@@ -199,7 +199,7 @@ final class ClientInquiryApiTest extends TestCase
             ->assertJsonPath('attention_count', 0);
 
         $body = (string) $res->json('reply_body');
-        $this->assertStringContainsString("1. 30 szt, rozmiar 10\n30szt Rękawice chemoodporne rozmiar 10\nProdukt: Rękawice chemoodporne (SKU G10), Supon", $body);
+        $this->assertStringContainsString("1. 30 szt, rozmiar z zapytania: 10\n30szt Rękawice chemoodporne rozmiar 10\nProdukt: Rękawice chemoodporne (SKU G10), Supon", $body);
         $this->assertStringNotContainsString('Cena:', $body);
     }
 
@@ -822,9 +822,11 @@ final class ClientInquiryApiTest extends TestCase
             ->assertJsonPath('attention_count', 1);
 
         $body = (string) $res->json('reply_body');
-        $this->assertStringContainsString("1. 30 szt, rozmiar 10\n", $body);
-        $this->assertStringContainsString('Cena: 22,15 zł netto / szt', $body);
-        $this->assertStringContainsString("2. 4 pary, rozmiar 43\n", $body);
+        $this->assertStringContainsString("1. 30 szt, rozmiar z zapytania: 10\n", $body);
+        $this->assertStringContainsString('Cena: 22,15 zł netto', $body);
+        // jednostka z maila klienta stoi w nagłówku pozycji, nigdy przy naszej cenie
+        $this->assertStringNotContainsString('netto / szt', $body);
+        $this->assertStringContainsString("2. 4 pary, rozmiar z zapytania: 43\n", $body);
         $this->assertStringContainsString("SKU FW94), Portwest\nNormy: S4\nCena: do potwierdzenia", $body);
         $this->assertStringContainsString("\nDopisek zostaje\n", $body);
         $this->assertStringNotContainsString('SUB1', $body);
@@ -844,7 +846,7 @@ final class ClientInquiryApiTest extends TestCase
             ->assertJsonPath('price.mode', 'catalog_margin');
         $body = (string) $res->json('reply_body');
         $this->assertStringContainsString('SKU 37675', $body);
-        $this->assertStringContainsString("Zamiennik: Zamiennik AlphaTec (SKU SUB1), Ansell\nCena: 20,00 zł netto / szt", $body);
+        $this->assertStringContainsString("Zamiennik: Zamiennik AlphaTec (SKU SUB1), Ansell\nCena: 20,00 zł netto", $body);
         $this->assertStringNotContainsString('37900VP', $body);
         $this->assertStringNotContainsString('Dopisek zostaje', $body);
     }
@@ -1072,10 +1074,10 @@ final class ClientInquiryApiTest extends TestCase
         ])->assertOk();
 
         $body = (string) $inquiry->fresh()->reply_body;
-        $this->assertStringContainsString('30 szt., rozmiar 10', $body);
+        $this->assertStringContainsString('30 szt., rozmiar z zapytania: 10', $body);
         $this->assertStringContainsString('SKU 37900VP', $body);
-        $this->assertStringContainsString('22,15 zł netto / szt.', $body);
-        $this->assertStringContainsString('65,44 zł netto / szt.', $body);
+        $this->assertStringContainsString('22,15 zł netto', $body);
+        $this->assertStringContainsString('65,44 zł netto', $body);
         $this->assertStringNotContainsString('EUR', $body);
         $this->assertStringNotContainsString('Stan magazynowy', $body);
         $this->assertStringNotContainsString('4.67', $body);

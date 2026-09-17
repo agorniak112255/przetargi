@@ -1910,9 +1910,12 @@ final class ClientInquiryService
         // cytat idzie do klienta — bez ceny z cudzej oferty, reszta słowo w słowo
         $quote = InquiryQueryText::withoutPrice((string) ($item['quote'] ?? ''));
         $head = (string) $n.'.';
+        // Rozmiar pochodzi z zapytania klienta i nikt go nie sprawdził w naszej karcie: kolumna „Pozycja
+        // z zapytania” obok kolumny „Nasza propozycja” czytała się jak zapewnienie, że mamy ten rozmiar.
+        // Dopóki karta nie potwierdza rozmiaru, piszemy wprost, skąd on jest.
         $meta = array_values(array_filter([
             $this->qtyLabel($item),
-            $size !== '' ? 'rozmiar '.$size : null,
+            $size !== '' ? 'rozmiar z zapytania: '.$size : null,
         ]));
         if ($meta !== []) {
             $head .= ' '.implode(', ', $meta);
@@ -1926,9 +1929,9 @@ final class ClientInquiryService
             ];
         }
 
-        $answer = $this->productLines('Produkt', $product, $priceMode, $margin, $qtyUnit['unit']);
+        $answer = $this->productLines('Produkt', $product, $priceMode, $margin);
         if ($substitute !== null) {
-            $answer = array_merge($answer, $this->productLines('Zamiennik', $substitute, $priceMode, $margin, $qtyUnit['unit']));
+            $answer = array_merge($answer, $this->productLines('Zamiennik', $substitute, $priceMode, $margin));
         }
 
         return [
@@ -1942,7 +1945,7 @@ final class ClientInquiryService
      * @param  array<string, mixed>  $product
      * @return list<string>
      */
-    private function productLines(string $label, array $product, string $priceMode, float $margin, ?string $unit): array
+    private function productLines(string $label, array $product, string $priceMode, float $margin): array
     {
         $maker = trim((string) ($product['manufacturer'] ?? ''));
         $lines = [sprintf(
@@ -1958,10 +1961,12 @@ final class ClientInquiryService
         }
         if ($priceMode !== '' && $priceMode !== 'none') {
             $price = $this->letterPrice($product, $priceMode, $margin);
-            // jednostka tylko z maila — bez niej samo „netto”
+            // Jednostki naszej ceny nie znamy — karta jej nie niesie. Doklejana była jednostka z maila
+            // klienta, więc przy zapytaniu „20 op.” cena za sztukę wychodziła jako cena za opakowanie.
+            // Ilość i jednostka klienta stoją w nagłówku pozycji i tam jest ich miejsce.
             $lines[] = $price === null
                 ? 'Cena: do potwierdzenia'
-                : 'Cena: '.$price.' netto'.($unit !== null ? ' / '.$unit : '');
+                : 'Cena: '.$price.' netto';
         }
 
         return $lines;
