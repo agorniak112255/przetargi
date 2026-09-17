@@ -43,6 +43,13 @@ powershell -Command "Compress-Archive -Path C:\xampp\htdocs\Przetargi\thunderbir
 Przy każdej poprawce podnieś `version` w `manifest.json` — bez tego Thunderbird
 nie zaproponuje aktualizacji przy instalacji nowego pliku.
 
+## Adres aplikacji
+
+Dodatek ma w `manifest.json` uprawnienie do domeny
+`https://przetargi.supon.rzeszow.pl/*` i tylko z nią może się łączyć — bez tego
+Thunderbird blokuje zapytania (komunikat „Brak połączenia z…”). Po zmianie adresu
+aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa.
+
 ## Wymagania po stronie aplikacji
 
 - konto z uprawnieniem `inquiries.use`,
