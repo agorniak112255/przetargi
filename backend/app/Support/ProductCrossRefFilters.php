@@ -74,17 +74,16 @@ final class ProductCrossRefFilters
         'electric' => 'elektryka',
     ];
 
-    /** @var array<string, array{group: string, rank: int}> */
+    /**
+     * Rangi tylko dla porządków naprawdę liniowych. Obuwie wypadło stąd świadomie — hierarchię klas
+     * (S1P, S3L, S6, S7, rodzina O) trzyma BhpAttributeNormalizer::footwearClassMeets.
+     *
+     * @var array<string, array{group: string, rank: int}>
+     */
+    /** Normalizator jest bezstanowy, a classMeets() woła się raz na kandydata — tworzymy go jeden raz. */
+    private static ?BhpAttributeNormalizer $footwearAttributes = null;
+
     private const CLASS_RANKS = [
-        'OB' => ['group' => 'footwear', 'rank' => 1],
-        'SB' => ['group' => 'footwear', 'rank' => 2],
-        'S1' => ['group' => 'footwear', 'rank' => 3],
-        'S1P' => ['group' => 'footwear', 'rank' => 4],
-        'S2' => ['group' => 'footwear', 'rank' => 5],
-        'S3' => ['group' => 'footwear', 'rank' => 6],
-        'S4' => ['group' => 'footwear', 'rank' => 7],
-        'S5' => ['group' => 'footwear', 'rank' => 8],
-        'S7' => ['group' => 'footwear', 'rank' => 9],
         'FFP1' => ['group' => 'ffp', 'rank' => 1],
         'FFP2' => ['group' => 'ffp', 'rank' => 2],
         'FFP3' => ['group' => 'ffp', 'rank' => 3],
@@ -461,8 +460,20 @@ final class ProductCrossRefFilters
         return $words !== '' && str_contains($hay, $words);
     }
 
+    /**
+     * Obuwie liczy hierarchię z BhpAttributeNormalizer, a nie własną listą rang: liniowy ranking mówił
+     * „S5 spełnia S3”, czyli podstawiał kalosz pod trzewik, i nie znał ani O1–O3, ani klas z wydania 2022
+     * (S6, S7, S3L). Rangi zostają tylko dla FFP i kategorii ŚOI, gdzie porządek naprawdę jest liniowy.
+     */
     private function classMeets(string $need, string $candClass): bool
     {
+        $attributes = self::$footwearAttributes ??= new BhpAttributeNormalizer;
+        $needFoot = $attributes->footwearClass($need);
+        if ($needFoot !== null) {
+            $candFoot = $attributes->footwearClass($candClass);
+
+            return $candFoot !== null && $attributes->footwearClassMeets($needFoot, $candFoot);
+        }
         $needKey = $this->classRank($need);
         if ($needKey === null) {
             $n = $this->norm($need);
@@ -472,7 +483,8 @@ final class ProductCrossRefFilters
         }
         $candKey = $this->classRank($candClass);
         if ($candKey === null) {
-            return $needKey['group'] !== 'footwear';
+            // Kandydat bez klasy FFP / kategorii ŚOI — brak wiedzy, nie sprzeczność (obuwie odsiane wyżej).
+            return true;
         }
         if ($needKey['group'] !== $candKey['group']) {
             return false;
@@ -502,11 +514,6 @@ final class ProductCrossRefFilters
         }
         if (isset(self::CLASS_RANKS[$c])) {
             return $c;
-        }
-        if (preg_match('/^S[1-57]P?\b/', $c, $m) === 1) {
-            $k = $m[0];
-
-            return isset(self::CLASS_RANKS[$k]) ? $k : null;
         }
         if (preg_match('/FFP[123]/', $c, $m) === 1) {
             return $m[0];

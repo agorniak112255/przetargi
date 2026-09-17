@@ -91,6 +91,12 @@ final class BackfillBhpAttributesCommand extends Command
             return false;
         }
 
+        // Obuwie bez klasy ochrony nie jest uzupełnione, choćby miało materiał i normy: stary parser gubił
+        // „S3L” czy „S1 PL”, a przebieg bez --force uznawał taką kartę za gotową i nigdy jej nie poprawiał.
+        if (($attrs['kategoria_bhp'] ?? null) === 'obuwie' && ($attrs['klasa_ochrony'] ?? null) === null) {
+            return false;
+        }
+
         return ($attrs['material'] ?? null) !== null
             || ($attrs['kategoria_bhp'] ?? null) !== null
             || (is_array($attrs['normy_en'] ?? null) && $attrs['normy_en'] !== []);

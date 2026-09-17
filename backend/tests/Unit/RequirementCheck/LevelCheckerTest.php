@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\RequirementCheck;
 
+use App\Support\BhpAttributeNormalizer;
 use App\Support\RequirementCheck\CardSource;
 use App\Support\RequirementCheck\CardSources;
 use App\Support\RequirementCheck\CheckRow;
@@ -258,6 +259,40 @@ final class LevelCheckerTest extends TestCase
         $this->assertSame(Status::Ok, $this->rows('Obuwie S1PL.', $spec('Klasa: S1PL'))['footwear_class']->status);
         $this->assertSame(Status::Unclear, $this->rows('Obuwie S1PL.', $spec('Klasa: S1P'))['footwear_class']->status, 'karta nie podaje typu wkładki');
         $this->assertSame(Status::Fail, $this->rows('Obuwie S1PL.', $spec('Klasa: S1'))['footwear_class']->status);
+        $this->assertSame(Status::Ok, $this->rows('Obuwie S1 PL.', $spec('Klasa: S1 P L'))['footwear_class']->status, 'zapis ze spacją to ta sama klasa');
+        $this->assertSame(Status::Unclear, $this->rows('Obuwie S3 L.', $spec('Klasa: S3 S'))['footwear_class']->status, 'inny typ wkładki');
+        $this->assertSame(Status::Ok, $this->rows('Obuwie S3.', $spec('EN ISO 20345:2022 S7 FO SR'))['footwear_class']->status, 'S7 to S3 z wodoodpornością');
+        $this->assertSame(Status::Fail, $this->rows('Obuwie S3.', $spec('Kalosz S5 SRC'))['footwear_class']->status, 'obuwie całogumowe nie zastępuje trzewika');
+    }
+
+    /**
+     * Wiersz „Klasa obuwia” i bramka przetargowa muszą czytać ten sam napis tak samo — inaczej karta
+     * przechodzi bramkę jako S1, a tabela pokazuje S1PL (albo odwrotnie). Jedyna celowa różnica to
+     * wielkość liter: tutaj klasą jest wyłącznie zapis wielkimi literami.
+     */
+    #[Test]
+    #[DataProvider('footwearClassVariants')]
+    public function footwear_class_is_read_the_same_as_in_product_attributes(string $text): void
+    {
+        $fromAttributes = (new BhpAttributeNormalizer)->footwearClass($text);
+        $row = $this->rows("Obuwie {$text}.", [new CardSource(CardSource::SPECS, $text)])['footwear_class'] ?? null;
+
+        $this->assertNotNull($row, "LevelChecker nie odczytał klasy z „{$text}”");
+        $this->assertSame($fromAttributes, $row->required['value']);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function footwearClassVariants(): iterable
+    {
+        foreach ([
+            'S1', 'S1P', 'S1 P', 'S1PL', 'S1 PL', 'S1 P L', 'S3', 'S3L', 'S3 L', 'S3S', 'S5L', 'S6',
+            'S7L', 'SB', 'OB', 'O1', 'O2 FO', 'OB A E FO', 'ARYEL 320 671460 S3L',
+            'EN ISO 20345:2022 S3L FO SR',
+        ] as $variant) {
+            yield $variant => [$variant];
+        }
     }
 
     #[Test]

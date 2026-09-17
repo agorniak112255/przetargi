@@ -151,15 +151,26 @@ final class CatalogRequirementRecall
         }
 
         if ($profile['foot_class'] !== null && $profile['family'] === PpeAssortment::FAMILY_FOOTWEAR) {
-            $class = $profile['foot_class'];
-            $token = $this->bhpAttributes->footwearClassToken($class);
-            $likeClass = '%'.addcslashes($class, '%_\\').'%';
-            $likeToken = '%'.addcslashes($token, '%_\\').'%';
-            $builder->where(function (Builder $outer) use ($likeClass, $likeToken): void {
-                $outer->where('name', 'like', $likeClass)
-                    ->orWhere('sku', 'like', $likeClass)
-                    ->orWhere('search_blob', 'like', $likeToken)
-                    ->orWhere('search_blob', 'like', $likeClass);
+            // Prefiltr SQL musi wpuścić wszystko, co bramka uzna za spełniające wymaganie: przy „S3”
+            // także S7, a przy „S3L” także karty zapisane jako „S3” lub „S3 L”. Dlatego pytamy o klasy
+            // bazowe (bez typu wkładki) — dosłowne LIKE „%S3L%” zerowało recall na katalogu z „S3 L”.
+            $likes = [];
+            $tokens = [];
+            foreach ($this->bhpAttributes->footwearClassesSatisfying($profile['foot_class']) as $class) {
+                $tokens[] = '%'.addcslashes($this->bhpAttributes->footwearClassToken($class), '%_\\').'%';
+                foreach (array_unique([$class, preg_replace('/^(S1|O1)P$/u', '$1 P', $class) ?? $class]) as $variant) {
+                    $likes[] = '%'.addcslashes($variant, '%_\\').'%';
+                }
+            }
+            $builder->where(function (Builder $outer) use ($likes, $tokens): void {
+                foreach ($likes as $like) {
+                    $outer->orWhere('name', 'like', $like)
+                        ->orWhere('sku', 'like', $like)
+                        ->orWhere('search_blob', 'like', $like);
+                }
+                foreach ($tokens as $token) {
+                    $outer->orWhere('search_blob', 'like', $token);
+                }
             });
         }
 
@@ -189,7 +200,10 @@ final class CatalogRequirementRecall
             }
             if ($profile['foot_class'] !== null) {
                 $identity = trim($product->name.' '.$product->sku.' '.(string) ($product->category ?? ''));
-                if ($this->bhpAttributes->footwearClass($identity) !== $profile['foot_class']) {
+                // Klasa karty musi spełniać wymaganą, a nie być z nią identyczna: „ARCASIO … S1 P ESD”
+                // czyta się teraz jako S1P i przy wymaganiu S1 wypadałby z recallu na samym porównaniu napisów.
+                $have = $this->bhpAttributes->footwearClass($identity);
+                if ($have === null || ! $this->bhpAttributes->footwearClassMeets($profile['foot_class'], $have)) {
                     return false;
                 }
                 $reqType = $this->assortment->articleType($query, PpeAssortment::FAMILY_FOOTWEAR);

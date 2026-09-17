@@ -182,9 +182,29 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertSame('S3', $attrs['klasa_ochrony']);
         $this->assertContains('HRO', $attrs['oznaczenia']);
         $this->assertContains('SRC', $attrs['oznaczenia']);
+        $this->assertNotContains('SR', $attrs['oznaczenia'], 'SRC to jedno oznaczenie, nie SR + C');
         $this->assertSame('trzewik', $attrs['typ_wyrobu']);
         $this->assertSame('skora', $attrs['rodzina_materialu']);
         $this->assertSame('welding', $attrs['przeznaczenie']);
+    }
+
+    public function test_reads_esd_wru_and_standalone_sr_markings(): void
+    {
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            ['kategoria_bhp' => 'obuwie'],
+            [
+                'name' => 'ARYEL 320 671460 S3L',
+                'description' => 'Trzewik bezpieczny, EN ISO 20345:2022 S3L FO SR WRU, obuwie ESD.',
+                'category' => 'Obuwie',
+            ]
+        );
+
+        $this->assertSame('S3L', $attrs['klasa_ochrony']);
+        $this->assertContains('ESD', $attrs['oznaczenia']);
+        $this->assertContains('WRU', $attrs['oznaczenia']);
+        $this->assertContains('SR', $attrs['oznaczenia']);
+        $this->assertContains('FO', $attrs['oznaczenia']);
+        $this->assertNotContains('WR', $attrs['oznaczenia'], 'WRU (cholewka) to nie WR (cały wyrób)');
     }
 
     public function test_reads_o2_class_from_sztyblety_name(): void
@@ -325,6 +345,72 @@ final class BhpAttributeNormalizerTest extends TestCase
             'category' => 'Obuwie',
         ]);
         $this->assertSame('S1P', $attrs['klasa_ochrony']);
+    }
+
+    public function test_footwear_class_reads_2022_insert_suffixes(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame('S3L', $n->footwearClass('ARYEL 320 671460 S3L'));
+        $this->assertSame('S3L', $n->footwearClass('Trzewik EN ISO 20345:2022 S3 L'), 'sufiks wkładki ze spacją');
+        $this->assertSame('S3S', $n->footwearClass('Półbut S3S'));
+        $this->assertSame('S1PL', $n->footwearClass('ARDEUS 350 Air 618080 S1 PL ESD'));
+        $this->assertSame('S1PL', $n->footwearClass('Sandał S1 P L'));
+        $this->assertSame('S5L', $n->footwearClass('Kalosz S5L'));
+        $this->assertSame('S6', $n->footwearClass('Trzewik S6'));
+        $this->assertSame('S7L', $n->footwearClass('Trzewik S7L'));
+        $this->assertSame('S3', $n->footwearClass('Trzewik S3 SRC'), 'SRC to nie sufiks wkładki');
+        $this->assertSame('S2', $n->footwearClass('Trzewik S2 L'), 'S2 nie ma wkładki, więc nie bierze L');
+
+        // S7 = S3 + wodoodporność, S6 = S2 + wodoodporność (wydanie 2022).
+        $this->assertTrue($n->footwearClassMeets('S3', 'S7'));
+        $this->assertTrue($n->footwearClassMeets('S2', 'S6'));
+        $this->assertTrue($n->footwearClassMeets('S6', 'S7'));
+        $this->assertFalse($n->footwearClassMeets('S7', 'S3'));
+        $this->assertFalse($n->footwearClassMeets('S6', 'S2'));
+        // Typ wkładki nie jest podstawą do odrzucenia karty — rozstrzyga go wiersz „Klasa obuwia”.
+        $this->assertTrue($n->footwearClassMeets('S3', 'S3L'));
+        $this->assertTrue($n->footwearClassMeets('S3L', 'S3'));
+        $this->assertTrue($n->footwearClassMeets('S3L', 'S7S'));
+        // Obuwie całogumowe stoi osobno: S5 nie jest zamiennikiem trzewika S3.
+        $this->assertFalse($n->footwearClassMeets('S3', 'S5'));
+        $this->assertFalse($n->footwearClassMeets('S1', 'S4'));
+        $this->assertTrue($n->footwearClassMeets('S4', 'S5'));
+        $this->assertTrue($n->footwearClassMeets('O2', 'O7'));
+        $this->assertFalse($n->footwearClassMeets('O3', 'S3'));
+
+        $this->assertSame(['S3', 'S7'], $n->footwearClassesSatisfying('S3L'));
+        $this->assertSame(['S1P', 'S3', 'S7'], $n->footwearClassesSatisfying('S1 P'));
+    }
+
+    public function test_degraded_class_in_payload_is_repaired_from_card_text(): void
+    {
+        // Karta z bazy: stary parser zapisał „S1”, bo gubił sufiks wkładki z nazwy „S1 PL”.
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            ['kategoria_bhp' => 'obuwie', 'klasa_ochrony' => 'S1'],
+            [
+                'name' => 'ARDEUS 350 Air 618080 S1 PL ESD',
+                'description' => 'Trzewik bezpieczny z wkładką antyprzebiciową.',
+                'category' => 'Obuwie robocze S1-S3',
+            ]
+        );
+
+        $this->assertSame('S1PL', $attrs['klasa_ochrony']);
+    }
+
+    public function test_class_from_card_text_never_replaces_another_class_family(): void
+    {
+        // Folder sklepu i opis mogą wymieniać inne klasy — uszczegóławiamy zapis, nie podmieniamy klasy.
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            ['kategoria_bhp' => 'obuwie', 'klasa_ochrony' => 'S3'],
+            [
+                'name' => 'Trzewik roboczy 671460',
+                'description' => 'Zastępuje wcześniejszy model O1 i sandały S1 P.',
+                'category' => 'Obuwie robocze S1-S3',
+            ]
+        );
+
+        $this->assertSame('S3', $attrs['klasa_ochrony']);
     }
 
     public function test_ffp_class_meets_reads_both_sides(): void

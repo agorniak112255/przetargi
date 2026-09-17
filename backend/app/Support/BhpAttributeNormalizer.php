@@ -19,6 +19,20 @@ final class BhpAttributeNormalizer
     ];
 
     /**
+     * Klasy obuwia z EN ISO 20345 / 20347 (wydania 2011 i 2022) — treść wzorca wspólna dla parsera
+     * kartotek i dla LevelCheckera, żeby oba czytały tę samą klasę z tego samego napisu.
+     *
+     * Spacja przed P i przed literą wkładki jest w zapisach dostawców („ARMEN 9007 6660 S1 P”,
+     * „ARDEUS 350 Air 618080 S1 PL”) — bez niej sandały antyprzebiciowe udawały S1. Litera L/S na końcu
+     * to typ wkładki antyprzebiciowej z wydania 2022 (S1PL, S3S, S5L, S7L); klasy bez wkładki
+     * (SB, S1, S2, S4, S6 i ich odpowiedniki O) tego sufiksu nie biorą, więc „S2 L” to nadal S2.
+     */
+    public const FOOTWEAR_CLASS = 'S1\h?P\h?[LS]?|S[357]\h?[LS]?|S[B1246]|O1\h?P\h?[LS]?|O[357]\h?[LS]?|O[B1246]';
+
+    /** Ten sam wzorzec w wersji dla kartotek: także małymi literami, bo opisy bywają pisane zwykłym tekstem. */
+    private const FOOTWEAR_CLASS_RE = '/(?<![\p{L}\d])('.self::FOOTWEAR_CLASS.')(?![\p{L}\d])/iu';
+
+    /**
      * @return array{
      *     kategoria_bhp: ?string,
      *     kod_producenta: ?string,
@@ -201,9 +215,13 @@ final class BhpAttributeNormalizer
             ],
         ));
 
+        // Doprecyzowanie zapisanej klasy bierzemy wyłącznie z tożsamości wyrobu (nazwa, kod, kolumna norm),
+        // nigdy z prozy opisu: zdanie „dostępny też w wersji S1P” nadałoby karcie wkładkę antyprzebiciową,
+        // której ten but nie ma, a taka cecha rozstrzyga o dopuszczeniu oferty w przetargu.
         $parsed = $this->parseKlasaAndMarkings(
             $this->nullableString($raw['klasa_ochrony'] ?? null),
-            $descBlob
+            $descBlob,
+            trim(($context['name'] ?? '').' '.($context['sku'] ?? '').' '.($context['norms_column'] ?? ''))
         );
         $out['klasa_ochrony'] = $parsed['klasa'];
         $out['oznaczenia'] = $parsed['oznaczenia'];
@@ -387,21 +405,55 @@ final class BhpAttributeNormalizer
     /**
      * @return array{klasa: ?string, oznaczenia: list<string>}
      */
-    private function parseKlasaAndMarkings(?string $rawKlasa, string $blob): array
+    private function parseKlasaAndMarkings(?string $rawKlasa, string $blob, string $identity = ''): array
     {
         $hay = trim(($rawKlasa ?? '').' '.$blob);
         $oznaczenia = $this->extractMarkings($hay);
         $klasa = $this->extractFfpClass($rawKlasa ?? '')
-            ?? $this->extractFootwearClass($rawKlasa ?? '')
+            ?? $this->footwearClassFromRawAndBlob($rawKlasa ?? '', $identity)
             ?? $this->detectKlasa($hay);
 
         return ['klasa' => $klasa, 'oznaczenia' => $oznaczenia];
     }
 
-    /** @return list<string> */
+    /**
+     * Klasa zapisana wcześniej w attributes bywa zdegradowana (karta „ARDEUS 350 Air 618080 S1 PL ESD”
+     * miała w payloadzie samo „S1”, bo stary parser gubił sufiks wkładki). Dlatego czytamy oba źródła
+     * i bierzemy zapis bardziej szczegółowy, ale wyłącznie w obrębie tej samej klasy: „S1” + „S1 PL” to
+     * S1PL, natomiast „S3” w polu i „O1” w tożsamości zostaje S3 — drugie źródło nie podmienia klasy na inną.
+     *
+     * Drugim źródłem jest tożsamość wyrobu (nazwa, kod, kolumna norm), a nie cały opis: klasa wypisana
+     * w nazwie dotyczy tego egzemplarza, klasa wspomniana w prozie może dotyczyć innego modelu.
+     */
+    private function footwearClassFromRawAndBlob(string $rawKlasa, string $identity): ?string
+    {
+        $raw = $this->extractFootwearClass($rawKlasa);
+        if ($raw === null) {
+            return null;
+        }
+        if (preg_match_all(self::FOOTWEAR_CLASS_RE, $identity, $m) < 1) {
+            return $raw;
+        }
+        $best = $raw;
+        foreach ($m[1] as $hit) {
+            $candidate = mb_strtoupper(preg_replace('/\s+/u', '', (string) $hit) ?? (string) $hit);
+            if (mb_strlen($candidate) > mb_strlen($best) && str_starts_with($candidate, $best)) {
+                $best = $candidate;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * SR bez SRA/SRB/SRC (granica słowa) i WRU przed WR — inaczej „SRC” dawałoby dodatkowo „SR”,
+     * a „WRU” (odporność cholewki na wodę) przepadałoby jako niedopasowane „WR”.
+     *
+     * @return list<string>
+     */
     private function extractMarkings(string $text): array
     {
-        if (preg_match_all('/\b(SRA|SRB|SRC|HRO|WR|CI|HI|FO|AN|NR)\b/u', $text, $m) < 1) {
+        if (preg_match_all('/\b(SRA|SRB|SRC|HRO|WRU|WR|CI|HI|FO|AN|NR|ESD|SR)\b/u', $text, $m) < 1) {
             return [];
         }
 
@@ -419,32 +471,76 @@ final class BhpAttributeNormalizer
     }
 
     /**
+     * Klasy, które spełniają wymaganą (bez niej samej) — po bazie klasy, czyli bez typu wkładki L/S.
+     * Jedna tabela dla bramki przetargowej, porównywarki zamienników i prefiltru recall katalogu,
+     * żeby SQL nie odsiewał kandydata, którego bramka i tak by przyjęła.
+     *
+     * Wydanie 2022: S6 = S2 + wodoodporność całego wyrobu, S7 = S3 + wodoodporność, więc S7 ⊇ S6 ⊇ S2.
+     * S4/S5 (obuwie całogumowe) celowo stoją osobno: „S5 spełnia S3” byłoby prawdą tylko na papierze —
+     * kalosz nie jest zamiennikiem trzewika, a typ wyrobu rozstrzyga się w PpeAssortment osobno.
+     *
+     * @var array<string, list<string>>
+     */
+    private const FOOTWEAR_SATISFIED_BY = [
+        'SB' => ['S1', 'S1P', 'S2', 'S3', 'S6', 'S7'],
+        'S1' => ['S1P', 'S2', 'S3', 'S6', 'S7'],
+        'S1P' => ['S3', 'S7'],
+        'S2' => ['S3', 'S6', 'S7'],
+        'S3' => ['S7'],
+        'S6' => ['S7'],
+        'S7' => [],
+        'S4' => ['S5'],
+        'S5' => [],
+        'OB' => ['O1', 'O1P', 'O2', 'O3', 'O6', 'O7'],
+        'O1' => ['O1P', 'O2', 'O3', 'O6', 'O7'],
+        'O1P' => ['O3', 'O7'],
+        'O2' => ['O3', 'O6', 'O7'],
+        'O3' => ['O7'],
+        'O6' => ['O7'],
+        'O7' => [],
+        'O4' => ['O5'],
+        'O5' => [],
+    ];
+
+    /**
      * S3L spełnia S3; S1P nie spełnia S3. Klasa wyższa w tej samej rodzinie spełnia niższą:
      * S3 ⊇ S2 ⊇ S1 ⊇ SB oraz S3 ⊇ S1P (S3 ma wkładkę antyprzebiciową), O3 ⊇ O2 ⊇ O1 ⊇ OB.
      * S4/S5 (obuwie całogumowe) i klasy S/O nie są wymienne.
+     *
+     * Typ wkładki (L/S z wydania 2022) nie rozstrzyga tutaj: wymaganie „S3L” wobec karty „S3” to brak
+     * informacji, nie sprzeczność — werdykt „do sprawdzenia” wystawia LevelChecker, a bramka nie może
+     * z tego powodu wyrzucić całej karty.
      */
     public function footwearClassMeets(string $required, string $have): bool
     {
-        $required = mb_strtoupper($required);
-        $have = mb_strtoupper($have);
+        $required = $this->footwearClassBase($required);
+        $have = $this->footwearClassBase($have);
         if ($have === $required) {
             return true;
         }
-        if (preg_match('/^'.preg_quote($required, '/').'[A-Z]$/u', $have) === 1) {
-            return true;
-        }
-        $base = static fn (string $class): string => preg_replace('/^(S1P|S[B1-3]|O[B1-3])[A-Z]?$/u', '$1', $class) ?? $class;
-        $satisfiedBy = [
-            'SB' => ['S1', 'S1P', 'S2', 'S3'],
-            'S1' => ['S1P', 'S2', 'S3'],
-            'S1P' => ['S3'],
-            'S2' => ['S3'],
-            'OB' => ['O1', 'O2', 'O3'],
-            'O1' => ['O2', 'O3'],
-            'O2' => ['O3'],
-        ];
 
-        return in_array($base($have), $satisfiedBy[$base($required)] ?? [], true);
+        return in_array($have, self::FOOTWEAR_SATISFIED_BY[$required] ?? [], true);
+    }
+
+    /**
+     * Klasy dopuszczalne przy wymaganej (z nią samą) — dla prefiltrów, które muszą zapytać bazę
+     * o wszystko, co bramka uzna za spełniające wymaganie.
+     *
+     * @return list<string>
+     */
+    public function footwearClassesSatisfying(string $required): array
+    {
+        $base = $this->footwearClassBase($required);
+
+        return [$base, ...(self::FOOTWEAR_SATISFIED_BY[$base] ?? [])];
+    }
+
+    /** „S3 L” / „S3L” → S3: typ wkładki odcinamy, bo hierarchia klas go nie dotyczy. */
+    private function footwearClassBase(string $class): string
+    {
+        $c = mb_strtoupper(preg_replace('/\s+/u', '', $class) ?? $class);
+
+        return preg_replace('/^(S1P|S[B1-7]|O1P|O[B1-7])[LS]$/u', '$1', $c) ?? $c;
     }
 
     /** Próg SNR z wymagania („SNR minimum 30 dB”, „tłumienie min. 31 dB”). */
@@ -588,9 +684,7 @@ final class BhpAttributeNormalizer
 
     private function extractFootwearClass(string $text): ?string
     {
-        // „S1 P” ze spacją (ARMEN 9007 6660 S1 P) to nadal S1P — bez tego sandały
-        // antyprzebiciowe udawały S1 i przegrywały z kartą bez wkładki.
-        if (preg_match('/\b(S7|S5|S4|S3|S2|S1\s?P|S1|SB|OB|O5|O4|O3|O2|O1)\b/iu', $text, $m) === 1) {
+        if (preg_match(self::FOOTWEAR_CLASS_RE, $text, $m) === 1) {
             return mb_strtoupper(preg_replace('/\s+/u', '', $m[1]) ?? $m[1]);
         }
 

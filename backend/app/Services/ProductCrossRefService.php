@@ -23,17 +23,14 @@ final class ProductCrossRefService
     /** Oznaczenia z bazy, bez których kandydat nie jest ekwiwalentem. */
     private const REQUIRED_MARKINGS = ['CI', 'HI', 'HRO', 'WR'];
 
-    /** @var array<string, array{group: string, rank: int}> */
+    /**
+     * Rangi tylko dla porządków naprawdę liniowych. Obuwie wypadło stąd świadomie — hierarchię klas
+     * (S1P, S3L, S6, S7, rodzina O) trzyma BhpAttributeNormalizer::footwearClassMeets, wspólnie
+     * z bramką przetargową; wcześniej ta tabela twierdziła, że S5 (kalosz) spełnia S3 (trzewik).
+     *
+     * @var array<string, array{group: string, rank: int}>
+     */
     private const CLASS_RANKS = [
-        'OB' => ['group' => 'footwear', 'rank' => 1],
-        'SB' => ['group' => 'footwear', 'rank' => 2],
-        'S1' => ['group' => 'footwear', 'rank' => 3],
-        'S1P' => ['group' => 'footwear', 'rank' => 4],
-        'S2' => ['group' => 'footwear', 'rank' => 5],
-        'S3' => ['group' => 'footwear', 'rank' => 6],
-        'S4' => ['group' => 'footwear', 'rank' => 7],
-        'S5' => ['group' => 'footwear', 'rank' => 8],
-        'S7' => ['group' => 'footwear', 'rank' => 9],
         'FFP1' => ['group' => 'ffp', 'rank' => 1],
         'FFP2' => ['group' => 'ffp', 'rank' => 2],
         'FFP3' => ['group' => 'ffp', 'rank' => 3],
@@ -304,13 +301,19 @@ final class ProductCrossRefService
      */
     private function classMeetsSeed(array $seed, array $cand): bool
     {
+        $seedClass = $this->bhpAttributes->footwearClass((string) ($seed['klasa_ochrony'] ?? ''));
+        if ($seedClass !== null) {
+            $candClass = $this->bhpAttributes->footwearClass((string) ($cand['klasa_ochrony'] ?? ''));
+
+            return $candClass !== null && $this->bhpAttributes->footwearClassMeets($seedClass, $candClass);
+        }
         $seedKey = $this->classRankKey((string) ($seed['klasa_ochrony'] ?? ''));
         if ($seedKey === null) {
             return true;
         }
         $candKey = $this->classRankKey((string) ($cand['klasa_ochrony'] ?? ''));
         if ($candKey === null) {
-            return $seedKey['group'] !== 'footwear';
+            return true;
         }
         if ($seedKey['group'] !== $candKey['group']) {
             return true;

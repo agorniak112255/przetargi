@@ -1512,7 +1512,8 @@ final class PpeAssortment
         if ($this->articleType($requirement, self::FAMILY_FOOTWEAR) === self::TYPE_SANDAL
             && $this->articleType($productText, self::FAMILY_FOOTWEAR) !== self::TYPE_SANDAL) {
             $productClass = $this->attributes()->footwearClass($productText);
-            if ($productClass !== null && preg_match('/^[SO][2-5]/u', mb_strtoupper($productClass)) === 1) {
+            // S6/S7 (wydanie 2022) to S2/S3 z wodoodpornością — sandał tym bardziej ich nie spełni.
+            if ($productClass !== null && preg_match('/^[SO][2-7]/u', mb_strtoupper($productClass)) === 1) {
                 return false;
             }
         }
@@ -1577,9 +1578,10 @@ final class PpeAssortment
             return false;
         }
 
+        // Klasy z wydania 2022 („S3L”, „S1 PL”, „S7”) też są dowodem, że karta bez typu to obuwie.
         return preg_match(
             '/\b(buty|obuwie|kalosz|trzewik|sztyblet|polbut|mokasyn|sandal|footwear'
-            .'|\bs1p?\b|\bs[2-5]\b|\bo[1-5]\b|\bsrc\b|\bfo\b|\bsr\b)\b/u',
+            .'|\bs1\h?p?[ls]?\b|\bs[2-7][ls]?\b|\bo1\h?p?[ls]?\b|\bo[2-7][ls]?\b|\bsrc\b|\bfo\b|\bsr\b)\b/u',
             $t
         ) === 1;
     }

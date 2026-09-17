@@ -24,10 +24,11 @@ final class LevelChecker implements ParameterChecker
     private const SKIP = 'skip';
 
     /**
-     * Klasa obuwia tylko wielkimi literami — „o2” czy „sb” w zwykłym tekście to nie klasa. L/S za S1P, S3, S5, S7
-     * to typ wkładki antyprzebiciowej z EN ISO 20345:2022 („S1PL”, „S3S”).
+     * Klasa obuwia tylko wielkimi literami — „o2” czy „sb” w zwykłym tekście to nie klasa. Sam zapis klasy
+     * (z L/S za S1P, S3, S5, S7 z EN ISO 20345:2022) bierzemy z BhpAttributeNormalizer, żeby wiersz „Klasa
+     * obuwia” i bramka przetargowa czytały „S1 PL” czy „S3 L” tak samo.
      */
-    private const FOOTWEAR = '/(?<![\p{L}\d])(S1\h?P[LS]?|S[357][LS]?|S[B1-7]|O[B1-7])(?![\p{L}\d])/u';
+    private const FOOTWEAR = '/(?<![\p{L}\d])('.BhpAttributeNormalizer::FOOTWEAR_CLASS.')(?![\p{L}\d])/u';
 
     private const FFP = '/(?<![\p{L}\d])FFP\s*-?([123])(?!\d)/iu';
 
@@ -348,7 +349,7 @@ final class LevelChecker implements ParameterChecker
      */
     private function footwearVerdict(string $required, string $have): Status
     {
-        $insert = static fn (string $class): ?string => preg_match('/^(?:S1P|S[357])([LS])$/', $class, $m) === 1 ? $m[1] : null;
+        $insert = static fn (string $class): ?string => preg_match('/^(?:S1P|S[357]|O1P|O[357])([LS])$/', $class, $m) === 1 ? $m[1] : null;
         $needInsert = $insert($required);
         if ($needInsert === null) {
             return $this->attributes->footwearClassMeets($required, $have) ? Status::Ok : Status::Fail;
