@@ -128,6 +128,29 @@ export function AdminUsers() {
     }
   }
 
+  /** Hasło w bazie jest hashowane — wysyłka zawsze ustawia nowe (podane w edycji albo wygenerowane). */
+  async function onSendCredentials(u: User, password?: string) {
+    const question = password
+      ? `Ustawić hasło wpisane w polu i wysłać dane logowania na ${u.email}?`
+      : `Wysłać dane logowania na ${u.email}? Zostanie ustawione nowe, losowe hasło — dotychczasowe przestanie działać.`
+    if (!confirm(question)) return
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>(`/admin/users/${u.id}/send-credentials`, {
+        method: 'POST',
+        body: JSON.stringify(password ? { password } : {}),
+      })
+      setEditPassword('')
+      setMsg(res.message)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function onDelete(userId: number) {
     if (!confirm('Usunąć użytkownika?')) return
     setBusy(true)
@@ -290,6 +313,15 @@ export function AdminUsers() {
                     </button>
                     <button
                       type="button"
+                      disabled={busy}
+                      onClick={() => void onSendCredentials(u, editPassword || undefined)}
+                      className="rounded bg-blue-100 px-2 py-1 text-xs text-blue-700 disabled:opacity-50"
+                      title="Wyśle na adres użytkownika login i hasło z pola obok (puste pole = hasło losowe)"
+                    >
+                      Wyślij dane
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => {
                         setEditId(null)
                         setEditEmail('')
@@ -314,6 +346,15 @@ export function AdminUsers() {
                       className="rounded bg-slate-200 px-2 py-1 text-xs"
                     >
                       Edytuj
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void onSendCredentials(u)}
+                      className="rounded bg-blue-100 px-2 py-1 text-xs text-blue-700 disabled:opacity-50"
+                      title="Wyśle na adres użytkownika login i nowe, losowe hasło"
+                    >
+                      Wyślij dane
                     </button>
                     <button
                       type="button"

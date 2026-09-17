@@ -64,6 +64,7 @@ final class ActivityActionResolver
     {
         $rules = [
             ['POST', '#^logout$#', 'logout', 'Wylogowanie'],
+            ['POST', '#^me/password$#', 'password.changed', 'Zmiana własnego hasła'],
             ['POST', '#^tenders$#', 'tender.created', 'Utworzono przetarg'],
             ['PATCH', '#^tenders/\d+$#', 'tender.updated', 'Zaktualizowano przetarg'],
             ['DELETE', '#^tenders/\d+/items/\d+$#', 'tender.item_deleted', 'Usunięto pozycję przetargu'],
@@ -123,6 +124,7 @@ final class ActivityActionResolver
             ['POST', '#^admin/users$#', 'user.created', 'Utworzono użytkownika'],
             ['PATCH', '#^admin/users/\d+$#', 'user.updated', 'Zaktualizowano użytkownika'],
             ['DELETE', '#^admin/users/\d+$#', 'user.deleted', 'Usunięto użytkownika'],
+            ['POST', '#^admin/users/\d+/send-credentials$#', 'user.credentials_sent', 'Wysłano dane dostępu'],
             ['POST', '#^admin/roles$#', 'role.created', 'Utworzono rolę'],
             ['PUT', '#^admin/roles/[^/]+$#', 'role.updated', 'Zaktualizowano rolę'],
             ['DELETE', '#^admin/roles/[^/]+$#', 'role.deleted', 'Usunięto rolę'],

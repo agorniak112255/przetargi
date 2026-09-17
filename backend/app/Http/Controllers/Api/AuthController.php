@@ -103,6 +103,45 @@ class AuthController extends Controller
     }
 
     /**
+     * Zmiana własnego hasła. Wymaga podania dotychczasowego, a po zapisie unieważnia
+     * pozostałe sesje tego konta — bieżąca zostaje, żeby użytkownik nie wypadł z aplikacji.
+     */
+    public function updatePassword(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'current_password' => ['required', 'string'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+        ], [
+            'password.confirmed' => 'Powtórzone hasło nie jest takie samo.',
+        ]);
+
+        /** @var User $user */
+        $user = $request->user();
+
+        if (! Hash::check($validated['current_password'], (string) $user->password)) {
+            throw ValidationException::withMessages([
+                'current_password' => ['Dotychczasowe hasło jest nieprawidłowe.'],
+            ]);
+        }
+
+        if (Hash::check($validated['password'], (string) $user->password)) {
+            throw ValidationException::withMessages([
+                'password' => ['Nowe hasło musi różnić się od dotychczasowego.'],
+            ]);
+        }
+
+        $user->forceFill(['password' => Hash::make($validated['password'])])->save();
+
+        // Przy Sanctum::actingAs w testach bieżący „token” nie jest rekordem z bazy — wtedy zostają wszystkie.
+        $current = $user->currentAccessToken();
+        if ($current instanceof PersonalAccessToken) {
+            $user->tokens()->whereKeyNot($current->getKey())->delete();
+        }
+
+        return response()->json(['message' => 'Hasło zmienione.']);
+    }
+
+    /**
      * Sygnał obecności z SPA: zapisuje bieżącą podstronę na tokenie tej sesji i czas ostatniej aktywności konta.
      */
     public function presence(Request $request): Response

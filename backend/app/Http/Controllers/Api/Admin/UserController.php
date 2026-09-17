@@ -5,12 +5,19 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\SendUserCredentialsRequest;
 use App\Http\Requests\Admin\StoreUserRequest;
 use App\Http\Requests\Admin\UpdateUserRequest;
+use App\Mail\AccountCredentialsMail;
+use App\Models\Role;
 use App\Models\User;
+use App\Support\PermissionCatalog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
+use Throwable;
 
 class UserController extends Controller
 {
@@ -73,6 +80,56 @@ class UserController extends Controller
         $user->delete();
 
         return response()->json(['message' => 'OK']);
+    }
+
+    /**
+     * Wysyła użytkownikowi dane dostępu. Hasło w bazie jest hashowane, więc nie da się
+     * przypomnieć dotychczasowego — wiadomość niesie hasło podane przez administratora
+     * albo wygenerowane tutaj. Hash zapisujemy dopiero po udanej wysyłce, żeby nieudany
+     * e-mail nie zostawił konta z hasłem, którego nikt nie zna.
+     */
+    public function sendCredentials(SendUserCredentialsRequest $request, User $user): JsonResponse
+    {
+        $password = $request->validated()['password'] ?? null;
+        $generated = $password === null || $password === '';
+        $plainPassword = $generated ? Str::password(12, symbols: false) : (string) $password;
+
+        $appUrl = rtrim((string) config('app.frontend_url'), '/');
+
+        try {
+            Mail::to($user->email)->send(
+                new AccountCredentialsMail($user, $plainPassword, $appUrl, $this->roleLabel($user))
+            );
+        } catch (Throwable $e) {
+            report($e);
+
+            return response()->json([
+                'ok' => false,
+                'message' => 'Nie udało się wysłać wiadomości: '.$e->getMessage(),
+            ], 422);
+        }
+
+        $user->password = Hash::make($plainPassword);
+        $user->save();
+
+        return response()->json([
+            'ok' => true,
+            'password_generated' => $generated,
+            'message' => 'Dane dostępu wysłane na '.$user->email.'.',
+        ]);
+    }
+
+    private function roleLabel(User $user): string
+    {
+        $roleName = (string) $user->toAuthArray()['role'];
+        $role = Role::query()->where('guard_name', 'web')->where('name', $roleName)->first();
+        $display = $role?->display_name;
+
+        if (is_string($display) && $display !== '') {
+            return $display;
+        }
+
+        return PermissionCatalog::roleLabels()[$roleName] ?? $roleName;
     }
 
     /**

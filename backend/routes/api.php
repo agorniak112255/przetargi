@@ -63,6 +63,7 @@ Route::get('/product-images/{image}/thumb', [ProductImageThumbController::class,
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);
     Route::patch('/me/preferences', [AuthController::class, 'updatePreferences']);
+    Route::post('/me/password', [AuthController::class, 'updatePassword']);
     Route::post('/me/presence', [AuthController::class, 'presence']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
@@ -260,6 +261,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/users', [AdminUserController::class, 'store'])->middleware('permission:admin.users.manage');
         Route::patch('/users/{user}', [AdminUserController::class, 'update'])->middleware('permission:admin.users.manage');
         Route::delete('/users/{user}', [AdminUserController::class, 'destroy'])->middleware('permission:admin.users.manage');
+        Route::post('/users/{user}/send-credentials', [AdminUserController::class, 'sendCredentials'])->middleware('permission:admin.users.manage');
 
         Route::get('/roles', [AdminRoleController::class, 'index'])->middleware('permission:admin.roles.manage');
         Route::post('/roles', [AdminRoleController::class, 'store'])->middleware('permission:admin.roles.manage');

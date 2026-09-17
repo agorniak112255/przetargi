@@ -1,5 +1,7 @@
+import { useState, type FormEvent } from 'react'
 import { useAppearance } from '../appearanceContext'
 import { useAuth } from '../auth'
+import { api } from '../lib/api'
 import { TEMPLATES, type AppearanceMode, type AppearanceTemplate, type Scheme } from '../lib/appearance'
 
 const schemeLabel: Record<Scheme, string> = {
@@ -41,6 +43,99 @@ function TemplateSwatches({ template }: { template: AppearanceTemplate }) {
   )
 }
 
+/** Zmiana własnego hasła: wymaga dotychczasowego, po zapisie pozostałe sesje konta są wylogowywane. */
+function PasswordForm() {
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [password, setPassword] = useState('')
+  const [passwordConfirmation, setPasswordConfirmation] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [msg, setMsg] = useState('')
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>('/me/password', {
+        method: 'POST',
+        body: JSON.stringify({
+          current_password: currentPassword,
+          password,
+          password_confirmation: passwordConfirmation,
+        }),
+      })
+      setCurrentPassword('')
+      setPassword('')
+      setPasswordConfirmation('')
+      setMsg(res.message)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={(e) => void onSubmit(e)} className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-sm font-semibold">Zmiana hasła</h2>
+      {err && <p className="mb-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {msg && <p className="mb-3 rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{msg}</p>}
+      <div className="grid max-w-xl gap-2 sm:grid-cols-[10rem_1fr] sm:items-center">
+        <label className="text-sm text-slate-500" htmlFor="current-password">
+          Dotychczasowe hasło
+        </label>
+        <input
+          id="current-password"
+          type="password"
+          autoComplete="current-password"
+          className="rounded border px-2 py-1.5 text-sm"
+          value={currentPassword}
+          onChange={(e) => setCurrentPassword(e.target.value)}
+          required
+        />
+        <label className="text-sm text-slate-500" htmlFor="new-password">
+          Nowe hasło
+        </label>
+        <input
+          id="new-password"
+          type="password"
+          autoComplete="new-password"
+          minLength={8}
+          className="rounded border px-2 py-1.5 text-sm"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
+        <label className="text-sm text-slate-500" htmlFor="new-password-2">
+          Powtórz nowe hasło
+        </label>
+        <input
+          id="new-password-2"
+          type="password"
+          autoComplete="new-password"
+          minLength={8}
+          className="rounded border px-2 py-1.5 text-sm"
+          value={passwordConfirmation}
+          onChange={(e) => setPasswordConfirmation(e.target.value)}
+          required
+        />
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        Hasło musi mieć co najmniej 8 znaków. Po zmianie pozostałe zalogowane urządzenia zostaną wylogowane.
+      </p>
+      <button
+        type="submit"
+        disabled={busy}
+        className="mt-3 rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+      >
+        Zmień hasło
+      </button>
+    </form>
+  )
+}
+
 export function Account() {
   const { user } = useAuth()
   const { choice, resolved, setChoice, saveState, saveError } = useAppearance()
@@ -62,8 +157,10 @@ export function Account() {
           <dt className="text-slate-500">{roles.length > 1 ? 'Role' : 'Rola'}</dt>
           <dd>{roleText}</dd>
         </dl>
-        <p className="mt-3 text-xs text-slate-500">Zmianę danych i hasła wykonuje administrator.</p>
+        <p className="mt-3 text-xs text-slate-500">Zmianę imienia, e-maila i roli wykonuje administrator.</p>
       </section>
+
+      <PasswordForm />
 
       <section className="rounded-xl bg-white p-4 shadow-sm">
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
