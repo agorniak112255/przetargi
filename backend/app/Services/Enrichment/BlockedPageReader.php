@@ -87,7 +87,8 @@ final class BlockedPageReader
      * @return array{
      *     text: string,
      *     image_urls: list<string>,
-     *     document_urls: list<string>
+     *     document_urls: list<string>,
+     *     document_labels: array<string, string>
      * }|null
      */
     public function fetch(string $url): ?array
@@ -131,10 +132,14 @@ final class BlockedPageReader
             return null;
         }
 
+        $documents = $this->extractDocumentUrls($markdown, $url);
+
         return [
             'text' => mb_substr($this->stripReaderChrome($markdown), 0, 5000),
             'image_urls' => $this->extractImageUrls($markdown, $url),
-            'document_urls' => $this->extractDocumentUrls($markdown, $url),
+            'document_urls' => array_keys($documents),
+            // etykieta odsyłacza z markdownu — bez niej rodzaj pliku zgadywalibyśmy z samego adresu
+            'document_labels' => array_filter($documents, static fn (string $label): bool => $label !== ''),
         ];
     }
 
@@ -421,7 +426,7 @@ final class BlockedPageReader
     }
 
     /**
-     * @return list<string>
+     * @return array<string, string> adres dokumentu => etykieta odsyłacza (pusta, gdy linku nie opisano)
      */
     private function extractDocumentUrls(string $markdown, string $pageUrl): array
     {
@@ -452,10 +457,13 @@ final class BlockedPageReader
             if (ProductDocumentDownloader::looksLikeJunkDocument($url.' '.$item['label'])) {
                 continue;
             }
-            $out[] = $url;
+            // pierwsza niepusta etykieta wygrywa: ten sam plik bywa linkowany też z pustej ikonki
+            if (($out[$url] ?? '') === '') {
+                $out[$url] = mb_substr($item['label'], 0, 255);
+            }
         }
 
-        return array_values(array_unique($out));
+        return $out;
     }
 
     private function cleanUrl(string $url): ?string

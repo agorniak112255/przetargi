@@ -51,6 +51,13 @@ final class ProductEnrichmentService
     /** Tyle treści musi mieć karta producenta, żeby wejść przed karty sklepów. */
     private const MFR_CARD_MIN_CHARS = 400;
 
+    /**
+     * Ile plików PDF zostaje przy karcie. Przetarg pyta o kartę produktu, deklarację zgodności,
+     * instrukcję, kartę gwarancyjną i tabelę rozmiarów — przy trzech część z nich nie mieściła się
+     * w limicie. Limit steruje też budżetem czytania PDF-ów, więc nie podnosimy go wyżej.
+     */
+    private const MAX_PRODUCT_DOCUMENTS = 5;
+
     /** Ile ostatnich kroków przebiegu zostaje przy karcie, gdy wzbogacanie się udało. */
     private const TRACE_STEPS_ON_SUCCESS = 12;
 
@@ -751,6 +758,7 @@ final class ProductEnrichmentService
                 foreach ($mfrFetched['document_urls'] as $url) {
                     $fetched['document_urls'][] = $url;
                 }
+                $this->mergeDocumentLabels($fetched, $mfrFetched);
                 $mfrPageSnippets = $this->keepConfirmedCardPages($product, $mfrFetched['pages']);
             }
             $timing['fetch_ms'] = $this->elapsedMs($t);
@@ -1088,6 +1096,11 @@ final class ProductEnrichmentService
                 $sourceUrls[] = $url;
             }
 
+            // Które z tych źródeł jest docelowe. Testujący zgłosił, że opisy Artry brały się z kart
+            // konkurencji (regera, Empik), a z samej listy adresów nie dało się tego zobaczyć.
+            // Kolejności listy nie ruszamy — z niej wybierane są zdjęcia — zapisujemy samo rozstrzygnięcie.
+            [$primarySourceUrl, $primarySourceKind] = $this->primarySource($sourceUrls, $product, $mfrDomains);
+
             // Zdjęcie z tej samej karty co opis — nie z innej pobranej strony.
             $this->liveProgress()->step('weryfikacja zdjęć');
             $t = microtime(true);
@@ -1188,6 +1201,8 @@ final class ProductEnrichmentService
                 'specs' => $specs,
                 'attributes' => $attributes,
                 'source_urls' => array_values(array_unique($sourceUrls)),
+                'primary_source_url' => $primarySourceUrl,
+                'primary_source_kind' => $primarySourceKind,
                 'confidence' => (float) ($extracted['confidence'] ?? 0),
                 'from_cache' => false,
             ];
@@ -1265,7 +1280,13 @@ final class ProductEnrichmentService
                 array_column($searchResults, 'url'),
             ));
             $preferredDocs = $this->preferManufacturerDocuments($documentUrls, $product, $mfrDomains);
-            $savedDocs = $this->documents->downloadMany($product, $preferredDocs, 3);
+            $documentLabels = is_array($fetched['document_labels'] ?? null) ? $fetched['document_labels'] : [];
+            $savedDocs = $this->documents->downloadMany(
+                $product,
+                $preferredDocs,
+                self::MAX_PRODUCT_DOCUMENTS,
+                $documentLabels,
+            );
             // Imperva na domenie producenta → PDF z CDN/dystrybutora (SKU w URL)
             if ($savedDocs === []) {
                 $fallbackDocs = array_values(array_unique(array_filter(
@@ -1273,7 +1294,12 @@ final class ProductEnrichmentService
                     static fn ($u): bool => is_string($u) && ProductDocumentDownloader::looksLikePdfUrl($u)
                 )));
                 if ($fallbackDocs !== $preferredDocs) {
-                    $savedDocs = $this->documents->downloadMany($product, $fallbackDocs, 3);
+                    $savedDocs = $this->documents->downloadMany(
+                        $product,
+                        $fallbackDocs,
+                        self::MAX_PRODUCT_DOCUMENTS,
+                        $documentLabels,
+                    );
                 }
             }
             foreach ($savedDocs as $document) {
@@ -2236,6 +2262,7 @@ final class ProductEnrichmentService
             $more = $this->pages->fetch($hits, (string) $product->sku, 3, [], $product);
             $confirmed = $this->keepConfirmedCardPages($product, $more['pages'] ?? []);
             if ($confirmed !== []) {
+                $this->mergeDocumentLabels($fetched, $more);
                 foreach (['image_urls', 'trusted_image_urls', 'document_urls'] as $key) {
                     foreach ($more[$key] ?? [] as $url) {
                         if (is_string($url) && $url !== '') {
@@ -2437,6 +2464,7 @@ final class ProductEnrichmentService
         );
         $webFetched = $this->pages->fetch($fresh, (string) $product->sku, 3, $mfrDomains, $product);
         // Zdjęcia i dokumenty zbieramy tak samo jak ścieżka zmapowanych sklepów.
+        $this->mergeDocumentLabels($fetched, $webFetched);
         foreach (['image_urls', 'trusted_image_urls', 'document_urls'] as $key) {
             foreach ($webFetched[$key] ?? [] as $url) {
                 if (is_string($url) && $url !== '') {
@@ -2481,6 +2509,7 @@ final class ProductEnrichmentService
             urls: array_values(array_filter(array_column($shopResults, 'url')))
         );
         $shopFetched = $this->pages->fetch($shopResults, (string) $product->sku, 3, [], $product);
+        $this->mergeDocumentLabels($fetched, $shopFetched);
         foreach (['image_urls', 'trusted_image_urls', 'document_urls'] as $key) {
             foreach ($shopFetched[$key] ?? [] as $url) {
                 if (! is_string($url) || $url === '') {
@@ -2673,6 +2702,64 @@ final class ProductEnrichmentService
             $urls,
             fn ($url): bool => is_string($url) && $this->identity->imageUrlMentionsProduct($url, $product)
         ));
+    }
+
+    /**
+     * Etykiety linków do plików („Karta produktu”, „Karta gwarancyjna”) zebrane przy pobieraniu stron.
+     * Po samym adresie nie da się odróżnić gwarancji od karty technicznej, a przy dobieraniu kolejnych
+     * kart etykiety z pierwszego pobrania nie mogą przepaść.
+     *
+     * @param  array<string, mixed>  $fetched
+     * @param  array<string, mixed>  $source
+     */
+    private function mergeDocumentLabels(array &$fetched, array $source): void
+    {
+        $labels = $source['document_labels'] ?? null;
+        if (! is_array($labels)) {
+            return;
+        }
+        $known = is_array($fetched['document_labels'] ?? null) ? $fetched['document_labels'] : [];
+        foreach ($labels as $url => $label) {
+            if (is_string($url) && is_string($label) && $url !== '' && ! isset($known[$url])) {
+                $known[$url] = $label;
+            }
+        }
+        $fetched['document_labels'] = $known;
+    }
+
+    /**
+     * Źródło docelowe karty i jego rodzaj. Adres wskazany ręcznie bije wszystko, bo to decyzja
+     * człowieka; dalej strona producenta, a sklepy dopiero po niej. Zwraca [null, null], gdy karta
+     * powstała bez źródeł — brak rozstrzygnięcia jest informacją, nie wolno go zgadywać.
+     *
+     * @param  list<string>  $sourceUrls
+     * @param  list<string>  $mfrDomains
+     * @return array{0: string|null, 1: string|null}
+     */
+    private function primarySource(array $sourceUrls, Product $product, array $mfrDomains): array
+    {
+        $urls = array_values(array_filter($sourceUrls, static fn ($url): bool => is_string($url) && $url !== ''));
+        if ($urls === []) {
+            return [null, null];
+        }
+
+        foreach ($urls as $url) {
+            if ($product->isHintedShopUrl($url)) {
+                return [$url, 'manual'];
+            }
+        }
+        foreach ($urls as $url) {
+            if ($this->manufacturers->isManufacturerUrl($url, $product, $mfrDomains)) {
+                return [$url, 'manufacturer'];
+            }
+        }
+        foreach ($urls as $url) {
+            if ($this->catalogPdf()->isConfiguredCatalogUrl($url)) {
+                return [$url, 'catalog'];
+            }
+        }
+
+        return [$urls[0], 'shop'];
     }
 
     /**

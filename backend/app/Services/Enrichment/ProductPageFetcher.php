@@ -21,7 +21,8 @@ final class ProductPageFetcher
 {
     private const HTML_CACHE_PREFIX = 'enrich_page_html_v1:';
 
-    private const READER_CACHE_PREFIX = 'enrich_page_reader_v1:';
+    // v2: wpis niesie też etykiety odsyłaczy (document_labels) — stare wpisy nie mają tego klucza
+    private const READER_CACHE_PREFIX = 'enrich_page_reader_v2:';
 
     private const CACHE_TTL_HOURS = 24;
 
@@ -33,6 +34,14 @@ final class ProductPageFetcher
 
     /** @var list<array{url: string, reason: string}> */
     private array $rejections = [];
+
+    /**
+     * Etykieta odsyłacza, pod którym znaleziono dokument (adres => tekst linku). Na kartach sklepów
+     * wszystkie pliki wiszą pod jednym „/download/file/id/…” i tylko etykieta mówi, co to za dokument.
+     *
+     * @var array<string, string>
+     */
+    private array $documentLabels = [];
 
     public function __construct(
         private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
@@ -54,6 +63,7 @@ final class ProductPageFetcher
      *     image_urls: list<string>,
      *     trusted_image_urls: list<string>,
      *     document_urls: list<string>,
+     *     document_labels: array<string, string>,
      *     rejected: list<array{url: string, reason: string}>
      * }
      */
@@ -66,8 +76,10 @@ final class ProductPageFetcher
     ): array {
         $previous = $this->matchingProduct;
         $previousRejections = $this->rejections;
+        $previousLabels = $this->documentLabels;
         $this->matchingProduct = $product;
         $this->rejections = [];
+        $this->documentLabels = [];
         try {
             $out = $this->fetchInner($results, $sku, $maxPages, $manufacturerDomains);
             $out['rejected'] = CandidateRejection::unique($this->rejections);
@@ -76,6 +88,7 @@ final class ProductPageFetcher
         } finally {
             $this->matchingProduct = $previous;
             $this->rejections = $previousRejections;
+            $this->documentLabels = $previousLabels;
         }
     }
 
@@ -86,7 +99,8 @@ final class ProductPageFetcher
      *     pages: list<array{url: string, text: string}>,
      *     image_urls: list<string>,
      *     trusted_image_urls: list<string>,
-     *     document_urls: list<string>
+     *     document_urls: list<string>,
+     *     document_labels: array<string, string>
      * }
      */
     /**
@@ -170,11 +184,15 @@ final class ProductPageFetcher
             ? $this->bestPages($goodPages, $skuNorm, $wanted)
             : array_slice($fallbackPages, 0, $wanted);
 
+        $documents = array_values(array_unique($documents));
+
         return [
             'pages' => $pages,
             'image_urls' => array_values(array_unique($images)),
             'trusted_image_urls' => array_values(array_unique($trustedImages)),
-            'document_urls' => array_values(array_unique($documents)),
+            'document_urls' => $documents,
+            // klucz dodatkowy — starsi odbiorcy biorą sam „document_urls” i go nie widzą
+            'document_labels' => array_intersect_key($this->documentLabels, array_flip($documents)),
         ];
     }
 
@@ -310,6 +328,7 @@ final class ProductPageFetcher
                     'text' => (string) ($cached['text'] ?? ''),
                     'image_urls' => is_array($cached['image_urls'] ?? null) ? $cached['image_urls'] : [],
                     'document_urls' => is_array($cached['document_urls'] ?? null) ? $cached['document_urls'] : [],
+                    'document_labels' => is_array($cached['document_labels'] ?? null) ? $cached['document_labels'] : [],
                 ];
             }
         }
@@ -377,6 +396,7 @@ final class ProductPageFetcher
         }
         foreach ($viaReader['document_urls'] as $doc) {
             $documents[] = $doc;
+            $this->rememberDocumentLabel((string) $doc, (string) (($viaReader['document_labels'] ?? [])[$doc] ?? ''));
         }
 
         return $used;
@@ -1395,7 +1415,9 @@ final class ProductPageFetcher
             foreach ($m as $row) {
                 $raw[] = [
                     'href' => html_entity_decode((string) ($row[1] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
-                    'label' => mb_strtolower(trim(strip_tags((string) ($row[2] ?? '')))),
+                    // etykieta w oryginalnej pisowni — porównania niżej i tak robią mb_strtolower,
+                    // a ten sam tekst bywa jedyną nazwą dokumentu („Instrukcja obsługi”)
+                    'label' => trim(strip_tags((string) ($row[2] ?? ''))),
                 ];
             }
         }
@@ -1441,7 +1463,7 @@ final class ProductPageFetcher
             }
             $meta = mb_strtolower(urldecode($abs));
             $label = $item['label'];
-            $hay = $meta.' '.$label;
+            $hay = $meta.' '.mb_strtolower($label);
 
             if (ProductDocumentDownloader::looksLikeJunkDocument($hay)) {
                 continue;
@@ -1460,6 +1482,7 @@ final class ProductPageFetcher
             }
             if ($matched) {
                 $out[] = $abs;
+                $this->rememberDocumentLabel($abs, $label);
 
                 continue;
             }
@@ -1472,10 +1495,12 @@ final class ProductPageFetcher
             }
             if ($fromManufacturer) {
                 $out[] = $abs;
+                $this->rememberDocumentLabel($abs, $label);
 
                 continue;
             }
             $unbound[$abs] = true;
+            $this->rememberDocumentLabel($abs, $label);
         }
 
         // Sklep: „deklaracja zgodności” bez kodu i nazwy bierzemy tylko wtedy, gdy na stronie jest
@@ -1487,6 +1512,16 @@ final class ProductPageFetcher
         }
 
         return array_values(array_unique($out));
+    }
+
+    /** Pierwsza niepusta etykieta wygrywa: ten sam plik bywa linkowany też z pustej ikonki. */
+    private function rememberDocumentLabel(string $url, string $label): void
+    {
+        $label = trim($label);
+        if ($url === '' || $label === '' || ($this->documentLabels[$url] ?? '') !== '') {
+            return;
+        }
+        $this->documentLabels[$url] = mb_substr($label, 0, 255);
     }
 
     private function looksLikeCertificateDocument(string $hay): bool

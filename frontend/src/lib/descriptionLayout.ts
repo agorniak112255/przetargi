@@ -175,9 +175,16 @@ export function attributeNorms(product: Product): string {
   return Array.isArray(normy) && normy.length > 0 ? normy.join(', ') : ''
 }
 
+const DOCUMENT_KIND_LABELS: Record<string, string> = {
+  certificate: 'certyfikat',
+  datasheet: 'karta',
+  manual: 'instrukcja',
+  warranty: 'gwarancja',
+  size_chart: 'rozmiary',
+}
+
 function documentMeta(kind?: string, sizeBytes?: number): string {
-  const type =
-    kind === 'certificate' ? 'certyfikat' : kind === 'datasheet' ? 'karta' : 'PDF'
+  const type = (kind && DOCUMENT_KIND_LABELS[kind]) || 'PDF'
   const size = sizeBytes ? ` · ${Math.max(1, Math.round(sizeBytes / 1024))} KB` : ''
   return `${type}${size}`
 }

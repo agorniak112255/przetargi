@@ -291,6 +291,42 @@ final class ProductPageFetcherTest extends TestCase
     }
 
     /** Pełna karta sklepu — dłuższa niż próg, od którego fetcher uznaje stronę za blokadę WAF. */
+    public function test_link_labels_travel_next_to_document_urls(): void
+    {
+        // Na kartach sklepów wszystkie pliki wiszą pod jednym „/download/file/id/…” i tylko tekst
+        // odsyłacza mówi, czy to deklaracja, instrukcja czy tabela rozmiarów.
+        $html = $this->card('ARYA 300 673560 S1 P')
+            .'<a href="/pliki/instrukcja.pdf">Instrukcja obsługi</a>'
+            .'<a href="/pliki/deklaracja-673560.pdf">Deklaracja zgodności UE</a>';
+        Http::fake([
+            self::RIGHT => Http::response($html, 200),
+            '*' => Http::response('', 404),
+        ]);
+
+        $product = new Product([
+            'sku' => '673560',
+            'name' => 'ARYA 300 673560 S1 P',
+            'manufacturer' => 'ARTRA',
+        ]);
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [['url' => self::RIGHT, 'title' => 'ARYA 300 673560 S1 P', 'snippet' => '']],
+            (string) $product->sku,
+            3,
+            [],
+            $product,
+        );
+
+        $this->assertContains('https://sklep-bhp.pl/pliki/deklaracja-673560.pdf', $fetched['document_urls']);
+        $this->assertSame(
+            'Deklaracja zgodności UE',
+            $fetched['document_labels']['https://sklep-bhp.pl/pliki/deklaracja-673560.pdf'] ?? null,
+        );
+        // mapa opisuje wyłącznie zwrócone adresy
+        foreach (array_keys($fetched['document_labels']) as $url) {
+            $this->assertContains($url, $fetched['document_urls']);
+        }
+    }
+
     private function card(string $model): string
     {
         $specs = '';

@@ -141,6 +141,96 @@ final class ProductDocumentContentFilterTest extends TestCase
         );
     }
 
+    /**
+     * @return list<array{0: string, 1: string, 2: string}> etykieta, adres, oczekiwany rodzaj
+     */
+    public static function documentKinds(): array
+    {
+        return [
+            // etykieta rozstrzyga, bo adres to sam numer pliku — tak wyglądają karty sklepów
+            'etykieta: instrukcja' => ['Instrukcja obsługi', 'https://sklep.pl/download/file/id/238', 'manual'],
+            'etykieta: instrukcja użytkownika' => ['Instrukcja użytkownika - PL', 'https://sklep.pl/download/file/id/239', 'manual'],
+            'etykieta: gwarancja' => ['Karta gwarancyjna', 'https://sklep.pl/download/file/id/240', 'warranty'],
+            'etykieta: tabela rozmiarów' => ['Tabela rozmiarów', 'https://sklep.pl/download/file/id/241', 'size_chart'],
+            // „karta produktowa” nie może zostać przeciągnięta do instrukcji ani do gwarancji
+            'etykieta: karta produktowa' => ['Karta produktowa', 'https://sklep.pl/download/file/id/242', 'datasheet'],
+            'etykieta: deklaracja' => ['Deklaracje zgodności - PL', 'https://sklep.pl/download/file/id/243', 'certificate'],
+            // adres, gdy etykiety nie ma
+            'adres: instrukcja' => ['', 'https://producent.pl/pliki/instrukcja-obslugi-60549.pdf', 'manual'],
+            'adres: user guide' => ['', 'https://producent.com/files/c300-user-guide.pdf', 'manual'],
+            'adres: ifu' => ['', 'https://www.ansell.com/-/media/ifu/59-lite.ashx', 'manual'],
+            'adres: gwarancja' => ['', 'https://producent.pl/pliki/karta-gwarancyjna.pdf', 'warranty'],
+            'adres: size chart' => ['', 'https://producent.com/files/size-chart-gloves.pdf', 'size_chart'],
+            // adres protokołowo względny — tak linkują niektóre sklepy
+            'adres bez protokołu: instrukcja' => ['', '//cdn.producent.pl/pliki/instrukcja.pdf', 'manual'],
+            'adres bez protokołu: rozmiary' => ['', '//cdn.producent.pl/pliki/tabela-rozmiarów.pdf', 'size_chart'],
+            // polskie znaki w etykiecie i w adresie (także zakodowane w %)
+            'polskie znaki w adresie' => ['', 'https://producent.pl/pliki/tabela%20rozmiar%C3%B3w.pdf', 'size_chart'],
+            // dotychczasowe rozpoznanie zostaje nienaruszone
+            'adres: deklaracja' => ['', 'https://www.ansell.com/pl/pl/doc/ringers-r259', 'certificate'],
+            'adres: karta produktu' => ['', 'https://www.ansell.com/pl/pl/pds/ringers-r259', 'datasheet'],
+            'adres: nic nie mówi' => ['', 'https://sklep.pl/files/12345.pdf', 'other'],
+        ];
+    }
+
+    #[DataProvider('documentKinds')]
+    public function test_recognises_document_kind(string $label, string $url, string $expected): void
+    {
+        $this->assertSame($expected, $this->guessKind($url, $label), $label.' | '.$url);
+    }
+
+    public function test_label_wins_over_address_for_new_kinds(): void
+    {
+        // plik leży w katalogu „karty”, ale link mówi wprost, że to instrukcja
+        $this->assertSame(
+            'manual',
+            $this->guessKind('https://sklep.pl/karta/12345.pdf', 'Instrukcja obsługi')
+        );
+    }
+
+    public function test_new_kinds_get_polish_titles(): void
+    {
+        $this->assertSame(
+            'Instrukcja obsługi.pdf',
+            $this->guessTitle('https://sklep.pl/download/file/id/238', 'manual', 'Instrukcja obsługi')
+        );
+        $this->assertSame(
+            'Karta gwarancyjna.pdf',
+            $this->guessTitle('https://sklep.pl/download/file/id/240', 'warranty', 'Karta gwarancyjna')
+        );
+        $this->assertSame(
+            'Tabela rozmiarów.pdf',
+            $this->guessTitle('https://sklep.pl/download/file/id/241', 'size_chart', 'Tabela rozmiarów')
+        );
+        // nazwy dotychczasowych rodzajów zostają bez zmian — nazwa pliku niesie więcej niż etykieta
+        $this->assertSame(
+            'deklaracja-zgodnosci-60549.pdf',
+            $this->guessTitle('https://producent.pl/pliki/deklaracja-zgodnosci-60549.pdf', 'certificate')
+        );
+    }
+
+    private function guessKind(string $url, string $label = ''): string
+    {
+        $method = new ReflectionMethod(ProductDocumentDownloader::class, 'guessKind');
+        $method->setAccessible(true);
+
+        /** @var string $kind */
+        $kind = $method->invoke(new ProductDocumentDownloader, $url, $label);
+
+        return $kind;
+    }
+
+    private function guessTitle(string $url, string $kind, string $label = ''): string
+    {
+        $method = new ReflectionMethod(ProductDocumentDownloader::class, 'guessTitle');
+        $method->setAccessible(true);
+
+        /** @var string $title */
+        $title = $method->invoke(new ProductDocumentDownloader, $url, $kind, $label);
+
+        return $title;
+    }
+
     private function uvexGlove(): Product
     {
         return new Product([

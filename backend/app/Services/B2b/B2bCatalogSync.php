@@ -42,6 +42,9 @@ use Throwable;
  * - opis ze źródła, gdy karta go nie ma albo ma opis zapisany wcześniej przez synchronizację i
  *   niezmieniony od tamtej pory — opisu poprawionego ręcznie nie nadpisujemy;
  * - kategoria, link i zdjęcie tylko gdy puste; produktów znikniętych z B2B nie kasujemy;
+ * - łącznik treści (B2bContentOnlySite, witryna producenta bez cen zakupu): brak ceny nie pomija pozycji,
+ *   nic nie idzie do slotu ceny ani do historii cen, a pozycja bez karty w katalogu jest pomijana z powodem
+ *   zamiast zakładać nową kartę; reszta (opis, tabelka, zdjęcia, pliki, rozmiary) idzie wspólną drogą;
  * - żaden łącznik nie zmienia nazwy istniejącej karty — nazwa ze źródła tylko na nowej (decyzja użytkownika
  *   15.09.2026; znacznik B2bKeepsExistingNames zostaje dla zgodności); b2b_product_links.remote_name zawsze
  *   trzyma nazwę ze źródła z ostatniego przebiegu;
@@ -90,6 +93,16 @@ final class B2bCatalogSync
      * bywają grubsze (16.09.2026 „instrukcja obsługi rękawic HexArmor.pdf” to 7,4 MB) — przy 5 MB odpadały.
      */
     private const DOCUMENT_MAX_BYTES = 12_000_000;
+
+    /**
+     * Rodzaje plików, z których wolno wziąć tekst opisu wyrobu. Po rozpoznaniu instrukcji, gwarancji
+     * i tabeli rozmiarów część plików dotąd oznaczanych jako karta techniczna zmienia rodzaj — opis
+     * ma dalej powstawać z karty produktu i z instrukcji obsługi, bo obie opisują sam wyrób.
+     * Karta gwarancyjna i tabela rozmiarów mówią o warunkach i wymiarach, nie o wyrobie.
+     *
+     * @var list<string>
+     */
+    private const DESCRIPTION_SOURCE_KINDS = [ProductDocument::KIND_DATASHEET, ProductDocument::KIND_MANUAL];
 
     /**
      * Co ile dni odświeżamy kartę wyrobu ze sklepu (ProductShopCard). Pobranie pól bywa płatne dodatkowym
@@ -509,9 +522,15 @@ final class B2bCatalogSync
             return ['status' => 'skipped', 'reason' => 'kod należy do karty producenta '.$existing->manufacturer];
         }
 
+        // łącznik treści (B2bContentOnlySite, np. witryna producenta): brak ceny jest u niego normalny,
+        // a katalog buduje cennik — pozycja bez karty nie zakłada nowej, tylko czeka na cennik
+        $contentOnly = $connector instanceof B2bContentOnlySite;
         $price = $connector->price($remote);
-        if ($price === null) {
+        if ($price === null && ! $contentOnly) {
             return ['status' => 'skipped', 'reason' => 'brak ceny w B2B'];
+        }
+        if ($contentOnly && $existing === null) {
+            return ['status' => 'skipped', 'reason' => 'brak karty w katalogu — cennik jej nie zawiera'];
         }
 
         // pola opisowe karty; ceny idą do slotu konta, nie do fill karty
@@ -529,7 +548,9 @@ final class B2bCatalogSync
             $summary = trim($remote->variantSummary);
             $payload['variant_summary'] = $summary === '' ? null : mb_substr($summary, 0, self::VARIANT_SUMMARY_LIMIT);
         }
-        $prices = [
+        // łącznik treści nie wnosi ceny: pusta tablica nie dojdzie ani na kartę (nowych nie zakłada),
+        // ani do slotu konta, ani do porównania cen — wszystkie te ścieżki są dla niego wyłączone
+        $prices = $price === null ? [] : [
             // cena konta (po rabacie) = zakup; cena bazowa dostawcy = katalogowa
             'catalog_price_net' => $price->base ?? $price->net,
             'purchase_price' => $price->net,
@@ -546,7 +567,13 @@ final class B2bCatalogSync
         $updateSummary = null;
         $dirty = true;
         $slotChanged = true;
-        if ($existing !== null) {
+        if ($contentOnly && $existing !== null) {
+            // tryb „tylko treść”: nie ma ceny do porównania ani slotu do odświeżenia, więc o tym, czy karta się
+            // zmieniła, decydują same pola opisowe. Podsumowania aktualizacji (kolumny cen) też nie budujemy.
+            $existing->fill($payload);
+            $dirty = $existing->isDirty();
+            $slotChanged = false;
+        } elseif ($existing !== null) {
             $slot = ProductSourcePrice::query()
                 ->where('product_id', $existing->id)
                 ->where('source_key', $slotKey)
@@ -591,7 +618,7 @@ final class B2bCatalogSync
         // — kolejne przebiegi nie ruszałyby już jej opisu (16.09.2026: 214 kart UVEX po błędzie pamięci podręcznej).
         [$product, $savedLink] = DB::transaction(function () use (
             $account, $connector, $remote, $existing, $payload, $prices, $slotKey, $priceChange, $priceListId,
-            $runId, $dirty, $members, $memberLinks, $descriptionHash, $sourceTextTaken, &$claimed, &$warnings,
+            $runId, $dirty, $members, $memberLinks, $descriptionHash, $sourceTextTaken, $contentOnly, &$claimed, &$warnings,
         ): array {
             if ($existing !== null) {
                 if ($dirty) {
@@ -605,23 +632,27 @@ final class B2bCatalogSync
 
             $this->claim($claimed, (int) $product->id, (string) $product->sku);
 
-            // zapis slotu także bez zmiany ceny — checked_at wyznacza najświeższe konto przy kilku kontach
-            $slot = $this->effectivePrices->saveSlot($product, $slotKey, [
-                ...$prices,
-                'b2b_account_id' => $account->id,
-                // null = źródło nie podaje dostępności — zapisana wartość zostaje
-                ...($remote->availability !== null ? ['availability' => $remote->availability] : []),
-            ])['slot'];
+            // Łącznik treści nie ma ceny do zapisania: slot konta zostawiamy pusty, a historii cen nie dotykamy.
+            // Slot z ceną detaliczną producenta wygrałby z ceną z cennika (ProductEffectivePrice) i zawyżył wycenę.
+            if (! $contentOnly) {
+                // zapis slotu także bez zmiany ceny — checked_at wyznacza najświeższe konto przy kilku kontach
+                $slot = $this->effectivePrices->saveSlot($product, $slotKey, [
+                    ...$prices,
+                    'b2b_account_id' => $account->id,
+                    // null = źródło nie podaje dostępności — zapisana wartość zostaje
+                    ...($remote->availability !== null ? ['availability' => $remote->availability] : []),
+                ])['slot'];
 
-            if ($existing === null || $priceChange !== null) {
-                ProductPriceHistory::query()->create([
-                    'product_id' => $product->id,
-                    'price_list_id' => $priceListId,
-                    'b2b_sync_run_id' => $runId,
-                    'catalog_price_net' => $slot->catalog_price_net,
-                    'purchase_price' => $slot->purchase_price,
-                    'source' => 'b2b:'.$connector::key(),
-                ]);
+                if ($existing === null || $priceChange !== null) {
+                    ProductPriceHistory::query()->create([
+                        'product_id' => $product->id,
+                        'price_list_id' => $priceListId,
+                        'b2b_sync_run_id' => $runId,
+                        'catalog_price_net' => $slot->catalog_price_net,
+                        'purchase_price' => $slot->purchase_price,
+                        'source' => 'b2b:'.$connector::key(),
+                    ]);
+                }
             }
 
             $linkValues = [
@@ -1576,7 +1607,7 @@ final class B2bCatalogSync
         $texts = [];
         foreach ($documents as $document) {
             // do opisu bierzemy pierwszą kartę techniczną; reszta plików zostaje załącznikiem
-            if ($document->kind !== ProductDocument::KIND_DATASHEET) {
+            if (! in_array($document->kind, self::DESCRIPTION_SOURCE_KINDS, true)) {
                 continue;
             }
             $stored = $existing === null ? null : ProductDocument::query()
@@ -1650,7 +1681,7 @@ final class B2bCatalogSync
             }
             try {
                 $file = $connector->documentBytes($document);
-                $text ??= $document->kind === ProductDocument::KIND_DATASHEET
+                $text ??= in_array($document->kind, self::DESCRIPTION_SOURCE_KINDS, true)
                     ? $this->documentText->fromFile($file['bytes'], $file['mime'])
                     : null;
                 $written = $this->documents->storeBytes(

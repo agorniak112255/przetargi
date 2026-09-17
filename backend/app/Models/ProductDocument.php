@@ -14,6 +14,13 @@ class ProductDocument extends Model
 
     public const KIND_DATASHEET = 'datasheet';
 
+    /** Instrukcja obsługi / użytkowania — w przetargach BHP wymagana obok deklaracji zgodności. */
+    public const KIND_MANUAL = 'manual';
+
+    public const KIND_WARRANTY = 'warranty';
+
+    public const KIND_SIZE_CHART = 'size_chart';
+
     public const KIND_OTHER = 'other';
 
     protected $fillable = [

@@ -55,6 +55,24 @@ final class ProductDocumentDownloader
     private const JUNK_DOCUMENT_WORDS = ['rodo', 'gdpr', 'agb', 'platnosc', 'dostawa'];
 
     /**
+     * Rodzaje dokumentów wymagane w przetargach BHP obok deklaracji zgodności i karty produktu.
+     * Dopasowywane do etykiety odsyłacza i do adresu (po urldecode, małymi literami).
+     *
+     * Wzorce celowo wąskie, bo rozstrzygają o rodzaju PRZED kartą produktu, a z karty produktu
+     * (i z instrukcji) bierze się tekst opisu wyrobu:
+     * - „ifu” i „manual” tylko jako osobne człony — inaczej „manualna zręczność” z opisu rękawic
+     *   robiłaby z karty technicznej instrukcję obsługi;
+     * - „notice” odpada w ogóle: po polsku nic nie znaczy, a po angielsku to najczęściej nota prawna;
+     * - sam „rozmiarów” odpada: „karta-produktu-tabela-rozmiarow.pdf” to nadal karta produktu,
+     *   tabelą rozmiarów jest dopiero plik, który mówi o tym wprost.
+     */
+    private const MANUAL_PATTERN = '#(instrukcj|(?<![a-z])manuals?(?![a-z])|(?<![a-z])ifu(?![a-z])|user.?guide|bedienungsanleitung)#iu';
+
+    private const WARRANTY_PATTERN = '#(gwaranc|warrant|garanti)#iu';
+
+    private const SIZE_CHART_PATTERN = '#(tabela.?rozmiar|rozmiar[oó]wk|size.?chart|size.?guide|sizing)#iu';
+
+    /**
      * Krótszy tekst z PDF to skan bez warstwy tekstowej albo sama metryczka — wtedy o przyjęciu
      * dokumentu decyduje jak dawniej adres. Prawdziwy certyfikat ze skanu nie może wypaść.
      */
@@ -243,15 +261,16 @@ final class ProductDocumentDownloader
 
     /**
      * @param  list<string>  $urls
+     * @param  array<string, string>  $labels  etykieta linku ze strony (url => tekst odsyłacza); pusta = jak dotąd
      * @return list<ProductDocument>
      */
-    public function downloadMany(Product $product, array $urls, int $max = 3): array
+    public function downloadMany(Product $product, array $urls, int $max = 3, array $labels = []): array
     {
         $saved = [];
         $sort = 0;
         $this->textBudget = max(1, $max * self::TEXT_CHECK_BUDGET_FACTOR);
 
-        foreach ($this->rankUrls($urls) as $url) {
+        foreach ($this->rankUrls($urls, $labels) as $url) {
             if (count($saved) >= $max) {
                 break;
             }
@@ -265,7 +284,7 @@ final class ProductDocumentDownloader
             }
 
             try {
-                $doc = $this->downloadOne($product, $url, $sort);
+                $doc = $this->downloadOne($product, $url, $sort, self::labelFor($labels, $url));
             } catch (Throwable $e) {
                 Log::info('Product PDF download skipped', [
                     'product_id' => $product->id,
@@ -289,9 +308,10 @@ final class ProductDocumentDownloader
 
     /**
      * @param  list<string>  $urls
+     * @param  array<string, string>  $labels
      * @return list<string>
      */
-    private function rankUrls(array $urls): array
+    private function rankUrls(array $urls, array $labels = []): array
     {
         $scored = [];
         foreach (array_values(array_unique($urls)) as $url) {
@@ -299,12 +319,19 @@ final class ProductDocumentDownloader
                 continue;
             }
             $u = mb_strtolower(urldecode($url));
+            $label = self::labelFor($labels, $url);
+            $hay = $label !== '' ? $u.' '.mb_strtolower($label) : $u;
             $score = 10;
             if (preg_match('#(cert|conform|declaration|deklarac|zgodno|doc|ue|eu[-_]?doc|oeko|oeeko|reach)#iu', $u)) {
                 $score += 80;
             }
             if (preg_match('#(datasheet|data[-_]?sheet|pds|tds|spec|karta|pdb)#i', $u)) {
                 $score += 50;
+            }
+            // Instrukcja, gwarancja i tabela rozmiarów mieszczą się w limicie pobrań przed przypadkowym
+            // PDF-em, ale nigdy przed deklaracją zgodności ani kartą produktu — to one rozstrzygają przetarg.
+            if (self::matchesExtraKind($hay) !== null) {
+                $score += 30;
             }
             if (preg_match('#/(pds|doc|ukdoc)(/|$)#i', $u)) {
                 $score += 70;
@@ -319,7 +346,15 @@ final class ProductDocumentDownloader
         return array_map(static fn (array $r): string => $r['url'], $scored);
     }
 
-    private function downloadOne(Product $product, string $url, int $sortOrder): ?ProductDocument
+    /** @param  array<string, string>  $labels */
+    private static function labelFor(array $labels, string $url): string
+    {
+        $label = $labels[$url] ?? '';
+
+        return is_string($label) ? trim($label) : '';
+    }
+
+    private function downloadOne(Product $product, string $url, int $sortOrder, string $label = ''): ?ProductDocument
     {
         $response = Http::timeout(20)
             ->connectTimeout(5)
@@ -331,7 +366,7 @@ final class ProductDocumentDownloader
             ->get($url);
 
         if (! $response->successful()) {
-            $fallback = $this->downloadBlockedDocument($product, $url, $sortOrder);
+            $fallback = $this->downloadBlockedDocument($product, $url, $sortOrder, $label);
             if ($fallback !== null) {
                 return $fallback;
             }
@@ -347,9 +382,10 @@ final class ProductDocumentDownloader
             // Ansell /pds|/doc czasem zwraca HTML z linkiem do PDF albo challenge
             $fromHtml = $this->extractPdfUrlFromHtml($bytes, $url);
             if ($fromHtml !== null && $fromHtml !== $url) {
-                return $this->downloadOne($product, $fromHtml, $sortOrder);
+                // etykieta opisuje ten sam dokument, nawet jeśli PDF leży pod innym adresem
+                return $this->downloadOne($product, $fromHtml, $sortOrder, $label);
             }
-            $fallback = $this->downloadBlockedDocument($product, $url, $sortOrder);
+            $fallback = $this->downloadBlockedDocument($product, $url, $sortOrder, $label);
             if ($fallback !== null) {
                 return $fallback;
             }
@@ -368,7 +404,7 @@ final class ProductDocumentDownloader
             return null;
         }
 
-        return $this->storePdfBytes($product, $bytes, $url, $sortOrder, $text !== '' ? $text : null);
+        return $this->storePdfBytes($product, $bytes, $url, $sortOrder, $text !== '' ? $text : null, $label);
     }
 
     /**
@@ -472,6 +508,7 @@ final class ProductDocumentDownloader
         Product $product,
         string $url,
         int $sortOrder,
+        string $label = '',
     ): ?ProductDocument {
         $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
         $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
@@ -487,7 +524,7 @@ final class ProductDocumentDownloader
         $mime = str_starts_with($imageBytes, "\x89PNG") ? 'image/png' : 'image/jpeg';
         $pdfBytes = $this->renderImageAsPdf($imageBytes, $mime);
 
-        return $this->storePdfBytes($product, $pdfBytes, $url, $sortOrder);
+        return $this->storePdfBytes($product, $pdfBytes, $url, $sortOrder, null, $label);
     }
 
     private function renderImageAsPdf(string $imageBytes, string $mime): string
@@ -515,6 +552,7 @@ final class ProductDocumentDownloader
         string $sourceUrl,
         int $sortOrder,
         ?string $text = null,
+        string $label = '',
     ): ProductDocument {
         $size = strlen($bytes);
         if (! str_starts_with($bytes, '%PDF') || $size === 0 || $size > self::MAX_BYTES) {
@@ -538,8 +576,8 @@ final class ProductDocumentDownloader
         $relative = 'products/'.$product->id.'/docs/'.Str::lower(Str::random(16)).'.pdf';
         Storage::disk('public')->put($relative, $bytes);
 
-        $kind = $this->guessKind($sourceUrl);
-        $title = $this->guessTitle($sourceUrl, $kind);
+        $kind = $this->guessKind($sourceUrl, $label);
+        $title = $this->guessTitle($sourceUrl, $kind, $label);
 
         return ProductDocument::query()->create([
             'product_id' => $product->id,
@@ -580,20 +618,63 @@ final class ProductDocumentDownloader
         return null;
     }
 
-    private function guessKind(string $url): string
+    /**
+     * Rodzaj pliku najpierw z etykiety odsyłacza, dopiero potem z adresu: na kartach sklepów
+     * wszystkie pliki wiszą pod jednym „/download/file/id/238”, a jedyne, co je rozróżnia,
+     * to tekst linku. Brak etykiety = zachowanie jak dotąd.
+     */
+    private function guessKind(string $url, string $label = ''): string
     {
-        $u = mb_strtolower(urldecode($url));
-        if (preg_match('#(cert|conform|declaration|deklarac|zgodno|/doc/|ukdoc|oeko)#iu', $u)) {
+        $label = trim($label);
+        if ($label !== '') {
+            $fromLabel = self::kindFromHay(mb_strtolower($label));
+            if ($fromLabel !== null) {
+                return $fromLabel;
+            }
+        }
+
+        return self::kindFromHay(mb_strtolower(urldecode($url))) ?? ProductDocument::KIND_OTHER;
+    }
+
+    /**
+     * Kolejność jest istotna: deklaracja zgodności i karta produktu to najważniejsze dokumenty
+     * przetargowe, więc certyfikat rozstrzyga pierwszy. Instrukcja, gwarancja i tabela rozmiarów
+     * stoją PRZED kartą produktu tylko dlatego, że „karta gwarancyjna” zawiera w sobie „karta” —
+     * inaczej gwarancja trafiałaby do kart technicznych i stamtąd do opisu wyrobu.
+     */
+    private static function kindFromHay(string $hay): ?string
+    {
+        if (preg_match('#(cert|conform|declaration|deklarac|zgodno|/doc/|ukdoc|oeko)#iu', $hay)) {
             return ProductDocument::KIND_CERTIFICATE;
         }
-        if (preg_match('#(datasheet|data[-_]?sheet|/pds/|pds|tds|spec|karta|pdb)#i', $u)) {
+        $extra = self::matchesExtraKind($hay);
+        if ($extra !== null) {
+            return $extra;
+        }
+        if (preg_match('#(datasheet|data[-_]?sheet|/pds/|pds|tds|spec|karta|pdb)#i', $hay)) {
             return ProductDocument::KIND_DATASHEET;
         }
 
-        return ProductDocument::KIND_OTHER;
+        return null;
     }
 
-    private function guessTitle(string $url, string $kind): string
+    /** Instrukcja / gwarancja / tabela rozmiarów albo null. */
+    private static function matchesExtraKind(string $hay): ?string
+    {
+        if (preg_match(self::MANUAL_PATTERN, $hay)) {
+            return ProductDocument::KIND_MANUAL;
+        }
+        if (preg_match(self::WARRANTY_PATTERN, $hay)) {
+            return ProductDocument::KIND_WARRANTY;
+        }
+        if (preg_match(self::SIZE_CHART_PATTERN, $hay)) {
+            return ProductDocument::KIND_SIZE_CHART;
+        }
+
+        return null;
+    }
+
+    private function guessTitle(string $url, string $kind, string $label = ''): string
     {
         $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
         $pathLower = mb_strtolower($path);
@@ -606,10 +687,24 @@ final class ProductDocumentDownloader
         if (str_contains($pathLower, '/pds/')) {
             return 'Karta produktu.pdf';
         }
+        // Nowe rodzaje nazywamy wprost po polsku, bo rozpoznaje je zwykle etykieta linku,
+        // a adres pod nią to najczęściej numer pliku („/download/file/id/238”).
+        $named = match ($kind) {
+            ProductDocument::KIND_MANUAL => 'Instrukcja obsługi.pdf',
+            ProductDocument::KIND_WARRANTY => 'Karta gwarancyjna.pdf',
+            ProductDocument::KIND_SIZE_CHART => 'Tabela rozmiarów.pdf',
+            default => null,
+        };
+        if ($named !== null) {
+            return $named;
+        }
         $base = basename($path);
         $base = urldecode($base);
         if ($base !== '' && $base !== '/') {
             return mb_substr($base, 0, 255);
+        }
+        if (trim($label) !== '') {
+            return mb_substr(trim($label), 0, 255);
         }
 
         return match ($kind) {

@@ -42,13 +42,15 @@ final class B2bQueueTableDescriptionsCommand extends Command
         'jsp' => ['Wagi i wymiary:', 'Jednostka: '],
         'bolle' => ['Parametry:'],
         'protekt' => ['Normy:', 'Specyfikacja techniczna:'],
+        // artra.pl: etykiety bloku parametrów ze strony producenta — pisane małą literą, tak jak w sklepie
+        'artra' => ['cholewka', 'podszewka', 'wyściólka', 'podnosek', 'wkładka', 'podeszwa', 'norma', 'Waga', 'Pielęgnacja', 'Pochodzenie'],
         'signproject' => ['Kategoria:', 'Dostępne formaty:', 'Podłoża:', 'Wersje:', 'Opis z danych katalogu SignProject'],
     ];
 
     private const SAMPLE_ROWS = 15;
 
     protected $signature = 'b2b:queue-table-descriptions
-        {--account= : Jedno konto B2B — id albo klucz łącznika (anro, signproject, jsp, bolle, uvex, protekt)}
+        {--account= : Jedno konto B2B — id albo klucz łącznika (anro, signproject, jsp, bolle, uvex, protekt, artra)}
         {--limit=0 : Najwyżej tyle kart (0 = wszystkie)}
         {--user= : E-mail użytkownika, na którego idą partie (domyślnie pierwszy administrator)}
         {--apply : Zleć uzupełnianie (bez tej flagi tylko podgląd)}';

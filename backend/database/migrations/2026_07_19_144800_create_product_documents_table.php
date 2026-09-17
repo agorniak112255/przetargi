@@ -16,7 +16,7 @@ return new class extends Migration
             $table->string('path');
             $table->string('source_url', 2000)->nullable();
             $table->string('title', 255)->nullable();
-            $table->string('kind', 32)->default('certificate'); // certificate|datasheet|other
+            $table->string('kind', 32)->default('certificate'); // certificate|datasheet|manual|warranty|size_chart|other
             $table->unsignedInteger('sort_order')->default(0);
             $table->string('checksum', 64)->nullable();
             $table->unsignedInteger('size_bytes')->default(0);

@@ -21,6 +21,7 @@ final class B2bConnectorRegistry
         BolleB2bConnector::class,
         UvexB2bConnector::class,
         ProtektB2bConnector::class,
+        ArtraB2bConnector::class,
     ];
 
     /**
@@ -36,7 +37,10 @@ final class B2bConnectorRegistry
                 // Witryna publiczna (protekt.pl) nie ma konta u dostawcy — formularz ukrywa pole hasła,
                 // a cena zakupu powstaje z ceny katalogowej i rabatów zapisanych przy koncie.
                 'requires_password' => ! is_a($class, B2bPublicSite::class, true),
-                'uses_discount_rules' => is_a($class, B2bPublicSite::class, true),
+                // Łącznik treści (artra.pl) żadnej ceny nie pobiera, więc rabat nie ma od czego liczyć —
+                // formularz nie ma po co pytać o reguły rabatowe.
+                'uses_discount_rules' => is_a($class, B2bPublicSite::class, true)
+                    && ! is_a($class, B2bContentOnlySite::class, true),
             ],
             self::CONNECTORS,
         );

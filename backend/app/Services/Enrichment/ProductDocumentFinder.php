@@ -40,7 +40,7 @@ final class ProductDocumentFinder
         $profile = $this->settings->tavilySearchProfile();
 
         foreach (array_slice($queries, 0, $profile->docsMaxQueries) as $query) {
-            $cacheKey = 'enrich_docs_v8:'.hash('sha256', $profile->mode.'|'.$query.'|'.implode(',', $domains));
+            $cacheKey = 'enrich_docs_v9:'.hash('sha256', $profile->mode.'|'.$query.'|'.implode(',', $domains));
             $cached = Cache::get($cacheKey);
             if (is_array($cached)) {
                 foreach ($cached as $url) {
@@ -160,6 +160,11 @@ final class ProductDocumentFinder
             // indeks deklaracji producenta (HTML) — potem wyciągamy PDF po SKU
             trim($mfr.' "declaration of conformity" OR deklaracje zgodności OR "declarations of conformity" downloads '.$site),
             trim($phrase.' '.$mfr.' PDS OR TDS filetype:pdf '.$site),
+            // Pozostałe dokumenty wymagane w przetargach BHP. Na końcu listy, bo deklaracja zgodności
+            // i karta produktu rozstrzygają ofertę — te zapytania wykonuje dopiero pełny profil.
+            trim(($sku !== '' ? '"'.$sku.'"' : '"'.$phrase.'"').' '.$mfr
+                .' (instrukcja obsługi OR "user guide" OR manual OR "karta gwarancyjna" OR "tabela rozmiarów" OR "size chart") filetype:pdf '
+                .$site),
         ];
         // uvex / numeryczne art.: szukaj też po samym numerze na CDN / safety
         if ($sku !== '' && preg_match('/^\d{4,}$/', $sku)) {
@@ -301,7 +306,11 @@ final class ProductDocumentFinder
             }
             $hay = mb_strtolower(urldecode($url).' '.($row['title'] ?? '').' '.($row['snippet'] ?? ''));
             $isPdf = ProductDocumentDownloader::looksLikePdfUrl($url);
-            $isDocPage = (bool) preg_match('#(deklar|certyfik|conform|datasheet|pds|tds|zgodo|certificate|download)#iu', $hay);
+            $isDocPage = (bool) preg_match(
+                '#(deklar|certyfik|conform|datasheet|pds|tds|zgodo|certificate|download'
+                .'|instrukcj|manual|user.?guide|gwaranc|warrant|tabela.?rozmiar|rozmiarów|size.?chart)#iu',
+                $hay
+            );
             $isMfr = $this->manufacturers->isManufacturerUrl($url, $product, $manufacturerDomains);
 
             // PDF z SKU w nazwie (CDN/dystrybutor) — gdy strona producenta (Ansell/Imperva) nie oddaje plików
