@@ -276,6 +276,85 @@ final class ClientInquiryApiTest extends TestCase
         $this->assertSame(25.0, (float) $res->json('answers.price.custom'));
     }
 
+    public function test_store_from_thunderbird_saves_source_and_reuses_existing_inquiry(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        Sanctum::actingAs($user);
+
+        // „once” pilnuje, że powtórne wysłanie tego samego maila nie uruchamia drugiej analizy
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Rękawice',
+                'questions' => [],
+                'product_queries' => [],
+                'line_items' => [],
+                'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock): void {
+            $mock->shouldReceive('findMany')->once()->andReturn([]);
+        });
+
+        $payload = [
+            'body' => "Dzień dobry\n\n10 szt. rękawice nitrylowe rozmiar 9",
+            'tone' => 'formal',
+            'source_channel' => 'thunderbird',
+            'source_message_id' => '<abc-123@poczta.example>',
+        ];
+
+        $first = $this->postJson('/api/inquiries', $payload)
+            ->assertCreated()
+            ->assertJsonPath('source_channel', 'thunderbird')
+            // nawiasy „< >” obcinamy, żeby porównanie nie zależało od zapisu
+            ->assertJsonPath('source_message_id', 'abc-123@poczta.example');
+
+        $second = $this->postJson('/api/inquiries', $payload)
+            ->assertOk()
+            ->assertJsonPath('id', $first->json('id'));
+
+        $this->assertSame($first->json('id'), $second->json('id'));
+        $this->assertSame(1, ClientInquiry::query()->where('user_id', $user->id)->count());
+    }
+
+    public function test_store_without_source_stays_web(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        Sanctum::actingAs($user);
+
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Kalosze',
+                'questions' => [],
+                'product_queries' => [],
+                'line_items' => [],
+                'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock): void {
+            $mock->shouldReceive('findMany')->once()->andReturn([]);
+        });
+
+        $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry\n\n4 szt. kalosze chemoodporne rozmiar 43",
+            'tone' => 'formal',
+        ])
+            ->assertCreated()
+            ->assertJsonPath('source_channel', 'web')
+            ->assertJsonPath('source_message_id', null);
+    }
+
+    public function test_store_rejects_unknown_source_channel(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        Sanctum::actingAs($user);
+
+        $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry\n\n4 szt. kalosze chemoodporne rozmiar 43",
+            'tone' => 'formal',
+            'source_channel' => 'outlook',
+        ])->assertStatus(422);
+    }
+
     public function test_compose_merges_partial_answers_and_marks_missing_price(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

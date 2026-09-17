@@ -23,6 +23,9 @@ class StoreClientInquiryRequest extends FormRequest
             'subject' => ['nullable', 'string', 'max:200'],
             'client_id' => ['nullable', 'integer', 'exists:clients,id'],
             'tone' => ['required', 'in:formal,handlowy'],
+            // Pochodzenie zapytania — wypełnia je dodatek do Thunderbirda.
+            'source_channel' => ['nullable', 'in:web,thunderbird'],
+            'source_message_id' => ['nullable', 'string', 'max:255'],
         ];
     }
 

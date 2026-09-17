@@ -57,6 +57,16 @@ class ClientInquiryController extends Controller
 
         $data = $request->validated();
 
+        // Powtórne kliknięcie w dodatku ma otworzyć istniejące zapytanie,
+        // a nie uruchomić drugiej analizy tego samego maila.
+        $existing = $this->inquiries->existingForMessage(
+            $request->user(),
+            isset($data['source_message_id']) ? (string) $data['source_message_id'] : null,
+        );
+        if ($existing instanceof ClientInquiry) {
+            return response()->json($this->inquiries->present($existing->load('client')));
+        }
+
         try {
             $inquiry = $this->inquiries->analyze(
                 $request->user(),
@@ -64,6 +74,10 @@ class ClientInquiryController extends Controller
                 (string) $data['tone'],
                 isset($data['client_id']) ? (int) $data['client_id'] : null,
                 isset($data['subject']) ? (string) $data['subject'] : null,
+                [
+                    'message_id' => isset($data['source_message_id']) ? (string) $data['source_message_id'] : null,
+                    'channel' => isset($data['source_channel']) ? (string) $data['source_channel'] : null,
+                ],
             );
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);

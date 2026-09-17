@@ -45,12 +45,16 @@ final class ClientInquiryService
         private readonly AiSettingsService $aiSettings,
     ) {}
 
+    /**
+     * @param  array{message_id?: string|null, channel?: string|null}  $source
+     */
     public function analyze(
         User $user,
         string $body,
         string $tone,
         ?int $clientId,
         ?string $subject,
+        array $source = [],
     ): ClientInquiry {
         $extracted = $this->extract($body);
         $lineItems = $this->resolveLineItems($body, $extracted['line_items']);
@@ -64,7 +68,9 @@ final class ClientInquiryService
             'user_id' => $user->id,
             'client_id' => $clientId,
             'tone' => $tone,
+            'source_channel' => $this->nullable($source['channel'] ?? null) ?? 'web',
             'source_subject' => $this->nullable($subject) ?? $extracted['subject'],
+            'source_message_id' => $this->normalizeMessageId($source['message_id'] ?? null),
             'source_body' => $body,
             'analysis' => [
                 'subject' => $extracted['subject'],
@@ -151,6 +157,37 @@ final class ClientInquiryService
     }
 
     /**
+     * Zapytanie założone już przez tę osobę z tego samego maila — chroni przed
+     * powtórną, kosztowną analizą przy drugim kliknięciu w dodatku.
+     */
+    public function existingForMessage(User $user, ?string $messageId): ?ClientInquiry
+    {
+        $normalized = $this->normalizeMessageId($messageId);
+        if ($normalized === null) {
+            return null;
+        }
+
+        return ClientInquiry::query()
+            ->where('user_id', $user->id)
+            ->where('source_message_id', $normalized)
+            ->latest('id')
+            ->first();
+    }
+
+    /** Message-ID bez nawiasów „< >”, żeby porównanie nie zależało od zapisu. */
+    public function normalizeMessageId(mixed $value): ?string
+    {
+        $id = $this->nullable($value);
+        if ($id === null) {
+            return null;
+        }
+        $id = trim($id, '<>');
+        $id = trim($id);
+
+        return $id === '' ? null : mb_substr($id, 0, 255);
+    }
+
+    /**
      * Pełny payload API zapytania (kontrakt GET /inquiries/{id}).
      *
      * @return array<string, mixed>
@@ -170,6 +207,8 @@ final class ClientInquiryService
                 : null,
             'tone' => (string) $inquiry->tone,
             'source_subject' => $inquiry->source_subject,
+            'source_channel' => (string) $inquiry->source_channel,
+            'source_message_id' => $inquiry->source_message_id,
             'source_body' => (string) $inquiry->source_body,
             'questions' => $this->stringList($analysis['questions'] ?? null),
             'attention_count' => $this->countAttention($items),
