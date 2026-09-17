@@ -316,6 +316,46 @@ final class ClientInquiryApiTest extends TestCase
         $this->assertSame(1, ClientInquiry::query()->where('user_id', $user->id)->count());
     }
 
+    public function test_store_keeps_whole_mail_but_analyzes_it_without_footer(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        Sanctum::actingAs($user);
+
+        // model nie zwraca pozycji, więc decyduje parser tekstowy — i to on
+        // wcześniej robił pozycję z adresu w stopce
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Rękawice',
+                'questions' => [],
+                'product_queries' => [],
+                'line_items' => [],
+                'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock): void {
+            $mock->shouldReceive('findMany')->once()->andReturn([]);
+        });
+
+        $mail = implode("\n", [
+            'Dzień dobry,',
+            '',
+            '10 szt. rękawice nitrylowe rozmiar 9',
+            '',
+            'Pozdrawiam',
+            'Mateusz Baniak',
+            'tel. 17 785 22 46,   Al. gen. L. Okulickiego 18,  35-206 Rzeszów',
+        ]);
+
+        $res = $this->postJson('/api/inquiries', ['body' => $mail, 'tone' => 'formal'])
+            ->assertCreated()
+            ->assertJsonCount(1, 'items')
+            ->assertJsonPath('items.0.quote', '10 szt. rękawice nitrylowe rozmiar 9');
+
+        // cały mail zostaje w bazie — obcięta jest tylko wersja robocza dla analizy
+        $this->assertSame($mail, $res->json('source_body'));
+        $this->assertStringNotContainsString('35-206', json_encode($res->json('items'), JSON_THROW_ON_ERROR));
+    }
+
     public function test_store_without_source_stays_web(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

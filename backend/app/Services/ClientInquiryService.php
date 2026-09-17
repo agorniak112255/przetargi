@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Support\InquiryMailText;
 use App\Support\OfferPricing;
 use RuntimeException;
 use Throwable;
@@ -56,8 +57,12 @@ final class ClientInquiryService
         ?string $subject,
         array $source = [],
     ): ClientInquiry {
-        $extracted = $this->extract($body);
-        $lineItems = $this->resolveLineItems($body, $extracted['line_items']);
+        // Do bazy trafia cały mail; model i parser pozycji dostają wersję bez
+        // cytatu, nagłówka przekazania i stopki — inaczej adres albo telefon
+        // z podpisu stają się pozycjami zamówienia.
+        $analysisBody = InquiryMailText::forAnalysis($body);
+        $extracted = $this->extract($analysisBody);
+        $lineItems = $this->resolveLineItems($analysisBody, $extracted['line_items']);
         $queries = $this->uniqueQueries($lineItems, $extracted['product_queries']);
         $matches = $this->matchProducts($queries);
         $substitutes = $this->loadSubstitutes($matches);
@@ -74,6 +79,8 @@ final class ClientInquiryService
             'source_body' => $body,
             'analysis' => [
                 'subject' => $extracted['subject'],
+                // Ślad audytowy: co dokładnie poszło do modelu, gdy mail był cięty.
+                'analyzed_body' => $analysisBody === $body ? null : $analysisBody,
                 'questions' => $extracted['questions'],
                 'product_queries' => $queries,
                 'line_items' => $lineItems,
