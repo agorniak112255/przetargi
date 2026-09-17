@@ -116,27 +116,27 @@ function DuplicateCell({ row }: { row: InquiryListItem }) {
 function StatusChip({ row }: { row: InquiryListItem }) {
   if (row.replied_at) {
     return (
-      <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+      <span className="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-emerald-800">
         Wysłano
       </span>
     )
   }
   if (row.send_requested_at) {
     return (
-      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-800">
+      <span className="inline-block rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-blue-800">
         Czeka na Thunderbirda
       </span>
     )
   }
   if (row.attention_count > 0) {
     return (
-      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+      <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-amber-800">
         Do sprawdzenia ({row.attention_count})
       </span>
     )
   }
   return (
-    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+    <span className="inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-slate-600">
       Szkic
     </span>
   )
@@ -644,14 +644,14 @@ export function Inquiries() {
           </p>
         ) : (
           <div className="-mx-4 overflow-x-auto sm:mx-0">
-            <table className="w-full min-w-[56rem] table-fixed border-separate border-spacing-0 text-left text-xs">
+            <table className="w-full min-w-[62rem] table-fixed border-separate border-spacing-0 text-left text-xs">
               <colgroup>
-                <col className="w-[34%]" />
+                <col className="w-[28%]" />
                 <col className="w-[20%]" />
-                <col className="w-[13%]" />
-                <col className="w-[12%]" />
-                <col className="w-[11%]" />
+                <col className="w-[16%]" />
+                <col className="w-[14%]" />
                 <col className="w-[10%]" />
+                <col className="w-[12%]" />
               </colgroup>
               <thead>
                 <tr className="text-[11px] tracking-wide text-slate-500 uppercase">
@@ -713,7 +713,10 @@ export function Inquiries() {
 
                     <td className="border-b border-slate-100 px-3 py-2.5 whitespace-nowrap">
                       <span className="block text-slate-800">{dateTime(row.source_sent_at)}</span>
-                      <span className="block text-[11px] text-slate-500" title="Kiedy założono zapytanie">
+                      <span
+                        className="block text-[11px] whitespace-nowrap text-slate-500"
+                        title="Kiedy założono zapytanie"
+                      >
                         dodano {dateTime(row.created_at)}
                       </span>
                     </td>
