@@ -48,7 +48,7 @@ export type InquirySubstitute = {
 
 export type InquiryConfidence = 'high' | 'medium' | 'none'
 
-export type InquiryFlag = 'low_score' | 'ambiguous' | 'no_price' | 'card_default'
+export type InquiryFlag = 'low_score' | 'ambiguous' | 'no_price' | 'card_default' | 'qty_unknown'
 
 /** `chosen`: `"p:<id>"` albo `"check"`. */
 export type InquiryItem = {

@@ -386,6 +386,66 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame('10', $resolved[0]['size']);
     }
 
+    public function test_lost_quantity_is_flagged_for_the_salesperson(): void
+    {
+        $svc = $this->service();
+        $inquiry = new ClientInquiry([
+            'tone' => 'formal',
+            'source_body' => 'x',
+            'analysis' => [
+                'line_items' => [[
+                    'id' => 'item_1',
+                    'quote' => '1. Rekawice nitrylowe',
+                    'qty' => null,
+                    'qty_source' => 'enumeration',
+                    'unit' => null,
+                    'query' => 'Rekawice nitrylowe',
+                ]],
+                'matches' => [['query' => 'Rekawice nitrylowe', 'products' => $this->candidates([92])]],
+                'cards' => [],
+            ],
+        ]);
+
+        // w mailu stala liczba, ale byla numerem pozycji — brak ilosci ma byc widoczny
+        $this->assertContains('qty_unknown', $svc->itemsView($inquiry)[0]['flags']);
+    }
+
+    public function test_list_numbers_with_a_gap_are_still_numbering(): void
+    {
+        $svc = $this->service();
+
+        // przepisana lista z luka: „4” to numer pozycji, nie ilosc
+        $gap = $svc->parseLineItemsFromBody(
+            '1. Rekawice nitrylowe'
+            .'
+2. Buty robocze S3'
+            .'
+4. Kask ochronny'
+        );
+        $this->assertSame([null, null, null], array_column($gap, 'qty'));
+        $this->assertSame(['enumeration', 'enumeration', 'enumeration'], array_column($gap, 'qty_source'));
+
+        // jednostka przy liczbie przewaza: to ilosci, nawet gdy wygladaja jak numeracja
+        $units = $svc->parseLineItemsFromBody(
+            '1 szt. Rekawice nitrylowe'
+            .'
+2 szt. Buty robocze S3'
+            .'
+4 szt. Kask ochronny'
+        );
+        $this->assertSame(['1', '2', '4'], array_column($units, 'qty'));
+
+        // liczba daleko poza dlugoscia listy to ilosc, a nie numer pozycji
+        $far = $svc->parseLineItemsFromBody(
+            '1 Rekawice nitrylowe'
+            .'
+2 Buty robocze S3'
+            .'
+6 Kask ochronny'
+        );
+        $this->assertSame(['1', '2', '6'], array_column($far, 'qty'));
+    }
+
     public function test_size_is_read_from_shortened_spellings_and_leaves_the_query(): void
     {
         $items = $this->service()->parseLineItemsFromBody(

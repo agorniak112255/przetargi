@@ -48,6 +48,7 @@ const flagLabel: Record<InquiryFlag, string> = {
   ambiguous: 'kilku podobnych kandydatów',
   no_price: 'brak ceny',
   card_default: 'pytanie AI z domyślną odpowiedzią',
+  qty_unknown: 'brak ilości w mailu',
 }
 
 const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [

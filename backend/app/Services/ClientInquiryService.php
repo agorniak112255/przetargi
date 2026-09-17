@@ -479,6 +479,12 @@ final class ClientInquiryService
             if ($this->isAmbiguous($candidates, $item)) {
                 $flags[] = 'ambiguous';
             }
+            // W mailu stała liczba, ale okazała się numerem pozycji, nie ilością. Bez tej
+            // flagi brak ilości w ofercie zauważyłby dopiero klient. Mail opisowy, w którym
+            // ilości nigdy nie było, flagi nie dostaje — tam nie ma czego szukać.
+            if ($qtyUnit['qty'] === null && $this->nullable($item['qty_source'] ?? null) !== null) {
+                $flags[] = 'qty_unknown';
+            }
             $product = $this->candidateById($candidates, $chosen);
             if ($product !== null && $priceMode !== 'none' && $this->letterPrice($product, $priceMode, $margin) === null) {
                 $flags[] = 'no_price';
@@ -1375,7 +1381,8 @@ final class ClientInquiryService
      */
     private function dropEnumerationQty(array $items, array $numbers): array
     {
-        if (count($items) < 2 || ! $this->looksLikeEnumeration($numbers)) {
+        $unitGiven = array_map(static fn (array $item): bool => ($item['qty_unit_given'] ?? false) === true, $items);
+        if (count($items) < 2 || ! $this->looksLikeEnumeration($numbers, $unitGiven)) {
             return array_map(function (array $item): array {
                 unset($item['qty_unit_given']);
 
@@ -1397,20 +1404,34 @@ final class ClientInquiryService
     }
 
     /**
+     * Ciąg 1,2,3… to numeracja bez dyskusji. Lista bywa też przepisana z luką
+     * („1.”, „2.”, „4.”) — wtedy uznajemy numerację tylko, gdy przy żadnej liczbie
+     * nie stoi jednostka. Przy jednostce liczba jest ilością i zostaje.
+     *
      * @param  list<int>  $numbers
+     * @param  list<bool>  $unitGiven
      */
-    private function looksLikeEnumeration(array $numbers): bool
+    private function looksLikeEnumeration(array $numbers, array $unitGiven = []): bool
     {
         if (count($numbers) < 2 || $numbers[0] !== 1) {
             return false;
         }
+
+        $exact = true;
+        $previous = 0;
         foreach ($numbers as $i => $number) {
             if ($number !== $i + 1) {
+                $exact = false;
+            }
+            // numer pozycji rośnie i trzyma się długości listy; „1, 2, 6” przy trzech
+            // pozycjach to już ilości, a nie numeracja
+            if ($number <= $previous || $number > count($numbers) + 2) {
                 return false;
             }
+            $previous = $number;
         }
 
-        return true;
+        return $exact || ! in_array(true, $unitGiven, true);
     }
 
     private function queryFromLine(string $rest): string
