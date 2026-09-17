@@ -155,36 +155,16 @@ async function send() {
   busy(false)
 }
 
-async function insertReply() {
-  busy(true, 'Pobieram odpowiedź…')
-  try {
-    const inquiry = await api('/api/inquiries/' + inquiryId)
-    const text = String(inquiry.reply_body || '').trim()
-    if (text === '') {
-      status('Odpowiedź nie jest jeszcze gotowa — dokończ ją w aplikacji.', 'warn')
-
-      return
-    }
-
-    const settings = await getSettings()
-    // Bez `details` w beginReply, żeby zachować cytat, adresata i podpis.
-    const tab = await browser.compose.beginReply(message.id, 'replyToSender')
-    const details = await browser.compose.getComposeDetails(tab.id)
-    const patch = details.isPlainText
-      ? { plainTextBody: text + '\n\n' + (details.plainTextBody || '') }
-      : { body: textToHtml(text) + '<br><br>' + (details.body || '') }
-    if (settings.useAppSubject && inquiry.reply_subject) {
-      patch.subject = inquiry.reply_subject
-    }
-
-    await browser.compose.setComposeDetails(tab.id, patch)
-    await rememberComposeTab(tab.id, inquiry.id)
-    window.close()
-  } catch (e) {
-    status(e.message || String(e), 'error')
-  } finally {
-    busy(false)
-  }
+function insertReply() {
+  busy(true)
+  // Wstawianiem zajmuje się tło: okienko zniknie, gdy okno odpowiedzi
+  // przejmie skupienie, a wtedy przepadłby też komunikat o błędzie.
+  browser.runtime.sendMessage({
+    type: 'insertReply',
+    inquiryId,
+    messageId: message.id,
+  })
+  status('Otwieram okno odpowiedzi…', 'info')
 }
 
 el('openOptions').addEventListener('click', () => browser.runtime.openOptionsPage())

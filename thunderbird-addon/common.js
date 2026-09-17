@@ -125,6 +125,47 @@ function textToHtml(text) {
   return escapeHtml(text).replace(/\n/g, '<br>')
 }
 
+/**
+ * Wstawia nasz list na początek wiadomości HTML. Treść okna kompozycji to cały
+ * dokument („<html>…<body>…”), więc doklejenie czegokolwiek przed nim edytor
+ * odrzuca — wchodzimy zaraz za znacznik <body>.
+ */
+function insertIntoHtmlBody(html, snippet) {
+  const document = String(html || '')
+  const opening = /<body[^>]*>/i.exec(document)
+  if (opening === null) {
+    return snippet + document
+  }
+
+  const at = opening.index + opening[0].length
+
+  return document.slice(0, at) + snippet + document.slice(at)
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Okno odpowiedzi dostaje cytat i podpis chwilę po otwarciu — wstawienie treści
+ * zbyt wcześnie zostałoby nadpisane. Czekamy, aż zawartość przestanie się zmieniać.
+ */
+async function composeDetailsWhenReady(tabId, tries = 20, everyMs = 150) {
+  let previous = null
+  for (let i = 0; i < tries; i += 1) {
+    const details = await browser.compose.getComposeDetails(tabId)
+    const body = details.isPlainText ? details.plainTextBody : details.body
+    const current = String(body || '')
+    if (current.trim() !== '' && current === previous) {
+      return details
+    }
+    previous = current
+    await sleep(everyMs)
+  }
+
+  return browser.compose.getComposeDetails(tabId)
+}
+
 /* -------------------- powiązanie okna odpowiedzi -------------------- */
 
 async function rememberComposeTab(tabId, inquiryId) {

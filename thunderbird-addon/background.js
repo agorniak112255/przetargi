@@ -77,9 +77,61 @@ async function createInquiry({ headerMessageId, subject, body, tone }) {
   }
 }
 
+/**
+ * Otwiera odpowiedź na mail i wstawia do niej list z aplikacji. Robione w tle,
+ * bo okienko znika w chwili, gdy okno kompozycji przejmuje skupienie — razem
+ * z ewentualnym komunikatem o błędzie.
+ */
+async function insertReply({ inquiryId, messageId }) {
+  try {
+    const inquiry = await api('/api/inquiries/' + inquiryId)
+    const text = String(inquiry.reply_body || '').trim()
+    if (text === '') {
+      await notify('Odpowiedź nie jest gotowa', 'Dokończ ją w aplikacji, potem wróć tutaj.')
+
+      return { ok: false }
+    }
+
+    const settings = await getSettings()
+    // Bez `details` w beginReply, żeby zachować cytat, adresata i podpis.
+    const tab = await browser.compose.beginReply(messageId, 'replyToSender')
+    const details = await composeDetailsWhenReady(tab.id)
+
+    const patch = details.isPlainText
+      ? { plainTextBody: text + '\n\n' + (details.plainTextBody || '') }
+      : { body: insertIntoHtmlBody(details.body, textToHtml(text) + '<br><br>') }
+    if (settings.useAppSubject && inquiry.reply_subject) {
+      patch.subject = inquiry.reply_subject
+    }
+
+    await browser.compose.setComposeDetails(tab.id, patch)
+
+    // Sprawdzamy, czy treść faktycznie weszła — edytor potrafi odrzucić zmianę.
+    const after = await browser.compose.getComposeDetails(tab.id)
+    const written = String(after.isPlainText ? after.plainTextBody : after.body)
+    const probe = text.slice(0, 24)
+    if (!written.includes(probe) && !written.includes(escapeHtml(probe))) {
+      await notify('Nie udało się wstawić treści', 'Skopiuj list z aplikacji i wklej ręcznie.')
+
+      return { ok: false }
+    }
+
+    await rememberComposeTab(tab.id, inquiry.id)
+
+    return { ok: true }
+  } catch (e) {
+    await notify('Nie udało się otworzyć odpowiedzi', e.message)
+
+    return { ok: false, error: e.message }
+  }
+}
+
 browser.runtime.onMessage.addListener((request) => {
   if (request && request.type === 'createInquiry') {
     return createInquiry(request)
+  }
+  if (request && request.type === 'insertReply') {
+    return insertReply(request)
   }
 
   return undefined
