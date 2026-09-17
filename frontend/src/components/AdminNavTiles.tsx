@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { can } from '../lib/api'
 
-type Tile = {
+export type AdminTile = {
   to: string
   label: string
   description: string
@@ -10,7 +10,7 @@ type Tile = {
   permission?: string
 }
 
-const tiles: Tile[] = [
+export const adminTiles: AdminTile[] = [
   {
     to: '/admin',
     label: 'Pracownicy',
@@ -82,7 +82,7 @@ const tiles: Tile[] = [
 
 export function AdminNavTiles() {
   const { user } = useAuth()
-  const visible = tiles.filter((t) => !t.permission || can(user, t.permission))
+  const visible = adminTiles.filter((t) => !t.permission || can(user, t.permission))
 
   return (
     <div className="mb-5">

@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppearanceProvider } from './appearance'
 import { AuthProvider, useAuth } from './auth'
 import { Layout } from './components/Layout'
+import { adminTiles } from './components/AdminNavTiles'
 import { Account } from './pages/Account'
 import { AdminActivityLog } from './pages/AdminActivityLog'
 import { AdminEnrichmentLogs } from './pages/AdminEnrichmentLogs'
@@ -47,6 +48,16 @@ function PermissionGuard({ permission, children }: { permission: string; childre
   if (!user) return <Navigate to="/login" replace />
   if (!can(user, permission)) return <Navigate to="/" replace />
   return children
+}
+
+/** Administracja bez prawa do listy pracowników otwiera pierwszy dostępny kafelek zamiast wracać na pulpit. */
+function AdminIndex() {
+  const { user } = useAuth()
+  if (can(user, 'admin.users.manage')) return <AdminUsers />
+  const firstAllowed = adminTiles.find(
+    (t) => t.to !== '/admin' && (!t.permission || can(user, t.permission)),
+  )
+  return <Navigate to={firstAllowed ? firstAllowed.to : '/'} replace />
 }
 
 export default function App() {
@@ -120,14 +131,7 @@ export default function App() {
                 </PermissionGuard>
               }
             >
-              <Route
-                index
-                element={
-                  <PermissionGuard permission="admin.users.manage">
-                    <AdminUsers />
-                  </PermissionGuard>
-                }
-              />
+              <Route index element={<AdminIndex />} />
               <Route
                 path="roles"
                 element={
