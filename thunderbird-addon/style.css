@@ -31,7 +31,28 @@ body {
 }
 
 body.popup {
-  width: 340px;
+  width: 380px;
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.row button {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.row select {
+  flex: 1;
+  min-width: 0;
+}
+
+body.popup textarea {
+  max-height: 150px;
 }
 
 body.options {

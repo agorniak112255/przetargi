@@ -6,7 +6,7 @@ odpowiedź jako odpowiedź na ten sam mail.
 ## Jak to działa
 
 1. Otwierasz mail od klienta i klikasz ikonę dodatku nad wiadomością.
-2. Dodatek pokazuje oczyszczoną treść (bez cytatów i stopki) — możesz ją poprawić.
+2. Dodatek pokazuje całą treść maila — możesz ją poprawić przed wysłaniem.
 3. Klikasz **Wyślij do Przetargów**. Aplikacja otwiera się w przeglądarce na tym zapytaniu.
 4. Wybierasz produkty w aplikacji.
 5. Wracasz do Thunderbirda, klikasz ikonę dodatku i **Wstaw odpowiedź do maila**.
@@ -55,6 +55,16 @@ aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa
 - konto z uprawnieniem `inquiries.use`,
 - API: `POST /api/login`, `POST /api/inquiries`, `GET /api/inquiries/{id}`,
   `POST /api/inquiries/{id}/replied`.
+
+## Podział zadań
+
+Dodatek wysyła **całą** treść maila i nic z niej nie usuwa. Cytat poprzedniej
+wiadomości, nagłówek przekazania („--- Treść przekazanej wiadomości ---”), podpis
+i klauzulę poufności odcina aplikacja (`App\Support\InquiryMailText`) — dopiero
+na potrzeby analizy. W bazie zostaje cały mail, a to, co poszło do modelu,
+zapisuje się w `analysis.analyzed_body`.
+
+Dzięki temu ta sama zasada działa też wtedy, gdy ktoś wklei maila w przeglądarce.
 
 ## Ograniczenia
 

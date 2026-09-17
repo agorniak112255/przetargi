@@ -21,21 +21,18 @@
   </section>
 
   <section id="fresh" hidden>
-    <label class="field">
-      <span>Ton odpowiedzi</span>
-      <select id="tone">
-        <option value="formal">Oficjalny</option>
-        <option value="handlowy">Handlowy</option>
+    <!-- Przycisk na górze: okienko Thunderbirda potrafi uciąć dolną część. -->
+    <div class="row">
+      <button id="send" class="primary">Wyślij do Przetargów</button>
+      <select id="tone" title="Ton odpowiedzi">
+        <option value="formal">Ton oficjalny</option>
+        <option value="handlowy">Ton handlowy</option>
       </select>
-    </label>
+    </div>
 
-    <label class="field">
-      <span>Treść do analizy — możesz poprawić przed wysłaniem</span>
-      <textarea id="body" rows="10" spellcheck="false"></textarea>
-    </label>
+    <p class="muted">Treść maila — możesz poprawić przed wysłaniem.</p>
+    <textarea id="body" rows="6" spellcheck="false"></textarea>
     <p id="counter" class="muted"></p>
-
-    <button id="send" class="primary">Wyślij do Przetargów</button>
   </section>
 
   <script src="common.js"></script>

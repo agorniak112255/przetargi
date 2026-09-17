@@ -98,7 +98,7 @@ async function init() {
     return
   }
 
-  const text = cleanBody(messageText(full))
+  const text = messageText(full)
   if (text.length < 20) {
     status('Treść maila jest za krótka do analizy — uzupełnij ją poniżej.', 'warn')
   }
