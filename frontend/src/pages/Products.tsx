@@ -725,7 +725,7 @@ export function Products() {
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => selected[id])
   const batchActive = batch?.status === 'queued' || batch?.status === 'running'
-  const tableCols = 9 + (aiMode ? 2 : 0) + (canSelect ? 1 : 0) + (hasActions ? 1 : 0)
+  const tableCols = 10 + (aiMode ? 2 : 0) + (canSelect ? 1 : 0) + (hasActions ? 1 : 0)
 
   return (
     <div>
@@ -1031,6 +1031,7 @@ export function Products() {
                   />
                 </th>
               )}
+              <th className="p-2 w-10 text-right font-normal text-slate-500">Lp.</th>
               {aiMode && (
                 <>
                   <SortTh label="Dopasowanie" col="ai_match_percent" sort={sort} dir={dir} onSort={onSort} />
@@ -1077,6 +1078,9 @@ export function Products() {
                       />
                     </td>
                   )}
+                  <td className="p-2 text-right tabular-nums text-slate-400" title={`ID ${p.id}`}>
+                    {(result?.from ?? 1) + i}
+                  </td>
                   {aiMode && (
                     <td className="p-2">
                       <span
