@@ -89,6 +89,13 @@ p {
   font-size: 12px;
 }
 
+.version {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+
 .field {
   display: block;
   margin-bottom: 10px;

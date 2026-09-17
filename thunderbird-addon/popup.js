@@ -65,7 +65,14 @@ async function pendingFor(messageId) {
   return entry
 }
 
+function showVersion() {
+  const version = addonVersion()
+  el('version').textContent = version === '' ? '' : 'Supon Przetargi ' + version
+}
+
 async function init() {
+  showVersion()
+
   const settings = await getSettings()
   if (!settings.token) {
     show('setup')
@@ -146,6 +153,9 @@ async function send() {
     type: 'createInquiry',
     headerMessageId: message.headerMessageId || null,
     subject: message.subject || '',
+    // Nagłówek From i data maila — z listy wiadomości, nie z jego treści.
+    sourceFrom: senderHeader(message.author),
+    sourceSentAt: toIsoDate(message.date),
     body,
     tone: el('tone').value,
   })

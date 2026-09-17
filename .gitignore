@@ -47,3 +47,4 @@ deploy/qdrant/
 
 # kopie robocze agentow Claude Code
 .claude/worktrees/
+thunderbird-addon/dist/

@@ -5,6 +5,9 @@ const DEFAULT_BASE_URL = 'https://przetargi.supon.rzeszow.pl'
 /** Limit `max:20000` w StoreClientInquiryRequest, z zapasem. */
 const MAX_BODY = 19000
 
+/** Limit `max:400` dla `source_from` w StoreClientInquiryRequest. */
+const MAX_FROM = 400
+
 async function getSettings() {
   const s = await browser.storage.local.get({
     baseUrl: DEFAULT_BASE_URL,
@@ -111,6 +114,47 @@ function messageText(full) {
   const normalized = String(text).replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 
   return normalized.length > MAX_BODY ? normalized.slice(0, MAX_BODY) : normalized
+}
+
+/**
+ * Data maila (`MessageHeader.date`) przychodzi jako obiekt Date, ale po przejściu
+ * przez `runtime.sendMessage` bywa już łańcuchem znaków — a w starszych wersjach
+ * Thunderbirda pola potrafi w ogóle zabraknąć. Obsługujemy wszystkie przypadki
+ * i zwracamy ISO 8601 albo null, gdy daty nie ma lub jest nieczytelna.
+ */
+function toIsoDate(value) {
+  if (value === null || value === undefined || value === '') return null
+
+  let date
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    // `instanceof Date` zawodzi między kontekstami dodatku (okienko ↔ tło).
+    date = value
+  } else if (typeof value === 'number') {
+    date = new Date(value)
+  } else {
+    date = new Date(String(value))
+  }
+
+  if (Number.isNaN(date.getTime())) return null
+
+  return date.toISOString()
+}
+
+/** Nagłówek From w całości („Jan Kowalski <jan@firma.pl>”); rozbija go aplikacja. */
+function senderHeader(value) {
+  const from = String(value === null || value === undefined ? '' : value).trim()
+  if (from === '') return null
+
+  return from.length > MAX_FROM ? from.slice(0, MAX_FROM) : from
+}
+
+/** Numer wersji z manifestu — żeby dało się sprawdzić, co jest zainstalowane. */
+function addonVersion() {
+  try {
+    return browser.runtime.getManifest().version
+  } catch (e) {
+    return ''
+  }
 }
 
 function escapeHtml(text) {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { BusyLabel, useBusySeconds } from '../components/Busy'
+import { InquiryContactChip, InquiryContactModal } from '../components/InquiryContact'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { api } from '../lib/api'
 import type {
@@ -17,6 +18,14 @@ type Draft = { subject: string; body: string }
 type Answers = Record<string, InquiryAnswer>
 
 const PLN = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' })
+
+/** Data wysłania maila źródłowego; nieczytelną wartość pokazujemy bez zmian. */
+function mailDate(value: string): string {
+  const d = new Date(value)
+  return Number.isNaN(d.getTime())
+    ? value
+    : d.toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' })
+}
 
 function priceByMode(
   p: { catalog_pln: number | null; offer_pln: number | null },
@@ -292,6 +301,7 @@ export function InquiryReply() {
   const [checked, setChecked] = useState<Record<number, boolean>>({})
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [previewQuery, setPreviewQuery] = useState('')
+  const [contactOpen, setContactOpen] = useState(false)
   const composeSec = useBusySeconds(composeBusy)
 
   // Treść zapisana na serwerze (PATCH) — do wykrywania niezapisanych edycji.
@@ -508,6 +518,10 @@ export function InquiryReply() {
 
   const total = inquiry.items.length
   const busy = composeBusy
+  // Nadawca dokładnie tak, jak przyszedł w mailu — bez sklejania brakujących kawałków.
+  const sender = [inquiry.source_from_name, inquiry.source_from_email]
+    .filter(Boolean)
+    .join(inquiry.source_from_name && inquiry.source_from_email ? ' · ' : '')
   const banner = inquiry.replied_at
     ? {
         cls: 'bg-emerald-50 text-emerald-800',
@@ -532,6 +546,12 @@ export function InquiryReply() {
             {inquiry.client?.name ? `${inquiry.client.name} · ` : ''}
             {inquiry.source_subject || `Zapytanie #${inquiry.id}`}
           </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+            {sender && <span>Od: {sender}</span>}
+            {inquiry.source_sent_at && <span>Mail z {mailDate(inquiry.source_sent_at)}</span>}
+            {inquiry.user?.name && <span>Prowadzi: {inquiry.user.name}</span>}
+            <InquiryContactChip contact={inquiry.contact} onOpen={() => setContactOpen(true)} />
+          </div>
         </div>
         <Link to="/inquiries" className="text-xs text-blue-600 hover:underline">
           ← Wróć do zapytań
@@ -765,6 +785,12 @@ export function InquiryReply() {
           )}
         </div>
       </div>
+
+      <InquiryContactModal
+        contact={contactOpen ? inquiry.contact : null}
+        subtitle={inquiry.source_subject || `Zapytanie #${inquiry.id}`}
+        onClose={() => setContactOpen(false)}
+      />
 
       <ProductVerifyModal
         productId={previewId}

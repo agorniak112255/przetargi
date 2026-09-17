@@ -1,16 +1,30 @@
-import { useEffect, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { BusyLabel, useBusySeconds } from '../components/Busy'
+import { InquiryContactChip, InquiryContactModal } from '../components/InquiryContact'
 import { useAuth } from '../auth'
 import { api, can } from '../lib/api'
 import type {
+  InquiryChannelFilter,
   InquiryListItem,
+  InquiryListResponse,
   InquiryPayload,
   InquiryPreferences,
+  InquiryScope,
+  InquiryStatusFilter,
   InquiryTone,
 } from '../types/inquiry'
 
 type ClientRow = { id: number; name: string }
+type DirectoryUser = { id: number; name: string; email: string }
 
 const priceModeLabel: Record<InquiryPreferences['price_mode'], string> = {
   none: 'bez cen',
@@ -18,11 +32,47 @@ const priceModeLabel: Record<InquiryPreferences['price_mode'], string> = {
   catalog_margin: 'katalog + marża',
 }
 
+const PER_PAGE_CHOICES = [25, 50, 100]
+const DEFAULT_PER_PAGE = 25
+
+const statusOptions: { id: InquiryStatusFilter; label: string }[] = [
+  { id: 'all', label: 'Wszystkie' },
+  { id: 'waiting', label: 'Do wysłania' },
+  { id: 'replied', label: 'Wysłane' },
+]
+
+const channelOptions: { id: InquiryChannelFilter; label: string }[] = [
+  { id: 'all', label: 'Wszystkie kanały' },
+  { id: 'thunderbird', label: 'Z Thunderbirda' },
+  { id: 'web', label: 'Wklejone w przeglądarce' },
+]
+
+const channelLabel: Record<string, string> = {
+  thunderbird: 'Thunderbird',
+  web: 'wklejone',
+}
+
+/** Data i godzina — na liście liczy się gęstość, więc krótki zapis. */
+function dateTime(value: string | null): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  return Number.isNaN(d.getTime())
+    ? value
+    : d.toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' })
+}
+
 function StatusChip({ row }: { row: InquiryListItem }) {
   if (row.replied_at) {
     return (
       <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
         Wysłano
+      </span>
+    )
+  }
+  if (row.send_requested_at) {
+    return (
+      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-800">
+        Czeka na Thunderbirda
       </span>
     )
   }
@@ -43,8 +93,8 @@ function StatusChip({ row }: { row: InquiryListItem }) {
 export function Inquiries() {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
   const [clients, setClients] = useState<ClientRow[]>([])
-  const [recent, setRecent] = useState<InquiryListItem[]>([])
   const [prefs, setPrefs] = useState<InquiryPreferences | null>(null)
   const [body, setBody] = useState('')
   const [subject, setSubject] = useState('')
@@ -55,10 +105,98 @@ export function Inquiries() {
   const [err, setErr] = useState('')
   const prepareSec = useBusySeconds(busy)
 
+  // Lista
+  const [list, setList] = useState<InquiryListResponse | null>(null)
+  const [listBusy, setListBusy] = useState(false)
+  const [listErr, setListErr] = useState('')
+  const [directory, setDirectory] = useState<DirectoryUser[]>([])
+  const [contactRow, setContactRow] = useState<InquiryListItem | null>(null)
+
+  // Filtry żyją w adresie strony — link do wyników da się podesłać i wrócić do niego wstecz.
+  const q = params.get('q') ?? ''
+  const status = (params.get('status') ?? 'all') as InquiryStatusFilter
+  const channel = (params.get('channel') ?? 'all') as InquiryChannelFilter
+  const scope: InquiryScope = params.get('scope') === 'all' ? 'all' : 'mine'
+  const userId = params.get('user_id') ?? ''
+  const from = params.get('from') ?? ''
+  const to = params.get('to') ?? ''
+  const page = Math.max(1, Number(params.get('page')) || 1)
+  const perPageParam = Number(params.get('per_page'))
+  const perPage = PER_PAGE_CHOICES.includes(perPageParam) ? perPageParam : DEFAULT_PER_PAGE
+
+  const setFilters = useCallback(
+    (patch: Record<string, string | null>) => {
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          for (const [key, value] of Object.entries(patch)) {
+            if (value === null || value === '') next.delete(key)
+            else next.set(key, value)
+          }
+          return next
+        },
+        { replace: true },
+      )
+    },
+    [setParams],
+  )
+
+  // Szukanie z opóźnieniem: w polu trzymamy własny stan, do adresu trafia po ~300 ms.
+  const [qDraft, setQDraft] = useState(q)
+  const pushedQ = useRef(q)
   useEffect(() => {
-    void api<InquiryListItem[]>('/inquiries')
-      .then(setRecent)
-      .catch((ex) => setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać listy'))
+    if (q !== pushedQ.current) {
+      pushedQ.current = q
+      setQDraft(q)
+    }
+  }, [q])
+  useEffect(() => {
+    if (qDraft === q) return
+    const t = window.setTimeout(() => {
+      pushedQ.current = qDraft
+      setFilters({ q: qDraft.trim() || null, page: null })
+    }, 300)
+    return () => window.clearTimeout(t)
+  }, [qDraft, q, setFilters])
+
+  // Do API idą tylko parametry z kontraktu — obce wpisy w adresie zostają na froncie.
+  const apiQuery = useMemo(() => {
+    const sp = new URLSearchParams()
+    if (q) sp.set('q', q)
+    if (status !== 'all') sp.set('status', status)
+    if (channel !== 'all') sp.set('channel', channel)
+    if (scope === 'all') {
+      sp.set('scope', 'all')
+      if (userId) sp.set('user_id', userId)
+    }
+    if (from) sp.set('from', from)
+    if (to) sp.set('to', to)
+    sp.set('page', String(page))
+    sp.set('per_page', String(perPage))
+    return sp.toString()
+  }, [q, status, channel, scope, userId, from, to, page, perPage])
+
+  useEffect(() => {
+    let cancelled = false
+    setListBusy(true)
+    setListErr('')
+    api<InquiryListResponse>(`/inquiries?${apiQuery}`)
+      .then((res) => {
+        if (!cancelled) setList(res)
+      })
+      .catch((ex) => {
+        if (cancelled) return
+        setListErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać listy')
+      })
+      .finally(() => {
+        if (!cancelled) setListBusy(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [apiQuery])
+
+  useEffect(() => {
     void api<InquiryPreferences>('/inquiries/preferences')
       .then((p) => {
         setPrefs(p)
@@ -68,11 +206,30 @@ export function Inquiries() {
         // brak preferencji — zostają domyślne
       })
     if (can(user, 'clients.view')) {
-      void api<ClientRow[]>('/clients').then((rows) =>
-        setClients(rows.map((c) => ({ id: c.id, name: c.name }))),
-      )
+      void api<ClientRow[]>('/clients')
+        .then((rows) => setClients(rows.map((c) => ({ id: c.id, name: c.name }))))
+        .catch(() => setClients([]))
     }
   }, [user])
+
+  const canViewAll = list?.meta.can_view_all ?? false
+
+  // Katalog użytkowników pokazujemy tylko przy prawie do cudzych zapytań — handlowiec
+  // i tak nie ma dostępu do `/users/directory`, więc pusta lista nie jest błędem.
+  useEffect(() => {
+    if (!canViewAll) return
+    let cancelled = false
+    void api<{ data: DirectoryUser[] }>('/users/directory')
+      .then((res) => {
+        if (!cancelled) setDirectory(Array.isArray(res.data) ? res.data : [])
+      })
+      .catch(() => {
+        if (!cancelled) setDirectory([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canViewAll])
 
   const canSubmit = !busy && body.trim().length >= 20
 
@@ -104,6 +261,17 @@ export function Inquiries() {
       void onPrepare()
     }
   }
+
+  const rows = list?.data ?? []
+  const meta = list?.meta
+  const lastPage = Math.max(1, meta?.last_page ?? 1)
+  const total = meta?.total ?? 0
+  const filtersActive = Boolean(
+    q || status !== 'all' || channel !== 'all' || from || to || scope === 'all' || userId,
+  )
+  const contactSubtitle = contactRow
+    ? contactRow.source_subject || contactRow.reply_subject || `Zapytanie #${contactRow.id}`
+    : null
 
   return (
     <div>
@@ -206,41 +374,262 @@ export function Inquiries() {
         )}
       </form>
 
-      {recent.length > 0 && (
-        <div className="rounded-xl bg-white p-4 shadow-sm">
-          <h2 className="mb-2 text-sm font-semibold">Ostatnie</h2>
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b bg-slate-50">
-                <th className="p-2">Temat</th>
-                <th className="p-2">Klient</th>
-                <th className="p-2">Data</th>
-                <th className="p-2">Status</th>
-                <th className="p-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {recent.map((row) => (
-                <tr key={row.id} className="border-b">
-                  <td className="p-2">{row.reply_subject || row.source_subject || `Zapytanie #${row.id}`}</td>
-                  <td className="p-2">{row.client?.name ?? '—'}</td>
-                  <td className="p-2 whitespace-nowrap">
-                    {row.created_at ? new Date(row.created_at).toLocaleString('pl-PL') : '—'}
-                  </td>
-                  <td className="p-2">
-                    <StatusChip row={row} />
-                  </td>
-                  <td className="p-2 text-right">
-                    <Link className="text-blue-600 hover:underline" to={`/inquiries/${row.id}`}>
-                      Otwórz
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="rounded-xl bg-white p-4 shadow-sm">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">Zapytania</h2>
+          <span className="text-[11px] text-slate-400">
+            {listBusy ? 'Wczytuję…' : `${total.toLocaleString('pl-PL')} zapytań`}
+          </span>
         </div>
-      )}
+
+        <div className="mb-3 flex flex-wrap items-end gap-2">
+          <label className="block text-xs">
+            Szukaj
+            <input
+              className="mt-1 w-64 rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={qDraft}
+              onChange={(e) => setQDraft(e.target.value)}
+              placeholder="temat, nadawca, firma, treść…"
+            />
+          </label>
+          <label className="block text-xs">
+            Status
+            <select
+              className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={status}
+              onChange={(e) => setFilters({ status: e.target.value, page: null })}
+            >
+              {statusOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs">
+            Kanał
+            <select
+              className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={channel}
+              onChange={(e) => setFilters({ channel: e.target.value, page: null })}
+            >
+              {channelOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs">
+            Od
+            <input
+              type="date"
+              className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={from}
+              onChange={(e) => setFilters({ from: e.target.value, page: null })}
+            />
+          </label>
+          <label className="block text-xs">
+            Do
+            <input
+              type="date"
+              className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={to}
+              onChange={(e) => setFilters({ to: e.target.value, page: null })}
+            />
+          </label>
+
+          {canViewAll && (
+            <>
+              <div className="flex items-center gap-1 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setFilters({ scope: null, user_id: null, page: null })}
+                  className={`rounded border px-2.5 py-1.5 ${
+                    scope === 'mine'
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  Moje
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilters({ scope: 'all', page: null })}
+                  className={`rounded border px-2.5 py-1.5 ${
+                    scope === 'all'
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  Wszyscy
+                </button>
+              </div>
+              {scope === 'all' && directory.length > 0 && (
+                <label className="block text-xs">
+                  Użytkownik
+                  <select
+                    className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm"
+                    value={userId}
+                    onChange={(e) => setFilters({ user_id: e.target.value, page: null })}
+                  >
+                    <option value="">— wszyscy —</option>
+                    {directory.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </>
+          )}
+
+          {filtersActive && (
+            <button
+              type="button"
+              onClick={() =>
+                setFilters({
+                  q: null,
+                  status: null,
+                  channel: null,
+                  scope: null,
+                  user_id: null,
+                  from: null,
+                  to: null,
+                  page: null,
+                })
+              }
+              className="rounded border border-slate-300 px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+            >
+              Wyczyść filtry
+            </button>
+          )}
+        </div>
+
+        {listErr && <p className="mb-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{listErr}</p>}
+
+        {rows.length === 0 && !listBusy ? (
+          <p className="py-4 text-xs text-slate-500">
+            {filtersActive ? 'Brak zapytań dla tych filtrów.' : 'Nie ma jeszcze żadnych zapytań.'}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b bg-slate-50">
+                  <th className="p-2">Temat</th>
+                  <th className="p-2">Klient</th>
+                  <th className="p-2">Nadawca</th>
+                  <th className="p-2">Data maila</th>
+                  <th className="p-2">Data zapytania</th>
+                  <th className="p-2">Użytkownik</th>
+                  <th className="p-2">Status</th>
+                  <th className="p-2">Kontakt</th>
+                  <th className="p-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => (
+                  <tr key={row.id} className="border-b align-top">
+                    <td className="p-2">
+                      <span className="text-slate-800">
+                        {row.reply_subject || row.source_subject || `Zapytanie #${row.id}`}
+                      </span>
+                      {row.source_channel && (
+                        <span className="ml-1.5 text-[11px] text-slate-400">
+                          {channelLabel[row.source_channel] ?? row.source_channel}
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2">{row.client?.name ?? '—'}</td>
+                    <td className="p-2">
+                      {row.source_from_name || row.source_from_email ? (
+                        <>
+                          {row.source_from_name && (
+                            <span className="block text-slate-800">{row.source_from_name}</span>
+                          )}
+                          {row.source_from_email && (
+                            <span className="block text-[11px] text-slate-500">
+                              {row.source_from_email}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td className="p-2 whitespace-nowrap">{dateTime(row.source_sent_at)}</td>
+                    <td className="p-2 whitespace-nowrap">{dateTime(row.created_at)}</td>
+                    <td className="p-2">{row.user?.name ?? '—'}</td>
+                    <td className="p-2">
+                      <StatusChip row={row} />
+                    </td>
+                    <td className="p-2">
+                      <InquiryContactChip contact={row.contact} onOpen={() => setContactRow(row)} />
+                    </td>
+                    <td className="p-2 text-right">
+                      <Link className="text-blue-600 hover:underline" to={`/inquiries/${row.id}`}>
+                        Otwórz
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
+          <p className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+            <span>
+              Strona {meta?.page ?? page} z {lastPage}
+            </span>
+            <span>·</span>
+            <span>{total.toLocaleString('pl-PL')} zapytań</span>
+            <span>·</span>
+            <label className="inline-flex items-center gap-1">
+              <select
+                className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-xs"
+                value={perPage}
+                onChange={(e) => setFilters({ per_page: e.target.value, page: null })}
+                title="Ile wierszy na stronie"
+              >
+                {PER_PAGE_CHOICES.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+              /stronę
+            </label>
+          </p>
+          <nav className="flex items-center gap-1" aria-label="Paginacja">
+            <button
+              type="button"
+              disabled={page <= 1 || listBusy}
+              onClick={() => setFilters({ page: String(Math.max(1, page - 1)) })}
+              className="rounded border border-slate-300 px-2.5 py-1.5 text-xs disabled:opacity-40"
+            >
+              ← Poprzednia
+            </button>
+            <button
+              type="button"
+              disabled={page >= lastPage || listBusy}
+              onClick={() => setFilters({ page: String(Math.min(lastPage, page + 1)) })}
+              className="rounded border border-slate-300 px-2.5 py-1.5 text-xs disabled:opacity-40"
+            >
+              Następna →
+            </button>
+          </nav>
+        </div>
+      </div>
+
+      <InquiryContactModal
+        contact={contactRow?.contact ?? null}
+        subtitle={contactSubtitle}
+        onClose={() => setContactRow(null)}
+      />
     </div>
   )
 }

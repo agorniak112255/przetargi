@@ -46,7 +46,7 @@ async function notify(title, message) {
  * Zakłada zapytanie i otwiera je w przeglądarce. Wywoływane z okienka, ale
  * wykonywane tutaj — zamknięcie okienka nie przerywa analizy.
  */
-async function createInquiry({ headerMessageId, subject, body, tone }) {
+async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentAt, body, tone }) {
   await setPending(headerMessageId, { startedAt: Date.now() })
   try {
     const inquiry = await api('/api/inquiries', {
@@ -57,6 +57,9 @@ async function createInquiry({ headerMessageId, subject, body, tone }) {
         tone,
         source_channel: 'thunderbird',
         source_message_id: headerMessageId || null,
+        // Powtórna zamiana: przez `runtime.sendMessage` data mogła stracić typ Date.
+        source_from: senderHeader(sourceFrom),
+        source_sent_at: toIsoDate(sourceSentAt),
       },
     })
 

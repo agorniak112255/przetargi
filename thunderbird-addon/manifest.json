@@ -2,12 +2,13 @@
   "manifest_version": 2,
   "name": "Supon Przetargi",
   "description": "Zakłada zapytanie w aplikacji Przetargi z otwartego maila i wstawia przygotowaną odpowiedź.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "Supon Rzeszów",
   "browser_specific_settings": {
     "gecko": {
       "id": "przetargi@supon.rzeszow.pl",
-      "strict_min_version": "115.0"
+      "strict_min_version": "115.0",
+      "update_url": "https://przetargi.supon.rzeszow.pl/dodatek/updates.json"
     }
   },
   "permissions": [

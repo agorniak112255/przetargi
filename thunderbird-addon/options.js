@@ -15,7 +15,14 @@ function busy(on) {
   }
 }
 
+function showVersion() {
+  const version = addonVersion()
+  el('version').textContent = version === '' ? '' : 'Supon Przetargi ' + version
+}
+
 async function refresh() {
+  showVersion()
+
   const settings = await getSettings()
   el('baseUrl').value = settings.baseUrl
   el('useAppSubject').checked = settings.useAppSubject

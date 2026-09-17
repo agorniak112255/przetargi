@@ -60,17 +60,47 @@ final class InquiryMailText
 
     public static function forAnalysis(string $raw): string
     {
-        $text = str_replace(["\r\n", "\r"], "\n", $raw);
-        $text = self::stripQuotedLines($text);
-        $text = self::dropForwardHeader($text);
-        $text = self::cutAtSeparator($text);
-        $text = self::cutAtClosing($text);
+        $text = self::split($raw)['body'];
         $text = preg_replace('/[ \t]+$/mu', '', $text) ?? $text;
         $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
         $text = trim($text);
 
         // Nadgorliwe cięcie jest gorsze niż brak cięcia — wtedy wracamy do oryginału.
         return $text === '' ? trim($raw) : $text;
+    }
+
+    /**
+     * Część maila odcięta przed analizą: podpis, stopka firmowa, klauzula
+     * poufności albo początek cytatu. Z niej `InquirySignature` wyjmuje kontakt.
+     *
+     * Cytowane linie („> …”) i nagłówek przekazania są już usunięte, więc do
+     * stopki nie wchodzą dane z cudzej, wcześniejszej wiadomości.
+     * Pusty wynik = w mailu nie było nic do odcięcia.
+     */
+    public static function footerOf(string $raw): string
+    {
+        return trim(self::split($raw)['footer']);
+    }
+
+    /**
+     * Wspólne cięcie dla obu widoków: to, co zostaje do analizy, i to, co odpada.
+     *
+     * @return array{body: string, footer: string}
+     */
+    private static function split(string $raw): array
+    {
+        $text = str_replace(["\r\n", "\r"], "\n", $raw);
+        $text = self::stripQuotedLines($text);
+        $text = self::dropForwardHeader($text);
+
+        $lines = explode("\n", $text);
+        $separator = self::separatorIndex($lines);
+        $cut = self::closingIndex(array_slice($lines, 0, $separator));
+
+        return [
+            'body' => implode("\n", array_slice($lines, 0, $cut)),
+            'footer' => implode("\n", array_slice($lines, $cut)),
+        ];
     }
 
     private static function stripQuotedLines(string $text): string
@@ -155,32 +185,38 @@ final class InquiryMailText
         return $headers >= 2 ? $j : $from;
     }
 
-    private static function cutAtSeparator(string $text): string
+    /**
+     * Indeks linii, od której zaczyna się podpis albo cytat (albo koniec tekstu).
+     *
+     * @param  list<string>  $lines
+     */
+    private static function separatorIndex(array $lines): int
     {
-        $lines = explode("\n", $text);
         foreach ($lines as $i => $line) {
             $trimmed = trim($line);
             if ($trimmed === '') {
                 continue;
             }
             if (preg_match(self::SIGNATURE, $line) === 1 || self::matchesAny($trimmed, self::SEPARATORS)) {
-                return implode("\n", array_slice($lines, 0, $i));
+                return $i;
             }
             if ($i > 0 && preg_match(self::HEADER_LINE, $trimmed) === 1 && self::looksLikeHeaderBlock($lines, $i)) {
-                return implode("\n", array_slice($lines, 0, $i));
+                return $i;
             }
         }
 
-        return $text;
+        return count($lines);
     }
 
     /**
-     * Wymaga dwóch linii treści przed zwrotem grzecznościowym, żeby „Pozdrawiam”
-     * w drugiej linijce krótkiego maila nie skasowało całego zapytania.
+     * Indeks zwrotu grzecznościowego (albo koniec tekstu). Wymaga dwóch linii
+     * treści przed nim, żeby „Pozdrawiam” w drugiej linijce krótkiego maila
+     * nie skasowało całego zapytania.
+     *
+     * @param  list<string>  $lines
      */
-    private static function cutAtClosing(string $text): string
+    private static function closingIndex(array $lines): int
     {
-        $lines = explode("\n", $text);
         $content = 0;
         foreach ($lines as $i => $line) {
             $trimmed = trim($line);
@@ -188,12 +224,12 @@ final class InquiryMailText
                 continue;
             }
             if ($content >= 2 && self::matchesAny($trimmed, self::CLOSING)) {
-                return implode("\n", array_slice($lines, 0, $i));
+                return $i;
             }
             $content++;
         }
 
-        return $text;
+        return count($lines);
     }
 
     /**

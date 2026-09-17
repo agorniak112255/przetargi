@@ -39,6 +39,7 @@ final class PermissionCatalog
         'clients.view',
         'clients.manage',
         'inquiries.use',
+        'inquiries.view_all',
         'ai_settings.manage',
         'admin.access',
         'admin.users.manage',
@@ -120,6 +121,7 @@ final class PermissionCatalog
             'clients.view',
             'clients.manage',
             'inquiries.use',
+            'inquiries.view_all',
         ];
 
         $dyrektor = [
@@ -140,6 +142,7 @@ final class PermissionCatalog
             'price_lists.view',
             'clients.view',
             'inquiries.use',
+            'inquiries.view_all',
         ];
 
         return [
@@ -194,6 +197,7 @@ final class PermissionCatalog
             ['clients.view', 'Klienci — podgląd', 'Może przeglądać listę klientów.', 'Klienci'],
             ['clients.manage', 'Klienci — edycja', 'Może dodawać i edytować klientów.', 'Klienci'],
             ['inquiries.use', 'Zapytania mailowe', 'Może wklejać zapytanie klienta i przygotować odpowiedź z katalogu.', 'Klienci'],
+            ['inquiries.view_all', 'Zapytania mailowe: wszyscy użytkownicy', 'Widzi na liście zapytania wszystkich pracowników, nie tylko własne.', 'Klienci'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],
             ['admin.access', 'Panel Administracja', 'Widzi pozycję menu Administracja.', 'Administracja'],
             ['admin.users.manage', 'Zarządzanie użytkownikami', 'Może tworzyć, edytować i usuwać konta oraz przypisywać role.', 'Administracja'],

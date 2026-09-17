@@ -23,26 +23,155 @@ class ClientInquiryController extends Controller
         private readonly ClientInquiryService $inquiries,
     ) {}
 
+    /**
+     * Lista zapytań: stronicowana i filtrowana po stronie bazy.
+     *
+     * Po roku pracy wpisów będą tysiące, więc nic tu nie wolno wczytywać
+     * „na całą tabelę” — filtry i stronicowanie idą do SQL-a, a w PHP
+     * liczona jest tylko jedna strona wyników.
+     */
     public function index(Request $request): JsonResponse
     {
-        $rows = ClientInquiry::query()
-            ->where('user_id', $request->user()->id)
-            ->with('client:id,name')
-            ->latest()
-            ->limit(50)
-            ->get()
-            ->map(fn (ClientInquiry $row): array => [
-                'id' => $row->id,
-                'source_subject' => $row->source_subject,
-                'reply_subject' => $row->reply_subject,
-                'client' => $row->client ? ['id' => $row->client->id, 'name' => $row->client->name] : null,
-                'created_at' => $row->created_at?->toIso8601String(),
-                'has_reply' => $row->reply_body !== null && $row->reply_body !== '',
-                'replied_at' => $row->replied_at?->toIso8601String(),
-                'attention_count' => $this->inquiries->attentionCount($row),
-            ]);
+        $validated = $request->validate([
+            'q' => ['nullable', 'string', 'max:200'],
+            'status' => ['nullable', 'string', 'in:all,waiting,replied'],
+            'channel' => ['nullable', 'string', 'in:all,web,thunderbird'],
+            'scope' => ['nullable', 'string', 'in:mine,all'],
+            'user_id' => ['nullable', 'integer', 'exists:users,id'],
+            'from' => ['nullable', 'date_format:Y-m-d'],
+            'to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:from'],
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+        ], [
+            'q.string' => 'Szukana fraza musi być tekstem.',
+            'q.max' => 'Szukana fraza może mieć najwyżej 200 znaków.',
+            'status.in' => 'Nieznany status. Dozwolone: all, waiting, replied.',
+            'channel.in' => 'Nieznane źródło. Dozwolone: all, web, thunderbird.',
+            'scope.in' => 'Nieznany zakres. Dozwolone: mine, all.',
+            'user_id.integer' => 'Identyfikator użytkownika musi być liczbą.',
+            'user_id.exists' => 'Nie ma takiego użytkownika.',
+            'from.date_format' => 'Data „od” musi być w formacie RRRR-MM-DD.',
+            'to.date_format' => 'Data „do” musi być w formacie RRRR-MM-DD.',
+            'to.after_or_equal' => 'Data „do” nie może być wcześniejsza niż data „od”.',
+            'page.integer' => 'Numer strony musi być liczbą.',
+            'page.min' => 'Numer strony musi być większy od zera.',
+            'per_page.integer' => 'Liczba wyników na stronie musi być liczbą.',
+            'per_page.min' => 'Liczba wyników na stronie musi być większa od zera.',
+            'per_page.max' => 'Na jedną stronę można pobrać najwyżej 100 zapytań.',
+        ]);
 
-        return response()->json($rows);
+        $user = $request->user();
+        $canViewAll = $user->can('inquiries.view_all');
+        $scope = (string) ($validated['scope'] ?? 'mine');
+
+        if ($scope === 'all' && ! $canViewAll) {
+            abort(403, 'Brak uprawnienia do oglądania zapytań innych użytkowników.');
+        }
+
+        $perPage = (int) ($validated['per_page'] ?? 25);
+
+        $query = ClientInquiry::query()
+            // Bez dużych kolumn (source_body, reply_body) — do listy ich nie potrzeba.
+            // „analysis” i „answers” zostają, bo z nich liczy się attention_count,
+            // a liczy się je tylko dla jednej strony wyników.
+            ->select([
+                'id',
+                'user_id',
+                'client_id',
+                'source_subject',
+                'reply_subject',
+                'source_channel',
+                'source_from_name',
+                'source_from_email',
+                'source_sent_at',
+                'contact',
+                'analysis',
+                'answers',
+                'replied_at',
+                'send_requested_at',
+                'created_at',
+            ])
+            // has_reply bez wczytywania całej treści listu
+            ->selectRaw("CASE WHEN reply_body IS NOT NULL AND reply_body <> '' THEN 1 ELSE 0 END as has_reply")
+            ->with(['client:id,name', 'user:id,name'])
+            ->orderByDesc('created_at')
+            ->orderByDesc('id');
+
+        if ($scope === 'all') {
+            if (! empty($validated['user_id'])) {
+                $query->where('user_id', (int) $validated['user_id']);
+            }
+        } else {
+            $query->where('user_id', $user->id);
+        }
+
+        $status = (string) ($validated['status'] ?? 'all');
+        if ($status === 'waiting') {
+            $query->whereNull('replied_at');
+        } elseif ($status === 'replied') {
+            $query->whereNotNull('replied_at');
+        }
+
+        $channel = (string) ($validated['channel'] ?? 'all');
+        if ($channel !== 'all') {
+            $query->where('source_channel', $channel);
+        }
+
+        if (! empty($validated['from'])) {
+            $query->whereDate('created_at', '>=', $validated['from']);
+        }
+        if (! empty($validated['to'])) {
+            $query->whereDate('created_at', '<=', $validated['to']);
+        }
+
+        $q = trim((string) ($validated['q'] ?? ''));
+        if ($q !== '') {
+            $like = '%'.$q.'%';
+            $query->where(function ($builder) use ($like): void {
+                $builder
+                    ->where('source_subject', 'like', $like)
+                    ->orWhere('reply_subject', 'like', $like)
+                    ->orWhere('source_from_name', 'like', $like)
+                    ->orWhere('source_from_email', 'like', $like)
+                    ->orWhere('contact->company', 'like', $like)
+                    ->orWhere('source_body', 'like', $like);
+            });
+        }
+
+        $paginator = $query->paginate($perPage, ['*'], 'page', $validated['page'] ?? null);
+
+        $data = collect($paginator->items())->map(fn (ClientInquiry $row): array => [
+            'id' => $row->id,
+            'source_subject' => $row->source_subject,
+            'reply_subject' => $row->reply_subject,
+            'client' => $row->client !== null
+                ? ['id' => $row->client->id, 'name' => $row->client->name]
+                : null,
+            'created_at' => $row->created_at?->toIso8601String(),
+            'source_channel' => (string) $row->source_channel,
+            'source_from_name' => $row->source_from_name,
+            'source_from_email' => $row->source_from_email,
+            'source_sent_at' => $row->source_sent_at?->toIso8601String(),
+            'has_reply' => (bool) $row->getAttribute('has_reply'),
+            'replied_at' => $row->replied_at?->toIso8601String(),
+            'send_requested_at' => $row->send_requested_at?->toIso8601String(),
+            'attention_count' => $this->inquiries->attentionCount($row),
+            'contact' => is_array($row->contact) ? $row->contact : null,
+            'user' => $row->user !== null
+                ? ['id' => $row->user->id, 'name' => $row->user->name]
+                : null,
+        ])->values();
+
+        return response()->json([
+            'data' => $data,
+            'meta' => [
+                'page' => $paginator->currentPage(),
+                'per_page' => $paginator->perPage(),
+                'total' => $paginator->total(),
+                'last_page' => $paginator->lastPage(),
+                'can_view_all' => $canViewAll,
+            ],
+        ]);
     }
 
     public function preferences(Request $request): JsonResponse
@@ -78,6 +207,8 @@ class ClientInquiryController extends Controller
                 [
                     'message_id' => isset($data['source_message_id']) ? (string) $data['source_message_id'] : null,
                     'channel' => isset($data['source_channel']) ? (string) $data['source_channel'] : null,
+                    'from' => isset($data['source_from']) ? (string) $data['source_from'] : null,
+                    'sent_at' => isset($data['source_sent_at']) ? (string) $data['source_sent_at'] : null,
                 ],
             );
         } catch (RuntimeException $e) {

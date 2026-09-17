@@ -28,6 +28,17 @@ Dodatek nie jest podpisany przez Mozillę, więc trzeba raz wyłączyć wymóg p
 
 Hasło nie jest zapisywane — służy tylko do jednorazowego pobrania klucza dostępu.
 
+## Aktualizacja
+
+Nową wersję instaluje się **na wierzch starej** — nie odinstalowuj poprzedniej,
+bo razem z nią znikają zapisane dane logowania. Identyfikator dodatku się nie
+zmienia, więc Thunderbird podmienia pliki i zostawia ustawienia.
+
+Dodatek pyta serwer o aktualizacje pod adresem
+`https://przetargi.supon.rzeszow.pl/dodatek/updates.json`, więc po wgraniu nowej
+wersji na serwer Thunderbird sam ją zauważy (sprawdza co kilka godzin; ręcznie:
+**Dodatki i motywy → koło zębate → Sprawdź dostępność aktualizacji**).
+
 ## Budowanie pliku XPI
 
 XPI to zwykłe ZIP-owe archiwum zawartości tego katalogu (bez katalogu nadrzędnego):
@@ -67,6 +78,20 @@ na potrzeby analizy. W bazie zostaje cały mail, a to, co poszło do modelu,
 zapisuje się w `analysis.analyzed_body`.
 
 Dzięki temu ta sama zasada działa też wtedy, gdy ktoś wklei maila w przeglądarce.
+
+## Nadawca i data maila
+
+Razem z treścią dodatek przekazuje nagłówek **From** maila (`source_from`, np.
+„Jan Kowalski <jan@firma.pl>”) i **datę wysłania** (`source_sent_at`) w formacie
+ISO 8601. Aplikacja rozbija nagłówek na nazwę i adres, dzięki czemu na liście
+zapytań widać, od kogo i kiedy przyszedł mail. Gdy Thunderbird nie poda którejś
+z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
+
+## Numer wersji
+
+Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
+ustawień („Supon Przetargi 1.2.0”) — czytana z `manifest.json`, więc zawsze
+zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia
 

@@ -12,7 +12,9 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Support\InquiryMailText;
+use App\Support\InquirySignature;
 use App\Support\OfferPricing;
+use Carbon\CarbonImmutable;
 use RuntimeException;
 use Throwable;
 
@@ -47,7 +49,7 @@ final class ClientInquiryService
     ) {}
 
     /**
-     * @param  array{message_id?: string|null, channel?: string|null}  $source
+     * @param  array{message_id?: string|null, channel?: string|null, from?: string|null, sent_at?: string|null}  $source
      */
     public function analyze(
         User $user,
@@ -69,6 +71,11 @@ final class ClientInquiryService
         $cards = $this->buildCards($extracted['cards'], $matches, $lineItems, $substitutes);
         $preferences = $this->lastPreferences($user);
 
+        // Nadawca z nagłówka From i kontakt z odciętej stopki — obie rzeczy
+        // pochodzą wprost z maila, nic tu nie jest domyślane.
+        $sender = InquirySignature::splitFrom($this->nullable($source['from'] ?? null));
+        $contact = InquirySignature::extract($body, $sender['email']);
+
         $inquiry = ClientInquiry::query()->create([
             'user_id' => $user->id,
             'client_id' => $clientId,
@@ -76,6 +83,10 @@ final class ClientInquiryService
             'source_channel' => $this->nullable($source['channel'] ?? null) ?? 'web',
             'source_subject' => $this->nullable($subject) ?? $extracted['subject'],
             'source_message_id' => $this->normalizeMessageId($source['message_id'] ?? null),
+            'source_from_name' => $sender['name'],
+            'source_from_email' => $sender['email'],
+            'source_sent_at' => $this->parseSentAt($source['sent_at'] ?? null),
+            'contact' => $contact,
             'source_body' => $body,
             'analysis' => [
                 'subject' => $extracted['subject'],
@@ -204,6 +215,8 @@ final class ClientInquiryService
         $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
         $answers = is_array($inquiry->answers) ? $inquiry->answers : [];
         $client = $inquiry->relationLoaded('client') ? $inquiry->client : null;
+        // Jedno zapytanie do bazy i tylko wtedy, gdy autor nie był wcześniej wczytany.
+        $author = $inquiry->loadMissing('user')->user;
         $items = $this->itemsView($inquiry);
 
         return [
@@ -216,6 +229,13 @@ final class ClientInquiryService
             'source_subject' => $inquiry->source_subject,
             'source_channel' => (string) $inquiry->source_channel,
             'source_message_id' => $inquiry->source_message_id,
+            'source_from_name' => $inquiry->source_from_name,
+            'source_from_email' => $inquiry->source_from_email,
+            'source_sent_at' => $inquiry->source_sent_at?->toIso8601String(),
+            'contact' => is_array($inquiry->contact) ? $inquiry->contact : null,
+            'user' => $author instanceof User
+                ? ['id' => $author->id, 'name' => $author->name]
+                : null,
             'source_body' => (string) $inquiry->source_body,
             'questions' => $this->stringList($analysis['questions'] ?? null),
             'attention_count' => $this->countAttention($items),
@@ -2057,6 +2077,27 @@ final class ClientInquiryService
         }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Data wysłania maila — ISO 8601 albo RFC 2822 z nagłówka Date.
+     * Nieczytelnej daty nie zgadujemy, zostaje null.
+     *
+     * Kolumna nie przechowuje strefy, więc przesunięcie z maila („+0200”)
+     * przeliczamy na strefę aplikacji — inaczej zapisalibyśmy inny moment.
+     */
+    private function parseSentAt(mixed $value): ?CarbonImmutable
+    {
+        $raw = $this->nullable($value);
+        if ($raw === null) {
+            return null;
+        }
+
+        try {
+            return CarbonImmutable::parse($raw)->setTimezone(config('app.timezone') ?: 'UTC');
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     private function nullable(mixed $value): ?string

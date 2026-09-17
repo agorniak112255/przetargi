@@ -1,0 +1,17 @@
+{
+  "addons": {
+    "przetargi@supon.rzeszow.pl": {
+      "updates": [
+        {
+          "version": "1.2.0",
+          "update_link": "https://przetargi.supon.rzeszow.pl/dodatek/supon-przetargi.xpi",
+          "applications": {
+            "gecko": {
+              "strict_min_version": "115.0"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

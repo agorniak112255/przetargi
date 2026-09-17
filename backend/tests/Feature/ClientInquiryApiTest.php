@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductInquirySearch;
+use Carbon\CarbonImmutable;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -356,6 +357,70 @@ final class ClientInquiryApiTest extends TestCase
         $this->assertStringNotContainsString('35-206', json_encode($res->json('items'), JSON_THROW_ON_ERROR));
     }
 
+    public function test_store_saves_sender_and_contact_from_mail_footer(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        Sanctum::actingAs($user);
+
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Rękawice',
+                'questions' => [],
+                'product_queries' => [],
+                'line_items' => [],
+                'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock): void {
+            $mock->shouldReceive('findMany')->once()->andReturn([]);
+        });
+
+        $mail = implode("\n", [
+            'Dzień dobry,',
+            '',
+            'proszę o wycenę 10 szt. rękawic nitrylowych rozmiar 9.',
+            '',
+            'Pozdrawiam,',
+            'Mateusz Baniak',
+            'pomoc@proferis.pl<mailto:pomoc@proferis.pl>',
+            '| PROFERIS',
+            'tel. 17 785 22 46,   Al. gen. L. Okulickiego 18,  35-206 Rzeszów',
+        ]);
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => $mail,
+            'tone' => 'formal',
+            'source_channel' => 'thunderbird',
+            'source_message_id' => '<stopka-1@poczta.example>',
+            'source_from' => 'Mateusz Baniak <pomoc@proferis.pl>',
+            'source_sent_at' => 'Tue, 4 Aug 2026 13:09:32 +0200',
+        ]);
+
+        $res->assertCreated()
+            ->assertJsonPath('source_from_name', 'Mateusz Baniak')
+            ->assertJsonPath('source_from_email', 'pomoc@proferis.pl')
+            ->assertJsonPath('contact.person', 'Mateusz Baniak')
+            ->assertJsonPath('contact.company', 'PROFERIS')
+            ->assertJsonPath('contact.emails.0', 'pomoc@proferis.pl')
+            ->assertJsonPath('contact.phones.0', '17 785 22 46')
+            ->assertJsonPath('contact.address', 'Al. gen. L. Okulickiego 18, 35-206 Rzeszów')
+            ->assertJsonPath('user.id', $user->id)
+            ->assertJsonPath('user.name', $user->name);
+
+        // strefa z maila (+0200) jest przeliczana, a nie gubiona
+        $this->assertSame('2026-08-04T11:09:32+00:00', $res->json('source_sent_at'));
+        $this->assertTrue(
+            CarbonImmutable::parse((string) $res->json('source_sent_at'))
+                ->equalTo(CarbonImmutable::parse('Tue, 4 Aug 2026 13:09:32 +0200')),
+        );
+
+        $inquiry = ClientInquiry::query()->findOrFail($res->json('id'));
+        $this->assertSame('Mateusz Baniak', $inquiry->source_from_name);
+        $this->assertSame('pomoc@proferis.pl', $inquiry->source_from_email);
+        // surowy blok stopki zostaje jako ślad źródła
+        $this->assertStringContainsString('| PROFERIS', (string) $inquiry->contact['raw']);
+    }
+
     public function test_reply_can_be_queued_for_thunderbird_and_picked_up(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();
@@ -621,10 +686,12 @@ final class ClientInquiryApiTest extends TestCase
 
         $this->getJson('/api/inquiries')
             ->assertOk()
-            ->assertJsonPath('0.id', $inquiry->id)
-            ->assertJsonPath('0.replied_at', $first)
-            ->assertJsonPath('0.has_reply', true)
-            ->assertJsonPath('0.attention_count', 0);
+            // lista jest stronicowana: wiersze siedzą pod „data”
+            ->assertJsonPath('data.0.id', $inquiry->id)
+            ->assertJsonPath('data.0.replied_at', $first)
+            ->assertJsonPath('data.0.has_reply', true)
+            ->assertJsonPath('data.0.attention_count', 0)
+            ->assertJsonPath('meta.total', 1);
 
         $this->postJson("/api/inquiries/{$inquiry->id}/replied", ['replied' => false])
             ->assertOk()

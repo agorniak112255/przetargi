@@ -16,6 +16,10 @@ class ClientInquiry extends Model
         'source_channel',
         'source_subject',
         'source_message_id',
+        'source_from_name',
+        'source_from_email',
+        'source_sent_at',
+        'contact',
         'source_body',
         'analysis',
         'answers',
@@ -33,6 +37,8 @@ class ClientInquiry extends Model
             'answers' => 'array',
             'replied_at' => 'datetime',
             'send_requested_at' => 'datetime',
+            'source_sent_at' => 'datetime',
+            'contact' => 'array',
         ];
     }
 

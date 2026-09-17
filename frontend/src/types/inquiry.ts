@@ -80,6 +80,28 @@ export type InquiryClientRef = {
   name: string
 }
 
+export type InquiryUserRef = {
+  id: number
+  name: string
+}
+
+/** Skąd przyszło zapytanie: wklejone w przeglądarce albo podjęte przez dodatek do Thunderbirda. */
+export type InquiryChannel = 'web' | 'thunderbird'
+
+/**
+ * Kontakt wyciągnięty ze stopki maila. Puste pole = nie było go w stopce —
+ * front niczego nie dopowiada. `null` w miejscu całego obiektu = nic nie wyciągnięto.
+ */
+export type InquiryContact = {
+  person: string | null
+  company: string | null
+  emails: string[]
+  phones: string[]
+  address: string | null
+  website: string | null
+  raw: string | null
+}
+
 export type InquiryPayload = {
   id: number
   client_id: number | null
@@ -89,6 +111,13 @@ export type InquiryPayload = {
   source_body: string
   /** Message-ID maila źródłowego — bez niego nie ma na co odpowiedzieć w Thunderbirdzie. */
   source_message_id: string | null
+  source_channel: InquiryChannel | null
+  source_from_name: string | null
+  source_from_email: string | null
+  /** Data wysłania maila źródłowego (ISO 8601) — inna niż data założenia zapytania. */
+  source_sent_at: string | null
+  contact: InquiryContact | null
+  user: InquiryUserRef | null
   questions: string[]
   attention_count: number
   replied_at: string | null
@@ -112,10 +141,38 @@ export type InquiryListItem = {
   reply_subject: string | null
   client: InquiryClientRef | null
   created_at: string | null
+  source_channel: InquiryChannel | null
+  source_from_name: string | null
+  source_from_email: string | null
+  source_sent_at: string | null
   has_reply: boolean
   replied_at: string | null
+  /** Ustawione, gdy list czeka na podjęcie przez dodatek do Thunderbirda. */
+  send_requested_at: string | null
   attention_count: number
+  contact: InquiryContact | null
+  user: InquiryUserRef | null
 }
+
+export type InquiryListMeta = {
+  page: number
+  per_page: number
+  total: number
+  last_page: number
+  /** Prawda, gdy użytkownik ma `inquiries.view_all` — dopiero wtedy działa `scope=all`. */
+  can_view_all: boolean
+}
+
+export type InquiryListResponse = {
+  data: InquiryListItem[]
+  meta: InquiryListMeta
+}
+
+export type InquiryStatusFilter = 'all' | 'waiting' | 'replied'
+
+export type InquiryChannelFilter = 'all' | InquiryChannel
+
+export type InquiryScope = 'mine' | 'all'
 
 export type InquiryPreferences = {
   tone: InquiryTone

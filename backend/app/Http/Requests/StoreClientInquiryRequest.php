@@ -26,6 +26,11 @@ class StoreClientInquiryRequest extends FormRequest
             // Pochodzenie zapytania — wypełnia je dodatek do Thunderbirda.
             'source_channel' => ['nullable', 'in:web,thunderbird'],
             'source_message_id' => ['nullable', 'string', 'max:255'],
+            // Pełny nagłówek From, np. „Jan Kowalski <jan@firma.pl>” — backend
+            // sam rozbija go na nazwę i adres.
+            'source_from' => ['nullable', 'string', 'max:400'],
+            // Data wysłania maila (ISO 8601 albo RFC 2822).
+            'source_sent_at' => ['nullable', 'date'],
         ];
     }
 
@@ -36,6 +41,8 @@ class StoreClientInquiryRequest extends FormRequest
     {
         return [
             'body.min' => 'Wklej treść zapytania (co najmniej 20 znaków).',
+            'source_from.max' => 'Nagłówek nadawcy może mieć najwyżej 400 znaków.',
+            'source_sent_at.date' => 'Data wysłania maila jest nieczytelna.',
         ];
     }
 }
