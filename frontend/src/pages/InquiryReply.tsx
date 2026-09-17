@@ -483,7 +483,10 @@ export function InquiryReply() {
       setMarginDraft(String(inquiry.price.margin))
       return
     }
-    void compose({ price: { option_id: 'catalog_margin', custom: value } })
+    // odrzuconą marżę cofamy do zapisanej, żeby w polu nie została liczba spoza oferty
+    void compose({ price: { option_id: 'catalog_margin', custom: value } }).then((ok) => {
+      if (!ok) setMarginDraft(String(inquiry.price.margin))
+    })
   }
 
   function onNoteBlur() {
@@ -847,7 +850,7 @@ export function InquiryReply() {
                   <input
                     type="number"
                     min={0}
-                    max={99}
+                    max={inquiry.price.margin_max}
                     step={0.5}
                     disabled={busy}
                     className="w-20 rounded border border-slate-300 px-2 py-1 text-xs"

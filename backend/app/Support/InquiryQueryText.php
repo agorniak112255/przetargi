@@ -130,6 +130,9 @@ final class InquiryQueryText
             '/(?:'.$word.')(?:\s*'.$word.')*\s*[:.\s]*\.{0,}\s*'.$amount.'\s*(?:'.$word.')?'.$unit.'/iu',
             // „4 497,00PLN/szt.” — liczba przyklejona do waluty
             '/'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.'/iu',
+            // „24,00/szt.” — cena bez waluty. Tylko przy jednostce handlowej i tylko dla
+            // kwoty z groszami: „120,5 g/m2” to gramatura, a „12,5 mb” długość, nie cena.
+            '/\d[\d \x{00A0}]*[.,]\d{2}\s*\/\s*(?:sztuk[ai]?|szt\.?|opak\.?|op\.?|kpl\.?|zest\.?|par[aęy]?)(?![\p{L}\d])/iu',
             // „......24,00” — po ciągu kropek zawsze stoi cena
             '/\.{3,}\s*'.$amount.'/u',
             // osierocone „c. netto”, gdy liczbę zabrał wcześniejszy wzorzec

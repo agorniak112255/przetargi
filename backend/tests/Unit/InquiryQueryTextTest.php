@@ -60,6 +60,9 @@ final class InquiryQueryTextTest extends TestCase
             // kropka na końcu linii odpada razem z interpunkcją — treść warunku zostaje
             ['Rękawice nitrylowe op. 100 szt., c. netto.....24,00 PLN/opak', ['op. 100 szt']],
             ['Drążek izolacyjny 110kV, UDI-110-B L=2200, c. netto.....937,00 PLN', ['110kV', 'UDI-110-B', 'L=2200']],
+            // liczba z jednostką techniczną to warunek doboru, nie cena bez waluty
+            ['Włóknina gramatura 120,5 g/m2, c. netto 8,40 PLN/m2', ['120,5 g/m2']],
+            ['Taśma ostrzegawcza 12,5 mb, cena 14,00 zł', ['12,5 mb']],
         ];
     }
 
@@ -79,6 +82,20 @@ final class InquiryQueryTextTest extends TestCase
         }
         $this->assertStringNotContainsString('PLN', $clean);
         $this->assertStringNotContainsString('netto', $clean);
+    }
+
+    public function test_price_without_currency_falls_only_at_a_commercial_unit(): void
+    {
+        // cudza cena z wcześniejszej oferty nie ma trafić do listu obok naszej
+        $this->assertSame('Rękawice nitrylowe', InquiryQueryText::withoutPrice('Rękawice nitrylowe 12,50/szt.'));
+        $this->assertSame('Buty robocze', InquiryQueryText::withoutPrice('Buty robocze 189,00/para'));
+
+        // gramatura i długość zostają — to warunki doboru wyrobu
+        $this->assertSame(
+            'Włóknina gramatura 120,5 g/m2',
+            InquiryQueryText::withoutPrice('Włóknina gramatura 120,5 g/m2')
+        );
+        $this->assertSame('Taśma 12,5 mb', InquiryQueryText::withoutPrice('Taśma 12,5 mb'));
     }
 
     public function test_recognises_lines_without_any_product_name(): void

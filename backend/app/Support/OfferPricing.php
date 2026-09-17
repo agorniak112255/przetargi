@@ -22,6 +22,14 @@ final class OfferPricing
         return max(0, (float) config('pricing.offer_markup_percent', 18));
     }
 
+    /** Najwyzsza marza, jaka wolno wpisac recznie. */
+    public static function marginMax(): float
+    {
+        $max = (float) config('pricing.offer_margin_max', 99);
+
+        return $max > 0 ? $max : 99.0;
+    }
+
     public static function factorFromPercent(?float $percent): float
     {
         $p = $percent ?? self::markupPercent();

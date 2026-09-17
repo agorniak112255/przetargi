@@ -429,6 +429,7 @@ final class ClientInquiryService
                 'answer_key' => 'price',
                 'mode' => $this->priceModeOf($answers),
                 'margin' => $this->marginPercent($answers),
+                'margin_max' => OfferPricing::marginMax(),
             ],
             'items' => $items,
             'global_cards' => $this->globalCards($analysis),

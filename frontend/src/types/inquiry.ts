@@ -73,6 +73,7 @@ export type InquiryPrice = {
   answer_key: 'price'
   mode: InquiryPriceMode
   margin: number
+  margin_max: number
 }
 
 export type InquiryClientRef = {

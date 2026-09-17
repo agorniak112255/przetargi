@@ -960,6 +960,37 @@ final class ClientInquiryApiTest extends TestCase
         $this->assertStringContainsString('Cena: 24,40 zl netto', str_replace(['ł', 'ę'], ['l', 'e'], (string) $res->json('reply_body')));
     }
 
+    public function test_margin_outside_the_range_is_rejected_instead_of_silently_trimmed(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_body' => '10 szt. rekawice nitrylowe',
+            'analysis' => ['line_items' => [], 'matches' => [], 'cards' => []],
+            'answers' => ['price' => ['option_id' => 'catalog_margin', 'custom' => '18']],
+        ]);
+
+        Sanctum::actingAs($user);
+
+        // 200% bylo przycinane do 99% bez slowa, litery cofaly cene do marzy domyslnej
+        $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => ['price' => ['option_id' => 'catalog_margin', 'custom' => '200']],
+        ])->assertStatus(422)->assertJsonValidationErrors('answers.price.custom');
+
+        $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => ['price' => ['option_id' => 'catalog_margin', 'custom' => 'osiemnascie']],
+        ])->assertStatus(422)->assertJsonValidationErrors('answers.price.custom');
+
+        // odrzucona marza niczego nie zapisuje
+        $this->assertSame('18', (string) $inquiry->fresh()->answers['price']['custom']);
+
+        // przecinek i znak procentu to normalny zapis, nie blad
+        $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => ['price' => ['option_id' => 'catalog_margin', 'custom' => '12,5%']],
+        ])->assertOk()->assertJsonPath('price.margin', 12.5)->assertJsonPath('price.margin_max', 99);
+    }
+
     public function test_preferences_default_without_history(): void
     {
         Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
