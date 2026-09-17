@@ -14,6 +14,10 @@ use RuntimeException;
  * TranslateB2bProductTextJob). Uzupełnianie AI takiego opisu nie nadpisuje zbiorczo; pojedynczo tylko po potwierdzeniu
  * — AI zastąpiłoby tekst ze sklepu dostawcy opisem z internetu, a kolejna synchronizacja uzna zmianę za ręczną
  * i oryginału nie przywróci.
+ *
+ * Opisem jest tekst spełniający miarę karty (Product::isDescriptionText) — sama jednostka sprzedaży ze sklepu
+ * („Jednostka: szt.”, 396 kart UVEX 17.09.2026) opisem nie jest: karta nadal czeka na opis, więc liczniki muszą
+ * ją pokazywać jako niegotową, a zbiorcze AI ma jej nie pomijać.
  */
 final class B2bDescriptionSource
 {
@@ -68,7 +72,9 @@ final class B2bDescriptionSource
             foreach ($links as $link) {
                 $id = (int) $link->product_id;
                 $description = (string) ($chunk[$id] ?? '');
-                if (trim($description) !== '' && sha1($description) === (string) $link->description_hash) {
+                // sam tekst musi być opisem: część kart UVEX ma ze sklepu tylko jednostkę sprzedaży
+                // („Jednostka: szt.”), a taka karta nadal czeka na opis — i AI ma wolno jej go dopisać
+                if (Product::isDescriptionText($description) && sha1($description) === (string) $link->description_hash) {
                     $out[$id] = true;
                 }
             }

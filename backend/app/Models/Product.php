@@ -26,6 +26,9 @@ class Product extends Model
     /** Kod wewnętrzny, którego nie ma w internecie — opis wpisuje człowiek, kolejki go pomijają. */
     public const ENRICHMENT_MANUAL = 'manual';
 
+    /** Krótszy tekst to etykieta, nie opis wyrobu (zob. hasDescriptionText). */
+    public const DESCRIPTION_MIN_CHARS = 24;
+
     protected $fillable = [
         'sku',
         'name',
@@ -132,7 +135,18 @@ class Product extends Model
     {
         $d = trim((string) ($this->description ?? ''));
 
-        return $d !== '' && mb_strlen($d) >= 24 && ! $this->descriptionRepeatsName($d);
+        return self::isDescriptionText($d) && ! $this->descriptionRepeatsName($d);
+    }
+
+    /**
+     * Czy sam tekst jest opisem, a nie jedną etykietą (np. „Jednostka: szt.” z cennika B2B) — bez części
+     * porównującej opis z nazwą karty, dla miejsc, które mają tylko tekst.
+     */
+    public static function isDescriptionText(string $description): bool
+    {
+        $d = trim($description);
+
+        return $d !== '' && mb_strlen($d) >= self::DESCRIPTION_MIN_CHARS;
     }
 
     public function hasUsableDescription(): bool

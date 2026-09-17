@@ -84,6 +84,29 @@ final class B2bDescriptionEnrichmentGuardTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_NONE, $fromB2b->fresh()?->enrichment_status);
     }
 
+    public function test_unit_alone_is_not_a_description_so_the_card_still_waits_for_one(): void
+    {
+        // część kart UVEX ma ze sklepu tylko jednostkę sprzedaży — panel pokazywał je jako gotowe,
+        // a zbiorcze AI je pomijało, więc opisu nie dostawały znikąd
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $onlyUnit = $this->b2bProduct('UVEX-1');
+        $onlyUnit->update(['description' => 'Jednostka: szt.']);
+        B2bProductLink::query()->where('product_id', $onlyUnit->id)->update(['description_hash' => sha1('Jednostka: szt.')]);
+
+        $this->assertSame([], app(B2bDescriptionSource::class)->productIds([(int) $onlyUnit->id]));
+        $this->getJson("/api/products/{$onlyUnit->id}")->assertOk()->assertJsonPath('description_from_b2b', false);
+
+        $this->postJson('/api/products/enrich', ['product_ids' => [$onlyUnit->id]])
+            ->assertStatus(202)
+            ->assertJsonPath('product_ids', [$onlyUnit->id])
+            ->assertJsonPath('skipped_b2b', 0);
+
+        $this->getJson('/api/products/catalog-health')
+            ->assertOk()
+            ->assertJsonPath('from_b2b', 0)
+            ->assertJsonPath('not_enriched', 1);
+    }
+
     public function test_single_enrichment_of_b2b_card_requires_confirmation(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
