@@ -485,6 +485,69 @@ final class ClientInquiryApiTest extends TestCase
         $this->assertNull(ClientInquiry::query()->find($id)?->reply_html);
     }
 
+    public function test_older_reply_without_stored_html_still_gets_the_table(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = Product::query()->create([
+            'sku' => 'RNITZ-100',
+            'name' => 'Rękawice nitrylowe',
+            'manufacturer' => 'Supon',
+            'catalog_price_net' => 2.40,
+            'purchase_price' => 1.10,
+            'stock' => 80,
+        ]);
+
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Rękawice',
+                'questions' => [],
+                'product_queries' => ['rękawice nitrylowe'],
+                'line_items' => [],
+                'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock) use ($product): void {
+            $mock->shouldReceive('findMany')->once()->andReturnUsing(
+                fn (array $queries): array => array_map(
+                    fn (string $q): array => ['query' => $q, 'products' => [[
+                        'id' => $product->id,
+                        'sku' => $product->sku,
+                        'name' => $product->name,
+                        'manufacturer' => $product->manufacturer,
+                        'norms' => 'EN 374',
+                        'catalog_price_net' => '2.40',
+                        'currency' => 'PLN',
+                        'stock' => 80,
+                        'ai_match_percent' => 92,
+                    ]]],
+                    $queries
+                )
+            );
+        });
+
+        Sanctum::actingAs($user);
+
+        $id = (int) $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry\n\n10 szt. rękawice nitrylowe rozmiar 9",
+            'tone' => 'formal',
+        ])->assertCreated()->json('id');
+
+        // list napisany, zanim tabela w ogóle powstawała
+        ClientInquiry::query()->where('id', $id)->update(['reply_html' => null]);
+
+        $this->getJson("/api/inquiries/{$id}")
+            ->assertOk()
+            ->assertJsonPath('id', $id);
+
+        $html = (string) $this->getJson("/api/inquiries/{$id}")->json('reply_html');
+        $this->assertStringContainsString('<table', $html);
+        $this->assertStringContainsString('RNITZ-100', $html);
+
+        // ale po ręcznej poprawce treści tabeli już nie odtwarzamy
+        $this->patchJson("/api/inquiries/{$id}", ['reply_body' => 'Dzień dobry, oferta w załączeniu.'])->assertOk();
+        $this->getJson("/api/inquiries/{$id}")->assertOk()->assertJsonPath('reply_html', null);
+    }
+
     public function test_html_reply_escapes_text_from_the_customer(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

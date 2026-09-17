@@ -208,6 +208,30 @@ final class ClientInquiryService
     }
 
     /**
+     * Tabela HTML do maila. Kolumna bywa pusta przy listach napisanych, zanim
+     * tabela powstała — wtedy odtwarzamy ją z zapisanych odpowiedzi. Robimy to
+     * tylko wtedy, gdy zapisany list to wciąż nasz tekst: po ręcznej poprawce
+     * klient dostałby tabelę mówiącą co innego niż zatwierdzona treść.
+     */
+    public function replyHtmlFor(ClientInquiry $inquiry): ?string
+    {
+        $stored = (string) ($inquiry->reply_html ?? '');
+        if ($stored !== '') {
+            return $stored;
+        }
+
+        $body = (string) ($inquiry->reply_body ?? '');
+        if ($body === '') {
+            return null;
+        }
+
+        $answers = is_array($inquiry->answers) ? $inquiry->answers : [];
+        $draft = $this->writeReply($inquiry, $answers, $this->nullable($inquiry->extra_note));
+
+        return trim((string) $draft['body']) === trim($body) ? (string) $draft['html'] : null;
+    }
+
+    /**
      * Pełny payload API zapytania (kontrakt GET /inquiries/{id}).
      *
      * @return array<string, mixed>
@@ -255,7 +279,7 @@ final class ClientInquiryService
             'extra_note' => $inquiry->extra_note,
             'reply_subject' => $inquiry->reply_subject,
             'reply_body' => $inquiry->reply_body,
-            'reply_html' => $inquiry->reply_html,
+            'reply_html' => $this->replyHtmlFor($inquiry),
             'created_at' => $inquiry->created_at?->toIso8601String(),
         ];
     }

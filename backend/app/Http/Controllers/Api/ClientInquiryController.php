@@ -314,7 +314,7 @@ class ClientInquiryController extends Controller
                 'source_message_id' => $row->source_message_id,
                 'reply_subject' => $row->reply_subject,
                 'reply_body' => $row->reply_body,
-                'reply_html' => $row->reply_html,
+                'reply_html' => $this->inquiries->replyHtmlFor($row),
                 'requested_at' => $row->send_requested_at?->toIso8601String(),
             ]);
 
