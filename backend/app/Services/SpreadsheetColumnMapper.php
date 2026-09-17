@@ -317,6 +317,53 @@ final class SpreadsheetColumnMapper
      *
      * @return array{0: int, 1: array<int, array{count: int, avg: float, distinct: int}>}
      */
+    /**
+     * Kategoria wskazana na kolumnę, która jest numerem katalogowym, nie jest kategorią. W cenniku ARTRY
+     * kolumna „kat.” to numer pozycji w katalogu producenta (223 = trzy warianty tego samego buta) i dała
+     * 112 „grup asortymentowych” o nazwach w rodzaju 223. Grupy służą do ustawiania upustów, więc taki
+     * podział jest bezużyteczny, a numer trafiał na kartę jako grupa.
+     *
+     * Zastępstwa nie zgadujemy: mapowanie kategorii po prostu odpada i wtedy obowiązuje kategoria domyślna
+     * podana przy imporcie. Wybieranie „jakiejś innej kolumny tekstowej” podstawiłoby równie dobrze rodzaj
+     * podeszwy albo nazwę kolekcji.
+     *
+     * @param  array<string, int|null>  $cols
+     * @return array<string, int|null>
+     */
+    public function correctCategoryColumn(Worksheet $sheet, int $headerExcel, int $maxC, array $cols): array
+    {
+        $col = $cols['category'] ?? null;
+        if (! is_int($col)) {
+            return $cols;
+        }
+
+        $lastRow = min((int) $sheet->getHighestDataRow(), $headerExcel + self::NAME_SAMPLE_ROWS);
+        $values = [];
+        $numeric = 0;
+        for ($r = $headerExcel + 1; $r <= $lastRow; $r++) {
+            $value = trim((string) $sheet->getCell(Coordinate::stringFromColumnIndex($col + 1).$r)->getFormattedValue());
+            if ($value === '') {
+                continue;
+            }
+            $values[] = mb_strtolower($value);
+            if (is_numeric(str_replace([',', ' '], ['.', ''], $value))) {
+                $numeric++;
+            }
+        }
+        $total = count($values);
+        if ($total < 10) {
+            return $cols;
+        }
+        // numer katalogowy: prawie same liczby i prawie każda inna. Dział cennika zapisany numerem
+        // („01”, „02”) powtarza się na dziesiątkach pozycji, więc tego warunku nie spełni.
+        if ($numeric < 0.8 * $total || count(array_unique($values)) < 0.3 * $total) {
+            return $cols;
+        }
+        $cols['category'] = null;
+
+        return $cols;
+    }
+
     private function columnTextStats(Worksheet $sheet, int $headerExcel, int $maxC): array
     {
         $lastRow = min((int) $sheet->getHighestDataRow(), $headerExcel + self::NAME_SAMPLE_ROWS);

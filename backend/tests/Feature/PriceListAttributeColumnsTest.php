@@ -132,6 +132,30 @@ final class PriceListAttributeColumnsTest extends TestCase
         @unlink($path);
     }
 
+    public function test_catalogue_index_is_not_taken_for_the_assortment_group(): void
+    {
+        $user = User::factory()->create();
+        $path = $this->artraLikeSheet(12, withCatalogueIndex: true);
+
+        // mapowanie jak z analizy: kategoria wskazana na kolumnę „kat.” — numer pozycji w katalogu
+        $mapping = $this->mapping();
+        $mapping['sheets'][0]['columns']['category'] = 7;
+
+        app(PriceListImportService::class)->importWithMapping(
+            new UploadedFile($path, 'artra.xlsx', null, null, true),
+            'ARTRA',
+            'test',
+            $user,
+            $mapping,
+            'Obuwie',
+        );
+
+        // numer katalogowy nie zostaje grupą; obowiązuje kategoria domyślna podana przy imporcie
+        $this->assertSame(['Obuwie'], Product::query()->pluck('category')->unique()->values()->all());
+
+        @unlink($path);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -161,18 +185,21 @@ final class PriceListAttributeColumnsTest extends TestCase
         ];
     }
 
-    private function artraLikeSheet(int $rows = 1, bool $withRetailColumn = false): string
+    private function artraLikeSheet(int $rows = 1, bool $withRetailColumn = false, bool $withCatalogueIndex = false): string
     {
         $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('PL');
-        $data = [['artykuł', 'typ', 'ochrony', 'kolor', 'rozm.', 'bez VAT', '* NCD z VAT']];
-        $data[] = ['ARYEL 320 671460 S3L', 'trzewiki', 'S3L', '', '35-48', 259, 1290];
+        $data = [['artykuł', 'typ', 'ochrony', 'kolor', 'rozm.', 'bez VAT', '* NCD z VAT', 'kat.']];
+        $data[] = ['ARYEL 320 671460 S3L', 'trzewiki', 'S3L', '', '35-48', 259, 1290, 223];
         // statystyki kolumn potrzebują kilku wierszy, żeby odróżnić nazwę od rodzaju wyrobu
         for ($i = 2; $i <= $rows; $i++) {
-            $data[] = ['ARYEL 320 67146'.$i.' S3L', 'trzewiki', 'S3L', '', '35-48', 259 + $i, 1290 + $i];
+            $data[] = ['ARYEL 320 67146'.$i.' S3L', 'trzewiki', 'S3L', '', '35-48', 259 + $i, 1290 + $i, 223 + $i];
         }
-        if (! $withRetailColumn) {
+        if (! $withCatalogueIndex) {
+            $data = array_map(static fn (array $row): array => array_slice($row, 0, 7), $data);
+        }
+        if (! $withRetailColumn && ! $withCatalogueIndex) {
             $data = array_map(static fn (array $row): array => array_slice($row, 0, 6), $data);
         }
         $sheet->fromArray($data, null, 'A1');

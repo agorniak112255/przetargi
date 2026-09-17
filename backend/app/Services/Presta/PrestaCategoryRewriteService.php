@@ -7,6 +7,7 @@ namespace App\Services\Presta;
 use App\Models\PrestaCategory;
 use App\Models\Product;
 use App\Support\PpeAssortment;
+use Illuminate\Support\Collection;
 
 final class PrestaCategoryRewriteService
 {
@@ -32,9 +33,13 @@ final class PrestaCategoryRewriteService
     ) {}
 
     /**
-     * @return array{updated: int, cleared: int, skipped: int}
+     * Przepisuje kategorie kart na drzewo Presty. Domyślnie tylko podgląd — zapis wymaga $apply,
+     * bo to zmiana na wszystkich kartach naraz, a kategoria decyduje o grupie widocznej na karcie
+     * i o mapowaniu przy wysyłce do sklepu.
+     *
+     * @return array{updated: int, cleared: int, skipped: int, samples: list<array{sku: string, from: string, to: string}>}
      */
-    public function rewrite(): array
+    public function rewrite(?string $manufacturer = null, bool $apply = true, int $samples = 15): array
     {
         $tree = PrestaCategory::query()->where('active', true)->get();
         $pathCache = [];
@@ -44,8 +49,15 @@ final class PrestaCategoryRewriteService
         $clearIds = [];
         $skipped = 0;
 
-        Product::query()->select(['id', 'name', 'category'])->orderBy('id')
-            ->chunkById(500, function ($products) use ($tree, &$pathCache, &$byPath, &$clearIds, &$skipped): void {
+        $sampleRows = [];
+        Product::query()
+            ->select(['id', 'sku', 'name', 'category'])
+            ->when(
+                $manufacturer !== null && trim($manufacturer) !== '',
+                static fn ($query) => $query->where('manufacturer', trim((string) $manufacturer))
+            )
+            ->orderBy('id')
+            ->chunkById(500, function ($products) use ($tree, &$pathCache, &$byPath, &$clearIds, &$skipped, &$sampleRows, $samples): void {
                 foreach ($products as $product) {
                     if (! $product instanceof Product) {
                         continue;
@@ -59,11 +71,25 @@ final class PrestaCategoryRewriteService
                     }
                     if ($target !== null) {
                         $byPath[$target][] = (int) $product->id;
+                        if (count($sampleRows) < $samples) {
+                            $sampleRows[] = [
+                                'sku' => (string) $product->sku,
+                                'from' => $current !== '' ? $current : '—',
+                                'to' => $target,
+                            ];
+                        }
 
                         continue;
                     }
                     if ($this->sanitizer->isGarbage($current)) {
                         $clearIds[] = (int) $product->id;
+                        if (count($sampleRows) < $samples) {
+                            $sampleRows[] = [
+                                'sku' => (string) $product->sku,
+                                'from' => $current !== '' ? $current : '—',
+                                'to' => '— (wyczyszczone)',
+                            ];
+                        }
 
                         continue;
                     }
@@ -72,6 +98,19 @@ final class PrestaCategoryRewriteService
             });
 
         $updated = 0;
+        if (! $apply) {
+            foreach ($byPath as $ids) {
+                $updated += count($ids);
+            }
+
+            return [
+                'updated' => $updated,
+                'cleared' => count($clearIds),
+                'skipped' => $skipped,
+                'samples' => $sampleRows,
+            ];
+        }
+
         foreach ($byPath as $path => $ids) {
             foreach (array_chunk($ids, 1000) as $chunk) {
                 Product::query()->whereIn('id', $chunk)->update(['category' => $path]);
@@ -86,11 +125,11 @@ final class PrestaCategoryRewriteService
 
         $this->maps->autoFillMaps();
 
-        return ['updated' => $updated, 'cleared' => $cleared, 'skipped' => $skipped];
+        return ['updated' => $updated, 'cleared' => $cleared, 'skipped' => $skipped, 'samples' => $sampleRows];
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int, PrestaCategory>  $tree
+     * @param  Collection<int, PrestaCategory>  $tree
      * @param  array<string, string|null>  $pathCache
      */
     public function resolvePath(Product $product, $tree, array &$pathCache = []): ?string
@@ -130,7 +169,7 @@ final class PrestaCategoryRewriteService
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int, PrestaCategory>  $tree
+     * @param  Collection<int, PrestaCategory>  $tree
      */
     private function uniqueNamePath(string $local, $tree): ?string
     {
@@ -150,7 +189,7 @@ final class PrestaCategoryRewriteService
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<int, PrestaCategory>  $tree
+     * @param  Collection<int, PrestaCategory>  $tree
      */
     private function bestTreePath(string $family, string $productName, $tree): ?string
     {

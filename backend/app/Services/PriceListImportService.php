@@ -835,13 +835,11 @@ final class PriceListImportService
             // Mapowanie z analizy potrafi wskazać na nazwę kolumnę rodzaju wyrobu — w cenniku ARTRY „typ”,
             // przez co wszystkie karty nazywałyby się „półbuty”. Te same statystyki kolumn, które poprawiają
             // mapowanie wykrywane samodzielnie, stosujemy do mapowania przyszłego z zewnątrz.
+            $headerExcelForFix = max(1, (int) ($sheetMap['header_excel_row'] ?? $sheetMap['header_row'] ?? 1));
+            $maxColForFix = min(28, Coordinate::columnIndexFromString($sheet->getHighestDataColumn() ?: 'A'));
+            $map = $this->columnMapper->correctCategoryColumn($sheet, $headerExcelForFix, $maxColForFix, $map);
             $map = array_filter(
-                $this->columnMapper->correctNameColumn(
-                    $sheet,
-                    max(1, (int) ($sheetMap['header_excel_row'] ?? $sheetMap['header_row'] ?? 1)),
-                    min(28, Coordinate::columnIndexFromString($sheet->getHighestDataColumn() ?: 'A')),
-                    $map,
-                ),
+                $this->columnMapper->correctNameColumn($sheet, $headerExcelForFix, $maxColForFix, $map),
                 static fn ($idx): bool => $idx !== null,
             );
 

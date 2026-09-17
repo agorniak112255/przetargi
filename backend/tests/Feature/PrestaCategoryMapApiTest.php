@@ -210,6 +210,56 @@ final class PrestaCategoryMapApiTest extends TestCase
         ]);
     }
 
+    public function test_preview_reports_changes_without_touching_the_catalogue(): void
+    {
+        $this->towelTree();
+        $this->makeProduct([
+            'sku' => 'GOMEZ-1',
+            'name' => 'Ręcznik GOMEZ 500g/m2 Biały',
+            'category' => '223',
+        ]);
+
+        $this->artisan('presta:rewrite-categories')
+            ->expectsOutputToContain('Podgląd — nic nie zapisano')
+            ->assertSuccessful();
+
+        $this->assertDatabaseHas('products', ['sku' => 'GOMEZ-1', 'category' => '223']);
+    }
+
+    public function test_rewrite_can_be_limited_to_a_single_manufacturer(): void
+    {
+        $this->towelTree();
+        $this->makeProduct([
+            'sku' => 'GOMEZ-1',
+            'name' => 'Ręcznik GOMEZ 500g/m2 Biały',
+            'category' => '223',
+            'manufacturer' => 'ARTRA',
+        ]);
+        $this->makeProduct([
+            'sku' => 'GOMEZ-2',
+            'name' => 'Ręcznik GOMEZ 400g/m2 Szary',
+            'category' => '224',
+            'manufacturer' => 'Canis',
+        ]);
+
+        $this->artisan('presta:rewrite-categories --manufacturer=ARTRA --apply')->assertSuccessful();
+
+        $this->assertDatabaseHas('products', [
+            'sku' => 'GOMEZ-1',
+            'category' => 'Ręczniki / Ręczniki bawełniane',
+        ]);
+        // karta innego producenta zostaje nietknięta — zmianę robi się jednym dostawcą naraz
+        $this->assertDatabaseHas('products', ['sku' => 'GOMEZ-2', 'category' => '224']);
+    }
+
+    private function towelTree(): void
+    {
+        app(PrestaCategorySyncService::class)->storeCategories([
+            ['presta_id' => 10, 'parent_presta_id' => 2, 'name' => 'Ręczniki', 'level_depth' => 2, 'active' => true],
+            ['presta_id' => 88, 'parent_presta_id' => 10, 'name' => 'Ręczniki bawełniane', 'level_depth' => 3, 'active' => true],
+        ]);
+    }
+
     /**
      * @param  array<string, mixed>  $overrides
      */
