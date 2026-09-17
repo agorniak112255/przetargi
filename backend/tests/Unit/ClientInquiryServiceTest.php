@@ -389,6 +389,18 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame('none', $svc->confidenceFor([]));
     }
 
+    public function test_sku_quoted_by_client_below_the_threshold_is_not_a_certain_match(): void
+    {
+        $svc = $this->service();
+        // model ocenil ten wiersz ponizej progu: zgodny bywa sam ciag znakow, nie wyrob
+        $low = $this->candidates([30]);
+        $item = ['id' => 'item_1', 'quote' => '20 szt. Okulary sku1 bezbarwne', 'query' => 'okulary'];
+
+        $this->assertSame('none', $svc->confidenceFor($low, $item));
+        // do listu idzie „sprawdzimy i wrocimy”, a wiersz zostaje na liscie do wyboru
+        $this->assertSame('check', $svc->defaultOptionFor($item, $low));
+    }
+
     public function test_sku_quoted_by_client_is_high_confidence_and_wins_tie(): void
     {
         $svc = $this->service();

@@ -540,11 +540,14 @@ final class ClientInquiryService
         if ($best === null) {
             return 'none';
         }
+        $score = (int) ($best['score'] ?? 0);
         // Klient wpisał dokładny kod z katalogu — to nie jest zgadywanie modelu.
-        if ($this->skuQuotedIndex($item, $candidates) === 0) {
+        // Ale gdy model ocenił ten wiersz poniżej progu, zgodny bywa sam ciąg znaków,
+        // a nie wyrób: taki wiersz zostaje na czele listy do wyboru ręcznego, jednak
+        // nie wchodzi do listu jako pewne dopasowanie.
+        if ($score >= $this->minMatchScore() && $this->skuQuotedIndex($item, $candidates) === 0) {
             return 'high';
         }
-        $score = (int) ($best['score'] ?? 0);
         if ($score >= self::CONFIDENT_SCORE && ! $this->isAmbiguous($candidates, $item)) {
             return 'high';
         }
