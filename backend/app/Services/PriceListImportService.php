@@ -19,6 +19,7 @@ use App\Support\ProductSizeVariant;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use Throwable;
 
@@ -831,6 +832,19 @@ final class PriceListImportService
                 continue;
             }
 
+            // Mapowanie z analizy potrafi wskazać na nazwę kolumnę rodzaju wyrobu — w cenniku ARTRY „typ”,
+            // przez co wszystkie karty nazywałyby się „półbuty”. Te same statystyki kolumn, które poprawiają
+            // mapowanie wykrywane samodzielnie, stosujemy do mapowania przyszłego z zewnątrz.
+            $map = array_filter(
+                $this->columnMapper->correctNameColumn(
+                    $sheet,
+                    max(1, (int) ($sheetMap['header_excel_row'] ?? $sheetMap['header_row'] ?? 1)),
+                    min(28, Coordinate::columnIndexFromString($sheet->getHighestDataColumn() ?: 'A')),
+                    $map,
+                ),
+                static fn ($idx): bool => $idx !== null,
+            );
+
             $headerExcelRow = max(1, (int) ($sheetMap['header_excel_row'] ?? $sheetMap['header_row'] ?? 1));
             $headerIdx = $headerExcelRow - 1;
             $repeating = (bool) ($sheetMap['repeating_headers'] ?? false);
@@ -1490,6 +1504,12 @@ final class PriceListImportService
         $purchase = isset($map['purchase'])
             ? $this->toFloat($row[$map['purchase']] ?? null)
             : null;
+        // Cena zakupu wyższa od katalogowej to nie jest cena zakupu — w cenniku ARTRY jako „zakup”
+        // wskazana została kolumna ceny detalicznej brutto w złotych obok ceny katalogowej w euro.
+        // Zamiast zapisać 429 tam, gdzie powinno stać 36, liczymy zakup z upustu jak przy braku kolumny.
+        if ($purchase !== null && $catalog > 0 && $purchase > $catalog) {
+            $purchase = null;
+        }
         if ($purchase !== null && $purchase > 0) {
             $purchaseFromFile = true;
             if ($catalog > 0) {

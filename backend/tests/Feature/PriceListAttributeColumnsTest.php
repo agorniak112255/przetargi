@@ -81,6 +81,57 @@ final class PriceListAttributeColumnsTest extends TestCase
         $this->assertSame('S3L', $attributes['klasa_ochrony']);
     }
 
+    public function test_type_column_is_not_taken_for_the_product_name(): void
+    {
+        $user = User::factory()->create();
+        $path = $this->artraLikeSheet(12);
+
+        // mapowanie jak z analizy: nazwa wskazana na kolumnę rodzaju wyrobu („typ”)
+        $mapping = $this->mapping();
+        $mapping['sheets'][0]['columns']['name'] = 1;
+
+        app(PriceListImportService::class)->importWithMapping(
+            new UploadedFile($path, 'artra.xlsx', null, null, true),
+            'ARTRA',
+            'test',
+            $user,
+            $mapping,
+            'obuwie',
+        );
+
+        // gdyby kolumna „typ” została nazwą, każda karta nazywalaby sie „trzewiki”
+        $names = Product::query()->pluck('name')->all();
+        $this->assertNotContains('trzewiki', $names);
+        $this->assertContains('ARYEL 320 671460 S3L', $names);
+
+        @unlink($path);
+    }
+
+    public function test_purchase_price_above_the_catalog_price_is_not_used(): void
+    {
+        $user = User::factory()->create();
+        $path = $this->artraLikeSheet(12, withRetailColumn: true);
+
+        $mapping = $this->mapping();
+        // jak w cenniku ARTRY: „zakup” wskazany na cene detaliczna brutto w zlotych obok ceny w euro
+        $mapping['sheets'][0]['columns']['purchase'] = 6;
+
+        app(PriceListImportService::class)->importWithMapping(
+            new UploadedFile($path, 'artra.xlsx', null, null, true),
+            'ARTRA',
+            'test',
+            $user,
+            $mapping,
+            'obuwie',
+        );
+
+        $product = Product::query()->where('sku', 'ARYEL 320 671460 S3L')->firstOrFail();
+        $this->assertEquals(259.0, (float) $product->catalog_price_net);
+        $this->assertEquals(259.0, (float) $product->purchase_price);
+
+        @unlink($path);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -110,15 +161,21 @@ final class PriceListAttributeColumnsTest extends TestCase
         ];
     }
 
-    private function artraLikeSheet(): string
+    private function artraLikeSheet(int $rows = 1, bool $withRetailColumn = false): string
     {
         $spreadsheet = new Spreadsheet;
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('PL');
-        $sheet->fromArray([
-            ['artykuł', 'typ', 'ochrony', 'kolor', 'rozm.', 'bez VAT'],
-            ['ARYEL 320 671460 S3L', 'trzewiki', 'S3L', '', '35-48', 259],
-        ], null, 'A1');
+        $data = [['artykuł', 'typ', 'ochrony', 'kolor', 'rozm.', 'bez VAT', '* NCD z VAT']];
+        $data[] = ['ARYEL 320 671460 S3L', 'trzewiki', 'S3L', '', '35-48', 259, 1290];
+        // statystyki kolumn potrzebują kilku wierszy, żeby odróżnić nazwę od rodzaju wyrobu
+        for ($i = 2; $i <= $rows; $i++) {
+            $data[] = ['ARYEL 320 67146'.$i.' S3L', 'trzewiki', 'S3L', '', '35-48', 259 + $i, 1290 + $i];
+        }
+        if (! $withRetailColumn) {
+            $data = array_map(static fn (array $row): array => array_slice($row, 0, 6), $data);
+        }
+        $sheet->fromArray($data, null, 'A1');
 
         $path = tempnam(sys_get_temp_dir(), 'cennik').'.xlsx';
         (new Xlsx($spreadsheet))->save($path);

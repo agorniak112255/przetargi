@@ -222,6 +222,55 @@ final class SpreadsheetColumnMapper
      * @param  array<string, int|null>  $cols
      * @return array<string, int|null>
      */
+    /**
+     * Ta sama poprawka dla mapowania, które przyszło z zewnątrz (z analizy AI albo z ręcznego wskazania).
+     * Model potrafi wziąć za nazwę kolumnę rodzaju wyrobu — w cenniku ARTRY „typ” (półbuty, trzewiki),
+     * przez co każda karta nazywała się „półbuty”, a prawdziwa nazwa stała w kolumnie „artykuł”.
+     *
+     * @param  array<string, int|null>  $cols
+     * @return array<string, int|null>
+     */
+    public function correctNameColumn(Worksheet $sheet, int $headerExcel, int $maxC, array $cols): array
+    {
+        $nameCol = $cols['name'] ?? null;
+        if (! is_int($nameCol)) {
+            return $cols;
+        }
+        [$rows, $stats] = $this->columnTextStats($sheet, $headerExcel, $maxC);
+        $current = $stats[$nameCol] ?? null;
+        if ($rows < 5 || $current === null || $current['count'] < 1) {
+            return $cols;
+        }
+        // Nazwa, która powtarza się w kółko, nie jest nazwą wyrobu: „typ” w cenniku ARTRY ma na 189
+        // wierszach pięć wartości (półbuty, trzewiki, sandały…). Próg jest luźny, bo cennik potrafi
+        // mieć kilka wariantów tej samej nazwy; prawdziwa nazwa jest niemal zawsze unikalna.
+        if ($current['distinct'] > max(2, (int) round(0.2 * $current['count']))) {
+            return $cols;
+        }
+
+        $best = null;
+        foreach ($stats as $col => $stat) {
+            if ($col === $nameCol || $stat['count'] < 0.6 * $rows) {
+                continue;
+            }
+            // kandydat musi być dłuższy i niemal zawsze inny — to odsiewa klasę ochrony i rozmiar
+            if ($stat['distinct'] < 0.8 * $stat['count'] || $stat['avg'] <= $current['avg']) {
+                continue;
+            }
+            if ($best === null || $stat['avg'] > $stats[$best]['avg']) {
+                $best = $col;
+            }
+        }
+        // ostatecznie nazwą zostaje kod wyrobu — lepszy niż powtarzalny rodzaj
+        $best ??= is_int($cols['sku'] ?? null) ? $cols['sku'] : null;
+        if ($best === null || $best === $nameCol) {
+            return $cols;
+        }
+        $cols['name'] = $best;
+
+        return $cols;
+    }
+
     private function preferDescriptiveNameColumn(Worksheet $sheet, int $headerExcel, int $maxC, array $cols): array
     {
         $nameCol = $cols['name'] ?? null;
