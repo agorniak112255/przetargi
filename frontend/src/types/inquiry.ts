@@ -132,6 +132,8 @@ export type InquiryPayload = {
   extra_note: string | null
   reply_subject: string | null
   reply_body: string | null
+  /** Ta sama treść jako tabela HTML; null po ręcznej poprawce tekstu. */
+  reply_html: string | null
   created_at: string | null
 }
 

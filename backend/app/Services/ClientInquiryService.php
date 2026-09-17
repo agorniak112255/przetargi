@@ -12,6 +12,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Support\InquiryMailText;
+use App\Support\InquiryReplyHtml;
 use App\Support\InquirySignature;
 use App\Support\OfferPricing;
 use Carbon\CarbonImmutable;
@@ -148,6 +149,7 @@ final class ClientInquiryService
         $inquiry->forceFill([
             'reply_subject' => $draft['subject'],
             'reply_body' => $draft['body'],
+            'reply_html' => $draft['html'],
         ])->save();
 
         return $inquiry->fresh(['client']) ?? $inquiry;
@@ -253,6 +255,7 @@ final class ClientInquiryService
             'extra_note' => $inquiry->extra_note,
             'reply_subject' => $inquiry->reply_subject,
             'reply_body' => $inquiry->reply_body,
+            'reply_html' => $inquiry->reply_html,
             'created_at' => $inquiry->created_at?->toIso8601String(),
         ];
     }
@@ -1472,15 +1475,22 @@ final class ClientInquiryService
             $parts[] = '';
             $parts[] = $note;
         }
+        $outro = ['W razie pytań zapraszamy do kontaktu.', '', 'Z poważaniem,', 'Zespół Supon'];
         $parts[] = '';
-        $parts[] = 'W razie pytań zapraszamy do kontaktu.';
-        $parts[] = '';
-        $parts[] = 'Z poważaniem,';
-        $parts[] = 'Zespół Supon';
+        foreach ($outro as $line) {
+            $parts[] = $line;
+        }
 
         return [
             'subject' => $this->offerSubject($inquiry),
             'body' => implode("\n", $parts),
+            // ta sama treść w tabeli: po lewej zapytanie klienta, po prawej nasza odpowiedź
+            'html' => InquiryReplyHtml::render(
+                $intro,
+                $this->offerRows($inquiry, $answers, $priceMode, $margin),
+                $note,
+                $outro,
+            ),
         ];
     }
 
@@ -1515,16 +1525,42 @@ final class ClientInquiryService
         }
 
         $out = [];
-        foreach ($items as $index => $item) {
+        foreach ($this->offerRows($inquiry, $answers, $priceMode, $margin) as $row) {
+            $lines = array_merge(
+                [$row['head']],
+                $row['quote'] === null ? [] : [$row['quote']],
+                $row['answer'],
+            );
+            $out[] = implode("\n", $lines);
+        }
+
+        return implode("\n\n", $out);
+    }
+
+    /**
+     * Pozycje oferty jako dane: nagłówek, cytat z zapytania i nasza odpowiedź.
+     * Z tego samego zestawu powstaje wersja tekstowa i tabela HTML — inaczej
+     * obie wersje listu mogłyby się rozjechać.
+     *
+     * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
+     * @return list<array{head: string, quote: string|null, answer: list<string>}>
+     */
+    private function offerRows(ClientInquiry $inquiry, array $answers, string $priceMode, float $margin): array
+    {
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $matches = $this->matchGroups($analysis);
+
+        $rows = [];
+        foreach ($this->lineItemsOf($analysis) as $index => $item) {
             $candidates = $this->candidatesForItem($matches, $item);
             $product = $this->chosenProductForItem($item, $candidates, $answers);
             $substitute = $product === null
                 ? null
                 : $this->chosenSubstituteForItem($item, $this->substitutesForItem($analysis, $candidates), $answers);
-            $out[] = $this->formatProductBlock($index + 1, $item, $product, $substitute, $priceMode, $margin);
+            $rows[] = $this->offerRow($index + 1, $item, $product, $substitute, $priceMode, $margin);
         }
 
-        return implode("\n\n", $out);
+        return $rows;
     }
 
     /**
@@ -1559,8 +1595,9 @@ final class ClientInquiryService
      * @param  array<string, mixed>  $item
      * @param  array<string, mixed>|null  $product
      * @param  array<string, mixed>|null  $substitute
+     * @return array{head: string, quote: string|null, answer: list<string>}
      */
-    private function formatProductBlock(int $n, array $item, ?array $product, ?array $substitute, string $priceMode, float $margin): string
+    private function offerRow(int $n, array $item, ?array $product, ?array $substitute, string $priceMode, float $margin): array
     {
         $qtyUnit = $this->qtyUnit($item);
         $size = trim((string) ($item['size'] ?? ''));
@@ -1573,22 +1610,25 @@ final class ClientInquiryService
         if ($meta !== []) {
             $head .= ' '.implode(', ', $meta);
         }
-        $lines = [$head];
-        if ($quote !== '') {
-            $lines[] = $quote;
-        }
         if ($product === null) {
             // bez SKU: nic nie zmyślamy, pozycja czeka na weryfikację pracownika
-            $lines[] = 'Pozycję potwierdzimy po weryfikacji dostępności i wrócimy z propozycją.';
-
-            return implode("\n", $lines);
+            return [
+                'head' => $head,
+                'quote' => $quote === '' ? null : $quote,
+                'answer' => ['Pozycję potwierdzimy po weryfikacji dostępności i wrócimy z propozycją.'],
+            ];
         }
-        $lines = array_merge($lines, $this->productLines('Produkt', $product, $priceMode, $margin, $qtyUnit['unit']));
+
+        $answer = $this->productLines('Produkt', $product, $priceMode, $margin, $qtyUnit['unit']);
         if ($substitute !== null) {
-            $lines = array_merge($lines, $this->productLines('Zamiennik', $substitute, $priceMode, $margin, $qtyUnit['unit']));
+            $answer = array_merge($answer, $this->productLines('Zamiennik', $substitute, $priceMode, $margin, $qtyUnit['unit']));
         }
 
-        return implode("\n", $lines);
+        return [
+            'head' => $head,
+            'quote' => $quote === '' ? null : $quote,
+            'answer' => $answer,
+        ];
     }
 
     /**

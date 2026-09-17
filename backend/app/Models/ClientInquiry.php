@@ -26,6 +26,7 @@ class ClientInquiry extends Model
         'extra_note',
         'reply_subject',
         'reply_body',
+        'reply_html',
         'replied_at',
         'send_requested_at',
     ];

@@ -652,6 +652,23 @@ export function InquiryReply() {
                   ? 'Edycje zapisują się po opuszczeniu pola. Thunderbird otworzy odpowiedź na ten mail — wysyłasz ją sam, po sprawdzeniu.'
                   : 'Edycje zapisują się po opuszczeniu pola. System nie wysyła maila — wklej treść do swojej poczty.'}
             </p>
+            <p className="mt-1 text-[11px] text-slate-400">
+              {inquiry.reply_html
+                ? 'Do maila pójdzie tabela: po lewej pozycja z zapytania, po prawej nasza propozycja. Podgląd niżej.'
+                : 'Po ręcznej poprawce treści wysyłamy sam tekst, bez tabeli. Tabela wróci po zmianie wyboru produktu lub cen.'}
+            </p>
+            {inquiry.reply_html && (
+              <details className="mt-2 rounded border border-slate-200 bg-slate-50 p-2">
+                <summary className="cursor-pointer text-[11px] font-medium text-slate-600">
+                  Podgląd tabeli, którą zobaczy klient
+                </summary>
+                {/* Treść z naszego serwera, zbudowana z danych zapytania — bez znaczników od klienta. */}
+                <div
+                  className="mt-2 overflow-x-auto rounded bg-white p-2"
+                  dangerouslySetInnerHTML={{ __html: inquiry.reply_html }}
+                />
+              </details>
+            )}
           </div>
 
           <details className="rounded-xl bg-white p-4 text-xs shadow-sm">

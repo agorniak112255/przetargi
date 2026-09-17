@@ -96,13 +96,19 @@ async function insertReply({ inquiryId, messageId }) {
     }
 
     const settings = await getSettings()
+    // Tabela „pozycja z zapytania — nasza propozycja”; brak = ręcznie poprawiony
+    // list, wtedy wysyłamy sam tekst, żeby nic się nie rozjechało.
+    const table = String(inquiry.reply_html || '').trim()
+
     // Bez `details` w beginReply, żeby zachować cytat, adresata i podpis.
     const tab = await browser.compose.beginReply(messageId, 'replyToSender')
     const details = await composeDetailsWhenReady(tab.id)
+    const before = String(details.isPlainText ? details.plainTextBody : details.body || '')
 
+    const snippet = table !== '' ? table + '<br>' : textToHtml(text) + '<br><br>'
     const patch = details.isPlainText
       ? { plainTextBody: text + '\n\n' + (details.plainTextBody || '') }
-      : { body: insertIntoHtmlBody(details.body, textToHtml(text) + '<br><br>') }
+      : { body: insertIntoHtmlBody(details.body, snippet) }
     if (settings.useAppSubject && inquiry.reply_subject) {
       patch.subject = inquiry.reply_subject
     }
@@ -113,7 +119,8 @@ async function insertReply({ inquiryId, messageId }) {
     const after = await browser.compose.getComposeDetails(tab.id)
     const written = String(after.isPlainText ? after.plainTextBody : after.body)
     const probe = text.slice(0, 24)
-    if (!written.includes(probe) && !written.includes(escapeHtml(probe))) {
+    const grew = written.length > before.length + 20
+    if (!grew && !written.includes(probe) && !written.includes(escapeHtml(probe))) {
       await notify('Nie udało się wstawić treści', 'Skopiuj list z aplikacji i wklej ręcznie.')
 
       return { ok: false }

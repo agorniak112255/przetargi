@@ -421,6 +421,100 @@ final class ClientInquiryApiTest extends TestCase
         $this->assertStringContainsString('| PROFERIS', (string) $inquiry->contact['raw']);
     }
 
+    public function test_reply_has_html_table_matching_text_and_manual_edit_drops_it(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = Product::query()->create([
+            'sku' => 'RNITZ-100',
+            'name' => 'Rękawice nitrylowe',
+            'manufacturer' => 'Supon',
+            'catalog_price_net' => 2.40,
+            'purchase_price' => 1.10,
+            'stock' => 80,
+        ]);
+
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Rękawice',
+                'questions' => [],
+                'product_queries' => ['rękawice nitrylowe'],
+                'line_items' => [],
+                'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock) use ($product): void {
+            $mock->shouldReceive('findMany')->once()->andReturnUsing(
+                fn (array $queries): array => array_map(
+                    fn (string $q): array => ['query' => $q, 'products' => [[
+                        'id' => $product->id,
+                        'sku' => $product->sku,
+                        'name' => $product->name,
+                        'manufacturer' => $product->manufacturer,
+                        'norms' => 'EN 374',
+                        'catalog_price_net' => '2.40',
+                        'currency' => 'PLN',
+                        'stock' => 80,
+                        'ai_match_percent' => 92,
+                    ]]],
+                    $queries
+                )
+            );
+        });
+
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry\n\n10 szt. rękawice nitrylowe rozmiar 9",
+            'tone' => 'formal',
+        ])->assertCreated();
+
+        $html = (string) $res->json('reply_html');
+        $this->assertStringContainsString('<table', $html);
+        $this->assertStringContainsString('Pozycja z zapytania', $html);
+        $this->assertStringContainsString('Nasza propozycja', $html);
+        // cytat klienta i nasza odpowiedź stoją w jednym wierszu tabeli
+        $this->assertStringContainsString('10 szt. rękawice nitrylowe rozmiar 9', $html);
+        $this->assertStringContainsString('RNITZ-100', $html);
+        // tabela nie może mówić czegoś innego niż wersja tekstowa
+        $this->assertStringContainsString('RNITZ-100', (string) $res->json('reply_body'));
+
+        $id = (int) $res->json('id');
+        $this->patchJson("/api/inquiries/{$id}", ['reply_body' => 'Dzień dobry, oferta w załączeniu.'])
+            ->assertOk()
+            ->assertJsonPath('reply_html', null);
+        $this->assertNull(ClientInquiry::query()->find($id)?->reply_html);
+    }
+
+    public function test_html_reply_escapes_text_from_the_customer(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Zapytanie',
+                'questions' => [],
+                'product_queries' => [],
+                'line_items' => [],
+                'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock): void {
+            $mock->shouldReceive('findMany')->once()->andReturn([]);
+        });
+
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry\n\n5 szt. <script>alert(1)</script> & rękawice",
+            'tone' => 'formal',
+        ])->assertCreated();
+
+        $html = (string) $res->json('reply_html');
+        $this->assertStringNotContainsString('<script>', $html);
+        $this->assertStringContainsString('&lt;script&gt;', $html);
+        $this->assertStringContainsString('&amp;', $html);
+    }
+
     public function test_reply_can_be_queued_for_thunderbird_and_picked_up(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

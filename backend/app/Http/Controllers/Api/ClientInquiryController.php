@@ -267,6 +267,10 @@ class ClientInquiryController extends Controller
         }
         if (array_key_exists('reply_body', $data)) {
             $changes['reply_body'] = (string) $data['reply_body'];
+            // Ręczna poprawka treści unieważnia tabelę — poszłaby do klienta
+            // z innym tekstem niż ten, który pracownik przed chwilą zatwierdził.
+            // Wraca przy ponownym złożeniu listu (wybór produktu, zmiana cen).
+            $changes['reply_html'] = null;
         }
         if ($changes !== []) {
             $inquiry->forceFill($changes)->save();
@@ -310,6 +314,7 @@ class ClientInquiryController extends Controller
                 'source_message_id' => $row->source_message_id,
                 'reply_subject' => $row->reply_subject,
                 'reply_body' => $row->reply_body,
+                'reply_html' => $row->reply_html,
                 'requested_at' => $row->send_requested_at?->toIso8601String(),
             ]);
 
