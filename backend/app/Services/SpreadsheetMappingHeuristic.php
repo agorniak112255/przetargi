@@ -112,6 +112,10 @@ final class SpreadsheetMappingHeuristic
                 'category' => $mapped['category'],
                 'currency' => $mapped['currency'],
             ];
+            // kolumny z parametrem wyrobu (klasa ochrony, normy, rozmiar) przechodzą tak samo jak reszta
+            foreach (SpreadsheetColumnMapper::attributeFields() as $attrField) {
+                $cols[$attrField] = $mapped[$attrField] ?? null;
+            }
             if ($cols['sku'] === null && $mapped['catalog_price'] !== null) {
                 $cols['sku'] = $this->inferSkuFromData($grid, $excelRow, $mapped['catalog_price'], $cols);
             }

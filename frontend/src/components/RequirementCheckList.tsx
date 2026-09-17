@@ -2,7 +2,15 @@ import { useState } from 'react'
 
 export type CheckStatus = 'ok' | 'fail' | 'missing' | 'unclear'
 
-export type CheckSource = 'name' | 'norms' | 'specs' | 'features' | 'payload_norms' | 'materials' | 'description'
+export type CheckSource =
+  | 'name'
+  | 'norms'
+  | 'price_list'
+  | 'specs'
+  | 'features'
+  | 'payload_norms'
+  | 'materials'
+  | 'description'
 
 export type CheckFinding = {
   text: string
@@ -71,7 +79,8 @@ type Props = {
 
 const SOURCE_LABEL: Record<CheckSource, string> = {
   name: 'nazwa',
-  norms: 'normy',
+  norms: 'normy',
+  price_list: 'cennik dostawcy',
   specs: 'specyfikacja',
   features: 'cechy',
   payload_norms: 'normy z opisu',

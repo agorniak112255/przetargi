@@ -44,6 +44,7 @@ final class CardConflictAiService
     private const FIELDS = [
         CardSource::NAME,
         CardSource::NORMS,
+        CardSource::PRICE_LIST,
         CardSource::SPECS,
         CardSource::FEATURES,
         CardSource::PAYLOAD_NORMS,

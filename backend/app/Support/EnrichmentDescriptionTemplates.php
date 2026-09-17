@@ -68,10 +68,29 @@ rozmiar: tylko numery rękawic ze źródeł; nigdy numery butów (36–48) ani 1
 Nie zmyślaj poziomów EN 388 spoza źródeł.
 TXT,
             'obuwie' => <<<'TXT'
-To obuwie ochronne / robocze. Zbierz pełną kartę katalogową — nie opisuj rękawic ani odzieży.
+To obuwie ochronne / robocze (EN ISO 20345 — z podnoskiem, EN ISO 20347 — zawodowe bez podnoska). Zbierz pełną kartę katalogową — nie opisuj rękawic ani odzieży.
 
-W description ujmij: przeznaczenie, cholewka, podnosek, wkładka, podeszwa, właściwości (antystatyczność, SRC, wodoodporność, izolacja), klasa (S1–S5 / O1–O5 / S1P), zastosowania.
-W specs i attributes: kod/SKU, materiał cholewki, podnosek (kompozyt / stal), wkładka, podeszwa, EN ISO 20345 / 20347, klasa_ochrony (np. S3), rozmiary EU ze źródeł.
+STAŁY ZESTAW CECH DOBORU — w specs wypisz WSZYSTKIE punkty 1–10, zawsze w tej kolejności, każdy w osobnym wierszu „parametr: wartość”, także wtedy, gdy źródła cechy nie podają:
+1. Typ wyrobu: półbut / trzewik / sztyblet / sandał / kalosz.
+2. Wysokość cholewki (niska / za kostkę / wysoka; cm, jeśli podano).
+3. Klasa ochrony z normą w pełnym zapisie, np. „EN ISO 20345:2022 S3L”. Sufiks L/S przy klasie to typ wkładki antyprzebiciowej z wydania 2022 — przepisz go dokładnie ze źródła, nigdy nie dopisuj go sam.
+4. Oznaczenia dodatkowe: SRC, FO, HRO, CI, HI, WR, ESD — wypisz te, które są w źródle.
+5. Typ zapięcia: sznurowane / rzepy / BOA lub inny system pokrętła / wsuwane / zamek błyskawiczny.
+6. Podnosek: stalowy / kompozytowy / aluminiowy / brak.
+7. Wkładka antyprzebiciowa: stalowa / tekstylna / brak.
+8. Materiał wierzchu i materiał podszewki.
+9. Materiał i typ podeszwy.
+10. Zakres rozmiarów EU, waga, przeznaczenie.
+Poza tą listą w specs: kod/SKU producenta. W attributes: kod_producenta, material, normy_en, klasa_ochrony (np. S3), rozmiar.
+
+TRZY STANY KAŻDEJ CECHY — brak danych ma być widoczny jako brak, nie jako cisza:
+- cecha OBECNA w źródle → sama wartość, np. „Typ zapięcia: sznurowane”;
+- cecha WYWNIOSKOWANA → wartość ze słowem wskazującym wnioskowanie i z podstawą wniosku, np. „Typ zapięcia: prawdopodobnie sznurowane — wniosek ze zdjęcia na karcie producenta”;
+- cecha NIEOBECNA → wiersz zostaje, z wartością „brak danych w źródle”, np. „Typ zapięcia: brak danych w źródle”. Nie skracaj listy przez pominięcie takiego punktu.
+
+ZAKAZ ZGADYWANIA: żadnej z tych cech nie wolno wymyślić. Nie wpisuj wartości „typowej dla klasy”, „standardowej”, przeniesionej z innego modelu tej serii ani wyprowadzonej z samej nazwy produktu. Przykład: na stronie producenta ARTRA typu zapięcia nie ma w żadnym polu tekstowym — ani w bloku parametrów, ani w karcie produktu PDF — widać je wyłącznie na zdjęciu. Wtedy wpisz „brak danych w źródle” albo wartość jawnie oznaczoną jako wniosek ze zdjęcia; nigdy wartość podaną jak fakt ze źródła.
+
+W description (2–4 akapity) opisz te same cechy prozą: przeznaczenie, budowa (cholewka, zapięcie, podnosek, wkładka antyprzebiciowa, podeszwa), właściwości (antystatyczność, SRC, wodoodporność, izolacja), klasa i norma, zastosowania. Cechy, których źródła nie podają, nazwij w opisie brakiem, np. „źródła nie podają typu zapięcia”.
 rozmiar: wyłącznie numery EU 36–50 ze źródeł; nigdy 1–5XL ani 6–12 z rękawic.
 TXT,
             'odziez' => <<<'TXT'

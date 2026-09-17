@@ -122,6 +122,8 @@ final class BhpAttributeNormalizer
                 // Osobny klucz, nie doklejenie do opisu — to dane dostawcy, a nie opis wyrobu.
                 'shop_fields' => (string) ($product->shop_fields_summary ?? ''),
                 'norms_column' => (string) ($product->norms ?? ''),
+                // Parametry wypisane w samym cenniku dostawcy — dokument producenta, nie odczyt ze strony.
+                'price_list' => is_array($product->price_list_attributes) ? $product->price_list_attributes : [],
             ]
         );
     }
@@ -138,7 +140,8 @@ final class BhpAttributeNormalizer
      *     name?: string,
      *     description?: string,
      *     shop_fields?: string,
-     *     norms_column?: string
+     *     norms_column?: string,
+     *     price_list?: array<string, string>
      * }  $context
      * @return array{
      *     kategoria_bhp: ?string,
@@ -180,11 +183,13 @@ final class BhpAttributeNormalizer
             ?? $this->catalogCodeFromIdentity($name, $sku)
             ?? $this->nullableString($sku !== '' ? $sku : null);
 
+        $priceList = is_array($context['price_list'] ?? null) ? $context['price_list'] : [];
         $materials = array_values(array_unique(array_merge(
             $this->stringList($raw['materialy'] ?? null),
             $this->stringList($context['materials'] ?? null),
         )));
-        $primary = $this->nullableString($raw['material'] ?? null);
+        $primary = $this->nullableString($priceList['material'] ?? null)
+            ?? $this->nullableString($raw['material'] ?? null);
         if ($primary !== null && ! in_array($primary, $materials, true)) {
             array_unshift($materials, $primary);
         }
@@ -195,6 +200,8 @@ final class BhpAttributeNormalizer
         $out['materialy'] = $materials;
 
         $normy = array_values(array_unique(array_merge(
+            // normy z cennika idą pierwsze — przy skracaniu listy zostają te z dokumentu producenta
+            $this->splitNormsColumn((string) ($priceList['normy'] ?? '')),
             $this->stringList($raw['normy_en'] ?? null),
             $this->stringList($context['norms'] ?? null),
             $this->splitNormsColumn($context['norms_column'] ?? ''),
@@ -215,11 +222,13 @@ final class BhpAttributeNormalizer
             ],
         ));
 
-        // Doprecyzowanie zapisanej klasy bierzemy wyłącznie z tożsamości wyrobu (nazwa, kod, kolumna norm),
-        // nigdy z prozy opisu: zdanie „dostępny też w wersji S1P” nadałoby karcie wkładkę antyprzebiciową,
-        // której ten but nie ma, a taka cecha rozstrzyga o dopuszczeniu oferty w przetargu.
+        // Klasa z cennika dostawcy bije to, co model wyczytał ze stron: cennik jest dokumentem producenta
+        // z datą obowiązywania, a strona sklepu bywa cudzą kartą. Doprecyzowanie zapisanej klasy bierzemy
+        // wyłącznie z tożsamości wyrobu (nazwa, kod, kolumna norm), nigdy z prozy opisu — zdanie „dostępny
+        // też w wersji S1P” nadałoby karcie wkładkę antyprzebiciową, której ten but nie ma.
         $parsed = $this->parseKlasaAndMarkings(
-            $this->nullableString($raw['klasa_ochrony'] ?? null),
+            $this->nullableString($priceList['klasa_ochrony'] ?? null)
+                ?? $this->nullableString($raw['klasa_ochrony'] ?? null),
             $descBlob,
             trim(($context['name'] ?? '').' '.($context['sku'] ?? '').' '.($context['norms_column'] ?? ''))
         );
@@ -228,7 +237,7 @@ final class BhpAttributeNormalizer
 
         $out['rozmiar'] = $this->detectRozmiar(
             implode(' ', $this->stringList($context['specs'] ?? null)).' '.($context['description'] ?? ''),
-            $this->nullableString($raw['rozmiar'] ?? null),
+            $this->nullableString($priceList['rozmiar'] ?? null) ?? $this->nullableString($raw['rozmiar'] ?? null),
             $out['kategoria_bhp']
         );
 

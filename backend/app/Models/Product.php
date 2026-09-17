@@ -48,6 +48,7 @@ class Product extends Model
         'embedding_synced_at',
         'embedding_hash',
         'norms',
+        'price_list_attributes',
         'catalog_price_net',
         'discount_percent',
         'purchase_price',
@@ -102,6 +103,7 @@ class Product extends Model
             'pack_qty' => 'integer',
             'enriched_at' => 'datetime',
             'embedding_synced_at' => 'datetime',
+            'price_list_attributes' => 'array',
             'enrichment_payload' => 'array',
             'enrichment_trace' => 'array',
         ];

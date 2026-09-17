@@ -15,6 +15,9 @@ final readonly class CardSource
 
     public const NORMS = 'norms';
 
+    /** Parametry wypisane w kolumnach cennika dostawcy — cytat z dokumentu producenta. */
+    public const PRICE_LIST = 'price_list';
+
     public const SPECS = 'specs';
 
     public const FEATURES = 'features';

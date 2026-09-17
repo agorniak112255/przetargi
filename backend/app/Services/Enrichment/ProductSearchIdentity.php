@@ -67,6 +67,40 @@ final class ProductSearchIdentity
      */
     private const CHINSTRAP_STEMS = ['chin strap', 'chinstrap', 'podbrod', 'kinnriemen', 'barbuquejo'];
 
+    /** Kolory po angielsku — porównanie całym słowem, żeby „red” nie łapało „redukcja”. */
+    private const COLOR_FAMILY_WORDS = [
+        'black' => ['black'],
+        'white' => ['white'],
+        'grey' => ['grey', 'gray'],
+        'blue' => ['blue', 'navy'],
+        'green' => ['green'],
+        'red' => ['red'],
+        'yellow' => ['yellow'],
+        'orange' => ['orange'],
+        'brown' => ['brown'],
+        'beige' => ['beige'],
+        'pink' => ['pink'],
+        'silver' => ['silver'],
+        'transparent' => ['transparent'],
+    ];
+
+    /** Kolory po polsku — po odmianie zostaje temat („czarne”, „czarnych” → czarn). */
+    private const COLOR_FAMILY_STEMS = [
+        'black' => ['czarn'],
+        'white' => ['bial'],
+        'grey' => ['szar'],
+        'blue' => ['niebiesk', 'granat', 'blekit'],
+        'green' => ['zielon'],
+        'red' => ['czerwon'],
+        'yellow' => ['zolt'],
+        'orange' => ['pomarancz'],
+        'brown' => ['brazow'],
+        'beige' => ['bezow'],
+        'pink' => ['rozow'],
+        'silver' => ['srebrn'],
+        'transparent' => ['przezroczyst'],
+    ];
+
     /**
      * Marka towaru u dystrybutora: Canis sprzedaje filtry i paski 3M oraz MSA (w cenniku model „3M”).
      * Biała lista zamiast wszystkich kluczy z config — „mat”, „kask”, „sir” to zwykłe słowa.
@@ -4912,6 +4946,242 @@ final class ProductSearchIdentity
         }
 
         return false;
+    }
+
+    /**
+     * Kod wariantu z nazwy/SKU. ARTRA koduje kolor liczbą obok modelu:
+     * „ARAGON 920 6060 S2” i „ARAGON 920 1010 S2” to ten sam but w dwóch kolorach.
+     * Nie wiemy — i nie musimy wiedzieć — że 6060 znaczy „czarny”; wystarczy, że
+     * 1010 to nie jest 6060. Dlatego reguła jest ogólna, bez słownika kolorów per marka.
+     *
+     * @return list<string>
+     */
+    public function productVariantCodes(Product $product): array
+    {
+        $out = [];
+        foreach ([(string) $product->name, (string) $product->sku] as $source) {
+            foreach ($this->variantCodeTokens($source) as $code) {
+                $out[$code] = true;
+            }
+        }
+
+        // klucze cyfrowe wracają z array_keys jako int, a porównania kodów są ścisłe
+        return array_map(static fn (int|string $code): string => (string) $code, array_keys($out));
+    }
+
+    /** Nazwa pliku potwierdza kod wariantu wyrobu (a nie cudzy). */
+    public function imageUrlConfirmsVariantCode(string $url, Product $product): bool
+    {
+        $own = $this->productVariantCodes($product);
+        if ($own === []) {
+            return false;
+        }
+        $file = $this->imageFileNameStem($url);
+        if ($file === '') {
+            return false;
+        }
+        foreach ($this->variantCodeTokens($file) as $code) {
+            if (in_array($code, $own, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Zdjęcie innego wariantu tego samego modelu: „ARAGON_920_1010_S2.png” przy
+     * wyrobie „ARAGON 920 6060 S2” — wygląd buta poprawny, kolor cudzy.
+     *
+     * Porównujemy wyłącznie człony NAZWY PLIKU (nie całego adresu) i wyłącznie te
+     * o tej samej długości co własny kod wyrobu, inaczej za kod wariantu poszłyby
+     * wymiary („/750x750/”), rozdzielczości, rok, identyfikatory CDN i parametry
+     * adresu („?v=1764059522”).
+     */
+    public function imageUrlHasForeignVariantCode(string $url, Product $product): bool
+    {
+        $own = $this->productVariantCodes($product);
+        if ($own === []) {
+            return false;
+        }
+        $file = $this->imageFileNameStem($url);
+        if ($file === '' || ! $this->fileNameMentionsModel($file, $product)) {
+            return false;
+        }
+
+        $ownByLength = [];
+        foreach ($own as $code) {
+            $ownByLength[strlen($code)][$code] = true;
+        }
+
+        $conflict = false;
+        foreach ($this->variantCodeTokens($file) as $code) {
+            if (in_array($code, $own, true)) {
+                return false;
+            }
+            // „aragon-920-s2-1200.jpg” — 1200 to szerokość miniatury sklepu, nie kolor
+            if ($this->looksLikeRasterSize($code)) {
+                continue;
+            }
+            if (isset($ownByLength[strlen($code)])) {
+                $conflict = true;
+            }
+        }
+
+        return $conflict;
+    }
+
+    /** Nazwa pliku z adresu, bez rozszerzenia i bez parametrów zapytania. */
+    private function imageFileNameStem(string $url): string
+    {
+        $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+        if ($path === '') {
+            return '';
+        }
+        $file = urldecode(basename($path));
+
+        return mb_strtolower((string) preg_replace('/\.[a-z0-9]{2,5}$/i', '', $file));
+    }
+
+    /**
+     * Reguła kodu wariantu dotyczy tylko plików, które same nazywają ten model
+     * („aragon-920-1010-s2.png”). Bez tego warunku „foto_1920.jpg” z przypadkowym
+     * numerem sklepu odrzucałoby poprawny packshot.
+     */
+    private function fileNameMentionsModel(string $file, Product $product): bool
+    {
+        $compact = preg_replace('/[^a-z0-9]+/u', '', $file) ?? $file;
+        foreach ($this->strongImageTokens($product) as $token) {
+            if (preg_match('/^\p{L}{4,}$/u', $token) !== 1) {
+                continue;
+            }
+            // „polbuty”, „trzewiki” — rodzaj wyrobu, nie model; pasują do setek plików
+            if ($this->typeStemsInText($token) !== []) {
+                continue;
+            }
+            if (str_contains($file, $token) || str_contains($compact, $token)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Kod wariantu to liczba 4–6-cyfrowa stojąca OBOK numeru modelu — „ARAGON 920 6060”.
+     * Sam numer modelu nim nie jest: w „AlphaTec 2500 Plus” 2500 to model, nie kolor,
+     * a numer normy i rok wydania („EN ISO 20345:2022”) nie są kodem wcale.
+     *
+     * @return list<string>
+     */
+    private function variantCodeTokens(string $text): array
+    {
+        $text = mb_strtolower($text);
+        // 750x750, 1200 x 800 — wymiar to jeden człon, nigdy dwa kody
+        $text = (string) preg_replace('/\d+\s*[x×]\s*\d+/u', ' ', $text);
+        $text = (string) preg_replace('/[^a-z0-9]+/u', ' ', $text);
+
+        $out = [];
+        $previous = '';
+        foreach (preg_split('/\s+/u', trim($text)) ?: [] as $token) {
+            if (preg_match('/^\d{4,6}$/', $token) === 1
+                && preg_match('/^(?:19|20)\d{2}$/', $token) !== 1
+                && preg_match('/^\d+$/', $previous) === 1) {
+                $out[$token] = true;
+            }
+            $previous = $token;
+        }
+
+        return array_map(static fn (int|string $code): string => (string) $code, array_keys($out));
+    }
+
+    /** Typowe szerokości/wysokości miniatur i packshotów w nazwach plików sklepów. */
+    private function looksLikeRasterSize(string $token): bool
+    {
+        return in_array($token, [
+            '1000', '1024', '1080', '1200', '1280', '1366', '1440', '1500', '1536',
+            '1600', '1920', '2000', '2048', '2160', '2560', '3000', '3840', '4096',
+        ], true);
+    }
+
+    /**
+     * Kolor wyrobu wzięty WPROST z tekstu karty: ze słowa w nazwie albo ze zdania
+     * „kolor …” w opisie. Kodów liczbowych producenta nie tłumaczymy na kolory —
+     * tego nie wiemy, a zgadnięty kolor byłby cechą wymyśloną. Dwa różne kolory
+     * w tekście (czarno-żółty, „dostępne kolory: …”) znaczą „nie wiadomo”.
+     */
+    public function expectedColorFamily(Product $product): ?string
+    {
+        $families = $this->colorFamiliesInText((string) $product->name);
+        if ($families === []) {
+            preg_match_all('/kolor\p{L}*\s*:?\s*([\p{L}\- ]{3,40})/u', (string) $product->description, $hits);
+            $families = $this->colorFamiliesInText(implode(' ', $hits[1] ?? []));
+        }
+
+        return count($families) === 1 ? $families[0] : null;
+    }
+
+    /**
+     * Rodzina koloru z pojedynczego słowa („black”, „czarne” → black). Osobno od
+     * isColorWord(), które odpowiada na inne pytanie — czy słowo nadaje się na token
+     * wyszukiwania — i celowo zna węższy zestaw słów.
+     */
+    public function colorFamily(string $word): ?string
+    {
+        $word = trim($this->normalizeTypeText($word));
+        if ($word === '') {
+            return null;
+        }
+        foreach (self::COLOR_FAMILY_WORDS as $family => $words) {
+            if (in_array($word, $words, true)) {
+                return $family;
+            }
+        }
+        foreach (self::COLOR_FAMILY_STEMS as $family => $stems) {
+            foreach ($stems as $stem) {
+                if (str_starts_with($word, $stem)) {
+                    return $family;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** Nazwa rodziny koloru do promptu — model odpowiada po polsku. */
+    public function colorFamilyLabel(string $family): ?string
+    {
+        return [
+            'black' => 'czarny',
+            'white' => 'biały',
+            'grey' => 'szary',
+            'blue' => 'niebieski lub granatowy',
+            'green' => 'zielony',
+            'red' => 'czerwony',
+            'yellow' => 'żółty',
+            'orange' => 'pomarańczowy',
+            'brown' => 'brązowy',
+            'beige' => 'beżowy',
+            'pink' => 'różowy',
+            'silver' => 'srebrny',
+            'transparent' => 'przezroczysty',
+        ][$family] ?? null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function colorFamiliesInText(string $text): array
+    {
+        $out = [];
+        foreach (preg_split('/[^\p{L}]+/u', $text) ?: [] as $word) {
+            $family = $this->colorFamily((string) $word);
+            if ($family !== null) {
+                $out[$family] = true;
+            }
+        }
+
+        return array_keys($out);
     }
 
     public function requiredArticleTypeLabel(Product $product): ?string

@@ -200,6 +200,10 @@ final class PriceListImportService
                     $name
                 ),
                 'norms' => null,
+                // parametry wyrobu wypisane w samym cenniku — dokument producenta z datą obowiązywania
+                'price_list_attributes' => is_array($row['price_list_attributes'] ?? null) && $row['price_list_attributes'] !== []
+                    ? $row['price_list_attributes']
+                    : null,
                 'catalog_price_net' => (float) $price,
                 'discount_percent' => $discount,
                 'purchase_price' => $purchase,
@@ -776,7 +780,12 @@ final class PriceListImportService
 
             $cols = is_array($sheetMap['columns'] ?? null) ? $sheetMap['columns'] : [];
             $map = [];
-            foreach (['sku', 'sku_alt', 'name', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'] as $key) {
+            $mappable = array_merge(
+                ['sku', 'sku_alt', 'name', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'],
+                // kolumny z parametrem wyrobu przechodzą tak samo jak reszta mapowania
+                SpreadsheetColumnMapper::attributeFields(),
+            );
+            foreach ($mappable as $key) {
                 if (isset($cols[$key]) && is_numeric($cols[$key])) {
                     $map[$key] = (int) $cols[$key];
                 }
@@ -1522,6 +1531,8 @@ final class PriceListImportService
                 'category' => $this->cleanCategory(is_string($category) ? $category : null, $name),
                 'description' => $description,
                 'norms' => null,
+                // pusto = cennik takich kolumn nie ma; nie zapisujemy pustej tablicy udającej odpowiedź
+                'price_list_attributes' => $this->attributesFromRow($row, $map) ?: null,
                 'catalog_price_net' => $catalog,
                 'discount_percent' => $discount,
                 'purchase_price' => $purchase,
@@ -1533,6 +1544,32 @@ final class PriceListImportService
                 '_purchase_from_file' => $purchaseFromFile,
             ],
         ];
+    }
+
+    /**
+     * Parametry wyrobu wypisane w kolumnach cennika (klasa ochrony, normy, rozmiar, kolor, materiał).
+     * Wartość idzie dosłownie ze źródła — nie normalizujemy jej, bo to dokument producenta i każdą
+     * pozycję trzeba móc do niego cofnąć. Puste komórki nie tworzą wpisu: brak danych to brak danych.
+     *
+     * @param  array<int, mixed>  $row
+     * @param  array<string, int>  $map
+     * @return array<string, string>
+     */
+    private function attributesFromRow(array $row, array $map): array
+    {
+        $out = [];
+        foreach (SpreadsheetColumnMapper::attributeFields() as $field) {
+            if (! isset($map[$field])) {
+                continue;
+            }
+            $value = trim((string) ($row[$map[$field]] ?? ''));
+            if ($value === '') {
+                continue;
+            }
+            $out[substr($field, strlen('attr_'))] = mb_substr($value, 0, 190);
+        }
+
+        return $out;
     }
 
     /**

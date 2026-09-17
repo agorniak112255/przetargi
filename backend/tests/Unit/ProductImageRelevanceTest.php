@@ -284,4 +284,143 @@ final class ProductImageRelevanceTest extends TestCase
             'https://icd.pl/media/catalog/product/r/e/rekawice-ansell-hyflex-11-618.jpg'
         ));
     }
+
+    public function test_rejects_image_of_another_colour_variant_of_the_same_model(): void
+    {
+        // ARTRA koduje kolor liczbą obok modelu: 6060 = czarny, 1010 = biały.
+        // Na kartach lądowały packshoty innego koloru, bo adres z og:image omijał model.
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'ARAGON-920-6060-S2',
+            'name' => 'Półbuty ARAGON 920 6060 S2 SRC',
+            'manufacturer' => 'ARTRA',
+        ]);
+
+        $this->assertSame(['6060'], $identity->productVariantCodes($product));
+
+        $own = 'https://artra.pl/media/ARAGON_920_6060_S2.png';
+        $foreign = 'https://artra.pl/media/ARAGON_920_1010_S2.png';
+
+        $this->assertFalse($identity->imageUrlHasForeignVariantCode($own, $product));
+        $this->assertTrue($identity->imageUrlConfirmsVariantCode($own, $product));
+        $this->assertTrue($identity->imageUrlHasForeignVariantCode($foreign, $product));
+        $this->assertFalse($identity->imageUrlConfirmsVariantCode($foreign, $product));
+
+        // Plik nazywający inny model (ARAL 927) nie jest tą regułą oceniany — porównujemy
+        // warianty TEGO modelu. Kodu wariantu nie potwierdza, więc zaufany kandydat
+        // i tak nie omija modelu wizyjnego.
+        $this->assertFalse($identity->imageUrlHasForeignVariantCode(
+            'https://artra.pl/media/ARAL_927_4260_S3.jpg',
+            $product
+        ));
+        $this->assertFalse($identity->imageUrlConfirmsVariantCode(
+            'https://artra.pl/media/ARAL_927_4260_S3.jpg',
+            $product
+        ));
+    }
+
+    public function test_variant_code_rule_ignores_dimensions_resolutions_and_url_parameters(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'ARAGON-920-6060-S2',
+            'name' => 'Półbuty ARAGON 920 6060 S2 SRC',
+            'manufacturer' => 'ARTRA',
+        ]);
+
+        foreach ([
+            'https://cdn.example.com/750x750/aragon-920-6060-s2.jpg?v=1764059522',
+            'https://cdn.example.com/img/aragon-920-6060-s2-750x750.jpg',
+            'https://cdn.example.com/img/aragon-920-6060-s2-1200.jpg',
+            // sama szerokość miniatury bez kodu koloru nie jest kodem wariantu
+            'https://cdn.example.com/img/aragon-920-s2-1200.jpg',
+            // rok wydania normy w nazwie pliku
+            'https://cdn.example.com/img/aragon-920-s2-en-iso-20345-2022.jpg',
+            // identyfikator CDN w katalogu, nie w nazwie pliku
+            'https://cdn.example.com/1010/aragon-920-6060-s2.jpg',
+            // nazwa pliku nie mówi nic o modelu — reguła nie ma czego porównać
+            'https://cdn.example.com/750x750/foto.jpg?v=1764059522',
+        ] as $url) {
+            $this->assertFalse(
+                $identity->imageUrlHasForeignVariantCode($url, $product),
+                $url
+            );
+        }
+
+        // sam numer modelu kodem wariantu nie jest — inaczej każdy packshot Ansella
+        // z identyfikatorem CDN w nazwie pliku byłby „cudzym wariantem”
+        $this->assertSame([], $identity->productVariantCodes(new Product([
+            'sku' => 'WH25T-00122-04',
+            'name' => 'AlphaTec 2500 Plus',
+            'manufacturer' => 'Ansell',
+        ])));
+
+        // wyrób bez kodu wariantu zachowuje się jak dotąd
+        $noCode = new Product([
+            'sku' => 'KMR-46',
+            'name' => 'Trzewiki KMR S3',
+            'manufacturer' => 'ARTRA',
+        ]);
+        $this->assertSame([], $identity->productVariantCodes($noCode));
+        $this->assertFalse($identity->imageUrlHasForeignVariantCode(
+            'https://artra.pl/media/kmr-1010-s3.jpg',
+            $noCode
+        ));
+    }
+
+    public function test_trusted_image_of_a_foreign_variant_never_reaches_the_card(): void
+    {
+        $product = new Product([
+            'sku' => 'ARAGON-920-6060-S2',
+            'name' => 'Półbuty ARAGON 920 6060 S2 SRC',
+            'manufacturer' => 'ARTRA',
+        ]);
+        $foreign = 'https://artra.pl/media/ARAGON_920_1010_S2.png';
+
+        $picked = app(ProductImageCandidateVerifier::class)->select(
+            $product,
+            [$foreign],
+            [['url' => 'https://artra.pl/produkt/aragon-920-6060-s2', 'text' => 'ARAGON 920 6060 S2']],
+            1,
+            [$foreign]
+        );
+
+        $this->assertSame([], $picked);
+    }
+
+    public function test_expected_colour_comes_only_from_plain_words_on_the_card(): void
+    {
+        $identity = new ProductSearchIdentity;
+
+        $this->assertSame('black', $identity->colorFamily('czarne'));
+        $this->assertSame('black', $identity->colorFamily('BLACK'));
+        $this->assertNull($identity->colorFamily('6060'));
+
+        // kod liczbowy koloru nie mówi nam, jaki to kolor
+        $this->assertNull($identity->expectedColorFamily(new Product([
+            'sku' => 'ARAGON-920-6060-S2',
+            'name' => 'Półbuty ARAGON 920 6060 S2 SRC',
+            'manufacturer' => 'ARTRA',
+        ])));
+
+        $this->assertSame('black', $identity->expectedColorFamily(new Product([
+            'sku' => 'ARAGON-920-6060-S2',
+            'name' => 'Półbuty ARAGON 920 6060 S2 SRC, czarne',
+            'manufacturer' => 'ARTRA',
+        ])));
+
+        $this->assertSame('brown', $identity->expectedColorFamily(new Product([
+            'sku' => 'CH-20KV',
+            'name' => 'Chodnik elektroizolacyjny 20 KV Secura',
+            'manufacturer' => 'SECURA',
+            'description' => 'Mata ma kolor brązowy, z wierzchnią stroną ryflowaną.',
+        ])));
+
+        // dwa kolory naraz znaczą „nie wiadomo”, a nie „jeden z nich”
+        $this->assertNull($identity->expectedColorFamily(new Product([
+            'sku' => 'X-1',
+            'name' => 'Kamizelka ostrzegawcza czarno-żółta',
+            'manufacturer' => 'ARTRA',
+        ])));
+    }
 }

@@ -67,7 +67,8 @@ final class ProductImageCandidateVerifier
         $unverified = [];
         foreach ($urls as $url) {
             if ($this->identity->imageUrlMentionsForeignBrand($url, $product)
-                || $this->identity->imageUrlHasForeignType($url, $product)) {
+                || $this->identity->imageUrlHasForeignType($url, $product)
+                || $this->identity->imageUrlHasForeignVariantCode($url, $product)) {
                 continue;
             }
             if ($this->identity->imageUrlMentionsProduct($url, $product)) {
@@ -79,7 +80,8 @@ final class ProductImageCandidateVerifier
                 continue;
             }
             if (isset($trusted[mb_strtolower($url)])
-                && $this->trustedImageIsSafe($url, $product, $pages)) {
+                && $this->trustedImageIsSafe($url, $product, $pages)
+                && $this->trustedImageMatchesVariant($url, $product)) {
                 $trustedHits[] = $url;
 
                 continue;
@@ -113,9 +115,11 @@ final class ProductImageCandidateVerifier
             return $this->finishSelection($auto, $trusted, $urls, $max, $product, $pages);
         }
 
+        $expectedColor = $this->identity->expectedColorFamily($product);
+
         try {
             $response = $this->llm->chatJsonWithImages(
-                $this->verificationPrompt($product, $pages, count($loaded)),
+                $this->verificationPrompt($product, $pages, count($loaded), $expectedColor),
                 array_map(
                     static fn (array $image): array => [
                         'bytes' => $image['bytes'],
@@ -151,8 +155,14 @@ final class ProductImageCandidateVerifier
             if ($confidence > 1) {
                 $confidence /= 100;
             }
+            // Kolor porównujemy tylko wtedy, gdy karta podaje go wprost słowem. Kodu
+            // wariantu (ARTRA 6060) na kolor nie tłumaczymy — nie wiemy, co znaczy.
+            $seenColor = $this->identity->colorFamily(
+                is_string($row['dominant_color'] ?? null) ? $row['dominant_color'] : ''
+            );
             if (($row['is_relevant_product'] ?? false) !== true
                 || ($row['is_logo_or_banner'] ?? false) === true
+                || ($expectedColor !== null && $seenColor !== null && $seenColor !== $expectedColor)
                 || $confidence < self::MIN_CONFIDENCE) {
                 continue;
             }
@@ -192,6 +202,19 @@ final class ProductImageCandidateVerifier
     }
 
     /**
+     * Zaufany kandydat (og:image / JSON-LD) trafia na kartę bez oglądania przez model.
+     * Przy wyrobie z kodem wariantu w nazwie (ARTRA: „ARAGON 920 6060 S2”, gdzie 6060
+     * to kolor) adres, który tego kodu nie potwierdza, nie dowodzi, że to TEN wariant —
+     * na kartach lądowały wtedy packshoty innego koloru. Taki kandydat idzie do modelu.
+     * Wyrób bez rozpoznanego kodu zachowuje się jak dotąd, bez dodatkowych przebiegów.
+     */
+    private function trustedImageMatchesVariant(string $url, Product $product): bool
+    {
+        return $this->identity->productVariantCodes($product) === []
+            || $this->identity->imageUrlConfirmsVariantCode($url, $product);
+    }
+
+    /**
      * @param  list<string>  $selected
      * @param  array<string, true>  $trusted
      * @param  list<string>  $urls
@@ -210,6 +233,7 @@ final class ProductImageCandidateVerifier
             $selected,
             fn (string $url): bool => ! $this->identity->imageUrlMentionsForeignBrand($url, $product)
                 && ! $this->identity->imageUrlHasForeignType($url, $product)
+                && ! $this->identity->imageUrlHasForeignVariantCode($url, $product)
         ));
         if ($selected !== []) {
             return array_values(array_unique(array_slice($selected, 0, $max)));
@@ -218,7 +242,9 @@ final class ProductImageCandidateVerifier
             if (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url)
                 && ! $this->identity->imageUrlMentionsForeignBrand($url, $product)
                 && ! $this->identity->imageUrlHasForeignType($url, $product)
-                && $this->trustedImageIsSafe($url, $product, $pages)) {
+                && ! $this->identity->imageUrlHasForeignVariantCode($url, $product)
+                && $this->trustedImageIsSafe($url, $product, $pages)
+                && $this->trustedImageMatchesVariant($url, $product)) {
                 return [$url];
             }
         }
@@ -407,8 +433,12 @@ final class ProductImageCandidateVerifier
     /**
      * @param  list<array{url: string, text: string}>  $pages
      */
-    private function verificationPrompt(Product $product, array $pages, int $count): string
-    {
+    private function verificationPrompt(
+        Product $product,
+        array $pages,
+        int $count,
+        ?string $expectedColor = null,
+    ): string {
         $context = [];
         foreach (array_slice($pages, 0, 4) as $page) {
             $context[] = 'URL: '.mb_substr((string) ($page['url'] ?? ''), 0, 500)
@@ -416,6 +446,12 @@ final class ProductImageCandidateVerifier
         }
         $countMinusOne = $count - 1;
         $typeLine = $this->identity->requiredArticleTypeLabel($product);
+        $colorLabel = $expectedColor !== null ? $this->identity->colorFamilyLabel($expectedColor) : null;
+        // O ESD ani o klasę ochrony modelu nie pytamy: na zdjęciu ich nie widać (najwyżej
+        // nadruk), a są twardą bramką przetargową — „zobaczone” ESD byłoby cechą wymyśloną.
+        $colorBlock = $colorLabel !== null
+            ? "\nKolor podany na karcie: {$colorLabel}. Wyraźnie inny kolor wyrobu — is_relevant_product=false.\n"
+            : '';
         $typeBlock = $typeLine !== null
             ? "Szukany rodzaj na zdjęciu: {$typeLine}. Inny rodzaj — is_relevant_product=false. Ta sama linia (np. GRZMOT) nie wystarczy."
             : 'Rodzaj bierz wyłącznie z nazwy (ręcznik ≠ kurtka ≠ kombinezon ≠ odzież robocza ≠ chemia).';
@@ -429,7 +465,7 @@ Oceń {$count} kandydatów na GŁÓWNE zdjęcie katalogowe (packshot) tego produ
 - normy: {$product->norms}
 
 {$typeBlock}
-
+{$colorBlock}
 Zaakceptuj TYLKO gdy widać sam ten produkt (pierwszy plan, ostro, studio/białe tło).
 Zawsze is_relevant_product=false gdy:
 - na zdjęciu są ludzie (twarz, ręce, kucharze, kelnerzy, personel, model w ubraniu, lifestyle, kuchnia, hotel jako motyw),
@@ -445,7 +481,7 @@ Kontekst stron:
 {$this->joinContext($context)}
 
 Zwróć:
-{"candidates":[{"index":0,"is_relevant_product":true,"is_logo_or_banner":false,"is_watermarked":false,"confidence":0.0,"reason":"krótko"}]}
+{"candidates":[{"index":0,"is_relevant_product":true,"is_logo_or_banner":false,"is_watermarked":false,"dominant_color":"dominujący kolor wyrobu jednym słowem po polsku","confidence":0.0,"reason":"krótko"}]}
 Uwzględnij każdy indeks od 0 do {$countMinusOne}.
 PROMPT;
     }

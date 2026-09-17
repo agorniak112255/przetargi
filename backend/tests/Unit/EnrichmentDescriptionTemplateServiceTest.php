@@ -78,6 +78,43 @@ final class EnrichmentDescriptionTemplateServiceTest extends TestCase
         );
     }
 
+    /**
+     * Szablon obuwia ma pokrywać stały zestaw cech doboru — typ zapięcia (sznurówki / rzepy / BOA)
+     * nie występuje w żadnym polu tekstowym u producentów, więc bez jawnego punktu w instrukcji
+     * i bez zakazu zgadywania model albo go pomija, albo wymyśla.
+     */
+    public function test_footwear_template_covers_fastening_and_forbids_guessing(): void
+    {
+        $product = Product::query()->create([
+            'sku' => 'S3-TRZEWIK',
+            'name' => 'Trzewiki robocze S3',
+            'manufacturer' => 'Artra',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+
+        $service = app(EnrichmentDescriptionTemplateService::class);
+        $this->assertSame('obuwie', $service->kategoriaForProduct($product));
+        $prompt = $service->systemPrompt($product);
+
+        // Stały zestaw cech doboru, z zapięciem na czele zgłoszenia użytkownika.
+        $this->assertStringContainsString('Typ zapięcia: sznurowane / rzepy / BOA', $prompt);
+        $this->assertStringContainsString('Podnosek: stalowy / kompozytowy / aluminiowy / brak', $prompt);
+        $this->assertStringContainsString('Wkładka antyprzebiciowa: stalowa / tekstylna / brak', $prompt);
+        $this->assertStringContainsString('EN ISO 20345:2022 S3L', $prompt);
+
+        // Trzy stany cechy: obecna, wywnioskowana, nieobecna — brak nazwany brakiem.
+        $this->assertStringContainsString('cecha OBECNA w źródle', $prompt);
+        $this->assertStringContainsString('cecha WYWNIOSKOWANA', $prompt);
+        $this->assertStringContainsString('cecha NIEOBECNA', $prompt);
+        $this->assertStringContainsString('Typ zapięcia: brak danych w źródle', $prompt);
+
+        // Zakaz zgadywania wraz z przykładem ARTRA (zapięcie widoczne wyłącznie na zdjęciu).
+        $this->assertStringContainsString('ZAKAZ ZGADYWANIA', $prompt);
+        $this->assertStringContainsString('widać je wyłącznie na zdjęciu', $prompt);
+    }
+
     public function test_presta_category_path_does_not_block_family_from_name(): void
     {
         $product = Product::query()->create([

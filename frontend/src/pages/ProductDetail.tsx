@@ -31,6 +31,15 @@ import {
 
 type Detail = Product & { substitutes: Substitute[] }
 
+/** Nagłówki kolumn cenników bywają skrótowe („ochrony”, „rozm.”) — na karcie nazywamy je po ludzku. */
+const PRICE_LIST_ATTR_LABELS: Record<string, string> = {
+  klasa_ochrony: 'Klasa ochrony',
+  normy: 'Normy',
+  rozmiar: 'Rozmiar',
+  kolor: 'Kolor',
+  material: 'Materiał',
+}
+
 const STATUS_LABEL: Record<string, string> = {
   none: 'Brak danych',
   queued: 'W kolejce',
@@ -867,6 +876,28 @@ export function ProductDetail() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {p.price_list_attributes && Object.keys(p.price_list_attributes).length > 0 && (
+        <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold">Parametry z cennika dostawcy</h2>
+          <p className="mb-3 text-xs text-slate-600">
+            Wartości przepisane dosłownie z kolumn cennika. To dokument producenta z datą obowiązywania,
+            więc przy dopasowaniu biorą górę nad tym, co wyczytano ze stron.
+          </p>
+          <table className="w-full text-left text-xs">
+            <tbody>
+              {Object.entries(p.price_list_attributes).map(([key, value]) => (
+                <tr key={key} className="border-b last:border-0">
+                  <th className="w-48 p-2 text-left font-medium text-slate-600">
+                    {PRICE_LIST_ATTR_LABELS[key] ?? key}
+                  </th>
+                  <td className="p-2 text-slate-800">{value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

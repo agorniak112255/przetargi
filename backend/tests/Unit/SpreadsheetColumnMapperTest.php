@@ -9,6 +9,50 @@ use PHPUnit\Framework\TestCase;
 
 final class SpreadsheetColumnMapperTest extends TestCase
 {
+    public function test_reads_artra_attribute_columns_from_price_list(): void
+    {
+        // nagłówek ARTRY jest dwuwierszowy: „kategoria” stoi wierszem wyżej, do mapowania dociera „ochrony”
+        $header = ['lp.', 'kat.', 'artykuł', 'zdjęcie', 'typ', 'ochrony', 'podeszwa', 'metal free', 'kolekcja', 'rozm.', 'bez VAT', '* NCD z VAT'];
+        $map = (new SpreadsheetColumnMapper)->mapLabels($header);
+
+        $this->assertSame(2, $map['sku']);
+        $this->assertSame(5, $map['attr_klasa_ochrony']);
+        $this->assertSame(9, $map['attr_rozmiar']);
+        $this->assertNull($map['attr_kolor']);
+        $this->assertNull($map['attr_material']);
+    }
+
+    public function test_attribute_columns_do_not_steal_columns_taken_by_price_list_fields(): void
+    {
+        // „rozmiar” bywa jednocześnie opakowaniem — kolumna należy do tego, kto ją wziął pierwszy
+        $header = ['Kod', 'Nazwa', 'Rozmiar', 'Cena netto'];
+        $map = (new SpreadsheetColumnMapper)->mapLabels($header);
+
+        $this->assertSame(2, $map['packaging']);
+        $this->assertNull($map['attr_rozmiar']);
+    }
+
+    public function test_reads_protection_class_norms_colour_and_material_columns(): void
+    {
+        $header = ['Indeks', 'Nazwa', 'Klasa ochrony', 'Normy EN', 'Kolor', 'Materiał', 'Cena katalogowa'];
+        $map = (new SpreadsheetColumnMapper)->mapLabels($header);
+
+        $this->assertSame(2, $map['attr_klasa_ochrony']);
+        $this->assertSame(3, $map['attr_normy']);
+        $this->assertSame(4, $map['attr_kolor']);
+        $this->assertSame(5, $map['attr_material']);
+    }
+
+    public function test_price_list_without_attribute_columns_reports_nulls(): void
+    {
+        $header = ['Kod', 'Nazwa produktu', 'Cena netto', 'Upust %'];
+        $map = (new SpreadsheetColumnMapper)->mapLabels($header);
+
+        foreach (SpreadsheetColumnMapper::attributeFields() as $field) {
+            $this->assertNull($map[$field], $field);
+        }
+    }
+
     public function test_maps_3m_new_list_and_net_not_date_or_ean(): void
     {
         $header = [

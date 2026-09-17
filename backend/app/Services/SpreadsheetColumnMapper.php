@@ -19,6 +19,29 @@ final class SpreadsheetColumnMapper
     ) {}
 
     /**
+     * Kolumny cennika niosące parametr wyrobu, a nie cenę ani kod. To dane od producenta, z datą
+     * obowiązywania cennika — pewniejsze niż cokolwiek, co da się wyczytać ze stron sklepów, a dotąd
+     * import je wyrzucał i ta sama informacja była potem zgadywana przez model.
+     *
+     * @var array<string, string> pole => metoda punktująca nagłówek
+     */
+    private const ATTRIBUTE_SCORERS = [
+        'attr_klasa_ochrony' => 'attrProtectionClassScores',
+        'attr_normy' => 'attrNormScores',
+        'attr_rozmiar' => 'attrSizeScores',
+        'attr_kolor' => 'attrColourScores',
+        'attr_material' => 'attrMaterialScores',
+    ];
+
+    /**
+     * @return list<string>
+     */
+    public static function attributeFields(): array
+    {
+        return array_keys(self::ATTRIBUTE_SCORERS);
+    }
+
+    /**
      * @param  list<string>  $labels  już dowolna wielkość liter
      * @return array<string, int|null>
      */
@@ -59,6 +82,21 @@ final class SpreadsheetColumnMapper
             $cols['ean'] = $this->best($norm, $this->eanScores(...), $cols['sku']);
         }
         $cols['sku_alt'] = $this->best($norm, $this->skuAltScores(...), $cols['sku']);
+
+        // Kolumny z parametrem wyrobu. Wyznaczamy je na końcu i wyłącznie spośród kolumn, których nie
+        // wziął żaden główny kawałek cennika: „rozmiar” bywa jednocześnie opakowaniem, a „kategoria”
+        // grupą asortymentową — o tym, czym jest kolumna, rozstrzyga pierwsze dopasowanie, nie drugie.
+        $used = array_flip(array_values(array_filter($cols, static fn ($idx): bool => $idx !== null)));
+        $free = $norm;
+        foreach (array_keys($used) as $idx) {
+            $free[$idx] = '';
+        }
+        foreach (self::ATTRIBUTE_SCORERS as $field => $method) {
+            $cols[$field] = $this->best($free, $this->{$method}(...));
+            if ($cols[$field] !== null) {
+                $free[$cols[$field]] = '';
+            }
+        }
 
         return $cols;
     }
@@ -145,7 +183,11 @@ final class SpreadsheetColumnMapper
                 continue;
             }
 
-            foreach (['catalog_price', 'purchase', 'discount', 'sku', 'sku_alt', 'name', 'ean', 'currency', 'pack_qty', 'packaging', 'category', 'model_key', 'model_name'] as $field) {
+            $passThrough = array_merge(
+                ['catalog_price', 'purchase', 'discount', 'sku', 'sku_alt', 'name', 'ean', 'currency', 'pack_qty', 'packaging', 'category', 'model_key', 'model_name'],
+                self::attributeFields(),
+            );
+            foreach ($passThrough as $field) {
                 if ($scored[$field] !== null) {
                     $cols[$field] = $scored[$field];
                 }
@@ -763,6 +805,69 @@ final class SpreadsheetColumnMapper
     private function isTransportLabel(string $l): bool
     {
         return str_contains($l, 'transport');
+    }
+
+    /**
+     * Klasa ochrony obuwia. „ochrony” samo w sobie jest nagłówkiem u ARTRY, gdzie słowo „kategoria”
+     * stoi wierszem wyżej i do mapowania nie dociera — w cenniku BHP taki nagłówek nie znaczy nic innego.
+     */
+    private function attrProtectionClassScores(string $l): int
+    {
+        if (str_contains($l, 'kategoria ochrony') || str_contains($l, 'klasa ochrony')
+            || str_contains($l, 'protection class') || str_contains($l, 'safety class')) {
+            return 100;
+        }
+        if ($l === 'ochrony' || $l === 'klasa' || $l === 'class') {
+            return 80;
+        }
+
+        return 0;
+    }
+
+    private function attrNormScores(string $l): int
+    {
+        if ($l === 'norma' || $l === 'normy' || $l === 'norm' || $l === 'normen'
+            || str_contains($l, 'norma en') || str_contains($l, 'normy en')) {
+            return 100;
+        }
+        if ($l === 'standard' || $l === 'standards' || str_contains($l, 'en iso')) {
+            return 70;
+        }
+
+        return 0;
+    }
+
+    private function attrSizeScores(string $l): int
+    {
+        if ($l === 'rozmiar' || $l === 'rozmiary' || str_starts_with($l, 'rozm.') || $l === 'rozm'
+            || str_contains($l, 'zakres rozmiar') || str_contains($l, 'size range')) {
+            return 90;
+        }
+        if ($l === 'size' || $l === 'sizes') {
+            return 60;
+        }
+
+        return 0;
+    }
+
+    private function attrColourScores(string $l): int
+    {
+        if ($l === 'kolor' || $l === 'kolory' || $l === 'colour' || $l === 'color'
+            || str_contains($l, 'kolor wyrobu')) {
+            return 90;
+        }
+
+        return 0;
+    }
+
+    private function attrMaterialScores(string $l): int
+    {
+        if ($l === 'materiał' || $l === 'material' || $l === 'materials'
+            || str_contains($l, 'materiał wierzchu') || str_contains($l, 'material wierzchu')) {
+            return 90;
+        }
+
+        return 0;
     }
 
     private function norm(string $value): string

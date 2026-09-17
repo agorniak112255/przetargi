@@ -231,6 +231,8 @@ export type Product = {
   /** Rozmiary/kody albo formaty wersji karty (ze źródła, do wyszukiwania); null = brak. */
   variant_summary?: string | null
   norms: string | null
+  /** Parametry wypisane w kolumnach cennika dostawcy — cytat z dokumentu, nie odczyt ze strony. */
+  price_list_attributes?: Record<string, string> | null
   catalog_price_net: string
   purchase_price: string
   discount_percent?: string
