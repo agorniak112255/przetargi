@@ -434,10 +434,9 @@ return [
         'www.demar.com.pl',
         'coba.com',
         'www.coba.com',
-        'artra.pl',
-        'www.artra.pl',
-        'artra.com',
-        'www.artra.com',
+        // artra.pl to sklep producenta, nie dystrybutor: karta ARTRY ma tam komplet parametrów,
+        // deklarację zgodności i zdjęcie właściwego koloru, więc nie może konkurować ze sklepami
+        // o rangę sklepu. Domeny zostają w manufacturer_domains i preferred_domains.
         'lemaitre-securite.com',
         'www.lemaitre-securite.com',
         'emercator.com',

@@ -62,6 +62,34 @@ class ManufacturerSite extends Model
     }
 
     /**
+     * Marki przypisane do hostów — panel pokazuje, czyją stroną producenta jest domena,
+     * i czy przypisał ją człowiek, czy wykrywanie przy imporcie marki.
+     *
+     * @return array<string, list<array{brand_key: string, manufacturer: string, source: string}>>
+     */
+    public static function brandsByHost(): array
+    {
+        if (! self::tableReady()) {
+            return [];
+        }
+
+        $out = [];
+        foreach (self::query()->get(['brand_key', 'manufacturer', 'host', 'source']) as $row) {
+            $host = self::normalizeHost((string) $row->host);
+            if ($host === '') {
+                continue;
+            }
+            $out[$host][] = [
+                'brand_key' => (string) $row->brand_key,
+                'manufacturer' => (string) $row->manufacturer,
+                'source' => (string) $row->source,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
      * @return list<string>
      */
     public static function allHosts(): array

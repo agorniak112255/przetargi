@@ -252,7 +252,7 @@ function SortTh({
 }) {
   const active = sort === col
   return (
-    <th className="p-2">
+    <th className="whitespace-nowrap p-2">
       <button
         type="button"
         onClick={() => onSort(col)}
@@ -1031,7 +1031,7 @@ export function Products() {
                   />
                 </th>
               )}
-              <th className="p-2 w-10 text-right font-normal text-slate-500">Lp.</th>
+              <th className="w-8 px-1 py-2 text-right font-normal text-slate-500">Lp.</th>
               {aiMode && (
                 <>
                   <SortTh label="Dopasowanie" col="ai_match_percent" sort={sort} dir={dir} onSort={onSort} />
@@ -1047,7 +1047,7 @@ export function Products() {
               <SortTh label="Upust" col="discount_percent" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Opis" col="description" sort={sort} dir={dir} onSort={onSort} />
               <SortTh label="Zdjęcia" col="images_count" sort={sort} dir={dir} onSort={onSort} />
-              {hasActions && <th className="p-2">Akcja</th>}
+              {hasActions && <th className="whitespace-nowrap p-2">Akcja</th>}
             </tr>
           </thead>
           <tbody>
@@ -1078,7 +1078,7 @@ export function Products() {
                       />
                     </td>
                   )}
-                  <td className="p-2 text-right tabular-nums text-slate-400" title={`ID ${p.id}`}>
+                  <td className="w-8 px-1 py-2 text-right tabular-nums text-slate-400" title={`ID ${p.id}`}>
                     {(result?.from ?? 1) + i}
                   </td>
                   {aiMode && (

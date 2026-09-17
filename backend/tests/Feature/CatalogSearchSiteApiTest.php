@@ -9,6 +9,7 @@ use App\Models\CatalogHost;
 use App\Models\CatalogPage;
 use App\Models\CatalogSearchSite;
 use App\Models\CatalogSearchSiteExclusion;
+use App\Models\ManufacturerSite;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Enrichment\CatalogSitemapIndexer;
@@ -48,6 +49,69 @@ final class CatalogSearchSiteApiTest extends TestCase
                 'links' => 2,
                 'source_label' => 'Konfiguracja',
             ]);
+    }
+
+    public function test_admin_marks_host_as_manufacturer_site(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedPage('https://artra.pl/products/aragon-920');
+
+        $this->postJson('/api/admin/catalog-search-sites/artra.pl/manufacturer', [
+            'manufacturer' => 'ARTRA',
+        ])
+            ->assertOk()
+            ->assertJsonPath('host', 'artra.pl')
+            ->assertJsonPath('brand_key', 'artra')
+            ->assertJsonPath('manufacturers.0', 'ARTRA');
+
+        $this->assertDatabaseHas('manufacturer_sites', [
+            'brand_key' => 'artra',
+            'host' => 'artra.pl',
+            'source' => 'manual',
+        ]);
+
+        $this->getJson('/api/admin/catalog-search-sites')
+            ->assertOk()
+            ->assertJsonFragment([
+                'host' => 'artra.pl',
+                'source_label' => 'Producent',
+                'manufacturers' => ['ARTRA'],
+                'manufacturer_assigned_by_hand' => true,
+            ]);
+    }
+
+    public function test_marked_host_counts_as_manufacturer_domain_for_that_brand(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedPage('https://artra.pl/products/aragon-920');
+
+        $this->postJson('/api/admin/catalog-search-sites/artra.pl/manufacturer', [
+            'manufacturer' => 'ARTRA',
+        ])->assertOk();
+
+        $this->assertSame(['artra.pl'], ManufacturerSite::hostsForBrand('artra'));
+    }
+
+    public function test_admin_clears_manufacturer_assignment(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedPage('https://artra.pl/products/aragon-920');
+        ManufacturerSite::remember('artra', 'ARTRA', ['artra.pl'], 'manual');
+
+        $this->deleteJson('/api/admin/catalog-search-sites/artra.pl/manufacturer')
+            ->assertOk()
+            ->assertJsonPath('removed', 1);
+
+        $this->assertDatabaseMissing('manufacturer_sites', ['host' => 'artra.pl']);
+    }
+
+    public function test_manufacturer_name_is_required(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedPage('https://artra.pl/products/aragon-920');
+
+        $this->postJson('/api/admin/catalog-search-sites/artra.pl/manufacturer', ['manufacturer' => ' '])
+            ->assertStatus(422);
     }
 
     public function test_admin_adds_new_site_and_rejects_duplicate(): void

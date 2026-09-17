@@ -6,6 +6,7 @@ namespace Tests\Unit;
 
 use App\Models\Product;
 use App\Services\Enrichment\ManufacturerDomainResolver;
+use App\Services\Enrichment\ProductSearchIdentity;
 use Tests\TestCase;
 
 final class ManufacturerDomainResolverTest extends TestCase
@@ -179,8 +180,6 @@ final class ManufacturerDomainResolverTest extends TestCase
             'jagatex.pl',
             'demar.com.pl',
             'coba.com',
-            'artra.pl',
-            'artra.com',
             'lemaitre-securite.com',
             'emercator.com',
             'ogniochron.eu',
@@ -281,7 +280,7 @@ final class ManufacturerDomainResolverTest extends TestCase
 
     public function test_atlas_catalog_hosts_use_polish_shoe_shops(): void
     {
-        $identity = new \App\Services\Enrichment\ProductSearchIdentity;
+        $identity = new ProductSearchIdentity;
         $product = new Product([
             'manufacturer' => 'ATLAS',
             'sku' => 'SL-46',
@@ -333,7 +332,9 @@ final class ManufacturerDomainResolverTest extends TestCase
             $domains
         ));
         $this->assertContains('artra.pl', config('enrichment.preferred_domains'));
-        $this->assertContains('artra.pl', config('enrichment.retailer_domains'));
+        // artra.pl jest sklepem producenta, nie dystrybutora: karta ARTRY ma tam komplet parametrów
+        // i deklarację zgodności, więc nie może przegrywać z kartami sklepów o rangę źródła opisu.
+        $this->assertNotContains('artra.pl', config('enrichment.retailer_domains'));
     }
 
     public function test_pilne_gloves_use_urgent_manufacturer_domains(): void

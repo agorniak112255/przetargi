@@ -12,6 +12,7 @@ use App\Models\CatalogSearchSiteExclusion;
 use App\Models\CatalogSkipOverride;
 use App\Models\ManufacturerSite;
 use App\Models\Product;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
@@ -23,6 +24,7 @@ final class CatalogSearchHostService
         private readonly CatalogIndexProgress $indexProgress,
         private readonly CatalogIndexSearch $catalog,
         private readonly ProductSearchIdentity $identity,
+        private readonly ManufacturerDomainResolver $manufacturers,
     ) {}
 
     /**
@@ -36,7 +38,9 @@ final class CatalogSearchHostService
      *     empty_reason: string|null,
      *     added_at: string|null,
      *     is_config_skip_listed: bool,
-     *     skip_overridden: bool
+     *     skip_overridden: bool,
+     *     manufacturers: list<string>,
+     *     manufacturer_assigned_by_hand: bool
      * }>
      */
     public function list(): array
@@ -54,7 +58,8 @@ final class CatalogSearchHostService
         foreach ($this->preferredHosts() as $host) {
             $hosts[$host]['config'] = true;
         }
-        foreach (ManufacturerSite::allHosts() as $host) {
+        $brandsByHost = ManufacturerSite::brandsByHost();
+        foreach (array_keys($brandsByHost) as $host) {
             $host = $this->normalizeHost((string) $host);
             if ($host !== '') {
                 $hosts[$host]['producent'] = true;
@@ -112,6 +117,11 @@ final class CatalogSearchHostService
                 'added_at' => $manualDates[$host] ?? null,
                 'is_config_skip_listed' => $configSkipListed,
                 'skip_overridden' => $skipOverridden,
+                'manufacturers' => array_values(array_map(
+                    static fn (array $brand): string => $brand['manufacturer'],
+                    $brandsByHost[$host] ?? []
+                )),
+                'manufacturer_assigned_by_hand' => $this->hasManualBrand($brandsByHost[$host] ?? []),
             ];
         }
 
@@ -570,6 +580,113 @@ final class CatalogSearchHostService
     /**
      * @return array{host: string, links: int, sources: list<string>, source_label: string, last_seen_at: string|null, last_attempt_at: string|null, empty_reason: string|null, added_at: string|null}
      */
+    /**
+     * Ręczne wskazanie, że domena jest stroną producenta danej marki. Bez tego jedyną drogą była
+     * zmiana config('enrichment.manufacturer_domains') albo automatyczne wykrycie przy imporcie —
+     * a testujący nie miał jak naprawić marki, której wykrywanie nie złapało.
+     *
+     * Wpis trafia do manufacturer_sites, czyli tam, skąd domeny producenta czyta wzbogacanie:
+     * od tej chwili karta z tej domeny liczy się jako karta producenta, a nie cudzy sklep.
+     *
+     * @return array{host: string, manufacturers: list<string>, brand_key: string, message: string}
+     */
+    public function assignManufacturer(string $host, string $manufacturer): array
+    {
+        $row = $this->requireHost($host);
+        $host = $row['host'];
+        $name = trim($manufacturer);
+        $brandKey = $this->manufacturers->brandKey($name);
+        if ($name === '' || $brandKey === '') {
+            throw ValidationException::withMessages([
+                'manufacturer' => 'Podaj nazwę producenta, np. ARTRA.',
+            ]);
+        }
+        if (! Schema::hasTable('manufacturer_sites')) {
+            throw ValidationException::withMessages([
+                'host' => 'Baza nie ma jeszcze tabeli stron producentów — uruchom migracje.',
+            ]);
+        }
+
+        ManufacturerSite::remember($brandKey, $name, [$host], 'manual');
+        $this->forgetManufacturerDomains([$brandKey]);
+
+        $brands = ManufacturerSite::brandsByHost()[$host] ?? [];
+
+        return [
+            'host' => $host,
+            'manufacturers' => array_values(array_map(
+                static fn (array $brand): string => $brand['manufacturer'],
+                $brands
+            )),
+            'brand_key' => $brandKey,
+            'message' => $host.' jest teraz stroną producenta '.$name.'.',
+        ];
+    }
+
+    /**
+     * Zdejmuje przypisanie domeny do producenta. Domena zostaje w indeksie — przestaje tylko
+     * uchodzić za stronę producenta.
+     *
+     * @return array{host: string, manufacturers: list<string>, removed: int, message: string}
+     */
+    public function clearManufacturer(string $host): array
+    {
+        $row = $this->requireHost($host);
+        $host = $row['host'];
+        if (! Schema::hasTable('manufacturer_sites')) {
+            return ['host' => $host, 'manufacturers' => [], 'removed' => 0, 'message' => 'Nie było czego zdejmować.'];
+        }
+
+        $aliases = $this->hostAliases($host);
+        $brandKeys = ManufacturerSite::query()
+            ->whereIn('host', $aliases)
+            ->pluck('brand_key')
+            ->map(static fn ($key): string => (string) $key)
+            ->unique()
+            ->values()
+            ->all();
+        $removed = ManufacturerSite::query()->whereIn('host', $aliases)->delete();
+        $this->forgetManufacturerDomains($brandKeys);
+
+        return [
+            'host' => $host,
+            'manufacturers' => [],
+            'removed' => (int) $removed,
+            'message' => $removed > 0
+                ? $host.' nie jest już stroną producenta.'
+                : 'Nie było czego zdejmować.',
+        ];
+    }
+
+    /**
+     * @param  list<array{brand_key: string, manufacturer: string, source: string}>  $brands
+     */
+    private function hasManualBrand(array $brands): bool
+    {
+        foreach ($brands as $brand) {
+            if ($brand['source'] === 'manual') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Domeny producenta są trzymane w cache na 30 dni — bez tego ręczna zmiana byłaby widoczna
+     * dopiero po wygaśnięciu wpisu.
+     *
+     * @param  list<string>  $brandKeys
+     */
+    private function forgetManufacturerDomains(array $brandKeys): void
+    {
+        foreach ($brandKeys as $brandKey) {
+            if ($brandKey !== '') {
+                Cache::forget('enrich_mfr_domains_v2:'.$brandKey);
+            }
+        }
+    }
+
     private function requireHost(string $host): array
     {
         $row = $this->find($host);

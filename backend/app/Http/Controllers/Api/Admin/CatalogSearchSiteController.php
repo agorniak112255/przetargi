@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\AssignCatalogSearchSiteManufacturerRequest;
 use App\Http\Requests\Admin\DestroyCatalogSearchSiteRequest;
 use App\Http\Requests\Admin\LookupCatalogSearchSiteProductRequest;
 use App\Http\Requests\Admin\ShowCatalogSearchSitePagesRequest;
@@ -86,6 +87,21 @@ class CatalogSearchSiteController extends Controller
     public function reskip(string $host): JsonResponse
     {
         return response()->json($this->sites->reskip($host));
+    }
+
+    public function assignManufacturer(
+        AssignCatalogSearchSiteManufacturerRequest $request,
+        string $host,
+    ): JsonResponse {
+        return response()->json($this->sites->assignManufacturer(
+            $host,
+            (string) $request->string('manufacturer'),
+        ));
+    }
+
+    public function clearManufacturer(string $host): JsonResponse
+    {
+        return response()->json($this->sites->clearManufacturer($host));
     }
 
     public function destroy(DestroyCatalogSearchSiteRequest $request, string $host): JsonResponse

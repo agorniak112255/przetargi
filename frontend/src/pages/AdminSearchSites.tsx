@@ -14,6 +14,8 @@ type SearchSite = {
   added_at: string | null
   is_config_skip_listed: boolean
   skip_overridden: boolean
+  manufacturers: string[]
+  manufacturer_assigned_by_hand: boolean
 }
 
 type SitesResponse = {
@@ -182,6 +184,7 @@ export function AdminSearchSites() {
   const [reindexHost, setReindexHost] = useState('')
   const [deleteHost, setDeleteHost] = useState('')
   const [skipToggleHost, setSkipToggleHost] = useState('')
+  const [manufacturerHost, setManufacturerHost] = useState('')
   const [pagesHost, setPagesHost] = useState<SearchSite | null>(null)
   const [watchHosts, setWatchHosts] = useState<string[]>(() => readWatchHosts())
   const [watchTick, setWatchTick] = useState(0)
@@ -403,6 +406,37 @@ export function AdminSearchSites() {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się dodać strony')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function onAssignManufacturer(row: SearchSite) {
+    const answer = window.prompt(
+      `Czyją stroną producenta jest ${row.host}?
+
+Wpisz nazwę marki tak, jak stoi w cenniku (np. ARTRA).
+Puste pole zdejmuje przypisanie.`,
+      row.manufacturers[0] ?? '',
+    )
+    if (answer === null) {
+      return
+    }
+    const name = answer.trim()
+    setManufacturerHost(row.host)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>(
+        `/admin/catalog-search-sites/${encodeURIComponent(row.host)}/manufacturer`,
+        name === ''
+          ? { method: 'DELETE' }
+          : { method: 'POST', body: JSON.stringify({ manufacturer: name }) },
+      )
+      setMsg(res.message)
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zapisać producenta')
+    } finally {
+      setManufacturerHost('')
     }
   }
 
@@ -708,6 +742,12 @@ export function AdminSearchSites() {
                         </span>
                       ))}
                     </span>
+                    {row.manufacturers.length > 0 && (
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        {row.manufacturers.join(', ')}
+                        {row.manufacturer_assigned_by_hand ? ' · wskazane ręcznie' : ''}
+                      </p>
+                    )}
                   </td>
                   <td className="p-3 text-slate-500">
                     <div>{formatWhen(row.last_seen_at)}</div>
@@ -744,6 +784,23 @@ export function AdminSearchSites() {
                               : 'Odblokuj'}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        disabled={manufacturerHost === row.host}
+                        onClick={() => void onAssignManufacturer(row)}
+                        title="Wskaż, czyją stroną producenta jest ta domena. Karty z niej liczą się wtedy jako karty producenta, a nie cudzego sklepu."
+                        className={`rounded-lg px-2 py-1 text-[11px] font-semibold disabled:opacity-50 ${
+                          row.manufacturers.length > 0
+                            ? 'border border-indigo-300 text-indigo-700 hover:bg-indigo-50'
+                            : 'border border-slate-300 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        {manufacturerHost === row.host
+                          ? '…'
+                          : row.manufacturers.length > 0
+                            ? 'Producent ✓'
+                            : 'Producent'}
+                      </button>
                       <button
                         type="button"
                         disabled={reindexHost !== ''}
