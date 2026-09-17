@@ -90,13 +90,84 @@ final class InquiryMailTextTest extends TestCase
 
         $clean = InquiryMailText::forAnalysis($mail);
 
-        // notatka przekazującego zostaje — bywa w niej polecenie dla handlowca
-        $this->assertStringContainsString('zapytanie:', $clean);
+        // Jednowyrazowa notatka („zapytanie:”) nic nie wnosi, a dokłada szumu
+        // do wyszukiwania w katalogu — zostaje pominięta. Notatka z treścią
+        // jest zachowywana, co sprawdza osobny test.
         $this->assertStringContainsString('6 szt. wycieraczek gumowych', $clean);
         // nagłówek przekazania znika, żeby data i adresy nie trafiły do analizy
         $this->assertStringNotContainsString('Nadawca:', $clean);
         $this->assertStringNotContainsString('oferty@elektrosilver.pl', $clean);
         $this->assertStringNotContainsString('4 Aug 2026', $clean);
+    }
+
+    /**
+     * Prawdziwy mail z produkcji (zapytanie #7): podpis handlowca stoi NAD treścią,
+     * pod nim dwa przekazania. Wcześniej z całego maila zostawało „Pozdrawiam”.
+     */
+    public function test_twice_forwarded_mail_with_signature_on_top_keeps_the_inquiry(): void
+    {
+        $mail = implode("\n", [
+            'Pozdrawiam',
+            '-- ',
+            'Artur Górniak',
+            'PHT Supon Sp. z o.o. w Rzeszowie',
+            '35-232 Rzeszów, ul. Miłocińska 17',
+            'tel. 017 860 28 53, fax 017 863 08 10',
+            'NIP: 813-22-83-737',
+            '',
+            '--- Treść przekazanej wiadomości ---',
+            "Temat: \tFwd: OFERTA Skalmierzyce - Zakupy",
+            "Data: \tTue, 1 Sep 2026 09:40:19 +0200",
+            'Nadawca: 	Wojciech Dzierżak <marketing@supon.rzeszow.pl>',
+            'Adresat: 	Artur - PHT Supon Rzeszów <artur@supon.rzeszow.pl>',
+            '',
+            '  zapytanie:',
+            '',
+            '--- Treść przekazanej wiadomości ---',
+            "Temat: \tOFERTA Skalmierzyce - Zakupy",
+            "Data: \tTue, 4 Aug 2026 13:09:32 +0200",
+            'Nadawca: 	Wojciech Dzierżak <marketing@supon.rzeszow.pl>',
+            'Adresat: 	oferty@elektrosilver.pl',
+            '',
+            '  Dzień dobry,',
+            '',
+            'W odpowiedzi, przesyłam ofertę na wybrane pozycje z zapytania:',
+            '',
+            ' 1. **(poz6)Wycieraczka gumowa:rozm:',
+            '      40x60cm, c. netto......24,00 PLN/szt',
+            '      50x100cm, c. netto...... 39,00 PLN/szt.',
+            '  2.  (poz9). Łopata do śniegu,c. netto......97,00 PLN/szt.',
+        ]);
+
+        $clean = InquiryMailText::forAnalysis($mail);
+
+        $this->assertStringContainsString('Wycieraczka gumowa', $clean);
+        $this->assertStringContainsString('Łopata do śniegu', $clean);
+        $this->assertStringContainsString('40x60cm', $clean);
+        // podpis osoby przekazującej i jej dane firmowe nie wchodzą do analizy
+        $this->assertStringNotContainsString('Miłocińska', $clean);
+        $this->assertStringNotContainsString('813-22-83-737', $clean);
+        $this->assertStringNotContainsString('Nadawca:', $clean);
+        // „Pozdrawiam” samo w sobie to nie jest zapytanie
+        $this->assertNotSame('Pozdrawiam', trim($clean));
+    }
+
+    public function test_note_of_the_person_forwarding_is_kept_when_it_says_something(): void
+    {
+        $mail = implode("\n", [
+            'Proszę wycenić tylko pozycje 1 i 3, reszta odpada.',
+            '',
+            '--- Treść przekazanej wiadomości ---',
+            'Temat: Zapytanie',
+            'Nadawca: klient@firma.pl',
+            '',
+            'Dzień dobry, proszę o wycenę 10 szt. rękawic nitrylowych rozmiar 9.',
+        ]);
+
+        $clean = InquiryMailText::forAnalysis($mail);
+
+        $this->assertStringContainsString('tylko pozycje 1 i 3', $clean);
+        $this->assertStringContainsString('rękawic nitrylowych', $clean);
     }
 
     public function test_cuts_quoted_reply(): void

@@ -87,19 +87,92 @@ final class InquiryMailText
      *
      * @return array{body: string, footer: string}
      */
+    /**
+     * Zapytanie bywa przekazywane kilka razy, a osoba przekazująca ma podpis
+     * NAD treścią. Dlatego mail dzielimy na kawałki po nagłówkach przekazania
+     * i podpisy wycinamy w każdym z osobna — inaczej pierwsze „-- ” na górze
+     * ucięłoby cały mail razem z zapytaniem.
+     *
+     * @return array{body: string, footer: string}
+     */
     private static function split(string $raw): array
     {
         $text = str_replace(["\r\n", "\r"], "\n", $raw);
         $text = self::stripQuotedLines($text);
-        $text = self::dropForwardHeader($text);
 
+        $segments = self::forwardSegments($text);
+        $last = array_pop($segments);
+
+        [$body, $footer] = self::cutWithFooter($last);
+
+        // Notatki osób przekazujących zostają (bywa w nich polecenie dla handlowca),
+        // ale bez ich podpisów; same „Pozdrawiam” pomijamy.
+        $notes = [];
+        foreach ($segments as $segment) {
+            $note = trim(self::cutWithFooter($segment)[0]);
+            if (mb_strlen($note) >= 20) {
+                $notes[] = $note;
+            }
+        }
+
+        $full = trim(implode("\n\n", array_filter([...$notes, trim($body)])));
+
+        // Nadgorliwe cięcie jest gorsze niż brak cięcia: gdy z długiego maila
+        // zostały strzępy, wracamy do wersji bez wycinania podpisów.
+        $plain = trim(implode("\n\n", array_map('trim', self::forwardSegments($text))));
+        if (mb_strlen($full) < 60 && mb_strlen($plain) > 200) {
+            return ['body' => $plain, 'footer' => ''];
+        }
+
+        return ['body' => $full, 'footer' => $footer];
+    }
+
+    /**
+     * Mail pocięty nagłówkami przekazania: [notatka, …, właściwe zapytanie].
+     * Same nagłówki („Temat:/Data:/Nadawca:/Adresat:”) wypadają.
+     *
+     * @return list<string>
+     */
+    private static function forwardSegments(string $text): array
+    {
         $lines = explode("\n", $text);
+        $segments = [];
+        $current = [];
+
+        for ($i = 0; $i < count($lines); $i++) {
+            if (! self::matchesAny(trim($lines[$i]), self::FORWARD_MARKERS)) {
+                $current[] = $lines[$i];
+
+                continue;
+            }
+
+            $segments[] = implode("\n", $current);
+            $current = [];
+            $i = self::skipHeaderBlock($lines, $i + 1) - 1;
+        }
+
+        $segments[] = implode("\n", $current);
+
+        if (count($segments) === 1) {
+            // Brak przekazania — zostaje przypadek nagłówka na samej górze maila.
+            return [self::dropLeadingHeaderBlock($lines)];
+        }
+
+        return $segments;
+    }
+
+    /**
+     * @return array{0: string, 1: string}
+     */
+    private static function cutWithFooter(string $segment): array
+    {
+        $lines = explode("\n", $segment);
         $separator = self::separatorIndex($lines);
         $cut = self::closingIndex(array_slice($lines, 0, $separator));
 
         return [
-            'body' => implode("\n", array_slice($lines, 0, $cut)),
-            'footer' => implode("\n", array_slice($lines, $cut)),
+            implode("\n", array_slice($lines, 0, $cut)),
+            implode("\n", array_slice($lines, $cut)),
         ];
     }
 
