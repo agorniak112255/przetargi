@@ -227,7 +227,7 @@ final class B2bAccountPriceListTest extends TestCase
         $this->assertSame('failed', B2bSyncRun::query()->latest('id')->firstOrFail()->status);
     }
 
-    public function test_account_list_cannot_be_deleted_or_edited_while_account_exists(): void
+    public function test_account_list_cannot_be_deleted_but_its_name_can_be_corrected(): void
     {
         Sanctum::actingAs($this->user);
         $product = $this->anroProduct();
@@ -239,12 +239,14 @@ final class B2bAccountPriceListTest extends TestCase
         $this->deleteJson("/api/price-lists/{$list->id}")
             ->assertStatus(422)
             ->assertJsonPath('message', 'Nie można usunąć cennika konta B2B (Anro · jan) — najpierw usuń konto w zakładce Cenniki → B2B.');
-        $this->patchJson("/api/price-lists/{$list->id}", ['manufacturer' => 'Inny'])
-            ->assertStatus(422)
-            ->assertJsonPath('message', 'Nie można edytować cennika konta B2B (Anro · jan) — nazwę i wersję ustawia pobieranie z konta. Najpierw usuń konto w zakładce Cenniki → B2B.');
+        // Wpis jest jeden na producenta i obsługuje też importy z pliku, więc nazwę wolno poprawić.
+        // Usuwanie zostaje zablokowane — to skasowanie całego katalogu dostawcy.
+        $this->patchJson("/api/price-lists/{$list->id}", ['manufacturer' => 'Anro Sp. z o.o.'])
+            ->assertOk();
 
-        $this->assertSame('Anro', $list->fresh()->manufacturer);
-        $this->assertSame('Anro', $product->fresh()->manufacturer);
+        $this->assertSame('Anro Sp. z o.o.', $list->fresh()->manufacturer);
+        $this->assertSame('anro sp z o o', $list->fresh()->manufacturer_key);
+        $this->assertSame('Anro Sp. z o.o.', $product->fresh()->manufacturer);
 
         $rows = collect($this->getJson('/api/price-lists')->assertOk()->json())->keyBy('id');
         $this->assertSame(['id' => $account->id, 'username' => 'jan', 'connector_label' => 'Anro'], $rows[$list->id]['b2b_account']);

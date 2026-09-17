@@ -8,6 +8,7 @@ use App\Jobs\RegisterManufacturerCatalogJob;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\B2bProductLink;
 use App\Models\PriceList;
+use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
@@ -361,18 +362,30 @@ final class PriceListImportService
         $updatedProducts = [];
         $productIds = [];
         $skippedDetails = [];
+        $importRow = null;
 
         // Wpis cennika powstaje na początku tej samej transakcji — sloty ceny pliku wskazują cennik, z którego
         // pochodzą (usunięcie cennika usuwa tylko jego slot). Liczniki uzupełniane na końcu; import dalej atomowy.
         /** @var PriceList $priceList */
-        $priceList = DB::transaction(function () use ($file, $manufacturer, $version, $user, &$collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds, &$skippedDetails): PriceList {
-            $priceList = PriceList::query()->create([
+        $priceList = DB::transaction(function () use ($file, $manufacturer, $version, $user, &$collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds, &$skippedDetails, &$importRow): PriceList {
+            // Jeden wpis na producenta: kolejna aktualizacja odnajduje swój cennik zamiast zakładać
+            // następny. Pola opisują ostatnią aktualizację, historia idzie do price_list_imports.
+            $priceList = PriceList::query()
+                ->where('manufacturer_key', PriceList::manufacturerKey($manufacturer))
+                ->first();
+            $attributes = [
                 'manufacturer' => $manufacturer,
+                'manufacturer_key' => PriceList::manufacturerKey($manufacturer),
                 'version' => $version,
                 'original_filename' => $file->getClientOriginalName(),
                 'imported_by' => $user->id,
                 'rows_total' => $collected['rows_total'],
-            ]);
+            ];
+            if ($priceList === null) {
+                $priceList = PriceList::query()->create($attributes);
+            } else {
+                $priceList->update($attributes);
+            }
 
             $byManufacturer = [];
             $fileSlots = [];
@@ -479,6 +492,26 @@ final class PriceListImportService
                 'product_ids' => $productIds,
             ]);
 
+            // Raport tego przebiegu: zakres kart z niego potrzebny jest do cofnięcia samej aktualizacji,
+            // bez kasowania całego katalogu producenta.
+            $import = $importRow = PriceListImport::query()->create([
+                'price_list_id' => $priceList->id,
+                'source' => PriceListImport::SOURCE_FILE,
+                'version' => $version,
+                'original_filename' => $file->getClientOriginalName(),
+                'imported_by' => $user->id,
+                'rows_total' => $collected['rows_total'],
+                'products_created' => $created,
+                'products_updated' => $updated,
+                'prices_changed' => count($priceChanges),
+                'rows_skipped' => $collected['skipped'],
+                'errors' => array_slice($collected['errors'], 0, 50),
+                'price_changes' => array_slice($priceChanges, 0, 100),
+                'updated_products' => array_slice($updatedProducts, 0, 100),
+                'skipped_details' => $skippedDetails,
+                'product_ids' => $productIds,
+            ]);
+
             // historia: ceny slotu pliku (nie ceny obowiązującej karty), tylko nowa karta albo zmiana ceny z pliku
             foreach (array_keys($historyIds) as $productId) {
                 $slot = $fileSlots[$productId] ?? null;
@@ -488,6 +521,7 @@ final class PriceListImportService
                 ProductPriceHistory::query()->create([
                     'product_id' => $productId,
                     'price_list_id' => $priceList->id,
+                    'price_list_import_id' => $import->id,
                     'catalog_price_net' => $slot->catalog_price_net,
                     'purchase_price' => $slot->purchase_price,
                     'source' => 'price_list_import',
@@ -523,6 +557,7 @@ final class PriceListImportService
 
         return [
             'price_list' => $priceList->load('importer:id,name'),
+            'price_list_import' => $importRow,
             'created' => $created,
             'updated' => $updated,
             'skipped' => $collected['skipped'],

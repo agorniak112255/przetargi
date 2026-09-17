@@ -35,7 +35,22 @@ function stepFor(steps: typeof ANALYZE_STEPS, elapsed: number) {
   return current
 }
 
-type HistoryKind = 'prices' | 'updates' | 'skips'
+type HistoryKind = 'prices' | 'updates' | 'skips' | 'imports'
+
+/** Jedna aktualizacja cennika: wpis w Cennikach jest jeden na producenta, przebiegów wiele. */
+type PriceListImportRow = {
+  id: number
+  source: 'file' | 'b2b' | string
+  version: string | null
+  original_filename: string | null
+  created_at: string | null
+  importer: string | null
+  products_created: number
+  products_updated: number
+  prices_changed: number
+  rows_skipped: number
+  products: number
+}
 
 type PriceChange = {
   sku: string
@@ -106,6 +121,9 @@ type PriceList = {
   enrichment_current_sku?: string | null
   enrichment_last_error?: string | null
   b2b_account?: PriceListB2bAccount | null
+  sources?: string[]
+  imports_count?: number
+  imports?: PriceListImportRow[]
   created_at: string
   importer?: { name: string }
 }
@@ -418,10 +436,11 @@ export function PriceLists() {
   const canEnrich = can(user, 'price_lists.import')
   const canExportPresta = can(user, 'presta.export')
   const canDelete = can(user, 'price_lists.delete')
-  const historyColSpan = 9 + (canEnrich ? 1 : 0) + (canEnrich || canDelete ? 1 : 0)
+  const historyColSpan = 10 + (canEnrich ? 1 : 0) + (canEnrich || canDelete ? 1 : 0)
   const [rows, setRows] = useState<PriceList[]>([])
   const [historyQuery, setHistoryQuery] = useState(() => searchParams.get('manufacturer') ?? '')
   const [deleteBusyId, setDeleteBusyId] = useState<number | null>(null)
+  const [undoImportId, setUndoImportId] = useState<number | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<PriceList | null>(null)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [deleteConfirmError, setDeleteConfirmError] = useState('')
@@ -812,6 +831,96 @@ export function PriceLists() {
     }
     setExpandedHistory({ id: row.id, kind })
     await ensureHistoryDetails(row)
+  }
+
+  const SOURCE_LABEL: Record<string, string> = { file: 'plik', b2b: 'B2B' }
+
+  async function onUndoImport(row: PriceList, item: PriceListImportRow) {
+    const when = item.created_at ? new Date(item.created_at).toLocaleString('pl-PL') : ''
+    if (
+      !window.confirm(
+        `Cofnąć aktualizację ${item.version ?? ''} z ${when}?
+
+` +
+          'Znikną tylko karty, których nie przyniosła żadna inna aktualizacja. ' +
+          'Ceny kart, które zostaną, nie wrócą do poprzednich wartości.',
+      )
+    ) {
+      return
+    }
+    setUndoImportId(item.id)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>(
+        `/price-lists/${row.id}/imports/${item.id}`,
+        { method: 'DELETE' },
+      )
+      setMsg(res.message)
+      setHistoryCache((prev) => {
+        const next = { ...prev }
+        delete next[row.id]
+        return next
+      })
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się cofnąć aktualizacji')
+    } finally {
+      setUndoImportId(null)
+    }
+  }
+
+  function renderImportsTable(row: PriceList, imports: PriceListImportRow[]) {
+    if (imports.length === 0) {
+      return <p className="text-slate-500">Brak zapisanych aktualizacji.</p>
+    }
+    return (
+      <table className="w-full text-left">
+        <thead>
+          <tr className="border-b bg-slate-50">
+            <th className="p-2">Data</th>
+            <th className="p-2">Źródło</th>
+            <th className="p-2">Wersja</th>
+            <th className="p-2">Plik</th>
+            <th className="p-2">Nowe</th>
+            <th className="p-2">Update</th>
+            <th className="p-2">Zmiany cen</th>
+            <th className="p-2">Kart</th>
+            <th className="p-2">Kto</th>
+            {canDelete && <th className="p-2" />}
+          </tr>
+        </thead>
+        <tbody>
+          {imports.map((item) => (
+            <tr key={item.id} className="border-b">
+              <td className="whitespace-nowrap p-2">
+                {item.created_at ? new Date(item.created_at).toLocaleString('pl-PL') : '—'}
+              </td>
+              <td className="p-2">{SOURCE_LABEL[item.source] ?? item.source}</td>
+              <td className="p-2">{item.version ?? '—'}</td>
+              <td className="p-2 text-slate-600">{item.original_filename ?? '—'}</td>
+              <td className="p-2 tabular-nums">{item.products_created}</td>
+              <td className="p-2 tabular-nums">{item.products_updated}</td>
+              <td className="p-2 tabular-nums">{item.prices_changed}</td>
+              <td className="p-2 tabular-nums">{item.products}</td>
+              <td className="p-2 text-slate-600">{item.importer ?? '—'}</td>
+              {canDelete && (
+                <td className="p-2 text-right">
+                  <button
+                    type="button"
+                    disabled={undoImportId === item.id}
+                    onClick={() => void onUndoImport(row, item)}
+                    className="rounded-lg border border-amber-300 px-2 py-1 text-[11px] font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-50"
+                  >
+                    {undoImportId === item.id ? 'Cofam…' : 'Cofnij'}
+                  </button>
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )
   }
 
   function renderPriceChangesTable(changes: PriceChange[], totalHint?: number) {
@@ -1729,6 +1838,7 @@ export function PriceLists() {
               <HistorySortTh label="Update" col="products_updated" sort={historySort} dir={historyDir} onSort={onHistorySort} />
               <HistorySortTh label="Zmiany cen" col="prices_changed" sort={historySort} dir={historyDir} onSort={onHistorySort} />
               <HistorySortTh label="Skip" col="rows_skipped" sort={historySort} dir={historyDir} onSort={onHistorySort} />
+              <th className="p-2">Aktualizacje</th>
               <HistorySortTh label="Kto" col="importer" sort={historySort} dir={historyDir} onSort={onHistorySort} />
               {canEnrich && (
                 <HistorySortTh label="Opisy/zdjęcia" col="enrichment" sort={historySort} dir={historyDir} onSort={onHistorySort} />
@@ -1817,6 +1927,14 @@ export function PriceLists() {
                   </td>
                   <td className="p-2">
                     {historyCountButton(r, 'skips', r.rows_skipped, 'text-slate-700')}
+                  </td>
+                  <td className="p-2">
+                    {historyCountButton(r, 'imports', r.imports_count ?? 0, 'text-indigo-700')}
+                    {(r.sources?.length ?? 0) > 0 && (
+                      <span className="ml-1 text-[10px] text-slate-500">
+                        {(r.sources ?? []).map((src) => SOURCE_LABEL[src] ?? src).join(' + ')}
+                      </span>
+                    )}
                   </td>
                   <td className="p-2">{r.importer?.name ?? '—'}</td>
                   {canEnrich && (
@@ -2038,7 +2156,9 @@ export function PriceLists() {
                           ? 'Zmiany cen'
                           : kind === 'updates'
                             ? 'Zaktualizowane produkty'
-                            : 'Pominięte wiersze'}
+                            : kind === 'imports'
+                              ? 'Historia aktualizacji'
+                              : 'Pominięte wiersze'}
                         {` — ${r.manufacturer} / ${r.version}`}
                         {r.original_filename ? ` · ${r.original_filename}` : ''}
                         {kind === 'prices' && ` · ${r.prices_changed ?? 0}`}
@@ -2054,6 +2174,8 @@ export function PriceLists() {
                           cached.updated_products ?? [],
                           r.products_updated,
                         )
+                      ) : kind === 'imports' ? (
+                        renderImportsTable(r, cached.imports ?? [])
                       ) : (
                         renderSkippedDetailsTable(
                           cached.skipped_details ?? [],
@@ -2178,11 +2300,18 @@ export function PriceLists() {
                 []
               ).length
               return (
+                <>
                 <p className="mt-2 text-xs text-slate-600">
-                  Zostaną usunięte produkty powiązane wyłącznie z tym importem
-                  {count > 0 ? <> (do <b>{count}</b> pozycji)</> : null}. Produkty występujące też
-                  w innych cennikach zostaną zachowane. <b>Tej operacji nie można cofnąć.</b>
+                  To jest <b>cały katalog tego producenta</b>, nie jedna aktualizacja: cennik ma jeden
+                  wpis niezależnie od liczby wgrań. Zostaną usunięte produkty powiązane wyłącznie z nim
+                  {count > 0 ? <> (do <b>{count}</b> pozycji)</> : null}; te z innych cenników i z kont
+                  B2B zostaną zachowane. <b>Tej operacji nie można cofnąć.</b>
                 </p>
+                <p className="mt-2 text-xs text-amber-800">
+                  Chcesz cofnąć tylko ostatnie wgranie? Zamknij to okno i użyj „Cofnij” przy wybranej
+                  pozycji w kolumnie <b>Aktualizacje</b>.
+                </p>
+                </>
               )
             })()}
             <label className="mt-3 block text-xs text-slate-700">

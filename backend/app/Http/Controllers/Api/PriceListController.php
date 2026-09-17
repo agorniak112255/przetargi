@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Jobs\RegisterManufacturerCatalogJob;
 use App\Models\PriceList;
+use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
 use App\Services\B2b\B2bAccountPriceList;
@@ -29,8 +30,15 @@ class PriceListController extends Controller
     {
         $lists = PriceList::query()
             ->with('importer:id,name')
+            ->withCount('imports')
             ->latest()
             ->get();
+        // czym przyszła ostatnia porcja danych i czy producent ma oba źródła — lista pokazuje to w jednym wierszu
+        $sources = PriceListImport::query()
+            ->whereIn('price_list_id', $lists->pluck('id'))
+            ->get(['price_list_id', 'source'])
+            ->groupBy('price_list_id')
+            ->map(static fn ($rows): array => $rows->pluck('source')->unique()->sort()->values()->all());
         $owners = $this->b2bLists->owners($lists);
 
         $allIds = [];
@@ -103,6 +111,7 @@ class PriceListController extends Controller
             $failedFromB2b,
             $latestBatchMsg,
             $owners,
+            $sources,
         ): array {
             $ids = array_map('intval', $list->product_ids ?? []);
             $countStatus = static function (array $set) use ($ids): int {
@@ -130,6 +139,7 @@ class PriceListController extends Controller
                 ? mb_substr((string) ($batch->message ?? ''), 0, 240)
                 : null;
             $row['b2b_account'] = isset($owners[$list->id]) ? $this->b2bLists->ownerPayload($owners[$list->id]) : null;
+            $row['sources'] = $sources[$list->id] ?? [];
 
             return $row;
         })->values()->all();
@@ -144,6 +154,52 @@ class PriceListController extends Controller
         return response()->json([
             ...$priceList->load('importer:id,name')->toArray(),
             'b2b_account' => $owner !== null ? $this->b2bLists->ownerPayload($owner) : null,
+            // historia aktualizacji tego producenta — wpis jest jeden, przebiegów wiele
+            'imports' => $priceList->imports()->with('importer:id,name')->get()->map(
+                static fn (PriceListImport $import): array => [
+                    'id' => $import->id,
+                    'source' => $import->source,
+                    'version' => $import->version,
+                    'original_filename' => $import->original_filename,
+                    'created_at' => $import->created_at?->toIso8601String(),
+                    'importer' => $import->importer?->name,
+                    'rows_total' => $import->rows_total,
+                    'products_created' => $import->products_created,
+                    'products_updated' => $import->products_updated,
+                    'prices_changed' => $import->prices_changed,
+                    'rows_skipped' => $import->rows_skipped,
+                    'products' => count($import->product_ids ?? []),
+                ]
+            )->values()->all(),
+        ]);
+    }
+
+    /**
+     * Cofa jedną aktualizację cennika. Łagodna operacja: znikają tylko karty, których nie przyniósł
+     * żaden inny przebieg — w odróżnieniu od usunięcia całego cennika producenta.
+     */
+    public function destroyImport(Request $request, PriceList $priceList, PriceListImport $import): JsonResponse
+    {
+        if ((int) $import->price_list_id !== (int) $priceList->id) {
+            return response()->json(['message' => 'Ta aktualizacja nie należy do tego cennika.'], 404);
+        }
+
+        try {
+            $result = $this->deletion->undoImport($import, $request->user());
+        } catch (Throwable $e) {
+            return response()->json(['message' => 'Nie udało się cofnąć aktualizacji: '.$e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => sprintf(
+                'Cofnięto aktualizację %s. Kart usuniętych: %d%s.',
+                $result['version'] !== '' ? $result['version'] : '(bez wersji)',
+                $result['products_deleted'],
+                $result['products_kept_shared'] > 0
+                    ? ', zachowanych (są w innych aktualizacjach): '.$result['products_kept_shared']
+                    : ''
+            ),
+            ...$result,
         ]);
     }
 
@@ -180,10 +236,10 @@ class PriceListController extends Controller
         if ($data === []) {
             return response()->json(['message' => 'Brak pól do aktualizacji.'], 422);
         }
-        if (($blocked = $this->b2bAccountBlock($priceList, 'update')) !== null) {
-            return $blocked;
-        }
-
+        // Nazwę wolno poprawić także przy cenniku z kontem B2B: po zwinięciu Cenników do jednego wpisu
+        // na producenta ten sam wiersz obsługuje import z pliku, więc blokada zabierałaby edycję czegoś,
+        // co z kontem nie ma nic wspólnego. Przebieg B2B nie nadpisuje już nazwy istniejącego wpisu,
+        // a odnajduje go po wskaźniku konta — zmiana zostaje. Usuwanie zostaje zablokowane.
         $oldManufacturer = (string) $priceList->manufacturer;
         $productIds = array_values(array_unique(array_filter(array_map(
             static fn ($id): int => (int) $id,
@@ -194,6 +250,8 @@ class PriceListController extends Controller
         DB::transaction(function () use ($priceList, $data, $productIds, &$productsUpdated): void {
             if (array_key_exists('manufacturer', $data)) {
                 $priceList->manufacturer = trim($data['manufacturer']);
+                // klucz idzie za nazwą — po nim kolejny import odnajduje cennik tego producenta
+                $priceList->manufacturer_key = PriceList::manufacturerKey($priceList->manufacturer);
             }
             if (array_key_exists('version', $data)) {
                 $priceList->version = trim($data['version']);

@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\B2bProductLink;
 use App\Models\PriceList;
+use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
@@ -25,7 +26,67 @@ final class PriceListDeletionService
     ) {}
 
     /**
-     * Usuwa cennik oraz produkty, które nie występują w innych importach.
+     * Cofa jedną aktualizację: znikają karty, które weszły tym przebiegiem i których nie przyniósł żaden
+     * inny. Cennik producenta zostaje — razem z cenami kart, które przetrwały. To jest łagodna operacja,
+     * którą dawniej robiło „usuń cennik”, kiedy każdy import miał własny wpis.
+     *
+     * Cen kart, które zostają, nie cofamy: poprzednie wartości są w historii ceny, a ciche przywracanie
+     * ich przy usuwaniu wpisu byłoby zmianą cennika bez śladu, kto i kiedy ją zrobił.
+     *
+     * @return array{
+     *     undone_import_id: int,
+     *     manufacturer: string,
+     *     version: string,
+     *     products_deleted: int,
+     *     products_kept_shared: int,
+     *     product_ids_deleted: list<int>
+     * }
+     */
+    public function undoImport(PriceListImport $import, User $actor): array
+    {
+        $priceList = $import->priceList;
+        $ids = $this->productIdsOf($import->product_ids ?? []);
+
+        return DB::transaction(function () use ($import, $priceList, $actor, $ids): array {
+            $shared = array_values(array_unique([
+                ...$this->productIdsReferencedByOtherImports((int) $import->id, $ids),
+                ...$this->productIdsLinkedToB2b($ids),
+            ]));
+            $toDelete = array_values(array_diff($ids, $shared));
+
+            if ($toDelete !== []) {
+                $this->deleteProductFiles($toDelete);
+                $this->deleteEnrichmentCaches($toDelete);
+                foreach ($toDelete as $productId) {
+                    $this->embeddings->delete($productId);
+                }
+                Product::query()->whereIn('id', $toDelete)->delete();
+            }
+
+            $meta = [
+                'undone_import_id' => (int) $import->id,
+                'manufacturer' => (string) ($priceList?->manufacturer ?? ''),
+                'version' => (string) $import->version,
+                'products_deleted' => count($toDelete),
+                'products_kept_shared' => count($shared),
+                'product_ids_deleted' => $toDelete,
+            ];
+            $import->delete();
+
+            Log::info('Price list import undone', [
+                'actor_id' => $actor->id,
+                'actor_email' => $actor->email,
+                ...$meta,
+            ]);
+
+            return $meta;
+        });
+    }
+
+    /**
+     * Usuwa cennik producenta wraz z jego kartami — te, których nie przyniósł żaden inny cennik
+     * i które nie mają powiązania B2B. Operacja szeroka: po zwinięciu Cenników do jednego wpisu na
+     * producenta to jest skasowanie całego jego katalogu, a nie jednej aktualizacji.
      *
      * @return array{
      *     deleted_price_list_id: int,
@@ -89,6 +150,49 @@ final class PriceListDeletionService
      * @param  list<int>  $productIds
      * @return list<int>
      */
+    /**
+     * @param  list<mixed>  $raw
+     * @return list<int>
+     */
+    private function productIdsOf(array $raw): array
+    {
+        return array_values(array_unique(array_filter(
+            array_map('intval', $raw),
+            static fn (int $id): bool => $id > 0
+        )));
+    }
+
+    /**
+     * Karty przyniesione także przez inną aktualizację — cofnięcie jednej ich nie zabiera.
+     *
+     * @param  list<int>  $productIds
+     * @return list<int>
+     */
+    private function productIdsReferencedByOtherImports(int $importId, array $productIds): array
+    {
+        if ($productIds === []) {
+            return [];
+        }
+
+        $lookup = array_fill_keys($productIds, true);
+        $shared = [];
+        $others = PriceListImport::query()
+            ->where('id', '!=', $importId)
+            ->whereNotNull('product_ids')
+            ->get(['id', 'product_ids']);
+
+        foreach ($others as $other) {
+            foreach ($other->product_ids ?? [] as $rawId) {
+                $id = (int) $rawId;
+                if (isset($lookup[$id])) {
+                    $shared[$id] = true;
+                }
+            }
+        }
+
+        return array_map('intval', array_keys($shared));
+    }
+
     private function productIdsReferencedByOtherPriceLists(int $priceListId, array $productIds): array
     {
         if ($productIds === []) {

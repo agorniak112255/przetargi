@@ -7,6 +7,7 @@ namespace App\Services\B2b;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\PriceList;
+use App\Models\PriceListImport;
 use App\Models\ProductVariant;
 use Illuminate\Support\Facades\DB;
 
@@ -40,21 +41,33 @@ final class B2bAccountPriceList
      */
     public function resolve(B2bAccount $account, B2bConnector $connector): array
     {
+        $manufacturer = mb_substr($connector::label(), 0, 100);
         $list = $this->current($account);
         $created = false;
-        if ($list === null) {
-            $list = $this->adoptionCandidate($connector::host(), $this->referencedIds($account->id));
-        }
+        // Jeden wpis na producenta, niezależnie od źródła: przebieg B2B dopisuje się do tego samego
+        // cennika, do którego trafiają importy z pliku. Wpis „{host} (API)” z czasów, gdy konto miało
+        // własny wiersz, jest przejmowany, a nie zakładany od nowa.
+        $list ??= PriceList::query()
+            ->where('manufacturer_key', PriceList::manufacturerKey($manufacturer))
+            ->first();
+        $list ??= $this->adoptionCandidate($connector::host(), $this->referencedIds($account->id));
         if ($list === null) {
             $list = new PriceList(['version' => $this->version()]);
             $created = true;
         }
 
         $list->fill([
-            'manufacturer' => mb_substr($connector::label(), 0, 100),
             'original_filename' => self::filename($connector::host()),
             'imported_by' => $account->updated_by ?? $account->created_by,
         ]);
+        // Nazwy istniejącego wpisu przebieg nie nadpisuje: człowiek mógł ją poprawić w panelu, a wpis
+        // i tak odnajduje się po wskaźniku konta. Uzupełniamy tylko to, czego brakuje.
+        if (trim((string) $list->manufacturer) === '') {
+            $list->manufacturer = $manufacturer;
+        }
+        if (trim((string) $list->manufacturer_key) === '') {
+            $list->manufacturer_key = PriceList::manufacturerKey((string) $list->manufacturer);
+        }
         $list->save();
 
         if ((int) $account->last_price_list_id !== (int) $list->id) {
@@ -101,6 +114,26 @@ final class B2bAccountPriceList
             'errors' => array_slice($progress->errors(), 0, self::ERRORS_LIMIT),
             'updated_at' => now(),
         ])->save();
+
+        // Raport przebiegu obok raportów importów z pliku — w Cennikach widać jedną historię producenta,
+        // bez względu na to, czym przyszła kolejna porcja danych.
+        PriceListImport::query()->create([
+            'price_list_id' => $list->id,
+            'source' => PriceListImport::SOURCE_B2B,
+            'version' => $this->version(),
+            'original_filename' => $list->original_filename,
+            'imported_by' => $account->updated_by ?? $account->created_by,
+            'rows_total' => count($productIds),
+            'products_created' => (int) ($run->created ?? 0),
+            'products_updated' => (int) ($run->updated ?? 0),
+            'prices_changed' => (int) ($run->prices_changed ?? 0),
+            'rows_skipped' => (int) ($run->skipped ?? 0),
+            'errors' => array_slice($progress->errors(), 0, self::ERRORS_LIMIT),
+            'price_changes' => array_slice($progress->priceChanges(), 0, self::PRICE_CHANGES_LIMIT),
+            'updated_products' => array_slice($progress->updatedProducts(), 0, self::UPDATED_PRODUCTS_LIMIT),
+            'skipped_details' => array_slice($progress->skippedDetails(), 0, self::SKIPPED_DETAILS_LIMIT),
+            'product_ids' => $productIds,
+        ]);
     }
 
     /**

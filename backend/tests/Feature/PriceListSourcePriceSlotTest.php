@@ -75,9 +75,10 @@ final class PriceListSourcePriceSlotTest extends TestCase
         $this->assertEquals(40.00, $second['price_changes'][0]['purchase_old']);
         $this->assertEquals(44.00, $second['price_changes'][0]['purchase_new']);
         $this->assertEquals(50.00, $second['updated_products'][0]['catalog_old']);
+        // cennik producenta jest jeden, więc historię rozróżnia aktualizacja, nie wpis cennika
         $history = ProductPriceHistory::query()
             ->where('product_id', $card->id)
-            ->where('price_list_id', $second['price_list']->id)
+            ->where('price_list_import_id', $second['price_list_import']->id)
             ->where('source', 'price_list_import')
             ->sole();
         $this->assertEquals(55.00, (float) $history->catalog_price_net);
@@ -86,7 +87,9 @@ final class PriceListSourcePriceSlotTest extends TestCase
         // ten sam plik jeszcze raz: bez zmiany ceny z pliku — bez zmian w raporcie i bez historii
         $third = $this->import('v3', [$this->row('N/IF005', 'Alarm z pliku', 55.00, 44.00, 'Znaki')]);
         $this->assertSame(0, $third['prices_changed']);
-        $this->assertFalse(ProductPriceHistory::query()->where('price_list_id', $third['price_list']->id)->exists());
+        $this->assertFalse(
+            ProductPriceHistory::query()->where('price_list_import_id', $third['price_list_import']->id)->exists()
+        );
     }
 
     public function test_file_import_without_b2b_sets_effective_price_and_name(): void
@@ -140,20 +143,23 @@ final class PriceListSourcePriceSlotTest extends TestCase
         $this->assertSame(1, Product::query()->where('sku', '420')->count());
     }
 
-    public function test_deleting_file_list_removes_only_its_slot_and_keeps_b2b_card(): void
+    public function test_undoing_an_update_keeps_the_price_list_and_deleting_it_removes_only_its_slot(): void
     {
         $card = $this->b2bCard();
-        $older = $this->import('v1', [$this->row('N/IF005', 'Alarm', 50.00, 40.00)])['price_list'];
-        $newer = $this->import('v2', [$this->row('N/IF005', 'Alarm', 55.00, 44.00)])['price_list'];
-        $this->assertSame($newer->id, $this->fileSlot($card)?->price_list_id);
+        $older = $this->import('v1', [$this->row('N/IF005', 'Alarm', 50.00, 40.00)]);
+        $newer = $this->import('v2', [$this->row('N/IF005', 'Alarm', 55.00, 44.00)]);
 
-        // starsza wersja: slot pochodzi z nowszej — zostaje; karta zostaje (w innym cenniku i z B2B)
-        $meta = app(PriceListDeletionService::class)->delete($older->fresh(), $this->user);
+        // jeden wpis na producenta: obie aktualizacje trafiły do tego samego cennika
+        $this->assertSame($older['price_list']->id, $newer['price_list']->id);
+        $this->assertSame($newer['price_list']->id, $this->fileSlot($card)?->price_list_id);
+
+        // cofnięcie starszej aktualizacji: kartę przyniosła też nowsza, więc zostaje razem z ceną
+        $meta = app(PriceListDeletionService::class)->undoImport($older['price_list_import'], $this->user);
         $this->assertSame(0, $meta['products_deleted']);
-        $this->assertSame($newer->id, $this->fileSlot($card)?->price_list_id);
+        $this->assertSame($newer['price_list']->id, $this->fileSlot($card)?->price_list_id);
 
-        // nowsza wersja: karty nie ma w innych cennikach z pliku, ale ma powiązanie B2B — nie jest kasowana
-        $meta = app(PriceListDeletionService::class)->delete($newer->fresh(), $this->user);
+        // usunięcie cennika producenta: karta ma powiązanie B2B, więc zostaje, ale traci cenę z pliku
+        $meta = app(PriceListDeletionService::class)->delete($newer['price_list']->fresh(), $this->user);
         $this->assertSame(0, $meta['products_deleted']);
         $this->assertSame(1, $meta['products_kept_shared']);
         $card->refresh();
