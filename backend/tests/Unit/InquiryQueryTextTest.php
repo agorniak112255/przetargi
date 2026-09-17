@@ -98,6 +98,86 @@ final class InquiryQueryTextTest extends TestCase
         $this->assertSame('Taśma 12,5 mb', InquiryQueryText::withoutPrice('Taśma 12,5 mb'));
     }
 
+    /**
+     * @return list<array{0: string, 1: list<string>}>
+     */
+    public static function packagingLines(): array
+    {
+        return [
+            // liczba przy jednostce fizycznej to wielkość opakowania, nie cena
+            ['Sorbent sypki mineralny, masa netto 20 kg', ['masa netto 20 kg']],
+            ['Pasta BHP do mycia rąk, masa netto 500 g', ['masa netto 500 g']],
+            ['Kanister z pompą, pojemność netto 5 l', ['pojemność netto 5 l']],
+            // wypunktowanie kropkowane poprzedza też ilość i długość, nie tylko cenę
+            ['Taśma antypoślizgowa ......... 18 m', ['18 m']],
+            ['Rękawice nitrylowe jednorazowe ............... 100 szt./op.', ['100 szt']],
+            // „c.” w środku wyrazu nie jest słowem o cenie
+            ['Rękawice powlekane, 100 par rękawic. 9 rozmiar', ['100 par rękawic']],
+        ];
+    }
+
+    /**
+     * Wielkość opakowania i długość to warunki doboru — ich utrata jest cichą
+     * zmianą danych źródłowych, tak samo jak utrata normy.
+     *
+     * @param  list<string>  $mustKeep
+     */
+    #[DataProvider('packagingLines')]
+    public function test_quantities_next_to_a_physical_unit_survive(string $line, array $mustKeep): void
+    {
+        foreach ([InquiryQueryText::forCatalog($line), InquiryQueryText::withoutPrice($line)] as $clean) {
+            foreach ($mustKeep as $needle) {
+                $this->assertStringContainsString($needle, $clean, 'zgubiony warunek: '.$needle);
+            }
+        }
+    }
+
+    public function test_amount_is_never_eaten_only_in_part(): void
+    {
+        $clean = InquiryQueryText::forCatalog('Sorbent sypki mineralny, masa netto 20 kg');
+
+        $this->assertStringContainsString('20 kg', $clean);
+        $this->assertStringNotContainsString(' 0 kg', $clean);
+    }
+
+    /**
+     * @return list<array{0: string}>
+     */
+    public static function foreignPriceLines(): array
+    {
+        return array_map(static fn (string $line): array => [$line], [
+            'Rękawice robocze, cena jednostkowa 189,00',
+            'Buty robocze S3, cena zakupu 18,90',
+            'Mata gumowa, cena jedn. 12,50',
+            'Łopata do śniegu, koszt 45,00',
+            'Fartuch ochronny, wartość netto pozycji: 120,00',
+            'Rękawice robocze wzmacniane 12,50 za szt.',
+            // test broniący rozdzielenia list jednostek: „szt.” po kwocie to nadal cena
+            'Rękawice nitrylowe, cena 24,00 szt.',
+            'Rękawice nitrylowe .......... 24,00 /szt',
+        ]);
+    }
+
+    /**
+     * Cena z cudzej oferty nie może wrócić do klienta obok naszej.
+     */
+    #[DataProvider('foreignPriceLines')]
+    public function test_foreign_price_never_reaches_the_letter(string $line): void
+    {
+        $quote = InquiryQueryText::withoutPrice($line);
+
+        $this->assertDoesNotMatchRegularExpression('/\d[\d ]*[.,]\d{2}/u', $quote, 'cena w cytacie: '.$quote);
+    }
+
+    public function test_quote_made_of_nothing_but_a_price_collapses_to_nothing(): void
+    {
+        // próg „krótkie → oryginał” oddawał klientowi z powrotem samą cenę
+        $this->assertSame('', InquiryQueryText::withoutPrice('cena 39,00 zł'));
+        $this->assertSame('', InquiryQueryText::withoutPrice('c. netto......24,00 PLN/szt'));
+        // ale cytat, który ceny nie miał, zostaje w całości
+        $this->assertSame('XL', InquiryQueryText::withoutPrice('XL'));
+    }
+
     public function test_recognises_lines_without_any_product_name(): void
     {
         $this->assertFalse(InquiryQueryText::hasProductWord('50x100cm'));

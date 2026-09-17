@@ -18,7 +18,23 @@ namespace App\Support;
 final class InquiryQueryText
 {
     /** Słowa, które zdradzają cenę — tylko przy nich wolno usunąć liczbę. */
-    private const PRICE_WORD = '(?:c\.|cena|cenie|ceny|netto|brutto|pln|zł|zl|eur|usd)';
+    private const PRICE_WORD = '(?:c\.|cena|cenie|ceny|cenę|koszt|kosztu|wartość|wartości|netto|brutto|pln|zł|zl|eur|usd)';
+
+    /**
+     * Wtrącenie między słowem o cenie a kwotą: „cena jednostkowa 189,00”,
+     * „wartość netto pozycji: 120,00”. Lista zamknięta — dowolne słowo między
+     * ceną a liczbą pozwoliłoby wyciąć liczbę, która ceną nie jest.
+     */
+    private const PRICE_FILLER = '(?:jednostkow[aeiy]|jedn\.?|zakupu|sprzedaży|sprzedazy|pozycji|brutto|netto)';
+
+    /**
+     * Jednostka fizyczna tuż za liczbą znaczy, że to parametr wyrobu (masa, długość,
+     * pojemność), a nie cena — „masa netto 20 kg” gubiło liczbę razem z warunkiem.
+     */
+    private const PHYSICAL_UNIT = '(?:kg|g|l|ml|t|mm|cm|m|db|kv|v|%|mb|m2|m²)';
+
+    /** Jednostka handlowa: sama z siebie znaczy wielkość opakowania albo ilość. */
+    private const TRADE_UNIT = '(?:sztuk[aeiyę]?|szt\.?|opak\.?|op\.?|kpl\.?|zest\.?|par[aeyę]?)';
 
     /** Liczba w zapisie cenowym: „4 497,00”, „24,00”, „137”. */
     private const AMOUNT = '\d[\d \x{00A0}]*(?:[.,]\d+)?';
@@ -60,8 +76,21 @@ final class InquiryQueryText
         $clean = preg_replace('/\s+/u', ' ', $clean) ?? $clean;
         $clean = trim($clean, " \t\n\r\0\x0B,;:.-–—");
 
-        // Gdyby z cytatu został sam ogryzek, lepszy jest oryginał niż strzępek.
-        return mb_strlen($clean) < 3 ? trim($text) : $clean;
+        // Gdyby z cytatu został sam ogryzek, lepszy jest oryginał niż strzępek —
+        // chyba że oryginał był samą ceną z cudzej oferty. Wtedy pusty cytat jest
+        // jedynym wyjściem: odesłanie klientowi jego ceny obok naszej wprowadza w błąd.
+        if (mb_strlen($clean) >= 3) {
+            return $clean;
+        }
+
+        return self::looksLikePrice($text) ? $clean : trim($text);
+    }
+
+    /** Czy w tekście stała kwota przy słowie o cenie. */
+    private static function looksLikePrice(string $text): bool
+    {
+        return preg_match('/'.self::PRICE_WORD.'/iu', $text) === 1
+            && preg_match('/\d[\d \x{00A0}]*[.,]\d{2}/u', $text) === 1;
     }
 
     /**
@@ -122,22 +151,34 @@ final class InquiryQueryText
     private static function dropPrices(string $text): string
     {
         $unit = '(?:\s*\/\s*(?:szt\.?|sztuk[ai]?|opak\.?|op\.?|kpl\.?|mb|m2|m²|para|par))?';
+        // ogon po kwocie: „18,00 za szt.” — mówi o cenie, nie o ilości
+        $per = '(?:\s*za\s+'.self::TRADE_UNIT.'(?![\p{L}]))?';
         $amount = self::AMOUNT;
         $word = self::PRICE_WORD;
+        $filler = self::PRICE_FILLER;
+        // Kwota bez cofania się w głąb liczby: bez grupy atomowej silnik oddałby
+        // ostatnią cyfrę, żeby wejśrzenie przeszło, i z „20 kg” zostałoby „0 kg”.
+        $sum = '(?>'.$amount.')(?![\d,.])';
+        // przy jednostce fizycznej liczba jest parametrem wyrobu, nie ceną
+        $notPhysical = '(?!\s*'.self::PHYSICAL_UNIT.'(?![\p{L}]))';
 
         $patterns = [
-            // „c. netto......24,00 PLN/szt” i „cena: 39,00 zł”
-            '/(?:'.$word.')(?:\s*'.$word.')*\s*[:.\s]*\.{0,}\s*'.$amount.'\s*(?:'.$word.')?'.$unit.'/iu',
+            // „c. netto......24,00 PLN/szt”, „cena: 39,00 zł”, „cena jednostkowa 189,00”
+            '/(?<![\p{L}])(?:'.$word.')(?:\s*(?:'.$word.'|'.$filler.'))*\s*[:.\s]*\.{0,}\s*'.$sum.$notPhysical.'\s*(?:'.$word.')?'.$unit.$per.'/iu',
             // „4 497,00PLN/szt.” — liczba przyklejona do waluty
-            '/'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.'/iu',
-            // „24,00/szt.” — cena bez waluty. Tylko przy jednostce handlowej i tylko dla
-            // kwoty z groszami: „120,5 g/m2” to gramatura, a „12,5 mb” długość, nie cena.
-            '/\d[\d \x{00A0}]*[.,]\d{2}\s*\/\s*(?:sztuk[ai]?|szt\.?|opak\.?|op\.?|kpl\.?|zest\.?|par[aęy]?)(?![\p{L}\d])/iu',
-            // „......24,00” — po ciągu kropek zawsze stoi cena
-            '/\.{3,}\s*'.$amount.'/u',
+            '/'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.$per.'/iu',
+            // „24,00/szt.” i „12,50 za szt.” — cena bez waluty. Tylko przy jednostce
+            // handlowej i tylko dla kwoty z groszami: „120,5 g/m2” to gramatura,
+            // a „12,5 mb” długość, nie cena.
+            '/\d[\d \x{00A0}]*[.,]\d{2}\s*(?:\/\s*|za\s+)'.self::TRADE_UNIT.'(?![\p{L}\d])/iu',
+            // „......24,00” — po ciągu kropek stoi cena, ale w wypunktowaniu stoi tam
+            // również ilość albo długość („......... 18 m”, „...... 100 szt./op.”)
+            '/\.{3,}\s*'.$sum.'(?!\s*(?:'.self::PHYSICAL_UNIT.'|'.self::TRADE_UNIT.')(?![\p{L}]))/u',
             // osierocone „c. netto”, gdy liczbę zabrał wcześniejszy wzorzec
             '/\bc\.\s*netto\b/iu',
-            '/\bnetto\b|\bbrutto\b/iu',
+            // „masa netto 20 kg” to wielkość opakowania — cytat klienta ma ją zachować
+            '/(?<!masa )(?<!wadze )(?<!waga )(?<!wagi )(?<!pojemność )(?<!pojemności )(?<!zawartość )(?<!zawartości )(?<!objętość )\bnetto\b/iu',
+            '/\bbrutto\b/iu',
         ];
 
         foreach ($patterns as $pattern) {
