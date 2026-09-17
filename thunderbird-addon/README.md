@@ -7,7 +7,9 @@ odpowiedź jako odpowiedź na ten sam mail.
 
 1. Otwierasz mail od klienta i klikasz ikonę dodatku nad wiadomością.
 2. Dodatek pokazuje całą treść maila — możesz ją poprawić przed wysłaniem.
-3. Klikasz **Wyślij do Przetargów**. Aplikacja otwiera się w przeglądarce na tym zapytaniu.
+3. Klikasz **Wyślij do Przetargów**. Analiza trwa nawet ponad minutę i idzie w tle
+   dodatku — okienko możesz zamknąć. Gdy zapytanie jest gotowe, samo otwiera się
+   w przeglądarce i pojawia się powiadomienie.
 4. Wybierasz produkty w aplikacji.
 5. Wracasz do Thunderbirda, klikasz ikonę dodatku i **Wstaw odpowiedź do maila**.
    Otwiera się zwykłe okno odpowiedzi — z adresatem, cytatem i podpisem — z gotową treścią na górze.

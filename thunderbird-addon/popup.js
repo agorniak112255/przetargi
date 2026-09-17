@@ -6,7 +6,7 @@ let message = null
 let inquiryId = null
 
 function show(section) {
-  for (const name of ['setup', 'known', 'fresh']) {
+  for (const name of ['setup', 'known', 'fresh', 'working']) {
     el(name).hidden = name !== section
   }
 }
@@ -48,12 +48,21 @@ async function openInquiryInBrowser(id) {
   await browser.windows.openDefaultBrowser(baseUrl + '/inquiries/' + id)
 }
 
-async function loadKnown(id, replied) {
+function loadKnown(id, replied) {
   inquiryId = id
   el('knownId').textContent = '#' + id
   el('knownReplied').hidden = !replied
   el('knownReplied').textContent = replied ? 'Odpowiedź została już wysłana.' : ''
   show('known')
+}
+
+async function pendingFor(messageId) {
+  const { pending } = await browser.storage.local.get({ pending: {} })
+  const entry = pending[messageId]
+  if (!entry) return null
+  if (Date.now() - (entry.startedAt || 0) > 15 * 60 * 1000) return null
+
+  return entry
 }
 
 async function init() {
@@ -75,18 +84,27 @@ async function init() {
   if (known !== null) {
     try {
       const inquiry = await api('/api/inquiries/' + known)
-      await loadKnown(inquiry.id, inquiry.replied_at !== null)
+      loadKnown(inquiry.id, inquiry.replied_at !== null)
 
       return
     } catch (e) {
-      if (e.status === 404 || e.status === 403) {
-        // zapytanie usunięte albo cudze — zakładamy nowe
-      } else {
+      if (e.status !== 404 && e.status !== 403) {
         status(e.message, 'error')
 
         return
       }
+      // zapytanie usunięte albo cudze — zakładamy nowe
     }
+  }
+
+  const pending = await pendingFor(message.headerMessageId)
+  if (pending && !pending.error) {
+    show('working')
+
+    return
+  }
+  if (pending && pending.error) {
+    status('Poprzednia próba się nie udała: ' + pending.error, 'error')
   }
 
   let full
@@ -122,29 +140,19 @@ async function send() {
     return
   }
 
-  const tone = el('tone').value
-  busy(true, 'Analizuję zapytanie… to może potrwać ponad minutę.')
-  try {
-    const inquiry = await api('/api/inquiries', {
-      method: 'POST',
-      body: {
-        body,
-        subject: message.subject || null,
-        tone,
-        source_channel: 'thunderbird',
-        source_message_id: message.headerMessageId || null,
-      },
-    })
-    await setSettings({ tone })
-    await rememberInquiry(message.headerMessageId, inquiry.id)
-    await openInquiryInBrowser(inquiry.id)
-    status('Gotowe — zapytanie #' + inquiry.id + ' czeka w przeglądarce.', 'ok')
-    await loadKnown(inquiry.id, inquiry.replied_at !== null)
-  } catch (e) {
-    status(e.message, 'error')
-  } finally {
-    busy(false)
-  }
+  busy(true)
+  // Analizę prowadzi tło dodatku, więc zamknięcie okienka jej nie przerywa.
+  browser.runtime.sendMessage({
+    type: 'createInquiry',
+    headerMessageId: message.headerMessageId || null,
+    subject: message.subject || '',
+    body,
+    tone: el('tone').value,
+  })
+
+  show('working')
+  status('')
+  busy(false)
 }
 
 async function insertReply() {
