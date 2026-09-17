@@ -80,10 +80,13 @@ class PriceListImportController extends Controller
                     $file->getClientOriginalName(),
                 );
                 $productsList = $analysis['products'] ?? [];
-                if (isset($analysis['meta']['manufacturer'])) {
+                // analiza uzupełnia to, czego człowiek nie podał — wpisanej nazwy i wersji nie nadpisuje
+                if (trim((string) ($data['manufacturer'] ?? '')) === ''
+                    && isset($analysis['meta']['manufacturer'])) {
                     $manufacturer = (string) $analysis['meta']['manufacturer'];
                 }
-                if (isset($analysis['meta']['version'])) {
+                if (trim((string) ($data['version'] ?? '')) === ''
+                    && isset($analysis['meta']['version'])) {
                     $version = (string) $analysis['meta']['version'];
                 }
             } catch (Throwable $e) {
@@ -129,10 +132,13 @@ class PriceListImportController extends Controller
                     $manufacturer,
                     $file->getClientOriginalName(),
                 );
-                if (isset($analysis['meta']['manufacturer'])) {
+                // analiza uzupełnia to, czego człowiek nie podał — wpisanej nazwy i wersji nie nadpisuje
+                if (trim((string) ($data['manufacturer'] ?? '')) === ''
+                    && isset($analysis['meta']['manufacturer'])) {
                     $manufacturer = (string) $analysis['meta']['manufacturer'];
                 }
-                if (isset($analysis['meta']['version'])) {
+                if (trim((string) ($data['version'] ?? '')) === ''
+                    && isset($analysis['meta']['version'])) {
                     $version = (string) $analysis['meta']['version'];
                 }
                 if (str_starts_with((string) ($analysis['source'] ?? ''), 'pdf')) {
@@ -321,23 +327,17 @@ class PriceListImportController extends Controller
         $meta = $this->metaDetector->resolve(null, $filename, $aiDetected, null, null);
 
         $manufacturer = $meta['manufacturer'];
-        $fileBrand = $fromFile['manufacturer'];
-        // formularz tylko gdy plik/AI nie wskazują innej marki
+
+        // Nazwa wpisana w formularzu wygrywa. Pole jest wypełniane wynikiem analizy, więc kiedy stoi w nim
+        // coś innego, to znaczy, że człowiek poprawił maszynę — a maszyna myli się tu regularnie: w cenniku
+        // ARTRY nagłówek arkusza niesie markę konstrukcji ARELAX® i to ją wykrywa AI, choć producentem jest
+        // ARTRA. Dotąd poprawka przepadała, bo brana była tylko wtedy, gdy zgadzała się z plikiem albo z AI.
         if ($formManufacturer !== '') {
-            $formNorm = mb_strtolower($formManufacturer);
-            $metaNorm = mb_strtolower($manufacturer);
-            $fileNorm = $fileBrand !== null ? mb_strtolower($fileBrand === 'EMA' ? 'Ansell' : $fileBrand) : null;
-            $aiNorm = $aiDetected !== null ? mb_strtolower($aiDetected) : null;
-            $agreesWithFile = $fileNorm !== null && ($formNorm === $fileNorm || ($formNorm === 'ansell' && $fileNorm === 'ansell'));
-            $agreesWithAi = $aiNorm !== null && $formNorm === $aiNorm;
-            if ($fileBrand === null && $aiDetected === null) {
-                $manufacturer = $formManufacturer;
-            } elseif ($agreesWithFile || $agreesWithAi || $formNorm === $metaNorm) {
-                $manufacturer = $formManufacturer;
-            }
+            $manufacturer = $formManufacturer === 'EMA' ? 'Ansell' : $formManufacturer;
         }
 
-        $version = $fromFile['version'] ?? ($formVersion !== '' ? $formVersion : $meta['version']);
+        // To samo dla wersji: wpisana ręcznie bije tę wyłuskaną z nazwy pliku.
+        $version = $formVersion !== '' ? $formVersion : ($fromFile['version'] ?? $meta['version']);
 
         return [$manufacturer, $version];
     }
