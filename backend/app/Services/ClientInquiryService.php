@@ -1327,6 +1327,8 @@ final class ClientInquiryService
                 'quote' => $line,
                 'qty' => $m[1],
                 'qty_unit_given' => $this->nullable($m[2] ?? null) !== null,
+                // treść wiersza po numerze — do szukania ilości, gdy numer był numeracją
+                'qty_rest' => $rest,
                 // jednostka tylko taka, jaka stoi w mailu — nie dopisujemy „szt.”
                 'unit' => $this->nullable($m[2] ?? null),
                 'query' => $this->queryFromLine($rest),
@@ -1384,7 +1386,7 @@ final class ClientInquiryService
         $unitGiven = array_map(static fn (array $item): bool => ($item['qty_unit_given'] ?? false) === true, $items);
         if (count($items) < 2 || ! $this->looksLikeEnumeration($numbers, $unitGiven)) {
             return array_map(function (array $item): array {
-                unset($item['qty_unit_given']);
+                unset($item['qty_unit_given'], $item['qty_rest']);
 
                 return $item;
             }, $items);
@@ -1393,14 +1395,62 @@ final class ClientInquiryService
         $out = [];
         foreach ($items as $item) {
             if (($item['qty_unit_given'] ?? false) !== true) {
-                $item['qty'] = null;
-                $item['qty_source'] = 'enumeration';
+                // „1. 20 szt. Rękawice” — numer pozycji z przodu, ilość dalej w wierszu
+                $inside = $this->qtyInsideRow((string) ($item['qty_rest'] ?? ''));
+                $item['qty'] = $inside['qty'] ?? null;
+                $item['unit'] = $inside['unit'] ?? $item['unit'] ?? null;
+                $item['qty_source'] = $inside === null ? 'enumeration' : 'row';
             }
-            unset($item['qty_unit_given']);
+            unset($item['qty_unit_given'], $item['qty_rest']);
             $out[] = $item;
         }
 
         return $out;
+    }
+
+    /**
+     * Ilość z wnętrza wiersza, gdy wiodąca liczba okazała się numerem pozycji:
+     * „1. 20 szt. Rękawice”. Pomijamy wielkość opakowania („op. 100 szt.”,
+     * „100 szt./op.”) — klient chce jedno opakowanie, nie sto sztuk — oraz liczby
+     * stojące przy cenie. Brak pewnego trafienia zostawia ilość pustą: brak jest
+     * lepszy niż liczba, której klient nie podał.
+     *
+     * @return array{qty: string, unit: string}|null
+     */
+    private function qtyInsideRow(string $rest): ?array
+    {
+        $found = preg_match_all(
+            '/(?<![\p{L}\d,.])(\d{1,5})\s*('.self::UNIT_PATTERN.')/iu',
+            $rest,
+            $all,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
+        );
+        if ($found === false || $found === 0) {
+            return null;
+        }
+
+        foreach ($all as $match) {
+            $offset = (int) $match[0][1];
+            $before = mb_strtolower(substr($rest, 0, $offset));
+            $after = substr($rest, $offset + strlen((string) $match[0][0]));
+
+            // „op. 100 szt.”, „w opakowaniu 100 szt.” — to zawartość opakowania
+            if (preg_match('/(?:op\.|opak\.?|opakowani[ue]|pak\.|zawiera(?:jący|jące)?|po)\s*$/iu', $before) === 1) {
+                continue;
+            }
+            // „100 szt./op.”, „100 szt. w opak.” — tak samo
+            if (preg_match('/^\s*(?:\/\s*op|w\s+opak)/iu', $after) === 1) {
+                continue;
+            }
+            // liczba tuż za słowem o cenie jest ceną, nie ilością
+            if (preg_match('/(?:cena|cenie|ceny|cenę|c\.|koszt|wartość|netto|brutto|pln|zł|zl|eur|usd)[^\p{L}\d]*$/iu', $before) === 1) {
+                continue;
+            }
+
+            return ['qty' => $this->formatQty($match[1][0]), 'unit' => trim($match[2][0])];
+        }
+
+        return null;
     }
 
     /**

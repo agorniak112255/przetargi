@@ -386,6 +386,28 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame('10', $resolved[0]['size']);
     }
 
+    public function test_quantity_inside_a_numbered_row_is_found_but_never_invented(): void
+    {
+        $items = $this->service()->parseLineItemsFromBody(
+            '1. 20 szt. Rekawice nitrylowe rozmiar L'
+            .'
+2. Rekawice nitrylowe, op. 100 szt.'
+            .'
+3. Buty robocze, c. netto 24,00 PLN/szt'
+            .'
+4. Kask ochronny 10 szt./op.'
+        );
+
+        // ilosc stala dalej w wierszu, za numerem pozycji
+        $this->assertSame(['20', 'szt.', 'row'], [$items[0]['qty'], $items[0]['unit'], $items[0]['qty_source']]);
+        $this->assertSame('L', $items[0]['size']);
+        // zawartosc opakowania to nie zamawiana ilosc
+        $this->assertNull($items[1]['qty']);
+        $this->assertNull($items[3]['qty']);
+        // liczba przy cenie tez nie jest iloscia
+        $this->assertNull($items[2]['qty']);
+    }
+
     public function test_lost_quantity_is_flagged_for_the_salesperson(): void
     {
         $svc = $this->service();
