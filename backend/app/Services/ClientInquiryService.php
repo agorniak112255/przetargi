@@ -1320,8 +1320,15 @@ final class ClientInquiryService
                 continue;
             }
             $marked = $this->positionMarker($line);
-            // ponumerowane pytanie („1) Czy posiadacie…?”) nie jest pozycją zamówienia
-            if ($marked !== null && ! str_ends_with($marked['rest'], '?')) {
+            if ($marked !== null && $this->isQuestionLine($marked['rest'])) {
+                // Ponumerowane pytanie („1) Czy posiadacie…?”) nie jest pozycją zamówienia,
+                // ale jego numer należy do numeracji: pominięty rwał ciąg i numery
+                // pozostałych wierszy wracały do oferty jako ilości.
+                $leadingNumbers[] = $marked['number'];
+
+                continue;
+            }
+            if ($marked !== null) {
                 // Jawny znacznik pozycji: numer z niego nigdy nie jest ilością.
                 // Ilość może stać dalej w wierszu — wtedy i tylko wtedy ją bierzemy.
                 $rest = $marked['rest'];
@@ -1352,8 +1359,13 @@ final class ClientInquiryService
                 continue;
             }
             $rest = trim($m[3]);
-            $size = $this->sizeFromLine($rest);
             $leadingNumbers[] = (int) $m[1];
+            // „1. Czy posiadacie rękawice?” — pytanie w liście numerowanym tak samo
+            // nie jest pozycją zamówienia
+            if ($this->isQuestionLine($rest)) {
+                continue;
+            }
+            $size = $this->sizeFromLine($rest);
             $items[] = [
                 'id' => 'item_'.$index,
                 'quote' => $line,
@@ -1387,7 +1399,7 @@ final class ClientInquiryService
         if (preg_match('/\b(?:rozmiar|rozm\.?|roz\.)(?:[:.\s]+|(?=\d))([\p{L}\d\/,.\-]+)/iu', $line, $m) !== 1) {
             return null;
         }
-        $size = trim(trim($m[1]), '.,-');
+        $size = trim(trim($m[1]), '.,-?!');
 
         // Rozmiarem jest liczba („43”, „40-42”, „1/2”, „40x60cm”) albo oznaczenie
         // literowe („M”, „2XL”). „Rozmiar do uzgodnienia”, „rozmiar uniwersalny” czy
@@ -1417,7 +1429,8 @@ final class ClientInquiryService
     private function dropEnumerationQty(array $items, array $numbers): array
     {
         $unitGiven = array_map(static fn (array $item): bool => ($item['qty_unit_given'] ?? false) === true, $items);
-        if (count($items) < 2 || ! $this->looksLikeEnumeration($numbers, $unitGiven)) {
+        // liczy się, ile wierszy było ponumerowanych — pominięte pytanie też było
+        if (count($numbers) < 2 || ! $this->looksLikeEnumeration($numbers, $unitGiven)) {
             return array_map(function (array $item): array {
                 unset($item['qty_unit_given'], $item['qty_rest']);
 
@@ -1457,7 +1470,26 @@ final class ClientInquiryService
             return $rest;
         }
 
-        return trim((string) substr_replace($rest, ' ', $inside['at'], $inside['len']));
+        $out = (string) substr_replace($rest, ' ', $inside['at'], $inside['len']);
+        // „Rękawice 20 szt., dostawa” → bez osieroconego przecinka po wyciętej ilości
+        $out = preg_replace('/\s+([,;])/u', '$1', $out) ?? $out;
+
+        return trim($out);
+    }
+
+    /**
+     * Pytanie o ofertę, a nie pozycja zamówienia: „Czy posiadacie…?”, „Jaki jest termin
+     * dostawy?”. Rozpoznajemy je po słowie pytającym NA POCZĄTKU wiersza i znaku zapytania
+     * na końcu — „Rękawice nitrylowe rozmiar XL?” to pytanie o konkretny wyrób i pozycją
+     * jak najbardziej jest.
+     */
+    private function isQuestionLine(string $rest): bool
+    {
+        if (! str_ends_with(trim($rest), '?')) {
+            return false;
+        }
+
+        return preg_match('/^(?:czy|jak[ai]?|jakie|jakim|kiedy|gdzie|ile|w\s+jakim|prosz[ęe]\s+o\s+podanie|prosimy\s+o\s+podanie)\b/iu', trim($rest)) === 1;
     }
 
     /**
@@ -1513,7 +1545,7 @@ final class ClientInquiryService
 
             // „op. 100 szt.”, „w opakowaniu 100 szt.”, „a 100 szt.”, „x 100 szt.” —
             // to zawartość opakowania, a klient zamawia opakowania, nie sztuki
-            if (preg_match('/(?:op\.|opak\.?|opakowani[ue]|opakowanie zbiorcze|pak\.|karton(?:ie|ik)?|zawiera(?:jący|jące)?|po|(?<![\p{L}])[ax])\s*[-–—]?\s*$/iu', $before) === 1) {
+            if (preg_match('/(?:op\.|opak\.?|opakowani[ue]|opakowanie zbiorcze|pak\.|zawiera(?:jący|jące)?|po|(?<![\p{L}\d])[ax])\s*[-–—]?\s*$/iu', $before) === 1) {
                 continue;
             }
             // „100 szt./op.”, „100 szt. w opak.”, „20 szt. w kartonie” — tak samo

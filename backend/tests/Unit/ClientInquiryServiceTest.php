@@ -386,6 +386,51 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame('10', $resolved[0]['size']);
     }
 
+    public function test_question_lines_do_not_break_the_numbering(): void
+    {
+        $svc = $this->service();
+
+        // pominiete pytanie nadal liczy sie do ciagu — inaczej numery kolejnych
+        // wierszy wracaly do oferty jako ilosci
+        $mixed = $svc->parseLineItemsFromBody(
+            '1) Czy posiadacie rekawice nitrylowe?
+2. Buty robocze S3 rozmiar 44
+3. Kask ochronny bialy'
+        );
+        $this->assertSame([null, null], array_column($mixed, 'qty'));
+        $this->assertSame(['Buty robocze S3', 'Kask ochronny bialy'], array_column($mixed, 'query'));
+
+        // pytanie w liscie „1.” tez nie jest pozycja
+        $dots = $svc->parseLineItemsFromBody(
+            '1. Czy posiadacie rekawice nitrylowe?
+2. Buty robocze S3'
+        );
+        $this->assertSame(['Buty robocze S3'], array_column($dots, 'query'));
+        $this->assertNull($dots[0]['qty']);
+
+        // ale pytanie o konkretny wyrob jest pozycja
+        $products = $svc->parseLineItemsFromBody(
+            '1) Rekawice nitrylowe rozmiar XL?
+2) Buty robocze S3 rozmiar 44?'
+        );
+        $this->assertCount(2, $products);
+        $this->assertSame(['XL', '44'], array_column($products, 'size'));
+    }
+
+    public function test_norm_code_before_the_quantity_is_not_a_package_size(): void
+    {
+        // „4121X 100 par” to kod normy przed iloscia, a nie zawartosc opakowania
+        $items = $this->service()->parseLineItemsFromBody(
+            '1. Rekawice EN 388 4121X 100 par
+2. Karton zbiorczy 20 szt.
+3. Rekawice lateksowe a 100 szt.'
+        );
+
+        $this->assertSame('100', $items[0]['qty']);
+        $this->assertSame('20', $items[1]['qty']);
+        $this->assertNull($items[2]['qty']);
+    }
+
     public function test_mixed_markers_and_numbers_are_one_numbering(): void
     {
         $svc = $this->service();

@@ -34,7 +34,7 @@ final class InquiryQueryText
     private const PHYSICAL_UNIT = '(?:kg|g|l|ml|t|mm|cm|m|db|kv|v|%|mb|m2|m²)';
 
     /** Jednostka handlowa: sama z siebie znaczy wielkość opakowania albo ilość. */
-    private const TRADE_UNIT = '(?:sztuk[aeiyę]?|szt\.?|opak\.?|op\.?|kpl\.?|zest\.?|par[aeyę]?)';
+    private const TRADE_UNIT = '(?:sztuk[aeiyę]?|szt\.?|opak\.?|op\.?|kpl\.?|komplet[a-zóy]*|zest\.?|zestaw[a-zóy]*|par[aeyę]?)';
 
     /**
      * Liczba w zapisie cenowym: „4 497,00”, „1.250,00”, „24,00”, „137”. Grupy tysięcy
@@ -55,13 +55,14 @@ final class InquiryQueryText
 
         // Ciągi kropek („c. netto......24,00”) i osierocone separatory po cięciu.
         $text = preg_replace('/\.{2,}/u', ' ', $text) ?? $text;
+        $text = preg_replace('/[(\[]\s*[)\]]/u', ' ', $text) ?? $text;
         // „Wycieraczka gumowa:rozm:” — rozmiar stoi dopiero w następnej linii
         $text = preg_replace('/\s*[:,]?\s*\b(?:rozmiar|rozm)\.?\s*[:.]?\s*$/iu', '', $text) ?? $text;
         // urwane „, c” z ceny rozbitej na dwie linie („…, c.\n netto....4 497,00 PLN”)
         $text = preg_replace('/[,;]?\s*\bc\.?\s*$/iu', '', $text) ?? $text;
         $text = preg_replace('/\s*[,;:]\s*(?=[,;:]|$)/u', ' ', $text) ?? $text;
         $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
-        $text = trim($text, " \t\n\r\0\x0B,;:.-–—");
+        $text = trim($text, " \t\n\r\0\x0B,;:.-–—?!");
 
         return mb_substr(trim($text), 0, 140);
     }
@@ -80,6 +81,8 @@ final class InquiryQueryText
         $clean = preg_replace('/\s+/u', ' ', $clean) ?? $clean;
         // po wycięciu ceny zostawał podwójny przecinek: „Rękawice, , rozmiar 9”
         $clean = preg_replace('/(?:\s*[,;]\s*){2,}/u', ', ', $clean) ?? $clean;
+        // „Rekawice 24,00 (netto)” — po kwocie zostawal pusty nawias
+        $clean = preg_replace('/\s*[(\[]\s*[)\]]/u', '', $clean) ?? $clean;
         $clean = trim($clean, " \t\n\r\0\x0B,;:.-–—");
 
         // Gdyby z cytatu został sam ogryzek, lepszy jest oryginał niż strzępek —
@@ -186,12 +189,12 @@ final class InquiryQueryText
             // również ilość albo długość („......... 18 m”, „...... 100 szt./op.”,
             // „....... 32 dB”, „....... 3 worki”). Kwotę bierzemy tylko wtedy, gdy za nią
             // stoi waluta albo koniec zapisu — jednostka po liczbie znaczy, że to nie cena.
-            '/\.{3,}\s*'.$sum.'(?=\s*(?:pln|zł|zl|eur|usd|netto|brutto)(?![\p{L}])|\s*[,;)\]]|\s*\.(?!\d)|\s*$)/iu',
+            '/\.{3,}\s*'.$sum.'(?:\s*[-–—]\s*'.$amount.')?(?=\s*(?:pln|zł|zl|eur|usd|netto|brutto)(?![\p{L}])|\s*za\s+(?:\d{1,3}\s*)?'.self::TRADE_UNIT.'|\s*[(\[,;)\]]|\s*\.(?!\d)|\s*$)(?:\s*'.$word.')*'.$unit.$per.$bare.'/iu',
             // osierocone „c. netto”, gdy liczbę zabrał wcześniejszy wzorzec
             '/\bc\.\s*netto\b/iu',
             // „masa netto 20 kg”, „waga produktu brutto 25 kg” — tu „netto” opisuje
             // wielkość opakowania, a nie cenę, i cytat klienta ma je zachować
-            '/\b(?:netto|brutto)\b(?!\s*\d[\d,. ]*\s*'.self::PHYSICAL_UNIT.'(?![\p{L}]))/iu',
+            '/\b(?:netto|brutto)\b(?!\s*[:=]?\s*(?:ok\.?\s+|ponad\s+|min\.?\s+|maks\.?\s+)?\d[\d,. ]*\s*'.self::PHYSICAL_UNIT.'(?![\p{L}]))/iu',
         ];
 
         foreach ($patterns as $pattern) {

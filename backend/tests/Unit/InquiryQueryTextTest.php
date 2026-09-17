@@ -115,6 +115,10 @@ final class InquiryQueryTextTest extends TestCase
             ['Nauszniki przeciwhałasowe ....... 32 dB', ['32 dB']],
             ['Kabel elektroizolacyjny ....... 1 kV', ['1 kV']],
             ['Sorbent sypki ....... 20 KG', ['20 KG']],
+            // między „netto” a liczbą bywa dwukropek albo „ok.”
+            ['Sorbent sypki, masa netto: 20 kg', ['masa netto: 20 kg']],
+            ['Worek BIG BAG, waga netto ok. 25 kg', ['waga netto ok. 25 kg']],
+            ['Sorbent sypki, masa brutto 25 kg', ['masa brutto 25 kg']],
             // „c.” w środku wyrazu nie jest słowem o cenie
             ['Rękawice powlekane, 100 par rękawic. 9 rozmiar', ['100 par rękawic']],
         ];
@@ -163,6 +167,12 @@ final class InquiryQueryTextTest extends TestCase
             'Mata gumowa przemysłowa, cena 1.250,00 zł',
             'Drabina aluminiowa, c. netto......1.250,00',
             'Kask ochronny, cena 24,00 zł za 1 szt.',
+            // po ciągu kropek cena bywa opisana szerzej
+            'Rękawice nitrylowe ...... 24,00 za 1 szt.',
+            'Rękawice nitrylowe ...... 24,00 (netto)',
+            'Rękawice nitrylowe ...... 24,00 - 30,00',
+            'Rękawice nitrylowe ...... 24,00 za komplet',
+            'Rękawice nitrylowe ...... 24,00 netto/szt',
         ]);
     }
 
