@@ -184,6 +184,14 @@ function hasDescription(p: Product): boolean {
   return Boolean(p.description && p.description.trim() !== '')
 }
 
+/**
+ * Karta bez opisu, ale z wierszami pobranymi z karty u dostawcy (product_shop_cards). Nie jest to opis wyrobu —
+ * status AI dalej pokazuje „Brak” — ale coś o wyrobie wiadomo, więc lista daje podgląd zamiast „—”.
+ */
+function hasShopFields(p: Product): boolean {
+  return Boolean(p.has_shop_fields)
+}
+
 type SortKey =
   | 'sku'
   | 'name'
@@ -1137,11 +1145,15 @@ export function Products() {
                     {/* Długa nazwa do trzech linii (wiersz i tak ma wysokość zdjęcia i przycisków); pełna w podpowiedzi.
                         Z opisem: kliknięcie nazwy otwiera ten sam podgląd co „Opis” — wygląd tekstu bez zmian,
                         podkreślenie tylko pod myszką. */}
-                    {hasDescription(p) ? (
+                    {hasDescription(p) || hasShopFields(p) ? (
                       <button
                         type="button"
                         onClick={() => setPreviewId(p.id)}
-                        title={`${p.name} — kliknij, aby zobaczyć opis`}
+                        title={
+                          hasDescription(p)
+                            ? `${p.name} — kliknij, aby zobaczyć opis`
+                            : `${p.name} — kliknij, aby zobaczyć dane ze sklepu dostawcy`
+                        }
                         className="block w-full cursor-pointer text-left hover:underline focus-visible:underline"
                       >
                         <span className="line-clamp-3 break-words">{p.name}</span>
@@ -1186,6 +1198,15 @@ export function Products() {
                         className="rounded border border-green-300 bg-green-50 px-2 py-1 text-[11px] text-green-800 hover:bg-green-100"
                       >
                         Opis
+                      </button>
+                    ) : hasShopFields(p) ? (
+                      <button
+                        type="button"
+                        onClick={() => setPreviewId(p.id)}
+                        title="Brak opisu wyrobu, ale są wiersze z karty u dostawcy — kliknij, aby je zobaczyć"
+                        className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-900 hover:bg-amber-100"
+                      >
+                        Ze sklepu
                       </button>
                     ) : (
                       <span className="text-slate-400">—</span>

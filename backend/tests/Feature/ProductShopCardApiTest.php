@@ -129,6 +129,32 @@ final class ProductShopCardApiTest extends TestCase
             ->assertJsonPath('shop_fields.0.sections.0.section', 'Z wierszami');
     }
 
+    public function test_index_flags_cards_with_shop_fields(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $withCard = $this->product('SHOP-4');
+        $withoutCard = $this->product('SHOP-5');
+        $account = $this->account('anro', 'b2b.anro.net.pl');
+
+        ProductShopCard::query()->create([
+            'product_id' => $withCard->id,
+            'b2b_account_id' => $account->id,
+            'source_url' => null,
+            'fields' => [
+                ['section' => 'Informacje handlowe', 'rows' => [['name' => 'Kod towaru', 'value' => '67E-LS PC']]],
+            ],
+            'synced_at' => Carbon::parse('2026-09-16 08:00:00'),
+        ]);
+
+        $rows = collect($this->getJson('/api/products?per_page=50')->assertOk()->json('data'))->keyBy('sku');
+
+        $this->assertTrue($rows['SHOP-4']['has_shop_fields']);
+        $this->assertFalse($rows['SHOP-5']['has_shop_fields']);
+        // sama flaga: wiersze idą dopiero w karcie szczegółów
+        $this->assertArrayNotHasKey('shop_fields', $rows['SHOP-4']);
+        $this->assertArrayNotHasKey('shop_cards_exists', $rows['SHOP-4']);
+    }
+
     private function product(string $sku): Product
     {
         return Product::query()->create([

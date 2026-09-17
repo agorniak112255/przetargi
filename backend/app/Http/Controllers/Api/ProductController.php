@@ -67,6 +67,9 @@ class ProductController extends Controller
                 'enrichment_error',
             ])
             ->withCount(['substitutes', 'images', 'documents'])
+            // Karta bez opisu może mieć wiersze ze sklepu dostawcy — lista ma to pokazać zamiast samego „—”.
+            // Sama flaga, bez treści: wiersze idą dopiero w /products/{id} (shop_fields).
+            ->withExists('shopCards')
             ->with([
                 'images' => static fn ($q) => $q->orderBy('sort_order')->orderBy('id'),
                 'documents' => static fn ($q) => $q->orderBy('sort_order')->orderBy('id'),
@@ -239,6 +242,8 @@ class ProductController extends Controller
                 'sort_order' => $doc->sort_order,
             ])->values()->all();
             $row['presta_export'] = $this->prestaExportPayload($product);
+            $row['has_shop_fields'] = (bool) $product->getAttribute('shop_cards_exists');
+            unset($row['shop_cards_exists']);
 
             return $this->fx->appendPricePln($row);
         });

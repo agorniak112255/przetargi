@@ -12,6 +12,7 @@ import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 import { CardConflictsModal } from './CardConflictsModal'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 import { RequirementCheckList } from './RequirementCheckList'
+import { ShopFieldsTables } from './ShopFieldsTables'
 
 type Props = {
   productId: number | null
@@ -109,6 +110,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
   }, [productId, onClose, conflictsOpen])
 
   const bodyText = useMemo(() => (product ? descriptionSearchText(product) : ''), [product])
+  const shopFields = product?.shop_fields ?? []
 
   const findHits = useMemo(() => findAllOffsets(bodyText, find), [bodyText, find])
   const tokenHitCounts = useMemo(
@@ -423,12 +425,23 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
 
           <div ref={bodyRef} className="min-h-0 overflow-y-auto px-5 py-4">
             {product ? (
-              <DescriptionLayoutView
-                product={product}
-                queryTokens={tokens}
-                findPhrase={find}
-                activeFindIndex={safeIndex}
-              />
+              <>
+                <DescriptionLayoutView
+                  product={product}
+                  queryTokens={tokens}
+                  findPhrase={find}
+                  activeFindIndex={safeIndex}
+                />
+                {/* Wiersze z karty u dostawcy pod opisem, nie zamiast niego: karta bez opisu nadal na niego czeka,
+                    ale nie jest pusta — te dane trzeba widzieć przy weryfikacji. Wyszukiwarka fraz ich nie liczy,
+                    bo obejmuje tylko treść opisu. */}
+                {shopFields.length > 0 && (
+                  <div className="mt-4 border-t border-slate-100 pt-3">
+                    <p className="mb-2 text-xs font-semibold text-slate-700">Dane ze sklepu dostawcy</p>
+                    <ShopFieldsTables sources={shopFields} />
+                  </div>
+                )}
+              </>
             ) : (
               !loading && <p className="text-sm text-slate-500">Brak opisu w karcie.</p>
             )}

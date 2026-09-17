@@ -282,6 +282,8 @@ export type Product = {
   source_prices?: ProductSourcePrice[]
   /** Karta szczegółów: tabelki z kart wyrobu u dostawców (product_shop_cards) — osobno od opisu. */
   shop_fields?: ProductShopCardSource[]
+  /** Lista produktów: karta ma wiersze ze sklepu dostawcy (sama flaga; treść dopiero w karcie szczegółów). */
+  has_shop_fields?: boolean
   special_prices?: Array<{
     id: number
     client_id: number | null
