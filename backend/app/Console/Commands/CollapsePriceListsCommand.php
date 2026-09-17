@@ -34,27 +34,42 @@ final class CollapsePriceListsCommand extends Command
     public function handle(): int
     {
         $apply = (bool) $this->option('apply');
+        $missingKeys = $this->rowsWithoutKey();
         $groups = $this->groups();
 
-        if ($groups->isEmpty()) {
-            $this->info('Nie ma czego zwijać — każdy producent ma już jeden wpis.');
+        if ($missingKeys->isNotEmpty()) {
+            $this->info('Wpisów bez klucza producenta: '.$missingKeys->count()
+                .' — bez niego kolejny import założyłby obok nich nowy wiersz.');
+        }
+
+        if ($groups->isEmpty() && $missingKeys->isEmpty()) {
+            $this->info('Nie ma czego zwijać — każdy producent ma już jeden wpis i swój klucz.');
 
             return self::SUCCESS;
         }
 
-        $this->table(
-            ['Klucz producenta', 'Zapisy nazwy', 'Wpisów', 'Zostaje', 'Kart łącznie'],
-            $this->previewRows($groups),
-        );
+        if ($groups->isNotEmpty()) {
+            $this->table(
+                ['Klucz producenta', 'Zapisy nazwy', 'Wpisów', 'Zostaje', 'Kart łącznie'],
+                $this->previewRows($groups),
+            );
+        }
 
         $collapsed = $groups->sum(static fn (Collection $rows): int => $rows->count() - 1);
         $this->line('');
-        $this->info('Grup: '.$groups->count().', wpisów do zwinięcia: '.$collapsed.'.');
+        $this->info('Grup do scalenia: '.$groups->count().', wpisów do zwinięcia: '.$collapsed.'.');
 
         if (! $apply) {
             $this->warn('Podgląd — nic nie zapisano. Zapis: --apply.');
 
             return self::SUCCESS;
+        }
+
+        // Klucz dostaje KAŻDY wpis, nie tylko scalany: producent z jednym cennikiem też musi dać się
+        // odnaleźć przy następnym imporcie, inaczej powstałby obok niego drugi wiersz.
+        $keyed = $this->fillMissingKeys();
+        if ($keyed > 0) {
+            $this->info('Uzupełniono klucz producenta w '.$keyed.' wpisach.');
         }
 
         $moved = 0;
@@ -65,6 +80,33 @@ final class CollapsePriceListsCommand extends Command
         $this->info('Zwinięto. Przeniesionych aktualizacji do dziennika: '.$moved.'.');
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Wpisy bez klucza producenta — po zwinięciu każdy musi go mieć, także ten jedyny w swojej grupie.
+     *
+     * @return Collection<int, PriceList>
+     */
+    private function rowsWithoutKey(): Collection
+    {
+        return PriceList::query()
+            ->where(static fn ($query) => $query->whereNull('manufacturer_key')->orWhere('manufacturer_key', ''))
+            ->get();
+    }
+
+    private function fillMissingKeys(): int
+    {
+        $n = 0;
+        foreach ($this->rowsWithoutKey() as $row) {
+            $key = PriceList::manufacturerKey((string) $row->manufacturer);
+            if ($key === '') {
+                continue;
+            }
+            $row->forceFill(['manufacturer_key' => $key])->save();
+            $n++;
+        }
+
+        return $n;
     }
 
     /**

@@ -120,6 +120,28 @@ final class CollapsePriceListsCommandTest extends TestCase
         $this->assertSame(2, PriceListImport::query()->count());
     }
 
+    public function test_apply_gives_a_key_to_manufacturers_that_have_a_single_entry(): void
+    {
+        $lonely = PriceList::query()->create(['manufacturer' => 'CANIS', 'version' => 'v1']);
+        $this->assertNull($lonely->manufacturer_key);
+
+        $this->artisan('price-lists:collapse --apply')->assertSuccessful();
+
+        // bez klucza kolejny import założyłby obok tego wpisu drugi, czyli dokładnie to, co zwijamy
+        $this->assertSame('canis', $lonely->fresh()->manufacturer_key);
+    }
+
+    public function test_preview_reports_entries_without_a_key_even_when_nothing_is_merged(): void
+    {
+        PriceList::query()->create(['manufacturer' => 'CANIS', 'version' => 'v1']);
+
+        $this->artisan('price-lists:collapse')
+            ->expectsOutputToContain('Wpisów bez klucza producenta: 1')
+            ->assertSuccessful();
+
+        $this->assertNull(PriceList::query()->sole()->manufacturer_key);
+    }
+
     /**
      * @return array{0: PriceList, 1: PriceList}
      */
