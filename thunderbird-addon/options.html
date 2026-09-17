@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <title>Supon Przetargi — ustawienia</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="options">
+  <h1>Supon Przetargi</h1>
+
+  <div id="status" class="status" hidden></div>
+
+  <section>
+    <h2>Połączenie z aplikacją</h2>
+    <p id="connected" class="muted" hidden></p>
+
+    <label class="field">
+      <span>Adres aplikacji</span>
+      <input id="baseUrl" type="url" autocomplete="off">
+    </label>
+
+    <label class="field">
+      <span>E-mail</span>
+      <input id="email" type="email" autocomplete="username">
+    </label>
+
+    <label class="field">
+      <span>Hasło</span>
+      <input id="password" type="password" autocomplete="current-password">
+    </label>
+    <p class="muted">Hasło służy tylko do jednorazowego zalogowania — dodatek go nie zapisuje.</p>
+
+    <button id="login" class="primary">Połącz</button>
+    <button id="check" class="secondary">Sprawdź połączenie</button>
+    <button id="logout" class="secondary">Odłącz</button>
+  </section>
+
+  <section>
+    <h2>Odpowiedzi</h2>
+    <label class="check">
+      <input id="useAppSubject" type="checkbox">
+      <span>Używaj tematu z aplikacji zamiast „Re: …”</span>
+    </label>
+    <p class="muted">
+      Domyślnie zostaje temat z Thunderbirda, bo część skrzynek (np. Gmail) łączy
+      wątek również po temacie.
+    </p>
+  </section>
+
+  <script src="common.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

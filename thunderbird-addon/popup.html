@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <title>Supon Przetargi</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="popup">
+  <div id="status" class="status" hidden></div>
+
+  <section id="setup" hidden>
+    <p>Dodatek nie jest jeszcze połączony z aplikacją.</p>
+    <button id="openOptions" class="primary">Otwórz ustawienia</button>
+  </section>
+
+  <section id="known" hidden>
+    <p class="lead">Zapytanie <strong id="knownId"></strong> jest już założone.</p>
+    <p id="knownReplied" class="muted" hidden></p>
+    <button id="insertReply" class="primary">Wstaw odpowiedź do maila</button>
+    <button id="openApp" class="secondary">Otwórz w aplikacji</button>
+  </section>
+
+  <section id="fresh" hidden>
+    <label class="field">
+      <span>Ton odpowiedzi</span>
+      <select id="tone">
+        <option value="formal">Oficjalny</option>
+        <option value="handlowy">Handlowy</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Treść do analizy — możesz poprawić przed wysłaniem</span>
+      <textarea id="body" rows="10" spellcheck="false"></textarea>
+    </label>
+    <p id="counter" class="muted"></p>
+
+    <button id="send" class="primary">Wyślij do Przetargów</button>
+  </section>
+
+  <script src="common.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

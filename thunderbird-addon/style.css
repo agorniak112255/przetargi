@@ -1,0 +1,153 @@
+:root {
+  --text: #1f2430;
+  --muted: #6b7280;
+  --line: #d6dae2;
+  --bg: #ffffff;
+  --primary: #1d4ed8;
+  --ok: #15803d;
+  --warn: #b45309;
+  --error: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #e7e9ee;
+    --muted: #a0a6b2;
+    --line: #3a4150;
+    --bg: #1f2330;
+    --primary: #6a93ff;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --error: #f87171;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body.popup {
+  width: 340px;
+}
+
+body.options {
+  max-width: 560px;
+  padding: 20px;
+}
+
+h1 {
+  margin: 0 0 16px;
+  font-size: 18px;
+}
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+section + section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+p {
+  margin: 0 0 8px;
+}
+
+.lead {
+  font-size: 14px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.field > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.check input {
+  width: auto;
+}
+
+textarea {
+  resize: vertical;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+button {
+  padding: 7px 12px;
+  margin: 2px 4px 2px 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+button.primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.status {
+  margin-bottom: 10px;
+  padding: 7px 9px;
+  border-left: 3px solid var(--muted);
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.status.ok {
+  border-color: var(--ok);
+}
+
+.status.warn {
+  border-color: var(--warn);
+}
+
+.status.error {
+  border-color: var(--error);
+}
