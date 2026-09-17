@@ -111,6 +111,10 @@ final class InquiryQueryTextTest extends TestCase
             // wypunktowanie kropkowane poprzedza też ilość i długość, nie tylko cenę
             ['Taśma antypoślizgowa ......... 18 m', ['18 m']],
             ['Rękawice nitrylowe jednorazowe ............... 100 szt./op.', ['100 szt']],
+            // jednostki pisze się też wielką literą — wzorzec musi je znać tak samo
+            ['Nauszniki przeciwhałasowe ....... 32 dB', ['32 dB']],
+            ['Kabel elektroizolacyjny ....... 1 kV', ['1 kV']],
+            ['Sorbent sypki ....... 20 KG', ['20 KG']],
             // „c.” w środku wyrazu nie jest słowem o cenie
             ['Rękawice powlekane, 100 par rękawic. 9 rozmiar', ['100 par rękawic']],
         ];
@@ -155,6 +159,10 @@ final class InquiryQueryTextTest extends TestCase
             // test broniący rozdzielenia list jednostek: „szt.” po kwocie to nadal cena
             'Rękawice nitrylowe, cena 24,00 szt.',
             'Rękawice nitrylowe .......... 24,00 /szt',
+            // kwota z kropką tysięcy — bez niej wzorzec dopasowywał tylko część liczby
+            'Mata gumowa przemysłowa, cena 1.250,00 zł',
+            'Drabina aluminiowa, c. netto......1.250,00',
+            'Kask ochronny, cena 24,00 zł za 1 szt.',
         ]);
     }
 
@@ -176,6 +184,9 @@ final class InquiryQueryTextTest extends TestCase
         $this->assertSame('', InquiryQueryText::withoutPrice('c. netto......24,00 PLN/szt'));
         // ale cytat, który ceny nie miał, zostaje w całości
         $this->assertSame('XL', InquiryQueryText::withoutPrice('XL'));
+        // po cenie nie zostaje osierocona jednostka ani podwójny przecinek
+        $this->assertSame('Rękawice nitrylowe', InquiryQueryText::withoutPrice('Rękawice nitrylowe, cena 24,00 szt.'));
+        $this->assertSame('Rękawice robocze, rozmiar 9', InquiryQueryText::withoutPrice('Rękawice robocze, 24,00 PLN, rozmiar 9'));
     }
 
     public function test_recognises_lines_without_any_product_name(): void

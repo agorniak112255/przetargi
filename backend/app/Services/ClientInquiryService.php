@@ -640,7 +640,10 @@ final class ClientInquiryService
     {
         $n = 0;
         foreach ($items as $item) {
-            if (($item['confidence'] ?? 'none') !== 'high' || ($item['flags'] ?? []) !== []) {
+            // Brak ilości widać przy pozycji; w liście numerowanym bez ilości dotyczy
+            // każdego wiersza i licznik „do sprawdzenia” przestałby cokolwiek znaczyć.
+            $flags = array_diff(is_array($item['flags'] ?? null) ? $item['flags'] : [], ['qty_unknown']);
+            if (($item['confidence'] ?? 'none') !== 'high' || $flags !== []) {
                 $n++;
             }
         }
@@ -1317,20 +1320,26 @@ final class ClientInquiryService
                 continue;
             }
             $marked = $this->positionMarker($line);
-            if ($marked !== null) {
+            // ponumerowane pytanie („1) Czy posiadacie…?”) nie jest pozycją zamówienia
+            if ($marked !== null && ! str_ends_with($marked['rest'], '?')) {
                 // Jawny znacznik pozycji: numer z niego nigdy nie jest ilością.
                 // Ilość może stać dalej w wierszu — wtedy i tylko wtedy ją bierzemy.
-                $inside = $this->qtyInsideRow($marked);
+                $rest = $marked['rest'];
+                $inside = $this->qtyInsideRow($rest);
+                // Numer ze znacznika liczy się przy wykrywaniu numeracji: bez niego
+                // w mailu „1) …, 2. …, 3. …” ciąg zaczynał się od dwójki, numeracja
+                // przestawała być rozpoznana i numery wierszy wpadały do oferty jako ilości.
+                $leadingNumbers[] = $marked['number'];
                 $items[] = [
                     'id' => 'item_'.$index,
                     'quote' => $line,
                     'qty' => $inside['qty'] ?? null,
                     'qty_unit_given' => false,
-                    'qty_rest' => $marked,
+                    'qty_rest' => $rest,
                     'unit' => $inside['unit'] ?? null,
                     'qty_source' => $inside === null ? 'marker' : 'row',
-                    'query' => $this->queryFromLine($marked),
-                    'size' => $this->sizeFromLine($marked),
+                    'query' => $this->queryFromLine($this->withoutQtyFragment($rest, $inside)),
+                    'size' => $this->sizeFromLine($rest),
                 ];
                 $index++;
                 if (count($items) >= self::MAX_LINE_ITEMS) {
@@ -1375,7 +1384,7 @@ final class ClientInquiryService
      */
     private function sizeFromLine(string $line): ?string
     {
-        if (preg_match('/\b(?:rozmiar|rozm\.?|roz\.?)(?:[:.\s]+|(?=\d))([\p{L}\d\/,.\-]+)/iu', $line, $m) !== 1) {
+        if (preg_match('/\b(?:rozmiar|rozm\.?|roz\.)(?:[:.\s]+|(?=\d))([\p{L}\d\/,.\-]+)/iu', $line, $m) !== 1) {
             return null;
         }
         $size = trim(trim($m[1]), '.,-');
@@ -1385,7 +1394,8 @@ final class ClientInquiryService
         // „rozmiar wg wzoru” to opis, a nie rozmiar — wpisany do nagłówka pozycji
         // czytałby się jak rozmiar podany przez klienta („rozmiar z zapytania: do”).
         $looksLikeSize = preg_match('/^\d/u', $size) === 1
-            || preg_match('/^(?:xx?s|s|m|l|xx?x?l|[2-5]xl)$/iu', $size) === 1;
+            // „M/8”, „L/9” — oznaczenie literowe z numerem obwodu dłoni
+            || preg_match('/^(?:xx?s|s|m|l|xx?x?l|[2-5]xl)(?:\/\d{1,3})?$/iu', $size) === 1;
         if (! $looksLikeSize) {
             return null;
         }
@@ -1419,10 +1429,14 @@ final class ClientInquiryService
         foreach ($items as $item) {
             if (($item['qty_unit_given'] ?? false) !== true) {
                 // „1. 20 szt. Rękawice” — numer pozycji z przodu, ilość dalej w wierszu
-                $inside = $this->qtyInsideRow((string) ($item['qty_rest'] ?? ''));
+                $rest = (string) ($item['qty_rest'] ?? '');
+                $inside = $this->qtyInsideRow($rest);
                 $item['qty'] = $inside['qty'] ?? null;
                 $item['unit'] = $inside['unit'] ?? $item['unit'] ?? null;
                 $item['qty_source'] = $inside === null ? 'enumeration' : 'row';
+                if ($inside !== null) {
+                    $item['query'] = $this->queryFromLine($this->withoutQtyFragment($rest, $inside));
+                }
             }
             unset($item['qty_unit_given'], $item['qty_rest']);
             $out[] = $item;
@@ -1432,23 +1446,38 @@ final class ClientInquiryService
     }
 
     /**
+     * Treść wiersza bez zapisu ilości, którą z niego odczytaliśmy — inaczej „20 szt.”
+     * szłoby do katalogu jako część frazy wyrobu.
+     *
+     * @param  array{qty: string, unit: string, at: int, len: int}|null  $inside
+     */
+    private function withoutQtyFragment(string $rest, ?array $inside): string
+    {
+        if ($inside === null) {
+            return $rest;
+        }
+
+        return trim((string) substr_replace($rest, ' ', $inside['at'], $inside['len']));
+    }
+
+    /**
      * Jawny znacznik pozycji — „(poz9).”, „poz. 12”, „2)” — i treść wiersza za nim.
      * Wiersze w tym zapisie dotąd w ogóle nie stawały się pozycjami. Numer ze znacznika
      * nie jest ilością: to numer wiersza w zapytaniu klienta.
      */
-    private function positionMarker(string $line): ?string
+    private function positionMarker(string $line): ?array
     {
         $patterns = [
-            '/^[*\-•\s]*\(\s*poz\.?\s*\d{1,3}\s*\)[\s.:)\-]*(.+)$/iu',
-            '/^[*\-•\s]*poz\.?\s*\d{1,3}\s*[\s.:)\-]+(.+)$/iu',
-            '/^\d{1,3}\s*\)\s*(.+)$/u',
+            '/^[*\-•\s]*\(\s*poz\.?\s*(\d{1,3})\s*\)[\s.:)\-]*(.+)$/iu',
+            '/^[*\-•\s]*poz\.?\s*(\d{1,3})\s*[\s.:)\-]+(.+)$/iu',
+            '/^(\d{1,3})\s*\)\s*(.+)$/u',
         ];
 
         foreach ($patterns as $pattern) {
             if (preg_match($pattern, trim($line), $m) === 1) {
-                $rest = trim((string) end($m));
+                $rest = trim($m[2]);
                 if ($rest !== '') {
-                    return $rest;
+                    return ['number' => (int) $m[1], 'rest' => $rest];
                 }
             }
         }
@@ -1463,7 +1492,7 @@ final class ClientInquiryService
      * stojące przy cenie. Brak pewnego trafienia zostawia ilość pustą: brak jest
      * lepszy niż liczba, której klient nie podał.
      *
-     * @return array{qty: string, unit: string}|null
+     * @return array{qty: string, unit: string, at: int, len: int}|null
      */
     private function qtyInsideRow(string $rest): ?array
     {
@@ -1482,20 +1511,29 @@ final class ClientInquiryService
             $before = mb_strtolower(substr($rest, 0, $offset));
             $after = substr($rest, $offset + strlen((string) $match[0][0]));
 
-            // „op. 100 szt.”, „w opakowaniu 100 szt.” — to zawartość opakowania
-            if (preg_match('/(?:op\.|opak\.?|opakowani[ue]|pak\.|zawiera(?:jący|jące)?|po)\s*$/iu', $before) === 1) {
+            // „op. 100 szt.”, „w opakowaniu 100 szt.”, „a 100 szt.”, „x 100 szt.” —
+            // to zawartość opakowania, a klient zamawia opakowania, nie sztuki
+            if (preg_match('/(?:op\.|opak\.?|opakowani[ue]|opakowanie zbiorcze|pak\.|karton(?:ie|ik)?|zawiera(?:jący|jące)?|po|(?<![\p{L}])[ax])\s*[-–—]?\s*$/iu', $before) === 1) {
                 continue;
             }
-            // „100 szt./op.”, „100 szt. w opak.” — tak samo
-            if (preg_match('/^\s*(?:\/\s*op|w\s+opak)/iu', $after) === 1) {
+            // „100 szt./op.”, „100 szt. w opak.”, „20 szt. w kartonie” — tak samo
+            if (preg_match('/^\s*(?:\/\s*op|w\s+(?:opak|karton|pud))/iu', $after) === 1) {
                 continue;
             }
-            // liczba tuż za słowem o cenie jest ceną, nie ilością
-            if (preg_match('/(?:cena|cenie|ceny|cenę|c\.|koszt|wartość|netto|brutto|pln|zł|zl|eur|usd)[^\p{L}\d]*$/iu', $before) === 1) {
+            // liczba tuż za słowem o cenie jest ceną albo przelicznikiem ceny
+            // („cena netto za 1 szt. 12,50”), a nie zamawianą ilością
+            if (preg_match('/(?:cena|cenie|ceny|cenę|c\.|koszt|wartość|stawka|netto|brutto|pln|zł|zl|eur|usd)[:\s]*(?:za\s+)?$/iu', $before) === 1) {
                 continue;
             }
 
-            return ['qty' => $this->formatQty($match[1][0]), 'unit' => trim($match[2][0])];
+            $digits = ltrim($match[1][0], '0');
+
+            return [
+                'qty' => $this->formatQty($digits === '' ? '0' : $digits),
+                'unit' => trim($match[2][0]),
+                'at' => $offset,
+                'len' => strlen((string) $match[0][0]),
+            ];
         }
 
         return null;
@@ -1521,9 +1559,11 @@ final class ClientInquiryService
             if ($number !== $i + 1) {
                 $exact = false;
             }
-            // numer pozycji rośnie i trzyma się długości listy; „1, 2, 6” przy trzech
-            // pozycjach to już ilości, a nie numeracja
-            if ($number <= $previous || $number > count($numbers) + 2) {
+            // Numer pozycji rośnie. Luka bywa dowolna („wyciąg z SIWZ: poz. 1, 2, 9”),
+            // więc progu na wielkość numeru nie stawiamy: liczba bez jednostki, stojąca
+            // w rosnącym ciągu od jedynki, jest numerem wiersza, a wpisanie jej do oferty
+            // byłoby ilością, której klient nie podał.
+            if ($number <= $previous) {
                 return false;
             }
             $previous = $number;
@@ -1536,7 +1576,7 @@ final class ClientInquiryService
     {
         // „rozm: 40x60cm” zapisują i z dwukropkiem, i ze spacją; klasa znaków obejmuje
         // polskie litery, bo „rozmiar duży” zostawiał we frazie ogryzek „ży”
-        $q = preg_replace('/\b(?:rozmiar|rozm\.?|roz\.?)(?:[:.\s]+|(?=\d))[\p{L}\d\/,.\-]+/iu', '', $rest) ?? $rest;
+        $q = preg_replace('/\b(?:rozmiar|rozm\.?|roz\.)(?:[:.\s]+|(?=\d))[\p{L}\d\/,.\-]+/iu', '', $rest) ?? $rest;
         $q = preg_replace('/^\d+\s*'.self::UNIT_PATTERN.'?[\s.,:–-]+/iu', '', $q) ?? $q;
 
         // cena i numeracja pozycji nie opisują wyrobu, a przeważają w wyszukiwaniu

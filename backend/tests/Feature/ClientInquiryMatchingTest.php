@@ -345,6 +345,57 @@ final class ClientInquiryMatchingTest extends TestCase
             ->assertJsonPath('items.1.candidates.0.sku', 'WYC-50');
     }
 
+    public function test_missing_quantity_is_visible_but_does_not_inflate_the_attention_count(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $gloves = $this->product('RNITZ-100', 'Rekawice nitrylowe');
+
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_body' => '1. Rekawice nitrylowe
+2. Buty robocze',
+            'analysis' => [
+                'line_items' => [[
+                    'id' => 'item_1',
+                    'quote' => '1. Rekawice nitrylowe',
+                    'qty' => null,
+                    'qty_source' => 'enumeration',
+                    'unit' => null,
+                    'query' => 'Rekawice nitrylowe',
+                ]],
+                'matches' => [[
+                    'query' => 'Rekawice nitrylowe',
+                    'products' => [[
+                        'id' => $gloves->id,
+                        'sku' => $gloves->sku,
+                        'name' => $gloves->name,
+                        'manufacturer' => 'Supon',
+                        'norms' => '',
+                        'score' => 92,
+                        'reason' => 'Zgodny rodzaj',
+                        'catalog_pln' => 100.0,
+                        'offer_pln' => 118.0,
+                        'stock' => 5,
+                    ]],
+                ]],
+            ],
+            'answers' => ['price' => ['option_id' => 'none']],
+            'reply_subject' => 'Oferta',
+            'reply_body' => 'Tresc listu.',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        // brak ilosci widac przy pozycji, ale w liscie numerowanym dotyczy kazdego
+        // wiersza i licznik „do sprawdzenia” przestalby cokolwiek znaczyc
+        $this->getJson("/api/inquiries/{$inquiry->id}")
+            ->assertOk()
+            ->assertJsonPath('items.0.flags', ['qty_unknown'])
+            ->assertJsonPath('items.0.confidence', 'high')
+            ->assertJsonPath('attention_count', 0);
+    }
+
     public function test_item_without_a_query_gets_no_candidates_from_the_only_group(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

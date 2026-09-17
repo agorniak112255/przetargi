@@ -386,6 +386,27 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame('10', $resolved[0]['size']);
     }
 
+    public function test_mixed_markers_and_numbers_are_one_numbering(): void
+    {
+        $svc = $this->service();
+
+        // numer ze znacznika musi liczyc sie do ciagu — inaczej numeracja zaczyna sie
+        // od dwojki, nie jest rozpoznana i numery wierszy wchodza do oferty jako ilosci
+        $mixed = $svc->parseLineItemsFromBody(
+            '1) Rekawice nitrylowe
+2. Buty robocze
+3. Kask ochronny'
+        );
+        $this->assertSame([null, null, null], array_column($mixed, 'qty'));
+
+        // ponumerowane pytania nie sa pozycjami zamowienia
+        $questions = $svc->parseLineItemsFromBody(
+            '1) Czy posiadacie rekawice nitrylowe w rozmiarze XL?
+2) Jaki jest termin dostawy?'
+        );
+        $this->assertSame([], $questions);
+    }
+
     public function test_position_markers_become_items_without_an_invented_quantity(): void
     {
         $svc = $this->service();
@@ -419,19 +440,31 @@ poz. 13 Buty robocze');
             .'
 2. Rekawice nitrylowe, op. 100 szt.'
             .'
-3. Buty robocze, c. netto 24,00 PLN/szt'
+3. Buty robocze, cena 24,00 zl za 1 szt.'
             .'
 4. Kask ochronny 10 szt./op.'
+            .'
+5. Rekawice lateksowe a 100 szt.'
+            .'
+6. Chusteczki x 100 szt.'
+            .'
+7. Maski, cena 39,00 zl, 10 szt.'
         );
 
         // ilosc stala dalej w wierszu, za numerem pozycji
         $this->assertSame(['20', 'szt.', 'row'], [$items[0]['qty'], $items[0]['unit'], $items[0]['qty_source']]);
         $this->assertSame('L', $items[0]['size']);
-        // zawartosc opakowania to nie zamawiana ilosc
+        // zapis ilosci znika z frazy katalogowej, zeby nie szedl do wyszukiwarki
+        $this->assertSame('Rekawice nitrylowe', $items[0]['query']);
+        // zawartosc opakowania to nie zamawiana ilosc — takze w zapisie „a 100 szt.”
         $this->assertNull($items[1]['qty']);
         $this->assertNull($items[3]['qty']);
-        // liczba przy cenie tez nie jest iloscia
+        $this->assertNull($items[4]['qty']);
+        $this->assertNull($items[5]['qty']);
+        // przelicznik ceny jednostkowej („cena 24,00 zl za 1 szt.”) nie jest iloscia
         $this->assertNull($items[2]['qty']);
+        // ale ilosc podana po cenie juz tak
+        $this->assertSame(['10', 'szt.'], [$items[6]['qty'], $items[6]['unit']]);
     }
 
     public function test_lost_quantity_is_flagged_for_the_salesperson(): void
@@ -483,15 +516,22 @@ poz. 13 Buty robocze');
         );
         $this->assertSame(['1', '2', '4'], array_column($units, 'qty'));
 
-        // liczba daleko poza dlugoscia listy to ilosc, a nie numer pozycji
+        // wyciag z SIWZ („poz. 1, 2, 9”) tez jest numeracja: gola liczba w rosnacym
+        // ciagu od jedynki to numer wiersza, a wpisanie jej do oferty byloby iloscia,
+        // ktorej klient nie podal. Ilosc rozpoznajemy po jednostce, nie po wielkosci luki.
         $far = $svc->parseLineItemsFromBody(
-            '1 Rekawice nitrylowe'
-            .'
-2 Buty robocze S3'
-            .'
-6 Kask ochronny'
+            '1. Rekawice nitrylowe
+2. Buty robocze S3
+9. Kask ochronny'
         );
-        $this->assertSame(['1', '2', '6'], array_column($far, 'qty'));
+        $this->assertSame([null, null, null], array_column($far, 'qty'));
+
+        // ciag, ktory nie zaczyna sie od jedynki, to ilosci
+        $counts = $svc->parseLineItemsFromBody(
+            '3 Rekawice nitrylowe
+5 Buty robocze S3'
+        );
+        $this->assertSame(['3', '5'], array_column($counts, 'qty'));
     }
 
     public function test_size_is_read_from_shortened_spellings_and_leaves_the_query(): void
@@ -503,7 +543,7 @@ poz. 13 Buty robocze');
             .'
 4 szt. Material rozmiarowy uniwersalny'
             .'
-5 szt. oferta z 2024 r. 10 szt. rekawic'
+5 szt. Rekawice nitrylowe roz 4512 katalogowy'
         );
 
         // „rozm.44” bez spacji trafialo i do frazy katalogowej, i nigdzie jako rozmiar
@@ -511,9 +551,10 @@ poz. 13 Buty robocze');
         $this->assertSame('Buty robocze', $items[0]['query']);
         $this->assertSame('43', $items[1]['size']);
         $this->assertSame('Buty robocze', $items[1]['query']);
-        // „rozmiarowy” to nie „rozmiar”, a skrot „r.” to rok, nie rozmiar
+        // „rozmiarowy” to nie „rozmiar”, a „roz 4512” bez kropki to numer katalogowy
         $this->assertNull($items[2]['size']);
         $this->assertNull($items[3]['size']);
+        $this->assertStringContainsString('4512', $items[3]['query']);
     }
 
     public function test_margin_reads_the_same_input_as_the_validator(): void
