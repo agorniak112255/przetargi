@@ -386,6 +386,32 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame('10', $resolved[0]['size']);
     }
 
+    public function test_position_markers_become_items_without_an_invented_quantity(): void
+    {
+        $svc = $this->service();
+
+        // „1)” i „(poz9)” nie tworzyly dotad zadnej pozycji
+        $brackets = $svc->parseLineItemsFromBody('1) Rekawice nitrylowe
+2) Buty robocze S3
+3) Kask ochronny');
+        $this->assertCount(3, $brackets);
+        $this->assertSame([null, null, null], array_column($brackets, 'qty'));
+        $this->assertSame('Rekawice nitrylowe', $brackets[0]['query']);
+
+        // numer ze znacznika nigdy nie jest iloscia — inaczej „(poz9)” dalby 9 sztuk
+        $poz = $svc->parseLineItemsFromBody('(poz9). Lopata do sniegu
+(poz10)Drabina KRAUSE 815446');
+        $this->assertCount(2, $poz);
+        $this->assertSame([null, null], array_column($poz, 'qty'));
+        $this->assertSame('Drabina KRAUSE 815446', $poz[1]['query']);
+
+        // ilosc podana dalej w wierszu zostaje odczytana
+        $withQty = $svc->parseLineItemsFromBody('poz. 12 Rekawice nitrylowe 20 szt.
+poz. 13 Buty robocze');
+        $this->assertSame(['20', 'szt.'], [$withQty[0]['qty'], $withQty[0]['unit']]);
+        $this->assertNull($withQty[1]['qty']);
+    }
+
     public function test_quantity_inside_a_numbered_row_is_found_but_never_invented(): void
     {
         $items = $this->service()->parseLineItemsFromBody(

@@ -1316,6 +1316,29 @@ final class ClientInquiryService
             if ($line === '') {
                 continue;
             }
+            $marked = $this->positionMarker($line);
+            if ($marked !== null) {
+                // Jawny znacznik pozycji: numer z niego nigdy nie jest ilością.
+                // Ilość może stać dalej w wierszu — wtedy i tylko wtedy ją bierzemy.
+                $inside = $this->qtyInsideRow($marked);
+                $items[] = [
+                    'id' => 'item_'.$index,
+                    'quote' => $line,
+                    'qty' => $inside['qty'] ?? null,
+                    'qty_unit_given' => false,
+                    'qty_rest' => $marked,
+                    'unit' => $inside['unit'] ?? null,
+                    'qty_source' => $inside === null ? 'marker' : 'row',
+                    'query' => $this->queryFromLine($marked),
+                    'size' => $this->sizeFromLine($marked),
+                ];
+                $index++;
+                if (count($items) >= self::MAX_LINE_ITEMS) {
+                    break;
+                }
+
+                continue;
+            }
             if (preg_match('/^(\d+)\s*('.self::UNIT_PATTERN.')?[\s.,:–-]+(.+)$/iu', $line, $m) !== 1) {
                 continue;
             }
@@ -1406,6 +1429,31 @@ final class ClientInquiryService
         }
 
         return $out;
+    }
+
+    /**
+     * Jawny znacznik pozycji — „(poz9).”, „poz. 12”, „2)” — i treść wiersza za nim.
+     * Wiersze w tym zapisie dotąd w ogóle nie stawały się pozycjami. Numer ze znacznika
+     * nie jest ilością: to numer wiersza w zapytaniu klienta.
+     */
+    private function positionMarker(string $line): ?string
+    {
+        $patterns = [
+            '/^[*\-•\s]*\(\s*poz\.?\s*\d{1,3}\s*\)[\s.:)\-]*(.+)$/iu',
+            '/^[*\-•\s]*poz\.?\s*\d{1,3}\s*[\s.:)\-]+(.+)$/iu',
+            '/^\d{1,3}\s*\)\s*(.+)$/u',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, trim($line), $m) === 1) {
+                $rest = trim((string) end($m));
+                if ($rest !== '') {
+                    return $rest;
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
