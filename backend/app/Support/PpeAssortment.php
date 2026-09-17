@@ -162,7 +162,9 @@ final class PpeAssortment
         // „buty” zostaje całym słowem, bo inaczej łapie „butylowe”.
         self::FAMILY_FOOTWEAR => '/\b(trzewik|sztyblet|polbut|mokasyn|sandal|obuwi|kalosz|gumowc|gumiak|wellington'
             .'|footwear|podeszw|podnosek|polobotk|holink|kotnikov)\w*|\b(buty|butow|obuv|boty|bota|shoes?|boots?)\b'
-            .'|\bs1p?\b|\bs[2-5]\b|\bo[1-5]\b/u',
+            // klasy z EN ISO 20345/20347 razem z zapisem z wydania 2022 (S3L, S1 PL, S6, S7) — karta ARTRY
+            // nie ma w nazwie ani jednego słowa o obuwiu, samą klasę: „ARYEL 320 671460 S3L”
+            .'|\bs1\h?p?[ls]?\b|\bs[2-7][ls]?\b|\bo1\h?p?[ls]?\b|\bo[2-7][ls]?\b/u',
     ];
 
     /**

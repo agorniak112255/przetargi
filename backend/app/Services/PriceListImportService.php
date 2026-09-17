@@ -7,12 +7,14 @@ namespace App\Services;
 use App\Jobs\RegisterManufacturerCatalogJob;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\B2bProductLink;
+use App\Models\PrestaCategory;
 use App\Models\PriceList;
 use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\User;
+use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\Presta\ProductCategorySanitizer;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Support\ProductSizeVariant;
@@ -35,6 +37,7 @@ final class PriceListImportService
         private readonly ProductCategorySanitizer $categorySanitizer,
         private readonly ProductSizeMergeService $sizeMerge,
         private readonly ProductEffectivePrice $effectivePrices,
+        private readonly PrestaCategoryRewriteService $prestaCategories,
     ) {}
 
     /**
@@ -357,6 +360,7 @@ final class PriceListImportService
         User $user,
         array $collected,
     ): array {
+        $collected['products'] = $this->categoriesFromTree($collected['products']);
         $created = 0;
         $updated = 0;
         $priceChanges = [];
@@ -1623,6 +1627,53 @@ final class PriceListImportService
         }
 
         return $out;
+    }
+
+    /**
+     * Grupa na karcie z drzewa kategorii sklepu, rozpoznana po nazwie wyrobu. Kategoria z cennika
+     * dostawcy albo ta domyślna z formularza jest zapasem na wypadek, gdy nazwa nic nie mówi —
+     * nie odwrotnie. Numer katalogowy dostawcy nigdy nie powinien być grupą, a nazwa wyrobu
+     * zwykle wystarcza, żeby trafić w gałąź drzewa (klasa obuwia, „rękawice”, „kask”).
+     *
+     * Bez drzewa w bazie nic nie robimy: nie ma na co przepisywać.
+     *
+     * @param  list<array<string, mixed>>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function categoriesFromTree(array $products): array
+    {
+        if ($products === []) {
+            return $products;
+        }
+        try {
+            $tree = PrestaCategory::query()->where('active', true)->get();
+        } catch (Throwable) {
+            return $products;
+        }
+        if ($tree->isEmpty()) {
+            return $products;
+        }
+
+        $cache = [];
+        foreach ($products as $index => $payload) {
+            $name = trim((string) ($payload['name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            $path = $this->prestaCategories->resolvePath(
+                new Product([
+                    'name' => $name,
+                    'category' => trim((string) ($payload['category'] ?? '')),
+                ]),
+                $tree,
+                $cache,
+            );
+            if (is_string($path) && trim($path) !== '') {
+                $products[$index]['category'] = $path;
+            }
+        }
+
+        return $products;
     }
 
     /**

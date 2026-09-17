@@ -21,6 +21,7 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\B2b\B2bDescriptionSource;
+use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\NormCode;
@@ -1341,6 +1342,7 @@ final class ProductEnrichmentService
                 $saved['packaging'] = $packaging;
             }
             $product->update($saved);
+            $this->refineCategoryFromDescription($product, $description);
             $this->rememberAccessories($product, $pageSnippets);
 
             ReindexProductEmbeddingJob::dispatch($product->id, true);
@@ -2702,6 +2704,29 @@ final class ProductEnrichmentService
             $urls,
             fn ($url): bool => is_string($url) && $this->identity->imageUrlMentionsProduct($url, $product)
         ));
+    }
+
+    /**
+     * Grupa na karcie bierze się z nazwy wyrobu przy imporcie cennika. Nazwa bywa jednak sama kodem,
+     * a wtedy dopiero ściągnięty opis mówi, co to za wyrób — i to jest ten moment, żeby kategorię
+     * doprecyzować. Kategoria, która już jest ścieżką z drzewa sklepu, zostaje nietknięta, także ta
+     * wskazana ręcznie; poprawiamy tylko to, czego wcześniej nie dało się rozpoznać.
+     *
+     * Błąd tego kroku nie może przerwać wzbogacania — opis jest już zapisany.
+     */
+    private function refineCategoryFromDescription(Product $product, string $description): void
+    {
+        try {
+            $path = app(PrestaCategoryRewriteService::class)->betterPathFor($product, $description);
+            if ($path !== null) {
+                $product->update(['category' => $path]);
+            }
+        } catch (Throwable $e) {
+            Log::info('Kategoria z opisu pominięta', [
+                'product_id' => $product->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

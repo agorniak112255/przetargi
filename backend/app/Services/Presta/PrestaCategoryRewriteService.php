@@ -30,7 +30,29 @@ final class PrestaCategoryRewriteService
     public function __construct(
         private readonly ProductCategorySanitizer $sanitizer,
         private readonly PrestaCategoryMapService $maps,
+        private readonly PpeAssortment $assortment = new PpeAssortment,
     ) {}
+
+    /**
+     * Lepsza kategoria dla jednej karty albo null, gdy nie ma czego poprawiać. Kategoria, która już
+     * jest ścieżką z drzewa sklepu, zostaje nietknięta — także wtedy, gdy wskazał ją człowiek.
+     * Dołożony tekst (opis ściągnięty przy wzbogacaniu) pomaga tam, gdzie sama nazwa nic nie mówi.
+     */
+    public function betterPathFor(Product $product, string $extraText = ''): ?string
+    {
+        $tree = PrestaCategory::query()->where('active', true)->get();
+        if ($tree->isEmpty()) {
+            return null;
+        }
+        $current = trim((string) ($product->category ?? ''));
+        if ($current !== '' && $tree->contains(fn (PrestaCategory $cat): bool => $this->pathOf($cat) === $current)) {
+            return null;
+        }
+        $cache = [];
+        $path = $this->resolvePath($product, $tree, $cache, $extraText);
+
+        return is_string($path) && trim($path) !== '' && $path !== $current ? $path : null;
+    }
 
     /**
      * Przepisuje kategorie kart na drzewo Presty. Domyślnie tylko podgląd — zapis wymaga $apply,
@@ -132,11 +154,18 @@ final class PrestaCategoryRewriteService
      * @param  Collection<int, PrestaCategory>  $tree
      * @param  array<string, string|null>  $pathCache
      */
-    public function resolvePath(Product $product, $tree, array &$pathCache = []): ?string
+    public function resolvePath(Product $product, $tree, array &$pathCache = [], string $extraText = ''): ?string
     {
         $current = trim((string) ($product->category ?? ''));
         $name = (string) $product->name;
         $fromName = $this->sanitizer->familyFromText($name);
+        // Nazwa bywa samym kodem („ARYEL 320 671460 S3L”). Wtedy rodzinę rozstrzyga klasyfikator
+        // asortymentu, który czyta też klasę ochrony, a dopiero na końcu dołożony tekst opisu.
+        $fromName ??= $this->assortment->resolveFamily($name);
+        if ($fromName === null && trim($extraText) !== '') {
+            $fromName = $this->sanitizer->familyFromText($extraText)
+                ?? $this->assortment->resolveFamily($name.' '.$extraText);
+        }
         if ($fromName !== null) {
             $cacheKey = $fromName.'|'.$this->extraKey($name);
             if (! array_key_exists($cacheKey, $pathCache)) {

@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\Product;
 use App\Models\User;
+use App\Services\Presta\PrestaCategorySyncService;
 use App\Services\PriceListImportService;
 use App\Support\BhpAttributeNormalizer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -152,6 +153,36 @@ final class PriceListAttributeColumnsTest extends TestCase
 
         // numer katalogowy nie zostaje grupą; obowiązuje kategoria domyślna podana przy imporcie
         $this->assertSame(['Obuwie'], Product::query()->pluck('category')->unique()->values()->all());
+
+        @unlink($path);
+    }
+
+    public function test_group_comes_from_the_shop_tree_recognised_by_the_product_name(): void
+    {
+        app(PrestaCategorySyncService::class)->storeCategories([
+            ['presta_id' => 10, 'parent_presta_id' => 2, 'name' => 'Obuwie', 'level_depth' => 2, 'active' => true],
+            ['presta_id' => 88, 'parent_presta_id' => 10, 'name' => 'Obuwie bezpieczne', 'level_depth' => 3, 'active' => true],
+        ]);
+        $user = User::factory()->create();
+        $path = $this->artraLikeSheet(12, withCatalogueIndex: true);
+
+        $mapping = $this->mapping();
+        $mapping['sheets'][0]['columns']['category'] = 7;
+
+        app(PriceListImportService::class)->importWithMapping(
+            new UploadedFile($path, 'artra.xlsx', null, null, true),
+            'ARTRA',
+            'test',
+            $user,
+            $mapping,
+            null,
+        );
+
+        // nazwa „ARYEL 320 671460 S3L” nie ma ani jednego słowa o obuwiu, tylko klasę — a to wystarczy
+        $this->assertSame(
+            ['Obuwie / Obuwie bezpieczne'],
+            Product::query()->pluck('category')->unique()->values()->all(),
+        );
 
         @unlink($path);
     }
