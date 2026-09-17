@@ -10,6 +10,7 @@ use App\Models\B2bSyncRun;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductShopCard;
 use App\Models\User;
 use App\Services\B2b\AnroB2bClient;
 use App\Services\B2b\AnroB2bConnector;
@@ -92,8 +93,17 @@ final class B2bAnroSyncTest extends TestCase
         $this->assertStringNotContainsString('<', (string) $product->description);
         $this->assertStringContainsString('Znak & alarm pożarowy', (string) $product->description);
         $this->assertStringContainsString("- fotoluminescencyjny\n- dwustronny", (string) $product->description);
-        $this->assertStringContainsString("Parametry:\n- Format: 200 x 200\n- Materiał: Płyta PVC", (string) $product->description);
+        // Parametry techniczne są tylko w tabelce karty wyrobu u dostawcy — opis ich nie powtarza.
+        $this->assertStringNotContainsString('Parametry:', (string) $product->description);
+        $this->assertStringNotContainsString('Format: 200 x 200', (string) $product->description);
         $this->assertStringNotContainsString('b2b.anro.net.pl', (string) $product->description);
+        $this->assertContains(
+            ['section' => 'Informacje techniczne', 'rows' => [
+                ['name' => 'Format', 'value' => '200 x 200'],
+                ['name' => 'Materiał', 'value' => 'Płyta PVC'],
+            ]],
+            (array) ProductShopCard::query()->where('product_id', $product->id)->sole()->fields,
+        );
 
         $image = $product->images()->firstOrFail();
         Storage::disk('public')->assertExists($image->path);
@@ -173,18 +183,24 @@ final class B2bAnroSyncTest extends TestCase
         )));
     }
 
-    public function test_opis_i_karta_wyrobu_pobieraja_parametry_techniczne_tylko_raz(): void
+    public function test_parametry_techniczne_pobiera_tylko_karta_wyrobu_a_nie_opis(): void
     {
         $this->fakeAnro();
         $connector = AnroB2bConnector::forAccount($this->account, 0);
         $remote = iterator_to_array($connector->products(), false);
 
         $description = $connector->description($remote[0]);
+
+        // Opis to sama proza z pola OPIS — po parametry nie sięga wcale.
+        $this->assertSame(0, $this->technicalDataRequests, 'Opis nie ma już pytać o parametry techniczne.');
+        $this->assertStringNotContainsString('Parametry:', $description);
+        $this->assertStringNotContainsString('Format: 200 x 200', $description);
+
         $fields = $connector->shopFields($remote[0]);
 
         $this->assertSame(1, $this->technicalDataRequests, 'Parametry techniczne mają być pobrane raz na produkt.');
-        $this->assertStringContainsString('Format: 200 x 200', $description);
         $this->assertContains(['Informacje techniczne', 'Format', '200 x 200'], self::rows($fields));
+        $this->assertContains(['Informacje techniczne', 'Materiał', 'Płyta PVC'], self::rows($fields));
 
         // To samo w pełnym przebiegu synchronizacji: jeden produkt z parametrami = jedno zapytanie.
         $this->technicalDataRequests = 0;

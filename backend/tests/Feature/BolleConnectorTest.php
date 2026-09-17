@@ -368,13 +368,14 @@ final class BolleConnectorTest extends TestCase
         $this->assertSame('Clear lens', $products['103']->name);
     }
 
-    public function test_description_is_verbatim_sections_and_labelled_parameters_only(): void
+    public function test_description_is_verbatim_sections_only_and_parameters_live_in_the_shop_card(): void
     {
         $this->fakeSite();
         $connector = $this->connector();
         $connector->login();
 
-        $description = $connector->description($this->productsById($connector)['101']);
+        $product = $this->productsById($connector)['101'];
+        $description = $connector->description($product);
 
         $this->assertSame(implode("\n", [
             'Copper safety glasses',
@@ -382,12 +383,20 @@ final class BolleConnectorTest extends TestCase
             'The TRYON BSSI offers a wraparound design.',
             '- EN 166 1FT',
             '- Anti-scratch & anti-fog',
-            '',
-            'Parametry:',
-            '- Materiał oprawki: Nylon',
-            '- Powłoka soczewki: Platinum®',
-            '- Kolor soczewki: Copper',
         ]), $description);
+        // Cechy z etykietami filtrów sklepu są tylko w tabelce karty wyrobu u dostawcy — opis ich nie powtarza.
+        foreach (['Parametry:', 'Materiał oprawki', 'Powłoka soczewki', 'Kolor soczewki', 'Nylon', 'Platinum®'] as $absent) {
+            $this->assertStringNotContainsString($absent, $description);
+        }
+        $this->assertSame([
+            ['Parametry', 'Materiał oprawki', 'Nylon'],
+            ['Parametry', 'Powłoka soczewki', 'Platinum®'],
+            ['Parametry', 'Kolor soczewki', 'Copper'],
+        ], array_values(array_filter(
+            self::rows($connector->shopFields($product)),
+            static fn (array $row): bool => $row[0] === 'Parametry',
+        )));
+
         foreach (['&nbsp;', 'Technologia oprawki', 'Frame Material', 'SEGMENT-WEWNETRZNY', '2026-10-01', '<p>'] as $absent) {
             $this->assertStringNotContainsString($absent, $description);
         }

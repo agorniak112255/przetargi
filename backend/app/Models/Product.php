@@ -39,6 +39,7 @@ class Product extends Model
         'assortment_group_id',
         'description',
         'variant_summary',
+        'shop_fields_summary',
         'enrichment_status',
         'enriched_at',
         'enrichment_error',

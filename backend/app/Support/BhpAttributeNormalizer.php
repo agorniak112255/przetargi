@@ -78,6 +78,9 @@ final class BhpAttributeNormalizer
         $haystack = trim(implode("\n", array_filter([
             (string) ($product->name ?? ''),
             (string) ($product->description ?? ''),
+            // Tabelka z karty dostawcy: od etapu 2 normy i materiały stoją poza opisem (u Protektu nigdy nie były
+            // prozą opisu), więc bez tego źródła wykrywanie norm i materiałów gubiłoby je razem z przeprowadzką.
+            (string) ($product->shop_fields_summary ?? ''),
             (string) ($product->category ?? ''),
             (string) ($product->norms ?? ''),
             ...$useCases,
@@ -102,6 +105,8 @@ final class BhpAttributeNormalizer
                 'sku' => (string) ($product->sku ?? ''),
                 'name' => (string) ($product->name ?? ''),
                 'description' => (string) ($product->description ?? ''),
+                // Osobny klucz, nie doklejenie do opisu — to dane dostawcy, a nie opis wyrobu.
+                'shop_fields' => (string) ($product->shop_fields_summary ?? ''),
                 'norms_column' => (string) ($product->norms ?? ''),
             ]
         );
@@ -118,6 +123,7 @@ final class BhpAttributeNormalizer
      *     sku?: string,
      *     name?: string,
      *     description?: string,
+     *     shop_fields?: string,
      *     norms_column?: string
      * }  $context
      * @return array{
@@ -186,7 +192,13 @@ final class BhpAttributeNormalizer
             $this->stringList($context['specs'] ?? null),
             $this->stringList($context['certificates'] ?? null),
             $this->stringList($context['use_cases'] ?? null),
-            [$context['name'] ?? '', $context['description'] ?? '', $context['norms_column'] ?? ''],
+            // Wiersze z karty dostawcy obok opisu — klasa ochrony, poziomy EN 388 i oznaczenia bywają tylko tam.
+            [
+                $context['name'] ?? '',
+                $context['description'] ?? '',
+                $context['shop_fields'] ?? '',
+                $context['norms_column'] ?? '',
+            ],
         ));
 
         $parsed = $this->parseKlasaAndMarkings(

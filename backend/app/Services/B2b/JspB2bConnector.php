@@ -131,9 +131,11 @@ final class JspB2bConnector implements B2bConnector, B2bShopFieldSource
     /**
      * Opis z tekstów strony, dosłownie (język strony konta, bez tłumaczenia), sekcje oddzielone pustą linią:
      * pełny opis z zakładki Overview; krótkie cechy spod tytułu tylko wtedy, gdy nie wszystkie są już liniami
-     * opisu (bez Overview — same cechy, jak dotąd); zakładki Features & Benefits, Delivered With (bez linii już
-     * obecnych w opisie) i Weights & Dimensions (tylko pary „nazwa: wartość”); na końcu jednostka sprzedaży.
-     * Zakładki Documents, Other Colours, Product Reviews i Video nie trafiają do opisu.
+     * opisu (bez Overview — same cechy, jak dotąd); zakładki Features & Benefits i Delivered With (bez linii już
+     * obecnych w opisie). Zakładki Weights & Dimensions i jednostki sprzedaży tu nie ma: to pary
+     * „nazwa → wartość”, które podaje shopFields() jako wiersze tabelki. Zakładki Documents, Other Colours,
+     * Product Reviews i Video nie trafiają do opisu. Strona bez żadnego z tych tekstów zostaje bez opisu;
+     * pusty opis niczego nie nadpisuje (B2bCatalogSync::applyCardDetails).
      */
     public function description(B2bRemoteProduct $product): string
     {
@@ -173,15 +175,6 @@ final class JspB2bConnector implements B2bConnector, B2bShopFieldSource
             if ($items !== []) {
                 $sections[] = $heading."\n".implode("\n", $items);
             }
-        }
-
-        if (($raw['weights'] ?? []) !== []) {
-            $sections[] = "Wagi i wymiary:\n".implode("\n", $raw['weights']);
-        }
-
-        $unit = (string) ($raw['unit'] ?? '');
-        if ($unit !== '') {
-            $sections[] = 'Jednostka: '.$unit;
         }
 
         return mb_substr(implode("\n\n", $sections), 0, 10000);

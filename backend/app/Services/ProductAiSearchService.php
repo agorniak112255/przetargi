@@ -3279,6 +3279,9 @@ final class ProductAiSearchService
             (string) $product->name,
             (string) ($product->norms ?? ''),
             (string) ($product->description ?? ''),
+            // Poziom cięcia bywa wierszem tabelki sklepu, nie zdaniem opisu — bez tego karta z poziomem
+            // podanym przez dostawcę byłaby czytana jako „bez danych”.
+            (string) ($product->shop_fields_summary ?? ''),
         ]));
 
         return $have === null || $have >= $min;
@@ -4667,14 +4670,21 @@ final class ProductAiSearchService
             'norms' => $product->norms,
             'heat_celsius' => $this->productHeatCelsius($product),
             'specs' => array_slice($this->stringList($payload['specs'] ?? null), 0, $short ? 2 : 8),
+            // Dane z karty dostawcy osobnym kluczem, nigdy doklejone do description — model ma móc napisać
+            // „karta dostawcy podaje SNR 31 dB”, a nie mylić tabelki sklepu z opisem redakcyjnym. Przycinamy
+            // tak samo jak specs, żeby karta krótka nie rozsadziła budżetu; normy i tak zostają w
+            // description_norms, więc urwane wiersze nie gubią dowodu.
+            'shop_fields' => array_slice($this->shopFieldLines($product), 0, $short ? 2 : 8),
             'use_cases' => array_slice($this->stringList($payload['use_cases'] ?? null), 0, $short ? 2 : 4),
             'payload_norms' => array_slice($this->stringList($payload['norms'] ?? null), 0, 6),
             // Normy z CAŁEGO opisu karty — opis idzie do modelu przycięty (karta krótka: wcale). Przetarg 1 poz. 13:
             // „PN-EN 140:2004” stoi na końcu opisu SECURA 3000, a pole norm ma cechy z enrichmentu, więc ranking
             // pisał „brak dowodu EN 140” i obcinał ocenę do 50. Nazwa pola mówi, skąd jest wartość.
+            // Od etapu 2 „Normy: EN 361…” Protektu stoją wyłącznie w shop_fields_summary — czytamy oba źródła
+            // naraz, inaczej normy zniknęłyby z karty rankingowej razem z przeprowadzką tabelek poza opis.
             'description_norms' => array_slice(array_map(
                 static fn (string $digits): string => 'EN '.$digits,
-                $this->featureMatch->norms((string) ($product->description ?? ''))
+                $this->featureMatch->norms(trim((string) ($product->description ?? '')."\n".$this->shopFieldsText($product)))
             ), 0, 8),
         ];
         if (! $short) {
@@ -4712,11 +4722,16 @@ final class ProductAiSearchService
             implode(' ', $this->stringList($card['specs'] ?? null)),
             implode(' ', $this->stringList($card['features'] ?? null)),
             implode(' ', $this->stringList($card['payload_norms'] ?? null)),
+            // Wiersze karty dostawcy widoczne na karcie — bez tego cytowalibyśmy to, co model i tak ma przed sobą.
+            implode(' ', $this->stringList($card['shop_fields'] ?? null)),
         ]));
         $fragments = array_merge(
             preg_split('/(?<=[.;!?])\s+|\R+/u', (string) ($product->description ?? '')) ?: [],
             $this->stringList($payload['features'] ?? null),
             $this->stringList($payload['specs'] ?? null),
+            // Karta dostawcy bywa jedynym miejscem z parametrem warunku, a na karcie rankingowej widać
+            // najwyżej kilka jej wierszy — resztę wolno zacytować dosłownie.
+            $this->shopFieldLines($product),
         );
         $out = [];
         foreach ($constraints as $constraint) {
@@ -4745,6 +4760,32 @@ final class ProductAiSearchService
             if (count($out) >= 4) {
                 break;
             }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /** Tekst tabelki z karty dostawcy (products.shop_fields_summary) — dane sklepu, nie opis wyrobu. */
+    private function shopFieldsText(Product $product): string
+    {
+        return trim((string) ($product->shop_fields_summary ?? ''));
+    }
+
+    /**
+     * Wiersze „nazwa: wartość” z karty dostawcy, dosłownie ze źródła — niczego nie normalizujemy, bo to dane
+     * dostawcy. Same nagłówki sekcji pomijamy: bez wartości nie są dowodem na nic.
+     *
+     * @return list<string>
+     */
+    private function shopFieldLines(Product $product): array
+    {
+        $out = [];
+        foreach (preg_split('/\R+/u', $this->shopFieldsText($product)) ?: [] as $line) {
+            $line = trim(preg_replace('/\s+/u', ' ', (string) $line) ?? '');
+            if ($line === '' || ! str_contains($line, ':')) {
+                continue;
+            }
+            $out[] = mb_substr($line, 0, 200);
         }
 
         return array_values(array_unique($out));
@@ -4811,9 +4852,11 @@ final class ProductAiSearchService
         if ($intent['model_name'] !== null && $intent['model_name'] !== '') {
             $intentLine .= "\nModel z analizy: ".$intent['model_name'];
         }
+        // shop_fields = tabelka z karty dostawcy; bez wymienienia pola model nie wie, że istnieje, i uzna
+        // warunek za niepotwierdzony, choć dowód stoi na karcie.
         $proofFields = $short
-            ? 'name/norms/specs/payload_norms/description_norms/constraint_evidence/use_cases/heat_celsius'
-            : 'name/norms/specs/payload_norms/description_norms/constraint_evidence/features/use_cases/description';
+            ? 'name/norms/specs/shop_fields/payload_norms/description_norms/constraint_evidence/use_cases/heat_celsius'
+            : 'name/norms/specs/shop_fields/payload_norms/description_norms/constraint_evidence/features/use_cases/description';
         $constraintLine = $constraints === []
             ? ''
             : "\nWarunki z analizy (dowód z {$proofFields}, nie zgaduj; kluczowy bez dowodu → score najwyżej 50, "
@@ -5012,6 +5055,9 @@ final class ProductAiSearchService
             (string) $product->sku,
             (string) ($product->manufacturer ?? ''),
             (string) ($product->description ?? ''),
+            // Temperatura z tabelki karty dostawcy („Odporność termiczna: 350°C”) — to wciąż karta wyrobu,
+            // a nie folder sklepu, którego świadomie tu nie bierzemy razem z search_blob.
+            (string) ($product->shop_fields_summary ?? ''),
             (string) ($product->norms ?? ''),
             ...$this->stringList($payload['features'] ?? null),
             ...$this->stringList($payload['use_cases'] ?? null),

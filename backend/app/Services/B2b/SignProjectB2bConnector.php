@@ -34,8 +34,6 @@ final class SignProjectB2bConnector implements B2bShopFieldSource, B2bVariantCon
 
     private const EPSILON = 0.005;
 
-    private const VERSIONS_LINE_LIMIT = 1500;
-
     /** Sekcje karty wyrobu u dostawcy (B2bShopFieldSource). */
     private const SHOP_SECTION_TRADE = 'Informacje handlowe';
 
@@ -246,16 +244,15 @@ final class SignProjectB2bConnector implements B2bShopFieldSource, B2bVariantCon
         return $variants;
     }
 
+    /**
+     * Opis znaku ze sklepu (sekcja „projector_longdescription”), dosłownie. Znak, którego sklep nie opisuje,
+     * zostaje z pustym opisem i czeka na niego: dane katalogowe (kategoria, formaty, podłoża, wersje) są na
+     * karcie wyrobu u dostawcy (shopFields()), a sklejka z nich opisem wyrobu nie jest. Synchronizacja pustym
+     * opisem istniejącego opisu nie nadpisuje.
+     */
     public function description(B2bRemoteProduct $product): string
     {
-        $html = $this->pageFor($product);
-
-        $long = self::longDescription($html);
-        if ($long !== '') {
-            return mb_substr($long, 0, 10000);
-        }
-
-        return $this->factualDescription($product, self::categorySegments($html));
+        return mb_substr(self::longDescription($this->pageFor($product)), 0, 10000);
     }
 
     /**
@@ -780,55 +777,6 @@ final class SignProjectB2bConnector implements B2bShopFieldSource, B2bVariantCon
         }
 
         return $this->pageHtml;
-    }
-
-    /**
-     * @param  list<string>  $categorySegments
-     */
-    private function factualDescription(B2bRemoteProduct $product, array $categorySegments): string
-    {
-        $lines = [$product->name];
-        if ($categorySegments !== []) {
-            $lines[] = 'Kategoria: '.implode(' › ', $categorySegments);
-        }
-
-        $header = self::members((string) ($product->raw['version_header'] ?? ''));
-        $formatAt = array_search('Format', $header, true);
-        $substrateAt = array_search('Podłoże', $header, true);
-        $labels = [];
-        $formats = [];
-        $substrates = [];
-        foreach ($product->raw['versions'] ?? [] as $version) {
-            if ($version['name'] === '') {
-                continue;
-            }
-            $labels[] = $version['name'];
-            $parts = self::members($version['name']);
-            if (count($parts) !== count($header)) {
-                continue;
-            }
-            if ($formatAt !== false && $parts[$formatAt] !== '') {
-                $formats[] = $parts[$formatAt];
-            }
-            if ($substrateAt !== false && $parts[$substrateAt] !== '') {
-                $substrates[] = $parts[$substrateAt];
-            }
-        }
-        $formats = array_values(array_unique($formats));
-        $substrates = array_values(array_unique($substrates));
-
-        if ($formats !== []) {
-            $lines[] = 'Dostępne formaty: '.implode('; ', $formats);
-        }
-        if ($substrates !== []) {
-            $lines[] = 'Podłoża: '.implode('; ', $substrates);
-        }
-        if ($formats === [] && $substrates === [] && $labels !== []) {
-            $lines[] = 'Wersje: '.self::limitedList(array_values(array_unique($labels)), self::VERSIONS_LINE_LIMIT);
-        }
-        $lines[] = 'Opis z danych katalogu SignProject — sklep nie podaje opisu tego znaku.';
-
-        return implode("\n", $lines);
     }
 
     /**

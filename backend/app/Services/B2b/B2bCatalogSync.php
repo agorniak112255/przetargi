@@ -98,6 +98,13 @@ final class B2bCatalogSync
      */
     public const SHOP_FIELDS_TTL_DAYS = 7;
 
+    /**
+     * Limit tekstu z kart sklepowych na karcie wyrobu — tyle samo co przy wersjach. Bez niego sama tabelka
+     * „Protection Level” z UVEX (kilkadziesiąt wierszy) wypchnęłaby opis poza blob wyszukiwania (16000 znaków)
+     * i poza dokument embeddingu (8000).
+     */
+    private const SHOP_FIELDS_SUMMARY_LIMIT = 1500;
+
     /** Tyle powodów pominięcia wraca w wyniku przebiegu (panel i CLI pokazują kilka pierwszych). */
     private const ERRORS_LIMIT = 200;
 
@@ -1682,10 +1689,32 @@ final class B2bCatalogSync
      * starszy niż SHOP_FIELDS_TTL_DAYS — inaczej nie wysyłamy do sklepu niczego. Pusta odpowiedź (dostawca
      * przestał podawać tabelkę) kasuje rekord tej pary, zamiast zostawiać nieaktualne wiersze.
      *
+     * Po każdej ścieżce (także tych, które kończą się bez zapisu) odświeżamy products.shop_fields_summary — tekst
+     * dla wyszukiwania liczony ze stanu w bazie, więc obejmuje też karty pozostałych kont.
+     *
      * @param  list<string>|null  $warnings
      * @return bool czy wiersze zostały zapisane albo odświeżone
      */
     private function storeShopFields(
+        B2bConnector $connector,
+        B2bRemoteProduct $remote,
+        Product $product,
+        B2bAccount $account,
+        ?array &$warnings = null,
+    ): bool {
+        $saved = $this->syncShopFields($connector, $remote, $product, $account, $warnings);
+        self::refreshShopFieldsSummary($product);
+
+        return $saved;
+    }
+
+    /**
+     * Samo pobranie i zapisanie wierszy karty sklepowej dla pary (karta, konto).
+     *
+     * @param  list<string>|null  $warnings
+     * @return bool czy wiersze zostały zapisane albo odświeżone
+     */
+    private function syncShopFields(
         B2bConnector $connector,
         B2bRemoteProduct $remote,
         Product $product,
@@ -1723,6 +1752,14 @@ final class B2bCatalogSync
             return false;
         }
 
+        if ($stored !== null && self::isPoorerShopCard($sections, is_array($stored->fields) ? $stored->fields : [])) {
+            // Zapisanej tabelki nie zastępujemy uboższą odpowiedzią — zostaje poprzednia, bez dotykania synced_at,
+            // żeby następny przebieg spróbował pobrać ją jeszcze raz.
+            $warnings[] = 'dane z karty w sklepie były uboższe od zapisanych — zostawiono poprzednie wiersze';
+
+            return false;
+        }
+
         ProductShopCard::query()->updateOrCreate(
             ['product_id' => $product->id, 'b2b_account_id' => $account->id],
             [
@@ -1733,6 +1770,107 @@ final class B2bCatalogSync
         );
 
         return true;
+    }
+
+    /**
+     * Czy nowa odpowiedź to uboższa wersja zapisanej tabelki: ma mniej wierszy i nie wnosi żadnej nowej sekcji.
+     *
+     * Tak wygląda karta UVEX: wiersze „Dane techniczne” pochodzą ze strony producenta, a łącznik zagląda tam tylko
+     * przy okazji opisu — karta z opisem ręcznym albo od AI dostaje po TTL same dwa wiersze handlowe. To luka
+     * w pobraniu, nie zmiana u dostawcy, więc nadpisanie (updateOrCreate) kasowałoby dane bez powodu. Odpowiedź
+     * z nową sekcją albo z tyloma samymi wierszami traktujemy normalnie — wtedy u dostawcy naprawdę coś się zmieniło.
+     *
+     * @param  array<int, array{section: string, rows: list<array{name: string, value: string}>}>  $fresh
+     * @param  array<int, array{section: string, rows: list<array{name: string, value: string}>}>  $stored
+     */
+    private static function isPoorerShopCard(array $fresh, array $stored): bool
+    {
+        if ($stored === [] || self::shopCardRows($fresh) >= self::shopCardRows($stored)) {
+            return false;
+        }
+
+        $known = [];
+        foreach ($stored as $section) {
+            $known['#'.trim((string) ($section['section'] ?? ''))] = true;
+        }
+        foreach ($fresh as $section) {
+            if (! isset($known['#'.trim((string) ($section['section'] ?? ''))])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param  array<int, array{section: string, rows: list<array{name: string, value: string}>}>  $sections
+     */
+    private static function shopCardRows(array $sections): int
+    {
+        $rows = 0;
+        foreach ($sections as $section) {
+            $rows += is_array($section['rows'] ?? null) ? count($section['rows']) : 0;
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Tekst z kart wyrobu u dostawców (ProductShopCard) na kolumnie products.shop_fields_summary — dane ze sklepu
+     * mają być widoczne dla wyszukiwania leksykalnego i wektorowego, mimo że nie są opisem wyrobu.
+     *
+     * Liczony ze stanu zapisanego w bazie (wszystkie konta naraz), nie z odpowiedzi łącznika, więc przebieg jednego
+     * konta nie gubi wierszy pozostałych. Zapis zwykłym save(): hak `saving` przelicza search_blob, hak `updated`
+     * zleca reindeks wektora — i tylko wtedy, gdy tekst faktycznie się zmienił.
+     *
+     * @return bool czy kolumna została zapisana
+     */
+    public static function refreshShopFieldsSummary(Product $product): bool
+    {
+        $product->shop_fields_summary = self::shopFieldsSummary($product);
+        if (! $product->isDirty('shop_fields_summary')) {
+            return false;
+        }
+
+        $product->save();
+
+        return true;
+    }
+
+    /**
+     * Układ (zamrożony): nazwa sekcji w osobnej linii, pod nią wiersze „nazwa: wartość” po jednym w linii; sekcja
+     * bez nazwy nie ma nagłówka. Karty kolejnych kont idą po sobie w kolejności b2b_account_id — kolejność musi być
+     * stała, bo inaczej ten sam stan bazy dawałby raz taki, raz inny tekst i każdy przebieg zlecałby reindeks
+     * wektora bez powodu.
+     */
+    public static function shopFieldsSummary(Product $product): ?string
+    {
+        $lines = [];
+        $cards = ProductShopCard::query()
+            ->where('product_id', $product->id)
+            ->orderBy('b2b_account_id')
+            ->get();
+
+        foreach ($cards as $card) {
+            foreach (is_array($card->fields) ? $card->fields : [] as $section) {
+                $name = trim((string) ($section['section'] ?? ''));
+                if ($name !== '') {
+                    $lines[] = $name;
+                }
+                foreach (is_array($section['rows'] ?? null) ? $section['rows'] : [] as $row) {
+                    $label = trim((string) ($row['name'] ?? ''));
+                    $value = trim((string) ($row['value'] ?? ''));
+                    if ($label === '' || $value === '') {
+                        continue;
+                    }
+                    $lines[] = $label.': '.$value;
+                }
+            }
+        }
+
+        $text = trim(implode("\n", $lines));
+
+        return $text === '' ? null : mb_substr($text, 0, self::SHOP_FIELDS_SUMMARY_LIMIT);
     }
 
     /**

@@ -302,7 +302,7 @@ final class JspConnectorTest extends TestCase
         $this->assertSame(2, $this->logins);
     }
 
-    public function test_description_is_polish_feature_list_without_duplicates_plus_unit_and_category_from_breadcrumbs(): void
+    public function test_description_is_polish_feature_list_without_duplicates_and_category_comes_from_breadcrumbs(): void
     {
         $this->fakeSite();
         $connector = $this->connector();
@@ -322,9 +322,13 @@ final class JspConnectorTest extends TestCase
             '- Taśma o szerokości 21 mm z amortyzatorem.',
             '- Zgodne z normą EN 360:2002, do pracy w poziomie (ostra krawędź CNB/P/11.060:2014) i przy współczynniku upadku 2 w granicy 100 kg.',
             '- 2 zatrzaśniki aluminiowe z blokadą ćwierćobrotową na obu końcach. Otwarcie zatrzaśnika: 21 mm. Zgodne z normą EN 362:2004 klasa B.',
-            '',
-            'Jednostka: sztuka',
         ]), $connector->description($far));
+        // Jednostka sprzedaży jest wierszem tabelki karty wyrobu u dostawcy, nie linią opisu.
+        $this->assertStringNotContainsString('Jednostka: ', $connector->description($far));
+        $this->assertContains(
+            ['Informacje handlowe', 'Jednostka sprzedaży', 'sztuka'],
+            self::rows($connector->shopFields($far)),
+        );
 
         $leone = $products['1LEOCARB23S'];
         $this->assertSame('1LEOCARB23S', $leone->sku);
@@ -334,7 +338,7 @@ final class JspConnectorTest extends TestCase
         Http::assertNotSent(static fn (Request $r): bool => str_contains($r->url(), 'showfile.aspx'));
     }
 
-    public function test_description_is_full_overview_then_short_features_weights_and_unit_without_other_tabs(): void
+    public function test_description_is_full_overview_then_short_features_without_weights_unit_or_other_tabs(): void
     {
         $description = $this->asaDescription();
 
@@ -342,9 +346,12 @@ final class JspConnectorTest extends TestCase
             self::ASA_OVERVIEW,
             // polskie krótkie cechy nie są dosłownie nagłówkami opisu („Stylowy Overspec” ≠ „Stylowe”) — zostają
             "Cechy w skrócie:\n".self::ASA_SHORT,
-            self::ASA_WEIGHTS,
-            'Jednostka: sztuka',
         ]), $description);
+        // Wagi i jednostka sprzedaży są wierszami tabelki karty wyrobu u dostawcy, nie liniami opisu.
+        $this->assertStringNotContainsString(self::ASA_WEIGHTS, $description);
+        foreach (['Wagi i wymiary:', 'INNER PACK', 'OUTER PACK', 'Jednostka: '] as $absent) {
+            $this->assertStringNotContainsString($absent, $description);
+        }
         foreach (['Karta techniczna', 'Download', 'przydymione', 'Add to basket', 'Brak opinii', 'Oceń ten produkt', 'Jak dobrać', 'Show More', 'Show Less', 'Szablon ze skryptu', '€'] as $chrome) {
             $this->assertStringNotContainsString($chrome, $description);
         }
@@ -358,20 +365,14 @@ final class JspConnectorTest extends TestCase
             $this->pages['ASA940061300'],
         );
 
-        $this->assertSame(
-            implode("\n\n", [self::ASA_OVERVIEW, self::ASA_WEIGHTS, 'Jednostka: sztuka']),
-            $this->asaDescription(),
-        );
+        $this->assertSame(self::ASA_OVERVIEW, $this->asaDescription());
     }
 
     public function test_without_overview_tab_description_falls_back_to_short_features(): void
     {
         $this->pages['ASA940061300'] = (string) preg_replace('#<!-- overview -->.*?<!-- /overview -->#s', '', $this->pages['ASA940061300']);
 
-        $this->assertSame(
-            implode("\n\n", [self::ASA_SHORT, self::ASA_WEIGHTS, 'Jednostka: sztuka']),
-            $this->asaDescription(),
-        );
+        $this->assertSame(self::ASA_SHORT, $this->asaDescription());
     }
 
     public function test_features_and_delivered_with_tabs_add_only_lines_not_yet_in_description(): void
@@ -383,8 +384,6 @@ final class JspConnectorTest extends TestCase
             "Cechy w skrócie:\n".self::ASA_SHORT,
             "Cechy i zalety:\n- Soczewka 1 klasy optycznej",
             "W zestawie:\n- Etui z mikrofibry\n- Linka do okularów",
-            self::ASA_WEIGHTS,
-            'Jednostka: sztuka',
         ]), $this->asaDescription());
     }
 
@@ -397,10 +396,17 @@ final class JspConnectorTest extends TestCase
             $this->pages['ASA940061300'],
         );
 
-        $this->assertStringContainsString(
-            "Wagi i wymiary:\nINNER PACK – Pack quantity: 10\nINNER PACK – Height: 12CM\nINNER PACK – Weight: 0.58KG\n\nJednostka: sztuka",
-            $this->asaDescription(),
-        );
+        $fields = self::rows($this->asaShopFields());
+
+        $this->assertSame([
+            ['Wagi i wymiary', 'INNER PACK – Pack quantity', '10'],
+            ['Wagi i wymiary', 'INNER PACK – Height', '12CM'],
+            ['Wagi i wymiary', 'INNER PACK – Weight', '0.58KG'],
+        ], array_values(array_filter(
+            $fields,
+            static fn (array $row): bool => $row[0] === 'Wagi i wymiary',
+        )));
+        $this->assertContains(['Informacje handlowe', 'Jednostka sprzedaży', 'sztuka'], $fields);
     }
 
     public function test_overview_keeps_inline_bold_in_its_sentence_and_list_items_as_bullets(): void
@@ -450,7 +456,7 @@ final class JspConnectorTest extends TestCase
         $first = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
         $product = Product::query()->where('sku', 'ASA940-061-300')->sole();
         $this->assertSame(1, $first['created']);
-        $this->assertSame(self::ASA_SHORT."\n\nJednostka: sztuka", $product->description);
+        $this->assertSame(self::ASA_SHORT, $product->description);
 
         $this->pages['ASA940061300'] = $full;
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
@@ -458,7 +464,8 @@ final class JspConnectorTest extends TestCase
         $product->refresh();
         $this->assertSame(1, $second['descriptions']);
         $this->assertStringStartsWith(self::ASA_OVERVIEW."\n\nCechy w skrócie:", (string) $product->description);
-        $this->assertStringContainsString(self::ASA_WEIGHTS, (string) $product->description);
+        // Wagi zostają w tabelce karty wyrobu u dostawcy — opis ich nie przejmuje.
+        $this->assertStringNotContainsString(self::ASA_WEIGHTS, (string) $product->description);
         $this->assertSame(sha1((string) $product->description), B2bProductLink::query()->where('remote_id', 'ASA940-061-300')->value('description_hash'));
     }
 
@@ -675,6 +682,28 @@ final class JspConnectorTest extends TestCase
     /** Opis ASA940-061-300 z przebiegu łącznika po stronie z $this->pages (mapa strony z jednym produktem). */
     private function asaDescription(): string
     {
+        [$connector, $product] = $this->asaProduct();
+
+        return $connector->description($product);
+    }
+
+    /**
+     * Wiersze karty wyrobu u dostawcy dla ASA940-061-300 (tam trafiły wagi i jednostka sprzedaży).
+     *
+     * @return list<B2bRemoteShopField>
+     */
+    private function asaShopFields(): array
+    {
+        [$connector, $product] = $this->asaProduct();
+
+        return $connector->shopFields($product);
+    }
+
+    /**
+     * @return array{0: JspB2bConnector, 1: B2bRemoteProduct}
+     */
+    private function asaProduct(): array
+    {
         $this->sitemap = self::ASA_SITEMAP;
         $this->fakeSite();
         $connector = $this->connector();
@@ -682,7 +711,7 @@ final class JspConnectorTest extends TestCase
         $product = $this->productsByCode($connector)['ASA940-061-300'];
         $this->assertSame('ok', $product->raw['status']);
 
-        return $connector->description($product);
+        return [$connector, $product];
     }
 
     private function fixture(string $name): string

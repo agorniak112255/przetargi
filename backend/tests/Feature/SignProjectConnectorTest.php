@@ -584,7 +584,7 @@ final class SignProjectConnectorTest extends TestCase
         $this->assertCount(1, Http::recorded(fn (Request $r): bool => $r->url() === $this->link(7109)));
     }
 
-    public function test_description_without_shop_text_is_built_only_from_catalog_facts(): void
+    public function test_description_is_empty_without_shop_text_and_catalog_facts_stay_on_the_shop_card(): void
     {
         $this->fakeShop();
         $connector = $this->connector();
@@ -593,14 +593,19 @@ final class SignProjectConnectorTest extends TestCase
 
         $description = $connector->description($gl031);
 
-        $this->assertSame(implode("\n", [
-            'GL031 Przeczytaj instrukcję',
-            'Kategoria: Ochrona i higiena pracy › Znaki nakazu z opisem',
-            'Dostępne formaty: 35 x 52,5 cm; 5 x 7,4 cm',
-            'Podłoża: KN - folia podłogowa; FS - folia fotoluminescencyjna',
-            'Opis z danych katalogu SignProject — sklep nie podaje opisu tego znaku.',
-        ]), $description);
-        $this->assertStringNotContainsString('Sklep ze znakami', $description);
+        // znak bez opisu w sklepie czeka na opis — sklejka danych katalogowych opisem wyrobu nie jest
+        $this->assertSame('', $description);
+        $this->assertStringNotContainsString('Kategoria:', $description);
+        $this->assertStringNotContainsString('Dostępne formaty:', $description);
+        $this->assertStringNotContainsString('Podłoża:', $description);
+        $this->assertStringNotContainsString('katalogu SignProject', $description);
+
+        // te same dane są na karcie wyrobu u dostawcy
+        $rows = self::rows($connector->shopFields($gl031));
+
+        $this->assertContains(['Informacje handlowe', 'Kategoria', 'Ochrona i higiena pracy › Znaki nakazu z opisem'], $rows);
+        $this->assertContains(['Dostępne wersje', 'Format', '35 x 52,5 cm; 5 x 7,4 cm'], $rows);
+        $this->assertContains(['Dostępne wersje', 'Podłoże', 'KN - folia podłogowa; FS - folia fotoluminescencyjna'], $rows);
     }
 
     public function test_category_falls_back_to_meta_description_template_when_breadcrumbs_have_one_level(): void
@@ -616,13 +621,13 @@ final class SignProjectConnectorTest extends TestCase
         $gl031 = iterator_to_array($connector->products(), false)[1];
 
         $this->assertSame('Ochrona i higiena pracy › Znaki nakazu z opisem', $gl031->category);
-        // nagłówek bez członów Format/Podłoże → lista etykiet wersji
-        $this->assertSame(implode("\n", [
-            'GL031 Przeczytaj instrukcję',
-            'Kategoria: Ochrona i higiena pracy › Znaki nakazu z opisem',
-            'Wersje: 35 x 52,5 cm \ KN - folia podłogowa; 5 x 7,4 cm \ FS - folia fotoluminescencyjna',
-            'Opis z danych katalogu SignProject — sklep nie podaje opisu tego znaku.',
-        ]), $connector->description($gl031));
+        $this->assertSame('', $connector->description($gl031), 'sklep nie opisuje tego znaku');
+        // kategoria idzie na kartę wyrobu u dostawcy; etykiety wersji o innej liczbie członów niż nagłówek
+        // zostają poza nią (bez zgadywania, co jest czym) — opisu też nie udają
+        $this->assertSame([
+            ['Informacje handlowe', 'Producent', 'SIGNPROJECT'],
+            ['Informacje handlowe', 'Kategoria', 'Ochrona i higiena pracy › Znaki nakazu z opisem'],
+        ], self::rows($connector->shopFields($gl031)));
     }
 
     public function test_image_comes_from_og_image_with_icon_fallback(): void

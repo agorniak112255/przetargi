@@ -100,6 +100,12 @@ final class AnroB2bConnector implements B2bConnector, B2bShopFieldSource
         );
     }
 
+    /**
+     * Sama proza z pola OPIS, dosłownie ze sklepu (HTML zamieniony na linie tekstu). Parametrów technicznych
+     * tu nie ma — te same wiersze podaje shopFields() jako tabelkę „Informacje techniczne”, a powtórzenie ich
+     * w opisie dublowałoby dane i psuło wyszukiwanie. Opis bywa przez to pusty: pusty opis niczego nie nadpisuje
+     * (B2bCatalogSync::applyCardDetails), więc karta zostaje z tym, co już ma.
+     */
     public function description(B2bRemoteProduct $product): string
     {
         $html = (string) ($product->raw['OPIS'] ?? '');
@@ -115,22 +121,15 @@ final class AnroB2bConnector implements B2bConnector, B2bShopFieldSource
                 $lines[] = $line;
             }
         }
-        $out = implode("\n", $lines);
 
-        $technical = $this->client->technicalData((int) $product->remoteId);
-        if ($technical !== []) {
-            $params = array_map(static fn (array $p): string => '- '.$p['name'].': '.$p['value'], $technical);
-            // źródło karty jest w linku produktu i powiązaniu z kontem B2B — nie w treści opisu
-            $out .= ($out !== '' ? "\n\n" : '')."Parametry:\n".implode("\n", $params);
-        }
-
-        return mb_substr($out, 0, 10000);
+        // źródło karty jest w linku produktu i powiązaniu z kontem B2B — nie w treści opisu
+        return mb_substr(implode("\n", $lines), 0, 10000);
     }
 
     /**
      * Tabelka „Informacje o produkcie” ze sklepu Anro, w układzie ze strony dostawcy: dane handlowe i
-     * klasyfikacja z pozycji listy (B2bRemoteProduct::$raw), parametry techniczne osobnym zapytaniem —
-     * tym samym, którego używa description(), więc klient odpowiada z pamięci ostatniego produktu.
+     * klasyfikacja z pozycji listy (B2bRemoteProduct::$raw), parametry techniczne osobnym zapytaniem.
+     * To jedyne miejsce, w którym parametry techniczne się zapisują — opis ich nie powtarza.
      *
      * Cen tu nie ma: karta wyrobu ma własne sloty cen ze źródeł (product_source_prices), a przepisanie
      * ceny konta do tabelki dublowałoby ją w drugim miejscu, bez wiedzy, dla którego konta obowiązuje.

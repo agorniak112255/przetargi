@@ -141,8 +141,11 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bP
     }
 
     /**
-     * Opis dosłownie z karty producenta: normy, specyfikacja techniczna (pary „nazwa: wartość”)
-     * i cechy szczególne. Niczego nie dopisujemy — karta Protektu nie ma pola opisu ciągłego.
+     * Opis dosłownie z karty producenta: ostrzeżenie o wycofaniu i cechy szczególne — czyli proza, której nie da
+     * się rozpisać na pary „nazwa: wartość”. Norm i specyfikacji technicznej tu nie ma: te same dane podaje
+     * shopFields() jako wiersze tabelki, gdzie pojedyncze oznaczenie („EN 361”) da się odczytać osobno.
+     * Niczego nie dopisujemy — karta Protektu nie ma pola opisu ciągłego, więc opis bywa pusty. Pusty opis
+     * niczego nie nadpisuje (B2bCatalogSync::applyCardDetails), więc karta zostaje z tym, co już ma.
      */
     public function description(B2bRemoteProduct $product): string
     {
@@ -152,19 +155,6 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bP
         $withdrawn = (string) ($raw['withdrawn'] ?? '');
         if ($withdrawn !== '') {
             $sections[] = 'UWAGA: produkt wycofany przez producenta — '.$withdrawn.'.';
-        }
-
-        $norms = $raw['norms'] ?? [];
-        if ($norms !== []) {
-            $sections[] = 'Normy: '.implode(', ', $norms);
-        }
-
-        $spec = $raw['spec'] ?? [];
-        if ($spec !== []) {
-            $sections[] = "Specyfikacja techniczna:\n".implode("\n", array_map(
-                static fn (string $row): string => '- '.$row,
-                $spec,
-            ));
         }
 
         $features = $raw['features'] ?? [];
@@ -521,7 +511,7 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bP
      * Wiersze specyfikacji jako „nazwa: wartość”; nagłówki podzespołów (spec-col__product) jako osobne linie.
      *
      * Wiersz „Kolor” dostaje pełną listę kolorów karty zamiast koloru tego jednego adresu: karta obejmuje
-     * wszystkie wersje kolorystyczne, więc pojedynczy kolor byłby w jej opisie nieprawdą. Przy okazji opis
+     * wszystkie wersje kolorystyczne, więc pojedynczy kolor byłby w tabelce nieprawdą. Przy okazji tabelka
      * przestaje się różnić między adresami rodzeństwa, więc kolejne odwiedziny nie liczą się jako zmiana.
      *
      * @return list<string>

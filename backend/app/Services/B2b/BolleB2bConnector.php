@@ -28,7 +28,8 @@ use RuntimeException;
  *
  * Sklep podaje teksty po angielsku (B2bForeignLanguageSource, decyzja użytkownika 15.09.2026): opis zapisany
  * przez import i nazwa nowej karty są tłumaczone na polski po zapisie (TranslateB2bProductTextJob). Łącznik
- * podaje tekst dosłownie; tylko etykiety cech w „Parametry:” są naszymi stałymi polskimi odpowiednikami.
+ * podaje tekst dosłownie; tylko etykiety cech w tabelce „Parametry” (shopFields) są naszymi stałymi polskimi
+ * odpowiednikami.
  */
 final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource, B2bKeepsExistingNames, B2bShopFieldSource
 {
@@ -46,9 +47,9 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
     /**
      * Pola cech, które mają etykiety filtrów sklepu (SC.CONFIGURATION.facets, odczyt 15.09.2026: Frame Material,
      * Frame Technology, Lens coating, Lens colour). Etykiety to nasze stałe polskie odpowiedniki tych etykiet
-     * (15.09.2026) — wartości cech zostają dosłownie ze źródła i tłumaczy je dopiero job tłumaczenia opisu.
+     * (15.09.2026) — wartości cech zostają dosłownie ze źródła, po angielsku.
      * Pozostałe custitem_* nie mają etykiet w źródle (część to pola wewnętrzne: segmenty klientów, najbliższa
-     * dostawa) — nie trafiają do opisu.
+     * dostawa) — nie trafiają na kartę wyrobu u dostawcy.
      */
     private const PARAMETERS = [
         'custitem_bb_fm_product_material' => 'Materiał oprawki',
@@ -184,8 +185,9 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
     /**
      * Opis dosłownie ze sklepu (tłumaczenie dopiero po zapisie karty — B2bForeignLanguageSource), sekcje
      * oddzielone pustą linią: krótki opis (storedescription), opis szczegółowy (storedetaileddescription), opis
-     * wyróżniony (featureddescription) — sekcja identyczna z wcześniejszą pominięta. Na końcu „Parametry:” tylko
-     * z pól z etykietami filtrów sklepu (PARAMETERS, polskie etykiety, wartości dosłownie).
+     * wyróżniony (featureddescription) — sekcja identyczna z wcześniejszą pominięta. Cech z PARAMETERS tu nie ma:
+     * to pary „nazwa → wartość”, które podaje shopFields() jako tabelkę „Parametry”. Pozycja bez żadnego z trzech
+     * pól opisowych zostaje bez opisu; pusty opis niczego nie nadpisuje (B2bCatalogSync::applyCardDetails).
      */
     public function description(B2bRemoteProduct $product): string
     {
@@ -195,21 +197,6 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
             if ($text !== '' && ! in_array($text, $sections, true)) {
                 $sections[] = $text;
             }
-        }
-
-        $params = [];
-        foreach (self::PARAMETERS as $field => $label) {
-            $value = $product->raw[$field] ?? null;
-            if (! is_scalar($value)) {
-                continue;
-            }
-            $value = self::inlineText((string) $value);
-            if ($value !== '') {
-                $params[] = '- '.$label.': '.$value;
-            }
-        }
-        if ($params !== []) {
-            $sections[] = "Parametry:\n".implode("\n", $params);
         }
 
         return mb_substr(implode("\n\n", $sections), 0, 10000);

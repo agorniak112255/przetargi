@@ -1912,6 +1912,9 @@ final class PpeAssortment
         return trim(implode(' ', array_filter([
             $this->productIdentityText($product),
             (string) ($product->description ?? ''),
+            // Karta dostawcy: po wyprowadzeniu tabelek z opisu to jedyne miejsce z normą czy materiałem,
+            // a z tego tekstu liczy się ppe_family i bramki asortymentu.
+            (string) ($product->shop_fields_summary ?? ''),
             (string) ($product->norms ?? ''),
         ])));
     }

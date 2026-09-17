@@ -74,6 +74,22 @@ final class B2bRelinkDescriptionsCommandTest extends TestCase
         $this->assertSame(sha1('poprzedni opis'), B2bProductLink::query()->where('product_id', $byHand->id)->value('description_hash'));
     }
 
+    public function test_jsp_description_without_the_unit_line_is_still_recognised_by_its_tab_headings(): void
+    {
+        // JSP nie pisze już „Jednostka: ” (jednostka sprzedaży jest w tabelce karty wyrobu u dostawcy),
+        // więc śladem synchronizacji są nagłówki zakładek, które w opisie zostają.
+        $jsp = $this->card('ASA940-061-300', "Stealth™ Coverlite™\n\nCechy w skrócie:\n- Stylowy Overspec", sha1('opis z poprzedniego przebiegu'));
+
+        $this->artisan('b2b:relink-descriptions', ['--apply' => true])
+            ->expectsOutputToContain('Naprawiono 1 kart')
+            ->assertSuccessful();
+
+        $this->assertSame(
+            sha1((string) $jsp->fresh()?->description),
+            B2bProductLink::query()->where('product_id', $jsp->id)->value('description_hash'),
+        );
+    }
+
     public function test_unknown_account_is_an_error(): void
     {
         $this->artisan('b2b:relink-descriptions', ['--account' => 987])

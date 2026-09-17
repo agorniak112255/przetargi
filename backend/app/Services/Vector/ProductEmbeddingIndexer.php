@@ -106,6 +106,9 @@ final class ProductEmbeddingIndexer
             (string) ($product->manufacturer ?? ''),
             (string) ($product->category ?? ''),
             (string) ($product->norms ?? ''),
+            // tabelka z karty wyrobu u dostawcy — przed opisem, bo dokument jest ucinany od końca, a te dane są
+            // krótkie i gęste (normy, parametry); jak coś ma wypaść z limitu, to proza opisu
+            (string) ($product->shop_fields_summary ?? ''),
             (string) ($product->description ?? ''),
             // formaty/podłoża wersji (bez cen — zmiana samej ceny wersji nie zmienia dokumentu)
             (string) ($product->variant_summary ?? ''),

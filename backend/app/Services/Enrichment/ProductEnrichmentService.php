@@ -177,6 +177,9 @@ final class ProductEnrichmentService
     /**
      * Karty z opisem z cennika B2B (B2bDescriptionSource) są pomijane zawsze, także z force — zbiorczo AI nie nadpisuje
      * opisu ze sklepu dostawcy (decyzja użytkownika 15.09.2026); skipped_b2b = ile takich kart pominięto.
+     * $overwriteB2bDescription to to samo potwierdzenie, co przy pojedynczej karcie z panelu (enqueueProduct,
+     * enrichProductSync): przepuszcza takie karty do kolejki. Używa go b2b:queue-table-descriptions dla kart,
+     * w których opis ze sklepu jest w praktyce samą tabelką.
      *
      * @param  list<int>  $ids
      * @return array{batch: ProductEnrichmentBatch, product_ids: list<int>, skipped_b2b: int}
@@ -188,6 +191,7 @@ final class ProductEnrichmentService
         string $scope = ProductEnrichmentBatch::SCOPE_PRODUCTS,
         int $scopeId = 0,
         bool $dispatchJobs = true,
+        bool $overwriteB2bDescription = false,
     ): array {
         $ids = array_values(array_unique(array_map('intval', $ids)));
         if ($ids === []) {
@@ -204,7 +208,7 @@ final class ProductEnrichmentService
         // zachowaj kolejność z $ids
         $eligible = $query->pluck('id')->map(static fn ($id): int => (int) $id)->all();
         $eligibleSet = array_fill_keys($eligible, true);
-        $fromB2b = app(B2bDescriptionSource::class)->productIds($eligible);
+        $fromB2b = $overwriteB2bDescription ? [] : app(B2bDescriptionSource::class)->productIds($eligible);
         $productIds = [];
         $skippedB2b = 0;
         foreach ($ids as $id) {

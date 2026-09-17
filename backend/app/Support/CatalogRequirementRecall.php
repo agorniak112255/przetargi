@@ -367,6 +367,9 @@ final class CatalogRequirementRecall
                             ->orWhere('name', 'like', '%kask%')
                             ->orWhere('description', 'like', '%hełm%')
                             ->orWhere('description', 'like', '%helm%')
+                            // Kontekst hełmu bywa wierszem tabelki z karty dostawcy, a nie zdaniem opisu.
+                            ->orWhere('shop_fields_summary', 'like', '%hełm%')
+                            ->orWhere('shop_fields_summary', 'like', '%helm%')
                             ->orWhere('search_blob', 'like', '%helm%');
                     });
                 })
@@ -380,7 +383,9 @@ final class CatalogRequirementRecall
                             ->orWhere('name', 'like', '%helm%')
                             ->orWhere('name', 'like', '%kask%')
                             ->orWhere('name', 'like', '%esd%')
-                            ->orWhere('description', 'like', '%hełm%');
+                            ->orWhere('description', 'like', '%hełm%')
+                            // Jak wyżej: po etapie 2 „Przeznaczenie: pod hełm” stoi poza opisem.
+                            ->orWhere('shop_fields_summary', 'like', '%hełm%');
                     });
                 });
         });

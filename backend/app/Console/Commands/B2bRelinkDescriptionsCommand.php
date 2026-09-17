@@ -28,10 +28,25 @@ final class B2bRelinkDescriptionsCommand extends Command
 {
     /**
      * Sekcje, które do opisu dopisuje sama synchronizacja: nagłówek tekstu z karty technicznej (B2bCatalogSync),
-     * jednostka sprzedaży i opis ze strony producenta (UVEX). Opis bez żadnej z nich mógł powstać gdzie indziej
-     * — takiej karty nie ruszamy, bo przypisanie jej do B2B pozwoliłoby nadpisać cudzy tekst.
+     * jednostka sprzedaży i opis ze strony producenta (UVEX) oraz nagłówki zakładek JSP. Opis bez żadnej z nich
+     * mógł powstać gdzie indziej — takiej karty nie ruszamy, bo przypisanie jej do B2B pozwoliłoby nadpisać
+     * cudzy tekst.
+     *
+     * JSP nie pisze już „Jednostka: ” — jednostka sprzedaży i wagi przeniosły się do tabelki karty wyrobu
+     * u dostawcy (product_shop_cards). Z opisów JSP zostają nagłówki zakładek, więc to one są tu znacznikiem.
+     * „Jednostka: ” zostaje na liście, bo polecenie ogląda opisy już zapisane w bazie, a te z wcześniejszych
+     * przebiegów nadal ten wiersz mają. Opis JSP złożony z samej prozy zakładki Overview nie ma znacznika i taka
+     * karta zostaje pominięta — to świadomy wybór: lepiej nie naprawić kilku kart niż przypisać do B2B opis,
+     * który ktoś mógł napisać ręcznie.
      */
-    private const SYNC_MARKS = ['Z karty technicznej (', 'Jednostka: ', 'Opis ze strony producenta'];
+    private const SYNC_MARKS = [
+        'Z karty technicznej (',
+        'Jednostka: ',
+        'Opis ze strony producenta',
+        'Cechy w skrócie:',
+        'Cechy i zalety:',
+        'W zestawie:',
+    ];
 
     protected $signature = 'b2b:relink-descriptions
                             {--account= : Tylko to konto B2B (id)}

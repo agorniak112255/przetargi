@@ -309,17 +309,24 @@ final class UvexConnectorTest extends TestCase
         $connector->price($duplicates[0]);
     }
 
-    public function test_description_is_verbatim_text_from_product_page_plus_unit(): void
+    public function test_description_is_verbatim_text_from_product_page_without_the_shop_table_data(): void
     {
         $this->fakeSite();
         $connector = $this->connector();
         $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
 
-        $description = $connector->description($this->productsByCode($connector)['9970.005']);
+        $description = $connector->description($product);
 
         $this->assertSame(
-            "Stacja czyszcząca do okularów i gogli. Zawiera: 2x chusteczki czyszczące (700 szt. w opakowaniu) 9971.000, 1x płyn czyszczący 9972.103, 1x pompkę dozującą 9973.101\n\nJednostka: szt.",
+            'Stacja czyszcząca do okularów i gogli. Zawiera: 2x chusteczki czyszczące (700 szt. w opakowaniu) 9971.000, 1x płyn czyszczący 9972.103, 1x pompkę dozującą 9973.101',
             $description,
+        );
+        // jednostka sprzedaży to dana z tabelki sklepu, nie zdanie opisu — jest na karcie wyrobu u dostawcy
+        $this->assertStringNotContainsString('Jednostka', $description);
+        $this->assertContains(
+            ['Informacje handlowe', 'Jednostka sprzedaży', 'szt.'],
+            self::rows($connector->shopFields($product)),
         );
         foreach (['Pobierz', 'SST', 'brutto', 'Marża', 'Dodaj do koszyka'] as $chrome) {
             $this->assertStringNotContainsString($chrome, $description);
@@ -340,10 +347,10 @@ final class UvexConnectorTest extends TestCase
 
         $description = $connector->description($this->productsByCode($connector)['9970.005']);
 
-        $this->assertSame('Jednostka: szt.', $description);
+        $this->assertSame('', $description, 'karta czeka na opis, a nie dostaje samej jednostki sprzedaży');
     }
 
-    public function test_empty_description_gives_only_unit_and_other_code_on_page_is_rejected(): void
+    public function test_empty_description_stays_empty_and_other_code_on_page_is_rejected(): void
     {
         $this->details['4713'] = str_replace(
             '<p>Stacja czyszcząca do okularów i gogli. Zawiera: 2x chusteczki czyszczące (700 szt. w opakowaniu) 9971.000, 1x płyn czyszczący 9972.103, 1x pompkę dozującą 9973.101</p>',
@@ -356,7 +363,11 @@ final class UvexConnectorTest extends TestCase
         $connector->login();
         $products = $this->productsByCode($connector);
 
-        $this->assertSame('Jednostka: szt.', $connector->description($products['9970.005']));
+        $this->assertSame('', $connector->description($products['9970.005']));
+        $this->assertContains(
+            ['Informacje handlowe', 'Jednostka sprzedaży', 'szt.'],
+            self::rows($connector->shopFields($products['9970.005'])),
+        );
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('kod na stronie produktu (8430/2/40) inny niż kod z listy (8430/2/39)');
         $connector->description($products['8430/2/39']);
@@ -598,29 +609,42 @@ final class UvexConnectorTest extends TestCase
         $this->assertStringContainsString('The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.', $description);
         // wstęp przy cenie dokłada fakty, których nie ma w zakładce (maksymalny rozmiar, grubość)
         $this->assertStringContainsString('user specific available up to a size of 1219x915mm', $description);
-        $this->assertStringContainsString('Jednostka: szt.', $description);
-        // parametry ze strony producenta jako osobny blok (idą do tłumaczenia razem z opisem)
-        $this->assertStringContainsString("Dane techniczne:\nFilter material: Plastic", $description);
-        $this->assertStringContainsString('Protection Class / Norm: EN 207 full protection', $description);
-        // boczny blok z granicami widma — bez niego karta ma same nazwy zakresów, bez liczb
-        $this->assertStringContainsString(
-            'Protection range – ultraviolett: Protection within the ultraviolet spectral range between 180 and 400nm',
-            $description,
-        );
-        $this->assertStringContainsString(
-            'Protection range – visible: Protection within the visible spectral range between 400 and 700nm',
-            $description,
-        );
-        // poziomy ochrony dosłownie, w segmencie, którego tłumaczenie nie rusza
-        $this->assertStringContainsString(
-            "Parametry:\nDługość fali (nm) | OD | Tryb pracy / badany stopień ochrony"
-                ."\n180 - 315 | (OD10+) | D LB10 + IR LB4 + M LB6",
-            $description,
-        );
-        $this->assertStringContainsString('>315 - 385 | (OD8+) | D LB6 + IRM LB8', $description);
+        // opis to sama proza: tabele strony producenta i jednostka sprzedaży są na karcie wyrobu u dostawcy
+        $this->assertStringNotContainsString('Jednostka', $description);
+        $this->assertStringNotContainsString('Dane techniczne:', $description);
+        $this->assertStringNotContainsString('Filter material', $description);
+        $this->assertStringNotContainsString('Protection range', $description);
+        $this->assertStringNotContainsString('Parametry:', $description);
+        $this->assertStringNotContainsString('180 - 315', $description);
         // sam nagłówek tabeli nie jest zdaniem opisu
         $this->assertStringNotContainsString("\nSpecifications", $description);
         $this->assertTrue($connector->hasForeignDescription($product), 'opis po angielsku idzie do tłumaczenia');
+
+        $rows = self::rows($connector->shopFields($product));
+
+        $this->assertContains(['Informacje handlowe', 'Jednostka sprzedaży', 'szt.'], $rows);
+        $this->assertContains(['Dane techniczne', 'Filter material', 'Plastic'], $rows);
+        $this->assertContains(
+            ['Dane techniczne', 'Protection Class / Norm', 'EN 207 full protection, EN 208 Alignment protection, EN 60825'],
+            $rows,
+        );
+        // boczny blok z granicami widma — bez niego karta ma same nazwy zakresów, bez liczb
+        $this->assertContains(
+            ['Ochrona', 'ultraviolett', 'Protection within the ultraviolet spectral range between 180 and 400nm'],
+            $rows,
+        );
+        $this->assertContains(
+            ['Ochrona', 'visible', 'Protection within the visible spectral range between 400 and 700nm'],
+            $rows,
+        );
+        // poziomy ochrony dosłownie, kolumnami
+        $this->assertContains(
+            ['Ochrona', 'Poziomy ochrony', 'Długość fali (nm) | OD | Tryb pracy / badany stopień ochrony'],
+            $rows,
+        );
+        $this->assertContains(['Ochrona', 'Poziomy ochrony', '180 - 315 | (OD10+) | D LB10 + IR LB4 + M LB6'], $rows);
+        $this->assertContains(['Ochrona', 'Poziomy ochrony', '>315 - 385 | (OD8+) | D LB6 + IRM LB8'], $rows);
+        // opis i karta wyrobu u dostawcy czytają tę samą kopię strony
         $this->assertCount(1, $this->manufacturerHits);
     }
 
@@ -660,7 +684,7 @@ final class UvexConnectorTest extends TestCase
 
         $description = $connector->description($product);
 
-        $this->assertSame('Jednostka: szt.', $description, 'karta zostaje bez opisu producenta');
+        $this->assertSame('', $description, 'karta zostaje bez opisu producenta');
         $this->assertSame([], $this->manufacturerHits, 'strony innego wyrobu nie pobieramy');
         $this->assertFalse($connector->hasForeignDescription($product));
         $this->assertSame(
@@ -692,7 +716,9 @@ final class UvexConnectorTest extends TestCase
         $description = (string) Product::query()->whereKey($cleaner->id)->value('description');
         $this->assertStringNotContainsString('laser safety window', $description);
         $this->assertStringNotContainsString('Opis ze strony producenta', $description);
-        $this->assertStringContainsString('Jednostka: szt.', $description);
+        // zostaje to, co karta ma z własnych źródeł — tekst karty technicznej
+        $this->assertStringContainsString('Z karty technicznej (SST stacja czyszcząca mini 9970.005.pdf):', $description);
+        $this->assertStringNotContainsString('Jednostka', $description);
 
         $log = array_column((array) B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log, 'text');
         $this->assertContains(
@@ -742,7 +768,7 @@ final class UvexConnectorTest extends TestCase
 
         $description = $connector->description($product);
 
-        $this->assertSame('Jednostka: szt.', $description);
+        $this->assertSame('', $description);
         $this->assertFalse($connector->hasForeignDescription($product));
         $this->assertSame([], $this->manufacturerHits);
     }
@@ -797,7 +823,7 @@ final class UvexConnectorTest extends TestCase
 
         $description = $connector->description($product);
 
-        $this->assertSame('Jednostka: szt.', $description);
+        $this->assertSame('', $description);
         $this->assertSame(['9970.005'], $this->searchHits, 'właściwej strony szukamy po numerze katalogowym karty');
         $this->assertFalse($connector->hasForeignDescription($product));
     }
@@ -819,8 +845,12 @@ final class UvexConnectorTest extends TestCase
             "Opis ze strony producenta (www.uvex-laservision.de):\nThe laservision plastic laser safety window P1P10",
             $description,
         );
-        $this->assertStringContainsString('Dane techniczne:', $description);
-        $this->assertStringContainsString('Jednostka: szt.', $description);
+        $this->assertStringNotContainsString('Dane techniczne:', $description);
+        $this->assertStringNotContainsString('Jednostka', $description);
+        $this->assertContains(
+            ['Dane techniczne', 'Filter material', 'Plastic'],
+            self::rows($connector->shopFields($product)),
+        );
         $this->assertTrue($connector->hasForeignDescription($product), 'wstęp też jest po angielsku');
     }
 
@@ -869,9 +899,9 @@ final class UvexConnectorTest extends TestCase
         ], self::rows($fields));
     }
 
-    public function test_shop_card_sends_no_request_when_the_manufacturer_page_was_not_downloaded(): void
+    public function test_shop_card_sends_no_request_when_the_card_does_not_link_to_the_manufacturer(): void
     {
-        // sklep ma własny opis, więc strony producenta nikt nie pobierał — tabelki wyrobu po prostu nie ma
+        // sklep ma własny opis, więc karta nigdzie nie odsyła — tabelki wyrobu po prostu nie ma czego szukać
         $this->fakeSite();
         $connector = $this->connector();
         $connector->login();
@@ -893,6 +923,12 @@ final class UvexConnectorTest extends TestCase
     {
         $this->manufacturerOrderNumber = '9970.005';
         $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/9970.005');
+        // druga karta ma własną stronę produktu, z opisem w panelu — do producenta nie odsyła
+        $this->details['6687'] = str_replace(
+            '<td class="codeViewProductDane">9970.005</td>',
+            '<td class="codeViewProductDane">8430/2/39</td>',
+            $this->fixture('product_9970005.html'),
+        );
         $this->fakeSite();
         $connector = $this->connector();
         $connector->login();
@@ -905,6 +941,36 @@ final class UvexConnectorTest extends TestCase
             ['Informacje handlowe', 'Kod', '8430/2/39'],
             ['Informacje handlowe', 'Jednostka sprzedaży', 'par.'],
         ], self::rows($connector->shopFields($products['8430/2/39'])));
+    }
+
+    public function test_shop_card_finds_the_manufacturer_page_itself_when_nobody_asked_for_the_description(): void
+    {
+        // karta z opisem ręcznym albo od AI nie woła description() — tabelka wyrobu i tak ma być pełna
+        $this->manufacturerOrderNumber = '9970.005';
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/9970.005');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+
+        $rows = self::rows($connector->shopFields($product));
+
+        $this->assertSame(
+            ['https://www.uvex-laservision.de/en/laser-safety-windows/laser-safety-window-p1p10-3mm/9970.005'],
+            $this->manufacturerHits,
+        );
+        $this->assertContains(['Informacje handlowe', 'Kod', '9970.005'], $rows);
+        $this->assertContains(['Informacje handlowe', 'Numer katalogowy producenta', '9970.005'], $rows);
+        $this->assertContains(['Dane techniczne', 'Filter material', 'Plastic'], $rows);
+        $this->assertContains(['Ochrona', 'Poziomy ochrony', '180 - 315 | (OD10+) | D LB10 + IR LB4 + M LB6'], $rows);
+
+        // przy jednym przebiegu strona producenta (i strona produktu) idzie po sieci raz, kto by o nią nie prosił
+        $description = $connector->description($product);
+        $connector->shopFields($product);
+
+        $this->assertStringContainsString('Opis ze strony producenta (www.uvex-laservision.de):', $description);
+        $this->assertCount(1, $this->manufacturerHits);
+        $this->assertSame(1, $this->detailHits);
     }
 
     /**

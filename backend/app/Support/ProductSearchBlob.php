@@ -16,7 +16,7 @@ final class ProductSearchBlob
     /** Kolumny, po których zmianie blob przestaje być aktualny. */
     public const SOURCE_COLUMNS = [
         'sku', 'name', 'model_name', 'manufacturer', 'category', 'norms',
-        'description', 'variant_summary', 'enrichment_payload',
+        'shop_fields_summary', 'description', 'variant_summary', 'enrichment_payload',
     ];
 
     private const MAX_LENGTH = 16000;
@@ -83,6 +83,9 @@ final class ProductSearchBlob
             (string) ($product->manufacturer ?? ''),
             (string) ($product->category ?? ''),
             (string) ($product->norms ?? ''),
+            // tabelka z karty wyrobu u dostawcy — przed opisem, bo blob jest ucinany od końca, a te dane są
+            // krótkie i gęste (normy, parametry); jak coś ma wypaść z limitu, to proza opisu
+            (string) ($product->shop_fields_summary ?? ''),
             (string) ($product->description ?? ''),
             // formaty/podłoża wersji z B2B — osobno od opisu źródła
             (string) ($product->variant_summary ?? ''),

@@ -9,6 +9,7 @@ use App\Models\B2bDiscountRule;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductShopCard;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\ProtektB2bClient;
@@ -178,10 +179,13 @@ final class ProtektConnectorTest extends TestCase
 
         $this->assertSame(1, Product::query()->where('sku', 'BW140')->count());
         $this->assertSame('czarny, czerwony, niebieski', Product::query()->where('sku', 'BW140')->value('variant_summary'));
-        // Opis karty wymienia wszystkie kolory, bo karta obejmuje je wszystkie — nie kolor jednego adresu.
-        $this->assertStringContainsString(
-            'Kolor: czarny, czerwony, niebieski',
-            (string) Product::query()->where('sku', 'BW140')->value('description'),
+        // Specyfikacja jest w tabelce karty wyrobu u dostawcy, nie w opisie — a wiersz „Kolor” wymienia
+        // wszystkie kolory, bo karta obejmuje je wszystkie, nie kolor jednego adresu.
+        $product = Product::query()->where('sku', 'BW140')->sole();
+        $this->assertStringNotContainsString('Kolor: czarny, czerwony, niebieski', (string) $product->description);
+        $this->assertContains(
+            ['name' => 'Kolor', 'value' => 'czarny, czerwony, niebieski'],
+            self::sectionRows(ProductShopCard::query()->where('product_id', $product->id)->sole(), 'Specyfikacja techniczna'),
         );
     }
 
@@ -237,9 +241,22 @@ final class ProtektConnectorTest extends TestCase
 
         app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
 
-        $description = (string) Product::query()->where('sku', 'BW200/2LE111')->value('description');
+        $product = Product::query()->where('sku', 'BW200/2LE111')->sole();
+        $description = (string) $product->description;
         $this->assertStringContainsString('produkt wycofany przez producenta', $description);
         $this->assertStringContainsString('zastąpiony przez BW100/2LE111', $description);
+        // Proza zostaje w opisie, pary „nazwa → wartość” tylko w tabelce karty wyrobu u dostawcy.
+        $this->assertStringContainsString('Cechy szczególne:', $description);
+        $this->assertStringNotContainsString('Normy: EN 355', $description);
+        $this->assertStringNotContainsString('Specyfikacja techniczna:', $description);
+        $this->assertStringNotContainsString('Materiał: poliester/poliamid', $description);
+
+        $card = ProductShopCard::query()->where('product_id', $product->id)->sole();
+        $this->assertSame([['name' => 'Norma', 'value' => 'EN 355']], self::sectionRows($card, 'Normy'));
+        $this->assertSame([
+            ['name' => 'Materiał', 'value' => 'poliester/poliamid'],
+            ['name' => 'Waga', 'value' => '300 g'],
+        ], self::sectionRows($card, 'Specyfikacja techniczna'));
     }
 
     public function test_pliki_do_pobrania_trafiaja_przy_karte(): void
@@ -352,6 +369,22 @@ final class ProtektConnectorTest extends TestCase
             static fn (B2bRemoteShopField $field): array => [$field->section, $field->name, $field->value],
             $fields,
         );
+    }
+
+    /**
+     * Wiersze jednej sekcji zapisanej karty wyrobu u dostawcy.
+     *
+     * @return list<array{name: string, value: string}>
+     */
+    private static function sectionRows(ProductShopCard $card, string $section): array
+    {
+        foreach ((array) $card->fields as $entry) {
+            if (($entry['section'] ?? null) === $section) {
+                return $entry['rows'];
+            }
+        }
+
+        return [];
     }
 
     /**
