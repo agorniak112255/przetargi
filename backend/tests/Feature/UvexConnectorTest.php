@@ -69,6 +69,18 @@ final class UvexConnectorTest extends TestCase
     /** Czy wstęp przy cenie powtarza tekst z zakładki „Description”. */
     private bool $manufacturerIntroRepeatsDescription = false;
 
+    /** Numer katalogowy wypisany na stronie producenta („Order number: …”); null = strona go nie podaje. */
+    private ?string $manufacturerOrderNumber = null;
+
+    /** Czy strona producenta ma zakładkę „Description” (część kart ma opis tylko we wstępie przy cenie). */
+    private bool $manufacturerHasDescriptionTab = true;
+
+    /** Adresy pobranych zdjęć — po jednym wpisie na pobranie. */
+    private array $imageHits = [];
+
+    /** Czy strona producenta jest bez któregokolwiek bloku opisu (zmiana budowy sklepu). */
+    private bool $emptyManufacturerPage = false;
+
     private int $logins = 0;
 
     private bool $dropSessionOnce = false;
@@ -359,7 +371,7 @@ final class UvexConnectorTest extends TestCase
         $image = $connector->image($products['9970.005']);
 
         $this->assertNotNull($image);
-        $this->assertSame(self::PNG, $image->bytes);
+        $this->assertStringStartsWith(self::PNG, $image->bytes);
         $this->assertSame('image/png', $image->mime);
         $this->assertSame(str_replace('/public/get-preview/', '/get-preview/', self::IMG_9970), $image->sourceUrl);
         $this->assertNull($connector->image($products['CENNIKI']));
@@ -752,6 +764,123 @@ final class UvexConnectorTest extends TestCase
         Queue::assertPushed(TranslateB2bProductTextJob::class, 1);
     }
 
+    public function test_page_reached_by_its_name_belongs_to_the_card_when_its_order_number_matches(): void
+    {
+        // akcesoria mają w sklepie producenta adres ze skrótu nazwy, bez numeru katalogowego — o przynależności
+        // strony mówi wtedy numer wypisany przy cenie
+        $this->manufacturerOrderNumber = '9970.005';
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-eyewear/accessories/cushion-frame-with-lip-seal/?number=9970.005');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+
+        $description = $connector->description($product);
+
+        $this->assertStringContainsString('Opis ze strony producenta (www.uvex-laservision.de):', $description);
+        $this->assertSame([], $this->searchHits, 'strona jest tego wyrobu — nie ma czego szukać');
+        $this->assertCount(1, $this->manufacturerHits);
+        $this->assertTrue($connector->hasForeignDescription($product));
+    }
+
+    public function test_page_with_another_order_number_is_rejected_even_when_its_address_fits(): void
+    {
+        // adres zgodny z kodem karty, ale sklep pokazuje pod nim inny wyrób — cudzy opis nie może wejść na kartę
+        $this->manufacturerOrderNumber = '000P1P102001';
+        $this->manufacturerKnowsCode = false;
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-windows/cleaning-station/9970.005');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+
+        $description = $connector->description($product);
+
+        $this->assertSame('Jednostka: szt.', $description);
+        $this->assertSame(['9970.005'], $this->searchHits, 'właściwej strony szukamy po numerze katalogowym karty');
+        $this->assertFalse($connector->hasForeignDescription($product));
+    }
+
+    public function test_description_is_taken_from_above_the_price_when_the_page_has_no_description_tab(): void
+    {
+        // strona akcesorium ma opis tylko we wstępie przy cenie — zakładki „Description” nie ma wcale
+        $this->manufacturerHasDescriptionTab = false;
+        $this->manufacturerOrderNumber = '9970.005';
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-eyewear/accessories/cushion-frame-with-lip-seal/');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+
+        $description = $connector->description($product);
+
+        $this->assertStringContainsString(
+            "Opis ze strony producenta (www.uvex-laservision.de):\nThe laservision plastic laser safety window P1P10",
+            $description,
+        );
+        $this->assertStringContainsString('Dane techniczne:', $description);
+        $this->assertStringContainsString('Jednostka: szt.', $description);
+        $this->assertTrue($connector->hasForeignDescription($product), 'wstęp też jest po angielsku');
+    }
+
+    public function test_page_without_any_description_block_is_reported_instead_of_being_taken_for_the_card(): void
+    {
+        $this->manufacturerHasDescriptionTab = false;
+        $this->manufacturerOrderNumber = '9970.005';
+        $this->emptyManufacturerPage = true;
+        $this->linkInsteadOfDescription('https://www.uvex-laservision.de/en/laser-safety-eyewear/accessories/cushion-frame-with-lip-seal/');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsByCode($connector)['9970.005'];
+
+        $this->expectExceptionMessage('nie ma opisu w spodziewanym miejscu');
+        $connector->description($product);
+    }
+
+    public function test_all_photos_from_the_product_page_land_on_the_card_and_are_not_downloaded_twice(): void
+    {
+        Storage::fake('public');
+        $gallery = [
+            self::IMG_9970,
+            'https://izam.system-b2b.pl/public/get-preview/product_images/C9/C9231177D6E8BDB6B2798552BD96BE49AFAFE8DD9B853842FFCCA085C6F18E6A.jpg',
+            'https://izam.system-b2b.pl/public/get-preview/product_images/F2/F2FA091F35BCCAB225754E2BC551DF97058C2C4B9C3652A2D3F9EAEFD6C4A780.jpg',
+        ];
+        $this->galleryOnProductPage($gallery);
+        $this->fakeSite();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $cleaner = Product::query()->where('sku', '9970.005')->sole();
+        $images = $cleaner->images()->orderBy('sort_order')->get();
+        $this->assertSame(
+            array_map(static fn (string $url): string => str_replace('/public/get-preview/', '/get-preview/', $url), $gallery),
+            $images->pluck('source_url')->all(),
+        );
+        $this->assertSame([true, false, false], $images->pluck('is_primary')->map(static fn ($v): bool => (bool) $v)->all());
+
+        // drugi przebieg: zdjęcia są już przy karcie, więc nie pobieramy ich ponownie
+        $this->imageHits = [];
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame([], $this->imageHits);
+        $this->assertSame(3, $cleaner->images()->count());
+    }
+
+    /** Galeria na stronie produktu: sklep trzyma tam pozostałe ujęcia wyrobu. */
+    private function galleryOnProductPage(array $urls): void
+    {
+        $links = '';
+        foreach ($urls as $url) {
+            $links .= '<a data-img="'.$url.'" data-full="'.$url.'" data-thumb="'.$url.'"></a>';
+        }
+        $this->details['4713'] = (string) preg_replace(
+            '#(<div class="B2B_fotorama widget-user-header" id="B2B_fotorama_details"[^>]*>).*?(</div>)#s',
+            '$1'.$links.'$2',
+            $this->details['4713'],
+        );
+    }
+
     /** Karta bez opisu w panelu: zamiast treści odnośnik „Kliknij i przejdź do pełnego opisu”. */
     private function linkInsteadOfDescription(string $url): void
     {
@@ -782,17 +911,28 @@ final class UvexConnectorTest extends TestCase
      */
     private function manufacturerPage(): string
     {
+        $descriptionTab = $this->manufacturerHasDescriptionTab
+            ? '<h2 class="product-detail-description-title">Product information "laser safety window P1P10 (3mm)"</h2>'
+                .'<div class="product-detail-description-text" itemprop="description">'
+                .'<p>The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.</p>'
+                .'<p>A broadband laser protection exists from 635nm to 11,500nm.</p>'
+                .'<h2>Specifications</h2>'
+                .'</div>'
+            : '';
+        $orderNumber = $this->manufacturerOrderNumber !== null
+            ? '<ul class="list-unstyled"><li>Order number: '.$this->manufacturerOrderNumber.'</li><li>GTIN: 4050369019263</li></ul>'
+            : '';
+        if ($this->emptyManufacturerPage) {
+            return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'.$orderNumber.'</body></html>';
+        }
+
         return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
             .'<div class="product-detail-short-description">'.($this->manufacturerIntroRepeatsDescription
                 ? 'The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.'
                 : 'The laservision plastic laser safety window P1P10 is a window for green laser systems'
                     .' and is user specific available up to a size of 1219x915mm. The thickness is 3mm.').'</div>'
-            .'<h2 class="product-detail-description-title">Product information "laser safety window P1P10 (3mm)"</h2>'
-            .'<div class="product-detail-description-text" itemprop="description">'
-            .'<p>The laser safety window P1P10 is a new blue absorbing laser protection filter without additional reflective coating.</p>'
-            .'<p>A broadband laser protection exists from 635nm to 11,500nm.</p>'
-            .'<h2>Specifications</h2>'
-            .'</div>'
+            .$orderNumber
+            .$descriptionTab
             .'<table class="product-detail-properties-table">'
             .'<tr><th>Filter material:</th><td>Plastic</td></tr>'
             .'<tr><th>Protection Class / Norm:</th><td>EN 207 full protection, EN 208 Alignment protection, EN 60825</td></tr>'
@@ -940,7 +1080,10 @@ final class UvexConnectorTest extends TestCase
                 return isset($this->details[$id]) ? Http::response($this->details[$id]) : Http::response('brak strony', 404);
             }
             if (str_starts_with($path, '/get-preview/')) {
-                return Http::response(self::PNG, 200, ['Content-Type' => 'image/png']);
+                $this->imageHits[] = $url;
+
+                // każde zdjęcie innymi bajtami — inaczej katalog uzna je za to samo (odcisk sha256)
+                return Http::response(self::PNG.basename($path), 200, ['Content-Type' => 'image/png']);
             }
             if (str_ends_with((string) parse_url($url, PHP_URL_HOST), 'uvex-laservision.de')) {
                 if ($path === '/en/search') {

@@ -11,6 +11,7 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductImage;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
@@ -565,68 +566,84 @@ final class B2bCatalogSync
             return ['status' => $status, 'description' => isset($payload['description'])];
         }
 
-        if ($existing !== null) {
-            if ($dirty) {
-                $existing->save();
+        // Karta i jej powiązanie w jednej transakcji (jak w ścieżce z wersjami): przerwany zapis zostawiłby kartę
+        // z nowym opisem i powiązanie ze starym description_hash, a taka karta wygląda jak ręcznie zmieniona
+        // — kolejne przebiegi nie ruszałyby już jej opisu (16.09.2026: 214 kart UVEX po błędzie pamięci podręcznej).
+        [$product, $savedLink] = DB::transaction(function () use (
+            $account, $connector, $remote, $existing, $payload, $prices, $slotKey, $priceChange, $priceListId,
+            $runId, $dirty, $members, $memberLinks, $descriptionHash, $sourceTextTaken, &$claimed, &$warnings,
+        ): array {
+            if ($existing !== null) {
+                if ($dirty) {
+                    $existing->save();
+                }
+                $product = $existing;
+            } else {
+                // kolumny cen karty są NOT NULL — nowa karta startuje z ceną konta, przeliczenie ze slotu jej nie zmieni
+                $product = Product::query()->create(['sku' => $remote->sku, ...$payload, ...$prices]);
             }
-            $product = $existing;
-        } else {
-            // kolumny cen karty są NOT NULL — nowa karta startuje z ceną konta, przeliczenie ze slotu jej nie zmieni
-            $product = Product::query()->create(['sku' => $remote->sku, ...$payload, ...$prices]);
-        }
 
-        $this->claim($claimed, (int) $product->id, (string) $product->sku);
+            $this->claim($claimed, (int) $product->id, (string) $product->sku);
 
-        // zapis slotu także bez zmiany ceny — checked_at wyznacza najświeższe konto przy kilku kontach
-        $slot = $this->effectivePrices->saveSlot($product, $slotKey, [
-            ...$prices,
-            'b2b_account_id' => $account->id,
-            // null = źródło nie podaje dostępności — zapisana wartość zostaje
-            ...($remote->availability !== null ? ['availability' => $remote->availability] : []),
-        ])['slot'];
+            // zapis slotu także bez zmiany ceny — checked_at wyznacza najświeższe konto przy kilku kontach
+            $slot = $this->effectivePrices->saveSlot($product, $slotKey, [
+                ...$prices,
+                'b2b_account_id' => $account->id,
+                // null = źródło nie podaje dostępności — zapisana wartość zostaje
+                ...($remote->availability !== null ? ['availability' => $remote->availability] : []),
+            ])['slot'];
 
-        if ($existing === null || $priceChange !== null) {
-            ProductPriceHistory::query()->create([
+            if ($existing === null || $priceChange !== null) {
+                ProductPriceHistory::query()->create([
+                    'product_id' => $product->id,
+                    'price_list_id' => $priceListId,
+                    'b2b_sync_run_id' => $runId,
+                    'catalog_price_net' => $slot->catalog_price_net,
+                    'purchase_price' => $slot->purchase_price,
+                    'source' => 'b2b:'.$connector::key(),
+                ]);
+            }
+
+            $linkValues = [
                 'product_id' => $product->id,
-                'price_list_id' => $priceListId,
-                'b2b_sync_run_id' => $runId,
-                'catalog_price_net' => $slot->catalog_price_net,
-                'purchase_price' => $slot->purchase_price,
-                'source' => 'b2b:'.$connector::key(),
-            ]);
-        }
-
-        $linkValues = [
-            'product_id' => $product->id,
-            'remote_sku' => mb_substr($remote->sku, 0, 255),
-            'remote_name' => mb_substr($remote->name, 0, 1000),
-            'description_hash' => $descriptionHash,
-            'last_seen_at' => now(),
-        ];
-        // karta dostała (albo już ma) tekst źródła, więc nie jest tłumaczeniem — jedyne miejsce zerowania
-        if ($sourceTextTaken) {
-            $linkValues['source_description_hash'] = null;
-        }
-        if ($members === []) {
-            $savedLink = B2bProductLink::query()->updateOrCreate(
-                ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
-                $linkValues,
-            );
-        } else {
-            // powiązanie dla każdej pozycji grupy — kod i nazwa pozycji dosłownie; memberRows zaczyna od remoteId
-            $savedLink = null;
-            foreach ($members as $member) {
-                $saved = B2bProductLink::query()->updateOrCreate(
-                    ['b2b_account_id' => $account->id, 'remote_id' => $member['remote_id']],
-                    [
-                        ...$linkValues,
-                        'remote_sku' => mb_substr($member['sku'], 0, 255),
-                        'remote_name' => mb_substr($member['name'], 0, 1000),
-                    ],
-                );
-                $savedLink ??= $saved;
+                'remote_sku' => mb_substr($remote->sku, 0, 255),
+                'remote_name' => mb_substr($remote->name, 0, 1000),
+                'description_hash' => $descriptionHash,
+                'last_seen_at' => now(),
+            ];
+            // karta dostała (albo już ma) tekst źródła, więc nie jest tłumaczeniem — jedyne miejsce zerowania
+            if ($sourceTextTaken) {
+                $linkValues['source_description_hash'] = null;
             }
-            $warnings = [...$warnings, ...$this->orphanedCardWarnings($account, $memberLinks, (int) $product->id)];
+            if ($members === []) {
+                $savedLink = B2bProductLink::query()->updateOrCreate(
+                    ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
+                    $linkValues,
+                );
+            } else {
+                // powiązanie dla każdej pozycji grupy — kod i nazwa pozycji dosłownie; memberRows zaczyna od remoteId
+                $savedLink = null;
+                foreach ($members as $member) {
+                    $saved = B2bProductLink::query()->updateOrCreate(
+                        ['b2b_account_id' => $account->id, 'remote_id' => $member['remote_id']],
+                        [
+                            ...$linkValues,
+                            'remote_sku' => mb_substr($member['sku'], 0, 255),
+                            'remote_name' => mb_substr($member['name'], 0, 1000),
+                        ],
+                    );
+                    $savedLink ??= $saved;
+                }
+                $warnings = [...$warnings, ...$this->orphanedCardWarnings($account, $memberLinks, (int) $product->id)];
+            }
+
+            return [$product, $savedLink];
+        });
+
+        // Hak modelu wysyła reindeks jeszcze w transakcji (kolejka bez after_commit) — worker mógłby przeczytać
+        // kartę sprzed zapisu. Ponowne zlecenie po commit; ShouldBeUnique pomija je, gdy pierwsze jeszcze czeka.
+        if ($product->wasRecentlyCreated || $product->wasChanged(ProductSearchBlob::SOURCE_COLUMNS)) {
+            ReindexProductEmbeddingJob::dispatch((int) $product->id);
         }
 
         // po zapisie powiązania — job czyta z niego hashe i nazwę ze źródła
@@ -1645,6 +1662,9 @@ final class B2bCatalogSync
      */
     private function storeImage(B2bConnector $connector, B2bRemoteProduct $remote, Product $product): array
     {
+        if ($connector instanceof B2bImageGallery) {
+            return $this->storeGallery($connector, $remote, $product);
+        }
         if ($product->images()->exists()) {
             return [false, null];
         }
@@ -1658,6 +1678,54 @@ final class B2bCatalogSync
         } catch (Throwable $e) {
             return [false, $e->getMessage()];
         }
+    }
+
+    /**
+     * Wszystkie zdjęcia karty u dostawcy, w kolejności ze sklepu. Pobieramy tylko te, których karta jeszcze nie
+     * ma pod tym adresem — kolejny przebieg nie ściąga niczego ponownie, ale dokłada ujęcia, które dostawca
+     * dodał później. Karta ze zdjęciami z innego źródła zostaje przy swoim głównym: nowe idą na koniec.
+     *
+     * @return array{0: bool, 1: string|null}
+     */
+    private function storeGallery(B2bImageGallery $connector, B2bRemoteProduct $remote, Product $product): array
+    {
+        try {
+            $urls = $connector->imageUrls($remote);
+        } catch (Throwable $e) {
+            return [false, $e->getMessage()];
+        }
+        if ($urls === []) {
+            return [false, null];
+        }
+
+        $have = ProductImage::query()->where('product_id', $product->id)->pluck('source_url')->all();
+        $stored = array_flip(array_map(static fn ($url): string => (string) $url, $have));
+        $sortOrder = $have === []
+            ? 0
+            : (int) ProductImage::query()->where('product_id', $product->id)->max('sort_order') + 1;
+
+        $saved = false;
+        $error = null;
+        foreach ($urls as $url) {
+            if (isset($stored[mb_substr($url, 0, 2000)])) {
+                continue;
+            }
+            try {
+                $image = $connector->imageAt($url);
+                if ($image === null) {
+                    continue;
+                }
+                if ($this->images->storeBytes($product, $image->bytes, $image->mime, $image->sourceUrl, $sortOrder) !== null) {
+                    $saved = true;
+                    $sortOrder++;
+                }
+            } catch (Throwable $e) {
+                // pierwsze niepobrane zdjęcie idzie do dziennika przebiegu; pozostałych i tak próbujemy
+                $error ??= $e->getMessage();
+            }
+        }
+
+        return [$saved, $error];
     }
 
     private function mayWriteDescription(?Product $existing, ?B2bProductLink $link): bool

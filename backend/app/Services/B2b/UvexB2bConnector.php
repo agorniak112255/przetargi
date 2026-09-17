@@ -29,10 +29,13 @@ use RuntimeException;
  * bazowej); 0,00 PLN (np. pozycje „Cenniki”, „Karty charakterystyki”) = brak ceny. Dostępność dosłownie
  * („Dostępny” / „Na zamówienie”), dla grupy z podziałem na rozmiary, gdy się różni.
  *
- * Karta bez opisu w panelu ma tam odnośnik do strony producenta (uvex-laservision.de) — opis, tabelę
- * „Specifications” i poziomy ochrony bierzemy stamtąd, ale tylko gdy numer katalogowy strony zgadza się z kodem
- * karty; sklep bywa nierzetelny i odsyła kilka filtrów pod jeden adres. Tekst jest po angielsku i idzie
- * do tłumaczenia (B2bForeignTextCards).
+ * Karta bez opisu w panelu ma tam odnośnik do strony producenta (uvex-laservision.de) — opis (zakładka
+ * „Description”, a gdy jej nie ma, wstęp przy cenie), tabelę „Specifications” i poziomy ochrony bierzemy stamtąd,
+ * ale tylko gdy numer katalogowy wypisany na stronie zgadza się z kodem karty; sklep bywa nierzetelny i odsyła
+ * kilka filtrów pod jeden adres. Tekst jest po angielsku i idzie do tłumaczenia (B2bForeignTextCards).
+ *
+ * Zdjęcia: miniatura z listy i galeria ze strony produktu (#B2B_fotorama_details) — sklep trzyma tam pozostałe
+ * ujęcia wyrobu (do czterech); na kartę idą wszystkie, pierwsze zostaje głównym.
  *
  * Pliki do pobrania (zakładka „Pliki do pobrania”, tabela #p-files-table): karta techniczna „SST …” i instrukcje.
  * Adresy w tabeli są względne wobec <base href> strony; nazwa pliku dosłownie z tabeli. Strona produktu pobierana
@@ -41,7 +44,7 @@ use RuntimeException;
  * Producent — ZAŁOŻENIE (sklep nie ma pola producenta): „HECKEL” gdy kod lub nazwa zawiera heckel, „HexArmor” gdy
  * nazwa zawiera hexarmor, inaczej „UVEX” (sklep firmy UVEX; większość nazw zawiera „uvex”).
  */
-final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bListProgressAware, B2bRunSummaryAware
+final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware
 {
     /** Nieprzerwane pobieranie listy dłużej = błąd (przebieg bez postępu uznałby b2b:sync-due za przerwany). */
     private const LIST_BUDGET_SECONDS = 25 * 60;
@@ -50,6 +53,9 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
 
     /** Tyle plików z jednej strony produktu trafia na kartę (UVEX: karta techniczna i instrukcja). */
     private const DOCUMENTS_LIMIT = 5;
+
+    /** Tyle zdjęć jednej karty bierzemy ze sklepu (galeria strony produktu; najwięcej widziano 4). */
+    private const IMAGES_LIMIT = 8;
 
     /** Sklep wstawia to zamiast opisu części kart — to zachęta do kliknięcia, nie opis wyrobu. */
     private const DESCRIPTION_PLACEHOLDERS = ['kliknij i przejdź do pełnego opisu'];
@@ -73,6 +79,12 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
      * Osiem znaków to „000” + oznaczenie filtra; różnią się dopiero wariant i rozmiar, a te opisu nie zmieniają.
      */
     private const MANUFACTURER_CODE_PREFIX = 8;
+
+    /**
+     * Etykiety, którymi sklep producenta podpisuje numer katalogowy pokazywanego wyrobu (strona po angielsku,
+     * niemiecku albo polsku). To jedyne miejsce, w którym strona sama mówi, jaki wyrób opisuje.
+     */
+    private const ORDER_NUMBER_LABELS = ['Order number', 'Bestellnummer', 'Artikelnummer', 'Numer katalogowy', 'Numer artykułu'];
 
     /** Tyle wierszy tabeli poziomów ochrony trafia na kartę. */
     private const PROTECTION_ROWS_LIMIT = 30;
@@ -322,9 +334,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         }
 
         $code = (string) ($product->raw['code'] ?? $product->sku);
-        $found = self::sameProduct(basename((string) parse_url($url, PHP_URL_PATH)), $code)
-            ? ['url' => $url, 'html' => $this->client->manufacturerPage($url)]
-            : $this->manufacturerPageByCode($url, $code);
+        $found = $this->manufacturerPageFor($url, $code);
         if ($found === null) {
             // Sam pomijamy sekcję, zamiast przerywać opis wyjątkiem: karta zapisze opis bez treści producenta,
             // więc cudzy opis z wcześniejszego przebiegu zniknie z katalogu sam.
@@ -336,18 +346,21 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         $url = $found['url'];
         $page = JspB2bClient::dom($found['html']);
         $description = $page->query('//*[@itemprop="description"]')->item(0);
-        if ($description === null) {
+        $intro = $page->query('//*['.JspB2bClient::classPredicate('product-detail-short-description').']')->item(0);
+        $properties = $page->query('//table[contains(@class, "product-detail-properties-table")]')->item(0);
+        if ($description === null && $intro === null && $properties === null) {
+            // żaden z bloków opisu — to nie jest strona wyrobu albo sklep zmienił budowę stron
             throw new RuntimeException('strona producenta '.$url.' nie ma opisu w spodziewanym miejscu');
         }
 
-        $lines = self::blockLines($description);
+        $lines = $description !== null ? self::blockLines($description) : [];
         // ostatni wiersz to nagłówek tabeli parametrów — samą tabelę czytamy niżej
         while ($lines !== [] && in_array(mb_strtolower(end($lines)), self::MANUFACTURER_TAIL_HEADINGS, true)) {
             array_pop($lines);
         }
 
-        // wstęp przy cenie: zwykle mówi to samo innymi słowami, ale dokłada fakty (maksymalny rozmiar, grubość, normy)
-        $intro = $page->query('//*['.JspB2bClient::classPredicate('product-detail-short-description').']')->item(0);
+        // wstęp przy cenie: zwykle mówi to samo innymi słowami, ale dokłada fakty (maksymalny rozmiar, grubość,
+        // normy); część kart (akcesoria) ma go zamiast zakładki „Description” — wtedy jest całym opisem
         $lines = self::withoutRepeatedText($intro !== null ? self::blockLines($intro) : [], $lines);
 
         $parameters = [...self::specificationLines($page), ...self::protectionRangeLines($page)];
@@ -439,9 +452,51 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     public function image(B2bRemoteProduct $product): ?B2bRemoteImage
     {
         $url = self::imageUrl((string) ($product->raw['image_url'] ?? ''));
-        if ($url === null) {
-            return null;
+
+        return $url === null ? null : $this->imageAt($url);
+    }
+
+    /**
+     * Zdjęcia karty: z listy (pierwsze — zostaje głównym) i z galerii strony produktu, gdzie sklep trzyma
+     * pozostałe ujęcia (strona jest pobierana raz na kartę, razem z opisem i plikami). Kolejność ze sklepu,
+     * bez powtórzeń. Strona innego wyrobu albo pozycja bez strony = zostaje samo zdjęcie z listy.
+     *
+     * @return list<string>
+     */
+    public function imageUrls(B2bRemoteProduct $product): array
+    {
+        $urls = [];
+        $listImage = self::imageUrl((string) ($product->raw['image_url'] ?? ''));
+        if ($listImage !== null) {
+            $urls[$listImage] = true;
         }
+
+        try {
+            $xpath = $this->productXpath($product);
+        } catch (RuntimeException) {
+            // strona produktu nieczytelna albo o innym kodzie — zdjęć stamtąd nie bierzemy (mogłyby być cudze),
+            // ale miniatura z wiersza listy należy do tej karty na pewno; powód błędu zgłasza już opis karty
+            return array_keys($urls);
+        }
+
+        foreach ($xpath?->query('//*[@id="B2B_fotorama_details"]//a[@data-full]') ?: [] as $link) {
+            if (! $link instanceof DOMElement) {
+                continue;
+            }
+            $url = self::imageUrl(trim(html_entity_decode($link->getAttribute('data-full'), ENT_QUOTES | ENT_HTML5)));
+            if ($url !== null) {
+                $urls[$url] = true;
+            }
+            if (count($urls) >= self::IMAGES_LIMIT) {
+                break;
+            }
+        }
+
+        return array_keys($urls);
+    }
+
+    public function imageAt(string $url): ?B2bRemoteImage
+    {
         $file = $this->client->imageBytes($url);
         if ($file['bytes'] === '' || ! str_starts_with($file['mime'], 'image/')) {
             return null;
@@ -843,6 +898,30 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     }
 
     /**
+     * Strona producenta dla karty: najpierw ta, do której odsyła sklep. O przynależności decyduje numer
+     * katalogowy widoczny na stronie („Order number: …”) — adres bywa samym opisowym skrótem nazwy
+     * (…/accessories/cushion-frame-with-lip-seal), więc po nim samym poznać wyrobu nie sposób. Strona z cudzym
+     * numerem albo bez numeru i o niezgodnym adresie = szukanie po numerze katalogowym w sklepie producenta.
+     *
+     * @return array{url: string, html: string}|null null = nie znaleziono karty tego wyrobu
+     */
+    private function manufacturerPageFor(string $url, string $code): ?array
+    {
+        $slug = basename((string) parse_url($url, PHP_URL_PATH));
+        if (self::looksLikeCode($slug) && ! self::sameProduct($slug, $code) && ! self::sameProduct(self::numberParam($url), $code)) {
+            // adres jest numerem katalogowym innego wyrobu — strony nie pobieramy, od razu szukamy po numerze karty
+            return $this->manufacturerPageByCode($url, $code);
+        }
+
+        $html = $this->client->manufacturerPage($url);
+        if (self::pageBelongsTo($html, $url, $code)) {
+            return ['url' => $url, 'html' => $html];
+        }
+
+        return $this->manufacturerPageByCode($url, $code);
+    }
+
+    /**
      * Sklep bywa nierzetelny i odsyła kartę pod adres innego wyrobu — właściwej strony szukamy wtedy sami,
      * po numerze katalogowym, w wyszukiwarce tego samego sklepu producenta. Przy jednym trafieniu sklep
      * przekierowuje wprost na kartę, inaczej wybieramy z listy wynik o zgodnym numerze.
@@ -857,7 +936,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         }
 
         $search = $this->client->manufacturerSearch('https://'.$host.'/en/search?search='.rawurlencode($code));
-        if (self::sameProduct(basename((string) parse_url($search['url'], PHP_URL_PATH)), $code)) {
+        if (self::pageBelongsTo($search['html'], $search['url'], $code)) {
             $this->foundByCode++;
 
             return $search;
@@ -867,12 +946,19 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         if ($found === null) {
             return null;
         }
+        $html = $this->client->manufacturerPage($found);
+        if (! self::pageBelongsTo($html, $found, $code)) {
+            return null;
+        }
         $this->foundByCode++;
 
-        return ['url' => $found, 'html' => $this->client->manufacturerPage($found)];
+        return ['url' => $found, 'html' => $html];
     }
 
-    /** Pierwszy odnośnik z listy wyników prowadzący do karty o tym numerze katalogowym (bez plików). */
+    /**
+     * Pierwszy odnośnik z listy wyników prowadzący do karty o tym numerze katalogowym (bez plików) — numer jest
+     * w adresie albo w parametrze „number”, którym sklep wybiera wariant wyrobu.
+     */
     private static function productLinkFor(DOMXPath $results, string $code): ?string
     {
         foreach ($results->query('//a[@href]') ?: [] as $link) {
@@ -884,12 +970,64 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             if ($path === '' || str_ends_with(mb_strtolower($path), '.pdf')) {
                 continue;
             }
-            if (UvexB2bClient::isManufacturerUrl($href) && self::sameProduct(basename($path), $code)) {
+            if (! UvexB2bClient::isManufacturerUrl($href)) {
+                continue;
+            }
+            if (self::sameProduct(basename($path), $code) || self::sameProduct(self::numberParam($href), $code)) {
                 return $href;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Czy ta strona producenta opisuje wyrób karty. Rozstrzyga numer katalogowy wypisany na stronie
+     * („Order number: A14LIPSE1000” / „Bestellnummer: …”) — to jedyne miejsce, w którym sklep sam mówi, jaki
+     * wyrób pokazuje. Strona bez numeru (skrócona, inna budowa) — jak dotąd po adresie.
+     */
+    private static function pageBelongsTo(string $html, string $url, string $code): bool
+    {
+        $shown = self::orderNumber($html);
+        if ($shown !== null) {
+            return self::sameProduct($shown, $code);
+        }
+
+        return self::sameProduct(basename((string) parse_url($url, PHP_URL_PATH)), $code)
+            || self::sameProduct(self::numberParam($url), $code);
+    }
+
+    /** Numer katalogowy wypisany na stronie producenta; null = strona go nie podaje. */
+    public static function orderNumber(string $html): ?string
+    {
+        // skrypty strony zostają po strip_tags — a sklep wstawia w nich cały koszyk jako JSON, z cudzymi numerami
+        $body = (string) preg_replace('#<(script|style)\b[^>]*>.*?</\1>#is', ' ', $html);
+        $text = (string) preg_replace('/[\s\x{00A0}]+/u', ' ', strip_tags($body));
+        foreach (self::ORDER_NUMBER_LABELS as $label) {
+            if (preg_match('/'.preg_quote($label, '/').'\s*:?\s*([\p{L}\p{N}][\p{L}\p{N}.\/_-]*)/ui', $text, $m) === 1) {
+                return $m[1];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Czy ostatni człon adresu jest numerem katalogowym (…/000P1P102001, …/9970.005), a nie skrótem nazwy
+     * (…/cushion-frame-with-lip-seal). Numer innego wyrobu w adresie wystarczy, żeby strony nie pobierać;
+     * po skrócie nazwy nie widać, jaki to wyrób — to mówi dopiero numer wypisany na stronie.
+     */
+    private static function looksLikeCode(string $segment): bool
+    {
+        return $segment !== '' && preg_match('/[a-z]{3,}-[a-z]{3,}/i', $segment) !== 1;
+    }
+
+    /** Wariant wyrobu wybrany parametrem „number” adresu (sklep producenta); '' = adres go nie ma. */
+    private static function numberParam(string $url): string
+    {
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+        return is_string($query['number'] ?? null) ? $query['number'] : '';
     }
 
     /**
