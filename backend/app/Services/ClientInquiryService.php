@@ -12,6 +12,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Support\InquiryMailText;
+use App\Support\InquiryQueryText;
 use App\Support\InquiryReplyHtml;
 use App\Support\InquirySignature;
 use App\Support\OfferPricing;
@@ -704,9 +705,9 @@ final class ClientInquiryService
      */
     private function candidatesForItem(array $matches, array $item): array
     {
-        $products = $this->productsForItem($matches, $item);
+        $products = $this->rated($this->productsForItem($matches, $item));
         usort($products, static fn (array $a, array $b): int => ((int) ($b['score'] ?? 0)) <=> ((int) ($a['score'] ?? 0)));
-        $products = array_values($products);
+        $products = array_values(array_slice($products, 0, self::MAX_MATCHES_PER_QUERY));
 
         // kod z maila na czoło — przy równych wynikach wariantów to on jest domyślny
         $quoted = $this->skuQuotedIndex($item, $products);
@@ -716,6 +717,30 @@ final class ClientInquiryService
         }
 
         return $products;
+    }
+
+    /**
+     * Odsiewa wiersze, których model nie ocenił: podstawione „ten sam rodzaj
+     * w katalogu” i skróty regułowe. To one podsuwały zestaw serwisowy 3M pod
+     * wycieraczkę — z widoku znikają, ale w `analysis.matches` zostają, bo to
+     * zapis tego, co wyszukiwarka naprawdę zwróciła.
+     *
+     * Te same źródła i to samo ustawienie z panelu, co w dopasowaniu przetargowym.
+     * Wiersze bez znacznika (stare rekordy, zamienniki) przepuszczamy.
+     *
+     * @param  list<array<string, mixed>>  $products
+     * @return list<array<string, mixed>>
+     */
+    private function rated(array $products): array
+    {
+        if ($this->aiSettings->matchAllowsCatalogRows()) {
+            return $products;
+        }
+
+        return array_values(array_filter(
+            $products,
+            static fn (array $row): bool => ! in_array((string) ($row['source'] ?? ''), ['catalog', 'rule'], true),
+        ));
     }
 
     /**
@@ -806,6 +831,7 @@ final class ClientInquiryService
             'stock' => isset($product['stock']) && is_numeric($product['stock']) ? (int) $product['stock'] : null,
             'score' => (int) ($product['score'] ?? 0),
             'reason' => $this->nullable($product['reason'] ?? null),
+            'source' => $this->nullable($product['source'] ?? null),
         ];
     }
 
@@ -1035,7 +1061,9 @@ final class ClientInquiryService
     {
         $sliced = array_values(array_slice($queries, 0, self::MAX_PRODUCT_QUERIES));
         try {
-            $rawGroups = $this->search->findMany($sliced, self::MAX_MATCHES_PER_QUERY);
+            // z zapasem: wiersze nieocenione odsiewamy dopiero przy pokazywaniu,
+            // więc przycięcie do trójki przed odsiewem zabrałoby dobre trafienia
+            $rawGroups = $this->search->findMany($sliced, self::MAX_MATCHES_PER_QUERY * 3);
         } catch (Throwable) {
             $rawGroups = [];
             foreach ($sliced as $query) {
@@ -1215,11 +1243,50 @@ final class ClientInquiryService
     public function resolveLineItems(string $body, array $fromAi): array
     {
         $parsed = $this->parseLineItemsFromBody($body);
-        if ($parsed !== [] && count($parsed) > count($fromAi)) {
-            return $parsed;
+        $items = $parsed !== [] && count($parsed) > count($fromAi)
+            ? $parsed
+            : ($fromAi !== [] ? $fromAi : $parsed);
+
+        return $this->withSearchQueries($items);
+    }
+
+    /**
+     * Uzupełnia pozycje o klucz wyszukiwania w katalogu.
+     *
+     * Wiersz z samym rozmiarem („50x100cm”) dziedziczy nazwę wyrobu z pozycji
+     * bezpośrednio wyżej — inaczej do katalogu idzie sam wymiar i wracają
+     * przypadkowe wyroby. Dziedziczenie jest ODNOTOWANE (`query_source`),
+     * bo to nasz wniosek, a nie treść maila.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @return list<array<string, mixed>>
+     */
+    private function withSearchQueries(array $items): array
+    {
+        $out = [];
+        // sama nazwa wyrobu z ostatniej pozycji, która ją miała w mailu
+        $previousName = null;
+
+        foreach ($items as $item) {
+            $own = $this->catalogSearchQuery(
+                (string) ($item['query'] ?? ''),
+                (string) ($item['quote'] ?? '')
+            );
+            $item['query_source'] = 'mail';
+
+            if (InquiryQueryText::hasProductWord($own)) {
+                $name = InquiryQueryText::productNameOnly($own);
+                $previousName = $name === '' ? $previousName : $name;
+            } elseif ($previousName !== null) {
+                $own = trim($previousName.' '.$own);
+                $item['query_source'] = 'inherited';
+            }
+
+            $item['search_query'] = $own;
+            $out[] = $item;
         }
 
-        return $fromAi !== [] ? $fromAi : $parsed;
+        return $out;
     }
 
     /**
@@ -1229,6 +1296,7 @@ final class ClientInquiryService
     {
         $items = [];
         $index = 1;
+        $leadingNumbers = [];
         foreach (preg_split('/\R/u', $body) ?: [] as $line) {
             $line = trim((string) $line);
             if ($line === '') {
@@ -1242,10 +1310,12 @@ final class ClientInquiryService
             if (preg_match('/\b(?:rozmiar|rozm\.?)\s+([a-z0-9\/,.\-]+)/iu', $rest, $sizeMatch) === 1) {
                 $size = trim($sizeMatch[1]);
             }
+            $leadingNumbers[] = (int) $m[1];
             $items[] = [
                 'id' => 'item_'.$index,
                 'quote' => $line,
                 'qty' => $m[1],
+                'qty_unit_given' => $this->nullable($m[2] ?? null) !== null,
                 // jednostka tylko taka, jaka stoi w mailu — nie dopisujemy „szt.”
                 'unit' => $this->nullable($m[2] ?? null),
                 'query' => $this->queryFromLine($rest),
@@ -1257,16 +1327,68 @@ final class ClientInquiryService
             }
         }
 
-        return $items;
+        return $this->dropEnumerationQty($items, $leadingNumbers);
+    }
+
+    /**
+     * Mail bywa ponumerowaną listą („1.”, „2.”, „3.”) — wtedy wiodąca liczba
+     * jest numerem pozycji, nie ilością. Bierzemy ją za ilość tylko wtedy, gdy
+     * stoi przy jednostce („10 szt.”) albo gdy numery NIE tworzą ciągu 1,2,3…
+     * Wpisanie numeru listy jako ilości byłoby wpisaniem do oferty liczby,
+     * której klient nie podał.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @param  list<int>  $numbers
+     * @return list<array<string, mixed>>
+     */
+    private function dropEnumerationQty(array $items, array $numbers): array
+    {
+        if (count($items) < 2 || ! $this->looksLikeEnumeration($numbers)) {
+            return array_map(function (array $item): array {
+                unset($item['qty_unit_given']);
+
+                return $item;
+            }, $items);
+        }
+
+        $out = [];
+        foreach ($items as $item) {
+            if (($item['qty_unit_given'] ?? false) !== true) {
+                $item['qty'] = null;
+                $item['qty_source'] = 'enumeration';
+            }
+            unset($item['qty_unit_given']);
+            $out[] = $item;
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<int>  $numbers
+     */
+    private function looksLikeEnumeration(array $numbers): bool
+    {
+        if (count($numbers) < 2 || $numbers[0] !== 1) {
+            return false;
+        }
+        foreach ($numbers as $i => $number) {
+            if ($number !== $i + 1) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function queryFromLine(string $rest): string
     {
-        $q = preg_replace('/\b(?:rozmiar|rozm\.?)\s+[a-z0-9\/,.\-]+/iu', '', $rest) ?? $rest;
+        // „rozm: 40x60cm” zapisują i z dwukropkiem, i ze spacją
+        $q = preg_replace('/\b(?:rozmiar|rozm\.?)[:\s]+[a-z0-9\/,.\-]+/iu', '', $rest) ?? $rest;
         $q = preg_replace('/^\d+\s*'.self::UNIT_PATTERN.'?[\s.,:–-]+/iu', '', $q) ?? $q;
-        $q = preg_replace('/\s+/u', ' ', $q) ?? $q;
 
-        return mb_substr(trim($q), 0, 140);
+        // cena i numeracja pozycji nie opisują wyrobu, a przeważają w wyszukiwaniu
+        return InquiryQueryText::forCatalog($q);
     }
 
     /**
@@ -1296,7 +1418,9 @@ final class ClientInquiryService
         $seen = [];
         $out = [];
         foreach ($lineItems as $item) {
-            $query = $this->catalogSearchQuery(
+            // ten sam klucz, który zapisaliśmy przy pozycji — inaczej wynik
+            // wyszukiwania nie trafiłby potem do swojej pozycji
+            $query = $this->nullable($item['search_query'] ?? null) ?? $this->catalogSearchQuery(
                 (string) ($item['query'] ?? ''),
                 (string) ($item['quote'] ?? '')
             );
@@ -1524,7 +1648,8 @@ final class ClientInquiryService
      */
     private function productsForItem(array $matches, array $item): array
     {
-        $search = $this->catalogSearchQuery(
+        // zapisany klucz z chwili analizy; stare rekordy go nie mają i liczą po staremu
+        $search = $this->nullable($item['search_query'] ?? null) ?? $this->catalogSearchQuery(
             (string) ($item['query'] ?? ''),
             (string) ($item['quote'] ?? '')
         );
@@ -2224,6 +2349,8 @@ final class ClientInquiryService
 
         return [
             'id' => $id,
+            // skąd wiersz: ocena modelu, wektor, czy wiersz katalogowy bez oceny
+            'source' => $this->nullable($row['ai_match_source'] ?? null),
             'sku' => $sku,
             'name' => $name,
             'manufacturer' => trim((string) ($row['manufacturer'] ?? '')),

@@ -1,0 +1,257 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Models\ClientInquiry;
+use App\Models\Product;
+use App\Models\User;
+use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ClientInquiryService;
+use App\Services\ProductInquirySearch;
+use Database\Seeders\RolesAndPermissionsSeeder;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Sanctum\Sanctum;
+use Tests\TestCase;
+
+/**
+ * Jakość doboru produktów do zapytania mailowego.
+ *
+ * Materiał wzięty z produkcji (zapytanie #6/#7 „OFERTA Skalmierzyce”), gdzie
+ * pod wycieraczkę 80×120 cm podstawiał się zestaw serwisowy 3M za 27 879,90 zł.
+ */
+final class ClientInquiryMatchingTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->seed(RolesAndPermissionsSeeder::class);
+    }
+
+    /**
+     * @param  array<string, mixed>  $extra
+     */
+    private function product(string $sku, string $name, array $extra = []): Product
+    {
+        return Product::query()->create(array_merge([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => 'Test',
+            'catalog_price_net' => 100.00,
+            'purchase_price' => 60.00,
+            'stock' => 5,
+        ], $extra));
+    }
+
+    /**
+     * @param  array<string, list<array<string, mixed>>>  $byQuery
+     */
+    private function mockSearch(array $byQuery): void
+    {
+        $this->mock(ProductInquirySearch::class, function ($mock) use ($byQuery): void {
+            $mock->shouldReceive('findMany')->andReturnUsing(
+                fn (array $queries): array => array_map(
+                    fn (string $q): array => ['query' => $q, 'products' => $byQuery[$q] ?? []],
+                    $queries
+                )
+            );
+        });
+    }
+
+    private function mockExtractor(): void
+    {
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->andReturn([
+                'subject' => 'Zapytanie',
+                'questions' => [],
+                'product_queries' => [],
+                'line_items' => [],
+                'cards' => [],
+            ]);
+        });
+    }
+
+    public function test_numbered_list_is_not_read_as_quantities(): void
+    {
+        $service = app(ClientInquiryService::class);
+
+        $mail = implode("\n", [
+            '1. Wycieraczka gumowa 40x60cm',
+            '2. Łopata do śniegu',
+            '3. Drabina elektroizolacyjna KRAUSE 815446',
+        ]);
+
+        $items = $service->resolveLineItems($mail, []);
+
+        $this->assertCount(3, $items);
+        foreach ($items as $item) {
+            $this->assertNull($item['qty'], 'numer listy nie jest ilością');
+        }
+    }
+
+    public function test_real_quantities_with_units_are_kept(): void
+    {
+        $service = app(ClientInquiryService::class);
+
+        $mail = implode("\n", [
+            '10 szt. rękawice nitrylowe rozmiar 9',
+            '4 pary buty robocze S3 rozmiar 43',
+        ]);
+
+        $items = $service->resolveLineItems($mail, []);
+
+        $this->assertSame('10', $items[0]['qty']);
+        $this->assertSame('4', $items[1]['qty']);
+    }
+
+    public function test_size_only_line_inherits_the_product_name_and_says_so(): void
+    {
+        $service = app(ClientInquiryService::class);
+
+        $items = $service->resolveLineItems('', [
+            ['id' => 'item_1', 'quote' => 'Wycieraczka gumowa:rozm: 40x60cm, c. netto......24,00 PLN/szt', 'query' => 'wycieraczka gumowa'],
+            ['id' => 'item_2', 'quote' => '50x100cm, c. netto...... 39,00 PLN/szt.', 'query' => ''],
+            ['id' => 'item_3', 'quote' => '80x120cm c. netto......89,00 PLN/szt.', 'query' => ''],
+        ]);
+
+        $this->assertSame('mail', $items[0]['query_source']);
+        $this->assertStringContainsString('wycieraczka gumowa', mb_strtolower($items[1]['search_query']));
+        $this->assertStringContainsString('50x100cm', $items[1]['search_query']);
+        // dziedziczenie to nasz wniosek, nie treść maila — musi być odnotowane
+        $this->assertSame('inherited', $items[1]['query_source']);
+        $this->assertStringContainsString('wycieraczka gumowa', mb_strtolower($items[2]['search_query']));
+    }
+
+    public function test_search_query_never_carries_the_price(): void
+    {
+        $service = app(ClientInquiryService::class);
+
+        $items = $service->resolveLineItems('', [
+            ['id' => 'item_1', 'quote' => '(poz9). Łopata do śniegu,c. netto......97,00 PLN/szt.', 'query' => 'łopata do śniegu'],
+        ]);
+
+        $this->assertStringNotContainsString('PLN', $items[0]['search_query']);
+        $this->assertStringNotContainsString('netto', $items[0]['search_query']);
+        $this->assertStringNotContainsString('poz9', $items[0]['search_query']);
+        $this->assertStringContainsString('opata do', $items[0]['search_query']);
+    }
+
+    public function test_catalog_row_without_model_rating_is_not_offered_to_the_customer(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $junk = $this->product('PF-SK-01', 'Zestaw serwisowy 3M PF-SK-01', ['catalog_price_net' => 27879.90]);
+
+        $this->mockExtractor();
+        $this->mockSearch([
+            'Wycieraczka gumowa 80x120cm' => [[
+                'id' => $junk->id,
+                'sku' => $junk->sku,
+                'name' => $junk->name,
+                'manufacturer' => '3M',
+                'catalog_price_net' => '27879.90',
+                'currency' => 'PLN',
+                'stock' => 1,
+                'ai_match_percent' => 48,
+                'ai_match_reason' => 'Nieocenione przez model — ten sam rodzaj w katalogu',
+                'ai_match_source' => 'catalog',
+            ]],
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry\n\n6 szt. Wycieraczka gumowa 80x120cm",
+            'tone' => 'formal',
+        ])->assertCreated();
+
+        $res->assertJsonPath('items.0.candidates', [])
+            ->assertJsonPath('items.0.confidence', 'none')
+            ->assertJsonPath('items.0.chosen', 'check');
+        $this->assertStringNotContainsString('PF-SK-01', (string) $res->json('reply_body'));
+    }
+
+    public function test_product_rated_by_the_model_stays_even_with_a_very_different_name(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        // w handlu to ten sam wyrób — model to ocenił i nie wolno tego odsiać
+        $waders = $this->product('SB-44', 'Spodniobuty wędkarskie PCV', ['catalog_price_net' => 189.00]);
+
+        $this->mockExtractor();
+        $this->mockSearch([
+            'Wodery' => [[
+                'id' => $waders->id,
+                'sku' => $waders->sku,
+                'name' => $waders->name,
+                'manufacturer' => 'Demar',
+                'catalog_price_net' => '189.00',
+                'currency' => 'PLN',
+                'stock' => 3,
+                'ai_match_percent' => 88,
+                'ai_match_reason' => 'Ten sam wyrób pod inną nazwą handlową',
+                'ai_match_source' => 'ai',
+            ]],
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry\n\n2 pary Wodery rozmiar 44",
+            'tone' => 'formal',
+        ])
+            ->assertCreated()
+            ->assertJsonPath('items.0.candidates.0.sku', 'SB-44')
+            ->assertJsonPath('items.0.confidence', 'high')
+            ->assertJsonPath('items.0.chosen', 'p:'.$waders->id);
+    }
+
+    public function test_old_inquiry_saved_before_the_change_keeps_its_candidates(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = $this->product('RNITZ-100', 'Rękawice nitrylowe');
+
+        // zapis w starym formacie: pozycje bez „search_query”, klucz grupy = cytat
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_body' => 'Stare zapytanie.',
+            'analysis' => [
+                'line_items' => [[
+                    'id' => 'item_1',
+                    'quote' => '10 szt. rękawice nitrylowe rozmiar 9',
+                    'qty' => '10',
+                    'unit' => 'szt.',
+                    'query' => 'rękawice nitrylowe',
+                    'size' => '9',
+                ]],
+                'matches' => [[
+                    'query' => 'rękawice nitrylowe rozmiar 9',
+                    'products' => [[
+                        'id' => $product->id,
+                        'sku' => $product->sku,
+                        'name' => $product->name,
+                        'manufacturer' => 'Supon',
+                        'norms' => '',
+                        'score' => 91,
+                        'reason' => 'Zgodny rodzaj',
+                        'catalog_pln' => 100.0,
+                        'offer_pln' => 118.0,
+                        'stock' => 5,
+                    ]],
+                ]],
+            ],
+            'answers' => ['product:item_1' => ['option_id' => 'p:'.$product->id]],
+            'reply_subject' => 'Oferta',
+            'reply_body' => 'Treść listu.',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->getJson("/api/inquiries/{$inquiry->id}")
+            ->assertOk()
+            ->assertJsonPath('items.0.candidates.0.sku', 'RNITZ-100')
+            ->assertJsonPath('items.0.chosen', 'p:'.$product->id);
+    }
+}
