@@ -139,13 +139,15 @@ async function replyTargetFor(inquiry, messageId) {
   }
 }
 
-async function insertReply({ inquiryId, messageId = null }) {
-  // Czasy etapów w konsoli dodatku (Narzędzia → Deweloper → Debugowanie dodatków):
-  // bez nich nie da się powiedzieć, czy handlowiec czeka na serwer, na wyszukanie
-  // maila w skrzynce, czy na samo otwarcie okna odpowiedzi.
+async function insertReply({ inquiryId, messageId = null, inquiry: known = null }) {
+  // Czasy etapów: w konsoli dodatku zawsze, a gdy otwieranie trwa długo — też
+  // w powiadomieniu. Bez nich nie da się powiedzieć, czy handlowiec czeka na
+  // serwer, na wyszukanie maila w skrzynce, czy na samo okno odpowiedzi.
   const marks = { start: Date.now() }
   try {
-    const inquiry = await api('/api/inquiries/' + inquiryId)
+    // Kolejka oddaje już całe zapytanie (treść listu, tabelę, Message-ID), więc
+    // drugie pytanie o to samo było czystym czekaniem.
+    const inquiry = known !== null ? known : await api('/api/inquiries/' + inquiryId)
     marks.inquiry = Date.now()
     const text = String(inquiry.reply_body || '').trim()
     if (text === '') {
@@ -194,19 +196,38 @@ async function insertReply({ inquiryId, messageId = null }) {
 
     // Message-ID oryginału: po wysłaniu odpowiedzi przestawimy znacznik maila.
     await rememberComposeTab(tab.id, inquiry.id, target.headerMessageId || null)
-    console.info(
-      'Supon: zapytanie ' + (marks.inquiry - marks.start) + ' ms, '
-        + 'szukanie maila ' + (marks.target - marks.inquiry) + ' ms, '
-        + 'otwarcie okna ' + (marks.window - marks.target) + ' ms, '
-        + 'gotowy cytat ' + (marks.ready - marks.window) + ' ms, '
-        + 'wstawienie treści ' + (Date.now() - marks.ready) + ' ms',
-    )
+    await reportTiming(marks)
 
     return { ok: true }
   } catch (e) {
     await notify('Nie udało się otworzyć odpowiedzi', e.message)
 
     return { ok: false, error: e.message }
+  }
+}
+
+/** Od tylu sekund oczekiwania mówimy handlowcowi, na co poszedł czas. */
+const SLOW_REPLY_SECONDS = 5
+
+/**
+ * Czasy etapów otwierania odpowiedzi. W konsoli dodatku zawsze, a gdy całość
+ * trwała długo — także w powiadomieniu: inaczej „u mnie się wlecze” zostaje
+ * bez liczb, a bez liczb nie wiadomo, co naprawiać.
+ */
+async function reportTiming(marks) {
+  const parts = [
+    ['zapytanie', marks.inquiry - marks.start],
+    ['szukanie maila', marks.target - marks.inquiry],
+    ['otwarcie okna', marks.window - marks.target],
+    ['gotowy cytat', marks.ready - marks.window],
+    ['wstawienie treści', Date.now() - marks.ready],
+  ]
+  const total = Date.now() - marks.start
+  const text = parts.map(([label, ms]) => label + ' ' + ms + ' ms').join(', ')
+  console.info('Supon: odpowiedź w ' + total + ' ms (' + text + ')')
+
+  if (total >= SLOW_REPLY_SECONDS * 1000) {
+    await notify('Okno odpowiedzi po ' + Math.round(total / 1000) + ' s', text)
   }
 }
 
@@ -263,7 +284,7 @@ async function findMessageByHeaderId(headerMessageId) {
 async function handleQueued(row) {
   // Maila wskazuje samo zapytanie — insertReply znajdzie go po Message-ID
   // i nie otworzy odpowiedzi na żadnym innym.
-  await insertReply({ inquiryId: row.id })
+  await insertReply({ inquiryId: row.id, inquiry: row })
 }
 
 /**

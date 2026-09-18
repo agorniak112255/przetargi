@@ -331,13 +331,20 @@ function sleep(ms) {
  * Okno odpowiedzi dostaje cytat i podpis chwilę po otwarciu — wstawienie treści
  * zbyt wcześnie zostałoby nadpisane. Czekamy, aż zawartość przestanie się zmieniać.
  */
-async function composeDetailsWhenReady(tabId, tries = 20, everyMs = 150) {
+async function composeDetailsWhenReady(tabId, tries = 30, everyMs = 100) {
   let previous = null
+  let empty = 0
   for (let i = 0; i < tries; i += 1) {
     const details = await browser.compose.getComposeDetails(tabId)
     const body = details.isPlainText ? details.plainTextBody : details.body
     const current = String(body || '')
     if (current.trim() !== '' && current === previous) {
+      return details
+    }
+    // Odpowiedź bez cytatu nigdy nie przestanie być pusta, a czekanie na nią
+    // kosztowało handlowca trzy sekundy przy każdym liście.
+    empty = current.trim() === '' ? empty + 1 : 0
+    if (empty >= 4) {
       return details
     }
     previous = current
