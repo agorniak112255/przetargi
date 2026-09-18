@@ -26,7 +26,7 @@ async function notify(title, message) {
  * `force` puszczamy dopiero wtedy, gdy handlowiec zobaczył cudze zapytanie
  * i mimo to chce założyć własne (oba zostaną powiązane po stronie aplikacji).
  */
-async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentAt, body, tone, force = false }) {
+async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentAt, body, tone, force = false, messageId = null }) {
   // Przy „Załóż mimo to” zachowujemy dane duplikatu — gdyby próba się nie udała,
   // ostrzeżenie musi wrócić na ekran, a nie przepaść razem z błędem.
   const previous = force ? await pendingFor(headerMessageId) : null
@@ -50,6 +50,15 @@ async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentA
 
     await setSettings({ tone })
     await rememberInquiry(headerMessageId, inquiry.id)
+    // Mail mamy otwarty tu i teraz — zapisujemy jego miejsce, żeby odpowiedź
+    // otwierała się od razu, bez przeszukiwania skrzynki.
+    if (messageId !== null && messageId !== undefined) {
+      try {
+        await rememberMessage(normalizeMessageId(headerMessageId), await browser.messages.get(messageId))
+      } catch (e) {
+        console.warn('Nie udało się zapamiętać miejsca maila:', e.message)
+      }
+    }
     await setPending(headerMessageId, null)
 
     // Znacznik na liście od razu, bez czekania na kolejne przejście w tle.
@@ -169,6 +178,9 @@ async function insertReply({ inquiryId, messageId = null, inquiry: known = null 
     // Bez `details` w beginReply, żeby zachować cytat, adresata i podpis.
     const tab = await browser.compose.beginReply(target.id, 'replyToSender')
     marks.window = Date.now()
+    // Konto nadawcy przestawiamy przed odczytaniem treści: Thunderbird przy zmianie
+    // tożsamości podmienia podpis, więc po wstawieniu listu byłoby już za późno.
+    await useIdentityOfMessage(tab.id, target)
     const details = await composeDetailsWhenReady(tab.id)
     marks.ready = Date.now()
     const before = String(details.isPlainText ? details.plainTextBody : details.body || '')
@@ -204,6 +216,44 @@ async function insertReply({ inquiryId, messageId = null, inquiry: known = null 
     await notify('Nie udało się otworzyć odpowiedzi', e.message)
 
     return { ok: false, error: e.message }
+  }
+}
+
+/**
+ * Odpowiedź ma wyjść z konta, na które klient napisał, a nie z domyślnego
+ * w Thunderbirdzie. Wybieramy tożsamość po adresie z pól „Do” i „DW” oryginału,
+ * a gdy żadna nie pasuje — pierwszą z konta, w którym mail leży.
+ *
+ * Bez zgody na odczyt kont (ta sama, której używa oznaczanie maili) zostawiamy
+ * wybór Thunderbirdowi — dodatek nie prosi o zgodę w tle, bo takie okno musi
+ * wychodzić z kliknięcia w ustawieniach.
+ */
+async function useIdentityOfMessage(tabId, message) {
+  try {
+    if (! await browser.permissions.contains({ permissions: ['accountsRead'] })) return
+    const accountId = message.folder ? message.folder.accountId : null
+    if (!accountId) return
+
+    const account = await browser.accounts.get(accountId)
+    const identities = account && Array.isArray(account.identities) ? account.identities : []
+    if (identities.length === 0) return
+
+    const addressed = []
+      .concat(message.recipients || [], message.ccList || [], message.bccList || [])
+      .join(' ')
+      .toLowerCase()
+    const match = identities.find(
+      (identity) => identity.email && addressed.includes(String(identity.email).toLowerCase()),
+    )
+    const wanted = match || identities[0]
+    if (!wanted || !wanted.id) return
+
+    const current = await browser.compose.getComposeDetails(tabId)
+    if (current.identityId === wanted.id) return
+
+    await browser.compose.setComposeDetails(tabId, { identityId: wanted.id })
+  } catch (e) {
+    console.warn('Nie udało się wybrać konta nadawcy:', e.message)
   }
 }
 
@@ -286,6 +336,12 @@ async function findMessageByHeaderId(headerMessageId) {
   const wanted = normalizeMessageId(headerMessageId)
   if (wanted === '') return null
 
+  // Pomiar u handlowca: samo przeszukanie skrzynki po identyfikatorze trwało
+  // 7 z 10 sekund oczekiwania. Zapamiętane miejsce maila skraca to do kilku
+  // milisekund, a gdy się nie zgadza, wracamy do pełnego przeszukania.
+  const known = await rememberedMessage(wanted)
+  if (known !== null) return known
+
   let list
   try {
     list = await browser.messages.query({ headerMessageId: wanted })
@@ -307,7 +363,10 @@ async function findMessageByHeaderId(headerMessageId) {
     }
   })
 
-  return (normal.length > 0 ? normal : exact)[0]
+  const picked = (normal.length > 0 ? normal : exact)[0]
+  await rememberMessage(wanted, picked)
+
+  return picked
 }
 
 async function handleQueued(row) {

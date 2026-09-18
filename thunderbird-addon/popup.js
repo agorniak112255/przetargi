@@ -137,6 +137,9 @@ function sendToBackground(body, tone, force) {
   browser.runtime.sendMessage({
     type: 'createInquiry',
     headerMessageId: message.headerMessageId || null,
+    // Numer otwartej wiadomości: dzięki niemu pierwsza wysyłka odpowiedzi
+    // nie musi przeszukiwać całej skrzynki.
+    messageId: message.id,
     subject: message.subject || '',
     // Nagłówek From i data maila — z listy wiadomości, nie z jego treści.
     sourceFrom: senderHeader(message.author),

@@ -26,6 +26,7 @@ async function refresh() {
   const settings = await getSettings()
   el('baseUrl').value = settings.baseUrl
   el('useAppSubject').checked = settings.useAppSubject
+  await showIdentityState()
   await showLastTiming()
   el('connected').hidden = !settings.token
   el('connected').textContent = settings.token ? 'Dodatek jest połączony z aplikacją.' : ''
@@ -281,6 +282,34 @@ el('getUpdate').addEventListener('click', async (event) => {
   const link = event.target.dataset.link || ''
   if (link !== '') await browser.windows.openDefaultBrowser(link)
 })
+/**
+ * Czy dodatek może odpowiadać z konta, na które przyszedł mail. Wymaga zgody na
+ * odczyt kont — tej samej, której używa oznaczanie maili na liście. Bez niej
+ * Thunderbird wybiera konto domyślne, co przy dwóch skrzynkach wysyła ofertę
+ * z niewłaściwego adresu.
+ */
+async function showIdentityState() {
+  let allowed = false
+  try {
+    allowed = await browser.permissions.contains({ permissions: ['accountsRead'] })
+  } catch (e) {
+    allowed = false
+  }
+  el('identityState').textContent = allowed
+    ? 'Konto nadawcy: odpowiedź wychodzi z konta, na które przyszedł mail.'
+    : 'Konto nadawcy: wybiera Thunderbird (konto domyślne). Zezwól na odczyt kont, żeby odpowiedź szła z tej skrzynki, na którą napisał klient.'
+  el('allowAccounts').hidden = allowed
+}
+
+el('allowAccounts').addEventListener('click', async () => {
+  try {
+    await browser.permissions.request({ permissions: ['accountsRead'] })
+  } catch (e) {
+    status(e.message, 'error')
+  }
+  await showIdentityState()
+})
+
 /**
  * Ile trwało ostatnie otwarcie okna odpowiedzi, z podziałem na etapy. Bez tego
  * „u mnie się wlecze” zostaje bez liczb, a powiadomienie z pomiarem bywa

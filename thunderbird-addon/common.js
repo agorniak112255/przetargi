@@ -354,6 +354,74 @@ async function composeDetailsWhenReady(tabId, tries = 30, everyMs = 100) {
   return browser.compose.getComposeDetails(tabId)
 }
 
+/** Ile miejsc maili trzymamy — pamięć dodatku, nie skrzynka. */
+const MESSAGE_PLACES_LIMIT = 300
+
+/**
+ * Gdzie leży mail o tym identyfikatorze: numer wiadomości (ważny tylko w tej
+ * sesji Thunderbirda) i folder (ważny także po restarcie). Numer sprawdzamy
+ * zawsze identyfikatorem — po restarcie ten sam numer bywa cudzą wiadomością.
+ */
+async function rememberedMessage(wanted) {
+  let places
+  try {
+    ({ messagePlaces: places } = await browser.storage.local.get({ messagePlaces: {} }))
+  } catch (e) {
+    return null
+  }
+  const place = places ? places[wanted] : null
+  if (!place) return null
+
+  if (place.id !== undefined && place.id !== null) {
+    try {
+      const message = await browser.messages.get(place.id)
+      if (message && normalizeMessageId(message.headerMessageId) === wanted) return message
+    } catch (e) {
+      // numer z poprzedniej sesji — szukamy dalej
+    }
+  }
+
+  if (place.folder) {
+    try {
+      const list = await browser.messages.query({ headerMessageId: wanted, folder: place.folder })
+      const found = (list && Array.isArray(list.messages) ? list.messages : [])
+        .filter((message) => normalizeMessageId(message.headerMessageId) === wanted)
+      if (found.length > 0) {
+        await rememberMessage(wanted, found[0])
+
+        return found[0]
+      }
+    } catch (e) {
+      // folder mógł zniknąć — zostaje pełne przeszukanie
+    }
+  }
+
+  return null
+}
+
+async function rememberMessage(wanted, message) {
+  if (!message) return
+  try {
+    const { messagePlaces } = await browser.storage.local.get({ messagePlaces: {} })
+    const places = messagePlaces || {}
+    // Najstarsze wpisy odpadają: pamięć dodatku ma służyć ostatnim sprawom,
+    // a nie rosnąć w nieskończoność razem ze skrzynką.
+    const keys = Object.keys(places)
+    if (keys.length >= MESSAGE_PLACES_LIMIT) {
+      for (const key of keys.slice(0, keys.length - MESSAGE_PLACES_LIMIT + 1)) delete places[key]
+    }
+    places[wanted] = {
+      id: message.id,
+      folder: message.folder
+        ? { accountId: message.folder.accountId, path: message.folder.path }
+        : null,
+    }
+    await browser.storage.local.set({ messagePlaces: places })
+  } catch (e) {
+    console.warn('Nie udało się zapamiętać miejsca maila:', e.message)
+  }
+}
+
 /* -------------------- powiązanie okna odpowiedzi -------------------- */
 
 async function rememberComposeTab(tabId, inquiryId, headerMessageId = null) {

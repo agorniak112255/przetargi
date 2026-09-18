@@ -367,8 +367,14 @@ async function messagesWithHeaderId(headerMessageId) {
   if (!headerMessageId) return []
   try {
     const list = await browser.messages.query({ headerMessageId })
+    const messages = list && Array.isArray(list.messages) ? list.messages : []
+    // Przejście znaczników i tak przeszukało skrzynkę — zapisujemy miejsce maila,
+    // żeby wysyłka odpowiedzi nie musiała robić tego drugi raz (7 sekund u handlowca).
+    if (messages.length > 0) {
+      await rememberMessage(normalizeMessageId(headerMessageId), messages[0])
+    }
 
-    return list && Array.isArray(list.messages) ? list.messages : []
+    return messages
   } catch (e) {
     // Pusta lista znaczy „nie ma tego maila w tym Thunderbirdzie”, więc awarii
     // wyszukiwania nie wolno na nią zamieniać — zostawiamy ślad i wstrzymujemy
