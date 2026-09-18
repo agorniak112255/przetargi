@@ -575,7 +575,7 @@ export function InquiryReply() {
 
   /**
    * Przeglądarka nie sięgnie do poczty na komputerze, więc zostawiamy prośbę
-   * na serwerze — dodatek do Thunderbirda podejmuje ją w ciągu kilkunastu sekund
+   * na serwerze — dodatek do Thunderbirda podejmuje ją w ciągu kilku sekund
    * i otwiera okno odpowiedzi na tym samym mailu.
    */
   async function sendViaThunderbird() {
@@ -592,7 +592,7 @@ export function InquiryReply() {
         body: JSON.stringify({ queued: true }),
       })
       setInquiry(res)
-      setMsg('Zapisano. Thunderbird otworzy okno odpowiedzi w ciągu kilkunastu sekund.')
+      setMsg('Zapisano. Thunderbird otworzy okno odpowiedzi w ciągu kilku sekund.')
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się przekazać listu do Thunderbirda.')
     }
@@ -796,7 +796,7 @@ export function InquiryReply() {
             </div>
             <p className="mt-2 text-[11px] text-slate-400">
               {inquiry.send_requested_at
-                ? 'List czeka na Thunderbirda — otworzy okno odpowiedzi w ciągu kilkunastu sekund. Maila wysyłasz sam, z Thunderbirda.'
+                ? 'List czeka na Thunderbirda — otworzy okno odpowiedzi w ciągu kilku sekund. Maila wysyłasz sam, z Thunderbirda.'
                 : inquiry.source_message_id
                   ? 'Edycje zapisują się po opuszczeniu pola. Thunderbird otworzy odpowiedź na ten mail — wysyłasz ją sam, po sprawdzeniu.'
                   : 'Edycje zapisują się po opuszczeniu pola. System nie wysyła maila — wklej treść do swojej poczty.'}

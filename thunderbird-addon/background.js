@@ -140,8 +140,13 @@ async function replyTargetFor(inquiry, messageId) {
 }
 
 async function insertReply({ inquiryId, messageId = null }) {
+  // Czasy etapów w konsoli dodatku (Narzędzia → Deweloper → Debugowanie dodatków):
+  // bez nich nie da się powiedzieć, czy handlowiec czeka na serwer, na wyszukanie
+  // maila w skrzynce, czy na samo otwarcie okna odpowiedzi.
+  const marks = { start: Date.now() }
   try {
     const inquiry = await api('/api/inquiries/' + inquiryId)
+    marks.inquiry = Date.now()
     const text = String(inquiry.reply_body || '').trim()
     if (text === '') {
       await notify('Odpowiedź nie jest gotowa', 'Dokończ ją w aplikacji, potem wróć tutaj.')
@@ -152,6 +157,7 @@ async function insertReply({ inquiryId, messageId = null }) {
     // Mail bierzemy z zapytania, nie z zaznaczenia na liście.
     const target = await replyTargetFor(inquiry, messageId)
     if (target === null) return { ok: false }
+    marks.target = Date.now()
 
     const settings = await getSettings()
     // Tabela „pozycja z zapytania — nasza propozycja”; brak = ręcznie poprawiony
@@ -160,7 +166,9 @@ async function insertReply({ inquiryId, messageId = null }) {
 
     // Bez `details` w beginReply, żeby zachować cytat, adresata i podpis.
     const tab = await browser.compose.beginReply(target.id, 'replyToSender')
+    marks.window = Date.now()
     const details = await composeDetailsWhenReady(tab.id)
+    marks.ready = Date.now()
     const before = String(details.isPlainText ? details.plainTextBody : details.body || '')
 
     const snippet = table !== '' ? table + '<br>' : textToHtml(text) + '<br><br>'
@@ -186,6 +194,13 @@ async function insertReply({ inquiryId, messageId = null }) {
 
     // Message-ID oryginału: po wysłaniu odpowiedzi przestawimy znacznik maila.
     await rememberComposeTab(tab.id, inquiry.id, target.headerMessageId || null)
+    console.info(
+      'Supon: zapytanie ' + (marks.inquiry - marks.start) + ' ms, '
+        + 'szukanie maila ' + (marks.target - marks.inquiry) + ' ms, '
+        + 'otwarcie okna ' + (marks.window - marks.target) + ' ms, '
+        + 'gotowy cytat ' + (marks.ready - marks.window) + ' ms, '
+        + 'wstawienie treści ' + (Date.now() - marks.ready) + ' ms',
+    )
 
     return { ok: true }
   } catch (e) {
@@ -197,8 +212,16 @@ async function insertReply({ inquiryId, messageId = null }) {
 
 /* ---------------- wysyłka zlecona z aplikacji w przeglądarce ---------------- */
 
-/** Co ile sekund pytamy serwer o listy czekające na wysłanie. */
-const QUEUE_POLL_SECONDS = 15
+/**
+ * Co ile sekund pytamy serwer o listy czekające na wysłanie. Pytanie jest tanie
+ * (jedno zapytanie po zapytaniach tego handlowca z ostatniej doby, ~60 ms), a to
+ * ono decyduje, ile handlowiec czeka po kliknięciu „Zapisz i wyślij” w aplikacji:
+ * przy 15 sekundach czekał średnio 7 sekund na sam początek pracy dodatku.
+ */
+const QUEUE_POLL_SECONDS = 5
+
+/** Jedno przejście naraz: okno odpowiedzi otwiera się dłużej niż odstęp między przejściami. */
+let queueBusy = false
 
 /**
  * Mail o podanym Message-ID. Numeryczne id wiadomości ważne są tylko w tej
@@ -249,31 +272,39 @@ async function handleQueued(row) {
  * Prośbę kasujemy zawsze po podjęciu, żeby nie otwierać okna w kółko.
  */
 async function pollQueue() {
+  if (queueBusy) return
   const { token } = await getSettings()
   if (!token) return
 
-  let rows
+  queueBusy = true
   try {
-    rows = await api('/api/inquiries/queued')
-  } catch (e) {
-    return
-  }
-
-  for (const row of Array.isArray(rows) ? rows : []) {
+    let rows
     try {
-      await api('/api/inquiries/' + row.id + '/queue-reply', {
-        method: 'POST',
-        body: { queued: false },
-      })
+      rows = await api('/api/inquiries/queued')
     } catch (e) {
-      continue
+      return
     }
 
-    try {
-      await handleQueued(row)
-    } catch (e) {
-      await notify('Nie udało się otworzyć odpowiedzi', e.message)
+    for (const row of Array.isArray(rows) ? rows : []) {
+      try {
+        await api('/api/inquiries/' + row.id + '/queue-reply', {
+          method: 'POST',
+          body: { queued: false },
+        })
+      } catch (e) {
+        continue
+      }
+
+      const started = Date.now()
+      try {
+        await handleQueued(row)
+        console.info('Supon: odpowiedź na zapytanie #' + row.id + ' otwarta w ' + (Date.now() - started) + ' ms')
+      } catch (e) {
+        await notify('Nie udało się otworzyć odpowiedzi', e.message)
+      }
     }
+  } finally {
+    queueBusy = false
   }
 }
 
