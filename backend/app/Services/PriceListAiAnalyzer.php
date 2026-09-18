@@ -53,6 +53,12 @@ final class PriceListAiAnalyzer
      *     meta?: array{manufacturer: string, version: string, source: string}
      * }
      */
+    /**
+     * Ile pozycji pokazujemy w oknie mapowania. Tyle wystarcza, żeby zobaczyć, czy kolumny wskazują
+     * to, co trzeba — różnice w cennikach widać na pierwszych kilkudziesięciu wierszach.
+     */
+    private const PREVIEW_ROWS = 50;
+
     public function analyze(string $path, ?string $manufacturerHint = null, ?string $originalName = null): array
     {
         if ($this->isPdf($path, $originalName)) {
@@ -150,7 +156,7 @@ final class PriceListAiAnalyzer
             ?? 'PLN';
 
         $preview = [];
-        foreach (array_slice($stats['items'], 0, 12) as $item) {
+        foreach (array_slice($stats['items'], 0, self::PREVIEW_ROWS) as $item) {
             if (! is_array($item)) {
                 continue;
             }
@@ -1360,6 +1366,6 @@ PROMPT;
 
     private function buildPreview(string $path, array $mapping): array
     {
-        return app(PriceListImportService::class)->previewFromMapping($path, $mapping, 8);
+        return app(PriceListImportService::class)->previewFromMapping($path, $mapping, self::PREVIEW_ROWS);
     }
 }

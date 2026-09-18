@@ -21,6 +21,9 @@ class PriceListImportController extends Controller
 {
     private const ALLOWED_EXT = ['xlsx', 'xls', 'csv', 'pdf'];
 
+    /** tyle pozycji pokazuje okno mapowania — tak samo jak po analizie */
+    private const PREVIEW_ROWS = 50;
+
     public function __construct(
         private readonly PriceListImportService $importer,
         private readonly PriceListAiAnalyzer $analyzer,
@@ -237,7 +240,7 @@ class PriceListImportController extends Controller
         }
 
         try {
-            $stats = $this->importer->previewFromMapping($path, $mapping, 12);
+            $stats = $this->importer->previewFromMapping($path, $mapping, self::PREVIEW_ROWS);
         } catch (Throwable $e) {
             throw ValidationException::withMessages([
                 'mapping' => 'Nie udało się odczytać pliku według tego mapowania: '.$e->getMessage(),

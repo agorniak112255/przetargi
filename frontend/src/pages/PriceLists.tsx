@@ -4,6 +4,13 @@ import { useAuth } from '../auth'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { PriceListsTabs } from '../components/PriceListsTabs'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
+import {
+  columnLetter,
+  COLUMN_ROLES,
+  type MappingPreviewRow,
+  PriceListMappingModal,
+  type SheetMapping,
+} from '../components/PriceListMappingModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
 import { api, can, parseActiveEnrichment, type EnrichmentBatch, type PrestaExportBatch } from '../lib/api'
 
@@ -170,38 +177,6 @@ type AssortmentGroupsSummary = {
 }
 
 const CURRENCIES = ['PLN', 'EUR', 'USD', 'GBP', 'CHF', 'CZK', 'SEK', 'NOK', 'DKK', 'ZAR'] as const
-
-type SheetColumn = { index: number; label: string; sample: string }
-
-type SheetMapping = {
-  sheet: string
-  include: boolean
-  header_excel_row: number
-  columns: Record<string, number | null>
-  available_columns?: SheetColumn[]
-  locked_columns?: string[]
-  repeating_headers: boolean
-  confidence: number
-}
-
-/**
- * Role kolumn do ręcznej korekty przed importem. Kolejność jest kolejnością w oknie — najpierw to,
- * bez czego importu nie ma, potem reszta.
- */
-const COLUMN_ROLES: Array<{ key: string; label: string; hint?: string; required?: boolean }> = [
-  { key: 'sku', label: 'Kod / symbol' },
-  { key: 'name', label: 'Nazwa', required: true },
-  { key: 'name_extra', label: 'Nazwa — druga część', hint: 'doklejana do nazwy (rodzina + opis)' },
-  { key: 'model_name', label: 'Rodzina / model' },
-  { key: 'catalog_price', label: 'Cena katalogowa', required: true },
-  { key: 'discount', label: 'Upust %' },
-  { key: 'purchase', label: 'Cena zakupu' },
-  { key: 'category', label: 'Grupa asortymentowa' },
-  { key: 'ean', label: 'EAN' },
-  { key: 'pack_qty', label: 'Ilość w opakowaniu' },
-  { key: 'packaging', label: 'Opakowanie' },
-  { key: 'currency', label: 'Waluta' },
-]
 
 type Analysis = {
   source?: string
@@ -449,16 +424,8 @@ function HistorySortTh({
   )
 }
 
-/** Numer kolumny w postaci, w jakiej widzi ją człowiek w arkuszu: 0 → A, 27 → AB. */
-function columnLetter(index: number): string {
-  let n = index
-  let out = ''
-  do {
-    out = String.fromCharCode(65 + (n % 26)) + out
-    n = Math.floor(n / 26) - 1
-  } while (n >= 0)
-  return out
-}
+/** Ile pozycji pokazuje tabela na stronie — pełny podgląd jest w oknie mapowania. */
+const PAGE_PREVIEW_ROWS = 12
 
 const btnPrimary =
   'inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50'
@@ -499,6 +466,7 @@ export function PriceLists() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   // mapowanie poprawione ręcznie, ale podgląd wciąż pokazuje poprzedni odczyt pliku
   const [mappingDirty, setMappingDirty] = useState(false)
+  const [mappingOpen, setMappingOpen] = useState(false)
   const [lastPriceChanges, setLastPriceChanges] = useState<PriceChange[]>([])
   const [lastPricesChanged, setLastPricesChanged] = useState(0)
   const [expandedHistory, setExpandedHistory] = useState<{ id: number; kind: HistoryKind } | null>(
@@ -1233,6 +1201,7 @@ export function PriceLists() {
     setMsg('')
     setAnalysis(null)
     setMappingDirty(false)
+    setMappingOpen(false)
     try {
       const fd = new FormData()
       fd.append('file', file)
@@ -1248,6 +1217,11 @@ export function PriceLists() {
       }
       setAnalysis(next)
       initGroupsFromAnalysis(next)
+      // Cennik z arkusza: mapowanie pokazujemy od razu, bo to ono decyduje, co wejdzie do bazy.
+      // PDF nie ma kolumn do poprawiania, więc okno nie ma tam czego pokazać.
+      if (res.source === 'spreadsheet' && (res.mapping?.sheets?.length ?? 0) > 0) {
+        setMappingOpen(true)
+      }
       const detectedManuf =
         res.meta?.manufacturer ?? res.mapping?.manufacturer_detected ?? null
       if (detectedManuf) setManufacturer(detectedManuf)
@@ -1315,6 +1289,41 @@ export function PriceLists() {
     return {
       ...mapping,
       sheets: mapping.sheets.map(({ available_columns: _drop, ...rest }) => rest),
+    }
+  }
+
+  /** Arkusz, który idzie do importu — po nim streszczamy mapowanie na pasku. */
+  const activeSheet = useMemo(
+    () => analysis?.mapping?.sheets.find((s) => s.include) ?? analysis?.mapping?.sheets[0] ?? null,
+    [analysis],
+  )
+
+  const mappingSummary = useMemo(() => {
+    if (!activeSheet) return ''
+    const parts = COLUMN_ROLES.filter((r) => typeof activeSheet.columns[r.key] === 'number')
+      .slice(0, 5)
+      .map((r) => {
+        const index = activeSheet.columns[r.key] as number
+        const label = activeSheet.available_columns?.find((c) => c.index === index)?.label
+        return `${r.label}: ${columnLetter(index)}${label ? ` (${label})` : ''}`
+      })
+    return [activeSheet.sheet, ...parts].join(' · ')
+  }, [activeSheet])
+
+  /**
+   * Upust i cena po upuście dla wiersza podglądu — dokładnie tak, jak policzy je import przy
+   * potwierdzeniu, żeby okno mapowania nie pokazywało czegoś innego niż to, co wejdzie do bazy.
+   */
+  function effectiveFor(row: MappingPreviewRow) {
+    const groupDiscount = groupRows.find((g) => g.name === (row.category ?? ''))?.discount_percent
+    const globalParsed = defaultDiscount.trim() === '' ? null : Number(defaultDiscount)
+    const discount =
+      groupRows.length > 0
+        ? (groupDiscount ?? (globalParsed ?? 0))
+        : (globalParsed ?? row.discount_percent)
+    return {
+      discount,
+      purchase: Number((row.catalog_price_net * (1 - discount / 100)).toFixed(2)),
     }
   }
 
@@ -1407,6 +1416,7 @@ export function PriceLists() {
       setFile(null)
       setAnalysis(null)
       setMappingDirty(false)
+      setMappingOpen(false)
       setGroupRows([])
       await load()
       finishProgress(true)
@@ -1652,107 +1662,24 @@ export function PriceLists() {
             </label>
           </div>
           {(analysis.mapping?.sheets?.length ?? 0) > 0 && (
-            <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <h3 className="text-sm font-semibold text-slate-800">Mapowanie kolumn</h3>
-                <span className="text-[11px] text-slate-500">
-                  Według tego mapowania plik zostanie odczytany. Popraw kolumnę, która wskazuje co innego,
-                  niż powinna — ręczna poprawka nie jest już zmieniana automatycznie.
-                </span>
-                {analysis.source === 'spreadsheet' && (
-                  <button
-                    type="button"
-                    className={`${btnSecondary} ml-auto px-3 py-1.5`}
-                    disabled={busy || !file}
-                    onClick={onRefreshPreview}
-                  >
-                    Odśwież podgląd
-                  </button>
-                )}
-              </div>
+            <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
+              <span className="text-sm font-semibold text-slate-800">Mapowanie kolumn</span>
+              {mappingSummary && (
+                <span className="text-[11px] text-slate-600">{mappingSummary}</span>
+              )}
               {mappingDirty && (
-                <p className="mb-2 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
-                  Mapowanie zmienione — podgląd poniżej jest jeszcze sprzed zmiany. Kliknij
-                  „Odśwież podgląd”.
-                </p>
+                <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-900">
+                  Mapowanie zmienione — odśwież podgląd w oknie mapowania.
+                </span>
               )}
-              {(analysis.errors?.length ?? 0) > 0 && (
-                <ul className="mb-2 rounded border border-red-200 bg-red-50 px-3 py-1.5 text-[11px] text-red-800">
-                  {analysis.errors!.slice(0, 5).map((e, i) => (
-                    <li key={i} className="list-disc">
-                      {e}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {analysis.mapping!.sheets.map((s) => (
-                <div key={s.sheet} className="mb-2 rounded border border-slate-200 bg-white p-2">
-                  <div className="mb-2 flex flex-wrap items-center gap-3">
-                    <label className="flex items-center gap-1.5 font-medium text-slate-800">
-                      <input
-                        type="checkbox"
-                        checked={s.include}
-                        onChange={(e) => setSheetInclude(s.sheet, e.target.checked)}
-                      />
-                      {s.sheet}
-                    </label>
-                    <span className="text-[11px] text-slate-500">
-                      nagłówek: wiersz {s.header_excel_row} · pewność{' '}
-                      {Math.round(s.confidence * 100)}%
-                    </span>
-                  </div>
-                  {s.include &&
-                    ((s.available_columns?.length ?? 0) > 0 ? (
-                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                        {COLUMN_ROLES.map((role) => {
-                          const value = s.columns[role.key]
-                          const chosen =
-                            typeof value === 'number'
-                              ? s.available_columns?.find((c) => c.index === value)
-                              : undefined
-                          return (
-                            <label key={role.key} className="block">
-                              <span className="block text-[11px] font-medium text-slate-600">
-                                {role.label}
-                                {role.required && <span className="text-red-600"> *</span>}
-                                {role.hint && (
-                                  <span className="font-normal text-slate-400"> — {role.hint}</span>
-                                )}
-                              </span>
-                              <select
-                                className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
-                                value={typeof value === 'number' ? String(value) : ''}
-                                onChange={(e) =>
-                                  setSheetColumn(
-                                    s.sheet,
-                                    role.key,
-                                    e.target.value === '' ? null : Number(e.target.value),
-                                  )
-                                }
-                              >
-                                <option value="">— brak —</option>
-                                {s.available_columns!.map((c) => (
-                                  <option key={c.index} value={c.index}>
-                                    {columnLetter(c.index)}
-                                    {c.label ? `: ${c.label}` : ''}
-                                  </option>
-                                ))}
-                              </select>
-                              <span className="mt-0.5 block truncate text-[11px] text-slate-500">
-                                {chosen?.sample ? `przykład: ${chosen.sample}` : ' '}
-                              </span>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-[11px] text-slate-500">
-                        SKU / Nazwa / Cena: kolumny {s.columns.sku ?? '—'} / {s.columns.name ?? '—'} /{' '}
-                        {s.columns.catalog_price ?? '—'}
-                      </p>
-                    ))}
-                </div>
-              ))}
+              <button
+                type="button"
+                className={`${btnSecondary} ml-auto px-3 py-1.5`}
+                disabled={busy || !file}
+                onClick={() => setMappingOpen(true)}
+              >
+                Sprawdź i popraw mapowanie
+              </button>
             </div>
           )}
 
@@ -1889,7 +1816,12 @@ export function PriceLists() {
           </div>
 
           <h3 className="mb-1 font-semibold">
-            Podgląd (przykłady {analysis.preview.length} z {analysis.products_found})
+            Podgląd (przykłady {Math.min(analysis.preview.length, PAGE_PREVIEW_ROWS)} z{' '}
+            {analysis.products_found})
+            <span className="ml-2 font-normal text-slate-500">
+              tu poprawisz grupę i walutę pojedynczej pozycji; całość mapowania — w oknie „Sprawdź
+              i popraw mapowanie”
+            </span>
           </h3>
           <table className="w-full text-left">
             <thead>
@@ -1906,18 +1838,8 @@ export function PriceLists() {
               </tr>
             </thead>
             <tbody>
-              {analysis.preview.map((p) => {
-                const groupDiscount = groupRows.find((g) => g.name === (p.category ?? ''))
-                  ?.discount_percent
-                const globalParsed =
-                  defaultDiscount.trim() === '' ? null : Number(defaultDiscount)
-                const effectiveDiscount =
-                  groupRows.length > 0
-                    ? (groupDiscount ?? (globalParsed ?? 0))
-                    : (globalParsed ?? p.discount_percent)
-                const effectivePurchase = Number(
-                  (p.catalog_price_net * (1 - effectiveDiscount / 100)).toFixed(2),
-                )
+              {analysis.preview.slice(0, PAGE_PREVIEW_ROWS).map((p) => {
+                const { discount: effectiveDiscount, purchase: effectivePurchase } = effectiveFor(p)
                 return (
                   <tr key={p.sku} className="border-b">
                     <td className="p-2 font-medium">{p.sku}</td>
@@ -1993,6 +1915,24 @@ export function PriceLists() {
           </table>
         </div>
       )}
+
+      <PriceListMappingModal
+        open={mappingOpen && analysis?.mapping != null}
+        busy={busy}
+        dirty={mappingDirty}
+        sheets={analysis?.mapping?.sheets ?? []}
+        rows={analysis?.preview ?? []}
+        productsFound={analysis?.products_found ?? 0}
+        rowsTotal={analysis?.rows_total ?? 0}
+        skipped={analysis?.skipped ?? 0}
+        errors={analysis?.errors ?? []}
+        defaultCurrency={analysis?.mapping?.currency ?? 'PLN'}
+        effectiveFor={effectiveFor}
+        onSetColumn={setSheetColumn}
+        onSetInclude={setSheetInclude}
+        onRefresh={() => void onRefreshPreview()}
+        onClose={() => setMappingOpen(false)}
+      />
 
       {lastPriceChanges.length > 0 && (
         <div className="mb-4 rounded-xl bg-white p-4 shadow-sm text-xs">
