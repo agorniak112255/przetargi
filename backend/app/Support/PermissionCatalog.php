@@ -199,8 +199,9 @@ final class PermissionCatalog
             ['b2b_accounts.manage', 'Konta B2B — edycja', 'Może dodawać, edytować i usuwać konta witryn B2B dostawców.', 'Produkty i cenniki'],
             ['clients.view', 'Klienci — podgląd', 'Może przeglądać listę klientów.', 'Klienci'],
             ['clients.manage', 'Klienci — edycja', 'Może dodawać i edytować klientów.', 'Klienci'],
-            ['inquiries.use', 'Zapytania mailowe', 'Może wklejać zapytanie klienta i przygotować odpowiedź z katalogu.', 'Klienci'],
-            ['inquiries.view_all', 'Zapytania mailowe: wszyscy użytkownicy', 'Widzi na liście zapytania wszystkich pracowników, nie tylko własne.', 'Klienci'],
+            // Własna grupa, a nie „Klienci”: uprawnienia do zapytań były tam nie do znalezienia.
+            ['inquiries.use', 'Zapytania — praca z mailem', 'Może wklejać zapytanie klienta (albo wysłać je z dodatku do Thunderbirda) i przygotować odpowiedź z katalogu.', 'Zapytania'],
+            ['inquiries.view_all', 'Zapytania — podgląd wszystkich', 'Widzi na liście zapytania wszystkich pracowników, nie tylko własne, i może filtrować po użytkowniku. Bez tego widzi wyłącznie swoje.', 'Zapytania'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],
             ['admin.access', 'Panel Administracja', 'Widzi pozycję menu Administracja.', 'Administracja'],
             ['admin.users.manage', 'Zarządzanie użytkownikami', 'Może tworzyć, edytować i usuwać konta oraz przypisywać role.', 'Administracja'],

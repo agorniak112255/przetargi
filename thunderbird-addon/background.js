@@ -53,7 +53,9 @@ async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentA
     await setPending(headerMessageId, null)
 
     // Znacznik na liście od razu, bez czekania na kolejne przejście w tle.
-    await markByHeaderId(headerMessageId)
+    // `loud`: to jest moment, w którym handlowiec patrzy — jeśli oznaczanie
+    // nie działa, ma o tym usłyszeć teraz, a nie nigdy.
+    await markByHeaderId(headerMessageId, { loud: true })
 
     const { baseUrl } = await getSettings()
     await browser.windows.openDefaultBrowser(baseUrl + '/inquiries/' + inquiry.id)
@@ -361,7 +363,7 @@ browser.messageDisplay.onMessageDisplayed.addListener(async (tab, message) => {
   if (headerMessageId === '' || checkedRecently(headerMessageId)) return
 
   try {
-    await markByHeaderId(headerMessageId)
+    await markByHeaderId(headerMessageId, { loud: true })
   } catch (e) {
     console.warn('Nie udało się oznaczyć otwartego maila:', e.message)
   }

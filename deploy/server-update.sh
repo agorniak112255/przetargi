@@ -124,6 +124,12 @@ fi
 echo "==> migrate"
 "$PHP_BIN" artisan migrate --force
 
+# Uprawnienia dopisane w kodzie trzeba dosypać do bazy, inaczej nowej opcji nie
+# ma nikt — także admin. Seedera rol tu NIE wołamy: robi syncPermissions, czyli
+# skasowałby ręczne zmiany z panelu „Role”. To polecenie tylko dodaje nowe.
+echo "==> uprawnienia"
+"$PHP_BIN" artisan permissions:sync --apply || true
+
 echo "==> cache"
 "$PHP_BIN" artisan config:cache || true
 "$PHP_BIN" artisan route:cache || true

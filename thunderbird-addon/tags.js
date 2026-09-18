@@ -50,6 +50,24 @@ const TAG_PERMISSIONS_LEGACY = ['messagesTags', 'messagesModify']
 /** Od tej wersji Thunderbirda zapis wiadomości stoi za `messagesUpdate`. */
 const MESSAGES_UPDATE_SINCE = 122
 
+/** Żeby dwa przejścia nie nachodziły na siebie przy wolnej sieci. */
+let syncing = false
+
+/**
+ * Czy ostatnie oznaczanie padło z przyczyn technicznych (brak zgody, brak API
+ * znaczników, błąd serwera). Wtedy nie wolno przesunąć `tagsSince`: serwer
+ * oddaje zmiany „od” tej chwili, więc maile z okna, którego nie przetworzyliśmy,
+ * nie wróciłyby już nigdy — i lista zostałaby bez oznaczeń na zawsze.
+ */
+let markBroken = false
+
+/**
+ * Powód ostatniej porażki, słowami. Wcześniej każdy błąd tej drogi kończył się
+ * wpisem w konsoli tła dodatku — awaria wyglądała jak „nic się nie dzieje”,
+ * bo do tej konsoli nikt nie zagląda. Teraz powód wychodzi na powiadomienie.
+ */
+let markError = null
+
 /* ---------------------------- uprawnienia ---------------------------- */
 
 async function thunderbirdMajor() {
@@ -147,7 +165,7 @@ async function ensureTag(tags, known, wanted) {
     } catch (e) {
       // Wyścig dwóch okien albo zajęty klucz — przy następnym przejściu
       // znacznik będzie już na liście i po prostu go użyjemy.
-      console.warn('Nie udało się założyć znacznika ' + wanted.key + ':', e.message)
+      markError = 'Nie udało się założyć znacznika „' + wanted.label + '”: ' + e.message
 
       return false
     }
@@ -260,9 +278,24 @@ async function applyTags(message, wantedKeys) {
   try {
     await browser.messages.update(message.id, { tags: next })
   } catch (e) {
-    console.warn('Nie udało się oznaczyć maila ' + message.id + ':', e.message)
+    markError = 'Thunderbird odmówił zapisu znacznika na mailu: ' + e.message
 
     return false
+  }
+
+  // Zapis bez wyjątku nie znaczy jeszcze, że znacznik został: serwer IMAP może
+  // nie przyjmować własnych etykiet i wtedy wraca stan sprzed zapisu.
+  try {
+    const after = await browser.messages.get(message.id)
+    const stuck = ownTags(after.tags)
+    if (wantedKeys.length > 0 && stuck.length === 0) {
+      markError = 'Znacznik nie został na mailu — serwer poczty prawdopodobnie nie przyjmuje '
+        + 'własnych etykiet (folder: ' + String(message.folder && message.folder.name ? message.folder.name : 'nieznany') + ').'
+
+      return false
+    }
+  } catch (e) {
+    // Sprawdzenie jest dodatkiem; brak odczytu nie unieważnia samego zapisu.
   }
 
   return true
@@ -279,13 +312,23 @@ async function markHeaderIds(headerMessageIds) {
   if (ids.length === 0) return 0
 
   markBroken = true
+  markError = null
 
   const { token } = await getSettings()
-  if (!token || !await tagsAllowed()) return 0
+  if (!token) {
+    markError = 'Dodatek nie jest połączony z aplikacją — zaloguj się w ustawieniach dodatku.'
+
+    return 0
+  }
+  if (!await tagsAllowed()) {
+    markError = 'Brak zgody na zmianę znaczników wiadomości — włącz oznaczanie w ustawieniach dodatku.'
+
+    return 0
+  }
 
   const tags = tagApi()
   if (tags === null) {
-    console.warn('Ten Thunderbird nie pozwala zakładać znaczników — oznaczanie pominięte.')
+    markError = 'Ta wersja Thunderbirda nie pozwala zakładać znaczników przez dodatek.'
 
     return 0
   }
@@ -295,7 +338,7 @@ async function markHeaderIds(headerMessageIds) {
     found = await lookupMessageIds(ids)
   } catch (e) {
     // Brak sieci albo wygasły token: znaczniki zostają takie, jakie są.
-    console.warn('Nie udało się sprawdzić zapytań dla maili:', e.message)
+    markError = 'Aplikacja nie odpowiedziała na pytanie o zapytania: ' + e.message
 
     return 0
   }
@@ -331,11 +374,35 @@ async function markHeaderIds(headerMessageIds) {
   return changed
 }
 
-/** Oznaczenie jednego maila — po otwarciu go albo po własnej akcji w dodatku. */
-async function markByHeaderId(headerMessageId) {
+/** Co ile minut najwyżej raz mówimy o tej samej awarii oznaczania. */
+const MARK_COMPLAIN_MINUTES = 60
+
+/**
+ * Oznaczenie jednego maila — po otwarciu go albo po własnej akcji w dodatku.
+ *
+ * `loud` włącza powiadomienie o porażce. Używamy go tam, gdzie człowiek właśnie
+ * patrzy (świeżo założone zapytanie, otwarty mail), żeby awaria nie była cicha.
+ */
+async function markByHeaderId(headerMessageId, { loud = false } = {}) {
   if (!headerMessageId) return
 
   await markHeaderIds([headerMessageId])
+  if (!loud || markError === null) return
+
+  const { markComplainedAt } = await browser.storage.local.get({ markComplainedAt: 0 })
+  if (Date.now() - Number(markComplainedAt || 0) < MARK_COMPLAIN_MINUTES * 60 * 1000) return
+
+  await browser.storage.local.set({ markComplainedAt: Date.now() })
+  try {
+    await browser.notifications.create({
+      type: 'basic',
+      iconUrl: browser.runtime.getURL('icons/icon.svg'),
+      title: 'Nie udało się oznaczyć maila',
+      message: markError,
+    })
+  } catch (e) {
+    console.warn('Powiadomienie o oznaczaniu się nie pokazało:', e.message)
+  }
 }
 
 /* --------------------------- nadążanie za innymi --------------------------- */
@@ -390,16 +457,6 @@ async function recheckTaggedMails() {
   await markHeaderIds(ids)
 }
 
-/** Żeby dwa przejścia nie nachodziły na siebie przy wolnej sieci. */
-let syncing = false
-
-/**
- * Czy ostatnie oznaczanie padło z przyczyn technicznych (brak zgody, brak API
- * znaczników, błąd serwera). Wtedy nie wolno przesunąć `tagsSince`: serwer
- * oddaje zmiany „od” tej chwili, więc maile z okna, którego nie przetworzyliśmy,
- * nie wróciłyby już nigdy — i lista zostałaby bez oznaczeń na zawsze.
- */
-let markBroken = false
 
 /**
  * Jedno przejście synchronizacji. `full` dorzuca powtórne sprawdzenie tego,

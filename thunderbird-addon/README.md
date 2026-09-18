@@ -142,6 +142,13 @@ zatrzymuje automatyczną aktualizację dodatku do czasu, aż człowiek zatwierdz
 w Menedżerze dodatków — nowa wersja weszłaby wtedy tylko u tych, którzy sami
 by to wypatrzyli.
 
+Gdy oznaczenie nie wejdzie, dodatek **mówi o tym powiadomieniem** — zaraz po
+założeniu zapytania i przy otwarciu maila (najwyżej raz na godzinę, żeby nie
+zasypywać). W treści stoi powód: brak zgody, brak połączenia z aplikacją, odmowa
+Thunderbirda albo „znacznik nie został na mailu”, gdy serwer poczty nie przyjmuje
+własnych etykiet. Wcześniej każda taka awaria kończyła się wpisem w konsoli tła,
+której nikt nie czyta, i wyglądała jak „nic się nie dzieje”.
+
 Gdy na liście nic się nie oznacza, ten sam ekran ma dwa przyciski do sprawdzenia:
 
 - **Oznacz wszystko od nowa** — kasuje znacznik czasu i pamięć oznaczonych maili,
@@ -287,7 +294,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.8.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.9.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia
