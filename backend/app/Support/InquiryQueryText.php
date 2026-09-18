@@ -204,10 +204,10 @@ final class InquiryQueryText
             // Goła liczba po kropkach bywa ilością albo długością („....... 32 dB”,
             // „...... 100 szt./op.”), więc bierzemy ją tylko przy walucie albo na końcu zapisu.
             '/\.{3,}\s*'.$sum.'(?>(?:\s*[-–—]\s*'.$amount.')?)(?=\s*(?:pln|zł|zl|eur|usd|netto|brutto)(?![\p{L}])|\s*za\s+(?:\d{1,3}\s*)?'.self::TRADE_UNIT.'|\s*[(\[]\s*(?:'.$word.')|\s*[,;)\]]|\s*\.(?!\d)|\s*$)(?:\s*'.$word.')*'.$unit.$per.$bare.'/iu',
-            // Waluta po kwocie („4 497,00PLN/szt.”) — rozpiętość cen zabrały już wzorce
-            // po ciągu kropek, bo tylko tam wiadomo, że liczba przed myślnikiem jest kwotą,
-            // a nie końcówką kodu wyrobu („A2P3 - 24,00 zł”).
-            '/'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.$per.'/iu',
+            // Waluta po kwocie („4 497,00PLN/szt.”). Rozpiętość bierzemy tylko wtedy, gdy
+            // dolna granica ma grosze („24,00-30,00 PLN”) — goła cyfra przed myślnikiem bywa
+            // końcówką kodu wyrobu albo rozmiarem („A2P3 - 24,00 zł”, „SRC 45 - 189,00 PLN”).
+            '/(?:\d[\d \x{00A0}]*[.,]\d{2}\s*[-–—]\s*)?'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.$per.'/iu',
             // osierocone „c. netto”, gdy liczbę zabrał wcześniejszy wzorzec
             '/\bc\.\s*netto\b/iu',
             // „masa netto 20 kg”, „waga produktu brutto 25 kg” — tu „netto” opisuje

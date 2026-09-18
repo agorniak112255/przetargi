@@ -39,7 +39,7 @@ final class ClientInquiryService
     private const PRICE_MODES = ['none', 'catalog', 'catalog_margin'];
 
     /** Jednostki z maila, które umiemy oddzielić od liczby („30szt”, „4 pary”, „2 op.”). */
-    private const UNIT_PATTERN = '(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?|karton(?:y|ów|ow|ami|ach|ie|a|u)?(?![\p{L}]))';
+    private const UNIT_PATTERN = '(?:(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?|karton(?:y|ów|ow|ami|ach|iem|ie|om|a|u)?)(?![\p{L}]))';
 
     private ?int $minMatchScore = null;
 
@@ -1484,8 +1484,11 @@ final class ClientInquiryService
             return false;
         }
         // „Jak najszybciej potrzebujemy 100 par rękawic?” to zamówienie zapisane jako
-        // pytanie — ilość z jednostką znaczy, że wiersz niesie pozycję, a nie pytanie.
-        if (preg_match('/\d{1,5}\s*'.self::UNIT_PATTERN.'/iu', $rest) === 1) {
+        // pytanie — ilość z jednostką znaczy, że wiersz niesie pozycję. Ale „Ile kosztuje
+        // 100 par rękawic?” i „Jaka jest cena za 50 szt.?” pytają o warunki, a nie zamawiają:
+        // przy tych słowach ilość niczego nie zmienia.
+        $aboutTerms = preg_match('/^(?:ile|jak[aąeęiy]\w*|kt[oó]r\w+|kto|kiedy|gdzie|dlaczego|w\s+jakim)\b/iu', trim($rest)) === 1;
+        if (! $aboutTerms && preg_match('/\d{1,5}\s*'.self::UNIT_PATTERN.'/iu', $rest) === 1) {
             return false;
         }
 

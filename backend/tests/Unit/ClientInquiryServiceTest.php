@@ -454,6 +454,43 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame(['100', 'par'], [$items[0]['qty'], $items[0]['unit']]);
     }
 
+    public function test_unit_never_ends_inside_a_word(): void
+    {
+        // „op.” dopasowywalo sie do „opisy”, a „para” do „parametry” — z frazy zostawal
+        // ogryzek („isy techniczne”), a do oferty wchodzila ilosc, ktorej nikt nie podal
+        $items = $this->service()->parseLineItemsFromBody(
+            '1. Rekawice 2 opisy techniczne w komplecie
+2. Odziez 3 parametry ochrony
+3. Rekawice 100 par'
+        );
+
+        $this->assertNull($items[0]['qty']);
+        $this->assertSame('Rekawice 2 opisy techniczne w komplecie', $items[0]['query']);
+        $this->assertNull($items[1]['qty']);
+        $this->assertSame(['100', 'par'], [$items[2]['qty'], $items[2]['unit']]);
+    }
+
+    public function test_questions_about_price_or_term_stay_questions_even_with_a_quantity(): void
+    {
+        $svc = $this->service();
+
+        // „Ile kosztuje 100 par?” pyta o warunki, a nie zamawia
+        $asking = $svc->parseLineItemsFromBody(
+            '1) Ile kosztuje 100 par rekawic?
+2) Jaka jest cena za 50 szt.?
+3) Jaki jest termin dostawy 50 szt. kaskow?
+4) Rekawice nitrylowe 100 par'
+        );
+        $this->assertSame(['Rekawice nitrylowe'], array_column($asking, 'query'));
+
+        // ale zamowienie zapisane jako pytanie zostaje pozycja
+        $ordering = $svc->parseLineItemsFromBody(
+            '1) Jak najszybciej potrzebujemy 100 par rekawic?
+2) Czy dostarczycie 500 szt. rekawic do piatku?'
+        );
+        $this->assertSame(['100', '500'], array_column($ordering, 'qty'));
+    }
+
     public function test_cartons_ordered_after_a_dash_are_the_quantity(): void
     {
         $items = $this->service()->parseLineItemsFromBody(

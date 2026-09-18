@@ -212,6 +212,9 @@ final class InquiryQueryTextTest extends TestCase
             'Buty robocze S3 ...... 19,50 - 25,50 rozmiar 44',
             // rozpiętość z walutą znika w całości — zostawał sam początek „100 -”
             'Rękawice robocze skórzane ...... 100 - 120 zł',
+            // rozpiętość z groszami znika też bez ciągu kropek
+            'Rękawice nitrylowe 24,00-30,00 PLN',
+            'Rękawice nitrylowe 24,00 - 30,00 zł/szt.',
             'Kask ochronny ...... 24,00, rozmiar 58',
         ]);
     }
