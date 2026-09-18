@@ -662,6 +662,12 @@ final class ClientInquiryService
 
             // Warunki szczególne z wiersza klienta — i to, czy karta je potwierdza.
             $requirements = $this->requirementsOf($item);
+            if ($requirements !== []) {
+                $this->warmCardChecks(array_map(
+                    static fn (array $candidate): int => (int) ($candidate['id'] ?? 0),
+                    $candidates,
+                ));
+            }
             $checkable = array_values(array_filter(
                 $requirements,
                 static fn (array $one): bool => ($one['checkable'] ?? false) === true,
@@ -753,6 +759,11 @@ final class ClientInquiryService
         if ($required === []) {
             return 'p:'.(int) $candidates[0]['id'];
         }
+
+        $this->warmCardChecks(array_map(
+            static fn (array $candidate): int => (int) ($candidate['id'] ?? 0),
+            $candidates,
+        ));
 
         foreach ($candidates as $candidate) {
             if ($this->meetsRequirements($required, $candidate)) {
@@ -1095,34 +1106,57 @@ final class ClientInquiryService
      */
     private function cardCheckText(int $productId): string
     {
-        if (array_key_exists($productId, $this->cardCheckTexts)) {
-            return $this->cardCheckTexts[$productId];
+        $this->warmCardChecks([$productId]);
+
+        return $this->cardCheckTexts[$productId] ?? '';
+    }
+
+    /**
+     * Wczytuje teksty kart jednym zapytaniem dla całej paczki wyrobów.
+     *
+     * Bez tego każdy kandydat w każdej pozycji szedł do bazy osobno: zapytanie
+     * o dziesięć pozycji po trzech kandydatach to trzydzieści zapytań zamiast
+     * jednego. Wynik zostaje na czas żądania — ten sam wyrób bywa kandydatem
+     * w kilku pozycjach.
+     *
+     * @param  list<int>  $ids
+     */
+    private function warmCardChecks(array $ids): void
+    {
+        $missing = [];
+        foreach ($ids as $id) {
+            $id = (int) $id;
+            if ($id > 0 && ! array_key_exists($id, $this->cardCheckTexts)) {
+                $missing[$id] = true;
+            }
+        }
+        if ($missing === []) {
+            return;
         }
 
-        $product = Product::query()
+        $rows = Product::query()
             ->with('shopCards:id,product_id,fields')
-            ->find($productId, ['id', 'description', 'norms', 'variant_summary']);
+            ->whereIn('id', array_keys($missing))
+            ->get(['id', 'description', 'norms', 'variant_summary']);
 
-        if ($product === null) {
-            $this->cardCheckTexts[$productId] = '';
-
-            return '';
+        foreach ($rows as $product) {
+            $parts = [
+                (string) $product->description,
+                (string) $product->norms,
+                (string) $product->variant_summary,
+            ];
+            foreach ($product->shopCards as $card) {
+                // Tabelka dostawcy jako tekst — szukamy w niej nazw substancji,
+                // więc wystarczy zapis JSON z zachowanymi polskimi znakami.
+                $parts[] = (string) json_encode($card->fields, JSON_UNESCAPED_UNICODE);
+            }
+            $this->cardCheckTexts[(int) $product->id] = trim(implode(' ', array_filter($parts)));
         }
 
-        $parts = [
-            (string) $product->description,
-            (string) $product->norms,
-            (string) $product->variant_summary,
-        ];
-        foreach ($product->shopCards as $card) {
-            // Tabelka dostawcy jako tekst — szukamy w niej nazw substancji,
-            // więc wystarczy zapis JSON z zachowanymi polskimi znakami.
-            $parts[] = (string) json_encode($card->fields, JSON_UNESCAPED_UNICODE);
+        // Karty, której nie ma w bazie, nie pytamy drugi raz.
+        foreach (array_keys($missing) as $id) {
+            $this->cardCheckTexts[$id] ??= '';
         }
-
-        $this->cardCheckTexts[$productId] = trim(implode(' ', array_filter($parts)));
-
-        return $this->cardCheckTexts[$productId];
     }
 
     /**

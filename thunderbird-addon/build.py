@@ -20,6 +20,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import zipfile
 
 ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +30,7 @@ PUBLIC_DIR = os.path.join(REPO_DIR, 'backend', 'public', 'dodatek')
 DIST_DIR = os.path.join(ADDON_DIR, 'dist')
 
 # Do archiwum nie pakujemy rzeczy, które są tylko dla nas.
-SKIP_FILES = {'README.md', 'build.py'}
+SKIP_FILES = {'README.md', 'build.py', 'lint.py'}
 SKIP_DIRS = {'dist', '.git'}
 
 UPDATE_BASE = 'https://przetargi.supon.rzeszow.pl/dodatek'
@@ -86,7 +88,25 @@ def write_updates(version: str, addon_id: str, min_version: str, xpi: str) -> No
         handle.write('\n')
 
 
+def check_names() -> None:
+    """Nie pakujemy dodatku, w którym coś woła funkcję bez definicji.
+
+    Trzy defekty z rzędu (`skipFolder()`, `ensureTag(api…)`, brak uprawnienia do
+    listy znaczników) przeszły do handlowców, bo pliki dodatku ładują się do
+    jednej przestrzeni nazw i literówka wychodzi dopiero w działaniu. lint.py
+    sprawdza to w sekundę — i XPI nie powstaje, gdy coś znajdzie.
+    """
+    result = subprocess.run(
+        [sys.executable, os.path.join(ADDON_DIR, 'lint.py')],
+        cwd=ADDON_DIR,
+    )
+    if result.returncode != 0:
+        raise SystemExit('Sprawdzenie nazw nie przeszło — popraw powyższe i zbuduj ponownie.')
+
+
 def main() -> None:
+    check_names()
+
     data = manifest()
     version = data['version']
     gecko = data['browser_specific_settings']['gecko']

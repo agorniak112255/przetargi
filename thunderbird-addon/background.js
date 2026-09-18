@@ -55,7 +55,15 @@ async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentA
     // Znacznik na liście od razu, bez czekania na kolejne przejście w tle.
     // `loud`: to jest moment, w którym handlowiec patrzy — jeśli oznaczanie
     // nie działa, ma o tym usłyszeć teraz, a nie nigdy.
-    await markByHeaderId(headerMessageId, { loud: true })
+    //
+    // Osobna osłona: zapytanie już powstało, więc błąd oznaczania nie może
+    // wywołać komunikatu „Zapytanie nie powstało” — po takim komunikacie
+    // handlowiec zakłada drugie i dostaje ostrzeżenie o duplikacie.
+    try {
+      await markByHeaderId(headerMessageId, { loud: true })
+    } catch (e) {
+      console.warn('Oznaczenie maila po założeniu zapytania się nie powiodło:', e.message)
+    }
 
     const { baseUrl } = await getSettings()
     await browser.windows.openDefaultBrowser(baseUrl + '/inquiries/' + inquiry.id)
@@ -378,6 +386,16 @@ setInterval(() => {
   syncTags({ full: syncTick % TAG_FULL_EVERY === 0 })
     .catch((e) => console.warn('Przejście znaczników się nie powiodło:', e.message))
 }, TAG_SYNC_MINUTES * 60 * 1000)
+
+/**
+ * Numery kart okien odpowiedzi żyją tylko w jednej sesji Thunderbirda, a wpis
+ * w pamięci dodatku przeżywa restart. Bez tego sprzątania przypadkowe okno
+ * o tym samym numerze zostałoby po restarcie wzięte za odpowiedź na stare
+ * zapytanie — aplikacja dostałaby „wysłane” dla cudzej sprawy.
+ */
+browser.storage.local.set({ composeTabs: {} }).catch((e) => {
+  console.warn('Nie udało się wyczyścić okien odpowiedzi:', e.message)
+})
 
 browser.runtime.onMessage.addListener((request) => {
   if (request && request.type === 'createInquiry') {

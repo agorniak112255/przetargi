@@ -175,12 +175,19 @@ async function showUpdateNotice() {
  */
 async function showTagsOffer() {
   let allowed = true
+  let partly = false
   try {
     allowed = await tagsAllowed()
+    partly = allowed ? false : await tagsPartlyAllowed()
   } catch (e) {
     allowed = true
   }
   el('tagsOff').hidden = allowed
+  el('enableTags').textContent = partly ? 'Dokończ włączanie' : 'Włącz oznaczanie'
+  if (partly) {
+    el('tagsOff').firstChild.textContent = 'Aktualizacja dodatku wymaga jednego kliknięcia — '
+      + 'dochodzi zgoda na odczyt listy znaczników. '
+  }
 }
 
 async function enableTags() {

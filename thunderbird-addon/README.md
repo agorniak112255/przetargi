@@ -235,6 +235,14 @@ Thunderbird pobrał dokładnie ten plik, który zbudowaliśmy.
 
 ## Budowanie pliku XPI
 
+Przed spakowaniem `build.py` uruchamia `lint.py`: zbiera nazwy zadeklarowane we
+wszystkich plikach dodatku i sprawdza (oxlint z regułą `no-undef`), czy coś nie
+woła funkcji, której nigdzie nie ma. Pliki dodatku ładują się do jednej
+przestrzeni nazw, więc taka literówka wychodziła dopiero u handlowca i to po
+cichu — tak przepadły trzy błędy z rzędu. **Gdy sprawdzenie coś znajdzie, XPI
+nie powstaje.**
+
+
 Normalnie buduje się to jednym poleceniem — ono składa XPI, kopiuje je do
 `backend/public/dodatek/` i przelicza `updates.json` razem z sumą kontrolną:
 
@@ -301,7 +309,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.10.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.11.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia
