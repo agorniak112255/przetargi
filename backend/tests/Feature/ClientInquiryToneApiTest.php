@@ -227,6 +227,30 @@ final class ClientInquiryToneApiTest extends TestCase
         $this->assertStringNotContainsString('Zespół Supon', $html);
     }
 
+    public function test_closing_sentence_appears_once_even_when_the_note_repeats_it(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = $this->product();
+        $this->mockAnalysis($product);
+        Sanctum::actingAs($user);
+
+        [$payload, $body] = $this->createInquiry(ClientInquiry::TONE_HANDLOWY);
+        $this->assertSame(1, mb_substr_count($body, 'W razie pytań zapraszamy do kontaktu.'));
+        $this->assertSame(1, mb_substr_count((string) $payload['reply_html'], 'W razie pytań zapraszamy do kontaktu.'));
+
+        // Handlowiec wpisał to samo zdanie w „Dopisku do listu” — klient dostawał
+        // je wtedy dwa razy pod rząd.
+        $id = (int) $payload['id'];
+        $with = $this->postJson("/api/inquiries/{$id}/compose", [
+            'answers' => [],
+            'extra_note' => 'Towar dostępny od ręki. W razie pytań zapraszamy do kontaktu.',
+        ])->assertOk();
+
+        $this->assertSame(1, mb_substr_count((string) $with->json('reply_body'), 'W razie pytań zapraszamy do kontaktu.'));
+        $this->assertSame(1, mb_substr_count((string) $with->json('reply_html'), 'W razie pytań zapraszamy do kontaktu.'));
+        $this->assertStringContainsString('Towar dostępny od ręki.', (string) $with->json('reply_body'));
+    }
+
     public function test_unknown_template_is_rejected(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

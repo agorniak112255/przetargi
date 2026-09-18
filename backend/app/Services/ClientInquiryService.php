@@ -41,6 +41,9 @@ final class ClientInquiryService
 
     private const PRICE_MODES = ['none', 'catalog', 'catalog_margin'];
 
+    /** Zdanie zamykające list; podpis zostawiamy stopce handlowca w poczcie. */
+    private const OUTRO = 'W razie pytań zapraszamy do kontaktu.';
+
     /** Jednostki z maila, które umiemy oddzielić od liczby („30szt”, „4 pary”, „2 op.”). */
     private const UNIT_PATTERN = '(?:(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?|karton(?:y|ów|ow|ami|ach|em|ie|om|a|u)?)(?![\p{L}]))';
 
@@ -2439,10 +2442,14 @@ final class ClientInquiryService
         }
         // Bez podpisu „Z poważaniem, Zespół Supon”: każdy handlowiec ma własną
         // stopkę w programie pocztowym, a dwa podpisy pod jednym listem to błąd.
-        $outro = ['W razie pytań zapraszamy do kontaktu.'];
-        $parts[] = '';
-        foreach ($outro as $line) {
-            $parts[] = $line;
+        // Gdy handlowiec wpisał to samo zdanie w dopisku, nie dokładamy drugiego —
+        // klient dostawał je dwa razy pod rząd.
+        $outro = $note !== null && mb_stripos($note, self::OUTRO) !== false ? [] : [self::OUTRO];
+        if ($outro !== []) {
+            $parts[] = '';
+            foreach ($outro as $line) {
+                $parts[] = $line;
+            }
         }
 
         return [
