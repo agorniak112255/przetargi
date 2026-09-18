@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { appHref } from '../lib/api'
 
 const modules = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -9,6 +10,7 @@ const modules = [
   { id: 'raporty', label: 'Raporty' },
   { id: 'klienci', label: 'Klienci' },
   { id: 'zapytania', label: 'Zapytania' },
+  { id: 'pobieranie', label: 'Pliki do pobrania' },
 ] as const
 
 type ModuleId = (typeof modules)[number]['id']
@@ -1785,6 +1787,360 @@ function InquiriesHelp() {
   )
 }
 
+const ADDON_ID = 'przetargi@supon.rzeszow.pl'
+const ADDON_FILE = '/dodatek/supon-przetargi.xpi'
+const ADDON_UPDATES = '/dodatek/updates.json'
+
+type UpdatesManifest = {
+  addons?: Record<
+    string,
+    { updates?: { version?: string; applications?: { gecko?: { strict_min_version?: string } } }[] }
+  >
+}
+
+/**
+ * Wersja dodatku czytana z tego samego `updates.json`, z którego bierze ją
+ * Thunderbird — inaczej numer na stronie rozjeżdżałby się z plikiem po każdym
+ * wgraniu nowej wersji. Gdy pliku nie ma (np. serwer deweloperski), strona po
+ * prostu nie pokazuje numeru, zamiast go zgadywać.
+ */
+function useAddonRelease(): { version: string; minThunderbird: string } | null {
+  const [release, setRelease] = useState<{ version: string; minThunderbird: string } | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    fetch(appHref(ADDON_UPDATES), { headers: { Accept: 'application/json' } })
+      .then((res) => (res.ok ? (res.json() as Promise<UpdatesManifest>) : null))
+      .then((manifest) => {
+        const list = manifest?.addons?.[ADDON_ID]?.updates ?? []
+        const newest = list[list.length - 1]
+        if (!alive || !newest?.version) return
+        setRelease({
+          version: newest.version,
+          minThunderbird: newest.applications?.gecko?.strict_min_version ?? '',
+        })
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  return release
+}
+
+type TbItem = 'sep' | { label: string; shortcut?: string; mark?: boolean; dim?: boolean }
+
+/** Makieta rozwiniętego menu Thunderbirda: niebieska ramka = ta pozycja. */
+function TbMenuList({ items, className = '' }: { items: TbItem[]; className?: string }) {
+  return (
+    <div className={`rounded-lg border border-slate-200 bg-white py-1.5 text-xs shadow-sm ${className}`}>
+      {items.map((item, idx) =>
+        item === 'sep' ? (
+          <div key={`sep-${idx}`} className="my-1.5 border-t border-slate-100" />
+        ) : (
+          <div key={item.label} className="flex items-center justify-between gap-6 px-3 py-1">
+            {item.mark ? (
+              <Mark>
+                <span className="px-1 font-semibold text-blue-800">{item.label}</span>
+              </Mark>
+            ) : (
+              <span className={item.dim ? 'text-slate-400' : 'text-slate-800'}>{item.label}</span>
+            )}
+            {item.shortcut ? <span className="text-slate-400">{item.shortcut}</span> : null}
+          </div>
+        ),
+      )}
+    </div>
+  )
+}
+
+/** Okno Thunderbirda z paskiem menu — odpowiednik AppFrame dla instrukcji instalacji. */
+function TbFrame({ open, children }: { open?: string; children: ReactNode }) {
+  return (
+    <div className="pointer-events-none overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm">
+      <div className="flex flex-wrap items-center gap-1 border-b border-slate-200 bg-white px-2 py-1.5 text-[11px]">
+        <span className="pr-2 font-semibold text-slate-500">Thunderbird</span>
+        {['Wydarzenia i zadania', 'Narzędzia', 'Pomoc'].map((m) => (
+          <span
+            key={m}
+            className={`rounded px-2 py-1 ${
+              m === open ? 'bg-slate-200 font-semibold text-slate-900' : 'text-slate-600'
+            }`}
+          >
+            {m}
+          </span>
+        ))}
+      </div>
+      <div className="min-h-[240px] overflow-x-auto p-4">{children}</div>
+    </div>
+  )
+}
+
+const toolsMenu = (mark: 'ustawienia' | 'dodatki'): TbItem[] => [
+  { label: 'Książka adresowa', shortcut: 'Ctrl+Shift+B' },
+  { label: 'Zapisane pliki', shortcut: 'Ctrl+J' },
+  { label: 'Dodatki i motywy', mark: mark === 'dodatki' },
+  { label: 'Monitor aktywności' },
+  'sep',
+  { label: 'Filtrowanie wiadomości' },
+  { label: 'Zastosuj filtry w bieżącym folderze', dim: true },
+  'sep',
+  { label: 'Importuj…' },
+  { label: 'Eksportuj…' },
+  { label: 'Narzędzia dla programistów' },
+  'sep',
+  { label: 'Ustawienia', mark: mark === 'ustawienia' },
+  { label: 'Konfiguracja kont' },
+]
+
+const gearMenu = (mark: 'instaluj' | 'aktualizacje'): TbItem[] => [
+  { label: 'Sprawdź dostępność aktualizacji', mark: mark === 'aktualizacje' },
+  { label: 'Wyświetl ostatnie aktualizacje' },
+  'sep',
+  { label: 'Zainstaluj dodatek z pliku…', mark: mark === 'instaluj' },
+  { label: 'Debuguj dodatki' },
+  'sep',
+  { label: 'Automatyczne aktualizacje dodatków' },
+  { label: 'Przestaw wszystkie dodatki na ręczną aktualizację' },
+  'sep',
+  { label: 'Zarządzaj skrótami rozszerzeń' },
+]
+
+/** Menedżer dodatków: nagłówek z kołem zębatym i jego rozwinięte menu. */
+function TbAddonsManager({ menu }: { menu: TbItem[] }) {
+  return (
+    <>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-base font-semibold text-slate-900">Zarządzanie rozszerzeniami</h1>
+        <div className="flex items-center gap-2">
+          <span className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-400">
+            Znajdź na dodatki.thunderbird.net
+          </span>
+          <Mark>
+            <span className="rounded border border-slate-300 bg-white px-2 py-1 text-xs">⚙</span>
+          </Mark>
+        </div>
+      </div>
+      <TbMenuList items={menu} className="max-w-md" />
+    </>
+  )
+}
+
+/** Okno wyboru pliku z filtrem „Dodatki (*.xpi;*.jar;*.zip)”. */
+function TbFilePicker() {
+  return (
+    <div className="pointer-events-none overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700">
+        Wybierz dodatek do zainstalowania
+      </div>
+      <div className="px-4 py-3">
+        <p className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
+          Pobrane (Downloads)
+        </p>
+        <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Nazwa</p>
+        <p className="mt-1 text-xs text-slate-500">Wczoraj</p>
+        <div className="mt-1">
+          <Mark>
+            <span className="rounded bg-sky-100 px-2 py-1 text-xs font-medium text-blue-800">supon-przetargi.xpi</span>
+          </Mark>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+        <span className="rounded border border-slate-300 px-2 py-1.5 text-xs text-slate-700">
+          Dodatki (*.xpi;*.jar;*.zip)
+        </span>
+        <Mark>
+          <Btn label="Otwórz" />
+        </Mark>
+        <Btn label="Anuluj" color="border" />
+      </div>
+    </div>
+  )
+}
+
+function DownloadsHelp() {
+  const release = useAddonRelease()
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl bg-white p-5 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-900">Dodatek do Thunderbirda „Supon Przetargi”</h2>
+        <p className="mt-1 text-sm leading-snug text-slate-700">
+          Zakłada zapytanie w aplikacji z otwartego maila, wstawia przygotowaną odpowiedź do tego samego wątku
+          i oznacza na liście wiadomości maile, którymi ktoś już się zajmuje.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <a
+            href={appHref(ADDON_FILE)}
+            download
+            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            Pobierz dodatek (plik XPI)
+          </a>
+          <span className="text-xs text-slate-500">
+            supon-przetargi.xpi
+            {release ? ` · wersja ${release.version}` : ''}
+            {release?.minThunderbird ? ` · Thunderbird ${release.minThunderbird} lub nowszy` : ''}
+          </span>
+        </div>
+        <p className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Masz już starszą wersję? Zainstaluj nową <strong>na wierzch</strong> — nie odinstalowuj poprzedniej, bo
+          razem z nią znikają zapisane dane logowania.
+        </p>
+      </div>
+      <Slideshow
+        title="Instalacja dodatku krok po kroku"
+        slides={[
+          {
+            action: 'Pobranie pliku',
+            does: 'Przycisk nad instrukcją zapisuje plik supon-przetargi.xpi w Pobranych. Thunderbird instaluje go z dysku — nie z przeglądarki.',
+            click: '„Pobierz dodatek (plik XPI)” nad tą instrukcją. Zapamiętaj, gdzie plik wylądował.',
+            tone: 'blue',
+            screen: (
+              <div className="pointer-events-none rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="rounded-xl bg-white p-4 shadow-sm">
+                  <p className="text-sm font-semibold">Dodatek do Thunderbirda „Supon Przetargi”</p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <Mark>
+                      <Btn label="Pobierz dodatek (plik XPI)" />
+                    </Mark>
+                    <span className="text-xs text-slate-500">supon-przetargi.xpi</span>
+                  </div>
+                </div>
+              </div>
+            ),
+          },
+          {
+            action: 'Zgoda na dodatek spoza katalogu Mozilli',
+            does: 'Dodatek jest nasz, nie ze sklepu Mozilli, więc Thunderbird domyślnie odmówi instalacji. Odblokowuje się to raz na komputer: Narzędzia → Ustawienia → Ogólne → na samym dole „Edytor konfiguracji”.',
+            click: 'Menu „Narzędzia” → „Ustawienia” (zaznaczone). Ten sam ekran otwiera menu ☰ → Ustawienia.',
+            tone: 'amber',
+            screen: (
+              <TbFrame open="Narzędzia">
+                <TbMenuList items={toolsMenu('ustawienia')} className="max-w-md" />
+              </TbFrame>
+            ),
+          },
+          {
+            action: 'Wyłączenie wymogu podpisu',
+            does: 'W edytorze konfiguracji wpisz nazwę ustawienia i przestaw je na false. To jedyna zmiana w samym Thunderbirdzie — dotyczy wyłącznie instalowania dodatków.',
+            click: 'Wpisz xpinstall.signatures.required, kliknij przełącznik przy wierszu — wartość ma być „false”.',
+            tone: 'amber',
+            screen: (
+              <TbFrame>
+                <p className="mb-2 text-xs text-slate-600">Ustawienia → Ogólne → Edytor konfiguracji</p>
+                <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                  <Field label="Szukaj ustawienia" value="xpinstall.signatures.required" mark />
+                  <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-2 text-xs">
+                    <span className="truncate text-slate-700">xpinstall.signatures.required</span>
+                    <span className="rounded bg-slate-100 px-2 py-1 font-semibold text-slate-800">false</span>
+                  </div>
+                </div>
+              </TbFrame>
+            ),
+          },
+          {
+            action: 'Otwarcie menedżera dodatków',
+            does: 'To miejsce, w którym instaluje się plik XPI i w którym potem otwiera się ustawienia dodatku.',
+            click: 'Menu „Narzędzia” → „Dodatki i motywy”.',
+            tone: 'blue',
+            screen: (
+              <TbFrame open="Narzędzia">
+                <TbMenuList items={toolsMenu('dodatki')} className="max-w-md" />
+              </TbFrame>
+            ),
+          },
+          {
+            action: 'Instalacja z pliku',
+            does: 'Na ekranie „Zarządzanie rozszerzeniami” instalacja z dysku kryje się pod kołem zębatym obok pola wyszukiwania.',
+            click: 'Koło zębate → „Zainstaluj dodatek z pliku…”.',
+            tone: 'blue',
+            screen: (
+              <TbFrame>
+                <TbAddonsManager menu={gearMenu('instaluj')} />
+              </TbFrame>
+            ),
+          },
+          {
+            action: 'Wskazanie pobranego pliku',
+            does: 'Okno wyboru pokazuje tylko dodatki (*.xpi;*.jar;*.zip), więc w Pobranych zobaczysz właściwie jeden plik. Po „Otwórz” Thunderbird wypisuje uprawnienia dodatku i prosi o potwierdzenie.',
+            click: 'Pobrane → supon-przetargi.xpi → „Otwórz”, potem „Dodaj” w oknie Thunderbirda.',
+            tone: 'blue',
+            screen: <TbFilePicker />,
+          },
+          {
+            action: 'Połączenie z aplikacją',
+            does: 'Świeżo zainstalowany dodatek nie wie jeszcze, z czym ma rozmawiać. Adres aplikacji, e-mail i hasło podaje się raz. Hasło nie jest zapisywane — służy tylko do jednorazowego pobrania klucza dostępu.',
+            click: 'Dodatki i motywy → przy „Supon Przetargi” Ustawienia → wypełnij pola → „Połącz”.',
+            tone: 'green',
+            screen: (
+              <TbFrame>
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-sm font-semibold text-slate-900">Supon Przetargi — ustawienia</p>
+                  <p className="mt-0.5 text-xs text-slate-500">Połączenie z aplikacją</p>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    <Field label="Adres aplikacji" value="https://przetargi.supon.rzeszow.pl" />
+                    <Field label="E-mail" value="jan.kowalski@supon.rzeszow.pl" />
+                    <Field label="Hasło" value="••••••••" />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Mark>
+                      <Btn label="Połącz" />
+                    </Mark>
+                    <Btn label="Sprawdź połączenie" color="border" />
+                  </div>
+                </div>
+              </TbFrame>
+            ),
+          },
+          {
+            action: 'Włączenie znaczników na liście maili',
+            does: 'Znaczniki „Zapytanie: …” i „Wysłane: …” pokazują na liście wiadomości, kto prowadzi dany mail. Thunderbird pyta o zgodę na zmianę znaczników osobno — bez niej dodatek działa, tylko lista maili zostaje bez kolorów.',
+            click: '„Włącz oznaczanie maili” na stronie ustawień dodatku (ten sam przycisk jest w okienku nad mailem).',
+            tone: 'green',
+            screen: (
+              <TbFrame>
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-sm font-semibold text-slate-900">Oznaczanie maili na liście</p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Oznaczanie jest wyłączone — Thunderbird nie dostał jeszcze zgody na zmianę znaczników.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Mark>
+                      <Btn label="Włącz oznaczanie maili" />
+                    </Mark>
+                    <Btn label="Sprawdź oznaczanie" color="border" />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5 text-[11px]">
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
+                      Zapytanie: Anna Kowalska
+                    </span>
+                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800">
+                      Wysłane: Anna Kowalska
+                    </span>
+                  </div>
+                </div>
+              </TbFrame>
+            ),
+          },
+          {
+            action: 'Nowe wersje',
+            does: 'Thunderbird sam pyta serwer o nowsze wydania i podmienia dodatek bez utraty ustawień. Dodatek dodatkowo przypomina powiadomieniem, gdy na serwerze leży nowsza wersja niż zainstalowana.',
+            click: 'Nic — chyba że ręcznie: Dodatki i motywy → koło zębate → „Sprawdź dostępność aktualizacji”.',
+            tone: 'slate',
+            screen: (
+              <TbFrame>
+                <TbAddonsManager menu={gearMenu('aktualizacje')} />
+              </TbFrame>
+            ),
+          },
+        ]}
+      />
+    </div>
+  )
+}
+
 const panels: Record<ModuleId, () => ReactNode> = {
   dashboard: () => <DashboardHelp />,
   przetargi: () => <TendersHelp />,
@@ -1794,6 +2150,7 @@ const panels: Record<ModuleId, () => ReactNode> = {
   raporty: () => <ReportsHelp />,
   klienci: () => <ClientsHelp />,
   zapytania: () => <InquiriesHelp />,
+  pobieranie: () => <DownloadsHelp />,
 }
 
 export function Help() {
