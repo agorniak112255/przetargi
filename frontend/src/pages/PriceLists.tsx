@@ -171,20 +171,45 @@ type AssortmentGroupsSummary = {
 
 const CURRENCIES = ['PLN', 'EUR', 'USD', 'GBP', 'CHF', 'CZK', 'SEK', 'NOK', 'DKK', 'ZAR'] as const
 
+type SheetColumn = { index: number; label: string; sample: string }
+
+type SheetMapping = {
+  sheet: string
+  include: boolean
+  header_excel_row: number
+  columns: Record<string, number | null>
+  available_columns?: SheetColumn[]
+  locked_columns?: string[]
+  repeating_headers: boolean
+  confidence: number
+}
+
+/**
+ * Role kolumn do ręcznej korekty przed importem. Kolejność jest kolejnością w oknie — najpierw to,
+ * bez czego importu nie ma, potem reszta.
+ */
+const COLUMN_ROLES: Array<{ key: string; label: string; hint?: string; required?: boolean }> = [
+  { key: 'sku', label: 'Kod / symbol' },
+  { key: 'name', label: 'Nazwa', required: true },
+  { key: 'name_extra', label: 'Nazwa — druga część', hint: 'doklejana do nazwy (rodzina + opis)' },
+  { key: 'model_name', label: 'Rodzina / model' },
+  { key: 'catalog_price', label: 'Cena katalogowa', required: true },
+  { key: 'discount', label: 'Upust %' },
+  { key: 'purchase', label: 'Cena zakupu' },
+  { key: 'category', label: 'Grupa asortymentowa' },
+  { key: 'ean', label: 'EAN' },
+  { key: 'pack_qty', label: 'Ilość w opakowaniu' },
+  { key: 'packaging', label: 'Opakowanie' },
+  { key: 'currency', label: 'Waluta' },
+]
+
 type Analysis = {
   source?: string
   mapping: {
     manufacturer_detected: string | null
     currency: string | null
     notes: string
-    sheets: Array<{
-      sheet: string
-      include: boolean
-      header_excel_row: number
-      columns: Record<string, number | null>
-      repeating_headers: boolean
-      confidence: number
-    }>
+    sheets: SheetMapping[]
   } | null
   products?: ProductRow[]
   preview: ProductRow[]
@@ -193,6 +218,7 @@ type Analysis = {
   skipped: number
   errors_count: number
   products_truncated?: boolean
+  errors?: string[]
   model: string
   meta?: { manufacturer: string; version: string; source: string }
   assortment_groups?: AssortmentGroupsSummary
@@ -423,6 +449,17 @@ function HistorySortTh({
   )
 }
 
+/** Numer kolumny w postaci, w jakiej widzi ją człowiek w arkuszu: 0 → A, 27 → AB. */
+function columnLetter(index: number): string {
+  let n = index
+  let out = ''
+  do {
+    out = String.fromCharCode(65 + (n % 26)) + out
+    n = Math.floor(n / 26) - 1
+  } while (n >= 0)
+  return out
+}
+
 const btnPrimary =
   'inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50'
 const btnAi =
@@ -460,6 +497,8 @@ export function PriceLists() {
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
+  // mapowanie poprawione ręcznie, ale podgląd wciąż pokazuje poprzedni odczyt pliku
+  const [mappingDirty, setMappingDirty] = useState(false)
   const [lastPriceChanges, setLastPriceChanges] = useState<PriceChange[]>([])
   const [lastPricesChanged, setLastPricesChanged] = useState(0)
   const [expandedHistory, setExpandedHistory] = useState<{ id: number; kind: HistoryKind } | null>(
@@ -1193,6 +1232,7 @@ export function PriceLists() {
     setErr('')
     setMsg('')
     setAnalysis(null)
+    setMappingDirty(false)
     try {
       const fd = new FormData()
       fd.append('file', file)
@@ -1235,6 +1275,96 @@ export function PriceLists() {
     }
   }
 
+  /**
+   * Zmiana roli kolumny przez człowieka. Rola trafia na listę potwierdzonych, bo import ma własne
+   * poprawki mapowania (nazwa, kategoria, parametry wyrobu) i bez tej listy cofnąłby wybór bez śladu.
+   */
+  function setSheetColumn(sheetName: string, role: string, index: number | null) {
+    setAnalysis((prev) => {
+      if (!prev?.mapping) return prev
+      const sheets = prev.mapping.sheets.map((s) => {
+        if (s.sheet !== sheetName) return s
+        const columns = { ...s.columns }
+        if (index === null) delete columns[role]
+        else columns[role] = index
+        const locked = new Set(s.locked_columns ?? [])
+        locked.add(role)
+        return { ...s, columns, locked_columns: [...locked] }
+      })
+      return { ...prev, mapping: { ...prev.mapping, sheets } }
+    })
+    setMappingDirty(true)
+  }
+
+  function setSheetInclude(sheetName: string, include: boolean) {
+    setAnalysis((prev) => {
+      if (!prev?.mapping) return prev
+      return {
+        ...prev,
+        mapping: {
+          ...prev.mapping,
+          sheets: prev.mapping.sheets.map((s) => (s.sheet === sheetName ? { ...s, include } : s)),
+        },
+      }
+    })
+    setMappingDirty(true)
+  }
+
+  /** Listy kolumn arkusza nie odsyłamy — serwer i tak zwraca własną, a POST ma być lekki. */
+  function mappingForRequest(mapping: NonNullable<Analysis['mapping']>) {
+    return {
+      ...mapping,
+      sheets: mapping.sheets.map(({ available_columns: _drop, ...rest }) => rest),
+    }
+  }
+
+  async function onRefreshPreview() {
+    if (!file || !analysis?.mapping) return
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('mapping', JSON.stringify(mappingForRequest(analysis.mapping)))
+      if (manufacturer) fd.append('manufacturer', manufacturer)
+      const res = await api<Analysis>('/price-lists/preview', { method: 'POST', body: fd })
+      const defaultCur = res.mapping?.currency ?? analysis.mapping.currency ?? 'PLN'
+      // Arkusz odznaczony do importu nie jest czytany, więc serwer nie odsyła jego kolumn — zostawiamy
+      // te, które już mamy, żeby po ponownym zaznaczeniu dało się go zmapować bez powtarzania analizy.
+      const previousColumns = new Map(
+        analysis.mapping.sheets.map((s) => [s.sheet, s.available_columns ?? []]),
+      )
+      const next: Analysis = {
+        ...analysis,
+        ...res,
+        mapping: res.mapping
+          ? {
+              ...res.mapping,
+              sheets: res.mapping.sheets.map((s) =>
+                (s.available_columns?.length ?? 0) > 0
+                  ? s
+                  : { ...s, available_columns: previousColumns.get(s.sheet) ?? [] },
+              ),
+            }
+          : analysis.mapping,
+        products: [],
+        preview: (res.preview ?? []).map((p) => ({ ...p, currency: p.currency ?? defaultCur })),
+      }
+      setAnalysis(next)
+      initGroupsFromAnalysis(next)
+      setMappingDirty(false)
+      setMsg(
+        `Podgląd po korekcie mapowania: ${res.products_found} pozycji do importu` +
+          ` (przeskanowano ${res.rows_total} wierszy, pominięto ${res.skipped}).`,
+      )
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się odświeżyć podglądu')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function onImportAi(e: FormEvent) {
     e.preventDefault()
     if (!file) {
@@ -1250,6 +1380,10 @@ export function PriceLists() {
       setErr(groupErr)
       return
     }
+    if (mappingDirty) {
+      setErr('Mapowanie kolumn zostało zmienione — kliknij „Odśwież podgląd”, żeby zobaczyć, co się zaimportuje.')
+      return
+    }
     setBusy(true)
     startProgress('import')
     setErr('')
@@ -1260,7 +1394,7 @@ export function PriceLists() {
       // XLSX: import po mapowaniu (bez pełnej listy w JSON). PDF: lista produktów z analizy.
       const isSpreadsheet = analysis.source === 'spreadsheet'
       if (isSpreadsheet && analysis.mapping) {
-        fd.append('mapping', JSON.stringify(analysis.mapping))
+        fd.append('mapping', JSON.stringify(mappingForRequest(analysis.mapping)))
       }
       if (!isSpreadsheet && analysis.products && analysis.products.length > 0) {
         fd.append('products', JSON.stringify(analysis.products))
@@ -1272,6 +1406,7 @@ export function PriceLists() {
       applyImportResult(res, 'Import AI OK')
       setFile(null)
       setAnalysis(null)
+      setMappingDirty(false)
       setGroupRows([])
       await load()
       finishProgress(true)
@@ -1517,30 +1652,108 @@ export function PriceLists() {
             </label>
           </div>
           {(analysis.mapping?.sheets?.length ?? 0) > 0 && (
-            <table className="mb-3 w-full text-left">
-              <thead>
-                <tr className="border-b bg-slate-50">
-                  <th className="p-2">Arkusz</th>
-                  <th className="p-2">Import</th>
-                  <th className="p-2">Nagłówek</th>
-                  <th className="p-2">SKU / Nazwa / Cena</th>
-                  <th className="p-2">Conf.</th>
-                </tr>
-              </thead>
-              <tbody>
-                {analysis.mapping!.sheets.map((s) => (
-                  <tr key={s.sheet} className="border-b">
-                    <td className="p-2">{s.sheet}</td>
-                    <td className="p-2">{s.include ? 'tak' : 'nie'}</td>
-                    <td className="p-2">wiersz {s.header_excel_row}</td>
-                    <td className="p-2">
-                      {s.columns.sku}/{s.columns.name}/{s.columns.catalog_price}
-                    </td>
-                    <td className="p-2">{Math.round(s.confidence * 100)}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <h3 className="text-sm font-semibold text-slate-800">Mapowanie kolumn</h3>
+                <span className="text-[11px] text-slate-500">
+                  Według tego mapowania plik zostanie odczytany. Popraw kolumnę, która wskazuje co innego,
+                  niż powinna — ręczna poprawka nie jest już zmieniana automatycznie.
+                </span>
+                {analysis.source === 'spreadsheet' && (
+                  <button
+                    type="button"
+                    className={`${btnSecondary} ml-auto px-3 py-1.5`}
+                    disabled={busy || !file}
+                    onClick={onRefreshPreview}
+                  >
+                    Odśwież podgląd
+                  </button>
+                )}
+              </div>
+              {mappingDirty && (
+                <p className="mb-2 rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+                  Mapowanie zmienione — podgląd poniżej jest jeszcze sprzed zmiany. Kliknij
+                  „Odśwież podgląd”.
+                </p>
+              )}
+              {(analysis.errors?.length ?? 0) > 0 && (
+                <ul className="mb-2 rounded border border-red-200 bg-red-50 px-3 py-1.5 text-[11px] text-red-800">
+                  {analysis.errors!.slice(0, 5).map((e, i) => (
+                    <li key={i} className="list-disc">
+                      {e}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {analysis.mapping!.sheets.map((s) => (
+                <div key={s.sheet} className="mb-2 rounded border border-slate-200 bg-white p-2">
+                  <div className="mb-2 flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-1.5 font-medium text-slate-800">
+                      <input
+                        type="checkbox"
+                        checked={s.include}
+                        onChange={(e) => setSheetInclude(s.sheet, e.target.checked)}
+                      />
+                      {s.sheet}
+                    </label>
+                    <span className="text-[11px] text-slate-500">
+                      nagłówek: wiersz {s.header_excel_row} · pewność{' '}
+                      {Math.round(s.confidence * 100)}%
+                    </span>
+                  </div>
+                  {s.include &&
+                    ((s.available_columns?.length ?? 0) > 0 ? (
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {COLUMN_ROLES.map((role) => {
+                          const value = s.columns[role.key]
+                          const chosen =
+                            typeof value === 'number'
+                              ? s.available_columns?.find((c) => c.index === value)
+                              : undefined
+                          return (
+                            <label key={role.key} className="block">
+                              <span className="block text-[11px] font-medium text-slate-600">
+                                {role.label}
+                                {role.required && <span className="text-red-600"> *</span>}
+                                {role.hint && (
+                                  <span className="font-normal text-slate-400"> — {role.hint}</span>
+                                )}
+                              </span>
+                              <select
+                                className="mt-0.5 w-full rounded border border-slate-300 bg-white px-2 py-1"
+                                value={typeof value === 'number' ? String(value) : ''}
+                                onChange={(e) =>
+                                  setSheetColumn(
+                                    s.sheet,
+                                    role.key,
+                                    e.target.value === '' ? null : Number(e.target.value),
+                                  )
+                                }
+                              >
+                                <option value="">— brak —</option>
+                                {s.available_columns!.map((c) => (
+                                  <option key={c.index} value={c.index}>
+                                    {columnLetter(c.index)}
+                                    {c.label ? `: ${c.label}` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                              <span className="mt-0.5 block truncate text-[11px] text-slate-500">
+                                {chosen?.sample ? `przykład: ${chosen.sample}` : ' '}
+                              </span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-slate-500">
+                        SKU / Nazwa / Cena: kolumny {s.columns.sku ?? '—'} / {s.columns.name ?? '—'} /{' '}
+                        {s.columns.catalog_price ?? '—'}
+                      </p>
+                    ))}
+                </div>
+              ))}
+            </div>
           )}
 
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50/70 p-3">

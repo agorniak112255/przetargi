@@ -989,6 +989,41 @@ final class SpreadsheetColumnMapper
         return $out;
     }
 
+    /**
+     * Opis kolumn arkusza na potrzeby ręcznej korekty mapowania: etykieta z wiersza nagłówka i pierwsza
+     * niepusta wartość spod niej. Bez tego człowiek widzi w oknie importu same numery kolumn i nie ma
+     * jak stwierdzić, czy „nazwa" wskazuje rodzinę wyrobu, czy przypadkową kolumnę obok.
+     *
+     * @return list<array{index: int, label: string, sample: string}>
+     */
+    public function describeColumns(Worksheet $sheet, int $headerExcel, int $maxC, int $sampleRows = 20): array
+    {
+        $lastRow = min((int) $sheet->getHighestDataRow(), $headerExcel + $sampleRows);
+        $out = [];
+        for ($c = 1; $c <= $maxC; $c++) {
+            $letter = Coordinate::stringFromColumnIndex($c);
+            $label = trim((string) $sheet->getCell($letter.$headerExcel)->getFormattedValue());
+            $sample = '';
+            for ($r = $headerExcel + 1; $r <= $lastRow; $r++) {
+                $value = trim((string) $sheet->getCell($letter.$r)->getFormattedValue());
+                if ($value !== '') {
+                    $sample = mb_substr($value, 0, 60);
+                    break;
+                }
+            }
+            if ($label === '' && $sample === '') {
+                continue;
+            }
+            $out[] = [
+                'index' => $c - 1,
+                'label' => mb_substr($label, 0, 80),
+                'sample' => $sample,
+            ];
+        }
+
+        return $out;
+    }
+
     private function attrColourScores(string $l): int
     {
         if ($l === 'kolor' || $l === 'kolory' || $l === 'colour' || $l === 'color'

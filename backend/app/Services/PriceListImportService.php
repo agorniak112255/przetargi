@@ -318,12 +318,14 @@ final class PriceListImportService
      *     products_found: int,
      *     rows_total: int,
      *     skipped: int,
-     *     errors_count: int
+     *     errors_count: int,
+     *     errors: list<string>,
+     *     sheets: list<array<string, mixed>>
      * }
      */
     public function previewFromMapping(string $path, array $mapping, int $limit = 8): array
     {
-        $collected = $this->collectFromMapping($path, $mapping, null, 'PREVIEW');
+        $collected = $this->collectFromMapping($path, $mapping, null, 'PREVIEW', true);
         $items = array_slice($collected['products'], 0, $limit);
 
         return [
@@ -333,6 +335,9 @@ final class PriceListImportService
             'rows_total' => $collected['rows_total'],
             'skipped' => $collected['skipped'],
             'errors_count' => count($collected['errors']),
+            'errors' => array_slice($collected['errors'], 0, 20),
+            // mapowanie po korektach, czyli to, według którego import naprawdę czyta plik
+            'sheets' => $collected['sheets'],
         ];
     }
 
@@ -785,19 +790,27 @@ final class PriceListImportService
 
     /**
      * @param  array{sheets: list<array<string, mixed>>}  $mapping
-     * @return array{products: list<array<string, mixed>>, skipped: int, errors: list<string>, rows_total: int}
+     * @return array{
+     *     products: list<array<string, mixed>>,
+     *     skipped: int,
+     *     errors: list<string>,
+     *     rows_total: int,
+     *     sheets: list<array{sheet: string, header_excel_row: int, columns: array<string, int>, available_columns: list<array{index: int, label: string, sample: string}>}>
+     * }
      */
     private function collectFromMapping(
         string $path,
         array $mapping,
         ?string $defaultCategory,
         string $manufacturer,
+        bool $describeColumns = false,
     ): array {
         $spreadsheet = IOFactory::load($path);
         $bySku = [];
         $skipped = 0;
         $errors = [];
         $rowsTotal = 0;
+        $sheetDetails = [];
 
         foreach ($mapping['sheets'] as $sheetMap) {
             $role = (string) ($sheetMap['role'] ?? 'catalog');
@@ -821,7 +834,7 @@ final class PriceListImportService
             $cols = is_array($sheetMap['columns'] ?? null) ? $sheetMap['columns'] : [];
             $map = [];
             $mappable = array_merge(
-                ['sku', 'sku_alt', 'name', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'],
+                ['sku', 'sku_alt', 'name', 'name_extra', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'],
                 // kolumny z parametrem wyrobu przechodzą tak samo jak reszta mapowania
                 SpreadsheetColumnMapper::attributeFields(),
             );
@@ -829,6 +842,19 @@ final class PriceListImportService
                 if (isset($cols[$key]) && is_numeric($cols[$key])) {
                     $map[$key] = (int) $cols[$key];
                 }
+            }
+            // Role, które człowiek ustawił w oknie importu. Poniższe korekty ratują mapowanie zgadnięte przez
+            // maszynę, ale na ręcznym mapowaniu robiłyby dokładnie to, przed czym to okno chroni: cofałyby wybór
+            // bez śladu. Pole odznaczone świadomie (rola bez kolumny) też jest wyborem i nie wraca automatem.
+            $locked = [];
+            foreach ((array) ($sheetMap['locked_columns'] ?? []) as $role) {
+                if (is_string($role) && $role !== '') {
+                    $locked[$role] = true;
+                }
+            }
+            // nazwa złożona z dwóch kolumn to zawsze decyzja człowieka — korekta nazwy nie ma tu czego ratować
+            if (isset($map['name_extra'])) {
+                $locked['name'] = true;
             }
             if (! isset($map['name'], $map['catalog_price'])) {
                 $errors[] = "Arkusz {$sheetName}: niepełne mapowanie kolumn (wymagane: nazwa + cena)";
@@ -841,17 +867,33 @@ final class PriceListImportService
             // mapowanie wykrywane samodzielnie, stosujemy do mapowania przyszłego z zewnątrz.
             $headerExcelForFix = max(1, (int) ($sheetMap['header_excel_row'] ?? $sheetMap['header_row'] ?? 1));
             $maxColForFix = min(28, Coordinate::columnIndexFromString($sheet->getHighestDataColumn() ?: 'A'));
-            $map = $this->columnMapper->correctCategoryColumn($sheet, $headerExcelForFix, $maxColForFix, $map);
-            $map = array_filter(
-                $this->columnMapper->correctNameColumn($sheet, $headerExcelForFix, $maxColForFix, $map),
-                static fn ($idx): bool => $idx !== null,
-            );
+            if (! isset($locked['category'])) {
+                $map = $this->columnMapper->correctCategoryColumn($sheet, $headerExcelForFix, $maxColForFix, $map);
+            }
+            if (! isset($locked['name'])) {
+                $map = array_filter(
+                    $this->columnMapper->correctNameColumn($sheet, $headerExcelForFix, $maxColForFix, $map),
+                    static fn ($idx): bool => $idx !== null,
+                );
+            }
             // Analiza zwraca tylko kolumny cennikowe, więc klasa ochrony, rodzaj wyrobu i rozmiar
             // nie trafiały nigdzie. Rozpoznajemy je z nagłówka sami, po korekcie nazwy i kategorii,
             // żeby nie sięgnąć po kolumnę, którą właśnie zajęła nazwa.
             foreach ($this->columnMapper->attributeColumnsFor($sheet, $headerExcelForFix, $maxColForFix, $map) as $field => $idx) {
+                if (isset($locked[$field])) {
+                    continue;
+                }
                 $map[$field] ??= $idx;
             }
+
+            $sheetDetails[] = [
+                'sheet' => $sheetName,
+                'header_excel_row' => $headerExcelForFix,
+                'columns' => $map,
+                'available_columns' => $describeColumns
+                    ? $this->columnMapper->describeColumns($sheet, $headerExcelForFix, $maxColForFix)
+                    : [],
+            ];
 
             $headerExcelRow = max(1, (int) ($sheetMap['header_excel_row'] ?? $sheetMap['header_row'] ?? 1));
             $headerIdx = $headerExcelRow - 1;
@@ -915,6 +957,7 @@ final class PriceListImportService
             'skipped' => $skipped,
             'errors' => $errors,
             'rows_total' => $rowsTotal,
+            'sheets' => $sheetDetails,
         ];
     }
 
@@ -1394,6 +1437,21 @@ final class PriceListImportService
         if ($this->looksLikeNonProductName($rawName)) {
             $rawName = '';
         }
+        // Nazwa złożona z dwóch kolumn. W cenniku ATG sama „Rodzina rękawic" powtarza się na kilkunastu
+        // pozycjach (dziesięć kart „MaxiCut® Oil™"), a sam „Opis rękawicy" nie mówi, jaki to wyrób
+        // („Ściągacz, oblanie 3/4"). Rolę name_extra ustawia wyłącznie człowiek w oknie importu, więc
+        // złączonego tekstu nie przepuszczamy przez rozpoznawanie opisu — to jest wybrana nazwa, nie opis.
+        $composedName = false;
+        if (isset($map['name_extra'])) {
+            $extra = trim((string) preg_replace('/\s+/u', ' ', (string) ($row[$map['name_extra']] ?? '')));
+            if ($extra !== '' && ($rawName === '' || mb_stripos($extra, $rawName) !== false)) {
+                // druga kolumna zawiera już pierwszą — doklejenie dałoby powtórzenie
+                $rawName = $extra;
+            } elseif ($extra !== '' && mb_stripos($rawName, $extra) === false) {
+                $rawName .= ' — '.$extra;
+                $composedName = true;
+            }
+        }
         $priceRaw = $row[$map['catalog_price']] ?? null;
 
         $groupKey = $this->resolveGroupKey($row, $map, $carry);
@@ -1417,7 +1475,7 @@ final class PriceListImportService
 
         $description = null;
         $name = $rawName;
-        if ($rawName !== '' && $this->isDescriptionLike($rawName)) {
+        if ($rawName !== '' && ! $composedName && $this->isDescriptionLike($rawName)) {
             // Nazwa z wiersza wyżej tylko w obrębie tego samego modelu (DuPont: tytuł w 1. wierszu
             // Reference, opis w kolejnych). Bez wspólnego klucza modelu każdy wiersz opisuje własny
             // wyrób — w cenniku Canis „Men´s shorts CXS LEONIS” przechodziło na setki kolejnych

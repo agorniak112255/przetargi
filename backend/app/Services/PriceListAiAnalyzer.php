@@ -143,6 +143,7 @@ final class PriceListAiAnalyzer
                 $model .= '+heuristic-empty';
             }
         }
+        $mapping = $this->withEffectiveColumns($mapping, is_array($stats['sheets'] ?? null) ? $stats['sheets'] : []);
         $allProducts = is_array($stats['products'] ?? null) ? $stats['products'] : [];
         $mapping['currency'] = $mapping['currency']
             ?? $this->majorityCurrency($allProducts)
@@ -1318,6 +1319,45 @@ PROMPT;
      *     errors_count: int
      * }
      */
+    /**
+     * Mapowanie pokazywane człowiekowi ma być tym, według którego import naprawdę czyta plik. Zgadnięte
+     * kolumny przechodzą jeszcze przez korekty w imporcie (nazwa, kategoria, parametry wyrobu), więc
+     * okno importu dostawało mapowanie sprzed tych poprawek — pokazywało co innego, niż się zaimportuje.
+     *
+     * @param  array<string, mixed>  $mapping
+     * @param  list<array<string, mixed>>  $sheetDetails
+     * @return array<string, mixed>
+     */
+    private function withEffectiveColumns(array $mapping, array $sheetDetails): array
+    {
+        if ($sheetDetails === [] || ! is_array($mapping['sheets'] ?? null)) {
+            return $mapping;
+        }
+
+        $byName = [];
+        foreach ($sheetDetails as $detail) {
+            if (is_array($detail) && is_string($detail['sheet'] ?? null)) {
+                $byName[$detail['sheet']] = $detail;
+            }
+        }
+
+        foreach ($mapping['sheets'] as $i => $sheet) {
+            if (! is_array($sheet)) {
+                continue;
+            }
+            $detail = $byName[(string) ($sheet['sheet'] ?? '')] ?? null;
+            if ($detail === null) {
+                continue;
+            }
+            $mapping['sheets'][$i]['columns'] = is_array($detail['columns'] ?? null) ? $detail['columns'] : [];
+            $mapping['sheets'][$i]['available_columns'] = is_array($detail['available_columns'] ?? null)
+                ? $detail['available_columns']
+                : [];
+        }
+
+        return $mapping;
+    }
+
     private function buildPreview(string $path, array $mapping): array
     {
         return app(PriceListImportService::class)->previewFromMapping($path, $mapping, 8);

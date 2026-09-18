@@ -191,6 +191,125 @@ class PriceListImportController extends Controller
         ], 201);
     }
 
+    /**
+     * Podgląd po ręcznej korekcie mapowania kolumn — bez pytania modelu od nowa. Analiza jest droga
+     * i losowa, a tu zmieniło się tylko to, która kolumna jest czym; plik czytamy ponownie według
+     * mapowania, które człowiek właśnie poprawił, i pokazujemy, co z niego wyjdzie.
+     */
+    public function preview(Request $request): JsonResponse
+    {
+        $request->validate([
+            'file' => ['required', 'file', 'max:102400'],
+            'mapping' => ['required'],
+            'manufacturer' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        /** @var UploadedFile $file */
+        $file = $request->file('file');
+        $this->assertAllowedFile($file);
+        if ($this->extensionOf($file) === 'pdf') {
+            throw ValidationException::withMessages([
+                'file' => 'PDF nie ma kolumn do mapowania — użyj „Analizuj AI".',
+            ]);
+        }
+
+        $mapping = $this->decodeJsonField($request->input('mapping'));
+        if ($mapping === null || ! is_array($mapping['sheets'] ?? null)) {
+            throw ValidationException::withMessages([
+                'mapping' => 'Brak mapowania arkuszy.',
+            ]);
+        }
+
+        $path = $file->getRealPath();
+        if ($path === false) {
+            throw ValidationException::withMessages([
+                'file' => 'Nie można odczytać pliku.',
+            ]);
+        }
+
+        @set_time_limit(3600);
+
+        $manufacturer = trim((string) ($request->input('manufacturer') ?? ''));
+        if ($manufacturer === '') {
+            $manufacturer = is_string($mapping['manufacturer_detected'] ?? null)
+                ? (string) $mapping['manufacturer_detected']
+                : ($this->metaDetector->fromFilename($file->getClientOriginalName())['manufacturer'] ?? 'Nieznany');
+        }
+
+        try {
+            $stats = $this->importer->previewFromMapping($path, $mapping, 12);
+        } catch (Throwable $e) {
+            throw ValidationException::withMessages([
+                'mapping' => 'Nie udało się odczytać pliku według tego mapowania: '.$e->getMessage(),
+            ]);
+        }
+
+        $currency = is_string($mapping['currency'] ?? null) && $mapping['currency'] !== ''
+            ? (string) $mapping['currency']
+            : 'PLN';
+        $preview = [];
+        foreach ($stats['items'] as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            if (! isset($item['currency']) || ! is_string($item['currency']) || $item['currency'] === '') {
+                $item['currency'] = $currency;
+            }
+            $preview[] = $item;
+        }
+
+        $products = is_array($stats['products'] ?? null) ? $stats['products'] : [];
+
+        return response()->json([
+            'source' => 'spreadsheet',
+            'mapping' => $this->withEffectiveColumns($mapping, $stats['sheets']),
+            'preview' => $preview,
+            'products_found' => $stats['products_found'],
+            'rows_total' => $stats['rows_total'],
+            'skipped' => $stats['skipped'],
+            'errors_count' => $stats['errors_count'],
+            'errors' => $stats['errors'],
+            'assortment_groups' => $this->assortmentGroups->summarize(
+                $products,
+                $manufacturer !== '' ? $manufacturer : 'Nieznany',
+            ),
+        ]);
+    }
+
+    /**
+     * Mapowanie odesłane do przeglądarki musi być tym, według którego plik został właśnie odczytany,
+     * razem z listą kolumn arkusza do wyboru.
+     *
+     * @param  array<string, mixed>  $mapping
+     * @param  list<array<string, mixed>>  $sheetDetails
+     * @return array<string, mixed>
+     */
+    private function withEffectiveColumns(array $mapping, array $sheetDetails): array
+    {
+        $byName = [];
+        foreach ($sheetDetails as $detail) {
+            if (is_array($detail) && is_string($detail['sheet'] ?? null)) {
+                $byName[$detail['sheet']] = $detail;
+            }
+        }
+
+        foreach ($mapping['sheets'] as $i => $sheet) {
+            if (! is_array($sheet)) {
+                continue;
+            }
+            $detail = $byName[(string) ($sheet['sheet'] ?? '')] ?? null;
+            if ($detail === null) {
+                continue;
+            }
+            $mapping['sheets'][$i]['columns'] = is_array($detail['columns'] ?? null) ? $detail['columns'] : [];
+            $mapping['sheets'][$i]['available_columns'] = is_array($detail['available_columns'] ?? null)
+                ? $detail['available_columns']
+                : [];
+        }
+
+        return $mapping;
+    }
+
     public function analyze(Request $request): JsonResponse
     {
         $data = $request->validate([
