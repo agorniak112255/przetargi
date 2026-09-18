@@ -2760,7 +2760,7 @@ final class ClientInquiryService
      * obie wersje listu mogłyby się rozjechać.
      *
      * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
-     * @return list<array{head: string, quote: string|null, answer: list<string>}>
+     * @return list<array{head: string, quote: string|null, answer: list<string>, answer_roles: list<string>}>
      */
     private function offerRows(ClientInquiry $inquiry, array $answers, string $priceMode, float $margin): array
     {
@@ -2841,7 +2841,7 @@ final class ClientInquiryService
      * @param  array<string, mixed>  $item
      * @param  array<string, mixed>|null  $product
      * @param  array<string, mixed>|null  $substitute
-     * @return array{head: string, quote: string|null, answer: list<string>}
+     * @return array{head: string, quote: string|null, answer: list<string>, answer_roles: list<string>}
      */
     private function offerRow(
         int $n,
@@ -2876,6 +2876,7 @@ final class ClientInquiryService
                 'head' => $head,
                 'quote' => $quote === '' ? null : $quote,
                 'answer' => ['Pozycję potwierdzimy po weryfikacji dostępności i wrócimy z propozycją.'],
+                'answer_roles' => ['note'],
             ];
         }
 
@@ -2909,7 +2910,8 @@ final class ClientInquiryService
         return [
             'head' => $head,
             'quote' => $quote === '' ? null : $quote,
-            'answer' => $answer,
+            'answer' => array_column($answer, 'text'),
+            'answer_roles' => array_column($answer, 'role'),
         ];
     }
 
@@ -2926,7 +2928,7 @@ final class ClientInquiryService
      *
      * @param  array<string, mixed>  $product
      * @param  array<string, mixed>  $card  pola karty wyrobu (opis, model, producent)
-     * @return list<string>
+     * @return list<array{text: string, role: string}>
      */
     private function productLines(
         string $label,
@@ -2944,21 +2946,29 @@ final class ClientInquiryService
             return [];
         }
 
+        // Pierwsza linia to nazwa wyrobu, kolejne (akapit opisu) to treść — tabela
+        // w liście pisze nazwę wytłuszczeniem, a resztę zwykłym pismem.
+        $out = [];
+        foreach ($lines as $index => $line) {
+            $out[] = ['text' => $line, 'role' => $index === 0 ? 'name' : 'body'];
+        }
+
         $norms = trim((string) ($product['norms'] ?? ''));
         if ($norms !== '') {
-            $lines[] = 'Normy: '.$norms;
+            $out[] = ['text' => 'Normy: '.$norms, 'role' => 'meta'];
         }
         if ($priceMode !== '' && $priceMode !== 'none') {
             $price = $this->letterPrice($product, $priceMode, $margin);
             // Jednostki naszej ceny nie znamy — karta jej nie niesie. Doklejana była jednostka z maila
             // klienta, więc przy zapytaniu „20 op.” cena za sztukę wychodziła jako cena za opakowanie.
             // Ilość i jednostka klienta stoją w nagłówku pozycji i tam jest ich miejsce.
-            $lines[] = $price === null
-                ? 'Cena: do potwierdzenia'
-                : 'Cena: '.$price.' netto';
+            $out[] = [
+                'text' => $price === null ? 'Cena: do potwierdzenia' : 'Cena: '.$price.' netto',
+                'role' => 'price',
+            ];
         }
 
-        return $lines;
+        return $out;
     }
 
     /**

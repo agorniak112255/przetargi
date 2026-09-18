@@ -25,7 +25,7 @@ final class InquiryReplyHtml
     private const HEAD_BG = '#1d4ed8';
 
     /**
-     * @param  list<array{head: string, quote: string|null, answer: list<string>}>  $rows
+     * @param  list<array{head: string, quote: string|null, answer: list<string>, answer_roles?: list<string>}>  $rows
      * @param  list<string>  $outro
      * @param  list<array{label: string, value: string}>  $terms  warunki wpisane przez handlowca
      */
@@ -56,7 +56,7 @@ final class InquiryReplyHtml
     }
 
     /**
-     * @param  list<array{head: string, quote: string|null, answer: list<string>}>  $rows
+     * @param  list<array{head: string, quote: string|null, answer: list<string>, answer_roles?: list<string>}>  $rows
      */
     private static function table(array $rows): string
     {
@@ -80,11 +80,38 @@ final class InquiryReplyHtml
 
             $html .= '<tr>'
                 .self::cell($ask, self::ASK_BG, '38%')
-                .self::cell(self::text(implode("\n", $row['answer'])), self::ANSWER_BG, null)
+                .self::cell(self::answer($row['answer'], $row['answer_roles'] ?? []), self::ANSWER_BG, null)
                 .'</tr>';
         }
 
         return $html.'</table>';
+    }
+
+    /**
+     * Nasza propozycja: nazwa wyrobu wytłuszczona, opis zwykłym pismem, normy
+     * drobniejszym i szarym, cena osobno. Jednolity blok tekstu czytało się ciężko —
+     * klient szukał wzrokiem nazwy i ceny pośród zdań opisu.
+     *
+     * @param  list<string>  $lines
+     * @param  list<string>  $roles
+     */
+    private static function answer(array $lines, array $roles): string
+    {
+        $html = '';
+        foreach ($lines as $index => $line) {
+            $role = $roles[$index] ?? 'body';
+            $style = match ($role) {
+                'name' => 'font-weight:bold',
+                'meta' => 'color:#475569;font-size:12px',
+                'price' => 'font-weight:bold',
+                default => 'color:#334155',
+            };
+            $html .= '<div style="'.($index === 0 ? '' : 'margin-top:4px;').$style.'">'
+                .self::text($line)
+                .'</div>';
+        }
+
+        return $html;
     }
 
     /**
