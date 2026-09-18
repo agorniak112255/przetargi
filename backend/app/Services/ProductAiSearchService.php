@@ -5090,7 +5090,11 @@ final class ProductAiSearchService
             }
             if (! $intent['manufacturer_absent_in_catalog']
                 && $this->modelFuzzy->usesModelAnchoredCatalogSearch($requirement)
-                && ! $this->modelFuzzy->matches($requirement, $product)) {
+                && ! $this->modelFuzzy->matches($requirement, $product)
+                // Kod z zapytania stoi na karcie, tylko z innym separatorem („8543.8” vs
+                // „8543/8/35”) — bramka odrzucała wtedy ocenę modelu i zostawał wiersz reguły,
+                // którego oferty nie przyjmują („brak w katalogu” mimo karty w katalogu).
+                && ! $this->modelFuzzy->separatedCodeMatches($requirement, $product)) {
                 continue;
             }
             if (! $this->filterType->covers($requirement, $this->filterHaystack($product))) {

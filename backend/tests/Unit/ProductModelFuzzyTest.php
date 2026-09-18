@@ -428,6 +428,27 @@ final class ProductModelFuzzyTest extends TestCase
         $this->assertSame(0, $this->fuzzy->strongSkuScore($cerva, $tronchetto));
     }
 
+    public function test_code_written_with_another_separator_still_points_at_the_card(): void
+    {
+        $uvex = $this->product('8543/8/35', 'Polbut Uvex 1 8543/8', 'UVEX');
+        $artra = $this->product('AROX 733 641460 S1 ESD', 'AROX 733 641460 S1 ESD', 'ARTRA');
+        $ajGroup = $this->product('101/001/A', 'Ubranie wodoochronne antystatyczne', 'AJ GROUP');
+
+        // klient pisze kod z kropka, katalog trzyma go z ukosnikami
+        $uvexQuery = 'BUTY UVEX BUSINESS CASUAL 8543.8 S1 SRC ROZMIAR 44';
+        $this->assertTrue($this->fuzzy->separatedCodeMatches($uvexQuery, $uvex));
+        $this->assertFalse($this->fuzzy->separatedCodeMatches($uvexQuery, $artra));
+        $this->assertTrue($this->fuzzy->separatedCodeMatches('UBRANIE WODOOCHRONNE AJ GROUP 101.001.A', $ajGroup));
+
+        // klasa ochrony, ulamek i model bez separatora kodem nie sa
+        $this->assertFalse($this->fuzzy->separatedCodeMatches('Trzewiki S1/SRC rozmiar 44', $artra));
+        $this->assertFalse($this->fuzzy->separatedCodeMatches('Kurtka 3/4 ocieplana', $ajGroup));
+        $this->assertFalse($this->fuzzy->separatedCodeMatches(
+            'Kombinezon Tychem 4000 bialy',
+            $this->product('AB-40/00', 'Kombinezon zwykly', 'X')
+        ));
+    }
+
     private function product(string $sku, string $name, string $manufacturer): Product
     {
         $p = new Product;

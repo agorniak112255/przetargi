@@ -532,6 +532,61 @@ final class ProductModelFuzzy
         return $this->score($requirement, $product) >= 80;
     }
 
+    /**
+     * Kod wyrobu zapisany z innym separatorem niż w katalogu: klient pisze „8543.8”
+     * albo „101.001.A”, a karta ma „8543/8/35” i „101/001/A”. Obie strony sprowadzamy
+     * do samych liter i cyfr — igły modelu tego nie łapią, bo kod złożony z samych
+     * cyfr igłą w ogóle nie zostaje (pushNeedle), a odległość Levenshteina rośnie
+     * z każdym separatorem.
+     */
+    public function separatedCodeMatches(string $requirement, Product $product): bool
+    {
+        $codes = $this->separatedCodes($requirement);
+        if ($codes === []) {
+            return false;
+        }
+        $hays = array_values(array_filter([
+            $this->compact((string) $product->sku),
+            $this->compact((string) $product->name),
+        ], static fn (string $hay): bool => $hay !== ''));
+
+        foreach ($codes as $code) {
+            foreach ($hays as $hay) {
+                if (str_contains($hay, $code)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Kody z wymagania, w których człony rozdziela kropka, ukośnik albo myślnik.
+     * Żądamy ciągu co najmniej trzech cyfr i pięciu znaków po sklejeniu — krótsze
+     * („3/4”, „s1/src”) trafiają przypadkiem w cudze numery.
+     *
+     * @return list<string>
+     */
+    private function separatedCodes(string $requirement): array
+    {
+        $text = $this->stripNorms($requirement);
+        $out = [];
+        if (preg_match_all('/\b[a-z0-9]*\d[a-z0-9]*(?:[.\/-][a-z0-9]+)+\b/u', $text, $m) === false) {
+            return [];
+        }
+        foreach ($m[0] ?? [] as $raw) {
+            $code = $this->compact($raw);
+            if (mb_strlen($code) < 5 || preg_match('/\d{3,}/u', $code) !== 1) {
+                continue;
+            }
+            $out[$code] = true;
+        }
+
+        // klucz złożony z samych cyfr wraca z array_keys() jako liczba
+        return array_map('strval', array_keys($out));
+    }
+
     private function brandAgrees(string $requirement, Product $product): bool
     {
         $manuf = $this->compact((string) $product->manufacturer);

@@ -55,9 +55,16 @@ final class ProductAiSearchModelCodeFloodTest extends TestCase
             'limit' => 5,
         ])->assertOk();
 
-        $skus = array_column($response->json('products') ?? [], 'sku');
+        $products = $response->json('products') ?? [];
+        $skus = array_column($products, 'sku');
         $this->assertContains('8543/8/35', $skus, 'Karta z kodem z zapytania nie weszła do wyniku.');
         $this->assertSame('8543/8/35', $skus[0] ?? null);
+
+        // Ocena ma pochodzić od modelu (95), a nie z reguły klasy obuwia (92 ze źródłem
+        // „rule”). Wiersza reguły oferty nie przyjmują, więc pozycja z maila stawała się
+        // „brak w katalogu”, choć wyszukiwarka pokazywała kartę.
+        $this->assertSame(95, $products[0]['ai_match_percent'] ?? null);
+        $this->assertNull($products[0]['ai_match_source'] ?? null);
     }
 
     /** Karta z kodem z zapytania zakładana jako ostatnia — tak jak świeżo pobrana z B2B. */
