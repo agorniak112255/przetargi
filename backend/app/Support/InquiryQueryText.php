@@ -99,7 +99,7 @@ final class InquiryQueryText
     }
 
     /** Czy w tekście stała kwota przy słowie o cenie. */
-    private static function looksLikePrice(string $text): bool
+    public static function looksLikePrice(string $text): bool
     {
         return preg_match('/'.self::PRICE_WORD.'/iu', $text) === 1
             && preg_match('/\d[\d \x{00A0}]*[.,]\d{2}/u', $text) === 1;

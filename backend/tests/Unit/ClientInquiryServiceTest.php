@@ -454,6 +454,31 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame(['100', 'par'], [$items[0]['qty'], $items[0]['unit']]);
     }
 
+    public function test_model_quantity_is_checked_against_the_quote(): void
+    {
+        // mail pisany myslnikami: naszego parsera nie ma, pozycje daje model — reguly
+        // czytania ilosci maja obowiazywac tak samo
+        $items = $this->service()->resolveLineItems('x', [
+            ['id' => 'item_1', 'quote' => '- Rekawice nitrylowe, a 100 szt., zamawiamy 4 opakowania', 'qty' => '100', 'unit' => 'szt.', 'query' => 'Rekawice nitrylowe'],
+            ['id' => 'item_2', 'quote' => '- Maski FFP2 w kartonie 20 szt.', 'qty' => '20', 'unit' => 'szt.', 'query' => 'Maski FFP2'],
+            ['id' => 'item_3', 'quote' => '- Rekawice, cena 24,00 zl/szt.', 'qty' => '24', 'unit' => 'szt.', 'query' => 'Rekawice'],
+            ['id' => 'item_4', 'quote' => '- Kaski ochronne, cztery sztuki', 'qty' => '4', 'unit' => 'szt.', 'query' => 'Kaski ochronne'],
+            ['id' => 'item_5', 'quote' => '- Buty robocze S3, 10 par', 'qty' => '10', 'unit' => 'par', 'query' => 'Buty robocze S3'],
+        ]);
+
+        // wielkosc opakowania to czesc wyrobu, zamowieniem sa 4 opakowania
+        $this->assertSame(['4', 'opakowania'], [$items[0]['qty'], $items[0]['unit']]);
+        $this->assertStringContainsString('a 100 szt', $items[0]['search_query']);
+        // zawartosc kartonu i liczba przy cenie nie sa iloscia — zostaje pusto z flaga
+        $this->assertNull($items[1]['qty']);
+        $this->assertSame('model_unverified', $items[1]['qty_source']);
+        $this->assertNull($items[2]['qty']);
+        // ilosci zapisanej slownie nie podwazamy, a zgodnej z cytatem nie ruszamy
+        $this->assertSame('4', $items[3]['qty']);
+        $this->assertSame('10', $items[4]['qty']);
+        $this->assertArrayNotHasKey('qty_source', $items[4]);
+    }
+
     public function test_unit_never_ends_inside_a_word(): void
     {
         // „op.” dopasowywalo sie do „opisy”, a „para” do „parametry” — z frazy zostawal

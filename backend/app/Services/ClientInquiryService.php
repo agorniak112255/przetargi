@@ -1262,9 +1262,72 @@ final class ClientInquiryService
         $parsed = $this->parseLineItemsFromBody($body);
         $items = $parsed !== [] && count($parsed) > count($fromAi)
             ? $parsed
-            : ($fromAi !== [] ? $fromAi : $parsed);
+            : ($fromAi !== [] ? $this->quantitiesCheckedAgainstQuote($fromAi) : $parsed);
 
         return $this->withSearchQueries($items);
+    }
+
+    /**
+     * Ilość podana przez model sprawdzona cytatem wiersza. Te same reguły co przy własnym
+     * rozbiorze maila: „a 100 szt.” to wielkość opakowania (część wyrobu), liczba przy cenie
+     * nie jest ilością, a zamawianą ilością jest ta, którą klient wskazał („4 opakowania”).
+     * Bez tego kroku mail pisany myślnikami — którego nasz parser nie czyta — omijał wszystkie
+     * zabezpieczenia, bo pozycje pochodziły wyłącznie od modelu.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @return list<array<string, mixed>>
+     */
+    private function quantitiesCheckedAgainstQuote(array $items): array
+    {
+        $out = [];
+        foreach ($items as $item) {
+            $quote = trim((string) ($item['quote'] ?? ''));
+            $qty = $this->nullable($item['qty'] ?? null);
+            if ($quote === '' || $qty === null) {
+                $out[] = $item;
+
+                continue;
+            }
+
+            $found = $this->qtyCandidatesInRow($quote);
+            if ($found['taken'] !== null) {
+                // cytat wskazuje ilość wprost — nasza reguła zna wielkość opakowania
+                if ($found['taken']['qty'] !== $qty) {
+                    // jednostka idzie razem z liczbą: model czytał „100 szt.”, a zamówieniem
+                    // są „4 opakowania”
+                    $item['qty_source'] = 'quote';
+                    $item['unit'] = $found['taken']['unit'];
+                }
+                $item['qty'] = $found['taken']['qty'];
+                $out[] = $item;
+
+                continue;
+            }
+
+            // Model wziął liczbę, którą my odrzuciliśmy jako wielkość opakowania albo cenę:
+            // zostawiamy pustą ilość z flagą, bo w ofercie stanęłaby liczba, której klient
+            // nie zamówił. Liczby spoza cytatu też nie potwierdzamy.
+            $digits = preg_replace('/[^0-9]/u', '', $qty) ?? $qty;
+            $standsAlone = $digits !== '' && $this->quoteHasNumber($quote, $digits);
+            $fromRejected = $digits !== '' && in_array($digits, $found['rejected'], true);
+            // Liczby zapisanej slownie („cztery sztuki”) nie podwazamy — model czyta tekst
+            // lepiej niz wyrazenie regularne. Podwazamy wtedy, gdy wzial liczbe, ktora my
+            // odrzucilismy, albo gdy jedyne liczby w cytacie to cena i wielkosc opakowania.
+            $unsupported = ! $standsAlone && ($found['rejected'] !== [] || InquiryQueryText::looksLikePrice($quote));
+            if ($fromRejected || ($digits !== '' && $unsupported)) {
+                $item['qty'] = null;
+                $item['qty_source'] = 'model_unverified';
+            }
+            $out[] = $item;
+        }
+
+        return $out;
+    }
+
+    /** Czy taka liczba stoi w cytacie jako osobny zapis (a nie jako część innej liczby). */
+    private function quoteHasNumber(string $quote, string $digits): bool
+    {
+        return preg_match('/(?<![\d,.])0*'.preg_quote($digits, '/').'(?![\d]|[,.]\d)/u', $quote) === 1;
     }
 
     /**
@@ -1541,6 +1604,19 @@ final class ClientInquiryService
      */
     private function qtyInsideRow(string $rest): ?array
     {
+        return $this->qtyCandidatesInRow($rest)['taken'];
+    }
+
+    /**
+     * Ilości znalezione w wierszu: ta wzięta i te odrzucone (zawartość opakowania,
+     * liczba przy cenie). Odrzucone są potrzebne przy sprawdzaniu ilości podanej przez
+     * model — inaczej nie da się odróżnić „zamawiamy 4 opakowania” od „a 100 szt.”.
+     *
+     * @return array{taken: array{qty: string, unit: string, at: int, len: int}|null, rejected: list<string>}
+     */
+    private function qtyCandidatesInRow(string $rest): array
+    {
+        $rejected = [];
         $found = preg_match_all(
             '/(?<![\p{L}\d,.])(\d{1,5})\s*('.self::UNIT_PATTERN.')/iu',
             $rest,
@@ -1548,7 +1624,7 @@ final class ClientInquiryService
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE
         );
         if ($found === false || $found === 0) {
-            return null;
+            return ['taken' => null, 'rejected' => []];
         }
 
         foreach ($all as $match) {
@@ -1564,6 +1640,8 @@ final class ClientInquiryService
             // to zawartość opakowania, a klient zamawia opakowania, nie sztuki
             if (preg_match('/(?:op\.|opak\.?|opakowani[ue]|opakowanie zbiorcze|pak\.|zawiera(?:jący|jące)?|po|(?<![\p{L}\d])[ax])\s*[-–—]?\s*$/iu', $before) === 1
                 && ! $packAfterDash) {
+                $rejected[] = $match[1][0];
+
                 continue;
             }
             // „Rękawice w kartonie 100 szt.” to zawartość opakowania, ale „Karton zbiorczy
@@ -1572,29 +1650,38 @@ final class ClientInquiryService
             if (preg_match('/\S+\s+(?:w\s+)?karton(?:ie|y|ów|ach)?\s*[-–—]?\s*$/iu', $before) === 1
                 && preg_match('/(?<![\p{L}])(?:do|na|dla|pod|przy|ze?)\s+karton\w*\s*[-–—]?\s*$/iu', $before) !== 1
                 && ! $packAfterDash) {
+                $rejected[] = $match[1][0];
+
                 continue;
             }
             // „100 szt./op.”, „100 szt. w opak.”, „20 szt. w kartonie” — tak samo
             if (preg_match('/^\s*(?:\/\s*op|w\s+(?:opak|karton|pud))/iu', $after) === 1) {
+                $rejected[] = $match[1][0];
+
                 continue;
             }
             // liczba tuż za słowem o cenie jest ceną albo przelicznikiem ceny
             // („cena netto za 1 szt. 12,50”), a nie zamawianą ilością
             if (preg_match('/(?:cena|cenie|ceny|cenę|c\.|koszt|wartość|stawka|netto|brutto|pln|zł|zl|eur|usd)[:\s]*(?:za\s+)?$/iu', $before) === 1) {
+                $rejected[] = $match[1][0];
+
                 continue;
             }
 
             $digits = ltrim($match[1][0], '0');
 
             return [
-                'qty' => $this->formatQty($digits === '' ? '0' : $digits),
-                'unit' => trim($match[2][0]),
-                'at' => $offset,
-                'len' => strlen((string) $match[0][0]),
+                'taken' => [
+                    'qty' => $this->formatQty($digits === '' ? '0' : $digits),
+                    'unit' => trim($match[2][0]),
+                    'at' => $offset,
+                    'len' => strlen((string) $match[0][0]),
+                ],
+                'rejected' => $rejected,
             ];
         }
 
-        return null;
+        return ['taken' => null, 'rejected' => $rejected];
     }
 
     /**
