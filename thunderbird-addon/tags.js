@@ -42,6 +42,19 @@ const PULL_PAGES = 5
 const RECHECK_LIMIT = 400
 
 /**
+ * Ile dni wstecz ma sięgać historia „kto się tym zajmuje”.
+ *
+ * Zwykłe przejście pyta tylko o zmiany od ostatniego razu, więc po nocy albo
+ * po urlopie i tak dostaniemy wszystko, co się w międzyczasie działo. To okno
+ * jest siatką bezpieczeństwa: raz na dobę pytamy o CAŁE ostatnie dwa tygodnie,
+ * żeby nic nie przepadło, gdyby któreś przejście się nie udało.
+ */
+const HISTORY_DAYS = 14
+
+/** Jak często robimy to pełne pytanie o dwa tygodnie. */
+const HISTORY_SWEEP_HOURS = 24
+
+/**
  * Jak długo pamiętamy, że maila o tym identyfikatorze nie ma w tym
  * Thunderbirdzie. Lista z serwera obejmuje zapytania wszystkich handlowców,
  * więc większość tych maili nigdy nie trafi do tej skrzynki — bez tej pamięci
@@ -632,8 +645,24 @@ async function markByHeaderId(headerMessageId, { loud = false } = {}) {
  * zapytania powstały), potem pytamy tylko o zmiany od ostatniego razu.
  */
 async function pullChangedMails() {
-  const { tagsSince } = await browser.storage.local.get({ tagsSince: '' })
+  const { tagsSince, historySweepAt } = await browser.storage.local.get({
+    tagsSince: '',
+    historySweepAt: 0,
+  })
   let since = String(tagsSince || '')
+
+  // Raz na dobę cofamy się o dwa tygodnie niezależnie od tego, dokąd doszedł
+  // zwykły znacznik czasu. Dzięki temu nieudane przejście (brak sieci, wyłączony
+  // komputer w złym momencie) nie zostawia dziury w historii na zawsze.
+  let sweeping = false
+  if (Date.now() - Number(historySweepAt || 0) > HISTORY_SWEEP_HOURS * 60 * 60 * 1000) {
+    sweeping = true
+    const from = new Date(Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000).toISOString()
+    // Porównanie przez czas, nie przez tekst: serwer podaje datę ze swoją strefą
+    // („+02:00”), a my liczymy w UTC — jako łańcuchy te zapisy nie są porównywalne.
+    const at = since === '' ? NaN : Date.parse(since)
+    if (! Number.isNaN(at) && at > Date.parse(from)) since = from
+  }
 
   for (let page = 0; page < PULL_PAGES; page += 1) {
     const path = '/api/inquiries/message-ids' + (since === '' ? '' : '?since=' + encodeURIComponent(since))
@@ -660,7 +689,13 @@ async function pullChangedMails() {
     since = String(data && data.next_since ? data.next_since : since)
     await browser.storage.local.set({ tagsSince: since })
 
-    if (!data || data.has_more !== true) return
+    if (!data || data.has_more !== true) {
+      // Datę pełnego przejścia zapisujemy dopiero po udanym przejściu — inaczej
+      // nieudane pytanie zjadałoby dobowy przegląd historii.
+      if (sweeping) await browser.storage.local.set({ historySweepAt: Date.now() })
+
+      return
+    }
   }
 }
 
@@ -765,6 +800,7 @@ async function tagDiagnostics() {
 
   const { tagsSince, tagged } = await browser.storage.local.get({ tagsSince: '', tagged: {} })
   say('Znacznik czasu', tagsSince === '' ? 'pusty (pełne nadgonienie 90 dni)' : String(tagsSince))
+  say('Historia wstecz', HISTORY_DAYS + ' dni (pełne sprawdzenie raz na dobę)')
   say('Maile oznaczone przez dodatek', String(Object.keys(tagged || {}).length))
 
   if (tags !== null) {
@@ -885,7 +921,7 @@ async function tagDiagnostics() {
  * najbliższe przejście przechodzi całe okno 90 dni od nowa.
  */
 async function resetTagSync() {
-  await browser.storage.local.set({ tagsSince: '', tagged: {}, absent: {} })
+  await browser.storage.local.set({ tagsSince: '', tagged: {}, absent: {}, historySweepAt: 0 })
   markBroken = false
   await syncTags({ full: true })
 }

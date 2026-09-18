@@ -132,7 +132,9 @@ eksperymentalne** (`experiment/columns`). Skutki, o których trzeba wiedzieć:
   **Ukryj kolumnę i wyczyść**.
 
 Znaczniki zostają obok kolumny i można je wyłączyć osobno (**Wyłącz i usuń
-znaczniki**) — kolumna działa bez nich.
+znaczniki**) — kolumna działa bez nich. Gdy kolumna działa, dodatek **nie
+namawia** już do włączania znaczników: pasek w okienku nad mailem się nie
+pokazuje, a w ustawieniach stoi wprost, że kolorowe etykiety nie są potrzebne.
 
 ## Oznaczanie maili na liście
 
@@ -180,6 +182,18 @@ minut, a maile kolegów, których nie ma w tej skrzynce, pamięta przez dobę i 
 szuka ich w kółko.
 
 Świeżo zainstalowany dodatek nadgania zaległości z ostatnich 90 dni.
+
+### Historia: skąd wiadomo o mailach sprzed kilku dni
+
+Treść kolumny siedzi w pamięci dodatku i **przeżywa zamknięcie Thunderbirda** —
+po otwarciu poczty nazajutrz maile sprzed kilku dni nadal mają nazwisko. Zwykłe
+przejście pyta tylko o zmiany od ostatniego razu, więc po nocy, weekendzie czy
+urlopie dodatek dostaje wszystko, co się w międzyczasie działo, jednym pytaniem.
+
+Do tego raz na dobę idzie **pełne pytanie o ostatnie 14 dni** — siatka
+bezpieczeństwa na wypadek, gdyby któreś przejście się nie udało (brak sieci,
+komputer wyłączony w złym momencie). Dzięki temu dziura w historii nie zostaje
+na zawsze.
 
 ### Zgoda na zmianę znaczników
 
@@ -365,7 +379,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.14.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.15.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia

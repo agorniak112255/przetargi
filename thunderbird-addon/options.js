@@ -96,9 +96,13 @@ async function logout() {
 async function showTagging() {
   const allowed = await tagsAllowed()
   const partly = allowed ? false : await tagsPartlyAllowed()
+  const column = await columnState()
 
   el('tagState').textContent = allowed
-    ? 'Oznaczanie jest włączone.'
+    ? (column.ok
+      ? 'Oznaczanie jest włączone. Przy działającej kolumnie „Prowadzi” nie jest potrzebne — '
+        + 'kolorowe etykiety możesz zdjąć przyciskiem poniżej.'
+      : 'Oznaczanie jest włączone.')
     : partly
       // Po aktualizacji, która dołożyła uprawnienie — zgoda była, ale jest niepełna.
       ? 'Aktualizacja dodatku wymaga jednego kliknięcia: dochodzi zgoda na odczyt listy znaczników.'

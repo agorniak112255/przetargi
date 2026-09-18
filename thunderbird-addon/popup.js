@@ -174,6 +174,19 @@ async function showUpdateNotice() {
  * do którego handlowiec zagląda codziennie — ustawień dodatku nie otwiera nikt.
  */
 async function showTagsOffer() {
+  // Gdy działa kolumna „Prowadzi”, znaczniki są zbędne — nie namawiamy do nich.
+  // Pasek zostaje tylko dla tych, u których kolumny nie ma (starszy Thunderbird).
+  try {
+    const state = await columnState()
+    if (state.ok) {
+      el('tagsOff').hidden = true
+
+      return
+    }
+  } catch (e) {
+    // Brak odpowiedzi o kolumnę traktujemy jak jej brak.
+  }
+
   let allowed = true
   let partly = false
   try {
