@@ -59,7 +59,7 @@ final class InquiryQueryText
         // „Wycieraczka gumowa:rozm:” — rozmiar stoi dopiero w następnej linii
         $text = preg_replace('/\s*[:,]?\s*\b(?:rozmiar|rozm)\.?\s*[:.]?\s*$/iu', '', $text) ?? $text;
         // urwane „, c” z ceny rozbitej na dwie linie („…, c.\n netto....4 497,00 PLN”)
-        $text = preg_replace('/[,;]?\s*\bc\.?\s*$/iu', '', $text) ?? $text;
+        $text = preg_replace('/[,;]?\s*\bc\.\s*$/iu', '', $text) ?? $text;
         $text = preg_replace('/\s*[,;:]\s*(?=[,;:]|$)/u', ' ', $text) ?? $text;
         // po wycietej cenie zostawala osierocona spacja przed przecinkiem
         $text = preg_replace('/\s+([,;])/u', '$1', $text) ?? $text;
@@ -181,13 +181,16 @@ final class InquiryQueryText
         // Za kwotą stoi coś, co mówi o cenie (waluta, „za sztukę”, nawias z walutą),
         // albo nie stoi tam żadne słowo. Słowo spoza tej listy znaczy, że liczba opisuje
         // wyrób — jednostkę, ilość albo parametr — i wtedy zostaje.
-        $priceTail = '(?=\s*(?:'.$word.'|za\b)|\s*[(\[]\s*(?:'.$word.')|\s*[^\p{L}(\[\s]|\s*$)';
+        // Znak też bywa jednostką („99,95 %”, „21,50 °C”, „12,50 Ø”) — sama reguła
+        // „za kwotą stoi słowo” by ich nie ochroniła, bo to nie są litery.
+        $priceTail = '(?!\s*[%°Ø‰])(?=\s*(?:'.$word.'|za\b)|\s*[(\[]\s*(?:'.$word.')|\s*[^\p{L}(\[\s]|\s*$)';
 
         $patterns = [
             // „c. netto......24,00 PLN/szt”, „cena: 39,00 zł”, „cena jednostkowa 189,00”
             '/(?<![\p{L}])(?:'.$word.')(?:\s*(?:'.$word.'|'.$filler.'))*\s*[:.\s]*\.{0,}\s*'.$sum.$notPhysical.'\s*(?:'.$word.')?'.$unit.$per.$bare.'/iu',
-            // „4 497,00PLN/szt.” — liczba przyklejona do waluty
-            '/'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.$per.'/iu',
+            // „4 497,00PLN/szt.” — liczba przyklejona do waluty; „100 - 120 zł” to jedna
+            // rozpiętość cen, więc bierzemy ją w całości, inaczej w cytacie zostaje „100 -”
+            '/(?:'.$amount.'\s*[-–—]\s*)?'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.$per.'/iu',
             // „24,00/szt.” i „12,50 za szt.” — cena bez waluty. Tylko przy jednostce
             // handlowej i tylko dla kwoty z groszami: „120,5 g/m2” to gramatura,
             // a „12,5 mb” długość, nie cena.

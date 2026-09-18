@@ -39,7 +39,7 @@ final class ClientInquiryService
     private const PRICE_MODES = ['none', 'catalog', 'catalog_margin'];
 
     /** Jednostki z maila, które umiemy oddzielić od liczby („30szt”, „4 pary”, „2 op.”). */
-    private const UNIT_PATTERN = '(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?)';
+    private const UNIT_PATTERN = '(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?|kartonów|kartony|karton[a-z]*)';
 
     private ?int $minMatchScore = null;
 
@@ -1487,7 +1487,7 @@ final class ClientInquiryService
         // Lista zamknięta: każde słowo spoza niej zostawia wiersz pozycją, bo „Co najmniej
         // 100 par rękawic?” to zamówienie, a nie pytanie o ofertę.
         return preg_match(
-            '/^(?:czy|jak(?!\s+naj)|jaki|jaka|jaką|jakie|jakiej|jakim|jakich|jakimi|kt[oó]r[aąeęyi]\w*|kto|kiedy|gdzie|ile|dlaczego|w\s+jakim|prosz[ęe]\s+o\s+(?:podanie|informacj\w*)|prosimy\s+o\s+(?:podanie|informacj\w*))\b/iu',
+            '/^(?:czy|jak(?!\s+naj\w*\s+\d)|jaki|jaka|jaką|jakie|jakiej|jakim|jakich|jakimi|kt[oó]r[aąeęyi]\w*|kto|kiedy|gdzie|ile|dlaczego|w\s+jakim|prosz[ęe]\s+o\s+(?:podanie|informacj\w*)|prosimy\s+o\s+(?:podanie|informacj\w*))\b/iu',
             trim($rest)
         ) === 1;
     }
@@ -1551,7 +1551,7 @@ final class ClientInquiryService
             // „Rękawice w kartonie 100 szt.” to zawartość opakowania, ale „Karton zbiorczy
             // na odpady 20 szt.” i „nóż do kartonów 10 szt.” to nazwy wyrobów. Karton liczy
             // się jako opakowanie tylko wtedy, gdy nie otwiera wiersza i nie stoi po przyimku.
-            if (preg_match('/\S+\s+(?:w\s+)?karton(?:ie|y|ów|ach)?\s*[-–—]?\s*$/iu', $before) === 1
+            if (preg_match('/\S+\s+(?:w\s+)?karton(?:ie|y|ów|ach)?\s*$/iu', $before) === 1
                 && preg_match('/(?<![\p{L}])(?:do|na|dla|pod|przy|ze?)\s+karton\w*\s*[-–—]?\s*$/iu', $before) !== 1) {
                 continue;
             }

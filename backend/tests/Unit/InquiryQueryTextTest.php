@@ -129,6 +129,11 @@ final class InquiryQueryTextTest extends TestCase
             ['Wysokość robocza ....... 1,80 metra', ['1,80 metra']],
             ['Nauszniki ....... 32,50 (dB)', ['32,50 (dB)']],
             ['Rękawice nitrylowe, ilość ....... 100,00 szt.', ['100,00 szt']],
+            // jednostka bywa znakiem, nie słowem — sama reguła „za kwotą stoi słowo” by tego nie ochroniła
+            ['Maska FFP3, skuteczność filtracji ....... 99,95 % skuteczności', ['99,95 %']],
+            ['Płyn do dezynfekcji, zawartość alkoholu ....... 70,50 %', ['70,50 %']],
+            // samotne „C” na końcu wiersza to stopnie, a nie urwane „c.” z ceny
+            ['Kurtka zimowa, temperatura pracy -20 C', ['-20 C']],
             ['Rękawice nitrylowe ...... 18 (opakowania po 100 szt.)', ['18 (opakowania po 100 szt']],
             // rozpiętość cen z tekstem za nią zostaje w całości albo znika w całości,
             // nigdy jako strzępek liczby
@@ -200,6 +205,8 @@ final class InquiryQueryTextTest extends TestCase
             // przestankowy; jeśli stoi tam słowo („6,00 bar”, „24,00 (rozmiar 9)”),
             // liczba opisuje wyrób i zostaje — patrz test niżej
             'Buty robocze S3 ...... 19,50 - 25,50 rozmiar 44',
+            // rozpiętość z walutą znika w całości — zostawał sam początek „100 -”
+            'Rękawice robocze skórzane ...... 100 - 120 zł',
             'Kask ochronny ...... 24,00, rozmiar 58',
         ]);
     }

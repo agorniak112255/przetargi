@@ -454,6 +454,20 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame(['100', 'par'], [$items[0]['qty'], $items[0]['unit']]);
     }
 
+    public function test_cartons_ordered_after_a_dash_are_the_quantity(): void
+    {
+        $items = $this->service()->parseLineItemsFromBody(
+            '1. Worki na odpady 120 l, 20 szt. w kartonie - 30 kartonow
+2. Rekawice lateksowe w kartonie 100 szt.
+3. Papier toaletowy, 36 rolek w kartonie - 20 kartonow'
+        );
+
+        // po mysliniku zaczyna sie ilosc zamawiana, a nie zawartosc opakowania
+        $this->assertSame(['30', 'kartonow'], [$items[0]['qty'], $items[0]['unit']]);
+        $this->assertSame(['20', 'kartonow'], [$items[2]['qty'], $items[2]['unit']]);
+        $this->assertNull($items[1]['qty']);
+    }
+
     public function test_question_words_cover_short_forms_but_not_ordinary_words(): void
     {
         $svc = $this->service();
@@ -465,6 +479,12 @@ final class ClientInquiryServiceTest extends TestCase
 3) Rekawice nitrylowe 100 par'
         );
         $this->assertSame(['Rekawice nitrylowe'], array_column($questions, 'query'));
+
+        // pytanie bez liczby zostaje pytaniem
+        $this->assertSame([], $svc->parseLineItemsFromBody(
+            '1) Jak najlepiej zapakowac?
+2) Jak dlugo czekamy?'
+        ));
 
         // „Co najmniej 100 par rekawic?” to zamowienie, a nie pytanie o oferte
         $order = $svc->parseLineItemsFromBody(
