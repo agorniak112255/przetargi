@@ -307,6 +307,28 @@ final class ProductSizeVariantTest extends TestCase
         $this->assertSame('8', $svc->extractSize('Wyrób testowy', 'AB12-34567-08'));
     }
 
+    /**
+     * Karta podająca sam token („XXL”) nie ma słowa kluczowego, więc parser list nic nie znajdzie
+     * i dotąd ten pusty wynik nadpisywał wartość z karty — 144 karty w katalogu miały pusty
+     * rozmiar mimo znanego opakowania. Kategoria nadal odsiewa oznaczenia nie z tej skali.
+     */
+    #[Test]
+    public function bare_size_token_is_kept_when_it_fits_the_category(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame('xxl', $svc->bareLabelForCategory('XXL', 'rekawice'));
+        $this->assertSame('10', $svc->bareLabelForCategory('10', 'rekawice'));
+        $this->assertSame('s-xxl', $svc->bareLabelForCategory('S-XXL', 'odziez'));
+        $this->assertSame('36-48', $svc->bareLabelForCategory('36-48', 'obuwie'));
+
+        // etykieta odzieżowa przy obuwiu to nadal śmieć, tak samo jak dotąd
+        $this->assertNull($svc->bareLabelForCategory('1-5XL', 'obuwie'));
+        $this->assertNull($svc->bareLabelForCategory('s-xxl', 'obuwie'));
+        $this->assertNull($svc->bareLabelForCategory('brak danych', 'rekawice'));
+        $this->assertNull($svc->bareLabelForCategory('', null));
+    }
+
     /** Tabela rozmiarów z odpowiednikami liczbowymi: rozmiarem jest litera, nie liczby z nawiasu. */
     #[Test]
     public function letter_size_table_keeps_every_letter(): void

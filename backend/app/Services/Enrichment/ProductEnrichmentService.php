@@ -3135,6 +3135,15 @@ final class ProductEnrichmentService
             $blob,
             $category
         );
+        if ($label === null) {
+            // Parser czyta rozmiary po słowie kluczowym („Rozmiary: …”). Gdy karta podaje sam
+            // token („XXL”), nic nie znajdzie — a dotąd ten pusty wynik i tak nadpisywał wartość
+            // z karty. Sięgamy wtedy po to, co mamy: najpierw wskazanie modelu, potem rozmiar
+            // pozycji cennika. Kategoria nadal odsiewa bzdury w rodzaju „1-5XL” przy obuwiu.
+            $claimed = is_string($attributes['rozmiar'] ?? null) ? $attributes['rozmiar'] : null;
+            $label = $sizes->bareLabelForCategory($claimed, $category)
+                ?? $sizes->bareLabelForCategory((string) $product->packaging, $category);
+        }
         $found = $label !== null ? $sizes->parseSizeList($label) : [];
         if ($found === [] && $label !== null) {
             $found = $sizes->parseSizesFromText($label);

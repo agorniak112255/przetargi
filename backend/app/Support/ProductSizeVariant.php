@@ -351,6 +351,27 @@ final class ProductSizeVariant
     }
 
     /**
+     * Gołe oznaczenie rozmiaru („XXL”, „10”, „S-XXL”, „7, 8, 9”) sprawdzone kategorią wyrobu.
+     * `labelFromTexts` czyta rozmiary po słowie kluczowym („Rozmiary: …”) i pojedynczego
+     * tokenu bez tego słowa nie widzi — a to on bywa jedyną wartością, jaką mamy. Null, gdy
+     * tekst nie jest rozmiarem albo nie pasuje do kategorii (np. „1-5XL” przy obuwiu).
+     */
+    public function bareLabelForCategory(?string $raw, ?string $category): ?string
+    {
+        $raw = trim((string) $raw);
+        if ($raw === '') {
+            return null;
+        }
+        $sizes = $this->parseSizeList($raw);
+        if ($sizes === []) {
+            $single = $this->normalizeSizeToken($raw);
+            $sizes = $single !== null ? [$single] : [];
+        }
+
+        return $this->formatPackaging($this->filterByCategory($sizes, $category));
+    }
+
+    /**
      * @param  list<string>  $sizes
      */
     public function formatPackaging(array $sizes): ?string
