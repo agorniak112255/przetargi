@@ -462,8 +462,15 @@ final class ClientInquiryServiceTest extends TestCase
 3. Papier toaletowy, 36 rolek w kartonie - 20 kartonow'
         );
 
-        // po mysliniku zaczyna sie ilosc zamawiana, a nie zawartosc opakowania
+        // po mysliniku ilosc liczy sie tylko przy jednostce opakowaniowej
         $this->assertSame(['30', 'kartonow'], [$items[0]['qty'], $items[0]['unit']]);
+        $pieces = $this->service()->parseLineItemsFromBody(
+            '1. Papier toaletowy w kartonie - 100 szt.
+2. Rekawice, 20 szt. w opakowaniu - 10 opakowan'
+        );
+        // „w kartonie - 100 szt.” to nadal zawartosc opakowania
+        $this->assertNull($pieces[0]['qty']);
+        $this->assertSame(['10', 'opakowan'], [$pieces[1]['qty'], $pieces[1]['unit']]);
         $this->assertSame(['20', 'kartonow'], [$items[2]['qty'], $items[2]['unit']]);
         $this->assertNull($items[1]['qty']);
     }
@@ -479,6 +486,22 @@ final class ClientInquiryServiceTest extends TestCase
 3) Rekawice nitrylowe 100 par'
         );
         $this->assertSame(['Rekawice nitrylowe'], array_column($questions, 'query'));
+
+        // wiersz z iloscia i jednostka jest zamowieniem, choćby zaczynal sie od „Jak”
+        $order = $svc->parseLineItemsFromBody(
+            '1) Jak najszybciej potrzebujemy 100 par rekawic nitrylowych?
+2) Jak dlugo trwa dostawa?'
+        );
+        $this->assertCount(1, $order);
+        $this->assertSame(['100', 'par'], [$order[0]['qty'], $order[0]['unit']]);
+
+        // przymiotnik „kartonowe” nie jest jednostka
+        $adj = $svc->parseLineItemsFromBody(
+            '1. 2 kartonowe pudla archiwizacyjne
+2. Pudla 5 kartonowych wkladek, 20 szt.'
+        );
+        $this->assertNull($adj[0]['qty']);
+        $this->assertSame(['20', 'szt.'], [$adj[1]['qty'], $adj[1]['unit']]);
 
         // pytanie bez liczby zostaje pytaniem
         $this->assertSame([], $svc->parseLineItemsFromBody(

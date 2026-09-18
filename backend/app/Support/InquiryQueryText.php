@@ -188,9 +188,6 @@ final class InquiryQueryText
         $patterns = [
             // „c. netto......24,00 PLN/szt”, „cena: 39,00 zł”, „cena jednostkowa 189,00”
             '/(?<![\p{L}])(?:'.$word.')(?:\s*(?:'.$word.'|'.$filler.'))*\s*[:.\s]*\.{0,}\s*'.$sum.$notPhysical.'\s*(?:'.$word.')?'.$unit.$per.$bare.'/iu',
-            // „4 497,00PLN/szt.” — liczba przyklejona do waluty; „100 - 120 zł” to jedna
-            // rozpiętość cen, więc bierzemy ją w całości, inaczej w cytacie zostaje „100 -”
-            '/(?:'.$amount.'\s*[-–—]\s*)?'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.$per.'/iu',
             // „24,00/szt.” i „12,50 za szt.” — cena bez waluty. Tylko przy jednostce
             // handlowej i tylko dla kwoty z groszami: „120,5 g/m2” to gramatura,
             // a „12,5 mb” długość, nie cena.
@@ -207,6 +204,10 @@ final class InquiryQueryText
             // Goła liczba po kropkach bywa ilością albo długością („....... 32 dB”,
             // „...... 100 szt./op.”), więc bierzemy ją tylko przy walucie albo na końcu zapisu.
             '/\.{3,}\s*'.$sum.'(?>(?:\s*[-–—]\s*'.$amount.')?)(?=\s*(?:pln|zł|zl|eur|usd|netto|brutto)(?![\p{L}])|\s*za\s+(?:\d{1,3}\s*)?'.self::TRADE_UNIT.'|\s*[(\[]\s*(?:'.$word.')|\s*[,;)\]]|\s*\.(?!\d)|\s*$)(?:\s*'.$word.')*'.$unit.$per.$bare.'/iu',
+            // Waluta po kwocie („4 497,00PLN/szt.”) — rozpiętość cen zabrały już wzorce
+            // po ciągu kropek, bo tylko tam wiadomo, że liczba przed myślnikiem jest kwotą,
+            // a nie końcówką kodu wyrobu („A2P3 - 24,00 zł”).
+            '/'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.$per.'/iu',
             // osierocone „c. netto”, gdy liczbę zabrał wcześniejszy wzorzec
             '/\bc\.\s*netto\b/iu',
             // „masa netto 20 kg”, „waga produktu brutto 25 kg” — tu „netto” opisuje

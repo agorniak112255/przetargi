@@ -39,7 +39,7 @@ final class ClientInquiryService
     private const PRICE_MODES = ['none', 'catalog', 'catalog_margin'];
 
     /** Jednostki z maila, które umiemy oddzielić od liczby („30szt”, „4 pary”, „2 op.”). */
-    private const UNIT_PATTERN = '(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?|kartonów|kartony|karton[a-z]*)';
+    private const UNIT_PATTERN = '(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?|karton(?:y|ów|ow|ami|ach|ie|a|u)?(?![\p{L}]))';
 
     private ?int $minMatchScore = null;
 
@@ -1483,11 +1483,16 @@ final class ClientInquiryService
         if (! str_ends_with(trim($rest), '?')) {
             return false;
         }
+        // „Jak najszybciej potrzebujemy 100 par rękawic?” to zamówienie zapisane jako
+        // pytanie — ilość z jednostką znaczy, że wiersz niesie pozycję, a nie pytanie.
+        if (preg_match('/\d{1,5}\s*'.self::UNIT_PATTERN.'/iu', $rest) === 1) {
+            return false;
+        }
 
         // Lista zamknięta: każde słowo spoza niej zostawia wiersz pozycją, bo „Co najmniej
         // 100 par rękawic?” to zamówienie, a nie pytanie o ofertę.
         return preg_match(
-            '/^(?:czy|jak(?!\s+naj\w*\s+\d)|jaki|jaka|jaką|jakie|jakiej|jakim|jakich|jakimi|kt[oó]r[aąeęyi]\w*|kto|kiedy|gdzie|ile|dlaczego|w\s+jakim|prosz[ęe]\s+o\s+(?:podanie|informacj\w*)|prosimy\s+o\s+(?:podanie|informacj\w*))\b/iu',
+            '/^(?:czy|jak|jaki|jaka|jaką|jakie|jakiej|jakim|jakich|jakimi|kt[oó]r[aąeęyi]\w*|kto|kiedy|gdzie|ile|dlaczego|w\s+jakim|prosz[ęe]\s+o\s+(?:podanie|informacj\w*)|prosimy\s+o\s+(?:podanie|informacj\w*))\b/iu',
             trim($rest)
         ) === 1;
     }
@@ -1542,17 +1547,23 @@ final class ClientInquiryService
             $offset = (int) $match[0][1];
             $before = mb_strtolower(substr($rest, 0, $offset));
             $after = substr($rest, $offset + strlen((string) $match[0][0]));
+            // „20 szt. w kartonie - 30 kartonów” zamawia kartony, ale „w kartonie - 100 szt.”
+            // to nadal zawartość opakowania: po myślniku liczy się jednostka opakowaniowa.
+            $packAfterDash = preg_match('/[-–—]\s*$/u', $before) === 1
+                && preg_match('/^(?:karton|opak|opakowa|op\.|zest|kpl|komplet)/iu', trim($match[2][0])) === 1;
 
             // „op. 100 szt.”, „w opakowaniu 100 szt.”, „a 100 szt.”, „x 100 szt.” —
             // to zawartość opakowania, a klient zamawia opakowania, nie sztuki
-            if (preg_match('/(?:op\.|opak\.?|opakowani[ue]|opakowanie zbiorcze|pak\.|zawiera(?:jący|jące)?|po|(?<![\p{L}\d])[ax])\s*[-–—]?\s*$/iu', $before) === 1) {
+            if (preg_match('/(?:op\.|opak\.?|opakowani[ue]|opakowanie zbiorcze|pak\.|zawiera(?:jący|jące)?|po|(?<![\p{L}\d])[ax])\s*[-–—]?\s*$/iu', $before) === 1
+                && ! $packAfterDash) {
                 continue;
             }
             // „Rękawice w kartonie 100 szt.” to zawartość opakowania, ale „Karton zbiorczy
             // na odpady 20 szt.” i „nóż do kartonów 10 szt.” to nazwy wyrobów. Karton liczy
             // się jako opakowanie tylko wtedy, gdy nie otwiera wiersza i nie stoi po przyimku.
-            if (preg_match('/\S+\s+(?:w\s+)?karton(?:ie|y|ów|ach)?\s*$/iu', $before) === 1
-                && preg_match('/(?<![\p{L}])(?:do|na|dla|pod|przy|ze?)\s+karton\w*\s*[-–—]?\s*$/iu', $before) !== 1) {
+            if (preg_match('/\S+\s+(?:w\s+)?karton(?:ie|y|ów|ach)?\s*[-–—]?\s*$/iu', $before) === 1
+                && preg_match('/(?<![\p{L}])(?:do|na|dla|pod|przy|ze?)\s+karton\w*\s*[-–—]?\s*$/iu', $before) !== 1
+                && ! $packAfterDash) {
                 continue;
             }
             // „100 szt./op.”, „100 szt. w opak.”, „20 szt. w kartonie” — tak samo
