@@ -26,6 +26,7 @@ async function refresh() {
   const settings = await getSettings()
   el('baseUrl').value = settings.baseUrl
   el('useAppSubject').checked = settings.useAppSubject
+  await showLastTiming()
   el('connected').hidden = !settings.token
   el('connected').textContent = settings.token ? 'Dodatek jest połączony z aplikacją.' : ''
 
@@ -280,6 +281,23 @@ el('getUpdate').addEventListener('click', async (event) => {
   const link = event.target.dataset.link || ''
   if (link !== '') await browser.windows.openDefaultBrowser(link)
 })
+/**
+ * Ile trwało ostatnie otwarcie okna odpowiedzi, z podziałem na etapy. Bez tego
+ * „u mnie się wlecze” zostaje bez liczb, a powiadomienie z pomiarem bywa
+ * w systemie wyciszone.
+ */
+async function showLastTiming() {
+  const { lastReplyTiming } = await browser.storage.local.get({ lastReplyTiming: null })
+  if (!lastReplyTiming || !lastReplyTiming.text) {
+    el('lastTiming').textContent = 'Ostatnie otwarcie odpowiedzi: jeszcze żadnego.'
+
+    return
+  }
+  const seconds = (Number(lastReplyTiming.total || 0) / 1000).toFixed(1)
+  el('lastTiming').textContent = 'Ostatnie otwarcie odpowiedzi: ' + seconds + ' s ('
+    + lastReplyTiming.text + ').'
+}
+
 el('useAppSubject').addEventListener('change', async (event) => {
   await setSettings({ useAppSubject: event.target.checked })
 })

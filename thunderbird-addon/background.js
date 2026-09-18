@@ -247,6 +247,14 @@ async function reportTiming(marks) {
   const text = parts.map(([label, ms]) => label + ' ' + ms + ' ms').join(', ')
   console.info('Supon: odpowiedź w ' + total + ' ms (' + text + ')')
 
+  // Powiadomienia bywają w systemie wyciszone, a wtedy pomiar przepadał. Ostatni
+  // wynik zostaje w ustawieniach dodatku, skąd można go po prostu przepisać.
+  try {
+    await browser.storage.local.set({ lastReplyTiming: { total, text, at: Date.now() } })
+  } catch (e) {
+    console.warn('Nie udało się zapisać pomiaru:', e.message)
+  }
+
   if (total >= SLOW_REPLY_SECONDS * 1000) {
     await notify('Okno odpowiedzi po ' + Math.round(total / 1000) + ' s', text)
   }
