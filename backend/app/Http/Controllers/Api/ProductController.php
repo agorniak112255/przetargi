@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\DestroyProductsRequest;
 use App\Http\Requests\UpdateProductCategoryRequest;
+use App\Http\Requests\UpdateProductManualSpecsRequest;
 use App\Http\Requests\UpdateProductShopSourceRequest;
 use App\Models\B2bAccount;
 use App\Models\PrestaCategory;
@@ -300,6 +301,21 @@ class ProductController extends Controller
 
         return response()->json([
             'category' => $product->category,
+        ]);
+    }
+
+    /**
+     * Parametry wpisane ręcznie — jedyne dane karty, których nie rusza żadna automatyka.
+     * Zapis zastępuje cały zestaw wierszy: panel przysyła tabelkę w całości.
+     */
+    public function updateManualSpecs(UpdateProductManualSpecsRequest $request, Product $product): JsonResponse
+    {
+        $rows = Product::manualSpecRows($request->validated('specs'));
+        $product->manual_specs = $rows !== [] ? $rows : null;
+        $product->save();
+
+        return response()->json([
+            'manual_specs' => $product->manual_specs,
         ]);
     }
 

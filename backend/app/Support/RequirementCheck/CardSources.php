@@ -32,6 +32,12 @@ final class CardSources
             }
         }
 
+        // Parametry wpisane ręcznie stoją zaraz za cennikiem: są wskazywalne co do wiersza
+        // i nikt ich nie nadpisuje, więc przy wymaganiu przetargu są najpewniejszym cytatem.
+        foreach (Product::manualSpecRows($product->manual_specs) as $row) {
+            self::push($out, CardSource::MANUAL, $row['label'], $row['value']);
+        }
+
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
         foreach ([
             CardSource::SPECS => 'specs',

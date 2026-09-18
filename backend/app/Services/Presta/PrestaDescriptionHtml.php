@@ -66,7 +66,14 @@ final class PrestaDescriptionHtml
             }
         }
 
-        if ($attrPairs === [] && ! $hasLists) {
+        // Parametry wpisane ręcznie liczą się jak każda inna sekcja: karta, która ma tylko je
+        // i prozę, nie może wypaść do wersji zapasowej bez tabelki.
+        $manualPairs = [];
+        foreach (Product::manualSpecRows($product->manual_specs) as $row) {
+            $manualPairs[] = [$row['label'], $row['value']];
+        }
+
+        if ($attrPairs === [] && $manualPairs === [] && ! $hasLists) {
             return $this->fallbackHtml($rawDescription);
         }
 
@@ -80,6 +87,7 @@ final class PrestaDescriptionHtml
             $chunk = match ($id) {
                 'description' => $prose !== '' ? $this->proseHtml($prose) : '',
                 'attributes' => $attrPairs !== [] ? $this->attributesBox($attrPairs, $emphasis) : '',
+                'manual_specs' => $manualPairs !== [] ? $this->attributesBox($manualPairs, $emphasis, 'Parametry') : '',
                 'sources' => '',
                 default => isset(self::LIST_KEYS[$id])
                     ? $this->listSection(
@@ -95,7 +103,7 @@ final class PrestaDescriptionHtml
             if ($chunk === '') {
                 continue;
             }
-            $html .= $id === 'attributes' || isset(self::LIST_KEYS[$id])
+            $html .= $id === 'attributes' || $id === 'manual_specs' || isset(self::LIST_KEYS[$id])
                 ? $chunk
                 : $this->emphasize($chunk, $emphasis);
         }
@@ -177,11 +185,11 @@ final class PrestaDescriptionHtml
     /**
      * @param  list<array{0: string, 1: string}>  $pairs
      */
-    private function attributesBox(array $pairs, string $emphasis = 'none'): string
+    private function attributesBox(array $pairs, string $emphasis = 'none', string $title = 'Atrybuty BHP'): string
     {
         [$bg, $border] = $this->emphasisColors($emphasis, '#f8fafc', '#e2e8f0');
         $rows = array_chunk($pairs, 3);
-        $body = '<tr><td colspan="3" style="font-weight:700;font-size:13px;padding:0 0 8px">Atrybuty BHP</td></tr>';
+        $body = '<tr><td colspan="3" style="font-weight:700;font-size:13px;padding:0 0 8px">'.$this->e($title).'</td></tr>';
         foreach ($rows as $row) {
             $body .= '<tr>';
             for ($i = 0; $i < 3; $i++) {

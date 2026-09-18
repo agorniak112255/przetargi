@@ -29,6 +29,9 @@ class Product extends Model
     /** Krótszy tekst to etykieta, nie opis wyrobu (zob. hasDescriptionText). */
     public const DESCRIPTION_MIN_CHARS = 24;
 
+    /** Ile wierszy parametrów wolno wpisać ręcznie na jednej karcie. */
+    public const MANUAL_SPECS_MAX_ROWS = 60;
+
     protected $fillable = [
         'sku',
         'name',
@@ -49,6 +52,7 @@ class Product extends Model
         'embedding_hash',
         'norms',
         'price_list_attributes',
+        'manual_specs',
         'catalog_price_net',
         'discount_percent',
         'purchase_price',
@@ -104,6 +108,7 @@ class Product extends Model
             'enriched_at' => 'datetime',
             'embedding_synced_at' => 'datetime',
             'price_list_attributes' => 'array',
+            'manual_specs' => 'array',
             'enrichment_payload' => 'array',
             'enrichment_trace' => 'array',
         ];
@@ -140,6 +145,33 @@ class Product extends Model
      * jest takich kart kilkanaście, a model i dowody ze słów nie mają wtedy czego potwierdzić. Opis powtarzający nazwę też nie:
      * import cennika 3M 2026 zapisał długie nazwy produktów jako opis (2939 kart bez pobranego opisu).
      */
+    /**
+     * Wiersze parametrów wpisanych ręcznie, odsiane z tego, co mogło wpaść do kolumny JSON.
+     * Jedno miejsce czytania: indeks wyszukiwania, karta wymagań i eksport mają widzieć to samo.
+     *
+     * @return list<array{label: string, value: string}>
+     */
+    public static function manualSpecRows(mixed $raw): array
+    {
+        $out = [];
+        foreach (is_array($raw) ? $raw : [] as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $label = trim((string) ($row['label'] ?? ''));
+            $value = trim((string) ($row['value'] ?? ''));
+            if ($label === '' || $value === '') {
+                continue;
+            }
+            $out[] = ['label' => $label, 'value' => $value];
+            if (count($out) >= self::MANUAL_SPECS_MAX_ROWS) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
     public function hasDescriptionText(): bool
     {
         $d = trim((string) ($this->description ?? ''));

@@ -85,6 +85,9 @@ export function ProductDetail() {
   const [priceHistory, setPriceHistory] = useState<ProductPriceHistoryRow[]>([])
   const [categoryOptions, setCategoryOptions] = useState<{ value: string; label: string }[]>([])
   const [categoryBusy, setCategoryBusy] = useState(false)
+  const [specsRows, setSpecsRows] = useState<{ label: string; value: string }[]>([])
+  const [specsBusy, setSpecsBusy] = useState(false)
+  const [specsMsg, setSpecsMsg] = useState('')
   const [categoryMsg, setCategoryMsg] = useState('')
   const [shopUrlDraft, setShopUrlDraft] = useState('')
   const [shopUrlBusy, setShopUrlBusy] = useState(false)
@@ -116,6 +119,38 @@ export function ProductDetail() {
   useEffect(() => {
     setShopUrlDraft(p?.shop_source_url ?? '')
   }, [p?.id, p?.shop_source_url])
+
+  useEffect(() => {
+    setSpecsRows(p?.manual_specs ?? [])
+    setSpecsMsg('')
+  }, [p?.id, p?.manual_specs])
+
+  async function saveManualSpecs(rows: { label: string; value: string }[]) {
+    if (!id || !p) return
+    const clean = rows
+      .map((r) => ({ label: r.label.trim(), value: r.value.trim() }))
+      .filter((r) => r.label !== '' || r.value !== '')
+    if (clean.some((r) => r.label === '' || r.value === '')) {
+      setErr('Każdy wiersz ma nazwę parametru i wartość — inaczej nie wiadomo, co zapisujemy.')
+      return
+    }
+    setSpecsBusy(true)
+    setSpecsMsg('')
+    setErr('')
+    try {
+      const res = await api<{ manual_specs: { label: string; value: string }[] | null }>(
+        `/products/${id}/manual-specs`,
+        { method: 'PATCH', body: JSON.stringify({ specs: clean }) },
+      )
+      setP({ ...p, manual_specs: res.manual_specs })
+      setSpecsRows(res.manual_specs ?? [])
+      setSpecsMsg('Zapisano')
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zapisać parametrów')
+    } finally {
+      setSpecsBusy(false)
+    }
+  }
 
   async function saveCategory(next: string) {
     if (!id || !p) return
@@ -878,6 +913,76 @@ export function ProductDetail() {
           </div>
         </div>
       )}
+
+      <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+        <h2 className="mb-2 text-sm font-semibold">Parametry wpisane ręcznie</h2>
+        <p className="mb-3 text-xs text-slate-600">
+          Jedyne dane karty, których nie rusza żadna automatyka: ani import cennika, ani pobieranie
+          z witryny dostawcy, ani wzbogacanie. Tu wpisz to, czego nie ma w opisie producenta, a jest
+          potrzebne przy wymaganiach przetargu. Trafiają do wyszukiwania, do porównania z wymaganiem
+          (z podpisem „wpisane ręcznie”) i do opisu wysyłanego do sklepu.
+        </p>
+        <table className="w-full text-left text-xs">
+          <tbody>
+            {specsRows.map((row, i) => (
+              <tr key={i} className="border-b last:border-0">
+                <td className="w-48 p-1">
+                  <input
+                    value={row.label}
+                    disabled={specsBusy}
+                    placeholder="Parametr, np. Tłumienie"
+                    onChange={(e) =>
+                      setSpecsRows(specsRows.map((r, j) => (i === j ? { ...r, label: e.target.value } : r)))
+                    }
+                    className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                  />
+                </td>
+                <td className="p-1">
+                  <input
+                    value={row.value}
+                    disabled={specsBusy}
+                    placeholder="Wartość, np. SNR 32 dB"
+                    onChange={(e) =>
+                      setSpecsRows(specsRows.map((r, j) => (i === j ? { ...r, value: e.target.value } : r)))
+                    }
+                    className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
+                  />
+                </td>
+                <td className="w-10 p-1 text-right">
+                  <button
+                    type="button"
+                    disabled={specsBusy}
+                    onClick={() => setSpecsRows(specsRows.filter((_, j) => i !== j))}
+                    title="Usuń wiersz"
+                    className="rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    ×
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            disabled={specsBusy}
+            onClick={() => setSpecsRows([...specsRows, { label: '', value: '' }])}
+            className="rounded-lg border border-slate-300 px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Dodaj wiersz
+          </button>
+          <button
+            type="button"
+            disabled={specsBusy}
+            onClick={() => void saveManualSpecs(specsRows)}
+            className="rounded-lg bg-slate-900 px-3 py-1 text-[11px] font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {specsBusy ? 'Zapisuję…' : 'Zapisz parametry'}
+          </button>
+          {specsMsg && <span className="text-[11px] text-emerald-700">{specsMsg}</span>}
+        </div>
+      </div>
 
       {p.price_list_attributes && Object.keys(p.price_list_attributes).length > 0 && (
         <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">

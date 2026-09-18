@@ -128,6 +128,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/products/manufacturers', [ProductController::class, 'manufacturers'])->middleware('permission:products.view');
     Route::get('/products/categories', [ProductController::class, 'categoryOptions'])->middleware('permission:products.view');
     Route::patch('/products/{product}/category', [ProductController::class, 'updateCategory'])->middleware('permission:products.view');
+    Route::patch('/products/{product}/manual-specs', [ProductController::class, 'updateManualSpecs'])
+        ->middleware('permission:products.view');
     Route::patch('/products/{product}/shop-source', [ProductController::class, 'updateShopSource'])
         ->middleware('permission:price_lists.import');
     Route::get('/products/catalog-health', [ProductCatalogHealthController::class, 'show'])

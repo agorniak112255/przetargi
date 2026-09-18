@@ -144,7 +144,9 @@ final class EnrichmentDescriptionTemplateServiceTest extends TestCase
         $resolved = $service->resolvedForProduct($product);
         $this->assertSame('rekawice', $resolved['kategoria_bhp']);
         $this->assertSame('description', $resolved['card'][0]['id']);
-        $this->assertSame('attributes', $resolved['card'][1]['id']);
+        // za opisem stoja parametry wpisane recznie, dopiero po nich atrybuty wyliczone
+        $this->assertSame('manual_specs', $resolved['card'][1]['id']);
+        $this->assertSame('attributes', $resolved['card'][2]['id']);
 
         $card = EnrichmentDescriptionLayouts::defaultBlocks('card');
         $card[0] = ['id' => 'norms', 'visible' => true, 'emphasis' => 'highlight'];

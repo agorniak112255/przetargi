@@ -18,6 +18,9 @@ final readonly class CardSource
     /** Parametry wypisane w kolumnach cennika dostawcy — cytat z dokumentu producenta. */
     public const PRICE_LIST = 'price_list';
 
+    /** Parametr wpisany ręcznie na karcie — czego nie ma w żadnym źródle automatycznym. */
+    public const MANUAL = 'manual';
+
     public const SPECS = 'specs';
 
     public const FEATURES = 'features';

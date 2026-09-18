@@ -17,6 +17,7 @@ final class ProductSearchBlob
     public const SOURCE_COLUMNS = [
         'sku', 'name', 'model_name', 'manufacturer', 'category', 'norms',
         'shop_fields_summary', 'description', 'variant_summary', 'enrichment_payload',
+        'manual_specs',
     ];
 
     private const MAX_LENGTH = 16000;
@@ -83,6 +84,9 @@ final class ProductSearchBlob
             (string) ($product->manufacturer ?? ''),
             (string) ($product->category ?? ''),
             (string) ($product->norms ?? ''),
+            // Parametry wpisane ręcznie idą pierwsze: to jedyne dane karty, których nie ma
+            // w żadnym źródle automatycznym, a blob ucinany jest od końca.
+            self::manualSpecsText($product),
             // tabelka z karty wyrobu u dostawcy — przed opisem, bo blob jest ucinany od końca, a te dane są
             // krótkie i gęste (normy, parametry); jak coś ma wypaść z limitu, to proza opisu
             (string) ($product->shop_fields_summary ?? ''),
@@ -92,6 +96,17 @@ final class ProductSearchBlob
             $this->flattenPayload($payload),
             $this->bhpAttributes->toSearchText($this->bhpAttributes->forProduct($product)),
         ], static fn (string $part): bool => trim($part) !== '')));
+    }
+
+    /** Wiersze „parametr: wartość” wpisane ręcznie, jednym ciągiem do indeksu. */
+    public static function manualSpecsText(Product $product): string
+    {
+        $out = [];
+        foreach (Product::manualSpecRows($product->manual_specs) as $row) {
+            $out[] = $row['label'].': '.$row['value'];
+        }
+
+        return implode("\n", $out);
     }
 
     /**

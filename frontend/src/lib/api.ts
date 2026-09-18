@@ -233,6 +233,8 @@ export type Product = {
   norms: string | null
   /** Parametry wypisane w kolumnach cennika dostawcy — cytat z dokumentu, nie odczyt ze strony. */
   price_list_attributes?: Record<string, string> | null
+  /** Parametry wpisane ręcznie — jedyne dane karty, których nie rusza automatyka. */
+  manual_specs?: { label: string; value: string }[] | null
   catalog_price_net: string
   purchase_price: string
   discount_percent?: string

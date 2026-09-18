@@ -57,9 +57,11 @@ final class EnrichmentDescriptionLayoutsTest extends TestCase
 
     public function test_export_follows_custom_card_when_export_inherits(): void
     {
-        $card = EnrichmentDescriptionLayouts::defaultBlocks('card');
-        $card[1]['emphasis'] = 'highlight';
-        $card[3]['emphasis'] = 'accent';
+        // bloki wskazujemy po id, a nie po numerze wiersza: uklad domyslny bywa rozszerzany
+        $card = self::withEmphasis(
+            EnrichmentDescriptionLayouts::defaultBlocks('card'),
+            ['attributes' => 'highlight', 'features' => 'accent']
+        );
         $layout = [
             'inherit_card' => false,
             'inherit_export' => true,
@@ -77,8 +79,7 @@ final class EnrichmentDescriptionLayoutsTest extends TestCase
 
     public function test_stock_export_follows_custom_card_even_without_flag(): void
     {
-        $card = EnrichmentDescriptionLayouts::defaultBlocks('card');
-        $card[1]['emphasis'] = 'highlight';
+        $card = self::withEmphasis(EnrichmentDescriptionLayouts::defaultBlocks('card'), ['attributes' => 'highlight']);
         $layout = [
             'inherit_card' => false,
             'inherit_export' => false,
@@ -89,5 +90,21 @@ final class EnrichmentDescriptionLayoutsTest extends TestCase
         $resolved = EnrichmentDescriptionLayouts::resolve($layout, EnrichmentDescriptionLayouts::defaultStoredLayout());
         $attrs = collect($resolved['export'])->firstWhere('id', 'attributes');
         $this->assertSame('highlight', $attrs['emphasis'] ?? null);
+    }
+
+    /**
+     * @param  list<array{id: string, visible: bool, emphasis: string}>  $blocks
+     * @param  array<string, string>  $emphasis
+     * @return list<array{id: string, visible: bool, emphasis: string}>
+     */
+    private static function withEmphasis(array $blocks, array $emphasis): array
+    {
+        foreach ($blocks as $i => $block) {
+            if (isset($emphasis[$block['id']])) {
+                $blocks[$i]['emphasis'] = $emphasis[$block['id']];
+            }
+        }
+
+        return $blocks;
     }
 }

@@ -25,6 +25,7 @@ final class EnrichmentDescriptionLayouts
     public const BLOCKS = [
         'description' => ['label' => 'Opis', 'surfaces' => ['card', 'export']],
         'attributes' => ['label' => 'Atrybuty BHP', 'surfaces' => ['card', 'export']],
+        'manual_specs' => ['label' => 'Parametry wpisane ręcznie', 'surfaces' => ['card', 'export']],
         'specs' => ['label' => 'Specyfikacja', 'surfaces' => ['card', 'export']],
         'features' => ['label' => 'Cechy', 'surfaces' => ['card', 'export']],
         'materials' => ['label' => 'Materiały', 'surfaces' => ['card', 'export']],
@@ -41,8 +42,8 @@ final class EnrichmentDescriptionLayouts
     public static function defaultBlocks(string $surface): array
     {
         $ids = $surface === self::SURFACE_EXPORT
-            ? ['description', 'attributes', 'specs', 'features', 'materials', 'norms', 'certificates', 'use_cases']
-            : ['description', 'attributes', 'specs', 'features', 'materials', 'norms', 'certificates', 'use_cases', 'documents', 'sources'];
+            ? ['description', 'manual_specs', 'attributes', 'specs', 'features', 'materials', 'norms', 'certificates', 'use_cases']
+            : ['description', 'manual_specs', 'attributes', 'specs', 'features', 'materials', 'norms', 'certificates', 'use_cases', 'documents', 'sources'];
 
         $out = [];
         foreach ($ids as $id) {
@@ -81,7 +82,6 @@ final class EnrichmentDescriptionLayouts
     }
 
     /**
-     * @param  mixed  $raw
      * @return array{inherit_card: bool, inherit_export: bool, card: list<array{id: string, visible: bool, emphasis: string}>, export: list<array{id: string, visible: bool, emphasis: string}>}
      */
     public static function normalize(mixed $raw, bool $isVisualDefault = false): array
@@ -228,7 +228,6 @@ final class EnrichmentDescriptionLayouts
     }
 
     /**
-     * @param  mixed  $raw
      * @return list<array{id: string, visible: bool, emphasis: string}>
      */
     private static function normalizeBlocks(mixed $raw, string $surface): array

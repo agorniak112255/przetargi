@@ -108,6 +108,21 @@ final class B2bManufacturerDescriptionTest extends TestCase
         $this->assertSame($connector->descriptionText, Product::query()->sole()->description);
     }
 
+    public function test_sync_does_not_touch_manually_entered_specs(): void
+    {
+        $product = $this->product('Opis z AI, ktory producent zastapi.');
+        $product->update(['manual_specs' => [['label' => 'Tlumienie', 'value' => 'SNR 32 dB']]]);
+        $connector = $this->connector(MfrFakeConnector::class);
+        $connector->descriptionText = 'Trzewik ARTRA ARMEN z podnoskiem kompozytowym i wkladka antyprzebiciowa.';
+
+        $this->sync($connector);
+
+        // opis producenta wchodzi, ale parametry wpisane recznie zostaja nietkniete
+        $fresh = $product->fresh();
+        $this->assertSame($connector->descriptionText, $fresh?->description);
+        $this->assertSame([['label' => 'Tlumienie', 'value' => 'SNR 32 dB']], $fresh?->manual_specs);
+    }
+
     private function product(string $description, string $manufacturer = 'ARTRA'): Product
     {
         return Product::query()->create([
