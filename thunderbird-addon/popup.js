@@ -14,6 +14,9 @@ let sourceText = ''
 /** Handlowiec zobaczył już cudze zapytanie i mimo to chce założyć własne. */
 let forced = false
 
+/** Po „Anuluj” nie pokazujemy ponownie ostrzeżenia znalezionego na serwerze. */
+let skipServerDuplicate = false
+
 function show(section) {
   for (const name of ['setup', 'known', 'fresh', 'working', 'duplicate']) {
     el(name).hidden = name !== section
@@ -91,6 +94,29 @@ function loadDuplicate(found, text) {
   show('duplicate')
 }
 
+/**
+ * Zapytania z tego maila — u kogokolwiek i z któregokolwiek komputera.
+ * Lokalna pamięć dodatku zna tylko własne zapytania założone na tej maszynie,
+ * a chodzi o to, żeby było widać także zapytanie kolegi (i własne, gdy zakładał
+ * je na innym komputerze).
+ */
+async function inquiriesForMessage(headerMessageId) {
+  if (!headerMessageId) return []
+
+  try {
+    const data = await api('/api/inquiries/lookup', {
+      method: 'POST',
+      body: { message_ids: [headerMessageId] },
+    })
+    const rows = data && data.data ? data.data[headerMessageId] : null
+
+    return Array.isArray(rows) ? rows : []
+  } catch (e) {
+    // Bez połączenia zachowujemy się jak dotąd — ekran zwykłego wysłania.
+    return []
+  }
+}
+
 /** Treść otwartego maila; null, gdy nie da się jej odczytać (komunikat już poszedł). */
 async function readBody() {
   let full
@@ -130,8 +156,19 @@ function showVersion() {
   el('version').textContent = version === '' ? '' : 'Supon Przetargi ' + version
 }
 
+/** Nowa wersja dodatku — z ostatniego sprawdzenia w tle, bez pytania serwera. */
+async function showUpdateNotice() {
+  const state = await lastUpdateCheck()
+  const waiting = state !== null && state.newer === true
+  el('update').hidden = !waiting
+  el('update').textContent = waiting
+    ? 'Dostępna nowa wersja ' + state.version + ' — ustawienia dodatku → Aktualizacje.'
+    : ''
+}
+
 async function init() {
   showVersion()
+  await showUpdateNotice()
 
   const settings = await getSettings()
   if (!settings.token) {
@@ -185,6 +222,24 @@ async function init() {
     return
   }
 
+  if (!skipServerDuplicate) {
+    const rows = await inquiriesForMessage(message.headerMessageId)
+    const own = rows.find((row) => row.mine === true)
+    if (own !== undefined) {
+      // Własne zapytanie z innego komputera — zapamiętujemy, żeby następny raz
+      // był natychmiastowy.
+      await rememberInquiry(message.headerMessageId, own.id)
+      loadKnown(own.id, own.replied_at !== null)
+
+      return
+    }
+    if (rows.length > 0) {
+      loadDuplicate(rows[0], text)
+
+      return
+    }
+  }
+
   if (text.length < 20) {
     status('Treść maila jest za krótka do analizy — uzupełnij ją poniżej.', 'warn')
   }
@@ -234,6 +289,9 @@ async function forceCreate() {
 async function cancelDuplicate() {
   await setPending(message.headerMessageId || null, null)
   duplicate = null
+  // Ostrzeżenie mogło przyjść z serwera, a nie z zapamiętanej odpowiedzi 409 —
+  // bez tego init() pokazałby je z powrotem i przycisk nic by nie dawał.
+  skipServerDuplicate = true
   status('')
   await init()
 }

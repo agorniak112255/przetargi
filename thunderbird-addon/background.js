@@ -52,6 +52,9 @@ async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentA
     await rememberInquiry(headerMessageId, inquiry.id)
     await setPending(headerMessageId, null)
 
+    // Znacznik na liście od razu, bez czekania na kolejne przejście w tle.
+    await markByHeaderId(headerMessageId)
+
     const { baseUrl } = await getSettings()
     await browser.windows.openDefaultBrowser(baseUrl + '/inquiries/' + inquiry.id)
     await notify('Zapytanie #' + inquiry.id + ' gotowe', 'Otworzyłem je w przeglądarce — wybierz produkty.')
@@ -121,7 +124,16 @@ async function insertReply({ inquiryId, messageId }) {
       return { ok: false }
     }
 
-    await rememberComposeTab(tab.id, inquiry.id)
+    // Message-ID oryginału: po wysłaniu odpowiedzi przestawimy znacznik maila.
+    let headerMessageId = null
+    try {
+      const header = await browser.messages.get(messageId)
+      headerMessageId = header && header.headerMessageId ? header.headerMessageId : null
+    } catch (e) {
+      // Bez identyfikatora znacznik przestawi się przy najbliższym przejściu w tle.
+    }
+
+    await rememberComposeTab(tab.id, inquiry.id, headerMessageId)
 
     return { ok: true }
   } catch (e) {
@@ -193,12 +205,116 @@ setInterval(() => {
   pollQueue().catch((e) => console.warn('Sprawdzenie kolejki się nie powiodło:', e.message))
 }, QUEUE_POLL_SECONDS * 1000)
 
+/* --------------------------- aktualizacje dodatku --------------------------- */
+
+/** Co ile godzin pytamy serwer o nową wersję dodatku. */
+const UPDATE_CHECK_HOURS = 6
+
+/** Ile sekund po starcie robimy pierwsze sprawdzenie — żeby nie opóźniać startu. */
+const UPDATE_FIRST_CHECK_SECONDS = 45
+
+/**
+ * Cichy dozór nad wersją. Thunderbird sam pobiera aktualizacje z tego samego
+ * updates.json, ale robi to po cichu i co kilka godzin — powiadomienie mówi
+ * handlowcowi, że nowa wersja jest, i pozwala nie czekać.
+ *
+ * O każdej wersji mówimy tylko raz: powtórka przy każdym sprawdzeniu byłaby
+ * uciążliwa.
+ */
+async function watchVersion() {
+  let state
+  try {
+    state = await checkUpdate()
+  } catch (e) {
+    // Brak sieci albo wyłączony serwer nie jest tu żadnym zdarzeniem.
+    return
+  }
+  if (!state.newer) return
+
+  const { updateNotified } = await browser.storage.local.get({ updateNotified: '' })
+  if (updateNotified === state.version) return
+
+  await browser.storage.local.set({ updateNotified: state.version })
+  await notify(
+    'Nowa wersja dodatku ' + state.version,
+    'Thunderbird zainstaluje ją sam. Od razu: Dodatki i motywy → koło zębate → Sprawdź dostępność aktualizacji.',
+  )
+}
+
+setTimeout(() => {
+  watchVersion().catch((e) => console.warn('Sprawdzenie wersji się nie powiodło:', e.message))
+}, UPDATE_FIRST_CHECK_SECONDS * 1000)
+
+setInterval(() => {
+  watchVersion().catch((e) => console.warn('Sprawdzenie wersji się nie powiodło:', e.message))
+}, UPDATE_CHECK_HOURS * 60 * 60 * 1000)
+
+/* ------------------------- oznaczanie maili na liście ------------------------- */
+
+/** Co ile minut pytamy serwer o nowe i zmienione zapytania. */
+const TAG_SYNC_MINUTES = 5
+
+/** Co które przejście sprawdzamy też maile bez zmian (usunięte zapytania). */
+const TAG_FULL_EVERY = 6
+
+/** Ile sekund po starcie robimy pierwsze przejście — żeby nie opóźniać startu. */
+const TAG_FIRST_SYNC_SECONDS = 25
+
+/** Ile sekund nie pytamy powtórnie o ten sam otwarty mail. */
+const TAG_DISPLAY_QUIET_SECONDS = 60
+
+/** Ostatnio sprawdzone otwarte maile — przeklikiwanie listy nie ma bić w serwer. */
+const recentlyChecked = new Map()
+
+let syncTick = 0
+
+function checkedRecently(headerMessageId) {
+  const at = recentlyChecked.get(headerMessageId)
+  const now = Date.now()
+  if (at !== undefined && now - at < TAG_DISPLAY_QUIET_SECONDS * 1000) return true
+
+  recentlyChecked.set(headerMessageId, now)
+  // Mapa nie może rosnąć bez końca przy całodziennej pracy.
+  if (recentlyChecked.size > 500) recentlyChecked.clear()
+
+  return false
+}
+
+/**
+ * Otwarcie maila: sprawdzamy go od razu, bo to jedyna chwila, w której
+ * handlowiec naprawdę patrzy — a zapytanie kolegi mogło powstać minutę temu.
+ */
+browser.messageDisplay.onMessageDisplayed.addListener(async (tab, message) => {
+  const headerMessageId = message && message.headerMessageId ? message.headerMessageId : ''
+  if (headerMessageId === '' || checkedRecently(headerMessageId)) return
+
+  try {
+    await markByHeaderId(headerMessageId)
+  } catch (e) {
+    console.warn('Nie udało się oznaczyć otwartego maila:', e.message)
+  }
+})
+
+setTimeout(() => {
+  syncTags({ full: true }).catch((e) => console.warn('Pierwsze przejście znaczników:', e.message))
+}, TAG_FIRST_SYNC_SECONDS * 1000)
+
+setInterval(() => {
+  syncTick += 1
+  syncTags({ full: syncTick % TAG_FULL_EVERY === 0 })
+    .catch((e) => console.warn('Przejście znaczników się nie powiodło:', e.message))
+}, TAG_SYNC_MINUTES * 60 * 1000)
+
 browser.runtime.onMessage.addListener((request) => {
   if (request && request.type === 'createInquiry') {
     return createInquiry(request)
   }
   if (request && request.type === 'insertReply') {
     return insertReply(request)
+  }
+  // Ustawienia po włączeniu oznaczania: pierwsze przejście od razu, nie po 5 minutach.
+  if (request && request.type === 'syncTags') {
+    return syncTags({ full: true })
   }
 
   return undefined
@@ -213,18 +329,24 @@ browser.compose.onAfterSend.addListener(async (tab, info) => {
   // „sendLater” trafia do Skrzynki nadawczej, ale odpowiedź jest już zatwierdzona.
   if (info.mode !== 'sendNow' && info.mode !== 'sendLater') return
 
-  const inquiryId = await takeComposeTab(tab.id)
-  if (inquiryId === null) return
+  const entry = await takeComposeTab(tab.id)
+  if (entry === null) return
 
   try {
-    await api('/api/inquiries/' + inquiryId + '/replied', {
+    await api('/api/inquiries/' + entry.inquiryId + '/replied', {
       method: 'POST',
       body: { replied: true },
     })
   } catch (e) {
     // Bez sieci zostaje ręczne „Oznacz wysłane” w aplikacji — nie blokujemy wysyłki.
-    console.warn('Nie udało się oznaczyć zapytania ' + inquiryId + ' jako wysłane:', e.message)
+    console.warn('Nie udało się oznaczyć zapytania ' + entry.inquiryId + ' jako wysłane:', e.message)
+
+    return
   }
+
+  // Zielony znacznik „Wysłane” od razu — także dla kolegów, po ich stronie
+  // wyjdzie przy najbliższym przejściu w tle.
+  await markByHeaderId(entry.headerMessageId)
 })
 
 /** Porzucone okna kompozycji nie mogą puchnąć w pamięci ustawień. */

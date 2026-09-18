@@ -13,6 +13,7 @@ use App\Http\Requests\UpdateClientInquiryRequest;
 use App\Models\ClientInquiry;
 use App\Services\ClientInquiryService;
 use App\Support\InquiryMailText;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -427,6 +428,65 @@ class ClientInquiryController extends Controller
             ]);
 
         return response()->json($rows);
+    }
+
+    /**
+     * Które z podanych maili mają już zapytanie i kto je prowadzi.
+     *
+     * Dodatek do Thunderbirda pyta o paczkę Message-ID i oznacza nimi pozycje
+     * na liście wiadomości, żeby na każdym komputerze było widać, że mailem
+     * ktoś się już zajmuje — razem z nazwiskiem i z tym, czy odpowiedź poszła.
+     *
+     * Odpowiedź obejmuje zapytania wszystkich handlowców, bo to jest właśnie
+     * sedno: ten sam mail trafia do kilku osób. Nie ma w niej treści maila,
+     * tematu ani treści odpowiedzi — tylko numer zapytania, autor i daty.
+     *
+     * Brak klucza w odpowiedzi znaczy „sprawdzone, nie ma nic”: dodatek
+     * zdejmuje wtedy swoje oznaczenie z maila.
+     */
+    public function lookup(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'message_ids' => ['required', 'array', 'min:1', 'max:200'],
+            'message_ids.*' => ['required', 'string', 'max:255'],
+        ], [
+            'message_ids.required' => 'Podaj identyfikatory wiadomości.',
+            'message_ids.array' => 'Identyfikatory wiadomości muszą być listą.',
+            'message_ids.min' => 'Podaj co najmniej jeden identyfikator wiadomości.',
+            'message_ids.max' => 'Na raz można sprawdzić najwyżej 200 wiadomości.',
+            'message_ids.*.required' => 'Identyfikator wiadomości nie może być pusty.',
+            'message_ids.*.string' => 'Identyfikator wiadomości musi być tekstem.',
+            'message_ids.*.max' => 'Identyfikator wiadomości może mieć najwyżej 255 znaków.',
+        ]);
+
+        $found = $this->inquiries->byMessageIds($request->user(), $validated['message_ids']);
+
+        // Rzutowanie na obiekt: pusty wynik ma zostać w JSON-ie mapą „{}”,
+        // nie tablicą „[]” — dodatek czyta go po kluczach.
+        return response()->json(['data' => (object) $found]);
+    }
+
+    /**
+     * Message-ID zapytań ruszonych od podanej chwili.
+     *
+     * Świeżo zainstalowany dodatek (albo taki, którego komputer był tydzień
+     * wyłączony) nie wie, które maile oznaczyć. Przejście po całej skrzynce
+     * byłoby drogie, więc pytamy odwrotnie: serwer podaje identyfikatory
+     * maili, wokół których coś się działo, a dodatek szuka ich u siebie.
+     */
+    public function messageIds(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'since' => ['nullable', 'date'],
+        ], [
+            'since.date' => 'Parametr „since” musi być datą.',
+        ]);
+
+        $since = empty($validated['since'])
+            ? null
+            : CarbonImmutable::parse((string) $validated['since']);
+
+        return response()->json($this->inquiries->messageIdsTouchedSince($since));
     }
 
     /** Prośba o wysyłkę z Thunderbirda: true zgłasza, false kasuje po podjęciu. */

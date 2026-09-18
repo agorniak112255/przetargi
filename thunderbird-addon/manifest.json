@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "Supon Przetargi",
-  "description": "Zakłada zapytanie w aplikacji Przetargi z otwartego maila i wstawia przygotowaną odpowiedź.",
-  "version": "1.4.0",
+  "description": "Zakłada zapytanie w aplikacji Przetargi z otwartego maila, wstawia przygotowaną odpowiedź i oznacza na liście maile, którymi ktoś już się zajmuje.",
+  "version": "1.5.0",
   "author": "Supon Rzeszów",
   "browser_specific_settings": {
     "gecko": {
@@ -21,6 +21,7 @@
   "background": {
     "scripts": [
       "common.js",
+      "tags.js",
       "background.js"
     ]
   },
@@ -36,5 +37,10 @@
   "icons": {
     "48": "icons/icon.svg",
     "96": "icons/icon.svg"
-  }
+  },
+  "optional_permissions": [
+    "messagesTags",
+    "messagesUpdate",
+    "messagesModify"
+  ]
 }

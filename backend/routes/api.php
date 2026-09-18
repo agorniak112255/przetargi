@@ -210,9 +210,12 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::middleware('permission:inquiries.use')->group(function (): void {
         Route::get('/inquiries', [ClientInquiryController::class, 'index']);
         Route::post('/inquiries', [ClientInquiryController::class, 'store']);
-        // przed „{inquiry}”, żeby „preferences” i „queued” nie zostały wzięte za id
+        // przed „{inquiry}”, żeby stałe ścieżki nie zostały wzięte za numer zapytania
         Route::get('/inquiries/preferences', [ClientInquiryController::class, 'preferences']);
         Route::get('/inquiries/queued', [ClientInquiryController::class, 'queued']);
+        // dodatek do Thunderbirda: które maile mają już zapytanie i kto je prowadzi
+        Route::post('/inquiries/lookup', [ClientInquiryController::class, 'lookup']);
+        Route::get('/inquiries/message-ids', [ClientInquiryController::class, 'messageIds']);
         Route::get('/inquiries/{inquiry}', [ClientInquiryController::class, 'show']);
         Route::patch('/inquiries/{inquiry}', [ClientInquiryController::class, 'update']);
         Route::post('/inquiries/{inquiry}/compose', [ClientInquiryController::class, 'compose']);

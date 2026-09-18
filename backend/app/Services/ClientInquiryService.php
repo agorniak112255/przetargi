@@ -199,6 +199,131 @@ final class ClientInquiryService
             ->first();
     }
 
+    /**
+     * Zapytania powstałe z podanych maili — dla dodatku do Thunderbirda, który
+     * oznacza nimi pozycje na liście wiadomości u wszystkich handlowców.
+     *
+     * Dopasowanie idzie wyłącznie po Message-ID: jest pewne (ten sam mail
+     * wysłany na kilka adresów albo przekierowany przez serwer zachowuje
+     * identyfikator) i nie wymaga wysyłania treści maili na serwer. Mail
+     * przekazany ręcznie ma inny Message-ID — ten przypadek łapie odcisk treści
+     * przy zakładaniu zapytania (findOthersInquiry), nie to oznaczanie.
+     *
+     * Brak klucza w wyniku znaczy „sprawdzone, nie ma nic” — dodatek zdejmuje
+     * wtedy swoje oznaczenie. Inaczej po usunięciu zapytania znacznik zostałby
+     * na mailu na zawsze i kłamał.
+     *
+     * Jeden mail może mieć kilka zapytań (świadome „Załóż mimo to”), więc pod
+     * każdym identyfikatorem jest lista — od najstarszego, czyli od osoby,
+     * która zaczęła. Przy obcinaniu nadmiaru nigdy nie wypada zapytanie
+     * pytającego ani takie z wysłaną odpowiedzią: to dwie informacje, dla
+     * których całe oznaczanie istnieje.
+     *
+     * @param  list<string>  $messageIds
+     * @return array<string, list<array<string, mixed>>>
+     */
+    public function byMessageIds(User $user, array $messageIds, int $perMessage = 5): array
+    {
+        $normalized = [];
+        foreach ($messageIds as $raw) {
+            $id = $this->normalizeMessageId($raw);
+            if ($id !== null) {
+                $normalized[$id] = true;
+            }
+        }
+        if ($normalized === []) {
+            return [];
+        }
+
+        $rows = ClientInquiry::query()
+            ->select(['id', 'user_id', 'source_message_id', 'replied_at', 'created_at'])
+            // Porównanie w MySQL nie zważa na wielkość liter, a Message-ID
+            // formalnie ją rozróżnia. W praktyce identyfikator wraca z tego
+            // samego maila w identycznym zapisie, więc na to przystajemy.
+            ->whereIn('source_message_id', array_keys($normalized))
+            ->with('user:id,name')
+            ->orderBy('id')
+            ->get()
+            ->groupBy(fn (ClientInquiry $row): string => (string) $row->source_message_id);
+
+        $found = [];
+        foreach ($rows as $messageId => $group) {
+            // Co musi się zmieścić w wyniku: wysłana odpowiedź (grozi drugą
+            // ofertą u klienta) i własne zapytanie pytającego (inaczej dodatek
+            // pomalowałby mail jako cudzy). Reszta dobierana od najstarszej.
+            $important = fn (ClientInquiry $row): bool => $row->replied_at !== null
+                || (int) $row->user_id === (int) $user->id;
+
+            $must = $group->filter($important)->take($perMessage);
+            $room = $perMessage - $must->count();
+            $picked = $room > 0
+                ? $must->concat($group->reject($important)->take($room))
+                : $must;
+
+            $found[(string) $messageId] = $picked
+                ->sortBy('id')
+                ->map(fn (ClientInquiry $row): array => [
+                    'id' => $row->id,
+                    'user' => $row->user === null
+                        ? null
+                        : ['id' => $row->user->id, 'name' => $row->user->name],
+                    'mine' => (int) $row->user_id === (int) $user->id,
+                    'created_at' => $row->created_at?->toIso8601String(),
+                    'replied_at' => $row->replied_at?->toIso8601String(),
+                ])
+                ->values()
+                ->all();
+        }
+
+        return $found;
+    }
+
+    /**
+     * Message-ID zapytań ruszonych po podanej chwili — z tego dodatek dowiaduje
+     * się, które maile ma sprawdzić, gdy właśnie go zainstalowano albo gdy
+     * komputer był wyłączony.
+     *
+     * Zwracamy same identyfikatory, bo pełny obraz maila (ile zapytań, kto,
+     * czy odpowiedź poszła) dodatek i tak bierze potem z byMessageIds — jeden
+     * wiersz z tej listy nie wystarczyłby, gdy nad mailem siedzą dwie osoby.
+     *
+     * @return array{ids: list<string>, next_since: string, has_more: bool}
+     */
+    public function messageIdsTouchedSince(?CarbonImmutable $since, int $limit = 500): array
+    {
+        $from = $since ?? CarbonImmutable::now()->subDays(90);
+
+        $rows = ClientInquiry::query()
+            ->select(['id', 'source_message_id', 'updated_at'])
+            ->whereNotNull('source_message_id')
+            ->where('updated_at', '>=', $from)
+            ->orderBy('updated_at')
+            ->orderBy('id')
+            ->limit($limit)
+            ->get();
+
+        $ids = $rows
+            ->pluck('source_message_id')
+            ->filter()
+            ->unique()
+            ->values()
+            ->map(fn (mixed $id): string => (string) $id)
+            ->all();
+
+        $hasMore = $rows->count() >= $limit;
+        $last = $rows->last();
+
+        return [
+            'ids' => $ids,
+            // Przy urwanej liście wracamy od ostatniego wiersza (ta sama chwila
+            // może się powtórzyć — powtórne sprawdzenie maila nic nie psuje).
+            'next_since' => $hasMore && $last !== null
+                ? (string) $last->updated_at?->toIso8601String()
+                : CarbonImmutable::now()->toIso8601String(),
+            'has_more' => $hasMore,
+        ];
+    }
+
     /** Message-ID bez nawiasów „< >”, żeby porównanie nie zależało od zapisu. */
     public function normalizeMessageId(mixed $value): ?string
     {

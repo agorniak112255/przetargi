@@ -17,6 +17,7 @@ bo identyfikator dodatku się nie zmienia.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import zipfile
@@ -50,7 +51,16 @@ def build_xpi(target: str) -> None:
                 archive.write(path, inside)
 
 
-def write_updates(version: str, addon_id: str, min_version: str) -> None:
+def sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for chunk in iter(lambda: handle.read(65536), b''):
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+def write_updates(version: str, addon_id: str, min_version: str, xpi: str) -> None:
     updates = {
         'addons': {
             addon_id: {
@@ -58,6 +68,10 @@ def write_updates(version: str, addon_id: str, min_version: str) -> None:
                     {
                         'version': version,
                         'update_link': UPDATE_BASE + '/supon-przetargi.xpi',
+                        # Dodatek nie jest podpisany przez Mozillę, więc suma
+                        # kontrolna jest jedyną weryfikacją, że Thunderbird
+                        # pobrał dokładnie ten plik, który zbudowaliśmy.
+                        'update_hash': 'sha256:' + sha256(xpi),
                         'applications': {
                             'gecko': {'strict_min_version': min_version},
                         },
@@ -83,7 +97,7 @@ def main() -> None:
     published = os.path.join(PUBLIC_DIR, 'supon-przetargi.xpi')
     build_xpi(published)
     build_xpi(os.path.join(DIST_DIR, 'supon-przetargi-' + version + '.xpi'))
-    write_updates(version, gecko['id'], gecko.get('strict_min_version', '115.0'))
+    write_updates(version, gecko['id'], gecko.get('strict_min_version', '115.0'), published)
 
     print('Wersja:      ' + version)
     print('Plik XPI:    ' + published + ' (' + str(os.path.getsize(published)) + ' bajtów)')

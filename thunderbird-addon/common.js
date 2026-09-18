@@ -159,6 +159,120 @@ function addonVersion() {
   }
 }
 
+/* ---------------------------- aktualizacje ---------------------------- */
+
+/** Identyfikator dodatku — tym kluczem opisana jest wersja w updates.json. */
+const ADDON_ID = 'przetargi@supon.rzeszow.pl'
+
+/** Plik, z którego Thunderbird sam czyta informację o nowej wersji. */
+const UPDATE_MANIFEST_PATH = '/dodatek/updates.json'
+
+/**
+ * Adres, spod którego bierze się aktualizacje — na sztywno, tak samo jak
+ * `update_url` w manifeście i `UPDATE_BASE` w build.py. Gdyby czytać go
+ * z ustawień, komputer wskazujący na serwer testowy pokazywałby inną wersję
+ * niż ta, którą faktycznie pobiera Thunderbird.
+ */
+const UPDATE_BASE = 'https://przetargi.supon.rzeszow.pl'
+
+/**
+ * „1.10.0” jest nowsze niż „1.9.0”, więc porównujemy człon po członie jako
+ * liczby. Zwraca 1, gdy `a` jest nowsze, -1 gdy starsze, 0 gdy to samo.
+ */
+function compareVersions(a, b) {
+  const left = String(a || '').split('.')
+  const right = String(b || '').split('.')
+  const length = Math.max(left.length, right.length)
+
+  for (let i = 0; i < length; i += 1) {
+    const one = Number.parseInt(left[i] || '0', 10) || 0
+    const two = Number.parseInt(right[i] || '0', 10) || 0
+    if (one > two) return 1
+    if (one < two) return -1
+  }
+
+  return 0
+}
+
+/**
+ * Najnowsza wersja opisana w updates.json na serwerze — ten sam plik, z którego
+ * Thunderbird bierze aktualizacje automatyczne. Dzięki temu przycisk w dodatku
+ * nigdy nie powie czegoś innego niż sam program.
+ */
+async function serverVersion() {
+  // Parametr z czasem: bez niego dostalibyśmy plik z pamięci podręcznej.
+  const url = UPDATE_BASE + UPDATE_MANIFEST_PATH + '?t=' + Date.now()
+
+  let res
+  try {
+    res = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' })
+  } catch (e) {
+    throw new ApiError(0, 'Brak połączenia z ' + UPDATE_BASE + UPDATE_MANIFEST_PATH)
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, 'Serwer nie podał wersji dodatku (' + res.status + ').')
+  }
+
+  let data
+  try {
+    data = await res.json()
+  } catch (e) {
+    throw new ApiError(0, 'Plik z wersją dodatku jest nieczytelny.')
+  }
+
+  const entry = data && data.addons && typeof data.addons === 'object' ? data.addons[ADDON_ID] : null
+  const updates = entry && Array.isArray(entry.updates) ? entry.updates : []
+
+  // Zwykle jest jedna pozycja, ale gdyby było ich więcej — bierzemy najnowszą.
+  let best = null
+  for (const row of updates) {
+    const version = row && typeof row.version === 'string' ? row.version : ''
+    if (version === '') continue
+    if (best === null || compareVersions(version, best.version) > 0) {
+      best = { version, link: String(row.update_link || '') }
+    }
+  }
+
+  if (best === null) {
+    throw new ApiError(0, 'Serwer nie ma informacji o wersji tego dodatku.')
+  }
+
+  return best
+}
+
+/**
+ * Stan aktualizacji: co jest zainstalowane, co leży na serwerze i czy warto
+ * ruszyć palcem. Wynik zapisujemy, żeby okienko nad mailem mogło o nowej
+ * wersji powiedzieć bez ponownego pytania serwera.
+ */
+async function checkUpdate() {
+  const installed = addonVersion()
+  const latest = await serverVersion()
+  const state = {
+    installed,
+    version: latest.version,
+    link: latest.link,
+    newer: installed !== '' && compareVersions(latest.version, installed) > 0,
+    checkedAt: Date.now(),
+  }
+
+  await browser.storage.local.set({ update: state })
+
+  return state
+}
+
+/** Ostatnio sprawdzony stan aktualizacji; null, gdy jeszcze nie sprawdzaliśmy. */
+async function lastUpdateCheck() {
+  const { update } = await browser.storage.local.get({ update: null })
+  if (!update || typeof update !== 'object') return null
+
+  // Po samej aktualizacji zapis jest już nieaktualny — wersja się zmieniła.
+  const installed = addonVersion()
+  if (installed !== '' && compareVersions(installed, update.version) >= 0) return null
+
+  return update
+}
+
 function escapeHtml(text) {
   return String(text)
     .replace(/&/g, '&amp;')
@@ -214,21 +328,27 @@ async function composeDetailsWhenReady(tabId, tries = 20, everyMs = 150) {
 
 /* -------------------- powiązanie okna odpowiedzi -------------------- */
 
-async function rememberComposeTab(tabId, inquiryId) {
+async function rememberComposeTab(tabId, inquiryId, headerMessageId = null) {
   const { composeTabs } = await browser.storage.local.get({ composeTabs: {} })
-  composeTabs[String(tabId)] = inquiryId
+  // Message-ID oryginału zapamiętujemy po to, żeby po wysłaniu odpowiedzi od
+  // razu przestawić znacznik maila na „Wysłane”.
+  composeTabs[String(tabId)] = { inquiryId, headerMessageId }
   await browser.storage.local.set({ composeTabs })
 }
 
+/** @return {{inquiryId: number, headerMessageId: string|null}|null} */
 async function takeComposeTab(tabId) {
   const { composeTabs } = await browser.storage.local.get({ composeTabs: {} })
   const key = String(tabId)
-  const inquiryId = composeTabs[key]
-  if (inquiryId === undefined) return null
+  const entry = composeTabs[key]
+  if (entry === undefined) return null
   delete composeTabs[key]
   await browser.storage.local.set({ composeTabs })
 
-  return inquiryId
+  // Wpis z wersji 1.4.0 i starszych trzymał sam numer zapytania.
+  return typeof entry === 'object' && entry !== null
+    ? { inquiryId: entry.inquiryId, headerMessageId: entry.headerMessageId || null }
+    : { inquiryId: entry, headerMessageId: null }
 }
 
 /** Message-ID maila ↔ numer zapytania; pozwala wrócić do zapytania po restarcie. */

@@ -47,9 +47,51 @@
     </p>
   </section>
 
+  <section>
+    <h2>Oznaczanie maili na liście</h2>
+    <p id="tagState" class="muted"></p>
+
+    <button id="enableTags" class="primary" hidden>Włącz oznaczanie maili</button>
+    <button id="disableTags" class="secondary" hidden>Wyłącz i usuń znaczniki</button>
+
+    <p class="muted">
+      Mail, z którego ktoś założył zapytanie, dostaje na liście wiadomości
+      znacznik z nazwiskiem tej osoby: pomarańczowy „Zapytanie: …”, a po
+      wysłaniu odpowiedzi do klienta zielony „Wysłane: …”. Stan bierze się
+      z aplikacji, więc to samo widać na każdym komputerze z tym dodatkiem.
+    </p>
+    <p class="muted">
+      Thunderbird musi raz zapytać o zgodę na zmianę znaczników wiadomości —
+      bez niej dodatek działa jak dotąd, tylko bez kolorów na liście.
+      Oznaczenia nie dostaną maile przekazane ręcznie (mają inny identyfikator
+      wiadomości) ani zapytania wklejone w przeglądarce.
+    </p>
+  </section>
+
+  <section>
+    <h2>Aktualizacje</h2>
+    <p id="updateState" class="muted"></p>
+    <p id="updateAlert" class="alarm" hidden></p>
+
+    <button id="checkUpdate" class="secondary">Sprawdź aktualizacje</button>
+    <button id="getUpdate" class="primary" hidden>Pobierz nową wersję</button>
+
+    <p class="muted">
+      Thunderbird pyta serwer o nowe wersje sam (co kilka godzin) i podmienia
+      dodatek bez utraty ustawień. Ręcznie: <strong>Dodatki i motywy → koło
+      zębate → Sprawdź dostępność aktualizacji</strong>.
+    </p>
+    <p id="updateHelp" class="muted" hidden>
+      „Pobierz nową wersję” otwiera plik w przeglądarce. Potem w Thunderbirdzie:
+      <strong>Dodatki i motywy → koło zębate → Zainstaluj dodatek z pliku</strong>
+      — na wierzch starej wersji, bez odinstalowywania.
+    </p>
+  </section>
+
   <p id="version" class="version"></p>
 
   <script src="common.js"></script>
+  <script src="tags.js"></script>
   <script src="options.js"></script>
 </body>
 </html>
