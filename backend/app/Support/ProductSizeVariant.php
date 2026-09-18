@@ -158,6 +158,31 @@ final class ProductSizeVariant
         $alpha = self::ALPHA;
         $sep = self::RANGE_SEP;
 
+        // Litera z odpowiednikiem liczbowym w nawiasie: „Rozmiar: XXL (10.5-11.0)” to jeden
+        // rozmiar, a „Rozmiary: S (36-38), M (40-42)” to lista liter — w obu wypadkach rozmiarem
+        // jest litera, nie liczby z nawiasu. Wcześniej wygrywał pierwszy zakres liczbowy, więc
+        // rękawica XXL dostawała token „10.5-11”, który nie przechodził kontroli rozmiaru.
+        if (preg_match(
+            '/\b'.$keyword.'\b\s*:?\s*(?='.$alpha.'\s*\()/iu',
+            $text,
+            $m,
+            PREG_OFFSET_CAPTURE
+        ) === 1) {
+            $tail = substr($text, $m[0][1] + strlen((string) $m[0][0]));
+            if (preg_match_all('/'.$alpha.'\s*\([^)]*\d[^)]*\)/iu', $tail, $all) >= 1) {
+                $letters = [];
+                foreach ($all[1] as $token) {
+                    $one = $this->normalizeSizeToken($token);
+                    if ($one !== null) {
+                        $letters[] = $one;
+                    }
+                }
+                if ($letters !== []) {
+                    return $this->uniqueSortedSizes($letters);
+                }
+            }
+        }
+
         if (preg_match(
             '/\b'.$keyword.'\b.{0,48}?(?:od|from|de|du|von)?\s*'.$num.'\s*'.$sep.'\s*'.$num.'\b/iu',
             $text,
@@ -1325,7 +1350,10 @@ final class ProductSizeVariant
         ) === 1) {
             return $this->normalizeSizeToken($m[1]);
         }
-        if (preg_match('/(?:^|[\s,\/\-])('.self::ALPHA.')\s*$/iu', $name, $m) === 1) {
+        // Kropka też oddziela rozmiar: cennik Ansella pisze „3000-YE CVRL COLLAR 103.5XL”
+        // i „4000-GR APOL ENCAP SCBA 126-G02.3XL”. Bez niej nazwa nie dawała rozmiaru,
+        // a system schodził do ogona SKU i czytał „-07” jako rozmiar rękawicy 7.
+        if (preg_match('/(?:^|[\s,\/\-.])('.self::ALPHA.')\s*$/iu', $name, $m) === 1) {
             return $this->normalizeSizeToken($m[1]);
         }
         if (preg_match('/(?:^|[\s,\/])(\d{1,2}(?:[.,]\d)?)\s*$/u', $name, $m) === 1) {
@@ -1343,11 +1371,29 @@ final class ProductSizeVariant
         if (preg_match('/^\d{5,}(\d{3})$/', $sku, $m) === 1) {
             return $this->sizeForDigitCode($m[1]);
         }
+        if ($this->isAnsellGarmentSku($sku)) {
+            return null;
+        }
         if (preg_match('/[\/\-_]([A-Za-z0-9]+(?:[.,]\d)?)$/', $sku, $m) === 1) {
             return $this->looksLikeWearSize($m[1]) ? $this->normalizeSizeToken($m[1]) : null;
         }
 
         return $this->sizeFromGluedSku($sku);
+    }
+
+    /**
+     * Kod odzieży Ansella: „GR40T-00126-07”, „YE30T-00121-07-G02”. Końcówka to kod wariantu
+     * rozmiarowego producenta, a nie rozmiar w skali, w której czytamy inne kody — „-07” przy
+     * kombinezonie 3XL wychodziło jako rozmiar rękawicy 7. Rozmiar tych kart stoi w nazwie
+     * (po kropce), a zgadywanie własnej mapy kodów byłoby wymyślaniem danych producenta.
+     * Rękawice Ansella mają SKU z samych cyfr i czyta je osobna gałąź.
+     */
+    private function isAnsellGarmentSku(string $sku): bool
+    {
+        // Dwie litery koloru + dziesiątka serii 15–59 (tak samo jak w rozbiorze kodu Ansella),
+        // pięciocyfrowy model i kod wariantu. Wzorzec jest wąski celowo, żeby nie objął
+        // kodów innych dostawców, w których końcówka bywa prawdziwym rozmiarem.
+        return preg_match('/^[A-Z]{2}(?:1[5-9]|[2-5]\d)[A-Z]?-\d{5}-\d{2}(?:-G\d{2})?$/i', trim($sku)) === 1;
     }
 
     /**

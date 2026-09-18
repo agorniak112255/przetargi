@@ -278,6 +278,71 @@ final class ProductSizeVariantTest extends TestCase
         );
     }
 
+    /**
+     * Cennik Ansella oddziela rozmiar kropką („103.5XL”, „126-G02.3XL”). Kropki nie było wśród
+     * separatorów, więc nazwa nie dawała rozmiaru, a system schodził do ogona SKU i czytał
+     * „-07” jako rozmiar rękawicy 7 przy kombinezonie 3XL.
+     */
+    #[Test]
+    public function reads_size_written_after_a_dot_in_the_name(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame('xxxl', $svc->extractSize('4000-GR APOL ENCAP SCBA 126-G02.3XL', 'GR40T-00126-07'));
+        $this->assertSame('5xl', $svc->extractSize('3000-YE CVRL COLLAR 103.5XL', 'YE30T-00103-09'));
+        $this->assertSame('5xl', $svc->extractSize('3000-YE SLEEVED APRON 243-G01.5XL', 'YE30T-00243-09-G01'));
+        // rozpiętość numerów butów w nazwie to nie jeden rozmiar — zostaje w opakowaniu
+        $this->assertNull($svc->extractSize('3000-YE OVERBOOTS 406.42-46', 'YE30T-00406-00'));
+
+        // gdy nazwa rozmiaru nie niesie, kod odzieży Ansella milczy zamiast zgadywać:
+        // „-07” to kod wariantu producenta, a nie rozmiar rękawicy 7
+        $this->assertNull($svc->extractSize('4000-GR CVRL HOOD 121-G02', 'GR40T-00121-07'));
+        $this->assertNull($svc->extractSize('3000-YE CVRL HOOD 121', 'YE30T-00121-09-G02'));
+
+        // kody innych dostawców i rękawice Ansella czytają się jak dotąd
+        $this->assertSame('11', $svc->extractSize('VersaTouch 92205', '92205110'));
+        $this->assertSame('42', $svc->extractSize('Półbuty ARMEN 9003', 'ARMEN-9003-42'));
+        $this->assertSame('11', $svc->extractSize('Rękawice BOE 471', 'BOE-471-11'));
+        // wzorzec jest wąski: obcy kod o podobnym kształcie zachowuje swój rozmiar
+        $this->assertSame('8', $svc->extractSize('Wyrób testowy', 'AB12-34567-08'));
+    }
+
+    /** Tabela rozmiarów z odpowiednikami liczbowymi: rozmiarem jest litera, nie liczby z nawiasu. */
+    #[Test]
+    public function letter_size_table_keeps_every_letter(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame(['s', 'm', 'l'], $svc->parseSizesFromText('Rozmiary: S (36-38), M (40-42), L (44-46)'));
+        $this->assertSame(
+            ['s', 'm', 'l', 'xl'],
+            $svc->parseSizesFromText('Rozmiary: S (36-38) / M (40-42) / L (44-46) / XL (48-50)')
+        );
+        // nawias bez litery rozmiaru nie uruchamia tej gałęzi
+        $this->assertSame(
+            ['38', '39', '40', '41', '42', '43', '44', '45', '46'],
+            $svc->parseSizesFromText('Rozmiary (wg tabeli): 38-46')
+        );
+    }
+
+    /**
+     * „Rozmiar: XXL (10.5-11.0)” to jeden rozmiar z metrycznym odpowiednikiem, nie zakres.
+     * Wygrywał zakres z nawiasu, token „10.5-11” nie przechodził kontroli rozmiaru rękawic
+     * i atrybut rozmiaru zostawał pusty (VersaTouch 92205 z listy testerki).
+     */
+    #[Test]
+    public function letter_size_with_metric_equivalent_in_brackets_is_one_size(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame(['xxl'], $svc->parseSizesFromText('Rozmiar: XXL (10.5-11.0)'));
+        $this->assertSame(['xl'], $svc->parseSizesFromText('Rozmiar: XL (54-56)'));
+        $this->assertSame('xxl', $svc->labelFromTexts(null, 'Rozmiar: XXL (10.5-11.0)', 'rekawice'));
+        // zwykła lista i zakres czytają się tak samo jak dotąd
+        $this->assertSame(['7', '8', '9', '10', '11'], $svc->parseSizesFromText('Rozmiary: 7, 8, 9, 10, 11'));
+        $this->assertSame(['9'], $svc->parseSizesFromText('Rozmiar: 9'));
+    }
+
     #[Test]
     public function fills_empty_packaging_from_description_range(): void
     {
