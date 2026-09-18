@@ -9,6 +9,18 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class ClientInquiry extends Model
 {
+    /** Pełna specyfikacja: nazwa z katalogu, SKU, producent, normy i cena. */
+    public const TONE_HANDLOWY = 'handlowy';
+
+    /** Oficjalny: nazwa, akapit opisu z karty, normy i cena — bez SKU. */
+    public const TONE_FORMAL = 'formal';
+
+    /** Bez SKU: jedno zdanie opisu bez marki i modelu, normy i cena. */
+    public const TONE_NO_SKU = 'bez_sku';
+
+    /** Szablony listu do klienta; wybór zapisuje się w kolumnie „tone”. */
+    public const TONES = [self::TONE_HANDLOWY, self::TONE_FORMAL, self::TONE_NO_SKU];
+
     protected $fillable = [
         'user_id',
         'client_id',

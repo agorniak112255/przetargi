@@ -1587,8 +1587,8 @@ function InquiriesHelp() {
       slides={[
         {
           action: 'Wklejenie maila klienta',
-          does: 'Z treści maila system wyciąga pozycje, dobiera towary z katalogu i od razu pisze list. Nic nie wysyła pocztą. Ton, tryb cen i marża są jak w Twoim ostatnim zapytaniu.',
-          click: 'Menu „Zapytania”, wklej całą treść w pole „Treść maila”, potem „Przygotuj odpowiedź” (albo Ctrl+Enter). Temat, klient i ton są pod „Więcej”.',
+          does: 'Z treści maila system wyciąga pozycje, dobiera towary z katalogu i od razu pisze list. Nic nie wysyła pocztą. Szablon listu, tryb cen i marża są jak w Twoim ostatnim zapytaniu.',
+          click: 'Menu „Zapytania”, wklej całą treść w pole „Treść maila”, potem „Przygotuj odpowiedź” (albo Ctrl+Enter). Temat, klient i szablon listu są pod „Więcej”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Zapytania">
@@ -1704,7 +1704,7 @@ function InquiriesHelp() {
         },
         {
           action: 'Kliknięcie alternatywy przepisuje list',
-          does: 'Pod każdą pozycją są chipy: kandydaci z katalogu (SKU · nazwa · % dopasowania) i „Sprawdzimy i wrócimy”. Kliknięcie od razu przepisuje list. „Opis” pokazuje kartę towaru. Niżej: ceny dla całej oferty, dopisek do listu i lista pytań klienta.',
+          does: 'Pod każdą pozycją są chipy: kandydaci z katalogu (SKU · nazwa · % dopasowania) i „Sprawdzimy i wrócimy”. Kliknięcie od razu przepisuje list. „Opis” pokazuje kartę towaru. Niżej, w „Dla całej oferty”: szablon listu, ceny, dopisek do listu i lista pytań klienta. Szablony to „Handlowy (pełna specyfikacja)” z SKU i producentem, „Bez SKU (proste opisy)” — jedno zdanie opisu bez marki i modelu — oraz „Oficjalny (długie opisy)” z akapitem opisu z karty. Zmiana szablonu przepisuje list.',
           click: 'Chip z towarem albo „Sprawdzimy i wrócimy”. Jeśli ręcznie zmieniłeś treść, system zapyta, czy ją nadpisać.',
           tone: 'blue',
           screen: (

@@ -102,7 +102,7 @@ final class ClientInquiryApiTest extends TestCase
 
         $res = $this->postJson('/api/inquiries', [
             'body' => 'Dzień dobry, proszę o ofertę na rękawice nitrylowe do laboratorium.',
-            'tone' => 'formal',
+            'tone' => 'handlowy',
             'client_id' => $client->id,
         ]);
 
@@ -179,7 +179,7 @@ final class ClientInquiryApiTest extends TestCase
 
         $res = $this->postJson('/api/inquiries', [
             'body' => "Dzień dobry\n\n30szt Rękawice chemoodporne rozmiar 10\n\n30szt Rękawice chemoodporne rozmiar 9",
-            'tone' => 'formal',
+            'tone' => 'handlowy',
         ]);
 
         // bez zatwierdzonych zamienników nie ma kart zamienników ani substitute_key
@@ -465,7 +465,7 @@ final class ClientInquiryApiTest extends TestCase
 
         $res = $this->postJson('/api/inquiries', [
             'body' => "Dzień dobry\n\n10 szt. rękawice nitrylowe rozmiar 9",
-            'tone' => 'formal',
+            'tone' => 'handlowy',
         ])->assertCreated();
 
         $html = (string) $res->json('reply_html');
@@ -529,7 +529,7 @@ final class ClientInquiryApiTest extends TestCase
 
         $id = (int) $this->postJson('/api/inquiries', [
             'body' => "Dzień dobry\n\n10 szt. rękawice nitrylowe rozmiar 9",
-            'tone' => 'formal',
+            'tone' => 'handlowy',
         ])->assertCreated()->json('id');
 
         // list napisany, zanim tabela w ogóle powstawała
@@ -768,7 +768,7 @@ final class ClientInquiryApiTest extends TestCase
         $user = User::factory()->withRole('handlowiec')->create();
         $inquiry = ClientInquiry::query()->create([
             'user_id' => $user->id,
-            'tone' => 'formal',
+            'tone' => 'handlowy',
             'source_subject' => 'Rękawice i kalosze',
             'source_body' => "30szt Rękawice chemoodporne rozmiar 10\n4 pary Kalosze chemoodporne rozmiar 43",
             'analysis' => [
@@ -995,9 +995,11 @@ final class ClientInquiryApiTest extends TestCase
     {
         Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
 
+        // Domyślny szablon to pełna specyfikacja — taki list dostawali klienci,
+        // zanim doszły szablony „bez SKU” i „oficjalny”.
         $this->getJson('/api/inquiries/preferences')
             ->assertOk()
-            ->assertExactJson(['tone' => 'formal', 'price_mode' => 'none', 'margin' => 18]);
+            ->assertExactJson(['tone' => 'handlowy', 'price_mode' => 'none', 'margin' => 18]);
     }
 
     public function test_other_user_cannot_edit_or_mark_inquiry(): void
@@ -1031,7 +1033,7 @@ final class ClientInquiryApiTest extends TestCase
 
         $inquiry = ClientInquiry::query()->create([
             'user_id' => $user->id,
-            'tone' => 'formal',
+            'tone' => 'handlowy',
             'source_body' => 'Proszę o informację o rękawicach nitrylowych do laboratorium.',
             'analysis' => [
                 'questions' => ['Czy macie rękawice?'],
@@ -1085,7 +1087,7 @@ final class ClientInquiryApiTest extends TestCase
         $user = User::factory()->withRole('handlowiec')->create();
         $inquiry = ClientInquiry::query()->create([
             'user_id' => $user->id,
-            'tone' => 'formal',
+            'tone' => 'handlowy',
             'source_subject' => 'Rękawice i kalosze',
             'source_body' => "30szt Rękawice chemoodporne rozmiar 10\n4szt Kalosze chemoodporne rozmiar 43",
             'analysis' => [

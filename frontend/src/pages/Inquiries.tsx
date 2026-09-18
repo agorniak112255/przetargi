@@ -12,6 +12,7 @@ import { BusyLabel, useBusySeconds } from '../components/Busy'
 import { InquiryContactChip, InquiryContactModal } from '../components/InquiryContact'
 import { useAuth } from '../auth'
 import { ApiError, api, can } from '../lib/api'
+import { toneHint, toneOptions } from '../lib/inquiryTone'
 import type {
   InquiryChannelFilter,
   InquiryDuplicateConflict,
@@ -151,7 +152,7 @@ export function Inquiries() {
   const [body, setBody] = useState('')
   const [subject, setSubject] = useState('')
   const [clientId, setClientId] = useState('')
-  const [tone, setTone] = useState<InquiryTone>('formal')
+  const [tone, setTone] = useState<InquiryTone>('handlowy')
   const [more, setMore] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -481,16 +482,20 @@ export function Inquiries() {
               </label>
             )}
             <label className="block text-xs">
-              Ton
+              Szablon listu
               <select
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
                 value={tone}
                 disabled={busy}
                 onChange={(e) => setTone(e.target.value as InquiryTone)}
               >
-                <option value="formal">Formalny</option>
-                <option value="handlowy">Handlowy</option>
+                {toneOptions.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
+              <span className="mt-1 block text-[11px] font-normal text-slate-500">{toneHint(tone)}</span>
             </label>
             {prefs && (
               <p className="text-[11px] text-slate-500 sm:col-span-3">

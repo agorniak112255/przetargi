@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\Client;
 use App\Models\ClientInquiry;
+use App\Models\Product;
 use App\Models\ProductSubstitute;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
@@ -16,6 +17,7 @@ use App\Support\InquiryQueryText;
 use App\Support\InquiryReplyHtml;
 use App\Support\InquirySignature;
 use App\Support\OfferPricing;
+use App\Support\OfferProductText;
 use Carbon\CarbonImmutable;
 use RuntimeException;
 use Throwable;
@@ -120,8 +122,12 @@ final class ClientInquiryService
      *
      * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
      */
-    public function compose(ClientInquiry $inquiry, array $answers, string|false|null $extraNote): ClientInquiry
-    {
+    public function compose(
+        ClientInquiry $inquiry,
+        array $answers,
+        string|false|null $extraNote,
+        ?string $tone = null,
+    ): ClientInquiry {
         $saved = is_array($inquiry->answers) ? $inquiry->answers : [];
         $merged = array_merge($saved, $answers);
         foreach ($this->defaultAnswers($inquiry, $this->priceModeOf($merged), $this->marginPercent($merged)) as $key => $answer) {
@@ -132,14 +138,19 @@ final class ClientInquiryService
             $inquiry,
             $merged,
             $extraNote === false ? $this->nullable($inquiry->extra_note) : $this->nullable($extraNote),
+            $tone,
         );
     }
 
     /**
      * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
      */
-    private function saveReply(ClientInquiry $inquiry, array $answers, ?string $extraNote): ClientInquiry
-    {
+    private function saveReply(
+        ClientInquiry $inquiry,
+        array $answers,
+        ?string $extraNote,
+        ?string $tone = null,
+    ): ClientInquiry {
         $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
         $analysis['margin_used'] = $this->marginPercent($answers);
 
@@ -148,6 +159,11 @@ final class ClientInquiryService
             'answers' => $answers,
             'extra_note' => $extraNote,
         ]);
+        // Szablon zmieniony na stronie odpowiedzi: zapisujemy go przed pisaniem
+        // listu, bo z niego bierze się kształt każdej pozycji.
+        if ($tone !== null && in_array($tone, ClientInquiry::TONES, true)) {
+            $inquiry->forceFill(['tone' => $tone]);
+        }
 
         $draft = $this->writeReply($inquiry, $answers, $extraNote);
 
@@ -172,7 +188,11 @@ final class ClientInquiryService
             ->latest('id')
             ->first();
         $answers = $last !== null && is_array($last->answers) ? $last->answers : [];
-        $tone = $last !== null && in_array($last->tone, ['formal', 'handlowy'], true) ? (string) $last->tone : 'formal';
+        // Bez historii bierzemy pełną specyfikację: tak wyglądały listy, które
+        // handlowcy wysyłali do tej pory, więc pierwszy list nie zmienia formy.
+        $tone = $last !== null && in_array($last->tone, ClientInquiry::TONES, true)
+            ? (string) $last->tone
+            : ClientInquiry::TONE_HANDLOWY;
 
         return [
             'tone' => $tone,
@@ -2240,9 +2260,7 @@ final class ClientInquiryService
     {
         $priceMode = $this->priceModeOf($answers);
         $margin = $this->marginPercent($answers);
-        $intro = $inquiry->tone === 'handlowy'
-            ? "Dzień dobry,\n\nprzesyłamy ofertę do zapytania."
-            : "Dzień dobry,\n\nw odpowiedzi na przesłane zapytanie przedstawiamy ofertę:";
+        $intro = $this->offerIntro((string) $inquiry->tone);
         $parts = [
             $intro,
             '',
@@ -2270,6 +2288,46 @@ final class ClientInquiryService
                 $outro,
             ),
         ];
+    }
+
+    /** Wstęp listu: oficjalny mówi pełnym zdaniem, dwa pozostałe krótko. */
+    private function offerIntro(string $tone): string
+    {
+        if ($tone === ClientInquiry::TONE_FORMAL) {
+            return "Dzień dobry,\n\nw odpowiedzi na przesłane zapytanie przedstawiamy ofertę:";
+        }
+
+        return "Dzień dobry,\n\nprzesyłamy ofertę do zapytania.";
+    }
+
+    /**
+     * Opisy kart wyrobów użytych w liście — jednym zapytaniem do bazy.
+     *
+     * W `analysis` opisu nie ma (kandydaci trzymają tylko nazwę, SKU, normy
+     * i ceny), a szablon oficjalny i „bez SKU” piszą pozycję właśnie z opisu.
+     * Czytamy je dopiero przy pisaniu listu i tylko dla wybranych wyrobów.
+     *
+     * @param  list<int>  $ids
+     * @return array<int, array<string, mixed>>
+     */
+    private function cardTexts(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter($ids)));
+        if ($ids === []) {
+            return [];
+        }
+
+        return Product::query()
+            ->whereIn('id', $ids)
+            ->get(['id', 'name', 'manufacturer', 'model_name', 'description'])
+            ->keyBy('id')
+            ->map(fn (Product $product): array => [
+                'name' => (string) $product->name,
+                'manufacturer' => (string) $product->manufacturer,
+                'model_name' => $this->nullable($product->model_name),
+                'description' => (string) $product->description,
+            ])
+            ->all();
     }
 
     private function offerSubject(ClientInquiry $inquiry): string
@@ -2327,15 +2385,44 @@ final class ClientInquiryService
     {
         $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
         $matches = $this->matchGroups($analysis);
+        $tone = (string) $inquiry->tone;
 
-        $rows = [];
+        $picked = [];
         foreach ($this->lineItemsOf($analysis) as $index => $item) {
             $candidates = $this->candidatesForItem($matches, $item);
             $product = $this->chosenProductForItem($item, $candidates, $answers);
             $substitute = $product === null
                 ? null
                 : $this->chosenSubstituteForItem($item, $this->substitutesForItem($analysis, $candidates), $answers);
-            $rows[] = $this->offerRow($index + 1, $item, $product, $substitute, $priceMode, $margin);
+            $picked[] = ['n' => $index + 1, 'item' => $item, 'product' => $product, 'substitute' => $substitute];
+        }
+
+        // Szablon handlowy pisze się z samego zapytania, więc do bazy nie idziemy.
+        $cards = [];
+        if ($tone !== ClientInquiry::TONE_HANDLOWY) {
+            $ids = [];
+            foreach ($picked as $row) {
+                foreach (['product', 'substitute'] as $key) {
+                    if (is_array($row[$key]) && isset($row[$key]['id'])) {
+                        $ids[] = (int) $row[$key]['id'];
+                    }
+                }
+            }
+            $cards = $this->cardTexts($ids);
+        }
+
+        $rows = [];
+        foreach ($picked as $row) {
+            $rows[] = $this->offerRow(
+                $row['n'],
+                $row['item'],
+                $row['product'],
+                $row['substitute'],
+                $priceMode,
+                $margin,
+                $tone,
+                $cards,
+            );
         }
 
         return $rows;
@@ -2375,8 +2462,16 @@ final class ClientInquiryService
      * @param  array<string, mixed>|null  $substitute
      * @return array{head: string, quote: string|null, answer: list<string>}
      */
-    private function offerRow(int $n, array $item, ?array $product, ?array $substitute, string $priceMode, float $margin): array
-    {
+    private function offerRow(
+        int $n,
+        array $item,
+        ?array $product,
+        ?array $substitute,
+        string $priceMode,
+        float $margin,
+        string $tone = ClientInquiry::TONE_HANDLOWY,
+        array $cards = [],
+    ): array {
         $size = trim((string) ($item['size'] ?? ''));
         // cytat idzie do klienta — bez ceny z cudzej oferty, reszta słowo w słowo
         $quote = InquiryQueryText::withoutPrice((string) ($item['quote'] ?? ''));
@@ -2400,9 +2495,31 @@ final class ClientInquiryService
             ];
         }
 
-        $answer = $this->productLines('Produkt', $product, $priceMode, $margin);
+        // Karta bez opisu w szablonie „bez SKU”: pozycję opisują słowa klienta
+        // z zapytania — krócej, ale prawdziwie, bez dopisywania czegokolwiek.
+        $fallback = $quote === '' ? null : mb_substr($quote, 0, 200);
+
+        $answer = $this->productLines(
+            'Produkt',
+            $product,
+            $priceMode,
+            $margin,
+            $tone,
+            $cards[(int) $product['id']] ?? [],
+            $fallback,
+        );
         if ($substitute !== null) {
-            $answer = array_merge($answer, $this->productLines('Zamiennik', $substitute, $priceMode, $margin));
+            // Zamiennika nie opisujemy słowami klienta — pytał o coś innego,
+            // a podstawienie jego słów pod nasz zamiennik wprowadzałoby w błąd.
+            $answer = array_merge($answer, $this->productLines(
+                'Zamiennik',
+                $substitute,
+                $priceMode,
+                $margin,
+                $tone,
+                $cards[(int) $substitute['id']] ?? [],
+                null,
+            ));
         }
 
         return [
@@ -2413,19 +2530,36 @@ final class ClientInquiryService
     }
 
     /**
+     * Propozycja w jednej pozycji listu. Szablon decyduje, co widzi klient:
+     *
+     *  - handlowy: nazwa z katalogu, SKU i producent — pełna specyfikacja,
+     *  - oficjalny: nazwa i akapit opisu z karty, bez SKU,
+     *  - bez SKU: jedno zdanie opisu bez marki i modelu, a gdy karta opisu
+     *    nie ma — słowa klienta z zapytania ($fallback).
+     *
+     * Normy i cena wyglądają tak samo we wszystkich trzech: to dane z karty
+     * i z polityki cenowej, nie element stylu listu.
+     *
      * @param  array<string, mixed>  $product
+     * @param  array<string, mixed>  $card  pola karty wyrobu (opis, model, producent)
      * @return list<string>
      */
-    private function productLines(string $label, array $product, string $priceMode, float $margin): array
-    {
-        $maker = trim((string) ($product['manufacturer'] ?? ''));
-        $lines = [sprintf(
-            '%s: %s (SKU %s)%s',
-            $label,
-            $product['name'],
-            $product['sku'],
-            $maker !== '' ? ', '.$maker : ''
-        )];
+    private function productLines(
+        string $label,
+        array $product,
+        string $priceMode,
+        float $margin,
+        string $tone = ClientInquiry::TONE_HANDLOWY,
+        array $card = [],
+        ?string $fallback = null,
+    ): array {
+        $lines = $this->productHeadLines($label, $product, $tone, $card, $fallback);
+        if ($lines === []) {
+            // Nie ma czym opisać pozycji bez ujawnienia modelu — wtedy nie
+            // wypisujemy norm i ceny bez nazwy, bo wyszedłby bezgłowy blok.
+            return [];
+        }
+
         $norms = trim((string) ($product['norms'] ?? ''));
         if ($norms !== '') {
             $lines[] = 'Normy: '.$norms;
@@ -2441,6 +2575,55 @@ final class ClientInquiryService
         }
 
         return $lines;
+    }
+
+    /**
+     * Pierwsze linie propozycji: nazwa albo opis, zależnie od szablonu.
+     *
+     * @param  array<string, mixed>  $product
+     * @param  array<string, mixed>  $card
+     * @return list<string>
+     */
+    private function productHeadLines(
+        string $label,
+        array $product,
+        string $tone,
+        array $card,
+        ?string $fallback,
+    ): array {
+        $description = (string) ($card['description'] ?? '');
+
+        if ($tone === ClientInquiry::TONE_NO_SKU) {
+            $lead = $description === '' ? null : OfferProductText::genericLead(
+                $description,
+                (string) ($card['manufacturer'] ?? ($product['manufacturer'] ?? '')),
+                $this->nullable($card['model_name'] ?? null),
+                (string) ($card['name'] ?? ($product['name'] ?? '')),
+            );
+            $text = $this->nullable($lead ?? $fallback);
+
+            return $text === null ? [] : [$label.': '.$text];
+        }
+
+        if ($tone === ClientInquiry::TONE_FORMAL) {
+            $lines = [$label.': '.$product['name']];
+            $paragraph = $description === '' ? null : OfferProductText::paragraph($description);
+            if ($paragraph !== null) {
+                $lines[] = $paragraph;
+            }
+
+            return $lines;
+        }
+
+        $maker = trim((string) ($product['manufacturer'] ?? ''));
+
+        return [sprintf(
+            '%s: %s (SKU %s)%s',
+            $label,
+            $product['name'],
+            $product['sku'],
+            $maker !== '' ? ', '.$maker : ''
+        )];
     }
 
     /**

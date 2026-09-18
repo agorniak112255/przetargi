@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Http\Requests;
 
+use App\Models\ClientInquiry;
 use App\Support\OfferPricing;
 use Closure;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class ComposeClientInquiryRequest extends FormRequest
 {
@@ -45,6 +47,8 @@ class ComposeClientInquiryRequest extends FormRequest
     public function rules(): array
     {
         return [
+            // Zmiana szablonu przepisuje list — brak pola zostawia zapisany szablon.
+            'tone' => ['nullable', Rule::in(ClientInquiry::TONES)],
             'answers' => ['present', 'array'],
             'answers.*.option_id' => ['required', 'string', 'max:80'],
             'answers.*.custom' => ['nullable', 'string', 'max:400'],

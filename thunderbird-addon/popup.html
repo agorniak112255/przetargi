@@ -44,11 +44,18 @@
     <!-- Przycisk na górze: okienko Thunderbirda potrafi uciąć dolną część. -->
     <div class="row">
       <button id="send" class="primary">Wyślij do Przetargów</button>
-      <select id="tone" title="Ton odpowiedzi">
-        <option value="formal">Ton oficjalny</option>
-        <option value="handlowy">Ton handlowy</option>
-      </select>
     </div>
+
+    <!-- Szablon decyduje, jak wygląda pozycja w liście do klienta. -->
+    <label class="field">
+      <span>Szablon listu</span>
+      <select id="tone" title="Szablon listu do klienta">
+        <option value="handlowy">Handlowy (pełna specyfikacja)</option>
+        <option value="bez_sku">Bez SKU (proste opisy)</option>
+        <option value="formal">Oficjalny (długie opisy)</option>
+      </select>
+    </label>
+    <p id="toneHint" class="muted"></p>
 
     <p class="muted">Treść maila — możesz poprawić przed wysłaniem.</p>
     <textarea id="body" rows="6" spellcheck="false"></textarea>

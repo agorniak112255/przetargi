@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Http\Requests;
 
+use App\Models\ClientInquiry;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class StoreClientInquiryRequest extends FormRequest
 {
@@ -22,7 +24,8 @@ class StoreClientInquiryRequest extends FormRequest
             'body' => ['required', 'string', 'min:20', 'max:20000'],
             'subject' => ['nullable', 'string', 'max:200'],
             'client_id' => ['nullable', 'integer', 'exists:clients,id'],
-            'tone' => ['required', 'in:formal,handlowy'],
+            // szablon listu do klienta — lista w ClientInquiry::TONES
+            'tone' => ['required', Rule::in(ClientInquiry::TONES)],
             // Pochodzenie zapytania — wypełnia je dodatek do Thunderbirda.
             'source_channel' => ['nullable', 'in:web,thunderbird'],
             'source_message_id' => ['nullable', 'string', 'max:255'],
@@ -43,6 +46,7 @@ class StoreClientInquiryRequest extends FormRequest
     {
         return [
             'body.min' => 'Wklej treść zapytania (co najmniej 20 znaków).',
+            'tone.in' => 'Nieznany szablon listu.',
             'source_from.max' => 'Nagłówek nadawcy może mieć najwyżej 400 znaków.',
             'source_sent_at.date' => 'Data wysłania maila jest nieczytelna.',
         ];

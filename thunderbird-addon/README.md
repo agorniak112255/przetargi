@@ -15,6 +15,31 @@ odpowiedź jako odpowiedź na ten sam mail.
    Otwiera się zwykłe okno odpowiedzi — z adresatem, cytatem i podpisem — z gotową treścią na górze.
 6. Wysyłasz. Dodatek sam oznacza zapytanie w aplikacji jako obsłużone.
 
+## Szablony listu
+
+Pod przyciskiem „Wyślij do Przetargów” wybiera się szablon listu do klienta.
+Ten sam dobór towarów wygląda w nim inaczej:
+
+| Szablon | Co widzi klient w pozycji |
+| --- | --- |
+| **Handlowy (pełna specyfikacja)** | nazwa z katalogu, SKU i producent, normy, cena |
+| **Bez SKU (proste opisy)** | jedno zdanie opisu bez marki i modelu, normy, cena |
+| **Oficjalny (długie opisy)** | nazwa, akapit opisu z karty wyrobu, normy, cena — bez SKU |
+
+Skąd bierze się opis: z karty wyrobu w aplikacji (`products.description`), nie
+z modelu językowego przy pisaniu listu. Do szablonu oficjalnego wchodzi proza
+z karty (bez przepisanych ze strony dostawcy bloków typu „NORMY I CERTYFIKATY:”),
+przycięta na końcu zdania. Do szablonu bez SKU — jej pierwsze zdanie z wyciętą
+nazwą producenta i oznaczeniem modelu.
+
+Gdy karta nie ma opisu, szablon bez SKU opisuje pozycję **słowami klienta
+z zapytania** — nic nie jest dopisywane od siebie. Zamiennika nigdy nie
+opisujemy słowami klienta (pytał o co innego): bez opisu w karcie taka
+propozycja po prostu nie wchodzi do listu.
+
+Szablon można zmienić także później, na stronie odpowiedzi w aplikacji
+(„Dla całej oferty” → „Szablon listu”) — list przepisuje się od razu.
+
 ## Gdy ten sam mail ma już ktoś inny
 
 Ten sam mail od klienta trafia czasem do kilku handlowców naraz. Jeśli zapytanie
@@ -215,7 +240,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.5.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.6.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia

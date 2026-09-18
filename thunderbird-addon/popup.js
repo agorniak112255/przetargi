@@ -245,9 +245,16 @@ async function init() {
   }
 
   el('tone').value = settings.tone
+  updateToneHint()
   el('body').value = text
   updateCounter()
   show('fresh')
+}
+
+/** Co klient zobaczy w wybranym szablonie — wprost pod listą wyboru. */
+function updateToneHint() {
+  const hint = TONES[el('tone').value]
+  el('toneHint').textContent = hint === undefined ? '' : hint
 }
 
 function updateCounter() {
@@ -274,6 +281,7 @@ async function forceCreate() {
     // ale zapamiętujemy, że to świadome założenie kopii.
     forced = true
     el('tone').value = settings.tone
+    updateToneHint()
     el('body').value = sourceText
     updateCounter()
     show('fresh')
@@ -319,6 +327,7 @@ el('dupForce').addEventListener('click', () => {
 el('dupCancel').addEventListener('click', () => {
   cancelDuplicate().catch((e) => status(e.message || String(e), 'error'))
 })
+el('tone').addEventListener('change', updateToneHint)
 el('body').addEventListener('input', updateCounter)
 
 init().catch((e) => status(e.message || String(e), 'error'))

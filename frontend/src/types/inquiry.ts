@@ -1,6 +1,7 @@
 // Typy 1:1 z kontraktem API „Zapytania” (PLAN_ZAPYTANIA_v2).
 
-export type InquiryTone = 'formal' | 'handlowy'
+/** Szablon listu do klienta; nazwy w src/lib/inquiryTone.ts. */
+export type InquiryTone = 'formal' | 'handlowy' | 'bez_sku'
 
 export type InquiryAnswer = {
   option_id: string

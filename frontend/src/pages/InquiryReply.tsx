@@ -5,6 +5,7 @@ import { InquiryContactChip, InquiryContactModal } from '../components/InquiryCo
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { useAuth } from '../auth'
 import { api } from '../lib/api'
+import { toneHint, toneOptions } from '../lib/inquiryTone'
 import type {
   InquiryAnswer,
   InquiryCard,
@@ -14,6 +15,7 @@ import type {
   InquiryItem,
   InquiryPayload,
   InquiryPriceMode,
+  InquiryTone,
 } from '../types/inquiry'
 
 type Draft = { subject: string; body: string }
@@ -440,7 +442,7 @@ export function InquiryReply() {
     await p
   }
 
-  async function compose(partial: Answers): Promise<boolean> {
+  async function compose(partial: Answers, tone?: InquiryTone): Promise<boolean> {
     if (!inquiry || composeBusy) return false
     const edited = subject !== composedRef.current.subject || body !== composedRef.current.body
     if (edited && !window.confirm('Nadpisać ręczne zmiany w treści listu?')) {
@@ -454,7 +456,12 @@ export function InquiryReply() {
       if (pendingSave.current) await pendingSave.current.catch(() => undefined)
       const done = await api<InquiryPayload>(`/inquiries/${inquiry.id}/compose`, {
         method: 'POST',
-        body: JSON.stringify({ answers: partial, extra_note: noteDraft.trim() || null }),
+        body: JSON.stringify({
+          answers: partial,
+          extra_note: noteDraft.trim() || null,
+          // bez pola „tone” backend zostawia zapisany szablon
+          ...(tone ? { tone } : {}),
+        }),
       })
       applyComposed(done)
       setMsg('List przepisany.')
@@ -469,6 +476,11 @@ export function InquiryReply() {
 
   function onAnswer(key: string, answer: InquiryAnswer) {
     void compose({ [key]: answer })
+  }
+
+  function onTone(tone: InquiryTone) {
+    if (!inquiry || tone === inquiry.tone) return
+    void compose({}, tone)
   }
 
   function onPriceMode(mode: InquiryPriceMode) {
@@ -833,7 +845,21 @@ export function InquiryReply() {
 
           <div className="rounded-xl bg-white p-4 shadow-sm">
             <h2 className="mb-2 text-sm font-semibold">Dla całej oferty</h2>
-            <p className="text-xs font-semibold text-slate-700">Ceny w liście</p>
+            <p className="text-xs font-semibold text-slate-700">Szablon listu</p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {toneOptions.map((opt) => (
+                <Chip
+                  key={opt.id}
+                  active={inquiry.tone === opt.id}
+                  disabled={busy}
+                  onClick={() => onTone(opt.id)}
+                >
+                  {opt.label}
+                </Chip>
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500">{toneHint(inquiry.tone)}</p>
+            <p className="mt-3 text-xs font-semibold text-slate-700">Ceny w liście</p>
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               {priceModeOptions.map((opt) => (
                 <Chip

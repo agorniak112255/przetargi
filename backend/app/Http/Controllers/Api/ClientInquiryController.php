@@ -330,8 +330,10 @@ class ClientInquiryController extends Controller
         }
 
         $data = $request->validated();
+        // Puste „answers” (np. samo przełączenie szablonu listu) walidator
+        // pomija w wyniku — bez tego domyślnego pustego zbioru leciał błąd.
         /** @var array<string, array{option_id: string, custom?: string|null}> $answers */
-        $answers = $data['answers'];
+        $answers = is_array($data['answers'] ?? null) ? $data['answers'] : [];
 
         try {
             $inquiry = $this->inquiries->compose(
@@ -339,6 +341,8 @@ class ClientInquiryController extends Controller
                 $answers,
                 // brak klucza w żądaniu = nie ruszaj zapisanego dopisku
                 array_key_exists('extra_note', $data) ? $data['extra_note'] : false,
+                // zmiana szablonu listu ze strony odpowiedzi; brak pola = bez zmiany
+                isset($data['tone']) ? (string) $data['tone'] : null,
             );
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
