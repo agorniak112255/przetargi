@@ -246,7 +246,15 @@ class ClientInquiryController extends Controller
 
     public function preferences(Request $request): JsonResponse
     {
-        return response()->json($this->inquiries->lastPreferences($request->user()));
+        // Tylko ustawienia listu; warunki oferty z ostatniego zapytania przepisuje
+        // analiza przy zakładaniu nowego i strona odpowiedzi czyta je stamtąd.
+        $last = $this->inquiries->lastPreferences($request->user());
+
+        return response()->json([
+            'tone' => $last['tone'],
+            'price_mode' => $last['price_mode'],
+            'margin' => $last['margin'],
+        ]);
     }
 
     public function store(StoreClientInquiryRequest $request): JsonResponse
@@ -343,6 +351,8 @@ class ClientInquiryController extends Controller
                 array_key_exists('extra_note', $data) ? $data['extra_note'] : false,
                 // zmiana szablonu listu ze strony odpowiedzi; brak pola = bez zmiany
                 isset($data['tone']) ? (string) $data['tone'] : null,
+                // warunki oferty; brak klucza = zostaw zapisane
+                array_key_exists('terms', $data) && is_array($data['terms']) ? $data['terms'] : false,
             );
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);

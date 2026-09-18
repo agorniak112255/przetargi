@@ -27,12 +27,14 @@ final class InquiryReplyHtml
     /**
      * @param  list<array{head: string, quote: string|null, answer: list<string>}>  $rows
      * @param  list<string>  $outro
+     * @param  list<array{label: string, value: string}>  $terms  warunki wpisane przez handlowca
      */
-    public static function render(string $intro, array $rows, ?string $note, array $outro): string
+    public static function render(string $intro, array $rows, ?string $note, array $outro, array $terms = []): string
     {
         $html = '<div style="'.self::FONT.'">';
         $html .= self::paragraph($intro);
         $html .= self::table($rows);
+        $html .= self::terms($terms);
 
         if ($note !== null && trim($note) !== '') {
             $html .= self::paragraph($note);
@@ -79,6 +81,32 @@ final class InquiryReplyHtml
             $html .= '<tr>'
                 .self::cell($ask, self::ASK_BG, '38%')
                 .self::cell(self::text(implode("\n", $row['answer'])), self::ANSWER_BG, null)
+                .'</tr>';
+        }
+
+        return $html.'</table>';
+    }
+
+    /**
+     * Warunki pod tabelą: etykieta i wartość w jednym wierszu. Klient pyta o nie
+     * wprost, więc stoją osobno, a nie w akapicie razem z dopiskiem handlowca.
+     *
+     * @param  list<array{label: string, value: string}>  $terms
+     */
+    private static function terms(array $terms): string
+    {
+        if ($terms === []) {
+            return '';
+        }
+
+        $html = '<table role="presentation" cellpadding="0" cellspacing="0" '
+            .'style="border-collapse:collapse;margin:0 0 12px;'.self::FONT.'">';
+        foreach ($terms as $term) {
+            $html .= '<tr>'
+                .'<td style="padding:2px 12px 2px 0;color:#475569;vertical-align:top;white-space:nowrap">'
+                .self::text($term['label'])
+                .'</td>'
+                .'<td style="padding:2px 0;vertical-align:top">'.self::text($term['value']).'</td>'
                 .'</tr>';
         }
 

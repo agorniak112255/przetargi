@@ -199,7 +199,7 @@ final class ClientInquiryApiTest extends TestCase
             ->assertJsonPath('attention_count', 0);
 
         $body = (string) $res->json('reply_body');
-        $this->assertStringContainsString("1. 30 szt, rozmiar z zapytania: 10\n30szt Rękawice chemoodporne rozmiar 10\nProdukt: Rękawice chemoodporne (SKU G10), Supon", $body);
+        $this->assertStringContainsString("Poz. 1 — ilość: 30 szt, rozmiar z zapytania: 10\n30szt Rękawice chemoodporne rozmiar 10\nProdukt: Rękawice chemoodporne (SKU G10), Supon", $body);
         $this->assertStringNotContainsString('Cena:', $body);
     }
 
@@ -212,6 +212,8 @@ final class ClientInquiryApiTest extends TestCase
             'source_body' => 'Poprzednie zapytanie o rękawice.',
             'analysis' => [],
             'answers' => ['price' => ['option_id' => 'catalog_margin', 'custom' => '25']],
+            // warunki z poprzedniej oferty mają się podpowiedzieć przy nowej
+            'offer_terms' => ['lead_time' => '3 dni robocze', 'payment' => 'przelew 30 dni'],
         ]);
 
         Sanctum::actingAs($user);
@@ -261,6 +263,9 @@ final class ClientInquiryApiTest extends TestCase
             ->assertJsonPath('answers.price.option_id', 'catalog_margin')
             ->assertJsonPath('answers.price.custom', '25')
             ->assertJsonPath('questions.0', 'Jaki termin dostawy?')
+            ->assertJsonPath('terms.lead_time', '3 dni robocze')
+            ->assertJsonPath('terms.payment', 'przelew 30 dni')
+            ->assertJsonPath('terms.delivery', null)
             ->assertJsonPath('items.0.confidence', 'none')
             ->assertJsonPath('items.0.chosen', 'check')
             ->assertJsonPath('items.0.flags', ['low_score'])
@@ -822,11 +827,11 @@ final class ClientInquiryApiTest extends TestCase
             ->assertJsonPath('attention_count', 1);
 
         $body = (string) $res->json('reply_body');
-        $this->assertStringContainsString("1. 30 szt, rozmiar z zapytania: 10\n", $body);
+        $this->assertStringContainsString("Poz. 1 — ilość: 30 szt, rozmiar z zapytania: 10\n", $body);
         $this->assertStringContainsString('Cena: 22,15 zł netto', $body);
         // jednostka z maila klienta stoi w nagłówku pozycji, nigdy przy naszej cenie
         $this->assertStringNotContainsString('netto / szt', $body);
-        $this->assertStringContainsString("2. 4 pary, rozmiar z zapytania: 43\n", $body);
+        $this->assertStringContainsString("Poz. 2 — ilość: 4 pary, rozmiar z zapytania: 43\n", $body);
         $this->assertStringContainsString("SKU FW94), Portwest\nNormy: S4\nCena: do potwierdzenia", $body);
         $this->assertStringContainsString("\nDopisek zostaje\n", $body);
         $this->assertStringNotContainsString('SUB1', $body);
@@ -1000,6 +1005,62 @@ final class ClientInquiryApiTest extends TestCase
         $this->getJson('/api/inquiries/preferences')
             ->assertOk()
             ->assertExactJson(['tone' => 'handlowy', 'price_mode' => 'none', 'margin' => 18]);
+    }
+
+    public function test_offer_terms_go_to_the_letter_and_come_back_in_the_view(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'handlowy',
+            'source_subject' => 'Buty robocze',
+            'source_body' => 'BUTY UVEX 8543.8 S1 SRC ROZMIAR 44',
+            'analysis' => [
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => 'BUTY UVEX 8543.8 S1 SRC ROZMIAR 44', 'qty' => '1', 'unit' => null, 'size' => '44', 'query' => 'buty uvex 8543.8'],
+                ],
+                'matches' => [
+                    ['query' => 'buty uvex 8543.8', 'products' => [
+                        ['id' => 31, 'sku' => '8543/8/35', 'name' => 'Półbut Uvex 1 8543/8', 'manufacturer' => 'UVEX', 'norms' => 'EN ISO 20345 S1 SRC', 'catalog_price_net' => '304.50', 'currency' => 'PLN', 'catalog_pln' => 304.5, 'offer_pln' => 359.31, 'stock' => 1, 'score' => 95],
+                    ]],
+                ],
+                'substitutes' => [],
+                'cards' => [],
+            ],
+            'answers' => ['product:item_1' => ['option_id' => 'p:31']],
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => [],
+            'terms' => [
+                'lead_time' => '3 dni robocze od zamówienia',
+                'delivery' => 'kurier, 25 zł netto',
+                // puste pole nie jest warunkiem i do listu nie idzie
+                'payment' => '   ',
+                'validity' => '14 dni',
+            ],
+        ]);
+
+        $res->assertOk()
+            ->assertJsonPath('terms.lead_time', '3 dni robocze od zamówienia')
+            ->assertJsonPath('terms.delivery', 'kurier, 25 zł netto')
+            ->assertJsonPath('terms.payment', null)
+            ->assertJsonPath('terms.validity', '14 dni');
+
+        $body = (string) $res->json('reply_body');
+        $this->assertStringContainsString("Warunki:\nTermin realizacji: 3 dni robocze od zamówienia\nDostawa: kurier, 25 zł netto\nWażność oferty: 14 dni", $body);
+        $this->assertStringNotContainsString('Płatność:', $body);
+
+        $html = (string) $res->json('reply_html');
+        $this->assertStringContainsString('Termin realizacji', $html);
+        $this->assertStringContainsString('3 dni robocze od zamówienia', $html);
+
+        // brak klucza „terms” w kolejnym żądaniu zostawia zapisane warunki
+        $this->postJson("/api/inquiries/{$inquiry->id}/compose", ['answers' => []])
+            ->assertOk()
+            ->assertJsonPath('terms.lead_time', '3 dni robocze od zamówienia');
     }
 
     public function test_other_user_cannot_edit_or_mark_inquiry(): void

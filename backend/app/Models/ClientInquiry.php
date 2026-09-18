@@ -21,6 +21,17 @@ class ClientInquiry extends Model
     /** Szablony listu do klienta; wybór zapisuje się w kolumnie „tone”. */
     public const TONES = [self::TONE_HANDLOWY, self::TONE_FORMAL, self::TONE_NO_SKU];
 
+    /**
+     * Warunki oferty wpisywane przez handlowca — klucz w `offer_terms` i etykieta
+     * w liście do klienta. Kolejność jest kolejnością wierszy w liście.
+     */
+    public const OFFER_TERMS = [
+        'lead_time' => 'Termin realizacji',
+        'delivery' => 'Dostawa',
+        'payment' => 'Płatność',
+        'validity' => 'Ważność oferty',
+    ];
+
     protected $fillable = [
         'user_id',
         'client_id',
@@ -39,6 +50,7 @@ class ClientInquiry extends Model
         'analysis',
         'answers',
         'extra_note',
+        'offer_terms',
         'reply_subject',
         'reply_body',
         'reply_html',
@@ -55,6 +67,7 @@ class ClientInquiry extends Model
             'send_requested_at' => 'datetime',
             'source_sent_at' => 'datetime',
             'contact' => 'array',
+            'offer_terms' => 'array',
         ];
     }
 

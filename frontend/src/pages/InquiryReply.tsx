@@ -15,11 +15,14 @@ import type {
   InquiryItem,
   InquiryPayload,
   InquiryPriceMode,
+  InquiryTerms,
   InquiryTone,
 } from '../types/inquiry'
 
 type Draft = { subject: string; body: string }
 type Answers = Record<string, InquiryAnswer>
+/** Warunki w polach formularza — pusty string zamiast null, bo tak działa `<input>`. */
+type TermsDraft = Record<keyof InquiryTerms, string>
 
 const PLN = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' })
 
@@ -60,6 +63,20 @@ const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
   { id: 'catalog', label: 'Cena katalogowa' },
   { id: 'catalog_margin', label: 'Zakup + marża' },
 ]
+
+/**
+ * Warunki, o które klient pyta wprost w mailu. Podpowiedzi pokazują format
+ * odpowiedzi, a nie przykładowe zobowiązanie — handlowiec wpisuje swoje.
+ */
+const termFields: { key: keyof InquiryTerms; label: string; placeholder: string }[] = [
+  { key: 'lead_time', label: 'Termin realizacji', placeholder: 'np. 3 dni robocze od zamówienia' },
+  { key: 'delivery', label: 'Dostawa', placeholder: 'np. kurier, koszt 25 zł netto' },
+  { key: 'payment', label: 'Płatność', placeholder: 'np. przelew 30 dni' },
+  { key: 'validity', label: 'Ważność oferty', placeholder: 'np. 14 dni' },
+]
+
+/** Limit z kontraktu API — dłuższego warunku serwer i tak nie przyjmie. */
+const TERM_MAX = 200
 
 function who(entry: InquiryDuplicateRef): string {
   return entry.user?.name ?? 'inna osoba'
@@ -385,6 +402,27 @@ function customDraftsFrom(p: InquiryPayload): Record<string, string> {
   return out
 }
 
+/** Warunki z serwera do pól; pole dochodzi po stronie API, więc czytamy ostrożnie. */
+function termsDraftFrom(p: InquiryPayload): TermsDraft {
+  const saved: Partial<InquiryTerms> = p.terms ?? {}
+  return {
+    lead_time: saved.lead_time ?? '',
+    delivery: saved.delivery ?? '',
+    payment: saved.payment ?? '',
+    validity: saved.validity ?? '',
+  }
+}
+
+/** Pola do kontraktu API: puste pole = null, czyli warunek skasowany. */
+function termsPayload(draft: TermsDraft): InquiryTerms {
+  return {
+    lead_time: draft.lead_time.trim() || null,
+    delivery: draft.delivery.trim() || null,
+    payment: draft.payment.trim() || null,
+    validity: draft.validity.trim() || null,
+  }
+}
+
 export function InquiryReply() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -399,6 +437,12 @@ export function InquiryReply() {
   const [saving, setSaving] = useState(false)
   const [marginDraft, setMarginDraft] = useState('')
   const [noteDraft, setNoteDraft] = useState('')
+  const [termsDraft, setTermsDraft] = useState<TermsDraft>({
+    lead_time: '',
+    delivery: '',
+    payment: '',
+    validity: '',
+  })
   const [customDrafts, setCustomDrafts] = useState<Record<string, string>>({})
   const [checked, setChecked] = useState<Record<number, boolean>>({})
   const [previewId, setPreviewId] = useState<number | null>(null)
@@ -415,6 +459,7 @@ export function InquiryReply() {
   function resetDrafts(p: InquiryPayload) {
     setMarginDraft(String(p.price.margin))
     setNoteDraft(p.extra_note ?? '')
+    setTermsDraft(termsDraftFrom(p))
     setCustomDrafts(customDraftsFrom(p))
   }
 
@@ -482,6 +527,8 @@ export function InquiryReply() {
         body: JSON.stringify({
           answers: partial,
           extra_note: noteDraft.trim() || null,
+          // warunki idą przy każdym przepisaniu listu, tak samo jak dopisek
+          terms: termsPayload(termsDraft),
           // bez pola „tone” backend zostawia zapisany szablon
           ...(tone ? { tone } : {}),
         }),
@@ -528,6 +575,13 @@ export function InquiryReply() {
   function onNoteBlur() {
     if (!inquiry) return
     if (noteDraft.trim() === (inquiry.extra_note ?? '').trim()) return
+    void compose({})
+  }
+
+  /** Przepisujemy list dopiero, gdy warunek naprawdę się zmienił — samo wejście w pole nic nie kosztuje. */
+  function onTermsBlur(key: keyof InquiryTerms) {
+    if (!inquiry) return
+    if (termsDraft[key].trim() === termsDraftFrom(inquiry)[key].trim()) return
     void compose({})
   }
 
@@ -912,6 +966,28 @@ export function InquiryReply() {
                 </label>
               )}
             </div>
+            {/* Klient pyta o te cztery rzeczy wprost w mailu; bez pól handlowiec
+                musiał je dopisywać ręcznie na końcu listu. */}
+            <p className="mt-3 text-xs font-semibold text-slate-700">Warunki oferty</p>
+            <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+              {termFields.map((field) => (
+                <label key={field.key} className="block text-[11px] font-medium text-slate-600">
+                  {field.label}
+                  <input
+                    className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1 text-xs font-normal"
+                    disabled={busy}
+                    maxLength={TERM_MAX}
+                    value={termsDraft[field.key]}
+                    onChange={(e) => setTermsDraft((d) => ({ ...d, [field.key]: e.target.value }))}
+                    onBlur={() => onTermsBlur(field.key)}
+                    placeholder={field.placeholder}
+                  />
+                </label>
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500">
+              Puste pola nie trafiają do listu — klient zobaczy tylko to, co wpiszesz.
+            </p>
             {inquiry.global_cards.length > 0 && (
               <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
                 {inquiry.global_cards.map((card) => (
@@ -935,7 +1011,7 @@ export function InquiryReply() {
                 value={noteDraft}
                 onChange={(e) => setNoteDraft(e.target.value)}
                 onBlur={onNoteBlur}
-                placeholder="np. termin realizacji, warunki dostawy…"
+                placeholder="np. uwaga do pozycji, informacja o dostępności…"
               />
             </label>
           </div>

@@ -230,16 +230,43 @@ final class OfferProductText
         }
 
         $cut = mb_substr($text, 0, $limit);
-        foreach (['.', '!', '?'] as $mark) {
-            $at = mb_strrpos($cut, $mark);
-            if ($at !== false && $at >= (int) ($limit / 2)) {
-                return trim(mb_substr($cut, 0, $at + 1));
-            }
+        $end = self::lastSentenceEnd($cut, (int) ($limit / 2));
+        if ($end !== null) {
+            return trim(mb_substr($cut, 0, $end + 1));
         }
 
         $space = mb_strrpos($cut, ' ');
 
         return trim($space === false ? $cut : mb_substr($cut, 0, $space)).'…';
+    }
+
+    /**
+     * Koniec ostatniego pełnego zdania w tekście, nie bliżej początku niż $min.
+     *
+     * Kropka kończy zdanie tylko wtedy, gdy stoi przed spacją albo na końcu, i gdy
+     * nie jest w środku kodu wyrobu ani w niezamkniętym nawiasie. Bez tego opis
+     * urywał się w połowie zapisu „(8543.8.” i tak szedł do klienta.
+     */
+    private static function lastSentenceEnd(string $text, int $min): ?int
+    {
+        if (preg_match_all('/[.!?](?=\s|$)/u', $text, $m, PREG_OFFSET_CAPTURE) === false) {
+            return null;
+        }
+        $found = null;
+        foreach ($m[0] ?? [] as $hit) {
+            // offset z PREG_OFFSET_CAPTURE jest bajtowy, a tniemy po znakach
+            $at = mb_strlen(substr($text, 0, (int) $hit[1]));
+            if ($at < $min) {
+                continue;
+            }
+            $before = mb_substr($text, 0, $at);
+            if (mb_substr_count($before, '(') > mb_substr_count($before, ')')) {
+                continue;
+            }
+            $found = $at;
+        }
+
+        return $found;
     }
 
     private static function isSectionHeader(string $line): bool

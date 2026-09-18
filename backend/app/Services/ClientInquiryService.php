@@ -112,6 +112,7 @@ final class ClientInquiryService
             'source_sent_at' => $this->parseSentAt($source['sent_at'] ?? null),
             'contact' => $contact,
             'source_body' => $body,
+            'offer_terms' => $preferences['terms'] === [] ? null : $preferences['terms'],
             'analysis' => [
                 'subject' => $extracted['subject'],
                 // Ślad audytowy: co dokładnie poszło do modelu, gdy mail był cięty.
@@ -143,11 +144,17 @@ final class ClientInquiryService
         array $answers,
         string|false|null $extraNote,
         ?string $tone = null,
+        array|false $terms = false,
     ): ClientInquiry {
         $saved = is_array($inquiry->answers) ? $inquiry->answers : [];
         $merged = array_merge($saved, $answers);
         foreach ($this->defaultAnswers($inquiry, $this->priceModeOf($merged), $this->marginPercent($merged)) as $key => $answer) {
             $merged[$key] ??= $answer;
+        }
+        // Warunki oferty wchodzą do listu, więc muszą być zapisane przed jego złożeniem.
+        // `false` = klucza nie było w żądaniu, czyli zostawiamy zapisane.
+        if ($terms !== false) {
+            $inquiry->forceFill(['offer_terms' => $this->offerTerms($terms)]);
         }
 
         return $this->saveReply(
@@ -156,6 +163,39 @@ final class ClientInquiryService
             $extraNote === false ? $this->nullable($inquiry->extra_note) : $this->nullable($extraNote),
             $tone,
         );
+    }
+
+    /**
+     * Warunki oferty w kolejności z modelu, bez pustych. Puste pole znaczy „nie wiem”
+     * i do listu nie idzie — zdanie „Termin realizacji:” bez treści czytałoby się jak
+     * pomyłka, a dopisanie czegokolwiek byłoby obietnicą, której nikt nie złożył.
+     *
+     * @param  array<string, mixed>  $terms
+     * @return array<string, string>|null
+     */
+    private function offerTerms(array $terms): ?array
+    {
+        $out = [];
+        foreach (array_keys(ClientInquiry::OFFER_TERMS) as $key) {
+            $value = $this->nullable($terms[$key] ?? null);
+            if ($value !== null) {
+                $out[$key] = mb_substr($value, 0, 200);
+            }
+        }
+
+        return $out === [] ? null : $out;
+    }
+
+    /**
+     * Zapisane warunki oferty tego zapytania.
+     *
+     * @return array<string, string>
+     */
+    private function termsOf(ClientInquiry $inquiry): array
+    {
+        $saved = is_array($inquiry->offer_terms) ? $inquiry->offer_terms : [];
+
+        return $this->offerTerms($saved) ?? [];
     }
 
     /**
@@ -214,6 +254,9 @@ final class ClientInquiryService
             'tone' => $tone,
             'price_mode' => $this->priceModeOf($answers),
             'margin' => $this->marginPercent($answers),
+            // Warunki bywają te same przy kolejnych ofertach — podpowiadamy ostatnie,
+            // żeby handlowiec ich nie przepisywał. Zmienić może je przy każdym liście.
+            'terms' => $last === null ? [] : $this->termsOf($last),
         ];
     }
 
@@ -609,6 +652,7 @@ final class ClientInquiryService
             'cards' => $this->storedCards($analysis),
             'answers' => $answers,
             'extra_note' => $inquiry->extra_note,
+            'terms' => $this->termsView($inquiry),
             'reply_subject' => $inquiry->reply_subject,
             'reply_body' => $inquiry->reply_body,
             'reply_html' => $this->replyHtmlFor($inquiry),
@@ -2554,6 +2598,15 @@ final class ClientInquiryService
             '',
             $this->offerPositionBlocks($inquiry, $answers, $priceMode, $margin),
         ];
+        $terms = $this->termsOf($inquiry);
+        if ($terms !== []) {
+            // Odpowiedź na pytania, które klient zadał wprost — pod pozycjami, przed dopiskiem.
+            $parts[] = '';
+            $parts[] = 'Warunki:';
+            foreach ($terms as $key => $value) {
+                $parts[] = ClientInquiry::OFFER_TERMS[$key].': '.$value;
+            }
+        }
         $note = $this->nullable($extraNote);
         if ($note !== null) {
             $parts[] = '';
@@ -2580,8 +2633,42 @@ final class ClientInquiryService
                 $this->offerRows($inquiry, $answers, $priceMode, $margin),
                 $note,
                 $outro,
+                $this->termsLabelled($terms),
             ),
         ];
+    }
+
+    /**
+     * Warunki dla panelu: zawsze wszystkie klucze, niewypełnione jako null —
+     * inaczej pole w formularzu zniknęłoby po skasowaniu treści.
+     *
+     * @return array<string, string|null>
+     */
+    private function termsView(ClientInquiry $inquiry): array
+    {
+        $saved = $this->termsOf($inquiry);
+        $out = [];
+        foreach (array_keys(ClientInquiry::OFFER_TERMS) as $key) {
+            $out[$key] = $saved[$key] ?? null;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Warunki jako pary etykieta–wartość dla tabeli w liście.
+     *
+     * @param  array<string, string>  $terms
+     * @return list<array{label: string, value: string}>
+     */
+    private function termsLabelled(array $terms): array
+    {
+        $out = [];
+        foreach ($terms as $key => $value) {
+            $out[] = ['label' => ClientInquiry::OFFER_TERMS[$key], 'value' => $value];
+        }
+
+        return $out;
     }
 
     /** Wstęp listu: oficjalny mówi pełnym zdaniem, dwa pozostałe krótko. */
@@ -2769,16 +2856,19 @@ final class ClientInquiryService
         $size = trim((string) ($item['size'] ?? ''));
         // cytat idzie do klienta — bez ceny z cudzej oferty, reszta słowo w słowo
         $quote = InquiryQueryText::withoutPrice((string) ($item['quote'] ?? ''));
-        $head = (string) $n.'.';
+        // „1. 1, rozmiar z zapytania: 44” czytało się jak pomyłka: numer pozycji i ilość
+        // stały obok siebie jako dwie gołe jedynki. Numer nazywamy numerem, ilość ilością.
+        $head = 'Poz. '.(string) $n;
         // Rozmiar pochodzi z zapytania klienta i nikt go nie sprawdził w naszej karcie: kolumna „Pozycja
         // z zapytania” obok kolumny „Nasza propozycja” czytała się jak zapewnienie, że mamy ten rozmiar.
         // Dopóki karta nie potwierdza rozmiaru, piszemy wprost, skąd on jest.
+        $qty = $this->qtyLabel($item);
         $meta = array_values(array_filter([
-            $this->qtyLabel($item),
+            $qty === null ? null : 'ilość: '.$qty,
             $size !== '' ? 'rozmiar z zapytania: '.$size : null,
         ]));
         if ($meta !== []) {
-            $head .= ' '.implode(', ', $meta);
+            $head .= ' — '.implode(', ', $meta);
         }
         if ($product === null) {
             // bez SKU: nic nie zmyślamy, pozycja czeka na weryfikację pracownika

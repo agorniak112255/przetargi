@@ -47,6 +47,21 @@ final class OfferProductTextTest extends TestCase
         $this->assertStringStartsWith('Rękawice ochronne VITAL 175', $cutOnWord);
     }
 
+    public function test_paragraph_does_not_cut_inside_a_product_code(): void
+    {
+        // Kropka w kodzie wyrobu nie kończy zdania: list do klienta urywał się
+        // na „(8543.8.” i tak szedł do wysyłki.
+        $description = 'Półbut ochronny uvex 1 z materiałów syntetycznych, odpowiedni dla osób '
+            .'uczulonych na chrom. Wyciągana wkładka antystatyczna odprowadza wilgoć. '
+            .'Z karty technicznej (8543.8. wersja perforowana) wynika, że cholewka jest bezszwowa.';
+
+        $cut = OfferProductText::paragraph($description, 190);
+
+        $this->assertNotNull($cut);
+        $this->assertStringEndsWith('odprowadza wilgoć.', $cut);
+        $this->assertStringNotContainsString('8543.8.', $cut);
+    }
+
     public function test_paragraph_is_null_when_the_card_has_no_description(): void
     {
         $this->assertNull(OfferProductText::paragraph(''));

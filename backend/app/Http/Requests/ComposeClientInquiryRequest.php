@@ -54,6 +54,12 @@ class ComposeClientInquiryRequest extends FormRequest
             'answers.*.custom' => ['nullable', 'string', 'max:400'],
             'answers.price.custom' => ['nullable', 'string', $this->marginRule()],
             'extra_note' => ['nullable', 'string', 'max:1000'],
+            // Warunki oferty wpisane przez handlowca; brak klucza zostawia zapisane.
+            'terms' => ['sometimes', 'array'],
+            'terms.lead_time' => ['nullable', 'string', 'max:200'],
+            'terms.delivery' => ['nullable', 'string', 'max:200'],
+            'terms.payment' => ['nullable', 'string', 'max:200'],
+            'terms.validity' => ['nullable', 'string', 'max:200'],
         ];
     }
 }

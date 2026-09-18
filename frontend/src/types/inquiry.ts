@@ -98,6 +98,18 @@ export type InquiryPrice = {
   margin_max: number
 }
 
+/**
+ * Warunki handlowe wpisane przez handlowca — klient pyta o nie wprost w mailu.
+ * `null` (albo pusty string w żądaniu) = warunku nie ma i nie wchodzi do listu;
+ * front niczego tu nie dopowiada.
+ */
+export type InquiryTerms = {
+  lead_time: string | null
+  delivery: string | null
+  payment: string | null
+  validity: string | null
+}
+
 export type InquiryClientRef = {
   id: number
   name: string
@@ -179,6 +191,7 @@ export type InquiryPayload = {
   cards: InquiryCard[]
   answers: Record<string, InquiryAnswer>
   extra_note: string | null
+  terms: InquiryTerms
   reply_subject: string | null
   reply_body: string | null
   /** Ta sama treść jako tabela HTML; null po ręcznej poprawce tekstu. */
