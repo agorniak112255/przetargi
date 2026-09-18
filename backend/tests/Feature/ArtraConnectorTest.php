@@ -37,6 +37,9 @@ final class ArtraConnectorTest extends TestCase
 
     private const SOLE_GRAPHIC = 'https://cdn.shopify.com/s/files/1/0994/8672/8533/files/Raptor-black.png';
 
+    /** Ujęcie serii 732 — sklep nazywa je numerem modelu z nazwy produktu. */
+    private const SERIES_PHOTO = 'https://cdn.shopify.com/s/files/1/0994/8672/8533/files/732-1.jpg';
+
     /** @var array<string, array{title: string, sizes: list<string>, images: list<string>}> handle => karta */
     private array $products = [];
 
@@ -46,16 +49,40 @@ final class ArtraConnectorTest extends TestCase
         Queue::fake();
     }
 
-    public function test_zdjeciem_karty_jest_obraz_o_nazwie_produktu_a_nie_grafika_podeszwy(): void
+    public function test_karta_dostaje_cala_galerie_ze_zdjeciem_wyrobu_na_pierwszym_miejscu(): void
     {
-        // Sedno zmiany: galeria Shopify miesza zdjęcie tego modelu z grafikami technologii podeszwy, wspólnymi
-        // dla wielu butów. Wzięcie pierwszego lepszego obrazu wstawiało na kartę cudzy model albo cudzy kolor.
+        // Galeria karty to zdjęcie wyrobu, zdjęcie jego podeszwy i ujęcia serii — wszystkie trafiają na kartę,
+        // bo tyle właśnie pokazuje sklep. Zdjęcie wyrobu musi być pierwsze, bo pierwsze zostaje głównym:
+        // wzięcie pierwszego lepszego obrazu z galerii wstawiało na kartę cudzy model albo cudzy kolor.
         Storage::fake('public');
         $this->catalogCard('ARCASIO 732 616560 S1 P ESD');
         $this->shopProduct('3813781-arcasio-732-616560-s1-p-esd', 'ARCASIO 732 616560 S1 P ESD', images: [
             self::SOLE_GRAPHIC,
             self::PHOTO,
+            self::SERIES_PHOTO,
+        ]);
+        $this->fakeShop();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+
+        $product = Product::query()->where('sku', 'ARCASIO 732 616560 S1 P ESD')->sole();
+        $this->assertSame(
+            [self::PHOTO, self::SOLE_GRAPHIC, self::SERIES_PHOTO],
+            ProductImage::query()->where('product_id', $product->id)->orderBy('sort_order')->pluck('source_url')->all(),
+        );
+    }
+
+    public function test_plik_innego_modelu_i_grafika_szablonu_nie_trafiaja_do_galerii(): void
+    {
+        // „320.jpg” to ujęcie serii 320, a odznaka nagrody to grafika szablonu sklepu — obu do tej karty
+        // przypisać nie można, a na karcie wyglądałyby jak zdjęcia tego wyrobu.
+        Storage::fake('public');
+        $this->catalogCard('ARCASIO 732 616560 S1 P ESD');
+        $this->shopProduct('3813781-arcasio-732-616560-s1-p-esd', 'ARCASIO 732 616560 S1 P ESD', images: [
+            self::PHOTO,
             'https://cdn.shopify.com/s/files/1/0994/8672/8533/files/320.jpg',
+            'https://cdn.shopify.com/s/files/1/0994/8672/8533/files/ARCASIO_732_618080_S1_P_ESD.png',
+            'https://cdn.shopify.com/s/files/1/0994/8672/8533/files/product_gallery_german_design_award.png',
         ]);
         $this->fakeShop();
 
