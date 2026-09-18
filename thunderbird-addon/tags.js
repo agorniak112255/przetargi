@@ -19,14 +19,18 @@
  *    Message-ID, więc nie ma czego szukać w poczcie.
  */
 
-/** Prefiks kluczy naszych znaczników — czegokolwiek bez niego nie ruszamy. */
-const TAG_PREFIX = 'supon-'
+/**
+ * Prefiks kluczy naszych znaczników — czegokolwiek bez niego nie ruszamy.
+ * Bez myślnika i bez podkreślenia: Thunderbird 115–119 odrzucał takie klucze
+ * przy zakładaniu znacznika (naprawione w 120), a my dopuszczamy 115.
+ */
+const TAG_PREFIX = 'supon'
 
 /** Zapytanie założone, odpowiedź do klienta jeszcze nie poszła. */
-const TAG_OPEN = { suffix: '-zapytanie', label: 'Zapytanie', color: '#D97706' }
+const TAG_OPEN = { suffix: 'zapytanie', label: 'Zapytanie', color: '#D97706' }
 
 /** Odpowiedź do klienta wysłana — sprawa zamknięta. */
-const TAG_DONE = { suffix: '-wyslane', label: 'Wysłane', color: '#15803D' }
+const TAG_DONE = { suffix: 'wyslane', label: 'Wysłane', color: '#15803D' }
 
 /** Ile Message-ID leci w jednym pytaniu do serwera (limit endpointu to 200). */
 const LOOKUP_BATCH = 200
@@ -38,13 +42,21 @@ const PULL_PAGES = 5
 const RECHECK_LIMIT = 400
 
 /**
- * Uprawnienia do zapisu znaczników. `messages.update` stoi za `messagesUpdate`
- * od Thunderbirda 122, a wcześniej za `messagesModify` — bierzemy to, co zna
- * ta wersja. Oba są w `optional_permissions`, bo uprawnienie dopisane jako
- * wymagane zatrzymuje automatyczną aktualizację dodatku do czasu, aż człowiek
- * klinie zgodę w Menedżerze dodatków.
+ * Uprawnienia potrzebne do oznaczania. Trzy rzeczy, nie dwie:
+ *
+ *  - `messagesTags` — założenie znacznika (`messages.tags.create`),
+ *  - `messagesTagsList` — ODCZYT listy znaczników (`messages.tags.list`); osobne
+ *    uprawnienie od Thunderbirda 122. Jego brak nie daje komunikatu o braku
+ *    zgody: Thunderbird po prostu NIE WSTRZYKUJE funkcji do API, więc wywołanie
+ *    kończy się „list is not a function”. Właśnie tego brakowało od wersji
+ *    1.5.0 i dlatego nic nigdy się nie oznaczyło,
+ *  - `messages.update` — zapis znacznika na mailu: `messagesUpdate` od TB 122,
+ *    wcześniej `messagesModify`.
+ *
+ * Wszystkie są opcjonalne, bo uprawnienie dopisane jako wymagane zatrzymuje
+ * automatyczną aktualizację dodatku do czasu zgody człowieka.
  */
-const TAG_PERMISSIONS_MODERN = ['messagesTags', 'messagesUpdate']
+const TAG_PERMISSIONS_MODERN = ['messagesTags', 'messagesTagsList', 'messagesUpdate']
 const TAG_PERMISSIONS_LEGACY = ['messagesTags', 'messagesModify']
 
 /** Od tej wersji Thunderbirda zapis wiadomości stoi za `messagesUpdate`. */
@@ -145,6 +157,7 @@ function tagFor(row) {
 
   return {
     key: TAG_PREFIX + 'u' + userId + stage.suffix,
+    // np. „suponu3zapytanie” — klucz techniczny; człowiek widzi `label`.
     label: stage.label + ': ' + duplicateOwner(row),
     color: stage.color,
   }
@@ -192,6 +205,25 @@ async function knownTags(tags) {
   }
 
   return known
+}
+
+/** Folderów z tymi typami nie oznaczamy: to nie są maile od klientów. */
+const SKIP_FOLDER_TYPES = ['sent', 'drafts', 'templates', 'trash', 'junk', 'outbox', 'archives']
+
+/**
+ * Czy to folder, w którym nie ma czego oznaczać ani na co odpowiadać. Nowsze
+ * wydania Thunderbirda podają `specialUse` (tablica), starsze `type` (łańcuch).
+ *
+ * Używa tego także `findMessageByHeaderId` w background.js przy wyborze kopii
+ * wiadomości — wcześniej wołał tę funkcję, choć nie było jej w żadnym pliku.
+ */
+function skipFolder(folder) {
+  if (folder === null || folder === undefined) return false
+
+  const uses = Array.isArray(folder.specialUse) ? folder.specialUse.map(String) : []
+  if (uses.some((use) => SKIP_FOLDER_TYPES.includes(use))) return true
+
+  return SKIP_FOLDER_TYPES.includes(String(folder.type || ''))
 }
 
 /* ------------------------- pamięć tego, co nasze ------------------------- */
@@ -345,7 +377,18 @@ async function markHeaderIds(headerMessageIds) {
 
   markBroken = false
 
-  const known = await knownTags(tags)
+  let known
+  try {
+    known = await knownTags(tags)
+  } catch (e) {
+    // Bez tego wyjątek wychodził z całej funkcji i gasł w console.warn piętro
+    // wyżej — oznaczanie nie działało i nikomu nic nie mówiło.
+    markError = 'Thunderbird nie pozwala odczytać listy znaczników (' + e.message
+      + '). Włącz oznaczanie jeszcze raz w ustawieniach dodatku — dochodzi nowa zgoda.'
+
+    return 0
+  }
+
   const tagged = await taggedMails()
   let changed = 0
 
@@ -451,8 +494,17 @@ async function pullChangedMails() {
  */
 async function recheckTaggedMails() {
   const tagged = await taggedMails()
-  const ids = Object.keys(tagged).slice(0, RECHECK_LIMIT)
-  if (ids.length === 0) return
+  const all = Object.keys(tagged)
+  if (all.length === 0) return
+
+  // Rotacja: bez niej przy ponad 400 oznaczonych mailach reszta nie byłaby
+  // sprawdzona nigdy, a to z tego sprawdzenia znika znacznik po usunięciu
+  // zapytania w aplikacji.
+  const { recheckAt } = await browser.storage.local.get({ recheckAt: 0 })
+  const from = Number(recheckAt || 0) % all.length
+  const ids = all.slice(from, from + RECHECK_LIMIT)
+  if (ids.length < RECHECK_LIMIT) ids.push(...all.slice(0, RECHECK_LIMIT - ids.length))
+  await browser.storage.local.set({ recheckAt: (from + ids.length) % all.length })
 
   await markHeaderIds(ids)
 }
@@ -520,6 +572,8 @@ async function tagDiagnostics() {
   say('Połączenie z aplikacją', settings.token ? 'jest' : 'BRAK — zaloguj się w ustawieniach')
   say('Adres aplikacji', settings.baseUrl)
 
+  say('Ostatni błąd oznaczania', markError === null ? 'brak' : markError)
+
   const { tagsSince, tagged } = await browser.storage.local.get({ tagsSince: '', tagged: {} })
   say('Znacznik czasu', tagsSince === '' ? 'pusty (pełne nadgonienie 90 dni)' : String(tagsSince))
   say('Maile oznaczone przez dodatek', String(Object.keys(tagged || {}).length))
@@ -580,6 +634,11 @@ async function tagDiagnostics() {
     if (copies.length > 0) {
       const mine = ownTags(copies[0].tags)
       parts.push('na mailu stoi: ' + (mine.length === 0 ? 'nic naszego' : mine.join(' + ')))
+      const folder = copies[0].folder
+      if (folder) {
+        parts.push('folder: ' + String(folder.name || folder.path || '?')
+          + ' (' + String(folder.type || (Array.isArray(folder.specialUse) ? folder.specialUse.join('/') : 'zwykły')) + ')')
+      }
     }
     lines.push('  ' + id + ' — ' + parts.join(', '))
   }
@@ -599,8 +658,17 @@ async function tagDiagnostics() {
     try {
       const known = await knownTags(tags)
       const wantedTag = tagFor(list[0])
-      const ready = await ensureTag(api, known, wantedTag)
+      // `tags`, nie `api`: `api()` to funkcja HTTP z common.js.
+      const ready = await ensureTag(tags, known, wantedTag)
       lines.push('  znacznik ' + wantedTag.key + ': ' + (ready ? 'gotowy' : 'NIE UDAŁO SIĘ założyć'))
+      // Zapis przepuszcza tylko klucze zarejestrowane w profilu — nieznany
+      // wypada po cichu, a `update` i tak kończy się powodzeniem.
+      try {
+        const inProfile = (await tags.list()).some((row) => String(row.key) === wantedTag.key)
+        lines.push('  klucz w profilu: ' + (inProfile ? 'jest' : 'BRAK — zapis nic nie da'))
+      } catch (e) {
+        lines.push('  klucz w profilu: nie dało się sprawdzić (' + e.message + ')')
+      }
       if (ready) {
         await browser.messages.update(copies[0].id, {
           tags: (copies[0].tags || []).filter((key) => !String(key).startsWith(TAG_PREFIX)).concat([wantedTag.key]),

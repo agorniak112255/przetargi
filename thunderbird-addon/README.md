@@ -127,8 +127,15 @@ Kiedy dodatek sprawdza stan:
 
 ### Zgoda na zmianę znaczników
 
-Zmiana znaczników wiadomości to osobne uprawnienie Thunderbirda, więc trzeba je
-raz włączyć. Dopóki zgody nie ma, **okienko nad mailem samo o nią prosi**:
+Oznaczanie potrzebuje **trzech** zgód Thunderbirda: na założenie znacznika,
+na **odczyt listy znaczników** (osobne uprawnienie od Thunderbirda 122!) i na
+zapis znacznika na mailu. Brak środkowej zgody nie daje żadnego komunikatu —
+Thunderbird po prostu nie udostępnia funkcji, a wywołanie kończy się błędem
+„list is not a function”. Właśnie tego brakowało w wersjach 1.5.0–1.9.0 i dlatego
+nic się nie oznaczało. Po aktualizacji do 1.10.0 trzeba **włączyć oznaczanie
+jeszcze raz**, bo dochodzi nowa zgoda.
+
+Zgody włącza się raz. Dopóki zgody nie ma, **okienko nad mailem samo o nią prosi**:
 u dołu pojawia się „Nie widzisz na liście, kto zajmuje się mailem” z przyciskiem
 **Włącz oznaczanie**. To samo da się zrobić w **Dodatki i motywy → przy dodatku
 Ustawienia → Oznaczanie maili na liście**. Bez zgody dodatek działa jak dotąd,
@@ -294,7 +301,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.9.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.10.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia
