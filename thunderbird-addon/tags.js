@@ -42,6 +42,14 @@ const PULL_PAGES = 5
 const RECHECK_LIMIT = 400
 
 /**
+ * Jak długo pamiętamy, że maila o tym identyfikatorze nie ma w tym
+ * Thunderbirdzie. Lista z serwera obejmuje zapytania wszystkich handlowców,
+ * więc większość tych maili nigdy nie trafi do tej skrzynki — bez tej pamięci
+ * każde przejście przeszukiwało pocztę za nimi od nowa.
+ */
+const ABSENT_HOURS = 24
+
+/**
  * Uprawnienia potrzebne do oznaczania. Trzy rzeczy, nie dwie:
  *
  *  - `messagesTags` — założenie znacznika (`messages.tags.create`),
@@ -222,6 +230,8 @@ async function ensureTag(tags, known, wanted) {
       // Wyścig dwóch okien albo zajęty klucz — przy następnym przejściu
       // znacznik będzie już na liście i po prostu go użyjemy.
       await rememberMarkError('Nie udało się założyć znacznika „' + wanted.label + '”: ' + e.message)
+      // Pamięć listy znaczników mogła się rozjechać z profilem.
+      tagsCache = null
 
       return false
     }
@@ -239,13 +249,30 @@ async function ensureTag(tags, known, wanted) {
   return true
 }
 
-/** Mapa klucz → znacznik, po jednym odczycie listy z profilu. */
+/** Jak długo trzymamy odczytaną listę znaczników, zanim spytamy profil znowu. */
+const TAGS_CACHE_MINUTES = 5
+
+let tagsCache = null
+let tagsCacheAt = 0
+
+/**
+ * Mapa klucz → znacznik. Odczyt listy z profilu jest tani, ale nie darmowy,
+ * a szedł przy każdym sprawdzeniu — trzymamy go więc przez kilka minut.
+ * Nieudane założenie znacznika unieważnia pamięć, żeby następne podejście
+ * zobaczyło prawdziwy stan profilu.
+ */
 async function knownTags(tags) {
+  if (tagsCache !== null && Date.now() - tagsCacheAt < TAGS_CACHE_MINUTES * 60 * 1000) {
+    return tagsCache
+  }
+
   const known = new Map()
   const rows = await tags.list()
   for (const row of Array.isArray(rows) ? rows : []) {
     known.set(String(row.key), { tag: String(row.tag || ''), color: String(row.color || '') })
   }
+  tagsCache = known
+  tagsCacheAt = Date.now()
 
   return known
 }
@@ -276,6 +303,13 @@ function skipFolder(folder) {
  * dowiedzielibyśmy się, że coś trzeba zdjąć: usunięte zapytanie nie pojawi
  * się już w żadnej odpowiedzi serwera, a znacznik zostałby i kłamał.
  */
+/** Maile, których tu nie ma: Message-ID → kiedy sprawdzaliśmy (ms). */
+async function absentMails() {
+  const { absent } = await browser.storage.local.get({ absent: {} })
+
+  return absent && typeof absent === 'object' ? absent : {}
+}
+
 async function taggedMails() {
   const { tagged } = await browser.storage.local.get({ tagged: {} })
 
@@ -461,9 +495,38 @@ async function markHeaderIds(headerMessageIds) {
 
   const tagged = await taggedMails()
   let changed = 0
+  let taggedChanged = false
+
+  // Treść kolumny znamy z pamięci — służy do rozpoznania, czy dla tego maila
+  // cokolwiek się zmieniło. Bez tego powtórne sprawdzenie pytało pocztę o każdy
+  // zapamiętany mail (do czterystu zapytań co pół godziny), choć w większości
+  // nic się nie ruszyło.
+  const shown = await columnEntries()
+  const absent = await absentMails()
+  const now = Date.now()
+  let absentChanged = false
 
   for (const headerMessageId of ids) {
-    const rows = found.get(String(headerMessageId).toLowerCase()) || []
+    const key = String(headerMessageId).toLowerCase()
+    const rows = found.get(key) || []
+
+    // Najpierw sam rachunek, bez dotykania poczty i bez zakładania znaczników.
+    const wantedKeys = []
+    for (const row of rows) {
+      const wanted = tagFor(row)
+      if (! wantedKeys.includes(wanted.key)) wantedKeys.push(wanted.key)
+    }
+    if (sameSet(tagged[headerMessageId] || [], wantedKeys)
+      && (shown[key] || '') === columnTextFor(rows)) {
+      // Nic się nie zmieniło — ten mail zostawiamy w spokoju.
+      continue
+    }
+
+    // Maila nie było tu przy poprzednim sprawdzeniu i od tego czasu minęło mało
+    // czasu — nie ma po co znowu przeszukiwać poczty.
+    if (absent[key] !== undefined && now - Number(absent[key]) < ABSENT_HOURS * 60 * 60 * 1000) {
+      continue
+    }
 
     const keys = []
     for (const row of rows) {
@@ -477,6 +540,14 @@ async function markHeaderIds(headerMessageIds) {
     const copies = await messagesWithHeaderId(headerMessageId)
     // Brak kopii to zwykła sytuacja — mail kolegi, którego nie mamy u siebie.
     // Awarią jest dopiero nieudany zapis na mailu, który tu jest.
+    if (copies.length === 0) {
+      if (absent[key] === undefined) absentChanged = true
+      absent[key] = now
+    } else if (absent[key] !== undefined) {
+      delete absent[key]
+      absentChanged = true
+    }
+
     let written = true
     for (const message of copies) {
       const state = await applyTags(message, keys)
@@ -493,13 +564,20 @@ async function markHeaderIds(headerMessageIds) {
       // Bez kopii w tym Thunderbirdzie nie ma na czym stać znacznikowi — wpis
       // w pamięci mówiłby nieprawdę i „Wyłącz i usuń znaczniki” szukałoby maila,
       // którego tu nie ma.
-      delete tagged[headerMessageId]
-    } else {
+      if (tagged[headerMessageId] !== undefined) {
+        delete tagged[headerMessageId]
+        taggedChanged = true
+      }
+    } else if (! sameSet(tagged[headerMessageId] || [], keys)) {
       tagged[headerMessageId] = keys
+      taggedChanged = true
     }
   }
 
-  await rememberTagged(tagged)
+  // Zapis całej mapy do pamięci dodatku szedł po każdym sprawdzeniu, nawet gdy
+  // nic się nie zmieniło — przy tysiącach wpisów to jest realny koszt.
+  if (taggedChanged) await rememberTagged(tagged)
+  if (absentChanged) await browser.storage.local.set({ absent })
   // Dopiero teraz wiadomo, że całe przejście się udało. Wcześniej flaga gasła
   // zaraz po pytaniu do serwera, więc nieudane zakładanie albo zapis znacznika
   // pozwalały przesunąć `tagsSince` i okno 90 dni przepadało — dokładnie ta
@@ -807,7 +885,7 @@ async function tagDiagnostics() {
  * najbliższe przejście przechodzi całe okno 90 dni od nowa.
  */
 async function resetTagSync() {
-  await browser.storage.local.set({ tagsSince: '', tagged: {} })
+  await browser.storage.local.set({ tagsSince: '', tagged: {}, absent: {} })
   markBroken = false
   await syncTags({ full: true })
 }

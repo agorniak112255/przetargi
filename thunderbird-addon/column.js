@@ -110,16 +110,39 @@ async function writeColumnEntries(ids, found) {
   await pushColumnEntries(entries)
 }
 
-/** Podaje całą mapę do kolumny; pusta mapa czyści kolumnę. */
-async function pushColumnEntries(entries = null) {
-  const api = columnApi()
-  if (api === null) return
+/** Po ilu milisekundach ciszy podajemy kolumnie nową treść. */
+const COLUMN_PUSH_DELAY = 1200
 
-  try {
-    await api.setEntries(entries === null ? await columnEntries() : entries)
-  } catch (e) {
-    console.warn('Nie udało się odświeżyć kolumny „Prowadzi”:', e.message)
-  }
+let pushTimer = null
+let pushPending = null
+
+/**
+ * Podaje całą mapę do kolumny; pusta mapa czyści kolumnę.
+ *
+ * Wywołania są zbierane w jedno: każde podanie mapy przerysowuje listę
+ * wiadomości we wszystkich oknach, a przy przejściu po wielu mailach szło ich
+ * kilka pod rząd.
+ */
+function pushColumnEntries(entries = null) {
+  pushPending = entries
+  if (pushTimer !== null) return Promise.resolve()
+
+  return new Promise((resolve) => {
+    pushTimer = setTimeout(async () => {
+      pushTimer = null
+      const next = pushPending
+      pushPending = null
+      const api = columnApi()
+      if (api !== null) {
+        try {
+          await api.setEntries(next === null ? await columnEntries() : next)
+        } catch (e) {
+          console.warn('Nie udało się odświeżyć kolumny „Prowadzi”:', e.message)
+        }
+      }
+      resolve()
+    }, COLUMN_PUSH_DELAY)
+  })
 }
 
 /**

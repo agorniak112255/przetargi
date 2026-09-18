@@ -334,48 +334,30 @@ setInterval(() => {
 /* ------------------------- oznaczanie maili na liście ------------------------- */
 
 /** Co ile minut pytamy serwer o nowe i zmienione zapytania. */
-const TAG_SYNC_MINUTES = 5
+const TAG_SYNC_MINUTES = 2
 
-/** Co które przejście sprawdzamy też maile bez zmian (usunięte zapytania). */
-const TAG_FULL_EVERY = 6
+/**
+ * Co które przejście sprawdzamy też maile bez zmian. To z tego sprawdzenia
+ * znika oznaczenie po usunięciu zapytania w aplikacji, więc nie musi być często
+ * — co piętnaste przejście, czyli mniej więcej co pół godziny.
+ */
+const TAG_FULL_EVERY = 15
 
 /** Ile sekund po starcie robimy pierwsze przejście — żeby nie opóźniać startu. */
 const TAG_FIRST_SYNC_SECONDS = 25
 
-/** Ile sekund nie pytamy powtórnie o ten sam otwarty mail. */
-const TAG_DISPLAY_QUIET_SECONDS = 60
-
-/** Ostatnio sprawdzone otwarte maile — przeklikiwanie listy nie ma bić w serwer. */
-const recentlyChecked = new Map()
-
 let syncTick = 0
 
-function checkedRecently(headerMessageId) {
-  const at = recentlyChecked.get(headerMessageId)
-  const now = Date.now()
-  if (at !== undefined && now - at < TAG_DISPLAY_QUIET_SECONDS * 1000) return true
-
-  recentlyChecked.set(headerMessageId, now)
-  // Mapa nie może rosnąć bez końca przy całodziennej pracy.
-  if (recentlyChecked.size > 500) recentlyChecked.clear()
-
-  return false
-}
-
-/**
- * Otwarcie maila: sprawdzamy go od razu, bo to jedyna chwila, w której
- * handlowiec naprawdę patrzy — a zapytanie kolegi mogło powstać minutę temu.
+/*
+ * Przy otwarciu maila dodatek NIE pyta serwera.
+ *
+ * Wcześniej każde kliknięcie w inny mail szło własnym zapytaniem do aplikacji,
+ * czytało listę znaczników i przerysowywało listę wiadomości — przy przewijaniu
+ * skrzynki strzałkami robiło się z tego kilkanaście przebiegów na sekundę i to
+ * właśnie spowalniało pocztę. Nic na tym nie tracimy: przejście w tle i tak
+ * pyta o zmiany co dwie minuty, a okienko nad mailem sprawdza stan na żywo,
+ * gdy handlowiec sam je otworzy.
  */
-browser.messageDisplay.onMessageDisplayed.addListener(async (tab, message) => {
-  const headerMessageId = message && message.headerMessageId ? message.headerMessageId : ''
-  if (headerMessageId === '' || checkedRecently(headerMessageId)) return
-
-  try {
-    await markByHeaderId(headerMessageId, { loud: true })
-  } catch (e) {
-    console.warn('Nie udało się oznaczyć otwartego maila:', e.message)
-  }
-})
 
 /**
  * Kolumna od razu po starcie tła — nie ma na co czekać, bo pokazuje to, co już

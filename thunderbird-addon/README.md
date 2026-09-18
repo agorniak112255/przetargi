@@ -161,11 +161,23 @@ droższe — skrzynki handlowców mają dziesiątki tysięcy maili.
 
 Kiedy dodatek sprawdza stan:
 
-- przy otwarciu maila (od razu, bo to jedyna chwila, gdy ktoś naprawdę patrzy),
-- co 5 minut — nowe i zmienione zapytania,
-- co pół godziny — powtórnie maile już oznaczone; tak znika znacznik po
+- **co 2 minuty** — nowe i zmienione zapytania (jedno krótkie pytanie do
+  aplikacji; gdy nic się nie zmieniło, nie robi nic więcej),
+- co pół godziny — powtórnie maile już oznaczone; tak znika oznaczenie po
   usunięciu zapytania w aplikacji,
 - natychmiast po założeniu własnego zapytania i po wysłaniu odpowiedzi.
+
+**Przy klikaniu w maile dodatek nie pyta serwera o nic.** Wcześniej każde
+kliknięcie w inny mail szło własnym zapytaniem do aplikacji, czytało listę
+znaczników i przerysowywało listę wiadomości — przy przewijaniu skrzynki
+strzałkami poczta wyraźnie zwalniała. Nic na tym nie tracimy: przejście w tle
+i tak chodzi co dwie minuty, a okienko nad mailem sprawdza stan na żywo, gdy
+sam je otworzysz.
+
+Dodatek pilnuje też, żeby nie robić pracy bez potrzeby: mail, przy którym nic
+się nie zmieniło, nie jest w ogóle dotykany, listę znaczników czyta raz na kilka
+minut, a maile kolegów, których nie ma w tej skrzynce, pamięta przez dobę i nie
+szuka ich w kółko.
 
 Świeżo zainstalowany dodatek nadgania zaległości z ostatnich 90 dni.
 
@@ -353,7 +365,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.13.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.14.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia
