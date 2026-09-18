@@ -19,11 +19,6 @@
             "name": "label",
             "type": "string",
             "description": "Nagłówek kolumny widoczny dla użytkownika."
-          },
-          {
-            "name": "tooltip",
-            "type": "string",
-            "description": "Podpowiedź pod kursorem nad nagłówkiem."
           }
         ]
       },
@@ -43,10 +38,19 @@
           {
             "name": "entries",
             "type": "object",
-            "additionalProperties": { "type": "string" },
+            "additionalProperties": {
+              "type": "string"
+            },
             "description": "Cała mapa naraz; zastępuje poprzednią."
           }
         ]
+      },
+      {
+        "name": "added",
+        "type": "function",
+        "async": true,
+        "description": "Czy kolumna faktycznie stoi w liście wiadomości.",
+        "parameters": []
       }
     ]
   }

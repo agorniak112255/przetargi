@@ -121,8 +121,9 @@ async function enableTags() {
     }
 
     status('Włączone. Pierwsze znaczniki pojawią się w ciągu kilku minut.', 'ok')
-    // Tło ma pełny obraz i pamięć tego, co już oznaczone — niech ono to zrobi.
-    browser.runtime.sendMessage({ type: 'syncTags' })
+    // Pełne przejście, nie zwykłe: maile sprawdzone w czasie bez zgody mają już
+    // przesunięty znacznik czasu i bez zerowania nie dostałyby znacznika nigdy.
+    browser.runtime.sendMessage({ type: 'syncTags', reset: true })
   } catch (e) {
     status(e.message, 'error')
   } finally {
@@ -186,7 +187,8 @@ async function showColumnState() {
   const api = typeof browser !== 'undefined' && browser.inquiryColumn ? browser.inquiryColumn : null
   let works = false
   try {
-    works = api !== null && await api.available()
+    // Pytamy, czy kolumna FAKTYCZNIE stoi, a nie tylko czy Thunderbird ma moduł.
+    works = api !== null && await api.added()
   } catch (e) {
     works = false
   }
@@ -204,7 +206,7 @@ async function hideColumnNow() {
   busy(true)
   try {
     await hideColumn()
-    status('Kolumna zdjęta. Wróci po ponownym uruchomieniu Thunderbirda.', 'ok')
+    status('Kolumna zdjęta. Wróci po ponownym uruchomieniu Thunderbirda — treść zostaje zapamiętana.', 'ok')
   } catch (e) {
     status(e.message, 'error')
   } finally {

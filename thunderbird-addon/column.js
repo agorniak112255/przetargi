@@ -17,9 +17,8 @@
  * po prostu kolumny nie widać.
  */
 
-/** Nagłówek kolumny i podpowiedź nad nim. */
+/** Nagłówek kolumny. Podpowiedzi nad nagłówkiem API kolumn nie obsługuje. */
 const COLUMN_LABEL = 'Prowadzi'
-const COLUMN_TOOLTIP = 'Kto prowadzi zapytanie z tego maila w aplikacji Przetargi'
 
 /** Znak przy nazwisku, gdy odpowiedź do klienta już poszła. */
 const COLUMN_REPLIED = ' ✓'
@@ -49,6 +48,19 @@ function columnTextFor(rows) {
   return seen.join(', ')
 }
 
+/**
+ * Zapisy do pamięci kolumny idą jeden po drugim. Bez tego równoległe przejścia
+ * (otwarcie maila i przejście w tle w tej samej chwili) czytały tę samą mapę
+ * i zapisywały ją nawzajem, gubiąc wpisy.
+ */
+let columnQueue = Promise.resolve()
+
+function queueColumnWork(work) {
+  columnQueue = columnQueue.then(work, work)
+
+  return columnQueue
+}
+
 /** Zapamiętana treść kolumny: Message-ID (małymi literami) → tekst. */
 async function columnEntries() {
   const { columnEntries: stored } = await browser.storage.local.get({ columnEntries: {} })
@@ -64,7 +76,11 @@ async function columnEntries() {
  * @param ids   Message-ID, o które pytaliśmy
  * @param found mapa z odpowiedzi serwera (klucze małymi literami)
  */
-async function updateColumnEntries(ids, found) {
+function updateColumnEntries(ids, found) {
+  return queueColumnWork(() => writeColumnEntries(ids, found))
+}
+
+async function writeColumnEntries(ids, found) {
   const entries = await columnEntries()
   let changed = false
 
@@ -117,7 +133,7 @@ async function showColumn() {
 
   try {
     if (! await api.available()) return false
-    await api.show(COLUMN_LABEL, COLUMN_TOOLTIP)
+    await api.show(COLUMN_LABEL)
     await pushColumnEntries()
 
     return true
@@ -128,14 +144,16 @@ async function showColumn() {
   }
 }
 
-/** Zdejmuje kolumnę i czyści jej pamięć — z ustawień dodatku. */
+/**
+ * Zdejmuje kolumnę z listy wiadomości. Pamięci NIE kasujemy: przy wyłączonych
+ * znacznikach nic by jej nie odtworzyło (serwer oddaje tylko zmiany od ostatniego
+ * pytania) i kolumna po ponownym pokazaniu byłaby pusta na zawsze.
+ */
 async function hideColumn() {
   const api = columnApi()
-  await browser.storage.local.set({ columnEntries: {} })
   if (api === null) return
 
   try {
-    await api.setEntries({})
     await api.hide()
   } catch (e) {
     console.warn('Nie udało się zdjąć kolumny „Prowadzi”:', e.message)

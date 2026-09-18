@@ -408,8 +408,10 @@ browser.runtime.onMessage.addListener((request) => {
     return insertReply(request)
   }
   // Ustawienia po włączeniu oznaczania: pierwsze przejście od razu, nie po 5 minutach.
+  // `reset` przechodzi całe okno 90 dni od nowa — potrzebne po świeżo danej
+  // zgodzie, bo maile sprawdzone bez niej mają już przesunięty znacznik czasu.
   if (request && request.type === 'syncTags') {
-    return syncTags({ full: true })
+    return request.reset === true ? resetTagSync() : syncTags({ full: true })
   }
 
   return undefined

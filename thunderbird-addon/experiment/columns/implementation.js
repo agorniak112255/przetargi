@@ -29,7 +29,6 @@ const COLUMN_ID = 'suponProwadzi'
  */
 const MODULE_PATHS = [
   'chrome://messenger/content/ThreadPaneColumns.mjs',
-  'resource:///modules/ThreadPaneColumns.mjs',
 ]
 
 /** Message-ID (małymi literami) → tekst w kolumnie. Ustawia to tło dodatku. */
@@ -59,9 +58,15 @@ function loadColumns() {
  */
 function textFor(message) {
   try {
-    const id = String(message.messageId || '').replace(/^</, '').replace(/>$/, '').trim().toLowerCase()
+    // `messageId` z bazy Thunderbirda nie ma nawiasów kątowych, więc żadnego
+    // czyszczenia nie trzeba — a ta funkcja biegnie przy każdym rysowanym
+    // wierszu i przy sortowaniu całego folderu.
+    const id = message.messageId ? message.messageId.toLowerCase() : ''
+    if (id === '') return ''
 
-    return id === '' ? '' : (entries[id] || '')
+    // Tylko własne klucze: mail o identyfikatorze „constructor” albo „toString”
+    // oddałby funkcję z prototypu zamiast tekstu.
+    return Object.prototype.hasOwnProperty.call(entries, id) ? entries[id] : ''
   } catch (e) {
     return ''
   }
@@ -69,7 +74,11 @@ function textFor(message) {
 
 var inquiryColumn = class extends ExtensionCommon.ExtensionAPI {
   getAPI(context) {
-    context.callOnClose(this)
+    // `context.extension`, nie `context`: getAPI biegnie dla KAŻDEGO kontekstu
+    // (tło, okienko, karta ustawień). Sprzątanie podpięte pod kontekst karty
+    // zdejmowało kolumnę ze wszystkich okien w chwili zamknięcia ustawień —
+    // a tam handlowiec loguje dodatek, więc trafiłby na to od razu.
+    context.extension.callOnClose(this)
 
     return {
       inquiryColumn: {
@@ -77,12 +86,15 @@ var inquiryColumn = class extends ExtensionCommon.ExtensionAPI {
           return loadColumns() !== null
         },
 
-        async show(label, tooltip) {
+        async show(label) {
           const columns = loadColumns()
           if (columns === null) return false
 
+          // Bezwarunkowo: po twardym przeładowaniu dodatku (awaria, aktualizacja
+          // bez sprzątania) stary wpis zostaje w rejestrze Thunderbirda i samo
+          // dodanie rzuca „id is already used”, a kolumna jest martwa do restartu.
           try {
-            if (columnAdded) columns.removeCustomColumn(COLUMN_ID)
+            columns.removeCustomColumn(COLUMN_ID)
           } catch (e) {
             // Nie było czego zdejmować.
           }
@@ -90,7 +102,6 @@ var inquiryColumn = class extends ExtensionCommon.ExtensionAPI {
           try {
             columns.addCustomColumn(COLUMN_ID, {
               name: label,
-              tooltip,
               hidden: false,
               icon: false,
               resizable: true,
@@ -107,6 +118,10 @@ var inquiryColumn = class extends ExtensionCommon.ExtensionAPI {
 
             return false
           }
+        },
+
+        async added() {
+          return columnAdded
         },
 
         async hide() {

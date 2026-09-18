@@ -200,7 +200,7 @@ async function enableTags() {
     }
     el('tagsOff').hidden = true
     status('Oznaczanie włączone — znaczniki pojawią się w ciągu kilku minut.', 'ok')
-    browser.runtime.sendMessage({ type: 'syncTags' })
+    browser.runtime.sendMessage({ type: 'syncTags', reset: true })
   } catch (e) {
     status('Zgodę można też włączyć w ustawieniach dodatku (Oznaczanie maili).', 'warn')
   }
