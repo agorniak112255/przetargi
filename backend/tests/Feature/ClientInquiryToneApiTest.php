@@ -147,6 +147,41 @@ final class ClientInquiryToneApiTest extends TestCase
         $this->assertStringNotContainsString('VITAL', $body);
     }
 
+    public function test_letter_table_keeps_the_rules_of_each_template(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = $this->product();
+        $this->mockAnalysis($product);
+        Sanctum::actingAs($user);
+
+        // Handlowy: kafelek pokazuje nazwę z katalogu i kod wyrobu.
+        [$handlowy] = $this->createInquiry(ClientInquiry::TONE_HANDLOWY);
+        $html = (string) ($handlowy['reply_html'] ?? '');
+        $this->assertStringContainsString('Zapytanie klienta', $html);
+        $this->assertStringContainsString('VITAL 175', $html);
+        $this->assertStringContainsString('kod VIT-175', $html);
+        // dane pozycji stoją osobno, a nie w zdaniu
+        $this->assertStringContainsString('rozmiar 9', $html);
+        $this->assertStringContainsString('30 szt', $html);
+
+        $this->mockAnalysis($product);
+        // Oficjalny: nazwa zostaje, kodu nie ma, opis z karty wchodzi pod kafelek.
+        [$formal] = $this->createInquiry(ClientInquiry::TONE_FORMAL);
+        $html = (string) ($formal['reply_html'] ?? '');
+        $this->assertStringContainsString('VITAL 175', $html);
+        $this->assertStringNotContainsString('VIT-175', $html);
+        $this->assertStringContainsString('agresywności chemicznej', $html);
+
+        $this->mockAnalysis($product);
+        // Bez SKU: ani nazwy z katalogu, ani marki, ani kodu — tak jak w treści listu.
+        [$noSku] = $this->createInquiry(ClientInquiry::TONE_NO_SKU);
+        $html = (string) ($noSku['reply_html'] ?? '');
+        $this->assertStringNotContainsString('VITAL', $html);
+        $this->assertStringNotContainsString('VIT-175', $html);
+        $this->assertStringNotContainsString('MAPA', $html);
+        $this->assertStringContainsString('Rękawice ochronne przeznaczone są do prac', $html);
+    }
+
     public function test_no_sku_template_falls_back_to_the_words_of_the_client(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

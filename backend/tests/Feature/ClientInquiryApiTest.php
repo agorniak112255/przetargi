@@ -475,9 +475,9 @@ final class ClientInquiryApiTest extends TestCase
 
         $html = (string) $res->json('reply_html');
         $this->assertStringContainsString('<table', $html);
-        $this->assertStringContainsString('Pozycja z zapytania', $html);
-        $this->assertStringContainsString('Nasza propozycja', $html);
-        // cytat klienta i nasza odpowiedź stoją w jednym wierszu tabeli
+        // zapytanie klienta u góry listu, pod nim nasze pozycje
+        $this->assertStringContainsString('Zapytanie klienta', $html);
+        $this->assertStringContainsString('Propozycja', $html);
         $this->assertStringContainsString('10 szt. rękawice nitrylowe rozmiar 9', $html);
         $this->assertStringContainsString('RNITZ-100', $html);
         // tabela nie może mówić czegoś innego niż wersja tekstowa

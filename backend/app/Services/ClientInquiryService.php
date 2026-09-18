@@ -2627,14 +2627,47 @@ final class ClientInquiryService
         return [
             'subject' => $this->offerSubject($inquiry),
             'body' => implode("\n", $parts),
-            // ta sama treść w tabeli: po lewej zapytanie klienta, po prawej nasza odpowiedź
+            // ta sama treść w układzie listu: zapytanie klienta u góry, pod nim nasze pozycje
             'html' => InquiryReplyHtml::render(
                 $intro,
                 $this->offerRows($inquiry, $answers, $priceMode, $margin),
                 $note,
                 $outro,
                 $this->termsLabelled($terms),
+                $this->askedBlock($inquiry),
             ),
+        ];
+    }
+
+    /**
+     * Zapytanie klienta nad ofertą: numer sprawy, data i pozycje jego słowami.
+     * Klient ma od razu widzieć, na co odpowiadamy — zwłaszcza gdy przysłał
+     * kilka zapytań tego samego dnia.
+     *
+     * @return array{title: string|null, date: string|null, lines: list<string>}
+     */
+    private function askedBlock(ClientInquiry $inquiry): array
+    {
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $sent = $inquiry->source_sent_at ?? $inquiry->created_at;
+
+        $lines = [];
+        foreach ($this->lineItemsOf($analysis) as $index => $item) {
+            $quote = trim(InquiryQueryText::withoutPrice((string) ($item['quote'] ?? '')));
+            if ($quote === '') {
+                $quote = trim((string) ($item['query'] ?? ''));
+            }
+            if ($quote === '') {
+                continue;
+            }
+            $qty = $this->qtyLabel($item);
+            $lines[] = ($index + 1).'. '.$quote.($qty === null ? '' : ' — '.$qty);
+        }
+
+        return [
+            'title' => $this->nullable($inquiry->source_subject),
+            'date' => $sent?->format('d.m.Y'),
+            'lines' => $lines,
         ];
     }
 
@@ -2896,6 +2929,8 @@ final class ClientInquiryService
         if ($substitute !== null) {
             // Zamiennika nie opisujemy słowami klienta — pytał o coś innego,
             // a podstawienie jego słów pod nasz zamiennik wprowadzałoby w błąd.
+            // Role z przedrostkiem „sub_”: w liście zamiennik ma własne miejsce
+            // pod pozycją, a nie miesza się z danymi wyrobu z katalogu.
             $answer = array_merge($answer, $this->productLines(
                 'Zamiennik',
                 $substitute,
@@ -2904,6 +2939,7 @@ final class ClientInquiryService
                 $tone,
                 $cards[(int) $substitute['id']] ?? [],
                 null,
+                'sub_',
             ));
         }
 
@@ -2912,6 +2948,71 @@ final class ClientInquiryService
             'quote' => $quote === '' ? null : $quote,
             'answer' => array_column($answer, 'text'),
             'answer_roles' => array_column($answer, 'role'),
+            'facts' => $this->offerFacts($n, $item, $product, $priceMode, $margin, $tone),
+        ];
+    }
+
+    /**
+     * Dane pozycji dla tabeli w liście: numer, rozmiar, ilość, normy, cena jednostkowa
+     * i wartość. Każde z nich stoi w liście osobno, więc klient nie musi ich wyławiać
+     * ze zdania. Wartość liczymy tylko wtedy, gdy znamy i ilość, i cenę — brak jednego
+     * z nich zostawia puste miejsce, a nie wymyśloną liczbę.
+     *
+     * @param  array<string, mixed>  $item
+     * @param  array<string, mixed>|null  $product
+     * @return array{no: int, name: string|null, code: string|null, size: string|null, qty: string|null, norms: string|null, price: string|null, total: string|null, total_pln: float|null}
+     */
+    private function offerFacts(
+        int $n,
+        array $item,
+        ?array $product,
+        string $priceMode,
+        float $margin,
+        string $tone,
+    ): array {
+        $size = $this->nullable($item['size'] ?? null);
+        $qu = $this->qtyUnit($item);
+        $qty = $qu['qty'] === null
+            ? null
+            : trim($qu['qty'].' '.(string) ($qu['unit'] ?? ''));
+
+        if ($product === null) {
+            return [
+                'no' => $n,
+                'name' => null,
+                'code' => null,
+                'size' => $size,
+                'qty' => $qty,
+                'norms' => null,
+                'price' => null,
+                'total' => null,
+                'total_pln' => null,
+            ];
+        }
+
+        $unitPln = $priceMode === 'catalog'
+            ? $this->catalogPln($product)
+            : ($priceMode === 'catalog_margin' ? $this->offerPln($product, $margin) : null);
+        $pieces = $qu['qty'] === null ? null : (float) str_replace(',', '.', $qu['qty']);
+        $totalPln = $unitPln !== null && $pieces !== null && $pieces > 0 ? $unitPln * $pieces : null;
+
+        return [
+            'no' => $n,
+            // Szablon „bez SKU” nie ujawnia nazwy katalogowej ani marki: nagłówek kafelka
+            // bierze wtedy zdanie opisowe z treści listu (rola „name”).
+            'name' => $tone === ClientInquiry::TONE_NO_SKU
+                ? null
+                : $this->nullable((string) ($product['name'] ?? '')),
+            // Kod wyrobu tylko w szablonie handlowym — dwa pozostałe mają go nie ujawniać.
+            'code' => $tone === ClientInquiry::TONE_HANDLOWY
+                ? $this->nullable((string) ($product['sku'] ?? ''))
+                : null,
+            'size' => $size,
+            'qty' => $qty,
+            'norms' => $this->nullable((string) ($product['norms'] ?? '')),
+            'price' => $unitPln === null ? null : $this->formatPln($unitPln),
+            'total' => $totalPln === null ? null : $this->formatPln($totalPln),
+            'total_pln' => $totalPln,
         ];
     }
 
@@ -2938,6 +3039,7 @@ final class ClientInquiryService
         string $tone = ClientInquiry::TONE_HANDLOWY,
         array $card = [],
         ?string $fallback = null,
+        string $rolePrefix = '',
     ): array {
         $lines = $this->productHeadLines($label, $product, $tone, $card, $fallback);
         if ($lines === []) {
@@ -2950,12 +3052,12 @@ final class ClientInquiryService
         // w liście pisze nazwę wytłuszczeniem, a resztę zwykłym pismem.
         $out = [];
         foreach ($lines as $index => $line) {
-            $out[] = ['text' => $line, 'role' => $index === 0 ? 'name' : 'body'];
+            $out[] = ['text' => $line, 'role' => $rolePrefix.($index === 0 ? 'name' : 'body')];
         }
 
         $norms = trim((string) ($product['norms'] ?? ''));
         if ($norms !== '') {
-            $out[] = ['text' => 'Normy: '.$norms, 'role' => 'meta'];
+            $out[] = ['text' => 'Normy: '.$norms, 'role' => $rolePrefix.'meta'];
         }
         if ($priceMode !== '' && $priceMode !== 'none') {
             $price = $this->letterPrice($product, $priceMode, $margin);
@@ -2964,7 +3066,7 @@ final class ClientInquiryService
             // Ilość i jednostka klienta stoją w nagłówku pozycji i tam jest ich miejsce.
             $out[] = [
                 'text' => $price === null ? 'Cena: do potwierdzenia' : 'Cena: '.$price.' netto',
-                'role' => 'price',
+                'role' => $rolePrefix.'price',
             ];
         }
 
