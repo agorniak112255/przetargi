@@ -483,6 +483,14 @@ final class ClientInquiryServiceTest extends TestCase
         );
         $this->assertSame(['Rekawice nitrylowe'], array_column($asking, 'query'));
 
+        // pytanie o wyrob z iloscia to zamowienie: pyta o towar, nie o warunki handlowe
+        $aboutGoods = $svc->parseLineItemsFromBody(
+            '1) Jakie rekawice nitrylowe 100 par macie w ofercie?
+2) Czy posiadacie rekawice?'
+        );
+        $this->assertCount(1, $aboutGoods);
+        $this->assertSame('100', $aboutGoods[0]['qty']);
+
         // ale zamowienie zapisane jako pytanie zostaje pozycja
         $ordering = $svc->parseLineItemsFromBody(
             '1) Jak najszybciej potrzebujemy 100 par rekawic?

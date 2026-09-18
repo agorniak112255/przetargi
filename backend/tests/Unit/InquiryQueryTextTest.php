@@ -123,6 +123,10 @@ final class InquiryQueryTextTest extends TestCase
             ['Odzież ochronna wg normy 4.1.2.1 - 24,00 zł', ['4.1.2.1']],
             ['Buty robocze S3 SRC 45 - 189,00 PLN', ['S3 SRC 45']],
             ['Okulary ochronne 2188 - 32,00 zł', ['2188']],
+            // dolna granica rozpiętości nie może zaczynać się w cudzej liczbie
+            ['Rękawice EN 388 4121 12,50 - 24,00 zł', ['EN 388 4121']],
+            ['Drabina KRAUSE 815446 12,50 - 24,00 zł', ['KRAUSE 815446']],
+            ['Rękawice norma 4.1.2.10 - 24,00 zł', ['4.1.2.10']],
             // liczba z jedną cyfrą po przecinku to wymiar, nie kwota
             ['Mata gumowa ......... 0,60 m', ['0,60 m']],
             ['Włóknina ....... 120,5 g/m2', ['120,5 g/m2']],

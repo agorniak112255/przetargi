@@ -207,7 +207,7 @@ final class InquiryQueryText
             // Waluta po kwocie („4 497,00PLN/szt.”). Rozpiętość bierzemy tylko wtedy, gdy
             // dolna granica ma grosze („24,00-30,00 PLN”) — goła cyfra przed myślnikiem bywa
             // końcówką kodu wyrobu albo rozmiarem („A2P3 - 24,00 zł”, „SRC 45 - 189,00 PLN”).
-            '/(?:\d[\d \x{00A0}]*[.,]\d{2}\s*[-–—]\s*)?'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.$per.'/iu',
+            '/(?:(?<![\p{L}\d.,])\d{1,3}(?:[ \x{00A0}]\d{3})*[.,]\d{2}\s*[-–—]\s*)?'.$amount.'\s*(?:pln|zł|zl|eur|usd)'.$unit.$per.'/iu',
             // osierocone „c. netto”, gdy liczbę zabrał wcześniejszy wzorzec
             '/\bc\.\s*netto\b/iu',
             // „masa netto 20 kg”, „waga produktu brutto 25 kg” — tu „netto” opisuje

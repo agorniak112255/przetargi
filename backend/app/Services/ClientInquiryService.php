@@ -39,7 +39,7 @@ final class ClientInquiryService
     private const PRICE_MODES = ['none', 'catalog', 'catalog_margin'];
 
     /** Jednostki z maila, które umiemy oddzielić od liczby („30szt”, „4 pary”, „2 op.”). */
-    private const UNIT_PATTERN = '(?:(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?|karton(?:y|ów|ow|ami|ach|iem|ie|om|a|u)?)(?![\p{L}]))';
+    private const UNIT_PATTERN = '(?:(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?|karton(?:y|ów|ow|ami|ach|em|ie|om|a|u)?)(?![\p{L}]))';
 
     private ?int $minMatchScore = null;
 
@@ -1487,7 +1487,12 @@ final class ClientInquiryService
         // pytanie — ilość z jednostką znaczy, że wiersz niesie pozycję. Ale „Ile kosztuje
         // 100 par rękawic?” i „Jaka jest cena za 50 szt.?” pytają o warunki, a nie zamawiają:
         // przy tych słowach ilość niczego nie zmienia.
-        $aboutTerms = preg_match('/^(?:ile|jak[aąeęiy]\w*|kt[oó]r\w+|kto|kiedy|gdzie|dlaczego|w\s+jakim)\b/iu', trim($rest)) === 1;
+        // O warunkach handlowych („Ile kosztuje 100 par?”, „Jaka jest cena za 50 szt.?”)
+        // pyta się słowem pytającym RAZEM ze słowem o cenie albo terminie. Wtedy ilość
+        // niczego nie zmienia. Bez takiego słowa („Jakie rękawice 100 par macie?”) wiersz
+        // niesie zamówienie i pozycją zostaje.
+        $aboutTerms = preg_match('/^(?:ile|jak[aąeęiy]\w*|kt[oó]r\w+|kto|kiedy|gdzie|dlaczego|w\s+jakim)\b/iu', trim($rest)) === 1
+            && preg_match('/\b(?:cen|koszt|termin|dostaw|transport|gwarancj|płatnoś|platnos|rabat|upust|faktur|wysyłk|wysylk)/iu', $rest) === 1;
         if (! $aboutTerms && preg_match('/\d{1,5}\s*'.self::UNIT_PATTERN.'/iu', $rest) === 1) {
             return false;
         }
