@@ -196,6 +196,7 @@ async function insertReply({ inquiryId, messageId = null, inquiry: known = null 
 
     // Message-ID oryginału: po wysłaniu odpowiedzi przestawimy znacznik maila.
     await rememberComposeTab(tab.id, inquiry.id, target.headerMessageId || null)
+    await raiseComposeWindow(tab)
     await reportTiming(marks)
 
     return { ok: true }
@@ -203,6 +204,26 @@ async function insertReply({ inquiryId, messageId = null, inquiry: known = null 
     await notify('Nie udało się otworzyć odpowiedzi', e.message)
 
     return { ok: false, error: e.message }
+  }
+}
+
+/**
+ * Okno odpowiedzi na wierzch. Handlowiec klika „Zapisz i wyślij” w przeglądarce
+ * i nie ma jak zobaczyć, czy Thunderbird już zareagował — okno otwierało się
+ * pod spodem, czasem na drugim ekranie. `drawAttention` zostaje na wypadek,
+ * gdyby system nie pozwolił przełożyć okna na wierzch: wtedy przycisk
+ * Thunderbirda miga na pasku zadań.
+ */
+async function raiseComposeWindow(tab) {
+  try {
+    await browser.tabs.update(tab.id, { active: true })
+  } catch (e) {
+    console.warn('Nie udało się uaktywnić karty odpowiedzi:', e.message)
+  }
+  try {
+    await browser.windows.update(tab.windowId, { focused: true, drawAttention: true })
+  } catch (e) {
+    console.warn('Nie udało się podnieść okna odpowiedzi:', e.message)
   }
 }
 

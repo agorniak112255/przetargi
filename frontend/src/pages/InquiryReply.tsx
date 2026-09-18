@@ -26,6 +26,10 @@ type TermsDraft = Record<keyof InquiryTerms, string>
 
 const PLN = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' })
 
+/** Ile razy i co ile pytamy serwer, czy dodatek podjął już list (łącznie ok. 40 s). */
+const WATCH_TRIES = 20
+const WATCH_EVERY_MS = 2000
+
 /** Data wysłania maila źródłowego; nieczytelną wartość pokazujemy bez zmian. */
 function mailDate(value: string): string {
   const d = new Date(value)
@@ -451,6 +455,9 @@ export function InquiryReply() {
   const composeSec = useBusySeconds(composeBusy)
 
   // Treść zapisana na serwerze (PATCH) — do wykrywania niezapisanych edycji.
+  // Numer otwartego zapytania dla pilnowania Thunderbirda: po przejściu na inne
+  // zapytanie stary nasłuch nie ma prawa nadpisać komunikatu na ekranie.
+  const inquiryRef = useRef<number | null>(null)
   const serverRef = useRef<Draft>({ subject: '', body: '' })
   // Treść ostatnio wygenerowana przez compose/wczytana — do ochrony ręcznych zmian przed regeneracją.
   const composedRef = useRef<Draft>({ subject: '', body: '' })
@@ -465,6 +472,7 @@ export function InquiryReply() {
 
   function applyComposed(p: InquiryPayload) {
     const draft = { subject: p.reply_subject ?? '', body: p.reply_body ?? '' }
+    inquiryRef.current = p.id
     serverRef.current = draft
     composedRef.current = draft
     setInquiry(p)
@@ -647,8 +655,37 @@ export function InquiryReply() {
       })
       setInquiry(res)
       setMsg('Zapisano. Thunderbird otworzy okno odpowiedzi w ciągu kilku sekund.')
+      void watchThunderbird(inquiry.id)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się przekazać listu do Thunderbirda.')
+    }
+  }
+
+  /**
+   * Czy Thunderbird odebrał list. Handlowiec zostaje w przeglądarce i nie widzi
+   * okna odpowiedzi — zwłaszcza gdy Thunderbird stoi zminimalizowany. Prośbę
+   * kasuje dodatek w chwili podjęcia, więc jej zniknięcie jest potwierdzeniem.
+   */
+  async function watchThunderbird(inquiryId: number) {
+    for (let i = 0; i < WATCH_TRIES; i += 1) {
+      await new Promise((done) => setTimeout(done, WATCH_EVERY_MS))
+      let row: InquiryPayload
+      try {
+        row = await api<InquiryPayload>(`/inquiries/${inquiryId}`)
+      } catch {
+        return
+      }
+      // inne zapytanie na ekranie albo ręczne anulowanie — przestajemy pilnować
+      if (inquiryRef.current !== inquiryId) return
+      if (row.send_requested_at === null) {
+        setInquiry(row)
+        setMsg('Thunderbird otworzył okno odpowiedzi. Maila wysyłasz stamtąd.')
+
+        return
+      }
+    }
+    if (inquiryRef.current === inquiryId) {
+      setMsg('Thunderbird jeszcze nie odebrał listu — sprawdź, czy jest uruchomiony i zalogowany w dodatku.')
     }
   }
 
