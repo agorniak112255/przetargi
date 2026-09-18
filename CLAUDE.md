@@ -237,6 +237,27 @@ After meaningful changes:
 Never modify or remove tests just to make them pass.
 
 
+Green tests do not end the task. After the relevant suite passes, review the
+
+code you wrote in this task for defects the tests cannot catch:
+
+
+
+1. Review your own diff.
+
+2. Fix the root cause of anything you find, rerun the tests, then review the
+
+   same scope again.
+
+3. If defects keep appearing after the fix, do not keep patching alone:
+
+   describe the problem and your proposed fix to a second agent (Plan or
+
+   code-review), agree on the solution, and only then implement it.
+
+4. Commit, build and push only after a clean review.
+
+
 
 \## Database
 
