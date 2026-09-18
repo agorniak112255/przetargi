@@ -598,6 +598,18 @@
                 "87063100BP"
             ],
             "note": "Z opisu źródłowego: lateks naturalny, kolor pomarańczowy, chlorowane, podszewka 100% bawełna (flok), bez usztywnienia, mankiet zawinięty, chwytność romb, długość 300 mm, grubość dłoni 0,45 mm, AQL 1,5, kontakt z żywnością, odporność na ścieranie i rozdarcia, rozmiary 7-10, pakowanie 12 par w woreczku / 12 woreczków w kartonie."
+        },
+        {
+            "id": "uvex-8543-kod-z-kropka",
+            "query": "BUTY UVEX BUSINESS CASUAL 8543.8 S1 SRC ROZMIAR 44",
+            "expected_skus": [
+                "8543/8/35"
+            ],
+            "forbidden_skus": [
+                "AROX 733 641460 S1 PL ESD",
+                "AROX 733 648080 S1 PL ESD"
+            ],
+            "note": "Zapytanie z maila klienta: kod z kropką, katalog trzyma go z ukośnikami, a „S1” wygląda jak kod i zalewa pulę kodową. Spadek tutaj oznacza powrót puli zapchanej klasą obuwia."
         }
     ]
 }

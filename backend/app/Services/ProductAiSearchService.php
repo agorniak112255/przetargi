@@ -46,6 +46,16 @@ final class ProductAiSearchService
     private const MAX_MATCHES = 20;
 
     /**
+     * Ile kart wolno wnieść do puli krótkiemu oznaczeniu z zapytania („s1”, „p3”).
+     * Trafia w setki nazw, więc bez własnego limitu zajmowało całą pulę kodową —
+     * o klasie rozstrzyga i tak reguła klasy obuwia oraz ocena modelu.
+     */
+    private const SHORT_CODE_HITS = 16;
+
+    /** Ile kart marki wolno dociągnąć, gdy w puli nie ma ani jednej karty żądanej marki. */
+    private const BRAND_FALLBACK_HITS = 24;
+
+    /**
      * Wiersz z zapasowej listy katalogowej, a nie z oceny modelu. Dopasowanie SIWZ
      * nie może traktować go jak werdyktu AI — model tej karty nie widział albo jej
      * nie wskazał.
@@ -155,6 +165,9 @@ final class ProductAiSearchService
         // Pula przed bramką zgodności — czy karty zabrakło w wyszukiwaniu, czy odrzuciła ją bramka
         // (poz. 1: HyFlex 11-202 z angielskim opisem odpadał na dowodzie żargonu i antystatyce).
         'pregate_ids' => [],
+        // Marka z zapytania nie miała w puli ani jednej karty i trzeba było ją dociągnąć
+        // osobno (withBrandFallback) — bez tego wpisu cichy fallback marki był niewidoczny.
+        'brand_fallback' => null,
         // Tylko po enableSourceTrace() (tenders:debug-match): id z każdego źródła wyszukiwania i przycięcie fuzji.
         'sources' => [],
         // Powód awarii kroku „zrozum” (wyjątek/timeout) — trafia do `search_events`,
@@ -2974,8 +2987,13 @@ final class ProductAiSearchService
         $brandHits = $this->modelFuzzy->usesModelAnchoredCatalogSearch($modelQuery)
             ? collect()
             : $this->clock('retrieve_brand', fn (): Collection => $this->retrieveByManufacturer($query, $intent, $limit));
-        $priority = $this->uniqueProducts(
-            $filterHits->concat($fuzzyHits)->concat($forcedHits)->concat($brandHits),
+        $priority = $this->withBrandFallback(
+            $query,
+            $intent,
+            $this->uniqueProducts(
+                $filterHits->concat($fuzzyHits)->concat($forcedHits)->concat($brandHits),
+                $limit
+            ),
             $limit
         );
 
@@ -3645,6 +3663,51 @@ final class ProductAiSearchService
     }
 
     /**
+     * Ostatnia siatka dla marki z zapytania. Marka jest twardym warunkiem, ale gdy w puli
+     * nie ma ani jednej jej karty, filtr przestaje obowiązywać po cichu (preferCatalogBrands
+     * oddaje wtedy pulę bez zmian) i do oceny idą same obce marki. Przy zapytaniu zakotwiczonym
+     * w modelu pula powstaje wyłącznie z kodu, więc chybiony kod zostawiał w niej same obce
+     * wyroby — zapytanie o buty uvex kończyło się listą butów innego producenta.
+     *
+     * To nie jest zrzut asortymentu marki: wchodzi wyłącznie wtedy, gdy marki w puli
+     * w ogóle nie ma, i jest odnotowane w śladzie.
+     *
+     * @param  array<string, mixed>  $intent
+     * @param  Collection<int, Product>  $priority
+     * @return Collection<int, Product>
+     */
+    private function withBrandFallback(string $query, array $intent, Collection $priority, int $limit): Collection
+    {
+        $brands = $this->modelFuzzy->catalogBrands($query);
+        if ($brands === []) {
+            return $priority;
+        }
+        $hasBrand = $priority->contains(
+            fn (Product $product): bool => $this->modelFuzzy->matchesCatalogBrand($product, $brands)
+        );
+        if ($hasBrand) {
+            return $priority;
+        }
+
+        $brandHits = $this->clock(
+            'retrieve_brand_fallback',
+            fn (): Collection => $this->retrieveByManufacturer($query, $intent, $limit)
+        );
+        if ($brandHits->isEmpty()) {
+            return $priority;
+        }
+        $this->trace['brand_fallback'] = [
+            'brands' => $brands,
+            'found' => $brandHits->count(),
+        ];
+
+        return $this->uniqueProducts(
+            $brandHits->take(self::BRAND_FALLBACK_HITS)->concat($priority),
+            $limit
+        );
+    }
+
+    /**
      * Marka z SIWZ jest twardym znacznikiem — nie pokazuj Portwest, gdy napisano MSA.
      *
      * @param  Collection<int, Product>  $products
@@ -3736,22 +3799,76 @@ final class ProductAiSearchService
                 ->values();
         }
 
-        $codeHits = collect();
-        if ($codes !== []) {
-            $codeHits = $this->productBaseQuery()
-                ->where(function ($outer) use ($codes): void {
-                    foreach ($codes as $code) {
-                        $like = addcslashes($code, '%_\\');
-                        $outer->orWhere('name', 'like', '%'.$like.'%');
-                        $outer->orWhere('sku', 'like', mb_strlen($code) <= 4 ? '%'.$like.'%' : $like.'%');
-                    }
-                })
-                ->limit($cap)
-                ->get()
-                ->values();
+        // Kod modelu („8543”, „gg6001sgaf”) i oznaczenie klasy albo filtra („s1”, „p3”) wchodzą
+        // z zapytania tą samą drogą, ale krótkie trafia w setki nazw („AROX 733 S1 ESD”). Jedno
+        // wspólne zapytanie z limitem oddawało cały limit takim trafieniom i karta z prawdziwym
+        // kodem („Półbut Uvex 1 8543/8”) nie wchodziła do puli.
+        $strong = array_values(array_filter($codes, static fn (string $c): bool => mb_strlen($c) >= 4));
+        $short = array_values(array_filter($codes, static fn (string $c): bool => mb_strlen($c) < 4));
+
+        return $this->uniqueProducts(
+            $pairHits
+                ->concat($this->productsByModelCodes($strong, $cap))
+                ->concat($this->productsByModelCodes($short, min($cap, self::SHORT_CODE_HITS))),
+            $cap
+        );
+    }
+
+    /**
+     * Kolumna bez separatorów kodu. Klient pisze kod tak, jak go widzi na wyrobie
+     * („8543.8”, „101 001 A”), a katalog trzyma go z ukośnikami („8543/8/35”,
+     * „101/001/A”) — 5321 z 21953 kart. Kod z zapytania jest sprowadzany do samych
+     * liter i cyfr, więc bez tego samego kroku po stronie kolumny nie trafiał nawet
+     * wtedy, gdy klient przepisał kod dokładnie tak, jak stoi w katalogu.
+     */
+    private function compactColumn(string $column): string
+    {
+        return "replace(replace(replace(replace(lower({$column}), '/', ''), '-', ''), '.', ''), ' ', '')";
+    }
+
+    /**
+     * Karty dla podanych kodów, trafieniami w kod przed trafieniami w nazwę: kod stoi
+     * w SKU wprost, a w nazwie bywa przypadkiem („1” z „Uvex 1”). Bez tego podziału
+     * limit zapełniały trafienia z nazwy.
+     *
+     * @param  list<string>  $codes
+     * @return Collection<int, Product>
+     */
+    private function productsByModelCodes(array $codes, int $cap): Collection
+    {
+        if ($codes === [] || $cap < 1) {
+            return collect();
         }
 
-        return $this->uniqueProducts($pairHits->concat($codeHits), $cap);
+        $bySku = $this->productBaseQuery()
+            ->where(function ($outer) use ($codes): void {
+                foreach ($codes as $code) {
+                    $like = addcslashes($code, '%_\\');
+                    $outer->orWhere('sku', 'like', mb_strlen($code) <= 4 ? '%'.$like.'%' : $like.'%');
+                    if (mb_strlen($code) >= 5) {
+                        $outer->orWhereRaw($this->compactColumn('sku').' like ?', [$like.'%']);
+                    }
+                }
+            })
+            ->limit($cap)
+            ->get()
+            ->values();
+
+        $byName = $this->productBaseQuery()
+            ->where(function ($outer) use ($codes): void {
+                foreach ($codes as $code) {
+                    $like = addcslashes($code, '%_\\');
+                    $outer->orWhere('name', 'like', '%'.$like.'%');
+                    if (mb_strlen($code) >= 5) {
+                        $outer->orWhereRaw($this->compactColumn('name').' like ?', ['%'.$like.'%']);
+                    }
+                }
+            })
+            ->limit($cap)
+            ->get()
+            ->values();
+
+        return $this->uniqueProducts($bySku->concat($byName), $cap);
     }
 
     /**
@@ -4348,7 +4465,9 @@ final class ProductAiSearchService
         // dwukropku i SKU z „2004”/„1998” (klej, materiał odblaskowy 3M) wchodziły do puli półmaski.
         $norm = RequirementCodeNoise::strip($query);
         $out = [];
-        if (preg_match_all('/\b[a-z]{0,6}\d[a-z0-9\-\/]{1,}\b/u', $norm, $m)) {
+        // Kropka rozdziela człony kodu tak samo jak ukośnik („8543.8”, „101.001.A”) — bez niej
+        // kod z kropkami rozpadał się na człony za krótkie, by cokolwiek znaleźć.
+        if (preg_match_all('/\b[a-z]{0,6}\d[a-z0-9\-\/.]{1,}\b/u', $norm, $m)) {
             foreach ($m[0] as $raw) {
                 $c = preg_replace('/[^a-z0-9]/', '', $raw) ?? '';
                 if ($c === '' || mb_strlen($c) < 3) {
