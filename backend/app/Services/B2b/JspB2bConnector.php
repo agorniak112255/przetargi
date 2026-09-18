@@ -25,7 +25,7 @@ use RuntimeException;
  * zakupu = kwota „From” (najniższy próg ilościowy, jak ją pokazuje sklep); progów nie uśredniamy.
  * MRRP, gdy niepuste, to cena katalogowa; inaczej katalogowa = zakupu (jak w Anro).
  */
-final class JspB2bConnector implements B2bConnector, B2bShopFieldSource
+final class JspB2bConnector implements B2bConnector, B2bManufacturerSite, B2bShopFieldSource
 {
     private const REASON_UNAVAILABLE = 'niedostępny w katalogu konta (sklep przekierował na stronę główną)';
 
@@ -82,6 +82,12 @@ final class JspB2bConnector implements B2bConnector, B2bShopFieldSource
     public function totalProducts(): int
     {
         return $this->total;
+    }
+
+    /** Witryna nalezy do tej marki — tylko jej karty wolno nadpisac opisem stad. */
+    public static function ownBrand(): string
+    {
+        return 'JSP';
     }
 
     public function manufacturer(B2bRemoteProduct $product): string

@@ -23,7 +23,7 @@ use RuntimeException;
  * jej powiązać z katalogiem, a sklejanie identyfikatora z nazwy byłoby wymyślaniem kodu, którego producent
  * na karcie nie podał.
  */
-final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldSource
+final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bManufacturerSite, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldSource
 {
     private int $total = 0;
 
@@ -81,6 +81,12 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bP
     public function totalProducts(): int
     {
         return $this->total;
+    }
+
+    /** Witryna nalezy do tej marki — tylko jej karty wolno nadpisac opisem stad. */
+    public static function ownBrand(): string
+    {
+        return 'PROTEKT';
     }
 
     public function manufacturer(B2bRemoteProduct $product): string

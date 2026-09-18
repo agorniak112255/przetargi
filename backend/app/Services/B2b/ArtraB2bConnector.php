@@ -17,14 +17,14 @@ use RuntimeException;
  * („ARAGON 920 6060 S2”), a innego wspólnego kodu sklep nie podaje — wariant Shopify ma tylko rozmiar, bez SKU.
  *
  * Zdjęcie wyrobu rozpoznajemy po nazwie pliku równej nazwie produktu z podkreśleniami zamiast spacji
- * („ARCASIO_732_616560_S1_P_ESD.png”). Reszta galerii to grafiki technologii podeszwy wspólne dla wielu modeli
- * („Raptor-black.png”, „Gripper-black.png”) — wzięcie pierwszego lepszego obrazu wstawiało na kartę but innego
- * modelu albo koloru, więc bez pasującej nazwy zdjęcia po prostu nie ma.
+ * („ARCASIO_732_616560_S1_P_ESD.png”) i ono zostaje zdjęciem głównym — wzięcie pierwszego lepszego obrazu
+ * z galerii wstawiało na kartę but innego modelu albo koloru. Pozostałe ujęcia tej samej galerii karta
+ * dostaje po nim (patrz galleryPhotos), bo to naprawdę ten wyrób: podeszwa i detale serii.
  *
  * Tabelki parametrów nie wklejamy do opisu: dane tabelaryczne dostawcy mają w tym projekcie własne miejsce
  * (product_shop_cards), a opis zostaje prozą karty.
  */
-final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDocumentSource, B2bImageGallery, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldSource
+final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDocumentSource, B2bImageGallery, B2bManufacturerSite, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldSource
 {
     /** Blok parametrów szablonu sklepu: wiersz, etykieta i wartość. */
     private const SPEC_ROW_CLASS = 'product-specs__row';
@@ -41,6 +41,9 @@ final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDo
     private const SECTION_PARAMETERS = 'Parametry';
 
     private const SECTION_SIZE_GUIDE = 'Przewodnik po rozmiarach';
+
+    /** Nazwa pliku grafiki wstawianej do galerii przez szablon sklepu, a nie przez zdjęcia wyrobu. */
+    private const TEMPLATE_IMAGE_PREFIX = 'product_gallery';
 
     private int $total = 0;
 
@@ -88,6 +91,12 @@ final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDo
     public function totalProducts(): int
     {
         return $this->total;
+    }
+
+    /** Witryna nalezy do tej marki — tylko jej karty wolno nadpisac opisem stad. */
+    public static function ownBrand(): string
+    {
+        return 'ARTRA';
     }
 
     public function manufacturer(B2bRemoteProduct $product): string
@@ -197,8 +206,8 @@ final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDo
     }
 
     /**
-     * Wyłącznie zdjęcie wyrobu — obraz o nazwie pliku równej nazwie produktu. Pusta lista = sklep zdjęcia tego
-     * modelu nie ma; grafiki technologii podeszwy z galerii to nie jest zdjęcie tego buta.
+     * Galeria karty ze sklepu: zdjęcie wyrobu na pierwszym miejscu, po nim reszta ujęć tej karty.
+     * Pusta lista = sklep zdjęcia tego modelu nie ma (patrz galleryPhotos).
      *
      * @return list<string>
      */
@@ -291,7 +300,7 @@ final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDo
             return self::skipped($handle, $url, 'karta bez nazwy produktu');
         }
 
-        $images = self::productPhotos($name, $this->catalog->imageUrls($product));
+        $images = self::galleryPhotos($name, $this->catalog->imageUrls($product));
         if ($images === []) {
             $this->withoutPhoto[] = $name;
         }
@@ -324,19 +333,56 @@ final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDo
     }
 
     /**
-     * Zdjęcia wyrobu z całej galerii: nazwa pliku równa nazwie produktu z podkreśleniami zamiast spacji.
+     * Galeria karty: najpierw zdjęcia wyrobu (nazwa pliku równa nazwie produktu z podkreśleniami zamiast
+     * spacji), potem pozostałe ujęcia tej karty w kolejności ze sklepu — zdjęcie podeszwy nazwane technologią
+     * i kolorem („Gripper-black.png”) oraz ujęcia serii z numerem modelu w nazwie („310-1.jpg”, „320Air-2.jpg”).
+     * To jest to, co sklep pokazuje w galerii karty; z paska wyboru modelu obok ceny nie bierzemy niczego.
+     *
+     * Odpadają dwie rzeczy, których do tej karty przypisać nie można:
+     * - plik nazwany nazwą innego modelu — sklep wgrał np. na karcie „ARAUKAN 940 1010 O2 FO” plik
+     *   „ARAUKAN_940_1010_O2_CI_FO.png” i nie wiadomo, który z dwóch butów jest na obrazku,
+     * - grafika szablonu sklepu („product_gallery_german_design_award.png” — odznaka nagrody, nie wyrób).
+     *
+     * Bez zdjęcia o nazwie produktu karta nie dostaje nic: pierwsze zdjęcie zostaje w katalogu zdjęciem
+     * głównym, a sama podeszwa i ujęcia serii nie pokazują, jak wygląda ten model.
      *
      * @param  list<string>  $urls
      * @return list<string>
      */
-    private static function productPhotos(string $name, array $urls): array
+    private static function galleryPhotos(string $name, array $urls): array
     {
         $stem = mb_strtolower(str_replace(' ', '_', $name));
+        $model = preg_match('/\d+/', $name, $m) === 1 ? $m[0] : '';
 
-        return array_values(array_filter(
-            $urls,
-            static fn (string $url): bool => mb_strtolower(ShopifyPublicCatalog::fileStem($url)) === $stem,
-        ));
+        $photos = [];
+        $rest = [];
+        foreach ($urls as $url) {
+            $file = mb_strtolower(ShopifyPublicCatalog::fileStem($url));
+            if ($file === $stem) {
+                $photos[] = $url;
+            } elseif (self::belongsToCard($file, $model)) {
+                $rest[] = $url;
+            }
+        }
+
+        return $photos === [] ? [] : array_merge($photos, $rest);
+    }
+
+    /**
+     * Czy plik z galerii jest ujęciem tej karty. Grafika technologii podeszwy nie ma w nazwie żadnej cyfry,
+     * a ujęcie serii zaczyna się numerem modelu z nazwy produktu — nazwa z cyframi spoza tego wzorca to plik
+     * innego modelu („320.jpg” na karcie ARCASIO 732) albo grafika szablonu sklepu.
+     */
+    private static function belongsToCard(string $fileStem, string $model): bool
+    {
+        if (str_starts_with($fileStem, self::TEMPLATE_IMAGE_PREFIX)) {
+            return false;
+        }
+        if (preg_match('/\d/', $fileStem) !== 1) {
+            return true;
+        }
+
+        return $model !== '' && preg_match('/^'.preg_quote($model, '/').'(?!\d)/', $fileStem) === 1;
     }
 
     /**

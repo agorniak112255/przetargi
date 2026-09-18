@@ -31,7 +31,7 @@ use RuntimeException;
  * podaje tekst dosłownie; tylko etykiety cech w tabelce „Parametry” (shopFields) są naszymi stałymi polskimi
  * odpowiednikami.
  */
-final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource, B2bKeepsExistingNames, B2bShopFieldSource
+final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource, B2bKeepsExistingNames, B2bManufacturerSite, B2bShopFieldSource
 {
     private const SESSION_LOST = 'Utracono sesję konta bolle-safety.com — ceny konta niedostępne';
 
@@ -144,6 +144,12 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
     }
 
     /** Tak nazywają się istniejące karty (254, cennik EMEA) — B2bCatalogSync porównuje producenta z kartą. */
+    /** Witryna nalezy do tej marki — tylko jej karty wolno nadpisac opisem stad. */
+    public static function ownBrand(): string
+    {
+        return 'Bolle';
+    }
+
     public function manufacturer(B2bRemoteProduct $product): string
     {
         return 'Bolle';

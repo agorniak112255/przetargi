@@ -469,7 +469,13 @@ final class JspConnectorTest extends TestCase
         $this->assertSame(sha1((string) $product->description), B2bProductLink::query()->where('remote_id', 'ASA940-061-300')->value('description_hash'));
     }
 
-    public function test_next_sync_keeps_manually_edited_description(): void
+    /**
+     * Hierarchia źródeł opisu (decyzja właściciela z 18.09.2026): witryna producenta stoi
+     * najwyżej i zastępuje opis zapisany na karcie — opisów nie redaguje się u nas ręcznie,
+     * a ten z JSP pochodzi od autora wyrobu. Poprzedni tekst zostaje w karcie, żeby zmiana
+     * była odwracalna. Dystrybutorzy opisu nadal nie ruszają (B2bManufacturerDescriptionTest).
+     */
+    public function test_next_sync_replaces_the_card_description_with_the_manufacturer_one(): void
     {
         Storage::fake('public');
         $this->sitemap = self::ASA_SITEMAP;
@@ -478,13 +484,19 @@ final class JspConnectorTest extends TestCase
         $this->fakeSite();
         app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
         $product = Product::query()->where('sku', 'ASA940-061-300')->sole();
-        $product->update(['description' => 'Opis poprawiony ręcznie przez handlowca w katalogu.']);
+        $product->update(['description' => 'Opis wpisany w katalogu przed przebiegiem.']);
 
         $this->pages['ASA940061300'] = $full;
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
 
-        $this->assertSame(0, $second['descriptions']);
-        $this->assertSame('Opis poprawiony ręcznie przez handlowca w katalogu.', $product->fresh()?->description);
+        $this->assertSame(1, $second['descriptions']);
+        $fresh = $product->fresh();
+        $this->assertNotSame('Opis wpisany w katalogu przed przebiegiem.', $fresh?->description);
+        $this->assertStringStartsWith(self::ASA_OVERVIEW, (string) $fresh?->description);
+        $this->assertSame(
+            'Opis wpisany w katalogu przed przebiegiem.',
+            $fresh?->enrichment_payload['replaced_description'] ?? null
+        );
     }
 
     public function test_shop_card_rows_come_from_the_page_already_downloaded_in_products(): void

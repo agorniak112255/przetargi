@@ -48,7 +48,7 @@ use RuntimeException;
  * Producent — ZAŁOŻENIE (sklep nie ma pola producenta): „HECKEL” gdy kod lub nazwa zawiera heckel, „HexArmor” gdy
  * nazwa zawiera hexarmor, inaczej „UVEX” (sklep firmy UVEX; większość nazw zawiera „uvex”).
  */
-final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
+final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
 {
     /** Nieprzerwane pobieranie listy dłużej = błąd (przebieg bez postępu uznałby b2b:sync-due za przerwany). */
     private const LIST_BUDGET_SECONDS = 25 * 60;
@@ -231,6 +231,12 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     public function totalProducts(): int
     {
         return $this->total;
+    }
+
+    /** Witryna nalezy do tej marki — tylko jej karty wolno nadpisac opisem stad. */
+    public static function ownBrand(): string
+    {
+        return 'uvex';
     }
 
     public function manufacturer(B2bRemoteProduct $product): string

@@ -1509,7 +1509,13 @@ final class B2bCatalogSync
         }
 
         $descriptionHash = $link?->description_hash;
-        if ($this->mayWriteDescription($existing, $link)) {
+        // Hierarchia źródeł opisu: najpierw producent. Witryna producenta tej marki zastępuje
+        // opis już zapisany na karcie (z AI, z Presty, od dystrybutora) — opisów nie redaguje
+        // się u nas ręcznie, więc nie ma czego bronić hashem.
+        $fromManufacturer = $connector instanceof B2bManufacturerSite
+            && $existing !== null
+            && $this->sameBrand($connector::ownBrand(), (string) $existing->manufacturer);
+        if ($this->mayWriteDescription($existing, $link, $fromManufacturer)) {
             try {
                 $description = $connector->description($remote);
             } catch (B2bFatalException $e) {
@@ -1526,9 +1532,23 @@ final class B2bCatalogSync
                 if ($this->keepsTranslation($existing, $link, $description)) {
                     return [$descriptionHash, false];
                 }
+                $replaces = $existing !== null && $existing->hasDescriptionText()
+                    && $description !== (string) $existing->description;
+                // Etykieta („Jednostka: szt.”) nie zastępuje opisu, który już jest na karcie.
+                if ($replaces && ! Product::isDescriptionText($description)) {
+                    return [$descriptionHash, false];
+                }
                 $descriptionHash = sha1($description);
                 if ($existing === null || $description !== (string) $existing->description) {
                     $payload['description'] = $description;
+                }
+                if ($replaces) {
+                    // Zastąpiony tekst zostaje w karcie przebiegu i w payloadzie — nadpisanie
+                    // ma być odwracalne, a nie ciche.
+                    $payload['enrichment_payload'] = $this->withReplacedDescription($existing, $description);
+                    if ($warnings !== null) {
+                        $warnings[] = 'opis zastąpiony opisem producenta (poprzedni w enrichment_payload.replaced_description)';
+                    }
                 }
 
                 return [$descriptionHash, true];
@@ -1548,6 +1568,20 @@ final class B2bCatalogSync
             && $link->description_hash !== null
             && hash_equals($link->source_description_hash, sha1($source))
             && hash_equals($link->description_hash, sha1((string) $existing->description));
+    }
+
+    /** Ta sama marka po odsianiu wielkosci liter, znakow i dopisków („Bolle Safety” = „BOLLE”). */
+    private function sameBrand(string $a, string $b): bool
+    {
+        $key = static function (string $v): string {
+            $v = trim(explode('(', explode('/', $v)[0])[0]);
+            $v = mb_strtolower($v);
+            $v = preg_replace('/[^a-z0-9]+/u', ' ', $v) ?? $v;
+
+            return trim(explode(' ', trim($v))[0]);
+        };
+
+        return $key($a) !== '' && $key($a) === $key($b);
     }
 
     private function foreignManufacturer(Product $existing, string $manufacturer): bool
@@ -1991,13 +2025,32 @@ final class B2bCatalogSync
         return [$saved, $error];
     }
 
-    private function mayWriteDescription(?Product $existing, ?B2bProductLink $link): bool
+    private function mayWriteDescription(?Product $existing, ?B2bProductLink $link, bool $fromManufacturer = false): bool
     {
         if ($existing === null || ! $existing->hasDescriptionText()) {
+            return true;
+        }
+        if ($fromManufacturer) {
             return true;
         }
 
         return $link?->description_hash !== null
             && hash_equals($link->description_hash, sha1((string) $existing->description));
+    }
+
+    /**
+     * Poprzedni opis karty zapisany obok wyniku wzbogacania — bez tego nadpisanie opisem
+     * producenta byłoby nieodwracalne, bo nigdzie indziej starego tekstu nie trzymamy.
+     *
+     * @return array<string, mixed>
+     */
+    private function withReplacedDescription(Product $existing, string $description): array
+    {
+        $payload = is_array($existing->enrichment_payload) ? $existing->enrichment_payload : [];
+        $payload['replaced_description'] = mb_substr((string) $existing->description, 0, 10000);
+        $payload['replaced_description_at'] = now()->toIso8601String();
+        $payload['replaced_description_hash'] = sha1($description);
+
+        return $payload;
     }
 }
