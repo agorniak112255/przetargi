@@ -118,6 +118,9 @@ final class InquiryQueryTextTest extends TestCase
             // jednostka bywa w nawiasie — liczba nadal nie jest ceną
             ['Nauszniki przeciwhałasowe ....... 32 (dB)', ['32 (dB)']],
             ['Wąż tłoczny ......... 20 (m)', ['20 (m)']],
+            // liczba z jedną cyfrą po przecinku to wymiar, nie kwota
+            ['Mata gumowa ......... 0,60 m', ['0,60 m']],
+            ['Włóknina ....... 120,5 g/m2', ['120,5 g/m2']],
             ['Rękawice nitrylowe ...... 18 (opakowania po 100 szt.)', ['18 (opakowania po 100 szt']],
             // rozpiętość cen z tekstem za nią zostaje w całości albo znika w całości,
             // nigdy jako strzępek liczby
@@ -185,6 +188,10 @@ final class InquiryQueryTextTest extends TestCase
             'Rękawice nitrylowe ...... 24,00 - 30,00',
             'Rękawice nitrylowe ...... 24,00 za komplet',
             'Rękawice nitrylowe ...... 24,00 netto/szt',
+            // kwota z groszami jest ceną także wtedy, gdy dalej stoi coś innego
+            'Rękawice nitrylowe ...... 24,00 (rozmiar 9)',
+            'Buty robocze S3 ...... 19,50 - 25,50 rozmiar 44',
+            'Kask ochronny ...... 24,00, rozmiar 58',
         ]);
     }
 

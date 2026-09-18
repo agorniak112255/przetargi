@@ -61,6 +61,8 @@ final class InquiryQueryText
         // urwane „, c” z ceny rozbitej na dwie linie („…, c.\n netto....4 497,00 PLN”)
         $text = preg_replace('/[,;]?\s*\bc\.?\s*$/iu', '', $text) ?? $text;
         $text = preg_replace('/\s*[,;:]\s*(?=[,;:]|$)/u', ' ', $text) ?? $text;
+        // po wycietej cenie zostawala osierocona spacja przed przecinkiem
+        $text = preg_replace('/\s+([,;])/u', '$1', $text) ?? $text;
         $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
         $text = trim($text, " \t\n\r\0\x0B,;:.-–—?!");
 
@@ -81,6 +83,7 @@ final class InquiryQueryText
         $clean = preg_replace('/\s+/u', ' ', $clean) ?? $clean;
         // po wycięciu ceny zostawał podwójny przecinek: „Rękawice, , rozmiar 9”
         $clean = preg_replace('/(?:\s*[,;]\s*){2,}/u', ', ', $clean) ?? $clean;
+        $clean = preg_replace('/\s+([,;])/u', '$1', $clean) ?? $clean;
         // „Rekawice 24,00 (netto)” — po kwocie zostawal pusty nawias
         $clean = preg_replace('/\s*[(\[]\s*[)\]]/u', '', $clean) ?? $clean;
         $clean = trim($clean, " \t\n\r\0\x0B,;:.-–—");
@@ -172,7 +175,7 @@ final class InquiryQueryText
         $filler = self::PRICE_FILLER;
         // Kwota bez cofania się w głąb liczby: bez grupy atomowej silnik oddałby
         // ostatnią cyfrę, żeby wejśrzenie przeszło, i z „20 kg” zostałoby „0 kg”.
-        $sum = '(?>'.$amount.')(?![\d,.])';
+        $sum = '(?>'.$amount.')(?!\d|[.,]\d)';
         // przy jednostce fizycznej liczba jest parametrem wyrobu, nie ceną
         $notPhysical = '(?!\s*'.self::PHYSICAL_UNIT.'(?![\p{L}]))';
 
@@ -189,7 +192,13 @@ final class InquiryQueryText
             // również ilość albo długość („......... 18 m”, „...... 100 szt./op.”,
             // „....... 32 dB”, „....... 3 worki”). Kwotę bierzemy tylko wtedy, gdy za nią
             // stoi waluta albo koniec zapisu — jednostka po liczbie znaczy, że to nie cena.
-            '/\.{3,}\s*'.$sum.'(?>(?:\s*[-–—]\s*'.$amount.')?)(?=\s*(?:pln|zł|zl|eur|usd|netto|brutto)(?![\p{L}])|\s*za\s+(?:\d{1,3}\s*)?'.self::TRADE_UNIT.'|\s*[(\[]\s*(?:'.$word.')|\s*[,;)\]]|\s*\.(?!\d)|\s*$)(?:\s*'.$word.')*'.$unit.$per.$bare.'/iu',
+            // Kwota z groszami po ciągu kropek jest ceną niezależnie od tego, co stoi
+            // dalej („...... 24,00 (rozmiar 9)”, „...... 24,00 - 30,00 rozmiar 44”) —
+            // chyba że opisuje wielkość fizyczną („......... 0,60 m”).
+            '/\.{3,}\s*(?>\d[\d \x{00A0}]*(?:[.,]\d{3})*[.,]\d{2})(?!\d|[.,]\d)'.$notPhysical.'(?>(?:\s*[-–—]\s*'.$amount.')?)(?:\s*'.$word.')*'.$unit.$per.$bare.'/iu',
+            // Goła liczba po kropkach bywa ilością albo długością („....... 32 dB”,
+            // „...... 100 szt./op.”), więc bierzemy ją tylko przy walucie albo na końcu zapisu.
+            '/\.{3,}\s*'.$sum.'(?=\s*(?:pln|zł|zl|eur|usd|netto|brutto)(?![\p{L}])|\s*za\s+(?:\d{1,3}\s*)?'.self::TRADE_UNIT.'|\s*[(\[]\s*(?:'.$word.')|\s*[,;)\]]|\s*\.(?!\d)|\s*$)(?:\s*'.$word.')*'.$unit.$per.$bare.'/iu',
             // osierocone „c. netto”, gdy liczbę zabrał wcześniejszy wzorzec
             '/\bc\.\s*netto\b/iu',
             // „masa netto 20 kg”, „waga produktu brutto 25 kg” — tu „netto” opisuje

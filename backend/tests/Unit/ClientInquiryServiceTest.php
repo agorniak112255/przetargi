@@ -426,7 +426,9 @@ final class ClientInquiryServiceTest extends TestCase
             '1. Rekawice lateksowe w kartonie 100 szt.
 2. Rekawice winylowe karton 100 szt.
 3. Karton zbiorczy na odpady 20 szt.
-4. Kartonik ochronny 10 szt.'
+4. Kartonik ochronny 10 szt.
+5. Noz do kartonow 10 szt.
+6. Wozek na kartony 2 szt.'
         );
 
         // zawartosc kartonu to nie zamawiana ilosc
@@ -435,6 +437,9 @@ final class ClientInquiryServiceTest extends TestCase
         // ale karton bywa wyrobem i wtedy liczba obok niego jest iloscia
         $this->assertSame('20', $items[2]['qty']);
         $this->assertSame('10', $items[3]['qty']);
+        // po przyimku karton opisuje wyrob („noz do kartonow”), a nie opakowanie
+        $this->assertSame('10', $items[4]['qty']);
+        $this->assertSame('2', $items[5]['qty']);
     }
 
     public function test_question_about_a_product_in_a_dotted_list_stays_an_item(): void
@@ -447,6 +452,27 @@ final class ClientInquiryServiceTest extends TestCase
 
         $this->assertCount(2, $items);
         $this->assertSame(['100', 'par'], [$items[0]['qty'], $items[0]['unit']]);
+    }
+
+    public function test_question_words_cover_short_forms_but_not_ordinary_words(): void
+    {
+        $svc = $this->service();
+
+        // „Jak” i „Jakim” wypadly ze slownika i pytania szly do katalogu jako nazwy wyrobow
+        $questions = $svc->parseLineItemsFromBody(
+            '1) Jak dlugo trwa dostawa?
+2) Jakim transportem dostarczacie?
+3) Rekawice nitrylowe 100 par'
+        );
+        $this->assertSame(['Rekawice nitrylowe'], array_column($questions, 'query'));
+
+        // „Co najmniej 100 par rekawic?” to zamowienie, a nie pytanie o oferte
+        $order = $svc->parseLineItemsFromBody(
+            '1) Co najmniej 100 par rekawic nitrylowych?
+2) Buty robocze S3'
+        );
+        $this->assertCount(2, $order);
+        $this->assertSame('100', $order[0]['qty']);
     }
 
     public function test_longer_unit_names_are_not_cut_in_half(): void
