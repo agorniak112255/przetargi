@@ -121,6 +121,29 @@ function normKey(value: string): string {
   return value.toLocaleLowerCase('pl').replace(/[^a-z0-9]+/g, '')
 }
 
+/**
+ * Kolumna `products.norms` to normy sklejone przecinkiem. Przecinek wewnątrz nawiasu należy
+ * do jednej normy („EN 14605 (Typ PB[3]-B, PB[4]-B, PB[6]-B)”), więc dzielimy tylko poza nawiasami.
+ */
+function splitNormsColumn(value: string | null | undefined): string[] {
+  if (typeof value !== 'string' || value.trim() === '') return []
+  const out: string[] = []
+  let depth = 0
+  let buf = ''
+  for (const ch of value) {
+    if (ch === '(' || ch === '[') depth++
+    else if (ch === ')' || ch === ']') depth = Math.max(0, depth - 1)
+    if ((ch === ',' || ch === ';') && depth === 0) {
+      if (buf.trim() !== '') out.push(buf.trim())
+      buf = ''
+      continue
+    }
+    buf += ch
+  }
+  if (buf.trim() !== '') out.push(buf.trim())
+  return out
+}
+
 /** Normy z atrybutu `normy_en` dokładamy do listy, ale bez powtórzeń tego, co już w niej jest. */
 function mergeNorms(items: string[], extra: unknown): string[] {
   if (!Array.isArray(extra)) return items
@@ -142,10 +165,10 @@ export function listItems(product: Product, id: string): string[] {
   const raw = payload?.[id as 'specs' | 'features' | 'materials' | 'norms' | 'certificates' | 'use_cases']
   const items = Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s.trim() !== '') : []
   const merged = id === 'norms' ? mergeNorms(items, payload?.attributes?.normy_en) : items
-  const withNorms =
-    id === 'norms' && product.norms && !merged.some((s) => s.includes(product.norms ?? ''))
-      ? [product.norms, ...merged]
-      : merged
+  // Kolumna `norms` to sklejka po przecinku („EN 1073-2, EN 14126, EN 1149-5”). Doklejana
+  // w całości nigdy nie pokrywała się z żadną pojedynczą pozycją listy, więc karta pokazywała
+  // najpierw cały ciąg, a pod nim te same normy z osobna. Dokładamy ją pozycja po pozycji.
+  const withNorms = id === 'norms' ? mergeNorms(merged, splitNormsColumn(product.norms)) : merged
   const prose = descriptionProse(product.description)
   if (!prose) {
     return withNorms

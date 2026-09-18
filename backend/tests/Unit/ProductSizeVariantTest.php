@@ -251,6 +251,33 @@ final class ProductSizeVariantTest extends TestCase
         ));
     }
 
+    /**
+     * Ansell zapisuje rozmiarówkę odzieży listą po przecinku albo ukośniku. Lista urywała się
+     * na pierwszym „NXL” (zostawało samo „3”), więc karta S–5XL dostawała rozmiar „S-XL”.
+     */
+    #[Test]
+    public function keeps_sizes_above_xl_in_comma_and_slash_lists(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        $this->assertSame(
+            ['s', 'm', 'l', 'xl', 'xxl', 'xxxl'],
+            $svc->parseSizesFromText('Dostępne rozmiary: S, M, L, XL, 2XL, 3XL')
+        );
+        $this->assertSame(
+            ['s', 'm', 'l', 'xl', 'xxl', 'xxxl', 'xxxxl', '5xl'],
+            $svc->parseSizesFromText('Available sizes: S, M, L, XL, 2XL, 3XL, 4XL, 5XL')
+        );
+        $this->assertSame(
+            ['s', 'm', 'l', 'xl', 'xxl', 'xxxl', 'xxxxl', '5xl'],
+            $svc->parseSizesFromText('Rozmiary: S/M/L/XL/XXL/3XL/4XL/5XL')
+        );
+        $this->assertSame(
+            's-5xl',
+            $svc->formatPackaging($svc->parseSizesFromText('Rozmiary: S, M, L, XL, XXL, 3XL, 4XL, 5XL'))
+        );
+    }
+
     #[Test]
     public function fills_empty_packaging_from_description_range(): void
     {

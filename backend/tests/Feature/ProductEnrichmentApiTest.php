@@ -844,7 +844,7 @@ final class ProductEnrichmentApiTest extends TestCase
         ProductEnrichmentCache::query()->create([
             'manufacturer' => 'ansell',
             'sku' => 'pool-1',
-            'description' => 'Opis z cache SKU.',
+            'description' => 'Opis z cache SKU: rękawice ochronne Ansell do prac montażowych.',
             'enrichment_payload' => ['features' => ['x'], 'from_cache' => false],
             'image_urls' => [],
             'source_urls' => ['https://example.com/p'],
@@ -911,7 +911,7 @@ final class ProductEnrichmentApiTest extends TestCase
         ProductEnrichmentCache::query()->create([
             'manufacturer' => 'ansell',
             'sku' => 'cache-1',
-            'description' => 'Opis z cache SKU.',
+            'description' => 'Opis z cache SKU: rękawice ochronne Ansell do prac montażowych.',
             'enrichment_payload' => ['features' => ['x'], 'from_cache' => false],
             'image_urls' => [],
             'source_urls' => ['https://example.com/p'],
@@ -946,8 +946,64 @@ final class ProductEnrichmentApiTest extends TestCase
 
         $product->refresh();
         $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
-        $this->assertSame('Opis z cache SKU.', $product->description);
+        $this->assertSame('Opis z cache SKU: rękawice ochronne Ansell do prac montażowych.', $product->description);
         $this->assertTrue((bool) ($product->enrichment_payload['from_cache'] ?? false));
+    }
+
+    /**
+     * Pusty wpis w cache dawał status „done” bez opisu — karta wyglądała w panelu na gotową
+     * i kolejki już jej nie brały. Taki wpis ma zostać pominięty, a karta iść normalną ścieżką.
+     */
+    public function test_empty_sku_cache_does_not_mark_card_as_done(): void
+    {
+        Storage::fake('public');
+
+        ProductEnrichmentCache::query()->create([
+            'manufacturer' => 'ansell',
+            'sku' => 'cache-pusty',
+            'description' => '',
+            'enrichment_payload' => ['features' => [], 'from_cache' => false],
+            'image_urls' => [],
+            'source_urls' => ['https://example.com/p'],
+        ]);
+
+        $product = $this->makeProduct([
+            'sku' => 'CACHE-PUSTY',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => []]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')->zeroOrMoreTimes()->andReturn([]);
+        $llm->shouldReceive('chatJson')->zeroOrMoreTimes()->andReturn([]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+        } catch (ProductSourcesNotFoundException) {
+            // brak stron to poprawne zakończenie — liczy się, że karta nie jest „done”
+        }
+
+        $product->refresh();
+        $this->assertSame('', trim((string) $product->description));
+        $this->assertNotSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
     }
 
     public function test_shop_source_url_skips_sku_cache_and_fetches_hinted_page(): void
@@ -1580,6 +1636,96 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
         $this->assertStringContainsString('wielowarstwowa bariera', (string) $product->description);
         $this->assertNotSame('Zdjęcie z karty sklepu. Opis wpisz ręcznie.', (string) $product->enrichment_error);
+    }
+
+    /**
+     * HyFlex 11584 z listy testerki: model nie zwrócił opisu, ale z karty udało się pobrać
+     * zdjęcie — karta dostawała status „done”, czyli w panelu „OK”, i nie wracała do kolejki.
+     * Zdjęcie nie zastępuje opisu: taka karta ma trafić do ręcznego uzupełnienia.
+     */
+    public function test_saved_image_without_description_does_not_mark_card_as_done(): void
+    {
+        Storage::fake('public');
+
+        $pageUrl = 'https://www.ansell.com/pl/pl/products/hyflex-11-584';
+        $img = 'https://www.ansell.com/-/media/hyflex-11-584/product-assets/hyflex-11-584_front.jpg';
+        $product = $this->makeProduct([
+            'sku' => '11584120',
+            'name' => 'HyFlex 11584',
+            'manufacturer' => 'Ansell',
+            'shop_source_url' => $pageUrl,
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [[
+                    'url' => $pageUrl,
+                    'title' => 'HyFlex 11-584',
+                    'snippet' => 'Rękawice HyFlex 11-584',
+                ]],
+                'errors' => [],
+            ]);
+        $search->shouldReceive('forgetProductCache')->zeroOrMoreTimes();
+        $search->shouldReceive('dropListingResults')
+            ->zeroOrMoreTimes()
+            ->andReturnUsing(static fn (array $results): array => $results);
+
+        $llm = $this->mockLlmWithSanitize([
+            'description' => '',
+            'features' => [],
+            'specs' => [],
+            'norms' => [],
+            'certificates' => [],
+            'materials' => [],
+            'use_cases' => [],
+            'image_urls' => [$img],
+            'source_urls' => [$pageUrl],
+            'confidence' => 0,
+        ]);
+
+        $html = '<html><head><meta property="og:image" content="'.$img.'"></head>'
+            .'<body><h1>HyFlex 11-584</h1><img src="'.$img.'" alt="HyFlex 11-584"></body></html>';
+
+        Http::fake(function (Request $request) use ($html) {
+            if (str_contains($request->url(), '.jpg')) {
+                return Http::response($this->tinyJpeg(), 200, ['Content-Type' => 'image/jpeg']);
+            }
+
+            return Http::response($html, 200, ['Content-Type' => 'text/html']);
+        });
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+        } catch (ProductSourcesNotFoundException) {
+            // brak potwierdzonej karty to również poprawne zakończenie — liczy się status
+        }
+
+        $product->refresh();
+        // zdjęcie się zapisało — to właśnie ta ścieżka ustawiała wcześniej status „done”
+        $this->assertGreaterThan(0, ProductImage::query()->where('product_id', $product->id)->count());
+        $this->assertSame('', trim((string) $product->description));
+        $this->assertNotSame(
+            Product::ENRICHMENT_DONE,
+            $product->enrichment_status,
+            'karta bez opisu nie może pokazywać się w panelu jako „OK”'
+        );
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
     }
 
     public function test_expert_description_is_not_replaced_by_shopify_price_dump(): void

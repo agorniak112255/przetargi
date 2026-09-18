@@ -199,13 +199,13 @@ final class BhpAttributeNormalizer
         $out['material'] = $primary;
         $out['materialy'] = $materials;
 
-        $normy = array_values(array_unique(array_merge(
+        $normy = $this->collapseNormVariants(array_values(array_unique(array_merge(
             // normy z cennika idą pierwsze — przy skracaniu listy zostają te z dokumentu producenta
             $this->splitNormsColumn((string) ($priceList['normy'] ?? '')),
             $this->stringList($raw['normy_en'] ?? null),
             $this->stringList($context['norms'] ?? null),
             $this->splitNormsColumn($context['norms_column'] ?? ''),
-        )));
+        ))));
         $out['normy_en'] = $normy;
 
         $descBlob = implode(' ', array_merge(
@@ -833,6 +833,60 @@ final class BhpAttributeNormalizer
         }
 
         return null;
+    }
+
+    /**
+     * „EN 14126” i „EN 14126 (ochrona przed czynnikami biologicznymi)” to jedna norma w dwóch
+     * zapisach — zostaje ten z objaśnieniem. NormCode::dedupe tego nie zwija, bo zapisu
+     * z nawiasem w ogóle nie uznaje za oznaczenie normy, a `array_unique` widzi dwa różne teksty.
+     *
+     * Rok, poprawkę i poziomy zwija NormCode — tutaj zwijamy WYŁĄCZNIE dopisek w nawiasie.
+     * Sam prefiks nie wystarczy: „EN 374” i „EN 374-1” to różne wymagania w przetargu,
+     * a „EN 1497” tylko zaczyna się jak „EN 149”. „EN 374-1 (Typ A)” i „EN 374-1 (Typ B)”
+     * nie są swoimi prefiksami i zostają obie.
+     *
+     * @param  list<string>  $items
+     * @return list<string>
+     */
+    private function collapseNormVariants(array $items): array
+    {
+        $out = [];
+        foreach (NormCode::dedupe($items) as $item) {
+            $text = trim($item);
+            if ($text === '') {
+                continue;
+            }
+            $zwiniete = false;
+            foreach ($out as $i => $known) {
+                if ($this->normWithGloss($known, $text)) {
+                    $out[$i] = $text;
+                    $zwiniete = true;
+                    break;
+                }
+                if ($this->normWithGloss($text, $known)) {
+                    $zwiniete = true;
+                    break;
+                }
+            }
+            if (! $zwiniete) {
+                $out[] = $text;
+            }
+        }
+
+        return array_values($out);
+    }
+
+    /** Czy `$zObjasnieniem` to `$goly` z dopiskiem w nawiasie („EN 407” → „EN 407 (poziom 1)”). */
+    private function normWithGloss(string $goly, string $zObjasnieniem): bool
+    {
+        if ($goly === '' || mb_strlen($zObjasnieniem) <= mb_strlen($goly)) {
+            return false;
+        }
+        if (mb_stripos($zObjasnieniem, $goly) !== 0) {
+            return false;
+        }
+
+        return preg_match('/^\s*[(\[]/u', mb_substr($zObjasnieniem, mb_strlen($goly))) === 1;
     }
 
     /** @return list<string> */

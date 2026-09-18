@@ -149,7 +149,7 @@ TXT,
             'inne' => <<<'TXT'
 Zbierz PEŁNĄ specyfikację jak na karcie katalogowej BHP/PPE.
 Opis: 1) przeznaczenie 2) budowa/materiały 3) właściwości użytkowe 4) normy/certyfikaty 5) zastosowania — 2–4 akapity.
-rozmiar: obuwie tylko EU 36–50; rękawice 6–12; odzież S–XXL; nigdy 1–5XL przy butach; brak w źródłach → null.
+rozmiar: obuwie tylko EU 36–50; rękawice 6–12; odzież pełny zakres ze źródła (bywa S–5XL, S–6XL); nigdy rozmiaru odzieży przy butach; brak w źródłach → null.
 Jeśli nazwa to PPE (obuwie, rękawice, odzież…), a tekst dotyczy odczynnika / CAS — description="" i confidence=0.
 TXT,
         ];
@@ -189,7 +189,7 @@ Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"d
     "materialy": ["lista materiałów"],
     "normy_en": ["EN 388", "EN ISO 20345"],
     "klasa_ochrony": "S3 / kat. II / …",
-    "rozmiar": "obuwie: tylko EU 36-48 ze źródeł; rękawice: 7-11; odzież: S-XXL; nigdy 1-5XL przy butach; brak w źródłach → null",
+    "rozmiar": "pełny zakres ze źródła, bez ucinania (odzież bywa S-5XL, S-6XL); obuwie: tylko EU ze źródeł; rękawice: numery 6-12 albo litery S-XXL; nigdy rozmiaru odzieży przy butach; brak w źródłach → null",
     "poziomy_en388": "np. 4544C albo null"
   },
   "image_urls": ["https://… tylko realny URL zdjęcia produktu"],

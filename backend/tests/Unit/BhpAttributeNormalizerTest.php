@@ -426,4 +426,73 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertTrue($n->ffpClassMeets('Półmaska FFP2 z zaworem', 'Półmaska SECURA 3000'), 'brak klasy = brak wiedzy');
         $this->assertTrue($n->ffpClassMeets('Półmaska wielorazowa', 'FFP1'));
     }
+
+    /**
+     * Zgłoszenie testerki „normy podane podwójnie”: ten sam kod wchodził raz jako goły zapis
+     * (regex z opisu), raz z objaśnieniem (lista z karty). NormCode::dedupe tego nie zwija,
+     * bo zapisu z nawiasem nie uznaje za oznaczenie normy.
+     */
+    public function test_norm_with_explanation_replaces_the_bare_code(): void
+    {
+        $n = new BhpAttributeNormalizer;
+        $attrs = $n->normalize(
+            ['normy_en' => ['EN 14126', 'Typ 3-B', 'EN 14605']],
+            [
+                'norms' => [
+                    'EN 14126 (ochrona przed czynnikami biologicznymi)',
+                    'Typ 3-B (ochrona przed cieczami)',
+                    'EN 14605 (Typ PB[3]-B, PB[4]-B, PB[6]-B)',
+                ],
+                'sku' => 'GR40T-00126-07',
+                'name' => '4000-GR APOL ENCAP SCBA 126-G02.3XL',
+            ]
+        );
+
+        $this->assertSame([
+            'EN 14126 (ochrona przed czynnikami biologicznymi)',
+            'Typ 3-B (ochrona przed cieczami)',
+            'EN 14605 (Typ PB[3]-B, PB[4]-B, PB[6]-B)',
+        ], $attrs['normy_en']);
+    }
+
+    /**
+     * Podobny początek to nie ten sam kod: „EN 1497” tylko zaczyna się jak „EN 149”,
+     * a część normy („EN 374-1” wobec „EN 374”) i typ badania to w przetargu różne wymagania.
+     */
+    public function test_different_norms_with_shared_prefix_are_kept_apart(): void
+    {
+        $n = new BhpAttributeNormalizer;
+        $attrs = $n->normalize(
+            ['normy_en' => [
+                'EN 149', 'EN 1497',
+                'EN 374', 'EN 374-1', 'EN 374-5',
+                'EN 374-1 (Typ A)', 'EN 374-1 (Typ B)',
+            ]],
+            ['sku' => 'TEST-1', 'name' => 'Wyrób testowy']
+        );
+
+        // „EN 374-1” wchłania się w pierwszy zapis z dopiskiem, bo sam z siebie nic nie wnosi;
+        // „EN 374” i „EN 374-5” to inne części normy i zostają osobno.
+        $this->assertSame(
+            ['EN 149', 'EN 1497', 'EN 374', 'EN 374-1 (Typ A)', 'EN 374-5', 'EN 374-1 (Typ B)'],
+            $attrs['normy_en']
+        );
+    }
+
+    /** Rok i poprawkę zwija NormCode, a sprzeczne poziomy zostają obie — tego nie wolno zgubić. */
+    public function test_year_and_amendment_collapse_but_contradictory_levels_stay(): void
+    {
+        $n = new BhpAttributeNormalizer;
+        $attrs = $n->normalize(
+            ['normy_en' => ['EN 388', 'EN 388:2016', 'EN 388:2016+A1:2018']],
+            ['sku' => 'TEST-2', 'name' => 'Wyrób testowy']
+        );
+        $this->assertSame(['EN 388:2016+A1:2018'], $attrs['normy_en']);
+
+        $sprzeczne = $n->normalize(
+            ['normy_en' => ['EN 388 4X42C', 'EN 388 3121X']],
+            ['sku' => 'TEST-3', 'name' => 'Wyrób testowy']
+        );
+        $this->assertSame(['EN 388 4X42C', 'EN 388 3121X'], $sprzeczne['normy_en']);
+    }
 }

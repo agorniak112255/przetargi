@@ -1055,8 +1055,11 @@ final class ProductEnrichmentService
                 }
                 if ($savedImages !== []) {
                     $this->attemptLog()->add('image', 'zdjęcie z karty mimo cienkiego opisu');
+                    // Zdjęcie nie zastępuje opisu: karta bez opisu dostaje ten sam status, co
+                    // przebieg bez zdjęcia (ProductSourcesNotFoundException → „manual”). Status
+                    // „done” pokazywał się w panelu jako „OK”, a karta nie wracała do kolejki.
                     $product->update([
-                        'enrichment_status' => Product::ENRICHMENT_DONE,
+                        'enrichment_status' => Product::ENRICHMENT_MANUAL,
                         'enriched_at' => now(),
                         'enrichment_error' => 'Zdjęcie z karty sklepu. Opis wpisz ręcznie.',
                         'enrichment_trace' => $this->attemptLog()->snapshot($product),
@@ -1549,6 +1552,11 @@ final class ProductEnrichmentService
         // Zrzut strony zapisany w cache przed tą kontrolą nie może się kopiować dalej —
         // produkt idzie wtedy normalną ścieżką i nowy opis nadpisuje wpis w cache.
         if ($this->looksLikeForeignOrPartsTableDump($cacheDescription)) {
+            return false;
+        }
+        // Pusty albo szczątkowy wpis w cache dawał status „done” bez opisu — karta
+        // wyglądała w panelu na gotową i nie wracała już do kolejki.
+        if (! Product::isDescriptionText($cacheDescription)) {
             return false;
         }
         $cacheSpecs = ProductDescriptionText::dropDuplicatedListItems(

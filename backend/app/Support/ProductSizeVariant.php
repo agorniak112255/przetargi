@@ -180,8 +180,11 @@ final class ProductSizeVariant
             }
         }
 
+        // Litera przed liczbą i domknięcie \b: przy „…, 2XL, 3XL” alternatywa z liczbą na
+        // początku zjadała samo „3”, a bez granicy na końcu silnik nie cofał się do „3XL”
+        // — lista rozmiarów urywała się na pierwszym NXL („S-5XL” zapisywało się jako „S-XL”).
         if (preg_match(
-            '/\b'.$keyword.'\b(?:\s+\p{L}+){0,4}\s*[:.\-—]?\s*\b((?:'.$num.'|'.$alpha.')(?:\s*[,\/;]\s*(?:'.$num.'|'.$alpha.')){1,24})/iu',
+            '/\b'.$keyword.'\b(?:\s+\p{L}+){0,4}\s*[:.\-—]?\s*\b((?:'.$alpha.'|'.$num.')(?:\s*[,\/;]\s*(?:'.$alpha.'|'.$num.')){1,24})\b/iu',
             $text,
             $m
         ) === 1) {

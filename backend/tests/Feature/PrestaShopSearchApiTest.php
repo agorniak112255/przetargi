@@ -118,8 +118,10 @@ final class PrestaShopSearchApiTest extends TestCase
         ])->assertOk();
 
         $fresh = $product->fresh();
-        $this->assertSame(['EN 140:2004', 'EN 140:1998'], $fresh->enrichment_payload['attributes']['normy_en']);
-        $this->assertSame('EN 140:2004, EN 140:1998', $fresh->norms);
+        // „PN-EN 140:2004 (EN 140:1998)” to jedna norma w dwóch wydaniach — na karcie ma być
+        // jedna pozycja, w brzmieniu bogatszym. Wcześniej lista pokazywała oba zapisy obok siebie.
+        $this->assertSame(['EN 140:2004'], $fresh->enrichment_payload['attributes']['normy_en']);
+        $this->assertSame('EN 140:2004', $fresh->norms);
         $this->assertContains('Silikon', $fresh->enrichment_payload['features'], 'cechy sklepu zostają w cechach');
     }
 
