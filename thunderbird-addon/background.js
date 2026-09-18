@@ -230,7 +230,11 @@ async function insertReply({ inquiryId, messageId = null, inquiry: known = null 
  */
 async function useIdentityOfMessage(tabId, message) {
   try {
-    if (! await browser.permissions.contains({ permissions: ['accountsRead'] })) return
+    if (! await browser.permissions.contains({ permissions: ['accountsRead'] })) {
+      await warnAboutSenderAccount()
+
+      return
+    }
     const accountId = message.folder ? message.folder.accountId : null
     if (!accountId) return
 
@@ -252,8 +256,37 @@ async function useIdentityOfMessage(tabId, message) {
     if (current.identityId === wanted.id) return
 
     await browser.compose.setComposeDetails(tabId, { identityId: wanted.id })
+
+    const after = await browser.compose.getComposeDetails(tabId)
+    if (after.identityId !== wanted.id) {
+      console.warn('Thunderbird zostawił własne konto nadawcy mimo prośby o zmianę.')
+    }
   } catch (e) {
     console.warn('Nie udało się wybrać konta nadawcy:', e.message)
+  }
+}
+
+/** Jak często przypominamy o zgodzie na odczyt kont — raz na dobę wystarczy. */
+const SENDER_WARNING_HOURS = 24
+
+/**
+ * Bez zgody na odczyt kont Thunderbird sam wybiera nadawcę i przy dwóch
+ * skrzynkach potrafi wysłać ofertę z niewłaściwego adresu. Dotąd dodatek milczał
+ * w takiej sytuacji, więc handlowiec nie miał skąd wiedzieć, czego brakuje.
+ */
+async function warnAboutSenderAccount() {
+  try {
+    const { senderWarnedAt } = await browser.storage.local.get({ senderWarnedAt: 0 })
+    if (Date.now() - Number(senderWarnedAt || 0) < SENDER_WARNING_HOURS * 60 * 60 * 1000) return
+
+    await browser.storage.local.set({ senderWarnedAt: Date.now() })
+    await notify(
+      'Sprawdź nadawcę odpowiedzi',
+      'Wybiera go Thunderbird, więc przy dwóch kontach może to być niewłaściwy adres. '
+        + 'W ustawieniach dodatku, w sekcji „Odpowiedzi”, kliknij „Zezwól na odczyt kont”.',
+    )
+  } catch (e) {
+    console.warn('Nie udało się ostrzec o koncie nadawcy:', e.message)
   }
 }
 
