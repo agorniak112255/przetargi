@@ -1652,7 +1652,7 @@ function InquiriesHelp() {
         {
           action: 'List od razu, pozycje do sprawdzenia oflagowane',
           does: 'Po lewej gotowy temat i treść. Po prawej każda pozycja z cytatem klienta, dobranym towarem i plakietką: zielona „pewne”, żółta „sprawdź”, czerwona „brak w katalogu”. Baner u góry mówi, ile pozycji wymaga sprawdzenia.',
-          click: 'Przejrzyj tylko pozycje z żółtą lub czerwoną plakietką. Pozycje „pewne” nie wymagają nic.',
+          click: 'Przejrzyj tylko pozycje z żółtą lub czerwoną plakietką. Pozycje „pewne” nie wymagają nic. Gdy klient postawił warunek („w szczególności na kwas siarkowy 96%”), pod pozycją stoi ten warunek i werdykt karty; karta, która go nie potwierdza, nie wchodzi do listu — pozycja idzie jako „potwierdzimy po weryfikacji”.',
           tone: 'amber',
           screen: (
             <AppFrame nav="Zapytania">

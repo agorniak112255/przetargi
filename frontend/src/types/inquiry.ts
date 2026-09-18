@@ -32,6 +32,8 @@ export type InquiryCandidate = {
   stock: number | null
   score: number
   reason: string | null
+  /** null = pozycja bez warunków do sprawdzenia w karcie */
+  requirements_ok: boolean | null
 }
 
 export type InquirySubstitute = {
@@ -49,7 +51,25 @@ export type InquirySubstitute = {
 
 export type InquiryConfidence = 'high' | 'medium' | 'none'
 
-export type InquiryFlag = 'low_score' | 'ambiguous' | 'no_price' | 'card_default' | 'qty_unknown'
+export type InquiryFlag =
+  | 'low_score'
+  | 'ambiguous'
+  | 'no_price'
+  | 'card_default'
+  | 'qty_unknown'
+  | 'requirement_unconfirmed'
+  | 'requirement_note'
+
+/**
+ * Warunek szczególny z wiersza klienta („w szczególności na kwas siarkowy 96%”).
+ * `checkable` false = klauzula, której nie sprawdza żadna reguła — do przeczytania
+ * przez człowieka. `ok` null = nie ma czego sprawdzić albo nic nie wybrano.
+ */
+export type InquiryRequirement = {
+  text: string
+  checkable: boolean
+  ok: boolean | null
+}
 
 /** `chosen`: `"p:<id>"` albo `"check"`. */
 export type InquiryItem = {
@@ -63,6 +83,7 @@ export type InquiryItem = {
   confidence: InquiryConfidence
   chosen: string
   flags: InquiryFlag[]
+  requirements: InquiryRequirement[]
   candidates: InquiryCandidate[]
   substitutes: InquirySubstitute[]
   cards: InquiryCard[]

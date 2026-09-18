@@ -15,6 +15,7 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Support\InquiryMailText;
 use App\Support\InquiryQueryText;
 use App\Support\InquiryReplyHtml;
+use App\Support\InquiryRequirements;
 use App\Support\InquirySignature;
 use App\Support\OfferPricing;
 use App\Support\OfferProductText;
@@ -44,6 +45,15 @@ final class ClientInquiryService
     private const UNIT_PATTERN = '(?:(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?|karton(?:y|ów|ow|ami|ach|em|ie|om|a|u)?)(?![\p{L}]))';
 
     private ?int $minMatchScore = null;
+
+    /**
+     * Teksty kart do sprawdzania warunków szczególnych, id → tekst. Ten sam
+     * wyrób bywa kandydatem w kilku pozycjach, a w jednym żądaniu wystarczy
+     * przeczytać go raz.
+     *
+     * @var array<int, string>
+     */
+    private array $cardCheckTexts = [];
 
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
@@ -646,6 +656,31 @@ final class ClientInquiryService
             if ($product !== null && $priceMode !== 'none' && $this->letterPrice($product, $priceMode, $margin) === null) {
                 $flags[] = 'no_price';
             }
+
+            // Warunki szczególne z wiersza klienta — i to, czy karta je potwierdza.
+            $requirements = $this->requirementsOf($item);
+            $checkable = array_values(array_filter(
+                $requirements,
+                static fn (array $one): bool => ($one['checkable'] ?? false) === true,
+            ));
+            // Do bazy idziemy tylko wtedy, gdy jest co sprawdzać — pozycje bez
+            // warunków (a takich jest większość) nie czytają żadnej karty.
+            $unconfirmed = [];
+            if ($checkable !== []) {
+                $unconfirmed = $product === null
+                    ? array_map(static fn (array $one): string => (string) $one['text'], $checkable)
+                    : InquiryRequirements::unconfirmed(
+                        $checkable,
+                        $this->cardCheckText((int) ($product['id'] ?? 0)),
+                    );
+            }
+            if ($unconfirmed !== []) {
+                $flags[] = 'requirement_unconfirmed';
+            }
+            if (count($checkable) !== count($requirements)) {
+                // Klauzula, której nie da się sprawdzić regułą — musi ją przeczytać człowiek.
+                $flags[] = 'requirement_note';
+            }
             foreach ($cards as $card) {
                 // karta AI bez odpowiedzi — list jej nie uwzględnia, pracownik powinien zerknąć
                 if (! isset($answers[(string) $card['id']])) {
@@ -665,7 +700,24 @@ final class ClientInquiryService
                 'confidence' => $confidence,
                 'chosen' => $chosen,
                 'flags' => $flags,
-                'candidates' => array_map(fn (array $p): array => $this->candidateView($p, $margin), $candidates),
+                'requirements' => array_map(
+                    fn (array $one): array => [
+                        'text' => (string) $one['text'],
+                        'checkable' => ($one['checkable'] ?? false) === true,
+                        // null, gdy warunku nie da się sprawdzić albo nic nie wybrano
+                        'ok' => ($one['checkable'] ?? false) !== true || $product === null
+                            ? null
+                            : ! in_array((string) $one['text'], $unconfirmed, true),
+                    ],
+                    $requirements,
+                ),
+                'candidates' => array_map(
+                    fn (array $p): array => array_merge($this->candidateView($p, $margin), [
+                        // null = pozycja bez warunków do sprawdzenia
+                        'requirements_ok' => $checkable === [] ? null : $this->meetsRequirements($checkable, $p),
+                    ]),
+                    $candidates,
+                ),
                 'substitutes' => array_map(
                     fn (array $p): array => array_merge($this->candidateView($p, $margin), ['score' => null, 'reason' => null]),
                     $substitutes
@@ -689,7 +741,23 @@ final class ClientInquiryService
             return 'check';
         }
 
-        return 'p:'.(int) $candidates[0]['id'];
+        // Klient postawił warunek („w szczególności na kwas siarkowy 96%”):
+        // do listu wchodzi tylko karta, która ten warunek potwierdza. Gdy żadna
+        // nie potwierdza, pozycja idzie jak brak w katalogu — „potwierdzimy po
+        // weryfikacji”. Milczenie o warunku czyta się jak jego spełnienie,
+        // a tego o wyrobie nie wiemy.
+        $required = $this->checkableRequirements($item);
+        if ($required === []) {
+            return 'p:'.(int) $candidates[0]['id'];
+        }
+
+        foreach ($candidates as $candidate) {
+            if ($this->meetsRequirements($required, $candidate)) {
+                return 'p:'.(int) $candidate['id'];
+            }
+        }
+
+        return 'check';
     }
 
     /**
@@ -966,6 +1034,92 @@ final class ClientInquiryService
         }
 
         return $this->defaultOptionFor($item, $candidates);
+    }
+
+    /**
+     * Warunki szczególne pozycji: „w szczególności na kwas siarkowy 96%”.
+     *
+     * Liczone z cytatu za każdym razem, a nie zapisywane w analizie: źródłem
+     * jest wiersz klienta, który i tak stoi w bazie, a reguły siedzą w kodzie
+     * z testami. Dzięki temu poprawiona reguła działa też dla zapytań
+     * założonych wcześniej — a wysłane listy zostają takie, jakie poszły.
+     *
+     * @param  array<string, mixed>  $item
+     * @return list<array<string, mixed>>
+     */
+    private function requirementsOf(array $item): array
+    {
+        return InquiryRequirements::fromQuote((string) ($item['quote'] ?? ''));
+    }
+
+    /**
+     * Warunki, które da się sprawdzić w karcie (nazwane substancje).
+     *
+     * @param  array<string, mixed>  $item
+     * @return list<array<string, mixed>>
+     */
+    private function checkableRequirements(array $item): array
+    {
+        return array_values(array_filter(
+            $this->requirementsOf($item),
+            static fn (array $requirement): bool => ($requirement['checkable'] ?? false) === true,
+        ));
+    }
+
+    /**
+     * Czy karta tego kandydata potwierdza wszystkie sprawdzalne warunki pozycji.
+     *
+     * @param  list<array<string, mixed>>  $requirements
+     * @param  array<string, mixed>  $candidate
+     */
+    private function meetsRequirements(array $requirements, array $candidate): bool
+    {
+        if ($requirements === []) {
+            return true;
+        }
+        $id = (int) ($candidate['id'] ?? 0);
+        if ($id === 0) {
+            return false;
+        }
+
+        return InquiryRequirements::unconfirmed($requirements, $this->cardCheckText($id)) === [];
+    }
+
+    /**
+     * Tekst karty, w którym szukamy potwierdzenia warunku: opis, normy,
+     * podsumowanie wersji i tabelki z kart B2B dostawców (tam bywają tabele
+     * czasów przenikania, których opis nie niesie).
+     */
+    private function cardCheckText(int $productId): string
+    {
+        if (array_key_exists($productId, $this->cardCheckTexts)) {
+            return $this->cardCheckTexts[$productId];
+        }
+
+        $product = Product::query()
+            ->with('shopCards:id,product_id,fields')
+            ->find($productId, ['id', 'description', 'norms', 'variant_summary']);
+
+        if ($product === null) {
+            $this->cardCheckTexts[$productId] = '';
+
+            return '';
+        }
+
+        $parts = [
+            (string) $product->description,
+            (string) $product->norms,
+            (string) $product->variant_summary,
+        ];
+        foreach ($product->shopCards as $card) {
+            // Tabelka dostawcy jako tekst — szukamy w niej nazw substancji,
+            // więc wystarczy zapis JSON z zachowanymi polskimi znakami.
+            $parts[] = (string) json_encode($card->fields, JSON_UNESCAPED_UNICODE);
+        }
+
+        $this->cardCheckTexts[$productId] = trim(implode(' ', array_filter($parts)));
+
+        return $this->cardCheckTexts[$productId];
     }
 
     /**

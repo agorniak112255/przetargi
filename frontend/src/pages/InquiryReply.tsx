@@ -51,6 +51,8 @@ const flagLabel: Record<InquiryFlag, string> = {
   no_price: 'brak ceny',
   card_default: 'pytanie AI z domyślną odpowiedzią',
   qty_unknown: 'brak ilości w mailu',
+  requirement_unconfirmed: 'karta nie potwierdza warunku z zapytania',
+  requirement_note: 'warunek szczególny do przeczytania',
 }
 
 const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
@@ -258,6 +260,27 @@ function ItemRow({
         <blockquote className="mt-2 border-l-4 border-amber-400 bg-amber-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-800">
           {item.quote}
         </blockquote>
+      )}
+
+      {/* Warunki szczególne klienta: wprost, z werdyktem karty. Karta bez
+          potwierdzenia nie wchodzi do listu, więc handlowiec musi wiedzieć,
+          czego brakuje i gdzie sam ma to sprawdzić. */}
+      {item.requirements.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {item.requirements.map((req) => (
+            <li key={req.text} className="text-[11px] leading-relaxed">
+              <span className="font-semibold text-slate-800">Warunek z zapytania:</span>{' '}
+              <span className="text-slate-800">{req.text}</span>{' '}
+              {!req.checkable ? (
+                <span className="text-slate-500">— sprawdź sam, tego nie sprawdzi żadna reguła</span>
+              ) : req.ok === true ? (
+                <span className="text-emerald-700">— potwierdzony w karcie</span>
+              ) : (
+                <span className="text-red-700">— karta tego nie potwierdza</span>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
 
       <div className="mt-2 text-xs">
