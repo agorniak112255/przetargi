@@ -83,7 +83,53 @@ async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentA
  * bo okienko znika w chwili, gdy okno kompozycji przejmuje skupienie — razem
  * z ewentualnym komunikatem o błędzie.
  */
-async function insertReply({ inquiryId, messageId }) {
+/**
+ * Mail, na który wolno otworzyć odpowiedź do tego zapytania.
+ *
+ * Zasada: decyduje Message-ID zapisany w zapytaniu, a nie to, co jest w danej
+ * chwili zaznaczone na liście. Wcześniej numeryczne id wiadomości podawało
+ * okienko, a ścieżka z aplikacji brała pierwszą wiadomość z wyszukiwania —
+ * przy niezgodności odpowiedź trafiała na inny mail niż ten z zapytania.
+ *
+ * Zapytanie wklejone w przeglądarce nie ma Message-ID; wtedy jedynym wskazaniem
+ * jest mail otwarty w okienku dodatku.
+ */
+async function replyTargetFor(inquiry, messageId) {
+  const wanted = normalizeMessageId(inquiry.source_message_id)
+
+  if (wanted !== '') {
+    const found = await findMessageByHeaderId(wanted)
+    if (found === null) {
+      await notify(
+        'Nie znalazłem maila',
+        'Zapytanie #' + inquiry.id + ' — wiadomości „' + wanted + '” nie ma w tym Thunderbirdzie.',
+      )
+
+      return null
+    }
+
+    return found
+  }
+
+  if (messageId === null || messageId === undefined) {
+    await notify(
+      'Nie wiem, na co odpowiedzieć',
+      'Zapytanie #' + inquiry.id + ' nie pochodzi z maila — odpowiedz z aplikacji albo otwórz mail i użyj okienka dodatku.',
+    )
+
+    return null
+  }
+
+  try {
+    return await browser.messages.get(messageId)
+  } catch (e) {
+    await notify('Nie znalazłem maila', 'Ta wiadomość nie jest już dostępna w Thunderbirdzie.')
+
+    return null
+  }
+}
+
+async function insertReply({ inquiryId, messageId = null }) {
   try {
     const inquiry = await api('/api/inquiries/' + inquiryId)
     const text = String(inquiry.reply_body || '').trim()
@@ -93,13 +139,17 @@ async function insertReply({ inquiryId, messageId }) {
       return { ok: false }
     }
 
+    // Mail bierzemy z zapytania, nie z zaznaczenia na liście.
+    const target = await replyTargetFor(inquiry, messageId)
+    if (target === null) return { ok: false }
+
     const settings = await getSettings()
     // Tabela „pozycja z zapytania — nasza propozycja”; brak = ręcznie poprawiony
     // list, wtedy wysyłamy sam tekst, żeby nic się nie rozjechało.
     const table = String(inquiry.reply_html || '').trim()
 
     // Bez `details` w beginReply, żeby zachować cytat, adresata i podpis.
-    const tab = await browser.compose.beginReply(messageId, 'replyToSender')
+    const tab = await browser.compose.beginReply(target.id, 'replyToSender')
     const details = await composeDetailsWhenReady(tab.id)
     const before = String(details.isPlainText ? details.plainTextBody : details.body || '')
 
@@ -125,15 +175,7 @@ async function insertReply({ inquiryId, messageId }) {
     }
 
     // Message-ID oryginału: po wysłaniu odpowiedzi przestawimy znacznik maila.
-    let headerMessageId = null
-    try {
-      const header = await browser.messages.get(messageId)
-      headerMessageId = header && header.headerMessageId ? header.headerMessageId : null
-    } catch (e) {
-      // Bez identyfikatora znacznik przestawi się przy najbliższym przejściu w tle.
-    }
-
-    await rememberComposeTab(tab.id, inquiry.id, headerMessageId)
+    await rememberComposeTab(tab.id, inquiry.id, target.headerMessageId || null)
 
     return { ok: true }
   } catch (e) {
@@ -148,23 +190,47 @@ async function insertReply({ inquiryId, messageId }) {
 /** Co ile sekund pytamy serwer o listy czekające na wysłanie. */
 const QUEUE_POLL_SECONDS = 15
 
-/** Numeryczne id wiadomości ważne są tylko w tej sesji — mail szukamy po Message-ID. */
+/**
+ * Mail o podanym Message-ID. Numeryczne id wiadomości ważne są tylko w tej
+ * sesji, więc do odpowiedzi szukamy maila po identyfikatorze z zapytania.
+ *
+ * Pusty identyfikator odrzucamy od razu: `messages.query({})` bez filtra oddaje
+ * CAŁĄ skrzynkę, a wzięcie z niej pierwszej wiadomości otwierało odpowiedź na
+ * przypadkowym mailu. Z kilku kopii tej samej wiadomości wybieramy tę ze
+ * zwykłego folderu — kopia w Wysłanych czy w Koszu to nie jest mail klienta.
+ */
 async function findMessageByHeaderId(headerMessageId) {
-  const list = await browser.messages.query({ headerMessageId })
-  const found = list && Array.isArray(list.messages) ? list.messages[0] : null
+  const wanted = normalizeMessageId(headerMessageId)
+  if (wanted === '') return null
 
-  return found || null
+  let list
+  try {
+    list = await browser.messages.query({ headerMessageId: wanted })
+  } catch (e) {
+    return null
+  }
+
+  const exact = (list && Array.isArray(list.messages) ? list.messages : [])
+    .filter((message) => normalizeMessageId(message.headerMessageId) === wanted)
+  if (exact.length === 0) return null
+
+  // `skipFolder` (tags.js) rozpoznaje Wysłane, Kosz, Szkice i spam; bez
+  // uprawnienia do kont Thunderbird nie poda folderu i wtedy bierzemy pierwszą.
+  const normal = exact.filter((message) => {
+    try {
+      return message.folder === undefined || message.folder === null || !skipFolder(message.folder)
+    } catch (e) {
+      return true
+    }
+  })
+
+  return (normal.length > 0 ? normal : exact)[0]
 }
 
 async function handleQueued(row) {
-  const message = await findMessageByHeaderId(row.source_message_id)
-  if (message === null) {
-    await notify('Nie znalazłem maila', 'Zapytanie #' + row.id + ' — tej wiadomości nie ma w tym Thunderbirdzie.')
-
-    return
-  }
-
-  await insertReply({ inquiryId: row.id, messageId: message.id })
+  // Maila wskazuje samo zapytanie — insertReply znajdzie go po Message-ID
+  // i nie otworzy odpowiedzi na żadnym innym.
+  await insertReply({ inquiryId: row.id })
 }
 
 /**
@@ -208,7 +274,10 @@ setInterval(() => {
 /* --------------------------- aktualizacje dodatku --------------------------- */
 
 /** Co ile godzin pytamy serwer o nową wersję dodatku. */
-const UPDATE_CHECK_HOURS = 6
+const UPDATE_CHECK_HOURS = 2
+
+/** Po tylu godzinach przypominamy o tej samej nowej wersji jeszcze raz. */
+const UPDATE_REMIND_HOURS = 20
 
 /** Ile sekund po starcie robimy pierwsze sprawdzenie — żeby nie opóźniać startu. */
 const UPDATE_FIRST_CHECK_SECONDS = 45
@@ -231,13 +300,16 @@ async function watchVersion() {
   }
   if (!state.newer) return
 
-  const { updateNotified } = await browser.storage.local.get({ updateNotified: '' })
-  if (updateNotified === state.version) return
+  const { updateNotified } = await browser.storage.local.get({ updateNotified: null })
+  const said = updateNotified && typeof updateNotified === 'object' ? updateNotified : {}
+  const fresh = said.version !== state.version
+  const quiet = Date.now() - (said.at || 0) < UPDATE_REMIND_HOURS * 60 * 60 * 1000
+  if (! fresh && quiet) return
 
-  await browser.storage.local.set({ updateNotified: state.version })
+  await browser.storage.local.set({ updateNotified: { version: state.version, at: Date.now() } })
   await notify(
     'Nowa wersja dodatku ' + state.version,
-    'Thunderbird zainstaluje ją sam. Od razu: Dodatki i motywy → koło zębate → Sprawdź dostępność aktualizacji.',
+    'Thunderbird zainstaluje ją sam w ciągu doby. Od razu: Dodatki i motywy → koło zębate → Sprawdź dostępność aktualizacji.',
   )
 }
 

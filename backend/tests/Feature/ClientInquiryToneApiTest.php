@@ -207,6 +207,26 @@ final class ClientInquiryToneApiTest extends TestCase
         $this->assertStringNotContainsString('SKU', (string) $again->json('reply_body'));
     }
 
+    public function test_letter_ends_without_our_own_signature(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = $this->product();
+        $this->mockAnalysis($product);
+        Sanctum::actingAs($user);
+
+        [$payload, $body] = $this->createInquiry(ClientInquiry::TONE_HANDLOWY);
+
+        // Każdy handlowiec ma własną stopkę w programie pocztowym — nasz podpis
+        // dawał dwa podpisy pod jednym listem.
+        $this->assertStringNotContainsString('Z poważaniem', $body);
+        $this->assertStringNotContainsString('Zespół Supon', $body);
+        $this->assertStringEndsWith('W razie pytań zapraszamy do kontaktu.', trim($body));
+
+        $html = (string) $payload['reply_html'];
+        $this->assertStringNotContainsString('Z poważaniem', $html);
+        $this->assertStringNotContainsString('Zespół Supon', $html);
+    }
+
     public function test_unknown_template_is_rejected(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

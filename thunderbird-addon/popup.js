@@ -162,13 +162,47 @@ async function showUpdateNotice() {
   const waiting = state !== null && state.newer === true
   el('update').hidden = !waiting
   el('update').textContent = waiting
-    ? 'Dostępna nowa wersja ' + state.version + ' — ustawienia dodatku → Aktualizacje.'
+    ? 'Pracujesz na starej wersji ' + addonVersion() + '. Na serwerze jest ' + state.version + '.'
     : ''
+  el('getUpdate').hidden = !waiting
+  el('getUpdate').dataset.link = waiting ? String(state.link || '') : ''
+}
+
+/**
+ * Oznaczanie maili wymaga zgody na zmianę znaczników. O zgodę wolno poprosić
+ * tylko w odpowiedzi na kliknięcie, a okienko nad mailem jest jedynym miejscem,
+ * do którego handlowiec zagląda codziennie — ustawień dodatku nie otwiera nikt.
+ */
+async function showTagsOffer() {
+  let allowed = true
+  try {
+    allowed = await tagsAllowed()
+  } catch (e) {
+    allowed = true
+  }
+  el('tagsOff').hidden = allowed
+}
+
+async function enableTags() {
+  try {
+    const granted = await requestTagPermissions()
+    if (!granted) {
+      status('Bez zgody na zmianę znaczników maile nie będą oznaczane.', 'warn')
+
+      return
+    }
+    el('tagsOff').hidden = true
+    status('Oznaczanie włączone — znaczniki pojawią się w ciągu kilku minut.', 'ok')
+    browser.runtime.sendMessage({ type: 'syncTags' })
+  } catch (e) {
+    status('Zgodę można też włączyć w ustawieniach dodatku (Oznaczanie maili).', 'warn')
+  }
 }
 
 async function init() {
   showVersion()
   await showUpdateNotice()
+  await showTagsOffer()
 
   const settings = await getSettings()
   if (!settings.token) {
@@ -311,12 +345,21 @@ function insertReply() {
   browser.runtime.sendMessage({
     type: 'insertReply',
     inquiryId,
+    // Tło i tak sprawdzi Message-ID z zapytania; ten numer służy tylko
+    // zapytaniom wklejonym w przeglądarce, które maila nie mają.
     messageId: message.id,
   })
   status('Otwieram okno odpowiedzi…', 'info')
 }
 
 el('openOptions').addEventListener('click', () => browser.runtime.openOptionsPage())
+el('enableTags').addEventListener('click', () => {
+  enableTags().catch((e) => status(e.message || String(e), 'error'))
+})
+el('getUpdate').addEventListener('click', async (event) => {
+  const link = event.target.dataset.link || ''
+  if (link !== '') await browser.windows.openDefaultBrowser(link)
+})
 el('openApp').addEventListener('click', () => openInquiryInBrowser(inquiryId))
 el('insertReply').addEventListener('click', insertReply)
 el('send').addEventListener('click', send)

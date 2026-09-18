@@ -62,13 +62,22 @@
     <p id="counter" class="muted"></p>
   </section>
 
-  <!-- Nowa wersja dodatku czeka na serwerze — informacja, nie ostrzeżenie. -->
-  <p id="update" class="muted" hidden></p>
+  <!-- Oznaczanie maili wymaga jednorazowej zgody; prosimy o nią tu, bo tu jest
+       kliknięcie użytkownika, bez którego Thunderbird o zgodę nie zapyta. -->
+  <p id="tagsOff" class="alarm" hidden>
+    Nie widzisz na liście, kto zajmuje się mailem — oznaczanie jest wyłączone.
+    <button id="enableTags" class="secondary">Włącz oznaczanie</button>
+  </p>
+
+  <!-- Nowa wersja dodatku czeka na serwerze. -->
+  <p id="update" class="alarm" hidden></p>
+  <button id="getUpdate" class="secondary" hidden>Pobierz nową wersję</button>
 
   <!-- Na samym dole, poza sekcjami: przycisk wysyłki zostaje na górze okienka. -->
   <p id="version" class="version"></p>
 
   <script src="common.js"></script>
+  <script src="tags.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

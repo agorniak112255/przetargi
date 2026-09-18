@@ -2271,7 +2271,9 @@ final class ClientInquiryService
             $parts[] = '';
             $parts[] = $note;
         }
-        $outro = ['W razie pytań zapraszamy do kontaktu.', '', 'Z poważaniem,', 'Zespół Supon'];
+        // Bez podpisu „Z poważaniem, Zespół Supon”: każdy handlowiec ma własną
+        // stopkę w programie pocztowym, a dwa podpisy pod jednym listem to błąd.
+        $outro = ['W razie pytań zapraszamy do kontaktu.'];
         $parts[] = '';
         foreach ($outro as $line) {
             $parts[] = $line;

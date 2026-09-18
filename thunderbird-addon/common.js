@@ -164,6 +164,13 @@ function senderHeader(value) {
   return from.length > MAX_FROM ? from.slice(0, MAX_FROM) : from
 }
 
+/** Message-ID bez nawiasów „< >” i bez spacji — tak samo jak w aplikacji. */
+function normalizeMessageId(value) {
+  const id = String(value === null || value === undefined ? '' : value).trim()
+
+  return id.replace(/^</, '').replace(/>$/, '').trim()
+}
+
 /** Numer wersji z manifestu — żeby dało się sprawdzić, co jest zainstalowane. */
 function addonVersion() {
   try {

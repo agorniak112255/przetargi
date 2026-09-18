@@ -15,6 +15,28 @@ odpowiedź jako odpowiedź na ten sam mail.
    Otwiera się zwykłe okno odpowiedzi — z adresatem, cytatem i podpisem — z gotową treścią na górze.
 6. Wysyłasz. Dodatek sam oznacza zapytanie w aplikacji jako obsłużone.
 
+## Na który mail idzie odpowiedź
+
+Zawsze na ten, z którego powstało zapytanie — dodatek szuka go po `Message-ID`
+zapisanym w zapytaniu, a nie po tym, co jest w danej chwili zaznaczone na
+liście wiadomości. Dotyczy to obu drog:
+
+- „Wstaw odpowiedź do maila” w okienku nad mailem,
+- „Zapisz i wyślij w Thunderbirdzie” w aplikacji (dodatek podejmuje prośbę
+  z serwera w ciągu kilkunastu sekund).
+
+Gdy tego maila nie ma w tym Thunderbirdzie, dodatek **nie otwiera żadnej
+odpowiedzi** — mówi wprost, którego identyfikatora nie znalazł. Wcześniej brał
+pierwszą wiadomość z wyszukiwania, a przy pustym identyfikatorze wyszukiwanie
+oddawało całą skrzynkę: odpowiedź potrafiła otworzyć się na przypadkowym mailu.
+
+Z kilku kopii tej samej wiadomości (ta sama w skrzynce i w archiwum) wybierana
+jest kopia ze zwykłego folderu — nie z Wysłanych, Kosza ani Szkiców.
+
+Zapytanie wklejone w przeglądarce nie ma `Message-ID`; wtedy jedynym wskazaniem
+jest mail otwarty w okienku dodatku, a z aplikacji taka odpowiedź nie da się
+wysłać przez Thunderbirda (dodatek to mówi).
+
 ## Szablony listu
 
 Pod przyciskiem „Wyślij do Przetargów” wybiera się szablon listu do klienta.
@@ -106,9 +128,14 @@ Kiedy dodatek sprawdza stan:
 ### Zgoda na zmianę znaczników
 
 Zmiana znaczników wiadomości to osobne uprawnienie Thunderbirda, więc trzeba je
-raz włączyć: **Dodatki i motywy → przy dodatku Ustawienia → Oznaczanie maili na
-liście → Włącz oznaczanie maili**. Bez zgody dodatek działa jak dotąd, tylko bez
-kolorów na liście.
+raz włączyć. Dopóki zgody nie ma, **okienko nad mailem samo o nią prosi**:
+u dołu pojawia się „Nie widzisz na liście, kto zajmuje się mailem” z przyciskiem
+**Włącz oznaczanie**. To samo da się zrobić w **Dodatki i motywy → przy dodatku
+Ustawienia → Oznaczanie maili na liście**. Bez zgody dodatek działa jak dotąd,
+tylko bez kolorów na liście.
+
+O zgodę prosi okienko, a nie tło dodatku, bo Thunderbird pyta o uprawnienia
+wyłącznie w odpowiedzi na kliknięcie człowieka.
 
 Uprawnienie jest **opcjonalne** celowo. Uprawnienie dopisane jako wymagane
 zatrzymuje automatyczną aktualizację dodatku do czasu, aż człowiek zatwierdzi je
@@ -161,12 +188,21 @@ wiedząc o tym:
 - **Ustawienia → Aktualizacje** pokazują zainstalowaną wersję i mają przycisk
   **Sprawdź aktualizacje** (czyta ten sam `updates.json`, więc nigdy nie powie
   czegoś innego niż sam Thunderbird),
-- w tle sprawdzenie idzie 45 sekund po starcie i potem co 6 godzin; o nowej
-  wersji dodatek mówi **raz** powiadomieniem,
-- okienko nad mailem wypisuje na dole, że nowa wersja czeka,
+- w tle sprawdzenie idzie 45 sekund po starcie i potem co 2 godziny; o nowej
+  wersji dodatek przypomina powiadomieniem i powtarza je raz na dobę, dopóki
+  stara wersja jest zainstalowana,
+- okienko nad mailem pisze wprost „Pracujesz na starej wersji X, na serwerze
+  jest Y” i ma przycisk **Pobierz nową wersję**,
 - przycisk **Pobierz nową wersję** otwiera plik XPI w przeglądarce — to droga
   awaryjna, gdy automat zawiedzie: pobrany plik instaluje się przez
   **Dodatki i motywy → koło zębate → Zainstaluj dodatek z pliku**.
+
+Czego dodatek **nie potrafi**: sam siebie zainstalować. Aktualizację wgrywa
+Thunderbird (domyślnie raz na dobę, ustawienia `extensions.update.enabled`
+i `extensions.update.autoUpdateDefault`), a dodatek może tylko o niej
+powiedzieć i podać plik. Jedyna rzecz, która wstrzymuje cichą aktualizację, to
+nowe **wymagane** uprawnienie w manifeście — dlatego uprawnienia do znaczników
+są opcjonalne.
 
 `updates.json` zawiera `update_hash` (SHA-256 pliku XPI). Dodatek nie jest
 podpisany przez Mozillę, więc suma kontrolna jest jedyną weryfikacją, że
@@ -240,7 +276,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.6.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.7.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia
