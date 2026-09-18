@@ -72,6 +72,54 @@ final class ArtraConnectorTest extends TestCase
         );
     }
 
+    public function test_zdjecie_producenta_wchodzi_przed_zdjecia_dystrybutora_i_z_sieci(): void
+    {
+        // Karta miała już zdjęcie poglądowe od dystrybutora i zdjęcie wyłowione z internetu — oba bywają
+        // innym wariantem serii. Zdjęcie ze sklepu producenta pokazuje ten konkretny model, więc zostaje
+        // zdjęciem głównym, a tamte schodzą niżej. Żadnego nie kasujemy: źródło zostaje przy karcie.
+        Storage::fake('public');
+        $product = $this->catalogCard('ARCASIO 732 616560 S1 P ESD');
+        $distributor = B2bAccount::query()->create([
+            'username' => 'ANRO',
+            'sites' => ['b2b.anro.net.pl'],
+            'connector' => 'anro',
+        ]);
+        $fromDistributor = ProductImage::query()->create([
+            'product_id' => $product->id,
+            'b2b_account_id' => $distributor->id,
+            'path' => 'products/'.$product->id.'/dystrybutor.png',
+            'source_url' => 'https://b2b.anro.net.pl/img/arcasio.png',
+            'is_primary' => true,
+            'sort_order' => 0,
+            'checksum' => str_repeat('a', 64),
+        ]);
+        $fromWeb = ProductImage::query()->create([
+            'product_id' => $product->id,
+            'path' => 'products/'.$product->id.'/siec.png',
+            'source_url' => 'https://sklep.example/arcasio.png',
+            'is_primary' => false,
+            'sort_order' => 1,
+            'checksum' => str_repeat('b', 64),
+        ]);
+        $this->shopProduct('3813781-arcasio-732-616560-s1-p-esd', 'ARCASIO 732 616560 S1 P ESD');
+        $this->fakeShop();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+
+        $this->assertSame(
+            [self::PHOTO, self::SOLE_GRAPHIC, (string) $fromDistributor->source_url, (string) $fromWeb->source_url],
+            ProductImage::query()
+                ->where('product_id', $product->id)
+                ->orderBy('sort_order')
+                ->pluck('source_url')
+                ->all(),
+        );
+        $this->assertSame(
+            self::PHOTO,
+            (string) ProductImage::query()->where('product_id', $product->id)->where('is_primary', true)->sole()->source_url,
+        );
+    }
+
     public function test_plik_innego_modelu_i_grafika_szablonu_nie_trafiaja_do_galerii(): void
     {
         // „320.jpg” to ujęcie serii 320, a odznaka nagrody to grafika szablonu sklepu — obu do tej karty

@@ -1943,8 +1943,9 @@ final class B2bCatalogSync
      */
     private function storeImage(B2bConnector $connector, B2bRemoteProduct $remote, Product $product, B2bAccount $account): array
     {
+        $manufacturerAccountId = $this->manufacturerAccountId($connector, $product, $account);
         if ($connector instanceof B2bImageGallery) {
-            return $this->storeGallery($connector, $remote, $product, $account);
+            return $this->storeGallery($connector, $remote, $product, $account, $manufacturerAccountId);
         }
         if ($product->images()->exists()) {
             return [false, null];
@@ -1964,7 +1965,7 @@ final class B2bCatalogSync
                 (int) $account->id,
             );
             if ($stored !== null) {
-                ProductImage::resequence((int) $product->id);
+                ProductImage::resequence((int) $product->id, $manufacturerAccountId);
             }
 
             return [$stored !== null, null];
@@ -1974,14 +1975,37 @@ final class B2bCatalogSync
     }
 
     /**
+     * Konto, którym witryna producenta tego wyrobu zapisuje zdjęcia — jego zdjęcia stoją w galerii karty
+     * przed zdjęciami dystrybutorów (ProductImage::resequence). Warunek jest ten sam co przy opisie:
+     * marker łącznika i zgodność marki witryny z marką karty, bo sklep producenta bywa też sklepem
+     * cudzych marek. null = ten przebieg nie jest przebiegiem producenta tej karty.
+     */
+    private function manufacturerAccountId(B2bConnector $connector, Product $product, B2bAccount $account): ?int
+    {
+        $fromManufacturer = $connector instanceof B2bManufacturerSite
+            && $this->sameBrand($connector::ownBrand(), (string) $product->manufacturer);
+
+        return $fromManufacturer ? (int) $account->id : null;
+    }
+
+    /**
      * Wszystkie zdjęcia karty u dostawcy, w kolejności ze sklepu. Pobieramy tylko te, których karta jeszcze nie
      * ma pod tym adresem — kolejny przebieg nie ściąga niczego ponownie, ale dokłada ujęcia, które dostawca
-     * dodał później. Karta ze zdjęciami z innego źródła zostaje przy swoim głównym: nowe idą na koniec.
+     * dodał później.
+     *
+     * Miejsce w galerii karty rozstrzyga ProductImage::resequence: zdjęcia producenta wchodzą przed zdjęcia
+     * dystrybutorów i przed to, co wyłowiono z internetu. Przy przebiegu producenta układamy kolejność także
+     * wtedy, gdy nic nowego nie przybyło — karta mogła dostać jego zdjęcia wcześniej, zanim ta reguła istniała.
      *
      * @return array{0: bool, 1: string|null}
      */
-    private function storeGallery(B2bImageGallery $connector, B2bRemoteProduct $remote, Product $product, B2bAccount $account): array
-    {
+    private function storeGallery(
+        B2bImageGallery $connector,
+        B2bRemoteProduct $remote,
+        Product $product,
+        B2bAccount $account,
+        ?int $manufacturerAccountId = null,
+    ): array {
         try {
             $urls = $connector->imageUrls($remote);
         } catch (Throwable $e) {
@@ -2018,8 +2042,8 @@ final class B2bCatalogSync
             }
         }
 
-        if ($saved) {
-            ProductImage::resequence((int) $product->id);
+        if ($saved || $manufacturerAccountId !== null) {
+            ProductImage::resequence((int) $product->id, $manufacturerAccountId);
         }
 
         return [$saved, $error];

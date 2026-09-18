@@ -26,18 +26,28 @@ class ProductImage extends Model
      * przeniesienie z PrestaShopu) i każde liczyło `sort_order` po swojemu — potrafiły powstać dwa
      * zdjęcia główne i dwa o tym samym numerze.
      *
-     * Pierwszeństwo: zdjęcie z witryny dostawcy przed zdjęciem wyłowionym z internetu. Packshot ze
-     * sklepu producenta przedstawia ten konkretny wariant wyrobu; zdjęcie znalezione przez model przy
-     * cudzej karcie bywa innym kolorem albo innym modelem.
+     * Pierwszeństwo: witryna producenta wyrobu, potem pozostali dostawcy, na końcu zdjęcie wyłowione
+     * z internetu. Packshot ze sklepu producenta przedstawia ten konkretny wariant wyrobu; dystrybutor
+     * pokazuje przy karcie zdjęcie poglądowe (bywa nim inny wariant tej serii), a zdjęcie znalezione
+     * przez model przy cudzej karcie bywa innym kolorem albo innym modelem.
+     *
+     * $manufacturerAccountId to konto B2B witryny producenta tej karty — podaje je synchronizacja,
+     * bo tylko ona wie, czy marka konta zgadza się z marką wyrobu (sklep producenta bywa też sklepem
+     * cudzych marek). Bez niego kolejność jest ta sama co dotąd: dostawcy przed siecią.
      *
      * Zapisuje tylko wiersze, które faktycznie zmieniają miejsce — wołanie tego po każdym zapisie
      * zdjęcia nie może przestawiać karty w kółko.
      */
-    public static function resequence(int $productId): void
+    public static function resequence(int $productId, ?int $manufacturerAccountId = null): void
     {
         $images = self::query()
             ->where('product_id', $productId)
-            ->orderByRaw('CASE WHEN b2b_account_id IS NULL THEN 1 ELSE 0 END')
+            // 0 = producent, 1 = inny dostawca, 2 = z sieci. Bez konta producenta żaden wiersz nie
+            // trafia do 0 (identyfikatory kont są dodatnie), więc zostaje podział dostawca/sieć.
+            ->orderByRaw(
+                'CASE WHEN b2b_account_id = ? THEN 0 WHEN b2b_account_id IS NULL THEN 2 ELSE 1 END',
+                [$manufacturerAccountId ?? 0],
+            )
             ->orderBy('sort_order')
             ->orderBy('id')
             ->get();
