@@ -454,6 +454,101 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame(['100', 'par'], [$items[0]['qty'], $items[0]['unit']]);
     }
 
+    public function test_numbered_list_of_information_requests_is_not_an_order(): void
+    {
+        $svc = $this->service();
+
+        // Mail Vallen: pozycja stoi w rozbitej tabeli (parser jej nie czyta, czyta model),
+        // a ponumerowana lista pod „Prosze rowniez o podanie:” to pytania o warunki.
+        // Wczytane jako pozycje wchodzily do listu zamiast wyrobu z zapytania.
+        $vallen = $svc->parseLineItemsFromBody(
+            'Prosze o przeslanie oferty cenowej na ponizsze pozycje:
+
+BUTY UVEX BUSINESS CASUAL 8543.8 S1 SRC ROZMIAR 44
+
+Prosze rowniez o podanie:
+
+1. Numeru katalogowego producenta MPN (Manufacturer Part Number)
+2. Terminu realizacji
+3. Warunkow oraz kosztow dostawy
+4. Formy oraz warunkow platnosci (30, 60-cio dniowy, odroczony termin platnosci jest warunkiem preferowanym).
+5. Dodatkowych oplat oraz informacji niezbednych do realizacji zamowienia.'
+        );
+        $this->assertSame([], $vallen);
+
+        // Numeracja pozycji przed lista zadan zostaje numeracja: numery punktow licza
+        // sie do ciagu, wiec „1.” z pierwszego wiersza nie wraca do oferty jako ilosc.
+        $withItems = $svc->parseLineItemsFromBody(
+            '1. Buty robocze S3 rozmiar 44
+2. Kask ochronny bialy
+
+Prosimy o podanie nastepujacych informacji:
+
+3. Terminu realizacji
+4. Warunkow platnosci'
+        );
+        $this->assertSame(['Buty robocze S3', 'Kask ochronny bialy'], array_column($withItems, 'query'));
+        $this->assertSame([null, null], array_column($withItems, 'qty'));
+
+        // Nagłowek zapowiadajacy wyroby albo ich ceny lista zadan nie jest
+        $goods = $svc->parseLineItemsFromBody(
+            'Prosimy o podanie cen dla:
+
+1. Rekawice nitrylowe
+2. Buty robocze S3'
+        );
+        $this->assertSame(['Rekawice nitrylowe', 'Buty robocze S3'], array_column($goods, 'query'));
+
+        // a pod lista zadan wiersz ze znamionami wyrobu (ilosc, rozmiar) zostaje pozycja
+        $mixed = $svc->parseLineItemsFromBody(
+            'Prosze o podanie:
+
+1. Terminu realizacji
+2. Rekawice nitrylowe 100 par
+3. Buty robocze rozmiar 44'
+        );
+        $this->assertSame(['Rekawice nitrylowe', 'Buty robocze'], array_column($mixed, 'query'));
+        $this->assertSame(['100', null], array_column($mixed, 'qty'));
+        $this->assertSame([null, '44'], array_column($mixed, 'size'));
+    }
+
+    public function test_information_request_list_ends_where_the_order_starts(): void
+    {
+        $svc = $this->service();
+
+        // numeracja od nowa to juz inna lista — pod nia moga stac wyroby
+        $again = $svc->parseLineItemsFromBody(
+            'Prosze o podanie:
+
+1. Terminu realizacji
+2. Warunkow platnosci
+
+1. Rekawice nitrylowe
+2. Buty robocze S3'
+        );
+        $this->assertSame(['Rekawice nitrylowe', 'Buty robocze S3'], array_column($again, 'query'));
+
+        // „…dla:”, „…na:” zapowiadaja liste rzeczy, o ktore klient pyta — nie liste
+        // informacji do podania
+        $forGoods = $svc->parseLineItemsFromBody(
+            'Prosze o podanie dostepnosci dla:
+
+1. Rekawice nitrylowe
+2. Buty robocze S3'
+        );
+        $this->assertSame(['Rekawice nitrylowe', 'Buty robocze S3'], array_column($forGoods, 'query'));
+
+        // nagłowek bywa punktem listy: jego numer liczy sie do numeracji, wiec numer
+        // wiersza z wyrobem nie wraca do oferty jako ilosc
+        $numberedHeader = $svc->parseLineItemsFromBody(
+            '1. Prosze o podanie:
+2. Terminu realizacji
+3. Buty robocze S3 rozmiar 44'
+        );
+        $this->assertSame(['Buty robocze S3'], array_column($numberedHeader, 'query'));
+        $this->assertSame([null], array_column($numberedHeader, 'qty'));
+    }
+
     public function test_model_quantity_is_checked_against_the_quote(): void
     {
         // mail pisany myslnikami: naszego parsera nie ma, pozycje daje model — reguly

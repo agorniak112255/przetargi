@@ -47,6 +47,9 @@ final class ClientInquiryService
     /** Jednostki z maila, które umiemy oddzielić od liczby („30szt”, „4 pary”, „2 op.”). */
     private const UNIT_PATTERN = '(?:(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?|karton(?:y|ów|ow|ami|ach|em|ie|om|a|u)?)(?![\p{L}]))';
 
+    /** Wiersz otwarty liczbą („1. Buty robocze”, „30 szt. Rękawice”) — liczba, jednostka, reszta. */
+    private const ROW_NUMBER = '/^(\d+)\s*('.self::UNIT_PATTERN.')?[\s.,:–-]+(.+)$/iu';
+
     private ?int $minMatchScore = null;
 
     /**
@@ -1725,12 +1728,50 @@ final class ClientInquiryService
         $items = [];
         $index = 1;
         $leadingNumbers = [];
+        // Lista żądań informacji („Proszę również o podanie:”) — jej punkty są
+        // pytaniami o warunki oferty, nie pozycjami zamówienia. $infoLast trzyma
+        // ostatni numer takiego punktu: numeracja od nowa („1.” po „5.”) to już
+        // inna lista, a ta bywa listą wyrobów.
+        $infoRequest = false;
+        $infoLast = 0;
         foreach (preg_split('/\R/u', $body) ?: [] as $line) {
             $line = trim((string) $line);
             if ($line === '') {
                 continue;
             }
             $marked = $this->positionMarker($line);
+            $plain = $marked === null && preg_match(self::ROW_NUMBER, $line, $m) === 1;
+            $number = $marked !== null ? $marked['number'] : ($plain ? (int) $m[1] : null);
+
+            if ($this->isInfoRequestHeader($line)) {
+                $infoRequest = true;
+                $infoLast = 0;
+                if ($number !== null) {
+                    // nagłówek bywa punktem listy („3. Proszę o podanie:”) — jego numer
+                    // należy do numeracji tak samo jak numer pominiętego punktu
+                    $leadingNumbers[] = $number;
+                }
+
+                continue;
+            }
+            if ($infoRequest) {
+                if ($number === null || $number <= $infoLast) {
+                    // wiersz spoza numeracji albo numeracja od nowa kończy listę żądań
+                    $infoRequest = false;
+                } else {
+                    $infoLast = $number;
+                    $rest = $marked !== null ? $marked['rest'] : trim($m[3]);
+                    // Znamiona wyrobu (ilość z jednostką, rozmiar) trzymają wiersz
+                    // pozycją nawet pod takim nagłówkiem — mylnie rozpoznany nagłówek
+                    // nie może zabrać z zapytania prawdziwego wiersza zamówienia.
+                    if (! $this->looksLikeGoodsRow($rest)) {
+                        // numer punktu należy do numeracji: pominięty rwał jej ciąg
+                        $leadingNumbers[] = $number;
+
+                        continue;
+                    }
+                }
+            }
             if ($marked !== null && $this->isQuestionLine($marked['rest'])) {
                 // Ponumerowane pytanie („1) Czy posiadacie…?”) nie jest pozycją zamówienia,
                 // ale jego numer należy do numeracji: pominięty rwał ciąg i numery
@@ -1766,7 +1807,7 @@ final class ClientInquiryService
 
                 continue;
             }
-            if (preg_match('/^(\d+)\s*('.self::UNIT_PATTERN.')?[\s.,:–-]+(.+)$/iu', $line, $m) !== 1) {
+            if (! $plain) {
                 continue;
             }
             $rest = trim($m[3]);
@@ -1881,6 +1922,50 @@ final class ClientInquiryService
         $out = preg_replace('/\s+([,;])/u', '$1', $out) ?? $out;
 
         return trim($out);
+    }
+
+    /**
+     * Nagłówek listy żądań informacji: „Proszę również o podanie:”, „Prosimy o podanie
+     * następujących informacji:”, „Pytania:”. Punkty pod takim nagłówkiem („1. Terminu
+     * realizacji”, „2. Warunków oraz kosztów dostawy”) to pytania o warunki oferty —
+     * czytane jako pozycje wchodziły do listu zamiast wyrobu z zapytania.
+     *
+     * Nagłówek, który zapowiada wyroby albo ich ceny („…na poniższe pozycje:”,
+     * „Prosimy o podanie cen dla:”), listą żądań NIE jest: tam numerowane wiersze
+     * niosą zamówienie i muszą zostać pozycjami.
+     */
+    private function isInfoRequestHeader(string $line): bool
+    {
+        $line = trim($line);
+        if (! str_ends_with($line, ':')) {
+            return false;
+        }
+        // zapowiedź wyrobów albo ich wyceny — nie lista informacji o warunkach
+        if (preg_match('/(?:pozycj|asortyment|wyrob|wyrób|produkt|towar|artyku[łl]|materia[łl]|cen|wycen|ofert|kalkulacj|rabat)/iu', $line) === 1) {
+            return false;
+        }
+        // „…dostępności dla:”, „…oferty na:” — po takim zwrocie idzie lista rzeczy,
+        // o które klient pyta, a nie lista informacji do podania
+        if (preg_match('/\b(?:dla|na|do|w|przy|dot\.?|dotycz\w*)\s*:$/iu', $line) === 1) {
+            return false;
+        }
+        if (preg_match('/^(?:dodatkowe\s+)?pytania\s*:$/iu', $line) === 1) {
+            return true;
+        }
+
+        return preg_match('/(?:prosz[ęe]|prosimy|pro[śs]b)/iu', $line) === 1
+            && preg_match('/(?:podani[ae]|informacj|wskazani[ae]|okre[śs]leni[ae]|potwierdzeni[ae]|uwzgl[ęe]dnieni[ae]|doprecyzowani[ae])/iu', $line) === 1;
+    }
+
+    /**
+     * Czy wiersz niesie znamiona wyrobu: ilość z jednostką albo rozmiar. Tyle wystarczy,
+     * żeby pod mylnie rozpoznanym nagłówkiem listy żądań („Prosimy o podanie:”) nie
+     * przepadła prawdziwa pozycja zamówienia.
+     */
+    private function looksLikeGoodsRow(string $rest): bool
+    {
+        return $this->sizeFromLine($rest) !== null
+            || preg_match('/\d{1,5}\s*'.self::UNIT_PATTERN.'/iu', $rest) === 1;
     }
 
     /**
