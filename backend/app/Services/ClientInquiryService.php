@@ -39,7 +39,7 @@ final class ClientInquiryService
     private const PRICE_MODES = ['none', 'catalog', 'catalog_margin'];
 
     /** Jednostki z maila, które umiemy oddzielić od liczby („30szt”, „4 pary”, „2 op.”). */
-    private const UNIT_PATTERN = '(?:szt\.?|sztuk|pcs\.?|par[ay]?|op\.?|opak\.?|opakowa[nń][a-z]*|kpl\.?|komplet[a-zóy]*|zest\.?|zestaw[a-zóy]*)';
+    private const UNIT_PATTERN = '(?:sztuk[ai]?|szt\.?|pcs\.?|par[ay]?|opakowa[nń][a-z]*|opak\.?|op\.?|komplet[a-zóy]*|kpl\.?|zestaw[a-zóy]*|zest\.?)';
 
     private ?int $minMatchScore = null;
 
@@ -1360,11 +1360,6 @@ final class ClientInquiryService
             }
             $rest = trim($m[3]);
             $leadingNumbers[] = (int) $m[1];
-            // „1. Czy posiadacie rękawice?” — pytanie w liście numerowanym tak samo
-            // nie jest pozycją zamówienia
-            if ($this->isQuestionLine($rest)) {
-                continue;
-            }
             $size = $this->sizeFromLine($rest);
             $items[] = [
                 'id' => 'item_'.$index,
@@ -1489,7 +1484,10 @@ final class ClientInquiryService
             return false;
         }
 
-        return preg_match('/^(?:czy|jak[ai]?|jakie|jakim|kiedy|gdzie|ile|w\s+jakim|prosz[ęe]\s+o\s+podanie|prosimy\s+o\s+podanie)\b/iu', trim($rest)) === 1;
+        return preg_match(
+            '/^(?:czy|jak[aąei]|jakie[jm]?|jakich|kt[oó]r[aáeęy][^\s]*|kto|co|kiedy|gdzie|ile|dlaczego|w\s+jakim|prosz[ęe]\s+o\s+(?:podanie|informacj)|prosimy\s+o\s+(?:podanie|informacj))\b/iu',
+            trim($rest)
+        ) === 1;
     }
 
     /**
@@ -1546,6 +1544,12 @@ final class ClientInquiryService
             // „op. 100 szt.”, „w opakowaniu 100 szt.”, „a 100 szt.”, „x 100 szt.” —
             // to zawartość opakowania, a klient zamawia opakowania, nie sztuki
             if (preg_match('/(?:op\.|opak\.?|opakowani[ue]|opakowanie zbiorcze|pak\.|zawiera(?:jący|jące)?|po|(?<![\p{L}\d])[ax])\s*[-–—]?\s*$/iu', $before) === 1) {
+                continue;
+            }
+            // „Rękawice w kartonie 100 szt.” to zawartość opakowania, ale „Karton zbiorczy
+            // na odpady 20 szt.” to nazwa wyrobu — karton liczy się tylko wtedy, gdy nie
+            // otwiera wiersza
+            if (preg_match('/\S+\s+(?:w\s+)?karton(?:ie|y|ów|ach)?\s*[-–—]?\s*$/iu', $before) === 1) {
                 continue;
             }
             // „100 szt./op.”, „100 szt. w opak.”, „20 szt. w kartonie” — tak samo

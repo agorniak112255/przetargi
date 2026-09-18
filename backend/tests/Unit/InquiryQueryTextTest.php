@@ -115,6 +115,13 @@ final class InquiryQueryTextTest extends TestCase
             ['Nauszniki przeciwhałasowe ....... 32 dB', ['32 dB']],
             ['Kabel elektroizolacyjny ....... 1 kV', ['1 kV']],
             ['Sorbent sypki ....... 20 KG', ['20 KG']],
+            // jednostka bywa w nawiasie — liczba nadal nie jest ceną
+            ['Nauszniki przeciwhałasowe ....... 32 (dB)', ['32 (dB)']],
+            ['Wąż tłoczny ......... 20 (m)', ['20 (m)']],
+            ['Rękawice nitrylowe ...... 18 (opakowania po 100 szt.)', ['18 (opakowania po 100 szt']],
+            // rozpiętość cen z tekstem za nią zostaje w całości albo znika w całości,
+            // nigdy jako strzępek liczby
+            ['Rękawice nitrylowe ...... 24,00 - 30,00 rozmiar 9', ['rozmiar 9']],
             // między „netto” a liczbą bywa dwukropek albo „ok.”
             ['Sorbent sypki, masa netto: 20 kg', ['masa netto: 20 kg']],
             ['Worek BIG BAG, waga netto ok. 25 kg', ['waga netto ok. 25 kg']],
@@ -144,6 +151,11 @@ final class InquiryQueryTextTest extends TestCase
     {
         $clean = InquiryQueryText::forCatalog('Sorbent sypki mineralny, masa netto 20 kg');
 
+        // rozpiętość cen dopasowana połowicznie zostawiała „,00” w tekście
+        $this->assertStringNotContainsString(
+            ',00',
+            InquiryQueryText::forCatalog('Rękawice nitrylowe ...... 24,00 - 30,00')
+        );
         $this->assertStringContainsString('20 kg', $clean);
         $this->assertStringNotContainsString(' 0 kg', $clean);
     }

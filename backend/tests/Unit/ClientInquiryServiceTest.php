@@ -400,13 +400,16 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame([null, null], array_column($mixed, 'qty'));
         $this->assertSame(['Buty robocze S3', 'Kask ochronny bialy'], array_column($mixed, 'query'));
 
-        // pytanie w liscie „1.” tez nie jest pozycja
+        // W liscie „1.” pytania nie odsiewamy: „1. Czy moga Panstwo wycenic rekawice
+        // 100 par?” to pozycja zamowienia, a o kwalifikacji decyduje pierwsze slowo,
+        // wiec odsianie gubiloby prawdziwe pozycje. Przy jawnym znaczniku („1)”, „poz.”)
+        // ryzyko jest odwrotne — tam wiersz-pytanie dotad w ogole nie byl pozycja.
         $dots = $svc->parseLineItemsFromBody(
-            '1. Czy posiadacie rekawice nitrylowe?
+            '1. Czy moga Panstwo wycenic rekawice nitrylowe 100 par?
 2. Buty robocze S3'
         );
-        $this->assertSame(['Buty robocze S3'], array_column($dots, 'query'));
-        $this->assertNull($dots[0]['qty']);
+        $this->assertCount(2, $dots);
+        $this->assertSame('100', $dots[0]['qty']);
 
         // ale pytanie o konkretny wyrob jest pozycja
         $products = $svc->parseLineItemsFromBody(
@@ -415,6 +418,47 @@ final class ClientInquiryServiceTest extends TestCase
         );
         $this->assertCount(2, $products);
         $this->assertSame(['XL', '44'], array_column($products, 'size'));
+    }
+
+    public function test_carton_counts_as_packaging_only_when_it_is_not_the_product(): void
+    {
+        $items = $this->service()->parseLineItemsFromBody(
+            '1. Rekawice lateksowe w kartonie 100 szt.
+2. Rekawice winylowe karton 100 szt.
+3. Karton zbiorczy na odpady 20 szt.
+4. Kartonik ochronny 10 szt.'
+        );
+
+        // zawartosc kartonu to nie zamawiana ilosc
+        $this->assertNull($items[0]['qty']);
+        $this->assertNull($items[1]['qty']);
+        // ale karton bywa wyrobem i wtedy liczba obok niego jest iloscia
+        $this->assertSame('20', $items[2]['qty']);
+        $this->assertSame('10', $items[3]['qty']);
+    }
+
+    public function test_question_about_a_product_in_a_dotted_list_stays_an_item(): void
+    {
+        // „1. Czy moga Panstwo wycenic rekawice 100 par?” to pozycja, a nie pytanie o oferte
+        $items = $this->service()->parseLineItemsFromBody(
+            '1. Czy moga Panstwo wycenic rekawice nitrylowe 100 par?
+2. Buty robocze S3'
+        );
+
+        $this->assertCount(2, $items);
+        $this->assertSame(['100', 'par'], [$items[0]['qty'], $items[0]['unit']]);
+    }
+
+    public function test_longer_unit_names_are_not_cut_in_half(): void
+    {
+        // „zest.” wygrywalo z „zestawy” i z wiersza zostawalo „awy pierwszej pomocy”
+        $items = $this->service()->parseLineItemsFromBody(
+            '1. 3 zestawy pierwszej pomocy
+2. 2 komplety odziezy roboczej'
+        );
+
+        $this->assertSame(['zestawy', 'komplety'], array_column($items, 'unit'));
+        $this->assertSame(['pierwszej pomocy', 'odziezy roboczej'], array_column($items, 'query'));
     }
 
     public function test_norm_code_before_the_quantity_is_not_a_package_size(): void
