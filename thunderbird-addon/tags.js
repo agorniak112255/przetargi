@@ -401,8 +401,38 @@ async function markHeaderIds(headerMessageIds) {
 
     return 0
   }
+  let found
+  try {
+    found = await lookupMessageIds(ids)
+  } catch (e) {
+    // Brak sieci albo wygasły token: znaczniki zostają takie, jakie są.
+    await rememberMarkError('Aplikacja nie odpowiedziała na pytanie o zapytania: ' + e.message)
+
+    return 0
+  }
+
+  // Kolumna „Prowadzi” idzie pierwsza: niczego w mailu nie zapisuje, więc nie
+  // potrzebuje zgody na zmianę wiadomości i działa także wtedy, gdy handlowiec
+  // nie chce kolorowych znaczników.
+  await updateColumnEntries(ids, found)
+
   if (!await tagsAllowed()) {
-    await rememberMarkError('Brak zgody na zmianę znaczników wiadomości — włącz oznaczanie w ustawieniach dodatku.')
+    // Brak zgody na znaczniki jest awarią tylko wtedy, gdy nie ma kolumny —
+    // inaczej to świadomy wybór handlowca i nie ma o czym mówić.
+    let columnWorks = false
+    try {
+      columnWorks = columnApi() !== null && await columnApi().available()
+    } catch (e) {
+      columnWorks = false
+    }
+    await rememberMarkError(columnWorks
+      ? null
+      : 'Brak zgody na zmianę znaczników wiadomości — włącz oznaczanie w ustawieniach dodatku.')
+
+    // Dane z tej paczki zostały zapisane w kolumnie, więc przejście się udało
+    // i znacznik czasu może iść dalej. Inaczej dodatek bez znaczników wracałby
+    // w kółko do tego samego okna 90 dni.
+    markBroken = false
 
     return 0
   }
@@ -410,16 +440,7 @@ async function markHeaderIds(headerMessageIds) {
   const tags = tagApi()
   if (tags === null) {
     await rememberMarkError('Ta wersja Thunderbirda nie pozwala zakładać znaczników przez dodatek.')
-
-    return 0
-  }
-
-  let found
-  try {
-    found = await lookupMessageIds(ids)
-  } catch (e) {
-    // Brak sieci albo wygasły token: znaczniki zostają takie, jakie są.
-    await rememberMarkError('Aplikacja nie odpowiedziała na pytanie o zapytania: ' + e.message)
+    markBroken = false
 
     return 0
   }
@@ -572,7 +593,10 @@ async function pullChangedMails() {
  */
 async function recheckTaggedMails() {
   const tagged = await taggedMails()
-  const all = Object.keys(tagged)
+  // Także maile znane samej kolumnie: przy wyłączonych znacznikach `tagged`
+  // jest puste, a usunięte w aplikacji zapytanie musi zniknąć i z kolumny.
+  const { columnEntries: shown } = await browser.storage.local.get({ columnEntries: {} })
+  const all = [...new Set([...Object.keys(tagged), ...Object.keys(shown || {})])]
   if (all.length === 0) return
 
   // Rotacja: bez niej przy ponad 400 oznaczonych mailach reszta nie byłaby
@@ -595,8 +619,12 @@ async function recheckTaggedMails() {
 async function syncTags({ full = false } = {}) {
   if (syncing) return
 
+  // Tylko połączenie z aplikacją jest tu warunkiem. Zgody na znaczniki NIE
+  // sprawdzamy: z tych samych danych żyje kolumna „Prowadzi”, która niczego
+  // w mailu nie zapisuje. Wcześniej wyłączone znaczniki zatrzymywały całe
+  // przejście i kolumna zostawała pusta.
   const { token } = await getSettings()
-  if (!token || !await tagsAllowed()) return
+  if (!token) return
 
   syncing = true
   try {

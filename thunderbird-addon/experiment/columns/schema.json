@@ -1,0 +1,53 @@
+[
+  {
+    "namespace": "inquiryColumn",
+    "functions": [
+      {
+        "name": "available",
+        "type": "function",
+        "async": true,
+        "description": "Czy w tym Thunderbirdzie da się dołożyć kolumnę do listy wiadomości.",
+        "parameters": []
+      },
+      {
+        "name": "show",
+        "type": "function",
+        "async": true,
+        "description": "Zakłada kolumnę „Prowadzi” w liście wiadomości (albo odświeża jej nazwę).",
+        "parameters": [
+          {
+            "name": "label",
+            "type": "string",
+            "description": "Nagłówek kolumny widoczny dla użytkownika."
+          },
+          {
+            "name": "tooltip",
+            "type": "string",
+            "description": "Podpowiedź pod kursorem nad nagłówkiem."
+          }
+        ]
+      },
+      {
+        "name": "hide",
+        "type": "function",
+        "async": true,
+        "description": "Zdejmuje kolumnę z listy wiadomości.",
+        "parameters": []
+      },
+      {
+        "name": "setEntries",
+        "type": "function",
+        "async": true,
+        "description": "Podaje treść kolumny: Message-ID (małymi literami) → tekst do pokazania.",
+        "parameters": [
+          {
+            "name": "entries",
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Cała mapa naraz; zastępuje poprzednią."
+          }
+        ]
+      }
+    ]
+  }
+]

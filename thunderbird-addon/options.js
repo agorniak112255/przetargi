@@ -30,6 +30,7 @@ async function refresh() {
   el('connected').textContent = settings.token ? 'Dodatek jest połączony z aplikacją.' : ''
 
   await showTagging()
+  await showColumnState()
 
   // Bez pytania serwera — pokazujemy to, co wiadomo z ostatniego sprawdzenia.
   showUpdate(await lastUpdateCheck())
@@ -179,6 +180,39 @@ async function disableTags() {
   }
 }
 
+/* ---------------------------- kolumna „Prowadzi” ---------------------------- */
+
+async function showColumnState() {
+  const api = typeof browser !== 'undefined' && browser.inquiryColumn ? browser.inquiryColumn : null
+  let works = false
+  try {
+    works = api !== null && await api.available()
+  } catch (e) {
+    works = false
+  }
+
+  const { columnEntries } = await browser.storage.local.get({ columnEntries: {} })
+  const known = Object.keys(columnEntries || {}).length
+
+  el('columnState').textContent = works
+    ? 'Kolumna działa. Maili z wpisem: ' + known + '.'
+    : 'Ta wersja Thunderbirda nie pozwala dołożyć kolumny — zostają znaczniki.'
+  el('hideColumn').hidden = ! works
+}
+
+async function hideColumnNow() {
+  busy(true)
+  try {
+    await hideColumn()
+    status('Kolumna zdjęta. Wróci po ponownym uruchomieniu Thunderbirda.', 'ok')
+  } catch (e) {
+    status(e.message, 'error')
+  } finally {
+    busy(false)
+    await showColumnState()
+  }
+}
+
 /* ---------------------------- aktualizacje ---------------------------- */
 
 function showUpdate(state) {
@@ -224,6 +258,7 @@ el('check').addEventListener('click', check)
 el('logout').addEventListener('click', logout)
 el('enableTags').addEventListener('click', enableTags)
 el('checkTags').addEventListener('click', checkTags)
+el('hideColumn').addEventListener('click', hideColumnNow)
 el('syncTags').addEventListener('click', syncTagsNow)
 el('disableTags').addEventListener('click', disableTags)
 el('checkUpdate').addEventListener('click', checkUpdateNow)

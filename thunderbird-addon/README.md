@@ -90,6 +90,38 @@ Do wyboru są trzy przyciski:
 
 Ostrzeżenie znika też samo, gdy zapytanie faktycznie powstanie.
 
+## Kolumna „Prowadzi”
+
+Na liście wiadomości dochodzi kolumna **Prowadzi**: nazwisko osoby, która
+prowadzi zapytanie z tego maila, i **✓**, gdy odpowiedź do klienta już poszła.
+Gdy nad jednym mailem siedzą dwie osoby, widać obie.
+
+Dlaczego kolumna, a nie sam znacznik: znacznik koloruje **cały wiersz** i zlewa
+się z kolorami, których handlowcy używają do własnych spraw. Kolumna nie rusza
+ani kolorów, ani etykiet — i **nie wymaga żadnej zgody** na zmianę wiadomości,
+bo niczego w mailu nie zapisuje.
+
+Szerokość, kolejność i ukrycie kolumny ustawia się ikoną po prawej stronie
+nagłówków listy; Thunderbird pamięta ten układ sam.
+
+### Czym to jest okupione
+
+Thunderbird nie ma zwykłego API do dokładania kolumn (zgłoszenie 1615801 jest
+otwarte od lat), więc kolumna sięga wprost do wnętrza programu — to jest **API
+eksperymentalne** (`experiment/columns`). Skutki, o których trzeba wiedzieć:
+
+- działa od **Thunderbirda 128**; na starszych wydaniach dodatek instaluje się
+  i działa normalnie, tylko bez kolumny,
+- moduł, z którego korzystamy, należy do wnętrza Thunderbirda i przy większym
+  wydaniu może zmienić nazwę albo zniknąć. Wszystkie odwołania są w osłonach:
+  gdy modułu zabraknie, kolumna po prostu się nie pokaże, a reszta dodatku
+  działa dalej,
+- w ustawieniach dodatku widać, czy kolumna działa, i jest przycisk
+  **Ukryj kolumnę i wyczyść**.
+
+Znaczniki zostają obok kolumny i można je wyłączyć osobno (**Wyłącz i usuń
+znaczniki**) — kolumna działa bez nich.
+
 ## Oznaczanie maili na liście
 
 Mail, z którego powstało zapytanie, dostaje na liście wiadomości znacznik
@@ -309,7 +341,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.11.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.12.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia

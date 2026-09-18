@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "Supon Przetargi",
   "description": "Zakłada zapytanie w aplikacji Przetargi z otwartego maila, wstawia przygotowaną odpowiedź i oznacza na liście maile, którymi ktoś już się zajmuje.",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "author": "Supon Rzeszów",
   "browser_specific_settings": {
     "gecko": {
@@ -22,6 +22,7 @@
     "scripts": [
       "common.js",
       "tags.js",
+      "column.js",
       "background.js"
     ]
   },
@@ -44,5 +45,21 @@
     "messagesUpdate",
     "messagesModify",
     "accountsRead"
-  ]
+  ],
+  "experiment_apis": {
+    "inquiryColumn": {
+      "schema": "experiment/columns/schema.json",
+      "parent": {
+        "scopes": [
+          "addon_parent"
+        ],
+        "paths": [
+          [
+            "inquiryColumn"
+          ]
+        ],
+        "script": "experiment/columns/implementation.js"
+      }
+    }
+  }
 }

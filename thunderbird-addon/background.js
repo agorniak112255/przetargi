@@ -378,7 +378,10 @@ browser.messageDisplay.onMessageDisplayed.addListener(async (tab, message) => {
 })
 
 setTimeout(() => {
-  syncTags({ full: true }).catch((e) => console.warn('Pierwsze przejście znaczników:', e.message))
+  // Kolumna najpierw: pokazuje to, co już wiadomo, zanim ruszy pytanie do serwera.
+  showColumn()
+    .then(() => syncTags({ full: true }))
+    .catch((e) => console.warn('Pierwsze przejście znaczników:', e.message))
 }, TAG_FIRST_SYNC_SECONDS * 1000)
 
 setInterval(() => {

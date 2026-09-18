@@ -74,6 +74,26 @@
   </section>
 
   <section>
+    <h2>Kolumna „Prowadzi”</h2>
+    <p id="columnState" class="muted"></p>
+
+    <button id="hideColumn" class="secondary">Ukryj kolumnę i wyczyść</button>
+
+    <p class="muted">
+      Kolumna pokazuje wprost, kto prowadzi zapytanie z danego maila, i „✓”, gdy
+      odpowiedź do klienta już poszła. Nie koloruje wierszy i nie rusza etykiet,
+      więc nie miesza się z Waszymi własnymi kolorami. Nie wymaga też żadnej
+      zgody na zmianę wiadomości — niczego w mailu nie zapisuje.
+    </p>
+    <p class="muted">
+      Szerokość i kolejność kolumn ustawia się ikoną po prawej stronie nagłówków
+      listy wiadomości; tam też można kolumnę ukryć. Kolumna korzysta z wnętrza
+      Thunderbirda (API eksperymentalne), więc po większej aktualizacji programu
+      może zniknąć — wtedy zostają znaczniki.
+    </p>
+  </section>
+
+  <section>
     <h2>Aktualizacje</h2>
     <p id="updateState" class="muted"></p>
     <p id="updateAlert" class="alarm" hidden></p>
@@ -97,6 +117,7 @@
 
   <script src="common.js"></script>
   <script src="tags.js"></script>
+  <script src="column.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

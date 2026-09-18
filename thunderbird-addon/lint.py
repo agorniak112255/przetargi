@@ -45,11 +45,33 @@ TOP_LEVEL = re.compile(
 )
 
 
-def addon_files() -> list[str]:
-    out = []
-    for name in sorted(os.listdir(ADDON_DIR)):
-        if name.endswith('.js') and name not in SKIP_DIRS:
-            out.append(name)
+SCRIPT_TAG = re.compile(r'<script\s+src="([^"]+\.js)"', re.I)
+
+
+def contexts() -> dict[str, list[str]]:
+    """Zestawy plików ładowane razem — każdy ma własną przestrzeń nazw.
+
+    Wspólne sprawdzanie wszystkiego naraz przepuszczało wywołanie funkcji
+    z pliku, którego dana strona w ogóle nie ładuje (tak `tags.js` sięgnęło do
+    `column.js`, którego nie było w okienku nad mailem).
+    """
+    out = {}
+
+    manifest_path = os.path.join(ADDON_DIR, 'manifest.json')
+    with open(manifest_path, encoding='utf-8') as handle:
+        manifest = json.load(handle)
+    scripts = manifest.get('background', {}).get('scripts', [])
+    if scripts:
+        out['tło'] = list(scripts)
+
+    for page in ('popup.html', 'options.html'):
+        path = os.path.join(ADDON_DIR, page)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding='utf-8') as handle:
+            found = SCRIPT_TAG.findall(handle.read())
+        if found:
+            out[page] = found
 
     return out
 
@@ -78,22 +100,11 @@ def oxlint_path() -> str | None:
     return None
 
 
-def main() -> int:
-    files = addon_files()
-    if files == []:
-        print('Nie ma czego sprawdzać.')
-
-        return 0
-
-    binary = oxlint_path()
-    if binary is None:
-        print('Pomijam sprawdzanie: brak oxlint (zainstaluj zależności frontendu: npm ci).')
-
-        return 0
-
+def check(binary: str, label: str, files: list[str]) -> list[str]:
+    """Sprawdza jeden zestaw; zwraca listę problemów (pusta = czysto)."""
     config = {
         'env': {'browser': True, 'es2023': True, 'webextensions': True},
-        # Nazwy z innych plików dodatku są globalne w czasie działania.
+        # Globalne są tylko nazwy z plików ładowanych razem z tym zestawem.
         'globals': {name: 'readonly' for name in shared_names(files)},
         'rules': {'no-undef': 'error'},
     }
@@ -115,17 +126,43 @@ def main() -> int:
     finally:
         os.unlink(config_path)
 
+    # 0 = czysto, 1 = znalazł błędy; cokolwiek innego to awaria samego oxlinta
+    # i nie wolno jej przemilczeć, bo build przeszedłby bez sprawdzenia.
+    if result.returncode not in (0, 1):
+        return [label + ': oxlint nie wykonał sprawdzenia (kod ' + str(result.returncode) + ')']
+
     output = (result.stdout or '') + (result.stderr or '')
-    problems = [line for line in output.splitlines() if ' error ' in line]
+
+    return [label + ': ' + line.strip() for line in output.splitlines() if ' error ' in line]
+
+
+def main() -> int:
+    sets = contexts()
+    if sets == {}:
+        print('Nie ma czego sprawdzać.')
+
+        return 0
+
+    binary = oxlint_path()
+    if binary is None:
+        print('Pomijam sprawdzanie: brak oxlint (zainstaluj zależności frontendu: npm ci).')
+
+        return 0
+
+    problems = []
+    for label, files in sets.items():
+        problems.extend(check(binary, label, [f for f in files if os.path.exists(os.path.join(ADDON_DIR, f))]))
 
     if problems != []:
         print('Wywołania bez definicji (XPI nie powstanie):')
         for line in problems:
-            print('  ' + line.strip())
+            print('  ' + line)
 
         return 1
 
-    print('Sprawdzenie nazw: czysto (' + str(len(files)) + ' plików).')
+    print('Sprawdzenie nazw: czysto (' + ', '.join(
+        label + ': ' + str(len(files)) for label, files in sets.items()
+    ) + ').')
 
     return 0
 
