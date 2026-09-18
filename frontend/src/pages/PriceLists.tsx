@@ -424,6 +424,14 @@ function HistorySortTh({
   )
 }
 
+/**
+ * Odcisk mapowania: po nim poznajemy, że człowiek naprawdę coś zmienił i plik trzeba odczytać na nowo.
+ * Lista kolumn arkusza do niego nie wchodzi — ta sama korekta nie może wołać podglądu w kółko.
+ */
+function mappingSignatureOf(sheets: SheetMapping[] | undefined): string {
+  return JSON.stringify((sheets ?? []).map((s) => [s.sheet, s.include, s.columns]))
+}
+
 /** Ile pozycji pokazuje tabela na stronie — pełny podgląd jest w oknie mapowania. */
 const PAGE_PREVIEW_ROWS = 12
 
@@ -1327,8 +1335,33 @@ export function PriceLists() {
     }
   }
 
+  const mappingSignature = useMemo(
+    () => mappingSignatureOf(analysis?.mapping?.sheets),
+    [analysis],
+  )
+  /** odcisk mapowania, dla którego podgląd został już pobrany — zapora przed pętlą odczytów */
+  const previewedSignature = useRef<string | null>(null)
+  /** odcisk tego, co człowiek ma teraz na ekranie — do rozpoznania odpowiedzi, która się spóźniła */
+  const latestSignature = useRef<string | null>(null)
+  useEffect(() => {
+    latestSignature.current = mappingSignature
+  }, [mappingSignature])
+
+  // Po zmianie kolumny podgląd odczytuje się sam. Krótka zwłoka scala serię poprawek w jeden odczyt
+  // pliku, żeby przestawienie trzech ról nie wołało serwera trzy razy.
+  useEffect(() => {
+    if (!mappingOpen || !mappingDirty || busy || !file || !analysis?.mapping) return
+    if (previewedSignature.current === mappingSignature) return
+    const timer = setTimeout(() => {
+      void onRefreshPreview()
+    }, 400)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- odcisk mapowania zastępuje tu analysis
+  }, [mappingOpen, mappingDirty, busy, file, mappingSignature])
+
   async function onRefreshPreview() {
     if (!file || !analysis?.mapping) return
+    const requested = mappingSignatureOf(analysis.mapping.sheets)
     setBusy(true)
     setErr('')
     setMsg('')
@@ -1338,6 +1371,9 @@ export function PriceLists() {
       fd.append('mapping', JSON.stringify(mappingForRequest(analysis.mapping)))
       if (manufacturer) fd.append('manufacturer', manufacturer)
       const res = await api<Analysis>('/price-lists/preview', { method: 'POST', body: fd })
+      // Człowiek mógł przestawić kolejną kolumnę, zanim serwer odpowiedział. Mapowanie z odpowiedzi
+      // jest wtedy starsze niż to, co widzi na ekranie — nadpisanie skasowałoby mu tamtą poprawkę.
+      const stale = latestSignature.current !== requested
       const defaultCur = res.mapping?.currency ?? analysis.mapping.currency ?? 'PLN'
       // Arkusz odznaczony do importu nie jest czytany, więc serwer nie odsyła jego kolumn — zostawiamy
       // te, które już mamy, żeby po ponownym zaznaczeniu dało się go zmapować bez powtarzania analizy.
@@ -1347,22 +1383,26 @@ export function PriceLists() {
       const next: Analysis = {
         ...analysis,
         ...res,
-        mapping: res.mapping
-          ? {
-              ...res.mapping,
-              sheets: res.mapping.sheets.map((s) =>
-                (s.available_columns?.length ?? 0) > 0
-                  ? s
-                  : { ...s, available_columns: previousColumns.get(s.sheet) ?? [] },
-              ),
-            }
-          : analysis.mapping,
+        mapping:
+          res.mapping && !stale
+            ? {
+                ...res.mapping,
+                sheets: res.mapping.sheets.map((s) =>
+                  (s.available_columns?.length ?? 0) > 0
+                    ? s
+                    : { ...s, available_columns: previousColumns.get(s.sheet) ?? [] },
+                ),
+              }
+            : analysis.mapping,
         products: [],
         preview: (res.preview ?? []).map((p) => ({ ...p, currency: p.currency ?? defaultCur })),
       }
       setAnalysis(next)
       initGroupsFromAnalysis(next)
-      setMappingDirty(false)
+      if (!stale) {
+        previewedSignature.current = mappingSignatureOf(next.mapping?.sheets)
+        setMappingDirty(false)
+      }
       setMsg(
         `Podgląd po korekcie mapowania: ${res.products_found} pozycji do importu` +
           ` (przeskanowano ${res.rows_total} wierszy, pominięto ${res.skipped}).`,
@@ -1390,7 +1430,7 @@ export function PriceLists() {
       return
     }
     if (mappingDirty) {
-      setErr('Mapowanie kolumn zostało zmienione — kliknij „Odśwież podgląd”, żeby zobaczyć, co się zaimportuje.')
+      setErr('Plik jest właśnie odczytywany po zmianie mapowania — spróbuj za chwilę.')
       return
     }
     setBusy(true)
@@ -1669,7 +1709,7 @@ export function PriceLists() {
               )}
               {mappingDirty && (
                 <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-900">
-                  Mapowanie zmienione — odśwież podgląd w oknie mapowania.
+                  Mapowanie zmienione — odczytuję plik na nowo…
                 </span>
               )}
               <button

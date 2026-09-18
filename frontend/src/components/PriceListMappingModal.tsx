@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 
 export type SheetColumn = { index: number; label: string; sample: string }
 
@@ -106,6 +106,22 @@ export function PriceListMappingModal({
     return () => document.removeEventListener('keydown', onKey)
   }, [open, busy, onClose])
 
+  /**
+   * Dwie pozycje z tym samym kodem to przy imporcie jedna karta — druga nadpisze pierwszą. Zdarza się
+   * to, gdy cennik nie ma kolumny kodu i kod powstaje z nazwy, a nazwy się powtarzają.
+   */
+  const duplicateCodes = useMemo(() => {
+    const seen = new Set<string>()
+    const duplicated = new Set<string>()
+    for (const row of rows) {
+      const sku = row.sku.trim()
+      if (sku === '') continue
+      if (seen.has(sku)) duplicated.add(sku)
+      else seen.add(sku)
+    }
+    return duplicated
+  }, [rows])
+
   if (!open) return null
 
   return (
@@ -205,6 +221,11 @@ export function PriceListMappingModal({
                           <span className="mt-0.5 block truncate text-[11px] text-slate-500">
                             {chosen?.sample ? `przykład: ${chosen.sample}` : ' '}
                           </span>
+                          {role.key === 'sku' && typeof value !== 'number' && (
+                            <span className="block text-[11px] text-amber-700">
+                              bez kolumny kodu karty dostaną kod wyliczony z nazwy
+                            </span>
+                          )}
                           {role.key === 'name_extra' &&
                             typeof value === 'number' &&
                             value === s.columns.name && (
@@ -233,11 +254,17 @@ export function PriceListMappingModal({
             </h3>
             {dirty && (
               <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-900">
-                Tabela jest jeszcze sprzed zmiany mapowania — kliknij „Odśwież podgląd”.
+                Mapowanie zmienione — odczytuję plik na nowo…
               </span>
             )}
           </div>
 
+          {duplicateCodes.size > 0 && (
+            <p className="mb-2 rounded border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-900">
+              Powtórzone kody w podglądzie ({duplicateCodes.size}) — pozycje o tym samym kodzie zapiszą
+              się jako jedna karta. Wskaż kolumnę z kodem producenta albo dołóż drugą część nazwy.
+            </p>
+          )}
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="w-full text-left">
               <thead className="sticky top-0 bg-slate-100">
@@ -266,7 +293,18 @@ export function PriceListMappingModal({
                   return (
                     <tr key={`${p.sku}-${i}`} className="border-b border-slate-100 even:bg-slate-50/60">
                       <td className="p-2 text-slate-400">{i + 1}</td>
-                      <td className="p-2 font-medium text-slate-800">{p.sku}</td>
+                      <td
+                        className={`p-2 font-medium ${
+                          duplicateCodes.has(p.sku.trim()) ? 'text-amber-700' : 'text-slate-800'
+                        }`}
+                        title={
+                          duplicateCodes.has(p.sku.trim())
+                            ? 'ten kod powtarza się w cenniku — pozycje zapiszą się jako jedna karta'
+                            : undefined
+                        }
+                      >
+                        {p.sku}
+                      </td>
                       <td className="p-2">{p.name}</td>
                       <td className="p-2 text-slate-600">{p.category ?? '—'}</td>
                       <td className="p-2 text-right tabular-nums">
