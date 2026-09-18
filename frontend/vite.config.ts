@@ -11,14 +11,15 @@ import tailwindcss from '@tailwindcss/vite'
  * wczytywały się dopiero za drugim razem, a konsola przy każdym wejściu pokazywała
  * dwa błędy.
  *
- * Dlatego tagi zasobów wstawiamy z końca strony, już z wyliczonym prefiksem —
+ * Dlatego tagi arkusza i skryptu wstawiamy z końca strony, już z wyliczonym prefiksem —
  * skaner wstępny nie ma czego wystrzelić w złą stronę, a #root w tym miejscu
- * na pewno istnieje.
+ * na pewno istnieje. Ikona zostaje w nagłówku: nie jest modułem, więc zły prefiks
+ * nic jej nie robi, a wstawiana skryptem kazała przeglądarce pytać o domyślny
+ * /favicon.ico i przerywać to żądanie.
  */
 function assetsWithPrefix(): Plugin {
   const script = /<script\b[^>]*\bsrc="\.\/([^"]+)"[^>]*><\/script>/g
   const stylesheet = /<link\b[^>]*\brel="stylesheet"[^>]*\bhref="\.\/([^"]+)"[^>]*>/g
-  const icon = /<link\b[^>]*\brel="icon"[^>]*\bhref="\.\/([^"]+)"[^>]*>/g
 
   return {
     name: 'supon-assets-with-prefix',
@@ -30,7 +31,6 @@ function assetsWithPrefix(): Plugin {
 
       const scripts = take(script)
       const styles = take(stylesheet)
-      const icons = take(icon)
       if (scripts.length === 0 && styles.length === 0) {
         return html
       }
@@ -41,7 +41,6 @@ function assetsWithPrefix(): Plugin {
         '        var p = location.pathname',
         "        var base = p === '/Przetargi' || p.indexOf('/Przetargi/') === 0 ? '/Przetargi/' : '/'",
         `        var styles = ${JSON.stringify(styles)}`,
-        `        var icons = ${JSON.stringify(icons)}`,
         `        var scripts = ${JSON.stringify(scripts)}`,
         '        function head(tag, attrs) {',
         '          var el = document.createElement(tag)',
@@ -50,9 +49,6 @@ function assetsWithPrefix(): Plugin {
         '        }',
         '        for (var i = 0; i < styles.length; i++) {',
         "          head('link', { rel: 'stylesheet', crossorigin: '', href: base + styles[i] })",
-        '        }',
-        '        for (var j = 0; j < icons.length; j++) {',
-        "          head('link', { rel: 'icon', type: 'image/svg+xml', href: base + icons[j] })",
         '        }',
         '        for (var k = 0; k < scripts.length; k++) {',
         "          var s = document.createElement('script')",
@@ -68,7 +64,6 @@ function assetsWithPrefix(): Plugin {
       return html
         .replace(script, '')
         .replace(stylesheet, '')
-        .replace(icon, '')
         .replace('</body>', loader + '\n  </body>')
     },
   }
