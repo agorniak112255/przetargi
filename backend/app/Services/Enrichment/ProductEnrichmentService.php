@@ -9,6 +9,7 @@ use App\Exceptions\ProductSourcesNotFoundException;
 use App\Jobs\EnrichProductJob;
 use App\Jobs\PrefetchProductSourcesJob;
 use App\Jobs\ReindexProductEmbeddingJob;
+use App\Models\CatalogHostPriority;
 use App\Models\CatalogSearchSite;
 use App\Models\PriceList;
 use App\Models\Product;
@@ -2124,20 +2125,29 @@ final class ProductEnrichmentService
     private function rankResultsForDescription(array $results, Product $product, array $mfrDomains = []): array
     {
         $retailers = $this->retailerHostList();
+        // ranga czytana RAZ: komparator woła się O(n log n) razy, zapytanie w środku byłoby drogie
+        $ranks = CatalogHostPriority::map();
 
-        usort($results, function (array $a, array $b) use ($product, $mfrDomains, $retailers): int {
-            return $this->descriptionSourceScore((string) ($b['url'] ?? ''), $product, $mfrDomains, $retailers)
-                <=> $this->descriptionSourceScore((string) ($a['url'] ?? ''), $product, $mfrDomains, $retailers);
-        });
+        $rows = [];
+        foreach ($results as $position => $row) {
+            $rows[] = [
+                'row' => $row,
+                // remis rozstrzyga kolejność z wyszukiwarki, a nie przypadek sortowania
+                'position' => $position,
+                'score' => $this->descriptionSourceScore((string) ($row['url'] ?? ''), $product, $mfrDomains, $retailers, $ranks),
+            ];
+        }
+        usort($rows, static fn (array $a, array $b): int => [-$a['score'], $a['position']] <=> [-$b['score'], $b['position']]);
 
-        return $results;
+        return array_column($rows, 'row');
     }
 
     /**
      * @param  list<string>  $mfrDomains
      * @param  list<string>  $retailers
+     * @param  array<string, int>  $ranks  ręczna ranga domeny (1 = najwyżej) z panelu
      */
-    private function descriptionSourceScore(string $url, Product $product, array $mfrDomains, array $retailers): int
+    private function descriptionSourceScore(string $url, Product $product, array $mfrDomains, array $retailers, array $ranks = []): int
     {
         if ($url === '') {
             return -100;
@@ -2163,6 +2173,12 @@ final class ProductEnrichmentService
             return 0;
         }
         $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        $rank = $ranks[preg_replace('/^www\./', '', $host) ?? $host] ?? null;
+        if ($rank !== null) {
+            // Ranga z panelu: 1 → 70, 100 → 21. Zawsze nad domeną zmapowaną bez rangi (20)
+            // i zawsze pod kartą wskazaną ręcznie przy wyrobie (100).
+            return 20 + (int) round((101 - $rank) / 2);
+        }
         foreach ($retailers as $retailer) {
             if ($host === $retailer || str_ends_with($host, '.'.$retailer)) {
                 return 20;
@@ -2813,9 +2829,11 @@ final class ProductEnrichmentService
      */
     private function orderPagesForDescription(array $pages, Product $product, array $mfrDomains): array
     {
+        $ranks = CatalogHostPriority::map();
         $manufacturer = [];
+        $ranked = [];
         $rest = [];
-        foreach ($pages as $page) {
+        foreach ($pages as $position => $page) {
             $url = (string) ($page['url'] ?? '');
             $text = trim((string) ($page['text'] ?? ''));
             if ($url !== '' && mb_strlen($text) >= self::MFR_CARD_MIN_CHARS
@@ -2824,10 +2842,20 @@ final class ProductEnrichmentService
 
                 continue;
             }
+            $host = preg_replace('/^www\./', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? '')));
+            $rank = $ranks[$host] ?? null;
+            if ($rank !== null) {
+                $ranked[] = ['page' => $page, 'rank' => $rank, 'position' => $position];
+
+                continue;
+            }
             $rest[] = $page;
         }
+        // Hierarchia źródeł opisu: producent, potem strony z ręczną rangą (1 najpierw),
+        // na końcu pozostałe. Bez rang kolejność jest dokładnie ta, co przed zmianą.
+        usort($ranked, static fn (array $a, array $b): int => [$a['rank'], $a['position']] <=> [$b['rank'], $b['position']]);
 
-        return array_values(array_merge($manufacturer, $rest));
+        return array_values(array_merge($manufacturer, array_column($ranked, 'page'), $rest));
     }
 
     /**

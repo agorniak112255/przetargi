@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\AssignCatalogSearchSiteManufacturerRequest;
 use App\Http\Requests\Admin\DestroyCatalogSearchSiteRequest;
 use App\Http\Requests\Admin\LookupCatalogSearchSiteProductRequest;
+use App\Http\Requests\Admin\SetCatalogSearchSitePriorityRequest;
 use App\Http\Requests\Admin\ShowCatalogSearchSitePagesRequest;
 use App\Http\Requests\Admin\ShowCatalogSearchSiteProgressRequest;
 use App\Http\Requests\Admin\StoreCatalogSearchSiteRequest;
@@ -102,6 +103,16 @@ class CatalogSearchSiteController extends Controller
     public function clearManufacturer(string $host): JsonResponse
     {
         return response()->json($this->sites->clearManufacturer($host));
+    }
+
+    public function setPriority(SetCatalogSearchSitePriorityRequest $request, string $host): JsonResponse
+    {
+        return response()->json($this->sites->setPriority($host, (int) $request->integer('priority')));
+    }
+
+    public function clearPriority(string $host): JsonResponse
+    {
+        return response()->json($this->sites->clearPriority($host));
     }
 
     public function destroy(DestroyCatalogSearchSiteRequest $request, string $host): JsonResponse

@@ -6,6 +6,7 @@ namespace App\Services\Enrichment;
 
 use App\Jobs\IndexCatalogHostJob;
 use App\Models\CatalogHost;
+use App\Models\CatalogHostPriority;
 use App\Models\CatalogPage;
 use App\Models\CatalogSearchSite;
 use App\Models\CatalogSearchSiteExclusion;
@@ -59,6 +60,8 @@ final class CatalogSearchHostService
             $hosts[$host]['config'] = true;
         }
         $brandsByHost = ManufacturerSite::brandsByHost();
+        // ranga czytana raz na całą listę — lista ma setki domen
+        $priorities = CatalogHostPriority::map();
         foreach (array_keys($brandsByHost) as $host) {
             $host = $this->normalizeHost((string) $host);
             if ($host !== '') {
@@ -122,6 +125,8 @@ final class CatalogSearchHostService
                     $brandsByHost[$host] ?? []
                 )),
                 'manufacturer_assigned_by_hand' => $this->hasManualBrand($brandsByHost[$host] ?? []),
+                // 1 = najwyżej przy wyborze źródła opisu, null = bez rangi
+                'priority' => $priorities[$host] ?? null,
             ];
         }
 
@@ -311,6 +316,7 @@ final class CatalogSearchHostService
         if (Schema::hasTable('manufacturer_sites')) {
             ManufacturerSite::query()->whereIn('host', $aliases)->delete();
         }
+        CatalogHostPriority::forget($aliases);
         CatalogSearchSiteExclusion::remember($host);
 
         return [
@@ -685,6 +691,52 @@ final class CatalogSearchHostService
                 Cache::forget('enrich_mfr_domains_v2:'.$brandKey);
             }
         }
+    }
+
+    /**
+     * Ranga domeny przy wyborze źródła opisu karty. Działa też dla domen z configu, bo siedzi
+     * w osobnej tabeli — tak samo jak ręczne przypisanie producenta.
+     *
+     * @return array{host: string, priority: int, message: string}
+     */
+    public function setPriority(string $host, int $priority): array
+    {
+        $row = $this->requireHost($host);
+        $host = $row['host'];
+        if ($priority < CatalogHostPriority::MIN || $priority > CatalogHostPriority::MAX) {
+            throw ValidationException::withMessages([
+                'priority' => 'Ranga mieści się w zakresie '.CatalogHostPriority::MIN.'–'.CatalogHostPriority::MAX.'.',
+            ]);
+        }
+        if (! Schema::hasTable('catalog_host_priorities')) {
+            throw ValidationException::withMessages([
+                'host' => 'Baza nie ma jeszcze tabeli rang domen — uruchom migracje.',
+            ]);
+        }
+
+        CatalogHostPriority::set($host, $priority);
+
+        return [
+            'host' => $host,
+            'priority' => $priority,
+            'message' => $host.' ma teraz rangę '.$priority.' przy wyborze źródła opisu.',
+        ];
+    }
+
+    /**
+     * @return array{host: string, priority: null, message: string}
+     */
+    public function clearPriority(string $host): array
+    {
+        $row = $this->requireHost($host);
+        $host = $row['host'];
+        CatalogHostPriority::forget($this->hostAliases($host));
+
+        return [
+            'host' => $host,
+            'priority' => null,
+            'message' => $host.' nie ma już rangi — liczy się jak pozostałe zmapowane strony.',
+        ];
     }
 
     private function requireHost(string $host): array

@@ -16,6 +16,8 @@ type SearchSite = {
   skip_overridden: boolean
   manufacturers: string[]
   manufacturer_assigned_by_hand: boolean
+  /** Ranga 1–100 przy wyborze źródła opisu karty; null = bez rangi. */
+  priority: number | null
 }
 
 type SitesResponse = {
@@ -185,6 +187,7 @@ export function AdminSearchSites() {
   const [deleteHost, setDeleteHost] = useState('')
   const [skipToggleHost, setSkipToggleHost] = useState('')
   const [manufacturerHost, setManufacturerHost] = useState('')
+  const [priorityHost, setPriorityHost] = useState('')
   const [pagesHost, setPagesHost] = useState<SearchSite | null>(null)
   const [watchHosts, setWatchHosts] = useState<string[]>(() => readWatchHosts())
   const [watchTick, setWatchTick] = useState(0)
@@ -406,6 +409,37 @@ export function AdminSearchSites() {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się dodać strony')
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function onSetPriority(row: SearchSite) {
+    const answer = window.prompt(
+      `Ranga ${row.host} przy wyborze źródła opisu karty.
+
+1 = pytamy najpierw, 100 = na końcu. Strona producenta i tak stoi wyżej.
+Puste pole zdejmuje rangę — domena liczy się wtedy jak pozostałe zmapowane.`,
+      row.priority === null ? '' : String(row.priority),
+    )
+    if (answer === null) {
+      return
+    }
+    const value = answer.trim()
+    setPriorityHost(row.host)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<{ message: string }>(
+        `/admin/catalog-search-sites/${encodeURIComponent(row.host)}/priority`,
+        value === ''
+          ? { method: 'DELETE' }
+          : { method: 'POST', body: JSON.stringify({ priority: Number(value) }) },
+      )
+      setMsg(res.message)
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zapisać rangi')
+    } finally {
+      setPriorityHost('')
     }
   }
 
@@ -784,6 +818,19 @@ Puste pole zdejmuje przypisanie.`,
                               : 'Odblokuj'}
                         </button>
                       )}
+                      <button
+                        type="button"
+                        disabled={priorityHost === row.host}
+                        onClick={() => void onSetPriority(row)}
+                        title="Ranga 1–100: która strona ma być pytana o opis jako pierwsza. Strona producenta i tak stoi wyżej niż każda ranga."
+                        className={`rounded-lg px-2 py-1 text-[11px] font-semibold disabled:opacity-50 ${
+                          row.priority === null
+                            ? 'border border-slate-300 text-slate-700 hover:bg-slate-50'
+                            : 'border border-amber-300 text-amber-700 hover:bg-amber-50'
+                        }`}
+                      >
+                        {priorityHost === row.host ? '…' : row.priority === null ? 'Ranga' : `Ranga ${row.priority}`}
+                      </button>
                       <button
                         type="button"
                         disabled={manufacturerHost === row.host}
