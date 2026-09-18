@@ -125,6 +125,36 @@ async function enableTags() {
   }
 }
 
+async function checkTags() {
+  busy(true)
+  status('Sprawdzam oznaczanie…')
+  el('tagReport').hidden = false
+  el('tagReport').value = 'Sprawdzam…'
+  try {
+    el('tagReport').value = await tagDiagnostics()
+    status('Gotowe — przeczytaj raport poniżej.', 'ok')
+  } catch (e) {
+    el('tagReport').value = 'Samotest się wywrócił: ' + (e.message || String(e))
+    status(e.message, 'error')
+  } finally {
+    busy(false)
+  }
+}
+
+async function syncTagsNow() {
+  busy(true)
+  status('Oznaczam maile od nowa…')
+  try {
+    await resetTagSync()
+    status('Przejście wykonane. Jeśli nadal nic nie widać, kliknij „Sprawdź oznaczanie”.', 'ok')
+  } catch (e) {
+    status(e.message, 'error')
+  } finally {
+    busy(false)
+    await showTagging()
+  }
+}
+
 async function disableTags() {
   busy(true)
   status('Zdejmuję znaczniki…')
@@ -188,6 +218,8 @@ el('login').addEventListener('click', login)
 el('check').addEventListener('click', check)
 el('logout').addEventListener('click', logout)
 el('enableTags').addEventListener('click', enableTags)
+el('checkTags').addEventListener('click', checkTags)
+el('syncTags').addEventListener('click', syncTagsNow)
 el('disableTags').addEventListener('click', disableTags)
 el('checkUpdate').addEventListener('click', checkUpdateNow)
 el('getUpdate').addEventListener('click', async (event) => {

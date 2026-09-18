@@ -211,7 +211,9 @@ async function lookupMessageIds(headerMessageIds) {
     })
     const rows = data && data.data && typeof data.data === 'object' ? data.data : {}
     for (const [messageId, list] of Object.entries(rows)) {
-      found.set(messageId, Array.isArray(list) ? list : [])
+      // Klucze trzymamy małymi literami: Message-ID wraca z serwera w zapisie
+      // z bazy, a ten po drodze przez MySQL-a może mieć inną wielkość liter.
+      found.set(String(messageId).toLowerCase(), Array.isArray(list) ? list : [])
     }
   }
 
@@ -276,6 +278,8 @@ async function markHeaderIds(headerMessageIds) {
   const ids = [...new Set(headerMessageIds.filter((id) => String(id || '') !== ''))]
   if (ids.length === 0) return 0
 
+  markBroken = true
+
   const { token } = await getSettings()
   if (!token || !await tagsAllowed()) return 0
 
@@ -296,12 +300,14 @@ async function markHeaderIds(headerMessageIds) {
     return 0
   }
 
+  markBroken = false
+
   const known = await knownTags(tags)
   const tagged = await taggedMails()
   let changed = 0
 
   for (const headerMessageId of ids) {
-    const rows = found.get(headerMessageId) || []
+    const rows = found.get(String(headerMessageId).toLowerCase()) || []
 
     const keys = []
     for (const row of rows) {
@@ -357,6 +363,12 @@ async function pullChangedMails() {
 
     const ids = data && Array.isArray(data.ids) ? data.ids : []
     if (ids.length > 0) await markHeaderIds(ids)
+    if (markBroken) {
+      // Nic nie oznaczyliśmy — okno czasu zostaje otwarte na następne przejście.
+      console.warn('Oznaczanie nie zadziałało — nie przesuwam znacznika czasu.')
+
+      return
+    }
 
     since = String(data && data.next_since ? data.next_since : since)
     await browser.storage.local.set({ tagsSince: since })
@@ -382,6 +394,14 @@ async function recheckTaggedMails() {
 let syncing = false
 
 /**
+ * Czy ostatnie oznaczanie padło z przyczyn technicznych (brak zgody, brak API
+ * znaczników, błąd serwera). Wtedy nie wolno przesunąć `tagsSince`: serwer
+ * oddaje zmiany „od” tej chwili, więc maile z okna, którego nie przetworzyliśmy,
+ * nie wróciłyby już nigdy — i lista zostałaby bez oznaczeń na zawsze.
+ */
+let markBroken = false
+
+/**
  * Jedno przejście synchronizacji. `full` dorzuca powtórne sprawdzenie tego,
  * co już oznaczone — robimy je rzadziej, bo dotyczy maili bez zmian.
  */
@@ -400,6 +420,157 @@ async function syncTags({ full = false } = {}) {
   } finally {
     syncing = false
   }
+}
+
+/* ------------------------------ samotest ------------------------------ */
+
+/**
+ * Samotest oznaczania: wypisuje po kolei, co działa, a co nie.
+ *
+ * Powód: każdy błąd w tej drodze kończył się wpisem w konsoli tła dodatku,
+ * do której nikt nie zagląda — awaria wyglądała jak „nic się nie dzieje”.
+ * Raport ma być czytelny dla człowieka i dać się wkleić w zgłoszeniu.
+ */
+async function tagDiagnostics() {
+  const lines = []
+  const say = (label, value) => lines.push(label + ': ' + value)
+
+  say('Wersja dodatku', addonVersion() || 'nieznana')
+  let version = 'nieznana'
+  try {
+    const info = await browser.runtime.getBrowserInfo()
+    version = String(info.name || 'Thunderbird') + ' ' + String(info.version || '')
+  } catch (e) {
+    version = 'nie podaje (' + e.message + ')'
+  }
+  say('Thunderbird', version)
+
+  const wanted = await tagPermissions()
+  say('Potrzebne uprawnienia', wanted.join(', '))
+  let allowed = false
+  try {
+    allowed = await browser.permissions.contains({ permissions: wanted })
+    say('Zgoda na znaczniki', allowed ? 'jest' : 'BRAK — włącz oznaczanie')
+  } catch (e) {
+    say('Zgoda na znaczniki', 'nie dało się sprawdzić (' + e.message + ')')
+  }
+
+  // Uwaga: nazwa `tags`, nie `api` — `api()` to funkcja HTTP z common.js.
+  const tags = tagApi()
+  say('API znaczników', tags === null ? 'BRAK w tej wersji' : 'jest')
+
+  const settings = await getSettings()
+  say('Połączenie z aplikacją', settings.token ? 'jest' : 'BRAK — zaloguj się w ustawieniach')
+  say('Adres aplikacji', settings.baseUrl)
+
+  const { tagsSince, tagged } = await browser.storage.local.get({ tagsSince: '', tagged: {} })
+  say('Znacznik czasu', tagsSince === '' ? 'pusty (pełne nadgonienie 90 dni)' : String(tagsSince))
+  say('Maile oznaczone przez dodatek', String(Object.keys(tagged || {}).length))
+
+  if (tags !== null) {
+    try {
+      const ours = (await tags.list()).filter((row) => String(row.key).startsWith(TAG_PREFIX))
+      say('Znaczniki dodatku w profilu', ours.length === 0
+        ? 'żadnych'
+        : ours.map((row) => row.key + ' („' + row.tag + '”)').join(', '))
+    } catch (e) {
+      say('Znaczniki dodatku w profilu', 'nie dało się odczytać (' + e.message + ')')
+    }
+  }
+
+  if (!settings.token) return lines.join('\n')
+
+  // Serwer: które maile mają zapytania
+  let ids = []
+  try {
+    const data = await api('/api/inquiries/message-ids')
+    ids = data && Array.isArray(data.ids) ? data.ids : []
+    say('Maile z zapytaniami na serwerze (90 dni)', String(ids.length))
+  } catch (e) {
+    say('Pytanie do serwera', 'BŁĄD — ' + e.message)
+
+    return lines.join('\n')
+  }
+
+  const sample = ids.slice(0, 5)
+  if (sample.length === 0) {
+    lines.push('Serwer nie ma żadnego zapytania z maila — nie ma czego oznaczać.')
+
+    return lines.join('\n')
+  }
+
+  let rows
+  try {
+    rows = await lookupMessageIds(sample)
+  } catch (e) {
+    say('Sprawdzenie zapytań', 'BŁĄD — ' + e.message)
+
+    return lines.join('\n')
+  }
+
+  lines.push('')
+  lines.push('Pierwsze ' + sample.length + ' maili z zapytaniami:')
+  for (const id of sample) {
+    const list = rows.get(String(id).toLowerCase()) || []
+    const copies = await messagesWithHeaderId(id)
+    const parts = [
+      'zapytania: ' + list.length,
+      'w tym Thunderbirdzie: ' + copies.length,
+    ]
+    if (list.length > 0) {
+      parts.push('znaczniki: ' + list.map((row) => tagFor(row).key).join(' + '))
+    }
+    if (copies.length > 0) {
+      const mine = ownTags(copies[0].tags)
+      parts.push('na mailu stoi: ' + (mine.length === 0 ? 'nic naszego' : mine.join(' + ')))
+    }
+    lines.push('  ' + id + ' — ' + parts.join(', '))
+  }
+
+  // Próba na żywo: pierwszy mail, który jest i tu, i na serwerze
+  for (const id of sample) {
+    const list = rows.get(String(id).toLowerCase()) || []
+    const copies = await messagesWithHeaderId(id)
+    if (list.length === 0 || copies.length === 0) continue
+
+    lines.push('')
+    lines.push('Próba oznaczenia maila ' + id + ':')
+    if (tags === null || !allowed) {
+      lines.push('  pominięta — brak zgody albo API znaczników')
+      break
+    }
+    try {
+      const known = await knownTags(tags)
+      const wantedTag = tagFor(list[0])
+      const ready = await ensureTag(api, known, wantedTag)
+      lines.push('  znacznik ' + wantedTag.key + ': ' + (ready ? 'gotowy' : 'NIE UDAŁO SIĘ założyć'))
+      if (ready) {
+        await browser.messages.update(copies[0].id, {
+          tags: (copies[0].tags || []).filter((key) => !String(key).startsWith(TAG_PREFIX)).concat([wantedTag.key]),
+        })
+        const after = await browser.messages.get(copies[0].id)
+        const stuck = ownTags(after.tags).includes(wantedTag.key)
+        lines.push('  zapis na mailu: ' + (stuck
+          ? 'UDANY — znacznik jest na mailu'
+          : 'zapis przeszedł, ale znacznik nie został (serwer poczty może nie przyjmować własnych etykiet)'))
+      }
+    } catch (e) {
+      lines.push('  BŁĄD zapisu: ' + e.message)
+    }
+    break
+  }
+
+  return lines.join('\n')
+}
+
+/**
+ * Pełne nadgonienie: kasuje znacznik czasu i pamięć oznaczonych maili, więc
+ * najbliższe przejście przechodzi całe okno 90 dni od nowa.
+ */
+async function resetTagSync() {
+  await browser.storage.local.set({ tagsSince: '', tagged: {} })
+  markBroken = false
+  await syncTags({ full: true })
 }
 
 /**

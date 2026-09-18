@@ -142,6 +142,17 @@ zatrzymuje automatyczną aktualizację dodatku do czasu, aż człowiek zatwierdz
 w Menedżerze dodatków — nowa wersja weszłaby wtedy tylko u tych, którzy sami
 by to wypatrzyli.
 
+Gdy na liście nic się nie oznacza, ten sam ekran ma dwa przyciski do sprawdzenia:
+
+- **Oznacz wszystko od nowa** — kasuje znacznik czasu i pamięć oznaczonych maili,
+  więc najbliższe przejście idzie przez całe okno 90 dni,
+- **Sprawdź oznaczanie** — samotest, który wypisuje po kolei: wersję
+  Thunderbirda, zgodę, dostępność API znaczników, połączenie z aplikacją, ile
+  maili z zapytaniami widzi serwer, ile z nich jest w tym Thunderbirdzie, jakie
+  znaczniki stoją na mailu i czy próbny zapis się udał. Raport da się wkleić
+  w zgłoszeniu — bez niego każda awaria tej drogi kończyła się wpisem w konsoli
+  tła dodatku, do której nikt nie zagląda.
+
 Ten sam ekran ma przycisk **Wyłącz i usuń znaczniki** — zdejmuje wszystkie
 znaczniki dodatku i odbiera zgodę. Dodatek rusza wyłącznie znaczniki z kluczem
 zaczynającym się od `supon-`; kolory ustawione ręcznie przez handlowca zostają
@@ -276,7 +287,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.7.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.8.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia

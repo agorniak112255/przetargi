@@ -255,16 +255,28 @@ final class ClientInquiryService
             return [];
         }
 
+        // Porównanie w MySQL nie zważa na wielkość liter, a Message-ID formalnie
+        // ją rozróżnia. Dlatego wynik kluczujemy zapisem, o który pytał dodatek,
+        // a nie zapisem z bazy: inaczej przy różnicy w wielkości liter dodatek
+        // nie znalazłby swojego klucza i uznałby mail za nieobrabiany.
+        // Testy chodzą na SQLite (porównanie wrażliwe na wielkość liter), więc
+        // ten przypadek widać dopiero na produkcyjnym MySQL-u.
+        $asked = [];
+        foreach (array_keys($normalized) as $id) {
+            $asked[mb_strtolower((string) $id, 'UTF-8')] = (string) $id;
+        }
+
         $rows = ClientInquiry::query()
             ->select(['id', 'user_id', 'source_message_id', 'replied_at', 'created_at'])
-            // Porównanie w MySQL nie zważa na wielkość liter, a Message-ID
-            // formalnie ją rozróżnia. W praktyce identyfikator wraca z tego
-            // samego maila w identycznym zapisie, więc na to przystajemy.
             ->whereIn('source_message_id', array_keys($normalized))
             ->with('user:id,name')
             ->orderBy('id')
             ->get()
-            ->groupBy(fn (ClientInquiry $row): string => (string) $row->source_message_id);
+            ->groupBy(function (ClientInquiry $row) use ($asked): string {
+                $key = mb_strtolower((string) $row->source_message_id, 'UTF-8');
+
+                return $asked[$key] ?? (string) $row->source_message_id;
+            });
 
         $found = [];
         foreach ($rows as $messageId => $group) {
