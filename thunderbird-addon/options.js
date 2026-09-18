@@ -184,22 +184,29 @@ async function disableTags() {
 /* ---------------------------- kolumna „Prowadzi” ---------------------------- */
 
 async function showColumnState() {
-  const api = typeof browser !== 'undefined' && browser.inquiryColumn ? browser.inquiryColumn : null
-  let works = false
-  try {
-    // Pytamy, czy kolumna FAKTYCZNIE stoi, a nie tylko czy Thunderbird ma moduł.
-    works = api !== null && await api.added()
-  } catch (e) {
-    works = false
-  }
-
+  const state = await columnState()
   const { columnEntries } = await browser.storage.local.get({ columnEntries: {} })
   const known = Object.keys(columnEntries || {}).length
 
-  el('columnState').textContent = works
+  el('columnState').textContent = state.ok
     ? 'Kolumna działa. Maili z wpisem: ' + known + '.'
-    : 'Ta wersja Thunderbirda nie pozwala dołożyć kolumny — zostają znaczniki.'
-  el('hideColumn').hidden = ! works
+    : state.reason
+  el('hideColumn').hidden = ! state.ok
+  el('showColumn').hidden = state.ok
+}
+
+async function showColumnNow() {
+  busy(true)
+  status('Zakładam kolumnę…')
+  try {
+    const state = await showColumn()
+    status(state.ok ? 'Kolumna założona.' : state.reason, state.ok ? 'ok' : 'warn')
+  } catch (e) {
+    status(e.message, 'error')
+  } finally {
+    busy(false)
+    await showColumnState()
+  }
 }
 
 async function hideColumnNow() {
@@ -260,6 +267,7 @@ el('check').addEventListener('click', check)
 el('logout').addEventListener('click', logout)
 el('enableTags').addEventListener('click', enableTags)
 el('checkTags').addEventListener('click', checkTags)
+el('showColumn').addEventListener('click', showColumnNow)
 el('hideColumn').addEventListener('click', hideColumnNow)
 el('syncTags').addEventListener('click', syncTagsNow)
 el('disableTags').addEventListener('click', disableTags)

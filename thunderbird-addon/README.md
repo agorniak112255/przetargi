@@ -104,6 +104,18 @@ bo niczego w mailu nie zapisuje.
 Szerokość, kolejność i ukrycie kolumny ustawia się ikoną po prawej stronie
 nagłówków listy; Thunderbird pamięta ten układ sam.
 
+### Gdy kolumny nie widać
+
+API eksperymentalne Thunderbird ładuje **przy starcie programu**, więc po
+aktualizacji dodatku kolumna nie pojawia się sama — trzeba raz zamknąć i
+otworzyć Thunderbirda. Dodatek mówi o tym powiadomieniem (raz na dobę), a
+w ustawieniach dodatku widać stan kolumny i jest przycisk **Pokaż kolumnę**.
+
+Gdy po restarcie nadal jej nie ma, sprawdź w edytorze konfiguracji
+(Ustawienia → Ogólne → Edytor konfiguracji) ustawienie
+`extensions.experiments.enabled` — musi być **true**. Bez niego Thunderbird
+pomija całą deklarację kolumny i nie mówi o tym nic.
+
 ### Czym to jest okupione
 
 Thunderbird nie ma zwykłego API do dokładania kolumn (zgłoszenie 1615801 jest
@@ -341,7 +353,7 @@ z tych wartości, wysyłane jest `null` — nic nie jest zgadywane.
 ## Numer wersji
 
 Wersja dodatku jest widoczna na dole okienka nad mailem i na dole strony
-ustawień („Supon Przetargi 1.12.0”) — czytana z `manifest.json`, więc zawsze
+ustawień („Supon Przetargi 1.13.0”) — czytana z `manifest.json`, więc zawsze
 zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia

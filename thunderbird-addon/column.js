@@ -123,24 +123,59 @@ async function pushColumnEntries(entries = null) {
 }
 
 /**
- * Pokazuje kolumnę i wypełnia ją tym, co już wiemy. Wołane przy starcie tła —
- * układ kolumn Thunderbird pamięta sam, więc raz ukryta przez handlowca
- * kolumna zostaje ukryta.
+ * Stan kolumny słowami — do ustawień i do powiadomienia. Bez tego „nie ma
+ * kolumny” było nie do odróżnienia od „Thunderbird jeszcze jej nie załadował”.
+ *
+ * @return {{ok: boolean, reason: string}}
+ */
+async function columnState() {
+  if (columnApi() === null) {
+    // Manifest deklaruje kolumnę, a Thunderbird jej nie udostępnił: API
+    // eksperymentalne wchodzi dopiero przy starcie programu, więc po
+    // aktualizacji dodatku trzeba go raz uruchomić ponownie.
+    return {
+      ok: false,
+      reason: 'Uruchom Thunderbirda ponownie — kolumna włącza się przy starcie programu.',
+    }
+  }
+
+  const { columnError } = await browser.storage.local.get({ columnError: '' })
+  try {
+    if (await columnApi().added()) return { ok: true, reason: '' }
+  } catch (e) {
+    return { ok: false, reason: 'Nie udało się zapytać o kolumnę: ' + e.message }
+  }
+
+  return {
+    ok: false,
+    reason: String(columnError || 'Kolumna jeszcze nie powstała — kliknij „Pokaż kolumnę”.'),
+  }
+}
+
+/**
+ * Pokazuje kolumnę i wypełnia ją tym, co już wiemy. Wołane przy starcie tła
+ * i z ustawień. Układ kolumn Thunderbird pamięta sam, więc raz ukryta przez
+ * handlowca kolumna zostaje ukryta.
+ *
+ * @return {{ok: boolean, reason: string}}
  */
 async function showColumn() {
   const api = columnApi()
-  if (api === null) return false
+  if (api === null) return columnState()
 
   try {
-    if (! await api.available()) return false
-    await api.show(COLUMN_LABEL)
+    const problem = await api.show(COLUMN_LABEL)
+    await browser.storage.local.set({ columnError: problem || '' })
+    if (problem) return { ok: false, reason: problem }
+
     await pushColumnEntries()
 
-    return true
+    return { ok: true, reason: '' }
   } catch (e) {
-    console.warn('Kolumna „Prowadzi” się nie pojawiła:', e.message)
+    const reason = 'Kolumna „Prowadzi” się nie pojawiła: ' + e.message
+    await browser.storage.local.set({ columnError: reason })
 
-    return false
+    return { ok: false, reason }
   }
 }
 

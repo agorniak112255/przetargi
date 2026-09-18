@@ -377,8 +377,27 @@ browser.messageDisplay.onMessageDisplayed.addListener(async (tab, message) => {
   }
 })
 
+/**
+ * Kolumna od razu po starcie tła — nie ma na co czekać, bo pokazuje to, co już
+ * zapamiętane. Gdy się nie uda (API eksperymentalne wchodzi dopiero przy
+ * starcie Thunderbirda), mówimy o tym raz powiadomieniem: bez tego brak
+ * kolumny wyglądał jak awaria bez przyczyny.
+ */
+async function startColumn() {
+  const state = await showColumn()
+  if (state.ok) return
+
+  const { columnComplainedAt } = await browser.storage.local.get({ columnComplainedAt: 0 })
+  if (Date.now() - Number(columnComplainedAt || 0) < 24 * 60 * 60 * 1000) return
+
+  await browser.storage.local.set({ columnComplainedAt: Date.now() })
+  await notify('Kolumna „Prowadzi” jeszcze nie działa', state.reason)
+}
+
+startColumn().catch((e) => console.warn('Kolumna przy starcie:', e.message))
+
 setTimeout(() => {
-  // Kolumna najpierw: pokazuje to, co już wiadomo, zanim ruszy pytanie do serwera.
+  // Druga próba: gdy Thunderbird ładował się dłużej niż tło dodatku.
   showColumn()
     .then(() => syncTags({ full: true }))
     .catch((e) => console.warn('Pierwsze przejście znaczników:', e.message))

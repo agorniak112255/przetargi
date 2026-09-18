@@ -13,7 +13,7 @@
         "name": "show",
         "type": "function",
         "async": true,
-        "description": "Zakłada kolumnę „Prowadzi” w liście wiadomości (albo odświeża jej nazwę).",
+        "description": "Zakłada kolumnę „Prowadzi”. Zwraca pusty łańcuch przy powodzeniu albo powód porażki.",
         "parameters": [
           {
             "name": "label",

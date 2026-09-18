@@ -88,7 +88,7 @@ var inquiryColumn = class extends ExtensionCommon.ExtensionAPI {
 
         async show(label) {
           const columns = loadColumns()
-          if (columns === null) return false
+          if (columns === null) return 'Ta wersja Thunderbirda nie ma modułu kolumn listy wiadomości.'
 
           // Bezwarunkowo: po twardym przeładowaniu dodatku (awaria, aktualizacja
           // bez sprzątania) stary wpis zostaje w rejestrze Thunderbirda i samo
@@ -112,11 +112,11 @@ var inquiryColumn = class extends ExtensionCommon.ExtensionAPI {
             })
             columnAdded = true
 
-            return true
+            return ''
           } catch (e) {
-            console.warn('Supon Przetargi: nie udało się dołożyć kolumny —', e.message)
-
-            return false
+            // Powód wraca do dodatku, a nie tylko do konsoli, której nikt
+            // nie czyta — inaczej „nie ma kolumny” znów byłoby bez wyjaśnienia.
+            return String(e && e.message ? e.message : e)
           }
         },
 
