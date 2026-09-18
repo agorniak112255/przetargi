@@ -1487,7 +1487,7 @@ final class ClientInquiryService
         // Lista zamknięta: każde słowo spoza niej zostawia wiersz pozycją, bo „Co najmniej
         // 100 par rękawic?” to zamówienie, a nie pytanie o ofertę.
         return preg_match(
-            '/^(?:czy|jak|jaki|jaka|jaką|jakie|jakiej|jakim|jakich|jakimi|kt[oó]r[aąeęyi]\w*|kto|kiedy|gdzie|ile|dlaczego|w\s+jakim|prosz[ęe]\s+o\s+(?:podanie|informacj\w*)|prosimy\s+o\s+(?:podanie|informacj\w*))\b/iu',
+            '/^(?:czy|jak(?!\s+naj)|jaki|jaka|jaką|jakie|jakiej|jakim|jakich|jakimi|kt[oó]r[aąeęyi]\w*|kto|kiedy|gdzie|ile|dlaczego|w\s+jakim|prosz[ęe]\s+o\s+(?:podanie|informacj\w*)|prosimy\s+o\s+(?:podanie|informacj\w*))\b/iu',
             trim($rest)
         ) === 1;
     }
@@ -1552,7 +1552,7 @@ final class ClientInquiryService
             // na odpady 20 szt.” i „nóż do kartonów 10 szt.” to nazwy wyrobów. Karton liczy
             // się jako opakowanie tylko wtedy, gdy nie otwiera wiersza i nie stoi po przyimku.
             if (preg_match('/\S+\s+(?:w\s+)?karton(?:ie|y|ów|ach)?\s*[-–—]?\s*$/iu', $before) === 1
-                && preg_match('/(?:do|na|dla|pod|przy|ze?)\s+karton\w*\s*[-–—]?\s*$/iu', $before) !== 1) {
+                && preg_match('/(?<![\p{L}])(?:do|na|dla|pod|przy|ze?)\s+karton\w*\s*[-–—]?\s*$/iu', $before) !== 1) {
                 continue;
             }
             // „100 szt./op.”, „100 szt. w opak.”, „20 szt. w kartonie” — tak samo

@@ -121,6 +121,14 @@ final class InquiryQueryTextTest extends TestCase
             // liczba z jedną cyfrą po przecinku to wymiar, nie kwota
             ['Mata gumowa ......... 0,60 m', ['0,60 m']],
             ['Włóknina ....... 120,5 g/m2', ['120,5 g/m2']],
+            // Grosze też nie czynią z liczby ceny, gdy zaraz za nią stoi słowo: lista
+            // jednostek nigdy nie będzie kompletna (bar, N, kN, °C, „metra”), a utrata
+            // parametru jest gorsza niż cudza cena, która w cytacie zostanie.
+            ['Ciśnienie robocze ....... 6,00 bar', ['6,00 bar']],
+            ['Siła zrywająca ....... 22,50 kN', ['22,50 kN']],
+            ['Wysokość robocza ....... 1,80 metra', ['1,80 metra']],
+            ['Nauszniki ....... 32,50 (dB)', ['32,50 (dB)']],
+            ['Rękawice nitrylowe, ilość ....... 100,00 szt.', ['100,00 szt']],
             ['Rękawice nitrylowe ...... 18 (opakowania po 100 szt.)', ['18 (opakowania po 100 szt']],
             // rozpiętość cen z tekstem za nią zostaje w całości albo znika w całości,
             // nigdy jako strzępek liczby
@@ -188,8 +196,9 @@ final class InquiryQueryTextTest extends TestCase
             'Rękawice nitrylowe ...... 24,00 - 30,00',
             'Rękawice nitrylowe ...... 24,00 za komplet',
             'Rękawice nitrylowe ...... 24,00 netto/szt',
-            // kwota z groszami jest ceną także wtedy, gdy dalej stoi coś innego
-            'Rękawice nitrylowe ...... 24,00 (rozmiar 9)',
+            // kwota z groszami jest ceną także wtedy, gdy dalej stoi liczba albo znak
+            // przestankowy; jeśli stoi tam słowo („6,00 bar”, „24,00 (rozmiar 9)”),
+            // liczba opisuje wyrób i zostaje — patrz test niżej
             'Buty robocze S3 ...... 19,50 - 25,50 rozmiar 44',
             'Kask ochronny ...... 24,00, rozmiar 58',
         ]);

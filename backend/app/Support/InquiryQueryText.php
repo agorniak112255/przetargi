@@ -178,6 +178,10 @@ final class InquiryQueryText
         $sum = '(?>'.$amount.')(?!\d|[.,]\d)';
         // przy jednostce fizycznej liczba jest parametrem wyrobu, nie ceną
         $notPhysical = '(?!\s*'.self::PHYSICAL_UNIT.'(?![\p{L}]))';
+        // Za kwotą stoi coś, co mówi o cenie (waluta, „za sztukę”, nawias z walutą),
+        // albo nie stoi tam żadne słowo. Słowo spoza tej listy znaczy, że liczba opisuje
+        // wyrób — jednostkę, ilość albo parametr — i wtedy zostaje.
+        $priceTail = '(?=\s*(?:'.$word.'|za\b)|\s*[(\[]\s*(?:'.$word.')|\s*[^\p{L}(\[\s]|\s*$)';
 
         $patterns = [
             // „c. netto......24,00 PLN/szt”, „cena: 39,00 zł”, „cena jednostkowa 189,00”
@@ -192,13 +196,14 @@ final class InquiryQueryText
             // również ilość albo długość („......... 18 m”, „...... 100 szt./op.”,
             // „....... 32 dB”, „....... 3 worki”). Kwotę bierzemy tylko wtedy, gdy za nią
             // stoi waluta albo koniec zapisu — jednostka po liczbie znaczy, że to nie cena.
-            // Kwota z groszami po ciągu kropek jest ceną niezależnie od tego, co stoi
-            // dalej („...... 24,00 (rozmiar 9)”, „...... 24,00 - 30,00 rozmiar 44”) —
-            // chyba że opisuje wielkość fizyczną („......... 0,60 m”).
-            '/\.{3,}\s*(?>\d[\d \x{00A0}]*(?:[.,]\d{3})*[.,]\d{2})(?!\d|[.,]\d)'.$notPhysical.'(?>(?:\s*[-–—]\s*'.$amount.')?)(?:\s*'.$word.')*'.$unit.$per.$bare.'/iu',
+            // Kwota z groszami po ciągu kropek („......24,00”) jest ceną, o ile zaraz za nią
+            // nie stoi słowo: „....... 6,00 bar”, „....... 1,80 metra”, „....... 32,50 (dB)”
+            // i „ilość ....... 100,00 szt.” to parametr albo ilość, a lista jednostek nigdy
+            // nie będzie kompletna — dlatego pyta o to, czy słowo jest słowem o cenie.
+            '/\.{3,}\s*(?>\d[\d \x{00A0}]*(?:[.,]\d{3})*[.,]\d{2})(?!\d|[.,]\d)'.$priceTail.'(?>(?:\s*[-–—]\s*'.$amount.')?)(?:\s*'.$word.')*'.$unit.$per.$bare.'/iu',
             // Goła liczba po kropkach bywa ilością albo długością („....... 32 dB”,
             // „...... 100 szt./op.”), więc bierzemy ją tylko przy walucie albo na końcu zapisu.
-            '/\.{3,}\s*'.$sum.'(?=\s*(?:pln|zł|zl|eur|usd|netto|brutto)(?![\p{L}])|\s*za\s+(?:\d{1,3}\s*)?'.self::TRADE_UNIT.'|\s*[(\[]\s*(?:'.$word.')|\s*[,;)\]]|\s*\.(?!\d)|\s*$)(?:\s*'.$word.')*'.$unit.$per.$bare.'/iu',
+            '/\.{3,}\s*'.$sum.'(?>(?:\s*[-–—]\s*'.$amount.')?)(?=\s*(?:pln|zł|zl|eur|usd|netto|brutto)(?![\p{L}])|\s*za\s+(?:\d{1,3}\s*)?'.self::TRADE_UNIT.'|\s*[(\[]\s*(?:'.$word.')|\s*[,;)\]]|\s*\.(?!\d)|\s*$)(?:\s*'.$word.')*'.$unit.$per.$bare.'/iu',
             // osierocone „c. netto”, gdy liczbę zabrał wcześniejszy wzorzec
             '/\bc\.\s*netto\b/iu',
             // „masa netto 20 kg”, „waga produktu brutto 25 kg” — tu „netto” opisuje
