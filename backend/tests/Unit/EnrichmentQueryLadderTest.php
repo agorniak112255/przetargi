@@ -773,7 +773,8 @@ final class EnrichmentQueryLadderTest extends TestCase
         $this->assertSame([], $dropped);
     }
 
-    public function test_ansell_open_search_starts_on_bpbhp(): void
+    /** Karta producenta jest pierwszym celem zapytania, dystrybutor zaraz za nią. */
+    public function test_ansell_open_search_starts_on_manufacturer_site(): void
     {
         $product = new Product([
             'manufacturer' => 'Ansell',
@@ -791,7 +792,8 @@ final class EnrichmentQueryLadderTest extends TestCase
         $ladder = $open->invoke($service, $product, $build->invoke($service, $product, 'manufacturer'));
 
         $this->assertNotEmpty($ladder);
-        $this->assertStringStartsWith('site:bpbhp.pl', $ladder[0] ?? '');
+        $this->assertStringStartsWith('site:ansell.com', $ladder[0] ?? '');
+        $this->assertStringStartsWith('site:bpbhp.pl', $ladder[1] ?? '');
         $this->assertMatchesRegularExpression('/121/', $ladder[0] ?? '');
         $this->assertStringContainsString('AlphaTec 4000 121', $ladder[0] ?? '');
         $this->assertStringContainsString('site:optimumbhp.pl', implode(' | ', $ladder));

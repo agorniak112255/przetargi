@@ -845,7 +845,10 @@ final class ProductSearchIdentity
             $this->officialCatalogHosts($product),
             ['bpbhp.pl', 'ansell.com']
         ));
-        $prefer = ['bpbhp.pl', 'ansell.com'];
+        // Najpierw karta producenta: zgadywanie adresu na ansell.com (AnsellOfficialCatalog)
+        // trafia nie zawsze, a zapytanie „site:ansell.com” jest drugą szansą na własną kartę.
+        // Dystrybutor zostaje zaraz za nią — nadal uzupełnia to, czego producent nie podaje.
+        $prefer = ['ansell.com', 'bpbhp.pl'];
         $head = [];
         foreach ($prefer as $host) {
             if (in_array($host, $hosts, true)) {
@@ -1112,9 +1115,13 @@ final class ProductSearchIdentity
         $series = mb_strtolower($series);
         $model = mb_strtolower($model);
         $slugs = $this->ansellOfficialSlugs($product, $series, $model);
+        // Najpierw WSZYSTKIE warianty adresu w jednej wersji językowej, dopiero potem kolejne.
+        // Przy kolejności odwrotnej obcięcie listy do kilku adresów zostawiało trzy warianty
+        // razy trzy języki, więc dalsze kroje wyrobu (np. ochraniacze na obuwie) nigdy nie
+        // były sprawdzane — a to one bywają jedynym poprawnym adresem karty.
         $out = [];
-        foreach ($slugs as $slug) {
-            foreach (self::ANSELL_CARD_LOCALES as $locale) {
+        foreach (self::ANSELL_CARD_LOCALES as $locale) {
+            foreach ($slugs as $slug) {
                 $out[] = 'https://www.ansell.com/'.$locale.'/products/'.$slug;
             }
         }
@@ -1346,8 +1353,37 @@ final class ProductSearchIdentity
             'alphatec-'.$series.'-apron-ultrasonically-welded-model-'.$model,
             'alphatec-'.$series.'-apron-stitched-model-'.$model,
         ];
+        if ($apron) {
+            return [...$apronSlugs, ...$coverallSlugs];
+        }
+        // Ochraniacze na obuwie mają własny krój w adresie karty. Bez nich wszystkie
+        // zgadywane adresy „3000-YE OVERBOOTS 406” były kombinezonowe, czyli nieistniejące,
+        // i wyrób szedł po opis do wyszukiwarek zamiast do karty producenta.
+        $cover = $this->ansellFootwearCoverSlugs($name, $series, $model);
 
-        return $apron ? [...$apronSlugs, ...$coverallSlugs] : [...$coverallSlugs, ...$apronSlugs];
+        return [...$cover, ...$coverallSlugs, ...$apronSlugs];
+    }
+
+    /**
+     * Adresy kart ochraniaczy na obuwie: „overboots” zakrywa but z cholewką, „overshoes”
+     * to niski ochraniacz. Pusta lista, gdy nazwa nie mówi o żadnym z nich.
+     *
+     * @return list<string>
+     */
+    private function ansellFootwearCoverSlugs(string $upperName, string $series, string $model): array
+    {
+        $out = [];
+        foreach (['OVERBOOT' => 'overboots', 'OVERSHOE' => 'overshoes'] as $token => $kind) {
+            if (! str_contains($upperName, $token)) {
+                continue;
+            }
+            $out[] = 'alphatec-'.$series.'-'.$kind.'-ultrasonically-welded-model-'.$model;
+            $out[] = 'alphatec-'.$series.'-standard-'.$kind.'-bound-model-'.$model;
+            $out[] = 'alphatec-'.$series.'-standard-'.$kind.'-model-'.$model;
+            $out[] = 'alphatec-'.$series.'-'.$kind.'-model-'.$model;
+        }
+
+        return $out;
     }
 
     public function ansellIsBioClean(Product $product): bool
@@ -3469,7 +3505,10 @@ final class ProductSearchIdentity
             return false;
         }
         $hay = mb_strtolower($url.' '.$title);
-        if (preg_match_all('/alphatec[-_ \/]?(\d{4})\b/u', $hay, $hits) < 1) {
+        // Klasa [-_ /] nie obejmowała znaku towarowego, więc tytuł „AlphaTec® 4000” przechodził
+        // jako nasza seria. Granica \b nie zachodzi przed podkreśleniem, a tak właśnie wyglądają
+        // adresy zdjęć w PIM Ansella („alphatec-3000_103_yellow”) — kontrola cicho się nie odpalała.
+        if (preg_match_all('/alphatec[^a-z0-9]{0,3}(\d{4})(?!\d)/u', $hay, $hits) < 1) {
             return false;
         }
         foreach ($hits[1] as $found) {

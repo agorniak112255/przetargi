@@ -882,8 +882,9 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertNotContains('BOOT 192', $id->shopIdentityPhrases($boot));
 
         $hosts = $id->ansellSearchHosts($boot);
-        $this->assertSame('bpbhp.pl', $hosts[0] ?? null);
-        $this->assertContains('ansell.com', $hosts);
+        // karta producenta pierwsza, dystrybutor zaraz za nią
+        $this->assertSame('ansell.com', $hosts[0] ?? null);
+        $this->assertSame('bpbhp.pl', $hosts[1] ?? null);
         $this->assertContains('optimumbhp.pl', $hosts);
         $this->assertContains('kams.com.pl', $hosts);
         $this->assertContains('behapownia.pl', $hosts);
@@ -1005,6 +1006,74 @@ final class ProductSearchIdentityTest extends TestCase
         $this->assertStringContainsString('AlphaTec 2000 213', $joined);
         $this->assertStringContainsString('fartuch', $joined);
         $this->assertStringNotContainsString('kombinezon', $joined);
+    }
+
+    /**
+     * „3000-YE OVERBOOTS 406” z listy testerki: wszystkie zgadywane adresy były kombinezonowe,
+     * czyli nieistniejące, więc wyrób szedł po opis do wyszukiwarek i dostał kartę serii 4000.
+     * Ochraniacze na obuwie mają własny krój w adresie, a warianty idą najpierw po polsku.
+     */
+    public function test_ansell_overboots_get_their_own_card_slugs(): void
+    {
+        $id = new ProductSearchIdentity;
+        $product = new Product([
+            'sku' => 'YE30T-00406-00',
+            'name' => '3000-YE OVERBOOTS 406.42-46',
+            'manufacturer' => 'Ansell',
+        ]);
+
+        $urls = $id->ansellOfficialProductUrls($product);
+        $this->assertSame(
+            'https://www.ansell.com/pl/pl/products/alphatec-3000-overboots-ultrasonically-welded-model-406',
+            $urls[0] ?? null
+        );
+        // pierwsze dziewięć adresów, czyli tyle ile sprawdza AnsellOfficialCatalog, to warianty
+        // kroju w jednym języku — nie trzy warianty powtórzone w trzech językach
+        foreach (array_slice($urls, 0, 9) as $url) {
+            $this->assertStringStartsWith('https://www.ansell.com/pl/pl/products/', $url);
+        }
+        $this->assertContains(
+            'https://www.ansell.com/pl/pl/products/alphatec-3000-standard-overboots-bound-model-406',
+            $urls
+        );
+
+        // karta sąsiedniej serii z tym samym numerem modelu nadal odpada, także gdy seria
+        // stoi wyłącznie w tytule, za znakiem towarowym
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://www.ansell.com/pl/pl/products/alphatec-4000-overboots-ultrasonically-welded-model-406',
+            'AlphaTec® 4000 Overboots Ultrasonically Welded – Model 406',
+            $product
+        ));
+        $this->assertTrue($id->pageClaimsAnotherCode(
+            'https://www.ansell.com/pl/pl/products/overboots-model-406',
+            'AlphaTec® 4000 Overboots – Model 406',
+            $product
+        ));
+        $this->assertFalse($id->pageClaimsAnotherCode(
+            'https://www.ansell.com/pl/pl/products/alphatec-3000-overboots-ultrasonically-welded-model-406',
+            'AlphaTec® 3000 Overboots – Model 406',
+            $product
+        ));
+    }
+
+    /**
+     * Adres zdjęcia w PIM Ansella niesie serię przed podkreśleniem („alphatec-3000_103_yellow”).
+     * Granica \b tam nie zachodzi, więc kontrola serii w ogóle się nie odpalała i ten sam
+     * packshot trafiał na wyroby serii 2000, 3000 i 4000 o tym samym numerze modelu.
+     */
+    public function test_ansell_pim_image_url_reveals_foreign_series(): void
+    {
+        $id = new ProductSearchIdentity;
+        $img = 'https://www.ansell.com/-/media/projects/ansell/website/pim/product-assets/'
+            .'alphatec-suits/3000/3000/3000-global/alphatec-3000_103_yellow_product_front.ashx';
+
+        $yellow = new Product(['sku' => 'YE30T-00103-09', 'name' => '3000-YE CVRL COLLAR 103.5XL', 'manufacturer' => 'Ansell']);
+        $green = new Product(['sku' => 'GR40T-00103-07', 'name' => '4000-GR CVRL COLLAR 103.3XL', 'manufacturer' => 'Ansell']);
+        $white = new Product(['sku' => 'WH20B-00103-09', 'name' => '2000-WH STD CVRL COLLAR 103.5XL', 'manufacturer' => 'Ansell']);
+
+        $this->assertFalse($id->pageClaimsAnotherCode($img, '', $yellow));
+        $this->assertTrue($id->pageClaimsAnotherCode($img, '', $green));
+        $this->assertTrue($id->pageClaimsAnotherCode($img, '', $white));
     }
 
     public function test_ansell_leading_zeros_come_later_in_search(): void

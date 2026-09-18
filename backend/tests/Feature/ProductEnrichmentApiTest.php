@@ -1639,6 +1639,46 @@ final class ProductEnrichmentApiTest extends TestCase
     }
 
     /**
+     * Uwagi testerki „dane wygenerowane z innej strony niż Ansell” i „opis po polsku
+     * i angielsku naraz”: polska karta producenta miała 8 punktów, czyli mniej niż dowolny
+     * sklep (20), a nawet mniej niż nieznana domena (10) — przy pobieraniu trzech pierwszych
+     * adresów w ogóle nie trafiała do puli opisu. Obie wersje językowe tej samej karty
+     * szły natomiast do modelu jako dwie osobne strony.
+     */
+    public function test_polish_manufacturer_card_wins_ranking_and_locale_twin_is_dropped(): void
+    {
+        $product = $this->makeProduct([
+            'sku' => '23201100',
+            'name' => 'AlphaTec 23201',
+            'manufacturer' => 'Ansell',
+        ]);
+        $service = app(ProductEnrichmentService::class);
+        $rank = new ReflectionMethod($service, 'rankResultsForDescription');
+        $rank->setAccessible(true);
+        $domains = app(ManufacturerDomainResolver::class)->domainsFor($product);
+
+        $ranked = $rank->invoke($service, [
+            ['url' => 'https://www.thesafetysupplycompany.co.uk/p/9554548/ansell-alphatec-23-201.html'],
+            ['url' => 'https://www.ansell.com/gb/en/products/alphatec-23-201'],
+            ['url' => 'https://www.bpbhp.pl/rekawice-alphatec-23-201'],
+            ['url' => 'https://www.ansell.com/pl/pl/products/alphatec-23-201'],
+        ], $product, $domains);
+        $urls = array_column($ranked, 'url');
+
+        $this->assertSame('https://www.ansell.com/pl/pl/products/alphatec-23-201', $urls[0] ?? null);
+        $this->assertNotContains('https://www.ansell.com/gb/en/products/alphatec-23-201', $urls);
+        $this->assertContains('https://www.bpbhp.pl/rekawice-alphatec-23-201', $urls);
+
+        // ręcznie wskazany adres to wybór człowieka i nadal bije kartę producenta
+        $product->shop_source_url = 'https://icd.pl/rekawice-alphatec-23-201.html';
+        $hinted = $rank->invoke($service, [
+            ['url' => 'https://www.ansell.com/pl/pl/products/alphatec-23-201'],
+            ['url' => 'https://icd.pl/rekawice-alphatec-23-201.html'],
+        ], $product, $domains);
+        $this->assertSame('https://icd.pl/rekawice-alphatec-23-201.html', $hinted[0]['url'] ?? null);
+    }
+
+    /**
      * HyFlex 11584 z listy testerki: model nie zwrócił opisu, ale z karty udało się pobrać
      * zdjęcie — karta dostawała status „done”, czyli w panelu „OK”, i nie wracała do kolejki.
      * Zdjęcie nie zastępuje opisu: taka karta ma trafić do ręcznego uzupełnienia.

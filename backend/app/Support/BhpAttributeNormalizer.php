@@ -856,19 +856,19 @@ final class BhpAttributeNormalizer
             if ($text === '') {
                 continue;
             }
-            $zwiniete = false;
+            $merged = false;
             foreach ($out as $i => $known) {
                 if ($this->normWithGloss($known, $text)) {
                     $out[$i] = $text;
-                    $zwiniete = true;
+                    $merged = true;
                     break;
                 }
                 if ($this->normWithGloss($text, $known)) {
-                    $zwiniete = true;
+                    $merged = true;
                     break;
                 }
             }
-            if (! $zwiniete) {
+            if (! $merged) {
                 $out[] = $text;
             }
         }

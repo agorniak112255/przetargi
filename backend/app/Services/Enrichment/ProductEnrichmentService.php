@@ -2124,7 +2124,22 @@ final class ProductEnrichmentService
     }
 
     /**
-     * Opis: sklepy / dystrybutorzy najpierw; producent na końcu (cienkie karty EN).
+     * Klucz karty bez członu językowego: „ansell.com/pl/pl/products/x” i „ansell.com/gb/en/products/x”
+     * to jedna i ta sama karta. Pusty string, gdy adres nie jest kartą z wersjami językowymi —
+     * takich nie zwijamy, bo dwa różne adresy u dystrybutora bywają dwoma różnymi wyrobami.
+     */
+    private function localeInsensitiveCardKey(string $url): string
+    {
+        if (preg_match('#^https?://(?:www\.)?ansell\.com/[^/]+/[^/]+/products/(.+)$#i', $url, $m) !== 1) {
+            return '';
+        }
+
+        return 'ansell:'.mb_strtolower(rtrim($m[1], '/'));
+    }
+
+    /**
+     * Opis: polska karta producenta pierwsza, potem sklepy / dystrybutorzy, a obcojęzyczne
+     * karty producenta na końcu (bywają cienkie).
      *
      * @param  list<array{url: string, title?: string, snippet?: string}>  $results
      * @param  list<string>  $mfrDomains
@@ -2147,7 +2162,24 @@ final class ProductEnrichmentService
         }
         usort($rows, static fn (array $a, array $b): int => [-$a['score'], $a['position']] <=> [-$b['score'], $b['position']]);
 
-        return array_column($rows, 'row');
+        // Ta sama karta w dwóch wersjach językowych to dla modelu dwie osobne strony: opis
+        // wychodził po polsku i po angielsku naraz, a te same fakty trafiały do specyfikacji
+        // w dwóch tłumaczeniach („Gramatura” i „Waga” tej samej wartości). Zostaje jedna —
+        // po sortowaniu pierwsza, czyli wersja polska.
+        $seen = [];
+        $out = [];
+        foreach ($rows as $row) {
+            $key = $this->localeInsensitiveCardKey((string) ($row['row']['url'] ?? ''));
+            if ($key !== '' && isset($seen[$key])) {
+                continue;
+            }
+            if ($key !== '') {
+                $seen[$key] = true;
+            }
+            $out[] = $row['row'];
+        }
+
+        return $out;
     }
 
     /**
@@ -2168,9 +2200,15 @@ final class ProductEnrichmentService
             if (str_contains($u, '/blogs/') || str_contains($u, '/blog/')) {
                 return -80;
             }
+            // Polska karta Ansella jest pełna i to ona ma być źródłem opisu. Przy 8 punktach
+            // przegrywała z dowolnym sklepem (20), a nawet z nieznaną domeną (10), i przy
+            // pobieraniu trzech pierwszych adresów w ogóle nie trafiała do puli opisu —
+            // stąd karty AlphaTec opisane z przypadkowego sklepu. Ręcznie wskazany adres
+            // (100) nadal bije producenta, bo to wybór człowieka.
             if (str_contains($u, 'ansell.com/pl/pl/products/')) {
-                return 8;
+                return 75;
             }
+            // Karty obcojęzyczne zostają nisko: bywają cieńsze, a opis i tak ma być po polsku.
             if (str_contains($u, 'ansell.com/gb/en/products/')) {
                 return 4;
             }
