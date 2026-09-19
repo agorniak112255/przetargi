@@ -227,7 +227,7 @@ export function ProductAiMatchModal({
           <div>
             <p className="text-sm font-semibold text-slate-900">Wyszukiwanie produktu</p>
             <p className="text-xs text-slate-500">
-              Szukaj — nazwa/SKU. Szukaj AI — to samo „Szukaj w katalogu” co na Produktach. AI Internet — poza bazą.
+              Szukaj — nazwa/SKU. Szukaj AI — model czyta opisy w katalogu (to samo co „Szukaj w katalogu” na Produktach). AI Internet — poza bazą.
             </p>
           </div>
           <button
@@ -267,7 +267,7 @@ export function ProductAiMatchModal({
               onClick={() => void runSearch(false)}
               className="rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
             >
-              {busy === 'ai' ? 'Szukam…' : 'Szukaj w katalogu'}
+              {busy === 'ai' ? 'Szukam…' : 'Szukaj AI'}
             </button>
             <button
               type="button"
