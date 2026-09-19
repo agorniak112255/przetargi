@@ -221,6 +221,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::get('/inquiries/{inquiry}', [ClientInquiryController::class, 'show']);
         Route::patch('/inquiries/{inquiry}', [ClientInquiryController::class, 'update']);
         Route::post('/inquiries/{inquiry}/compose', [ClientInquiryController::class, 'compose']);
+        Route::post('/inquiries/{inquiry}/pick-product', [ClientInquiryController::class, 'pickProduct']);
         Route::post('/inquiries/{inquiry}/replied', [ClientInquiryController::class, 'replied']);
         Route::post('/inquiries/{inquiry}/queue-reply', [ClientInquiryController::class, 'queueReply']);
         // kasuje tylko autor zapytania — sprawdzenie w kontrolerze

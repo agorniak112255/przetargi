@@ -1237,6 +1237,133 @@ final class ClientInquiryApiTest extends TestCase
         $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
             'answers' => [],
         ])->assertForbidden();
+        $product = Product::query()->create([
+            'sku' => 'OBCY-1',
+            'name' => 'Rękawice',
+            'manufacturer' => 'Supon',
+            'catalog_price_net' => 5.00,
+            'purchase_price' => 3.00,
+        ]);
+        $this->postJson("/api/inquiries/{$inquiry->id}/pick-product", [
+            'item_id' => 'item_1',
+            'product_id' => $product->id,
+        ])->assertForbidden();
+    }
+
+    public function test_manual_search_pick_adds_candidate_and_rewrites_letter(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $matched = Product::query()->create([
+            'sku' => 'AUTO-1',
+            'name' => 'Rękawice z wyszukiwarki',
+            'manufacturer' => 'Supon',
+            'catalog_price_net' => 9.00,
+            'purchase_price' => 5.00,
+            'stock' => 10,
+        ]);
+        $wanted = Product::query()->create([
+            'sku' => 'MAN-1',
+            'name' => 'Rękawice wskazane ręcznie',
+            'manufacturer' => 'Ansell',
+            'norms' => 'EN 388',
+            'catalog_price_net' => 12.00,
+            'purchase_price' => 7.00,
+            'stock' => 3,
+        ]);
+
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'handlowy',
+            'source_body' => '10 par rękawic roboczych',
+            'analysis' => [
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => '10 par rękawic roboczych', 'qty' => '10', 'unit' => 'pary', 'size' => null, 'query' => 'rękawice robocze'],
+                ],
+                'matches' => [[
+                    'query' => 'rękawice robocze',
+                    'products' => [[
+                        'id' => $matched->id,
+                        'sku' => 'AUTO-1',
+                        'name' => 'Rękawice z wyszukiwarki',
+                        'manufacturer' => 'Supon',
+                        'norms' => 'EN 388',
+                        'catalog_price_net' => '9.00',
+                        'currency' => 'PLN',
+                        'stock' => 10,
+                        'score' => 88,
+                    ]],
+                ]],
+                'cards' => [],
+            ],
+            'answers' => [
+                'product:item_1' => ['option_id' => 'p:'.$matched->id],
+                'price' => ['option_id' => 'none', 'custom' => '18'],
+            ],
+            'extra_note' => 'Dopisek zostaje',
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson("/api/inquiries/{$inquiry->id}/pick-product", [
+            'item_id' => 'item_1',
+            'product_id' => $wanted->id,
+        ]);
+
+        $res->assertOk()
+            ->assertJsonPath('items.0.chosen', 'p:'.$wanted->id)
+            ->assertJsonPath('items.0.candidates.0.sku', 'AUTO-1')
+            ->assertJsonPath('items.0.candidates.1.sku', 'MAN-1')
+            // ręczny wybór nie udaje werdyktu modelu
+            ->assertJsonPath('items.0.candidates.1.source', 'manual')
+            ->assertJsonPath('items.0.candidates.1.score', 0)
+            // dopisek nieprzysłany w żądaniu zostaje nietknięty
+            ->assertJsonPath('extra_note', 'Dopisek zostaje');
+
+        $body = (string) $res->json('reply_body');
+        $this->assertStringContainsString('MAN-1', $body);
+        $this->assertStringNotContainsString('AUTO-1', $body);
+
+        // wybór przetrwa ponowne wczytanie zapytania
+        $this->getJson("/api/inquiries/{$inquiry->id}")
+            ->assertOk()
+            ->assertJsonPath('items.0.chosen', 'p:'.$wanted->id)
+            ->assertJsonPath('items.0.candidates.1.sku', 'MAN-1');
+    }
+
+    public function test_manual_search_pick_rejects_unknown_item_and_product(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = Product::query()->create([
+            'sku' => 'MAN-2',
+            'name' => 'Rękawice wskazane ręcznie',
+            'manufacturer' => 'Ansell',
+            'catalog_price_net' => 12.00,
+            'purchase_price' => 7.00,
+        ]);
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'handlowy',
+            'source_body' => '10 par rękawic roboczych',
+            'analysis' => [
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => '10 par rękawic roboczych', 'qty' => '10', 'unit' => 'pary', 'query' => 'rękawice robocze'],
+                ],
+                'matches' => [],
+                'cards' => [],
+            ],
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $this->postJson("/api/inquiries/{$inquiry->id}/pick-product", [
+            'item_id' => 'item_9',
+            'product_id' => $product->id,
+        ])->assertStatus(422);
+
+        $this->postJson("/api/inquiries/{$inquiry->id}/pick-product", [
+            'item_id' => 'item_1',
+            'product_id' => $product->id + 1000,
+        ])->assertStatus(422);
     }
 
     public function test_user_without_permission_is_forbidden(): void

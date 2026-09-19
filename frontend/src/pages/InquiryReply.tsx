@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { BusyLabel, useBusySeconds } from '../components/Busy'
 import { InquiryContactChip, InquiryContactModal } from '../components/InquiryContact'
+import { ProductAiMatchModal, type AiMatchPick } from '../components/ProductAiMatchModal'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { useAuth } from '../auth'
 import { api } from '../lib/api'
@@ -20,6 +21,10 @@ import type {
 } from '../types/inquiry'
 
 type Draft = { subject: string; body: string }
+/** Ręczne szukanie przy pozycji: „Szukaj” po nazwie/kodzie, „Szukaj AI” po opisie. */
+type SearchMode = 'catalog' | 'ai'
+/** Otwarte okno szukania: dla której pozycji i w którym trybie. */
+type SearchFor = { itemId: string; mode: SearchMode; query: string }
 type Answers = Record<string, InquiryAnswer>
 /** Warunki w polach formularza — pusty string zamiast null, bo tak działa `<input>`. */
 type TermsDraft = Record<keyof InquiryTerms, string>
@@ -243,6 +248,7 @@ function ItemRow({
   onCustomDraft,
   onAnswer,
   onPreview,
+  onSearch,
 }: {
   item: InquiryItem
   index: number
@@ -253,6 +259,7 @@ function ItemRow({
   onCustomDraft: (cardId: string, value: string) => void
   onAnswer: (key: string, answer: InquiryAnswer) => void
   onPreview: (productId: number, query: string) => void
+  onSearch: (mode: SearchMode) => void
 }) {
   const badge = confidenceBadge[item.confidence]
   const chosenId = item.chosen.startsWith('p:') ? Number(item.chosen.slice(2)) : null
@@ -304,21 +311,45 @@ function ItemRow({
         </ul>
       )}
 
-      <div className="mt-2 text-xs">
-        {chosen ? (
-          <>
-            <p className="text-slate-800">
-              <span className="font-semibold">{chosen.sku}</span> · {chosen.name}
-              {chosen.manufacturer ? ` · ${chosen.manufacturer}` : ''}
-              {chosenPrice ? ` · ${chosenPrice}` : priceMode !== 'none' ? ' · cena do potwierdzenia' : ''}
-            </p>
-            {chosen.reason && <p className="text-[11px] text-slate-500">{chosen.reason}</p>}
-          </>
-        ) : chosenId != null ? (
-          <p className="text-slate-800">Towar #{chosenId} (spoza listy kandydatów)</p>
-        ) : (
-          <p className="text-slate-600">W liście: sprawdzimy i wrócimy z propozycją — bez SKU.</p>
-        )}
+      <div className="mt-2 flex items-start justify-between gap-2 text-xs">
+        <div className="min-w-0">
+          {chosen ? (
+            <>
+              <p className="text-slate-800">
+                <span className="font-semibold">{chosen.sku}</span> · {chosen.name}
+                {chosen.manufacturer ? ` · ${chosen.manufacturer}` : ''}
+                {chosenPrice ? ` · ${chosenPrice}` : priceMode !== 'none' ? ' · cena do potwierdzenia' : ''}
+              </p>
+              {chosen.reason && <p className="text-[11px] text-slate-500">{chosen.reason}</p>}
+            </>
+          ) : chosenId != null ? (
+            <p className="text-slate-800">Towar #{chosenId} (spoza listy kandydatów)</p>
+          ) : (
+            <p className="text-slate-600">W liście: sprawdzimy i wrócimy z propozycją — bez SKU.</p>
+          )}
+        </div>
+        {/* Model podsunął nie to, czego szukał klient — handlowiec szuka sam:
+            po nazwie/kodzie albo opisem przez AI. Wybrany wyrób wchodzi do listu. */}
+        <div className="flex shrink-0 gap-1.5">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onSearch('catalog')}
+            title="Szukanie po nazwie i kodzie w katalogu"
+            className="rounded-full border border-sky-300 bg-white px-2 py-0.5 text-[11px] font-medium text-sky-800 hover:bg-sky-50 disabled:opacity-50"
+          >
+            Szukaj
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onSearch('ai')}
+            title="Szukanie AI po opisie wymagania"
+            className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
+          >
+            Szukaj AI
+          </button>
+        </div>
       </div>
 
       <div className="mt-2">
@@ -331,7 +362,7 @@ function ItemRow({
                 disabled={busy}
                 onClick={() => onAnswer(item.answer_key, { option_id: `p:${c.id}` })}
               >
-                {c.sku} · {c.name} · {c.score}%
+                {c.sku} · {c.name} · {c.source === 'manual' ? 'ręcznie' : `${c.score}%`}
               </Chip>
               <button
                 type="button"
@@ -451,6 +482,7 @@ export function InquiryReply() {
   const [checked, setChecked] = useState<Record<number, boolean>>({})
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [previewQuery, setPreviewQuery] = useState('')
+  const [searchFor, setSearchFor] = useState<SearchFor | null>(null)
   const [contactOpen, setContactOpen] = useState(false)
   const composeSec = useBusySeconds(composeBusy)
 
@@ -518,10 +550,16 @@ export function InquiryReply() {
     await p
   }
 
+  /** Przepisanie listu kasuje ręczne poprawki treści — pytamy o zgodę raz, przed żądaniem. */
+  function overwriteAllowed(): boolean {
+    const edited = subject !== composedRef.current.subject || body !== composedRef.current.body
+
+    return !edited || window.confirm('Nadpisać ręczne zmiany w treści listu?')
+  }
+
   async function compose(partial: Answers, tone?: InquiryTone): Promise<boolean> {
     if (!inquiry || composeBusy) return false
-    const edited = subject !== composedRef.current.subject || body !== composedRef.current.body
-    if (edited && !window.confirm('Nadpisać ręczne zmiany w treści listu?')) {
+    if (!overwriteAllowed()) {
       resetDrafts(inquiry)
       return false
     }
@@ -554,6 +592,37 @@ export function InquiryReply() {
 
   function onAnswer(key: string, answer: InquiryAnswer) {
     void compose({ [key]: answer })
+  }
+
+  /**
+   * Wyrób wyszukany ręcznie wchodzi do pozycji: serwer dopisuje go do jej
+   * alternatyw i od razu przepisuje list. Dopisek i warunki jadą z żądaniem,
+   * żeby niezapisane pola nie przepadły przy przepisaniu.
+   */
+  async function pickProduct(itemId: string, productId: number): Promise<void> {
+    if (!inquiry || composeBusy) return
+    if (!overwriteAllowed()) return
+    setComposeBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      if (pendingSave.current) await pendingSave.current.catch(() => undefined)
+      const done = await api<InquiryPayload>(`/inquiries/${inquiry.id}/pick-product`, {
+        method: 'POST',
+        body: JSON.stringify({
+          item_id: itemId,
+          product_id: productId,
+          extra_note: noteDraft.trim() || null,
+          terms: termsPayload(termsDraft),
+        }),
+      })
+      applyComposed(done)
+      setMsg('Wyrób z wyszukiwania wstawiony do pozycji, list przepisany.')
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się wstawić wyrobu do pozycji')
+    } finally {
+      setComposeBusy(false)
+    }
   }
 
   function onTone(tone: InquiryTone) {
@@ -951,6 +1020,13 @@ export function InquiryReply() {
                       setPreviewId(pid)
                       setPreviewQuery(q.trim())
                     }}
+                    onSearch={(mode) =>
+                      setSearchFor({
+                        itemId: item.id,
+                        mode,
+                        query: (item.query ?? item.quote ?? '').trim(),
+                      })
+                    }
                   />
                 ))}
               </div>
@@ -1091,6 +1167,19 @@ export function InquiryReply() {
         onClose={() => {
           setPreviewId(null)
           setPreviewQuery('')
+        }}
+      />
+
+      <ProductAiMatchModal
+        open={searchFor !== null}
+        initialQuery={searchFor?.query ?? ''}
+        initialMode={searchFor?.mode ?? 'catalog'}
+        autoRunAi={searchFor?.mode === 'ai'}
+        onClose={() => setSearchFor(null)}
+        onSelect={(p: AiMatchPick) => {
+          const target = searchFor
+          setSearchFor(null)
+          if (target) void pickProduct(target.itemId, p.id)
         }}
       />
     </div>

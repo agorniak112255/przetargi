@@ -33,6 +33,8 @@ type Props = {
   initialQuery: string
   initialWeb?: boolean
   initialMode?: SearchKind
+  /** Uruchom szukanie AI zaraz po otwarciu (tryb `ai`); tryby `catalog`/`web` startują same. */
+  autoRunAi?: boolean
   allowCompanion?: boolean
   hasMainProduct?: boolean
   onClose: () => void
@@ -57,6 +59,7 @@ export function ProductAiMatchModal({
   initialQuery,
   initialWeb = false,
   initialMode,
+  autoRunAi = false,
   allowCompanion = false,
   hasMainProduct = false,
   onClose,
@@ -199,9 +202,11 @@ export function ProductAiMatchModal({
       void runSearch(true, initialQuery)
     } else if (startMode === 'catalog') {
       void runCatalogSearch(initialQuery)
+    } else if (autoRunAi) {
+      void runSearch(false, initialQuery)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tylko przy otwarciu
-  }, [open, startMode, initialQuery])
+  }, [open, startMode, initialQuery, autoRunAi])
 
   if (!open) return null
 

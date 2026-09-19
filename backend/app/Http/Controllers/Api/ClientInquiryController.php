@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ComposeClientInquiryRequest;
 use App\Http\Requests\MarkClientInquiryRepliedRequest;
+use App\Http\Requests\PickClientInquiryProductRequest;
 use App\Http\Requests\QueueClientInquiryReplyRequest;
 use App\Http\Requests\StoreClientInquiryRequest;
 use App\Http\Requests\UpdateClientInquiryRequest;
@@ -352,6 +353,38 @@ class ClientInquiryController extends Controller
                 // zmiana szablonu listu ze strony odpowiedzi; brak pola = bez zmiany
                 isset($data['tone']) ? (string) $data['tone'] : null,
                 // warunki oferty; brak klucza = zostaw zapisane
+                array_key_exists('terms', $data) && is_array($data['terms']) ? $data['terms'] : false,
+            );
+        } catch (RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (Throwable $e) {
+            return response()->json(['message' => 'Błąd pisania odpowiedzi: '.$e->getMessage()], 422);
+        }
+
+        return response()->json($this->inquiries->present($inquiry));
+    }
+
+    /**
+     * Wyrób wyszukany ręcznie (zwykłe szukanie albo AI) wstawiony przy pozycji.
+     * Wynik jest ten sam co po kliknięciu alternatywy: przepisany list.
+     */
+    public function pickProduct(PickClientInquiryProductRequest $request, ClientInquiry $inquiry): JsonResponse
+    {
+        $this->assertOwner($request, $inquiry);
+
+        if (function_exists('set_time_limit')) {
+            @set_time_limit(180);
+        }
+
+        $data = $request->validated();
+
+        try {
+            $inquiry = $this->inquiries->pickProduct(
+                $inquiry,
+                (string) $data['item_id'],
+                (int) $data['product_id'],
+                // brak klucza = nie ruszaj zapisanego dopisku / warunków
+                array_key_exists('extra_note', $data) ? $data['extra_note'] : false,
                 array_key_exists('terms', $data) && is_array($data['terms']) ? $data['terms'] : false,
             );
         } catch (RuntimeException $e) {

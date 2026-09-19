@@ -31,6 +31,9 @@ final class ClientInquiryService
 
     private const MAX_LINE_ITEMS = 8;
 
+    /** Ile wyrobów dobranych ręcznie trzymamy przy jednej pozycji. */
+    private const MAX_MANUAL_CANDIDATES = 3;
+
     private const MAX_CARDS = 28;
 
     /** Od tego wyniku najlepszy kandydat jest „pewny” (jeśli drugi nie depcze mu po piętach). */
@@ -162,6 +165,77 @@ final class ClientInquiryService
             $merged,
             $extraNote === false ? $this->nullable($inquiry->extra_note) : $this->nullable($extraNote),
             $tone,
+        );
+    }
+
+    /**
+     * Wyrób wyszukany ręcznie przez handlowca: dopisujemy go do kandydatów tej
+     * pozycji i od razu czynimy jej propozycją. Oceny dopasowania nie wpisujemy —
+     * tego wyrobu nikt do tej pozycji nie oceniał, a liczba udawałaby werdykt modelu.
+     *
+     * `extraNote`/`terms` jak w compose(): false = zostaw zapisane.
+     *
+     * @param  array<string, mixed>|false  $terms
+     *
+     * @throws RuntimeException gdy pozycji albo wyrobu nie ma
+     */
+    public function pickProduct(
+        ClientInquiry $inquiry,
+        string $itemId,
+        int $productId,
+        string|false|null $extraNote = false,
+        array|false $terms = false,
+    ): ClientInquiry {
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $item = null;
+        foreach ($this->lineItemsOf($analysis) as $one) {
+            if ((string) ($one['id'] ?? '') === $itemId) {
+                $item = $one;
+                break;
+            }
+        }
+        if ($item === null) {
+            throw new RuntimeException('Nie ma takiej pozycji w tym zapytaniu.');
+        }
+
+        $product = Product::query()->find($productId);
+        if ($product === null) {
+            throw new RuntimeException('Nie ma takiego wyrobu w katalogu.');
+        }
+        $safe = $this->safeProduct([
+            'id' => $product->id,
+            'sku' => $product->sku,
+            'name' => $product->name,
+            'manufacturer' => $product->manufacturer,
+            'norms' => $product->norms,
+            'catalog_price_net' => $product->catalog_price_net,
+            'purchase_price' => $product->purchase_price,
+            'currency' => $product->currency ?? 'PLN',
+            'stock' => $product->stock,
+            // skąd wiersz: wybór człowieka, nie wyszukiwarka
+            'ai_match_source' => 'manual',
+        ]);
+        if ($safe === null) {
+            throw new RuntimeException('Wyrób bez kodu albo nazwy nie może trafić do oferty.');
+        }
+
+        $candidates = $this->candidatesForItem($this->matchGroups($analysis), $item, $analysis);
+        if ($this->candidateById($candidates, 'p:'.$safe['id']) === null) {
+            $manual = $this->manualCandidates($analysis, $itemId);
+            $manual[] = $safe;
+            // Najstarsze ręczne wypadają; właśnie dodany zostaje, bo staje się propozycją.
+            $byItem = is_array($analysis['manual_candidates'] ?? null) ? $analysis['manual_candidates'] : [];
+            $byItem[$itemId] = array_slice($manual, -self::MAX_MANUAL_CANDIDATES);
+            $analysis['manual_candidates'] = $byItem;
+            $inquiry->forceFill(['analysis' => $analysis])->save();
+        }
+
+        return $this->compose(
+            $inquiry,
+            ['product:'.$itemId => ['option_id' => 'p:'.$safe['id']]],
+            $extraNote,
+            null,
+            $terms,
         );
     }
 
@@ -682,7 +756,7 @@ final class ClientInquiryService
         $out = [];
         foreach ($this->lineItemsOf($analysis) as $item) {
             $itemId = (string) $item['id'];
-            $candidates = $this->candidatesForItem($matches, $item);
+            $candidates = $this->candidatesForItem($matches, $item, $analysis);
             $substitutes = $this->substitutesForItem($analysis, $candidates);
             $confidence = $this->confidenceFor($candidates, $item);
             $chosen = $this->chosenOptionFor($item, $candidates, $answers);
@@ -751,6 +825,10 @@ final class ClientInquiryService
                 'qty' => $qtyUnit['qty'],
                 'unit' => $qtyUnit['unit'],
                 'size' => $this->nullable($item['size'] ?? null),
+                // Fraza, którą ta pozycja szukała w katalogu — podpowiedź dla
+                // ręcznego wyszukiwania przy pozycji, nie nowe źródło danych.
+                'query' => $this->nullable($item['search_query'] ?? null)
+                    ?? $this->nullable($item['query'] ?? null),
                 'answer_key' => 'product:'.$itemId,
                 'substitute_key' => $substitutes !== [] ? 'substitutes:'.$itemId : null,
                 'confidence' => $confidence,
@@ -905,7 +983,7 @@ final class ClientInquiryService
         $answers = [];
         foreach ($this->lineItemsOf($analysis) as $item) {
             $itemId = (string) $item['id'];
-            $candidates = $this->candidatesForItem($matches, $item);
+            $candidates = $this->candidatesForItem($matches, $item, $analysis);
             $answers['product:'.$itemId] = ['option_id' => $this->defaultOptionFor($item, $candidates)];
             if ($this->substitutesForItem($analysis, $candidates) !== []) {
                 $answers['substitutes:'.$itemId] = ['option_id' => 'no'];
@@ -997,12 +1075,15 @@ final class ClientInquiryService
 
     /**
      * Kandydaci pozycji malejąco po score (także poniżej progu — do ręcznego wyboru).
+     * Na końcu listy stoją wyroby dobrane ręcznie przez handlowca (`manual_candidates`):
+     * nie mają oceny modelu, więc nie mogą decydować o pewności ani o wyborze domyślnym.
      *
      * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
      * @param  array<string, mixed>  $item
+     * @param  array<string, mixed>  $analysis
      * @return list<array<string, mixed>>
      */
-    private function candidatesForItem(array $matches, array $item): array
+    private function candidatesForItem(array $matches, array $item, array $analysis = []): array
     {
         $products = $this->rated($this->productsForItem($matches, $item));
         usort($products, static fn (array $a, array $b): int => ((int) ($b['score'] ?? 0)) <=> ((int) ($a['score'] ?? 0)));
@@ -1018,7 +1099,39 @@ final class ClientInquiryService
             array_unshift($products, $hit);
         }
 
+        $seen = [];
+        foreach ($products as $product) {
+            $seen[(int) ($product['id'] ?? 0)] = true;
+        }
+        foreach ($this->manualCandidates($analysis, (string) ($item['id'] ?? '')) as $manual) {
+            if (! isset($seen[(int) $manual['id']])) {
+                $products[] = $manual;
+            }
+        }
+
         return $products;
+    }
+
+    /**
+     * Wyroby dobrane ręcznie przy tej pozycji, w kolejności dodania.
+     *
+     * @param  array<string, mixed>  $analysis
+     * @return list<array<string, mixed>>
+     */
+    private function manualCandidates(array $analysis, string $itemId): array
+    {
+        if ($itemId === '') {
+            return [];
+        }
+        $byItem = is_array($analysis['manual_candidates'] ?? null) ? $analysis['manual_candidates'] : [];
+        $out = [];
+        foreach (is_array($byItem[$itemId] ?? null) ? $byItem[$itemId] : [] as $row) {
+            if (is_array($row) && (int) ($row['id'] ?? 0) > 0) {
+                $out[] = $row;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -2803,7 +2916,7 @@ final class ClientInquiryService
 
         $picked = [];
         foreach ($this->lineItemsOf($analysis) as $index => $item) {
-            $candidates = $this->candidatesForItem($matches, $item);
+            $candidates = $this->candidatesForItem($matches, $item, $analysis);
             $product = $this->chosenProductForItem($item, $candidates, $answers);
             $substitute = $product === null
                 ? null

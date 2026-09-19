@@ -1706,8 +1706,8 @@ function InquiriesHelp() {
         },
         {
           action: 'Kliknięcie alternatywy przepisuje list',
-          does: 'Pod każdą pozycją są chipy: kandydaci z katalogu (SKU · nazwa · % dopasowania) i „Sprawdzimy i wrócimy”. Kliknięcie od razu przepisuje list. „Opis” pokazuje kartę towaru. Niżej, w „Dla całej oferty”: szablon listu, ceny, dopisek do listu i lista pytań klienta. Szablony to „Handlowy (pełna specyfikacja)” z SKU i producentem, „Bez SKU (proste opisy)” — jedno zdanie opisu bez marki i modelu — oraz „Oficjalny (długie opisy)” z akapitem opisu z karty. Zmiana szablonu przepisuje list.',
-          click: 'Chip z towarem albo „Sprawdzimy i wrócimy”. Jeśli ręcznie zmieniłeś treść, system zapyta, czy ją nadpisać.',
+          does: 'Pod każdą pozycją są chipy: kandydaci z katalogu (SKU · nazwa · % dopasowania) i „Sprawdzimy i wrócimy”. Kliknięcie od razu przepisuje list. „Opis” pokazuje kartę towaru. Gdy żaden kandydat nie jest tym, o co pyta klient, przy propozycji stoją „Szukaj” (po nazwie i kodzie) oraz „Szukaj AI” (po opisie wymagania) — wybrany tam wyrób dopisuje się do alternatyw tej pozycji z etykietą „ręcznie” (bez procentu, bo nikt go nie oceniał) i od razu wchodzi do listu. Niżej, w „Dla całej oferty”: szablon listu, ceny, dopisek do listu i lista pytań klienta. Szablony to „Handlowy (pełna specyfikacja)” z SKU i producentem, „Bez SKU (proste opisy)” — jedno zdanie opisu bez marki i modelu — oraz „Oficjalny (długie opisy)” z akapitem opisu z karty. Zmiana szablonu przepisuje list.',
+          click: 'Chip z towarem, „Sprawdzimy i wrócimy” albo „Szukaj” / „Szukaj AI”. Jeśli ręcznie zmieniłeś treść, system zapyta, czy ją nadpisać.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Zapytania">
@@ -1722,6 +1722,19 @@ function InquiriesHelp() {
                     </span>
                   </p>
                   <p className="mt-1 border-l-4 border-amber-400 bg-amber-50 px-2 py-1">4szt Kalosze chemoodporne rozmiar 43</p>
+                  <div className="mt-2 flex items-start justify-between gap-2">
+                    <p className="text-slate-600">W liście: sprawdzimy i wrócimy z propozycją — bez SKU.</p>
+                    <Mark>
+                      <span className="flex shrink-0 gap-1.5">
+                        <span className="rounded-full border border-sky-300 bg-white px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                          Szukaj
+                        </span>
+                        <span className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800">
+                          Szukaj AI
+                        </span>
+                      </span>
+                    </Mark>
+                  </div>
                   <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Alternatywy</p>
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <Mark>

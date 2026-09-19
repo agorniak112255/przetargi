@@ -32,6 +32,8 @@ export type InquiryCandidate = {
   stock: number | null
   score: number
   reason: string | null
+  /** Skąd wiersz: ocena modelu/wektor, wiersz katalogowy albo `manual` — ręczny wybór handlowca. */
+  source: string | null
   /** null = pozycja bez warunków do sprawdzenia w karcie */
   requirements_ok: boolean | null
 }
@@ -78,6 +80,8 @@ export type InquiryItem = {
   qty: string | null
   unit: string | null
   size: string | null
+  /** Fraza, którą pozycja szukała w katalogu — startowe zapytanie ręcznego wyszukiwania. */
+  query: string | null
   answer_key: string
   substitute_key: string | null
   confidence: InquiryConfidence
