@@ -2079,6 +2079,65 @@ function DownloadsHelp() {
             ),
           },
           {
+            action: 'Włączenie kolumny „Prowadzi”',
+            does: 'Kolumna na liście wiadomości pokazuje przy każdym mailu, kto prowadzi z niego zapytanie, i „✓”, gdy odpowiedź do klienta już poszła. Niczego w mailu nie zapisuje i nie koloruje wierszy. Wchodzi przy starcie programu, więc po instalacji dodatku zamknij Thunderbirda i otwórz go ponownie — kolumna pojawi się sama.',
+            click: 'Zamknij i otwórz Thunderbirda. Gdyby kolumny nadal nie było: Dodatki i motywy → przy „Supon Przetargi” Ustawienia → „Pokaż kolumnę” (w ustawieniach widać też stan kolumny).',
+            tone: 'green',
+            screen: (
+              <TbFrame>
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-sm font-semibold text-slate-900">Kolumna „Prowadzi”</p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    Uruchom Thunderbirda ponownie — kolumna włącza się przy starcie programu.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Mark>
+                      <Btn label="Pokaż kolumnę" />
+                    </Mark>
+                    <Btn label="Ukryj kolumnę" color="border" />
+                  </div>
+                </div>
+              </TbFrame>
+            ),
+          },
+          {
+            action: 'Kolumna na liście wiadomości',
+            does: 'Kolumna „Prowadzi” staje obok Tematu, Korespondentów i Daty. Szerokość, kolejność i ukrycie ustawia się ikoną po prawej stronie nagłówków listy — Thunderbird pamięta ten układ sam. Gdy kolumny nie widać mimo restartu, w Ustawieniach → Ogólne → Edytor konfiguracji ustawienie extensions.experiments.enabled musi być true (kolumna działa od Thunderbirda 128).',
+            click: 'Ikona wyboru kolumn po prawej stronie nagłówków listy wiadomości.',
+            tone: 'slate',
+            screen: (
+              <TbFrame>
+                <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                  <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-1.5 text-[11px] font-semibold text-slate-600">
+                    <span className="flex-1">Temat</span>
+                    <span className="w-28 shrink-0">Korespondenci</span>
+                    <span className="w-16 shrink-0">Data</span>
+                    <span className="w-28 shrink-0 text-blue-800">Prowadzi</span>
+                    <Mark>
+                      <span className="rounded border border-slate-300 px-1.5 py-0.5">☰</span>
+                    </Mark>
+                  </div>
+                  {[
+                    ['Zapytanie ofertowe — rękawice nitrylowe', 'Jan Kowalski', '09:14', 'Anna Kowalska'],
+                    ['Prośba o wycenę kaloszy S5', 'Biuro ZOZ', 'wczoraj', 'Artur ✓'],
+                    ['Faktura korygująca 4/2026', 'Księgowość', 'wczoraj', ''],
+                  ].map(([subject, from, date, owner]) => (
+                    <div
+                      key={subject}
+                      className="flex items-center gap-2 border-b border-slate-100 px-3 py-1.5 text-[11px] text-slate-700"
+                    >
+                      <span className="flex-1 truncate">{subject}</span>
+                      <span className="w-28 shrink-0 truncate">{from}</span>
+                      <span className="w-16 shrink-0">{date}</span>
+                      <span className="w-28 shrink-0 font-medium text-slate-900">{owner || '—'}</span>
+                      <span className="px-1.5 py-0.5 text-transparent">☰</span>
+                    </div>
+                  ))}
+                </div>
+              </TbFrame>
+            ),
+          },
+          {
             action: 'Nowe wersje',
             does: 'Thunderbird sam pyta serwer o nowsze wydania i podmienia dodatek bez utraty ustawień. Dodatek dodatkowo przypomina powiadomieniem, gdy na serwerze leży nowsza wersja niż zainstalowana.',
             click: 'Nic — chyba że ręcznie: Dodatki i motywy → koło zębate → „Sprawdź dostępność aktualizacji”.',
