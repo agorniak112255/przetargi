@@ -1890,10 +1890,10 @@ function TbFrame({ open, children }: { open?: string; children: ReactNode }) {
   )
 }
 
-const toolsMenu = (mark: 'ustawienia' | 'dodatki'): TbItem[] => [
+const toolsMenu: TbItem[] = [
   { label: 'Książka adresowa', shortcut: 'Ctrl+Shift+B' },
   { label: 'Zapisane pliki', shortcut: 'Ctrl+J' },
-  { label: 'Dodatki i motywy', mark: mark === 'dodatki' },
+  { label: 'Dodatki i motywy', mark: true },
   { label: 'Monitor aktywności' },
   'sep',
   { label: 'Filtrowanie wiadomości' },
@@ -1903,7 +1903,7 @@ const toolsMenu = (mark: 'ustawienia' | 'dodatki'): TbItem[] => [
   { label: 'Eksportuj…' },
   { label: 'Narzędzia dla programistów' },
   'sep',
-  { label: 'Ustawienia', mark: mark === 'ustawienia' },
+  { label: 'Ustawienia' },
   { label: 'Konfiguracja kont' },
 ]
 
@@ -2025,42 +2025,13 @@ function DownloadsHelp() {
             ),
           },
           {
-            action: 'Zgoda na dodatek spoza katalogu Mozilli',
-            does: 'Dodatek jest nasz, nie ze sklepu Mozilli, więc Thunderbird domyślnie odmówi instalacji. Odblokowuje się to raz na komputer: Narzędzia → Ustawienia → Ogólne → na samym dole „Edytor konfiguracji”.',
-            click: 'Menu „Narzędzia” → „Ustawienia” (zaznaczone). Ten sam ekran otwiera menu ☰ → Ustawienia.',
-            tone: 'amber',
-            screen: (
-              <TbFrame open="Narzędzia">
-                <TbMenuList items={toolsMenu('ustawienia')} className="max-w-md" />
-              </TbFrame>
-            ),
-          },
-          {
-            action: 'Wyłączenie wymogu podpisu',
-            does: 'W edytorze konfiguracji wpisz nazwę ustawienia i przestaw je na false. To jedyna zmiana w samym Thunderbirdzie — dotyczy wyłącznie instalowania dodatków.',
-            click: 'Wpisz xpinstall.signatures.required, kliknij przełącznik przy wierszu — wartość ma być „false”.',
-            tone: 'amber',
-            screen: (
-              <TbFrame>
-                <p className="mb-2 text-xs text-slate-600">Ustawienia → Ogólne → Edytor konfiguracji</p>
-                <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-                  <Field label="Szukaj ustawienia" value="xpinstall.signatures.required" mark />
-                  <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-2 text-xs">
-                    <span className="truncate text-slate-700">xpinstall.signatures.required</span>
-                    <span className="rounded bg-slate-100 px-2 py-1 font-semibold text-slate-800">false</span>
-                  </div>
-                </div>
-              </TbFrame>
-            ),
-          },
-          {
             action: 'Otwarcie menedżera dodatków',
             does: 'To miejsce, w którym instaluje się plik XPI i w którym potem otwiera się ustawienia dodatku.',
             click: 'Menu „Narzędzia” → „Dodatki i motywy”.',
             tone: 'blue',
             screen: (
               <TbFrame open="Narzędzia">
-                <TbMenuList items={toolsMenu('dodatki')} className="max-w-md" />
+                <TbMenuList items={toolsMenu} className="max-w-md" />
               </TbFrame>
             ),
           },
@@ -2077,7 +2048,7 @@ function DownloadsHelp() {
           },
           {
             action: 'Wskazanie pobranego pliku',
-            does: 'Okno wyboru pokazuje tylko dodatki (*.xpi;*.jar;*.zip), więc w Pobranych zobaczysz właściwie jeden plik. Po „Otwórz” Thunderbird wypisuje uprawnienia dodatku i prosi o potwierdzenie.',
+            does: 'Okno wyboru pokazuje tylko dodatki (*.xpi;*.jar;*.zip), więc w Pobranych zobaczysz właściwie jeden plik. Po „Otwórz” Thunderbird otwiera okno instalacji.',
             click: 'Pobrane → supon-przetargi.xpi → „Otwórz”, potem „Dodaj” w oknie Thunderbirda.',
             tone: 'blue',
             screen: <TbFilePicker />,
@@ -2102,36 +2073,6 @@ function DownloadsHelp() {
                       <Btn label="Połącz" />
                     </Mark>
                     <Btn label="Sprawdź połączenie" color="border" />
-                  </div>
-                </div>
-              </TbFrame>
-            ),
-          },
-          {
-            action: 'Włączenie znaczników na liście maili',
-            does: 'Znaczniki „Zapytanie: …” i „Wysłane: …” pokazują na liście wiadomości, kto prowadzi dany mail. Thunderbird pyta o zgodę na zmianę znaczników osobno — bez niej dodatek działa, tylko lista maili zostaje bez kolorów.',
-            click: '„Włącz oznaczanie maili” na stronie ustawień dodatku (ten sam przycisk jest w okienku nad mailem).',
-            tone: 'green',
-            screen: (
-              <TbFrame>
-                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                  <p className="text-sm font-semibold text-slate-900">Oznaczanie maili na liście</p>
-                  <p className="mt-1 text-xs text-slate-600">
-                    Oznaczanie jest wyłączone — Thunderbird nie dostał jeszcze zgody na zmianę znaczników.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Mark>
-                      <Btn label="Włącz oznaczanie maili" />
-                    </Mark>
-                    <Btn label="Sprawdź oznaczanie" color="border" />
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-1.5 text-[11px]">
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
-                      Zapytanie: Anna Kowalska
-                    </span>
-                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-800">
-                      Wysłane: Anna Kowalska
-                    </span>
                   </div>
                 </div>
               </TbFrame>
