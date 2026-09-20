@@ -1029,8 +1029,49 @@ final class ProductPageFetcher
         }
 
         $text = trim(implode("\n\n", array_filter($chunks)));
+        $text = $this->cleanFetchedPageText($text, $skuNorm);
+        $norms = $this->extractNormBlocks($html);
+        if ($text === '' || $norms === '' || str_contains($text, $norms)) {
+            return $text;
+        }
 
-        return $this->cleanFetchedPageText($text, $skuNorm);
+        // Po czyszczeniu: krótki wiersz („Normy: EN 343”) nie przeszedłby progu długości akapitu.
+        return $text."\n\n".$norms;
+    }
+
+    /**
+     * Ramka norm obok opisu (pros.pl: <ul class="norm-values">). Karta AJ GROUP 202 straciła przez jej
+     * pominięcie EN ISO 13688 i EN 343 — strona ma blok opisu, więc reszty strony czytnik już nie brał,
+     * a w dopasowaniu przetargu model odrzucał kartę za brak normy. Dosłowny tekst bloku, bez własnych
+     * słów; blok bez kodu normy albo dłuższy niż ramka (słowniczek norm sklepu) jest pomijany.
+     */
+    private function extractNormBlocks(string $html): string
+    {
+        $pattern = '#<(ul|ol|dl|div|section|table)\b[^>]*(?:id|class)=["\'][^"\']*(?<![a-z])norm(?:y|s)?(?![a-z])[^"\']*["\'][^>]*>(.*?)</\1>#isu';
+        // Bez stripShopChromeHtml: PrestaShop trzyma ramkę norm wewnątrz <form> koszyka, który tamto
+        // czyszczenie wycina w całości. Menu z linkiem „Normy” odpada niżej — nie ma w nim kodu normy.
+        $html = preg_replace('#<(script|style|noscript)[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
+        if (! preg_match_all($pattern, $html, $m)) {
+            return '';
+        }
+        $values = [];
+        foreach ($m[2] as $block) {
+            $lines = [];
+            foreach (preg_split('/\R+/u', $this->htmlToText((string) $block)) ?: [] as $line) {
+                // Myślnika nie obcinamy: „-50ºC” to temperatura ujemna, nie punktor.
+                $line = (string) preg_replace('/^[\s:•]+|[\s:•]+$/u', '', $line);
+                if ($line !== '' && mb_strtolower($line) !== 'normy') {
+                    $lines[] = $line;
+                }
+            }
+            $joined = implode(', ', $lines);
+            if (mb_strlen($joined) > 300 || preg_match('/\b(?:PN-)?EN(?:\s*ISO)?\s*\d{3,5}\b|\bISO\s*\d{4,5}\b/iu', $joined) !== 1) {
+                continue;
+            }
+            $values = array_values(array_unique([...$values, ...$lines]));
+        }
+
+        return $values === [] ? '' : 'Normy: '.implode(', ', $values);
     }
 
     private function cleanFetchedPageText(string $text, string $skuNorm): string
