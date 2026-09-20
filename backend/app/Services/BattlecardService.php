@@ -9,6 +9,7 @@ use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
+use App\Services\Search\AiProductSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
@@ -26,7 +27,7 @@ final class BattlecardService
 
     public function __construct(
         private readonly ProductMatchService $matcher,
-        private readonly ProductAiSearchService $aiSearch,
+        private readonly AiProductSearch $aiSearch,
         private readonly AiSettingsService $aiSettings,
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly PpeAssortment $assortment,
@@ -308,7 +309,7 @@ final class BattlecardService
         $fromLlm = false;
         if ($allowAi && $this->aiSettings->isReady()) {
             try {
-                $result = $this->aiSearch->search($requirement, max(8, $limit), false, AiTask::ProductSearch);
+                $result = $this->aiSearch->find($requirement, max(8, $limit), AiTask::ProductSearch);
                 $rows = is_array($result['products'] ?? null) ? $result['products'] : [];
                 $fromLlm = $rows !== [];
             } catch (Throwable) {
@@ -316,7 +317,7 @@ final class BattlecardService
             }
         }
         if ($rows === []) {
-            $rows = $this->aiSearch->requirementCatalogRows($requirement, max(8, $limit));
+            $rows = $this->aiSearch->catalogRows($requirement, max(8, $limit));
         }
 
         $blocked = array_fill_keys($excludeIds, true);

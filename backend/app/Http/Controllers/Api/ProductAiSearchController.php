@@ -10,6 +10,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\NbpExchangeRateService;
 use App\Services\ProductAiSearchService;
+use App\Services\Search\AiProductSearch;
 use App\Services\Search\SearchEventRecorder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,7 +20,7 @@ use Throwable;
 class ProductAiSearchController extends Controller
 {
     public function __construct(
-        private readonly ProductAiSearchService $search,
+        private readonly AiProductSearch $search,
         private readonly NbpExchangeRateService $fx,
         private readonly AiSettingsService $aiSettings,
         private readonly SearchEventRecorder $events,
@@ -40,11 +41,11 @@ class ProductAiSearchController extends Controller
         $webOnly = (bool) ($data['web'] ?? false);
 
         try {
-            $result = $this->search->search(
+            $result = $this->search->find(
                 (string) $data['query'],
                 (int) ($data['limit'] ?? ($webOnly ? ProductAiSearchService::WEB_LIMIT : $this->aiSettings->catalogSearchLimit())),
-                false,
                 AiTask::ProductSearch,
+                false,
                 $webOnly,
             );
         } catch (RuntimeException $e) {
@@ -60,11 +61,15 @@ class ProductAiSearchController extends Controller
             $result['products'],
         );
 
+        // Ślad wykonania służy telemetrii, nie klientowi — do odpowiedzi API nie wchodzi.
+        $trace = is_array($result['trace'] ?? null) ? $result['trace'] : [];
+        unset($result['trace']);
+
         // Telemetria: bez niej nie da się zmierzyć, czy zmiana w rankingu pomogła.
         $event = $this->events->record(
             (string) $data['query'],
             $result,
-            $this->search->lastTrace(),
+            $trace,
             $request->user()?->id,
             $webOnly ? SearchEvent::TASK_PRODUCT_SEARCH_WEB : SearchEvent::TASK_PRODUCT_SEARCH,
         );

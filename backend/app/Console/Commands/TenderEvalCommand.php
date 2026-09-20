@@ -11,6 +11,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\ProductAiSearchService;
 use App\Services\ProductMatchService;
+use App\Services\Search\AiProductSearch;
 use App\Services\Search\SearchEvalRunner;
 use App\Support\SearchEvalMetrics;
 use Carbon\CarbonInterface;
@@ -144,12 +145,11 @@ final class TenderEvalCommand extends Command
             $tally = app(AiServedProviderTally::class);
             $tally->reset();
             $searchStarted = hrtime(true);
-            $search = app()->make(ProductAiSearchService::class);
+            $search = app()->make(AiProductSearch::class);
             $matcher = app()->make(ProductMatchService::class);
-            $rows = $search->searchMany(
+            $rows = $search->findMany(
                 array_map(static fn (array $case): string => $case['query'], $cases),
                 $settings->catalogSearchLimit(),
-                false,
                 AiTask::ProductSearch,
                 $settings->matchConcurrency(),
             );

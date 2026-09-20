@@ -10,6 +10,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\ProductAiSearchService;
 use App\Services\ProductMatchService;
+use App\Services\Search\AiProductSearch;
 use Illuminate\Console\Command;
 
 /**
@@ -49,16 +50,18 @@ final class DebugTenderMatchCommand extends Command
         $sku = trim((string) $this->option('sku'));
         $this->line('Pozycja '.$item->line_no.': '.mb_substr($requirement, 0, 160));
 
-        $many = app()->make(ProductAiSearchService::class);
+        // Osobne instancje, bo ślad obu przebiegów siedzi jeszcze w stanie silnika i drugi
+        // nadpisałby pierwszy. Znika to razem ze śladem przenoszonym do odpowiedzi.
+        $many = app()->make(AiProductSearch::class);
         $many->enableSourceTrace();
-        $rows = $many->searchMany([$requirement], $limit, false, AiTask::ProductSearch, $settings->matchConcurrency());
-        $this->report('„Dopasuj wszystkie” (searchMany)', is_array($rows[0] ?? null) ? $rows[0] : [], $many->lastTrace(), $sku);
+        $rows = $many->findMany([$requirement], $limit, AiTask::ProductSearch, $settings->matchConcurrency());
+        $this->report('„Dopasuj wszystkie” (findMany)', is_array($rows[0] ?? null) ? $rows[0] : [], $many->lastTrace(), $sku);
         $this->reportDecision(app(ProductMatchService::class)->debugPick($item, is_array($rows[0] ?? null) ? $rows[0] : []));
 
-        $single = app()->make(ProductAiSearchService::class);
+        $single = app()->make(AiProductSearch::class);
         $single->enableSourceTrace();
-        $result = $single->search($requirement, $limit, false, AiTask::ProductSearch);
-        $this->report('Wyszukiwarka (search)', $result, $single->lastTrace(), $sku);
+        $result = $single->find($requirement, $limit, AiTask::ProductSearch);
+        $this->report('Wyszukiwarka (find)', $result, is_array($result['trace'] ?? null) ? $result['trace'] : [], $sku);
 
         return self::SUCCESS;
     }

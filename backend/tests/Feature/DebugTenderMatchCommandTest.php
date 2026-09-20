@@ -81,8 +81,8 @@ final class DebugTenderMatchCommandTest extends TestCase
             'line' => 3,
             '--sku' => 'ARSO 701 616560 S1 P ESD',
         ])
-            ->expectsOutputToContain('„Dopasuj wszystkie” (searchMany)')
-            ->expectsOutputToContain('Wyszukiwarka (search)')
+            ->expectsOutputToContain('„Dopasuj wszystkie” (findMany)')
+            ->expectsOutputToContain('Wyszukiwarka (find)')
             ->expectsOutputToContain('ARSO 701 616560 S1 P ESD=93')
             ->expectsOutputToContain('w kartach rankingu=tak')
             ->expectsOutputToContain('dowód warunków karty ARSO 701 616560 S1 P ESD:')

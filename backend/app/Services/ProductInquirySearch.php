@@ -5,13 +5,14 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Services\Ai\AiTask;
+use App\Services\Search\AiProductSearch;
 
 class ProductInquirySearch
 {
     private const MAX_PARALLEL = 10;
 
     public function __construct(
-        private readonly ProductAiSearchService $search,
+        private readonly AiProductSearch $search,
     ) {}
 
     /**
@@ -19,7 +20,7 @@ class ProductInquirySearch
      */
     public function find(string $query, int $limit): array
     {
-        $result = $this->search->search($query, $limit, false, AiTask::ProductSearch);
+        $result = $this->search->find($query, $limit, AiTask::ProductSearch);
 
         return [
             'products' => is_array($result['products'] ?? null) ? $result['products'] : [],
@@ -32,10 +33,9 @@ class ProductInquirySearch
      */
     public function findMany(array $queries, int $limit): array
     {
-        $results = $this->search->searchMany(
+        $results = $this->search->findMany(
             $queries,
             $limit,
-            false,
             AiTask::ProductSearch,
             self::MAX_PARALLEL,
         );

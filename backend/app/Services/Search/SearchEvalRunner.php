@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Services\Search;
 
 use App\Models\Product;
-use App\Services\ProductAiSearchService;
 use App\Support\SearchEvalMetrics;
 use InvalidArgumentException;
 use Throwable;
@@ -21,7 +20,7 @@ use Throwable;
 final class SearchEvalRunner
 {
     public function __construct(
-        private readonly ProductAiSearchService $search,
+        private readonly AiProductSearch $search,
     ) {}
 
     /**
@@ -79,7 +78,7 @@ final class SearchEvalRunner
     {
         $started = hrtime(true);
         try {
-            $result = $this->search->search($case['query'], $limit);
+            $result = $this->search->find($case['query'], $limit);
         } catch (Throwable $e) {
             return [
                 'id' => $case['id'],

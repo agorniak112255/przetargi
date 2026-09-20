@@ -9,6 +9,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
+use App\Services\Search\AiProductSearch;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\CatalogManufacturerContext;
@@ -148,7 +149,7 @@ final class ProductMatchService
 
     public function __construct(
         private readonly TenderPricingService $pricing,
-        private readonly ProductAiSearchService $aiSearch,
+        private readonly AiProductSearch $aiSearch,
         private readonly AiSettingsService $aiSettings,
         private readonly ProductVectorSearch $vectorSearch,
         private readonly BhpAttributeNormalizer $bhpAttributes,
@@ -1581,7 +1582,7 @@ final class ProductMatchService
             if ($familyProducts->count() > 0 && $familyProducts->count() <= 120) {
                 return $familyProducts->values();
             }
-            foreach ($this->aiSearch->requirementCatalogRows($requirement, 80) as $row) {
+            foreach ($this->aiSearch->catalogRows($requirement, 80) as $row) {
                 $id = (int) ($row['id'] ?? 0);
                 if ($id > 0) {
                     $ids[$id] = true;
@@ -2070,10 +2071,9 @@ final class ProductMatchService
         }
 
         try {
-            $rows = $this->aiSearch->searchMany(
+            $rows = $this->aiSearch->findMany(
                 $queries,
                 $this->aiSettings->catalogSearchLimit(),
-                false,
                 AiTask::ProductSearch,
                 $this->aiSettings->matchConcurrency(),
                 $onProgress,
@@ -2162,7 +2162,7 @@ final class ProductMatchService
         }
 
         try {
-            $result = $this->aiSearch->search($requirement, $limit, false, AiTask::ProductSearch);
+            $result = $this->aiSearch->find($requirement, $limit, AiTask::ProductSearch);
         } catch (Throwable) {
             return [];
         }
@@ -2183,7 +2183,7 @@ final class ProductMatchService
         if (! $this->aiSettings->matchAllowsCatalogRows()) {
             return $mapped;
         }
-        $catalogRows = $this->aiSearch->requirementCatalogRows($requirement, $limit);
+        $catalogRows = $this->aiSearch->catalogRows($requirement, $limit);
         if ($catalogRows === []) {
             return $mapped;
         }
