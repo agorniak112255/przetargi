@@ -50,8 +50,18 @@ final class SearchEvalRunnerTest extends TestCase
         $ids = array_column($cases, 'id');
 
         $this->assertSame($ids, array_values(array_unique($ids)), 'zdublowane id w golden.json');
-        $this->assertGreaterThanOrEqual(50, count($cases), 'golden.json ma mieć 35 dotychczasowych + 15 opisowych przypadków');
+        // Liczba przypadków nie jest miarą jakości pomiaru: 19 przypadków mierzyło SKU, których nie ma
+        // w katalogu (marki spoza asortymentu), więc z definicji dawały zero i zaniżały każdą metrykę.
+        // W ich miejsce weszły prawdziwe zapytania klientów z poczty. Zamiast progu liczbowego
+        // pilnujemy tego, co naprawdę ma znaczenie: każdy przypadek musi cokolwiek mierzyć.
+        $this->assertGreaterThanOrEqual(35, count($cases), 'golden.json ma nieść przypadki zakotwiczone, opisowe i z poczty');
         $this->assertContains('peltor-x2-naglowne', $ids, 'dotychczasowe przypadki mają zostać');
+        foreach ($cases as $case) {
+            $this->assertNotEmpty(
+                [...($case['expected_skus'] ?? []), ...($case['forbidden_skus'] ?? [])],
+                'przypadek '.$case['id'].' nie ma czego mierzyć — ani oczekiwanych, ani zakazanych SKU',
+            );
+        }
 
         $byLine = [];
         foreach ($cases as $case) {
