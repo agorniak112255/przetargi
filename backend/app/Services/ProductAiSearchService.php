@@ -152,6 +152,15 @@ final class ProductAiSearchService
      */
     private array $trace = self::EMPTY_TRACE;
 
+    /**
+     * Ślad osobno dla każdego wymagania w fali. Jeden wspólny `$trace` opisywał tylko ostatnie
+     * zapytanie — reszta była nadpisywana w pętli, więc ścieżki „Dopasuj wszystkie” nie dało się
+     * porównać z wyszukiwarką ani zmierzyć per pozycja.
+     *
+     * @var array<int, array<string, mixed>>
+     */
+    private array $tracesByIndex = [];
+
     /** @var array<int, ?string> dostawca modelu, który zrozumiał zapytanie (indeks zapytania w searchMany) */
     private array $understandProviders = [];
 
@@ -247,6 +256,8 @@ final class ProductAiSearchService
         );
         $this->timingMs['total'] = (int) round((hrtime(true) - $started) / 1e6);
         $result['timings_ms'] = $this->timingMs;
+        // Ślad w odpowiedzi — tak samo jak w fali, żeby wywołujący nie musiał sięgać po stan serwisu.
+        $result['trace'] = $this->lastTrace();
         Log::info('product-ai-search.timings', [
             'query' => mb_substr($query, 0, 80),
             'timings_ms' => $this->timingMs,
@@ -318,6 +329,10 @@ final class ProductAiSearchService
         $wanted = min(max(1, min(80, $limit)), $this->catalogLimit());
         $limit = $this->rankLimit($wanted);
         $maxConcurrent = $this->clampLlmConcurrency($maxConcurrent);
+        // Fala zaczyna z czystym śladem i czasami — dotąd zostawały po poprzednim wywołaniu.
+        $this->trace = self::EMPTY_TRACE;
+        $this->tracesByIndex = [];
+        $this->timingMs = [];
 
         $pending = [];
         $done = [];
@@ -334,7 +349,11 @@ final class ProductAiSearchService
         $modelStates = [];
         foreach ($clean as $i => $query) {
             $retrieveIntents[$i] = $intents[$i];
+            // Ślad liczony od zera dla każdego wymagania — inaczej pula i karty rankingu
+            // poprzedniej pozycji zostają w zapisie następnej.
+            $this->trace = self::EMPTY_TRACE;
             $prepared = $this->clock('catalog', fn (): array => $this->prepareSearch($query, $intents[$i], $limit));
+            $this->tracesByIndex[$i] = $this->trace;
             if ($task === AiTask::TenderMatch && $prepared['rank_cards'] !== null) {
                 $prepared['rank_cards'] = $prepared['rank_cards']->take(12)->values();
             }
@@ -377,6 +396,8 @@ final class ProductAiSearchService
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
             $rankProviderByIndex[$i] = $rankProviders[$pos] ?? null;
+            // Wracamy do śladu tego wymagania, żeby trafienia modelu dopisały się do właściwej pozycji.
+            $this->trace = $this->tracesByIndex[$i] ?? self::EMPTY_TRACE;
             $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
             $retrieveIntent = $this->mergeRetrieveIntent($intents[$i], $retrieveIntents[$i]);
             $ranked = $this->rowsFromLlmMatches(
@@ -416,6 +437,7 @@ final class ProductAiSearchService
                 : ((is_array($raw['matches'] ?? null) && $raw['matches'] !== [])
                     ? self::MODEL_STATE_RANKED
                     : self::MODEL_STATE_EMPTY);
+            $this->tracesByIndex[$i] = $this->trace;
         }
         if ($task !== AiTask::TenderMatch) {
             $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent, $report);
@@ -440,6 +462,14 @@ final class ProductAiSearchService
             ];
         }
         ksort($done);
+        foreach ($done as $i => $row) {
+            $done[$i]['trace'] = $this->traceFor($i);
+        }
+        // Zgodność dla wywołujących, którzy czytają ślad po fali: ostatnie wymaganie, jak dotąd.
+        $lastIndex = array_key_last($this->tracesByIndex);
+        if ($lastIndex !== null) {
+            $this->trace = $this->tracesByIndex[$lastIndex];
+        }
 
         return array_map(
             fn (array $row): array => $this->clipResult($row, $wanted),
@@ -818,6 +848,21 @@ final class ProductAiSearchService
     }
 
     /**
+     * Ślad jednego wymagania z fali, w tym samym kształcie co lastTrace(). Czasy zostają wspólne
+     * dla całej fali — model ocenia wymagania jednym wywołaniem wsadowym, więc rozbicie ich na
+     * pozycje byłoby zmyśleniem.
+     *
+     * @return array<string, mixed>
+     */
+    private function traceFor(int $index): array
+    {
+        return ($this->tracesByIndex[$index] ?? self::EMPTY_TRACE) + [
+            'timings_ms' => $this->timingMs,
+            'prompt_version' => self::RANK_PROMPT_VERSION,
+        ];
+    }
+
+    /**
      * Diagnostyka: ślad dostaje listy id z każdego źródła wyszukiwania (priorytet, kaskada przed i po bramce, tekst,
      * karty bez rodziny, wektor) i przyciętą fuzję. Przetarg 1 poz. 1: rękaw przechodził wszystkie bramki, a nie było go
      * w puli przed bramką — bez miejsca w źródłach nie da się powiedzieć, czy go nie znaleziono, czy wypadł przy przycięciu.
@@ -1123,7 +1168,10 @@ final class ProductAiSearchService
         foreach ($empty as $i) {
             $current = $intents[$i];
             if ($this->intentChanged($retrieveIntents[$i], $current)) {
+                // Przepisanie zastępuje wynik pozycji, więc zastępuje też jej ślad.
+                $this->trace = self::EMPTY_TRACE;
                 $prepared = $this->clock('catalog', fn (): array => $this->prepareSearch($clean[$i], $current, $limit));
+                $this->tracesByIndex[$i] = $this->trace;
                 if ($prepared['rank_cards'] === null) {
                     $done[$i] = $this->searchResult(
                         $clean[$i],
@@ -1162,7 +1210,9 @@ final class ProductAiSearchService
                     continue;
                 }
                 $intents[$i] = $rewritten;
+                $this->trace = self::EMPTY_TRACE;
                 $prepared = $this->clock('catalog', fn (): array => $this->prepareSearch($clean[$i], $rewritten, $limit));
+                $this->tracesByIndex[$i] = $this->trace;
                 if ($prepared['rank_cards'] === null) {
                     $done[$i] = $this->searchResult(
                         $clean[$i],
@@ -1197,6 +1247,7 @@ final class ProductAiSearchService
         $rankRaws = $this->llm->chatJsonMany($rankMessages, $this->rankMaxTokens($task), $task, $maxConcurrent);
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
+            $this->trace = $this->tracesByIndex[$i] ?? self::EMPTY_TRACE;
             $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
             $retrieveIntent = $this->mergeRetrieveIntent($intents[$i], $retrieveIntents[$i] ?? $intents[$i]);
             $ranked = $this->rowsFromLlmMatches(
@@ -1228,6 +1279,7 @@ final class ProductAiSearchService
                 $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
                 $withExternalHint,
             );
+            $this->tracesByIndex[$i] = $this->trace;
         }
     }
 

@@ -37,7 +37,8 @@ final class AiProductSearch
         bool $webOnly = false,
     ): array {
         $result = $this->engine->search($query, $limit, $withExternalHint, $task, $webOnly);
-        $result['trace'] = $this->engine->lastTrace();
+        // Tryb „tylko internet” nie przechodzi przez katalog, więc ślad zostaje pusty.
+        $result['trace'] ??= $this->engine->lastTrace();
 
         return $result;
     }
