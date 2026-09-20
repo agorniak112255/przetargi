@@ -124,6 +124,9 @@ final class BhpAttributeNormalizer
                 'norms_column' => (string) ($product->norms ?? ''),
                 // Parametry wypisane w samym cenniku dostawcy — dokument producenta, nie odczyt ze strony.
                 'price_list' => is_array($product->price_list_attributes) ? $product->price_list_attributes : [],
+                // Normy z karty wyrobu u jego producenta — jedyne źródło poziomów EN 388, któremu wolno
+                // przebić opis: opisy powstają ze sklepów, a te podają poziomy cudzych albo starych wersji.
+                'manufacturer' => ManufacturerNormFacts::context($product->manufacturer_norms),
             ]
         );
     }
@@ -141,7 +144,8 @@ final class BhpAttributeNormalizer
      *     description?: string,
      *     shop_fields?: string,
      *     norms_column?: string,
-     *     price_list?: array<string, string>
+     *     price_list?: array<string, string>,
+     *     manufacturer?: array{en388?: string, normy?: list<string>}
      * }  $context
      * @return array{
      *     kategoria_bhp: ?string,
@@ -199,12 +203,35 @@ final class BhpAttributeNormalizer
         $out['material'] = $primary;
         $out['materialy'] = $materials;
 
+        $manufacturer = is_array($context['manufacturer'] ?? null) ? $context['manufacturer'] : [];
+        $fromManufacturer = $this->stringList($manufacturer['normy'] ?? null);
+        // Normę, którą karta producenta podaje wprost, opisujemy JEGO zapisem: wariant tej samej normy
+        // ze słabszego źródła odpada, żeby karta nie pokazywała dwóch sprzecznych poziomów EN 388
+        // (NormCode::dedupe zostawia sprzeczne warianty obok siebie — słusznie, ale nie wobec producenta).
+        $manufacturerKeys = [];
+        foreach ($fromManufacturer as $norm) {
+            $key = NormCode::key($norm);
+            if ($key !== '') {
+                $manufacturerKeys[$key] = true;
+            }
+        }
+        $fromOthers = array_filter(
+            array_merge(
+                // normy z cennika idą pierwsze — przy skracaniu listy zostają te z dokumentu producenta
+                $this->splitNormsColumn((string) ($priceList['normy'] ?? '')),
+                $this->stringList($raw['normy_en'] ?? null),
+                $this->stringList($context['norms'] ?? null),
+                $this->splitNormsColumn($context['norms_column'] ?? ''),
+            ),
+            static function (string $norm) use ($manufacturerKeys): bool {
+                $key = NormCode::key($norm);
+
+                return $key === '' || ! isset($manufacturerKeys[$key]);
+            },
+        );
         $normy = $this->collapseNormVariants(array_values(array_unique(array_merge(
-            // normy z cennika idą pierwsze — przy skracaniu listy zostają te z dokumentu producenta
-            $this->splitNormsColumn((string) ($priceList['normy'] ?? '')),
-            $this->stringList($raw['normy_en'] ?? null),
-            $this->stringList($context['norms'] ?? null),
-            $this->splitNormsColumn($context['norms_column'] ?? ''),
+            $fromManufacturer,
+            array_values($fromOthers),
         ))));
         $out['normy_en'] = $normy;
 
@@ -241,7 +268,11 @@ final class BhpAttributeNormalizer
             $out['kategoria_bhp']
         );
 
-        $out['poziomy_en388'] = $this->nullableString($raw['poziomy_en388'] ?? null)
+        // Poziomy EN 388 z karty producenta biją i zapisany atrybut, i odczyt z tekstu: kod z opisu
+        // sklepowego bywa cudzym wyrobem albo starym wydaniem normy, a od niego zależy dopasowanie
+        // do wymagania przetargu (App\Support\ManufacturerNormFacts).
+        $out['poziomy_en388'] = $this->nullableString($manufacturer['en388'] ?? null)
+            ?? $this->nullableString($raw['poziomy_en388'] ?? null)
             ?? $this->detectEn388($descBlob);
 
         $assortment = new PpeAssortment;

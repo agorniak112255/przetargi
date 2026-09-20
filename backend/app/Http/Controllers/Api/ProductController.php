@@ -24,6 +24,8 @@ use App\Services\NbpExchangeRateService;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\ProductDeletionService;
 use App\Services\ProductKitService;
+use App\Support\BhpAttributeNormalizer;
+use App\Support\ManufacturerNormFacts;
 use App\Support\ProductModelFuzzy;
 use App\Support\ProductPriceChangeResolver;
 use App\Support\ProductVariantPresenter;
@@ -43,6 +45,7 @@ class ProductController extends Controller
         private readonly ProductVariantPresenter $variants,
         private readonly ProductEffectivePrice $effectivePrice,
         private readonly B2bConnectorRegistry $connectors,
+        private readonly BhpAttributeNormalizer $bhpAttributes,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -357,7 +360,7 @@ class ProductController extends Controller
             'shopCards.account:id,connector,sites',
         ]);
 
-        $payload = $product->toArray();
+        $payload = $this->withManufacturerNorms($product->toArray(), $product);
         $payload['images'] = $product->images->map(static fn ($img): array => [
             'id' => $img->id,
             'url' => $img->url(),
@@ -631,6 +634,35 @@ class ProductController extends Controller
         }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Karta z normami od producenta wyrobu pokazuje JEGO poziomy. Atrybuty zapisane w payloadzie pochodzą
+     * z opisu wzbogaconego ze sklepów i właśnie one przyniosły nieaktualne poziomy EN 388 (25 z 54 kart ATG,
+     * sprawdzone 20.09.2026); przeliczone atrybuty znają hierarchię źródeł, w której kolumna producenta bije
+     * opis. Dzięki temu karta pokazuje to, czym dopasowanie do wymagania przetargu naprawdę się liczy.
+     *
+     * Payloadu w bazie nie ruszamy: pozostaje zapisem tego, co przyniosło wzbogacanie.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    private function withManufacturerNorms(array $row, Product $product): array
+    {
+        if (ManufacturerNormFacts::norms($product->manufacturer_norms) === []) {
+            return $row;
+        }
+
+        $computed = $this->bhpAttributes->forProduct($product);
+        $payload = is_array($row['enrichment_payload'] ?? null) ? $row['enrichment_payload'] : [];
+        $payload['attributes'] = array_merge(
+            is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [],
+            $computed,
+        );
+        $payload['norms'] = $computed['normy_en'];
+        $row['enrichment_payload'] = $payload;
+
+        return $row;
     }
 
     /**

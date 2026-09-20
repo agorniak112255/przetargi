@@ -53,6 +53,7 @@ class Product extends Model
         'norms',
         'price_list_attributes',
         'manual_specs',
+        'manufacturer_norms',
         'catalog_price_net',
         'discount_percent',
         'purchase_price',
@@ -109,6 +110,7 @@ class Product extends Model
             'embedding_synced_at' => 'datetime',
             'price_list_attributes' => 'array',
             'manual_specs' => 'array',
+            'manufacturer_norms' => 'array',
             'enrichment_payload' => 'array',
             'enrichment_trace' => 'array',
         ];

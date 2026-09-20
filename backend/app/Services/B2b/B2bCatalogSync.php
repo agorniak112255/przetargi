@@ -21,6 +21,7 @@ use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\PriceListImportService;
 use App\Services\Pricing\ProductEffectivePrice;
+use App\Support\ManufacturerNormFacts;
 use App\Support\ProductSearchBlob;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
@@ -728,6 +729,7 @@ final class B2bCatalogSync
         [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product, $account) : [false, null];
         $documents = $this->storeDocuments($account, $product, $connector, $card, $warnings);
         $shopFields = $this->storeShopFields($connector, $remote, $product, $account, $warnings);
+        $this->storeNormFacts($connector, $remote, $product, $account, $warnings);
 
         return [
             'status' => $status,
@@ -1262,6 +1264,7 @@ final class B2bCatalogSync
 
         [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product, $account) : [false, null];
         $shopFields = $this->storeShopFields($connector, $remote, $product, $account, $warnings);
+        $this->storeNormFacts($connector, $remote, $product, $account, $warnings);
 
         return [
             'status' => $status,
@@ -1791,6 +1794,65 @@ final class B2bCatalogSync
         self::refreshShopFieldsSummary($product);
 
         return $saved;
+    }
+
+    /**
+     * Normy z karty wyrobu u JEGO producenta (products.manufacturer_norms) — pary „norma → poziom” dosłownie
+     * ze źródła, razem z adresem karty i datą odczytu. To jedyne źródło poziomów EN 388, któremu wolno przebić
+     * opis: opisy powstają ze sklepów, a te podają poziomy cudzych wyrobów albo starych wydań normy.
+     *
+     * Warunek jest ten sam co przy nadpisaniu opisu i przy kolejności zdjęć (manufacturerAccountId): marker
+     * łącznika i zgodność marki witryny z marką karty. U dystrybutora lista norm bywa przepisana z cudzej karty,
+     * a właśnie takie listy ta kolumna naprawia.
+     *
+     * Pusta odpowiedź nie kasuje zapisanych norm — brak listy na stronie to luka w odczycie (albo przebudowany
+     * szablon), a nie wiadomość, że wyrób norm nie ma. Gdy pary się nie zmieniły, nie zapisujemy nic: data
+     * odczytu w `source.synced_at` należy do tych par, a zbędny zapis zlecałby reindeks wektora.
+     *
+     * @param  list<string>|null  $warnings
+     * @return bool czy kolumna została zapisana
+     */
+    private function storeNormFacts(
+        B2bConnector $connector,
+        B2bRemoteProduct $remote,
+        Product $product,
+        B2bAccount $account,
+        ?array &$warnings = null,
+    ): bool {
+        if (! $connector instanceof B2bNormFactSource || ! $connector instanceof B2bManufacturerSite) {
+            return false;
+        }
+        if ($this->manufacturerAccountId($connector, $product, $account) === null) {
+            return false;
+        }
+
+        try {
+            $facts = $connector->normFacts($remote);
+        } catch (B2bFatalException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            $warnings[] = 'normy z karty producenta nie zostały odczytane ('.$e->getMessage().')';
+
+            return false;
+        }
+
+        $column = ManufacturerNormFacts::build(
+            array_map(
+                static fn (B2bRemoteNormFact $fact): array => ['label' => $fact->label, 'value' => $fact->value],
+                $facts,
+            ),
+            $connector::key(),
+            $connector::ownBrand(),
+            (string) ($remote->sourceUrl ?? ''),
+        );
+        if ($column === null || ManufacturerNormFacts::sameFacts($product->manufacturer_norms, $column)) {
+            return false;
+        }
+
+        $product->manufacturer_norms = $column;
+        $product->save();
+
+        return true;
     }
 
     /**

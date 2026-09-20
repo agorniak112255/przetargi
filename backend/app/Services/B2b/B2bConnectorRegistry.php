@@ -22,6 +22,7 @@ final class B2bConnectorRegistry
         UvexB2bConnector::class,
         ProtektB2bConnector::class,
         ArtraB2bConnector::class,
+        AtgB2bConnector::class,
     ];
 
     /**

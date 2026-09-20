@@ -25,6 +25,9 @@ final class ProductEnrichmentResetter
     private const PRODUCT_COLUMNS = [
         'id', 'sku', 'name', 'description', 'norms', 'packaging', 'shop_source_url', 'enrichment_status',
         'enriched_at', 'enrichment_error', 'enrichment_trace', 'enrichment_payload',
+        // Normy z karty producenta: reset ich nie zeruje (nie pochodzą z wzbogacania), ale kopia ma je nieść,
+        // żeby przywrócenie oddawało kartę w całości — także gdy przebieg producenta zapisał je pomiędzy.
+        'manufacturer_norms',
     ];
 
     /**

@@ -15,6 +15,9 @@ final readonly class CardSource
 
     public const NORMS = 'norms';
 
+    /** Norma z karty wyrobu u jego producenta — cytat od autora wyrobu, najmocniejszy przy normach. */
+    public const MANUFACTURER = 'manufacturer';
+
     /** Parametry wypisane w kolumnach cennika dostawcy — cytat z dokumentu producenta. */
     public const PRICE_LIST = 'price_list';
 

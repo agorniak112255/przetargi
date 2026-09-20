@@ -17,7 +17,7 @@ final class ProductSearchBlob
     public const SOURCE_COLUMNS = [
         'sku', 'name', 'model_name', 'manufacturer', 'category', 'norms',
         'shop_fields_summary', 'description', 'variant_summary', 'enrichment_payload',
-        'manual_specs',
+        'manual_specs', 'manufacturer_norms',
     ];
 
     private const MAX_LENGTH = 16000;

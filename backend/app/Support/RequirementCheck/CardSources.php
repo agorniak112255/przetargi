@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Support\RequirementCheck;
 
 use App\Models\Product;
+use App\Support\ManufacturerNormFacts;
 use App\Support\ProductDescriptionText;
 
 /**
@@ -23,6 +24,12 @@ final class CardSources
         $out = [];
         self::push($out, CardSource::NAME, (string) $product->name);
         self::push($out, CardSource::NORMS, (string) ($product->norms ?? ''));
+
+        // Normy z karty u producenta wyrobu stoją najwyżej: pary są dosłowne, mają adres strony i datę
+        // odczytu, a poziomy EN 388 z opisów sklepowych bywają cudzym wyrobem albo starym wydaniem normy.
+        foreach (ManufacturerNormFacts::rows($product->manufacturer_norms) as $row) {
+            self::push($out, CardSource::MANUFACTURER, $row['label'], $row['value'] === '' ? null : $row['value']);
+        }
 
         // Cennik dostawcy jest dokumentem z datą obowiązywania, więc w odróżnieniu od attributes
         // wolno go cytować — i trzeba, bo to z niego bierze się klasa ochrony przy dopasowaniu.
