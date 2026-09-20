@@ -208,11 +208,14 @@ final class BhpAttributeNormalizer
         // Normę, którą karta producenta podaje wprost, opisujemy JEGO zapisem: wariant tej samej normy
         // ze słabszego źródła odpada, żeby karta nie pokazywała dwóch sprzecznych poziomów EN 388
         // (NormCode::dedupe zostawia sprzeczne warianty obok siebie — słusznie, ale nie wobec producenta).
-        $manufacturerKeys = [];
+        // Rodzina i numer normy, a nie pełny klucz: sklep pisze o tej samej normie zdaniem („EN 388:2016 –
+        // 4121A (ścieranie 4…)”) albo z poziomem w nawiasie („EN 388:2016 (4121A)”), a takich zapisów key()
+        // nie rozbiera. Po rodzinie poznajemy, że mówią o normie, którą producent podał wprost.
+        $manufacturerFamilies = [];
         foreach ($fromManufacturer as $norm) {
-            $key = NormCode::key($norm);
-            if ($key !== '') {
-                $manufacturerKeys[$key] = true;
+            $family = NormCode::leadFamily($norm);
+            if ($family !== '') {
+                $manufacturerFamilies[$family] = true;
             }
         }
         $fromOthers = array_filter(
@@ -223,10 +226,10 @@ final class BhpAttributeNormalizer
                 $this->stringList($context['norms'] ?? null),
                 $this->splitNormsColumn($context['norms_column'] ?? ''),
             ),
-            static function (string $norm) use ($manufacturerKeys): bool {
-                $key = NormCode::key($norm);
+            static function (string $norm) use ($manufacturerFamilies): bool {
+                $family = NormCode::leadFamily($norm);
 
-                return $key === '' || ! isset($manufacturerKeys[$key]);
+                return $family === '' || ! isset($manufacturerFamilies[$family]);
             },
         );
         $normy = $this->collapseNormVariants(array_values(array_unique(array_merge(

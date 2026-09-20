@@ -48,6 +48,33 @@ final class NormCode
     }
 
     /**
+     * Rodzina i numer normy, o KTÓREJ mówi ten zapis — z jego początku, bez roku, poprawki i poziomów:
+     * „EN 388:2016 + A1:2018 4331B” → „EN 388”, „EN ISO 374-1 Typ A” → „EN ISO 374-1”. Pusty string,
+     * gdy zapis nie zaczyna się oznaczeniem normy.
+     *
+     * W odróżnieniu od key() działa też na zapisach, których nie da się rozebrać do końca: opisowych
+     * („EN 388:2016 – 4121A (ścieranie 4, przecięcie Coup 1…)”) i z poziomem w nawiasie („EN 388:2016 (4121A)”).
+     * Dzięki temu da się poznać, że dwa źródła mówią o tej samej normie, nawet jeśli jedno z nich pisze o niej
+     * zdaniem — a przy sprzecznych poziomach trzeba wiedzieć, które zapisy dotyczą tej samej normy.
+     */
+    public static function leadFamily(string $raw): string
+    {
+        $text = self::tidy($raw);
+        if ($text === '') {
+            return '';
+        }
+        if (preg_match(
+            '/^(?:(?:'.self::PREFIKSY_KRAJOWE.')[\s\-]+)?((?:EN|ISO|IEC)(?:[\s\-]*(?:ISO|IEC))*)[\s\-]*(\d{2,6}(?:-\d{1,3})*)(?![\d\-])/iu',
+            $text,
+            $m
+        ) !== 1) {
+            return '';
+        }
+
+        return mb_strtoupper((string) preg_replace('/[\s\-]+/u', ' ', $m[1])).' '.$m[2];
+    }
+
+    /**
      * Deduplikacja listy: pozycje o tym samym kluczu zwijamy do JEDNEJ — najbogatszej
      * w informacje. Kolejność pierwszego wystąpienia zachowana. Pozycje niebędące
      * normami przechodzą bez zmian (dedup po zwykłym porównaniu tekstu).

@@ -201,4 +201,32 @@ final class NormCodeTest extends TestCase
         );
         $this->assertSame([], NormCode::dedupe([]));
     }
+
+    /**
+     * Rodzina i numer normy z początku zapisu — także wtedy, gdy całości nie da się rozebrać do klucza:
+     * sklepy piszą o normie zdaniem albo wpisują poziom w nawiasie. Po tym poznajemy, że dwa źródła mówią
+     * o tej samej normie, a przy sprzecznych poziomach decyduje zapis producenta wyrobu.
+     */
+    public function test_lead_family_reads_the_norm_the_entry_is_about(): void
+    {
+        $this->assertSame('EN 388', NormCode::leadFamily('EN 388:2016 + A1:2018 3121A'));
+        $this->assertSame('EN 388', NormCode::leadFamily('EN 388:2016 (4121A)'));
+        $this->assertSame('EN 388', NormCode::leadFamily(
+            'EN 388:2016 – 4121A (ścieranie 4, przecięcie Coup 1, rozerwanie 2, przekłucie 1, przecięcie ISO 13997 A)'
+        ));
+        $this->assertSame('EN 388', NormCode::leadFamily('PN-EN 388:2017-02'));
+        $this->assertSame('EN ISO 21420', NormCode::leadFamily('EN ISO 21420:2020+A1:2024'));
+        $this->assertSame('EN ISO 374-1', NormCode::leadFamily('EN ISO 374-1:2016 + A1:2018 Typ A'));
+        $this->assertSame('EN 16350', NormCode::leadFamily('EN16350'));
+
+        // części normy i inny numer to inne normy — zwijanie ich byłoby zmianą wymagania
+        $this->assertNotSame(NormCode::leadFamily('EN ISO 374-5:2016'), NormCode::leadFamily('EN ISO 374-1:2016'));
+        $this->assertNotSame(NormCode::leadFamily('EN 3880'), NormCode::leadFamily('EN 388'));
+        $this->assertNotSame(NormCode::leadFamily('EN ISO 20345'), NormCode::leadFamily('EN 20345'));
+
+        // zapis, który nie zaczyna się oznaczeniem normy, nie należy do żadnej rodziny
+        $this->assertSame('', NormCode::leadFamily('Kompatybilne z ekranami dotykowymi'));
+        $this->assertSame('', NormCode::leadFamily('Rękawice spełniają wymagania normy EN 388'));
+        $this->assertSame('', NormCode::leadFamily(''));
+    }
 }
