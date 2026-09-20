@@ -80,7 +80,7 @@ final class ProductMatchService
     /** Powód, dla którego bieżąca pozycja zostaje bez produktu (poza „nic nie pasuje”). */
     private ?string $lastNoMatchReason = null;
 
-    /** @var array{sku: string, score: int}|null karta oceniona przez model poniżej progu, której słowa karty nie zapisały */
+    /** @var array{sku: string, score: int, reason: ?string}|null karta oceniona przez model poniżej progu, której słowa karty nie zapisały */
     private ?array $lastModelLowScore = null;
 
     /** SKU pierwszej karty pominiętej w propozycji, bo nie ma opisu — trafia do powodu braku karty. */
@@ -1853,7 +1853,11 @@ final class ProductMatchService
             // „bez oceny modelu” z 70%.
             $lowModelScore = $this->modelScoreBelowMin($aiCandidates, (int) $heuristic['product']->id);
             if ($lowModelScore !== null) {
-                $this->lastModelLowScore = ['sku' => (string) $heuristic['product']->sku, 'score' => $lowModelScore];
+                $this->lastModelLowScore = [
+                    'sku' => (string) $heuristic['product']->sku,
+                    'score' => $lowModelScore,
+                    'reason' => $this->modelReasonBelowMin($aiCandidates, (int) $heuristic['product']->id),
+                ];
 
                 return null;
             }
@@ -1974,6 +1978,26 @@ final class ProductMatchService
             }
 
             return (int) $row['score'] < $this->minMatchScore() ? (int) $row['score'] : null;
+        }
+
+        return null;
+    }
+
+    /**
+     * Własne słowa modelu przy ocenie poniżej progu — czego karcie brakuje („karta podaje kat. II,
+     * wymagana kat. III”). Bez nich użytkownik dostawał ogólnik i nie wiedział, co sprawdzić.
+     *
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     */
+    private function modelReasonBelowMin(array $aiCandidates, int $productId): ?string
+    {
+        foreach ($aiCandidates as $row) {
+            if ((int) $row['id'] !== $productId || $this->isCatalogRowSource((string) $row['source'])) {
+                continue;
+            }
+            $reason = trim((string) ($row['reason'] ?? ''));
+
+            return (int) $row['score'] < $this->minMatchScore() && $reason !== '' ? $reason : null;
         }
 
         return null;
@@ -2517,7 +2541,10 @@ final class ProductMatchService
                         // „brak produktu w katalogu” byłoby nieprawdą
                         'code' => 'model_low_score',
                         'label' => 'Model ocenił najlepszą kartę ('.$this->lastModelLowScore['sku'].') na '
-                            .$this->lastModelLowScore['score'].'% — brak dowodu kluczowego warunku, karty nie zapisano; sprawdź ręcznie.',
+                            .$this->lastModelLowScore['score'].'% — '
+                            .(($this->lastModelLowScore['reason'] ?? null) !== null
+                                ? 'karty nie zapisano; sprawdź ręcznie. Ocena modelu: '.$this->lastModelLowScore['reason']
+                                : 'brak dowodu kluczowego warunku, karty nie zapisano; sprawdź ręcznie.'),
                         'points' => 0,
                     ]
                     : [
@@ -2570,7 +2597,13 @@ final class ProductMatchService
             $label = 'Model nie odpowiedział — zostawiono poprzednią kartę bez ponownej oceny (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.';
         } elseif ($modelScore !== null) {
             $score = min($score, $modelScore);
-            $label = 'Model ocenił poprzednią kartę na '.$modelScore.'% (poniżej progu, zwykle brak dowodu kluczowego warunku) — zostawiono ją do sprawdzenia.';
+            $modelReason = $this->modelReasonBelowMin(
+                $this->aiCandidatesCache[$this->aiCandidatesCacheKey($item->requirement)] ?? [],
+                (int) $existing->id,
+            );
+            $label = $modelReason !== null
+                ? 'Model ocenił poprzednią kartę na '.$modelScore.'% (poniżej progu) — zostawiono ją do sprawdzenia. Ocena modelu: '.$modelReason
+                : 'Model ocenił poprzednią kartę na '.$modelScore.'% (poniżej progu, zwykle brak dowodu kluczowego warunku) — zostawiono ją do sprawdzenia.';
         } else {
             $label = 'Ten przebieg nie potwierdził poprzedniej karty — zostawiono ją (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.';
         }

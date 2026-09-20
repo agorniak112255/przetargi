@@ -297,6 +297,44 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertStringContainsString('50%', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
     }
 
+    /**
+     * Przetarg 1, poz. 1 (20.09.2026): rękaw HyFlex 11-202 dostał 50%, bo karta podaje kat. II, a wymaganie
+     * kat. III. Użytkownik widział tylko ogólnik „zwykle brak dowodu kluczowego warunku” — słowa modelu,
+     * które mówią, czego karcie brakuje, ginęły. Dotyczy obu dróg: karty niezapisanej i karty zostawionej.
+     */
+    public function test_low_model_score_label_carries_models_own_words(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $gloveId = (int) $glove->id;
+        $words = 'karta podaje kat. II, wymagana kat. III';
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => [['id' => $gloveId, 'score' => 50, 'reason' => $words]]]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+
+        app(ProductMatchService::class)->matchTender($tender, true);
+        $item->refresh();
+
+        $this->assertNull($item->main_product_id);
+        $this->assertSame('model_low_score', $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertStringContainsString($words, (string) ($item->ai_match_reasons[0]['label'] ?? ''), 'karta niezapisana');
+
+        $item->forceFill([
+            'main_product_id' => $gloveId,
+            'status' => 'matched',
+            'match_source' => 'ai',
+            'ai_match_percent' => 95,
+            'ai_match_reasons' => [['code' => 'ai', 'label' => 'stara ocena 95%', 'points' => 95]],
+            'offer_price' => 5,
+        ])->save();
+
+        app(ProductMatchService::class)->matchTender($tender, false);
+        $item->refresh();
+
+        $this->assertSame('not_reconfirmed', $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertStringContainsString($words, (string) ($item->ai_match_reasons[0]['label'] ?? ''), 'karta zostawiona do sprawdzenia');
+    }
+
     /** Poprzednia karta oceniona przez model poniżej progu zostaje z oceną modelu i jasną etykietą. */
     public function test_previous_card_scored_low_by_model_keeps_model_score_in_label(): void
     {
