@@ -10,6 +10,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Search\ProductTextSearch;
+use App\Services\Search\RequirementUnderstandingStore;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\CatalogCascadeRecall;
@@ -148,6 +149,13 @@ final class ProductAiSearchService
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
     public const RANK_PROMPT_VERSION = 'rank-2026-09-21-pelna-karta';
+
+    /**
+     * Wersja instrukcji kroku „zrozum wymaganie”. Zrozumienie zapisujemy raz na treść wymagania i tę wersję
+     * (RequirementUnderstandingStore) — podnieś przy każdej zmianie understandSystemPrompt(), inaczej stare
+     * zrozumienia będą dalej obowiązywać.
+     */
+    public const UNDERSTAND_PROMPT_VERSION = 'understand-2026-09-21';
 
     /** Opis na karcie dla modelu (tryb pełnej karty): 95% opisów w katalogu mieści się w 3000 znaków. */
     private const RANK_CARD_DESCRIPTION_CHARS = 3000;
@@ -1439,8 +1447,16 @@ final class ProductAiSearchService
      */
     public function understandRequirement(string $query, AiTask $task = AiTask::ProductSearch): array
     {
+        // To samo wymaganie rozumiemy raz: model pytany ponownie inaczej nazywał produkt i warunki, a od nich
+        // zależy pula i wybór kart do oceny — wynik zmieniał się między przebiegami bez żadnej zmiany danych.
+        $understandings = app(RequirementUnderstandingStore::class);
+        $stored = $understandings->get($query, self::UNDERSTAND_PROMPT_VERSION);
+        if ($stored !== null) {
+            return $this->withCatalogAliases($this->parseIntent($stored, $query), $query);
+        }
         try {
             $raw = $this->llm->chatJson($this->understandMessages($query), null, 900, null, $task);
+            $understandings->put($query, self::UNDERSTAND_PROMPT_VERSION, $raw);
 
             return $this->withCatalogAliases($this->parseIntent($raw, $query), $query);
         } catch (Throwable $first) {
@@ -1542,12 +1558,25 @@ final class ProductAiSearchService
         $this->understandProviders = [];
         $intents = [];
         $need = [];
+        $understandings = app(RequirementUnderstandingStore::class);
         foreach ($queries as $i => $query) {
-            if ($this->needsStructuredIntent($query)) {
-                $need[] = $i;
-            } else {
+            if (! $this->needsStructuredIntent($query)) {
                 $intents[$i] = $this->applySlangIntent($query, $this->normalizeIntent($this->localIntent($query)));
+
+                continue;
             }
+            // zapisane zrozumienie — to samo co w understandRequirement(), żeby przetarg i wyszukiwarka
+            // widziały jedno wymaganie tak samo i tak samo przy każdym przebiegu
+            $stored = $understandings->get($query, self::UNDERSTAND_PROMPT_VERSION);
+            if ($stored !== null) {
+                $intents[$i] = $this->applySlangIntent(
+                    $query,
+                    $this->normalizeIntent($this->withCatalogAliases($this->parseIntent($stored, $query), $query))
+                );
+
+                continue;
+            }
+            $need[] = $i;
         }
         if ($need === []) {
             return $intents;
@@ -1572,6 +1601,7 @@ final class ProductAiSearchService
         $understandProviders = $providerTally->lastBatch();
         foreach ($need as $pos => $i) {
             $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
+            $understandings->put($queries[$i], self::UNDERSTAND_PROMPT_VERSION, $raw);
             $this->understandProviders[$i] = $understandProviders[$pos] ?? null;
             $intents[$i] = $this->applySlangIntent(
                 $queries[$i],
