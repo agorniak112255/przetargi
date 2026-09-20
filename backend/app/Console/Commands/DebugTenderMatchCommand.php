@@ -54,7 +54,7 @@ final class DebugTenderMatchCommand extends Command
         // nadpisałby pierwszy. Znika to razem ze śladem przenoszonym do odpowiedzi.
         $many = app()->make(AiProductSearch::class);
         $many->enableSourceTrace();
-        $rows = $many->findMany([$requirement], $limit, $settings->matchSearchTask(), $settings->matchConcurrency());
+        $rows = $many->findMany([$requirement], $limit, AiTask::ProductSearch, $settings->matchConcurrency());
         $this->report('„Dopasuj wszystkie” (findMany)', is_array($rows[0] ?? null) ? $rows[0] : [], $many->lastTrace(), $sku);
         $this->reportDecision(app(ProductMatchService::class)->debugPick($item, is_array($rows[0] ?? null) ? $rows[0] : []));
 

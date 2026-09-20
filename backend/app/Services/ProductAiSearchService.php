@@ -277,14 +277,6 @@ final class ProductAiSearchService
     }
 
     /**
-     * To samo wyszukiwanie co „Szukaj w katalogu” na /products.
-     */
-    public function searchForTenderMatch(string $query, int $limit = self::CATALOG_LIMIT): array
-    {
-        return $this->search($query, $limit, false, AiTask::ProductSearch);
-    }
-
-    /**
      * @return list<array<string, mixed>>
      */
     public function requirementCatalogRows(string $query, int $limit): array
@@ -391,9 +383,6 @@ final class ProductAiSearchService
             $this->trace = self::EMPTY_TRACE;
             $prepared = $this->clock('catalog', fn (): array => $this->prepareSearch($query, $intents[$i], $limit));
             $this->tracesByIndex[$i] = $this->trace;
-            if ($task === AiTask::TenderMatch && $prepared['rank_cards'] !== null) {
-                $prepared['rank_cards'] = $prepared['rank_cards']->take(12)->values();
-            }
             if ($prepared['rank_cards'] === null) {
                 $done[$i] = $this->searchResult($query, $intents[$i], $prepared['products'], $prepared['note'], $withExternalHint);
                 $done[$i]['model_state'] = self::MODEL_STATE_SKIPPED;
@@ -486,9 +475,7 @@ final class ProductAiSearchService
                     : self::MODEL_STATE_EMPTY);
             $this->tracesByIndex[$i] = $this->trace;
         }
-        if ($task !== AiTask::TenderMatch) {
-            $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent, $report);
-        }
+        $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent, $report);
         foreach ($modelStates as $i => $state) {
             // Po przepisaniu zapytania model mógł jednak coś ocenić — ale wiersze zapasu (reguła, lista katalogowa)
             // to nie ocena modelu; dotąd dawały stan „ranked” i pomiar nie widział pustych odpowiedzi (błąd E).
@@ -997,9 +984,6 @@ final class ProductAiSearchService
     ): array {
         $retrieveIntent = $intent;
         $prepared = $this->clock('prepare', fn (): array => $this->prepareSearch($query, $intent, $limit));
-        if ($task === AiTask::TenderMatch && $prepared['rank_cards'] !== null) {
-            $prepared['rank_cards'] = $prepared['rank_cards']->take(12)->values();
-        }
         if ($prepared['rank_cards'] === null) {
             $result = $this->searchResult($query, $intent, $prepared['products'], $prepared['note'], $withExternalHint);
             // Bez rankingu (nazwany model, brak kart) — model nie był pytany, jak w fali.
@@ -1021,7 +1005,7 @@ final class ProductAiSearchService
                 $intent,
             )
         );
-        [$rankedIntent, $ranked] = $this->clock('post_rank', function () use ($query, $intent, $limit, $task, $prepared, $rankedIntent, $ranked, $rankFailed): array {
+        [$rankedIntent, $ranked] = $this->clock('post_rank', function () use ($query, $intent, $limit, $prepared, $rankedIntent, $ranked, $rankFailed): array {
             $rankedIntent = $this->withCatalogAliases($rankedIntent, $query);
             $catalogQ = $this->catalogSearchQuery($query, $intent);
             $ranked = $this->filterRankedCompatible($catalogQ, $ranked, $query);
@@ -1037,17 +1021,15 @@ final class ProductAiSearchService
             // Użytkownik dostaje pustą listę i informację, że to błąd modelu.
             $noGuessing = $rankFailed && $this->isSpecificRequirement($query);
             $useCatalog = ! $noGuessing && $this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent);
-            $deferCatalogMerge = $task === AiTask::TenderMatch;
-            if (! $deferCatalogMerge && $useCatalog && count($ranked) < $limit) {
+            if ($useCatalog && count($ranked) < $limit) {
                 $ranked = $this->mergeRequirementCatalogRows($query, $ranked, $limit, $intent);
             }
-            if (! $deferCatalogMerge && $ranked === [] && $useCatalog) {
+            if ($ranked === [] && $useCatalog) {
                 $ranked = $this->rowsFromRequirementCatalog($catalogQ, $limit);
-            } elseif ($ranked === [] && ! $noGuessing
-                && (! $deferCatalogMerge || $this->aiSettings->matchAllowsCatalogRows())) {
-                // Przy dopasowaniu SIWZ wynik idzie prosto do pozycji oferty, więc
-                // najsłabszy poziom („ten sam rodzaj w katalogu”) tu nie wchodzi —
-                // kalesony nie mogą zostać kombinezonem tylko dlatego, że to odzież.
+            } elseif ($ranked === [] && ! $noGuessing) {
+                // Najsłabszy poziom („ten sam rodzaj w katalogu”). O tym, czy taki wiersz wolno
+                // wpisać do pozycji oferty, decyduje dopasowanie przetargu (match_allow_catalog_rows),
+                // nie wyszukiwanie — tu wynik jest ten sam dla każdego wywołującego.
                 $ranked = $this->rowsFromGenericCatalog($query, $prepared['candidates'], $limit, $intent);
             }
 
@@ -1447,31 +1429,6 @@ final class ProductAiSearchService
     }
 
     /**
-     * @param  Collection<int, Product>  $candidates
-     * @return list<array<string, mixed>>
-     */
-    public function rankCandidates(
-        string $query,
-        Collection $candidates,
-        int $limit = 5,
-        ?string $needed = null,
-        AiTask $task = AiTask::TenderMatch
-    ): array {
-        if ($candidates->isEmpty()) {
-            return [];
-        }
-
-        return $this->rankWithLlm(
-            $query,
-            $candidates->values(),
-            max(1, min(80, $limit)),
-            $needed,
-            $task,
-            $this->fallbackConstraints($query),
-        );
-    }
-
-    /**
      * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
      */
     public function understandRequirement(string $query, AiTask $task = AiTask::ProductSearch): array
@@ -1560,9 +1517,6 @@ final class ProductAiSearchService
      */
     private function intentForSearch(string $query, AiTask $task): array
     {
-        if ($task === AiTask::TenderMatch) {
-            return $this->applySlangIntent($query, $this->normalizeIntent($this->localIntent($query)));
-        }
         if (! $this->needsStructuredIntent($query)) {
             return $this->applySlangIntent($query, $this->normalizeIntent($this->localIntent($query)));
         }
@@ -1583,7 +1537,7 @@ final class ProductAiSearchService
         $intents = [];
         $need = [];
         foreach ($queries as $i => $query) {
-            if ($task !== AiTask::TenderMatch && $this->needsStructuredIntent($query)) {
+            if ($this->needsStructuredIntent($query)) {
                 $need[] = $i;
             } else {
                 $intents[$i] = $this->applySlangIntent($query, $this->normalizeIntent($this->localIntent($query)));
@@ -4940,34 +4894,6 @@ final class ProductAiSearchService
             'external_hint' => $first,
             'external_hints' => $hints,
         ];
-    }
-
-    /**
-     * @param  Collection<int, Product>  $candidates
-     * @param  list<string>  $constraints
-     * @return list<array<string, mixed>>
-     */
-    private function rankWithLlm(
-        string $query,
-        Collection $candidates,
-        int $limit,
-        ?string $needed = null,
-        AiTask $task = AiTask::ProductSearch,
-        array $constraints = [],
-    ): array {
-        try {
-            $raw = $this->llm->chatJson(
-                $this->rankMessages($query, $candidates, $limit, $needed, $constraints, $task),
-                null,
-                $this->rankMaxTokens($task),
-                null,
-                $task,
-            );
-        } catch (Throwable) {
-            return [];
-        }
-
-        return $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $needed);
     }
 
     /**

@@ -62,7 +62,7 @@ final class AiChatManyEmptyAnswerTest extends TestCase
                 [['role' => 'user', 'content' => 'ranking BB']],
             ],
             2500,
-            AiTask::TenderMatch,
+            AiTask::ProductSearch,
             16,
         );
 
@@ -84,7 +84,7 @@ final class AiChatManyEmptyAnswerTest extends TestCase
         $rows = app(OpenAiCompatibleClient::class)->chatMany([
             [['role' => 'user', 'content' => 'a']],
             [['role' => 'user', 'content' => 'b']],
-        ], true, null, AiTask::TenderMatch);
+        ], true, null, AiTask::ProductSearch);
 
         $this->assertFalse($rows[0]['ok']);
         $this->assertStringContainsString('finish_reason=stop', (string) $rows[0]['error']);
@@ -102,7 +102,7 @@ final class AiChatManyEmptyAnswerTest extends TestCase
         app(OpenAiCompatibleClient::class)->chatJsonMany([
             [['role' => 'user', 'content' => 'a']],
             [['role' => 'user', 'content' => 'b']],
-        ], 900, AiTask::TenderMatch, 16);
+        ], 900, AiTask::ProductSearch, 16);
 
         Http::assertSent(function (Request $request): bool {
             $data = $request->data();

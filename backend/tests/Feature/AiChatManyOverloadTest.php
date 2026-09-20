@@ -41,7 +41,7 @@ final class AiChatManyOverloadTest extends TestCase
             'model' => 'deepseek/deepseek-v4-flash-0731',
             'openrouter_provider' => 'makora',
             'api_key' => 'sk-or-profile-123',
-            'tasks' => [AiTask::ProductSearch->value, AiTask::TenderMatch->value, AiTask::Enrichment->value],
+            'tasks' => [AiTask::ProductSearch->value, AiTask::Enrichment->value],
         ]]])->save();
     }
 
@@ -153,8 +153,9 @@ final class AiChatManyOverloadTest extends TestCase
         $this->assertSame(0, $tally->snapshot()['relaxed_pins']);
         $this->assertSame(['Makora', 'Makora'], $tally->lastBatch());
 
-        app(OpenAiCompatibleClient::class)->chatJsonMany([[['role' => 'user', 'content' => 'c']]], null, AiTask::TenderMatch, 16);
-        $this->assertSame([$pinned, $pinned, $pinned], $providers['c'], 'pojedyncze zapytanie dopasowania przetargu też bez zastępcy');
+        // Dopasowanie przetargu woła model tym samym zadaniem co wyszukiwarka — osobnego zadania już nie ma.
+        app(OpenAiCompatibleClient::class)->chatJsonMany([[['role' => 'user', 'content' => 'c']]], null, AiTask::ProductSearch, 16);
+        $this->assertSame([$pinned, $pinned, $pinned], $providers['c'], 'pojedyncze zapytanie wyszukiwania też bez zastępcy');
         $this->assertSame(0, $tally->snapshot()['relaxed_pins']);
     }
 

@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\TenderItem;
 use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Ai\AiTask;
 use App\Services\ProductAiSearchService;
 use App\Services\ProductMatchService;
 use App\Services\Search\AiProductSearch;
@@ -83,8 +84,7 @@ final class TenderEvalCommand extends Command
         $runs = $replay !== ''
             ? max(1, ...array_values(array_map(static fn (array $case): int => count($case['runs'] ?? []), $replayed ?: [['runs' => [1]]])))
             : max(1, min(5, (int) $this->option('runs')));
-        // Pomiar jedzie tym samym zadaniem co dopasowanie w panelu (przełącznik w Strojeniu AI).
-        $profile = $settings->profileForTask($settings->matchSearchTask());
+        $profile = $settings->profileForTask(AiTask::ProductSearch);
         $header = [
             'generated_at' => now()->toIso8601String(),
             'file' => $file,
@@ -150,7 +150,7 @@ final class TenderEvalCommand extends Command
             $rows = $search->findMany(
                 array_map(static fn (array $case): string => $case['query'], $cases),
                 $settings->catalogSearchLimit(),
-                $settings->matchSearchTask(),
+                AiTask::ProductSearch,
                 $settings->matchConcurrency(),
             );
             $searchMs = (int) round((hrtime(true) - $searchStarted) / 1e6);

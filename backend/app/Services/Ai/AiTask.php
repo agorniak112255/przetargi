@@ -12,8 +12,6 @@ enum AiTask: string
 {
     case ProductSearch = 'product_search';
 
-    case TenderMatch = 'tender_match';
-
     case Enrichment = 'enrichment';
 
     case WebSearch = 'web_search';
@@ -36,7 +34,6 @@ enum AiTask: string
     {
         return match ($this) {
             self::ProductSearch => 'Wyszukiwarka AI produktów',
-            self::TenderMatch => 'Dopasowanie pozycji SIWZ',
             self::Enrichment => 'Opisy produktów',
             self::WebSearch => 'Szukanie w internecie',
             self::PriceListPdf => 'Analiza cennika',
@@ -54,7 +51,6 @@ enum AiTask: string
     {
         return match ($this) {
             self::ProductSearch => 'Jedno wywołanie: analiza wymagania i ranking kart katalogu. Zyskuje na szybkim modelu.',
-            self::TenderMatch => 'Największy wolumen — pozycje przetargu lecą równolegle.',
             self::Enrichment => 'Bez własnego profilu działa pole „Model do opisów”.',
             self::WebSearch => 'Wymaga dostawcy z pluginem web (OpenRouter).',
             self::PriceListPdf => 'Tylko tekst z PDF (bez vision). Skan → wgraj XLSX.',

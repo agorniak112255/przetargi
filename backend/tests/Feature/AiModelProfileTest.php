@@ -680,15 +680,39 @@ final class AiModelProfileTest extends TestCase
 
         $this->putJson('/api/ai-settings', [
             'model_profiles' => [
-                ['id' => 'a', 'name' => 'Pierwszy', 'model' => 'model-a', 'tasks' => ['product_search', 'tender_match']],
-                ['id' => 'b', 'name' => 'Drugi', 'model' => 'model-b', 'tasks' => ['tender_match', 'web_search']],
+                ['id' => 'a', 'name' => 'Pierwszy', 'model' => 'model-a', 'tasks' => ['product_search', 'client_inquiry']],
+                ['id' => 'b', 'name' => 'Drugi', 'model' => 'model-b', 'tasks' => ['client_inquiry', 'web_search']],
             ],
         ])->assertOk()
-            ->assertJsonPath('model_profiles.0.tasks', ['product_search', 'tender_match'])
+            ->assertJsonPath('model_profiles.0.tasks', ['product_search', 'client_inquiry'])
             ->assertJsonPath('model_profiles.1.tasks', ['web_search']);
 
-        $profile = app(AiSettingsService::class)->profileForTask(AiTask::TenderMatch);
+        $profile = app(AiSettingsService::class)->profileForTask(AiTask::ClientInquiry);
         $this->assertSame('model-a', $profile['model']);
+    }
+
+    public function test_retired_tender_match_task_stored_in_a_profile_does_not_block_saving(): void
+    {
+        // Zadanie „Dopasowanie pozycji SIWZ” zostało usunięte: przetarg woła model zadaniem
+        // wyszukiwarki, a osobny tryb nigdy nie był podłączony. Na produkcji profil ma ten klucz
+        // w bazie; ekran odsyła przy zapisie listę zadań, którą wczytał, więc stary klucz nie może
+        // do niego trafić — inaczej walidacja odrzuca całe Ustawienia AI.
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->seedMainConfig();
+        $this->saveProfiles([
+            ['id' => 'a', 'name' => 'Pierwszy', 'model' => 'model-a', 'tasks' => ['product_search', 'tender_match']],
+        ]);
+
+        $loaded = $this->getJson('/api/ai-settings')->assertOk()
+            ->assertJsonPath('model_profiles.0.tasks', ['product_search'])
+            ->json('model_profiles');
+
+        $this->putJson('/api/ai-settings', ['model_profiles' => $loaded])->assertOk()
+            ->assertJsonPath('model_profiles.0.tasks', ['product_search']);
+
+        $this->assertSame('model-a', app(AiSettingsService::class)->profileForTask(AiTask::ProductSearch)['model']);
+        $this->assertNotContains('tender_match', array_column(AiTask::catalog(), 'key'));
     }
 
     public function test_profile_key_survives_a_save_that_sends_back_the_mask(): void

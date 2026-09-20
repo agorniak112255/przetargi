@@ -1479,7 +1479,7 @@ class OpenAiCompatibleClient
      */
     private function withProviderPinPolicy(array $profile, ?AiTask $task): array
     {
-        $profile['keep_provider_pin'] = in_array($task, [AiTask::ProductSearch, AiTask::TenderMatch], true);
+        $profile['keep_provider_pin'] = $task === AiTask::ProductSearch;
 
         return $profile;
     }

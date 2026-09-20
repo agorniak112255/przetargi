@@ -95,7 +95,9 @@ final class AiModelProfiles
                 'timeout_seconds' => $profile['timeout_seconds'] ?? null,
                 'temperature' => $profile['temperature'] ?? null,
                 'reasoning_effort' => $profile['reasoning_effort'] ?? null,
-                'tasks' => array_values((array) ($profile['tasks'] ?? [])),
+                // Tylko zadania, które dziś istnieją: klucz usuniętego zadania zapisany w bazie wróciłby
+                // z ekranu przy zapisie i walidacja odrzuciłaby całe ustawienia.
+                'tasks' => array_values(array_intersect((array) ($profile['tasks'] ?? []), AiTask::keys())),
                 'has_api_key' => $key !== '',
                 'api_key_masked' => $key !== '' && $mask !== null ? $mask($key) : null,
             ];

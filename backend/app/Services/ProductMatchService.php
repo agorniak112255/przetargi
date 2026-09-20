@@ -1782,9 +1782,8 @@ final class ProductMatchService
             // Twarda bramka: wiersz listy katalogowej / skrótu nie jest oceną modelu, więc bez
             // zgody admina odpada ZANIM persistableScore zważy go samym explainMatch (explain ≥ 40
             // przepuszczał wiersz „catalog” mimo wyłączonego ustawienia). Trzeba to robić tu,
-            // bo prefetch przetargu idzie domyślnie jako AiTask::ProductSearch (matchSearchTask() —
-            // tryb TenderMatch jest za przełącznikiem w Strojeniu AI), więc wyłącznik
-            // z ProductAiSearchService::finishSearch na tej ścieżce zwykle nie działa.
+            // bo prefetch przetargu idzie jako AiTask::ProductSearch (prefetchAiCandidates), więc
+            // wyłącznik z ProductAiSearchService::finishSearch nie działa na tej ścieżce.
             // Fala nie dokłada już listy katalogowej po awarii modelu przy wymaganiu z warunkiem
             // (ta sama bramka co w wyszukiwarce), ale przy modelu, który odpowiedział „nic nie
             // pasuje”, i przy ogólnym wymaganiu dalej to robi — dlatego ta bramka zostaje.
@@ -2077,7 +2076,7 @@ final class ProductMatchService
             $rows = $this->aiSearch->findMany(
                 $queries,
                 $this->aiSettings->catalogSearchLimit(),
-                $this->aiSettings->matchSearchTask(),
+                AiTask::ProductSearch,
                 $this->aiSettings->matchConcurrency(),
                 $onProgress,
             );
@@ -2165,7 +2164,7 @@ final class ProductMatchService
         }
 
         try {
-            $result = $this->aiSearch->find($requirement, $limit, $this->aiSettings->matchSearchTask());
+            $result = $this->aiSearch->find($requirement, $limit, AiTask::ProductSearch);
         } catch (Throwable) {
             return [];
         }

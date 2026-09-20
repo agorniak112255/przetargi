@@ -10,12 +10,10 @@ use App\Models\Product;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
-use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductMatchService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
@@ -370,59 +368,6 @@ final class TenderMatchModelStateTest extends TestCase
     }
 
     /** @param  callable(array): array  $rankAnswer  odpowiedź modelu na każdy zestaw wiadomości */
-    public function test_tender_match_uses_search_task_by_default(): void
-    {
-        $this->glove('RNITZ-M');
-        $tasks = $this->captureTasks();
-        [$tender] = $this->tenderWith(self::DESCRIPTIVE);
-
-        app(ProductMatchService::class)->matchTender($tender, true);
-
-        $this->assertNotSame([], $tasks->all(), 'dopasowanie nie zawołało modelu');
-        $this->assertSame(['product_search'], $tasks->unique()->values()->all(), 'bez przełącznika przetarg ma jechać zadaniem wyszukiwarki, jak dotąd');
-    }
-
-    public function test_switch_makes_tender_match_use_its_own_task(): void
-    {
-        // Profil „Dopasowanie pozycji SIWZ” z Ustawień AI był martwy: przetarg zawsze wołał model
-        // zadaniem wyszukiwarki. Przełącznik w Strojeniu AI kieruje dopasowanie na własne zadanie.
-        AiSetting::query()->update(['match_use_tender_profile' => true]);
-        $this->glove('RNITZ-M');
-        $tasks = $this->captureTasks();
-        [$tender] = $this->tenderWith(self::DESCRIPTIVE);
-
-        app(ProductMatchService::class)->matchTender($tender, true);
-
-        $this->assertNotSame([], $tasks->all(), 'dopasowanie nie zawołało modelu');
-        $this->assertSame(['tender_match'], $tasks->unique()->values()->all(), 'z przełącznikiem każde wywołanie modelu w dopasowaniu ma iść zadaniem SIWZ');
-    }
-
-    /**
-     * Zbiera zadanie (AiTask) przekazane do każdego wywołania modelu; model odpowiada „nic nie pasuje”.
-     *
-     * @return Collection<int, string>
-     */
-    private function captureTasks(): Collection
-    {
-        $tasks = collect();
-        $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static function (...$args) use ($tasks): array {
-            $tasks->push($args[2] instanceof AiTask ? $args[2]->value : 'brak');
-
-            return array_fill(0, count($args[0]), ['matches' => []]);
-        });
-        $llm->shouldReceive('chatJson')->andReturnUsing(static function (...$args) use ($tasks): array {
-            $task = $args[4] ?? null;
-            $tasks->push($task instanceof AiTask ? $task->value : 'brak');
-
-            return ['matches' => []];
-        });
-        $llm->shouldNotReceive('chat');
-        $this->app->instance(OpenAiCompatibleClient::class, $llm);
-
-        return $tasks;
-    }
-
     private function stubModel(callable $rankAnswer): void
     {
         $llm = Mockery::mock(OpenAiCompatibleClient::class);

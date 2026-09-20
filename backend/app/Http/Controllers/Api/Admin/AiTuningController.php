@@ -33,9 +33,6 @@ class AiTuningController extends Controller
         if ($request->has('match_allow_catalog_rows')) {
             $payload['match_allow_catalog_rows'] = $request->boolean('match_allow_catalog_rows');
         }
-        if ($request->has('match_use_tender_profile')) {
-            $payload['match_use_tender_profile'] = $request->boolean('match_use_tender_profile');
-        }
         $this->settings->update($payload);
 
         return response()->json($this->payload());
@@ -55,7 +52,6 @@ class AiTuningController extends Controller
             'match_substitute_score' => $this->settings->matchSubstituteScore(),
             'match_min_score' => $this->settings->matchMinScore(),
             'match_allow_catalog_rows' => $this->settings->matchAllowsCatalogRows(),
-            'match_use_tender_profile' => $this->settings->matchUsesTenderProfile(),
             'match_defaults' => [
                 'apply' => AiSettingsService::MATCH_APPLY_SCORE_DEFAULT,
                 'substitute' => AiSettingsService::MATCH_SUBSTITUTE_SCORE_DEFAULT,
