@@ -2154,6 +2154,52 @@ final class ProductAiSearchService
     }
 
     /**
+     * Krótkie kody, które są częścią nazwanego modelu z zapytania („x2” siedzi w igle „peltorx2”),
+     * w odróżnieniu od oznaczeń klas i filtrów („s1”, „p3”), które igłą modelu nie są.
+     *
+     * @param  list<string>  $codes
+     * @return list<string>
+     */
+    private function namedModelCodes(array $codes, string $query): array
+    {
+        $needles = $this->modelFuzzy->needles($query);
+
+        return array_values(array_filter($codes, static function (string $code) use ($needles): bool {
+            foreach ($needles as $needle) {
+                if (str_contains($needle, $code)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }));
+    }
+
+    /**
+     * Kod nazwanego modelu ma zaczynać oznaczenie na karcie, a nie być ogonem dłuższego słowa:
+     * „X2” szukane jako dowolny fragment trafiało w kable „PELTOR FLX2-200”, które jako trafienia
+     * priorytetowe stawały na czele wyniku dla nauszników X2. „X2A” i „X2P3E” zostają.
+     *
+     * @param  Collection<int, Product>  $products
+     * @param  list<string>  $codes
+     * @return Collection<int, Product>
+     */
+    private function keepShortCodeTokenHits(Collection $products, array $codes): Collection
+    {
+        if ($codes === []) {
+            return $products;
+        }
+        $pattern = '/(?<![\p{L}])(?:'.implode('|', array_map(
+            static fn (string $code): string => preg_quote($code, '/'),
+            $codes
+        )).')/iu';
+
+        return $products
+            ->filter(static fn (Product $p): bool => preg_match($pattern, $p->name.' '.$p->sku) === 1)
+            ->values();
+    }
+
+    /**
      * Czego ta propozycja nie spełnia — dopisek do wiersza, którego model nie oceniał.
      * Handlowiec dostawał „ten sam rodzaj w katalogu” i przy zapytaniu o kalosze widział
      * półbuty bez słowa o tym, że to inny wyrób. Wiersza nie usuwamy (ma być propozycja),
@@ -4032,7 +4078,20 @@ final class ProductAiSearchService
         return $this->uniqueProducts(
             $pairHits
                 ->concat($this->productsByModelCodes($strong, $cap))
-                ->concat($this->productsByModelCodes($short, min($cap, self::SHORT_CODE_HITS))),
+                // Krótki kod będący częścią nazwanego modelu („x2” z „Peltor X2”) musi zaczynać oznaczenie
+                // na karcie; oznaczenia klas i filtrów („s1”, „p3”) zostają na dotychczasowej ścieżce, bo
+                // „P3” w „A2B2E2K2HgP3” stoi po literze i jest poprawnym trafieniem. Pobieramy z zapasem,
+                // żeby odrzucone karty nie zjadły limitu.
+                ->concat(
+                    $this->keepShortCodeTokenHits(
+                        $this->productsByModelCodes($this->namedModelCodes($short, $query), min($cap, self::SHORT_CODE_HITS) * 4),
+                        $this->namedModelCodes($short, $query)
+                    )->take(min($cap, self::SHORT_CODE_HITS))
+                )
+                ->concat($this->productsByModelCodes(
+                    array_values(array_diff($short, $this->namedModelCodes($short, $query))),
+                    min($cap, self::SHORT_CODE_HITS)
+                )),
             $cap
         );
     }
