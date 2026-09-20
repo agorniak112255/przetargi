@@ -285,12 +285,20 @@ class TenderItemController extends Controller
                 $item->custom_name = null;
                 $item->custom_url = null;
             }
-            if ($data['main_product_id'] !== null && ! array_key_exists('offer_price', $data)) {
+            if ($data['main_product_id'] !== null) {
                 $product = Product::query()->find($data['main_product_id']);
-                if ($product !== null && (float) $product->purchase_price > 0) {
+                if (! array_key_exists('offer_price', $data)
+                    && $product !== null && (float) $product->purchase_price > 0) {
                     $item->offer_price = $this->pricing->offerFromProduct($tender, $product);
                 }
-                if (! array_key_exists('ai_match_reasons', $data) && $product !== null) {
+                // Ocena i uzasadnienie opisują kartę, nie cenę. Dotąd całe przeliczenie wisiało pod
+                // warunkiem „żądanie nie niesie ceny”, a panel przy „Zapisz” cenę wysyła zawsze —
+                // więc po ręcznej podmianie produktu przy pozycji zostawał procent i uzasadnienie
+                // poprzedniej karty (ocena opisywała wyrób, którego już tam nie ma).
+                // Tylko przy zmianie wyrobu: panel wysyła komplet pól także przy zmianie samej
+                // ilości, a to nie powód, żeby ocena modelu stała się oceną ręczną.
+                $productChanged = (int) ($before['main_product_id'] ?? 0) !== (int) $data['main_product_id'];
+                if ($product !== null && $productChanged && ! array_key_exists('ai_match_reasons', $data)) {
                     $explained = $this->matcher->explainMatch($item->requirement, $product);
                     $item->ai_match_reasons = $explained['reasons'];
                     if (! array_key_exists('ai_match_percent', $data)) {

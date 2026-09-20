@@ -291,6 +291,8 @@ export function Products() {
   const [perPage, setPerPage] = useState<PerPageChoice>('100')
   const [sort, setSort] = useState<SortKey>('name')
   const [dir, setDir] = useState<'asc' | 'desc'>('asc')
+  // Kolejność z odpowiedzi AI (ranking modelu) zostaje, dopóki użytkownik sam nie wybierze kolumny.
+  const [aiOrder, setAiOrder] = useState(false)
   const [result, setResult] = useState<Page | null>(null)
   const [loading, setLoading] = useState(false)
   const [enrichBusy, setEnrichBusy] = useState(false)
@@ -410,6 +412,7 @@ export function Products() {
       setSort(col)
       setDir('asc')
     }
+    setAiOrder(false)
     setPage(1)
   }
 
@@ -440,8 +443,11 @@ export function Products() {
       const hints = externalHintsFrom(res)
       setAiMode(true)
       setAiEventId(res.search_event_id ?? null)
-      setSort('purchase_price_pln')
-      setDir('asc')
+      // Ranking modelu (kolejność z serwera) zostaje. Dotąd lista wchodziła od razu na sortowanie
+      // po cenie zakupu, co kasowało ocenę, za którą właśnie zapłaciliśmy wywołaniem modelu.
+      setSort('ai_match_percent')
+      setDir('desc')
+      setAiOrder(true)
       setExternalHints(hints)
       setResult({
         data: res.products,
@@ -476,6 +482,10 @@ export function Products() {
 
   function clearAiSearch() {
     setAiMode(false)
+    setAiOrder(false)
+    // Kolumny „Dopasowanie” zwykła lista nie sortuje — bez tego zostawała myląca strzałka.
+    setSort('name')
+    setDir('asc')
     setAiQuery('')
     setMsg('')
     setErr('')
@@ -712,8 +722,11 @@ export function Products() {
   const displayRows = useMemo(() => {
     const data = result?.data ?? []
     if (!aiMode) return data
+    // Kolejność z odpowiedzi AI: remisy procentu rozstrzyga serwer (cena zakupu), więc lokalne
+    // sortowanie po tym samym procencie tylko by je przetasowało.
+    if (aiOrder) return data
     return sortProductRows(data, sort, dir)
-  }, [result, aiMode, sort, dir])
+  }, [result, aiMode, aiOrder, sort, dir])
   const visibleIds = displayRows.map((p) => p.id)
   // karty z opisem z cennika B2B nie idą do zbiorczego AI (serwer i tak je pomija)
   const pendingVisible = displayRows.filter(
