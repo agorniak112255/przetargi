@@ -1367,6 +1367,13 @@ final class PpeAssortment
     /**
      * Podtyp karty z nazwy, potem z identyfikatora (kategoria „Półmaski wielokrotnego użytku”
      * doprecyzowuje gołą „półmaskę”) — opisu nie czytamy, bo wymienia kompatybilne maski.
+     *
+     * Doprecyzowanie działa tylko w stronę konstrukcji wielorazowej. Ścieżka kategorii u dostawcy
+     * bywa workiem na wszystkie półmaski: SECURA 3000 (półmaska wielorazowa) stoi w „Półmaski
+     * filtrujące FFP1”, więc goła „półmaska” z nazwy stawała się twardym „ffp” i wypadała
+     * z puli przy wymaganiu na półmaskę wielokrotnego użytku — zanim model ją zobaczył.
+     * Nazwa wyrobu waży więcej niż nawigacja sklepu: zostaje „półmaska nieznanej konstrukcji”,
+     * która nie jest sprzeczna ani z FFP, ani z wielorazową, i o karcie decyduje model.
      */
     private function productRespiratoryType(Product $product): ?string
     {
@@ -1375,7 +1382,12 @@ final class PpeAssortment
             return $fromName;
         }
 
-        return $this->knownRespiratoryType($this->productIdentityText($product)) ?? $fromName;
+        $fromIdentity = $this->knownRespiratoryType($this->productIdentityText($product));
+        if ($fromName === self::RESPIRATORY_HALF_UNKNOWN && $fromIdentity === 'ffp') {
+            return self::RESPIRATORY_HALF_UNKNOWN;
+        }
+
+        return $fromIdentity ?? $fromName;
     }
 
     /**
