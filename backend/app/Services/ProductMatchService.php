@@ -300,7 +300,9 @@ final class ProductMatchService
                     $pick['product'],
                     $pick['score'],
                     $pick['source'] ?? 'heuristic',
-                    null,
+                    // Oceny, z których wybór karty właśnie skorzystał — czytane z pamięci, bez nowego
+                    // zapytania do modelu (karta wskazana kodem z SIWZ w ogóle modelu nie pyta).
+                    $this->modelReasonForPick($pick, $this->aiCandidatesCache[$this->aiCandidatesCacheKey($item->requirement)] ?? []),
                     (bool) ($pick['heuristic_only'] ?? false),
                 );
                 if (! $applied) {
@@ -1386,15 +1388,7 @@ final class ProductMatchService
             ];
         }
 
-        $aiReason = null;
-        if (in_array($pick['source'] ?? '', ['ai', 'vector'], true)) {
-            foreach ($aiCandidates as $cand) {
-                if ((int) $cand['id'] === (int) $pick['product']->id && is_string($cand['reason'] ?? null)) {
-                    $aiReason = $cand['reason'];
-                    break;
-                }
-            }
-        }
+        $aiReason = $this->modelReasonForPick($pick, $aiCandidates);
         if ($this->heuristicWouldReplaceModelPick($item, $pick)
             || ! $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason, (bool) ($pick['heuristic_only'] ?? false))) {
             $this->applyNoCatalogMatch($item, $products);
@@ -2147,6 +2141,28 @@ final class ProductMatchService
         $this->aiCandidatesCache[$cacheKey] = $out;
 
         return $out;
+    }
+
+    /**
+     * Uzasadnienie modelu dla wybranej karty (z brakami, które model wypisał). Jedno miejsce dla
+     * dopasowania całego przetargu i pojedynczej pozycji — dotąd cały przetarg zapisywał pozycję
+     * bez tego tekstu i użytkownik nie widział, czego karta nie spełnia.
+     *
+     * @param  array{product: Product, source?: string}  $pick
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     */
+    private function modelReasonForPick(array $pick, array $aiCandidates): ?string
+    {
+        if (! in_array($pick['source'] ?? '', ['ai', 'vector'], true)) {
+            return null;
+        }
+        foreach ($aiCandidates as $cand) {
+            if ((int) $cand['id'] === (int) $pick['product']->id && is_string($cand['reason'] ?? null)) {
+                return $cand['reason'];
+            }
+        }
+
+        return null;
     }
 
     /**

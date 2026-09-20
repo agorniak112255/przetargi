@@ -165,6 +165,38 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertSame(0, $result['model_failed']);
     }
 
+    /**
+     * Przetarg 1 na serwerze (20.09.2026): po dopasowaniu całego przetargu żadna z 15 pozycji nie miała
+     * uzasadnienia modelu — tylko punkty za słowa. Pojedyncza pozycja zapisywała je od zawsze. Bez tego
+     * tekstu użytkownik nie widzi, czego karta nie spełnia.
+     */
+    public function test_whole_tender_run_saves_model_reason_like_single_item(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $gloveId = (int) $glove->id;
+        $reason = 'Nitryl ze ściągaczem; brak potwierdzenia dzianiny bawełnianej.';
+        $answer = static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => [['id' => $gloveId, 'score' => 90, 'reason' => $reason]]]
+            : [];
+        // Cały przetarg pyta model falą (chatJsonMany), pojedyncza pozycja jednym zapytaniem (chatJson).
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
+        $llm->shouldReceive('chatJson')->andReturnUsing($answer);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+
+        app(ProductMatchService::class)->matchTender($tender, true);
+        $whole = $item->refresh()->ai_match_reasons;
+
+        $this->assertSame($gloveId, (int) $item->main_product_id);
+        $this->assertSame('ai', $whole[0]['code'] ?? null, 'pierwszy wiersz uzasadnienia to ocena modelu');
+        $this->assertStringContainsString('brak potwierdzenia dzianiny', (string) ($whole[0]['label'] ?? ''));
+
+        app(ProductMatchService::class)->matchItem($item, true);
+        $single = $item->refresh()->ai_match_reasons;
+        $this->assertSame($whole[0]['label'], $single[0]['label'] ?? null, 'cały przetarg i pojedyncza pozycja zapisują to samo uzasadnienie');
+    }
+
     public function test_manual_pick_is_not_capped_when_run_does_not_confirm_it(): void
     {
         $glove = $this->glove('RNITZ-M');
