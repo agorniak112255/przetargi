@@ -6,6 +6,7 @@ namespace App\Console\Commands;
 
 use App\Models\B2bProductLink;
 use App\Models\Product;
+use App\Services\B2b\B2bCatalogSync;
 use Illuminate\Console\Command;
 
 /**
@@ -29,7 +30,7 @@ use Illuminate\Console\Command;
 final class B2bStripDatasheetDescriptionsCommand extends Command
 {
     /** Nagłówek sekcji doklejanej kiedyś przez synchronizację; ten sam ciąg zna b2b:relink-descriptions. */
-    private const MARK = 'Z karty technicznej (';
+    private const MARK = B2bCatalogSync::DATASHEET_MARK;
 
     protected $signature = 'b2b:strip-datasheet-descriptions
                             {--apply : Zapisz zmiany (bez tej flagi tylko raport)}

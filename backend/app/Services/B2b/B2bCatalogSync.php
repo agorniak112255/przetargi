@@ -105,6 +105,13 @@ final class B2bCatalogSync
     private const DESCRIPTION_SOURCE_KINDS = [ProductDocument::KIND_DATASHEET, ProductDocument::KIND_MANUAL];
 
     /**
+     * Nagłówek sekcji z tekstem karty technicznej, którą synchronizacja doklejała do opisu do 20.09.2026.
+     * Nowe opisy jej nie dostają; stare zdejmuje b2b:strip-datasheet-descriptions, a do tego czasu opis
+     * złożony z samej tej sekcji nie jest tekstem ze sklepu (zob. ownDescriptionIsGone).
+     */
+    public const DATASHEET_MARK = 'Z karty technicznej (';
+
+    /**
      * Co ile dni odświeżamy kartę wyrobu ze sklepu (ProductShopCard). Pobranie pól bywa płatne dodatkowym
      * zapytaniem do sklepu (Anro pobiera parametry techniczne osobno), więc odświeżamy je nie częściej niż
      * raz na tydzień — tabelka u dostawcy zmienia się rzadziej niż cena.
@@ -1583,6 +1590,10 @@ final class B2bCatalogSync
         return $fromManufacturer
             && $existing !== null
             && $existing->hasDescriptionText()
+            // Opis złożony z samego tekstu karty technicznej (zapis sprzed 20.09.2026) też nosi odcisk
+            // synchronizacji, ale nigdy nie był tekstem ze sklepu — sklep nie ma czego „wycofać”. Kasowanie
+            // go zostawiało kartę bez opisu, czyli poza propozycjami przetargowymi (przebieg UVEX 20.09.2026).
+            && ! str_starts_with(trim((string) $existing->description), self::DATASHEET_MARK)
             && $link?->description_hash !== null
             && hash_equals($link->description_hash, sha1((string) $existing->description));
     }
