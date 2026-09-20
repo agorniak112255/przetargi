@@ -1246,7 +1246,8 @@ final class PpeAssortment
     private function respiratoryCompatible(string $requirement, Product $product): bool
     {
         $identity = $this->productIdentityText($product);
-        if ($this->respiratoryTypesConflict($this->knownRespiratoryType($requirement), $this->productRespiratoryType($product))) {
+        $productType = $this->productRespiratoryType($product);
+        if ($this->respiratoryTypesConflict($this->knownRespiratoryType($requirement), $productType)) {
             return false;
         }
 
@@ -1255,8 +1256,14 @@ final class PpeAssortment
         if ($attrs->valveState($requirement) === 1 && $attrs->valveState($identity) === 0) {
             return false;
         }
-        // Klasa FFP niższa niż wymagana (FFP1 przy wymaganej FFP2).
-        if (! $attrs->ffpClassMeets($requirement, $identity)) {
+        // Klasa FFP niższa niż wymagana (FFP1 przy wymaganej FFP2). Karta, której nazwa mówi tylko
+        // „półmaska”, bierze klasę wyłącznie z nazwy: „FFP1” ze ścieżki kategorii sklepu opisuje
+        // półkę dostawcy, nie wyrób (SECURA 3000 stoi w „Półmaski filtrujące FFP1”), a wymaganie
+        // SIWZ potrafi mówić „skuteczność odpowiadająca klasie FFP3” przy normie EN 140.
+        $classText = $productType === self::RESPIRATORY_HALF_UNKNOWN
+            ? $this->productNameText($product)
+            : $identity;
+        if (! $attrs->ffpClassMeets($requirement, $classText)) {
             return false;
         }
         // Pochłaniacz gazów (A2) to nie filtr cząstek (P1 R) — klasy elementu oczyszczającego obu stron znane.
