@@ -6,6 +6,7 @@ namespace App\Console\Commands;
 
 use App\Services\ProductAiSearchService;
 use App\Services\Search\SearchEvalRunner;
+use App\Services\Vector\ProductVectorSearch;
 use Illuminate\Console\Command;
 use Throwable;
 
@@ -31,8 +32,11 @@ class SearchEvalCommand extends Command
 
     protected $description = 'Mierzy jakość wyszukiwania AI: recall retrievalu i ranking (recall@k, nDCG@k, MRR)';
 
-    public function handle(SearchEvalRunner $runner, ProductAiSearchService $search): int
-    {
+    public function handle(
+        SearchEvalRunner $runner,
+        ProductAiSearchService $search,
+        ProductVectorSearch $vectorSearch,
+    ): int {
         $file = (string) ($this->option('file') ?: base_path('resources/search-eval/golden.json'));
         $k = max(1, (int) $this->option('k'));
         $limit = (int) ($this->option('limit') ?: ProductAiSearchService::CATALOG_LIMIT);
@@ -69,7 +73,11 @@ class SearchEvalCommand extends Command
             $k,
             $limit,
             ProductAiSearchService::RANK_PROMPT_VERSION,
-            $noVector ? 'wyłączony (ablacja)' : 'włączony',
+            // Sama flaga mówiła tylko o ablacji: raport pisał „włączony” także wtedy, gdy wektor
+            // jest wyłączony w Ustawieniach AI — czyli pomiar deklarował konfigurację, której nie miał.
+            $noVector
+                ? 'wyłączony (ablacja)'
+                : ($vectorSearch->enabled() ? 'włączony' : 'wyłączony w Ustawieniach AI'),
         ));
 
         $rows = [];

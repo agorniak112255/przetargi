@@ -1975,15 +1975,16 @@ final class ProductAiSearchService
             // Remis rozstrzyga zgodny typ artykułu (sandały do sandałów) — +1 ponad
             // kartę o nieznanym typie — a dopiero potem cena (wspólny sorter
             // „procent → cena” zostaje bez zmian i nie odwraca tej kolejności).
-            $typeAgrees = $wantType !== null
-                && $this->assortment->articleType(
-                    $product->name.' '.$product->sku.' '.(string) ($product->category ?? '')
-                ) === $wantType;
+            $cardType = $this->assortment->articleType(
+                $product->name.' '.$product->sku.' '.(string) ($product->category ?? '')
+            );
+            $typeAgrees = $wantType !== null && $cardType === $wantType;
             $row['ai_match_percent'] = min(49, max(40, 30 + $this->articleTypeScore($query, $product)))
                 + ($typeAgrees ? 1 : 0);
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON
-                .($slang !== null ? ' (żargon SIWZ → '.$slang['needed'].')' : '');
+                .($slang !== null ? ' (żargon SIWZ → '.$slang['needed'].')' : '')
+                .$this->unratedTypeGapNote($wantType, $cardType);
             $out[] = $row;
         }
 
@@ -1991,8 +1992,22 @@ final class ProductAiSearchService
     }
 
     /**
-     * @return list<array<string, mixed>>
+     * Czego ta propozycja nie spełnia — dopisek do wiersza, którego model nie oceniał.
+     * Handlowiec dostawał „ten sam rodzaj w katalogu” i przy zapytaniu o kalosze widział
+     * półbuty bez słowa o tym, że to inny wyrób. Wiersza nie usuwamy (ma być propozycja),
+     * ale różnicę nazywamy wprost.
      */
+    private function unratedTypeGapNote(?string $wantType, ?string $cardType): string
+    {
+        if ($wantType === null || $wantType === $cardType) {
+            return '';
+        }
+
+        return $cardType !== null
+            ? ' Uwaga: zapytanie wskazuje „'.$wantType.'”, a karta to „'.$cardType.'”.'
+            : ' Uwaga: karta nie potwierdza, że to „'.$wantType.'”.';
+    }
+
     /** Karta opisana (albo świadomie oznaczona jako ręczna) — jest czym uzasadnić trafienie. */
     private function hasSomethingToShow(Product $product): bool
     {
@@ -2000,6 +2015,9 @@ final class ProductAiSearchService
             || $product->enrichment_status !== Product::ENRICHMENT_NONE;
     }
 
+    /**
+     * @return list<array<string, mixed>>
+     */
     private function rowsFromRequirementCatalog(string $query, int $limit): array
     {
         $products = $this->withResponseRelations(
@@ -2011,6 +2029,7 @@ final class ProductAiSearchService
         // przy takim wymaganiu nie ma czego pokazać. Kart opisanych ręcznie (MANUAL)
         // to nie dotyczy — tam opis jest świadomą decyzją człowieka.
         $specific = $this->isSpecificRequirement($query);
+        $wantType = $this->assortment->articleType($query);
         $out = [];
         foreach ($products as $product) {
             if (! $product instanceof Product) {
@@ -2023,7 +2042,10 @@ final class ProductAiSearchService
             // Lista zapasowa z cechy (ESD, klasa, °C) — nieoceniona przez model,
             // więc procent zostaje poniżej progu zapisu przetargu, jak w rowsFromGenericCatalog.
             $row['ai_match_percent'] = min(50, max(40, 30 + $this->requirementCatalogScore($query, $product)));
-            $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON.' ('.rtrim($reason, '.').')';
+            $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON.' ('.rtrim($reason, '.').')'
+                .$this->unratedTypeGapNote($wantType, $this->assortment->articleType(
+                    $product->name.' '.$product->sku.' '.(string) ($product->category ?? '')
+                ));
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $out[] = $row;
         }
@@ -2061,6 +2083,21 @@ final class ProductAiSearchService
     }
 
     /**
+     * 0 — ocena modelu, 1 — wiersz zapasowy (lista katalogowa albo skrót deterministyczny).
+     * Kolejność remisu, nie bramka: wiersz zapasowy dalej wchodzi do wyniku.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private function rowRatedRank(array $row): int
+    {
+        return in_array(
+            $row['ai_match_source'] ?? null,
+            [self::MATCH_SOURCE_CATALOG, self::MATCH_SOURCE_RULE],
+            true
+        ) ? 1 : 0;
+    }
+
+    /**
      * @param  list<array<string, mixed>>  $ranked
      * @return list<array<string, mixed>>
      */
@@ -2070,6 +2107,14 @@ final class ProductAiSearchService
             $byScore = ($b['ai_match_percent'] ?? 0) <=> ($a['ai_match_percent'] ?? 0);
             if ($byScore !== 0) {
                 return $byScore;
+            }
+            // Przy równym procencie ocena modelu idzie przed wierszem, którego model nie widział.
+            // Wiersze zapasowe mają płaskie 50, więc remis rozstrzygała cena: pod „kombinezon
+            // chemoodporny na kwas siarkowy” na czoło wychodziła tania ścierka i rękaw Tyvek,
+            // a ocenione kombinezony spadały poza okno wyniku.
+            $byRated = $this->rowRatedRank($a) <=> $this->rowRatedRank($b);
+            if ($byRated !== 0) {
+                return $byRated;
             }
 
             return $this->rowPurchasePln($a) <=> $this->rowPurchasePln($b);
