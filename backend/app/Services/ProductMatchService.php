@@ -153,7 +153,6 @@ final class ProductMatchService
         private readonly AiSettingsService $aiSettings,
         private readonly ProductVectorSearch $vectorSearch,
         private readonly BhpAttributeNormalizer $bhpAttributes,
-        private readonly ExternalCatalogHintService $externalHints,
         private readonly ProductModelFuzzy $modelFuzzy,
         private readonly PpeAssortment $assortment,
         private readonly CatalogManufacturerContext $manufacturerContext,
