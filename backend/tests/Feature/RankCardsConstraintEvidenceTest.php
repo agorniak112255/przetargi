@@ -109,13 +109,13 @@ final class RankCardsConstraintEvidenceTest extends TestCase
 
     /**
      * Przetarg 1 poz. 5 (debug-match 14.09, 3/3 przebiegi puste): model dał SBM01 FLUO 95, ale zgłosił brak dowodu
-     * „odporność na zginanie do -50°C” i kod obciął ocenę do 50. Zdanie stoi w opisie na znaku 950, a model widzi
-     * 360 znaków opisu i 4 cechy. Karta dla modelu niesie dosłowne fragmenty potwierdzające warunki — bez powtarzania
-     * tego, co model już widzi.
+     * „odporność na zginanie do -50°C” i kod obciął ocenę do 50. Zdanie stało w opisie na znaku 950, a model widział
+     * wtedy 360 znaków opisu i 4 cechy. Od 21.09.2026 model dostaje pełną kartę (opis do 3000 znaków), więc fragmenty
+     * dowodu zostają dla tego, co stoi jeszcze dalej — nadal bez powtarzania tego, co model już widzi.
      */
     public function test_rank_card_carries_verbatim_evidence_for_conditions_hidden_beyond_visible_text(): void
     {
-        $intro = str_repeat('Spodniobuty PROS MAX S5 FLUO to profesjonalna odzież wodoochronna z wbudowanymi kaloszami. ', 6);
+        $intro = str_repeat('Spodniobuty PROS MAX S5 FLUO to profesjonalna odzież wodoochronna z wbudowanymi kaloszami. ', 40);
         $card = Product::query()->create([
             'sku' => 'SBM01 FLUO',
             'name' => 'Spodniobuty Max ze wzmocnieniem kalosz typ S5 w kolorach fluo',
@@ -140,11 +140,11 @@ final class RankCardsConstraintEvidenceTest extends TestCase
         $service = app(ProductAiSearchService::class);
         $rankCard = new \ReflectionMethod($service, 'rankCard');
 
-        $this->assertStringNotContainsString('-50', mb_substr((string) $card->description, 0, 360));
+        $this->assertStringNotContainsString('-50', mb_substr((string) $card->description, 0, 3000), 'zdanie stoi za granicą opisu wysyłanego modelowi');
         $evidence = $rankCard->invoke($service, $card, false, $constraints)['constraint_evidence'] ?? null;
 
         $this->assertIsArray($evidence);
-        $this->assertCount(1, $evidence, 'tylko to, czego model nie widzi: wkładka jest w 4 cechach, normy w polu norms');
+        $this->assertCount(1, $evidence, 'tylko to, czego model nie widzi: wkładka jest w cechach, normy w polu norms');
         $this->assertStringContainsString('do -50°C', $evidence[0]);
         $this->assertLessThanOrEqual(200, mb_strlen($evidence[0]));
         $this->assertSame([], $rankCard->invoke($service, $card, false)['constraint_evidence'], 'bez warunków nie ma fragmentów');
@@ -161,6 +161,43 @@ final class RankCardsConstraintEvidenceTest extends TestCase
         $content = implode("\n", array_column($messages, 'content'));
         $this->assertStringContainsString('constraint_evidence', $content, 'pole dowodu wymienione w poleceniu i obecne na karcie');
         $this->assertStringContainsString('do -50', $content);
+    }
+
+    /**
+     * Pełna karta: zdanie, które dawniej ginęło za 360. znakiem opisu, model czyta teraz wprost w opisie — razem ze
+     * wszystkimi cechami i całą specyfikacją. Średnio widział 34% opisu właściwej karty, a miał na nim potwierdzić
+     * 8–15 warunków; „brak dowodu” i sufit 50 brały się z przycięcia, nie z wyrobu.
+     */
+    public function test_rank_card_sends_the_whole_description_features_and_specs(): void
+    {
+        $intro = str_repeat('Spodniobuty PROS MAX S5 FLUO to profesjonalna odzież wodoochronna z wbudowanymi kaloszami. ', 6);
+        $features = array_map(static fn (int $i): string => 'Cecha wyrobu numer '.$i, range(1, 9));
+        $specs = array_map(static fn (int $i): string => 'Parametr '.$i.': wartość '.$i, range(1, 12));
+        $card = Product::query()->create([
+            'sku' => 'SBM01 FLUO',
+            'name' => 'Spodniobuty Max ze wzmocnieniem kalosz typ S5 w kolorach fluo',
+            'manufacturer' => 'AJ GROUP',
+            'description' => $intro.'Materiał charakteryzuje się odpornością na zginanie bez pękania w temperaturze do -50°C.',
+            'enrichment_payload' => ['features' => $features, 'specs' => $specs],
+            'catalog_price_net' => 250,
+            'purchase_price' => 202.3,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        $service = app(ProductAiSearchService::class);
+        $rankCard = new \ReflectionMethod($service, 'rankCard');
+
+        $long = $rankCard->invoke($service, $card, false, ['odporność na zginanie do -50°C']);
+
+        $this->assertGreaterThan(360, mb_strlen((string) $card->description));
+        $this->assertSame((string) $card->description, $long['description'], 'cały opis, nie pierwsze 360 znaków');
+        $this->assertSame($features, $long['features'], 'wszystkie cechy, nie pierwsze 4');
+        $this->assertSame($specs, $long['specs'], 'cała specyfikacja, nie pierwsze 8 wierszy');
+        $this->assertSame([], $long['constraint_evidence'], 'dowód stoi w opisie — nie powtarzamy go wycinkiem');
+
+        $short = $rankCard->invoke($service, $card, true);
+        $this->assertArrayNotHasKey('description', $short, 'tryb krótkich kart to świadomy wybór w Ustawieniach AI — bez zmian');
+        $this->assertCount(2, $short['specs']);
     }
 
     public function test_complete_cascade_does_not_end_retrieval_before_text_search(): void

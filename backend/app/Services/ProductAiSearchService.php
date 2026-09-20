@@ -147,7 +147,13 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-14';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-21-pelna-karta';
+
+    /** Opis na karcie dla modelu (tryb pełnej karty): 95% opisów w katalogu mieści się w 3000 znaków. */
+    private const RANK_CARD_DESCRIPTION_CHARS = 3000;
+
+    /** Wierszy listy (specyfikacja, cechy, dane sklepu, zastosowania, normy): 95% kart ma ich do 11, najwięcej 23. */
+    private const RANK_CARD_LIST_ROWS = 24;
 
     /** @var array<string, int> */
     private array $timingMs = [];
@@ -5024,14 +5030,14 @@ final class ProductAiSearchService
             'manufacturer' => $product->manufacturer,
             'norms' => $product->norms,
             'heat_celsius' => $this->productHeatCelsius($product),
-            'specs' => array_slice($this->stringList($payload['specs'] ?? null), 0, $short ? 2 : 8),
+            'specs' => array_slice($this->stringList($payload['specs'] ?? null), 0, $short ? 2 : self::RANK_CARD_LIST_ROWS),
             // Dane z karty dostawcy osobnym kluczem, nigdy doklejone do description — model ma móc napisać
             // „karta dostawcy podaje SNR 31 dB”, a nie mylić tabelki sklepu z opisem redakcyjnym. Przycinamy
             // tak samo jak specs, żeby karta krótka nie rozsadziła budżetu; normy i tak zostają w
             // description_norms, więc urwane wiersze nie gubią dowodu.
-            'shop_fields' => array_slice($this->shopFieldLines($product), 0, $short ? 2 : 8),
-            'use_cases' => array_slice($this->stringList($payload['use_cases'] ?? null), 0, $short ? 2 : 4),
-            'payload_norms' => array_slice($this->stringList($payload['norms'] ?? null), 0, 6),
+            'shop_fields' => array_slice($this->shopFieldLines($product), 0, $short ? 2 : self::RANK_CARD_LIST_ROWS),
+            'use_cases' => array_slice($this->stringList($payload['use_cases'] ?? null), 0, $short ? 2 : self::RANK_CARD_LIST_ROWS),
+            'payload_norms' => array_slice($this->stringList($payload['norms'] ?? null), 0, $short ? 6 : self::RANK_CARD_LIST_ROWS),
             // Normy z CAŁEGO opisu karty — opis idzie do modelu przycięty (karta krótka: wcale). Przetarg 1 poz. 13:
             // „PN-EN 140:2004” stoi na końcu opisu SECURA 3000, a pole norm ma cechy z enrichmentu, więc ranking
             // pisał „brak dowodu EN 140” i obcinał ocenę do 50. Nazwa pola mówi, skąd jest wartość.
@@ -5043,8 +5049,12 @@ final class ProductAiSearchService
             ), 0, 8),
         ];
         if (! $short) {
-            $card['description'] = mb_substr((string) ($product->description ?? ''), 0, 360);
-            $card['features'] = array_slice($this->stringList($payload['features'] ?? null), 0, 4);
+            // Pełna karta. Do 21.09.2026 opis szedł przycięty do 360 znaków, specyfikacja do 8 wierszy, cechy do 4:
+            // model widział średnio 34% opisu właściwej karty, a miał na nim potwierdzić 8–15 warunków wymagania —
+            // „brak dowodu kluczowego warunku” i sufit 50 brały się z przycięcia, nie z wyrobu. Na zamrożonym
+            // wejściu pełna karta dała 5 razy tę samą odpowiedź, przycięta skakała między 50 a 95.
+            $card['description'] = mb_substr((string) ($product->description ?? ''), 0, self::RANK_CARD_DESCRIPTION_CHARS);
+            $card['features'] = array_slice($this->stringList($payload['features'] ?? null), 0, self::RANK_CARD_LIST_ROWS);
         }
         // Dosłowne fragmenty z CAŁEGO opisu, cech i specyfikacji, które potwierdzają warunki rankingu, a których model
         // nie widzi w przyciętych polach. Przetarg 1 poz. 5: „odporność na zginanie do -50°C” stoi w opisie SBM01 FLUO
