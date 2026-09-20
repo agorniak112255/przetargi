@@ -370,6 +370,9 @@ final class ProductAiSearchService
         $rankOrder = [];
         foreach ($pending as $i => $prepared) {
             $rankOrder[] = $i;
+            // Intencja z analizy idzie do promptu tak samo jak w wyszukiwarce (finishSearch → analyzeAndRank):
+            // bez niej wsad dostawał twarde „inna marka → nie zwracaj” także wtedy, gdy marki z SIWZ nie ma
+            // w katalogu, i tracił linie z marką i modelem z analizy — zamienniki wypadały tylko w przetargu.
             $rankMessages[] = $this->analyzeAndRankMessages(
                 $clean[$i],
                 $prepared['rank_cards'],
@@ -377,6 +380,7 @@ final class ProductAiSearchService
                 $intents[$i]['needed'],
                 $intents[$i]['constraints'],
                 $task,
+                $intents[$i],
             );
         }
         $report(self::PROGRESS_STAGE_RANK, 0, count($rankMessages));
@@ -1235,6 +1239,9 @@ final class ProductAiSearchService
         $rankOrder = [];
         foreach ($pending as $i => $prepared) {
             $rankOrder[] = $i;
+            // Intencja z analizy idzie do promptu tak samo jak w wyszukiwarce (finishSearch → analyzeAndRank):
+            // bez niej wsad dostawał twarde „inna marka → nie zwracaj” także wtedy, gdy marki z SIWZ nie ma
+            // w katalogu, i tracił linie z marką i modelem z analizy — zamienniki wypadały tylko w przetargu.
             $rankMessages[] = $this->analyzeAndRankMessages(
                 $clean[$i],
                 $prepared['rank_cards'],
@@ -1242,6 +1249,7 @@ final class ProductAiSearchService
                 $intents[$i]['needed'],
                 $intents[$i]['constraints'],
                 $task,
+                $intents[$i],
             );
         }
         $rankRaws = $this->llm->chatJsonMany($rankMessages, $this->rankMaxTokens($task), $task, $maxConcurrent);
