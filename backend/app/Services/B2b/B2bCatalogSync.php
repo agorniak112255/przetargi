@@ -1990,8 +1990,13 @@ final class B2bCatalogSync
 
     /**
      * Wszystkie zdjęcia karty u dostawcy, w kolejności ze sklepu. Pobieramy tylko te, których karta jeszcze nie
-     * ma pod tym adresem — kolejny przebieg nie ściąga niczego ponownie, ale dokłada ujęcia, które dostawca
-     * dodał później.
+     * ma — kolejny przebieg nie ściąga niczego ponownie, ale dokłada ujęcia, które dostawca dodał później.
+     *
+     * Zdjęcie, które karta już ma, dostaje tu stempel dostawcy i swoje miejsce z galerii sklepu (patrz
+     * stampGalleryImage). Bez tego wzbogacanie z sieci wyprzedzało dostawcę: zdjęcie wyrobu zapisane wcześniej
+     * spod tego samego adresu zostawało „z internetu”, a stempel dostawcy dostawało jedyne zdjęcie, którego
+     * karta jeszcze nie miała — zdjęcie podeszwy („Gripper-black.png”). Ono zostawało zdjęciem głównym, więc
+     * testujący widział na liście podeszwy zamiast cholewek.
      *
      * Miejsce w galerii karty rozstrzyga ProductImage::resequence: zdjęcia producenta wchodzą przed zdjęcia
      * dystrybutorów i przed to, co wyłowiono z internetu. Przy przebiegu producenta układamy kolejność także
@@ -2015,16 +2020,30 @@ final class B2bCatalogSync
             return [false, null];
         }
 
-        $have = ProductImage::query()->where('product_id', $product->id)->pluck('source_url')->all();
-        $stored = array_flip(array_map(static fn ($url): string => (string) $url, $have));
-        $sortOrder = $have === []
-            ? 0
-            : (int) ProductImage::query()->where('product_id', $product->id)->max('sort_order') + 1;
+        // Gdy karta ma ten sam plik w dwóch wierszach, stemplujemy ten, który należy już do tego konta —
+        // inaczej numer z galerii nie trafiłby nigdzie (cudzych ujęć nie przenumerowujemy). Nadmiarowe wiersze
+        // zostają: kasuje je products:images-audit --apply, po obejrzeniu raportu.
+        $have = [];
+        foreach (ProductImage::query()->where('product_id', $product->id)->orderBy('id')->get() as $row) {
+            $key = ProductImageDownloader::sameFileKey((string) $row->source_url);
+            $better = ! isset($have[$key]) || ((int) $row->b2b_account_id === (int) $account->id
+                && (int) $have[$key]->b2b_account_id !== (int) $account->id);
+            if ($better) {
+                $have[$key] = $row;
+            }
+        }
 
         $saved = false;
+        $stamped = false;
         $error = null;
+        // miejsce w galerii sklepu, liczone tylko dla zdjęć, które karta faktycznie ma albo dostała
+        $position = 0;
         foreach ($urls as $url) {
-            if (isset($stored[mb_substr($url, 0, 2000)])) {
+            $known = $have[ProductImageDownloader::sameFileKey($url)] ?? null;
+            if ($known !== null) {
+                $stamped = $this->stampGalleryImage($known, $account, $position) || $stamped;
+                $position++;
+
                 continue;
             }
             try {
@@ -2032,9 +2051,14 @@ final class B2bCatalogSync
                 if ($image === null) {
                     continue;
                 }
-                if ($this->images->storeBytes($product, $image->bytes, $image->mime, $image->sourceUrl, $sortOrder, (int) $account->id) !== null) {
+                $new = $this->images->storeBytes($product, $image->bytes, $image->mime, $image->sourceUrl, $position, (int) $account->id);
+                if ($new !== null) {
+                    // ten sam plik pod innym adresem trafia w dedup po sumie kontrolnej i wraca jako
+                    // istniejący wiersz — też należy mu się miejsce z galerii
+                    $this->stampGalleryImage($new, $account, $position);
+                    $have[ProductImageDownloader::sameFileKey($url)] = $new;
                     $saved = true;
-                    $sortOrder++;
+                    $position++;
                 }
             } catch (Throwable $e) {
                 // pierwsze niepobrane zdjęcie idzie do dziennika przebiegu; pozostałych i tak próbujemy
@@ -2042,11 +2066,42 @@ final class B2bCatalogSync
             }
         }
 
-        if ($saved || $manufacturerAccountId !== null) {
+        if ($saved || $stamped || $manufacturerAccountId !== null) {
             ProductImage::resequence((int) $product->id, $manufacturerAccountId);
         }
 
         return [$saved, $error];
+    }
+
+    /**
+     * Zdjęcie, które karta ma, a dostawca pokazuje je w galerii tej karty: dostaje jego konto (o ile było
+     * bez konta, czyli wyłowione z internetu) i numer z galerii sklepu. Kolejność ze sklepu jest jedyną
+     * wiedzą o tym, które ujęcie przedstawia wyrób, a które podeszwę albo detal serii — bez przepisania jej
+     * do karty ginie i o zdjęciu głównym decyduje przypadkowa kolejność pobrań.
+     *
+     * Numer przestawiamy tylko własnym zdjęciom dostawcy: karta bywa w galerii dwóch dostawców i drugi
+     * przebieg nie ma prawa przenumerowywać cudzych ujęć.
+     *
+     * Zwraca true, gdy wiersz faktycznie się zmienił.
+     */
+    private function stampGalleryImage(ProductImage $image, B2bAccount $account, int $position): bool
+    {
+        $patch = [];
+        $ownerless = $image->b2b_account_id === null;
+        if ($ownerless) {
+            $patch['b2b_account_id'] = (int) $account->id;
+        }
+        if (($ownerless || (int) $image->b2b_account_id === (int) $account->id)
+            && (int) $image->sort_order !== $position) {
+            $patch['sort_order'] = $position;
+        }
+        if ($patch === []) {
+            return false;
+        }
+
+        $image->forceFill($patch)->save();
+
+        return true;
     }
 
     private function mayWriteDescription(?Product $existing, ?B2bProductLink $link, bool $fromManufacturer = false): bool

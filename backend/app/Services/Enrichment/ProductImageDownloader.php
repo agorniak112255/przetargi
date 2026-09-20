@@ -192,6 +192,28 @@ final class ProductImageDownloader
     }
 
     /**
+     * Klucz pliku zdjęcia: dwa adresy o tym samym kluczu to dla karty ten sam obraz.
+     *
+     * Shopify wydaje ten sam plik pod domeną sklepu i pod cdn.shopify.com, a do tego dokleja żądany rozmiar
+     * w zapytaniu („…/cdn/shop/files/AROX.png?v=17&width=1728”). Pobrane osobno dają różne bajty, więc dedup
+     * po sumie kontrolnej ich nie scala — karta dostawała dwa wiersze z tym samym butem. Poza Shopify kluczem
+     * jest cały adres: u dystrybutorów zapytanie bywa jedynym, co odróżnia dwa różne obrazy.
+     */
+    public static function sameFileKey(string $url): string
+    {
+        $url = self::preferFullSizeUrl($url);
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+
+        if (preg_match('#^/cdn/shop/files/([^/]+)$#i', $path, $m) === 1
+            || ($host === 'cdn.shopify.com' && preg_match('#^/s/files/[\d/]+/files/([^/]+)$#i', $path, $m) === 1)) {
+            return 'shopify:'.mb_strtolower($m[1]);
+        }
+
+        return mb_strtolower($url);
+    }
+
+    /**
      * Miniatury sklepów → wariant pełny (WP, Demar, Presta, Magento cache/hash).
      */
     public static function preferFullSizeUrl(string $url): string
