@@ -1518,7 +1518,8 @@ class OpenAiCompatibleClient
     /**
      * Przerwa przed powtórką. Nagłówek Retry-After to dolna granica, nie cała przerwa: przetarg 1 na
      * produkcji (20.09.2026) — dostawca odsyłał „Retry-After: 1”, obie powtórki 429 poszły w 2 sekundy
-     * i trzy pozycje zostały bez oceny modelu, choć limit minąłby po kilku sekundach.
+     * i trzy pozycje zostały bez oceny modelu. Jak długo trwa limit u dostawcy — nie wiemy; liczbę
+     * powtórek 429 dalej ogranicza RATE_LIMIT_RETRIES.
      */
     private function overloadWaitSeconds(Response $response, int $attempt): int
     {
