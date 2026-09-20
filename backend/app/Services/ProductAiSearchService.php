@@ -1975,20 +1975,42 @@ final class ProductAiSearchService
             // Remis rozstrzyga zgodny typ artykułu (sandały do sandałów) — +1 ponad
             // kartę o nieznanym typie — a dopiero potem cena (wspólny sorter
             // „procent → cena” zostaje bez zmian i nie odwraca tej kolejności).
-            $cardType = $this->assortment->articleType(
-                $product->name.' '.$product->sku.' '.(string) ($product->category ?? '')
-            );
+            if (! $this->unratedRowAllowed($query, $product, $wantType)) {
+                continue;
+            }
+            $cardType = $this->assortment->articleType($product->name.' '.$product->sku);
             $typeAgrees = $wantType !== null && $cardType === $wantType;
             $row['ai_match_percent'] = min(49, max(40, 30 + $this->articleTypeScore($query, $product)))
                 + ($typeAgrees ? 1 : 0);
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON
                 .($slang !== null ? ' (żargon SIWZ → '.$slang['needed'].')' : '')
-                .$this->unratedTypeGapNote($wantType, $cardType);
+                .$this->unratedTypeGapNote($wantType, $cardType)
+                .$this->unratedModelGapNote($query, $product);
             $out[] = $row;
         }
 
         return array_slice($this->orderApparelSetRows($query, $out, $candidates), 0, max(1, min(80, $limit)));
+    }
+
+    /**
+     * Czy karta bez oceny modelu ma prawo wejść do wyniku jako propozycja. Lista zapasowa
+     * odpowiada na „ten sam rodzaj w katalogu”, ale rodzaj to za mało, gdy wymaganie nazywa
+     * wyrób wprost: pod „Peltor X2” wchodziły wszystkie nauszniki Peltor (z X1A włącznie),
+     * a pod „kalosze” półbuty i trzewiki. Karta o nieznanym typie zostaje — brak wiedzy
+     * o karcie to nie to samo co sprzeczność z wymaganiem.
+     */
+    private function unratedRowAllowed(string $query, Product $product, ?string $wantType): bool
+    {
+        if ($wantType === null) {
+            return true;
+        }
+        // Typ czytamy z nazwy i numeru, bez sciezki kategorii: polka dostawcy bywa workiem
+        // (polmaska wielorazowa SECURA stoi w „Polmaski filtrujace FFP1”), wiec kategoria
+        // odcinalaby karty, ktore nazwa opisuje poprawnie.
+        $cardType = $this->assortment->articleType($product->name.' '.$product->sku);
+
+        return $cardType === null || $cardType === $wantType;
     }
 
     /**
@@ -2006,6 +2028,20 @@ final class ProductAiSearchService
         return $cardType !== null
             ? ' Uwaga: zapytanie wskazuje „'.$wantType.'”, a karta to „'.$cardType.'”.'
             : ' Uwaga: karta nie potwierdza, że to „'.$wantType.'”.';
+    }
+
+    /**
+     * Wymaganie nazywa model wprost, a karty nikt nie ocenil pod tym katem — pod „Peltor X2”
+     * lista zapasowa podstawia inne nauszniki Peltor. Wiersz zostaje propozycja (zero wynikow
+     * jest gorsze), ale nie udaje, ze model sie zgadza.
+     */
+    private function unratedModelGapNote(string $query, Product $product): string
+    {
+        if (! $this->modelFuzzy->hasNamedModel($query) || $this->modelFuzzy->matches($query, $product)) {
+            return '';
+        }
+
+        return ' Uwaga: karta nie potwierdza modelu z zapytania.';
     }
 
     /** Karta opisana (albo świadomie oznaczona jako ręczna) — jest czym uzasadnić trafienie. */
@@ -2038,14 +2074,16 @@ final class ProductAiSearchService
             if ($specific && ! $this->hasSomethingToShow($product)) {
                 continue;
             }
+            if (! $this->unratedRowAllowed($query, $product, $wantType)) {
+                continue;
+            }
             $row = $this->productToRow($product);
             // Lista zapasowa z cechy (ESD, klasa, °C) — nieoceniona przez model,
             // więc procent zostaje poniżej progu zapisu przetargu, jak w rowsFromGenericCatalog.
             $row['ai_match_percent'] = min(50, max(40, 30 + $this->requirementCatalogScore($query, $product)));
             $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON.' ('.rtrim($reason, '.').')'
-                .$this->unratedTypeGapNote($wantType, $this->assortment->articleType(
-                    $product->name.' '.$product->sku.' '.(string) ($product->category ?? '')
-                ));
+                .$this->unratedTypeGapNote($wantType, $this->assortment->articleType($product->name.' '.$product->sku))
+                .$this->unratedModelGapNote($query, $product);
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $out[] = $row;
         }
