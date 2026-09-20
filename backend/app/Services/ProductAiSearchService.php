@@ -5367,6 +5367,12 @@ final class ProductAiSearchService
                 $score = min($score, self::MISSING_KEY_SCORE_CAP);
                 $reason = trim(($reason ?? '').' Brak dowodu typu obuwia: '.$typeGap.'.');
             }
+            if ($this->assortment->missingWeldingFilterEvidence($requirement, $product)) {
+                // Ten sam wzorzec co wyżej: cecha ochronna sprawdzana deterministycznie, bo model
+                // degradował ją do „drugorzędnej” (poz. 9: gogle bez filtra 90–95% w pięciu biegach).
+                $score = min($score, self::MISSING_KEY_SCORE_CAP);
+                $reason = trim(($reason ?? '').' Brak dowodu kluczowego warunku: filtr spawalniczy / stopień zaciemnienia.');
+            }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(0, $score));
             $row['ai_match_reason'] = $reason;

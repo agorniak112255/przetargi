@@ -641,6 +641,23 @@ final class PpeAssortment
         return $this->weldingFilterAllows($requirement, $this->productFullText($product));
     }
 
+    /**
+     * Wymaganie chce filtra spawalniczego, a karta nigdzie go nie pokazuje (nazwa, opis, tabelka
+     * dostawcy, normy). Bramka zgodności taką kartę przepuszcza — brak danych to nie sprzeczność —
+     * ale to za mało na wysoką ocenę: stopień zaciemnienia jest funkcją ochronną, a model potrafił
+     * dać 95% goglom bez żadnej wzmianki o filtrze, nazywając ten brak „drugorzędnym”.
+     */
+    public function missingWeldingFilterEvidence(string $requirement, Product $product): bool
+    {
+        $family = $this->family($requirement);
+        if ($family !== self::FAMILY_EYES && $family !== self::FAMILY_FACE) {
+            return false;
+        }
+
+        return $this->requiresWeldingFilter($requirement)
+            && ! $this->showsWeldingFilter($this->normalize($this->productFullText($product)));
+    }
+
     /** Wymaganie spawalnicze ze stopniem zaciemnienia („spawalnicze, z zaciemnieniem 5.0”, „filtr spawalniczy 5”, EN 169). */
     public function requiresWeldingFilter(string $requirement): bool
     {
