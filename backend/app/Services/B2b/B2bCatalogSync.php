@@ -561,7 +561,7 @@ final class B2bCatalogSync
         // błąd pobrania opisu nie wstrzymuje ceny: opis zostaje bez zmian, ostrzeżenie w dzienniku przebiegu
         $warnings = [];
         $card = $this->cardDocuments($connector, $remote, $existing, $warnings);
-        [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings, $card);
+        [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings);
 
         $priceChange = null;
         $updateSummary = null;
@@ -1499,7 +1499,6 @@ final class B2bCatalogSync
         B2bConnector $connector,
         B2bRemoteProduct $remote,
         ?array &$warnings = null,
-        array $card = ['documents' => [], 'texts' => []],
     ): array {
         if ($remote->category !== null && trim((string) ($existing?->category ?? '')) === '') {
             $payload['category'] = mb_substr($remote->category, 0, 255);
@@ -1516,6 +1515,7 @@ final class B2bCatalogSync
             && $existing !== null
             && $this->sameBrand($connector::ownBrand(), (string) $existing->manufacturer);
         if ($this->mayWriteDescription($existing, $link, $fromManufacturer)) {
+            $read = true;
             try {
                 $description = $connector->description($remote);
             } catch (B2bFatalException $e) {
@@ -1526,8 +1526,20 @@ final class B2bCatalogSync
                 }
                 $warnings[] = 'opis nie został pobrany ('.$e->getMessage().') — opis bez zmian, ceny zaktualizowane';
                 $description = '';
+                $read = false;
             }
-            $description = self::withDatasheet($description, $card);
+            if ($description === '' && $read && $this->ownDescriptionIsGone($existing, $link, $fromManufacturer)) {
+                // Witryna producenta odczytana bez błędu, a opisu, który sama tu kiedyś wpisała, już nie ma —
+                // tak wygląda odnośnik przestawiony na inny wyrób (UvexB2bConnector::manufacturerPageOf).
+                // Cudzy tekst musi zniknąć z karty; do 20.09.2026 znikał ubocznie, bo opis trzymał się
+                // doklejonego tekstu karty technicznej, a ten do opisu już nie wchodzi.
+                $payload['description'] = null;
+                if ($warnings !== null) {
+                    $warnings[] = 'opis producenta zniknął ze strony — karta została bez opisu';
+                }
+
+                return [null, false];
+            }
             if ($description !== '') {
                 if ($this->keepsTranslation($existing, $link, $description)) {
                     return [$descriptionHash, false];
@@ -1559,6 +1571,23 @@ final class B2bCatalogSync
     }
 
     /**
+     * Czy opis, który karta ma, wpisała tu ta sama witryna producenta — a teraz go u siebie nie ma.
+     *
+     * Pusty opis od dystrybutora niczego nie kasuje (dostawca bywa bez opisu i karta ma zostać z tym, co ma);
+     * tu chodzi o węższy przypadek: witryna producenta tej marki jest źródłem rozstrzygającym, a jej opis
+     * zapisaliśmy z odciskiem. Zgodny odcisk znaczy, że od tego zapisu nikt tekstu nie ruszał, więc nie ma
+     * czego bronić — cudzy albo nieaktualny opis znika z karty.
+     */
+    private function ownDescriptionIsGone(?Product $existing, ?B2bProductLink $link, bool $fromManufacturer): bool
+    {
+        return $fromManufacturer
+            && $existing !== null
+            && $existing->hasDescriptionText()
+            && $link?->description_hash !== null
+            && hash_equals($link->description_hash, sha1((string) $existing->description));
+    }
+
+    /**
      * Karta ma tłumaczenie tego samego tekstu źródła, nietknięte od zapisu przez job tłumaczenia.
      */
     private function keepsTranslation(?Product $existing, ?B2bProductLink $link, string $source): bool
@@ -1587,26 +1616,6 @@ final class B2bCatalogSync
     private function foreignManufacturer(Product $existing, string $manufacturer): bool
     {
         return mb_strtolower(trim((string) $existing->manufacturer)) !== mb_strtolower($manufacturer);
-    }
-
-    /**
-     * Opis karty ze sklepu dostawcy + dosłowny tekst z karty technicznej (PDF z zakładki „Pliki do pobrania”),
-     * z nazwą pliku jako źródłem. Nic nie jest dopisywane od siebie: bez tekstu w pliku nie ma sekcji.
-     *
-     * @param  array{documents: list<B2bRemoteDocument>, texts: array<string, string>}  $card
-     */
-    private static function withDatasheet(string $description, array $card): string
-    {
-        $sections = $description !== '' ? [$description] : [];
-        foreach ($card['documents'] as $document) {
-            $text = B2bDocumentText::forCard($card['texts'][$document->sourceUrl] ?? '');
-            if ($text === '') {
-                continue;
-            }
-            $sections[] = 'Z karty technicznej ('.$document->title.'):'."\n".$text;
-        }
-
-        return implode("\n\n", $sections);
     }
 
     /**

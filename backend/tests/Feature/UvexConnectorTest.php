@@ -18,6 +18,7 @@ use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\UvexB2bClient;
 use App\Services\B2b\UvexB2bConnector;
+use App\Services\Vector\ProductEmbeddingIndexer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -545,7 +546,7 @@ final class UvexConnectorTest extends TestCase
         );
     }
 
-    public function test_sync_saves_product_files_and_reads_description_from_the_datasheet(): void
+    public function test_sync_saves_product_files_and_keeps_the_datasheet_text_out_of_the_description(): void
     {
         Storage::fake('public');
         $this->fakeSite();
@@ -569,14 +570,19 @@ final class UvexConnectorTest extends TestCase
             $this->assertStringStartsWith('https://izam.system-b2b.pl/public/assets/resources/products/4713/', (string) $document->source_url);
         }
 
-        // tekst karty technicznej: zapisany przy pliku i dopisany do opisu ze wskazaniem źródła
+        // tekst karty technicznej zostaje przy pliku — opis wyrobu to proza ze sklepu, nie treść PDF-a
         $datasheet = $documents->firstOrFail();
         $this->assertStringContainsString('EN ISO 20345:2011 S1 P SRC', (string) $datasheet->text);
         $this->assertNull($documents->last()->text, 'skan bez warstwy tekstowej nie dostaje tekstu');
 
         $this->assertStringStartsWith('Stacja czyszcząca do okularów i gogli.', (string) $cleaner->description);
-        $this->assertStringContainsString('Z karty technicznej (SST stacja czyszcząca mini 9970.005.pdf):', (string) $cleaner->description);
-        $this->assertStringContainsString('EN ISO 20345:2011 S1 P SRC', (string) $cleaner->description);
+        $this->assertStringNotContainsString('Z karty technicznej (', (string) $cleaner->description);
+        $this->assertStringNotContainsString('EN ISO 20345:2011 S1 P SRC', (string) $cleaner->description);
+        // wyszukiwanie nic nie traci: karta techniczna wchodzi do dokumentu embeddingu
+        $this->assertStringContainsString(
+            'EN ISO 20345:2011 S1 P SRC',
+            app(ProductEmbeddingIndexer::class)->documentText($cleaner->fresh()),
+        );
 
         // opis z synchronizacji jest rozpoznawany jako opis z B2B (kolejny przebieg może go poprawić)
         $link = B2bProductLink::query()->where('remote_id', '9970.005')->sole();
@@ -716,9 +722,13 @@ final class UvexConnectorTest extends TestCase
         $description = (string) Product::query()->whereKey($cleaner->id)->value('description');
         $this->assertStringNotContainsString('laser safety window', $description);
         $this->assertStringNotContainsString('Opis ze strony producenta', $description);
-        // zostaje to, co karta ma z własnych źródeł — tekst karty technicznej
-        $this->assertStringContainsString('Z karty technicznej (SST stacja czyszcząca mini 9970.005.pdf):', $description);
-        $this->assertStringNotContainsString('Jednostka', $description);
+        // karta zostaje bez opisu: jedynym jej opisem była treść, której producent już nie ma. Tekst karty
+        // technicznej nie jest opisem — zostaje przy pliku i w dokumencie embeddingu
+        $this->assertSame('', $description);
+        $this->assertStringContainsString(
+            'EN ISO 20345:2011 S1 P SRC',
+            (string) ProductDocument::query()->where('product_id', $cleaner->id)->orderBy('sort_order')->value('text'),
+        );
 
         $log = array_column((array) B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log, 'text');
         $this->assertContains(

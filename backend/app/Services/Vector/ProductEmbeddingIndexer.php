@@ -5,13 +5,18 @@ declare(strict_types=1);
 namespace App\Services\Vector;
 
 use App\Models\Product;
+use App\Models\ProductDocument;
 use App\Services\Ai\AiSettingsService;
+use App\Services\B2b\B2bDocumentText;
 use App\Support\BhpAttributeNormalizer;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 final class ProductEmbeddingIndexer
 {
+    /** Ile znaków karty technicznej wchodzi do dokumentu wyrobu (zob. datasheetText). */
+    private const DATASHEET_LIMIT = 2000;
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly EmbeddingClient $embeddings,
@@ -112,6 +117,10 @@ final class ProductEmbeddingIndexer
             (string) ($product->description ?? ''),
             // formaty/podłoża wersji (bez cen — zmiana samej ceny wersji nie zmienia dokumentu)
             (string) ($product->variant_summary ?? ''),
+            // tekst karty technicznej dostawcy — na końcu i przycięty, bo jest długi i luźny; do 20.09.2026
+            // wchodził tu okrężnie, bo synchronizacja doklejała go do opisu karty (B2bCatalogSync). Opis wrócił
+            // do samej prozy, a wyszukiwanie ma widzieć to, co w karcie technicznej naprawdę jest
+            $this->datasheetText($product),
             $this->joinList($payload['materials'] ?? null),
             $this->joinList($payload['features'] ?? null),
             $this->joinList($payload['use_cases'] ?? null),
@@ -129,6 +138,25 @@ final class ProductEmbeddingIndexer
         }
 
         return $text !== '' ? $text : ('product:'.$product->id);
+    }
+
+    /**
+     * Tekst pierwszej karty technicznej przy wyrobie. Przycinamy go do DATASHEET_LIMIT: cały dokument
+     * (bywa kilkanaście tysięcy znaków) wypchnąłby z ośmiotysięcznego limitu opis i parametry, a to one
+     * odpowiadają na zapytanie klienta.
+     */
+    private function datasheetText(Product $product): string
+    {
+        $raw = (string) ($product->documents()
+            ->whereIn('kind', [ProductDocument::KIND_DATASHEET, ProductDocument::KIND_MANUAL])
+            ->whereNotNull('text')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->value('text') ?? '');
+
+        // to samo czyszczenie, które przechodził tekst doklejany kiedyś do opisu: bez stopki firmowej
+        // i bez cennika rozmiarów, bo one o wyrobie nic nie mówią
+        return mb_substr(B2bDocumentText::forCard($raw), 0, self::DATASHEET_LIMIT);
     }
 
     private function joinList(mixed $value): string
