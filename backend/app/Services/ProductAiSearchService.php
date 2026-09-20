@@ -97,6 +97,15 @@ final class ProductAiSearchService
     /** Powód wierszy zapasowych (`catalog`): ten sam rodzaj w katalogu, ale bez oceny modelu. */
     public const UNRATED_CATALOG_REASON = 'Nieocenione przez model — ten sam rodzaj w katalogu';
 
+    /** Model odpowiedział i nic nie wskazał — w katalogu nie ma pasującej karty. */
+    public const NOTE_MODEL_EMPTY = 'Model nie znalazł pasującego produktu w katalogu.';
+
+    /**
+     * Wywołanie modelu padło (limit tempa, timeout, zły JSON). To nie to samo co brak produktu:
+     * fala mówiła handlowcowi „nie znalazł”, choć model nie widział kart wcale.
+     */
+    public const NOTE_MODEL_FAILED = 'Nie udało się ocenić kart przez model. Spróbuj ponownie albo użyj zwykłego wyszukiwania.';
+
     /**
      * Karta z rodziny nazwanego modelu, ale bez oznaczenia wariantu z wymagania. Poniżej
      * domyślnego progu zapisu pozycji przetargu (AiSettingsService::MATCH_MIN_SCORE_DEFAULT = 65),
@@ -431,7 +440,8 @@ final class ProductAiSearchService
                 $clean[$i],
                 $this->applySlangIntent($clean[$i], $retrieveIntent),
                 $ranked,
-                $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
+                // Pusta odpowiedź wsadu = wywołanie padło; „nie znalazł” tylko gdy model faktycznie ocenił karty.
+                $ranked === [] ? ($raw === [] ? self::NOTE_MODEL_FAILED : self::NOTE_MODEL_EMPTY) : null,
                 $withExternalHint,
             );
             // Kontrakt klienta: pusta tablica = wywołanie padło (timeout, 5xx, niepoprawny JSON);
@@ -1016,8 +1026,8 @@ final class ProductAiSearchService
             return [$rankedIntent, $this->orderApparelSetRows($query, $ranked, $prepared['candidates'])];
         });
         $emptyNote = $rankFailed
-            ? 'Nie udało się ocenić kart przez model. Spróbuj ponownie albo użyj zwykłego wyszukiwania.'
-            : 'Model nie znalazł pasującego produktu w katalogu.';
+            ? self::NOTE_MODEL_FAILED
+            : self::NOTE_MODEL_EMPTY;
         $resultIntent = $this->applySlangIntent($query, $this->mergeRetrieveIntent($rankedIntent, $intent));
         $result = $this->searchResult(
             $query,
@@ -1061,7 +1071,7 @@ final class ProductAiSearchService
                 $query,
                 $rewritten,
                 $withExternalHint,
-                'Model nie znalazł pasującego produktu w katalogu.',
+                self::NOTE_MODEL_EMPTY,
             );
         }
 
@@ -1284,7 +1294,8 @@ final class ProductAiSearchService
                 $clean[$i],
                 $this->applySlangIntent($clean[$i], $retrieveIntent),
                 $ranked,
-                $ranked === [] ? 'Model nie znalazł pasującego produktu w katalogu.' : null,
+                // Pusta odpowiedź wsadu = wywołanie padło; „nie znalazł” tylko gdy model faktycznie ocenił karty.
+                $ranked === [] ? ($raw === [] ? self::NOTE_MODEL_FAILED : self::NOTE_MODEL_EMPTY) : null,
                 $withExternalHint,
             );
             $this->tracesByIndex[$i] = $this->trace;
