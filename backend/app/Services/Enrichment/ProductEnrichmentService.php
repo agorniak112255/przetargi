@@ -22,6 +22,7 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\B2b\B2bDescriptionSource;
+use App\Services\B2b\B2bDocumentText;
 use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
@@ -824,6 +825,12 @@ final class ProductEnrichmentService
             // sam blok czyniłby pulę niepustą i produkt zostawałby bez zdjęcia z karty sklepu.
             // Nie przechodzi przez keepConfirmedCardPages — jest przypięty do dokładnego kodu
             // wyrobu, więc potwierdza go mocniej niż heurystyka nazwy na stronie sklepu.
+            // Tą samą drogą idzie karta PDF ze strony producenta: za kartą HTML, przed sklepami, ponownie po
+            // filtrze stron (tabela rozmiarów przetrwa) i z własnym wpisem w źródłach.
+            $catalogPages = array_merge(
+                $catalogPages,
+                $this->manufacturerPdfCardPages($product, (array) ($fetched['document_urls'] ?? []))
+            );
             $pageSnippets = $this->withCatalogPages($pageSnippets, $catalogPages, $product, $mfrDomains);
             $rawCardPages = $this->withCatalogPages($rawCardPages, $catalogPages, $product, $mfrDomains);
             if ($pageSnippets === []) {
@@ -2933,6 +2940,83 @@ final class ProductEnrichmentService
         }
 
         return $pages;
+    }
+
+    /** Dłuższy tekst to nie karta jednego wyrobu, tylko katalog albo broszura rodziny. */
+    private const PDF_CARD_MAX_CHARS = 6000;
+
+    /**
+     * Karta produktu PDF ze strony producenta („Pobierz kartę produktu w pliku PDF”) jako dodatkowa strona źródłowa.
+     * Karta AJ GROUP 202: PDF podaje kolory „w białe paski”, rozmiary do 120/75, tabelę wymiarów i normy — czytnik HTML
+     * tego nie niósł. Link pochodzi wyłącznie z potwierdzonej karty wyrobu na hoście producenta (ProductPageFetcher);
+     * tu dochodzi kontrola treści tymi samymi regułami co dla strony HTML, razem z regułą wariantu po ukośniku.
+     * Brak pliku, brak tekstu albo wątpliwość = karta powstaje bez tego źródła.
+     *
+     * @param  list<mixed>  $documentUrls
+     * @return list<array{url: string, text: string, title: string}>
+     */
+    private function manufacturerPdfCardPages(Product $product, array $documentUrls): array
+    {
+        try {
+            foreach ($documentUrls as $url) {
+                if (! is_string($url) || ! ProductDocumentDownloader::looksLikeGeneratedCardUrl($url)) {
+                    continue;
+                }
+                $raw = $this->documents->readGeneratedCard($product, $url);
+                $length = $raw === null ? 0 : mb_strlen($raw);
+                // tekst ucięty na limicie odczytu = plik dłuższy niż karta
+                if ($raw === null || $length < 400 || $length > self::PDF_CARD_MAX_CHARS || $length >= B2bDocumentText::LIMIT) {
+                    return [];
+                }
+                $confirmed = $this->identity->pageHasSkuOrNameAndManufacturer($url, '', $raw, $product)
+                    || (! $this->identity->requiresExactSkuOrNameOnCard($product)
+                        && $this->identity->isConfirmedProductCard($url, '', $raw, $product));
+                if (! $confirmed) {
+                    return [];
+                }
+                $this->attemptLog()->add('page', 'karta produktu PDF ze strony producenta', urls: [$url]);
+
+                return [[
+                    'url' => $url,
+                    'text' => $this->pdfCardTextForExtraction($raw),
+                    'title' => 'Karta produktu PDF producenta — '.$product->sku,
+                ]];
+            }
+        } catch (Throwable $e) {
+            Log::info('Karta PDF producenta pominięta', ['product_id' => $product->id, 'sku' => $product->sku, 'error' => $e->getMessage()]);
+        }
+
+        return [];
+    }
+
+    /**
+     * Treść karty bez stopki firmowej i bez wiersza „link do produktu”: adres kończy się wyborem jednego koloru
+     * i rozmiaru (#/kolor-czerwony_w_biale_paski/rozmiar-75_75), co podsuwałoby modelowi jeden wariant zamiast
+     * listy z karty. Ligatury druku („specyﬁczne”) rozwijamy; reszta dosłownie — także „-50ºC”.
+     */
+    private function pdfCardTextForExtraction(string $raw): string
+    {
+        $lines = [];
+        $inLink = false;
+        foreach (preg_split('/\R/u', B2bDocumentText::forCard($raw)) ?: [] as $line) {
+            // nagłówek wydruku: data złożenia pliku i numer strony („20-09-2026 1/1”) — nie dotyczy wyrobu
+            if (preg_match('/^\d{2}-\d{2}-\d{4}\s+\d+\/\d+$/u', $line) === 1) {
+                continue;
+            }
+            if (preg_match('/^link do produktu\b/iu', $line) === 1) {
+                $inLink = true;
+
+                continue;
+            }
+            // zawinięty adres: kolejne wiersze bez spacji, wyglądające na kawałek adresu
+            if ($inLink && preg_match('/^\S*[\/_#]\S*$/u', $line) === 1) {
+                continue;
+            }
+            $inLink = false;
+            $lines[] = $line;
+        }
+
+        return strtr(trim(implode("\n", $lines)), ['ﬁ' => 'fi', 'ﬂ' => 'fl', 'ﬀ' => 'ff', 'ﬃ' => 'ffi', 'ﬄ' => 'ffl']);
     }
 
     /**

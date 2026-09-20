@@ -84,6 +84,14 @@ final class ProductDocumentDownloader
     /** Zostaje z downloadMany: ile jeszcze plików wolno odczytać w tym przebiegu. */
     private int $textBudget = 0;
 
+    /**
+     * Karta odczytana przed napisaniem opisu (readGeneratedCard) — najwyżej jedna naraz, bo obiekt żyje długo
+     * w procesie kolejki.
+     *
+     * @var array<string, array{bytes: string, text: string}>
+     */
+    private array $prefetched = [];
+
     public function __construct(
         private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
         private readonly ProductSearchIdentity $identity = new ProductSearchIdentity,
@@ -327,6 +335,7 @@ final class ProductDocumentDownloader
             $saved[] = $doc;
             $sort++;
         }
+        $this->prefetched = [];
 
         return $saved;
     }
@@ -381,6 +390,11 @@ final class ProductDocumentDownloader
 
     private function downloadOne(Product $product, string $url, int $sortOrder, string $label = ''): ?ProductDocument
     {
+        $prefetched = $this->prefetched[$this->prefetchKey($product, $url)] ?? null;
+        if ($prefetched !== null) {
+            return $this->storeUnlessTextRejects($product, $prefetched['bytes'], $prefetched['text'], $url, $sortOrder, $label);
+        }
+
         $response = Http::timeout(20)
             ->connectTimeout(5)
             ->withHeaders([
@@ -417,7 +431,17 @@ final class ProductDocumentDownloader
             throw new \RuntimeException('Plik nie wygląda na PDF');
         }
 
-        $text = $this->readPdfText($bytes);
+        return $this->storeUnlessTextRejects($product, $bytes, $this->readPdfText($bytes), $url, $sortOrder, $label);
+    }
+
+    private function storeUnlessTextRejects(
+        Product $product,
+        string $bytes,
+        string $text,
+        string $url,
+        int $sortOrder,
+        string $label,
+    ): ?ProductDocument {
         $reason = $this->textRejects($text, $url, $product);
         if ($reason !== null) {
             Log::info('Product PDF rejected by content', [
@@ -430,6 +454,44 @@ final class ProductDocumentDownloader
         }
 
         return $this->storePdfBytes($product, $bytes, $url, $sortOrder, $text !== '' ? $text : null, $label);
+    }
+
+    /**
+     * Tekst karty produktu składanej przez sklep producenta — zanim powstanie opis, żeby karta mogła być jego
+     * źródłem (normy, kolory, tabela rozmiarów). Dotąd pliki pobierano dopiero po napisaniu opisu i ich treść
+     * do niego nie trafiała. Plik zostaje w pamięci przebiegu: downloadMany() zapisze go bez drugiego pobrania
+     * i bez drugiego odczytu. null = nie ta karta, nie ten host, brak pliku albo brak warstwy tekstowej.
+     */
+    public function readGeneratedCard(Product $product, string $url): ?string
+    {
+        $this->prefetched = [];
+        if (! self::looksLikeGeneratedCardUrl($url) || ! $this->identity->isOfficialCatalogUrl($url, $product)) {
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(10)
+                ->connectTimeout(5)
+                ->withHeaders(['Accept' => 'application/pdf,*/*;q=0.8'])
+                ->get($url);
+            $bytes = $response->successful() ? $response->body() : '';
+            if (! str_starts_with($bytes, '%PDF') || strlen($bytes) > self::MAX_BYTES) {
+                return null;
+            }
+            $text = $this->documentText->fromFile($bytes, 'application/pdf');
+        } catch (Throwable $e) {
+            Log::info('Generated product card skipped', ['product_id' => $product->id, 'url' => $url, 'error' => $e->getMessage()]);
+
+            return null;
+        }
+        $this->prefetched[$this->prefetchKey($product, $url)] = ['bytes' => $bytes, 'text' => $text];
+
+        return trim($text) === '' || self::looksLikePolicyText($text) ? null : $text;
+    }
+
+    private function prefetchKey(Product $product, string $url): string
+    {
+        return ((string) $product->id).'|'.$url;
     }
 
     /**
