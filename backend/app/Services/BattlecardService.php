@@ -323,7 +323,7 @@ final class BattlecardService
         $blocked = array_fill_keys($excludeIds, true);
         $scored = [];
         if ($rows === []) {
-            return $this->scoreFamilyAlternates($requirement, $blocked, $limit);
+            return $this->scoreRetrievedAlternates($requirement, $blocked, $limit);
         }
         foreach ($rows as $row) {
             $id = (int) ($row['id'] ?? 0);
@@ -358,20 +358,17 @@ final class BattlecardService
      * @param  array<int, true>  $blocked
      * @return list<array{product: Product, score: int}>
      */
-    private function scoreFamilyAlternates(string $requirement, array $blocked, int $limit): array
+    private function scoreRetrievedAlternates(string $requirement, array $blocked, int $limit): array
     {
-        $family = $this->assortment->family($requirement);
-        $query = Product::query();
-        if ($family !== null) {
-            $query->where('ppe_family', $family);
-        }
-        $exclude = array_keys($blocked);
-        if ($exclude !== []) {
-            $query->whereNotIn('id', $exclude);
-        }
+        // Karty z tego samego retrievalu co wyszukiwarka AI (bez pytania modelu), w kolejności
+        // trafności. Dotąd brało się pierwsze 20 kart rodziny w kolejności bazy — przy rodzinach
+        // po 1000–3000 kart to loteria, a gdy rodziny wymagania nie dało się rozpoznać, pierwsze
+        // 20 kart całego katalogu. Ocena i próg zostają te same: dowody z karty (explainMatch).
         $scored = [];
-        foreach ($query->limit(max(20, $limit))->get() as $product) {
-            if (! $product instanceof Product || ! $this->assortment->compatibleProduct($requirement, $product)) {
+        foreach ($this->aiSearch->candidates($requirement, max(40, $limit), true) as $product) {
+            if (! $product instanceof Product
+                || isset($blocked[(int) $product->id])
+                || ! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
             }
             $explained = $this->matcher->explainMatch($requirement, $product);

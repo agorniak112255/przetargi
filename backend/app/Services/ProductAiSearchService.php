@@ -304,6 +304,34 @@ final class ProductAiSearchService
     }
 
     /**
+     * Pula kandydatów bez pytania modelu: intencja liczona lokalnie, ten sam retrieval co
+     * w wyszukiwarce (kody, kaskada, tekst, bramki zgodności), kolejność wg trafności. Dla
+     * wywołujących, którzy sami oceniają karty (battlecard) i potrzebują kart pasujących do
+     * treści wymagania, a nie pierwszych z brzegu kart rodziny.
+     *
+     * @return Collection<int, Product>
+     */
+    public function candidatePool(string $query, int $limit, bool $anyBrand = false): Collection
+    {
+        $query = trim($query);
+        if ($query === '') {
+            return collect();
+        }
+        $intent = $this->localIntent($query);
+        if ($anyBrand) {
+            // Zamienniki: ten sam asortyment niezależnie od marki i modelu z wymagania. To istniejący
+            // tryb „marki nie ma w katalogu — rankuj zamienniki”: kaskada bez kroków marki i bez
+            // preferencji kart tej marki. Bez niego pod „…REJS RNITZ…” zostawały same karty REJS,
+            // a zamiennik z definicji jest innej marki. Nazwany model schodzi z kotwicy retrievalu,
+            // ale bramki zgodności dalej czytają pełne wymaganie (nagłowne zostaje nagłowne).
+            $intent['manufacturer_absent_in_catalog'] = true;
+            $intent['needed'] = $this->modelFuzzy->withoutNamedModel($query);
+        }
+
+        return $this->retrieveCandidates($query, $intent, max(1, min(self::CANDIDATE_POOL, $limit)));
+    }
+
+    /**
      * Wiele zapytań: fala analizy wymagań, retrieval, potem fala rankingu (max $maxConcurrent).
      *
      * @param  list<string>  $queries

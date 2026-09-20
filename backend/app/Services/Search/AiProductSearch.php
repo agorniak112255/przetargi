@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Services\Search;
 
+use App\Models\Product;
 use App\Services\Ai\AiTask;
 use App\Services\ProductAiSearchService;
+use Illuminate\Support\Collection;
 
 /**
  * Jedno wejście do wyszukiwania AI. Wszystko, co dobiera produkt do treści wymagania —
@@ -70,6 +72,19 @@ final class AiProductSearch
     public function catalogRows(string $query, int $limit): array
     {
         return $this->engine->requirementCatalogRows($query, $limit);
+    }
+
+    /**
+     * Karty pasujące do treści wymagania, bez pytania modelu — ten sam retrieval co w `find()`,
+     * z intencją liczoną lokalnie i kolejnością wg trafności. Dla wywołujących, którzy oceniają
+     * karty sami (battlecard ocenia je dowodami z karty i sortuje ceną).
+     *
+     * @return Collection<int, Product>
+     */
+    public function candidates(string $query, int $limit, bool $anyBrand = false): Collection
+    {
+        // $anyBrand: szukanie zamienników — ten sam asortyment bez kotwicy na marce i modelu z wymagania.
+        return $this->engine->candidatePool($query, $limit, $anyBrand);
     }
 
     /**

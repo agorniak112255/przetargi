@@ -143,6 +143,32 @@ final class ProductModelFuzzy
     }
 
     /**
+     * Wymaganie bez słów, z których zbudowana jest marka i nazwany model („Nauszniki 3M Peltor X2
+     * wersja nagłowna” → „Nauszniki wersja nagłowna”). Dla szukania zamienników: ten sam asortyment
+     * i te same cechy, ale bez kotwicy na konkretnym wyrobie — inaczej retrieval oddaje wyłącznie
+     * karty nazwanego modelu, czyli dokładnie to, co zamiennik ma zastąpić.
+     */
+    public function withoutNamedModel(string $requirement): string
+    {
+        $anchors = array_merge($this->needles($requirement), $this->catalogBrands($requirement));
+        if ($anchors === []) {
+            return $requirement;
+        }
+        $kept = [];
+        foreach (preg_split('/\s+/u', trim($requirement)) ?: [] as $token) {
+            $compact = $this->compact($token);
+            foreach ($anchors as $anchor) {
+                if (mb_strlen($compact) >= 2 && str_contains($anchor, $compact)) {
+                    continue 2;
+                }
+            }
+            $kept[] = $token;
+        }
+
+        return $kept === [] ? $requirement : implode(' ', $kept);
+    }
+
+    /**
      * Oznaczenia wariantu z wymagania, których karta nie niesie.
      *
      * @return list<string>
