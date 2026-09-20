@@ -97,6 +97,13 @@ final class ProductAiSearchService
     /** Powód wierszy zapasowych (`catalog`): ten sam rodzaj w katalogu, ale bez oceny modelu. */
     public const UNRATED_CATALOG_REASON = 'Nieocenione przez model — ten sam rodzaj w katalogu';
 
+    /**
+     * Karta z rodziny nazwanego modelu, ale bez oznaczenia wariantu z wymagania. Poniżej
+     * domyślnego progu zapisu pozycji przetargu (AiSettingsService::MATCH_MIN_SCORE_DEFAULT = 65),
+     * więc zostaje propozycją do decyzji człowieka, a nie automatycznym wpisem do oferty.
+     */
+    private const VARIANT_MISMATCH_SCORE = 60;
+
     /** Limit listy /products „Szukaj w katalogu” — ranking zawsze do tego progu. */
     public const CATALOG_LIMIT = 40;
 
@@ -4349,11 +4356,26 @@ final class ProductAiSearchService
                 continue;
             }
             $row = $this->productToRow($product);
-            $row['ai_match_percent'] = min(99, max(80, $this->modelFuzzy->score($query, $product)));
-            $row['ai_match_reason'] = 'Marka i model z SIWZ (literówka w nazwie modelu jest dopuszczalna).';
+            $missingCodes = $this->modelFuzzy->missingVariantCodes($query, $product);
+            if ($missingCodes === []) {
+                $row['ai_match_percent'] = min(99, max(80, $this->modelFuzzy->score($query, $product)));
+                $row['ai_match_reason'] = 'Marka i model z SIWZ (literówka w nazwie modelu jest dopuszczalna).';
+            } else {
+                // Ta sama rodzina modelu, ale inny wariant: pod „ARMEN 9007 1010 S1” wszystkie
+                // warianty (6660, 9360) dostawały płaskie 99% i najtańszy wchodził do oferty
+                // zamiast żądanego. Karta zostaje widoczną propozycją, ale poniżej progu zapisu,
+                // żeby o podmianie wariantu decydował człowiek.
+                $row['ai_match_percent'] = self::VARIANT_MISMATCH_SCORE;
+                $row['ai_match_reason'] = 'Ta sama rodzina modelu, ale karta nie ma oznaczenia z zapytania: '
+                    .implode(', ', $missingCodes).'.';
+            }
             $out[] = $row;
         }
         usort($out, function (array $a, array $b) use ($query, $products): int {
+            $byScore = ((int) ($b['ai_match_percent'] ?? 0)) <=> ((int) ($a['ai_match_percent'] ?? 0));
+            if ($byScore !== 0) {
+                return $byScore;
+            }
             $pa = $products->firstWhere('id', (int) ($a['id'] ?? 0));
             $pb = $products->firstWhere('id', (int) ($b['id'] ?? 0));
             if ($pa instanceof Product && $pb instanceof Product) {

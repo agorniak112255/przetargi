@@ -111,6 +111,60 @@ final class ProductModelFuzzy
     }
 
     /**
+     * Czterocyfrowe oznaczenia wariantu podane obok modelu, których nie niesie sama igła:
+     * „ARMEN 9007 1010 S1” → 1010 (9007 siedzi już w igle „armen9007”). Numery norm odpadają
+     * razem z rokiem, a wymiary i rozmiary są krótsze, więc nie wchodzą.
+     *
+     * @return list<string>
+     */
+    public function variantCodes(string $requirement): array
+    {
+        $needles = $this->needles($requirement);
+        if ($needles === []) {
+            return [];
+        }
+        preg_match_all('/\b\d{4}\b/u', $this->stripNorms($requirement), $m);
+        $codes = array_unique($m[0] ?? []);
+        if ($codes === []) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($codes as $code) {
+            foreach ($needles as $needle) {
+                if (str_contains($needle, (string) $code)) {
+                    continue 2;
+                }
+            }
+            $out[] = (string) $code;
+        }
+
+        return array_values($out);
+    }
+
+    /**
+     * Oznaczenia wariantu z wymagania, których karta nie niesie.
+     *
+     * @return list<string>
+     */
+    public function missingVariantCodes(string $requirement, Product $product): array
+    {
+        $codes = $this->variantCodes($requirement);
+        if ($codes === []) {
+            return [];
+        }
+        $hay = $this->compact((string) $product->name.' '.(string) $product->sku);
+        $missing = [];
+        foreach ($codes as $code) {
+            if (! str_contains($hay, $code)) {
+                $missing[] = $code;
+            }
+        }
+
+        return $missing;
+    }
+
+    /**
      * @return list<string>
      */
     public function needles(string $requirement): array
