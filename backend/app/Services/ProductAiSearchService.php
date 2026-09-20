@@ -428,6 +428,11 @@ final class ProductAiSearchService
                 // model nic nie ocenił — wiersze skrótu (źródło rule) w kolejności reguły, nie lista katalogowa
                 $ranked = $pending[$i]['products'];
                 $ruleFallback = true;
+            } elseif ($ranked === [] && $raw === [] && $this->isSpecificRequirement($clean[$i])) {
+                // Ta sama bramka co noGuessing w finishSearch: model padł, a wymaganie ma warunek
+                // (substancja, norma, klasa) — lista „ten sam rodzaj w katalogu” udawałaby ocenę, której
+                // nikt nie zrobił. Pozycja zostaje pusta z informacją o awarii modelu.
+                $ranked = [];
             } elseif ($ranked === []) {
                 $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit, $retrieveIntent);
             } else {
@@ -1306,6 +1311,11 @@ final class ProductAiSearchService
             if ($ranked === [] && ($pending[$i]['products'] ?? []) !== []) {
                 $ranked = $pending[$i]['products'];
                 $ruleFallback = true;
+            } elseif ($ranked === [] && $raw === [] && $this->isSpecificRequirement($clean[$i])) {
+                // Ta sama bramka co noGuessing w finishSearch: model padł, a wymaganie ma warunek
+                // (substancja, norma, klasa) — lista „ten sam rodzaj w katalogu” udawałaby ocenę, której
+                // nikt nie zrobił. Pozycja zostaje pusta z informacją o awarii modelu.
+                $ranked = [];
             } elseif ($ranked === []) {
                 $ranked = $this->rowsFromGenericCatalog($clean[$i], $pending[$i]['candidates'], $limit, $retrieveIntent);
             } else {

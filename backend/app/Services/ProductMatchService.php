@@ -1783,8 +1783,10 @@ final class ProductMatchService
             // zgody admina odpada ZANIM persistableScore zważy go samym explainMatch (explain ≥ 40
             // przepuszczał wiersz „catalog” mimo wyłączonego ustawienia). Trzeba to robić tu,
             // bo prefetch przetargu idzie jako AiTask::ProductSearch (prefetchAiCandidates), więc
-            // wyłącznik z ProductAiSearchService::finishSearch nie działa na tej ścieżce,
-            // a searchMany zawsze dokłada rowsFromGenericCatalog.
+            // wyłącznik z ProductAiSearchService::finishSearch nie działa na tej ścieżce.
+            // Fala nie dokłada już listy katalogowej po awarii modelu przy wymaganiu z warunkiem
+            // (ta sama bramka co w wyszukiwarce), ale przy modelu, który odpowiedział „nic nie
+            // pasuje”, i przy ogólnym wymaganiu dalej to robi — dlatego ta bramka zostaje.
             if ($this->isCatalogRowSource($source) && ! $this->aiSettings->matchAllowsCatalogRows()) {
                 continue;
             }

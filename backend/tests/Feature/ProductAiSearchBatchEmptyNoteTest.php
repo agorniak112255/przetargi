@@ -76,6 +76,51 @@ final class ProductAiSearchBatchEmptyNoteTest extends TestCase
         $this->assertSame(ProductAiSearchService::NOTE_MODEL_EMPTY, $result['ai_note'] ?? null);
     }
 
+    public function test_failed_model_does_not_fill_specific_requirement_with_unrated_catalog_rows(): void
+    {
+        // Karta z opisem: bez bramki fala po awarii modelu dokładała ją jako „ten sam rodzaj w katalogu”
+        // i zasłaniała awarię. Wyszukiwarka przy wymaganiu z warunkiem (tu norma EN 388) zwraca pustkę.
+        $this->describedGlove();
+        $this->app->instance(OpenAiCompatibleClient::class, $this->llmReturning([]));
+
+        $result = $this->app->make(AiProductSearch::class)->findMany([self::QUERY], 10, AiTask::ProductSearch, 1)[0];
+
+        $this->assertSame([], $result['products'] ?? null, 'po awarii modelu fala podstawiła nieocenione karty pod wymaganie z warunkiem');
+        $this->assertSame(ProductAiSearchService::NOTE_MODEL_FAILED, $result['ai_note'] ?? null);
+        $this->assertSame(ProductAiSearchService::MODEL_STATE_UNAVAILABLE, $result['model_state'] ?? null);
+    }
+
+    public function test_failed_model_still_shows_catalog_for_generic_requirement(): void
+    {
+        // Parytet z wyszukiwarką: bramka dotyczy tylko wymagania z warunkiem. Gołe „Rękawice robocze”
+        // nie obiecuje żadnej cechy, więc lista rodzaju z katalogu zostaje — z jawnym „nieocenione”.
+        $this->describedGlove();
+        $this->app->instance(OpenAiCompatibleClient::class, $this->llmReturning([]));
+
+        $result = $this->app->make(AiProductSearch::class)->findMany(['Rękawice robocze'], 10, AiTask::ProductSearch, 1)[0];
+
+        $this->assertNotSame([], $result['products'] ?? [], 'ogólne wymaganie straciło listę katalogową');
+        foreach ($result['products'] as $row) {
+            $this->assertSame(ProductAiSearchService::MATCH_SOURCE_CATALOG, $row['ai_match_source'] ?? null);
+        }
+    }
+
+    private function describedGlove(): void
+    {
+        Product::query()->create([
+            'sku' => 'RKW-NITRYL-OPIS',
+            'name' => 'Rękawice robocze powlekane nitrylem',
+            'manufacturer' => 'TEST',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice robocze powlekane nitrylem, EN 388, do prac montażowych.',
+            'catalog_price_net' => 20,
+            'purchase_price' => 12,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+    }
+
     /** @param  array<string, mixed>  $rankAnswer  odpowiedź na każde wywołanie rankingu i przepisania */
     private function llmReturning(array $rankAnswer): OpenAiCompatibleClient
     {
