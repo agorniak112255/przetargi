@@ -234,6 +234,9 @@ final class AiSettingsService
                 'match_allow_catalog_rows' => Schema::hasColumn('ai_settings', 'match_allow_catalog_rows')
                     ? (bool) ($row->match_allow_catalog_rows ?? false)
                     : false,
+                'match_use_tender_profile' => Schema::hasColumn('ai_settings', 'match_use_tender_profile')
+                    ? (bool) ($row->match_use_tender_profile ?? false)
+                    : false,
                 'vector_enabled' => $hasVectorCols ? (bool) ($row->vector_enabled ?? false) : false,
                 'qdrant_url' => $hasVectorCols ? $this->nullableString($row->qdrant_url ?? null) : null,
                 'qdrant_api_key' => $qdrantKey !== null && $qdrantKey !== '' ? (string) $qdrantKey : null,
@@ -315,6 +318,7 @@ final class AiSettingsService
                 self::MATCH_MIN_SCORE_DEFAULT
             ),
             'match_allow_catalog_rows' => (bool) config('ai.match_allow_catalog_rows', false),
+            'match_use_tender_profile' => (bool) config('ai.match_use_tender_profile', false),
             'vector_enabled' => (bool) config('ai.vector_enabled', false),
             'qdrant_url' => $this->nullableString(config('ai.qdrant_url')),
             'qdrant_api_key' => $qdrantKey,
@@ -498,6 +502,11 @@ final class AiSettingsService
         if (array_key_exists('match_allow_catalog_rows', $data)
             && Schema::hasColumn('ai_settings', 'match_allow_catalog_rows')) {
             $row->match_allow_catalog_rows = (bool) $data['match_allow_catalog_rows'];
+        }
+
+        if (array_key_exists('match_use_tender_profile', $data)
+            && Schema::hasColumn('ai_settings', 'match_use_tender_profile')) {
+            $row->match_use_tender_profile = (bool) $data['match_use_tender_profile'];
         }
 
         if (array_key_exists('product_search_card_detail', $data)
@@ -906,6 +915,29 @@ final class AiSettingsService
     public function matchAllowsCatalogRows(): bool
     {
         return (bool) ($this->resolve()['match_allow_catalog_rows'] ?? false);
+    }
+
+    /**
+     * Czy dopasowanie pozycji SIWZ ma jechać własnym trybem wyszukiwania. Domyślnie nie: przetarg
+     * idzie wtedy dokładnie tak jak wyszukiwarka, a profil „Dopasowanie pozycji SIWZ” nie jest używany.
+     */
+    public function matchUsesTenderProfile(): bool
+    {
+        return (bool) ($this->resolve()['match_use_tender_profile'] ?? false);
+    }
+
+    /**
+     * Zadanie, z jakim dopasowanie przetargu woła wyszukiwanie AI. Jedno miejsce decyzji dla
+     * dopasowania całej oferty, pojedynczej pozycji i narzędzi pomiarowych — żeby pomiar mierzył
+     * to samo, co działa w panelu.
+     *
+     * Tryb TenderMatch to w silniku pięć różnic naraz: profil modelu „Dopasowanie pozycji SIWZ”,
+     * brak kroku „zrozum” (intencja liczona lokalnie, bez modelu), 12 zamiast 24 kart w rankingu,
+     * brak przepisywania pustych zapytań i odroczone dokładanie listy katalogowej.
+     */
+    public function matchSearchTask(): AiTask
+    {
+        return $this->matchUsesTenderProfile() ? AiTask::TenderMatch : AiTask::ProductSearch;
     }
 
     private function normalizeMatchScore(mixed $value, int $default): int

@@ -10,6 +10,7 @@ type Payload = {
   match_substitute_score: number
   match_min_score: number
   match_allow_catalog_rows: boolean
+  match_use_tender_profile: boolean
   match_defaults: {
     apply: number
     substitute: number
@@ -34,6 +35,7 @@ export function AdminAiTuning() {
   const [substituteScore, setSubstituteScore] = useState('55')
   const [minScore, setMinScore] = useState('65')
   const [allowCatalog, setAllowCatalog] = useState(false)
+  const [tenderProfile, setTenderProfile] = useState(false)
   const [meta, setMeta] = useState<Meta>(META_FALLBACK)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -45,6 +47,7 @@ export function AdminAiTuning() {
     setSubstituteScore(String(data.match_substitute_score))
     setMinScore(String(data.match_min_score))
     setAllowCatalog(data.match_allow_catalog_rows)
+    setTenderProfile(Boolean(data.match_use_tender_profile))
     setMeta({
       default: data.default,
       min: data.min,
@@ -76,6 +79,7 @@ export function AdminAiTuning() {
           match_substitute_score: Number(substituteScore),
           match_min_score: Number(minScore),
           match_allow_catalog_rows: allowCatalog,
+          match_use_tender_profile: tenderProfile,
         }),
       })
       fill(data)
@@ -92,6 +96,7 @@ export function AdminAiTuning() {
     setSubstituteScore(String(meta.match.substitute))
     setMinScore(String(meta.match.min))
     setAllowCatalog(false)
+    setTenderProfile(false)
   }
 
   const scoreRange = { min: meta.match.score_min, max: meta.match.score_max }
@@ -216,6 +221,26 @@ export function AdminAiTuning() {
                 Gdy model nie wskaże żadnej karty, pozycja dostaje produkt „tego samego
                 rodzaju z katalogu”. Wypełnia więcej pozycji, ale bez oceny modelu —
                 domyślnie wyłączone.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-2 rounded-lg bg-slate-50 p-3 text-xs text-slate-700">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={tenderProfile}
+              onChange={(e) => setTenderProfile(e.target.checked)}
+            />
+            <span>
+              <b>Dopasowanie SIWZ własnym trybem (profil „Dopasowanie pozycji SIWZ”)</b>
+              <span className="mt-0.5 block text-[11px] text-slate-500">
+                Wyłączone: przetarg dobiera karty dokładnie tak jak „Szukaj AI” i używa modelu
+                wyszukiwarki. Włączone: używa modelu przypisanego do „Dopasowania pozycji SIWZ”
+                w Ustawieniach AI i działa szybciej i taniej, ale inaczej — nie pyta modelu, czego
+                szuka klient (liczy to sam z treści wymagania), pokazuje modelowi 12 kart zamiast 24
+                i nie ponawia pustych zapytań. Może obniżyć trafność — po włączeniu dopasuj ten sam
+                przetarg i porównaj wynik. Domyślnie wyłączone.
               </span>
             </span>
           </label>

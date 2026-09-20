@@ -41,6 +41,7 @@ class UpdateAiTuningRequest extends FormRequest
             'match_substitute_score' => $score,
             'match_min_score' => $score,
             'match_allow_catalog_rows' => ['sometimes', 'boolean'],
+            'match_use_tender_profile' => ['sometimes', 'boolean'],
         ];
     }
 

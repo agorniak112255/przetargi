@@ -34,6 +34,7 @@ class AiSetting extends Model
         'match_substitute_score',
         'match_min_score',
         'match_allow_catalog_rows',
+        'match_use_tender_profile',
         'vector_enabled',
         'qdrant_url',
         'qdrant_api_key',
@@ -71,6 +72,7 @@ class AiSetting extends Model
             'match_substitute_score' => 'integer',
             'match_min_score' => 'integer',
             'match_allow_catalog_rows' => 'boolean',
+            'match_use_tender_profile' => 'boolean',
             'vector_enabled' => 'boolean',
         ];
     }

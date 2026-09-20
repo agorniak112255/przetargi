@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -72,6 +73,33 @@ final class AdminAiTuningApiTest extends TestCase
         $this->assertSame(45, $settings->matchSubstituteScore());
         $this->assertSame(50, $settings->matchMinScore());
         $this->assertTrue($settings->matchAllowsCatalogRows());
+    }
+
+    public function test_admin_can_switch_tender_match_to_its_own_profile(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        // Domyślnie wyłączone: przetarg jedzie trybem wyszukiwarki, jak przed wprowadzeniem przełącznika.
+        $this->getJson('/api/admin/ai-tuning')
+            ->assertOk()
+            ->assertJsonPath('match_use_tender_profile', false);
+        $this->assertSame(AiTask::ProductSearch, app(AiSettingsService::class)->matchSearchTask());
+
+        // Limit katalogu jest w tym API polem wymaganym — panel wysyła go przy każdym zapisie.
+        $this->putJson('/api/admin/ai-tuning', ['catalog_search_limit' => 40, 'match_use_tender_profile' => true])
+            ->assertOk()
+            ->assertJsonPath('match_use_tender_profile', true);
+        $this->assertSame(AiTask::TenderMatch, app(AiSettingsService::class)->matchSearchTask());
+
+        // Zapis bez tego pola (starszy klient) nie może po cichu wyłączyć przełącznika.
+        $this->putJson('/api/admin/ai-tuning', ['catalog_search_limit' => 15])
+            ->assertOk()
+            ->assertJsonPath('match_use_tender_profile', true);
+
+        $this->putJson('/api/admin/ai-tuning', ['catalog_search_limit' => 15, 'match_use_tender_profile' => false])
+            ->assertOk()
+            ->assertJsonPath('match_use_tender_profile', false);
+        $this->assertSame(AiTask::ProductSearch, app(AiSettingsService::class)->matchSearchTask());
     }
 
     public function test_match_thresholds_reject_out_of_range_and_bad_order(): void
