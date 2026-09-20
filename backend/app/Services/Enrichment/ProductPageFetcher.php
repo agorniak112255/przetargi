@@ -495,7 +495,11 @@ final class ProductPageFetcher
         if (str_contains($contentType, 'image/') || str_contains($contentType, 'application/pdf')
             || self::looksLikeBinaryMedia($html)) {
             if (str_contains($contentType, 'pdf') || str_starts_with(ltrim($html), '%PDF')) {
-                $documents[] = $url;
+                // Karta składana na żądanie podana wprost przez wyszukiwarkę nie ma strony, która wiąże ją
+                // z wyrobem (adres bez kodu) — przyjmujemy ją tylko jako link z potwierdzonej karty producenta.
+                if (! ProductDocumentDownloader::looksLikeGeneratedCardUrl($url)) {
+                    $documents[] = $url;
+                }
             } else {
                 $images[] = $url;
             }
@@ -602,7 +606,12 @@ final class ProductPageFetcher
             $this->rejections[] = ['url' => $url, 'reason' => $this->unconfirmedReason()];
         }
         $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
-        foreach ($this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer) as $doc) {
+        // Karta PDF składana na żądanie nie ma kodu w adresie — z wyrobem wiąże ją tylko strona, na której
+        // stoi link: potwierdzona karta tego wyrobu u producenta. Pierwsze pobranie i karty z indeksu katalogu
+        // nie podają domen producenta, stąd druga droga przez listę oficjalnych hostów.
+        $bindsGeneratedCard = $this->matchingProduct !== null && $pageLooksLikeProduct && $text !== ''
+            && ($fromManufacturer || $this->identity->isOfficialCatalogUrl($url, $this->matchingProduct));
+        foreach ($this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer, $bindsGeneratedCard) as $doc) {
             $documents[] = $doc;
         }
     }
@@ -1448,8 +1457,13 @@ final class ProductPageFetcher
     /**
      * @return list<string>
      */
-    private function extractDocumentUrls(string $html, string $pageUrl, string $skuNorm, bool $fromManufacturer = false): array
-    {
+    private function extractDocumentUrls(
+        string $html,
+        string $pageUrl,
+        string $skuNorm,
+        bool $fromManufacturer = false,
+        bool $bindsGeneratedCard = false,
+    ): array {
         /** @var list<array{href: string, label: string}> $raw */
         $raw = [];
         if (preg_match_all('#<a\b[^>]*href=["\']([^"\']+\.pdf[^"\']*)["\'][^>]*>(.*?)</a>#is', $html, $m, PREG_SET_ORDER)) {
@@ -1551,8 +1565,43 @@ final class ProductPageFetcher
         if (count($unbound) === 1) {
             $out[] = (string) array_key_first($unbound);
         }
+        if ($bindsGeneratedCard) {
+            $card = $this->generatedCardLink($html, $pageUrl);
+            if ($card !== null) {
+                $out[] = $card;
+            }
+        }
 
         return array_values(array_unique($out));
+    }
+
+    /**
+     * „Pobierz kartę produktu w pliku PDF” (pros.pl: /modules/x13producttopdf/pdf.php?id_product=211…) — najwyżej
+     * jeden taki link, z tego samego hosta co strona. Wołane tylko dla potwierdzonej karty wyrobu u producenta.
+     */
+    private function generatedCardLink(string $html, string $pageUrl): ?string
+    {
+        if (! preg_match_all('#<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>#is', $html, $m, PREG_SET_ORDER)) {
+            return null;
+        }
+        $pageHost = preg_replace('/^www\./', '', mb_strtolower((string) parse_url($pageUrl, PHP_URL_HOST)));
+        foreach ($m as $row) {
+            $abs = $this->absolutize(html_entity_decode((string) $row[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'), $pageUrl);
+            if ($abs === null || ! ProductDocumentDownloader::looksLikeGeneratedCardUrl($abs)) {
+                continue;
+            }
+            $host = preg_replace('/^www\./', '', mb_strtolower((string) parse_url($abs, PHP_URL_HOST)));
+            $label = trim(strip_tags((string) $row[2]));
+            if ($host === '' || $host !== $pageHost
+                || ProductDocumentDownloader::looksLikeJunkDocument(mb_strtolower($abs.' '.$label))) {
+                continue;
+            }
+            $this->rememberDocumentLabel($abs, $label);
+
+            return $abs;
+        }
+
+        return null;
     }
 
     /** Pierwsza niepusta etykieta wygrywa: ten sam plik bywa linkowany też z pustej ikonki. */

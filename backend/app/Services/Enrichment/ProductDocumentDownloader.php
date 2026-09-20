@@ -105,6 +105,25 @@ final class ProductDocumentDownloader
     }
 
     /**
+     * „Pobierz kartę produktu w pliku PDF” — karta składana przez sklep producenta na żądanie
+     * (PrestaShop x13producttopdf: /modules/x13producttopdf/pdf.php?id_product=211&id_product_attribute=3759).
+     * Adres nie kończy się na .pdf i nie niesie kodu wyrobu, dlatego NIE wchodzi do looksLikeDocumentUrl():
+     * tamta bramka przyjmuje też adresy z wyszukiwarki i od modelu, a taką kartę z wyrobem wiąże wyłącznie
+     * potwierdzona strona producenta, na której stoi link. Wzorzec celowo wąski — poszerzać po napotkaniu przypadku.
+     */
+    public static function looksLikeGeneratedCardUrl(string $url): bool
+    {
+        if (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://')) {
+            return false;
+        }
+        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        $query = mb_strtolower((string) (parse_url($url, PHP_URL_QUERY) ?? ''));
+
+        return str_contains($path, 'producttopdf')
+            || (str_ends_with($path, '/pdf.php') && str_contains($query, 'id_product='));
+    }
+
+    /**
      * Dokumenty „obsługi klienta” i korporacyjne: polityka prywatności, regulamin, RODO,
      * reklamacje, zwroty, warunki dostawy, raport CSR. Do zakładki „Pliki PDF” trafiały,
      * bo filtr znał wyłącznie hasła angielskie i niemieckie — polskie przechodziły.
@@ -274,7 +293,13 @@ final class ProductDocumentDownloader
             if (count($saved) >= $max) {
                 break;
             }
-            if (! is_string($url) || ! self::looksLikeDocumentUrl($url)) {
+            if (! is_string($url)) {
+                continue;
+            }
+            // Karta generowana przez sklep producenta nie ma kodu wyrobu w adresie — wiąże ją strona, z której
+            // pochodzi link (ProductPageFetcher). Tu druga, niezależna kontrola: tylko oficjalny host producenta.
+            $generatedCard = self::looksLikeGeneratedCardUrl($url) && $this->identity->isOfficialCatalogUrl($url, $product);
+            if (! $generatedCard && ! self::looksLikeDocumentUrl($url)) {
                 continue;
             }
             // adresy przychodzą też z wyszukiwarki, nie tylko z karty — regulamin sklepu
@@ -325,7 +350,7 @@ final class ProductDocumentDownloader
             if (preg_match('#(cert|conform|declaration|deklarac|zgodno|doc|ue|eu[-_]?doc|oeko|oeeko|reach)#iu', $u)) {
                 $score += 80;
             }
-            if (preg_match('#(datasheet|data[-_]?sheet|pds|tds|spec|karta|pdb)#i', $u)) {
+            if (preg_match('#(datasheet|data[-_]?sheet|pds|tds|spec|karta|pdb)#i', $u) || self::looksLikeGeneratedCardUrl($url)) {
                 $score += 50;
             }
             // Instrukcja, gwarancja i tabela rozmiarów mieszczą się w limicie pobrań przed przypadkowym
@@ -560,6 +585,7 @@ final class ProductDocumentDownloader
         }
 
         $checksum = hash('sha256', $bytes);
+        $storedUrl = mb_substr($sourceUrl, 0, 2000);
         $existing = ProductDocument::query()
             ->where('product_id', $product->id)
             ->where('checksum', $checksum)
@@ -572,24 +598,40 @@ final class ProductDocumentDownloader
 
             return $existing;
         }
+        // Karta składana na żądanie ma w środku datę utworzenia, więc każda kopia ma inną sumę kontrolną —
+        // bez tego każde ponowne wzbogacenie dopisywałoby kolejną „Kartę produktu”. Ten sam adres = ten sam
+        // dokument: podmieniamy plik i tekst, jak storeBytes() dla plików z paneli B2B.
+        $regenerated = self::looksLikeGeneratedCardUrl($sourceUrl)
+            ? ProductDocument::query()->where('product_id', $product->id)->where('source_url', $storedUrl)->first()
+            : null;
 
         $relative = 'products/'.$product->id.'/docs/'.Str::lower(Str::random(16)).'.pdf';
         Storage::disk('public')->put($relative, $bytes);
 
         $kind = $this->guessKind($sourceUrl, $label);
         $title = $this->guessTitle($sourceUrl, $kind, $label);
-
-        return ProductDocument::query()->create([
+        $values = [
             'product_id' => $product->id,
             'path' => $relative,
-            'source_url' => mb_substr($sourceUrl, 0, 2000),
+            'source_url' => $storedUrl,
             'title' => $title,
             'text' => $text,
             'kind' => $kind,
             'sort_order' => $sortOrder,
             'checksum' => $checksum,
             'size_bytes' => $size,
-        ]);
+        ];
+        if ($regenerated === null) {
+            return ProductDocument::query()->create($values);
+        }
+
+        $previous = (string) $regenerated->path;
+        $regenerated->forceFill($values)->save();
+        if ($previous !== '' && $previous !== $relative) {
+            Storage::disk('public')->delete($previous);
+        }
+
+        return $regenerated;
     }
 
     private function extractPdfUrlFromHtml(string $html, string $pageUrl): ?string
@@ -633,7 +675,8 @@ final class ProductDocumentDownloader
             }
         }
 
-        return self::kindFromHay(mb_strtolower(urldecode($url))) ?? ProductDocument::KIND_OTHER;
+        return self::kindFromHay(mb_strtolower(urldecode($url)))
+            ?? (self::looksLikeGeneratedCardUrl($url) ? ProductDocument::KIND_DATASHEET : ProductDocument::KIND_OTHER);
     }
 
     /**
@@ -684,7 +727,8 @@ final class ProductDocumentDownloader
         if (str_contains($pathLower, '/doc/')) {
             return 'Deklaracja zgodności UE.pdf';
         }
-        if (str_contains($pathLower, '/pds/')) {
+        // karta składana na żądanie: plik nazywałby się „pdf.php”
+        if (str_contains($pathLower, '/pds/') || ($kind === ProductDocument::KIND_DATASHEET && self::looksLikeGeneratedCardUrl($url))) {
             return 'Karta produktu.pdf';
         }
         // Nowe rodzaje nazywamy wprost po polsku, bo rozpoznaje je zwykle etykieta linku,
