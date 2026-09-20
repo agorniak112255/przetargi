@@ -459,17 +459,10 @@ final class ProductAiSearchService
         foreach ($modelStates as $i => $state) {
             // Po przepisaniu zapytania model mógł jednak coś ocenić — ale wiersze zapasu (reguła, lista katalogowa)
             // to nie ocena modelu; dotąd dawały stan „ranked” i pomiar nie widział pustych odpowiedzi (błąd E).
-            $rated = array_filter(
+            $done[$i]['model_state'] = $this->modelStateForRows(
                 is_array($done[$i]['products'] ?? null) ? $done[$i]['products'] : [],
-                static fn (array $row): bool => ! in_array(
-                    $row['ai_match_source'] ?? null,
-                    [self::MATCH_SOURCE_CATALOG, self::MATCH_SOURCE_RULE],
-                    true
-                )
+                $state,
             );
-            $done[$i]['model_state'] = $rated !== [] && $state !== self::MODEL_STATE_UNAVAILABLE
-                ? self::MODEL_STATE_RANKED
-                : $state;
             $done[$i]['model_providers'] = [
                 'understand' => $this->understandProviders[$i] ?? null,
                 'rank' => $rankProviderByIndex[$i] ?? null,
@@ -976,13 +969,15 @@ final class ProductAiSearchService
         }
         if ($prepared['rank_cards'] === null) {
             $result = $this->searchResult($query, $intent, $prepared['products'], $prepared['note'], $withExternalHint);
+            // Bez rankingu (nazwany model, brak kart) — model nie był pytany, jak w fali.
+            $result['model_state'] = self::MODEL_STATE_SKIPPED;
             if ($allowRewrite && $result['products'] === [] && ! $this->normalizeIntent($intent)['manufacturer_absent_in_catalog']) {
-                return $this->retryAfterRewrite($query, $retrieveIntent, $limit, $withExternalHint, $task);
+                return $this->retryAfterRewrite($query, $retrieveIntent, $limit, $withExternalHint, $task, self::MODEL_STATE_SKIPPED);
             }
 
             return $result;
         }
-        [$rankedIntent, $ranked, $rankFailed] = $this->clock(
+        [$rankedIntent, $ranked, $rankFailed, $modelState] = $this->clock(
             'rank_llm',
             fn (): array => $this->analyzeAndRank(
                 $query,
@@ -1036,6 +1031,9 @@ final class ProductAiSearchService
             $ranked === [] ? $emptyNote : null,
             $withExternalHint,
         );
+        // Jak w fali: wiersze zapasu (reguła, lista katalogowa) to nie ocena modelu, więc stan
+        // „ranked” tylko wtedy, gdy w wyniku została choć jedna karta oceniona przez model.
+        $result['model_state'] = $this->modelStateForRows($ranked, $modelState);
         if ($result['products'] !== [] || ! $allowRewrite) {
             return $result;
         }
@@ -1043,7 +1041,27 @@ final class ProductAiSearchService
             return $this->finishSearch($query, $rankedIntent, $limit, $withExternalHint, $task, false);
         }
 
-        return $this->retryAfterRewrite($query, $retrieveIntent, $limit, $withExternalHint, $task);
+        return $this->retryAfterRewrite($query, $retrieveIntent, $limit, $withExternalHint, $task, $result['model_state']);
+    }
+
+    /**
+     * Stan modelu po nałożeniu zapasów — wspólna reguła obu ścieżek: awaria zostaje awarią,
+     * a „ranked” wymaga karty, którą model faktycznie ocenił (nie z reguły ani listy katalogowej).
+     *
+     * @param  list<array<string, mixed>>  $rows
+     */
+    private function modelStateForRows(array $rows, string $modelState): string
+    {
+        if ($modelState === self::MODEL_STATE_UNAVAILABLE) {
+            return $modelState;
+        }
+        foreach ($rows as $row) {
+            if (! in_array($row['ai_match_source'] ?? null, [self::MATCH_SOURCE_CATALOG, self::MATCH_SOURCE_RULE], true)) {
+                return self::MODEL_STATE_RANKED;
+            }
+        }
+
+        return $modelState;
     }
 
     /**
@@ -1064,15 +1082,21 @@ final class ProductAiSearchService
         int $limit,
         bool $withExternalHint,
         AiTask $task,
+        string $modelState = self::MODEL_STATE_EMPTY,
     ): array {
         $rewritten = $this->clock('rewrite_llm', fn (): array => $this->rewriteCatalogIntent($query, $task));
         if (! $this->intentChanged($usedIntent, $rewritten)) {
-            return $this->emptyResult(
+            // Przepisanie nic nie zmieniło — stan i komunikat z rankingu zostają: awaria modelu
+            // nie może po przepisaniu wyglądać jak „nie znalazł”.
+            $result = $this->emptyResult(
                 $query,
                 $rewritten,
                 $withExternalHint,
-                self::NOTE_MODEL_EMPTY,
+                $modelState === self::MODEL_STATE_UNAVAILABLE ? self::NOTE_MODEL_FAILED : self::NOTE_MODEL_EMPTY,
             );
+            $result['model_state'] = $modelState;
+
+            return $result;
         }
 
         return $this->finishSearch($query, $rewritten, $limit, $withExternalHint, $task, false);
@@ -4875,11 +4899,24 @@ final class ProductAiSearchService
         } catch (Throwable $e) {
             Log::warning('product-ai-search.rank-failed', ['message' => $e->getMessage()]);
 
-            return [$this->localIntent($query), [], true];
+            return [$this->localIntent($query), [], true, self::MODEL_STATE_UNAVAILABLE];
         }
         $intent = $this->mergeRetrieveIntent($this->parseIntent($raw, $query), $retrieveIntent);
+        // Ten sam kontrakt co w fali: pusta tablica = wywołanie padło; obiekt z pustym `matches` =
+        // model odpowiedział „nic nie pasuje”. Bez tego stanu dopasowanie pojedynczej pozycji
+        // widziało „unknown” i ochrona „model padł → nie podstawiaj karty po słowach” nie działała.
+        $modelState = $raw === []
+            ? self::MODEL_STATE_UNAVAILABLE
+            : ((is_array($raw['matches'] ?? null) && $raw['matches'] !== [])
+                ? self::MODEL_STATE_RANKED
+                : self::MODEL_STATE_EMPTY);
 
-        return [$intent, $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $intent['needed'], $intent), false];
+        return [
+            $intent,
+            $this->rowsFromLlmMatches($query, $candidates, $raw, $limit, $intent['needed'], $intent),
+            false,
+            $modelState,
+        ];
     }
 
     /** @param array<string, mixed> $parsed @param array<string, mixed> $retrieve */

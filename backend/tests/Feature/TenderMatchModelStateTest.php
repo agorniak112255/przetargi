@@ -66,6 +66,24 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertSame(1, $result['model_failed']);
     }
 
+    public function test_single_item_waits_when_model_did_not_answer(): void
+    {
+        // Pojedyncza pozycja idzie przez search(), nie przez falę. Ta ścieżka nie zwracała
+        // model_state, więc dopasowanie widziało „unknown” i po awarii modelu podstawiało
+        // kartę po słowach z 99% — dokładnie to, przed czym chroni ścieżka wsadowa.
+        $this->glove('RNITZ-M');
+        $this->stubModel(static fn (): array => []);
+        [, $item] = $this->tenderWith(self::DESCRIPTIVE);
+
+        app(ProductMatchService::class)->matchItem($item, true);
+        $item->refresh();
+
+        $this->assertNull($item->main_product_id, 'bez odpowiedzi modelu pojedyncza pozycja nie może dostać karty po słowach');
+        $this->assertSame('brak', $item->status);
+        $this->assertNull($item->ai_match_percent);
+        $this->assertSame('model_unavailable', $item->ai_match_reasons[0]['code'] ?? null);
+    }
+
     public function test_descriptive_line_gets_capped_heuristic_when_model_found_nothing(): void
     {
         $glove = $this->glove('RNITZ-M');
