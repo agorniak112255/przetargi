@@ -2520,6 +2520,11 @@ final class ProductSearchIdentity
             || $this->looksLikeUnrelatedHandToolPage($url.' '.$title.' '.$text, $product)) {
             return false;
         }
+        // Karta wariantu z przyrostkiem (101/001/A) nie jest kartą 101/001 — żadna z dalszych dróg
+        // (numer sklejony w adresie, nazwa i marka) nie może jej wpuścić.
+        if ($this->codeAppearsOnlyAsSlashVariant(mb_strtolower($title.' '.$text), mb_strtolower(trim((string) $product->sku)))) {
+            return false;
+        }
         if ($this->manufacturerIsThreeM($product) && $this->isOfficialThreeMProductUrl($url)) {
             $card = $url.' '.$title.' '.$text;
             if (($this->hayHasProductCode($card, $product)
@@ -3836,7 +3841,10 @@ final class ProductSearchIdentity
         }
         $sku = trim((string) $product->sku);
         $name = trim($this->usableProductName($product));
-        if ($sku !== '' && ! $this->looksLikeInternalSku($product)
+        // Tytuł i treść, bez adresu: w adresie przyrostek wariantu stoi po myślniku („zestaw-bw100-az023”),
+        // więc kod bazowy wygląda tam na samodzielny.
+        $variantCard = $this->codeAppearsOnlyAsSlashVariant(mb_strtolower($title.' '.$text), mb_strtolower($sku));
+        if ($sku !== '' && ! $variantCard && ! $this->looksLikeInternalSku($product)
             && $this->tokenInHay($hay, $hayCompact, mb_strtolower($sku))) {
             return true;
         }
@@ -5524,6 +5532,36 @@ final class ProductSearchIdentity
         $stripped = trim((string) preg_replace($pattern, '', $code));
 
         return $stripped !== '' ? $stripped : $code;
+    }
+
+    /**
+     * Kod stoi na stronie wyłącznie z przyrostkiem po ukośniku — to karta innego wariantu.
+     * Produkcja 20.09.2026: zwykłe ubranie AJ GROUP 101/001 wzięło opis ze strony 101/001/A
+     * (antystatyczne) i dostało normę EN 1149-5. Tak samo 333 ≠ 333/WZ, 108 ≠ 108/PU, BW100 ≠ BW100/AZ023.
+     * Własna strona ma kod także bez przyrostka („model 101/001”, „101/001-00025-48/XS”), więc przechodzi.
+     * Podawać tytuł i treść strony, nie adres: w adresie ukośnik to separator ścieżki („…/modell-111/p-G40…”).
+     */
+    private function codeAppearsOnlyAsSlashVariant(string $hay, string $token): bool
+    {
+        if (preg_match('/\s/u', $token) === 1 || preg_match('/\d/u', $token) !== 1) {
+            return false;
+        }
+        $count = preg_match_all(
+            '/(?<![a-z0-9])'.preg_quote($token, '/').'(?![a-z0-9])(\/[a-z0-9])?/iu',
+            $hay,
+            $matches,
+            PREG_SET_ORDER
+        );
+        if ($count === false || $count === 0) {
+            return false;
+        }
+        foreach ($matches as $match) {
+            if (($match[1] ?? '') === '') {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function tokenInHay(string $hay, string $hayCompact, string $token): bool
