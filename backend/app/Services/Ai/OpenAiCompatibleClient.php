@@ -1511,19 +1511,28 @@ class OpenAiCompatibleClient
         if (app()->environment('testing')) {
             return 0;
         }
+
+        return $this->overloadWaitSeconds($response, $attempt);
+    }
+
+    /**
+     * Przerwa przed powtórką. Nagłówek Retry-After to dolna granica, nie cała przerwa: przetarg 1 na
+     * produkcji (20.09.2026) — dostawca odsyłał „Retry-After: 1”, obie powtórki 429 poszły w 2 sekundy
+     * i trzy pozycje zostały bez oceny modelu, choć limit minąłby po kilku sekundach.
+     */
+    private function overloadWaitSeconds(Response $response, int $attempt): int
+    {
         if ($response->status() === 100) {
-            return app()->environment('testing') ? 0 : 1;
-        }
-        $header = $response->header('Retry-After');
-        if (is_numeric($header)) {
-            return min(60, max(1, (int) $header));
+            return 1;
         }
 
         // Jitter jest tu istotny: bez niego wszystkie równoległe żądania wracają
         // w tej samej chwili i znowu przepełniają kolejkę slotów modelu.
         $base = [3, 8, 15, 25, 40][$attempt] ?? 40;
+        $wait = $base + random_int(0, intdiv($base, 2));
+        $header = $response->header('Retry-After');
 
-        return $base + random_int(0, intdiv($base, 2));
+        return is_numeric($header) ? min(60, max($wait, (int) $header)) : $wait;
     }
 
     /**
