@@ -11,6 +11,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -1638,9 +1639,73 @@ class OpenAiCompatibleClient
      */
     private function fitChatRequest(array $messages, int $requestedMaxTokens, array $profile): array
     {
-        $messages = $this->shrinkMessagesToFit($messages, self::MIN_OUTPUT_TOKENS, $profile);
+        $limit = $this->hardContextLimit($profile);
+        // Założony limit lokalnego serwera to --max-model-len dawnego vLLM. Zapytanie, które by się w nim nie
+        // zmieściło, sprawdza faktyczny limit serwera — 21.09.2026 Qwen na Sparku miał 65536, a klient ciął prompt
+        // rankingu (13,7 tys. znaków) do 947 znaków bez reguł i formatu odpowiedzi: 13 z 15 pozycji przetargu bez
+        // oceny modelu. Małe zapytania i chmura idą bez dodatkowego pytania.
+        if ($this->usesAssumedLocalLimit($profile)
+            && $this->estimatePromptTokens($messages) + max(self::MIN_OUTPUT_TOKENS, $requestedMaxTokens) + self::SLOT_RESERVE > $limit) {
+            $served = $this->servedMaxModelLen($profile);
+            if ($served !== null) {
+                $limit = max($limit, (int) floor($served * self::LOCAL_FIT_RATIO));
+            }
+        }
+        $messages = $this->shrinkMessagesToFit($messages, self::MIN_OUTPUT_TOKENS, $profile, $limit);
 
-        return [$messages, $this->fitMaxTokens($requestedMaxTokens, $messages, $profile)];
+        return [$messages, $this->fitMaxTokens($requestedMaxTokens, $messages, $profile, $limit)];
+    }
+
+    /**
+     * @param  array<string, mixed>  $profile
+     */
+    private function usesAssumedLocalLimit(array $profile): bool
+    {
+        $base = (string) ($profile['base_url'] ?? '');
+
+        return (int) config('ai.max_model_len', 0) < 1024 && $base !== '' && ! $this->isCloudEndpoint($base);
+    }
+
+    /**
+     * Limit kontekstu podany przez serwer modelu (vLLM: /v1/models → max_model_len) dla modelu profilu.
+     * Zapamiętany na godzinę; brak odpowiedzi — na 5 minut null, czyli dotychczasowy założony limit.
+     *
+     * @param  array<string, mixed>  $profile
+     * @param  bool  $fetch  false = tylko zapamiętana wartość, bez zapytania do serwera
+     */
+    private function servedMaxModelLen(array $profile, bool $fetch = true): ?int
+    {
+        $base = rtrim((string) ($profile['base_url'] ?? ''), '/');
+        $model = (string) ($profile['model'] ?? '');
+        if ($base === '') {
+            return null;
+        }
+        $key = 'ai:served-max-model-len:'.sha1($base.'|'.$model);
+        $cached = Cache::get($key);
+        if (is_int($cached)) {
+            return $cached > 0 ? $cached : null;
+        }
+        if (! $fetch) {
+            return null;
+        }
+
+        $found = 0;
+        try {
+            $response = Http::timeout(5)
+                ->withToken((string) ($profile['api_key'] ?? ''))
+                ->acceptJson()
+                ->get($base.'/models');
+            $models = $response->successful() && is_array($response->json('data')) ? $response->json('data') : [];
+            $entry = collect($models)->first(static fn (mixed $m): bool => is_array($m) && ($m['id'] ?? null) === $model)
+                ?? (count($models) === 1 ? $models[0] : null);
+            $len = is_array($entry) ? ($entry['max_model_len'] ?? null) : null;
+            $found = is_int($len) && $len >= 1024 ? $len : 0;
+        } catch (Throwable) {
+            $found = 0;
+        }
+        Cache::put($key, $found, $found > 0 ? 3600 : 300);
+
+        return $found > 0 ? $found : null;
     }
 
     /**
@@ -1648,9 +1713,9 @@ class OpenAiCompatibleClient
      * @param  array<string, mixed>  $profile
      * @return list<array{role: string, content: mixed}>
      */
-    private function shrinkMessagesToFit(array $messages, int $minOutputTokens, array $profile): array
+    private function shrinkMessagesToFit(array $messages, int $minOutputTokens, array $profile, ?int $limit = null): array
     {
-        $limit = $this->hardContextLimit($profile);
+        $limit ??= $this->hardContextLimit($profile);
         $keep = 0.82;
         for ($i = 0; $i < 8; $i++) {
             if ($this->estimatePromptTokens($messages) + $minOutputTokens + self::SLOT_RESERVE <= $limit) {
@@ -1709,9 +1774,9 @@ class OpenAiCompatibleClient
      * @param  list<array{role: string, content: mixed}>  $messages
      * @param  array<string, mixed>  $profile
      */
-    private function fitMaxTokens(int $requested, array $messages, array $profile = []): int
+    private function fitMaxTokens(int $requested, array $messages, array $profile = [], ?int $limit = null): int
     {
-        $room = $this->hardContextLimit($profile) - $this->estimatePromptTokens($messages) - self::SLOT_RESERVE;
+        $room = ($limit ?? $this->hardContextLimit($profile)) - $this->estimatePromptTokens($messages) - self::SLOT_RESERVE;
 
         return max(self::MIN_OUTPUT_TOKENS, min($requested, $room));
     }
@@ -1730,7 +1795,10 @@ class OpenAiCompatibleClient
             return self::CLOUD_MAX_MODEL_LEN;
         }
 
-        return (int) floor(self::LOCAL_MAX_MODEL_LEN * self::LOCAL_FIT_RATIO);
+        // limit podany przez serwer, jeśli już go znamy (servedMaxModelLen) — bez pytania serwera tutaj
+        $served = $this->servedMaxModelLen($profile, fetch: false);
+
+        return (int) floor(max(self::LOCAL_MAX_MODEL_LEN, $served ?? 0) * self::LOCAL_FIT_RATIO);
     }
 
     private function isCloudEndpoint(string $baseUrl): bool
