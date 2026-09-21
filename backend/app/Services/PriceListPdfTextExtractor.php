@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\PolishPdfMojibake;
 use RuntimeException;
 use Smalot\PdfParser\Parser;
 
@@ -20,7 +21,7 @@ final class PriceListPdfTextExtractor
         } catch (\Throwable $e) {
             throw $this->scanOrRethrow($path, $e);
         }
-        $text = $this->ensureUtf8($text);
+        $text = PolishPdfMojibake::repair($this->ensureUtf8($text));
         $text = $this->normalizeWhitespace($text);
 
         if (mb_strlen($text) < 40) {
@@ -47,7 +48,7 @@ final class PriceListPdfTextExtractor
         if ($text === null) {
             return null;
         }
-        $text = $this->ensureUtf8($text);
+        $text = PolishPdfMojibake::repair($this->ensureUtf8($text));
         $text = $this->normalizeWhitespace($text);
         if (mb_strlen($text) < 40) {
             return null;
