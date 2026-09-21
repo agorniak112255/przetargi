@@ -614,6 +614,8 @@ final class TenderEvalCommand extends Command
             'model_providers' => $this->rowProviders($row),
             'external_hint' => null,
             'products' => $products,
+            // Karty odrzucone przez model (< 40) — bez nich --replay wybierałby je po słowach z 70%.
+            'trace' => ['model_rejected' => is_array($row['trace']['model_rejected'] ?? null) ? $row['trace']['model_rejected'] : []],
         ];
     }
 

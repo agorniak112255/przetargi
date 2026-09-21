@@ -77,6 +77,14 @@ final class ProductMatchService
      */
     private array $aiModelState = [];
 
+    /**
+     * Karty odrzucone przez model (ocena < 40) per wymaganie — ze śladu wyszukiwania (`model_rejected`).
+     * Nie ma ich w wyniku, a bez tej listy dobór po słowach zapisywał je z 70% jako „bez oceny modelu”.
+     *
+     * @var array<string, list<array{id: int, score: int, reason: ?string}>>
+     */
+    private array $aiModelRejected = [];
+
     /** Powód, dla którego bieżąca pozycja zostaje bez produktu (poza „nic nie pasuje”). */
     private ?string $lastNoMatchReason = null;
 
@@ -1869,13 +1877,15 @@ final class ProductMatchService
             }
             // Model ocenił tę kartę poniżej progu (ranking: brak dowodu kluczowego warunku → najwyżej 50,
             // np. 9312+ bez węgla aktywnego) — słowa karty nie odwracają tej oceny i nie dopisują
-            // „bez oceny modelu” z 70%.
-            $lowModelScore = $this->modelScoreBelowMin($aiCandidates, (int) $heuristic['product']->id);
+            // „bez oceny modelu” z 70%. Dotyczy też kart odrzuconych przez model (< 40: inny rodzaj wyrobu,
+            // sprzeczność), których nie ma w wyniku wyszukiwania.
+            $rated = $this->withModelRejected($requirement, $aiCandidates);
+            $lowModelScore = $this->modelScoreBelowMin($rated, (int) $heuristic['product']->id);
             if ($lowModelScore !== null) {
                 $this->lastModelLowScore = [
                     'sku' => (string) $heuristic['product']->sku,
                     'score' => $lowModelScore,
-                    'reason' => $this->modelReasonBelowMin($aiCandidates, (int) $heuristic['product']->id),
+                    'reason' => $this->modelReasonBelowMin($rated, (int) $heuristic['product']->id),
                 ];
 
                 return $this->proposalPick($requirement, $aiCandidates, $products);
@@ -2070,6 +2080,22 @@ final class ProductMatchService
         return null;
     }
 
+    /**
+     * Kandydaci modelu uzupełnieni o karty, które model odrzucił (ocena < 40), dla modelScoreBelowMin /
+     * modelReasonBelowMin. Wiersz z wyniku wyszukiwania stoi pierwszy, więc ma pierwszeństwo.
+     *
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     * @return list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>
+     */
+    private function withModelRejected(string $requirement, array $aiCandidates): array
+    {
+        foreach ($this->aiModelRejected[$this->aiCandidatesCacheKey($requirement)] ?? [] as $rejected) {
+            $aiCandidates[] = $rejected + ['sku' => '', 'name' => '', 'source' => 'ai'];
+        }
+
+        return $aiCandidates;
+    }
+
     private function modelStateFor(string $requirement): string
     {
         return $this->aiModelState[$this->aiCandidatesCacheKey($requirement)] ?? 'unknown';
@@ -2196,6 +2222,16 @@ final class ProductMatchService
     {
         $cacheKey = $this->aiCandidatesCacheKey($requirement);
         $this->aiModelState[$cacheKey] = is_string($result['model_state'] ?? null) ? $result['model_state'] : 'unknown';
+        $this->aiModelRejected[$cacheKey] = [];
+        foreach (is_array($result['trace']['model_rejected'] ?? null) ? $result['trace']['model_rejected'] : [] as $rejected) {
+            if (is_array($rejected) && (int) ($rejected['id'] ?? 0) > 0) {
+                $this->aiModelRejected[$cacheKey][] = [
+                    'id' => (int) $rejected['id'],
+                    'score' => (int) ($rejected['score'] ?? 0),
+                    'reason' => is_string($rejected['reason'] ?? null) ? $rejected['reason'] : null,
+                ];
+            }
+        }
         $hint = $result['external_hint'] ?? null;
         if (is_array($hint) && isset($hint['url'], $hint['title'])) {
             $this->lastExternalHint = [
@@ -2716,18 +2752,16 @@ final class ProductMatchService
     {
         $score = min($honest, (int) ($item->ai_match_percent ?? $honest), self::HEURISTIC_ONLY_CAP);
         $reasons = $this->explainMatch($item->requirement, $existing)['reasons'];
-        $modelScore = $this->modelScoreBelowMin(
+        $rated = $this->withModelRejected(
+            $item->requirement,
             $this->aiCandidatesCache[$this->aiCandidatesCacheKey($item->requirement)] ?? [],
-            (int) $existing->id,
         );
+        $modelScore = $this->modelScoreBelowMin($rated, (int) $existing->id);
         if ($this->lastNoMatchReason === self::NO_MATCH_MODEL_UNAVAILABLE) {
             $label = 'Model nie odpowiedział — zostawiono poprzednią kartę bez ponownej oceny (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.';
         } elseif ($modelScore !== null) {
             $score = min($score, $modelScore);
-            $modelReason = $this->modelReasonBelowMin(
-                $this->aiCandidatesCache[$this->aiCandidatesCacheKey($item->requirement)] ?? [],
-                (int) $existing->id,
-            );
+            $modelReason = $this->modelReasonBelowMin($rated, (int) $existing->id);
             $label = $modelReason !== null
                 ? 'Model ocenił poprzednią kartę na '.$modelScore.'% (poniżej progu) — zostawiono ją do sprawdzenia. Ocena modelu: '.$modelReason
                 : 'Model ocenił poprzednią kartę na '.$modelScore.'% (poniżej progu, zwykle brak dowodu kluczowego warunku) — zostawiono ją do sprawdzenia.';

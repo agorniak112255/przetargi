@@ -212,6 +212,10 @@ final class ProductAiSearchService
         // Powód awarii kroku „zrozum” (wyjątek/timeout) — trafia do `search_events`,
         // żeby intent lokalny z całym tekstem dało się odróżnić od decyzji modelu.
         'intent_error' => null,
+        // Karty z listy rankingu ocenione przez model poniżej 40 (inny rodzaj wyrobu / sprzeczność): {id, score, reason}.
+        // Wypadają z wyniku, ale dopasowanie przetargu musi wiedzieć, że model je odrzucił — inaczej wybierało
+        // tę samą kartę po słowach z 70% jako „bez oceny modelu”.
+        'model_rejected' => [],
     ];
 
     public function __construct(
@@ -950,6 +954,42 @@ final class ProductAiSearchService
                 $this->trace['llm_matches'][] = ['id' => $id, 'score' => (int) ($match['score'] ?? 0)];
             }
         }
+    }
+
+    /**
+     * Zapisuje w śladzie karty z listy rankingu, które model ocenił poniżej 40. Liczy się tylko jawna ocena
+     * (trafienie bez `score` to nie odrzucenie) i id karty, którą model faktycznie dostał. Przy kolejnym
+     * przebiegu (rewrite) najnowsza ocena karty zastępuje wcześniejszą — także gdy teraz ma ≥ 40.
+     *
+     * @param  array<mixed>  $matches
+     * @param  Collection<int|string, Product>  $byId
+     */
+    private function traceModelRejected(array $matches, Collection $byId): void
+    {
+        $scoredIds = [];
+        $rejected = [];
+        foreach ($matches as $m) {
+            if (! is_array($m) || ! is_numeric($m['score'] ?? null)) {
+                continue;
+            }
+            $id = (int) ($m['id'] ?? 0);
+            if ($id <= 0 || ! $byId->has($id)) {
+                continue;
+            }
+            $scoredIds[] = $id;
+            if ((int) $m['score'] < 40) {
+                $rejected[] = [
+                    'id' => $id,
+                    'score' => (int) $m['score'],
+                    'reason' => is_string($m['reason'] ?? null) ? $m['reason'] : null,
+                ];
+            }
+        }
+        $kept = array_filter(
+            $this->trace['model_rejected'] ?? [],
+            static fn (array $row): bool => ! in_array((int) $row['id'], $scoredIds, true),
+        );
+        $this->trace['model_rejected'] = [...array_values($kept), ...$rejected];
     }
 
     private function rankLimit(int $displayLimit): int
@@ -5339,6 +5379,7 @@ final class ProductAiSearchService
         $matches = is_array($raw['matches'] ?? null) ? $raw['matches'] : [];
         $candidates = $this->withResponseRelations($candidates);
         $byId = $candidates->keyBy('id');
+        $this->traceModelRejected($matches, $byId);
         $out = [];
 
         foreach ($matches as $m) {
