@@ -150,26 +150,28 @@ final class ArdonB2bClient
 
     /**
      * Adresy stron produktów z podpowiedzi wyszukiwarki dla kodu, w kolejności sklepu. Podpowiedź to trafienie
-     * pełnotekstowe, nie dopasowanie kodu — który adres jest tym wyrobem, rozstrzyga łącznik na stronie produktu.
+     * pełnotekstowe, nie dopasowanie kodu (po zalogowaniu „A1020” daje najpierw uprzęże „FA1020…”) — który adres
+     * jest tym wyrobem, rozstrzyga łącznik na stronie produktu. Zdjęcie podpowiedzi podajemy dalej, bo jego nazwa
+     * pliku zwykle zaczyna się kodem wyrobu („A1020_001.jpg.webp”).
      *
-     * @return list<string>
+     * @return list<array{url: string, image: string}>
      */
-    public function searchProductUrls(string $query): array
+    public function searchProducts(string $query): array
     {
         $response = $this->send(static fn (PendingRequest $http): Response => $http
             ->acceptJson()
             ->withHeaders(['X-Requested-With' => 'XMLHttpRequest'])
             ->get(self::SEARCH_URL, ['query' => $query]));
         $json = $response->json();
-        $urls = [];
+        $found = [];
         foreach (is_array($json['products'] ?? null) ? $json['products'] : [] as $product) {
             $url = is_array($product) && is_string($product['url'] ?? null) ? trim($product['url']) : '';
-            if (self::isOwnUrl($url) && ! in_array($url, $urls, true)) {
-                $urls[] = $url;
+            if (self::isOwnUrl($url) && ! isset($found[$url])) {
+                $found[$url] = ['url' => $url, 'image' => is_string($product['image'] ?? null) ? trim($product['image']) : ''];
             }
         }
 
-        return $urls;
+        return array_values($found);
     }
 
     /**

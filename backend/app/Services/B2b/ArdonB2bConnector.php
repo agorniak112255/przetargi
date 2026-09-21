@@ -25,7 +25,9 @@ use RuntimeException;
  * („ATG® NBR-Lite® 24-985”). Katalog trzyma karty ATG pod numerem artykułu ATG i pod nim wiąże je łącznik witryny
  * producenta (AtgB2bConnector: normy, opis, pliki) — kod Ardon założyłby drugą kartę tego samego wyrobu.
  *
- * Producent: część kart ma w tabelce „Parametry” wiersz „Producent” z marką („3M”) — bierzemy go dosłownie.
+ * Producent: część kart ma w tabelce „Parametry” wiersz „Producent” z marką („3M”) — bierzemy go dosłownie (poza
+ * odmienioną formą z PARAMETER_BRANDS). Wyrób z „ARDON®” w nazwie to marka ARDON, także gdy dane strukturalne
+ * podają fabrykę, w której Ardon go zamawia.
  * Poza tym sklep podaje w danych strukturalnych tylko nazwę prawną dostawcy („3M Česko, spol. s r.o.”); na markę
  * zamieniamy tylko nazwy sprawdzone w MANUFACTURERS — nieznaną zostawiamy dosłownie i wypisujemy w podsumowaniu
  * przebiegu. Nazwa prawna trafia też dosłownie do tabelki sklepu („Marka w danych sklepu”).
@@ -70,7 +72,29 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
         'UNIVET s.r.l.' => 'Univet',
         'Kratos Safety' => 'Kratos Safety',
         'Productos Climax S.A.' => 'Climax',
+        // sprawdzone po pierwszym przebiegu 21.09.2026 — firma jest właścicielem marki z nazw wyrobów
+        'ANSELL HEALTHCARE EUROPE N.V.' => 'Ansell',
+        'WELDAS EUROPE B.V.' => 'Weldas',
+        'PAB Akrapovič d.o.o.' => 'PAB',
+        'OKULA Nýrsko a.s.' => 'Okula',
+        'FAGUM - STOMIL Sp. z o. o.' => 'Fagum-Stomil',
+        'Medicom SAS' => 'Medicom',
+        'JS GLOVES Szewczyk Sp. J.' => 'JS Gloves',
+        'Moleda, a.s.' => 'Moleda',
     ];
+
+    /**
+     * Wiersz „Producent” z tabelki sklepu w złej formie — polski tekst sklepu jest tłumaczeniem maszynowym
+     * i odmienia markę („Sundströma”, 33 karty 21.09.2026). Klucz małymi literami.
+     *
+     * @var array<string, string>
+     */
+    private const PARAMETER_BRANDS = [
+        'sundströma' => 'Sundström',
+    ];
+
+    /** Marka ARDON wprost w nazwie wyrobu („Kalosze robocze ARDON®NIGHTFISH OB”, „ARDON®SAFETY”). */
+    private const ARDON_NAME = '/\bARDON\s*®/u';
 
     /** Litery czeskie i słowackie, których nie ma w polskim alfabecie. */
     private const CZECH_SLOVAK_LETTERS = '/[áäčďéěíĺľňôŕřšťúůýž]/u';
@@ -88,6 +112,9 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
 
     /** @var list<string> kody bazowe bez odnalezionej strony produktu */
     private array $withoutPage = [];
+
+    /** @var list<string> kody bazowe, które w cenniku nie mają nazwy (sklep ich nie pokazuje) */
+    private array $withoutName = [];
 
     /** @var array<string, int> nazwa prawna spoza MANUFACTURERS → liczba kart */
     private array $unknownManufacturers = [];
@@ -133,6 +160,7 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
         $cards = self::group($rows);
         $this->total = count($cards);
         $this->withoutPage = [];
+        $this->withoutName = [];
         $this->unknownManufacturers = [];
         $this->pages = [];
         $groups = count(array_filter($cards, static fn (array $card): bool => count($card['rows']) > 1));
@@ -152,8 +180,12 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
     {
         $lines = $this->summary;
         if ($this->withoutPage !== []) {
-            $lines[] = 'Bez strony produktu w sklepie: '.count($this->withoutPage).' kart (pominięte, bo producent nieznany; ATG — z ceną, bez treści), np. '
+            $lines[] = 'Bez strony produktu w sklepie: '.count($this->withoutPage).' kart (pominięte, bo producent nieznany; ATG i ARDON® — z ceną, bez treści), np. '
                 .implode(', ', array_slice($this->withoutPage, 0, 10));
+        }
+        if ($this->withoutName !== []) {
+            $lines[] = 'Bez nazwy w cenniku Ardona: '.count($this->withoutName).' kart (pominięte — sklep nie podaje nazwy ani strony), np. '
+                .implode(', ', array_slice($this->withoutName, 0, 10));
         }
         if ($this->unknownManufacturers !== []) {
             arsort($this->unknownManufacturers);
@@ -470,13 +502,21 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
         $rows = $card['rows'];
         $first = $rows[0];
         $grouped = count($rows) > 1;
-        $page = $this->findPage($card['base']);
+        $page = $this->findPage($card['base'], $first['name']);
         $url = $page['url'] ?? null;
 
         $legal = self::text($page['legal_manufacturer'] ?? null);
         $atg = self::atgArticle($first['name']) !== null;
-        // marka: ATG z nazwy; wiersz „Producent” z tabelki strony (dosłownie, np. „3M”); nazwa prawna z listy
-        $manufacturer = $atg ? 'ATG' : (self::parameter($page['parameters'] ?? [], 'Producent') ?? self::brandOf($legal));
+        // marka: ATG z nazwy; wiersz „Producent” z tabelki strony (dosłownie, np. „3M”); ARDON® w nazwie wyrobu —
+        // Ardon zamawia część własnych wyrobów w fabrykach innych firm, a dane strukturalne podają wtedy fabrykę
+        // („Dikamar S.A.” przy kaloszach ARDON®NIGHTFISH); na końcu nazwa prawna z listy
+        $parameter = self::parameter($page['parameters'] ?? [], 'Producent');
+        $manufacturer = match (true) {
+            $atg => 'ATG',
+            $parameter !== null => self::PARAMETER_BRANDS[mb_strtolower($parameter)] ?? $parameter,
+            preg_match(self::ARDON_NAME, $first['name']) === 1 => 'ARDON',
+            default => self::brandOf($legal),
+        };
         if ($manufacturer === null && $legal !== '') {
             $manufacturer = $legal;
             $this->unknownManufacturers[$legal] = ($this->unknownManufacturers[$legal] ?? 0) + 1;
@@ -516,33 +556,76 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
 
     /**
      * Strona produktu kodu bazowego: podpowiedzi wyszukiwarki, a z nich pierwsza strona, której dane strukturalne
-     * mają ten kod (mpn). Błąd zapytania nie przerywa przebiegu: karta bez strony nie zna producenta, więc
-     * synchronizacja ją pomija z powodem (manufacturer()), a wyrób ATG dostaje samą cenę.
+     * mają ten kod (mpn). Najpierw szukamy po kodzie, a gdy żadna podpowiedź nie jest tym wyrobem — po nazwie
+     * z cennika: po zalogowaniu wyszukiwarka dopasowuje fragment tekstu i dla „A1020” podaje same uprzęże
+     * „FA1020…”, bez rękawicy A1020 (21.09.2026). Podpowiedzi ze zdjęciem nazwanym tym kodem sprawdzamy pierwsze.
+     *
+     * Błąd zapytania nie przerywa przebiegu: karta bez strony nie zna producenta, więc synchronizacja ją pomija
+     * z powodem (manufacturer()), a wyrób ATG dostaje samą cenę. Pozycji bez nazwy w cenniku nie szukamy —
+     * synchronizacja i tak ją pomija („brak kodu lub nazwy”), a sklep takich wyrobów nie pokazuje.
      *
      * @return array{url: string, legal_manufacturer: string, image: string|null, categories: list<string>, description: string, parameters: list<array{0: string, 1: string}>, documents: list<array{0: string, 1: string}>}|null
      */
-    private function findPage(string $baseCode): ?array
+    private function findPage(string $baseCode, string $name): ?array
     {
         $key = mb_strtolower($baseCode);
         if (array_key_exists($key, $this->pages)) {
             return $this->pages[$key];
         }
         $this->pages[$key] = null;
-        try {
-            foreach (array_slice($this->client->searchProductUrls($baseCode), 0, self::SEARCH_CANDIDATES) as $url) {
-                $page = self::parsePage($this->client->page($url), $baseCode);
-                if ($page !== null) {
-                    return $this->pages[$key] = ['url' => $url, ...$page];
+        if (trim($name) === '') {
+            $this->withoutName[] = $baseCode;
+
+            return null;
+        }
+
+        $checked = [];
+        foreach (array_unique([$baseCode, trim($name)]) as $query) {
+            try {
+                $candidates = array_values(array_filter(
+                    self::rankByImage($this->client->searchProducts($query), $baseCode),
+                    static fn (array $candidate): bool => ! isset($checked[$candidate['url']]),
+                ));
+                foreach (array_slice($candidates, 0, self::SEARCH_CANDIDATES) as $candidate) {
+                    $checked[$candidate['url']] = true;
+                    $page = self::parsePage($this->client->page($candidate['url']), $baseCode);
+                    if ($page !== null) {
+                        return $this->pages[$key] = ['url' => $candidate['url'], ...$page];
+                    }
                 }
+            } catch (B2bFatalException $e) {
+                throw $e;
+            } catch (RuntimeException) {
+                // błąd tego zapytania — próbujemy następnego; bez strony kod trafia do podsumowania przebiegu
             }
-        } catch (B2bFatalException $e) {
-            throw $e;
-        } catch (RuntimeException) {
-            // jak brak strony — kod trafia do podsumowania przebiegu
         }
         $this->withoutPage[] = $baseCode;
 
         return null;
+    }
+
+    /**
+     * Podpowiedzi ze zdjęciem, którego nazwa pliku zaczyna się kodem wyrobu („A1020_001.jpg.webp”), na początek;
+     * poza tym kolejność sklepu. To tylko kolejność sprawdzania — o trafieniu decyduje mpn na stronie produktu.
+     *
+     * @param  list<array{url: string, image: string}>  $candidates
+     * @return list<array{url: string, image: string}>
+     */
+    private static function rankByImage(array $candidates, string $baseCode): array
+    {
+        $pattern = '/^'.preg_quote(mb_strtolower($baseCode), '/').'[_.\-]/u';
+        $matching = [];
+        $rest = [];
+        foreach ($candidates as $candidate) {
+            $file = mb_strtolower(basename((string) parse_url($candidate['image'], PHP_URL_PATH)));
+            if (preg_match($pattern, $file) === 1) {
+                $matching[] = $candidate;
+            } else {
+                $rest[] = $candidate;
+            }
+        }
+
+        return [...$matching, ...$rest];
     }
 
     /**

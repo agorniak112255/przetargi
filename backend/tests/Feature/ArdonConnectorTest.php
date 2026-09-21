@@ -184,7 +184,7 @@ final class ArdonConnectorTest extends TestCase
         $this->assertSame('ARDON', $connector->manufacturer($alfa));
         $this->assertSame('3M', $connector->manufacturer($products['C1020']));
         $this->assertSame('Univet', $connector->manufacturer($products['E4085']));
-        $this->assertSame('WELDAS EUROPE B.V.', $connector->manufacturer($products['I4999']));
+        $this->assertSame('HARPS Investment Asia Pte. Ltd.', $connector->manufacturer($products['I4999']));
         $this->assertSame('ATG', $connector->manufacturer($products['24-985']));
         $this->assertSame([], $products['C1020']->members);
         $this->assertNull($products['C1020']->variantSummary);
@@ -200,7 +200,49 @@ final class ArdonConnectorTest extends TestCase
         $this->assertSame('Cennik Ardon: 10 pozycji → 7 kart (2 grup rozmiarów o tej samej cenie)', $summary[0]);
         $this->assertStringContainsString('Bez strony produktu w sklepie: 1 kart', $summary[1]);
         $this->assertStringContainsString('X9999', $summary[1]);
-        $this->assertSame('Producent spoza listy marek — zapisany dosłownie nazwą ze sklepu: WELDAS EUROPE B.V. (1)', $summary[2]);
+        $this->assertSame('Producent spoza listy marek — zapisany dosłownie nazwą ze sklepu: HARPS Investment Asia Pte. Ltd. (1)', $summary[2]);
+    }
+
+    public function test_page_is_found_by_the_image_named_with_the_code_or_by_the_name_when_the_code_search_misses(): void
+    {
+        $this->rows = [
+            'A1020/08;Rękawice wzmacniane skórą ARDON®MECHANIK;5,568;43,000;3,174',
+            'A2010/09;Rękawice spawalnicze ARDON®GLEN;16,869;43,000;9,615',
+            // pozycja bez nazwy w cenniku — sklep jej nie pokazuje, nie szukamy
+            'A3045;;11,645;42,000;6,754',
+        ];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = $this->productsBySku($connector);
+
+        $this->assertSame('https://www.ardon.pl/rekawice-mechanik', $products['A1020']->sourceUrl);
+        $this->assertSame('https://www.ardon.pl/rekawice-glen', $products['A2010']->sourceUrl);
+        // uprzęże otwiera tylko A2010 (3 pierwsze podpowiedzi po kodzie); A1020 zaczyna od podpowiedzi ze swoim zdjęciem
+        $this->assertCount(3, Http::recorded(fn (Request $r): bool => (bool) preg_match('#/(uprzaz|lina)-fa#', $r->url())));
+        $this->assertNull($products['A3045']->sourceUrl);
+        $this->assertCount(0, Http::recorded(fn (Request $r): bool => str_contains($r->url(), 'query=A3045')));
+        $summary = $connector->runSummary();
+        $this->assertCount(2, $summary);
+        $this->assertSame('Bez nazwy w cenniku Ardona: 1 kart (pominięte — sklep nie podaje nazwy ani strony), np. A3045', $summary[1]);
+    }
+
+    public function test_brand_fixes_inflected_producer_row_ardon_made_elsewhere_and_known_company_names(): void
+    {
+        $this->rows = [
+            'F8000;Filtr SR 510;10,000;43,000;5,700',
+            'G3300/40;Kalosze robocze ARDON®NIGHTFISH OB;10,000;43,000;5,700',
+            'A9500/09;Rękawice chemiczne AlphaTec® 37-676;10,000;43,000;5,700',
+        ];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = $this->productsBySku($connector);
+
+        $this->assertSame('Sundström', $connector->manufacturer($products['F8000']));
+        $this->assertSame('ARDON', $connector->manufacturer($products['G3300']));
+        $this->assertSame('Ansell', $connector->manufacturer($products['A9500']));
+        $this->assertCount(1, $connector->runSummary());
     }
 
     public function test_a_code_in_two_prices_is_searched_and_read_once(): void
@@ -550,25 +592,70 @@ final class ArdonConnectorTest extends TestCase
                 'description' => '<p>Okulary ochronne.</p>', 'parameters' => [], 'files' => [],
             ],
             '/rekawice-spawalnicze-i4999' => [
-                'mpn' => 'I4999', 'name' => 'Rękawice spawalnicze testowe', 'brand' => 'WELDAS EUROPE B.V.',
+                'mpn' => 'I4999', 'name' => 'Rękawice spawalnicze testowe', 'brand' => 'HARPS Investment Asia Pte. Ltd.',
                 'description' => '<p>Rękawice spawalnicze.</p>', 'parameters' => [], 'files' => ['I4999-DoC-EN.pdf'],
+            ],
+            // uprzęże o kodach „FA1020…” — po zalogowaniu wyszukiwarka podaje je dla „A1020” i „A2010”
+            '/uprzaz-fa1020600a' => ['mpn' => 'I4001', 'name' => 'Uprząż FA1020600A', 'brand' => 'Kratos Safety', 'description' => '', 'parameters' => [], 'files' => []],
+            '/uprzaz-fa1020300' => ['mpn' => 'I4002', 'name' => 'Uprząż FA1020300', 'brand' => 'Kratos Safety', 'description' => '', 'parameters' => [], 'files' => []],
+            '/uprzaz-fa1020700' => ['mpn' => 'I4024', 'name' => 'Uprząż FA1020700', 'brand' => 'Kratos Safety', 'description' => '', 'parameters' => [], 'files' => []],
+            '/lina-fa2010010' => ['mpn' => 'I4039', 'name' => 'Lina FA2010010', 'brand' => 'Kratos Safety', 'description' => '', 'parameters' => [], 'files' => []],
+            '/rekawice-mechanik' => [
+                'mpn' => 'A1020', 'name' => 'Rękawice wzmacniane skórą ARDON®MECHANIK', 'brand' => 'ARDON s.r.o.',
+                'description' => '<p>Rękawice robocze.</p>', 'parameters' => [], 'files' => [],
+            ],
+            '/rekawice-glen' => [
+                'mpn' => 'A2010', 'name' => 'Rękawice spawalnicze ARDON®GLEN', 'brand' => 'ARDON s.r.o.',
+                'description' => '<p>Rękawice spawalnicze.</p>', 'parameters' => [], 'files' => [],
+            ],
+            '/filtr-sr-510' => [
+                'mpn' => 'F8000', 'name' => 'Filtr SR 510', 'brand' => 'Sundström Safety AB',
+                'description' => '<p>Filtr.</p>', 'parameters' => ['Producent' => 'Sundströma'], 'files' => [],
+            ],
+            '/kalosze-nightfish' => [
+                'mpn' => 'G3300', 'name' => 'Kalosze robocze ARDON®NIGHTFISH OB', 'brand' => 'Dikamar S.A.',
+                'description' => '<p>Kalosze.</p>', 'parameters' => [], 'files' => [],
+            ],
+            '/rekawice-alphatec' => [
+                'mpn' => 'A9500', 'name' => 'Rękawice chemiczne AlphaTec® 37-676', 'brand' => 'ANSELL HEALTHCARE EUROPE N.V.',
+                'description' => '<p>Rękawice chemiczne.</p>', 'parameters' => [], 'files' => [],
             ],
         ];
     }
 
-    /** Podpowiedzi wyszukiwarki dla kodu (kolejność jak w sklepie — pierwsza bywa innym wyrobem). */
+    /**
+     * Podpowiedzi wyszukiwarki (kolejność jak w sklepie — pierwsza bywa innym wyrobem): adres i zdjęcie podpowiedzi;
+     * zdjęcie wyrobu nazywa się kodem („A1020_001.jpg.webp”), zdjęcia uprzęży — swoim kodem.
+     *
+     * @return list<array{0: string, 1: string}>
+     */
     private function suggestions(string $query): array
     {
         if (in_array($query, $this->searchMisses, true)) {
             return [];
         }
+        $image = static fn (string $code): string => 'https://www.ardon.cz/images/palette/shared/www/multimedia/products/'.$code.'_001.39686828.jpg.webp';
+        $harnesses = [
+            ['/uprzaz-fa1020600a', $image('I4001')],
+            ['/uprzaz-fa1020300', $image('I4002')],
+            ['/uprzaz-fa1020700', $image('I4024')],
+            ['/lina-fa2010010', $image('I4039')],
+        ];
 
         return match ($query) {
-            'A5001' => ['/rekawice-a50010', '/rekawice-a5001'],
-            'A3031' => ['/atg-r-nbr-lite-24-985'],
-            'C1020' => ['/wkladki-przeciwhalasowe-3m-1100'],
-            'E4085' => ['/okulary-univet-506up'],
-            'I4999' => ['/rekawice-spawalnicze-i4999'],
+            'A5001' => [['/rekawice-a50010', ''], ['/rekawice-a5001', '']],
+            'A3031' => [['/atg-r-nbr-lite-24-985', '']],
+            'C1020' => [['/wkladki-przeciwhalasowe-3m-1100', '']],
+            'E4085' => [['/okulary-univet-506up', '']],
+            'I4999' => [['/rekawice-spawalnicze-i4999', '']],
+            // właściwy wyrób dopiero piąty, ale ma zdjęcie nazwane swoim kodem
+            'A1020' => [...$harnesses, ['/rekawice-mechanik', $image('A1020')]],
+            // po kodzie wyrobu w ogóle nie ma — jest dopiero po nazwie z cennika
+            'A2010' => $harnesses,
+            'Rękawice spawalnicze ARDON®GLEN' => [['/rekawice-glen', $image('A2010')]],
+            'F8000' => [['/filtr-sr-510', '']],
+            'G3300' => [['/kalosze-nightfish', '']],
+            'A9500' => [['/rekawice-alphatec', '']],
             default => [],
         };
     }
@@ -615,7 +702,7 @@ final class ArdonConnectorTest extends TestCase
                 parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
 
                 return Http::response(['categories' => [], 'products' => array_map(
-                    static fn (string $p): array => ['label' => 'x', 'url' => 'https://www.ardon.pl'.$p, 'image' => ''],
+                    static fn (array $p): array => ['label' => 'x', 'url' => 'https://www.ardon.pl'.$p[0], 'image' => $p[1]],
                     $this->suggestions((string) ($query['query'] ?? '')),
                 ), 'articles' => [], 'advices' => []]);
             }
