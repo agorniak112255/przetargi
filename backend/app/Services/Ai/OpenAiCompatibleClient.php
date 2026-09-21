@@ -1667,7 +1667,9 @@ class OpenAiCompatibleClient
     }
 
     /**
-     * Limit kontekstu podany przez serwer modelu (vLLM: /v1/models → max_model_len) dla modelu profilu.
+     * Limit kontekstu podany przez serwer modelu dla modelu profilu: vLLM — /v1/models → max_model_len; pośrednik
+     * LiteLLM (21.09.2026 profil na :4000 przed vLLM na :8000) w /models limitu nie podaje, więc dalej jego
+     * /model/info: max_input_tokens.
      * Zapamiętany na godzinę; brak odpowiedzi — na 5 minut null, czyli dotychczasowy założony limit.
      *
      * @param  array<string, mixed>  $profile
@@ -1689,23 +1691,53 @@ class OpenAiCompatibleClient
             return null;
         }
 
-        $found = 0;
-        try {
-            $response = Http::timeout(5)
-                ->withToken((string) ($profile['api_key'] ?? ''))
-                ->acceptJson()
-                ->get($base.'/models');
-            $models = $response->successful() && is_array($response->json('data')) ? $response->json('data') : [];
-            $entry = collect($models)->first(static fn (mixed $m): bool => is_array($m) && ($m['id'] ?? null) === $model)
-                ?? (count($models) === 1 ? $models[0] : null);
-            $len = is_array($entry) ? ($entry['max_model_len'] ?? null) : null;
-            $found = is_int($len) && $len >= 1024 ? $len : 0;
-        } catch (Throwable) {
-            $found = 0;
-        }
+        $apiKey = (string) ($profile['api_key'] ?? '');
+        $found = $this->vllmMaxModelLen($base, $model, $apiKey) ?? $this->liteLlmMaxModelLen($base, $model, $apiKey) ?? 0;
         Cache::put($key, $found, $found > 0 ? 3600 : 300);
 
         return $found > 0 ? $found : null;
+    }
+
+    /** vLLM: /models → max_model_len wpisu o id modelu (albo jedynego wpisu). */
+    private function vllmMaxModelLen(string $base, string $model, string $apiKey): ?int
+    {
+        $models = $this->servedJsonList($base.'/models', $apiKey);
+        $entry = collect($models)->first(static fn (mixed $m): bool => is_array($m) && ($m['id'] ?? null) === $model)
+            ?? (count($models) === 1 ? $models[0] : null);
+        $len = is_array($entry) ? ($entry['max_model_len'] ?? null) : null;
+
+        return is_int($len) && $len >= 1024 ? $len : null;
+    }
+
+    /**
+     * LiteLLM: /model/info → model_info.max_input_tokens modelu (wpis `model_info: max_input_tokens` w konfiguracji
+     * LiteLLM). Serwera pod LiteLLM nie pytamy — ma własny klucz (21.09.2026 vLLM :8000 odrzucał klucz LiteLLM).
+     */
+    private function liteLlmMaxModelLen(string $base, string $model, string $apiKey): ?int
+    {
+        $root = (string) preg_replace('#/v1$#', '', $base);
+        $entry = collect($this->servedJsonList($root.'/model/info', $apiKey))
+            ->first(static fn (mixed $m): bool => is_array($m) && ($m['model_name'] ?? null) === $model);
+        $declared = is_array($entry) ? ($entry['model_info']['max_input_tokens'] ?? null) : null;
+
+        return is_int($declared) && $declared >= 1024 ? $declared : null;
+    }
+
+    /**
+     * Lista `data` z odpowiedzi serwera modelu; [] przy błędzie.
+     *
+     * @return list<mixed>
+     */
+    private function servedJsonList(string $url, string $apiKey): array
+    {
+        try {
+            $response = Http::timeout(5)->withToken($apiKey)->acceptJson()->get($url);
+        } catch (Throwable) {
+            return [];
+        }
+        $data = $response->successful() ? $response->json('data') : null;
+
+        return is_array($data) ? array_values($data) : [];
     }
 
     /**

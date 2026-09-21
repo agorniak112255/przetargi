@@ -99,6 +99,49 @@ final class AiLocalContextLimitTest extends TestCase
         $this->assertLessThan(mb_strlen($messages[0]['content'].$messages[1]['content']), mb_strlen($sent));
     }
 
+    /** Pośrednik LiteLLM (:4000) — /models bez limitu, limit w /model/info z konfiguracji LiteLLM. */
+    private function fakeLiteLlm(?int $maxInputTokens): void
+    {
+        Http::fake(function (Request $request) use ($maxInputTokens) {
+            if (str_ends_with($request->url(), '/v1/models')) {
+                return Http::response(['object' => 'list', 'data' => [['id' => self::MODEL, 'object' => 'model', 'owned_by' => 'openai']]]);
+            }
+            if (str_ends_with($request->url(), '/model/info')) {
+                return Http::response(['data' => [[
+                    'model_name' => self::MODEL,
+                    'litellm_params' => ['api_base' => 'http://192.168.1.59:8000/v1', 'model' => 'hosted_vllm/'.self::MODEL],
+                    'model_info' => ['max_input_tokens' => $maxInputTokens, 'max_tokens' => null],
+                ]]]);
+            }
+
+            return Http::response(['choices' => [['message' => ['content' => '{"matches":[]}'], 'finish_reason' => 'stop']]]);
+        });
+    }
+
+    public function test_litellm_limit_from_model_info_keeps_the_prompt_whole(): void
+    {
+        $this->seedSettings('http://192.168.1.59:4000/v1');
+        $this->fakeLiteLlm(65536);
+        $messages = self::rankingMessages();
+
+        app(OpenAiCompatibleClient::class)->chatJsonMany([$messages, $messages], 2500, AiTask::ProductSearch, 4);
+
+        Http::assertSent(fn (Request $r): bool => $r->url() === 'http://192.168.1.59:4000/model/info');
+        $this->assertSame($messages[0]['content'], self::chatRequests()[0]['messages'][0]['content']);
+    }
+
+    public function test_litellm_without_a_declared_limit_trims_as_before_and_does_not_call_the_server_behind_it(): void
+    {
+        $this->seedSettings('http://192.168.1.59:4000/v1');
+        $this->fakeLiteLlm(null);
+        $messages = self::rankingMessages();
+
+        app(OpenAiCompatibleClient::class)->chatJsonMany([$messages, $messages], 2500, AiTask::ProductSearch, 4);
+
+        Http::assertNotSent(fn (Request $r): bool => str_starts_with($r->url(), 'http://192.168.1.59:8000'));
+        $this->assertNotSame($messages[0]['content'], self::chatRequests()[0]['messages'][0]['content']);
+    }
+
     public function test_small_prompt_does_not_ask_the_server_for_its_limit(): void
     {
         $this->seedSettings();
