@@ -269,7 +269,7 @@ function SortTh({
 
 export function Products() {
   const { user } = useAuth()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const canEnrich = can(user, 'price_lists.import')
   const canExportPresta = can(user, 'presta.export')
   const canDelete = can(user, 'products.delete')
@@ -278,6 +278,9 @@ export function Products() {
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
   const [manufacturer, setManufacturer] = useState(() => searchParams.get('manufacturer') ?? '')
+  // Karty z cennika konta B2B (link z Cenników) — dystrybutor sprzedaje cudze marki, więc nie filtr producenta.
+  const b2bAccount = searchParams.get('b2b_account') ?? ''
+  const b2bAccountLabel = searchParams.get('b2b_label') ?? ''
   const [statusFilter, setStatusFilter] = useState('')
   const [hasAccessories, setHasAccessories] = useState(false)
   const [manufacturers, setManufacturers] = useState<string[]>([])
@@ -393,6 +396,7 @@ export function Products() {
     })
     if (debouncedQ) params.set('q', debouncedQ)
     if (manufacturer) params.set('manufacturer', manufacturer)
+    if (b2bAccount) params.set('b2b_account', b2bAccount)
     if (statusFilter) params.set('enrichment_status', statusFilter)
     if (hasAccessories) params.set('has_accessories', '1')
     return params
@@ -426,7 +430,7 @@ export function Products() {
       })
       .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q/manufacturer/status
-  }, [debouncedQ, manufacturer, statusFilter, hasAccessories, page, perPage, sort, dir, aiMode])
+  }, [debouncedQ, manufacturer, b2bAccount, statusFilter, hasAccessories, page, perPage, sort, dir, aiMode])
 
   async function runAiSearch(web = false, raw = aiQuery) {
     const query = raw.trim()
@@ -931,6 +935,21 @@ export function Products() {
               </option>
             ))}
           </select>
+          {b2bAccount && (
+            <button
+              type="button"
+              onClick={() => {
+                const next = new URLSearchParams(searchParams)
+                next.delete('b2b_account')
+                next.delete('b2b_label')
+                setSearchParams(next)
+              }}
+              className="rounded border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-800 hover:bg-indigo-100"
+              title="Pokaż wszystkie karty, nie tylko z tego cennika B2B"
+            >
+              Cennik B2B: {b2bAccountLabel || `konto #${b2bAccount}`} ×
+            </button>
+          )}
         </div>
       </div>
       <form

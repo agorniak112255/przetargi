@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\B2bAccount;
+use App\Models\B2bProductLink;
 use App\Models\PrestaCategory;
 use App\Models\Product;
 use App\Models\User;
@@ -31,6 +33,30 @@ final class ProductIndexApiTest extends TestCase
                 ],
             ]]),
         ]);
+    }
+
+    /** Dystrybutor (Tegro) sprzedaje cudze marki — link z Cenników filtruje po powiązaniach konta, nie po producencie. */
+    public function test_products_can_be_filtered_by_b2b_account_whatever_the_brand(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $tegro = B2bAccount::query()->create(['username' => 'jan@example.com', 'password' => 'x', 'sites' => ['b2b.tegro.pl'], 'connector' => 'tegro']);
+        $other = B2bAccount::query()->create(['username' => 'anna@example.com', 'password' => 'x', 'sites' => ['b2b.anro.net.pl'], 'connector' => 'anro']);
+        $card = static fn (string $sku, string $brand): Product => Product::query()->create([
+            'sku' => $sku, 'name' => 'Rękawice '.$sku, 'manufacturer' => $brand, 'catalog_price_net' => 10, 'purchase_price' => 5, 'stock' => 1,
+        ]);
+        $rs = $card('ALASKA 10', 'RS');
+        $grex = $card('F09 PLUS 6', 'G-REX');
+        $anro = $card('ANRO-1', 'Anro');
+        $card('BEZ-B2B', 'RS');
+        foreach ([[$tegro, $rs, '1921'], [$tegro, $grex, '4634'], [$tegro, $grex, '4635'], [$other, $anro, '77']] as [$account, $product, $remote]) {
+            B2bProductLink::query()->create(['b2b_account_id' => $account->id, 'product_id' => $product->id, 'remote_id' => $remote, 'remote_sku' => $product->sku]);
+        }
+
+        $this->getJson('/api/products?sort=sku&b2b_account='.$tegro->id)
+            ->assertOk()
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('data.0.sku', 'ALASKA 10')
+            ->assertJsonPath('data.1.sku', 'F09 PLUS 6');
     }
 
     public function test_products_can_be_filtered_by_manufacturer(): void

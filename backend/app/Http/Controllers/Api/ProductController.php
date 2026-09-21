@@ -10,6 +10,7 @@ use App\Http\Requests\UpdateProductCategoryRequest;
 use App\Http\Requests\UpdateProductManualSpecsRequest;
 use App\Http\Requests\UpdateProductShopSourceRequest;
 use App\Models\B2bAccount;
+use App\Models\B2bProductLink;
 use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
 use App\Models\Product;
@@ -155,6 +156,13 @@ class ProductController extends Controller
 
         if ($request->filled('manufacturer')) {
             $query->where('manufacturer', (string) $request->string('manufacturer'));
+        }
+        // Karty cennika konta B2B — po powiązaniach, nie po producencie: dystrybutor (Tegro) sprzedaje cudze marki,
+        // więc „producent = nazwa dostawcy” dawał pustą listę.
+        if ($request->filled('b2b_account')) {
+            $query->whereIn('id', B2bProductLink::query()
+                ->where('b2b_account_id', $request->integer('b2b_account'))
+                ->select('product_id'));
         }
 
         $status = trim((string) $request->string('enrichment_status'));

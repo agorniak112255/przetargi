@@ -2073,9 +2073,13 @@ export function PriceLists() {
                       />
                     ) : r.manufacturer ? (
                       <Link
-                        to={`/products?manufacturer=${encodeURIComponent(r.manufacturer)}`}
+                        to={
+                          r.b2b_account
+                            ? `/products?b2b_account=${r.b2b_account.id}&b2b_label=${encodeURIComponent(r.manufacturer)}`
+                            : `/products?manufacturer=${encodeURIComponent(r.manufacturer)}`
+                        }
                         className="font-medium text-blue-700 hover:underline"
-                        title={`Pokaż produkty: ${r.manufacturer}`}
+                        title={r.b2b_account ? `Pokaż karty z cennika B2B: ${r.manufacturer}` : `Pokaż produkty: ${r.manufacturer}`}
                       >
                         {r.manufacturer}
                       </Link>
