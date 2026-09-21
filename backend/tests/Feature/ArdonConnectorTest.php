@@ -624,7 +624,8 @@ final class ArdonConnectorTest extends TestCase
             }
             if ($path === '/eshop/download/product-attachment') {
                 // każdy plik z inną treścią — zapis plików rozpoznaje powtórzony plik po sumie kontrolnej
-                return Http::response("%PDF-1.4\n".$url."\n%%EOF", 200, ['Content-Type' => 'application/pdf']);
+                // jak w sklepie: załączniki idą jako application/octet-stream, nie application/pdf
+                return Http::response("%PDF-1.4\n".$url."\n%%EOF", 200, ['Content-Type' => 'application/octet-stream']);
             }
             if (str_starts_with($url, 'https://www.ardon.cz/images/')) {
                 return Http::response(self::JPEG, 200, ['Content-Type' => 'image/jpeg']);

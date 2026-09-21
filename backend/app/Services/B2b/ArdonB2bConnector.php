@@ -295,7 +295,14 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
             throw new RuntimeException('plik spoza '.ArdonB2bClient::HOST.': '.$document->sourceUrl);
         }
 
-        return $this->client->fileBytes($document->sourceUrl);
+        $file = $this->client->fileBytes($document->sourceUrl);
+        // Sklep wydaje załączniki jako application/octet-stream (sprawdzone 21.09.2026), a zapis plików przyjmuje
+        // tylko rozpoznany typ — PDF poznajemy po sygnaturze pliku, nie po nagłówku.
+        if (str_starts_with($file['bytes'], '%PDF-')) {
+            $file['mime'] = 'application/pdf';
+        }
+
+        return $file;
     }
 
     /** Zdjęcie wyrobu z danych strukturalnych strony produktu (serwer zdjęć www.ardon.cz). */
