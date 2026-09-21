@@ -5510,6 +5510,7 @@ final class ProductAiSearchService
         $candidates = $this->withResponseRelations($candidates);
         $byId = $candidates->keyBy('id');
         $this->traceModelRejected($matches, $byId);
+        $series = $this->requestedSeriesWords($query, $candidates);
         $out = [];
 
         foreach ($matches as $m) {
@@ -5569,6 +5570,15 @@ final class ProductAiSearchService
                 $score = min($score, self::MISSING_KEY_SCORE_CAP);
                 $reason = trim(($reason ?? '').' Brak dowodu kluczowego warunku: filtr spawalniczy / stopień zaciemnienia.');
             }
+            $missingSeries = $this->missingSeriesWords($series, $product, $query);
+            if ($missingSeries !== []) {
+                // Klient żąda serii, a karta jej nie ma — to inny model, nie spełnienie wymagania. 21.09.2026:
+                // „Rękawice Ultrane” → model dał 90% rękawicy FAWA („zgodne z wymaganiem … rękawice ochronne”).
+                // Karta zostaje widoczną propozycją poniżej progu zapisu, jak inny wariant w rowsFromNamedModels.
+                $score = min($score, self::VARIANT_MISMATCH_SCORE);
+                $reason = trim(($reason ?? '').' Zapytanie wymienia serię „'.implode('”, „', $missingSeries)
+                    .'”, a karta jej nie ma — inny model; sprawdź, czy zamiennik jest dopuszczalny.');
+            }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(0, $score));
             $row['ai_match_reason'] = $reason;
@@ -5576,6 +5586,66 @@ final class ProductAiSearchService
         }
 
         return array_slice($this->sortRankedByMatchPercent($out), 0, max(1, min(80, $limit)));
+    }
+
+    /** Krótkie zapytanie (pozycja maila, wyszukiwarka) — powyżej tylu treściwych słów to akapit SIWZ. */
+    private const SERIES_CHECK_MAX_WORDS = 6;
+
+    /**
+     * Nazwy serii, których krótkie zapytanie wprost żąda: to samo rozpoznanie co przy dopisywaniu nazwy do fraz
+     * (looksLikeCatalogSeriesName), a do tego choć jedna oceniana karta ma to słowo w nazwie albo kodzie — bez tego
+     * warunku błędnie rozpoznane słowo obniżyłoby wszystkie karty. Akapity SIWZ pomijamy: wiele słów wymagania stoi
+     * w nazwach kart i fałszywa „seria” zepchnęłaby poprawną kartę pod próg.
+     *
+     * @param  Collection<int, Product>  $candidates
+     * @return list<string>
+     */
+    private function requestedSeriesWords(string $query, Collection $candidates): array
+    {
+        $words = $this->modelFuzzy->brandHints($query);
+        if ($words === [] || count($words) > self::SERIES_CHECK_MAX_WORDS) {
+            return [];
+        }
+        $names = $candidates->map(fn (Product $p): string => $this->seriesHaystack($p))->all();
+        $out = [];
+        foreach ($words as $word) {
+            if (mb_strlen($word) < 4 || $this->isGenericAssortmentToken($word) || $this->catalogSlang->isIndexedTerm($word)
+                || ! $this->looksLikeCatalogSeriesName($word)) {
+                continue;
+            }
+            foreach ($names as $name) {
+                if (str_contains($name, $word)) {
+                    $out[] = $word;
+
+                    break;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Serie z zapytania, których karta nie ma w nazwie ani kodzie. Karta ze zgodnym kodem modelu z zapytania nie
+     * jest „innym modelem”: „buty uvex business casual 8543.8” → karta „Półbut Uvex 1 8543/8” bez słów serii w nazwie.
+     *
+     * @param  list<string>  $series
+     * @return list<string>
+     */
+    private function missingSeriesWords(array $series, Product $product, string $query): array
+    {
+        if ($series === [] || $this->modelFuzzy->matches($query, $product) || $this->modelFuzzy->separatedCodeMatches($query, $product)) {
+            return [];
+        }
+        $name = $this->seriesHaystack($product);
+
+        return array_values(array_filter($series, static fn (string $word): bool => ! str_contains($name, $word)));
+    }
+
+    /** Nazwa i kod karty bez odstępów i znaków — słowo serii bywa sklejone („GoggleGear” przy serii „Gear”). */
+    private function seriesHaystack(Product $product): string
+    {
+        return str_replace(' ', '', $this->lexicalNormalize($product->name.' '.$product->sku));
     }
 
     /**

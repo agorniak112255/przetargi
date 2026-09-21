@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Services\ProductAiSearchService;
 use App\Support\CatalogCascadeRecall;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Collection;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -81,6 +82,55 @@ final class SearchSeriesNameAndCascadeWeightTest extends TestCase
         $this->assertSame(2.0, $weight->invoke($service, CatalogCascadeRecall::LEVEL_FAMILY_FEATURE_BRAND, $intent), 'zawężona marką');
         $this->assertSame(2.0, $weight->invoke($service, 'steps_2', $intent), 'zawężona krokami z nazwy');
         $this->assertSame(0.5, $weight->invoke($service, 'steps_1', ['search_steps' => ['rękawice']]), 'krok to sam rzeczownik — jak dotąd');
+    }
+
+    /** Klient żąda serii, model daje wysoką ocenę karcie bez niej — kod obniża ją poniżej progu zapisu i mówi dlaczego. */
+    public function test_card_without_the_requested_series_is_marked_as_another_model(): void
+    {
+        $ultrane = $this->card('MAPA-500', 'Rękawice MAPA Ultrane 500', 'Rękawice nitrylowe na podkładzie bawełnianym.');
+        $fawa = $this->card('FAWA-1', 'Rękawice robocze FAWA', 'Rękawice robocze wzmacniane skórą.');
+
+        $rows = $this->rank('Rękawice Ultrane', collect([$ultrane, $fawa]), [
+            ['id' => $fawa->id, 'score' => 90, 'reason' => 'Zgodne z wymaganiem (rękawice ochronne).'],
+            ['id' => $ultrane->id, 'score' => 95, 'reason' => 'Rękawice MAPA Ultrane.'],
+        ]);
+
+        $bySku = collect($rows)->keyBy('sku');
+        $this->assertSame(95, $bySku['MAPA-500']['ai_match_percent']);
+        $this->assertSame(60, $bySku['FAWA-1']['ai_match_percent'], 'poniżej progu zapisu 65');
+        $this->assertStringContainsString('wymienia serię „ultrane”, a karta jej nie ma', (string) $bySku['FAWA-1']['ai_match_reason']);
+    }
+
+    public function test_series_rule_leaves_long_tender_paragraphs_and_matching_model_codes_alone(): void
+    {
+        $ultrane = $this->card('MAPA-500', 'Rękawice MAPA Ultrane 500', 'Rękawice nitrylowe.');
+        $fawa = $this->card('FAWA-1', 'Rękawice robocze FAWA', 'Rękawice robocze.');
+        $uvex = $this->card('8543/8/35', 'Półbut Uvex 1 8543/8', 'Półbut skórzany S1 SRC.');
+        $casual = $this->card('UVX-BC', 'Buty uvex business casual 8540', 'Półbuty S3.');
+        $matches = [['id' => $fawa->id, 'score' => 90, 'reason' => 'ok']];
+
+        $long = $this->rank(
+            'Rękawice ochronne powlekane nitrylem na podkładzie bawełnianym, do prac w olejach, typu Ultrane lub równoważne, EN 388, rozmiary 8-10',
+            collect([$ultrane, $fawa]),
+            $matches,
+        );
+        $this->assertSame(90, $long[0]['ai_match_percent'], 'akapit SIWZ — reguła serii nie działa');
+
+        $code = $this->rank('buty uvex business casual 8543.8 s1 src', collect([$uvex, $casual]), [['id' => $uvex->id, 'score' => 95, 'reason' => 'ok']]);
+        $this->assertSame(95, $code[0]['ai_match_percent'], 'kod modelu z zapytania stoi na karcie — to nie inny model');
+    }
+
+    /**
+     * @param  Collection<int, Product>  $candidates
+     * @param  list<array<string, mixed>>  $matches
+     * @return list<array<string, mixed>>
+     */
+    private function rank(string $query, Collection $candidates, array $matches): array
+    {
+        $service = app(ProductAiSearchService::class);
+
+        return (new ReflectionMethod($service, 'rowsFromLlmMatches'))
+            ->invoke($service, $query, $candidates, ['matches' => $matches], 10, null);
     }
 
     /**
