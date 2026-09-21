@@ -24,6 +24,7 @@ final class B2bConnectorRegistry
         ArtraB2bConnector::class,
         AtgB2bConnector::class,
         TegroB2bConnector::class,
+        PolstarB2bConnector::class,
     ];
 
     /**
