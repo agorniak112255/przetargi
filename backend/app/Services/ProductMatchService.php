@@ -100,6 +100,9 @@ final class ProductMatchService
     /** Poprzednia karta zostaje, ale ten przebieg jej nie potwierdził (powód na górze listy). */
     private const NOT_RECONFIRMED = 'not_reconfirmed';
 
+    /** Karta poniżej progu zapisu wpisana jako propozycja do sprawdzenia (proposalPick). */
+    public const PROPOSAL = 'proposal';
+
     /** Wybór człowieka (ręczna karta, tańszy zamiennik z porównania) — przebieg go nie tnie. */
     private const USER_DECIDED_SOURCES = ['manual', 'battlecard'];
 
@@ -294,7 +297,7 @@ final class ProductMatchService
                 if ($this->modelStateFor($item->requirement) === ProductAiSearchService::MODEL_STATE_UNAVAILABLE) {
                     $modelFailed++;
                 }
-                $applied = $pick !== null && ! $this->heuristicWouldReplaceModelPick($item, $pick) && $this->applyProduct(
+                $applied = $pick !== null && ! $this->lowConfidencePickWouldReplace($item, $pick) && $this->applyProduct(
                     $item,
                     $pick['product'],
                     $pick['score'],
@@ -303,6 +306,7 @@ final class ProductMatchService
                     // zapytania do modelu (karta wskazana kodem z SIWZ w ogóle modelu nie pyta).
                     $this->modelReasonForPick($pick, $this->aiCandidatesCache[$this->aiCandidatesCacheKey($item->requirement)] ?? []),
                     (bool) ($pick['heuristic_only'] ?? false),
+                    (bool) ($pick['proposal'] ?? false),
                 );
                 if (! $applied) {
                     if ($this->lastNoMatchReason === self::NO_MATCH_MODEL_UNAVAILABLE) {
@@ -1388,8 +1392,16 @@ final class ProductMatchService
         }
 
         $aiReason = $this->modelReasonForPick($pick, $aiCandidates);
-        if ($this->heuristicWouldReplaceModelPick($item, $pick)
-            || ! $this->applyProduct($item, $pick['product'], $pick['score'], $pick['source'], $aiReason, (bool) ($pick['heuristic_only'] ?? false))) {
+        if ($this->lowConfidencePickWouldReplace($item, $pick)
+            || ! $this->applyProduct(
+                $item,
+                $pick['product'],
+                $pick['score'],
+                $pick['source'],
+                $aiReason,
+                (bool) ($pick['heuristic_only'] ?? false),
+                (bool) ($pick['proposal'] ?? false),
+            )) {
             $this->applyNoCatalogMatch($item, $products);
             $item->refresh();
 
@@ -1459,6 +1471,13 @@ final class ProductMatchService
         $picked = $this->pickAuto($requirement, $heuristic, $aiCandidates, $described);
         if ($picked === null) {
             return null;
+        }
+        // Propozycja jest z definicji poniżej progu zapisu — przeszła już bramki w proposalPick, a progi niżej
+        // wycięłyby ją z powrotem.
+        if ($picked['proposal'] ?? false) {
+            $picked['product'] = $this->resolveCatalogBySku($picked['product'], $products);
+
+            return $picked;
         }
 
         $source = (string) ($picked['source'] ?? 'heuristic');
@@ -1859,7 +1878,7 @@ final class ProductMatchService
                     'reason' => $this->modelReasonBelowMin($aiCandidates, (int) $heuristic['product']->id),
                 ];
 
-                return null;
+                return $this->proposalPick($requirement, $aiCandidates, $products);
             }
             $honest = $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']);
             if ($honest !== null) {
@@ -1875,7 +1894,54 @@ final class ProductMatchService
             }
         }
 
-        return null;
+        return $this->proposalPick($requirement, $aiCandidates, $products);
+    }
+
+    /**
+     * Żadna karta nie spełnia wymagania w całości — pozycja dostaje najlepszą kartę tego rodzaju jako
+     * propozycję do sprawdzenia, z listą braków, zamiast zostać pusta. Decyzja właściciela 21.09.2026:
+     * „jak czegoś z wymagań nie spełnia, należy to dobrze wyartykułować”. Wcześniej brak dowodu jednego
+     * kluczowego warunku (sufit 50 < próg zapisu 65) zostawiał pozycję pustą, choć model wskazał właściwy
+     * rodzaj wyrobu — przetarg 1 poz. 1: rękaw HyFlex z kat. II przy wymaganej kat. III.
+     *
+     * Tylko karty ocenione przez model, z oceną od progu „zgodna nazwa, bez sprzeczności” (applyMatchScore,
+     * domyślnie 40) do progu zapisu — poniżej model mówi, że to inny wyrób albo karta przeczy wymaganiu.
+     * Te same bramki co zwykły wybór: zgodność asortymentu, karta z opisem, bez wierszy listy katalogowej.
+     * Pozycja z taką kartą liczy się w „Słabe AI” i blokuje gotowość oferty (TenderCoverageService).
+     *
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     * @param  Collection<int, Product>  $products
+     * @return array{product: Product, score: int, source: string, proposal: true}|null
+     */
+    private function proposalPick(string $requirement, array $aiCandidates, Collection $products): ?array
+    {
+        if ($this->modelStateFor($requirement) === ProductAiSearchService::MODEL_STATE_UNAVAILABLE) {
+            return null;
+        }
+        $best = null;
+        foreach ($aiCandidates as $row) {
+            $score = (int) $row['score'];
+            $source = (string) ($row['source'] ?? 'ai');
+            if ($this->isCatalogRowSource($source) || $score < $this->applyMatchScore() || $score >= $this->minMatchScore()
+                || ($best !== null && $score <= $best['score'])) {
+                continue;
+            }
+            $product = $products->firstWhere('id', $row['id']) ?? Product::query()->find($row['id']);
+            if (! $product instanceof Product || ! $this->assortment->compatibleProduct($requirement, $product)) {
+                continue;
+            }
+            if (! $product->hasDescriptionText()) {
+                $this->lastUndescribedSku ??= (string) $product->sku;
+
+                continue;
+            }
+            if (($this->explainMatch($requirement, $product)['reasons'][0]['code'] ?? '') === 'asortyment_reject') {
+                continue;
+            }
+            $best = ['product' => $product, 'score' => $score, 'source' => $source, 'proposal' => true];
+        }
+
+        return $best;
     }
 
     /**
@@ -1922,6 +1988,7 @@ final class ProductMatchService
                 'score' => (int) $pick['score'],
                 'source' => (string) ($pick['source'] ?? ''),
                 'heuristic_only' => (bool) ($pick['heuristic_only'] ?? false),
+                'proposal' => (bool) ($pick['proposal'] ?? false),
             ],
             'reason' => $reason,
         ];
@@ -2398,13 +2465,18 @@ final class ProductMatchService
         ?string $source = 'heuristic',
         ?string $aiReason = null,
         bool $heuristicOnly = false,
+        bool $proposal = false,
     ): bool {
-        $honest = $this->persistableScore(
-            $item->requirement,
-            $product,
-            $score,
-            $this->trustsRowScore((string) $source)
-        );
+        // Propozycja (proposalPick) zapisuje ocenę modelu wprost — jest poniżej progu z definicji, więc
+        // persistableScore by ją odrzucił; zgodność asortymentu sprawdza się niżej tak samo jak dla każdej karty.
+        $honest = $proposal
+            ? ($this->assortment->compatibleProduct($item->requirement, $product) ? min($score, $this->minMatchScore() - 1) : null)
+            : $this->persistableScore(
+                $item->requirement,
+                $product,
+                $score,
+                $this->trustsRowScore((string) $source)
+            );
         if ($honest === null) {
             return false;
         }
@@ -2443,6 +2515,13 @@ final class ProductMatchService
                 'points' => $honest,
             ]);
         }
+        if ($proposal) {
+            array_unshift($reasons, [
+                'code' => self::PROPOSAL,
+                'label' => $this->proposalLabel($honest, $aiReason),
+                'points' => $honest,
+            ]);
+        }
 
         $item->main_product_id = $product->id;
         if ($item->companion_product_id !== null && (int) $item->companion_product_id === (int) $product->id) {
@@ -2465,6 +2544,22 @@ final class ProductMatchService
         $this->pricing->recalculateItemMargin($item);
 
         return true;
+    }
+
+    /**
+     * Etykieta propozycji: że to nie jest pełne dopasowanie i czego karta nie potwierdza. Braki bierzemy
+     * z oceny modelu (rowsFromLlmMatches dopisuje „Brak dowodu kluczowego warunku: …”); pełne słowa modelu
+     * stoją zaraz pod tą etykietą.
+     */
+    private function proposalLabel(int $score, ?string $aiReason): string
+    {
+        $label = 'Propozycja do sprawdzenia — najlepsza karta tego rodzaju w katalogu, ale nie potwierdza wszystkich '
+            .'warunków wymagania (ocena modelu '.$score.'%, automatyczny zapis od '.$this->minMatchScore().'%).';
+        if (is_string($aiReason) && preg_match('/Brak dowodu kluczowego warunku:\s*([^\n]+?)\.?\s*$/u', $aiReason, $m) === 1) {
+            return $label.' Karta nie potwierdza: '.trim($m[1]).'.';
+        }
+
+        return $label.' Czego brakuje — w ocenie modelu poniżej.';
     }
 
     private function substituteReasonLabel(string $requirement): string
@@ -2565,6 +2660,38 @@ final class ProductMatchService
      *
      * @param  array{product: Product, score: int, source: string, heuristic_only?: bool}  $pick
      */
+    private function lowConfidencePickWouldReplace(TenderItem $item, array $pick): bool
+    {
+        return $this->heuristicWouldReplaceModelPick($item, $pick) || $this->proposalWouldReplaceExisting($item, $pick);
+    }
+
+    /**
+     * Propozycja (karta poniżej progu) wypełnia pustą pozycję, ale nie wypiera karty, którą pozycja już ma:
+     * wybranej ręcznie albo z battlecardu — nawet tej samej, bo nadpisałaby znak „decyzja użytkownika” — ani
+     * karty z wcześniejszego dopasowania, która dalej przechodzi bramki. Ta zostaje z oceną modelu z bieżącego
+     * przebiegu i etykietą „do sprawdzenia” (applyNoCatalogMatch → markExistingNotReconfirmed), tak jak dotąd.
+     *
+     * @param  array{product: Product, proposal?: bool}  $pick
+     */
+    private function proposalWouldReplaceExisting(TenderItem $item, array $pick): bool
+    {
+        if (! ($pick['proposal'] ?? false) || $item->main_product_id === null) {
+            return false;
+        }
+        if (in_array($item->match_source, self::USER_DECIDED_SOURCES, true)) {
+            return true;
+        }
+        if ((int) $item->main_product_id === (int) $pick['product']->id) {
+            return false;
+        }
+        $item->loadMissing('mainProduct');
+        $existing = $item->mainProduct;
+
+        return $existing instanceof Product
+            && $existing->hasDescriptionText()
+            && $this->persistableScore($item->requirement, $existing, 100) !== null;
+    }
+
     private function heuristicWouldReplaceModelPick(TenderItem $item, array $pick): bool
     {
         if (! ($pick['heuristic_only'] ?? false) || $item->main_product_id === null

@@ -80,7 +80,7 @@ final class DebugTenderMatchCommand extends Command
         $pick = $decision['pick'];
         $this->line('wybór przetargu: '.($pick === null
             ? 'brak'
-            : sprintf('%s (%d%%, %s%s)', $pick['sku'], $pick['score'], $pick['source'], $pick['heuristic_only'] ? ', po słowach karty' : '')));
+            : sprintf('%s (%d%%, %s%s%s)', $pick['sku'], $pick['score'], $pick['source'], $pick['heuristic_only'] ? ', po słowach karty' : '', ($pick['proposal'] ?? false) ? ', propozycja do sprawdzenia' : '')));
         if ($decision['reason'] !== null) {
             $this->line('powód braku karty: '.$decision['reason']);
         }

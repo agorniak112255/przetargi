@@ -291,9 +291,14 @@ final class TenderMatchModelStateTest extends TestCase
         app(ProductMatchService::class)->matchTender($tender, true);
         $item->refresh();
 
-        $this->assertNull($item->main_product_id, 'niska ocena modelu nie zamienia się w 70% po słowach');
-        $this->assertSame('model_low_score', $item->ai_match_reasons[0]['code'] ?? null, 'nie „brak produktu w katalogu”');
-        $this->assertStringContainsString('RNITZ-M', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+        // Od 21.09.2026 (decyzja właściciela) karta poniżej progu jest propozycją do sprawdzenia, a nie pustą
+        // pozycją — ale z oceną modelu, nie z 70% „po słowach karty”.
+        $codes = array_column((array) $item->ai_match_reasons, 'code');
+        $this->assertSame($gloveId, (int) $item->main_product_id);
+        $this->assertSame(50, (int) $item->ai_match_percent, 'niska ocena modelu nie zamienia się w 70% po słowach');
+        $this->assertNotContains('heuristic_only', $codes);
+        $this->assertSame(ProductMatchService::PROPOSAL, $codes[0] ?? null, 'wyraźnie propozycja, nie dopasowanie');
+        $this->assertStringContainsString('Propozycja do sprawdzenia', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
         $this->assertStringContainsString('50%', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
     }
 
@@ -315,12 +320,14 @@ final class TenderMatchModelStateTest extends TestCase
         app(ProductMatchService::class)->matchTender($tender, true);
         $item->refresh();
 
-        $this->assertNull($item->main_product_id);
-        $this->assertSame('model_low_score', $item->ai_match_reasons[0]['code'] ?? null);
-        $this->assertStringContainsString($words, (string) ($item->ai_match_reasons[0]['label'] ?? ''), 'karta niezapisana');
+        $this->assertSame($gloveId, (int) $item->main_product_id);
+        $this->assertSame(ProductMatchService::PROPOSAL, $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertStringContainsString($words, (string) ($item->ai_match_reasons[1]['label'] ?? ''), 'słowa modelu tuż pod etykietą propozycji');
 
+        // Poprzednia karta INNA niż ta, którą model ocenił teraz nisko — zostaje jako „do sprawdzenia”.
+        $other = $this->glove('RNITZ-L');
         $item->forceFill([
-            'main_product_id' => $gloveId,
+            'main_product_id' => $other->id,
             'status' => 'matched',
             'match_source' => 'ai',
             'ai_match_percent' => 95,
@@ -331,11 +338,14 @@ final class TenderMatchModelStateTest extends TestCase
         app(ProductMatchService::class)->matchTender($tender, false);
         $item->refresh();
 
+        $this->assertSame((int) $other->id, (int) $item->main_product_id, 'propozycja nie wypiera karty z wcześniejszego dopasowania');
         $this->assertSame('not_reconfirmed', $item->ai_match_reasons[0]['code'] ?? null);
-        $this->assertStringContainsString($words, (string) ($item->ai_match_reasons[0]['label'] ?? ''), 'karta zostawiona do sprawdzenia');
     }
 
-    /** Poprzednia karta oceniona przez model poniżej progu zostaje z oceną modelu i jasną etykietą. */
+    /**
+     * Poprzednia karta, którą model ocenia teraz poniżej progu, zostaje z oceną modelu — jako propozycja z bieżącymi
+     * słowami modelu (ta sama karta), a procent nie jest wyższy niż ocena modelu.
+     */
     public function test_previous_card_scored_low_by_model_keeps_model_score_in_label(): void
     {
         $glove = $this->glove('RNITZ-M');
@@ -357,9 +367,56 @@ final class TenderMatchModelStateTest extends TestCase
         $item->refresh();
 
         $this->assertSame($gloveId, (int) $item->main_product_id);
-        $this->assertSame('not_reconfirmed', $item->ai_match_reasons[0]['code'] ?? null);
-        $this->assertStringContainsString('Model ocenił poprzednią kartę na 50%', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+        $this->assertSame(ProductMatchService::PROPOSAL, $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertStringContainsString('ocena modelu 50%', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
         $this->assertSame(50, (int) $item->ai_match_percent, 'procent nie wyższy niż ocena modelu');
+    }
+
+    /** Karta wybrana ręcznie zostaje nietknięta, gdy model proponuje inną kartę poniżej progu. */
+    public function test_proposal_never_overwrites_a_manual_choice(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $manual = $this->glove('RNITZ-XL');
+        $gloveId = (int) $glove->id;
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => [['id' => $gloveId, 'score' => 50, 'reason' => 'Brak dowodu kluczowego warunku: dzianina bawełniana.']]]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+        $item->forceFill([
+            'main_product_id' => $manual->id,
+            'status' => 'matched',
+            'match_source' => 'manual',
+            'ai_match_percent' => 80,
+            'ai_match_reasons' => [['code' => 'manual', 'label' => 'wybór ręczny', 'points' => 80]],
+            'offer_price' => 5,
+        ])->save();
+
+        app(ProductMatchService::class)->matchTender($tender, true);
+        $item->refresh();
+
+        $this->assertSame((int) $manual->id, (int) $item->main_product_id);
+        $this->assertSame('manual', $item->match_source);
+    }
+
+    /** Etykieta propozycji wypisuje braki z oceny modelu wprost — także przy dopasowaniu pojedynczej pozycji. */
+    public function test_proposal_label_names_what_the_card_does_not_confirm(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $gloveId = (int) $glove->id;
+        $answer = static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => [['id' => $gloveId, 'score' => 50, 'reason' => 'Nitryl ze ściągaczem. Brak dowodu kluczowego warunku: kategoria III, EN 420.']]]
+            : [];
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
+        $llm->shouldReceive('chatJson')->andReturnUsing($answer);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+
+        app(ProductMatchService::class)->matchItem($item, true);
+        $item->refresh();
+
+        $this->assertSame($gloveId, (int) $item->main_product_id, 'pojedyncza pozycja — ta sama zasada co cały przetarg');
+        $this->assertStringContainsString('Karta nie potwierdza: kategoria III, EN 420.', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
     }
 
     /**

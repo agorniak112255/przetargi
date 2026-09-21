@@ -239,7 +239,7 @@ final class TenderEvalCommand extends Command
             'verdict' => $verdict,
             'sku' => $pick['sku'],
             'score' => $pick['score'],
-            'source' => $pick['source'].($pick['heuristic_only'] ? ' (po słowach)' : ''),
+            'source' => $pick['source'].($pick['heuristic_only'] ? ' (po słowach)' : '').(($pick['proposal'] ?? false) ? ' (propozycja)' : ''),
             'top_model' => $top,
             'model_state' => $state,
             'reason' => null,

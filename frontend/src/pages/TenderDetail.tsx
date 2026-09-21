@@ -3180,6 +3180,9 @@ function ItemRow({
   )
   const isExternal = isExternalOfferItem(item, productId)
   const isSubstitute = isBrandSubstituteItem(item)
+  // Karta poniżej progu zapisu wpisana jako propozycja (backend: ProductMatchService::PROPOSAL) — nie jest pełnym
+  // dopasowaniem, więc mówimy to wprost przy procencie i od razu pokazujemy, czego karta nie potwierdza.
+  const isProposal = (item.ai_match_reasons ?? []).some((r) => r.code === 'proposal')
   const markup = offerMarkupFactor(targetMarginPercent)
 
   function applyCatalogPrice(purchase: string | number | null | undefined): number | null {
@@ -3313,7 +3316,9 @@ function ItemRow({
                   matchHint ||
                   (item.ai_match_percent != null
                     ? hasSavedProduct
-                      ? `Dopasowanie AI: ${item.ai_match_percent}%`
+                      ? isProposal
+                        ? `Propozycja do sprawdzenia — nie spełnia wszystkich warunków (AI: ${item.ai_match_percent}%), braki w Uzasadnieniu`
+                        : `Dopasowanie AI: ${item.ai_match_percent}%`
                       : `Wynik AI: ${item.ai_match_percent}%`
                     : undefined)
                 }
@@ -3864,7 +3869,10 @@ function ItemRow({
               </div>
             </details>
             {hasSavedProduct && !isExternal && (
-              <details className="mt-1 rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] text-violet-900">
+              <details
+                open={isProposal}
+                className="mt-1 rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] text-violet-900"
+              >
                 <summary className="cursor-pointer font-semibold">
                   Uzasadnienie{item.ai_match_percent != null ? ` ${item.ai_match_percent}%` : ''}
                 </summary>

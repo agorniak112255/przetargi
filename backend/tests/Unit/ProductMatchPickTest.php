@@ -275,11 +275,16 @@ final class ProductMatchPickTest extends TestCase
         $glove = $this->glove('NIT-2', 2.0);
         $this->assertGreaterThanOrEqual($matcher->minMatchScore(), $matcher->explainMatch($requirement, $glove)['score'], 'karta pasuje — odcina wyłącznie procent modelu');
 
+        // Od 21.09.2026 poniżej progu karta nie jest dopasowaniem, tylko propozycją do sprawdzenia (flaga proposal,
+        // ocena modelu bez podbijania) — pozycja nie zostaje pusta, ale też nie udaje pewnego wyboru.
         $weak = $this->invoke($matcher, 'pickAuto', $requirement, null, [$this->candidate($glove, 58)], collect([$glove]));
-        $this->assertNull($weak, '58% bez kodu → „brak”, nie zapis');
+        $this->assertNotNull($weak);
+        $this->assertTrue($weak['proposal'] ?? false, '58% bez kodu → propozycja, nie dopasowanie');
+        $this->assertSame(58, $weak['score']);
 
         $enough = $this->invoke($matcher, 'pickAuto', $requirement, null, [$this->candidate($glove, $matcher->minMatchScore())], collect([$glove]));
         $this->assertNotNull($enough);
+        $this->assertFalse($enough['proposal'] ?? false);
         $this->assertSame($matcher->minMatchScore(), $enough['score']);
     }
 
