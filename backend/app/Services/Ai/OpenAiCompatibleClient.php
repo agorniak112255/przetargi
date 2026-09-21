@@ -161,7 +161,7 @@ class OpenAiCompatibleClient
             try {
                 $raw = $this->chat($messageSets[0], null, $jsonMode, $extra, $task);
 
-                return [['ok' => true, 'content' => $raw['content'], 'model' => $raw['model'], 'provider' => $raw['provider'] ?? null]];
+                return [['ok' => true, 'content' => $raw['content'], 'model' => $raw['model'], 'provider' => $raw['provider'] ?? null, 'finish_reason' => $raw['finish_reason'] ?? null]];
             } catch (RuntimeException $e) {
                 return [['ok' => false, 'error' => $e->getMessage()]];
             }
@@ -242,7 +242,20 @@ class OpenAiCompatibleClient
 
                     continue;
                 }
-                $json = $this->tryParseJson((string) ($row['content'] ?? ''));
+                $content = (string) ($row['content'] ?? '');
+                $json = $this->tryParseJson($content);
+                if ($json === null) {
+                    // Pusta tablica niżej znaczy dla wołającego „model nie odpowiedział” — bez tego wpisu przetarg
+                    // pokazywał „model nie odpowiedział” przy czystym logu (21.09.2026, lokalny Qwen na profilu).
+                    Log::warning('AI chatJsonMany: odpowiedź bez poprawnego JSON', [
+                        'task' => $task?->value,
+                        'model' => $row['model'] ?? null,
+                        'finish_reason' => $row['finish_reason'] ?? null,
+                        'length' => mb_strlen($content),
+                        'head' => mb_substr($content, 0, 300),
+                        'tail' => mb_strlen($content) > 300 ? mb_substr($content, -200) : null,
+                    ]);
+                }
                 $parsed[] = $json ?? [];
                 $providers[] = is_string($row['provider'] ?? null) ? $row['provider'] : null;
             }
@@ -614,7 +627,7 @@ class OpenAiCompatibleClient
 
     /**
      * @param  array<string, mixed>  $profile
-     * @return array{ok: bool, content?: string, model?: string, error?: string}
+     * @return array{ok: bool, content?: string, model?: string, provider?: string|null, finish_reason?: string, error?: string}
      */
     private function chatManyItemFromResponse(mixed $response, array $profile): array
     {
@@ -649,6 +662,7 @@ class OpenAiCompatibleClient
             'content' => $content,
             'model' => (string) data_get($payload, 'model', $profile['model'] ?? ''),
             'provider' => is_string(data_get($payload, 'provider')) ? (string) data_get($payload, 'provider') : null,
+            'finish_reason' => $this->contentReader->finishReason($payload),
         ];
     }
 

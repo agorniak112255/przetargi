@@ -9,7 +9,9 @@ use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
+use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Tests\TestCase;
 
 /**
@@ -70,6 +72,36 @@ final class AiChatManyEmptyAnswerTest extends TestCase
         $this->assertSame(10, $out[1]['matches'][0]['id'] ?? null, 'drugie zapytanie ma wynik po ponowieniu');
         Http::assertSentCount(4);
         Http::assertSent(fn (Request $request): bool => (int) ($request['max_tokens'] ?? 0) > 2500);
+    }
+
+    public function test_answer_that_is_not_json_is_logged_with_model_finish_reason_and_text(): void
+    {
+        $this->seedSettings();
+        $logged = [];
+        Log::listen(static function (MessageLogged $event) use (&$logged): void {
+            $logged[] = $event;
+        });
+        Http::fake(['*' => Http::response([
+            'model' => 'qwen36-35b-a3b',
+            'choices' => [['message' => ['content' => 'Oto ranking kart: karta 12 pasuje najlepiej'], 'finish_reason' => 'stop']],
+        ])]);
+
+        $out = app(OpenAiCompatibleClient::class)->chatJsonMany(
+            [[['role' => 'user', 'content' => 'ranking A']]],
+            2500,
+            AiTask::ProductSearch,
+        );
+
+        $this->assertSame([[]], $out);
+        $warnings = array_values(array_filter(
+            $logged,
+            static fn (MessageLogged $e): bool => $e->level === 'warning' && $e->message === 'AI chatJsonMany: odpowiedź bez poprawnego JSON',
+        ));
+        $this->assertCount(1, $warnings);
+        $this->assertSame('qwen36-35b-a3b', $warnings[0]->context['model']);
+        $this->assertSame('stop', $warnings[0]->context['finish_reason']);
+        $this->assertSame('Oto ranking kart: karta 12 pasuje najlepiej', $warnings[0]->context['head']);
+        $this->assertSame(AiTask::ProductSearch->value, $warnings[0]->context['task']);
     }
 
     public function test_empty_answer_error_names_finish_reason_and_tokens(): void
