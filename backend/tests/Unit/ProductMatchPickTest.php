@@ -6,6 +6,7 @@ namespace Tests\Unit;
 
 use App\Models\AiSetting;
 use App\Models\Product;
+use App\Models\TenderItem;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductAiSearchService;
 use App\Services\ProductMatchService;
@@ -391,6 +392,46 @@ final class ProductMatchPickTest extends TestCase
         $this->assertSame('KAL-1', $pick['product']->sku);
         $this->assertSame('catalog', $pick['source']);
         $this->assertSame(66, $pick['score']);
+    }
+
+    /**
+     * Model ocenił kartę poniżej 40 (inny rodzaj wyrobu / sprzeczność) — wiersz listy katalogowej albo
+     * skrótu tej samej karty nie może jej wpisać ze stałym procentem listy, także za zgodą admina.
+     */
+    #[Test]
+    public function catalog_and_rule_rows_do_not_bring_back_card_rejected_by_model(): void
+    {
+        $this->settings(['match_allow_catalog_rows' => true]);
+        $matcher = app(ProductMatchService::class);
+        $product = $this->apparel('KAL-1', 'Kalesony bawełniane męskie');
+        $other = $this->apparel('KAL-2', 'Kalesony bawełniane męskie długie');
+        $this->invoke($matcher, 'rememberAiCandidates', self::LONG_JOHNS, [
+            'model_state' => ProductAiSearchService::MODEL_STATE_RANKED,
+            'products' => [],
+            'trace' => ['model_rejected' => [['id' => (int) $product->id, 'score' => 20, 'reason' => 'inny rodzaj wyrobu']]],
+        ], 10, 'ai');
+
+        foreach (['catalog', 'rule'] as $source) {
+            $pick = $this->invoke($matcher, 'pickAuto', self::LONG_JOHNS, null, [$this->candidate($product, 66, $source)], collect([$product]));
+            $this->assertNull($pick, "wiersz '{$source}' nie może wpisać karty odrzuconej przez model");
+        }
+
+        $pick = $this->invoke($matcher, 'pickAuto', self::LONG_JOHNS, null, [
+            $this->candidate($product, 66, 'catalog'),
+            $this->candidate($other, 66, 'catalog'),
+        ], collect([$product, $other]));
+        $this->assertSame('KAL-2', $pick['product']->sku ?? null, 'karta, której model nie odrzucił, dalej przechodzi');
+
+        // Pomiar (tenders:eval, tenders:debug-match) liczy ten sam werdykt co pickAuto.
+        $item = new TenderItem;
+        $item->forceFill(['requirement' => self::LONG_JOHNS]);
+        $debug = app(ProductMatchService::class)->debugPick($item, [
+            'model_state' => ProductAiSearchService::MODEL_STATE_RANKED,
+            'products' => [['id' => (int) $product->id, 'sku' => 'KAL-1', 'name' => 'Kalesony', 'ai_match_percent' => 66, 'ai_match_source' => 'catalog']],
+            'trace' => ['model_rejected' => [['id' => (int) $product->id, 'score' => 20, 'reason' => 'inny rodzaj wyrobu']]],
+        ]);
+        $this->assertSame('odrzucona: model ocenił kartę poniżej 40', $debug['candidates'][0]['verdict'] ?? null);
+        $this->assertNotSame('KAL-1', $debug['pick']['sku'] ?? null);
     }
 
     // ------------------------------------------------------------------------- pomocnicze

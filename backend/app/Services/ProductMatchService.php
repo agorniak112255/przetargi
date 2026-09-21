@@ -1810,6 +1810,11 @@ final class ProductMatchService
             if ($this->isCatalogRowSource($source) && ! $this->aiSettings->matchAllowsCatalogRows()) {
                 continue;
             }
+            // Model odrzucił tę kartę (< 40: inny rodzaj wyrobu, sprzeczność) — stały procent listy
+            // katalogowej / skrótu nie odwraca jego oceny, także za zgodą admina.
+            if ($this->isCatalogRowSource($source) && $this->rejectedByModel($requirement, (int) $product->id)) {
+                continue;
+            }
             $exact = $this->honorsSpecificModelCodes($requirement, $product);
             $minScore = $exact ? $this->applyMatchScore() : $this->substituteMatchScore();
             if ($topAi['score'] < $minScore) {
@@ -1971,6 +1976,8 @@ final class ProductMatchService
         $requirement = (string) $item->requirement;
         $products = $this->productsForItems(collect([$item]));
         $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
+        // Przed werdyktami: debugVerdict czyta zapamiętany stan wyszukiwania (karty odrzucone przez model).
+        $candidates = $this->rememberAiCandidates($requirement, $searchResult, self::AI_CANDIDATE_WINDOW, $source);
         $rows = [];
         foreach ($this->mapAiSearchRows($searchResult['products'] ?? [], self::AI_CANDIDATE_WINDOW, $source) as $row) {
             $product = Product::query()->find($row['id']);
@@ -1980,7 +1987,6 @@ final class ProductMatchService
                 : 'brak karty w katalogu'];
         }
 
-        $candidates = $this->rememberAiCandidates($requirement, $searchResult, self::AI_CANDIDATE_WINDOW, $source);
         $this->lastNoMatchReason = null;
         $this->lastModelLowScore = null;
         $pick = $this->resolveBestPick($requirement, $products, $candidates);
@@ -2015,6 +2021,9 @@ final class ProductMatchService
         }
         if ($this->isCatalogRowSource($source) && ! $this->aiSettings->matchAllowsCatalogRows()) {
             return 'odrzucona: wiersz katalogowy/reguły bez zgody admina';
+        }
+        if ($this->isCatalogRowSource($source) && $this->rejectedByModel($requirement, (int) $product->id)) {
+            return 'odrzucona: model ocenił kartę poniżej 40';
         }
         $exact = $this->honorsSpecificModelCodes($requirement, $product);
         $minScore = $exact ? $this->applyMatchScore() : $this->substituteMatchScore();
@@ -2094,6 +2103,18 @@ final class ProductMatchService
         }
 
         return $aiCandidates;
+    }
+
+    /** Model ocenił kartę poniżej 40 w wyszukiwaniu dla tego wymagania (ślad `model_rejected`). */
+    private function rejectedByModel(string $requirement, int $productId): bool
+    {
+        foreach ($this->aiModelRejected[$this->aiCandidatesCacheKey($requirement)] ?? [] as $rejected) {
+            if ($rejected['id'] === $productId) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function modelStateFor(string $requirement): string
