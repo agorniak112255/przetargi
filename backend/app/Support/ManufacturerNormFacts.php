@@ -213,10 +213,27 @@ final class ManufacturerNormFacts
                 continue;
             }
 
-            return $value;
+            return self::compactSpacedCode($value, $code);
         }
 
         return null;
+    }
+
+    /**
+     * Kod rozstrzelony spacjami albo kropkami („2 1 2 1 X”, „3.1.2.1.X”) — zwarty („2121X”); każda inna wartość
+     * bez zmian. PO CO: witryna Delta Plus podaje przy „EN 388” kod ze spacjami, a ProductMatchService szuka
+     * `en388` w wymaganiu przetargu bez spacji („4331B”) — rozstrzelony kod nigdy by nie trafił, a porównanie
+     * dokładne w ProductCrossRefService rozdzieliłoby ten sam poziom na dwa. Zwieramy tylko, gdy wartość to w całości
+     * sam kod (dosłowny zapis kodu z En388Code, czyli z jednolitym separatorem) — kod z dopiskiem zostaje dosłownie.
+     * Dosłowny zapis z karty i tak zostaje w `rows`.
+     */
+    private static function compactSpacedCode(string $value, En388Code $code): string
+    {
+        if ($code->worded || $code->text !== $value) {
+            return $value;
+        }
+
+        return preg_replace('/[\h.]/u', '', $value) ?? $value;
     }
 
     /**

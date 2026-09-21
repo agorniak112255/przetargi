@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use App\Support\BhpAttributeNormalizer;
 use App\Support\ManufacturerNormFacts;
 use Carbon\CarbonImmutable;
 use PHPUnit\Framework\TestCase;
@@ -118,6 +119,86 @@ final class ManufacturerNormFactsTest extends TestCase
             ['label' => 'EN ISO 374-1:2016 + A1:2018', 'value' => 'KLMNOP'],
             ManufacturerNormFacts::rows($column),
         );
+    }
+
+    public function test_kod_rozstrzelony_spacjami_zapisany_zwarcie_a_cytat_doslownie(): void
+    {
+        // Witryna Delta Plus: etykieta „EN 388”, wartość „2 1 2 1 X”. Dopasowanie szuka kodu w wymaganiu
+        // przetargu bez spacji, więc poziom ma być zwarty; cytat i lista norm — dosłownie z karty.
+        $column = ManufacturerNormFacts::build(
+            [['label' => 'EN 388', 'value' => '2 1 2 1 X']],
+            'deltaplus',
+            'Delta Plus',
+            'https://example.test/karta',
+        );
+
+        $this->assertNotNull($column);
+        $this->assertSame('2121X', $column['en388'] ?? null);
+        $this->assertSame('2121X', ManufacturerNormFacts::context($column)['en388'] ?? null);
+        $this->assertSame([['label' => 'EN 388', 'value' => '2 1 2 1 X']], ManufacturerNormFacts::rows($column));
+        $this->assertSame(['EN 388 2 1 2 1 X'], ManufacturerNormFacts::norms($column));
+    }
+
+    public function test_kod_z_kropkami_i_z_uderzeniem_zapisany_zwarcie(): void
+    {
+        foreach (['3.1.2.1.X' => '3121X', '4 3 3 1 B' => '4331B', '4 5 4 3 F P' => '4543FP'] as $value => $expected) {
+            $column = ManufacturerNormFacts::build(
+                [['label' => 'EN 388:2016 + A1:2018', 'value' => $value]],
+                'deltaplus',
+                'Delta Plus',
+                'https://example.test/karta',
+            );
+
+            $this->assertNotNull($column);
+            $this->assertSame($expected, $column['en388'] ?? null, 'kod „'.$value.'”');
+            $this->assertSame($value, ManufacturerNormFacts::rows($column)[0]['value']);
+        }
+    }
+
+    public function test_kod_zwarty_i_kod_z_dopiskiem_zostaja_doslownie(): void
+    {
+        // Zwieramy wyłącznie wartość, która w całości jest kodem — dopisek zostaje taki, jak na karcie.
+        foreach (['4331B', '2 1 2 1 X (2016)', '4331B (2016)'] as $value) {
+            $column = ManufacturerNormFacts::build(
+                [['label' => 'EN 388', 'value' => $value]],
+                'deltaplus',
+                'Delta Plus',
+                'https://example.test/karta',
+            );
+
+            $this->assertNotNull($column);
+            $this->assertSame($value, $column['en388'] ?? null, 'wartość „'.$value.'”');
+        }
+    }
+
+    public function test_mieszane_separatory_nie_sa_kodem(): void
+    {
+        $column = ManufacturerNormFacts::build(
+            [['label' => 'EN 388', 'value' => '2.1 2.1X']],
+            'deltaplus',
+            'Delta Plus',
+            'https://example.test/karta',
+        );
+
+        $this->assertNotNull($column);
+        $this->assertArrayNotHasKey('en388', $column);
+    }
+
+    public function test_normalizer_dostaje_kod_zwarty_z_karty_producenta(): void
+    {
+        $column = ManufacturerNormFacts::build(
+            [['label' => 'EN 388', 'value' => '2 1 2 1 X']],
+            'deltaplus',
+            'Delta Plus',
+            'https://example.test/karta',
+        );
+
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            ['poziomy_en388' => '4131X'],
+            ['manufacturer' => ManufacturerNormFacts::context($column)],
+        );
+
+        $this->assertSame('2121X', $attrs['poziomy_en388']);
     }
 
     public function test_karta_bez_ani_jednej_pary_nie_zapisuje_kolumny(): void
