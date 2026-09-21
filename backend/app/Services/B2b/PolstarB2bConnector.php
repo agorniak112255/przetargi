@@ -29,8 +29,12 @@ use SimpleXMLElement;
  *
  * Polstar jest producentem swoich kolekcji (B2bManufacturerSite): opis stąd pochodzi od autora wyrobu. Pojedyncze
  * wyroby innych producentów (np. SUMIRUBBER) mają ich nazwę jako producenta, więc reguła marki ich nie obejmuje.
+ *
+ * Opis w pliku XML to krótkie hasła, a zastosowanie, kategoria ochrony i zakres rozmiarów są w instrukcji PDF —
+ * dlatego B2bDescribesFromDatasheet: opis karty pisze model wyłącznie z opisu sklepu i instrukcji zapisanej przy
+ * karcie, jak u Tegro (decyzja użytkownika 21.09.2026).
  */
-final class PolstarB2bConnector implements B2bConnector, B2bDocumentSource, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
+final class PolstarB2bConnector implements B2bConnector, B2bDescribesFromDatasheet, B2bDocumentSource, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
 {
     private const SHOP_SECTION = 'Parametry produktu';
 
