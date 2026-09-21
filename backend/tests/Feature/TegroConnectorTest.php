@@ -70,7 +70,8 @@ final class TegroConnectorTest extends TestCase
         $this->items = [
             // lista sklepu nie jest ułożona wg rozmiaru
             $this->item(4635, 'F09 PLUS 7', self::F09.' 7', self::F09, 5.1, 6.0, '5900000000007'),
-            $this->item(4634, 'F09 PLUS 6', self::F09.' 6', self::F09, 5.1, 6.0, '5900000000006'),
+            // jak w sklepie 21.09.2026: najmniejszy rozmiar bez opisu, pozostałe z opisem
+            $this->item(4634, 'F09 PLUS 6', self::F09.' 6', self::F09, 5.1, 6.0, '5900000000006', ['Description' => '']),
             $this->item(4638, 'F09 PLUS 10', self::F09.' 10', self::F09, 5.1, 6.0, '5900000000010'),
             // ten sam model, rozmiar w innej cenie — osobne karty z pełną nazwą
             $this->item(2001, 'HEAVY 9', 'RĘKAWICE RS ARBEITSSCHUTZ HEAVY 9', 'RĘKAWICE RS ARBEITSSCHUTZ HEAVY', 5.9, 6.24, '5900000000109'),
@@ -161,6 +162,7 @@ final class TegroConnectorTest extends TestCase
         $this->assertSame('PLN', $price->currency);
 
         $this->assertNull($connector->price($products['NOPRICE 9']));
+        $this->assertSame('Rękawica ochronna kat. II, nitryl.'."\n".'Druga linia opisu.', $connector->description($products['F09 PLUS 6']));
         $this->assertSame('G-REX', $connector->manufacturer($products['F09 PLUS 6']));
         $this->assertSame('Rękawica ochronna kat. II, nitryl.'."\n".'Druga linia opisu.', $connector->description($products['F09 PLUS 6']));
     }

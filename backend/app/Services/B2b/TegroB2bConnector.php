@@ -337,7 +337,11 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
             sourceUrl: $url,
             raw: [
                 'brand' => self::text($first['Brand'] ?? null),
-                'description' => self::text($first['Description'] ?? null),
+                // pierwszy niepusty opis rozmiarów modelu — 21.09.2026 „F09 PLUS 6” jako jedyna z 455 pozycji nie miała
+                // opisu, a pozostałe rozmiary tego modelu go mają; karta zostawała bez opisu
+                'description' => (string) (collect($group)
+                    ->map(static fn (array $m): string => self::text($m['item']['Description'] ?? null))
+                    ->first(static fn (string $d): bool => $d !== '') ?? ''),
                 'unit' => self::text($first['Unit'] ?? null),
                 'price' => $first['PriceAfterDiscountNet'] ?? null,
                 'retail_price' => $first['RetailPriceNet'] ?? null,
