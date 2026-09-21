@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\B2b;
 
+use App\Jobs\DescribeB2bProductFromDatasheetJob;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Jobs\TranslateB2bProductTextJob;
 use App\Models\B2bAccount;
@@ -52,9 +53,14 @@ use Throwable;
  * - łącznik B2bForeignLanguageSource (decyzja użytkownika 15.09.2026): po zapisie opisu ze źródła (i przy nowej
  *   karcie — także nazwy) zlecamy TranslateB2bProductTextJob; nigdy w dry-run.
  *   Niezmiennik hashy powiązania: description_hash = sha1 opisu na karcie zapisanego przez synchronizację;
- *   source_description_hash niepusty tylko wtedy, gdy ten opis jest tłumaczeniem — wtedy to sha1 tekstu źródła.
- *   Źródło bez zmian i tłumaczenie na karcie nietknięte → import nie przywraca oryginału i nie zleca ponownie;
- *   zapis tekstu źródła zeruje source_description_hash. Oryginalnego opisu nie przechowujemy.
+ *   source_description_hash niepusty tylko wtedy, gdy ten opis powstał z tekstu źródła (tłumaczenie albo opis
+ *   z karty katalogowej — niżej) — wtedy to sha1 tego tekstu źródła.
+ *   Źródło bez zmian i opis pochodny na karcie nietknięty → import nie przywraca oryginału i nie zleca ponownie;
+ *   zapis tekstu źródła zeruje source_description_hash. Oryginalnego opisu nie przechowujemy (poza opisem z karty
+ *   katalogowej: tekst sklepu zostaje w enrichment_payload.b2b_sources).
+ * - łącznik B2bDescribesFromDatasheet (decyzja użytkownika 21.09.2026): po zapisie plików karty zlecamy
+ *   DescribeB2bProductFromDatasheetJob — opis z opisu sklepu i karty katalogowej PDF, bez internetu; ta sama para
+ *   hashy co przy tłumaczeniu; nigdy w dry-run.
  *   Karta, która wciąż ma nieprzetłumaczony tekst źródła (TranslateB2bProductTextJob::pending), dostaje zlecenie
  *   przy każdym przebiegu — ponowne pobranie nadrabia tłumaczenia odrzucone, nieudane albo nadpisane.
  *
@@ -730,6 +736,18 @@ final class B2bCatalogSync
         $documents = $this->storeDocuments($account, $product, $connector, $card, $warnings);
         $shopFields = $this->storeShopFields($connector, $remote, $product, $account, $warnings);
         $this->storeNormFacts($connector, $remote, $product, $account, $warnings);
+
+        // Po zapisie plików — job czyta tekst karty katalogowej z bazy. Karta, która wciąż ma tekst sklepu (opis
+        // odrzucony, nieudany albo nowy tekst u dostawcy), dostaje zlecenie przy każdym przebiegu; czekający job nie
+        // jest dublowany.
+        if ($connector instanceof B2bDescribesFromDatasheet && $savedLink !== null
+            && DescribeB2bProductFromDatasheetJob::sources(
+                $product,
+                $savedLink,
+                DescribeB2bProductFromDatasheetJob::datasheet((int) $product->id, (int) $account->id),
+            ) !== null) {
+            DescribeB2bProductFromDatasheetJob::dispatch((int) $product->id, (int) $account->id);
+        }
 
         return [
             'status' => $status,
@@ -1569,7 +1587,8 @@ final class B2bCatalogSync
                     // ma być odwracalne, a nie ciche.
                     $payload['enrichment_payload'] = $this->withReplacedDescription($existing, $description);
                     if ($warnings !== null) {
-                        $warnings[] = 'opis zastąpiony opisem producenta (poprzedni w enrichment_payload.replaced_description)';
+                        $warnings[] = ($fromManufacturer ? 'opis zastąpiony opisem producenta' : 'opis zastąpiony nowym tekstem ze źródła')
+                            .' (poprzedni w enrichment_payload.replaced_description)';
                     }
                 }
 

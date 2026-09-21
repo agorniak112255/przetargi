@@ -6,6 +6,7 @@ namespace App\Services\Enrichment;
 
 use App\Exceptions\EnrichmentCancelledException;
 use App\Exceptions\ProductSourcesNotFoundException;
+use App\Jobs\DescribeB2bProductFromDatasheetJob;
 use App\Jobs\EnrichProductJob;
 use App\Jobs\PrefetchProductSourcesJob;
 use App\Jobs\ReindexProductEmbeddingJob;
@@ -1158,60 +1159,11 @@ final class ProductEnrichmentService
             $imageUrls = array_values(array_unique($imageUrls));
 
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
-
-            $features = ProductDescriptionText::dropDuplicatedListItems(
-                $this->stringList($extracted['features'] ?? null),
-                $description
-            );
-            // „EN 388”, „EN 388:2016” i „EN388:2016+A1:2018” z trzech kart to jedna norma,
-            // a nie trzy pozycje na liście — zwijamy do zapisu najbogatszego w informacje.
-            $norms = NormCode::dedupe($this->stringList($extracted['norms'] ?? null));
-            $certificates = NormCode::dedupe($this->stringList($extracted['certificates'] ?? null));
-            $materials = ProductDescriptionText::dropDuplicatedListItems(
-                $this->stringList($extracted['materials'] ?? null),
-                $description
-            );
-            $useCases = ProductDescriptionText::dropDuplicatedListItems(
-                $this->stringList($extracted['use_cases'] ?? null),
-                $description
-            );
-            $specs = ProductDescriptionText::dropDuplicatedListItems(
-                $this->stringList($extracted['specs'] ?? null),
-                $description
-            );
-
-            $attributes = $this->bhpAttributes->normalize(
-                is_array($extracted['attributes'] ?? null) ? $extracted['attributes'] : null,
-                [
-                    'materials' => $materials,
-                    'norms' => $norms,
-                    'specs' => $specs,
-                    'certificates' => $certificates,
-                    'category' => (string) ($product->category ?? ''),
-                    'sku' => (string) $product->sku,
-                    'name' => (string) $product->name,
-                    'description' => $description,
-                    'norms_column' => (string) ($product->norms ?? ''),
-                ]
-            );
-            $sized = $this->applyExtractedSizes(
-                $product,
-                $attributes,
-                $specs,
-                $description,
-                $this->collectOptionSizes($pageSnippets, $this->sizeCategoryHint($product, $attributes))
-            );
-            $attributes = $sized['attributes'];
-            $packaging = $sized['packaging'];
+            $fields = $this->payloadFromExtraction($product, $extracted, $description, $pageSnippets);
+            $packaging = $fields['packaging'];
 
             $payload = [
-                'features' => $features,
-                'norms' => $norms,
-                'certificates' => $certificates,
-                'materials' => $materials,
-                'use_cases' => $useCases,
-                'specs' => $specs,
-                'attributes' => $attributes,
+                ...$fields['lists'],
                 'source_urls' => array_values(array_unique($sourceUrls)),
                 'primary_source_url' => $primarySourceUrl,
                 'primary_source_kind' => $primarySourceKind,
@@ -4841,9 +4793,11 @@ SYS,
     /**
      * @param  list<array{url: string, title: string, snippet: string}>  $searchResults
      * @param  list<array{url: string, text: string}>  $pageSnippets
+     * @param  string|null  $sourcesNote  opis źródeł zamiast „Wyniki wyszukiwania / Strony (po filtrze AI)” — dla
+     *                                    opisu ze źródeł B2B, gdzie ani wyszukiwania, ani filtra nie było
      * @return array<string, mixed>
      */
-    private function extractWithLlm(Product $product, array $searchResults, array $pageSnippets): array
+    private function extractWithLlm(Product $product, array $searchResults, array $pageSnippets, ?string $sourcesNote = null): array
     {
         $compactPages = $this->fitPagesToBudget($pageSnippets, 5, 8000, 20000);
         $compactSources = array_map(static function (array $r): array {
@@ -4866,7 +4820,9 @@ SYS,
                 'role' => 'user',
                 'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}"
                     .$this->manufacturerModelHint($product)."\nEAN: ".($product->ean ?? '—')
-                    ."\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}",
+                    .($sourcesNote !== null
+                        ? "\n\n{$sourcesNote}\n\nTeksty źródeł:\n{$pagesJson}"
+                        : "\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}"),
             ],
         ], 0.1, 4500);
     }
@@ -4887,6 +4843,186 @@ SYS,
         $codes = array_values(array_unique($codes));
 
         return $codes === [] ? '' : "\nOznaczenie modelu u producenta (ten sam produkt): ".implode(', ', $codes);
+    }
+
+    /**
+     * Listy i atrybuty karty z odpowiedzi modelu — wspólne dla opisu z internetu i opisu ze źródeł B2B.
+     *
+     * @param  array<string, mixed>  $extracted  po enrichStructuredFieldsFromPages
+     * @param  list<array<string, mixed>>  $pageSnippets
+     * @return array{lists: array{features: list<string>, norms: list<string>, certificates: list<string>, materials: list<string>, use_cases: list<string>, specs: list<string>, attributes: array<string, mixed>}, packaging: string|null}
+     */
+    private function payloadFromExtraction(Product $product, array $extracted, string $description, array $pageSnippets): array
+    {
+        $features = ProductDescriptionText::dropDuplicatedListItems(
+            $this->stringList($extracted['features'] ?? null),
+            $description
+        );
+        // „EN 388”, „EN 388:2016” i „EN388:2016+A1:2018” z trzech kart to jedna norma,
+        // a nie trzy pozycje na liście — zwijamy do zapisu najbogatszego w informacje.
+        $norms = NormCode::dedupe($this->stringList($extracted['norms'] ?? null));
+        $certificates = NormCode::dedupe($this->stringList($extracted['certificates'] ?? null));
+        $materials = ProductDescriptionText::dropDuplicatedListItems(
+            $this->stringList($extracted['materials'] ?? null),
+            $description
+        );
+        $useCases = ProductDescriptionText::dropDuplicatedListItems(
+            $this->stringList($extracted['use_cases'] ?? null),
+            $description
+        );
+        $specs = ProductDescriptionText::dropDuplicatedListItems(
+            $this->stringList($extracted['specs'] ?? null),
+            $description
+        );
+
+        $attributes = $this->bhpAttributes->normalize(
+            is_array($extracted['attributes'] ?? null) ? $extracted['attributes'] : null,
+            [
+                'materials' => $materials,
+                'norms' => $norms,
+                'specs' => $specs,
+                'certificates' => $certificates,
+                'category' => (string) ($product->category ?? ''),
+                'sku' => (string) $product->sku,
+                'name' => (string) $product->name,
+                'description' => $description,
+                'norms_column' => (string) ($product->norms ?? ''),
+            ]
+        );
+        $sized = $this->applyExtractedSizes(
+            $product,
+            $attributes,
+            $specs,
+            $description,
+            $this->collectOptionSizes($pageSnippets, $this->sizeCategoryHint($product, $attributes))
+        );
+
+        return [
+            'lists' => [
+                'features' => $features,
+                'norms' => $norms,
+                'certificates' => $certificates,
+                'materials' => $materials,
+                'use_cases' => $useCases,
+                'specs' => $specs,
+                'attributes' => $sized['attributes'],
+            ],
+            'packaging' => $sized['packaging'],
+        ];
+    }
+
+    /**
+     * Opis karty wyłącznie z dwóch źródeł zapisanych przez import B2B: opisu ze sklepu dostawcy i tekstu karty
+     * katalogowej PDF (decyzja użytkownika 21.09.2026, łącznik B2bDescribesFromDatasheet). Bez wyszukiwarki, bez cache
+     * SKU, bez stron z internetu i bez pobierania plików — tożsamość wyrobu gwarantuje powiązanie B2B, więc nie ma
+     * potwierdzania karty ani filtra stron. Niczego nie zapisuje: wynik zapisuje DescribeB2bProductFromDatasheetJob.
+     *
+     * Tekst PDF bywa poszatkowany (kolumny pomieszane), więc model mógłby skleić poziom normy z sąsiednich kolumn.
+     * Każdy kod poziomów (EN 388 „4131A”, EN 407 „X1XXXX”) z opisu i list musi występować w tekście źródeł: z list
+     * znika pozycja bez pokrycia, a opis z takim kodem jest odrzucany w całości.
+     *
+     * @return array{description: string, payload: array<string, mixed>, norms: string|null, packaging: string|null, dropped: list<string>}
+     *
+     * @throws B2bSourcesDescriptionRejected
+     */
+    public function describeFromB2bSources(Product $product, string $shopText, string $shopUrl, string $sheetText, string $sheetUrl): array
+    {
+        $shopText = trim($shopText);
+        $sheetText = trim($sheetText);
+        if ($sheetText === '') {
+            throw new B2bSourcesDescriptionRejected('brak tekstu karty katalogowej');
+        }
+        $pages = [
+            ['url' => $sheetUrl, 'text' => mb_substr($sheetText, 0, 8000)],
+            ...($shopText !== '' ? [['url' => $shopUrl, 'text' => mb_substr($shopText, 0, 1500)]] : []),
+        ];
+
+        $extracted = $this->extractWithLlm($product, [], $pages, 'Źródła — wyłącznie te dwa teksty, nic spoza nich:'
+            ."\n1. Karta katalogowa PDF ze sklepu dostawcy ({$sheetUrl}) — tekst wyciągnięty z PDF, kolumny i wiersze mogą"
+            .' być pomieszane; wartości (np. poziomy normy) przypisuj tylko wtedy, gdy przypisanie jest w tekście jednoznaczne.'
+            ."\n2. Opis ze sklepu dostawcy (".($shopUrl !== '' ? $shopUrl : 'strona produktu').').');
+        $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pages);
+
+        $description = ProductDescriptionText::plain($this->composeFullDescription($extracted));
+        if ($description === '') {
+            throw new B2bSourcesDescriptionRejected('model nie zwrócił opisu');
+        }
+        if ($this->looksLikeMissingCardMeta($description) || $this->looksLikeRawLocaleDump($description)
+            || $this->looksLikeForeignOrPartsTableDump($description)) {
+            throw new B2bSourcesDescriptionRejected('opis nie jest opisem wyrobu');
+        }
+        if (mb_strlen($description) <= mb_strlen($shopText)) {
+            throw new B2bSourcesDescriptionRejected('opis nie dłuższy niż opis ze sklepu');
+        }
+
+        $sources = self::levelKey($shopText."\n".$sheetText);
+        $unsupported = array_values(array_filter(
+            self::levelCodes($description),
+            static fn (string $code): bool => ! str_contains($sources, $code),
+        ));
+        if ($unsupported !== []) {
+            throw new B2bSourcesDescriptionRejected('poziomy norm spoza źródeł w opisie: '.implode(', ', $unsupported));
+        }
+
+        $fields = $this->payloadFromExtraction($product, $extracted, $description, $pages);
+        $dropped = [];
+        $supported = static function (string $text) use ($sources, &$dropped): bool {
+            foreach (self::levelCodes($text) as $code) {
+                if (! str_contains($sources, $code)) {
+                    $dropped[] = $text;
+
+                    return false;
+                }
+            }
+
+            return true;
+        };
+        $lists = $fields['lists'];
+        foreach (['features', 'norms', 'certificates', 'materials', 'use_cases', 'specs'] as $key) {
+            $lists[$key] = array_values(array_filter($lists[$key], $supported));
+        }
+        foreach ($lists['attributes'] as $key => $value) {
+            if (is_string($value) && ! $supported($value)) {
+                unset($lists['attributes'][$key]);
+            }
+        }
+
+        return [
+            'description' => mb_substr($description, 0, 10000),
+            'payload' => [
+                ...$lists,
+                'source_urls' => array_values(array_unique(array_filter([$sheetUrl, $shopUrl], static fn (string $u): bool => $u !== ''))),
+                'primary_source_url' => $sheetUrl,
+                'primary_source_kind' => DescribeB2bProductFromDatasheetJob::PRIMARY_SOURCE_KIND,
+                'confidence' => (float) ($extracted['confidence'] ?? 0),
+                'from_cache' => false,
+            ],
+            'norms' => $lists['norms'] !== [] ? implode(', ', array_slice($lists['norms'], 0, 8)) : null,
+            'packaging' => $fields['packaging'],
+            'dropped' => array_values(array_unique($dropped)),
+        ];
+    }
+
+    /**
+     * Kody poziomów ochrony: EN 388 („4131A”, „4544C” — przecięcie coup test ma poziomy do 5), EN 407 („X1XXXX”),
+     * bez lat („2016”, „2020”) — tylko ciągi, które mogą być poziomami, w postaci do porównania ze źródłem.
+     *
+     * @return list<string>
+     */
+    private static function levelCodes(string $text): array
+    {
+        preg_match_all('/(?<![\p{L}\p{N}])(?:[0-5X]{6}|[0-5X]{4}[A-FX]?)(?![\p{L}\p{N}])/u', mb_strtoupper($text), $m);
+
+        return array_values(array_unique(array_filter(
+            $m[0],
+            static fn (string $code): bool => preg_match('/^(?:19|20)\d\d$/', $code) !== 1,
+        )));
+    }
+
+    /** Tekst źródeł do szukania kodów poziomów: wielkie litery, bez białych znaków (PDF łamie „4131 A”). */
+    private static function levelKey(string $text): string
+    {
+        return (string) preg_replace('/\s+/u', '', mb_strtoupper($text));
     }
 
     /**

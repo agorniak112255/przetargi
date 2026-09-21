@@ -23,8 +23,11 @@ use RuntimeException;
  *
  * Tegro nie jest producentem tych marek, więc łącznik nie jest B2bManufacturerSite: opis ze sklepu nie nadpisuje
  * opisu z witryny producenta, a normy trafiają do tabelki sklepu (B2bShopFieldSource), nie do norm producenta.
+ *
+ * Opis w sklepie ma 1–2 zdania, a treść wyrobu (poziomy norm, powłoka, wkładka, branże) jest w karcie katalogowej
+ * PDF — dlatego B2bDescribesFromDatasheet: opis karty pisze model z tych dwóch źródeł (decyzja użytkownika 21.09.2026).
  */
-final class TegroB2bConnector implements B2bConnector, B2bDocumentSource, B2bRunSummaryAware, B2bShopFieldSource
+final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet, B2bDocumentSource, B2bRunSummaryAware, B2bShopFieldSource
 {
     private const SHOP_SECTION = 'Parametry produktu';
 
