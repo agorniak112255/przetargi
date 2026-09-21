@@ -26,6 +26,7 @@ use App\Support\RrfFusion;
 use App\Support\TechnicalAbbreviations;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
@@ -165,6 +166,9 @@ final class ProductAiSearchService
 
     /** @var array<string, int> */
     private array $timingMs = [];
+
+    /** @var array<string, int>|null słowa z nazw kart → liczba kart (catalogNameWordCounts) */
+    private ?array $catalogNameWords = null;
 
     /**
      * Ślad ostatniego search(): pula z retrievalu, karty pokazane modelowi i jego
@@ -2776,8 +2780,119 @@ final class ProductAiSearchService
             'search_steps' => $steps,
         ], $query), $query));
         $intent['search_steps'] = $this->sanitizeSearchSteps($intent['search_steps'], $intent);
+        $intent['search_phrases'] = $this->withRareCatalogNameWords($query, $intent);
 
         return $intent;
+    }
+
+    /**
+     * Nazwa serii albo modelu: stoi w nazwach najwyżej tylu kart i w ponad połowie kart, które w ogóle ją wymieniają,
+     * właśnie w nazwie. Pomiar 21.09.2026 na zapytaniach z serwera: „ultrane” 31/31 w nazwach, „araukan” 11/11,
+     * „solus” 39/41, „hycron” 6/7 — a zwykłe słowa stoją głównie w opisach: „dostawa” 1/176, „oczu” 45/1652,
+     * „wymiary” 15/4208, najwyżej „wodoochronne” 20/40. Sama rzadkość w nazwach przepuszczała te zwykłe słowa.
+     */
+    private const RARE_NAME_WORD_MAX_CARDS = 60;
+
+    /** Ile takich słów dopisujemy na wymaganie — długi akapit SIWZ nie może przestawić całej listy fraz. */
+    private const RARE_NAME_WORDS_PER_QUERY = 2;
+
+    /**
+     * Nazwa serii z wymagania nie może zginąć w kroku „zrozum”. 21.09.2026: „Rękawice Ultrane” model zrozumiał jako
+     * samo „rękawice”, a zapisane zrozumienie utrwaliło błąd — w puli 3 z 31 kart Ultrane, do modelu żadna, model dał
+     * 90% innej rękawicy. Słowo z wymagania, którego zrozumienie nie zawiera, a które stoi w nazwach od 1 do
+     * RARE_NAME_WORD_MAX_CARDS kart, idzie na początek fraz (limit tokenów wyszukiwania tnie od końca). Tylko do fraz:
+     * nie ustawiamy model_name (to przełącza na ścieżkę nazwanego modelu z ocenami bez modelu) ani kroków kaskady.
+     * Liczone przy każdym odczycie, więc naprawia też zrozumienia zapisane wcześniej.
+     *
+     * @param  array<string, mixed>  $intent
+     * @return list<string>
+     */
+    private function withRareCatalogNameWords(string $query, array $intent): array
+    {
+        $phrases = array_values((array) $intent['search_phrases']);
+        $known = $this->lexicalNormalize(implode(' ', array_merge(
+            [(string) $intent['needed'], (string) ($intent['manufacturer'] ?? ''), (string) ($intent['model_name'] ?? '')],
+            $phrases,
+            (array) ($intent['search_steps'] ?? []),
+            (array) $intent['constraints'],
+        )));
+        $knownTokens = array_filter(explode(' ', $known), static fn (string $t): bool => mb_strlen($t) >= 5);
+        $noun = explode(' ', trim($this->lexicalNormalize((string) $intent['needed'])))[0] ?? '';
+        $noun = $this->isGenericAssortmentToken($noun) ? explode(' ', trim(mb_strtolower((string) $intent['needed'])))[0] : '';
+
+        $added = [];
+        foreach ($this->modelFuzzy->brandHints($query) as $word) {
+            if (count($added) >= self::RARE_NAME_WORDS_PER_QUERY) {
+                break;
+            }
+            if (mb_strlen($word) < 4 || $this->isGenericAssortmentToken($word) || $this->catalogSlang->isIndexedTerm($word)
+                || str_contains(' '.$known.' ', ' '.$word.' ')) {
+                continue;
+            }
+            // odmiana („ultrane” / „ultranem”): wspólny początek ≥ 5 znaków z czymś, co zrozumienie już ma
+            $prefix = mb_substr($word, 0, 5);
+            if (mb_strlen($word) >= 5 && array_filter($knownTokens, static fn (string $t): bool => str_starts_with($t, $prefix)) !== []) {
+                continue;
+            }
+            if (! $this->looksLikeCatalogSeriesName($word)) {
+                continue;
+            }
+            $added[] = trim($noun.' '.$word);
+        }
+
+        return array_values(array_unique(array_merge($added, $phrases)));
+    }
+
+    /**
+     * Słowo w nazwach 1..RARE_NAME_WORD_MAX_CARDS kart i w ponad połowie kart, które je w ogóle wymieniają (search_blob:
+     * nazwa, opis, dane sklepu — bez polskich znaków, jak słowo z brandHints). Nazwy liczy słownik z pamięci podręcznej
+     * (catalogNameWordCounts), cały tekst — indeks FULLTEXT, tylko dla słów, które przeszły próg nazw. Pierwsza wersja
+     * liczyła oba przez LIKE po 25 tys. kart: przy pustej pamięci długie wymaganie kosztowało do 18 s.
+     */
+    private function looksLikeCatalogSeriesName(string $word): bool
+    {
+        $inNames = $this->catalogNameWordCounts()[$word] ?? 0;
+        if ($inNames < 1 || $inNames > self::RARE_NAME_WORD_MAX_CARDS) {
+            return false;
+        }
+
+        return (bool) Cache::remember('catalog-series-word:'.$word, now()->addDay(), static function () use ($word, $inNames): bool {
+            $query = Product::query();
+            if ($query->getConnection()->getDriverName() === 'mysql') {
+                $query->whereRaw('MATCH(search_blob) AGAINST (? IN BOOLEAN MODE)', ['+'.$word.'*']);
+            } else {
+                $query->where('search_blob', 'like', '%'.addcslashes($word, '%_\\').'%');
+            }
+
+            return $inNames * 2 > $query->count();
+        });
+    }
+
+    /**
+     * W ilu nazwach kart stoi każde słowo (małe litery, bez polskich znaków i cyfr — tak jak słowa z brandHints).
+     * Budowane raz na dobę z samych nazw; w pamięci obiektu na czas żądania.
+     *
+     * @return array<string, int>
+     */
+    private function catalogNameWordCounts(): array
+    {
+        return $this->catalogNameWords ??= Cache::remember('catalog-name-word-counts', now()->addDay(), function (): array {
+            $counts = [];
+            foreach (Product::query()->toBase()->pluck('name') as $name) {
+                $words = [];
+                foreach (explode(' ', $this->lexicalNormalize((string) $name)) as $token) {
+                    $token = (string) preg_replace('/[0-9]+/', '', $token);
+                    if (mb_strlen($token) >= 3) {
+                        $words[$token] = true;
+                    }
+                }
+                foreach (array_keys($words) as $token) {
+                    $counts[$token] = ($counts[$token] ?? 0) + 1;
+                }
+            }
+
+            return $counts;
+        });
     }
 
     /**
@@ -3358,9 +3473,7 @@ final class ProductAiSearchService
         // marka) i wyszukiwania tekstowego. Kroki trafiają w słowa, nie w produkt — karta opisana innymi słowami
         // (angielski opis, „oblanie” zamiast „powlekane”, sam model w nazwie) wypadała z puli na każdym poziomie.
         // Kaskada zejściowa do samego rzeczownika rodzaju waży mniej: z definicji nie widzi kart bez tego słowa.
-        $cascadeWeight = $this->cascadeSweptFamilyNoun($cascadeLevel, $intent)
-            ? self::RRF_WEIGHT_CASCADE_FAMILY_NOUN
-            : self::RRF_WEIGHT_CASCADE;
+        $cascadeWeight = $this->cascadeFusionWeight($cascadeLevel, $intent);
 
         // Gdy rodzina jest rozpoznana, indeks zwraca cały zgodny asortyment — także karty
         // bez trafienia we frazę, tylko niżej. Wcześniej wymagał tego skan całego katalogu
@@ -3434,6 +3547,23 @@ final class ProductAiSearchService
         $branded = $this->preferCatalogBrands($query, $merged, $intent);
 
         return $this->uniqueProducts($branded, $limit)->values();
+    }
+
+    /**
+     * Waga listy kaskady w fuzji rang. Pełna tylko dla listy zawężonej krokami z nazwy albo marką/modelem.
+     * Słabo waży lista „sam rodzaj” i „rodzaj + DOWOLNE słowo z fraz” (poziomy family, family_feature — słowa łączone
+     * przez LUB, lista ułożona po dacie opisu, nie po trafności). Do 21.09.2026 te najszersze listy dostawały wagę 2,0:
+     * „rękawice wysokotemperaturowe” łapało 497 rękawic (słowa „ochronne”, „odporne” są w każdym opisie), a MEFISTO —
+     * 11. i 15. w wyszukiwaniu po tekście — spadało po fuzji na 91. i 95. miejsce, poza pulę 80.
+     *
+     * @param  array{search_steps: list<string>}  $intent
+     */
+    private function cascadeFusionWeight(?string $level, array $intent): float
+    {
+        return $this->cascadeSweptFamilyNoun($level, $intent)
+            || in_array($level, [CatalogCascadeRecall::LEVEL_FAMILY, CatalogCascadeRecall::LEVEL_FAMILY_FEATURE], true)
+            ? self::RRF_WEIGHT_CASCADE_FAMILY_NOUN
+            : self::RRF_WEIGHT_CASCADE;
     }
 
     /**

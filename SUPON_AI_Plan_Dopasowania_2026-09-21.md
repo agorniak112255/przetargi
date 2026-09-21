@@ -88,7 +88,10 @@ Audyt „źródło podaje normę, karta jej nie ma” dla całego katalogu (wczo
 
 ## 4. Ograniczenia i ryzyka
 - Zapisane zrozumienie jest trwałe: gdy model raz źle zrozumie wymaganie, kolejne przebiegi tego nie zmienią.
-  Wyjścia: zmiana treści wymagania albo podniesienie `UNDERSTAND_PROMPT_VERSION`. Docelowo: podgląd i edycja warunków przy pozycji.
+  Tak stało się 21.09 z „Rękawice Ultrane” (zapisane jako samo „rękawice”). Zabezpieczenie: nazwa serii z wymagania,
+  której zrozumienie nie zawiera, wraca do fraz wyszukiwania przy każdym odczycie (słowo w nazwach 1–60 kart i w ponad
+  połowie kart, które je wymieniają). Wyjścia awaryjne: zmiana treści wymagania albo podniesienie `UNDERSTAND_PROMPT_VERSION`.
+  Docelowo: podgląd i edycja warunków przy pozycji.
 - Pełna karta zwiększa liczbę tokenów rankingu mniej więcej 2–3×; czasu przebiegu to nie wydłużyło.
 - Zestaw testowy to 15 pozycji jednego przetargu — każdy etap trzeba dodatkowo sprawdzić na prawdziwych zapytaniach z maili.
 - Pomiar na żywo zależy od limitu zapytań u dostawcy (4 z 45 pozycji bez odpowiedzi w ostatnim przebiegu lokalnym).

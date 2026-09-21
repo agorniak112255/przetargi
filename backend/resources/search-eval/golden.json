@@ -452,6 +452,65 @@
                 "1160-011-100-00"
             ],
             "note": "Zapytanie klienta z poczty. Katalog nie ma kombinezonu z udokumentowaną odpornością na kwas siarkowy 96% — wynik ma pokazać najbliższe bariery chemiczne i nazwać brak. Ścierka bawełniana i rękaw Tyvek to nie kombinezon."
+        },
+        {
+            "id": "mail-rekawice-ultrane",
+            "query": "Rękawice Ultrane",
+            "expected_skus": [
+                "34339019",
+                "34340018",
+                "34341018",
+                "34382028",
+                "34401148",
+                "34407009",
+                "34414149",
+                "34420028",
+                "34450008",
+                "34500018",
+                "34500038",
+                "34510098",
+                "34524008",
+                "34525008",
+                "34525098",
+                "34526008",
+                "34527008",
+                "34541008",
+                "34544008",
+                "34548058",
+                "34548088",
+                "34549058",
+                "34549068",
+                "34550018",
+                "34550548",
+                "34551038",
+                "34553088",
+                "34641028",
+                "34648008",
+                "34664008",
+                "34681008"
+            ],
+            "forbidden_skus": [],
+            "note": "Zapytanie z serwera 21.09.2026. Krok „zrozum” zgubił nazwę serii (zostało samo „rękawice”), zapisane zrozumienie utrwaliło błąd: w puli 3 z 31 kart Ultrane, do modelu żadna, model dał 90% innej rękawicy. Każda karta serii Ultrane jest trafna."
+        },
+        {
+            "id": "mail-rekawice-wysokotemperaturowe-400-pelne",
+            "query": "Zakup i dostawa rękawic ochronnych wysokotemperaturowych odpornych na temperaturę min. 400C",
+            "expected_skus": [
+                "3620-001-716-11",
+                "3620-003-716-11"
+            ],
+            "forbidden_skus": [],
+            "note": "Zapytanie klienta nr 33 z serwera 21.09.2026. Canis MEFISTO (angielska nazwa „Heat resistant welding gloves”, opis: rękawice termoodporne do 500°C). Lista kaskady „rękawice + dowolne słowo” (497 kart po dacie opisu) wypychała je z puli, choć wyszukiwanie po tekście stawiało je na 11. i 15. miejscu."
+        },
+        {
+            "id": "mail-rekawice-wysokotemperaturowe-400-krotkie",
+            "query": "rękawice ochronne wysokotemperaturowe odporne na temperaturę min. 400C",
+            "expected_skus": [
+                "3620-001-716-11",
+                "3620-003-716-11"
+            ],
+            "forbidden_skus": [],
+            "note": "To samo zapytanie bez „Zakup i dostawa” — tu MEFISTO trafiało do modelu już przed poprawką."
         }
     ]
 }
