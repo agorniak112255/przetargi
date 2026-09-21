@@ -44,6 +44,9 @@ final class TegroDatasheetDescriptionTest extends TestCase
 
     private string $shopText = self::SHOP_TEXT;
 
+    /** Dodatkowy fragment karty katalogowej (HTML przed renderem do PDF). */
+    private string $pdfExtra = '';
+
     /** @var \ArrayObject<int, string> */
     private \ArrayObject $prompts;
 
@@ -151,6 +154,41 @@ final class TegroDatasheetDescriptionTest extends TestCase
         $this->assertNotSame(Product::ENRICHMENT_DONE, $card->enrichment_status);
     }
 
+    public function test_description_with_a_norm_edition_absent_from_the_sources_is_rejected(): void
+    {
+        // oba źródła podają „+A1:2018”, opis — wydanie zmiany, którego w nich nie ma
+        $this->answer['description'] = str_replace('EN 388:2016+A1:2018', 'EN 388:2016+A1:2019', self::AI_TEXT);
+        $this->fakeSite();
+
+        $this->sync();
+
+        $this->assertSame(self::SHOP_TEXT, $this->card()->description);
+    }
+
+    public function test_norm_designation_without_iso_is_not_the_one_from_the_sources(): void
+    {
+        // PVC/40 21.09.2026: źródło „EN ISO 374-1:2016”, opis „EN 374-1:2016”
+        $this->answer['description'] = self::AI_TEXT.' Chroni przed chemikaliami zgodnie z EN 374-1:2016.';
+        $this->fakeSite();
+        $this->pdfExtra = '<p>EN ISO 374-1:2016/Type C</p>';
+
+        $this->sync();
+
+        $this->assertSame(self::SHOP_TEXT, $this->card()->description);
+    }
+
+    public function test_norms_from_the_shop_page_table_count_as_a_source_and_reach_the_model(): void
+    {
+        // tylko wiersz „Normy” strony sklepu podaje EN 511 — karta PDF go nie ma
+        $this->answer['description'] = self::AI_TEXT.' Chroni przed zimnem zgodnie z EN 511:2006 (X1X).';
+        $this->fakeSite();
+
+        $this->sync();
+
+        $this->assertStringContainsString('EN 511:2006', $this->prompts[0]);
+        $this->assertStringContainsString('EN 511:2006', (string) $this->card()->description);
+    }
+
     public function test_list_items_with_a_level_absent_from_the_sources_are_dropped(): void
     {
         $this->answer['features'] = ['obsługa ekranów dotykowych', 'odporność na przecięcie 4X44F'];
@@ -228,6 +266,7 @@ final class TegroDatasheetDescriptionTest extends TestCase
             .'<p>BRANŻE:</p><p>Przemysł metalowy</p><p>Przemysł motoryzacyjny (automotive)</p><p>Prace montażowe</p><p>F 09 PLUS</p>'
             .'<p>EN ISO 21420:2020,</p><p>EN 388:2016+A1:2018 (4131A),</p><p>EN 407:2020 (X1XXXX)</p>'
             .'<p>Rękawica Touchscreen umożliwia pracę z ekranami dotykowymi. Wkładka o uigleniu 15 gg gwarantuje wysoką elastyczność.</p>'
+            .$this->pdfExtra
             .'</body></html>')->output();
     }
 
@@ -262,7 +301,9 @@ final class TegroDatasheetDescriptionTest extends TestCase
                     ['Content-Type' => 'text/xml'],
                 ),
                 str_starts_with($path, '/pl/rekawice-') => Http::response(
-                    '<div class="kontrolka-ZalacznikiDoPropduktu"><div class="pliki-do-produktu">'
+                    '<div class="kontrolka-PoleProduktu"><div class="pole-opis-wartosc"><span class="wartosc">'
+                    .'Normy:EN 388:2016+A1:2018 (4131A); EN 511:2006 (X1X)</span></div></div>'
+                    .'<div class="kontrolka-ZalacznikiDoPropduktu"><div class="pliki-do-produktu">'
                     .'<a href="'.parse_url(self::PDF_URL, PHP_URL_PATH).'">'
                     .'g-rex-f09-plus-karta-katalogowa-pl.pdf</a></div></div>',
                 ),

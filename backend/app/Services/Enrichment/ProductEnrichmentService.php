@@ -4925,22 +4925,25 @@ SYS,
      *
      * @throws B2bSourcesDescriptionRejected
      */
-    public function describeFromB2bSources(Product $product, string $shopText, string $shopUrl, string $sheetText, string $sheetUrl): array
+    public function describeFromB2bSources(Product $product, string $shopText, string $shopUrl, string $sheetText, string $sheetUrl, string $shopFields = ''): array
     {
         $shopText = trim($shopText);
         $sheetText = trim($sheetText);
+        $shopFields = trim($shopFields);
         if ($sheetText === '') {
             throw new B2bSourcesDescriptionRejected('brak tekstu karty katalogowej');
         }
+        // tabelka ze strony sklepu (normy, pakowanie, rozmiary) należy do źródła „sklep” — dosłownie, jak na stronie
+        $shopSource = trim($shopText.($shopFields !== '' ? "\n\nParametry ze strony sklepu:\n".mb_substr($shopFields, 0, 1500) : ''));
         $pages = [
             ['url' => $sheetUrl, 'text' => mb_substr($sheetText, 0, 8000)],
-            ...($shopText !== '' ? [['url' => $shopUrl, 'text' => mb_substr($shopText, 0, 1500)]] : []),
+            ...($shopSource !== '' ? [['url' => $shopUrl, 'text' => mb_substr($shopSource, 0, 3000)]] : []),
         ];
 
         $extracted = $this->extractWithLlm($product, [], $pages, 'Źródła — wyłącznie te dwa teksty, nic spoza nich:'
             ."\n1. Karta katalogowa PDF ze sklepu dostawcy ({$sheetUrl}) — tekst wyciągnięty z PDF, kolumny i wiersze mogą"
             .' być pomieszane; wartości (np. poziomy normy) przypisuj tylko wtedy, gdy przypisanie jest w tekście jednoznaczne.'
-            ."\n2. Opis ze sklepu dostawcy (".($shopUrl !== '' ? $shopUrl : 'strona produktu').').');
+            ."\n2. Opis i parametry ze strony sklepu dostawcy (".($shopUrl !== '' ? $shopUrl : 'strona produktu').').');
         $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pages);
 
         $description = ProductDescriptionText::plain($this->composeFullDescription($extracted));
@@ -4955,19 +4958,19 @@ SYS,
             throw new B2bSourcesDescriptionRejected('opis nie dłuższy niż opis ze sklepu');
         }
 
-        $sources = self::levelKey($shopText."\n".$sheetText);
+        $sources = self::claimKey($shopSource."\n".$sheetText);
         $unsupported = array_values(array_filter(
-            self::levelCodes($description),
+            self::sourceClaims($description),
             static fn (string $code): bool => ! str_contains($sources, $code),
         ));
         if ($unsupported !== []) {
-            throw new B2bSourcesDescriptionRejected('poziomy norm spoza źródeł w opisie: '.implode(', ', $unsupported));
+            throw new B2bSourcesDescriptionRejected('oznaczenia albo poziomy norm spoza źródeł w opisie: '.implode(', ', $unsupported));
         }
 
         $fields = $this->payloadFromExtraction($product, $extracted, $description, $pages);
         $dropped = [];
         $supported = static function (string $text) use ($sources, &$dropped): bool {
-            foreach (self::levelCodes($text) as $code) {
+            foreach (self::sourceClaims($text) as $code) {
                 if (! str_contains($sources, $code)) {
                     $dropped[] = $text;
 
@@ -5004,23 +5007,32 @@ SYS,
     }
 
     /**
-     * Kody poziomów ochrony: EN 388 („4131A”, „4544C” — przecięcie coup test ma poziomy do 5), EN 407 („X1XXXX”),
-     * bez lat („2016”, „2020”) — tylko ciągi, które mogą być poziomami, w postaci do porównania ze źródłem.
+     * Fakty, które muszą wystąpić w źródłach, w postaci do porównania (claimKey):
+     * - kody poziomów ochrony: EN 388 („4131A”, „4544C” — przecięcie coup test ma poziomy do 5), EN 407 („X1XXXX”),
+     *   bez lat („2016”, „2020”);
+     * - oznaczenia norm z wydaniem i zmianą („EN 388:2016+A1:2018”, „EN ISO 21420:2020”) — 21.09.2026 model napisał
+     *   przy PVC/40 „EN 374-1:2016”, a źródło podaje „EN ISO 374-1:2016”. Źródła bywają ze sobą niezgodne (CITRIN:
+     *   PDF „A1:2019”, strona sklepu „A1:2018”) — wystarczy, że oznaczenie jest w jednym z nich.
+     *   Przedrostek „PN-” zostaje poza dopasowaniem (ta sama norma).
      *
      * @return list<string>
      */
-    private static function levelCodes(string $text): array
+    private static function sourceClaims(string $text): array
     {
-        preg_match_all('/(?<![\p{L}\p{N}])(?:[0-5X]{6}|[0-5X]{4}[A-FX]?)(?![\p{L}\p{N}])/u', mb_strtoupper($text), $m);
+        $upper = mb_strtoupper($text);
+        preg_match_all('/(?<![\p{L}\p{N}])(?:[0-5X]{6}|[0-5X]{4}[A-FX]?)(?![\p{L}\p{N}])/u', $upper, $levels);
+        preg_match_all('/(?<![\p{L}\p{N}])(?:EN|ISO)(?:\s*ISO)?\s*\d{3,5}(?:-\d+)*(?:\s*:\s*\d{4})?(?:\s*\+\s*A\d+(?:\s*:\s*\d{4})?)?/u', $upper, $norms);
 
-        return array_values(array_unique(array_filter(
-            $m[0],
-            static fn (string $code): bool => preg_match('/^(?:19|20)\d\d$/', $code) !== 1,
-        )));
+        $claims = array_filter($levels[0], static fn (string $code): bool => preg_match('/^(?:19|20)\d\d$/', $code) !== 1);
+        foreach ($norms[0] as $norm) {
+            $claims[] = self::claimKey($norm);
+        }
+
+        return array_values(array_unique($claims));
     }
 
-    /** Tekst źródeł do szukania kodów poziomów: wielkie litery, bez białych znaków (PDF łamie „4131 A”). */
-    private static function levelKey(string $text): string
+    /** Tekst do porównania faktów ze źródłem: wielkie litery, bez białych znaków (PDF łamie „4131 A”, „EN 388 :2016”). */
+    private static function claimKey(string $text): string
     {
         return (string) preg_replace('/\s+/u', '', mb_strtoupper($text));
     }

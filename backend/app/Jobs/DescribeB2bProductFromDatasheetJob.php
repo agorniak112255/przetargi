@@ -102,6 +102,7 @@ class DescribeB2bProductFromDatasheetJob implements ShouldBeUniqueUntilProcessin
                 (string) ($product->shop_source_url ?? ''),
                 $start['sheet_text'],
                 $start['sheet_url'],
+                (string) ($product->shop_fields_summary ?? ''),
             );
         } catch (B2bSourcesDescriptionRejected $e) {
             Log::warning('Opis z karty katalogowej B2B odrzucony — karta zostaje z opisem ze sklepu', [
