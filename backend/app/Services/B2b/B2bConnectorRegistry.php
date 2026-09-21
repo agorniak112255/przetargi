@@ -28,6 +28,7 @@ final class B2bConnectorRegistry
         ArdonB2bConnector::class,
         RawpolB2bConnector::class,
         DeltaplusB2bConnector::class,
+        ProceraB2bConnector::class,
     ];
 
     /**

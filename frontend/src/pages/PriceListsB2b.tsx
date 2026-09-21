@@ -314,7 +314,7 @@ export function PriceListsB2b() {
           <h2 className="mb-3 font-semibold">{form.id === null ? 'Nowe konto B2B' : 'Edycja konta B2B'}</h2>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block text-xs">
-              Kod kontrahenta <span className="text-slate-400">(tylko gdy witryna go wymaga, np. UVEX)</span>
+              Kod kontrahenta <span className="text-slate-400">(tylko gdy witryna go wymaga, np. UVEX, Procera — NIP)</span>
               <input
                 autoComplete="off"
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
