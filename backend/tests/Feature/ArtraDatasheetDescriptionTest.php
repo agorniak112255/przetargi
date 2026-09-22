@@ -173,6 +173,37 @@ final class ArtraDatasheetDescriptionTest extends TestCase
         $this->assertSame(self::AI_TEXT, $card->refresh()->description);
     }
 
+    /**
+     * Karta produktu zapisana starszą wersją łącznika jako „inny dokument” (produkcja 22.09.2026: 9476
+     * „PL-KP-ARISAKA_333_631460_S2_ESD.pdf”) — synchronizacja poprawia nazwę i rodzaj, a karta dostaje opis z PDF.
+     */
+    public function test_legacy_product_sheet_stored_as_other_document_becomes_a_datasheet(): void
+    {
+        Queue::fake();
+        $card = $this->card(self::SLOGAN);
+        $this->link($card, sha1(self::SLOGAN));
+        $this->sync();
+        $sheet = $this->datasheetOf($card);
+        $legacyTitle = 'PL-KP-'.str_replace(' ', '_', self::SKU).'.pdf';
+        $sheet->forceFill(['kind' => ProductDocument::KIND_OTHER, 'title' => $legacyTitle])->save();
+        $foreign = ProductDocument::query()->create([
+            'product_id' => $card->id,
+            'path' => 'products/'.$card->id.'/reczny.pdf',
+            'source_url' => 'https://example.test/reczny.pdf',
+            'title' => 'Plik dodany ręcznie',
+            'kind' => ProductDocument::KIND_OTHER,
+        ]);
+        Queue::fake();
+
+        $this->sync();
+
+        $sheet->refresh();
+        $this->assertSame(ProductDocument::KIND_DATASHEET, $sheet->kind);
+        $this->assertSame('Karta produktu', $sheet->title);
+        $this->assertSame('Plik dodany ręcznie', $foreign->refresh()->title);
+        Queue::assertPushed(DescribeB2bProductFromDatasheetJob::class, 1);
+    }
+
     public function test_restored_description_is_not_replaced_by_the_datasheet_description(): void
     {
         $card = $this->card(self::OLD_AI_TEXT);

@@ -1759,8 +1759,24 @@ final class B2bCatalogSync
             $text = $card['texts'][$document->sourceUrl] ?? null;
             if ($have !== null) {
                 // plik już jest przy karcie — bajtów nie pobieramy ponownie, najwyżej uzupełniamy tekst
+                $patch = [];
                 if ($text !== null && $have->text === null) {
-                    $have->forceFill(['text' => $text])->save();
+                    $patch['text'] = $text;
+                }
+                // Nazwa i rodzaj własnego pliku konta idą za łącznikiem: plik zapisany starszą wersją łącznika
+                // zostawał „innym dokumentem” (ARTRA „PL-KP-ARISAKA_333…pdf” sprzed rozpoznawania kart produktu),
+                // a job opisu z PDF czyta tylko karty katalogowe — karta zostawała ze sloganem.
+                if ((int) $have->b2b_account_id === (int) $account->id) {
+                    if ($have->kind !== $document->kind) {
+                        $patch['kind'] = $document->kind;
+                    }
+                    $title = mb_substr($document->title, 0, 255);
+                    if ($title !== '' && $have->title !== $title) {
+                        $patch['title'] = $title;
+                    }
+                }
+                if ($patch !== []) {
+                    $have->forceFill($patch)->save();
                     $saved++;
                 }
 
