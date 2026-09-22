@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Services\Ai\AiServedProviderTally;
 use App\Services\ProductAiSearchService;
 use App\Services\Search\SearchEvalRunner;
 use App\Services\Vector\ProductVectorSearch;
@@ -81,6 +82,12 @@ class SearchEvalCommand extends Command
         ));
 
         $rows = [];
+        // Przebieg musi wiedzieć, czy naprawdę szedł na tym modelu, którym się deklaruje. 22.09.2026 padł
+        // jeden z dwóch węzłów vLLM, aplikacja po cichu zeszła na konfigurację główną w chmurze i raport
+        // porównywał podmianę modelu, a nie zmianę w wyszukiwarce.
+        $tally = app(AiServedProviderTally::class);
+        $tally->reset();
+
         $bar = $this->output->createProgressBar(count($cases));
         $bar->start();
         foreach ($cases as $case) {
@@ -90,9 +97,12 @@ class SearchEvalCommand extends Command
         $bar->finish();
         $this->newLine(2);
 
+        $fallbacks = $tally->profileFallbacks();
+
         $this->renderCases($rows, $k);
         $summary = $runner->summarize($rows);
         $this->renderSummary($summary, $k);
+        $this->renderProfileFallbacks($fallbacks);
         $this->renderProblems($rows);
         $this->renderWorst($rows, max(0, (int) $this->option('worst')));
 
@@ -103,6 +113,7 @@ class SearchEvalCommand extends Command
             'limit' => $limit,
             'prompt_version' => ProductAiSearchService::RANK_PROMPT_VERSION,
             'vector_disabled' => $noVector,
+            'profile_fallbacks' => $fallbacks,
             'summary' => $summary,
             'cases' => $rows,
         ];
@@ -117,6 +128,21 @@ class SearchEvalCommand extends Command
         }
 
         return $summary['errors'] > 0 ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * Ile zapytań obsłużyła konfiguracja główna zamiast profilu przypisanego do wyszukiwarki.
+     * Każde takie zapytanie to inny model w tym samym przebiegu, więc porównanie z raportem bazowym
+     * przestaje mierzyć wyszukiwarkę.
+     */
+    private function renderProfileFallbacks(int $fallbacks): void
+    {
+        if ($fallbacks === 0) {
+            return;
+        }
+
+        $this->warn('UWAGA: '.$fallbacks.' zapytań zeszło z profilu na konfigurację główną (profil nie odpowiadał).');
+        $this->line('Przebieg mieszał modele — nie porównuj go z innym raportem. Napraw dostawcę i powtórz pomiar.');
     }
 
     /** @param list<array<string, mixed>> $rows */

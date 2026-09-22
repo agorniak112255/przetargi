@@ -319,6 +319,7 @@ class OpenAiCompatibleClient
             'profile' => $profileLabel,
             'error' => $profileError->getMessage(),
         ]);
+        app(AiServedProviderTally::class)->profileFallback();
 
         try {
             return $run($main);

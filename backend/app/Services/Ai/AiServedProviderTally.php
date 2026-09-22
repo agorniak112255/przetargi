@@ -17,6 +17,8 @@ final class AiServedProviderTally
 
     private int $relaxedPins = 0;
 
+    private int $profileFallbacks = 0;
+
     /** @var list<?string> */
     private array $lastBatch = [];
 
@@ -24,6 +26,7 @@ final class AiServedProviderTally
     {
         $this->served = [];
         $this->relaxedPins = 0;
+        $this->profileFallbacks = 0;
         $this->lastBatch = [];
     }
 
@@ -65,13 +68,33 @@ final class AiServedProviderTally
     }
 
     /**
-     * @return array{served: array<string, int>, relaxed_pins: int}
+     * Zadanie obsłużone przez konfigurację główną, bo profil nie odpowiedział. Pomiar musi to widzieć:
+     * 22.09.2026 padł jeden z dwóch węzłów vLLM, połowa rankingu w `search:eval` poszła do innego modelu
+     * w chmurze, a raport deklarował przebieg na profilu — porównanie z poprzednim raportem mierzyło
+     * podmianę modelu, nie zmianę w wyszukiwarce.
+     */
+    public function profileFallback(): void
+    {
+        $this->profileFallbacks++;
+    }
+
+    public function profileFallbacks(): int
+    {
+        return $this->profileFallbacks;
+    }
+
+    /**
+     * @return array{served: array<string, int>, relaxed_pins: int, profile_fallbacks: int}
      */
     public function snapshot(): array
     {
         $served = $this->served;
         arsort($served);
 
-        return ['served' => $served, 'relaxed_pins' => $this->relaxedPins];
+        return [
+            'served' => $served,
+            'relaxed_pins' => $this->relaxedPins,
+            'profile_fallbacks' => $this->profileFallbacks,
+        ];
     }
 }
