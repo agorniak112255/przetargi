@@ -57,6 +57,22 @@ use RuntimeException;
  */
 final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource, B2bStandardDiscountSite
 {
+    /**
+     * Rabaty standardowe z wiadomości dostawcy (22.09.2026): 35% ochrona wzroku; 30% hełmy, ochrona słuchu, dróg
+     * oddechowych, rękawice (HexArmor 30% — potwierdzone przez użytkownika); 15% obuwie. Odzieży nie ma, bo jej
+     * arkusz jest pominięty (UvexBasePriceList::EXCLUDED_SHEETS). Nazwy dosłownie jak arkusze cennika.
+     */
+    private const DEFAULT_STANDARD_DISCOUNTS = [
+        'Ochrona wzroku' => 35.0,
+        'Hełmy' => 30.0,
+        'Ochrona słuchu' => 30.0,
+        'Ochrona dróg oddechowych' => 30.0,
+        'Rękawice uvex' => 30.0,
+        'Rękawice HEXArmor' => 30.0,
+        'Buty Uvex' => 15.0,
+        'Buty Heckel' => 15.0,
+    ];
+
     /** Tekst odnośnika do cennika bazowego na stronie startowej konta (sprawdzone 22.09.2026). */
     private const BASE_PRICE_LINK_TEXT = 'cennik do pobrania';
 
@@ -345,6 +361,36 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         $this->lastBasePrice = ['remote_id' => $product->remoteId, 'price' => $price];
 
         return $price;
+    }
+
+    /**
+     * @return list<array{category: string, discount_percent: float}>
+     */
+    public static function defaultStandardDiscounts(): array
+    {
+        $out = [];
+        foreach (self::DEFAULT_STANDARD_DISCOUNTS as $category => $percent) {
+            $out[] = ['category' => $category, 'discount_percent' => $percent];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Arkusze aktualnego cennika bazowego dla okna reguł rabatu — ta sama ścieżka co przebieg (strona startowa,
+     * odnośnik, plik), więc podpowiedź nazw nie rozjedzie się z tym, co zapisze synchronizacja.
+     *
+     * @return list<string>
+     */
+    public function basePriceCategories(): array
+    {
+        $this->client->login();
+        $this->loadBasePriceList();
+        if ($this->basePrices === null) {
+            throw new RuntimeException('Nie udało się wczytać cennika bazowego UVEX: '.($this->basePriceError ?? 'nieznany błąd'));
+        }
+
+        return $this->basePrices->sheets();
     }
 
     /**

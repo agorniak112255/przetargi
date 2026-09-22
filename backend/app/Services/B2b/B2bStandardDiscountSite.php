@@ -23,4 +23,21 @@ interface B2bStandardDiscountSite
      * synchronizacja zostawia wtedy ceny bazowe z poprzedniego przebiegu (null z basePrice() nie znaczy „brak”).
      */
     public function basePriceListLoaded(): bool;
+
+    /**
+     * Kategorie aktualnego cennika bazowego (UVEX: arkusze bez pominiętych) — podpowiedzi i kontrola nazw
+     * w oknie reguł, zanim pierwsza synchronizacja zapisze kategorie na kartach. Loguje się u dostawcy i pobiera
+     * plik; błąd = wyjątek z powodem.
+     *
+     * @return list<string>
+     */
+    public function basePriceCategories(): array;
+
+    /**
+     * Rabaty standardowe podane przez dostawcę — okno reguł wstawia je kontu bez reguł jako propozycję
+     * (zapis dopiero po zatwierdzeniu przez użytkownika).
+     *
+     * @return list<array{category: string, discount_percent: float}>
+     */
+    public static function defaultStandardDiscounts(): array;
 }

@@ -7,13 +7,17 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\B2bAccount;
 use App\Models\B2bDiscountRule;
+use App\Models\B2bSyncRun;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bDiscountRuleResolver;
+use App\Services\B2b\B2bStandardDiscountSite;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Throwable;
 
 /**
  * Rabaty konta B2B. Dla witryn z samą ceną katalogową (protekt.pl) reguły dają cenę zakupu; dla łączników
@@ -25,6 +29,9 @@ class B2bDiscountRuleController extends Controller
 {
     /** Tyle slotów naraz przy przeliczaniu rabatu standardowego — UVEX ma kilka tysięcy kart. */
     private const RECOMPUTE_CHUNK = 500;
+
+    /** Tyle godzin pamiętamy arkusze pobranego cennika bazowego (podpowiedzi i kontrola nazw reguł). */
+    private const CATEGORIES_TTL_HOURS = 24;
 
     public function __construct(private readonly B2bConnectorRegistry $connectors) {}
 
@@ -58,6 +65,12 @@ class B2bDiscountRuleController extends Controller
         }
 
         $standard = $this->connectors->usesStandardDiscounts($this->connectors->keyForAccount($b2bAccount));
+        if ($standard) {
+            $unknown = $this->unknownCategoryRule($b2bAccount, $rules);
+            if ($unknown !== null) {
+                return response()->json($unknown, 422);
+            }
+        }
 
         $recomputed = DB::transaction(function () use ($b2bAccount, $rules, $standard): ?int {
             // Liczniki trafień z ostatniego przebiegu przenosimy na reguły o niezmienionym dopasowaniu:
@@ -113,24 +126,136 @@ class B2bDiscountRuleController extends Controller
             'mode' => $mode,
         ];
         if ($mode === B2bConnectorRegistry::DISCOUNT_RULES_STANDARD) {
-            // Nazwy kategorii (arkuszy cennika) dosłownie z ostatniej synchronizacji — reguła „równa się”
-            // musi mieć wzorzec co do znaku, a literówka w nazwie arkusza cicho zostawia karty bez oceny.
-            $payload['categories'] = ProductSourcePrice::query()
-                ->where('source_key', ProductSourcePrice::b2bKey((int) $account->id))
-                ->whereNotNull('base_price_category')
-                ->groupBy('base_price_category')
-                ->orderBy('base_price_category')
-                ->selectRaw('base_price_category as name, COUNT(DISTINCT product_id) as product_count')
-                ->get()
-                ->map(static fn (ProductSourcePrice $row): array => [
-                    'name' => (string) $row->getAttribute('name'),
-                    'product_count' => (int) $row->getAttribute('product_count'),
-                ])
-                ->values()
-                ->all();
+            $payload['categories'] = $this->knownCategories($account);
+            // propozycja od dostawcy dla konta bez reguł — okno wstawia ją do formularza, zapis robi użytkownik
+            $connector = $this->connectors->make($account);
+            $payload['defaults'] = $connector instanceof B2bStandardDiscountSite
+                ? array_map(static fn (array $d): array => [
+                    'name' => $d['category'],
+                    'match_field' => B2bDiscountRule::FIELD_CATEGORY,
+                    'match_type' => B2bDiscountRule::TYPE_EQUALS,
+                    'pattern' => $d['category'],
+                    'discount_percent' => $d['discount_percent'],
+                ], $connector::defaultStandardDiscounts())
+                : [];
         }
 
         return $payload;
+    }
+
+    /**
+     * Arkusze aktualnego cennika bazowego prosto od dostawcy (logowanie i pobranie pliku, kilka sekund) — okno
+     * reguł podpowiada nazwy, zanim pierwsza synchronizacja zapisze kategorie na kartach. Wynik zapamiętany
+     * (CATEGORIES_TTL_HOURS) — kontrola nazw przy zapisie reguł korzysta z tej samej listy. W trakcie
+     * synchronizacji konta nie logujemy się drugi raz: nowa sesja u dostawcy mogłaby unieważnić sesję przebiegu.
+     */
+    public function baseCategories(B2bAccount $b2bAccount): JsonResponse
+    {
+        if (! $this->connectors->usesStandardDiscounts($this->connectors->keyForAccount($b2bAccount))) {
+            return response()->json(['message' => 'To konto nie ma cennika bazowego.'], 422);
+        }
+        $running = B2bSyncRun::query()
+            ->where('b2b_account_id', $b2bAccount->id)
+            ->where('status', B2bSyncRun::STATUS_RUNNING)
+            ->where('updated_at', '>=', now()->subMinutes(B2bSyncRun::STALE_MINUTES))
+            ->exists();
+        if ($running) {
+            return response()->json([
+                'message' => 'Trwa synchronizacja konta — arkusze cennika pobiorę po jej zakończeniu.',
+                'categories' => $this->knownCategories($b2bAccount),
+            ], 409);
+        }
+
+        $connector = $this->connectors->make($b2bAccount);
+        if (! $connector instanceof B2bStandardDiscountSite) {
+            return response()->json(['message' => 'To konto nie ma cennika bazowego.'], 422);
+        }
+        try {
+            $sheets = $connector->basePriceCategories();
+        } catch (Throwable $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'categories' => $this->knownCategories($b2bAccount),
+            ], 502);
+        }
+        Cache::put(self::categoriesCacheKey($b2bAccount), array_values($sheets), now()->addHours(self::CATEGORIES_TTL_HOURS));
+
+        return response()->json(['categories' => $this->knownCategories($b2bAccount)]);
+    }
+
+    /**
+     * Kategorie znane dla konta: z kart (ostatnia synchronizacja, z liczbą kart) i z ostatnio pobranego cennika
+     * (liczba kart 0, dopóki synchronizacja ich nie zapisze). Nazwy dosłownie — reguła „jest równe” musi mieć
+     * pełną nazwę arkusza, a literówka cicho zostawiłaby karty bez oceny.
+     *
+     * @return list<array{name: string, product_count: int}>
+     */
+    private function knownCategories(B2bAccount $account): array
+    {
+        $out = [];
+        $rows = ProductSourcePrice::query()
+            ->where('source_key', ProductSourcePrice::b2bKey((int) $account->id))
+            ->whereNotNull('base_price_category')
+            ->groupBy('base_price_category')
+            ->selectRaw('base_price_category as name, COUNT(DISTINCT product_id) as product_count')
+            ->get();
+        foreach ($rows as $row) {
+            $name = (string) $row->getAttribute('name');
+            $out[mb_strtolower($name)] = ['name' => $name, 'product_count' => (int) $row->getAttribute('product_count')];
+        }
+        foreach ((array) Cache::get(self::categoriesCacheKey($account), []) as $sheet) {
+            $out[mb_strtolower((string) $sheet)] ??= ['name' => (string) $sheet, 'product_count' => 0];
+        }
+        $list = array_values($out);
+        usort($list, static fn (array $a, array $b): int => strcmp($a['name'], $b['name']));
+
+        return $list;
+    }
+
+    /**
+     * Reguła po kategorii, która nie trafia w żaden znany arkusz cennika — odrzucenie z nazwą reguły zamiast
+     * cichego braku oceny cen. Bez znanych kategorii (cennika jeszcze nie pobrano) nie ma z czym porównać.
+     *
+     * @param  list<array<string, mixed>>  $rules
+     * @return array{message: string, errors: array<string, list<string>>}|null
+     */
+    private function unknownCategoryRule(B2bAccount $account, array $rules): ?array
+    {
+        $known = array_map(static fn (array $c): string => mb_strtolower(trim($c['name'])), $this->knownCategories($account));
+        if ($known === []) {
+            return null;
+        }
+        foreach ($rules as $index => $rule) {
+            if ($rule['match_field'] !== B2bDiscountRule::FIELD_CATEGORY || $rule['match_type'] === B2bDiscountRule::TYPE_ANY) {
+                continue;
+            }
+            $pattern = mb_strtolower(trim((string) ($rule['pattern'] ?? '')));
+            $hit = false;
+            foreach ($known as $name) {
+                $hit = match ($rule['match_type']) {
+                    B2bDiscountRule::TYPE_EQUALS => $name === $pattern,
+                    B2bDiscountRule::TYPE_CONTAINS => str_contains($name, $pattern),
+                    default => str_starts_with($name, $pattern),
+                };
+                if ($hit) {
+                    break;
+                }
+            }
+            if (! $hit) {
+                return [
+                    'message' => 'Reguła „'.$rule['name'].'”: arkusza „'.trim((string) $rule['pattern']).'” nie ma w cenniku bazowym. '
+                        .'Znane arkusze: '.implode(', ', array_map(static fn (array $c): string => $c['name'], $this->knownCategories($account))).'.',
+                    'errors' => ['rules.'.$index.'.pattern' => ['Nieznany arkusz cennika.']],
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    private static function categoriesCacheKey(B2bAccount $account): string
+    {
+        return 'b2b:base-categories:'.$account->id;
     }
 
     /**

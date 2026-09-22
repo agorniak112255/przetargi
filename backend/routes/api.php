@@ -269,6 +269,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:b2b_accounts.view');
     Route::put('/b2b-accounts/{b2bAccount}/discount-rules', [B2bDiscountRuleController::class, 'update'])
         ->middleware('permission:b2b_accounts.manage');
+    // loguje się u dostawcy i pobiera cennik bazowy — tylko dla zarządzających kontami
+    Route::post('/b2b-accounts/{b2bAccount}/discount-rules/base-categories', [B2bDiscountRuleController::class, 'baseCategories'])
+        ->middleware('permission:b2b_accounts.manage');
     Route::get('/b2b-connectors', [B2bAccountController::class, 'connectors'])->middleware('permission:b2b_accounts.view');
 
     Route::get('/ai-settings', [AiSettingsController::class, 'show'])->middleware('permission:ai_settings.manage');

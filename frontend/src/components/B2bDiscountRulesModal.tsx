@@ -22,7 +22,16 @@ type RulesMode = 'price' | 'standard'
 /** Arkusz cennika bazowego widziany na kartach konta — podpowiedź wzorca, żeby nie zgadywać nazwy. */
 type BaseCategory = { name: string; product_count: number }
 
-type RulesResponse = { rules: Rule[]; mode?: RulesMode; categories?: BaseCategory[]; recomputed?: number }
+/** Rabat standardowy podany przez dostawcę — propozycja dla konta bez reguł. */
+type DefaultRule = Pick<Rule, 'name' | 'match_field' | 'match_type' | 'pattern' | 'discount_percent'>
+
+type RulesResponse = {
+  rules: Rule[]
+  mode?: RulesMode
+  categories?: BaseCategory[]
+  defaults?: DefaultRule[]
+  recomputed?: number
+}
 
 type Props = {
   account: { id: number; username: string; connector_label: string | null }
@@ -72,8 +81,17 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
   const [msg, setMsg] = useState('')
   const [mode, setMode] = useState<RulesMode>('price')
   const [categories, setCategories] = useState<BaseCategory[]>([])
+  const [defaults, setDefaults] = useState<DefaultRule[]>([])
+  /** Pobieranie arkuszy z aktualnego cennika dostawcy (logowanie + plik, kilka sekund). */
+  const [sheetsState, setSheetsState] = useState<'idle' | 'loading' | 'done'>('idle')
+  const [sheetsNote, setSheetsNote] = useState('')
   const standard = mode === 'standard'
   const datalistId = `b2b-base-categories-${account.id}`
+
+  const fillDefaults = (list: DefaultRule[]) => {
+    setRules(list.map((d) => ({ ...EMPTY_RULE, ...d })))
+    setMsg('Wstawiono rabaty standardowe podane przez dostawcę — sprawdź i kliknij „Zapisz rabaty”.')
+  }
 
   useEffect(() => {
     let alive = true
@@ -83,6 +101,33 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
         setRules(r.rules)
         setMode(r.mode ?? 'price')
         setCategories(r.categories ?? [])
+        setDefaults(r.defaults ?? [])
+        // konto bez reguł dostaje propozycję dostawcy w formularzu — zapis dopiero po kliknięciu
+        if (r.mode === 'standard' && r.rules.length === 0 && (r.defaults ?? []).length > 0 && canManage) {
+          setRules((r.defaults ?? []).map((d) => ({ ...EMPTY_RULE, ...d })))
+          setMsg('Wstawiono rabaty standardowe podane przez dostawcę — sprawdź i kliknij „Zapisz rabaty”.')
+        }
+        if (r.mode === 'standard' && canManage) {
+          setSheetsState('loading')
+          api<{ categories: BaseCategory[] }>(`/b2b-accounts/${account.id}/discount-rules/base-categories`, {
+            method: 'POST',
+          })
+            .then((s) => {
+              if (!alive) return
+              setCategories(s.categories)
+              setSheetsNote('')
+            })
+            .catch((e: unknown) => {
+              if (alive) {
+                setSheetsNote(
+                  `Nie udało się pobrać arkuszy z cennika dostawcy: ${e instanceof Error ? e.message : 'błąd'}`,
+                )
+              }
+            })
+            .finally(() => {
+              if (alive) setSheetsState('done')
+            })
+        }
       })
       .catch((e: unknown) => {
         if (alive) setErr(e instanceof Error ? e.message : 'Nie udało się wczytać rabatów.')
@@ -93,7 +138,7 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
     return () => {
       alive = false
     }
-  }, [account.id])
+  }, [account.id, canManage])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -152,6 +197,15 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
   }
 
   const hasCatchAll = rules.some((r) => r.match_type === 'any')
+
+  /** Reguła „jest równe” po arkuszu, którego nie ma w znanym cenniku — literówka; zapis i tak odrzuci serwer. */
+  const unknownSheet = (r: Rule) =>
+    standard &&
+    categories.length > 0 &&
+    r.match_field === 'category' &&
+    r.match_type === 'equals' &&
+    r.pattern.trim() !== '' &&
+    !categories.some((c) => c.name.trim().toLowerCase() === r.pattern.trim().toLowerCase())
 
   return (
     <div
@@ -221,10 +275,26 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
                 </p>
               )}
 
+              {standard && sheetsState === 'loading' && (
+                <p className="mb-2 text-[11px] text-slate-500">Pobieram nazwy arkuszy z cennika dostawcy…</p>
+              )}
+              {standard && sheetsNote && <p className="mb-2 text-[11px] text-amber-700">{sheetsNote}</p>}
+              {standard && canManage && defaults.length > 0 && rules.length > 0 && (
+                <p className="mb-2 text-[11px] text-slate-500">
+                  <button
+                    type="button"
+                    className="text-blue-700 underline hover:text-blue-900"
+                    onClick={() => fillDefaults(defaults)}
+                  >
+                    Wstaw rabaty standardowe dostawcy
+                  </button>{' '}
+                  (zastępuje listę w formularzu; zapis dopiero przyciskiem „Zapisz rabaty”)
+                </p>
+              )}
               {standard && categories.length > 0 && (
                 <div className="mb-3">
                   <p className="mb-1 text-[11px] text-slate-500">
-                    Arkusze cennika bazowego na kartach tego konta (liczba kart)
+                    Arkusze cennika bazowego (liczba kart po ostatniej synchronizacji)
                     {canManage ? ' — kliknij, aby dodać regułę „jest równe”:' : ':'}
                   </p>
                   <div className="flex flex-wrap gap-1">
@@ -331,7 +401,10 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
                       </td>
                       <td className="px-2 py-1">
                         <input
-                          className="w-full rounded border border-slate-300 px-2 py-1 disabled:bg-slate-100"
+                          className={`w-full rounded border px-2 py-1 disabled:bg-slate-100 ${
+                            unknownSheet(rule) ? 'border-red-400 bg-red-50' : 'border-slate-300'
+                          }`}
+                          title={unknownSheet(rule) ? 'Nie ma takiego arkusza w cenniku bazowym — wybierz z podpowiedzi' : undefined}
                           value={rule.match_type === 'any' ? '' : rule.pattern}
                           disabled={!canManage || rule.match_type === 'any'}
                           list={standard && rule.match_field === 'category' ? datalistId : undefined}
