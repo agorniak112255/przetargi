@@ -145,7 +145,7 @@ final class PpeAssortment
             .'|oslona\s+twarzy|face\s*shield|siatk\w*\s+(na\s+)?twarz|maska\s+spawal)\w*/u',
         self::FAMILY_EYES => '/\b(okular|gogl|szyba\s+ochronn|spectacle|eyewear|bryl)\w*|\bglasses\b/u',
         self::FAMILY_HEARING => '/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|wkladk\w*\s+sluch'
-            .'|stoper\w*|ochrona\s+sluchu|sluchawk\w*\s+ochron|ear\s*(muff|plug|defender)|earmuff|earplug'
+            .'|stoper\w*|zatyczk\w*|ochrona\s+sluchu|sluchawk\w*\s+ochron|ear\s*(muff|plug|defender)|earmuff|earplug'
             .'|chranic\w*\s+sluchu|sluchatk)\w*/u',
         // „Szelki … do podtrzymywania spodni” (Canis 11898 „Braces CXS DARREN”) to akcesorium odzieży,
         // nie uprząż — przechodziły bramkę „Szelki EN 361”. Wyłączamy szelki, gdy do 120 znaków dalej stoją spodnie
@@ -202,6 +202,13 @@ final class PpeAssortment
     private const RESUSCITATION = '/\b(resuscyt\w*|usta\s+usta|cpr|sztuczn\w*\s+oddych\w*|pocket\s+mask)\b/u';
 
     /**
+     * Rzeczowniki rodzin, które są też nazwami modeli pisanymi wersalikami: Bollé „WELLINGTON – Unisex okulary…”
+     * i „COVERALL – Przezroczyste okulary ochronne” to okulary, a pierwsze słowo robiło z nich kalosz i kombinezon.
+     * Taki wyraz ustępuje innemu rzeczownikowi rodziny w tekście; sam („KALOSZE WELLINGTON PVC”) dalej się liczy.
+     */
+    private const MODEL_NAME_WORDS = '/\b(?:WELLINGTON|COVERALL)\b/u';
+
+    /**
      * Rodzinę wskazuje rzeczownik główny — pierwszy w tekście, nie pierwszy na liście.
      * Opis SIWZ wymienia dalej akcesoria i kompatybilności („wymienne szelki” przy
      * spodniobutach, „łącznie z półmaskami” przy goglach), które nie zmieniają wyrobu.
@@ -218,6 +225,13 @@ final class PpeAssortment
      */
     private function familyOf(string $text, bool $footwearClasses): ?string
     {
+        if (preg_match(self::MODEL_NAME_WORDS, $text) === 1) {
+            $withoutModel = $this->familyOf((string) preg_replace(self::MODEL_NAME_WORDS, ' ', $text), $footwearClasses);
+            if ($withoutModel !== null) {
+                return $withoutModel;
+            }
+        }
+
         $t = $this->normalize($text);
         $t = preg_replace(self::FOOTWEAR_AS_OBJECT, ' ', $t) ?? $t;
         $hasHelm = preg_match('/\b(helm|kask)\w*/u', $t) === 1;
@@ -880,7 +894,7 @@ final class PpeAssortment
         if (preg_match('/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|sluchawk\w*\s+ochron)\w*/u', $t) === 1) {
             return 'earmuff';
         }
-        if (preg_match('/\b(wkladk\w*\s+sluch|stoper)\w*/u', $t) === 1) {
+        if (preg_match('/\b(wkladk\w*\s+sluch|stoper|zatyczk)\w*/u', $t) === 1) {
             return 'earplug';
         }
 
@@ -1357,7 +1371,7 @@ final class PpeAssortment
             'goggles' => ['gogl'],
             'glasses' => ['okular'],
             'earmuff' => ['nausznik', 'ochronnik', 'czasze'],
-            'earplug' => ['stoper'],
+            'earplug' => ['stoper', 'zatyczk'],
             'kneepad' => ['nakolann'],
             'welding_helmet' => ['przylbic'],
             'shield' => ['oslona twarz', 'osłona twarz', 'face shield'],

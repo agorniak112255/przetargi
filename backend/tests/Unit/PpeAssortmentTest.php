@@ -84,6 +84,18 @@ final class PpeAssortmentTest extends TestCase
             ['Helmet liner winter, fleece', PpeAssortment::FAMILY_HEAD],
             // kombinezon Ansell z wgrzanymi skarpetami/butami — „CVRL” stoi przed „BOOTS”
             ['1800-WH TSPLUS CVRL HOOD BOOTS 122.5XL', PpeAssortment::FAMILY_APPAREL],
+            // Bollé: nazwa modelu wersalikami to rzeczownik innej rodziny — wygrywa „okulary”
+            ['WELLINGTON – Unisex okulary z filtrem światła niebieskiego, przezroczyste', PpeAssortment::FAMILY_EYES],
+            ['COVERALL – Przezroczyste okulary ochronne', PpeAssortment::FAMILY_EYES],
+            ['KALOSZE WELLINGTON PVC', PpeAssortment::FAMILY_FOOTWEAR],
+            ['Kalosze Wellington', PpeAssortment::FAMILY_FOOTWEAR],
+            ['COVERALL TYVEK 500 XPERT', PpeAssortment::FAMILY_APPAREL],
+            ['Tyvek 500 Xpert coverall', PpeAssortment::FAMILY_APPAREL],
+            // UVEX: zatyczki to wkładki przeciwhałasowe
+            ['Zatyczki X-fit bez sznurka, żółte-karton 200 par 2112.001', PpeAssortment::FAMILY_HEARING],
+            ['Zatyczki WHISPER ze sznurkiem', PpeAssortment::FAMILY_HEARING],
+            ['Zatyczki Com4-fit', PpeAssortment::FAMILY_HEARING],
+            ['Zatyczki xact-fit multi rozm. S opak. 50 par 2124.017', PpeAssortment::FAMILY_HEARING],
         ];
     }
 
@@ -348,6 +360,22 @@ final class PpeAssortmentTest extends TestCase
         ]);
         $this->assertFalse($this->assortment->isArmSleeve((string) $withCuff->name));
         $this->assertTrue($this->assortment->compatibleProduct('rękawice dzianinowe', $withCuff));
+    }
+
+    #[Test]
+    public function earplug_name_beats_gloves_from_description_and_category(): void
+    {
+        $plugs = new Product;
+        $plugs->forceFill([
+            'name' => 'Zatyczki xact-fit multi rozm. S opak. 50 par 2124.017',
+            'sku' => '2124.017',
+            'category' => 'Rękawice',
+            'description' => 'Wielorazowe zatyczki do uszu, można je zakładać także w rękawicach roboczych.',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+        ]);
+
+        $this->assertSame(PpeAssortment::FAMILY_HEARING, $this->assortment->productFamily($plugs));
+        $this->assertSame('earplug', $this->assortment->articleType('Zatyczki Com4-fit', PpeAssortment::FAMILY_HEARING));
     }
 
     #[Test]

@@ -5619,7 +5619,10 @@ final class ProductAiSearchService
         $names = $candidates->map(fn (Product $p): string => $this->seriesHaystack($p))->all();
         $out = [];
         foreach ($words as $word) {
+            // Mocowanie ochronnika („nagłowne”, „nahełmowe”) to cecha sprawdzana osobno, nie seria — rzadkie w nazwach,
+            // więc bez tego karta X2 „wersja nagłowna” spadała do 60% jako „inny model” niż „Optime … nagłowne”.
             if (mb_strlen($word) < 4 || $this->isGenericAssortmentToken($word) || $this->catalogSlang->isIndexedTerm($word)
+                || $this->assortment->hearingMount($word) !== null
                 || ! $this->looksLikeCatalogSeriesName($word)) {
                 continue;
             }
