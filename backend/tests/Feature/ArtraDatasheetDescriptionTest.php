@@ -175,7 +175,8 @@ final class ArtraDatasheetDescriptionTest extends TestCase
 
     /**
      * Karta produktu zapisana starszą wersją łącznika jako „inny dokument” (produkcja 22.09.2026: 9476
-     * „PL-KP-ARISAKA_333_631460_S2_ESD.pdf”) — synchronizacja poprawia nazwę i rodzaj, a karta dostaje opis z PDF.
+     * „PL-KP-ARISAKA_333_631460_S2_ESD.pdf”, bez konta B2B) — synchronizacja przejmuje plik, poprawia nazwę i rodzaj,
+     * a karta dostaje opis z PDF.
      */
     public function test_legacy_product_sheet_stored_as_other_document_becomes_a_datasheet(): void
     {
@@ -185,7 +186,8 @@ final class ArtraDatasheetDescriptionTest extends TestCase
         $this->sync();
         $sheet = $this->datasheetOf($card);
         $legacyTitle = 'PL-KP-'.str_replace(' ', '_', self::SKU).'.pdf';
-        $sheet->forceFill(['kind' => ProductDocument::KIND_OTHER, 'title' => $legacyTitle])->save();
+        // plik zapisało wcześniej wzbogacanie ze strony producenta — bez konta B2B (produkcja: b2b_account_id = null)
+        $sheet->forceFill(['kind' => ProductDocument::KIND_OTHER, 'title' => $legacyTitle, 'b2b_account_id' => null])->save();
         $foreign = ProductDocument::query()->create([
             'product_id' => $card->id,
             'path' => 'products/'.$card->id.'/reczny.pdf',
@@ -200,7 +202,9 @@ final class ArtraDatasheetDescriptionTest extends TestCase
         $sheet->refresh();
         $this->assertSame(ProductDocument::KIND_DATASHEET, $sheet->kind);
         $this->assertSame('Karta produktu', $sheet->title);
+        $this->assertSame((int) $this->account()->id, $sheet->b2b_account_id);
         $this->assertSame('Plik dodany ręcznie', $foreign->refresh()->title);
+        $this->assertNull($foreign->b2b_account_id);
         Queue::assertPushed(DescribeB2bProductFromDatasheetJob::class, 1);
     }
 

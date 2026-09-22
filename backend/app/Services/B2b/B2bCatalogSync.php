@@ -1765,8 +1765,14 @@ final class B2bCatalogSync
                 }
                 // Nazwa i rodzaj własnego pliku konta idą za łącznikiem: plik zapisany starszą wersją łącznika
                 // zostawał „innym dokumentem” (ARTRA „PL-KP-ARISAKA_333…pdf” sprzed rozpoznawania kart produktu),
-                // a job opisu z PDF czyta tylko karty katalogowe — karta zostawała ze sloganem.
-                if ((int) $have->b2b_account_id === (int) $account->id) {
+                // a job opisu z PDF czyta tylko karty katalogowe — karta zostawała ze sloganem. Plik bez właściciela
+                // pod tym samym adresem (zapisany wcześniej przez wzbogacanie ze strony producenta) konto przejmuje
+                // — jak zdjęcia bez właściciela w storeImage; plik innego konta zostaje nietknięty.
+                $ownerless = $have->b2b_account_id === null;
+                if ($ownerless) {
+                    $patch['b2b_account_id'] = (int) $account->id;
+                }
+                if ($ownerless || (int) $have->b2b_account_id === (int) $account->id) {
                     if ($have->kind !== $document->kind) {
                         $patch['kind'] = $document->kind;
                     }
