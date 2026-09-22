@@ -51,6 +51,7 @@ export function AdminUsers() {
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<string>('handlowiec')
   const [appearance, setAppearance] = useState(DEFAULT_NEW_USER_APPEARANCE)
+  const [sendOnCreate, setSendOnCreate] = useState(true)
   const [editId, setEditId] = useState<number | null>(null)
   const [editRole, setEditRole] = useState('handlowiec')
   const [editEmail, setEditEmail] = useState('')
@@ -84,7 +85,7 @@ export function AdminUsers() {
     setErr('')
     setMsg('')
     try {
-      await api('/admin/users', {
+      const created = await api<User>('/admin/users', {
         method: 'POST',
         body: JSON.stringify({ name, email, password, role, ...appearancePayload(appearance) }),
       })
@@ -93,6 +94,22 @@ export function AdminUsers() {
       setPassword('')
       setAppearance(DEFAULT_NEW_USER_APPEARANCE)
       setMsg('Użytkownik utworzony.')
+      // Konto już istnieje — nieudana wysyłka nie cofa go; wpisane hasło nadal działa.
+      if (sendOnCreate) {
+        try {
+          const res = await api<{ message: string }>(`/admin/users/${created.id}/send-credentials`, {
+            method: 'POST',
+            body: JSON.stringify({ password }),
+          })
+          setMsg(`Użytkownik utworzony. ${res.message}`)
+        } catch (ex) {
+          setMsg('')
+          setErr(
+            `Użytkownik utworzony, ale nie wysłano danych logowania (${ex instanceof Error ? ex.message : 'błąd'}). ` +
+              'Użyj „Wyślij dane” na liście.',
+          )
+        }
+      }
       await load()
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd')
@@ -217,6 +234,10 @@ export function AdminUsers() {
               </option>
             ))}
           </select>
+        </label>
+        <label className="sm:col-span-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={sendOnCreate} onChange={(e) => setSendOnCreate(e.target.checked)} />
+          <span>Wyślij dane logowania na e-mail użytkownika (login i wpisane hasło)</span>
         </label>
         <button
           type="submit"
