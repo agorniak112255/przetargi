@@ -119,7 +119,9 @@ final class ClientInquiryApiTest extends TestCase
             ->assertJsonPath('items.0.substitute_key', null)
             ->assertJsonPath('global_cards.0.id', 'sizes')
             ->assertJsonPath('answers.product:item_1.option_id', 'p:'.$product->id)
-            ->assertJsonPath('price.mode', 'none')
+            // domyślnie list z ceną oferty (zakup + marża konta) — i nadal bez zakupu
+            ->assertJsonPath('price.mode', 'catalog_margin')
+            ->assertJsonPath('price.margin', 18)
             ->assertJsonPath('attention_count', 0)
             ->assertJsonPath('replied_at', null);
 
@@ -163,6 +165,7 @@ final class ClientInquiryApiTest extends TestCase
                 'manufacturer' => $product->manufacturer,
                 'norms' => '',
                 'catalog_price_net' => '12.00',
+                'purchase_price' => '5.00',
                 'currency' => 'PLN',
                 'stock' => 40,
                 'ai_match_percent' => 86,
@@ -200,18 +203,22 @@ final class ClientInquiryApiTest extends TestCase
 
         $body = (string) $res->json('reply_body');
         $this->assertStringContainsString("Poz. 1 — ilość: 30 szt, rozmiar z zapytania: 10\n30szt Rękawice chemoodporne rozmiar 10\nProdukt: Rękawice chemoodporne (SKU G10), Supon", $body);
-        $this->assertStringNotContainsString('Cena:', $body);
+        // cena oferty z domyślnej marży konta: 5,00 × 1,18
+        $this->assertStringContainsString('5,90', $body);
     }
 
-    public function test_store_uses_price_preferences_from_last_inquiry(): void
+    public function test_store_prices_with_account_default_margin_not_last_inquiry(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();
+        $user->forceFill(['default_margin_percent' => 25])->save();
         ClientInquiry::query()->create([
             'user_id' => $user->id,
             'tone' => 'handlowy',
             'source_body' => 'Poprzednie zapytanie o rękawice.',
             'analysis' => [],
-            'answers' => ['price' => ['option_id' => 'catalog_margin', 'custom' => '25']],
+            // Poprzedni list bez ceny i z inną marżą — nowy i tak startuje z ceną
+            // oferty i marżą z konta.
+            'answers' => ['price' => ['option_id' => 'none', 'custom' => '40']],
             // warunki z poprzedniej oferty mają się podpowiedzieć przy nowej
             'offer_terms' => ['lead_time' => '3 dni robocze', 'payment' => 'przelew 30 dni'],
         ]);
@@ -1004,7 +1011,28 @@ final class ClientInquiryApiTest extends TestCase
         // zanim doszły szablony „bez SKU” i „oficjalny”.
         $this->getJson('/api/inquiries/preferences')
             ->assertOk()
-            ->assertExactJson(['tone' => 'handlowy', 'price_mode' => 'none', 'margin' => 18]);
+            ->assertExactJson(['tone' => 'handlowy', 'price_mode' => 'catalog_margin', 'margin' => 18]);
+    }
+
+    public function test_user_sets_own_default_margin(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/me')->assertOk()->assertJsonPath('default_margin_percent', 18);
+
+        $this->patchJson('/api/me/margin', ['default_margin_percent' => '22,5 %'])
+            ->assertOk()
+            ->assertJsonPath('default_margin_percent', 22.5);
+        $this->getJson('/api/inquiries/preferences')
+            ->assertOk()
+            ->assertJsonPath('price_mode', 'catalog_margin')
+            ->assertJsonPath('margin', 22.5);
+
+        $this->patchJson('/api/me/margin', ['default_margin_percent' => '200'])->assertUnprocessable();
+        $this->patchJson('/api/me/margin', ['default_margin_percent' => 'dużo'])->assertUnprocessable();
+        $this->patchJson('/api/me/margin', [])->assertUnprocessable();
+        $this->assertSame(22.5, $user->fresh()?->defaultMarginPercent());
     }
 
     public function test_offer_terms_go_to_the_letter_and_come_back_in_the_view(): void

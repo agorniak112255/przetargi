@@ -307,9 +307,12 @@ final class ClientInquiryService
     }
 
     /**
-     * Ton, tryb ceny i marża z ostatniego zapytania użytkownika (bez osobnej tabeli ustawień).
+     * Ustawienia, z którymi startuje nowa odpowiedź. Szablon i warunki pochodzą
+     * z ostatniego zapytania użytkownika. Cena zawsze startuje jako cena oferty
+     * (zakup + marża) z domyślną marżą z konta — handlowiec zmienia ją na stronie
+     * odpowiedzi tylko dla tego jednego listu.
      *
-     * @return array{tone: string, price_mode: string, margin: float}
+     * @return array{tone: string, price_mode: string, margin: float, terms: array<string, string>}
      */
     public function lastPreferences(User $user): array
     {
@@ -317,7 +320,6 @@ final class ClientInquiryService
             ->where('user_id', $user->id)
             ->latest('id')
             ->first();
-        $answers = $last !== null && is_array($last->answers) ? $last->answers : [];
         // Bez historii bierzemy pełną specyfikację: tak wyglądały listy, które
         // handlowcy wysyłali do tej pory, więc pierwszy list nie zmienia formy.
         $tone = $last !== null && in_array($last->tone, ClientInquiry::TONES, true)
@@ -326,8 +328,10 @@ final class ClientInquiryService
 
         return [
             'tone' => $tone,
-            'price_mode' => $this->priceModeOf($answers),
-            'margin' => $this->marginPercent($answers),
+            'price_mode' => 'catalog_margin',
+            // Świeżo z bazy: model dopiero co utworzony w pamięci nie zna jeszcze
+            // wartości domyślnej kolumny (18%) i dostałby marżę z konfiguracji.
+            'margin' => ($user->fresh() ?? $user)->defaultMarginPercent(),
             // Warunki bywają te same przy kolejnych ofertach — podpowiadamy ostatnie,
             // żeby handlowiec ich nie przepisywał. Zmienić może je przy każdym liście.
             'terms' => $last === null ? [] : $this->termsOf($last),

@@ -28,15 +28,9 @@ class ComposeClientInquiryRequest extends FormRequest
             if (trim((string) $value) === '') {
                 return;
             }
-            $percent = OfferPricing::percentFromInput($value);
-            if ($percent === null) {
-                $fail('Marża musi być liczbą, np. 18 albo 12,5.');
-
-                return;
-            }
-            $max = OfferPricing::marginMax();
-            if ($percent < 0 || $percent > $max) {
-                $fail('Marża musi mieścić się w zakresie 0–'.rtrim(rtrim(number_format($max, 2, '.', ''), '0'), '.').'%.');
+            $error = OfferPricing::marginInputError($value);
+            if ($error !== null) {
+                $fail($error);
             }
         };
     }

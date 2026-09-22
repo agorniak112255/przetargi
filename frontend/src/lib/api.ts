@@ -72,6 +72,8 @@ export type User = {
     template: string | null
     mode: 'light' | 'dark' | 'system' | null
   }
+  /** Marża, z którą startuje każda nowa odpowiedź na zapytanie (w procentach). */
+  default_margin_percent?: number
 }
 
 export function can(user: User | null | undefined, permission: string): boolean {

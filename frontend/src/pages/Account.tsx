@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useAppearance } from '../appearanceContext'
 import { useAuth } from '../auth'
-import { api } from '../lib/api'
+import { api, type User } from '../lib/api'
 import { TEMPLATES, type AppearanceMode, type AppearanceTemplate, type Scheme } from '../lib/appearance'
 
 const schemeLabel: Record<Scheme, string> = {
@@ -136,6 +136,71 @@ function PasswordForm() {
   )
 }
 
+/** Domyślna marża konta: z nią startuje każda nowa odpowiedź na zapytanie. */
+function MarginForm() {
+  const { user, replaceUser } = useAuth()
+  const saved = user?.default_margin_percent ?? 18
+  const [value, setValue] = useState(String(saved).replace('.', ','))
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [msg, setMsg] = useState('')
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<User>('/me/margin', {
+        method: 'PATCH',
+        body: JSON.stringify({ default_margin_percent: value }),
+      })
+      replaceUser(res)
+      setValue(String(res.default_margin_percent ?? '').replace('.', ','))
+      setMsg('Zapisano. Nowe odpowiedzi na zapytania zaczną się od tej marży.')
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form onSubmit={(e) => void onSubmit(e)} className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+      <h2 className="mb-3 text-sm font-semibold">Oferty</h2>
+      {err && <p className="mb-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {msg && <p className="mb-3 rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{msg}</p>}
+      <div className="grid max-w-xl gap-2 sm:grid-cols-[10rem_1fr] sm:items-center">
+        <label className="text-sm text-slate-500" htmlFor="default-margin">
+          Domyślna marża
+        </label>
+        <div className="flex items-center gap-2">
+          <input
+            id="default-margin"
+            inputMode="decimal"
+            className="w-24 rounded border px-2 py-1.5 text-sm"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            required
+          />
+          <span className="text-sm text-slate-500">%</span>
+        </div>
+      </div>
+      <p className="mt-2 text-xs text-slate-500">
+        Każda nowa odpowiedź na zapytanie startuje z ceną oferty: zakup + ta marża. Dla pojedynczego listu
+        zmienisz ją na stronie odpowiedzi.
+      </p>
+      <button
+        type="submit"
+        disabled={busy}
+        className="mt-3 rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+      >
+        Zapisz marżę
+      </button>
+    </form>
+  )
+}
+
 export function Account() {
   const { user } = useAuth()
   const { choice, resolved, setChoice, saveState, saveError } = useAppearance()
@@ -159,6 +224,8 @@ export function Account() {
         </dl>
         <p className="mt-3 text-xs text-slate-500">Zmianę imienia, e-maila i roli wykonuje administrator.</p>
       </section>
+
+      <MarginForm />
 
       <PasswordForm />
 

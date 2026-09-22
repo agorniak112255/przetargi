@@ -63,6 +63,7 @@ Route::get('/product-images/{image}/thumb', [ProductImageThumbController::class,
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);
     Route::patch('/me/preferences', [AuthController::class, 'updatePreferences']);
+    Route::patch('/me/margin', [AuthController::class, 'updateDefaultMargin']);
     Route::post('/me/password', [AuthController::class, 'updatePassword']);
     Route::post('/me/presence', [AuthController::class, 'presence']);
     Route::post('/logout', [AuthController::class, 'logout']);

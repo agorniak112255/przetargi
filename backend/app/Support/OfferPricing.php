@@ -48,6 +48,24 @@ final class OfferPricing
         return $clean !== '' && is_numeric($clean) ? (float) $clean : null;
     }
 
+    /**
+     * Komunikat błędu dla marży wpisanej ręcznie albo null, gdy jest poprawna.
+     * Wspólny dla marży w liście i domyślnej marży konta — obie liczą tę samą cenę.
+     */
+    public static function marginInputError(mixed $raw): ?string
+    {
+        $percent = self::percentFromInput($raw);
+        if ($percent === null) {
+            return 'Marża musi być liczbą, np. 18 albo 12,5.';
+        }
+        $max = self::marginMax();
+        if ($percent < 0 || $percent > $max) {
+            return 'Marża musi mieścić się w zakresie 0–'.rtrim(rtrim(number_format($max, 2, '.', ''), '0'), '.').'%.';
+        }
+
+        return null;
+    }
+
     public static function factorFromPercent(?float $percent): float
     {
         $p = $percent ?? self::markupPercent();

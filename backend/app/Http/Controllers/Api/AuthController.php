@@ -7,6 +7,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\ActivityLogger;
+use App\Support\OfferPricing;
+use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -97,6 +99,30 @@ class AuthController extends Controller
                 'template' => $validated['template'] ?? null,
                 'mode' => $validated['mode'] ?? null,
             ],
+        ])->save();
+
+        return response()->json($user->toAuthArray());
+    }
+
+    /**
+     * Domyślna marża konta — z nią startuje każda nowa odpowiedź na zapytanie.
+     * Zakres i zapis liczby (przecinek, „%”) są te same co przy marży w liście.
+     */
+    public function updateDefaultMargin(Request $request): JsonResponse
+    {
+        $request->validate([
+            'default_margin_percent' => ['required', function (string $attribute, mixed $value, Closure $fail): void {
+                $error = OfferPricing::marginInputError($value);
+                if ($error !== null) {
+                    $fail($error);
+                }
+            }],
+        ]);
+
+        /** @var User $user */
+        $user = $request->user();
+        $user->forceFill([
+            'default_margin_percent' => round((float) OfferPricing::percentFromInput($request->input('default_margin_percent')), 2),
         ])->save();
 
         return response()->json($user->toAuthArray());

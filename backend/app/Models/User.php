@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Support\OfferPricing;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -62,7 +63,7 @@ class User extends Authenticatable
     }
 
     /**
-     * @return array{id: int, name: string, email: string, role: string, roles: list<string>, permissions: list<string>, ui_preferences: array{template: ?string, mode: ?string}}
+     * @return array{id: int, name: string, email: string, role: string, roles: list<string>, permissions: list<string>, ui_preferences: array{template: ?string, mode: ?string}, default_margin_percent: float}
      */
     public function toAuthArray(): array
     {
@@ -77,7 +78,23 @@ class User extends Authenticatable
             'roles' => $roles,
             'permissions' => $this->getAllPermissions()->pluck('name')->values()->all(),
             'ui_preferences' => $this->normalizedUiPreferences(),
+            'default_margin_percent' => $this->defaultMarginPercent(),
         ];
+    }
+
+    /**
+     * Marża, z którą startuje nowa odpowiedź na zapytanie. Wartość spoza dozwolonego
+     * zakresu (np. wpisana ręcznie w bazie) jest przycinana do granic, a jej brak
+     * oznacza marżę z konfiguracji.
+     */
+    public function defaultMarginPercent(): float
+    {
+        $raw = $this->getAttribute('default_margin_percent');
+        if (! is_numeric($raw)) {
+            return OfferPricing::markupPercent();
+        }
+
+        return max(0.0, min((float) $raw, OfferPricing::marginMax()));
     }
 
     /**

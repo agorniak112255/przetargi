@@ -499,9 +499,9 @@ export function Inquiries() {
             </label>
             {prefs && (
               <p className="text-[11px] text-slate-500 sm:col-span-3">
-                Ceny jak ostatnio: {priceModeLabel[prefs.price_mode]}
-                {prefs.price_mode === 'catalog_margin' ? ` ${prefs.margin}%` : ''} — zmienisz na stronie
-                odpowiedzi.
+                Ceny: {priceModeLabel[prefs.price_mode]}
+                {prefs.price_mode === 'catalog_margin' ? ` ${prefs.margin}% (domyślna marża z „Moje konto”)` : ''} —
+                dla tego listu zmienisz na stronie odpowiedzi.
               </p>
             )}
           </div>
