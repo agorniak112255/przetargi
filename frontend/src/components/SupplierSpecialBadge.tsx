@@ -1,4 +1,5 @@
 import type { SupplierSpecial } from '../lib/api'
+import { currencyLabel, formatPct, formatPrice } from '../lib/priceChange'
 import { supplierSpecialSummary } from '../lib/supplierSpecial'
 
 /**
@@ -20,12 +21,24 @@ export function SupplierSpecialBadge({
   if (!special || special.status === 'standard') return null
   const title = supplierSpecialSummary(special, currency)
   if (special.status === 'special') {
-    return (
+    const badge = (
       <span
-        className={`${block ? 'block w-fit' : 'inline-block'} whitespace-nowrap rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold text-white ${className}`}
+        className={`${block ? 'block w-fit' : 'inline-block'} whitespace-nowrap rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold text-white ${block ? '' : className}`}
         title={title}
       >
         Cena specjalna B2B
+      </span>
+    )
+    if (!block) return badge
+    // w komórce listy: pod znacznikiem cena normalna kategorii (cennik bazowy − rabat standardowy)
+    return (
+      <span className={`block ${className}`} title={title}>
+        {badge}
+        <span className="block whitespace-nowrap text-[10px] text-slate-600">
+          normalna: <b>{formatPrice(special.standard_price)} {currencyLabel(currency)}</b>
+          {special.standard_discount_percent != null && <> (−{formatPct(special.standard_discount_percent, false)})</>}
+        </span>
+        {special.category && <span className="block whitespace-nowrap text-[10px] text-slate-500">{special.category}</span>}
       </span>
     )
   }

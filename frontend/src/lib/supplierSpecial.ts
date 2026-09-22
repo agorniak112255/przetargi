@@ -7,7 +7,11 @@ export const SUPPLIER_SPECIAL_INFERENCE_NOTE =
 
 export function supplierSpecialSummary(s: SupplierSpecial, currency: string | null | undefined): string {
   const cur = currencyLabel(currency)
-  const standard = `Cena standardowa (cennik bazowy − rabat standardowy): ${formatPrice(s.standard_price)} ${cur}`
+  const basis =
+    s.base_price != null && s.standard_discount_percent != null
+      ? ` = ${formatPrice(s.base_price)} ${cur} − ${formatPct(s.standard_discount_percent, false)}`
+      : ''
+  const standard = `Cena normalna${s.category ? ` (${s.category})` : ''}: ${formatPrice(s.standard_price)} ${cur}${basis}`
   const actual = `Rabat faktyczny od cennika bazowego: ${formatPct(s.actual_discount_percent, false)}`
   if (s.status === 'special') {
     return [

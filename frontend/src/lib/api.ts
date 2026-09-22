@@ -377,6 +377,11 @@ export type SupplierSpecial = {
   actual_discount_percent: number
   /** O ile cena konta jest niższa od standardowej; ujemne = wyższa. */
   saving_net: number
+  /** Cena z cennika bazowego i rabat standardowy kategorii — z nich cena normalna (standard_price). */
+  base_price?: number
+  standard_discount_percent?: number
+  /** Kategoria cennika bazowego (UVEX: arkusz); tylko ocena ceny karty (lista, szczegóły). */
+  category?: string | null
 }
 
 /** Jeden wiersz tabelki z karty wyrobu u dostawcy, dosłownie ze sklepu. */

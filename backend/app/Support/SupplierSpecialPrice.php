@@ -31,7 +31,7 @@ final class SupplierSpecialPrice
     private const TOLERANCE_SHARE = 0.005;
 
     /**
-     * @return array{status: string, standard_price: float, actual_discount_percent: float, saving_net: float}|null
+     * @return array{status: string, standard_price: float, actual_discount_percent: float, saving_net: float, base_price: float, standard_discount_percent: float}|null
      */
     public static function evaluate(?float $purchase, ?float $base, ?float $standardDiscountPercent): ?array
     {
@@ -55,6 +55,9 @@ final class SupplierSpecialPrice
             'actual_discount_percent' => round((1 - $purchase / $base) * 100, 2),
             // o ile cena konta jest niższa od standardowej (ujemne = wyższa)
             'saving_net' => round($difference, 2),
+            // podstawa ceny standardowej — cena normalna kategorii bez ponownego pobierania cennika
+            'base_price' => round($base, 2),
+            'standard_discount_percent' => round($standardDiscountPercent, 2),
         ];
     }
 
@@ -96,7 +99,7 @@ final class SupplierSpecialPrice
     }
 
     /**
-     * @return array{status: string, standard_price: float, actual_discount_percent: float, saving_net: float}|null
+     * @return array{status: string, standard_price: float, actual_discount_percent: float, saving_net: float, base_price: float, standard_discount_percent: float}|null
      */
     public static function forSlot(ProductSourcePrice $slot): ?array
     {

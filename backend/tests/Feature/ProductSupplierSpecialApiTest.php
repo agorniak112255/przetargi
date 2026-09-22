@@ -177,6 +177,10 @@ final class ProductSupplierSpecialApiTest extends TestCase
 
         $this->assertSame('special', $rows['9160-130']['supplier_special']['status']);
         $this->assertSame(217.01, $rows['9160-130']['supplier_special']['standard_price']);
+        // cena normalna kategorii bez ponownego pobierania cennika: podstawa i kategoria przy ocenie
+        $this->assertSame(255.31, $rows['9160-130']['supplier_special']['base_price']);
+        $this->assertEquals(15, $rows['9160-130']['supplier_special']['standard_discount_percent']);
+        $this->assertSame('Okulary ochronne', $rows['9160-130']['supplier_special']['category']);
         $this->assertNull($rows['9160-131']['supplier_special']);
         $this->assertNull($rows['9160-132']['supplier_special']);
         $this->assertNull($rows['9160-133']['supplier_special']);

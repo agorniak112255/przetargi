@@ -571,7 +571,7 @@ class ProductController extends Controller
      * wygrywa najświeżej sprawdzony, jak w ProductEffectivePrice.
      *
      * @param  iterable<ProductSourcePrice>  $slots  sloty karty (dowolne — filtr tutaj)
-     * @return array{status: string, standard_price: float, actual_discount_percent: float, saving_net: float}|null
+     * @return array{status: string, standard_price: float, actual_discount_percent: float, saving_net: float, base_price: float, standard_discount_percent: float, category: string|null}|null
      */
     private function cardSupplierSpecial(mixed $cardPurchase, mixed $cardCurrency, iterable $slots): ?array
     {
@@ -598,7 +598,13 @@ class ProductController extends Controller
             }
         }
 
-        return $best !== null ? SupplierSpecialPrice::forSlot($best) : null;
+        $evaluation = $best !== null ? SupplierSpecialPrice::forSlot($best) : null;
+        if ($evaluation === null) {
+            return null;
+        }
+
+        // kategoria cennika bazowego (UVEX: arkusz) — „cena normalna w kategorii …” przy znaczniku
+        return [...$evaluation, 'category' => $best->base_price_category];
     }
 
     /**
@@ -617,7 +623,7 @@ class ProductController extends Controller
                 ->where('source_key', 'like', 'b2b:%')
                 ->whereNotNull('base_price_net')
                 ->whereNotNull('standard_discount_percent')
-                ->get(['id', 'product_id', 'source_key', 'purchase_price', 'currency', 'base_price_net', 'standard_discount_percent', 'checked_at']);
+                ->get(['id', 'product_id', 'source_key', 'purchase_price', 'currency', 'base_price_net', 'base_price_category', 'standard_discount_percent', 'checked_at']);
             foreach ($slots as $slot) {
                 $out[(int) $slot->product_id][] = $slot;
             }
