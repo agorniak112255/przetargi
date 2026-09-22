@@ -91,6 +91,26 @@ final class EmbeddingQueueGateTest extends TestCase
         );
     }
 
+    /**
+     * Laravel bierze limit zadania przed `--timeout` workera, a klient osadzeń czeka na odpowiedź
+     * tyle, ile wynosi „Limit czasu” w Ustawieniach AI. Sztywne 90 sekund przy ustawieniu 240
+     * ubijało workera w środku zapytania — wiersz zostawał zarezerwowany i wracał jako
+     * przekroczenie prób.
+     */
+    public function test_job_timeout_outlives_the_configured_embedding_request(): void
+    {
+        config(['ai.timeout_seconds' => 240]);
+        $this->assertSame(300, (new ReindexProductEmbeddingJob(1))->timeout);
+
+        // limit workera to 420 s, a retry_after 480 s — limit zadania musi zostać pod spodem
+        config(['ai.timeout_seconds' => 900]);
+        $this->assertSame(400, (new ReindexProductEmbeddingJob(1))->timeout);
+
+        // bezsensowne ustawienie nie może dać zadania bez limitu
+        config(['ai.timeout_seconds' => 0]);
+        $this->assertSame(300, (new ReindexProductEmbeddingJob(1))->timeout);
+    }
+
     public function test_halt_clears_waiting_jobs_in_chunks_and_leaves_reserved_ones(): void
     {
         $this->enableVectors();

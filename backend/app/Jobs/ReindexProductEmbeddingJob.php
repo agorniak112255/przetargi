@@ -6,6 +6,7 @@ namespace App\Jobs;
 
 use App\Exceptions\EmbeddingRequestException;
 use App\Models\Product;
+use App\Services\Ai\AiSettingsService;
 use App\Services\Vector\ProductEmbeddingIndexer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -16,6 +17,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Throwable;
 
 class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
 {
@@ -29,7 +31,19 @@ class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
     /** @var list<int> */
     public array $backoff = [20, 60];
 
-    public int $timeout = 90;
+    /**
+     * Ustawiany w konstruktorze z „Limitu czasu” w Ustawieniach AI — zob. timeoutSeconds().
+     * Wartość tutaj obowiązuje, gdy ustawień nie da się odczytać.
+     */
+    public int $timeout = self::TIMEOUT_FALLBACK;
+
+    /** Zapas na wyszukanie karty, zapis punktu w Qdrancie i zapis produktu — poza samym osadzeniem. */
+    private const TIMEOUT_MARGIN = 60;
+
+    /** Górna granica: limit zadania musi zmieścić się w limicie workera (420 s) i retry_after (480 s). */
+    private const TIMEOUT_MAX = 400;
+
+    private const TIMEOUT_FALLBACK = 300;
 
     /** Osobna kolejka — reindeks całego katalogu nie może blokować pobierania opisów. */
     public const QUEUE = 'embeddings';
@@ -52,6 +66,29 @@ class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
         public readonly bool $force = false,
     ) {
         $this->onQueue(self::QUEUE);
+        $this->timeout = self::timeoutSeconds();
+    }
+
+    /**
+     * Laravel bierze limit zadania przed limitem workera (`--timeout`), więc to ta liczba decyduje,
+     * kiedy worker dostanie sygnał zabicia. Klient osadzeń czeka na odpowiedź tyle, ile wynosi
+     * „Limit czasu” w Ustawieniach AI (EmbeddingClient), więc sztywne 90 sekund ubijało workera
+     * w środku zapytania: wiersz zostawał zarezerwowany, wracał po retry_after i lądował
+     * w failed_jobs jako przekroczenie prób, choć samo osadzenie nie miało prawa się wyrobić.
+     */
+    private static function timeoutSeconds(): int
+    {
+        try {
+            $configured = (int) app(AiSettingsService::class)->resolve()['timeout_seconds'];
+        } catch (Throwable) {
+            return self::TIMEOUT_FALLBACK;
+        }
+
+        if ($configured < 1) {
+            return self::TIMEOUT_FALLBACK;
+        }
+
+        return min(self::TIMEOUT_MAX, $configured + self::TIMEOUT_MARGIN);
     }
 
     /**

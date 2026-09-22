@@ -70,7 +70,7 @@ if ! command -v systemctl >/dev/null 2>&1; then
   echo "UWAGA: brak systemd — workery trzeba uruchomić ręcznie:"
   echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=enrich --tries=3 --timeout=420 --max-time=3600 &"
   echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=prefetch,default --tries=3 --timeout=180 --max-time=3600 &"
-  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=embeddings --sleep=3 --tries=3 --timeout=180 --max-time=3600 &"
+  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=embeddings --sleep=3 --tries=3 --timeout=420 --max-time=3600 &"
   exit 0
 fi
 
@@ -127,11 +127,14 @@ write_unit "/etc/systemd/system/${PREFETCH_UNIT}.service" \
   prefetch \
   "$PREFETCH_WORKERS"
 # --sleep=3: pusta kolejka wektorów ma odpytywać tabelę `jobs` rzadko,
-# a nie co sekundę razy liczba workerów
+# a nie co sekundę razy liczba workerów.
+# Limit czasu 420 s jak przy enrich, i z tego samego powodu: klient osadzeń czeka na odpowiedź tyle,
+# ile wynosi „Limit czasu” w Ustawieniach AI (domyślnie 240 s). Krótszy limit zadania ubijał workera
+# w trakcie zapytania — wiersz zostawał zarezerwowany i po retry_after wracał jako przekroczenie prób.
 write_unit "/etc/systemd/system/${EMBEDDING_UNIT}.service" \
   "Przetargi embeddings worker" \
   "embeddings" \
-  180 \
+  420 \
   embeddings \
   "$EMBEDDING_WORKERS" \
   3
