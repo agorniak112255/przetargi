@@ -125,6 +125,14 @@ final class PpeAssortment
     }
 
     /**
+     * „Zatyczki” to stopery do uszu tylko w kontekście słuchu: UVEX „Zatyczki X-fit bez sznurka … 200 par”,
+     * „Zatyczki do uszu”, „przeciwhałasowe zatyczki”. Samo słowo to też zaślepka: „Zatyczka do maski 3M Scott”,
+     * „Zatyczki natryskowe 3M PF-653”, „zatyczki do ponownego użycia wkładu” pochłaniaczy M9000 — to nie ochrona słuchu.
+     */
+    private const EARPLUG_ZATYCZKI = '(?:zatyczk\w*(?=.{0,40}?(?:\b(?:uszu|uszach|ucha|par|pary)\b|dousz|przeciwhal|halas|sluch|snr|sznur|palak))'
+        .'|(?:przeciwhal|dousz)\w*\s+zatyczk\w*)';
+
+    /**
      * Rzeczowniki rodzin w kolejności rozstrzygającej remisy (ta sama pozycja w tekście).
      * Spodniobuty i wodery to odzież wodoochronna, nie obuwie — „kalosz” w ich nazwie
      * nie może przerzucić ich do obuwia.
@@ -144,8 +152,8 @@ final class PpeAssortment
         self::FAMILY_FACE => '/\b(przylbic|oslon\w{0,10}\s+\w{0,16}twarz|twarz\w{0,8}\s+\w{0,12}oslon'
             .'|oslona\s+twarzy|face\s*shield|siatk\w*\s+(na\s+)?twarz|maska\s+spawal)\w*/u',
         self::FAMILY_EYES => '/\b(okular|gogl|szyba\s+ochronn|spectacle|eyewear|bryl)\w*|\bglasses\b/u',
-        self::FAMILY_HEARING => '/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|wkladk\w*\s+sluch'
-            .'|stoper\w*|zatyczk\w*|ochrona\s+sluchu|sluchawk\w*\s+ochron|ear\s*(muff|plug|defender)|earmuff|earplug'
+        self::FAMILY_HEARING => '/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|wkladk\w*\s+(sluch|przeciwhal)'
+            .'|stoper\w*|'.self::EARPLUG_ZATYCZKI.'|ochrona\s+sluchu|sluchawk\w*\s+ochron|ear\s*(muff|plug|defender)|earmuff|earplug'
             .'|chranic\w*\s+sluchu|sluchatk)\w*/u',
         // „Szelki … do podtrzymywania spodni” (Canis 11898 „Braces CXS DARREN”) to akcesorium odzieży,
         // nie uprząż — przechodziły bramkę „Szelki EN 361”. Wyłączamy szelki, gdy do 120 znaków dalej stoją spodnie
@@ -894,7 +902,7 @@ final class PpeAssortment
         if (preg_match('/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|sluchawk\w*\s+ochron)\w*/u', $t) === 1) {
             return 'earmuff';
         }
-        if (preg_match('/\b(wkladk\w*\s+sluch|stoper|zatyczk)\w*/u', $t) === 1) {
+        if (preg_match('/\b(wkladk\w*\s+(sluch|przeciwhal)|stoper)\w*|\b'.self::EARPLUG_ZATYCZKI.'/u', $t) === 1) {
             return 'earplug';
         }
 

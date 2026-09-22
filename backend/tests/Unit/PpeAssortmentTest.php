@@ -94,8 +94,13 @@ final class PpeAssortmentTest extends TestCase
             // UVEX: zatyczki to wkładki przeciwhałasowe
             ['Zatyczki X-fit bez sznurka, żółte-karton 200 par 2112.001', PpeAssortment::FAMILY_HEARING],
             ['Zatyczki WHISPER ze sznurkiem', PpeAssortment::FAMILY_HEARING],
-            ['Zatyczki Com4-fit', PpeAssortment::FAMILY_HEARING],
+            ['Zatyczki Com4-fit bez sznurka, karton 200 par 2112.004', PpeAssortment::FAMILY_HEARING],
             ['Zatyczki xact-fit multi rozm. S opak. 50 par 2124.017', PpeAssortment::FAMILY_HEARING],
+            ['Zatyczki uvex x-fit XL 2212.140 (karton 200 par)', PpeAssortment::FAMILY_HEARING],
+            ['Zatyczki na pałąku x-cap 2125.361 - karton 15 szt', PpeAssortment::FAMILY_HEARING],
+            ['Zatyczki do uszu MAX.', PpeAssortment::FAMILY_HEARING],
+            ['Wkładki z pianki, przeciwhałasowe zatyczki', PpeAssortment::FAMILY_HEARING],
+            ['WKŁADKI PRZECIWHAŁASOWE 3M E-A-Rsoft ES-01-001 - KARTON 250 PAR.', PpeAssortment::FAMILY_HEARING],
         ];
     }
 
@@ -375,7 +380,44 @@ final class PpeAssortmentTest extends TestCase
         ]);
 
         $this->assertSame(PpeAssortment::FAMILY_HEARING, $this->assortment->productFamily($plugs));
-        $this->assertSame('earplug', $this->assortment->articleType('Zatyczki Com4-fit', PpeAssortment::FAMILY_HEARING));
+        $this->assertSame('earplug', $this->assortment->articleType('Zatyczki Com4-fit bez sznurka', PpeAssortment::FAMILY_HEARING));
+    }
+
+    /** Zatyczka jako zaślepka (3M Scott, Versaflo, pochłaniacze M9000) — produkcja 23.09.2026 dała im rodzinę „hearing”. */
+    #[Test]
+    #[DataProvider('plugCapNames')]
+    public function plug_cap_is_not_hearing_protection(string $name): void
+    {
+        $this->assertNotSame(PpeAssortment::FAMILY_HEARING, $this->assortment->family($name));
+    }
+
+    /**
+     * @return list<array{0: string}>
+     */
+    public static function plugCapNames(): array
+    {
+        return [
+            ['Zatyczka do maski 3M™ Scott™, 40 mm, 5512777'],
+            ['Zatyczka 3M™ Scott™, zaślepka portu wysokiego ciśnienia reduktora'],
+            ['Rurka gwizdka z zatyczką 3M™ Scott™, 1023220'],
+            ['Zatyczki natryskowe 3M™ do systemów z wymuszonym przepływem powietrza 3M™ PF-600E+'],
+            ['Zatyczki do przechowywania 3M™ Versaflo™ BT-957, 5 szt./opak.'],
+            ['Uszczelki oraz zatyczki pomagają ochronić otwór wlotowy i wylotowy przed uszkodzeniem'],
+        ];
+    }
+
+    #[Test]
+    public function cartridge_with_reusable_plugs_stays_respiratory(): void
+    {
+        $cartridge = new Product;
+        $cartridge->forceFill([
+            'name' => 'M9000 P3',
+            'sku' => 'M9000P3',
+            'category' => 'Ochrona głowy > Ochrona dróg oddechowych > Maski wielokrotnego użytku',
+            'description' => 'Filtr do półmasek M9200 ROTOR GALAXY i M9300 STRAP GALAXY. Zamykane zatyczki do ponownego użycia wkładu wydłużają trwałość.',
+        ]);
+
+        $this->assertNotSame(PpeAssortment::FAMILY_HEARING, $this->assortment->productFamily($cartridge));
     }
 
     #[Test]
