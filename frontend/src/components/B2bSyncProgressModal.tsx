@@ -59,6 +59,8 @@ type Props = {
   canManage: boolean
   onClose: () => void
   onChanged: () => void
+  /** Zastępuje zwykłe zlecenie pobrania (np. konto z logowaniem kodem z e-maila otwiera okno logowania). */
+  onRequestSync?: () => void
 }
 
 const STATUS_LABEL: Record<RunStatus, string> = {
@@ -122,7 +124,7 @@ function formatNumber(value: number): string {
   return value.toLocaleString('pl-PL')
 }
 
-export function B2bSyncProgressModal({ account, canManage, onClose, onChanged }: Props) {
+export function B2bSyncProgressModal({ account, canManage, onClose, onChanged, onRequestSync }: Props) {
   const [data, setData] = useState<SyncProgress | null>(null)
   const [err, setErr] = useState('')
   const [actionErr, setActionErr] = useState('')
@@ -209,6 +211,10 @@ export function B2bSyncProgressModal({ account, canManage, onClose, onChanged }:
   }
 
   async function requestSync() {
+    if (onRequestSync) {
+      onRequestSync()
+      return
+    }
     setBusy(true)
     setActionErr('')
     try {

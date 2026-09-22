@@ -7,7 +7,10 @@ namespace App\Services\B2b;
 use App\Models\B2bAccount;
 use RuntimeException;
 
-final class B2bConnectorRegistry
+/**
+ * Bez „final” — testy API panelu podmieniają w kontenerze make() na atrapę łącznika.
+ */
+class B2bConnectorRegistry
 {
     /**
      * Nowa witryna B2B = nowa klasa łącznika dopisana tutaj.
@@ -29,10 +32,11 @@ final class B2bConnectorRegistry
         RawpolB2bConnector::class,
         DeltaplusB2bConnector::class,
         ProceraB2bConnector::class,
+        MmmB2bConnector::class,
     ];
 
     /**
-     * @return list<array{key: string, label: string, host: string, requires_password: bool, uses_discount_rules: bool}>
+     * @return list<array{key: string, label: string, host: string, requires_password: bool, uses_discount_rules: bool, requires_login_code: bool}>
      */
     public function options(): array
     {
@@ -48,6 +52,8 @@ final class B2bConnectorRegistry
                 // formularz nie ma po co pytać o reguły rabatowe.
                 'uses_discount_rules' => is_a($class, B2bPublicSite::class, true)
                     && ! is_a($class, B2bContentOnlySite::class, true),
+                // Witryna z kodem jednorazowym z e-maila (3M) — panel pokazuje „Zaloguj kodem” przy koncie.
+                'requires_login_code' => is_a($class, B2bCodeLoginSite::class, true),
             ],
             self::CONNECTORS,
         );
@@ -72,6 +78,14 @@ final class B2bConnectorRegistry
         $class = $key !== null ? $this->classFor($key) : null;
 
         return $class === null || ! is_a($class, B2bPublicSite::class, true);
+    }
+
+    /** Czy łącznik loguje się kodem jednorazowym z e-maila (B2bCodeLoginSite). */
+    public function requiresLoginCode(?string $key): bool
+    {
+        $class = $key !== null ? $this->classFor($key) : null;
+
+        return $class !== null && is_a($class, B2bCodeLoginSite::class, true);
     }
 
     public function label(?string $key): ?string

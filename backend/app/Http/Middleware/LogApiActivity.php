@@ -38,7 +38,8 @@ final class LogApiActivity
             $resolved = $this->resolver->resolve($request);
 
             $meta = $resolved['meta'];
-            $input = $request->except(['password', 'password_confirmation', 'token', 'api_key', 'openai_api_key']);
+            // „code” — kod jednorazowy z e-maila przy logowaniu konta B2B (B2bCodeLoginSite)
+            $input = $request->except(['password', 'password_confirmation', 'token', 'api_key', 'openai_api_key', 'code']);
             if ($input !== []) {
                 $meta['payload'] = $this->logger->sanitizePayload($input);
             }

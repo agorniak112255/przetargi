@@ -9,16 +9,21 @@ use App\Models\B2bAccount;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductSourcePrice;
+use App\Services\B2b\B2bCodeLoginSite;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\Pricing\ProductEffectivePrice;
 use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Http\Client\HttpClientException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use JsonException;
+use RuntimeException;
 
 class B2bAccountController extends Controller
 {
@@ -63,10 +68,20 @@ class B2bAccountController extends Controller
             unset($data['password']);
         }
 
-        $b2bAccount->update([
+        $b2bAccount->fill([
             ...$data,
             'updated_by' => $request->user()->id,
         ]);
+
+        // Sesja sklepu (i rozpoczęte logowanie kodem) należą do starego loginu, hasła albo witryny — po ich zmianie
+        // przebieg nie może jej użyć, bo działałby na koncie, którego użytkownik już nie wskazuje.
+        if ($b2bAccount->isDirty(['username', 'password', 'connector'])) {
+            $b2bAccount->connector_session = null;
+            $b2bAccount->connector_session_saved_at = null;
+            Cache::forget($this->codeLoginCacheKey($b2bAccount));
+        }
+
+        $b2bAccount->save();
 
         return response()->json($this->view($b2bAccount->fresh()->load(['creator:id,name', 'updater:id,name'])));
     }
@@ -125,13 +140,87 @@ class B2bAccountController extends Controller
         }
 
         // Drugie zlecenie w trakcie przebiegu dałoby podwójne pobieranie tuż po zakończeniu pierwszego.
-        $running = $b2bAccount->last_sync_status === B2bSyncRun::STATUS_RUNNING
-            || $b2bAccount->syncRuns()->where('status', B2bSyncRun::STATUS_RUNNING)->exists();
-        if ($running) {
+        if ($this->syncIsRunning($b2bAccount)) {
             return response()->json(['message' => 'Pobieranie już trwa.'], 409);
         }
 
         $b2bAccount->forceFill(['sync_requested_at' => now()])->save();
+
+        return response()->json($this->view($b2bAccount->fresh()->load(['creator:id,name', 'updater:id,name'])));
+    }
+
+    /**
+     * „Zaloguj kodem”, krok 1: łącznik loguje się e-mailem i hasłem aż do prośby o kod i zleca jego wysyłkę.
+     * Stan logowania (ciasteczka, znaczniki transakcji — bez hasła) czeka zaszyfrowany w cache na kod z e-maila.
+     */
+    public function startLoginCode(B2bAccount $b2bAccount): JsonResponse
+    {
+        if ($this->syncIsRunning($b2bAccount)) {
+            return response()->json(['message' => 'Pobieranie już trwa.'], 409);
+        }
+
+        try {
+            $connector = $this->connectors->make($b2bAccount);
+            if (! $connector instanceof B2bCodeLoginSite) {
+                return response()->json(['message' => 'Łącznik tego konta nie loguje się kodem z e-maila.'], 422);
+            }
+
+            $started = $connector->startCodeLogin();
+        } catch (RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (HttpClientException $e) {
+            return response()->json(['message' => 'Witryna nie odpowiada: '.$e->getMessage()], 422);
+        }
+
+        Cache::put(
+            $this->codeLoginCacheKey($b2bAccount),
+            Crypt::encryptString((string) json_encode($started['state'], JSON_THROW_ON_ERROR)),
+            now()->addMinutes(self::CODE_LOGIN_TTL_MINUTES),
+        );
+
+        return response()->json(['message' => $started['message']]);
+    }
+
+    /**
+     * „Zaloguj kodem”, krok 2: kod z e-maila kończy logowanie; sesja trafia na konto (szyfrowana), a pobieranie
+     * rusza od razu, bo sesja sklepu żyje krótko. Zły kod zostawia stan w cache — użytkownik może go poprawić.
+     */
+    public function verifyLoginCode(Request $request, B2bAccount $b2bAccount): JsonResponse
+    {
+        $data = $request->validate([
+            'code' => ['required', 'string', 'regex:/^\s*\d{4,10}\s*$/'],
+        ]);
+
+        if ($this->syncIsRunning($b2bAccount)) {
+            return response()->json(['message' => 'Pobieranie już trwa.'], 409);
+        }
+
+        $state = $this->codeLoginState($b2bAccount);
+        if ($state === null) {
+            return response()->json([
+                'message' => 'Kod wygasł albo nie wysłano go — kliknij „Wyślij kod” jeszcze raz.',
+            ], 422);
+        }
+
+        try {
+            $connector = $this->connectors->make($b2bAccount);
+            if (! $connector instanceof B2bCodeLoginSite) {
+                return response()->json(['message' => 'Łącznik tego konta nie loguje się kodem z e-maila.'], 422);
+            }
+
+            $session = $connector->finishCodeLogin($state, trim((string) $data['code']));
+        } catch (RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (HttpClientException $e) {
+            return response()->json(['message' => 'Witryna nie odpowiada: '.$e->getMessage()], 422);
+        }
+
+        $b2bAccount->forceFill([
+            'connector_session' => $session,
+            'connector_session_saved_at' => now(),
+            'sync_requested_at' => now(),
+        ])->save();
+        Cache::forget($this->codeLoginCacheKey($b2bAccount));
 
         return response()->json($this->view($b2bAccount->fresh()->load(['creator:id,name', 'updater:id,name'])));
     }
@@ -184,6 +273,40 @@ class B2bAccountController extends Controller
         }
 
         return response()->json(['ok' => true]);
+    }
+
+    private const CODE_LOGIN_TTL_MINUTES = 15;
+
+    private function syncIsRunning(B2bAccount $account): bool
+    {
+        return $account->last_sync_status === B2bSyncRun::STATUS_RUNNING
+            || $account->syncRuns()->where('status', B2bSyncRun::STATUS_RUNNING)->exists();
+    }
+
+    private function codeLoginCacheKey(B2bAccount $account): string
+    {
+        return 'b2b-code-login:'.$account->id;
+    }
+
+    /**
+     * Stan rozpoczętego logowania kodem; nieczytelny (zmieniony klucz aplikacji, uszkodzony wpis) = brak stanu.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function codeLoginState(B2bAccount $account): ?array
+    {
+        $encrypted = Cache::get($this->codeLoginCacheKey($account));
+        if (! is_string($encrypted) || $encrypted === '') {
+            return null;
+        }
+
+        try {
+            $state = json_decode(Crypt::decryptString($encrypted), true, 512, JSON_THROW_ON_ERROR);
+        } catch (DecryptException|JsonException) {
+            return null;
+        }
+
+        return is_array($state) ? $state : null;
     }
 
     private const RUN_COLUMNS = [
@@ -290,6 +413,9 @@ class B2bAccountController extends Controller
             'last_sync_finished_at' => $account->last_sync_finished_at?->toIso8601String(),
             'last_sync_message' => $account->last_sync_message,
             'last_price_list_id' => $account->last_price_list_id,
+            // Sama sesja (ciasteczka sklepu) nigdy nie wychodzi do panelu — tylko kiedy ją zapisano.
+            'connector_session_saved_at' => $account->connector_session_saved_at?->toIso8601String(),
+            'requires_login_code' => $this->connectors->requiresLoginCode($account->connector),
             'created_by' => $account->creator?->only(['id', 'name']),
             'updated_by' => $account->updater?->only(['id', 'name']),
             'created_at' => $account->created_at?->toIso8601String(),

@@ -26,6 +26,8 @@ class B2bAccount extends Model
         'username',
         'contractor_code',
         'password',
+        'connector_session',
+        'connector_session_saved_at',
         'sites',
         'note',
         'connector',
@@ -43,12 +45,16 @@ class B2bAccount extends Model
 
     protected $hidden = [
         'password',
+        'connector_session',
     ];
 
     protected function casts(): array
     {
         return [
             'password' => 'encrypted',
+            // ciasteczka po logowaniu kodem z e-maila (B2bCodeLoginSite) — sekret jak hasło
+            'connector_session' => 'encrypted:array',
+            'connector_session_saved_at' => 'datetime',
             'sites' => 'array',
             'sync_images' => 'boolean',
             'sync_requested_at' => 'datetime',

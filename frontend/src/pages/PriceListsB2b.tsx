@@ -24,6 +24,10 @@ type B2bAccount = {
   last_sync_finished_at: string | null
   last_sync_message: string | null
   last_price_list_id: number | null
+  /** Dostawca wysyła kod na e-mail przy każdym logowaniu (3M) — pobieranie zleca się przez „Zaloguj kodem”. */
+  requires_login_code: boolean
+  /** Kiedy ostatnio zapisano sesję sklepu po logowaniu kodem (ISO 8601). */
+  connector_session_saved_at: string | null
   created_by: { id: number; name: string } | null
   updated_by: { id: number; name: string } | null
   updated_at: string | null
@@ -37,6 +41,8 @@ type Connector = {
   requires_password: boolean
   /** Ceny ze strony to ceny katalogowe; cena zakupu powstaje z rabatów zapisanych przy koncie. */
   uses_discount_rules: boolean
+  /** Logowanie wymaga kodu z e-maila (3M) — harmonogram nocny się nie uda. */
+  requires_login_code: boolean
 }
 
 type FormState = {
@@ -108,6 +114,7 @@ export function PriceListsB2b() {
   const [visible, setVisible] = useState<Record<number, boolean>>({})
   const [progressAccount, setProgressAccount] = useState<B2bAccount | null>(null)
   const [discountAccount, setDiscountAccount] = useState<B2bAccount | null>(null)
+  const [codeLoginAccount, setCodeLoginAccount] = useState<B2bAccount | null>(null)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
 
@@ -247,6 +254,25 @@ export function PriceListsB2b() {
     } finally {
       setBusy(false)
     }
+  }
+
+  /** Dostawca z kodem z e-maila: zamiast zlecać od razu, otwórz okno logowania kodem. */
+  function startSync(row: B2bAccount) {
+    if (row.requires_login_code) {
+      setMsg('')
+      setErr('')
+      setCodeLoginAccount(row)
+      return
+    }
+    void onRequestSync(row)
+  }
+
+  /** Po udanym kodzie serwer sam zleca pobieranie — dalej jak po „Sprawdź teraz”. */
+  async function onCodeLoginDone(updated: B2bAccount) {
+    setCodeLoginAccount(null)
+    setMsg('Zalogowano kodem i zlecono sprawdzenie cennika — ruszy w ciągu minuty i działa w tle.')
+    setProgressAccount(updated)
+    await load().catch(() => {})
   }
 
   function renderSyncStatus(row: B2bAccount) {
@@ -398,6 +424,12 @@ export function PriceListsB2b() {
                   <option value="daily">Codziennie (w nocy)</option>
                   <option value="weekly">Raz w tygodniu (w nocy)</option>
                 </select>
+                {formConnector(form)?.requires_login_code && (
+                  <span className="mt-1 block text-amber-700">
+                    Ten dostawca wymaga kodu z e-maila przy każdym logowaniu, więc automatyczne pobieranie w nocy
+                    się nie uda. Zostaw „Wyłączone” i pobieraj ręcznie przyciskiem „Zaloguj kodem” przy koncie.
+                  </span>
+                )}
               </label>
               <label className="mt-5 flex items-center gap-2 text-xs">
                 <input
@@ -553,13 +585,20 @@ export function PriceListsB2b() {
                           type="button"
                           className="text-blue-700 underline disabled:text-slate-400 disabled:no-underline"
                           disabled={busy || row.last_sync_status === 'running' || row.sync_requested_at !== null}
-                          onClick={() => void onRequestSync(row)}
+                          onClick={() => startSync(row)}
                         >
-                          Sprawdź teraz
+                          {row.requires_login_code ? 'Zaloguj kodem' : 'Sprawdź teraz'}
                         </button>
                       )}
                     </div>
                   </div>
+                  {row.requires_login_code && (
+                    <p className="text-slate-500">
+                      {row.connector_session_saved_at
+                        ? `Zalogowano kodem: ${formatDate(row.connector_session_saved_at)}`
+                        : 'Wymaga logowania kodem z e-maila'}
+                    </p>
+                  )}
                   {renderSyncStatus(row)}
                 </>
               ) : (
@@ -593,6 +632,23 @@ export function PriceListsB2b() {
           canManage={canManage}
           onClose={() => setProgressAccount(null)}
           onChanged={() => void load().catch(() => {})}
+          onRequestSync={
+            progressAccount.requires_login_code
+              ? () => {
+                  const row = progressAccount
+                  setProgressAccount(null)
+                  startSync(row)
+                }
+              : undefined
+          }
+        />
+      )}
+
+      {codeLoginAccount && (
+        <B2bCodeLoginModal
+          account={codeLoginAccount}
+          onClose={() => setCodeLoginAccount(null)}
+          onDone={(updated) => void onCodeLoginDone(updated)}
         />
       )}
 
@@ -603,6 +659,173 @@ export function PriceListsB2b() {
           onClose={() => setDiscountAccount(null)}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * Logowanie kodem z e-maila (3M): krok 1 wysyła kod, krok 2 go sprawdza — serwer zapisuje sesję sklepu
+ * i od razu zleca pobieranie cennika (sesja żyje krótko).
+ */
+function B2bCodeLoginModal({
+  account,
+  onClose,
+  onDone,
+}: {
+  account: B2bAccount
+  onClose: () => void
+  onDone: (updated: B2bAccount) => void
+}) {
+  const supplier = account.connector_label ?? 'dostawcy'
+  const [step, setStep] = useState<'send' | 'code'>('send')
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [info, setInfo] = useState('')
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !busy) onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, busy])
+
+  async function sendCode() {
+    setBusy(true)
+    setErr('')
+    setInfo('')
+    try {
+      const res = await api<{ message?: string }>(`/b2b-accounts/${account.id}/login-code`, { method: 'POST' })
+      setInfo(res.message ?? 'Kod wysłany na e-mail. Wpisz go poniżej.')
+      setCode('')
+      setStep('code')
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się wysłać kodu')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function verify(e: FormEvent) {
+    e.preventDefault()
+    if (code.length < 4) return
+    setBusy(true)
+    setErr('')
+    try {
+      const updated = await api<B2bAccount>(`/b2b-accounts/${account.id}/login-code/verify`, {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+      })
+      onDone(updated)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zalogować kodem')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={() => {
+        if (!busy) onClose()
+      }}
+    >
+      <div
+        className="flex w-full max-w-md flex-col overflow-hidden rounded-xl bg-white shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-slate-900">Logowanie do {supplier}</p>
+            <p className="truncate text-xs text-slate-500">Konto: {account.username}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            aria-label="Zamknij"
+            className="rounded px-2 py-0.5 text-lg leading-none text-slate-500 hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="space-y-3 px-4 py-3 text-xs">
+          <p className="rounded bg-slate-50 px-3 py-2 text-slate-600">
+            {supplier} przy każdym logowaniu wysyła jednorazowy kod na e-mail konta. Po zalogowaniu pobieranie
+            cennika rusza od razu.
+          </p>
+          {info && <p className="rounded bg-green-50 px-3 py-2 text-green-800">{info}</p>}
+          {err && <p className="rounded bg-red-50 px-3 py-2 text-red-700">{err}</p>}
+
+          {step === 'send' ? (
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+              >
+                Anuluj
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void sendCode()}
+                className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {busy ? 'Wysyłanie…' : 'Wyślij kod na e-mail'}
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={verify} className="space-y-3">
+              <label className="block">
+                Kod z e-maila
+                <input
+                  autoFocus
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={10}
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono text-sm tracking-widest"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                />
+              </label>
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void sendCode()}
+                  className="text-blue-700 underline disabled:text-slate-400 disabled:no-underline"
+                >
+                  Wyślij nowy kod
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    disabled={busy}
+                    className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Anuluj
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={busy || code.length < 4}
+                    className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {busy ? 'Logowanie…' : 'Zaloguj i pobierz'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
