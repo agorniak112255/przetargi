@@ -34,6 +34,7 @@ class B2bConnectorRegistry
         ProceraB2bConnector::class,
         MmmB2bConnector::class,
         MascotB2bConnector::class,
+        JhkB2bConnector::class,
     ];
 
     /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */
