@@ -11,6 +11,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
 
 /**
@@ -72,6 +73,9 @@ final class MmmB2bClient
 
     /** Ceny liczy SAP 3M na żywo — paczka 100 wyrobów to ok. 3–10 s; zapas na wolniejsze chwile sklepu. */
     private const PRICE_TIMEOUT_SECONDS = 60;
+
+    /** Największy plik (zdjęcie, PDF) — synchronizacja i tak przyjmuje dokumenty do 12 MB. */
+    private const FILE_MAX_BYTES = 15_000_000;
 
     private const MAX_CONSECUTIVE_FAILURES = 20;
 
@@ -395,7 +399,24 @@ final class MmmB2bClient
         if (! self::isFileUrl($url)) {
             throw new RuntimeException('plik spoza '.self::FILE_HOST.': '.$url);
         }
-        $response = $this->send(fn (PendingRequest $http): Response => $this->browser($http)->get($url));
+        // Twardy limit rozmiaru: karta 3M podaje w galerii także filmy (701 MB MP4 wyczerpał pamięć przebiegu
+        // 22.09.2026). Nagłówek Content-Length albo bajty w trakcie pobierania ponad limit = przerwane pobranie.
+        $tooLarge = static function (int $bytes) use ($url): void {
+            if ($bytes > self::FILE_MAX_BYTES) {
+                throw new RuntimeException('plik ponad '.(int) (self::FILE_MAX_BYTES / 1_000_000).' MB pominięty: '.$url);
+            }
+        };
+        $response = $this->send(fn (PendingRequest $http): Response => $this->browser($http)->withOptions([
+            'on_headers' => static function (ResponseInterface $response) use ($tooLarge): void {
+                $length = $response->getHeaderLine('Content-Length');
+                if (ctype_digit($length)) {
+                    $tooLarge((int) $length);
+                }
+            },
+            'progress' => static function (int $total, int $downloaded) use ($tooLarge): void {
+                $tooLarge($downloaded);
+            },
+        ])->get($url));
         $mime = strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]));
 
         return ['bytes' => (string) $response->body(), 'mime' => $mime];

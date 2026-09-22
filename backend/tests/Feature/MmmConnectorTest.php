@@ -717,12 +717,16 @@ final class MmmConnectorTest extends TestCase
                     ['url' => self::MEDIA.'1287825J/polmaska-bok.jpg', 'url_pattern' => self::MEDIA.'1287825<R>/polmaska-bok.jpg', 'is_main_image' => false, 'mime_type' => 'image/tiff'],
                     ['url' => self::MEDIA.'1287824J/polmaska-front.jpg', 'url_pattern' => self::MEDIA.'1287824<R>/polmaska-front.jpg', 'is_main_image' => true, 'mime_type' => 'image/tiff'],
                     ['url' => 'https://example.com/obce.jpg', 'url_pattern' => 'https://example.com/<R>/obce.jpg', 'is_main_image' => false],
+                    // jak na żywo: galeria 3M miesza zdjęcia z filmami — ani z typem wideo, ani z adresem .mp4 bez typu
+                    ['url' => self::MEDIA.'1657267O/3m-davit-final-en-master-hd-720p.mp4?&fn=DAVIT2020_EN_MASTER_R1.mp4', 'url_pattern' => self::MEDIA.'1657267<R>/3m-davit-final-en-master-hd-720p.mp4', 'is_main_image' => false, 'mime_type' => 'video/mp4'],
+                    ['url' => self::MEDIA.'1657268O/film-bez-typu.mp4', 'url_pattern' => self::MEDIA.'1657268<R>/film-bez-typu.mp4', 'is_main_image' => false],
                 ],
                 'media_links_documents' => [
                     ['url' => self::MEDIA.'1287001J/karta-6200.jpg', 'title' => 'Karta danych 6200.pdf', 'content_type' => 'Arkusze danych', 'mime_type' => 'application/pdf'],
                     ['url' => self::MEDIA.'1287009J/katalog-emea.jpg', 'title' => 'Katalog EMEA.pdf', 'content_type' => 'Katalogi', 'mime_type' => 'application/pdf'],
                     ['url' => self::MEDIA.'1287010J/przewodnik.jpg', 'title' => 'Przewodnik doboru.pdf', 'content_type' => 'Przewodniki\\wytyczne wyboru produktów', 'mime_type' => 'application/pdf'],
                     ['url' => self::MEDIA.'1287002J/ulotka.jpg', 'title' => 'Ulotka półmasek.pdf', 'content_type' => 'Ulotki', 'mime_type' => 'application/pdf'],
+                    ['url' => self::MEDIA.'1287012J/fall-catalogue.jpg', 'title' => '3M-Fall-Protection-Product-Catalogue-EMEA-EN_R2.pdf', 'content_type' => 'Broszury', 'mime_type' => 'application/pdf'],
                     ['url' => self::MEDIA.'1287011J/film.jpg', 'title' => 'Film', 'content_type' => 'Wideo', 'mime_type' => 'video/mp4'],
                 ],
             ],

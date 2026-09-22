@@ -316,14 +316,16 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
             }
             $type = mb_strtolower(self::value($row['content_type'] ?? null));
             $mime = mb_strtolower(self::value($row['mime_type'] ?? null));
-            if ($mime !== 'application/pdf' || self::startsWithAny($type, self::SKIPPED_DOCUMENT_TYPES)) {
+            $title = self::value($row['title'] ?? null);
+            // katalogi wielu wyrobów bywają opisane innym typem („3M-Fall-Protection-Product-Catalogue-EMEA-EN”)
+            if ($mime !== 'application/pdf' || self::startsWithAny($type, self::SKIPPED_DOCUMENT_TYPES)
+                || preg_match('/catalog|katalog/i', $title) === 1) {
                 continue;
             }
             $url = self::pdfUrl(self::value($row['url'] ?? null));
             if ($url === null || isset($documents[$url])) {
                 continue;
             }
-            $title = self::value($row['title'] ?? null);
             $documents[$url] = new B2bRemoteDocument(
                 mb_substr($title !== '' ? $title : rawurldecode(basename((string) parse_url($url, PHP_URL_PATH))), 0, 255),
                 $url,
@@ -363,9 +365,13 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
 
         $urls = [];
         foreach ($rows as $row) {
+            // galeria 3M miesza zdjęcia z filmami (MP4 701 MB, przebieg 22.09.2026) — filmów nie pobieramy wcale
+            if (! self::isImageRow($row)) {
+                continue;
+            }
             $pattern = html_entity_decode(self::value($row['url_pattern'] ?? null), ENT_QUOTES | ENT_HTML5);
             $url = str_contains($pattern, '<R>') ? str_replace('<R>', 'Z', $pattern) : self::value($row['url'] ?? null);
-            if ($url !== '' && MmmB2bClient::isFileUrl($url)) {
+            if ($url !== '' && MmmB2bClient::isFileUrl($url) && self::hasImageExtension($url)) {
                 $urls[$url] = true;
             }
             if (count($urls) >= self::IMAGES_LIMIT) {
@@ -854,6 +860,25 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
     }
 
     /** Adres pliku PDF z adresu podglądu dokumentu („…/2064569J/x.jpg” → „…/2064569O/x.pdf”); null = inny adres. */
+    /**
+     * Pozycja galerii 3M, która jest obrazem: typ MIME obrazu albo brak typu (starsze pozycje) — wideo, audio
+     * i dokumenty odpadają.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private static function isImageRow(array $row): bool
+    {
+        $mime = mb_strtolower(self::value($row['mime_type'] ?? null));
+
+        return $mime === '' || str_starts_with($mime, 'image/');
+    }
+
+    /** Adres pliku obrazu (jpg/jpeg/png/gif/webp) — adres filmu z galerii 3M ma rozszerzenie .mp4. */
+    private static function hasImageExtension(string $url): bool
+    {
+        return preg_match('/\.(jpe?g|png|gif|webp)$/i', (string) parse_url($url, PHP_URL_PATH)) === 1;
+    }
+
     private static function pdfUrl(string $url): ?string
     {
         if (! MmmB2bClient::isFileUrl($url)) {
