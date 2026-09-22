@@ -10,6 +10,7 @@ import {
 import { productDisplayName } from '../lib/productLabel'
 import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 import { CardConflictsModal } from './CardConflictsModal'
+import { SupplierSpecialPanel } from './SupplierSpecialPanel'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 import { RequirementCheckList } from './RequirementCheckList'
 import { ShopFieldsTables } from './ShopFieldsTables'
@@ -413,6 +414,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
                 </span>
               </div>
             )}
+            {product && <SupplierSpecialPanel product={product} />}
             {product && (
               <RequirementCheckList
                 check={check}

@@ -9,6 +9,7 @@ import { PriceStep } from '../components/ProductPriceChange'
 import { ProductVariantsTable } from '../components/ProductVariantsTable'
 import { ShopFieldsTables } from '../components/ShopFieldsTables'
 import { SupplierSpecialBadge } from '../components/SupplierSpecialBadge'
+import { SupplierSpecialPanel } from '../components/SupplierSpecialPanel'
 import { SUPPLIER_SPECIAL_INFERENCE_NOTE, supplierSpecialSummary } from '../lib/supplierSpecial'
 import {
   api,
@@ -761,6 +762,7 @@ export function ProductDetail() {
             Upust:{' '}
             <b>{p.discount_percent != null && p.discount_percent !== '' ? `${p.discount_percent}%` : '—'}</b>
           </div>
+          <SupplierSpecialPanel product={p} className="sm:col-span-3" />
         </div>
       )}
       {(p.source_prices?.length ?? 0) > 0 && (
