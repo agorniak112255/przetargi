@@ -308,6 +308,8 @@ export type Product = {
   shop_fields?: ProductShopCardSource[]
   /** Lista produktów: karta ma wiersze ze sklepu dostawcy (sama flaga; treść dopiero w karcie szczegółów). */
   has_shop_fields?: boolean
+  /** Lista produktów: ocena ceny konta B2B z karty względem cennika bazowego dostawcy; null = brak oceny. */
+  supplier_special?: SupplierSpecial | null
   special_prices?: Array<{
     id: number
     client_id: number | null
@@ -353,6 +355,28 @@ export type ProductSourcePrice = {
   checked_at: string | null
   migrated: boolean
   is_effective: boolean
+  /** Cena z cennika bazowego dostawcy (np. xlsx UVEX) — obok ceny konta, catalog_price_net bez zmian. */
+  base_price_net?: string | null
+  /** Arkusz cennika bazowego (np. „Hełmy”) — po nim dobierany rabat standardowy. */
+  base_price_category?: string | null
+  base_price_code?: string | null
+  /** Pochodzenie ceny bazowej: plik · arkusz · pozycja · data pobrania. */
+  base_price_source?: string | null
+  /** Rabat standardowy kategorii z reguł konta; null = brak reguły dla arkusza. */
+  standard_discount_percent?: string | null
+  supplier_special?: SupplierSpecial | null
+}
+
+/**
+ * Ocena ceny konta B2B: special = niższa niż cennik bazowy × (1 − rabat standardowy).
+ * Wniosek z porównania, nie potwierdzenie dostawcy. Kwoty w walucie slotu ceny.
+ */
+export type SupplierSpecial = {
+  status: 'special' | 'standard' | 'worse_than_standard'
+  standard_price: number
+  actual_discount_percent: number
+  /** O ile cena konta jest niższa od standardowej; ujemne = wyższa. */
+  saving_net: number
 }
 
 /** Jeden wiersz tabelki z karty wyrobu u dostawcy, dosłownie ze sklepu. */

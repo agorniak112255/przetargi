@@ -573,6 +573,9 @@ final class B2bCatalogSync
             'discount_percent' => $price->discountPercent,
             'currency' => $price->currency,
         ];
+        // cennik bazowy dostawcy (B2bStandardDiscountSite) tylko do slotu konta — poza $prices, bo te idą na nową
+        // kartę, do detectPriceChange/summarizeUpdate i do historii cen, a cena bazowa nie jest ceną karty
+        $baseSlot = $price === null ? [] : $this->baseSlotValues($connector, $remote);
         $slotKey = ProductSourcePrice::b2bKey((int) $account->id);
         // błąd pobrania opisu nie wstrzymuje ceny: opis zostaje bez zmian, ostrzeżenie w dzienniku przebiegu
         $warnings = [];
@@ -633,7 +636,7 @@ final class B2bCatalogSync
         // z nowym opisem i powiązanie ze starym description_hash, a taka karta wygląda jak ręcznie zmieniona
         // — kolejne przebiegi nie ruszałyby już jej opisu (16.09.2026: 214 kart UVEX po błędzie pamięci podręcznej).
         [$product, $savedLink] = DB::transaction(function () use (
-            $account, $connector, $remote, $existing, $payload, $prices, $slotKey, $priceChange, $priceListId,
+            $account, $connector, $remote, $existing, $payload, $prices, $baseSlot, $slotKey, $priceChange, $priceListId,
             $runId, $dirty, $members, $memberLinks, $descriptionHash, $sourceTextTaken, $contentOnly, &$claimed, &$warnings,
         ): array {
             if ($existing !== null) {
@@ -654,6 +657,7 @@ final class B2bCatalogSync
                 // zapis slotu także bez zmiany ceny — checked_at wyznacza najświeższe konto przy kilku kontach
                 $slot = $this->effectivePrices->saveSlot($product, $slotKey, [
                     ...$prices,
+                    ...$baseSlot,
                     'b2b_account_id' => $account->id,
                     // null = źródło nie podaje dostępności — zapisana wartość zostaje
                     ...($remote->availability !== null ? ['availability' => $remote->availability] : []),
@@ -765,6 +769,31 @@ final class B2bCatalogSync
             'image_error' => $imageError,
             'translation_queued' => $translationQueued,
             'warnings' => $warnings,
+        ];
+    }
+
+    /**
+     * Pola cennika bazowego do slotu konta (App\Support\SupplierSpecialPrice). Cennik niewczytany w tym przebiegu
+     * = [] — slot zachowuje wartości z poprzedniego przebiegu (błąd pobrania pliku to nie „karty już nie ma
+     * w cenniku”). Wczytany, a karty w nim nie ma = wszystkie pola null, żeby stara cena bazowa nie udawała
+     * aktualnej.
+     *
+     * @return array<string, mixed>
+     */
+    private function baseSlotValues(B2bConnector $connector, B2bRemoteProduct $remote): array
+    {
+        if (! $connector instanceof B2bStandardDiscountSite || ! $connector->basePriceListLoaded()) {
+            return [];
+        }
+
+        $base = $connector->basePrice($remote);
+
+        return [
+            'base_price_net' => $base !== null ? round($base->net, 2) : null,
+            'base_price_category' => $base !== null ? mb_substr($base->category, 0, 100) : null,
+            'base_price_code' => $base !== null ? mb_substr($base->code, 0, 64) : null,
+            'base_price_source' => $base !== null ? mb_substr($base->source, 0, 255) : null,
+            'standard_discount_percent' => $base?->standardDiscountPercent,
         ];
     }
 

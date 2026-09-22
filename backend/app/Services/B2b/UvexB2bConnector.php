@@ -47,9 +47,19 @@ use RuntimeException;
  *
  * Producent — ZAŁOŻENIE (sklep nie ma pola producenta): „HECKEL” gdy kod lub nazwa zawiera heckel, „HexArmor” gdy
  * nazwa zawiera hexarmor, inaczej „UVEX” (sklep firmy UVEX; większość nazw zawiera „uvex”).
+ *
+ * Cennik bazowy (B2bStandardDiscountSite): xlsx spod odnośnika „Cennik do pobrania” na stronie startowej konta
+ * (nazwa pliku zmienia się z wydaniem cennika — szukamy po tekście odnośnika). Wczytywany raz na przebieg, po
+ * liście, przed pierwszą kartą; każdy błąd (brak odnośnika, HTTP, plik nieczytelny) to ostrzeżenie w podsumowaniu,
+ * nie przerwanie przebiegu — ceny konta nie zależą od cennika bazowego, a synchronizacja zostawia wtedy ceny
+ * bazowe z poprzedniego przebiegu. Dopasowanie kodów: UvexBasePriceList. Rabat standardowy z reguł konta
+ * (B2bDiscountRuleResolver: numer katalogowy = kod karty, kategoria = arkusz cennika, nazwa = nazwa karty).
  */
-final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
+final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource, B2bStandardDiscountSite
 {
+    /** Tekst odnośnika do cennika bazowego na stronie startowej konta (sprawdzone 22.09.2026). */
+    private const BASE_PRICE_LINK_TEXT = 'cennik do pobrania';
+
     /** Nieprzerwane pobieranie listy dłużej = błąd (przebieg bez postępu uznałby b2b:sync-due za przerwany). */
     private const LIST_BUDGET_SECONDS = 25 * 60;
 
@@ -158,9 +168,26 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     /** @var (callable(string): void)|null */
     private $listProgress = null;
 
+    /** Cennik bazowy tego przebiegu; null = niewczytany (powód w $basePriceError). */
+    private ?UvexBasePriceList $basePrices = null;
+
+    private ?string $basePriceError = null;
+
+    /**
+     * Ostatnia karta, o którą pytano basePrice() — drugie pytanie o tę samą kartę nie liczy się drugi raz
+     * w licznikach cennika ani reguł.
+     *
+     * @var array{remote_id: string, price: B2bBasePrice|null}|null
+     */
+    private ?array $lastBasePrice = null;
+
+    /**
+     * @param  B2bDiscountRuleResolver|null  $discounts  reguły rabatu standardowego konta; null = bez oceny (rabat null)
+     */
     public function __construct(
         private readonly UvexB2bClient $client,
         private readonly UvexSizeGroups $groups = new UvexSizeGroups,
+        private readonly ?B2bDiscountRuleResolver $discounts = null,
     ) {}
 
     public static function key(): string
@@ -185,7 +212,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             (string) $account->username,
             (string) $account->password,
             $delayMs,
-        ));
+        ), discounts: new B2bDiscountRuleResolver((int) $account->id));
     }
 
     public function onListProgress(callable $callback): void
@@ -222,6 +249,8 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         // generator żyje do ostatniej karty — wiersze listy (tysiące pozycji) nie są już potrzebne,
         // karty mają własne kopie kodu i nazwy
         unset($rows, $skipped);
+
+        $this->loadBasePriceList();
 
         foreach ($products as $product) {
             yield $product;
@@ -277,6 +306,98 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         }
 
         return new B2bRemotePrice(net: $cents / 100, base: null, discountPercent: 0.0, currency: 'PLN');
+    }
+
+    public function basePriceListLoaded(): bool
+    {
+        return $this->basePrices !== null;
+    }
+
+    /**
+     * Wiersz cennika bazowego dla wszystkich kodów karty (rozmiary) i rabat standardowy z reguł konta. Karta bez
+     * wiersza, z niejednoznacznym wierszem albo z arkusza pominiętego = null (brak oceny ceny, nie „standard”).
+     */
+    public function basePrice(B2bRemoteProduct $product): ?B2bBasePrice
+    {
+        if ($this->basePrices === null || ($product->raw['status'] ?? null) !== 'ok') {
+            return null;
+        }
+        if (($this->lastBasePrice['remote_id'] ?? null) === $product->remoteId) {
+            return $this->lastBasePrice['price'];
+        }
+
+        $codes = array_map(static fn (array $member): string => (string) $member['sku'], $product->members);
+        $row = $this->basePrices->match($codes !== [] ? $codes : [$product->sku]);
+        $price = null;
+        if ($row !== null) {
+            $price = new B2bBasePrice(
+                net: $row['price'],
+                category: $row['sheet'],
+                code: $row['code'],
+                source: $this->basePrices->sourceOf($row),
+                standardDiscountPercent: $this->discounts?->resolve(
+                    catalogNo: $product->sku,
+                    category: $row['sheet'],
+                    name: $product->name,
+                )?->discountPercent,
+            );
+        }
+        $this->lastBasePrice = ['remote_id' => $product->remoteId, 'price' => $price];
+
+        return $price;
+    }
+
+    /**
+     * Cennik bazowy raz na przebieg. Błąd sesji konta (B2bFatalException) przerywa przebieg jak na każdej innej
+     * stronie; każdy inny błąd zostaje w podsumowaniu, a karty idą dalej z samą ceną konta.
+     */
+    private function loadBasePriceList(): void
+    {
+        $this->basePrices = null;
+        $this->basePriceError = null;
+        $this->lastBasePrice = null;
+        try {
+            $url = self::basePriceListUrl($this->client->startPage());
+            $file = $this->client->fileBytes($url, 'cennika bazowego');
+            $this->basePrices = UvexBasePriceList::fromXlsx(
+                $file['bytes'],
+                rawurldecode(basename((string) parse_url($url, PHP_URL_PATH))),
+                now(),
+            );
+            $this->progress('Cennik bazowy UVEX: '.$this->basePrices->fileName().' ('.$this->basePrices->rowCount().' wierszy)');
+        } catch (B2bFatalException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            $this->basePriceError = $e->getMessage();
+        }
+    }
+
+    /**
+     * Adres cennika bazowego ze strony startowej: odnośnik z tekstem „Cennik do pobrania”, rozwinięty po <base href>
+     * i sprawdzony, czy prowadzi do sklepu. Brak albo kilka różnych adresów = wyjątek (nie zgadujemy, który plik).
+     */
+    public static function basePriceListUrl(string $startPage): string
+    {
+        $xpath = JspB2bClient::dom($startPage);
+        $base = self::baseUrl($xpath);
+        $urls = [];
+        foreach ($xpath->query('//a[@href]') ?: [] as $link) {
+            if (! $link instanceof DOMElement || ! str_contains(mb_strtolower(self::text($link)), self::BASE_PRICE_LINK_TEXT)) {
+                continue;
+            }
+            $url = self::fileUrl($base, $link->getAttribute('href'));
+            if ($url !== null) {
+                $urls[$url] = true;
+            }
+        }
+        if ($urls === []) {
+            throw new RuntimeException('brak odnośnika „Cennik do pobrania” do sklepu na stronie startowej konta');
+        }
+        if (count($urls) > 1) {
+            throw new RuntimeException('kilka różnych odnośników „Cennik do pobrania” na stronie startowej ('.implode(', ', array_keys($urls)).')');
+        }
+
+        return (string) array_key_first($urls);
     }
 
     /**
@@ -370,7 +491,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
      */
     public function runSummary(): array
     {
-        $lines = [];
+        $lines = $this->basePriceSummary();
         if ($this->foundByCode > 0) {
             $lines[] = 'Odnośnik ze sklepu prowadził do strony innego wyrobu, właściwą znaleziono po numerze katalogowym: '
                 .$this->foundByCode.' kart';
@@ -385,6 +506,51 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             implode('; ', array_slice($this->wrongLinks, 0, 3)),
             count($this->wrongLinks) > 3 ? '; …' : '',
         )];
+    }
+
+    /**
+     * Linie podsumowania cennika bazowego i rabatu standardowego. Liczniki trafień reguł zapisujemy tylko po
+     * wczytanym cenniku — bez niego reguł nikt nie pytał, a zera przy regułach wyglądałyby jak „reguła nic nie łapie”.
+     *
+     * @return list<string>
+     */
+    private function basePriceSummary(): array
+    {
+        if ($this->basePrices === null) {
+            return $this->basePriceError === null ? [] : [
+                'Cennik bazowy UVEX nie wczytany ('.$this->basePriceError.') — ceny bazowe kart bez zmian z poprzedniego przebiegu',
+            ];
+        }
+
+        $list = $this->basePrices;
+        $counters = $list->counters();
+        $lines = [
+            'Cennik bazowy UVEX: '.$list->fileName().' — '.$list->rowCount().' wierszy z arkuszy: '.implode(', ', $list->sheets())
+                .' (pominięte: '.implode(', ', [...UvexBasePriceList::EXCLUDED_SHEETS, ...$list->skippedSheets()]).')',
+            sprintf(
+                'Cennik bazowy: %d kart dopasowanych (w tym %d z częścią rozmiarów spoza cennika), %d kart spoza cennika, %d kart z niejednoznacznym wierszem',
+                $counters['matched'],
+                $counters['partial'],
+                $counters['missing'],
+                $counters['conflicts'],
+            ).($counters['conflict_examples'] !== [] ? ' ('.implode('; ', $counters['conflict_examples']).($counters['conflicts'] > count($counters['conflict_examples']) ? '; …' : '').')' : ''),
+        ];
+
+        if ($this->discounts === null) {
+            return $lines;
+        }
+        $this->discounts->flushCounters();
+        if (! $this->discounts->hasRules()) {
+            $lines[] = 'Konto nie ma reguł rabatu standardowego — ceny specjalne nie są oceniane. Uzupełnij rabaty w konfiguracji konta.';
+
+            return $lines;
+        }
+        $lines[] = 'Rabat standardowy: '.$this->discounts->matchedCount().' kart z pasującą regułą';
+        if ($this->discounts->missedCount() > 0) {
+            $lines[] = 'Kart w cenniku bazowym bez pasującej reguły rabatu standardowego: '.$this->discounts->missedCount().' — cena specjalna nieoceniana.';
+        }
+
+        return $lines;
     }
 
     public function hasForeignDescription(B2bRemoteProduct $product): bool

@@ -39,8 +39,13 @@ type Connector = {
   host: string
   /** Witryna publiczna (protekt.pl) nie ma konta u dostawcy — bez hasła. */
   requires_password: boolean
-  /** Ceny ze strony to ceny katalogowe; cena zakupu powstaje z rabatów zapisanych przy koncie. */
+  /** Konto ma reguły rabatu (przycisk „Rabaty”); co znaczą — w discount_rules_mode. */
   uses_discount_rules: boolean
+  /**
+   * price = ceny ze strony są katalogowe, cena zakupu powstaje z rabatów konta (protekt.pl);
+   * standard = rabat standardowy od cennika bazowego, do wykrycia ceny specjalnej B2B (UVEX).
+   */
+  discount_rules_mode?: 'price' | 'standard' | null
   /** Logowanie wymaga kodu z e-maila (3M) — harmonogram nocny się nie uda. */
   requires_login_code: boolean
 }
@@ -90,9 +95,11 @@ function formatDate(value: string | null): string {
 export function PriceListsB2b() {
   const { user } = useAuth()
   const canManage = can(user, 'b2b_accounts.manage')
-  /** Rabaty konfiguruje się tylko dla witryn, które podają samą cenę katalogową (protekt.pl). */
+  /** Rabaty: witryny z samą ceną katalogową (protekt.pl) i łączniki z cennikiem bazowym (UVEX). */
   const usesDiscountRules = (key: string | null) =>
     connectors.some((c) => c.key === key && c.uses_discount_rules)
+  const usesStandardDiscounts = (key: string | null) =>
+    connectors.some((c) => c.key === key && c.discount_rules_mode === 'standard')
 
   /**
    * Łącznik wybrany w formularzu albo wykryty z wpisanych witryn — tak samo jak na serwerze,
@@ -576,6 +583,11 @@ export function PriceListsB2b() {
                           type="button"
                           className="text-blue-700 underline"
                           onClick={() => setDiscountAccount(row)}
+                          title={
+                            usesStandardDiscounts(row.connector)
+                              ? 'Rabaty standardowe na arkusze cennika bazowego — do wykrywania ceny specjalnej B2B'
+                              : 'Rabaty od ceny katalogowej ze strony — dają cenę zakupu'
+                          }
                         >
                           Rabaty
                         </button>

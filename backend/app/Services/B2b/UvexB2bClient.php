@@ -142,6 +142,12 @@ final class UvexB2bClient
         return $this->accountPage(self::LIST_PAGE.max(1, $page), 'strona listy '.$page);
     }
 
+    /** Strona startowa zalogowanego konta — jest na niej odnośnik „Cennik do pobrania” (cennik bazowy xlsx). */
+    public function startPage(): string
+    {
+        return $this->accountPage(self::START_PAGE, 'strona startowa');
+    }
+
     /** Strona produktu (adres z listy) jako HTML zalogowanego konta. */
     public function productPage(string $url): string
     {

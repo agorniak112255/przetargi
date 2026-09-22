@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
@@ -8,6 +8,8 @@ import { PrestaKitBadge, ProductKitModal } from '../components/ProductKitModal'
 import { PriceStep } from '../components/ProductPriceChange'
 import { ProductVariantsTable } from '../components/ProductVariantsTable'
 import { ShopFieldsTables } from '../components/ShopFieldsTables'
+import { SupplierSpecialBadge } from '../components/SupplierSpecialBadge'
+import { SUPPLIER_SPECIAL_INFERENCE_NOTE, supplierSpecialSummary } from '../lib/supplierSpecial'
 import {
   api,
   B2B_DESCRIPTION_OVERWRITE_CONFIRM,
@@ -18,6 +20,7 @@ import {
   type ProductAccessory,
   type ProductKitSuggestions,
   type ProductPriceHistoryRow,
+  type ProductSourcePrice,
   type Substitute,
 } from '../lib/api'
 import {
@@ -30,6 +33,75 @@ import {
 } from '../lib/priceChange'
 
 type Detail = Product & { substitutes: Substitute[] }
+
+/**
+ * Cennik bazowy dostawcy pod ceną konta B2B: rabat standardowy, faktyczny i ocena ceny specjalnej B2B.
+ * Ocena to wniosek z porównania (dostawca potwierdza ceny specjalne mailem) — stąd zawsze pochodzenie ceny bazowej.
+ */
+function BasePriceNote({ slot }: { slot: ProductSourcePrice }) {
+  const cur = currencyLabel(slot.currency)
+  const special = slot.supplier_special ?? null
+  const hasStandard = slot.standard_discount_percent != null && slot.standard_discount_percent !== ''
+  return (
+    <div className="rounded bg-slate-50 px-2 py-1.5 text-[11px] text-slate-600">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span>
+          Cennik bazowy:{' '}
+          <b className="tabular-nums text-slate-800">
+            {formatPrice(slot.base_price_net)} {cur}
+          </b>
+          {slot.base_price_category && <> ({slot.base_price_category})</>}
+          {slot.base_price_code && <span className="text-slate-500"> · kod {slot.base_price_code}</span>}
+        </span>
+        {hasStandard ? (
+          <>
+            <span>
+              Rabat standardowy: <b className="tabular-nums">{formatPct(Number(slot.standard_discount_percent), false)}</b>
+            </span>
+            {special && (
+              <>
+                <span>
+                  Rabat faktyczny:{' '}
+                  <b className="tabular-nums">{formatPct(special.actual_discount_percent, false)}</b>
+                </span>
+                <span>
+                  Cena standardowa:{' '}
+                  <b className="tabular-nums">
+                    {formatPrice(special.standard_price)} {cur}
+                  </b>
+                </span>
+              </>
+            )}
+          </>
+        ) : (
+          <span className="text-amber-800">
+            Brak rabatu standardowego dla kategorii {slot.base_price_category ? `„${slot.base_price_category}”` : '(bez arkusza)'} —
+            ustaw w{' '}
+            <Link to="/price-lists/b2b" className="underline hover:text-amber-900">
+              Cenniki B2B → Rabaty
+            </Link>
+          </span>
+        )}
+      </div>
+      {special?.status === 'special' && (
+        <div className="mt-1 flex flex-wrap items-center gap-2" title={supplierSpecialSummary(special, slot.currency)}>
+          <SupplierSpecialBadge special={special} currency={slot.currency} />
+          <b className="tabular-nums text-emerald-800">
+            taniej o {formatPrice(special.saving_net)} {cur} od ceny standardowej
+          </b>
+          <span className="text-slate-500">{SUPPLIER_SPECIAL_INFERENCE_NOTE}</span>
+        </div>
+      )}
+      {special?.status === 'worse_than_standard' && (
+        <p className="mt-1 text-amber-800">
+          Cena konta powyżej ceny standardowej o {formatPrice(Math.abs(special.saving_net))} {cur} — sprawdź arkusz
+          cennika bazowego i rabat standardowy.
+        </p>
+      )}
+      {slot.base_price_source && <p className="mt-1 text-[10px] text-slate-500">Źródło: {slot.base_price_source}</p>}
+    </div>
+  )
+}
 
 /** Nagłówki kolumn cenników bywają skrótowe („ochrony”, „rozm.”) — na karcie nazywamy je po ludzku. */
 const PRICE_LIST_ATTR_LABELS: Record<string, string> = {
@@ -710,31 +782,40 @@ export function ProductDetail() {
               </thead>
               <tbody>
                 {p.source_prices!.map((s) => (
-                  <tr key={s.source_key} className="border-b">
-                    <td className="p-2" title={s.source_key}>
-                      {s.source_label}
-                      {s.migrated && <span className="ml-1 text-[11px] text-slate-400">(z historii cen)</span>}
-                    </td>
-                    <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.catalog_price_net)}</td>
-                    <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.purchase_price)}</td>
-                    <td className="whitespace-nowrap p-2 text-right tabular-nums">
-                      {s.discount_percent !== null && s.discount_percent !== ''
-                        ? formatPct(Number(s.discount_percent), false)
-                        : '—'}
-                    </td>
-                    <td className="p-2">{s.currency ?? '—'}</td>
-                    <td className="p-2">{s.availability ?? '—'}</td>
-                    <td className="whitespace-nowrap p-2 tabular-nums">
-                      {s.checked_at ? formatDateTime(s.checked_at) : '—'}
-                    </td>
-                    <td className="p-2">
-                      {s.is_effective && (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
-                          obowiązuje
-                        </span>
-                      )}
-                    </td>
-                  </tr>
+                  <Fragment key={s.source_key}>
+                    <tr className={s.base_price_net != null ? '' : 'border-b'}>
+                      <td className="p-2" title={s.source_key}>
+                        {s.source_label}
+                        {s.migrated && <span className="ml-1 text-[11px] text-slate-400">(z historii cen)</span>}
+                      </td>
+                      <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.catalog_price_net)}</td>
+                      <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.purchase_price)}</td>
+                      <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                        {s.discount_percent !== null && s.discount_percent !== ''
+                          ? formatPct(Number(s.discount_percent), false)
+                          : '—'}
+                      </td>
+                      <td className="p-2">{s.currency ?? '—'}</td>
+                      <td className="p-2">{s.availability ?? '—'}</td>
+                      <td className="whitespace-nowrap p-2 tabular-nums">
+                        {s.checked_at ? formatDateTime(s.checked_at) : '—'}
+                      </td>
+                      <td className="p-2">
+                        {s.is_effective && (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                            obowiązuje
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                    {s.base_price_net != null && (
+                      <tr className="border-b">
+                        <td colSpan={8} className="px-2 pb-2 pt-0">
+                          <BasePriceNote slot={s} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

@@ -16,6 +16,14 @@ type Rule = {
   last_matched_at: string | null
 }
 
+/** price = reguły dają cenę zakupu (protekt.pl); standard = rabat standardowy do wykrywania ceny specjalnej B2B (UVEX). */
+type RulesMode = 'price' | 'standard'
+
+/** Arkusz cennika bazowego widziany na kartach konta — podpowiedź wzorca, żeby nie zgadywać nazwy. */
+type BaseCategory = { name: string; product_count: number }
+
+type RulesResponse = { rules: Rule[]; mode?: RulesMode; categories?: BaseCategory[]; recomputed?: number }
+
 type Props = {
   account: { id: number; username: string; connector_label: string | null }
   canManage: boolean
@@ -35,6 +43,16 @@ const TYPE_LABEL: Record<MatchType, string> = {
   any: 'wszystko (łapanka)',
 }
 
+/** W trybie standard kategoria karty to nazwa arkusza cennika bazowego. */
+function fieldLabel(field: MatchField, mode: RulesMode): string {
+  return mode === 'standard' && field === 'category' ? 'arkusz cennika bazowego' : FIELD_LABEL[field]
+}
+
+/** „1 karcie”, „3 kartach” — liczba w miejscowniku. */
+function cardsLocative(n: number): string {
+  return `${n.toLocaleString('pl-PL')} ${n === 1 ? 'karcie' : 'kartach'}`
+}
+
 const EMPTY_RULE: Rule = {
   id: null,
   name: '',
@@ -52,12 +70,19 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
+  const [mode, setMode] = useState<RulesMode>('price')
+  const [categories, setCategories] = useState<BaseCategory[]>([])
+  const standard = mode === 'standard'
+  const datalistId = `b2b-base-categories-${account.id}`
 
   useEffect(() => {
     let alive = true
-    api<{ rules: Rule[] }>(`/b2b-accounts/${account.id}/discount-rules`)
+    api<RulesResponse>(`/b2b-accounts/${account.id}/discount-rules`)
       .then((r) => {
-        if (alive) setRules(r.rules)
+        if (!alive) return
+        setRules(r.rules)
+        setMode(r.mode ?? 'price')
+        setCategories(r.categories ?? [])
       })
       .catch((e: unknown) => {
         if (alive) setErr(e instanceof Error ? e.message : 'Nie udało się wczytać rabatów.')
@@ -104,12 +129,21 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
         pattern: r.match_type === 'any' ? '' : r.pattern,
         discount_percent: Number(r.discount_percent) || 0,
       }))
-      const res = await api<{ rules: Rule[] }>(`/b2b-accounts/${account.id}/discount-rules`, {
+      const res = await api<RulesResponse>(`/b2b-accounts/${account.id}/discount-rules`, {
         method: 'PUT',
         body: JSON.stringify({ rules: payload }),
       })
       setRules(res.rules)
-      setMsg('Rabaty zapisane. Obowiązują od następnego pobrania cennika.')
+      if (res.categories) setCategories(res.categories)
+      if ((res.mode ?? mode) === 'standard') {
+        setMsg(
+          res.recomputed !== undefined
+            ? `Rabaty standardowe zapisane. Przeliczono ocenę cen — rabat standardowy zmienił się na ${cardsLocative(res.recomputed)}.`
+            : 'Rabaty standardowe zapisane.',
+        )
+      } else {
+        setMsg('Rabaty zapisane. Obowiązują od następnego pobrania cennika.')
+      }
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : 'Nie udało się zapisać rabatów.')
     } finally {
@@ -133,7 +167,8 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <div className="min-w-0">
             <p className="text-sm font-semibold text-slate-900">
-              Rabaty na grupy asortymentowe — {account.connector_label ?? 'importer B2B'}
+              {standard ? 'Rabaty standardowe dostawcy' : 'Rabaty na grupy asortymentowe'} —{' '}
+              {account.connector_label ?? 'importer B2B'}
             </p>
             <p className="truncate text-xs text-slate-500">
               Konto: {account.username} · reguły sprawdzane od góry, pierwsza pasująca wygrywa
@@ -157,28 +192,99 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
             <p className="text-slate-500">Wczytywanie…</p>
           ) : (
             <>
-              <p className="mb-3 rounded bg-slate-50 px-3 py-2 text-slate-600">
-                Witryna podaje tylko cenę katalogową. Cena zakupu = cena ze strony minus rabat z tej listy.
-                Karta, do której nie pasuje żadna reguła, <b>nie zostanie zapisana</b> — znajdziesz ją wśród
-                pominiętych w logu pobierania.
-                {!hasCatchAll && rules.length > 0 && (
-                  <>
-                    {' '}
-                    Nie masz reguły „wszystko” na końcu listy, więc nowe grupy produktów u dostawcy będą
-                    pomijane, dopóki ich tu nie dopiszesz.
-                  </>
-                )}
-              </p>
+              {standard ? (
+                <div className="mb-3 space-y-1 rounded bg-slate-50 px-3 py-2 text-slate-600">
+                  <p>
+                    Reguły ustalają <b>rabat standardowy</b> dla kategorii cennika bazowego dostawcy. Kategoria to
+                    nazwa arkusza w pliku cennika bazowego (np. „Hełmy”) — wybierz ją z podpowiedzi, bo reguła
+                    „jest równe” musi mieć pełną nazwę arkusza (wielkość liter nie ma znaczenia).
+                  </p>
+                  <p>
+                    Cena konta niższa niż <b>cennik bazowy × (1 − rabat standardowy)</b> ={' '}
+                    <b className="text-emerald-800">cena specjalna B2B</b>. To wniosek z porównania — potwierdzenie
+                    ceny specjalnej dostawca wysyła mailem. Cena zakupu karty zostaje ceną konta, reguły jej nie
+                    zmieniają. Karta bez pasującej reguły jest zapisywana, tylko bez oceny ceny.
+                  </p>
+                </div>
+              ) : (
+                <p className="mb-3 rounded bg-slate-50 px-3 py-2 text-slate-600">
+                  Witryna podaje tylko cenę katalogową. Cena zakupu = cena ze strony minus rabat z tej listy.
+                  Karta, do której nie pasuje żadna reguła, <b>nie zostanie zapisana</b> — znajdziesz ją wśród
+                  pominiętych w logu pobierania.
+                  {!hasCatchAll && rules.length > 0 && (
+                    <>
+                      {' '}
+                      Nie masz reguły „wszystko” na końcu listy, więc nowe grupy produktów u dostawcy będą
+                      pomijane, dopóki ich tu nie dopiszesz.
+                    </>
+                  )}
+                </p>
+              )}
+
+              {standard && categories.length > 0 && (
+                <div className="mb-3">
+                  <p className="mb-1 text-[11px] text-slate-500">
+                    Arkusze cennika bazowego na kartach tego konta (liczba kart)
+                    {canManage ? ' — kliknij, aby dodać regułę „jest równe”:' : ':'}
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {categories.map((c) => {
+                      const covered = rules.some(
+                        (r) =>
+                          r.match_field === 'category' &&
+                          r.match_type === 'equals' &&
+                          r.pattern.trim().toLowerCase() === c.name.trim().toLowerCase(),
+                      )
+                      return (
+                        <button
+                          key={c.name}
+                          type="button"
+                          disabled={!canManage || covered}
+                          title={covered ? 'Reguła dla tego arkusza już jest na liście' : undefined}
+                          className="rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-100 disabled:cursor-default disabled:opacity-50"
+                          onClick={() => {
+                            setRules([
+                              ...rules,
+                              {
+                                ...EMPTY_RULE,
+                                name: c.name,
+                                match_field: 'category',
+                                match_type: 'equals',
+                                pattern: c.name,
+                              },
+                            ])
+                            setMsg('')
+                          }}
+                        >
+                          {c.name} <span className="text-slate-400">· {c.product_count}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <datalist id={datalistId}>
+                    {categories.map((c) => (
+                      <option key={c.name} value={c.name}>
+                        {`kart: ${c.product_count}`}
+                      </option>
+                    ))}
+                  </datalist>
+                </div>
+              )}
 
               <table className="w-full table-fixed border-separate border-spacing-y-1">
                 <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
                   <tr>
                     <th className="w-8" />
                     <th className="px-2">Grupa</th>
-                    <th className="w-28 px-2">Pole</th>
+                    <th className={`${standard ? 'w-44' : 'w-28'} px-2`}>Pole</th>
                     <th className="w-32 px-2">Dopasowanie</th>
                     <th className="w-40 px-2">Wzorzec</th>
-                    <th className="w-20 px-2 text-right">Upust %</th>
+                    <th
+                      className={`${standard ? 'w-24' : 'w-20'} px-2 text-right`}
+                      title={standard ? 'Rabat standardowy od ceny z cennika bazowego' : undefined}
+                    >
+                      {standard ? 'Rabat std. %' : 'Upust %'}
+                    </th>
                     <th className="w-24 px-2 text-right">Kart</th>
                     <th className="w-16" />
                   </tr>
@@ -204,7 +310,7 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
                         >
                           {(Object.keys(FIELD_LABEL) as MatchField[]).map((f) => (
                             <option key={f} value={f}>
-                              {FIELD_LABEL[f]}
+                              {fieldLabel(f, mode)}
                             </option>
                           ))}
                         </select>
@@ -228,7 +334,14 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
                           className="w-full rounded border border-slate-300 px-2 py-1 disabled:bg-slate-100"
                           value={rule.match_type === 'any' ? '' : rule.pattern}
                           disabled={!canManage || rule.match_type === 'any'}
-                          placeholder={rule.match_type === 'any' ? 'nie dotyczy' : 'np. BW'}
+                          list={standard && rule.match_field === 'category' ? datalistId : undefined}
+                          placeholder={
+                            rule.match_type === 'any'
+                              ? 'nie dotyczy'
+                              : standard && rule.match_field === 'category'
+                                ? 'nazwa arkusza'
+                                : 'np. BW'
+                          }
                           onChange={(e) => patch(index, { pattern: e.target.value })}
                         />
                       </td>
@@ -300,7 +413,9 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
                   {rules.length === 0 && (
                     <tr>
                       <td colSpan={8} className="px-2 py-3 text-slate-500">
-                        Brak reguł. Dopóki ich nie dodasz, pobieranie cennika pominie wszystkie karty.
+                        {standard
+                          ? 'Brak reguł. Dopóki ich nie dodasz, karty tego konta nie mają oceny ceny specjalnej B2B.'
+                          : 'Brak reguł. Dopóki ich nie dodasz, pobieranie cennika pominie wszystkie karty.'}
                       </td>
                     </tr>
                   )}
@@ -316,7 +431,10 @@ export function B2bDiscountRulesModal({ account, canManage, onClose }: Props) {
               type="button"
               className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
               onClick={() => {
-                setRules([...rules, { ...EMPTY_RULE }])
+                setRules([
+                  ...rules,
+                  standard ? { ...EMPTY_RULE, match_field: 'category', match_type: 'equals' } : { ...EMPTY_RULE },
+                ])
                 setMsg('')
               }}
             >

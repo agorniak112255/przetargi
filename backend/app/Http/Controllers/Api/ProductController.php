@@ -30,6 +30,8 @@ use App\Support\ManufacturerNormFacts;
 use App\Support\ProductModelFuzzy;
 use App\Support\ProductPriceChangeResolver;
 use App\Support\ProductVariantPresenter;
+use App\Support\SupplierSpecialPrice;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Throwable;
@@ -267,7 +269,14 @@ class ProductController extends Controller
         $variantSummaries = $this->variants->listSummaries($pageIds);
         // opis z cennika B2B (status AI „Z B2B”, bez zbiorczego nadpisywania) — dwa zapytania na stronę
         $fromB2b = app(B2bDescriptionSource::class)->productIds($pageIds);
-        $page->getCollection()->transform(static function (array $row) use ($changes, $variantSummaries, $fromB2b): array {
+        // cena specjalna dostawcy przy cenie karty (lista i ProductSearchSelect) — jedno zapytanie na stronę
+        $evaluable = $this->evaluableSlotsByProduct($pageIds);
+        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $evaluable): array {
+            $row['supplier_special'] = $this->cardSupplierSpecial(
+                $row['purchase_price'] ?? null,
+                $row['currency'] ?? null,
+                $evaluable[(int) $row['id']] ?? [],
+            );
             $row['last_price_change'] = $changes[(int) $row['id']] ?? null;
             $row['description_from_b2b'] = isset($fromB2b[(int) $row['id']]);
             $summary = $variantSummaries[(int) $row['id']] ?? null;
@@ -412,7 +421,13 @@ class ProductController extends Controller
         $payload['price_history_latest_at'] = $latest?->created_at;
         $payload['last_price_change'] = $this->priceChanges->latestChanges([(int) $product->id])[(int) $product->id] ?? null;
         $payload['variants'] = $this->variants->forProduct((int) $product->id);
-        $payload['source_prices'] = $this->sourcePricesPayload($product);
+        $slots = ProductSourcePrice::query()
+            ->with(['account:id,connector,sites', 'priceList:id,manufacturer,version'])
+            ->where('product_id', $product->id)
+            ->get();
+        $payload['source_prices'] = $this->sourcePricesPayload($product, $slots);
+        // ta sama reguła co na liście: ocena tylko dla slotu, którego cena jest ceną karty
+        $payload['supplier_special'] = $this->cardSupplierSpecial($product->purchase_price, $product->currency, $slots);
         // relacja doładowana tylko po to, by zbudować shop_fields — surowe wiersze nie mają być w odpowiedzi dwa razy
         unset($payload['shop_cards']);
         $payload['shop_fields'] = $this->shopFieldsPayload($product);
@@ -501,14 +516,11 @@ class ProductController extends Controller
      * Ceny karty osobno dla każdego źródła (product_source_prices). Kolejność: slot, z którego pochodzi cena karty,
      * potem konta B2B (najświeżej sprawdzone wyżej), na końcu cennik z pliku. Etykieta konta bez loginu i hasła.
      *
+     * @param  Collection<int, ProductSourcePrice>  $slots  sloty karty z account i priceList
      * @return list<array<string, mixed>>
      */
-    private function sourcePricesPayload(Product $product): array
+    private function sourcePricesPayload(Product $product, Collection $slots): array
     {
-        $slots = ProductSourcePrice::query()
-            ->with(['account:id,connector,sites', 'priceList:id,manufacturer,version'])
-            ->where('product_id', $product->id)
-            ->get();
         if ($slots->isEmpty()) {
             return [];
         }
@@ -528,6 +540,15 @@ class ProductController extends Controller
                 'catalog_price_net' => $slot->catalog_price_net,
                 'purchase_price' => $slot->purchase_price,
                 'discount_percent' => $slot->discount_percent,
+                // cennik bazowy dostawcy (UVEX) dosłownie ze slotu — podstawa oceny supplier_special
+                'base_price_net' => $slot->base_price_net,
+                'base_price_category' => $slot->base_price_category,
+                'base_price_code' => $slot->base_price_code,
+                'base_price_source' => $slot->base_price_source,
+                'standard_discount_percent' => $slot->standard_discount_percent,
+                // cena specjalna dostawcy (wniosek z porównania); null = brak ceny bazowej albo reguły rabatu.
+                // Nie mylić z special_prices — to ceny kontraktowe klientów.
+                'supplier_special' => SupplierSpecialPrice::forSlot($slot),
                 'currency' => $slot->currency,
                 'availability' => $slot->availability,
                 'checked_at' => $slot->checked_at?->toISOString(),
@@ -536,6 +557,68 @@ class ProductController extends Controller
             ])
             ->values()
             ->all();
+    }
+
+    /**
+     * Ocena ceny specjalnej dla ceny widocznej na karcie: slot B2B z oceną, którego cena zakupu i waluta są
+     * dokładnie ceną karty. Gdy cenę karty ustala inne źródło (plik, inne konto) albo wersje, znacznik przy cenie
+     * karty byłby nieprawdą o cenie, której użytkownik nie widzi — wtedy null. Przy kilku pasujących slotach
+     * wygrywa najświeżej sprawdzony, jak w ProductEffectivePrice.
+     *
+     * @param  iterable<ProductSourcePrice>  $slots  sloty karty (dowolne — filtr tutaj)
+     * @return array{status: string, standard_price: float, actual_discount_percent: float, saving_net: float}|null
+     */
+    private function cardSupplierSpecial(mixed $cardPurchase, mixed $cardCurrency, iterable $slots): ?array
+    {
+        if ($cardPurchase === null || $cardPurchase === '') {
+            return null;
+        }
+        $price = round((float) $cardPurchase, 2);
+        $currency = strtoupper(trim((string) $cardCurrency));
+
+        $best = null;
+        foreach ($slots as $slot) {
+            // tylko sloty z oceną — jak na liście (evaluableSlotsByProduct); inaczej świeższy slot innego konta
+            // o tej samej cenie zasłaniałby w szczegółach ocenę, którą lista pokazuje
+            if (! $slot->isB2b() || $slot->purchase_price === null || $slot->base_price_net === null || $slot->standard_discount_percent === null) {
+                continue;
+            }
+            // slot bez waluty dziedziczy walutę karty (ProductEffectivePrice::resolve)
+            $slotCurrency = $slot->currency !== null ? strtoupper(trim((string) $slot->currency)) : $currency;
+            if ($slotCurrency !== $currency || round((float) $slot->purchase_price, 2) !== $price) {
+                continue;
+            }
+            if ($best === null || ($slot->checked_at?->getTimestamp() ?? 0) > ($best->checked_at?->getTimestamp() ?? 0)) {
+                $best = $slot;
+            }
+        }
+
+        return $best !== null ? SupplierSpecialPrice::forSlot($best) : null;
+    }
+
+    /**
+     * supplier_special dla strony listy — jedno zapytanie na 1000 kart, tylko sloty z oceną (cena bazowa
+     * i rabat standardowy), więc przy per_page=all nie ciągniemy wszystkich slotów katalogu.
+     *
+     * @param  list<int>  $productIds
+     * @return array<int, list<ProductSourcePrice>> product_id => sloty
+     */
+    private function evaluableSlotsByProduct(array $productIds): array
+    {
+        $out = [];
+        foreach (array_chunk($productIds, 1000) as $chunk) {
+            $slots = ProductSourcePrice::query()
+                ->whereIn('product_id', $chunk)
+                ->where('source_key', 'like', 'b2b:%')
+                ->whereNotNull('base_price_net')
+                ->whereNotNull('standard_discount_percent')
+                ->get(['id', 'product_id', 'source_key', 'purchase_price', 'currency', 'base_price_net', 'standard_discount_percent', 'checked_at']);
+            foreach ($slots as $slot) {
+                $out[(int) $slot->product_id][] = $slot;
+            }
+        }
+
+        return $out;
     }
 
     private function sourcePriceLabel(ProductSourcePrice $slot): string

@@ -6,10 +6,12 @@ namespace Tests\Feature;
 
 use App\Jobs\TranslateB2bProductTextJob;
 use App\Models\B2bAccount;
+use App\Models\B2bDiscountRule;
 use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
@@ -26,6 +28,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Tests\TestCase;
+use Tests\Unit\UvexBasePriceListTest;
 
 /**
  * Łącznik izam.system-b2b.pl (UVEX) na atrapie sklepu (Http::fake, bez prawdziwego logowania). Znaczniki listy, wiersza
@@ -39,6 +42,9 @@ final class UvexConnectorTest extends TestCase
 
     /** 1×1 PNG */
     private const PNG = "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82";
+
+    /** Strona startowa atrapy bez odnośnika do cennika bazowego — podsumowanie przebiegu to zgłasza. */
+    private const NO_PRICE_LIST_LINE = 'Cennik bazowy UVEX nie wczytany (brak odnośnika „Cennik do pobrania” do sklepu na stronie startowej konta) — ceny bazowe kart bez zmian z poprzedniego przebiegu';
 
     private const IMG_9970 = 'https://izam.system-b2b.pl/public/get-preview/product_images/40/408ACDA208BDCAB5C69A726ED5D5F989AECA8874FF618C9D87E81DE857F63480.jpg';
 
@@ -94,6 +100,14 @@ final class UvexConnectorTest extends TestCase
 
     /** @var list<int> */
     private array $sleeps = [];
+
+    /** HTML dopisany do strony startowej konta (np. odnośnik „Cennik do pobrania”). */
+    private string $startPageExtra = '';
+
+    /** Bajty cennika bazowego spod odnośnika; null = sklep odpowiada błędem 500. */
+    private ?string $priceListXlsx = null;
+
+    private int $priceListHits = 0;
 
     protected function setUp(): void
     {
@@ -674,7 +688,7 @@ final class UvexConnectorTest extends TestCase
         $this->assertStringContainsString('Opis ze strony producenta (www.uvex-laservision.de):', $description);
         $this->assertTrue($connector->hasForeignDescription($product));
         $this->assertSame(
-            ['Odnośnik ze sklepu prowadził do strony innego wyrobu, właściwą znaleziono po numerze katalogowym: 1 kart'],
+            [self::NO_PRICE_LIST_LINE, 'Odnośnik ze sklepu prowadził do strony innego wyrobu, właściwą znaleziono po numerze katalogowym: 1 kart'],
             $connector->runSummary(),
         );
     }
@@ -694,7 +708,7 @@ final class UvexConnectorTest extends TestCase
         $this->assertSame([], $this->manufacturerHits, 'strony innego wyrobu nie pobieramy');
         $this->assertFalse($connector->hasForeignDescription($product));
         $this->assertSame(
-            ['Odnośnik ze sklepu prowadził do strony innego wyrobu — opisu nie pobrano dla 1 kart (9970.005 → 000P1P102001)'],
+            [self::NO_PRICE_LIST_LINE, 'Odnośnik ze sklepu prowadził do strony innego wyrobu — opisu nie pobrano dla 1 kart (9970.005 → 000P1P102001)'],
             $connector->runSummary(),
         );
     }
@@ -1115,6 +1129,158 @@ final class UvexConnectorTest extends TestCase
             .'</body></html>';
     }
 
+    public function test_price_list_link_is_found_by_its_text_and_resolved_against_the_shop(): void
+    {
+        $html = '<html><head><base href="https://izam.system-b2b.pl/public/"></head><body>'
+            .'<a href="https://izam.system-b2b.pl/public/logout">Wyloguj</a>'
+            .'<a href="assets/resources/products/2180/cenniki%20USPL%20od%201%20X%2025%20ver.2.xlsx"> Cennik  do pobrania </a>'
+            .'</body></html>';
+
+        $this->assertSame(
+            'https://izam.system-b2b.pl/public/assets/resources/products/2180/cenniki%20USPL%20od%201%20X%2025%20ver.2.xlsx',
+            UvexB2bConnector::basePriceListUrl($html),
+        );
+
+        $this->expectException(RuntimeException::class);
+        UvexB2bConnector::basePriceListUrl('<a href="https://example.com/cennik.xlsx">Cennik do pobrania</a>');
+    }
+
+    public function test_missing_price_list_link_leaves_base_prices_unloaded_and_the_sync_goes_on(): void
+    {
+        Storage::fake('public');
+        $this->fakeSite();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame(7, $result['created']);
+        $this->assertSame(0, $this->priceListHits);
+        $this->assertFalse(ProductSourcePrice::query()->whereNotNull('base_price_net')->exists());
+        $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
+        $this->assertContains(self::NO_PRICE_LIST_LINE, $log);
+    }
+
+    public function test_sync_stores_the_base_price_and_standard_discount_in_the_account_slot_only(): void
+    {
+        Storage::fake('public');
+        $this->withPriceList($this->priceListSheets());
+        $account = $this->account();
+        B2bDiscountRule::query()->create([
+            'b2b_account_id' => $account->id, 'position' => 1, 'name' => 'Heckel',
+            'match_field' => B2bDiscountRule::FIELD_CATEGORY, 'match_type' => B2bDiscountRule::TYPE_EQUALS,
+            'pattern' => 'Buty Heckel', 'discount_percent' => 15,
+        ]);
+        $any = B2bDiscountRule::query()->create([
+            'b2b_account_id' => $account->id, 'position' => 2, 'name' => 'Reszta',
+            'match_field' => B2bDiscountRule::FIELD_CATALOG_NO, 'match_type' => B2bDiscountRule::TYPE_ANY,
+            'pattern' => '', 'discount_percent' => 10,
+        ]);
+
+        $result = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
+
+        $this->assertSame(7, $result['created']);
+        // nowa karta (grupa rozmiarów, reguła butów) — slot z ceną bazową, karta z ceną konta
+        $shoes = Product::query()->where('sku', '8430/2/39')->sole();
+        $this->assertSame('226.80', $shoes->catalog_price_net);
+        $this->assertSame([
+            'base_price_net' => '300.00',
+            'base_price_category' => 'Buty Uvex',
+            'base_price_code' => '84302',
+            'base_price_source' => 'cennik UVEX 2026.xlsx · arkusz Buty Uvex · Półbuty uvex 1 business · pobrano '.now()->format('Y-m-d'),
+            'standard_discount_percent' => '10.00',
+        ], $this->baseFields($shoes));
+        // Heckel: seria + model, cena z długim ułamkiem zaokrąglona, reguła kategorii przed łapanką
+        $heckel = $this->baseFields(Product::query()->where('sku', 'HECKEL6273/3/36')->sole());
+        $this->assertSame(['255.31', 'Buty Heckel', '62733', '15.00'], [$heckel['base_price_net'], $heckel['base_price_category'], $heckel['base_price_code'], $heckel['standard_discount_percent']]);
+        // HexArmor po modelu w nazwie wiersza
+        $this->assertSame('60201', $this->baseFields(Product::query()->where('sku', 'HA2023(L)')->sole())['base_price_code']);
+        // arkusz „Odzież” pominięty, choć łapanka pasowałaby do wszystkiego
+        $this->assertSame(
+            ['base_price_net' => null, 'base_price_category' => null, 'base_price_code' => null, 'base_price_source' => null, 'standard_discount_percent' => null],
+            $this->baseFields(Product::query()->where('sku', '000P1D011003')->sole()),
+        );
+        // historia cen: jeden wpis na nową kartę — cena bazowa nie jest ceną karty
+        $this->assertSame(7, ProductPriceHistory::query()->count());
+        $this->assertFalse(ProductPriceHistory::query()->where('catalog_price_net', '300.00')->exists());
+
+        $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
+        $this->assertContains('Cennik bazowy: 6 kart dopasowanych (w tym 0 z częścią rozmiarów spoza cennika), 1 kart spoza cennika, 0 kart z niejednoznacznym wierszem', $log);
+        $this->assertContains('Rabat standardowy: 6 kart z pasującą regułą', $log);
+        $this->assertSame(5, (int) $any->fresh()->last_matched_count);
+    }
+
+    public function test_failed_price_list_keeps_previous_base_prices_and_a_card_gone_from_the_list_loses_them(): void
+    {
+        Storage::fake('public');
+        $this->withPriceList($this->priceListSheets());
+        $account = $this->account();
+        app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
+        $shoes = Product::query()->where('sku', '8430/2/39')->sole();
+        $before = $this->baseFields($shoes);
+        $history = ProductPriceHistory::query()->count();
+
+        // plik nie do pobrania — ceny bazowe z poprzedniego przebiegu zostają
+        $this->priceListXlsx = null;
+        $result = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
+        $this->assertSame(0, $result['created']);
+        $this->assertSame($before, $this->baseFields($shoes->fresh()));
+        $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
+        $this->assertContains('Cennik bazowy UVEX nie wczytany (izam.system-b2b.pl odpowiedziało HTTP 500) — ceny bazowe kart bez zmian z poprzedniego przebiegu', $log);
+
+        // plik wczytany, ale bez wiersza butów — karta traci cenę bazową, inne ją zachowują
+        $sheets = $this->priceListSheets();
+        $sheets['Buty Uvex'] = array_values(array_filter($sheets['Buty Uvex'], static fn (array $row): bool => $row[0] !== 84302));
+        $this->priceListXlsx = UvexBasePriceListTest::workbook($sheets);
+        app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
+        $this->assertNull($this->baseFields($shoes->fresh())['base_price_net']);
+        $this->assertSame('62733', $this->baseFields(Product::query()->where('sku', 'HECKEL6273/3/36')->sole())['base_price_code']);
+
+        // ceny konta bez zmian — zmiana ceny bazowej nie dopisuje historii cen
+        $this->assertSame($history, ProductPriceHistory::query()->count());
+    }
+
+    /**
+     * @param  array<string, list<list<mixed>>>  $sheets
+     */
+    private function withPriceList(array $sheets): void
+    {
+        $this->startPageExtra = '<a href="https://izam.system-b2b.pl/public/assets/resources/products/2180/cennik%20UVEX%202026.xlsx">Cennik do pobrania</a>';
+        $this->priceListXlsx = UvexBasePriceListTest::workbook($sheets);
+        $this->fakeSite();
+    }
+
+    /**
+     * Cennik bazowy dla pozycji z setUp(): buty po „NNNN/D”, Heckel, HexArmor po modelu, pojemnik dokładnie po
+     * kodzie; szyba lasera tylko w „Odzież” (arkusz pominięty).
+     *
+     * @return array<string, list<list<mixed>>>
+     */
+    private function priceListSheets(): array
+    {
+        $header = ['Kod', 'Nazwa', 'CENA KATALOGOWA'];
+
+        return [
+            'Ogólne' => [],
+            'Ochrona wzroku' => [$header, ['9970005', 'Stacja czyszcząca uvex', 200]],
+            'Rękawice HEXArmor' => [$header, [60201, 'HexArmor Rig Lizard® Arctic 2023', 222]],
+            'Buty Heckel' => [['Kod', 'Seria', 'Model', 'KATALOG'], [62733, 'Suxxeed Offroad', 'SUXXEED OFFROAD HIGH S3', 255.30601]],
+            'Buty Uvex' => [$header, [84302, 'Półbuty uvex 1 business', 300], [69352, 'Trzewik uvex 2 trend', 420]],
+            'Odzież' => [$header, ['000P1D011003', 'Szyba', 999]],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function baseFields(Product $product): array
+    {
+        $slot = ProductSourcePrice::query()
+            ->where('product_id', $product->id)
+            ->where('source_key', ProductSourcePrice::b2bKey((int) $this->account()->id))
+            ->sole();
+
+        return $slot->only(['base_price_net', 'base_price_category', 'base_price_code', 'base_price_source', 'standard_discount_percent']);
+    }
+
     private function client(): UvexB2bClient
     {
         return new UvexB2bClient('K123', 'jan', 'dobre-haslo', 0, function (int $ms): void {
@@ -1217,7 +1383,17 @@ final class UvexConnectorTest extends TestCase
                 ]);
             }
             if ($path === '/public/start') {
-                return $loggedIn ? Http::response(strtr($this->fixture('list_page.html'), ['{{ROWS}}' => '', '{{INFO}}' => ''])) : $toLogin;
+                return $loggedIn ? Http::response(strtr($this->fixture('list_page.html'), ['{{ROWS}}' => '', '{{INFO}}' => $this->startPageExtra])) : $toLogin;
+            }
+            if (str_starts_with($path, '/public/assets/resources/products/') && str_ends_with($path, '.xlsx')) {
+                if (! $loggedIn) {
+                    return $toLogin;
+                }
+                $this->priceListHits++;
+
+                return $this->priceListXlsx === null
+                    ? Http::response('błąd serwera', 500)
+                    : Http::response($this->priceListXlsx, 200, ['Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']);
             }
             if ($path === '/public/product' || str_starts_with($path, '/public/product-details/')) {
                 if ($this->dropSessionOnce) {

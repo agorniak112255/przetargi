@@ -25,6 +25,12 @@ class ProductSourcePrice extends Model
         'catalog_price_net',
         'purchase_price',
         'discount_percent',
+        // cennik bazowy dostawcy obok ceny konta (App\Support\SupplierSpecialPrice); catalog_price_net bez zmian
+        'base_price_net',
+        'base_price_category',
+        'base_price_code',
+        'base_price_source',
+        'standard_discount_percent',
         'currency',
         'pack_qty',
         // dostępność u dostawcy dosłownie ze źródła (tylko sloty B2B; null = źródło jej nie podaje)
@@ -39,6 +45,8 @@ class ProductSourcePrice extends Model
             'catalog_price_net' => 'decimal:2',
             'purchase_price' => 'decimal:2',
             'discount_percent' => 'decimal:2',
+            'base_price_net' => 'decimal:2',
+            'standard_discount_percent' => 'decimal:2',
             'pack_qty' => 'integer',
             'checked_at' => 'datetime',
             'migrated' => 'boolean',

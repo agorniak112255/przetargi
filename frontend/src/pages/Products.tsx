@@ -7,6 +7,7 @@ import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductAiSearchModal } from '../components/ProductAiSearchModal'
 import { PriceChangeNote } from '../components/ProductPriceChange'
+import { SupplierSpecialBadge } from '../components/SupplierSpecialBadge'
 import { variantsFromLabel } from '../lib/priceChange'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { clampAiConcurrency, clampEnrichmentBatchLimit } from '../lib/aiConcurrency'
@@ -1219,6 +1220,7 @@ export function Products() {
                           </span>
                         )}
                         {p.last_price_change && <PriceChangeNote change={p.last_price_change} currency={p.currency} />}
+                        <SupplierSpecialBadge special={p.supplier_special} currency={p.currency} className="mt-0.5" block />
                       </>
                     )}
                   </td>

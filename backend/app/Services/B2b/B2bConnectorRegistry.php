@@ -35,28 +35,72 @@ class B2bConnectorRegistry
         MmmB2bConnector::class,
     ];
 
+    /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */
+    public const DISCOUNT_RULES_PRICE = 'price';
+
     /**
-     * @return list<array{key: string, label: string, host: string, requires_password: bool, uses_discount_rules: bool, requires_login_code: bool}>
+     * Reguły rabatu konta to rabat standardowy dostawcy (UVEX): cena konta porównana z cennikiem bazowym
+     * pokazuje cenę specjalną, a cena zakupu zostaje ceną konta.
+     */
+    public const DISCOUNT_RULES_STANDARD = 'standard';
+
+    /**
+     * @return list<array{key: string, label: string, host: string, requires_password: bool, uses_discount_rules: bool, discount_rules_mode: 'price'|'standard'|null, requires_login_code: bool}>
      */
     public function options(): array
     {
         return array_map(
-            static fn (string $class): array => [
-                'key' => $class::key(),
-                'label' => $class::label(),
-                'host' => $class::host(),
-                // Witryna publiczna (protekt.pl) nie ma konta u dostawcy — formularz ukrywa pole hasła,
-                // a cena zakupu powstaje z ceny katalogowej i rabatów zapisanych przy koncie.
-                'requires_password' => ! is_a($class, B2bPublicSite::class, true),
-                // Łącznik treści (artra.pl) żadnej ceny nie pobiera, więc rabat nie ma od czego liczyć —
-                // formularz nie ma po co pytać o reguły rabatowe.
-                'uses_discount_rules' => is_a($class, B2bPublicSite::class, true)
-                    && ! is_a($class, B2bContentOnlySite::class, true),
-                // Witryna z kodem jednorazowym z e-maila (3M) — panel pokazuje „Zaloguj kodem” przy koncie.
-                'requires_login_code' => is_a($class, B2bCodeLoginSite::class, true),
-            ],
+            static function (string $class): array {
+                $mode = self::modeForClass($class);
+
+                return [
+                    'key' => $class::key(),
+                    'label' => $class::label(),
+                    'host' => $class::host(),
+                    // Witryna publiczna (protekt.pl) nie ma konta u dostawcy — formularz ukrywa pole hasła,
+                    // a cena zakupu powstaje z ceny katalogowej i rabatów zapisanych przy koncie.
+                    'requires_password' => ! is_a($class, B2bPublicSite::class, true),
+                    // Łącznik treści (artra.pl) żadnej ceny nie pobiera, więc rabat nie ma od czego liczyć —
+                    // formularz nie ma po co pytać o reguły rabatowe.
+                    'uses_discount_rules' => $mode !== null,
+                    // To samo pole reguł, dwa znaczenia — panel musi opisać, co wpisany rabat zmieni.
+                    'discount_rules_mode' => $mode,
+                    // Witryna z kodem jednorazowym z e-maila (3M) — panel pokazuje „Zaloguj kodem” przy koncie.
+                    'requires_login_code' => is_a($class, B2bCodeLoginSite::class, true),
+                ];
+            },
             self::CONNECTORS,
         );
+    }
+
+    /**
+     * Znaczenie reguł rabatu konta dla łącznika: DISCOUNT_RULES_PRICE, DISCOUNT_RULES_STANDARD albo null
+     * (łącznik reguł nie używa, także nieznany klucz).
+     *
+     * @return 'price'|'standard'|null
+     */
+    public function discountRulesMode(?string $key): ?string
+    {
+        $class = $key !== null ? $this->classFor($key) : null;
+
+        return $class !== null ? self::modeForClass($class) : null;
+    }
+
+    /** Czy reguły rabatu konta znaczą rabat standardowy dostawcy (B2bStandardDiscountSite, UVEX). */
+    public function usesStandardDiscounts(?string $key): bool
+    {
+        return $this->discountRulesMode($key) === self::DISCOUNT_RULES_STANDARD;
+    }
+
+    /**
+     * Klucz łącznika konta: zapisany przy koncie, a przy starszych kontach bez niego — z witryn.
+     * To samo rozstrzygnięcie co w make().
+     */
+    public function keyForAccount(B2bAccount $account): ?string
+    {
+        $key = trim((string) $account->connector);
+
+        return $key !== '' ? $key : $this->keyForSites($account->sites ?? []);
     }
 
     /**
@@ -126,6 +170,22 @@ class B2bConnectorRegistry
         }
 
         return $class::forAccount($account, $delayMs);
+    }
+
+    /**
+     * @param  class-string<B2bConnector>  $class
+     * @return 'price'|'standard'|null
+     */
+    private static function modeForClass(string $class): ?string
+    {
+        if (is_a($class, B2bStandardDiscountSite::class, true)) {
+            return self::DISCOUNT_RULES_STANDARD;
+        }
+        if (is_a($class, B2bPublicSite::class, true) && ! is_a($class, B2bContentOnlySite::class, true)) {
+            return self::DISCOUNT_RULES_PRICE;
+        }
+
+        return null;
     }
 
     /**
