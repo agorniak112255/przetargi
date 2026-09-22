@@ -1195,6 +1195,28 @@ final class PpeAssortment
 
         $fromName = $this->family((string) $product->name);
         $stored = $product->ppe_family !== null && $product->ppe_family !== ''
+    /**
+     * Nazwa modelu na karcie nie przełamuje rodzaju ubioru: „Tyvek 500” i „Tychem C” to linie materiału,
+     * w których są kombinezon, osłona na buty i rękawica. Pod „Niska osłona na buty DuPont Tyvek 500 POSO”
+     * trafienie w model podstawiało kombinezony TYVEK 500 z 99%. Konflikt tylko wtedy, gdy wymaganie
+     * i nazwa karty (albo zapisana rodzina) wskazują dwie różne rodziny ubioru; pozostałe rodziny
+     * (adapter do hełmu vs osłona twarzy) rozstrzyga dalej trafienie w model.
+     */
+    public function wearFamilyConflict(string $requirement, Product $product): bool
+    {
+        $wear = [self::FAMILY_GLOVES, self::FAMILY_FOOTWEAR, self::FAMILY_APPAREL];
+        $reqFamily = $this->family($requirement);
+        if (! in_array($reqFamily, $wear, true)) {
+            return false;
+        }
+        $stored = $product->ppe_family !== null && $product->ppe_family !== ''
+            ? (string) $product->ppe_family
+            : null;
+        $prodFamily = $this->family((string) $product->name) ?? $stored;
+
+        return $prodFamily !== null && $prodFamily !== $reqFamily && in_array($prodFamily, $wear, true);
+    }
+
             ? (string) $product->ppe_family
             : null;
         $prodFamily = $fromName ?? $stored ?? $this->productFamily($product);

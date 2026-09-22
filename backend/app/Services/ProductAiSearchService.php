@@ -696,7 +696,7 @@ final class ProductAiSearchService
         $candidates = $this->retrieveCandidates($query, $local, 12);
 
         return $candidates->contains(
-            fn (Product $p): bool => $this->modelFuzzy->matches($modelQuery, $p)
+            fn (Product $p): bool => $this->namedModelKeepsFamily($modelQuery, $p)
         );
     }
 
@@ -3677,7 +3677,7 @@ final class ProductAiSearchService
         $requirement = $this->assortmentText($query, $needed);
 
         return [
-            'rodzina' => $this->assortment->compatibleProduct($requirement, $product) || $this->modelFuzzy->matches($requirement, $product),
+            'rodzina' => $this->assortment->compatibleProduct($requirement, $product) || $this->namedModelKeepsFamily($requirement, $product),
             'dowód żargonu' => $this->matchesSlangEvidence($requirement, $product),
             'SNR' => $this->meetsRequiredSnr($requirement, $product),
             'klasa obuwia' => $this->meetsRequiredFootwearClass($requirement, $product),
@@ -3692,6 +3692,16 @@ final class ProductAiSearchService
     }
 
     /**
+     * Trafienie w model ratuje kartę, której rodziny klasyfikator nie odczytał z zapytania (adapter P3E do hełmu),
+     * ale nie zamienia rodzaju ubioru: kombinezon TYVEK 500 to nie osłona na buty Tyvek 500.
+     */
+    private function namedModelKeepsFamily(string $query, Product $product): bool
+    {
+        return $this->modelFuzzy->matches($query, $product)
+            && ! $this->assortment->wearFamilyConflict($query, $product);
+    }
+
+    /**
      * @param  Collection<int, Product>  $products
      * @return Collection<int, Product>
      */
@@ -3700,7 +3710,7 @@ final class ProductAiSearchService
         return $products
             ->filter(fn (Product $p): bool => (
                 $this->assortment->compatibleProduct($query, $p)
-                || $this->modelFuzzy->matches($query, $p)
+                || $this->namedModelKeepsFamily($query, $p)
             ) && $this->matchesSlangEvidence($query, $p)
                 && $this->meetsRequiredSnr($query, $p)
                 && $this->meetsRequiredFootwearClass($query, $p)
@@ -4703,7 +4713,7 @@ final class ProductAiSearchService
             if (! $product instanceof Product) {
                 continue;
             }
-            if (! $this->modelFuzzy->matches($query, $product)
+            if (! $this->namedModelKeepsFamily($query, $product)
                 && ! $this->assortment->compatibleProduct($query, $product)) {
                 continue;
             }
@@ -5527,7 +5537,7 @@ final class ProductAiSearchService
             /** @var Product $product */
             $product = $byId->get($id);
             if (! $this->assortment->compatibleProduct($requirement, $product)
-                && ! $this->modelFuzzy->matches($requirement, $product)) {
+                && ! $this->namedModelKeepsFamily($requirement, $product)) {
                 continue;
             }
             $brands = $intent['manufacturer_absent_in_catalog']

@@ -177,6 +177,28 @@ final class PpeAssortmentTest extends TestCase
     }
 
     #[Test]
+    public function wear_family_conflict_only_between_known_wear_families(): void
+    {
+        $coverall = new Product;
+        $coverall->forceFill(['name' => 'Kombinezon ochronny TYVEK®500 XPERT', 'sku' => 'TYVEKX-CHF5W']);
+        $cover = new Product;
+        $cover->forceFill(['name' => 'Osłony na buty, wykonane z materiału Tyvek.', 'sku' => 'TYV-CS']);
+        $bareCode = new Product;
+        $bareCode->forceFill(['name' => 'TYVEK 500 CHF5', 'sku' => 'CHF5']);
+        $adapter = new Product;
+        $adapter->forceFill(['name' => '3M Adapter P3E do mocowania osłony twarzy', 'sku' => 'P3E']);
+
+        $shoeCover = 'Niska osłona na buty DuPont™ Tyvek® 500 POSO';
+        $this->assertTrue($this->assortment->wearFamilyConflict($shoeCover, $coverall));
+        $this->assertFalse($this->assortment->wearFamilyConflict($shoeCover, $cover));
+        // nazwa bez rzeczownika wyrobu to brak wiedzy, nie inny rodzaj
+        $this->assertFalse($this->assortment->wearFamilyConflict($shoeCover, $bareCode));
+        $this->assertTrue($this->assortment->wearFamilyConflict('Kombinezon Tyvek 500 Xpert', $cover));
+        // poza rodzinami ubioru reguła milczy — adapter do hełmu rozstrzyga trafienie w model
+        $this->assertFalse($this->assortment->wearFamilyConflict('Adapter P3E do hełmu 3M', $adapter));
+    }
+
+    #[Test]
     public function compatible_product_drops_face_shield_for_vest(): void
     {
         $shield = new Product;

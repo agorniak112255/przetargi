@@ -269,6 +269,55 @@ final class ProductAiSearchApiTest extends TestCase
             ->assertJsonMissing(['sku' => 'FH-934']);
     }
 
+    /** Mail klienta 22.09.2026: pod osłoną na buty Tyvek 500 szły kombinezony TYVEK 500 z 99% („marka i model”). */
+    public function test_named_material_line_does_not_turn_shoe_cover_into_coverall(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $coverall = Product::query()->create([
+            'sku' => 'TYVEKX-CHF5W',
+            'name' => 'Kombinezon ochronny TYVEK®500 XPERT wykonany z "oddychającego" materiału Tyvek®.',
+            'manufacturer' => 'DUPONT TYVEK',
+            'category' => 'Odzież ochronna',
+            'description' => 'Kombinezon z kapturem, typ 5/6, materiał Tyvek 500.',
+            'catalog_price_net' => 31.06,
+            'purchase_price' => 20,
+            'stock' => 50,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $cover = Product::query()->create([
+            'sku' => 'TYV-CS',
+            'name' => 'Osłony na buty, wykonane z materiału Tyvek.',
+            'manufacturer' => 'DUPONT TYVEK',
+            'category' => 'Odzież ochronna',
+            'description' => 'Niskie osłony na obuwie z materiału Tyvek 500.',
+            'catalog_price_net' => 1.2,
+            'purchase_price' => 0.8,
+            'stock' => 500,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => 'niska osłona na buty Tyvek 500',
+            'search_phrases' => ['osłony na buty', 'Tyvek'],
+            'constraints' => [],
+            'matches' => [
+                ['id' => $cover->id, 'score' => 90, 'reason' => 'Osłona na buty z Tyvek'],
+            ],
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->postJson('/api/products/ai-search', [
+            'query' => 'Niska osłona na buty DuPont™ Tyvek® 500 POSO',
+        ])
+            ->assertOk()
+            ->assertJsonPath('products.0.id', $cover->id)
+            ->assertJsonMissing(['sku' => $coverall->sku]);
+    }
+
     public function test_ai_search_finds_sku_without_description(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
