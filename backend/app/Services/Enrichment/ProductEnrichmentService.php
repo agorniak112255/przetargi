@@ -74,6 +74,24 @@ final class ProductEnrichmentService
     /** Tyle roznych norm wyciagnietych z surowego tekstu strony to slowniczek sklepu, nie karta. */
     private const NORMS_GLOSSARY_THRESHOLD = 5;
 
+    /**
+     * Polecenie dla opisu wyłącznie ze źródeł B2B (describeFromB2bSources) — tylko tam, w wiadomości użytkownika;
+     * zwykłe wzbogacanie z internetu dostaje dotychczasowy prompt bez zmian.
+     */
+    private const B2B_SOURCES_ONLY_RULES = <<<'TXT'
+ZASADY TEGO OPISU — mają pierwszeństwo przed instrukcją rodziny i przed zasadami pisania z polecenia systemowego:
+- Pisz wyłącznie fakty podane w tych źródłach. Nie uzupełniaj niczego ogólną wiedzą o wyrobach tego typu.
+- Nie objaśniaj wymagań klasy ani normy: bez energii uderzenia (np. 200 J), sił zgniatania (np. 15 kN), opisów
+  badań, podłoży i środków badawczych. Oznaczenie klasy i normy podaj tak, jak stoi w źródle.
+- Nie dopisuj przeznaczenia, zastosowań, branż ani warunków pracy, których źródła nie podają.
+- Nie dopisuj właściwości (wodoodporność, izolacja od zimna lub ciepła, odporność na oleje, chemikalia, przebicie,
+  antystatyczność, elektroizolacja, praca w wysokich temperaturach), których źródła nie podają słowem albo
+  oznaczeniem w zapisie klasy lub normy.
+- Brak informacji = pomiń. Nie pisz „brak danych w źródle”, „źródła nie podają…” ani podobnych zdań — ani
+  w description, ani w specs, features, use_cases czy materials. Pozycję listy bez wartości pomiń w całości.
+- Opis może być krótki, jeśli źródła są ubogie — to lepsze niż zdanie spoza źródeł.
+TXT;
+
     private const GENERIC_NAME_TOKENS = [
         'rekawice', 'rękawice', 'rekawiczki', 'spodnie', 'kurtka', 'bluza', 'koszulka', 'kamizelka',
         'ubranie', 'odziez', 'odzież', 'buty', 'obuwie', 'trzewiki', 'polbuty', 'półbuty', 'sandaly',
@@ -4936,7 +4954,13 @@ SYS,
      * Każdy kod poziomów (EN 388 „4131A”, EN 407 „X1XXXX”) z opisu i list musi występować w tekście źródeł: z list
      * znika pozycja bez pokrycia, a opis z takim kodem jest odrzucany w całości.
      *
-     * @return array{description: string, payload: array<string, mixed>, norms: string|null, packaging: string|null, dropped: list<string>}
+     * PDF-y bywają ubogie (ARTRA 22.09.2026: materiały, podnosek, podeszwa, norma), a model dopisywał ogólną wiedzę —
+     * „wodoodporną cholewkę” przy S1 P, „pracę w wysokich temperaturach”, objaśnienie klasy („200 J”, „15 kN”). Stąd
+     * polecenie B2B_SOURCES_ONLY_RULES (ma pierwszeństwo przed szablonem rodziny, który przy zwykłym wzbogacaniu każe
+     * wypisywać „brak danych w źródle”) i SourceClaimGuard: zdanie opisu z twierdzeniem o właściwości bez pokrycia
+     * w źródłach wypada (dropped_claims), tak samo pozycja list; opis za krótki po usunięciu jest odrzucany.
+     *
+     * @return array{description: string, payload: array<string, mixed>, norms: string|null, packaging: string|null, dropped: list<string>, dropped_claims: list<string>}
      *
      * @throws B2bSourcesDescriptionRejected
      */
@@ -4958,7 +4982,8 @@ SYS,
         $extracted = $this->extractWithLlm($product, [], $pages, 'Źródła — wyłącznie te dwa teksty, nic spoza nich:'
             ."\n1. Karta katalogowa PDF ze sklepu dostawcy ({$sheetUrl}) — tekst wyciągnięty z PDF, kolumny i wiersze mogą"
             .' być pomieszane; wartości (np. poziomy normy) przypisuj tylko wtedy, gdy przypisanie jest w tekście jednoznaczne.'
-            ."\n2. Opis i parametry ze strony sklepu dostawcy (".($shopUrl !== '' ? $shopUrl : 'strona produktu').').');
+            ."\n2. Opis i parametry ze strony sklepu dostawcy (".($shopUrl !== '' ? $shopUrl : 'strona produktu').').'
+            ."\n\n".self::B2B_SOURCES_ONLY_RULES);
         $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pages);
 
         $description = ProductDescriptionText::plain($this->composeFullDescription($extracted));
@@ -4982,15 +5007,31 @@ SYS,
             throw new B2bSourcesDescriptionRejected('oznaczenia albo poziomy norm spoza źródeł w opisie: '.implode(', ', $unsupported));
         }
 
+        // twierdzenia o właściwościach bez pokrycia w źródłach (wodoodporność przy S1 P, „200 J” z objaśnienia klasy)
+        $guard = new SourceClaimGuard($shopSource."\n".$sheetText);
+        $filtered = $guard->filterDescription($description);
+        $droppedClaims = $filtered['dropped'];
+        $description = $filtered['text'];
+        if (! Product::isDescriptionText($description) || mb_strlen($description) <= mb_strlen($shopText)) {
+            throw new B2bSourcesDescriptionRejected('po usunięciu twierdzeń spoza źródeł opis za krótki: '
+                .mb_substr(implode(' | ', $droppedClaims), 0, 400));
+        }
+
         $fields = $this->payloadFromExtraction($product, $extracted, $description, $pages);
         $dropped = [];
-        $supported = static function (string $text) use ($sources, &$dropped): bool {
+        $supported = static function (string $text) use ($sources, $guard, &$dropped, &$droppedClaims): bool {
             foreach (self::sourceClaims($text) as $code) {
                 if (! str_contains($sources, $code)) {
                     $dropped[] = $text;
 
                     return false;
                 }
+            }
+            if (! $guard->keeps($text)) {
+                $claims = $guard->uncoveredClaims($text);
+                $droppedClaims[] = ($claims !== [] ? implode(', ', $claims) : 'brak danych').': '.$text;
+
+                return false;
             }
 
             return true;
@@ -5018,6 +5059,7 @@ SYS,
             'norms' => $lists['norms'] !== [] ? implode(', ', array_slice($lists['norms'], 0, 8)) : null,
             'packaging' => $fields['packaging'],
             'dropped' => array_values(array_unique($dropped)),
+            'dropped_claims' => array_values(array_unique($droppedClaims)),
         ];
     }
 

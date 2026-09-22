@@ -50,6 +50,11 @@ use Throwable;
  * a wcale, gdy odrzucenie jest trwałe (PDF opisuje wyłącznie inny wariant obuwia); nowy PDF, inna tabelka albo nazwa
  * karty liczą od nowa.
  *
+ * $redo (komenda b2b:redescribe-from-datasheets, 22.09.2026 — po zaostrzeniu polecenia i kontroli twierdzeń
+ * SourceClaimGuard) opisuje ponownie kartę, której obecny opis napisał ten job (describedByThisJob), mimo ustawionego
+ * source_description_hash. Opis wpisany ręcznie albo przywrócony ma niezgodny odcisk i nie jest nadpisywany; ślad
+ * odrzuceń liczy się jak zwykle, a odrzucony ponowny opis zostawia na karcie opis dotychczasowy.
+ *
  * Slot z EnrichmentSlots i compare-and-set jak w TranslateB2bProductTextJob: model odpowiada nawet minutę, w tym czasie
  * kartę mógł zmienić import albo człowiek — wtedy wynik przepada, karta zostaje nietknięta.
  */
@@ -77,11 +82,19 @@ class DescribeB2bProductFromDatasheetJob implements ShouldBeUniqueUntilProcessin
 
     public int $uniqueFor = 3600;
 
+    /**
+     * Zwykłe pole z wartością domyślną, nie parametr promowany: job zapisany w kolejce przed dodaniem pola nie ma go
+     * w danych, a Laravel odtwarza joba bez konstruktora — pole promowane zostałoby niezainicjowane i job by padł.
+     */
+    public bool $redo = false;
+
     public function __construct(
         public readonly int $productId,
         public readonly int $b2bAccountId,
         public readonly bool $datasheetOnly = false,
+        bool $redo = false,
     ) {
+        $this->redo = $redo;
         $this->onQueue(self::QUEUE);
     }
 
@@ -97,7 +110,7 @@ class DescribeB2bProductFromDatasheetJob implements ShouldBeUniqueUntilProcessin
         if ($product === null || $link === null) {
             return;
         }
-        $start = self::sources($product, $link, self::datasheet($this->productId, $this->b2bAccountId), $this->datasheetOnly);
+        $start = self::sources($product, $link, self::datasheet($this->productId, $this->b2bAccountId), $this->datasheetOnly, $this->redo);
         if ($start === null) {
             return;
         }
@@ -108,7 +121,7 @@ class DescribeB2bProductFromDatasheetJob implements ShouldBeUniqueUntilProcessin
         );
         if ($slot === null) {
             // Limit z Ustawień AI obłożony — karta wraca do kolejki bez zużycia próby.
-            self::dispatch($this->productId, $this->b2bAccountId, $this->datasheetOnly)->delay(now()->addSeconds(10));
+            self::dispatch($this->productId, $this->b2bAccountId, $this->datasheetOnly, $this->redo)->delay(now()->addSeconds(10));
             $this->delete();
 
             return;
@@ -157,7 +170,9 @@ class DescribeB2bProductFromDatasheetJob implements ShouldBeUniqueUntilProcessin
                 'sku' => $product->sku,
                 'reason' => $skipReason,
                 'dropped_levels' => $result['dropped'],
+                'dropped_claims' => $result['dropped_claims'],
                 'shop_fields_dropped' => $shopFields['dropped'],
+                'redo' => $this->redo,
             ]);
     }
 
@@ -212,13 +227,19 @@ class DescribeB2bProductFromDatasheetJob implements ShouldBeUniqueUntilProcessin
      * Opis odrzucony dla tych samych źródeł (b2b_sources_rejected, patrz rejectionKey) nie jest zlecany ponownie, gdy
      * odrzucenie było trwałe albo zdarzyło się MAX_REJECTED_ATTEMPTS razy — inaczej import pytałby przy każdym przebiegu.
      *
+     * $redo — ponowny opis karty, której obecny opis napisał ten job (describedByThisJob; komenda
+     * b2b:redescribe-from-datasheets po zaostrzeniu kontroli twierdzeń 22.09.2026). Karta bez takiego opisu idzie
+     * zwykłą ścieżką; opis wpisany ręcznie albo przywrócony (odcisk niezgodny) nie jest nadpisywany nigdy.
+     *
      * @return array{shop_text: string, sheet_text: string, sheet_url: string, document_id: int, product_description: string, description_hash: string|null, source_description_hash: string|null}|null
      */
-    public static function sources(Product $product, B2bProductLink $link, ?ProductDocument $sheet, bool $datasheetOnly = false): ?array
+    public static function sources(Product $product, B2bProductLink $link, ?ProductDocument $sheet, bool $datasheetOnly = false, bool $redo = false): ?array
     {
         $sheetText = $sheet !== null ? B2bDocumentText::forCard((string) $sheet->text) : '';
         $current = (string) ($product->description ?? '');
-        $start = self::startFor($product, $link, $sheet, $sheetText, $current, $datasheetOnly);
+        $start = $redo && $link->source_description_hash !== null
+            ? self::redoStartFor($product, $link, $sheet, $sheetText, $current, $datasheetOnly)
+            : self::startFor($product, $link, $sheet, $sheetText, $current, $datasheetOnly);
         if ($start === null) {
             return null;
         }
@@ -319,10 +340,60 @@ class DescribeB2bProductFromDatasheetJob implements ShouldBeUniqueUntilProcessin
     }
 
     /**
+     * Obecny opis karty napisał ten job dla tego konta: jest ślad b2b_sources z described_at, a odcisk powiązania
+     * (description_hash) to sha1 obecnego opisu — nikt go od tamtej pory nie zmienił ani nie przywrócił innego.
+     */
+    public static function describedByThisJob(Product $product, B2bProductLink $link): bool
+    {
+        $current = (string) ($product->description ?? '');
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $trace = is_array($payload['b2b_sources'] ?? null) ? $payload['b2b_sources'] : [];
+
+        return trim($current) !== ''
+            && trim((string) ($trace['described_at'] ?? '')) !== ''
+            && (int) ($trace['b2b_account_id'] ?? 0) === (int) $link->b2b_account_id
+            && $link->source_description_hash !== null
+            && $link->description_hash !== null
+            && hash_equals($link->description_hash, sha1($current));
+    }
+
+    /**
+     * Start ponownego opisu (sources z $redo) karty opisanej już przez ten job. Źródło sklepu to tekst zapisany
+     * w śladzie b2b_sources.shop_text, o ile jego sha1 jest odciskiem źródła na powiązaniu (ARTRA: sha1('') — tekst
+     * sklepu nie jest źródłem); source_description_hash zostaje w stanie startu dla compare-and-set w store().
+     *
+     * @return array{shop_text: string, sheet_text: string, sheet_url: string, document_id: int, product_description: string, description_hash: string|null, source_description_hash: string|null}|null
+     */
+    private static function redoStartFor(Product $product, B2bProductLink $link, ?ProductDocument $sheet, string $sheetText, string $current, bool $datasheetOnly): ?array
+    {
+        if ($sheet === null || $sheetText === '' || ! self::describedByThisJob($product, $link)) {
+            return null;
+        }
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $shopText = $datasheetOnly ? '' : (string) ($payload['b2b_sources']['shop_text'] ?? '');
+        if (! $datasheetOnly && trim($shopText) === '') {
+            return null;
+        }
+        if (! hash_equals((string) $link->source_description_hash, sha1($shopText))) {
+            return null;
+        }
+
+        return [
+            'shop_text' => $shopText,
+            'sheet_text' => $sheetText,
+            'sheet_url' => (string) $sheet->source_url,
+            'document_id' => (int) $sheet->id,
+            'product_description' => $current,
+            'description_hash' => $link->description_hash,
+            'source_description_hash' => $link->source_description_hash,
+        ];
+    }
+
+    /**
      * Compare-and-set. Zwraca powód pominięcia albo null, gdy zapisano.
      *
      * @param  array{shop_text: string, sheet_text: string, sheet_url: string, document_id: int, product_description: string, description_hash: string|null, source_description_hash: string|null}  $start
-     * @param  array{description: string, payload: array<string, mixed>, norms: string|null, packaging: string|null, dropped: list<string>}  $result
+     * @param  array{description: string, payload: array<string, mixed>, norms: string|null, packaging: string|null, dropped: list<string>, dropped_claims: list<string>}  $result
      * @param  list<string>  $shopFieldsDropped  wiersze tabelki ze strony, których model nie dostał (shopFieldsForModel)
      */
     private function store(array $start, array $result, array $shopFieldsDropped = []): ?string
@@ -348,6 +419,7 @@ class DescribeB2bProductFromDatasheetJob implements ShouldBeUniqueUntilProcessin
             }
 
             $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+            $previousTrace = is_array($payload['b2b_sources'] ?? null) ? $payload['b2b_sources'] : [];
             $payload = [
                 ...$payload,
                 ...$result['payload'],
@@ -359,12 +431,20 @@ class DescribeB2bProductFromDatasheetJob implements ShouldBeUniqueUntilProcessin
                     'shop_text' => $start['shop_text'],
                     'shop_sha1' => sha1($start['shop_text']),
                     'dropped_levels' => $result['dropped'],
+                    'dropped_claims' => $result['dropped_claims'],
                     'shop_fields_dropped' => $shopFieldsDropped,
                     'described_at' => now()->toIso8601String(),
                 ],
             ];
             unset($payload['b2b_sources_rejected']);
-            if ($this->datasheetOnly && Product::isDescriptionText($start['product_description'])) {
+            if ($start['source_description_hash'] !== null) {
+                // ponowny opis (redo): poprzedni opis tego joba zostaje w śladzie, a tekst zastąpiony przy pierwszym
+                // opisie (slogan) i replaced_description — bez zmian; to wciąż ten sam jeden poziom historii
+                $payload['b2b_sources']['previous_description'] = mb_substr($start['product_description'], 0, 10000);
+                if (isset($previousTrace['replaced_text'])) {
+                    $payload['b2b_sources']['replaced_text'] = $previousTrace['replaced_text'];
+                }
+            } elseif ($this->datasheetOnly && Product::isDescriptionText($start['product_description'])) {
                 // Zastąpiony tekst (slogan zapisany przez synchronizację) zostaje przy opisie. Do
                 // replaced_description tylko wtedy, gdy to miejsce jest wolne: jest jeden poziom historii,
                 // a przed sloganem stał tam opis karty, którego nie da się odtworzyć ze sklepu — slogan da się.
