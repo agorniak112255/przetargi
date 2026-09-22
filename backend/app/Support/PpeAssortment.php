@@ -2051,10 +2051,29 @@ final class PpeAssortment
         return null;
     }
 
+    /** Słowa świadczące o wentylowanej czaszy — po polsku i po angielsku (zob. helmetVent). */
+    private const HELMET_VENT_WORDS = '(?:wentylowan|ventilat|vented)';
+
+    /**
+     * „ventilated” / „vented” obok polskiego słowa: karty producentów bywają opisane po angielsku
+     * (MSA V-Gard 500 „helmet ventilated”), a wymaganie z SIWZ jest po polsku. Bez tego hełm wskazany
+     * w zapytaniu z marki i modelu odpadał jako niewentylowany — 22.09.2026 tak ginął cały przypadek
+     * golden setu „helm-wentylowany-msa-super-v-gard-500”, mimo trafienia w nazwę i kod modelu.
+     * Ten sam zabieg co przy dowodzie antystatyczności (zob. productShowsAntistatic).
+     *
+     * Świadomie wąsko: „ventilat*” i „vented”, bez „air”, „breathable” czy „mesh” — te mówią
+     * o materiale albo o komforcie, nie o otworach w czaszy, a rozróżnienie wentylowany
+     * / niewentylowany decyduje o zgodności wyrobu z wymaganiem.
+     */
     public function helmetVent(string $text): ?string
     {
         $t = $this->normalize($text);
-        if (preg_match('/\bwentylowan\w*/u', $t) === 1) {
+        // Zaprzeczenie stoi osobnym słowem, bo normalizacja zamienia myślnik na spację
+        // („non-ventilated” → „non ventilated”) — bez tego czytalibyśmy je jako potwierdzenie wentylacji.
+        if (preg_match('/\b(?:non|not|no|un|nie|bez)\s+'.self::HELMET_VENT_WORDS.'\w*/u', $t) === 1) {
+            return null;
+        }
+        if (preg_match('/\b'.self::HELMET_VENT_WORDS.'\w*/u', $t) === 1) {
             return self::VENT_OPEN;
         }
 

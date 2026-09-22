@@ -807,6 +807,49 @@ final class PpeAssortmentTest extends TestCase
         ));
     }
 
+    /**
+     * Karta producenta bywa opisana po angielsku, a wymaganie z SIWZ jest po polsku.
+     * 22.09.2026 hełm MSA V-Gard 500 wskazany w zapytaniu z marki i modelu odpadał jako
+     * niewentylowany, bo jego nazwa mówi „helmet ventilated”, a bramka znała tylko
+     * „wentylowany” — cały przypadek golden setu miał przez to recall 0,00.
+     */
+    #[Test]
+    public function helmet_vent_reads_english_card_without_letting_unvented_through(): void
+    {
+        $req = 'Hełm wentylowany MSA SUPER V - GARD 500 ATEX czasza ABS - różne kolory, więźba Fas-Trac';
+
+        $this->assertSame(
+            PpeAssortment::VENT_OPEN,
+            $this->assortment->helmetVent('MSA V-Gard 500 helmet ventilated, white, yellow, red')
+        );
+        $this->assertSame(
+            PpeAssortment::VENT_OPEN,
+            $this->assortment->helmetVent('V-Gard 500 vented helmet')
+        );
+
+        // dokładna karta z katalogu, przez którą przypadek golden setu przepadał
+        $this->assertTrue($this->assortment->helmetSpecAllows(
+            $req,
+            'MSA V-Gard 500 helmet ventilated, white, yellow, red, green, blue 4310-163-000-00'
+        ));
+
+        // to jest sedno zmiany: wariant bez wentylacji dalej odpada
+        $this->assertNull($this->assortment->helmetVent('MSA V-Gard 500 helmet, white'));
+        $this->assertFalse($this->assortment->helmetSpecAllows(
+            $req,
+            'MSA V-Gard 500 helmet, white 4310-163-100-00'
+        ));
+
+        // zaprzeczenie nie może udawać potwierdzenia — myślnik znika przy normalizacji
+        $this->assertNull($this->assortment->helmetVent('MSA V-Gard 500 non-ventilated helmet'));
+        $this->assertNull($this->assortment->helmetVent('V-Gard 500 helmet, no ventilation'));
+        $this->assertNull($this->assortment->helmetVent('MSA V-Gard 500 unvented helmet'));
+        $this->assertFalse($this->assortment->helmetSpecAllows(
+            $req,
+            'MSA V-Gard 500 non-ventilated helmet, white'
+        ));
+    }
+
     #[Test]
     public function cut_resistance_accepts_fiber_name_not_only_adjective(): void
     {
