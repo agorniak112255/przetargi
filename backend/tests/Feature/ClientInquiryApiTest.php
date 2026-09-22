@@ -483,7 +483,7 @@ final class ClientInquiryApiTest extends TestCase
         $html = (string) $res->json('reply_html');
         $this->assertStringContainsString('<table', $html);
         // zapytanie klienta u góry listu, pod nim nasze pozycje
-        $this->assertStringContainsString('Zapytanie klienta', $html);
+        $this->assertStringContainsString('Państwa zapytanie', $html);
         $this->assertStringContainsString('Propozycja', $html);
         $this->assertStringContainsString('10 szt. rękawice nitrylowe rozmiar 9', $html);
         $this->assertStringContainsString('RNITZ-100', $html);

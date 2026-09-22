@@ -133,7 +133,8 @@ final class InquiryReplyHtml
             return '';
         }
 
-        $html = self::caption('Zapytanie klienta');
+        // List czyta klient — zwracamy się do niego, jak w makiecie.
+        $html = self::caption('Państwa zapytanie');
         if ($title !== '') {
             $html .= '<div style="font-size:13px;font-weight:bold;color:'.self::TEXT.';margin-top:4px">'
                 .self::text($title).'</div>';

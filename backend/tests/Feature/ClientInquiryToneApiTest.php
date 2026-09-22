@@ -157,7 +157,7 @@ final class ClientInquiryToneApiTest extends TestCase
         // Handlowy: kafelek pokazuje nazwę z katalogu i kod wyrobu.
         [$handlowy] = $this->createInquiry(ClientInquiry::TONE_HANDLOWY);
         $html = (string) ($handlowy['reply_html'] ?? '');
-        $this->assertStringContainsString('Zapytanie klienta', $html);
+        $this->assertStringContainsString('Państwa zapytanie', $html);
         $this->assertStringContainsString('VITAL 175', $html);
         $this->assertStringContainsString('kod VIT-175', $html);
         // dane pozycji stoją osobno, a nie w zdaniu
