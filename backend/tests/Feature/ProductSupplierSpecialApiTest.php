@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\B2bAccount;
+use App\Models\B2bProductLink;
 use App\Models\Client;
 use App\Models\Product;
 use App\Models\ProductSourcePrice;
@@ -184,6 +185,51 @@ final class ProductSupplierSpecialApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.0.sku', '9160-130')
             ->assertJsonPath('data.0.supplier_special.status', 'special');
+    }
+
+    public function test_filtr_listy_ceny_specjalne_zgodny_z_ocena_i_z_filtrem_cennika_konta(): void
+    {
+        // cennik 255,31 − 15% = 217,01; tolerancja 1,09 zł (0,5%)
+        $special = $this->product('F-SPEC', 200);
+        $this->uvexSlot($special, 200);
+        $edge = $this->product('F-EDGE', 215.92);
+        $this->uvexSlot($edge, 215.92);
+        $standard = $this->product('F-STD', 216.75);
+        $this->uvexSlot($standard, 216.75);
+        $worse = $this->product('F-WORSE', 230);
+        $this->uvexSlot($worse, 230);
+        // cenę karty ustala inne źródło — nie ma znacznika, więc nie ma jej w filtrze
+        $shadowed = $this->product('F-OTHER', 180);
+        $this->uvexSlot($shadowed, 150);
+        $foreign = $this->product('F-EUR', 200, 'EUR');
+        $this->uvexSlot($foreign, 200);
+        $noRule = $this->product('F-NORULE', 150);
+        $this->uvexSlot($noRule, 150, ['standard_discount_percent' => null]);
+        $this->product('F-NONE', 100);
+
+        $specialRows = collect($this->getJson('/api/products?per_page=all&supplier_special=special')->assertOk()->json('data'));
+        $this->assertEqualsCanonicalizing(['F-SPEC', 'F-EDGE'], $specialRows->pluck('sku')->all());
+        // filtr w SQL i znacznik z PHP mówią to samo
+        $this->assertSame(['special'], $specialRows->pluck('supplier_special.status')->unique()->values()->all());
+
+        $worseRows = collect($this->getJson('/api/products?per_page=all&supplier_special=worse_than_standard')->assertOk()->json('data'));
+        $this->assertSame(['F-WORSE'], $worseRows->pluck('sku')->all());
+        $this->assertSame('worse_than_standard', $worseRows->first()['supplier_special']['status']);
+
+        // nieznana wartość nie zawęża listy
+        $this->assertCount(8, $this->getJson('/api/products?per_page=all&supplier_special=cokolwiek')->assertOk()->json('data'));
+
+        // razem z filtrem „Cennik B2B: konto” — tylko karty tego konta
+        B2bProductLink::query()->create([
+            'b2b_account_id' => $this->uvex->id,
+            'remote_id' => 'F-SPEC',
+            'remote_sku' => 'F-SPEC',
+            'product_id' => $special->id,
+        ]);
+        $this->getJson('/api/products?per_page=all&supplier_special=special&b2b_account='.$this->uvex->id)
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.sku', 'F-SPEC');
     }
 
     private function product(string $sku, float $purchase, string $currency = 'PLN'): Product

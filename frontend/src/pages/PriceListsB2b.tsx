@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { B2bDiscountRulesModal } from '../components/B2bDiscountRulesModal'
 import { B2bSyncProgressModal } from '../components/B2bSyncProgressModal'
@@ -591,6 +592,15 @@ export function PriceListsB2b() {
                         >
                           Rabaty
                         </button>
+                      )}
+                      {usesStandardDiscounts(row.connector) && (
+                        <Link
+                          className="font-medium text-emerald-700 underline"
+                          to={`/products?b2b_account=${row.id}&b2b_label=${encodeURIComponent(row.connector_label ?? row.username)}&supplier_special=special`}
+                          title="Karty tego konta z ceną niższą niż cennik bazowy minus rabat standardowy"
+                        >
+                          Ceny specjalne
+                        </Link>
                       )}
                       {canManage && (
                         <button

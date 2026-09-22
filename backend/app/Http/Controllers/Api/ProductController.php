@@ -184,6 +184,11 @@ class ProductController extends Controller
             $query->whereHas('accessories');
         }
 
+        // „Tylko ceny specjalne B2B” (albo ceny powyżej rabatu standardowego) — łączy się z filtrem cennika konta
+        if ($request->filled('supplier_special')) {
+            SupplierSpecialPrice::whereCardStatus($query, (string) $request->string('supplier_special'));
+        }
+
         $allowedSort = [
             'sku' => 'sku',
             'name' => 'name',
