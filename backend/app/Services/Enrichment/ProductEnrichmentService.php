@@ -3517,7 +3517,8 @@ final class ProductEnrichmentService
         return $compact !== '' && mb_strlen($compact) >= 6 && str_contains($hayCompact, $compact);
     }
 
-    private function looksLikeMissingCardMeta(string $description): bool
+    /** Publiczna także dla raportu products:audit-source-identity (zapisane opisy „brak danych o produkcie…”). */
+    public function looksLikeMissingCardMeta(string $description): bool
     {
         $d = mb_strtolower($description);
 
@@ -3762,8 +3763,9 @@ final class ProductEnrichmentService
      * @param  list<string>  $sourceUrls  potwierdzone karty, z których model napisał opis. Karta
      *                                    z domeny producenta potwierdza markę: model pisze
      *                                    „Deckplate”, „COBAstat”, a nie osobne „Coba” (batch #300).
+     *                                    Publiczna także dla raportu products:audit-source-identity.
      */
-    private function descriptionMentionsProduct(string $description, Product $product, array $sourceUrls = []): bool
+    public function descriptionMentionsProduct(string $description, Product $product, array $sourceUrls = []): bool
     {
         $hay = mb_strtolower($description);
         $hayCompact = preg_replace('/[^a-z0-9]+/iu', '', $hay) ?? $hay;
