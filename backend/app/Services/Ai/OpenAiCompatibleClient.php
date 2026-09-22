@@ -2037,10 +2037,17 @@ class OpenAiCompatibleClient
                 'Expect' => '',
             ])
             // Zatrzymany dostawca potrafi trzymać połączenie bez danych dłużej niż timeout
-            // (zdarzały się godziny) — wtedy worker stoi. Brak ruchu przez minutę kończy próbę.
+            // (zdarzały się godziny) — wtedy worker stoi. Cisza dłuższa niż limit zapytania kończy próbę.
+            //
+            // Ta granica musi równać się limitowi zapytania, a nie być od niego krótsza. Zapytania idą bez
+            // strumienia, więc przez cały czas generowania nie płynie ani jeden bajt — dla cURL-a poprawna
+            // odpowiedź jest nie do odróżnienia od zawieszonej. Sztywna minuta wystarczała modelowi MoE
+            // (Qwen3.6-35B-A3B), ale gęsty Qwen3.8-27B generuje 1200–1500 tokenów rankingu po ~23 tok/s,
+            // czyli 55–65 s: 22.09.2026 wyszukiwanie zrywało własne, działające zapytania i schodziło
+            // na konfigurację główną. Zatrzymane połączenie ucina teraz sam limit zapytania.
             ->withOptions(['expect' => false, 'curl' => [
                 CURLOPT_LOW_SPEED_LIMIT => 1,
-                CURLOPT_LOW_SPEED_TIME => 60,
+                CURLOPT_LOW_SPEED_TIME => $timeoutSeconds,
             ]])
             ->timeout($timeoutSeconds)
             ->connectTimeout(15);
