@@ -51,6 +51,9 @@ final class B2bVariantSyncTest extends TestCase
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
         Queue::fake();
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
 
         $user = User::factory()->withRole('admin')->create();
         $this->account = B2bAccount::query()->create([
@@ -133,6 +136,9 @@ final class B2bVariantSyncTest extends TestCase
 
         $this->travel(1)->days();
         Queue::fake();
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
         $second = $this->sync();
 
         $this->assertSame(1, $second['unchanged']);
@@ -152,6 +158,9 @@ final class B2bVariantSyncTest extends TestCase
 
         $this->sign('BB014', ['101' => 0.97, '102' => 1.60]);
         Queue::fake();
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
         $second = $this->sync();
 
         $this->assertSame(1, $second['updated']);

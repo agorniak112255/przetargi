@@ -342,6 +342,10 @@ final class AiSettingsService
     public function publicView(): array
     {
         $cfg = $this->resolve();
+        // Profil „local” z pustym adresem schodzi do adresu i klucza czatu (zob. embeddingProfile).
+        // Panel pokazywał wtedy puste pole, więc nie było po czym poznać, że wektory poszłyby pod
+        // endpoint czatu — a ten nie musi wystawiać /embeddings ani znać modelu osadzeń.
+        $embedding = $this->embeddingProfile();
 
         return [
             'enabled' => $cfg['enabled'],
@@ -370,6 +374,8 @@ final class AiSettingsService
             'embedding_provider' => $cfg['embedding_provider'],
             'embedding_cloud_model' => $cfg['embedding_cloud_model'],
             'embedding_collection' => $this->embeddingCollection($cfg),
+            'embedding_effective_base_url' => $embedding['base_url'],
+            'embedding_effective_model' => $embedding['model'],
             'has_api_key' => $cfg['has_api_key'],
             'has_tavily_api_key' => $cfg['has_tavily_api_key'],
             'has_jina_api_key' => $this->jinaApiKey() !== null,

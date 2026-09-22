@@ -16,10 +16,8 @@ final class ReindexProductEmbeddingsCommandTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_fresh_drops_collection_and_clears_hashes(): void
+    private function vectorSettings(): void
     {
-        Queue::fake();
-
         AiSetting::query()->create([
             'enabled' => true,
             'provider' => 'openai_compatible',
@@ -34,6 +32,12 @@ final class ReindexProductEmbeddingsCommandTest extends TestCase
             'embedding_provider' => 'openrouter',
             'embedding_cloud_model' => 'qwen/qwen3-embedding-8b',
         ]);
+    }
+
+    public function test_fresh_drops_collection_and_clears_hashes(): void
+    {
+        Queue::fake();
+        $this->vectorSettings();
 
         $product = Product::query()->create([
             'sku' => 'VEC-FRESH-1',
@@ -47,6 +51,10 @@ final class ReindexProductEmbeddingsCommandTest extends TestCase
         ]);
 
         Http::fake([
+            // komenda sprawdza profil jednym osadzeniem, zanim zakolejkuje katalog
+            'https://openrouter.ai/api/v1/embeddings' => Http::response([
+                'data' => [['embedding' => array_fill(0, 8, 0.1)]],
+            ]),
             'qdrant.test:6333/collections/products_openrouter' => Http::response(['result' => true], 200),
         ]);
 
@@ -65,5 +73,38 @@ final class ReindexProductEmbeddingsCommandTest extends TestCase
         $product->refresh();
         $this->assertNull($product->embedding_hash);
         $this->assertNull($product->embedding_synced_at);
+    }
+
+    /**
+     * Zły profil osadzeń (adres bez /embeddings, model nieznany dostawcy) wychodził dopiero
+     * na kilkudziesięciu tysiącach zadań w kolejce. Jedno osadzenie próbne kończy przebieg
+     * od razu i nic nie kolejkuje.
+     */
+    public function test_broken_embedding_profile_stops_before_queueing(): void
+    {
+        Queue::fake();
+        $this->vectorSettings();
+
+        Product::withoutEvents(fn (): Product => Product::query()->create([
+            'sku' => 'VEC-PROBE-1',
+            'name' => 'Rękawice testowe',
+            'manufacturer' => 'Test',
+            'catalog_price_net' => 1,
+            'purchase_price' => 1,
+            'stock' => 1,
+        ]));
+
+        Http::fake([
+            'https://openrouter.ai/api/v1/embeddings' => Http::response(
+                ['error' => ['message' => 'No endpoints found for baai/bge-m3.']],
+                404
+            ),
+        ]);
+
+        $this->artisan('products:reindex-embeddings')
+            ->expectsOutputToContain('Profil embeddingów nie odpowiada')
+            ->assertFailed();
+
+        Queue::assertNotPushed(ReindexProductEmbeddingJob::class);
     }
 }

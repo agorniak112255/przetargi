@@ -32,6 +32,9 @@ final class BackfillBhpAttributesCommandTest extends TestCase
     {
         parent::setUp();
         Queue::fake();
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
         // karta CEDERROTH z audytu: model wpisał masce do resuscytacji kategorię i typ półmaski
         $this->mask = Product::query()->create([
             'sku' => '1921',
@@ -78,6 +81,9 @@ final class BackfillBhpAttributesCommandTest extends TestCase
         $backup = storage_path('app/repair-backups/test-bhp-attributes.json');
         @unlink($backup);
         Queue::fake();
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
 
         $this->artisan('products:backfill-bhp-attributes', [
             '--force' => true,

@@ -46,6 +46,9 @@ final class RepairPolishDocumentTextCommandTest extends TestCase
         $good = $this->document('Rękawica z włókna HPPE, ściągacz.');
         // zakładanie kart zleca własne reindeksowanie — liczymy tylko to, co zleci polecenie
         Queue::fake();
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
 
         $this->artisan('documents:repair-polish-text')
             ->expectsOutputToContain('Teksty do poprawy: 1 (kart: 1)')
@@ -63,6 +66,9 @@ final class RepairPolishDocumentTextCommandTest extends TestCase
         $good = $this->document('Rękawica z włókna HPPE, ściągacz.');
         // zakładanie kart zleca własne reindeksowanie — liczymy tylko to, co zleci polecenie
         Queue::fake();
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
 
         $this->artisan('documents:repair-polish-text', ['--apply' => true])->assertSuccessful();
 

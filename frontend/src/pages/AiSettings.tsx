@@ -99,6 +99,8 @@ type AiSettings = {
   embedding_provider: EmbeddingProvider
   embedding_cloud_model: string | null
   embedding_collection: string
+  embedding_effective_base_url: string
+  embedding_effective_model: string
   model_profiles: AiModelProfile[]
   ai_tasks: AiTaskInfo[]
   has_api_key: boolean
@@ -1148,6 +1150,12 @@ export function AiSettingsPage() {
               Każdy dostawca ma własną kolekcję w Qdrant (inny wymiar wektora). Aktywna:{' '}
               <code>{cfg.embedding_collection}</code>. Po przełączeniu zrób{' '}
               <code>php artisan products:reindex-embeddings --force</code>.
+            </span>
+            <span className="mt-1 block text-[11px] text-slate-500">
+              Zapytanie o wektor pójdzie pod{' '}
+              <code>{cfg.embedding_effective_base_url || '(brak adresu)'}/embeddings</code>, model{' '}
+              <code>{cfg.embedding_effective_model || '(brak)'}</code>. Puste pola schodzą do
+              konfiguracji czatu, więc to jest adres i model, które naprawdę policzą wektory.
             </span>
           </label>
 

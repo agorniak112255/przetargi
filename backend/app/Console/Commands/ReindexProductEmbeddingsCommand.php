@@ -6,6 +6,8 @@ namespace App\Console\Commands;
 
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\Product;
+use App\Services\Ai\AiSettingsService;
+use App\Services\Vector\EmbeddingClient;
 use App\Services\Vector\ProductEmbeddingIndexer;
 use App\Services\Vector\QdrantClient;
 use Illuminate\Console\Command;
@@ -20,8 +22,12 @@ class ReindexProductEmbeddingsCommand extends Command
 
     protected $description = 'Reindeksuje embeddingi produktów do Qdrant';
 
-    public function handle(ProductEmbeddingIndexer $indexer, QdrantClient $qdrant): int
-    {
+    public function handle(
+        ProductEmbeddingIndexer $indexer,
+        QdrantClient $qdrant,
+        EmbeddingClient $embeddings,
+        AiSettingsService $settings,
+    ): int {
         if (! $indexer->shouldIndex()) {
             $this->warn('Wyszukiwanie wektorowe wyłączone lub brak qdrant_url — nic nie robimy.');
 
@@ -48,6 +54,10 @@ class ReindexProductEmbeddingsCommand extends Command
                 ->update(['embedding_hash' => null, 'embedding_synced_at' => null]);
         }
 
+        if (! $this->probeEmbeddingProfile($embeddings, $qdrant, $settings)) {
+            return self::FAILURE;
+        }
+
         $sync = (bool) $this->option('sync');
         $query = Product::query()->orderBy('id');
         $total = (clone $query)->count();
@@ -70,5 +80,43 @@ class ReindexProductEmbeddingsCommand extends Command
             : "Wysłano do kolejki: {$dispatched} jobów.");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Jedno osadzenie próbne przed zakolejkowaniem całego katalogu. Bez niego zły profil
+     * (adres bez /embeddings, model, którego dostawca nie zna) albo kolekcja o innym wymiarze
+     * wychodziły dopiero na kilkudziesięciu tysiącach zadań — 22.09.2026 skończyło się to
+     * 620 wpisami w failed_jobs i zerem wektorów. Próba kosztuje jedno wywołanie API.
+     */
+    private function probeEmbeddingProfile(
+        EmbeddingClient $embeddings,
+        QdrantClient $qdrant,
+        AiSettingsService $settings,
+    ): bool {
+        $profile = $settings->embeddingProfile();
+        $where = $profile['base_url'].'/embeddings, model '.$profile['model']
+            .' (dostawca: '.$profile['provider'].')';
+
+        try {
+            $vector = $embeddings->embed('test profilu embeddingów SUPON');
+        } catch (Throwable $e) {
+            $this->error('Profil embeddingów nie odpowiada — '.$where.': '.$e->getMessage());
+            $this->line('Popraw Ustawienia AI → Wyszukiwanie wektorowe i uruchom komendę ponownie.');
+
+            return false;
+        }
+
+        try {
+            $qdrant->ensureCollection(count($vector));
+        } catch (Throwable $e) {
+            $this->error($e->getMessage());
+
+            return false;
+        }
+
+        $this->info('Profil embeddingów OK — '.$where.', wymiar '.count($vector)
+            .', kolekcja '.$qdrant->collection().'.');
+
+        return true;
     }
 }

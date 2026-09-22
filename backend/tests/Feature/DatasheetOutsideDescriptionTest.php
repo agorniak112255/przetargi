@@ -46,6 +46,9 @@ final class DatasheetOutsideDescriptionTest extends TestCase
         $product = $this->product('Półbuty bezpieczne.');
         // zlecenie z zapisu karty już poszło — patrzymy tylko na to, co wywoła sam plik
         Queue::fake();
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
 
         // plik trafia przy karcie po jej zapisie — bez własnego haka wektor poznałby kartę techniczną
         // dopiero przy najbliższej edycji wyrobu
@@ -58,6 +61,9 @@ final class DatasheetOutsideDescriptionTest extends TestCase
 
         // skasowanie pliku też zmienia dokument wyszukiwania
         Queue::fake();
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
         $document->delete();
         Queue::assertPushed(ReindexProductEmbeddingJob::class);
     }

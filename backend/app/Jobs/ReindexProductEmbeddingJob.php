@@ -37,6 +37,9 @@ class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
     /** Po 401/403 kolejka embeddings nie ma sensu — każdy następny job dostanie to samo. */
     public const HALT_CACHE_KEY = 'product_embeddings_halt';
 
+    /** Ile wierszy kolejki kasuje jedna transakcja przy zatrzymaniu (zob. haltRun). */
+    private const HALT_DELETE_CHUNK = 200;
+
     /**
      * Import cennika i enrichment potrafią zapisać ten sam produkt kilka razy pod
      * rząd — bez unikalności każdy zapis wkładałby do kolejki osobny reindeks.
@@ -49,6 +52,22 @@ class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
         public readonly bool $force = false,
     ) {
         $this->onQueue(self::QUEUE);
+    }
+
+    /**
+     * Zadanie ma sens tylko wtedy, gdy jest dokąd zapisać wektor. Przy wyłączonym wyszukiwaniu
+     * wektorowym każdy zapis karty wkładał do kolejki zadanie, które po pobraniu kończyło się
+     * natychmiast — 16 workerów kolejki embeddings waliło wtedy w tabelę `jobs` bez przerwy
+     * i wywracało ją zakleszczeniami (22.09.2026: 620 wpisów w failed_jobs,
+     * wszystkie MaxAttemptsExceededException, przy zerze wektorów w katalogu).
+     *
+     * Po ponownym włączeniu wektorów nic nie ginie: embedding_hash każdej karty jest wtedy pusty
+     * (AiSettingsService czyści go przy zmianie profilu), a pełny indeks buduje
+     * products:reindex-embeddings.
+     */
+    public static function dispatch(...$arguments)
+    {
+        return static::dispatchIf(app(ProductEmbeddingIndexer::class)->shouldIndex(), ...$arguments);
     }
 
     public function uniqueId(): string
@@ -99,9 +118,35 @@ class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        DB::table('jobs')
-            ->where('queue', self::QUEUE)
-            ->whereNull('reserved_at')
-            ->delete();
+        // Jeden DELETE po kolumnie `queue` skanuje cały zakres kolejki i bierze blokady na wierszach,
+        // po które w tej samej chwili sięga `select ... for update` workerów pobierających zadania —
+        // MySQL rozwiązywał to zakleszczeniem (1213) po obu stronach. Kasujemy porcjami po kluczu
+        // głównym: blokada obejmuje wtedy tylko te wiersze, które naprawdę znikają.
+        //
+        // Górna granica z chwili zatrzymania: pętla ma skończyć na tym, co leżało w kolejce teraz,
+        // a nie gonić zleceń dokładanych w trakcie kasowania.
+        $lastId = (int) (DB::table('jobs')->where('queue', self::QUEUE)->max('id') ?? 0);
+        if ($lastId === 0) {
+            return;
+        }
+
+        while (true) {
+            $ids = DB::table('jobs')
+                ->where('queue', self::QUEUE)
+                ->where('id', '<=', $lastId)
+                ->whereNull('reserved_at')
+                ->orderBy('id')
+                ->limit(self::HALT_DELETE_CHUNK)
+                ->pluck('id')
+                ->all();
+
+            if ($ids === []) {
+                return;
+            }
+
+            if (DB::table('jobs')->whereIn('id', $ids)->delete() === 0) {
+                return;
+            }
+        }
     }
 }

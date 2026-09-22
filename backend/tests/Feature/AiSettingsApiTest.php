@@ -199,6 +199,33 @@ final class AiSettingsApiTest extends TestCase
             ->assertStatus(422);
     }
 
+    /**
+     * Pusty „Embedding base URL” przy dostawcy „local” schodzi do adresu i klucza czatu.
+     * Na produkcji 22.09.2026 dawało to profil „local + https://openrouter.ai/api/v1
+     * + baai/bge-m3”, po którym nikt nie poznał, dokąd naprawdę pójdą zapytania o wektory.
+     */
+    public function test_empty_embedding_base_url_reports_chat_endpoint_as_effective(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->putJson('/api/ai-settings', [
+            'enabled' => true,
+            'base_url' => 'https://openrouter.ai/api/v1',
+            'api_key' => 'sk-or-v1-test-1234567890',
+            'model' => 'deepseek/deepseek-v4-flash-0731',
+            'vector_enabled' => true,
+            'qdrant_url' => 'http://127.0.0.1:6333',
+            'embedding_provider' => 'local',
+            'embedding_base_url' => null,
+            'embedding_model' => 'baai/bge-m3',
+        ])->assertOk()
+            ->assertJsonPath('embedding_base_url', null)
+            ->assertJsonPath('embedding_effective_base_url', 'https://openrouter.ai/api/v1')
+            ->assertJsonPath('embedding_effective_model', 'baai/bge-m3');
+    }
+
     public function test_openrouter_embeddings_fall_back_to_chat_key(): void
     {
         $this->seed(RolesAndPermissionsSeeder::class);

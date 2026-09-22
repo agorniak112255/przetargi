@@ -15,9 +15,18 @@ final class ProductEmbeddingReindexOnSaveTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function product(): Product
+    protected function setUp(): void
     {
-        return Product::query()->create([
+        parent::setUp();
+        // Zlecenie reindeksu powstaje tylko wtedy, gdy jest dokąd zapisać wektor
+        // (zob. ReindexProductEmbeddingJob::dispatch i EmbeddingQueueGateTest).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
+    }
+
+    /** @return array<string, mixed> */
+    private function attributes(): array
+    {
+        return [
             'sku' => 'GLOVE-1',
             'name' => 'Rękawice chemiczne',
             'manufacturer' => 'Ansell',
@@ -25,7 +34,13 @@ final class ProductEmbeddingReindexOnSaveTest extends TestCase
             'catalog_price_net' => 10,
             'purchase_price' => 6,
             'stock' => 5,
-        ]);
+        ];
+    }
+
+    /** Karta na wejście testu — bez haków, żeby zliczać dopiero zlecenia z badanego zapisu. */
+    private function product(): Product
+    {
+        return Product::withoutEvents(fn (): Product => Product::query()->create($this->attributes()));
     }
 
     public function test_editing_description_queues_reindex(): void
@@ -56,7 +71,7 @@ final class ProductEmbeddingReindexOnSaveTest extends TestCase
     {
         Bus::fake();
 
-        $this->product();
+        Product::query()->create($this->attributes());
 
         Bus::assertDispatched(ReindexProductEmbeddingJob::class);
     }

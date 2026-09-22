@@ -160,6 +160,10 @@ final class ProductEmbeddingIndexFailureTest extends TestCase
     {
         Cache::put(ReindexProductEmbeddingJob::HALT_CACHE_KEY, 1, 60);
         Http::fake([
+            // komenda sprawdza profil jednym osadzeniem, zanim zakolejkuje katalog
+            'https://emb.test/v1/embeddings' => Http::response([
+                'data' => [['embedding' => array_fill(0, 8, 0.1)]],
+            ]),
             'qdrant.test:6333/*' => Http::response(['result' => true], 200),
         ]);
 

@@ -47,6 +47,9 @@ final class RepairPriceListNamesCommandTest extends TestCase
     {
         $dover = $this->wronglyNamedDover();
         Queue::fake(); // po zapisie produktu — sam zapis też reindeksuje
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
 
         $this->artisan('products:repair-price-list-names', ['file' => $this->path, '--manufacturer' => 'Canis'])
             ->expectsOutputToContain('Do poprawy: 1 nazw')
@@ -73,6 +76,9 @@ final class RepairPriceListNamesCommandTest extends TestCase
         $cutSize = $this->product('1010-130-270-00', 'Men´s jacket CXS SOLIS FLEX, blue-black, size 46 -', 'Kurtka robocza CXS SOLIS FLEX, niebiesko-czarna.');
         $handWritten = $this->product('1112-001-000-00', 'Filter type 6055 A2 against gases', 'Opis wpisany ręcznie przez handlowca.', Product::ENRICHMENT_MANUAL);
         Queue::fake(); // po zapisie produktów — sam zapis też reindeksuje
+        // Reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym
+        // (zob. ReindexProductEmbeddingJob::dispatch).
+        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
 
         $this->artisan('products:repair-price-list-names', [
             'file' => $this->path, '--manufacturer' => 'Canis', '--apply' => true, '--backup' => $this->backup,
