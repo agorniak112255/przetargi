@@ -15,7 +15,14 @@ namespace App\Support;
  */
 final class InquiryReplyHtml
 {
-    private const FONT = 'font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.55;color:#24211f';
+    /**
+     * Kolor tekstu wpisany wprost w każdy element na jasnym tle. Ciemny motyw
+     * Thunderbirda podmienia kolor dziedziczony na jasny, a białe tło kafla
+     * zostawia — tekst bez własnego koloru znikał (nazwa, plakietki, wartość).
+     */
+    private const TEXT = '#24211f';
+
+    private const FONT = 'font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.55;color:'.self::TEXT;
 
     /** Węgiel — kafel zapytania. */
     private const INK = '#1f1d1b';
@@ -133,7 +140,7 @@ final class InquiryReplyHtml
 
         foreach ($rows as $row) {
             $facts = is_array($row['facts'] ?? null) ? $row['facts'] : [];
-            $html .= '<tr><td style="background:#ffffff;border-left:4px solid '.self::ACCENT.';'
+            $html .= '<tr><td style="background:#ffffff;color:'.self::TEXT.';border-left:4px solid '.self::ACCENT.';'
                 .'border-radius:0 8px 8px 0;box-shadow:0 1px 5px rgba(25,22,20,0.09);padding:16px 18px">'
                 .'<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%">'
                 .'<tr><td style="vertical-align:top">'
@@ -167,7 +174,7 @@ final class InquiryReplyHtml
             ($norms = trim((string) ($facts['norms'] ?? ''))) === '' ? null : $norms,
         ]));
 
-        $html = '<div style="font-size:15px;font-weight:bold">'.self::text($name).'</div>';
+        $html = '<div style="font-size:15px;font-weight:bold;color:'.self::TEXT.'">'.self::text($name).'</div>';
         if ($line !== []) {
             $html .= '<div style="font-size:12px;color:#8a817a;margin-top:4px">'
                 .self::text(implode(' · ', $line)).'</div>';
@@ -181,7 +188,7 @@ final class InquiryReplyHtml
         if ($chips !== []) {
             $html .= '<div style="font-size:12px;margin-top:9px">';
             foreach ($chips as $chip) {
-                $html .= '<span style="background:'.self::CHIP_BG.';padding:4px 10px;border-radius:12px;'
+                $html .= '<span style="background:'.self::CHIP_BG.';color:'.self::TEXT.';padding:4px 10px;border-radius:12px;'
                     .'margin-right:4px;display:inline-block">'.self::text($chip).'</span>';
             }
             $html .= '</div>';
@@ -236,7 +243,7 @@ final class InquiryReplyHtml
 
         return '<div style="font-size:10px;letter-spacing:0.8px;text-transform:uppercase;color:'.self::LABEL.'">'
             .'Wartość</div>'
-            .'<div style="font-size:19px;font-weight:bold;margin-top:2px">'.self::text($total).'</div>';
+            .'<div style="font-size:19px;font-weight:bold;color:'.self::TEXT.';margin-top:2px">'.self::text($total).'</div>';
     }
 
     /**
@@ -361,7 +368,7 @@ final class InquiryReplyHtml
         }
 
         $html = '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;'
-            .'width:100%;background:#ffffff;border-radius:8px;box-shadow:0 1px 5px rgba(25,22,20,0.09);margin:0 0 16px">';
+            .'width:100%;background:#ffffff;color:'.self::TEXT.';border-radius:8px;box-shadow:0 1px 5px rgba(25,22,20,0.09);margin:0 0 16px">';
         foreach (array_chunk($terms, 2) as $index => $pair) {
             $html .= '<tr>';
             foreach ($pair as $column => $term) {
@@ -369,7 +376,7 @@ final class InquiryReplyHtml
                     .'vertical-align:top'.($column === 1 ? ';border-left:1px solid '.self::HAIRLINE : '').'">'
                     .'<div style="font-size:10px;letter-spacing:0.8px;text-transform:uppercase;color:'.self::LABEL.'">'
                     .self::text($term['label']).'</div>'
-                    .'<div style="margin-top:3px">'.self::text($term['value']).'</div>'
+                    .'<div style="margin-top:3px;color:'.self::TEXT.'">'.self::text($term['value']).'</div>'
                     .'</td>';
             }
             if (count($pair) === 1) {
