@@ -13,6 +13,7 @@ use App\Models\ProductEnrichmentBatch;
 use App\Services\B2b\B2bAccountPriceList;
 use App\Services\B2b\B2bDescriptionSource;
 use App\Services\PriceListDeletionService;
+use App\Services\PriceListDiscountService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -24,6 +25,7 @@ class PriceListController extends Controller
         private readonly PriceListDeletionService $deletion,
         private readonly B2bAccountPriceList $b2bLists,
         private readonly B2bDescriptionSource $b2bDescriptions,
+        private readonly PriceListDiscountService $discounts,
     ) {}
 
     public function index(): JsonResponse
@@ -285,6 +287,48 @@ class PriceListController extends Controller
                     : '',
                 $productsUpdated > 0
                     ? sprintf(', zaktualizowano producent na %d produktach', $productsUpdated)
+                    : ''
+            ),
+        ]);
+    }
+
+    /**
+     * Rabaty cen z tego cennika (per grupa asortymentowa i wspólny dla reszty kart) — do edycji po imporcie.
+     */
+    public function discounts(PriceList $priceList): JsonResponse
+    {
+        return response()->json($this->discounts->summary($priceList));
+    }
+
+    public function updateDiscounts(Request $request, PriceList $priceList): JsonResponse
+    {
+        $data = $request->validate([
+            'groups' => ['sometimes', 'array'],
+            'groups.*.id' => ['required', 'integer'],
+            'groups.*.discount_percent' => ['required', 'numeric', 'min:0', 'max:100'],
+            'ungrouped_discount' => ['nullable', 'numeric', 'min:0', 'max:100'],
+        ]);
+
+        $groupDiscounts = [];
+        foreach ($data['groups'] ?? [] as $row) {
+            $groupDiscounts[(int) $row['id']] = round((float) $row['discount_percent'], 2);
+        }
+        $ungrouped = isset($data['ungrouped_discount']) ? round((float) $data['ungrouped_discount'], 2) : null;
+        if ($groupDiscounts === [] && $ungrouped === null) {
+            return response()->json(['message' => 'Brak rabatu do zapisania.'], 422);
+        }
+
+        $result = $this->discounts->apply($priceList, $groupDiscounts, $ungrouped);
+
+        return response()->json([
+            ...$result,
+            'discounts' => $this->discounts->summary($priceList),
+            'message' => sprintf(
+                'Zapisano rabat cennika %s: nowa cena zakupu na %d kartach%s.',
+                $priceList->manufacturer,
+                $result['products_changed'],
+                $result['b2b_priced'] > 0
+                    ? sprintf(' (w tym %d z ceną z konta B2B — ich cena obowiązująca zostaje z B2B)', $result['b2b_priced'])
                     : ''
             ),
         ]);

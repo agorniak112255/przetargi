@@ -232,6 +232,10 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/price-lists/{priceList}', [PriceListController::class, 'show'])->middleware('permission:price_lists.view');
     Route::patch('/price-lists/{priceList}', [PriceListController::class, 'update'])
         ->middleware('permission:price_lists.import');
+    Route::get('/price-lists/{priceList}/discounts', [PriceListController::class, 'discounts'])
+        ->middleware('permission:price_lists.import');
+    Route::put('/price-lists/{priceList}/discounts', [PriceListController::class, 'updateDiscounts'])
+        ->middleware('permission:price_lists.import');
     Route::delete('/price-lists/{priceList}/imports/{import}', [PriceListController::class, 'destroyImport'])
         ->middleware('permission:price_lists.delete');
     Route::delete('/price-lists/{priceList}', [PriceListController::class, 'destroy'])

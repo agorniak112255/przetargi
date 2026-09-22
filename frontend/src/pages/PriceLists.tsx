@@ -140,6 +140,36 @@ function b2bLockedTitle(account: PriceListB2bAccount): string {
   return `Cennik konta B2B (${label}${account.username}) — aby go usunąć lub edytować, najpierw usuń konto w zakładce Cenniki → B2B.`
 }
 
+/** Rabaty cen z cennika z pliku — GET/PUT /price-lists/{id}/discounts. */
+type PriceListDiscounts = {
+  groups: Array<{ id: number; name: string; discount_percent: number; product_count: number }>
+  ungrouped: { product_count: number; discount_percent: number | null; mixed: boolean }
+  product_count: number
+  b2b_priced_count: number
+}
+
+/** Formularz rabatów w edycji wpisu: wartości jako tekst pól, porównywane z odczytem przy zapisie. */
+type DiscountDraft = {
+  source: PriceListDiscounts
+  groups: Record<number, string>
+  ungrouped: string
+}
+
+function discountDraftFrom(d: PriceListDiscounts): DiscountDraft {
+  return {
+    source: d,
+    groups: Object.fromEntries(d.groups.map((g) => [g.id, String(g.discount_percent)])),
+    ungrouped: d.ungrouped.discount_percent != null ? String(d.ungrouped.discount_percent) : '',
+  }
+}
+
+function parseDiscount(raw: string): number | null | 'invalid' {
+  const t = raw.trim().replace(',', '.')
+  if (t === '') return null
+  const n = Number(t)
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : 'invalid'
+}
+
 type ImportResult = {
   created: number
   updated: number
@@ -460,6 +490,8 @@ export function PriceLists() {
   const [editManufacturer, setEditManufacturer] = useState('')
   const [editVersion, setEditVersion] = useState('')
   const [editBusyId, setEditBusyId] = useState<number | null>(null)
+  const [editDiscounts, setEditDiscounts] = useState<DiscountDraft | null>(null)
+  const [editDiscountsLoading, setEditDiscountsLoading] = useState(false)
   const [manufacturer, setManufacturer] = useState('')
   const [version, setVersion] = useState('')
   const [category, setCategory] = useState('')
@@ -568,14 +600,42 @@ export function PriceLists() {
     setEditId(row.id)
     setEditManufacturer(row.manufacturer)
     setEditVersion(row.version)
+    setEditDiscounts(null)
     setErr('')
     setMsg('')
+    setEditDiscountsLoading(true)
+    void api<PriceListDiscounts>(`/price-lists/${row.id}/discounts`)
+      .then((d) => setEditDiscounts(discountDraftFrom(d)))
+      .catch((e) => setErr(e instanceof Error ? `Rabat: ${e.message}` : 'Nie udało się wczytać rabatu cennika'))
+      .finally(() => setEditDiscountsLoading(false))
   }
 
   function cancelEditPriceList() {
     setEditId(null)
     setEditManufacturer('')
     setEditVersion('')
+    setEditDiscounts(null)
+  }
+
+  /** Zmienione rabaty do PUT — null, gdy nic się nie zmieniło; string = komunikat błędu pola. */
+  function changedDiscounts():
+    | { groups: Array<{ id: number; discount_percent: number }>; ungrouped_discount: number | null }
+    | null
+    | string {
+    if (!editDiscounts) return null
+    const groups: Array<{ id: number; discount_percent: number }> = []
+    for (const g of editDiscounts.source.groups) {
+      const v = parseDiscount(editDiscounts.groups[g.id] ?? '')
+      if (v === 'invalid' || v === null) return `Rabat grupy „${g.name}” musi być liczbą od 0 do 100.`
+      if (Math.abs(v - g.discount_percent) >= 0.005) groups.push({ id: g.id, discount_percent: v })
+    }
+    const u = parseDiscount(editDiscounts.ungrouped)
+    if (u === 'invalid') return 'Rabat musi być liczbą od 0 do 100.'
+    const before = editDiscounts.source.ungrouped.discount_percent
+    // puste pole przy różnych rabatach kart = bez zmian
+    const ungrouped = u !== null && (before == null || Math.abs(u - before) >= 0.005) ? u : null
+    if (groups.length === 0 && ungrouped === null) return null
+    return { groups, ungrouped_discount: ungrouped }
   }
 
   async function saveEditPriceList(row: PriceList) {
@@ -583,6 +643,20 @@ export function PriceLists() {
     const version = editVersion.trim()
     if (!manufacturer || !version) {
       setErr('Producent i wersja nie mogą być puste.')
+      return
+    }
+    const discounts = changedDiscounts()
+    if (typeof discounts === 'string') {
+      setErr(discounts)
+      return
+    }
+    if (
+      discounts &&
+      !confirm(
+        `Zmienić rabat cennika „${row.manufacturer}”?\n` +
+          'Cena zakupu z tego cennika zostanie przeliczona od ceny katalogowej na wszystkich jego kartach.',
+      )
+    ) {
       return
     }
     const productCount = (row.product_ids ?? []).length
@@ -613,7 +687,15 @@ export function PriceLists() {
         if (next[row.id]) next[row.id] = { ...next[row.id], ...res.price_list }
         return next
       })
-      setMsg(res.message)
+      let message = res.message
+      if (discounts) {
+        const d = await api<{ message: string }>(`/price-lists/${row.id}/discounts`, {
+          method: 'PUT',
+          body: JSON.stringify(discounts),
+        })
+        message = `${message} ${d.message}`
+      }
+      setMsg(message)
       cancelEditPriceList()
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zapisu cennika')
@@ -2331,6 +2413,72 @@ export function PriceLists() {
                     </td>
                   )}
                 </tr>
+                {editing && (
+                  <tr className="border-b bg-sky-50/60">
+                    <td colSpan={historyColSpan} className="px-3 py-2 text-xs">
+                      {editDiscountsLoading ? (
+                        <span className="text-slate-500">Wczytuję rabat cennika…</span>
+                      ) : !editDiscounts ? null : editDiscounts.source.product_count === 0 ? (
+                        <span className="text-slate-500">
+                          Ten wpis nie ma cen z pliku z ceną katalogową — nie ma czego przeliczać rabatem.
+                        </span>
+                      ) : (
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                          <span className="font-semibold text-slate-700">Rabat %</span>
+                          {editDiscounts.source.groups.map((g) => (
+                            <label key={g.id} className="inline-flex items-center gap-1 text-slate-700">
+                              <span title={`${g.product_count} kart w grupie`}>
+                                {g.name} <span className="text-slate-400">({g.product_count})</span>
+                              </span>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step="0.01"
+                                className="w-20 rounded border border-slate-300 px-1.5 py-1 text-xs tabular-nums"
+                                value={editDiscounts.groups[g.id] ?? ''}
+                                disabled={editBusyId === r.id}
+                                onChange={(e) =>
+                                  setEditDiscounts((d) =>
+                                    d ? { ...d, groups: { ...d.groups, [g.id]: e.target.value } } : d,
+                                  )
+                                }
+                              />
+                            </label>
+                          ))}
+                          {editDiscounts.source.ungrouped.product_count > 0 && (
+                            <label className="inline-flex items-center gap-1 text-slate-700">
+                              <span>
+                                {editDiscounts.source.groups.length > 0 ? 'Pozostałe karty' : 'Cały cennik'}{' '}
+                                <span className="text-slate-400">({editDiscounts.source.ungrouped.product_count})</span>
+                              </span>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step="0.01"
+                                className="w-20 rounded border border-slate-300 px-1.5 py-1 text-xs tabular-nums"
+                                value={editDiscounts.ungrouped}
+                                placeholder={editDiscounts.source.ungrouped.mixed ? 'różne' : ''}
+                                disabled={editBusyId === r.id}
+                                onChange={(e) =>
+                                  setEditDiscounts((d) => (d ? { ...d, ungrouped: e.target.value } : d))
+                                }
+                              />
+                            </label>
+                          )}
+                          <span className="text-[11px] text-slate-500">
+                            Zakup = cena katalogowa × (1 − rabat).
+                            {editDiscounts.source.ungrouped.mixed &&
+                              ' Karty mają dziś różne rabaty — puste pole zostawia je bez zmian.'}
+                            {editDiscounts.source.b2b_priced_count > 0 &&
+                              ` ${editDiscounts.source.b2b_priced_count} kart ma cenę z konta B2B — ich cena obowiązująca zostaje z B2B.`}
+                          </span>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                )}
                 {kind && (
                   <tr
                     className={`border-b ${
