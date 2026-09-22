@@ -5,40 +5,54 @@ declare(strict_types=1);
 namespace App\Support;
 
 /**
- * List do klienta w HTML: zapytanie w ciemnym kaflu u góry, pod nim nasze
- * pozycje jako osobne wiersze-kafelki z terakotową krawędzią.
+ * List do klienta w HTML, układ „bento”: po lewej jeden duży kafel na wyrób
+ * (nazwa, cena, opis raz) z małymi kafelkami rozmiarów pod spodem, po prawej
+ * kolumna kafli — zapytanie klienta, warunki i suma.
  *
  * Powstaje z tych samych danych co wersja tekstowa (`reply_body`), więc obie
  * mówią to samo. Style są wpisane w znaczniki, bo programy pocztowe wycinają
- * arkusze stylów — bez tego list rozpadłby się u odbiorcy. Zaokrąglenia i cienie
- * pomija stary Outlook; układ trzyma się wtedy na tłach i krawędziach.
+ * arkusze stylów — bez tego list rozpadłby się u odbiorcy. Zaokrąglenia pomija
+ * stary Outlook; układ trzyma się wtedy na tłach.
  */
 final class InquiryReplyHtml
 {
     /**
-     * Kolor tekstu wpisany wprost w każdy element na jasnym tle. Ciemny motyw
-     * Thunderbirda podmienia kolor dziedziczony na jasny, a białe tło kafla
-     * zostawia — tekst bez własnego koloru znikał (nazwa, plakietki, wartość).
+     * Kolor tekstu wpisany wprost w każdy element. Ciemny motyw Thunderbirda
+     * podmienia kolor dziedziczony na jasny, a tła wpisane w znaczniki zostawia
+     * jasne — tekst bez własnego koloru znikał.
      */
-    private const TEXT = '#24211f';
+    private const TEXT = '#1c1917';
+
+    private const BODY = '#44403c';
+
+    private const MUTED = '#78716c';
 
     private const FONT = 'font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.55;color:'.self::TEXT;
 
-    /** Węgiel — kafel zapytania. */
-    private const INK = '#1f1d1b';
+    /** Beżowe tło listu, na którym stoją białe kafle. */
+    private const PAGE_BG = '#f5f3ef';
 
-    /** Terakota — krawędź pozycji i suma. */
-    private const ACCENT = '#b35a32';
+    private const TILE_BG = '#ffffff';
 
-    private const MUTED = '#6f6862';
+    /** Kafelek rozmiaru. */
+    private const SIZE_BG = '#fafaf9';
 
-    private const LABEL = '#a49b93';
+    private const BORDER = '#e7e5e4';
 
-    private const PAGE_BG = '#f7f6f5';
+    /** Kafel zapytania klienta. */
+    private const ASKED_BG = '#e7e5e4';
 
-    private const CHIP_BG = '#f4f1ee';
+    /** Zieleń — suma i plakietka liczby rozmiarów. */
+    private const TOTAL_BG = '#166534';
 
-    private const HAIRLINE = '#f0ece8';
+    private const TOTAL_SOFT = '#bbf7d0';
+
+    private const BADGE_BG = '#ecfdf5';
+
+    private const BADGE = '#047857';
+
+    /** Tyle kafelków rozmiarów stoi w jednym rzędzie. */
+    private const SIZES_PER_ROW = 3;
 
     /**
      * @param  list<array{head: string, quote: string|null, answer: list<string>, answer_roles?: list<string>, facts?: array<string, mixed>}>  $rows
@@ -56,38 +70,53 @@ final class InquiryReplyHtml
     ): string {
         // 60% okna: na pełnej szerokości opis rozlewał się w długie, męczące wiersze.
         // Dolna granica chroni wąskie okna (telefon), gdzie 60% byłoby za ciasne.
-        $html = '<div style="'.self::FONT.';background:'.self::PAGE_BG.';padding:24px;border-radius:10px;'
+        $html = '<div style="'.self::FONT.';background:'.self::PAGE_BG.';padding:22px;border-radius:18px;'
             .'width:60%;min-width:320px;box-sizing:border-box">';
         $html .= self::paragraph($intro);
-        $html .= self::asked($asked);
-        $html .= self::items($rows);
-        $html .= self::summary($rows);
-        $html .= self::terms($terms);
 
-        if ($note !== null && trim($note) !== '') {
-            $html .= self::paragraph($note);
+        $main = self::items($rows);
+        $side = self::asked($asked).self::terms($terms).self::summary($rows);
+        if ($main === '' || $side === '') {
+            $html .= $main.$side;
+        } else {
+            $html .= '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%">'
+                .'<tr><td style="vertical-align:top;color:'.self::TEXT.'">'.$main.'</td>'
+                .'<td style="width:12px"></td>'
+                .'<td style="width:32%;vertical-align:top;color:'.self::TEXT.'">'.$side.'</td></tr></table>';
         }
 
-        $html .= self::paragraph(implode("\n", $outro));
+        if ($note !== null && trim($note) !== '') {
+            $html .= self::paragraph($note, '18px 0 0');
+        }
+
+        $html .= self::paragraph(implode("\n", $outro), '18px 0 0');
 
         return $html.'</div>';
     }
 
-    private static function paragraph(string $text): string
+    private static function paragraph(string $text, string $margin = '0 0 16px'): string
     {
         $trimmed = trim($text);
         if ($trimmed === '') {
             return '';
         }
 
-        return '<p style="margin:0 0 16px;color:'.self::MUTED.'">'.self::text($trimmed).'</p>';
+        return '<p style="margin:'.$margin.';color:'.self::BODY.'">'.self::text($trimmed).'</p>';
     }
 
-    /** Nagłówek sekcji: drobne wersaliki nad blokiem. */
-    private static function caption(string $label): string
+    /** Drobne wersaliki nad treścią kafla. */
+    private static function caption(string $label, string $color = self::MUTED): string
     {
-        return '<div style="font-size:10px;letter-spacing:1.4px;text-transform:uppercase;'
-            .'color:'.self::LABEL.';margin:0 0 10px">'.self::text($label).'</div>';
+        return '<div style="font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:'.$color.'">'
+            .self::text($label).'</div>';
+    }
+
+    /** Kafel w prawej kolumnie; kolejne kafle dzieli odstęp nad nimi. */
+    private static function sideTile(string $content, string $background, string $color): string
+    {
+        return '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;'
+            .'width:100%;margin:0 0 12px"><tr><td style="background:'.$background.';color:'.$color.';'
+            .'border-radius:16px;padding:16px">'.$content.'</td></tr></table>';
     }
 
     /**
@@ -104,30 +133,90 @@ final class InquiryReplyHtml
             return '';
         }
 
-        $head = trim($title.($title !== '' && $date !== '' ? ' · ' : '').$date);
-
-        $html = '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;'
-            .'width:100%;background:'.self::INK.';border-radius:8px;margin:0 0 20px">'
-            .'<tr><td style="padding:18px 20px">';
-        $html .= '<div style="font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:#9c948c">'
-            .'Zapytanie klienta</div>';
-        if ($head !== '') {
-            $html .= '<div style="font-size:16px;font-weight:bold;color:#ffffff;margin-top:4px">'
-                .self::text($head).'</div>';
+        $html = self::caption('Zapytanie klienta');
+        if ($title !== '') {
+            $html .= '<div style="font-size:13px;font-weight:bold;color:'.self::TEXT.';margin-top:4px">'
+                .self::text($title).'</div>';
+        }
+        if ($date !== '') {
+            $html .= '<div style="font-size:12px;color:#57534e">'.self::text($date).'</div>';
         }
         if ($lines !== []) {
-            $html .= '<div style="font-size:12px;color:#b9b0a7;margin-top:10px;line-height:1.8">'
-                .self::text(implode("\n", $lines))
-                .'</div>';
+            $html .= '<div style="font-size:12px;color:'.self::BODY.';margin-top:8px;line-height:1.7">'
+                .self::text(implode("\n", $lines)).'</div>';
         }
 
-        return $html.'</td></tr></table>';
+        return self::sideTile($html, self::ASKED_BG, self::TEXT);
     }
 
     /**
-     * Pozycje jako wiersze-kafelki: nazwa i dane techniczne po lewej, wartość po
-     * prawej. Jednolity blok tekstu czytało się ciężko — klient szukał wzrokiem
-     * rozmiaru, ilości i ceny pośród zdań opisu.
+     * Warunki w jednym kafelku, każdy w osobnej linii — klient pyta o nie wprost,
+     * więc stoją osobno, a nie w akapicie razem z dopiskiem handlowca.
+     *
+     * @param  list<array{label: string, value: string}>  $terms
+     */
+    private static function terms(array $terms): string
+    {
+        if ($terms === []) {
+            return '';
+        }
+
+        $html = self::caption('Warunki');
+        foreach ($terms as $term) {
+            $html .= '<div style="font-size:12px;color:'.self::BODY.';margin-top:4px">'
+                .self::text($term['label'].': ')
+                .'<b style="color:'.self::TEXT.'">'.self::text($term['value']).'</b></div>';
+        }
+
+        return self::sideTile($html, self::TILE_BG, self::TEXT);
+    }
+
+    /**
+     * Suma w zielonym kafelku. Liczymy tylko pozycje, które mają wartość — gdy
+     * choć jednej brakuje ceny albo ilości, mówimy o tym wprost zamiast podawać
+     * sumę części oferty jako całość.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     */
+    private static function summary(array $rows): string
+    {
+        $sum = 0.0;
+        $counted = 0;
+        $missing = 0;
+        foreach ($rows as $row) {
+            $facts = self::facts($row);
+            $value = $facts['total_pln'] ?? null;
+            if (is_numeric($value)) {
+                $sum += (float) $value;
+                $counted++;
+
+                continue;
+            }
+            $missing++;
+        }
+        if ($counted === 0) {
+            return '';
+        }
+
+        $html = self::caption('Razem netto', self::TOTAL_SOFT)
+            .'<div style="font-size:26px;font-weight:bold;color:#ffffff;white-space:nowrap">'
+            .self::text(number_format($sum, 2, ',', ' ').' zł').'</div>';
+        $quantity = self::quantitySum($rows);
+        if ($missing > 0) {
+            $html .= '<div style="font-size:11px;color:'.self::TOTAL_SOFT.'">'
+                .self::text('bez pozycji, dla których podamy cenę po weryfikacji').'</div>';
+        } elseif ($quantity !== null) {
+            $html .= '<div style="font-size:11px;color:'.self::TOTAL_SOFT.'">'.self::text($quantity).'</div>';
+        }
+
+        return self::sideTile($html, self::TOTAL_BG, '#ffffff');
+    }
+
+    /**
+     * Pozycje z tym samym wyrobem stoją w jednym kaflu — opis wyrobu klient czyta
+     * raz, a rozmiary widzi obok siebie. Łączymy tylko pozycje, które w liście
+     * wyglądałyby identycznie poza rozmiarem, ilością i ceną; inny opis albo inny
+     * zamiennik to już osobny kafel.
      *
      * @param  list<array<string, mixed>>  $rows
      */
@@ -137,67 +226,206 @@ final class InquiryReplyHtml
             return '';
         }
 
-        $html = self::caption('Propozycja');
-        $html .= '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:separate;'
-            .'border-spacing:0 10px;width:100%;margin:-10px 0 4px">';
+        $groups = [];
+        foreach ($rows as $index => $row) {
+            $key = self::groupKey($row);
+            if ($key === null) {
+                $groups[] = ['rows' => [$row], 'numbers' => [$index + 1]];
 
-        foreach ($rows as $row) {
-            $facts = is_array($row['facts'] ?? null) ? $row['facts'] : [];
-            $html .= '<tr><td style="background:#ffffff;color:'.self::TEXT.';border-left:4px solid '.self::ACCENT.';'
-                .'border-radius:0 8px 8px 0;box-shadow:0 1px 5px rgba(25,22,20,0.09);padding:16px 18px">'
-                .'<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%">'
-                .'<tr><td style="vertical-align:top">'
-                .self::itemMain($row, $facts)
-                .'</td><td style="vertical-align:top;text-align:right;padding-left:14px;white-space:nowrap">'
-                .self::itemValue($facts)
-                .'</td></tr></table>'
-                .self::itemNotes($row)
-                .'</td></tr>';
+                continue;
+            }
+            $groups[$key] ??= ['rows' => [], 'numbers' => []];
+            $groups[$key]['rows'][] = $row;
+            $groups[$key]['numbers'][] = $index + 1;
+        }
+
+        $html = '<div style="font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:'.self::MUTED.';'
+            .'margin:0 0 10px">'.self::text('Propozycja').'</div>';
+        foreach ($groups as $group) {
+            $html .= self::productTile($group['rows'], $group['numbers']);
+        }
+
+        return $html;
+    }
+
+    /**
+     * Klucz wyrobu albo null, gdy pozycja nie ma wyrobu (wtedy zawsze stoi sama).
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private static function groupKey(array $row): ?string
+    {
+        $name = self::productName($row, false);
+        if ($name === null) {
+            return null;
+        }
+        $facts = self::facts($row);
+
+        return json_encode([
+            $name,
+            trim((string) ($facts['code'] ?? '')),
+            trim((string) ($facts['norms'] ?? '')),
+            self::notes($row),
+        ], JSON_UNESCAPED_UNICODE) ?: null;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows  pozycje jednego wyrobu
+     * @param  list<int>  $numbers  numery pozycji w liście
+     */
+    private static function productTile(array $rows, array $numbers): string
+    {
+        $first = $rows[0];
+        $facts = self::facts($first);
+        $name = self::productName($first, true) ?? '';
+
+        $meta = array_values(array_filter([
+            ($code = trim((string) ($facts['code'] ?? ''))) === '' ? null : 'kod '.$code,
+            ($norms = trim((string) ($facts['norms'] ?? ''))) === '' ? null : $norms,
+        ]));
+
+        $head = '';
+        $badge = self::badge($rows);
+        if ($badge !== null) {
+            $head .= '<span style="display:inline-block;background:'.self::BADGE_BG.';color:'.self::BADGE.';'
+                .'font-size:11px;font-weight:bold;border-radius:20px;padding:3px 10px;margin-bottom:10px">'
+                .self::text($badge).'</span>';
+        }
+        $head .= '<div style="font-size:20px;font-weight:bold;color:'.self::TEXT.';line-height:1.3">'.self::text($name).'</div>';
+        if ($meta !== []) {
+            $head .= '<div style="font-size:12px;color:'.self::MUTED.';margin-top:2px">'.self::text(implode(' · ', $meta)).'</div>';
+        }
+
+        // Cena za jednostkę stoi przy nazwie tylko wtedy, gdy cena i jednostka są
+        // te same dla wszystkich rozmiarów; inaczej każdy kafelek podaje swoją.
+        $prices = array_values(array_unique(array_map(
+            fn (array $row): string => (string) self::unitPrice(self::facts($row)),
+            $rows,
+        )));
+        $sharedPrice = count($prices) === 1 && $prices[0] !== ''
+            ? trim((string) ($facts['price'] ?? ''))
+            : null;
+        $priceCell = '';
+        if ($sharedPrice !== null) {
+            $unit = self::unitOf($facts);
+            $priceCell = '<div style="font-size:26px;font-weight:bold;color:'.self::TEXT.'">'.self::text($sharedPrice).'</div>'
+                .'<div style="font-size:11px;color:'.self::MUTED.'">'
+                .self::text($unit === '' ? 'netto' : 'netto / '.self::singular($unit)).'</div>';
+        }
+
+        $html = '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin:0 0 12px">'
+            .'<tr><td style="background:'.self::TILE_BG.';color:'.self::TEXT.';border-radius:16px;padding:20px">'
+            .'<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%"><tr>'
+            .'<td style="vertical-align:top;color:'.self::TEXT.'">'.$head.'</td>'
+            .($priceCell === '' ? '' : '<td style="vertical-align:top;text-align:right;white-space:nowrap;padding-left:14px;color:'.self::TEXT.'">'.$priceCell.'</td>')
+            .'</tr></table>'
+            .self::notesHtml($first)
+            .self::sizeTiles($rows, $numbers, $sharedPrice === null)
+            .'</td></tr></table>';
+
+        return $html;
+    }
+
+    /**
+     * „3 rozmiary · 480 par” nad nazwą — tylko gdy wyrób ma kilka pozycji.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     */
+    private static function badge(array $rows): ?string
+    {
+        $count = count($rows);
+        if ($count < 2) {
+            return null;
+        }
+        $allSized = array_filter($rows, fn (array $row): bool => trim((string) (self::facts($row)['size'] ?? '')) !== '') === $rows;
+        $label = $count.' '.($allSized
+            ? self::plural($count, 'rozmiar', 'rozmiary', 'rozmiarów')
+            : self::plural($count, 'pozycja', 'pozycje', 'pozycji'));
+        $quantity = self::quantitySum($rows);
+
+        return $quantity === null ? $label : $label.' · '.$quantity;
+    }
+
+    /**
+     * Małe kafelki rozmiarów pod opisem, po trzy w rzędzie.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @param  list<int>  $numbers
+     */
+    private static function sizeTiles(array $rows, array $numbers, bool $withPrice): string
+    {
+        $tiles = [];
+        foreach ($rows as $index => $row) {
+            $facts = self::facts($row);
+            $size = trim((string) ($facts['size'] ?? ''));
+            $qty = trim((string) ($facts['qty'] ?? ''));
+            $total = trim((string) ($facts['total'] ?? ''));
+            $price = $withPrice ? self::unitPrice($facts) : null;
+            if ($size === '' && $qty === '' && $total === '' && $price === null) {
+                continue;
+            }
+
+            [$label, $value] = $size !== ''
+                ? ['rozmiar', $size]
+                : ['pozycja', (string) ($numbers[$index] ?? $index + 1)];
+            $line = '';
+            if ($qty !== '') {
+                $line .= self::text($qty);
+            }
+            if ($total !== '') {
+                $line .= ($line === '' ? '' : ' · ').'<b style="color:'.self::TEXT.'">'.self::text($total).'</b>';
+            }
+
+            $tiles[] = '<div style="font-size:11px;color:'.self::MUTED.'">'.self::text($label).'</div>'
+                .'<div style="font-size:18px;font-weight:bold;color:'.self::TEXT.'">'.self::text($value).'</div>'
+                .($line === '' ? '' : '<div style="font-size:12px;color:'.self::BODY.'">'.$line.'</div>')
+                .($price === null ? '' : '<div style="font-size:11px;color:'.self::MUTED.'">'.self::text($price).'</div>');
+        }
+        if ($tiles === []) {
+            return '';
+        }
+
+        $html = '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:separate;'
+            .'border-spacing:8px;width:100%;margin:8px -8px -8px;table-layout:fixed">';
+        foreach (array_chunk($tiles, self::SIZES_PER_ROW) as $chunk) {
+            $html .= '<tr>';
+            foreach ($chunk as $tile) {
+                $html .= '<td style="vertical-align:top;background:'.self::SIZE_BG.';border:1px solid '.self::BORDER.';'
+                    .'border-radius:12px;padding:10px 12px;color:'.self::TEXT.'">'.$tile.'</td>';
+            }
+            // Puste komórki trzymają szerokość kafelków w ostatnim, niepełnym rzędzie.
+            for ($i = count($chunk); $i < self::SIZES_PER_ROW; $i++) {
+                $html .= '<td></td>';
+            }
+            $html .= '</tr>';
         }
 
         return $html.'</table>';
     }
 
     /**
+     * Nazwa wyrobu w kaflu. Szablon „bez SKU” nie podaje nazwy z katalogu —
+     * nagłówkiem jest wtedy zdanie opisowe z treści listu. Gdy i tego nie ma
+     * (brak karty), zostaje nagłówek pozycji z zapytania klienta.
+     *
      * @param  array<string, mixed>  $row
-     * @param  array<string, mixed>  $facts
      */
-    private static function itemMain(array $row, array $facts): string
+    private static function productName(array $row, bool $fallbackToHead): ?string
     {
-        $name = trim((string) ($facts['name'] ?? ''));
-        if ($name === '') {
-            // Szablon „bez SKU” nie podaje nazwy z katalogu — nagłówkiem jest wtedy
-            // zdanie opisowe z treści listu. Gdy i tego nie ma (brak karty), zostaje
-            // nagłówek pozycji z zapytania klienta.
-            $name = self::lineWithRole($row, 'name') ?? trim((string) ($row['head'] ?? ''));
+        $name = trim((string) (self::facts($row)['name'] ?? ''));
+        if ($name !== '') {
+            return $name;
         }
-
-        $line = array_values(array_filter([
-            ($code = trim((string) ($facts['code'] ?? ''))) === '' ? null : 'kod '.$code,
-            ($norms = trim((string) ($facts['norms'] ?? ''))) === '' ? null : $norms,
-        ]));
-
-        $html = '<div style="font-size:15px;font-weight:bold;color:'.self::TEXT.'">'.self::text($name).'</div>';
-        if ($line !== []) {
-            $html .= '<div style="font-size:12px;color:#8a817a;margin-top:4px">'
-                .self::text(implode(' · ', $line)).'</div>';
+        $name = self::lineWithRole($row, 'name');
+        if ($name !== null) {
+            return $name;
         }
-
-        $chips = array_values(array_filter([
-            ($size = trim((string) ($facts['size'] ?? ''))) === '' ? null : 'rozmiar '.$size,
-            ($qty = trim((string) ($facts['qty'] ?? ''))) === '' ? null : $qty,
-            self::unitPrice($facts),
-        ]));
-        if ($chips !== []) {
-            $html .= '<div style="font-size:12px;margin-top:9px">';
-            foreach ($chips as $chip) {
-                $html .= '<span style="background:'.self::CHIP_BG.';color:'.self::TEXT.';padding:4px 10px;border-radius:12px;'
-                    .'margin-right:4px;display:inline-block">'.self::text($chip).'</span>';
-            }
-            $html .= '</div>';
+        if (! $fallbackToHead) {
+            return null;
         }
+        $head = trim((string) ($row['head'] ?? ''));
 
-        return $html;
+        return $head === '' ? null : $head;
     }
 
     /**
@@ -212,9 +440,49 @@ final class InquiryReplyHtml
         if ($price === '') {
             return null;
         }
-        $unit = trim(preg_replace('/^[\d\s.,]+/u', '', trim((string) ($facts['qty'] ?? ''))) ?? '');
+        $unit = self::unitOf($facts);
 
         return $unit === '' ? $price : $price.' / '.self::singular($unit);
+    }
+
+    /**
+     * Jednostka z ilości klienta („96 par” → „par”).
+     *
+     * @param  array<string, mixed>  $facts
+     */
+    private static function unitOf(array $facts): string
+    {
+        return trim(preg_replace('/^[\d\s.,]+/u', '', trim((string) ($facts['qty'] ?? ''))) ?? '');
+    }
+
+    /**
+     * Suma ilości („480 par”) — tylko gdy każda pozycja ma liczbę i wszystkie tę
+     * samą jednostkę. Par i kartonów nie dodajemy.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     */
+    private static function quantitySum(array $rows): ?string
+    {
+        $sum = 0.0;
+        $unit = null;
+        foreach ($rows as $row) {
+            $qty = trim((string) (self::facts($row)['qty'] ?? ''));
+            if (preg_match('/^(\d+(?:[.,]\d+)?)\s*(\S.*)$/u', $qty, $m) !== 1) {
+                return null;
+            }
+            $rowUnit = mb_strtolower(trim($m[2]));
+            if ($unit !== null && $rowUnit !== $unit) {
+                return null;
+            }
+            $unit = $rowUnit;
+            $sum += (float) str_replace(',', '.', $m[1]);
+        }
+        if ($unit === null) {
+            return null;
+        }
+        $number = floor($sum) === $sum ? number_format($sum, 0, ',', ' ') : number_format($sum, 2, ',', ' ');
+
+        return $number.' '.$unit;
     }
 
     /** „pary” → „para”, „sztuk” → „szt.” — jednostka przy cenie stoi w liczbie pojedynczej. */
@@ -228,25 +496,20 @@ final class InquiryReplyHtml
             str_starts_with($lower, 'opak'), str_starts_with($lower, 'op.') => 'opak.',
             str_starts_with($lower, 'kpl'), str_starts_with($lower, 'komplet') => 'kpl.',
             str_starts_with($lower, 'zest') => 'zestaw',
+            str_starts_with($lower, 'karton') => 'karton',
             default => $unit,
         };
     }
 
-    /**
-     * Wartość pozycji po prawej stronie kafelka.
-     *
-     * @param  array<string, mixed>  $facts
-     */
-    private static function itemValue(array $facts): string
+    private static function plural(int $count, string $one, string $few, string $many): string
     {
-        $total = trim((string) ($facts['total'] ?? ''));
-        if ($total === '') {
-            return '';
+        if ($count === 1) {
+            return $one;
         }
+        $tens = $count % 100;
+        $units = $count % 10;
 
-        return '<div style="font-size:10px;letter-spacing:0.8px;text-transform:uppercase;color:'.self::LABEL.'">'
-            .'Wartość</div>'
-            .'<div style="font-size:19px;font-weight:bold;color:'.self::TEXT.';margin-top:2px">'.self::text($total).'</div>';
+        return $units >= 2 && $units <= 4 && ($tens < 12 || $tens > 14) ? $few : $many;
     }
 
     /**
@@ -274,121 +537,74 @@ final class InquiryReplyHtml
     }
 
     /**
-     * Opis wyrobu i zamiennik — wszystko, co nie zmieściło się w nagłówku kafelka
-     * i plakietkach. Zamiennik dostaje własny, oddzielony blok: to inna propozycja
-     * niż wyrób z pozycji i nie może się z nim zlewać.
+     * Opis wyrobu i linie zamiennika — wszystko, co nie ma miejsca w nagłówku
+     * kafla i kafelkach rozmiarów.
      *
      * @param  array<string, mixed>  $row
+     * @return array{body: list<string>, substitute: list<array{text: string, strong: bool}>}
      */
-    private static function itemNotes(array $row): string
+    private static function notes(array $row): array
     {
         $lines = is_array($row['answer'] ?? null) ? $row['answer'] : [];
         $roles = is_array($row['answer_roles'] ?? null) ? $row['answer_roles'] : [];
 
-        $html = '';
-        $substitute = '';
+        $body = [];
+        $substitute = [];
         foreach ($lines as $index => $line) {
             $role = (string) ($roles[$index] ?? 'body');
             $text = trim((string) $line);
             if ($text === '') {
                 continue;
             }
-            // Nazwa, normy i cena wyrobu mają już swoje miejsce w kafelku.
+            // Nazwa, normy i cena wyrobu mają już swoje miejsce w kaflu.
             if (in_array($role, ['name', 'meta', 'price'], true)) {
                 continue;
             }
             if (str_starts_with($role, 'sub_')) {
-                $strong = $role === 'sub_name' ? 'font-weight:bold;' : '';
-                $substitute .= '<div style="font-size:12px;color:#4a453f;'.$strong.'margin-top:4px">'
-                    .self::text($text).'</div>';
+                $substitute[] = ['text' => $text, 'strong' => $role === 'sub_name'];
 
                 continue;
             }
-            $html .= '<div style="font-size:13px;color:#4a453f;margin-top:12px">'.self::text($text).'</div>';
+            $body[] = $text;
         }
 
-        if ($substitute !== '') {
-            $html .= '<div style="margin-top:12px;padding-top:10px;border-top:1px dashed #e4ded7">'
-                .'<div style="font-size:10px;letter-spacing:0.8px;text-transform:uppercase;color:'.self::LABEL.'">'
-                .'Zamiennik</div>'.$substitute.'</div>';
+        return ['body' => $body, 'substitute' => $substitute];
+    }
+
+    /**
+     * Zamiennik dostaje własny, oddzielony blok: to inna propozycja niż wyrób
+     * z pozycji i nie może się z nim zlewać.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private static function notesHtml(array $row): string
+    {
+        $notes = self::notes($row);
+        $html = '';
+        foreach ($notes['body'] as $text) {
+            $html .= '<div style="font-size:13px;color:'.self::BODY.';margin-top:12px">'.self::text($text).'</div>';
+        }
+
+        if ($notes['substitute'] !== []) {
+            $html .= '<div style="margin-top:12px;padding-top:10px;border-top:1px dashed '.self::BORDER.'">'
+                .self::caption('Zamiennik');
+            foreach ($notes['substitute'] as $line) {
+                $html .= '<div style="font-size:12px;color:'.self::BODY.';'.($line['strong'] ? 'font-weight:bold;' : '')
+                    .'margin-top:4px">'.self::text($line['text']).'</div>';
+            }
+            $html .= '</div>';
         }
 
         return $html;
     }
 
     /**
-     * Suma po prawej. Liczymy tylko pozycje, które mają wartość — gdy choć
-     * jednej brakuje ceny albo ilości, mówimy o tym wprost zamiast podawać
-     * sumę części oferty jako całość.
-     *
-     * @param  list<array<string, mixed>>  $rows
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
      */
-    private static function summary(array $rows): string
+    private static function facts(array $row): array
     {
-        $sum = 0.0;
-        $counted = 0;
-        $missing = 0;
-        foreach ($rows as $row) {
-            $facts = is_array($row['facts'] ?? null) ? $row['facts'] : [];
-            $value = $facts['total_pln'] ?? null;
-            if (is_numeric($value)) {
-                $sum += (float) $value;
-                $counted++;
-
-                continue;
-            }
-            $missing++;
-        }
-        if ($counted === 0) {
-            return '';
-        }
-
-        $label = 'Razem netto';
-        $note = $missing > 0
-            ? '<div style="font-size:11px;color:'.self::LABEL.';text-transform:none;letter-spacing:0">'
-                .self::text('bez pozycji, dla których podamy cenę po weryfikacji').'</div>'
-            : '';
-
-        return '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;'
-            .'width:100%;margin:12px 0 18px"><tr>'
-            .'<td style="text-align:right;padding:0 18px 0 0;color:'.self::MUTED.';font-size:12px;'
-            .'letter-spacing:0.8px;text-transform:uppercase;vertical-align:top">'.self::text($label).$note.'</td>'
-            .'<td style="width:150px;text-align:right;font-size:22px;font-weight:bold;color:'.self::ACCENT.';'
-            .'white-space:nowrap;vertical-align:top">'.self::text(number_format($sum, 2, ',', ' ').' zł').'</td>'
-            .'</tr></table>';
-    }
-
-    /**
-     * Warunki na białej karcie, po dwa w rzędzie — klient pyta o nie wprost,
-     * więc stoją osobno, a nie w akapicie razem z dopiskiem handlowca.
-     *
-     * @param  list<array{label: string, value: string}>  $terms
-     */
-    private static function terms(array $terms): string
-    {
-        if ($terms === []) {
-            return '';
-        }
-
-        $html = '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;'
-            .'width:100%;background:#ffffff;color:'.self::TEXT.';border-radius:8px;box-shadow:0 1px 5px rgba(25,22,20,0.09);margin:0 0 16px">';
-        foreach (array_chunk($terms, 2) as $index => $pair) {
-            $html .= '<tr>';
-            foreach ($pair as $column => $term) {
-                $html .= '<td style="padding:'.($index === 0 ? '14px 18px' : '0 18px 14px').';width:50%;'
-                    .'vertical-align:top'.($column === 1 ? ';border-left:1px solid '.self::HAIRLINE : '').'">'
-                    .'<div style="font-size:10px;letter-spacing:0.8px;text-transform:uppercase;color:'.self::LABEL.'">'
-                    .self::text($term['label']).'</div>'
-                    .'<div style="margin-top:3px;color:'.self::TEXT.'">'.self::text($term['value']).'</div>'
-                    .'</td>';
-            }
-            if (count($pair) === 1) {
-                $html .= '<td style="width:50%;border-left:1px solid '.self::HAIRLINE.'"></td>';
-            }
-            $html .= '</tr>';
-        }
-
-        return $html.'</table>';
+        return is_array($row['facts'] ?? null) ? $row['facts'] : [];
     }
 
     /** Treść od klienta i z katalogu trafia do maila jako tekst, nigdy jako znaczniki. */
