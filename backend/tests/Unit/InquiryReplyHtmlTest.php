@@ -58,5 +58,7 @@ final class InquiryReplyHtmlTest extends TestCase
 
         $this->assertSame([], $uncolored);
         $this->assertStringContainsString('Rękawice FAWA z bistorem', $html);
+        // Szkic listu zajmuje 60% okna, nie całą szerokość.
+        $this->assertMatchesRegularExpression('/^<div style="[^"]*width:60%/', $html);
     }
 }

@@ -54,7 +54,10 @@ final class InquiryReplyHtml
         array $terms = [],
         array $asked = ['title' => null, 'date' => null, 'lines' => []],
     ): string {
-        $html = '<div style="'.self::FONT.';background:'.self::PAGE_BG.';padding:24px;border-radius:10px">';
+        // 60% okna: na pełnej szerokości opis rozlewał się w długie, męczące wiersze.
+        // Dolna granica chroni wąskie okna (telefon), gdzie 60% byłoby za ciasne.
+        $html = '<div style="'.self::FONT.';background:'.self::PAGE_BG.';padding:24px;border-radius:10px;'
+            .'width:60%;min-width:320px;box-sizing:border-box">';
         $html .= self::paragraph($intro);
         $html .= self::asked($asked);
         $html .= self::items($rows);
