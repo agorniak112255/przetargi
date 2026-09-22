@@ -280,6 +280,34 @@ final class B2bAnroSyncTest extends TestCase
         $this->assertNull(B2bProductLink::query()->where('product_id', $existing->id)->value('description_hash'));
     }
 
+    /**
+     * Przegląd 22.09.2026 (N1): karta z kategorią (ścieżka drzewa dobrana automatem) zachowuje category, a kategoria
+     * ze sklepu B2B idzie obok jako dowód rodzaju wyrobu.
+     */
+    public function test_sync_stores_b2b_category_as_evidence_even_when_card_has_category(): void
+    {
+        $this->fakeAnro();
+        $existing = Product::query()->create([
+            'sku' => self::SKU,
+            'name' => 'Stara nazwa',
+            'manufacturer' => 'Anro',
+            'category' => 'Sklep - kategorie / Znaki / Wysięgniki',
+            'category_source' => Product::CATEGORY_SOURCE_PRESTA_REWRITE,
+            'catalog_price_net' => 40.80,
+            'purchase_price' => 30.00,
+            'discount_percent' => 0,
+            'currency' => 'PLN',
+        ]);
+
+        $this->sync();
+
+        $existing->refresh();
+        $this->assertSame('Sklep - kategorie / Znaki / Wysięgniki', $existing->category);
+        $this->assertSame(Product::CATEGORY_SOURCE_PRESTA_REWRITE, $existing->category_source);
+        $this->assertSame('17/WGK - Wysięgniki', $existing->category_evidence);
+        $this->assertSame('17/WGK - Wysięgniki', $existing->categoryAsEvidence());
+    }
+
     public function test_dry_run_writes_nothing_and_keeps_account_status(): void
     {
         $this->fakeAnro();

@@ -337,7 +337,8 @@ final class ProductCrossRefFilters
         $parts = [
             (string) ($product->name ?? ''),
             (string) ($product->description ?? ''),
-            (string) ($product->category ?? ''),
+            // kategoria-dowód: ścieżka drzewa dobrana automatem nie spełnia wymagań zamiennika
+            $product->categoryAsEvidence(),
             (string) ($product->norms ?? ''),
             (string) ($attrs['klasa_ochrony'] ?? ''),
             (string) ($attrs['typ_wyrobu'] ?? ''),

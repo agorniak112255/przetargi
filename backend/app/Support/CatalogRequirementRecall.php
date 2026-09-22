@@ -199,7 +199,8 @@ final class CatalogRequirementRecall
                 return false;
             }
             if ($profile['foot_class'] !== null) {
-                $identity = trim($product->name.' '.$product->sku.' '.(string) ($product->category ?? ''));
+                // kategoria-dowód: klasa z nazwy ścieżki drzewa dobranej automatem nie jest klasą karty
+                $identity = trim($product->name.' '.$product->sku.' '.$product->categoryAsEvidence());
                 // Klasa karty musi spełniać wymaganą, a nie być z nią identyczna: „ARCASIO … S1 P ESD”
                 // czyta się teraz jako S1P i przy wymaganiu S1 wypadałby z recallu na samym porównaniu napisów.
                 $have = $this->bhpAttributes->footwearClass($identity);

@@ -27,6 +27,7 @@ use App\Services\B2b\B2bDocumentText;
 use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\EnrichmentDescriptionTemplates;
 use App\Support\NormCode;
 use App\Support\PpeAssortment;
 use App\Support\ProductDescriptionText;
@@ -73,24 +74,6 @@ final class ProductEnrichmentService
 
     /** Tyle roznych norm wyciagnietych z surowego tekstu strony to slowniczek sklepu, nie karta. */
     private const NORMS_GLOSSARY_THRESHOLD = 5;
-
-    /**
-     * Polecenie dla opisu wyłącznie ze źródeł B2B (describeFromB2bSources) — tylko tam, w wiadomości użytkownika;
-     * zwykłe wzbogacanie z internetu dostaje dotychczasowy prompt bez zmian.
-     */
-    private const B2B_SOURCES_ONLY_RULES = <<<'TXT'
-ZASADY TEGO OPISU — mają pierwszeństwo przed instrukcją rodziny i przed zasadami pisania z polecenia systemowego:
-- Pisz wyłącznie fakty podane w tych źródłach. Nie uzupełniaj niczego ogólną wiedzą o wyrobach tego typu.
-- Nie objaśniaj wymagań klasy ani normy: bez energii uderzenia (np. 200 J), sił zgniatania (np. 15 kN), opisów
-  badań, podłoży i środków badawczych. Oznaczenie klasy i normy podaj tak, jak stoi w źródle.
-- Nie dopisuj przeznaczenia, zastosowań, branż ani warunków pracy, których źródła nie podają.
-- Nie dopisuj właściwości (wodoodporność, izolacja od zimna lub ciepła, odporność na oleje, chemikalia, przebicie,
-  antystatyczność, elektroizolacja, praca w wysokich temperaturach), których źródła nie podają słowem albo
-  oznaczeniem w zapisie klasy lub normy.
-- Brak informacji = pomiń. Nie pisz „brak danych w źródle”, „źródła nie podają…” ani podobnych zdań — ani
-  w description, ani w specs, features, use_cases czy materials. Pozycję listy bez wartości pomiń w całości.
-- Opis może być krótki, jeśli źródła są ubogie — to lepsze niż zdanie spoza źródeł.
-TXT;
 
     private const GENERIC_NAME_TOKENS = [
         'rekawice', 'rękawice', 'rekawiczki', 'spodnie', 'kurtka', 'bluza', 'koszulka', 'kamizelka',
@@ -412,8 +395,10 @@ TXT;
     }
 
     /**
-     * Hosty wykluczone jako źródło (config `enrichment.blocked_source_hosts`) — przede
-     * wszystkim własne środowisko migracyjne. Ręcznie wskazany adres sklepu dopisujemy
+     * Hosty wykluczone jako źródło (config `enrichment.blocked_source_hosts`) — własny sklep
+     * i jego środowisko migracyjne. Host naszego sklepu z `prestashop.shop_url` dokładamy
+     * zawsze, także gdy lista w konfiguracji go nie ma: eksport wysyła tam nasze opisy, więc
+     * opis „ze sklepu” byłby naszym własnym tekstem. Ręcznie wskazany adres sklepu dopisujemy
      * później i on wykluczeniu nie podlega: to świadoma decyzja człowieka.
      *
      * @param  list<array<string, mixed>>  $results
@@ -421,12 +406,13 @@ TXT;
      */
     private function dropBlockedSourceHosts(array $results): array
     {
-        $blocked = array_values(array_filter(array_map(
+        $ownShopHost = parse_url(trim((string) config('prestashop.shop_url', '')), PHP_URL_HOST);
+        $blocked = array_values(array_unique(array_filter(array_map(
             static fn ($host): string => is_string($host)
                 ? preg_replace('/^www\./', '', mb_strtolower(trim($host))) ?? ''
                 : '',
-            (array) config('enrichment.blocked_source_hosts', [])
-        )));
+            [...(array) config('enrichment.blocked_source_hosts', []), is_string($ownShopHost) ? $ownShopHost : '']
+        ))));
         if ($blocked === []) {
             return array_values($results);
         }
@@ -521,7 +507,7 @@ TXT;
     }
 
     /**
-     * Opis z podanych kart: filtr AI, wyciągnięcie faktów, opis zapasowy z treści karty.
+     * Opis z podanych kart: filtr AI i opis od modelu (bez opisu zapasowego z treści karty).
      * Używane przy drugim podejściu, gdy pierwsze karty nie dały opisu.
      *
      * @param  list<array{url?: string, text?: string}>  $pages
@@ -542,15 +528,9 @@ TXT;
             ];
         }
         $extracted = $this->extractWithLlm($product, $cardSources, array_slice($clean, 0, 5));
-        $description = ProductDescriptionText::plain($this->composeFullDescription($extracted));
+        $description = ProductDescriptionText::plain($this->modelDescription($extracted));
         if (! $this->isUsableProductDescription($description, $product, array_column($clean, 'url'))) {
             $description = '';
-        }
-        if ($description === '') {
-            $fallback = $this->fallbackDescriptionFromPages($clean, $product);
-            if ($fallback !== '' && $this->isUsableProductDescription($fallback, $product)) {
-                $description = ProductDescriptionText::plain($fallback);
-            }
         }
 
         return ['description' => $description, 'extracted' => $extracted, 'pages' => $clean];
@@ -793,7 +773,6 @@ TXT;
                 $product,
                 $mfrDomains
             );
-            $rawCardPages = $pageSnippets;
             $openWebCardsUnreachable = false;
             $openWebWalledCards = [];
             $this->walledReaderDetails = [];
@@ -838,7 +817,6 @@ TXT;
                     $searchResults = array_values(array_merge($searchResults, $shopResults));
                     $descResults = $this->rankResultsForDescription($searchResults, $product, $mfrDomains);
                 }
-                $rawCardPages = $pageSnippets;
             }
             // Blok z katalogu dokładamy dopiero tutaj, po rundach dobierania kart: wcześniej
             // sam blok czyniłby pulę niepustą i produkt zostawałby bez zdjęcia z karty sklepu.
@@ -851,7 +829,6 @@ TXT;
                 $this->manufacturerPdfCardPages($product, (array) ($fetched['document_urls'] ?? []))
             );
             $pageSnippets = $this->withCatalogPages($pageSnippets, $catalogPages, $product, $mfrDomains);
-            $rawCardPages = $this->withCatalogPages($rawCardPages, $catalogPages, $product, $mfrDomains);
             if ($pageSnippets === []) {
                 // Gdy po drodze padła wyszukiwarka, „brak karty” jest tylko
                 // skutkiem awarii — produkt wraca do ponowienia, nie do ręki.
@@ -919,15 +896,11 @@ TXT;
             $timing['llm_extract_ms'] = $this->elapsedMs($t);
 
             $rawDescription = $this->composeFullDescription($extracted);
-            $description = ProductDescriptionText::plain($rawDescription);
+            // Opis wyłącznie od modelu — tekstu strony jako opisu zapasowego nie bierzemy
+            // (audyt 22.09.2026: CAPTCHA, cenniki i banery cookies zapisane jako opis).
+            $description = ProductDescriptionText::plain($this->modelDescription($extracted));
             if (! $this->isUsableProductDescription($description, $product, array_column($pageSnippets, 'url'))) {
                 $description = '';
-            }
-            if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)) {
-                $fallback = $this->fallbackDescriptionFromPages($pageSnippets, $product);
-                if ($fallback !== '' && $this->isUsableProductDescription($fallback, $product)) {
-                    $description = ProductDescriptionText::plain($fallback);
-                }
             }
 
             // niepełny opis / puste listy → doszukaj na kolejnych sklepach
@@ -965,14 +938,6 @@ TXT;
                     $fetched['document_urls'][] = $url;
                 }
                 $timing['supplement_ms'] = $this->elapsedMs($t);
-                $rawCardPages = $this->mergePageSnippets($rawCardPages, $supplementedPages);
-            }
-
-            if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)) {
-                $fromCard = $this->usableCardDescription($rawCardPages, $product);
-                if ($fromCard !== '') {
-                    $description = ProductDescriptionText::plain($fromCard);
-                }
             }
 
             // Potwierdza karta, nie to, że model przepisał nazwę z cennika.
@@ -1023,7 +988,6 @@ TXT;
                     $retry = $this->describeFromPages($product, $retryPages);
                     if ($retry['description'] !== '') {
                         $pageSnippets = $retry['pages'];
-                        $rawCardPages = $this->mergePageSnippets($rawCardPages, $retryPages);
                         $extracted = $this->enrichStructuredFieldsFromPages($retry['extracted'], $pageSnippets);
                         $description = $retry['description'];
                         $confirmed = ! $this->looksLikeMissingCardMeta($description)
@@ -1177,6 +1141,7 @@ TXT;
             $imageUrls = array_values(array_unique($imageUrls));
 
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
+            $extracted = $this->withoutMissingDataListItems($extracted);
             $fields = $this->payloadFromExtraction($product, $extracted, $description, $pageSnippets);
             $packaging = $fields['packaging'];
 
@@ -1524,6 +1489,14 @@ TXT;
         }
 
         $payload = is_array($cache->enrichment_payload) ? $cache->enrichment_payload : [];
+        // Pewność 0 (albo jej brak) to wpis, w którym model nie dał opisu: przed audytem 22.09.2026
+        // opisem zostawał wtedy tekst strony (CAPTCHA, cennik, baner cookies). Taki wpis wracał
+        // do karty manual/failed ze statusem „done” — produkt idzie normalną ścieżką.
+        if ((float) ($payload['confidence'] ?? 0) <= 0) {
+            return false;
+        }
+        // wpis sprzed bezpiecznika w zwykłym wzbogacaniu może nieść „Typ zapięcia: brak danych w źródle”
+        $payload = $this->withoutMissingDataListItems($payload);
         $payload['from_cache'] = true;
         $cacheDescription = ProductDescriptionText::plain((string) $cache->description);
         // Zrzut strony zapisany w cache przed tą kontrolą nie może się kopiować dalej —
@@ -1552,7 +1525,8 @@ TXT;
                 'norms' => $this->stringList($payload['norms'] ?? null),
                 'specs' => $cacheSpecs,
                 'certificates' => $this->stringList($payload['certificates'] ?? null),
-                'category' => (string) ($product->category ?? ''),
+                // kategoria-dowód: ścieżka dobrana automatem nie mówi, czym wyrób jest
+                'category' => $product->categoryAsEvidence(),
                 'sku' => (string) $product->sku,
                 'name' => (string) $product->name,
                 'description' => $cacheDescription,
@@ -2646,7 +2620,7 @@ TXT;
                     array_slice($extraResults, 0, 4),
                     $extraPages
                 );
-                $extraDesc = $this->composeFullDescription($extraExtracted);
+                $extraDesc = $this->modelDescription($extraExtracted);
                 if (! $this->isUsableProductDescription($extraDesc, $product, array_column($extraPages, 'url'))) {
                     $extraDesc = '';
                 }
@@ -2654,14 +2628,6 @@ TXT;
                     $description = $extraDesc;
                 }
                 $extracted = $this->mergeExtracted($extracted, $extraExtracted, $product);
-            }
-        }
-
-        if ($description === '' || $this->looksLikeThinDescription($description) || $this->looksLikeIncompleteDescription($description)) {
-            $fallback = $this->fallbackDescriptionFromPages($pageSnippets, $product);
-            if ($this->isUsableProductDescription($fallback, $product)
-                && $this->isRicherDescription($fallback, $description)) {
-                $description = $fallback;
             }
         }
 
@@ -2776,7 +2742,7 @@ TXT;
         try {
             $path = app(PrestaCategoryRewriteService::class)->betterPathFor($product, $description);
             if ($path !== null) {
-                $product->update(['category' => $path]);
+                $product->update(['category' => $path, 'category_source' => Product::CATEGORY_SOURCE_PRESTA_REWRITE]);
             }
         } catch (Throwable $e) {
             Log::info('Kategoria z opisu pominięta', [
@@ -3463,7 +3429,7 @@ TXT;
                     'certificates' => $this->stringList($base['certificates'] ?? null),
                     // tożsamość wyrobu, cennik i tabelka dostawcy — bez nich klasa z drugiej tury stron
                     // (cudzy wariant) wygrywała z klasą z nazwy
-                    'category' => (string) ($product?->category ?? ''),
+                    'category' => (string) $product?->categoryAsEvidence(),
                     'sku' => (string) ($product?->sku ?? ''),
                     'name' => (string) ($product?->name ?? ''),
                     'norms_column' => (string) ($product?->norms ?? ''),
@@ -3560,6 +3526,9 @@ TXT;
             || str_contains($d, 'brak szczegółowej karty')
             || str_contains($d, 'na podstawie samej nazwy')
             || str_contains($d, 'wyniki wyszukiwania wskazują')
+            // audyt 22.09.2026: „Brak danych o produkcie… Wyniki wyszukiwania dotyczą…” (8 opisów)
+            || str_contains($d, 'brak danych o produkcie')
+            || str_contains($d, 'wyniki wyszukiwania dotyczą')
             || str_contains($d, "you don't have permission to access")
             || str_contains($d, 'you do not have permission')
             || str_contains($d, 'access denied')
@@ -3806,6 +3775,11 @@ TXT;
             }
         }
         $brandConfirmed = $officialSource !== '' || $this->identity->hayHasBrand($hay, $product);
+        // Canis: opis z kodem „3420-115” (MERU) bez naszego „3420-007” to opis cudzego modelu,
+        // choćby marka i rodzaj się zgadzały.
+        if ($this->identity->textNamesAnotherGroupedCode($description, $product)) {
+            return false;
+        }
 
         if ($this->identity->hayHasProductCode($hay, $product)) {
             if ($this->identity->pageAgreesWithBrandAndName($hay, $officialSource, $product)
@@ -3938,213 +3912,6 @@ TXT;
         $stem = mb_substr($token, 0, mb_strlen($token) - 2);
 
         return preg_match('/(^|[^\p{L}\d])'.preg_quote($stem, '/').'\p{L}{0,4}([^\p{L}\d]|$)/iu', $hay) === 1;
-    }
-
-    /**
-     * @param  list<array{url: string, text: string}>  $pageSnippets
-     */
-    private function fallbackDescriptionFromPages(array $pageSnippets, Product $product): string
-    {
-        $byPage = [];
-        foreach ($pageSnippets as $page) {
-            $url = (string) ($page['url'] ?? '');
-            $text = ProductPageFetcher::stripExpandLinkChrome(trim((string) ($page['text'] ?? '')));
-            if ($text === '') {
-                continue;
-            }
-            $parts = preg_split('/\n{2,}/u', $text) ?: [$text];
-            foreach ($parts as $part) {
-                $part = ProductDescriptionText::stripShopUi(
-                    ProductPageFetcher::stripExpandLinkChrome(trim((string) $part))
-                );
-                if ($part === '' || ProductPageFetcher::looksLikeTruncatedShopTeaser($part)
-                    || ProductPageFetcher::looksLikeRelatedProductTeaser($part)
-                    || $this->looksLikeMissingCardMeta($part)
-                    || ProductPageFetcher::looksLikeCompanyImprint($part)
-                    || $this->looksLikeShopChromeDescription($part)
-                    || $this->looksLikeRawLocaleDump($part)
-                    || ProductPageFetcher::looksLikeShopOfferDump($part)) {
-                    continue;
-                }
-                if (mb_strlen($part) >= 40 && $this->descriptionMentionsProduct($part, $product)) {
-                    $byPage[$url][] = $part;
-                }
-            }
-        }
-        if ($byPage === []) {
-            // Żadna karta nie dała akapitu — dopiero wtedy bierzemy całą treść strony.
-            foreach ($pageSnippets as $page) {
-                $url = (string) ($page['url'] ?? '');
-                $text = ProductPageFetcher::stripExpandLinkChrome(trim((string) ($page['text'] ?? '')));
-                if ($text === '') {
-                    continue;
-                }
-                $flat = ProductDescriptionText::stripShopUi(
-                    ProductPageFetcher::stripExpandLinkChrome(trim(preg_replace('/\s+/u', ' ', $text) ?? $text))
-                );
-                if ($flat !== '' && ! ProductPageFetcher::looksLikeTruncatedShopTeaser($flat)
-                    && ! $this->looksLikeThinDescription($flat) && ! $this->looksLikeRawLocaleDump($flat)
-                    && ! ProductPageFetcher::looksLikeShopOfferDump($flat)
-                    && mb_strlen($flat) >= 220
-                    && $this->descriptionMentionsProduct($flat, $product)) {
-                    $byPage[$url][] = $flat;
-                }
-            }
-        }
-        $out = $this->composeFromSingleCard($byPage, $pageSnippets, $product);
-
-        return $out !== '' && $this->isUsableProductDescription($out, $product) ? $out : '';
-    }
-
-    /**
-     * Opis składamy z akapitów JEDNEJ karty — nigdy z kilku naraz. Sklejone akapity z dwóch
-     * stron opisywały dwa różne wyroby jako jeden produkt (płatek zaworu + półmaska), a przy
-     * wyborze „najdłuższego” akapitu karta całego zestawu zawsze biła kartę pojedynczej części.
-     *
-     * @param  array<string, list<string>>  $byPage  akapity w kolejności strony, klucz = URL karty
-     * @param  list<array{url?: string, text?: string, title?: string}>  $pageSnippets
-     */
-    private function composeFromSingleCard(array $byPage, array $pageSnippets, ?Product $product): string
-    {
-        $bestParts = [];
-        $bestRank = -1;
-        $bestLength = -1;
-        foreach ($byPage as $url => $parts) {
-            $parts = array_values(array_unique($parts));
-            if ($parts === []) {
-                continue;
-            }
-            $rank = $product !== null
-                ? $this->cardIdentityRank((string) $url, $pageSnippets, $product)
-                : 0;
-            $length = array_sum(array_map(static fn (string $p): int => mb_strlen($p), $parts));
-            if ($rank > $bestRank || ($rank === $bestRank && $length > $bestLength)) {
-                $bestRank = $rank;
-                $bestLength = $length;
-                $bestParts = $parts;
-            }
-        }
-        if ($bestParts === []) {
-            return '';
-        }
-        $longest = $bestParts;
-        usort($longest, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
-        $head = $longest[0];
-        // Akapity tej samej karty łączymy w kolejności strony — dopiero gdy sam najdłuższy
-        // akapit nie niesie ani cech technicznych, ani norm.
-        $out = ! $this->looksLikeIncompleteDescription($head) || count($bestParts) === 1
-            ? $head
-            : implode("\n\n", $bestParts);
-
-        return mb_substr($out, 0, 12000);
-    }
-
-    /**
-     * Siła potwierdzenia karty: 4 = adres wskazany ręcznie, 3 = kod produktu na karcie,
-     * 2 = pełna nazwa razem z marką, 1 = karta potwierdzona słabszą przesłanką, 0 = reszta.
-     * Decyduje, z której karty piszemy opis — zamiast dawnego „wygrywa dłuższy tekst”.
-     *
-     * Kod stoi wyżej niż nazwa, bo nazwa części bywa wspólna dla całej serii: karta płatka
-     * do SECURA 2000 i karta płatka do SECURA 3000 mają tę samą nazwę wyrobu i tylko kod
-     * rozstrzyga, która jest nasza.
-     *
-     * @param  list<array{url?: string, text?: string, title?: string}>  $pageSnippets
-     */
-    private function cardIdentityRank(string $url, array $pageSnippets, Product $product): int
-    {
-        if ($url === '') {
-            return 0;
-        }
-        if ($product->isHintedShopUrl($url)) {
-            return 4;
-        }
-        $title = '';
-        $text = '';
-        foreach ($pageSnippets as $page) {
-            if (mb_strtolower((string) ($page['url'] ?? '')) === mb_strtolower($url)) {
-                $title = (string) ($page['title'] ?? '');
-                $text = (string) ($page['text'] ?? '');
-                break;
-            }
-        }
-        if ($this->identity->hayHasProductCode(mb_strtolower($url.' '.$title.' '.$text), $product)) {
-            return 3;
-        }
-        if ($this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $product)) {
-            return 2;
-        }
-
-        return $this->identity->isConfirmedProductCard($url, $title, $text, $product) ? 1 : 0;
-    }
-
-    /**
-     * Karta już potwierdzona (ten sam URL co packshot) — nie wymagaj ponownie SKU/modelu w akapicie.
-     *
-     * @param  list<array{url?: string, text?: string}>  $pageSnippets
-     */
-    /**
-     * Tekst potwierdzonej karty jako opis — ta sama kontrola co opis od modelu.
-     * Bez niej ekran błędu sklepu („ANSELL | Protection solutions… Sorry to interrupt”)
-     * zapisywał się jako opis rękawicy ze statusem „Gotowe”.
-     *
-     * @param  list<array{url?: string, text?: string}>  $pages
-     */
-    private function usableCardDescription(array $pages, Product $product): string
-    {
-        $fromCard = $this->descriptionFromConfirmedCards($pages, $product);
-
-        return $fromCard !== '' && $this->isUsableProductDescription($fromCard, $product) ? $fromCard : '';
-    }
-
-    private function descriptionFromConfirmedCards(array $pageSnippets, ?Product $product = null): string
-    {
-        $byPage = [];
-        foreach ($pageSnippets as $page) {
-            $url = (string) ($page['url'] ?? '');
-            $text = ProductPageFetcher::stripExpandLinkChrome(trim((string) ($page['text'] ?? '')));
-            if ($text === '') {
-                continue;
-            }
-            $parts = preg_split('/\n{2,}/u', $text) ?: [$text];
-            foreach ($parts as $part) {
-                $part = ProductDescriptionText::stripShopUi(
-                    ProductPageFetcher::stripExpandLinkChrome(trim((string) $part))
-                );
-                if ($part === '' || ProductPageFetcher::looksLikeTruncatedShopTeaser($part)
-                    || ProductPageFetcher::looksLikeRelatedProductTeaser($part)
-                    || $this->looksLikeMissingCardMeta($part)
-                    || ProductPageFetcher::looksLikeCompanyImprint($part)
-                    || $this->looksLikeShopChromeDescription($part)
-                    || $this->looksLikeRawLocaleDump($part)
-                    || $this->looksLikeOffTopicDescription($part)
-                    || $this->looksLikeCategoryIndexDescription($part)
-                    || $this->looksLikeLinkDump($part)
-                    || ProductPageFetcher::looksLikeShopOfferDump($part)) {
-                    continue;
-                }
-                if (mb_strlen($part) >= 40) {
-                    $byPage[$url][] = $part;
-                }
-            }
-        }
-        foreach ($byPage as $url => $parts) {
-            $byPage[$url] = array_values(array_filter(
-                $parts,
-                fn (string $part): bool => ! $this->looksLikeRawLocaleDump($part)
-            ));
-        }
-        $out = $this->composeFromSingleCard($byPage, $pageSnippets, $product);
-        if ($out === '') {
-            return '';
-        }
-        $out = ProductDescriptionText::stripShopUi($out);
-        if ($this->looksLikeThinDescription($out) || $this->looksLikeMissingCardMeta($out)
-            || $this->looksLikeRawLocaleDump($out)
-            || ProductPageFetcher::looksLikeShopOfferDump($out)) {
-            return '';
-        }
-
-        return $out;
     }
 
     private function isJunkImageUrl(string $url): bool
@@ -4882,6 +4649,29 @@ SYS,
      * @param  list<array<string, mixed>>  $pageSnippets
      * @return array{lists: array{features: list<string>, norms: list<string>, certificates: list<string>, materials: list<string>, use_cases: list<string>, specs: list<string>, attributes: array<string, mixed>}, packaging: string|null}
      */
+    /**
+     * Zwykłe wzbogacanie: pozycje list o braku danych („Typ zapięcia: brak danych w źródle”) nie są informacją
+     * o wyrobie. Szablon rodziny w bazie bywa starszy i każe je wypisywać (przegląd 22.09.2026: `obuwie`),
+     * a zasada brzmi: brak informacji = pomiń. Opis ze źródeł B2B (describeFromB2bSources) wycina je sam
+     * przez SourceClaimGuard i zapisuje w dropped_claims — tam tego filtra nie ma, żeby ślad nie zginął.
+     *
+     * @param  array<string, mixed>  $extracted
+     * @return array<string, mixed>
+     */
+    private function withoutMissingDataListItems(array $extracted): array
+    {
+        foreach (['features', 'norms', 'certificates', 'materials', 'use_cases', 'specs'] as $listKey) {
+            if (is_array($extracted[$listKey] ?? null)) {
+                $extracted[$listKey] = array_values(array_filter(
+                    $this->stringList($extracted[$listKey]),
+                    static fn (string $item): bool => ! SourceClaimGuard::statesMissingData($item)
+                ));
+            }
+        }
+
+        return $extracted;
+    }
+
     private function payloadFromExtraction(Product $product, array $extracted, string $description, array $pageSnippets): array
     {
         $features = ProductDescriptionText::dropDuplicatedListItems(
@@ -4912,7 +4702,8 @@ SYS,
                 'norms' => $norms,
                 'specs' => $specs,
                 'certificates' => $certificates,
-                'category' => (string) ($product->category ?? ''),
+                // kategoria-dowód, jak w BhpAttributeNormalizer::forProduct
+                'category' => $product->categoryAsEvidence(),
                 'sku' => (string) $product->sku,
                 'name' => (string) $product->name,
                 'description' => $description,
@@ -4956,8 +4747,10 @@ SYS,
      *
      * PDF-y bywają ubogie (ARTRA 22.09.2026: materiały, podnosek, podeszwa, norma), a model dopisywał ogólną wiedzę —
      * „wodoodporną cholewkę” przy S1 P, „pracę w wysokich temperaturach”, objaśnienie klasy („200 J”, „15 kN”). Stąd
-     * polecenie B2B_SOURCES_ONLY_RULES (ma pierwszeństwo przed szablonem rodziny, który przy zwykłym wzbogacaniu każe
-     * wypisywać „brak danych w źródle”) i SourceClaimGuard: zdanie opisu z twierdzeniem o właściwości bez pokrycia
+     * zasady EnrichmentDescriptionTemplates::sourcesOnlyRules() — od 22.09.2026 w poleceniu systemowym każdego
+     * wzbogacania, tu powtórzone w wiadomości użytkownika z pierwszeństwem przed szablonem rodziny (szablon zapisany
+     * w bazie bywa starszy i może kazać wypisywać „brak danych w źródle”) — i SourceClaimGuard: zdanie opisu
+     * z twierdzeniem o właściwości bez pokrycia
      * w źródłach wypada (dropped_claims), tak samo pozycja list; opis za krótki po usunięciu jest odrzucany.
      *
      * @return array{description: string, payload: array<string, mixed>, norms: string|null, packaging: string|null, dropped: list<string>, dropped_claims: list<string>}
@@ -4983,12 +4776,16 @@ SYS,
             ."\n1. Karta katalogowa PDF ze sklepu dostawcy ({$sheetUrl}) — tekst wyciągnięty z PDF, kolumny i wiersze mogą"
             .' być pomieszane; wartości (np. poziomy normy) przypisuj tylko wtedy, gdy przypisanie jest w tekście jednoznaczne.'
             ."\n2. Opis i parametry ze strony sklepu dostawcy (".($shopUrl !== '' ? $shopUrl : 'strona produktu').').'
-            ."\n\n".self::B2B_SOURCES_ONLY_RULES);
+            ."\n\n".EnrichmentDescriptionTemplates::sourcesOnlyRules(
+                'ZASADY TEGO OPISU — mają pierwszeństwo przed instrukcją rodziny i przed zasadami pisania z polecenia systemowego:'
+            ));
         $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pages);
 
-        $description = ProductDescriptionText::plain($this->composeFullDescription($extracted));
+        $description = ProductDescriptionText::plain($this->modelDescription($extracted));
         if ($description === '') {
-            throw new B2bSourcesDescriptionRejected('model nie zwrócił opisu');
+            throw new B2bSourcesDescriptionRejected($this->composeFullDescription($extracted) !== ''
+                ? 'model nie potwierdził źródeł (confidence 0)'
+                : 'model nie zwrócił opisu');
         }
         if ($this->looksLikeMissingCardMeta($description) || $this->looksLikeRawLocaleDump($description)
             || $this->looksLikeForeignOrPartsTableDump($description)) {
@@ -5102,6 +4899,24 @@ SYS,
     private function composeFullDescription(array $extracted): string
     {
         return ProductDescriptionText::plain((string) ($extracted['description'] ?? ''));
+    }
+
+    /**
+     * Opis, który wolno zapisać: wyłącznie tekst napisany przez model, i tylko gdy model
+     * potwierdził źródła (confidence > 0). Przy confidence 0 model sam mówi, że strony nie
+     * opisują produktu — audyt 22.09.2026 znalazł 166 kart z confidence 0 i zapisanym opisem,
+     * w tym 104 z surowym tekstem strony (CAPTCHA, cennik, baner cookies). Karta bez takiego
+     * opisu idzie do ręki; tekstu strony jako opisu nie zapisujemy nigdy.
+     *
+     * @param  array<string, mixed>  $extracted
+     */
+    private function modelDescription(array $extracted): string
+    {
+        if ((float) ($extracted['confidence'] ?? 0) <= 0.0) {
+            return '';
+        }
+
+        return $this->composeFullDescription($extracted);
     }
 
     /**

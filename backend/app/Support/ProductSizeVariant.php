@@ -332,8 +332,22 @@ final class ProductSizeVariant
     /**
      * Etykieta z AI / opisu: odrzuca śmieci w stylu „1-5XL” przy obuwiu.
      */
-    public function labelFromTexts(?string $claimed, string $text, ?string $category = null): ?string
-    {
+    public function labelFromTexts(
+        ?string $claimed,
+        string $text,
+        ?string $category = null,
+        ?string $name = null,
+    ): ?string {
+        // Pojedynczy rozmiar z nazwy („TouchNTuff 92600 SIZE XXL”, „vel. 9”, „122.3XL”) to rozmiar TEJ karty —
+        // zakres z opisu („Rozmiary: XS–XXL”) opisuje całą linię i dotąd wygrywał, bo dłuższa lista brała górę.
+        $single = $this->singleSizeFromName((string) $name);
+        if ($single !== null) {
+            $label = $this->formatPackaging($this->filterByCategory([$single], $category));
+            if ($label !== null) {
+                return $label;
+            }
+        }
+
         $best = [];
         foreach ([$claimed ?? '', $text] as $chunk) {
             if (trim($chunk) === '') {
@@ -348,6 +362,43 @@ final class ProductSizeVariant
         }
 
         return $this->formatPackaging($best);
+    }
+
+    /**
+     * Jeden rozmiar jawnie zapisany w nazwie: po słowie „size/rozmiar/vel.” albo doklejony po kropce na końcu
+     * („2500-WH PLUS CVRL HOOD SOCKS 122.3XL”). Świadomie węższe niż extractSize: bez SKU (Coba „AF0107” to
+     * nie rozmiar 7, a końcówka „065-13” u Ringers nie jest pewna), bez gołej litery na końcu (ucięta nazwa
+     * Ansella „… NO THUMB S” to „SLOT”) i bez zakresów („size S - 3XL”, „sizes 46-64”).
+     */
+    private function singleSizeFromName(string $name): ?string
+    {
+        $name = trim($name);
+        if ($name === '') {
+            return null;
+        }
+        // Cenniki Canis tną nazwę do 80 znaków: „…, size S” na końcu takiej nazwy bywa uciętym „size S-3XL”
+        // (karta 11583). Rozmiar kończący nazwę tej długości nie jest pewny.
+        $truncated = mb_strlen($name) >= 79;
+        $token = '(\d{1,2}(?:[.,]\d)?|[2-6]\s*xl|xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l)';
+        // Zakres albo wiszący separator po rozmiarze („size S - 3XL”, ucięte „size S -” — karta 11804).
+        $notRange = '(?!\s*(?:[-–—\/,;+]|do\b|to\b|a\b)\s*(?:[\dxsml]|$))';
+        // Tylko pierwsze słowo „size”: przy „size M-3XL (size S to order)” (karta 11634) drugie to dopisek
+        // o wariancie na zamówienie, nie rozmiar karty.
+        $keyword = '/\b(?:size|rozmiar|rozm|taille|velikost|vel)(?:\s*[:.]\s*|\s+)/iu';
+        if (preg_match($keyword, $name, $k, PREG_OFFSET_CAPTURE) === 1) {
+            $rest = substr($name, $k[0][1] + strlen($k[0][0]));
+            if (preg_match('/^'.$token.'\b'.$notRange.'/iu', $rest, $m) !== 1
+                || ($truncated && trim(substr($rest, strlen($m[0]))) === '')) {
+                return null;
+            }
+
+            return $this->normalizeSizeToken($m[1]);
+        }
+        if (! $truncated && preg_match('/\d\.([2-6]xl|xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l)\s*$/iu', $name, $m) === 1) {
+            return $this->normalizeSizeToken($m[1]);
+        }
+
+        return null;
     }
 
     /**

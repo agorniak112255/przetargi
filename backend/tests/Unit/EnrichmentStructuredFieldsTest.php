@@ -252,21 +252,7 @@ TXT;
         $service = app(ProductEnrichmentService::class);
         $this->assertTrue($this->invoke($service, 'looksLikeThinDescription', [$teaser]));
         $this->assertTrue($this->invoke($service, 'looksLikeIncompleteDescription', [$teaser]));
-
-        $fallback = $this->invoke($service, 'fallbackDescriptionFromPages', [
-            [
-                ['url' => 'https://icd.pl/filtr-3m-2125.html', 'text' => $teaser."\n\n".$full],
-            ],
-            new Product([
-                'sku' => '3M-2125',
-                'name' => 'Filtry 3M serii 2000',
-                'manufacturer' => '3M',
-            ]),
-        ]);
-
-        $this->assertStringContainsString('cząstkami stałymi', $fallback);
-        $this->assertStringNotContainsString('Zobacz klasy', $fallback);
-        $this->assertGreaterThan(mb_strlen($teaser), mb_strlen($fallback));
+        // opis zapasowy z akapitów strony usunięto 22.09.2026 — tekst strony nie bywa już opisem
     }
 
     public function test_rejects_infield_imprint_as_raptor_description(): void
@@ -284,10 +270,6 @@ TXT;
         $this->assertTrue(ProductPageFetcher::looksLikeCompanyImprint($imprint));
         $this->assertTrue($this->invoke($service, 'looksLikeThinDescription', [$imprint]));
         $this->assertFalse($this->invoke($service, 'isUsableProductDescription', [$imprint, $product]));
-        $this->assertSame('', $this->invoke($service, 'fallbackDescriptionFromPages', [
-            [['url' => 'https://infield-safety.com/impressum/', 'text' => $imprint]],
-            $product,
-        ]));
     }
 
     public function test_expert_prose_is_not_replaced_by_shop_offer_dump(): void
@@ -310,14 +292,6 @@ TXT;
         $this->assertFalse($this->invoke($service, 'isRicherDescription', [$dump, $expert]));
         $this->assertTrue($this->invoke($service, 'isUsableProductDescription', [$expert, $product]));
         $this->assertFalse($this->invoke($service, 'isUsableProductDescription', [$dump, $product]));
-
-        $fallback = $this->invoke($service, 'fallbackDescriptionFromPages', [
-            [['url' => 'https://artra.pl/products/armen-9003', 'text' => $dump."\n\n".$expert]],
-            $product,
-        ]);
-        $this->assertStringContainsString('podnoskiem', $fallback);
-        $this->assertStringNotContainsString('309 zł', $fallback);
-        $this->assertStringNotContainsString('Wariant', $fallback);
     }
 
     public function test_two_prices_and_wariant_word_are_not_offer_dump(): void
@@ -338,13 +312,9 @@ TXT;
         $dump = 'EU 35 - 309 złEU 36 - 309 złEU 37 - 309 złEU 38 - 309 zł '
             .'EU 39 - 309 złEU 40 - 309 złEU 41 - 309 złEU 42 - 309 zł Wariant';
 
-        $this->assertSame('', $this->invoke($service, 'fallbackDescriptionFromPages', [
-            [['url' => 'https://artra.pl/products/armen-9003', 'text' => $dump]],
-            $product,
-        ]));
-        $this->assertSame('', $this->invoke($service, 'descriptionFromConfirmedCards', [
-            [['url' => 'https://artra.pl/products/armen-9003', 'text' => $dump]],
-        ]));
+        // opis zapasowy z tekstu karty usunięto 22.09.2026; cennik nie przechodzi też kontroli opisu od modelu
+        $this->assertTrue(ProductPageFetcher::looksLikeShopOfferDump($dump));
+        $this->assertFalse($this->invoke($service, 'isUsableProductDescription', [$dump, $product]));
     }
 
     public function test_compose_full_description_strips_html(): void
@@ -379,13 +349,6 @@ TXT;
         $this->assertTrue(ProductPageFetcher::looksLikeCjkDump($cjk));
         $this->assertTrue($this->invoke($service, 'looksLikeRawLocaleDump', [$cookies]));
         $this->assertFalse($this->invoke($service, 'isUsableProductDescription', [$cookies, $product]));
-        $this->assertSame('', $this->invoke($service, 'fallbackDescriptionFromPages', [
-            [['url' => 'https://www.ansell.com/cn/zh-hans/products/bioclean-2000', 'text' => $cookies."\n\n".$cjk]],
-            $product,
-        ]));
-        $this->assertSame('', $this->invoke($service, 'descriptionFromConfirmedCards', [[
-            ['url' => 'https://www.ansell.com/lac/es/products/bioclean-2000', 'text' => $cookies],
-        ]]));
     }
 
     /**

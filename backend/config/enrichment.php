@@ -328,7 +328,6 @@ return [
         'blastone.com',
         'novarlo.com',
         'icd.pl',
-        'supon.rzeszow.pl',
         'sprzetbhp.pl',
         'gvarant.pl',
         'bhponline-24.pl',
@@ -554,10 +553,14 @@ return [
     /*
     | Hosty wykluczone jako źródło opisu i zdjęć. Własne środowisko migracyjne opisuje
     | dokładnie te dane, które do tej bazy migrujemy — opis przepisany stamtąd wygląda
-    | na nowe źródło, a nim nie jest. Wykluczenie działa na host i jego subdomeny.
+    | na nowe źródło, a nim nie jest. Tak samo nasz sklep: PrestaProductExportService
+    | wysyła tam nasze opisy, więc opis „ze sklepu” to nasz własny tekst sprzed poprawek
+    | (audyt 22.09.2026: 91 kart, w tym 41 CEDERROTH). Wykluczenie działa na host i jego
+    | subdomeny; host z prestashop.shop_url dokłada ProductEnrichmentService niezależnie
+    | od tej listy.
     */
     'blocked_source_hosts' => [
-        'migracja.supon.rzeszow.pl',
+        'supon.rzeszow.pl',
     ],
 
     /*
@@ -568,7 +571,6 @@ return [
         'blastone.com',
         'novarlo.com',
         'icd.pl',
-        'supon.rzeszow.pl',
         'sprzetbhp.pl',
         'gvarant.pl',
         'bhponline-24.pl',

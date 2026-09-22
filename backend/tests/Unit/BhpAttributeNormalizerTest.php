@@ -829,6 +829,21 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertNull($but['przeznaczenie']);
     }
 
+    /**
+     * Zapisanego `przeznaczenie` nie czytamy także poza obuwiem (model go nie zwraca — w payloadzie leży dawne
+     * wyliczenie): kurtka ostrzegawcza jest hivis z nazwy, choćby w payloadzie stało „agriculture”, a lista
+     * zastosowań wymieniała rolnictwo.
+     */
+    public function test_stored_purpose_is_ignored_for_apparel_too(): void
+    {
+        $kurtka = (new BhpAttributeNormalizer)->normalize(
+            ['kategoria_bhp' => 'odziez', 'przeznaczenie' => 'agriculture'],
+            ['sku' => 'K-2', 'name' => 'Kurtka ostrzegawcza', 'use_cases' => ['rolnictwo', 'drogownictwo']],
+        );
+
+        $this->assertSame('hivis', $kurtka['przeznaczenie']);
+    }
+
     /** Rok i poprawkę zwija NormCode, a sprzeczne poziomy zostają obie — tego nie wolno zgubić. */
     public function test_year_and_amendment_collapse_but_contradictory_levels_stay(): void
     {

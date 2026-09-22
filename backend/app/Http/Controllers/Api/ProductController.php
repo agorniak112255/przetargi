@@ -322,6 +322,8 @@ class ProductController extends Controller
     {
         $category = trim((string) $request->validated('category'));
         $product->category = $category !== '' ? $category : null;
+        // wybór człowieka: dowód rodzaju wyrobu, a automaty (przepisanie na drzewo, import) go nie nadpisują
+        $product->category_source = $category !== '' ? Product::CATEGORY_SOURCE_MANUAL : null;
         $product->save();
 
         return response()->json([

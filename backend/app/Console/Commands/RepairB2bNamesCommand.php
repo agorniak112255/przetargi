@@ -197,6 +197,9 @@ final class RepairB2bNamesCommand extends Command
             }
             if ($change['category'] !== null) {
                 $updates['category'] = $change['category'];
+                // kategorię podał człowiek w --category — to wybór ręczny, dowód rodzaju wyrobu, i automat
+                // (przepisanie drzewa, import) nie może go po cichu nadpisać
+                $updates['category_source'] = Product::CATEGORY_SOURCE_MANUAL;
             }
             // przez model: hak saving przelicza indeks tekstowy, updated zleca reindeks wektora
             $change['product']->update($updates);
@@ -288,6 +291,8 @@ final class RepairB2bNamesCommand extends Command
             'sku' => (string) $c['product']->sku,
             'name' => $c['product']->name,
             'category' => $c['product']->category,
+            // pochodzenie kategorii sprzed naprawy — --restore oddaje je razem z kategorią
+            'category_source' => $c['product']->category_source,
             // stan po naprawie — --restore cofa kartę tylko wtedy, gdy od naprawy nikt jej nie zmienił
             'written_name' => $c['name'] ?? $c['product']->name,
             'written_category' => $c['category'] ?? $c['product']->category,
@@ -344,7 +349,12 @@ final class RepairB2bNamesCommand extends Command
                         return false;
                     }
                     // przez model, jak przy naprawie — indeks tekstowy i wektor wracają razem z nazwą
-                    $product->update(['name' => $entry['name'] ?? $product->name, 'category' => $entry['category'] ?? null]);
+                    $restore = ['name' => $entry['name'] ?? $product->name, 'category' => $entry['category'] ?? null];
+                    // kopia sprzed znacznika pochodzenia nie ma tego klucza — wtedy pochodzenia nie ruszamy
+                    if (array_key_exists('category_source', $entry)) {
+                        $restore['category_source'] = $entry['category_source'];
+                    }
+                    $product->update($restore);
 
                     return true;
                 });

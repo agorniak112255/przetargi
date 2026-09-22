@@ -101,6 +101,59 @@ final class RepairB2bNamesCommandTest extends TestCase
         @unlink($backup);
     }
 
+    /**
+     * Kategoria z --category to wybór człowieka: znacznik manual (dowód rodzaju wyrobu, automat go nie nadpisze).
+     * --restore oddaje pochodzenie sprzed naprawy razem z kategorią.
+     */
+    public function test_given_category_is_marked_manual_and_restore_brings_back_previous_source(): void
+    {
+        $backup = storage_path('app/repair-backups/test-b2b-names-source.json');
+        @unlink($backup);
+        $card = Product::query()->where('sku', 'ARYA 300 671460 S1 PL')->firstOrFail();
+        $card->update(['category_source' => Product::CATEGORY_SOURCE_IMPORT]);
+
+        $this->artisan('products:repair-b2b-names', [
+            '--price-list' => $this->priceList->id,
+            '--category' => 'Obuwie / Sandały ochronne',
+            '--id' => [(string) $card->id],
+            '--backup' => $backup,
+            '--apply' => true,
+        ])->assertSuccessful();
+
+        $card->refresh();
+        $this->assertSame('Obuwie / Sandały ochronne', $card->category);
+        $this->assertSame(Product::CATEGORY_SOURCE_MANUAL, $card->category_source);
+        $this->assertSame('Obuwie / Sandały ochronne', $card->categoryAsEvidence());
+
+        $this->artisan('products:repair-b2b-names', ['--restore' => $backup])
+            ->expectsOutputToContain('Przywrócono 1 kart')
+            ->assertSuccessful();
+        $card->refresh();
+        $this->assertSame('144', $card->category);
+        $this->assertSame(Product::CATEGORY_SOURCE_IMPORT, $card->category_source);
+        @unlink($backup);
+    }
+
+    /** Kopia sprzed znacznika pochodzenia (bez klucza category_source) nie zeruje pochodzenia przy --restore. */
+    public function test_restore_from_backup_without_source_leaves_source_alone(): void
+    {
+        $backup = storage_path('app/repair-backups/test-b2b-names-legacy.json');
+        $card = Product::query()->where('sku', 'ARYA 300 671460 S1 PL')->firstOrFail();
+        $card->update(['name' => 'ARYA 300 671460 S1 PL', 'category' => 'Obuwie / Sandały ochronne', 'category_source' => Product::CATEGORY_SOURCE_B2B]);
+        file_put_contents($backup, json_encode(['label' => 'repair-b2b-names', 'products' => [[
+            'id' => $card->id, 'sku' => $card->sku, 'name' => 'sandały', 'category' => '144',
+            'written_name' => 'ARYA 300 671460 S1 PL', 'written_category' => 'Obuwie / Sandały ochronne',
+        ]]], JSON_UNESCAPED_UNICODE));
+
+        $this->artisan('products:repair-b2b-names', ['--restore' => $backup])
+            ->expectsOutputToContain('Przywrócono 1 kart')
+            ->assertSuccessful();
+        $card->refresh();
+        $this->assertSame('144', $card->category);
+        $this->assertSame(Product::CATEGORY_SOURCE_B2B, $card->category_source);
+        @unlink($backup);
+    }
+
     public function test_restore_leaves_a_card_changed_since_the_repair(): void
     {
         $backup = storage_path('app/repair-backups/test-b2b-names-cas.json');

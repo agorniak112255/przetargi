@@ -35,8 +35,61 @@ final class EnrichmentDescriptionTemplateServiceTest extends TestCase
         $this->assertStringContainsString('"description"', $prompt);
         $this->assertStringContainsString('Nie tłumacz karty produktu 1 do 1', $prompt);
         $this->assertStringContainsString('Nie powtarzaj zdań z description', $prompt);
-        $this->assertStringContainsString('wyłuszcz ochronę', $prompt);
         $this->assertStringContainsString('cenników rozmiarów', $prompt);
+    }
+
+    /**
+     * Zasady „tylko źródła” (dawniej tylko przy PDF B2B) idą w każdym wzbogacaniu: audyt 22.09.2026 znalazł
+     * ~288 opisów z wiedzą ogólną i objaśnieniami norm, bo prompt kazał ekspertowi „wyłuszczyć” ochronę.
+     */
+    public function test_every_prompt_carries_sources_only_and_variant_rules(): void
+    {
+        $product = Product::query()->create([
+            'sku' => 'AN-GLOVE-2',
+            'name' => 'Rękawice nitrylowe',
+            'manufacturer' => 'Ansell',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+
+        $prompt = app(EnrichmentDescriptionTemplateService::class)->systemPrompt($product);
+
+        $this->assertStringContainsString('Pisz wyłącznie fakty podane w tych źródłach', $prompt);
+        $this->assertStringContainsString('(np. 200 J)', $prompt);
+        $this->assertStringContainsString('co oznacza klasa', $prompt);
+        $this->assertStringContainsString('Brak informacji = pomiń', $prompt);
+        $this->assertStringContainsString(
+            'podaj wartości wyłącznie wariantu z nazwy'."\n".'  karty; jeśli nie da się przypisać — pomiń.',
+            $prompt
+        );
+        $this->assertStringNotContainsString('wyłuszcz', $prompt);
+        $this->assertStringNotContainsString('ekspert', mb_strtolower($prompt));
+    }
+
+    /**
+     * Szablon rodziny zapisany w bazie przed zmianą (obuwie z „brak danych w źródle”) nie uchyla zasad: idzie
+     * przed nimi, a zasady mają pierwszeństwo przed instrukcją rodziny.
+     */
+    public function test_stored_family_template_is_followed_by_sources_only_rules(): void
+    {
+        $product = Product::query()->create([
+            'sku' => 'S3-BOOT-OLD',
+            'name' => 'Trzewiki ochronne S3',
+            'manufacturer' => 'Uvex',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+        $service = app(EnrichmentDescriptionTemplateService::class);
+        $service->update('obuwie', "STARY-SZABLON-OBUWIA\nCecha nieobecna → „brak danych w źródle”.");
+
+        $prompt = $service->systemPrompt($product);
+
+        $this->assertLessThan(
+            mb_strpos($prompt, 'TYLKO ŹRÓDŁA — mają pierwszeństwo przed instrukcją rodziny'),
+            mb_strpos($prompt, 'STARY-SZABLON-OBUWIA')
+        );
     }
 
     public function test_unknown_product_falls_back_to_inne(): void
@@ -82,6 +135,9 @@ final class EnrichmentDescriptionTemplateServiceTest extends TestCase
      * Szablon obuwia ma pokrywać stały zestaw cech doboru — typ zapięcia (sznurówki / rzepy / BOA)
      * nie występuje w żadnym polu tekstowym u producentów, więc bez jawnego punktu w instrukcji
      * i bez zakazu zgadywania model albo go pomija, albo wymyśla.
+     *
+     * Od 22.09.2026 (decyzja użytkownika) cechy nieobecnej w źródle nie wypisujemy: dawny stan
+     * „brak danych w źródle” trafiał do opisów jako treść karty i przeczył zasadom „tylko źródła”.
      */
     public function test_footwear_template_covers_fastening_and_forbids_guessing(): void
     {
@@ -104,15 +160,16 @@ final class EnrichmentDescriptionTemplateServiceTest extends TestCase
         $this->assertStringContainsString('Wkładka antyprzebiciowa: stalowa / tekstylna / brak', $prompt);
         $this->assertStringContainsString('EN ISO 20345:2022 S3L', $prompt);
 
-        // Trzy stany cechy: obecna, wywnioskowana, nieobecna — brak nazwany brakiem.
-        $this->assertStringContainsString('cecha OBECNA w źródle', $prompt);
-        $this->assertStringContainsString('cecha WYWNIOSKOWANA', $prompt);
-        $this->assertStringContainsString('cecha NIEOBECNA', $prompt);
-        $this->assertStringContainsString('Typ zapięcia: brak danych w źródle', $prompt);
+        // Brak informacji = pomiń — bez wierszy „brak danych w źródle” w szablonie domyślnym.
+        $this->assertStringContainsString('BRAK INFORMACJI = POMIŃ', $prompt);
+        $this->assertStringNotContainsString('Typ zapięcia: brak danych w źródle', $prompt);
+        $this->assertStringNotContainsString('cecha NIEOBECNA', $prompt);
+        $this->assertStringNotContainsString('brak danych w źródle', EnrichmentDescriptionTemplates::defaultInstructions('obuwie'));
 
         // Zakaz zgadywania wraz z przykładem ARTRA (zapięcie widoczne wyłącznie na zdjęciu).
         $this->assertStringContainsString('ZAKAZ ZGADYWANIA', $prompt);
         $this->assertStringContainsString('widać je wyłącznie na zdjęciu', $prompt);
+        $this->assertStringContainsString('Wtedy typ zapięcia pomiń.', $prompt);
     }
 
     public function test_presta_category_path_does_not_block_family_from_name(): void

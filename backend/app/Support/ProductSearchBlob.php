@@ -13,9 +13,12 @@ use App\Models\Product;
  */
 final class ProductSearchBlob
 {
-    /** Kolumny, po których zmianie blob przestaje być aktualny. */
+    /**
+     * Kolumny, po których zmianie blob przestaje być aktualny. category_source i category_evidence nie wchodzą do
+     * tekstu, ale rozstrzygają, jaka kategoria liczy się do ppe_family (Product::categoryAsEvidence).
+     */
     public const SOURCE_COLUMNS = [
-        'sku', 'name', 'model_name', 'manufacturer', 'category', 'norms',
+        'sku', 'name', 'model_name', 'manufacturer', 'category', 'category_source', 'category_evidence', 'norms',
         'shop_fields_summary', 'description', 'variant_summary', 'enrichment_payload',
         'manual_specs', 'manufacturer_norms',
     ];

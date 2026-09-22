@@ -44,7 +44,23 @@ final class ProductDocumentDownloader
         'formularz', 'platnosci', 'warunki dostawy', 'zasady dostawy', 'koszty dostawy',
         'sposoby dostawy', 'czas dostawy', 'warunki sprzedazy', 'warunki wspolpracy',
         'ogolne warunki',
+        // dokumenty firmowe przy setkach kart jako „certyfikat” (audyt 22.09.2026): deklaracja opakowaniowa
+        // (Ansell PPWR 387 kart), certyfikat wykonawcy Safe Contractor i polityka ESG (Coba), ulotki
+        // i materiały reklamowe (Canis) — żaden nie mówi nic o konkretnym wyrobie. Gołego „katalog” tu
+        // celowo nie ma: „karta katalogowa” to dokument wyrobu.
+        'packaging declaration', 'deklaracja opakowaniow', 'safe contractor', 'esg policy', 'polityka esg',
+        'publicita',
     ];
+
+    /**
+     * Ulotka reklamowa — tylko nazwana wprost: czeski „leták” (Canis letak-cz.pdf przy 214 kartach), „ulotka
+     * reklamowa/promocyjna”, „marketing/promo leaflet”. Gołe „leaflet” i „ulotka” śmieciem nie są: JSP nazywa
+     * kartę techniczną wyrobu „product leaflet”, a „information leaflet” / „ulotka informacyjna” to instrukcja
+     * ŚOI — oba to dokumenty przetargowe.
+     */
+    private const MARKETING_LEAFLET_PATTERN = '#( letak[uy]? | ulotk[aiy]? (?:reklam|promo)| (?:marketing|promo\w*) leaflets? | leaflets? promo)#';
+
+    private const USER_INFORMATION_PATTERN = '#(inform|instruk|instruc|user|uzytk|uzivatel|navod)#';
 
     /**
      * Hasła dopasowywane całym słowem — „rodo” jako fragment siedzi w „środowisko”,
@@ -52,7 +68,12 @@ final class ProductDocumentDownloader
      *
      * @var list<string>
      */
-    private const JUNK_DOCUMENT_WORDS = ['rodo', 'gdpr', 'agb', 'platnosc', 'dostawa'];
+    private const JUNK_DOCUMENT_WORDS = [
+        'rodo', 'gdpr', 'agb', 'platnosc', 'dostawa',
+        // PPWR = rozporządzenie o opakowaniach („ppwr declaration of conformity” to deklaracja opakowania,
+        // nie wyrobu); ESG — polityka firmy
+        'ppwr', 'esg',
+    ];
 
     /**
      * Rodzaje dokumentów wymagane w przetargach BHP obok deklaracji zgodności i karty produktu.
@@ -157,8 +178,24 @@ final class ProductDocumentDownloader
                 return true;
             }
         }
+        if (preg_match(self::MARKETING_LEAFLET_PATTERN, $norm) === 1
+            && preg_match(self::USER_INFORMATION_PATTERN, $norm) !== 1) {
+            return true;
+        }
 
         return false;
+    }
+
+    /**
+     * Deklaracja opakowania (PPWR, „packaging declaration”, „deklaracja opakowaniowa”) — też „declaration of
+     * conformity”, ale opakowania, nie wyrobu. Nie jest certyfikatem wyrobu.
+     */
+    public static function looksLikePackagingDeclaration(string $hay): bool
+    {
+        $norm = self::normalizeDocumentHay($hay);
+
+        return str_contains($norm, ' ppwr ')
+            || preg_match('#(packaging|opakowan|verpackung)#', $norm) === 1;
     }
 
     /**
@@ -749,7 +786,9 @@ final class ProductDocumentDownloader
      */
     private static function kindFromHay(string $hay): ?string
     {
-        if (preg_match('#(cert|conform|declaration|deklarac|zgodno|/doc/|ukdoc|oeko)#iu', $hay)) {
+        // deklaracja opakowania (PPWR) też jest „declaration of conformity”, ale nie wyrobu — nie certyfikat
+        if (preg_match('#(cert|conform|declaration|deklarac|zgodno|/doc/|ukdoc|oeko)#iu', $hay)
+            && ! self::looksLikePackagingDeclaration($hay)) {
             return ProductDocument::KIND_CERTIFICATE;
         }
         $extra = self::matchesExtraKind($hay);

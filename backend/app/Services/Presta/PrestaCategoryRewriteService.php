@@ -37,9 +37,13 @@ final class PrestaCategoryRewriteService
      * Lepsza kategoria dla jednej karty albo null, gdy nie ma czego poprawiać. Kategoria, która już
      * jest ścieżką z drzewa sklepu, zostaje nietknięta — także wtedy, gdy wskazał ją człowiek.
      * Dołożony tekst (opis ściągnięty przy wzbogacaniu) pomaga tam, gdzie sama nazwa nic nie mówi.
+     * Wynik zapisuje się z category_source = presta_rewrite; kategorii wpisanej ręcznie nie poprawiamy.
      */
     public function betterPathFor(Product $product, string $extraText = ''): ?string
     {
+        if ($product->category_source === Product::CATEGORY_SOURCE_MANUAL) {
+            return null;
+        }
         $tree = PrestaCategory::query()->where('active', true)->get();
         if ($tree->isEmpty()) {
             return null;
@@ -59,6 +63,9 @@ final class PrestaCategoryRewriteService
      * bo to zmiana na wszystkich kartach naraz, a kategoria decyduje o grupie widocznej na karcie
      * i o mapowaniu przy wysyłce do sklepu.
      *
+     * Zapisana ścieżka dostaje category_source = presta_rewrite: to wybór automatu, nie dowód rodzaju wyrobu
+     * (PpeAssortment i dopasowanie jej nie czytają). Kategorii wybranej ręcznie w panelu przebieg nie rusza.
+     *
      * @return array{updated: int, cleared: int, skipped: int, samples: list<array{sku: string, from: string, to: string}>}
      */
     public function rewrite(?string $manufacturer = null, bool $apply = true, int $samples = 15): array
@@ -73,7 +80,7 @@ final class PrestaCategoryRewriteService
 
         $sampleRows = [];
         Product::query()
-            ->select(['id', 'sku', 'name', 'category'])
+            ->select(['id', 'sku', 'name', 'category', 'category_source'])
             ->when(
                 $manufacturer !== null && trim($manufacturer) !== '',
                 static fn ($query) => $query->where('manufacturer', trim((string) $manufacturer))
@@ -82,6 +89,12 @@ final class PrestaCategoryRewriteService
             ->chunkById(500, function ($products) use ($tree, &$pathCache, &$byPath, &$clearIds, &$skipped, &$sampleRows, $samples): void {
                 foreach ($products as $product) {
                     if (! $product instanceof Product) {
+                        continue;
+                    }
+                    // wybór człowieka w panelu — automat go nie nadpisuje
+                    if ($product->category_source === Product::CATEGORY_SOURCE_MANUAL) {
+                        $skipped++;
+
                         continue;
                     }
                     $current = trim((string) ($product->category ?? ''));
@@ -135,13 +148,16 @@ final class PrestaCategoryRewriteService
 
         foreach ($byPath as $path => $ids) {
             foreach (array_chunk($ids, 1000) as $chunk) {
-                Product::query()->whereIn('id', $chunk)->update(['category' => $path]);
+                Product::query()->whereIn('id', $chunk)->update([
+                    'category' => $path,
+                    'category_source' => Product::CATEGORY_SOURCE_PRESTA_REWRITE,
+                ]);
                 $updated += count($chunk);
             }
         }
         $cleared = 0;
         foreach (array_chunk($clearIds, 1000) as $chunk) {
-            Product::query()->whereIn('id', $chunk)->update(['category' => null]);
+            Product::query()->whereIn('id', $chunk)->update(['category' => null, 'category_source' => null]);
             $cleared += count($chunk);
         }
 

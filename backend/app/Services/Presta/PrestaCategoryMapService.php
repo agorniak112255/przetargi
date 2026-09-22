@@ -189,7 +189,16 @@ final class PrestaCategoryMapService
             if ($path === '' || $local === '' || mb_strtolower($path) === mb_strtolower($local)) {
                 continue;
             }
-            $updated += Product::query()->where('category', $local)->update(['category' => $path]);
+            // Ścieżka z mapy (category_source = presta_map) to ręcznie ułożone tłumaczenie kategorii z cennika —
+            // liczy się jako dowód rodzaju wyrobu jak import (decyzja 22.09.2026); kategoria wybrana ręcznie
+            // w panelu zostaje nietknięta.
+            $updated += Product::query()
+                ->where('category', $local)
+                ->where(static function ($query): void {
+                    $query->whereNull('category_source')
+                        ->orWhere('category_source', '!=', Product::CATEGORY_SOURCE_MANUAL);
+                })
+                ->update(['category' => $path, 'category_source' => Product::CATEGORY_SOURCE_PRESTA_MAP]);
             PrestaCategoryMap::query()->updateOrCreate(
                 ['local_category' => $path],
                 ['presta_id' => (int) $map->presta_id]

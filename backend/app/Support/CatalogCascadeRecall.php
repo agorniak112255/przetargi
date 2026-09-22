@@ -424,7 +424,16 @@ final class CatalogCascadeRecall
             foreach ($nouns as $noun) {
                 $like = '%'.addcslashes($noun, '%_\\').'%';
                 $outer->orWhere('name', 'like', $like)
-                    ->orWhere('category', 'like', $like);
+                    // kategoria-dowód (kolumna cennika / B2B zachowana obok ścieżki sklepu) — jak categoryAsEvidence()
+                    ->orWhere('category_evidence', 'like', $like)
+                    // kategoria nadana automatem (drzewo sklepu z nazwy/opisu) nie wpuszcza karty do rodziny
+                    ->orWhere(static function (Builder $category) use ($like): void {
+                        $category->where('category', 'like', $like)
+                            ->where(static function (Builder $source): void {
+                                $source->whereNull('category_source')
+                                    ->orWhereNotIn('category_source', Product::AUTOMATIC_CATEGORY_SOURCES);
+                            });
+                    });
             }
         });
     }

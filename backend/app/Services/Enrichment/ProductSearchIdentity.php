@@ -2530,6 +2530,10 @@ final class ProductSearchIdentity
         if ($this->pageNamesAnotherFootwearVariant($url, $title, $text, $product)) {
             return false;
         }
+        // I karta tej samej półmaski w innej klasie ochrony (SPIRO P3 ze strony spiro-p1).
+        if ($this->pageNamesAnotherRespiratoryClass($url, $title, $product)) {
+            return false;
+        }
         if ($this->manufacturerIsThreeM($product) && $this->isOfficialThreeMProductUrl($url)) {
             $card = $url.' '.$title.' '.$text;
             if (($this->hayHasProductCode($card, $product)
@@ -3422,6 +3426,14 @@ final class ProductSearchIdentity
             || $this->urlOrTitleHasForeignAnsellGloveModel($url, $title, $product)) {
             return true;
         }
+        // Jawny cudzy kod rozstrzyga przed frazą z nazwy: jedno słowo z nazwy („Bandage”, „marble”,
+        // „Rukavice”) wystarczało za tożsamość i kończyło sprawdzanie, zanim ktoś spojrzał na kod
+        // (ROXY 3420-007 z karty MERU 3420-115, bandaż 51011021 ze strony „nr-51011010”).
+        $path = rawurldecode((string) (parse_url($url, PHP_URL_PATH) ?? ''));
+        if ($this->namesAnotherGroupedCode($path.' '.$title, $product, [$path, $title])
+            || $this->urlOrTitleHasLabeledForeignCode($path, $title, $product)) {
+            return true;
+        }
         // SKU 205, sklep „model 285” — ta sama kurtka, pełna nazwa w slugu.
         if ($this->hayHasDistinctiveNamePhrase($url.' '.$title, $product)) {
             return false;
@@ -3442,6 +3454,40 @@ final class ProductSearchIdentity
         return $tokens !== []
             && $this->compactProductCodes($product) !== []
             && ! $this->urlOrTitleCarriesCodeFamily($url, $title, $product);
+    }
+
+    /**
+     * Adres albo tytuł podpisuje numer jako numer artykułu („…-soft-foam-bandage-blue-6x450cm-nr-51011010”,
+     * „ref. 390103”, „art. nr 390102”), a to nie nasz numer. Numer szukany tylko 3–5 cyfr pomijał
+     * ośmiocyfrowe numery CEDERROTH, a słowo z nazwy („Bandage”) kończyło sprawdzanie wcześniej.
+     *
+     * Świadomie wąsko: SKU z samych cyfr (co najmniej 5) i podpisany numer tej samej długości.
+     * Bez przedrostka numer długości SKU nie wystarcza (3M i UVEX mają SKU z samych cyfr, a strona
+     * niesie też EAN, numery zdjęć, id karty), a krótszy numer za „art.” to często numer sklepu
+     * („art. 860” przy naszym modelu). Sąsiedni rozmiar też odpada: podpisany numer to inny artykuł.
+     */
+    private function urlOrTitleHasLabeledForeignCode(string $path, string $title, Product $product): bool
+    {
+        $sku = preg_replace('/[\s\-]+/u', '', trim((string) $product->sku)) ?? '';
+        if (preg_match('/^\d{5,}$/u', $sku) !== 1) {
+            return false;
+        }
+        if (preg_match_all(
+            '/(?<![\p{L}\d])(?:nr|ref|art|kod|sku)\.?[\s\-_:#]*(?:nr\.?[\s\-_:#]*)?(\d{5,})(?![\d])/iu',
+            $path.' '.$title,
+            $hits
+        ) < 1) {
+            return false;
+        }
+        $ours = $this->compactProductCodes($product);
+        foreach ($hits[1] as $code) {
+            $code = (string) $code;
+            if (strlen($code) === strlen($sku) && ! in_array($code, $ours, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -3934,6 +3980,62 @@ final class ProductSearchIdentity
         }
 
         return $this->footwearNormRecordsNameAnotherClass($text, $records);
+    }
+
+    /**
+     * Strona opisuje tę samą półmaskę albo filtr w innej klasie ochrony. Produkcja 22.09.2026 (Canis):
+     * „Respirator SPIRO, P3” dostał dane ze stron spiro-p1 i spiro-p2, „SPIRO P1” ze strony P2 — model
+     * i marka te same, więc bramki po nazwie przepuszczały.
+     *
+     * Wzorem sita obuwia (pageNamesAnotherFootwearVariant), ale węziej:
+     *  - tylko gdy nazwa wskazuje ochronę dróg oddechowych i podaje dokładnie jedną klasę
+     *    (FFP1–FFP3 albo samodzielne P1–P3; FFP3 i P3 to ta sama klasa 3);
+     *  - czytamy ostatni segment adresu (slug wyrobu) i tytuł; treść nie, bo karta klasy P3 zwykle
+     *    porównuje się w akapicie z P1/P2;
+     *  - odrzucamy, gdy strona podaje klasy i żadna nie jest naszą; strona z listą wariantów,
+     *    wśród których jest nasz („spiro-p1-p2-p3”), zostaje.
+     * Adres wskazany ręcznie przez człowieka przechodzi bez sprawdzania.
+     */
+    public function pageNamesAnotherRespiratoryClass(string $url, string $title, Product $product): bool
+    {
+        if ($product->isHintedShopUrl($url)) {
+            return false;
+        }
+        $name = mb_strtolower(Str::ascii((string) $product->name));
+        $ours = $this->respiratoryClassesIn($name);
+        if (count($ours) !== 1) {
+            return false;
+        }
+        $namesFfp = preg_match('/(?<![a-z0-9])ffp\s?[1-3]/u', $name) === 1;
+        if (! $namesFfp && preg_match(
+            '/respira|polmask|maska|maske|mask\b|filtr|filter|pochlan|ochrona drog|drog oddech|oddech/u',
+            $name
+        ) !== 1) {
+            return false;
+        }
+        foreach ([$this->footwearUrlPathHay($url), $title] as $hay) {
+            $found = $this->respiratoryClassesIn(mb_strtolower(Str::ascii($hay)));
+            if ($found !== [] && ! in_array($ours[0], $found, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Numery klas ochrony dróg oddechowych w tekście: „FFP2”, „ffp 3”, samodzielne „P3”, „P3 R”,
+     * „p2nr”. „p4129” (id karty sklepu) czy „P100” to nie klasa.
+     *
+     * @return list<string>
+     */
+    private function respiratoryClassesIn(string $lower): array
+    {
+        if (preg_match_all('/(?<![a-z0-9])(?:ffp\s?|p)([1-3])(?:nr|r|d|nrd)?(?![a-z0-9])/u', $lower, $m) < 1) {
+            return [];
+        }
+
+        return array_values(array_unique(array_map('strval', $m[1])));
     }
 
     /**
@@ -5977,6 +6079,11 @@ final class ProductSearchIdentity
 
     private function primaryDigitCore(Product $product): ?string
     {
+        // Canis „3420-007-157-07”: rdzeniem jest grupa z modelem, nie sama grupa „3420”.
+        $grouped = $this->groupedNumericModelCode($product);
+        if ($grouped !== null) {
+            return str_replace('-', '', $grouped);
+        }
         if ($this->looksLikeWarehouseArticleSku($product)) {
             $stripped = rtrim(preg_replace('/\D+/u', '', (string) $product->sku) ?? '', '0');
             if (mb_strlen($stripped) >= 8) {
@@ -6383,8 +6490,266 @@ final class ProductSearchIdentity
         return mb_strlen($core) >= 4 ? $core : '';
     }
 
+    /**
+     * Rdzeń modelu z kodu złożonego w zapisie Canis: „3420-007-157-07” to grupa towarowa 3420
+     * (rękawice powlekane), model 007 (ROXY), a dalej kolor i rozmiar. Model to dopiero para
+     * „3420-007” — sama grupa „3420” stoi też w kodach MERU 3420-115 i każdej innej rękawicy
+     * z tej grupy, więc brana za rdzeń wpuszczała ich karty jako nasze (produkcja 22.09.2026).
+     * Tylko SKU z co najmniej trzema członami: dwuczłonowe 3M „8906-200” czy Tegera „8805-9”
+     * to już pełny model.
+     */
+    public function groupedNumericModelCode(Product $product): ?string
+    {
+        $sku = trim((string) $product->sku);
+        if (preg_match('/^(\d{4})-(\d{3})(?:-\d{2,3}){1,2}$/u', $sku, $m) !== 1) {
+            return null;
+        }
+
+        return $m[1].'-'.$m[2];
+    }
+
+    /**
+     * Tekst (adres, tytuł, opis) nazywa kodem złożonym inny model niż nasz: nasze „3420-007”,
+     * a na stronie tylko „3420-115” (MERU) albo „2118-005” (STONE MARBLE przy klapkach TREND).
+     * Działa wyłącznie dla SKU w zapisie Canis (groupedNumericModelCode) — tylko wtedy wiemy,
+     * że czterocyfrowa grupa z trzycyfrowym modelem jest kodem wyrobu, a nie wymiarem.
+     * Liczymy zapisy z myślnikami („3420-115”, „3420-115-157-07”) i sklejone dziesięć cyfr
+     * („3420115157”). Gdy którykolwiek kod na stronie to nasz model, strona zostaje.
+     */
+    public function textNamesAnotherGroupedCode(string $text, Product $product): bool
+    {
+        return $this->namesAnotherGroupedCode($text, $product, null);
+    }
+
+    /**
+     * Wspólne sito kodu grupowego dla opisu ($page = null) i dla strony ($page = [ścieżka, tytuł],
+     * a $text to „ścieżka tytuł”). Różni je tylko to, skąd bierzemy etykietę cudzego kodu dla wyjątku
+     * blistrowego (blisterCardMatchesGroupedModel).
+     *
+     * @param  array{0: string, 1: string}|null  $page
+     */
+    private function namesAnotherGroupedCode(string $text, Product $product, ?array $page): bool
+    {
+        $ours = $this->groupedNumericModelCode($product);
+        if ($ours === null || trim($text) === '') {
+            return false;
+        }
+        $ours = str_replace('-', '', $ours);
+        // [kod bez myślników, przesunięcie w bajtach, długość zapisu]
+        $hits = [];
+        // „1200-300 mm” to wymiar, nie kod
+        $notMeasure = '(?!\s?(?:mm|cm|m|g|kg|ml|l|v|kv|w)\b)';
+        if (preg_match_all(
+            '/(?<![\p{L}\d.,])(\d{4})[\-‐–](\d{3})(?:[\-‐–]\d{2,3}){0,2}(?![\d])'.$notMeasure.'/iu',
+            $text,
+            $dashed,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
+        ) > 0) {
+            foreach ($dashed as $hit) {
+                $hits[] = [$hit[1][0].$hit[2][0], (int) $hit[0][1], strlen($hit[0][0])];
+            }
+        }
+        // Sklejone dziesięć cyfr tylko z grupą naszego kodu: inne dziesięciocyfrowe numery to identyfikatory
+        // sklepów i producentów (3M „…-pd01010-…/ass-1325184410” przy wkładkach E.A.R. Soft 4410-008)
+        if (preg_match_all(
+            '/(?<![\p{L}\d.,])('.substr($ours, 0, 4).'\d{3})\d{3}(?![\d])'.$notMeasure.'/iu',
+            $text,
+            $glued,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
+        ) > 0) {
+            foreach ($glued as $hit) {
+                $hits[] = [(string) $hit[1][0], (int) $hit[0][1], strlen($hit[0][0])];
+            }
+        }
+        $found = array_column($hits, 0);
+        if ($found === [] || in_array($ours, $found, true)) {
+            return false;
+        }
+        $labels = $page === null
+            ? $this->groupedCodeLabelsInText($text, $hits)
+            : $this->groupedCodeLabelsOnPage($page[0], $page[1], $hits);
+
+        return ! $this->blisterCardMatchesGroupedModel($labels, $product, substr($ours, 0, 4), $found);
+    }
+
+    /**
+     * Etykiety cudzych kodów w opisie: okno do czterech słów tuż przed kodem, ucięte na znaku
+     * przestankowym („Rukavice TECHNIK ECO (3210-010)” → „Rukavice TECHNIK ECO (”).
+     *
+     * @param  list<array{0: string, 1: int, 2: int}>  $hits
+     * @return list<string>
+     */
+    private function groupedCodeLabelsInText(string $text, array $hits): array
+    {
+        $labels = [];
+        foreach ($hits as [, $offset]) {
+            $before = substr($text, 0, $offset);
+            $parts = preg_split('/[.,;:!?\n]/u', $before) ?: [''];
+            $words = preg_split('/\s+/u', trim((string) end($parts)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            $labels[] = implode(' ', array_slice($words, -4));
+        }
+
+        return $labels;
+    }
+
+    /**
+     * Etykiety cudzych kodów na stronie: segment adresu z kodem i cały tytuł (gdy jest).
+     *
+     * @param  list<array{0: string, 1: int, 2: int}>  $hits  przesunięcia w tekście „ścieżka tytuł”
+     * @return list<string>
+     */
+    private function groupedCodeLabelsOnPage(string $path, string $title, array $hits): array
+    {
+        $labels = [];
+        $pathLength = strlen($path);
+        foreach ($hits as [, $offset, $length]) {
+            if ($offset >= $pathLength) {
+                continue;
+            }
+            $start = strrpos(substr($path, 0, $offset), '/');
+            $start = $start === false ? 0 : $start + 1;
+            $end = strpos($path, '/', $offset + $length);
+            $labels[] = substr($path, $start, ($end === false ? $pathLength : $end) - $start);
+        }
+        if (trim($title) !== '') {
+            $labels[] = $title;
+        }
+
+        return array_values(array_unique($labels));
+    }
+
+    /**
+     * Karta blistrowa Canis („Rukavice BONO, kožené, BLISTR” 3100-041, „TECHNIK ECO, s blistrem”
+     * 3210-033) to ten sam wyrób co rękawica bez blistra, tylko w opakowaniu jednostkowym — i pod
+     * innym numerem modelu (BONO 3100-006, TECHNIK ECO 3210-010). Decyzja 22.09.2026: blister = ten
+     * sam wyrób, więc kod grupowy strony nie rozstrzyga, gdy:
+     *  - nazwa karty mówi o blistrze,
+     *  - każdy kod na stronie jest z naszej grupy towarowej (pierwsze cztery cyfry),
+     *  - każda etykieta cudzego kodu ma dokładnie ten sam zbiór słów modelu co nasza nazwa.
+     * Jedno wspólne słowo nie wystarcza: TECHNIK PLUS to nie TECHNIK ECO, DOUBLE ROXY WINTER to nie
+     * ROXY WINTER, CITA II to nie CITA, DINGO A to nie DINGO. Wątpliwość (brak słów po którejś
+     * stronie, dopisek w etykiecie) — odrzucenie.
+     *
+     * @param  list<string>  $labels  etykiety cudzych kodów (segment adresu, tytuł, okno opisu)
+     * @param  list<string>  $found  kody model+grupa znalezione w tekście (bez myślników)
+     */
+    private function blisterCardMatchesGroupedModel(array $labels, Product $product, string $group, array $found): bool
+    {
+        $name = (string) $product->name;
+        if (preg_match('/blist/iu', $name) !== 1 || $labels === []) {
+            return false;
+        }
+        foreach ($found as $code) {
+            if (! str_starts_with($code, $group)) {
+                return false;
+            }
+        }
+        $ours = $this->blisterModelWords($name);
+        if ($ours === []) {
+            return false;
+        }
+        sort($ours);
+        foreach ($labels as $label) {
+            $theirs = $this->blisterLabelModelWords($label);
+            sort($theirs);
+            if ($theirs !== $ours) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Słowa modelu z nazwy karty Canis: pisane wielkimi literami, co najmniej dwie litery
+     * („BONO”, „TECHNIK ECO”, „CITA II”, „PATON RED”), i krótki człon tuż po słowie modelu
+     * („DINGO A”). Dopiski wersji (ECO, PLUS, WINTER, HV, BLUE, DOUBLE…) zostają — to one
+     * odróżniają modele.
+     *
+     * @return list<string>
+     */
+    private function blisterModelWords(string $name): array
+    {
+        if (preg_match_all('/(?<![\p{L}\d])\p{Lu}+(?![\p{L}\d])/u', $name, $m, PREG_OFFSET_CAPTURE) < 1) {
+            return [];
+        }
+        $out = [];
+        $previousEnd = null;
+        foreach ($m[0] as [$raw, $offset]) {
+            $word = mb_strtolower(Str::ascii($raw));
+            $short = mb_strlen($raw) < 2;
+            // „DINGO A”: jednoliterowy człon liczy się tylko tuż po słowie modelu (sama spacja lub myślnik)
+            $afterModelWord = $previousEnd !== null
+                && preg_match('/^[\s\-]+$/u', substr($name, $previousEnd, $offset - $previousEnd)) === 1;
+            $previousEnd = null;
+            if ($this->isBlisterGenericWord($word) || ($short && ! $afterModelWord)) {
+                continue;
+            }
+            $out[] = $word;
+            $previousEnd = $offset + strlen($raw);
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Słowa modelu z etykiety strony lub opisu: adres gubi wielkość liter („rukavice-technik-eco-3210-010”),
+     * więc liczy się każde słowo poza opakowaniem, językiem, marką, materiałem i rozmiarem; pojedyncza
+     * litera tylko tuż po słowie modelu. Kody i liczby odpadają same (tylko litery).
+     *
+     * @return list<string>
+     */
+    private function blisterLabelModelWords(string $label): array
+    {
+        $out = [];
+        $previousKept = false;
+        foreach (preg_split('/[^a-z]+/', mb_strtolower(Str::ascii($label)), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $word) {
+            if ($this->isBlisterGenericWord($word) || (strlen($word) < 2 && ! $previousKept)) {
+                $previousKept = false;
+
+                continue;
+            }
+            $out[] = $word;
+            $previousKept = true;
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Słowa pomijane po obu stronach porównania blistra: opakowanie i język („blistr”, „s blistrem”,
+     * „rukavice”, „gloves”), marka, materiały powłoki i rozmiary.
+     */
+    private function isBlisterGenericWord(string $word): bool
+    {
+        // Przymiotniki opisowe sklepów (PL/CZ) — materiał, wykonanie, kolor — to nie człon modelu: „BONO-SKORZANE-3100-006”,
+        // „OLAS-POWLEKANE”, „TALE-KOMBINOWANE”, „MERU-powlekane-w-polowie” to te same wyroby. Warianty modelu stoją w nazwie
+        // wielkimi literami (PLUS, ECO, WINTER, RED, DOTS) i dalej rozstrzygają.
+        foreach ([
+            'blist', 'latex', 'lateks', 'nitril', 'nitryl',
+            'skorzan', 'kozen', 'licow', 'powlek', 'macen', 'kombinow', 'kombinov', 'wzmacnian', 'polowie',
+            'spawaln', 'svarec', 'tekstyln', 'textiln', 'bawelnian', 'bavln',
+            'czarn', 'niebiesk', 'czerwon', 'zolt', 'zielon', 'bial', 'szar', 'pomarancz', 'cern', 'modr', 'cerven', 'zlut', 'zelen',
+        ] as $prefix) {
+            if (str_starts_with($word, $prefix)) {
+                return true;
+            }
+        }
+
+        // jednoliterowe przyimki („MAWA-z-PVC”, „máčené v latexu”) to nie człon modelu; „a” zostaje (DINGO A)
+        return in_array($word, [
+            's', 'z', 'w', 'v', 'o', 'rukavice', 'gloves', 'glove', 'rekawice', 'cxs', 'canis', 'vel', 'size',
+            'pvc', 'nbr', 'pu', 'pes',
+            'xxs', 'xs', 'm', 'l', 'xl', 'xxl', 'xxxl',
+        ], true);
+    }
+
     public function gloveCodeCore(Product $product): ?string
     {
+        $grouped = $this->groupedNumericModelCode($product);
+        if ($grouped !== null) {
+            return $grouped;
+        }
         $brand = $this->shortBrand((string) $product->manufacturer);
         foreach ([(string) $product->name, (string) $product->sku] as $value) {
             $bare = $this->stripBrandPrefix(trim($value), $brand);

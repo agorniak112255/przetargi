@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Support\EnrichmentDescriptionLayouts;
 use App\Support\EnrichmentDescriptionTemplates;
 use App\Support\PpeAssortment;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Schema;
 use InvalidArgumentException;
 use RuntimeException;
@@ -155,9 +156,10 @@ final class EnrichmentDescriptionTemplateService
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
         $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
         $stored = $this->normalizeKey($attrs['kategoria_bhp'] ?? null);
+        // Kategoria tylko jako dowód: ścieżka dobrana automatem (presta_rewrite) nie wybiera szablonu rodziny.
         $hay = trim(
             $product->name.' '.$product->sku.' '
-            .(string) ($product->category ?? '').' '
+            .$product->categoryAsEvidence().' '
             .(string) ($product->norms ?? '')
         );
         $family = $this->assortment->resolveFamily($hay, $stored);
@@ -175,7 +177,9 @@ final class EnrichmentDescriptionTemplateService
         $instructions = $this->instructionsFor($key);
         $label = EnrichmentDescriptionTemplates::label($key);
 
-        return "Jesteś ekspertem BHP/PPE. Wejście to OCZYSZCZONE fakty o produkcie (bez chrome sklepu).\n"
+        // Szablon rodziny (z bazy albo domyślny) idzie przed zasadami pisania, a te — razem z zasadami „tylko
+        // źródła” — mają pierwszeństwo; dzięki temu starszy szablon zapisany w bazie ich nie uchyla.
+        return "Redagujesz kartę produktu BHP/PPE wyłącznie z podanych źródeł. Wejście to OCZYSZCZONE fakty o produkcie (bez chrome sklepu).\n"
             ."Rodzina produktu do tej karty: {$label} ({$key}). Stosuj poniższe instrukcje tej rodziny.\n\n"
             .$instructions."\n\n"
             .EnrichmentDescriptionTemplates::writingRules()."\n\n"
@@ -275,7 +279,7 @@ final class EnrichmentDescriptionTemplateService
     }
 
     /**
-     * @param  \Illuminate\Support\Collection<string, EnrichmentDescriptionTemplate>|mixed  $rows
+     * @param  Collection<string, EnrichmentDescriptionTemplate>|mixed  $rows
      * @return array{
      *     kategoria_bhp: string,
      *     label: string,
@@ -357,7 +361,6 @@ final class EnrichmentDescriptionTemplateService
     }
 
     /**
-     * @param  mixed  $rows
      * @return array{inherit_card: bool, inherit_export: bool, card: list<array<string, mixed>>, export: list<array<string, mixed>>}
      */
     private function storedDefaultLayout(mixed $rows): array

@@ -15,78 +15,12 @@ use Tests\TestCase;
  * zaczepowy dostawał treść karty półmaski, a nagłowie treść całego zestawu SECURA 3100.
  * Drugi mechanizm tej samej usterki: przy wyborze opisu wygrywał tekst dłuższy, a karta
  * zestawu jest zawsze dłuższa niż karta pojedynczej części.
+ *
+ * Od 22.09.2026 opis pisze wyłącznie model — składanie opisu zapasowego z akapitów kart
+ * (i jego testy) usunięto razem z tym mechanizmem; zostają testy wyboru i scalania kart.
  */
 final class EnrichmentSingleCardDescriptionTest extends TestCase
 {
-    private const NAGLOWIE_CARD = 'https://sklep.example/p/naglowie-tekstylne-secura-3100-s5621300';
-
-    private const ZESTAW_CARD = 'https://innysklep.example/p/zestaw-secura-3100-lak';
-
-    private function naglowieProduct(): Product
-    {
-        return new Product([
-            'sku' => 'S5621300',
-            'name' => 'Nagłowie tekstylne kompletne do półmaski SECURA 3100',
-            'manufacturer' => 'SECURA',
-        ]);
-    }
-
-    /** Akapity dwóch różnych kart nie mogą się skleić w jeden opis. */
-    public function test_description_never_mixes_paragraphs_from_two_cards(): void
-    {
-        $service = app(ProductEnrichmentService::class);
-        $product = $this->naglowieProduct();
-
-        $naglowie = 'Nagłowie tekstylne kompletne S5621300 do półmaski SECURA 3100. '
-            ."Zestaw taśm z regulacją długości, mocowany do korpusu półmaski zatrzaskami.\n\n"
-            .'Element wymienny — zużyte taśmy wymienia się bez wymiany całej półmaski SECURA 3100.';
-        $zestaw = 'Zestaw lakierniczy SECURA 3100 LAK zawiera półmaskę, dwa pochłaniacze A2 '
-            ."oraz parę filtrów przeciwpyłowych P2 R.\n\n"
-            ."Zestaw chroni drogi oddechowe przed parami rozpuszczalników organicznych podczas lakierowania.\n\n"
-            .'Półmaska SECURA 3100 wykonana jest z elastomeru termoplastycznego, masa 180 g.';
-
-        $out = $this->invoke($service, 'descriptionFromConfirmedCards', [
-            [
-                ['url' => self::NAGLOWIE_CARD, 'text' => $naglowie],
-                ['url' => self::ZESTAW_CARD, 'text' => $zestaw],
-            ],
-            $product,
-        ]);
-
-        $this->assertNotSame('', $out);
-        $this->assertStringContainsString('Nagłowie tekstylne kompletne', $out);
-        $this->assertStringNotContainsString('pochłaniacze A2', $out);
-        $this->assertStringNotContainsString('Zestaw lakierniczy', $out);
-    }
-
-    /** Karta z kodem produktu bije kartę dłuższą, ale słabiej potwierdzoną. */
-    public function test_card_with_product_code_wins_over_longer_foreign_card(): void
-    {
-        $service = app(ProductEnrichmentService::class);
-        $product = $this->naglowieProduct();
-
-        $krotkaWlasciwa = 'Nagłowie tekstylne kompletne S5621300 do półmaski SECURA 3100 — komplet '
-            .'taśm nagłownych z płynną regulacją długości. Taśmy mocuje się do korpusu półmaski '
-            .'zatrzaskami, bez użycia narzędzi. Element zużywalny: wymiana nagłowia przywraca '
-            .'szczelne przyleganie części twarzowej, więc półmaski nie trzeba wymieniać w całości. '
-            .'Materiał tekstylny nadaje się do prania ręcznego w letniej wodzie.';
-        $dlugaObca = str_repeat(
-            'Zestaw SECURA 3100 LAK z pochłaniaczami i filtrami do prac lakierniczych. ',
-            12
-        );
-
-        $out = $this->invoke($service, 'fallbackDescriptionFromPages', [
-            [
-                ['url' => self::ZESTAW_CARD, 'text' => $dlugaObca],
-                ['url' => self::NAGLOWIE_CARD, 'text' => $krotkaWlasciwa],
-            ],
-            $product,
-        ]);
-
-        $this->assertStringContainsString('Nagłowie tekstylne kompletne', $out);
-        $this->assertStringNotContainsString('pochłaniaczami', $out);
-    }
-
     /** Kompletnego opisu nie podmienia tekst wyłącznie dłuższy. */
     public function test_longer_text_alone_does_not_replace_complete_description(): void
     {
@@ -134,21 +68,41 @@ final class EnrichmentSingleCardDescriptionTest extends TestCase
         $this->assertStringContainsString('sklep.example', (string) ($withLanding[0]['url'] ?? ''));
     }
 
-    /** Własne środowisko migracyjne nie jest źródłem; działający sklep klienta zostaje. */
-    public function test_blocked_source_hosts_drop_own_migration_shop(): void
+    /**
+     * Nasz sklep (i jego środowisko migracyjne) nie jest źródłem: eksport wysyła tam nasze
+     * opisy, więc opis stamtąd to nasz własny tekst. Audyt 22.09.2026: 91 kart z opisem
+     * „ze sklepu” supon.rzeszow.pl. Zmiana decyzji użytkownika — wcześniej sklep zostawał.
+     */
+    public function test_blocked_source_hosts_drop_own_shop_and_migration_shop(): void
     {
         $service = app(ProductEnrichmentService::class);
 
         $kept = $this->invoke($service, 'dropBlockedSourceHosts', [[
             ['url' => 'https://migracja.supon.rzeszow.pl/3263-rekawice-mapa-vital-117.html'],
             ['url' => 'https://www.supon.rzeszow.pl/297-polmaska-secura-3000.html'],
+            ['url' => 'https://supon.rzeszow.pl/apteczki/390102-apteczka-cederroth.html'],
             ['url' => 'https://www.mapa-pro.pl/produkty/vital-117'],
         ]]);
 
-        $urls = array_column($kept, 'url');
-        $this->assertCount(2, $urls);
-        $this->assertStringNotContainsString('migracja.', implode(' ', $urls));
-        $this->assertStringContainsString('www.supon.rzeszow.pl', implode(' ', $urls));
+        $this->assertSame(['https://www.mapa-pro.pl/produkty/vital-117'], array_column($kept, 'url'));
+    }
+
+    /** Host sklepu z prestashop.shop_url jest wykluczony także wtedy, gdy nie ma go na liście. */
+    public function test_own_shop_host_from_presta_config_is_always_blocked(): void
+    {
+        config([
+            'enrichment.blocked_source_hosts' => [],
+            'prestashop.shop_url' => 'https://www.nasz-sklep.example/',
+        ]);
+        $service = app(ProductEnrichmentService::class);
+
+        $kept = $this->invoke($service, 'dropBlockedSourceHosts', [[
+            ['url' => 'https://nasz-sklep.example/297-polmaska-secura-3000.html'],
+            ['url' => 'https://b2b.nasz-sklep.example/297'],
+            ['url' => 'https://inny-nasz-sklep.example/297'],
+        ]]);
+
+        $this->assertSame(['https://inny-nasz-sklep.example/297'], array_column($kept, 'url'));
     }
 
     /** Normy z dwóch kart różniące się samym zapisem to jedna pozycja na karcie. */

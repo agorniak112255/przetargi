@@ -38,6 +38,7 @@ use App\Services\Enrichment\ProductSearchIdentity;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
+use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Contracts\Queue\Job;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -49,6 +50,7 @@ use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
 use Mockery\MockInterface;
+use PHPUnit\Framework\Attributes\DataProvider;
 use ReflectionMethod;
 use RuntimeException;
 use Tests\TestCase;
@@ -845,7 +847,8 @@ final class ProductEnrichmentApiTest extends TestCase
             'manufacturer' => 'ansell',
             'sku' => 'pool-1',
             'description' => 'Opis z cache SKU: rękawice ochronne Ansell do prac montażowych.',
-            'enrichment_payload' => ['features' => ['x'], 'from_cache' => false],
+            // storeSkuCache zawsze zapisuje pewność modelu
+            'enrichment_payload' => ['features' => ['x'], 'confidence' => 0.8, 'from_cache' => false],
             'image_urls' => [],
             'source_urls' => ['https://example.com/p'],
         ]);
@@ -912,7 +915,8 @@ final class ProductEnrichmentApiTest extends TestCase
             'manufacturer' => 'ansell',
             'sku' => 'cache-1',
             'description' => 'Opis z cache SKU: rękawice ochronne Ansell do prac montażowych.',
-            'enrichment_payload' => ['features' => ['x'], 'from_cache' => false],
+            // storeSkuCache zawsze zapisuje pewność modelu
+            'enrichment_payload' => ['features' => ['x'], 'confidence' => 0.8, 'from_cache' => false],
             'image_urls' => [],
             'source_urls' => ['https://example.com/p'],
         ]);
@@ -1006,6 +1010,65 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertNotSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
     }
 
+    /**
+     * Wpis w pamięci SKU z pewnością 0 to karta, dla której model nie dał opisu — przed audytem
+     * 22.09.2026 zapisywał się wtedy tekst strony. Pobranie bez force nie może go skopiować
+     * do karty ze statusem „done”.
+     */
+    public function test_sku_cache_entry_with_zero_confidence_is_not_used(): void
+    {
+        Storage::fake('public');
+
+        ProductEnrichmentCache::query()->create([
+            'manufacturer' => 'ansell',
+            'sku' => 'cache-zero',
+            'description' => 'Rękawice ochronne Ansell HyFlex 11-800 — zaloguj się, aby zobaczyć cenę. Dodaj do koszyka. '
+                .'Wysyłka w 24 h. Regulamin sklepu, polityka prywatności, pliki cookies.',
+            'enrichment_payload' => ['features' => [], 'confidence' => 0.0, 'from_cache' => false],
+            'image_urls' => [],
+            'source_urls' => ['https://example.com/p'],
+        ]);
+
+        $product = $this->makeProduct([
+            'sku' => 'CACHE-ZERO',
+            'manufacturer' => 'Ansell',
+            'enrichment_status' => Product::ENRICHMENT_MANUAL,
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn(['results' => [], 'errors' => []]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJsonEnrichment')->zeroOrMoreTimes()->andReturn([]);
+        $llm->shouldReceive('chatJson')->zeroOrMoreTimes()->andReturn([]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+        } catch (ProductSourcesNotFoundException) {
+            // brak stron to poprawne zakończenie — liczy się, że wpis z pamięci nie trafił na kartę
+        }
+
+        $product->refresh();
+        $this->assertSame('', trim((string) $product->description));
+        $this->assertNotSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+    }
+
     public function test_shop_source_url_skips_sku_cache_and_fetches_hinted_page(): void
     {
         Storage::fake('public');
@@ -1078,7 +1141,11 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertStringContainsString('CACHE-HINT', (string) $product->description);
     }
 
-    public function test_hinted_shoper_card_saves_image_when_description_is_thin(): void
+    /**
+     * Zmiana zachowania 22.09.2026 (decyzja użytkownika, audyt ręcznych cenników): model dał cienki opis, więc
+     * karta idzie do ręki. Dawniej opis brał się z akapitu strony i karta dostawała „done”.
+     */
+    public function test_hinted_shoper_card_saves_image_but_goes_to_manual_when_description_is_thin(): void
     {
         Storage::fake('public');
 
@@ -1143,10 +1210,16 @@ final class ProductEnrichmentApiTest extends TestCase
             app(PpeAssortment::class),
         );
 
-        $service->enrichProduct($product, false);
+        try {
+            $service->enrichProduct($product, false);
+        } catch (ProductSourcesNotFoundException) {
+            // liczy się status, nie sposób zakończenia przebiegu
+        }
 
         $product->refresh();
-        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
+        $this->assertSame('', trim((string) $product->description));
+        $this->assertStringNotContainsString('Chodniki elektroizolacyjne w kl. 2', (string) $product->description);
         $this->assertSame(1, $product->images()->count());
         $this->assertStringContainsString('userdata/public/gfx/46771', (string) $product->images()->first()?->source_url);
     }
@@ -1552,7 +1625,11 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertTrue($decide->invoke($service, [], $hinted));
     }
 
-    public function test_confirmed_card_saves_page_description_when_llm_drops_model(): void
+    /**
+     * Zmiana zachowania 22.09.2026 (decyzja użytkownika): tekst potwierdzonej karty nie zastępuje opisu, gdy model
+     * dał opis za krótki. Dawniej zapisywał się akapit strony ze statusem „done”; teraz karta idzie do ręki.
+     */
+    public function test_confirmed_card_page_text_is_not_saved_when_llm_description_is_thin(): void
     {
         Storage::fake('public');
 
@@ -1630,12 +1707,16 @@ final class ProductEnrichmentApiTest extends TestCase
             app(PpeAssortment::class),
         );
 
-        $service->enrichProduct($product, false);
+        try {
+            $service->enrichProduct($product, false);
+        } catch (ProductSourcesNotFoundException) {
+            // liczy się status, nie sposób zakończenia przebiegu
+        }
 
         $product->refresh();
-        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
-        $this->assertStringContainsString('wielowarstwowa bariera', (string) $product->description);
-        $this->assertNotSame('Zdjęcie z karty sklepu. Opis wpisz ręcznie.', (string) $product->enrichment_error);
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
+        $this->assertStringNotContainsString('wielowarstwowa bariera', (string) $product->description);
+        $this->assertSame('', trim((string) $product->description));
     }
 
     /**
@@ -1852,6 +1933,174 @@ final class ProductEnrichmentApiTest extends TestCase
         $this->assertStringContainsString('EN ISO 20345', (string) $product->description);
         $this->assertStringNotContainsString('309 zł', (string) $product->description);
         $this->assertStringNotContainsString('Wariant', (string) $product->description);
+    }
+
+    /**
+     * Audyt ręcznych cenników 22.09.2026: 104 karty z surowym tekstem strony jako opisem (CAPTCHA, hiszpańska tabela
+     * „Solicitar precio”, baner cookies, „Cena netto: 342,91 zł/szt.”, szablon „{{ }}”) — opis zapasowy z akapitów
+     * strony, gdy model opisu nie dał. Teraz: model bez opisu (albo z confidence 0) = karta do ręki, opis pusty.
+     *
+     * @return array<string, array{0: string, 1: string, 2: string, 3: string, 4: string}>
+     */
+    public static function rawPageTextCases(): array
+    {
+        return [
+            'CAPTCHA (Canis 12483)' => [
+                '5141-236-000-00', 'Shoe shine brush', 'CANIS', 'CAPTCHA',
+                'Warning: This page maybe requiring CAPTCHA, please make sure you are authorized to access this page. '
+                ."## Kontrola, zda je připojení bezpečné Než budeme pokračovat, musíme zkontrolovat zabezpečení vašeho připojení.\n\n"
+                .'Shoe shine brush 5141-236-000-00 (szczotka do butów) to praktyczne narzędzie do codziennej pielęgnacji '
+                .'i konserwacji obuwia, zapewniające czystość i długą żywotność materiału.',
+            ],
+            'Solicitar precio (Coba 11188)' => [
+                'LM010503', 'COBAwash Czarny/Brązowy 1.15m x 1.75m', 'COBA', 'Solicitar precio',
+                "Numero de parte Dimensiones Color Peso (kg) Precio requerido\n\n"
+                .'LM010603 1,15 m x 1,75 m Negro/Plata 4.75 Qty: Solicitar precio '
+                .'LM010503 1,15 m x 1,75 m Negro/Marrón 4.75 Qty: Solicitar precio '
+                .'LM010303 1,15 m x 1,75 m Negro/Rojo 4.75 Qty: Solicitar precio COBAwash LM010503 wycieraczka.',
+            ],
+            'baner cookies (Ansell 8717)' => [
+                '11300110', 'HYFLEX 11300', 'ANSELL', 'Performance Cookies',
+                'Dostępne rozmiary: 7, 8, 9, 10, 11 Niskostrzępiące się, lekkie rękawice przemysłowe HyFlex 11300, '
+                .'zapewniające użytkownikom doskonały komfort. ### Najważniejsze funkcje i zalety * **Wyściółka z poliamidu** '
+                .'### Znajdź wszystkie powiązane pliki do pobrania tutaj **© 2026 ANSELL LTD.** '
+                .'## Do Not Sell My Personal Information * ##### Performance Cookies',
+            ],
+            'Cena netto (CEDERROTH 26575)' => [
+                '190400', 'Uchwyt ścienny Cederroth 190400', 'CEDERROTH', 'Cena netto: 342,91',
+                "Uchwyt ścienny Cederroth 190400\nSKU: CED-190400\n\n"
+                .'Cena netto: 342,91 zł/szt. - Przenośna apteczka walizkowa z serii CEDERROTH FIRST AID KIT w obudowie '
+                .'z wytrzymałego materiału. Bogate, estetyczne i przejrzyste wyposażenie wg standardu Cederroth. '
+                .'Łatwa do uzupełniania - każdy element ma swoje miejsce.',
+            ],
+            'szablon {{ }} (Canis 12550)' => [
+                '3200-001-000-09', 'Rękawice kombinowane ZORO 3200-001-000-09', 'CANIS', '{{ }}',
+                'Rękawice kombinowane ZORO 3200-001-000-09 {{ }} Rękawice kombinowane ZORO - roboczystyl.pl - Stylowo '
+                .'w pracy - Odzież robocza - Sklep Sklep Ochrona rąk Rękawice wzmacniane Skóra dwoina Rękawice kombinowane '
+                .'ZORO – 10 Trzewiki CXS INDUSTRY. Sklep internetowy roboczystyl.pl to sklep z odzieżą roboczą.',
+            ],
+        ];
+    }
+
+    #[DataProvider('rawPageTextCases')]
+    public function test_raw_page_text_is_never_saved_as_description_when_model_gives_none(
+        string $sku,
+        string $name,
+        string $manufacturer,
+        string $marker,
+        string $raw,
+    ): void {
+        $product = $this->runEnrichmentOverRawPage($sku, $name, $manufacturer, $raw, [
+            'description' => '',
+            'confidence' => 0,
+        ], $prompts);
+
+        // strona przeszła bramkę i jej surowy tekst dotarł do modelu — mimo to nie jest opisem
+        $this->assertStringContainsString($marker, implode("\n", $prompts));
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
+        $this->assertSame('', trim((string) $product->description));
+    }
+
+    /** Model sam mówi confidence 0 — jego opis też nie jest zapisywany. */
+    public function test_model_description_with_zero_confidence_is_not_saved(): void
+    {
+        $product = $this->runEnrichmentOverRawPage(
+            '11300110',
+            'HYFLEX 11300',
+            'ANSELL',
+            'Rękawice HyFlex 11300 z wyściółką z poliamidu, powlekane nitrylem, do precyzyjnych prac montażowych.',
+            [
+                'description' => 'Rękawice HyFlex 11300 to lekkie rękawice przemysłowe z wyściółką z poliamidu o wysokiej '
+                    .'elastyczności. Zapewniają doskonałe dopasowanie, zręczność i wygodę przy precyzyjnych pracach montażowych. '
+                    ."Oburęczna konstrukcja wydłuża żywotność rękawic.\n\nNiskostrzępiąca się tkanina zmniejsza ryzyko "
+                    .'zanieczyszczenia produktu, dlatego rękawice nadają się do prac w czystych strefach.',
+                'confidence' => 0,
+            ],
+            $prompts
+        );
+
+        $this->assertSame(Product::ENRICHMENT_MANUAL, $product->enrichment_status);
+        $this->assertSame('', trim((string) $product->description));
+    }
+
+    /**
+     * Jeden przebieg nad hinted kartą, której tekst po filtrze stron jest surowym tekstem strony.
+     *
+     * @param  array<string, mixed>  $extract
+     * @param  list<string>|null  $prompts  wiadomości użytkownika wysłane do modelu opisu
+     */
+    private function runEnrichmentOverRawPage(string $sku, string $name, string $manufacturer, string $raw, array $extract, ?array &$prompts): Product
+    {
+        Storage::fake('public');
+        $prompts = [];
+        $pageUrl = 'https://sklep.example/p/'.rawurlencode(mb_strtolower($sku));
+        $product = $this->makeProduct([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => $manufacturer,
+            'shop_source_url' => $pageUrl,
+            'description' => null,
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')->zeroOrMoreTimes()->andReturn([
+            'results' => [['url' => $pageUrl, 'title' => $name.' '.$sku, 'snippet' => $name]],
+            'errors' => [],
+        ]);
+        $search->shouldReceive('forgetProductCache')->zeroOrMoreTimes();
+        $search->shouldReceive('dropListingResults')->zeroOrMoreTimes()
+            ->andReturnUsing(static fn (array $results): array => $results);
+        $search->shouldReceive('searchMappedRetailers')->zeroOrMoreTimes()->andReturn([]);
+
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $handler = function (array $messages) use ($extract, $raw, &$prompts): array {
+            $system = (string) ($messages[0]['content'] ?? '');
+            $user = (string) ($messages[1]['content'] ?? '');
+            if (str_contains($system, 'filtrem treści')) {
+                // filtr stron przepuszcza surowy tekst — tak jak na 104 kartach z audytu
+                preg_match_all('#"url"\s*:\s*"(https?://[^"]+)"#', $user, $m);
+
+                return ['pages' => array_map(
+                    static fn (string $url): array => ['url' => stripslashes($url), 'text' => $raw],
+                    array_values(array_unique($m[1] ?? []))
+                )];
+            }
+            $prompts[] = $user;
+
+            return [
+                'features' => [], 'specs' => [], 'norms' => [], 'certificates' => [], 'materials' => [],
+                'use_cases' => [], 'image_urls' => [], 'source_urls' => [], ...$extract,
+            ];
+        };
+        $llm->shouldReceive('chatJsonEnrichment')->zeroOrMoreTimes()->andReturnUsing($handler);
+        $llm->shouldReceive('chatJson')->zeroOrMoreTimes()->andReturnUsing($handler);
+        $llm->shouldReceive('chatJsonWithImages')->zeroOrMoreTimes()->andReturn(['candidates' => []]);
+
+        $html = '<html><head><title>'.$name.' '.$sku.'</title></head><body><h1>'.$name.' '.$sku.'</h1>'
+            .'<div class="product-description">'.nl2br(htmlspecialchars($raw)).'</div></body></html>';
+        Http::fake(static fn (): PromiseInterface => Http::response($html, 200, ['Content-Type' => 'text/html']));
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            app(ProductImageCandidateVerifier::class),
+            app(PpeAssortment::class),
+        );
+
+        try {
+            $service->enrichProduct($product, false);
+        } catch (ProductSourcesNotFoundException) {
+            // karta bez opisu kończy przebieg wyjątkiem — status „manual” ustawia enrichProduct
+        }
+
+        return $product->refresh();
     }
 
     public function test_product_absent_from_web_goes_to_manual_and_leaves_queues(): void
@@ -2155,44 +2404,6 @@ final class ProductEnrichmentApiTest extends TestCase
             $this->assertStringContainsString('sklep blokuje pobieranie', $e->getMessage());
             $this->assertStringContainsString('wpisz opis ręcznie', $e->getMessage());
         }
-    }
-
-    public function test_card_text_that_does_not_name_product_is_not_a_description(): void
-    {
-        $service = app(ProductEnrichmentService::class);
-        $method = new ReflectionMethod($service, 'usableCardDescription');
-        $method->setAccessible(true);
-
-        // ekran błędu sklepu Ansell zapisywał się jako opis HyFlex ze statusem „Gotowe”
-        $hyflex = $this->makeProduct([
-            'sku' => '11819PRO110',
-            'name' => 'HyFlex 11819PRO SIZE 11,0',
-            'manufacturer' => 'Ansell',
-        ]);
-        $junk = [[
-            'url' => 'https://shop.ansell.com/eu/s/product/hyflex-1181',
-            'text' => "ANSELL | Protection solutions, gloves, personal protective equipment across Europe\n\n"
-                .'ANSELL Protection solutions, gloves, personal protective equipment across Europe '
-                .'Loading ×Sorry to interrupt CSS Error',
-        ]];
-        $this->assertSame('', $method->invoke($service, $junk, $hyflex));
-
-        // prawdziwa karta, która nazywa produkt, dalej daje opis
-        $ringers = $this->makeProduct([
-            'sku' => '259-13',
-            'name' => 'Ringers 259 Size 13.0',
-            'manufacturer' => 'Ansell',
-        ]);
-        $card = [[
-            'url' => 'https://www.ansell.com/pl/pl/products/ringers-r259',
-            'text' => 'RINGERS™ R259 to wytrzymałe rękawice robocze o konstrukcji z TPR (gumy termoplastycznej) '
-                .'i technologii F3™, które zapewniają ochronę przed uderzeniami oraz sprawność manualną i wygodę. '
-                .'Wykonana z syntetycznej skóry dłoń zapewnia lepszą przyczepność i odporność na ścieranie. '
-                .'Dodatkowa warstwa dłoni z Kevlaru™ zapewnia odporność na przecięcia na poziomie EN 388 E '
-                .'i ANSI/ISEA A5. Przedłużone neoprenowe zapięcie na nadgarstku zapewnia bezpieczne dopasowanie. '
-                .'Przeznaczone do obsługi ciężkiego sprzętu w przemyśle naftowym, gazowym i górniczym.',
-        ]];
-        $this->assertNotSame('', $method->invoke($service, $card, $ringers));
     }
 
     public function test_empty_description_from_confirmed_card_tries_next_catalog_cards(): void

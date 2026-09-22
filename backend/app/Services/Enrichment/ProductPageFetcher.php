@@ -1616,6 +1616,11 @@ final class ProductPageFetcher
 
     private function looksLikeCertificateDocument(string $hay): bool
     {
+        // „declaration”/„doc_” liczą się jako dokument wyrobu tylko dla deklaracji zgodności wyrobu — deklaracja
+        // opakowania (Ansell PPWR przy 387 kartach) mówi o kartonie, nie o rękawicy
+        if (ProductDocumentDownloader::looksLikePackagingDeclaration($hay)) {
+            return false;
+        }
         foreach ([
             'deklarac', 'declaration', 'conformity', 'certyfik', 'certificate',
             'datasheet', 'datenblatt', 'karta-katalog', 'karta_katalog', 'karta produktu',

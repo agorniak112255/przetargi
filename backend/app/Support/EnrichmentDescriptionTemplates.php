@@ -70,7 +70,7 @@ TXT,
             'obuwie' => <<<'TXT'
 To obuwie ochronne / robocze (EN ISO 20345 — z podnoskiem, EN ISO 20347 — zawodowe bez podnoska). Zbierz pełną kartę katalogową — nie opisuj rękawic ani odzieży.
 
-STAŁY ZESTAW CECH DOBORU — w specs wypisz WSZYSTKIE punkty 1–10, zawsze w tej kolejności, każdy w osobnym wierszu „parametr: wartość”, także wtedy, gdy źródła cechy nie podają:
+STAŁY ZESTAW CECH DOBORU — szukaj w źródłach punktów 1–10 i w specs wypisz te, które źródła podają, w tej kolejności, każdy w osobnym wierszu „parametr: wartość”:
 1. Typ wyrobu: półbut / trzewik / sztyblet / sandał / kalosz.
 2. Wysokość cholewki (niska / za kostkę / wysoka; cm, jeśli podano).
 3. Klasa ochrony z normą w pełnym zapisie, np. „EN ISO 20345:2022 S3L”. Sufiks L/S przy klasie to typ wkładki antyprzebiciowej z wydania 2022 — przepisz go dokładnie ze źródła, nigdy nie dopisuj go sam.
@@ -83,14 +83,11 @@ STAŁY ZESTAW CECH DOBORU — w specs wypisz WSZYSTKIE punkty 1–10, zawsze w t
 10. Zakres rozmiarów EU, waga, przeznaczenie.
 Poza tą listą w specs: kod/SKU producenta. W attributes: kod_producenta, material, normy_en, klasa_ochrony (np. S3), rozmiar.
 
-TRZY STANY KAŻDEJ CECHY — brak danych ma być widoczny jako brak, nie jako cisza:
-- cecha OBECNA w źródle → sama wartość, np. „Typ zapięcia: sznurowane”;
-- cecha WYWNIOSKOWANA → wartość ze słowem wskazującym wnioskowanie i z podstawą wniosku, np. „Typ zapięcia: prawdopodobnie sznurowane — wniosek ze zdjęcia na karcie producenta”;
-- cecha NIEOBECNA → wiersz zostaje, z wartością „brak danych w źródle”, np. „Typ zapięcia: brak danych w źródle”. Nie skracaj listy przez pominięcie takiego punktu.
+BRAK INFORMACJI = POMIŃ: cechy, której źródła nie podają, nie wypisuj wcale — ani w specs, ani w description. W miejsce wartości nie wpisuj zdań o braku danych.
 
-ZAKAZ ZGADYWANIA: żadnej z tych cech nie wolno wymyślić. Nie wpisuj wartości „typowej dla klasy”, „standardowej”, przeniesionej z innego modelu tej serii ani wyprowadzonej z samej nazwy produktu. Przykład: na stronie producenta ARTRA typu zapięcia nie ma w żadnym polu tekstowym — ani w bloku parametrów, ani w karcie produktu PDF — widać je wyłącznie na zdjęciu. Wtedy wpisz „brak danych w źródle” albo wartość jawnie oznaczoną jako wniosek ze zdjęcia; nigdy wartość podaną jak fakt ze źródła.
+ZAKAZ ZGADYWANIA: żadnej z tych cech nie wolno wymyślić. Nie wpisuj wartości „typowej dla klasy”, „standardowej”, przeniesionej z innego modelu tej serii ani wyprowadzonej z samej nazwy produktu. Przykład: na stronie producenta ARTRA typu zapięcia nie ma w żadnym polu tekstowym — ani w bloku parametrów, ani w karcie produktu PDF — widać je wyłącznie na zdjęciu. Wtedy typ zapięcia pomiń.
 
-W description (2–4 akapity) opisz te same cechy prozą: przeznaczenie, budowa (cholewka, zapięcie, podnosek, wkładka antyprzebiciowa, podeszwa), właściwości (antystatyczność, SRC, wodoodporność, izolacja), klasa i norma, zastosowania. Cechy, których źródła nie podają, nazwij w opisie brakiem, np. „źródła nie podają typu zapięcia”.
+W description (1–4 akapity) opisz prozą te z cech, które źródła podają: budowa (cholewka, zapięcie, podnosek, wkładka antyprzebiciowa, podeszwa), właściwości (antystatyczność, SRC, wodoodporność, izolacja) tylko ze słowa albo oznaczenia w źródle, klasa i norma w zapisie ze źródła, przeznaczenie i zastosowania tylko wtedy, gdy źródła je podają.
 rozmiar: wyłącznie numery EU 36–50 ze źródeł; nigdy 1–5XL ani 6–12 z rękawic.
 TXT,
             'odziez' => <<<'TXT'
@@ -155,19 +152,44 @@ TXT,
         ];
     }
 
+    /**
+     * Zasady „tylko źródła” — do 22.09.2026 wyłącznie przy opisie z PDF B2B, od tego dnia w poleceniu każdego
+     * wzbogacania. Audyt ręcznych cenników znalazł ~288 opisów z wiedzą ogólną (200 J / 15 kN, objaśnienia EN 388
+     * i kategorii III, „co oznacza”), bo prompt kazał ekspertowi „wyłuszczyć” ochronę, a szablon obuwia wypisywać
+     * „brak danych w źródle”. Wariant: strony zbiorcze (COBAswitch klasa 0/2/4, SPIRO P1/P2/P3) dawały karcie
+     * jednego wariantu wartości wszystkich.
+     */
+    public static function sourcesOnlyRules(string $heading = 'TYLKO ŹRÓDŁA — mają pierwszeństwo przed instrukcją rodziny:'): string
+    {
+        return $heading."\n".<<<'TXT'
+- Pisz wyłącznie fakty podane w tych źródłach. Nie uzupełniaj niczego ogólną wiedzą o wyrobach tego typu.
+- Nie objaśniaj wymagań klasy ani normy: bez energii uderzenia (np. 200 J), sił zgniatania (np. 15 kN), opisów
+  badań, podłoży i środków badawczych, bez zdań o tym, co oznacza klasa, poziom albo oznaczenie. Oznaczenie
+  klasy i normy podaj tak, jak stoi w źródle.
+- Nie dopisuj przeznaczenia, zastosowań, branż ani warunków pracy, których źródła nie podają.
+- Nie dopisuj właściwości (wodoodporność, izolacja od zimna lub ciepła, odporność na oleje, chemikalia, przebicie,
+  antystatyczność, elektroizolacja, praca w wysokich temperaturach), których źródła nie podają słowem albo
+  oznaczeniem w zapisie klasy lub normy.
+- Gdy źródło obejmuje kilka wariantów (klasa, grubość, rozmiar, kolor), podaj wartości wyłącznie wariantu z nazwy
+  karty; jeśli nie da się przypisać — pomiń.
+- Brak informacji = pomiń. Nie pisz „brak danych w źródle”, „źródła nie podają…” ani podobnych zdań — ani
+  w description, ani w specs, features, use_cases czy materials. Pozycję listy bez wartości pomiń w całości.
+- Opis może być krótki, jeśli źródła są ubogie — to lepsze niż zdanie spoza źródeł.
+TXT;
+    }
+
     public static function writingRules(): string
     {
         return <<<'TXT'
 PISANIE OPISU — te zasady mają pierwszeństwo przed instrukcją rodziny:
-Jesteś ekspertem BHP: z faktów na karcie wyłuszcz ochronę, budowę, klasy/normy i zastosowanie.
-Przeczytaj fakty ze stron i NAPISZ nowy, czytelny tekst po polsku.
+Przeczytaj fakty ze stron i NAPISZ z nich nowy, czytelny tekst po polsku. Lista cech w instrukcji rodziny mówi, czego szukać w źródłach — nie, co dopisać.
 Nie tłumacz karty produktu 1 do 1 i nie wklejaj jej jako opisu.
 Nie przepisuj UI sklepu: cenników rozmiarów (EU 35 - 309 zł), etykiet „Wariant”, tabeli długości stopy, zwrotów, gwarancji sklepu ani CTA wysyłki.
-description = 2–4 krótkie akapity (przeznaczenie, budowa, zastosowanie), oddzielone pustą linią.
+description = 1–4 krótkie akapity (budowa, ochrona, normy, zastosowanie — o ile źródła je podają), oddzielone pustą linią.
 Bez HTML, CSS, markdown i bez tabeli parametrów / list SKU w description.
 specs = wyłącznie krótkie „parametr: wartość”. Nie powtarzaj zdań z description.
 features = krótkie korzyści, nie te same zdania co description.
-TXT;
+TXT."\n\n".self::sourcesOnlyRules();
     }
 
     public static function jsonContract(): string
@@ -175,7 +197,7 @@ TXT;
         return <<<'SYS'
 Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"description":
 {
-  "description": "własny opis eksperta BHP PL: 2–4 krótkie akapity — ochrona, budowa, normy, zastosowanie. Nie zrzut karty ani cennika.",
+  "description": "opis PL napisany wyłącznie z faktów źródeł: 1–4 krótkie akapity — budowa, ochrona, normy, zastosowanie, o ile źródła je podają. Nie zrzut karty ani cennika.",
   "features": ["krótkie korzyści — nie zdania z description"],
   "specs": ["parametr: wartość (nr art./SKU, typ, materiał, powłoka, opakowanie, rozmiary)"],
   "norms": ["EN … z poziomami, jeśli podane w źródłach", "EN ISO …"],
@@ -195,7 +217,7 @@ Zwróć WYŁĄCZNIE JSON — bez pola thought/reasoning/thinking. Zacznij od {"d
   "image_urls": ["https://… tylko realny URL zdjęcia produktu"],
   "document_urls": ["https://… tylko realny URL PDF karty/certyfikatu"],
   "source_urls": ["https://… karty produktu"],
-  "confidence": 0.0
+  "confidence": 0.8
 }
 JĘZYK: cały tekst wyjściowy po polsku, także gdy źródła są francuskie, niemieckie, czeskie, hiszpańskie, chińskie czy angielskie.
 Bez zdań w języku oryginału i bez etykiet typu „Produit”, „Matériaux”, „Usage” — tłumacz je na polskie odpowiedniki.
@@ -203,6 +225,7 @@ WYPEŁNIJ tablice features/specs/norms/materials/use_cases oraz attributes, gdy 
 Nie powtarzaj tych samych zdań w description, features i specs.
 attributes: używaj wyłącznie wartości ze źródeł; brak danych → null / [].
 Nie zmyślaj URL ani kodów EN spoza źródeł. Brak opisu → description="" i confidence=0.
+confidence = pewność 0–1, że źródła opisują TEN produkt; przy niepustym description podaj wartość większą od 0 (opis z confidence 0 jest odrzucany).
 Nie przepisuj nazwy z cennika jako dowodu — opisuj wyłącznie podane strony.
 Pomiń reklamy, nieruchomości, leasing, biura, inwestycje i inny tekst niezwiązany z tym produktem BHP.
 Jeśli źródła opisują substancję chemiczną / CAS, a nazwa produktu to PPE (obuwie, rękawice, odzież…) — description="" i confidence=0.

@@ -1563,6 +1563,12 @@ final class B2bCatalogSync
     ): array {
         if ($remote->category !== null && trim((string) ($existing?->category ?? '')) === '') {
             $payload['category'] = mb_substr($remote->category, 0, 255);
+            $payload['category_source'] = Product::CATEGORY_SOURCE_B2B;
+        }
+        // Kategoria ze sklepu dostawcy jest dowodem rodzaju wyrobu także wtedy, gdy karta ma już kategorię (zwykle
+        // ścieżkę drzewa sklepu dobraną automatem) — category zostaje, dowód idzie obok (przegląd 22.09.2026).
+        if ($remote->category !== null && trim($remote->category) !== '') {
+            $payload['category_evidence'] = mb_substr(trim($remote->category), 0, 255);
         }
         if ($remote->sourceUrl !== null && trim((string) ($existing?->shop_source_url ?? '')) === '') {
             $payload['shop_source_url'] = $remote->sourceUrl;

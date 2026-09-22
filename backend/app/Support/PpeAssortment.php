@@ -139,7 +139,7 @@ final class PpeAssortment
     private const FAMILY_PATTERNS = [
         self::FAMILY_GLOVES => '/\b(rekawic|glove|handschuh|rukavic|mitten)\w*/u',
         self::FAMILY_RESPIRATORY => '/\b(polmask|polomask|respirator|aparat\w*\s+oddech|drog[iy]\s+oddech|filtrow?\w*\s+oddech'
-            .'|maska\s+(twarzow|pelnotwarz|filtruj|przeciwpyl)|czesc\s+twarzow|semi-?mask|half\s*mask|dust\s*mask'
+            .'|maska\s+(twarzow|pelnotwarz|filtruj|przeciwpyl)|czesc\s+twarzow|semi\s*mask|half\s*mask|dust\s*mask'
             .'|pochlaniacz|filtropochlaniacz|ffp[123]?)\w*/u',
         self::FAMILY_FACE => '/\b(przylbic|oslon\w{0,10}\s+\w{0,16}twarz|twarz\w{0,8}\s+\w{0,12}oslon'
             .'|oslona\s+twarzy|face\s*shield|siatk\w*\s+(na\s+)?twarz|maska\s+spawal)\w*/u',
@@ -147,10 +147,16 @@ final class PpeAssortment
         self::FAMILY_HEARING => '/\b(nausznik|ochronnik\w*\s+sluch|czasze\s+przeciwhal|wkladk\w*\s+sluch'
             .'|stoper\w*|ochrona\s+sluchu|sluchawk\w*\s+ochron|ear\s*(muff|plug|defender)|earmuff|earplug'
             .'|chranic\w*\s+sluchu|sluchatk)\w*/u',
-        self::FAMILY_FALL => '/\b(szelk|linka\s+bezpieczen|amortyzator|asekurac|urzadzeni\w*\s+samoham|lonza'
+        // „Szelki … do podtrzymywania spodni” (Canis 11898 „Braces CXS DARREN”) to akcesorium odzieży,
+        // nie uprząż — przechodziły bramkę „Szelki EN 361”. Wyłączamy szelki, gdy do 120 znaków dalej stoją spodnie
+        // (normalize() zdejmuje kropki, więc granicą jest odległość, nie zdanie).
+        self::FAMILY_FALL => '/\b(szelk(?![^.;]{0,120}\bspodn(?:ie|i)\b)|linka\s+bezpieczen|amortyzator|asekurac|urzadzeni\w*\s+samoham|lonza'
             .'|ewakuac|podnoszac|opuszczaj|wciagark|harness|lanyard|postroj)\w*/u',
         self::FAMILY_KNEE => '/\b(nakolann|ochrona\s+kolan|knee\s*pad)\w*/u',
-        self::FAMILY_APPAREL => '/\b(odziez|kurtk|spodn|podnie|kombinezon|kamizelk|kamizelak|softshell|fartuch|kitel|bluza'
+        // „spodn” tylko w formach rzeczownika „spodnie” — „spodnia warstwa” maty Coba to przymiotnik (lookahead,
+        // żeby rdzeń chipu został „Spodn”); „podnie” już tylko całym słowem (ucięte „[S]podnie” w SIWZ) — jako
+        // przedrostek łapało „podniesiona krawędź”. „Low softshell footwear” (Canis) to but, nie kurtka.
+        self::FAMILY_APPAREL => '/\b(odziez|kurtk|spodn(?=(?:ie|i|iach|iami|iom)\b)|podnie\b|kombinezon|kamizelk|kamizelak|softshell(?!\s+(?:footwear|shoes?|boots?|obuw))|fartuch|kitel|bluza'
             .'|kaleson|ogrodniczk|park[ae]|peleryn|spodniobut|woder|wader'
             .'|jacket|trousers|coverall|cvrl|overall|apron|sweatshirt|t-?shirt|fleece|waistcoat|hoodie|raincoat'
             .'|kalhoty|bunda|vesta|kombinez|zaster|mikina|tricko|triko|monterk|kosile|svetr)\w*'
@@ -161,11 +167,39 @@ final class PpeAssortment
         // Rzeczowniki obuwia bez kotwicy na końcu („trzewiki”, „półbuty”, „sandały”);
         // „buty” zostaje całym słowem, bo inaczej łapie „butylowe”.
         self::FAMILY_FOOTWEAR => '/\b(trzewik|sztyblet|polbut|mokasyn|sandal|obuwi|kalosz|gumowc|gumiak|wellington'
-            .'|footwear|podeszw|podnosek|polobotk|holink|kotnikov)\w*|\b(buty|butow|obuv|boty|bota|shoes?|boots?)\b'
-            // klasy z EN ISO 20345/20347 razem z zapisem z wydania 2022 (S3L, S1 PL, S6, S7) — karta ARTRY
-            // nie ma w nazwie ani jednego słowa o obuwiu, samą klasę: „ARYEL 320 671460 S3L”
-            .'|\bs1\h?p?[ls]?\b|\bs[2-7][ls]?\b|\bo1\h?p?[ls]?\b|\bo[2-7][ls]?\b|\bsb\b|\bob\b/u',
+            .'|footwear|podeszw|podnosek|polobotk|holink|kotnikov)\w*|\b(buty|butow|obuv|boty|bota|shoes?|boots?)\b/u',
     ];
+
+    /**
+     * Klasy z EN ISO 20345/20347 razem z zapisem z wydania 2022 (S3L, S1 PL, S6, S7) — karta ARTRY
+     * nie ma w nazwie ani jednego słowa o obuwiu, samą klasę: „ARYEL 320 671460 S3L”. Liczą się do
+     * rodziny tylko w nazwie i tożsamości: w opisie maty Coba „klasa Dfl-s1” (reakcja na ogień)
+     * robiła z 138 mat obuwie.
+     */
+    private const FOOTWEAR_CLASS_TOKENS = '/\bs1\h?p?[ls]?\b|\bs[2-7][ls]?\b|\bo1\h?p?[ls]?\b|\bo[2-7][ls]?\b|\bsb\b|\bob\b/u';
+
+    /**
+     * Obuwie jako przedmiot czynności („czyszczenie obuwia”, „wycieraczka do butów”) — wyrób służy
+     * obuwiu, ale nim nie jest („usuwa brud z obuwia”, „przyczepność dla butów”). Bez tego 94 maty Coba były obuwiem.
+     */
+    private const FOOTWEAR_AS_OBJECT = '/\b(?:(?:czyszcz|oczyszcz|wycier|dezynfek|myci|mycia|susz|osusz|przechowyw|pielegn|szoruj|szorowan'
+        .'|usuw|zdrapuj|zeskrob|przyczepnos)\w*\s+(?:\w+\s+)?|(?:z|ze|dla)\s+(?:podeszw\w*\s+)?)(obuwi|butow|buty|podeszw)\w*/u';
+
+    /**
+     * Rzeczownik maty w nazwie (mata, wycieraczka, wykładzina, chodnik, dywanik). Gołe „Mat” i końcówkę „…mat”
+     * („Orthomat”, „Rib Mat”) sprawdza namesFloorMat osobno, tylko przy nazwie bez rodziny ŚOI — małe „mat”
+     * to u Canis skrót „materiał” („Socks, white, mat. 100% cotton”).
+     */
+    private const FLOOR_MAT_NAME = '/\b(?:mat[ay]|mats|matach|matami|matting|wycieraczk\w*|wykladzin\w*|chodnik\w*|dywanik\w*)\b/u';
+
+    /** Nazwa maty Coba sklejona z „mat” („Orthomat”, „Bubblemat”); „Automat” i „format” to nie maty. */
+    private const FLOOR_MAT_SUFFIX = '/\b\w{2,}(?<!auto|for|kli|diplo|pri)mat\b/u';
+
+    /**
+     * Maska do resuscytacji („usta-usta”, CPR) to wyposażenie apteczki, nie ochrona dróg oddechowych —
+     * CEDERROTH 26604/26605 „Maska oddechowa” przechodziły pod „Półmaskę FFP2”.
+     */
+    private const RESUSCITATION = '/\b(resuscyt\w*|usta\s+usta|cpr|sztuczn\w*\s+oddych\w*|pocket\s+mask)\b/u';
 
     /**
      * Rodzinę wskazuje rzeczownik główny — pierwszy w tekście, nie pierwszy na liście.
@@ -175,7 +209,17 @@ final class PpeAssortment
      */
     public function family(string $text): ?string
     {
+        return $this->familyOf($text, true);
+    }
+
+    /**
+     * @param  bool  $footwearClasses  klasy obuwia (S1, O2, SB) jako dowód rodziny — tylko dla nazwy, tożsamości
+     *                                 i wymagania, nie dla opisu karty (FOOTWEAR_CLASS_TOKENS)
+     */
+    private function familyOf(string $text, bool $footwearClasses): ?string
+    {
         $t = $this->normalize($text);
+        $t = preg_replace(self::FOOTWEAR_AS_OBJECT, ' ', $t) ?? $t;
         $hasHelm = preg_match('/\b(helm|kask)\w*/u', $t) === 1;
 
         $best = null;
@@ -186,6 +230,12 @@ final class PpeAssortment
                 continue;
             }
             $at = $this->firstWordOffset($pattern, $t);
+            if ($family === self::FAMILY_FOOTWEAR && $footwearClasses) {
+                $classAt = $this->firstWordOffset(self::FOOTWEAR_CLASS_TOKENS, $t);
+                if ($classAt !== null && ($at === null || $classAt < $at)) {
+                    $at = $classAt;
+                }
+            }
             if ($at !== null && $at < $bestAt) {
                 $best = $family;
                 $bestAt = $at;
@@ -431,11 +481,13 @@ final class PpeAssortment
             && preg_match('/\b(kalosz|buty|obuwie|trzewik|sztyblet|polbut|mokasyn)\w*/u', $t) !== 1) {
             return null;
         }
-        if (preg_match('/\b(kalosz|wellington|gumowc|gumiak|purofort|wader|gumboot|gumow\w*|spodniobut|woder)\w*/u', $t) === 1) {
+        if (preg_match('/\b(kalosz|wellington|gumowc|gumiak|purofort|wader|gumboot|spodniobut|woder)\w*/u', $t) === 1) {
             return self::TYPE_KALOSZ;
         }
-        if (preg_match('/\bguma\b/u', $t) === 1
-            && preg_match('/\b(mata|arkusz|tasm|taśm)\w*/u', $t) !== 1) {
+        // Sama „guma”/„gumowy” to kalosz tylko bez skóry i bez podeszwy w tekście: „gumowa podeszwa”,
+        // „gumowy nadlew” skórzanych trzewików Canis („Ankle leather footwear”) robiły z nich kalosze.
+        if (preg_match('/\b(gumow\w*|guma)\b/u', $t) === 1
+            && preg_match('/\b(mata|arkusz|tasm|taśm|skor|leather|podeszw)\w*/u', $t) !== 1) {
             return self::TYPE_KALOSZ;
         }
         // Nazwy Canis/CXS są angielskie i czeskie: „Low perforated leather footwear” to półbut,
@@ -446,7 +498,7 @@ final class PpeAssortment
         if (preg_match('/\b(sztyblet|chelsea)\w*/u', $t) === 1) {
             return self::TYPE_SZTYBLET;
         }
-        if (preg_match('/\b(trzewik|ankle\s*(boot|shoe|footwear)|kotnikov|high\s*(shoe|footwear|boot)|winter\s*(boot|footwear))\w*/u', $t) === 1) {
+        if (preg_match('/\b(trzewik|ankle\s+(?:\w+\s+){0,2}(boot|shoe|footwear)|ankle(boot|shoe)|kotnikov|high\s*(shoe|footwear|boot)|winter\s*(boot|footwear))\w*/u', $t) === 1) {
             return self::TYPE_TRZEWIK;
         }
         if (preg_match('/\b(mokasyn|polbut|polbuty|polobot|low\s*(?:\w+\s+){0,2}(shoe|footwear))\w*/u', $t) === 1) {
@@ -948,22 +1000,43 @@ final class PpeAssortment
      */
     public function purpose(string $text, ?string $family = null): ?string
     {
+        // Przeznaczenie twardo odrzuca zamienniki, więc wzmianka przecząca albo nazwa technologii go nie daje:
+        // „nie należy ich stosować przy pracach spawalniczych” (Polstar COVENT), „nie są antystatyczne” (Ansell
+        // AlphaTec 23200), „szwy zgrzewane w technologii Solar Welding” (płaszcze AJ GROUP).
+        $text = $this->withoutNegatedPurposeMentions($text);
         $t = $this->normalize($text);
         if (preg_match('/\bspawal|11611|welding|welder/u', $t) === 1) {
             return 'welding';
         }
-        if (preg_match('/\b(rolnict|agro|ogrodnict|gospodarstw|gnojow|farma|mleczar)/u', $t) === 1) {
-            return 'agriculture';
-        }
-        if (preg_match('/\b(spozywc|food|haccp|gastronom|miesn)/u', $t) === 1) {
-            return 'food';
-        }
-        if (preg_match('/\b(chemiczn|kwasow|rozpuszczaln)/u', $t) === 1) {
+        // Branże z listy zastosowań: „farm” bez „farmaceut”/„farmacj”, a jedna wzmianka nie przeważa drugiej —
+        // rękawica chemiczna „do przemysłu farmaceutycznego, spożywczego i rolnictwa” dostawała „agriculture”
+        // (466 kart w ręcznych cennikach), a przeznaczenie twardo odrzuca zamienniki (ProductCrossRefService).
+        // Chemia wygrywa z samym rolnictwem (rękawice do środków ochrony roślin to rękawice chemiczne); każdy
+        // inny zbieg kilku branż to brak wiedzy, nie pierwsza z listy.
+        $sectors = array_keys(array_filter([
+            'agriculture' => preg_match('/\b(rolnict|agro|ogrodnict|gospodarstw|gnojow|farm(?!ac)|mleczar)/u', $t) === 1,
+            'food' => preg_match('/\b(spozywc|food|haccp|gastronom|miesn)/u', $t) === 1,
+            'chemical' => preg_match('/\b(chemiczn|kwasow|rozpuszczaln)/u', $t) === 1,
+        ]));
+        if ($sectors === ['agriculture', 'chemical']) {
             return 'chemical';
+        }
+        // Rolnictwo albo spożywka jako jedna z wielu branż listy zastosowań („Logistyka”, „Spedycja”, „Garaż”,
+        // „Rolnictwo i ogród”, „Hobby” przy spodniach Canis) to wyrób ogólny, nie branżowy. Taką listę, jak zbieg
+        // kilku branż, pomijamy — przeznaczenie mówi wtedy już tylko cecha wyrobu (rola niżej: hivis, deszcz…).
+        $generalList = in_array($sectors, [['agriculture'], ['food']], true)
+            && preg_match('/\b(budownict|logistyk|magazyn|spedycj|transport|motoryzac|autoserwis|warsztat|hobby|energetyk|gornict|hutnict|remont)/u', $t) === 1;
+        if (count($sectors) === 1 && ! $generalList) {
+            return $sectors[0];
         }
         if ($family === self::FAMILY_FOOTWEAR) {
             // kolejność ról jak w roles(): hivis, welding, electric, heat, rain
             $roles = array_values(array_diff($this->roles($text), ['electric']));
+            // But z elementem odblaskowym nie jest obuwiem ostrzegawczym — „hivis” tylko z EN ISO 20471
+            // albo z wyraźnej wysokiej widzialności (Canis „STONE MARBLE” z odblaskiem na pięcie dostawał hivis).
+            if (preg_match('/\b20471\b|\bhi.?vis|\bhigh\s*vis|wysokiej widzial/u', $t) !== 1) {
+                $roles = array_values(array_diff($roles, ['hivis']));
+            }
             if (preg_match('/\b(elektroizol\w*|dielektr\w*|50321)/u', $t) === 1) {
                 $before = array_values(array_intersect($roles, ['hivis', 'welding']));
                 $roles = [...$before, 'electric', ...array_values(array_diff($roles, $before))];
@@ -972,7 +1045,58 @@ final class PpeAssortment
             return $roles[0] ?? null;
         }
 
-        return $this->role($text);
+        // Przeznaczenie „hivis” odrzuca w porównywarce każdy zamiennik bez wysokiej widzialności, więc sam „element
+        // odblaskowy” (kurtki Canis SOLIS FLEX z odblaskową lamówką) go nie daje; roles() — do bramki odzieży — zostaje.
+        $roles = $this->roles($text);
+        if (preg_match('/\b20471\b|\bhi.?vis|\bhigh\s*vis|wysokiej widzial|ostrzegawcz/u', $t) !== 1) {
+            $roles = array_values(array_diff($roles, ['hivis']));
+        }
+        // Rękawice i odzież są „electric” tylko z normy albo wprost nazwanej ochrony elektrycznej: sama antystatyka
+        // to cecha materiału (rękawice ESD, kombinezony z domieszką), wspólna z wyrobami ogólnymi. Odzież EN 1149
+        // zostaje electric; wywołanie bez rodziny bez zmian.
+        // Numer normy bez spacji („EN1149”, „EN1149-5”) też się liczy — \b między „n” a „1” nie zachodzi.
+        if (in_array($family, [self::FAMILY_GLOVES, self::FAMILY_APPAREL], true)
+            && preg_match('/(?<!\d)(1149|61482|50321|60903)(?!\d)|\b(elektroizol|dielektr)\w*|\blukiem\b|\bluk\w*\s+elektr/u', $t) !== 1) {
+            $roles = array_values(array_diff($roles, ['electric']));
+        }
+
+        return $roles[0] ?? null;
+    }
+
+    /**
+     * Tekst bez wzmianek przeczących o branży lub roli i bez nazwy technologii „Solar Welding” (zgrzewanie szwów
+     * płaszczy przeciwdeszczowych, nie spawanie):
+     * - „nie”/„not” do ostatniego słowa branży w tym samym członie zdania (bez przecinka, kropki i spójnika
+     *   „i/a/oraz/ale” po drodze — „nie zawierają lateksu i są przeznaczone do spawania” zostaje spawalnicze);
+     * - „z dala od”/„unikać” do ostatniego słowa branży w zdaniu: wskazówki przechowywania i użytkowania
+     *   („z dala od rozpuszczalników, kwasów i zasad”) to lista zagrożeń, przed którymi wyrób NIE chroni;
+     * - „bez” tylko tuż przed słowem branży albo przez jedno słowo („bez czyszczenia chemicznego”) — dalej
+     *   to zwykle cecha innej części wyrobu („kurtka bez kaptura dla spawaczy”).
+     */
+    private function withoutNegatedPurposeMentions(string $text): string
+    {
+        $s = strtr(mb_strtolower($text), ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z']);
+        $sector = '(?:spawal|spawacz|welding|welder|antystat|antistat|elektrostat|elektroizol|dielektr|rolnict|spozywc'
+            .'|chemiczn|kwasow|kwasami|kwasy|rozpuszczaln|zaroodporn|wodoochron|przeciwdeszcz|ostrzegawcz|odblask)\w*';
+        $clause = '(?:(?!\b(?:i|a|oraz|ale|lecz|and|but)\b)[^.;:!?\n,()]){0,70}';
+        $sentence = '[^.;:!?\n]{0,90}';
+        $s = preg_replace('/\bsolar\s+welding\b/u', ' ', $s) ?? $s;
+        // „skład chemiczny powleczenia”, „czyszczenie/pranie chemiczne” to opis materiału i konserwacji, nie branża
+        // (karta 241: ubranie wodoochronne antystatyczne dostawało „chemical” zamiast „electric”)
+        $s = preg_replace('/\b(?:sklad|czyszcz|pranie|prania)\w*\s+chemiczn\w*/u', ' ', $s) ?? $s;
+        // Zakaz użycia („nie zaleca się kontaktu z ogniem, prac spawalniczych”) przeczy do końca zdania, a wyliczenie
+        // „nie A, B ani C” — całej liście aż do członu po „ani”; przecinek w środku nie kończy przeczenia. Człon po
+        // przecinku za „ani” („nie zawiera lateksu ani silikonu, do prac spawalniczych”) i samo „nie zawiera
+        // lateksu, do prac spawalniczych” zostają (reguła członu niżej kończy się na przecinku).
+        $s = preg_replace('/\bnie\s+(?:zaleca|stosowa|uzywa|nadaj|przeznaczon|wolno)\w*'.$sentence.'\b'.$sector.'/u', ' ', $s) ?? $s;
+        // najpierw z członem po „ani” (zdejmuje też branże przed nim), potem same branże przed „ani”
+        $s = preg_replace('/\bnie\b'.$sentence.'\bani\b'.$clause.'\b'.$sector.'/u', ' ', $s) ?? $s;
+        $s = preg_replace('/\bnie\b'.$sentence.'\b'.$sector.'(?=[^.;:!?\n]*\bani\b)/u', ' ', $s) ?? $s;
+        $s = preg_replace('/\b(?:nie(?!\s+tylko\b)|not)\b'.$clause.'\b'.$sector.'/u', ' ', $s) ?? $s;
+        // „unikać/unikanie/unikając”, ale nie „unikalny” (G-REX „unikalny, bezuciskowy ściągacz”)
+        $s = preg_replace('/\b(?:z\s+dala\s+od|unika(?:c|j|jac|nie|nia|niu)|avoid\w*)\b'.$sentence.'\b'.$sector.'/u', ' ', $s) ?? $s;
+
+        return preg_replace('/\bbez\s+(?:\w+\s+)?'.$sector.'/u', ' ', $s) ?? $s;
     }
 
     public function role(string $text): ?string
@@ -997,7 +1121,9 @@ final class PpeAssortment
         if (preg_match('/\bspawal|11611|welding|welder/u', $t) === 1) {
             $out[] = 'welding';
         }
-        if (preg_match('/\beletryk|1149|61482|lukiem|antystatyczn/u', $t) === 1) {
+        // „elektryk/elektryka/elektryków”, ale nie „elektrycznie” (kurtka ogrzewana elektrycznie to nie ochrona
+        // elektryczna); rękawice elektroizolacyjne i normy EN 60903 / EN 50321 to wprost ochrona przed prądem.
+        if (preg_match('/\belektryk(?:a|ow|om|ami|i)?\b|(?<!\d)(?:1149|61482|60903|50321)(?!\d)|lukiem|antystatyczn|\b(?:elektroizol|dielektr)/u', $t) === 1) {
             $out[] = 'electric';
         }
         if (preg_match('/\bzaroodporn|11612\b/u', $t) === 1) {
@@ -1108,6 +1234,12 @@ final class PpeAssortment
         $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
         $kat = is_string($attrs['kategoria_bhp'] ?? null) ? $attrs['kategoria_bhp'] : null;
 
+        // Mata z nazwy nie należy do żadnej rodziny ŚOI, choćby opis wspominał obuwie czy klasę ogniową „Dfl-s1”,
+        // a model wpisał kategorię — pusta rodzina jest bezpieczniejsza niż zła (bramka i tak odrzuca maty po nazwie).
+        if ($this->namesFloorMat((string) $product->name)) {
+            return null;
+        }
+
         // Nazwa i kategoria mówią, czym produkt JEST. Opis wymienia też akcesoria i
         // sąsiednie środki ochrony („kieszenie na nakolanniki” w spodniach), więc o
         // rodzinie decyduje dopiero wtedy, gdy tamte milczą.
@@ -1117,18 +1249,62 @@ final class PpeAssortment
         }
 
         $identity = $this->productIdentityText($product);
-        $familyText = $this->family($identity) !== null ? $identity : $this->productFullText($product);
-
-        $resolved = $this->resolveFamily($familyText, $kat);
+        if ($this->isResuscitationMask($identity, (string) ($product->description ?? ''))) {
+            return null;
+        }
+        // Z opisu bez klas obuwia: „S1”, „SB” w prozie to klasa ogniowa, oznaczenie wariantu albo cudzy wyrób.
+        $fromText = $this->family($identity) ?? $this->familyOf($this->productFullText($product), false);
         // Rękaw / ochraniacz przedramienia bez rzeczownika rodziny i bez normy rękawic w nazwie i opisie („HyFlex 11202 SIZE 19''”,
         // polski opis „rękaw ochronny”, normy EN 407 i ISO 13997) zostawał bez rodziny. Wyszukiwanie tekstowe całej rodziny
         // „rękawice” go pomijało, a bramka „rękaw ≠ rękawica” obsługuje go właśnie w tej rodzinie. Przetarg 1 poz. 1 (debug 14.09):
         // karta była tylko w źródle kart bez rodziny, na 77. miejscu, i wypadała przy przycięciu puli.
-        if ($resolved === null && $this->productIsArmSleeve($product) && $this->sleeveShowsProtection($product)) {
+        // Rękaw bije też kategorię od modelu: HyFlex 11-281 z „odziez” trafiał do odzieży, gdzie bramki rękawa nie ma.
+        if ($fromText === null && $this->productIsArmSleeve($product) && $this->sleeveShowsProtection($product)) {
             return self::FAMILY_GLOVES;
         }
 
-        return $resolved;
+        return $fromText ?? $this->familyFromKategoria($kat);
+    }
+
+    /** Rodzina z prozy opisu — bez klas obuwia (FOOTWEAR_CLASS_TOKENS), które liczą się tylko w nazwie i tożsamości. */
+    public function familyFromDescription(string $text): ?string
+    {
+        return $this->familyOf($text, false);
+    }
+
+    /** Nazwa karty nazywa matę (FLOOR_MAT_NAME) — wyrób spoza rodzin ŚOI. */
+    public function namesFloorMat(string $name): bool
+    {
+        $normalized = $this->normalize($name);
+        if (preg_match(self::FLOOR_MAT_NAME, $normalized) === 1) {
+            return true;
+        }
+        // Samo słowo „Mat” tylko wielką literą, jak w nazwach Coba („Rib Mat Czarny”, „COBATrack HD Mat”): Canis pisze
+        // małym „mat” skrót materiału, także ucięty bez kropki („Socks 3 pairs, dark grey, mat”, „soft silicone mat”).
+        // Gołe „MAT” i końcówka „…mat” tylko przy nazwie bez rodziny ŚOI: „Rękawice nitrylowe MAT” (matowe),
+        // „Kurtka Thermat”, „Okulary i-3 MAT” to rękawice, kurtka i okulary, a nie maty.
+        $ambiguous = preg_match('/\b(?:Mat|MAT|Mats|MATS)\b(?!\.)/u', $name) === 1
+            || preg_match(self::FLOOR_MAT_SUFFIX, $normalized) === 1;
+
+        return $ambiguous && $this->family($name) === null;
+    }
+
+    /**
+     * Maska do resuscytacji: tożsamość mówi „maska/maseczka/ustnik”, ale nie nazywa półmaski ani filtra,
+     * a tożsamość albo opis mówi o resuscytacji („usta-usta”, CPR). Prawdziwa półmaska z rzeczownikiem
+     * rodziny w nazwie nie wpada tu nawet przy wzmiance o pierwszej pomocy w opisie.
+     */
+    public function isResuscitationMask(string $identity, string $description = ''): bool
+    {
+        $id = $this->normalize($identity);
+        if (preg_match('/\b(mask|maseczk|ustnik|chust)\w*/u', $id) !== 1) {
+            return false;
+        }
+        if ($this->family($identity) !== null) {
+            return false;
+        }
+
+        return preg_match(self::RESUSCITATION, $id.' '.$this->normalize($description)) === 1;
     }
 
     /**
@@ -1228,6 +1404,12 @@ final class PpeAssortment
         $reqFamily = $this->family($requirement);
         if ($reqFamily === null) {
             return true;
+        }
+        // Mata z nazwy i maska do resuscytacji nie są żadnym ŚOI — pusta rodzina nie może ich przepuścić
+        // pod wymaganie z rodziną („Nauszniki”, „Półmaska FFP2”), jak przepuszcza karty bez opisu.
+        if ($this->namesFloorMat((string) $product->name)
+            || $this->isResuscitationMask($this->productIdentityText($product), (string) ($product->description ?? ''))) {
+            return false;
         }
 
         $fromName = $this->family((string) $product->name);
@@ -1701,7 +1883,8 @@ final class PpeAssortment
             (string) $product->name,
             (string) $product->sku,
             (string) ($product->norms ?? ''),
-            (string) ($product->category ?? ''),
+            // kategoria-dowód: ścieżka „…/Obuwie ESD” dobrana automatem z nazwy nie potwierdza antystatyki
+            $product->categoryAsEvidence(),
         ])));
         $idN = $this->normalize($identity);
         if (preg_match('/\b(esd|antyelektrostat|1149[\s-]*5|61340)\b/u', $idN) === 1) {
@@ -1907,7 +2090,10 @@ final class PpeAssortment
         $sleeveAt = $this->firstWordOffset(
             '/\b(naramiennik|narekawnik|zarekaw|arm\s*sleeves?|armguards?|arm\s*guards?|arm\s*protectors?|manchon'
             .'|ochraniacz\w*\s+(przed)?ramien|cut[\s-]*resistant\s+sleeves?)\w*'
-            .'|\brekaw(y|a|u|ow|em|ie|ach|om|ami)?\b|primacuff|\bcuffs\b/u',
+            .'|\brekaw(y|a|u|ow|em|ie|ach|om|ami)?\b|primacuff|\bcuffs\b'
+            // Cennik Ansella ucina nazwy do 40 znaków i nie pisze „sleeve”: „HyFlex 11250 NARROW NO THUMB S”,
+            // „HYFLEX 11281 THUMBSLOT NARROW”, „HYFLEX 70114” — zarękawki po otworze na kciuk albo po linii modelu.
+            .'|\bno\s+thumb|\bthumb\s*(slot|hole|loop)s?\b|\bhyflex\s+(?:11\s?2[58]\d|70\s?1\d\d)\b/u',
             $t
         );
         if ($sleeveAt === null) {
@@ -1980,7 +2166,9 @@ final class PpeAssortment
     {
         return trim(implode(' ', array_filter([
             $this->productNameText($product),
-            (string) ($product->category ?? ''),
+            // kategoria nadana automatem (drzewo sklepu z nazwy/opisu) nie jest dowodem — inaczej zła rodzina
+            // wybiera kategorię, a kategoria podtrzymuje złą rodzinę
+            $product->categoryAsEvidence(),
         ])));
     }
 

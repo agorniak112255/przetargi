@@ -204,6 +204,11 @@ final class PriceListImportService
                         : $defaultCategory,
                     $name
                 ),
+                'category_evidence' => $this->categoryEvidence(
+                    isset($row['category']) && is_string($row['category']) && $row['category'] !== ''
+                        ? $row['category']
+                        : $defaultCategory,
+                ),
                 'norms' => null,
                 // parametry wyrobu wypisane w samym cenniku — dokument producenta z datą obowiązywania
                 'price_list_attributes' => is_array($row['price_list_attributes'] ?? null) && $row['price_list_attributes'] !== []
@@ -447,6 +452,10 @@ final class PriceListImportService
                     // karta z powiązaniem B2B: nazwa i producent zostają na karcie (decyzja użytkownika 15.09.2026)
                     if (B2bProductLink::query()->where('product_id', $existing->id)->exists()) {
                         unset($cardPayload['name'], $cardPayload['manufacturer']);
+                    }
+                    // kategoria wybrana ręcznie w panelu zostaje — cennik ani drzewo sklepu jej po cichu nie nadpisują
+                    if ($existing->category_source === Product::CATEGORY_SOURCE_MANUAL) {
+                        unset($cardPayload['category'], $cardPayload['category_source']);
                     }
                     $change = $this->detectPriceChange($before, $cardPayload, $sku);
                     if ($change !== null) {
@@ -1650,6 +1659,7 @@ final class PriceListImportService
                 'manufacturer' => $manufacturer,
                 'ean' => isset($map['ean']) ? trim((string) ($row[$map['ean']] ?? '')) ?: null : null,
                 'category' => $this->cleanCategory(is_string($category) ? $category : null, $name),
+                'category_evidence' => $this->categoryEvidence(is_string($category) ? $category : null),
                 'description' => $description,
                 'norms' => null,
                 // pusto = cennik takich kolumn nie ma; nie zapisujemy pustej tablicy udającej odpowiedź
@@ -1701,6 +1711,10 @@ final class PriceListImportService
      *
      * Bez drzewa w bazie nic nie robimy: nie ma na co przepisywać.
      *
+     * Pochodzenie idzie razem z kategorią (category_source): kolumna cennika = import, ścieżka drzewa dobrana
+     * tutaj z nazwy/parametrów = presta_rewrite — ta nie jest dowodem rodzaju wyrobu przy dopasowaniu. Dowodem
+     * zostaje category_evidence (kategoria z cennika albo formularza, sprzed zamiany na ścieżkę).
+     *
      * @param  list<array<string, mixed>>  $products
      * @return list<array<string, mixed>>
      */
@@ -1708,6 +1722,23 @@ final class PriceListImportService
     {
         if ($products === []) {
             return $products;
+        }
+        foreach ($products as $index => $payload) {
+            // pozycja bez klucza kategorii nie zmienia kategorii karty — pochodzenie też zostaje
+            if (! array_key_exists('category', $payload)) {
+                continue;
+            }
+            $products[$index]['category_source'] = trim((string) ($payload['category'] ?? '')) !== ''
+                ? Product::CATEGORY_SOURCE_IMPORT
+                : null;
+        }
+        foreach ($products as $index => $payload) {
+            // Kategoria-dowód policzona przy zbieraniu wierszy (categoryEvidence) zostaje obok ścieżki drzewa, na
+            // którą niżej przepisujemy category. Cennik bez prawdziwej kategorii nie kasuje dowodu z B2B ani z
+            // poprzedniego importu.
+            if (array_key_exists('category_evidence', $payload) && trim((string) $payload['category_evidence']) === '') {
+                unset($products[$index]['category_evidence']);
+            }
         }
         try {
             $tree = PrestaCategory::query()->where('active', true)->get();
@@ -1739,6 +1770,9 @@ final class PriceListImportService
                 $attributes,
             );
             if (is_string($path) && trim($path) !== '') {
+                if ($path !== trim((string) ($payload['category'] ?? ''))) {
+                    $products[$index]['category_source'] = Product::CATEGORY_SOURCE_PRESTA_REWRITE;
+                }
                 $products[$index]['category'] = $path;
             }
         }
@@ -2040,6 +2074,21 @@ final class PriceListImportService
     private function cleanCategory(?string $category, string $name = ''): ?string
     {
         return $this->categorySanitizer->imported($category, $name);
+    }
+
+    /**
+     * Kategoria-dowód (products.category_evidence): kolumna cennika albo domyślna kategoria z formularza, dosłownie.
+     * Tylko prawdziwa — śmieć z komórki (isGarbage) i etykieta rodziny wymyślona z nazwy (imported → inferLabel) nie
+     * są dowodem. Liczona z surowej wartości, zanim categoriesFromTree zamieni kategorię na ścieżkę drzewa sklepu.
+     */
+    private function categoryEvidence(?string $category): ?string
+    {
+        $category = trim((string) $category);
+        if ($category === '' || $this->categorySanitizer->isGarbage($category)) {
+            return null;
+        }
+
+        return mb_substr($category, 0, 255);
     }
 
     /**

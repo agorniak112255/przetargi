@@ -103,13 +103,16 @@ final class BhpAttributeNormalizer
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
         $useCases = $this->stringList($payload['use_cases'] ?? null);
         $features = $this->stringList($payload['features'] ?? null);
+        // Kategoria tylko jako dowód: ścieżka dobrana automatem (presta_rewrite) to zgadnięcie, nie opis wyrobu —
+        // „Kombinezony bawełniane” przy kurtce dawały bawełnę, rodzinę i szablon.
+        $categoryEvidence = $product->categoryAsEvidence();
         $haystack = trim(implode("\n", array_filter([
             (string) ($product->name ?? ''),
             (string) ($product->description ?? ''),
             // Tabelka z karty dostawcy: od etapu 2 normy i materiały stoją poza opisem (u Protektu nigdy nie były
             // prozą opisu), więc bez tego źródła wykrywanie norm i materiałów gubiłoby je razem z przeprowadzką.
             (string) ($product->shop_fields_summary ?? ''),
-            (string) ($product->category ?? ''),
+            $categoryEvidence,
             (string) ($product->norms ?? ''),
             ...$useCases,
             ...$features,
@@ -129,7 +132,7 @@ final class BhpAttributeNormalizer
                 'specs' => $this->stringList($payload['specs'] ?? null),
                 'certificates' => $this->stringList($payload['certificates'] ?? null),
                 'use_cases' => $useCases,
-                'category' => (string) ($product->category ?? ''),
+                'category' => $categoryEvidence,
                 'sku' => (string) ($product->sku ?? ''),
                 'name' => (string) ($product->name ?? ''),
                 'description' => (string) ($product->description ?? ''),
@@ -204,7 +207,8 @@ final class BhpAttributeNormalizer
         $sku = (string) ($product->sku ?? '');
         $priceListKlasa = $this->nullableString($priceList['klasa_ochrony'] ?? null);
         $identitySources = $this->footwearIdentitySources($name, $sku, (string) ($product->norms ?? ''), $shopFields);
-        $katText = ($product->category ?? '').' '.$name.' '.$sku.' '.($product->description ?? '');
+        // kategoria-dowód, jak w normalize: ścieżka drzewa dobrana automatem nie czyni karty obuwiem
+        $katText = $product->categoryAsEvidence().' '.$name.' '.$sku.' '.($product->description ?? '');
         $footwear = $this->mentionsFootwear($this->normalizeText($katText))
             || $this->normalizeKategoria($this->nullableString($attrs['kategoria_bhp'] ?? null)) === 'obuwie';
         // Bez klasy z payloadu: ta bywa cudzą kartą, więc nie jej używamy do przesiewu (jak w normalize).
@@ -224,6 +228,9 @@ final class BhpAttributeNormalizer
     }
 
     /**
+     * `category` w kontekście to kategoria-dowód (Product::categoryAsEvidence): ścieżki dobranej automatem
+     * wywołujący nie podaje — z niej szły kategoria BHP, rodzina, typ i bramka zamienników.
+     *
      * @param  array<string, mixed>|null  $raw
      * @param  array{
      *     materials?: list<string>,
@@ -263,10 +270,19 @@ final class BhpAttributeNormalizer
             .($context['name'] ?? '').' '
             .($context['sku'] ?? '');
         $katText = $identity.' '.($context['description'] ?? '');
+        $assortment = new PpeAssortment;
+        // Mata z nazwy i maska do resuscytacji nie są ŚOI żadnej rodziny — model wpisywał im „drogi_oddechowe”
+        // (CEDERROTH 26604 „Maska oddechowa”, opis „resuscytacja usta-usta”) albo obuwie z „czyszczenia obuwia”.
+        $outsidePpe = $assortment->namesFloorMat((string) ($context['name'] ?? ''))
+            || $assortment->isResuscitationMask($identity, (string) ($context['description'] ?? ''));
 
-        $out['kategoria_bhp'] = $this->normalizeKategoria(
+        // Poza tym kategoria od modelu zostaje pierwsza: rzeczownik z nazwy przed nią psuł więcej, niż naprawiał
+        // („Shoe cover”, „Low softshell footwear” — przegląd ręcznych cenników 22.09). Bez niej tożsamość, a na końcu
+        // opis bez klas obuwia („klasa Dfl-s1” maty to nie S1).
+        $out['kategoria_bhp'] = $outsidePpe ? 'inne' : $this->normalizeKategoria(
             $this->nullableString($raw['kategoria_bhp'] ?? null)
-            ?? $this->detectKategoria($katText)
+            ?? $this->detectKategoria($identity)
+            ?? $assortment->kategoriaFromFamily($assortment->familyFromDescription($katText))
         );
 
         $kod = $this->nullableString($raw['kod_producenta'] ?? null);
@@ -398,10 +414,13 @@ final class BhpAttributeNormalizer
             )));
         }
 
+        // Rozmiar z cennika bije resztę; bez niego pojedynczy rozmiar z nazwy („SIZE XXL”) bije zakres z opisu.
+        $priceListRozmiar = $this->nullableString($priceList['rozmiar'] ?? null);
         $out['rozmiar'] = $this->detectRozmiar(
             implode(' ', $this->stringList($context['specs'] ?? null)).' '.($context['description'] ?? ''),
-            $this->nullableString($priceList['rozmiar'] ?? null) ?? $this->nullableString($raw['rozmiar'] ?? null),
-            $out['kategoria_bhp']
+            $priceListRozmiar ?? $this->nullableString($raw['rozmiar'] ?? null),
+            $out['kategoria_bhp'],
+            $priceListRozmiar === null ? $name : null,
         );
 
         // Poziomy EN 388 z karty producenta biją i zapisany atrybut, i odczyt z tekstu: kod z opisu
@@ -411,18 +430,37 @@ final class BhpAttributeNormalizer
             ?? $this->nullableString($raw['poziomy_en388'] ?? null)
             ?? $this->detectEn388($descBlob);
 
-        $assortment = new PpeAssortment;
         $typeBlob = $identity.' '.$descBlob;
         $family = $assortment->familyFromKategoria($out['kategoria_bhp']);
-        $out['typ_wyrobu'] = $this->nullableString($raw['typ_wyrobu'] ?? null)
-            ?? $assortment->articleTypePreferIdentity($identity, $typeBlob, $family);
-        // Obuwiu zapisanego `przeznaczenie` nie czytamy: model go nie zwraca (nie ma go w schemacie odpowiedzi), więc
-        // w payloadzie leży nasze dawne wyliczenie — „electric” przy butach antystatycznych przyklejało się na
-        // zawsze, także po poprawce reguły (odrzucane w porównywarce zamienników). Innym rodzinom zostaje zapis:
-        // przeliczenie z całego tekstu dałoby kurtce ostrzegawczej „agriculture” z listy zastosowań.
-        $out['przeznaczenie'] = $family === PpeAssortment::FAMILY_FOOTWEAR
-            ? $assortment->purpose($typeBlob, $family)
-            : ($this->nullableString($raw['przeznaczenie'] ?? null) ?? $assortment->purpose($typeBlob, $family));
+        if ($family === null && ! $outsidePpe) {
+            $family = $assortment->family($identity) ?? $assortment->familyFromDescription($typeBlob);
+        }
+        $nameSku = trim($name.' '.$sku);
+        // Typ z nazwy bije typ od modelu, a ten odczyt z całego tekstu: model dawał „kalosz” skórzanym
+        // trzewikom Canis („Ankle leather footwear … gumowa podeszwa”) i „ffp” masce do resuscytacji.
+        // Po nazwie kategoria-dowód (kolumna cennika, B2B, ręczna): „POWLEKANE” przy Polstar COVENT czy G-REX P01
+        // to powlekane, a nie „welding” ze zdania „nie stosować przy pracach spawalniczych” w opisie. Kategoria
+        // dobrana automatem tu nie dociera (context['category'] jest już bez niej) — z nią typ kłamał
+        // („Kombinezony bawełniane” przy kurtce, „Półmaski filtrujące FFP1” przy pochłaniaczu).
+        $out['typ_wyrobu'] = $outsidePpe ? null : (
+            $assortment->articleType($nameSku, $family)
+            ?? $assortment->articleType($identity, $family)
+            ?? $this->nullableString($raw['typ_wyrobu'] ?? null)
+            ?? $assortment->articleType($typeBlob, $family)
+        );
+        // Zapisanego `przeznaczenie` nie czytamy dla żadnej rodziny: model go nie zwraca (nie ma go w schemacie
+        // odpowiedzi), więc w payloadzie leży nasze dawne wyliczenie — „electric” przy butach antystatycznych czy
+        // „agriculture” z „farmaceutycznego” przyklejały się na zawsze, także po poprawce reguły (odrzucane
+        // w porównywarce zamienników). Tożsamość idzie pierwsza: „Kurtka ostrzegawcza” to hivis, choćby lista
+        // zastosowań wymieniała rolnictwo.
+        // Antystatyka w nazwie rozstrzyga się dopiero w całym tekście: „Kurtka wodoochronna antystatyczna” jest
+        // electric z EN 1149-5 z norm i opisu (sama antystatyka nie wystarcza — PpeAssortment::purpose), a sama
+        // nazwa dałaby jej „rain”.
+        $nameDefersPurpose = preg_match('/antysta|antista|\besd\b/iu', $nameSku) === 1;
+        $out['przeznaczenie'] = $outsidePpe ? null : (
+            ($nameDefersPurpose ? null : $assortment->purpose($nameSku, $family))
+            ?? $assortment->purpose($typeBlob, $family)
+        );
         $out['rodzina_materialu'] = $this->materialFamily($primary, $materials, $typeBlob);
 
         return $out;
@@ -1240,9 +1278,13 @@ final class BhpAttributeNormalizer
         return null;
     }
 
-    private function detectRozmiar(string $text, ?string $claimed = null, ?string $category = null): ?string
-    {
-        return (new ProductSizeVariant)->labelFromTexts($claimed, $text, $category);
+    private function detectRozmiar(
+        string $text,
+        ?string $claimed = null,
+        ?string $category = null,
+        ?string $name = null,
+    ): ?string {
+        return (new ProductSizeVariant)->labelFromTexts($claimed, $text, $category, $name);
     }
 
     private function detectEn388(string $text): ?string

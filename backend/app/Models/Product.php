@@ -32,6 +32,30 @@ class Product extends Model
     /** Ile wierszy parametrów wolno wpisać ręcznie na jednej karcie. */
     public const MANUAL_SPECS_MAX_ROWS = 60;
 
+    /** Pochodzenie kategorii (category_source): kolumna z cennika dostawcy. */
+    public const CATEGORY_SOURCE_IMPORT = 'import';
+
+    /** Kategoria z karty w sklepie B2B dostawcy. */
+    public const CATEGORY_SOURCE_B2B = 'b2b';
+
+    /** Wybrana przez człowieka w panelu. */
+    public const CATEGORY_SOURCE_MANUAL = 'manual';
+
+    /** Ścieżka drzewa Presty dobrana automatem (z nazwy, opisu albo parametrów) — nie jest dowodem rodzaju wyrobu. */
+    public const CATEGORY_SOURCE_PRESTA_REWRITE = 'presta_rewrite';
+
+    /**
+     * Kategoria przepisana hurtem przez mapę „kategoria lokalna → drzewo Presty”. Mapę układa człowiek: to ręczne
+     * tłumaczenie kategorii z cennika na drzewo sklepu, więc liczy się jako dowód rodzaju wyrobu (decyzja
+     * użytkownika 22.09.2026) — w odróżnieniu od ścieżki zgadniętej przez automat.
+     */
+    public const CATEGORY_SOURCE_PRESTA_MAP = 'presta_map';
+
+    /** Źródła, z których kategoria nie świadczy o rodzaju wyrobu (decyzja użytkownika 22.09.2026). */
+    public const AUTOMATIC_CATEGORY_SOURCES = [
+        self::CATEGORY_SOURCE_PRESTA_REWRITE,
+    ];
+
     protected $fillable = [
         'sku',
         'name',
@@ -39,6 +63,8 @@ class Product extends Model
         'manufacturer',
         'ean',
         'category',
+        'category_source',
+        'category_evidence',
         'assortment_group_id',
         'description',
         'variant_summary',
@@ -114,6 +140,29 @@ class Product extends Model
             'enrichment_payload' => 'array',
             'enrichment_trace' => 'array',
         ];
+    }
+
+    /**
+     * Kategoria jako dowód rodzaju wyrobu. Wybór ręczny w panelu wygrywa. Poza nim liczy się kategoria ze źródła
+     * (category_evidence: kolumna cennika, formularz importu, karta B2B) — przetrwa przepisanie category na ścieżkę
+     * drzewa. Bez niej ścieżka dobrana automatem nie jest dowodem (z nazwy czy opisu wraca inaczej jako
+     * „potwierdzenie” tej samej zgadniętej rodziny), a null w category_source (karty sprzed znacznika) = pochodzenie
+     * nieznane — kategoria liczy się jak dotąd.
+     */
+    public function categoryAsEvidence(): string
+    {
+        if ($this->category_source === self::CATEGORY_SOURCE_MANUAL) {
+            return (string) ($this->category ?? '');
+        }
+        $evidence = trim((string) ($this->category_evidence ?? ''));
+        if ($evidence !== '') {
+            return $evidence;
+        }
+        if (in_array($this->category_source, self::AUTOMATIC_CATEGORY_SOURCES, true)) {
+            return '';
+        }
+
+        return (string) ($this->category ?? '');
     }
 
     public function assortmentGroup(): BelongsTo
