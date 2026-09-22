@@ -25,8 +25,12 @@ use RuntimeException;
  * Ceny: strona konta podaje w tabeli wariantów „Twoją cenę” każdego rozmiaru (cena zakupu). Ceny katalogowej
  * (detalicznej) sklep zalogowanemu podaje tylko przy rozmiarze otwartej karty, więc tę samą stronę pobieramy
  * drugi raz bez logowania — tam każdy rozmiar ma „Cenę detaliczną”. Wyrób bez rozmiarów (czapka, koc) ma obie ceny
- * w bloku głównym strony konta i drugiego pobrania nie wymaga. Cena katalogowa niższa od ceny konta albo rozmiar,
- * którego strona gościa nie zna, to karta bez ceny katalogowej (liczone w podsumowaniu przebiegu).
+ * w bloku głównym strony konta i drugiego pobrania nie wymaga. Wyjątek: wyrób sprzedawany progami ilościowymi
+ * (kamizelki ostrzegawcze, narzuty — tabela „Progi cenowe”) nie ma bloku „Twoja cena” ani ceny przed rabatem;
+ * ceną konta jest próg, po którym sklep sprzedaje teraz („Twoja cena” w tabeli), a cena katalogowa pochodzi ze
+ * strony gościa. Pozostałe progi idą do tabelki sklepu — w przetargu cena zależy od zamawianej ilości.
+ * Cena katalogowa niższa od ceny konta albo rozmiar, którego strona gościa nie zna, to karta bez ceny katalogowej
+ * (liczone w podsumowaniu przebiegu).
  *
  * Karta = rozmiary jednego koloru w tej samej parze cen (decyzja użytkownika 15.09.2026: rozmiar w innej cenie to
  * osobna karta; w JHK typowo XS–XXL w jednej cenie, 3XL droższy). SKU: kod wyrobu bez rozmiaru („JT SWCR BK”), gdy
@@ -275,6 +279,10 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
         }
         $add(self::SHOP_SECTION_TRADE, 'Kategoria w sklepie', (string) ($raw['category_path'] ?? ''));
         $add(self::SHOP_SECTION_TRADE, 'VAT', (string) ($raw['vat'] ?? ''));
+        $add(self::SHOP_SECTION_TRADE, 'Progi cenowe konta', implode('; ', array_map(
+            static fn (array $tier): string => $tier['label'].' szt.: '.number_format($tier['cents'] / 100, 2, ',', ' ').' PLN',
+            $raw['tiers'] ?? [],
+        )));
         $add(self::SHOP_SECTION_TRADE, 'Stan magazynowy', implode('; ', $raw['stock'] ?? []));
         $add(self::SHOP_SECTION_TRADE, 'Oznaczenia sklepu', implode('; ', $raw['labels'] ?? []));
 
@@ -383,7 +391,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
      * są z bloku ceny konta („Twoja cena”) albo detalicznej — zależnie od tego, czyja to strona ($account).
      * Nieczytelna budowa = wyjątek z powodem (pozycja pominięta, reszta przebiegu idzie dalej).
      *
-     * @return array{name: string, categories: list<string>, symbol: string, fields: list<array{0: string, 1: string}>, attributes: list<array{0: string, 1: string}>, labels: list<string>, description: string, documents: list<array{title: string, url: string, kind: string}>, images: list<string>, price_cents: int|null, stock: string, rows: list<array{path: string, symbol: string, size: string, ean: string, cents: int|null, vat: string, stock: string}>}
+     * @return array{name: string, categories: list<string>, symbol: string, fields: list<array{0: string, 1: string}>, attributes: list<array{0: string, 1: string}>, labels: list<string>, description: string, documents: list<array{title: string, url: string, kind: string}>, images: list<string>, price_cents: int|null, tiers: list<array{label: string, cents: int}>, stock: string, rows: list<array{path: string, symbol: string, size: string, ean: string, cents: int|null, vat: string, stock: string}>}
      */
     public static function parsePage(string $html, bool $account): array
     {
@@ -407,6 +415,16 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
 
         // pliki przed opisem: odnośniki do nich znikają z drzewa, żeby nazwa pliku nie weszła w opis wyrobu
         $documents = self::documentsOf($xpath);
+        $tiers = self::priceTiers($xpath);
+        $price = self::priceCents(self::text($xpath->query(
+            '//*['.JspB2bClient::classPredicate($account ? 'ceny-twoja' : 'ceny-detaliczna').']'
+            .'//*['.JspB2bClient::classPredicate('netto').']'
+        )->item(0)));
+        // wyrób sprzedawany progami ilościowymi (kamizelki ostrzegawcze) nie ma bloku „Twoja cena” — cena konta
+        // to próg, po którym sklep sprzedaje teraz (wiersz „Twoja cena”)
+        if ($price === null && $account && $tiers !== []) {
+            $price = $tiers[0]['cents'];
+        }
 
         return [
             'name' => $name,
@@ -418,13 +436,54 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
             'description' => self::descriptionOf($xpath),
             'documents' => $documents,
             'images' => self::galleryUrls($html, $xpath),
-            'price_cents' => self::priceCents(self::text($xpath->query(
-                '//*['.JspB2bClient::classPredicate($account ? 'ceny-twoja' : 'ceny-detaliczna').']'
-                .'//*['.JspB2bClient::classPredicate('netto').']'
-            )->item(0))),
+            'price_cents' => $price,
+            'tiers' => $tiers,
             'stock' => self::stockText($xpath, $xpath->query('//*['.JspB2bClient::classPredicate('produkt-karta-stany').']')->item(0)),
             'rows' => self::variantRows($xpath, $account),
         ];
+    }
+
+    /**
+     * Progi ilościowe konta („1 - 99”, „100 - 499”, …) z tabeli gradacji, w kolejności ze sklepu i z ceną netto
+     * progu. Pierwszy wiersz to próg, po którym sklep sprzedaje teraz (sklep zaznacza go „Twoja cena”) — dlatego
+     * wiersz bieżący idzie na początek. Wyrób bez progów = [].
+     *
+     * @return list<array{label: string, cents: int}>
+     */
+    private static function priceTiers(DOMXPath $xpath): array
+    {
+        $tiers = [];
+        $current = null;
+        foreach ($xpath->query('//table['.JspB2bClient::classPredicate('gradacje').']//tr') ?: [] as $tr) {
+            if (! $tr instanceof DOMElement) {
+                continue;
+            }
+            $cells = [];
+            foreach ($xpath->query('./td', $tr) ?: [] as $td) {
+                $cells[] = self::text($td);
+            }
+            // wiersz progu: zakres, „Zamów jeszcze”, cena netto, cena brutto
+            if (count($cells) < 4) {
+                continue;
+            }
+            $cents = self::priceCents($cells[2]);
+            if ($cents === null || $cells[0] === '') {
+                continue;
+            }
+            $tier = ['label' => $cells[0], 'cents' => $cents];
+            $classes = ' '.preg_replace('/\s+/', ' ', $tr->getAttribute('class')).' ';
+            if ($current === null && str_contains($classes, ' aktualna-cena ')) {
+                $current = $tier;
+
+                continue;
+            }
+            $tiers[] = $tier;
+        }
+        if ($current !== null) {
+            array_unshift($tiers, $current);
+        }
+
+        return $tiers;
     }
 
     /**
@@ -697,12 +756,20 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
     {
         if ($single) {
             $base = self::accountBaseCents($html);
-
-            return $base !== null ? [$page['symbol'] => $base] : [];
+            if ($base !== null) {
+                return [$page['symbol'] => $base];
+            }
+            // wyrób sprzedawany progami ilościowymi nie ma na stronie konta ceny przed rabatem — ma ją strona gościa
+            if ($page['tiers'] === []) {
+                return [];
+            }
         }
 
         try {
             $guest = self::parsePage($this->client->guestProductPage($row['path']), account: false);
+            if ($single) {
+                return $guest['price_cents'] !== null ? [$page['symbol'] => $guest['price_cents']] : [];
+            }
         } catch (B2bFatalException $e) {
             throw $e;
         } catch (RuntimeException $e) {
@@ -792,6 +859,8 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
                 ))]] : []),
                 'attributes' => self::cardAttributes($page['attributes'], $single),
                 'category_path' => implode(' | ', $page['categories']),
+                // progi tylko na karcie wyrobu bez rozmiarów — tam, gdzie sklep je pokazuje
+                'tiers' => $single ? $page['tiers'] : [],
                 'vat' => $first['vat'],
                 'stock' => array_map(
                     static fn (array $s): string => ($s['size'] !== '' ? $s['size'].': ' : '').$s['stock'],

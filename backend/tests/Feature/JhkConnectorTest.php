@@ -248,6 +248,28 @@ final class JhkConnectorTest extends TestCase
         $this->assertContains(['Rozmiar', 'Uni'], $fields);
     }
 
+    public function test_product_sold_in_quantity_tiers_takes_the_current_tier_as_the_account_price(): void
+    {
+        $this->addProduct(self::vest());
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(1, $products);
+        $card = $products[0];
+        $this->assertSame('MOONTEX KO TEST SYF M', $card->sku);
+        // cena konta z progu „Twoja cena”, katalogowa ze strony gościa (konto jej nie widzi)
+        $this->assertSame(4.48, $connector->price($card)?->net);
+        $this->assertSame(8.0, $connector->price($card)?->base);
+        $this->assertSame('MOONTEX', $connector->manufacturer($card));
+        $fields = array_map(static fn ($f): array => [$f->name, $f->value], $connector->shopFields($card));
+        $this->assertContains([
+            'Progi cenowe konta',
+            '1 - 99 szt.: 4,48 PLN; 100 - 499 szt.: 3,99 PLN; 500 - 999 szt.: 3,67 PLN; 1000 + szt.: 3,40 PLN',
+        ], $fields);
+    }
+
     public function test_page_without_a_product_name_or_with_another_price_than_the_tile_is_skipped(): void
     {
         $this->addProduct(self::catalogPage());
@@ -634,6 +656,28 @@ final class JhkConnectorTest extends TestCase
     }
 
     /**
+     * Kamizelka ostrzegawcza sprzedawana progami ilościowymi: strona konta ma tabelę progów zamiast bloku
+     * „Twoja cena”, ceny przed rabatem nie ma wcale — cenę detaliczną widzi tylko gość.
+     *
+     * @return array<string, mixed>
+     */
+    private static function vest(): array
+    {
+        $product = self::beanie();
+        $product['tile_path'] = '/pl/moontex-kamizelka-ost-test-syf-m';
+        $product['tile_name'] = 'MOONTEX Kamizelka ost TEST SYF M';
+        $product['tile_price_text'] = '';
+        $product['name'] = 'MOONTEX Kamizelka ost TEST SYF M';
+        $product['symbol'] = 'MOONTEX KO TEST SYF M';
+        $product['categories'] = [['Kamizelki Ostrzegawcze'], ['Wysoka Widoczność']];
+        $product['account'] = null;
+        $product['catalog'] = 800;
+        $product['tiers'] = [['1 - 99', 448], ['100 - 499', 399], ['500 - 999', 367], ['1000 +', 340]];
+
+        return $product;
+    }
+
+    /**
      * Kurtka linii Professional: pliki w opisie (karta produktu i certyfikaty) i komplet językowy w blokach plików.
      *
      * @return array<string, mixed>
@@ -869,16 +913,36 @@ final class JhkConnectorTest extends TestCase
                 .'<span class="atrybut-cechy">'.$paths.'</span></span></div></div></div>';
         }
 
-        if ($account && $opened['catalog'] !== null) {
-            $body .= '<div class="kontrolka-CenaProduktu col-12"><div class="cena ceny-przed-rabatem row karta">'
-                .'<div class="opis-cena-netto col-6">Cena przed rabatem netto</div>'
-                .'<div class="netto col-6">'.self::priceText($opened['catalog']).' <small>/szt.</small></div></div></div>';
+        // wyrób sprzedawany progami ilościowymi: strona konta ma tabelę progów zamiast bloków „Twoja cena”
+        // i „Cena przed rabatem”, a cenę detaliczną pokazuje tylko gościowi
+        $tiers = $product['tiers'] ?? [];
+        if ($account && $tiers !== []) {
+            $rows = '<tr><td colspan="4" class="text-center">Zakupiłeś już <b>0 szt.</b> tego produktu</td></tr>'
+                .'<tr class="text-center"><td rowspan="2" class="progi">Progi cenowe</td>'
+                .'<td rowspan="2" class="zamow-jeszcze">Zamów jeszcze</td><td colspan="2">Twoja cena wyniesie</td></tr>';
+            foreach ($tiers as $i => [$label, $cents]) {
+                $rows .= '<tr class="niespalniony '.($i === 0 ? 'aktualna-cena ' : '').'">'
+                    .'<td class="text-center"> '.$label.' </td>'
+                    .'<td class="text-center brakujace">'.($i === 0 ? ' Twoja cena ' : ' '.$label.' ').'</td>'
+                    .'<td class="text-right">'.self::priceText($cents).' </td>'
+                    .'<td class="text-right">'.self::priceText((int) round($cents * 1.23)).'</td></tr>';
+            }
+            $body .= '<div class="kontrolka-GradacjaProduktu col-12"><table class="gradacje table table-sm"><tbody>'
+                .$rows.'</tbody></table></div>';
         }
-        $mainPrice = $account ? $opened['account'] : $opened['catalog'];
-        if ($mainPrice !== null) {
-            $body .= '<div class="kontrolka-CenaProduktu col-12"><div class="cena '.($account ? 'ceny-twoja' : 'ceny-detaliczna').' row karta">'
-                .'<div class="opis-cena-netto col-6">'.($account ? 'Twoja cena netto' : 'Cena detaliczna netto').'</div>'
-                .'<div class="netto col-6">'.self::priceText($mainPrice).' <small>/szt.</small></div></div></div>';
+
+        if (! $account || $tiers === []) {
+            if ($account && $opened['catalog'] !== null) {
+                $body .= '<div class="kontrolka-CenaProduktu col-12"><div class="cena ceny-przed-rabatem row karta">'
+                    .'<div class="opis-cena-netto col-6">Cena przed rabatem netto</div>'
+                    .'<div class="netto col-6">'.self::priceText($opened['catalog']).' <small>/szt.</small></div></div></div>';
+            }
+            $mainPrice = $account ? $opened['account'] : $opened['catalog'];
+            if ($mainPrice !== null) {
+                $body .= '<div class="kontrolka-CenaProduktu col-12"><div class="cena '.($account ? 'ceny-twoja' : 'ceny-detaliczna').' row karta">'
+                    .'<div class="opis-cena-netto col-6">'.($account ? 'Twoja cena netto' : 'Cena detaliczna netto').'</div>'
+                    .'<div class="netto col-6">'.self::priceText($mainPrice).' <small>/szt.</small></div></div></div>';
+            }
         }
 
         $body .= '<div class="kontrolka-StanyProduktuNaKarcie col-6"><div class="naglowek-kontrolki">Stan mag.:</div>'
