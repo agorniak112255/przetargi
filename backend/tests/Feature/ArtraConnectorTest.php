@@ -211,7 +211,8 @@ final class ArtraConnectorTest extends TestCase
 
     public function test_tabelka_trafia_do_karty_wyrobu_a_nie_do_opisu(): void
     {
-        // W tym projekcie dane tabelaryczne dostawcy mają własną tabelę; opis zostaje prozą karty.
+        // W tym projekcie dane tabelaryczne dostawcy mają własną tabelę. Slogan marki z bloku opisowego nie jest
+        // opisem wyrobu (decyzja użytkownika 22.09.2026) — opis karty powstaje z karty produktu PDF, nie ze sklepu.
         Storage::fake('public');
         $this->catalogCard('ARCASIO 732 616560 S1 P ESD');
         $this->shopProduct('3813781-arcasio-732-616560-s1-p-esd', 'ARCASIO 732 616560 S1 P ESD');
@@ -220,10 +221,7 @@ final class ArtraConnectorTest extends TestCase
         app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
 
         $product = Product::query()->where('sku', 'ARCASIO 732 616560 S1 P ESD')->sole();
-        $description = (string) $product->description;
-        $this->assertStringContainsString('Konstrukcja obuwia ARELAX', $description);
-        $this->assertStringNotContainsString('EN ISO 20345:2011', $description);
-        $this->assertStringNotContainsString('cholewka', $description);
+        $this->assertSame('', (string) $product->description);
 
         $card = ProductShopCard::query()->where('product_id', $product->id)->sole();
         $this->assertSame('https://artra.pl/products/3813781-arcasio-732-616560-s1-p-esd', (string) $card->source_url);

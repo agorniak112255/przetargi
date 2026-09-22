@@ -73,7 +73,7 @@ final class CardConflictAiApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('rejected', 0)
             ->assertJsonPath('cached', false)
-            ->assertJsonPath('prompt_version', 'conflicts-2026-09-15')
+            ->assertJsonPath('prompt_version', 'conflicts-2026-09-22-tabelka-dostawcy')
             ->assertJsonCount(2, 'conflicts')
             ->assertJsonPath('conflicts.0.parameter', 'kategoria ŚOI')
             ->assertJsonPath('conflicts.0.quotes.0.source', 'norms')

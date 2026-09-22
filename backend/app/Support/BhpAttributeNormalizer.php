@@ -33,6 +33,20 @@ final class BhpAttributeNormalizer
     private const FOOTWEAR_CLASS_RE = '/(?<![\p{L}\d])('.self::FOOTWEAR_CLASS.')(?![\p{L}\d])/iu';
 
     /**
+     * Tylko wielkimi literami — dla wpisów list norm i fragmentów tekstu, gdzie „sb” czy „o2” w zwykłym tekście
+     * (rozmiary, skróty) to nie klasa. Zapis klasy przy normie dostawcy piszą zawsze wielkimi literami.
+     */
+    private const FOOTWEAR_CLASS_UPPER_RE = '/(?<![\p{L}\d])('.self::FOOTWEAR_CLASS.')(?![\p{L}\d])/u';
+
+    /**
+     * Klasa w kodzie (SKU), w kolumnie norm i w wierszu tabelki dostawcy: wielkimi literami i jako osobny
+     * wyraz — przed nią i za nią tylko spacja, przecinek, średnik, dwukropek albo nawias. Myślnik, ukośnik,
+     * cyfra czy litera obok to część kodu: „BRS-s1-42” (rozmiar 42 wariantu), „OB-4512” (indeks) nie niosą klasy.
+     * Spacja wewnątrz zapisu klasy („S1 P L”) należy do wzorca, więc „… 618080 S1 PL ESD” to nadal S1PL.
+     */
+    private const FOOTWEAR_CLASS_CODE_RE = '/(?<![^\s,;:(])('.self::FOOTWEAR_CLASS.')(?![^\s,;:)])/u';
+
+    /**
      * @return array{
      *     kategoria_bhp: ?string,
      *     kod_producenta: ?string,
@@ -132,6 +146,84 @@ final class BhpAttributeNormalizer
     }
 
     /**
+     * Pola, które karta w panelu i opis na sklep biorą z przeliczenia (forProduct): te mają hierarchię źródeł
+     * (producent, cennik, nazwa, tabelka dostawcy biją opis), a zapisane w payloadzie bywają cudzym wariantem.
+     * Reszta zostaje zapisana: przeliczone materiały czy typ wyrobu to odczyt z całej prozy, razem ze zdaniami
+     * przeczącymi („bez lateksu” → lateks, karta 11202000).
+     */
+    private const DISPLAY_RECOMPUTED = ['klasa_ochrony', 'oznaczenia', 'poziomy_en388', 'kod_producenta', 'przeznaczenie'];
+
+    /**
+     * Atrybuty i normy do pokazania na karcie w panelu i w opisie na nasz sklep: zapisane atrybuty, na nich pola
+     * z hierarchią z przeliczenia (DISPLAY_RECOMPUTED), a normy z displayedNorms — w obu miejscach te same.
+     *
+     * @return array{attributes: array<string, mixed>, norms: list<string>}
+     */
+    public function forDisplay(Product $product): array
+    {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $stored = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
+        $computed = $this->forProduct($product);
+        $norms = $this->displayedNorms($product, $computed);
+
+        return [
+            'attributes' => array_merge(
+                $stored,
+                array_intersect_key($computed, array_flip(self::DISPLAY_RECOMPUTED)),
+                ['normy_en' => $norms],
+            ),
+            'norms' => $norms,
+        ];
+    }
+
+    /**
+     * Normy do pokazania na karcie w panelu i w opisie na nasz sklep — nie to samo co normy_en z forProduct.
+     * forProduct dokłada normy wyczytane z całego opisu, także ze zdań przeczących („Źródła nie podają
+     * zgodności z EN 407 ani EN ISO 374-1”); dla dopasowania to tylko kandydat do sprawdzenia, ale na karcie
+     * i na sklepie wyszłoby jako fakt. Pokazujemy więc to, co dotąd: normy zapisane przez wzbogacanie (lista
+     * norm i atrybut normy_en), bez zapisów cudzego wariantu obuwia (klasa z cennika, nazwy albo tabelki
+     * dostawcy — jak w normalize), a do tego normy z kolumny cennika i z tabelki dostawcy.
+     *
+     * Karta z normami producenta wyrobu pokazuje przeliczone normy_en, jak dotąd: tam kolumna producenta bije
+     * resztę i to jej poziomy mają wyjść na kartę (App\Support\ManufacturerNormFacts).
+     *
+     * @param  array{kategoria_bhp: ?string, normy_en: list<string>}  $computed  wynik forProduct($product)
+     * @return list<string>
+     */
+    private function displayedNorms(Product $product, array $computed): array
+    {
+        if (ManufacturerNormFacts::norms($product->manufacturer_norms) !== []) {
+            return $computed['normy_en'];
+        }
+
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
+        $priceList = is_array($product->price_list_attributes) ? $product->price_list_attributes : [];
+        $shopFields = (string) ($product->shop_fields_summary ?? '');
+        $name = (string) ($product->name ?? '');
+        $sku = (string) ($product->sku ?? '');
+        $priceListKlasa = $this->nullableString($priceList['klasa_ochrony'] ?? null);
+        $identitySources = $this->footwearIdentitySources($name, $sku, (string) ($product->norms ?? ''), $shopFields);
+        $katText = ($product->category ?? '').' '.$name.' '.$sku.' '.($product->description ?? '');
+        $footwear = $this->mentionsFootwear($this->normalizeText($katText))
+            || $this->normalizeKategoria($this->nullableString($attrs['kategoria_bhp'] ?? null)) === 'obuwie';
+        // Bez klasy z payloadu: ta bywa cudzą kartą, więc nie jej używamy do przesiewu (jak w normalize).
+        $klasa = $this->footwearClassByHierarchy($priceListKlasa, $identitySources, null, $footwear)['klasa'];
+        $cardRecord = $klasa === null
+            ? null
+            : $this->cardFootwearClassRecord($klasa, [[$priceListKlasa ?? '', self::FOOTWEAR_CLASS_RE], ...$identitySources]);
+
+        return NormCode::dedupe(array_merge(
+            $this->splitNormsColumn((string) ($priceList['normy'] ?? '')),
+            $this->withoutForeignFootwearNorms(array_merge(
+                $this->stringList($payload['norms'] ?? null),
+                $this->stringList($attrs['normy_en'] ?? null),
+                $this->detectNormsFromText($shopFields),
+            ), $cardRecord),
+        ));
+    }
+
+    /**
      * @param  array<string, mixed>|null  $raw
      * @param  array{
      *     materials?: list<string>,
@@ -180,7 +272,11 @@ final class BhpAttributeNormalizer
         $kod = $this->nullableString($raw['kod_producenta'] ?? null);
         $name = (string) ($context['name'] ?? '');
         $sku = (string) ($context['sku'] ?? '');
-        if ($kod !== null && $this->codeConflictsWithIdentity($kod, $name, $sku)) {
+        if ($kod !== null && $this->isColourCodeInSku($kod, $sku)) {
+            // Sam kod koloru z pełnego kodu producenta w SKU — kodem wyrobu jest całe SKU. Bez
+            // catalogCodeFromIdentity: to ono sklejało „TEGRO 250 3021 S3” z nazwy.
+            $kod = trim($sku);
+        } elseif ($kod !== null && $this->codeConflictsWithIdentity($kod, $name, $sku)) {
             $kod = $this->catalogCodeFromIdentity($name, $sku);
         }
         $out['kod_producenta'] = $kod
@@ -203,6 +299,23 @@ final class BhpAttributeNormalizer
         $out['material'] = $primary;
         $out['materialy'] = $materials;
 
+        // Klasa obuwia według hierarchii źródeł, zanim zbierzemy normy i oznaczenia — od niej zależy, które
+        // wpisy z tabelki dostawcy i z payloadu opisują ten wyrób, a które jego wariant o innej klasie.
+        $identityText = trim($name.' '.$sku.' '.($context['norms_column'] ?? ''));
+        $shopFields = (string) ($context['shop_fields'] ?? '');
+        $priceListKlasa = $this->nullableString($priceList['klasa_ochrony'] ?? null);
+        $rawKlasa = $this->nullableString($raw['klasa_ochrony'] ?? null);
+        // Obuwie tylko ze słowa obuwniczego w tekście albo z jawnej kategorii payloadu — sama wyliczona kategoria
+        // nie wystarcza: statyw „TM 14-SB” czy instrukcja „OB 750 A” dostawały klasę obuwia z nazwy.
+        $footwear = $this->mentionsFootwear($this->normalizeText($katText))
+            || $this->normalizeKategoria($this->nullableString($raw['kategoria_bhp'] ?? null)) === 'obuwie';
+        $identitySources = $this->footwearIdentitySources($name, $sku, (string) ($context['norms_column'] ?? ''), $shopFields);
+        $footwearClass = $this->footwearClassByHierarchy($priceListKlasa, $identitySources, $rawKlasa, $footwear);
+        $classTexts = [[$priceListKlasa ?? '', self::FOOTWEAR_CLASS_RE], ...$identitySources];
+        $trustedRecord = $footwearClass['trusted'] && $footwearClass['klasa'] !== null
+            ? $this->cardFootwearClassRecord($footwearClass['klasa'], $classTexts)
+            : null;
+
         $manufacturer = is_array($context['manufacturer'] ?? null) ? $context['manufacturer'] : [];
         $fromManufacturer = $this->stringList($manufacturer['normy'] ?? null);
         // Normę, którą karta producenta podaje wprost, opisujemy JEGO zapisem: wariant tej samej normy
@@ -222,8 +335,14 @@ final class BhpAttributeNormalizer
             array_merge(
                 // normy z cennika idą pierwsze — przy skracaniu listy zostają te z dokumentu producenta
                 $this->splitNormsColumn((string) ($priceList['normy'] ?? '')),
-                $this->stringList($raw['normy_en'] ?? null),
-                $this->stringList($context['norms'] ?? null),
+                // Payload, odczyt z tekstów i tabelka dostawcy mogą opisywać wariant o innej klasie („ARMEN 900
+                // 6060 O1 FO” z normą „EN ISO 20345:2011 S2 CI SRC” ze sklepu) — taki zapis nie trafia do norm.
+                // Cennik i kolumna norm to tożsamość wyrobu, więc ich nie przesiewamy.
+                $this->withoutForeignFootwearNorms(array_merge(
+                    $this->stringList($raw['normy_en'] ?? null),
+                    $this->stringList($context['norms'] ?? null),
+                    $this->detectNormsFromText($shopFields),
+                ), $trustedRecord),
                 $this->splitNormsColumn($context['norms_column'] ?? ''),
             ),
             static function (string $norm) use ($manufacturerFamilies): bool {
@@ -238,32 +357,46 @@ final class BhpAttributeNormalizer
         ))));
         $out['normy_en'] = $normy;
 
-        $descBlob = implode(' ', array_merge(
+        // Tożsamość i tabelka dostawcy idą pierwsze: klasę i poziomy czytamy do pierwszego trafienia, a pierwsze
+        // ma być z opisu TEGO wyrobu, nie ze specyfikacji zebranej ze sklepów.
+        $blobParts = array_merge(
+            [$name, (string) ($context['norms_column'] ?? ''), $shopFields],
             $normy,
             $this->stringList($context['specs'] ?? null),
             $this->stringList($context['certificates'] ?? null),
             $this->stringList($context['use_cases'] ?? null),
-            // Wiersze z karty dostawcy obok opisu — klasa ochrony, poziomy EN 388 i oznaczenia bywają tylko tam.
-            [
-                $context['name'] ?? '',
-                $context['description'] ?? '',
-                $context['shop_fields'] ?? '',
-                $context['norms_column'] ?? '',
-            ],
-        ));
-
-        // Klasa z cennika dostawcy bije to, co model wyczytał ze stron: cennik jest dokumentem producenta
-        // z datą obowiązywania, a strona sklepu bywa cudzą kartą. Doprecyzowanie zapisanej klasy bierzemy
-        // wyłącznie z tożsamości wyrobu (nazwa, kod, kolumna norm), nigdy z prozy opisu — zdanie „dostępny
-        // też w wersji S1P” nadałoby karcie wkładkę antyprzebiciową, której ten but nie ma.
-        $parsed = $this->parseKlasaAndMarkings(
-            $this->nullableString($priceList['klasa_ochrony'] ?? null)
-                ?? $this->nullableString($raw['klasa_ochrony'] ?? null),
-            $descBlob,
-            trim(($context['name'] ?? '').' '.($context['sku'] ?? '').' '.($context['norms_column'] ?? ''))
+            [(string) ($context['description'] ?? '')],
         );
-        $out['klasa_ochrony'] = $parsed['klasa'];
-        $out['oznaczenia'] = $parsed['oznaczenia'];
+        $descBlob = implode(' ', $blobParts);
+
+        // Klasa z cennika bije nazwę, nazwa bije tabelkę dostawcy, a tabelka payload wzbogacania — patrz
+        // footwearClassByHierarchy. Klasy nieobuwnicze (FFP, kat. ŚOI) czytamy jak dotąd: FFP z zapisanego pola,
+        // reszta z tekstu karty, który zaczyna się od tożsamości.
+        $explicitKlasa = $priceListKlasa ?? $rawKlasa;
+        // U obuwia bez klasy w hierarchii nie czytamy luźnym wzorcem SKU ani tabelki dostawcy — te źródła hierarchia
+        // już przeczytała ściśle, a luźno „BRS-s1-42” dawałby S1, a „Indeks: OB-4512” klasę OB. Nazwa i kolumna
+        // norm stoją w descBlob.
+        $fallbackBlob = $footwear
+            ? implode(' ', array_diff_key($blobParts, [2 => true]))
+            : $identityText.' '.$descBlob;
+        $out['klasa_ochrony'] = $this->extractFfpClass($explicitKlasa ?? '')
+            ?? $footwearClass['klasa']
+            ?? $this->detectKlasa(trim(($explicitKlasa ?? '').' '.$fallbackBlob));
+
+        // Oznaczenia przy klasie obuwia czytamy z tekstów pociętych na fragmenty (wpis listy, wiersz tabelki,
+        // zdanie opisu), żeby odsiać fragmenty o innej klasie — patrz segmentsOfFootwearClass.
+        if ($this->extractFootwearClass($out['klasa_ochrony'] ?? '') === null) {
+            $out['oznaczenia'] = $this->extractMarkings(trim(($priceListKlasa ?? '').' '.($rawKlasa ?? '').' '.$descBlob));
+        } else {
+            $segments = [$priceListKlasa ?? '', $rawKlasa ?? ''];
+            foreach ($blobParts as $part) {
+                array_push($segments, ...$this->textSegments($part));
+            }
+            $out['oznaczenia'] = $this->extractMarkings(implode(' ', $this->segmentsOfFootwearClass(
+                $segments,
+                $this->cardFootwearClassRecord((string) $out['klasa_ochrony'], [...$classTexts, [$rawKlasa ?? '', self::FOOTWEAR_CLASS_RE]]),
+            )));
+        }
 
         $out['rozmiar'] = $this->detectRozmiar(
             implode(' ', $this->stringList($context['specs'] ?? null)).' '.($context['description'] ?? ''),
@@ -283,8 +416,13 @@ final class BhpAttributeNormalizer
         $family = $assortment->familyFromKategoria($out['kategoria_bhp']);
         $out['typ_wyrobu'] = $this->nullableString($raw['typ_wyrobu'] ?? null)
             ?? $assortment->articleTypePreferIdentity($identity, $typeBlob, $family);
-        $out['przeznaczenie'] = $this->nullableString($raw['przeznaczenie'] ?? null)
-            ?? $assortment->purpose($typeBlob);
+        // Obuwiu zapisanego `przeznaczenie` nie czytamy: model go nie zwraca (nie ma go w schemacie odpowiedzi), więc
+        // w payloadzie leży nasze dawne wyliczenie — „electric” przy butach antystatycznych przyklejało się na
+        // zawsze, także po poprawce reguły (odrzucane w porównywarce zamienników). Innym rodzinom zostaje zapis:
+        // przeliczenie z całego tekstu dałoby kurtce ostrzegawczej „agriculture” z listy zastosowań.
+        $out['przeznaczenie'] = $family === PpeAssortment::FAMILY_FOOTWEAR
+            ? $assortment->purpose($typeBlob, $family)
+            : ($this->nullableString($raw['przeznaczenie'] ?? null) ?? $assortment->purpose($typeBlob, $family));
         $out['rodzina_materialu'] = $this->materialFamily($primary, $materials, $typeBlob);
 
         return $out;
@@ -446,46 +584,267 @@ final class BhpAttributeNormalizer
     }
 
     /**
-     * @return array{klasa: ?string, oznaczenia: list<string>}
-     */
-    private function parseKlasaAndMarkings(?string $rawKlasa, string $blob, string $identity = ''): array
-    {
-        $hay = trim(($rawKlasa ?? '').' '.$blob);
-        $oznaczenia = $this->extractMarkings($hay);
-        $klasa = $this->extractFfpClass($rawKlasa ?? '')
-            ?? $this->footwearClassFromRawAndBlob($rawKlasa ?? '', $identity)
-            ?? $this->detectKlasa($hay);
-
-        return ['klasa' => $klasa, 'oznaczenia' => $oznaczenia];
-    }
-
-    /**
-     * Klasa zapisana wcześniej w attributes bywa zdegradowana (karta „ARDEUS 350 Air 618080 S1 PL ESD”
-     * miała w payloadzie samo „S1”, bo stary parser gubił sufiks wkładki). Dlatego czytamy oba źródła
-     * i bierzemy zapis bardziej szczegółowy, ale wyłącznie w obrębie tej samej klasy: „S1” + „S1 PL” to
-     * S1PL, natomiast „S3” w polu i „O1” w tożsamości zostaje S3 — drugie źródło nie podmienia klasy na inną.
+     * Jedna hierarchia klasy obuwia: kolumna cennika → nazwa → kod (SKU) → kolumna norm → tabelka z karty
+     * dostawcy → payload wzbogacania (źródła tożsamości i tabelki: footwearIdentitySources). Klasę daje pierwsze źródło, które ją podaje; niższe mogą ją wyłącznie uszczegółowić
+     * w obrębie tej samej bazy (footwearClassBase): „S1 P” + „S1 PL” to S1PL, „S3” + „S3 L” to S3L.
      *
-     * Drugim źródłem jest tożsamość wyrobu (nazwa, kod, kolumna norm), a nie cały opis: klasa wypisana
-     * w nazwie dotyczy tego egzemplarza, klasa wspomniana w prozie może dotyczyć innego modelu.
+     * Inna baza niżej to nie fakt, tylko sprzeczność do sprawdzenia — pokazuje ją LevelChecker::cardConflicts
+     * (tabelka ARTRA „ARMEN 900 6060 O1 FO” podaje „EN ISO 20345:2011 S1 P SRC”, a empik w payloadzie
+     * „S2 CI SRC”; karta zostaje O1). Payload bywa cudzą kartą, więc liczy się dopiero, gdy wyżej wszystko
+     * milczy. Stary zapis zdegradowany przez parser („S1” zamiast „S1 PL” z nazwy) naprawia się sam, bo nazwa
+     * stoi wyżej.
+     *
+     * Klasę z tożsamości i tabelki bierzemy tylko u obuwia: „SB”, „S2” czy „O2” trafiają się w kodach innych
+     * wyrobów. Prozy opisu tu nie ma wcale — zdanie „dostępny też w wersji S1P” nadałoby karcie wkładkę
+     * antyprzebiciową, której ten but nie ma.
+     *
+     * @param  list<array{0: string, 1: string}>  $identitySources  tekst i wzorzec klasy (footwearIdentitySources)
+     * @return array{klasa: ?string, trusted: bool} trusted — klasa z cennika, tożsamości albo tabelki, nie z payloadu
      */
-    private function footwearClassFromRawAndBlob(string $rawKlasa, string $identity): ?string
-    {
-        $raw = $this->extractFootwearClass($rawKlasa);
-        if ($raw === null) {
-            return null;
+    private function footwearClassByHierarchy(
+        ?string $priceListKlasa,
+        array $identitySources,
+        ?string $rawKlasa,
+        bool $footwear,
+    ): array {
+        $fromPayload = $this->extractFootwearClass($rawKlasa ?? '');
+        $levels = [array_values(array_filter([$this->extractFootwearClass($priceListKlasa ?? '')]))];
+        foreach ($identitySources as [$text, $pattern]) {
+            $levels[] = $footwear ? $this->footwearClassesIn($text, $pattern) : [];
         }
-        if (preg_match_all(self::FOOTWEAR_CLASS_RE, $identity, $m) < 1) {
-            return $raw;
+        $payloadLevel = count($levels);
+        $levels[] = $fromPayload !== null ? [$fromPayload] : [];
+
+        $klasa = null;
+        $trusted = false;
+        foreach ($levels as $level => $classes) {
+            if ($classes !== []) {
+                $klasa = $classes[0];
+                $trusted = $level < $payloadLevel;
+                break;
+            }
         }
-        $best = $raw;
-        foreach ($m[1] as $hit) {
-            $candidate = mb_strtoupper(preg_replace('/\s+/u', '', (string) $hit) ?? (string) $hit);
-            if (mb_strlen($candidate) > mb_strlen($best) && str_starts_with($candidate, $best)) {
-                $best = $candidate;
+        if ($klasa === null) {
+            return ['klasa' => null, 'trusted' => false];
+        }
+
+        $base = $this->footwearClassBase($klasa);
+        foreach (array_merge(...$levels) as $candidate) {
+            if (mb_strlen($candidate) > mb_strlen($klasa) && $this->footwearClassBase($candidate) === $base) {
+                $klasa = $candidate;
             }
         }
 
-        return $best;
+        return ['klasa' => $klasa, 'trusted' => $trusted];
+    }
+
+    /**
+     * Źródła klasy z tożsamości wyrobu i z tabelki dostawcy, w kolejności hierarchii, każde z własnym wzorcem:
+     * nazwa jak dotąd (także małymi literami, granica: brak litery i cyfry obok), a kod, kolumna norm i tabelka
+     * tylko wielkimi literami i jako osobny wyraz (FOOTWEAR_CLASS_CODE_RE). Złączony tekst „nazwa SKU normy”
+     * czytany jednym luźnym wzorcem brał „s1” z kodu „BRS-s1-42” i bił nim prawdziwe S3.
+     *
+     * Z tabelki bierzemy tylko wiersze o normie albo klasie („norma: EN ISO 20345:2022 S1 PL FO SR”, „Klasa: S3”) —
+     * „Indeks: OB-4512” czy „Zobacz także: … S3” to nie twierdzenie o klasie tego wyrobu.
+     *
+     * @return list<array{0: string, 1: string}> tekst i wzorzec klasy
+     */
+    private function footwearIdentitySources(string $name, string $sku, string $normsColumn, string $shopFields): array
+    {
+        $tableLines = array_filter(
+            preg_split('/\R/u', $shopFields) ?: [],
+            static fn (string $line): bool => preg_match('/\bnorm\w*\s*:|2034[57]|\bklas/iu', $line) === 1,
+        );
+
+        return [
+            [$name, self::FOOTWEAR_CLASS_RE],
+            [$sku, self::FOOTWEAR_CLASS_CODE_RE],
+            [$normsColumn, self::FOOTWEAR_CLASS_CODE_RE],
+            [implode("\n", $tableLines), self::FOOTWEAR_CLASS_CODE_RE],
+        ];
+    }
+
+    /**
+     * Klasa obuwia z kodu wyrobu (SKU) — wielkimi literami i jako osobny wyraz: „ARYEL 320 Air 618080 S1 PL ESD”
+     * → S1PL, ale „BRS-s1-42” czy „SB-123” → null. Wspólne dla hierarchii klasy karty i sita stron wzbogacania
+     * (ProductSearchIdentity), żeby obie czytały kod tak samo.
+     */
+    public function footwearClassFromCode(string $sku): ?string
+    {
+        return $this->footwearClassesIn($sku, self::FOOTWEAR_CLASS_CODE_RE)[0] ?? null;
+    }
+
+    /** @return list<string> klasy obuwia z tekstu w kolejności wystąpienia, bez spacji („S1 PL” → S1PL) */
+    private function footwearClassesIn(string $text, string $pattern): array
+    {
+        if (trim($text) === '' || preg_match_all($pattern, $text, $m) < 1) {
+            return [];
+        }
+
+        return array_values(array_unique(array_map(
+            static fn (string $hit): string => mb_strtoupper(preg_replace('/\s+/u', '', $hit) ?? $hit),
+            $m[1],
+        )));
+    }
+
+    /**
+     * Zapisy klasy obuwia w tekście razem z oznaczeniami stojącymi tuż za klasą (do 3 tokenów): „EN ISO
+     * 20345:2022 S7S CI SR” → „S7S CI SR”. Oznaczenie liczy się tylko przy tokenie klasy — „Hi” z marki czy
+     * „CI” z innego zdania nie należą do zapisu klasy.
+     *
+     * @return list<string> klasa bez spacji i oznaczenia wielkimi literami („S3 WR SRC”)
+     */
+    private function footwearClassRecords(string $text, string $pattern): array
+    {
+        if (trim($text) === '' || preg_match_all($pattern, $text, $m, PREG_OFFSET_CAPTURE) < 1) {
+            return [];
+        }
+        $flags = str_ends_with($pattern, 'iu') ? 'iu' : 'u';
+        $out = [];
+        foreach ($m[1] as [$hit, $offset]) {
+            $record = mb_strtoupper(preg_replace('/\s+/u', '', $hit) ?? $hit);
+            $after = substr($text, $offset + strlen($hit));
+            if (preg_match('/^(?:[\h,]+(?:SRA|SRB|SRC|HRO|WRU|WR|CI|HI|FO|AN|NR|ESD|SR)(?![\p{L}\d])){1,3}/'.$flags, $after, $mm) === 1) {
+                $record .= ' '.mb_strtoupper(trim(preg_replace('/[\h,]+/u', ' ', $mm[0]) ?? $mm[0]));
+            }
+            $out[] = $record;
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Zapis klasy karty razem z oznaczeniami przy niej w źródłach tożsamości (cennik, nazwa/kod, tabelka):
+     * „Trzewik uvex 2 S3 WR SRC” → „S3 WR SRC”. Od oznaczeń przy klasie zależy równoważność wydań normy
+     * (sameFootwearVariantClass: S3 WR ≡ S7), więc samo „S3” by jej nie widziało. Każde źródło czytamy jego
+     * wzorcem z footwearIdentitySources — kod i tabelkę tylko wielkimi literami, jak przy samej klasie.
+     *
+     * @param  list<array{0: string, 1: string}>  $sources  tekst i wzorzec klasy
+     */
+    private function cardFootwearClassRecord(string $klasa, array $sources): string
+    {
+        $base = $this->footwearClassBase($klasa);
+        $markings = [];
+        foreach ($sources as [$text, $pattern]) {
+            foreach ($this->footwearClassRecords($text, $pattern) as $record) {
+                $parts = explode(' ', $record);
+                if ($this->footwearClassBase($parts[0]) === $base) {
+                    array_push($markings, ...array_slice($parts, 1));
+                }
+            }
+        }
+
+        return trim($klasa.' '.implode(' ', array_values(array_unique($markings))));
+    }
+
+    /**
+     * Czy zapis klasy z tekstu opisuje wariant karty: ta sama baza klasy („S1 P” = „S1PL”, „S3” = „S3L”) albo
+     * ten sam wariant po przecertyfikowaniu na wydanie 2022 („S3 WR” karty = „S7S” ze strony producenta).
+     * Brak WR przy „S3” w tekście nie przeczy karcie „S3 WR” — brak oznaczenia to nie dowód.
+     */
+    private function footwearRecordFitsCard(string $record, string $cardRecord): bool
+    {
+        $class = $this->extractFootwearClass($record);
+        $cardClass = $this->extractFootwearClass($cardRecord);
+        if ($class === null || $cardClass === null) {
+            return false;
+        }
+
+        return $this->footwearClassBase($class) === $this->footwearClassBase($cardClass)
+            || $this->sameFootwearVariantClass($cardRecord, $record);
+    }
+
+    /**
+     * Wpisy norm obuwia, które opisują wariant o innej klasie niż karta. Zapis z klasą („EN ISO 20345:2011
+     * S2 CI SRC”) odpada, gdy żaden podany w nim zapis klasy nie pasuje do karty (footwearRecordFitsCard);
+     * zapis bez klasy odpada tylko przy sprzecznej rodzinie — EN ISO 20345 to obuwie S (bezpieczne), EN ISO
+     * 20347 to O (zawodowe). Wpis wymieniający obie normy zostaje: to lista, nie twierdzenie o tym wyrobie.
+     * Klasa rozstrzyga przed numerem normy, bo to ona jest twierdzeniem o wyrobie (numer normy model myli
+     * częściej niż klasę).
+     *
+     * @param  list<string>  $norms
+     * @param  ?string  $cardRecord  zapis klasy karty z oznaczeniami (cardFootwearClassRecord)
+     * @return list<string>
+     */
+    private function withoutForeignFootwearNorms(array $norms, ?string $cardRecord): array
+    {
+        $cardClass = $cardRecord === null ? null : $this->extractFootwearClass($cardRecord);
+        if ($cardRecord === null || $cardClass === null) {
+            return $norms;
+        }
+        $family = $this->footwearClassBase($cardClass)[0];
+
+        return array_values(array_filter($norms, function (string $norm) use ($cardRecord, $family): bool {
+            // także okruch „klasa S3)” z listy norm pociętej przez model — klasa bez numeru normy
+            $records = $this->footwearClassRecords($norm, self::FOOTWEAR_CLASS_UPPER_RE);
+            if ($records !== []) {
+                foreach ($records as $record) {
+                    if ($this->footwearRecordFitsCard($record, $cardRecord)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            $safety = preg_match('/20345/u', $norm) === 1;
+            $occupational = preg_match('/20347/u', $norm) === 1;
+            if ($safety === $occupational) {
+                return true;
+            }
+
+            return $family === 'S' ? $safety : $occupational;
+        }));
+    }
+
+    /**
+     * Fragmenty, z których wolno czytać oznaczenia (FO, CI, SRC, ESD…) karty o danej klasie obuwia: fragment
+     * podający klasę innego wariantu opisuje inny wyrób — „S2 CI SRC” z empiku przy sandale O1 dałby mu
+     * izolację od zimna i antypoślizg SRC, których jego karta nie podaje, a natare „O1 FO ESD” przy „S1 P
+     * ESD” — FO. Oznaczenie należy do zapisu klasy konkretnego wyrobu, więc wędruje razem z nim. Fragment bez
+     * klasy zostaje (brak klasy nie dowodzi, że to inny wyrób), a zapis po przecertyfikowaniu („S7S CI SR”
+     * przy „S3 WR”) — też, bo to ten sam but.
+     *
+     * @param  list<string>  $segments
+     * @param  string  $cardRecord  zapis klasy karty z oznaczeniami (cardFootwearClassRecord)
+     * @return list<string>
+     */
+    private function segmentsOfFootwearClass(array $segments, string $cardRecord): array
+    {
+        return array_values(array_filter($segments, function (string $segment) use ($cardRecord): bool {
+            $records = $this->footwearClassRecords($segment, self::FOOTWEAR_CLASS_UPPER_RE);
+            if ($records === []) {
+                return true;
+            }
+            foreach ($records as $record) {
+                if ($this->footwearRecordFitsCard($record, $cardRecord)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }));
+    }
+
+    /** @return list<string> wiersze i zdania tekstu — granica fragmentu przy przesiewie oznaczeń */
+    private function textSegments(string $text): array
+    {
+        if (trim($text) === '') {
+            return [];
+        }
+
+        return array_values(array_filter(
+            array_map('trim', preg_split('/\R+|(?<=[.;!?])\s+/u', $text) ?: []),
+            static fn (string $s): bool => $s !== '',
+        ));
+    }
+
+    /** Słowa obuwia w tekście po normalizeText — wspólne dla odczytu klasy z tekstu i z nazwy. */
+    private function mentionsFootwear(string $normalized): bool
+    {
+        return preg_match(
+            '/\b(trzewik|sztyblet|polbut|mokasyn|sandal|obuwie|buty|footwear|podeszw|podnosek|kalosz|purofort)\w*/u',
+            $normalized
+        ) === 1;
     }
 
     /**
@@ -578,8 +937,46 @@ final class BhpAttributeNormalizer
         return [$base, ...(self::FOOTWEAR_SATISFIED_BY[$base] ?? [])];
     }
 
-    /** „S3 L” / „S3L” → S3: typ wkładki odcinamy, bo hierarchia klas go nie dotyczy. */
-    private function footwearClassBase(string $class): string
+    /**
+     * Czy dwa zapisy klasy obuwia opisują ten sam wariant (zapis może nieść oznaczenia: „S3 WR SRC”, „S7S CI SR”).
+     * Porównanie po bazie klasy, a do tego równoważność wydań normy: wodoodporność całego wyrobu, w wydaniu 2011
+     * oznaczenie WR przy S3/S2 (O3/O2), w wydaniu 2022 weszła do klasy jako S7/S6 (O7/O6) — „uvex 2 S3 WR SRC”
+     * przecertyfikowany na „S7L” to ten sam but.
+     */
+    public function sameFootwearVariantClass(string $a, string $b): bool
+    {
+        $keyA = $this->footwearVariantKey($a);
+        $keyB = $this->footwearVariantKey($b);
+
+        return $keyA !== null && $keyA === $keyB;
+    }
+
+    /** Baza klasy z pierwszego zapisu klasy w tekście, z WR przy S2/S3/O2/O3 podniesionym do S6/S7/O6/O7. */
+    private function footwearVariantKey(string $text): ?string
+    {
+        $class = $this->extractFootwearClass($text);
+        if ($class === null) {
+            return null;
+        }
+        $base = $this->footwearClassBase($class);
+        if (preg_match('/(?<![\p{L}\d])WR(?![\p{L}\d])/u', mb_strtoupper($text)) === 1) {
+            $base = match ($base) {
+                'S2' => 'S6',
+                'S3' => 'S7',
+                'O2' => 'O6',
+                'O3' => 'O7',
+                default => $base,
+            };
+        }
+
+        return $base;
+    }
+
+    /**
+     * „S3 L” / „S3L” → S3: typ wkładki odcinamy, bo hierarchia klas go nie dotyczy. Publiczne, bo tak samo
+     * porównuje klasę sito stron wzbogacania i audyt tożsamości obuwia — „S1 P” i „S1PL” to jeden wyrób.
+     */
+    public function footwearClassBase(string $class): string
     {
         $c = mb_strtoupper(preg_replace('/\s+/u', '', $class) ?? $class);
 
@@ -791,11 +1188,7 @@ final class BhpAttributeNormalizer
 
         $footwearClass = $this->extractFootwearClass($text);
         if ($footwearClass !== null) {
-            $footwear = preg_match(
-                '/\b(trzewik|sztyblet|polbut|mokasyn|sandal|obuwie|buty|footwear|podeszw|podnosek|kalosz|purofort)\w*/u',
-                $norm
-            ) === 1;
-            if ($footwear && ! $respiratory) {
+            if ($this->mentionsFootwear($norm) && ! $respiratory) {
                 return $footwearClass;
             }
         }
@@ -956,6 +1349,42 @@ final class BhpAttributeNormalizer
         }
 
         return array_intersect($idPairs, $kodPairs) === [];
+    }
+
+    /**
+     * Sam numer, który w SKU stoi osobno ZA parą model–numer, to kod koloru albo wariantu, a pełnym kodem
+     * producenta jest SKU: ARTRA „ARYEL 320 Air 618080 S1 PL ESD” (SKU = nazwa) z kodem „618080” ze sklepu
+     * („Kod produktu: 618080”). Rozstrzyga wyłącznie SKU — sama nazwa tego nie potwierdza: „Trzewik Tegro 250
+     * 3021 S3 SRC” z SKU „TG250-42” ma kod 3021, a „Rękawice uvex unidur 6648 60942” z SKU 6094209 kod 60942.
+     * Numer równy numerowi pary („ARGON 8229” i kod 8229) to kod modelu, nie koloru.
+     */
+    private function isColourCodeInSku(string $kod, string $sku): bool
+    {
+        $kod = trim($kod);
+        if (preg_match('/^\d{4,}$/u', $kod) !== 1 || trim($sku) === '') {
+            return false;
+        }
+        $kodAt = preg_match('/(?<![\p{L}\d])'.preg_quote($kod, '/').'(?![\p{L}\d])/u', $sku, $m, PREG_OFFSET_CAPTURE) === 1
+            ? (int) $m[0][1]
+            : null;
+        if ($kodAt === null) {
+            return false;
+        }
+        foreach ((new ProductModelFuzzy)->catalogModelWordDigitPairs($sku) as [$word, $num]) {
+            if ($num === $kod) {
+                continue;
+            }
+            if (preg_match(
+                '/(?<![\p{L}\d])'.preg_quote($word, '/').'\h+'.preg_quote($num, '/').'(?![\p{L}\d])/iu',
+                $sku,
+                $pm,
+                PREG_OFFSET_CAPTURE
+            ) === 1 && (int) $pm[0][1] < $kodAt) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function catalogCodeFromIdentity(string $name, string $sku): ?string

@@ -479,6 +479,356 @@ final class BhpAttributeNormalizerTest extends TestCase
         );
     }
 
+    /** Tabelka z karty ARTRA — w produkcji identyczna poza wierszem normy (i kodem koloru w cholewce). */
+    private static function artraShopFields(string $normLine): string
+    {
+        return "Parametry\ncholewka: wegańska RACYA SKINYUM™ – Zacznijcie tutaj.\npodszewka: DRYUM™\n"
+            ."podeszwa: GRIPPER PU.2D z technologią LEVITARYUM™\n{$normLine}\nWaga: 430 gramów dla rozmiaru 42\n"
+            ."Rozmiary: EU 35, EU 36, EU 37\nRozmiar EU 35: 21,8";
+    }
+
+    /**
+     * Karta 9577 z produkcji (22.09.2026): cennik i nazwa mówią O1, empik w payloadzie „S2 CI SRC”, a tabelka
+     * ARTRA (zamieniona z wariantem S1 P) — „EN ISO 20345:2011 S1 P SRC”. Karta zostaje O1, a zapisy cudzej
+     * klasy nie wchodzą ani do norm, ani do oznaczeń.
+     */
+    public function test_class_from_price_list_and_name_beats_payload_and_supplier_table_of_another_variant(): void
+    {
+        $product = new Product([
+            'sku' => 'ARMEN 900 6060 O1 FO',
+            'name' => 'ARMEN 900 6060 O1 FO',
+            'category' => 'Sklep - kategorie / Obuwie robocze i ochronne / Sandały ochronne',
+            'description' => 'Konstrukcja obuwia ARELAX® zapewnia przestrzeń dla wszystkich palców i swobodę ruchu.',
+            'shop_fields_summary' => self::artraShopFields('norma: EN ISO 20345:2011 S1 P SRC'),
+            'price_list_attributes' => ['klasa_ochrony' => 'O1', 'rozmiar' => '35-48', 'typ_wyrobu' => 'sandały'],
+            'enrichment_payload' => [
+                'norms' => ['EN ISO 20345:2011 S2 CI SRC'],
+                'specs' => ['Kod producenta: ARMEN 900 6060 O1 FO', 'Norma: EN ISO 20345:2011 S2 CI SRC'],
+                'attributes' => [
+                    'kategoria_bhp' => 'obuwie',
+                    'klasa_ochrony' => 'S2',
+                    'normy_en' => ['EN ISO 20345:2011', 'EN ISO 20345:2011 S2 CI SRC'],
+                    'oznaczenia' => ['CI', 'SRC', 'FO'],
+                    'przeznaczenie' => 'electric',
+                ],
+            ],
+        ]);
+
+        $attrs = (new BhpAttributeNormalizer)->forProduct($product);
+
+        $this->assertSame('O1', $attrs['klasa_ochrony']);
+        $this->assertNotContains('EN ISO 20345:2011 S2 CI SRC', $attrs['normy_en']);
+        // EN ISO 20345 to obuwie S — przy klasie O1 goły zapis z tabelki też nie jest normą tego wyrobu
+        foreach ($attrs['normy_en'] as $norm) {
+            $this->assertStringNotContainsString('20345', $norm);
+        }
+        $this->assertSame(['FO'], $attrs['oznaczenia'], 'CI i SRC należą do zapisu klasy S2 / S1 P, nie do tej karty');
+        $this->assertNull($attrs['przeznaczenie'], 'zapisane wyliczenie „electric” nie jest czytane z payloadu');
+    }
+
+    /** Karta 9524: payload pusty, klasa i norma są tylko w tabelce dostawcy. */
+    public function test_supplier_table_gives_class_and_norm_when_payload_is_empty(): void
+    {
+        $product = new Product([
+            'sku' => 'ARMEN 9003 2360 S1',
+            'name' => 'ARMEN 9003 2360 S1',
+            'category' => 'Sklep - kategorie / Obuwie robocze i ochronne / Sandały ochronne',
+            'shop_fields_summary' => self::artraShopFields('norma: EN ISO 20345:2022 S1 FO SR'),
+            'enrichment_payload' => ['attributes' => ['kategoria_bhp' => 'obuwie', 'klasa_ochrony' => null]],
+        ]);
+
+        $attrs = (new BhpAttributeNormalizer)->forProduct($product);
+
+        $this->assertSame('S1', $attrs['klasa_ochrony']);
+        $this->assertSame(['EN ISO 20345:2022'], $attrs['normy_en']);
+        $this->assertContains('FO', $attrs['oznaczenia']);
+        $this->assertContains('SR', $attrs['oznaczenia']);
+
+        // Ta sama tabelka w ścieżce wzbogacania (normalize z kontekstem jak w ProductEnrichmentService).
+        $enriched = (new BhpAttributeNormalizer)->normalize(null, [
+            'name' => 'ARMEN 9003',
+            'category' => 'Obuwie robocze i ochronne',
+            'shop_fields' => self::artraShopFields('norma: EN ISO 20345:2022 S1 FO SR'),
+        ]);
+        $this->assertSame('S1', $enriched['klasa_ochrony'], 'nazwa milczy, więc klasę daje tabelka dostawcy');
+        $this->assertSame(['EN ISO 20345:2022'], $enriched['normy_en']);
+    }
+
+    /** Tabelka dostawcy uszczegóławia klasę z nazwy tylko w obrębie tej samej bazy. */
+    public function test_supplier_table_only_refines_the_class_from_the_name(): void
+    {
+        $n = new BhpAttributeNormalizer;
+        $refined = $n->normalize(['kategoria_bhp' => 'obuwie'], [
+            'name' => 'ARMEN 9007 6660 S1 P',
+            'shop_fields' => 'norma: EN ISO 20345:2022 S1 PL FO SR',
+        ]);
+        $this->assertSame('S1PL', $refined['klasa_ochrony']);
+
+        $other = $n->normalize(['kategoria_bhp' => 'obuwie'], [
+            'name' => 'ARMEN 900 6060 O1 FO',
+            'shop_fields' => 'norma: EN ISO 20345:2011 S1 P SRC',
+        ]);
+        $this->assertSame('O1', $other['klasa_ochrony'], 'inna baza w tabelce to sprzeczność do sprawdzenia, nie fakt');
+    }
+
+    /**
+     * Nazwa, SKU i kolumna norm to trzy kolejne źródła klasy; SKU, kolumnę norm i tabelkę czytamy tylko wielkimi
+     * literami i jako osobny wyraz. Złączony tekst czytany luźnym wzorcem brał „s1” z kodu „BRS-s1-42” (i przesiewał
+     * nim prawdziwe normy S3), a z tabelki „Indeks: OB-4512” klasę OB.
+     */
+    public function test_class_from_sku_norms_column_and_table_needs_a_standalone_uppercase_record(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $sku = $n->normalize(
+            ['kategoria_bhp' => 'obuwie', 'klasa_ochrony' => 'S3', 'normy_en' => ['EN ISO 20345:2011 S3 SRC']],
+            ['name' => 'Trzewik Reis BRS', 'sku' => 'BRS-s1-42']
+        );
+        $this->assertSame('S3', $sku['klasa_ochrony']);
+        $this->assertSame(['EN ISO 20345:2011 S3 SRC'], $sku['normy_en']);
+
+        $index = $n->normalize(['kategoria_bhp' => 'obuwie'], [
+            'name' => 'Trzewik Polstar BRYES',
+            'sku' => 'BRYES',
+            'shop_fields' => "Indeks: OB-4512\nKolor: czarny",
+        ]);
+        $this->assertNull($index['klasa_ochrony']);
+
+        $table = $n->normalize(['kategoria_bhp' => 'obuwie'], [
+            'name' => 'Półbuty ARTRA ARYEL 320',
+            'sku' => 'AR-320',
+            'shop_fields' => "podnosek: kompozytowy\nnorma: EN ISO 20345:2022 S1 PL FO SR\nIndeks: OB-4512",
+        ]);
+        $this->assertSame('S1PL', $table['klasa_ochrony']);
+
+        $artraSku = $n->normalize(['kategoria_bhp' => 'obuwie'], [
+            'name' => 'Półbuty ARTRA ARYEL 320',
+            'sku' => 'ARYEL 320 Air 618080 S1 PL ESD',
+        ]);
+        $this->assertSame('S1PL', $artraSku['klasa_ochrony']);
+
+        $normsColumn = $n->normalize(['kategoria_bhp' => 'obuwie'], [
+            'name' => 'Trzewik roboczy X',
+            'sku' => 'X-1',
+            'norms_column' => 'EN ISO 20345 S3 SRC',
+        ]);
+        $this->assertSame('S3', $normsColumn['klasa_ochrony']);
+
+        $this->assertSame('S1PL', $n->footwearClassFromCode('ARYEL 320 Air 618080 S1 PL ESD'));
+        $this->assertSame('S3', $n->footwearClassFromCode('X (S3)'));
+        $this->assertNull($n->footwearClassFromCode('BRS-s1-42'));
+        $this->assertNull($n->footwearClassFromCode('SB-123'));
+        $this->assertNull($n->footwearClassFromCode('BRS s1 42'));
+        $this->assertNull($n->footwearClassFromCode('G3070/S3'));
+    }
+
+    /** Karta 9495: nazwa „S1 P ESD”, a payload ze strony natare dla wariantu „O1 FO ESD”. */
+    public function test_class_in_the_name_beats_payload_class_of_another_family(): void
+    {
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            ['kategoria_bhp' => 'obuwie', 'klasa_ochrony' => 'O1', 'oznaczenia' => ['FO', 'ESD']],
+            [
+                'name' => 'ARCASIO 732 616560 S1 P ESD',
+                'sku' => 'ARCASIO 732 616560 S1 P ESD',
+                'category' => 'Półbuty ochronne',
+                'specs' => ['Kod produktu: ARCASIO 732 616560', 'Klasa ochrony: O1 FO ESD'],
+                'shop_fields' => "podnosek: stalowy LIBERYUM™\nnorma: EN ISO 20345:2011 S1 P SRC\nnorma: ESD według EN IEC 61340-4-3:2018",
+            ]
+        );
+
+        $this->assertSame('S1P', $attrs['klasa_ochrony']);
+        $this->assertContains('ESD', $attrs['oznaczenia']);
+        $this->assertContains('SRC', $attrs['oznaczenia']);
+        $this->assertNotContains('FO', $attrs['oznaczenia'], 'FO przyszło z zapisu klasy O1 cudzej strony');
+    }
+
+    /** Karta 9433: cennik „S1 PL”, nazwa „S1 PL ESD”. */
+    public function test_price_list_class_with_insert_suffix(): void
+    {
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            ['kategoria_bhp' => 'obuwie', 'klasa_ochrony' => 'S1PL'],
+            [
+                'name' => 'AROX 7333 641460 S1 PL ESD',
+                'sku' => 'AROX 7333 641460 S1 PL ESD',
+                'price_list' => ['klasa_ochrony' => 'S1 PL'],
+                'norms' => ['EN ISO 20345:2022 S1 PL FO SR', 'EN IEC 61340-4-3:2018'],
+            ]
+        );
+
+        $this->assertSame('S1PL', $attrs['klasa_ochrony']);
+        $this->assertContains('EN ISO 20345:2022 S1 PL FO SR', $attrs['normy_en']);
+        $this->assertSame(['ESD', 'FO', 'SR'], $attrs['oznaczenia']);
+    }
+
+    /**
+     * Karta 9463: sklep dał normę wariantu S3L przy półbucie S1 PL i sam kod koloru jako kod producenta.
+     * Pełnym kodem producenta jest SKU ARTRY (model, kod koloru i klasa) — kod koloru to tylko jego część.
+     */
+    public function test_norm_with_another_class_base_and_colour_code_are_dropped(): void
+    {
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            ['kategoria_bhp' => 'obuwie', 'kod_producenta' => '618080', 'normy_en' => ['EN ISO 20345:2022 S3L FO SR']],
+            [
+                'name' => 'ARYEL 320 Air 618080 S1 PL ESD',
+                'sku' => 'ARYEL 320 Air 618080 S1 PL ESD',
+                'price_list' => ['klasa_ochrony' => 'S1 PL'],
+                'norms' => ['EN ISO 20345:2022 S3L FO SR', 'EN IEC 61340-4-3:2018 (ESD)'],
+            ]
+        );
+
+        $this->assertSame('S1PL', $attrs['klasa_ochrony']);
+        $this->assertSame(['EN IEC 61340-4-3:2018 (ESD)'], $attrs['normy_en']);
+        $this->assertSame('ARYEL 320 Air 618080 S1 PL ESD', $attrs['kod_producenta']);
+    }
+
+    public function test_purpose_electric_for_insulating_footwear_and_en_1149_apparel_only(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertNull($n->normalize(['kategoria_bhp' => 'obuwie', 'przeznaczenie' => 'electric'], [
+            'name' => 'Półbuty ochronne S1 ESD',
+            'description' => 'Podeszwa antystatyczna, obuwie ESD wg EN IEC 61340-4-3.',
+        ])['przeznaczenie']);
+        $this->assertSame('electric', $n->normalize(['kategoria_bhp' => 'obuwie'], [
+            'name' => 'Półbuty elektroizolacyjne',
+            'norms' => ['EN 50321:2018'],
+        ])['przeznaczenie']);
+        $this->assertSame('electric', $n->normalize(['kategoria_bhp' => 'odziez'], [
+            'name' => 'Kurtka antystatyczna',
+            'norms' => ['EN 1149-5'],
+        ])['przeznaczenie']);
+    }
+
+    public function test_numeric_code_equal_to_sku_or_model_number_stays(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame('618080', $n->normalize(
+            ['kod_producenta' => '618080'],
+            ['name' => 'ARYEL 320 Air 618080 S1 PL ESD', 'sku' => '618080']
+        )['kod_producenta'], 'kod równy SKU to kod wyrobu');
+        $this->assertSame('9322', $n->normalize(
+            ['kod_producenta' => '9322'],
+            ['name' => 'Półmaska Aura 9322', 'sku' => '9322+']
+        )['kod_producenta']);
+        $this->assertSame('4011', $n->normalize(
+            ['kod_producenta' => '4011'],
+            ['name' => 'Rękawice nitrylowe 4011 Powerflex', 'sku' => 'PF-4011']
+        )['kod_producenta'], 'bez pary model–numer przed kodem nie ma czego uznać za model');
+    }
+
+    /**
+     * Kod koloru rozpoznajemy tylko po SKU, które niesie jednocześnie parę modelu i ten numer osobno — wtedy
+     * kodem producenta jest całe SKU. Rękawica uvex kończy nazwę kodem wyrobu (SKU 6094209 to kod z rozmiarem)
+     * — przegląd 22.09.2026: kod zamieniał się w „UNIDUR 6648”; Tegro z SKU bez pary modelu dawało kod
+     * sklejony z nazwy „TEGRO 250 3021 S3”.
+     */
+    public function test_numeric_code_after_model_stays_without_footwear_class_behind_it(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame('60942', $n->normalize(
+            ['kod_producenta' => '60942', 'kategoria_bhp' => 'rekawice'],
+            ['name' => 'Rękawice uvex unidur 6648 60942', 'sku' => '6094209']
+        )['kod_producenta']);
+        $this->assertSame('ARYEL 320 618080 S1PL ESD', $n->normalize(
+            ['kod_producenta' => '618080', 'kategoria_bhp' => 'obuwie'],
+            ['name' => 'ARYEL 320 Air 618080 S1 PL ESD', 'sku' => 'ARYEL 320 618080 S1PL ESD']
+        )['kod_producenta'], 'SKU niesie model i kod barwy — to pełny kod producenta, a 618080 tylko jego część');
+        $this->assertSame('3021', $n->normalize(
+            ['kod_producenta' => '3021', 'kategoria_bhp' => 'obuwie'],
+            ['name' => 'Trzewik Tegro 250 3021 S3 SRC', 'sku' => 'TG250-42']
+        )['kod_producenta'], 'SKU bez pary modelu nie potwierdza kodu barwy');
+    }
+
+    /**
+     * Przecertyfikowanie na wydanie 2022: „uvex 2 S3 WR SRC” to dziś „S7S” (S7 = S3 + wodoodporność całego
+     * wyrobu). Norma ze strony producenta i jej oznaczenia zostają przy karcie; norma innej klasy — nie.
+     */
+    public function test_recertified_class_norm_stays_with_markings(): void
+    {
+        $attrs = (new BhpAttributeNormalizer)->normalize(
+            ['kategoria_bhp' => 'obuwie', 'normy_en' => ['EN ISO 20345:2022 S7S CI SR', 'EN ISO 20345:2011 S1 P SRC']],
+            ['name' => 'Trzewik uvex 2 S3 WR SRC', 'sku' => '6502242']
+        );
+
+        $this->assertSame('S3', $attrs['klasa_ochrony']);
+        $this->assertContains('EN ISO 20345:2022 S7S CI SR', $attrs['normy_en']);
+        $this->assertNotContains('EN ISO 20345:2011 S1 P SRC', $attrs['normy_en']);
+        $this->assertContains('CI', $attrs['oznaczenia']);
+        $this->assertContains('SR', $attrs['oznaczenia']);
+        $this->assertContains('WR', $attrs['oznaczenia']);
+
+        // Bez WR przy klasie karty S7 to inny wariant — przesiew zostaje.
+        $plain = (new BhpAttributeNormalizer)->normalize(
+            ['kategoria_bhp' => 'obuwie', 'normy_en' => ['EN ISO 20345:2022 S7S CI SR']],
+            ['name' => 'Trzewik uvex 2 S3 SRC', 'sku' => '6502243']
+        );
+        $this->assertSame([], $plain['normy_en']);
+        $this->assertNotContains('CI', $plain['oznaczenia']);
+    }
+
+    /**
+     * Normy na karcie i na sklepie to normy zapisane i z tabelki/cennika, nie odczyt z prozy: zdanie
+     * „nie podają zgodności z EN 407” nie może dać karcie EN 407 (przegląd 22.09.2026).
+     */
+    public function test_displayed_norms_do_not_come_from_negated_prose(): void
+    {
+        $n = new BhpAttributeNormalizer;
+        $product = new Product([
+            'sku' => '6094209',
+            'name' => 'Rękawice uvex unidur 6648 60942',
+            'category' => 'Rękawice',
+            'description' => 'Rękawice powlekane nitrylem. Źródła nie podają zgodności z EN 407 ani EN ISO 374-1.',
+            'price_list_attributes' => ['normy' => 'EN 420'],
+            'enrichment_payload' => [
+                'norms' => ['EN 388:2016 4X43C'],
+                'attributes' => ['kategoria_bhp' => 'rekawice', 'normy_en' => ['EN 388:2016 4X43C']],
+            ],
+        ]);
+
+        $shown = $n->forDisplay($product);
+
+        $this->assertSame(['EN 420', 'EN 388:2016 4X43C'], $shown['norms']);
+        $this->assertSame($shown['norms'], $shown['attributes']['normy_en']);
+        $this->assertContains('EN 407', $n->forProduct($product)['normy_en'], 'dopasowanie dalej widzi kandydata z opisu');
+    }
+
+    /**
+     * Klasa obuwia z nazwy tylko u obuwia rozpoznanego po słowie albo jawnej kategorii — statyw Protekt
+     * „TM 14-SB” i instrukcja SignProject „OB 750 A” dostawały klasę SB/OB.
+     */
+    public function test_non_footwear_card_with_class_like_token_gets_no_footwear_class(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertNull($n->normalize(null, ['sku' => 'AT016', 'name' => 'Statyw TM 14-SB', 'category' => 'Asekuracja'])['klasa_ochrony']);
+        $this->assertNull($n->normalize(null, ['sku' => 'IAC30', 'name' => 'Instrukcja IAC30 OB 750 A', 'category' => 'Znaki'])['klasa_ochrony']);
+        $this->assertSame('S1PL', $n->normalize(null, ['sku' => 'ARYA 300 671460 S1 PL', 'name' => 'sandały', 'category' => '144'])['klasa_ochrony']);
+        $this->assertSame('S3', $n->normalize(['kategoria_bhp' => 'obuwie'], ['sku' => 'X-1', 'name' => 'Model 5 S3'])['klasa_ochrony']);
+    }
+
+    /**
+     * Przeznaczenie przeliczamy na nowo tylko u obuwia („electric” przy antystatyce przyklejało się w payloadzie);
+     * innym rodzinom zostaje zapis — kurtka ostrzegawcza z „rolnictwem” na liście zastosowań zostaje hivis.
+     */
+    public function test_stored_purpose_stays_outside_footwear(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $kurtka = $n->normalize(
+            ['kategoria_bhp' => 'odziez', 'przeznaczenie' => 'hivis'],
+            ['sku' => 'K-1', 'name' => 'Kurtka ostrzegawcza', 'use_cases' => ['rolnictwo', 'drogownictwo']],
+        );
+        $this->assertSame('hivis', $kurtka['przeznaczenie']);
+
+        $but = $n->normalize(
+            ['kategoria_bhp' => 'obuwie', 'przeznaczenie' => 'electric'],
+            ['sku' => 'B-1', 'name' => 'Półbuty S1 antystatyczne'],
+        );
+        $this->assertNull($but['przeznaczenie']);
+    }
+
     /** Rok i poprawkę zwija NormCode, a sprzeczne poziomy zostają obie — tego nie wolno zgubić. */
     public function test_year_and_amendment_collapse_but_contradictory_levels_stay(): void
     {

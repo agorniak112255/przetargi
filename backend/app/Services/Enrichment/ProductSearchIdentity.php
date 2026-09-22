@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\Product;
+use App\Support\BhpAttributeNormalizer;
 use App\Support\ProductSizeVariant;
 use Illuminate\Support\Str;
 
@@ -2525,6 +2526,10 @@ final class ProductSearchIdentity
         if ($this->codeAppearsOnlyAsSlashVariant(mb_strtolower($title.' '.$text), mb_strtolower(trim((string) $product->sku)))) {
             return false;
         }
+        // Tak samo karta tego modelu obuwia w innej klasie („ARCASIO 732 616560 O1 FO ESD” przy S1 P ESD).
+        if ($this->pageNamesAnotherFootwearVariant($url, $title, $text, $product)) {
+            return false;
+        }
         if ($this->manufacturerIsThreeM($product) && $this->isOfficialThreeMProductUrl($url)) {
             $card = $url.' '.$title.' '.$text;
             if (($this->hayHasProductCode($card, $product)
@@ -3846,10 +3851,301 @@ final class ProductSearchIdentity
         $variantCard = $this->codeAppearsOnlyAsSlashVariant(mb_strtolower($title.' '.$text), mb_strtolower($sku));
         if ($sku !== '' && ! $variantCard && ! $this->looksLikeInternalSku($product)
             && $this->tokenInHay($hay, $hayCompact, mb_strtolower($sku))) {
+            return ! $this->pageNamesAnotherFootwearVariant($url, $title, $text, $product);
+        }
+
+        return $name !== '' && $this->tokenInHay($hay, $hayCompact, mb_strtolower($name))
+            && ! $this->pageNamesAnotherFootwearVariant($url, $title, $text, $product);
+    }
+
+    /**
+     * Oznaczenia wersji, które u dostawców obuwia wyróżniają osobny wyrób tego samego modelu
+     * (ARCASIO 732 616560 O1 FO ESD obok O1 FO, ARMEN … S2 CI).
+     */
+    private const FOOTWEAR_VARIANT_MARKERS = ['esd', 'ci', 'hi'];
+
+    /** ESD/CI/HI gdziekolwiek w nazwie karty — „Hi-Tec” to marka, nie oznaczenie HI. */
+    private const FOOTWEAR_VARIANT_MARKER_RE = '/(?<![\p{L}\d])(esd|ci|hi(?![\h\-_]*tec))(?![\p{L}\d])/iu';
+
+    /**
+     * Symbol, który w zapisie obuwia stoi tuż za klasą: wymagania dodatkowe (ESD, CI, HI, FO, WR, HRO, AN, M,
+     * A, E…), odporność na poślizg (SR, SRA/SRB/SRC) i typ wkładki (P, L, S) zapisany osobno.
+     */
+    private const FOOTWEAR_DESIGNATION_TOKEN = '(?:esd|ci|hi(?![\h\-_]*tec)|fo|wru?|hro|an|wpa|cr|sc|lg|sr[abc]?|p|l|s|m|a|e)';
+
+    private ?BhpAttributeNormalizer $footwearAttributes = null;
+
+    /**
+     * Strona opisuje inny wariant klasy tego samego modelu obuwia. Produkcja 22.09.2026: karta
+     * „ARCASIO 732 616560 S1 P ESD” wzięła opis z natare.pl …-arcasio-732-616560-o1-fo-esd (sandał bez podnoska),
+     * „ARYEL 320 Air 618080 S1 PL ESD” z artra.pl …-aryel-320-618080-s3l-esd, a „ARMEN 900 6060 O1 FO” z empik
+     * z normą „EN ISO 20345:2011 S2 CI SRC” — model i kod koloru te same, klasa inna, więc stare bramki przepuszczały.
+     *
+     * Sprawdzamy tylko karty obuwia z klasą w nazwie albo SKU. Klasę porównujemy z symbolami stojącymi tuż za nią:
+     * ta sama baza (BhpAttributeNormalizer::footwearClassBase: S1P = S1 PL, S3 = S3L = S3S, ale S1 ≠ S1P i S ≠ O)
+     * albo ten sam wariant po przecertyfikowaniu (sameFootwearVariantClass: „S3 WR SRC” z 2011 = „S7L” z 2022).
+     *  - adres (tylko slug wyrobu, czyli ostatni segment ścieżki — „/obuwie-s3/” to kategoria sklepu, a w
+     *    „?srsltid=AfmBO…” trafiają się litery klas) i tytuł: odrzucamy, gdy podają klasę i żadna nie jest naszą;
+     *    strona z listą wariantów, wśród których jest nasz, zostaje;
+     *  - ESD/CI/HI tuż za klasą na stronie, których nie ma w naszej nazwie, odrzucają tylko wtedy, gdy nasza
+     *    nazwa sama wypisuje za klasą wymagania dodatkowe (ARTRA: „O1 FO” obok „O1 FO ESD”, „S3L ESD” obok
+     *    „S3L CI ESD”). Nazwa z samą klasą i poślizgiem („uvex 1 G2 S1 P SRC”) to zapis cennika, który ESD
+     *    zwykle pomija — strona „S1 P SRC ESD” to wtedy ten sam wyrób. Brak oznaczenia na stronie niczego
+     *    nie dowodzi (sklepy je ucinają);
+     *  - treść: dowodem jest tylko zapis normy „EN ISO 2034x[:rrrr] <klasa>” — gdy wszystkie nazywają inny
+     *    wariant, to karta innego wyrobu; sama norma bez klasy liczy się tylko rodziną (20345 = S, 20347 = O).
+     * Adres wskazany ręcznie przez człowieka przechodzi bez sprawdzania.
+     */
+    public function pageNamesAnotherFootwearVariant(string $url, string $title, string $text, Product $product): bool
+    {
+        if ($product->isHintedShopUrl($url)) {
+            return false;
+        }
+        $card = $this->cardFootwearDesignation($product);
+        if ($card === null) {
+            return false;
+        }
+        [$records, $markers] = $card;
+        $markersDecide = array_filter($records, static fn (array $r): bool => $r['supplementary']) !== [];
+
+        foreach ([$this->footwearUrlPathHay($url), $title] as $hay) {
+            $found = $this->footwearClassesIn($hay);
+            if ($found === []) {
+                continue;
+            }
+            $ours = array_values(array_filter(
+                $found,
+                fn (array $r): bool => $this->footwearRecordIsOurs($r, $records)
+            ));
+            if ($ours === []) {
+                return true;
+            }
+            if (! $markersDecide) {
+                continue;
+            }
+            // Cudzy wyrób dopiero wtedy, gdy każdy zapis naszej klasy niesie oznaczenie, którego nie mamy.
+            $clean = array_filter(
+                $ours,
+                static fn (array $r): bool => array_diff($r['markers'], $markers) === []
+            );
+            if ($clean === []) {
+                return true;
+            }
+        }
+
+        return $this->footwearNormRecordsNameAnotherClass($text, $records);
+    }
+
+    /**
+     * Zapisy klas i oznaczenia wersji z nazwy/SKU karty obuwia; null, gdy karta nie jest obuwiem z klasą.
+     * Klasa musi stać osobno („… 616560 S1 P ESD”) — „SB-123” czy „O2” w kodzie to nie klasa.
+     *
+     * Zapisy klasy i symbole za nią czytamy z samej nazwy: sklejona z SKU („Trzewik X S3” + „A-123”) dawała
+     * „S3 A” — wymaganie dodatkowe, które odrzucało każdą stronę „S3 ESD”. SKU liczy się tylko wtedy, gdy nazwa
+     * klasy nie podaje, i to samą klasą (BhpAttributeNormalizer::footwearClassFromCode) bez symboli, więc nie
+     * włącza trybu, w którym decydują oznaczenia. Oznaczenia ESD/CI/HI gdziekolwiek (tylko łagodzą odrzucenie)
+     * bierzemy z nazwy i SKU.
+     *
+     * @return array{0: list<array{base: string, text: string, markers: list<string>, supplementary: bool}>, 1: list<string>}|null
+     */
+    private function cardFootwearDesignation(Product $product): ?array
+    {
+        $name = (string) $product->name;
+        $own = $name.' '.(string) $product->sku;
+        $normalizer = $this->footwearAttributes ??= new BhpAttributeNormalizer;
+        $nameHasClass = preg_match_all(
+            '/(?<![^\s,;(])('.BhpAttributeNormalizer::FOOTWEAR_CLASS.')(?![^\s,;)])/iu',
+            $name,
+            $m,
+            PREG_OFFSET_CAPTURE
+        ) > 0;
+        $skuClass = $nameHasClass ? null : $normalizer->footwearClassFromCode((string) $product->sku);
+        if (! $nameHasClass && $skuClass === null) {
+            return null;
+        }
+        // Rękawica, kask czy kurtka z „S2” w nazwie to nie obuwie; nazwa bez rodzaju (ARTRA:
+        // „ARCASIO 732 616560 S1 P ESD”) rozstrzyga się drzewem sklepu, a gdy i ono milczy — samą klasą.
+        $footwear = self::TYPE_STEMS['footwear'];
+        $nameTypes = $this->typeStemsInText($name);
+        if ($nameTypes !== [] && ! in_array($footwear, $nameTypes, true)) {
+            return null;
+        }
+        if ($nameTypes === [] && ! $this->skuImpliesFootwear($product)) {
+            $categoryTypes = $this->typeStemsInText((string) ($product->category ?? ''));
+            if ($categoryTypes !== [] && ! in_array($footwear, $categoryTypes, true)) {
+                return null;
+            }
+        }
+
+        $records = [];
+        if ($skuClass !== null) {
+            $records[] = [
+                'base' => $normalizer->footwearClassBase($skuClass),
+                'text' => $skuClass,
+                'markers' => [],
+                'supplementary' => false,
+            ];
+        } else {
+            foreach ($m[1] as [$class, $offset]) {
+                $records[] = $this->footwearClassRecord($name, (string) $class, (int) $offset + strlen((string) $class));
+            }
+        }
+        // Oznaczenie gdziekolwiek w nazwie wystarcza, żeby strona z nim nie była „cudza”
+        // („Półbuty ESD Protekt S1” i strona „…-s1-esd”).
+        $markers = [];
+        if (preg_match_all(self::FOOTWEAR_VARIANT_MARKER_RE, $own, $mm) > 0) {
+            foreach ($mm[1] as $marker) {
+                $markers[] = mb_strtolower((string) $marker);
+            }
+        }
+
+        return [$records, array_values(array_unique($markers))];
+    }
+
+    /**
+     * Zapisy klas obuwia w adresie albo tytule strony.
+     *
+     * @return list<array{base: string, text: string, markers: list<string>, supplementary: bool}>
+     */
+    private function footwearClassesIn(string $hay): array
+    {
+        if (trim($hay) === '' || preg_match_all(
+            '/(?<![\p{L}\d])('.BhpAttributeNormalizer::FOOTWEAR_CLASS.')(?![\p{L}\d])/iu',
+            $hay,
+            $m,
+            PREG_OFFSET_CAPTURE
+        ) < 1) {
+            return [];
+        }
+        $out = [];
+        foreach ($m[1] as [$class, $offset]) {
+            $out[] = $this->footwearClassRecord($hay, (string) $class, (int) $offset + strlen((string) $class));
+        }
+
+        return $out;
+    }
+
+    /**
+     * Klasa z symbolami stojącymi tuż za nią (do pięciu, rozdzielonych spacją, myślnikiem albo kropką):
+     * „S1 P SRC ESD”, „SB A E FO ESD”. Dalej nie patrzymy — przed klasą i za pierwszym obcym słowem stoją
+     * marka, kategoria i kod („| Hi-Tec”, „/obuwie-esd/”, „68308”), które wariantu nie opisują.
+     *
+     * @param  int  $end  przesunięcie (w bajtach) pierwszego znaku za klasą
+     * @return array{base: string, text: string, markers: list<string>, supplementary: bool}
+     */
+    private function footwearClassRecord(string $hay, string $class, int $end): array
+    {
+        $tokens = [];
+        while (count($tokens) < 5 && preg_match(
+            '/\G[\h\-_.]+('.self::FOOTWEAR_DESIGNATION_TOKEN.')(?![\p{L}\d])/iu',
+            $hay,
+            $t,
+            0,
+            $end
+        ) === 1) {
+            $tokens[] = mb_strtolower($t[1]);
+            $end += strlen($t[0]);
+        }
+        $normalizer = $this->footwearAttributes ??= new BhpAttributeNormalizer;
+
+        return [
+            'base' => $normalizer->footwearClassBase($class),
+            'text' => trim($class.' '.implode(' ', $tokens)),
+            'markers' => array_values(array_unique(array_intersect($tokens, self::FOOTWEAR_VARIANT_MARKERS))),
+            // Wymaganie dodatkowe za klasą (FO, CI, ESD, A E…) — nazwa wypisuje oznaczenia wariantu. Poślizg
+            // i typ wkładki należą do samej klasy i cennik podaje je także wtedy, gdy ESD pomija.
+            'supplementary' => array_filter(
+                $tokens,
+                static fn (string $token): bool => preg_match('/^(?:sr[abc]?|p|l|s)$/', $token) !== 1
+            ) !== [],
+        ];
+    }
+
+    /**
+     * Zapis klasy ze strony to nasz wariant: ta sama baza klasy albo ten sam wariant po zmianie wydania normy.
+     *
+     * @param  array{base: string, text: string}  $record
+     * @param  list<array{base: string, text: string}>  $card
+     */
+    private function footwearRecordIsOurs(array $record, array $card): bool
+    {
+        $normalizer = $this->footwearAttributes ??= new BhpAttributeNormalizer;
+        foreach ($card as $own) {
+            if ($own['base'] === $record['base']
+                || $normalizer->sameFootwearVariantClass($own['text'], $record['text'])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Ścieżka adresu jako tekst: tylko slug wyrobu (ostatni segment z literami, bez rozszerzenia) — wcześniejsze
+     * segmenty to kategorie sklepu („/obuwie-s3/”, „/obuwie-s1-s1p/”), nie tożsamość wyrobu. „-” i „_” to w slugach
+     * spacje, a wzorzec klasy dopuszcza między członami tylko spację („s1-p” to S1P). Bez query stringa
+     * i kotwicy — losowe identyfikatory („?srsltid=AfmBOop4Da…”) niosą przypadkowe „sb”, „o2”.
+     */
+    private function footwearUrlPathHay(string $url): string
+    {
+        $path = parse_url($url, PHP_URL_PATH);
+        if (! is_string($path)) {
+            $path = preg_replace('/[?#].*$/su', '', $url) ?? '';
+        }
+        $slug = '';
+        foreach (explode('/', rawurldecode($path)) as $segment) {
+            $segment = preg_replace('/\.[a-z]{2,5}$/iu', '', $segment) ?? $segment;
+            if (preg_match('/\p{L}/u', $segment) === 1) {
+                $slug = $segment;
+            }
+        }
+
+        return preg_replace('/[-_.,+=]+/u', ' ', $slug) ?? '';
+    }
+
+    /**
+     * Zapisy norm obuwia w treści strony nazywają wyłącznie inny wariant niż nasz.
+     *
+     * @param  list<array{base: string, text: string}>  $card
+     */
+    private function footwearNormRecordsNameAnotherClass(string $text, array $card): bool
+    {
+        if (trim($text) === '' || $card === []) {
+            return false;
+        }
+        $norm = '(?<![\p{L}\d])EN\s*ISO\s*2034([57])';
+        $year = '(?:\s*[:\/]\s*(?:19|20)\d{2})?(?:\s*\+\s*A\d+(?:\s*:\s*(?:19|20)\d{2})?)?';
+        if (preg_match_all(
+            '/'.$norm.$year.'\s*[,;:]?\s+('.BhpAttributeNormalizer::FOOTWEAR_CLASS.')(?![\p{L}\d])/iu',
+            $text,
+            $m,
+            PREG_OFFSET_CAPTURE
+        ) > 0) {
+            foreach ($m[2] as [$class, $offset]) {
+                $record = $this->footwearClassRecord($text, (string) $class, (int) $offset + strlen((string) $class));
+                if ($this->footwearRecordIsOurs($record, $card)) {
+                    return false;
+                }
+            }
+
             return true;
         }
 
-        return $name !== '' && $this->tokenInHay($hay, $hayCompact, mb_strtolower($name));
+        // Norma bez klasy: 20345 to obuwie bezpieczne (S), 20347 zawodowe (O). Dowód tylko wtedy,
+        // gdy strona zna wyłącznie normę drugiej rodziny, a nasza klasa jest z jednej rodziny.
+        $families = array_values(array_unique(array_map(
+            static fn (array $r): string => $r['base'][0],
+            $card
+        )));
+        if (count($families) !== 1 || preg_match_all('/'.$norm.'(?!\d)/iu', $text, $n) < 1) {
+            return false;
+        }
+        $pageFamilies = array_values(array_unique(array_map(
+            static fn (string $d): string => $d === '5' ? 'S' : 'O',
+            $n[1]
+        )));
+
+        return count($pageFamilies) === 1 && $pageFamilies[0] !== $families[0];
     }
 
     /**

@@ -29,7 +29,7 @@ class TenderConflictsController extends Controller
         $items = TenderItem::query()
             ->select(['id', 'tender_id', 'main_product_id', 'requirement', 'custom_name', 'match_source'])
             // kolumny, z których CardSources::fromProduct buduje fragmenty karty
-            ->with('mainProduct:id,name,norms,description,enrichment_payload,updated_at')
+            ->with('mainProduct:id,name,norms,description,enrichment_payload,price_list_attributes,manufacturer_norms,manual_specs,shop_fields_summary,updated_at')
             ->where('tender_id', $tender->id)
             ->whereNotNull('main_product_id')
             ->orderBy('line_no')

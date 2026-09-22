@@ -6,6 +6,7 @@ export type CheckSource =
   | 'name'
   | 'norms'
   | 'price_list'
+  | 'shop_fields'
   | 'specs'
   | 'features'
   | 'payload_norms'
@@ -81,6 +82,7 @@ const SOURCE_LABEL: Record<CheckSource, string> = {
   name: 'nazwa',
   norms: 'normy',
   price_list: 'cennik dostawcy',
+  shop_fields: 'tabela dostawcy',
   specs: 'specyfikacja',
   features: 'cechy',
   payload_norms: 'normy z opisu',

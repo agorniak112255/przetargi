@@ -940,8 +940,13 @@ final class PpeAssortment
 
     /**
      * Przeznaczenie / branża — spawanie ≠ rolnictwo.
+     *
+     * Obuwie jest „electric” tylko jako elektroizolacyjne (EN 50321, dielektryczne). Antystatyka i ESD to
+     * u butów zwykła cecha podeszwy — wspólna z połową katalogu — a nie przeznaczenie: sandał S1 ESD
+     * z „electric” odpadał w porównywarce zamienników przy każdym zwykłym bucie tej samej klasy. Odzież
+     * zostaje przy roles(): EN 1149 to tam realnie ubranie dla energetyki.
      */
-    public function purpose(string $text): ?string
+    public function purpose(string $text, ?string $family = null): ?string
     {
         $t = $this->normalize($text);
         if (preg_match('/\bspawal|11611|welding|welder/u', $t) === 1) {
@@ -955,6 +960,16 @@ final class PpeAssortment
         }
         if (preg_match('/\b(chemiczn|kwasow|rozpuszczaln)/u', $t) === 1) {
             return 'chemical';
+        }
+        if ($family === self::FAMILY_FOOTWEAR) {
+            // kolejność ról jak w roles(): hivis, welding, electric, heat, rain
+            $roles = array_values(array_diff($this->roles($text), ['electric']));
+            if (preg_match('/\b(elektroizol\w*|dielektr\w*|50321)/u', $t) === 1) {
+                $before = array_values(array_intersect($roles, ['hivis', 'welding']));
+                $roles = [...$before, 'electric', ...array_values(array_diff($roles, $before))];
+            }
+
+            return $roles[0] ?? null;
         }
 
         return $this->role($text);

@@ -1539,6 +1539,10 @@ final class ProductEnrichmentService
                 'name' => (string) $product->name,
                 'description' => $cacheDescription,
                 'norms_column' => (string) ($product->norms ?? ''),
+                // te same źródła co BhpAttributeNormalizer::forProduct — inaczej zapisana klasa nie zna cennika
+                // ani tabelki dostawcy i bierze ją ze strony sklepu, która bywa kartą wariantu
+                'shop_fields' => (string) ($product->shop_fields_summary ?? ''),
+                'price_list' => is_array($product->price_list_attributes) ? $product->price_list_attributes : [],
             ]
         );
         $sized = $this->applyExtractedSizes($product, $payload['attributes'], $cacheSpecs, $cacheDescription);
@@ -2631,7 +2635,7 @@ final class ProductEnrichmentService
                 if ($this->isRicherDescription($extraDesc, $description)) {
                     $description = $extraDesc;
                 }
-                $extracted = $this->mergeExtracted($extracted, $extraExtracted);
+                $extracted = $this->mergeExtracted($extracted, $extraExtracted, $product);
             }
         }
 
@@ -3416,7 +3420,7 @@ final class ProductEnrichmentService
      * @param  array<string, mixed>  $extra
      * @return array<string, mixed>
      */
-    private function mergeExtracted(array $base, array $extra): array
+    private function mergeExtracted(array $base, array $extra, ?Product $product = null): array
     {
         foreach (['features', 'specs', 'norms', 'certificates', 'materials', 'use_cases', 'image_urls', 'document_urls', 'source_urls'] as $key) {
             $a = $this->stringList($base[$key] ?? null);
@@ -3439,6 +3443,14 @@ final class ProductEnrichmentService
                     'norms' => $this->stringList($base['norms'] ?? null),
                     'specs' => $this->stringList($base['specs'] ?? null),
                     'certificates' => $this->stringList($base['certificates'] ?? null),
+                    // tożsamość wyrobu, cennik i tabelka dostawcy — bez nich klasa z drugiej tury stron
+                    // (cudzy wariant) wygrywała z klasą z nazwy
+                    'category' => (string) ($product?->category ?? ''),
+                    'sku' => (string) ($product?->sku ?? ''),
+                    'name' => (string) ($product?->name ?? ''),
+                    'norms_column' => (string) ($product?->norms ?? ''),
+                    'shop_fields' => (string) ($product?->shop_fields_summary ?? ''),
+                    'price_list' => is_array($product?->price_list_attributes) ? $product->price_list_attributes : [],
                 ]
             );
         }
@@ -4887,6 +4899,9 @@ SYS,
                 'name' => (string) $product->name,
                 'description' => $description,
                 'norms_column' => (string) ($product->norms ?? ''),
+                // te same źródła co BhpAttributeNormalizer::forProduct (cennik, tabelka dostawcy)
+                'shop_fields' => (string) ($product->shop_fields_summary ?? ''),
+                'price_list' => is_array($product->price_list_attributes) ? $product->price_list_attributes : [],
             ]
         );
         $sized = $this->applyExtractedSizes(

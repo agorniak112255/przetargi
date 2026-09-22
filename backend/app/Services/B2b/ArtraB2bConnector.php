@@ -23,8 +23,13 @@ use RuntimeException;
  *
  * Tabelki parametrów nie wklejamy do opisu: dane tabelaryczne dostawcy mają w tym projekcie własne miejsce
  * (product_shop_cards), a opis zostaje prozą karty.
+ *
+ * Opisu ze sklepu łącznik nie oddaje (B2bDatasheetOnlyDescription, decyzja użytkownika 22.09.2026): blok opisowy
+ * karty (.product-description-text) to na każdej karcie ten sam slogan „Konstrukcja obuwia ARELAX® zapewnia
+ * przestrzeń…”, a nie opis wyrobu — 22.09.2026 nadpisał opisy 171 kart. Opis karty pisze model z karty produktu
+ * PDF (pl-kp-…) i tabelki parametrów (DescribeB2bProductFromDatasheetJob).
  */
-final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDocumentSource, B2bImageGallery, B2bManufacturerSite, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldSource
+final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDatasheetOnlyDescription, B2bDocumentSource, B2bImageGallery, B2bManufacturerSite, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldSource
 {
     /** Blok parametrów szablonu sklepu: wiersz, etykieta i wartość. */
     private const SPEC_ROW_CLASS = 'product-specs__row';
@@ -32,9 +37,6 @@ final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDo
     private const SPEC_KEY_CLASS = 'product-specs__key';
 
     private const SPEC_VALUE_CLASS = 'product-specs__value';
-
-    /** Akapit opisowy o konstrukcji ARELAX i technologiach YUM — jedyna proza na karcie. */
-    private const DESCRIPTION_CLASS = 'product-description-text';
 
     private const SIZE_TABLE_CLASS = 'size-guide-drawer__table';
 
@@ -121,12 +123,13 @@ final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDo
     }
 
     /**
-     * Akapit opisowy ze strony, dosłownie. Parametrów z bloku obok nie dopisujemy — idą do product_shop_cards
-     * jako wiersze tabelki. Karta bez akapitu daje pusty opis, który niczego nie nadpisuje.
+     * Zawsze pusty: jedyna proza na stronie karty to slogan marki wspólny dla całego sklepu (patrz opis klasy),
+     * więc nie jest ani opisem wyrobu, ani źródłem dla modelu. Pusty opis tego łącznika niczego na karcie nie
+     * kasuje ani nie nadpisuje (B2bDatasheetOnlyDescription).
      */
     public function description(B2bRemoteProduct $product): string
     {
-        return (string) ($product->raw['description'] ?? '');
+        return '';
     }
 
     /**
@@ -317,7 +320,6 @@ final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDo
             variantSummary: $sizes === [] ? null : implode(', ', $sizes),
             raw: [
                 'status' => 'ok',
-                'description' => ShopifyPublicCatalog::blockText($html, self::DESCRIPTION_CLASS),
                 'specs' => ShopifyPublicCatalog::labelledRows(
                     $html,
                     self::SPEC_ROW_CLASS,
@@ -386,8 +388,9 @@ final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDo
     }
 
     /**
-     * Nazwa i rodzaj pliku po wzorcu jego nazwy. Karta produktu jest kartą techniczną (jej tekst trafia też do
-     * opisu karty), obie deklaracje to dokument dla przetargu, karta gwarancyjna jest wspólna dla całego sklepu.
+     * Nazwa i rodzaj pliku po wzorcu jego nazwy. Karta produktu jest kartą techniczną (z jej tekstu model pisze
+     * opis karty — DescribeB2bProductFromDatasheetJob), obie deklaracje to dokument dla przetargu, karta
+     * gwarancyjna jest wspólna dla całego sklepu.
      *
      * @return array{0: string, 1: string} nazwa po polsku i ProductDocument::KIND_*
      */

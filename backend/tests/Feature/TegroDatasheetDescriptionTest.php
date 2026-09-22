@@ -154,6 +154,31 @@ final class TegroDatasheetDescriptionTest extends TestCase
         $this->assertNotSame(Product::ENRICHMENT_DONE, $card->enrichment_status);
     }
 
+    public function test_rejected_description_is_retried_by_the_next_syncs_up_to_the_limit(): void
+    {
+        // poziom spoza źródeł to odpowiedź modelu, nie wada źródeł — karta nie zostaje z tekstem sklepu na zawsze
+        $this->answer['description'] = str_replace('4131A', '4544C', self::AI_TEXT);
+        $this->fakeSite();
+
+        $this->sync();
+        $this->sync();
+
+        $this->assertCount(2, $this->prompts);
+        $rejected = ((array) $this->card()->enrichment_payload)['b2b_sources_rejected'];
+        $this->assertSame(2, $rejected['attempts']);
+        $this->assertFalse($rejected['permanent']);
+
+        $this->sync();
+        $this->sync();
+
+        $this->assertCount(3, $this->prompts);
+        $card = $this->card();
+        $this->assertSame(self::SHOP_TEXT, $card->description);
+        $link = B2bProductLink::query()->where('product_id', $card->id)->orderBy('id')->firstOrFail();
+        $sheet = DescribeB2bProductFromDatasheetJob::datasheet((int) $card->id, (int) $link->b2b_account_id);
+        $this->assertNull(DescribeB2bProductFromDatasheetJob::sources($card, $link, $sheet));
+    }
+
     public function test_description_with_a_norm_edition_absent_from_the_sources_is_rejected(): void
     {
         // oba źródła podają „+A1:2018”, opis — wydanie zmiany, którego w nich nie ma

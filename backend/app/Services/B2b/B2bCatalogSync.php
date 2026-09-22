@@ -60,7 +60,9 @@ use Throwable;
  *   katalogowej: tekst sklepu zostaje w enrichment_payload.b2b_sources).
  * - łącznik B2bDescribesFromDatasheet (decyzja użytkownika 21.09.2026): po zapisie plików karty zlecamy
  *   DescribeB2bProductFromDatasheetJob — opis z opisu sklepu i karty katalogowej PDF, bez internetu; ta sama para
- *   hashy co przy tłumaczeniu; nigdy w dry-run.
+ *   hashy co przy tłumaczeniu; nigdy w dry-run. Łącznik B2bDatasheetOnlyDescription (ARTRA, 22.09.2026) opisu ze
+ *   sklepu nie oddaje: synchronizacja nie zapisuje, nie zastępuje ani nie kasuje opisu jego kart, a job pisze opis
+ *   z samej karty katalogowej i tabelki ze strony.
  *   Karta, która wciąż ma nieprzetłumaczony tekst źródła (TranslateB2bProductTextJob::pending), dostaje zlecenie
  *   przy każdym przebiegu — ponowne pobranie nadrabia tłumaczenia odrzucone, nieudane albo nadpisane.
  *
@@ -738,15 +740,17 @@ final class B2bCatalogSync
         $this->storeNormFacts($connector, $remote, $product, $account, $warnings);
 
         // Po zapisie plików — job czyta tekst karty katalogowej z bazy. Karta, która wciąż ma tekst sklepu (opis
-        // odrzucony, nieudany albo nowy tekst u dostawcy), dostaje zlecenie przy każdym przebiegu; czekający job nie
-        // jest dublowany.
+        // nieudany albo nowy tekst u dostawcy), dostaje zlecenie przy każdym przebiegu; czekający job nie jest
+        // dublowany. Opis odrzucony dla tych samych źródeł (ten sam PDF, tekst i tabelka) nie wraca — sources().
+        $datasheetOnly = $connector instanceof B2bDatasheetOnlyDescription;
         if ($connector instanceof B2bDescribesFromDatasheet && $savedLink !== null
             && DescribeB2bProductFromDatasheetJob::sources(
                 $product,
                 $savedLink,
                 DescribeB2bProductFromDatasheetJob::datasheet((int) $product->id, (int) $account->id),
+                $datasheetOnly,
             ) !== null) {
-            DescribeB2bProductFromDatasheetJob::dispatch((int) $product->id, (int) $account->id);
+            DescribeB2bProductFromDatasheetJob::dispatch((int) $product->id, (int) $account->id, $datasheetOnly);
         }
 
         return [
@@ -1536,6 +1540,13 @@ final class B2bCatalogSync
         }
 
         $descriptionHash = $link?->description_hash;
+        // Łącznik bez własnego opisu wyrobu (ARTRA — decyzja użytkownika 22.09.2026): opis powstaje z karty katalogowej
+        // PDF w DescribeB2bProductFromDatasheetJob, a pusty opis ze sklepu nie jest wiadomością, że opis zniknął
+        // — ownDescriptionIsGone skasowałby opis karty ze sloganem zapisanym przed tą decyzją (odcisk wciąż zgodny),
+        // a karta bez opisu wypada z propozycji przetargowych. Opis karty i odcisk zostają, jakie są.
+        if ($connector instanceof B2bDatasheetOnlyDescription) {
+            return [$descriptionHash, false];
+        }
         // Hierarchia źródeł opisu: najpierw producent. Witryna producenta tej marki zastępuje
         // opis już zapisany na karcie (z AI, z Presty, od dystrybutora) — opisów nie redaguje
         // się u nas ręcznie, więc nie ma czego bronić hashem.

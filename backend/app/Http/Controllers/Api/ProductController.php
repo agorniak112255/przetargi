@@ -645,29 +645,31 @@ class ProductController extends Controller
     }
 
     /**
-     * Karta z normami od producenta wyrobu pokazuje JEGO poziomy. Atrybuty zapisane w payloadzie pochodzą
-     * z opisu wzbogaconego ze sklepów i właśnie one przyniosły nieaktualne poziomy EN 388 (25 z 54 kart ATG,
-     * sprawdzone 20.09.2026); przeliczone atrybuty znają hierarchię źródeł, w której kolumna producenta bije
-     * opis. Dzięki temu karta pokazuje to, czym dopasowanie do wymagania przetargu naprawdę się liczy.
+     * Karta pokazuje pola z hierarchią źródeł przeliczone (BhpAttributeNormalizer::forDisplay), a nie zapisane.
+     * Zapisane pochodzą z opisu wzbogaconego ze sklepów: przyniosły nieaktualne poziomy EN 388 (25 z 54 kart
+     * ATG, sprawdzone 20.09.2026) i klasy cudzych wariantów (ARTRA „ARMEN 900 6060 O1 FO” z „S2 CI SRC”
+     * z empiku, 22.09.2026). Przeliczone znają hierarchię źródeł — producent, cennik, nazwa i tabelka dostawcy
+     * biją opis — więc karta pokazuje to, czym dopasowanie do wymagania przetargu naprawdę się liczy.
      *
-     * Payloadu w bazie nie ruszamy: pozostaje zapisem tego, co przyniosło wzbogacanie.
+     * Payloadu w bazie nie ruszamy: pozostaje zapisem tego, co przyniosło wzbogacanie. Karta bez atrybutów
+     * i bez norm producenta zostaje bez zmian — nie udajemy wzbogacenia, którego nie było.
      *
      * @param  array<string, mixed>  $row
      * @return array<string, mixed>
      */
     private function withManufacturerNorms(array $row, Product $product): array
     {
-        if (ManufacturerNormFacts::norms($product->manufacturer_norms) === []) {
+        $stored = is_array($row['enrichment_payload'] ?? null) ? $row['enrichment_payload'] : [];
+        if (! is_array($stored['attributes'] ?? null) && ManufacturerNormFacts::norms($product->manufacturer_norms) === []) {
             return $row;
         }
 
-        $computed = $this->bhpAttributes->forProduct($product);
-        $payload = is_array($row['enrichment_payload'] ?? null) ? $row['enrichment_payload'] : [];
-        $payload['attributes'] = array_merge(
-            is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [],
-            $computed,
-        );
-        $payload['norms'] = $computed['normy_en'];
+        // Z przeliczenia tylko pola z hierarchią źródeł, a normy nie z prozy — przeliczone normy_en mają też
+        // normy ze zdania „nie podają zgodności z EN 407”; brak informacji wyszedłby jako fakt (forDisplay).
+        $display = $this->bhpAttributes->forDisplay($product);
+        $payload = $stored;
+        $payload['attributes'] = $display['attributes'];
+        $payload['norms'] = $display['norms'];
         $row['enrichment_payload'] = $payload;
 
         return $row;

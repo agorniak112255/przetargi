@@ -1327,4 +1327,25 @@ final class PpeAssortmentTest extends TestCase
         $this->assertSame(PpeAssortment::FAMILY_GLOVES, $a->resolveFamily('Rekawice HyFlex 11-840'));
         $this->assertSame(PpeAssortment::FAMILY_EYES, $a->resolveFamily('Okulary ochronne Bolle'));
     }
+
+    /**
+     * Antystatyka i ESD to u obuwia cecha podeszwy, nie przeznaczenie — „electric” tylko dla butów
+     * elektroizolacyjnych. Odzież z EN 1149 zostaje „electric” (ubranie dla energetyki).
+     */
+    public function test_footwear_is_electric_only_when_electrically_insulating(): void
+    {
+        $a = new PpeAssortment;
+
+        $this->assertNull($a->purpose('ARCASIO 732 616560 S1 P ESD, podeszwa antystatyczna, EN IEC 61340-4-3', PpeAssortment::FAMILY_FOOTWEAR));
+        $this->assertNull($a->purpose('Półbuty S1 antystatyczne', PpeAssortment::FAMILY_FOOTWEAR));
+        $this->assertSame('electric', $a->purpose('Półbuty elektroizolacyjne 20 kV, EN 50321', PpeAssortment::FAMILY_FOOTWEAR));
+        $this->assertSame('electric', $a->purpose('Kalosze dielektryczne klasy 0', PpeAssortment::FAMILY_FOOTWEAR));
+        $this->assertSame('electric', $a->purpose('Obuwie EN 50321:2018 klasa 0', PpeAssortment::FAMILY_FOOTWEAR));
+        $this->assertSame('welding', $a->purpose('Trzewiki spawalnicze HRO antystatyczne', PpeAssortment::FAMILY_FOOTWEAR));
+
+        // odzież i wywołanie bez rodziny bez zmian
+        $this->assertSame('electric', $a->purpose('Kurtka antystatyczna EN 1149-5', PpeAssortment::FAMILY_APPAREL));
+        $this->assertSame('electric', $a->purpose('Kurtka EN 1149-5'));
+        $this->assertSame('electric', $a->purpose('Półbuty S1 antystatyczne'));
+    }
 }

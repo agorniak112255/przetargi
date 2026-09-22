@@ -52,24 +52,26 @@ final class PrestaDescriptionHtml
         $rawDescription = (string) ($product->description ?? '');
         $prose = $this->prose($rawDescription);
         $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
-        // Karta, dla której mamy normy od producenta wyrobu, wychodzi na sklep z JEGO poziomami: atrybuty
-        // zapisane w payloadzie pochodzą z opisu wzbogaconego ze sklepów i to one przyniosły na naszą stronę
-        // nieaktualne poziomy EN 388 (25 z 54 kart ATG, sprawdzone 20.09.2026). Przeliczone atrybuty znają
-        // hierarchię źródeł — kolumna producenta bije opis (App\Support\ManufacturerNormFacts).
+        // Na sklep wychodzą atrybuty przeliczone, nie zapisane: zapisane pochodzą z opisu wzbogaconego ze sklepów
+        // i to one przyniosły na naszą stronę nieaktualne poziomy EN 388 (25 z 54 kart ATG, 20.09.2026) i klasy
+        // cudzych wariantów (ARTRA „O1 FO” z „S2 CI SRC”, 22.09.2026). Przeliczone znają hierarchię źródeł —
+        // producent, cennik, nazwa i tabelka dostawcy biją opis. Karta bez atrybutów i bez norm producenta
+        // zostaje przy wersji zapasowej: kod z SKU i kategoria z nazwy to jeszcze nie opis.
         $fromManufacturer = ManufacturerNormFacts::norms($product->manufacturer_norms) !== [];
-        $computed = $fromManufacturer ? $this->bhpAttributes->forProduct($product) : [];
-        if ($fromManufacturer) {
-            $attrs['poziomy_en388'] = $computed['poziomy_en388'];
-        }
+        $recompute = $fromManufacturer || $attrs !== [];
         // Normy siedzą i w payloadzie, i w atrybutach. Sekcja „Normy” pokazuje ich sumę
         // (bez powtórek po kanonizacji), a ramka atrybutów wtedy ich nie powtarza —
-        // wcześniej ta sama norma wychodziła na karcie dwa razy.
-        $normsList = $fromManufacturer
-            ? $computed['normy_en']
-            : NormCode::dedupe(array_merge(
+        // wcześniej ta sama norma wychodziła na karcie dwa razy. Przy przeliczeniu normy NIE są przeliczonymi
+        // normy_en: te zawierają normy wyczytane z prozy, także ze zdania „nie podają zgodności z EN 407”
+        // (BhpAttributeNormalizer::forDisplay — ten sam widok co karta w panelu).
+        if ($recompute) {
+            ['attributes' => $attrs, 'norms' => $normsList] = $this->bhpAttributes->forDisplay($product);
+        } else {
+            $normsList = NormCode::dedupe(array_merge(
                 $this->stringList($payload['norms'] ?? null),
                 $this->stringList($attrs['normy_en'] ?? null)
             ));
+        }
         $normsBlockShown = $normsList !== [] && $this->blockVisible($this->exportBlocks($product), 'norms');
         $attrPairs = $this->attributePairs($attrs, ! $normsBlockShown);
         $hasLists = false;

@@ -22,7 +22,11 @@ use RuntimeException;
  */
 final class CardConflictAiService
 {
-    public const PROMPT_VERSION = 'conflicts-2026-09-15';
+    /**
+     * Wersja jest w kluczu cache — podbijać przy każdej zmianie promptu albo pól karty (22.09.2026: doszła
+     * tabelka dostawcy), inaczej zapisany wynik ze starych źródeł ukrywa nowe sprzeczności.
+     */
+    public const PROMPT_VERSION = 'conflicts-2026-09-22-tabelka-dostawcy';
 
     /** Łączny limit znaków pól karty w zapytaniu; przycinamy opis na końcu. */
     private const INPUT_BUDGET = 24000;
@@ -45,6 +49,7 @@ final class CardConflictAiService
         CardSource::NAME,
         CardSource::NORMS,
         CardSource::PRICE_LIST,
+        CardSource::SHOP_FIELDS,
         CardSource::SPECS,
         CardSource::FEATURES,
         CardSource::PAYLOAD_NORMS,
@@ -54,6 +59,7 @@ final class CardConflictAiService
 
     /** Pola, które na karcie są listą pozycji — w zapytaniu zostają listą. */
     private const LIST_FIELDS = [
+        CardSource::SHOP_FIELDS,
         CardSource::SPECS,
         CardSource::FEATURES,
         CardSource::PAYLOAD_NORMS,
@@ -315,7 +321,8 @@ TXT;
         }
 
         $lines = [
-            'Pola karty: name — nazwa; norms — kolumna norm; specs — specyfikacja; features — cechy;'
+            'Pola karty: name — nazwa; norms — kolumna norm; shop_fields — tabelka z karty u dostawcy;'
+            .' specs — specyfikacja; features — cechy;'
             .' payload_norms — normy z opisu pobranego; materials — materiały; description — opis.',
         ];
         if ($truncated) {

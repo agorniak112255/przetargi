@@ -24,6 +24,13 @@ final readonly class CardSource
     /** Parametr wpisany ręcznie na karcie — czego nie ma w żadnym źródle automatycznym. */
     public const MANUAL = 'manual';
 
+    /**
+     * Wiersz tabelki z karty wyrobu u dostawcy (products.shop_fields_summary) — dane sklepu, nie opis. Bywa
+     * pomylona z sąsiednim wariantem (ARTRA: „ARMEN 900 6060 O1 FO” z tabelką „EN ISO 20345:2011 S1 P SRC”),
+     * więc jako osobne pole pokazuje sprzeczność z nazwą zamiast ją rozstrzygać.
+     */
+    public const SHOP_FIELDS = 'shop_fields';
+
     public const SPECS = 'specs';
 
     public const FEATURES = 'features';
@@ -39,9 +46,9 @@ final readonly class CardSource
         public string $text,
     ) {}
 
-    /** Nazwy nie ma w tekście opisu okna weryfikacji — kliknięcie „Szukaj w opisie” nic by nie znalazło. */
+    /** Nazwy i tabelki dostawcy nie ma w tekście opisu okna weryfikacji — „Szukaj w opisie” nic by nie znalazło. */
     public function searchable(): bool
     {
-        return $this->source !== self::NAME;
+        return $this->source !== self::NAME && $this->source !== self::SHOP_FIELDS;
     }
 }
