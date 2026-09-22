@@ -86,10 +86,14 @@ final class MmmConnectorTest extends TestCase
 
     private ?int $listTotal = null;
 
-    /** @var (\Closure(int, int): list<array<string, mixed>>)|null  (start, numer pobrania od 1) → pozycje strony */
+    /** @var (\Closure(string, int, int, list<array<string, mixed>>): list<array<string, mixed>>)|null  (grupa, start, numer przejścia grupy od 1, pozycje grupy) → pozycje strony */
     private ?\Closure $listPage = null;
 
-    private int $listPasses = 0;
+    /** @var array<string, int> grupa („ścieżka|marka”) → liczba przejść */
+    private array $listPasses = [];
+
+    /** @var array<string, array<string, int>> ścieżka → podkategorie z licznikiem nadpisanym (niespójne drzewo) */
+    private array $facetOverrides = [];
 
     /** @var array<string, array<string, mixed>> numer magazynowy → „value” odpowiedzi ceny */
     private array $prices = [];
@@ -306,19 +310,24 @@ final class MmmConnectorTest extends TestCase
         $summary = implode("\n", $connector->runSummary());
         $this->assertStringContainsString('cena za inną jednostkę niż bazowa (szt): 1, np. 7000034747 („1 karton”)', $summary);
         $this->assertStringContainsString('sklep nie podaje ceny: 1, np. 7100066103', $summary);
-        $this->assertStringContainsString('powtórzone na stronach: 1', $summary);
+        // pozycja powtórzona na liście liczy się raz
+        $this->assertStringContainsString('Lista 3M (ŚOI, aktywne): 4 wyrobów z 1 grup kategorii', $summary);
     }
 
-    public function test_list_is_deduplicated_read_again_on_a_count_mismatch_and_prices_go_in_packs_of_100(): void
+    public function test_list_goes_by_category_groups_splits_a_large_leaf_by_brand_and_rereads_an_unstable_group(): void
     {
         $this->fakeSite();
-        for ($i = 0; $i < 150; $i++) {
-            $this->items[] = self::item((string) (7000000000 + $i), 'K'.$i, 'Wyrób testowy '.$i, 'EA', 'szt', 'CS', 'karton', '10');
+        // 60 w podkategorii A (jedna strona), 150 w liściu B bez podkategorii: 70 PELTOR + 80 Scott
+        for ($i = 0; $i < 210; $i++) {
+            $item = self::item((string) (7000000000 + $i), 'K'.$i, 'Wyrób testowy '.$i, 'EA', 'szt', 'CS', 'karton', '10');
+            $item['_path'] = $i < 60 ? ['GPH10008', 'GPHA'] : ['GPH10008', 'GPHB'];
+            $item['_brand'] = $i < 60 ? '3M' : ($i < 130 ? 'PELTOR' : 'Scott');
+            $this->items[] = $item;
         }
-        // pierwsze pobranie: strona 2 zaczyna się o jedną pozycję za wcześnie (powtórka), ostatniej brak
-        $this->listPage = fn (int $start, int $pass): array => $pass === 1 && $start === 100
-            ? array_slice($this->items, 99, 50)
-            : array_slice($this->items, $start, 100);
+        // jak na żywo: pierwsze przejście grupy Scott gubi pozycję i powtarza inną — drugie przejście ją dobiera
+        $this->listPage = static fn (string $group, int $start, int $pass, array $inGroup): array => $group === 'GPH10008/GPHB|Scott' && $pass === 1
+            ? [...array_slice($inGroup, 0, 79), $inGroup[0]]
+            : array_slice($inGroup, $start, 100);
         $messages = [];
         $connector = $this->connector();
         $connector->onListProgress(static function (string $m) use (&$messages): void {
@@ -327,33 +336,56 @@ final class MmmConnectorTest extends TestCase
 
         $products = iterator_to_array($connector->products(), false);
 
-        $this->assertCount(150, $products);
-        $this->assertSame(150, $connector->totalProducts());
-        $this->assertSame(150, count(array_unique(array_map(static fn (B2bRemoteProduct $p): string => $p->sku, $products))));
-        $this->assertSame(2, $this->listPasses);
-        $this->assertStringContainsString('pobieram jeszcze raz', implode("\n", $messages));
+        $this->assertCount(210, $products);
+        $this->assertSame(210, $connector->totalProducts());
+        $this->assertSame(210, count(array_unique(array_map(static fn (B2bRemoteProduct $p): string => $p->sku, $products))));
+        $this->assertSame(['GPH10008/GPHA' => 1, 'GPH10008/GPHB|PELTOR' => 1, 'GPH10008/GPHB|Scott' => 2], $this->listPasses);
+        $this->assertStringContainsString('210 pozycji w 3 grupach kategorii', implode("\n", $messages));
+        $this->assertStringContainsString('grup pobranych więcej niż raz (zmienna kolejność stron): 1', implode("\n", $connector->runSummary()));
         $packs = Http::recorded(fn (Request $r): bool => str_contains($r->url(), 'productPrice'))->values();
-        $this->assertCount(2, $packs);
-        parse_str((string) parse_url($packs[1][0]->url(), PHP_URL_QUERY), $query);
-        $this->assertCount(50, explode(',', $query['materialIDs']));
+        $this->assertCount(3, $packs);
+        parse_str((string) parse_url($packs[2][0]->url(), PHP_URL_QUERY), $query);
+        $this->assertCount(10, explode(',', $query['materialIDs']));
     }
 
-    public function test_list_inconsistent_on_both_passes_stops_before_the_first_product(): void
+    public function test_group_incomplete_after_every_pass_stops_before_the_first_product(): void
     {
         $this->fakeSite();
         for ($i = 0; $i < 150; $i++) {
             $this->items[] = self::item((string) (7000000000 + $i), 'K'.$i, 'Wyrób testowy '.$i, 'EA', 'szt', 'CS', 'karton', '10');
         }
-        $this->listPage = fn (int $start, int $pass): array => $start === 100 ? array_slice($this->items, 99, 50) : array_slice($this->items, $start, 100);
+        // jedna marka bez podkategorii — grupy nie da się podzielić, a ostatniej pozycji nie ma nigdy
+        $this->listPage = static fn (string $group, int $start, int $pass, array $inGroup): array => $start === 100
+            ? array_slice($inGroup, 99, 50)
+            : array_slice($inGroup, $start, 100);
         $connector = $this->connector();
 
         try {
             iterator_to_array($connector->products(), false);
-            $this->fail('lista niespójna dwa razy');
+            $this->fail('grupa niepełna po każdym przejściu');
         } catch (RuntimeException $e) {
-            $this->assertStringContainsString('niespójna także po ponownym pobraniu', $e->getMessage());
+            $this->assertStringContainsString('po 4 przejściach ma 149 różnych pozycji przy liczniku 150', $e->getMessage());
         }
+        $this->assertSame(4, $this->listPasses['GPH10008|3M']);
         $this->assertCount(0, Http::recorded(fn (Request $r): bool => str_contains($r->url(), 'productPrice')));
+    }
+
+    public function test_subcategories_not_adding_up_to_the_branch_count_stop_the_list(): void
+    {
+        $this->fakeSite();
+        for ($i = 0; $i < 150; $i++) {
+            $item = self::item((string) (7000000000 + $i), 'K'.$i, 'Wyrób testowy '.$i, 'EA', 'szt', 'CS', 'karton', '10');
+            $item['_path'] = ['GPH10008', $i < 75 ? 'GPHA' : 'GPHB'];
+            $this->items[] = $item;
+        }
+        $this->facetOverrides = ['GPH10008' => ['GPHB' => 70]];
+
+        try {
+            iterator_to_array($this->connector()->products(), false);
+            $this->fail('drzewo kategorii niespójne');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('podkategorie GPH10008 dają 145 pozycji przy liczniku 150', $e->getMessage());
+        }
     }
 
     public function test_session_lost_on_prices_logs_in_once_and_without_sso_the_run_stops(): void
@@ -674,6 +706,63 @@ final class MmmConnectorTest extends TestCase
         ];
     }
 
+    /**
+     * Wyszukiwarka jak na żywo: filtr pełnej ścieżki kategorii (pozycja w gałęzi, gdy jej _path zaczyna się od ścieżki)
+     * i marki, licznik grupy, podkategorie następnego poziomu i marki w aggregations.sticky. Pozycje testowe niosą
+     * _path (domyślnie ["GPH10008"]) i _brand (domyślnie „3M”).
+     *
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>
+     */
+    private function searchResponse(array $body): array
+    {
+        $filters = $body['sticky_filters'];
+        $want = $filters['categories_path'];
+        $brand = $filters['brand']['values'][0] ?? null;
+        $inGroup = array_values(array_filter($this->items, static function (array $item) use ($want, $brand): bool {
+            $path = $item['_path'] ?? ['GPH10008'];
+
+            return array_slice($path, 0, count($want)) === $want && ($brand === null || ($item['_brand'] ?? '3M') === $brand);
+        }));
+        $unique = [];
+        foreach ($inGroup as $item) {
+            $unique[$item['mmm_id']['value']] = $item;
+        }
+        $categories = [];
+        $brands = [];
+        foreach ($unique as $item) {
+            $next = ($item['_path'] ?? ['GPH10008'])[count($want)] ?? null;
+            if ($next !== null) {
+                $categories[$next] = ($categories[$next] ?? 0) + 1;
+            }
+            $b = $item['_brand'] ?? '3M';
+            $brands[$b] = ($brands[$b] ?? 0) + 1;
+        }
+        foreach ($this->facetOverrides[implode('/', $want)] ?? [] as $id => $count) {
+            $categories[$id] = $count;
+        }
+
+        $key = implode('/', $want).($brand !== null ? '|'.$brand : '');
+        $start = (int) $body['start'];
+        if ($start === 0 && (int) $body['size'] > 1) {
+            $this->listPasses[$key] = ($this->listPasses[$key] ?? 0) + 1;
+        }
+        $page = $this->listPage !== null
+            ? ($this->listPage)($key, $start, $this->listPasses[$key] ?? 1, $inGroup)
+            : array_slice($inGroup, $start, (int) $body['size']);
+        $total = $want === ['GPH10008'] && $brand === null && $this->listTotal !== null ? $this->listTotal : count($unique);
+
+        return [
+            'items' => $page,
+            'total' => $total,
+            'queryId' => 'q1',
+            'aggregations' => ['sticky' => [
+                'categories' => ['facets' => array_map(static fn (string $id, int $c): array => ['id' => $id, 'value' => 'Kategoria '.$id, 'count' => $c], array_keys($categories), $categories)],
+                'brand' => ['facets' => array_map(static fn (string $v, int $c): array => ['value' => $v, 'count' => $c], array_keys($brands), $brands)],
+            ]],
+        ];
+    }
+
     private function fakeSite(): void
     {
         $html = ['Content-Type' => 'text/html; charset=UTF-8'];
@@ -778,15 +867,7 @@ final class MmmConnectorTest extends TestCase
                 }
                 $body = $request->data();
                 if ($path === '/search/bcom/v1/search') {
-                    $start = (int) $body['start'];
-                    if ($start === 0) {
-                        $this->listPasses++;
-                    }
-                    $page = $this->listPage !== null
-                        ? ($this->listPage)($start, $this->listPasses)
-                        : array_slice($this->items, $start, (int) $body['size']);
-
-                    return Http::response(['items' => $page, 'total' => $this->listTotal ?? count($this->items), 'queryId' => 'q1'], 200, $json);
+                    return Http::response($this->searchResponse($body), 200, $json);
                 }
                 if ($path === '/search/bcom/v1/pdp') {
                     $pdp = $this->pdps[(string) $body['mmm_id']] ?? ['mmm_id' => (string) $body['mmm_id'], 'name' => 'x'];

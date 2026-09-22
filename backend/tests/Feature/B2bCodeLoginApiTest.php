@@ -225,11 +225,13 @@ final class B2bCodeLoginApiTest extends TestCase
     public function test_view_reports_session_time_and_whether_connector_needs_code(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
-        $this->account->forceFill(['connector_session' => ['cookies' => []], 'connector_session_saved_at' => now()->startOfSecond()])->save();
+        // stała chwila — pod obciążeniem zapis i asercja trafiały w różne sekundy
+        $savedAt = now()->startOfSecond()->subMinutes(3);
+        $this->account->forceFill(['connector_session' => ['cookies' => []], 'connector_session_saved_at' => $savedAt])->save();
 
         $this->getJson('/api/b2b-accounts')
             ->assertOk()
-            ->assertJsonPath('0.connector_session_saved_at', now()->startOfSecond()->toIso8601String())
+            ->assertJsonPath('0.connector_session_saved_at', $savedAt->toIso8601String())
             ->assertJsonPath('0.requires_login_code', false)
             ->assertJsonMissingPath('0.connector_session');
 

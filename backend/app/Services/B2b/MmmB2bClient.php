@@ -293,20 +293,27 @@ final class MmmB2bClient
     }
 
     /**
-     * Strona listy wyrobów kategorii ŚOI (aktywne). Odpowiedź: items, total.
+     * Strona listy aktywnych wyrobów jednej gałęzi kategorii ŚOI, opcjonalnie jednej marki. Odpowiedź: items, total
+     * i aggregations.sticky (categories.facets: podkategorie {id, count}; brand.facets: marki {value, count}).
+     * Ścieżka kategorii musi być pełna od korzenia (["GPH10008", "GPH10160", …]) — sama podkategoria daje 0.
      *
+     * @param  list<string>|null  $path  null = cała kategoria ŚOI
      * @return array<string, mixed>
      */
-    public function search(int $start, int $size = self::LIST_PAGE_SIZE): array
+    public function search(int $start, int $size = self::LIST_PAGE_SIZE, ?array $path = null, ?string $brand = null): array
     {
+        $filters = [
+            'categories_path' => $path ?? [self::CATEGORY],
+            'product_status' => ['values' => ['Aktywny']],
+        ];
+        if ($brand !== null) {
+            $filters['brand'] = ['values' => [$brand]];
+        }
         $body = [
             'start' => $start,
-            'size' => min($size, self::LIST_PAGE_SIZE),
+            'size' => max(1, min($size, self::LIST_PAGE_SIZE)),
             'includeHighlights' => false,
-            'sticky_filters' => [
-                'categories_path' => [self::CATEGORY],
-                'product_status' => ['values' => ['Aktywny']],
-            ],
+            'sticky_filters' => $filters,
         ];
 
         return $this->searchApi(self::SEARCH_URL, $body, 'listy wyrobów');

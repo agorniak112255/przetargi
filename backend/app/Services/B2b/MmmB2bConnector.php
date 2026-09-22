@@ -13,9 +13,9 @@ use Throwable;
 /**
  * Sklep 3M Polska order.3m.com — witryna producenta (B2bManufacturerSite, marka 3M). Sprawdzone na koncie 22.09.2026.
  *
- * Lista: aktywne wyroby kategorii „Środki ochrony indywidualnej” (GPH10008) z wyszukiwarki 3M, po 100 na stronę.
- * Kolejność stron bywa zmienna, więc cała lista idzie przed pierwszym produktem, deduplikowana po numerze magazynowym
- * (mmm_id), i musi się zgadzać z licznikiem „total” (rozjazd = jedno ponowne pobranie).
+ * Lista: aktywne wyroby kategorii „Środki ochrony indywidualnej” (GPH10008) z wyszukiwarki 3M, po 100 na stronę,
+ * w grupach podkategorii (i marek) — duże wyniki wyszukiwarka stronicuje niedeterministycznie (listItems). Cała lista
+ * idzie przed pierwszym produktem, deduplikowana po numerze magazynowym (mmm_id), i musi się zgadzać z licznikami.
  *
  * Karta = jeden numer magazynowy 3M (SKU = mmm_id). Ceny konta w paczkach po 100 za JEDNOSTKĘ BAZOWĄ wyrobu
  * (materialUnits = baseUomCode) — 3M sam przelicza cenę kartonu na sztukę/parę, my niczego nie dzielimy. Odpowiedź
@@ -36,7 +36,11 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
     /** Górna granica listy — więcej pozycji niż tyle to błąd licznika, nie oferta ŚOI. */
     private const MAX_TOTAL = 20_000;
 
+    /** Komunikat postępu co tyle grup kategorii. */
     private const PROGRESS_EVERY_PAGES = 10;
+
+    /** Przejścia jednej grupy listy, zanim uznamy ją za niespójną (małe grupy przechodzą w całości za pierwszym razem). */
+    private const MAX_GROUP_PASSES = 4;
 
     private const DOCUMENTS_LIMIT = 8;
 
@@ -418,46 +422,54 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
     }
 
     /**
-     * Cała lista; niezgodna z licznikiem — jedno ponowne pobranie (a gdy i ono nie jest pełne, suma obu
-     * pobrań musi dać licznik).
+     * Cała lista ŚOI złożona z grup po najwyżej kilkaset pozycji. Wyszukiwarka 3M stronicuje duże wyniki
+     * niedeterministycznie (sprawdzone na żywo 22.09.2026: ta sama strona 2955 pozycji zapytana dwa razy potrafiła
+     * mieć 0 wspólnych pozycji, a pełne przejście dawało ~2300 różnych z 2955; parametry sortowania i queryId nic
+     * nie zmieniają), a małe wyniki (331 pozycji PELTOR) przechodzi w całości. Dlatego: drzewo kategorii do liści,
+     * liść ponad 100 pozycji dzielony po marce; każda grupa musi dać tyle różnych pozycji, ile mówi jej licznik
+     * (inaczej kolejne przejście, suma przejść), a suma grup — licznik całej kategorii.
      *
      * @return list<array<string, mixed>>
      */
     private function listItems(): array
     {
-        $first = $this->scanList();
-        if ($first['complete']) {
-            return $this->acceptList($first['items'], $first);
+        $root = $this->searchPage(null, null, 0, 1);
+        $total = $root['total'];
+        if ($total <= 0 || $total > self::MAX_TOTAL) {
+            throw new RuntimeException('Lista wyrobów '.MmmB2bClient::HOST.' ma nieoczekiwany licznik: '.$total);
         }
-        $this->progress('Lista 3M niezgodna z licznikiem ('.$first['problem'].') — pobieram jeszcze raz');
-
-        $second = $this->scanList();
-        if ($second['complete']) {
-            return $this->acceptList($second['items'], $second);
+        $groups = $this->listGroups([MmmB2bClient::CATEGORY], $root);
+        $grouped = array_sum(array_column($groups, 'total'));
+        if ($grouped !== $total) {
+            throw new RuntimeException('Lista wyrobów '.MmmB2bClient::HOST.': grupy kategorii dają '.$grouped.' pozycji przy liczniku '.$total);
         }
-        $union = $first['items'] + $second['items'];
-        if (! $second['changed'] && count($union) + $second['without_id'] === $second['total']) {
-            $this->summary[] = 'Lista 3M zebrana z dwóch pobrań (strony w zmiennej kolejności)';
+        $this->progress('Lista wyrobów 3M: '.$total.' pozycji w '.count($groups).' grupach kategorii');
 
-            return $this->acceptList($union, $second);
+        $items = [];
+        $withoutId = 0;
+        $repeated = 0;
+        $done = 0;
+        foreach ($groups as $i => $group) {
+            $scan = $this->scanGroup($group);
+            $withoutId += $scan['without_id'];
+            $repeated += $scan['passes'] > 1 ? 1 : 0;
+            $items += $scan['items'];
+            $done += $group['total'];
+            if (($i + 1) % self::PROGRESS_EVERY_PAGES === 0) {
+                $this->progress('Lista wyrobów 3M: '.$done.'/'.$total);
+            }
+        }
+        if (count($items) + $withoutId !== $total) {
+            throw new RuntimeException('Lista wyrobów '.MmmB2bClient::HOST.' niespójna: zebrano '.count($items).' różnych pozycji'
+                .($withoutId > 0 ? ' i '.$withoutId.' bez numeru' : '').' przy liczniku '.$total.' (pozycje w kilku grupach naraz?)');
         }
 
-        throw new RuntimeException('Lista wyrobów '.MmmB2bClient::HOST.' niespójna także po ponownym pobraniu: '.$second['problem']);
-    }
-
-    /**
-     * @param  array<string, array<string, mixed>>  $items
-     * @param  array{total: int, duplicates: int, without_id: int}  $scan
-     * @return list<array<string, mixed>>
-     */
-    private function acceptList(array $items, array $scan): array
-    {
-        $line = 'Lista 3M (ŚOI, aktywne): '.count($items).' wyrobów';
-        if ($scan['duplicates'] > 0) {
-            $line .= ', powtórzone na stronach: '.$scan['duplicates'];
+        $line = 'Lista 3M (ŚOI, aktywne): '.count($items).' wyrobów z '.count($groups).' grup kategorii';
+        if ($repeated > 0) {
+            $line .= ', grup pobranych więcej niż raz (zmienna kolejność stron): '.$repeated;
         }
-        if ($scan['without_id'] > 0) {
-            $line .= ', bez numeru magazynowego (pominięte): '.$scan['without_id'];
+        if ($withoutId > 0) {
+            $line .= ', bez numeru magazynowego (pominięte): '.$withoutId;
         }
         $this->summary[] = $line;
 
@@ -465,73 +477,131 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
     }
 
     /**
-     * @return array{items: array<string, array<string, mixed>>, total: int, duplicates: int, without_id: int, complete: bool, changed: bool, problem: string}
+     * Grupy do pobrania: gałąź do 100 pozycji albo bez podkategorii to jedna grupa; większa gałąź — jej podkategorie
+     * (suma ich liczników musi dać licznik gałęzi); większy liść — marki, gdy ich suma daje licznik, inaczej cały liść.
+     *
+     * @param  list<string>  $path
+     * @param  array{total: int, categories: array<string, int>, brands: array<string, int>}  $node
+     * @return list<array{path: list<string>, brand: ?string, total: int}>
      */
-    private function scanList(): array
+    private function listGroups(array $path, array $node): array
+    {
+        if ($node['total'] === 0) {
+            return [];
+        }
+        $children = array_diff_key($node['categories'], array_flip($path));
+        if ($node['total'] <= MmmB2bClient::LIST_PAGE_SIZE || ($children === [] && $node['brands'] === [])) {
+            return [['path' => $path, 'brand' => null, 'total' => $node['total']]];
+        }
+        if ($children !== []) {
+            if (array_sum($children) !== $node['total']) {
+                throw new RuntimeException('Lista wyrobów '.MmmB2bClient::HOST.': podkategorie '.implode('/', $path)
+                    .' dają '.array_sum($children).' pozycji przy liczniku '.$node['total']);
+            }
+            $groups = [];
+            foreach (array_keys($children) as $child) {
+                $childPath = [...$path, (string) $child];
+                $groups = [...$groups, ...$this->listGroups($childPath, $this->searchPage($childPath, null, 0, 1))];
+            }
+
+            return $groups;
+        }
+        if (array_sum($node['brands']) !== $node['total']) {
+            return [['path' => $path, 'brand' => null, 'total' => $node['total']]];
+        }
+        $groups = [];
+        foreach ($node['brands'] as $brand => $count) {
+            $groups[] = ['path' => $path, 'brand' => (string) $brand, 'total' => $count];
+        }
+
+        return $groups;
+    }
+
+    /**
+     * Wszystkie pozycje grupy: przejście stron aż do licznika; brakujące pozycje = kolejne przejście, a pozycje
+     * z kolejnych przejść się sumują (wyszukiwarka zmienia kolejność). Po MAX_GROUP_PASSES przejściach bez kompletu
+     * — błąd zamiast cennika bez części wyrobów.
+     *
+     * @param  array{path: list<string>, brand: ?string, total: int}  $group
+     * @return array{items: array<string, array<string, mixed>>, without_id: int, passes: int}
+     */
+    private function scanGroup(array $group): array
     {
         $items = [];
-        $total = null;
-        $duplicates = 0;
         $withoutId = 0;
-        $changed = false;
-        $page = 0;
-
-        for ($start = 0; $total === null || $start < $total; $start += MmmB2bClient::LIST_PAGE_SIZE) {
-            $json = $this->client->search($start);
-            $rows = $json['items'] ?? null;
-            $pageTotal = $json['total'] ?? null;
-            if (! is_array($rows) || ! is_numeric($pageTotal)) {
-                throw new RuntimeException('Lista wyrobów '.MmmB2bClient::HOST.': nieczytelna odpowiedź wyszukiwarki (strona od '.$start.')');
-            }
-            $pageTotal = (int) $pageTotal;
-            $page++;
-            if ($total === null) {
-                if ($pageTotal <= 0 || $pageTotal > self::MAX_TOTAL) {
-                    throw new RuntimeException('Lista wyrobów '.MmmB2bClient::HOST.' ma nieoczekiwany licznik: '.$pageTotal);
+        for ($pass = 1; $pass <= self::MAX_GROUP_PASSES; $pass++) {
+            $passWithoutId = 0;
+            for ($start = 0; $start < $group['total']; $start += MmmB2bClient::LIST_PAGE_SIZE) {
+                $page = $this->searchPage($group['path'], $group['brand'], $start, MmmB2bClient::LIST_PAGE_SIZE);
+                if ($page['total'] !== $group['total']) {
+                    throw new RuntimeException('Lista wyrobów '.MmmB2bClient::HOST.': licznik grupy '.self::groupName($group)
+                        .' zmienił się w trakcie pobierania ('.$group['total'].' → '.$page['total'].')');
                 }
-                $total = $pageTotal;
-                $this->progress('Lista wyrobów 3M: '.$total.' pozycji na '.(int) ceil($total / MmmB2bClient::LIST_PAGE_SIZE).' stronach');
-            } elseif ($pageTotal !== $total) {
-                $changed = true;
-            }
-            if ($rows === []) {
-                break;
-            }
-            foreach ($rows as $row) {
-                $item = is_array($row) ? self::listItem($row) : null;
-                if ($item === null) {
-                    $withoutId++;
+                foreach ($page['rows'] as $row) {
+                    $item = is_array($row) ? self::listItem($row) : null;
+                    if ($item === null) {
+                        $passWithoutId++;
 
-                    continue;
+                        continue;
+                    }
+                    $items[$item['id']] ??= $item;
                 }
-                if (isset($items[$item['id']])) {
-                    $duplicates++;
-
-                    continue;
+                if ($page['rows'] === []) {
+                    break;
                 }
-                $items[$item['id']] = $item;
             }
-            if ($page % self::PROGRESS_EVERY_PAGES === 0) {
-                $this->progress('Lista wyrobów 3M: '.count($items).'/'.$total);
+            // pozycji bez numeru nie da się odróżnić między przejściami — liczy się największa liczba z jednego
+            $withoutId = max($withoutId, $passWithoutId);
+            if (count($items) + $withoutId >= $group['total']) {
+                return ['items' => $items, 'without_id' => $withoutId, 'passes' => $pass];
             }
         }
 
-        $total = (int) $total;
-        $complete = ! $changed && count($items) + $withoutId === $total;
-        $problem = $changed
-            ? 'licznik zmienił się w trakcie pobierania'
-            : 'pobrano '.count($items).' różnych pozycji'.($withoutId > 0 ? ' i '.$withoutId.' bez numeru' : '').' przy liczniku '.$total
-                .($duplicates > 0 ? ', powtórzonych '.$duplicates : '');
+        throw new RuntimeException('Lista wyrobów '.MmmB2bClient::HOST.' niespójna: grupa '.self::groupName($group).' po '
+            .self::MAX_GROUP_PASSES.' przejściach ma '.count($items).' różnych pozycji przy liczniku '.$group['total']);
+    }
+
+    /**
+     * Strona wyszukiwarki z odczytanym licznikiem, pozycjami i podziałem na podkategorie i marki.
+     *
+     * @param  list<string>|null  $path
+     * @return array{total: int, rows: list<mixed>, categories: array<string, int>, brands: array<string, int>}
+     */
+    private function searchPage(?array $path, ?string $brand, int $start, int $size): array
+    {
+        $json = $this->client->search($start, $size, $path, $brand);
+        $rows = $json['items'] ?? null;
+        $total = $json['total'] ?? null;
+        if (! is_array($rows) || ! is_numeric($total)) {
+            throw new RuntimeException('Lista wyrobów '.MmmB2bClient::HOST.': nieczytelna odpowiedź wyszukiwarki ('
+                .implode('/', $path ?? [MmmB2bClient::CATEGORY]).($brand !== null ? ', '.$brand : '').', od '.$start.')');
+        }
+        $sticky = is_array($json['aggregations']['sticky'] ?? null) ? $json['aggregations']['sticky'] : [];
+        $facets = static function (mixed $list, string $key): array {
+            $out = [];
+            foreach (is_array($list) ? $list : [] as $facet) {
+                if (is_array($facet) && is_scalar($facet[$key] ?? null) && is_numeric($facet['count'] ?? null) && (string) $facet[$key] !== '') {
+                    $out[(string) $facet[$key]] = (int) $facet['count'];
+                }
+            }
+
+            return $out;
+        };
 
         return [
-            'items' => $items,
-            'total' => $total,
-            'duplicates' => $duplicates,
-            'without_id' => $withoutId,
-            'complete' => $complete,
-            'changed' => $changed,
-            'problem' => $problem,
+            'total' => (int) $total,
+            'rows' => array_values($rows),
+            'categories' => $facets($sticky['categories']['facets'] ?? null, 'id'),
+            'brands' => $facets($sticky['brand']['facets'] ?? null, 'value'),
         ];
+    }
+
+    /**
+     * @param  array{path: list<string>, brand: ?string, total: int}  $group
+     */
+    private static function groupName(array $group): string
+    {
+        return implode('/', $group['path']).($group['brand'] !== null ? ' ('.$group['brand'].')' : '');
     }
 
     /**
