@@ -187,7 +187,14 @@ final class ArtraDatasheetDescriptionTest extends TestCase
         $sheet = $this->datasheetOf($card);
         $legacyTitle = 'PL-KP-'.str_replace(' ', '_', self::SKU).'.pdf';
         // plik zapisało wcześniej wzbogacanie ze strony producenta — bez konta B2B (produkcja: b2b_account_id = null)
-        $sheet->forceFill(['kind' => ProductDocument::KIND_OTHER, 'title' => $legacyTitle, 'b2b_account_id' => null])->save();
+        $canonicalUrl = (string) $sheet->source_url;
+        // i pod adresem z parametrem wersji Shopify, którego łącznik nie podaje (produkcja: „…pdf?v=10009356346779842891”)
+        $sheet->forceFill([
+            'kind' => ProductDocument::KIND_OTHER,
+            'title' => $legacyTitle,
+            'b2b_account_id' => null,
+            'source_url' => $canonicalUrl.'?v=10009356346779842891',
+        ])->save();
         $foreign = ProductDocument::query()->create([
             'product_id' => $card->id,
             'path' => 'products/'.$card->id.'/reczny.pdf',
@@ -195,6 +202,7 @@ final class ArtraDatasheetDescriptionTest extends TestCase
             'title' => 'Plik dodany ręcznie',
             'kind' => ProductDocument::KIND_OTHER,
         ]);
+        $documentsBefore = ProductDocument::query()->where('product_id', $card->id)->count();
         Queue::fake();
 
         $this->sync();
@@ -203,6 +211,8 @@ final class ArtraDatasheetDescriptionTest extends TestCase
         $this->assertSame(ProductDocument::KIND_DATASHEET, $sheet->kind);
         $this->assertSame('Karta produktu', $sheet->title);
         $this->assertSame((int) $this->account()->id, $sheet->b2b_account_id);
+        $this->assertSame($canonicalUrl, $sheet->source_url);
+        $this->assertSame($documentsBefore, ProductDocument::query()->where('product_id', $card->id)->count());
         $this->assertSame('Plik dodany ręcznie', $foreign->refresh()->title);
         $this->assertNull($foreign->b2b_account_id);
         Queue::assertPushed(DescribeB2bProductFromDatasheetJob::class, 1);

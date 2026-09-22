@@ -1750,6 +1750,14 @@ final class B2bCatalogSync
         return ['documents' => $documents, 'texts' => $texts];
     }
 
+    /** Adres pliku do porównania: bez schematu, zapytania i fragmentu („//artra.pl/…pdf?v=1” = „https://artra.pl/…pdf”). */
+    private static function documentUrlKey(string $url): string
+    {
+        $url = (string) preg_replace('/[?#].*$/s', '', trim($url));
+
+        return (string) preg_replace('~^(?:https?:)?//~i', '', $url);
+    }
+
     /**
      * Pliki dostawcy przy karcie (ProductDocument): pobieramy tylko te, których karta jeszcze nie ma pod tym
      * adresem. Tekst odczytany dla opisu zapisujemy razem z plikiem; z pozostałych PDF-ów czytamy go przy zapisie,
@@ -1774,11 +1782,23 @@ final class B2bCatalogSync
             static fn (B2bRemoteDocument $document): string => mb_substr($document->sourceUrl, 0, 2000),
             $card['documents'],
         );
-        $stored = ProductDocument::query()
+        // Ten sam plik bywa zapisany pod adresem z parametrem wersji (Shopify „?v=…” — wzbogacanie ze strony
+        // producenta), a łącznik podaje adres bez zapytania: bez dopasowania po adresie bez zapytania każdy przebieg
+        // pobierał taki plik od nowa (ARTRA: „pliki: 22” co przebieg), a zapis po sumie kontrolnej zostawiał stary
+        // wpis bez konta i z rodzajem „inne” (9476 ARISAKA bez opisu z PDF).
+        $byUrl = ProductDocument::query()
             ->where('product_id', $product->id)
-            ->whereIn('source_url', $urls)
             ->get()
             ->keyBy('source_url');
+        $stored = collect();
+        foreach ($urls as $url) {
+            $have = $byUrl->get($url) ?? $byUrl->first(
+                static fn (ProductDocument $d): bool => self::documentUrlKey((string) $d->source_url) === self::documentUrlKey($url),
+            );
+            if ($have !== null) {
+                $stored->put($url, $have);
+            }
+        }
         $sortOrder = (int) ProductDocument::query()->where('product_id', $product->id)->max('sort_order');
 
         $saved = 0;
@@ -1802,6 +1822,10 @@ final class B2bCatalogSync
                     $patch['b2b_account_id'] = (int) $account->id;
                 }
                 if ($ownerless || (int) $have->b2b_account_id === (int) $account->id) {
+                    // adres jak podaje łącznik (bez „?v=…”), żeby kolejne przebiegi trafiały w plik wprost
+                    if ((string) $have->source_url !== $url) {
+                        $patch['source_url'] = $url;
+                    }
                     if ($have->kind !== $document->kind) {
                         $patch['kind'] = $document->kind;
                     }
