@@ -23,6 +23,7 @@ use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
 use App\Services\B2b\MmmB2bClient;
 use App\Services\B2b\MmmB2bConnector;
+use GuzzleHttp\Exception\ConnectException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\DB;
@@ -80,6 +81,9 @@ final class MmmConnectorTest extends TestCase
 
     /** Ceny zawsze 401 (sesja sklepu utracona w trakcie przebiegu). */
     private bool $pricesUnauthorized = false;
+
+    /** @var list<string> numery, z którymi każda paczka cen kończy się błędem */
+    private array $brokenPriceIds = [];
 
     /** @var list<array<string, mixed>> pozycje listy wyszukiwarki */
     private array $items = [];
@@ -343,9 +347,37 @@ final class MmmConnectorTest extends TestCase
         $this->assertStringContainsString('210 pozycji w 3 grupach kategorii', implode("\n", $messages));
         $this->assertStringContainsString('grup pobranych więcej niż raz (zmienna kolejność stron): 1', implode("\n", $connector->runSummary()));
         $packs = Http::recorded(fn (Request $r): bool => str_contains($r->url(), 'productPrice'))->values();
-        $this->assertCount(3, $packs);
-        parse_str((string) parse_url($packs[2][0]->url(), PHP_URL_QUERY), $query);
+        // paczki po 50: 210 = 4 × 50 + 10
+        $this->assertCount(5, $packs);
+        parse_str((string) parse_url($packs[4][0]->url(), PHP_URL_QUERY), $query);
         $this->assertCount(10, explode(',', $query['materialIDs']));
+    }
+
+    public function test_price_pack_failing_on_one_item_is_halved_so_only_that_item_has_no_price(): void
+    {
+        $this->fakeSite();
+        for ($i = 0; $i < 50; $i++) {
+            $id = (string) (7000000000 + $i);
+            $this->items[] = self::item($id, 'K'.$i, 'Wyrób testowy '.$i, 'EA', 'szt', 'CS', 'karton', '10');
+            $this->prices[$id] = self::price('10,00 PLN / szt', '20,00 PLN / szt', '1 szt');
+        }
+        $this->brokenPriceIds = ['7000000017'];
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(50, $products);
+        $failed = [];
+        foreach ($products as $product) {
+            try {
+                $this->assertSame(10.0, $connector->price($product)?->net);
+            } catch (RuntimeException $e) {
+                $failed[$product->remoteId] = $e->getMessage();
+            }
+        }
+        $this->assertSame(['7000000017'], array_map('strval', array_keys($failed)));
+        $this->assertStringStartsWith('ceny 3M nie zostały pobrane (', $failed['7000000017']);
+        $this->assertStringNotContainsString('materialIDs=', $failed['7000000017']);
     }
 
     public function test_group_incomplete_after_every_pass_stops_before_the_first_product(): void
@@ -774,6 +806,12 @@ final class MmmConnectorTest extends TestCase
             parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
             $cookies = self::requestCookies($request);
 
+            // jak na żywo (22.09.2026): Akamai przytrzymuje zapytanie bez przeglądarkowego User-Agent — 0 bajtów
+            // do przekroczenia czasu; ceny bez UA szły tak przez cały pierwszy przebieg
+            if (str_ends_with($host, '3m.com') && ! str_contains($request->header('User-Agent')[0] ?? '', 'Mozilla/5.0')) {
+                throw new ConnectException('Operation timed out after 30001 milliseconds with 0 bytes received', $request->toPsrRequest());
+            }
+
             if ($host === 'order.3m.com') {
                 $signedIn = in_array($cookies['JSESSIONID'] ?? '', $this->storeSessions, true);
                 if ($path === '/store/user/login') {
@@ -814,8 +852,13 @@ final class MmmConnectorTest extends TestCase
                     if (! $signedIn || $this->pricesUnauthorized || ! str_contains($path, '/users/'.self::USER_ID.'/')) {
                         return Http::response(['errors' => [['type' => 'InvalidTokenError']]], 401, $json);
                     }
+                    $asked = explode(',', (string) ($query['materialIDs'] ?? ''));
+                    if (array_intersect($asked, $this->brokenPriceIds) !== []) {
+                        // SAP 3M nie wycenia tej pozycji — cała paczka z nią kończy się błędem
+                        return Http::response(['errors' => [['type' => 'SapError']]], 500, $json);
+                    }
                     $products = [];
-                    foreach (explode(',', (string) ($query['materialIDs'] ?? '')) as $id) {
+                    foreach ($asked as $id) {
                         if (isset($this->prices[$id])) {
                             $products[] = ['key' => $id, 'value' => $this->prices[$id]];
                         }

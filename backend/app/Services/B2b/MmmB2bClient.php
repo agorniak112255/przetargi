@@ -70,6 +70,9 @@ final class MmmB2bClient
 
     private const TIMEOUT_SECONDS = 30;
 
+    /** Ceny liczy SAP 3M na żywo — paczka 100 wyrobów to ok. 3–10 s; zapas na wolniejsze chwile sklepu. */
+    private const PRICE_TIMEOUT_SECONDS = 60;
+
     private const MAX_CONSECUTIVE_FAILURES = 20;
 
     /** Przerwy po 429/503, gdy witryna nie podała Retry-After (ms). */
@@ -354,7 +357,8 @@ final class MmmB2bClient
         $fetch = function () use ($query): ?array {
             $url = sprintf(self::PRICE_URL, rawurlencode((string) $this->userId)).'?'.$query;
             $response = $this->send(
-                static fn (PendingRequest $http): Response => $http->acceptJson()->get($url),
+                // bez User-Agent przeglądarki Akamai przytrzymuje zapytanie bez odpowiedzi (pierwszy przebieg 22.09.2026)
+                fn (PendingRequest $http): Response => $this->browser($http)->timeout(self::PRICE_TIMEOUT_SECONDS)->acceptJson()->get($url),
                 [401, 403],
             );
             $json = $response->successful() ? json_decode((string) $response->body(), true) : null;
@@ -391,7 +395,7 @@ final class MmmB2bClient
         if (! self::isFileUrl($url)) {
             throw new RuntimeException('plik spoza '.self::FILE_HOST.': '.$url);
         }
-        $response = $this->send(static fn (PendingRequest $http): Response => $http->get($url));
+        $response = $this->send(fn (PendingRequest $http): Response => $this->browser($http)->get($url));
         $mime = strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]));
 
         return ['bytes' => (string) $response->body(), 'mime' => $mime];

@@ -17,7 +17,7 @@ use Throwable;
  * w grupach podkategorii (i marek) — duże wyniki wyszukiwarka stronicuje niedeterministycznie (listItems). Cała lista
  * idzie przed pierwszym produktem, deduplikowana po numerze magazynowym (mmm_id), i musi się zgadzać z licznikami.
  *
- * Karta = jeden numer magazynowy 3M (SKU = mmm_id). Ceny konta w paczkach po 100 za JEDNOSTKĘ BAZOWĄ wyrobu
+ * Karta = jeden numer magazynowy 3M (SKU = mmm_id). Ceny konta w paczkach po 50 za JEDNOSTKĘ BAZOWĄ wyrobu
  * (materialUnits = baseUomCode) — 3M sam przelicza cenę kartonu na sztukę/parę, my niczego nie dzielimy. Odpowiedź
  * mówi, za co jest cena („pricePer”: „1 szt”); inna jednostka niż bazowa = brak ceny z powodem w podsumowaniu.
  *
@@ -31,7 +31,8 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
 {
     public const BRAND = '3M';
 
-    private const PRICE_CHUNK = 100;
+    /** Paczka cen w jednym zapytaniu (sklep przyjmuje 100); paczka z błędem dzielona na pół (chunkPrices). */
+    private const PRICE_CHUNK = 50;
 
     /** Górna granica listy — więcej pozycji niż tyle to błąd licznika, nie oferta ŚOI. */
     private const MAX_TOTAL = 20_000;
@@ -158,9 +159,9 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         $this->total = count($items);
 
         foreach (array_chunk($items, self::PRICE_CHUNK) as $chunk) {
-            [$prices, $error] = $this->chunkPrices($chunk);
+            [$prices, $errors] = $this->chunkPrices($chunk);
             foreach ($chunk as $item) {
-                yield $this->productFor($item, $prices, $error);
+                yield $this->productFor($item, $prices, $errors[(string) $item['id']] ?? null);
             }
         }
     }
@@ -644,10 +645,12 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
     }
 
     /**
-     * Ceny jednej paczki (za jednostkę bazową). Błąd pobrania (poza krytycznym) = wszystkie pozycje paczki z powodem.
+     * Ceny jednej paczki (za jednostkę bazową). Błąd pobrania (poza krytycznym) → paczka dzielona na pół i pobierana
+     * ponownie, aż do pojedynczej pozycji — powód braku ceny dostaje tylko pozycja, której ceny sklep nie wydał,
+     * a nie cała paczka.
      *
      * @param  list<array<string, mixed>>  $chunk
-     * @return array{0: array<string, array<string, mixed>>, 1: string|null}
+     * @return array{0: array<string, array<string, mixed>>, 1: array<string, string>} ceny i powody błędów wg numeru
      */
     private function chunkPrices(array $chunk): array
     {
@@ -660,11 +663,21 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
             }
         }
         try {
-            return [$this->client->prices($ids, $units), null];
+            return [$this->client->prices($ids, $units), []];
         } catch (B2bFatalException $e) {
             throw $e;
         } catch (RuntimeException $e) {
-            return [[], 'ceny 3M nie zostały pobrane ('.$e->getMessage().')'];
+            if (count($chunk) > 1) {
+                $half = (int) ceil(count($chunk) / 2);
+                [$firstPrices, $firstErrors] = $this->chunkPrices(array_slice($chunk, 0, $half));
+                [$secondPrices, $secondErrors] = $this->chunkPrices(array_slice($chunk, $half));
+
+                return [$firstPrices + $secondPrices, $firstErrors + $secondErrors];
+            }
+            // adres zapytania (z listą numerów) nie mówi nic nowego, a zalewa dziennik
+            $reason = 'ceny 3M nie zostały pobrane ('.trim((string) preg_replace('~\s*\(see https?://\S+\)|\s*for https?://\S+~', '', $e->getMessage())).')';
+
+            return [[], [(string) $chunk[0]['id'] => $reason]];
         }
     }
 
