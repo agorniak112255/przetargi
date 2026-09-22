@@ -1181,21 +1181,6 @@ final class PpeAssortment
     }
 
     /**
-     * Dwie trzecie katalogu nie ma opisu, z którego dałoby się odczytać rodzinę —
-     * zostaje sam kod producenta. Odrzucamy więc tylko wtedy, gdy wiemy, że produkt
-     * należy do innej rodziny; nierozpoznana rodzina to brak wiedzy, nie niezgodność.
-     * O takich kartach rozstrzyga trafienie w tekst i model, nie ta bramka.
-     */
-    public function compatibleProduct(string $requirement, Product $product): bool
-    {
-        $reqFamily = $this->family($requirement);
-        if ($reqFamily === null) {
-            return true;
-        }
-
-        $fromName = $this->family((string) $product->name);
-        $stored = $product->ppe_family !== null && $product->ppe_family !== ''
-    /**
      * Nazwa modelu na karcie nie przełamuje rodzaju ubioru: „Tyvek 500” i „Tychem C” to linie materiału,
      * w których są kombinezon, osłona na buty i rękawica. Pod „Niska osłona na buty DuPont Tyvek 500 POSO”
      * trafienie w model podstawiało kombinezony TYVEK 500 z 99%. Konflikt tylko wtedy, gdy wymaganie
@@ -1217,6 +1202,21 @@ final class PpeAssortment
         return $prodFamily !== null && $prodFamily !== $reqFamily && in_array($prodFamily, $wear, true);
     }
 
+    /**
+     * Dwie trzecie katalogu nie ma opisu, z którego dałoby się odczytać rodzinę —
+     * zostaje sam kod producenta. Odrzucamy więc tylko wtedy, gdy wiemy, że produkt
+     * należy do innej rodziny; nierozpoznana rodzina to brak wiedzy, nie niezgodność.
+     * O takich kartach rozstrzyga trafienie w tekst i model, nie ta bramka.
+     */
+    public function compatibleProduct(string $requirement, Product $product): bool
+    {
+        $reqFamily = $this->family($requirement);
+        if ($reqFamily === null) {
+            return true;
+        }
+
+        $fromName = $this->family((string) $product->name);
+        $stored = $product->ppe_family !== null && $product->ppe_family !== ''
             ? (string) $product->ppe_family
             : null;
         $prodFamily = $fromName ?? $stored ?? $this->productFamily($product);
