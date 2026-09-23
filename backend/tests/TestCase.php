@@ -13,6 +13,11 @@ abstract class TestCase extends BaseTestCase
     {
         $app = parent::createApplication();
         $this->rejectUnsafeRefreshDatabase($app);
+        // Kontrolery zapytań klienta i eksportu Presta ustawiają set_time_limit(180) dla żądania HTTP.
+        // W teście limit zostawał w procesie roboczym paratestu na kolejne pliki, a na Windows liczy
+        // czas zegarowy — wolny test łącznika z PDF (Delta Plus, ATG) padał „Maximum execution time”
+        // zależnie od tego, co ten proces uruchomił wcześniej. Każdy test startuje bez limitu.
+        set_time_limit(0);
 
         return $app;
     }
