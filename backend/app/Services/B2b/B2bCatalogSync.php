@@ -19,6 +19,7 @@ use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Models\ProductVariantPriceHistory;
+use App\Services\Catalog\CardOwnership;
 use App\Services\Catalog\ProductIdentifierStore;
 use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductImageDownloader;
@@ -165,6 +166,7 @@ final class B2bCatalogSync
         private readonly B2bDocumentText $documentText = new B2bDocumentText,
         private readonly B2bManufacturerRules $manufacturerRules = new B2bManufacturerRules,
         private readonly ProductIdentifierStore $identifiers = new ProductIdentifierStore,
+        private readonly CardOwnership $ownership = new CardOwnership,
     ) {}
 
     /**
@@ -623,6 +625,11 @@ final class B2bCatalogSync
      * opisu nie czytamy, nie zapisujemy i nie kasujemy, opisu z karty katalogowej nie zlecamy; oba wyłączone —
      * pozycja pominięta w całości (status „excluded”, bez powiązania).
      *
+     * Karta producenta chroniona przed dystrybutorem (plan łączenia kart, etap A, 23.09.2026): na karcie z właścicielem
+     * (CardOwnership) konto nie-właściciel nie zmienia producenta ani nazwy, listę rozmiarów i dowód kategorii wpisuje
+     * tylko do pustych pól, a zdjęcie dokłada tylko do karty bez zdjęć (keepOwnerFields, storeImage). Slot ceny,
+     * tabelka sklepu, identyfikatory, powiązanie, dokumenty i opis (mayWriteDescription) — jak dotąd.
+     *
      * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed  karty użyte w tym przebiegu
      * @param  array<string, array{price: bool, description: bool}>  $rules  wyłączenia konta po kluczu producenta
      * @return array<string, mixed>
@@ -740,6 +747,11 @@ final class B2bCatalogSync
         $warnings = [];
         $card = $this->cardDocuments($connector, $remote, $existing, $warnings);
         [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings, ! $descriptionOff);
+        // Przed fill — właściciela liczymy z producenta zapisanego na karcie, nie z brzmienia tego konta.
+        $foreignOnProtected = $existing !== null && $this->isForeignOnProtectedCard($existing, $account);
+        if ($foreignOnProtected) {
+            $this->keepOwnerFields($payload, $existing);
+        }
 
         $priceChange = null;
         $updateSummary = null;
@@ -916,7 +928,9 @@ final class B2bCatalogSync
             }
         }
 
-        [$image, $imageError] = $withImages ? $this->storeImage($connector, $remote, $product, $account) : [false, null];
+        [$image, $imageError] = $withImages
+            ? $this->storeImage($connector, $remote, $product, $account, $foreignOnProtected)
+            : [false, null];
         $documents = $this->storeDocuments($account, $product, $connector, $card, $warnings);
         $shopFields = $this->storeShopFields($connector, $remote, $product, $account, $warnings);
         $this->storeNormFacts($connector, $remote, $product, $account, $warnings);
@@ -2003,6 +2017,36 @@ final class B2bCatalogSync
         return BrandKey::same($a, $b);
     }
 
+    /**
+     * Karta ma właściciela (konto B2B albo cennik z pliku producenta jej marki — CardOwnership), a konto tego
+     * przebiegu nim nie jest: dystrybutor dopięty do karty producenta (products:merge-duplicate). Karta bez
+     * właściciela i konto-właściciel — false, zachowanie jak dotąd.
+     */
+    private function isForeignOnProtectedCard(Product $card, B2bAccount $account): bool
+    {
+        return ! $this->ownership->isOwnerAccount($card, $account) && $this->ownership->isProtected($card);
+    }
+
+    /**
+     * Pola karty, których nie-właściciel nie zmienia na karcie chronionej. Producent i nazwa — nigdy (od producenta
+     * karty zależy cena z pliku producenta, pierwszeństwo jego opisu i szukanie karty przy imporcie; 23.09.2026 P4S
+     * po scaleniu co przebieg przepisywał producenta karty na swoje brzmienie). Lista rozmiarów i dowód kategorii
+     * — tylko do pustego pola: karta ATG #9669 „MaxiChem Cut” z konta treści ATG (bez rozmiarów) ma rozmiary
+     * wyłącznie od dystrybutora Ardon („Rozmiary: 07 (A3083/07); …”), więc puste pole dalej się wypełnia,
+     * a wypełnionego dystrybutor nie nadpisuje. Kategoria i link do sklepu — jak dotąd, tylko do pustych (applyCardDetails).
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function keepOwnerFields(array &$payload, Product $card): void
+    {
+        unset($payload['name'], $payload['manufacturer']);
+        foreach (['variant_summary', 'category_evidence'] as $field) {
+            if (trim((string) ($card->getAttribute($field) ?? '')) !== '') {
+                unset($payload[$field]);
+            }
+        }
+    }
+
     private function foreignManufacturer(Product $existing, string $manufacturer): bool
     {
         return mb_strtolower(trim((string) $existing->manufacturer)) !== mb_strtolower($manufacturer);
@@ -2460,10 +2504,23 @@ final class B2bCatalogSync
     }
 
     /**
+     * $onlyIfNoImages — konto nie-właściciel na karcie chronionej (isForeignOnProtectedCard): zdjęcie dokłada tylko
+     * do karty bez zdjęć. Galeria karty, która już ma zdjęcia, zostaje nietknięta: bez nowych ujęć, bez stempla
+     * konta na zdjęciach bez konta (stampGalleryImage) i bez przestawiania kolejności (resequence stawia
+     * zdjęcia dostawcy przed zdjęciami z sieci — zdjęcie główne karty producenta przechodziło na dystrybutora).
+     *
      * @return array{0: bool, 1: string|null}
      */
-    private function storeImage(B2bConnector $connector, B2bRemoteProduct $remote, Product $product, B2bAccount $account): array
-    {
+    private function storeImage(
+        B2bConnector $connector,
+        B2bRemoteProduct $remote,
+        Product $product,
+        B2bAccount $account,
+        bool $onlyIfNoImages = false,
+    ): array {
+        if ($onlyIfNoImages && $product->images()->exists()) {
+            return [false, null];
+        }
         $manufacturerAccountId = $this->manufacturerAccountId($connector, $product, $account);
         if ($connector instanceof B2bImageGallery) {
             return $this->storeGallery($connector, $remote, $product, $account, $manufacturerAccountId);

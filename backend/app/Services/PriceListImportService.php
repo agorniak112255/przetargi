@@ -15,10 +15,12 @@ use App\Models\ProductIdentifier;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\User;
+use App\Services\Catalog\CardOwnership;
 use App\Services\Catalog\ProductIdentifierStore;
 use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\Presta\ProductCategorySanitizer;
 use App\Services\Pricing\ProductEffectivePrice;
+use App\Support\CanonicalBrand;
 use App\Support\ProductSizeVariant;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
@@ -46,6 +48,7 @@ final class PriceListImportService
         private readonly ProductEffectivePrice $effectivePrices,
         private readonly PrestaCategoryRewriteService $prestaCategories,
         private readonly ProductIdentifierStore $identifiers = new ProductIdentifierStore,
+        private readonly CardOwnership $ownership = new CardOwnership,
     ) {}
 
     /**
@@ -478,8 +481,10 @@ final class PriceListImportService
                     $fileSlot = $this->fileSlot($existing, $fileSlots);
                     $before = $this->effectivePrices->previousSourcePrices($existing, $fileSlot, $slotValues);
                     $cardPayload = $payload;
-                    // karta z powiązaniem B2B: nazwa i producent zostają na karcie (decyzja użytkownika 15.09.2026)
-                    if (B2bProductLink::query()->where('product_id', $existing->id)->exists()) {
+                    // karta z powiązaniem B2B: nazwa i producent zostają na karcie (decyzja użytkownika 15.09.2026) —
+                    // poza cennikiem producenta marki karty, gdy powiązania są tylko od dystrybutorów (producerFileOwnsCard)
+                    if (B2bProductLink::query()->where('product_id', $existing->id)->exists()
+                        && ! $this->producerFileOwnsCard($existing, $manufacturer)) {
                         unset($cardPayload['name'], $cardPayload['manufacturer']);
                     }
                     // kategoria wybrana ręcznie w panelu zostaje — cennik ani drzewo sklepu jej po cichu nie nadpisują
@@ -1387,6 +1392,26 @@ final class PriceListImportService
         $incoming = mb_strtolower(trim($manufacturer));
 
         return $card !== '' && $incoming !== '' && $card !== $incoming;
+    }
+
+    /**
+     * Cennik producenta marki karty (właściciel „file” wg CardOwnership, także sugerowany), a karta nie ma powiązania
+     * z kontem B2B producenta tej marki — wtedy cennik dalej ustala nazwę i producenta karty. Powiązania dystrybutorów
+     * (P4S, Raw-Pol, Ardon…, dopięte np. przez products:merge-duplicate) tego nie blokują: bez tego karta producenta
+     * z pliku po scaleniu z kartą dystrybutora przestawała przyjmować nazwę ze swojego cennika.
+     */
+    private function producerFileOwnsCard(Product $card, string $listManufacturer): bool
+    {
+        if (! CanonicalBrand::same($listManufacturer, (string) $card->manufacturer)) {
+            return false;
+        }
+        foreach ($this->ownership->ownerSourceKeys($card) as $key) {
+            if ($key !== ProductSourcePrice::SOURCE_FILE) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
