@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Jobs\RegisterManufacturerCatalogJob;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\B2bProductLink;
+use App\Models\CardRedirect;
 use App\Models\PrestaCategory;
 use App\Models\PriceList;
 use App\Models\PriceListImport;
@@ -16,6 +17,7 @@ use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\User;
 use App\Services\Catalog\CardOwnership;
+use App\Services\Catalog\CardRedirectStore;
 use App\Services\Catalog\ProductIdentifierStore;
 use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\Presta\ProductCategorySanitizer;
@@ -430,6 +432,12 @@ final class PriceListImportService
             $historyIds = [];
             /** @var array<int, list<array<string, mixed>>> $identifierRows id karty => identyfikatory jej wierszy */
             $identifierRows = [];
+            // mapa połączeń tego cennika (decyzje człowieka „pozycja pliku → karta”) — raz na import
+            $redirects = $this->fileRedirects((int) $priceList->id);
+            /** @var array<int, list<array{sku: string, payload: array<string, mixed>, positions: list<string>}>> $redirectGroups */
+            $redirectGroups = [];
+            /** @var list<string> $redirectWarnings ostrzeżenia mapy do uwag importu */
+            $redirectWarnings = [];
             foreach ($collected['products'] as $payload) {
                 $sku = (string) $payload['sku'];
                 $rowIdentifiers = is_array($payload['_identifiers'] ?? null) ? $payload['_identifiers'] : [];
@@ -446,21 +454,38 @@ final class PriceListImportService
                 if (($payload['ean'] ?? null) === null) {
                     unset($payload['ean']);
                 }
-                $existing = $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots);
-                // sku jest UNIQUE — kod karty innego producenta: pozycja pominięta, bez drugiej karty i bez nadpisania
-                if ($existing !== null && $this->foreignManufacturer($existing, (string) ($payload['manufacturer'] ?? ''))) {
-                    $reason = 'kod należy do karty producenta '.$existing->manufacturer;
-                    $collected['skipped']++;
-                    $collected['errors'][] = $sku.': '.$reason;
-                    if (is_array($collected['skipped_details'] ?? null)) {
-                        $collected['skipped_details'][] = [
-                            'reason' => $reason,
-                            'row' => null,
-                            'sheet' => null,
-                            'sku' => $sku,
-                            'name' => isset($payload['name']) ? (string) $payload['name'] : null,
-                        ];
+                // mapa połączeń ma pierwszeństwo przed dopasowaniem kodu, rdzenia i nazwy (findExistingProduct)
+                $route = $this->redirectRoute($rowIdentifiers, $redirects, (string) ($payload['manufacturer'] ?? ''));
+                foreach ($route['warnings'] as $warning) {
+                    $redirectWarnings[] = $sku.': '.$warning;
+                }
+                if ($route['skip'] !== null) {
+                    $this->skipRow($collected, $sku, $payload, $route['skip']);
+                    // pozycje pominiętego wiersza są w pliku — zostają przy swoich kartach, nie jako zniknięte
+                    foreach ($route['identifiers'] as $productId => $skippedIdentifiers) {
+                        $identifierRows[$productId] = [...($identifierRows[$productId] ?? []), ...$skippedIdentifiers];
                     }
+
+                    continue;
+                }
+                $existing = $route['card'] ?? $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots);
+                // sku jest UNIQUE — kod karty innego producenta: pozycja pominięta, bez drugiej karty i bez nadpisania
+                // (karta z mapy przeszła już porównanie marki kanonicznej w redirectRoute)
+                if ($route['card'] === null && $existing !== null
+                    && $this->foreignManufacturer($existing, (string) ($payload['manufacturer'] ?? ''))) {
+                    $this->skipRow($collected, $sku, $payload, 'kod należy do karty producenta '.$existing->manufacturer);
+
+                    continue;
+                }
+                // karta docelowa mapy tego cennika (z mapy albo trafiona zwykłym dopasowaniem, np. własny wiersz karty
+                // po łączeniu rozmiarów): wiersze zbierane i zapisywane razem po pętli (applyRedirectGroup)
+                if ($existing !== null && isset($redirects['cards'][(int) $existing->id])) {
+                    $redirectGroups[(int) $existing->id][] = [
+                        'sku' => $sku,
+                        'payload' => $payload,
+                        'positions' => $this->rowPositions($rowIdentifiers) ?: [$sku],
+                    ];
+                    $identifierRows[(int) $existing->id] = [...($identifierRows[(int) $existing->id] ?? []), ...$rowIdentifiers];
 
                     continue;
                 }
@@ -529,6 +554,23 @@ final class PriceListImportService
                 }
             }
 
+            // karty z mapy połączeń: jedna aktualizacja na kartę, bez zmiany SKU, nazwy i producenta (decyzja człowieka)
+            foreach ($redirectGroups as $cardId => $groupRows) {
+                $result = $this->applyRedirectGroup($redirects['cards'][$cardId], $groupRows, (int) $priceList->id, $manufacturer, $fileSlots);
+                if ($result['change'] !== null) {
+                    $priceChanges[] = $result['change'];
+                }
+                if ($result['history']) {
+                    $historyIds[$cardId] = true;
+                }
+                if ($result['warning'] !== null) {
+                    $redirectWarnings[] = $result['warning'];
+                }
+                $updatedProducts[] = $result['summary'];
+                $productIds[] = $cardId;
+                $updated++;
+            }
+
             $productIds = array_values(array_unique($productIds));
 
             // największe zmiany % najpierw
@@ -537,6 +579,8 @@ final class PriceListImportService
             $skippedDetails = is_array($collected['skipped_details'] ?? null)
                 ? array_slice($collected['skipped_details'], 0, 100)
                 : $this->skippedDetailsFromErrors($collected['errors'] ?? [], (int) $collected['skipped']);
+            // ostrzeżenia mapy to nie pominięte wiersze (poza skipped_details); na początku uwag, żeby limit ich nie uciął
+            $collected['errors'] = [...$redirectWarnings, ...$collected['errors']];
 
             $priceList->update([
                 'products_created' => $created,
@@ -1412,6 +1456,322 @@ final class PriceListImportService
         }
 
         return true;
+    }
+
+    /**
+     * Mapa połączeń cennika (card_redirects, source_key „file:{cennik}”): wpisy po kluczu pozycji jak UNIQUE
+     * (CardRedirectStore::key) i istniejące karty docelowe.
+     *
+     * @return array{source_key: string, entries: array<string, CardRedirect>, cards: array<int, Product>}
+     */
+    private function fileRedirects(int $priceListId): array
+    {
+        $sourceKey = ProductIdentifierStore::fileKey($priceListId);
+        $entries = [];
+        foreach (CardRedirect::query()->where('source_key', $sourceKey)->orderBy('id')->get() as $entry) {
+            $entries[CardRedirectStore::key($sourceKey, (string) $entry->position_key)] = $entry;
+        }
+        $ids = [];
+        foreach ($entries as $entry) {
+            if ($entry->product_id !== null) {
+                $ids[(int) $entry->product_id] = true;
+            }
+        }
+        $cards = [];
+        foreach (array_chunk(array_keys($ids), 1000) as $chunk) {
+            foreach (Product::query()->whereIn('id', $chunk)->get() as $card) {
+                $cards[(int) $card->id] = $card;
+            }
+        }
+
+        return ['source_key' => $sourceKey, 'entries' => $entries, 'cards' => $cards];
+    }
+
+    /**
+     * Pozycje wiersza (kody wierszy pliku, także zwiniętych rozmiarów) tak, jak zapisuje je
+     * ProductIdentifierStore::recordFile i mapa połączeń: przycięte, najwyżej 64 znaki.
+     *
+     * @param  list<array<string, mixed>>  $rowIdentifiers
+     * @return list<string>
+     */
+    private function rowPositions(array $rowIdentifiers): array
+    {
+        $positions = [];
+        foreach ($rowIdentifiers as $identifier) {
+            $position = mb_substr(trim((string) ($identifier['position'] ?? '')), 0, 64);
+            if ($position !== '' && ! in_array($position, $positions, true)) {
+                $positions[] = $position;
+            }
+        }
+
+        return $positions;
+    }
+
+    /**
+     * Karta wiersza wg mapy połączeń. Wszystkie zmapowane pozycje wiersza wskazują jedną kartę → ta karta (pozycje
+     * bez wpisu idą z wierszem); różne karty albo inna marka producenta niż karta → wiersz pominięty z powodem
+     * (bez zgadywania). Wpis z usuniętą kartą → ostrzeżenie, pozycja bez przekierowania. Brak wpisów → zwykła ścieżka.
+     *
+     * @param  list<array<string, mixed>>  $rowIdentifiers
+     * @param  array{source_key: string, entries: array<string, CardRedirect>, cards: array<int, Product>}  $redirects
+     * @return array{card: Product|null, skip: string|null, warnings: list<string>, identifiers: array<int, list<array<string, mixed>>>}
+     */
+    private function redirectRoute(array $rowIdentifiers, array $redirects, string $manufacturer): array
+    {
+        $route = ['card' => null, 'skip' => null, 'warnings' => [], 'identifiers' => []];
+        if ($redirects['entries'] === []) {
+            return $route;
+        }
+
+        /** @var array<string, int> $mapped pozycja => karta z mapy */
+        $mapped = [];
+        foreach ($this->rowPositions($rowIdentifiers) as $position) {
+            $entry = $redirects['entries'][CardRedirectStore::key($redirects['source_key'], $position)] ?? null;
+            if ($entry === null) {
+                continue;
+            }
+            $card = $entry->product_id !== null ? ($redirects['cards'][(int) $entry->product_id] ?? null) : null;
+            if ($card === null) {
+                $snapshot = is_array($entry->target_snapshot) ? $entry->target_snapshot : [];
+                $label = isset($snapshot['id'])
+                    ? '#'.$snapshot['id'].(trim((string) ($snapshot['sku'] ?? '')) !== '' ? ' ('.$snapshot['sku'].')' : '')
+                    : 'kartą';
+                $route['warnings'][] = 'pozycja '.$position.' była połączona z kartą '.$label
+                    .', której już nie ma (decyzja bez karty) — pozycja bez przekierowania; sprawdź w Łączenie kart';
+
+                continue;
+            }
+            $mapped[$position] = (int) $card->id;
+        }
+
+        $targets = array_values(array_unique($mapped));
+        if ($targets === []) {
+            return $route;
+        }
+        $card = $redirects['cards'][$targets[0]];
+        $manufacturer = trim($manufacturer);
+        $cardManufacturer = trim((string) $card->manufacturer);
+        if (count($targets) > 1) {
+            sort($targets);
+            $route['skip'] = 'pozycje wiersza należą do różnych połączonych kart (#'.implode(', #', $targets)
+                .') — sprawdź w Łączenie kart';
+        } elseif ($manufacturer !== '' && $cardManufacturer !== '' && ! CanonicalBrand::same($manufacturer, $cardManufacturer)) {
+            // marka kanoniczna, nie dosłowny zapis: „ANRO”/„Anro” i marka ze słownika nie blokują decyzji
+            $route['skip'] = 'pozycja połączona z kartą #'.$card->id.' producenta '.$cardManufacturer
+                .', a cennik podaje producenta '.$manufacturer.' — sprawdź w Łączenie kart';
+        } else {
+            $route['card'] = $card;
+
+            return $route;
+        }
+        $route['identifiers'] = $this->skippedRowIdentifiers($rowIdentifiers, $mapped, $redirects['source_key']);
+
+        return $route;
+    }
+
+    /**
+     * Identyfikatory pominiętego wiersza, który w pliku jest: pozycja z mapy przy swojej karcie z mapy, pozycja bez
+     * wpisu przy karcie, przy której ten cennik już ją ma. Inaczej recordFile oznaczyłby je jako zniknięte z pliku.
+     *
+     * @param  list<array<string, mixed>>  $rowIdentifiers
+     * @param  array<string, int>  $mapped  pozycja => karta z mapy
+     * @return array<int, list<array<string, mixed>>>
+     */
+    private function skippedRowIdentifiers(array $rowIdentifiers, array $mapped, string $sourceKey): array
+    {
+        $unmapped = array_values(array_filter(
+            $this->rowPositions($rowIdentifiers),
+            static fn (string $position): bool => ! isset($mapped[$position]),
+        ));
+        $owners = [];
+        if ($unmapped !== []) {
+            foreach (ProductIdentifier::query()->where('source_key', $sourceKey)->whereIn('position_key', $unmapped)
+                ->orderBy('id')->get(['position_key', 'product_id']) as $row) {
+                $owners[(string) $row->position_key] ??= (int) $row->product_id;
+            }
+        }
+
+        $out = [];
+        foreach ($rowIdentifiers as $identifier) {
+            $position = mb_substr(trim((string) ($identifier['position'] ?? '')), 0, 64);
+            $productId = $mapped[$position] ?? $owners[$position] ?? null;
+            if ($productId !== null) {
+                $out[$productId][] = $identifier;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Wiersze importu trafiające w jedną kartę z mapy połączeń — jedna aktualizacja karty. SKU, nazwa i producent
+     * karty bez zmian (decyzja człowieka), kategoria jak w zwykłej ścieżce (ręczna zostaje). Pola karty tylko te,
+     * które wszystkie wiersze podają tak samo (EAN czy opakowanie jednego rozmiaru nie nadpisuje drugiego).
+     * Cena: wiersze w tej samej cenie zakupu, katalogowej, walucie i ilości w opakowaniu → jeden zapis slotu „file”;
+     * różne → slot bez zmian i ostrzeżenie (bez zgadywania ceny).
+     * Karta chroniona (CardOwnership), a ten cennik nie jest jej właścicielem (cennik innej marki albo karta z kontem
+     * B2B producenta bez pliku producenta): pola karty z pliku tylko do pustych pól — nic nie nadpisuje (etap A planu).
+     *
+     * @param  list<array{sku: string, payload: array<string, mixed>, positions: list<string>}>  $rows
+     * @param  array<int, ProductSourcePrice|null>  $fileSlots
+     * @return array{change: array<string, mixed>|null, summary: array<string, mixed>, history: bool, warning: string|null}
+     */
+    private function applyRedirectGroup(Product $card, array $rows, int $priceListId, string $listManufacturer, array &$fileSlots): array
+    {
+        // właściciel sprzed zapisu slotu (slot „file” tego importu zmienia wynik ownerSourceKeys)
+        // (właściciel „file” = slot pliku marki karty; ten cennik jest właścicielem, gdy to jego slot)
+        $owners = $this->ownership->ownerSourceKeys($card);
+        $fillEmptyOnly = $owners !== []
+            && ! (in_array(ProductSourcePrice::SOURCE_FILE, $owners, true)
+                && (int) $this->fileSlot($card, $fileSlots)?->price_list_id === $priceListId
+                && CanonicalBrand::same($listManufacturer, (string) $card->manufacturer));
+        $payloads = array_column($rows, 'payload');
+        $first = $payloads[0];
+
+        $signatures = [];
+        foreach ($payloads as $payload) {
+            $signatures[$this->filePriceSignature($payload)] = true;
+        }
+        $samePrice = count($signatures) === 1;
+
+        $cardPayload = [];
+        foreach ($first as $field => $value) {
+            if (in_array($field, ProductEffectivePrice::PRICE_FIELDS, true)) {
+                continue;
+            }
+            foreach ($payloads as $other) {
+                if (! array_key_exists($field, $other) || json_encode($other[$field]) !== json_encode($value)) {
+                    continue 2;
+                }
+            }
+            $cardPayload[$field] = $value;
+        }
+        unset($cardPayload['name'], $cardPayload['manufacturer']);
+        if ($card->category_source === Product::CATEGORY_SOURCE_MANUAL) {
+            unset($cardPayload['category'], $cardPayload['category_source']);
+        }
+        if ($fillEmptyOnly) {
+            $cardPayload = $this->onlyEmptyCardFields($card, $cardPayload);
+        }
+        $updates = $cardPayload;
+        $sku = (string) $card->sku;
+        $fileSlot = $this->fileSlot($card, $fileSlots);
+
+        if (! $samePrice) {
+            // bez ceny w porównaniu: raport pokazuje cenę z pliku sprzed importu (slot zostaje)
+            $before = $fileSlot !== null ? $this->effectivePrices->previousSourcePrices($card, $fileSlot, []) : $card;
+            $summary = $this->summarizeUpdate($before, $cardPayload, $sku, false);
+            $card->update($updates);
+            $positions = array_values(array_unique(array_merge(...array_column($rows, 'positions'))));
+
+            return [
+                'change' => null,
+                'summary' => $summary,
+                'history' => false,
+                'warning' => 'karta #'.$card->id.' (połączone pozycje: '.implode(', ', $positions)
+                    .') ma w cenniku różne ceny — cena karty bez zmian; do rozdzielenia w Łączenie kart',
+            ];
+        }
+
+        foreach (ProductEffectivePrice::PRICE_FIELDS as $field) {
+            if (array_key_exists($field, $first)) {
+                $cardPayload[$field] = $first[$field];
+            }
+        }
+        $slotValues = [
+            'catalog_price_net' => $first['catalog_price_net'] ?? null,
+            'purchase_price' => $first['purchase_price'] ?? null,
+            'discount_percent' => $first['discount_percent'] ?? null,
+            'currency' => $first['currency'] ?? null,
+            'pack_qty' => $first['pack_qty'] ?? null,
+            'price_list_id' => $priceListId,
+        ];
+        $before = $this->effectivePrices->previousSourcePrices($card, $fileSlot, $slotValues);
+        $change = $this->detectPriceChange($before, $cardPayload, $sku);
+        $summary = $this->summarizeUpdate($before, $cardPayload, $sku, $change !== null);
+        $card->update($updates);
+        $saved = $this->effectivePrices->saveSlot($card, ProductSourcePrice::SOURCE_FILE, $slotValues);
+        $fileSlots[(int) $card->id] = $saved['slot'];
+
+        return [
+            'change' => $change,
+            'summary' => $summary,
+            // pierwsza cena z pliku to punkt odniesienia dla kolejnych zmian tego źródła w historii
+            'history' => $change !== null || $fileSlot === null,
+            'warning' => null,
+        ];
+    }
+
+    /**
+     * Pola z pliku tylko tam, gdzie karta nic nie ma (null, pusty tekst, pusta lista). Kategoria razem ze źródłem
+     * i dowodem kategorii — wszystkie trzy albo żadne, żeby dowód nie opisywał cudzej kategorii.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array<string, mixed>
+     */
+    private function onlyEmptyCardFields(Product $card, array $payload): array
+    {
+        $isEmpty = static fn (mixed $value): bool => $value === null
+            || (is_string($value) && trim($value) === '')
+            || (is_array($value) && $value === []);
+        $categoryFields = ['category', 'category_source', 'category_evidence'];
+        $fillCategory = array_key_exists('category', $payload) && $isEmpty($card->getAttribute('category'));
+
+        $out = [];
+        foreach ($payload as $field => $value) {
+            if (in_array($field, $categoryFields, true)) {
+                if ($fillCategory) {
+                    $out[$field] = $value;
+                }
+
+                continue;
+            }
+            if ($isEmpty($card->getAttribute($field))) {
+                $out[$field] = $value;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Cena wiersza do porównania wierszy jednej karty z mapy: katalogowa, zakupu (grosze), waluta, ilość w opakowaniu.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function filePriceSignature(array $payload): string
+    {
+        $money = static fn (mixed $value): string => is_numeric($value)
+            ? number_format(round((float) $value, 2), 2, '.', '')
+            : '-';
+
+        return implode('|', [
+            $money($payload['catalog_price_net'] ?? null),
+            $money($payload['purchase_price'] ?? null),
+            strtoupper(trim((string) ($payload['currency'] ?? ''))),
+            is_numeric($payload['pack_qty'] ?? null) ? (string) (int) $payload['pack_qty'] : '-',
+        ]);
+    }
+
+    /**
+     * Pozycja pominięta w imporcie z powodem (raport: errors i skipped_details).
+     *
+     * @param  array<string, mixed>  $collected
+     * @param  array<string, mixed>  $payload
+     */
+    private function skipRow(array &$collected, string $sku, array $payload, string $reason): void
+    {
+        $collected['skipped']++;
+        $collected['errors'][] = $sku.': '.$reason;
+        if (is_array($collected['skipped_details'] ?? null)) {
+            $collected['skipped_details'][] = [
+                'reason' => $reason,
+                'row' => null,
+                'sheet' => null,
+                'sku' => $sku,
+                'name' => isset($payload['name']) ? (string) $payload['name'] : null,
+            ];
+        }
     }
 
     /**
