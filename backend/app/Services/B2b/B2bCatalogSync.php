@@ -19,6 +19,7 @@ use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Models\ProductVariantPriceHistory;
+use App\Services\Catalog\ProductIdentifierStore;
 use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\PriceListImportService;
@@ -153,6 +154,7 @@ final class B2bCatalogSync
         private readonly ProductDocumentDownloader $documents = new ProductDocumentDownloader,
         private readonly B2bDocumentText $documentText = new B2bDocumentText,
         private readonly B2bManufacturerRules $manufacturerRules = new B2bManufacturerRules,
+        private readonly ProductIdentifierStore $identifiers = new ProductIdentifierStore,
     ) {}
 
     /**
@@ -786,6 +788,18 @@ final class B2bCatalogSync
                 $warnings = [...$warnings, ...$this->orphanedCardWarnings($account, $memberLinks, (int) $product->id)];
             }
 
+            // identyfikatory pozycji (EAN, kody) — za powiązaniami, bo należą do tych samych pozycji; statusu karty
+            // nie zmieniają (pierwszy przebieg po wdrożeniu nie ma pokazać wszystkich kart jako zmienionych)
+            $warnings = [...$warnings, ...$this->identifiers->recordB2b(
+                $product,
+                $account,
+                $remote->remoteId,
+                $members === [] ? [$remote->remoteId] : array_column($members, 'remote_id'),
+                $remote->identifiers,
+                $manufacturer,
+                $runId,
+            )];
+
             return [$product, $savedLink];
         });
 
@@ -1380,6 +1394,15 @@ final class B2bCatalogSync
                     'last_seen_at' => $now,
                 ],
             );
+            $warnings = [...$warnings, ...$this->identifiers->recordB2b(
+                $product,
+                $account,
+                $remote->remoteId,
+                [$remote->remoteId],
+                $remote->identifiers,
+                $manufacturer,
+                $runId,
+            )];
 
             return $product;
         });

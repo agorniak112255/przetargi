@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use DOMDocument;
 use DOMElement;
 use DOMXPath;
@@ -357,7 +358,33 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
             members: $grouped
                 ? array_map(static fn (array $i): array => ['remote_id' => $i['id'], 'sku' => $i['sku'], 'name' => $i['name']], $items)
                 : [],
+            identifiers: self::identifiers($items),
         );
+    }
+
+    /**
+     * EAN i kod Tegro każdego rozmiaru; pozycja = Id z API (remote_id powiązania). Tegro jest dystrybutorem, więc
+     * Sku to jego własny kod, nie kod producenta.
+     *
+     * @param  list<array{id: string, sku: string, name: string, ean: string, size: string|null}>  $items
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(array $items): array
+    {
+        $out = [];
+        foreach ($items as $item) {
+            if ($item['id'] === '') {
+                continue;
+            }
+            if ($item['ean'] !== '') {
+                $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_EAN, value: $item['ean'], remoteId: $item['id'], label: $item['size'], field: 'Ean');
+            }
+            if ($item['sku'] !== '') {
+                $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_SOURCE_CODE, value: $item['sku'], remoteId: $item['id'], label: $item['size'], field: 'Sku');
+            }
+        }
+
+        return $out;
     }
 
     /** Strona produktu tej karty; tabelka i pliki czytają tę samą stronę — pobieramy ją raz na kartę. */

@@ -12,6 +12,8 @@ final readonly class B2bRemoteProduct
      * @param  string|null  $variantSummary  lista rozmiarów/kodów karty (products.variant_summary); null = nie zmieniać, '' = wyczyść
      * @param  list<array{remote_id: string, sku: string, name: string}>  $members  pozycje dostawcy scalone w tę kartę
      *                                                                              (np. rozmiary o tej samej cenie), razem z remoteId; [] = jedna pozycja
+     * @param  list<B2bRemoteIdentifier>|null  $identifiers  identyfikatory pozycji (EAN, kod producenta); null = łącznik ich
+     *                                                       nie podaje (zapisane zostają), [] = podaje i nie ma żadnych
      */
     public function __construct(
         public string $remoteId,
@@ -23,5 +25,6 @@ final readonly class B2bRemoteProduct
         public ?string $availability = null,
         public ?string $variantSummary = null,
         public array $members = [],
+        public ?array $identifiers = null,
     ) {}
 }

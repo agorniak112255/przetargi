@@ -208,6 +208,12 @@ class Product extends Model
         return $this->hasMany(ProductShopCard::class);
     }
 
+    /** Identyfikatory wyrobu ze źródeł cen (EAN, kody) — z pochodzeniem, osobno od SKU i EAN karty. */
+    public function identifiers(): HasMany
+    {
+        return $this->hasMany(ProductIdentifier::class);
+    }
+
     /**
      * Karta ma tekst opisu (co najmniej 24 znaki), który mówi coś ponad nazwę. Status „done” bez tekstu nie wystarcza — w katalogu
      * jest takich kart kilkanaście, a model i dowody ze słów nie mają wtedy czego potwierdzić. Opis powtarzający nazwę też nie:

@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\Product;
+use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
@@ -15,6 +16,7 @@ use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bListProgressAware;
 use App\Services\B2b\B2bManufacturerSite;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
@@ -175,6 +177,15 @@ final class MascotConnectorTest extends TestCase
         );
         $this->assertSame('Na stanie: 0840; Brak na stanie, możliwość zamówienia, spodziewane od 03.11.2026: 0841', $card->availability);
         $this->assertSame('Rozmiary: 0840 (EAN 5700000000101); 0841 (EAN 5700000000102)', $card->variantSummary);
+        // numer z portalu dosłownie (karta) i EAN każdego rozmiaru przy jego pozycji
+        $this->assertSame(
+            [
+                ['manufacturer_code', 'F999991009', null, null, 'Number'],
+                ['ean', '5700000000101', '5700000000101', '0840', 'EanNumber'],
+                ['ean', '5700000000102', '5700000000102', '0841', 'EanNumber'],
+            ],
+            array_map(static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field], $card->identifiers ?? []),
+        );
 
         $connector = $this->connector();
         $price = $connector->price($card);
@@ -346,8 +357,16 @@ final class MascotConnectorTest extends TestCase
         $this->assertSame('599.00', (string) ProductSourcePrice::query()
             ->where('product_id', Product::query()->where('sku', '19999-249-1809 3XL')->value('id'))->value('purchase_price'));
 
+        $this->assertSame(
+            ['0840' => '5700000000101', '0841' => '5700000000102', '' => 'F999991009'],
+            ProductIdentifier::query()->where('product_id', $boots->id)->orderBy('value')->pluck('value', 'variant_label')->all(),
+        );
+
         $before = $this->snapshot();
+        $identifiers = ProductIdentifier::query()->count();
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+        $this->assertSame($identifiers, ProductIdentifier::query()->count());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
 
         $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
         $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));

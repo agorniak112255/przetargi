@@ -9,6 +9,7 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountSyncRunner;
@@ -16,6 +17,7 @@ use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bManufacturerSite;
 use App\Services\B2b\B2bRemoteDocument;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\TegroB2bClient;
@@ -138,6 +140,23 @@ final class TegroConnectorTest extends TestCase
                 ['remote_id' => '4638', 'sku' => 'F09 PLUS 10', 'name' => self::F09.' 10'],
             ],
             $f09->members,
+        );
+        // EAN i kod Tegro każdego rozmiaru, przy jego pozycji (Id z API)
+        $this->assertSame(
+            [
+                ['ean', '5900000000006', '4634', '6', 'Ean'],
+                ['source_code', 'F09 PLUS 6', '4634', '6', 'Sku'],
+                ['ean', '5900000000007', '4635', '7', 'Ean'],
+                ['source_code', 'F09 PLUS 7', '4635', '7', 'Sku'],
+                ['ean', '5900000000010', '4638', '10', 'Ean'],
+                ['source_code', 'F09 PLUS 10', '4638', '10', 'Sku'],
+            ],
+            array_map(static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field], $f09->identifiers ?? []),
+        );
+        // pozycja bez EAN w sklepie — sam kod, bez wymyślonego EAN
+        $this->assertSame(
+            [['source_code', 'ODD 8', '3001']],
+            array_map(static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId], $products['ODD 8']->identifiers ?? []),
         );
 
         // pojedyncza pozycja: pełna nazwa ze sklepu, bez listy rozmiarów i bez members
@@ -351,6 +370,9 @@ final class TegroConnectorTest extends TestCase
         $this->assertSame($description, (string) $f09->fresh()?->description);
         $this->assertSame($documents, ProductDocument::query()->where('product_id', $f09->id)->count());
         $this->assertSame(3, B2bProductLink::query()->where('product_id', $f09->id)->count());
+        // identyfikatory rozmiarów zapisane raz, drugi przebieg ich nie dubluje ani nie oznacza jako zniknięte
+        $this->assertSame(6, ProductIdentifier::query()->where('product_id', $f09->id)->count());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
         // pliki, które karta już ma, nie są pobierane drugi raz
         $this->assertSame($pdfDownloads, count(Http::recorded(fn (Request $r): bool => str_ends_with((string) parse_url($r->url(), PHP_URL_PATH), '.pdf'))));
     }

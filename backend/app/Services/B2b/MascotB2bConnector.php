@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
+use App\Models\ProductIdentifier;
 use RuntimeException;
 
 /**
@@ -519,6 +520,17 @@ final class MascotB2bConnector implements B2bConnector, B2bListProgressAware, B2
                 $group,
             )),
             members: $members,
+            // numer z portalu dosłownie (18001-249-1809 w nazwie to nasz zapis) i EAN każdego rozmiaru
+            identifiers: [
+                new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MANUFACTURER_CODE, value: $row['number'], field: 'Number'),
+                ...array_map(static fn (array $size): B2bRemoteIdentifier => new B2bRemoteIdentifier(
+                    type: ProductIdentifier::TYPE_EAN,
+                    value: $size['ean'],
+                    remoteId: $size['ean'],
+                    label: $size['size'],
+                    field: 'EanNumber',
+                ), $group),
+            ],
         );
     }
 

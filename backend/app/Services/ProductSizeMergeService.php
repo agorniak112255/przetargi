@@ -9,6 +9,7 @@ use App\Models\B2bProductLink;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductImageRejection;
 use App\Models\ProductPriceHistory;
@@ -334,6 +335,8 @@ final class ProductSizeMergeService
             $this->moveB2bLinks((int) $winner->id, $loserIds);
             $this->moveShopCards((int) $winner->id, $loserIds);
             $this->moveImageRejections((int) $winner->id, $loserIds);
+            // identyfikatory ze źródeł cen (EAN, kody scalanych rozmiarów) — UNIQUE bez product_id, więc bez konfliktów
+            ProductIdentifier::query()->whereIn('product_id', $loserIds)->update(['product_id' => $winner->id]);
             $winner->update($updates);
             Product::query()->whereIn('id', $loserIds)->delete();
             if ($newSku !== null) {

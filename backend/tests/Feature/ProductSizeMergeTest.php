@@ -9,6 +9,7 @@ use App\Models\B2bProductLink;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductImageRejection;
 use App\Models\ProductShopCard;
@@ -93,6 +94,38 @@ final class ProductSizeMergeTest extends TestCase
         $this->assertSame('37695VP', $kept->sku);
         $this->assertSame(6, $kept->stock);
         $this->assertSame([$rich->id], $list->fresh()?->product_ids);
+    }
+
+    public function test_merge_moves_identifiers_of_absorbed_cards_to_kept_card(): void
+    {
+        Queue::fake();
+        $cards = [];
+        foreach (['L' => 'HM5500BL', 'M' => 'HM5500BM', 'S' => 'HM5500BS'] as $size => $sku) {
+            $cards[$size] = Product::query()->create([
+                'sku' => $sku,
+                'name' => 'HM5500 BAYONET HALF-MASK ELASTOMERIC '.$size,
+                'manufacturer' => 'PIP',
+                'description' => $size === 'M' ? str_repeat('Półmaska PIP HM5500 Bayonet. ', 3) : null,
+                'catalog_price_net' => 348,
+                'purchase_price' => 292.32,
+                'currency' => 'EUR',
+                'stock' => 1,
+            ]);
+            ProductIdentifier::query()->create([
+                'product_id' => $cards[$size]->id,
+                'source_key' => 'file:1',
+                'position_key' => $sku,
+                'type' => ProductIdentifier::TYPE_SOURCE_CODE,
+                'value' => $sku,
+                'normalized' => $sku,
+            ]);
+        }
+
+        app(ProductSizeMergeService::class)->merge('PIP', false);
+
+        $this->assertSame(1, Product::query()->count());
+        $this->assertSame(3, ProductIdentifier::query()->count());
+        $this->assertSame([$cards['M']->id], ProductIdentifier::query()->pluck('product_id')->unique()->values()->all());
     }
 
     public function test_merges_trailing_numeric_size_in_name(): void
