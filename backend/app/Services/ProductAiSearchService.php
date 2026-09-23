@@ -4374,7 +4374,14 @@ final class ProductAiSearchService
      */
     private function retrieveByFuzzyModel(string $query, int $limit): Collection
     {
-        $brands = $this->modelFuzzy->manufacturerHints($query);
+        // Marka z zamkniętego zbioru (catalogBrands) ma pierwszeństwo przed manufacturerHints. Te drugie biorą
+        // dowolne słowo od trzech liter spoza listy pomijanych, więc dla „Nauszniki przeciwhałasowe 3M Peltor X2
+        // wersja nagłowna” dawały [przeciwhalasowe, wersja, naglowna] — „3M” ginęło na progu długości, a „Peltor”
+        // jako część igły modelu. Zapytanie szło po przypadkowych słowach i 23.09.2026 w puli nie było ani jednej
+        // karty 3M, choć obie karty Peltor X2A przechodziły wszystkie bramki zgodności. Gdy zbiór marki nic nie
+        // znajduje, zostaje dawna ścieżka — inaczej marka spoza zbioru przestałaby działać.
+        $catalogBrands = $this->modelFuzzy->catalogBrands($query);
+        $brands = $catalogBrands !== [] ? $catalogBrands : $this->modelFuzzy->manufacturerHints($query);
         $q = $this->productBaseQuery();
 
         $nums = $this->modelFuzzy->modelNumbers($query);
@@ -4386,6 +4393,22 @@ final class ProductAiSearchService
                         ->orWhere('name', 'like', $like);
                 }
             });
+            // Bez numeru modelu sama marka to tysiące kart (3M: 3273), a niżej jest limit bez kolejności —
+            // karta z zapytania trafiała do puli albo nie, zależnie od tego, w jakiej kolejności baza oddała
+            // wiersze. Zawężamy skan pozostałymi słowami zapytania. Wszystkimi, nie tylko tymi z igły modelu:
+            // „solus” w „3M SOLUS S1201SGAF” i „gear” w „3M GEAR GG6001SGAF” to nazwy linii spoza igły,
+            // a to one trzymały dotąd zapytanie przy właściwych kartach (symulacja na produkcji 23.09.2026).
+            if ($catalogBrands !== [] && $nums === []) {
+                $words = array_values(array_diff($this->modelFuzzy->brandHints($query), $catalogBrands));
+                if ($words !== []) {
+                    $q->where(function ($w) use ($words): void {
+                        foreach ($words as $word) {
+                            $like = '%'.addcslashes($word, '%_\\').'%';
+                            $w->orWhere('name', 'like', $like)->orWhere('sku', 'like', $like);
+                        }
+                    });
+                }
+            }
         } elseif ($this->modelFuzzy->hasNamedModel($query)) {
             $parts = $this->modelFuzzy->hyphenLetterParts($query);
             if ($parts === [] && $nums === []) {
