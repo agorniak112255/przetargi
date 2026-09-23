@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
+import { CheaperSourceNote } from '../components/CheaperSourceNote'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
@@ -1239,6 +1240,7 @@ export function Products() {
                         )}
                         {p.last_price_change && <PriceChangeNote change={p.last_price_change} currency={p.last_price_change.currency ?? p.currency} />}
                         <SupplierSpecialBadge special={p.supplier_special} currency={p.currency} className="mt-0.5" block />
+                        <CheaperSourceNote cheaper={p.cheaper_source} className="mt-0.5" />
                       </>
                     )}
                   </td>

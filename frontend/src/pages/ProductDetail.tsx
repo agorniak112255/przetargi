@@ -27,6 +27,7 @@ import {
 } from '../lib/api'
 import {
   currencyLabel,
+  formatDate,
   formatDateTime,
   formatPct,
   formatPrice,
@@ -103,6 +104,29 @@ function BasePriceNote({ slot }: { slot: ProductSourcePrice }) {
       {slot.base_price_source && <p className="mt-1 text-[10px] text-slate-500">Źródło: {slot.base_price_source}</p>}
     </div>
   )
+}
+
+/**
+ * Kolejność tabeli „Ceny ze źródeł”: porównywalne od najtańszej (price_rank z backendu), potem pozostałe
+ * w kolejności z API. Starsza odpowiedź bez price_rank — kolejność z API bez zmian.
+ */
+function sortSourcePrices(slots: ProductSourcePrice[]): ProductSourcePrice[] {
+  const ranked = (s: ProductSourcePrice) => s.comparable === true && s.price_rank != null
+  return slots
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => {
+      const ra = ranked(a.s)
+      const rb = ranked(b.s)
+      if (ra && rb) return a.s.price_rank! - b.s.price_rank! || a.i - b.i
+      if (ra !== rb) return ra ? -1 : 1
+      return a.i - b.i
+    })
+    .map(({ s }) => s)
+}
+
+/** Data kursu NBP („2026-09-22”) po polsku; nieczytelną zostawiamy dosłownie. */
+function rateDate(asOf: string): string {
+  return Number.isNaN(new Date(asOf).getTime()) ? asOf : formatDate(asOf)
 }
 
 /** Nagłówki kolumn cenników bywają skrótowe („ochrony”, „rozm.”) — na karcie nazywamy je po ludzku. */
@@ -485,6 +509,8 @@ export function ProductDetail() {
   const currency = p.currency?.trim() || 'PLN'
   const variants = p.variants ?? null
   const variantsBlockExport = variants !== null && variants.active_count > 0
+  // Starsza odpowiedź API bez porównania źródeł — tabela jak dotąd, bez kolumn „Zakup PLN” i „Różnica”.
+  const sourceCompare = (p.source_prices ?? []).some((s) => s.comparable !== undefined)
 
   return (
     <div>
@@ -794,6 +820,20 @@ export function ProductDetail() {
       {(p.source_prices?.length ?? 0) > 0 && (
         <div className="mt-3 rounded-xl bg-white p-4 shadow-sm">
           <h2 className="mb-2 text-sm font-semibold">Ceny ze źródeł</h2>
+          {p.source_prices_rates?.source === 'fallback' ? (
+            <p className="mb-2 text-[11px] text-amber-800">
+              Kurs zastępczy — NBP nie odpowiedział
+              {p.source_prices_rates.as_of && <> · kurs z {rateDate(p.source_prices_rates.as_of)}</>}. Ceny w
+              walutach obcych porównane orientacyjnie.
+            </p>
+          ) : (
+            p.source_prices_rates?.as_of &&
+            p.source_prices!.some((s) => (s.currency ?? 'PLN').trim().toUpperCase() !== 'PLN') && (
+              <p className="mb-2 text-[11px] text-slate-500">
+                Zakup PLN przeliczony kursem NBP z {rateDate(p.source_prices_rates.as_of)}.
+              </p>
+            )
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
@@ -803,51 +843,105 @@ export function ProductDetail() {
                   <th className="p-2 text-right">Zakup</th>
                   <th className="p-2 text-right">Rabat</th>
                   <th className="p-2">Waluta</th>
+                  {sourceCompare && (
+                    <>
+                      <th className="p-2 text-right" title="Cena zakupu netto przeliczona na PLN — po niej kolejność od najtańszej">
+                        Zakup PLN
+                      </th>
+                      <th className="p-2 text-right" title="Różnica ceny zakupu (PLN) do ceny obowiązującej karty">
+                        Różnica
+                      </th>
+                    </>
+                  )}
                   <th className="p-2">Dostępność</th>
                   <th className="p-2">Sprawdzono</th>
                   <th className="p-2">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {p.source_prices!.map((s) => (
-                  <Fragment key={s.source_key}>
-                    <tr className={s.base_price_net != null ? '' : 'border-b'}>
-                      <td className="p-2" title={s.source_key}>
-                        {s.source_label}
-                        {s.migrated && <span className="ml-1 text-[11px] text-slate-400">(z historii cen)</span>}
-                      </td>
-                      <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.catalog_price_net)}</td>
-                      <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.purchase_price)}</td>
-                      <td className="whitespace-nowrap p-2 text-right tabular-nums">
-                        {s.discount_percent !== null && s.discount_percent !== ''
-                          ? formatPct(Number(s.discount_percent), false)
-                          : '—'}
-                      </td>
-                      <td className="p-2">{s.currency ?? '—'}</td>
-                      <td className="p-2">{s.availability ?? '—'}</td>
-                      <td className="whitespace-nowrap p-2 tabular-nums">
-                        {s.checked_at ? formatDateTime(s.checked_at) : '—'}
-                      </td>
-                      <td className="p-2">
-                        {s.is_effective && (
-                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
-                            obowiązuje
+                {sortSourcePrices(p.source_prices!).map((s) => {
+                  const rowBg = s.is_cheapest ? 'bg-emerald-50' : ''
+                  // Powód spoza porównania bywa tym samym tekstem co ignored_reason (cena wyłączona w „Producenci”).
+                  const notComparable =
+                    s.comparable === false &&
+                    s.not_comparable_reason &&
+                    !(!s.is_effective && s.ignored_reason === s.not_comparable_reason)
+                      ? s.not_comparable_reason
+                      : null
+                  const diff = s.diff_to_effective_pct
+                  return (
+                    <Fragment key={s.source_key}>
+                      <tr className={`${s.base_price_net != null ? '' : 'border-b'} ${rowBg}`}>
+                        <td className="p-2" title={s.source_key}>
+                          {s.source_label}
+                          {s.migrated && <span className="ml-1 text-[11px] text-slate-400">(z historii cen)</span>}
+                        </td>
+                        <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.catalog_price_net)}</td>
+                        <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.purchase_price)}</td>
+                        <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                          {s.discount_percent !== null && s.discount_percent !== ''
+                            ? formatPct(Number(s.discount_percent), false)
+                            : '—'}
+                        </td>
+                        <td className="p-2">{s.currency ?? '—'}</td>
+                        {sourceCompare && (
+                          <>
+                            <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                              {formatPrice(s.purchase_price_pln)}
+                            </td>
+                            <td
+                              className={`whitespace-nowrap p-2 text-right tabular-nums ${
+                                s.comparable === false
+                                  ? 'text-slate-400'
+                                  : diff != null && diff < 0
+                                    ? 'font-medium text-emerald-700'
+                                    : 'text-slate-600'
+                              }`}
+                            >
+                              {diff != null ? formatPct(diff) : '—'}
+                            </td>
+                          </>
+                        )}
+                        <td className="p-2">{s.availability ?? '—'}</td>
+                        <td className="whitespace-nowrap p-2 tabular-nums">
+                          {s.checked_at ? formatDateTime(s.checked_at) : '—'}
+                        </td>
+                        <td className="p-2">
+                          <span className="flex flex-wrap items-center gap-1">
+                            {s.is_effective && (
+                              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                                obowiązuje
+                              </span>
+                            )}
+                            {s.is_cheapest && (
+                              <span
+                                className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-medium text-white"
+                                title="Najniższa cena zakupu netto w PLN wśród porównywalnych źródeł. Cena karty dalej z wiersza „obowiązuje”."
+                              >
+                                najtaniej
+                              </span>
+                            )}
+                            {!s.is_effective && s.ignored_reason && (
+                              <span className="text-[11px] text-slate-500">{s.ignored_reason}</span>
+                            )}
+                            {notComparable && (
+                              <span className="text-[11px] text-slate-500" title="Poza porównaniem cen">
+                                {notComparable}
+                              </span>
+                            )}
                           </span>
-                        )}
-                        {!s.is_effective && s.ignored_reason && (
-                          <span className="text-[11px] text-slate-500">{s.ignored_reason}</span>
-                        )}
-                      </td>
-                    </tr>
-                    {s.base_price_net != null && (
-                      <tr className="border-b">
-                        <td colSpan={8} className="px-2 pb-2 pt-0">
-                          <BasePriceNote slot={s} />
                         </td>
                       </tr>
-                    )}
-                  </Fragment>
-                ))}
+                      {s.base_price_net != null && (
+                        <tr className={`border-b ${rowBg}`}>
+                          <td colSpan={sourceCompare ? 10 : 8} className="px-2 pb-2 pt-0">
+                            <BasePriceNote slot={s} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>

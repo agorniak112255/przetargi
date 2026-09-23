@@ -18,11 +18,11 @@ use App\Models\ProductPriceHistory;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
-use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bDescriptionSource;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\NbpExchangeRateService;
 use App\Services\Pricing\ProductEffectivePrice;
+use App\Services\Pricing\SourcePriceComparison;
 use App\Services\ProductDeletionService;
 use App\Services\ProductKitService;
 use App\Support\BhpAttributeNormalizer;
@@ -47,8 +47,8 @@ class ProductController extends Controller
         private readonly ProductPriceChangeResolver $priceChanges,
         private readonly ProductVariantPresenter $variants,
         private readonly ProductEffectivePrice $effectivePrice,
-        private readonly B2bConnectorRegistry $connectors,
         private readonly BhpAttributeNormalizer $bhpAttributes,
+        private readonly SourcePriceComparison $comparison,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -287,8 +287,11 @@ class ProductController extends Controller
             ->groupBy('product_id')
             ->pluck('c', 'product_id')
             ->all();
-        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $evaluable, $models, $slotCounts): array {
+        // „taniej u …” przy cenie — informacja, cena karty bez zmian; stała liczba zapytań na stronę
+        $cheaper = $this->comparison->cheaperSources(collect(array_values($models)));
+        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $evaluable, $models, $slotCounts, $cheaper): array {
             $id = (int) $row['id'];
+            $row['cheaper_source'] = $cheaper[$id] ?? null;
             $candidates = $this->slotsAtCardPrice($row['purchase_price'] ?? null, $row['currency'] ?? null, $evaluable[$id] ?? []);
             // explain() tylko dla kart ze slotem ocenionym w cenie karty — pozostałe i tak nie mają znacznika
             $winner = match (true) {
@@ -430,11 +433,14 @@ class ProductController extends Controller
         $payload['last_price_change'] = $lastChange;
         $payload['variants'] = $this->variants->forProduct((int) $product->id);
         $slots = ProductSourcePrice::query()
-            ->with(['account:id,connector,sites', 'priceList:id,manufacturer,version'])
+            ->with(['account:id,connector,sites', 'priceList:id,manufacturer,version,suggested_prices'])
             ->where('product_id', $product->id)
             ->get();
         $explain = $this->effectivePrice->explain($product);
-        $payload['source_prices'] = $this->sourcePricesPayload($slots, $explain);
+        // porównanie od najtańszej (pola Row przy każdym źródle) — kolejność elementów zostaje jak dotąd
+        $comparison = $this->comparison->forCard($product, $slots, $explain);
+        $payload['source_prices'] = $this->sourcePricesPayload($slots, $explain, $comparison['rows']);
+        $payload['source_prices_rates'] = $comparison['rates'];
         // ta sama reguła co na liście: ocena tylko dla slotu obowiązującego, którego cena jest ceną karty
         $payload['supplier_special'] = $this->cardSupplierSpecial(
             $this->slotsAtCardPrice($product->purchase_price, $product->currency, $slots),
@@ -532,9 +538,10 @@ class ProductController extends Controller
      *
      * @param  Collection<int, ProductSourcePrice>  $slots  sloty karty z account i priceList
      * @param  array{winner: ProductSourcePrice|null, reasons: array<string, string>}  $explain
+     * @param  array<string, array<string, mixed>>  $comparisonRows  SourcePriceComparison::forCard()['rows'] po source_key
      * @return list<array<string, mixed>>
      */
-    private function sourcePricesPayload(Collection $slots, array $explain): array
+    private function sourcePricesPayload(Collection $slots, array $explain, array $comparisonRows): array
     {
         if ($slots->isEmpty()) {
             return [];
@@ -573,6 +580,15 @@ class ProductController extends Controller
                 'is_effective' => $effectiveKey !== null && $slot->source_key === $effectiveKey,
                 // dlaczego ta cena nie obowiązuje (null = explain nie podaje powodu)
                 'ignored_reason' => $reasons[(string) $slot->source_key] ?? null,
+                // porównanie cen zakupu w PLN (price_rank, is_cheapest, różnica do ceny obowiązującej, powód pominięcia)
+                ...($comparisonRows[(string) $slot->source_key] ?? [
+                    'purchase_price_pln' => null,
+                    'comparable' => false,
+                    'not_comparable_reason' => null,
+                    'price_rank' => null,
+                    'is_cheapest' => false,
+                    'diff_to_effective_pct' => null,
+                ]),
             ])
             ->values()
             ->all();
@@ -664,19 +680,12 @@ class ProductController extends Controller
         return $out;
     }
 
+    /**
+     * Etykieta źródła — wspólna z „taniej u …” na liście i w przetargu (SourcePriceComparison::sourceLabel).
+     */
     private function sourcePriceLabel(ProductSourcePrice $slot): string
     {
-        if ($slot->source_key === ProductSourcePrice::SOURCE_FILE) {
-            $list = $slot->priceList;
-            $listLabel = $list !== null ? trim(trim((string) $list->manufacturer).' '.trim((string) $list->version)) : '';
-
-            return $listLabel !== '' ? 'Cennik z pliku · '.$listLabel : 'Cennik z pliku';
-        }
-        if (! $slot->isB2b()) {
-            return (string) $slot->source_key;
-        }
-
-        return $this->b2bAccountLabel($slot->account);
+        return $this->comparison->sourceLabel($slot);
     }
 
     /**
@@ -685,14 +694,7 @@ class ProductController extends Controller
      */
     private function b2bAccountLabel(?B2bAccount $account): string
     {
-        if ($account === null) {
-            return 'B2B (usunięte konto)';
-        }
-        // b2b_accounts nie ma nazwy — bez łącznika pierwsza witryna konta (nigdy login ani notatka)
-        $name = $this->connectors->label($account->connector)
-            ?? (is_array($account->sites) && isset($account->sites[0]) ? trim((string) $account->sites[0]) : '');
-
-        return $name !== '' ? 'B2B '.$name : 'B2B konto #'.$account->id;
+        return $this->comparison->accountLabel($account);
     }
 
     /**

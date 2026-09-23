@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { CheaperSourceNote } from '../components/CheaperSourceNote'
 import { ItemBattlecard, type BattlecardProduct } from '../components/ItemBattlecard'
 import { ProductAiMatchModal } from '../components/ProductAiMatchModal'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
@@ -3741,6 +3742,10 @@ function ItemRow({
                   </div>
                 </div>
               </div>
+              {/* Tańsze źródło liczy backend dla zapisanej karty — przy niezapisanym wyborze w edycji go nie ma. */}
+              {item.main_product != null && productId === String(item.main_product.id) && (
+                <CheaperSourceNote cheaper={item.main_product.cheaper_source} className="mt-1" />
+              )}
               {companionPicked && (
                 <div className="mt-1 text-[10px] text-slate-500">
                   Drugi: {canEdit ? (

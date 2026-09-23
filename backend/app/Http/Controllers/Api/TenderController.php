@@ -9,6 +9,7 @@ use App\Models\ProductSubstitute;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\NbpExchangeRateService;
+use App\Services\Pricing\SourcePriceComparison;
 use App\Services\ProductMatchService;
 use App\Services\TenderActivityLogger;
 use App\Services\TenderCoverageService;
@@ -29,6 +30,7 @@ class TenderController extends Controller
         private readonly ProductMatchService $matcher,
         private readonly TenderPricingService $pricing,
         private readonly NbpExchangeRateService $fx,
+        private readonly SourcePriceComparison $comparison,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -253,6 +255,15 @@ class TenderController extends Controller
             $withFx = $this->fx->appendPricePln($product->toArray());
             $product->setAttribute('purchase_price_pln', $withFx['purchase_price_pln'] ?? null);
             $product->setAttribute('price_pln', $withFx['price_pln'] ?? null);
+        }
+        // „taniej u …” przy cenie zakupu wybranej karty — informacja; cena oferty bez zmian (decyzja 2 planu łączenia
+        // kart). Hurtem dla wszystkich kart przetargu, nie zapytania na pozycję.
+        $mainProducts = $tender->items->pluck('mainProduct')->filter()->unique('id')->values();
+        $cheaper = $this->comparison->cheaperSources($mainProducts);
+        foreach ($tender->items as $item) {
+            if ($item->mainProduct !== null) {
+                $item->mainProduct->setAttribute('cheaper_source', $cheaper[(int) $item->mainProduct->id] ?? null);
+            }
         }
 
         $mainIds = $tender->items

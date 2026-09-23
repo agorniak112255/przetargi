@@ -68,8 +68,9 @@ producenta w tej samej marce), nigdy po nazwie. Plan po recenzji drugiego agenta
   wyróżniony, nazwa dostawcy, różnica % do ceny obowiązującej. Znacznik „obowiązuje” zostaje.
 - Poza porównaniem (z powodem): cennik sugerowany, źródło bez ceny zakupu, nieznana waluta, cena nieaktualna
   (dostawca nie potwierdził jej od N dni), cena producenta wyłączona w oknie „Producenci”.
-- Jednostka: gdy najtańsza cena jest > 3× niższa od obowiązującej albo plik ma ilość w opakowaniu ≠ 1 — zamiast
-  „najtaniej” ostrzeżenie „sprawdź jednostkę”.
+- Jednostka: gdy cena jest > 3× niższa od obowiązującej — zamiast „najtaniej” ostrzeżenie „sprawdź jednostkę”.
+  Ilość w opakowaniu z pliku NIE wyklucza ceny: to liczba sztuk w kartonie przy cenie za sztukę (produkcja: Ansell
+  373 z 682, Bolle 248 z 254 wierszy z kartonem > 1).
 - Lista produktów: przy cenie „taniej u P4S: 7,90 zł (−9%)”, gdy najtańsze źródło ≠ obowiązujące.
 - Przetarg: przy pozycji ta sama informacja. Cena oferty bez zmian (patrz decyzja 2).
 - Kurs zastępczy (NBP nie odpowiada) — widoczna informacja.

@@ -317,6 +317,10 @@ export type Product = {
   accessories?: ProductAccessory[]
   /** Karta szczegółów: ceny karty osobno dla każdego źródła (plik, konta B2B). */
   source_prices?: ProductSourcePrice[]
+  /** Karta szczegółów: kurs, po którym porównano ceny źródeł w PLN. */
+  source_prices_rates?: SourcePricesRates | null
+  /** Lista produktów i karta pozycji przetargu: tańsze źródło niż obowiązujące; null = brak. */
+  cheaper_source?: CheaperSource | null
   /** Karta szczegółów: tabelki z kart wyrobu u dostawców (product_shop_cards) — osobno od opisu. */
   shop_fields?: ProductShopCardSource[]
   /** Lista produktów: karta ma wiersze ze sklepu dostawcy (sama flaga; treść dopiero w karcie szczegółów). */
@@ -380,6 +384,35 @@ export type ProductSourcePrice = {
   /** Rabat standardowy kategorii z reguł konta; null = brak reguły dla arkusza. */
   standard_discount_percent?: string | null
   supplier_special?: SupplierSpecial | null
+  // Porównanie źródeł (SourcePriceComparison) — starsze odpowiedzi API tych pól nie mają.
+  /** Cena zakupu netto przeliczona na PLN (kurs NBP); null = brak ceny zakupu albo nieznana waluta. */
+  purchase_price_pln?: number | null
+  /** false = poza porównaniem (powód w not_comparable_reason), np. cennik sugerowany. */
+  comparable?: boolean
+  not_comparable_reason?: string | null
+  /** 1..n wśród porównywalnych, rosnąco po cenie zakupu w PLN; null = poza porównaniem. */
+  price_rank?: number | null
+  is_cheapest?: boolean
+  /** Różnica do ceny obowiązującej karty w %, np. −9.0; wiersz obowiązujący 0.0; null = brak ceny obowiązującej. */
+  diff_to_effective_pct?: number | null
+}
+
+/** Kurs użyty do porównania cen źródeł; fallback = NBP nie odpowiedział, kurs zastępczy. */
+export type SourcePricesRates = {
+  as_of: string | null
+  source: 'nbp' | 'fallback'
+}
+
+/**
+ * Tańsze porównywalne źródło niż obowiązujące (lista produktów, przetarg) — tylko informacja:
+ * cena karty i oferty dalej z ceny obowiązującej (pierwszeństwo producenta).
+ */
+export type CheaperSource = {
+  source_key: string
+  label: string
+  purchase_price_pln: number
+  /** Ujemne, np. −9.0 = o 9% taniej od ceny obowiązującej. */
+  diff_pct: number
 }
 
 /**
