@@ -20,6 +20,7 @@ use App\Services\B2b\B2bRemoteProduct;
 use Carbon\CarbonImmutable;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -46,6 +47,15 @@ final class B2bSourcePriceSlotTest extends TestCase
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
         Queue::fake();
+        // konto w EUR — karta liczy cenę w PLN kursem NBP
+        Http::fake([
+            'api.nbp.pl/api/exchangerates/tables/A/*' => Http::response([[
+                'table' => 'A',
+                'no' => '179/A/NBP/2026',
+                'effectiveDate' => '2026-09-15',
+                'rates' => [['currency' => 'euro', 'code' => 'EUR', 'mid' => 4.2698]],
+            ]]),
+        ]);
         $this->travelTo(CarbonImmutable::parse('2026-09-15 10:00'));
         $this->user = User::factory()->withRole('admin')->create();
         $this->account = $this->makeAccount('jan');

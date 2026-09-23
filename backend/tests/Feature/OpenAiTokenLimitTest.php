@@ -226,7 +226,18 @@ final class OpenAiTokenLimitTest extends TestCase
             'temperature' => 0.1,
         ]);
 
+        // Długi prompt nie mieści się w założonym limicie, więc klient pyta serwer o faktyczny max_model_len.
+        // Bez atrapy /v1/models wynik zależał od tego, czy na 127.0.0.1:8000 akurat działa vLLM.
         Http::fake([
+            '127.0.0.1:8000/v1/models' => Http::response([
+                'object' => 'list',
+                'data' => [[
+                    'id' => 'qwen38-27b-fast',
+                    'object' => 'model',
+                    'owned_by' => 'vllm',
+                    'max_model_len' => 16384,
+                ]],
+            ], 200),
             '127.0.0.1:8000/v1/chat/completions' => Http::response([
                 'choices' => [[
                     'message' => ['content' => '{"ok":true}'],
@@ -240,7 +251,11 @@ final class OpenAiTokenLimitTest extends TestCase
             ['role' => 'user', 'content' => $long],
         ], 0.0, 6000);
 
+        // tylko żądanie czatu — pytanie GET o /v1/models ma puste dane i samo spełniłoby warunek
         Http::assertSent(function (Request $request) use ($long): bool {
+            if ($request->url() !== 'http://127.0.0.1:8000/v1/chat/completions') {
+                return false;
+            }
             $messages = $request->data()['messages'] ?? [];
             $chars = 0;
             foreach ($messages as $message) {
@@ -253,6 +268,7 @@ final class OpenAiTokenLimitTest extends TestCase
             return $est + $maxTokens <= 16128
                 && ($sent !== $long || $maxTokens < 6000);
         });
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'http://127.0.0.1:8000/v1/models');
     }
 
     public function test_cloud_endpoint_keeps_long_prompt_and_requested_tokens(): void

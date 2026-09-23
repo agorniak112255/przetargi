@@ -10,6 +10,7 @@ use App\Services\ProductAiSearchService;
 use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Mockery;
 use Tests\TestCase;
 
@@ -26,6 +27,15 @@ final class ProductAiSearchAraukanTest extends TestCase
     {
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
+        // karty w EUR — ceny w PLN liczone kursem NBP
+        Http::fake([
+            'api.nbp.pl/api/exchangerates/tables/A/*' => Http::response([[
+                'table' => 'A',
+                'no' => '185/A/NBP/2026',
+                'effectiveDate' => '2026-09-23',
+                'rates' => [['currency' => 'euro', 'code' => 'EUR', 'mid' => 4.2698]],
+            ]]),
+        ]);
     }
 
     public function test_araukan_940_s3_ranks_before_9403_and_drops_s2(): void

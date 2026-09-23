@@ -5,10 +5,45 @@ namespace Tests;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
+use Illuminate\Http\Client\StrayRequestException;
+use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\AssertionFailedError;
 use RuntimeException;
 
 abstract class TestCase extends BaseTestCase
 {
+    /** @var list<string> */
+    private array $strayRequests = [];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // Test nie wychodzi do sieci. Kod aplikacji często połyka błąd żądania (kursy NBP, sonda limitu vLLM)
+        // i idzie dalej na wartości zastępczej — wtedy sam wyjątek nie oblałby testu, więc zablokowane
+        // żądania są zapisywane i oblewają test w tearDown.
+        Http::preventStrayRequests();
+        Http::globalMiddleware(fn (callable $handler): callable => function ($request, array $options) use ($handler) {
+            try {
+                return $handler($request, $options);
+            } catch (StrayRequestException $e) {
+                $this->strayRequests[] = (string) $request->getUri();
+
+                throw $e;
+            }
+        });
+    }
+
+    protected function tearDown(): void
+    {
+        $stray = array_values(array_unique($this->strayRequests));
+        $this->strayRequests = [];
+        parent::tearDown();
+
+        if ($stray !== []) {
+            throw new AssertionFailedError('Test wysłał żądanie HTTP bez Http::fake: '.implode(', ', $stray));
+        }
+    }
+
     public function createApplication(): Application
     {
         $app = parent::createApplication();

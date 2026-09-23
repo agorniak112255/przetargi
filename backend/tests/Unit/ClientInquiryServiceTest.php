@@ -11,6 +11,7 @@ use App\Services\ClientInquiryService;
 use App\Services\NbpExchangeRateService;
 use App\Services\ProductInquirySearch;
 use App\Support\InquiryMailText;
+use Illuminate\Support\Facades\Http;
 use Mockery;
 use Tests\TestCase;
 
@@ -93,6 +94,18 @@ final class ClientInquiryServiceTest extends TestCase
 
     public function test_safe_product_converts_eur_catalog_to_pln(): void
     {
+        Http::fake([
+            'api.nbp.pl/api/exchangerates/tables/A/*' => Http::response([[
+                'table' => 'A',
+                'no' => '185/A/NBP/2026',
+                'effectiveDate' => '2026-09-23',
+                'rates' => [
+                    ['currency' => 'dolar amerykański', 'code' => 'USD', 'mid' => 3.6412],
+                    ['currency' => 'euro', 'code' => 'EUR', 'mid' => 4.2698],
+                ],
+            ]]),
+        ]);
+
         $safe = $this->service()->safeProduct([
             'id' => 8,
             'sku' => '37900VP',
@@ -109,6 +122,10 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertGreaterThan(15.0, (float) $safe['catalog_pln']);
         $this->assertGreaterThan(12.0, (float) $safe['offer_pln']);
         $this->assertLessThan((float) $safe['catalog_pln'], (float) $safe['offer_pln']);
+        // kurs średni NBP 4,2698: katalog 4,67 × kurs, oferta = zakup 3,50 × kurs (14,94) + 18%
+        $this->assertSame(19.94, $safe['catalog_pln']);
+        $this->assertSame('19.94', $safe['catalog_price_net']);
+        $this->assertSame(17.63, $safe['offer_pln']);
         $this->assertStringNotContainsString('EUR', (string) json_encode($safe));
     }
 
