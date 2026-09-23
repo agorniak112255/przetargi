@@ -618,6 +618,14 @@ final class B2bCatalogSync
         if ($contentOnly && $existing === null) {
             return ['status' => 'skipped', 'reason' => 'brak karty w katalogu — cennik jej nie zawiera'];
         }
+        // Karta zapisana już w tym przebiegu przez inny kod tego konta (rozmiary scalone w jedną kartę —
+        // ProductSizeMergeService przenosi powiązania scalanej karty). Każdy kod zapisywał na nią swój opis (witryna
+        // producenta zastępuje opis zawsze) i swoją cenę do jednego slotu konta: opis przeskakiwał między kodami
+        // co przebieg, z nowym replaced_description i reindeksem. Kartę zapisuje pierwszy kod przebiegu, ten
+        // odświeża tylko swoje powiązanie. Grupy rozmiarów (members) omijają takie karty w resolveGroupCard.
+        if ($members === [] && $existing !== null && isset($claimed['products'][(int) $existing->id])) {
+            return $this->refreshSharedCardLink($account, $remote, $existing, $manufacturer, $price, $dryRun, $runId, $ruleOutcome);
+        }
 
         // pola opisowe karty; ceny idą do slotu konta, nie do fill karty
         $payload = [
@@ -863,6 +871,75 @@ final class B2bCatalogSync
             'warnings' => $warnings,
             ...$ruleOutcome,
         ];
+    }
+
+    /**
+     * Kolejny kod konta na karcie zapisanej już w tym przebiegu: tylko powiązanie (karta, kod i nazwa u dostawcy,
+     * ostatnio widziany) i identyfikatory tej pozycji. Opisu, slotu ceny, historii, zdjęć i plików nie ruszamy
+     * — to robi pierwszy kod karty.
+     * Odcisk opisu powiązania zostaje, bo jego opisu na karcie nie ma. Cena inna niż zapisana w slocie konta nie
+     * ginie po cichu — ostrzeżenie w dzienniku przebiegu.
+     *
+     * @param  array<string, mixed>  $ruleOutcome
+     * @return array<string, mixed>
+     */
+    private function refreshSharedCardLink(
+        B2bAccount $account,
+        B2bRemoteProduct $remote,
+        Product $card,
+        string $manufacturer,
+        ?B2bRemotePrice $price,
+        bool $dryRun,
+        ?int $runId,
+        array $ruleOutcome,
+    ): array {
+        $warnings = [];
+        if ($price !== null) {
+            $slot = ProductSourcePrice::query()
+                ->where('product_id', $card->id)
+                ->where('source_key', ProductSourcePrice::b2bKey((int) $account->id))
+                ->first();
+            if ($slot !== null && (round((float) $slot->purchase_price, 2) !== round($price->net, 2)
+                || strtoupper((string) $slot->currency) !== strtoupper($price->currency))) {
+                $warnings[] = sprintf(
+                    'karta #%d (%s) ma już cenę z innego kodu tego konta (%s %s) — cena tego kodu (%s %s) pominięta',
+                    $card->id,
+                    (string) $card->sku,
+                    number_format((float) $slot->purchase_price, 2, ',', ''),
+                    (string) $slot->currency,
+                    number_format($price->net, 2, ',', ''),
+                    $price->currency,
+                );
+            }
+        }
+
+        if (! $dryRun) {
+            $warnings = DB::transaction(function () use ($account, $remote, $card, $manufacturer, $runId, $warnings): array {
+                B2bProductLink::query()->updateOrCreate(
+                    ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
+                    [
+                        'product_id' => $card->id,
+                        'remote_sku' => mb_substr($remote->sku, 0, 255),
+                        'remote_name' => mb_substr($remote->name, 0, 1000),
+                        'manufacturer' => $manufacturer !== '' ? $manufacturer : null,
+                        'last_seen_at' => now(),
+                    ],
+                );
+
+                // identyfikatory należą do pozycji (position_key), nie do karty — cudzych nie nadpisują
+                return [...$warnings, ...$this->identifiers->recordB2b(
+                    $card,
+                    $account,
+                    $remote->remoteId,
+                    [$remote->remoteId],
+                    $remote->identifiers,
+                    $manufacturer,
+                    $runId,
+                )];
+            });
+        }
+
+        return ['status' => 'unchanged', 'product_id' => (int) $card->id, 'warnings' => $warnings, ...$ruleOutcome];
     }
 
     /**
