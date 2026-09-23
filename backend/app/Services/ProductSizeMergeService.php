@@ -193,6 +193,17 @@ final class ProductSizeMergeService
         ];
     }
 
+    /**
+     * Duplikat tego samego wyrobu (np. karta dystrybutora założona obok karty producenta): powiązania B2B, sloty cen,
+     * tabelki, media, historia, identyfikatory i odwołania przechodzą na $keep, $drop znika. Nazwa, SKU i lista
+     * rozmiarów $keep zostają; kod duplikatu trafia do merged_duplicate_skus (nie do listy rozmiarów, z której
+     * korzysta łączenie rozmiarów). Warunki (ten sam producent, brak wersji itp.) sprawdza wywołujący.
+     */
+    public function mergeDuplicate(Product $keep, Product $drop): void
+    {
+        $this->absorb($keep, [$drop], null, true, 'merged_duplicate_skus');
+    }
+
     /** Klucz kodu w mapie kart modelu — z producentem, bo merge(null) obejmuje cały katalog. */
     private function modelSkuKey(Product $product, string $sku): string
     {
@@ -316,16 +327,22 @@ final class ProductSizeMergeService
      * @param  array<string, string>|null  $midSizes  SKU => litera rozmiaru z kodu (tylko ścieżka „mid”)
      * @param  bool  $keepIdentity  karta modelu z wcześniejszego łączenia — nazwa, SKU i lista rozmiarów zostają
      *                              (stripSizeFromName nie jest idempotentne, a packaging mogło wypełnić wzbogacanie)
+     * @param  string  $mergedKey  lista kodów scalonych kart w enrichment_payload (rozmiary albo duplikaty)
      */
-    private function absorb(Product $winner, array $losers, ?array $midSizes = null, bool $keepIdentity = false): void
-    {
+    private function absorb(
+        Product $winner,
+        array $losers,
+        ?array $midSizes = null,
+        bool $keepIdentity = false,
+        string $mergedKey = 'merged_size_skus',
+    ): void {
         $loserIds = array_map(static fn (Product $p): int => (int) $p->id, $losers);
         $map = [];
         foreach ($loserIds as $id) {
             $map[$id] = (int) $winner->id;
         }
 
-        DB::transaction(function () use ($winner, $losers, $loserIds, $map, $midSizes, $keepIdentity): void {
+        DB::transaction(function () use ($winner, $losers, $loserIds, $map, $midSizes, $keepIdentity, $mergedKey): void {
             $this->remapTenderItems($map);
             $this->remapSubstitutes((int) $winner->id, $loserIds);
             $this->moveMedia($winner, $loserIds);
@@ -336,11 +353,11 @@ final class ProductSizeMergeService
             $core = $this->sizes->skuCore((string) $winner->sku, (string) $winner->name);
             $stripped = $this->sizes->stripSizeFromName((string) $winner->name);
             $payload = is_array($winner->enrichment_payload) ? $winner->enrichment_payload : [];
-            $mergedSkus = is_array($payload['merged_size_skus'] ?? null) ? $payload['merged_size_skus'] : [];
+            $mergedSkus = is_array($payload[$mergedKey] ?? null) ? $payload[$mergedKey] : [];
             foreach ($losers as $loser) {
                 $mergedSkus[] = (string) $loser->sku;
             }
-            $payload['merged_size_skus'] = array_values(array_unique(array_filter($mergedSkus)));
+            $payload[$mergedKey] = array_values(array_unique(array_filter($mergedSkus)));
 
             // Rozmiar odczytany z kodu nie może zniknąć: lista na kartę, przypisanie SKU → rozmiar do payloadu.
             $sizeLabel = null;
