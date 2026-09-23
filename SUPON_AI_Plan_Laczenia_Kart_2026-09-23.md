@@ -140,3 +140,103 @@ Producent ma kartę na rozmiar, dystrybutor kartę na model — połączyć w je
 Rozdział 6X00 na trzy karty i dwa kolejne przebiegi P4S bez scalenia; zmiana grup cenowych w obie strony; nowy rozmiar
 → osobna karta; usunięta karta producenta; drugie konto; kod karty P4S po poprawce (6X00, 6X00P, JALAS, FR360); odmowy;
 łączenie z etapu C odporne na zmianę grup cenowych; odrzucenie niepewnej.
+
+---
+
+# Etap C3 — „Łączenie rozmiarów” (decyzja użytkownika 24.09.2026, plan do recenzji)
+
+Decyzja: gdy dystrybutor ma jedną kartę modelu z rozmiarami, a producent osobną kartę na każdy rozmiar w tej samej
+cenie — karty producenta łączymy w jedną kartę modelu (jak reszta katalogu: pliki i UVEX łączą rozmiary), a kartę
+dystrybutora dołączamy do niej zwykłym połączeniem. Osobna zakładka na ekranie „Łączenie kart”. Różne ceny
+(rozmiary albo kolory) → rozdzielanie z etapu C2.
+
+Dane z produkcji (24 niepewne „kilka kart producenta”): 23 w tej samej cenie, 1 w różnych (UVEX 9762 X40).
+Wśród 23: rozmiary (3M 6000/6000S/7500/6500QL, kombinezony 3M 4515/4520/4530/4540/4565, szelki DBI-SALA) i kolory
+(kłódki lockout czerwona/zielona/żółta, hełmy UVEX Airwing/Pheos, 3M SecureFit, czapki JSP?).
+
+## Reguła propozycji „połącz rozmiary”
+- Karta dystrybutora (źródło) z ≥ 2 pozycjami; każda pozycja wskazuje dokładnie jedną kartę producenta (klucz
+  rozmiaru, jak w C2), ≥ 2 różne karty producenta, wszystkie pozycje trafione.
+- Karty producenta: ten sam właściciel (to samo konto producenta albo ten sam cennik), ta sama marka, bez wersji,
+  identyczna cena zakupu i waluta w KAŻDYM wspólnym źródle (sloty o tym samym source_key muszą mieć tę samą cenę —
+  scalenie zostawia jeden slot na źródło).
+- Tylko rozmiary, nie kolory: etykiety pozycji u dystrybutora (P4S sizeName: „rozmiar S (mały)”, „kolor biały,
+  rozmiar L”) i nazwy kart producenta; kolor albo etykieta niejednoznaczna → nie ta zakładka (rozdzielanie albo
+  niepewne). Kolory mają osobne karty (zasada katalogu: karta = kolor — Mascot, JHK, MAVIBO; przetargi wymagają koloru).
+- Odmowa, gdy któraś karta producenta jest w przetargu (pozycja albo produkt dodatkowy — połączenie zgubiłoby wybrany
+  rozmiar), w Preście (osobne produkty sklepu), ma ceny specjalne albo akcesoria.
+
+## Połączenie (jedno kliknięcie, dwa kroki w jednej transakcji)
+1. Karty rozmiarów producenta → jedna karta modelu (istniejący absorb z ProductSizeMergeService): zostaje karta
+   z najlepszym zdjęciem i opisem (pickWinner) albo wskazana na ekranie; nazwa karty modelu — pole na ekranie
+   z podpowiedzią (nazwa producenta bez rozmiaru; przy 3M „…, 6300” numer rozmiaru trzeba usunąć ręcznie), zatwierdza
+   człowiek; SKU karty modelu — kod producenta karty, która zostaje (kody pozostałych w merged_size_skus); lista
+   rozmiarów (variant_summary) złożona z etykiet dystrybutora i kodów producenta („S 7000146845; M …; L …”).
+2. Karta dystrybutora → dołączona do karty modelu (CardMatchMerger, z przypięciem powiązań).
+Kopia zapasowa wszystkich kart przed zmianą. Opis karty modelu: opis karty, która zostaje — do sprawdzenia, czy nie
+mówi o jednym rozmiarze (wtedy ponowne „Pobierz” albo ostrzeżenie na ekranie).
+
+## Synchronizacja po połączeniu
+Konto producenta (3M) podaje dalej każdy rozmiar osobno — wszystkie trafiają po powiązaniu w kartę modelu; drugi
+i kolejny kod konta na tej samej karcie odświeża tylko powiązanie i identyfikatory (refreshSharedCardLink), różna
+cena → ostrzeżenie w dzienniku przebiegu. Karta modelu jest chroniona (etap A) — nazwy nie nadpisze nikt poza nowym
+założeniem karty. Do sprawdzenia w recenzji: czy konto producenta z pozycjami bez grup nie zbierze się inaczej.
+
+## Ekran — zakładki
+Do decyzji (połącz) · Łączenie rozmiarów · Rozdzielanie · Niepewne · Odrzucone · Połączone.
+W „Łączenie rozmiarów”: karta dystrybutora, tabelka rozmiar → karta producenta (zdjęcie, SKU, cena), pole nazwy karty
+modelu, wybór karty, która zostaje, przycisk „Połącz rozmiary i dołącz kartę dystrybutora”, „Odrzuć”.
+
+## Pytania do recenzji
+1. Rozróżnienie rozmiar/kolor — skąd pewny sygnał (etykiety P4S, nazwy 3M/UVEX, kody UVEX 9762.020/.420 = kolory?).
+2. Kolory w tej samej cenie — rozdzielać (C2) czy zostawić osobne karty dystrybutora?
+3. Czy łączenie kart producenta (właściciela) za zgodą człowieka nie psuje synchronizacji konta producenta, cen
+   (sloty), historii, identyfikatorów, zdjęć (galeria z trzech kart), opisu i tabelek.
+4. Kolejność etapów C2/C3 i co wspólne (przypięcie, poprawka kodu P4S, plan rozmiar → karta w CardMatchFinder).
+
+---
+
+# Wersja uzgodniona C2 + C3 (po dyskusji z agentem, 24.09.2026) — zastępuje kroki C2 i C3 wyżej
+
+## Co wyszło w dyskusji
+- Po połączeniu kart rozmiarów producenta następny przebieg konta producenta (3M) bierze cenę, OPIS, zdjęcie główne
+  i tabelkę sklepu z rozmiaru, który akurat przyjdzie pierwszy na liście; różnica cen innych rozmiarów zostaje tylko
+  w dzienniku. Potrzebna „pozycja wiodąca” karty modelu i cena zapisywana przy każdej pozycji.
+- Import cennika z pliku po połączeniu zakłada karty od nowa (nie zna połączeń) — dotyczy to już dziś połączeń
+  z zakładki „Do decyzji”, jeśli dostawca ma też cennik z pliku. Trzy wiersze trafiające w jedną kartę dodatkowo
+  przepisywałyby jej SKU i nazwę.
+- Rozmiar vs kolor: pewny sygnał tylko przy spełnieniu trzech warunków (etykieta dystrybutora typu „rozmiar S (mały)”
+  bez koloru; części nazw kart producenta, którymi się różnią, to rozmiary, bez słów koloru; łącznik producenta sam
+  nie grupuje tych kodów — UVEX 9762.020/.420/.520 to warianty, nie rozmiary). Inaczej „niepewne”.
+- Kolory w tej samej cenie → rozdzielanie (karta = kolor; inaczej ceny dystrybutora nie trafią do kart producenta).
+
+## Mapa połączeń (pomysł użytkownika) — tabela `card_redirects`
+Wiersz = kod ze źródła (konto B2B albo cennik z pliku + kod pozycji) → karta, powód (połączenie / łączenie rozmiarów /
+rozdzielenie), numer propozycji, karta z chwili decyzji, pozycja wiodąca, kto i kiedy. Każda aktualizacja
+(synchronizacja B2B i import pliku) najpierw sprawdza mapę i aktualizuje dane na wskazanej karcie — nie pomija pozycji.
+Mapa ma pierwszeństwo przed powiązaniem (synchronizacja nie przepnie pozycji wbrew decyzji człowieka). Usunięta karta
+docelowa → wiersz zostaje jako „decyzja bez karty” z ostrzeżeniem. Uzupełnienie wstecz z połączeń zrobionych na ekranie.
+Zastępuje znacznik „przypięcia” z C2.
+
+## Kolejność (każdy punkt osobnym commitem z testami)
+1. Kod karty P4S (kod karty równy kodowi rozmiaru → pomijany; przy rozmiarach z własnymi kodami → kod modelu).
+   Pełny przebieg P4S, propozycje przed/po.
+2. Mapa połączeń: tabela, zapis przy „Połącz”, przepinanie przy scaleniach, uzupełnienie wstecz (najpierw podgląd).
+3. Synchronizacja B2B respektuje mapę; cena i data przy każdej pozycji (b2b_product_links) — rozjazd cen rozmiarów
+   widoczny, nie po cichu.
+4. Import pliku respektuje mapę (wiersze jednej karty razem, bez przepisywania SKU i nazwy, rozjazd cen w raporcie).
+   Punkty 2–4 naprawiają też istniejące połączenia.
+5. Propozycje z planem „pozycja → karta” i rodzajem (połącz / połącz rozmiary / rozdziel) — pomiar: ile rozmiarów,
+   ile kolorów, ile niepewnych.
+6. „Łączenie rozmiarów” (C3): pozycja wiodąca w synchronizacji, nowe scalenie kart producenta z nazwą i listą rozmiarów
+   zatwierdzonymi przez człowieka (podpowiedź: wspólna część nazw; SKU karty, która zostaje; opis i zdjęcie główne
+   z pozycji wiodącej), potem dołączenie karty dystrybutora. Osobna zakładka (decyzja użytkownika).
+7. „Rozdzielanie” (C2) dla kolorów i różnych cen.
+Odłożone: cofanie z ekranu, ręczne „to są rozmiary” dla niepewnych, zbiorcze decyzje dla 6 i 7.
+
+## Ekran
+Zakładki: Do decyzji · Łączenie rozmiarów · Rozdzielanie · Niepewne · Odrzucone · Zrobione. (Agent proponował mniej
+zakładek z filtrem rodzaju — zostaje osobna zakładka, bo tak zdecydował użytkownik.) Każdy wiersz zaczyna się zdaniem
+po ludzku, np. „P4S ma jeden wyrób w 3 rozmiarach, 3M ma osobną kartę na każdy rozmiar w tej samej cenie. Po
+połączeniu: jedna karta 3M z rozmiarami S, M, L i ceną P4S obok.” Przy łączeniu rozmiarów potwierdzenie „pozycje
+różnią się tylko rozmiarem”.
