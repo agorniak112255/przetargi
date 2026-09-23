@@ -36,6 +36,7 @@ class B2bConnectorRegistry
         MascotB2bConnector::class,
         JhkB2bConnector::class,
         P4sB2bConnector::class,
+        MaviboB2bConnector::class,
     ];
 
     /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */
