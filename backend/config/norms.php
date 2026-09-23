@@ -16,6 +16,10 @@ return [
         'cxs' => ['host' => 'cxs.net.pl', 'template' => 'https://cxs.net.pl/catalogsearch/result/?q={q}', 'links' => 'magento'],
     ],
 
+    // Witryny za zaporą (Ansell: Incapsula) — gdy zwykłe pobranie trafi na zaporę, strona idzie przez reader jako
+    // markdown (BlockedPageReader::fetchMarkdown, wspólna kolejka readera z wzbogacaniem).
+    'reader_hosts' => ['ansell.com'],
+
     // Ile stron z wyników wyszukiwarki producenta sprawdzić na jedną kartę.
     'max_pages_per_card' => 4,
 

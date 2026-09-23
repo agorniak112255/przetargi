@@ -144,6 +144,39 @@ final class BlockedPageReader
     }
 
     /**
+     * Cały markdown strony z readera — dla norms:from-manufacturer-pages (plan norm, etap 3b). fetch() usuwa obrazki
+     * i tnie tekst do 5000 znaków, a Ansell podaje normy właśnie jako podpisy obrazków z kodem obok
+     * („![Image 30: EN 388:2016](…) 4X43EP”), w sekcji daleko za menu. Te same zabezpieczenia co fetch(): kolejka
+     * readera, zapora także u readera, strona błędu u celu. Bez modelu i bez czyszczenia — dosłowny tekst.
+     */
+    public function fetchMarkdown(string $url): ?string
+    {
+        $url = trim($url);
+        if ($url === '' || (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://'))) {
+            return null;
+        }
+        unset($this->failures[$url]);
+        $response = $this->requestReader($url);
+        if ($response === null) {
+            $this->failures[$url] ??= 'reader nie odpowiedział';
+
+            return null;
+        }
+        $markdown = $this->readLimitedBody($response, self::MAX_TEXT_BYTES);
+        if (mb_strlen($markdown) < 80
+            || (str_contains(mb_strtolower($markdown), 'incapsula') && mb_strlen($markdown) < 1200)
+            || $this->readerHitCaptchaOnly($markdown)
+            || $this->readerReportsTargetError($markdown)
+            || self::looksLikeAppErrorShell($markdown)) {
+            $this->failures[$url] = 'reader nie oddał karty';
+
+            return null;
+        }
+
+        return $markdown;
+    }
+
+    /**
      * Przy wielu workerach naraz Jina potrafi chwilowo odmówić (429) albo paść (5xx) —
      * wtedy druga próba po chwili. Timeoutu nie ponawiamy: to kolejne 35 s zadania.
      */

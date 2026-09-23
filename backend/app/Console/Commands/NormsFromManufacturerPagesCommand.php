@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Models\Product;
+use App\Services\Enrichment\BlockedPageReader;
 use App\Services\Enrichment\ProductPageFetcher;
 use App\Services\Norms\ManufacturerNormIdentity;
 use App\Services\Norms\ManufacturerNormReaders;
 use App\Services\Norms\ManufacturerPageFinder;
+use App\Services\Norms\ReaderMarkdownPage;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ManufacturerNormFacts;
 use Illuminate\Console\Command;
@@ -157,7 +159,7 @@ final class NormsFromManufacturerPagesCommand extends Command
         $rejections = [];
         foreach ($candidates as $candidate) {
             usleep($delayUs);
-            $raw = $pages->fetchRaw($candidate['url']);
+            $raw = $pages->fetchRaw($candidate['url']) ?? $this->throughReader($candidate['url']);
             if ($raw === null) {
                 $rejections[] = $candidate['url'].': nie pobrano';
 
@@ -211,6 +213,28 @@ final class NormsFromManufacturerPagesCommand extends Command
         }
 
         return $base + ['status' => 'odrzucone', 'why' => $rejections];
+    }
+
+    /**
+     * Witryna za zaporą (config norms.reader_hosts — Ansell: Incapsula) przez reader jako markdown, zamieniony na prosty
+     * HTML (ReaderMarkdownPage), żeby bramka i czytnik witryny działały jak na zwykłej stronie.
+     *
+     * @return array{html: string, final_url: string, status: int, from_cache: bool}|null
+     */
+    private function throughReader(string $url): ?array
+    {
+        $host = preg_replace('/^www\./', '', mb_strtolower((string) parse_url($url, PHP_URL_HOST))) ?? '';
+        $walled = array_filter(
+            (array) config('norms.reader_hosts', []),
+            static fn (mixed $h): bool => is_string($h) && ($host === $h || str_ends_with($host, '.'.$h)),
+        );
+        if ($walled === []) {
+            return null;
+        }
+        $markdown = app(BlockedPageReader::class)->fetchMarkdown($url);
+
+        return $markdown === null ? null
+            : ['html' => ReaderMarkdownPage::toHtml($markdown), 'final_url' => $url, 'status' => 200, 'from_cache' => false];
     }
 
     private function apply(string $planPath): int

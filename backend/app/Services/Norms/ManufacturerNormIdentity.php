@@ -12,6 +12,7 @@ use App\Models\ProductIdentifier;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\JspB2bClient;
 use App\Services\Enrichment\ProductPageFetcher;
+use App\Services\Enrichment\ProductSearchIdentity;
 use App\Support\BrandKey;
 use App\Support\ProductIdentifierCode;
 use App\Support\ProductSizeVariant;
@@ -26,8 +27,9 @@ use DOMXPath;
  * kod producenta ze źródła ceny albo EAN karty. Nazwa i marka nie wystarczają: „Rękawice CXS Tale” to jedna strona,
  * a „Tale” z innego koloru czy wersji miałby inny kod i mógłby mieć inne poziomy EN 388.
  *
- * Nie używamy tu ProductSearchIdentity::productCodes / modelAliases / model_name — to luźne rdzenie rodziny
- * („3210-012” dla wszystkich rozmiarów i kolorów), dobre do szukania, złe do potwierdzania.
+ * Nie używamy tu ProductSearchIdentity::productCodes / model_name — to luźne rdzenie rodziny („3210-012” dla wszystkich
+ * rozmiarów i kolorów), dobre do szukania, złe do potwierdzania. Wyjątek: z modelAliases same kody modelu Ansella
+ * („R065”, „11-800”) dla karty z cennika Ansella — ansellModelCodes.
  *
  * Niczego nie zapisuje.
  */
@@ -38,6 +40,9 @@ final class ManufacturerNormIdentity
     public const KIND_MANUFACTURER_CODE = 'manufacturer_code';
 
     public const KIND_SKU = 'sku';
+
+    /** Kod modelu wyprowadzony ze SKU cennika marki według jej zapisu na stronie (Ansell: „065-13” → „R065”). */
+    public const KIND_MODEL_CODE = 'model_code';
 
     /**
      * Klasy i id bloków z innymi wyrobami. Usuwane z DOM-u razem z zawartością — regex w withoutRelatedProductHtml
@@ -80,7 +85,7 @@ final class ManufacturerNormIdentity
      * od samej marki (cennik producenta z pliku albo jego konto B2B). SKU karty z konta dystrybutora (Raw-Pol, P4S)
      * bywa numerem dystrybutora — na stronie producenta nic nie znaczy albo przypadkiem znaczy inny wyrób.
      *
-     * @return list<array{code: string, kind: 'ean'|'manufacturer_code'|'sku', short: bool}>
+     * @return list<array{code: string, kind: 'ean'|'manufacturer_code'|'sku'|'model_code', short: bool}>
      */
     public function codesFor(Product $product): array
     {
@@ -137,9 +142,32 @@ final class ManufacturerNormIdentity
             if (is_string($stripped) && $stripped !== '') {
                 $add($stripped, self::KIND_SKU);
             }
+            foreach ($this->ansellModelCodes($product, $brandKey) as $model) {
+                $add($model, self::KIND_MODEL_CODE);
+            }
         }
 
         return $out;
+    }
+
+    /**
+     * Kod modelu Ansella z SKU cennika Ansella: „065-13” (RINGERS 065, rozmiar 13) to na ansell.com „R065” / „R-065”,
+     * „11-800-9” to „11-800” (plan norm, etap 3b, 23.09.2026). Z ProductSearchIdentity::modelAliases bierzemy tylko
+     * zapisy w kształcie kodu — bez nazwy linii („ringers”) i gołych cyfr („065”), które na stronie nic nie potwierdzają.
+     * Tylko dla karty z cennika samej marki (wołający sprawdza priceSourceIsBrand): u dystrybutora SKU to jego numer.
+     *
+     * @return list<string>
+     */
+    private function ansellModelCodes(Product $product, string $brandKey): array
+    {
+        if ($brandKey !== BrandKey::of('Ansell')) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            app(ProductSearchIdentity::class)->modelAliases($product),
+            static fn (string $alias): bool => preg_match('/^(?:[a-z]{1,4}-?\d{2,6}|\d{2}-\d{3}[a-z]?)$/iu', trim($alias)) === 1,
+        ));
     }
 
     /**

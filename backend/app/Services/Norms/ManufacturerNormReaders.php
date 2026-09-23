@@ -13,6 +13,7 @@ final class ManufacturerNormReaders
 {
     public function __construct(
         private readonly CxsNormPageReader $cxs,
+        private readonly AnsellNormPageReader $ansell,
         private readonly GenericNormFrameReader $generic,
     ) {}
 
@@ -23,7 +24,7 @@ final class ManufacturerNormReaders
     {
         $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
         $out = [];
-        foreach ([$this->cxs] as $reader) {
+        foreach ([$this->cxs, $this->ansell] as $reader) {
             if ($host !== '' && $reader->supports($host)) {
                 $out[] = $reader;
             }
