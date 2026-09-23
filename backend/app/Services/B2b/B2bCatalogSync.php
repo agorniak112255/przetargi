@@ -1757,10 +1757,17 @@ final class B2bCatalogSync
         return ['documents' => $documents, 'texts' => $texts];
     }
 
-    /** Adres pliku do porównania: bez schematu, zapytania i fragmentu („//artra.pl/…pdf?v=1” = „https://artra.pl/…pdf”). */
+    /**
+     * Adres pliku do porównania: bez schematu, zapytania i fragmentu („//artra.pl/…pdf?v=1” = „https://artra.pl/…pdf”).
+     * Przy adresie skryptu (…/b2bPortal.jsp?function=getProductDocument&productId=1&ordinalNumber=2 u P4S) plik
+     * wskazuje dopiero zapytanie — tam zostaje, bo inaczej każdy plik karty byłby „tym samym” plikiem.
+     */
     private static function documentUrlKey(string $url): string
     {
-        $url = (string) preg_replace('/[?#].*$/s', '', trim($url));
+        $url = trim($url);
+        $url = preg_match('~^[^?#]+\.(?:jsp|php|aspx?|cgi)\?~i', $url) === 1
+            ? (string) preg_replace('/#.*$/s', '', $url)
+            : (string) preg_replace('/[?#].*$/s', '', $url);
 
         return (string) preg_replace('~^(?:https?:)?//~i', '', $url);
     }
