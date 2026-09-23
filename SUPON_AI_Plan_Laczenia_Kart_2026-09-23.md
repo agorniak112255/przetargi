@@ -240,3 +240,9 @@ zakładek z filtrem rodzaju — zostaje osobna zakładka, bo tak zdecydował uż
 po ludzku, np. „P4S ma jeden wyrób w 3 rozmiarach, 3M ma osobną kartę na każdy rozmiar w tej samej cenie. Po
 połączeniu: jedna karta 3M z rozmiarami S, M, L i ceną P4S obok.” Przy łączeniu rozmiarów potwierdzenie „pozycje
 różnią się tylko rozmiarem”.
+
+## Stan 24.09.2026 (rano)
+Zrobione: 1 (0acdf91), 2 (2449f04), 3 (d173764), 4 (36b3621), 5 (8b11654, 7a86f0f, build 8a513ed).
+Następne: wdrożenie → „Odśwież propozycje” → pomiar (rozmiary / kolory / niepewne) → decyzja → 6 (akcja łączenia
+rozmiarów z nazwą karty modelu zatwierdzaną przez człowieka, pozycja wiodąca) → 7 (akcja rozdzielania).
+
