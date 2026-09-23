@@ -427,6 +427,37 @@ final class ProductModelFuzzyTest extends TestCase
         $this->assertContains('coolflow', $this->fuzzy->needles('Zawór Cool-Flow do półmaski'));
     }
 
+    /** Zapytanie #50 z 23.09.2026: symbol REIS przepisany z katalogu, doklejony myślnikiem do poprzedniego słowa. */
+    #[Test]
+    public function code_declared_by_symbol_label_is_the_named_model(): void
+    {
+        $req = 'Rękawice ochronne tkaninowe pięciopalcowe, powlekane nitrylem żółtym, zakończone ściągaczem-symbol RNITz  - 432 pary';
+
+        $this->assertSame(['rnitz'], $this->fuzzy->needles($req));
+        $this->assertTrue($this->fuzzy->matches($req, $this->product('RNITZ', 'Rękawice ochronne NITZ.', 'REIS')));
+        // Kod przepisany z katalogu nie ma literówki — sąsiednie symbole to inne wyroby.
+        $this->assertFalse($this->fuzzy->matches($req, $this->product('RNITNL', 'Rękawice ochronne NITNL.', 'REIS')));
+        $this->assertFalse($this->fuzzy->matches($req, $this->product('RNITRIO', 'Rękawice ochronne NITRIO.', 'REIS')));
+
+        $this->assertSame(['ab15021'], $this->fuzzy->needles('Szelki bezpieczeństwa, kod: AB15021'));
+        $this->assertSame(['rnitz'], $this->fuzzy->needles('Rękawice nitrylowe o symbolu RNITZ'));
+    }
+
+    /** Etykieta stoi też przed zwykłymi słowami — te nie są kodem. */
+    #[Test]
+    public function code_label_before_ordinary_words_adds_no_needle(): void
+    {
+        foreach ([
+            'Rękawice oznaczone symbolem CE, EN 388',
+            'Kask z naklejką, kod kreskowy na opakowaniu',
+            'Okulary ochronne, symbol graficzny na zauszniku',
+            'Obuwie zgodne z kodeksem pracy',
+            'rękawice ochronne tkaninowe nitryl żółty ściągacz-symbol',
+        ] as $req) {
+            $this->assertSame([], $this->fuzzy->needles($req), $req.': '.implode(', ', $this->fuzzy->needles($req)));
+        }
+    }
+
     #[Test]
     public function measure_nouns_and_units_do_not_form_word_digit_pairs(): void
     {

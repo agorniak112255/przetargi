@@ -44,6 +44,9 @@ final class ProductModelFuzzy
         'uhmwpe', 'hppe', 'hdpe',
     ];
 
+    /** Słowo, którym klient zapowiada numer katalogowy („symbol RNITz”, „indeks: ABC”). */
+    private const CODE_LABEL = '(?:symbol(?:u|em)?|indeks(?:u|em)?|kod(?:u|em)?)';
+
     public function hasNamedModel(string $requirement): bool
     {
         return $this->needles($requirement) !== [];
@@ -217,6 +220,11 @@ final class ProductModelFuzzy
                 if ($this->isCompoundAdjective($raw)) {
                     continue;
                 }
+                // „ściągaczem-symbol RNITz” — brak spacji przed etykietą kodu, nie model „ściągaczem-symbol”.
+                // Jako igła modelu odrzucała na bramce nazwanego modelu każdą kartę, z RNITZ włącznie.
+                if (preg_match('/(?:^|-)'.self::CODE_LABEL.'(?:-|$)/u', $raw) === 1) {
+                    continue;
+                }
                 $this->pushNeedle($out, $raw);
                 if ($this->isShortHyphenModel($raw)) {
                     $compact = $this->compact($raw);
@@ -329,7 +337,41 @@ final class ProductModelFuzzy
             }
         }
 
-        return $this->preferDigitModelNeedles(array_values(array_unique($out)));
+        // Kod zapowiedziany przez klienta zostaje także obok igieł z cyfrą — to on nazywa wyrób.
+        return array_values(array_unique(array_merge(
+            $this->preferDigitModelNeedles(array_values(array_unique($out))),
+            $this->declaredCodes($requirement),
+        )));
+    }
+
+    /**
+     * Numer katalogowy zapowiedziany etykietą: „ściągaczem-symbol RNITz” → rnitz. Kod bez cyfr
+     * nie przechodził żadnej reguły igieł (KAPITALIKI dopiero od 6 liter, bez małej litery),
+     * więc karta RNITZ nie była nazwanym modelem, choć klient przepisał jej symbol z katalogu.
+     *
+     * Etykieta stoi też przed zwykłymi słowami („symbolem CE”, „kod kreskowy”), dlatego kod
+     * musi wyglądać na kod: mieć cyfrę albo być pisany głównie wielkimi literami.
+     *
+     * @return list<string>
+     */
+    private function declaredCodes(string $requirement): array
+    {
+        $pattern = '/(?<![\p{L}\d])'.self::CODE_LABEL.'(?![\p{L}\d])\s*[-:.]?\s*([\p{L}\d][\p{L}\d\/.\-]*[\p{L}\d])/iu';
+        if (preg_match_all($pattern, $requirement, $m) < 1) {
+            return [];
+        }
+        $out = [];
+        foreach ($m[1] as $raw) {
+            $letters = preg_replace('/[^\p{L}]/u', '', $raw) ?? '';
+            $upper = preg_match_all('/\p{Lu}/u', $letters);
+            $looksLikeCode = preg_match('/\d/', $raw) === 1
+                || ($upper >= 2 && $upper * 2 >= mb_strlen($letters));
+            if ($looksLikeCode) {
+                $this->pushNeedle($out, $raw);
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -615,6 +657,9 @@ final class ProductModelFuzzy
 
         $best = 99;
         $bestLen = 0;
+        // Kod przepisany przez klienta z katalogu nie ma literówki do wybaczenia: pod „symbol RNITz”
+        // tolerancja jednej litery wpuszczała RNITNL i RNITNS jako „ten sam model”.
+        $declared = array_flip($this->declaredCodes($requirement));
         foreach ($needles as $needle) {
             if ($this->brandAndSkuMatch($needle, $product)) {
                 $best = 0;
@@ -622,7 +667,7 @@ final class ProductModelFuzzy
 
                 continue;
             }
-            $allowed = $this->maxDistance(mb_strlen($needle));
+            $allowed = isset($declared[$needle]) ? 0 : $this->maxDistance(mb_strlen($needle));
             foreach ($hays as $hay) {
                 $dist = $this->windowDistance($needle, $hay);
                 if ($dist <= $allowed && ($dist < $best || ($dist === $best && mb_strlen($needle) > $bestLen))) {
