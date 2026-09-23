@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type MouseEvent, type ReactNode } from 'react'
 import { appHref } from '../lib/api'
 
 const modules = [
@@ -1972,8 +1972,52 @@ function TbFilePicker() {
   )
 }
 
+type AddonDownload =
+  | { state: 'idle' }
+  | { state: 'busy' }
+  | { state: 'done'; kb: number }
+  | { state: 'error'; message: string }
+
+/**
+ * Sam link `download` nie daje żadnego znaku: 48 KB zapisuje się w ułamku
+ * sekundy, a Chrome i Edge pokazują tylko ikonkę w rogu — ludzie uznawali,
+ * że przycisk nie działa. Plik pobieramy więc sami i mówimy, że dotarł.
+ * Gdy fetch zawiedzie, zostaje zwykły link (prawy przycisk → Zapisz link jako).
+ */
+function useAddonDownload() {
+  const [status, setStatus] = useState<AddonDownload>({ state: 'idle' })
+
+  async function download(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault()
+    setStatus({ state: 'busy' })
+    try {
+      const res = await fetch(appHref(ADDON_FILE), { cache: 'no-store' })
+      if (!res.ok) throw new Error(`serwer odpowiedział kodem ${res.status}`)
+      // Brak pliku na serwerze kończy się stroną aplikacji (index.html) z kodem 200.
+      if ((res.headers.get('Content-Type') ?? '').includes('text/html')) {
+        throw new Error('na serwerze brakuje pliku dodatku')
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'supon-przetargi.xpi'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      setStatus({ state: 'done', kb: Math.max(1, Math.round(blob.size / 1024)) })
+    } catch (ex) {
+      setStatus({ state: 'error', message: ex instanceof Error ? ex.message : 'nieznany błąd' })
+    }
+  }
+
+  return { status, download }
+}
+
 function DownloadsHelp() {
   const release = useAddonRelease()
+  const { status, download } = useAddonDownload()
 
   return (
     <div className="space-y-4">
@@ -1987,9 +2031,13 @@ function DownloadsHelp() {
           <a
             href={appHref(ADDON_FILE)}
             download
-            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            onClick={download}
+            aria-disabled={status.state === 'busy'}
+            className={`rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 ${
+              status.state === 'busy' ? 'pointer-events-none opacity-60' : ''
+            }`}
           >
-            Pobierz dodatek (plik XPI)
+            {status.state === 'busy' ? 'Pobieram…' : 'Pobierz dodatek (plik XPI)'}
           </a>
           <span className="text-xs text-slate-500">
             supon-przetargi.xpi
@@ -1997,6 +2045,19 @@ function DownloadsHelp() {
             {release?.minThunderbird ? ` · Thunderbird ${release.minThunderbird} lub nowszy` : ''}
           </span>
         </div>
+        {status.state === 'done' ? (
+          <p role="status" className="mt-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+            <strong>Pobrano plik supon-przetargi.xpi ({status.kb} KB).</strong> Przeglądarka zapisuje go w folderze
+            Pobrane — listę pobranych otworzysz skrótem <strong>Ctrl+J</strong>. Jeśli pliku tam nie ma albo jest
+            oznaczony jako zablokowany, zatrzymał go antywirus lub zasady komputera.
+          </p>
+        ) : null}
+        {status.state === 'error' ? (
+          <p role="alert" className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+            Nie udało się pobrać pliku ({status.message}). Spróbuj prawym przyciskiem na przycisku → „Zapisz link
+            jako…”.
+          </p>
+        ) : null}
         <p className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           Masz już starszą wersję? Zainstaluj nową <strong>na wierzch</strong> — nie odinstalowuj poprzedniej, bo
           razem z nią znikają zapisane dane logowania.
