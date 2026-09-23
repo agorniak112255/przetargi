@@ -93,7 +93,12 @@ final class ProductImageAuditCommand extends Command
 
         if (! $this->option('apply')) {
             $this->newLine();
-            $this->warn('Raport — nic nie skasowano. Żeby usunąć te wiersze: php artisan products:images-audit --apply');
+            // podpowiedź powtarza filtr producenta — bez niego --apply czyściłby galerie wszystkich marek
+            $quoted = preg_match('/^[\w.-]+$/u', $manufacturer) === 1
+                ? $manufacturer
+                : '"'.str_replace('"', '\"', $manufacturer).'"';
+            $filter = $manufacturer !== '' ? ' --manufacturer='.$quoted : '';
+            $this->warn('Raport — nic nie skasowano. Żeby usunąć te wiersze: php artisan products:images-audit'.$filter.' --apply');
 
             return self::SUCCESS;
         }

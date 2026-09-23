@@ -33,6 +33,15 @@ final class ProductImageAuditCommandTest extends TestCase
         $this->assertSame(4, ProductImage::query()->where('product_id', $product->id)->count());
     }
 
+    public function test_hint_keeps_the_manufacturer_filter(): void
+    {
+        $this->productWithMess();
+
+        $this->artisan('products:images-audit --manufacturer=ARTRA')
+            ->expectsOutputToContain('products:images-audit --manufacturer=ARTRA --apply')
+            ->assertSuccessful();
+    }
+
     public function test_apply_keeps_the_supplier_row_and_drops_the_mess(): void
     {
         $product = $this->productWithMess();
