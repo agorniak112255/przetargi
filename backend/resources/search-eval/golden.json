@@ -1,17 +1,17 @@
 {
     "version": 1,
-    "note": "Golden set wyszukiwania AI. Przypadki zakotwiczone w marce i modelu, linie SIWZ z ofert oraz prawdziwe zapytania klientów z poczty. Każdy oczekiwany i zakazany SKU jest sprawdzany względem katalogu — przypadki mierzące nieistniejące karty zostały usunięte. Metryki bezwzględne nadal wymagają przeglądu handlowca.",
+    "note": "Golden set wyszukiwania AI. Przypadki zakotwiczone w marce i modelu, linie SIWZ z ofert oraz prawdziwe zapytania klientów z poczty. Każdy oczekiwany i zakazany SKU jest sprawdzany względem katalogu — przypadki mierzące nieistniejące karty zostały usunięte. Wyroby 3M zapisujemy globalnym numerem 3M (7000103989), bo na taki katalog przeszedł przy imporcie cennika; krótki numer z dawnej numeracji (1575818) siedzi dziś tylko w tabelce danych sklepowych. Metryki bezwzględne nadal wymagają przeglądu handlowca.",
     "cases": [
         {
             "id": "peltor-x2-naglowne",
             "query": "Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna",
             "expected_skus": [
-                "1575818",
+                "7000103989",
                 "7100141454"
             ],
             "forbidden_skus": [
-                "1575813",
-                "1587242"
+                "7000103987",
+                "7000103990"
             ],
             "note": "Marka + model X2A w wersji nagłownej. Katalog prowadzi te nauszniki pod numerami 3M, nie pod kodem EU — zakazane: X1A (inny model) i X2P3 (wersja nahełmowa)."
         },
@@ -19,14 +19,14 @@
             "id": "nauszniki-snr-30",
             "query": "Ochronniki słuchu nagłowne o tłumieniu SNR minimum 30 dB",
             "expected_skus": [
-                "1274119",
-                "1058622",
-                "1575820",
-                "1306374"
+                "7000038211",
+                "7000039622",
+                "7000103993",
+                "7000038207"
             ],
             "forbidden_skus": [
-                "A401GU",
-                "1575813"
+                "7000039616",
+                "7000103987"
             ],
             "note": "Bez marki, warunek liczbowy z karty: Optime II/III i X4A maja SNR 31-35 dB, Optime I i X1A po 27 dB i nie spelniaja progu. Katalog prowadzi te nauszniki pod numerami 3M, nie pod kodami EU."
         },
@@ -35,14 +35,14 @@
             "query": "Nauszniki przeciwhałasowe montowane na hełm ochronny",
             "expected_skus": [
                 "7000103988",
-                "1587242",
-                "X2P3E",
-                "1584875",
-                "1588690"
+                "7000103990",
+                "7100326939",
+                "7000103994",
+                "7000103996"
             ],
             "forbidden_skus": [
-                "1575818",
-                "1575813"
+                "7000103989",
+                "7000103987"
             ],
             "note": "Wariant mocowania: wynik ma zawierać wyłącznie nauszniki nahełmowe, nagłowne są zakazane."
         },
@@ -110,7 +110,7 @@
             "id": "okulary-ochronne-3m-solus-s1201sgaf-eu",
             "query": "Okulary ochronne 3M SOLUS S1201SGAF - EU",
             "expected_skus": [
-                "S1201SGAF-TSKT"
+                "7100244066"
             ],
             "forbidden_skus": [],
             "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
@@ -119,7 +119,7 @@
             "id": "pasek-podbrodkowy-3-punktowy-do-helmu-g3000",
             "query": "Pasek podbródkowy 3 punktowy do hełmu G3000",
             "expected_skus": [
-                "1085868"
+                "7000108175"
             ],
             "forbidden_skus": [],
             "note": "Pasek podbródkowy GH4 do hełmu G3000 — karta 3M pod numerem katalogowym."
@@ -175,7 +175,7 @@
             "id": "gogle-ochronne-3m-gear-gg6001sgaf-eu",
             "query": "Gogle ochronne 3M GEAR GG6001SGAF-EU",
             "expected_skus": [
-                "GG6001SGAF-RED"
+                "7100216192"
             ],
             "forbidden_skus": [],
             "note": "Gogle 3M GoggleGear 6001SGAF — katalog ma wariant z czerwoną oprawką."
