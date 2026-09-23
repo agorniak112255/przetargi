@@ -5,14 +5,18 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Jobs\ReindexProductEmbeddingJob;
+use App\Models\B2bProductLink;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductImage;
+use App\Models\ProductImageRejection;
 use App\Models\ProductPriceHistory;
+use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
+use App\Services\B2b\B2bCatalogSync;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Support\ProductSizeVariant;
 use Illuminate\Support\Collection;
@@ -324,13 +328,18 @@ final class ProductSizeMergeService
                     $newSku = $core;
                 }
             }
-            // przed usunięciem scalanych kart — ich sloty zniknęłyby kaskadą
+            // przed usunięciem scalanych kart — ich sloty, powiązania B2B, tabelki ze sklepu i odrzucone zdjęcia
+            // zniknęłyby kaskadą, a następna synchronizacja założyłaby dla kodu dostawcy osobną kartę
             $this->moveSourcePrices((int) $winner->id, $loserIds);
+            $this->moveB2bLinks((int) $winner->id, $loserIds);
+            $this->moveShopCards((int) $winner->id, $loserIds);
+            $this->moveImageRejections((int) $winner->id, $loserIds);
             $winner->update($updates);
             Product::query()->whereIn('id', $loserIds)->delete();
             if ($newSku !== null) {
                 $winner->update(['sku' => $newSku]);
             }
+            B2bCatalogSync::refreshShopFieldsSummary($winner);
             $this->effectivePrices->refresh($winner);
         });
 
@@ -472,6 +481,77 @@ final class ProductSizeMergeService
             $slot->product_id = $winnerId;
             $slot->save();
             $kept[$key] = $slot;
+        }
+    }
+
+    /**
+     * Powiązania kodów dostawcy na kartę docelową. UNIQUE (b2b_account_id, remote_id) nie zależy od karty, a kilka
+     * kodów jednego konta na jednej karcie to zwykły stan grupy rozmiarów w B2bCatalogSync.
+     *
+     * @param  list<int>  $loserIds
+     */
+    private function moveB2bLinks(int $winnerId, array $loserIds): void
+    {
+        if (! Schema::hasTable('b2b_product_links') || $loserIds === []) {
+            return;
+        }
+        B2bProductLink::query()->whereIn('product_id', $loserIds)->update(['product_id' => $winnerId]);
+    }
+
+    /**
+     * Tabelki ze sklepu dostawcy na kartę docelową. Ta sama para (karta, konto) jest UNIQUE — zostaje tabelka
+     * pobrana później (jak slot ceny w moveSourcePrices).
+     *
+     * @param  list<int>  $loserIds
+     */
+    private function moveShopCards(int $winnerId, array $loserIds): void
+    {
+        if (! Schema::hasTable('product_shop_cards') || $loserIds === []) {
+            return;
+        }
+        $kept = ProductShopCard::query()->where('product_id', $winnerId)->get()->keyBy('b2b_account_id')->all();
+        foreach (ProductShopCard::query()->whereIn('product_id', $loserIds)->orderBy('id')->get() as $card) {
+            $accountId = (int) $card->b2b_account_id;
+            $current = $kept[$accountId] ?? null;
+            if ($current !== null) {
+                if (($card->synced_at?->getTimestamp() ?? 0) <= ($current->synced_at?->getTimestamp() ?? 0)) {
+                    $card->delete();
+
+                    continue;
+                }
+                $current->delete();
+            }
+            $card->product_id = $winnerId;
+            $card->save();
+            $kept[$accountId] = $card;
+        }
+    }
+
+    /**
+     * Zdjęcie odrzucone na scalanej karcie nie może wrócić na kartę docelową z galerii przeniesionego powiązania B2B.
+     * UNIQUE (product_id, file_key_hash) — odrzucenie już zapisane na karcie docelowej wystarcza.
+     *
+     * @param  list<int>  $loserIds
+     */
+    private function moveImageRejections(int $winnerId, array $loserIds): void
+    {
+        if (! Schema::hasTable('product_image_rejections') || $loserIds === []) {
+            return;
+        }
+        $taken = array_fill_keys(
+            ProductImageRejection::query()->where('product_id', $winnerId)->pluck('file_key_hash')->all(),
+            true,
+        );
+        foreach (ProductImageRejection::query()->whereIn('product_id', $loserIds)->orderBy('id')->get() as $rejection) {
+            $hash = (string) $rejection->file_key_hash;
+            if (isset($taken[$hash])) {
+                $rejection->delete();
+
+                continue;
+            }
+            $taken[$hash] = true;
+            $rejection->product_id = $winnerId;
+            $rejection->save();
         }
     }
 

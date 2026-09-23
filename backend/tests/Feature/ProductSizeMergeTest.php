@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\B2bAccount;
+use App\Models\B2bProductLink;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductImage;
+use App\Models\ProductImageRejection;
+use App\Models\ProductShopCard;
 use App\Models\User;
 use App\Services\PriceListImportService;
 use App\Services\ProductSizeMergeService;
@@ -656,5 +660,76 @@ final class ProductSizeMergeTest extends TestCase
         $this->assertSame([], $result['errors']);
         $this->assertSame(1, Product::query()->count());
         $this->assertSame(1, ProductDocument::query()->count());
+    }
+
+    public function test_merge_moves_b2b_links_shop_cards_and_image_rejections_to_winner(): void
+    {
+        Queue::fake();
+
+        // Łączenie po imporcie cennika bierze cały katalog producenta — także karty z synchronizacji B2B.
+        $winner = Product::query()->create([
+            'sku' => '37695VP100',
+            'name' => 'AlphaTec 37695VP Size 10.0',
+            'manufacturer' => 'Ansell',
+            'description' => str_repeat('Rękawice chemiczne Ansell AlphaTec. ', 3),
+            'catalog_price_net' => 2.85,
+            'purchase_price' => 2.85,
+        ]);
+        $loser = Product::query()->create([
+            'sku' => '37695VP070',
+            'name' => 'AlphaTec 37695VP Size 7.0',
+            'manufacturer' => 'Ansell',
+            'catalog_price_net' => 2.85,
+            'purchase_price' => 2.85,
+        ]);
+        $anro = B2bAccount::query()->create(['username' => 'anro', 'password' => 'x', 'sites' => ['b2b.anro.net.pl'], 'connector' => 'anro']);
+        $uvex = B2bAccount::query()->create(['username' => 'uvex', 'password' => 'x', 'sites' => ['b2b.uvex.pl'], 'connector' => 'uvex']);
+        B2bProductLink::query()->create(['b2b_account_id' => $anro->id, 'remote_id' => '100', 'product_id' => $winner->id]);
+        B2bProductLink::query()->create(['b2b_account_id' => $anro->id, 'remote_id' => '70', 'product_id' => $loser->id]);
+        B2bProductLink::query()->create(['b2b_account_id' => $uvex->id, 'remote_id' => 'u70', 'product_id' => $loser->id]);
+        $shopCard = static fn (Product $p, B2bAccount $a, string $value, string $at): ProductShopCard => ProductShopCard::query()->create([
+            'product_id' => $p->id,
+            'b2b_account_id' => $a->id,
+            'fields' => [['section' => '', 'rows' => [['name' => 'Materiał', 'value' => $value]]]],
+            'synced_at' => $at,
+        ]);
+        $shopCard($winner, $anro, 'nitryl stary', '2026-09-01 10:00');
+        $newerAnro = $shopCard($loser, $anro, 'nitryl nowy', '2026-09-10 10:00');
+        $uvexCard = $shopCard($loser, $uvex, 'lateks', '2026-09-05 10:00');
+        foreach ([$winner, $loser] as $p) {
+            ProductImageRejection::query()->create([
+                'product_id' => $p->id,
+                'file_key_hash' => hash('sha256', 'https://b2b/zdjecie.jpg'),
+                'file_key' => 'https://b2b/zdjecie.jpg',
+                'reason' => ProductImageRejection::REASON_MANUAL,
+            ]);
+        }
+        ProductImageRejection::query()->create([
+            'product_id' => $loser->id,
+            'file_key_hash' => hash('sha256', 'https://b2b/inne.jpg'),
+            'file_key' => 'https://b2b/inne.jpg',
+            'reason' => ProductImageRejection::REASON_AUDIT,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('Ansell', false);
+
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(1, $result['groups']);
+        $this->assertNull(Product::query()->find($loser->id));
+        $this->assertSame(
+            ['100', '70', 'u70'],
+            B2bProductLink::query()->where('product_id', $winner->id)->orderBy('remote_id')->pluck('remote_id')->all(),
+        );
+        $this->assertSame(3, B2bProductLink::query()->count());
+        // ta sama para (karta, konto) jest UNIQUE — zostaje tabelka pobrana później
+        $cards = ProductShopCard::query()->where('product_id', $winner->id)->orderBy('b2b_account_id')->pluck('id')->all();
+        $this->assertSame([$newerAnro->id, $uvexCard->id], $cards);
+        $this->assertSame(2, ProductShopCard::query()->count());
+        $summary = (string) $winner->fresh()->shop_fields_summary;
+        $this->assertStringContainsString('Materiał: nitryl nowy', $summary);
+        $this->assertStringContainsString('Materiał: lateks', $summary);
+        $this->assertStringNotContainsString('nitryl stary', $summary);
+        $this->assertSame(2, ProductImageRejection::query()->where('product_id', $winner->id)->count());
+        $this->assertSame(2, ProductImageRejection::query()->count());
     }
 }
