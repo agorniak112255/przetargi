@@ -164,7 +164,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:products.delete');
     Route::delete('/products/{product}/images/{image}', [ProductImageController::class, 'destroy'])
         ->whereNumber('image')
-        ->middleware('permission:products.delete');
+        ->middleware('permission:products.images.delete');
     Route::post('/products/{product}/kit-suggestions', [ProductKitController::class, 'suggest'])->middleware('permission:products.view');
     Route::post('/products/{product}/kit', [ProductKitController::class, 'attach'])->middleware('permission:products.view');
     Route::delete('/products/{product}/kit', [ProductKitController::class, 'destroy'])->middleware('permission:products.view');

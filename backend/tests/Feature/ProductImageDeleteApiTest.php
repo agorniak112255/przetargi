@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\ProductImageRejection;
+use App\Models\Role;
 use App\Models\User;
 use App\Services\Enrichment\ProductImageDownloader;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -96,6 +97,23 @@ final class ProductImageDeleteApiTest extends TestCase
         $this->deleteJson("/api/products/{$product->id}/images/{$image->id}")->assertForbidden();
 
         $this->assertNotNull(ProductImage::query()->find($image->id));
+    }
+
+    public function test_role_granted_the_permission_can_remove_photos(): void
+    {
+        // uprawnienie nadane w edycji ról — bez prawa usuwania produktów
+        $role = Role::findOrCreate('opiekun_zdjec', 'web');
+        $role->givePermissionTo(['products.view', 'products.images.delete']);
+        Sanctum::actingAs(User::factory()->withRole('opiekun_zdjec')->create());
+        $product = $this->product();
+        $image = (new ProductImageDownloader)->storeBytes($product, $this->png(0x102030), 'image/png', self::WRONG, 0);
+        $this->assertNotNull($image);
+
+        $this->deleteJson("/api/products/{$product->id}/images/{$image->id}")->assertOk();
+        // usuwanie całej karty dalej wymaga products.delete
+        $this->deleteJson("/api/products/{$product->id}")->assertForbidden();
+
+        $this->assertNull(ProductImage::query()->find($image->id));
     }
 
     private function product(): Product

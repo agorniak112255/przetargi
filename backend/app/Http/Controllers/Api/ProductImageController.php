@@ -17,7 +17,8 @@ use Illuminate\Http\Request;
  * wariantu z pierwszego pobierania, a reguły audytu nie łapią każdego przypadku).
  *
  * Usunięcie zostawia ślad odrzucenia (ProductImageRejection), więc synchronizacja dostawcy ani ponowne
- * wzbogacanie nie przywrócą tego zdjęcia. Uprawnienie jak przy usuwaniu produktów.
+ * wzbogacanie nie przywrócą tego zdjęcia. Uprawnienie products.images.delete — domyślnie administrator,
+ * pozostałym rolom nadawane w edycji ról.
  */
 final class ProductImageController extends Controller
 {

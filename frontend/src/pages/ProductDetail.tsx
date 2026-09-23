@@ -143,6 +143,7 @@ export function ProductDetail() {
   const canEnrich = can(user, 'price_lists.import')
   const canExportPresta = can(user, 'presta.export')
   const canDelete = can(user, 'products.delete')
+  const canDeleteImages = can(user, 'products.images.delete')
   const [p, setP] = useState<Detail | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -1157,7 +1158,7 @@ export function ProductDetail() {
                     }}
                   />
                 </button>
-                {canDelete && (
+                {canDeleteImages && (
                   <button
                     type="button"
                     onClick={() => void deleteImage(img.id)}
