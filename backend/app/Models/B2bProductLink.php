@@ -23,12 +23,15 @@ class B2bProductLink extends Model
         'description_hash',
         'source_description_hash',
         'last_seen_at',
+        // przeniesione przez scalenie rozmiarów (ProductSizeMergeService); zerowane, gdy synchronizacja przepnie kod
+        'merged_at',
     ];
 
     protected function casts(): array
     {
         return [
             'last_seen_at' => 'datetime',
+            'merged_at' => 'datetime',
         ];
     }
 

@@ -19,6 +19,7 @@ use App\Services\B2b\B2bListProgressAware;
 use App\Services\B2b\B2bRemoteImage;
 use App\Services\B2b\B2bRemotePrice;
 use App\Services\B2b\B2bRemoteProduct;
+use App\Services\ProductSizeMergeService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -174,6 +175,62 @@ final class B2bSizeGroupSyncTest extends TestCase
         );
     }
 
+    public function test_size_merge_of_two_supplier_groups_survives_next_syncs(): void
+    {
+        $card = $this->mergeHalfMaskSizes();
+
+        // dwa przebiegi, w obu kolejnościach grup: scalenie zostaje — bez nowej karty i bez pominięcia
+        foreach ([['S', 'M'], ['M', 'S']] as [$first, $second]) {
+            $this->connector->items = [$this->halfMask($first), $this->halfMask($second)];
+            $result = $this->sync();
+
+            $this->assertSame(0, $result['created']);
+            $this->assertSame(0, $result['skipped']);
+            $this->assertSame([], $result['errors']);
+            $this->assertSame(1, Product::query()->count());
+            $this->assertSame(
+                ['HM5500BM' => $card->id, 'HM5500BS' => $card->id],
+                B2bProductLink::query()->orderBy('remote_id')->pluck('product_id', 'remote_id')->all(),
+            );
+            // cenę konta zapisuje pierwsza grupa przebiegu; inna cena drugiej nie ginie po cichu
+            $this->assertSame(
+                number_format($this->connector->prices['HM5500B'.$first], 2, '.', ''),
+                ProductSourcePrice::query()->where('source_key', ProductSourcePrice::b2bKey((int) $this->account->id))->sole()->purchase_price,
+            );
+            $this->assertNotEmpty(array_filter(
+                $this->logTexts($result),
+                static fn (string $t): bool => str_starts_with($t, 'HM5500B'.$second.': karta #'.$card->id)
+                    && str_contains($t, 'ma już cenę z innego kodu tego konta'),
+            ));
+        }
+    }
+
+    public function test_code_moved_off_merged_card_by_sync_loses_merge_marker(): void
+    {
+        $card = $this->mergeHalfMaskSizes();
+        $this->assertNotNull(B2bProductLink::query()->where('product_id', $card->id)->whereNotNull('merged_at')->first());
+
+        // rozmiar M trafia u dostawcy do grupy innego wyrobu (jego kod prowadzi grupę, karta po kodzie) — powiązanie
+        // przechodzi na kartę tej grupy i nie niesie tam znacznika scalenia
+        $other = Product::query()->create(['sku' => 'HM6600', 'name' => 'HM6600 PÓŁMASKA', 'manufacturer' => 'Uvex']);
+        $this->connector->items = [new B2bRemoteProduct(
+            remoteId: 'HM6600',
+            sku: 'HM6600',
+            name: 'HM6600 PÓŁMASKA',
+            members: [
+                ['remote_id' => 'HM6600', 'sku' => 'HM6600', 'name' => 'HM6600 PÓŁMASKA'],
+                ['remote_id' => 'HM5500BM', 'sku' => 'HM5500BM', 'name' => 'HM5500 PÓŁMASKA M'],
+            ],
+        )];
+        $this->connector->prices = ['HM6600' => 20.0];
+        $this->sync();
+
+        $moved = B2bProductLink::query()->where('remote_id', 'HM5500BM')->sole();
+        $this->assertSame($other->id, $moved->product_id);
+        $this->assertNull($moved->merged_at);
+        $this->assertNull(B2bProductLink::query()->where('remote_id', 'HM6600')->sole()->merged_at);
+    }
+
     public function test_availability_only_change_updates_slot_and_dry_run_reports_it(): void
     {
         $this->connector->items = [$this->group('U1', ['S', 'M'], availability: 'Dostępny')];
@@ -288,6 +345,44 @@ final class B2bSizeGroupSyncTest extends TestCase
             variantSummary: $summary,
             members: $members,
         );
+    }
+
+    /** Rozmiar jako osobna grupa jednej pozycji — tak dostawca podaje rozmiary o różnych cenach B2B. */
+    private function halfMask(string $size): B2bRemoteProduct
+    {
+        $code = 'HM5500B'.$size;
+
+        return new B2bRemoteProduct(
+            remoteId: $code,
+            sku: $code,
+            name: 'HM5500 PÓŁMASKA '.$size,
+            members: [['remote_id' => $code, 'sku' => $code, 'name' => 'HM5500 PÓŁMASKA '.$size]],
+        );
+    }
+
+    /**
+     * Rozmiary S i M z osobnych grup (ceny B2B 10 i 12) scalone po jednej cenie z pliku — ProductSizeMergeService
+     * przenosi powiązanie scalanej karty na docelową.
+     */
+    private function mergeHalfMaskSizes(): Product
+    {
+        $this->connector->items = [$this->halfMask('S'), $this->halfMask('M')];
+        $this->connector->prices = ['HM5500BS' => 10.0, 'HM5500BM' => 12.0];
+        $this->sync();
+        foreach (Product::query()->get() as $card) {
+            ProductSourcePrice::query()->create([
+                'product_id' => $card->id,
+                'source_key' => ProductSourcePrice::SOURCE_FILE,
+                'catalog_price_net' => 15.0,
+                'purchase_price' => 15.0,
+                'currency' => 'PLN',
+            ]);
+        }
+        $this->assertSame(1, app(ProductSizeMergeService::class)->merge('Uvex')['groups']);
+        $card = Product::query()->sole();
+        $this->assertSame([$card->id], B2bProductLink::query()->pluck('product_id')->unique()->values()->all());
+
+        return $card;
     }
 
     /**

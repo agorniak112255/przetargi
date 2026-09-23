@@ -489,7 +489,8 @@ final class ProductSizeMergeService
 
     /**
      * Powiązania kodów dostawcy na kartę docelową. UNIQUE (b2b_account_id, remote_id) nie zależy od karty, a kilka
-     * kodów jednego konta na jednej karcie to zwykły stan grupy rozmiarów w B2bCatalogSync.
+     * kodów jednego konta na jednej karcie to zwykły stan grupy rozmiarów w B2bCatalogSync. merged_at oznacza kartę
+     * scaloną — synchronizacja nie oddaje jej kolejnych grup rozmiarów konta na nowe karty (resolveGroupCard).
      *
      * @param  list<int>  $loserIds
      */
@@ -498,7 +499,7 @@ final class ProductSizeMergeService
         if (! Schema::hasTable('b2b_product_links') || $loserIds === []) {
             return;
         }
-        B2bProductLink::query()->whereIn('product_id', $loserIds)->update(['product_id' => $winnerId]);
+        B2bProductLink::query()->whereIn('product_id', $loserIds)->update(['product_id' => $winnerId, 'merged_at' => now()]);
     }
 
     /**

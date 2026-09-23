@@ -566,6 +566,7 @@ final class B2bCatalogSync
 
         $members = $remote->members !== [] ? $this->memberRows($remote) : [];
         $memberLinks = null;
+        $joinsMerged = false;
         if ($members === []) {
             $link = B2bProductLink::query()
                 ->where('b2b_account_id', $account->id)
@@ -583,6 +584,7 @@ final class B2bCatalogSync
             $linked = $group['linked'];
             $existing = $group['existing'];
             $memberLinks = $group['member_links'];
+            $joinsMerged = $group['joins_merged'] ?? false;
         }
         $manufacturer = mb_substr(trim($connector->manufacturer($remote)), 0, 100);
 
@@ -622,9 +624,10 @@ final class B2bCatalogSync
         // ProductSizeMergeService przenosi powiązania scalanej karty). Każdy kod zapisywał na nią swój opis (witryna
         // producenta zastępuje opis zawsze) i swoją cenę do jednego slotu konta: opis przeskakiwał między kodami
         // co przebieg, z nowym replaced_description i reindeksem. Kartę zapisuje pierwszy kod przebiegu, ten
-        // odświeża tylko swoje powiązanie. Grupy rozmiarów (members) omijają takie karty w resolveGroupCard.
-        if ($members === [] && $existing !== null && isset($claimed['products'][(int) $existing->id])) {
-            return $this->refreshSharedCardLink($account, $remote, $existing, $manufacturer, $price, $dryRun, $runId, $ruleOutcome);
+        // odświeża tylko swoje powiązanie. Grupy rozmiarów (members) omijają takie karty w resolveGroupCard, poza
+        // kartą scaloną z rozmiarów (joins_merged) — wtedy grupa odświeża powiązania wszystkich swoich pozycji.
+        if (($members === [] || $joinsMerged) && $existing !== null && isset($claimed['products'][(int) $existing->id])) {
+            return $this->refreshSharedCardLink($account, $remote, $members, $existing, $manufacturer, $price, $dryRun, $runId, $ruleOutcome);
         }
 
         // pola opisowe karty; ceny idą do slotu konta, nie do fill karty
@@ -775,22 +778,16 @@ final class B2bCatalogSync
                 $linkValues['source_description_hash'] = null;
             }
             if ($members === []) {
-                $savedLink = B2bProductLink::query()->updateOrCreate(
-                    ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
-                    $linkValues,
-                );
+                $savedLink = $this->saveLink($account, $remote->remoteId, (int) $product->id, $linkValues);
             } else {
                 // powiązanie dla każdej pozycji grupy — kod i nazwa pozycji dosłownie; memberRows zaczyna od remoteId
                 $savedLink = null;
                 foreach ($members as $member) {
-                    $saved = B2bProductLink::query()->updateOrCreate(
-                        ['b2b_account_id' => $account->id, 'remote_id' => $member['remote_id']],
-                        [
-                            ...$linkValues,
-                            'remote_sku' => mb_substr($member['sku'], 0, 255),
-                            'remote_name' => mb_substr($member['name'], 0, 1000),
-                        ],
-                    );
+                    $saved = $this->saveLink($account, $member['remote_id'], (int) $product->id, [
+                        ...$linkValues,
+                        'remote_sku' => mb_substr($member['sku'], 0, 255),
+                        'remote_name' => mb_substr($member['name'], 0, 1000),
+                    ]);
                     $savedLink ??= $saved;
                 }
                 $warnings = [...$warnings, ...$this->orphanedCardWarnings($account, $memberLinks, (int) $product->id)];
@@ -878,14 +875,17 @@ final class B2bCatalogSync
      * ostatnio widziany) i identyfikatory tej pozycji. Opisu, slotu ceny, historii, zdjęć i plików nie ruszamy
      * — to robi pierwszy kod karty.
      * Odcisk opisu powiązania zostaje, bo jego opisu na karcie nie ma. Cena inna niż zapisana w slocie konta nie
-     * ginie po cichu — ostrzeżenie w dzienniku przebiegu.
+     * ginie po cichu — ostrzeżenie w dzienniku przebiegu. Grupa rozmiarów ($members) odświeża powiązanie każdej
+     * swojej pozycji (kod i nazwa pozycji dosłownie).
      *
+     * @param  list<array{remote_id: string, sku: string, name: string}>  $members
      * @param  array<string, mixed>  $ruleOutcome
      * @return array<string, mixed>
      */
     private function refreshSharedCardLink(
         B2bAccount $account,
         B2bRemoteProduct $remote,
+        array $members,
         Product $card,
         string $manufacturer,
         ?B2bRemotePrice $price,
@@ -914,24 +914,23 @@ final class B2bCatalogSync
         }
 
         if (! $dryRun) {
-            $warnings = DB::transaction(function () use ($account, $remote, $card, $manufacturer, $runId, $warnings): array {
-                B2bProductLink::query()->updateOrCreate(
-                    ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
-                    [
-                        'product_id' => $card->id,
-                        'remote_sku' => mb_substr($remote->sku, 0, 255),
-                        'remote_name' => mb_substr($remote->name, 0, 1000),
+            $rows = $members !== [] ? $members : [['remote_id' => $remote->remoteId, 'sku' => $remote->sku, 'name' => $remote->name]];
+            $warnings = DB::transaction(function () use ($account, $remote, $rows, $card, $manufacturer, $runId, $warnings): array {
+                foreach ($rows as $row) {
+                    $this->saveLink($account, $row['remote_id'], (int) $card->id, [
+                        'remote_sku' => mb_substr($row['sku'], 0, 255),
+                        'remote_name' => mb_substr($row['name'], 0, 1000),
                         'manufacturer' => $manufacturer !== '' ? $manufacturer : null,
                         'last_seen_at' => now(),
-                    ],
-                );
+                    ]);
+                }
 
                 // identyfikatory należą do pozycji (position_key), nie do karty — cudzych nie nadpisują
                 return [...$warnings, ...$this->identifiers->recordB2b(
                     $card,
                     $account,
                     $remote->remoteId,
-                    [$remote->remoteId],
+                    array_column($rows, 'remote_id'),
                     $remote->identifiers,
                     $manufacturer,
                     $runId,
@@ -1004,10 +1003,11 @@ final class B2bCatalogSync
      * takiej karty, nowa karta złamałaby UNIQUE products.sku — pozycja pominięta z powodem.
      * „linked” = karta, na którą wskazuje powiązanie pozycji grupy (bez reguły producenta); „link” = to powiązanie
      * (hashe opisu) albo null przy dopasowaniu po samym kodzie. member_links — powiązania pozycji sprzed zapisu.
+     * joins_merged — grupa dołącza do karty scalonej z rozmiarów, użytej już w tym przebiegu (tylko powiązania).
      *
      * @param  list<array{remote_id: string, sku: string, name: string}>  $members
      * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed
-     * @return array{reason: string|null, link: B2bProductLink|null, linked: Product|null, existing: Product|null, member_links: Collection<int, B2bProductLink>}
+     * @return array{reason: string|null, link: B2bProductLink|null, linked: Product|null, existing: Product|null, member_links: Collection<int, B2bProductLink>, joins_merged?: bool}
      */
     private function resolveGroupCard(B2bAccount $account, B2bRemoteProduct $remote, array $members, array $claimed): array
     {
@@ -1035,6 +1035,21 @@ final class B2bCatalogSync
         $own = $memberLinks->first(static fn (B2bProductLink $l): bool => (string) $l->remote_id === $remote->remoteId);
         if ($own?->product !== null && ! $isClaimed((int) $own->product_id)) {
             return $found($own, $own->product);
+        }
+
+        // Karta scalona z rozmiarów (powiązanie konta z merged_at): dostawca dalej podaje scalone kody jako osobne
+        // grupy (inna cena B2B, cena z pliku ta sama). Grupa, której wszystkie powiązania wskazują taką kartę użytą
+        // już w tym przebiegu, dołącza do niej — bez nowej karty i bez pominięcia. Bez znacznika to rozdział rozmiaru
+        // u dostawcy (inna cena) i kroki (b)–(d) jak dotąd.
+        $cardIds = $memberLinks->pluck('product_id')->map(static fn ($id): int => (int) $id)->unique();
+        $shared = $memberLinks->first()?->product;
+        if ($cardIds->count() === 1 && $shared !== null && $isClaimed((int) $shared->id)
+            && B2bProductLink::query()
+                ->where('b2b_account_id', $account->id)
+                ->where('product_id', $shared->id)
+                ->whereNotNull('merged_at')
+                ->exists()) {
+            return [...$found($own ?? $memberLinks->first(), $shared), 'joins_merged' => true];
         }
 
         // (b)
@@ -1108,6 +1123,23 @@ final class B2bCatalogSync
         }
 
         return $warnings;
+    }
+
+    /**
+     * Powiązanie kodu konta z kartą. Kod przepięty na inną kartę traci znacznik scalenia rozmiarów (merged_at) —
+     * znacznik opisuje kartę, na którą przeniosło go scalenie, nie nową.
+     *
+     * @param  array<string, mixed>  $values
+     */
+    private function saveLink(B2bAccount $account, string $remoteId, int $productId, array $values): B2bProductLink
+    {
+        $link = B2bProductLink::query()->firstOrNew(['b2b_account_id' => $account->id, 'remote_id' => $remoteId]);
+        if ($link->exists && (int) $link->product_id !== $productId) {
+            $values['merged_at'] = null;
+        }
+        $link->fill([...$values, 'product_id' => $productId])->save();
+
+        return $link;
     }
 
     /**
@@ -1460,17 +1492,13 @@ final class B2bCatalogSync
                 ProductVariant::query()->toBase()->whereIn('id', $touchSeen)->update(['last_seen_at' => $now]);
             }
 
-            B2bProductLink::query()->updateOrCreate(
-                ['b2b_account_id' => $account->id, 'remote_id' => $remote->remoteId],
-                [
-                    'product_id' => $product->id,
-                    'remote_sku' => mb_substr($remote->sku, 0, 255),
-                    'remote_name' => mb_substr($remote->name, 0, 1000),
-                    'manufacturer' => $manufacturer !== '' ? $manufacturer : null,
-                    'description_hash' => $descriptionHash,
-                    'last_seen_at' => $now,
-                ],
-            );
+            $this->saveLink($account, $remote->remoteId, (int) $product->id, [
+                'remote_sku' => mb_substr($remote->sku, 0, 255),
+                'remote_name' => mb_substr($remote->name, 0, 1000),
+                'manufacturer' => $manufacturer !== '' ? $manufacturer : null,
+                'description_hash' => $descriptionHash,
+                'last_seen_at' => $now,
+            ]);
             $warnings = [...$warnings, ...$this->identifiers->recordB2b(
                 $product,
                 $account,
