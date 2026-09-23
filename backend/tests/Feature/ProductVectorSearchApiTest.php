@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\AiSetting;
 use App\Models\Product;
 use App\Models\User;
@@ -12,6 +13,7 @@ use App\Services\Vector\QdrantClient;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
 use Mockery;
 use Tests\TestCase;
@@ -24,6 +26,13 @@ final class ProductVectorSearchApiTest extends TestCase
     {
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
+
+        // Przy włączonych wektorach Product::create() reindeksuje kartę na kolejce sync, zanim test
+        // zarejestruje Http::fake — zapytanie szło wtedy do prawdziwego api.openai.com
+        // (23.09.2026: cURL 28 w pełnym przebiegu). Testy sprawdzają wyszukiwanie, nie indeksowanie;
+        // każde niepodrobione zapytanie ma wywrócić test, a nie wyjść do sieci.
+        Queue::fake([ReindexProductEmbeddingJob::class]);
+        Http::preventStrayRequests();
     }
 
     public function test_ai_search_falls_back_to_like_when_vector_disabled(): void
