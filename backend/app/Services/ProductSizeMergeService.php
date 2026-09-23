@@ -94,26 +94,62 @@ final class ProductSizeMergeService
 
         /** @var array<string, list<Product>> $groups */
         $groups = [];
+        // Karty modelu z wcześniejszego łączenia: nazwa i SKU bez rozmiaru, więc poza grupami. Kod ze scalonej listy
+        // (merged_size_skus) → karta; kod na dwóch listach to niejednoznaczny dowód — odpada.
+        /** @var array<int, Product> $modelCards */
+        $modelCards = [];
+        /** @var array<string, list<int>> $modelBySku */
+        $modelBySku = [];
         foreach ($query->cursor() as $product) {
             $key = $this->mergeGroupKey($product, $knownStems, $midGroups, $fileSlots[(int) $product->id] ?? null);
             if ($key === null) {
+                $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+                foreach (is_array($payload['merged_size_skus'] ?? null) ? $payload['merged_size_skus'] : [] as $sku) {
+                    $modelCards[(int) $product->id] = $product;
+                    $modelBySku[$this->modelSkuKey($product, (string) $sku)][] = (int) $product->id;
+                }
+
                 continue;
             }
             $groups[$key][] = $product;
         }
+        $modelBySku = array_filter($modelBySku, static fn (array $ids): bool => count(array_unique($ids)) === 1);
 
         $mergedGroups = 0;
         $deleted = 0;
         $examples = [];
         $errors = [];
         foreach ($groups as $key => $items) {
+            $model = null;
+            if (str_starts_with((string) $key, 'name:')) {
+                $modelIds = [];
+                foreach ($items as $product) {
+                    $ids = $modelBySku[$this->modelSkuKey($product, (string) $product->sku)] ?? [];
+                    if ($ids !== []) {
+                        $modelIds[$ids[0]] = true;
+                    }
+                }
+                if (count($modelIds) > 1) {
+                    $errors[] = $items[0]->sku.': kody grupy scalono wcześniej do kilku kart (#'
+                        .implode(', #', array_keys($modelIds)).') — grupa pominięta';
+
+                    continue;
+                }
+                $candidate = $modelIds !== [] ? $modelCards[(int) array_key_first($modelIds)] : null;
+                if ($candidate !== null
+                    && $this->sizes->namesCompatibleForMerge([(string) $candidate->name, (string) $items[0]->name])) {
+                    $model = $candidate;
+                    $items = [$model, ...$items];
+                }
+            }
             if (count($items) < 2) {
                 continue;
             }
             if (str_starts_with((string) $key, 'stem:') && ! $this->stemNamesAllowMerge($items, $knownStems)) {
                 continue;
             }
-            $winner = $this->pickWinner($items);
+            // karta modelu zostaje: to samo id, jej powiązania innych kont, pozycje przetargów, nazwa i SKU
+            $winner = $model ?? $this->pickWinner($items);
             $losers = array_values(array_filter(
                 $items,
                 static fn (Product $p): bool => (int) $p->id !== (int) $winner->id
@@ -135,6 +171,7 @@ final class ProductSizeMergeService
                         $winner,
                         $losers,
                         str_starts_with((string) $key, 'mid:') ? $this->midSizesBySku($items, $midGroups) : null,
+                        $model !== null,
                     );
                 } catch (Throwable $e) {
                     $mergedGroups--;
@@ -154,6 +191,12 @@ final class ProductSizeMergeService
             'examples' => $examples,
             'errors' => $errors,
         ];
+    }
+
+    /** Klucz kodu w mapie kart modelu — z producentem, bo merge(null) obejmuje cały katalog. */
+    private function modelSkuKey(Product $product, string $sku): string
+    {
+        return mb_strtolower(trim((string) $product->manufacturer)).'|'.mb_strtolower(trim($sku));
     }
 
     /**
@@ -271,8 +314,10 @@ final class ProductSizeMergeService
     /**
      * @param  list<Product>  $losers
      * @param  array<string, string>|null  $midSizes  SKU => litera rozmiaru z kodu (tylko ścieżka „mid”)
+     * @param  bool  $keepIdentity  karta modelu z wcześniejszego łączenia — nazwa, SKU i lista rozmiarów zostają
+     *                              (stripSizeFromName nie jest idempotentne, a packaging mogło wypełnić wzbogacanie)
      */
-    private function absorb(Product $winner, array $losers, ?array $midSizes = null): void
+    private function absorb(Product $winner, array $losers, ?array $midSizes = null, bool $keepIdentity = false): void
     {
         $loserIds = array_map(static fn (Product $p): int => (int) $p->id, $losers);
         $map = [];
@@ -280,7 +325,7 @@ final class ProductSizeMergeService
             $map[$id] = (int) $winner->id;
         }
 
-        DB::transaction(function () use ($winner, $losers, $loserIds, $map, $midSizes): void {
+        DB::transaction(function () use ($winner, $losers, $loserIds, $map, $midSizes, $keepIdentity): void {
             $this->remapTenderItems($map);
             $this->remapSubstitutes((int) $winner->id, $loserIds);
             $this->moveMedia($winner, $loserIds);
@@ -311,15 +356,17 @@ final class ProductSizeMergeService
             }
 
             $updates = [
-                'packaging' => $sizeLabel,
                 'stock' => $stock,
                 'enrichment_payload' => $payload,
             ];
-            if ($stripped !== '' && $stripped !== (string) $winner->name) {
+            if (! $keepIdentity) {
+                $updates['packaging'] = $sizeLabel;
+            }
+            if (! $keepIdentity && $stripped !== '' && $stripped !== (string) $winner->name) {
                 $updates['name'] = $stripped;
             }
             $newSku = null;
-            if ($core !== null && $core !== (string) $winner->sku) {
+            if (! $keepIdentity && $core !== null && $core !== (string) $winner->sku) {
                 $taken = Product::query()
                     ->where('sku', $core)
                     ->where('id', '!=', $winner->id)

@@ -695,6 +695,142 @@ final class ProductSizeMergeTest extends TestCase
         $this->assertSame(1, ProductDocument::query()->count());
     }
 
+    public function test_size_cards_recreated_after_merge_join_the_earlier_model_card(): void
+    {
+        Queue::fake();
+
+        // Karta modelu z wcześniejszego łączenia: nazwa bez rozmiaru, SKU = rdzeń, kody w merged_size_skus.
+        $model = Product::query()->create([
+            'sku' => '60492',
+            'name' => 'Rękawice C500 WET',
+            'manufacturer' => 'UVEX',
+            'description' => str_repeat('Rękawice antyprzecięciowe UVEX C500 wet. ', 3),
+            'catalog_price_net' => 37.10,
+            'purchase_price' => 37.10,
+            'stock' => 2,
+            'enrichment_payload' => ['merged_size_skus' => ['6049208', '6049209']],
+        ]);
+        // Synchronizacja B2B założyła skasowane rozmiary od nowa (przed 7b2911f łączenie gubiło ich powiązania).
+        $eight = Product::query()->create([
+            'sku' => '6049208', 'name' => 'Rękawice C500 WET/8', 'manufacturer' => 'UVEX',
+            'catalog_price_net' => 37.10, 'purchase_price' => 37.10, 'stock' => 1,
+        ]);
+        $nine = Product::query()->create([
+            'sku' => '6049209', 'name' => 'Rękawice C500 WET/9', 'manufacturer' => 'UVEX',
+            'catalog_price_net' => 37.10, 'purchase_price' => 37.10, 'stock' => 1,
+        ]);
+        // Ta sama nazwa bez śladu łączenia — nie dołącza (dowodem jest wcześniejsza decyzja, nie sama nazwa).
+        $sameName = Product::query()->create([
+            'sku' => 'C500-WET-KPL', 'name' => 'Rękawice C500 WET', 'manufacturer' => 'UVEX',
+            'catalog_price_net' => 37.10, 'purchase_price' => 37.10,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('UVEX', false);
+
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(1, $result['groups']);
+        $this->assertSame(2, $result['deleted']);
+        $this->assertNull(Product::query()->find($eight->id));
+        $this->assertNull(Product::query()->find($nine->id));
+        $kept = $model->fresh();
+        $this->assertNotNull($kept);
+        $this->assertSame('60492', $kept->sku);
+        $this->assertSame('Rękawice C500 WET', $kept->name);
+        $this->assertSame(4, $kept->stock);
+        $this->assertNotNull($sameName->fresh());
+    }
+
+    public function test_single_recreated_card_joins_model_card_in_other_price_bucket_and_keeps_its_sizes(): void
+    {
+        Queue::fake();
+
+        // Karta modelu ma cenę z pliku, odtworzona karta tylko cenę B2B — dowodem jest kod na liście scalonych.
+        $model = Product::query()->create([
+            'sku' => '60278',
+            'name' => 'Rękawice Unilite 7710F',
+            'manufacturer' => 'UVEX',
+            'packaging' => '7, 8, 9, 10, 11',
+            'catalog_price_net' => 12.00,
+            'purchase_price' => 12.00,
+            'enrichment_payload' => ['merged_size_skus' => ['6027808']],
+        ]);
+        $recreated = Product::query()->create([
+            'sku' => '6027808', 'name' => 'Rękawice Unilite 7710F/8', 'manufacturer' => 'UVEX',
+            'catalog_price_net' => 13.65, 'purchase_price' => 13.65,
+        ]);
+        // ten sam kod na liście scalonych u innego producenta — bez klucza z producentem dowód byłby niejednoznaczny
+        $foreign = Product::query()->create([
+            'sku' => 'INNY-7710', 'name' => 'Rękawice innego producenta', 'manufacturer' => 'Inny',
+            'catalog_price_net' => 13.65, 'purchase_price' => 13.65,
+            'enrichment_payload' => ['merged_size_skus' => ['6027808']],
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge(null, false);
+
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(1, $result['groups']);
+        $this->assertNull(Product::query()->find($recreated->id));
+        $this->assertNotNull($foreign->fresh());
+        $kept = $model->fresh();
+        $this->assertSame('60278', $kept->sku);
+        $this->assertSame('Rękawice Unilite 7710F', $kept->name);
+        $this->assertSame('7, 8, 9, 10, 11', $kept->packaging);
+    }
+
+    public function test_group_pointing_at_two_model_cards_is_skipped_and_reported(): void
+    {
+        Queue::fake();
+
+        foreach (['6659/07 FOAM' => ['6659/09 FOAM'], '6659/8*' => ['6659/10 FOAM']] as $sku => $merged) {
+            Product::query()->create([
+                'sku' => $sku, 'name' => 'Rękawice antyprzecięciowe 6659 foam', 'manufacturer' => 'UVEX',
+                'catalog_price_net' => 19.60, 'purchase_price' => 19.60,
+                'enrichment_payload' => ['merged_size_skus' => $merged],
+            ]);
+        }
+        foreach (['09' => 9, '10' => 10] as $code => $size) {
+            Product::query()->create([
+                'sku' => '6659/'.$code.' FOAM', 'name' => 'Rękawice antyprzecięciowe 6659 foam rozm. '.$size,
+                'manufacturer' => 'UVEX', 'catalog_price_net' => 19.60, 'purchase_price' => 19.60,
+            ]);
+        }
+
+        $result = app(ProductSizeMergeService::class)->merge('UVEX', false);
+
+        $this->assertSame(0, $result['groups']);
+        $this->assertCount(1, $result['errors']);
+        $this->assertStringContainsString('kilku kart', $result['errors'][0]);
+        $this->assertSame(4, Product::query()->count());
+    }
+
+    public function test_code_tail_group_does_not_rejoin_earlier_model_card(): void
+    {
+        Queue::fake();
+
+        // Szyby 420x297 i 450x300 skleiło kiedyś odczytanie „06” z kodu jako rozmiaru — nie powtarzamy tego.
+        $model = Product::query()->create([
+            'sku' => '000P1P1026',
+            'name' => 'Szyba chroniąca przed laserem 420x297x6 mm filtr P1P10',
+            'manufacturer' => 'UVEX',
+            'catalog_price_net' => 900,
+            'purchase_price' => 900,
+            'enrichment_payload' => ['merged_size_skus' => ['000P1P102606']],
+        ]);
+        $other = Product::query()->create([
+            'sku' => '000P1P102606',
+            'name' => 'Szyba chroniąca przed laserem 450x300x6 mm filtr P1P10',
+            'manufacturer' => 'UVEX',
+            'catalog_price_net' => 900,
+            'purchase_price' => 900,
+        ]);
+
+        $result = app(ProductSizeMergeService::class)->merge('UVEX', false);
+
+        $this->assertSame(0, $result['groups']);
+        $this->assertNotNull($model->fresh());
+        $this->assertNotNull($other->fresh());
+    }
+
     public function test_does_not_merge_dotted_digit_codes_by_code_tail(): void
     {
         Queue::fake();
