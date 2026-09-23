@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Support;
 
 use App\Models\Product;
+use App\Support\RequirementCheck\En388Code;
 
 /**
  * Mini-schemat atrybutów BHP (kanoniczne pola w enrichment_payload.attributes).
@@ -333,44 +334,29 @@ final class BhpAttributeNormalizer
             : null;
 
         $manufacturer = is_array($context['manufacturer'] ?? null) ? $context['manufacturer'] : [];
-        $fromManufacturer = $this->stringList($manufacturer['normy'] ?? null);
-        // Normę, którą karta producenta podaje wprost, opisujemy JEGO zapisem: wariant tej samej normy
-        // ze słabszego źródła odpada, żeby karta nie pokazywała dwóch sprzecznych poziomów EN 388
-        // (NormCode::dedupe zostawia sprzeczne warianty obok siebie — słusznie, ale nie wobec producenta).
-        // Rodzina i numer normy, a nie pełny klucz: sklep pisze o tej samej normie zdaniem („EN 388:2016 –
-        // 4121A (ścieranie 4…)”) albo z poziomem w nawiasie („EN 388:2016 (4121A)”), a takich zapisów key()
-        // nie rozbiera. Po rodzinie poznajemy, że mówią o normie, którą producent podał wprost.
-        $manufacturerFamilies = [];
-        foreach ($fromManufacturer as $norm) {
-            $family = NormCode::leadFamily($norm);
-            if ($family !== '') {
-                $manufacturerFamilies[$family] = true;
-            }
-        }
-        $fromOthers = array_filter(
-            array_merge(
-                // normy z cennika idą pierwsze — przy skracaniu listy zostają te z dokumentu producenta
-                $this->splitNormsColumn((string) ($priceList['normy'] ?? '')),
-                // Payload, odczyt z tekstów i tabelka dostawcy mogą opisywać wariant o innej klasie („ARMEN 900
-                // 6060 O1 FO” z normą „EN ISO 20345:2011 S2 CI SRC” ze sklepu) — taki zapis nie trafia do norm.
-                // Cennik i kolumna norm to tożsamość wyrobu, więc ich nie przesiewamy.
-                $this->withoutForeignFootwearNorms(array_merge(
-                    $this->stringList($raw['normy_en'] ?? null),
-                    $this->stringList($context['norms'] ?? null),
-                    $this->detectNormsFromText($shopFields),
-                ), $trustedRecord),
-                $this->splitNormsColumn($context['norms_column'] ?? ''),
-            ),
-            static function (string $norm) use ($manufacturerFamilies): bool {
-                $family = NormCode::leadFamily($norm);
-
-                return $family === '' || ! isset($manufacturerFamilies[$family]);
-            },
+        // Pary z karty producenta; kontekst bez par (sama lista norm producenta) — każda pozycja jako para bez
+        // wartości: wchodzi na listę, ale niczego nie wypiera.
+        $manufacturerRows = is_array($manufacturer['rows'] ?? null)
+            ? $manufacturer['rows']
+            : array_map(static fn (string $norm): array => ['label' => $norm, 'value' => ''], $this->stringList($manufacturer['normy'] ?? null));
+        $fromOthers = array_merge(
+            // normy z cennika idą pierwsze — przy skracaniu listy zostają te z dokumentu producenta
+            $this->splitNormsColumn((string) ($priceList['normy'] ?? '')),
+            // Payload, odczyt z tekstów i tabelka dostawcy mogą opisywać wariant o innej klasie („ARMEN 900
+            // 6060 O1 FO” z normą „EN ISO 20345:2011 S2 CI SRC” ze sklepu) — taki zapis nie trafia do norm.
+            // Cennik i kolumna norm to tożsamość wyrobu, więc ich nie przesiewamy.
+            $this->withoutForeignFootwearNorms(array_merge(
+                $this->stringList($raw['normy_en'] ?? null),
+                $this->stringList($context['norms'] ?? null),
+                $this->detectNormsFromText($shopFields),
+            ), $trustedRecord),
+            $this->splitNormsColumn($context['norms_column'] ?? ''),
         );
-        $normy = $this->collapseNormVariants(array_values(array_unique(array_merge(
-            $fromManufacturer,
-            array_values($fromOthers),
-        ))));
+        // Normę, którą karta producenta podaje wprost z oznaczeniem, opisujemy JEGO zapisem — to samo rozstrzygnięcie
+        // co lista norm zapisywana przy wzbogacaniu (ManufacturerNormFacts::resolveAgainstRows).
+        $normy = $this->collapseNormVariants(array_values(array_unique(
+            ManufacturerNormFacts::resolveAgainstRows(array_values(array_unique($fromOthers)), $manufacturerRows)
+        )));
         $out['normy_en'] = $normy;
 
         // Tożsamość i tabelka dostawcy idą pierwsze: klasę i poziomy czytamy do pierwszego trafienia, a pierwsze
@@ -426,9 +412,12 @@ final class BhpAttributeNormalizer
         // Poziomy EN 388 z karty producenta biją i zapisany atrybut, i odczyt z tekstu: kod z opisu
         // sklepowego bywa cudzym wyrobem albo starym wydaniem normy, a od niego zależy dopasowanie
         // do wymagania przetargu (App\Support\ManufacturerNormFacts).
+        // Zapisany atrybut i tekst karty czyta ten sam czytnik co sprawdzanie wymagań (En388Code) — dawny wzorzec brał
+        // rok albo ucięty kod za poziomy („EN 388 2016” → „2016”, „EN 388 211” → „211”), a nie widział „EN 388: 4121X”
+        // ani „EN 388 (4121X)”. Zapis słowny bywa częściowy („ścieranie 4”), więc pola nie wypełnia.
         $out['poziomy_en388'] = $this->nullableString($manufacturer['en388'] ?? null)
-            ?? $this->nullableString($raw['poziomy_en388'] ?? null)
-            ?? $this->detectEn388($descBlob);
+            ?? $this->en388Code('EN 388 '.($this->nullableString($raw['poziomy_en388'] ?? null) ?? ''))
+            ?? $this->en388Code($descBlob);
 
         $typeBlob = $identity.' '.$descBlob;
         $family = $assortment->familyFromKategoria($out['kategoria_bhp']);
@@ -1287,17 +1276,16 @@ final class BhpAttributeNormalizer
         return (new ProductSizeVariant)->labelFromTexts($claimed, $text, $category, $name);
     }
 
-    private function detectEn388(string $text): ?string
+    /**
+     * Pierwszy kod EN 388 zapisany kodem (nie słowami), zwarty: „EN 388:2016 (4 1 2 1 X)” → „4121X”. Tekst idzie
+     * w kolejności źródeł karty, więc pierwszy odczyt jest z najmocniejszego źródła.
+     */
+    private function en388Code(string $text): ?string
     {
-        // EN 388:2016 + A1:2018 - 4131A / EN 388 4X42C
-        $patterns = [
-            '/EN\s*388(?::\d{4})?(?:\s*\+\s*A\d+(?::\d+)?)?\s*[-–]\s*([0-9X]{3,5}[A-F]?)\b/iu',
-            '/EN\s*388:\d{4}\s+([0-9X]{3,5}[A-F]?)\b/iu',
-            '/EN\s*388\s+([0-9X]{3,5}[A-F]?)\b/iu',
-        ];
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $text, $m) === 1) {
-                return mb_strtoupper($m[1]);
+        foreach (En388Code::allIn($text) as $code) {
+            $compact = $code->compact();
+            if ($compact !== null && $compact !== '') {
+                return $compact;
             }
         }
 

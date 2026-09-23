@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\HybridWebSearchService;
+use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\ProductPageFetcher;
 use App\Services\Enrichment\ProductSearchIdentity;
 use App\Support\BhpAttributeNormalizer;
@@ -129,7 +130,37 @@ final class ManufacturerPageNormFactsTest extends TestCase
         $this->assertSame('2121X', $product->manufacturer_norms['en388'] ?? null);
     }
 
-    private function enrichWithModelFollowingTheShop(?\ArrayObject $prompts = null, ?array $storedNorms = null): Product
+    public function test_page_norms_come_only_from_the_card_chosen_as_description_source(): void
+    {
+        $product = $this->enrichWithModelFollowingTheShop(null, null, [self::SHOP]);
+
+        $this->assertNull($product->manufacturer_norms, 'opis powstał ze sklepu — ramki norm strony producenta z puli nie bierzemy');
+    }
+
+    public function test_description_code_of_another_edition_is_not_replaced(): void
+    {
+        $product = $this->glove();
+        $product->manufacturer_norms = ManufacturerNormFacts::build(
+            [['label' => 'EN 388:2016 + A1:2018', 'value' => '4X42C']],
+            'atg',
+            'MAPA',
+            'https://b2b.example/karta',
+        );
+        $service = app(ProductEnrichmentService::class);
+        $align = new \ReflectionMethod($service, 'alignEn388WithManufacturer');
+
+        $description = (string) $align->invoke(
+            $service,
+            'Rękawice spełniają EN 388:2003 (4542) oraz EN 388:2016 (4131X), a według innego sklepu EN 388 (3131X).',
+            $product,
+        );
+
+        $this->assertStringContainsString('EN 388:2003 (4542)', $description, 'inne wydanie to inna, prawdziwa wartość');
+        $this->assertStringContainsString('EN 388:2016 (4X42C)', $description, 'to samo wydanie — kod producenta');
+        $this->assertStringContainsString('EN 388 (4X42C)', $description, 'rok niepodany — rozstrzyga producent');
+    }
+
+    private function enrichWithModelFollowingTheShop(?\ArrayObject $prompts = null, ?array $storedNorms = null, ?array $sourceUrls = null): Product
     {
         Queue::fake();
         Storage::fake('public');
@@ -138,7 +169,7 @@ final class ManufacturerPageNormFactsTest extends TestCase
         $product->manufacturer_norms = $storedNorms;
         $product->save();
         $this->fakeSearch();
-        $this->fakeModel($prompts ?? new \ArrayObject);
+        $this->fakeModel($prompts ?? new \ArrayObject, $sourceUrls ?? [self::MAPA, self::SHOP]);
         Http::fake([
             self::MAPA => Http::response($this->mapaPage(), 200),
             self::SHOP => Http::response($this->shopPage(), 200),
@@ -182,9 +213,10 @@ final class ManufacturerPageNormFactsTest extends TestCase
     }
 
     /** Model powtarza zapis ze sklepu — to ma naprawić kod, nie posłuszeństwo modelu. */
-    private function fakeModel(\ArrayObject $prompts): void
+    /** @param  list<string>  $sourceUrls */
+    private function fakeModel(\ArrayObject $prompts, array $sourceUrls): void
     {
-        $handler = static function (array $messages) use ($prompts): array {
+        $handler = static function (array $messages) use ($prompts, $sourceUrls): array {
             $user = (string) ($messages[1]['content'] ?? '');
             $prompts->append($user);
             if (str_contains((string) ($messages[0]['content'] ?? ''), 'filtrem treści')) {
@@ -208,7 +240,7 @@ final class ManufacturerPageNormFactsTest extends TestCase
                 'materials' => ['butyl'],
                 'use_cases' => ['przemysł chemiczny'],
                 'image_urls' => [],
-                'source_urls' => [self::MAPA, self::SHOP],
+                'source_urls' => $sourceUrls,
                 'confidence' => 0.9,
             ];
         };

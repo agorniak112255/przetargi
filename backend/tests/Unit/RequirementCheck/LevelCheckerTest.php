@@ -224,6 +224,70 @@ final class LevelCheckerTest extends TestCase
     }
 
     #[Test]
+    public function en388_code_of_other_edition_is_shown_but_does_not_meet_requirement_with_edition(): void
+    {
+        // 4542 z 2003 spełniałoby każdą cyfrę 3121X, ale to inne wydanie — Coup Test nie jest literą ISO, nie przeliczamy
+        $row = $this->rows('Rękawice EN 388:2016 min. 3121X', [new CardSource(CardSource::NORMS, 'EN 388:2003 (4542)')])['en388'];
+
+        $this->assertSame(Status::Missing, $row->status);
+        $this->assertSame('karta podaje tylko EN 388:2003 4542 — inne wydanie normy', $row->note);
+        $this->assertCount(1, $row->card);
+        $this->assertSame(['4542', 'unclear', '4542-', '2003'], [$row->card[0]['text'], $row->card[0]['verdict'], $row->card[0]['code'], $row->card[0]['edition']]);
+        $this->assertSame(['missing', 'missing', 'missing', 'missing', 'skip'], array_column($row->positions ?? [], 'status'), 'pozycje bez wartości z innego wydania');
+    }
+
+    #[Test]
+    public function uvex_c500_is_judged_by_code_of_required_edition_only(): void
+    {
+        // UVEX C500: oba wydania w jednym polu, 2003 pierwsze — wiersz ocenia tylko kod 2016
+        $row = $this->rows('Rękawice EN 388:2016+A1:2018 min. 3X21C', [
+            new CardSource(CardSource::NORMS, 'EN 388:2003 (4542), EN 388:2016 (4X42C)'),
+        ])['en388'];
+
+        $this->assertSame(Status::Ok, $row->status);
+        $this->assertSame(['4X42C', 'ok'], [$row->card[0]['text'], $row->card[0]['verdict']], 'oceniane pole pierwsze — wiersz ✓ pokazuje jedno znalezisko');
+        $this->assertArrayNotHasKey('edition', $row->card[0]);
+        $this->assertSame(['4542', 'unclear', '2003'], [$row->card[1]['text'], $row->card[1]['verdict'], $row->card[1]['edition']]);
+        $this->assertSame('inne wydanie normy (nie oceniane): EN 388:2003 4542', $row->note);
+    }
+
+    #[Test]
+    public function card_code_without_edition_is_judged_against_requirement_with_edition(): void
+    {
+        // rok tylko po jednej stronie — kod karty porównujemy, a nie odrzucamy
+        $row = $this->rows('Rękawice EN 388:2016 min. 3121X', [new CardSource(CardSource::NORMS, 'EN 388 4131X')])['en388'];
+
+        $this->assertSame(Status::Ok, $row->status);
+        $this->assertSame('ok', $row->card[0]['verdict']);
+        $this->assertNull($row->note);
+    }
+
+    #[Test]
+    public function requirement_without_edition_judges_both_editions_without_conflict_note(): void
+    {
+        $row = $this->rows('Rękawice EN 388 min. 3121', [
+            new CardSource(CardSource::NORMS, 'EN 388:2003 (4542)'),
+            new CardSource(CardSource::SPECS, 'EN 388:2016 (4X42C)'),
+        ])['en388'];
+
+        $this->assertSame(['ok', 'missing'], array_column($row->card, 'verdict'), 'bez roku w wymaganiu oba pola oceniane jak dotąd');
+        $this->assertSame(Status::Missing, $row->status);
+        $this->assertSame('przecięcie (Coup Test): X na karcie (nie badano)', $row->note, 'różne wydania to nie „różne kody”');
+    }
+
+    #[Test]
+    public function same_edition_codes_that_differ_give_conflict_note_with_edition(): void
+    {
+        $row = $this->rows('Rękawice EN 388 min. 3X21C', [
+            new CardSource(CardSource::NORMS, 'EN 388:2016 (4X42C)'),
+            new CardSource(CardSource::SPECS, 'EN 388:2016 (3X42C)'),
+        ])['en388'];
+
+        $this->assertSame(Status::Ok, $row->status);
+        $this->assertSame('pola karty podają różne kody: EN 388:2016 4X42C, EN 388:2016 3X42C', $row->note);
+    }
+
+    #[Test]
     public function card_listing_several_categories_is_unclear(): void
     {
         $slashes = $this->rows('Kategoria: II', [new CardSource(CardSource::SPECS, 'Kategoria: I/II/III')])['ppe_category'];

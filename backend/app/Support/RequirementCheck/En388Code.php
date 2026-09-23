@@ -11,6 +11,10 @@ namespace App\Support\RequirementCheck;
  * oddać kodu EN 407, a „EN 3880” nie jest EN 388. Kod musi stać tuż za numerem normy (LEAD) albo w nawiasie za samym
  * tytułem normy (TITLE) — „EN 388, nr art. 4543” czy „EN 388. Karton 1200 par.” to nie kod.
  * Pozycja null = tekst jej nie podaje; „X” = nie badano.
+ *
+ * Wydanie normy (`edition`) tylko dosłownie z tekstu: rok za numerem („EN 388:2016”, „EN 388:2016 + A1:2018” → 2016)
+ * albo w nawiasie przed kodem („EN 388 (2003) 4131”). Z formatu kodu go nie zgadujemy — EN 388:2003 „4542” i EN 388:2016
+ * „4X42C” to dwie prawdziwe wartości tego samego wyrobu, a przypisanie wydania z domysłu podałoby wniosek jako fakt.
  */
 final readonly class En388Code
 {
@@ -34,7 +38,11 @@ final readonly class En388Code
     /** Tytuł normy z samych liter, a za nim kod w nawiasie: „EN 388:2016 – Rękawice chroniące … (4343B)”. */
     public const TITLE = '[\h:\-–—]*[\p{L}\h\-–]{3,120}?\(\h*';
 
-    private const NORM = '/(?<![\p{L}\d])EN\s?(?:ISO\s?)?388(?!\d)(?:\s?:\s?(?:19|20)\d{2}(?!\d))?(?:\s*\+\s*A\d(?:\s?:\s?(?:19|20)\d{2}(?!\d))?)?/iu';
+    /** Grupa 1 = rok wydania („:2016”); rok poprawki („+ A1:2018”) nie zmienia wydania. */
+    private const NORM = '/(?<![\p{L}\d])EN\s?(?:ISO\s?)?388(?!\d)(?:\s?:\s?((?:19|20)\d{2})(?!\d))?(?:\s*\+\s*A\d(?:\s?:\s?(?:19|20)\d{2}(?!\d))?)?/iu';
+
+    /** Rok wydania w nawiasie tuż za numerem normy: „EN 388 (2003) 4131”. */
+    private const EDITION_IN_LEAD = '/^[\h:\-–—]*\(\h*((?:19|20)\d{2})\h*\)/u';
 
     /** Koniec fragmentu normy: średnik albo numer kolejnej normy („EN 407”, „EN ISO 21420”, „ANSI”). */
     private const STOP = '/;|(?<![\p{L}\d])(?:EN\s?(?:ISO\s?)?\d{3,5}(?!\d)|ANSI)/iu';
@@ -49,6 +57,7 @@ final readonly class En388Code
         public array $levels,
         public string $text,
         public bool $worded,
+        public ?string $edition = null,
     ) {}
 
     public static function first(string $text): ?self
@@ -62,14 +71,36 @@ final readonly class En388Code
     public static function allIn(string $text): array
     {
         $out = [];
-        foreach (self::segments($text) as $segment) {
-            $code = self::code($segment) ?? self::worded($segment);
+        foreach (self::segments($text) as [$segment, $edition]) {
+            $code = self::code($segment, $edition) ?? self::worded($segment, $edition);
             if ($code !== null) {
                 $out[] = $code;
             }
         }
 
         return $out;
+    }
+
+    /**
+     * Pełny kod zapisany kodem (nie słowami) — dosłowny, bez spacji i kropek między pozycjami: „4 1 2 1 X” → „4121X”,
+     * „1.1.2.2” → „1122”. Null dla zapisu słownego: ten bywa częściowy („ścieranie 4”) i nie jest kodem karty.
+     */
+    public function compact(): ?string
+    {
+        if ($this->worded) {
+            return null;
+        }
+
+        return mb_strtoupper(preg_replace('/[\h.]/u', '', $this->text) ?? $this->text);
+    }
+
+    /**
+     * Czy dwa odczyty mogą sobie przeczyć: to samo wydanie albo wydanie niepodane przy którymkolwiek. Dwa różne
+     * podane wydania (2003 i 2016) to dwie wartości wyrobu, nie sprzeczność.
+     */
+    public static function comparableEditions(?string $a, ?string $b): bool
+    {
+        return $a === null || $b === null || $a === $b;
     }
 
     /** Zapis do wyświetlenia: „2X42C”, „4341B”; pozycja niepodana jako „-”. */
@@ -122,24 +153,29 @@ final readonly class En388Code
     }
 
     /**
-     * @return list<string>
+     * @return list<array{0: string, 1: string|null}> [fragment za numerem normy, rok wydania albo null]
      */
     private static function segments(string $text): array
     {
-        if (preg_match_all(self::NORM, $text, $m, PREG_OFFSET_CAPTURE) < 1) {
+        if (preg_match_all(self::NORM, $text, $m, PREG_OFFSET_CAPTURE | PREG_UNMATCHED_AS_NULL) < 1) {
             return [];
         }
         $out = [];
-        foreach ($m[0] as [$norm, $offset]) {
+        foreach ($m[0] as $i => [$norm, $offset]) {
             $rest = mb_strcut($text, $offset + strlen($norm), 1200);
             $rest = preg_split(self::STOP, $rest, 2)[0] ?? '';
-            $out[] = mb_substr($rest, 0, 320);
+            $segment = mb_substr($rest, 0, 320);
+            $edition = $m[1][$i][0] ?? null;
+            if ($edition === null && preg_match(self::EDITION_IN_LEAD, $segment, $lead) === 1) {
+                $edition = $lead[1];
+            }
+            $out[] = [$segment, $edition];
         }
 
         return $out;
     }
 
-    private static function code(string $segment): ?self
+    private static function code(string $segment, ?string $edition = null): ?self
     {
         $m = self::codeMatch($segment, self::CODE);
         if ($m === null) {
@@ -158,10 +194,10 @@ final readonly class En388Code
             'puncture' => $value(5),
             'iso' => $value(6),
             'impact' => $value(7),
-        ], self::codeLiteral($segment, $m), false);
+        ], self::codeLiteral($segment, $m), false, $edition);
     }
 
-    private static function worded(string $segment): ?self
+    private static function worded(string $segment, ?string $edition = null): ?self
     {
         $cut = '(?i:przecię|przecie|przeciec)\p{L}*';
         $patterns = [
@@ -193,6 +229,6 @@ final readonly class En388Code
             return null;
         }
 
-        return new self($levels, trim(substr($segment, $start, $end - $start)), true);
+        return new self($levels, trim(substr($segment, $start, $end - $start)), true, $edition);
     }
 }

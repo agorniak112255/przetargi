@@ -120,6 +120,14 @@ class B2bConnectorRegistry
         return $this->classFor($key) !== null;
     }
 
+    /** Czy łącznik to witryna producenta własnej marki (B2bManufacturerSite), a nie dystrybutor wielu marek. */
+    public function isManufacturerSite(string $key): bool
+    {
+        $class = $this->classFor($key);
+
+        return $class !== null && is_a($class, B2bManufacturerSite::class, true);
+    }
+
     /** Czy łącznik loguje się u dostawcy. Witryna publiczna (protekt.pl) hasła nie ma. */
     public function requiresPassword(?string $key): bool
     {

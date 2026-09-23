@@ -106,7 +106,7 @@ final class ManufacturerNormFacts
      * Slot dla BhpAttributeNormalizer: to, co producent podał wprost, w formie gotowej do scalenia.
      *
      * @param  mixed  $column  zawartość products.manufacturer_norms
-     * @return array{en388?: string, normy: list<string>}
+     * @return array{en388?: string, normy: list<string>, rows?: list<array{label: string, value: string}>}
      */
     public static function context(mixed $column): array
     {
@@ -114,7 +114,8 @@ final class ManufacturerNormFacts
             return ['normy' => []];
         }
 
-        $out = ['normy' => self::norms($column)];
+        // `rows` dla resolveAgainstRows — tym samym rozstrzygnięciem liczy się lista norm przy zapisie i w normalizatorze
+        $out = ['normy' => self::norms($column), 'rows' => self::rows($column)];
         $en388 = $column['en388'] ?? null;
         if (is_string($en388) && trim($en388) !== '') {
             $out['en388'] = trim($en388);
@@ -211,30 +212,54 @@ final class ManufacturerNormFacts
      */
     public static function preferOver(array $norms, mixed $column): array
     {
-        if (self::norms($column) === []) {
-            return $norms;
-        }
-        // Na listę idą pary dosłownie („EN 374-1 Type A ABCILMNOS”) — normy_en zostawia przy EN 374-1 samo
-        // oznaczenie, bo liter nie umie odczytać jako poziomu, a na karcie ich brak byłby utratą danych producenta.
+        return self::resolveAgainstRows($norms, self::rows($column));
+    }
+
+    /**
+     * Jedno rozstrzygnięcie listy norm wobec par producenta — dla listy zapisywanej przy wzbogacaniu (preferOver)
+     * i dla normy_en liczonych przez BhpAttributeNormalizer (dopasowanie, karta, Presta). Dwie osobne reguły dawały
+     * dwa wyniki: normalizator zostawiał „EN 374 (A.B.C.I.K.L)” obok „EN ISO 374-1 …” producenta, a wyrzucał
+     * „EN 388 4121X”, gdy producent podał samo „EN 388” bez poziomu (recenzja planu norm, 23.09.2026).
+     *
+     * - Na listę idą pary producenta dosłownie („EN 374-1 Type A ABCILMNOS”) — normy_en zostawia przy EN 374-1 samo
+     *   oznaczenie, bo liter nie umie odczytać jako poziomu.
+     * - Zapis innego źródła odpada tylko przy normie, przy której producent podał oznaczenie: ta sama norma albo jej
+     *   część („EN 374” wobec „EN 374-1”), „EN ISO 374-1” i „EN 374-1” to jedna norma. Para bez wartości („EN 374-5”)
+     *   niczego nie wypiera — poziom ze sklepu jest wtedy jedynym, jaki mamy.
+     * - Dwa podane i różne wydania (producent „EN 388:2016 …”, sklep „EN 388:2003 4542”) to dwie wartości wyrobu —
+     *   zapis innego wydania zostaje. Rok tylko po jednej stronie rozstrzyga producent (jak #112: MAPA „EN 388”
+     *   wobec sklepowego „EN 388 (1.1.2.2)”).
+     *
+     * @param  list<string>  $norms
+     * @param  list<array{label: string, value: string}>  $rows  wynik rows()
+     * @return list<string> normy producenta na początku, potem pozycje, które mu nie przeczą
+     */
+    public static function resolveAgainstRows(array $norms, array $rows): array
+    {
         $own = [];
         $covered = [];
-        foreach (self::rows($column) as $row) {
+        foreach ($rows as $row) {
             $family = self::conflictFamily($row['label']);
             if ($family === '') {
                 continue;
             }
             $own[] = $row['value'] !== '' ? $row['label'].' '.$row['value'] : $row['label'];
             if ($row['value'] !== '') {
-                $covered[] = $family;
+                $covered[] = [$family, self::statedEdition($row['label'])];
             }
+        }
+        if ($own === []) {
+            return $norms;
         }
 
         $kept = [];
         foreach ($norms as $norm) {
             $family = self::conflictFamily($norm);
+            $edition = self::statedEdition($norm);
             $contradicts = $family !== '' && array_filter(
                 $covered,
-                static fn (string $own): bool => $own === $family || str_starts_with($own, $family.'-')
+                static fn (array $own): bool => ($own[0] === $family || str_starts_with($own[0], $family.'-'))
+                    && ($own[1] === null || $edition === null || $own[1] === $edition)
             ) !== [];
             if (! $contradicts) {
                 $kept[] = $norm;
@@ -242,6 +267,18 @@ final class ManufacturerNormFacts
         }
 
         return NormCode::dedupe([...$own, ...$kept]);
+    }
+
+    /**
+     * Rok wydania podany wprost przy oznaczeniu normy: „EN 388:2016 + A1:2018 …” → 2016, „EN 388 (2003) 4542” → 2003.
+     * Bez roku — null (wydania nie zgadujemy z formatu kodu).
+     */
+    public static function statedEdition(string $norm): ?string
+    {
+        $pattern = '/^\s*(?:(?:PN|DIN|BS|NF)[\s\-]+)?(?:EN|ISO|IEC)(?:[\s\-]*(?:ISO|IEC))*[\s\-]*\d{2,6}(?:-\d{1,3})*'
+            .'(?:\s?:\s?|\s*\(\s*)((?:19|20)\d{2})(?!\d)/iu';
+
+        return preg_match($pattern, $norm, $m) === 1 ? $m[1] : null;
     }
 
     /** Rodzina normy do wykrycia sprzeczności — „EN ISO 374-1” i „EN 374-1” to ta sama norma w dwóch zapisach. */

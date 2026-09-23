@@ -20,6 +20,8 @@ export type CheckFinding = {
   find: string | null
   verdict: CheckStatus
   value_mm?: number
+  /** Rok wydania normy, gdy karta podaje inne wydanie niż wymaganie — taki zapis nie jest oceniany. */
+  edition?: string
 }
 
 export type CheckPosition = { name: string; required: string; card: string | null; status: CheckStatus | 'skip' }
@@ -206,7 +208,15 @@ function CheckItem({
             {row.card.length === 0 ? (
               <span className="italic text-slate-400">brak na karcie</span>
             ) : (
-              <Finding finding={row.card[0]} onFind={onFind} findHitCount={findHitCount} />
+              <>
+                {/* „brak” obok samego kodu wyglądałby jak kod tego wydania — mówimy wprost, że to inne wydanie normy */}
+                {row.status === 'missing' && row.card[0].edition && (
+                  <span className="mr-1 italic text-slate-400" title={row.note ?? undefined}>
+                    tylko inne wydanie ({row.card[0].edition}):
+                  </span>
+                )}
+                <Finding finding={row.card[0]} onFind={onFind} findHitCount={findHitCount} />
+              </>
             )}
           </span>
         )}

@@ -75,7 +75,7 @@ final class LevelChecker implements ParameterChecker
     {
         $footwear = static fn (string $literal): string => preg_replace('/\s+/u', '', $literal) ?? $literal;
         $labels = ['ppe_category' => 'Kategoria ŚOI', 'en388' => 'EN 388', 'en407' => 'EN 407', 'footwear_class' => 'Klasa obuwia', 'ffp' => 'Klasa FFP', 'snr' => 'Tłumienie SNR'];
-        // [pole, zapis, wartość, pozycje kodu]
+        // [pole, zapis, wartość, pozycje kodu, wydanie EN 388]
         $hits = array_fill_keys(array_keys($labels), []);
         $seen = [];
         foreach ($cardSources as $source) {
@@ -101,7 +101,8 @@ final class LevelChecker implements ParameterChecker
             foreach (['en388' => En388Code::allIn($source->text), 'en407' => En407Code::allIn($source->text)] as $key => $found) {
                 foreach ($found as $code) {
                     if (! $this->seen($seen, $source, $key."\0".$code->text)) {
-                        $hits[$key][] = [$source, $code->text, $code->canonical(), $code->levels];
+                        // wydanie tylko przy EN 388 — UVEX C500: EN 388:2003 „4542” i EN 388:2016 „4X42C” to nie sprzeczność
+                        $hits[$key][] = [$source, $code->text, $code->canonical(), $code->levels, $code instanceof En388Code ? $code->edition : null];
                     }
                 }
             }
@@ -110,7 +111,7 @@ final class LevelChecker implements ParameterChecker
         $out = [];
         foreach ($hits as $key => $keyHits) {
             $conflict = $key === 'en388' || $key === 'en407'
-                ? $this->codesConflict(array_column($keyHits, 3))
+                ? $this->codesConflict(array_map(static fn (array $hit): array => [$hit[3], $hit[4]], $keyHits))
                 : count(array_unique(array_column($keyHits, 2))) > 1;
             if (! $conflict) {
                 continue;
@@ -157,11 +158,11 @@ final class LevelChecker implements ParameterChecker
         $codes = [];
         foreach ($sources as $source) {
             foreach (En388Code::allIn($source->text) as $code) {
-                $codes[] = [$source, $code->text, $code->levels, $code->canonical()];
+                $codes[] = [$source, $code->text, $code->levels, $code->canonical(), $code->edition];
             }
         }
 
-        return $this->codeRow('en388', 'EN 388', 'cut_level', $requirement, $this->requiredCodeText($required->text, $required->canonical(), $required->worded), $required->text, $required->canonical(), En388Code::POSITIONS, $required->levels, $codes);
+        return $this->codeRow('en388', 'EN 388', 'cut_level', $requirement, $this->requiredCodeText($required->text, $required->canonical(), $required->worded), $required->text, $required->canonical(), En388Code::POSITIONS, $required->levels, $codes, $required->edition);
     }
 
     /**
@@ -472,19 +473,33 @@ final class LevelChecker implements ParameterChecker
      * Wiersz kodu z pozycjami (EN 388, EN 407). Werdykt pola = najgorsza pozycja; `positions` z pierwszego pola
      * o najgorszym werdykcie, żeby tabela pokazała, dlaczego wiersz nie jest ✓.
      *
+     * Wydanie normy (tylko EN 388): gdy wymaganie podaje rok, pole karty z innym podanym rokiem pokazujemy jako „do
+     * sprawdzenia”, ale nie decyduje o wierszu — „EN 388:2016 min. 3121X” a karta tylko z EN 388:2003 „4542” to brak
+     * kodu 2016, nie „spełnia”: wartości między wydaniami nie przeliczamy (Coup Test to nie litera ISO 13997).
+     *
      * @param  array<string, string>  $labels
      * @param  array<string, string|null>  $requiredLevels
-     * @param  list<array{0: CardSource, 1: string, 2: array<string, string|null>, 3: string}>  $codes
+     * @param  list<array{0: CardSource, 1: string, 2: array<string, string|null>, 3: string, 4?: string|null}>  $codes  4 = wydanie podane w polu karty
      */
-    private function codeRow(string $key, string $label, ?string $gate, string $requirement, string $requiredText, string $requiredLiteral, string $requiredCode, array $labels, array $requiredLevels, array $codes): CheckRow
+    private function codeRow(string $key, string $label, ?string $gate, string $requirement, string $requiredText, string $requiredLiteral, string $requiredCode, array $labels, array $requiredLevels, array $codes, ?string $requiredEdition = null): CheckRow
     {
         $findings = [];
+        $otherEdition = [];
+        $otherEditionTexts = [];
         $verdicts = [];
         $positionsPerFinding = [];
         $levelsPerFinding = [];
         $seen = [];
-        foreach ($codes as [$source, $text, $levels, $canonical]) {
+        foreach ($codes as $code) {
+            [$source, $text, $levels, $canonical] = $code;
+            $edition = $code[4] ?? null;
             if ($this->seen($seen, $source, $text)) {
+                continue;
+            }
+            if (! En388Code::comparableEditions($requiredEdition, $edition)) {
+                $otherEdition[] = CheckRow::finding($source, $text, Status::Unclear, ['code' => $canonical, 'edition' => $edition]);
+                $otherEditionTexts[] = "{$label}:{$edition} {$text}";
+
                 continue;
             }
             $positions = $this->positions($labels, $requiredLevels, $levels);
@@ -498,13 +513,17 @@ final class LevelChecker implements ParameterChecker
             $findings[] = CheckRow::finding($source, $text, $verdict, ['code' => $canonical]);
             $verdicts[] = $verdict;
             $positionsPerFinding[] = $positions;
-            $levelsPerFinding[$canonical] = $levels;
+            // ten sam kod z dwóch podanych wydań to dwa wpisy — w notce z rokiem, żeby było widać, skąd który
+            $levelsPerFinding[$edition === null ? $canonical : "{$label}:{$edition} {$canonical}"] = [$levels, $edition];
         }
 
         $status = Status::fromCardVerdicts($verdicts);
         $note = null;
         if ($findings === []) {
             $shown = $this->positions($labels, $requiredLevels, []);
+            if ($otherEditionTexts !== []) {
+                $note = 'karta podaje tylko '.implode(', ', $otherEditionTexts).' — inne wydanie normy';
+            }
         } else {
             $shown = $positionsPerFinding[(int) array_search(Status::worst($verdicts), $verdicts, true)];
             $parts = [];
@@ -518,6 +537,9 @@ final class LevelChecker implements ParameterChecker
             if ($this->codesConflict(array_values($levelsPerFinding))) {
                 $parts[] = 'pola karty podają różne kody: '.implode(', ', array_keys($levelsPerFinding));
             }
+            if ($otherEditionTexts !== []) {
+                $parts[] = 'inne wydanie normy (nie oceniane): '.implode(', ', $otherEditionTexts);
+            }
             $note = $parts === [] ? null : implode('; ', $parts);
         }
 
@@ -525,7 +547,8 @@ final class LevelChecker implements ParameterChecker
             $key,
             $label,
             ['text' => $requiredText, 'quote' => CheckRow::quote($requirement, $requiredLiteral), 'code' => $requiredCode],
-            $findings,
+            // oceniane pola najpierw: wiersz ✓/brak pokazuje w jednej linii tylko pierwsze znalezisko
+            [...$findings, ...$otherEdition],
             $status,
             $note,
             $shown,
@@ -544,14 +567,19 @@ final class LevelChecker implements ParameterChecker
 
     /**
      * Kody sobie przeczą tylko wtedy, gdy ta sama pozycja ma różne wartości. Specyfikacja „Ciepło kontaktowe: poziom 1”
-     * i opis „X1XXXX” podają tę samą jedynkę — to nie sprzeczność.
+     * i opis „X1XXXX” podają tę samą jedynkę — to nie sprzeczność. Dwa różne podane wydania też nie: UVEX C500 ma
+     * EN 388:2003 „4542” i EN 388:2016 „4X42C” (Coup Test 5 i X) — to dwie wartości wyrobu. Ten sam rok albo rok
+     * niepodany przy którymkolwiek kodzie porównujemy pozycjami jak dotąd (EN 407 nie ma wydania — zawsze null).
      *
-     * @param  list<array<string, string|null>>  $codes
+     * @param  list<array{0: array<string, string|null>, 1: string|null}>  $codes  [pozycje, wydanie]
      */
     private function codesConflict(array $codes): bool
     {
-        foreach ($codes as $i => $a) {
-            foreach (array_slice($codes, $i + 1) as $b) {
+        foreach ($codes as $i => [$a, $aEdition]) {
+            foreach (array_slice($codes, $i + 1) as [$b, $bEdition]) {
+                if (! En388Code::comparableEditions($aEdition, $bEdition)) {
+                    continue;
+                }
                 foreach ($a as $key => $value) {
                     if ($value !== null && ($b[$key] ?? null) !== null && $b[$key] !== $value) {
                         return true;

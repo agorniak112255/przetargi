@@ -860,4 +860,26 @@ final class BhpAttributeNormalizerTest extends TestCase
         );
         $this->assertSame(['EN 388 4X42C', 'EN 388 3121X'], $sprzeczne['normy_en']);
     }
+
+    public function test_poziomy_en388_czyta_ten_sam_czytnik_co_sprawdzanie_wymagan(): void
+    {
+        $n = new BhpAttributeNormalizer;
+        $read = static fn (string $description, ?string $stored = null): ?string => $n->normalize(
+            $stored === null ? null : ['poziomy_en388' => $stored],
+            ['sku' => 'R-1', 'name' => 'Rękawice robocze', 'description' => $description],
+        )['poziomy_en388'];
+
+        // dawny wzorzec nie widział kodu po dwukropku ani w nawiasie
+        $this->assertSame('4121X', $read('Normy: EN 388: 4121X.'));
+        $this->assertSame('4121X', $read('Normy: EN 388 (4121X).'));
+        $this->assertSame('4121X', $read('Spełnia EN 388 4 1 2 1 X.'));
+        // a rok albo ucięty kod brał za poziomy
+        $this->assertNull($read('Zgodne z EN 388 2016 i EN 420.'));
+        $this->assertNull($read('Rękawice EN 388 211 w kolorze szarym.'));
+        // zapis słowny bywa częściowy — pola nie wypełnia
+        $this->assertNull($read('EN 388: ścieranie 4, przecięcie (Coup Test) 1.'));
+        // zapisany atrybut przechodzi przez ten sam czytnik: „2016” z dawnego odczytu odpada
+        $this->assertNull($read('Opis bez kodu.', '2016'));
+        $this->assertSame('4X42C', $read('Opis bez kodu.', '4X42C'));
+    }
 }

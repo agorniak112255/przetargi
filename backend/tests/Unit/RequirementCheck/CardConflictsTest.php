@@ -93,6 +93,50 @@ final class CardConflictsTest extends TestCase
             new CardSource(CardSource::DESCRIPTION, 'Dostępne w klasach FFP1, FFP2 i FFP3'),
             new CardSource(CardSource::SPECS, 'Klasa: FFP2'),
         ]];
+        yield 'dwa wydania EN 388 w dwóch polach (UVEX C500)' => [[
+            new CardSource(CardSource::NORMS, 'EN 388:2003 (4542)'),
+            new CardSource(CardSource::SPECS, 'EN 388:2016 (4X42C)'),
+        ]];
+        yield 'dwa wydania EN 388 w jednym polu' => [[
+            new CardSource(CardSource::DESCRIPTION, 'Normy: EN 388:2003 (4542), EN 388:2016 + A1:2018 (4X42C)'),
+        ]];
+    }
+
+    /**
+     * @return iterable<string, array{list<CardSource>, array<string, list<string>>}>
+     */
+    public static function en388EditionConflicts(): iterable
+    {
+        yield 'dwa kody 2016 różne na pozycji' => [[
+            new CardSource(CardSource::NORMS, 'EN 388:2016 (4X42C)'),
+            new CardSource(CardSource::SPECS, 'EN 388:2016 (3X42C)'),
+        ], ['4X42C' => ['norms: 4X42C'], '3X42C' => ['specs: 3X42C']]];
+        yield '2016 i 2016+A1:2018 to jedno wydanie' => [[
+            new CardSource(CardSource::NORMS, 'EN 388:2016+A1:2018 (4X42C)'),
+            new CardSource(CardSource::SPECS, 'EN 388:2016 (4X43C)'),
+        ], ['4X42C' => ['norms: 4X42C'], '4X43C' => ['specs: 4X43C']]];
+        yield 'bez roku po obu stronach (MAPA #112)' => [[
+            new CardSource(CardSource::SPECS, 'EN 388 (1.1.2.2)'),
+            new CardSource(CardSource::DESCRIPTION, 'Rękawice zgodne z EN 388 1121X.'),
+        ], ['1122-' => ['specs: 1.1.2.2'], '1121X' => ['description: 1121X']]];
+        yield 'rok tylko po jednej stronie' => [[
+            new CardSource(CardSource::NORMS, 'EN 388:2003 (4542)'),
+            new CardSource(CardSource::SPECS, 'EN 388: 4X42C'),
+        ], ['4542-' => ['norms: 4542'], '4X42C' => ['specs: 4X42C']]];
+    }
+
+    /**
+     * @param  list<CardSource>  $sources
+     * @param  array<string, list<string>>  $values
+     */
+    #[Test]
+    #[DataProvider('en388EditionConflicts')]
+    public function en388_codes_of_same_or_unstated_edition_conflict(array $sources, array $values): void
+    {
+        $conflicts = $this->byKey((new LevelChecker)->cardConflicts($sources));
+
+        $this->assertSame(['en388'], array_keys($conflicts));
+        $this->assertSame($values, $this->values($conflicts['en388']));
     }
 
     /**

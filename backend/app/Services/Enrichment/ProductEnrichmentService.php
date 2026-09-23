@@ -1142,7 +1142,7 @@ final class ProductEnrichmentService
             }
             $imageUrls = array_values(array_unique($imageUrls));
 
-            $this->storeManufacturerPageNorms($product, $pageSnippets);
+            $this->storeManufacturerPageNorms($product, $pageSnippets, $primarySourceUrl, $primarySourceKind);
             $description = $this->alignEn388WithManufacturer($description, $product);
 
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
@@ -4675,11 +4675,26 @@ SYS,
      * (te są pewniejsze: dane strukturalne, a nie ramka odczytana z HTML). Od tej kolumny liczy się dopasowanie
      * do wymagania przetargu i normy pokazywane na karcie (BhpAttributeNormalizer::forDisplay).
      *
+     * Pary bierzemy tylko z karty, która została źródłem opisu i jest kartą producenta — nie z pierwszej strony
+     * producenta z ramką norm w puli. W puli bywa strona rodziny albo katalogu, a ramka norm takiej strony opisuje
+     * inny wariant (recenzja planu norm, 23.09.2026). Dokładnego kodu wyrobu na stronie tu nie wymagamy: karta
+     * przeszła bramkę tożsamości opisu, a producenci (MAPA) kodu z cennika na karcie nie piszą.
+     *
      * @param  list<array<string, mixed>>  $pages
      */
-    private function storeManufacturerPageNorms(Product $product, array $pages): void
+    private function storeManufacturerPageNorms(Product $product, array $pages, ?string $primarySourceUrl, ?string $primarySourceKind): void
     {
-        $column = $this->manufacturerNormFactsFromPages($pages, $product);
+        if ($primarySourceKind !== 'manufacturer' || $primarySourceUrl === null || $primarySourceUrl === '') {
+            return;
+        }
+        $sourcePages = array_values(array_filter(
+            $pages,
+            fn (array $page): bool => in_array($primarySourceUrl, [
+                (string) ($page['url'] ?? ''),
+                $this->identity->preferredLocaleUrl((string) ($page['url'] ?? ''), $product),
+            ], true)
+        ));
+        $column = $this->manufacturerNormFactsFromPages($sourcePages, $product);
         if ($column === null
             || ! ManufacturerNormFacts::replaceableFromWebPage($product->manufacturer_norms)
             || ManufacturerNormFacts::sameFacts($product->manufacturer_norms, $column)) {
@@ -4695,16 +4710,33 @@ SYS,
      * Kod EN 388 w opisie inny niż u producenta → kod producenta. Model dostaje normy producenta z pierwszeństwem
      * (manufacturerNormsNote), ale przy dwóch zapisach bywał zapis ze sklepu. Podmieniamy sam dosłowny kod, nie
      * zdanie; zapis słowny („ścieranie 4, przecięcie 1…”) zostaje, tylko trafia do śladu przebiegu.
+     *
+     * Tylko w obrębie wydania: „EN 388:2003 4542” obok producenta „EN 388:2016 … 4X42C” to inna, prawdziwa wartość —
+     * podmiana dałaby „EN 388:2003 4X42C”, czyli fakt zmyślony. Rok podany tylko po jednej stronie rozstrzyga
+     * producent (ManufacturerNormFacts::resolveAgainstRows).
      */
     private function alignEn388WithManufacturer(string $description, Product $product): string
     {
         $own = ManufacturerNormFacts::context($product->manufacturer_norms)['en388'] ?? null;
-        $ownCode = $own !== null ? En388Code::first('EN 388 '.$own) : null;
-        if ($ownCode === null || $description === '') {
+        if ($own === null || $description === '') {
+            return $description;
+        }
+        // Wydanie kodu producenta z etykiety jego pary („EN 388:2016 + A1:2018” → 2016); samo en388 roku nie niesie.
+        $ownCode = null;
+        foreach (ManufacturerNormFacts::rows($product->manufacturer_norms) as $row) {
+            $candidate = En388Code::first($row['label'].' '.$row['value']);
+            if ($candidate !== null && ! $candidate->worded && $candidate->compact() === $own) {
+                $ownCode = $candidate;
+                break;
+            }
+        }
+        $ownCode ??= En388Code::first('EN 388 '.$own);
+        if ($ownCode === null) {
             return $description;
         }
         foreach (En388Code::allIn($description) as $code) {
-            if ($code->canonical() === $ownCode->canonical()) {
+            if ($code->canonical() === $ownCode->canonical()
+                || ! En388Code::comparableEditions($code->edition, $ownCode->edition)) {
                 continue;
             }
             if ($code->worded || $code->text === '') {

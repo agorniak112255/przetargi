@@ -231,6 +231,57 @@ final class ManufacturerNormFactsTest extends TestCase
         $this->assertStringNotContainsString('Kategoria', $joined, 'kategoria ŚOI nie jest normą');
     }
 
+    public function test_inne_podane_wydanie_zostaje_a_zapis_bez_roku_ustepuje_producentowi(): void
+    {
+        $rows = [['label' => 'EN 388:2016 + A1:2018', 'value' => '4X42C']];
+
+        $norms = ManufacturerNormFacts::resolveAgainstRows(['EN 388:2003 (4542)', 'EN 388 (1.1.2.2)', 'EN 388:2016 4131X'], $rows);
+
+        $this->assertSame('EN 388:2016 + A1:2018 4X42C', $norms[0]);
+        $this->assertContains('EN 388:2003 (4542)', $norms, 'EN 388:2003 to inna, prawdziwa wartość wyrobu');
+        $this->assertNotContains('EN 388 (1.1.2.2)', $norms, 'rok tylko po stronie producenta — rozstrzyga producent');
+        $this->assertNotContains('EN 388:2016 4131X', $norms, 'to samo wydanie, inny kod — sklep ustępuje');
+    }
+
+    public function test_para_producenta_bez_wartosci_nie_wypiera_poziomu_ze_sklepu(): void
+    {
+        $norms = ManufacturerNormFacts::resolveAgainstRows(
+            ['EN 388 4121X', 'EN 374 (A.B.C.I.K.L)'],
+            [['label' => 'EN 388', 'value' => ''], ['label' => 'EN ISO 374-1', 'value' => 'Typ A AJKOPT']],
+        );
+
+        $this->assertContains('EN 388 4121X', $norms);
+        $this->assertContains('EN ISO 374-1 Typ A AJKOPT', $norms);
+        $this->assertNotContains('EN 374 (A.B.C.I.K.L)', $norms, 'EN 374 to stary zapis tej samej normy co EN ISO 374-1');
+    }
+
+    public function test_wydanie_czytamy_tylko_z_roku_podanego_wprost(): void
+    {
+        $this->assertSame('2016', ManufacturerNormFacts::statedEdition('EN 388:2016 + A1:2018 4X42C'));
+        $this->assertSame('2003', ManufacturerNormFacts::statedEdition('EN 388 (2003) 4542'));
+        $this->assertSame('2016', ManufacturerNormFacts::statedEdition('EN ISO 374-1:2016 Typ B'));
+        $this->assertNull(ManufacturerNormFacts::statedEdition('EN 388 4542'), 'format kodu nie mówi o wydaniu');
+        $this->assertNull(ManufacturerNormFacts::statedEdition('EN 388 (1.1.2.2)'));
+    }
+
+    public function test_normalizator_rozstrzyga_normy_tak_samo_jak_lista_przy_zapisie(): void
+    {
+        $column = ManufacturerNormFacts::build(
+            [['label' => 'EN 388', 'value' => ''], ['label' => 'EN ISO 374-1', 'value' => 'Typ A AJKOPT']],
+            ManufacturerNormFacts::WEB_PAGE_CONNECTOR,
+            'MAPA',
+            'https://example.test/karta',
+        );
+        $others = ['EN 388 4121X', 'EN 374 (A.B.C.I.K.L)'];
+
+        $attrs = (new BhpAttributeNormalizer)->normalize(null, [
+            'norms' => $others,
+            'manufacturer' => ManufacturerNormFacts::context($column),
+        ]);
+
+        $this->assertSame(ManufacturerNormFacts::preferOver($others, $column), $attrs['normy_en']);
+    }
+
     public function test_bez_norm_producenta_lista_zostaje_bez_zmian(): void
     {
         $this->assertSame(['EN 388 (1.1.2.2)'], ManufacturerNormFacts::preferOver(['EN 388 (1.1.2.2)'], null));
