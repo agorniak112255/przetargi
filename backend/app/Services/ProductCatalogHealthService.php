@@ -187,8 +187,8 @@ final class ProductCatalogHealthService
         }
 
         $pending = 0;
-        if (config('queue.default') === 'database' && Schema::hasTable('jobs')) {
-            $pending = DB::table('jobs')
+        if (config('queue.default') === 'database' && Schema::hasTable(ReindexProductEmbeddingJob::TABLE)) {
+            $pending = DB::table(ReindexProductEmbeddingJob::TABLE)
                 ->where('queue', ReindexProductEmbeddingJob::QUEUE)
                 ->count();
         }

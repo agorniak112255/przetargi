@@ -80,7 +80,7 @@ final class ProductEmbeddingIndexFailureTest extends TestCase
     public function test_job_401_halts_and_drops_pending_embeddings_jobs(): void
     {
         $product = $this->product('VEC-HALT');
-        DB::table('jobs')->insert([
+        DB::table(ReindexProductEmbeddingJob::TABLE)->insert([
             'queue' => ReindexProductEmbeddingJob::QUEUE,
             'payload' => '{}',
             'attempts' => 0,
@@ -101,7 +101,7 @@ final class ProductEmbeddingIndexFailureTest extends TestCase
     public function test_job_401_clears_unreserved_queue_and_sets_halt(): void
     {
         $product = $this->product('VEC-HALT-2');
-        DB::table('jobs')->insert([
+        DB::table(ReindexProductEmbeddingJob::TABLE)->insert([
             'queue' => ReindexProductEmbeddingJob::QUEUE,
             'payload' => '{}',
             'attempts' => 0,
@@ -121,7 +121,7 @@ final class ProductEmbeddingIndexFailureTest extends TestCase
         }
 
         $this->assertTrue(Cache::has(ReindexProductEmbeddingJob::HALT_CACHE_KEY));
-        $this->assertSame(0, DB::table('jobs')->where('queue', ReindexProductEmbeddingJob::QUEUE)->count());
+        $this->assertSame(0, DB::table(ReindexProductEmbeddingJob::TABLE)->where('queue', ReindexProductEmbeddingJob::QUEUE)->count());
         $this->assertNull($product->refresh()->embedding_synced_at);
     }
 

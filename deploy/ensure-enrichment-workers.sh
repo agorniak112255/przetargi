@@ -2,7 +2,7 @@
 # Trzy pule workerów:
 #   - enrich (domyślnie 16) — tylko vLLM / opisy
 #   - prefetch (domyślnie tyle, ile publicznych IP, min. 5, maks. 16) — SearXNG + HTML
-#   - embeddings (domyślnie 3) — wektory do Qdranta
+#   - embeddings (domyślnie 3) — wektory do Qdranta, własna tabela jobs_embeddings
 # Kolejka embeddings ma własną, małą pulę: gdy chodziła razem z enrich, wszystkie 16 workerów
 # pobierało z niej zadania w kółko (jedno zadanie to jeden krótki zapis), a `select ... for update`
 # na tabeli `jobs` zakleszczał się z kasowaniem wykonanych wierszy — 22.09.2026 dało to 620 zadań
@@ -70,7 +70,7 @@ if ! command -v systemctl >/dev/null 2>&1; then
   echo "UWAGA: brak systemd — workery trzeba uruchomić ręcznie:"
   echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=enrich --tries=3 --timeout=420 --max-time=3600 &"
   echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=prefetch,default --tries=3 --timeout=180 --max-time=3600 &"
-  echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=embeddings --sleep=3 --tries=3 --timeout=420 --max-time=3600 &"
+  echo "  cd $BACKEND && $PHP_BIN artisan queue:work database_embeddings --queue=embeddings --sleep=3 --tries=3 --timeout=420 --max-time=3600 &"
   exit 0
 fi
 
@@ -87,6 +87,7 @@ write_unit() {
   local pool="$5"
   local count="$6"
   local sleep_seconds="${7:-1}"
+  local connection="${8:-}"
   cat > "$unit_file" <<EOF
 [Unit]
 Description=$description %i
@@ -102,7 +103,7 @@ Environment=QUEUE_WORKER_INDEX=%i
 Environment=QUEUE_WORKER_COUNT=$count
 Environment=ENRICHMENT_SEARCH_LANES=$SEARCH_LANES
 Environment=ENRICHMENT_PREFETCH_CONCURRENCY=$PREFETCH_WORKERS
-ExecStart=$PHP_BIN artisan queue:work --queue=$queues --sleep=$sleep_seconds --tries=3 --timeout=$timeout --max-time=3600
+ExecStart=$PHP_BIN artisan queue:work ${connection:+$connection }--queue=$queues --sleep=$sleep_seconds --tries=3 --timeout=$timeout --max-time=3600
 Restart=always
 RestartSec=5
 StandardOutput=append:$LOG_FILE
@@ -131,13 +132,16 @@ write_unit "/etc/systemd/system/${PREFETCH_UNIT}.service" \
 # Limit czasu 420 s jak przy enrich, i z tego samego powodu: klient osadzeń czeka na odpowiedź tyle,
 # ile wynosi „Limit czasu” w Ustawieniach AI (domyślnie 240 s). Krótszy limit zadania ubijał workera
 # w trakcie zapytania — wiersz zostawał zarezerwowany i po retry_after wracał jako przekroczenie prób.
+# Połączenie database_embeddings = własna tabela jobs_embeddings. MariaDB 10.5 nie zna SKIP LOCKED
+# i przy wspólnej tabeli `jobs` workery wektorów zakleszczały się z resztą w każdej synchronizacji B2B.
 write_unit "/etc/systemd/system/${EMBEDDING_UNIT}.service" \
   "Przetargi embeddings worker" \
   "embeddings" \
   420 \
   embeddings \
   "$EMBEDDING_WORKERS" \
-  3
+  3 \
+  database_embeddings
 
 touch "$LOG_FILE"
 chown "$OWNER:$GROUP" "$LOG_FILE" || true

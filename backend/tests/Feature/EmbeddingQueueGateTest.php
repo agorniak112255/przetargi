@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 /**
@@ -138,15 +139,15 @@ final class EmbeddingQueueGateTest extends TestCase
             'available_at' => time(),
             'created_at' => time(),
         ];
-        $rows[] = [
+        DB::table(ReindexProductEmbeddingJob::TABLE)->insert($rows);
+        DB::table('jobs')->insert([
             'queue' => 'enrich',
             'payload' => '{}',
             'attempts' => 0,
             'reserved_at' => null,
             'available_at' => time(),
             'created_at' => time(),
-        ];
-        DB::table('jobs')->insert($rows);
+        ]);
 
         // bez haka zapisu — zadanie odpalamy niżej ręcznie, żeby zmierzyć samo zatrzymanie kolejki
         $product = Product::withoutEvents(fn (): Product => $this->product('HALT-1'));
@@ -162,8 +163,66 @@ final class EmbeddingQueueGateTest extends TestCase
 
         $this->assertTrue(Cache::has(ReindexProductEmbeddingJob::HALT_CACHE_KEY));
         // zadanie w trakcie wykonania zostaje — worker sam je zamknie
-        $this->assertSame(1, DB::table('jobs')->where('queue', ReindexProductEmbeddingJob::QUEUE)->count());
+        $this->assertSame(1, DB::table(ReindexProductEmbeddingJob::TABLE)->where('queue', ReindexProductEmbeddingJob::QUEUE)->count());
         // inne kolejki nietknięte
         $this->assertSame(1, DB::table('jobs')->where('queue', 'enrich')->count());
+    }
+
+    /**
+     * MariaDB 10.5 na serwerze nie zna SKIP LOCKED — przy wspólnej tabeli `jobs` workery wektorów
+     * zakleszczały się z resztą przy każdej synchronizacji B2B (23.09.2026). Przy kolejce w bazie
+     * zadanie wektora ma trafić do własnej tabeli, a nie do `jobs`.
+     */
+    public function test_database_queue_routes_reindex_to_its_own_table(): void
+    {
+        $this->enableVectors();
+        config([
+            'queue.default' => 'database',
+            'queue.embeddings_connection' => 'database_embeddings',
+        ]);
+
+        $product = Product::withoutEvents(fn (): Product => $this->product('ROUTE-1'));
+        ReindexProductEmbeddingJob::dispatch((int) $product->id);
+
+        $this->assertSame(1, DB::table(ReindexProductEmbeddingJob::TABLE)->where('queue', ReindexProductEmbeddingJob::QUEUE)->count());
+        $this->assertSame(0, DB::table('jobs')->count());
+        $this->assertSame(ReindexProductEmbeddingJob::TABLE, config('queue.connections.database_embeddings.table'));
+    }
+
+    public function test_migration_moves_waiting_reindex_jobs_out_of_the_shared_table(): void
+    {
+        $row = fn (string $queue, ?int $reservedAt): array => [
+            'queue' => $queue,
+            'payload' => '{"id":"'.$queue.'"}',
+            'attempts' => $reservedAt === null ? 0 : 1,
+            'reserved_at' => $reservedAt,
+            'available_at' => 1000,
+            'created_at' => 900,
+        ];
+        $rows = [];
+        for ($i = 0; $i < 205; $i++) {
+            $rows[] = $row(ReindexProductEmbeddingJob::QUEUE, null);
+        }
+        // zadanie w trakcie wykonania zostaje — zamknie je stary worker
+        $rows[] = $row(ReindexProductEmbeddingJob::QUEUE, time());
+        $rows[] = $row('enrich', null);
+        DB::table('jobs')->insert($rows);
+
+        $migration = require database_path('migrations/2026_09_23_160000_create_jobs_embeddings_table.php');
+        $migration->up();
+
+        $this->assertSame(205, DB::table(ReindexProductEmbeddingJob::TABLE)->count());
+        $moved = DB::table(ReindexProductEmbeddingJob::TABLE)->first();
+        $this->assertSame(ReindexProductEmbeddingJob::QUEUE, $moved->queue);
+        $this->assertSame('{"id":"embeddings"}', $moved->payload);
+        $this->assertSame(1000, (int) $moved->available_at);
+        $this->assertNull($moved->reserved_at);
+        $this->assertSame(1, DB::table('jobs')->where('queue', ReindexProductEmbeddingJob::QUEUE)->count());
+        $this->assertSame(1, DB::table('jobs')->where('queue', 'enrich')->count());
+
+        // wycofanie oddaje czekające zadania do wspólnej tabeli
+        $migration->down();
+        $this->assertFalse(Schema::hasTable(ReindexProductEmbeddingJob::TABLE));
+        $this->assertSame(206, DB::table('jobs')->where('queue', ReindexProductEmbeddingJob::QUEUE)->count());
     }
 }

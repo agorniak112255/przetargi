@@ -48,6 +48,9 @@ class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
     /** Osobna kolejka — reindeks całego katalogu nie może blokować pobierania opisów. */
     public const QUEUE = 'embeddings';
 
+    /** Tabela połączenia `database_embeddings` (config/queue.php) — osobna, bez zakleszczeń z `jobs`. */
+    public const TABLE = 'jobs_embeddings';
+
     /** Po 401/403 kolejka embeddings nie ma sensu — każdy następny job dostanie to samo. */
     public const HALT_CACHE_KEY = 'product_embeddings_halt';
 
@@ -65,6 +68,7 @@ class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
         public readonly int $productId,
         public readonly bool $force = false,
     ) {
+        $this->onConnection(config('queue.embeddings_connection'));
         $this->onQueue(self::QUEUE);
         $this->timeout = self::timeoutSeconds();
     }
@@ -151,7 +155,7 @@ class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
     private function haltRun(): void
     {
         Cache::put(self::HALT_CACHE_KEY, 1, 86400);
-        if (! Schema::hasTable('jobs')) {
+        if (! Schema::hasTable(self::TABLE)) {
             return;
         }
 
@@ -162,13 +166,13 @@ class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
         //
         // Górna granica z chwili zatrzymania: pętla ma skończyć na tym, co leżało w kolejce teraz,
         // a nie gonić zleceń dokładanych w trakcie kasowania.
-        $lastId = (int) (DB::table('jobs')->where('queue', self::QUEUE)->max('id') ?? 0);
+        $lastId = (int) (DB::table(self::TABLE)->where('queue', self::QUEUE)->max('id') ?? 0);
         if ($lastId === 0) {
             return;
         }
 
         while (true) {
-            $ids = DB::table('jobs')
+            $ids = DB::table(self::TABLE)
                 ->where('queue', self::QUEUE)
                 ->where('id', '<=', $lastId)
                 ->whereNull('reserved_at')
@@ -181,7 +185,7 @@ class ReindexProductEmbeddingJob implements ShouldBeUnique, ShouldQueue
                 return;
             }
 
-            if (DB::table('jobs')->whereIn('id', $ids)->delete() === 0) {
+            if (DB::table(self::TABLE)->whereIn('id', $ids)->delete() === 0) {
                 return;
             }
         }

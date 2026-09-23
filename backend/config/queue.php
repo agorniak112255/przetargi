@@ -16,6 +16,16 @@ return [
     'default' => env('QUEUE_CONNECTION', 'database'),
 
     /*
+    | Połączenie kolejki wektorów (ReindexProductEmbeddingJob). Własna tabela ma sens tylko przy
+    | kolejce w bazie — przy `sync` (testy) albo innym sterowniku zadanie idzie połączeniem
+    | domyślnym. Worker: `queue:work database_embeddings --queue=embeddings`.
+    */
+    'embeddings_connection' => env(
+        'QUEUE_EMBEDDINGS_CONNECTION',
+        env('QUEUE_CONNECTION', 'database') === 'database' ? 'database_embeddings' : null
+    ),
+
+    /*
     |--------------------------------------------------------------------------
     | Queue Connections
     |--------------------------------------------------------------------------
@@ -42,6 +52,19 @@ return [
             'queue' => env('DB_QUEUE', 'default'),
             // Musi być większe niż najdłuższy job (EnrichProductJob: 420 s),
             // inaczej kolejka odda ten sam produkt drugiemu workerowi.
+            'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 480),
+            'after_commit' => false,
+        ],
+
+        // Wektory w osobnej tabeli. MariaDB 10.5 na serwerze nie zna SKIP LOCKED, więc workery
+        // pobierają zadania przez zwykłe `select ... for update` i przy wspólnej tabeli `jobs`
+        // blokowały się nawzajem: 22.09.2026 ok. 2 200 zakleszczeń przy reindeksie, 23.09.2026
+        // kolejne w trakcie synchronizacji B2B, która przy każdej karcie dokłada zadanie wektora.
+        'database_embeddings' => [
+            'driver' => 'database',
+            'connection' => env('DB_QUEUE_CONNECTION'),
+            'table' => 'jobs_embeddings',
+            'queue' => 'embeddings',
             'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 480),
             'after_commit' => false,
         ],
