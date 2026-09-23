@@ -31,14 +31,23 @@ class B2bTextTranslator
 
     /**
      * Słowa wielkimi literami, które wolno przetłumaczyć — powszechne skróty, a nie nazwy własne:
-     * N/A („nie dotyczy”), PPE (po polsku ŚOI). UV, PC, PVC, LED, ESD po polsku brzmią tak samo,
-     * więc zostają chronione — ich zniknięcie z wyniku oznacza zgubiony fakt.
+     * N/A („nie dotyczy”), PPE (po polsku ŚOI). UV, PC, PVC, LED, ESD zostają chronione — ich zniknięcie
+     * z wyniku oznacza zgubiony fakt (PVC wolno zapisać polskim skrótem PCW/PCV — TOKEN_EQUIVALENTS).
      * Do tego angielskie słowa funkcyjne pisane wersalikami dla podkreślenia („FLASH is THE reference” — 23.09.2026
      * odrzucane jako „zgubiony token: THE”); nazwą modelu nie są.
      */
     private const TRANSLATABLE_UPPERCASE = [
         'N/A', 'PPE',
         'THE', 'AND', 'FOR', 'WITH', 'YOUR', 'YOU', 'OUR', 'ARE', 'THIS', 'THAT', 'FROM', 'BUT', 'NOT',
+    ];
+
+    /**
+     * Chroniony token źródła => zapisy w wyniku, które go spełniają. PVC (polichlorek winylu) to po polsku PCW
+     * albo PCV — ten sam materiał (23.09.2026 „oprawki BL150 z PCW” odrzucone jako „zgubiony token: PVC”).
+     * PC (poliwęglan) to inny materiał i zamiennikiem PVC nie jest („oprawka z PC” zostaje odrzucona).
+     */
+    private const TOKEN_EQUIVALENTS = [
+        'PVC' => ['PVC', 'PCW', 'PCV'],
     ];
 
     /**
@@ -428,7 +437,14 @@ SYS;
         $haystack = self::withoutThousandsSeparators($result);
         $missing = [];
         foreach (self::protectedTokens($source) as $token) {
-            if (preg_match(self::tokenPattern($token), $haystack) !== 1) {
+            $kept = false;
+            foreach (self::TOKEN_EQUIVALENTS[$token] ?? [$token] as $variant) {
+                if (preg_match(self::tokenPattern($variant), $haystack) === 1) {
+                    $kept = true;
+                    break;
+                }
+            }
+            if (! $kept) {
                 $missing[] = $token;
             }
         }

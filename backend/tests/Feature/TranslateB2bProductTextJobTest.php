@@ -21,6 +21,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -147,6 +148,38 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame([[self::SOURCE_DESCRIPTION, null, 'Okulary Tryon — nazwa nadana ręcznie']], $this->translator->calls);
     }
 
+    /**
+     * 23.09.2026: 173 karty Bollé mają nazwę innego wyrobu — taka nazwa nie może iść do modelu jako kontekst
+     * (FLASHV: „Welding helmet” przetłumaczone jako „Napotnik do przyłbic”).
+     */
+    #[DataProvider('cardNameContextCases')]
+    public function test_card_name_is_context_only_when_it_names_the_same_product(string $sku, string $cardName, ?string $remoteName, bool $kept): void
+    {
+        [$product] = $this->importedCard($cardName, $remoteName, $sku);
+
+        $this->runJob($product);
+
+        $this->assertCount(1, $this->translator->calls);
+        $this->assertSame($kept ? $cardName : null, $this->translator->calls[0][2]);
+        $this->assertSame(self::POLISH_DESCRIPTION, $product->fresh()->description, 'Opis tłumaczony także bez kontekstu');
+    }
+
+    /**
+     * Pełny zestaw przypadków reguły — tests/Unit/B2bProductNameMatchTest; tu tylko wpięcie w job.
+     *
+     * @return array<string, array{0: string, 1: string, 2: string|null, 3: bool}>
+     */
+    public static function cardNameContextCases(): array
+    {
+        return [
+            'FLASHV: nazwa innego wyrobu' => ['FLASHV', 'Napotnik do przyłbic ELECTRO i ELECTRO+ (Pakiet 5 szt.)', 'FLASH – Welding helmet', false],
+            'RUSXMN10E: „XP” ma 2 znaki, nie wiąże' => ['RUSXMN10E', 'XP', 'RUSH+ 2.0 XP - size M/L – Hybrid clear safety glasses', false],
+            'brak nazwy u dostawcy' => ['BOL-2', 'Okulary ochronne TRYON BSSI', null, false],
+            'TRYON BSSI we wspólnej nazwie' => ['TRYBSSI', 'Okulary ochronne TRYON BSSI, soczewka miedziana', 'TRYON BSSI – Copper safety glasses', true],
+            'P1P10: kod z cyfrą' => ['LSWP1P10', 'Szyba chroniąca przed laserem P1P10', 'P1P10 laser safety window', true],
+        ];
+    }
+
     public function test_description_edited_by_hand_is_not_sent_to_translator(): void
     {
         [$product, $link] = $this->importedCard();
@@ -159,8 +192,25 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertNull($link->fresh()->source_description_hash);
     }
 
-    public function test_already_translated_card_is_not_sent_to_translator(): void
+    public function test_already_translated_description_is_not_sent_to_translator(): void
     {
+        [$product, $link] = $this->importedCard();
+        $link->update([
+            'description_hash' => sha1(self::POLISH_DESCRIPTION),
+            'source_description_hash' => sha1(self::SOURCE_DESCRIPTION),
+        ]);
+        $product->update(['description' => self::POLISH_DESCRIPTION]);
+
+        $this->runJob($product);
+
+        $this->assertSame([], $this->translator->calls);
+        $this->assertSame(self::SOURCE_NAME, $product->fresh()->name);
+    }
+
+    public function test_source_name_is_translated_even_when_description_already_is(): void
+    {
+        // 23.09.2026: 18 kart Bolle z 15.09 miało polski opis, a nazwę wciąż po angielsku — wczesne wyjście przy
+        // przetłumaczonym opisie blokowało też nazwę (decyzja 15.09: nazwy nowych kart po polsku)
         [$product, $link] = $this->importedCard();
         $link->update([
             'description_hash' => sha1(self::POLISH_DESCRIPTION),
@@ -170,8 +220,45 @@ final class TranslateB2bProductTextJobTest extends TestCase
 
         $this->runJob($product, translateName: true);
 
-        $this->assertSame([], $this->translator->calls);
+        $product->refresh();
+        $link->refresh();
+        $this->assertSame([['', self::SOURCE_NAME, self::SOURCE_NAME]], $this->translator->calls);
+        $this->assertSame(self::POLISH_NAME, $product->name);
+        $this->assertSame(self::POLISH_DESCRIPTION, $product->description);
+        $this->assertSame(sha1(self::POLISH_DESCRIPTION), $link->description_hash);
+        $this->assertSame(sha1(self::SOURCE_DESCRIPTION), $link->source_description_hash);
+    }
+
+    public function test_name_returned_unchanged_is_rejected_and_not_sent_again(): void
+    {
+        [$product, $link] = $this->importedCard();
+        $link->update([
+            'description_hash' => sha1(self::POLISH_DESCRIPTION),
+            'source_description_hash' => sha1(self::SOURCE_DESCRIPTION),
+        ]);
+        $product->update(['description' => self::POLISH_DESCRIPTION]);
+        $this->translator->nameUnchanged = true;
+
+        $this->runJob($product, translateName: true);
+        $this->runJob($product, translateName: true);
+
+        $this->assertCount(1, $this->translator->calls, 'nazwa bez zmian nie wraca do modelu przy każdym przebiegu');
+        $this->assertSame('nazwa bez zmian po tłumaczeniu', $link->fresh()->translation_rejected_reason);
         $this->assertSame(self::SOURCE_NAME, $product->fresh()->name);
+    }
+
+    public function test_description_is_saved_when_only_the_name_comes_back_unchanged(): void
+    {
+        [$product, $link] = $this->importedCard();
+        $this->translator->nameUnchanged = true;
+
+        $this->runJob($product, translateName: true);
+
+        $product->refresh();
+        $this->assertSame(self::POLISH_DESCRIPTION, $product->description);
+        $this->assertSame(self::SOURCE_NAME, $product->name);
+        $this->assertSame(sha1(self::SOURCE_DESCRIPTION), $link->fresh()->source_description_hash);
+        $this->assertNull($link->fresh()->translation_rejected_hash);
     }
 
     public function test_description_changed_while_model_answers_is_not_overwritten(): void
@@ -326,11 +413,11 @@ final class TranslateB2bProductTextJobTest extends TestCase
      *
      * @return array{0: Product, 1: B2bProductLink}
      */
-    private function importedCard(): array
+    private function importedCard(string $name = self::SOURCE_NAME, ?string $remoteName = self::SOURCE_NAME, string $sku = 'BOL-1'): array
     {
         $product = Product::query()->create([
-            'sku' => 'BOL-1',
-            'name' => self::SOURCE_NAME,
+            'sku' => $sku,
+            'name' => $name,
             'description' => self::SOURCE_DESCRIPTION,
             'manufacturer' => 'Bollé Safety',
             'catalog_price_net' => 60.00,
@@ -342,8 +429,8 @@ final class TranslateB2bProductTextJobTest extends TestCase
             'b2b_account_id' => $this->account->id,
             'remote_id' => '1',
             'product_id' => $product->id,
-            'remote_sku' => 'BOL-1',
-            'remote_name' => self::SOURCE_NAME,
+            'remote_sku' => $sku,
+            'remote_name' => $remoteName,
             'description_hash' => sha1(self::SOURCE_DESCRIPTION),
             'last_seen_at' => now(),
         ]);
@@ -368,6 +455,9 @@ final class FakeB2bTextTranslator extends B2bTextTranslator
 
     public ?Closure $during = null;
 
+    /** Nazwa zwracana dosłownie tak, jak przyszła (model oddał nazwę bez tłumaczenia). */
+    public bool $nameUnchanged = false;
+
     /** Bez klienta modelu — translate() jest w całości podmienione. */
     public function __construct() {}
 
@@ -380,7 +470,7 @@ final class FakeB2bTextTranslator extends B2bTextTranslator
 
         return [
             'description' => $description === '' ? '' : 'Soczewka miedziana, powłoka przeciwmgielna i odporna na zarysowania. EN 166, EN 170.',
-            'name' => $name === null ? null : 'TRYON BSSI – okulary ochronne, soczewka miedziana',
+            'name' => $name === null ? null : ($this->nameUnchanged ? $name : 'TRYON BSSI – okulary ochronne, soczewka miedziana'),
         ];
     }
 }

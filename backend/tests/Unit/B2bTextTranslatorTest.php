@@ -295,6 +295,32 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function pvc_may_be_written_as_polish_pcw_or_pcv(): void
+    {
+        // 23.09.2026: „oprawki BL150 z PCW” odrzucone jako „zgubiony token: PVC” — to ten sam materiał
+        $source = 'Replacement PVC frame for BL150 goggles.';
+        foreach (['Zapasowa oprawka z PCW do gogli BL150.', 'Zapasowa oprawka z PCV do gogli BL150.'] as $result) {
+            $translator = $this->translatorReturning(['segments' => [$result]]);
+
+            $this->assertSame($result, $translator->translate($source)['description']);
+        }
+    }
+
+    #[Test]
+    public function rejects_pc_written_instead_of_pvc(): void
+    {
+        // Bollé BL15APSI 23.09.2026: model napisał „oprawka z PC” — poliwęglan to inny materiał niż PVC
+        $translator = $this->translatorReturning([
+            'segments' => ['Zapasowa oprawka z PC do gogli BL150.'],
+        ]);
+
+        $this->expectException(B2bTranslationRejected::class);
+        $this->expectExceptionMessage('zgubiony token: PVC');
+
+        $translator->translate('Replacement PVC frame for BL150 goggles.');
+    }
+
+    #[Test]
     public function rejects_changed_decimal_in_model_name(): void
     {
         $translator = $this->translatorReturning([

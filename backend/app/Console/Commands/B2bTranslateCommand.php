@@ -120,8 +120,8 @@ final class B2bTranslateCommand extends Command
     {
         $links = B2bProductLink::query()
             ->where('b2b_account_id', $account->id)
+            // także karta z przetłumaczonym opisem — odrzucona mogła być sama nazwa; udane tłumaczenie czyści odcisk
             ->whereNotNull('translation_rejected_hash')
-            ->whereNull('source_description_hash')
             ->with('product:id,sku')
             ->orderBy('translation_rejected_at')
             ->get();
@@ -192,8 +192,8 @@ final class B2bTranslateCommand extends Command
     {
         $candidates = [];
         B2bProductLink::query()
+            // bez filtra po source_description_hash — przy przetłumaczonym opisie nazwa ze źródła wciąż czeka (pending)
             ->where('b2b_account_id', $accountId)
-            ->whereNull('source_description_hash')
             ->with('product:id,sku,name,description')
             ->chunkById(500, function (Collection $links) use (&$candidates, $keepsNames): void {
                 foreach ($links as $link) {

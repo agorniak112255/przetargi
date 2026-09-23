@@ -45,8 +45,8 @@ final class B2bTranslateCommandTest extends TestCase
         $this->card('BOL-3', 'Goggles', 'Opis poprawiony ręcznie', remoteName: 'Goggles', hashOf: 'Indirect vent goggles.');
         // opis edytowany ręcznie, nazwa po polsku — pomijana
         $this->card('BOL-4', 'Gogle', 'Opis poprawiony ręcznie', remoteName: 'Goggles 4', hashOf: 'Goggles.');
-        // już przetłumaczona — pomijana
-        $this->card('BOL-5', 'Okulary Tracker', 'Soczewka bezbarwna.', remoteName: 'Okulary Tracker', translated: true);
+        // już przetłumaczona (opis i nazwa po polsku, u dostawcy po angielsku) — pomijana
+        $this->card('BOL-5', 'Okulary Tracker', 'Soczewka bezbarwna.', remoteName: 'TRACKER – Clear safety glasses', translated: true);
         // przed remote_name — tylko opis
         $this->card('BOL-6', 'Silium+ glasses', 'Smoke lens.', remoteName: null);
     }
@@ -79,6 +79,18 @@ final class B2bTranslateCommandTest extends TestCase
         ksort($flags);
         $this->assertSame(['BOL-1' => true, 'BOL-2' => false, 'BOL-3' => true, 'BOL-6' => false], $flags);
         Queue::assertPushedOn(TranslateB2bProductTextJob::QUEUE, TranslateB2bProductTextJob::class);
+    }
+
+    public function test_translated_description_with_source_name_is_a_name_candidate(): void
+    {
+        // 23.09.2026: 18 kart Bolle z polskim opisem i angielską nazwą ze źródła — nazwa dalej do tłumaczenia
+        $this->card('BOL-7', 'X1000 – Clear vented ballistic goggles', 'Gogle balistyczne.', remoteName: 'X1000 – Clear vented ballistic goggles', translated: true);
+
+        $this->artisan('b2b:translate', ['account' => $this->account->id, '--dry-run' => true])
+            ->expectsOutputToContain('do tłumaczenia: 5 kart (opis: 3, nazwa: 3)')
+            ->expectsOutputToContain('BOL-7 · nazwa')
+            ->doesntExpectOutputToContain('BOL-5')
+            ->assertSuccessful();
     }
 
     public function test_rejected_card_is_not_dispatched_and_is_listed_for_manual_translation(): void

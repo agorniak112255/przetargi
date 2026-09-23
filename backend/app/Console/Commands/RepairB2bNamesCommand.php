@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Models\B2bProductLink;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Support\B2bProductNameMatch;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -26,6 +27,11 @@ use JsonException;
  * wypisuje kategorie pozostałych kart cennika. Zapis idzie przez model, więc hak Product::saving
  * przelicza indeks tekstowy, a Product::updated zleca reindeks wektora.
  *
+ * --mismatched (23.09.2026): także karty z nazwą innego wyrobu — import Bolle z 12.09.2026 (sprzed poprawki 88713db)
+ * przepisał nazwę z wiersza wyżej na 189 kart innych modeli (mismatchedNames). --account wybiera powiązanie konta
+ * (np. producenta: nazwa oficjalna zamiast nazwy dystrybutora). Nazwa ze źródła obcojęzycznego zostaje po angielsku
+ * do tłumaczenia przez b2b:translate — tak samo jak nazwa nowej karty.
+ *
  * Domyślnie tylko podgląd — zapis wymaga --apply. Przed zapisem powstaje kopia zapasowa (nazwa
  * i kategoria sprzed naprawy oraz wartości wpisane przez naprawę), --restore przywraca stan sprzed naprawy
  * tylko kartom, których nazwa i kategoria są wciąż takie, jak zostawiła je naprawa — poprawki zrobione
@@ -40,11 +46,14 @@ final class RepairB2bNamesCommand extends Command
                             {--price-list= : Numer cennika, którego karty sprawdzić}
                             {--category= : Kategoria dla kart, których kategoria jest samą liczbą (bez tej opcji tylko wypis)}
                             {--id=* : Zawęź do tych kart (np. inna kategoria dla sandałów, inna dla półbutów)}
+                            {--except=* : Pomiń te karty (numery kart z podglądu)}
+                            {--mismatched : Karty z nazwą innego wyrobu albo nazwą powtórzoną na kartach różnych wyrobów (nie tylko nazwa-typ)}
+                            {--account= : Nazwa z powiązania tego konta B2B (np. producenta zamiast dystrybutora)}
                             {--backup= : Plik kopii zapasowej JSON (domyślnie storage/app/repair-backups)}
                             {--restore= : Przywróć nazwę i kategorię z kopii zapasowej i zakończ}
                             {--apply : Zapisz zmiany (bez tej flagi tylko podgląd)}';
 
-    protected $description = 'Przywraca nazwę z powiązania B2B kartom cennika z nazwą-typem wyrobu („sandały”); kategoria-liczba tylko z --category (podgląd bez --apply)';
+    protected $description = 'Przywraca nazwę z powiązania B2B kartom cennika z nazwą-typem wyrobu („sandały”), z --mismatched także z nazwą innego wyrobu; kategoria-liczba tylko z --category (podgląd bez --apply)';
 
     public function handle(): int
     {
@@ -71,34 +80,40 @@ final class RepairB2bNamesCommand extends Command
         $products = Product::query()->whereIn('id', $listIds)->orderBy('id')->get();
         $typeWords = $this->typeWords($products);
         $onlyIds = array_values(array_filter(array_map('intval', (array) $this->option('id'))));
+        $exceptIds = array_values(array_filter(array_map('intval', (array) $this->option('except'))));
         $category = trim((string) $this->option('category'));
+        $accountId = (int) $this->option('account') ?: null;
+        $mismatched = $this->option('mismatched')
+            ? $this->mismatchedNames($products, $this->linksOf($products->pluck('id')->all(), $accountId))
+            : [];
 
-        $candidates = $products->filter(function (Product $p) use ($typeWords, $onlyIds): bool {
-            if ($onlyIds !== [] && ! in_array((int) $p->id, $onlyIds, true)) {
+        $candidates = $products->filter(function (Product $p) use ($typeWords, $onlyIds, $exceptIds, $mismatched): bool {
+            if (($onlyIds !== [] && ! in_array((int) $p->id, $onlyIds, true)) || in_array((int) $p->id, $exceptIds, true)) {
                 return false;
             }
 
-            return isset($typeWords[$this->word((string) $p->name)]) || $this->isNumericCategory($p);
+            return isset($typeWords[$this->word((string) $p->name)]) || isset($mismatched[(int) $p->id]) || $this->isNumericCategory($p);
         })->values();
 
         if ($candidates->isEmpty()) {
-            $this->info('Karty tego cennika nie mają nazwy-typu wyrobu ani kategorii-liczby — nic do naprawy.');
+            $this->info($this->option('mismatched')
+                ? 'Karty tego cennika mają nazwy pasujące do wyrobu u dostawcy i nie mają kategorii-liczby — nic do naprawy.'
+                : 'Karty tego cennika nie mają nazwy-typu wyrobu ani kategorii-liczby — nic do naprawy.');
 
             return self::SUCCESS;
         }
 
-        $links = B2bProductLink::query()
-            ->whereIn('product_id', $candidates->pluck('id')->all())
-            ->orderBy('id')
-            ->get()
-            ->groupBy('product_id');
+        $links = $this->linksOf($candidates->pluck('id')->all(), $accountId);
 
         /** @var list<array{product: Product, name: ?string, category: ?string, note: string}> $changes */
         $changes = [];
         foreach ($candidates as $product) {
             $name = null;
             $notes = [];
-            if (isset($typeWords[$this->word((string) $product->name)])) {
+            if (isset($mismatched[(int) $product->id])) {
+                $notes[] = $mismatched[(int) $product->id];
+            }
+            if (isset($typeWords[$this->word((string) $product->name)]) || isset($mismatched[(int) $product->id])) {
                 $link = $this->pickLink($product, $links->get($product->id, collect()));
                 if ($link === null) {
                     $notes[] = 'brak powiązania B2B z nazwą — nazwa zostaje';
@@ -206,6 +221,9 @@ final class RepairB2bNamesCommand extends Command
         }
         $this->info("Poprawiono {$names} nazw i {$categories} kategorii. Kopia zapasowa: {$backup}");
         $this->line("Przywrócenie stanu sprzed: --restore=\"{$backup}\"");
+        if ($accountId !== null && $names > 0) {
+            $this->line("Nazwy ze źródła obcojęzycznego przetłumaczy: b2b:translate {$accountId}");
+        }
 
         return self::SUCCESS;
     }
@@ -243,6 +261,68 @@ final class RepairB2bNamesCommand extends Command
         $threshold = self::TYPE_WORD_SHARE * $products->count();
 
         return array_filter($singles, static fn (int $n): bool => $n >= $threshold);
+    }
+
+    /**
+     * Powiązania kart z niepustą nazwą u dostawcy, pogrupowane po karcie; z $accountId — tylko tego konta.
+     *
+     * @param  list<int>  $productIds
+     * @return Collection<int, Collection<int, B2bProductLink>>
+     */
+    private function linksOf(array $productIds, ?int $accountId): Collection
+    {
+        return B2bProductLink::query()
+            ->whereIn('product_id', $productIds)
+            ->when($accountId !== null, static fn ($q) => $q->where('b2b_account_id', $accountId))
+            ->orderBy('id')
+            ->get()
+            ->groupBy('product_id');
+    }
+
+    /**
+     * Karty z nazwą przepisaną z innego wyrobu (import Bolle 12.09.2026, sprzed poprawki 88713db: nazwa z wiersza wyżej
+     * także dla innego modelu — 189 kart, np. okulary TRACKER nazwane „XP”, przyłbica FLASH „Napotnik do przyłbic…”):
+     * - nazwa nie nazywa wyrobu z powiązania (B2bProductNameMatch),
+     * - albo ta sama nazwa stoi na kartach, które u dostawcy są różnymi wyrobami (NESPSN10E/20E/30E — okulary NESS+
+     *   z nazwą zestawu uszczelki NESS+; wspólna rodzina wystarcza regule, ale nie czyni wyrobu tym samym). Taka grupa
+     *   obejmuje też kartę, z której nazwę przepisano — ona dostaje nazwę producenta, nadal prawdziwą (--except, by ją zostawić).
+     *
+     * @param  Collection<int, Product>  $products
+     * @param  Collection<int, Collection<int, B2bProductLink>>  $links
+     * @return array<int, string> product_id => powód
+     */
+    private function mismatchedNames(Collection $products, Collection $links): array
+    {
+        $remote = [];
+        foreach ($products as $product) {
+            $link = $this->pickLink($product, $links->get($product->id, collect()));
+            if ($link !== null) {
+                $remote[(int) $product->id] = trim((string) $link->remote_name);
+            }
+        }
+        $groups = $products
+            ->filter(static fn (Product $p): bool => isset($remote[(int) $p->id]))
+            ->groupBy(static fn (Product $p): string => mb_strtolower(trim((string) $p->name)));
+
+        $reasons = [];
+        foreach ($products as $product) {
+            $id = (int) $product->id;
+            if (! isset($remote[$id]) || trim((string) $product->name) === $remote[$id]) {
+                continue;
+            }
+            if (! B2bProductNameMatch::sameProduct((string) $product->name, $remote[$id], (string) $product->sku)) {
+                $reasons[$id] = 'nazwa innego wyrobu';
+
+                continue;
+            }
+            $group = $groups->get(mb_strtolower(trim((string) $product->name)), collect());
+            $distinct = $group->map(static fn (Product $p): string => $remote[(int) $p->id])->unique()->count();
+            if ($distinct > 1) {
+                $reasons[$id] = sprintf('ta sama nazwa na %d kartach różnych wyrobów', $group->count());
+            }
+        }
+
+        return $reasons;
     }
 
     /** Cała nazwa jako jedno słowo z samych liter (małymi), inaczej ''. */

@@ -10,6 +10,7 @@ use App\Services\B2b\B2bManufacturerRules;
 use App\Services\B2b\B2bTextTranslator;
 use App\Services\B2b\B2bTranslationRejected;
 use App\Services\Enrichment\EnrichmentSlots;
+use App\Support\B2bProductNameMatch;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -39,6 +40,8 @@ use Throwable;
  * - Odrzucenie (23.09.2026): odcisk wysłanego tekstu na powiązaniu (translation_rejected_hash) — pending() nie zgłasza
  *   go ponownie, bo model z temperaturą 0 odpowiedziałby tak samo; nowy tekst u dostawcy ma inny odcisk. Karty
  *   z odrzuceniem wypisuje b2b:translate --rejected (do ręcznego tłumaczenia). Udane tłumaczenie czyści odcisk.
+ * - Kontekst nazwy karty (23.09.2026): nazwa karty idzie do modelu jako słownictwo katalogu tylko wtedy, gdy nazywa
+ *   ten sam wyrób co nazwa u dostawcy (B2bProductNameMatch) — karty z nazwą innego wyrobu psuły tłumaczenie.
  *
  * Unikalność do startu (ShouldBeUniqueUntilProcessing): kolejne przebiegi importu nie dublują czekającego joba,
  * a ponowne zlecenie z handle() przy braku slotu nie jest po cichu odrzucane przez blokadę tego samego joba
@@ -111,8 +114,8 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
 
         try {
             // Sama nazwa (opis edytowany ręcznie) — opis pusty, jego tłumaczenie ignorujemy.
-            // nazwa karty w katalogu jako kontekst terminologiczny — tłumaczenie ma mówić tak samo jak katalog
-            $translated = $translator->translate($start['description'] ?? '', $start['name'], $product->name);
+            // nazwa karty w katalogu jako kontekst terminologiczny — tylko gdy nazywa ten sam wyrób (contextName)
+            $translated = $translator->translate($start['description'] ?? '', $start['name'], self::contextName($product, $link));
         } catch (B2bTranslationRejected $e) {
             $this->reject($product, (int) $link->id, $start, $e->getMessage(), $e->modelResponse);
 
@@ -127,6 +130,17 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
             $this->reject($product, (int) $link->id, $start, 'puste tłumaczenie');
 
             return;
+        }
+        // Nazwa bez zmian zostałaby równa nazwie u dostawcy, więc pending() zgłaszałby ją przy każdym przebiegu. Sama
+        // nazwa — odrzucenie (zapamiętane, na liście --rejected); z opisem — opis zapisujemy, nazwa wróci sama i wtedy
+        // odpadnie tą samą drogą.
+        if ($name !== null && $name === trim((string) $start['name'])) {
+            if ($description === null) {
+                $this->reject($product, (int) $link->id, $start, 'nazwa bez zmian po tłumaczeniu');
+
+                return;
+            }
+            $name = null;
         }
         if ($name !== null && mb_strlen($name) > self::MAX_NAME_LENGTH) {
             $this->reject($product, (int) $link->id, $start, 'nazwa po tłumaczeniu dłuższa niż '.self::MAX_NAME_LENGTH.' znaków');
@@ -180,21 +194,32 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
     }
 
     /**
+     * Nazwa karty jako kontekst dla modelu — tylko gdy nazywa ten sam wyrób co nazwa u dostawcy
+     * (B2bProductNameMatch). W innym razie null — lepiej bez kontekstu niż z fałszywym.
+     */
+    private static function contextName(Product $product, B2bProductLink $link): ?string
+    {
+        $cardName = (string) $product->name;
+
+        return B2bProductNameMatch::sameProduct($cardName, $link->remote_name, (string) $product->sku) ? $cardName : null;
+    }
+
+    /**
      * Co na karcie wciąż jest tekstem źródła do przetłumaczenia: opis zapisany przez import i nietknięty od tamtej
-     * pory, nazwa ze źródła (tylko gdy $withName). Karta z tłumaczeniem (source_description_hash) — nic.
+     * pory, nazwa ze źródła (tylko gdy $withName). Karta z tłumaczeniem opisu (source_description_hash) — opisu nie,
+     * nazwa ze źródła nadal tak.
      * Wspólne dla joba, importu (zaległe karty przy każdym przebiegu) i b2b:translate.
      *
      * @return array{description: bool, name: bool}
      */
     public static function pending(Product $product, B2bProductLink $link, bool $withName): array
     {
-        if ($link->source_description_hash !== null) {
-            return ['description' => false, 'name' => false];
-        }
-
         $current = (string) ($product->description ?? '');
         $pending = [
-            'description' => trim($current) !== ''
+            // opis przetłumaczony (source_description_hash) — gotowy; nazwa ze źródła niezależnie od opisu
+            // (23.09.2026: 18 kart Bolle z 15.09 miało przetłumaczony opis, a nazwę wciąż po angielsku)
+            'description' => $link->source_description_hash === null
+                && trim($current) !== ''
                 && $link->description_hash !== null
                 && hash_equals($link->description_hash, sha1($current)),
             'name' => $withName
@@ -267,7 +292,7 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
             if ($product === null || $link === null) {
                 return 'karta albo powiązanie usunięte';
             }
-            if ($link->source_description_hash !== null) {
+            if ($start['description'] !== null && $link->source_description_hash !== null) {
                 return 'opis już przetłumaczony';
             }
             if ($link->description_hash !== $start['description_hash']) {
@@ -305,7 +330,7 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
      * nie zlecają tego samego tekstu, a karta trafia na listę do ręcznego tłumaczenia (b2b:translate --rejected).
      * Odcisk tylko gdy powiązanie wciąż wskazuje ten sam tekst (import mógł w międzyczasie zapisać nowy).
      *
-     * @param  array{description_hash: string|null, rejection_key: string}  $start
+     * @param  array{description: string|null, description_hash: string|null, rejection_key: string}  $start
      * @param  array<string, mixed>|null  $modelResponse
      */
     private function reject(Product $product, int $linkId, array $start, string $reason, ?array $modelResponse = null): void
@@ -324,7 +349,8 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
 
         B2bProductLink::query()
             ->whereKey($linkId)
-            ->whereNull('source_description_hash')
+            // opis w wysłanym tekście — powiązanie musi go wciąż mieć nieprzetłumaczony; sama nazwa — bez tego warunku
+            ->when($start['description'] !== null, static fn ($q) => $q->whereNull('source_description_hash'))
             ->where(fn ($q) => $start['description_hash'] === null
                 ? $q->whereNull('description_hash')
                 : $q->where('description_hash', $start['description_hash']))
