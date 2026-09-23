@@ -45,6 +45,13 @@ final class ProductAiSearchService
 
     private const RANK_CARDS = 24;
 
+    /**
+     * Miejsca w kartach do oceny zawsze dla czołówki puli (kolejność wyszukiwania = zgodność z tekstem wymagania).
+     * Zob. cardsForRanking(). Symulacja na golden set 23.09.2026: 8 miejsc — 55 oczekiwanych kart w ocenie
+     * zamiast 52, żadna nie wypada, zakazanych bez zmian.
+     */
+    private const RANK_CARDS_POOL_TOP = 8;
+
     private const MAX_MATCHES = 20;
 
     /**
@@ -4483,7 +4490,26 @@ final class ProductAiSearchService
         usort($with, static fn (array $a, array $b): int => [$b['hits'], $a['position']] <=> [$a['hits'], $b['position']]);
         $withProducts = collect(array_map(static fn (array $row): Product => $row['product'], $with));
 
-        return $this->interleaveApparelSetProducts($query, $withProducts->concat($without))->take(self::RANK_CARDS)->values();
+        // Czołówka puli ma zagwarantowane miejsca. Dowód warunku z normy wypychał karty najlepiej zgodne z rodzajem
+        // wyrobu: pod „Rękawice drelichowe pięciopalcowe EN374, EN420” (zapytanie #55, 23.09.2026) 24 miejsca zajęły
+        // rękawice chemiczne z EN 374, a drelichowe RD, RDP, RN — 3., 4. i 7. w puli, bez norm na karcie — nie
+        // dotarły do modelu; pozycja wyszła „brak w katalogu” z lateksem na 40%. Kolejność bez zmian: karta
+        // z dowodem wszystkich warunków daleko w puli (ATG 44-304 na 53.) dalej idzie do modelu pierwsza.
+        $ordered = $this->interleaveApparelSetProducts($query, $withProducts->concat($without))->values();
+        $keepIds = [];
+        foreach ($candidates->take(self::RANK_CARDS_POOL_TOP) as $product) {
+            $keepIds[(int) $product->id] = true;
+        }
+        foreach ($ordered as $product) {
+            if (count($keepIds) >= self::RANK_CARDS) {
+                break;
+            }
+            $keepIds[(int) $product->id] = true;
+        }
+
+        return $ordered
+            ->filter(static fn (Product $p): bool => isset($keepIds[(int) $p->id]))
+            ->values();
     }
 
     /**

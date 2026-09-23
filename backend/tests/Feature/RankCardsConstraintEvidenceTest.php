@@ -63,6 +63,55 @@ final class RankCardsConstraintEvidenceTest extends TestCase
     }
 
     /**
+     * Zapytanie #55 z 23.09.2026: „Rękawice drelichowe pięciopalcowe EN374, EN420”. Drelichowe RD, RDP, RN stały
+     * w czołówce puli, ale bez norm na karcie — 24 miejsca zajęły rękawice chemiczne z EN 374 i pozycja wyszła
+     * „brak w katalogu”. Czołówka puli ma miejsca zagwarantowane; kolejność dalej od dowodu warunków.
+     */
+    public function test_top_of_pool_reaches_ranking_even_without_constraint_evidence(): void
+    {
+        $base = [
+            'manufacturer' => 'REIS',
+            'category' => 'Rękawice',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ];
+        $pool = collect();
+        foreach (['RD', 'RDP', 'RN'] as $sku) {
+            $pool->push(Product::query()->create($base + [
+                'sku' => $sku,
+                'name' => 'Rękawice ochronne drelichowe '.$sku.'.',
+                'description' => 'Rękawice drelichowe pięciopalcowe, wzmocnienie wewnętrznej strony dłoni.',
+            ]));
+        }
+        for ($i = 1; $i <= 30; $i++) {
+            $pool->push(Product::query()->create($base + [
+                'sku' => 'CHEM-'.$i,
+                'name' => 'Rękawice chemoodporne lateksowe '.$i,
+                'description' => 'Rękawice chroniące przed chemikaliami.',
+                'norms' => 'EN 374-1, EN 420',
+            ]));
+        }
+
+        $service = app(ProductAiSearchService::class);
+        $cards = (new \ReflectionMethod($service, 'cardsForRanking'))->invoke(
+            $service,
+            'Rękawice drelichowe pięciopalcowe EN374,EN420(2)(brak rozmiaru)',
+            $pool,
+            ['EN 374', 'EN 420'],
+        )->pluck('sku')->all();
+
+        $this->assertCount(24, $cards);
+        foreach (['RD', 'RDP', 'RN'] as $sku) {
+            $this->assertContains($sku, $cards, $sku.' z czołówki puli nie dotarła do modelu');
+        }
+        // karty z dowodem warunków dalej idą pierwsze
+        $this->assertSame('CHEM-1', $cards[0]);
+    }
+
+    /**
      * Produkcja (debug-match po 2e0099b): 44-304 w kandydatach, dowód 8/10 igieł, a w kartach rankingu najsłabsza
      * karta miała 1/10 — reguła odporności na przecięcie brała do rankingu tylko karty z przecięciem w nazwie.
      */
