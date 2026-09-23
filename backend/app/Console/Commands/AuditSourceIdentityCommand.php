@@ -34,7 +34,8 @@ use RuntimeException;
  * 5. „brak danych” w opisie albo w parametrach (specs);
  * 6. status „done” bez opisu.
  *
- * Adres wpisany ręcznie (shop_source_url) to decyzja człowieka — nie oceniamy go ani w 1, ani w 2.
+ * Adres wpisany ręcznie (shop_source_url) to decyzja człowieka — nie oceniamy go ani w 1, ani w 2. Adres karty
+ * u dostawcy B2B, wpisany przez synchronizację (Product::trustedShopUrl), oceniamy jak każdy inny.
  *
  * Do --out (format products:recheck-skus --file=) idą karty z kategorii 1, 3 i 4 oraz z 2, gdy nasz sklep jest
  * jedynym albo głównym źródłem. 5 i 6 są wypisane osobno z poleceniem: opis z jednym zdaniem „brak danych” bywa poza
@@ -243,7 +244,7 @@ final class AuditSourceIdentityCommand extends Command
         $mainRejected = false;
         $ownShop = [];
         foreach ($sourceUrls as $i => $url) {
-            if ($product->isHintedShopUrl($url)) {
+            if ($product->isTrustedShopUrl($url)) {
                 continue;
             }
             if ($this->isOwnShopUrl($url)) {
@@ -277,11 +278,14 @@ final class AuditSourceIdentityCommand extends Command
         }
 
         if ($description !== '') {
-            // 3. Opis innego modelu. Adres wpisany ręcznie zwalnia opis ze sprawdzenia (jak isUsableProductDescription).
+            // 3. Opis innego modelu. Adres wpisany ręcznie zwalnia opis ze sprawdzenia (jak isUsableProductDescription);
+            // link z synchronizacji B2B zwalnia tylko opis zapisany przez sam łącznik (bez źródeł z sieci).
+            $descriptionExempt = $product->trustedShopUrl() !== null
+                || ($product->hintedShopUrl() !== null && $sourceUrls === []);
             if ($this->identity->textNamesAnotherGroupedCode($description, $product)) {
                 $findings[self::CATEGORY_FOREIGN_MODEL] = 'opis ma kod grupowy innego modelu (nasz '
                     .$this->identity->groupedNumericModelCode($product).')';
-            } elseif ($product->hintedShopUrl() === null
+            } elseif (! $descriptionExempt
                 && ! $this->enrichment->descriptionMentionsProduct($description, $product, $sourceUrls)) {
                 $findings[self::CATEGORY_UNCONFIRMED_DESCRIPTION] = 'opis nie nazywa karty kodem ani nazwą z marką';
             }

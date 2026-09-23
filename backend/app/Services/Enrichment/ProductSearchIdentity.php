@@ -3948,7 +3948,7 @@ final class ProductSearchIdentity
      */
     public function pageNamesAnotherFootwearVariant(string $url, string $title, string $text, Product $product): bool
     {
-        if ($product->isHintedShopUrl($url)) {
+        if ($product->isTrustedShopUrl($url)) {
             return false;
         }
         $card = $this->cardFootwearDesignation($product);
@@ -4013,7 +4013,7 @@ final class ProductSearchIdentity
      */
     public function pageNamesAnotherRespiratoryClass(string $url, string $title, Product $product): bool
     {
-        if ($product->isHintedShopUrl($url)) {
+        if ($product->isTrustedShopUrl($url)) {
             return false;
         }
         $name = mb_strtolower(Str::ascii((string) $product->name));

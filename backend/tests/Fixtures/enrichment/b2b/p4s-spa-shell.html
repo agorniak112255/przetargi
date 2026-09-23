@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta charset="utf-8">    
+		<title class="i18n" data-i18n="application.title"></title>
+		<link href="css/plugins/autocomplete/jquery.autocomplete.css" rel="stylesheet">
+		<link href="css/bootstrap.min.css" rel="stylesheet">
+		<link href="font-awesome/css/all.css" rel="stylesheet">
+		<link href="css/animate.css" rel="stylesheet">		
+		<link href="css/plugins/dataTables/datatables.min.css" rel="stylesheet">
+		<link href="css/plugins/jsTree/style.min.css" rel="stylesheet">
+		<link href="css/plugins/slick/slick.css" rel="stylesheet">
+		<link href="css/plugins/slick/slick-theme.css" rel="stylesheet">
+		<link href="css/plugins/touchspin/jquery.bootstrap-touchspin.min.css" rel="stylesheet">		
+		<link href="css/plugins/datapicker/datepicker3.css" rel="stylesheet">
+		<link href="css/plugins/jQueryUI/jquery-ui.css" rel="stylesheet">
+		<link href="css/plugins/jqGrid/ui.jqgrid.css" rel="stylesheet">
+		<link href="css/plugins/sweetalert/sweetalert.css" rel="stylesheet">
+        <link href="css/plugins/select2/select2.min.css" rel="stylesheet">
+		<link href="css/style.css" rel="stylesheet">
+		<link href="css/app.css" rel="stylesheet">
+	</head>
+	<body>		
+		<div id="wrapper" v-cloak>
+			<nav v-if="loggedIn || anonymousSession" class="navbar-default navbar-static-side" role="navigation">
+				<div class="sidebar-collapse">
+					<ul class="nav metismenu" id="side-menu">
+                        <li><a href="#" v-on:click="minimalize($event)"><i class="fa fa-bars"></i> </a></li>
+						<li class="nav-header">
+							<div class="dropdown profile-element">
+								<span>
+									<img class="img" src="img/logo.png" style="max-width: 160px;">
+								</span>								
+								<router-link v-bind:to="punchOutLevel === '2' ? '' : '/deliveryPlaces'" v-if="loggedIn" data-toggle="tooltip" data-placement="left"
+										v-bind:data-original-title="multipleDeliveryPlaces ? i18n.t('application.selectDeliveryPlace') : ''">
+									<span class="clear">
+										<span class="block m-t-xs">
+											<span class="font-bold">{{userName}}</span>
+										</span>
+										<span class="text-xs block">
+											{{currentCompanyName}}
+										</span>
+										<span class="text-xs block" v-if="costCentre !==''">
+											<span class="i18n" data-i18n="application.costCentre"></span> {{costCentre}}
+										</span>
+									</span>
+								</router-link>
+							</div>
+						</li>
+						<li v-bind:class="activeMenuItem === 'products' ? 'active' : ''" v-if="punchOutLevel !== '2' && accessRights['PRODUKTY.KATALOG']">
+							<router-link to="/products"><i class="fa fa-qrcode"></i> <span class="nav-label i18n" data-i18n="application.products"></span></router-link>
+						</li>
+						<li v-bind:class="activeMenuItem === 'employees' ? 'active' : ''" v-if="accessRights['PRACOWNICY']">
+							<router-link to="/employees"><i class="fa fa-people-carry"></i> <span class="nav-label i18n" data-i18n="application.employees"></span></router-link>
+						</li>
+						<li v-bind:class="activeMenuItem === 'assignations' ? 'active' : ''" v-if="accessRights['PRACOWNICY'] || assignationsWithoutEmployees">
+							<router-link to="/assignations"><i class="fa fa-address-card"></i> <span class="nav-label i18n" data-i18n="application.assignations"></span></router-link>
+						</li>
+                        <li v-bind:class="activeMenuItem === 'dueProducts' ? 'active' : ''" v-if="accessRights['PRACOWNICY'] && assignationOrders">
+							<router-link to="/dueProducts"><i class="fa fa-calendar"></i> <span class="nav-label i18n" data-i18n="application.dueProducts"></span></router-link>
+						</li>
+						<li v-bind:class="activeMenuItem === 'carts' ? 'active' : ''"
+								v-if="(punchOutLevel === '0' || (punchOutLevel === '1' && punchOutWrite === '1')) && accessRights['ZAMOWIENIA.SKLADANIE']">
+							<router-link to="/carts"><i class="fa fa-shopping-cart"></i> <span class="nav-label i18n" data-i18n="application.carts"></span></router-link>
+						</li>
+						<li v-bind:class="activeMenuItem === 'orders' ? 'active' : ''"
+                                v-if="punchOutLevel !== '2'
+                                    && (accessRights['ZAMOWIENIA.PRZEGLAD'] || accessRights['ZAMOWIENIA.SKLADANIE'] || accessRights['ZAMOWIENIA.ZATWIERDZANIE.LIMIT'] || accessRights['ZAMOWIENIA.ZATWIERDZANIE.BUDZET'])">
+							<router-link to="/orders"><i class="fa fa-list"></i> <span class="nav-label i18n" data-i18n="application.orders"></span></router-link>
+						</li>
+						<li v-bind:class="activeMenuItem === 'user' ? 'active' : ''" v-if="punchOutLevel === '0' && !anonymousSession">
+							<router-link to="/user"><i class="fa fa-user"></i> <span class="nav-label i18n" data-i18n="application.user"></span></router-link>
+						</li>
+						<li v-bind:class="activeMenuItem === 'users' ? 'active' : ''" v-if="accessRights['UZYTKOWNICY.ZARZADZANIE'] === 'UZYTKOWNICY.ZARZADZANIE.DODAWANIE'">
+							<router-link to="/users"><i class="fa fa-users"></i> <span class="nav-label i18n" data-i18n="application.users"></span></router-link>
+						</li>
+						<li v-bind:class="activeMenuItem === 'costCentres' ? 'active' : ''" v-if="accessRights['MPK.ZARZADZANIE']">
+							<router-link to="/costCentres"><i class="fa fa-coins"></i> <span class="nav-label i18n" data-i18n="application.costCentres"></span></router-link>
+						</li>
+						<li v-bind:class="activeMenuItem === 'budgets' ? 'active' : ''" v-if="accessRights['BUDZETY']">
+							<router-link to="/budgets"><i class="fas fa-euro-sign"></i> <span class="nav-label i18n" data-i18n="application.budgets"></span></router-link>
+						</li>
+						<li v-bind:class="activeMenuItem === 'reports' ? 'active' : ''" v-if="accessRights['RAPORTY']">
+							<router-link to="/reports"><i class="fa fa-file"></i> <span class="nav-label i18n" data-i18n="application.reports"></span></router-link>
+						</li>
+                        <li v-bind:class="activeMenuItem === 'informations' ? 'active' : ''" v-if="!anonymousSession">
+							<router-link to="/informations"><i class="fa fa-info-circle"></i> <span class="nav-label i18n" data-i18n="application.informations"></span></router-link>
+						</li>
+					</ul>					
+				</div>
+			</nav>
+
+			<div id="page-wrapper" v-bind:class="'white-bg' + (loggedIn || anonymousSession ? '' : ' ml-0')">
+				<div v-bind:class="'border-bottom' + (loggedIn || anonymousSession ? '' : ' d-none')">
+					<nav class="navbar navbar-static-top white-bg" role="navigation" style="margin-bottom: 0">
+						<div class="navbar-header">
+							<a class="minimalize-styl-2 btn btn-primary " href="#" v-on:click="homePage($event)"><i class="fa fa-home"></i> </a>
+							<router-link v-bind:to="returnButton.link" class="btn btn-white btn-sm mt-3" v-if="returnButton.link"><i class="fa fa-arrow-left"></i> {{returnButton.name}}</router-link>
+						</div>						
+						<div>
+							<ol class="breadcrumb mt-4">
+								<li class="breadcrumb-item" v-for="breadcrumbItem in breadcrumb">
+									<router-link v-bind:to="breadcrumbItem.link" v-if="breadcrumbItem.link">{{breadcrumbItem.name}}</router-link>
+									<strong v-if="!breadcrumbItem.link">{{breadcrumbItem.name}}</strong>
+								</li>								
+							</ol>
+						</div>
+						<div v-if="activeMenuItem === 'products' && budget !== ''" class="mt-2 ml-3">
+							<div class="width-150px float-left">
+								<div>
+									<span>{{budgetType}}</span>
+									<span class="float-right">{{budget}}</span>
+								</div>
+								<div v-bind:class="'progress ' + (budgetUsagePercentBelowLimit ? '' : 'progress-above-limit') + ' progress-small'">
+									<div v-bind:style="'width: ' + budgetUsagePercent + '%;'" class="progress-bar"></div>
+								</div>
+							</div>
+							<div v-if="remainingBudget !== ''" class="width-150px float-left ml-1">
+								<div>
+									<span class="i18n" data-i18n="application.remainingBudget"></span>
+									<span class="float-right">{{remainingBudget}}</span>
+								</div>
+								<div class="progress progress-small">
+									<div v-bind:style="'width: ' + remainingBudgetPercent + '%;'" class="progress-bar"></div>
+								</div>
+							</div>
+							<div v-if="annualBudget !== ''" class="width-150px float-left ml-1">
+								<div>
+									<span class="i18n" data-i18n="application.annualBudget"></span>
+									<span class="float-right">{{annualBudget}}</span>
+								</div>
+								<div v-bind:class="'progress ' + (annualBudgetUsageBelowLimit ? '' : 'progress-above-limit') + ' progress-small'">
+									<div v-bind:style="'width: ' + annualBudgetUsagePercent + '%;'" class="progress-bar"></div>
+								</div>
+							</div>							
+						</div>
+						<div class="ml-3">							
+							<router-link to="/cart/0" class="btn btn-primary btn-sm mt-3 mr-1" v-if="(accessRights['PRODUKTY.KATALOG'] || assignationOrders) && !disableCart && punchOutLevel !== '2'">
+								<img src="/img/shopping-basket.png"> <span class="i18n" data-i18n="application.cart"></span> <span class="badge badge-primary">{{orderNetValue}}</span>
+							</router-link>
+							<ul class="nav navbar-top-links navbar-right float-right">
+								<li v-if="punchOutLevel === '0' && !anonymousSession">
+									<router-link to="/notifications">
+                                        <i class="fa fa-bell mr-0"> </i><span class="label label-primary" v-if="notificationsNumber">{{notificationsNumber}}</span> <span class="i18n" data-i18n="application.notifications"></span>
+                                    </router-link>
+								</li>
+								<li v-if="punchOutLevel === '0' && !anonymousSession">
+									<router-link to="/logout"><i class="fa fa-sign-out-alt mr-1"></i><span class="i18n" data-i18n="application.logOut"></span></router-link>								
+								</li>
+                                <li v-if="anonymousSession">
+									<router-link to="/login"><i class="fa fa-sign-in-alt mr-1"></i><span class="i18n" data-i18n="application.logIn"></span></router-link>								
+								</li>
+                                <li v-if="languages.length > 1">
+                                    <select id="selectLanguage" class="form-control mt-3 mb-1" v-model="language">
+                                        <option v-for="language in languages" v-bind:value="language">{{language.toUpperCase()}}</option>
+                                    </select>
+                                </li>
+								<li class="ml-1 text-center line-height-13px">
+									{{currentDate}}<br>
+									{{currentTime}}
+								</li>
+							</ul>
+						</div>
+					</nav>
+				</div>
+				
+				<div class="wrapper wrapper-content animated fadeInRight">
+					<router-view></router-view>
+				</div>
+			</div>
+            
+            <div v-if="!cookiesAllowed" class="fixed-bottom cookies-info">
+                <span class="i18n" data-i18n="application.cookiesInfo"></span>
+                <button type="button" class="btn btn-primary i18n" v-on:click="allowCookies" data-i18n="application.allowCookies"></button>	
+            </div>
+		</div>
+	
+		<div id="browserInfo" class="alert alert-danger col-lg-6 d-none">Ten serwis nie jest dostępny dla Twojej przeglądarki, prosimy o skorzystanie z Chrome, Firefox lub Edge.</div>        
+
+		<script src="js/jquery-3.1.1.min.js"></script>
+		<script src="js/popper.min.js"></script>
+		<script src="js/bootstrap.min.js"></script>
+		<script src="js/plugins/metisMenu/jquery.metisMenu.js"></script>
+		<script src="js/plugins/slimscroll/jquery.slimscroll.min.js"></script>
+		<script src="js/plugins/dataTables/datatables.min.js"></script>
+		<script src="js/plugins/dataTables/dataTables.bootstrap4.min.js"></script>
+		<script src="js/plugins/jsTree/jstree.min.js"></script>
+		<script src="js/plugins/slick/slick.min.js"></script>
+		<script src="js/plugins/autocomplete/jquery.autocomplete.min.js"></script>
+		<script src="js/plugins/datapicker/bootstrap-datepicker.js"></script>
+		<script src="js/plugins/datapicker/locales/bootstrap-datepicker.pl.js"></script>
+        <script src="js/plugins/datapicker/locales/bootstrap-datepicker.cz.js"></script>
+		<script src="js/plugins/jqGrid/jquery.jqGrid.min.js"></script>		
+		<script src="js/plugins/sweetalert/sweetalert.min.js"></script>
+		<script src="js/plugins/i18next/i18next.min.js"></script>
+        <script src="js/plugins/select2/select2.full.min.js"></script>
+        <script src="js/plugins/jasny/jasny-bootstrap.min.js"></script>
+		<script src="js/inspinia.js"></script>
+		<script src="js/vue/vue.min.js"></script>
+		<script src="js/vue/vue-router.js"></script>
+		<script src="js/wizja/dist/checkBrowser.js"></script>
+		<script src="js/wizja/dist/config.js"></script>
+		<script src="js/wizja/dist/index.js?version=2026091400"></script>
+	</body>
+</html>

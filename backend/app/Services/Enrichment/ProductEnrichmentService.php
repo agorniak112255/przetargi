@@ -475,7 +475,9 @@ final class ProductEnrichmentService
         array_unshift($results, [
             'url' => $hint,
             'title' => 'Wskazana karta sklepu',
-            'snippet' => trim((string) $product->name.' '.(string) $product->sku),
+            // Nazwa z cennika w snippecie to nie treść strony — przy linku z synchronizacji B2B, gdy strona nie
+            // odpowie, taki snippet szedł do stron zapasowych jak tekst karty.
+            'snippet' => $product->trustedShopUrl() !== null ? trim((string) $product->name.' '.(string) $product->sku) : '',
             'hinted' => true,
         ]);
         $pack['results'] = $results;
@@ -691,7 +693,7 @@ final class ProductEnrichmentService
             'docs_ms' => 0,
         ];
         try {
-            if (! $force && $product->hintedShopUrl() === null && $this->applyFromSkuCache($product)) {
+            if (! $force && $product->trustedShopUrl() === null && $this->applyFromSkuCache($product)) {
                 $this->logEnrichmentTiming($timing, $started, extra: ['from_cache' => true]);
 
                 return;
@@ -1739,7 +1741,7 @@ final class ProductEnrichmentService
      */
     private function cardsCarryProductCode(array $pages, Product $product): bool
     {
-        if ($product->hintedShopUrl() !== null) {
+        if ($product->trustedShopUrl() !== null) {
             return true;
         }
         foreach ($pages as $page) {
@@ -1795,7 +1797,7 @@ final class ProductEnrichmentService
         if ($trusted === [] && $all === []) {
             return [];
         }
-        if ($product->hintedShopUrl() === null && $pages === []) {
+        if ($product->trustedShopUrl() === null && $pages === []) {
             return [];
         }
         $urls = $this->cardImagesAfterConfirmation($trusted, $all, $pages, $product);
@@ -2797,7 +2799,7 @@ final class ProductEnrichmentService
         }
 
         foreach ($urls as $url) {
-            if ($product->isHintedShopUrl($url)) {
+            if ($product->isTrustedShopUrl($url)) {
                 return [$url, 'manual'];
             }
         }
@@ -3695,7 +3697,7 @@ final class ProductEnrichmentService
             || $this->looksLikeForeignOrPartsTableDump($d)) {
             return false;
         }
-        if ($product->hintedShopUrl() !== null) {
+        if ($product->trustedShopUrl() !== null) {
             return true;
         }
 
@@ -3723,7 +3725,7 @@ final class ProductEnrichmentService
             }
             $named = $this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $product);
             $exact = $this->identity->requiresExactSkuOrNameOnCard($product);
-            $ok = $product->isHintedShopUrl($url)
+            $ok = $product->isTrustedShopUrl($url)
                 || $named
                 || (! $exact && $this->identity->isConfirmedProductCard($url, $title, $text, $product));
             if (! $ok) {
@@ -3743,7 +3745,7 @@ final class ProductEnrichmentService
      */
     private function sourceUrlIsConfirmedCard(string $url, array $pages, Product $product): bool
     {
-        if ($product->isHintedShopUrl($url)) {
+        if ($product->isTrustedShopUrl($url)) {
             return true;
         }
         foreach ($pages as $page) {
@@ -4461,12 +4463,16 @@ SYS,
         }
 
         $byUrl = [];
+        $judged = [];
         foreach ($parsed['pages'] ?? [] as $row) {
             if (! is_array($row)) {
                 continue;
             }
             $url = (string) ($row['url'] ?? '');
             $text = trim((string) ($row['text'] ?? ''));
+            if ($url !== '') {
+                $judged[mb_strtolower($url)] = true;
+            }
             if ($url === '' || $text === '' || $this->looksLikeShopChromeDescription($text)
                 || $this->looksLikeOffTopicDescription($text)) {
                 continue;
@@ -4484,8 +4490,57 @@ SYS,
         if ($cleaned === [] && $byUrl !== []) {
             $cleaned = array_values($byUrl);
         }
+        if ($cleaned !== []) {
+            return $cleaned;
+        }
 
-        return $cleaned !== [] ? $cleaned : $this->stripShopUiFromPages($pageSnippets);
+        $fallback = $this->stripShopUiFromPages($pageSnippets);
+        if (! $this->filterJudgedEveryPage($compact, $judged)) {
+            return $fallback;
+        }
+        // Filtr ocenił każdą stronę i nie znalazł faktów o wyrobie. Surowy tekst wraca tylko ze strony, która sama
+        // nazywa wyrób — inaczej komunikat „Ten serwis nie jest dostępny dla Twojej przeglądarki” szedł do modelu
+        // jako źródło, a model pisał opis z samej nazwy (karta 57476, 23.09.2026).
+        $kept = $this->stripShopUiFromPages(array_values(array_filter(
+            $pageSnippets,
+            fn (array $page): bool => $this->identity->pageHasSkuOrNameAndManufacturer(
+                (string) ($page['url'] ?? ''),
+                (string) ($page['title'] ?? ''),
+                (string) ($page['text'] ?? ''),
+                $product
+            )
+        )));
+        if (count($kept) < count($fallback)) {
+            $this->attemptLog()->add(
+                'drop',
+                'filtr stron: brak faktów o wyrobie, a strona go nie nazywa',
+                urls: array_values(array_diff(array_column($fallback, 'url'), array_column($kept, 'url')))
+            );
+        }
+
+        return $kept;
+    }
+
+    /**
+     * Czy odpowiedź filtra niesie werdykt dla każdej wysłanej strony. Odpowiedź bez listy stron albo z innymi
+     * adresami to nie ocena, tylko nieczytelna odpowiedź — wtedy zostaje surowy tekst (jak przy awarii filtra).
+     *
+     * @param  list<array{url?: string}>  $sent
+     * @param  array<string, true>  $judged
+     */
+    private function filterJudgedEveryPage(array $sent, array $judged): bool
+    {
+        if ($sent === [] || $judged === []) {
+            return false;
+        }
+        foreach ($sent as $page) {
+            $key = mb_strtolower((string) ($page['url'] ?? ''));
+            if ($key === '' || ! isset($judged[$key])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -4603,6 +4658,13 @@ SYS,
      */
     private function extractWithLlm(Product $product, array $searchResults, array $pageSnippets, ?string $sourcesNote = null): array
     {
+        // Nie ma tekstu źródła — nie ma opisu. Model z samą nazwą z cennika dopisuje wyrobowi cechy z pamięci.
+        $withText = array_filter($pageSnippets, static fn ($page): bool => is_array($page) && trim((string) ($page['text'] ?? '')) !== '');
+        if ($withText === []) {
+            $this->attemptLog()->add('desc', 'brak tekstu źródła — opis nie powstaje');
+
+            return [];
+        }
         $compactPages = $this->fitPagesToBudget($pageSnippets, 5, 8000, 20000);
         $compactSources = array_map(static function (array $r): array {
             return [

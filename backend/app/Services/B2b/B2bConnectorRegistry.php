@@ -237,6 +237,26 @@ class B2bConnectorRegistry
      * @param  class-string<B2bConnector>  $class
      * @return 'price'|'standard'|null
      */
+    /**
+     * Czy adres leży na witrynie któregoś łącznika (host łącznika albo jego subdomena: web.rawpol.com, www.ardon.pl).
+     * Takie adresy wpisuje do kart synchronizacja B2B — to nie jest link wskazany przez człowieka (Product::trustedShopUrl).
+     */
+    public static function isConnectorUrl(string $url): bool
+    {
+        $host = mb_strtolower(trim((string) parse_url(trim($url), PHP_URL_HOST), '.'));
+        if ($host === '') {
+            return false;
+        }
+        foreach (self::CONNECTORS as $class) {
+            $own = mb_strtolower($class::host());
+            if ($own !== '' && ($host === $own || str_ends_with($host, '.'.$own))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static function modeForClass(string $class): ?string
     {
         if (is_a($class, B2bStandardDiscountSite::class, true)) {

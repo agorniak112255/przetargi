@@ -268,7 +268,7 @@ final class ProductImageCandidateVerifier
         // Samo „są jakieś strony” przepuszczało każde og:image bez Vision — przy wzbogacaniu
         // strony są zawsze, więc baner kolekcji albo zdjęcie „lifestyle” szły jako packshot.
         if (! $this->identity->nameRequiresArticleType($product)
-            || $product->hintedShopUrl() !== null) {
+            || $product->trustedShopUrl() !== null) {
             return true;
         }
         if ($this->identity->imageHayHasRequiredType($url, $product)) {

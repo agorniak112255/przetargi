@@ -524,7 +524,7 @@ final class ProductPageFetcher
         if ($product === null) {
             return false;
         }
-        if ($product->isHintedShopUrl($url)
+        if ($product->isTrustedShopUrl($url)
             || $this->identity->pageHasSkuOrNameAndManufacturer($url, $title, $text, $product)) {
             return true;
         }
@@ -649,7 +649,7 @@ final class ProductPageFetcher
         if ($title === '' && $identityText !== '') {
             $title = strtok($identityText, "\n") ?: $identityText;
         }
-        $hinted = $this->matchingProduct !== null && $this->matchingProduct->isHintedShopUrl($url);
+        $hinted = $this->matchingProduct !== null && $this->matchingProduct->isTrustedShopUrl($url);
         // Karta rodziny producenta (coba.com/pl/produkt/cobastat) wymienia w tabeli części
         // „AS060003C” (na metr bieżący) i osobno „AS060003” (rolka) — dokładny numer obok
         // dłuższego to nasz produkt, nie cudzy. Batch #293: 65 takich kart poszło do kosza.

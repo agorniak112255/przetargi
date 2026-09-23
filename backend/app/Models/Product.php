@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Jobs\ReindexProductEmbeddingJob;
+use App\Services\B2b\B2bConnectorRegistry;
 use App\Support\CatalogManufacturerContext;
 use App\Support\ProductSearchBlob;
 use Illuminate\Database\Eloquent\Model;
@@ -339,6 +340,24 @@ class Product extends Model
         }
 
         return self::normalizeShopUrl($hint) === self::normalizeShopUrl($url);
+    }
+
+    /**
+     * Link do sklepu, któremu wolno ominąć bramki tożsamości — wybrany przez człowieka. Adres karty u dostawcy B2B
+     * wpisuje synchronizacja (B2bCatalogSync), a bez sesji konta strona bywa pusta: P4S oddaje tylko „Ten serwis nie
+     * jest dostępny dla Twojej przeglądarki” i model napisał z samej nazwy opis koca gaśniczego dla naklejki ze znakiem
+     * (karta 57476, 23.09.2026). Taki link dalej idzie pierwszy do pobrania, ale strona musi się potwierdzić sama.
+     */
+    public function trustedShopUrl(): ?string
+    {
+        $hint = $this->hintedShopUrl();
+
+        return $hint !== null && ! B2bConnectorRegistry::isConnectorUrl($hint) ? $hint : null;
+    }
+
+    public function isTrustedShopUrl(string $url): bool
+    {
+        return $this->trustedShopUrl() !== null && $this->isHintedShopUrl($url);
     }
 
     public static function normalizeShopUrl(string $url): string
