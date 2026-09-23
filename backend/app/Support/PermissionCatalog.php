@@ -40,6 +40,7 @@ final class PermissionCatalog
         'clients.manage',
         'inquiries.use',
         'inquiries.view_all',
+        'inquiries.view_others',
         'ai_settings.manage',
         'admin.access',
         'admin.users.manage',
@@ -125,6 +126,7 @@ final class PermissionCatalog
             'clients.manage',
             'inquiries.use',
             'inquiries.view_all',
+            'inquiries.view_others',
         ];
 
         $dyrektor = [
@@ -146,6 +148,7 @@ final class PermissionCatalog
             'clients.view',
             'inquiries.use',
             'inquiries.view_all',
+            'inquiries.view_others',
         ];
 
         return [
@@ -202,6 +205,7 @@ final class PermissionCatalog
             // Własna grupa, a nie „Klienci”: uprawnienia do zapytań były tam nie do znalezienia.
             ['inquiries.use', 'Zapytania — praca z mailem', 'Może wklejać zapytanie klienta (albo wysłać je z dodatku do Thunderbirda) i przygotować odpowiedź z katalogu.', 'Zapytania'],
             ['inquiries.view_all', 'Zapytania — podgląd wszystkich', 'Widzi na liście zapytania wszystkich pracowników, nie tylko własne, i może filtrować po użytkowniku. Bez tego widzi wyłącznie swoje.', 'Zapytania'],
+            ['inquiries.view_others', 'Zapytania — otwieranie cudzych', 'Może otworzyć zapytanie innego pracownika i zobaczyć mail klienta, dobrane pozycje i przygotowany list. Tylko podgląd — zmieniać i wysyłać może wyłącznie autor.', 'Zapytania'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],
             ['admin.access', 'Panel Administracja', 'Widzi pozycję menu Administracja.', 'Administracja'],
             ['admin.users.manage', 'Zarządzanie użytkownikami', 'Może tworzyć, edytować i usuwać konta oraz przypisywać role.', 'Administracja'],

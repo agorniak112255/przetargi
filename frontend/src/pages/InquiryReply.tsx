@@ -812,6 +812,10 @@ export function InquiryReply() {
 
   const total = inquiry.items.length
   const busy = composeBusy
+  // Cudze zapytanie (uprawnienie „otwieranie cudzych”) jest tylko do podglądu —
+  // serwer i tak odrzuci każdą zmianę spoza konta autora.
+  const readOnly = inquiry.user?.id !== user?.id
+  const locked = busy || readOnly
   // Inne zapytania z tego samego maila; pole dochodzi po stronie API, więc czytamy ostrożnie.
   const duplicates = Array.isArray(inquiry.duplicates) ? inquiry.duplicates : []
   // Nadawca dokładnie tak, jak przyszedł w mailu — bez sklejania brakujących kawałków.
@@ -857,6 +861,13 @@ export function InquiryReply() {
       {inquiry.duplicate_of && <DuplicateOfBar origin={inquiry.duplicate_of} />}
       {duplicates.length > 0 && <DuplicatesBar list={duplicates} />}
 
+      {readOnly && (
+        <p className="rounded border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+          Podgląd zapytania, które prowadzi {inquiry.user?.name ?? 'inna osoba'}. Zmieniać list i wysyłać
+          odpowiedź może tylko autor.
+        </p>
+      )}
+
       <p className={`rounded px-3 py-2 text-sm font-medium ${banner.cls}`}>{banner.text}</p>
 
       {msg && <p className="rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
@@ -870,7 +881,7 @@ export function InquiryReply() {
               <input
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
                 value={subject}
-                disabled={busy}
+                disabled={locked}
                 onChange={(e) => setSubject(e.target.value)}
                 onBlur={() => void saveEdits().catch(() => undefined)}
               />
@@ -880,13 +891,13 @@ export function InquiryReply() {
               <textarea
                 className="mt-1 min-h-[420px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm leading-relaxed"
                 value={body}
-                disabled={busy}
+                disabled={locked}
                 onChange={(e) => setBody(e.target.value)}
                 onBlur={() => void saveEdits().catch(() => undefined)}
               />
             </label>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {inquiry.source_message_id && (
+              {!readOnly && inquiry.source_message_id && (
                 <button
                   type="button"
                   disabled={busy || saving}
@@ -896,18 +907,20 @@ export function InquiryReply() {
                   Zapisz i wyślij w Thunderbirdzie
                 </button>
               )}
-              <button
-                type="button"
-                disabled={busy || saving}
-                onClick={() => void copyAndMarkSent()}
-                className={
-                  inquiry.source_message_id
-                    ? 'rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50'
-                    : 'rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50'
-                }
-              >
-                Kopiuj i oznacz jako wysłane
-              </button>
+              {!readOnly && (
+                <button
+                  type="button"
+                  disabled={busy || saving}
+                  onClick={() => void copyAndMarkSent()}
+                  className={
+                    inquiry.source_message_id
+                      ? 'rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50'
+                      : 'rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50'
+                  }
+                >
+                  Kopiuj i oznacz jako wysłane
+                </button>
+              )}
               <button
                 type="button"
                 disabled={busy || saving}
@@ -916,20 +929,20 @@ export function InquiryReply() {
               >
                 Kopiuj treść
               </button>
-              {inquiry.send_requested_at && (
+              {!readOnly && inquiry.send_requested_at && (
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={locked}
                   onClick={() => void cancelThunderbird()}
                   className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
                 >
                   Anuluj wysyłkę
                 </button>
               )}
-              {inquiry.replied_at && (
+              {!readOnly && inquiry.replied_at && (
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={locked}
                   onClick={() => void unmarkSent()}
                   className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
                 >
@@ -942,7 +955,7 @@ export function InquiryReply() {
               >
                 Wróć do zapytań
               </Link>
-              {inquiry.user?.id === user?.id && (
+              {!readOnly && (
                 <button
                   type="button"
                   disabled={busy || saving}
@@ -955,11 +968,13 @@ export function InquiryReply() {
               {saving && <span className="text-[11px] text-slate-400">Zapisuję…</span>}
             </div>
             <p className="mt-2 text-[11px] text-slate-400">
-              {inquiry.send_requested_at
-                ? 'List czeka na Thunderbirda — otworzy okno odpowiedzi w ciągu kilku sekund. Maila wysyłasz sam, z Thunderbirda.'
-                : inquiry.source_message_id
-                  ? 'Edycje zapisują się po opuszczeniu pola. Thunderbird otworzy odpowiedź na ten mail — wysyłasz ją sam, po sprawdzeniu.'
-                  : 'Edycje zapisują się po opuszczeniu pola. System nie wysyła maila — wklej treść do swojej poczty.'}
+              {readOnly
+                ? 'Tylko podgląd — treść listu możesz skopiować, ale zmienić go może wyłącznie autor.'
+                : inquiry.send_requested_at
+                  ? 'List czeka na Thunderbirda — otworzy okno odpowiedzi w ciągu kilku sekund. Maila wysyłasz sam, z Thunderbirda.'
+                  : inquiry.source_message_id
+                    ? 'Edycje zapisują się po opuszczeniu pola. Thunderbird otworzy odpowiedź na ten mail — wysyłasz ją sam, po sprawdzeniu.'
+                    : 'Edycje zapisują się po opuszczeniu pola. System nie wysyła maila — wklej treść do swojej poczty.'}
             </p>
             <p className="mt-1 text-[11px] text-slate-400">
               {inquiry.reply_html
@@ -997,7 +1012,7 @@ export function InquiryReply() {
                 <span className="text-xs text-violet-800">
                   <BusyLabel label="Piszę list" seconds={composeSec} />
                 </span>
-              ) : (
+              ) : readOnly ? null : (
                 <span className="text-[11px] text-slate-400">Kliknięcie alternatywy od razu przepisuje list.</span>
               )}
             </div>
@@ -1012,7 +1027,7 @@ export function InquiryReply() {
                     index={i}
                     priceMode={inquiry.price.mode}
                     answers={inquiry.answers}
-                    busy={busy}
+                    busy={locked}
                     customDrafts={customDrafts}
                     onCustomDraft={(cardId, v) => setCustomDrafts((d) => ({ ...d, [cardId]: v }))}
                     onAnswer={onAnswer}
@@ -1041,7 +1056,7 @@ export function InquiryReply() {
                 <Chip
                   key={opt.id}
                   active={inquiry.tone === opt.id}
-                  disabled={busy}
+                  disabled={locked}
                   onClick={() => onTone(opt.id)}
                 >
                   {opt.label}
@@ -1055,7 +1070,7 @@ export function InquiryReply() {
                 <Chip
                   key={opt.id}
                   active={inquiry.price.mode === opt.id}
-                  disabled={busy}
+                  disabled={locked}
                   onClick={() => onPriceMode(opt.id)}
                 >
                   {opt.label}
@@ -1069,7 +1084,7 @@ export function InquiryReply() {
                     min={0}
                     max={inquiry.price.margin_max}
                     step={0.5}
-                    disabled={busy}
+                    disabled={locked}
                     className="w-20 rounded border border-slate-300 px-2 py-1 text-xs"
                     value={marginDraft}
                     onChange={(e) => setMarginDraft(e.target.value)}
@@ -1088,7 +1103,7 @@ export function InquiryReply() {
                   {field.label}
                   <input
                     className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1 text-xs font-normal"
-                    disabled={busy}
+                    disabled={locked}
                     maxLength={TERM_MAX}
                     value={termsDraft[field.key]}
                     onChange={(e) => setTermsDraft((d) => ({ ...d, [field.key]: e.target.value }))}
@@ -1108,7 +1123,7 @@ export function InquiryReply() {
                     key={card.id}
                     card={card}
                     answers={inquiry.answers}
-                    busy={busy}
+                    busy={locked}
                     customDraft={customDrafts[card.id] ?? ''}
                     onCustomDraft={(v) => setCustomDrafts((d) => ({ ...d, [card.id]: v }))}
                     onAnswer={onAnswer}
@@ -1120,7 +1135,7 @@ export function InquiryReply() {
               Dopisek do listu (klient go zobaczy)
               <textarea
                 className="mt-1 min-h-[56px] w-full rounded border border-slate-300 px-2 py-1 text-xs font-normal"
-                disabled={busy}
+                disabled={locked}
                 value={noteDraft}
                 onChange={(e) => setNoteDraft(e.target.value)}
                 onBlur={onNoteBlur}

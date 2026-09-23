@@ -1278,6 +1278,38 @@ final class ClientInquiryApiTest extends TestCase
         ])->assertForbidden();
     }
 
+    public function test_view_others_permission_opens_foreign_inquiry_read_only(): void
+    {
+        $owner = User::factory()->withRole('handlowiec')->create();
+        $manager = User::factory()->withRole('kierownik')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $owner->id,
+            'tone' => 'formal',
+            'source_body' => 'Proszę o informację o rękawicach nitrylowych XL.',
+            'reply_body' => 'Dzień dobry',
+        ]);
+
+        Sanctum::actingAs($manager);
+
+        $this->getJson("/api/inquiries/{$inquiry->id}")
+            ->assertOk()
+            ->assertJsonPath('user.id', $owner->id)
+            ->assertJsonPath('source_body', 'Proszę o informację o rękawicach nitrylowych XL.');
+
+        // sam podgląd — zmiany i wysyłka zostają przy autorze
+        $this->patchJson("/api/inquiries/{$inquiry->id}", ['reply_body' => 'x'])->assertForbidden();
+        $this->postJson("/api/inquiries/{$inquiry->id}/compose", ['answers' => []])->assertForbidden();
+        $this->postJson("/api/inquiries/{$inquiry->id}/replied", ['replied' => true])->assertForbidden();
+        $this->deleteJson("/api/inquiries/{$inquiry->id}")->assertForbidden();
+        $this->assertSame('Dzień dobry', (string) $inquiry->fresh()->reply_body);
+
+        // odebrane w panelu ról — cudze zapytanie znowu zamknięte
+        $manager->roles->first()?->revokePermissionTo('inquiries.view_others');
+        $manager->forgetCachedPermissions();
+
+        $this->getJson("/api/inquiries/{$inquiry->id}")->assertForbidden();
+    }
+
     public function test_manual_search_pick_adds_candidate_and_rewrites_letter(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

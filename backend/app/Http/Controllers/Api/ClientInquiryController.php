@@ -323,9 +323,16 @@ class ClientInquiryController extends Controller
         return response()->json($this->inquiries->present($inquiry), 201);
     }
 
+    /**
+     * Cudze zapytanie otwiera tylko rola z `inquiries.view_others` — i tylko
+     * do podglądu: wszystkie zmiany (list, wybór wyrobu, wysyłka) zostają
+     * przy autorze, bo pilnuje ich `assertOwner`.
+     */
     public function show(Request $request, ClientInquiry $inquiry): JsonResponse
     {
-        $this->assertOwner($request, $inquiry);
+        if (! $request->user()->can('inquiries.view_others')) {
+            $this->assertOwner($request, $inquiry);
+        }
 
         return response()->json($this->inquiries->present($inquiry->load('client')));
     }
