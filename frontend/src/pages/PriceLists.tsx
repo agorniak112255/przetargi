@@ -139,7 +139,7 @@ type PriceList = {
 
 function b2bLockedTitle(account: PriceListB2bAccount): string {
   const label = account.connector_label ? `${account.connector_label} · ` : ''
-  return `Cennik konta B2B (${label}${account.username}) — aby go usunąć lub edytować, najpierw usuń konto w zakładce Cenniki → B2B.`
+  return `Cennik konta B2B (${label}${account.username}) — aby go usunąć, najpierw usuń konto w zakładce Cenniki → B2B.`
 }
 
 /** Rabaty cen z cennika z pliku — GET/PUT /price-lists/{id}/discounts. */
@@ -2406,10 +2406,16 @@ export function PriceLists() {
                           ) : (
                             <button
                               type="button"
-                              disabled={editBusyId != null || deleteBusyId === r.id || !!r.b2b_account}
+                              // Wpis z kontem B2B też się edytuje (serwer na to pozwala od zwinięcia Cenników do jednego
+                              // wpisu na producenta — ten sam wiersz obsługuje import z pliku); blokada zostaje przy usuwaniu.
+                              disabled={editBusyId != null || deleteBusyId === r.id}
                               onClick={() => startEditPriceList(r)}
                               className="rounded border border-sky-300 px-2 py-1 text-[11px] text-sky-800 hover:bg-sky-50 disabled:opacity-50"
-                              title={r.b2b_account ? b2bLockedTitle(r.b2b_account) : undefined}
+                              title={
+                                r.b2b_account
+                                  ? 'Nazwa, rabat i znacznik cennika sugerowanego zostają przy kolejnych pobraniach z konta B2B; wersję ustawia każde pobranie'
+                                  : undefined
+                              }
                             >
                               Edytuj
                             </button>
