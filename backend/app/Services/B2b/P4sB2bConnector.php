@@ -665,10 +665,13 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
                 static fn (array $v): string => $v['label'].' ('.$v['code'].')',
                 $group,
             )),
+            // dostępność rozmiaru tekstem platformy — karta rozdzielona na rozmiary (mapa połączeń) dostaje
+            // dostępność swojego rozmiaru, nie zbiorczą listę grupy
             members: $single ? [] : array_map(static fn (array $v): array => [
                 'remote_id' => $v['id'],
                 'sku' => $v['code'],
                 'name' => $v['name'] !== '' ? $v['name'] : $base.', '.$v['label'],
+                'availability' => self::groupAvailability([$v], true),
             ], $group),
             identifiers: self::identifiers($detail, $group, $single, $allVariants !== [] ? $allVariants : $group),
         );

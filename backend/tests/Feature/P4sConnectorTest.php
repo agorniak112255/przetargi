@@ -206,10 +206,11 @@ final class P4sConnectorTest extends TestCase
         $this->assertSame('Rękawice testowe powlekane nitrylem', $card->name);
         $this->assertSame(
             [
-                ['remote_id' => '900111', 'sku' => '11.999/F07,0', 'name' => 'Rękawice testowe powlekane nitrylem, rozmiar 7'],
-                ['remote_id' => '900112', 'sku' => '11.999/F08,0', 'name' => 'Rękawice testowe powlekane nitrylem, rozmiar 8'],
+                // dostępność każdego rozmiaru osobno (mapa połączeń: rozmiar rozdzielony na swoją kartę)
+                ['remote_id' => '900111', 'sku' => '11.999/F07,0', 'name' => 'Rękawice testowe powlekane nitrylem, rozmiar 7', 'availability' => 'Produkt dostępny'],
+                ['remote_id' => '900112', 'sku' => '11.999/F08,0', 'name' => 'Rękawice testowe powlekane nitrylem, rozmiar 8', 'availability' => 'Produkt dostępny'],
                 // rozmiar bez oznaczenia — reszta nazwy rozmiaru po nazwie wyrobu
-                ['remote_id' => '900113', 'sku' => '11.999/F09,0', 'name' => 'Rękawice testowe powlekane nitrylem, rozmiar 9'],
+                ['remote_id' => '900113', 'sku' => '11.999/F09,0', 'name' => 'Rękawice testowe powlekane nitrylem, rozmiar 9', 'availability' => 'Produkt niedostępny'],
             ],
             $card->members,
         );

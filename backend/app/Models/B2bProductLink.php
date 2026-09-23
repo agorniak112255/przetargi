@@ -29,12 +29,18 @@ class B2bProductLink extends Model
         'last_seen_at',
         // przeniesione przez scalenie rozmiarów (ProductSizeMergeService); zerowane, gdy synchronizacja przepnie kod
         'merged_at',
+        // cena zakupu tej pozycji z ostatniego przebiegu (grupa — cena grupy); slot ceny konta jest jeden na kartę
+        'last_purchase_price',
+        'last_currency',
+        'last_price_at',
     ];
 
     protected function casts(): array
     {
         return [
             'last_seen_at' => 'datetime',
+            'last_purchase_price' => 'decimal:2',
+            'last_price_at' => 'datetime',
             'merged_at' => 'datetime',
             'translation_rejected_at' => 'datetime',
         ];

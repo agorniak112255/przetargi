@@ -7,11 +7,15 @@ namespace App\Services\B2b;
 final readonly class B2bRemoteProduct
 {
     /**
+     * Klucz members[].availability (opcjonalny) — dostępność tej jednej pozycji dosłownie ze źródła. Używana, gdy mapa
+     * połączeń rozdziela grupę na osobne karty (B2bCatalogSync, tryb pojedynczy); bez niego slot takiej karty zachowuje
+     * zapisaną dostępność (dostępność grupy mówi o wszystkich jej rozmiarach naraz).
+     *
      * @param  array<string, mixed>  $raw  pozycja listy dostawcy (dla łącznika)
      * @param  string|null  $availability  dostępność u dostawcy dosłownie ze źródła (slot ceny konta); null = źródło jej nie podaje
      * @param  string|null  $variantSummary  lista rozmiarów/kodów karty (products.variant_summary); null = nie zmieniać, '' = wyczyść
-     * @param  list<array{remote_id: string, sku: string, name: string}>  $members  pozycje dostawcy scalone w tę kartę
-     *                                                                              (np. rozmiary o tej samej cenie), razem z remoteId; [] = jedna pozycja
+     * @param  list<array{remote_id: string, sku: string, name: string, availability?: string}>  $members  pozycje dostawcy scalone
+     *                                                                                                     w tę kartę (np. rozmiary o tej samej cenie), razem z remoteId; [] = jedna pozycja
      * @param  list<B2bRemoteIdentifier>|null  $identifiers  identyfikatory pozycji (EAN, kod producenta); null = łącznik ich
      *                                                       nie podaje (zapisane zostają), [] = podaje i nie ma żadnych
      */
