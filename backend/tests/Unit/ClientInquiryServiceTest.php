@@ -419,6 +419,35 @@ final class ClientInquiryServiceTest extends TestCase
         ));
     }
 
+    /** Zapytanie #50 z 23.09.2026: model wpisał każdej pozycji rozmiaru sumę z wiersza (432 pary). */
+    public function test_size_item_takes_its_quantity_from_the_size_breakdown(): void
+    {
+        $quote = 'Rękawice ochronne tkaninowe pięciopalcowe, powlekane nitrylem żółtym, zakończone ściągaczem-symbol RNITz  - 432 pary Rozmiar: 8-108par,9-108par,10-216par.';
+        $item = static fn (string $id, string $size): array => [
+            'id' => $id, 'quote' => $quote, 'qty' => '432', 'unit' => 'pary', 'query' => 'rękawice RNITz', 'size' => $size,
+        ];
+        $resolved = $this->service()->resolveLineItems('x', [$item('item_1', '8'), $item('item_2', '9'), $item('item_3', '10')]);
+
+        $this->assertSame([['108', 'par'], ['108', 'par'], ['216', 'par']], array_map(
+            static fn (array $i): array => [$i['qty'], $i['unit']],
+            $resolved,
+        ));
+
+        // litery też są rozmiarem; pozycja bez rozmiaru zostaje przy sumie z wiersza
+        $letters = $this->service()->resolveLineItems('x', [
+            ['id' => 'item_1', 'quote' => 'Kurtka robocza 30 szt: S - 10 szt, M - 20 szt', 'qty' => '30', 'unit' => 'szt', 'query' => 'Kurtka robocza', 'size' => 'M'],
+            ['id' => 'item_2', 'quote' => 'Kurtka robocza 30 szt: S - 10 szt, M - 20 szt', 'qty' => '30', 'unit' => 'szt', 'query' => 'Kurtka robocza', 'size' => null],
+        ]);
+        $this->assertSame('20', $letters[0]['qty']);
+        $this->assertSame('30', $letters[1]['qty']);
+
+        // jedna para to nie rozbicie — ilość czyta dotychczasowa reguła
+        $single = $this->service()->resolveLineItems('x', [
+            ['id' => 'item_1', 'quote' => 'Rękawice nitrylowe rozm. 9 - 50 par', 'qty' => '50', 'unit' => 'par', 'query' => 'Rękawice nitrylowe', 'size' => '9'],
+        ]);
+        $this->assertSame('50', $single[0]['qty']);
+    }
+
     /** Fragment bez nazwy wyrobu, ale oddzielony od wiersza wyrobu innym wierszem — nie doklejamy. */
     public function test_size_fragment_after_another_line_keeps_its_own_quote(): void
     {

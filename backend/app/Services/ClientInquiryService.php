@@ -1929,6 +1929,18 @@ final class ClientInquiryService
                 continue;
             }
 
+            $bySize = $this->qtyFromSizeBreakdown($quote, trim((string) ($item['size'] ?? '')));
+            if ($bySize !== null) {
+                if ($bySize['qty'] !== $qty) {
+                    $item['qty_source'] = 'quote';
+                }
+                $item['qty'] = $bySize['qty'];
+                $item['unit'] = $bySize['unit'];
+                $out[] = $item;
+
+                continue;
+            }
+
             $found = $this->qtyCandidatesInRow($quote);
             if ($found['taken'] !== null) {
                 // cytat wskazuje ilość wprost — nasza reguła zna wielkość opakowania
@@ -1962,6 +1974,38 @@ final class ClientInquiryService
         }
 
         return $out;
+    }
+
+    /**
+     * Ilość rozmiaru z rozbicia w cytacie: „432 pary Rozmiar: 8-108par,9-108par,10-216par.”
+     * dla rozmiaru 9 to 108 par. Model rozbija taki wiersz na pozycje rozmiarów, ale bywa,
+     * że każdej wpisuje sumę (zapytanie #50, 23.09.2026: trzy pozycje po 432 pary), a nasze
+     * sprawdzenie ją potwierdzało, bo 432 stoi w cytacie jako pierwsza liczba z jednostką.
+     *
+     * Rozbiciem są co najmniej dwie pary „rozmiar-ilość jednostka” — pojedyncza para
+     * („rozm. 9 - 50 par”) to zwykła ilość, którą czyta dotychczasowa reguła.
+     *
+     * @return array{qty: string, unit: string}|null
+     */
+    private function qtyFromSizeBreakdown(string $quote, string $size): ?array
+    {
+        if ($size === '') {
+            return null;
+        }
+        // pary stoją po przecinku („8-108par,9-108par”), ale nie w środku liczby („10,5”)
+        $pair = '(?<![\p{L}\d])(?<!\d[.,])([\p{L}\d]{1,4}(?:[.,]\d)?)\s*[-–:=]\s*(\d{1,5})\s*('.self::UNIT_PATTERN.')';
+        if (preg_match_all('/'.$pair.'/iu', $quote, $all, PREG_SET_ORDER) < 2) {
+            return null;
+        }
+        foreach ($all as $match) {
+            if (mb_strtolower($match[1]) === mb_strtolower($size)) {
+                $digits = ltrim($match[2], '0');
+
+                return ['qty' => $this->formatQty($digits === '' ? '0' : $digits), 'unit' => trim($match[3])];
+            }
+        }
+
+        return null;
     }
 
     /** Czy taka liczba stoi w cytacie jako osobny zapis (a nie jako część innej liczby). */
