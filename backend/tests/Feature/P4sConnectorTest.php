@@ -363,6 +363,39 @@ final class P4sConnectorTest extends TestCase
         $this->assertSame(2, $this->logins);
     }
 
+    public function test_file_listed_on_the_card_but_missing_is_skipped_without_stopping_the_run(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $goggles = self::goggles();
+        // platforma wypisuje plik, a przy aktywnej sesji oddaje pustą odpowiedź (09-430/10,0L, 23.09.2026)
+        $goggles['detail']['documents'][] = ['ordinalNumber' => 9, 'productId' => 900001, 'description' => 'Instrukcja użytkowania', 'type' => 'document'];
+        $this->addProduct($goggles);
+        unset($this->files['900001/9']);
+        $this->addProduct(self::gloves());
+        $this->fakeSite();
+
+        $connector = $this->connector();
+        $card = iterator_to_array($connector->products(), false)[0];
+        try {
+            $connector->documentBytes($connector->documents($card)[2]);
+            $this->fail('brakujący plik powinien dać błąd pliku');
+        } catch (B2bFatalException $e) {
+            $this->fail('brakujący plik to nie utrata sesji: '.$e->getMessage());
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('nie wydała pliku', $e->getMessage());
+        }
+        $this->assertSame(1, $this->logins);
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame(2, $result['created'], implode(' | ', $result['errors']));
+        $this->assertSame(
+            ['Deklaracja zgodności', 'Tabela rozmiarów'],
+            ProductDocument::query()->where('product_id', Product::query()->where('sku', '000999')->value('id'))->orderBy('sort_order')->pluck('title')->all(),
+        );
+    }
+
     public function test_sync_creates_p4s_cards_with_prices_links_shop_card_documents_and_images_and_a_second_run_changes_nothing(): void
     {
         Storage::fake('public');

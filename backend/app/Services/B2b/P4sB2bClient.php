@@ -19,7 +19,8 @@ use RuntimeException;
  * Każde zapytanie to POST JSON {function: …, …} pod /scripts/b2bPortal.jsp; odpowiedź to JSON poprzedzony pustymi
  * liniami (JSP). Logowanie: {function: login, userEmail, password, language} → {errorMessage} przy odmowie, potem
  * checkSession potwierdza konto (loggedIn, showPrices, waluta zamówień). Gość albo wygasła sesja dostaje
- * {sessionExpired: true}, a pliki — pustą odpowiedź HTML; wtedy jedno ponowne logowanie.
+ * {sessionExpired: true} — wtedy jedno ponowne logowanie. Plik daje pustą odpowiedź HTML i gościowi, i gdy go brak
+ * (documentBytes rozróżnia to przez checkSession).
  * Pliki wyrobu: GET z function=getProductDocument&productId=…&ordinalNumber=… (tylko z sesją konta); zdjęcia
  * (/productDocuments/…) są publiczne. Zapytania idą po kolei, z przerwą przed każdym.
  */
@@ -184,8 +185,10 @@ final class P4sB2bClient
     }
 
     /**
-     * Plik wyrobu z sesją konta. Pusta odpowiedź (tak platforma odpowiada gościowi) = sesja mogła wygasnąć → jedno
-     * ponowne logowanie; nadal pusta = B2bFatalException.
+     * Plik wyrobu z sesją konta. Pustą odpowiedź platforma daje i gościowi, i przy pliku wypisanym na karcie, którego
+     * nie ma (23.09.2026: „Instrukcja użytkowania” 09-430/10,0L przy aktywnej sesji). Dlatego pusta odpowiedź przy
+     * sesji potwierdzonej przez checkSession = brak pliku (RuntimeException — plik pominięty, przebieg idzie dalej);
+     * sesja wygasła → jedno ponowne logowanie, a pusty plik także potem = brak pliku.
      *
      * @return array{bytes: string, mime: string}
      */
@@ -200,12 +203,13 @@ final class P4sB2bClient
 
         $response = $this->send(static fn (PendingRequest $http): Response => $http->get($url));
         if ($response->body() === '') {
+            if ($this->sessionActive()) {
+                throw new RuntimeException('platforma nie wydała pliku (pusta odpowiedź przy aktywnej sesji konta)');
+            }
             $this->relogin();
             $response = $this->send(static fn (PendingRequest $http): Response => $http->get($url));
             if ($response->body() === '') {
-                $this->loggedIn = false;
-
-                throw new B2bFatalException(self::SESSION_LOST.' (plik wyrobu pusty po ponownym logowaniu)');
+                throw new RuntimeException('platforma nie wydała pliku (pusta odpowiedź także po ponownym logowaniu)');
             }
         }
 
@@ -287,6 +291,14 @@ final class P4sB2bClient
         $json = json_decode(trim($response->body()), true);
 
         return is_array($json) ? $json : null;
+    }
+
+    /** Czy platforma nadal widzi zalogowane konto (checkSession). */
+    private function sessionActive(): bool
+    {
+        $session = $this->call(['function' => 'checkSession']);
+
+        return $session !== null && ($session['loggedIn'] ?? false) === true && ($session['anonymousSession'] ?? false) !== true;
     }
 
     private function relogin(): void
