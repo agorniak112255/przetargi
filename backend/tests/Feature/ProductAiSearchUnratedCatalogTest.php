@@ -213,6 +213,86 @@ final class ProductAiSearchUnratedCatalogTest extends TestCase
         }
     }
 
+    /**
+     * 23.09.2026: „Zestaw plastrów plastikowych CEDERROTH 6036” — model ocenił plaster na 95, ale bramka
+     * nazwanego modelu go odrzuciła (marka w producencie, kod w SKU), a lista zapasowa dołożyła rękawicę
+     * Ansell „A6036” jako „ten sam rodzaj w katalogu”.
+     */
+    public function test_brand_and_code_query_finds_card_by_manufacturer_and_sku_without_foreign_brand(): void
+    {
+        $base = [
+            'catalog_price_net' => 20,
+            'purchase_price' => 14,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ];
+        Product::query()->create($base + [
+            'sku' => '6036',
+            'name' => 'Plastry plastikowe Cederroth Salvequick, 45 szt.',
+            'manufacturer' => 'CEDERROTH',
+            'category' => 'Pierwsza pomoc',
+            'description' => 'Plastry plastikowe Salvequick w wymiennym wkładzie, 45 sztuk.',
+        ]);
+        Product::query()->create($base + [
+            'sku' => 'A6036',
+            'name' => 'Rękawice termoizolacyjne CRUSADER FLEX 42-474',
+            'manufacturer' => 'ANSELL HEALTHCARE EUROPE N.V.',
+            'category' => 'Rękawice',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'description' => 'Rękawice termoizolacyjne do 180°C.',
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $this->emptyRankLlm());
+
+        $json = $this->postJson('/api/products/ai-search', [
+            'query' => 'Zestaw plastrów plastikowych CEDERROTH 6036',
+            'limit' => 10,
+        ])->assertOk()->json();
+
+        $skus = array_column($json['products'], 'sku');
+        $this->assertSame('6036', $skus[0] ?? null);
+        $this->assertNotContains('A6036', $skus);
+        $this->assertGreaterThanOrEqual(80, (int) $json['products'][0]['ai_match_percent']);
+        $this->assertNotSame(ProductAiSearchService::MATCH_SOURCE_CATALOG, $json['products'][0]['ai_match_source'] ?? null);
+    }
+
+    /** Lista zapasowa („ten sam rodzaj w katalogu”) nie dokłada kart innej marki niż nazwana w zapytaniu. */
+    public function test_catalog_fallback_skips_cards_of_other_brand_than_requested(): void
+    {
+        $base = [
+            'category' => 'Rękawice',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'catalog_price_net' => 20,
+            'purchase_price' => 14,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ];
+        $ansell = Product::query()->create($base + [
+            'sku' => 'A6036',
+            'name' => 'Rękawice termoizolacyjne CRUSADER FLEX 42-474',
+            'manufacturer' => 'ANSELL HEALTHCARE EUROPE N.V.',
+            'description' => 'Rękawice termoizolacyjne do 180°C.',
+        ]);
+        $mapa = Product::query()->create($base + [
+            'sku' => 'M-TEMP',
+            'name' => 'Rękawice termoizolacyjne MAPA',
+            'manufacturer' => 'MAPA',
+            'description' => 'Rękawice termoizolacyjne.',
+        ]);
+        $service = app(ProductAiSearchService::class);
+
+        $rows = (new \ReflectionMethod($service, 'rowsFromGenericCatalog'))->invoke(
+            $service,
+            'Rękawice termoizolacyjne MAPA',
+            collect([$ansell, $mapa]),
+            10,
+            ['needed' => 'rękawice termoizolacyjne'],
+        );
+
+        $this->assertSame(['M-TEMP'], array_column($rows, 'sku'));
+    }
+
     /** Recenzja dopasowania (13.09), błąd B: trafienie modelu bez oceny z polem sku/name dostawało 70 — zmyślona pewność. */
     public function test_model_match_without_score_gets_no_made_up_percent(): void
     {

@@ -2124,9 +2124,14 @@ final class ProductAiSearchService
         }
 
         $requirement = $this->assortmentText($query, null);
+        // Ta sama bramka marki co przy ocenie modelu (rowsFromLlmMatches): lista zapasowa nie może być
+        // luźniejsza niż werdykt. Pod „plastry CEDERROTH 6036” wchodziła rękawica Ansell „A6036” — kod
+        // trafił w SKU, a plastry nie mają rodziny, więc zgodność rodzaju niczego nie odcinała.
+        $brands = $intent['manufacturer_absent_in_catalog'] ? [] : $this->modelFuzzy->catalogBrands($query);
         $products = $this->withResponseRelations(
             $candidates
-                ->filter(fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
+                ->filter(fn (Product $p): bool => $this->modelFuzzy->matchesCatalogBrand($p, $brands)
+                    && $this->assortment->compatibleProduct($requirement, $p)
                     && $this->matchesSlangEvidence($query, $p)
                     && $this->filterType->covers($requirement, $this->filterHaystack($p))
                     // To najsłabszy poziom odpowiedzi („ten sam rodzaj w katalogu”).

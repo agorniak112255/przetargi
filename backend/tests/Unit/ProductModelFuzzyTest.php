@@ -34,6 +34,39 @@ final class ProductModelFuzzyTest extends TestCase
         $this->assertNotSame($expectedFirst, $expectedSecond);
     }
 
+    /** 23.09.2026: „CEDERROTH 6036” — marka stoi w polu producenta, kod w SKU, nazwa nie ma ani jednego z nich razem. */
+    #[Test]
+    public function brand_in_manufacturer_and_code_in_sku_match_named_model(): void
+    {
+        $req = 'Zestaw plastrów plastikowych CEDERROTH 6036';
+
+        $this->assertTrue($this->fuzzy->matches($req, $this->product(
+            '6036',
+            'Plastry plastikowe Cederroth Salvequick, 45 szt.',
+            'CEDERROTH',
+        )));
+        // Ten sam kod z literą przed nim, inna marka — to nie jest nazwany wyrób.
+        $this->assertFalse($this->fuzzy->matches($req, $this->product(
+            'A6036',
+            'Rękawice termoizolacyjne CRUSADER FLEX 42-474',
+            'ANSELL HEALTHCARE EUROPE N.V.',
+        )));
+        // Dokładny kod, ale inna marka.
+        $this->assertFalse($this->fuzzy->matches($req, $this->product('6036', 'Plastry opatrunkowe', 'REF')));
+        // SKU karty to tylko ogon dłuższego numeru z zapytania.
+        $this->assertFalse($this->fuzzy->matches('Plastry CEDERROTH 16036', $this->product(
+            '6036',
+            'Plastry plastikowe Cederroth Salvequick, 45 szt.',
+            'CEDERROTH 1',
+        )));
+        // Marka zgodna, kod o jedną cyfrę inny — inny wyrób.
+        $this->assertFalse($this->fuzzy->matches($req, $this->product(
+            '6035',
+            'Plastry tekstylne Cederroth Salvequick',
+            'CEDERROTH',
+        )));
+    }
+
     #[Test]
     public function tepm_ice_matches_temp_ice_and_not_other_gloves(): void
     {

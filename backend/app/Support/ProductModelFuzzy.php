@@ -580,6 +580,12 @@ final class ProductModelFuzzy
         $best = 99;
         $bestLen = 0;
         foreach ($needles as $needle) {
+            if ($this->brandAndSkuMatch($needle, $product)) {
+                $best = 0;
+                $bestLen = max($bestLen, mb_strlen($needle));
+
+                continue;
+            }
             $allowed = $this->maxDistance(mb_strlen($needle));
             foreach ($hays as $hay) {
                 $dist = $this->windowDistance($needle, $hay);
@@ -605,6 +611,28 @@ final class ProductModelFuzzy
         }
 
         return $score;
+    }
+
+    /**
+     * „CEDERROTH 6036” daje igłę „cederroth6036”, a karta trzyma markę w polu producenta, a kod w SKU
+     * („6036”, nazwa „Plastry plastikowe Cederroth Salvequick”). Sklejona igła nie stoi ani w nazwie,
+     * ani w SKU, więc ocena modelu 95% odpadała na bramce nazwanego modelu i zostawała lista zapasowa.
+     * Liczy się tylko dokładny kod: SKU karty to cały ogon igły, a reszta igły to marka z pola producenta.
+     */
+    private function brandAndSkuMatch(string $needle, Product $product): bool
+    {
+        $sku = $this->compact((string) $product->sku);
+        if (mb_strlen($sku) < 3 || preg_match('/\d/', $sku) !== 1 || ! str_ends_with($needle, $sku)) {
+            return false;
+        }
+        $brand = mb_substr($needle, 0, mb_strlen($needle) - mb_strlen($sku));
+        $manufacturer = $this->compact((string) $product->manufacturer);
+        // Marka kończy się literą — inaczej SKU „6036” byłby tylko ogonem dłuższego numeru („16036”).
+        if ($manufacturer === '' || preg_match('/[a-z]$/', $brand) !== 1) {
+            return false;
+        }
+
+        return $brand === $manufacturer || (mb_strlen($brand) >= 3 && str_contains($manufacturer, $brand));
     }
 
     public function matches(string $requirement, Product $product): bool
