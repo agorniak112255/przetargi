@@ -7,6 +7,7 @@ namespace App\Services\B2b;
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
+use App\Support\ProductIdentifierCode;
 use RuntimeException;
 
 /**
@@ -633,7 +634,7 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
 
         $products = [];
         foreach ($groups as $cents => $group) {
-            $products[] = $this->productFor($row, $detail, $group, $cents, $split);
+            $products[] = $this->productFor($row, $detail, $group, $cents, $split, $variants);
         }
         $this->cards += count($products);
 
@@ -644,8 +645,9 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
      * @param  array<string, mixed>  $row
      * @param  array<string, mixed>  $detail  wynik parseProduct()
      * @param  list<array{id: string, code: string, name: string, label: string, size_name: string, manufacturer_code: string, cents: int, available: bool}>  $group
+     * @param  list<array{manufacturer_code: string}>  $allVariants  wszystkie rozmiary wyrobu (wszystkich grup cenowych)
      */
-    private function productFor(array $row, array $detail, array $group, int $cents, bool $split): B2bRemoteProduct
+    private function productFor(array $row, array $detail, array $group, int $cents, bool $split, array $allVariants = []): B2bRemoteProduct
     {
         $single = $row['type'] === self::TYPE_SINGLE;
         $base = $detail['name'] !== '' ? $detail['name'] : self::field($row['name'] ?? '');
@@ -668,7 +670,7 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
                 'sku' => $v['code'],
                 'name' => $v['name'] !== '' ? $v['name'] : $base.', '.$v['label'],
             ], $group),
-            identifiers: self::identifiers($detail, $group, $single),
+            identifiers: self::identifiers($detail, $group, $single, $allVariants !== [] ? $allVariants : $group),
         );
     }
 
@@ -682,13 +684,16 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
      *
      * @param  array<string, mixed>  $detail  wynik parseProduct()
      * @param  list<array{id: string, code: string, name: string, label: string, size_name: string, manufacturer_code: string, cents: int, available: bool}>  $group
+     * @param  list<array{manufacturer_code: string}>  $allVariants  wszystkie rozmiary wyrobu — kod karty równy kodowi
+     *                                                               rozmiaru z innej grupy cenowej też jest kodem rozmiaru
      * @return list<B2bRemoteIdentifier>
      */
-    private static function identifiers(array $detail, array $group, bool $single): array
+    private static function identifiers(array $detail, array $group, bool $single, array $allVariants = []): array
     {
         $out = [];
-        if ($detail['manufacturer_code'] !== '') {
-            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MANUFACTURER_CODE, value: $detail['manufacturer_code'], field: 'manufacturerCode');
+        $cardCode = self::cardManufacturerCodeType($detail['manufacturer_code'], $group, $single, $allVariants !== [] ? $allVariants : $group);
+        if ($cardCode !== null) {
+            $out[] = new B2bRemoteIdentifier(type: $cardCode, value: $detail['manufacturer_code'], field: 'manufacturerCode');
         }
         if (! $single && $detail['code'] !== '') {
             $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MODEL_CODE, value: $detail['code'], field: 'code');
@@ -704,6 +709,48 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
         }
 
         return $out;
+    }
+
+    /**
+     * Typ kodu producenta z karty wyrobu (manufacturerCode karty); null = pomijamy. Kod bez pozycji trafia pod pozycję
+     * karty, czyli pierwszego rozmiaru grupy (ProductIdentifierStore) — przy wyrobie z rozmiarami, które mają własne
+     * kody, to przypisywało rozmiarowi cudzy kod (24.09.2026: P4S „6X00 Półmaska 3M 6000” ma kod karty 7000146847 = kod
+     * rozmiaru M, zapisany pod rozmiarem S — S wskazywał dwie karty 3M). Dlatego:
+     * - wyrób pojedynczy albo rozmiary bez własnych kodów → kod producenta jak dotąd (JALAS/TEGERA „PS18” — po nim
+     *   łączymy z kartami Ejendals);
+     * - kod równy własnemu kodowi któregoś rozmiaru wyrobu (także z innej grupy cenowej) → pomijamy (to ten rozmiar,
+     *   jest pod swoją pozycją);
+     * - rozmiary tej grupy z własnymi kodami, kod karty inny → kod modelu (FR360 obok FR360-08-58): zostaje w danych,
+     *   ale nie udaje kodu producenta pierwszego rozmiaru (dopasowanie kart go nie używa).
+     *
+     * @param  list<array{manufacturer_code: string}>  $group
+     * @param  list<array{manufacturer_code: string}>  $allVariants
+     */
+    private static function cardManufacturerCodeType(string $code, array $group, bool $single, array $allVariants): ?string
+    {
+        if ($code === '') {
+            return null;
+        }
+        if ($single) {
+            return ProductIdentifier::TYPE_MANUFACTURER_CODE;
+        }
+        $own = static function (array $variants): array {
+            $codes = [];
+            foreach ($variants as $variant) {
+                $normalized = $variant['manufacturer_code'] !== '' ? ProductIdentifierCode::code($variant['manufacturer_code']) : null;
+                if ($normalized !== null) {
+                    $codes[$normalized] = true;
+                }
+            }
+
+            return $codes;
+        };
+        $normalized = ProductIdentifierCode::code($code);
+        if ($normalized !== null && isset($own($allVariants)[$normalized])) {
+            return null;
+        }
+
+        return $own($group) === [] ? ProductIdentifier::TYPE_MANUFACTURER_CODE : ProductIdentifier::TYPE_MODEL_CODE;
     }
 
     /**

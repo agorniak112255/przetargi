@@ -281,12 +281,42 @@ final class P4sConnectorTest extends TestCase
             ['source_code', '05 99 360 04 056', '900201', 'kolor niebieski, rozmiar 56', 'code'],
             ['source_code', '05 99 360 08 056', '900202', 'kolor szary, rozmiar 56', 'code'],
         ], $identifiers($products['05 99 360 04 056']));
+        // rozmiar karty ma własny kod producenta — kod z karty wyrobu (FR360) to kod modelu, nie kod tego rozmiaru
+        // (zmiana 24.09.2026: wcześniej szedł jako kod producenta pod pozycję pierwszego rozmiaru)
         $this->assertSame([
-            ['manufacturer_code', 'FR360', null, null, 'manufacturerCode'],
+            ['model_code', 'FR360', null, null, 'manufacturerCode'],
             ['model_code', '05 99 360 00 000', null, null, 'code'],
             ['source_code', '05 99 360 08 058', '900203', 'kolor szary, rozmiar 58', 'code'],
             ['manufacturer_code', 'FR360-08-58', '900203', 'kolor szary, rozmiar 58', 'manufacturerCode'],
         ], $identifiers($products['05 99 360 08 058']));
+    }
+
+    /**
+     * P4S „6X00 Półmaska 3M 6000” (24.09.2026): kod producenta z karty wyrobu (7000146847) to kod rozmiaru M — pod
+     * pozycją pierwszego rozmiaru (S) rozmiar S wskazywał dwie karty 3M. Kod karty równy kodowi rozmiaru jest pomijany,
+     * także gdy ten rozmiar jest w innej grupie cenowej (osobnej karcie P4S).
+     */
+    public function test_card_code_equal_to_a_size_code_is_not_attached_to_the_first_size(): void
+    {
+        $trousers = self::trousers();
+        $trousers['detail']['manufacturerCode'] = 'FR360-08-58';
+        $trousers['sizes'][0]['manufacturerCode'] = 'FR360-04-56';
+        $trousers['sizes'][2]['manufacturerCode'] = 'FR360-08-58';
+        $this->addProduct($trousers);
+        $this->fakeSite();
+
+        $products = array_column(array_map(
+            static fn (B2bRemoteProduct $p): array => ['sku' => $p->sku, 'product' => $p],
+            $this->products(),
+        ), 'product', 'sku');
+        $manufacturerCodes = static fn (B2bRemoteProduct $p): array => array_values(array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->value, $i->remoteId],
+            array_filter($p->identifiers ?? [], static fn (B2bRemoteIdentifier $i): bool => $i->type === 'manufacturer_code'),
+        ));
+
+        // grupa 04 056: kod karty = kod rozmiaru z drugiej grupy cenowej — nie trafia pod rozmiar 900201
+        $this->assertSame([['FR360-04-56', '900201']], $manufacturerCodes($products['05 99 360 04 056']));
+        $this->assertSame([['FR360-08-58', '900203']], $manufacturerCodes($products['05 99 360 08 058']));
     }
 
     public function test_offers_are_merged_without_duplicates_and_non_products_are_skipped(): void
