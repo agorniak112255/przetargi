@@ -555,7 +555,9 @@ class HybridWebSearchService
             }
             // ten sam filtr co w wyszukiwarce: sam kod „104” bez marki to kombinezon PROS,
             // nie rękawica Tegera. Skrócone MT-212 zostaje przez rodzinę kodu.
-            if ($this->identity->hayMentionsProduct($hay, $product)
+            // U producenta typ sprawdza treść po pobraniu (jak TYPE_MISSING wyżej) — inaczej polska karta MAPA
+            // bez „rękawic” w adresie odpadała jako „brak kodu i nazwy”, choć niesie „butoflex-650”.
+            if ($this->identity->hayMentionsProduct($hay, $product, $official)
                 || $this->identity->urlOrTitleCarriesCodeFamily($url, $title, $product)
                 || $this->identity->hayHasDistinctiveNamePhrase($hay, $product)) {
                 $out[] = [

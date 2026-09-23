@@ -239,6 +239,13 @@ export type Product = {
   /** Rozmiary/kody albo formaty wersji karty (ze źródła, do wyszukiwania); null = brak. */
   variant_summary?: string | null
   norms: string | null
+  /** Normy i kody odczytane dosłownie z karty producenta (strona producenta albo łącznik B2B); null = brak odczytu. */
+  manufacturer_norms?: {
+    source?: { connector?: string; brand?: string; url?: string; synced_at?: string }
+    rows?: { label: string; value?: string }[]
+    en388?: string
+    normy_en?: string[]
+  } | null
   /** Parametry wypisane w kolumnach cennika dostawcy — cytat z dokumentu, nie odczyt ze strony. */
   price_list_attributes?: Record<string, string> | null
   /** Parametry wpisane ręcznie — jedyne dane karty, których nie rusza automatyka. */

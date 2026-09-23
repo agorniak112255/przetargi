@@ -34,6 +34,13 @@ use Carbon\CarbonImmutable;
  */
 final class ManufacturerNormFacts
 {
+    /**
+     * `source.connector` par odczytanych przy wzbogacaniu z ramki norm na karcie wyrobu w witrynie producenta
+     * (MAPA: „EN 388 → 1121X”). Pary łącznika B2B producenta (ATG) mają pierwszeństwo — tych wzbogacanie nie
+     * nadpisuje (replaceableFromWebPage).
+     */
+    public const WEB_PAGE_CONNECTOR = 'strona-producenta';
+
     /** Tyle norm ile na kartę — tyle samo, ile dopuszcza kolumna products.norms. */
     private const MAX_NORMS = 8;
 
@@ -183,6 +190,64 @@ final class ManufacturerNormFacts
         };
 
         return $comparable($stored) == $comparable($fresh);
+    }
+
+    /** Czy wzbogacanie może zapisać pary ze strony producenta: kolumna pusta albo sama pochodzi ze strony. */
+    public static function replaceableFromWebPage(mixed $column): bool
+    {
+        return self::rows($column) === []
+            || (is_array($column) && ($column['source']['connector'] ?? null) === self::WEB_PAGE_CONNECTOR);
+    }
+
+    /**
+     * Pozycje listy norm z innego źródła (opis ze sklepów), które przeczą producentowi: ta sama norma — albo jej
+     * część, „EN 374” wobec „EN 374-1” — przy której producent podał oznaczenie. Butoflex 650: producent „EN 388:
+     * 1121X”, sklep „EN 388 (1.1.2.2)” (stary zapis) i „EN 374 (A.B.C.I.K.L)”. Normy, przy której producent nie
+     * podał oznaczenia, nie ruszamy — wtedy poziom ze sklepu jest jedynym, jaki mamy, i dedupe go zostawi.
+     *
+     * @param  list<string>  $norms
+     * @param  mixed  $column  zawartość products.manufacturer_norms
+     * @return list<string> normy producenta na początku, potem pozycje, które mu nie przeczą
+     */
+    public static function preferOver(array $norms, mixed $column): array
+    {
+        if (self::norms($column) === []) {
+            return $norms;
+        }
+        // Na listę idą pary dosłownie („EN 374-1 Type A ABCILMNOS”) — normy_en zostawia przy EN 374-1 samo
+        // oznaczenie, bo liter nie umie odczytać jako poziomu, a na karcie ich brak byłby utratą danych producenta.
+        $own = [];
+        $covered = [];
+        foreach (self::rows($column) as $row) {
+            $family = self::conflictFamily($row['label']);
+            if ($family === '') {
+                continue;
+            }
+            $own[] = $row['value'] !== '' ? $row['label'].' '.$row['value'] : $row['label'];
+            if ($row['value'] !== '') {
+                $covered[] = $family;
+            }
+        }
+
+        $kept = [];
+        foreach ($norms as $norm) {
+            $family = self::conflictFamily($norm);
+            $contradicts = $family !== '' && array_filter(
+                $covered,
+                static fn (string $own): bool => $own === $family || str_starts_with($own, $family.'-')
+            ) !== [];
+            if (! $contradicts) {
+                $kept[] = $norm;
+            }
+        }
+
+        return NormCode::dedupe([...$own, ...$kept]);
+    }
+
+    /** Rodzina normy do wykrycia sprzeczności — „EN ISO 374-1” i „EN 374-1” to ta sama norma w dwóch zapisach. */
+    private static function conflictFamily(string $raw): string
+    {
+        return str_replace(' ISO ', ' ', NormCode::leadFamily($raw));
     }
 
     /** Adres karty producenta, z której pochodzą pary; null gdy kolumna pusta. */

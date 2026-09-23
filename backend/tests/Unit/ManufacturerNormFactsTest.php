@@ -201,6 +201,51 @@ final class ManufacturerNormFactsTest extends TestCase
         $this->assertSame('2121X', $attrs['poziomy_en388']);
     }
 
+    public function test_lista_norm_ze_sklepu_ustepuje_producentowi_tej_samej_normy(): void
+    {
+        $column = ManufacturerNormFacts::build(
+            [
+                ['label' => 'Kategoria 3', 'value' => '0075'],
+                ['label' => 'EN 388', 'value' => '1121X'],
+                ['label' => 'EN 374-1', 'value' => 'Type A ABCILMNOS'],
+                ['label' => 'EN 374-5', 'value' => null],
+            ],
+            ManufacturerNormFacts::WEB_PAGE_CONNECTOR,
+            'MAPA',
+            'https://www.mapa-pro.pl/produkty/chemioodporne/strona-produktu/butoflex-650',
+        );
+
+        $norms = ManufacturerNormFacts::preferOver(
+            ['EN 388 (1.1.2.2)', 'EN 374 (A.B.C.I.K.L)', 'EN ISO 374-1 Typ B KPT', 'EN 374-5 (ALMNST)', 'EN 407 X1XXXX'],
+            $column,
+        );
+
+        $this->assertSame('EN 388 1121X', $norms[0]);
+        $this->assertContains('EN 374-1 Type A ABCILMNOS', $norms);
+        $this->assertContains('EN 407 X1XXXX', $norms, 'normy, której producent nie podaje, nie ruszamy');
+        $this->assertContains('EN 374-5 (ALMNST)', $norms, 'producent podał EN 374-5 bez oznaczenia — poziom ze sklepu zostaje');
+        $joined = implode(' | ', $norms);
+        $this->assertStringNotContainsString('1.1.2.2', $joined);
+        $this->assertStringNotContainsString('A.B.C.I.K.L', $joined, 'EN 374 to stary zapis tej samej normy co EN 374-1');
+        $this->assertStringNotContainsString('KPT', $joined, 'EN ISO 374-1 i EN 374-1 to ta sama norma');
+        $this->assertStringNotContainsString('Kategoria', $joined, 'kategoria ŚOI nie jest normą');
+    }
+
+    public function test_bez_norm_producenta_lista_zostaje_bez_zmian(): void
+    {
+        $this->assertSame(['EN 388 (1.1.2.2)'], ManufacturerNormFacts::preferOver(['EN 388 (1.1.2.2)'], null));
+    }
+
+    public function test_strona_producenta_nie_nadpisuje_par_lacznika(): void
+    {
+        $atg = ManufacturerNormFacts::build([['label' => 'EN 388', 'value' => '4331B']], 'atg', 'ATG', 'https://example.test/karta');
+        $web = ManufacturerNormFacts::build([['label' => 'EN 388', 'value' => '4331B']], ManufacturerNormFacts::WEB_PAGE_CONNECTOR, 'ATG', 'https://example.test/karta');
+
+        $this->assertTrue(ManufacturerNormFacts::replaceableFromWebPage(null));
+        $this->assertTrue(ManufacturerNormFacts::replaceableFromWebPage($web));
+        $this->assertFalse(ManufacturerNormFacts::replaceableFromWebPage($atg));
+    }
+
     public function test_karta_bez_ani_jednej_pary_nie_zapisuje_kolumny(): void
     {
         $this->assertNull(ManufacturerNormFacts::build([], 'atg', 'ATG', 'https://example.test/karta'));

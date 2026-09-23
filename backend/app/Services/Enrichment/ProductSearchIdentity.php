@@ -2347,8 +2347,12 @@ final class ProductSearchIdentity
 
     /**
      * Czy tekst wyniku dotyczy tego produktu.
+     *
+     * @param  bool  $typeCheckedOnPage  typ wyrobu z nazwy/kategorii sprawdzi dopiero treść pobranej karty — dla
+     *                                   karty z witryny producenta, który nie pisze „rękawice” w adresie własnej
+     *                                   karty (mapa-pro.pl/produkty/chemioodporne/strona-produktu/butoflex-650)
      */
-    public function hayMentionsProduct(string $hay, Product $product): bool
+    public function hayMentionsProduct(string $hay, Product $product, bool $typeCheckedOnPage = false): bool
     {
         $hay = mb_strtolower($hay);
         if ($this->looksLikeChemicalCatalogHit($hay)) {
@@ -2370,7 +2374,7 @@ final class ProductSearchIdentity
         if ($modelVerdict !== null) {
             return $modelVerdict;
         }
-        if (! $this->hayHasRequiredTypeFromName($hay, $product)) {
+        if (! $typeCheckedOnPage && ! $this->hayHasRequiredTypeFromName($hay, $product)) {
             return false;
         }
         $kleenVariant = $this->kleenGuardVariantKey($product);

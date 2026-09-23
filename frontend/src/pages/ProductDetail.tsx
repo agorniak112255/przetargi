@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
 import { CrossRefPanel } from '../components/CrossRefPanel'
+import { NormPictograms } from '../components/NormPictograms'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { PrestaKitBadge, ProductKitModal } from '../components/ProductKitModal'
 import { PriceStep } from '../components/ProductPriceChange'
@@ -528,6 +529,9 @@ export function ProductDetail() {
             ) : null}
             <span>{p.norms ?? 'bez normy'}</span>
           </p>
+          <div className="mb-2 empty:hidden">
+            <NormPictograms product={p} />
+          </div>
           <div className="mb-2 flex max-w-xl flex-wrap items-center gap-2">
             <label htmlFor="product-group" className="shrink-0 text-xs font-semibold text-slate-600">
               Grupa

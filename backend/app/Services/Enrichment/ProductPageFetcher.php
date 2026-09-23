@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\Product;
+use App\Support\NormCode;
 use App\Support\ProductAccessoryExtractor;
 use App\Support\ProductDescriptionText;
 use App\Support\ProductSizeVariant;
@@ -597,6 +598,11 @@ final class ProductPageFetcher
             if ($optionSizes !== []) {
                 $page['option_sizes'] = $optionSizes;
             }
+            // Pary z ramki norm — ProductEnrichmentService bierze je za normy producenta tylko ze strony producenta.
+            $normFacts = $this->normFacts($html);
+            if ($normFacts !== []) {
+                $page['norm_facts'] = $normFacts;
+            }
             $accessories = (new ProductAccessoryExtractor)->fromHtml($html);
             if ($accessories !== []) {
                 $page['accessories'] = $accessories;
@@ -1056,31 +1062,92 @@ final class ProductPageFetcher
      */
     private function extractNormBlocks(string $html): string
     {
+        $values = [];
+        foreach ($this->normFacts($html) as $fact) {
+            $values[] = isset($fact['value']) ? $fact['label'].': '.$fact['value'] : $fact['label'];
+        }
+
+        return $values === [] ? '' : 'Normy: '.implode(', ', $values);
+    }
+
+    /**
+     * Pary „norma → oznaczenie” z ramki norm, dosłownie. Pozycja listy z etykietą normy i wartością pod nią
+     * (MAPA: <li> z „EN 388” i „1121X”) to jedna para; bez tego ramka szła do modelu płasko („EN 388, 1121X,
+     * EN 374-1, Type A, ABCILMNOS”) i model brał czytelniej zapisany, ale stary kod ze sklepu (Butoflex 650,
+     * 23.09.2026: „EN 388 (1.1.2.2)” z cas-technik.eu). Pozycja z jedną linią zostaje samą etykietą, tak jak
+     * dotąd (pros.pl: „EN ISO 13688”, „EN 343”).
+     *
+     * @return list<array{label: string, value?: string}>
+     */
+    private function normFacts(string $html): array
+    {
         $pattern = '#<(ul|ol|dl|div|section|table)\b[^>]*(?:id|class)=["\'][^"\']*(?<![a-z])norm(?:y|s)?(?![a-z])[^"\']*["\'][^>]*>(.*?)</\1>#isu';
         // Bez stripShopChromeHtml: PrestaShop trzyma ramkę norm wewnątrz <form> koszyka, który tamto
         // czyszczenie wycina w całości. Menu z linkiem „Normy” odpada niżej — nie ma w nim kodu normy.
         $html = preg_replace('#<(script|style|noscript)[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
         if (! preg_match_all($pattern, $html, $m)) {
-            return '';
+            return [];
         }
-        $values = [];
+        $facts = [];
         foreach ($m[2] as $block) {
-            $lines = [];
-            foreach (preg_split('/\R+/u', $this->htmlToText((string) $block)) ?: [] as $line) {
-                // Myślnika nie obcinamy: „-50ºC” to temperatura ujemna, nie punktor.
-                $line = (string) preg_replace('/^[\s:•]+|[\s:•]+$/u', '', $line);
-                if ($line !== '' && mb_strtolower($line) !== 'normy') {
-                    $lines[] = $line;
+            $blockFacts = [];
+            $allLines = [];
+            $items = preg_match('#<li\b#i', (string) $block) === 1
+                ? preg_split('#</li\s*>#i', (string) $block) ?: []
+                : [(string) $block];
+            foreach ($items as $item) {
+                $lines = $this->normBlockLines((string) $item);
+                if ($lines === []) {
+                    continue;
+                }
+                $allLines = [...$allLines, ...$lines];
+                $value = implode(' ', array_slice($lines, 1));
+                // Wartość to oznaczenie („1121X”, „Type A ABCILMNOS”), nie zdanie — zdanie jako „poziom” normy
+                // producenta wypchnęłoby potem prawdziwy kod tej normy (ManufacturerNormFacts::preferOver).
+                if (count($lines) >= 2 && mb_strlen($value) <= 40 && $this->looksLikeNormLabel($lines[0])
+                    && array_filter(array_slice($lines, 1), fn (string $line): bool => $this->looksLikeNormLabel($line)) === []) {
+                    $blockFacts[] = ['label' => $lines[0], 'value' => $value];
+
+                    continue;
+                }
+                foreach ($lines as $line) {
+                    $blockFacts[] = ['label' => $line];
                 }
             }
-            $joined = implode(', ', $lines);
+            $joined = implode(', ', $allLines);
             if (mb_strlen($joined) > 300 || preg_match('/\b(?:PN-)?EN(?:\s*ISO)?\s*\d{3,5}\b|\bISO\s*\d{4,5}\b/iu', $joined) !== 1) {
                 continue;
             }
-            $values = array_values(array_unique([...$values, ...$lines]));
+            foreach ($blockFacts as $fact) {
+                if (! in_array($fact, $facts, true)) {
+                    $facts[] = $fact;
+                }
+            }
         }
 
-        return $values === [] ? '' : 'Normy: '.implode(', ', $values);
+        return $facts;
+    }
+
+    /** @return list<string> */
+    private function normBlockLines(string $html): array
+    {
+        $lines = [];
+        foreach (preg_split('/\R+/u', $this->htmlToText($html)) ?: [] as $line) {
+            // Myślnika nie obcinamy: „-50ºC” to temperatura ujemna, nie punktor.
+            $line = (string) preg_replace('/^[\s:•]+|[\s:•]+$/u', '', $line);
+            if ($line !== '' && mb_strtolower($line) !== 'normy') {
+                $lines[] = $line;
+            }
+        }
+
+        return $lines;
+    }
+
+    /** Etykieta pozycji ramki norm: oznaczenie normy albo kategoria ŚOI („Category 3”, „Kategoria III”). */
+    private function looksLikeNormLabel(string $line): bool
+    {
+        return NormCode::leadFamily($line) !== ''
+            || preg_match('/^(?:kategori[ai]|category|kat\.)\s*(?:I{1,3}|[123])$/iu', $line) === 1;
     }
 
     private function cleanFetchedPageText(string $text, string $skuNorm): string
@@ -1233,6 +1300,10 @@ final class ProductPageFetcher
     {
         $patterns = [
             '#<(?:div|section|article)[^>]*(?:id|class)=["\'][^"\']*(?:product[-_ ]?desc|product[-_]?page[-_]?desc|opis[-_ ]?produkt|short[-_ ]?desc|full[-_ ]?desc|product[-_ ]?detail|tab[-_ ]?description|description|resetcss|specyfik|cechy|parametr)[^"\']*["\'][^>]*>(.*?)</(?:div|section|article)>#is',
+            // Rozwijane sekcje karty producenta (MAPA: id="foldable-content-specificadvantages", „…-applications”).
+            // Bez nich z mapa-pro.com szło do modelu ~600 znaków (wykończenie i opakowanie), a zalety i zastosowania
+            // brał ze sklepów — Butoflex 650, 23.09.2026. Tylko po id: klasy „applications” bywają menu.
+            '#<(?:div|section|article)[^>]*\bid=["\'][^"\']*(?:advantages|applications|zastosowani|zalety)[^"\']*["\'][^>]*>(.*?)</(?:div|section|article)>#is',
             '#<div[^>]*itemprop=["\']description["\'][^>]*>(.*?)</div>#is',
             '#<(?:p|div)[^>]*itemprop=["\']description["\'][^>]*>(.*?)</(?:p|div)>#is',
         ];
@@ -1240,6 +1311,19 @@ final class ProductPageFetcher
         foreach ($patterns as $pattern) {
             if (preg_match_all($pattern, $html, $m)) {
                 foreach ($m[1] as $block) {
+                    // Kafelek innego wyrobu („Więcej rękawic”: <div class="product-details"> z nagłówkiem-linkiem
+                    // „UltraNeo 420” i jego hasłem) łapał się na „product-detail” i szedł do modelu jako treść karty.
+                    // Nagłówek z kotwicą („#collapse1” w akordeonie zakładek) to nie kafelek — ten zostaje.
+                    if (preg_match('#<h[2-6]\b[^>]*>\s*<a\s[^>]*href=["\'](?!\s*(?:\#|javascript:))#i', (string) $block) === 1) {
+                        continue;
+                    }
+                    // Lista w bloku opisu to jeden akapit: wcięcia między <li> rozbijały ją na akapity, a krótkie
+                    // punkty („Sampling chemicals”) odpadały potem jako za krótkie.
+                    $block = preg_replace_callback(
+                        '#<(ul|ol)\b.*?</\1>#is',
+                        static fn (array $m): string => preg_replace('/>\s+</', '><', $m[0]) ?? $m[0],
+                        (string) $block
+                    ) ?? (string) $block;
                     $t = self::stripExpandLinkChrome($this->htmlToText($this->stripShopChromeHtml((string) $block)));
                     $t = ProductDescriptionText::stripShopUi($t);
                     if (mb_strlen($t) >= 40 && ! $this->looksLikeShopChrome($t)
@@ -1272,6 +1356,13 @@ final class ProductPageFetcher
     private function htmlToText(string $html): string
     {
         $html = preg_replace('#<(script|style|noscript)[^>]*>.*?</\1>#is', ' ', $html) ?? $html;
+        // Wcięcia między wierszami tabeli dawały po „</tr>” pusty wiersz, więc każdy wiersz parametrów stał się
+        // osobnym akapitem, a krótkie („Material Butyl”, „Thickness (mm) 1.45”) odpadały w keepProductRelevantParagraphs.
+        $html = preg_replace_callback(
+            '#<table\b.*?</table>#is',
+            static fn (array $m): string => preg_replace('/>\s+</', '><', $m[0]) ?? $m[0],
+            $html
+        ) ?? $html;
         $html = preg_replace('#<\s*br\s*/?\s*>#i', "\n", $html) ?? $html;
         $html = preg_replace('#</(?:p|div|h[1-6]|section|article|table)>#i', "\n\n", $html) ?? $html;
         $html = preg_replace('#</(?:li|tr|ul|ol)>#i', "\n", $html) ?? $html;

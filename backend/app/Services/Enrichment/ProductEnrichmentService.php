@@ -28,10 +28,12 @@ use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\EnrichmentDescriptionTemplates;
+use App\Support\ManufacturerNormFacts;
 use App\Support\NormCode;
 use App\Support\PpeAssortment;
 use App\Support\ProductDescriptionText;
 use App\Support\ProductSizeVariant;
+use App\Support\RequirementCheck\En388Code;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -1140,6 +1142,9 @@ final class ProductEnrichmentService
             }
             $imageUrls = array_values(array_unique($imageUrls));
 
+            $this->storeManufacturerPageNorms($product, $pageSnippets);
+            $description = $this->alignEn388WithManufacturer($description, $product);
+
             $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pageSnippets, $description);
             $extracted = $this->withoutMissingDataListItems($extracted);
             $fields = $this->payloadFromExtraction($product, $extracted, $description, $pageSnippets);
@@ -1862,7 +1867,7 @@ final class ProductEnrichmentService
      */
     private function copyPageMeta(array $from, array $to): array
     {
-        foreach (['option_sizes', 'accessories', 'image_urls', 'trusted_image_urls'] as $key) {
+        foreach (['option_sizes', 'accessories', 'image_urls', 'trusted_image_urls', 'norm_facts'] as $key) {
             if (isset($from[$key]) && is_array($from[$key])) {
                 $to[$key] = $from[$key];
             }
@@ -4619,11 +4624,123 @@ SYS,
                 'role' => 'user',
                 'content' => "SKU: {$product->sku}\nProducent: {$product->manufacturer}\nNazwa: {$product->name}"
                     .$this->manufacturerModelHint($product)."\nEAN: ".($product->ean ?? '—')
+                    .$this->manufacturerNormsNote($this->manufacturerNormFactsFromPages($pageSnippets, $product))
                     .($sourcesNote !== null
                         ? "\n\n{$sourcesNote}\n\nTeksty źródeł:\n{$pagesJson}"
                         : "\n\nWyniki wyszukiwania:\n{$sourcesJson}\n\nStrony (po filtrze AI):\n{$pagesJson}"),
             ],
         ], 0.1, 4500);
+    }
+
+    /**
+     * Pary z ramki norm na karcie wyrobu w witrynie producenta (ProductPageFetcher::normFacts) jako zawartość
+     * kolumny products.manufacturer_norms; null, gdy żadna strona producenta w puli ich nie podaje. Ramka norm
+     * u sklepu się nie liczy — sklep bywa źródłem starego zapisu (cas-technik.eu: Butoflex 650 „EN 388 (1.1.2.2)”
+     * wobec „1121X” u MAPA).
+     *
+     * @param  list<array<string, mixed>>  $pages
+     * @return array<string, mixed>|null
+     */
+    private function manufacturerNormFactsFromPages(array $pages, Product $product): ?array
+    {
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            $facts = $page['norm_facts'] ?? null;
+            if ($url === '' || ! is_array($facts) || $facts === []
+                || ! $this->manufacturers->isManufacturerUrl($url, $product)) {
+                continue;
+            }
+            $pairs = [];
+            foreach ($facts as $fact) {
+                if (is_array($fact) && is_string($fact['label'] ?? null)) {
+                    $pairs[] = ['label' => $fact['label'], 'value' => is_string($fact['value'] ?? null) ? $fact['value'] : null];
+                }
+            }
+            $column = ManufacturerNormFacts::build(
+                $pairs,
+                ManufacturerNormFacts::WEB_PAGE_CONNECTOR,
+                (string) $product->manufacturer,
+                $url,
+            );
+            if ($column !== null && ManufacturerNormFacts::norms($column) !== []) {
+                return $column;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Pary ze strony producenta zapisane w products.manufacturer_norms — o ile nie ma tam par łącznika B2B producenta
+     * (te są pewniejsze: dane strukturalne, a nie ramka odczytana z HTML). Od tej kolumny liczy się dopasowanie
+     * do wymagania przetargu i normy pokazywane na karcie (BhpAttributeNormalizer::forDisplay).
+     *
+     * @param  list<array<string, mixed>>  $pages
+     */
+    private function storeManufacturerPageNorms(Product $product, array $pages): void
+    {
+        $column = $this->manufacturerNormFactsFromPages($pages, $product);
+        if ($column === null
+            || ! ManufacturerNormFacts::replaceableFromWebPage($product->manufacturer_norms)
+            || ManufacturerNormFacts::sameFacts($product->manufacturer_norms, $column)) {
+            return;
+        }
+
+        $product->manufacturer_norms = $column;
+        $product->save();
+        $this->attemptLog()->add('desc', 'normy z karty producenta: '.implode(', ', ManufacturerNormFacts::norms($column)));
+    }
+
+    /**
+     * Kod EN 388 w opisie inny niż u producenta → kod producenta. Model dostaje normy producenta z pierwszeństwem
+     * (manufacturerNormsNote), ale przy dwóch zapisach bywał zapis ze sklepu. Podmieniamy sam dosłowny kod, nie
+     * zdanie; zapis słowny („ścieranie 4, przecięcie 1…”) zostaje, tylko trafia do śladu przebiegu.
+     */
+    private function alignEn388WithManufacturer(string $description, Product $product): string
+    {
+        $own = ManufacturerNormFacts::context($product->manufacturer_norms)['en388'] ?? null;
+        $ownCode = $own !== null ? En388Code::first('EN 388 '.$own) : null;
+        if ($ownCode === null || $description === '') {
+            return $description;
+        }
+        foreach (En388Code::allIn($description) as $code) {
+            if ($code->canonical() === $ownCode->canonical()) {
+                continue;
+            }
+            if ($code->worded || $code->text === '') {
+                $this->attemptLog()->add('desc', 'opis podaje poziomy EN 388 inne niż producent ('.$own.') — zapis słowny zostaje');
+
+                continue;
+            }
+            $description = (string) preg_replace('/'.preg_quote($code->text, '/').'/u', $own, $description, 1);
+            $this->attemptLog()->add('desc', 'EN 388 w opisie: '.$code->text.' → '.$own.' (karta producenta)');
+        }
+
+        return $description;
+    }
+
+    /**
+     * Normy producenta dla modelu, z pierwszeństwem przed sklepami. Ramka norm stała w tekście strony, ale model
+     * przy dwóch zapisach tej samej normy brał czytelniejszy ze sklepu — nawet gdy był to stary kod.
+     *
+     * @param  array<string, mixed>|null  $column
+     */
+    private function manufacturerNormsNote(?array $column): string
+    {
+        $rows = ManufacturerNormFacts::rows($column);
+        if ($rows === []) {
+            return '';
+        }
+        $lines = array_map(
+            static fn (array $row): string => '- '.$row['label'].($row['value'] !== '' ? ': '.$row['value'] : ''),
+            $rows
+        );
+
+        return "\n\nNormy z karty producenta (".ManufacturerNormFacts::sourceUrl($column)."), dosłownie:\n"
+            .implode("\n", $lines)
+            ."\nTe oznaczenia mają pierwszeństwo: gdy inne źródło podaje dla tej samej normy inny kod, poziom albo"
+            .' litery (także stary zapis, np. „EN 374” zamiast „EN 374-1”), pomiń wersję z innego źródła i podaj tę'
+            .' od producenta — w opisie i w listach.';
     }
 
     /**
@@ -4682,7 +4799,12 @@ SYS,
         );
         // „EN 388”, „EN 388:2016” i „EN388:2016+A1:2018” z trzech kart to jedna norma,
         // a nie trzy pozycje na liście — zwijamy do zapisu najbogatszego w informacje.
-        $norms = NormCode::dedupe($this->stringList($extracted['norms'] ?? null));
+        // Normy producenta wyrobu przed zapisem ze sklepu tej samej normy (Butoflex 650: „EN 388 (1.1.2.2)” z cas-technik.eu
+        // wobec „1121X” u MAPA) — lista idzie do products.norms, a stamtąd do nagłówka karty.
+        $norms = ManufacturerNormFacts::preferOver(
+            NormCode::dedupe($this->stringList($extracted['norms'] ?? null)),
+            $product->manufacturer_norms
+        );
         $certificates = NormCode::dedupe($this->stringList($extracted['certificates'] ?? null));
         $materials = ProductDescriptionText::dropDuplicatedListItems(
             $this->stringList($extracted['materials'] ?? null),
@@ -4713,6 +4835,8 @@ SYS,
                 // te same źródła co BhpAttributeNormalizer::forProduct (cennik, tabelka dostawcy)
                 'shop_fields' => (string) ($product->shop_fields_summary ?? ''),
                 'price_list' => is_array($product->price_list_attributes) ? $product->price_list_attributes : [],
+                // jak w BhpAttributeNormalizer::forProduct — poziomy EN 388 producenta biją opis
+                'manufacturer' => ManufacturerNormFacts::context($product->manufacturer_norms),
             ]
         );
         $sized = $this->applyExtractedSizes(
