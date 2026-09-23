@@ -140,7 +140,7 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
                   </h3>
                   <ul className="space-y-1.5">
                     {conflicts.card_fields.map((c) => (
-                      <CardFieldItem key={c.key} conflict={c} onFind={handleFind} />
+                      <CardFieldItem key={c.key} conflict={c} onFind={handleFind} manufacturerSource={check?.manufacturer_source ?? null} />
                     ))}
                   </ul>
                 </section>
@@ -255,13 +255,35 @@ function RequirementItem({
   )
 }
 
-function CardFieldItem({ conflict, onFind }: { conflict: CardFieldConflict; onFind?: (phrase: string) => void }) {
+function CardFieldItem({
+  conflict,
+  onFind,
+  manufacturerSource,
+}: {
+  conflict: CardFieldConflict
+  onFind?: (phrase: string) => void
+  manufacturerSource: RequirementCheck['manufacturer_source']
+}) {
+  // Wartość z norm producenta rozstrzyga dopasowanie (backend stawia ją pierwszą) — pozostałe to zapisy ze sklepu
+  // albo z opisu, które jej przeczą.
+  const fromManufacturer = (v: CardFieldConflict['values'][number]) => v.findings.some((f) => f.source === 'manufacturer')
+  const decided = conflict.values.some(fromManufacturer)
   return (
     <li className="rounded border border-amber-100 bg-amber-50/50 px-2.5 py-1.5">
       <p className="font-medium text-slate-800">{conflict.label}</p>
       {conflict.values.map((v, vi) => (
-        <div key={`${v.value}:${vi}`} className="flex flex-wrap items-baseline gap-x-1">
+        <div key={`${v.value}:${v.edition ?? ''}:${vi}`} className="flex flex-wrap items-baseline gap-x-1">
           <span className="font-semibold text-amber-900">{v.value}</span>
+          {v.edition && (
+            <span className="text-[11px] text-slate-500" title="Rok wydania normy podany w polu karty">
+              ({conflict.label}:{v.edition})
+            </span>
+          )}
+          {fromManufacturer(v) && (
+            <span className="rounded bg-emerald-100 px-1 text-[10px] font-semibold text-emerald-800" title="Ta wartość rozstrzyga dopasowanie">
+              producent — rozstrzyga
+            </span>
+          )}
           <span className="text-slate-400">—</span>
           {v.findings.map((f, i) => (
             <span key={`${f.source}:${i}`}>
@@ -270,9 +292,24 @@ function CardFieldItem({ conflict, onFind }: { conflict: CardFieldConflict; onFi
               <Finding finding={f} onFind={onFind} sourceOnly={sameText(f.text, v.value)} />
             </span>
           ))}
+          {fromManufacturer(v) && manufacturerSource?.url && (
+            <a
+              href={manufacturerSource.url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[11px] text-sky-700 hover:underline"
+              title={manufacturerSource.synced_at ? `odczyt ${formatDate(manufacturerSource.synced_at)}` : undefined}
+            >
+              źródło producenta
+            </a>
+          )}
         </div>
       ))}
-      <p className="mt-0.5 text-[11px] text-amber-700">karta podaje różne wartości — sprawdź u producenta</p>
+      <p className="mt-0.5 text-[11px] text-amber-700">
+        {decided
+          ? 'dopasowanie bierze wartość producenta — pozostałe zapisy (sklep, opis) mu przeczą'
+          : 'karta podaje różne wartości — sprawdź u producenta'}
+      </p>
     </li>
   )
 }

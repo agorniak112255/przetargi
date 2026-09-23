@@ -369,6 +369,34 @@ final class LevelCheckerTest extends TestCase
      * @param  list<CardSource>  $sources
      * @return array<string, CheckRow>
      */
+    #[Test]
+    public function manufacturer_code_decides_the_row_and_other_fields_stay_visible(): void
+    {
+        // ATG (23.09.2026): producent „3121A”, stara lista wzbogacania „4121A” — o wierszu decyduje producent
+        $rows = $this->rows('Rękawice EN 388 min. 3121A', [
+            new CardSource(CardSource::MANUFACTURER, 'EN 388:2016 + A1:2018: 3121A'),
+            new CardSource(CardSource::PAYLOAD_NORMS, 'EN 388:2016 2121X'),
+        ]);
+
+        $row = $rows['en388'];
+        $this->assertSame(Status::Ok, $row->status, 'producent spełnia — zapis z opisu nie robi z tego „do sprawdzenia”');
+        $this->assertSame(CardSource::MANUFACTURER, $row->card[0]['source'], 'w jednej linii pokazujemy zapis producenta');
+        $this->assertCount(2, $row->card, 'zapis z opisu zostaje widoczny');
+        $this->assertStringContainsString('rozstrzyga norma producenta', (string) $row->note);
+    }
+
+    #[Test]
+    public function manufacturer_without_the_asked_position_does_not_decide(): void
+    {
+        // CXS podaje poziomy słownie bez litery ISO — brak u producenta nie jest faktem, liczymy wszystkie pola
+        $rows = $this->rows('Rękawice EN 388 min. 2112B', [
+            new CardSource(CardSource::MANUFACTURER, 'EN 388: odporność na przetarcie - 2, odporność na przecięcie - 1, odporność na rozerwanie - 1, odporność na przekłucie - 2'),
+            new CardSource(CardSource::DESCRIPTION, 'Normy: EN 388:2016 2112B.'),
+        ]);
+
+        $this->assertStringNotContainsString('rozstrzyga norma producenta', (string) $rows['en388']->note);
+    }
+
     private function rows(string $requirement, array $sources): array
     {
         $out = [];

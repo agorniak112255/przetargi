@@ -5,6 +5,8 @@ export type CheckStatus = 'ok' | 'fail' | 'missing' | 'unclear'
 export type CheckSource =
   | 'name'
   | 'norms'
+  | 'manufacturer'
+  | 'manual'
   | 'price_list'
   | 'shop_fields'
   | 'specs'
@@ -43,7 +45,8 @@ export type CardFieldConflict = {
   label: string
   /** klucz wiersza w `groups`, gdy przetarg pyta o ten parametr */
   row: string | null
-  values: { value: string; findings: Omit<CheckFinding, 'verdict'>[] }[]
+  /** `edition` — rok wydania normy podany w polu (EN 388:2003 obok 2016 to inne wydanie, nie przekręcony kod) */
+  values: { value: string; edition?: string; findings: Omit<CheckFinding, 'verdict'>[] }[]
 }
 
 /** Źródło przycisku „Sprzeczności (N)”: klucze wierszy fail + sprzeczne pola karty. Liczone regułami. */
@@ -56,6 +59,8 @@ export type RequirementConflicts = {
 export type RequirementCheck = {
   groups: { key: 'dimensions' | 'levels' | 'flags' | 'color'; label: string; rows: CheckRow[] }[]
   conflicts: RequirementConflicts
+  /** skąd są normy producenta (pola „producent”); null — karta ich nie ma */
+  manufacturer_source?: { url: string | null; connector: string | null; synced_at: string | null; verified: boolean } | null
 }
 
 /** POST /products/{id}/conflicts/ai — sprzeczności znalezione przez model; każdy cytat sprawdzony w polach karty. */
@@ -90,6 +95,8 @@ const SOURCE_LABEL: Record<CheckSource, string> = {
   payload_norms: 'normy z opisu',
   materials: 'materiały',
   description: 'opis',
+  manufacturer: 'producent',
+  manual: 'wpisane ręcznie',
 }
 
 // „Brak na karcie” to niewiadoma, nie porażka — szary, nigdy czerwony.

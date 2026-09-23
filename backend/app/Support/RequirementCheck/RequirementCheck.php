@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Support\RequirementCheck;
 
 use App\Models\Product;
+use App\Support\ManufacturerNormFacts;
 
 /**
  * Porównanie parametrów wymagania przetargowego z kartą produktu do okna „Weryfikacja karty”.
@@ -59,6 +60,29 @@ final class RequirementCheck
         return [
             'groups' => $groups,
             'conflicts' => ConflictSummary::build($allRows, $this->cardConflicts($sources)),
+            'manufacturer_source' => self::manufacturerSource($product),
+        ];
+    }
+
+    /**
+     * Skąd są normy producenta (pola „producent” w porównaniu) — okno sprzeczności pokazuje przy nich adres karty
+     * producenta i rodzaj źródła, żeby „producent podaje X” dało się sprawdzić jednym kliknięciem.
+     *
+     * @return array{url: ?string, connector: ?string, synced_at: ?string, verified: bool}|null
+     */
+    private static function manufacturerSource(Product $product): ?array
+    {
+        $column = $product->manufacturer_norms;
+        if (ManufacturerNormFacts::rows($column) === [] || ! is_array($column)) {
+            return null;
+        }
+        $source = is_array($column['source'] ?? null) ? $column['source'] : [];
+
+        return [
+            'url' => ManufacturerNormFacts::sourceUrl($column),
+            'connector' => is_string($source['connector'] ?? null) ? $source['connector'] : null,
+            'synced_at' => is_string($source['synced_at'] ?? null) ? $source['synced_at'] : null,
+            'verified' => ManufacturerNormFacts::verified($column),
         ];
     }
 

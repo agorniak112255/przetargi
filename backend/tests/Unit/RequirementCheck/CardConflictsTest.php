@@ -125,6 +125,21 @@ final class CardConflictsTest extends TestCase
         ], ['4542-' => ['norms: 4542'], '4X42C' => ['specs: 4X42C']]];
     }
 
+    #[Test]
+    public function manufacturer_value_comes_first_and_stated_edition_is_shown(): void
+    {
+        $conflicts = $this->byKey((new LevelChecker)->cardConflicts([
+            new CardSource(CardSource::PAYLOAD_NORMS, 'EN 388:2016 4121A'),
+            new CardSource(CardSource::MANUFACTURER, 'EN 388:2016 + A1:2018: 3121A'),
+        ]));
+
+        $values = $conflicts['en388']['values'];
+        $this->assertSame('3121A', $values[0]['value'], 'wartość producenta pierwsza');
+        $this->assertSame('manufacturer', $values[0]['findings'][0]['source']);
+        $this->assertSame('2016', $values[0]['edition'] ?? null, 'rok podany w polu stoi przy wartości');
+        $this->assertSame('4121A', $values[1]['value']);
+    }
+
     /**
      * @param  list<CardSource>  $sources
      * @param  array<string, list<string>>  $values

@@ -117,17 +117,41 @@ final class LevelChecker implements ParameterChecker
                 continue;
             }
             $grouped = [];
-            foreach ($keyHits as [$source, $text, $value]) {
-                $grouped[$value][] = CheckRow::finding($source, $text, Status::Unclear);
+            $editions = [];
+            foreach ($keyHits as $hit) {
+                [$source, $text, $value] = $hit;
+                // Rok podany w polu idzie obok wartości (plan norm, etap 6): „4542” z EN 388:2003 obok „4X42C” to inne
+                // wydanie, a nie przekręcony kod — handlowiec musi to widzieć w oknie sprzeczności.
+                $edition = $key === 'en388' ? ($hit[4] ?? null) : null;
+                $group = $value.'|'.($edition ?? '');
+                $grouped[$group][] = CheckRow::finding($source, $text, Status::Unclear);
+                $editions[$group] = [(string) $value, $edition];
             }
             $values = [];
-            foreach ($grouped as $value => $findings) {
-                $values[] = ['value' => (string) $value, 'findings' => $findings];
+            foreach ($grouped as $group => $findings) {
+                [$value, $edition] = $editions[$group];
+                $values[] = ['value' => $value, 'findings' => $findings, ...($edition !== null ? ['edition' => $edition] : [])];
             }
-            $out[] = new CardConflict($key, $key === 'footwear_class' ? $this->footwearConflictLabel(array_keys($grouped)) : $labels[$key], $values);
+            // Wartość producenta pierwsza — to ona rozstrzyga dopasowanie (normalizator i wiersz wymagania).
+            usort($values, static fn (array $a, array $b): int => self::hasManufacturer($b['findings']) <=> self::hasManufacturer($a['findings']));
+            $out[] = new CardConflict($key, $key === 'footwear_class' ? $this->footwearConflictLabel(array_column($values, 'value')) : $labels[$key], $values);
         }
 
         return $out;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $findings
+     */
+    private static function hasManufacturer(array $findings): bool
+    {
+        foreach ($findings as $finding) {
+            if (($finding['source'] ?? null) === CardSource::MANUFACTURER) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -517,7 +541,19 @@ final class LevelChecker implements ParameterChecker
             $levelsPerFinding[$edition === null ? $canonical : "{$label}:{$edition} {$canonical}"] = [$levels, $edition];
         }
 
-        $status = Status::fromCardVerdicts($verdicts);
+        // Producent rozstrzyga (plan norm, etap 6): gdy norma producenta tego wydania podaje wszystkie pozycje, o które
+        // pyta przetarg, o wierszu decyduje ona — zapis ze sklepu czy opisu (ATG: lista wzbogacania „4121A” wobec
+        // producenta „3121A”) zostaje widoczny, ale nie zamienia ✓ producenta w „do sprawdzenia”. Gdy producent czegoś
+        // nie podaje (zapis słowny bez litery ISO), liczymy jak dotąd ze wszystkich pól — brak nie jest faktem.
+        $fromManufacturer = [];
+        foreach ($findings as $i => $finding) {
+            if (($finding['source'] ?? null) === CardSource::MANUFACTURER) {
+                $fromManufacturer[] = $verdicts[$i];
+            }
+        }
+        $decidedByManufacturer = $fromManufacturer !== [] && ! in_array(Status::Missing, $fromManufacturer, true)
+            && count($fromManufacturer) < count($verdicts);
+        $status = Status::fromCardVerdicts($decidedByManufacturer ? $fromManufacturer : $verdicts);
         $note = null;
         if ($findings === []) {
             $shown = $this->positions($labels, $requiredLevels, []);
@@ -525,7 +561,22 @@ final class LevelChecker implements ParameterChecker
                 $note = 'karta podaje tylko '.implode(', ', $otherEditionTexts).' — inne wydanie normy';
             }
         } else {
-            $shown = $positionsPerFinding[(int) array_search(Status::worst($verdicts), $verdicts, true)];
+            $pool = array_keys($findings);
+            if ($decidedByManufacturer) {
+                $pool = array_values(array_filter($pool, static fn (int $i): bool => ($findings[$i]['source'] ?? null) === CardSource::MANUFACTURER));
+            }
+            $worst = Status::worst(array_map(static fn (int $i): Status => $verdicts[$i], $pool));
+            $shown = $positionsPerFinding[$pool[0]];
+            foreach ($pool as $i) {
+                if ($verdicts[$i] === $worst) {
+                    $shown = $positionsPerFinding[$i];
+                    break;
+                }
+            }
+            if ($decidedByManufacturer) {
+                // wiersz ✓/brak pokazuje w jednej linii pierwsze znalezisko — ma nim być zapis producenta
+                usort($findings, static fn (array $a, array $b): int => (($b['source'] ?? null) === CardSource::MANUFACTURER) <=> (($a['source'] ?? null) === CardSource::MANUFACTURER));
+            }
             $parts = [];
             foreach ($shown as $position) {
                 if ($position['status'] === Status::Fail->value) {
@@ -539,6 +590,9 @@ final class LevelChecker implements ParameterChecker
             }
             if ($otherEditionTexts !== []) {
                 $parts[] = 'inne wydanie normy (nie oceniane): '.implode(', ', $otherEditionTexts);
+            }
+            if ($decidedByManufacturer) {
+                $parts[] = 'rozstrzyga norma producenta; pozostałe pola karty pokazane, nie oceniane';
             }
             $note = $parts === [] ? null : implode('; ', $parts);
         }
