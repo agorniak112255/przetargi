@@ -1982,8 +1982,9 @@ final class ClientInquiryService
      * że każdej wpisuje sumę (zapytanie #50, 23.09.2026: trzy pozycje po 432 pary), a nasze
      * sprawdzenie ją potwierdzało, bo 432 stoi w cytacie jako pierwsza liczba z jednostką.
      *
-     * Rozbiciem są co najmniej dwie pary „rozmiar-ilość jednostka” — pojedyncza para
-     * („rozm. 9 - 50 par”) to zwykła ilość, którą czyta dotychczasowa reguła.
+     * Wystarczy jedna para z rozmiarem pozycji: model składa też cytat „wiersz + para tego
+     * rozmiaru” („… 432 pary Rozmiar: 8-108par”, zapytanie #52), a przy zwykłym „rozm. 9 - 50 par”
+     * para daje tę samą ilość co dotychczasowa reguła.
      *
      * @return array{qty: string, unit: string}|null
      */
@@ -1994,7 +1995,7 @@ final class ClientInquiryService
         }
         // pary stoją po przecinku („8-108par,9-108par”), ale nie w środku liczby („10,5”)
         $pair = '(?<![\p{L}\d])(?<!\d[.,])([\p{L}\d]{1,4}(?:[.,]\d)?)\s*[-–:=]\s*(\d{1,5})\s*('.self::UNIT_PATTERN.')';
-        if (preg_match_all('/'.$pair.'/iu', $quote, $all, PREG_SET_ORDER) < 2) {
+        if (preg_match_all('/'.$pair.'/iu', $quote, $all, PREG_SET_ORDER) < 1) {
             return null;
         }
         foreach ($all as $match) {

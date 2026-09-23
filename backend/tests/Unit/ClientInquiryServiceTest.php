@@ -450,6 +450,12 @@ final class ClientInquiryServiceTest extends TestCase
             $resolved,
         ));
 
+        // #52: model złożył cytat z wiersza i samej pary tego rozmiaru
+        $composed = $this->service()->resolveLineItems('x', [
+            ['id' => 'item_1', 'quote' => 'Rękawice ochronne tkaninowe pięciopalcowe, powlekane nitrylem żółtym, zakończone ściągaczem-symbol RNITz - 432 pary Rozmiar: 10-216par', 'qty' => '432', 'unit' => 'pary', 'query' => 'rękawice RNITz', 'size' => '10'],
+        ]);
+        $this->assertSame(['216', 'par'], [$composed[0]['qty'], $composed[0]['unit']]);
+
         // litery też są rozmiarem; pozycja bez rozmiaru zostaje przy sumie z wiersza
         $letters = $this->service()->resolveLineItems('x', [
             ['id' => 'item_1', 'quote' => 'Kurtka robocza 30 szt: S - 10 szt, M - 20 szt', 'qty' => '30', 'unit' => 'szt', 'query' => 'Kurtka robocza', 'size' => 'M'],
