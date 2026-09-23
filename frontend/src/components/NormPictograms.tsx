@@ -150,19 +150,31 @@ function itemsFromNormStrings(norms: string[]): PictogramItem[] {
   return dedupe(items)
 }
 
-function collectItems(product: Product): { items: PictogramItem[]; sourceTitle: string } {
+function collectItems(product: Product): {
+  items: PictogramItem[]
+  sourceTitle: string
+  fromManufacturer: boolean
+  url: string | null
+} {
   const mn = product.manufacturer_norms
   const rows = (mn?.rows ?? []).filter((r) => r && typeof r.label === 'string' && r.label.trim() !== '')
   if (rows.length > 0) {
-    const url = mn?.source?.url?.trim()
+    const url = mn?.source?.url?.trim() || null
     return {
       items: itemsFromManufacturerRows(rows),
       sourceTitle: url ? `Z karty producenta: ${url}` : 'Z karty producenta',
+      fromManufacturer: true,
+      url,
     }
   }
   const fromPayload = (product.enrichment_payload?.norms ?? []).filter((n) => typeof n === 'string' && n.trim() !== '')
   const norms = fromPayload.length > 0 ? fromPayload : splitNormsColumn(product.norms ?? '')
-  return { items: itemsFromNormStrings(norms), sourceTitle: 'Z norm karty (opis ze źródeł)' }
+  return {
+    items: itemsFromNormStrings(norms),
+    sourceTitle: 'Z norm karty (opis ze źródeł)',
+    fromManufacturer: false,
+    url: null,
+  }
 }
 
 /** Obrys tarczy wspólny dla piktogramów norm. */
@@ -284,12 +296,14 @@ function NormIcon({ kind }: { kind: IconKind }) {
  * Źródło: wiersze z karty producenta (manufacturer_norms.rows), a gdy ich brak — lista norm karty.
  * Kod pokazujemy tylko dosłownie ze źródła; gdy nie da się go pewnie wydzielić, piktogram jest bez kodu.
  * Normy nierozpoznane nie dostają piktogramu — zostają widoczne w tekście norm karty.
+ * showSource: podpis nad piktogramami, skąd są kody (producent z odnośnikiem albo opis karty) — w oknie weryfikacji
+ * karty, gdzie obok leży opis ze sklepów i trzeba od razu wiedzieć, której wartości wierzyć.
  */
-export function NormPictograms({ product }: { product: Product }) {
-  const { items, sourceTitle } = collectItems(product)
+export function NormPictograms({ product, showSource = false }: { product: Product; showSource?: boolean }) {
+  const { items, sourceTitle, fromManufacturer, url } = collectItems(product)
   if (items.length === 0) return null
 
-  return (
+  const pictograms = (
     <div className="flex flex-wrap items-start gap-3" title={sourceTitle}>
       {items.map((it) => (
         <div
@@ -304,6 +318,33 @@ export function NormPictograms({ product }: { product: Product }) {
           )}
         </div>
       ))}
+    </div>
+  )
+  if (!showSource) return pictograms
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="text-xs text-slate-600">
+        {fromManufacturer ? (
+          <>
+            <span className="font-semibold text-slate-700">Normy producenta</span>
+            {url && /^https?:\/\//i.test(url) && (
+              <>
+                {' · '}
+                <a href={url} target="_blank" rel="noreferrer" className="text-violet-700 underline hover:text-violet-900">
+                  źródło
+                </a>
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="font-semibold text-slate-700">Normy z opisu karty</span>
+            {' · karta nie ma norm od producenta'}
+          </>
+        )}
+      </p>
+      {pictograms}
     </div>
   )
 }

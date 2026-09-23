@@ -12,6 +12,7 @@ import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 import { CardConflictsModal } from './CardConflictsModal'
 import { SupplierSpecialPanel } from './SupplierSpecialPanel'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
+import { NormPictograms } from './NormPictograms'
 import { RequirementCheckList } from './RequirementCheckList'
 import { ShopFieldsTables } from './ShopFieldsTables'
 
@@ -414,6 +415,9 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
                 </span>
               </div>
             )}
+            {/* Piktogramy norm jak na stronie karty — także bez wymagania (otwarcie z wyszukiwarki), gdy lista
+                „Parametry z wymagania” się nie pokazuje. */}
+            {product && <NormPictograms product={product} showSource />}
             {product && <SupplierSpecialPanel product={product} />}
             {product && (
               <RequirementCheckList
