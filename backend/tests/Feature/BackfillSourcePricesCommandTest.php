@@ -75,7 +75,9 @@ final class BackfillSourcePricesCommandTest extends TestCase
         $this->link($this->legacyB2b, $this->anro, 'a1');
         $this->history($this->legacyB2b, 'b2b_api', 15.00, 15.00, '2026-09-12 09:30:00');
 
-        $this->both = $this->card('OBA-1', 80.00, 10, 72.00);
+        // karta marki konta jsp: od 23.09.2026 plik cennika producenta wygrywa z dystrybutorem, więc „obowiązuje
+        // B2B” zostaje prawdą tylko wtedy, gdy konto B2B jest cennikiem producenta tej karty
+        $this->both = $this->card('OBA-1', 80.00, 10, 72.00, 'PLN', ['manufacturer' => 'JSP']);
         $this->link($this->both, $this->jsp, 'j2');
         $this->history($this->both, 'price_list_import', 100.00, 90.00, '2026-09-01 08:00:00', $this->olderList);
         $this->history($this->both, 'b2b:jsp', 80.00, 72.00, '2026-09-14 10:00:00');

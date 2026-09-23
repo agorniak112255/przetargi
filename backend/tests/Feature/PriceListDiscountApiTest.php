@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\AssortmentGroup;
 use App\Models\B2bAccount;
+use App\Models\B2bAccountManufacturerRule;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductSourcePrice;
@@ -18,7 +19,7 @@ use Tests\TestCase;
 
 /**
  * Zmiana rabatu cennika z pliku w edycji wpisu: przelicza zakup ze slotu „file” tego cennika,
- * a cena obowiązująca karty z ceną B2B zostaje z B2B.
+ * a cena obowiązująca karty z ceną z konta B2B producenta zostaje z tego konta.
  */
 final class PriceListDiscountApiTest extends TestCase
 {
@@ -99,24 +100,71 @@ final class PriceListDiscountApiTest extends TestCase
         $this->assertEquals(30.00, (float) $gloves->refresh()->discount_percent);
     }
 
-    public function test_b2b_priced_card_keeps_b2b_price_but_file_slot_changes(): void
+    public function test_card_priced_from_manufacturer_b2b_account_keeps_it_but_file_slot_changes(): void
     {
-        $card = $this->card('S-1', 100.00, 10);
-        $account = B2bAccount::query()->create(['username' => 'jan', 'password' => 'sekret', 'sites' => ['b2b.example.pl']]);
+        $bolleList = PriceList::query()->create(['manufacturer' => 'Bolle', 'version' => '2026']);
+        $card = $this->card('B-1', 100.00, 10, $bolleList);
+        $card->update(['manufacturer' => 'Bolle']);
+        $account = B2bAccount::query()->create(['username' => 'jan', 'password' => 'sekret', 'sites' => ['b2b.bolle.com'], 'connector' => 'bolle']);
         app(ProductEffectivePrice::class)->saveSlot($card, ProductSourcePrice::b2bKey($account->id), [
+            'b2b_account_id' => $account->id,
             'catalog_price_net' => 80.00,
             'purchase_price' => 60.00,
             'discount_percent' => 25,
         ]);
 
-        $this->putJson("/api/price-lists/{$this->list->id}/discounts", ['ungrouped_discount' => 50])
+        $this->getJson("/api/price-lists/{$bolleList->id}/discounts")
+            ->assertOk()
+            ->assertJsonPath('b2b_priced_count', 1);
+
+        $this->putJson("/api/price-lists/{$bolleList->id}/discounts", ['ungrouped_discount' => 50])
             ->assertOk()
             ->assertJsonPath('products_changed', 1)
-            ->assertJsonPath('b2b_priced', 1);
+            ->assertJsonPath('b2b_priced', 1)
+            ->assertJsonPath('message', 'Zapisano rabat cennika Bolle: nowa cena zakupu na 1 kartach (w tym 1 z ceną z konta B2B producenta — ich cena obowiązująca zostaje z tego konta).');
 
         $this->assertEquals(60.00, (float) $card->refresh()->purchase_price);
         $slot = ProductSourcePrice::query()->where('product_id', $card->id)->where('source_key', 'file')->first();
         $this->assertEquals(50.00, (float) $slot->purchase_price);
+
+        // konto producenta z wyłączoną ceną tej marki (okno „Producenci”) nie wygrywa z plikiem
+        B2bAccountManufacturerRule::query()->create([
+            'b2b_account_id' => $account->id,
+            'manufacturer' => 'Bolle',
+            'manufacturer_key' => 'bolle',
+            'take_price' => false,
+            'take_description' => true,
+        ]);
+        $this->getJson("/api/price-lists/{$bolleList->id}/discounts")
+            ->assertOk()
+            ->assertJsonPath('b2b_priced_count', 0);
+    }
+
+    /**
+     * Cennik producenta z pliku ma pierwszeństwo przed kontem dystrybutora (23.09.2026) — nowy rabat zmienia cenę
+     * karty, a karta nie liczy się do „ceny z konta B2B”.
+     */
+    public function test_manufacturer_file_discount_changes_card_priced_by_distributor_account(): void
+    {
+        $card = $this->card('S-1', 100.00, 10);
+        $account = B2bAccount::query()->create(['username' => 'jan', 'password' => 'sekret', 'sites' => ['b2b.example.pl']]);
+        app(ProductEffectivePrice::class)->saveSlot($card, ProductSourcePrice::b2bKey($account->id), [
+            'b2b_account_id' => $account->id,
+            'catalog_price_net' => 80.00,
+            'purchase_price' => 60.00,
+            'discount_percent' => 25,
+        ]);
+
+        $this->getJson("/api/price-lists/{$this->list->id}/discounts")
+            ->assertOk()
+            ->assertJsonPath('b2b_priced_count', 0);
+
+        $this->putJson("/api/price-lists/{$this->list->id}/discounts", ['ungrouped_discount' => 50])
+            ->assertOk()
+            ->assertJsonPath('products_changed', 1)
+            ->assertJsonPath('b2b_priced', 0);
+
+        $this->assertEquals(50.00, (float) $card->refresh()->purchase_price);
     }
 
     public function test_rejects_out_of_range_and_empty_payload(): void

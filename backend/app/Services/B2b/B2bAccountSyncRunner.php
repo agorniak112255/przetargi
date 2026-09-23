@@ -384,6 +384,9 @@ final class B2bAccountSyncRunner
             $result['documents'] ?? 0,
             $result['shop_fields'] ?? 0,
         );
+        if (($result['excluded'] ?? 0) > 0) {
+            $text .= sprintf(' · wyłączone w oknie „Producenci”: %d', $result['excluded']);
+        }
         if (($result['progress_unit'] ?? null) === B2bSyncRun::UNIT_VARIANTS) {
             $text .= sprintf(
                 ' · wersje: %d/%d · wycofane wersje: %d',

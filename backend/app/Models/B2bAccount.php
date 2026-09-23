@@ -118,6 +118,12 @@ class B2bAccount extends Model
         return $this->hasMany(B2bSyncRun::class);
     }
 
+    /** Producenci, których cenę albo opis ten cennik ma pomijać (tylko wyłączenia). */
+    public function manufacturerRules(): HasMany
+    {
+        return $this->hasMany(B2bAccountManufacturerRule::class);
+    }
+
     /** Rabaty dla witryn podających tylko cenę katalogową; kolejność sprawdzania = position. */
     public function discountRules(): HasMany
     {

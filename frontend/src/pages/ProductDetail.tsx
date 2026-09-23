@@ -830,6 +830,9 @@ export function ProductDetail() {
                             obowiązuje
                           </span>
                         )}
+                        {!s.is_effective && s.ignored_reason && (
+                          <span className="text-[11px] text-slate-500">{s.ignored_reason}</span>
+                        )}
                       </td>
                     </tr>
                     {s.base_price_net != null && (

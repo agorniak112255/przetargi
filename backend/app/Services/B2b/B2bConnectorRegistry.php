@@ -136,6 +136,40 @@ class B2bConnectorRegistry
         return $class !== null && is_a($class, B2bCodeLoginSite::class, true);
     }
 
+    /**
+     * Marki, których cennikiem producenta jest to konto: marka witryny producenta (B2bManufacturerSite::ownBrand)
+     * i nazwa dostawcy — Anro podaje siebie jako producenta wszystkich swoich kart (decyzja użytkownika 23.09.2026:
+     * to jego wyroby). [] = nieznany łącznik.
+     *
+     * @return list<string>
+     */
+    public function brandsForKey(?string $key): array
+    {
+        $class = $key !== null ? $this->classFor($key) : null;
+        if ($class === null) {
+            return [];
+        }
+        $brands = [$class::label()];
+        if (is_a($class, B2bManufacturerSite::class, true)) {
+            $brands[] = $class::ownBrand();
+        }
+
+        return array_values(array_unique($brands));
+    }
+
+    /**
+     * Czy przy koncie ma sens znacznik „cena” producenta: łącznik treści ceny nie pobiera, a łącznik z wersjami
+     * trzyma ceny w wersjach, nie w slocie konta — tam liczy się tylko znacznik opisu.
+     */
+    public function usesPriceRules(?string $key): bool
+    {
+        $class = $key !== null ? $this->classFor($key) : null;
+
+        return $class !== null
+            && ! is_a($class, B2bContentOnlySite::class, true)
+            && ! is_a($class, B2bVariantConnector::class, true);
+    }
+
     public function label(?string $key): ?string
     {
         $class = $key !== null ? $this->classFor($key) : null;

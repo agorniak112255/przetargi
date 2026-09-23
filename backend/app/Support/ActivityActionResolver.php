@@ -104,6 +104,7 @@ final class ActivityActionResolver
             ['POST', '#^b2b-accounts/\d+/password$#', 'b2b_account.password_revealed', 'Odsłonięto hasło konta B2B'],
             ['POST', '#^b2b-accounts/\d+/sync$#', 'b2b_account.sync_requested', 'Zlecono pobranie cennika B2B'],
             ['POST', '#^b2b-accounts/\d+/sync-cancel$#', 'b2b_account.sync_cancelled', 'Zatrzymano pobieranie cennika B2B'],
+            ['PUT', '#^b2b-accounts/\d+/manufacturers$#', 'b2b_account.manufacturer_rules_updated', 'Zmieniono producentów w cenniku B2B'],
             ['POST', '#^products/enrich$#', 'product.enriched', 'Wzbogacanie produktów'],
             ['POST', '#^products/\d+/enrich$#', 'product.enriched', 'Wzbogacanie produktu'],
             ['POST', '#^products/delete$#', 'product.deleted', 'Usunięto produkty'],

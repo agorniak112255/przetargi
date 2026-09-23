@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { B2bDiscountRulesModal } from '../components/B2bDiscountRulesModal'
+import { B2bManufacturerRulesModal } from '../components/B2bManufacturerRulesModal'
 import { B2bSyncProgressModal } from '../components/B2bSyncProgressModal'
 import { PriceListsTabs } from '../components/PriceListsTabs'
 import { api, can } from '../lib/api'
@@ -122,6 +123,7 @@ export function PriceListsB2b() {
   const [visible, setVisible] = useState<Record<number, boolean>>({})
   const [progressAccount, setProgressAccount] = useState<B2bAccount | null>(null)
   const [discountAccount, setDiscountAccount] = useState<B2bAccount | null>(null)
+  const [manufacturersAccount, setManufacturersAccount] = useState<B2bAccount | null>(null)
   const [codeLoginAccount, setCodeLoginAccount] = useState<B2bAccount | null>(null)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
@@ -593,6 +595,14 @@ export function PriceListsB2b() {
                           Rabaty
                         </button>
                       )}
+                      <button
+                        type="button"
+                        className="text-blue-700 underline"
+                        onClick={() => setManufacturersAccount(row)}
+                        title="Producenci, których karty pobiera to konto — czy ten cennik ustala ich cenę i opis"
+                      >
+                        Producenci
+                      </button>
                       {usesStandardDiscounts(row.connector) && (
                         <Link
                           className="font-medium text-emerald-700 underline"
@@ -679,6 +689,14 @@ export function PriceListsB2b() {
           account={discountAccount}
           canManage={canManage}
           onClose={() => setDiscountAccount(null)}
+        />
+      )}
+
+      {manufacturersAccount && (
+        <B2bManufacturerRulesModal
+          account={manufacturersAccount}
+          canManage={canManage}
+          onClose={() => setManufacturersAccount(null)}
         />
       )}
     </div>

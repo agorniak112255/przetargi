@@ -119,6 +119,9 @@ final class B2bSyncCommand extends Command
             $result['documents'] ?? 0,
             $result['shop_fields'] ?? 0,
         ));
+        if (($result['excluded'] ?? 0) > 0) {
+            $this->info('Wyłączone w oknie „Producenci”: '.$result['excluded']);
+        }
         foreach (array_slice($result['errors'], 0, 20) as $error) {
             $this->warn('  '.$error);
         }

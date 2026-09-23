@@ -31,6 +31,8 @@ use Throwable;
  * Kontrola: w transakcji porcji sloty są wstawiane i dla każdej karty liczona jest cena obowiązująca
  * (ProductEffectivePrice::resolve, ta sama logika co przy importach). Karta z ceną inną niż obecna nie dostaje slotów
  * (decyzja człowieka). Bez --apply transakcja każdej porcji jest wycofywana — nic nie zostaje zapisane.
+ * Polecenie jednorazowe (migracja 15.09.2026). Od 23.09.2026 resolve() daje pierwszeństwo cennikowi producenta
+ * przed dystrybutorem, więc ponowne uruchomienie porównywałoby karty z inną regułą niż ta, wg której powstały.
  */
 final class BackfillSourcePricesCommand extends Command
 {

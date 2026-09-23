@@ -212,8 +212,9 @@ final class PriceListSourcePriceSlotTest extends TestCase
             'name' => 'AlphaTec 37695VP Size 10.0',
             'manufacturer' => 'Ansell',
             'description' => str_repeat('Rękawice chemiczne Ansell AlphaTec. ', 3),
-            'catalog_price_net' => 2.85,
-            'purchase_price' => 2.85,
+            // cena karty inna niż w slotach — po łączeniu ma wynikać z przeniesionych slotów
+            'catalog_price_net' => 3.00,
+            'purchase_price' => 3.00,
             'currency' => 'PLN',
         ]);
         $loser = Product::query()->create([
@@ -241,10 +242,11 @@ final class PriceListSourcePriceSlotTest extends TestCase
         $this->assertCount(2, $slots);
         $this->assertSame($newList->id, $slots[ProductSourcePrice::SOURCE_FILE]->price_list_id);
         $this->assertTrue($slots->has(ProductSourcePrice::b2bKey($account->id)));
-        // cena obowiązująca karty docelowej przeliczona: z B2B
+        // cena obowiązująca karty docelowej przeliczona z przeniesionych slotów: plik cennika Ansell to cennik
+        // producenta, a konto anro jest dla Ansell dystrybutorem — od 23.09.2026 wygrywa plik producenta
         $kept = $winner->fresh();
-        $this->assertEquals(3.50, (float) $kept->catalog_price_net);
-        $this->assertEquals(3.10, (float) $kept->purchase_price);
+        $this->assertEquals(2.85, (float) $kept->catalog_price_net);
+        $this->assertEquals(2.85, (float) $kept->purchase_price);
     }
 
     private function b2bCard(): Product

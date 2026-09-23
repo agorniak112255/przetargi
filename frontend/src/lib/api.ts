@@ -355,6 +355,8 @@ export type ProductSourcePrice = {
   checked_at: string | null
   migrated: boolean
   is_effective: boolean
+  /** Dlaczego cena z tego źródła nie obowiązuje (np. pierwszeństwo cennika producenta); null = brak powodu. */
+  ignored_reason?: string | null
   /** Cena z cennika bazowego dostawcy (np. xlsx UVEX) — obok ceny konta, catalog_price_net bez zmian. */
   base_price_net?: string | null
   /** Arkusz cennika bazowego (np. „Hełmy”) — po nim dobierany rabat standardowy. */

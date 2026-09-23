@@ -191,6 +191,39 @@ final class ProductSupplierSpecialApiTest extends TestCase
             ->assertJsonPath('data.0.supplier_special.status', 'special');
     }
 
+    /**
+     * Dwa sloty z oceną w tej samej cenie: znacznik bierze slot obowiązujący (konto producenta UVEX), nie świeższy
+     * slot dystrybutora — ocena dystrybutora mówi o jego rabacie, a nie o cenie karty (23.09.2026).
+     */
+    public function test_znacznik_z_ceny_obowiazujacej_nie_ze_swiezszego_slotu_o_tej_samej_cenie(): void
+    {
+        $product = $this->product('9160-140', 200);
+        $this->uvexSlot($product, 200, ['checked_at' => Carbon::parse('2026-09-01 08:00:00')]);
+        ProductSourcePrice::query()->create([
+            'product_id' => $product->id,
+            'source_key' => ProductSourcePrice::b2bKey((int) $this->anro->id),
+            'b2b_account_id' => $this->anro->id,
+            'catalog_price_net' => 200,
+            'purchase_price' => 200,
+            'currency' => 'PLN',
+            // 230 − 15% = 195,50 → cena 200 gorsza niż standard
+            'base_price_net' => 230,
+            'standard_discount_percent' => 15,
+            'checked_at' => Carbon::parse('2026-09-20 08:00:00'),
+        ]);
+
+        $this->getJson('/api/products/'.$product->id)
+            ->assertOk()
+            ->assertJsonPath('source_prices.0.source_key', ProductSourcePrice::b2bKey((int) $this->uvex->id))
+            ->assertJsonPath('source_prices.0.is_effective', true)
+            ->assertJsonPath('source_prices.1.supplier_special.status', 'worse_than_standard')
+            ->assertJsonPath('source_prices.1.ignored_reason', 'pierwszeństwo ma cennik producenta (konto B2B producenta)')
+            ->assertJsonPath('supplier_special.status', 'special');
+
+        $rows = collect($this->getJson('/api/products?per_page=all')->assertOk()->json('data'))->keyBy('sku');
+        $this->assertSame('special', $rows['9160-140']['supplier_special']['status']);
+    }
+
     public function test_filtr_listy_ceny_specjalne_zgodny_z_ocena_i_z_filtrem_cennika_konta(): void
     {
         // cennik 255,31 − 15% = 217,01; tolerancja 1,09 zł (0,5%)

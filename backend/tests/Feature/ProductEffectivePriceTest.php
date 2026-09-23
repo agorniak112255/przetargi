@@ -80,7 +80,9 @@ final class ProductEffectivePriceTest extends TestCase
 
     public function test_newest_checked_b2b_account_wins(): void
     {
-        $product = $this->card();
+        // Obaj to dystrybutorzy tej marki — karta „Anro” miałaby w koncie anro cennik producenta, który od 23.09.2026
+        // wygrywa niezależnie od daty (test_manufacturer_b2b_price_list_wins_over_fresher_distributor).
+        $product = $this->card(['manufacturer' => 'Ansell']);
         $first = $this->account('jsp');
         $second = $this->account('anro');
 

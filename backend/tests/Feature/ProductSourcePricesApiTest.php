@@ -40,7 +40,8 @@ final class ProductSourcePricesApiTest extends TestCase
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $product = $this->product('SRC-1');
-        $list = PriceList::query()->create(['manufacturer' => 'Ansell', 'version' => '2026-09']);
+        // cennik z pliku dystrybutora (nie producenta karty) — przegrywa z B2B; plik producenta: test niżej
+        $list = PriceList::query()->create(['manufacturer' => 'Hurtownia BHP', 'version' => '2026-09']);
         $anro = B2bAccount::query()->create([
             'username' => 'login-anro-tajny',
             'password' => 'haslo-anro-tajne',
@@ -98,7 +99,7 @@ final class ProductSourcePricesApiTest extends TestCase
             ->assertJsonPath('source_prices.1.is_effective', false)
             ->assertJsonPath('source_prices.1.discount_percent', null)
             ->assertJsonPath('source_prices.2.source_key', 'file')
-            ->assertJsonPath('source_prices.2.source_label', 'Cennik z pliku · Ansell 2026-09')
+            ->assertJsonPath('source_prices.2.source_label', 'Cennik z pliku · Hurtownia BHP 2026-09')
             ->assertJsonPath('source_prices.2.is_effective', false)
             ->assertJsonPath('source_prices.2.migrated', true);
 
@@ -106,6 +107,50 @@ final class ProductSourcePricesApiTest extends TestCase
         foreach (['login-anro-tajny', 'haslo-anro-tajne', 'login-inny-tajny', 'haslo-inne-tajne'] as $secret) {
             $this->assertStringNotContainsString($secret, $body);
         }
+    }
+
+    /**
+     * Cennik producenta z pliku ma pierwszeństwo przed dystrybutorem wielu marek bez względu na datę (23.09.2026);
+     * karta mówi, dlaczego pozostałe ceny nie obowiązują, a sloty z powodem są na końcu listy.
+     */
+    public function test_manufacturer_file_wins_over_distributor_and_ignored_slots_explain_why(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $product = $this->product('SRC-4');
+        $list = PriceList::query()->create(['manufacturer' => 'Ansell', 'version' => '2026-09']);
+        $anro = B2bAccount::query()->create(['username' => 'a', 'password' => 'b', 'sites' => ['b2b.anro.net.pl'], 'connector' => 'anro']);
+        $empty = B2bAccount::query()->create(['username' => 'c', 'password' => 'd', 'sites' => ['b2b.example.pl'], 'connector' => null]);
+
+        $this->slot($product, ProductSourcePrice::b2bKey($empty->id), [
+            'b2b_account_id' => $empty->id,
+            'currency' => 'PLN',
+            'checked_at' => Carbon::parse('2026-09-15 08:00:00'),
+        ]);
+        $this->slot($product, ProductSourcePrice::SOURCE_FILE, [
+            'price_list_id' => $list->id,
+            'catalog_price_net' => 50,
+            'purchase_price' => 40,
+            'currency' => 'PLN',
+            'checked_at' => Carbon::parse('2026-09-01 08:00:00'),
+        ]);
+        $this->slot($product, ProductSourcePrice::b2bKey($anro->id), [
+            'b2b_account_id' => $anro->id,
+            'catalog_price_net' => 48,
+            'purchase_price' => 36,
+            'currency' => 'PLN',
+            'checked_at' => Carbon::parse('2026-09-20 08:00:00'),
+        ]);
+
+        $this->getJson('/api/products/'.$product->id)
+            ->assertOk()
+            ->assertJsonPath('source_prices.0.source_key', 'file')
+            ->assertJsonPath('source_prices.0.is_effective', true)
+            ->assertJsonPath('source_prices.0.ignored_reason', null)
+            ->assertJsonPath('source_prices.1.source_key', 'b2b:'.$anro->id)
+            ->assertJsonPath('source_prices.1.is_effective', false)
+            ->assertJsonPath('source_prices.1.ignored_reason', 'pierwszeństwo ma cennik producenta (plik cennika producenta)')
+            ->assertJsonPath('source_prices.2.source_key', 'b2b:'.$empty->id)
+            ->assertJsonPath('source_prices.2.ignored_reason', 'brak ceny w tym źródle');
     }
 
     public function test_file_slot_is_effective_without_b2b_and_label_without_price_list(): void

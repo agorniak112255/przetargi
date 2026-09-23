@@ -6,6 +6,7 @@ namespace App\Jobs;
 
 use App\Models\B2bProductLink;
 use App\Models\Product;
+use App\Services\B2b\B2bManufacturerRules;
 use App\Services\B2b\B2bTextTranslator;
 use App\Services\B2b\B2bTranslationRejected;
 use App\Services\Enrichment\EnrichmentSlots;
@@ -206,6 +207,11 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
     private function snapshot(Product $product, B2bProductLink $link): ?array
     {
         $pending = self::pending($product, $link, $this->translateName);
+        // Opis producenta wyłączony w oknie „Producenci”: tłumaczenie opisu też jest zapisem opisu z tego cennika.
+        // Nazwa nowej karty dalej się tłumaczy — to nie opis.
+        if ($pending['description'] && ! app(B2bManufacturerRules::class)->descriptionAllowed($link, $product)) {
+            $pending['description'] = false;
+        }
         if (! $pending['description'] && ! $pending['name']) {
             return null;
         }

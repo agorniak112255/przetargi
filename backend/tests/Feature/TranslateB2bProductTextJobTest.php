@@ -6,7 +6,9 @@ namespace Tests\Feature;
 
 use App\Jobs\TranslateB2bProductTextJob;
 use App\Models\B2bAccount;
+use App\Models\B2bAccountManufacturerRule;
 use App\Models\B2bProductLink;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\B2b\B2bTextTranslator;
@@ -105,6 +107,28 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame('Opis poprawiony ręcznie', $product->description);
         $this->assertSame(sha1(self::SOURCE_DESCRIPTION), $link->description_hash);
         $this->assertNull($link->source_description_hash, 'Opis karty nie jest tłumaczeniem');
+        $this->assertSame([['', self::SOURCE_NAME, self::SOURCE_NAME]], $this->translator->calls);
+    }
+
+    public function test_description_off_in_producers_window_translates_only_name(): void
+    {
+        [$product, $link] = $this->importedCard();
+        // opis producenta wyłączony w oknie „Producenci” już po zleceniu joba
+        B2bAccountManufacturerRule::query()->create([
+            'b2b_account_id' => $this->account->id,
+            'manufacturer' => (string) $product->manufacturer,
+            'manufacturer_key' => PriceList::manufacturerKey((string) $product->manufacturer),
+            'take_price' => true,
+            'take_description' => false,
+        ]);
+
+        $this->runJob($product, translateName: true);
+
+        $product->refresh();
+        $link->refresh();
+        $this->assertSame(self::POLISH_NAME, $product->name);
+        $this->assertSame(self::SOURCE_DESCRIPTION, $product->description);
+        $this->assertNull($link->source_description_hash);
         $this->assertSame([['', self::SOURCE_NAME, self::SOURCE_NAME]], $this->translator->calls);
     }
 

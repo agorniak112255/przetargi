@@ -23,6 +23,7 @@ use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\PriceListImportService;
 use App\Services\Pricing\ProductEffectivePrice;
+use App\Support\BrandKey;
 use App\Support\ManufacturerNormFacts;
 use App\Support\ProductSearchBlob;
 use Carbon\CarbonImmutable;
@@ -37,7 +38,7 @@ use Throwable;
  *   innego producenta jest pomijany (wspólny import cenników skleja warianty po rdzeniu kodu i cenie);
  * - cena ze źródła trafia do slotu konta w product_source_prices („b2b:{id konta}”), nie wprost na kartę
  *   (decyzja użytkownika 15.09.2026: cenniki z plików i B2B nie nadpisują sobie cen); cenę obowiązującą karty
- *   przelicza ProductEffectivePrice (slot B2B ma pierwszeństwo przed plikiem). Zmiana ceny i podsumowanie
+ *   przelicza ProductEffectivePrice (cennik producenta przed dystrybutorem, B2B przed plikiem). Zmiana ceny i podsumowanie
  *   aktualizacji porównują z poprzednim slotem tego konta (bez slotu — z ceną karty). Historia cen karty (źródło
  *   „b2b:{łącznik}”, przebieg, stały wpis konta w Cennikach) z wartościami slotu, tylko przy nowej karcie lub
  *   zmianie ceny slotu — zmiany widać na karcie produktu z datą; wpis konta w Cennikach (jeden na konto,
@@ -66,6 +67,10 @@ use Throwable;
  *   z samej karty katalogowej i tabelki ze strony.
  *   Karta, która wciąż ma nieprzetłumaczony tekst źródła (TranslateB2bProductTextJob::pending), dostaje zlecenie
  *   przy każdym przebiegu — ponowne pobranie nadrabia tłumaczenia odrzucone, nieudane albo nadpisane.
+ *
+ * Okno „Producenci” przy koncie (B2bManufacturerRules, decyzja użytkownika 23.09.2026): znaczniki „cena” i „opis”
+ * producenta wyłączają zapis ceny albo opisu z tego cennika (szczegóły przy syncProduct); b2b_product_links.manufacturer
+ * trzyma producenta w brzmieniu konta — to klucz tych znaczników także w ProductEffectivePrice.
  *
  * Grupa pozycji scalonych przez łącznik (B2bRemoteProduct::members, np. rozmiary o tej samej cenie — decyzja
  * użytkownika 15.09.2026): jedna karta, powiązanie dla każdej pozycji; kartę użytą w przebiegu przez inną grupę
@@ -147,6 +152,7 @@ final class B2bCatalogSync
         private readonly ProductEffectivePrice $effectivePrices,
         private readonly ProductDocumentDownloader $documents = new ProductDocumentDownloader,
         private readonly B2bDocumentText $documentText = new B2bDocumentText,
+        private readonly B2bManufacturerRules $manufacturerRules = new B2bManufacturerRules,
     ) {}
 
     /**
@@ -159,6 +165,7 @@ final class B2bCatalogSync
      *     updated: int,
      *     unchanged: int,
      *     skipped: int,
+     *     excluded: int,
      *     descriptions: int,
      *     images: int,
      *     documents: int,
@@ -193,9 +200,14 @@ final class B2bCatalogSync
 
         $stats = [
             'total_remote' => 0, 'seen' => 0, 'created' => 0, 'updated' => 0,
-            'unchanged' => 0, 'skipped' => 0, 'descriptions' => 0, 'images' => 0,
+            'unchanged' => 0, 'skipped' => 0, 'excluded' => 0, 'descriptions' => 0, 'images' => 0,
             'documents' => 0, 'shop_fields' => 0, 'translations_queued' => 0,
         ];
+        // Znaczniki „cena” / „opis” producenta z okna „Producenci” — raz na przebieg; zmiana w trakcie działa od
+        // następnego przebiegu (cena obowiązująca czyta je na bieżąco w ProductEffectivePrice).
+        $rules = $this->manufacturerRules->forAccount((int) $account->id);
+        // producent => [pozycje pominięte w całości, pozycje bez ceny, pozycje bez opisu] — jedna linia w dzienniku
+        $ruleHits = [];
         $errors = [];
         $errorsOverLimit = 0;
         $pricesChanged = 0;
@@ -258,8 +270,8 @@ final class B2bCatalogSync
 
             try {
                 $outcome = $variantConnector !== null
-                    ? $this->syncVariantProduct($account, $variantConnector, $remote, $dryRun, $withImages, $runId, $priceListId)
-                    : $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId, $priceListId, $claimed);
+                    ? $this->syncVariantProduct($account, $variantConnector, $remote, $dryRun, $withImages, $runId, $priceListId, $rules)
+                    : $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules);
             } catch (B2bFatalException $e) {
                 // utrata sesji / blokada — kolejne produkty zapisałyby złe ceny; przebieg kończy się jako „failed”
                 throw $e;
@@ -271,7 +283,18 @@ final class B2bCatalogSync
                 $variantsProcessed += (int) ($outcome['variants'] ?? $this->listedVersionCount($remote));
             }
 
-            if ($outcome['status'] === 'skipped') {
+            $ruleManufacturer = (string) ($outcome['rule_manufacturer'] ?? '');
+            if ($ruleManufacturer !== '') {
+                $ruleHits[$ruleManufacturer] ??= [0, 0, 0];
+                $ruleHits[$ruleManufacturer][0] += $outcome['status'] === 'excluded' ? 1 : 0;
+                $ruleHits[$ruleManufacturer][1] += ($outcome['price_off'] ?? false) ? 1 : 0;
+                $ruleHits[$ruleManufacturer][2] += ($outcome['description_off'] ?? false) ? 1 : 0;
+            }
+
+            if ($outcome['status'] === 'excluded') {
+                // decyzja użytkownika, nie problem — tylko licznik i linia podsumowania, bez listy pominięć
+                $stats['excluded']++;
+            } elseif ($outcome['status'] === 'skipped') {
                 $stats['skipped']++;
                 $addError($label.': '.$outcome['reason']);
                 $progress?->error($label.': '.$outcome['reason']);
@@ -314,9 +337,10 @@ final class B2bCatalogSync
                 'created' => 'nowy',
                 'updated' => 'zaktualizowany',
                 'unchanged' => 'bez zmian',
+                'excluded' => 'wyłączony w cenniku: '.$outcome['reason'],
                 default => 'pominięty: '.$outcome['reason'],
             };
-            if ($variantConnector !== null && $outcome['status'] !== 'skipped') {
+            if ($variantConnector !== null && ! in_array($outcome['status'], ['skipped', 'excluded'], true)) {
                 $statusText .= ' · wersji: '.(int) ($outcome['variants'] ?? 0);
             }
             $line = sprintf('[%d/%d] %s — %s', $stats['seen'], $expected($stats['total_remote']), $label, $statusText);
@@ -325,8 +349,9 @@ final class B2bCatalogSync
             }
 
             if ($progress !== null) {
-                // „bez zmian” tylko w licznikach — przy pełnym cenniku to tysiące wierszy szumu
-                if ($outcome['status'] !== 'unchanged') {
+                // „bez zmian” i wyłączone w oknie „Producenci” tylko w licznikach — przy pełnym cenniku to tysiące
+                // wierszy szumu
+                if (! in_array($outcome['status'], ['unchanged', 'excluded'], true)) {
                     $progress->log($outcome['status'] === 'skipped' ? 'warn' : 'info', $line);
                 }
                 foreach ($outcome['warnings'] ?? [] as $warning) {
@@ -407,6 +432,23 @@ final class B2bCatalogSync
 
         if ($stats['translations_queued'] > 0) {
             $progress?->log('info', 'Opisy zlecone do tłumaczenia na polski: '.$stats['translations_queued']);
+        }
+
+        if ($ruleHits !== []) {
+            $parts = [];
+            foreach ($ruleHits as $name => [$excluded, $priceOff, $descriptionOff]) {
+                $bits = array_filter([
+                    $excluded > 0 ? 'pominięte: '.$excluded : null,
+                    $priceOff > 0 ? 'bez ceny: '.$priceOff : null,
+                    $descriptionOff > 0 ? 'bez opisu: '.$descriptionOff : null,
+                ]);
+                if ($bits !== []) {
+                    $parts[] = $name.' ('.implode(', ', $bits).')';
+                }
+            }
+            if ($parts !== []) {
+                $progress?->log('info', 'Wyłączone w oknie „Producenci”: '.implode('; ', $parts));
+            }
         }
 
         // Podsumowanie własne łącznika (np. trafienia reguł rabatowych) — po przejściu całej listy.
@@ -496,7 +538,13 @@ final class B2bCatalogSync
      * Dostępność ze źródła (niepusta wartość) tylko w slocie konta; variant_summary łącznika tylko na kartę bez
      * aktywnych wersji. Błąd pobrania opisu nie wstrzymuje ceny (ostrzeżenie w dzienniku, jak w ścieżce z wersjami).
      *
+     * Znaczniki producenta z okna „Producenci” ($rules, decyzja użytkownika 23.09.2026): bez ceny — jak łącznik
+     * treści (price() nie jest wołane, slot konta i historia cen bez zmian, nowej karty nie zakładamy); bez opisu —
+     * opisu nie czytamy, nie zapisujemy i nie kasujemy, opisu z karty katalogowej nie zlecamy; oba wyłączone —
+     * pozycja pominięta w całości (status „excluded”, bez powiązania).
+     *
      * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed  karty użyte w tym przebiegu
+     * @param  array<string, array{price: bool, description: bool}>  $rules  wyłączenia konta po kluczu producenta
      * @return array<string, mixed>
      */
     private function syncProduct(
@@ -508,6 +556,7 @@ final class B2bCatalogSync
         ?int $runId,
         ?int $priceListId,
         array &$claimed,
+        array $rules = [],
     ): array {
         if ($remote->remoteId === '' || $remote->sku === '' || $remote->name === '') {
             return ['status' => 'skipped', 'reason' => 'brak kodu lub nazwy'];
@@ -542,9 +591,27 @@ final class B2bCatalogSync
         // łącznik treści (B2bContentOnlySite, np. witryna producenta): brak ceny jest u niego normalny,
         // a katalog buduje cennik — pozycja bez karty nie zakłada nowej, tylko czeka na cennik
         $contentOnly = $connector instanceof B2bContentOnlySite;
-        $price = $connector->price($remote);
-        if ($price === null && ! $contentOnly) {
+        $flags = $rules[B2bManufacturerRules::key($manufacturer)] ?? B2bManufacturerRules::ALLOW_ALL;
+        // łącznik treści ceny i tak nie wnosi — znacznik ceny go nie dotyczy
+        $priceOff = ! $contentOnly && ! $flags['price'];
+        $descriptionOff = ! $flags['description'];
+        $ruleOutcome = ['rule_manufacturer' => $manufacturer, 'price_off' => $priceOff, 'description_off' => $descriptionOff];
+        if ($priceOff && $descriptionOff) {
+            return ['status' => 'excluded', 'reason' => 'producent '.$manufacturer.' wyłączony w tym cenniku', ...$ruleOutcome];
+        }
+        // Bez ceny (łącznik treści albo cena producenta wyłączona) pozycja idzie drogą łącznika treści. Przy
+        // wyłączonej cenie nie pytamy sklepu o cenę wcale: nie jest potrzebna, a jej błąd pomijałby pozycję.
+        $noPrice = $contentOnly || $priceOff;
+        $price = $priceOff ? null : $connector->price($remote);
+        if ($price === null && ! $noPrice) {
             return ['status' => 'skipped', 'reason' => 'brak ceny w B2B'];
+        }
+        if ($priceOff && $existing === null) {
+            return [
+                'status' => 'excluded',
+                'reason' => 'cena producenta '.$manufacturer.' wyłączona w tym cenniku — nowej karty nie zakładamy',
+                ...$ruleOutcome,
+            ];
         }
         if ($contentOnly && $existing === null) {
             return ['status' => 'skipped', 'reason' => 'brak karty w katalogu — cennik jej nie zawiera'];
@@ -581,13 +648,13 @@ final class B2bCatalogSync
         // błąd pobrania opisu nie wstrzymuje ceny: opis zostaje bez zmian, ostrzeżenie w dzienniku przebiegu
         $warnings = [];
         $card = $this->cardDocuments($connector, $remote, $existing, $warnings);
-        [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings);
+        [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings, ! $descriptionOff);
 
         $priceChange = null;
         $updateSummary = null;
         $dirty = true;
         $slotChanged = true;
-        if ($contentOnly && $existing !== null) {
+        if ($noPrice && $existing !== null) {
             // tryb „tylko treść”: nie ma ceny do porównania ani slotu do odświeżenia, więc o tym, czy karta się
             // zmieniła, decydują same pola opisowe. Podsumowania aktualizacji (kolumny cen) też nie budujemy.
             $existing->fill($payload);
@@ -630,7 +697,7 @@ final class B2bCatalogSync
         if ($dryRun) {
             $this->claim($claimed, $existing !== null ? (int) $existing->id : null, $existing !== null ? (string) $existing->sku : $remote->sku);
 
-            return ['status' => $status, 'description' => isset($payload['description'])];
+            return ['status' => $status, 'description' => isset($payload['description']), ...$ruleOutcome];
         }
 
         // Karta i jej powiązanie w jednej transakcji (jak w ścieżce z wersjami): przerwany zapis zostawiłby kartę
@@ -638,7 +705,7 @@ final class B2bCatalogSync
         // — kolejne przebiegi nie ruszałyby już jej opisu (16.09.2026: 214 kart UVEX po błędzie pamięci podręcznej).
         [$product, $savedLink] = DB::transaction(function () use (
             $account, $connector, $remote, $existing, $payload, $prices, $baseSlot, $slotKey, $priceChange, $priceListId,
-            $runId, $dirty, $members, $memberLinks, $descriptionHash, $sourceTextTaken, $contentOnly, &$claimed, &$warnings,
+            $runId, $dirty, $members, $memberLinks, $descriptionHash, $sourceTextTaken, $noPrice, $manufacturer, &$claimed, &$warnings,
         ): array {
             if ($existing !== null) {
                 if ($dirty) {
@@ -654,7 +721,9 @@ final class B2bCatalogSync
 
             // Łącznik treści nie ma ceny do zapisania: slot konta zostawiamy pusty, a historii cen nie dotykamy.
             // Slot z ceną detaliczną producenta wygrałby z ceną z cennika (ProductEffectivePrice) i zawyżył wycenę.
-            if (! $contentOnly) {
+            // Tak samo przy cenie producenta wyłączonej w oknie „Producenci”: slot z poprzednich przebiegów zostaje
+            // w bazie, ale ProductEffectivePrice go pomija.
+            if (! $noPrice) {
                 // zapis slotu także bez zmiany ceny — checked_at wyznacza najświeższe konto przy kilku kontach
                 $slot = $this->effectivePrices->saveSlot($product, $slotKey, [
                     ...$prices,
@@ -680,6 +749,7 @@ final class B2bCatalogSync
                 'product_id' => $product->id,
                 'remote_sku' => mb_substr($remote->sku, 0, 255),
                 'remote_name' => mb_substr($remote->name, 0, 1000),
+                'manufacturer' => $manufacturer !== '' ? $manufacturer : null,
                 'description_hash' => $descriptionHash,
                 'last_seen_at' => now(),
             ];
@@ -748,7 +818,7 @@ final class B2bCatalogSync
         // nieudany albo nowy tekst u dostawcy), dostaje zlecenie przy każdym przebiegu; czekający job nie jest
         // dublowany. Opis odrzucony dla tych samych źródeł (ten sam PDF, tekst i tabelka) nie wraca — sources().
         $datasheetOnly = $connector instanceof B2bDatasheetOnlyDescription;
-        if ($connector instanceof B2bDescribesFromDatasheet && $savedLink !== null
+        if ($connector instanceof B2bDescribesFromDatasheet && $savedLink !== null && ! $descriptionOff
             && DescribeB2bProductFromDatasheetJob::sources(
                 $product,
                 $savedLink,
@@ -770,6 +840,7 @@ final class B2bCatalogSync
             'image_error' => $imageError,
             'translation_queued' => $translationQueued,
             'warnings' => $warnings,
+            ...$ruleOutcome,
         ];
     }
 
@@ -971,6 +1042,7 @@ final class B2bCatalogSync
         bool $withImages,
         ?int $runId,
         ?int $priceListId,
+        array $rules = [],
     ): array {
         if ($remote->remoteId === '' || $remote->sku === '' || $remote->name === '') {
             return ['status' => 'skipped', 'reason' => 'brak kodu lub nazwy'];
@@ -1187,7 +1259,10 @@ final class B2bCatalogSync
         }
         // błąd pobrania opisu nie wstrzymuje cen: opis zostaje bez zmian, ostrzeżenie w dzienniku przebiegu
         $warnings = [];
-        [$descriptionHash] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings);
+        // Ceny wersji to cały sens tego łącznika — okno „Producenci” pokazuje przy nim tylko znacznik opisu.
+        $descriptionOff = ! ($rules[B2bManufacturerRules::key($manufacturer)] ?? B2bManufacturerRules::ALLOW_ALL)['description'];
+        $ruleOutcome = ['rule_manufacturer' => $manufacturer, 'description_off' => $descriptionOff];
+        [$descriptionHash] = $this->applyCardDetails($payload, $existing, $link, $connector, $remote, $warnings, ! $descriptionOff);
 
         // przed fill — porównuje zapisane wartości karty z nowymi; zmiany wersji dopisane po zapisie
         $updateSummary = $existing !== null
@@ -1203,12 +1278,13 @@ final class B2bCatalogSync
                 'description' => isset($payload['description']),
                 'variants' => $count,
                 'compared' => $compared,
+                ...$ruleOutcome,
             ];
         }
 
         $changes = [];
         $product = DB::transaction(function () use (
-            $account, $remote, $existing, $payload, $rows, $runId, $priceListId, $descriptionHash, $source,
+            $account, $remote, $existing, $payload, $rows, $runId, $priceListId, $descriptionHash, $source, $manufacturer,
             $hadCardPrice, $oldCardPurchase, $oldCardCatalog, &$warnings, &$changes,
         ): Product {
             $now = now();
@@ -1291,6 +1367,7 @@ final class B2bCatalogSync
                     'product_id' => $product->id,
                     'remote_sku' => mb_substr($remote->sku, 0, 255),
                     'remote_name' => mb_substr($remote->name, 0, 1000),
+                    'manufacturer' => $manufacturer !== '' ? $manufacturer : null,
                     'description_hash' => $descriptionHash,
                     'last_seen_at' => $now,
                 ],
@@ -1330,6 +1407,7 @@ final class B2bCatalogSync
             'variants' => $count,
             'compared' => $compared,
             'warnings' => $warnings,
+            ...$ruleOutcome,
         ];
     }
 
@@ -1561,6 +1639,7 @@ final class B2bCatalogSync
         B2bConnector $connector,
         B2bRemoteProduct $remote,
         ?array &$warnings = null,
+        bool $takeDescription = true,
     ): array {
         if ($remote->category !== null && trim((string) ($existing?->category ?? '')) === '') {
             $payload['category'] = mb_substr($remote->category, 0, 255);
@@ -1576,6 +1655,11 @@ final class B2bCatalogSync
         }
 
         $descriptionHash = $link?->description_hash;
+        // Opis producenta wyłączony w oknie „Producenci” (decyzja użytkownika 23.09.2026): opisu nie czytamy,
+        // nie zapisujemy i nie kasujemy — karta zostaje z tym, co ma; odcisk powiązania bez zmian.
+        if (! $takeDescription) {
+            return [$descriptionHash, false];
+        }
         // Łącznik bez własnego opisu wyrobu (ARTRA — decyzja użytkownika 22.09.2026): opis powstaje z karty katalogowej
         // PDF w DescribeB2bProductFromDatasheetJob, a pusty opis ze sklepu nie jest wiadomością, że opis zniknął
         // — ownDescriptionIsGone skasowałby opis karty ze sloganem zapisanym przed tą decyzją (odcisk wciąż zgodny),
@@ -1682,15 +1766,7 @@ final class B2bCatalogSync
     /** Ta sama marka po odsianiu wielkosci liter, znakow i dopisków („Bolle Safety” = „BOLLE”). */
     private function sameBrand(string $a, string $b): bool
     {
-        $key = static function (string $v): string {
-            $v = trim(explode('(', explode('/', $v)[0])[0]);
-            $v = mb_strtolower($v);
-            $v = preg_replace('/[^a-z0-9]+/u', ' ', $v) ?? $v;
-
-            return trim(explode(' ', trim($v))[0]);
-        };
-
-        return $key($a) !== '' && $key($a) === $key($b);
+        return BrandKey::same($a, $b);
     }
 
     private function foreignManufacturer(Product $existing, string $manufacturer): bool

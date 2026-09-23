@@ -239,7 +239,8 @@ final class PriceListDeletionService
 
     /**
      * Karty, które zostają: znika tylko slot ceny z pliku pochodzący z usuwanego cennika (slot z nowszego cennika
-     * zostaje). deleteSlot przelicza cenę obowiązującą — z B2B, a bez innych slotów cena karty zostaje bez zmian.
+     * zostaje). deleteSlot przelicza cenę obowiązującą z pozostałych slotów (konta B2B), a bez innych slotów z ceną
+     * cena karty zostaje bez zmian.
      * Po price_list_id slotu, nie po product_ids — sloty przeniesione przy scalaniu rozmiarów też się liczą.
      *
      * @param  list<int>  $deletedProductIds

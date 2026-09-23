@@ -18,6 +18,7 @@ use App\Http\Controllers\Api\AiSettingsController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\B2bAccountController;
 use App\Http\Controllers\Api\B2bDiscountRuleController;
+use App\Http\Controllers\Api\B2bManufacturerRuleController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
@@ -276,6 +277,10 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:b2b_accounts.manage');
     // loguje się u dostawcy i pobiera cennik bazowy — tylko dla zarządzających kontami
     Route::post('/b2b-accounts/{b2bAccount}/discount-rules/base-categories', [B2bDiscountRuleController::class, 'baseCategories'])
+        ->middleware('permission:b2b_accounts.manage');
+    Route::get('/b2b-accounts/{b2bAccount}/manufacturers', [B2bManufacturerRuleController::class, 'index'])
+        ->middleware('permission:b2b_accounts.view');
+    Route::put('/b2b-accounts/{b2bAccount}/manufacturers', [B2bManufacturerRuleController::class, 'update'])
         ->middleware('permission:b2b_accounts.manage');
     Route::get('/b2b-connectors', [B2bAccountController::class, 'connectors'])->middleware('permission:b2b_accounts.view');
 

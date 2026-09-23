@@ -8,6 +8,7 @@ use App\Models\B2bProductLink;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Services\B2b\B2bDocumentText;
+use App\Services\B2b\B2bManufacturerRules;
 use App\Services\Enrichment\B2bSourcesDescriptionRejected;
 use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
@@ -108,6 +109,10 @@ class DescribeB2bProductFromDatasheetJob implements ShouldBeUniqueUntilProcessin
         $product = Product::query()->find($this->productId);
         $link = $product !== null ? self::link($this->productId, $this->b2bAccountId) : null;
         if ($product === null || $link === null) {
+            return;
+        }
+        // opis producenta wyłączony w oknie „Producenci” po zleceniu — job nie może go już zapisać
+        if (! app(B2bManufacturerRules::class)->descriptionAllowed($link, $product)) {
             return;
         }
         $start = self::sources($product, $link, self::datasheet($this->productId, $this->b2bAccountId), $this->datasheetOnly, $this->redo);

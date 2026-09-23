@@ -10,13 +10,15 @@ use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Services\Pricing\ProductEffectivePrice;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
  * Zmiana rabatu cennika z pliku po imporcie. Rabat dotyczy tylko cen z tego cennika (sloty „file” z jego
- * price_list_id): zakup = katalogowa × (1 − rabat). Cena obowiązująca karty przeliczana jest ze slotów, więc
- * karta z ceną z konta B2B zostaje przy cenie B2B — zmienia się tylko cena z pliku.
+ * price_list_id): zakup = katalogowa × (1 − rabat). Cena obowiązująca karty przeliczana jest ze slotów
+ * (ProductEffectivePrice::explain): cennik producenta z pliku przegrywa tylko z kontem B2B tego producenta (z włączoną
+ * ceną) — karta z ceną z takiego konta zostaje przy niej, zmienia się tylko cena z pliku.
  * Przy grupach asortymentowych rabat ustawia się per grupa (jak przy imporcie), reszta kart ma rabat wspólny.
  */
 final class PriceListDiscountService
@@ -75,7 +77,7 @@ final class PriceListDiscountService
                 'mixed' => count($distinct) > 1,
             ],
             'product_count' => $slots->count(),
-            'b2b_priced_count' => $this->b2bPricedCount($slots),
+            'b2b_priced_count' => $this->b2bPricedCount($slots, $this->ownAccountKeys($priceList)),
         ];
     }
 
@@ -89,10 +91,12 @@ final class PriceListDiscountService
         $groupIds = $this->groupIdsByProduct($slots);
         $groups = $this->groups($groupIds);
 
+        $ownKeys = $this->ownAccountKeys($priceList);
+
         $changed = 0;
         $b2bPriced = 0;
         DB::transaction(function () use (
-            $priceList, $slots, $groupIds, $groups, $groupDiscounts, $ungroupedDiscount, &$changed, &$b2bPriced
+            $priceList, $slots, $groupIds, $groups, $groupDiscounts, $ungroupedDiscount, $ownKeys, &$changed, &$b2bPriced
         ): void {
             foreach ($groupDiscounts as $groupId => $discount) {
                 if (isset($groups[$groupId])) {
@@ -132,8 +136,8 @@ final class PriceListDiscountService
                     // data sprawdzenia ceny z pliku zostaje — zmienił się rabat, nie odczyt cennika
                     'checked_at' => $slot->checked_at,
                 ]);
-                // slot B2B wygrywa z plikiem (ProductEffectivePrice) — cena karty się nie zmieni
-                if ($this->hasB2bSlot((int) $product->id)) {
+                // z cennikiem producenta z pliku wygrywa tylko konto B2B producenta — tam cena karty się nie zmieni
+                if ($this->hasOwnB2bPrice((int) $product->id, $ownKeys)) {
                     $b2bPriced++;
                 }
                 ProductPriceHistory::query()->create([
@@ -199,22 +203,58 @@ final class PriceListDiscountService
     }
 
     /**
-     * @param  Collection<int, ProductSourcePrice>  $slots
+     * Sloty kont B2B, które są cennikiem producenta tego cennika i mają włączoną jego cenę — tylko one wygrywają
+     * z plikiem producenta (ProductEffectivePrice::explain). Konto dystrybutora wielu marek z plikiem przegrywa.
+     *
+     * @return list<string> source_key slotów
      */
-    private function b2bPricedCount(Collection $slots): int
+    private function ownAccountKeys(PriceList $priceList): array
     {
-        return ProductSourcePrice::query()
-            ->whereIn('product_id', $slots->pluck('product_id')->all())
-            ->where('source_key', 'like', 'b2b:%')
-            ->distinct()
-            ->count('product_id');
+        return array_map(
+            static fn (int $id): string => ProductSourcePrice::b2bKey($id),
+            $this->effectivePrices->ownB2bAccountIds((string) $priceList->manufacturer),
+        );
     }
 
-    private function hasB2bSlot(int $productId): bool
+    /**
+     * @param  Collection<int, ProductSourcePrice>  $slots
+     * @param  list<string>  $ownKeys
+     */
+    private function b2bPricedCount(Collection $slots, array $ownKeys): int
+    {
+        if ($ownKeys === []) {
+            return 0;
+        }
+
+        $count = 0;
+        foreach ($slots->pluck('product_id')->chunk(1000) as $chunk) {
+            $count += $this->ownB2bPriced($ownKeys)
+                ->whereIn('product_id', $chunk->all())
+                ->distinct()
+                ->count('product_id');
+        }
+
+        return $count;
+    }
+
+    /**
+     * @param  list<string>  $ownKeys
+     */
+    private function hasOwnB2bPrice(int $productId, array $ownKeys): bool
+    {
+        return $ownKeys !== [] && $this->ownB2bPriced($ownKeys)->where('product_id', $productId)->exists();
+    }
+
+    /**
+     * Slot bez ceny nie ustala ceny karty (explain: „brak ceny w tym źródle”), więc się nie liczy.
+     *
+     * @param  list<string>  $ownKeys
+     * @return Builder<ProductSourcePrice>
+     */
+    private function ownB2bPriced(array $ownKeys): Builder
     {
         return ProductSourcePrice::query()
-            ->where('product_id', $productId)
-            ->where('source_key', 'like', 'b2b:%')
-            ->exists();
+            ->whereIn('source_key', $ownKeys)
+            ->where(static fn (Builder $q) => $q->where('purchase_price', '>', 0)->orWhere('catalog_price_net', '>', 0));
     }
 }

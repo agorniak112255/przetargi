@@ -2472,7 +2472,7 @@ export function PriceLists() {
                             {editDiscounts.source.ungrouped.mixed &&
                               ' Karty mają dziś różne rabaty — puste pole zostawia je bez zmian.'}
                             {editDiscounts.source.b2b_priced_count > 0 &&
-                              ` ${editDiscounts.source.b2b_priced_count} kart ma cenę z konta B2B — ich cena obowiązująca zostaje z B2B.`}
+                              ` ${editDiscounts.source.b2b_priced_count.toLocaleString('pl-PL')} kart ma cenę z konta B2B producenta — ich cena obowiązująca zostaje z tego konta.`}
                           </span>
                         </div>
                       )}

@@ -18,6 +18,8 @@ class B2bProductLink extends Model
         'product_id',
         'remote_sku',
         'remote_name',
+        // producent w brzmieniu tego konta (klucz reguł B2bAccountManufacturerRule); null = zapis sprzed 23.09.2026
+        'manufacturer',
         'description_hash',
         'source_description_hash',
         'last_seen_at',

@@ -328,7 +328,7 @@ class PriceListController extends Controller
                 $priceList->manufacturer,
                 $result['products_changed'],
                 $result['b2b_priced'] > 0
-                    ? sprintf(' (w tym %d z ceną z konta B2B — ich cena obowiązująca zostaje z B2B)', $result['b2b_priced'])
+                    ? sprintf(' (w tym %d z ceną z konta B2B producenta — ich cena obowiązująca zostaje z tego konta)', $result['b2b_priced'])
                     : ''
             ),
         ]);
