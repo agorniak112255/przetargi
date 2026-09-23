@@ -39,6 +39,9 @@ type Draft = {
 
 type ProducerSortKey = 'name' | 'cards_count' | 'detect'
 
+/** Wiersz tabeli wpisów: zapisany wpis albo producent rozpoznawany domyślnie (z konfiguracji programu, bez wpisu). */
+type EntryRow = { type: 'entry'; entry: DictionaryEntry } | { type: 'default'; producer: CatalogProducer }
+
 const KIND_BADGE: Record<EntryKind, string> = {
   producer: 'bg-slate-100 text-slate-700',
   brand: 'bg-violet-50 text-violet-700',
@@ -110,6 +113,16 @@ function cardsLabel(n: number): string {
   if (last >= 2 && last <= 4 && (lastTwo < 12 || lastTwo > 14)) return `${n} karty`
   return `${n} kart`
 }
+
+/**
+ * Wyłączony producent z katalogu nie stoi w tabeli wpisów — widać go w tabeli producentów z odznaczoną kratką.
+ * Wpis z „Nie” zostaje w bazie, bo bez niego producent z konfiguracji programu wróciłby do „Tak”.
+ */
+function hiddenInEntries(kind: EntryKind, termKey: string, detect: boolean, catalogKeys: Map<string, number>): boolean {
+  return kind === 'producer' && !detect && catalogKeys.has(termKey)
+}
+
+const HIDDEN_NOTE = ' Wyłączony producent jest widoczny tylko w tabeli „Producenci z katalogu”.'
 
 function SortMark({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
   if (!active) return <span className="ml-1 text-slate-300">↕</span>
@@ -187,14 +200,32 @@ export function AdminDictionaries() {
 
   const cardsByKey = useMemo(() => new Map(producers.map((p) => [p.key, p.cards_count])), [producers])
 
+  const entryKeys = useMemo(() => new Set(entries.map((e) => e.term_key)), [entries])
+
+  const entryRows = useMemo<EntryRow[]>(() => {
+    const rows: EntryRow[] = entries
+      .filter((e) => !hiddenInEntries(e.kind, e.term_key, e.detect_in_query, cardsByKey))
+      .map((entry) => ({ type: 'entry', entry }))
+    for (const producer of producers) {
+      if (producer.detect_in_query && !entryKeys.has(producer.key)) rows.push({ type: 'default', producer })
+    }
+    const term = (r: EntryRow) => (r.type === 'entry' ? r.entry.term : r.producer.name)
+    return rows.sort((a, b) => term(a).localeCompare(term(b), 'pl'))
+  }, [entries, producers, entryKeys, cardsByKey])
+
   const visibleEntries = useMemo(() => {
     const needle = entryQ.trim().toLowerCase()
-    return entries.filter((e) => {
-      if (entryKind && e.kind !== entryKind) return false
+    return entryRows.filter((r) => {
+      const kind = r.type === 'entry' ? r.entry.kind : 'producer'
+      if (entryKind && kind !== entryKind) return false
       if (!needle) return true
-      return `${e.term} ${e.manufacturer ?? ''} ${e.note ?? ''}`.toLowerCase().includes(needle)
+      const text =
+        r.type === 'entry'
+          ? `${r.entry.term} ${r.entry.manufacturer ?? ''} ${r.entry.note ?? ''}`
+          : `${r.producer.name} domyślnie`
+      return text.toLowerCase().includes(needle)
     })
-  }, [entries, entryQ, entryKind])
+  }, [entryRows, entryQ, entryKind])
 
   const visibleProducers = useMemo(() => {
     const needle = producerQ.trim().toLowerCase()
@@ -237,7 +268,8 @@ export function AdminDictionaries() {
         body: JSON.stringify(payloadFrom(form)),
       })
       setForm((prev) => ({ ...emptyDraft(), kind: prev.kind }))
-      setMsg(`Dodano „${res.entry?.term ?? form.term.trim()}”.`)
+      const hidden = res.entry && hiddenInEntries(res.entry.kind, res.entry.term_key, res.entry.detect_in_query, cardsByKey)
+      setMsg(`Dodano „${res.entry?.term ?? form.term.trim()}”.${hidden ? HIDDEN_NOTE : ''}`)
       await load()
     } catch (ex) {
       setFormErr(errorText(ex, 'Nie udało się dodać wpisu'))
@@ -269,12 +301,13 @@ export function AdminDictionaries() {
     setRowErr('')
     setMsg('')
     try {
-      await api<{ entry: DictionaryEntry }>(`/admin/brand-dictionary/${entry.id}`, {
+      const res = await api<{ entry: DictionaryEntry }>(`/admin/brand-dictionary/${entry.id}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
       })
       setEditingId(null)
-      setMsg(`Zapisano „${editDraft.term.trim()}”.`)
+      const hidden = res.entry && hiddenInEntries(res.entry.kind, res.entry.term_key, res.entry.detect_in_query, cardsByKey)
+      setMsg(`Zapisano „${editDraft.term.trim()}”.${hidden ? HIDDEN_NOTE : ''}`)
       await load()
     } catch (ex) {
       setRowErr(errorText(ex, 'Nie udało się zapisać wpisu'))
@@ -358,7 +391,9 @@ export function AdminDictionaries() {
           <h3 className="text-sm font-semibold text-slate-900">Producenci, marki i wykluczenia</h3>
           <p className="mt-0.5 max-w-3xl text-[12px] text-slate-600">
             Marka wskazuje producenta, pod którym są jej karty (np. Peltor → 3M). Producent z wyłączonym
-            rozpoznawaniem nie zawęża wyniku. Wykluczenie to słowo, które nigdy nie jest marką (np. kask).
+            rozpoznawaniem nie zawęża wyniku i nie stoi w tabeli wpisów — widać go w tabeli „Producenci z katalogu”
+            z odznaczoną kratką. „Domyślnie” oznacza producenta z listy wbudowanej w program. Wykluczenie to słowo,
+            które nigdy nie jest marką (np. kask).
           </p>
         </div>
 
@@ -453,7 +488,7 @@ export function AdminDictionaries() {
               onChange={(e) => setEntryQ(e.target.value)}
             />
             <span className="text-[11px] text-slate-500">
-              {visibleEntries.length} z {entries.length}
+              {visibleEntries.length} z {entryRows.length}
             </span>
           </div>
           <div className="overflow-x-auto">
@@ -469,7 +504,48 @@ export function AdminDictionaries() {
                 </tr>
               </thead>
               <tbody>
-                {visibleEntries.map((entry) => {
+                {visibleEntries.map((row) => {
+                  if (row.type === 'default') {
+                    const p = row.producer
+                    const busy = producerBusy === p.key
+                    return (
+                      <tr key={`default-${p.key}`} className="border-b align-top last:border-b-0">
+                        <td className="p-2">
+                          <span className="font-medium text-slate-900">{p.name}</span>
+                          <span className="ml-1.5 text-[11px] text-slate-500">{cardsLabel(p.cards_count)}</span>
+                        </td>
+                        <td className="p-2">
+                          <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${KIND_BADGE.producer}`}>
+                            {kindLabel('producer')}
+                          </span>
+                        </td>
+                        <td className="p-2">
+                          <span className="text-slate-500">—</span>
+                        </td>
+                        <td className="p-2">
+                          <span className="text-slate-700">Tak</span>
+                          <span
+                            className="ml-1.5 text-[11px] text-slate-500"
+                            title="Producent z listy wbudowanej w program — rozpoznawany bez wpisu w słowniku."
+                          >
+                            domyślnie
+                          </span>
+                        </td>
+                        <td className="p-2" />
+                        <td className="whitespace-nowrap p-2 text-right">
+                          <button
+                            type="button"
+                            disabled={producerBusy !== null}
+                            onClick={() => void toggleProducer(p, false)}
+                            className="rounded-lg border border-slate-300 px-2.5 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {busy ? 'Zapisuję…' : 'Wyłącz'}
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  }
+                  const entry = row.entry
                   const editing = editingId === entry.id
                   const busy = rowBusy === entry.id
                   const d = editDraft
@@ -623,7 +699,7 @@ export function AdminDictionaries() {
             </table>
             {visibleEntries.length === 0 && (
               <p className="px-4 py-6 text-center text-xs text-slate-500">
-                {loading ? 'Ładowanie…' : entries.length === 0 ? 'Słownik jest pusty.' : 'Brak wpisów dla tego filtra.'}
+                {loading ? 'Ładowanie…' : entryRows.length === 0 ? 'Słownik jest pusty.' : 'Brak wpisów dla tego filtra.'}
               </p>
             )}
           </div>
@@ -666,6 +742,8 @@ export function AdminDictionaries() {
                   // Wpis innego rodzaju (marka, wykluczenie) zmienia się w tabeli wpisów, nie przełącznikiem.
                   const foreignEntry = entry !== undefined && entry.kind !== 'producer'
                   const busy = producerBusy === p.key
+                  // „Tak” bez żadnego wpisu o tym słowie pochodzi z listy producentów w konfiguracji programu.
+                  const byDefault = p.detect_in_query && !entryKeys.has(p.key)
                   return (
                     <tr key={p.key} className="border-b last:border-b-0">
                       <td className="p-2 font-medium text-slate-900">{p.name}</td>
@@ -690,6 +768,14 @@ export function AdminDictionaries() {
                           )}
                           {foreignEntry && (
                             <span className="text-[11px] text-slate-500">({kindLabel(entry.kind).toLowerCase()})</span>
+                          )}
+                          {byDefault && !busy && (
+                            <span
+                              className="text-[11px] text-slate-500"
+                              title="Producent z listy wbudowanej w program — nie ma wpisu w słowniku. Odznaczenie zapisze wpis z „Nie”."
+                            >
+                              domyślnie
+                            </span>
                           )}
                         </label>
                       </td>
