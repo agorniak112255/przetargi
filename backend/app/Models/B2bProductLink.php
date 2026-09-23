@@ -22,6 +22,10 @@ class B2bProductLink extends Model
         'manufacturer',
         'description_hash',
         'source_description_hash',
+        // odrzucone tłumaczenie tego tekstu źródła (TranslateB2bProductTextJob::rejectionKey) — bez ponawiania
+        'translation_rejected_hash',
+        'translation_rejected_reason',
+        'translation_rejected_at',
         'last_seen_at',
         // przeniesione przez scalenie rozmiarów (ProductSizeMergeService); zerowane, gdy synchronizacja przepnie kod
         'merged_at',
@@ -32,6 +36,7 @@ class B2bProductLink extends Model
         return [
             'last_seen_at' => 'datetime',
             'merged_at' => 'datetime',
+            'translation_rejected_at' => 'datetime',
         ];
     }
 

@@ -13,6 +13,7 @@ use App\Services\B2b\AnroB2bConnector;
 use App\Services\B2b\BolleB2bConnector;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -78,6 +79,62 @@ final class B2bTranslateCommandTest extends TestCase
         ksort($flags);
         $this->assertSame(['BOL-1' => true, 'BOL-2' => false, 'BOL-3' => true, 'BOL-6' => false], $flags);
         Queue::assertPushedOn(TranslateB2bProductTextJob::QUEUE, TranslateB2bProductTextJob::class);
+    }
+
+    public function test_rejected_card_is_not_dispatched_and_is_listed_for_manual_translation(): void
+    {
+        $product = Product::query()->where('sku', 'BOL-6')->firstOrFail();
+        $link = B2bProductLink::query()->where('product_id', $product->id)->firstOrFail();
+        $link->update([
+            'translation_rejected_hash' => TranslateB2bProductTextJob::rejectionKey($product, ['description' => true, 'name' => false]),
+            'translation_rejected_reason' => 'segment 2: inna liczba linii — w źródle 4, w tłumaczeniu 2',
+            'translation_rejected_at' => now(),
+        ]);
+
+        $this->artisan('b2b:translate', ['account' => $this->account->id, '--dry-run' => true])
+            ->expectsOutputToContain('do tłumaczenia: 3 kart')
+            ->doesntExpectOutputToContain('BOL-6')
+            ->assertSuccessful();
+
+        $this->assertSame(0, Artisan::call('b2b:translate', ['account' => $this->account->id, '--rejected' => true]));
+        $output = Artisan::output();
+        $this->assertStringContainsString('odrzucone tłumaczenia: 1 kart', $output);
+        $this->assertMatchesRegularExpression(
+            '/BOL-6 \(#'.$product->id.'\) · \d{4}-\d{2}-\d{2} \d{2}:\d{2} · segment 2: inna liczba linii/u',
+            $output,
+        );
+        Queue::assertNotPushed(TranslateB2bProductTextJob::class);
+    }
+
+    public function test_redo_identical_requeues_cards_whose_translation_equals_the_source(): void
+    {
+        // HUSTLN50E: model oddał angielski tekst bez zmian, a karta została oznaczona jako przetłumaczona
+        $text = 'Experience unmatched protection and comfort with HUSTLER.';
+        $product = Product::query()->create([
+            'sku' => 'HUSTLN50E', 'name' => 'Okulary Hustler', 'description' => $text, 'manufacturer' => 'Bollé Safety',
+            'catalog_price_net' => 60.00, 'purchase_price' => 50.00, 'discount_percent' => 0, 'currency' => 'PLN',
+        ]);
+        B2bProductLink::query()->create([
+            'b2b_account_id' => $this->account->id, 'remote_id' => 'HUSTLN50E', 'product_id' => $product->id,
+            'remote_sku' => 'HUSTLN50E', 'remote_name' => 'HUSTLER – Safety glasses',
+            'description_hash' => sha1($text), 'source_description_hash' => sha1($text), 'last_seen_at' => now(),
+        ]);
+
+        $this->artisan('b2b:translate', ['account' => $this->account->id, '--redo-identical' => true, '--dry-run' => true])
+            ->expectsOutputToContain('identyczne ze źródłem: 1 kart')
+            ->expectsOutputToContain('HUSTLN50E')
+            // BOL-5 ma prawdziwe tłumaczenie (inny odcisk źródła) — nie jest ruszana
+            ->doesntExpectOutputToContain('BOL-5')
+            ->assertSuccessful();
+        Queue::assertNotPushed(TranslateB2bProductTextJob::class);
+        $this->assertNotNull(B2bProductLink::query()->where('product_id', $product->id)->value('source_description_hash'));
+
+        $this->artisan('b2b:translate', ['account' => $this->account->id, '--redo-identical' => true])
+            ->expectsOutputToContain('Zlecono ponowne tłumaczenie 1 kart')
+            ->assertSuccessful();
+        $this->assertNull(B2bProductLink::query()->where('product_id', $product->id)->value('source_description_hash'));
+        Queue::assertPushed(TranslateB2bProductTextJob::class, fn (TranslateB2bProductTextJob $job): bool => $job->productId === $product->id);
+        Queue::assertPushed(TranslateB2bProductTextJob::class, 1);
     }
 
     public function test_limit_caps_dispatched_jobs(): void

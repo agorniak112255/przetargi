@@ -36,6 +36,9 @@ use Throwable;
  * - Niezmiennik: link.source_description_hash jest niepusty TYLKO gdy opis karty jest tłumaczeniem
  *   (sha1 tekstu źródła, z którego powstał), a link.description_hash = sha1(opisu na karcie) — dzięki temu import
  *   rozpozna, że opis nie był edytowany ręcznie, a ponowny przebieg z tym samym źródłem nie zleca tłumaczenia od nowa.
+ * - Odrzucenie (23.09.2026): odcisk wysłanego tekstu na powiązaniu (translation_rejected_hash) — pending() nie zgłasza
+ *   go ponownie, bo model z temperaturą 0 odpowiedziałby tak samo; nowy tekst u dostawcy ma inny odcisk. Karty
+ *   z odrzuceniem wypisuje b2b:translate --rejected (do ręcznego tłumaczenia). Udane tłumaczenie czyści odcisk.
  *
  * Unikalność do startu (ShouldBeUniqueUntilProcessing): kolejne przebiegi importu nie dublują czekającego joba,
  * a ponowne zlecenie z handle() przy braku slotu nie jest po cichu odrzucane przez blokadę tego samego joba
@@ -52,6 +55,9 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
 
     /** Kolumna products.name to VARCHAR(1000) — dłuższej nazwy nie zapisujemy (i nie ucinamy po cichu). */
     private const MAX_NAME_LENGTH = 1000;
+
+    /** Odpowiedź modelu w logu odrzucenia — do oceny, czy odrzucenie było słuszne; dłuższa jest ucinana. */
+    private const LOGGED_RESPONSE_CHARS = 4000;
 
     public int $tries = 3;
 
@@ -108,7 +114,7 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
             // nazwa karty w katalogu jako kontekst terminologiczny — tłumaczenie ma mówić tak samo jak katalog
             $translated = $translator->translate($start['description'] ?? '', $start['name'], $product->name);
         } catch (B2bTranslationRejected $e) {
-            $this->logRejected($product, $e->getMessage());
+            $this->reject($product, (int) $link->id, $start, $e->getMessage(), $e->modelResponse);
 
             return;
         } finally {
@@ -118,12 +124,12 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
         $description = $start['description'] !== null ? trim((string) ($translated['description'] ?? '')) : null;
         $name = $start['name'] !== null ? trim((string) ($translated['name'] ?? '')) : null;
         if ($description === '' || $name === '') {
-            $this->logRejected($product, 'puste tłumaczenie');
+            $this->reject($product, (int) $link->id, $start, 'puste tłumaczenie');
 
             return;
         }
         if ($name !== null && mb_strlen($name) > self::MAX_NAME_LENGTH) {
-            $this->logRejected($product, 'nazwa po tłumaczeniu dłuższa niż '.self::MAX_NAME_LENGTH.' znaków');
+            $this->reject($product, (int) $link->id, $start, 'nazwa po tłumaczeniu dłuższa niż '.self::MAX_NAME_LENGTH.' znaków');
 
             return;
         }
@@ -187,8 +193,7 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
         }
 
         $current = (string) ($product->description ?? '');
-
-        return [
+        $pending = [
             'description' => trim($current) !== ''
                 && $link->description_hash !== null
                 && hash_equals($link->description_hash, sha1($current)),
@@ -197,16 +202,38 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
                 && trim($link->remote_name) !== ''
                 && (string) $product->name === $link->remote_name,
         ];
+        // Ten sam tekst już raz odrzucony — model (temperatura 0) odpowie tak samo; nowy tekst ma inny odcisk.
+        if ($link->translation_rejected_hash !== null
+            && hash_equals($link->translation_rejected_hash, self::rejectionKey($product, $pending))) {
+            return ['description' => false, 'name' => false];
+        }
+
+        return $pending;
+    }
+
+    /**
+     * Odcisk tekstu, który poszedłby do tłumaczenia (opis i nazwa wg pending) — klucz odrzucenia na powiązaniu.
+     *
+     * @param  array{description: bool, name: bool}  $pending
+     */
+    public static function rejectionKey(Product $product, array $pending): string
+    {
+        return sha1(json_encode([
+            $pending['description'] ? (string) $product->description : null,
+            $pending['name'] ? (string) $product->name : null,
+        ], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
     }
 
     /**
      * Co tłumaczyć i stan karty/linku, który musi przetrwać do zapisu. Null = nic do tłumaczenia.
      *
-     * @return array{description: string|null, name: string|null, description_hash: string|null, remote_name: string|null, product_description: string|null, product_name: string}|null
+     * @return array{description: string|null, name: string|null, description_hash: string|null, remote_name: string|null, product_description: string|null, product_name: string, rejection_key: string}|null
      */
     private function snapshot(Product $product, B2bProductLink $link): ?array
     {
         $pending = self::pending($product, $link, $this->translateName);
+        // klucz liczony przed filtrem okna „Producenci” — tak samo jak w pending() przy kolejnym przebiegu
+        $rejectionKey = self::rejectionKey($product, $pending);
         // Opis producenta wyłączony w oknie „Producenci”: tłumaczenie opisu też jest zapisem opisu z tego cennika.
         // Nazwa nowej karty dalej się tłumaczy — to nie opis.
         if ($pending['description'] && ! app(B2bManufacturerRules::class)->descriptionAllowed($link, $product)) {
@@ -223,13 +250,14 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
             'remote_name' => $link->remote_name,
             'product_description' => $product->description,
             'product_name' => (string) $product->name,
+            'rejection_key' => $rejectionKey,
         ];
     }
 
     /**
      * Compare-and-set. Zwraca powód pominięcia albo null, gdy zapisano.
      *
-     * @param  array{description: string|null, name: string|null, description_hash: string|null, remote_name: string|null, product_description: string|null, product_name: string}  $start
+     * @param  array{description: string|null, name: string|null, description_hash: string|null, remote_name: string|null, product_description: string|null, product_name: string, rejection_key: string}  $start
      */
     private function store(int $linkId, array $start, ?string $description, ?string $name): ?string
     {
@@ -261,6 +289,9 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
             if ($name !== null) {
                 $product->name = $name;
             }
+            $link->translation_rejected_hash = null;
+            $link->translation_rejected_reason = null;
+            $link->translation_rejected_at = null;
             // haki modelu przebudują search_blob i zlecą reindeks embeddingu
             $product->save();
             $link->save();
@@ -269,13 +300,38 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
         });
     }
 
-    private function logRejected(Product $product, string $reason): void
+    /**
+     * Odrzucenie: wpis w logu (z odpowiedzią modelu, gdy jest) i odcisk tekstu na powiązaniu — kolejne przebiegi
+     * nie zlecają tego samego tekstu, a karta trafia na listę do ręcznego tłumaczenia (b2b:translate --rejected).
+     * Odcisk tylko gdy powiązanie wciąż wskazuje ten sam tekst (import mógł w międzyczasie zapisać nowy).
+     *
+     * @param  array{description_hash: string|null, rejection_key: string}  $start
+     * @param  array<string, mixed>|null  $modelResponse
+     */
+    private function reject(Product $product, int $linkId, array $start, string $reason, ?array $modelResponse = null): void
     {
         Log::warning('Tłumaczenie tekstu B2B odrzucone', [
             'product_id' => $this->productId,
             'b2b_account_id' => $this->b2bAccountId,
             'sku' => $product->sku,
             'reason' => $reason,
+            ...($modelResponse !== null ? ['model_response' => mb_substr(
+                (string) json_encode($modelResponse, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                0,
+                self::LOGGED_RESPONSE_CHARS,
+            )] : []),
         ]);
+
+        B2bProductLink::query()
+            ->whereKey($linkId)
+            ->whereNull('source_description_hash')
+            ->where(fn ($q) => $start['description_hash'] === null
+                ? $q->whereNull('description_hash')
+                : $q->where('description_hash', $start['description_hash']))
+            ->update([
+                'translation_rejected_hash' => $start['rejection_key'],
+                'translation_rejected_reason' => mb_substr($reason, 0, 500),
+                'translation_rejected_at' => now(),
+            ]);
     }
 }

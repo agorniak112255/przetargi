@@ -130,6 +130,66 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function uppercase_english_function_word_may_be_translated(): void
+    {
+        // Bollé FLASHV 23.09.2026: „zgubiony token: THE” — wersaliki dla podkreślenia, nie nazwa modelu
+        $source = 'FLASH is THE reference in welding helmets.';
+        $translator = $this->translatorReturning([
+            'segments' => ['FLASH to wzorzec wśród przyłbic spawalniczych.'],
+        ]);
+
+        $this->assertSame('FLASH to wzorzec wśród przyłbic spawalniczych.', $translator->translate($source)['description']);
+    }
+
+    #[Test]
+    public function words_glued_by_punctuation_are_separate_tokens(): void
+    {
+        // Bollé KOVEMX10U-F 23.09.2026: „zgubiony token: D5),Overflow” — model poprawnie wstawił spację
+        $source = 'Comfortable TPR gasket,Optimal protection (D3 D4 D5),Overflow chute for liquids,Sealed bi-material frame';
+        $result = 'Wygodna uszczelka z TPR, optymalna ochrona (D3 D4 D5), rynienka odprowadzająca ciecze, szczelna oprawka dwumateriałowa';
+        $translator = $this->translatorReturning(['segments' => [$result]]);
+
+        $this->assertSame($result, $translator->translate($source)['description']);
+    }
+
+    #[Test]
+    public function glued_model_code_is_still_protected(): void
+    {
+        // sklejone „(TRYON),Overflow” miało małe litery, więc nazwa modelu nie była chroniona wcale
+        $this->expectException(B2bTranslationRejected::class);
+        $this->expectExceptionMessage('zgubiony token: TRYON');
+
+        $this->translatorReturning([
+            'segments' => ['Wygodna uszczelka z TPR, rama jak w modelu, rynienka odprowadzająca ciecze'],
+        ])->translate('Comfortable TPR gasket,Frame as in (TRYON),Overflow chute for liquids');
+    }
+
+    #[Test]
+    public function rejects_english_segment_returned_without_translation(): void
+    {
+        // Bollé HUSTLN50E: „tłumaczenie” identyczne z angielskim źródłem zapisane jako gotowe
+        $source = 'Experience unmatched protection and comfort with HUSTLER, now eco-designed.';
+
+        try {
+            $this->translatorReturning(['segments' => [$source]])->translate($source);
+            $this->fail('Oczekiwano odrzucenia tekstu bez tłumaczenia');
+        } catch (B2bTranslationRejected $e) {
+            $this->assertStringContainsString('model zwrócił tekst źródła bez tłumaczenia', $e->getMessage());
+            // odpowiedź modelu idzie z odrzuceniem do logu joba
+            $this->assertSame(['segments' => [$source]], $e->modelResponse);
+        }
+    }
+
+    #[Test]
+    public function polish_segment_returned_unchanged_is_accepted(): void
+    {
+        $source = 'Zestaw pianki i paska do gogli NESS+';
+        $translator = $this->translatorReturning(['segments' => [$source]]);
+
+        $this->assertSame($source, $translator->translate($source)['description']);
+    }
+
+    #[Test]
     public function range_with_a_unit_may_be_written_the_polish_way(): void
     {
         $source = 'There is broad protection in the NIR range from 855nm-1090nm (OD5+).';

@@ -33,8 +33,23 @@ class B2bTextTranslator
      * Słowa wielkimi literami, które wolno przetłumaczyć — powszechne skróty, a nie nazwy własne:
      * N/A („nie dotyczy”), PPE (po polsku ŚOI). UV, PC, PVC, LED, ESD po polsku brzmią tak samo,
      * więc zostają chronione — ich zniknięcie z wyniku oznacza zgubiony fakt.
+     * Do tego angielskie słowa funkcyjne pisane wersalikami dla podkreślenia („FLASH is THE reference” — 23.09.2026
+     * odrzucane jako „zgubiony token: THE”); nazwą modelu nie są.
      */
-    private const TRANSLATABLE_UPPERCASE = ['N/A', 'PPE'];
+    private const TRANSLATABLE_UPPERCASE = [
+        'N/A', 'PPE',
+        'THE', 'AND', 'FOR', 'WITH', 'YOUR', 'YOU', 'OUR', 'ARE', 'THIS', 'THAT', 'FROM', 'BUT', 'NOT',
+    ];
+
+    /**
+     * Angielskie słowa funkcyjne: segment, który je zawiera i wrócił z modelu bez zmian, nie został przetłumaczony
+     * (23.09.2026 karta HUSTLN50E zapisana jako „tłumaczenie” identyczne z angielskim źródłem). Tylko słowa, których
+     * nie ma w polszczyźnie — tekst po polsku model słusznie zwraca bez zmian.
+     */
+    private const ENGLISH_FUNCTION_WORDS = ['the', 'and', 'with', 'for', 'your', 'you', 'our', 'are', 'is', 'of', 'this', 'that', 'from', 'its'];
+
+    /** Tyle różnych słów funkcyjnych wystarcza, by uznać segment za angielski. */
+    private const ENGLISH_WORDS_MIN = 2;
 
     /**
      * Oznaczenie normy: EN 166, EN ISO 16321-1, EN 166:2001, ANSI Z87.1, DIN EN 175. Prefiks wielkimi literami,
@@ -100,7 +115,11 @@ class B2bTextTranslator
             ['role' => 'user', 'content' => $payload],
         ], 0.0, $maxTokens);
 
-        $translated = self::validated($response, $sources, $sourceName);
+        try {
+            $translated = self::validated($response, $sources, $sourceName);
+        } catch (B2bTranslationRejected $e) {
+            throw $e->withResponse($response);
+        }
 
         foreach (array_keys($translatable) as $position => $index) {
             $segments[$index] = $translated['segments'][$position];
@@ -203,6 +222,9 @@ SYS;
                     $resultLines
                 ));
             }
+            if ($result === trim($source) && self::looksEnglish($source)) {
+                throw new B2bTranslationRejected($label.': model zwrócił tekst źródła bez tłumaczenia');
+            }
             $results[] = $result;
         }
 
@@ -243,6 +265,13 @@ SYS;
         if (str_starts_with($text, '```') || preg_match('/<\/?[a-z][a-z0-9-]*(?:\s[^<>]*)?\/?>/i', $text) === 1) {
             throw new B2bTranslationRejected($label.': znaczniki markdown/HTML w wyniku');
         }
+    }
+
+    private static function looksEnglish(string $text): bool
+    {
+        preg_match_all('/(?<![\p{L}\p{N}])('.implode('|', self::ENGLISH_FUNCTION_WORDS).')(?![\p{L}\p{N}])/iu', $text, $matches);
+
+        return count(array_unique(array_map('mb_strtolower', $matches[1]))) >= self::ENGLISH_WORDS_MIN;
     }
 
     private static function nonEmptyLineCount(string $text): int
@@ -423,7 +452,14 @@ SYS;
     {
         $tokens = [];
         $previousProtected = false;
-        foreach (preg_split('/\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $raw) {
+        // Słowa sklejone interpunkcją bez odstępu („(D3 D4 D5),Overflow chute” — 23.09.2026 „zgubiony token:
+        // D5),Overflow”, bo model wstawił spację) to osobne słowa. Dzielimy tylko przed literą: „EN166:2001”,
+        // „17.5CM” i „1,030” zostają w całości.
+        $words = [];
+        foreach (preg_split('/\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $chunk) {
+            array_push($words, ...(preg_split('/[,;:()\[\]]+(?=\p{L})/u', $chunk, -1, PREG_SPLIT_NO_EMPTY) ?: [$chunk]));
+        }
+        foreach ($words as $raw) {
             $word = (string) preg_replace('/^\p{P}+|\p{P}+$/u', '', $raw);
             $protected = $word !== '' && ! in_array($word, self::TRANSLATABLE_UPPERCASE, true) && (
                 // kod wyrobu ma wielką literę (B809, P1P10, FLEX160°); zlepki małymi literami to proza

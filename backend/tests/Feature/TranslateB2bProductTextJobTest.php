@@ -19,6 +19,7 @@ use Closure;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use RuntimeException;
 use Tests\TestCase;
@@ -206,6 +207,71 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame(self::SOURCE_NAME, $product->name);
         $this->assertSame(sha1(self::SOURCE_DESCRIPTION), $link->description_hash);
         $this->assertNull($link->source_description_hash);
+    }
+
+    public function test_rejection_is_remembered_and_the_same_text_is_not_sent_again(): void
+    {
+        // 23.09.2026: 7 kart Bolle odrzucanych przy każdym przebiegu (model z temperaturą 0 odpowiada tak samo)
+        Log::spy();
+        [$product, $link] = $this->importedCard();
+        $this->translator->during = static function (): void {
+            throw new B2bTranslationRejected('zgubiony token: PVC', ['segments' => ['Oprawka z PCW.']]);
+        };
+
+        $this->runJob($product);
+
+        $link->refresh();
+        $this->assertSame('zgubiony token: PVC', $link->translation_rejected_reason);
+        $this->assertNotNull($link->translation_rejected_hash);
+        $this->assertNotNull($link->translation_rejected_at);
+        $this->assertNull($link->source_description_hash);
+        $this->assertSame(['description' => false, 'name' => false], TranslateB2bProductTextJob::pending($product->fresh(), $link, false));
+        Log::shouldHaveReceived('warning')->withArgs(static fn (string $message, array $context): bool => $message === 'Tłumaczenie tekstu B2B odrzucone'
+            && $context['reason'] === 'zgubiony token: PVC'
+            && str_contains((string) ($context['model_response'] ?? ''), 'Oprawka z PCW.'));
+
+        $this->runJob($product);
+        $this->assertCount(1, $this->translator->calls, 'ten sam tekst nie idzie drugi raz do modelu');
+
+        // dostawca zmienił tekst — import zapisał nowy opis i jego odcisk: znów do tłumaczenia
+        $newSource = 'Clear lens, PVC frame. EN 166.';
+        $product->update(['description' => $newSource]);
+        $link->update(['description_hash' => sha1($newSource)]);
+        $this->assertTrue(TranslateB2bProductTextJob::pending($product->fresh(), $link->fresh(), false)['description']);
+        $this->runJob($product);
+        $this->assertCount(2, $this->translator->calls);
+    }
+
+    public function test_successful_translation_clears_earlier_rejection(): void
+    {
+        [$product, $link] = $this->importedCard();
+        // odrzucenie wcześniejszego tekstu — ten na karcie jest inny, więc idzie do tłumaczenia
+        $link->update([
+            'translation_rejected_hash' => sha1('inny tekst'),
+            'translation_rejected_reason' => 'zgubiony token: THE',
+            'translation_rejected_at' => now(),
+        ]);
+
+        $this->runJob($product);
+
+        $link->refresh();
+        $this->assertSame(self::POLISH_DESCRIPTION, $product->fresh()->description);
+        $this->assertNull($link->translation_rejected_hash);
+        $this->assertNull($link->translation_rejected_reason);
+        $this->assertNull($link->translation_rejected_at);
+    }
+
+    public function test_rejection_is_not_recorded_when_import_saved_new_text_meanwhile(): void
+    {
+        [$product, $link] = $this->importedCard();
+        $this->translator->during = static function () use ($link): void {
+            $link->update(['description_hash' => sha1('nowy tekst ze sklepu')]);
+            throw new B2bTranslationRejected('inna liczba segmentów: w źródle 3, w odpowiedzi 6');
+        };
+
+        $this->runJob($product);
+
+        $this->assertNull($link->fresh()->translation_rejected_hash);
     }
 
     public function test_model_error_propagates_and_releases_slot(): void

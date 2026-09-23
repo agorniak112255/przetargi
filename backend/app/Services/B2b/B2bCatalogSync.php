@@ -67,7 +67,8 @@ use Throwable;
  *   sklepu nie oddaje: synchronizacja nie zapisuje, nie zastępuje ani nie kasuje opisu jego kart, a job pisze opis
  *   z samej karty katalogowej i tabelki ze strony.
  *   Karta, która wciąż ma nieprzetłumaczony tekst źródła (TranslateB2bProductTextJob::pending), dostaje zlecenie
- *   przy każdym przebiegu — ponowne pobranie nadrabia tłumaczenia odrzucone, nieudane albo nadpisane.
+ *   przy każdym przebiegu — ponowne pobranie nadrabia tłumaczenia nieudane albo nadpisane. Tekstu, którego
+ *   tłumaczenie walidacja już odrzuciła, nie zlecamy ponownie (23.09.2026) — do zmiany tekstu u dostawcy.
  *
  * Okno „Producenci” przy koncie (B2bManufacturerRules, decyzja użytkownika 23.09.2026): znaczniki „cena” i „opis”
  * producenta wyłączają zapis ceny albo opisu z tego cennika (szczegóły przy syncProduct); b2b_product_links.manufacturer
@@ -900,8 +901,8 @@ final class B2bCatalogSync
         $foreignText = $connector instanceof B2bForeignLanguageSource
             || ($connector instanceof B2bForeignTextCards && $connector->hasForeignDescription($remote));
         if ($foreignText) {
-            // Karta, która wciąż ma tekst źródła (tłumaczenie odrzucone, nieudane albo nadpisane — 15.09.2026 ponowne
-            // pobranie niczego nie nadrabiało), dostaje zlecenie przy każdym przebiegu; czekający job nie jest
+            // Karta, która wciąż ma tekst źródła (tłumaczenie nieudane albo nadpisane — 15.09.2026 ponowne pobranie
+            // niczego nie nadrabiało; odrzucony tekst pending() pomija), dostaje zlecenie przy każdym przebiegu; czekający job nie jest
             // dublowany (ShouldBeUniqueUntilProcessing). Nazwa istniejącej karty tylko gdy to wciąż nazwa ze źródła
             // i łącznik zachowuje nazwy — jak b2b:translate.
             $pending = TranslateB2bProductTextJob::pending(

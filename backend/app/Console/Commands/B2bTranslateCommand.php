@@ -29,7 +29,9 @@ final class B2bTranslateCommand extends Command
     protected $signature = 'b2b:translate
         {account : ID konta B2B}
         {--limit= : Najwyżej tyle kart}
-        {--dry-run : Tylko policz i pokaż}';
+        {--dry-run : Tylko policz i pokaż}
+        {--rejected : Tylko wypisz karty z odrzuconym tłumaczeniem (do ręcznego tłumaczenia)}
+        {--redo-identical : Zleć ponownie karty, których „tłumaczenie” jest identyczne z tekstem źródła}';
 
     protected $description = 'Zleca tłumaczenie na polski opisów (i nazw nowych kart) z importu B2B; nazwy kart sprzed remote_name — dopiero po jednym przebiegu importu';
 
@@ -61,6 +63,12 @@ final class B2bTranslateCommand extends Command
 
         $limit = $this->option('limit') !== null ? max(1, (int) $this->option('limit')) : null;
         $dryRun = (bool) $this->option('dry-run');
+        if ($this->option('rejected')) {
+            return $this->listRejected($account);
+        }
+        if ($this->option('redo-identical')) {
+            return $this->redoIdentical($account, $dryRun);
+        }
         $candidates = $this->candidates((int) $account->id, $connector instanceof B2bKeepsExistingNames);
 
         $this->info(sprintf(
@@ -100,6 +108,77 @@ final class B2bTranslateCommand extends Command
             $selected->count(),
             TranslateB2bProductTextJob::QUEUE,
         ));
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * Karty, których tekstu model nie przetłumaczył poprawnie (TranslateB2bProductTextJob::reject) — przebiegi ich
+     * nie ponawiają, dopóki dostawca nie zmieni tekstu. Lista do ręcznego tłumaczenia.
+     */
+    private function listRejected(B2bAccount $account): int
+    {
+        $links = B2bProductLink::query()
+            ->where('b2b_account_id', $account->id)
+            ->whereNotNull('translation_rejected_hash')
+            ->whereNull('source_description_hash')
+            ->with('product:id,sku')
+            ->orderBy('translation_rejected_at')
+            ->get();
+
+        $this->info(sprintf('Konto #%d %s · odrzucone tłumaczenia: %d kart', $account->id, $account->username, $links->count()));
+        foreach ($links as $link) {
+            $this->line(sprintf(
+                '  %s (#%d) · %s · %s',
+                (string) $link->product?->sku,
+                (int) $link->product_id,
+                $link->translation_rejected_at?->format('Y-m-d H:i') ?? '—',
+                (string) $link->translation_rejected_reason,
+            ));
+        }
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * Karty zapisane jako przetłumaczone, choć opis jest dokładnie tekstem źródła (source_description_hash =
+     * description_hash = sha1(opisu karty)) — model oddał tekst bez tłumaczenia, a walidacja sprzed 23.09.2026 to
+     * przepuszczała (HUSTLN50E). Zdjęcie znacznika tłumaczenia przywraca kartę do kolejki; tekst po polsku model
+     * odda bez zmian i zostanie przyjęty ponownie, angielski zostanie przetłumaczony albo odrzucony (--rejected).
+     */
+    private function redoIdentical(B2bAccount $account, bool $dryRun): int
+    {
+        $links = B2bProductLink::query()
+            ->where('b2b_account_id', $account->id)
+            ->whereNotNull('source_description_hash')
+            ->whereColumn('source_description_hash', 'description_hash')
+            ->with('product:id,sku,description')
+            ->get()
+            ->filter(static fn (B2bProductLink $link): bool => $link->product !== null
+                && hash_equals((string) $link->description_hash, sha1((string) $link->product->description)))
+            ->unique('product_id')
+            ->values();
+
+        $this->info(sprintf(
+            'Konto #%d %s · „tłumaczenie” identyczne ze źródłem: %d kart%s',
+            $account->id,
+            $account->username,
+            $links->count(),
+            $dryRun ? ' · bez zmian (--dry-run)' : '',
+        ));
+        foreach ($links as $link) {
+            $this->line(sprintf('  %s (#%d)', (string) $link->product?->sku, (int) $link->product_id));
+        }
+        if ($dryRun || $links->isEmpty()) {
+            return self::SUCCESS;
+        }
+
+        foreach ($links as $link) {
+            $link->source_description_hash = null;
+            $link->save();
+            TranslateB2bProductTextJob::dispatch((int) $link->product_id, (int) $account->id, false);
+        }
+        $this->info(sprintf('Zlecono ponowne tłumaczenie %d kart (kolejka %s).', $links->count(), TranslateB2bProductTextJob::QUEUE));
 
         return self::SUCCESS;
     }
