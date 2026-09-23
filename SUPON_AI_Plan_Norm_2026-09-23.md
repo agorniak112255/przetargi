@@ -173,3 +173,43 @@ z podglądem i `--apply` / `--restore` dla użytkownika.
    z rangą „producent”.
 4. Przenoszenie norm po kodzie modelu albo kodzie dystrybutora na warianty rodzeństwa.
 5. Druga kopia danych (tabela faktów) za wcześnie — rozjazd z kolumną, indeksem, kopią i łączeniem rozmiarów.
+
+## 7. Etap 3 — projekt szczegółowy (23.09.2026, po etapach 0–2)
+
+Stan po etapach 0–2 (produkcja): 821 kart z EN 388 bez kodu; największe grupy: Reis przez Raw-Pol 155, Ansell z pliku 126,
+UVEX 87, Canis 84, Tegera i Ansell przez P4S po 70, Procera 68, Polstar 32, Portwest 27, HexArmor 25. Karty mają opis
+ze sklepu B2B (bez adresu strony producenta) albo z WWW (adres w `enrichment_payload.source_urls`). Tabela
+`product_identifiers` dla tych kart jest jeszcze pusta.
+
+Rozpoznanie żywych stron producentów (23.09.2026):
+- Portwest: sekcja „Normy”: „EN 388: 2016 + A1: 2018 214XX” — kod po normie (En388Code go czyta).
+- uvex-safety.com (HexArmor, UVEX): „Certified 4X43EP according to EN 388:2016” — kod PRZED normą; w JSON sklepu
+  (Shopware) grupy właściwości „EN 388:2016 + A1:2018”.
+- Polstar: wiersz „Norma: EN ISO 21420:2020, EN 388:2016+A1:2018” i poziomy słownie w odwrotnym szyku
+  („2: odporność na ścieranie, 1: odporność na przecięcie, 3: …”).
+- Ansell (ansell.com/pl): zapora Incapsula — tylko przez czytnik (BlockedPageReader), normy jako podpisy obrazków
+  („![Image: EN 388:2016 +A1:2018](…) 1X42C”).
+- Indeks map stron (catalog_pages) ma domeny: portwest 18 385, ejendals 20 128, ansell 82 960, uvex-safety 3 273,
+  procera 2 048, cxs.net.pl 1 206, polstar 740, hexarmor 507; reis.pl — brak.
+
+Budowa (3a):
+1. Czytniki norm ze strony producenta — interfejs `ManufacturerNormPageReader` (supports(host), facts(html|text, url,
+   product) → pary dosłowne). Ogólny: ramka norm (ProductPageFetcher::normFacts). Witrynowe: Portwest, uvex-safety,
+   Polstar — każdy z testem na zapisanej prawdziwej stronie. Ansell, Ejendals, CXS, Procera, Reis — 3b, po sprawdzeniu
+   ich żywych stron.
+2. Polecenie `norms:from-manufacturer-pages {--manufacturer=} {--limit=} {--apply} {--backup=} {--restore=}` — bez
+   modelu, bez zmiany opisu ani innych pól karty. Kandydaci: karty ŚOI marki z czytnikiem, bez `manufacturer_norms`
+   (albo z normami ze strony). Adres karty producenta w kolejności: (a) adres producenta już zapisany przy karcie
+   (source_urls / primary_source_url na domenie producenta), (b) indeks map stron (CatalogIndexSearch) — tylko domena
+   producenta. Bez płatnej wyszukiwarki w 3a.
+3. Bramka tożsamości (ostrzejsza niż przy opisie): na stronie (URL, tytuł albo treść) musi stać dokładny kod wyrobu —
+   SKU albo kod producenta z nazwy/tabelki — jako osobny token (A110, 2039, 11-800), albo EAN karty. Strona z kilkoma
+   różnymi kodami EN 388 bez przypisania do naszego kodu — odrzucona (strona rodziny). Nazwa + producent nie wystarcza.
+4. Zapis: `manufacturer_norms` z `source.connector = strona-producenta`, adresem strony i datą odczytu; tylko gdy
+   kolumna pusta albo sama ze strony (pary łącznika B2B zostają). Podgląd domyślnie, `--apply` z kopią, `--restore`.
+5. Dokumenty producenta (3a): tekst `product_documents` z hosta producenta (karty techniczne, deklaracje), w którym
+   stoi kod wyrobu — pary EN 388/EN 407/EN 374 z En388Code/En407Code z fragmentu przy kodzie; źródło z id dokumentu.
+6. Miara: `norms:audit` przed/po; raport polecenia: znalezione / odrzucone przez bramkę (z powodem) / bez strony.
+
+Poza 3a: wyszukiwarka płatna (Brave/Tavily) dla kart bez adresu i bez indeksu (Reis), czytnik Ansell przez zaporę,
+rozstrzyganie sprzeczności Tegro (PDF vs tabelka) — widok z etapu 6.
