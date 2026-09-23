@@ -684,9 +684,15 @@ Prosimy o podanie nastepujacych informacji:
     {
         $items = $this->service()->resolveLineItems('x', [
             ['id' => 'item_1', 'quote' => 'Zestaw plastrów plastikowych CEDERROTH 6036 – 10 kompletów', 'qty' => '10', 'unit' => 'kompletów', 'query' => 'CEDERROTH 6036 plasterki plastikowe', 'size' => null],
-            ['id' => 'item_2', 'quote' => 'Rękawice ATG 42-874 r.9 - 40 par', 'qty' => '40', 'unit' => 'par', 'query' => 'rękawice ATG', 'size' => '9'],
-            ['id' => 'item_3', 'quote' => 'Rękawice MAxicut 44-3745 10 12 par', 'qty' => '12', 'unit' => 'par', 'query' => 'MAxicut', 'size' => '10'],
+            ['id' => 'item_2', 'quote' => 'Rękawice ATG 42-874 r.9 - 40 par', 'qty' => '40', 'unit' => 'par', 'query' => 'ATG 42-874 rękawice', 'size' => '9'],
+            ['id' => 'item_3', 'quote' => 'Rękawice MAxicut 44-3745 10 12 par', 'qty' => '12', 'unit' => 'par', 'query' => 'MAxicut 44-3745 rękawice', 'size' => '10'],
             ['id' => 'item_4', 'quote' => 'Filtry 3M 6035 12 szt.', 'qty' => '12', 'unit' => 'szt.', 'query' => 'filtry', 'size' => null],
+            // zapytanie #3: ta sama ilość dwa razy i rozmiar podany wzrostem
+            ['id' => 'item_5', 'quote' => 'Kalosze białe 3 pary rozmiar 43, 3 pary rozmiar 46', 'qty' => '3', 'unit' => 'pary', 'query' => 'kalosze', 'size' => '43'],
+            ['id' => 'item_6', 'quote' => 'Fartuch ochronny 3 sztuki wzrost 176-182', 'qty' => '3', 'unit' => 'sztuki', 'query' => 'fartuch', 'size' => '176-182'],
+            // zapytanie #18: cytat wybrany przed wycięciem ilości zostaje cytatem — z kodem „1010”,
+            // którego krótsza od pełnego cytatu fraza modelu nie ma
+            ['id' => 'item_7', 'quote' => 'ARMEN 9007 1010 S1 38 - 4 pary', 'qty' => '4', 'unit' => 'pary', 'query' => 'ARTRA ARMEN 9007 S1 buty', 'size' => '38'],
         ]);
 
         $this->assertSame([
@@ -695,9 +701,12 @@ Prosimy o podanie nastepujacych informacji:
             'Rękawice MAxicut 44-3745',
             // kod wyrobu nie jest ilością ani rozmiarem — zostaje
             'Filtry 3M 6035',
+            'Kalosze białe',
+            'Fartuch ochronny',
+            'ARMEN 9007 1010 S1',
         ], array_column($items, 'search_query'));
         // ilość i rozmiar dalej siedzą w pozycji, a cytat zostaje słowo w słowo
-        $this->assertSame([['10', null], ['40', '9'], ['12', '10'], ['12', null]], array_map(
+        $this->assertSame([['10', null], ['40', '9'], ['12', '10'], ['12', null], ['3', '43'], ['3', '176-182'], ['4', '38']], array_map(
             static fn (array $item): array => [$item['qty'], $item['size']],
             $items,
         ));

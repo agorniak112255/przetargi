@@ -1995,7 +1995,8 @@ final class ClientInquiryService
         foreach ($items as $item) {
             $own = $this->catalogSearchQuery(
                 (string) ($item['query'] ?? ''),
-                $this->quoteWithoutQtyAndSize((string) ($item['quote'] ?? ''), $item)
+                (string) ($item['quote'] ?? ''),
+                $item
             );
             $item['query_source'] = 'mail';
 
@@ -2037,8 +2038,12 @@ final class ClientInquiryService
     private function quoteWithoutQtyAndSize(string $quote, array $item): string
     {
         $qty = $this->nullable($item['qty'] ?? null);
-        $taken = $this->qtyInsideRow($quote);
-        if ($qty !== null && $taken !== null && $taken['qty'] === $this->formatQty(ltrim($qty, '0'))) {
+        // „Kalosze 3 pary rozmiar 43, 3 pary rozmiar 46” — ta sama ilość bywa w cytacie kilka razy
+        for ($i = 0; $qty !== null && $i < 5; $i++) {
+            $taken = $this->qtyInsideRow($quote);
+            if ($taken === null || $taken['qty'] !== $this->formatQty(ltrim($qty, '0'))) {
+                break;
+            }
             $quote = $this->withoutQtyFragment($quote, $taken);
         }
 
@@ -2047,8 +2052,9 @@ final class ClientInquiryService
             $s = preg_quote($size, '/');
             // „r.9”, „r. 9” — skrót, którego queryFromLine (rozmiar/rozm./roz.) nie zna
             $quote = preg_replace('/(?<![\p{L}\d])r\.\s*'.$s.'(?![\p{L}\d])/iu', ' ', $quote) ?? $quote;
-            // goła liczba na końcu, gdzie stała przed wyciętą ilością: „44-3745 10 12 par”
-            $quote = preg_replace('/(?<=\s)'.$s.'\s*[-–—,;:]?\s*$/iu', '', $quote) ?? $quote;
+            // goła liczba na końcu, gdzie stała przed wyciętą ilością: „44-3745 10 12 par”,
+            // razem ze słowem „wzrost”, którego queryFromLine też nie wycina
+            $quote = preg_replace('/(?<=\s)(?:wzrost\s*:?\s*)?'.$s.'\s*[-–—,;:]?\s*$/iu', '', $quote) ?? $quote;
         }
 
         return trim($quote);
@@ -2571,8 +2577,10 @@ final class ClientInquiryService
 
     /**
      * Do katalogu idzie cytat z warunkiem, nie sama nazwa z ekstraktora („kombinezon”).
+     *
+     * @param  array<string, mixed>|null  $item  pozycja, której ilość i rozmiar wycinamy z cytatu
      */
-    public function catalogSearchQuery(string $query, string $quote): string
+    public function catalogSearchQuery(string $query, string $quote, ?array $item = null): string
     {
         $query = trim($query);
         $fromQuote = $this->queryFromLine($quote);
@@ -2580,7 +2588,12 @@ final class ClientInquiryService
             return $query;
         }
         if ($query === '' || mb_strlen($fromQuote) > mb_strlen($query)) {
-            return $fromQuote;
+            // Wybór cytat/fraza modelu zostaje jak był — przy krótszym cytacie wygrywałaby
+            // fraza modelu, która gubi kody („ARMEN 9007 1010 S1” → bez „1010”).
+            // Stare rekordy (bez $item) liczą klucz grupy po staremu.
+            $clean = $item === null ? '' : $this->queryFromLine($this->quoteWithoutQtyAndSize($quote, $item));
+
+            return $clean !== '' ? $clean : $fromQuote;
         }
 
         return $query;
