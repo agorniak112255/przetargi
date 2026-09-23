@@ -15,6 +15,7 @@ import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayou
 import { NormPictograms } from './NormPictograms'
 import { RequirementCheckList } from './RequirementCheckList'
 import { ShopFieldsTables } from './ShopFieldsTables'
+import { SourcePricesRanked } from './SourcePricesRanked'
 
 type Props = {
   productId: number | null
@@ -418,6 +419,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
             {/* Piktogramy norm jak na stronie karty — także bez wymagania (otwarcie z wyszukiwarki), gdy lista
                 „Parametry z wymagania” się nie pokazuje. */}
             {product && <NormPictograms product={product} showSource />}
+            {product && <SourcePricesRanked product={product} />}
             {product && <SupplierSpecialPanel product={product} />}
             {product && (
               <RequirementCheckList

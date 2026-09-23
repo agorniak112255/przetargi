@@ -11,6 +11,7 @@ import { ProductVariantsTable } from '../components/ProductVariantsTable'
 import { ShopFieldsTables } from '../components/ShopFieldsTables'
 import { SupplierSpecialBadge } from '../components/SupplierSpecialBadge'
 import { SupplierSpecialPanel } from '../components/SupplierSpecialPanel'
+import { sortSourcePrices } from '../lib/sourcePrices'
 import { SUPPLIER_SPECIAL_INFERENCE_NOTE, supplierSpecialSummary } from '../lib/supplierSpecial'
 import {
   api,
@@ -104,24 +105,6 @@ function BasePriceNote({ slot }: { slot: ProductSourcePrice }) {
       {slot.base_price_source && <p className="mt-1 text-[10px] text-slate-500">Źródło: {slot.base_price_source}</p>}
     </div>
   )
-}
-
-/**
- * Kolejność tabeli „Ceny ze źródeł”: porównywalne od najtańszej (price_rank z backendu), potem pozostałe
- * w kolejności z API. Starsza odpowiedź bez price_rank — kolejność z API bez zmian.
- */
-function sortSourcePrices(slots: ProductSourcePrice[]): ProductSourcePrice[] {
-  const ranked = (s: ProductSourcePrice) => s.comparable === true && s.price_rank != null
-  return slots
-    .map((s, i) => ({ s, i }))
-    .sort((a, b) => {
-      const ra = ranked(a.s)
-      const rb = ranked(b.s)
-      if (ra && rb) return a.s.price_rank! - b.s.price_rank! || a.i - b.i
-      if (ra !== rb) return ra ? -1 : 1
-      return a.i - b.i
-    })
-    .map(({ s }) => s)
 }
 
 /** Data kursu NBP („2026-09-22”) po polsku; nieczytelną zostawiamy dosłownie. */
