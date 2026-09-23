@@ -31,7 +31,10 @@ final class B2bTranslateCommand extends Command
         {--limit= : Najwyżej tyle kart}
         {--dry-run : Tylko policz i pokaż}
         {--rejected : Tylko wypisz karty z odrzuconym tłumaczeniem (do ręcznego tłumaczenia)}
-        {--redo-identical : Zleć ponownie karty, których „tłumaczenie” jest identyczne z tekstem źródła}';
+        {--redo-identical : Zleć ponownie karty, których „tłumaczenie” jest identyczne z tekstem źródła}
+        {--retry-rejected : Zdejmij zapamiętane odrzucenia (po poprawce tłumacza) — karty wracają do tłumaczenia}
+        {--redo-names : Kartom z --id przywróć nazwę ze źródła i przetłumacz ją od nowa}
+        {--id=* : Tylko te karty (numery kart)}';
 
     protected $description = 'Zleca tłumaczenie na polski opisów (i nazw nowych kart) z importu B2B; nazwy kart sprzed remote_name — dopiero po jednym przebiegu importu';
 
@@ -68,6 +71,27 @@ final class B2bTranslateCommand extends Command
         }
         if ($this->option('redo-identical')) {
             return $this->redoIdentical($account, $dryRun);
+        }
+        $ids = array_values(array_filter(array_map('intval', (array) $this->option('id'))));
+        if ($this->option('redo-names')) {
+            return $this->redoNames($account, $ids, $dryRun);
+        }
+        if ($this->option('retry-rejected')) {
+            $rejected = B2bProductLink::query()
+                ->where('b2b_account_id', $account->id)
+                ->whereNotNull('translation_rejected_hash')
+                ->when($ids !== [], static fn ($q) => $q->whereIn('product_id', $ids));
+            if ($dryRun) {
+                $this->info(sprintf('Odrzucenia do zdjęcia: %d kart · bez zmian (--dry-run)', (clone $rejected)->count()));
+
+                return self::SUCCESS;
+            }
+            $cleared = $rejected->update([
+                'translation_rejected_hash' => null,
+                'translation_rejected_reason' => null,
+                'translation_rejected_at' => null,
+            ]);
+            $this->info("Zdjęto odrzucenie z {$cleared} kart — wracają do tłumaczenia.");
         }
         $candidates = $this->candidates((int) $account->id, $connector instanceof B2bKeepsExistingNames);
 
@@ -135,6 +159,59 @@ final class B2bTranslateCommand extends Command
                 $link->translation_rejected_at?->format('Y-m-d H:i') ?? '—',
                 (string) $link->translation_rejected_reason,
             ));
+        }
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * Nazwa przetłumaczona źle (23.09.2026: „FLASH – Kask spawalniczy” zamiast przyłbicy) — karta dostaje z powrotem nazwę
+     * ze źródła (b2b_product_links.remote_name tego konta) i zlecenie tłumaczenia nazwy od nowa. Tylko karty wskazane
+     * przez --id: tłumaczenia nie da się odróżnić od nazwy nadanej ręcznie, więc wybór należy do człowieka.
+     *
+     * @param  list<int>  $ids
+     */
+    private function redoNames(B2bAccount $account, array $ids, bool $dryRun): int
+    {
+        if ($ids === []) {
+            $this->error('Podaj karty: --id=… (numery kart, którym przetłumaczyć nazwę od nowa).');
+
+            return self::FAILURE;
+        }
+        $links = B2bProductLink::query()
+            ->where('b2b_account_id', $account->id)
+            ->whereIn('product_id', $ids)
+            ->with('product')
+            ->orderBy('id')
+            ->get()
+            ->unique('product_id');
+
+        $this->info(sprintf('Konto #%d %s · nazwy od nowa: %d kart%s', $account->id, $account->username, $links->count(), $dryRun ? ' · bez zmian (--dry-run)' : ''));
+        $missing = array_diff($ids, $links->pluck('product_id')->map(static fn (mixed $id): int => (int) $id)->all());
+        if ($missing !== []) {
+            $this->warn('Bez powiązania z tym kontem (pominięte): '.implode(', ', $missing));
+        }
+        $done = 0;
+        foreach ($links as $link) {
+            $product = $link->product;
+            $source = trim((string) $link->remote_name);
+            if ($product === null || $source === '') {
+                $this->warn(sprintf('  #%d: brak nazwy u dostawcy — pominięta', (int) $link->product_id));
+
+                continue;
+            }
+            $this->line(sprintf('  %s (#%d): %s → %s', (string) $product->sku, (int) $product->id, (string) $product->name, $source));
+            if ($dryRun) {
+                continue;
+            }
+            // przez model: indeks tekstowy i wektor przeliczą się z nazwy; tłumaczenie nadpisze ją po polsku
+            $product->update(['name' => $source]);
+            $link->update(['translation_rejected_hash' => null, 'translation_rejected_reason' => null, 'translation_rejected_at' => null]);
+            TranslateB2bProductTextJob::dispatch((int) $product->id, (int) $account->id, true);
+            $done++;
+        }
+        if (! $dryRun) {
+            $this->info(sprintf('Zlecono tłumaczenie nazw %d kart (kolejka %s).', $done, TranslateB2bProductTextJob::QUEUE));
         }
 
         return self::SUCCESS;

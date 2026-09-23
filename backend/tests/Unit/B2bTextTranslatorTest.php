@@ -349,6 +349,33 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function name_family_is_the_code_before_the_first_dash(): void
+    {
+        // Bollé BL150N10W 23.09.2026: „Pack of 10 pieces” to nie kod — wolno go przetłumaczyć
+        $translator = $this->translatorReturning([
+            'name' => 'BL150 - Zestaw 10 sztuk – Przezroczyste okulary ochronne',
+            'segments' => [],
+        ]);
+
+        $this->assertSame(
+            'BL150 - Zestaw 10 sztuk – Przezroczyste okulary ochronne',
+            $translator->translate('', 'BL150 - Pack of 10 pieces – Clear safety goggle')['name'],
+        );
+    }
+
+    #[Test]
+    public function changed_code_before_the_first_dash_is_still_rejected(): void
+    {
+        $this->expectException(B2bTranslationRejected::class);
+        $this->expectExceptionMessage('zmieniony człon nazwy „BL150”');
+
+        $this->translatorReturning([
+            'name' => 'BL 150 - Zestaw 10 sztuk – Przezroczyste okulary ochronne',
+            'segments' => [],
+        ])->translate('', 'BL150 - Pack of 10 pieces – Clear safety goggle');
+    }
+
+    #[Test]
     public function translates_name_only_when_description_is_empty(): void
     {
         $translator = $this->translatorReturning([

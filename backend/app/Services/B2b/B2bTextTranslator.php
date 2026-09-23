@@ -155,8 +155,9 @@ ZASADY:
 - product to nazwa tej samej karty po polsku — tylko kontekst: trzymaj się jej słownictwa (gdy karta mówi „szyba chroniąca przed laserem”, nie pisz „okno ochronne”). Nie tłumacz jej i nie dopisuj do wyniku.
 - Terminologia ochrony przed laserem: laser safety window → szyba chroniąca przed laserem, laser protection filter → filtr chroniący przed laserem, laser radiation → promieniowanie laserowe, within the bulk material → w samym materiale, daylight transmission → przepuszczalność światła dziennego, visual brightness → jasność widzenia, colour recognition → rozpoznawanie barw, alignment protection → ochrona przy justowaniu, optical density (OD) → gęstość optyczna (OD), coating → powłoka, anti-scratch → odporna na zarysowania.
 - Terminologia okularów i ŚOI (spójnie w całym tekście): temples → zauszniki, nose bridge → mostek nosowy, nose pads → noski, sideshields / side shields → osłony boczne, frame → oprawka, lens → soczewka, lens tint → odcień soczewki, anti-fog → przeciwmgielna, anti-scratch → odporna na zarysowania, wrap-around → panoramiczna (owijająca).
+- Nazwy wyrobów (name i tytuły segmentów): safety glasses → okulary ochronne, safety goggle(s) → gogle ochronne, over-the-glasses → okulary ochronne nakładane na okulary korekcyjne, prescription safety glasses → okulary ochronne korekcyjne, welding safety glasses → okulary spawalnicze, welding helmet → przyłbica spawalnicza (nie „kask” ani „hełm” — kask to ochrona głowy), face shield / faceguard → osłona twarzy, tilting shield → osłona uchylna, spare lens → wizjer zapasowy (osłony i przyłbice) albo soczewka zapasowa (okulary i gogle), screen guard / protection plates → szybka ochronna, headband / headgear → nagłowie, sweatband / sweat band → napotnik, foam and strap kit → zestaw pianki i paska, optical insert → wkładka korekcyjna, cord / strap → sznurek, case → etui, eco pack of N pieces → opakowanie ekologiczne N szt., pack of N pieces → opakowanie N szt. Odcienie soczewek: clear → bezbarwne, smoke → przyciemniane, copper → miedziane, amber → bursztynowe, bronze → brązowe, polarized → polaryzacyjne.
 - Tekst już po polsku zwróć bez zmian.
-- name: człon przed pierwszym „ – ” (albo „ - ”, gdy nie ma „ – ”) zostaw dosłownie, przetłumacz resztę. name=null → zwróć null.
+- name: człon przed pierwszym „ – ” albo „ - ” (który pierwszy) zostaw dosłownie, przetłumacz resztę. name=null → zwróć null.
 - Bez HTML, markdown i komentarzy.
 
 Zwróć TYLKO JSON — bez pola thought/reasoning. Pierwszy znak to {.
@@ -295,17 +296,19 @@ SYS;
         return $count;
     }
 
-    /** Człon przed pierwszym „ – ” (albo „ - ”, gdy brak „ – ”): kod, model, rozmiar — zostaje dosłownie. */
+    /**
+     * Człon przed pierwszym „ – ” albo „ - ” (który wcześniej): kod i model — zostaje dosłownie. Do 23.09.2026 „ – ” miał
+     * pierwszeństwo, więc w „BL150 - Pack of 10 pieces – Clear safety goggle” dosłownie miało zostać także „Pack of 10
+     * pieces” i poprawne tłumaczenie („BL150 - Zestaw 10 sztuk – …”) było odrzucane.
+     */
     private static function nameFamily(string $name): ?string
     {
-        foreach ([' – ', ' - '] as $separator) {
-            $position = mb_strpos($name, $separator);
-            if ($position !== false && $position > 0) {
-                return mb_substr($name, 0, $position);
-            }
-        }
+        $positions = array_filter(
+            [mb_strpos($name, ' – '), mb_strpos($name, ' - ')],
+            static fn (int|false $position): bool => $position !== false && $position > 0,
+        );
 
-        return null;
+        return $positions === [] ? null : mb_substr($name, 0, min($positions));
     }
 
     private static function assertSameNorms(string $source, string $result): void

@@ -76,8 +76,9 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame(sha1(self::POLISH_DESCRIPTION), $link->description_hash);
         $this->assertSame(sha1(self::SOURCE_DESCRIPTION), $link->source_description_hash);
         $this->assertSame(self::SOURCE_NAME, $link->remote_name);
-        // trzeci element to nazwa karty w katalogu — kontekst terminologiczny dla modelu
-        $this->assertSame([[self::SOURCE_DESCRIPTION, null, self::SOURCE_NAME]], $this->translator->calls);
+        // trzeci element to nazwa karty jako kontekst — tu nazwa karty = nazwa u dostawcy, czyli tekst źródła, więc bez
+        // kontekstu (23.09.2026: taki „kontekst” sprawiał, że model oddawał nazwę bez tłumaczenia)
+        $this->assertSame([[self::SOURCE_DESCRIPTION, null, null]], $this->translator->calls);
         // haki modelu przebudowały indeks tekstowy (małe litery, bez polskich znaków)
         $this->assertStringContainsString('soczewka miedziana, powloka', (string) $product->search_blob);
     }
@@ -93,7 +94,7 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame(self::POLISH_NAME, $product->name);
         $this->assertSame(self::POLISH_DESCRIPTION, $product->description);
         $this->assertSame(self::SOURCE_NAME, $link->remote_name, 'Nazwa u dostawcy zostaje jako proweniencja');
-        $this->assertSame([[self::SOURCE_DESCRIPTION, self::SOURCE_NAME, self::SOURCE_NAME]], $this->translator->calls);
+        $this->assertSame([[self::SOURCE_DESCRIPTION, self::SOURCE_NAME, null]], $this->translator->calls);
     }
 
     public function test_translates_only_name_when_description_was_edited(): void
@@ -109,7 +110,7 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame('Opis poprawiony ręcznie', $product->description);
         $this->assertSame(sha1(self::SOURCE_DESCRIPTION), $link->description_hash);
         $this->assertNull($link->source_description_hash, 'Opis karty nie jest tłumaczeniem');
-        $this->assertSame([['', self::SOURCE_NAME, self::SOURCE_NAME]], $this->translator->calls);
+        $this->assertSame([['', self::SOURCE_NAME, null]], $this->translator->calls);
     }
 
     public function test_description_off_in_producers_window_translates_only_name(): void
@@ -131,7 +132,7 @@ final class TranslateB2bProductTextJobTest extends TestCase
         $this->assertSame(self::POLISH_NAME, $product->name);
         $this->assertSame(self::SOURCE_DESCRIPTION, $product->description);
         $this->assertNull($link->source_description_hash);
-        $this->assertSame([['', self::SOURCE_NAME, self::SOURCE_NAME]], $this->translator->calls);
+        $this->assertSame([['', self::SOURCE_NAME, null]], $this->translator->calls);
     }
 
     public function test_name_changed_by_hand_is_not_translated(): void
@@ -222,7 +223,7 @@ final class TranslateB2bProductTextJobTest extends TestCase
 
         $product->refresh();
         $link->refresh();
-        $this->assertSame([['', self::SOURCE_NAME, self::SOURCE_NAME]], $this->translator->calls);
+        $this->assertSame([['', self::SOURCE_NAME, null]], $this->translator->calls);
         $this->assertSame(self::POLISH_NAME, $product->name);
         $this->assertSame(self::POLISH_DESCRIPTION, $product->description);
         $this->assertSame(sha1(self::POLISH_DESCRIPTION), $link->description_hash);

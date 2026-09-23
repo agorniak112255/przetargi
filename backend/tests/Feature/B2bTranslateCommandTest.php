@@ -149,6 +149,59 @@ final class B2bTranslateCommandTest extends TestCase
         Queue::assertPushed(TranslateB2bProductTextJob::class, 1);
     }
 
+    public function test_retry_rejected_clears_markers_and_dispatches_again(): void
+    {
+        $product = Product::query()->where('sku', 'BOL-6')->firstOrFail();
+        B2bProductLink::query()->where('product_id', $product->id)->update([
+            'translation_rejected_hash' => TranslateB2bProductTextJob::rejectionKey($product, ['description' => true, 'name' => false]),
+            'translation_rejected_reason' => 'nazwa bez zmian po tłumaczeniu',
+            'translation_rejected_at' => now(),
+        ]);
+
+        $this->artisan('b2b:translate', ['account' => $this->account->id, '--retry-rejected' => true, '--dry-run' => true])
+            ->expectsOutputToContain('Odrzucenia do zdjęcia: 1 kart')
+            ->assertSuccessful();
+        $this->assertNotNull(B2bProductLink::query()->where('product_id', $product->id)->value('translation_rejected_hash'));
+
+        $this->artisan('b2b:translate', ['account' => $this->account->id, '--retry-rejected' => true])
+            ->expectsOutputToContain('Zdjęto odrzucenie z 1 kart')
+            ->expectsOutputToContain('Zlecono tłumaczenie 4 kart')
+            ->assertSuccessful();
+        $this->assertNull(B2bProductLink::query()->where('product_id', $product->id)->value('translation_rejected_hash'));
+        Queue::assertPushed(TranslateB2bProductTextJob::class, fn (TranslateB2bProductTextJob $job): bool => $job->productId === $product->id);
+    }
+
+    public function test_redo_names_restores_source_name_of_chosen_cards_and_dispatches_name_translation(): void
+    {
+        // „FLASH – Kask spawalniczy”: nazwa przetłumaczona złym terminem, do przetłumaczenia od nowa
+        $bol5 = Product::query()->where('sku', 'BOL-5')->firstOrFail();
+        $bol2 = Product::query()->where('sku', 'BOL-2')->firstOrFail();
+
+        $this->artisan('b2b:translate', ['account' => $this->account->id, '--redo-names' => true, '--id' => [(string) $bol5->id], '--dry-run' => true])
+            ->expectsOutputToContain('BOL-5 (#'.$bol5->id.'): Okulary Tracker → TRACKER – Clear safety glasses')
+            ->assertSuccessful();
+        $this->assertSame('Okulary Tracker', $bol5->fresh()->name);
+        Queue::assertNotPushed(TranslateB2bProductTextJob::class);
+
+        $this->artisan('b2b:translate', ['account' => $this->account->id, '--redo-names' => true, '--id' => [(string) $bol5->id, '999999']])
+            ->expectsOutputToContain('Bez powiązania z tym kontem (pominięte): 999999')
+            ->expectsOutputToContain('Zlecono tłumaczenie nazw 1 kart')
+            ->assertSuccessful();
+        $this->assertSame('TRACKER – Clear safety glasses', $bol5->fresh()->name);
+        // karta spoza --id nietknięta
+        $this->assertSame('Okulary ochronne Rush', $bol2->fresh()->name);
+        Queue::assertPushed(TranslateB2bProductTextJob::class, 1);
+        Queue::assertPushed(TranslateB2bProductTextJob::class, fn (TranslateB2bProductTextJob $job): bool => $job->productId === $bol5->id && $job->translateName);
+        $this->assertTrue(TranslateB2bProductTextJob::pending($bol5->fresh(), B2bProductLink::query()->where('product_id', $bol5->id)->firstOrFail(), true)['name']);
+    }
+
+    public function test_redo_names_requires_ids(): void
+    {
+        $this->artisan('b2b:translate', ['account' => $this->account->id, '--redo-names' => true])
+            ->expectsOutputToContain('Podaj karty: --id=')
+            ->assertFailed();
+    }
+
     public function test_limit_caps_dispatched_jobs(): void
     {
         $this->artisan('b2b:translate', ['account' => $this->account->id, '--limit' => 2])

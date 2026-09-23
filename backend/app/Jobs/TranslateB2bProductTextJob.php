@@ -200,6 +200,11 @@ class TranslateB2bProductTextJob implements ShouldBeUniqueUntilProcessing, Shoul
     private static function contextName(Product $product, B2bProductLink $link): ?string
     {
         $cardName = (string) $product->name;
+        // Nazwa karty równa nazwie u dostawcy to wciąż tekst źródła, nie polskie słownictwo katalogu — model brał ją
+        // za gotową polską nazwę i oddawał nazwę bez tłumaczenia (23.09.2026: 180 z 202 nazw Bolle po naprawie).
+        if (trim($cardName) === trim((string) $link->remote_name)) {
+            return null;
+        }
 
         return B2bProductNameMatch::sameProduct($cardName, $link->remote_name, (string) $product->sku) ? $cardName : null;
     }
