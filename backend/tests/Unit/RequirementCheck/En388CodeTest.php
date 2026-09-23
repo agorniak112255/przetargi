@@ -78,6 +78,69 @@ final class En388CodeTest extends TestCase
         $this->assertSame('4341B', $code?->canonical());
     }
 
+    #[Test]
+    public function reads_canis_worded_block_with_przetarcie_and_cut_digit_without_coup(): void
+    {
+        // Strona producenta Canis/CXS (tests/Fixtures/norms/cxs-tale-3210-012.html): „przetarcie” zamiast
+        // „ścieranie”, przy przecięciu sama cyfra bez „Coup Test”. Wcięcia na stronie to twarde spacje.
+        $block = "Poziomy odporności dla normy EN388:\n"
+            ."       - odporność na przetarcie - 2\n"
+            ."       - odporność na przecięcie - 1\n"
+            ."       - odporność na rozerwanie - 1\n"
+            .'       - odporność na przekłucie - 2';
+        $expected = ['abrasion' => '2', 'coupe' => '1', 'tear' => '1', 'puncture' => '2', 'iso' => null, 'impact' => null];
+
+        foreach ([$block, str_replace('  ', "\u{00A0} ", $block)] as $text) {
+            $code = En388Code::first($text);
+
+            $this->assertNotNull($code);
+            $this->assertTrue($code->worded);
+            $this->assertSame($expected, $code->levels);
+            $this->assertNull($code->compact(), 'zapis słowny nie jest kodem karty');
+        }
+    }
+
+    #[Test]
+    public function reads_cut_digit_without_coup_as_coup_test(): void
+    {
+        $code = En388Code::first('EN 388: ścieranie 4, przecięcie 1');
+
+        $this->assertSame(['abrasion' => '4', 'coupe' => '1', 'tear' => null, 'puncture' => null, 'iso' => null, 'impact' => null], $code?->levels);
+    }
+
+    #[Test]
+    public function cut_letter_stays_iso_and_does_not_become_coup(): void
+    {
+        $iso = En388Code::first('EN 388 – przecięcie wg ISO 13997 – poziom B');
+        $coup = En388Code::first('EN 388 – przecięcie (Coup Test) 3');
+
+        $this->assertSame('B', $iso?->levels['iso']);
+        $this->assertNull($iso?->levels['coupe']);
+        $this->assertSame('3', $coup?->levels['coupe']);
+        $this->assertNull($coup?->levels['iso']);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function cutDigitNotCoup(): iterable
+    {
+        yield 'wynik ISO w niutonach' => ['EN 388 – odporność na przecięcie 3,5 N'];
+        yield 'liczba z jednostką po spacji' => ['EN 388 – odporność na przecięcie 5 N'];
+        yield 'przetarg to nie przetarcie' => ['EN 388 zgodnie z SIWZ przetargu 2'];
+        yield 'przeciętnie to nie przecięcie' => ['EN 388, wytrzymują przeciętnie 3 miesiące'];
+    }
+
+    #[Test]
+    #[DataProvider('cutDigitNotCoup')]
+    public function does_not_take_other_numbers_as_worded_levels(string $text): void
+    {
+        $code = En388Code::first($text);
+
+        $this->assertNull($code?->levels['coupe']);
+        $this->assertNull($code?->levels['abrasion']);
+    }
+
     /**
      * @return iterable<string, array{string}>
      */

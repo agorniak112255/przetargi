@@ -105,6 +105,117 @@ final class ProductPageFetcher
      * }
      */
     /**
+     * Cała strona HTML do odczytu norm ze strony producenta (norms:from-manufacturer-pages). Ten sam klient, pamięć
+     * podręczna i rozpoznanie zapory co przy opisie (fetchWave), ale bez czyszczenia treści: bramka tożsamości szuka
+     * kodu w mikrodanych (cxs.net.pl ma „3210-012-000-00” tylko w itemprop="sku"), a ramka norm PrestaShopu stoi
+     * w formularzu koszyka, który czyszczenie wycina. Bez czytnika zapór (BlockedPageReader) — on oddaje tekst,
+     * nie HTML.
+     *
+     * Null: brak odpowiedzi, status błędu (404 strony wycofanego wyrobu to nie karta), zapora (Incapsula przed
+     * ansell.com) albo treść, która nie jest stroną HTML (PDF karty technicznej pod adresem wyrobu).
+     *
+     * @return array{html: string, final_url: string, status: int, from_cache: bool}|null
+     */
+    public function fetchRaw(string $url): ?array
+    {
+        $url = trim($url);
+        if (preg_match('#^https?://#i', $url) !== 1) {
+            return null;
+        }
+        $cached = $this->cachedHtml($url);
+        if ($cached !== null) {
+            // pamięć podręczna trzyma adres z zapytania, nie po przekierowaniu — ten zostaje adresem strony
+            return $this->looksLikeHtmlPage($cached) && ! $this->looksLikeBotWall($cached)
+                ? ['html' => $cached, 'final_url' => $url, 'status' => 200, 'from_cache' => true]
+                : null;
+        }
+
+        $response = $this->fetchWave([['url' => $url]])['0'] ?? null;
+        if (! $response instanceof Response || ! $response->successful()) {
+            return null;
+        }
+        $type = mb_strtolower($response->header('Content-Type'));
+        $html = $response->body();
+        if (($type !== '' && ! str_contains($type, 'html')) || ! $this->looksLikeHtmlPage($html)
+            || $this->looksLikeBotWall($html)) {
+            return null;
+        }
+        $final = $response->effectiveUri();
+
+        return [
+            'html' => $html,
+            'final_url' => $final !== null ? (string) $final : $url,
+            'status' => $response->status(),
+            'from_cache' => false,
+        ];
+    }
+
+    /**
+     * Pary „norma → oznaczenie” z ramki norm strony, dosłownie — to samo co w opisie (normFacts), dla czytnika norm
+     * ze strony producenta.
+     *
+     * @return list<array{label: string, value?: string}>
+     */
+    public function normFactsFromHtml(string $html): array
+    {
+        return $this->normFacts($html);
+    }
+
+    /**
+     * Tytuły strony do bramki tożsamości: og:title, pierwszy <h1> i <title>, dosłownie, bez pustych.
+     *
+     * @return list<string>
+     */
+    public function pageTitles(string $html): array
+    {
+        $titles = [];
+        foreach ([$this->extractOgTitle($html), $this->extractFirstHeading($html), $this->extractDocumentTitle($html)] as $title) {
+            $title = trim((string) preg_replace('/\s+/u', ' ', $title));
+            if ($title !== '' && ! in_array($title, $titles, true)) {
+                $titles[] = $title;
+            }
+        }
+
+        return $titles;
+    }
+
+    /**
+     * Kody produktu z mikrodanych (itemprop sku/mpn) i z klasy Magento — dosłownie, jak markupSkus.
+     *
+     * @return list<string>
+     */
+    public function markupProductCodes(string $html): array
+    {
+        return $this->markupSkus($html);
+    }
+
+    /** Czy mikrodane strony mówią, że to inny wyrób niż ten kod (markupSkuNamesOtherProduct). */
+    public function markupNamesOtherProduct(string $html, string $code): bool
+    {
+        return $this->markupSkuNamesOtherProduct($html, $code);
+    }
+
+    /**
+     * Tekst strony bez bloków innych wyrobów („Klienci kupili”, „Podobne produkty”), menu, nagłówka, stopki
+     * i formularzy — do szukania kodu wyrobu w treści. Bez odsiewania akapitów po długości: kod w krótkim wierszu
+     * („Kod: 11-800”) ma zostać.
+     */
+    public function mainTextFromHtml(string $html): string
+    {
+        return $this->htmlToText($this->stripShopChromeHtml($this->withoutRelatedProductHtml($html)));
+    }
+
+    /** Odpowiedź wygląda na dokument HTML, nie na PDF, obrazek czy JSON podany pod adresem karty. */
+    private function looksLikeHtmlPage(string $body): bool
+    {
+        if (self::looksLikeBinaryMedia($body)) {
+            return false;
+        }
+
+        return preg_match('#<(?:!doctype\s+html|html|head|body)\b#i', substr($body, 0, 20000)) === 1;
+    }
+
+    /**
      * Sklepy w całości rysowane skryptem (Salesforce Commerce) — HTML bez treści karty.
      * Karta producenta pod www.ansell.com zostaje; odpada wyłącznie sklepowa skorupa.
      */

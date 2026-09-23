@@ -184,6 +184,24 @@ final class ManufacturerNormFactsTest extends TestCase
         $this->assertArrayNotHasKey('en388', $column);
     }
 
+    public function test_zapis_slowny_nie_jest_zapisywany_jako_kod_en388(): void
+    {
+        // Canis/CXS podaje poziomy słowami. En388Code je odczyta, ale `en388` ma być kodem karty, nie zdaniem —
+        // para zostaje tylko jako cytat w `rows`.
+        $value = 'odporność na przetarcie 2, odporność na przecięcie 1, odporność na rozerwanie 1, odporność na przekłucie 2';
+        $column = ManufacturerNormFacts::build(
+            [['label' => 'EN 388', 'value' => $value]],
+            'strona-producenta',
+            'Canis',
+            'https://example.test/karta',
+        );
+
+        $this->assertNotNull($column);
+        $this->assertArrayNotHasKey('en388', $column);
+        $this->assertArrayNotHasKey('en388', ManufacturerNormFacts::context($column));
+        $this->assertSame([['label' => 'EN 388', 'value' => $value]], ManufacturerNormFacts::rows($column));
+    }
+
     public function test_normalizer_dostaje_kod_zwarty_z_karty_producenta(): void
     {
         $column = ManufacturerNormFacts::build(

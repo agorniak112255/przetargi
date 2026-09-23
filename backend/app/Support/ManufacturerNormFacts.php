@@ -48,12 +48,19 @@ final class ManufacturerNormFacts
 
     private const MAX_LABEL = 120;
 
-    private const MAX_VALUE = 60;
+    /**
+     * Poziomy bywają podane słownie w całości (CXS: „odporność na przetarcie - 2, odporność na przecięcie - 1, …”, ok. 100
+     * znaków) — przy 60 znakach para zostawała ucięta w połowie, czyli przestawała być dosłowna.
+     */
+    private const MAX_VALUE = 240;
 
     /**
      * Zawartość kolumny z par odczytanych przez łącznik producenta; null, gdy karta nie podała ani jednej pary.
      *
      * @param  list<array{label: string, value: string|null}>  $facts  pary dosłownie ze źródła
+     * @param  array<string, mixed>  $provenance  dodatkowe pola `source` (norms:from-manufacturer-pages: kind, final_url,
+     *                                            reader, identity — czym bramka potwierdziła stronę, block — dosłowny
+     *                                            fragment strony z parami, block_sha256)
      */
     public static function build(
         array $facts,
@@ -61,6 +68,7 @@ final class ManufacturerNormFacts
         string $brand,
         string $url,
         ?CarbonImmutable $syncedAt = null,
+        array $provenance = [],
     ): ?array {
         $rows = [];
         foreach ($facts as $fact) {
@@ -86,6 +94,7 @@ final class ManufacturerNormFacts
                 'brand' => $brand,
                 'url' => mb_substr($url, 0, 2000),
                 'synced_at' => ($syncedAt ?? CarbonImmutable::now())->toIso8601String(),
+                ...$provenance,
             ],
             'rows' => $rows,
         ];
@@ -193,11 +202,28 @@ final class ManufacturerNormFacts
         return $comparable($stored) == $comparable($fresh);
     }
 
-    /** Czy wzbogacanie może zapisać pary ze strony producenta: kolumna pusta albo sama pochodzi ze strony. */
-    public static function replaceableFromWebPage(mixed $column): bool
+    /**
+     * Czy pary ze strony producenta mogą zastąpić zapisaną kolumnę: pusta albo sama pochodzi ze strony. Pary sprawdzone
+     * bramką tożsamości (`source.identity` — dokładny kod albo EAN na stronie, norms:from-manufacturer-pages) zastępuje
+     * tylko odczyt, który też przeszedł bramkę: wzbogacanie opisu kodu wyrobu na stronie nie wymaga, więc ponowne
+     * wzbogacenie nie może po cichu podmienić sprawdzonych norm odczytem z innej strony.
+     */
+    public static function replaceableFromWebPage(mixed $column, bool $incomingVerified = false): bool
     {
-        return self::rows($column) === []
-            || (is_array($column) && ($column['source']['connector'] ?? null) === self::WEB_PAGE_CONNECTOR);
+        if (self::rows($column) === []) {
+            return true;
+        }
+        if (! is_array($column) || ($column['source']['connector'] ?? null) !== self::WEB_PAGE_CONNECTOR) {
+            return false;
+        }
+
+        return $incomingVerified || ! self::verified($column);
+    }
+
+    /** Czy pary ze strony producenta przeszły bramkę tożsamości (dokładny kod albo EAN wyrobu na stronie). */
+    public static function verified(mixed $column): bool
+    {
+        return is_array($column) && is_array($column['source']['identity'] ?? null);
     }
 
     /**
@@ -311,7 +337,10 @@ final class ManufacturerNormFacts
             // Etykieta musi być normą EN 388 (a nie ANSI/ISEA czy EN 407), i to ona wyznacza fragment,
             // w którym En388Code szuka kodu — dlatego sprawdzamy sklejkę etykiety z wartością.
             $code = En388Code::first($row['label'].' '.$value);
-            if ($code === null) {
+            // Zapis słowny („odporność na przetarcie 2, odporność na przecięcie 1…”, Canis/CXS) to nie kod: `en388`
+            // trafia do dopasowania i porównań jako kod karty, a zdanie w tym polu nigdy by nie trafiło w wymaganie
+            // („4331B”) i udawałoby poziom podany kodem. Para zostaje dosłownie w `rows`.
+            if ($code === null || $code->worded) {
                 continue;
             }
 
@@ -331,7 +360,7 @@ final class ManufacturerNormFacts
      */
     private static function compactSpacedCode(string $value, En388Code $code): string
     {
-        if ($code->worded || $code->text !== $value) {
+        if ($code->text !== $value) {
             return $value;
         }
 

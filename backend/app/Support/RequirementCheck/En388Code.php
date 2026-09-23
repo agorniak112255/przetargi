@@ -201,8 +201,18 @@ final readonly class En388Code
     {
         $cut = '(?i:przecię|przecie|przeciec)\p{L}*';
         $patterns = [
-            'abrasion' => ['/(?i:ściera|sciera)\p{L}*'.self::GAP.'([0-4Xx])(?![\p{L}\d])/u'],
-            'coupe' => ['/'.$cut.'[^;,\d]{0,30}?(?i:coup)\p{L}*(?i:\s*test)?["”]?\s*\)?\s*[:\-–—]?\s*(?:(?i:poziom)\p{L}*\s*)?([0-5Xx])(?![\p{L}\d])/u'],
+            // „przetarcie” to w polskich kartach ścieranie (Canis/CXS: „odporność na przetarcie - 2”). Tylko
+            // „przetarci…/przetarć” — samo „przetar” łapałoby „przetargu 2” z treści zamówienia.
+            'abrasion' => ['/(?i:ściera|sciera|przetarci|przetarć)\p{L}*'.self::GAP.'([0-4Xx])(?![\p{L}\d])/u'],
+            'coupe' => [
+                '/'.$cut.'[^;,\d]{0,30}?(?i:coup)\p{L}*(?i:\s*test)?["”]?\s*\)?\s*[:\-–—]?\s*(?:(?i:poziom)\p{L}*\s*)?([0-5Xx])(?![\p{L}\d])/u',
+                // Bez słowa „coup” cyfra tuż za przecięciem to też Coup Test: poziomy EN 388 w tej pozycji to cyfry
+                // 0–5, a ISO 13997 to litery A–F, więc cyfra nie może być wynikiem ISO (Canis/CXS: „odporność na
+                // przecięcie - 1”). „X” tu nie wchodzi — bez „coup” nie wiadomo, której metody dotyczy. Bez nawiasu
+                // z GAP i bez liczby z jednostką: „przecięcie (TDM) 2 N”, „przecięcie 3,5 N” to wynik ISO w niutonach,
+                // nie poziom Coup. Samo słowo przecięcia, nie każde „przecię…”: „przeciętnie 3 miesiące” to nie poziom.
+                '/(?i:przecięci|przecieci|przecięć|przeciec)\p{L}*\s*[:\-–—]?\s*(?:(?i:poziom|level)\p{L}*\s*[:\-–—]?\s*)?([0-5])(?![\p{L}\d]|[,.]\d|\h*(?i:N|niuton\p{L}*)(?!\p{L}))/u',
+            ],
             'tear' => ['/(?i:rozdziera|rozdzier|rozerwa|rozdar)\p{L}*'.self::GAP.'([0-4Xx])(?![\p{L}\d])/u'],
             'puncture' => ['/(?i:przekłu|przeklu|przebic)\p{L}*'.self::GAP.'([0-4Xx])(?![\p{L}\d])/u'],
             'iso' => [
