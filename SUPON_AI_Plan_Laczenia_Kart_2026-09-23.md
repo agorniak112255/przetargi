@@ -85,3 +85,58 @@ producenta w tej samej marce), nigdy po nazwie. Plan po recenzji drugiego agenta
 - Jeden slot ceny z pliku na kartę (dwa cenniki z plików tego samego wyrobu nadpisują się) — osobny etap.
 - Jednostka sprzedaży w danych cen.
 - Karty dystrybutora założone z pliku (nie z B2B) — łączenie po etapie z wieloma slotami plików.
+
+---
+
+# Etap C2 — „Rozdziel rozmiarami” (plan 24.09.2026, do akceptacji)
+
+## Przypadek z produkcji
+Po pierwszym „Odśwież propozycje”: 273 do decyzji, 42 niepewne — 24 z nich „klucze wskazują kilka kart producenta”.
+Przykład: P4S „6X00 Półmaska 3M 6000” (#56362) = jedna karta z 3 rozmiarami, każdy rozmiar to osobna pozycja P4S
+z własnym kodem 3M: 6100 S → 7000146845 → karta 3M #40819; 6200 M → 7000146847 → #40815; 6300 L → 7000146849 → #40814.
+Producent ma kartę na rozmiar, dystrybutor kartę na model — połączyć w jedną się nie da, trzeba rozdzielić.
+
+## Ustalenia z kodu
+- P4S dzieli wyrób na karty według ceny (rozmiary w innej cenie = osobna karta P4S), więc wszystkie rozmiary jednej
+  karty P4S mają tę samą cenę — cena rozmiaru = cena karty P4S.
+- Synchronizacja grupy rozmiarów (B2bCatalogSync::resolveGroupCard, saveLink) przepina powiązania wszystkich rozmiarów
+  na jedną kartę — rozdział bez zmian w synchronizacji zostałby cofnięty przy najbliższym przebiegu.
+- Slot ceny, tabelka sklepu i identyfikatory zapisują się dziś tylko na karcie grupy.
+- Błąd danych: kod producenta z karty wyrobu P4S (tu 7000146847 = kod rozmiaru M) ląduje pod pozycją pierwszego
+  rozmiaru (S) — rozmiar S wskazuje dwie karty 3M. Źródło: P4sB2bConnector::identifiers (kod karty bez remoteId)
+  + ProductIdentifierStore (pozycja bez remoteId = pozycja karty).
+
+## Kroki (po recenzji agenta, 24.09.2026)
+0. Znacznik „przypięte” na powiązaniu (`b2b_product_links.pinned_at`, `pinned_by_candidate_id`) — ustawia go rozdział
+   ORAZ zwykłe łączenie z ekranu (etap C). Recenzja znalazła istniejący błąd: po połączeniu kilku kart P4S jednego
+   modelu z różnymi kartami producenta zmiana grup cenowych u P4S zebrałaby rozmiary z powrotem na jedną kartę
+   producenta. Uzupełnienie znacznika wstecz dla połączonych już par (z kopii zapasowych).
+1. Kod karty P4S (liczony w grupie cenowej): równy kodowi któregoś rozmiaru → nie zapisujemy (duplikat, 6X00); grupa,
+   w której rozmiary mają własne kody → kod karty jako kod modelu (nie bierze udziału w dopasowaniu); w pozostałych
+   przypadkach jak dziś (JALAS/TEGERA „PS18”, FR360). Ta sama reguła dla „Kod producenta” w tabelce sklepu.
+   Pomiar przed i po: CSV propozycji przed zmianą i po pełnym przebiegu P4S.
+2. Synchronizacja: jeśli KTÓREKOLWIEK powiązanie pozycji grupy jest przypięte — każda pozycja grupy idzie ścieżką
+   pojedynczą (swoja karta, swój slot ceny z dostępnością tej pozycji, swoje identyfikatory, bez listy rozmiarów
+   grupy); pozycja bez powiązania → osobna karta dystrybutora (później propozycja), bez zgadywania. Dodatkowo grupa
+   nie przepina powiązania z karty, która ma innego właściciela.
+3. Propozycja rozdziału: każde powiązanie karty dystrybutora (wszystkie konta) ma klucz rozmiaru wskazujący dokładnie
+   jedną kartę producenta, ≥ 2 różne karty; karty producenta jak przy łączeniu (chronione, marka, bez wersji, bez
+   innej pozycji tego konta); pozycje widziane w ostatnim pełnym przebiegu; karta dystrybutora bez cennika z pliku.
+   Częściowe trafienie → „niepewne” z planem pokazującym, którego rozmiaru brakuje.
+4. Rozdzielenie: transakcja, blokada, ponowna ocena całego planu, pełna kopia JSON przed zmianą; na każdą kartę
+   producenta: slot ceny dystrybutora (z datą sprawdzenia), wpis historii ceny, tabelka sklepu, odrzucone zdjęcia;
+   powiązania i identyfikatory rozmiarów przepięte i przypięte; karta dystrybutora usunięta na końcu (z wektorem).
+   Historia cen, zdjęcia i dokumenty karty dystrybutora tylko w kopii. Odmowa, gdy karta dystrybutora jest w
+   przetargu (także jako produkt dodatkowy), w zamiennikach, akcesoriach (także jako powiązane), Preście, ma ceny
+   specjalne, wersje, albo trwa synchronizacja jej konta.
+5. Poprawki etapu C przy okazji: łączenie przepina też produkt dodatkowy w przetargach i akcesoria wskazujące kartę,
+   usuwa wektor karty-duplikatu, ustawia znacznik przypięcia.
+6. Ekran: w „Do decyzji” propozycje rozdziału z tabelką rozmiar → karta producenta i przyciskiem „Rozdziel rozmiarami”
+   (bez zbiorczego); po rozdziale w „Połączone” jako „Rozdzielono”; w „Niepewne” przycisk „Odrzuć” (odrzucenie
+   zapamiętane dla tego zestawu kart).
+7. Kolejność wdrożenia: 0+1+2+5 → pełny przebieg P4S → „Odśwież propozycje” → 3+4+6.
+
+## Testy
+Rozdział 6X00 na trzy karty i dwa kolejne przebiegi P4S bez scalenia; zmiana grup cenowych w obie strony; nowy rozmiar
+→ osobna karta; usunięta karta producenta; drugie konto; kod karty P4S po poprawce (6X00, 6X00P, JALAS, FR360); odmowy;
+łączenie z etapu C odporne na zmianę grup cenowych; odrzucenie niepewnej.
