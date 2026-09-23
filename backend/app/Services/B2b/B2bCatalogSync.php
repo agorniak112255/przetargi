@@ -550,6 +550,23 @@ final class B2bCatalogSync
         return [['product_id' => $outcome['product_id'], ...$outcome['price_change']]];
     }
 
+    /**
+     * Waluta wpisu zmiany ceny w dzienniku przebiegu (okno postępu podpisywało każdą cenę „zł”). Gdy poprzednia cena
+     * była w innej znanej walucie, także currency_old — to zmiana waluty, nie ceny do porównania procentem.
+     *
+     * @return array{currency: string|null, currency_old?: string}
+     */
+    private function changeCurrencies(mixed $old, mixed $new): array
+    {
+        $old = strtoupper(trim((string) $old));
+        $new = strtoupper(trim((string) $new));
+
+        return [
+            'currency' => $new !== '' ? $new : null,
+            ...($old !== '' && $new !== '' && $old !== $new ? ['currency_old' => $old] : []),
+        ];
+    }
+
     private function listedVersionCount(B2bRemoteProduct $remote): int
     {
         $versions = $remote->raw['versions'] ?? null;
@@ -711,6 +728,9 @@ final class B2bCatalogSync
             $previous = $this->effectivePrices->previousSourcePrices($existing, $slot, $prices);
             $compared = [...$payload, ...$prices];
             $priceChange = $this->priceLists->detectPriceChange($previous, $compared, $remote->sku);
+            if ($priceChange !== null) {
+                $priceChange = [...$priceChange, ...$this->changeCurrencies($previous->currency, $price->currency)];
+            }
             $updateSummary = $this->priceLists->summarizeUpdate($previous, $compared, $remote->sku, $priceChange !== null);
             // dostępność tylko w slocie (poza $prices — te idą na nową kartę i do detectPriceChange); null = źródło
             // jej nie podaje, zapisana wartość zostaje
@@ -1401,6 +1421,7 @@ final class B2bCatalogSync
                     'discount_old' => null,
                     'discount_new' => null,
                     'direction' => $new - $old >= 0.005 ? 'up' : ($old - $new >= 0.005 ? 'down' : 'flat'),
+                    ...$this->changeCurrencies($model->getOriginal('currency'), $model->currency),
                 ];
             }
 

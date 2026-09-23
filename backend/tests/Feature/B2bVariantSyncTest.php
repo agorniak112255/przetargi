@@ -180,6 +180,9 @@ final class B2bVariantSyncTest extends TestCase
         $this->assertSame('BB014', $change['sku']);
         $this->assertEquals(1.5, $change['purchase_old']);
         $this->assertEquals(1.6, $change['purchase_new']);
+        // okno postępu podpisuje cenę walutą wpisu
+        $this->assertSame('PLN', $change['currency']);
+        $this->assertArrayNotHasKey('currency_old', $change);
         $this->assertNull($change['catalog_old']);
         $this->assertNull($change['catalog_new']);
         $this->assertNull($change['catalog_pct']);

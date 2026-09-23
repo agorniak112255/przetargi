@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
+import { currencyLabel } from '../lib/priceChange'
 
 type RunStatus = 'running' | 'ok' | 'failed' | 'cancelled'
 type RunTrigger = 'manual' | 'schedule' | 'cli'
@@ -42,6 +43,10 @@ type PriceChange = {
   discount_old: number | null
   discount_new: number | null
   direction: 'up' | 'down' | 'flat'
+  /** Waluta nowej ceny; brak w przebiegach sprzed 23.09.2026 (wtedy bez waluty, nie „zł” na ślepo). */
+  currency?: string | null
+  /** Tylko gdy poprzednia cena była w innej walucie. */
+  currency_old?: string
   at: string
 }
 
@@ -627,8 +632,11 @@ function PriceChangesSection({ changes }: { changes: PriceChange[] }) {
                       {c.name}
                     </td>
                     <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums">
-                      {formatPrice(c.purchase_old)} → {formatPrice(c.purchase_new)} zł
-                      <PctBadge pct={pctChange(c.purchase_old, c.purchase_new)} />
+                      {formatPrice(c.purchase_old)}
+                      {c.currency_old ? ` ${currencyLabel(c.currency_old)}` : ''} → {formatPrice(c.purchase_new)}
+                      {c.currency ? ` ${currencyLabel(c.currency)}` : ''}
+                      {/* zmiana waluty — procent między walutami nic nie znaczy */}
+                      {!c.currency_old && <PctBadge pct={pctChange(c.purchase_old, c.purchase_new)} />}
                     </td>
                     <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-slate-500">
                       {formatPrice(c.catalog_old)} → {formatPrice(c.catalog_new)}

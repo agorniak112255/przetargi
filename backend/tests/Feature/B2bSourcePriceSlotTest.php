@@ -124,12 +124,34 @@ final class B2bSourcePriceSlotTest extends TestCase
         $change = B2bSyncRun::query()->findOrFail($second['sync_run_id'])->price_changes[0];
         $this->assertEquals(6.93, $change['purchase_old']);
         $this->assertEquals(7.20, $change['purchase_new']);
+        $this->assertSame('EUR', $change['currency']);
+        $this->assertArrayNotHasKey('currency_old', $change);
         $this->getJson('/api/products/'.$card->id)
             ->assertOk()
             ->assertJsonPath('last_price_change.currency', 'EUR')
             ->assertJsonPath('last_price_change.purchase_old', 6.93)
             ->assertJsonPath('last_price_change.purchase_new', 7.2)
             ->assertJsonPath('last_price_change.purchase_pct', 3.9);
+    }
+
+    public function test_account_switching_currency_logs_both_currencies_in_price_change(): void
+    {
+        $card = $this->fileCard();
+        $shop = $this->shop();
+        $this->runSync($this->account, $shop);
+
+        $shop->currency = 'EUR';
+        $shop->net = 12.0;
+        $shop->base = 16.0;
+        $this->travel(1)->days();
+        $second = $this->runSync($this->account, $shop);
+
+        $change = B2bSyncRun::query()->findOrFail($second['sync_run_id'])->price_changes[0];
+        $this->assertEquals(50.0, $change['purchase_old']);
+        $this->assertEquals(12.0, $change['purchase_new']);
+        $this->assertSame('PLN', $change['currency_old']);
+        $this->assertSame('EUR', $change['currency']);
+        $this->assertSame('EUR', $this->slot($card, ProductSourcePrice::b2bKey($this->account->id))->currency);
     }
 
     public function test_card_without_slots_compares_with_card_price_only_in_the_same_currency(): void
