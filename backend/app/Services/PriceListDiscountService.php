@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\AssortmentGroup;
+use App\Models\B2bAccount;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
@@ -210,10 +211,12 @@ final class PriceListDiscountService
      */
     private function ownAccountKeys(PriceList $priceList): array
     {
-        return array_map(
-            static fn (int $id): string => ProductSourcePrice::b2bKey($id),
-            $this->effectivePrices->ownB2bAccountIds((string) $priceList->manufacturer),
-        );
+        // cennik sugerowany (bez cen zakupu) przegrywa z każdym kontem B2B, nie tylko z kontem producenta
+        $ids = $priceList->suggested_prices
+            ? B2bAccount::query()->pluck('id')->map(static fn (mixed $id): int => (int) $id)->all()
+            : $this->effectivePrices->ownB2bAccountIds((string) $priceList->manufacturer);
+
+        return array_map(static fn (int $id): string => ProductSourcePrice::b2bKey($id), $ids);
     }
 
     /**

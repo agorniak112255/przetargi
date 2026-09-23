@@ -10,10 +10,12 @@ use App\Models\PriceList;
 use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatch;
+use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountPriceList;
 use App\Services\B2b\B2bDescriptionSource;
 use App\Services\PriceListDeletionService;
 use App\Services\PriceListDiscountService;
+use App\Services\Pricing\ProductEffectivePrice;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -26,6 +28,7 @@ class PriceListController extends Controller
         private readonly B2bAccountPriceList $b2bLists,
         private readonly B2bDescriptionSource $b2bDescriptions,
         private readonly PriceListDiscountService $discounts,
+        private readonly ProductEffectivePrice $effectivePrices,
     ) {}
 
     public function index(): JsonResponse
@@ -233,6 +236,8 @@ class PriceListController extends Controller
         $data = $request->validate([
             'manufacturer' => ['sometimes', 'string', 'min:1', 'max:255'],
             'version' => ['sometimes', 'string', 'min:1', 'max:120'],
+            // ceny sugerowane bez cen zakupu (np. „ATG-sugerowany”) — decyzja użytkownika 23.09.2026
+            'suggested_prices' => ['sometimes', 'boolean'],
         ]);
 
         if ($data === []) {
@@ -249,6 +254,8 @@ class PriceListController extends Controller
         ))));
 
         $productsUpdated = 0;
+        $suggestedChanged = array_key_exists('suggested_prices', $data)
+            && (bool) $data['suggested_prices'] !== (bool) $priceList->suggested_prices;
         DB::transaction(function () use ($priceList, $data, $productIds, &$productsUpdated): void {
             if (array_key_exists('manufacturer', $data)) {
                 $priceList->manufacturer = trim($data['manufacturer']);
@@ -258,6 +265,9 @@ class PriceListController extends Controller
             if (array_key_exists('version', $data)) {
                 $priceList->version = trim($data['version']);
             }
+            if (array_key_exists('suggested_prices', $data)) {
+                $priceList->suggested_prices = (bool) $data['suggested_prices'];
+            }
             $priceList->save();
 
             if (array_key_exists('manufacturer', $data) && $productIds !== []) {
@@ -266,6 +276,24 @@ class PriceListController extends Controller
                     ->update(['manufacturer' => $priceList->manufacturer]);
             }
         });
+
+        // Znacznik cennika sugerowanego zmienia kolejność źródeł ceny — przeliczamy karty z ceną z tego pliku.
+        // Poza transakcją: refresh() blokuje każdą kartę osobno.
+        $pricesChanged = 0;
+        if ($suggestedChanged) {
+            ProductSourcePrice::query()
+                ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+                ->where('price_list_id', $priceList->id)
+                ->select('product_id')
+                ->orderBy('product_id')
+                ->chunk(500, function ($slots) use (&$pricesChanged): void {
+                    foreach (Product::query()->whereIn('id', $slots->pluck('product_id'))->get() as $product) {
+                        if ($this->effectivePrices->refresh($product) !== []) {
+                            $pricesChanged++;
+                        }
+                    }
+                });
+        }
 
         $priceList->load('importer:id,name');
 
@@ -280,13 +308,21 @@ class PriceListController extends Controller
         return response()->json([
             'price_list' => $priceList,
             'products_updated' => $productsUpdated,
+            'prices_changed' => $pricesChanged,
             'message' => sprintf(
-                'Zapisano cennik%s%s.',
+                'Zapisano cennik%s%s%s.',
                 array_key_exists('manufacturer', $data) && $oldManufacturer !== $priceList->manufacturer
                     ? sprintf(' (producent: „%s” → „%s”)', $oldManufacturer, $priceList->manufacturer)
                     : '',
                 $productsUpdated > 0
                     ? sprintf(', zaktualizowano producent na %d produktach', $productsUpdated)
+                    : '',
+                $suggestedChanged
+                    ? sprintf(
+                        '%s cena obowiązująca zmieniła się na %d kartach',
+                        $priceList->suggested_prices ? ' (cennik sugerowany — bez pierwszeństwa przed kontem B2B);' : ' (cennik zakupu producenta);',
+                        $pricesChanged,
+                    )
                     : ''
             ),
         ]);
@@ -328,7 +364,7 @@ class PriceListController extends Controller
                 $priceList->manufacturer,
                 $result['products_changed'],
                 $result['b2b_priced'] > 0
-                    ? sprintf(' (w tym %d z ceną z konta B2B producenta — ich cena obowiązująca zostaje z tego konta)', $result['b2b_priced'])
+                    ? sprintf(' (w tym %d z ceną z konta B2B, które ma pierwszeństwo — ich cena obowiązująca zostaje z tego konta)', $result['b2b_priced'])
                     : ''
             ),
         ]);

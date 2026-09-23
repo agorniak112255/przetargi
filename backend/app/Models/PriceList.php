@@ -18,6 +18,8 @@ class PriceList extends Model
     protected $fillable = [
         'manufacturer',
         'manufacturer_key',
+        // ceny sugerowane bez cen zakupu — plik nie ma pierwszeństwa przed kontem B2B (ProductEffectivePrice)
+        'suggested_prices',
         'version',
         'original_filename',
         'imported_by',
@@ -36,6 +38,7 @@ class PriceList extends Model
     protected function casts(): array
     {
         return [
+            'suggested_prices' => 'boolean',
             'errors' => 'array',
             'price_changes' => 'array',
             'updated_products' => 'array',

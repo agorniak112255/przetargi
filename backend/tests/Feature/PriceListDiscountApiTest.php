@@ -121,7 +121,7 @@ final class PriceListDiscountApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('products_changed', 1)
             ->assertJsonPath('b2b_priced', 1)
-            ->assertJsonPath('message', 'Zapisano rabat cennika Bolle: nowa cena zakupu na 1 kartach (w tym 1 z ceną z konta B2B producenta — ich cena obowiązująca zostaje z tego konta).');
+            ->assertJsonPath('message', 'Zapisano rabat cennika Bolle: nowa cena zakupu na 1 kartach (w tym 1 z ceną z konta B2B, które ma pierwszeństwo — ich cena obowiązująca zostaje z tego konta).');
 
         $this->assertEquals(60.00, (float) $card->refresh()->purchase_price);
         $slot = ProductSourcePrice::query()->where('product_id', $card->id)->where('source_key', 'file')->first();

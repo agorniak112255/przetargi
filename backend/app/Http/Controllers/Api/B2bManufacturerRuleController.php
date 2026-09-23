@@ -220,6 +220,8 @@ class B2bManufacturerRuleController extends Controller
                 ->where('source_key', ProductSourcePrice::SOURCE_FILE)
                 ->whereNotNull('price_list_id')
                 ->distinct())
+            // cennik sugerowany (bez cen zakupu) nie ma pierwszeństwa przed tym kontem — to nie „cennik producenta”
+            ->where('suggested_prices', false)
             ->orderByDesc('id')
             ->get(['id', 'manufacturer', 'version']);
 

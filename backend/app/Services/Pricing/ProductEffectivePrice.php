@@ -173,7 +173,8 @@ final class ProductEffectivePrice
     /**
      * Który slot ustala cenę karty i dlaczego pozostałe nie. Kolejność (decyzje użytkownika 15.09 i 23.09.2026):
      * 1) konto B2B będące cennikiem producenta tej marki (najświeżej sprawdzone), 2) cennik producenta z pliku,
-     * 3) konto dystrybutora (najświeżej sprawdzone), 4) inny plik. Pomijane: slot bez ceny, slot konta, które
+     * 3) konto dystrybutora (najświeżej sprawdzone), 4) inny plik — także cennik producenta oznaczony jako
+     * sugerowany (price_lists.suggested_prices: ceny sugerowane bez cen zakupu). Pomijane: slot bez ceny, slot konta, które
      * ma wyłączoną cenę tego producenta (okno „Producenci”). Slot zostaje w bazie — nic nie kasujemy.
      * Karta z aktywnymi wersjami: winner = null, powody puste (ceny są w wersjach).
      *
@@ -223,7 +224,9 @@ final class ProductEffectivePrice
                     continue;
                 }
                 $listManufacturer = (string) ($slot->priceList?->manufacturer ?? '');
-                if ($listManufacturer !== '' && BrandKey::same($listManufacturer, $cardManufacturer)) {
+                // cennik sugerowany (bez cen zakupu, np. „ATG-sugerowany”) nie jest cennikiem zakupu u producenta
+                $suggested = (bool) ($slot->priceList?->suggested_prices ?? false);
+                if (! $suggested && $listManufacturer !== '' && BrandKey::same($listManufacturer, $cardManufacturer)) {
                     $ownFile = $slot;
                 } else {
                     $otherFile = $slot;
@@ -274,6 +277,7 @@ final class ProductEffectivePrice
                 }
                 $reasons[$key] = match (true) {
                     $slot->isB2b() => 'cenę ustala świeżej sprawdzone konto B2B',
+                    (bool) ($slot->priceList?->suggested_prices ?? false) => 'cennik sugerowany (bez cen zakupu) — pierwszeństwo ma cena z konta B2B',
                     in_array($winner, $own, true) => 'pierwszeństwo ma konto B2B producenta',
                     default => 'pierwszeństwo ma cena z konta B2B',
                 };

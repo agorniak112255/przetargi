@@ -128,6 +128,8 @@ type PriceList = {
   enrichment_current_sku?: string | null
   enrichment_last_error?: string | null
   b2b_account?: PriceListB2bAccount | null
+  /** Ceny sugerowane bez cen zakupu — cennik nie ma pierwszeństwa przed ceną zakupu z konta B2B. */
+  suggested_prices?: boolean
   sources?: string[]
   imports_count?: number
   imports?: PriceListImportRow[]
@@ -489,6 +491,7 @@ export function PriceLists() {
   const [editId, setEditId] = useState<number | null>(null)
   const [editManufacturer, setEditManufacturer] = useState('')
   const [editVersion, setEditVersion] = useState('')
+  const [editSuggested, setEditSuggested] = useState(false)
   const [editBusyId, setEditBusyId] = useState<number | null>(null)
   const [editDiscounts, setEditDiscounts] = useState<DiscountDraft | null>(null)
   const [editDiscountsLoading, setEditDiscountsLoading] = useState(false)
@@ -600,6 +603,7 @@ export function PriceLists() {
     setEditId(row.id)
     setEditManufacturer(row.manufacturer)
     setEditVersion(row.version)
+    setEditSuggested(Boolean(row.suggested_prices))
     setEditDiscounts(null)
     setErr('')
     setMsg('')
@@ -614,6 +618,7 @@ export function PriceLists() {
     setEditId(null)
     setEditManufacturer('')
     setEditVersion('')
+    setEditSuggested(false)
     setEditDiscounts(null)
   }
 
@@ -678,7 +683,7 @@ export function PriceLists() {
         `/price-lists/${row.id}`,
         {
           method: 'PATCH',
-          body: JSON.stringify({ manufacturer, version }),
+          body: JSON.stringify({ manufacturer, version, suggested_prices: editSuggested }),
         },
       )
       setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, ...res.price_list } : r)))
@@ -2177,15 +2182,37 @@ export function PriceLists() {
                         B2B
                       </Link>
                     )}
+                    {!editing && r.suggested_prices && (
+                      <span
+                        className="ml-1.5 inline-block rounded bg-amber-100 px-1.5 py-0.5 align-middle text-[10px] font-semibold text-amber-800"
+                        title="Cennik sugerowany (bez cen zakupu) — nie ma pierwszeństwa przed ceną zakupu z konta B2B"
+                      >
+                        sugerowany
+                      </span>
+                    )}
                   </td>
                   <td className="p-2">
                     {editing ? (
-                      <input
-                        className="w-24 rounded border border-slate-300 px-1.5 py-1 text-xs"
-                        value={editVersion}
-                        onChange={(e) => setEditVersion(e.target.value)}
-                        disabled={editBusyId === r.id}
-                      />
+                      <>
+                        <input
+                          className="w-24 rounded border border-slate-300 px-1.5 py-1 text-xs"
+                          value={editVersion}
+                          onChange={(e) => setEditVersion(e.target.value)}
+                          disabled={editBusyId === r.id}
+                        />
+                        <label
+                          className="mt-1 flex items-center gap-1 whitespace-nowrap text-[11px] text-slate-600"
+                          title="Ceny sugerowane bez Twoich cen zakupu — cena zakupu z konta B2B (np. dystrybutora) ma pierwszeństwo"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={editSuggested}
+                            onChange={(e) => setEditSuggested(e.target.checked)}
+                            disabled={editBusyId === r.id}
+                          />
+                          cennik sugerowany (bez cen zakupu)
+                        </label>
+                      </>
                     ) : (
                       r.version
                     )}
@@ -2472,7 +2499,7 @@ export function PriceLists() {
                             {editDiscounts.source.ungrouped.mixed &&
                               ' Karty mają dziś różne rabaty — puste pole zostawia je bez zmian.'}
                             {editDiscounts.source.b2b_priced_count > 0 &&
-                              ` ${editDiscounts.source.b2b_priced_count.toLocaleString('pl-PL')} kart ma cenę z konta B2B producenta — ich cena obowiązująca zostaje z tego konta.`}
+                              ` ${editDiscounts.source.b2b_priced_count.toLocaleString('pl-PL')} kart ma cenę z konta B2B, które ma pierwszeństwo — ich cena obowiązująca zostaje z tego konta.`}
                           </span>
                         </div>
                       )}

@@ -73,6 +73,25 @@ final class ProductEffectivePriceManufacturerTest extends TestCase
         );
     }
 
+    public function test_suggested_manufacturer_file_loses_to_distributor_purchase_price(): void
+    {
+        // „ATG-sugerowany.xlsx”: ceny sugerowane bez rabatu, ATG kupowane tylko przez Ardon (produkcja 23.09.2026)
+        $card = $this->card('ATG');
+        $ardon = $this->account('ardon');
+        $list = PriceList::query()->create([
+            'manufacturer' => 'ATG', 'manufacturer_key' => 'atg', 'version' => '2026-09', 'suggested_prices' => true,
+        ]);
+
+        $this->fileSlot($card, $list, 17.88, 17.88, '2026-09-18 13:55');
+        $this->slot($card, $ardon, 17.88, 11.04, 'PLN', '2026-09-21 15:27');
+
+        $this->assertCardPrice($card, '17.88', '11.04', 'PLN');
+        $this->assertSame(
+            'cennik sugerowany (bez cen zakupu) — pierwszeństwo ma cena z konta B2B',
+            $this->prices->explain($card->fresh())['reasons'][ProductSourcePrice::SOURCE_FILE],
+        );
+    }
+
     public function test_manufacturer_b2b_wins_over_manufacturer_file(): void
     {
         $card = $this->card('Bolle');
