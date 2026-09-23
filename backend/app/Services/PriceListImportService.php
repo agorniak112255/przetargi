@@ -27,6 +27,11 @@ use Throwable;
 
 final class PriceListImportService
 {
+    /** Pola karty porównywane w podsumowaniu aktualizacji (summarizeUpdate); inne pola dopisuje wołający. */
+    public const SUMMARY_TEXT_FIELDS = ['name', 'manufacturer', 'category', 'currency', 'packaging'];
+
+    public const SUMMARY_NUMBER_FIELDS = ['catalog_price_net', 'purchase_price', 'discount_percent', 'pack_qty'];
+
     public function __construct(
         private readonly CurrencyDetector $currencyDetector,
         private readonly AssortmentGroupService $assortmentGroups,
@@ -607,14 +612,14 @@ final class PriceListImportService
     public function summarizeUpdate(Product $existing, array $payload, string $sku, bool $priceChanged): array
     {
         $fields = [];
-        foreach (['name', 'manufacturer', 'category', 'currency', 'packaging'] as $field) {
+        foreach (self::SUMMARY_TEXT_FIELDS as $field) {
             $old = (string) ($existing->{$field} ?? '');
             $new = (string) ($payload[$field] ?? $old);
             if ($old !== $new) {
                 $fields[] = $field;
             }
         }
-        foreach (['catalog_price_net', 'purchase_price', 'discount_percent', 'pack_qty'] as $field) {
+        foreach (self::SUMMARY_NUMBER_FIELDS as $field) {
             $old = (float) ($existing->{$field} ?? 0);
             $new = (float) ($payload[$field] ?? $old);
             if (abs($old - $new) >= 0.001) {

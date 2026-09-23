@@ -87,6 +87,15 @@ final class B2bCatalogSync
 {
     private const VARIANT_SUMMARY_LIMIT = 1500;
 
+    /** Nazwy pól karty w podsumowaniu aktualizacji; pole spoza listy — nazwą kolumny. */
+    private const CARD_FIELD_LABELS = [
+        'description' => 'opis',
+        'category_evidence' => 'kategoria-dowód',
+        'category_source' => 'źródło kategorii',
+        'shop_source_url' => 'link do sklepu',
+        'variant_summary' => 'rozmiary',
+    ];
+
     /** Bezpiecznik: taki udział wersji z ceną zmienił cenę tym samym współczynnikiem… */
     private const FUSE_SHARE = 0.8;
 
@@ -551,6 +560,32 @@ final class B2bCatalogSync
     }
 
     /**
+     * Zmienione pola karty (po fill, przed zapisem), których podsumowanie aktualizacji (summarizeUpdate) nie porównuje.
+     * Bez nich karta zapisana z nowym opisem albo kategorią-dowodem trafiała do „zaktualizowanych” z opisem „bez zmian
+     * wartości” (przebiegi Bolle 17, 19 i 23.09.2026: 219, 187 i 414 kart).
+     *
+     * @return list<string>
+     */
+    private function unsummarizedCardFields(Product $card): array
+    {
+        $dirty = array_keys($card->getDirty());
+        $fields = [];
+        foreach (array_diff($dirty, PriceListImportService::SUMMARY_TEXT_FIELDS, PriceListImportService::SUMMARY_NUMBER_FIELDS) as $column) {
+            // poprzedni opis odkładany przy zastąpieniu opisu — część zmiany „opis”, nie osobne pole
+            if ($column === 'enrichment_payload' && in_array('description', $dirty, true)) {
+                continue;
+            }
+            // źródło kategorii zmienia się razem z kategorią, którą podsumowanie już wymienia
+            if ($column === 'category_source' && in_array('category', $dirty, true)) {
+                continue;
+            }
+            $fields[] = self::CARD_FIELD_LABELS[$column] ?? $column;
+        }
+
+        return $fields;
+    }
+
+    /**
      * Waluta wpisu zmiany ceny w dzienniku przebiegu (okno postępu podpisywało każdą cenę „zł”). Gdy poprzednia cena
      * była w innej znanej walucie, także currency_old — to zmiana waluty, nie ceny do porównania procentem.
      *
@@ -743,7 +778,7 @@ final class B2bCatalogSync
             $dirty = $existing->isDirty();
             // summarizeUpdate nie zna tych pól — jak „wersje” w ścieżce z wersjami
             $extraFields = [
-                ...($existing->isDirty('variant_summary') ? ['rozmiary'] : []),
+                ...$this->unsummarizedCardFields($existing),
                 ...($availabilityChanged ? ['dostępność'] : []),
                 ...($firstAccountPrice ? ['cena z nowego konta'] : []),
             ];
@@ -1461,6 +1496,7 @@ final class B2bCatalogSync
             : null;
         $existing?->fill($payload);
         $cardDirty = $existing === null || $existing->isDirty();
+        $cardFields = $existing !== null ? $this->unsummarizedCardFields($existing) : [];
         $status = $existing === null ? 'created' : (($cardDirty || $variantChanged) ? 'updated' : 'unchanged');
 
         if ($dryRun) {
@@ -1580,7 +1616,7 @@ final class B2bCatalogSync
         }
 
         if ($updateSummary !== null && $status === 'updated') {
-            $fields = array_values(array_diff($updateSummary['fields'], ['bez zmian wartości']));
+            $fields = [...array_values(array_diff($updateSummary['fields'], ['bez zmian wartości'])), ...$cardFields];
             if ($variantChanged) {
                 $fields[] = 'wersje';
             }

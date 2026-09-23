@@ -176,6 +176,32 @@ final class B2bSourcePriceSlotTest extends TestCase
         $this->assertSame('EUR', $card->fresh()->currency);
     }
 
+    public function test_update_summary_names_card_fields_outside_price_comparison(): void
+    {
+        // przebieg Bolle 23.09.2026: 414 kart „zaktualizowanych” z opisem „bez zmian wartości” — zmieniała się
+        // kategoria-dowód, której podsumowanie nie wymieniało
+        $card = $this->fileCard();
+        // karta ma już kategorię (jak karty Bolle) — kategoria ze sklepu idzie tylko do dowodu
+        $card->update(['category' => 'Okulary ochronne']);
+        $shop = $this->shop();
+        $this->runSync($this->account, $shop);
+
+        $shop->category = 'INDUSTRIAL › GLASSES › Safety glasses';
+        $shop->sourceUrl = 'https://slottest.example.test/p/1';
+        $this->travel(1)->days();
+        $second = $this->runSync($this->account, $shop);
+
+        $this->assertSame(1, $second['updated']);
+        $updated = collect(PriceList::query()->sole()->updated_products)->firstWhere('sku', 'SLOT-1');
+        $this->assertEqualsCanonicalizing(['kategoria-dowód', 'link do sklepu'], $updated['fields']);
+        $this->assertSame('INDUSTRIAL › GLASSES › Safety glasses', $card->fresh()->category_evidence);
+
+        $this->travel(1)->days();
+        $third = $this->runSync($this->account, $shop);
+        $this->assertSame(1, $third['unchanged']);
+        $this->assertSame(0, $third['updated']);
+    }
+
     public function test_second_run_without_changes_is_unchanged_without_new_history(): void
     {
         $card = $this->fileCard();
@@ -420,6 +446,10 @@ final class SourceSlotConnector implements B2bConnector
     /** @var array<string, array{sku: string, name: string}> */
     public array $items = [];
 
+    public ?string $category = null;
+
+    public ?string $sourceUrl = null;
+
     public float $net = 50.0;
 
     public ?float $base = 70.0;
@@ -451,7 +481,7 @@ final class SourceSlotConnector implements B2bConnector
     public function products(): iterable
     {
         foreach ($this->items as $id => $item) {
-            yield new B2bRemoteProduct(remoteId: (string) $id, sku: $item['sku'], name: $item['name']);
+            yield new B2bRemoteProduct(remoteId: (string) $id, sku: $item['sku'], name: $item['name'], category: $this->category, sourceUrl: $this->sourceUrl);
         }
     }
 
