@@ -59,7 +59,11 @@ final class B2bSourcePriceSlotTest extends TestCase
 
         $card->refresh();
         $this->assertSame(1, $result['updated']);
-        $this->assertSame(1, $result['prices_changed']);
+        // pierwszy przebieg konta na karcie to dodanie ceny źródła, nie zmiana — cena z pliku jest z innego źródła
+        $this->assertSame(0, $result['prices_changed']);
+        $updated = collect(PriceList::query()->sole()->updated_products)->firstWhere('sku', 'SLOT-1');
+        $this->assertContains('cena z nowego konta', $updated['fields']);
+        $this->assertNotContains('purchase_price', $updated['fields']);
         // nazwa istniejącej karty nietknięta (łącznik bez znacznika B2bKeepsExistingNames)
         $this->assertSame(self::FILE_NAME, $card->name);
         $this->assertSame(self::SOURCE_NAME, B2bProductLink::query()->where('remote_id', '1')->value('remote_name'));
@@ -86,6 +90,68 @@ final class B2bSourcePriceSlotTest extends TestCase
         $this->assertSame($result['sync_run_id'], $history->b2b_sync_run_id);
         $this->assertEquals(50, $history->purchase_price);
         $this->assertEquals(70, $history->catalog_price_net);
+        $this->assertSame('PLN', $history->currency);
+    }
+
+    public function test_first_run_in_other_currency_is_not_a_change_and_later_change_compares_within_account(): void
+    {
+        // 23.09.2026: konto producenta w EUR na karcie z ceną dystrybutora w PLN dawało zmianę ~+393%
+        $card = $this->fileCard();
+        $shop = $this->shop();
+        $shop->currency = 'EUR';
+        $shop->net = 6.93;
+        $shop->base = 8.0;
+
+        $first = $this->runSync($this->account, $shop);
+
+        $this->assertSame(0, $first['prices_changed']);
+        $this->assertSame([], B2bSyncRun::query()->findOrFail($first['sync_run_id'])->price_changes ?? []);
+        $history = ProductPriceHistory::query()->where('product_id', $card->id)->sole();
+        $this->assertSame('EUR', $history->currency);
+        $this->assertEquals(6.93, (float) $history->purchase_price);
+
+        Sanctum::actingAs($this->user);
+        $this->getJson('/api/products/'.$card->id)
+            ->assertOk()
+            ->assertJsonPath('last_price_change', null)
+            ->assertJsonPath('price_change_percent', null);
+
+        $shop->net = 7.20;
+        $this->travel(1)->days();
+        $second = $this->runSync($this->account, $shop);
+
+        $this->assertSame(1, $second['prices_changed']);
+        $change = B2bSyncRun::query()->findOrFail($second['sync_run_id'])->price_changes[0];
+        $this->assertEquals(6.93, $change['purchase_old']);
+        $this->assertEquals(7.20, $change['purchase_new']);
+        $this->getJson('/api/products/'.$card->id)
+            ->assertOk()
+            ->assertJsonPath('last_price_change.currency', 'EUR')
+            ->assertJsonPath('last_price_change.purchase_old', 6.93)
+            ->assertJsonPath('last_price_change.purchase_new', 7.2)
+            ->assertJsonPath('last_price_change.purchase_pct', 3.9);
+    }
+
+    public function test_card_without_slots_compares_with_card_price_only_in_the_same_currency(): void
+    {
+        // karta sprzed slotów: jej cena to jedyna poprzednia cena — porównanie zostaje, ale nie między walutami
+        $card = Product::query()->create([
+            'sku' => 'SLOT-1',
+            'name' => self::FILE_NAME,
+            'manufacturer' => 'Testowy',
+            'catalog_price_net' => 60.00,
+            'purchase_price' => 40.00,
+            'discount_percent' => 0,
+            'currency' => 'PLN',
+        ]);
+        $shop = $this->shop();
+        $shop->currency = 'EUR';
+
+        $result = $this->runSync($this->account, $shop);
+
+        $this->assertSame(0, $result['prices_changed']);
+        $this->assertSame('EUR', ProductPriceHistory::query()->where('product_id', $card->id)->sole()->currency);
+        $this->assertSame('EUR', $card->fresh()->currency);
     }
 
     public function test_second_run_without_changes_is_unchanged_without_new_history(): void
@@ -172,6 +238,42 @@ final class B2bSourcePriceSlotTest extends TestCase
         $this->deleteJson("/api/b2b-accounts/{$this->account->id}")->assertOk();
         $this->assertSame('80.00', $card->fresh()->purchase_price);
         $this->assertSame('90.00', $card->fresh()->catalog_price_net);
+    }
+
+    public function test_card_price_change_indicator_compares_within_account_of_the_same_connector(): void
+    {
+        $card = $this->fileCard();
+        $shopA = $this->shop();
+        $this->runSync($this->account, $shopA);
+
+        $otherAccount = $this->makeAccount('ewa');
+        $shopB = $this->shop();
+        $shopB->net = 80.0;
+        $shopB->base = 90.0;
+        $this->travel(1)->hours();
+        $this->runSync($otherAccount, $shopB);
+
+        Sanctum::actingAs($this->user);
+        // pierwszy przebieg drugiego konta to dodanie ceny, nie skok 50 → 80
+        $this->getJson('/api/products/'.$card->id)->assertOk()->assertJsonPath('last_price_change', null);
+
+        $shopA->net = 55.0;
+        $this->travel(1)->hours();
+        $this->runSync($this->account, $shopA);
+
+        // oba konta mają to samo źródło „b2b:slottest” — porównanie po koncie przebiegu, nie 80 → 55
+        $this->getJson('/api/products/'.$card->id)
+            ->assertOk()
+            ->assertJsonPath('last_price_change.purchase_old', 50)
+            ->assertJsonPath('last_price_change.purchase_new', 55)
+            ->assertJsonPath('last_price_change.purchase_pct', 10);
+        $this->getJson('/api/products/'.$card->id.'/price-history')
+            ->assertOk()
+            ->assertJsonCount(3, 'data')
+            ->assertJsonPath('data.0.purchase_old', 50)
+            ->assertJsonPath('data.1.purchase_price', '80.00')
+            ->assertJsonPath('data.1.purchase_old', null)
+            ->assertJsonPath('data.1.first_in_source', true);
     }
 
     public function test_new_card_from_b2b_gets_slot_card_price_and_source_name(): void
@@ -300,6 +402,8 @@ final class SourceSlotConnector implements B2bConnector
 
     public ?float $base = 70.0;
 
+    public string $currency = 'PLN';
+
     public static function key(): string
     {
         return 'slottest';
@@ -341,7 +445,7 @@ final class SourceSlotConnector implements B2bConnector
 
     public function price(B2bRemoteProduct $product): ?B2bRemotePrice
     {
-        return new B2bRemotePrice(net: $this->net, base: $this->base, discountPercent: 10.0);
+        return new B2bRemotePrice(net: $this->net, base: $this->base, discountPercent: 10.0, currency: $this->currency);
     }
 
     public function description(B2bRemoteProduct $product): string

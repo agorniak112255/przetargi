@@ -146,6 +146,7 @@ final class PriceListDiscountService
                     'price_list_id' => $priceList->id,
                     'catalog_price_net' => $slot->catalog_price_net,
                     'purchase_price' => $purchase,
+                    'currency' => $slot->currency,
                     'source' => 'price_list_discount',
                 ]);
                 $changed++;

@@ -118,9 +118,33 @@ final class ProductEffectivePrice
     }
 
     /**
+     * Karta z poprzednią ceną źródła przed jego nowym odczytem — do raportów zmian cen (detectPriceChange /
+     * summarizeUpdate). Slot źródła istnieje: jego ceny. Bez slotu (pierwszy odczyt źródła na karcie) poprzedniej
+     * ceny źródła nie ma, a cena karty pochodzi z innego slotu albo jest w innej walucie (23.09.2026: konto Bolle
+     * w EUR na karcie z ceną dystrybutora w PLN dawało „+393%”) — odczyt to dodanie ceny, nie zmiana: kopia
+     * z nowymi cenami. Wyjątek: karta bez żadnego slotu w tej samej walucie (sprzed slotów albo wpisana ręcznie) —
+     * jej cena to jedyna znana poprzednia cena i nowe źródło ją zastąpi, więc porównanie z nią zostaje.
+     *
+     * @param  array<string, mixed>  $values  nowe ceny źródła (catalog_price_net, purchase_price, discount_percent, currency)
+     */
+    public function previousSourcePrices(Product $product, ?ProductSourcePrice $slot, array $values): Product
+    {
+        if ($slot !== null) {
+            return $this->cardWithSlotPrices($product, $slot);
+        }
+        $currency = static fn (mixed $code): string => strtoupper(trim((string) $code)) ?: 'PLN';
+        if ($currency($product->currency) === $currency($values['currency'] ?? null)
+            && ! ProductSourcePrice::query()->where('product_id', $product->id)->exists()) {
+            return clone $product;
+        }
+
+        return $this->cardWithSlotPrices($product, new ProductSourcePrice($values));
+    }
+
+    /**
      * Niezapisana kopia karty z cenami danego slotu — do raportów zmian cen (detectPriceChange / summarizeUpdate),
      * które mają porównywać z poprzednią ceną TEGO źródła, a nie z ceną obowiązującą. Bez slotu — kopia z ceną
-     * obowiązującą (pierwszy import źródła porównuje z tym, co było na karcie).
+     * obowiązującą; nowy odczyt źródła porównuje przez previousSourcePrices().
      */
     public function cardWithSlotPrices(Product $product, ?ProductSourcePrice $slot): Product
     {

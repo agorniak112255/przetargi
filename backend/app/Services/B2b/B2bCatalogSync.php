@@ -654,6 +654,7 @@ final class B2bCatalogSync
         $updateSummary = null;
         $dirty = true;
         $slotChanged = true;
+        $firstAccountPrice = false;
         if ($noPrice && $existing !== null) {
             // tryb „tylko treść”: nie ma ceny do porównania ani slotu do odświeżenia, więc o tym, czy karta się
             // zmieniła, decydują same pola opisowe. Podsumowania aktualizacji (kolumny cen) też nie budujemy.
@@ -666,8 +667,10 @@ final class B2bCatalogSync
                 ->where('source_key', $slotKey)
                 ->first();
             // porównanie z poprzednią ceną tego konta, nie z ceną obowiązującą (ta może być z pliku albo innego
-            // konta); bez slotu (pierwszy przebieg konta) — z ceną karty. Przed fill — kopia ma zapisane wartości.
-            $previous = $this->effectivePrices->cardWithSlotPrices($existing, $slot);
+            // konta, także w innej walucie). Bez slotu (pierwszy przebieg konta na tej karcie) — dodanie ceny źródła,
+            // chyba że karta nie ma żadnego slotu (previousSourcePrices). Przed fill — kopia ma zapisane wartości.
+            $firstAccountPrice = $slot === null;
+            $previous = $this->effectivePrices->previousSourcePrices($existing, $slot, $prices);
             $compared = [...$payload, ...$prices];
             $priceChange = $this->priceLists->detectPriceChange($previous, $compared, $remote->sku);
             $updateSummary = $this->priceLists->summarizeUpdate($previous, $compared, $remote->sku, $priceChange !== null);
@@ -684,6 +687,7 @@ final class B2bCatalogSync
             $extraFields = [
                 ...($existing->isDirty('variant_summary') ? ['rozmiary'] : []),
                 ...($availabilityChanged ? ['dostępność'] : []),
+                ...($firstAccountPrice ? ['cena z nowego konta'] : []),
             ];
             if ($extraFields !== []) {
                 $updateSummary['fields'] = [
@@ -705,7 +709,8 @@ final class B2bCatalogSync
         // — kolejne przebiegi nie ruszałyby już jej opisu (16.09.2026: 214 kart UVEX po błędzie pamięci podręcznej).
         [$product, $savedLink] = DB::transaction(function () use (
             $account, $connector, $remote, $existing, $payload, $prices, $baseSlot, $slotKey, $priceChange, $priceListId,
-            $runId, $dirty, $members, $memberLinks, $descriptionHash, $sourceTextTaken, $noPrice, $manufacturer, &$claimed, &$warnings,
+            $runId, $dirty, $members, $memberLinks, $descriptionHash, $sourceTextTaken, $noPrice, $manufacturer, $firstAccountPrice,
+            &$claimed, &$warnings,
         ): array {
             if ($existing !== null) {
                 if ($dirty) {
@@ -733,13 +738,15 @@ final class B2bCatalogSync
                     ...($remote->availability !== null ? ['availability' => $remote->availability] : []),
                 ])['slot'];
 
-                if ($existing === null || $priceChange !== null) {
+                // pierwszy wiersz konta na karcie to punkt odniesienia dla jego kolejnych zmian
+                if ($existing === null || $priceChange !== null || $firstAccountPrice) {
                     ProductPriceHistory::query()->create([
                         'product_id' => $product->id,
                         'price_list_id' => $priceListId,
                         'b2b_sync_run_id' => $runId,
                         'catalog_price_net' => $slot->catalog_price_net,
                         'purchase_price' => $slot->purchase_price,
+                        'currency' => $slot->currency,
                         'source' => 'b2b:'.$connector::key(),
                     ]);
                 }
@@ -1304,6 +1311,7 @@ final class B2bCatalogSync
                     'b2b_sync_run_id' => $runId,
                     'catalog_price_net' => 0,
                     'purchase_price' => 0,
+                    'currency' => $payload['currency'],
                     'source' => $source,
                 ]);
                 $warning = sprintf(

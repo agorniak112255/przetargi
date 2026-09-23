@@ -1237,7 +1237,7 @@ export function Products() {
                             ≈ {Number(p.price_pln).toFixed(2)} PLN
                           </span>
                         )}
-                        {p.last_price_change && <PriceChangeNote change={p.last_price_change} currency={p.currency} />}
+                        {p.last_price_change && <PriceChangeNote change={p.last_price_change} currency={p.last_price_change.currency ?? p.currency} />}
                         <SupplierSpecialBadge special={p.supplier_special} currency={p.currency} className="mt-0.5" block />
                       </>
                     )}

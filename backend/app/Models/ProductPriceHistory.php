@@ -18,6 +18,7 @@ class ProductPriceHistory extends Model
         'b2b_sync_run_id',
         'catalog_price_net',
         'purchase_price',
+        'currency',
         'source',
     ];
 

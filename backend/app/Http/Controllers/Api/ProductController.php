@@ -418,30 +418,16 @@ class ProductController extends Controller
             'sort_order' => $doc->sort_order,
         ])->values()->all();
 
-        $history = ProductPriceHistory::query()
+        $latest = ProductPriceHistory::query()
             ->where('product_id', $product->id)
             ->orderByDesc('id')
-            ->limit(2)
-            ->get();
-        $latest = $history->first();
-        $previous = $history->skip(1)->first();
-        $catalogChangePct = null;
-        if (
-            $latest !== null
-            && $previous !== null
-            && $previous->catalog_price_net !== null
-            && (float) $previous->catalog_price_net > 0
-            && $latest->catalog_price_net !== null
-        ) {
-            $catalogChangePct = round(
-                (((float) $latest->catalog_price_net - (float) $previous->catalog_price_net)
-                    / (float) $previous->catalog_price_net) * 100,
-                1
-            );
-        }
-        $payload['price_change_percent'] = $catalogChangePct;
+            ->first();
+        $lastChange = $this->priceChanges->latestChanges([(int) $product->id])[(int) $product->id] ?? null;
+        // zmiana katalogowej z ostatniej zmiany ceny (w obrębie jednego źródła), nie z dwóch ostatnich wierszy
+        // historii — te bywają z różnych źródeł i walut
+        $payload['price_change_percent'] = isset($lastChange['catalog_pct']) ? round((float) $lastChange['catalog_pct'], 1) : null;
         $payload['price_history_latest_at'] = $latest?->created_at;
-        $payload['last_price_change'] = $this->priceChanges->latestChanges([(int) $product->id])[(int) $product->id] ?? null;
+        $payload['last_price_change'] = $lastChange;
         $payload['variants'] = $this->variants->forProduct((int) $product->id);
         $slots = ProductSourcePrice::query()
             ->with(['account:id,connector,sites', 'priceList:id,manufacturer,version'])

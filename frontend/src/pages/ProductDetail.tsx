@@ -856,14 +856,14 @@ export function ProductDetail() {
       )}
       <p className="mb-4 mt-2 text-xs text-slate-600">
         {p.last_price_change ? (
-          <span title={priceChangeSummary(p.last_price_change, currency)}>
+          <span title={priceChangeSummary(p.last_price_change, p.last_price_change.currency ?? currency)}>
             Ostatnia zmiana ceny: <b>{formatDateTime(p.last_price_change.at)}</b> · {p.last_price_change.source_label}
             {' · zakup '}
             <PriceStep
               oldValue={p.last_price_change.purchase_old}
               newValue={p.last_price_change.purchase_new}
               pct={p.last_price_change.purchase_pct}
-              currency={currency}
+              currency={p.last_price_change.currency ?? currency}
             />
             {p.last_price_change.catalog_old !== p.last_price_change.catalog_new && (
               <>
@@ -872,7 +872,7 @@ export function ProductDetail() {
                   oldValue={p.last_price_change.catalog_old}
                   newValue={p.last_price_change.catalog_new}
                   pct={p.last_price_change.catalog_pct}
-                  currency={currency}
+                  currency={p.last_price_change.currency ?? currency}
                 />
               </>
             )}
@@ -998,20 +998,20 @@ export function ProductDetail() {
                 </tr>
               </thead>
               <tbody>
-                {priceHistory.map((h, i) => {
-                  const first = i === priceHistory.length - 1 && h.purchase_old === null && h.catalog_old === null
+                {priceHistory.map((h) => {
+                  const rowCurrency = h.currency ?? currency
                   return (
                     <tr key={h.id} className="border-b">
                       <td className="whitespace-nowrap p-2">{formatDateTime(h.created_at)}</td>
                       <td className="p-2" title={h.source ?? undefined}>
                         {h.source_label}
-                        {first && <span className="ml-1 text-slate-400">(dodanie ceny)</span>}
+                        {h.first_in_source && <span className="ml-1 text-slate-400">(dodanie ceny)</span>}
                       </td>
                       <td className="whitespace-nowrap p-2">
-                        <PriceStep oldValue={h.purchase_old} newValue={h.purchase_price} pct={h.purchase_pct} currency={currency} />
+                        <PriceStep oldValue={h.purchase_old} newValue={h.purchase_price} pct={h.purchase_pct} currency={rowCurrency} />
                       </td>
                       <td className="whitespace-nowrap p-2">
-                        <PriceStep oldValue={h.catalog_old} newValue={h.catalog_price_net} pct={h.catalog_pct} currency={currency} />
+                        <PriceStep oldValue={h.catalog_old} newValue={h.catalog_price_net} pct={h.catalog_pct} currency={rowCurrency} />
                       </td>
                     </tr>
                   )

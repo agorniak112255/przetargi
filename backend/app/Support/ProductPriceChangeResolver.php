@@ -7,6 +7,7 @@ namespace App\Support;
 use App\Models\PriceList;
 use App\Services\B2b\B2bConnectorRegistry;
 use DateTimeInterface;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -14,12 +15,17 @@ use Illuminate\Support\Facades\DB;
  * Zmiany cen produktu z historii (import cennika, synchronizacja B2B).
  *
  * Wiersz historii zapisuje tylko nowe ceny; poprzednia wartość to poprzedni wiersz
- * tego samego produktu (kolejność: created_at, id). Pierwszy wiersz produktu to
- * dodanie ceny, nie zmiana.
+ * tego samego produktu z tego samego źródła (kolejność: created_at, id). Karta ma wiersze
+ * z kilku źródeł (plik, konta B2B, np. producent w EUR i dystrybutor w PLN) — porównanie
+ * między źródłami dawałoby fałszywe skoki. Pierwszy wiersz źródła to dodanie ceny, nie zmiana;
+ * wiersze w różnych walutach nie są porównywane (null = waluta nieznana, starsze wiersze).
  */
 final class ProductPriceChangeResolver
 {
     private const IDS_PER_QUERY = 1000;
+
+    /** Oba źródła piszą ceny slotu pliku — rabat z okna cennika zmienia cenę tego samego źródła. */
+    private const FILE_SOURCES = ['price_list_import', 'price_list_discount'];
 
     public function __construct(private readonly B2bConnectorRegistry $connectors) {}
 
@@ -40,20 +46,27 @@ final class ProductPriceChangeResolver
         /** @var array<int, array{row: object, previous: object}> $latest */
         $latest = [];
         foreach (array_chunk($productIds, self::IDS_PER_QUERY) as $chunk) {
-            $rows = DB::table('product_price_history')
-                ->select(['id', 'product_id', 'price_list_id', 'catalog_price_net', 'purchase_price', 'source', 'created_at'])
-                ->whereIn('product_id', $chunk)
-                ->orderBy('product_id')
-                ->orderBy('created_at')
-                ->orderBy('id')
+            $rows = $this->historyQuery(['product_id', 'price_list_id', 'catalog_price_net', 'purchase_price', 'currency', 'source', 'created_at'])
+                ->whereIn('h.product_id', $chunk)
+                ->orderBy('h.product_id')
+                ->orderBy('h.created_at')
+                ->orderBy('h.id')
                 ->get();
 
-            $previous = null;
+            $productId = null;
+            /** @var array<string, object> $lastBySource */
+            $lastBySource = [];
             foreach ($rows as $row) {
-                if ($previous !== null && (int) $previous->product_id === (int) $row->product_id && $this->differs($previous, $row)) {
-                    $latest[(int) $row->product_id] = ['row' => $row, 'previous' => $previous];
+                if ((int) $row->product_id !== $productId) {
+                    $productId = (int) $row->product_id;
+                    $lastBySource = [];
                 }
-                $previous = $row;
+                $group = $this->sourceGroup($row);
+                $previous = $this->comparable($lastBySource[$group] ?? null, $row);
+                if ($previous !== null && $this->differs($previous, $row)) {
+                    $latest[$productId] = ['row' => $row, 'previous' => $previous];
+                }
+                $lastBySource[$group] = $row;
             }
         }
 
@@ -72,20 +85,32 @@ final class ProductPriceChangeResolver
      */
     public function history(int $productId, int $limit = 100): array
     {
-        // Jeden wiersz więcej, żeby najstarszy pokazany miał poprzednią wartość.
-        $rows = DB::table('product_price_history')
-            ->select(['id', 'product_id', 'price_list_id', 'catalog_price_net', 'purchase_price', 'source', 'created_at', 'updated_at'])
-            ->where('product_id', $productId)
-            ->orderByDesc('created_at')
-            ->orderByDesc('id')
-            ->limit($limit + 1)
-            ->get()
-            ->values();
+        // Wszystkie wiersze karty: poprzedni wiersz tego samego źródła może leżeć dowolnie daleko
+        // (inne źródła między nimi), więc nie wystarczy jeden wiersz ponad limit.
+        $rows = $this->historyQuery(['product_id', 'price_list_id', 'catalog_price_net', 'purchase_price', 'currency', 'source', 'created_at', 'updated_at'])
+            ->where('h.product_id', $productId)
+            ->orderBy('h.created_at')
+            ->orderBy('h.id')
+            ->get();
+
+        /** @var array<int, array{previous: object|null, first: bool}> $steps */
+        $steps = [];
+        /** @var array<string, object> $lastBySource */
+        $lastBySource = [];
+        foreach ($rows as $row) {
+            $group = $this->sourceGroup($row);
+            $steps[(int) $row->id] = [
+                'previous' => $this->comparable($lastBySource[$group] ?? null, $row),
+                'first' => ! isset($lastBySource[$group]),
+            ];
+            $lastBySource[$group] = $row;
+        }
+        $rows = $rows->reverse()->take($limit)->values();
 
         $priceLists = $this->priceLists($rows->pluck('price_list_id')->all());
         $out = [];
-        foreach ($rows->take($limit) as $i => $row) {
-            $previous = $rows->get($i + 1);
+        foreach ($rows as $row) {
+            ['previous' => $previous, 'first' => $first] = $steps[(int) $row->id];
             $list = $row->price_list_id !== null ? ($priceLists[(int) $row->price_list_id] ?? null) : null;
             $purchaseOld = $previous !== null ? $this->price($previous->purchase_price) : null;
             $catalogOld = $previous !== null ? $this->price($previous->catalog_price_net) : null;
@@ -98,6 +123,7 @@ final class ProductPriceChangeResolver
                 'price_list_id' => $row->price_list_id !== null ? (int) $row->price_list_id : null,
                 'catalog_price_net' => $row->catalog_price_net !== null ? number_format((float) $row->catalog_price_net, 2, '.', '') : null,
                 'purchase_price' => $row->purchase_price !== null ? number_format((float) $row->purchase_price, 2, '.', '') : null,
+                'currency' => $this->currency($row->currency),
                 'source' => $row->source,
                 'source_label' => $this->sourceLabel($row->source, $row->price_list_id !== null, $list),
                 'created_at' => $this->iso($row->created_at),
@@ -112,6 +138,8 @@ final class ProductPriceChangeResolver
                 'catalog_old' => $catalogOld,
                 'purchase_pct' => $previous !== null ? $this->pct($purchaseOld, $purchaseNew) : null,
                 'catalog_pct' => $previous !== null ? $this->pct($catalogOld, $catalogNew) : null,
+                // pierwszy wiersz tego źródła = dodanie ceny; bez poprzedniej wartości także przy zmianie waluty
+                'first_in_source' => $first,
             ];
         }
 
@@ -169,6 +197,7 @@ final class ProductPriceChangeResolver
 
         return [
             'at' => $this->iso($row->created_at),
+            'currency' => $this->currency($row->currency),
             'source' => $row->source,
             'source_label' => $this->sourceLabel($row->source, $row->price_list_id !== null, $list),
             'purchase_old' => $purchaseOld,
@@ -199,6 +228,54 @@ final class ProductPriceChangeResolver
             ->get()
             ->keyBy('id')
             ->all();
+    }
+
+    /**
+     * Wiersze historii z kontem B2B przebiegu (dwa konta jednego łącznika to dwa źródła ceny).
+     *
+     * @param  list<string>  $columns  kolumny product_price_history
+     */
+    private function historyQuery(array $columns): Builder
+    {
+        return DB::table('product_price_history as h')
+            ->leftJoin('b2b_sync_runs as r', 'r.id', '=', 'h.b2b_sync_run_id')
+            ->select(['h.id', ...array_map(static fn (string $c): string => 'h.'.$c, $columns), 'r.b2b_account_id']);
+    }
+
+    /**
+     * Klucz źródła wiersza historii — jak sloty cen: pliki (import i rabat) to jeden slot, wiersz przebiegu B2B
+     * należy do konta. Każde inne źródło osobno, także „b2b:…” bez przebiegu (sprzed dziennika przebiegów albo konta
+     * usuniętego), dawne „b2b_api” i puste — nie wiadomo, z którym dzisiejszym slotem je utożsamić.
+     */
+    private function sourceGroup(object $row): string
+    {
+        $source = trim((string) $row->source);
+        if (in_array($source, self::FILE_SOURCES, true)) {
+            return 'file';
+        }
+
+        return $row->b2b_account_id !== null ? 'account:'.(int) $row->b2b_account_id : $source;
+    }
+
+    /**
+     * Poprzedni wiersz źródła, jeśli da się z nim porównać: przy różnych znanych walutach nie da się.
+     */
+    private function comparable(?object $previous, object $row): ?object
+    {
+        if ($previous === null) {
+            return null;
+        }
+        $old = $this->currency($previous->currency);
+        $new = $this->currency($row->currency);
+
+        return $old !== null && $new !== null && $old !== $new ? null : $previous;
+    }
+
+    private function currency(mixed $value): ?string
+    {
+        $code = strtoupper(trim((string) $value));
+
+        return $code === '' ? null : $code;
     }
 
     private function differs(object $previous, object $row): bool

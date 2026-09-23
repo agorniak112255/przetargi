@@ -445,9 +445,11 @@ final class PriceListImportService
                 ];
 
                 if ($existing !== null) {
-                    // cena z pliku trafia tylko do slotu „file”; raporty porównują z poprzednią ceną z pliku
+                    // cena z pliku trafia tylko do slotu „file”; raporty porównują z poprzednią ceną z pliku. Karta bez
+                    // slotu pliku z ceną z konta B2B (także w innej walucie) — dodanie ceny źródła, nie zmiana
+                    // (previousSourcePrices).
                     $fileSlot = $this->fileSlot($existing, $fileSlots);
-                    $before = $this->effectivePrices->cardWithSlotPrices($existing, $fileSlot);
+                    $before = $this->effectivePrices->previousSourcePrices($existing, $fileSlot, $slotValues);
                     $cardPayload = $payload;
                     // karta z powiązaniem B2B: nazwa i producent zostają na karcie (decyzja użytkownika 15.09.2026)
                     if (B2bProductLink::query()->where('product_id', $existing->id)->exists()) {
@@ -460,6 +462,9 @@ final class PriceListImportService
                     $change = $this->detectPriceChange($before, $cardPayload, $sku);
                     if ($change !== null) {
                         $priceChanges[] = $change;
+                    }
+                    // pierwsza cena z pliku to punkt odniesienia dla kolejnych zmian tego źródła w historii
+                    if ($change !== null || $fileSlot === null) {
                         $historyIds[(int) $existing->id] = true;
                     }
                     $updatedProducts[] = $this->summarizeUpdate($before, $cardPayload, $sku, $change !== null);
@@ -543,6 +548,7 @@ final class PriceListImportService
                     'price_list_import_id' => $import->id,
                     'catalog_price_net' => $slot->catalog_price_net,
                     'purchase_price' => $slot->purchase_price,
+                    'currency' => $slot->currency,
                     'source' => 'price_list_import',
                 ]);
             }

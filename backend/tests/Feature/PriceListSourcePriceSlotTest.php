@@ -58,10 +58,17 @@ final class PriceListSourcePriceSlotTest extends TestCase
         $this->assertSame('Anro', $card->manufacturer);
         $this->assertSame('Znaki', $card->category);
         $this->assertSame([$card->id], $firstList->product_ids);
-        // pierwszy import pliku porównuje z ceną, która była na karcie
-        $this->assertSame(1, $first['prices_changed']);
-        $this->assertEquals(36.72, $first['price_changes'][0]['purchase_old']);
-        $this->assertEquals(40.00, $first['price_changes'][0]['purchase_new']);
+        // pierwszy import pliku to dodanie ceny źródła, nie zmiana — cena karty jest z konta B2B (innego źródła,
+        // czasem w innej walucie); wiersz historii zostaje punktem odniesienia dla kolejnych plików
+        $this->assertSame(0, $first['prices_changed']);
+        $this->assertSame([], $first['price_changes']);
+        $this->assertNotContains('purchase_price', $first['updated_products'][0]['fields']);
+        $firstHistory = ProductPriceHistory::query()
+            ->where('product_id', $card->id)
+            ->where('price_list_import_id', $first['price_list_import']->id)
+            ->sole();
+        $this->assertEquals(40.00, (float) $firstHistory->purchase_price);
+        $this->assertSame('PLN', $firstHistory->currency);
         $this->assertNotContains('name', $first['updated_products'][0]['fields']);
         $this->assertNotContains('manufacturer', $first['updated_products'][0]['fields']);
 

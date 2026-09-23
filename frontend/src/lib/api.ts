@@ -135,6 +135,8 @@ export type ProductDocument = {
 /** Ostatnia zmiana ceny z historii (import cennika albo synchronizacja B2B). */
 export type ProductPriceChange = {
   at: string
+  /** Waluta cen zmiany; null = wiersz historii sprzed zapisu waluty (wtedy waluta karty). */
+  currency: string | null
   source: string | null
   source_label: string
   purchase_old: number | null
@@ -154,16 +156,20 @@ export type ProductPriceHistoryRow = {
   price_list_id: number | null
   catalog_price_net: string | null
   purchase_price: string | null
+  /** null = wiersz historii sprzed zapisu waluty (wtedy waluta karty). */
+  currency: string | null
   source: string | null
   source_label: string
   created_at: string
   updated_at: string | null
   price_list: { id: number; manufacturer: string; version: string; created_at: string | null } | null
-  /** null dla pierwszego wpisu produktu (dodanie ceny, nie zmiana). */
+  /** Poprzednia cena tego samego źródła; null przy pierwszym wpisie źródła albo innej walucie. */
   purchase_old: number | null
   catalog_old: number | null
   purchase_pct: number | null
   catalog_pct: number | null
+  /** Pierwszy wpis tego źródła na karcie (dodanie ceny, nie zmiana). */
+  first_in_source: boolean
 }
 
 /** Ostatnia zmiana ceny wersji (ceny jako tekst z dwoma miejscami po przecinku). */
