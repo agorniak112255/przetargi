@@ -14,6 +14,7 @@ import { AdminSessions } from './pages/AdminSessions'
 import { AdminAiTuning } from './pages/AdminAiTuning'
 import { AdminCatalogSlang } from './pages/AdminCatalogSlang'
 import { AdminDescriptionTemplates } from './pages/AdminDescriptionTemplates'
+import { AdminDictionaries } from './pages/AdminDictionaries'
 import { AdminSmtp } from './pages/AdminSmtp'
 import { AdminUsers } from './pages/AdminUsers'
 import { Clients } from './pages/Clients'
@@ -201,6 +202,14 @@ export default function App() {
                 element={
                   <PermissionGuard permission="admin.catalog_slang.manage">
                     <AdminCatalogSlang />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="slowniki"
+                element={
+                  <PermissionGuard permission="admin.dictionaries.manage">
+                    <AdminDictionaries />
                   </PermissionGuard>
                 }
               />

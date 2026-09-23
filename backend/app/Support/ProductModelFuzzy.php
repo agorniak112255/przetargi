@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Support;
 
 use App\Models\Product;
+use Throwable;
 
 /**
  * Literówki w modelu SIWZ (TEPM-ICE → TEMP-ICE) vs nazwa/SKU cennika.
@@ -389,26 +390,61 @@ final class ProductModelFuzzy
     public function catalogBrands(string $requirement): array
     {
         $known = $this->knownCatalogBrandTokens();
-        if ($known === []) {
+        // Słownik z administracji (BrandDictionary) dokłada marki i producentów oraz zdejmuje wykluczenia.
+        // Pusty słownik nie zmienia niczego — zbiór zostaje taki jak z konfiguracji. Igły modelu (needles,
+        // strongSkuNeedles) budujemy dalej ze zbioru z konfiguracji: dopisane marki tworzyłyby tam nowe
+        // „mocne” igły, a te rozstrzygają pozycję przetargu bez oceny modelu.
+        $dictionary = $this->brandDictionary();
+        $detect = $dictionary?->detectable() ?? [];
+        $suppress = $dictionary?->suppressed() ?? [];
+        if ($known === [] && $detect === []) {
             return [];
         }
+        $isBrand = static fn (string $c): bool => $c !== ''
+            && (isset($known[$c]) || isset($detect[$c]))
+            && ! isset($suppress[$c]);
         $found = [];
         $text = $this->stripNorms($requirement);
         $tokens = preg_split('/[\s,;:·•\/|+]+/u', $text) ?: [];
         foreach ($tokens as $token) {
             $c = $this->compact($token);
-            if ($c !== '' && isset($known[$c])) {
+            if ($isBrand($c)) {
                 $found[$c] = true;
             }
             foreach (preg_split('/[^a-z0-9]+/u', mb_strtolower($token)) ?: [] as $part) {
                 $p = $this->compact($part);
-                if ($p !== '' && isset($known[$p])) {
+                if ($isBrand($p)) {
                     $found[$p] = true;
                 }
             }
         }
 
+        // Marka ze słownika ciągnie za sobą producenta („peltor” → „3m”): karty nazywają producenta,
+        // a nie podmarkę („3M Optime III H540A” to Peltor). Wtedy bramka marki, preferencja marki i skan
+        // po producencie widzą właściwe karty bez osobnych zmian w każdym z tych miejsc. Producent stoi
+        // po marce, bo enrichIntentManufacturers bierze pierwszy token — ten tłumaczy się przez słownik
+        // w CatalogManufacturerContext::matchManufacturer.
+        if ($dictionary !== null) {
+            foreach (array_keys($found) as $token) {
+                $producer = $dictionary->producerFor((string) $token);
+                $key = $producer === null ? '' : $this->compact($producer);
+                if ($key !== '') {
+                    $found[$key] = true;
+                }
+            }
+        }
+
         return array_keys($found);
+    }
+
+    private function brandDictionary(): ?BrandDictionary
+    {
+        try {
+            return app(BrandDictionary::class);
+        } catch (Throwable) {
+            // poza aplikacją (czysty test jednostkowy) słownika nie ma — zbiór jak z konfiguracji
+            return null;
+        }
     }
 
     /**

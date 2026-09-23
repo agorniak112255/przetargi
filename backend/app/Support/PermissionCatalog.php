@@ -54,6 +54,7 @@ final class PermissionCatalog
         'admin.search_sites.manage',
         'admin.ai_tuning.manage',
         'admin.catalog_slang.manage',
+        'admin.dictionaries.manage',
         'admin.description_templates.manage',
         'presta.export',
     ];
@@ -220,6 +221,7 @@ final class PermissionCatalog
             ['admin.search_sites.manage', 'Strony wyszukiwarka', 'Może zarządzać domenami indeksu i liczbą linków wyszukiwarki.', 'Administracja'],
             ['admin.ai_tuning.manage', 'Strojenie AI', 'Może zmieniać limit wyników wyszukiwania w katalogu i progi dopasowania.', 'Administracja'],
             ['admin.catalog_slang.manage', 'Żargon SIWZ', 'Może edytować słownik potocznych nazw z przetargów.', 'Administracja'],
+            ['admin.dictionaries.manage', 'Słowniki', 'Może edytować słownik producentów, marek i wykluczeń używany do rozpoznawania marki w zapytaniach i przetargach.', 'Administracja'],
             ['admin.description_templates.manage', 'Szablony opisów', 'Może edytować instrukcje AI wg rodziny BHP.', 'Administracja'],
             ['presta.export', 'Eksport do Presty', 'Może wysyłać produkty (opis, rozmiary, termin na zamówienie) do sklepu PrestaShop.', 'Administracja'],
         ];

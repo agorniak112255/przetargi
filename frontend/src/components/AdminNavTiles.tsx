@@ -73,6 +73,12 @@ export const adminTiles: AdminTile[] = [
     permission: 'admin.catalog_slang.manage',
   },
   {
+    to: '/admin/slowniki',
+    label: 'Słowniki',
+    description: 'Producenci, marki i wykluczenia',
+    permission: 'admin.dictionaries.manage',
+  },
+  {
     to: '/admin/szablony-opisow',
     label: 'Szablony opisów',
     description: 'Instrukcje AI wg rodziny BHP',

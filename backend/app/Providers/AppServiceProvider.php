@@ -15,6 +15,7 @@ use App\Services\Presta\PrestaCatalogGateway;
 use App\Services\Presta\PrestaExportGateway;
 use App\Services\Presta\PrestaShopCatalogClient;
 use App\Services\Presta\PrestaShopExportClient;
+use App\Support\BrandDictionary;
 use App\Support\StorageOwnership;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
@@ -24,6 +25,8 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->scoped(AiServedProviderTally::class);
+        // jedna instancja na żądanie albo zadanie kolejki — słownik czytany raz, nie przy każdej karcie
+        $this->app->scoped(BrandDictionary::class);
         $this->app->scoped(EnrichmentAttemptLog::class);
         $this->app->scoped(EnrichmentLiveProgress::class);
         $this->app->bind(PrestaCatalogGateway::class, PrestaShopCatalogClient::class);

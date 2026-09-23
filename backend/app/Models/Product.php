@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Jobs\ReindexProductEmbeddingJob;
+use App\Support\CatalogManufacturerContext;
 use App\Support\ProductSearchBlob;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -112,17 +113,33 @@ class Product extends Model
         // — hybryda przestawała mówić o tym samym produkcie.
         static::created(function (self $product): void {
             ReindexProductEmbeddingJob::dispatch((int) $product->id);
+            self::forgetManufacturersIf(trim((string) $product->manufacturer) !== '');
         });
 
         // Sam UPDATE ceny czy stanu magazynowego nie zmienia dokumentu embeddingu —
         // reindeks byłby czystym kosztem.
         static::updated(function (self $product): void {
+            self::forgetManufacturersIf($product->wasChanged('manufacturer'));
             if (! $product->wasChanged(ProductSearchBlob::SOURCE_COLUMNS)) {
                 return;
             }
 
             ReindexProductEmbeddingJob::dispatch((int) $product->id);
         });
+
+        static::deleted(static fn (self $product): mixed => self::forgetManufacturersIf(trim((string) $product->manufacturer) !== ''));
+    }
+
+    /**
+     * Lista producentów (CatalogManufacturerContext) trzyma się w pamięci godzinę i nic jej nie czyściło —
+     * producent z właśnie zaimportowanego cennika był przez ten czas „spoza katalogu”: wyszukiwanie
+     * oznaczało markę jako nieobecną i zerowało producenta w intencji, a ekran Słowniki go nie pokazywał.
+     */
+    private static function forgetManufacturersIf(bool $changed): void
+    {
+        if ($changed) {
+            CatalogManufacturerContext::forgetCache();
+        }
     }
 
     protected function casts(): array

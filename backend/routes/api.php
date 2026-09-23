@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use App\Http\Controllers\Api\Admin\ActivityLogController as AdminActivityLogController;
 use App\Http\Controllers\Api\Admin\AiTuningController as AdminAiTuningController;
+use App\Http\Controllers\Api\Admin\BrandDictionaryController as AdminBrandDictionaryController;
 use App\Http\Controllers\Api\Admin\CatalogSearchSiteController as AdminCatalogSearchSiteController;
 use App\Http\Controllers\Api\Admin\CatalogSlangController as AdminCatalogSlangController;
 use App\Http\Controllers\Api\Admin\EnrichmentDescriptionTemplateController as AdminEnrichmentDescriptionTemplateController;
@@ -329,6 +330,13 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::middleware('permission:admin.catalog_slang.manage')->group(function (): void {
             Route::get('/catalog-slang', [AdminCatalogSlangController::class, 'show']);
             Route::put('/catalog-slang', [AdminCatalogSlangController::class, 'update']);
+        });
+
+        Route::middleware('permission:admin.dictionaries.manage')->group(function (): void {
+            Route::get('/brand-dictionary', [AdminBrandDictionaryController::class, 'index']);
+            Route::post('/brand-dictionary', [AdminBrandDictionaryController::class, 'store']);
+            Route::patch('/brand-dictionary/{entry}', [AdminBrandDictionaryController::class, 'update'])->whereNumber('entry');
+            Route::delete('/brand-dictionary/{entry}', [AdminBrandDictionaryController::class, 'destroy'])->whereNumber('entry');
         });
 
         Route::middleware('permission:admin.description_templates.manage')->group(function (): void {

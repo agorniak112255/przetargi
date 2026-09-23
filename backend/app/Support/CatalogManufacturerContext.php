@@ -6,6 +6,7 @@ namespace App\Support;
 
 use App\Models\Product;
 use Illuminate\Support\Facades\Cache;
+use Throwable;
 
 /**
  * Producenci z katalogu + aliasy z config — kontekst dla analizy SIWZ przez model.
@@ -60,6 +61,13 @@ final class CatalogManufacturerContext
             if ($this->compact($canonical) === $needle) {
                 return $canonical;
             }
+        }
+        // Marka ze słownika („Peltor” → 3M) przed luźnym etapem niżej. Katalog nazywa producenta, nie
+        // podmarkę, więc „peltor” nie trafiało w żadną nazwę i enrichIntentManufacturers uznawało markę
+        // za nieobecną w katalogu — a to zeruje producenta i model w intencji zapytania.
+        $viaDictionary = $this->producerFromDictionary($needle);
+        if ($viaDictionary !== null) {
+            return $viaDictionary;
         }
         foreach ($this->catalogManufacturers() as $canonical) {
             $c = $this->compact($canonical);
@@ -116,6 +124,27 @@ final class CatalogManufacturerContext
         }
 
         return array_values(array_unique($out));
+    }
+
+    /** Kanoniczny producent z katalogu dla marki ze słownika; null, gdy to nie marka albo producenta nie ma w katalogu. */
+    private function producerFromDictionary(string $key): ?string
+    {
+        try {
+            $producer = app(BrandDictionary::class)->producerFor($key);
+        } catch (Throwable) {
+            return null;
+        }
+        if ($producer === null) {
+            return null;
+        }
+        $wanted = $this->compact($producer);
+        foreach ($this->catalogManufacturers() as $canonical) {
+            if ($this->compact($canonical) === $wanted) {
+                return $canonical;
+            }
+        }
+
+        return null;
     }
 
     public static function forgetCache(): void
