@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use DOMDocument;
 use DOMElement;
 use DOMXPath;
@@ -114,7 +115,13 @@ final class PolstarB2bConnector implements B2bConnector, B2bDescribesFromDatashe
     {
         $producer = self::text($product->raw['producer'] ?? null);
 
-        return $producer === '' || str_contains(mb_strtolower($producer), 'polstar') ? self::label() : $producer;
+        return self::isOwnProducer($producer) ? self::label() : $producer;
+    }
+
+    /** Pusty producent albo „Polstar …” w pliku XML = wyrób kolekcji Polstaru. */
+    private static function isOwnProducer(string $producer): bool
+    {
+        return $producer === '' || str_contains(mb_strtolower($producer), 'polstar');
     }
 
     public function price(B2bRemoteProduct $product): ?B2bRemotePrice
@@ -484,7 +491,43 @@ final class PolstarB2bConnector implements B2bConnector, B2bDescribesFromDatashe
                 'page_url' => $tile['url'] ?? null,
             ],
             variantSummary: $summary !== [] ? implode(' | ', $summary) : null,
+            identifiers: self::identifiers($item),
         );
+    }
+
+    /**
+     * Kod produktu i kody oraz EAN-y wariantów z pliku XML, dosłownie. Karta nie ma pozycji (members), więc wszystkie
+     * należą do karty (remoteId null), a wariant opisuje etykieta: kolor i rozmiar bez znaczników braku („__”,
+     * „_______a”). Kod wyrobu kolekcji Polstaru to kod producenta; kod wyrobu innego producenta (SUMIRUBBER) to kod
+     * sklepu Polstar. SKU karty („kod-id”) składamy sami — nie jest identyfikatorem; kod_koloru i kod_rozmiaru to
+     * tylko przyrostki wariantu, nie kody wyrobu.
+     *
+     * @param  array{code: string, producer: string, variants: list<array{color: string, size: string, ean: string, code: string}>}  $item
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(array $item): array
+    {
+        $codeType = self::isOwnProducer($item['producer']) ? ProductIdentifier::TYPE_MANUFACTURER_CODE : ProductIdentifier::TYPE_SOURCE_CODE;
+        $out = [];
+        if ($item['code'] !== '') {
+            $out[] = new B2bRemoteIdentifier(type: $codeType, value: $item['code'], field: 'kod_produktu');
+        }
+        foreach ($item['variants'] as $variant) {
+            $parts = [
+                $variant['color'] !== '__' ? $variant['color'] : '',
+                preg_match('/^_+[a-z]?$/', $variant['size']) !== 1 ? $variant['size'] : '',
+            ];
+            $label = trim(implode(' ', $parts));
+            $label = $label !== '' ? $label : null;
+            if ($variant['code'] !== '') {
+                $out[] = new B2bRemoteIdentifier(type: $codeType, value: $variant['code'], label: $label, field: 'wariant/kod_produktu');
+            }
+            if ($variant['ean'] !== '') {
+                $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_EAN, value: $variant['ean'], label: $label, field: 'wariant/ean13');
+            }
+        }
+
+        return $out;
     }
 
     /**

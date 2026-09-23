@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use RuntimeException;
 
 /**
@@ -687,7 +688,35 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bRu
                     'name' => trim($product['name'].' '.$item['label']),
                 ], $items)
                 : [],
+            identifiers: self::identifiers($product['id'], $items),
         );
+    }
+
+    /**
+     * Kod wyrobu RAW-POL (kod rodziny wersji, bez koloru i rozmiaru) dosłownie z listy wyrobów („3m-mas-6000” —
+     * SKU karty to nasz zapis wielkimi literami) — na każdej karcie wyrobu, także na karcie wersji w innej cenie.
+     * Symbol i EAN każdej wersji; pozycja = symbol (remote_id powiązania). RAW-POL jest hurtownią, więc symbol to
+     * jej własny kod, nie kod producenta.
+     *
+     * @param  list<array{symbol: string, ean: string, label: string}>  $items
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(string $productId, array $items): array
+    {
+        $out = [];
+        $productId = self::text($productId);
+        if ($productId !== '') {
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MODEL_CODE, value: $productId, field: 'Kod wyrobu');
+        }
+        foreach ($items as $item) {
+            $label = $item['label'] !== '' ? $item['label'] : null;
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_SOURCE_CODE, value: $item['symbol'], remoteId: $item['symbol'], label: $label, field: 'Symbol');
+            if ($item['ean'] !== '') {
+                $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_EAN, value: $item['ean'], remoteId: $item['symbol'], label: $label, field: 'EAN');
+            }
+        }
+
+        return $out;
     }
 
     /** Nazwa linii wyrobów ze słownika serwisu („TACTICAL GUARD”); klucz dosłownie, gdy słownik go nie zna. */

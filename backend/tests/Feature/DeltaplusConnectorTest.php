@@ -9,6 +9,7 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
@@ -20,6 +21,7 @@ use App\Services\B2b\B2bImageGallery;
 use App\Services\B2b\B2bListProgressAware;
 use App\Services\B2b\B2bManufacturerSite;
 use App\Services\B2b\B2bNormFactSource;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
@@ -291,6 +293,37 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame('NEPTUN TT733 Pomarańczowy fluo-czarny 07', $card->members[0]['name']);
         $this->assertSame('NEPTUN TT733 Żółty fluo-czarny 10', $card->members[7]['name']);
 
+        // identyfikatory dosłownie ze strony: Ref. modelu dla karty, referencja (kod producenta), EAN 13 i kod
+        // kartonu każdej wersji na jej pozycji; SKU karty nie jest identyfikatorem
+        $identifiers = array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $card->identifiers ?? [],
+        );
+        $this->assertCount(1 + 8 * 3, $identifiers);
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MODEL_CODE, 'TT733', null, null, 'Ref.'],
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'TT733OR07', 'TT733OR07', 'Pomarańczowy fluo-czarny 07', 'Referencja'],
+                [ProductIdentifier::TYPE_EAN, '3200000000011', 'TT733OR07', 'Pomarańczowy fluo-czarny 07', 'EAN 13'],
+                [ProductIdentifier::TYPE_PACK_EAN, '13200000000011', 'TT733OR07', 'Pomarańczowy fluo-czarny 07', 'Kod kartonu'],
+            ],
+            array_slice($identifiers, 0, 4),
+        );
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'TT73310', 'TT73310', 'Żółty fluo-czarny 10', 'Referencja'],
+                [ProductIdentifier::TYPE_EAN, '3200000000080', 'TT73310', 'Żółty fluo-czarny 10', 'EAN 13'],
+                [ProductIdentifier::TYPE_PACK_EAN, '13200000000080', 'TT73310', 'Żółty fluo-czarny 10', 'Kod kartonu'],
+            ],
+            array_slice($identifiers, -3),
+        );
+        // każdy identyfikator wersji wskazuje pozycję karty
+        $this->assertSame([], array_diff(
+            array_filter(array_column($identifiers, 2)),
+            array_column($card->members, 'remote_id'),
+        ));
+        $this->assertNotContains('TT733', array_column(array_slice($identifiers, 1), 1));
+
         $this->assertSame('Delta Plus', $connector->manufacturer($card));
         $price = $connector->price($card);
         $this->assertNotNull($price);
@@ -397,6 +430,32 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame('TC100BMSH', $other->remoteId);
         $this->assertSame([], $other->members);
         $this->assertSame('Wersje: Granatowo-pomarańczowy Krótki daszek (TC100BMSH)', $other->variantSummary);
+        // Ref. modelu na obu kartach; wersje tylko swojej karty, wersja bez ceny (TC100JFSH) na żadnej
+        $ids = static fn (B2bRemoteProduct $p): array => array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId],
+            $p->identifiers ?? [],
+        );
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MODEL_CODE, 'TC100', null],
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'TC100BMSH', 'TC100BMSH'],
+                [ProductIdentifier::TYPE_EAN, '3200000000110', 'TC100BMSH'],
+                [ProductIdentifier::TYPE_PACK_EAN, '13200000000110', 'TC100BMSH'],
+            ],
+            $ids($other),
+        );
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MODEL_CODE, 'TC100', null],
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'TC100NOSH', 'TC100NOSH'],
+                [ProductIdentifier::TYPE_EAN, '3200000000127', 'TC100NOSH'],
+                [ProductIdentifier::TYPE_PACK_EAN, '13200000000127', 'TC100NOSH'],
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'TC100NOLG', 'TC100NOLG'],
+                [ProductIdentifier::TYPE_EAN, '3200000000141', 'TC100NOLG'],
+                [ProductIdentifier::TYPE_PACK_EAN, '13200000000141', 'TC100NOLG'],
+            ],
+            $ids($main),
+        );
 
         // CZARNO-CZERWONY ma w cenniku dwa wiersze o różnych cenach — cena katalogowa niejednoznaczna
         $price = $connector->price($main);
@@ -511,6 +570,31 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame('22990', $cards[0]->remoteId);
         $this->assertSame('Sznurowadła okrągłe 22990', $cards[0]->name);
         $this->assertContains(['Informacje handlowe', 'Ref.', '22990_'], self::fields($connector, $cards[0]));
+        // Ref. jako kod modelu dosłownie (z „_”), referencja wersji osobno; pojedyncza wersja = pozycja karty
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MODEL_CODE, '22990_', null, null],
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, '22990', '22990', 'Czarny Uniwersalny'],
+            ],
+            array_map(
+                static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label],
+                array_slice($cards[0]->identifiers ?? [], 0, 2),
+            ),
+        );
+    }
+
+    public function test_reference_keeps_its_case_from_the_page_in_the_identifier_while_the_position_is_upper_case(): void
+    {
+        $page = self::codeNamed('AM903', 'Łączniki', 'Zatrzaśnik', 'am903x5', 'Stalowy', 'Uniwersalny', '10,00 zł');
+        $this->pages['am903'] = $page;
+        $this->lists['hand-protection'] = [1 => ['am903']];
+        $this->fakeSite();
+
+        $cards = iterator_to_array($this->connector()->products(), false);
+
+        $this->assertSame('AM903X5', $cards[0]->remoteId);
+        $code = collect($cards[0]->identifiers ?? [])->firstWhere('type', ProductIdentifier::TYPE_MANUFACTURER_CODE);
+        $this->assertSame(['am903x5', 'AM903X5'], [$code?->value, $code?->remoteId]);
     }
 
     public function test_name_of_a_code_titled_product_without_short_description_takes_the_category(): void
@@ -704,6 +788,21 @@ final class DeltaplusConnectorTest extends TestCase
 
         $log = implode("\n", array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text'));
         $this->assertStringContainsStringIgnoringCase('TS208', $log);
+        $this->assertStringNotContainsString('spoza karty', $log);
+
+        // identyfikatory: NEPTUN 1 + 8×3, AERO 1 + 2×3 i 1 + 3, AM902 1 + 3; Ref. modelu na pozycji karty
+        $this->assertSame(25, ProductIdentifier::query()->where('product_id', $card->id)->count());
+        $this->assertSame(40, ProductIdentifier::query()->count());
+        $model = ProductIdentifier::query()->where('product_id', $card->id)->where('type', ProductIdentifier::TYPE_MODEL_CODE)->sole();
+        $this->assertSame(['TT733', 'TT733OR07', 'Ref.', 'Delta Plus'], [$model->value, $model->position_key, $model->source_field, $model->manufacturer]);
+        $ean = ProductIdentifier::query()->where('product_id', $card->id)->where('type', ProductIdentifier::TYPE_EAN)->where('position_key', 'TT73310')->sole();
+        $this->assertSame(['3200000000080', 'Żółty fluo-czarny 10', 'EAN 13'], [$ean->value, $ean->variant_label, $ean->source_field]);
+        $this->assertSame(
+            ['TC100BMSH'],
+            ProductIdentifier::query()->where('product_id', Product::query()->where('sku', 'TC100BMSH')->value('id'))
+                ->distinct()->pluck('position_key')->all(),
+        );
+        $this->assertFalse(ProductIdentifier::query()->where('value', 'like', 'TC100JFSH%')->exists());
     }
 
     public function test_second_sync_on_the_same_site_changes_nothing(): void
@@ -714,6 +813,7 @@ final class DeltaplusConnectorTest extends TestCase
         $this->fakeSite();
         app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
         $before = $this->snapshot();
+        $identifiers = ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray();
 
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
 
@@ -722,6 +822,10 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame(4, $second['unchanged'], implode(' | ', $second['errors']));
         // opis, normy producenta (z datą odczytu), tabelka, pliki, zdjęcia i powiązania — bez zmian
         $this->assertSame($before, $this->snapshot());
+        // identyfikatory zapisane raz: drugi przebieg ich nie dubluje ani nie oznacza jako zniknięte
+        $this->assertCount(40, $identifiers);
+        $this->assertSame($identifiers, ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
     }
 
     public function test_second_sync_after_a_version_loses_its_price_keeps_the_same_card(): void

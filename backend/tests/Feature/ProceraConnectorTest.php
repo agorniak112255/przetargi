@@ -9,6 +9,7 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
@@ -19,6 +20,7 @@ use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bImageGallery;
 use App\Services\B2b\B2bListProgressAware;
 use App\Services\B2b\B2bManufacturerSite;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
@@ -66,7 +68,7 @@ final class ProceraConnectorTest extends TestCase
 
     private int $pageSize = 3;
 
-    /** @var array<string, array{client: string, catalog: string, ean: string, currency?: string}> cennik XML wg kodu */
+    /** @var array<string, array{client: string, catalog: string, ean: string, currency?: string, more_eans?: list<string>}> cennik XML wg kodu */
     private array $xml = [];
 
     private bool $xmlBroken = false;
@@ -323,6 +325,69 @@ final class ProceraConnectorTest extends TestCase
         $this->assertSame(0.0, $connector->price($products[0])->discountPercent);
     }
 
+    public function test_identifiers_are_size_codes_the_confirmed_model_code_and_eans_only_where_the_size_is_known(): void
+    {
+        $this->addModel(self::glove());
+        $this->addModel(self::shoes());
+        $this->addModel(self::filter());
+        $this->addModel(self::socks());
+        // wyrób bez rozmiarów bez EAN na stronie — EAN z cennika XML (product_code = kod pozycji)
+        $xmlOnly = self::single('8201', 'TESTXML', 'WYRÓB Z EAN W CENNIKU', '5,00 PLN');
+        $xmlOnly['xml'] = ['TESTXML' => ['client' => '5.00', 'catalog' => '6.0000', 'ean' => '5900000000509']];
+        $this->addModel($xmlOnly);
+        // dwa EAN-y w jednym wierszu cennika — nie wiadomo, który jest EAN-em sztuki
+        $twoEans = self::single('8202', 'TESTDWA', 'WYRÓB Z DWOMA EAN', '5,00 PLN');
+        $twoEans['xml'] = ['TESTDWA' => ['client' => '5.00', 'catalog' => '6.0000', 'ean' => '5900000000516', 'more_eans' => ['15900000000513']]];
+        $this->addModel($twoEans);
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = [];
+        foreach ($connector->products() as $product) {
+            $products[$product->sku] = array_map(
+                static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+                $product->identifiers ?? [],
+            );
+        }
+
+        // kod modelu z cennika XML; „Kod EAN” strony należy do kodu pokazanego obok (pierwszy rozmiar); EAN wiersza
+        // XML kodu modelu (bez rozmiaru) pominięty — nie wiadomo, który to rozmiar
+        $this->assertSame([
+            ['model_code', 'X-TESTGRIP', null, null, 'product_code'],
+            ['source_code', 'X-TESTGRIP 9', 'X-TESTGRIP 9', '9', 'Kod'],
+            ['ean', '5900000000101', 'X-TESTGRIP 9', '9', 'Kod EAN'],
+            ['source_code', 'X-TESTGRIP 10', 'X-TESTGRIP 10', '10', 'Kod'],
+        ], $products['X-TESTGRIP']);
+        // model w dwóch cenach: kod modelu na obu kartach, EAN strony tylko na karcie swojego rozmiaru
+        $this->assertSame([
+            ['model_code', 'TESTOS S1PL', null, null, 'product_code'],
+            ['source_code', 'TESTOS S1PL 39', 'TESTOS S1PL 39', '39', 'Kod'],
+            ['ean', '5900000000201', 'TESTOS S1PL 39', '39', 'Kod EAN'],
+        ], $products['TESTOS S1PL 39']);
+        $this->assertSame([
+            ['model_code', 'TESTOS S1PL', null, null, 'product_code'],
+            ['source_code', 'TESTOS S1PL 46', 'TESTOS S1PL 46', '46', 'Kod'],
+            ['source_code', 'TESTOS S1PL 47', 'TESTOS S1PL 47', '47', 'Kod'],
+        ], $products['TESTOS S1PL 46']);
+        // wyrób bez rozmiarów: kod pozycji bez osobnego kodu modelu; EAN strony i ten sam EAN z cennika
+        $this->assertSame([
+            ['source_code', '3M9125', '3M9125', null, 'Kod'],
+            ['ean', '0511315290450', '3M9125', null, 'Kod EAN'],
+            ['ean', '0511315290450', '3M9125', null, 'barcodes/ean'],
+        ], $products['3M9125']);
+        // kod modelu wyliczony z rozmiarów, którego cennik nie zna („TESTSOCKS OPAK”) — nie jest identyfikatorem
+        $this->assertSame([
+            ['source_code', 'TESTSOCKS 39-42 OPAK', 'TESTSOCKS 39-42 OPAK', '39-42', 'Kod'],
+            ['ean', '5900000000301', 'TESTSOCKS 39-42 OPAK', '39-42', 'Kod EAN'],
+            ['source_code', 'TESTSOCKS 43-46 OPAK', 'TESTSOCKS 43-46 OPAK', '43-46', 'Kod'],
+        ], $products['TESTSOCKS 39-42 OPAK']);
+        $this->assertSame([
+            ['source_code', 'TESTXML', 'TESTXML', null, 'Kod'],
+            ['ean', '5900000000509', 'TESTXML', null, 'barcodes/ean'],
+        ], $products['TESTXML']);
+        $this->assertSame([['source_code', 'TESTDWA', 'TESTDWA', null, 'Kod']], $products['TESTDWA']);
+    }
+
     public function test_modern_description_gives_prose_and_its_specs_and_icons_go_to_the_shop_card(): void
     {
         $this->addModel(self::glove());
@@ -547,6 +612,7 @@ final class ProceraConnectorTest extends TestCase
         $this->fakeSite();
         app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
         $before = $this->snapshot();
+        $identifiers = $this->identifierRows();
 
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
 
@@ -554,6 +620,42 @@ final class ProceraConnectorTest extends TestCase
         $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
         $this->assertSame(5, $second['unchanged'], implode(' | ', $second['errors']));
         $this->assertSame($before, $this->snapshot());
+
+        // identyfikatory zapisane w pierwszym przebiegu (pod pozycjami swoich kart), drugi ich nie dubluje ani nie
+        // oznacza jako zniknięte
+        $grip = (int) Product::query()->where('sku', 'X-TESTGRIP')->value('id');
+        $dear = (int) Product::query()->where('sku', 'TESTOS S1PL 46')->value('id');
+        $filter = (int) Product::query()->where('sku', '3M9125')->value('id');
+        $this->assertSame([
+            [$filter, '3M9125', 'ean', '0511315290450', 'Kod EAN'],
+            [$filter, '3M9125', 'source_code', '3M9125', 'Kod'],
+            [$dear, 'TESTOS S1PL 46', 'model_code', 'TESTOS S1PL', 'product_code'],
+            [$dear, 'TESTOS S1PL 46', 'source_code', 'TESTOS S1PL 46', 'Kod'],
+            [$dear, 'TESTOS S1PL 47', 'source_code', 'TESTOS S1PL 47', 'Kod'],
+            [$grip, 'X-TESTGRIP 10', 'source_code', 'X-TESTGRIP 10', 'Kod'],
+            [$grip, 'X-TESTGRIP 9', 'ean', '5900000000101', 'Kod EAN'],
+            [$grip, 'X-TESTGRIP 9', 'model_code', 'X-TESTGRIP', 'product_code'],
+            [$grip, 'X-TESTGRIP 9', 'source_code', 'X-TESTGRIP 9', 'Kod'],
+        ], array_values(array_filter(
+            array_map(static fn (array $r): array => [$r['product_id'], $r['position_key'], $r['type'], $r['value'], $r['source_field']], $identifiers),
+            static fn (array $r): bool => in_array($r[0], [$grip, $dear, $filter], true),
+        )));
+        $this->assertSame($identifiers, $this->identifierRows());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+        foreach (B2bSyncRun::query()->get() as $run) {
+            $this->assertSame([], preg_grep('/: identyfikator /', array_column((array) $run->log, 'text')));
+        }
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function identifierRows(): array
+    {
+        return ProductIdentifier::query()->orderBy('position_key')->orderBy('type')->orderBy('value')
+            ->get(['id', 'product_id', 'position_key', 'type', 'value', 'source_field', 'variant_label', 'removed_at'])
+            ->map(static fn (ProductIdentifier $i): array => [...$i->toArray(), 'product_id' => (int) $i->product_id])
+            ->all();
     }
 
     public function test_second_sync_after_the_split_disappears_keeps_both_cards_without_a_sku_conflict(): void
@@ -1154,7 +1256,9 @@ final class ProceraConnectorTest extends TestCase
             $rows .= "<product>\r\n<product_code>".htmlspecialchars($code)."</product_code>\r\n<name>WYRÓB</name>\r\n"
                 .'<CENA_KLIENTA>'.$row['client']."</CENA_KLIENTA>\r\n<currency>".($row['currency'] ?? 'PLN')."</currency>\r\n<vat>23.00</vat>\r\n"
                 ."<quantity>0.0000</quantity>\r\n<on_stock>false</on_stock>\r\n<CENA_CENNIKOWA_HURT>".$row['catalog']."</CENA_CENNIKOWA_HURT>\r\n"
-                ."<CENA_DETAL>0.0000</CENA_DETAL>\r\n<barcodes>\r\n<ean>".$row['ean']."</ean>\r\n</barcodes>\r\n</product>\r\n";
+                ."<CENA_DETAL>0.0000</CENA_DETAL>\r\n<barcodes>\r\n<ean>".$row['ean']."</ean>\r\n"
+                .implode('', array_map(static fn (string $ean): string => '<ean>'.$ean."</ean>\r\n", $row['more_eans'] ?? []))
+                ."</barcodes>\r\n</product>\r\n";
         }
 
         return "<?xml version='1.0' standalone='yes'?>\n                    <offer>\r\n".$rows.'</offer>';

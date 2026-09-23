@@ -8,6 +8,7 @@ use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
@@ -18,6 +19,7 @@ use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bImageGallery;
 use App\Services\B2b\B2bListProgressAware;
 use App\Services\B2b\B2bManufacturerSite;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
@@ -203,6 +205,18 @@ final class JhkConnectorTest extends TestCase
         $names = array_column($fields, 1);
         $this->assertNotContains('Rozmiar', $names);
         $this->assertNotContains('Produkt niekupiony', $names);
+
+        // symbol i EAN każdego rozmiaru na jego pozycji; kod bez rozmiaru („JT TEST BK”) składamy sami — nie jest
+        // identyfikatorem ze źródła
+        $this->assertSame(
+            [
+                ['manufacturer_code', 'JT TEST BK XS', 'JT TEST BK XS', 'XS', 'Symbol'],
+                ['ean', '5900000000101', 'JT TEST BK XS', 'XS', 'EAN'],
+                ['manufacturer_code', 'JT TEST BK XXL', 'JT TEST BK XXL', 'XXL', 'Symbol'],
+                ['ean', '5900000000102', 'JT TEST BK XXL', 'XXL', 'EAN'],
+            ],
+            self::identifierRows($card),
+        );
     }
 
     public function test_sizes_in_two_prices_are_two_cards_named_with_their_sizes(): void
@@ -246,6 +260,14 @@ final class JhkConnectorTest extends TestCase
         $fields = array_map(static fn ($f): array => [$f->name, $f->value], $connector->shopFields($card));
         $this->assertContains(['Kod kreskowy EAN', '5900000000201'], $fields);
         $this->assertContains(['Rozmiar', 'Uni'], $fields);
+        // jedna pozycja = symbol karty (remoteId), EAN z pola karty
+        $this->assertSame(
+            [
+                ['manufacturer_code', 'CZZIM TEST BK', 'CZZIM TEST BK', null, 'Symbol'],
+                ['ean', '5900000000201', 'CZZIM TEST BK', null, 'Kod kreskowy EAN'],
+            ],
+            self::identifierRows($card),
+        );
     }
 
     public function test_product_sold_in_quantity_tiers_takes_the_current_tier_as_the_account_price(): void
@@ -268,6 +290,14 @@ final class JhkConnectorTest extends TestCase
             'Progi cenowe konta',
             '1 - 99 szt.: 4,48 PLN; 100 - 499 szt.: 3,99 PLN; 500 - 999 szt.: 3,67 PLN; 1000 + szt.: 3,40 PLN',
         ], $fields);
+        // MOONTEX to inna marka niż właściciel sklepu (JHK) — symbol sklepu jest kodem źródła, nie kodem producenta
+        $this->assertSame(
+            [
+                ['source_code', 'MOONTEX KO TEST SYF M', 'MOONTEX KO TEST SYF M', null, 'Symbol'],
+                ['ean', '5900000000201', 'MOONTEX KO TEST SYF M', null, 'Kod kreskowy EAN'],
+            ],
+            self::identifierRows($card),
+        );
     }
 
     public function test_page_without_a_product_name_or_with_another_price_than_the_tile_is_skipped(): void
@@ -491,6 +521,34 @@ final class JhkConnectorTest extends TestCase
         $beanie = Product::query()->where('sku', 'CZZIM TEST BK')->sole();
         $this->assertSame('6.16', (string) ProductSourcePrice::query()->where('product_id', $beanie->id)->value('purchase_price'));
 
+        // identyfikatory na pozycjach kart: rozmiar 3XL (inna cena) na swojej karcie, symbol i EAN każdego rozmiaru
+        $this->assertSame(
+            [
+                ['JT TEST BK XS', 'ean', '5900000000101', 'XS', 'EAN', 'JHK'],
+                ['JT TEST BK XS', 'manufacturer_code', 'JT TEST BK XS', 'XS', 'Symbol', 'JHK'],
+                ['JT TEST BK XXL', 'ean', '5900000000102', 'XXL', 'EAN', 'JHK'],
+                ['JT TEST BK XXL', 'manufacturer_code', 'JT TEST BK XXL', 'XXL', 'Symbol', 'JHK'],
+            ],
+            self::storedIdentifiers($card->id),
+        );
+        $split = Product::query()->where('sku', 'JT TEST BK 3XL')->sole();
+        $this->assertSame(
+            [
+                ['JT TEST BK 3XL', 'ean', '5900000000103', '3XL', 'EAN', 'JHK'],
+                ['JT TEST BK 3XL', 'manufacturer_code', 'JT TEST BK 3XL', '3XL', 'Symbol', 'JHK'],
+            ],
+            self::storedIdentifiers($split->id),
+        );
+        $this->assertSame(
+            [
+                ['CZZIM TEST BK', 'ean', '5900000000201', null, 'Kod kreskowy EAN', 'JHK'],
+                ['CZZIM TEST BK', 'manufacturer_code', 'CZZIM TEST BK', null, 'Symbol', 'JHK'],
+            ],
+            self::storedIdentifiers($beanie->id),
+        );
+        $identifiers = ProductIdentifier::query()->count();
+        $this->assertSame(8, $identifiers);
+
         $before = $this->snapshot();
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
 
@@ -498,6 +556,9 @@ final class JhkConnectorTest extends TestCase
         $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
         $this->assertSame(3, $second['unchanged'], implode(' | ', $second['errors']));
         $this->assertSame($before, $this->snapshot());
+        // drugi przebieg nie dubluje identyfikatorów i żadnego nie uznaje za usunięty
+        $this->assertSame($identifiers, ProductIdentifier::query()->count());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
     }
 
     public function test_sync_reports_a_skipped_tile_and_saves_the_rest(): void
@@ -541,6 +602,32 @@ final class JhkConnectorTest extends TestCase
     }
 
     // ---- pomocnicze ----
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string|null, 3: string|null, 4: string|null}>
+     */
+    private static function identifierRows(B2bRemoteProduct $product): array
+    {
+        return array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $product->identifiers ?? [],
+        );
+    }
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string, 3: string|null, 4: string|null, 5: string|null}>
+     */
+    private static function storedIdentifiers(int $productId): array
+    {
+        return ProductIdentifier::query()
+            ->where('product_id', $productId)
+            ->orderBy('position_key')->orderBy('type')->orderBy('value')
+            ->get()
+            ->map(static fn (ProductIdentifier $i): array => [
+                $i->position_key, $i->type, $i->value, $i->variant_label, $i->source_field, $i->manufacturer,
+            ])
+            ->all();
+    }
 
     private function client(): JhkB2bClient
     {

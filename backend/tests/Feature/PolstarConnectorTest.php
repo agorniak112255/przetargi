@@ -9,6 +9,7 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountSyncRunner;
@@ -16,6 +17,7 @@ use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bManufacturerSite;
 use App\Services\B2b\B2bRemoteDocument;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\PolstarB2bClient;
@@ -115,6 +117,46 @@ final class PolstarConnectorTest extends TestCase
         $this->assertSame('CHAPLIN OCHRONNIKI SŁUCHU GUARD 1 SNR-27', $products['SOG1-2583']->name);
         // wyrób bez rozmiaru („_______a”) nie ma listy rozmiarów
         $this->assertNull($products['SOG1-2583']->variantSummary);
+
+        // identyfikatory z pliku XML dosłownie, wszystkie na karcie (bez members); kod wyrobu kolekcji Polstaru to kod
+        // producenta, a SKU karty „RCCS-64” (złożone przez nas) nie jest identyfikatorem
+        $ids = static fn (B2bRemoteProduct $p): array => array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $p->identifiers ?? [],
+        );
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'RCCS', null, null, 'kod_produktu'],
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'X-4853', null, '8', 'wariant/kod_produktu'],
+                [ProductIdentifier::TYPE_EAN, '5900000000148', null, '8', 'wariant/ean13'],
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'X-4854', null, '9', 'wariant/kod_produktu'],
+                [ProductIdentifier::TYPE_EAN, '5900000000155', null, '9', 'wariant/ean13'],
+            ],
+            $ids($covent),
+        );
+        // etykieta wariantu: kolor i rozmiar dosłownie
+        $this->assertSame(
+            [ProductIdentifier::TYPE_EAN, '5900000000002', null, 'Zielony (_z) 2XL.', 'wariant/ean13'],
+            $ids($products['ABOG-9'])[4],
+        );
+        // znaczniki braku koloru i rozmiaru („__”, „_______a”) nie są etykietą
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'SOG1', null, null, 'kod_produktu'],
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'X-6000', null, null, 'wariant/kod_produktu'],
+                [ProductIdentifier::TYPE_EAN, '5900000000006', null, null, 'wariant/ean13'],
+            ],
+            $ids($products['SOG1-2583']),
+        );
+        // wyrób innego producenta: kody Polstaru to kody sklepu, nie producenta
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_SOURCE_CODE, 'RUFL', null, null, 'kod_produktu'],
+                [ProductIdentifier::TYPE_SOURCE_CODE, 'X-7000', null, 'Żółty 9', 'wariant/kod_produktu'],
+                [ProductIdentifier::TYPE_EAN, '5900000000007', null, 'Żółty 9', 'wariant/ean13'],
+            ],
+            $ids($products['RUFL-2551']),
+        );
 
         $this->assertSame([
             'Lista Polstar (plik XML konta): 7 produktów',
@@ -303,6 +345,31 @@ final class PolstarConnectorTest extends TestCase
 
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
         $this->assertContains('Lista Polstar (plik XML konta): 7 produktów', $log);
+        $this->assertStringNotContainsString('spoza karty', implode("\n", $log));
+
+        // identyfikatory na pozycji karty (id produktu); wyrób bez ceny (ZZZZ) nie ma karty ani identyfikatorów
+        $this->assertSame(
+            [
+                ['64', ProductIdentifier::TYPE_MANUFACTURER_CODE, 'RCCS', null, 'kod_produktu', 'Polstar'],
+                ['64', ProductIdentifier::TYPE_MANUFACTURER_CODE, 'X-4853', '8', 'wariant/kod_produktu', 'Polstar'],
+                ['64', ProductIdentifier::TYPE_EAN, '5900000000148', '8', 'wariant/ean13', 'Polstar'],
+                ['64', ProductIdentifier::TYPE_MANUFACTURER_CODE, 'X-4854', '9', 'wariant/kod_produktu', 'Polstar'],
+                ['64', ProductIdentifier::TYPE_EAN, '5900000000155', '9', 'wariant/ean13', 'Polstar'],
+            ],
+            ProductIdentifier::query()->where('product_id', $covent->id)->orderBy('id')->get()
+                ->map(static fn (ProductIdentifier $i): array => [$i->position_key, $i->type, $i->value, $i->variant_label, $i->source_field, $i->manufacturer])
+                ->all(),
+        );
+        $rufl = Product::query()->where('sku', 'RUFL-2551')->sole();
+        $this->assertSame(
+            [ProductIdentifier::TYPE_SOURCE_CODE, 'SUMIRUBBER MALAYSIA SDN BHD'],
+            [
+                ProductIdentifier::query()->where('product_id', $rufl->id)->where('value', 'RUFL')->value('type'),
+                ProductIdentifier::query()->where('product_id', $rufl->id)->where('value', 'RUFL')->value('manufacturer'),
+            ],
+        );
+        $this->assertSame(24, ProductIdentifier::query()->count());
+        $this->assertFalse(ProductIdentifier::query()->where('value', 'ZZZZ')->exists());
     }
 
     public function test_second_run_on_the_same_cards_creates_nothing_and_keeps_description_and_files(): void
@@ -314,11 +381,16 @@ final class PolstarConnectorTest extends TestCase
         $description = (string) $covent->description;
         $documents = ProductDocument::query()->where('product_id', $covent->id)->count();
         $pdfDownloads = count(Http::recorded(fn (Request $r): bool => str_starts_with((string) parse_url($r->url(), PHP_URL_PATH), '/media/medias/download/')));
+        $identifiers = ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray();
 
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
 
         $this->assertSame(0, $second['created']);
         $this->assertSame(6, Product::query()->count());
+        // identyfikatory zapisane raz: drugi przebieg ich nie dubluje ani nie oznacza jako zniknięte
+        $this->assertCount(24, $identifiers);
+        $this->assertSame($identifiers, ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
         $this->assertNotSame('', $description);
         $this->assertSame($description, (string) $covent->fresh()?->description);
         $this->assertSame($documents, ProductDocument::query()->where('product_id', $covent->id)->count());

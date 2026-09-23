@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use Illuminate\Contracts\Encryption\DecryptException;
 use RuntimeException;
 use Throwable;
@@ -706,7 +707,35 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
                 'item' => $item,
                 'price' => $error !== null ? ['status' => 'error', 'reason' => $error] : $this->priceOf($item, $prices[$id] ?? null),
             ],
+            identifiers: self::identifiers($item),
         );
+    }
+
+    /**
+     * Numery 3M z pozycji listy wyszukiwarki, dosłownie (GTIN-14 z zerem na początku tak, jak podaje 3M); pole = klucz
+     * wyszukiwarki. Karta = jedna pozycja (numer magazynowy). Kody kreskowe opakowań (packagingIdentificationDetails)
+     * są tylko na karcie pdp, pobieranej dopiero po wydaniu produktu — tu ich nie ma.
+     *
+     * @param  array<string, mixed>  $item
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(array $item): array
+    {
+        $id = (string) $item['id'];
+        $out = [];
+        foreach ([
+            [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'catalog', 'mmm_catalog_number'],
+            [ProductIdentifier::TYPE_ALT_CODE, 'id', 'mmm_id'],
+            [ProductIdentifier::TYPE_LEGACY_CODE, 'legacy', 'legacy_mmm_id'],
+            [ProductIdentifier::TYPE_EAN, 'gtin', 'gtin_display'],
+        ] as [$type, $key, $field]) {
+            $value = (string) ($item[$key] ?? '');
+            if ($value !== '') {
+                $out[] = new B2bRemoteIdentifier(type: $type, value: $value, remoteId: $id, field: $field);
+            }
+        }
+
+        return $out;
     }
 
     /**

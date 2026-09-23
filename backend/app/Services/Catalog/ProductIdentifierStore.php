@@ -11,12 +11,14 @@ use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bRemoteIdentifier;
 use App\Support\BrandKey;
 use App\Support\ProductIdentifierCode;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Str;
 
 /**
  * Zapis identyfikatorów wyrobu ze źródeł cen do product_identifiers (decyzja użytkownika 23.09.2026). Niczego nie
- * nadpisuje ani nie kasuje: identyfikator, którego źródło już nie podaje, dostaje removed_at, a gdy wróci — znacznik
- * znika. Wiersze należą do pozycji źródła (remote_id powiązania), więc przepięcie pozycji na inną kartę przenosi je.
+ * nadpisuje ani nie kasuje: identyfikator, którego źródło w pełnym przebiegu już nie podało, dostaje removed_at
+ * (sweepB2b na końcu przebiegu), a gdy wróci — znacznik znika. Wiersze należą do pozycji źródła (remote_id
+ * powiązania), więc przepięcie pozycji na inną kartę przenosi je.
  */
 final class ProductIdentifierStore
 {
@@ -62,18 +64,15 @@ final class ProductIdentifierStore
 
         $matched = [];
         $seenIds = [];
-        $goneIds = [];
         $rows = ProductIdentifier::query()
             ->where('source_key', $sourceKey)
             ->whereIn('position_key', $positionIds)
             ->get();
         foreach ($rows as $row) {
             $key = self::rowKey((string) $row->position_key, (string) $row->type, (string) $row->value);
+            // niepodanych tu nie oznaczamy — pozycję podaje czasem kilka adresów (kolory Protektu), więc o tym, co
+            // zniknęło, rozstrzyga cały przebieg (sweepB2b)
             if (! isset($wanted[$key]) || isset($matched[$key])) {
-                if ($row->removed_at === null) {
-                    $goneIds[] = (int) $row->id;
-                }
-
                 continue;
             }
             $matched[$key] = true;
@@ -88,9 +87,6 @@ final class ProductIdentifierStore
         if ($seenIds !== []) {
             ProductIdentifier::query()->toBase()->whereIn('id', $seenIds)
                 ->update(['last_seen_at' => $now, 'b2b_sync_run_id' => $runId, 'removed_at' => null]);
-        }
-        if ($goneIds !== []) {
-            ProductIdentifier::query()->toBase()->whereIn('id', $goneIds)->update(['removed_at' => $now]);
         }
 
         $inserts = [];
@@ -118,6 +114,35 @@ final class ProductIdentifierStore
         }
 
         return $warnings;
+    }
+
+    /**
+     * Koniec pełnego przebiegu konta: identyfikatory pozycji zapisanych w tym przebiegu, których żaden ich produkt
+     * nie podał, dostają removed_at. Tylko pozycje z przekazanej listy — wywołujący podaje pozycje zapisane
+     * w całości (bez pominiętych i wycofanych), a przebieg przerwany, próbny albo z limitem nie woła tej metody.
+     *
+     * @param  list<string>  $positionIds
+     * @return int liczba oznaczonych wierszy
+     */
+    public function sweepB2b(B2bAccount $account, array $positionIds, ?int $runId, CarbonImmutable $startedAt): int
+    {
+        $removed = 0;
+        $now = now();
+        foreach (array_chunk(array_values(array_unique($positionIds)), 1000) as $chunk) {
+            $removed += ProductIdentifier::query()->toBase()
+                ->where('source_key', ProductSourcePrice::b2bKey((int) $account->id))
+                ->whereIn('position_key', $chunk)
+                ->whereNull('removed_at')
+                // przebieg bez wpisu w dzienniku (runId null) — widziane w nim mają last_seen_at od jego startu
+                ->where(static function ($query) use ($runId, $startedAt): void {
+                    $runId !== null
+                        ? $query->whereNull('b2b_sync_run_id')->orWhere('b2b_sync_run_id', '!=', $runId)
+                        : $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', $startedAt);
+                })
+                ->update(['removed_at' => $now]);
+        }
+
+        return $removed;
     }
 
     /**

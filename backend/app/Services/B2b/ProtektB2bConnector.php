@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use DOMNode;
 use DOMXPath;
 use RuntimeException;
@@ -324,7 +325,10 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bM
         }
 
         $priceText = self::text($xpath->query('//*[@itemprop="price"]')->item(0));
-        [$sku, $summary] = $this->identityFor($catalogNo, self::money($priceText), self::ownColour($xpath), $colours);
+        $ownColour = self::ownColour($xpath);
+        [$sku, $summary] = $this->identityFor($catalogNo, self::money($priceText), $ownColour, $colours);
+        $ean = self::text($xpath->query('//*[@itemprop="gtin13"]')->item(0));
+        $supplierIndex = self::text($xpath->query('//*[@itemprop="sku"]')->item(0));
 
         return new B2bRemoteProduct(
             remoteId: $sku,
@@ -340,9 +344,9 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bM
                 'catalog_no' => $catalogNo,
                 'price_text' => $priceText,
                 'currency' => self::text($xpath->query('//*[@itemprop="priceCurrency"]')->item(0)),
-                'ean' => self::text($xpath->query('//*[@itemprop="gtin13"]')->item(0)),
+                'ean' => $ean,
                 // „Indeks” producenta — trzymamy do wglądu, kartę identyfikuje numer katalogowy.
-                'supplier_index' => self::text($xpath->query('//*[@itemprop="sku"]')->item(0)),
+                'supplier_index' => $supplierIndex,
                 'norms' => self::texts($xpath, '//*['.self::classPredicate('product-desc__norms--bold').']'),
                 'spec' => self::specRows($xpath, $summary),
                 'withdrawn' => self::withdrawnNote($xpath),
@@ -351,7 +355,48 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bM
                 'image_url' => self::imageUrl($xpath),
             ],
             availability: self::availability($xpath),
+            identifiers: self::identifiersFor($sku, $catalogNo, $supplierIndex, $ean, $ownColour),
         );
+    }
+
+    /**
+     * Identyfikatory karty dosłownie ze strony: numer katalogowy („Nr kat.”, itemprop gtin — to numer katalogowy,
+     * nie GTIN) i „Indeks” (itemprop sku) jako kody producenta, EAN (itemprop gtin13). Numer katalogowy bez dopisku
+     * koloru — dopisek w kodzie karty jest nasz.
+     *
+     * Karta nie ma pozycji (members): wszystkie adresy kolorów jednego numeru trafiają na tę samą pozycję ($sku),
+     * a każdy adres podaje tylko swój kolor (etykieta = kolor adresu; numer katalogowy jest wspólny dla kolorów —
+     * bez etykiety). Sumę kolorów składa zapis: identyfikator, którego żaden adres pozycji nie podał w pełnym
+     * przebiegu, dostaje removed_at dopiero na końcu przebiegu (ProductIdentifierStore::sweepB2b).
+     *
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiersFor(string $sku, string $catalogNo, string $supplierIndex, string $ean, string $colour): array
+    {
+        $label = $colour !== '' ? $colour : null;
+        $found = [];
+        if ($catalogNo !== '') {
+            $found[] = new B2bRemoteIdentifier(
+                type: ProductIdentifier::TYPE_MANUFACTURER_CODE,
+                value: $catalogNo,
+                remoteId: $sku,
+                field: 'Nr katalogowy',
+            );
+        }
+        if ($supplierIndex !== '') {
+            $found[] = new B2bRemoteIdentifier(
+                type: ProductIdentifier::TYPE_MANUFACTURER_CODE,
+                value: $supplierIndex,
+                remoteId: $sku,
+                label: $label,
+                field: 'Indeks producenta',
+            );
+        }
+        if ($ean !== '') {
+            $found[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_EAN, value: $ean, remoteId: $sku, label: $label, field: 'EAN');
+        }
+
+        return $found;
     }
 
     /**

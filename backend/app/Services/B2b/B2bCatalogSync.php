@@ -245,6 +245,10 @@ final class B2bCatalogSync
         // karty użyte w tym przebiegu (id → true, kod karty małymi literami → id; null = nowa karta w dry-run) —
         // grupa rozmiarów (members) nie trafia na kartę innej pozycji z tego samego przebiegu
         $claimed = ['products' => [], 'skus' => []];
+        /** @var array<string, true> $identifierPositions pozycje z identyfikatorami zapisane w tym przebiegu */
+        $identifierPositions = [];
+        /** @var array<string, true> $taintedPositions pozycje, które w tym przebiegu choć raz pominięto */
+        $taintedPositions = [];
 
         // długie pobieranie listy przed pierwszym produktem — komunikaty są sygnałem życia przebiegu,
         // a przy okazji jedynym miejscem, w którym widać prośbę o zatrzymanie (pętli produktów jeszcze nie ma)
@@ -283,6 +287,17 @@ final class B2bCatalogSync
 
             if ($variantConnector !== null) {
                 $variantsProcessed += (int) ($outcome['variants'] ?? $this->listedVersionCount($remote));
+            }
+
+            // pozycje do sprzątania identyfikatorów na końcu przebiegu: zapisane w całości (transakcja przeszła)
+            // i z identyfikatorami od łącznika; pozycja pominięta albo wyłączona choć raz — nie (jej kolor mógł nie dojść)
+            $saved = in_array($outcome['status'], ['created', 'updated', 'unchanged'], true);
+            foreach (self::positionIds($remote) as $position) {
+                if (! $saved) {
+                    $taintedPositions[$position] = true;
+                } elseif ($remote->identifiers !== null) {
+                    $identifierPositions[$position] = true;
+                }
             }
 
             $ruleManufacturer = (string) ($outcome['rule_manufacturer'] ?? '');
@@ -425,6 +440,16 @@ final class B2bCatalogSync
                 }
             } else {
                 $progress?->log('warn', 'Lista wersji u dostawcy niepełna — wycofanych wersji nie oznaczono.');
+            }
+        }
+
+        // tylko pełny przebieg rozstrzyga, czego dostawca już nie podaje — przerwany, próbny albo z limitem nie widział
+        // wszystkich adresów pozycji (kolory Protektu); wiersze nie są kasowane, tylko oznaczane
+        $sweepable = array_keys(array_diff_key($identifierPositions, $taintedPositions));
+        if (! $cancelled && ! $partial && ! $dryRun && $limit === null && $sweepable !== []) {
+            $identifiersRemoved = $this->identifiers->sweepB2b($account, array_map('strval', $sweepable), $runId, $startedAt);
+            if ($identifiersRemoved > 0) {
+                $progress?->log('info', 'Identyfikatory, których dostawca już nie podaje (oznaczone, nie skasowane): '.$identifiersRemoved);
             }
         }
 
@@ -964,6 +989,21 @@ final class B2bCatalogSync
             'base_price_source' => $base !== null ? mb_substr($base->source, 0, 255) : null,
             'standard_discount_percent' => $base?->standardDiscountPercent,
         ];
+    }
+
+    /**
+     * Pozycje produktu łącznika — remote_id jego powiązań (remoteId i pozycje grupy, jak memberRows).
+     *
+     * @return list<string>
+     */
+    private static function positionIds(B2bRemoteProduct $remote): array
+    {
+        $ids = [$remote->remoteId];
+        foreach ($remote->members as $member) {
+            $ids[] = (string) ($member['remote_id'] ?? '');
+        }
+
+        return array_values(array_unique(array_filter($ids, static fn (string $id): bool => trim($id) !== '')));
     }
 
     /**

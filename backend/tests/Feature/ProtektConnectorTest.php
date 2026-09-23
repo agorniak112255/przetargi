@@ -9,8 +9,11 @@ use App\Models\B2bDiscountRule;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductShopCard;
 use App\Services\B2b\B2bAccountSyncRunner;
+use App\Services\B2b\B2bRemoteIdentifier;
+use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\ProtektB2bClient;
 use App\Services\B2b\ProtektB2bConnector;
@@ -333,6 +336,12 @@ final class ProtektConnectorTest extends TestCase
             ['Lonża', 'Materiał', 'taśma poliestrowa'],
             ['Zatrzaśnik', 'Materiał', 'stal'],
         ], self::rows($connector->shopFields($remote[0])));
+        // numer katalogowy (itemprop gtin — to nie GTIN) i indeks jako kody producenta, EAN z gtin13
+        $this->assertSame([
+            ['manufacturer_code', 'BW200/2LE111', 'BW200/2LE111', null, 'Nr katalogowy'],
+            ['manufacturer_code', 'AX 011', 'BW200/2LE111', null, 'Indeks producenta'],
+            ['ean', '5906800652997', 'BW200/2LE111', null, 'EAN'],
+        ], self::identifierRows($remote[0]));
     }
 
     public function test_karta_wyrobu_podaje_numer_katalogowy_ze_strony_a_nie_kod_z_dopiskiem_koloru(): void
@@ -355,6 +364,96 @@ final class ProtektConnectorTest extends TestCase
             self::rows($connector->shopFields($remote[1])),
         );
         $this->assertSame([], $connector->shopFields($remote[2]));
+        // identyfikator to numer ze strony, bez naszego dopisku koloru — na pozycji karty wersji droższej
+        $this->assertSame(
+            [['manufacturer_code', 'BW200/LB101HV', 'BW200/LB101HV', null, 'Nr katalogowy']],
+            self::identifierRows($remote[0]),
+        );
+        $this->assertSame(
+            [['manufacturer_code', 'BW200/LB101HV', 'BW200/LB101HV / jaskrawy pomarańczowy', null, 'Nr katalogowy']],
+            self::identifierRows($remote[1]),
+        );
+        $this->assertNull($remote[2]->identifiers);
+    }
+
+    public function test_identyfikatory_wszystkich_kolorow_trafiaja_na_jedna_karte_a_drugi_przebieg_ich_nie_dubluje(): void
+    {
+        // Kolory jednego numeru to osobne adresy z własnym EAN i indeksem, a karta i jej pozycja są jedne. Każdy adres
+        // podaje tylko swój kolor; sumę składa zapis, a zniknięte oznacza dopiero koniec pełnego przebiegu.
+        $this->rule(1, 'Amortyzatory', B2bDiscountRule::TYPE_PREFIX, 'BW', 45.0);
+        $colours = ['czarny', 'czerwony'];
+        foreach ($colours as $i => $colour) {
+            $this->page('/amortyzator-'.$i.'~p'.(100 + $i).'~c5341', $this->card(
+                name: 'BW140 - Amortyzator bezpieczeństwa',
+                catalogNo: 'BW140',
+                price: '76,00',
+                ean: '590680065299'.$i,
+                index: 'AX 01'.$i,
+                colours: $colours,
+                ownColour: $colour,
+            ));
+        }
+        $this->fakeSite();
+
+        $remote = iterator_to_array(ProtektB2bConnector::forAccount($this->account(), 0)->products(), false);
+
+        $this->assertSame([
+            ['manufacturer_code', 'BW140', 'BW140', null, 'Nr katalogowy'],
+            ['manufacturer_code', 'AX 010', 'BW140', 'czarny', 'Indeks producenta'],
+            ['ean', '5906800652990', 'BW140', 'czarny', 'EAN'],
+        ], self::identifierRows($remote[0]));
+        $this->assertSame([
+            ['manufacturer_code', 'BW140', 'BW140', null, 'Nr katalogowy'],
+            ['manufacturer_code', 'AX 011', 'BW140', 'czerwony', 'Indeks producenta'],
+            ['ean', '5906800652991', 'BW140', 'czerwony', 'EAN'],
+        ], self::identifierRows($remote[1]));
+
+        $expected = [
+            ['BW140', 'ean', '5906800652990', 'czarny', 'EAN', 'PROTEKT'],
+            ['BW140', 'ean', '5906800652991', 'czerwony', 'EAN', 'PROTEKT'],
+            ['BW140', 'manufacturer_code', 'AX 010', 'czarny', 'Indeks producenta', 'PROTEKT'],
+            ['BW140', 'manufacturer_code', 'AX 011', 'czerwony', 'Indeks producenta', 'PROTEKT'],
+            ['BW140', 'manufacturer_code', 'BW140', null, 'Nr katalogowy', 'PROTEKT'],
+        ];
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame(1, $result['created'], implode(' | ', $result['errors']));
+        $product = Product::query()->where('sku', 'BW140')->sole();
+        $this->assertSame($expected, self::storedIdentifiers($product->id));
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+
+        $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
+        $this->assertSame($expected, self::storedIdentifiers($product->id));
+        $this->assertSame(5, ProductIdentifier::query()->count());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+    }
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string|null, 3: string|null, 4: string|null}>
+     */
+    private static function identifierRows(B2bRemoteProduct $product): array
+    {
+        return array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $product->identifiers ?? [],
+        );
+    }
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string, 3: string|null, 4: string|null, 5: string|null}>
+     */
+    private static function storedIdentifiers(int $productId): array
+    {
+        return ProductIdentifier::query()
+            ->where('product_id', $productId)
+            ->orderBy('position_key')->orderBy('type')->orderBy('value')
+            ->get()
+            ->map(static fn (ProductIdentifier $i): array => [
+                $i->position_key, $i->type, $i->value, $i->variant_label, $i->source_field, $i->manufacturer,
+            ])
+            ->all();
     }
 
     /**
@@ -390,8 +489,9 @@ final class ProtektConnectorTest extends TestCase
     /**
      * @param  list<string>  $colours  wersje kolorystyczne karty (każda ma u Protektu osobny adres,
      *                                 ten sam numer katalogowy i tę samą cenę)
+     * @param  string|null  $ownColour  kolor tego adresu w wierszu „Kolor” specyfikacji; null = pierwszy z $colours
      */
-    private function card(string $name, ?string $catalogNo, ?string $price, ?string $ean = null, ?string $stock = null, array $colours = [], ?string $withdrawn = null, bool $documents = false, ?string $index = null, bool $subassemblies = false): string
+    private function card(string $name, ?string $catalogNo, ?string $price, ?string $ean = null, ?string $stock = null, array $colours = [], ?string $withdrawn = null, bool $documents = false, ?string $index = null, bool $subassemblies = false, ?string $ownColour = null): string
     {
         $html = '<!DOCTYPE html><html><body>'
             .($withdrawn !== null
@@ -444,7 +544,7 @@ final class ProtektConnectorTest extends TestCase
             .'<div class="product-spec"><div class="spec-tech"><div class="spec-tech__info"><div class="spec-col">'
             .'<div class="spec-col__row"><p class="spec-col__type">Materiał:</p><p class="spec-col__type_val">poliester/poliamid</p></div>'
             .'<div class="spec-col__row"><p class="spec-col__type">Waga:</p><p class="spec-col__type_val">300 g</p></div>'
-            .($colours !== [] ? '<div class="spec-col__row"><p class="spec-col__type">Kolor:</p><p class="spec-col__type_val">'.$colours[0].'</p></div>' : '')
+            .($colours !== [] ? '<div class="spec-col__row"><p class="spec-col__type">Kolor:</p><p class="spec-col__type_val">'.($ownColour ?? $colours[0]).'</p></div>' : '')
             // Karty zestawów mają specyfikację rozbitą na podzespoły — te same etykiety powtarzają się
             // pod różnymi nagłówkami („Materiał” lonży i zatrzaśnika to dwie różne cechy).
             .($subassemblies

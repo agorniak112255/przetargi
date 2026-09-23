@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use DOMElement;
 use DOMNode;
 use DOMXPath;
@@ -93,6 +94,9 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bI
 
     /** @var array<string, array{client: float, catalog: float, ean: string}> cennik XML: kod modelu → ceny */
     private array $priceList = [];
+
+    /** @var array<string, string> cennik XML: product_code → jedyny EAN tego kodu (kod z różnymi EAN-ami pominięty) */
+    private array $priceListEans = [];
 
     /** @var list<string> */
     private array $summary = [];
@@ -631,6 +635,7 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bI
     private function loadPriceList(): void
     {
         $this->priceList = [];
+        $this->priceListEans = [];
         try {
             $xml = $this->client->priceListXml();
         } catch (B2bFatalException $e) {
@@ -653,8 +658,26 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bI
 
         $rows = [];
         $repeated = [];
+        $eans = [];
+        $ambiguousEans = [];
         foreach ($doc->product as $product) {
             $code = self::clean((string) $product->product_code);
+            // EAN niezależnie od cen wiersza; kilka EAN-ów w jednym wierszu albo różne EAN-y jednego kodu = nie wiadomo,
+            // który jest EAN-em sztuki
+            $barcodes = [];
+            foreach ($product->barcodes->ean ?? [] as $ean) {
+                $ean = self::clean((string) $ean);
+                if ($ean !== '') {
+                    $barcodes[$ean] = true;
+                }
+            }
+            if ($code !== '' && $barcodes !== []) {
+                $ean = (string) array_key_first($barcodes);
+                if (count($barcodes) > 1 || (isset($eans[$code]) && $eans[$code] !== $ean)) {
+                    $ambiguousEans[$code] = true;
+                }
+                $eans[$code] ??= $ean;
+            }
             $client = self::decimal((string) $product->CENA_KLIENTA);
             $catalog = self::decimal((string) $product->CENA_CENNIKOWA_HURT);
             $currency = mb_strtoupper(self::clean((string) $product->currency));
@@ -676,6 +699,7 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bI
             unset($rows[$code]);
         }
         $this->priceList = $rows;
+        $this->priceListEans = array_diff_key($eans, $ambiguousEans);
         $this->summary[] = 'Cennik XML: '.count($rows).' modeli'.($repeated !== [] ? ' (kody powtórzone, pominięte: '.implode(', ', array_keys($repeated)).')' : '');
     }
 
@@ -813,7 +837,41 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bI
             availability: self::groupAvailability($group),
             variantSummary: $summary,
             members: $members,
+            identifiers: $this->identifiers($page, $group, $modelCode),
         );
+    }
+
+    /**
+     * Kod każdego rozmiaru (pozycja karty) i EAN tam, gdzie wiadomo, którego rozmiaru dotyczy: „Kod EAN” strony należy
+     * do kodu pokazanego obok („Kod”), EAN cennika XML — do pozycji, której kod jest dokładnie product_code wiersza.
+     * EAN wiersza XML kodu modelu (bez rozmiaru) pomijamy — nie wiadomo, który to rozmiar. Kod modelu tylko
+     * potwierdzony cennikiem XML (product_code), na każdej karcie modelu; wyrób bez rozmiarów nie ma osobnego kodu
+     * modelu — jego kod to kod pozycji. Kod to własny kod Procery (source_code): przy jej liniach to zarazem kod
+     * producenta, przy 3M czy Bollé — nie; rozstrzyga producent karty, nie łącznik.
+     *
+     * @param  array<string, mixed>  $page
+     * @param  list<array{code: string, size: string, delivery: string, availability: string, cents: int|null}>  $group
+     * @return list<B2bRemoteIdentifier>
+     */
+    private function identifiers(array $page, array $group, ?string $modelCode): array
+    {
+        $out = [];
+        if (! $page['single'] && $modelCode !== null) {
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MODEL_CODE, value: $modelCode, field: 'product_code');
+        }
+        foreach ($group as $variant) {
+            $label = $variant['size'] !== '' ? $variant['size'] : null;
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_SOURCE_CODE, value: $variant['code'], remoteId: $variant['code'], label: $label, field: 'Kod');
+            if ($page['ean'] !== '' && $variant['code'] === $page['code']) {
+                $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_EAN, value: $page['ean'], remoteId: $variant['code'], label: $label, field: 'Kod EAN');
+            }
+            $xmlEan = $this->priceListEans[$variant['code']] ?? '';
+            if ($xmlEan !== '') {
+                $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_EAN, value: $xmlEan, remoteId: $variant['code'], label: $label, field: 'barcodes/ean');
+            }
+        }
+
+        return $out;
     }
 
     /**

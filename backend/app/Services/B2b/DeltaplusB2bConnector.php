@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use DOMElement;
 use DOMNode;
 use DOMXPath;
@@ -51,6 +52,9 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
     private const COLUMN_MODEL = 'Model';
 
     private const COLUMN_EAN = 'EAN 13';
+
+    /** GTIN kartonu wersji (na witrynie 14 cyfr) — identyfikator opakowania zbiorczego, nie sztuki. */
+    private const COLUMN_CARTON_CODE = 'Kod kartonu';
 
     private const COLUMN_CARTON = 'Ilość w kart.';
 
@@ -684,7 +688,41 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
                     'name' => trim($name.' '.$item['label']),
                 ], $items)
                 : [],
+            identifiers: self::identifiers($page, $versions),
         );
+    }
+
+    /**
+     * Identyfikatory karty dosłownie ze strony: Ref. wyrobu (model bez koloru i rozmiaru, bywa z „_” na końcu) dla
+     * całej karty, a dla każdej wersji (pozycja = jej referencja) referencja jako kod producenta — witryna jest
+     * producenta i wydaje tylko wyroby Delta Plus — oraz EAN 13 sztuki i kod kartonu (GTIN opakowania zbiorczego).
+     * SKU karty nie jest identyfikatorem: przy kilku cenach to referencja wybrana przez nas.
+     *
+     * @param  array<string, mixed>  $page
+     * @param  list<array<string, mixed>>  $versions
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(array $page, array $versions): array
+    {
+        $out = [];
+        if ($page['ref_source'] !== '') {
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MODEL_CODE, value: $page['ref_source'], field: 'Ref.');
+        }
+        foreach ($versions as $version) {
+            $label = trim($version['color'].' '.$version['size']);
+            $label = $label !== '' ? $label : null;
+            foreach ([
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, $version['ref_source'], self::COLUMN_REF],
+                [ProductIdentifier::TYPE_EAN, $version['ean'], self::COLUMN_EAN],
+                [ProductIdentifier::TYPE_PACK_EAN, $version['carton_code'], self::COLUMN_CARTON_CODE],
+            ] as [$type, $value, $field]) {
+                if ($value !== '') {
+                    $out[] = new B2bRemoteIdentifier(type: $type, value: $value, remoteId: $version['ref'], label: $label, field: $field);
+                }
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -936,10 +974,13 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
             }
             $versions[] = [
                 'ref' => $ref,
+                // referencja dosłownie ze strony (ref wyżej to pozycja: wielkie litery) — do identyfikatorów
+                'ref_source' => $cell(self::COLUMN_REF),
                 'color' => $cell(self::COLUMN_COLOR),
                 'size' => $cell(self::COLUMN_SIZE),
                 'model' => $cell(self::COLUMN_MODEL),
                 'ean' => $cell(self::COLUMN_EAN),
+                'carton_code' => $cell(self::COLUMN_CARTON_CODE),
                 'carton' => $cell(self::COLUMN_CARTON),
                 'min_order' => $cell(self::COLUMN_MIN_ORDER),
                 'availability' => $cell(self::COLUMN_AVAILABILITY),

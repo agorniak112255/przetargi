@@ -8,6 +8,7 @@ use App\Models\B2bAccount;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
@@ -18,6 +19,7 @@ use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bImageGallery;
 use App\Services\B2b\B2bListProgressAware;
 use App\Services\B2b\B2bManufacturerSite;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
@@ -311,6 +313,22 @@ final class MmmConnectorTest extends TestCase
         $this->assertNull($connector->price($products['7000034747']));
         $this->assertNull($connector->price($products['7100066103']));
 
+        // numery 3M z pozycji listy dosłownie (GTIN-14 z zerem), pozycja = numer magazynowy; kody kreskowe opakowań
+        // są dopiero na karcie pdp, więc nie ma ich tutaj (i karta pdp nie jest pobierana przy liście)
+        $this->assertSame([
+            [ProductIdentifier::TYPE_MANUFACTURER_CODE, '6200', '7000009701', null, 'mmm_catalog_number'],
+            [ProductIdentifier::TYPE_ALT_CODE, '7000009701', '7000009701', null, 'mmm_id'],
+            [ProductIdentifier::TYPE_LEGACY_CODE, '70-0710-2845-5', '7000009701', null, 'legacy_mmm_id'],
+            [ProductIdentifier::TYPE_EAN, '04046719303420', '7000009701', null, 'gtin_display'],
+        ], self::identifierRows($products['7000009701']));
+        // bez poprzedniego numeru — nic nie jest wymyślane
+        $this->assertSame([
+            [ProductIdentifier::TYPE_MANUFACTURER_CODE, '1100', '7100100637', null, 'mmm_catalog_number'],
+            [ProductIdentifier::TYPE_ALT_CODE, '7100100637', '7100100637', null, 'mmm_id'],
+            [ProductIdentifier::TYPE_EAN, '07100100637', '7100100637', null, 'gtin_display'],
+        ], self::identifierRows($products['7100100637']));
+        $this->assertCount(0, Http::recorded(fn (Request $r): bool => str_contains($r->url(), '/pdp')));
+
         $summary = implode("\n", $connector->runSummary());
         $this->assertStringContainsString('cena za inną jednostkę niż bazowa (szt): 1, np. 7000034747 („1 karton”)', $summary);
         $this->assertStringContainsString('sklep nie podaje ceny: 1, np. 7100066103', $summary);
@@ -527,6 +545,27 @@ final class MmmConnectorTest extends TestCase
         $log = implode("\n", array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text'));
         $this->assertStringContainsString('cena za inną jednostkę niż bazowa', $log);
         $this->assertNotNull($account->fresh()?->connector_session_saved_at);
+
+        $identifiers = static fn (int $productId): array => ProductIdentifier::query()->where('product_id', $productId)->orderBy('id')
+            ->get()->map(static fn (ProductIdentifier $i): array => [$i->type, $i->value, $i->position_key, $i->source_field, $i->manufacturer])->all();
+        $expected = [
+            [ProductIdentifier::TYPE_MANUFACTURER_CODE, '6200', '7000009701', 'mmm_catalog_number', '3M'],
+            [ProductIdentifier::TYPE_ALT_CODE, '7000009701', '7000009701', 'mmm_id', '3M'],
+            [ProductIdentifier::TYPE_LEGACY_CODE, '70-0710-2845-5', '7000009701', 'legacy_mmm_id', '3M'],
+            [ProductIdentifier::TYPE_EAN, '04046719303420', '7000009701', 'gtin_display', '3M'],
+        ];
+        $this->assertSame($expected, $identifiers((int) $card->id));
+        $this->assertSame(3, ProductIdentifier::query()->where('product_id', $plugs->id)->count());
+        $this->assertSame(7, ProductIdentifier::query()->count());
+
+        // drugi przebieg: nic nowego, identyfikatory nie dublują się i nie są oznaczane jako zniknięte
+        $second = app(B2bAccountSyncRunner::class)->run(
+            $account->fresh() ?? $account, delayMs: 0, withImages: true, connector: MmmB2bConnector::forAccount($account->fresh() ?? $account, 0),
+        );
+        $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
+        $this->assertSame($expected, $identifiers((int) $card->id));
+        $this->assertSame(7, ProductIdentifier::query()->count());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
     }
 
     public function test_connector_declares_its_capabilities(): void
@@ -625,6 +664,17 @@ final class MmmConnectorTest extends TestCase
         }
 
         return $byId;
+    }
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string|null, 3: string|null, 4: string|null}>
+     */
+    private static function identifierRows(B2bRemoteProduct $product): array
+    {
+        return array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $product->identifiers ?? [],
+        );
     }
 
     private static function jwt(): string

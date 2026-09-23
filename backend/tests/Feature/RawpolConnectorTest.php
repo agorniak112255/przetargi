@@ -9,12 +9,14 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bManufacturerSite;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\RawpolB2bClient;
 use App\Services\B2b\RawpolB2bConnector;
@@ -178,6 +180,39 @@ final class RawpolConnectorTest extends TestCase
         ));
     }
 
+    public function test_products_carry_the_product_code_and_each_version_symbol_and_ean_as_identifiers(): void
+    {
+        $this->fakeSite();
+        $products = $this->productsBySku($this->connector());
+        $identifiers = static fn (B2bRemoteProduct $p): array => array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $p->identifiers ?? [],
+        );
+
+        // kod wyrobu dosłownie z listy (małymi literami — SKU „RTEST” to nasz zapis), pozycja = symbol wersji
+        $this->assertSame([
+            ['model_code', 'rtest', null, null, 'Kod wyrobu'],
+            ['source_code', 'RTESTS', 'RTESTS', 'niebieski s', 'Symbol'],
+            ['ean', '5900000000011', 'RTESTS', 'niebieski s', 'EAN'],
+            ['source_code', 'RTESTM', 'RTESTM', 'niebieski m', 'Symbol'],
+            ['ean', '5900000000012', 'RTESTM', 'niebieski m', 'EAN'],
+            ['source_code', 'RTESTL', 'RTESTL', 'niebieski l', 'Symbol'],
+            ['ean', '5900000000013', 'RTESTL', 'niebieski l', 'EAN'],
+        ], $identifiers($products['RTEST']));
+        // wyrób w dwóch cenach: kod wyrobu także na karcie wersji w innej cenie (jej SKU to symbol wersji)
+        $this->assertSame([
+            ['model_code', 'ox-test', null, null, 'Kod wyrobu'],
+            ['source_code', 'OX-TEST_WS7', 'OX-TEST_WS7', 'biało-szary 7', 'Symbol'],
+            ['ean', '5900000000023', 'OX-TEST_WS7', 'biało-szary 7', 'EAN'],
+        ], $identifiers($products['OX-TEST_WS7']));
+        $this->assertSame('ox-test', $products['OX-TEST']->identifiers[0]->value);
+        // wersja bez EAN w serwisie — sam symbol, bez wymyślonego EAN
+        $this->assertSame([
+            ['model_code', 'zz-test', null, null, 'Kod wyrobu'],
+            ['source_code', 'ZZ-TESTP700x500', 'ZZ-TESTP700x500', '700x500 mm', 'Symbol'],
+        ], $identifiers($products['ZZ-TEST']));
+    }
+
     public function test_item_without_brand_is_skipped_instead_of_getting_the_wholesaler_as_manufacturer(): void
     {
         $this->fakeSite();
@@ -276,6 +311,30 @@ final class RawpolConnectorTest extends TestCase
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
         $this->assertContains('Katalog Raw-Pol: 5 wyrobów, w sprzedaży 4 (wersji: 8)', $log);
         $this->assertContains('Karty: 5 (1 wyrobów w kilku cenach — rozmiar w innej cenie to osobna karta)', $log);
+
+        // identyfikatory: kod wyrobu pod pozycją karty (RTESTS), symbol i EAN pod każdą wersją
+        $this->assertSame(
+            [
+                ['RTESTL', 'ean', '5900000000013'], ['RTESTL', 'source_code', 'RTESTL'],
+                ['RTESTM', 'ean', '5900000000012'], ['RTESTM', 'source_code', 'RTESTM'],
+                ['RTESTS', 'ean', '5900000000011'], ['RTESTS', 'model_code', 'rtest'], ['RTESTS', 'source_code', 'RTESTS'],
+            ],
+            ProductIdentifier::query()->where('product_id', $rtest->id)->orderBy('position_key')->orderBy('type')->get()
+                ->map(static fn (ProductIdentifier $i): array => [$i->position_key, $i->type, $i->value])->all(),
+        );
+        $wsCard = Product::query()->where('sku', 'OX-TEST_WS7')->value('id');
+        $this->assertTrue(ProductIdentifier::query()->where('product_id', $wsCard)->where('type', 'model_code')->where('value', 'ox-test')->exists());
+        $count = ProductIdentifier::query()->count();
+
+        // drugi przebieg: identyfikatorów nie przybywa ani nie znikają
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame($count, ProductIdentifier::query()->count());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+        // żaden identyfikator nie wskazał pozycji spoza swojej karty
+        foreach (B2bSyncRun::query()->get() as $run) {
+            $this->assertSame([], preg_grep('/: identyfikator /', array_column((array) $run->log, 'text')));
+        }
     }
 
     public function test_registry_detects_rawpol_by_host_and_it_is_not_a_manufacturer_site(): void

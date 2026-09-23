@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use DOMElement;
 use DOMNode;
 use DOMXPath;
@@ -219,14 +220,21 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
 
     public function manufacturer(B2bRemoteProduct $product): string
     {
-        $text = mb_strtoupper($product->name.' '.$product->sku.' '.($product->raw['symbol'] ?? ''));
-        if (str_contains($text, self::BRAND_MOONTEX) || preg_match('/(?<![\p{L}\p{N}])MOO\d/u', $text) === 1) {
+        if (self::isMoontex($product->name, $product->sku, (string) ($product->raw['symbol'] ?? ''))) {
             $this->moontex[$product->remoteId] = true;
 
             return self::BRAND_MOONTEX;
         }
 
         return self::BRAND;
+    }
+
+    /** Marka MOONTEX w nazwie, kodzie albo symbolu karty (MOONTEX KOC…, MOO410HV) — reszta to JHK. */
+    private static function isMoontex(string $name, string $sku, string $symbol): bool
+    {
+        $text = mb_strtoupper($name.' '.$sku.' '.$symbol);
+
+        return str_contains($text, self::BRAND_MOONTEX) || preg_match('/(?<![\p{L}\p{N}])MOO\d/u', $text) === 1;
     }
 
     public function price(B2bRemoteProduct $product): ?B2bRemotePrice
@@ -841,6 +849,8 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
             ));
         }
 
+        $symbols = $single ? $page['symbol'] : implode('; ', array_column($group, 'symbol'));
+
         return new B2bRemoteProduct(
             remoteId: $first['symbol'],
             sku: $sku,
@@ -851,7 +861,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
                 'status' => 'ok',
                 'price' => (float) $cents / 100,
                 'base_price' => $baseCents !== null ? (float) $baseCents / 100 : null,
-                'symbol' => $single ? $page['symbol'] : implode('; ', array_column($group, 'symbol')),
+                'symbol' => $symbols,
                 'description' => $page['description'],
                 'fields' => $single ? $fields : array_merge($fields, $eans !== [] ? [['EAN', implode('; ', array_map(
                     static fn (array $s): string => $s['size'].': '.$s['ean'],
@@ -873,7 +883,40 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImage
             availability: self::groupAvailability($group),
             variantSummary: $summary,
             members: $members,
+            identifiers: self::identifiers($group, $single, self::isMoontex($name, $sku, $symbols)),
         );
+    }
+
+    /**
+     * Symbol i EAN każdego rozmiaru karty; pozycja = symbol rozmiaru (remote_id powiązania), a wyrób bez rozmiarów
+     * ma jedną pozycję — swój symbol, zarazem remoteId karty. Symbol to własny kod sklepu producenta: przy wyrobie
+     * JHK jest kodem producenta, przy MOONTEX (inna marka w tym sklepie) tylko kodem źródła. Kod wyrobu bez rozmiaru
+     * (productCode) składamy sami z symboli — nie jest identyfikatorem ze źródła i tu nie trafia.
+     *
+     * @param  list<array{path: string, symbol: string, size: string, ean: string, cents: int|null, vat: string, stock: string}>  $group
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(array $group, bool $single, bool $moontex): array
+    {
+        $codeType = $moontex ? ProductIdentifier::TYPE_SOURCE_CODE : ProductIdentifier::TYPE_MANUFACTURER_CODE;
+        $out = [];
+        foreach ($group as $size) {
+            $position = $size['symbol'];
+            $label = $size['size'] !== '' ? $size['size'] : null;
+            $out[] = new B2bRemoteIdentifier(type: $codeType, value: $position, remoteId: $position, label: $label, field: 'Symbol');
+            if ($size['ean'] !== '') {
+                $out[] = new B2bRemoteIdentifier(
+                    type: ProductIdentifier::TYPE_EAN,
+                    value: $size['ean'],
+                    remoteId: $position,
+                    label: $label,
+                    // wyrób bez rozmiarów ma EAN w polu karty, rozmiar — w tabeli wariantów („EAN:”)
+                    field: $single ? 'Kod kreskowy EAN' : 'EAN',
+                );
+            }
+        }
+
+        return $out;
     }
 
     /**

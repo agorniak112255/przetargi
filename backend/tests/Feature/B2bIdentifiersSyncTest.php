@@ -231,6 +231,48 @@ final class B2bIdentifiersSyncTest extends TestCase
         $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
     }
 
+    public function test_one_position_given_by_several_products_keeps_the_union_and_run_end_marks_what_is_gone(): void
+    {
+        // jak kolory Protektu: dwa adresy, jedna karta i pozycja, każdy adres ze swoim EAN
+        $this->connector->items = [$this->colour('czarny', '5711074644834'), $this->colour('czerwony', '5711074644803')];
+        $this->sync();
+
+        $this->assertSame(2, ProductIdentifier::query()->count());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+
+        // czerwony zniknął ze sklepu — oznaczony dopiero na końcu pełnego przebiegu, czarny zostaje
+        $this->connector->items = [$this->colour('czarny', '5711074644834')];
+        $result = $this->sync();
+
+        $this->assertNull(ProductIdentifier::query()->where('value', '5711074644834')->value('removed_at'));
+        $this->assertNotNull(ProductIdentifier::query()->where('value', '5711074644803')->value('removed_at'));
+        $texts = array_column(B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log, 'text');
+        $this->assertContains('Identyfikatory, których dostawca już nie podaje (oznaczone, nie skasowane): 1', $texts);
+    }
+
+    public function test_position_skipped_once_in_run_keeps_its_identifiers(): void
+    {
+        $this->connector->items = [$this->colour('czarny', '5711074644834'), $this->colour('czerwony', '5711074644803')];
+        $this->sync();
+
+        // strona czerwonego koloru bez ceny — pozycja pominięta raz, więc jej EAN nie znika
+        $this->connector->skipNames = ['Amortyzator BW140 czerwony'];
+        $this->sync();
+
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+    }
+
+    public function test_run_with_limit_marks_nothing(): void
+    {
+        $this->connector->items = [$this->group(['S' => '5711074644834', 'M' => '5711074644803'])];
+        $this->sync();
+
+        $this->connector->items = [$this->group(['S' => '5711074644834', 'M' => ''])];
+        app(B2bAccountSyncRunner::class)->run($this->account->fresh(), limit: 1, delayMs: 0, connector: $this->connector);
+
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+    }
+
     public function test_deleting_card_removes_its_identifiers(): void
     {
         $this->connector->items = [$this->group(['S' => '5711074644834'])];
@@ -268,6 +310,17 @@ final class B2bIdentifiersSyncTest extends TestCase
         );
     }
 
+    /** Adres jednego koloru karty BW140 — ta sama pozycja dla wszystkich kolorów. */
+    private function colour(string $colour, string $ean): B2bRemoteProduct
+    {
+        return new B2bRemoteProduct(
+            remoteId: 'BW140',
+            sku: 'BW140',
+            name: 'Amortyzator BW140 '.$colour,
+            identifiers: [new B2bRemoteIdentifier(type: 'ean', value: $ean, label: $colour, field: 'EAN')],
+        );
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -290,6 +343,9 @@ final class IdentifierFakeConnector implements B2bConnector
 
     /** @var array<string, float> */
     public array $prices = [];
+
+    /** @var list<string> nazwy produktów bez ceny (pozycja pominięta w przebiegu) */
+    public array $skipNames = [];
 
     public static function key(): string
     {
@@ -330,6 +386,10 @@ final class IdentifierFakeConnector implements B2bConnector
 
     public function price(B2bRemoteProduct $product): ?B2bRemotePrice
     {
+        if (in_array($product->name, $this->skipNames, true)) {
+            return null;
+        }
+
         return new B2bRemotePrice(net: $this->prices[$product->remoteId] ?? 25.5);
     }
 
