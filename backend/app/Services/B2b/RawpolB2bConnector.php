@@ -32,7 +32,7 @@ use RuntimeException;
  * Producent: marka z danych wyrobu (słownik marek serwisu); pisownię marek, które katalog już ma, bierzemy
  * z katalogu (BRANDS). RAW-POL nie jest producentem tych marek, więc łącznik nie jest B2bManufacturerSite.
  */
-final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bRunSummaryAware, B2bShopFieldSource
+final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bRunSummaryAware, B2bShopFieldSource
 {
     private const SHOP_SECTION = 'Dane wyrobu';
 

@@ -38,6 +38,9 @@ final class CardMatchApiTest extends TestCase
 
     private B2bAccount $p4s;
 
+    /** konto 3M — właściciel kart rozmiarów w propozycjach z planem (zakładane przy pierwszej takiej propozycji) */
+    private ?B2bAccount $mmm = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -170,6 +173,12 @@ final class CardMatchApiTest extends TestCase
         $this->postJson("/api/card-matches/{$candidate->id}/merge")
             ->assertStatus(422)
             ->assertJsonPath('message', 'Karta dystrybutora nie ma już wspólnego klucza z kartą producenta — odśwież propozycje.');
+
+        // od odświeżenia klucze karty wskazują kilka kart producenta — to już łączenie rozmiarów, nie zwykłe łączenie
+        $this->evaluations[$source->id] = ['kind' => CardMatchCandidate::KIND_SIZE_MERGE, 'target_product_id' => null] + $this->evaluation($target->id);
+        $this->postJson("/api/card-matches/{$candidate->id}/merge")
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Propozycja zmieniła rodzaj — klucze karty dystrybutora wskazują teraz kilka kart producenta (łączenie rozmiarów). Odśwież propozycje.');
 
         $this->assertNotNull($source->fresh());
         $this->assertSame(1, ProductSourcePrice::query()->where('product_id', $source->id)->count());
@@ -321,7 +330,16 @@ final class CardMatchApiTest extends TestCase
         CardMatchCandidate::query()->whereKey($candidates[1]->id)->update(['last_seen_at' => '2026-09-24 06:10:00']);
         $this->getJson('/api/card-matches/summary')
             ->assertOk()
-            ->assertExactJson(['pending' => 2, 'conflict' => 1, 'rejected' => 1, 'merged' => 0, 'refreshed_at' => '2026-09-24T06:10:00+00:00']);
+            ->assertExactJson([
+                'pending' => 2, 'conflict' => 1, 'rejected' => 1, 'merged' => 0, 'refreshed_at' => '2026-09-24T06:10:00+00:00',
+                // krok 5: te same liczniki w podziale na rodzaj i pomiar sygnału (tu same zwykłe pary)
+                'by_kind' => [
+                    'merge' => ['pending' => 2, 'conflict' => 1, 'rejected' => 1, 'merged' => 0],
+                    'size_merge' => ['pending' => 0, 'conflict' => 0, 'rejected' => 0, 'merged' => 0],
+                    'split' => ['pending' => 0, 'conflict' => 0, 'rejected' => 0, 'merged' => 0],
+                ],
+                'signals' => ['size' => 0, 'color' => 0, 'unknown' => 0],
+            ]);
         $this->postJson('/api/card-matches/refresh')
             ->assertOk()
             ->assertJsonPath('pending', 2)
@@ -367,6 +385,163 @@ final class CardMatchApiTest extends TestCase
         $five = $this->countQueries('/api/card-matches');
 
         $this->assertSame($one, $five);
+    }
+
+    public function test_list_filters_by_kind_and_presents_plan_with_card_briefs(): void
+    {
+        $this->actingAsRole('admin');
+        [, , $pair] = $this->pair('IF/016/F/PS', 'ZPPV99C');
+        [$source, $targets, $sizes] = $this->sizeMergeCandidate('6X00');
+        [, , $split] = $this->sizeMergeCandidate('KLODKA', CardMatchCandidate::KIND_SPLIT, CardMatchCandidate::SIGNAL_COLOR);
+
+        // bez rodzaju — wszystkie rodzaje (kolejność jak dotąd: marka, id)
+        $this->assertSame([$sizes->id, $split->id, $pair->id], array_column((array) $this->getJson('/api/card-matches')->json('data'), 'id'));
+        $this->getJson('/api/card-matches?kind=merge')->assertJsonPath('total', 1)->assertJsonPath('data.0.id', $pair->id)
+            ->assertJsonPath('data.0.kind', 'merge')
+            ->assertJsonPath('data.0.signal', null)
+            ->assertJsonPath('data.0.plan_hash', null)
+            ->assertJsonPath('data.0.plan', null);
+        $this->getJson('/api/card-matches?kind=split')->assertJsonPath('total', 1)->assertJsonPath('data.0.id', $split->id);
+        $this->getJson('/api/card-matches?kind=other')->assertStatus(422);
+
+        $ids = array_map(static fn (Product $p): int => (int) $p->id, $targets);
+        $row = $this->getJson('/api/card-matches?status=pending&kind=size_merge')
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.id', $sizes->id)
+            ->assertJsonPath('data.0.kind', 'size_merge')
+            ->assertJsonPath('data.0.signal', 'size')
+            ->assertJsonPath('data.0.plan_hash', $sizes->plan_hash)
+            ->assertJsonPath('data.0.target', null)
+            ->assertJsonPath('data.0.conflict_product_ids', $ids)
+            ->assertJsonPath('data.0.source.id', $source->id)
+            ->assertJsonPath('data.0.plan.version', 1)
+            ->assertJsonPath('data.0.plan.source_label', 'B2B P4S')
+            ->assertJsonPath('data.0.plan.suggested.keep_product_id', $ids[0])
+            ->assertJsonPath('data.0.plan.suggested.common_name', 'Półmaska wielokrotnego użytku 3M™')
+            ->json('data.0');
+        $this->assertCount(3, $row['plan']['positions']);
+        foreach ($row['plan']['positions'] as $i => $position) {
+            $this->assertSame($ids[$i], $position['target_product_id']);
+            $this->assertSame($ids[$i], $position['target']['id']);
+            $this->assertSame($targets[$i]->sku, $position['target']['sku']);
+            $this->assertSame('3M', $position['target']['manufacturer']);
+            $this->assertSame('61.38', $position['target']['purchase_price']);
+            $this->assertSame('B2B 3M', $position['target']['sources'][0]['label']);
+            $this->assertStringContainsString('/thumb', (string) $position['target']['thumb_url']);
+        }
+        $this->assertSame('6X00/S', $row['plan']['positions'][0]['remote_sku']);
+        $this->assertSame('S (mały)', $row['plan']['positions'][0]['size_label']);
+
+        // niepewna: pozycja bez karty, pozycja w kilka kart i karta usunięta po odświeżeniu — target null
+        $plan = $sizes->plan;
+        $plan['positions'][0]['target_product_id'] = null;
+        $plan['positions'][0]['target_ids'] = [$ids[0], $ids[1]];
+        $plan['positions'][1]['target_product_id'] = null;
+        $sizes->forceFill(['status' => CardMatchCandidate::STATUS_CONFLICT, 'plan' => $plan])->save();
+        $targets[2]->delete();
+        $positions = $this->getJson('/api/card-matches?status=conflict')->assertJsonPath('total', 1)->json('data.0.plan.positions');
+        $this->assertNull($positions[0]['target']);
+        $this->assertSame([$ids[0], $ids[1]], $positions[0]['target_ids']);
+        $this->assertNull($positions[1]['target']);
+        $this->assertNull($positions[1]['target_ids']);
+        $this->assertSame($ids[2], $positions[2]['target_product_id']);
+        $this->assertNull($positions[2]['target']);
+    }
+
+    public function test_summary_counts_by_kind_and_signals_of_open_plans(): void
+    {
+        $this->actingAsRole('admin');
+        $this->pair('IF/016/F/PS', 'ZPPV99C');
+        [, , $conflictPair] = $this->pair('IF/020/F/PS', 'ZPPV20C');
+        $conflictPair->forceFill(['status' => CardMatchCandidate::STATUS_CONFLICT])->save();
+        $this->sizeMergeCandidate('6X00');
+        $this->sizeMergeCandidate('KLODKA', CardMatchCandidate::KIND_SPLIT, CardMatchCandidate::SIGNAL_COLOR);
+        [, , $unknown] = $this->sizeMergeCandidate('UVEX', CardMatchCandidate::KIND_SPLIT, CardMatchCandidate::SIGNAL_UNKNOWN);
+        $unknown->forceFill(['status' => CardMatchCandidate::STATUS_CONFLICT])->save();
+        // odrzucone nie liczą się do pomiaru, ale są w liczniku rodzaju
+        [, , $rejected] = $this->sizeMergeCandidate('4520', CardMatchCandidate::KIND_SIZE_MERGE, CardMatchCandidate::SIGNAL_SIZE);
+        $rejected->forceFill(['status' => CardMatchCandidate::STATUS_REJECTED, 'decided_at' => now()])->save();
+
+        $this->getJson('/api/card-matches/summary')
+            ->assertOk()
+            ->assertJsonPath('pending', 3)
+            ->assertJsonPath('conflict', 2)
+            ->assertJsonPath('rejected', 1)
+            ->assertJsonPath('merged', 0)
+            ->assertJsonPath('by_kind', [
+                'merge' => ['pending' => 1, 'conflict' => 1, 'rejected' => 0, 'merged' => 0],
+                'size_merge' => ['pending' => 1, 'conflict' => 0, 'rejected' => 1, 'merged' => 0],
+                'split' => ['pending' => 1, 'conflict' => 1, 'rejected' => 0, 'merged' => 0],
+            ])
+            ->assertJsonPath('signals', ['size' => 1, 'color' => 1, 'unknown' => 1]);
+        $this->postJson('/api/card-matches/refresh')->assertOk()->assertJsonPath('by_kind.split.conflict', 1)->assertJsonPath('signals.color', 1);
+    }
+
+    public function test_merge_of_size_merge_or_split_is_refused_but_reject_works(): void
+    {
+        $this->actingAsRole('admin');
+        [$source, $targets, $sizes] = $this->sizeMergeCandidate('6X00');
+        [$splitSource, , $split] = $this->sizeMergeCandidate('KLODKA', CardMatchCandidate::KIND_SPLIT, CardMatchCandidate::SIGNAL_COLOR);
+        [, , $okPair] = $this->pair('IF/016/F/PS', 'ZPPV99C');
+
+        $this->postJson("/api/card-matches/{$sizes->id}/merge")
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Ta propozycja to łączenie rozmiarów — ta decyzja będzie dostępna w kolejnej wersji ekranu. Możesz ją odrzucić.');
+        // rodzaj sprawdzany przed statusem — niepewna propozycja rozmiarów mówi to samo
+        $sizes->forceFill(['status' => CardMatchCandidate::STATUS_CONFLICT])->save();
+        $this->postJson("/api/card-matches/{$sizes->id}/merge")
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Ta propozycja to łączenie rozmiarów — ta decyzja będzie dostępna w kolejnej wersji ekranu. Możesz ją odrzucić.');
+
+        $results = $this->postJson('/api/card-matches/bulk', ['action' => 'merge', 'ids' => [$split->id, $okPair->id]])
+            ->assertOk()
+            ->json('results');
+        $this->assertSame([
+            'id' => $split->id, 'ok' => false,
+            'error' => 'Ta propozycja to rozdzielanie — ta decyzja będzie dostępna w kolejnej wersji ekranu. Możesz ją odrzucić.',
+        ], $results[0]);
+        $this->assertSame(['id' => $okPair->id, 'ok' => true, 'error' => null], $results[1]);
+
+        // nic nie zmienione: karty, sloty, propozycje
+        $this->assertNotNull($source->fresh());
+        $this->assertNotNull($splitSource->fresh());
+        foreach ($targets as $target) {
+            $this->assertNotNull($target->fresh());
+        }
+        $this->assertSame(1, ProductSourcePrice::query()->where('product_id', $source->id)->count());
+        $this->assertSame(CardMatchCandidate::STATUS_CONFLICT, $sizes->fresh()->status);
+        $this->assertSame(CardMatchCandidate::STATUS_PENDING, $split->fresh()->status);
+        $this->assertNull($split->fresh()->decided_by);
+        $this->assertNull($split->fresh()->backup_path);
+
+        // odrzucenie działa dla każdego rodzaju, także niepewnej propozycji
+        $split->forceFill(['status' => CardMatchCandidate::STATUS_CONFLICT, 'reason' => 'nie wiadomo, czy pozycje różnią się rozmiarem czy kolorem'])->save();
+        $this->postJson("/api/card-matches/{$split->id}/reject", ['note' => 'to różne wyroby'])
+            ->assertOk()
+            ->assertJsonPath('status', 'rejected')
+            ->assertJsonPath('kind', 'split')
+            ->assertJsonPath('reason', 'nie wiadomo, czy pozycje różnią się rozmiarem czy kolorem · to różne wyroby')
+            ->assertJsonPath('plan.positions.0.target.manufacturer', '3M');
+        $this->postJson("/api/card-matches/{$sizes->id}/reject")->assertOk()->assertJsonPath('status', 'rejected')->assertJsonPath('kind', 'size_merge');
+        $this->assertNotNull($splitSource->fresh());
+    }
+
+    public function test_list_with_plans_uses_constant_number_of_queries_per_page(): void
+    {
+        $this->actingAsRole('admin');
+        $this->sizeMergeCandidate('P00');
+        $url = '/api/card-matches?status=pending&kind=size_merge&per_page=50';
+        $this->getJson($url)->assertOk();
+        $one = $this->countQueries($url);
+
+        for ($i = 1; $i < 20; $i++) {
+            $this->sizeMergeCandidate('P'.str_pad((string) $i, 2, '0', STR_PAD_LEFT));
+        }
+        $this->getJson($url)->assertJsonPath('total', 20);
+        $twenty = $this->countQueries($url);
+
+        $this->assertSame($one, $twenty);
     }
 
     private function countQueries(string $url): int
@@ -437,6 +612,78 @@ final class CardMatchApiTest extends TestCase
         $this->evaluations[$source->id] = $this->evaluation((int) $target->id);
 
         return [$target, $source, $candidate];
+    }
+
+    /**
+     * Propozycja z planem „pozycja → karta” (krok 5) w kształcie z CardMatchFinder: karta P4S jednego wyrobu
+     * w trzech rozmiarach (6X00/S, /M, /L) i trzy karty 3M (konto 3M, cena 61,38, zdjęcie) — po jednej na pozycję.
+     * Wiersz tworzony ręcznie: tu sprawdzamy ekran i decyzje, nie reguły planu.
+     *
+     * @return array{0: Product, 1: list<Product>, 2: CardMatchCandidate}
+     */
+    private function sizeMergeCandidate(
+        string $model,
+        string $kind = CardMatchCandidate::KIND_SIZE_MERGE,
+        string $signal = CardMatchCandidate::SIGNAL_SIZE,
+        string $status = CardMatchCandidate::STATUS_PENDING,
+    ): array {
+        $this->mmm ??= B2bAccount::query()->create(['username' => 'mmm', 'password' => 'x', 'sites' => ['3mb2b.pl'], 'connector' => '3m']);
+        $source = Product::query()->create([
+            'sku' => $model, 'name' => 'Półmaska wielokrotnego użytku 3M™ '.$model, 'manufacturer' => '3M',
+            'catalog_price_net' => 70, 'purchase_price' => 65, 'currency' => 'PLN',
+        ]);
+        ProductSourcePrice::query()->create([
+            'product_id' => $source->id, 'source_key' => ProductSourcePrice::b2bKey($this->p4s->id), 'b2b_account_id' => $this->p4s->id,
+            'catalog_price_net' => 70, 'purchase_price' => 65, 'currency' => 'PLN', 'checked_at' => now(),
+        ]);
+
+        $targets = [];
+        $positions = [];
+        foreach (['S' => 'mały', 'M' => 'średni', 'L' => 'duży'] as $size => $word) {
+            $code = '70001468'.$model.$size;
+            $target = Product::query()->create([
+                'sku' => $code, 'name' => 'Półmaska wielokrotnego użytku 3M™, rozmiar '.$word.', '.$model.$size, 'manufacturer' => '3M',
+                'catalog_price_net' => 61.38, 'purchase_price' => 61.38, 'currency' => 'PLN',
+            ]);
+            ProductSourcePrice::query()->create([
+                'product_id' => $target->id, 'source_key' => ProductSourcePrice::b2bKey($this->mmm->id), 'b2b_account_id' => $this->mmm->id,
+                'catalog_price_net' => 61.38, 'purchase_price' => 61.38, 'currency' => 'PLN', 'checked_at' => now(),
+            ]);
+            ProductImage::query()->create(['product_id' => $target->id, 'b2b_account_id' => $this->mmm->id, 'path' => $code.'.jpg', 'is_primary' => true, 'sort_order' => 0, 'checksum' => 'm-'.$code]);
+            $targets[] = $target;
+            $label = $signal === CardMatchCandidate::SIGNAL_COLOR ? 'kolor '.$word : 'rozmiar '.$size.' ('.$word.')';
+            $positions[] = [
+                'source_key' => ProductSourcePrice::b2bKey($this->p4s->id), 'source_label' => 'B2B P4S',
+                'position_key' => 'p4s-'.$model.'-'.$size, 'remote_sku' => $model.'/'.$size,
+                'label' => $label, 'size_label' => $signal === CardMatchCandidate::SIGNAL_SIZE ? $size.' ('.$word.')' : null,
+                'target_product_id' => (int) $target->id, 'target_ids' => null,
+                'matched_by' => 'manufacturer_code', 'matched_value' => $code,
+                'signal' => $signal, 'signal_why' => 'etykieta P4S: '.$label,
+            ];
+        }
+        $ids = array_map(static fn (Product $p): int => (int) $p->id, $targets);
+        sort($ids);
+        $plan = [
+            'version' => 1, 'signal' => $signal, 'source_label' => 'B2B P4S', 'same_owner' => true, 'equal_prices' => true,
+            'price_differences' => [], 'blockers' => [], 'positions' => $positions,
+            'suggested' => $kind === CardMatchCandidate::KIND_SIZE_MERGE ? [
+                'keep_product_id' => $ids[0], 'common_name' => 'Półmaska wielokrotnego użytku 3M™',
+                'sizes' => array_map(static fn (array $p): array => ['product_id' => $p['target_product_id'], 'label' => $p['size_label'], 'code' => $p['matched_value']], $positions),
+            ] : null,
+        ];
+
+        $candidate = CardMatchCandidate::query()->create([
+            'source_product_id' => $source->id, 'target_product_id' => null, 'status' => $status,
+            'kind' => $kind, 'plan' => $plan, 'targets_key' => implode(',', $ids),
+            'plan_hash' => sha1((string) json_encode([$kind, array_map(static fn (array $p): array => [$p['source_key'], $p['position_key'], $p['target_product_id']], $positions)])),
+            'matched_by' => CardMatchCandidate::BY_MANUFACTURER_CODE, 'matched_value' => $positions[0]['matched_value'],
+            'matched_source_key' => ProductSourcePrice::b2bKey($this->p4s->id), 'brand' => '3m', 'hits' => 3, 'positions' => 3,
+            'conflict_product_ids' => $ids,
+            'source_snapshot' => ['sku' => $model, 'name' => (string) $source->name, 'manufacturer' => '3M'],
+            'last_seen_at' => now(),
+        ]);
+
+        return [$source, $targets, $candidate];
     }
 
     /** @return array<string, mixed> */

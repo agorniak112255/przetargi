@@ -47,7 +47,7 @@ use RuntimeException;
  * apteczki), co podsumowanie przebiegu liczy osobno. Dlatego łącznik nie jest B2bManufacturerSite: opis stąd nie
  * nadpisuje opisów z innych źródeł.
  */
-final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
+final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
 {
     public const SUPPLIER = 'Procera';
 

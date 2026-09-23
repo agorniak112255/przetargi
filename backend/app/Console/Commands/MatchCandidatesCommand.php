@@ -23,9 +23,11 @@ final class MatchCandidatesCommand extends Command
 
     protected $description = 'Przelicza propozycje łączenia kart dystrybutora z kartami producenta (niczego nie łączy)';
 
-    public function handle(CardMatchFinder $finder): int
+    public function handle(): int
     {
-        $summary = $finder->refresh();
+        // z kontenera przy użyciu, bez podpowiedzi typu w handle(): CardMatchFinder jest final, a test polecenia
+        // podmienia go atrapą (jak CardMatchMerger i CardMatchController)
+        $summary = app(CardMatchFinder::class)->refresh();
 
         $rows = CardMatchCandidate::query()
             ->whereIn('status', [CardMatchCandidate::STATUS_PENDING, CardMatchCandidate::STATUS_CONFLICT])
@@ -50,9 +52,11 @@ final class MatchCandidatesCommand extends Command
         $shown = $limit > 0 ? $rows->take($limit) : $rows;
         if ($shown->isNotEmpty()) {
             $this->table(
-                ['Status', 'Karta dystrybutora', 'Karta producenta', 'Klucz', 'Marka', 'Trafione', 'Cena dystr.', 'Cena prod.', 'Powód'],
+                ['Status', 'Rodzaj', 'Sygnał', 'Karta dystrybutora', 'Karta producenta', 'Klucz', 'Marka', 'Trafione', 'Cena dystr.', 'Cena prod.', 'Powód'],
                 $shown->map(fn (CardMatchCandidate $c): array => [
                     $c->status === CardMatchCandidate::STATUS_PENDING ? 'do decyzji' : 'niepewne',
+                    self::kindLabel($c),
+                    self::signalLabel(self::signal($c)),
                     $this->cardLabel($c->source, $c->source_snapshot),
                     $c->target_product_id !== null
                         ? $this->cardLabel($c->target, null)
@@ -77,6 +81,14 @@ final class MatchCandidatesCommand extends Command
             $summary['removed'],
             $summary['refreshed_at'],
         ));
+        // pomiar propozycji z planem „pozycja → karta” (do decyzji i niepewne, bez zwykłych par)
+        $signals = is_array($summary['signals'] ?? null) ? $summary['signals'] : [];
+        $this->line(sprintf(
+            'Pomiar: rozmiary %d · kolory %d · niepewne %d',
+            (int) ($signals[CardMatchCandidate::SIGNAL_SIZE] ?? 0),
+            (int) ($signals[CardMatchCandidate::SIGNAL_COLOR] ?? 0),
+            (int) ($signals[CardMatchCandidate::SIGNAL_UNKNOWN] ?? 0),
+        ));
 
         return self::SUCCESS;
     }
@@ -95,6 +107,8 @@ final class MatchCandidatesCommand extends Command
             'dystrybutor_id', 'dystrybutor_sku', 'dystrybutor_nazwa', 'dystrybutor_producent', 'dystrybutor_cena', 'dystrybutor_waluta',
             'producent_id', 'producent_sku', 'producent_nazwa', 'producent_producent', 'producent_cena', 'producent_waluta',
             'karty_konfliktu', 'powod',
+            // krok 5 — dopisane na końcu, żeby arkusze czytające dotychczasowe kolumny się nie przesunęły
+            'rodzaj', 'sygnal', 'plan_pozycje', 'podpowiedz_nazwy',
         ], ';');
         foreach ($rows as $c) {
             $snapshot = is_array($c->source_snapshot) ? $c->source_snapshot : [];
@@ -120,6 +134,12 @@ final class MatchCandidatesCommand extends Command
                 $c->target?->currency,
                 implode(' ', (array) $c->conflict_product_ids),
                 $c->reason,
+                (string) ($c->kind ?? CardMatchCandidate::KIND_MERGE),
+                self::signal($c) ?? '',
+                self::planPositions($c),
+                is_array($c->plan) && is_array($c->plan['suggested'] ?? null)
+                    ? (string) ($c->plan['suggested']['common_name'] ?? '')
+                    : '',
             ], ';');
         }
         fclose($handle);
@@ -136,6 +156,63 @@ final class MatchCandidatesCommand extends Command
         $name = $card?->name ?? ($snapshot['name'] ?? '');
 
         return '#'.($card?->id ?? '—').' ['.$sku.'] '.mb_substr((string) $name, 0, 40);
+    }
+
+    private static function kindLabel(CardMatchCandidate $c): string
+    {
+        return match ((string) ($c->kind ?? CardMatchCandidate::KIND_MERGE)) {
+            CardMatchCandidate::KIND_MERGE => 'połącz',
+            CardMatchCandidate::KIND_SIZE_MERGE => 'rozmiary',
+            CardMatchCandidate::KIND_SPLIT => 'rozdzielanie',
+            default => (string) $c->kind,
+        };
+    }
+
+    private static function signal(CardMatchCandidate $c): ?string
+    {
+        return is_array($c->plan) && is_string($c->plan['signal'] ?? null) ? $c->plan['signal'] : null;
+    }
+
+    private static function signalLabel(?string $signal): string
+    {
+        return match ($signal) {
+            null => '—',
+            CardMatchCandidate::SIGNAL_SIZE => 'rozmiar',
+            CardMatchCandidate::SIGNAL_COLOR => 'kolor',
+            CardMatchCandidate::SIGNAL_UNKNOWN => 'nie wiadomo',
+            default => $signal,
+        };
+    }
+
+    /**
+     * Plan „pozycja → karta” w jednej komórce: „6X00/S→#40819|6X00/M→#40820”. Pozycja bez kodu u dystrybutora —
+     * klucz pozycji; trafiająca w kilka kart — „#a/#b”; bez karty — „—”.
+     */
+    private static function planPositions(CardMatchCandidate $c): string
+    {
+        if (! is_array($c->plan) || ! is_array($c->plan['positions'] ?? null)) {
+            return '';
+        }
+        $parts = [];
+        foreach ($c->plan['positions'] as $position) {
+            if (! is_array($position)) {
+                continue;
+            }
+            $code = trim((string) ($position['remote_sku'] ?? ''));
+            if ($code === '') {
+                $code = trim((string) ($position['position_key'] ?? ''));
+            }
+            if (isset($position['target_product_id'])) {
+                $target = '#'.(int) $position['target_product_id'];
+            } elseif (is_array($position['target_ids'] ?? null) && $position['target_ids'] !== []) {
+                $target = implode('/', array_map(static fn (mixed $id): string => '#'.(int) $id, $position['target_ids']));
+            } else {
+                $target = '—';
+            }
+            $parts[] = $code.'→'.$target;
+        }
+
+        return implode('|', $parts);
     }
 
     private static function keyLabel(CardMatchCandidate $c): string

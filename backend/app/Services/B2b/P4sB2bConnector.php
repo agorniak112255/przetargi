@@ -39,7 +39,7 @@ use RuntimeException;
  * jest pomijana — to PDF złożony przez platformę z tych samych pól karty (sprawdzone 23.09.2026 na 11.935), a ma
  * 200–360 KB na każdym z 3370 wyrobów.
  */
-final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
+final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
 {
     public const SUPPLIER = 'P4S';
 

@@ -35,7 +35,7 @@ use RuntimeException;
  * zakładki „Opis”, normy, sektory, zagrożenia i dane handlowe wersji — do tabelki sklepu (B2bShopFieldSource), nie do
  * opisu. Normy z poziomami także jako fakty producenta (B2bNormFactSource) — dosłownie („EN 388” → „2 1 2 1 X”).
  */
-final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bNormFactSource, B2bRunSummaryAware, B2bShopFieldSource
+final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bNormFactSource, B2bRunSummaryAware, B2bShopFieldSource
 {
     private const BRAND = 'Delta Plus';
 

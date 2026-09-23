@@ -44,7 +44,7 @@ use RuntimeException;
  *
  * Producent: marka wyrobu ze sklepu (manufacturer_name); wyrób bez marki — „MAVIBO” (liczone w podsumowaniu).
  */
-final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
+final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
 {
     /** Producent przyjęty dla wyrobu, któremu sklep nie podał marki. */
     public const FALLBACK_BRAND = 'MAVIBO';

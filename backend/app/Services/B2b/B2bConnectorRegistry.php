@@ -143,6 +143,14 @@ class B2bConnectorRegistry
         return $class !== null && is_a($class, B2bManufacturerSite::class, true);
     }
 
+    /** Czy łącznik sam łączy rozmiary tej samej ceny w jedną kartę (B2bGroupsSizes). */
+    public function groupsSizes(?string $key): bool
+    {
+        $class = $key !== null ? $this->classFor($key) : null;
+
+        return $class !== null && is_a($class, B2bGroupsSizes::class, true);
+    }
+
     /** Czy łącznik loguje się u dostawcy. Witryna publiczna (protekt.pl) hasła nie ma. */
     public function requiresPassword(?string $key): bool
     {

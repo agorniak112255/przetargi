@@ -45,6 +45,8 @@ class CardMatchController extends Controller
     {
         $data = $request->validate([
             'status' => ['nullable', 'string', Rule::in(CardMatchCandidate::STATUSES)],
+            // bez rodzaju — wszystkie (zakładki „Niepewne”, „Odrzucone”, „Zrobione”)
+            'kind' => ['nullable', 'string', Rule::in(CardMatchCandidate::KINDS)],
             'page' => ['nullable', 'integer', 'min:1'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:'.self::MAX_PER_PAGE],
         ]);
@@ -53,6 +55,9 @@ class CardMatchController extends Controller
         $query = CardMatchCandidate::query()
             ->with('decider:id,name')
             ->where('status', $status);
+        if (isset($data['kind'])) {
+            $query->where('kind', (string) $data['kind']);
+        }
         if (in_array($status, [CardMatchCandidate::STATUS_REJECTED, CardMatchCandidate::STATUS_MERGED], true)) {
             $query->orderByDesc('decided_at')->orderByDesc('id');
         } else {
@@ -155,14 +160,52 @@ class CardMatchController extends Controller
     }
 
     /**
-     * @return array{pending: int, conflict: int, rejected: int, merged: int, refreshed_at: string|null}
+     * Liczniki statusów (wszystkie rodzaje razem — jak przed krokiem 5), te same liczniki w podziale na rodzaj
+     * i pomiar sygnału propozycji z planem (do decyzji i niepewne, bez kind=merge).
+     *
+     * @return array{pending: int, conflict: int, rejected: int, merged: int, refreshed_at: string|null, by_kind: array<string, array<string, int>>, signals: array<string, int>}
      */
     private function summaryPayload(?string $refreshedAt = null): array
     {
-        $counts = CardMatchCandidate::query()
-            ->selectRaw('status, count(*) as aggregate')
-            ->groupBy('status')
-            ->pluck('aggregate', 'status');
+        $totals = array_fill_keys(CardMatchCandidate::STATUSES, 0);
+        $byKind = array_fill_keys(CardMatchCandidate::KINDS, $totals);
+        foreach (CardMatchCandidate::query()
+            ->toBase()
+            ->select(['kind', 'status'])
+            ->selectRaw('count(*) as aggregate')
+            ->groupBy('kind', 'status')
+            ->get() as $row) {
+            $status = (string) $row->status;
+            $kind = (string) $row->kind;
+            if (! array_key_exists($status, $totals)) {
+                continue;
+            }
+            $totals[$status] += (int) $row->aggregate;
+            if (array_key_exists($kind, $byKind)) {
+                $byKind[$kind][$status] += (int) $row->aggregate;
+            }
+        }
+
+        $signals = [
+            CardMatchCandidate::SIGNAL_SIZE => 0,
+            CardMatchCandidate::SIGNAL_COLOR => 0,
+            CardMatchCandidate::SIGNAL_UNKNOWN => 0,
+        ];
+        foreach (CardMatchCandidate::query()
+            ->toBase()
+            ->select('plan->signal as signal')
+            ->selectRaw('count(*) as aggregate')
+            ->whereIn('status', [CardMatchCandidate::STATUS_PENDING, CardMatchCandidate::STATUS_CONFLICT])
+            ->where('kind', '!=', CardMatchCandidate::KIND_MERGE)
+            ->groupBy('plan->signal')
+            ->get() as $row) {
+            // plan bez sygnału (nie powinien się zdarzyć przy kind != merge) liczony jako niepewny — nie jako rozmiar
+            $signal = is_string($row->signal) && array_key_exists($row->signal, $signals)
+                ? $row->signal
+                : CardMatchCandidate::SIGNAL_UNKNOWN;
+            $signals[$signal] += (int) $row->aggregate;
+        }
+
         if ($refreshedAt === null) {
             // odświeżenie ustawia last_seen_at wszystkim propozycjom, które znalazło
             $last = CardMatchCandidate::query()->max('last_seen_at');
@@ -170,17 +213,20 @@ class CardMatchController extends Controller
         }
 
         return [
-            'pending' => (int) ($counts[CardMatchCandidate::STATUS_PENDING] ?? 0),
-            'conflict' => (int) ($counts[CardMatchCandidate::STATUS_CONFLICT] ?? 0),
-            'rejected' => (int) ($counts[CardMatchCandidate::STATUS_REJECTED] ?? 0),
-            'merged' => (int) ($counts[CardMatchCandidate::STATUS_MERGED] ?? 0),
+            'pending' => $totals[CardMatchCandidate::STATUS_PENDING],
+            'conflict' => $totals[CardMatchCandidate::STATUS_CONFLICT],
+            'rejected' => $totals[CardMatchCandidate::STATUS_REJECTED],
+            'merged' => $totals[CardMatchCandidate::STATUS_MERGED],
             'refreshed_at' => $refreshedAt,
+            'by_kind' => $byKind,
+            'signals' => $signals,
         ];
     }
 
     /**
      * Propozycje w kształcie CardMatch (kontrakt ekranu). Stała liczba zapytań niezależnie od liczby wierszy:
-     * karty, zdjęcia, sloty cen (+ cenniki) i konta B2B — po jednym zapytaniu na stronę.
+     * karty (także karty producenta z planu „pozycja → karta”), zdjęcia, sloty cen (+ cenniki) i konta B2B — po
+     * jednym zapytaniu na stronę.
      *
      * @param  Collection<int, CardMatchCandidate>  $candidates  z załadowanym decider
      * @return list<array<string, mixed>>
@@ -188,7 +234,11 @@ class CardMatchController extends Controller
     private function present(Collection $candidates): array
     {
         $productIds = $candidates
-            ->flatMap(static fn (CardMatchCandidate $c): array => [(int) $c->source_product_id, (int) $c->target_product_id])
+            ->flatMap(static fn (CardMatchCandidate $c): array => [
+                (int) $c->source_product_id,
+                (int) $c->target_product_id,
+                ...self::planProductIds($c->plan),
+            ])
             ->filter()
             ->unique()
             ->values()
@@ -260,6 +310,10 @@ class CardMatchController extends Controller
         return $candidates->map(static fn (CardMatchCandidate $c): array => [
             'id' => (int) $c->id,
             'status' => (string) $c->status,
+            'kind' => (string) ($c->kind ?? CardMatchCandidate::KIND_MERGE),
+            'signal' => is_array($c->plan) && is_string($c->plan['signal'] ?? null) ? $c->plan['signal'] : null,
+            'plan_hash' => $c->plan_hash,
+            'plan' => self::presentPlan($c->plan, $brief),
             'matched_by' => $c->matched_by,
             'matched_value' => $c->matched_value,
             'matched_source_key' => $c->matched_source_key,
@@ -277,5 +331,55 @@ class CardMatchController extends Controller
             'source_snapshot' => is_array($c->source_snapshot) ? $c->source_snapshot : null,
             'target' => $brief($c->target_product_id !== null ? (int) $c->target_product_id : null),
         ])->values()->all();
+    }
+
+    /**
+     * Karty wskazane w planie „pozycja → karta” — do tych samych hurtowych zapytań co karty propozycji.
+     *
+     * @return list<int>
+     */
+    private static function planProductIds(mixed $plan): array
+    {
+        if (! is_array($plan) || ! is_array($plan['positions'] ?? null)) {
+            return [];
+        }
+        $ids = [];
+        foreach ($plan['positions'] as $position) {
+            if (! is_array($position)) {
+                continue;
+            }
+            if (isset($position['target_product_id'])) {
+                $ids[] = (int) $position['target_product_id'];
+            }
+            foreach (is_array($position['target_ids'] ?? null) ? $position['target_ids'] : [] as $id) {
+                $ids[] = (int) $id;
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Plan jak w bazie (CardMatchFinder), każda pozycja z kartą producenta w kształcie CardBrief (null: pozycja bez
+     * karty albo trafiająca w kilka kart — wtedy target_ids). Karta usunięta po odświeżeniu też daje null.
+     *
+     * @param  callable(?int): ?array<string, mixed>  $brief
+     * @return array<string, mixed>|null
+     */
+    private static function presentPlan(mixed $plan, callable $brief): ?array
+    {
+        if (! is_array($plan)) {
+            return null;
+        }
+        if (is_array($plan['positions'] ?? null)) {
+            $plan['positions'] = array_values(array_map(
+                static fn (mixed $position): mixed => is_array($position)
+                    ? array_merge($position, ['target' => $brief(isset($position['target_product_id']) ? (int) $position['target_product_id'] : null)])
+                    : $position,
+                $plan['positions'],
+            ));
+        }
+
+        return $plan;
     }
 }

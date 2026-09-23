@@ -151,7 +151,7 @@ final class ProductSizeMergeService
                 continue;
             }
             // karta modelu zostaje: to samo id, jej powiązania innych kont, pozycje przetargów, nazwa i SKU
-            $winner = $model ?? $this->pickWinner($items);
+            $winner = $model ?? $this->preferredKeeper($items);
             $losers = array_values(array_filter(
                 $items,
                 static fn (Product $p): bool => (int) $p->id !== (int) $winner->id
@@ -282,9 +282,13 @@ final class ProductSizeMergeService
     }
 
     /**
+     * Karta, która zostaje przy łączeniu rozmiarów: rdzeń SKU innej karty, zdjęcie i opis, gotowy opis; remis —
+     * pierwsza w kolejności podanej listy. Także podpowiedź „Zostanie karta” propozycji łączenia rozmiarów
+     * (CardMatchFinder) — karty potrzebują sku, images_count, description, name i enrichment_status.
+     *
      * @param  list<Product>  $variants
      */
-    private function pickWinner(array $variants): Product
+    public function preferredKeeper(array $variants): Product
     {
         $knownStems = [];
         foreach ($variants as $product) {

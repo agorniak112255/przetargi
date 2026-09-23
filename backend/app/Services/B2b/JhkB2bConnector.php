@@ -48,7 +48,7 @@ use RuntimeException;
  * (MOO…), w pozostałych JHK. Witryna należy do producenta JHK (B2bManufacturerSite, marka JHK), więc opis stąd
  * może nadpisać opis kart JHK — kart MOONTEX już nie.
  */
-final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
+final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
 {
     public const BRAND = 'JHK';
 

@@ -74,6 +74,7 @@ final class CardMatchMerger
         try {
             DB::transaction(function () use ($candidate, $user): void {
                 $locked = $this->lock($candidate);
+                $this->refuseOtherKinds($locked);
                 if ($locked->status !== CardMatchCandidate::STATUS_PENDING) {
                     throw new DomainException('Propozycja #'.$locked->id.' ma status „'.$locked->status
                         .'” — połączyć można tylko propozycję do decyzji.');
@@ -188,6 +189,26 @@ final class CardMatchMerger
     }
 
     /**
+     * „Połącz” łączy tylko parę karta dystrybutora → jedna karta producenta (kind=merge). Łączenie rozmiarów
+     * i rozdzielanie (plan „pozycja → karta”) mają w tej wersji tylko podgląd i odrzucenie — mergeDuplicate
+     * z target_product_id=null i tak by nie zadziałało, ale powód ma mówić, co zrobić.
+     */
+    private function refuseOtherKinds(CardMatchCandidate $locked): void
+    {
+        $kind = (string) ($locked->kind ?? CardMatchCandidate::KIND_MERGE);
+        if ($kind === CardMatchCandidate::KIND_MERGE) {
+            return;
+        }
+        $what = match ($kind) {
+            CardMatchCandidate::KIND_SIZE_MERGE => 'łączenie rozmiarów',
+            CardMatchCandidate::KIND_SPLIT => 'rozdzielanie',
+            default => 'nieznany rodzaj („'.$kind.'”)',
+        };
+
+        throw new DomainException('Ta propozycja to '.$what.' — ta decyzja będzie dostępna w kolejnej wersji ekranu. Możesz ją odrzucić.');
+    }
+
+    /**
      * Strażnicy niezależni od reguł dopasowania — to, czego scalenie nie umie przenieść albo po czym coś by zginęło.
      */
     private function guard(Product $source, Product $target): void
@@ -219,9 +240,15 @@ final class CardMatchMerger
     /** Ponowna weryfikacja kluczem: ten sam cel i pewna para (nie konflikt). */
     private function verify(CardMatchCandidate $candidate, Product $source): void
     {
-        $result = $this->container->make(CardMatchFinder::class)->evaluate($source);
+        $result = $this->container->make(CardMatchFinder::class)->evaluate($source, true);
         if ($result === null) {
             throw new DomainException('Karta dystrybutora nie ma już wspólnego klucza z kartą producenta — odśwież propozycje.');
+        }
+        // klucze karty wskazują dziś kilka kart producenta (łączenie rozmiarów albo rozdzielanie) — to inna decyzja
+        $kind = (string) ($result['kind'] ?? CardMatchCandidate::KIND_MERGE);
+        if ($kind !== CardMatchCandidate::KIND_MERGE) {
+            throw new DomainException('Propozycja zmieniła rodzaj — klucze karty dystrybutora wskazują teraz kilka kart producenta ('
+                .($kind === CardMatchCandidate::KIND_SIZE_MERGE ? 'łączenie rozmiarów' : 'rozdzielanie').'). Odśwież propozycje.');
         }
         $status = (string) ($result['status'] ?? '');
         $targetId = isset($result['target_product_id']) ? (int) $result['target_product_id'] : null;

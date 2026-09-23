@@ -30,7 +30,7 @@ use RuntimeException;
  * Opis: pole Description dosłownie. Portal nie podaje norm ani certyfikatów — łącznik ich nie dopisuje.
  * „Brak tekstu w tym języku” to komunikat portalu, nie wartość — pole traktujemy jako puste.
  */
-final class MascotB2bConnector implements B2bConnector, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
+final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
 {
     public const BRAND = 'MASCOT';
 

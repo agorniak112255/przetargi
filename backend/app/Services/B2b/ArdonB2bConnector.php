@@ -40,7 +40,7 @@ use RuntimeException;
  * sluchu…”). Taki opis oznaczamy jako obcojęzyczny (B2bForeignTextCards), a synchronizacja zleca tłumaczenie
  * na polski. Rozpoznajemy go po literach, których polszczyzna nie ma (isForeignText).
  */
-final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bRunSummaryAware, B2bShopFieldSource
+final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bGroupsSizes, B2bRunSummaryAware, B2bShopFieldSource
 {
     private const SHOP_SECTION = 'Parametry';
 
