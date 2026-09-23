@@ -4320,7 +4320,46 @@ final class ProductAiSearchService
             ->get()
             ->values();
 
-        return $this->uniqueProducts($bySku->concat($byName), $cap);
+        if ($bySku->isNotEmpty() || $byName->isNotEmpty()) {
+            return $this->uniqueProducts($bySku->concat($byName), $cap);
+        }
+
+        return $this->uniqueProducts($this->productsByShopFieldCodes($codes, $cap), $cap);
+    }
+
+    /**
+     * Zapasowe wyjście dla dawnego numeru katalogowego producenta: bywa, że siedzi już tylko
+     * w tabelce danych sklepowych. Import cennika 3M przeniósł karty na numery globalne
+     * (1575818 → 7000103989), a stary numer został w tabelce — wyszukiwanie po kodzie modelu
+     * czytało wtedy sam SKU i nazwę, więc nie znajdowało po nim nic. Kartę wyławiał okrężnie
+     * dopiero indeks tekstowy, a ten przy zapytaniu „3M 1575818” rozmywał się na setkach kart
+     * tej samej marki i klient dostawał pustkę.
+     *
+     * Pytamy dopiero wtedy, gdy SKU ani nazwa nic nie dały: kolumna nie ma indeksu, a takie
+     * `LIKE` kosztuje na produkcji ok. 210 ms wobec 0,6 ms po SKU (44 tys. kart, 23.09.2026).
+     * Dopasowanie przetargu woła to raz na pozycję, więc stały koszt byłby nie do przyjęcia.
+     *
+     * Tylko kody od pięciu znaków: krótkie („s1”, „p3”) stoją w tabelce przy połowie asortymentu.
+     *
+     * @param  list<string>  $codes
+     * @return Collection<int, Product>
+     */
+    private function productsByShopFieldCodes(array $codes, int $cap): Collection
+    {
+        $long = array_values(array_filter($codes, static fn (string $c): bool => mb_strlen($c) >= 5));
+        if ($long === []) {
+            return collect();
+        }
+
+        return $this->productBaseQuery()
+            ->where(function ($outer) use ($long): void {
+                foreach ($long as $code) {
+                    $outer->orWhere('shop_fields_summary', 'like', '%'.addcslashes($code, '%_\\').'%');
+                }
+            })
+            ->limit($cap)
+            ->get()
+            ->values();
     }
 
     /**
