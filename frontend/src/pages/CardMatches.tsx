@@ -7,6 +7,10 @@ import {
   can,
   type CardBrief,
   type CardMatch,
+  type CardMatchKind,
+  type CardMatchPlan,
+  type CardMatchPlanPosition,
+  type CardMatchSignal,
   type CardMatchStatus,
   type CardMatchSummary,
 } from '../lib/api'
@@ -22,25 +26,196 @@ type Page = {
 
 const PER_PAGE = 50
 
-const TABS: Array<{ status: CardMatchStatus; label: string; empty: string }> = [
+/** Zakładka ekranu: trzy rodzaje propozycji do decyzji, potem wspólne Niepewne / Odrzucone / Zrobione. */
+type TabKey = 'merge' | 'size_merge' | 'split' | 'conflict' | 'rejected' | 'merged'
+
+type TabDef = {
+  key: TabKey
+  label: string
+  status: CardMatchStatus
+  kind: CardMatchKind | null
+  count: (s: CardMatchSummary) => number | undefined
+  empty: string
+}
+
+const TABS: TabDef[] = [
   {
-    status: 'pending',
+    key: 'merge',
     label: 'Do decyzji',
+    status: 'pending',
+    kind: 'merge',
+    count: (s) => s.by_kind?.merge?.pending,
     empty:
       'Brak propozycji. Propozycje powstają z EAN-ów i kodów producenta zapisanych przy synchronizacji kont B2B ' +
       'i imporcie cenników — kolejne pojawią się po najbliższych przebiegach.',
   },
   {
-    status: 'conflict',
-    label: 'Niepewne',
-    empty: 'Brak niepewnych par — każdy znaleziony klucz wskazuje jedną kartę producenta bez przeszkód.',
+    key: 'size_merge',
+    label: 'Łączenie rozmiarów',
+    status: 'pending',
+    kind: 'size_merge',
+    count: (s) => s.by_kind?.size_merge?.pending,
+    empty:
+      'Brak propozycji łączenia rozmiarów — żaden dystrybutor nie trzyma na jednej karcie rozmiarów, które producent ' +
+      'ma na osobnych kartach w tej samej cenie.',
   },
-  { status: 'rejected', label: 'Odrzucone', empty: 'Nic nie odrzucono.' },
-  { status: 'merged', label: 'Połączone', empty: 'Jeszcze nic nie połączono.' },
+  {
+    key: 'split',
+    label: 'Rozdzielanie',
+    status: 'pending',
+    kind: 'split',
+    count: (s) => s.by_kind?.split?.pending,
+    empty:
+      'Brak propozycji rozdzielania — żadna karta dystrybutora nie łączy wyrobów, które producent ma na osobnych kartach.',
+  },
+  {
+    key: 'conflict',
+    label: 'Niepewne',
+    status: 'conflict',
+    kind: null,
+    count: (s) => s.conflict,
+    empty: 'Brak niepewnych propozycji — każdy znaleziony klucz prowadzi do kart producenta bez przeszkód.',
+  },
+  {
+    key: 'rejected',
+    label: 'Odrzucone',
+    status: 'rejected',
+    kind: null,
+    count: (s) => s.rejected,
+    empty: 'Nic nie odrzucono.',
+  },
+  {
+    key: 'merged',
+    label: 'Zrobione',
+    status: 'merged',
+    kind: null,
+    count: (s) => s.merged,
+    empty: 'Jeszcze nic nie połączono.',
+  },
 ]
 
-function isStatus(value: string | null): value is CardMatchStatus {
-  return value === 'pending' || value === 'conflict' || value === 'rejected' || value === 'merged'
+/** Zakładka z adresu: ?tab=…, a stare odnośniki ?status=… (pending → „Do decyzji”) nadal trafiają we właściwe miejsce. */
+function tabFromParams(params: URLSearchParams): TabKey {
+  const tab = params.get('tab')
+  if (TABS.some((t) => t.key === tab)) return tab as TabKey
+  const status = params.get('status')
+  if (status === 'conflict' || status === 'rejected' || status === 'merged') return status
+  return 'merge'
+}
+
+const KIND_LABEL: Record<CardMatchKind, string> = {
+  merge: 'Połącz',
+  size_merge: 'Łączenie rozmiarów',
+  split: 'Rozdzielanie',
+}
+
+function KindBadge({ kind }: { kind: CardMatchKind }) {
+  const cls =
+    kind === 'size_merge'
+      ? 'bg-sky-100 text-sky-800'
+      : kind === 'split'
+        ? 'bg-violet-100 text-violet-800'
+        : 'bg-slate-100 text-slate-700'
+  return <span className={`inline-block rounded px-1.5 py-px text-[11px] font-medium ${cls}`}>{KIND_LABEL[kind]}</span>
+}
+
+/** Plakietka „rozmiar S (mały)” / „kolor” / „nie wiadomo”; w dymku skąd to wiemy (signal_why z API). */
+function SignalBadge({ signal, sizeLabel, why }: { signal: CardMatchSignal; sizeLabel?: string | null; why?: string }) {
+  const text =
+    signal === 'size' ? (sizeLabel ? `rozmiar ${sizeLabel}` : 'rozmiar') : signal === 'color' ? 'kolor' : 'nie wiadomo'
+  const cls =
+    signal === 'size'
+      ? 'bg-sky-100 text-sky-800'
+      : signal === 'color'
+        ? 'bg-violet-100 text-violet-800'
+        : 'bg-amber-100 text-amber-800'
+  return (
+    <span
+      className={`inline-block rounded px-1.5 py-px text-[11px] ${cls} ${why ? 'cursor-help' : ''}`}
+      title={why || undefined}
+    >
+      {text}
+    </span>
+  )
+}
+
+/** Polska liczba mnoga: 1 → one, 2–4 (bez 12–14) → few, reszta → many. */
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (n === 1) return one
+  return mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? few : many
+}
+
+/** „1 propozycja”, „3 propozycje”, „25 propozycji”. */
+function proposalsLabel(n: number): string {
+  return `${n.toLocaleString('pl-PL')} ${plural(n, 'propozycja', 'propozycje', 'propozycji')}`
+}
+
+/** Karty producenta z planu po id (do SKU w podsumowaniach pod tabelką). */
+function planCards(plan: CardMatchPlan): Map<number, CardBrief> {
+  const cards = new Map<number, CardBrief>()
+  for (const p of plan.positions) {
+    if (p.target) cards.set(p.target.id, p.target)
+  }
+  return cards
+}
+
+/** Liczba różnych kart producenta w planie (z pozycji; bez nich — z conflict_product_ids). */
+function planTargetCount(m: CardMatch, plan: CardMatchPlan): number {
+  const ids = new Set(plan.positions.map((p) => p.target_product_id).filter((id): id is number => id !== null))
+  return ids.size > 0 ? ids.size : (m.conflict_product_ids?.length ?? 0)
+}
+
+/**
+ * Zdanie „co proponujemy” z kontraktu ekranu. Niepewne (albo plan z blokadami) — lista powodów; inaczej opis
+ * rodzaju. Tylko fakty z planu: „różnych cenach” wyłącznie przy equal_prices=false, rozmiary tylko przy sygnale size.
+ */
+function planSentence(m: CardMatch, plan: CardMatchPlan): { intro: string; items: string[] } {
+  if (m.status === 'conflict' || plan.blockers.length > 0) {
+    const items = plan.blockers.map((b) => b.text).filter((t) => t !== '')
+    return {
+      intro: 'Nie da się jeszcze zdecydować automatycznie:',
+      items: items.length > 0 ? items : [m.reason ?? 'powód nieznany'],
+    }
+  }
+  const d = plan.source_label
+  const p = plan.positions[0]?.target?.manufacturer ?? m.brand ?? 'producent'
+  const n = planTargetCount(m, plan)
+  if (m.kind === 'size_merge') {
+    const sizes = (plan.suggested?.sizes ?? []).map((s) => s.label ?? s.code).join(', ')
+    return {
+      intro:
+        `${d} ma jeden wyrób w ${n} rozmiarach, ${p} ma osobną kartę na każdy rozmiar w tej samej cenie. ` +
+        `Po połączeniu: jedna karta ${p}${sizes ? ` z rozmiarami ${sizes}` : ''} i ceną ${d} obok.`,
+      items: [],
+    }
+  }
+  const after = ` Po rozdzieleniu: cena ${d} trafi na każdą z ${n} kart ${p}, a karta ${d} zniknie.`
+  if (plan.signal === 'color') {
+    return {
+      intro: `${d} trzyma ${n} ${plural(n, 'kolor', 'kolory', 'kolorów')} na jednej karcie, ${p} ma osobną kartę na każdy kolor.${after}`,
+      items: [],
+    }
+  }
+  const variants = plan.signal === 'size' ? 'rozmiarach' : 'wariantach'
+  if (!plan.equal_prices) {
+    return { intro: `${d} ma jeden wyrób w ${n} ${variants}, ${p} ma osobne karty w różnych cenach.${after}`, items: [] }
+  }
+  if (plan.signal === 'size' && !plan.same_owner) {
+    return {
+      intro: `${d} ma jeden wyrób w ${n} rozmiarach, ${p} ma osobne karty z różnych źródeł (inny właściciel karty).${after}`,
+      items: [],
+    }
+  }
+  return { intro: `${d} ma jeden wyrób w ${n} wariantach, ${p} ma osobną kartę na każdy wariant.${after}`, items: [] }
+}
+
+function positionKeyLabel(p: CardMatchPlanPosition): string | null {
+  if (!p.matched_value) return null
+  if (p.matched_by === 'ean') return `EAN ${p.matched_value}`
+  if (p.matched_by === 'manufacturer_code') return `kod producenta ${p.matched_value}`
+  return `${p.matched_by ?? 'klucz'} ${p.matched_value}`
 }
 
 function tabClass(active: boolean): string {
@@ -51,10 +226,7 @@ function tabClass(active: boolean): string {
 
 /** „1 para”, „3 pary”, „25 par”, „22 pary”. */
 function pairsLabel(n: number): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  const word = n === 1 ? 'para' : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? 'pary' : 'par'
-  return `${n.toLocaleString('pl-PL')} ${word}`
+  return `${n.toLocaleString('pl-PL')} ${plural(n, 'para', 'pary', 'par')}`
 }
 
 function priceText(price: string | null, currency: string | null): string {
@@ -185,11 +357,156 @@ function CardSide({
   )
 }
 
+/** Tabelka planu „pozycja u dystrybutora → karta producenta” + różnice cen i (size_merge) co zostanie. */
+function PlanTable({ m, plan }: { m: CardMatch; plan: CardMatchPlan }) {
+  const d = plan.source_label
+  const p = plan.positions[0]?.target?.manufacturer ?? m.brand ?? 'producenta'
+  const cards = planCards(plan)
+  const cardLabel = (id: number) => cards.get(id)?.sku ?? `#${id}`
+  const suggested = m.kind === 'size_merge' ? plan.suggested : null
+
+  return (
+    <div className="mt-2">
+      <table className="w-full text-left text-xs">
+        <thead>
+          <tr className="border-b bg-slate-50 text-[11px] text-slate-600">
+            <th className="w-44 p-1.5 font-medium">Pozycja u {d}</th>
+            <th className="p-1.5 font-medium">Karta {p}</th>
+            <th className="w-32 p-1.5 font-medium">Rozmiar / kolor</th>
+          </tr>
+        </thead>
+        <tbody>
+          {plan.positions.map((pos) => {
+            const key = positionKeyLabel(pos)
+            return (
+              <tr key={`${pos.source_key}|${pos.position_key}`} className="border-b border-slate-100 align-top">
+                <td className="p-1.5">
+                  <p className="break-words text-slate-800">{pos.label ?? <span className="text-slate-400">bez etykiety</span>}</p>
+                  <p className="break-all font-mono text-[11px] text-slate-500">{pos.remote_sku ?? pos.position_key}</p>
+                  {pos.source_label !== d && <p className="text-[11px] text-slate-500">u {pos.source_label}</p>}
+                  {key && <p className="break-all text-[11px] text-slate-500">{key}</p>}
+                </td>
+                <td className="min-w-[14rem] p-1.5">
+                  {pos.target ? (
+                    <CardSide card={pos.target} />
+                  ) : pos.target_ids && pos.target_ids.length > 0 ? (
+                    <div>
+                      <p className="text-amber-800">Wskazuje kilka kart producenta:</p>
+                      <p className="mt-0.5 flex flex-wrap gap-x-2">
+                        {pos.target_ids.map((id) => (
+                          <Link
+                            key={id}
+                            to={`/products/${id}`}
+                            target="_blank"
+                            rel="noopener"
+                            className="text-blue-600 hover:underline"
+                          >
+                            karta #{id}
+                          </Link>
+                        ))}
+                      </p>
+                    </div>
+                  ) : (
+                    <span className="text-amber-800">brak karty producenta</span>
+                  )}
+                </td>
+                <td className="p-1.5">
+                  <SignalBadge signal={pos.signal} sizeLabel={pos.size_label} why={pos.signal_why} />
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+
+      {plan.price_differences.map((diff) => (
+        <p key={diff.source_key} className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-900">
+          Różne ceny w {diff.label}:{' '}
+          {diff.values.map((v) => `${cardLabel(v.product_id)} ${priceText(v.purchase_price, v.currency)}`).join(' · ')}
+        </p>
+      ))}
+
+      {suggested && (
+        <div className="mt-1 space-y-px rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-700">
+          <p>
+            Zostanie karta:{' '}
+            <Link
+              to={`/products/${suggested.keep_product_id}`}
+              target="_blank"
+              rel="noopener"
+              className="font-mono text-blue-600 hover:underline"
+            >
+              {cardLabel(suggested.keep_product_id)}
+            </Link>
+          </p>
+          <p>Podpowiedź nazwy karty modelu: {suggested.common_name ?? '—'}</p>
+          <p>
+            Kody rozmiarów:{' '}
+            {suggested.sizes.length > 0
+              ? suggested.sizes.map((s) => `${s.label ?? '—'} ${s.code}`).join('; ')
+              : '—'}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * „Co proponujemy” dla size_merge / split: plakietka rodzaju (poza zakładkami rodzaju), zdanie po ludzku i tabelka
+ * planu — w Odrzuconych / Zrobionych zwinięta, żeby historia była gęsta.
+ */
+function PlanProposal({ m, showKind, collapsed }: { m: CardMatch; showKind: boolean; collapsed: boolean }) {
+  const plan = m.plan
+  const header =
+    showKind || m.signal === 'unknown' ? (
+      <p className="mb-1 flex flex-wrap items-center gap-2">
+        {showKind && <KindBadge kind={m.kind} />}
+        {m.signal === 'unknown' && <span className="text-[11px] text-amber-800">rozmiar czy kolor — nie wiadomo</span>}
+      </p>
+    ) : null
+
+  if (!plan) {
+    return (
+      <div>
+        {header}
+        <p className="text-amber-800">{m.reason ?? 'Brak planu tej propozycji — odśwież propozycje.'}</p>
+      </div>
+    )
+  }
+
+  const sentence = planSentence(m, plan)
+  return (
+    <div>
+      {header}
+      <p className={sentence.items.length > 0 ? 'text-amber-800' : 'text-slate-800'}>{sentence.intro}</p>
+      {sentence.items.length > 0 && (
+        <ul className="mt-0.5 list-disc pl-5 text-amber-800">
+          {sentence.items.map((t, i) => (
+            <li key={i}>{t}</li>
+          ))}
+        </ul>
+      )}
+      {collapsed ? (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-[11px] text-blue-600">pokaż pozycje ({plan.positions.length})</summary>
+          <PlanTable m={m} plan={plan} />
+        </details>
+      ) : (
+        <PlanTable m={m} plan={plan} />
+      )}
+    </div>
+  )
+}
+
 export function CardMatches() {
   const { user } = useAuth()
   const canDecide = can(user, 'card_matches.decide')
   const [params, setParams] = useSearchParams()
-  const status: CardMatchStatus = isStatus(params.get('status')) ? (params.get('status') as CardMatchStatus) : 'pending'
+  const tabKey = tabFromParams(params)
+  const tab = TABS.find((t) => t.key === tabKey) ?? TABS[0]
+  const status = tab.status
+  const kind = tab.kind
   const page = Math.max(1, Number(params.get('page')) || 1)
 
   const [summary, setSummary] = useState<CardMatchSummary | null>(null)
@@ -211,6 +528,7 @@ export function CardMatches() {
     setLoading(true)
     try {
       const qs = new URLSearchParams({ status, page: String(page), per_page: String(PER_PAGE) })
+      if (kind) qs.set('kind', kind)
       const [list, sum] = await Promise.all([
         api<Page>(`/card-matches?${qs}`),
         api<CardMatchSummary>('/card-matches/summary'),
@@ -224,7 +542,7 @@ export function CardMatches() {
     } finally {
       if (seq === requestSeq.current) setLoading(false)
     }
-  }, [status, page])
+  }, [status, kind, page])
 
   useEffect(() => {
     void load()
@@ -246,17 +564,19 @@ export function CardMatches() {
   useEffect(() => {
     setSelected({})
     lastSelectIndex.current = null
-  }, [status, page])
+  }, [tabKey, page])
 
-  function go(nextStatus: CardMatchStatus, nextPage = 1) {
+  function go(nextTab: TabKey, nextPage = 1) {
     setMsg('')
     setErr('')
     setRowErrors({})
     // Inna zakładka: nie pokazuj przez chwilę wierszy poprzedniej pod nowymi nagłówkami.
-    if (nextStatus !== status) setResult(null)
+    if (nextTab !== tabKey) setResult(null)
     setParams((prev) => {
       const next = new URLSearchParams(prev)
-      next.set('status', nextStatus)
+      next.set('tab', nextTab)
+      // stary parametr (?status=…) już niepotrzebny — zakładkę niesie ?tab
+      next.delete('status')
       if (nextPage > 1) next.set('page', String(nextPage))
       else next.delete('page')
       return next
@@ -264,10 +584,11 @@ export function CardMatches() {
   }
 
   const rows = result?.data ?? []
-  const selectableIds = rows.filter((m) => m.status === 'pending').map((m) => m.id)
+  // zaznaczanie i akcje zbiorcze tylko dla zwykłych par (kind=merge) w „Do decyzji”
+  const selectableIds = rows.filter((m) => m.status === 'pending' && m.kind === 'merge').map((m) => m.id)
   const selectedIds = selectableIds.filter((id) => selected[id])
   const allVisibleSelected = selectableIds.length > 0 && selectableIds.every((id) => selected[id])
-  const showSelect = canDecide && status === 'pending'
+  const showSelect = canDecide && tabKey === 'merge'
 
   function toggleSelected(id: number, shiftKey: boolean) {
     const index = selectableIds.indexOf(id)
@@ -408,7 +729,15 @@ export function CardMatches() {
     try {
       const sum = await api<CardMatchSummary>('/card-matches/refresh', { method: 'POST', body: '{}' })
       setSummary(sum)
-      setMsg(`Propozycje przeliczone: do decyzji ${sum.pending}, niepewne ${sum.conflict}.`)
+      const byKind = sum.by_kind
+      setMsg(
+        `Propozycje przeliczone: do decyzji ${sum.pending}` +
+          (byKind
+            ? ` (połącz ${byKind.merge?.pending ?? 0}, rozmiary ${byKind.size_merge?.pending ?? 0}, ` +
+              `rozdzielanie ${byKind.split?.pending ?? 0})`
+            : '') +
+          `, niepewne ${sum.conflict}.`,
+      )
       await load()
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd odświeżania propozycji')
@@ -417,9 +746,92 @@ export function CardMatches() {
     }
   }
 
-  const tab = TABS.find((t) => t.status === status) ?? TABS[0]
   const decided = status === 'merged' || status === 'rejected'
-  const colCount = 4 + (showSelect ? 1 : 0)
+  // „Łączenie rozmiarów” / „Rozdzielanie”: tylko do odczytu i odrzucenia — trzy kolumny, bez zaznaczania
+  const planTab = tabKey === 'size_merge' || tabKey === 'split'
+  // Niepewne / Odrzucone / Zrobione mieszają rodzaje — przy każdym wierszu plakietka rodzaju
+  const mixedTab = !planTab && tabKey !== 'merge'
+  const colCount = planTab ? 3 : 4 + (showSelect ? 1 : 0)
+
+  /** Ostatnia kolumna wiersza: akcje (Połącz tylko dla kind=merge), powód niepewnej pary albo zapis decyzji. */
+  function renderActions(m: CardMatch) {
+    const rowErr = rowErrors[m.id]
+    const isPlan = m.kind === 'size_merge' || m.kind === 'split'
+    const rejectButton = (
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void rejectOne(m)}
+        className="rounded border border-slate-300 px-2.5 py-1 text-[11px] hover:bg-slate-50 disabled:opacity-50"
+      >
+        {busyRowId === m.id && isPlan ? '…' : 'Odrzuć'}
+      </button>
+    )
+    return (
+      <>
+        {m.status === 'pending' && canDecide && !isPlan && (
+          <div className="flex flex-wrap gap-1">
+            <button
+              type="button"
+              disabled={busy || !m.source || !m.target}
+              onClick={() => void mergeOne(m)}
+              className="rounded bg-blue-600 px-2.5 py-1 text-[11px] text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {busyRowId === m.id ? '…' : 'Połącz'}
+            </button>
+            {rejectButton}
+          </div>
+        )}
+        {m.status === 'pending' && canDecide && isPlan && <div className="flex flex-wrap gap-1">{rejectButton}</div>}
+        {m.status === 'pending' && !canDecide && <span className="text-slate-400">czeka na decyzję</span>}
+        {m.status === 'pending' && isPlan && (
+          <p className="mt-1 text-[11px] text-slate-500">
+            Decyzja o {m.kind === 'size_merge' ? 'połączeniu rozmiarów' : 'rozdzieleniu'} będzie dostępna wkrótce — na
+            razie sprawdź plan albo odrzuć.
+          </p>
+        )}
+        {m.status === 'conflict' && (
+          <div>
+            {/* przy planie powody są w „Co proponujemy” — tu bez powtórzenia */}
+            {!isPlan && <p className="text-amber-800">{m.reason ?? 'Niejednoznaczne — bez łączenia.'}</p>}
+            {!isPlan && m.target && m.conflict_product_ids && m.conflict_product_ids.length > 0 && (
+              <p className="mt-1 flex flex-wrap gap-x-2 text-[11px]">
+                {m.conflict_product_ids.map((id) => (
+                  <Link
+                    key={id}
+                    to={`/products/${id}`}
+                    target="_blank"
+                    rel="noopener"
+                    className="text-blue-600 hover:underline"
+                  >
+                    karta #{id}
+                  </Link>
+                ))}
+              </p>
+            )}
+            {canDecide && <div className={isPlan ? '' : 'mt-1'}>{rejectButton}</div>}
+          </div>
+        )}
+        {decided && (
+          <div className="text-[11px] text-slate-600">
+            <p className={m.status === 'merged' ? 'font-medium text-emerald-700' : 'font-medium text-slate-700'}>
+              {m.status === 'rejected'
+                ? 'Odrzucono'
+                : m.kind === 'size_merge'
+                  ? 'Połączono rozmiary'
+                  : m.kind === 'split'
+                    ? 'Rozdzielono'
+                    : 'Połączono'}
+            </p>
+            <p>{m.decided_by?.name ?? '—'}</p>
+            <p className="text-slate-500">{m.decided_at ? formatDateTime(m.decided_at) : '—'}</p>
+            {m.reason && <p className="mt-0.5 text-slate-500">{m.reason}</p>}
+          </div>
+        )}
+        {rowErr && <p className="mt-1 text-[11px] text-red-700">{rowErr}</p>}
+      </>
+    )
+  }
 
   return (
     <div>
@@ -432,6 +844,15 @@ export function CardMatches() {
             zdjęciem głównym; ceny dystrybutora dochodzą do jej „Ceny ze źródeł”, a karta dystrybutora znika.
             Przed każdym połączeniem zapisuje się pełna kopia zapasowa.
           </p>
+          {summary?.signals && (
+            <p
+              className="mt-1 text-[11px] text-slate-500"
+              title="Propozycje z kilkoma kartami producenta (do decyzji i niepewne) — czym różnią się pozycje karty dystrybutora"
+            >
+              Pomiar: rozmiary {summary.signals.size ?? 0} · kolory {summary.signals.color ?? 0} · niepewne{' '}
+              {summary.signals.unknown ?? 0}
+            </p>
+          )}
         </div>
         <div className="flex flex-col items-end gap-1">
           {canDecide && (
@@ -456,12 +877,15 @@ export function CardMatches() {
       </div>
 
       <nav className="mb-3 flex flex-wrap gap-1 border-b border-slate-200">
-        {TABS.map((t) => (
-          <button key={t.status} type="button" className={tabClass(t.status === status)} onClick={() => go(t.status)}>
-            {t.label}
-            {summary ? <span className="ml-1 tabular-nums text-slate-500">({summary[t.status]})</span> : null}
-          </button>
-        ))}
+        {TABS.map((t) => {
+          const n = summary ? t.count(summary) : undefined
+          return (
+            <button key={t.key} type="button" className={tabClass(t.key === tabKey)} onClick={() => go(t.key)}>
+              {t.label}
+              {n !== undefined ? <span className="ml-1 tabular-nums text-slate-500">({n})</span> : null}
+            </button>
+          )
+        })}
       </nav>
 
       {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
@@ -503,7 +927,7 @@ export function CardMatches() {
                 </>
               )}
               <span className="text-xs text-slate-500">
-                {pairsLabel(result.total)}
+                {tabKey === 'merge' ? pairsLabel(result.total) : proposalsLabel(result.total)}
                 {loading ? ' · ładowanie…' : ''}
               </span>
             </div>
@@ -515,7 +939,7 @@ export function CardMatches() {
                 <button
                   type="button"
                   disabled={loading || result.current_page <= 1}
-                  onClick={() => go(status, result.current_page - 1)}
+                  onClick={() => go(tabKey, result.current_page - 1)}
                   className="rounded border border-slate-300 px-2.5 py-1 disabled:opacity-40"
                 >
                   ← Poprzednia
@@ -523,7 +947,7 @@ export function CardMatches() {
                 <button
                   type="button"
                   disabled={loading || result.current_page >= result.last_page}
-                  onClick={() => go(status, result.current_page + 1)}
+                  onClick={() => go(tabKey, result.current_page + 1)}
                   className="rounded border border-slate-300 px-2.5 py-1 disabled:opacity-40"
                 >
                   Następna →
@@ -549,15 +973,37 @@ export function CardMatches() {
                 </th>
               )}
               <th className="p-2">Karta dystrybutora</th>
-              <th className="w-48 p-2">Dlaczego to ten sam wyrób</th>
-              <th className="p-2">Karta producenta — zostaje</th>
+              {planTab ? (
+                <th className="p-2">Co proponujemy</th>
+              ) : (
+                <>
+                  <th className="w-48 p-2">{mixedTab ? 'Dlaczego / co proponujemy' : 'Dlaczego to ten sam wyrób'}</th>
+                  <th className="p-2">{mixedTab ? 'Karta producenta' : 'Karta producenta — zostaje'}</th>
+                </>
+              )}
               <th className="w-44 p-2">{decided ? 'Decyzja' : status === 'conflict' ? 'Powód' : 'Akcja'}</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((m, i) => {
-              const rowErr = rowErrors[m.id]
               const matchedFrom = sourceLabelFor(m)
+              const stripe = i % 2 === 1 ? 'bg-slate-100/60' : ''
+              if (m.kind === 'size_merge' || m.kind === 'split') {
+                // plan „pozycja → karta”: karta dystrybutora · zdanie + tabelka (w zakładkach mieszanych na dwie
+                // kolumny) · odrzucenie; bez zaznaczania i akcji zbiorczych
+                return (
+                  <tr key={m.id} className={`border-b align-top ${stripe}`}>
+                    {showSelect && <td className="p-2" />}
+                    <td className="min-w-[16rem] max-w-[24rem] p-2">
+                      <CardSide card={m.source} snapshot={m.source_snapshot} />
+                    </td>
+                    <td className="p-2" colSpan={planTab ? 1 : 2}>
+                      <PlanProposal m={m} showKind={mixedTab} collapsed={decided} />
+                    </td>
+                    <td className="p-2">{renderActions(m)}</td>
+                  </tr>
+                )
+              }
               return (
                 <tr
                   key={m.id}
@@ -588,6 +1034,11 @@ export function CardMatches() {
                     <CardSide card={m.source} snapshot={m.source_snapshot} />
                   </td>
                   <td className="p-2">
+                    {mixedTab && (
+                      <p className="mb-1">
+                        <KindBadge kind={m.kind ?? 'merge'} />
+                      </p>
+                    )}
                     <p className="text-slate-600">{keyLabel(m)}</p>
                     <p className="break-all font-mono text-[13px] font-semibold text-slate-900">{m.matched_value}</p>
                     <p className="mt-1 text-[11px] text-slate-500">
@@ -646,62 +1097,7 @@ export function CardMatches() {
                       <span className="text-slate-400">—</span>
                     )}
                   </td>
-                  <td className="p-2">
-                    {m.status === 'pending' && canDecide && (
-                      <div className="flex flex-wrap gap-1">
-                        <button
-                          type="button"
-                          disabled={busy || !m.source || !m.target}
-                          onClick={() => void mergeOne(m)}
-                          className="rounded bg-blue-600 px-2.5 py-1 text-[11px] text-white hover:bg-blue-700 disabled:opacity-50"
-                        >
-                          {busyRowId === m.id ? '…' : 'Połącz'}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void rejectOne(m)}
-                          className="rounded border border-slate-300 px-2.5 py-1 text-[11px] hover:bg-slate-50 disabled:opacity-50"
-                        >
-                          Odrzuć
-                        </button>
-                      </div>
-                    )}
-                    {m.status === 'pending' && !canDecide && (
-                      <span className="text-slate-400">czeka na decyzję</span>
-                    )}
-                    {m.status === 'conflict' && (
-                      <div>
-                        <p className="text-amber-800">{m.reason ?? 'Niejednoznaczne — bez łączenia.'}</p>
-                        {m.target && m.conflict_product_ids && m.conflict_product_ids.length > 0 && (
-                          <p className="mt-1 flex flex-wrap gap-x-2 text-[11px]">
-                            {m.conflict_product_ids.map((id) => (
-                              <Link
-                                key={id}
-                                to={`/products/${id}`}
-                                target="_blank"
-                                rel="noopener"
-                                className="text-blue-600 hover:underline"
-                              >
-                                karta #{id}
-                              </Link>
-                            ))}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                    {decided && (
-                      <div className="text-[11px] text-slate-600">
-                        <p className={m.status === 'merged' ? 'font-medium text-emerald-700' : 'font-medium text-slate-700'}>
-                          {m.status === 'merged' ? 'Połączono' : 'Odrzucono'}
-                        </p>
-                        <p>{m.decided_by?.name ?? '—'}</p>
-                        <p className="text-slate-500">{m.decided_at ? formatDateTime(m.decided_at) : '—'}</p>
-                        {m.reason && <p className="mt-0.5 text-slate-500">{m.reason}</p>}
-                      </div>
-                    )}
-                    {rowErr && <p className="mt-1 text-[11px] text-red-700">{rowErr}</p>}
-                  </td>
+                  <td className="p-2">{renderActions(m)}</td>
                 </tr>
               )
             })}

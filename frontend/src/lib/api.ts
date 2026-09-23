@@ -637,6 +637,63 @@ export type CardMatch = {
   source: CardBrief | null
   source_snapshot: { sku: string; name: string; manufacturer: string | null } | null
   target: CardBrief | null
+  /** merge = jedna karta producenta (target); size_merge / split = kilka kart, szczegóły w plan. */
+  kind: CardMatchKind
+  /** plan.signal albo null (merge). */
+  signal: CardMatchSignal | null
+  plan_hash: string | null
+  plan: CardMatchPlan | null
+}
+
+/**
+ * Rodzaj propozycji: merge — karta dystrybutora = jedna karta producenta; size_merge — dystrybutor ma jeden wyrób
+ * w rozmiarach, producent osobne karty rozmiarów (łączymy karty producenta); split — karta dystrybutora trzyma
+ * kilka wyrobów producenta (rozdzielamy).
+ */
+export type CardMatchKind = 'merge' | 'size_merge' | 'split'
+
+/** Czym różnią się pozycje: rozmiar, kolor, albo nie wiadomo (bez zgadywania). */
+export type CardMatchSignal = 'size' | 'color' | 'unknown'
+
+/** Pozycja karty dystrybutora (rozmiar / kolor u źródła) i karta producenta, w którą trafia jej klucz. */
+export type CardMatchPlanPosition = {
+  source_key: string
+  source_label: string
+  position_key: string
+  remote_sku: string | null
+  label: string | null
+  size_label: string | null
+  /** null = pozycja bez karty (bez klucza albo w kilka kart — wtedy target_ids). */
+  target_product_id: number | null
+  target_ids: number[] | null
+  target: CardBrief | null
+  matched_by: string | null
+  matched_value: string | null
+  signal: CardMatchSignal
+  /** Skąd sygnał, po ludzku (np. „etykieta P4S: rozmiar S (mały)”). */
+  signal_why: string
+}
+
+/** Plan „pozycja → karta” dla propozycji z kilkoma kartami producenta (size_merge / split). */
+export type CardMatchPlan = {
+  version: 1
+  signal: CardMatchSignal
+  source_label: string
+  same_owner: boolean
+  equal_prices: boolean
+  price_differences: Array<{
+    source_key: string
+    label: string
+    values: Array<{ product_id: number; purchase_price: string | null; currency: string | null }>
+  }>
+  blockers: Array<{ code: string; text: string }>
+  positions: CardMatchPlanPosition[]
+  /** Tylko size_merge: która karta zostaje, podpowiedź nazwy i kody rozmiarów. */
+  suggested: {
+    keep_product_id: number
+    common_name: string | null
+    sizes: Array<{ product_id: number; label: string | null; code: string }>
+  } | null
 }
 
 export type CardMatchSummary = {
@@ -645,6 +702,9 @@ export type CardMatchSummary = {
   rejected: number
   merged: number
   refreshed_at: string | null
+  by_kind: Record<CardMatchKind, { pending: number; conflict: number; rejected: number; merged: number }>
+  /** Pomiar: propozycje z kilkoma kartami (do decyzji + niepewne) wg sygnału planu. */
+  signals: Record<CardMatchSignal, number>
 }
 
 export async function downloadFile(path: string, fallbackName: string): Promise<void> {
