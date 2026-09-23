@@ -210,4 +210,24 @@ final class InquiryMailTextTest extends TestCase
 
         $this->assertSame($mail, InquiryMailText::forAnalysis($mail));
     }
+
+    public function test_forwarded_subject_is_the_clients_own(): void
+    {
+        $mail = implode("\n", [
+            'Zobacz, proszę.',
+            '--- Treść przekazanej wiadomości ---',
+            "Temat: \tRe: rękawice",
+            "Data: \tMon, 21 Sep 2026 10:00:00 +0000",
+            '',
+            'Notatka',
+            '--- Treść przekazanej wiadomości ---',
+            "Temat: \t11-571",
+            "Nadawca: \tJan <jan@example.com>",
+            '',
+            'Czy ma Pani r. 11 40-50 par?',
+        ]);
+
+        $this->assertSame('11-571', InquiryMailText::forwardedSubject($mail));
+        $this->assertNull(InquiryMailText::forwardedSubject("Temat: 11-571\nzwykły mail bez przekazania"));
+    }
 }

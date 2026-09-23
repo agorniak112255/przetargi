@@ -37,6 +37,26 @@ final class InquiryQueryText
     private const TRADE_UNIT = '(?:sztuk[aeiyę]?|szt\.?|opak\.?|op\.?|kpl\.?|komplet[a-zóy]*|zest\.?|zestaw[a-zóy]*|par[aeyę]?)';
 
     /**
+     * Słowa zapytania i tematu maila, które nie nazywają wyrobu: „Czy ma Pani może…”,
+     * „Zapytanie ofertowe”, „Pilne”. Lista zamknięta — słowo spoza niej liczy się
+     * jako nazwa, bo lepiej nie użyć tematu niż skleić wiersz z cudzym wyrobem.
+     */
+    private const INQUIRY_WORDS = [
+        'czy', 'pan', 'pani', 'pana', 'panu', 'państwo', 'panstwo', 'może', 'moze', 'można', 'mozna',
+        'jaka', 'jaki', 'jakie', 'jaką', 'jest', 'będzie', 'cena', 'ceny', 'cenę', 'cene', 'cenie', 'cennik',
+        'koszt', 'kosztuje', 'proszę', 'prosze', 'prosimy', 'poproszę', 'poprosze', 'potrzebuję',
+        'potrzebuje', 'potrzebujemy', 'macie', 'posiadacie', 'mają', 'maja', 'dostępne', 'dostepne',
+        'dostępny', 'dostępność', 'dostepnosc', 'dzień', 'dzien', 'dobry', 'witam', 'zapytanie',
+        'zapytania', 'ofertowe', 'ofertowy', 'oferta', 'ofertę', 'oferte', 'oferty', 'wycena', 'wycenę',
+        'wycene', 'wyceny', 'zamówienie', 'zamowienie', 'zamówienia', 'zamowienia', 'pytanie', 'prośba',
+        'prosba', 'pilne', 'pilnie', 'dotyczy', 'sztuk', 'sztuki', 'pary', 'rozmiar', 'rozmiarze',
+        'rozmiary', 'ilość', 'ilosc', 'termin', 'dostawa', 'dostawy', 'również', 'rowniez', 'także',
+        'takze', 'oraz', 'około', 'okolo', 'tylko', 'jeszcze', 'bardzo', 'dziękuję', 'dziekuje',
+        'pozdrawiam', 'informacja', 'sprawa', 'temat', 'cenowe', 'cenowa', 'cenowy', 'cenowego',
+        'produkt', 'produkty', 'produktów', 'produktow', 'towar', 'towary', 'asortyment',
+    ];
+
+    /**
      * Liczba w zapisie cenowym: „4 497,00”, „1.250,00”, „24,00”, „137”. Grupy tysięcy
      * bierzemy w całości — inaczej z „1.250,00” wzorzec dopasowywał samo „1.250” i cena
      * z kropką tysięcy zostawała w cytacie.
@@ -117,6 +137,89 @@ final class InquiryQueryText
         $name = preg_replace('/\s+/u', ' ', $name) ?? $name;
 
         return trim($name, " \t\n\r\0\x0B,;:.-–—");
+    }
+
+    /**
+     * Wyrób z tematu maila. Klient bywa pisze model w temacie („11-571”), a w treści
+     * już tylko „r. 11 – 40-50 par, jaka cena?”. Zdejmujemy przedrostki odpowiedzi
+     * i przekazania, datę, numer sprawy i słowa, które niczego nie nazywają
+     * („Zapytanie ofertowe”, „Pilne”). Gdy nie zostaje nazwa ani kod wyrobu — null.
+     */
+    public static function subjectProductHint(?string $subject): ?string
+    {
+        $text = trim((string) $subject);
+        do {
+            $before = $text;
+            $text = preg_replace('/^\s*\[[^\]]{0,40}\]\s*/u', '', $text) ?? $text;
+            $text = preg_replace('/^\s*(?:re|fwd?|fw|odp|pd|wg|aw|tr|sv)\s*(?:\[\d+\]|\(\d+\))?\s*:\s*/iu', '', $text) ?? $text;
+        } while ($text !== $before);
+
+        // numer sprawy i data to nie wyrób, a wyglądają jak kod
+        $text = preg_replace('/(?<![\p{L}])(?:nr|numer)\.?\s*\S+/iu', ' ', $text) ?? $text;
+        $text = preg_replace('/(?<![\d])(?:\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}|\d{4}-\d{2}-\d{2})(?![\d])/u', ' ', $text) ?? $text;
+        // „Zapytanie ofertowe 056646136” — w temacie goły ciąg cyfr to numer sprawy
+        $text = preg_replace('/(?<![\p{L}\d.\-])\d{5,}(?![\p{L}\d.\-])/u', ' ', $text) ?? $text;
+        $text = self::withoutWords($text, self::INQUIRY_WORDS);
+        $text = trim(preg_replace('/\s+/u', ' ', $text) ?? $text, " \t\n\r\0\x0B,;:.-–—?!*\"'()");
+
+        if ($text === '' || ! self::namesProduct($text)) {
+            return null;
+        }
+
+        return mb_substr($text, 0, 80);
+    }
+
+    /**
+     * Czy wiersz zapytania sam nazywa wyrób — słowem albo kodem. Rozmiar, ilość
+     * z jednostką i zwroty zapytania („Czy ma Pani może … jaka cena?”) nie nazywają
+     * niczego: wiersz „r. 11 40-50 par” mówi, ile i jaki rozmiar, ale nie co.
+     */
+    public static function namesProduct(string $text): bool
+    {
+        $rest = self::dropPrices($text);
+        $rest = preg_replace('/(?<![\p{L}])(?:rozmiar\p{L}*|rozm\.?|roz\.?|r\.)\s*\S+/iu', ' ', $rest) ?? $rest;
+        // lookbehind: „PX140 - 30 par” — ogon kodu nie jest początkiem zakresu ilości
+        $rest = preg_replace('/(?<![\p{L}\d.,])\d+(?:\s*[-–]\s*\d+)?\s*'.self::TRADE_UNIT.'(?![\p{L}])/iu', ' ', $rest) ?? $rest;
+        $rest = self::withoutWords($rest, self::INQUIRY_WORDS);
+
+        return self::hasProductWord($rest) || self::hasProductCode($rest);
+    }
+
+    /**
+     * Kod wyrobu: litery z cyframi („PX140”, „11571VP”) albo grupy cyfr z łącznikiem,
+     * z których jedna ma co najmniej trzy cyfry („11-571”). Krótkie oznaczenia
+     * („S3”, „M/8”) to klasa albo rozmiar, a „40-50” to zakres ilości.
+     */
+    private static function hasProductCode(string $text): bool
+    {
+        preg_match_all('/(?<![\p{L}\d])[\p{L}\d]+(?:[-.][\p{L}\d]+)*(?![\p{L}\d])/u', $text, $m);
+        foreach ($m[0] as $token) {
+            $compact = preg_replace('/[-.]/u', '', $token) ?? $token;
+            if (mb_strlen($compact) < 4 || preg_match('/\d/u', $compact) !== 1) {
+                continue;
+            }
+            // wymiar i miara („40x60cm”, „500ml”) opisują wyrób, ale go nie nazywają
+            if (preg_match('/^\d+(?:[.,]\d+)?(?:[x×]\d|(?:mm|cm|m|mb|g|kg|l|ml|db|v|kv)$)/iu', $token) === 1) {
+                continue;
+            }
+            $lettersAndDigits = preg_match('/\p{L}/u', $compact) === 1;
+            $groupedDigits = preg_match('/\d{3,}/u', $token) === 1 && preg_match('/\d[-.]\d/u', $token) === 1;
+            if ($lettersAndDigits || $groupedDigits || preg_match('/^\d{5,}$/u', $compact) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  list<string>  $words
+     */
+    private static function withoutWords(string $text, array $words): string
+    {
+        $pattern = '/(?<![\p{L}\d])(?:'.implode('|', array_map(static fn (string $w): string => preg_quote($w, '/'), $words)).')(?![\p{L}\d])/iu';
+
+        return preg_replace($pattern, ' ', $text) ?? $text;
     }
 
     /** Czy w tekście została choć jedna nazwa wyrobu (słowo, nie wymiar). */

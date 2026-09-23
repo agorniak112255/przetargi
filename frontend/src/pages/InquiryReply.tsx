@@ -65,6 +65,7 @@ const flagLabel: Record<InquiryFlag, string> = {
   qty_unknown: 'brak ilości w mailu',
   requirement_unconfirmed: 'karta nie potwierdza warunku z zapytania',
   requirement_note: 'warunek szczególny do przeczytania',
+  product_from_subject: 'wyrób wzięty z tematu maila',
 }
 
 const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [

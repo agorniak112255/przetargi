@@ -61,6 +61,7 @@ export type InquiryFlag =
   | 'qty_unknown'
   | 'requirement_unconfirmed'
   | 'requirement_note'
+  | 'product_from_subject'
 
 /**
  * Warunek szczególny z wiersza klienta („w szczególności na kwas siarkowy 96%”).

@@ -70,6 +70,30 @@ final class InquiryMailText
     }
 
     /**
+     * Temat z nagłówka przekazanej wiadomości („Temat: 11-571”) — temat, który nadał
+     * sam klient. Przy kilku przekazaniach bierzemy najgłębsze, bo tam stoi oryginał.
+     * Brak nagłówka przekazania z tematem = null.
+     */
+    public static function forwardedSubject(string $raw): ?string
+    {
+        $lines = explode("\n", str_replace(["\r\n", "\r"], "\n", self::stripQuotedLines($raw)));
+        $subject = null;
+        foreach ($lines as $i => $line) {
+            if (! self::matchesAny(trim($line), self::FORWARD_MARKERS)) {
+                continue;
+            }
+            $end = self::skipHeaderBlock($lines, $i + 1);
+            for ($j = $i + 1; $j < $end; $j++) {
+                if (preg_match('/^(?:temat|subject)\s*:\s*(.+)$/iu', trim($lines[$j]), $m) === 1) {
+                    $subject = trim($m[1]);
+                }
+            }
+        }
+
+        return $subject === '' ? null : $subject;
+    }
+
+    /**
      * Część maila odcięta przed analizą: podpis, stopka firmowa, klauzula
      * poufności albo początek cytatu. Z niej `InquirySignature` wyjmuje kontakt.
      *

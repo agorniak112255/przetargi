@@ -261,4 +261,56 @@ final class InquiryQueryTextTest extends TestCase
         $this->assertSame('', InquiryQueryText::forCatalog(''));
         $this->assertSame('', InquiryQueryText::forCatalog('c. netto......24,00 PLN/szt'));
     }
+
+    /**
+     * @return list<array{0: string|null, 1: string|null}>
+     */
+    public static function subjects(): array
+    {
+        return [
+            ['Fwd: 11-571', '11-571'],
+            ['RE: Fwd: Zapytanie ofertowe - rękawice PX140', 'rękawice PX140'],
+            ['Odp: [EXTERNAL] HyFlex 11-571', 'HyFlex 11-571'],
+            ['Zapytanie ofertowe', null],
+            ['Pilne!', null],
+            ['Zamówienie nr 45/2026', null],
+            ['Zapytanie 23.09.2026', null],
+            // tematy z produkcji: numer sprawy i przymiotnik zapytania to nie wyrób
+            ['Fwd: Zapytanie ofertowe 056646136', null],
+            ['Fwd: zapytanie cenowe', null],
+            ['Fwd: Zapytanie - Płukanki Cederroth', 'Płukanki Cederroth'],
+            ['', null],
+            [null, null],
+        ];
+    }
+
+    #[DataProvider('subjects')]
+    public function test_subject_hint_keeps_only_what_names_a_product(?string $subject, ?string $expected): void
+    {
+        $this->assertSame($expected, InquiryQueryText::subjectProductHint($subject));
+    }
+
+    /**
+     * @return list<array{0: string, 1: bool}>
+     */
+    public static function quoteLines(): array
+    {
+        return [
+            // zapytanie #45: rozmiar i ilość, żadnego wyrobu
+            ['Czy ma Pani może r. 11?40-50par- jaka cena?', false],
+            ['r. 11.40-50par', false],
+            ['rozmiar 9 - 20 par', false],
+            ['50x100cm, c. netto...... 39,00 PLN/szt.', false],
+            ['100 szt.', false],
+            ['rękawice nitrylowe rozmiar 9', true],
+            ['PX140 rozm. 10 - 30 par', true],
+            ['11-571 r. 11', true],
+        ];
+    }
+
+    #[DataProvider('quoteLines')]
+    public function test_names_product_ignores_size_quantity_and_inquiry_words(string $line, bool $expected): void
+    {
+        $this->assertSame($expected, InquiryQueryText::namesProduct($line));
+    }
 }

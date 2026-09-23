@@ -125,6 +125,38 @@ final class ClientInquiryMatchingTest extends TestCase
         $this->assertStringContainsString('wycieraczka gumowa', mb_strtolower($items[2]['search_query']));
     }
 
+    public function test_product_from_the_subject_goes_only_to_lines_that_name_nothing(): void
+    {
+        $service = app(ClientInquiryService::class);
+
+        $items = $service->resolveLineItems('', [
+            ['id' => 'item_1', 'quote' => 'rozmiar 9 - 20 par', 'query' => ''],
+            ['id' => 'item_2', 'quote' => 'rozmiar 10 - 30 par', 'query' => ''],
+        ], 'PX140');
+
+        foreach ($items as $item) {
+            $this->assertStringStartsWith('PX140', $item['search_query']);
+            $this->assertSame('subject', $item['query_source']);
+        }
+
+        // wiersz z własną nazwą nie bierze tematu, a rozmiar pod nim dziedziczy tę nazwę
+        $items = $service->resolveLineItems('', [
+            ['id' => 'item_1', 'quote' => 'Rękawice nitrylowe rozmiar M 100 szt.', 'query' => 'rękawice nitrylowe'],
+            ['id' => 'item_2', 'quote' => 'rozmiar L 50 szt.', 'query' => ''],
+        ], 'PX140');
+
+        $this->assertStringNotContainsString('PX140', $items[0]['search_query']);
+        $this->assertSame('mail', $items[0]['query_source']);
+        $this->assertStringNotContainsString('PX140', $items[1]['search_query']);
+        $this->assertSame('inherited', $items[1]['query_source']);
+
+        // bez tematu nic się nie zmienia
+        $items = $service->resolveLineItems('', [
+            ['id' => 'item_1', 'quote' => 'rozmiar 9 - 20 par', 'query' => ''],
+        ]);
+        $this->assertSame('mail', $items[0]['query_source']);
+    }
+
     public function test_search_query_never_carries_the_price(): void
     {
         $service = app(ClientInquiryService::class);

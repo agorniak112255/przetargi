@@ -87,9 +87,20 @@ final class ClientInquiryService
         // z podpisu stają się pozycjami zamówienia.
         $analysisBody = InquiryMailText::forAnalysis($body);
         $fingerprints = $this->fingerprints($analysisBody);
-        $extracted = $this->extract($analysisBody);
-        $lineItems = $this->resolveLineItems($analysisBody, $extracted['line_items']);
-        $queries = $this->uniqueQueries($lineItems, $extracted['product_queries']);
+        // Klient bywa pisze model w temacie („11-571”), a w treści tylko ilość i rozmiar.
+        // Najpierw temat nadany przez klienta (z nagłówka przekazania), potem temat maila.
+        $forwardedSubject = InquiryMailText::forwardedSubject($body);
+        $subjectHint = InquiryQueryText::subjectProductHint($forwardedSubject)
+            ?? InquiryQueryText::subjectProductHint($subject);
+        $extracted = $this->extract($analysisBody, $forwardedSubject ?? $this->nullable($subject));
+        $lineItems = $this->resolveLineItems($analysisBody, $extracted['line_items'], $subjectHint);
+        $queries = $this->uniqueQueries(
+            $lineItems,
+            // mail bez żadnej pozycji („Proszę o ofertę”) — szukamy przynajmniej wyrobu z tematu
+            $lineItems === [] && $extracted['product_queries'] === [] && $subjectHint !== null
+                ? [$subjectHint]
+                : $extracted['product_queries']
+        );
         $matches = $this->matchProducts($queries);
         $substitutes = $this->loadSubstitutes($matches);
         $cards = $this->buildCards($extracted['cards'], $matches, $lineItems, $substitutes);
@@ -120,6 +131,8 @@ final class ClientInquiryService
                 'subject' => $extracted['subject'],
                 // Ślad audytowy: co dokładnie poszło do modelu, gdy mail był cięty.
                 'analyzed_body' => $analysisBody === $body ? null : $analysisBody,
+                // wyrób z tematu maila, dopisany do szukania pozycji bez nazwy (query_source: subject)
+                'subject_hint' => $subjectHint,
                 'questions' => $extracted['questions'],
                 'product_queries' => $queries,
                 'line_items' => $lineItems,
@@ -815,6 +828,10 @@ final class ClientInquiryService
                 // Klauzula, której nie da się sprawdzić regułą — musi ją przeczytać człowiek.
                 $flags[] = 'requirement_note';
             }
+            if (($item['query_source'] ?? null) === 'subject') {
+                // wiersz nie nazywał wyrobu — szukaliśmy tym z tematu maila (nasz wniosek)
+                $flags[] = 'product_from_subject';
+            }
             foreach ($cards as $card) {
                 // karta AI bez odpowiedzi — list jej nie uwzględnia, pracownik powinien zerknąć
                 if (! isset($answers[(string) $card['id']])) {
@@ -1010,7 +1027,8 @@ final class ClientInquiryService
         foreach ($items as $item) {
             // Brak ilości widać przy pozycji; w liście numerowanym bez ilości dotyczy
             // każdego wiersza i licznik „do sprawdzenia” przestałby cokolwiek znaczyć.
-            $flags = array_diff(is_array($item['flags'] ?? null) ? $item['flags'] : [], ['qty_unknown']);
+            // Wyrób z tematu to informacja o źródle frazy, nie wątpliwość co do dopasowania.
+            $flags = array_diff(is_array($item['flags'] ?? null) ? $item['flags'] : [], ['qty_unknown', 'product_from_subject']);
             if (($item['confidence'] ?? 'none') !== 'high' || $flags !== []) {
                 $n++;
             }
@@ -1522,8 +1540,11 @@ final class ClientInquiryService
      *     cards: list<array<string, mixed>>
      * }
      */
-    private function extract(string $body): array
+    private function extract(string $body, ?string $subject = null): array
     {
+        // Temat idzie osobnym wierszem nad treścią: bywa w nim model wyrobu, a cytaty
+        // pozycji dalej mają pochodzić z treści.
+        $content = $subject === null ? $body : 'Temat maila: '.$subject."\n\n".$body;
         try {
             $raw = $this->llm->chatJson([
                 [
@@ -1537,6 +1558,9 @@ final class ClientInquiryService
                         .'Każda pozycja: id (item_1…), quote (DOKŁADNY cytat wiersza z maila), '
                         .'qty (SAMA liczba jako string, np. „30”; brak → null), unit (jednostka DOKŁADNIE jak w mailu: „szt.”, „par”, „op.”; brak → null), '
                         .'query (fraza do katalogu BEZ rozmiaru, Z warunkiem: substancja, norma, typ), size (lub null). '
+                        .'Temat maila (pierwszy wiersz, jeśli jest) bywa nazwą albo kodem wyrobu: gdy pozycja w treści podaje '
+                        .'tylko ilość i rozmiar, weź do query nazwę albo kod z tematu. Temat nie jest osobną pozycją. '
+                        .'Nie dopisuj rodzaju wyrobu, którego nie ma ani w temacie, ani w treści. '
                         .'product_queries: unikalne query z line_items. '
                         .'cards: max 4 — TYLKO prawdziwe niejasności (rozmiar, wariant, termin). '
                         .'Nie pytaj o oczywistości. item_id jeśli karta dotyczy jednej pozycji. '
@@ -1545,7 +1569,7 @@ final class ClientInquiryService
                 ],
                 [
                     'role' => 'user',
-                    'content' => $body,
+                    'content' => $content,
                 ],
             ], 0.1, 3500, null, AiTask::ClientInquiry);
         } catch (Throwable $e) {
@@ -1769,14 +1793,14 @@ final class ClientInquiryService
      * @param  list<array<string, mixed>>  $fromAi
      * @return list<array<string, mixed>>
      */
-    public function resolveLineItems(string $body, array $fromAi): array
+    public function resolveLineItems(string $body, array $fromAi, ?string $subjectHint = null): array
     {
         $parsed = $this->parseLineItemsFromBody($body);
         $items = $parsed !== [] && count($parsed) > count($fromAi)
             ? $parsed
             : ($fromAi !== [] ? $this->quantitiesCheckedAgainstQuote($fromAi) : $parsed);
 
-        return $this->withSearchQueries($items);
+        return $this->withSearchQueries($items, $subjectHint);
     }
 
     /**
@@ -1850,10 +1874,15 @@ final class ClientInquiryService
      * przypadkowe wyroby. Dziedziczenie jest ODNOTOWANE (`query_source`),
      * bo to nasz wniosek, a nie treść maila.
      *
+     * Wiersz, który nie nazywa wyrobu („r. 11 40-50 par”), a nad nim nie ma pozycji
+     * z nazwą, bierze wyrób z tematu maila („11-571”) — `query_source: subject`.
+     * O tym decyduje cytat z maila, nie fraza modelu: model potrafi dopisać rodzaj
+     * wyrobu („rękawice”), którego klient nie napisał.
+     *
      * @param  list<array<string, mixed>>  $items
      * @return list<array<string, mixed>>
      */
-    private function withSearchQueries(array $items): array
+    private function withSearchQueries(array $items, ?string $subjectHint = null): array
     {
         $out = [];
         // sama nazwa wyrobu z ostatniej pozycji, która ją miała w mailu
@@ -1865,6 +1894,16 @@ final class ClientInquiryService
                 (string) ($item['quote'] ?? '')
             );
             $item['query_source'] = 'mail';
+
+            if ($subjectHint !== null
+                && $previousName === null
+                && ! InquiryQueryText::namesProduct((string) ($item['quote'] ?? ''))) {
+                // model mógł już wziąć kod z tematu — wtedy nie dublujemy
+                if (! $this->containsCompact($own, $subjectHint)) {
+                    $own = trim($subjectHint.' '.$own);
+                }
+                $item['query_source'] = 'subject';
+            }
 
             if (InquiryQueryText::hasProductWord($own)) {
                 $name = InquiryQueryText::productNameOnly($own);
@@ -1879,6 +1918,15 @@ final class ClientInquiryService
         }
 
         return $out;
+    }
+
+    /** „rękawice 11-571” zawiera „11571” — bez wielkości liter, spacji i łączników. */
+    private function containsCompact(string $haystack, string $needle): bool
+    {
+        $compact = static fn (string $s): string => preg_replace('/[^\p{L}\d]+/u', '', mb_strtolower($s)) ?? '';
+        $needle = $compact($needle);
+
+        return $needle !== '' && str_contains($compact($haystack), $needle);
     }
 
     /**
@@ -2348,6 +2396,7 @@ final class ClientInquiryService
     {
         $seen = [];
         $out = [];
+        $subjectQueries = [];
         foreach ($lineItems as $item) {
             // ten sam klucz, który zapisaliśmy przy pozycji — inaczej wynik
             // wyszukiwania nie trafiłby potem do swojej pozycji
@@ -2355,6 +2404,9 @@ final class ClientInquiryService
                 (string) ($item['query'] ?? ''),
                 (string) ($item['quote'] ?? '')
             );
+            if (($item['query_source'] ?? null) === 'subject') {
+                $subjectQueries[] = $query;
+            }
             $key = mb_strtolower($query);
             if ($query === '' || isset($seen[$key])) {
                 continue;
@@ -2366,6 +2418,15 @@ final class ClientInquiryService
             $key = mb_strtolower(trim($query));
             if ($key === '' || isset($seen[$key])) {
                 continue;
+            }
+            // Fraza modelu, którą pozycja już szuka z wyrobem z tematu, jako osobne szukanie
+            // wróciłaby do tej pozycji tylnymi drzwiami (gdy szukanie z tematu nic nie da):
+            // w zapytaniu #45 to były przypadkowe rękawice pod „rękawice r. 11”, dopisane
+            // przez model. Lepiej „Sprawdzimy i wrócimy” niż wyrób, o który nikt nie pytał.
+            foreach ($subjectQueries as $taken) {
+                if ($this->containsCompact($taken, $query)) {
+                    continue 2;
+                }
             }
             $seen[$key] = true;
             $out[] = trim($query);

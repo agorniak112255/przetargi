@@ -135,6 +135,105 @@ final class ClientInquiryApiTest extends TestCase
         ]);
     }
 
+    /**
+     * Zapytanie #45 z produkcji: model w temacie („11-571”), w treści tylko rozmiar
+     * i ilość. Model dopisał „rękawice”, a katalog zwrócił przypadkowe Ansell zamiast
+     * HyFlex 11571 — temat nie brał udziału w szukaniu.
+     */
+    public function test_product_code_from_the_subject_is_searched_when_the_body_gives_only_size_and_quantity(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = Product::query()->create([
+            'sku' => '11571120',
+            'name' => 'HyFlex 11571',
+            'manufacturer' => 'Ansell',
+            'catalog_price_net' => 20.00,
+            'purchase_price' => 10.00,
+            'stock' => 50,
+        ]);
+
+        $seenByModel = null;
+        $this->mock(OpenAiCompatibleClient::class, function ($mock) use (&$seenByModel): void {
+            $mock->shouldReceive('chatJson')->once()->andReturnUsing(function (array $messages) use (&$seenByModel): array {
+                $seenByModel = (string) $messages[1]['content'];
+
+                return [
+                    'subject' => 'Cena r. 11',
+                    'questions' => ['jaka cena?'],
+                    'product_queries' => ['rękawice r. 11.40-50'],
+                    'line_items' => [[
+                        'id' => 'item_1',
+                        'quote' => 'r. 11.40-50par',
+                        'qty' => '50',
+                        'unit' => 'par',
+                        'query' => 'rękawice r. 11.40-50',
+                        'size' => '11.40-50',
+                    ]],
+                    'cards' => [],
+                ];
+            });
+        });
+
+        $searched = [];
+        $this->mock(ProductInquirySearch::class, function ($mock) use ($product, &$searched): void {
+            $mock->shouldReceive('findMany')->once()->andReturnUsing(function (array $queries) use ($product, &$searched): array {
+                $searched = $queries;
+
+                return array_map(fn (string $q): array => [
+                    'query' => $q,
+                    'products' => str_contains($q, '11-571') ? [[
+                        'id' => $product->id,
+                        'sku' => $product->sku,
+                        'name' => $product->name,
+                        'manufacturer' => $product->manufacturer,
+                        'catalog_price_net' => '20.00',
+                        'purchase_price' => '10.00',
+                        'currency' => 'PLN',
+                        'stock' => 50,
+                        'ai_match_percent' => 95,
+                    ]] : [],
+                ], $queries);
+            });
+        });
+
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', [
+            'subject' => 'Fwd: 11-571',
+            'body' => implode("\n", [
+                '--- Treść przekazanej wiadomości ---',
+                "Temat: \t11-571",
+                "Data: \tTue, 22 Sep 2026 12:42:59 +0000",
+                "Nadawca: \tJan Klient <jan@example.com>",
+                "Adresat: \tIwona - Supon <iwona@supon.rzeszow.pl>",
+                '',
+                'Dzień dobry Pani Iwono,',
+                '',
+                'Czy ma Pani może r. 11?40-50par- jaka cena?',
+                '',
+                'Pozdrawiam',
+                '',
+                'Jan Klient',
+            ]),
+            'tone' => 'handlowy',
+        ]);
+
+        $res->assertCreated()
+            ->assertJsonPath('items.0.candidates.0.sku', '11571120');
+        // handlowiec widzi, że wyrób pochodzi z tematu, a nie z wiersza zapytania
+        $this->assertContains('product_from_subject', $res->json('items.0.flags'));
+
+        $this->assertStringContainsString('Temat maila: 11-571', (string) $seenByModel);
+        $this->assertCount(1, $searched);
+        $this->assertStringStartsWith('11-571 ', $searched[0]);
+
+        $inquiry = ClientInquiry::query()->findOrFail($res->json('id'));
+        $this->assertSame('11-571', $inquiry->analysis['subject_hint']);
+        // wyrób z tematu to nasz wniosek, nie cytat z treści — odnotowany przy pozycji
+        $this->assertSame('subject', $inquiry->analysis['line_items'][0]['query_source']);
+        $this->assertSame('r. 11.40-50par', $inquiry->analysis['line_items'][0]['quote']);
+    }
+
     public function test_analyze_keeps_product_on_each_line_without_substitute_card(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();
