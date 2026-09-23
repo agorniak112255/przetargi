@@ -17,7 +17,7 @@ const links: NavLinkItem[] = [
   { to: '/', label: 'Dashboard', icon: 'dashboard', permission: 'dashboard.view' },
   { to: '/tenders', label: 'Przetargi', icon: 'tenders', anyOf: ['tenders.view_own', 'tenders.view_all'] },
   { to: '/products', label: 'Produkty', icon: 'products', permission: 'products.view' },
-  { to: '/card-matches', label: 'Łączenie kart', icon: 'substitutes', permission: 'products.view' },
+  { to: '/card-matches', label: 'Łączenie kart', icon: 'substitutes', permission: 'card_matches.view' },
   { to: '/price-lists', label: 'Cenniki', icon: 'price-lists', permission: 'price_lists.view' },
   { to: '/substitutes', label: 'Zamienniki', icon: 'substitutes', permission: 'products.view' },
   { to: '/reports', label: 'Raporty', icon: 'reports', permission: 'reports.view' },

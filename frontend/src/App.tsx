@@ -84,7 +84,7 @@ export default function App() {
             <Route
               path="card-matches"
               element={
-                <PermissionGuard permission="products.view">
+                <PermissionGuard permission="card_matches.view">
                   <CardMatches />
                 </PermissionGuard>
               }

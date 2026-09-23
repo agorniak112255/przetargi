@@ -328,9 +328,19 @@ final class CardMatchApiTest extends TestCase
             ->assertJsonPath('refreshed_at', '2026-09-24T06:10:00+00:00');
     }
 
+    public function test_role_without_card_matches_permission_does_not_see_screen(): void
+    {
+        // handlowiec ma podgląd katalogu (products.view), ale łączenie kart to osobne uprawnienie nadawane w rolach
+        $this->actingAsRole('handlowiec');
+        $this->pair('IF/016/F/PS', 'ZPPV99C');
+
+        $this->getJson('/api/card-matches')->assertForbidden();
+        $this->getJson('/api/card-matches/summary')->assertForbidden();
+    }
+
     public function test_viewer_sees_list_but_cannot_decide(): void
     {
-        $this->actingAsRole('handlowiec');
+        $this->actingAsRole('handlowiec')->givePermissionTo('card_matches.view');
         [, , $candidate] = $this->pair('IF/016/F/PS', 'ZPPV99C');
 
         $this->getJson('/api/card-matches')->assertOk()->assertJsonPath('total', 1);

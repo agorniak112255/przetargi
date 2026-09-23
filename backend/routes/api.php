@@ -213,17 +213,18 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::delete('/substitutes/{productSubstitute}', [ProductSubstituteController::class, 'destroy'])->middleware('permission:substitutes.manage');
     Route::patch('/substitutes/{productSubstitute}/approve', [ProductSubstituteController::class, 'approve'])->middleware('permission:substitutes.approve');
 
-    // Łączenie kart dystrybutora z kartą producenta (plan łączenia kart, etap C) — decyzja człowieka
-    Route::get('/card-matches', [CardMatchController::class, 'index'])->middleware('permission:products.view');
-    Route::get('/card-matches/summary', [CardMatchController::class, 'summary'])->middleware('permission:products.view');
-    Route::post('/card-matches/refresh', [CardMatchController::class, 'refresh'])->middleware('permission:products.delete');
-    Route::post('/card-matches/bulk', [CardMatchController::class, 'bulk'])->middleware('permission:products.delete');
+    // Łączenie kart dystrybutora z kartą producenta (plan łączenia kart, etap C) — decyzja człowieka;
+    // uprawnienia osobne od katalogu produktów, nadawane rolom w Administracja → Role
+    Route::get('/card-matches', [CardMatchController::class, 'index'])->middleware('permission:card_matches.view');
+    Route::get('/card-matches/summary', [CardMatchController::class, 'summary'])->middleware('permission:card_matches.view');
+    Route::post('/card-matches/refresh', [CardMatchController::class, 'refresh'])->middleware('permission:card_matches.decide');
+    Route::post('/card-matches/bulk', [CardMatchController::class, 'bulk'])->middleware('permission:card_matches.decide');
     Route::post('/card-matches/{candidate}/merge', [CardMatchController::class, 'merge'])
         ->whereNumber('candidate')
-        ->middleware('permission:products.delete');
+        ->middleware('permission:card_matches.decide');
     Route::post('/card-matches/{candidate}/reject', [CardMatchController::class, 'reject'])
         ->whereNumber('candidate')
-        ->middleware('permission:products.delete');
+        ->middleware('permission:card_matches.decide');
 
     Route::get('/clients', [ClientController::class, 'index'])->middleware('permission:clients.view');
     Route::post('/clients', [ClientController::class, 'store'])->middleware('permission:clients.manage');

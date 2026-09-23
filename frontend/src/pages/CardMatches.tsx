@@ -187,7 +187,7 @@ function CardSide({
 
 export function CardMatches() {
   const { user } = useAuth()
-  const canDecide = can(user, 'products.delete')
+  const canDecide = can(user, 'card_matches.decide')
   const [params, setParams] = useSearchParams()
   const status: CardMatchStatus = isStatus(params.get('status')) ? (params.get('status') as CardMatchStatus) : 'pending'
   const page = Math.max(1, Number(params.get('page')) || 1)
