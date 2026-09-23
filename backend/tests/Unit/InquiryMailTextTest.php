@@ -211,6 +211,122 @@ final class InquiryMailTextTest extends TestCase
         $this->assertSame($mail, InquiryMailText::forAnalysis($mail));
     }
 
+    /**
+     * Prawdziwy mail (zapytanie Cederroth, 23.09.2026): stopka bez „Pozdrawiam” i bez
+     * „-- ” stoi zaraz pod treścią. Telefon „600 903 483 <tel:…>” wchodził do analizy
+     * i wracał z niej jako pozycja z ilością 600.
+     */
+    public function test_cuts_contact_footer_without_closing(): void
+    {
+        $clean = InquiryMailText::forAnalysis(self::cederrothMail());
+
+        $this->assertStringContainsString('(nr 7251-7200) – 10 szt.', $clean);
+        $this->assertStringContainsString('5szt./kompletów.', $clean);
+        $this->assertStringContainsString('koszt dostawy', $clean);
+        $this->assertStringNotContainsString('600 903 483', $clean);
+        $this->assertStringNotContainsString('PL 62 1240', $clean);
+        $this->assertStringNotContainsString('NIP:', $clean);
+        // odcięta stopka zostaje do odczytu kontaktu
+        $this->assertStringContainsString('600 903 483', InquiryMailText::footerOf(self::cederrothMail()));
+    }
+
+    public function test_contact_line_inside_the_inquiry_does_not_cut_the_order(): void
+    {
+        $mail = implode("\n", [
+            'Dzień dobry,',
+            'proszę o ofertę, w razie pytań proszę dzwonić:',
+            'tel. 600 900 900',
+            '10 szt. rękawic nitrylowych rozmiar 9',
+            '',
+            'Jan Kowalski',
+            '600 903 483 <tel:+48600903483>',
+            'NIP: 813-22-83-737',
+        ]);
+
+        $clean = InquiryMailText::forAnalysis($mail);
+
+        $this->assertStringContainsString('10 szt. rękawic nitrylowych', $clean);
+        // stopka pod ostatnią pozycją i tak odpada
+        $this->assertStringNotContainsString('600 903 483', $clean);
+        $this->assertStringNotContainsString('NIP:', $clean);
+    }
+
+    public function test_contact_lines_are_recognised_but_order_rows_are_not(): void
+    {
+        foreach ([
+            '600 903 483 <tel:+48600903483> / (17) 860-28-49 <tel:+48178602849>',
+            '(17) 860-28-49',
+            '17 785 22 46',
+            '+48 600 903 483',
+            'tel. 17 785 22 46',
+            'NIP: 813-22-83-737 | REGON: 690462358',
+            'KRS: 0000063924 | Sąd Rejonowy w Rzeszowie',
+            'PL 62 1240 1792 1111 0010 4150 7426',
+            'lzielinski@supon.rzeszow.pl',
+        ] as $line) {
+            $this->assertTrue(InquiryMailText::isContactLine($line), $line);
+        }
+
+        foreach ([
+            '10 szt. rękawic nitrylowych',
+            '2. Płukanka do oczu Cederroth 2-pack 2 x butelka 500 ml (nr 725200)  -',
+            '40-42 10 par',
+            '100 200 par',
+            '5901234123457 Rękawice nitrylowe',
+        ] as $line) {
+            $this->assertFalse(InquiryMailText::isContactLine($line), $line);
+        }
+    }
+
+    public static function cederrothMail(): string
+    {
+        return implode("\n", [
+            'Proszę o ofertę na: 1. Płukanka do oczu Cederroth 500 ml z uchwytem',
+            'ściennym (nr 7251-7200) – 10 szt.',
+            '',
+            '2. Płukanka do oczu Cederroth 2-pack 2 x butelka 500 ml (nr 725200)  -',
+            '5szt./kompletów.',
+            '',
+            'Chodzi mi o cenę w przypadku zamówienia jednej albo drugiej pozycji nie',
+            'obu na raz.',
+            '',
+            'Proszę o rabat handlowy oraz przybliżony czas i koszt dostawy.',
+            '',
+            'Supon Rzeszów <https://www.supon.rzeszow.pl/>',
+            'Łukasz Zieliński Obsługa sklepu internetowego',
+            '☎',
+            '   600 903 483 <tel:+48600903483> / (17) 860-28-49 <tel:+48178602849>',
+            '',
+            '@',
+            '   lzielinski@supon.rzeszow.pl',
+            '',
+            '⌘',
+            '   www.supon.rzeszow.pl <https://www.supon.rzeszow.pl/>',
+            '',
+            'Sprawdź:     Promocje <https://www.supon.rzeszow.pl/231-promocja>',
+            'Outlet <https://www.supon.rzeszow.pl/259-outlet-bhp>      Blog',
+            '<https://www.supon.rzeszow.pl/nowosci>',
+            '',
+            'Uwaga ! Zmiana numeru konta bankowego',
+            'Od dnia 24.07.2026 płatności za zamówienia internetowe proszę kierować',
+            'na nowy numer konta w banku PEKAO S.A :',
+            'PL 62 1240 1792 1111 0010 4150 7426',
+            '',
+            '*PHT Supon Sp. z o.o.*',
+            'ul. Miłocińska 17, 35-232 Rzeszów',
+            'NIP: 813-22-83-737 | REGON: 690462358',
+            'KRS: 0000063924 | Sąd Rejonowy w Rzeszowie',
+            '',
+            'Znajdź nas:',
+            'f Facebook',
+            '',
+            '<https://www.facebook.com/supon.rzeszow/>',
+            'in LinkedIn',
+            '',
+            '<https://pl.linkedin.com/company/supon-rzesz%C3%B3w>',
+        ]);
+    }
+
     public function test_forwarded_subject_is_the_clients_own(): void
     {
         $mail = implode("\n", [

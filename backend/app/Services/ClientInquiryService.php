@@ -53,6 +53,15 @@ final class ClientInquiryService
     /** Wiersz otwarty liczbą („1. Buty robocze”, „30 szt. Rękawice”) — liczba, jednostka, reszta. */
     private const ROW_NUMBER = '/^(\d+)\s*('.self::UNIT_PATTERN.')?[\s.,:–-]+(.+)$/iu';
 
+    /** Data na początku wiersza („24.07.2026 płatności…”) — nie numer pozycji ani ilość. */
+    private const LEADING_DATE = '/^\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{2,4}(?!\d)/u';
+
+    /**
+     * Mail łamany w stałej szerokości (ok. 72–78 znaków) tnie wiersz pozycji w połowie.
+     * Wiersz od tej długości, po którym treść idzie dalej małą literą, uznajemy za złamany.
+     */
+    private const WRAPPED_LINE_MIN = 60;
+
     private ?int $minMatchScore = null;
 
     /**
@@ -1796,11 +1805,31 @@ final class ClientInquiryService
     public function resolveLineItems(string $body, array $fromAi, ?string $subjectHint = null): array
     {
         $parsed = $this->parseLineItemsFromBody($body);
-        $items = $parsed !== [] && count($parsed) > count($fromAi)
+        // Parser przeważa nad modelem, gdy znalazł więcej pozycji — ale liczą się tylko
+        // wiersze ze znamionami wyrobu. Inaczej telefon czy urwany wiersz ze stopki
+        // przegłosowywały poprawną odpowiedź modelu samą liczbą.
+        $credible = count(array_filter($parsed, fn (array $item): bool => $this->isCredibleRow($item)));
+        $items = $parsed !== [] && $credible > count($fromAi)
             ? $parsed
             : ($fromAi !== [] ? $this->quantitiesCheckedAgainstQuote($fromAi) : $parsed);
 
         return $this->withSearchQueries($items, $subjectHint);
+    }
+
+    /**
+     * Wiersz z parsera, który może przegłosować model: nazywa wyrób (słowo albo kod)
+     * albo niesie ilość z jednostką czy rozmiar — i nie jest wierszem kontaktowym.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private function isCredibleRow(array $item): bool
+    {
+        $quote = (string) ($item['quote'] ?? '');
+        if (InquiryMailText::isContactLine($quote)) {
+            return false;
+        }
+
+        return InquiryQueryText::namesProduct($quote) || $this->looksLikeGoodsRow($quote);
     }
 
     /**
@@ -1943,9 +1972,13 @@ final class ClientInquiryService
         // inna lista, a ta bywa listą wyrobów.
         $infoRequest = false;
         $infoLast = 0;
-        foreach (preg_split('/\R/u', $body) ?: [] as $line) {
-            $line = trim((string) $line);
+        foreach ($this->bodyLines($body) as $line) {
             if ($line === '') {
+                continue;
+            }
+            // Telefon, numer konta i data z przodu wiersza to liczby, ale nie ilości:
+            // „600 903 483 <tel:…>” ze stopki wchodziło do oferty jako 600 sztuk.
+            if (InquiryMailText::isContactLine($line) || preg_match(self::LEADING_DATE, $line) === 1) {
                 continue;
             }
             $marked = $this->positionMarker($line);
@@ -2041,6 +2074,67 @@ final class ClientInquiryService
         }
 
         return $this->dropEnumerationQty($items, $leadingNumbers);
+    }
+
+    /**
+     * Wiersze treści gotowe do czytania pozycji. Program pocztowy łamie tekst w stałej
+     * szerokości, więc jedna pozycja przychodzi w dwóch wierszach:
+     * „2. Płukanka … (nr 725200)  -” i „5szt./kompletów.” — pierwszy dostawał ilość 2
+     * (numer punktu), drugi stawał się osobną pozycją. Złamaną pozycję sklejamy spacją,
+     * nic poza tym nie zmieniając. Lista bywa też zaczęta w wierszu zapowiedzi
+     * („Proszę o ofertę na: 1. Płukanka…”) — wtedy jej pierwszy punkt przepadał.
+     *
+     * @return list<string>
+     */
+    private function bodyLines(string $body): array
+    {
+        $out = [];
+        // długość ostatniego fizycznego wiersza maila — o złamaniu świadczy ona,
+        // a nie długość sklejonej albo wydzielonej pozycji
+        $lastLength = 0;
+        foreach (preg_split('/\R/u', $body) ?: [] as $raw) {
+            $line = trim((string) $raw);
+            $length = mb_strlen($line);
+            $last = count($out) - 1;
+
+            if ($line !== '' && $last >= 0 && $out[$last] !== ''
+                && $this->continuesWrappedRow($out[$last], $lastLength, $line)) {
+                $out[$last] .= ' '.$line;
+                $lastLength = $length;
+
+                continue;
+            }
+
+            if (preg_match('/^(.*?\S:)\s+(1\s*[.)]\s+\p{L}.*)$/u', $line, $m) === 1
+                && preg_match('/(?:prosz[ęe]|prosimy|ofert|wycen|zapytani|zam[óo]wi|potrzeb)/iu', $m[1]) === 1) {
+                $out[] = trim($m[1]);
+                $out[] = trim($m[2]);
+            } else {
+                $out[] = $line;
+            }
+            $lastLength = $length;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Czy wiersz jest dalszym ciągiem złamanej pozycji. Tylko pod wierszem, który
+     * pozycję zaczyna (numer albo znacznik), i tylko w dwóch pewnych układach:
+     * ilość z jednostką pod wierszem urwanym na myślniku („… (nr 725200) -” / „5szt.”)
+     * albo ciąg małą literą pod wierszem długim jak łamanie w stałej szerokości.
+     */
+    private function continuesWrappedRow(string $previous, int $previousLength, string $line): bool
+    {
+        if ($this->positionMarker($previous) === null && preg_match(self::ROW_NUMBER, $previous) !== 1) {
+            return false;
+        }
+        if (preg_match('/[-–—]$/u', $previous) === 1
+            && preg_match('/^\d{1,5}\s*'.self::UNIT_PATTERN.'/iu', $line) === 1) {
+            return true;
+        }
+
+        return $previousLength >= self::WRAPPED_LINE_MIN && preg_match('/^\p{Ll}/u', $line) === 1;
     }
 
     /**

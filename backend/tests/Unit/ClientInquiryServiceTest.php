@@ -10,6 +10,7 @@ use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ClientInquiryService;
 use App\Services\NbpExchangeRateService;
 use App\Services\ProductInquirySearch;
+use App\Support\InquiryMailText;
 use Mockery;
 use Tests\TestCase;
 
@@ -384,6 +385,57 @@ final class ClientInquiryServiceTest extends TestCase
 
         $this->assertCount(2, $resolved);
         $this->assertSame('10', $resolved[0]['size']);
+    }
+
+    public function test_cederroth_mail_gives_both_positions_and_nothing_from_the_footer(): void
+    {
+        $svc = $this->service();
+        $expected = function (array $items): void {
+            $this->assertCount(2, $items);
+            // pozycja 1 zaczynala sie w wierszu zapowiedzi i przepadala
+            $this->assertStringContainsString('7251-7200', $items[0]['quote']);
+            $this->assertSame(['10', 'szt.'], [$items[0]['qty'], $items[0]['unit']]);
+            // pozycja 2 zlamana na myslniku: numer punktu „2” byl iloscia, a „5szt.” osobna pozycja
+            $this->assertStringContainsString('725200', $items[1]['quote']);
+            $this->assertStringContainsString('5szt./kompletów.', $items[1]['quote']);
+            $this->assertSame(['5', 'szt.'], [$items[1]['qty'], $items[1]['unit']]);
+        };
+
+        // po odcieciu stopki
+        $expected($svc->parseLineItemsFromBody(InquiryMailText::forAnalysis(InquiryMailTextTest::cederrothMail())));
+        // i bez odciecia: telefon, konto i data ze stopki nie sa pozycjami same z siebie
+        $expected($svc->parseLineItemsFromBody(InquiryMailTextTest::cederrothMail()));
+    }
+
+    public function test_wrapped_row_is_joined_only_in_certain_layouts(): void
+    {
+        $svc = $this->service();
+
+        // krotki wiersz nie jest zlamany: nizej moze stac rozpiska, ktorej nie sklejamy
+        $short = $svc->parseLineItemsFromBody("1. Buty robocze S3\nrozmiar 44 - 5 par\n2. Kask ochronny");
+        $this->assertSame(['1. Buty robocze S3', '2. Kask ochronny'], array_column($short, 'quote'));
+        $this->assertSame([null, null], array_column($short, 'qty'));
+
+        // zapowiedz bez prosby to nie lista wyrobow
+        $this->assertSame([], $svc->parseLineItemsFromBody('Termin: 1. kwartał 2027'));
+    }
+
+    public function test_rows_without_goods_signs_do_not_outvote_the_model(): void
+    {
+        $fromAi = [[
+            'id' => 'item_1',
+            'quote' => 'Proszę o 10 par butów S3.',
+            'qty' => '10',
+            'unit' => 'par',
+            'query' => 'buty S3',
+            'size' => null,
+        ]];
+
+        // dwa wiersze z parsera bez nazwy wyrobu, ilosci z jednostka i rozmiaru
+        $resolved = $this->service()->resolveLineItems("Proszę o 10 par butów S3.\n12, 34\n56 - 78", $fromAi);
+
+        $this->assertCount(1, $resolved);
+        $this->assertSame('Proszę o 10 par butów S3.', $resolved[0]['quote']);
     }
 
     public function test_question_lines_do_not_break_the_numbering(): void

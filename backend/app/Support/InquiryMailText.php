@@ -58,6 +58,30 @@ final class InquiryMailText
         '/^this\s+(e-?mail|message)\s+(is|and)/iu',
     ];
 
+    /**
+     * Wiersz danych kontaktowych: telefon, e-mail, NIP/REGON/KRS, numer konta.
+     * Stopka bez zwrotu grzecznościowego („Supon Rzeszów <https://…>” zaraz pod
+     * treścią) zaczyna się właśnie od takiego wiersza.
+     */
+    private const CONTACT_LINE = [
+        // link telefonu albo poczty ze stopki HTML przepisanej na tekst
+        '/<(?:tel|mailto):/iu',
+        '/^(?:tel|telefon|tel\/fax|kom|mob|mobile|fax|faks|phone)\b[\s.:\/]*\+?\(?\d/iu',
+        '/^(?:nip|regon|krs|bdo)\b\s*[:.]?\s*\d/iu',
+        '/^[\w.%+\-]+@[\w\-]+(?:\.[\w\-]+)*\.\p{L}{2,}$/u',
+        // numer konta: „PL 62 1240 1792 1111 0010 4150 7426”, także bez „PL”
+        '/^(?:[A-Z]{2}\s?)?\d{2}(?:\s?\d{4}){6}$/u',
+    ];
+
+    /**
+     * Wiersz zamówienia: ilość z jednostką albo ponumerowana pozycja. Pod nim
+     * stopki nie ucinamy — blok kontaktowy stał wtedy w środku zapytania.
+     */
+    private const ORDER_ROW = [
+        '/(?<![\p{L}\d,.])\d{1,5}\s*(?:sztuk\p{L}*|szt\.?|par[aeyę]?|op\.|opak\p{L}*\.?|kpl\.?|komplet\p{L}*|zestaw\p{L}*)(?![\p{L}])/iu',
+        '/^\s*(?:\d{1,3}\s*[.)]|poz\.?\s*\d{1,3})\s*\p{L}{3,}/iu',
+    ];
+
     public static function forAnalysis(string $raw): string
     {
         $text = self::split($raw)['body'];
@@ -192,7 +216,8 @@ final class InquiryMailText
     {
         $lines = explode("\n", $segment);
         $separator = self::separatorIndex($lines);
-        $cut = self::closingIndex(array_slice($lines, 0, $separator));
+        $beforeSeparator = array_slice($lines, 0, $separator);
+        $cut = min(self::closingIndex($beforeSeparator), self::contactIndex($beforeSeparator));
 
         return [
             implode("\n", array_slice($lines, 0, $cut)),
@@ -327,6 +352,73 @@ final class InquiryMailText
         }
 
         return count($lines);
+    }
+
+    /**
+     * Wiersz z danymi kontaktowymi (telefon, e-mail, NIP/REGON/KRS, numer konta).
+     * Parser pozycji czyta „liczba + reszta”, więc „600 903 483 <tel:…>” stawało
+     * się pozycją z ilością 600.
+     */
+    public static function isContactLine(string $line): bool
+    {
+        $line = trim($line);
+
+        return self::matchesAny($line, self::CONTACT_LINE) || self::startsWithPhone($line);
+    }
+
+    /**
+     * Numer telefonu na początku wiersza: „600 903 483”, „17 785 22 46”,
+     * „(17) 860-28-49”, „+48 600 903 483”. Liczy się 9 cyfr albo 11 z numerem
+     * kierunkowym kraju — tyle nie ma żadna zamawiana ilość.
+     */
+    private static function startsWithPhone(string $line): bool
+    {
+        if (preg_match('/^\+?(?:\(\d{2,3}\)\s?)?\d{2,3}(?:[\s\-]\d{2,3}){2,3}(?!\d)/u', $line, $m) !== 1) {
+            return false;
+        }
+        $digits = strlen(preg_replace('/\D+/u', '', $m[0]) ?? '');
+
+        return $digits === 9 || $digits === 11;
+    }
+
+    /**
+     * Indeks pierwszego wiersza kontaktowego (albo koniec tekstu) — stopka bez
+     * zwrotu grzecznościowego i bez „-- ”. Jak przy zwrocie: dwie linie treści
+     * przed nim. Gdy niżej stoi jeszcze wiersz zamówienia, kontakt był wtrącony
+     * w zapytanie — tniemy dopiero przy następnym wierszu kontaktowym pod nim,
+     * bo nadgorliwe cięcie gubi pozycje.
+     *
+     * @param  list<string>  $lines
+     */
+    private static function contactIndex(array $lines): int
+    {
+        $content = 0;
+        foreach ($lines as $i => $line) {
+            $trimmed = trim($line);
+            if ($trimmed === '') {
+                continue;
+            }
+            if ($content >= 2 && self::isContactLine($trimmed) && ! self::orderRowFrom($lines, $i)) {
+                return $i;
+            }
+            $content++;
+        }
+
+        return count($lines);
+    }
+
+    /**
+     * @param  list<string>  $lines
+     */
+    private static function orderRowFrom(array $lines, int $from): bool
+    {
+        foreach (array_slice($lines, $from) as $line) {
+            if (self::matchesAny(trim($line), self::ORDER_ROW)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
