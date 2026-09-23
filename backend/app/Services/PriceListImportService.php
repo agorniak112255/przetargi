@@ -11,9 +11,11 @@ use App\Models\PrestaCategory;
 use App\Models\PriceList;
 use App\Models\PriceListImport;
 use App\Models\Product;
+use App\Models\ProductIdentifier;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\User;
+use App\Services\Catalog\ProductIdentifierStore;
 use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\Presta\ProductCategorySanitizer;
 use App\Services\Pricing\ProductEffectivePrice;
@@ -43,6 +45,7 @@ final class PriceListImportService
         private readonly ProductSizeMergeService $sizeMerge,
         private readonly ProductEffectivePrice $effectivePrices,
         private readonly PrestaCategoryRewriteService $prestaCategories,
+        private readonly ProductIdentifierStore $identifiers = new ProductIdentifierStore,
     ) {}
 
     /**
@@ -82,6 +85,7 @@ final class PriceListImportService
             $defaultCategory,
             $manufacturer,
             $headerIdx + 2,
+            $rows[$headerIdx] ?? [],
         );
         try {
             $collected = $this->applyGroupOptions($collected, $manufacturer, $groupOptions);
@@ -226,6 +230,11 @@ final class PriceListImportService
                 'stock' => 0,
                 'pack_qty' => is_numeric($packQty) ? max(0, (int) $packQty) : null,
                 'packaging' => $packaging !== '' ? $packaging : null,
+                // pozycje odczytane z PDF nie mają nagłówków kolumn — pole = rola (sku, ean)
+                '_identifiers' => $this->rowIdentifiers(
+                    [$sku, trim((string) ($row['ean'] ?? '')), $packaging],
+                    ['sku' => 0, 'ean' => 1, 'packaging' => 2],
+                ),
             ];
         }
 
@@ -336,6 +345,12 @@ final class PriceListImportService
     public function previewFromMapping(string $path, array $mapping, int $limit = 8): array
     {
         $collected = $this->collectFromMapping($path, $mapping, null, 'PREVIEW', true);
+        // identyfikatory wierszy są dla zapisu importu, nie dla okna podglądu
+        $collected['products'] = array_map(static function (array $product): array {
+            unset($product['_identifiers']);
+
+            return $product;
+        }, $collected['products']);
         $items = array_slice($collected['products'], 0, $limit);
 
         return [
@@ -410,9 +425,12 @@ final class PriceListImportService
             $byManufacturer = [];
             $fileSlots = [];
             $historyIds = [];
+            /** @var array<int, list<array<string, mixed>>> $identifierRows id karty => identyfikatory jej wierszy */
+            $identifierRows = [];
             foreach ($collected['products'] as $payload) {
                 $sku = (string) $payload['sku'];
-                unset($payload['sku'], $payload['_purchase_from_file']);
+                $rowIdentifiers = is_array($payload['_identifiers'] ?? null) ? $payload['_identifiers'] : [];
+                unset($payload['sku'], $payload['_purchase_from_file'], $payload['_identifiers']);
                 $payload = $this->clampProductFields($payload);
                 if (($payload['description'] ?? null) === null) {
                     unset($payload['description']);
@@ -492,6 +510,7 @@ final class PriceListImportService
                     $saved = $this->effectivePrices->saveSlot($existing, ProductSourcePrice::SOURCE_FILE, $slotValues);
                     $fileSlots[(int) $existing->id] = $saved['slot'];
                     $productIds[] = (int) $existing->id;
+                    $identifierRows[(int) $existing->id] = [...($identifierRows[(int) $existing->id] ?? []), ...$rowIdentifiers];
                     $updated++;
                 } else {
                     // nowa karta: cena z pliku jest też startową ceną obowiązującą
@@ -500,6 +519,7 @@ final class PriceListImportService
                     $fileSlots[(int) $createdProduct->id] = $saved['slot'];
                     $historyIds[(int) $createdProduct->id] = true;
                     $productIds[] = (int) $createdProduct->id;
+                    $identifierRows[(int) $createdProduct->id] = $rowIdentifiers;
                     $created++;
                 }
             }
@@ -544,6 +564,9 @@ final class PriceListImportService
                 'skipped_details' => $skippedDetails,
                 'product_ids' => $productIds,
             ]);
+
+            // kody i EAN-y każdego wiersza pliku (także zwiniętych rozmiarów) z pochodzeniem — do łączenia kart źródeł
+            $this->identifiers->recordFile($priceList, $import, $identifierRows);
 
             // historia: ceny slotu pliku (nie ceny obowiązującej karty), tylko nowa karta albo zmiana ceny z pliku
             foreach (array_keys($historyIds) as $productId) {
@@ -755,6 +778,7 @@ final class PriceListImportService
         ?string $defaultCategory,
         string $manufacturer,
         int $firstDataExcelRow = 2,
+        array $header = [],
     ): array {
         $products = [];
         $skipped = 0;
@@ -797,7 +821,7 @@ final class PriceListImportService
 
                 continue;
             }
-            $products[] = $parsed['product'];
+            $products[] = [...$parsed['product'], '_identifiers' => $this->rowIdentifiers($row, $map, $header)];
         }
 
         $collapsed = $this->collapseSamePriceVariants($products);
@@ -969,7 +993,13 @@ final class PriceListImportService
                 }
 
                 $sku = (string) $parsed['product']['sku'];
-                $bySku[$sku] = $parsed['product'];
+                $product = $parsed['product'];
+                // kod powtórzony w pliku — wiersz zastępuje poprzedni, ale kody i EAN-y obu zostają
+                $product['_identifiers'] = [
+                    ...($bySku[$sku]['_identifiers'] ?? []),
+                    ...$this->rowIdentifiers($row, $map, $all[$headerIdx] ?? []),
+                ];
+                $bySku[$sku] = $product;
             }
         }
 
@@ -1073,6 +1103,11 @@ final class PriceListImportService
                 if ($model !== '' && trim((string) ($chosen['_size_core'] ?? '')) === '') {
                     $chosen['_size_core'] = $model;
                 }
+                // kody i EAN-y wszystkich zwiniętych rozmiarów zostają przy karcie (product_identifiers)
+                $chosen['_identifiers'] = array_merge(...array_map(
+                    static fn (array $item): array => $item['product']['_identifiers'] ?? [],
+                    $items,
+                ));
                 // Kod = model (Reference), nie Article Number rozmiaru
                 $out[] = $this->finalizeProductCode($chosen, null);
                 $removed += count($items) - 1;
@@ -1358,6 +1393,49 @@ final class PriceListImportService
      * @param  array<string, mixed>  $product
      * @return array<string, mixed>
      */
+    /**
+     * Identyfikatory wiersza cennika dosłownie z komórek (kod, drugi kod, EAN, kod modelu), zanim import zwinie
+     * rozmiary i przerobi kod na kod karty. Pozycja = kod wiersza (bez kodu — drugi kod albo EAN); nazwa pola =
+     * nagłówek kolumny, etykieta = rozmiar/opakowanie z wiersza. Wiersz bez żadnego kodu nic nie podaje.
+     *
+     * @param  array<int, mixed>  $row
+     * @param  array<string, int>  $map
+     * @param  array<int, mixed>  $header  wiersz nagłówka arkusza (surowy)
+     * @return list<array{position: string, type: string, value: string, field: string|null, label: string|null}>
+     */
+    private function rowIdentifiers(array $row, array $map, array $header = []): array
+    {
+        $cell = static fn (string $role): string => isset($map[$role]) ? trim((string) ($row[$map[$role]] ?? '')) : '';
+        $position = $cell('sku') !== '' ? $cell('sku') : ($cell('sku_alt') !== '' ? $cell('sku_alt') : $cell('ean'));
+        if ($position === '') {
+            return [];
+        }
+        $label = $cell('packaging') !== '' ? $cell('packaging') : $cell('attr_rozmiar');
+
+        $out = [];
+        foreach ([
+            'sku' => ProductIdentifier::TYPE_SOURCE_CODE,
+            'sku_alt' => ProductIdentifier::TYPE_ALT_CODE,
+            'ean' => ProductIdentifier::TYPE_EAN,
+            'model_key' => ProductIdentifier::TYPE_MODEL_CODE,
+        ] as $role => $type) {
+            $value = $cell($role);
+            if ($value === '') {
+                continue;
+            }
+            $field = isset($map[$role]) ? trim((string) ($header[$map[$role]] ?? '')) : '';
+            $out[] = [
+                'position' => $position,
+                'type' => $type,
+                'value' => $value,
+                'field' => $field !== '' ? $field : $role,
+                'label' => $label !== '' ? $label : null,
+            ];
+        }
+
+        return $out;
+    }
+
     private function stripInternalProductKeys(array $product): array
     {
         unset($product['_model_key'], $product['_size_core']);

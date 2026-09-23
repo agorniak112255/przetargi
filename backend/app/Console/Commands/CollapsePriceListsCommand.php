@@ -9,6 +9,7 @@ use App\Models\PriceList;
 use App\Models\PriceListImport;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
+use App\Services\Catalog\ProductIdentifierStore;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -185,6 +186,8 @@ final class CollapsePriceListsCommand extends Command
                 B2bAccount::query()
                     ->where('last_price_list_id', $row->id)
                     ->update(['last_price_list_id' => $survivor->id]);
+                // przed usunięciem wpisu — jego identyfikatory zniknęłyby kaskadą
+                (new ProductIdentifierStore)->moveFileSource((int) $row->id, (int) $survivor->id);
                 $row->delete();
             }
 

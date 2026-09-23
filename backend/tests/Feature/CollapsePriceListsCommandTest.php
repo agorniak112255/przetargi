@@ -8,6 +8,7 @@ use App\Models\B2bAccount;
 use App\Models\PriceList;
 use App\Models\PriceListImport;
 use App\Models\Product;
+use App\Models\ProductIdentifier;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\User;
@@ -89,12 +90,24 @@ final class CollapsePriceListsCommandTest extends TestCase
             'sites' => ['artra.pl'],
             'last_price_list_id' => $older->id,
         ]);
+        ProductIdentifier::query()->create([
+            'product_id' => $product->id,
+            'source_key' => 'file:'.$older->id,
+            'price_list_id' => $older->id,
+            'position_key' => 'ARAGON 920 6060 S2',
+            'type' => ProductIdentifier::TYPE_SOURCE_CODE,
+            'value' => 'ARAGON 920 6060 S2',
+        ]);
 
         $this->artisan('price-lists:collapse --apply')->assertSuccessful();
 
         $this->assertSame($newer->id, (int) ProductSourcePrice::query()->sole()->price_list_id);
         $this->assertSame($newer->id, (int) ProductPriceHistory::query()->sole()->price_list_id);
         $this->assertSame($newer->id, (int) $account->fresh()->last_price_list_id);
+        // identyfikator scalanego wpisu przechodzi na wpis, który zostaje (bez tego zniknąłby kaskadą)
+        $identifier = ProductIdentifier::query()->sole();
+        $this->assertSame($newer->id, (int) $identifier->price_list_id);
+        $this->assertSame('file:'.$newer->id, $identifier->source_key);
     }
 
     public function test_different_manufacturers_are_not_merged(): void

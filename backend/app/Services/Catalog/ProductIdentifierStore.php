@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Services\Catalog;
 
 use App\Models\B2bAccount;
+use App\Models\PriceList;
+use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductIdentifier;
 use App\Models\ProductSourcePrice;
@@ -114,6 +116,131 @@ final class ProductIdentifierStore
         }
 
         return $warnings;
+    }
+
+    /**
+     * Identyfikatory wierszy importu cennika z pliku (source_key „file:{cennik}”), wołane w transakcji importu. Pozycja
+     * = kod wiersza dosłownie (bez kodu — EAN), więc zwinięte rozmiary zachowują każdy swój kod i EAN. Import czyta cały
+     * plik: identyfikator tego cennika, którego nowy plik już nie ma, dostaje removed_at (wiersze nie są kasowane).
+     *
+     * @param  array<int, list<array{position: string, type: string, value: string, field?: string|null, label?: string|null}>>  $rowsByProduct
+     *                                                                                                                                           id karty => identyfikatory jej wierszy
+     * @return int liczba identyfikatorów oznaczonych jako zniknięte
+     */
+    public function recordFile(PriceList $priceList, PriceListImport $import, array $rowsByProduct): int
+    {
+        $sourceKey = self::fileKey((int) $priceList->id);
+        $manufacturer = trim((string) $priceList->manufacturer);
+        $brandKey = BrandKey::of($manufacturer);
+        $now = now();
+
+        /** @var array<string, array<string, mixed>> $wanted klucz wiersza => wartości */
+        $wanted = [];
+        foreach ($rowsByProduct as $productId => $rows) {
+            foreach ($rows as $row) {
+                $value = trim(preg_replace('/\s+/u', ' ', (string) $row['value']) ?? '');
+                $position = mb_substr(trim((string) $row['position']), 0, 64);
+                if ($value === '' || $position === '' || mb_strlen($value) > self::VALUE_LIMIT
+                    || ! in_array($row['type'], ProductIdentifier::TYPES, true)) {
+                    continue;
+                }
+                // ta sama pozycja na dwóch kartach (kod powtórzony w pliku) — zostaje przy pierwszej
+                $wanted[self::rowKey($position, $row['type'], $value)] ??= [
+                    'product_id' => (int) $productId,
+                    'position_key' => $position,
+                    'type' => $row['type'],
+                    'value' => $value,
+                    'normalized' => ProductIdentifierCode::normalize($row['type'], $value),
+                    'source_field' => self::cut($row['field'] ?? null, 100),
+                    'variant_label' => self::cut($row['label'] ?? null, 120),
+                    'manufacturer' => self::cut($manufacturer, 100),
+                    'brand_key' => self::cut($brandKey, 100),
+                ];
+            }
+        }
+
+        $matched = [];
+        $seenIds = [];
+        $goneIds = [];
+        foreach (ProductIdentifier::query()->where('source_key', $sourceKey)->get() as $row) {
+            $key = self::rowKey((string) $row->position_key, (string) $row->type, (string) $row->value);
+            if (! isset($wanted[$key]) || isset($matched[$key])) {
+                if ($row->removed_at === null) {
+                    $goneIds[] = (int) $row->id;
+                }
+
+                continue;
+            }
+            $matched[$key] = true;
+            $seenIds[] = (int) $row->id;
+            // karta i opis wiersza za plikiem (pozycja mogła trafić na inną kartę)
+            $row->fill(array_diff_key($wanted[$key], ['position_key' => true, 'type' => true]));
+            if ($row->isDirty()) {
+                $row->save();
+            }
+        }
+        foreach (array_chunk($seenIds, 1000) as $chunk) {
+            ProductIdentifier::query()->toBase()->whereIn('id', $chunk)
+                ->update(['last_seen_at' => $now, 'price_list_import_id' => $import->id, 'removed_at' => null]);
+        }
+        foreach (array_chunk($goneIds, 1000) as $chunk) {
+            ProductIdentifier::query()->toBase()->whereIn('id', $chunk)->update(['removed_at' => $now]);
+        }
+
+        $inserts = [];
+        foreach ($wanted as $key => $row) {
+            if (isset($matched[$key])) {
+                continue;
+            }
+            $inserts[] = [
+                ...$row,
+                'source_key' => $sourceKey,
+                'b2b_account_id' => null,
+                'price_list_id' => $priceList->id,
+                'b2b_sync_run_id' => null,
+                'price_list_import_id' => $import->id,
+                'first_seen_at' => $now,
+                'last_seen_at' => $now,
+                'removed_at' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+        foreach (array_chunk($inserts, 500) as $chunk) {
+            ProductIdentifier::query()->insert($chunk);
+        }
+
+        return count($goneIds);
+    }
+
+    /**
+     * Identyfikatory scalanego wpisu cennika przechodzą na wpis, który zostaje (products:collapse-price-lists).
+     * Wiersz, który wpis docelowy już ma (ta sama pozycja, rodzaj i wartość), zostaje przy starym wpisie i znika
+     * razem z nim kaskadą — to powtórzenie, nie nowa informacja.
+     */
+    public function moveFileSource(int $fromPriceListId, int $toPriceListId): void
+    {
+        $toKey = self::fileKey($toPriceListId);
+        $taken = [];
+        foreach (ProductIdentifier::query()->where('source_key', $toKey)->get(['position_key', 'type', 'value']) as $row) {
+            $taken[self::rowKey((string) $row->position_key, (string) $row->type, (string) $row->value)] = true;
+        }
+        $movable = [];
+        foreach (ProductIdentifier::query()->where('source_key', self::fileKey($fromPriceListId))->get() as $row) {
+            $key = self::rowKey((string) $row->position_key, (string) $row->type, (string) $row->value);
+            if (! isset($taken[$key])) {
+                $taken[$key] = true;
+                $movable[] = (int) $row->id;
+            }
+        }
+        foreach (array_chunk($movable, 1000) as $chunk) {
+            ProductIdentifier::query()->whereIn('id', $chunk)->update(['source_key' => $toKey, 'price_list_id' => $toPriceListId]);
+        }
+    }
+
+    public static function fileKey(int $priceListId): string
+    {
+        return 'file:'.$priceListId;
     }
 
     /**
