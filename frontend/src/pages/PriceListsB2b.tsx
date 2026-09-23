@@ -315,6 +315,10 @@ export function PriceListsB2b() {
   const fieldBox = 'flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-sm'
   const iconBtn = 'rounded px-1.5 py-0.5 text-xs text-slate-600 hover:bg-slate-200 hover:text-slate-900'
   const outlineBtn = 'rounded-full border border-blue-300 px-4 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50'
+  // akcje importera przy koncie: obrys jak Edytuj/Usuń, „Sprawdź teraz” wypełnione jako główna akcja
+  const actionBtn = 'rounded-full border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50'
+  const primaryActionBtn = 'rounded-full bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50'
+  const specialActionBtn = 'rounded-full border border-emerald-300 px-3 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50'
 
   return (
     <div>
@@ -573,10 +577,10 @@ export function PriceListsB2b() {
                       Importer: <b>{row.connector_label}</b> · sprawdzanie: <b>{FREQUENCY_LABEL[row.sync_frequency]}</b>
                       {row.sync_images ? ' · ze zdjęciami' : ' · bez zdjęć'}
                     </p>
-                    <div className="flex gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        className="text-blue-700 underline"
+                        className={actionBtn}
                         onClick={() => setProgressAccount(row)}
                       >
                         Postęp i log
@@ -584,7 +588,7 @@ export function PriceListsB2b() {
                       {usesDiscountRules(row.connector) && (
                         <button
                           type="button"
-                          className="text-blue-700 underline"
+                          className={actionBtn}
                           onClick={() => setDiscountAccount(row)}
                           title={
                             usesStandardDiscounts(row.connector)
@@ -597,7 +601,7 @@ export function PriceListsB2b() {
                       )}
                       <button
                         type="button"
-                        className="text-blue-700 underline"
+                        className={actionBtn}
                         onClick={() => setManufacturersAccount(row)}
                         title="Producenci, których karty pobiera to konto — czy ten cennik ustala ich cenę i opis"
                       >
@@ -605,7 +609,7 @@ export function PriceListsB2b() {
                       </button>
                       {usesStandardDiscounts(row.connector) && (
                         <Link
-                          className="font-medium text-emerald-700 underline"
+                          className={specialActionBtn}
                           to={`/products?b2b_account=${row.id}&b2b_label=${encodeURIComponent(row.connector_label ?? row.username)}&supplier_special=special`}
                           title="Karty tego konta z ceną niższą niż cennik bazowy minus rabat standardowy"
                         >
@@ -615,7 +619,7 @@ export function PriceListsB2b() {
                       {canManage && (
                         <button
                           type="button"
-                          className="text-blue-700 underline disabled:text-slate-400 disabled:no-underline"
+                          className={primaryActionBtn}
                           disabled={busy || row.last_sync_status === 'running' || row.sync_requested_at !== null}
                           onClick={() => startSync(row)}
                         >
