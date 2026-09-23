@@ -4788,7 +4788,10 @@ final class ProductAiSearchService
             $missingCodes = $this->modelFuzzy->missingVariantCodes($query, $product);
             if ($missingCodes === []) {
                 $row['ai_match_percent'] = min(99, max(80, $this->modelFuzzy->score($query, $product)));
-                $row['ai_match_reason'] = 'Marka i model z SIWZ (literówka w nazwie modelu jest dopuszczalna).';
+                // Kod przepisany przez klienta nie ma literówki — stary opis sugerował zgadywanie.
+                $row['ai_match_reason'] = $this->modelFuzzy->matchesDeclaredCode($query, $product)
+                    ? 'Kod z zapytania klienta.'
+                    : 'Marka i model z SIWZ (literówka w nazwie modelu jest dopuszczalna).';
             } else {
                 // Ta sama rodzina modelu, ale inny wariant: pod „ARMEN 9007 1010 S1” wszystkie
                 // warianty (6660, 9360) dostawały płaskie 99% i najtańszy wchodził do oferty

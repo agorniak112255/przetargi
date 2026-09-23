@@ -345,6 +345,24 @@ final class ProductModelFuzzy
     }
 
     /**
+     * Karta to dokładnie kod, który klient zapowiedział etykietą („symbol RNITz”): cały SKU albo
+     * całe słowo nazwy. RNITZ-SUPER też zawiera „rnitz”, ale klient o niego nie pytał.
+     */
+    public function matchesDeclaredCode(string $requirement, Product $product): bool
+    {
+        $codes = $this->declaredCodes($requirement);
+        if ($codes === []) {
+            return false;
+        }
+        $words = [$this->compact((string) $product->sku)];
+        foreach (preg_split('/\s+/u', (string) $product->name) ?: [] as $word) {
+            $words[] = $this->compact($word);
+        }
+
+        return array_intersect($codes, $words) !== [];
+    }
+
+    /**
      * Numer katalogowy zapowiedziany etykietą: „ściągaczem-symbol RNITz” → rnitz. Kod bez cyfr
      * nie przechodził żadnej reguły igieł (KAPITALIKI dopiero od 6 liter, bez małej litery),
      * więc karta RNITZ nie była nazwanym modelem, choć klient przepisał jej symbol z katalogu.

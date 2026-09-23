@@ -31,6 +31,9 @@ final class ProductAiSearchDeclaredCodeTest extends TestCase
         parent::setUp();
         $this->seed(RolesAndPermissionsSeeder::class);
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        // pula w remisie idzie od najświeższej karty — karty zakładane na przełomie sekundy
+        // zmieniały kolejność między przebiegami (jak w ProductAiSearchCascadeTest)
+        $this->freezeTime();
     }
 
     public function test_code_declared_by_symbol_label_points_at_the_catalog_card(): void
@@ -61,6 +64,12 @@ final class ProductAiSearchDeclaredCodeTest extends TestCase
         $this->assertSame('RNITZ', $skus[0] ?? null, 'Karta z symbolem z maila nie stoi na czele wyniku.');
         // Trafienie po kodzie to nie wiersz zapasowy — oferty przyjmują tylko takie bez źródła „catalog”/„rule”.
         $this->assertNull($products[0]['ai_match_source'] ?? null);
+        // kod przepisany przez klienta to nie „literówka dopuszczalna”
+        $this->assertSame('Kod z zapytania klienta.', $products[0]['ai_match_reason'] ?? null);
+        // RNITZ-SUPER zawiera kod, ale nim nie jest — nie udaje kodu klienta
+        $super = array_values(array_filter($products, static fn (array $p): bool => $p['sku'] === 'RNITZ-SUPER'))[0] ?? null;
+        $this->assertNotNull($super);
+        $this->assertNotSame('Kod z zapytania klienta.', $super['ai_match_reason'] ?? null);
         // Kod przepisany z katalogu nie ma literówki: RNITNL to inny wyrób, nie „RNITz z błędem”.
         $this->assertNotContains('RNITNL', $skus);
         $this->assertNotContains('X-NITRON', $skus);
