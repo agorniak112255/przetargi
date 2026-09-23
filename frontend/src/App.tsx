@@ -17,6 +17,7 @@ import { AdminDescriptionTemplates } from './pages/AdminDescriptionTemplates'
 import { AdminDictionaries } from './pages/AdminDictionaries'
 import { AdminSmtp } from './pages/AdminSmtp'
 import { AdminUsers } from './pages/AdminUsers'
+import { CardMatches } from './pages/CardMatches'
 import { Clients } from './pages/Clients'
 import { Inquiries } from './pages/Inquiries'
 import { InquiryReply } from './pages/InquiryReply'
@@ -80,6 +81,14 @@ export default function App() {
             <Route path="products" element={<Products />} />
             <Route path="products/compare" element={<ProductCompare />} />
             <Route path="products/:id" element={<ProductDetail />} />
+            <Route
+              path="card-matches"
+              element={
+                <PermissionGuard permission="products.view">
+                  <CardMatches />
+                </PermissionGuard>
+              }
+            />
             <Route path="price-lists" element={<PriceLists />} />
             <Route
               path="price-lists/b2b"

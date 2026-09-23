@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\B2bAccountController;
 use App\Http\Controllers\Api\B2bDiscountRuleController;
 use App\Http\Controllers\Api\B2bManufacturerRuleController;
+use App\Http\Controllers\Api\CardMatchController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
@@ -211,6 +212,18 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::patch('/substitutes/{productSubstitute}', [ProductSubstituteController::class, 'update'])->middleware('permission:substitutes.manage');
     Route::delete('/substitutes/{productSubstitute}', [ProductSubstituteController::class, 'destroy'])->middleware('permission:substitutes.manage');
     Route::patch('/substitutes/{productSubstitute}/approve', [ProductSubstituteController::class, 'approve'])->middleware('permission:substitutes.approve');
+
+    // Łączenie kart dystrybutora z kartą producenta (plan łączenia kart, etap C) — decyzja człowieka
+    Route::get('/card-matches', [CardMatchController::class, 'index'])->middleware('permission:products.view');
+    Route::get('/card-matches/summary', [CardMatchController::class, 'summary'])->middleware('permission:products.view');
+    Route::post('/card-matches/refresh', [CardMatchController::class, 'refresh'])->middleware('permission:products.delete');
+    Route::post('/card-matches/bulk', [CardMatchController::class, 'bulk'])->middleware('permission:products.delete');
+    Route::post('/card-matches/{candidate}/merge', [CardMatchController::class, 'merge'])
+        ->whereNumber('candidate')
+        ->middleware('permission:products.delete');
+    Route::post('/card-matches/{candidate}/reject', [CardMatchController::class, 'reject'])
+        ->whereNumber('candidate')
+        ->middleware('permission:products.delete');
 
     Route::get('/clients', [ClientController::class, 'index'])->middleware('permission:clients.view');
     Route::post('/clients', [ClientController::class, 'store'])->middleware('permission:clients.manage');

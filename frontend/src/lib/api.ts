@@ -593,6 +593,60 @@ export type Substitute = {
   approver?: { id: number; name: string } | null
 }
 
+/** Stan propozycji połączenia kart (ekran „Łączenie kart”). */
+export type CardMatchStatus = 'pending' | 'conflict' | 'rejected' | 'merged'
+
+/** Skrót karty do porównania obok siebie; ceny jako tekst jak w API, źródła z etykietą SourcePriceComparison. */
+export type CardBrief = {
+  id: number
+  sku: string
+  name: string
+  manufacturer: string | null
+  purchase_price: string | null
+  currency: string | null
+  thumb_url: string | null
+  has_description: boolean
+  sources: Array<{
+    source_key: string
+    label: string
+    purchase_price: string | null
+    currency: string | null
+  }>
+}
+
+/**
+ * Para: karta dystrybutora (source, duplikat) → karta producenta (target, zostaje).
+ * matched_value przychodzi znormalizowane (np. „IF016FPS” dla IF/016/F/PS) — pokazujemy dosłownie.
+ */
+export type CardMatch = {
+  id: number
+  status: CardMatchStatus
+  matched_by: 'ean' | 'manufacturer_code' | string
+  matched_value: string
+  matched_source_key: string | null
+  /** Marka kanoniczna (klucz, np. „anro”). */
+  brand: string | null
+  hits: number
+  positions: number
+  reason: string | null
+  conflict_product_ids: number[] | null
+  decided_by: { id: number; name: string } | null
+  decided_at: string | null
+  last_seen_at: string | null
+  /** null po połączeniu (karta dystrybutora usunięta) — wtedy source_snapshot. */
+  source: CardBrief | null
+  source_snapshot: { sku: string; name: string; manufacturer: string | null } | null
+  target: CardBrief | null
+}
+
+export type CardMatchSummary = {
+  pending: number
+  conflict: number
+  rejected: number
+  merged: number
+  refreshed_at: string | null
+}
+
 export async function downloadFile(path: string, fallbackName: string): Promise<void> {
   const headers = new Headers({ Accept: '*/*' })
   const t = token()

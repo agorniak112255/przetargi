@@ -35,6 +35,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('activity-logs:prune')->dailyAt('02:15');
         $schedule->command('search-events:prune')->dailyAt('02:25');
         $schedule->command('storage:prune')->hourly();
+        // propozycje łączenia kart dystrybutora z kartami producenta — po nocnych przebiegach B2B, przed pracą
+        $schedule->command('products:match-candidates')->dailyAt('06:10')->withoutOverlapping();
         // cenniki B2B: konta z harmonogramem (od 02:00) i „Sprawdź teraz”; każde konto rusza we własnym procesie w tle
         // (pełny przebieg trwa > 1 h), a samo b2b:sync-due kończy się w kilka sekund — stąd krótka blokada; co minutę,
         // żeby „Sprawdź teraz” ruszało bez czekania do 5 min (decyzja użytkownika 15.09.2026)
