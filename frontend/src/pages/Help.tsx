@@ -1984,14 +1984,20 @@ type AddonDownload =
  * że przycisk nie działa. Plik pobieramy więc sami i mówimy, że dotarł.
  * Gdy fetch zawiedzie, zostaje zwykły link (prawy przycisk → Zapisz link jako).
  */
+const ADDON_DOWNLOAD_TIMEOUT_MS = 20_000
+
 function useAddonDownload() {
   const [status, setStatus] = useState<AddonDownload>({ state: 'idle' })
 
   async function download(event: MouseEvent<HTMLAnchorElement>) {
     event.preventDefault()
     setStatus({ state: 'busy' })
+    // Antywirus albo filtr sieci potrafi przytrzymać plik .xpi bez odpowiedzi —
+    // bez limitu przycisk wisiałby na „Pobieram…” w nieskończoność.
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => controller.abort(), ADDON_DOWNLOAD_TIMEOUT_MS)
     try {
-      const res = await fetch(appHref(ADDON_FILE), { cache: 'no-store' })
+      const res = await fetch(appHref(ADDON_FILE), { cache: 'no-store', signal: controller.signal })
       if (!res.ok) throw new Error(`serwer odpowiedział kodem ${res.status}`)
       // Brak pliku na serwerze kończy się stroną aplikacji (index.html) z kodem 200.
       if ((res.headers.get('Content-Type') ?? '').includes('text/html')) {
@@ -2008,7 +2014,14 @@ function useAddonDownload() {
       window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
       setStatus({ state: 'done', kb: Math.max(1, Math.round(blob.size / 1024)) })
     } catch (ex) {
-      setStatus({ state: 'error', message: ex instanceof Error ? ex.message : 'nieznany błąd' })
+      const message = controller.signal.aborted
+        ? `plik nie dotarł w ${ADDON_DOWNLOAD_TIMEOUT_MS / 1000} s — najpewniej zatrzymał go antywirus lub filtr sieci na tym komputerze`
+        : ex instanceof Error
+          ? ex.message
+          : 'nieznany błąd'
+      setStatus({ state: 'error', message })
+    } finally {
+      window.clearTimeout(timer)
     }
   }
 
@@ -2054,8 +2067,8 @@ function DownloadsHelp() {
         ) : null}
         {status.state === 'error' ? (
           <p role="alert" className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-            Nie udało się pobrać pliku ({status.message}). Spróbuj prawym przyciskiem na przycisku → „Zapisz link
-            jako…”.
+            Nie udało się pobrać pliku ({status.message}). Spróbuj w innej przeglądarce (np. Edge) albo prawym
+            przyciskiem na przycisku → „Zapisz link jako…”.
           </p>
         ) : null}
         <p className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
