@@ -387,6 +387,59 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame('10', $resolved[0]['size']);
     }
 
+    /** Zapytanie #51 z 23.09.2026: model zacytował same rozmiary, a symbol wyrobu przepadł. */
+    public function test_size_fragment_quote_gets_the_product_row_above_it(): void
+    {
+        $body = "Proszę o przesłanie oferty cenowej na:\n"
+            ."1. RĘKAWICZKI DIAGNOSTYCZNE BEZPUDROWE,(wyposażenie apteczek) -10 OPAKOWAŃ PO 50 PAR = 500par\n"
+            ."2. Rękawice ochronne tkaninowe pięciopalcowe, powlekane nitrylem żółtym, zakończone ściągaczem-symbol RNITz  - 432 pary\n"
+            .'Rozmiar: 8-108par,9-108par,10-216par.';
+        $query = 'rękawice ochronne tkaninowe nitryl żółty ściągacz RNITz';
+        $resolved = $this->service()->resolveLineItems($body, [
+            ['id' => 'item_1', 'quote' => 'RĘKAWICZKI DIAGNOSTYCZNE BEZPUDROWE,(wyposażenie apteczek) -10 OPAKOWAŃ PO 50 PAR = 500par', 'qty' => '10', 'unit' => 'OPAKOWAŃ', 'query' => 'rękawiczki diagnostyczne bezpudrowe apteczki', 'size' => null],
+            ['id' => 'item_2', 'quote' => 'Rozmiar: 8-108par', 'qty' => '108', 'unit' => 'par', 'query' => $query, 'size' => '8'],
+            ['id' => 'item_3', 'quote' => '9-108par', 'qty' => '108', 'unit' => 'par', 'query' => $query, 'size' => '9'],
+            ['id' => 'item_4', 'quote' => '10-216par', 'qty' => '216', 'unit' => 'par', 'query' => $query, 'size' => '10'],
+        ]);
+
+        $this->assertCount(4, $resolved);
+        // pozycja z nazwą wyrobu zostaje, jak ją zacytował model
+        $this->assertSame('RĘKAWICZKI DIAGNOSTYCZNE BEZPUDROWE,(wyposażenie apteczek) -10 OPAKOWAŃ PO 50 PAR = 500par', $resolved[0]['quote']);
+        $expectedQuote = '2. Rękawice ochronne tkaninowe pięciopalcowe, powlekane nitrylem żółtym, zakończone ściągaczem-symbol RNITz  - 432 pary'
+            .' Rozmiar: 8-108par,9-108par,10-216par.';
+        foreach ([1, 2, 3] as $i) {
+            $this->assertSame($expectedQuote, $resolved[$i]['quote']);
+            // szukamy wierszem z maila — z symbolem i etykietą, nie frazą modelu
+            $this->assertStringContainsString('symbol RNITz', $resolved[$i]['search_query']);
+        }
+        // ilość i rozmiar zostają z fragmentu, nie „432 pary” całego wiersza
+        $this->assertSame([['108', '8'], ['108', '9'], ['216', '10']], array_map(
+            static fn (array $item): array => [$item['qty'], $item['size']],
+            array_slice($resolved, 1),
+        ));
+    }
+
+    /** Fragment bez nazwy wyrobu, ale oddzielony od wiersza wyrobu innym wierszem — nie doklejamy. */
+    public function test_size_fragment_after_another_line_keeps_its_own_quote(): void
+    {
+        $body = "1. Rękawice nitrylowe RNITZ 100 par\nProszę o szybką odpowiedź.\nRozmiar 9 - 50 par";
+        $resolved = $this->service()->resolveLineItems($body, [
+            ['id' => 'item_1', 'quote' => 'Rękawice nitrylowe RNITZ 100 par', 'qty' => '100', 'unit' => 'par', 'query' => 'Rękawice nitrylowe RNITZ', 'size' => null],
+            ['id' => 'item_2', 'quote' => 'Rozmiar 9 - 50 par', 'qty' => '50', 'unit' => 'par', 'query' => 'rękawice', 'size' => '9'],
+        ]);
+
+        $this->assertSame('Rozmiar 9 - 50 par', $resolved[1]['quote']);
+
+        // fragment stojący w mailu dwa razy — nie wiadomo, pod którym wierszem
+        $twice = "1. Rękawice białe dziane - 108 par\n2. Rękawice nitrylowe RNITZ\nRozmiar 8 - 108 par";
+        $resolved = $this->service()->resolveLineItems($twice, [
+            ['id' => 'item_1', 'quote' => 'Rękawice białe dziane - 108 par', 'qty' => '108', 'unit' => 'par', 'query' => 'Rękawice białe dziane', 'size' => null],
+            ['id' => 'item_2', 'quote' => '108 par', 'qty' => '108', 'unit' => 'par', 'query' => 'Rękawice nitrylowe RNITZ', 'size' => '8'],
+            ['id' => 'item_3', 'quote' => '108 par', 'qty' => '108', 'unit' => 'par', 'query' => 'Rękawice nitrylowe RNITZ', 'size' => '8'],
+        ]);
+        $this->assertSame('108 par', $resolved[1]['quote']);
+    }
+
     public function test_cederroth_mail_gives_both_positions_and_nothing_from_the_footer(): void
     {
         $svc = $this->service();
@@ -624,6 +677,45 @@ Prosimy o podanie nastepujacych informacji:
         $this->assertSame('4', $items[3]['qty']);
         $this->assertSame('10', $items[4]['qty']);
         $this->assertArrayNotHasKey('qty_source', $items[4]);
+    }
+
+    /** Zapytanie #47 z 23.09.2026: „10 12 par” we frazie model brał za warunek opakowania. */
+    public function test_search_query_drops_the_item_quantity_and_size(): void
+    {
+        $items = $this->service()->resolveLineItems('x', [
+            ['id' => 'item_1', 'quote' => 'Zestaw plastrów plastikowych CEDERROTH 6036 – 10 kompletów', 'qty' => '10', 'unit' => 'kompletów', 'query' => 'CEDERROTH 6036 plasterki plastikowe', 'size' => null],
+            ['id' => 'item_2', 'quote' => 'Rękawice ATG 42-874 r.9 - 40 par', 'qty' => '40', 'unit' => 'par', 'query' => 'rękawice ATG', 'size' => '9'],
+            ['id' => 'item_3', 'quote' => 'Rękawice MAxicut 44-3745 10 12 par', 'qty' => '12', 'unit' => 'par', 'query' => 'MAxicut', 'size' => '10'],
+            ['id' => 'item_4', 'quote' => 'Filtry 3M 6035 12 szt.', 'qty' => '12', 'unit' => 'szt.', 'query' => 'filtry', 'size' => null],
+        ]);
+
+        $this->assertSame([
+            'Zestaw plastrów plastikowych CEDERROTH 6036',
+            'Rękawice ATG 42-874',
+            'Rękawice MAxicut 44-3745',
+            // kod wyrobu nie jest ilością ani rozmiarem — zostaje
+            'Filtry 3M 6035',
+        ], array_column($items, 'search_query'));
+        // ilość i rozmiar dalej siedzą w pozycji, a cytat zostaje słowo w słowo
+        $this->assertSame([['10', null], ['40', '9'], ['12', '10'], ['12', null]], array_map(
+            static fn (array $item): array => [$item['qty'], $item['size']],
+            $items,
+        ));
+        $this->assertSame('Rękawice MAxicut 44-3745 10 12 par', $items[2]['quote']);
+    }
+
+    /** Liczba różna od ilości i rozmiaru pozycji nie znika z frazy. */
+    public function test_search_query_keeps_numbers_that_are_not_the_item_quantity(): void
+    {
+        $items = $this->service()->resolveLineItems('x', [
+            // zawartość opakowania to część wyrobu, nie zamawiana ilość
+            ['id' => 'item_1', 'quote' => 'Rękawice nitrylowe op. 100 szt.', 'qty' => '100', 'unit' => 'szt.', 'query' => 'rękawice', 'size' => null],
+            // rozmiar w środku frazy, nie na jej końcu, zostaje
+            ['id' => 'item_2', 'quote' => 'Kask 10 lat gwarancji', 'qty' => null, 'unit' => null, 'query' => 'kask', 'size' => '10'],
+        ]);
+
+        $this->assertSame('Rękawice nitrylowe op. 100 szt', $items[0]['search_query']);
+        $this->assertSame('Kask 10 lat gwarancji', $items[1]['search_query']);
     }
 
     public function test_unit_never_ends_inside_a_word(): void

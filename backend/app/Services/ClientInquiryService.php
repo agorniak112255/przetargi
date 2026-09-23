@@ -1811,9 +1811,84 @@ final class ClientInquiryService
         $credible = count(array_filter($parsed, fn (array $item): bool => $this->isCredibleRow($item)));
         $items = $parsed !== [] && $credible > count($fromAi)
             ? $parsed
-            : ($fromAi !== [] ? $this->quantitiesCheckedAgainstQuote($fromAi) : $parsed);
+            : ($fromAi !== []
+                ? $this->withProductRowQuotes($this->quantitiesCheckedAgainstQuote($fromAi), $parsed, $body)
+                : $parsed);
 
         return $this->withSearchQueries($items, $subjectHint);
+    }
+
+    /**
+     * Model rozbija wiersz na rozmiary i bywa, że cytuje sam rozmiar („Rozmiar: 8-108par”,
+     * „9-108par”) zamiast wiersza wyrobu nad nim (zapytanie #51, 23.09.2026). Cytat bez nazwy
+     * wyrobu gubił symbol z maila („ściągaczem-symbol RNITz”): szukanie szło frazą modelu,
+     * a handlowiec widział jako prośbę klienta same rozmiary. Taki cytat dostaje wiersz
+     * wyrobu z maila, pod którym stoi — dosłownie, bez przepisywania. Ilość i rozmiar
+     * zostają z fragmentu, bo to on mówi, ile par którego rozmiaru.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @param  list<array<string, mixed>>  $parsed  wiersze parsera, w kolejności maila
+     * @return list<array<string, mixed>>
+     */
+    private function withProductRowQuotes(array $items, array $parsed, string $body): array
+    {
+        $rows = [];
+        foreach ($parsed as $row) {
+            $quote = trim((string) ($row['quote'] ?? ''));
+            $at = $quote === '' ? false : mb_strpos($body, $quote);
+            if ($at !== false) {
+                $rows[] = ['quote' => $quote, 'start' => $at, 'end' => $at + mb_strlen($quote)];
+            }
+        }
+        if ($rows === []) {
+            return $items;
+        }
+
+        foreach ($items as $i => $item) {
+            $quote = trim((string) ($item['quote'] ?? ''));
+            if ($quote === '' || InquiryQueryText::namesProduct($quote)) {
+                continue;
+            }
+            $at = mb_strpos($body, $quote);
+            // fragment stojący w mailu dwa razy („108 par”) nie mówi, pod którym wierszem stoi
+            if ($at === false || mb_substr_count($body, $quote) > 1) {
+                continue;
+            }
+            // ostatni wiersz parsera zaczynający się przed fragmentem — tylko jeśli nazywa wyrób
+            $row = null;
+            foreach ($rows as $candidate) {
+                if ($candidate['start'] <= $at) {
+                    $row = $candidate;
+                }
+            }
+            if ($row === null || ! InquiryQueryText::namesProduct($row['quote'])) {
+                continue;
+            }
+            if ($at < $row['end']) {
+                $items[$i]['quote'] = $row['quote'];
+
+                continue;
+            }
+            // fragment z wiersza pod pozycją — cytujemy oba wiersze, jak stoją w mailu
+            $lineStart = mb_strrpos(mb_substr($body, 0, $at), "\n");
+            $lineStart = $lineStart === false ? 0 : $lineStart + 1;
+            $lineEnd = mb_strpos($body, "\n", $at);
+            $line = trim(mb_substr($body, $lineStart, ($lineEnd === false ? mb_strlen($body) : $lineEnd) - $lineStart));
+            if ($lineStart <= $row['start']) {
+                // ten sam wiersz, tylko za końcem cytatu parsera
+                $items[$i]['quote'] = $line;
+
+                continue;
+            }
+            $between = trim(mb_substr($body, $row['end'], $lineStart - $row['end']));
+            // między wierszem wyrobu a fragmentem stoi coś jeszcze — to już nie jego ciąg dalszy
+            if ($between !== '') {
+                continue;
+            }
+            $items[$i]['quote'] = $row['quote'].' '.$line;
+        }
+
+        return $items;
     }
 
     /**
@@ -1920,7 +1995,7 @@ final class ClientInquiryService
         foreach ($items as $item) {
             $own = $this->catalogSearchQuery(
                 (string) ($item['query'] ?? ''),
-                (string) ($item['quote'] ?? '')
+                $this->quoteWithoutQtyAndSize((string) ($item['quote'] ?? ''), $item)
             );
             $item['query_source'] = 'mail';
 
@@ -1947,6 +2022,36 @@ final class ClientInquiryService
         }
 
         return $out;
+    }
+
+    /**
+     * Cytat pozycji bez jej ilości i rozmiaru — do frazy katalogowej. Pozycja trzyma je
+     * w osobnych polach, a we frazie model brał je za warunek: pod „Rękawice MAxicut
+     * 44-3745 10 12 par” (zapytanie #47, 23.09.2026) dopisywał „opakowanie 12 par”
+     * i „włókno aramidowe” i oceniał właściwą kartę na 40%. Wycinamy tylko to, co
+     * pozycja sama odczytała: ilość zgodną z jej `qty` i rozmiar równy jej `size`.
+     * Zawartość opakowania („a 100 szt.”) i kody wyrobów zostają.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private function quoteWithoutQtyAndSize(string $quote, array $item): string
+    {
+        $qty = $this->nullable($item['qty'] ?? null);
+        $taken = $this->qtyInsideRow($quote);
+        if ($qty !== null && $taken !== null && $taken['qty'] === $this->formatQty(ltrim($qty, '0'))) {
+            $quote = $this->withoutQtyFragment($quote, $taken);
+        }
+
+        $size = trim((string) ($item['size'] ?? ''));
+        if ($size !== '') {
+            $s = preg_quote($size, '/');
+            // „r.9”, „r. 9” — skrót, którego queryFromLine (rozmiar/rozm./roz.) nie zna
+            $quote = preg_replace('/(?<![\p{L}\d])r\.\s*'.$s.'(?![\p{L}\d])/iu', ' ', $quote) ?? $quote;
+            // goła liczba na końcu, gdzie stała przed wyciętą ilością: „44-3745 10 12 par”
+            $quote = preg_replace('/(?<=\s)'.$s.'\s*[-–—,;:]?\s*$/iu', '', $quote) ?? $quote;
+        }
+
+        return trim($quote);
     }
 
     /** „rękawice 11-571” zawiera „11571” — bez wielkości liter, spacji i łączników. */
