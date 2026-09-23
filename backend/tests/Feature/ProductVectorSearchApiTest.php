@@ -29,10 +29,9 @@ final class ProductVectorSearchApiTest extends TestCase
 
         // Przy włączonych wektorach Product::create() reindeksuje kartę na kolejce sync, zanim test
         // zarejestruje Http::fake — zapytanie szło wtedy do prawdziwego api.openai.com
-        // (23.09.2026: cURL 28 w pełnym przebiegu). Testy sprawdzają wyszukiwanie, nie indeksowanie;
-        // każde niepodrobione zapytanie ma wywrócić test, a nie wyjść do sieci.
+        // (23.09.2026: cURL 28 w pełnym przebiegu). Testy sprawdzają wyszukiwanie, nie indeksowanie.
+        // Niepodrobione zapytanie wywraca test przez strażnika w Tests\TestCase.
         Queue::fake([ReindexProductEmbeddingJob::class]);
-        Http::preventStrayRequests();
     }
 
     public function test_ai_search_falls_back_to_like_when_vector_disabled(): void

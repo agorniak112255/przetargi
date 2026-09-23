@@ -24,12 +24,6 @@ final class CatalogIndexTest extends TestCase
 {
     use RefreshDatabase;
 
-    protected function setUp(): void
-    {
-        parent::setUp();
-        Http::preventStrayRequests();
-    }
-
     /**
      * @param  array<string, mixed>  $urls
      */
