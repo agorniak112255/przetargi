@@ -7,6 +7,8 @@ namespace App\Services\Enrichment;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\ProductImageRejection;
+use GuzzleHttp\Exception\TooManyRedirectsException;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -89,10 +91,46 @@ final class ProductImageDownloader
      */
     private array $failures = [];
 
+    /**
+     * Adresy z ostatniego downloadMany, których źródło chwilowo odmówiło: strona zapory zamiast pliku
+     * (Incapsula na ansell.com), 403, 429, 5xx. Ta sama karta raz przechodzi, raz nie — warto ponowić
+     * później (products:retry-images). 404, za mały obrazek czy zły typ pliku nie wracają.
+     *
+     * @var list<string>
+     */
+    private array $retryLater = [];
+
+    /** Kod wyjątku downloadOne: odmowa chwilowa, adres trafia do $retryLater. */
+    private const RETRY_LATER = 4290;
+
     /** @return array<string, string> url => powód */
     public function lastFailures(): array
     {
         return $this->failures;
+    }
+
+    /** @return list<string> */
+    public function lastRetryLaterUrls(): array
+    {
+        return $this->retryLater;
+    }
+
+    /**
+     * Przekroczony czas, zerwane połączenie, a także pętla 302 Incapsuli (302 na ten sam adres z ciasteczkiem —
+     * Guzzle kończy ją po 5 przekierowaniach, Laravel owija w ConnectionException) — za kilka godzin może przejść.
+     * Nie: nieznany host i plik większy niż limit (ansell.com: 81 MB, czas mija przy 2 MB za każdym razem).
+     */
+    private static function isTransientConnectionFailure(Throwable $e): bool
+    {
+        if (! $e instanceof ConnectionException && ! $e instanceof TooManyRedirectsException) {
+            return false;
+        }
+        $message = $e->getMessage();
+        if (str_contains($message, 'Could not resolve host')) {
+            return false;
+        }
+
+        return ! (preg_match('/out of (\d+) bytes received/', $message, $m) === 1 && (int) $m[1] > self::MAX_BYTES);
     }
 
     public function downloadMany(Product $product, array $urls, int $max = 5): array
@@ -102,6 +140,7 @@ final class ProductImageDownloader
         // z numerem 0 i drugie zdjęcie główne, a po chwili zdjęcie z sieci wracało na wierzch.
         $sort = (int) (ProductImage::query()->where('product_id', $product->id)->max('sort_order') ?? -1) + 1;
         $this->failures = [];
+        $this->retryLater = [];
 
         foreach (array_values(array_unique($urls)) as $url) {
             if (count($saved) >= $max) {
@@ -130,6 +169,9 @@ final class ProductImageDownloader
                 $image = $this->downloadOne($product, $url, $sort);
             } catch (Throwable $e) {
                 $this->failures[$url] = $e->getMessage();
+                if ($e->getCode() === self::RETRY_LATER || self::isTransientConnectionFailure($e)) {
+                    $this->retryLater[] = $url;
+                }
                 Log::info('Product image download skipped', [
                     'product_id' => $product->id,
                     'url' => $url,
@@ -307,10 +349,14 @@ final class ProductImageDownloader
         if ($blocked) {
             $shot = $this->blockedPages->fetchScreenshot($url);
             if ($shot === null) {
+                $status = $response->status();
+                // strona zapory zamiast pliku albo odmowa chwilowa — nie 404 i nie błąd klienta
+                $later = $response->successful() || in_array($status, [403, 429], true) || $status >= 500;
                 throw new \RuntimeException(
                     $response->successful()
                         ? 'Odpowiedź nie jest obrazem ('.$mime.')'
-                        : 'HTTP '.$response->status()
+                        : 'HTTP '.$status,
+                    $later ? self::RETRY_LATER : 0
                 );
             }
             $bytes = $shot;

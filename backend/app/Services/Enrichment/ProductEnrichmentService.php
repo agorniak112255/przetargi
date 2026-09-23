@@ -1185,6 +1185,8 @@ final class ProductEnrichmentService
             ]);
             $savedImages = $this->images->downloadMany($product, $primaryImageUrls, 1);
             $imageFailure = $this->imageFailureSummary($primaryImageUrls);
+            // przed tryImagesFromOtherCards — kolejne downloadMany czyści listę
+            $imageRetryUrls = $this->images->lastRetryLaterUrls();
             if ($savedImages === []) {
                 $savedImages = $this->tryImagesFromOtherCards(
                     $product,
@@ -1276,14 +1278,20 @@ final class ProductEnrichmentService
                 $savedImages
             )));
 
+            // Zdjęcie wybrane, ale źródło chwilowo odmówiło (zapora ansell.com) — products:retry-images ponowi później.
+            // Tylko na karcie: pamięć SKU (storeSkuCache) dostaje $payload bez tego klucza.
+            $retryImages = $cachedImageUrls === [] && $imageRetryUrls !== [];
             $product->refresh();
             $saved = [
                 'description' => mb_substr($description, 0, 10000),
-                'enrichment_payload' => $payload,
+                'enrichment_payload' => $retryImages
+                    ? [...$payload, ProductImageRetry::PAYLOAD_KEY => ProductImageRetry::fresh($imageRetryUrls)]
+                    : $payload,
                 'enrichment_status' => Product::ENRICHMENT_DONE,
                 'enriched_at' => now(),
                 'enrichment_error' => $cachedImageUrls === []
                     ? 'Opis OK, nie udało się pobrać zdjęcia'.($imageFailure !== '' ? ' ('.$imageFailure.')' : ' (karty nie miały zdjęcia produktu)').'.'
+                        .($retryImages ? ProductImageRetry::ERROR_NOTE : '')
                     : null,
                 // Ślad zapisujemy też po udanym przebiegu (skrócony) — bez niego nie da się
                 // sprawdzić, z której karty powstał opis, a właśnie to zgłasza tester.
