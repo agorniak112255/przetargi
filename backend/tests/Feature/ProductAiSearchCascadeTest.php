@@ -23,6 +23,11 @@ final class ProductAiSearchCascadeTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // Pula kandydatów w remisie trafności idzie od najświeższego opisu (enriched_at),
+        // a karty tworzone tu z `now()` mają remisować. Bez zamrożonego zegara przełom
+        // sekundy w trakcie zakładania kart zmieniał kolejność i wynik (co kilka przebiegów
+        // do kompletu wchodziły OGROD-1 czy OGROD-4 zamiast najtańszych OGROD-0).
+        $this->freezeTime();
         $this->seed(RolesAndPermissionsSeeder::class);
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
     }
