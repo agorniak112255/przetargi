@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Catalog;
 
 use App\Models\CardMatchCandidate;
+use App\Models\CardRedirect;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductImage;
@@ -43,6 +44,8 @@ final class CardMatchMerger
         'product_image_rejections' => 'product_id',
         'presta_product_matches' => 'product_id',
         'tender_items' => 'main_product_id',
+        // mapa połączeń: wiersze karty dystrybutora przechodzą na kartę producenta (CardRedirectStore::repoint)
+        'card_redirects' => 'product_id',
     ];
 
     /** tabela => opis — dane duplikatu, których mergeDuplicate nie przenosi; kaskada skasowałaby je razem z kartą */
@@ -60,6 +63,7 @@ final class CardMatchMerger
         private readonly ProductSizeMergeService $sizeMerge,
         private readonly CardOwnership $ownership,
         private readonly Container $container,
+        private readonly CardRedirectStore $redirects,
     ) {}
 
     /**
@@ -101,6 +105,8 @@ final class CardMatchMerger
                     ->map(static fn (mixed $id): int => (int) $id)
                     ->all();
 
+                // mapa połączeń przed scaleniem — powiązania i identyfikatory są jeszcze na karcie dystrybutora
+                $this->redirects->recordMerge($source, $target, CardRedirect::REASON_MERGE, $locked, $user);
                 $this->sizeMerge->mergeDuplicate($target, $source);
 
                 $this->keepTargetImageOrder((int) $target->id, $targetImages);

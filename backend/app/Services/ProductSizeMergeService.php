@@ -18,6 +18,7 @@ use App\Models\ProductSourcePrice;
 use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
 use App\Services\B2b\B2bCatalogSync;
+use App\Services\Catalog\CardRedirectStore;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Support\ProductSizeVariant;
 use Illuminate\Support\Collection;
@@ -30,6 +31,7 @@ final class ProductSizeMergeService
     public function __construct(
         private readonly ProductSizeVariant $sizes,
         private readonly ProductEffectivePrice $effectivePrices,
+        private readonly CardRedirectStore $redirects,
     ) {}
 
     /**
@@ -397,6 +399,8 @@ final class ProductSizeMergeService
             // zniknęłyby kaskadą, a następna synchronizacja założyłaby dla kodu dostawcy osobną kartę
             $this->moveSourcePrices((int) $winner->id, $loserIds);
             $this->moveB2bLinks((int) $winner->id, $loserIds);
+            // mapa połączeń: decyzje wskazujące scalane karty idą za ich kodami (usunięcie karty wyzerowałoby wskazanie)
+            $this->redirects->repoint($loserIds, (int) $winner->id);
             $this->moveShopCards((int) $winner->id, $loserIds);
             $this->moveImageRejections((int) $winner->id, $loserIds);
             // identyfikatory ze źródeł cen (EAN, kody scalanych rozmiarów) — UNIQUE bez product_id, więc bez konfliktów

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Models\CardRedirect;
 use App\Models\Product;
+use App\Services\Catalog\CardRedirectStore;
 use App\Services\ProductSizeMergeService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -21,7 +23,8 @@ use Throwable;
  * Nazwa, opis i SKU karty, która zostaje, się nie zmieniają. --take-sku przejmuje SKU duplikatu (po jego usunięciu
  * kod jest wolny) — dla karty z obciętym SKU. Pusta kategoria karty, która zostaje, bierze kategorię duplikatu.
  * Odmowa, gdy producent jest inny albo duplikat ma dane, których przenoszenie nie obejmuje (wersje, ceny specjalne,
- * akcesoria). Domyślnie podgląd; --apply zapisuje kopię zapasową obu kart i scala.
+ * akcesoria). Domyślnie podgląd; --apply zapisuje kopię zapasową obu kart i scala. Kody duplikatu (powiązania B2B,
+ * pozycje cenników z pliku) trafiają do mapy połączeń (card_redirects) jako decyzja bez propozycji i autora.
  */
 final class MergeDuplicateProductsCommand extends Command
 {
@@ -53,7 +56,7 @@ final class MergeDuplicateProductsCommand extends Command
 
     protected $description = 'Scala kartę-duplikat tego samego wyrobu w kartę, która zostaje (podgląd bez --apply)';
 
-    public function handle(ProductSizeMergeService $merge): int
+    public function handle(ProductSizeMergeService $merge, CardRedirectStore $redirects): int
     {
         $pairs = $this->pairs();
         if ($pairs === null) {
@@ -129,7 +132,12 @@ final class MergeDuplicateProductsCommand extends Command
             $dropSku = (string) $drop->sku;
             $dropCategory = trim((string) $drop->category);
             try {
-                $merge->mergeDuplicate($keep, $drop);
+                // mapa połączeń przed scaleniem (powiązania i identyfikatory są jeszcze na duplikacie) — razem
+                // ze scaleniem albo wcale
+                DB::transaction(static function () use ($redirects, $merge, $keep, $drop): void {
+                    $redirects->recordMerge($drop, $keep, CardRedirect::REASON_MERGE, null, null);
+                    $merge->mergeDuplicate($keep, $drop);
+                });
                 $keep->refresh();
                 if ($takeSku) {
                     $keep->sku = $dropSku;
