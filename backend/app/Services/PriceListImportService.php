@@ -416,6 +416,10 @@ final class PriceListImportService
                 if (($payload['model_name'] ?? null) === null) {
                     unset($payload['model_name']);
                 }
+                // ani EAN: cennik bez kolumny EAN albo z pustą komórką nie mówi, że wyrób kod stracił
+                if (($payload['ean'] ?? null) === null) {
+                    unset($payload['ean']);
+                }
                 $existing = $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots);
                 // sku jest UNIQUE — kod karty innego producenta: pozycja pominięta, bez drugiej karty i bez nadpisania
                 if ($existing !== null && $this->foreignManufacturer($existing, (string) ($payload['manufacturer'] ?? ''))) {
