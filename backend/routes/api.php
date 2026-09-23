@@ -32,6 +32,7 @@ use App\Http\Controllers\Api\ProductCatalogHealthController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\ProductCrossRefController;
 use App\Http\Controllers\Api\ProductEnrichmentController;
+use App\Http\Controllers\Api\ProductImageController;
 use App\Http\Controllers\Api\ProductImageThumbController;
 use App\Http\Controllers\Api\ProductKitController;
 use App\Http\Controllers\Api\ProductRequirementCheckController;
@@ -160,6 +161,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:products.delete');
     Route::get('/products/{product}', [ProductController::class, 'show'])->middleware('permission:products.view');
     Route::delete('/products/{product}', [ProductController::class, 'destroy'])
+        ->middleware('permission:products.delete');
+    Route::delete('/products/{product}/images/{image}', [ProductImageController::class, 'destroy'])
+        ->whereNumber('image')
         ->middleware('permission:products.delete');
     Route::post('/products/{product}/kit-suggestions', [ProductKitController::class, 'suggest'])->middleware('permission:products.view');
     Route::post('/products/{product}/kit', [ProductKitController::class, 'attach'])->middleware('permission:products.view');

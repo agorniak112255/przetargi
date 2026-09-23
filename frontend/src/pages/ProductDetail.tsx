@@ -155,6 +155,7 @@ export function ProductDetail() {
   const [exportBusy, setExportBusy] = useState(false)
   const [exportMsg, setExportMsg] = useState('')
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const [imageDeleteId, setImageDeleteId] = useState<number | null>(null)
   const [priceHistory, setPriceHistory] = useState<ProductPriceHistoryRow[]>([])
   const [categoryOptions, setCategoryOptions] = useState<{ value: string; label: string }[]>([])
   const [categoryBusy, setCategoryBusy] = useState(false)
@@ -398,6 +399,26 @@ export function ProductDetail() {
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd usuwania produktu')
       setDeleteBusy(false)
+    }
+  }
+
+  async function deleteImage(imageId: number) {
+    if (!id || !p) return
+    const ok = window.confirm(
+      'Usunąć to zdjęcie z karty?\n\nSynchronizacja z dostawcą i wzbogacanie nie dodadzą go ponownie.',
+    )
+    if (!ok) return
+    setImageDeleteId(imageId)
+    setErr('')
+    try {
+      const res = await api<{ images: NonNullable<Detail['images']> }>(`/products/${id}/images/${imageId}`, {
+        method: 'DELETE',
+      })
+      setP((prev) => (prev ? { ...prev, images: res.images } : prev))
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się usunąć zdjęcia')
+    } finally {
+      setImageDeleteId(null)
     }
   }
 
@@ -1108,8 +1129,8 @@ export function ProductDetail() {
           {p.images && p.images.length > 0 ? (
             <div className="mb-3 flex flex-wrap gap-2">
               {p.images.map((img) => (
+                <div key={img.id} className="relative">
                 <button
-                  key={img.id}
                   type="button"
                   onClick={() => setImageModalUrl(img.url)}
                   className="rounded border border-slate-200 bg-slate-50 p-0 hover:border-blue-400"
@@ -1136,6 +1157,19 @@ export function ProductDetail() {
                     }}
                   />
                 </button>
+                {canDelete && (
+                  <button
+                    type="button"
+                    onClick={() => void deleteImage(img.id)}
+                    disabled={imageDeleteId !== null}
+                    className="absolute right-1 top-1 rounded bg-white/90 px-1.5 text-xs font-semibold text-red-700 shadow hover:bg-red-50 disabled:opacity-50"
+                    title="Usuń zdjęcie z karty"
+                    aria-label="Usuń zdjęcie z karty"
+                  >
+                    {imageDeleteId === img.id ? '…' : '×'}
+                  </button>
+                )}
+                </div>
               ))}
             </div>
           ) : p.enrichment_status === 'done' ? (

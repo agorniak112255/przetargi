@@ -66,9 +66,7 @@ final class ProductImageCandidateVerifier
         $trustedHits = [];
         $unverified = [];
         foreach ($urls as $url) {
-            if ($this->identity->imageUrlMentionsForeignBrand($url, $product)
-                || $this->identity->imageUrlHasForeignType($url, $product)
-                || $this->identity->imageUrlHasForeignVariantCode($url, $product)) {
+            if ($this->urlNamesForeignProduct($url, $product)) {
                 continue;
             }
             if ($this->identity->imageUrlMentionsProduct($url, $product)) {
@@ -202,6 +200,18 @@ final class ProductImageCandidateVerifier
     }
 
     /**
+     * Adres zdjęcia sam nazywa cudzy wyrób: inną markę, inny rodzaj, inny kod koloru albo inną klasę obuwia
+     * („ARDOR_330_619060_S3L_ESD.png” przy karcie „ARDOR 330 Air 619060 S1 PL ESD”).
+     */
+    private function urlNamesForeignProduct(string $url, Product $product): bool
+    {
+        return $this->identity->imageUrlMentionsForeignBrand($url, $product)
+            || $this->identity->imageUrlHasForeignType($url, $product)
+            || $this->identity->imageUrlHasForeignVariantCode($url, $product)
+            || $this->identity->imageUrlNamesAnotherFootwearVariant($url, $product);
+    }
+
+    /**
      * Zaufany kandydat (og:image / JSON-LD) trafia na kartę bez oglądania przez model.
      * Przy wyrobie z kodem wariantu w nazwie (ARTRA: „ARAGON 920 6060 S2”, gdzie 6060
      * to kolor) adres, który tego kodu nie potwierdza, nie dowodzi, że to TEN wariant —
@@ -231,18 +241,14 @@ final class ProductImageCandidateVerifier
     ): array {
         $selected = array_values(array_filter(
             $selected,
-            fn (string $url): bool => ! $this->identity->imageUrlMentionsForeignBrand($url, $product)
-                && ! $this->identity->imageUrlHasForeignType($url, $product)
-                && ! $this->identity->imageUrlHasForeignVariantCode($url, $product)
+            fn (string $url): bool => ! $this->urlNamesForeignProduct($url, $product)
         ));
         if ($selected !== []) {
             return array_values(array_unique(array_slice($selected, 0, $max)));
         }
         foreach ($urls as $url) {
             if (isset($trusted[mb_strtolower($url)]) && $this->isPotentialProductImage($url)
-                && ! $this->identity->imageUrlMentionsForeignBrand($url, $product)
-                && ! $this->identity->imageUrlHasForeignType($url, $product)
-                && ! $this->identity->imageUrlHasForeignVariantCode($url, $product)
+                && ! $this->urlNamesForeignProduct($url, $product)
                 && $this->trustedImageIsSafe($url, $product, $pages)
                 && $this->trustedImageMatchesVariant($url, $product)) {
                 return [$url];

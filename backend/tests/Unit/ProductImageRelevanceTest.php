@@ -423,4 +423,36 @@ final class ProductImageRelevanceTest extends TestCase
             'manufacturer' => 'ARTRA',
         ])));
     }
+
+    /** Produkcja 23.09.2026: zdjęcia z pierwszego pobierania ARTRY z inną klasą obuwia w nazwie pliku. */
+    public function test_image_file_naming_another_footwear_class_is_foreign(): void
+    {
+        $identity = new ProductSearchIdentity;
+        $card = static fn (string $name): Product => new Product(['sku' => $name, 'name' => $name, 'manufacturer' => 'ARTRA']);
+
+        $this->assertTrue($identity->imageUrlNamesAnotherFootwearVariant(
+            'https://artra.pl/cdn/shop/files/ARDOR_330_619060_S3L_ESD.png?v=1764059517&width=1728',
+            $card('ARDOR 330 Air 619060 S1 PL ESD'),
+        ));
+        // inny model tej samej linii, inna klasa
+        $this->assertTrue($identity->imageUrlNamesAnotherFootwearVariant(
+            'https://sklep.example/buty-robocze-trzewiki-artra-archa-942-2360-o2-fo.jpg',
+            $card('ARMEN 900 2360 S1'),
+        ));
+        // S1 PL i S1P to ta sama klasa
+        $this->assertFalse($identity->imageUrlNamesAnotherFootwearVariant(
+            'https://sklep.example/polbuty-artra-ardor-330-air-619060-s1p-esd.jpg',
+            $card('ARDOR 330 Air 619060 S1 PL ESD'),
+        ));
+        // plik bez klasy niczego nie dowodzi
+        $this->assertFalse($identity->imageUrlNamesAnotherFootwearVariant(
+            'https://cdn.shopify.com/s/files/1/2/3/files/330Air-1.jpg',
+            $card('ARDOR 330 Air 619060 S1 PL ESD'),
+        ));
+        // karta bez klasy (wkładka) — reguła jej nie dotyczy
+        $this->assertFalse($identity->imageUrlNamesAnotherFootwearVariant(
+            'https://sklep.example/wkladki-zapasowe-do-butow-artra-softyum-3d-esd-s3.webp',
+            $card('SOFTYUM 3D ESD czarna'),
+        ));
+    }
 }

@@ -6,6 +6,7 @@ namespace App\Services\Enrichment;
 
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Models\ProductImageRejection;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -107,6 +108,11 @@ final class ProductImageDownloader
                 break;
             }
             if (! is_string($url) || ! str_starts_with($url, 'http')) {
+                continue;
+            }
+            if (ProductImageRejection::blocksUrl((int) $product->id, $url)) {
+                $this->failures[$url] = 'Zdjęcie usunięte wcześniej z tej karty';
+
                 continue;
             }
             if (! self::looksLikeImageUrl($url)) {
@@ -363,6 +369,11 @@ final class ProductImageDownloader
         }
 
         $checksum = hash('sha256', $bytes);
+        // usunięte z karty świadomie (panel, audyt zdjęć) — ani pod tym adresem, ani ten sam plik pod innym
+        if (ProductImageRejection::blocksUrl((int) $product->id, $sourceUrl)
+            || ProductImageRejection::blocksChecksum((int) $product->id, $checksum)) {
+            return null;
+        }
         $existing = ProductImage::query()
             ->where('product_id', $product->id)
             ->where('checksum', $checksum)

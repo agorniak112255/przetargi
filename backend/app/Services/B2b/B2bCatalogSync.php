@@ -13,6 +13,7 @@ use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductImage;
+use App\Models\ProductImageRejection;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
@@ -2229,9 +2230,15 @@ final class B2bCatalogSync
         $saved = false;
         $stamped = false;
         $error = null;
+        // zdjęcia usunięte z karty ręcznie albo audytem — nie pobieramy ich co przebieg tylko po to,
+        // żeby storeBytes je odrzucił
+        $blocked = ProductImageRejection::blockedKeyHashes((int) $product->id);
         // miejsce w galerii sklepu, liczone tylko dla zdjęć, które karta faktycznie ma albo dostała
         $position = 0;
         foreach ($urls as $url) {
+            if ($blocked !== [] && ProductImageRejection::blocksUrl((int) $product->id, $url, $blocked)) {
+                continue;
+            }
             $known = $have[ProductImageDownloader::sameFileKey($url)] ?? null;
             if ($known !== null) {
                 $stamped = $this->stampGalleryImage($known, $account, $position) || $stamped;

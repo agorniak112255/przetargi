@@ -6,6 +6,7 @@ namespace App\Console\Commands;
 
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Models\ProductImageRejection;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\Enrichment\ProductSearchIdentity;
 use Illuminate\Console\Command;
@@ -23,7 +24,10 @@ use Illuminate\Console\Command;
  * Domyślnie polecenie **tylko liczy i wypisuje**. Kasuje wiersze wyłącznie po jawnym `--apply`, i tylko te
  * dwa rodzaje:
  * - powtórzony plik w obrębie jednej karty — zostaje wiersz dostawcy (a przy remisie wcześniejszy),
- * - zdjęcie wyłowione z sieci (bez konta dostawcy), które nie przechodzi dzisiejszej bramki tożsamości.
+ * - zdjęcie wyłowione z sieci (bez konta dostawcy), które nie przechodzi dzisiejszej bramki tożsamości —
+ *   także gdy nazwa pliku podaje inną klasę obuwia (23.09.2026: „ARDOR 330 Air 619060 S1 PL ESD” ze zdjęciem
+ *   „ARDOR_330_619060_S3L_ESD.png” z pierwszego pobierania). Takie zdjęcie dostaje ślad odrzucenia
+ *   (ProductImageRejection), żeby wzbogacanie nie dołożyło go z powrotem.
  *
  * Zdjęcia dostawców nie są ruszane nigdy: to, co dostawca pokazuje przy swojej karcie, jest jego decyzją.
  * Pliki na dysku zostają — sprząta je `products:media-report --apply`, które liczy też miejsce.
@@ -72,6 +76,13 @@ final class ProductImageAuditCommand extends Command
         $this->examples('Powtórzony plik w karcie', $duplicates, $show);
         $this->examples('Zdjęcie, które dziś nie przeszłoby bramki', $foreign, $show);
 
+        // karta, w której wszystkie zdjęcia są do usunięcia, zostanie bez zdjęcia — człowiek ma to widzieć przed --apply
+        $emptied = $this->cardsLeftWithoutImages(array_merge($duplicates, $foreign));
+        if ($emptied !== []) {
+            $this->newLine();
+            $this->line('Po usunięciu zostaną bez zdjęcia ('.count($emptied).'): #'.implode(', #', $emptied));
+        }
+
         $rows = array_merge($duplicates, $foreign);
         if ($rows === []) {
             $this->newLine();
@@ -90,12 +101,20 @@ final class ProductImageAuditCommand extends Command
         $this->newLine();
         $this->line('Kasuję wiersze…');
         $touched = [];
-        foreach ($rows as $row) {
+        foreach ($duplicates as $row) {
             ProductImage::query()->whereKey($row['id'])->delete();
             $touched[$row['product_id']] = true;
         }
         foreach (array_keys($touched) as $productId) {
             ProductImage::resequence((int) $productId);
+        }
+        // powtórzony plik zostaje w karcie drugim wierszem, więc odrzucamy tylko obce zdjęcia
+        foreach ($foreign as $row) {
+            $image = ProductImage::query()->find($row['id']);
+            if ($image !== null) {
+                ProductImageRejection::rejectAndDelete($image, ProductImageRejection::REASON_AUDIT);
+            }
+            $touched[$row['product_id']] = true;
         }
 
         $this->info('Skasowano '.count($rows).' wierszy w '.count($touched).' kartach. '
@@ -142,10 +161,41 @@ final class ProductImageAuditCommand extends Command
             }
             if ($this->identity->imageUrlMentionsForeignBrand($url, $product)
                 || $this->identity->imageUrlHasForeignVariantCode($url, $product)
-                || $this->identity->imageUrlHasForeignType($url, $product)) {
+                || $this->identity->imageUrlHasForeignType($url, $product)
+                || $this->identity->imageUrlNamesAnotherFootwearVariant($url, $product)) {
                 $foreign[] = $row;
             }
         }
+    }
+
+    /**
+     * @param  list<array{id: int, product_id: int, sku: string, file: string}>  $rows
+     * @return list<int>
+     */
+    private function cardsLeftWithoutImages(array $rows): array
+    {
+        $removed = [];
+        foreach ($rows as $row) {
+            $removed[$row['product_id']] = ($removed[$row['product_id']] ?? 0) + 1;
+        }
+        if ($removed === []) {
+            return [];
+        }
+        $totals = ProductImage::query()
+            ->whereIn('product_id', array_keys($removed))
+            ->selectRaw('product_id, count(*) as c')
+            ->groupBy('product_id')
+            ->pluck('c', 'product_id');
+
+        $out = [];
+        foreach ($removed as $productId => $count) {
+            if ((int) ($totals[$productId] ?? 0) <= $count) {
+                $out[] = (int) $productId;
+            }
+        }
+        sort($out);
+
+        return $out;
     }
 
     /**

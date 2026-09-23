@@ -8,6 +8,7 @@ use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\PrestaProductMatch;
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Models\ProductImageRejection;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
@@ -260,7 +261,7 @@ final class PrestaCatalogApplyService
                     $q->where('checksum', $checksum)->orWhere('source_url', $url);
                 })
                 ->exists();
-            if ($exists) {
+            if ($exists || ProductImageRejection::blocksUrl((int) $product->id, $url)) {
                 continue;
             }
             ProductImage::query()->create([

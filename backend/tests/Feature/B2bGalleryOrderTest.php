@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\B2bAccount;
 use App\Models\Product;
 use App\Models\ProductImage;
+use App\Models\ProductImageRejection;
 use App\Models\User;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnector;
@@ -117,6 +118,23 @@ final class B2bGalleryOrderTest extends TestCase
             ->orderBy('sort_order')->get(['source_url', 'sort_order', 'is_primary', 'updated_at']);
         $this->assertEquals($before->toArray(), $after->toArray());
         $this->assertSame(self::SHOE, (string) $after->first()->source_url);
+    }
+
+    public function test_photo_removed_by_hand_is_neither_downloaded_nor_added_again(): void
+    {
+        $product = $this->product();
+        $this->connector->urls = [self::SHOE, self::SOLE];
+        $this->sync();
+        $sole = ProductImage::query()->where('product_id', $product->id)->where('source_url', self::SOLE)->sole();
+        ProductImageRejection::rejectAndDelete($sole, ProductImageRejection::REASON_MANUAL, $this->user->id);
+
+        $this->sync();
+
+        $left = ProductImage::query()->where('product_id', $product->id)->get();
+        $this->assertSame([self::SHOE], $left->pluck('source_url')->map(static fn ($u): string => (string) $u)->all());
+        $this->assertTrue((bool) $left->first()->is_primary);
+        // pierwszy przebieg pobrał podeszwę, drugi już o nią nie prosił
+        $this->assertSame(1, $this->connector->downloads[self::SOLE] ?? 0);
     }
 
     public function test_key_joins_both_shopify_addresses_of_one_file(): void

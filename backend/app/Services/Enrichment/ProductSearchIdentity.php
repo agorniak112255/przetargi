@@ -3983,6 +3983,17 @@ final class ProductSearchIdentity
     }
 
     /**
+     * Nazwa pliku zdjęcia podaje inny wariant klasy obuwia niż karta — to samo sito co dla strony
+     * (pageNamesAnotherFootwearVariant), czytane ze sluga pliku. Produkcja 23.09.2026: „ARDOR 330 Air 619060
+     * S1 PL ESD” ze zdjęciem „ARDOR_330_619060_S3L_ESD.png”, „ARMEN 900 2360 S1” z „…-archa-942-2360-o2-fo.jpg”.
+     * Plik bez zapisu klasy przechodzi — brak klasy w nazwie niczego nie dowodzi.
+     */
+    public function imageUrlNamesAnotherFootwearVariant(string $url, Product $product): bool
+    {
+        return $this->pageNamesAnotherFootwearVariant($url, '', '', $product);
+    }
+
+    /**
      * Strona opisuje tę samą półmaskę albo filtr w innej klasie ochrony. Produkcja 22.09.2026 (Canis):
      * „Respirator SPIRO, P3” dostał dane ze stron spiro-p1 i spiro-p2, „SPIRO P1” ze strony P2 — model
      * i marka te same, więc bramki po nazwie przepuszczały.
