@@ -120,6 +120,21 @@ class B2bConnectorRegistry
         return $this->classFor($key) !== null;
     }
 
+    /**
+     * Łącznik producenta z normami w tabelce karty: [marka, nazwy wierszy z normami]; null dla pozostałych.
+     *
+     * @return array{brand: string, names: list<string>}|null
+     */
+    public function shopFieldNormSource(string $key): ?array
+    {
+        $class = $this->classFor($key);
+        if ($class === null || ! is_a($class, B2bShopFieldNormSource::class, true) || ! is_a($class, B2bManufacturerSite::class, true)) {
+            return null;
+        }
+
+        return ['brand' => $class::ownBrand(), 'names' => $class::normShopFieldNames()];
+    }
+
     /** Czy łącznik to witryna producenta własnej marki (B2bManufacturerSite), a nie dystrybutor wielu marek. */
     public function isManufacturerSite(string $key): bool
     {

@@ -28,7 +28,7 @@ use Throwable;
  * Logowanie kodem z e-maila (B2bCodeLoginSite): przebieg korzysta z sesji zapisanej na koncie, a po udanym login()
  * i na końcu przebiegu zapisuje odnowione ciasteczka z powrotem na koncie.
  */
-final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
+final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource
 {
     public const BRAND = '3M';
 
@@ -104,6 +104,12 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
     public static function ownBrand(): string
     {
         return self::BRAND;
+    }
+
+    /** Dane techniczne / Spełnione specyfikacje = „EN 166:2001, EN 14594 3B, EN 12941:1998 TH3, Oznaczenie CE” (23.09.2026: 380 kart). */
+    public static function normShopFieldNames(): array
+    {
+        return ['Spełnione specyfikacje'];
     }
 
     public static function forAccount(B2bAccount $account, int $delayMs): self

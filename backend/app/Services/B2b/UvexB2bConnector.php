@@ -56,7 +56,7 @@ use RuntimeException;
  * bazowe z poprzedniego przebiegu. Dopasowanie kodów: UvexBasePriceList. Rabat standardowy z reguł konta
  * (B2bDiscountRuleResolver: numer katalogowy = kod karty, kategoria = arkusz cennika, nazwa = nazwa karty).
  */
-final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource, B2bStandardDiscountSite
+final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bStandardDiscountSite
 {
     /**
      * Rabaty standardowe z wiadomości dostawcy (22.09.2026): 35% ochrona wzroku; 30% hełmy, ochrona słuchu, dróg
@@ -283,6 +283,12 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     public static function ownBrand(): string
     {
         return 'uvex';
+    }
+
+    /** Dane techniczne / Protection Class / Norm = „EN 207 full protection, EN 60825” — tylko ochrona laserowa; rękawice UVEX nie mają tu EN 388 (23.09.2026: 58 kart). */
+    public static function normShopFieldNames(): array
+    {
+        return ['Protection Class / Norm'];
     }
 
     public function manufacturer(B2bRemoteProduct $product): string

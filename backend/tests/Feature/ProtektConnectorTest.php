@@ -17,6 +17,7 @@ use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\ProtektB2bClient;
 use App\Services\B2b\ProtektB2bConnector;
+use App\Support\ManufacturerNormFacts;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -260,6 +261,20 @@ final class ProtektConnectorTest extends TestCase
             ['name' => 'Materiał', 'value' => 'poliester/poliamid'],
             ['name' => 'Waga', 'value' => '300 g'],
         ], self::sectionRows($card, 'Specyfikacja techniczna'));
+    }
+
+    public function test_norma_z_tabelki_karty_trafia_do_norm_producenta(): void
+    {
+        // plan norm z 23.09.2026, etap 2: wiersz „Normy / Norma” to norma od samego producenta
+        $this->rule(1, 'Amortyzatory', B2bDiscountRule::TYPE_PREFIX, 'BW', 45.0);
+        $this->page('/wycofany~p370~c5341', $this->card(name: 'ABM/2LE111', catalogNo: 'BW200/2LE111', price: '259,00'));
+        $this->fakeSite();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $column = Product::query()->where('sku', 'BW200/2LE111')->sole()->manufacturer_norms;
+        $this->assertSame('protekt', $column['source']['connector'] ?? null);
+        $this->assertSame([['label' => 'EN 355', 'value' => '']], ManufacturerNormFacts::rows($column));
     }
 
     public function test_pliki_do_pobrania_trafiaja_przy_karte(): void

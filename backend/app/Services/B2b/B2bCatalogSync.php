@@ -2247,6 +2247,16 @@ final class B2bCatalogSync
         B2bAccount $account,
         ?array &$warnings = null,
     ): bool {
+        // Normy z tabelki karty, którą storeShopFields właśnie zapisał — bez drugiego zapytania do sklepu producenta.
+        if ($connector instanceof B2bShopFieldNormSource && $connector instanceof B2bManufacturerSite) {
+            return app(ShopCardNormFacts::class)->store(
+                $product,
+                $account,
+                $connector::key(),
+                $connector::ownBrand(),
+                $connector::normShopFieldNames(),
+            ) === ShopCardNormFacts::SAVED;
+        }
         if (! $connector instanceof B2bNormFactSource || ! $connector instanceof B2bManufacturerSite) {
             return false;
         }

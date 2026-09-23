@@ -35,7 +35,7 @@ use SimpleXMLElement;
  * dlatego B2bDescribesFromDatasheet: opis karty pisze model wyłącznie z opisu sklepu i instrukcji zapisanej przy
  * karcie, jak u Tegro (decyzja użytkownika 21.09.2026).
  */
-final class PolstarB2bConnector implements B2bConnector, B2bDescribesFromDatasheet, B2bDocumentSource, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
+final class PolstarB2bConnector implements B2bConnector, B2bDescribesFromDatasheet, B2bDocumentSource, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource
 {
     private const SHOP_SECTION = 'Parametry produktu';
 
@@ -72,6 +72,12 @@ final class PolstarB2bConnector implements B2bConnector, B2bDescribesFromDatashe
     public static function ownBrand(): string
     {
         return 'Polstar';
+    }
+
+    /** Parametry produktu / Norma = „EN ISO 13688:2013” (23.09.2026: 452 karty). */
+    public static function normShopFieldNames(): array
+    {
+        return ['Norma'];
     }
 
     public static function forAccount(B2bAccount $account, int $delayMs): self

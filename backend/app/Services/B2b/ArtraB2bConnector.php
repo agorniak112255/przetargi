@@ -29,7 +29,7 @@ use RuntimeException;
  * przestrzeń…”, a nie opis wyrobu — 22.09.2026 nadpisał opisy 171 kart. Opis karty pisze model z karty produktu
  * PDF (pl-kp-…) i tabelki parametrów (DescribeB2bProductFromDatasheetJob).
  */
-final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDatasheetOnlyDescription, B2bDocumentSource, B2bImageGallery, B2bManufacturerSite, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldSource
+final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDatasheetOnlyDescription, B2bDocumentSource, B2bImageGallery, B2bManufacturerSite, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource
 {
     /** Blok parametrów szablonu sklepu: wiersz, etykieta i wartość. */
     private const SPEC_ROW_CLASS = 'product-specs__row';
@@ -99,6 +99,12 @@ final class ArtraB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDa
     public static function ownBrand(): string
     {
         return 'ARTRA';
+    }
+
+    /** Parametry / norma = „EN ISO 20345:2022 S3L FO SR” (23.09.2026: 186 kart). */
+    public static function normShopFieldNames(): array
+    {
+        return ['norma'];
     }
 
     public function manufacturer(B2bRemoteProduct $product): string

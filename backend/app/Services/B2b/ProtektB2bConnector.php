@@ -24,7 +24,7 @@ use RuntimeException;
  * jej powiązać z katalogiem, a sklejanie identyfikatora z nazwy byłoby wymyślaniem kodu, którego producent
  * na karcie nie podał.
  */
-final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bManufacturerSite, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldSource
+final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bManufacturerSite, B2bPublicSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource
 {
     private int $total = 0;
 
@@ -88,6 +88,12 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bM
     public static function ownBrand(): string
     {
         return 'PROTEKT';
+    }
+
+    /** Normy / Norma = „EN 355” — jeden wiersz na normę (23.09.2026: 1760 kart). */
+    public static function normShopFieldNames(): array
+    {
+        return ['Norma'];
     }
 
     public function manufacturer(B2bRemoteProduct $product): string
