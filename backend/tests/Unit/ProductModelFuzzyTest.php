@@ -443,6 +443,28 @@ final class ProductModelFuzzyTest extends TestCase
         $this->assertSame(['rnitz'], $this->fuzzy->needles('Rękawice nitrylowe o symbolu RNITZ'));
     }
 
+    /**
+     * Zapytanie #53 z 23.09.2026: opis wyrobu pisany KAPITALIKAMI. „DIAGNOSTYCZNE” i „BEZPUDROWE”
+     * były igłami modelu, więc rękawice lateksowe z tymi słowami w nazwie dostawały 94% jak nazwany model.
+     */
+    #[Test]
+    public function caps_words_next_to_the_product_noun_are_description_not_model(): void
+    {
+        $req = 'RĘKAWICZKI DIAGNOSTYCZNE BEZPUDROWE,(wyposażenie apteczek) -10 OPAKOWAŃ PO 50 PAR = 500par';
+        $this->assertSame([], $this->fuzzy->needles($req));
+        $this->assertFalse($this->fuzzy->matches($req, $this->product('RZ-LATEX', 'Rękawice diagnostyczne lateksowe bezpudrowe RZ-LATEX', 'REIS')));
+
+        $boots = $this->fuzzy->needles('TRZEWIKI BEZPIECZNE PPO STRZELCE OPOLSKIE MODEL 705, KAT. S3,HI,CI,SRC');
+        $this->assertNotContains('bezpieczne', $boots);
+
+        // KAPITALIKI wyróżnione w zwykłym tekście dalej są modelem
+        $this->assertContains('tronchetto', $this->fuzzy->needles('Obuwie TRONCHETTO'));
+        $this->assertSame(['easygrip', 'purple'], $this->fuzzy->needles('Rękawiczki nitrylowe "MedaSept" EASYGRIP PURPLE - 50 opk'));
+        // linia po znanej marce i numerowany model nie zależą od wielkości liter
+        $this->assertContains('ultrane', $this->fuzzy->needles('RĘKAWICE MAPA ULTRANE'));
+        $this->assertContains('perspecta010', $this->fuzzy->needles('OKULARY OCHRONNE MSA PERSPECTA 010'));
+    }
+
     /** Etykieta stoi też przed zwykłymi słowami — te nie są kodem. */
     #[Test]
     public function code_label_before_ordinary_words_adds_no_needle(): void

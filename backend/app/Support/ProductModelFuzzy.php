@@ -319,8 +319,10 @@ final class ProductModelFuzzy
             $this->pushNeedle($out, $line);
         }
 
+        $capsDescription = $this->capsDescriptionWords($requirement);
         foreach ($tokens as $token) {
-            if (! $this->isSiwxUpperModelToken($token, $requirement)) {
+            if (! $this->isSiwxUpperModelToken($token, $requirement)
+                || isset($capsDescription[$this->lettersOnly($token)])) {
                 continue;
             }
             $letters = $this->lettersOnly($token);
@@ -1132,6 +1134,54 @@ final class ProductModelFuzzy
         }
 
         return false;
+    }
+
+    /**
+     * Słowa opisu wyrobu pisanego wielkimi literami: „RĘKAWICZKI DIAGNOSTYCZNE BEZPUDROWE”.
+     * KAPITALIKI są dowodem modelu tylko wtedy, gdy słowo wyróżnia się w zwykłym tekście
+     * („rozm. 35-41 TRONCHETTO OB.”). Gdy tak samo zapisany jest cały opis razem z rodzajem
+     * wyrobu, wielkość liter nic nie mówi — dotąd „diagnostyczne” i „bezpudrowe” były igłami
+     * modelu, a każda karta z tymi słowami w nazwie dostawała 94% „Marka i model z SIWZ”
+     * bez oceny modelu (zapytanie #53, 23.09.2026: rękawice lateksowe RZ-LATEX).
+     *
+     * Ciąg to kolejne słowa bez małych liter; liczby i znaki go nie przerywają. Opisem jest
+     * ciąg, w którym stoi rodzaj wyrobu (rękawiczki, buty, kurtka…).
+     *
+     * @return array<string, true>
+     */
+    private function capsDescriptionWords(string $requirement): array
+    {
+        $runs = [];
+        $run = [];
+        foreach (preg_split('/[\s,;:·•\/|+()]+/u', $requirement) ?: [] as $token) {
+            $letters = preg_replace('/[^\p{L}]/u', '', $token) ?? '';
+            if ($letters === '') {
+                continue;
+            }
+            if (preg_match('/\p{Ll}/u', $letters) === 1) {
+                $runs[] = $run;
+                $run = [];
+
+                continue;
+            }
+            $run[] = $letters;
+        }
+        $runs[] = $run;
+
+        $out = [];
+        $assortment = new PpeAssortment;
+        foreach ($runs as $words) {
+            // słowa od 4 liter: skróty klas i norm („OB”, „SRA”, „EN”) nie są rodzajem wyrobu
+            $long = array_filter($words, static fn (string $w): bool => mb_strlen($w) >= 4);
+            if ($long === [] || $assortment->family(implode(' ', $long)) === null) {
+                continue;
+            }
+            foreach ($words as $word) {
+                $out[$this->lettersOnly($word)] = true;
+            }
+        }
+
+        return $out;
     }
 
     private function isSiwxUpperModelToken(string $token, string $rawRequirement): bool
