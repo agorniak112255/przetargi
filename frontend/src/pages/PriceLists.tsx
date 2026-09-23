@@ -2200,18 +2200,21 @@ export function PriceLists() {
                           onChange={(e) => setEditVersion(e.target.value)}
                           disabled={editBusyId === r.id}
                         />
-                        <label
-                          className="mt-1 flex items-center gap-1 whitespace-nowrap text-[11px] text-slate-600"
-                          title="Ceny sugerowane bez Twoich cen zakupu — cena zakupu z konta B2B (np. dystrybutora) ma pierwszeństwo"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={editSuggested}
-                            onChange={(e) => setEditSuggested(e.target.checked)}
-                            disabled={editBusyId === r.id}
-                          />
-                          cennik sugerowany (bez cen zakupu)
-                        </label>
+                        {/* znacznik dotyczy tylko cen z pliku — wpis z samym kontem B2B (np. P4S) pliku nie ma */}
+                        {(!r.b2b_account || (r.sources ?? []).includes('file') || r.suggested_prices) && (
+                          <label
+                            className="mt-1 flex items-center gap-1 whitespace-nowrap text-[11px] text-slate-600"
+                            title="Ceny w pliku to ceny katalogowe/sugerowane, nie Twoje ceny zakupu — cena z konta B2B (np. dystrybutora) ma pierwszeństwo, plik zostaje tam, gdzie innej ceny nie ma"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={editSuggested}
+                              onChange={(e) => setEditSuggested(e.target.checked)}
+                              disabled={editBusyId === r.id}
+                            />
+                            cennik sugerowany (bez cen zakupu)
+                          </label>
+                        )}
                       </>
                     ) : (
                       r.version
