@@ -6,12 +6,15 @@ namespace Tests\Feature;
 
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\B2bSyncRun;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductIdentifier;
 use App\Models\ProductPriceHistory;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\JspB2bClient;
@@ -253,6 +256,9 @@ final class JspConnectorTest extends TestCase
 
         $this->assertSame('kod na stronie (FAR0701) inny niż kod z mapy strony (1LEOCARB23S)', $products['1LEOCARB23S']->raw['reason']);
         $this->assertSame('brak kodu produktu na stronie (np. strona grupy wariantów)', $products['VAR-AKS270-000-100']->raw['reason']);
+        // strona innego wyrobu nie przypisuje jego kodu tej pozycji
+        $this->assertNull($products['1LEOCARB23S']->identifiers);
+        $this->assertNull($products['VAR-AKS270-000-100']->identifiers);
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('kod na stronie (FAR0701) inny niż kod z mapy strony (1LEOCARB23S)');
         $connector->price($products['1LEOCARB23S']);
@@ -330,8 +336,19 @@ final class JspConnectorTest extends TestCase
             self::rows($connector->shopFields($far)),
         );
 
+        // kod JSP ze strony (ProductTitleBar_PartNo) dosłownie — kod producenta pozycji karty
+        $this->assertSame(
+            [[ProductIdentifier::TYPE_MANUFACTURER_CODE, 'FAR0701', 'FAR0701', null, 'PartNo']],
+            self::identifierRows($far),
+        );
+
         $leone = $products['1LEOCARB23S'];
         $this->assertSame('1LEOCARB23S', $leone->sku);
+        // mapa strony podaje „1lEOCARB23S” — wartość idzie ze strony produktu, nie z adresu
+        $this->assertSame(
+            [[ProductIdentifier::TYPE_MANUFACTURER_CODE, '1LEOCARB23S', '1LEOCARB23S', null, 'PartNo']],
+            self::identifierRows($leone),
+        );
         $this->assertSame('Okulary ochronne Leone™ Premium - soczewki przyciemniane K&N, oprawki w stylu karbonu', $leone->name);
         $this->assertSame('ŚOI › Ostatnia szansa na zakup › Ochrona oczu ostatniej szansy', $leone->category);
         // dokumenty (karty techniczne, deklaracje) nie są pobierane
@@ -467,6 +484,19 @@ final class JspConnectorTest extends TestCase
         // Wagi zostają w tabelce karty wyrobu u dostawcy — opis ich nie przejmuje.
         $this->assertStringNotContainsString(self::ASA_WEIGHTS, (string) $product->description);
         $this->assertSame(sha1((string) $product->description), B2bProductLink::query()->where('remote_id', 'ASA940-061-300')->value('description_hash'));
+
+        // kod producenta zapisany raz, drugi przebieg bez duplikatu, bez oznaczenia zniknięcia i bez ostrzeżeń
+        $this->assertSame(
+            [[$product->id, 'ASA940-061-300', ProductIdentifier::TYPE_MANUFACTURER_CODE, 'ASA940-061-300', 'PartNo', 'JSP']],
+            ProductIdentifier::query()->orderBy('id')->get()
+                ->map(static fn (ProductIdentifier $i): array => [$i->product_id, $i->position_key, $i->type, $i->value, $i->source_field, $i->manufacturer])
+                ->all(),
+        );
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+        foreach ([$first, $second] as $result) {
+            $texts = implode("\n", array_column(B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log, 'text'));
+            $this->assertStringNotContainsString('identyfikator', $texts);
+        }
     }
 
     /**
@@ -646,6 +676,13 @@ final class JspConnectorTest extends TestCase
             ->exists());
         $this->assertSame(1, PriceList::query()->count());
         $this->assertStringStartsWith('W B2B: 4 · sprawdzone: 4 · nowe: 2', (string) $this->account()->last_sync_message);
+        // kody producenta tylko zapisanych pozycji — pominięte (AJF030, VAR-AKS270) nie mają wierszy
+        $this->assertSame(
+            ['1LEOCARB23S' => '1LEOCARB23S', 'FAR0701' => 'FAR0701'],
+            ProductIdentifier::query()->where('type', ProductIdentifier::TYPE_MANUFACTURER_CODE)
+                ->orderBy('position_key')->pluck('value', 'position_key')->all(),
+        );
+        $this->assertSame(2, ProductIdentifier::query()->count());
     }
 
     public function test_sync_command_prints_summary_for_product_connector(): void
@@ -689,6 +726,17 @@ final class JspConnectorTest extends TestCase
         }
 
         return $out;
+    }
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string|null, 3: string|null, 4: string|null}>
+     */
+    private static function identifierRows(B2bRemoteProduct $product): array
+    {
+        return array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $product->identifiers ?? [],
+        );
     }
 
     /** Opis ASA940-061-300 z przebiegu łącznika po stronie z $this->pages (mapa strony z jednym produktem). */

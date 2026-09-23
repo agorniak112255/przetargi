@@ -6,8 +6,10 @@ namespace Tests\Feature;
 
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
@@ -18,6 +20,7 @@ use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bImageGallery;
 use App\Services\B2b\B2bListProgressAware;
 use App\Services\B2b\B2bManufacturerSite;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
@@ -240,6 +243,52 @@ final class P4sConnectorTest extends TestCase
         $this->assertStringContainsString('1 wyrobów w kilku cenach', implode("\n", $connector->runSummary()));
     }
 
+    public function test_cards_carry_the_manufacturer_code_the_p4s_family_code_and_each_size_code_as_identifiers(): void
+    {
+        $this->addProduct(self::goggles());
+        $this->addProduct(self::gloves());
+        $trousers = self::trousers();
+        $trousers['detail']['manufacturerCode'] = 'FR360';
+        // kod producenta rozmiaru z wiersza listy — tylko przy jednym rozmiarze
+        $trousers['sizes'][2]['manufacturerCode'] = 'FR360-08-58';
+        $this->addProduct($trousers);
+        $this->fakeSite();
+
+        $products = $this->products();
+
+        $identifiers = static fn (B2bRemoteProduct $p): array => array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $p->identifiers ?? [],
+        );
+        $products = array_column(array_map(static fn (B2bRemoteProduct $p): array => ['sku' => $p->sku, 'product' => $p], $products), 'product', 'sku');
+        $this->assertSame(['000999', '05 99 360 04 056', '05 99 360 08 058', '11.999'], array_keys($products));
+        // wyrób pojedynczy: kod P4S to kod pozycji, nie kod rodziny
+        $this->assertSame([
+            ['manufacturer_code', 'PS99', null, null, 'manufacturerCode'],
+            ['source_code', '000999', '900001', null, 'code'],
+        ], $identifiers($products['000999']));
+        // bez kodu producenta na karcie; rozmiar bez sizeName — bez etykiety
+        $this->assertSame([
+            ['model_code', '11.999', null, null, 'code'],
+            ['source_code', '11.999/F07,0', '900111', 'rozmiar 7', 'code'],
+            ['source_code', '11.999/F08,0', '900112', 'rozmiar 8', 'code'],
+            ['source_code', '11.999/F09,0', '900113', null, 'code'],
+        ], $identifiers($products['11.999']));
+        // podział cenowy: kod producenta i kod rodziny na każdej karcie
+        $this->assertSame([
+            ['manufacturer_code', 'FR360', null, null, 'manufacturerCode'],
+            ['model_code', '05 99 360 00 000', null, null, 'code'],
+            ['source_code', '05 99 360 04 056', '900201', 'kolor niebieski, rozmiar 56', 'code'],
+            ['source_code', '05 99 360 08 056', '900202', 'kolor szary, rozmiar 56', 'code'],
+        ], $identifiers($products['05 99 360 04 056']));
+        $this->assertSame([
+            ['manufacturer_code', 'FR360', null, null, 'manufacturerCode'],
+            ['model_code', '05 99 360 00 000', null, null, 'code'],
+            ['source_code', '05 99 360 08 058', '900203', 'kolor szary, rozmiar 58', 'code'],
+            ['manufacturer_code', 'FR360-08-58', '900203', 'kolor szary, rozmiar 58', 'manufacturerCode'],
+        ], $identifiers($products['05 99 360 08 058']));
+    }
+
     public function test_offers_are_merged_without_duplicates_and_non_products_are_skipped(): void
     {
         $this->addProduct(self::goggles());
@@ -402,7 +451,9 @@ final class P4sConnectorTest extends TestCase
         Storage::fake('local');
         $this->addProduct(self::goggles());
         $this->addProduct(self::gloves());
-        $this->addProduct(self::trousers());
+        $trousers = self::trousers();
+        $trousers['detail']['manufacturerCode'] = 'FR360';
+        $this->addProduct($trousers);
         $this->fakeSite();
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
@@ -431,6 +482,32 @@ final class P4sConnectorTest extends TestCase
         $this->assertSame('148.09', (string) ProductSourcePrice::query()
             ->where('product_id', Product::query()->where('sku', '05 99 360 08 058')->value('id'))->value('purchase_price'));
 
+        // identyfikatory: kod producenta i kod rodziny pod pozycją karty, kod P4S pod każdym rozmiarem; kod
+        // producenta na obu kartach wyrobu w dwóch cenach
+        $stored = static fn (string $sku): array => ProductIdentifier::query()
+            ->where('product_id', Product::query()->where('sku', $sku)->value('id'))
+            ->orderBy('position_key')->orderBy('type')->get()
+            ->map(static fn (ProductIdentifier $i): array => [$i->position_key, $i->type, $i->value, $i->variant_label])->all();
+        $this->assertSame([
+            ['900001', 'manufacturer_code', 'PS99', null], ['900001', 'source_code', '000999', null],
+        ], $stored('000999'));
+        $this->assertSame([
+            ['900111', 'model_code', '11.999', null], ['900111', 'source_code', '11.999/F07,0', 'rozmiar 7'],
+            ['900112', 'source_code', '11.999/F08,0', 'rozmiar 8'],
+            ['900113', 'source_code', '11.999/F09,0', null],
+        ], $stored('11.999'));
+        $this->assertSame([
+            ['900201', 'manufacturer_code', 'FR360', null], ['900201', 'model_code', '05 99 360 00 000', null],
+            ['900201', 'source_code', '05 99 360 04 056', 'kolor niebieski, rozmiar 56'],
+            ['900202', 'source_code', '05 99 360 08 056', 'kolor szary, rozmiar 56'],
+        ], $stored('05 99 360 04 056'));
+        $this->assertSame([
+            ['900203', 'manufacturer_code', 'FR360', null], ['900203', 'model_code', '05 99 360 00 000', null],
+            ['900203', 'source_code', '05 99 360 08 058', 'kolor szary, rozmiar 58'],
+        ], $stored('05 99 360 08 058'));
+        $this->assertSame('PORTWEST', ProductIdentifier::query()->where('value', 'PS99')->value('manufacturer'));
+        $count = ProductIdentifier::query()->count();
+
         $before = $this->snapshot();
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
 
@@ -438,6 +515,13 @@ final class P4sConnectorTest extends TestCase
         $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
         $this->assertSame(4, $second['unchanged'], implode(' | ', $second['errors']));
         $this->assertSame($before, $this->snapshot());
+        // drugi przebieg: identyfikatorów nie przybywa ani nie znikają
+        $this->assertSame($count, ProductIdentifier::query()->count());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+        // żaden identyfikator nie wskazał pozycji spoza swojej karty
+        foreach (B2bSyncRun::query()->get() as $run) {
+            $this->assertSame([], preg_grep('/identyfikator /', array_column((array) $run->log, 'text')));
+        }
     }
 
     public function test_a_file_added_later_under_the_same_script_address_is_stored_next_to_the_existing_ones(): void

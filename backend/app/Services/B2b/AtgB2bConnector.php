@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use DOMNode;
 use DOMXPath;
 use RuntimeException;
@@ -432,7 +433,30 @@ final class AtgB2bConnector implements B2bConnector, B2bContentOnlySite, B2bDocu
                 'documents' => $this->documentLinks($dom),
                 'image_urls' => self::imagesFrom($data),
             ],
+            identifiers: self::identifiers($data, $sku),
         );
+    }
+
+    /**
+     * Numer artykułu ATG z danych strukturalnych, dosłownie: `sku` i `mpn` (witryna podaje w obu ten sam numer —
+     * zapis identyfikatorów łączy równe wartości). Witryna jest producenta, a karta = jeden artykuł, więc to kod
+     * producenta pozycji karty. `brand.name` to nazwa serii („MaxiFlex® Cut™”), nie identyfikator. GTIN-u dane
+     * strukturalne z odczytu 20.09.2026 (atrapa w AtgConnectorTest) nie mają — nie podajemy go.
+     *
+     * @param  array<string, mixed>  $data
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(array $data, string $remoteId): array
+    {
+        $out = [];
+        foreach (['sku', 'mpn'] as $field) {
+            $value = is_scalar($data[$field] ?? null) ? trim((string) $data[$field]) : '';
+            if ($value !== '') {
+                $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MANUFACTURER_CODE, value: $value, remoteId: $remoteId, field: $field);
+            }
+        }
+
+        return $out;
     }
 
     /**

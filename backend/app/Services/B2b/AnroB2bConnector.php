@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
+use App\Models\ProductIdentifier;
 
 /**
  * b2b.anro.net.pl (platforma Zami). Lista produktów nie ma cen — cena konta, parametry
@@ -67,6 +68,7 @@ final class AnroB2bConnector implements B2bConnector, B2bShopFieldSource
                     category: $category !== '' ? $category : null,
                     sourceUrl: $id > 0 ? AnroB2bClient::PRODUCT_PAGE_URL.$id : null,
                     raw: $item,
+                    identifiers: self::identifiers($item),
                 );
             }
             $page++;
@@ -207,6 +209,31 @@ final class AnroB2bConnector implements B2bConnector, B2bShopFieldSource
             mime: $file['mime'] !== '' ? $file['mime'] : $attachment['content_type'],
             sourceUrl: AnroB2bClient::attachmentSourceUrl($attachment['id']),
         );
+    }
+
+    /**
+     * Kody towaru z pozycji listy, dosłownie, na całą kartę (karta = jedna pozycja). Wszystkie wyroby Anro to jego
+     * własne wyroby (decyzja użytkownika), więc kod towaru („KOD”, gdy pusty — „TOWARKOD”, jak w tabelce karty) jest
+     * kodem producenta; „Kod producenta” (TOWARKODD, zwykle pusty) — także. ID to numer wewnętrzny platformy Zami —
+     * nie jest identyfikatorem wyrobu. EAN-u lista nie podaje; parametry techniczne pobiera dopiero shopFields().
+     *
+     * @param  array<string, mixed>  $item
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(array $item): array
+    {
+        $out = [];
+        $field = self::text($item['KOD'] ?? null) !== '' ? 'KOD' : 'TOWARKOD';
+        $code = self::text($item[$field] ?? null);
+        if ($code !== '') {
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MANUFACTURER_CODE, value: $code, field: $field);
+        }
+        $manufacturerCode = self::text($item['TOWARKODD'] ?? null);
+        if ($manufacturerCode !== '') {
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MANUFACTURER_CODE, value: $manufacturerCode, field: 'TOWARKODD');
+        }
+
+        return $out;
     }
 
     private static function decimal(mixed $value): ?float

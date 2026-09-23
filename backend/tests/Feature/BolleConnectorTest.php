@@ -5,10 +5,15 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\B2bAccount;
+use App\Models\B2bSyncRun;
+use App\Models\Product;
+use App\Models\ProductIdentifier;
+use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bForeignLanguageSource;
 use App\Services\B2b\B2bKeepsExistingNames;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\BolleB2bClient;
@@ -16,6 +21,8 @@ use App\Services\B2b\BolleB2bConnector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -258,6 +265,58 @@ final class BolleConnectorTest extends TestCase
         $this->assertSame('SAFETY GLASSES › Tinted', $products[2]->category);
         $this->assertSame('PSSTRYOC13B', $products[0]->sku);
         $this->assertSame('PSSRUSH0002', $products[1]->sku);
+
+        // kod towaru (itemid) = kod producenta pozycji karty (internalid); internalid identyfikatorem nie jest
+        $this->assertSame(
+            [[ProductIdentifier::TYPE_MANUFACTURER_CODE, 'PSSTRYOC13B', '101', null, 'itemid']],
+            self::identifierRows($products[0]),
+        );
+        $this->assertSame(
+            [[ProductIdentifier::TYPE_MANUFACTURER_CODE, 'PSSRUSH0002', '102', null, 'itemid']],
+            self::identifierRows($products[1]),
+        );
+        // pozycja z wariantami jest pomijana — nie podaje identyfikatorów
+        $this->assertNull($products[3]->identifiers);
+    }
+
+    public function test_sync_stores_item_codes_once_and_second_run_neither_duplicates_nor_removes_them(): void
+    {
+        Queue::fake();
+        Storage::fake('public');
+        $this->fakeSite();
+        $account = B2bAccount::query()->create([
+            'username' => 'jan@example.com',
+            'password' => 'dobre-haslo',
+            'sites' => ['https://b2b.bolle-safety.com/'],
+            'connector' => 'bolle',
+        ]);
+        $rows = static fn (): array => ProductIdentifier::query()->orderBy('id')->get()
+            ->map(static fn (ProductIdentifier $i): array => [
+                (string) $i->product_id, $i->position_key, $i->type, $i->value, $i->source_field, $i->manufacturer,
+            ])
+            ->all();
+
+        $first = app(B2bAccountSyncRunner::class)->run($account->fresh(), delayMs: 0, withImages: false);
+
+        $this->assertSame(2, $first['created'], implode(' | ', $first['errors']));
+        $tryon = (string) Product::query()->where('sku', 'PSSTRYOC13B')->value('id');
+        $clear = (string) Product::query()->where('sku', 'PSSCLEAR03')->value('id');
+        // tylko zapisane pozycje: bez ceny konta (102) i macierz (104) są pominięte
+        $this->assertSame([
+            [$tryon, '101', ProductIdentifier::TYPE_MANUFACTURER_CODE, 'PSSTRYOC13B', 'itemid', 'Bolle'],
+            [$clear, '103', ProductIdentifier::TYPE_MANUFACTURER_CODE, 'PSSCLEAR03', 'itemid', 'Bolle'],
+        ], $rows());
+        $stored = $rows();
+
+        $second = app(B2bAccountSyncRunner::class)->run($account->fresh(), delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
+        $this->assertSame($stored, $rows());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+        foreach ([$first, $second] as $result) {
+            $texts = implode("\n", array_column(B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log, 'text'));
+            $this->assertStringNotContainsString('identyfikator', $texts);
+        }
     }
 
     public function test_incomplete_leaf_is_fatal(): void
@@ -510,6 +569,17 @@ final class BolleConnectorTest extends TestCase
         $this->assertInstanceOf(B2bKeepsExistingNames::class, $connector);
         $this->assertInstanceOf(B2bForeignLanguageSource::class, $connector);
         $this->assertSame('Bolle', $connector->manufacturer(new B2bRemoteProduct('1', 'X', 'X')));
+    }
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string|null, 3: string|null, 4: string|null}>
+     */
+    private static function identifierRows(B2bRemoteProduct $product): array
+    {
+        return array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $product->identifiers ?? [],
+        );
     }
 
     private function client(): BolleB2bClient

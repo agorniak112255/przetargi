@@ -10,6 +10,7 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\ArdonB2bClient;
 use App\Services\B2b\ArdonB2bConnector;
@@ -18,6 +19,7 @@ use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bManufacturerSite;
 use App\Services\B2b\B2bRemoteDocument;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -201,6 +203,42 @@ final class ArdonConnectorTest extends TestCase
         $this->assertStringContainsString('Bez strony produktu w sklepie: 1 kart', $summary[1]);
         $this->assertStringContainsString('X9999', $summary[1]);
         $this->assertSame('Producent spoza listy marek — zapisany dosłownie nazwą ze sklepu: HARPS Investment Asia Pte. Ltd. (1)', $summary[2]);
+    }
+
+    public function test_cards_carry_each_ardon_code_the_page_mpn_and_the_atg_article_number_as_identifiers(): void
+    {
+        $this->fakeSite();
+
+        $products = $this->productsBySku($this->connector());
+
+        $identifiers = static fn (B2bRemoteProduct $p): array => array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $p->identifiers ?? [],
+        );
+        // kod bazowy tylko z mpn strony (dosłownie), pod pozycją karty; kod Ardon każdego rozmiaru pod jego pozycją
+        $this->assertSame([
+            ['source_code', 'A5001', null, null, 'mpn'],
+            ['source_code', 'A5001/08', 'A5001/08', '08', 'artykuł'],
+            ['source_code', 'A5001/09', 'A5001/09', '09', 'artykuł'],
+            ['source_code', 'A5001/10', 'A5001/10', '10', 'artykuł'],
+        ], $identifiers($products['A5001']));
+        // rozmiar w innej cenie: ta sama strona, mpn też na tej karcie
+        $this->assertSame([
+            ['source_code', 'A5001', null, null, 'mpn'],
+            ['source_code', 'A5001/11', 'A5001/11', '11', 'artykuł'],
+        ], $identifiers($products['A5001/11']));
+        // ATG: numer artykułu producenta z nazwy w cenniku
+        $this->assertSame([
+            ['source_code', 'A3031', null, null, 'mpn'],
+            ['manufacturer_code', '24-985', null, null, 'nazwa'],
+            ['source_code', 'A3031/07', 'A3031/07', '07', 'artykuł'],
+            ['source_code', 'A3031/08', 'A3031/08', '08', 'artykuł'],
+        ], $identifiers($products['24-985']));
+        // pozycja bez rozmiaru: mpn równy kodowi z cennika — jeden identyfikator; innych marek numerów nie wyciągamy z nazwy
+        $this->assertSame([['source_code', 'C1020', 'C1020', null, 'artykuł']], $identifiers($products['C1020']));
+        $this->assertSame([['source_code', 'E4085', 'E4085', null, 'artykuł']], $identifiers($products['E4085']));
+        // bez strony — sam kod z cennika
+        $this->assertSame([['source_code', 'X9999', 'X9999', null, 'artykuł']], $identifiers($products['X9999']));
     }
 
     public function test_page_is_found_by_the_image_named_with_the_code_or_by_the_name_when_the_code_search_misses(): void
@@ -419,6 +457,43 @@ final class ArdonConnectorTest extends TestCase
 
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
         $this->assertContains('Cennik Ardon: 10 pozycji → 7 kart (2 grup rozmiarów o tej samej cenie)', $log);
+
+        // identyfikatory: mpn i numer ATG pod pozycją karty, kod Ardon pod każdym rozmiarem
+        $stored = static fn (int $productId): array => ProductIdentifier::query()->where('product_id', $productId)
+            ->orderBy('position_key')->orderBy('type')->orderBy('value')->get()
+            ->map(static fn (ProductIdentifier $i): array => [$i->position_key, $i->type, $i->value, $i->variant_label, $i->source_field])->all();
+        $this->assertSame([
+            ['A3031/07', 'manufacturer_code', '24-985', null, 'nazwa'],
+            ['A3031/07', 'source_code', 'A3031', null, 'mpn'],
+            ['A3031/07', 'source_code', 'A3031/07', '07', 'artykuł'],
+            ['A3031/08', 'source_code', 'A3031/08', '08', 'artykuł'],
+        ], $stored($atg->id));
+        $this->assertSame('ATG', ProductIdentifier::query()->where('value', '24-985')->value('manufacturer'));
+        $this->assertSame([
+            ['A5001/08', 'source_code', 'A5001', null, 'mpn'],
+            ['A5001/08', 'source_code', 'A5001/08', '08', 'artykuł'],
+            ['A5001/09', 'source_code', 'A5001/09', '09', 'artykuł'],
+            ['A5001/10', 'source_code', 'A5001/10', '10', 'artykuł'],
+        ], $stored($alfa->id));
+        $this->assertSame(
+            [['A5001/11', 'source_code', 'A5001', null, 'mpn'], ['A5001/11', 'source_code', 'A5001/11', '11', 'artykuł']],
+            $stored((int) Product::query()->where('sku', 'A5001/11')->value('id')),
+        );
+        // pozycja pominięta (bez strony) nic nie zapisuje
+        $this->assertFalse(ProductIdentifier::query()->where('value', 'X9999')->exists());
+        $count = ProductIdentifier::query()->count();
+        $this->assertSame(13, $count);
+
+        // drugi przebieg: identyfikatorów nie przybywa ani nie znikają
+        $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame(0, $second['created']);
+        $this->assertSame($count, ProductIdentifier::query()->count());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+        // żaden identyfikator nie wskazał pozycji spoza swojej karty
+        foreach (B2bSyncRun::query()->get() as $run) {
+            $this->assertSame([], preg_grep('/identyfikator /', array_column((array) $run->log, 'text')));
+        }
     }
 
     public function test_page_missing_on_a_later_run_skips_the_card_instead_of_changing_its_manufacturer(): void

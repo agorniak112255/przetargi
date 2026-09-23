@@ -9,12 +9,15 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductIdentifier;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductShopCard;
 use App\Models\User;
 use App\Services\B2b\AnroB2bClient;
 use App\Services\B2b\AnroB2bConnector;
 use App\Services\B2b\B2bAccountSyncRunner;
+use App\Services\B2b\B2bRemoteIdentifier;
+use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use Carbon\CarbonImmutable;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -40,6 +43,9 @@ final class B2bAnroSyncTest extends TestCase
     private int $technicalDataRequests = 0;
 
     private bool $expireTokenOnce = false;
+
+    /** Lista podaje kod towaru tylko w TOWARKOD (KOD pusty). */
+    private bool $codeOnlyInTowarkod = false;
 
     /** Symuluje „Zatrzymaj” kliknięte w panelu, gdy przebieg pobiera cenę pierwszego produktu. */
     private bool $cancelOnFirstPrice = false;
@@ -160,6 +166,12 @@ final class B2bAnroSyncTest extends TestCase
             ['Klasyfikacja produktowa', 'Podgrupa', '17/WGK - Wysięgniki'],
         ], $rows);
 
+        // Kod towaru to kod producenta (wyroby Anro są jego własne); pusty „Kod producenta” i ID Zami — nie.
+        $this->assertSame(
+            [[ProductIdentifier::TYPE_MANUFACTURER_CODE, self::SKU, null, null, 'KOD']],
+            self::identifiers($remote[0]),
+        );
+
         // Cen w tabelce nie ma — karta wyrobu ma własne sloty cen ze źródeł.
         $this->assertSame([], array_values(array_filter(
             $rows,
@@ -181,6 +193,30 @@ final class B2bAnroSyncTest extends TestCase
             $rows,
             static fn (array $row): bool => $row[0] === 'Klasyfikacja produktowa' || $row[1] === 'Dział towarowy',
         )));
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'OBCY-1', null, null, 'KOD'],
+                [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'UV-9999', null, null, 'TOWARKODD'],
+            ],
+            self::identifiers($remote[2]),
+        );
+    }
+
+    public function test_kod_towaru_z_towarkod_gdy_kod_pusty(): void
+    {
+        $this->codeOnlyInTowarkod = true;
+        $this->fakeAnro();
+        $connector = AnroB2bConnector::forAccount($this->account, 0);
+        $remote = iterator_to_array($connector->products(), false);
+
+        // Tabelka karty i identyfikator biorą ten sam kod — z pola, które naprawdę go podało.
+        $this->assertContains(['Informacje handlowe', 'Kod towaru', self::SKU], self::rows($connector->shopFields($remote[0])));
+        $this->assertSame(
+            [[ProductIdentifier::TYPE_MANUFACTURER_CODE, self::SKU, null, null, 'TOWARKOD']],
+            self::identifiers($remote[0]),
+        );
+        // Pozycja bez żadnego kodu podaje pustą listę, nie „nie wiem”.
+        $this->assertSame([], $remote[1]->identifiers);
     }
 
     public function test_parametry_techniczne_pobiera_tylko_karta_wyrobu_a_nie_opis(): void
@@ -213,13 +249,31 @@ final class B2bAnroSyncTest extends TestCase
         $this->fakeAnro();
 
         $this->sync();
+        $product = Product::query()->where('sku', self::SKU)->firstOrFail();
+        // kod towaru zapisany jako kod producenta pod pozycją karty (ID Zami); pominięte pozycje nie mają identyfikatorów
+        $this->assertSame(
+            [['13507', ProductIdentifier::TYPE_MANUFACTURER_CODE, self::SKU, null, 'KOD', 'Anro']],
+            ProductIdentifier::query()->orderBy('id')->get()
+                ->map(static fn (ProductIdentifier $i): array => [$i->position_key, $i->type, $i->value, $i->variant_label, $i->source_field, $i->manufacturer])
+                ->all(),
+        );
+        $this->assertSame($product->id, ProductIdentifier::query()->sole()->product_id);
+        $identifiers = ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray();
+
         $second = $this->sync();
 
         $this->assertSame(1, $second['unchanged']);
         $this->assertSame(0, $second['created'] + $second['updated']);
         $this->assertSame(1, PriceList::query()->count());
         $this->assertSame(1, ProductPriceHistory::query()->count());
-        $this->assertSame(1, Product::query()->where('sku', self::SKU)->firstOrFail()->images()->count());
+        $this->assertSame(1, $product->images()->count());
+        // drugi przebieg identyfikatorów nie dubluje ani nie oznacza jako zniknięte
+        $this->assertSame($identifiers, ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+        $this->assertSame(2, B2bSyncRun::query()->count());
+        foreach (B2bSyncRun::query()->get() as $run) {
+            $this->assertSame([], preg_grep('/identyfikator /', array_column((array) $run->log, 'text')));
+        }
     }
 
     public function test_source_price_and_description_changes_update_card_but_manual_description_is_kept(): void
@@ -554,6 +608,17 @@ final class B2bAnroSyncTest extends TestCase
     }
 
     /**
+     * @return list<array{0: string, 1: string, 2: string|null, 3: string|null, 4: string|null}>
+     */
+    private static function identifiers(B2bRemoteProduct $product): array
+    {
+        return array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $product->identifiers ?? [],
+        );
+    }
+
+    /**
      * Wiersze karty wyrobu jako proste trójki — czytelniej porównać niż obiekty.
      *
      * @param  list<B2bRemoteShopField>  $fields
@@ -657,6 +722,11 @@ final class B2bAnroSyncTest extends TestCase
             ['ID' => 2, 'KOD' => 'BEZ-CENY', 'NAME' => 'Produkt bez ceny', 'OPIS' => '', 'DZIAL_OPIS' => ''],
             ['ID' => 3, 'KOD' => 'OBCY-1', 'NAME' => 'Kod zajęty', 'OPIS' => '', 'DZIAL_OPIS' => '', 'TOWARKODD' => 'UV-9999', 'JEDNOSTKA' => 'PAR'],
         ];
+        if ($this->codeOnlyInTowarkod) {
+            // Kod towaru tylko w TOWARKOD; druga pozycja bez żadnego kodu.
+            $items[0] = ['KOD' => '', 'TOWARKOD' => self::SKU] + $items[0];
+            $items[1]['KOD'] = '';
+        }
 
         // Dwie strony po 2 pozycje — sprawdza stronicowanie od 0 niezależnie od onPage.
         return ['count' => count($items), 'list' => array_slice($items, $page * 2, 2)];

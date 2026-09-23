@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use DOMDocument;
 use DOMElement;
 use DOMXPath;
@@ -444,7 +445,7 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
      * Treść strony produktu potrzebna karcie: producent (nazwa prawna), zdjęcie, okruszki kategorii, opis,
      * tabelka „Parametry” i pliki. null = to nie jest strona wyrobu o tym kodzie (inny mpn w danych strukturalnych).
      *
-     * @return array{legal_manufacturer: string, image: string|null, categories: list<string>, description: string, parameters: list<array{0: string, 1: string}>, documents: list<array{0: string, 1: string}>}|null
+     * @return array{mpn: string, legal_manufacturer: string, image: string|null, categories: list<string>, description: string, parameters: list<array{0: string, 1: string}>, documents: list<array{0: string, 1: string}>}|null
      */
     public static function parsePage(string $html, string $baseCode): ?array
     {
@@ -485,6 +486,7 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
         $image = self::text($product['image'] ?? null);
 
         return [
+            'mpn' => self::text($product['mpn'] ?? null),
             'legal_manufacturer' => self::inline(self::text($product['brand']['name'] ?? null)),
             'image' => ArdonB2bClient::isImageUrl($image) ? $image : null,
             'categories' => $breadcrumb,
@@ -551,7 +553,36 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
             members: $grouped
                 ? array_map(static fn (array $row): array => ['remote_id' => $row['code'], 'sku' => $row['code'], 'name' => $row['name']], $rows)
                 : [],
+            identifiers: self::identifiers($rows, self::text($page['mpn'] ?? null), $atg ? self::atgArticle($first['name']) : null),
         );
+    }
+
+    /**
+     * Kod Ardon każdej pozycji cennika („A5001/09”, kolumna „artykuł”) — własny kod dystrybutora, pozycja = ten kod
+     * (remote_id powiązania), etykieta = rozmiar z kodu. Kod bazowy („A5001”) składamy sami z kodu pozycji, więc
+     * identyfikatorem jest tylko wtedy, gdy strona produktu podaje go wprost (mpn w danych strukturalnych —
+     * to kod Ardon, nie producenta). Numer artykułu ATG z końca nazwy w cenniku („… 24-985”) — kod producenta
+     * karty ATG. Numerów innych producentów sklep nie podaje w osobnym polu (tylko w nazwach) — nie wyciągamy ich.
+     *
+     * @param  list<array{code: string, name: string, retail: float|null, discount: float|null, net: float|null, size: string|null}>  $rows
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(array $rows, string $mpn, ?string $atgArticle): array
+    {
+        $out = [];
+        // pozycja bez rozmiaru ma kod równy mpn — wystarczy jej kod z cennika
+        $codes = array_map(static fn (array $row): string => mb_strtolower($row['code']), $rows);
+        if ($mpn !== '' && ! in_array(mb_strtolower($mpn), $codes, true)) {
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_SOURCE_CODE, value: $mpn, field: 'mpn');
+        }
+        if ($atgArticle !== null) {
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MANUFACTURER_CODE, value: $atgArticle, field: 'nazwa');
+        }
+        foreach ($rows as $row) {
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_SOURCE_CODE, value: $row['code'], remoteId: $row['code'], label: $row['size'], field: 'artykuł');
+        }
+
+        return $out;
     }
 
     /**
@@ -564,7 +595,7 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
      * z powodem (manufacturer()), a wyrób ATG dostaje samą cenę. Pozycji bez nazwy w cenniku nie szukamy —
      * synchronizacja i tak ją pomija („brak kodu lub nazwy”), a sklep takich wyrobów nie pokazuje.
      *
-     * @return array{url: string, legal_manufacturer: string, image: string|null, categories: list<string>, description: string, parameters: list<array{0: string, 1: string}>, documents: list<array{0: string, 1: string}>}|null
+     * @return array{url: string, mpn: string, legal_manufacturer: string, image: string|null, categories: list<string>, description: string, parameters: list<array{0: string, 1: string}>, documents: list<array{0: string, 1: string}>}|null
      */
     private function findPage(string $baseCode, string $name): ?array
     {

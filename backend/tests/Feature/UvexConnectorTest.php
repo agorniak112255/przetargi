@@ -11,11 +11,13 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\UvexB2bClient;
@@ -237,6 +239,30 @@ final class UvexConnectorTest extends TestCase
         $heckel = $products['HECKEL6273/3/36'];
         $this->assertSame('HECKEL 6273/3 SUXXED OFFROAD HIGH S3', $heckel->name);
         $this->assertSame('HECKEL', $connector->manufacturer($heckel));
+
+        // identyfikatory: kod panelu każdej pozycji dosłownie; wyrób UVEX — kod producenta, HECKEL i HexArmor
+        // (sklep UVEX tylko je sprzedaje) — kod źródła; rozmiar tylko na karcie z rozmiarami
+        $this->assertSame([
+            ['manufacturer_code', '8430/2/39', '8430/2/39', '39', 'Kod'],
+            ['manufacturer_code', '8430/2/40', '8430/2/40', '40', 'Kod'],
+            ['manufacturer_code', '8430/2/41', '8430/2/41', '41', 'Kod'],
+        ], self::identifierRows($shoes));
+        $this->assertSame([['manufacturer_code', '6935/2/38', '6935/2/38', null, 'Kod']], self::identifierRows($products['6935/2/38']));
+        $this->assertSame([['manufacturer_code', '9970.005', '9970.005', null, 'Kod']], self::identifierRows($products['9970.005']));
+        $this->assertSame([
+            ['source_code', 'HA2023(L)', 'HA2023(L)', '9', 'Kod'],
+            ['source_code', 'HA2023(M)', 'HA2023(M)', '8', 'Kod'],
+        ], self::identifierRows($gloves));
+        $this->assertSame([
+            ['source_code', 'HECKEL6273/3/36', 'HECKEL6273/3/36', '36', 'Kod'],
+            ['source_code', 'HECKEL6273/3/37', 'HECKEL6273/3/37', '37', 'Kod'],
+        ], self::identifierRows($heckel));
+        foreach ($products as $product) {
+            $positions = array_column($product->members, 'remote_id');
+            foreach ($product->identifiers ?? [] as $identifier) {
+                $this->assertContains($identifier->remoteId, $positions, 'identyfikator wskazuje pozycję spoza karty');
+            }
+        }
 
         $laser = $products['000P1D011003'];
         $this->assertSame('Szyba chroniąca przed laserem 000P1D011003 wymiary: 6 x 915 x 610 mm', $laser->name);
@@ -512,6 +538,47 @@ final class UvexConnectorTest extends TestCase
 
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
         $this->assertContains('Lista UVEX: 13 pozycji → 8 kart (4 grup rozmiarów o tej samej cenie)', $log);
+    }
+
+    public function test_sync_stores_panel_codes_as_identifiers_and_the_second_run_neither_duplicates_nor_removes_them(): void
+    {
+        Storage::fake('public');
+        $this->fakeSite();
+
+        $first = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame(7, $first['created']);
+        $shoes = Product::query()->where('sku', '8430/2/39')->sole();
+        $this->assertSame([
+            ['8430/2/39', 'manufacturer_code', '8430/2/39', '39', 'Kod', 'UVEX'],
+            ['8430/2/40', 'manufacturer_code', '8430/2/40', '40', 'Kod', 'UVEX'],
+            ['8430/2/41', 'manufacturer_code', '8430/2/41', '41', 'Kod', 'UVEX'],
+        ], self::storedIdentifiers($shoes->id));
+        $this->assertSame(
+            [['HECKEL6273/3/36', 'source_code', 'HECKEL6273/3/36', '36', 'Kod', 'HECKEL'], ['HECKEL6273/3/37', 'source_code', 'HECKEL6273/3/37', '37', 'Kod', 'HECKEL']],
+            self::storedIdentifiers((int) Product::query()->where('sku', 'HECKEL6273/3/36')->value('id')),
+        );
+        $this->assertSame(
+            [['HA2023(L)', 'source_code', 'HA2023(L)', '9', 'Kod', 'HexArmor'], ['HA2023(M)', 'source_code', 'HA2023(M)', '8', 'Kod', 'HexArmor']],
+            self::storedIdentifiers((int) Product::query()->where('sku', 'HA2023(L)')->value('id')),
+        );
+        $this->assertSame(
+            [['9970.005', 'manufacturer_code', '9970.005', null, 'Kod', 'UVEX']],
+            self::storedIdentifiers((int) Product::query()->where('sku', '9970.005')->value('id')),
+        );
+        // 7 kart, 12 pozycji z ceną (CENNIKI bez ceny nie jest zapisywany)
+        $identifiers = ProductIdentifier::query()->count();
+        $this->assertSame(12, $identifiers);
+        $this->assertNoIdentifierWarnings($first);
+
+        $descriptions = Product::query()->orderBy('id')->pluck('description', 'id')->all();
+        $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame(0, $second['created']);
+        $this->assertSame($identifiers, ProductIdentifier::query()->count());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+        $this->assertSame($descriptions, Product::query()->orderBy('id')->pluck('description', 'id')->all());
+        $this->assertNoIdentifierWarnings($second);
     }
 
     public function test_product_files_are_listed_with_absolute_addresses_and_kinds(): void
@@ -1279,6 +1346,43 @@ final class UvexConnectorTest extends TestCase
             ->sole();
 
         return $slot->only(['base_price_net', 'base_price_category', 'base_price_code', 'base_price_source', 'standard_discount_percent']);
+    }
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string|null, 3: string|null, 4: string|null}>
+     */
+    private static function identifierRows(B2bRemoteProduct $product): array
+    {
+        return array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $product->identifiers ?? [],
+        );
+    }
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string, 3: string|null, 4: string|null, 5: string|null}>
+     */
+    private static function storedIdentifiers(int $productId): array
+    {
+        return ProductIdentifier::query()
+            ->where('product_id', $productId)
+            ->orderBy('position_key')->orderBy('type')->orderBy('value')
+            ->get()
+            ->map(static fn (ProductIdentifier $i): array => [
+                $i->position_key, $i->type, $i->value, $i->variant_label, $i->source_field, $i->manufacturer,
+            ])
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function assertNoIdentifierWarnings(array $result): void
+    {
+        $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
+        foreach ([...$result['errors'], ...$log] as $line) {
+            $this->assertStringNotContainsString('identyfikator', mb_strtolower((string) $line));
+        }
     }
 
     private function client(): UvexB2bClient

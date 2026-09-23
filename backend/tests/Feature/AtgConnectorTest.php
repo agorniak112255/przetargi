@@ -6,13 +6,16 @@ namespace Tests\Feature;
 
 use App\Http\Controllers\Api\ProductController;
 use App\Models\B2bAccount;
+use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\AtgB2bConnector;
 use App\Services\B2b\B2bAccountSyncRunner;
+use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\Presta\PrestaDescriptionHtml;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ManufacturerNormFacts;
@@ -239,6 +242,8 @@ final class AtgConnectorTest extends TestCase
 
         $this->assertNull($foreign->refresh()->manufacturer_norms);
         $this->assertSame(1, $result['skipped'], implode(' | ', $result['errors']));
+        // ani kodu producenta ATG na karcie Ansella
+        $this->assertSame(0, ProductIdentifier::query()->count());
     }
 
     public function test_pozycja_bez_karty_w_katalogu_nie_zaklada_nowej(): void
@@ -267,12 +272,48 @@ final class AtgConnectorTest extends TestCase
         $this->siteCard(self::SKU);
         $this->fakeSite();
 
-        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+        $firstRun = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
         $first = $product->refresh()->manufacturer_norms;
-        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+        // numer artykułu z `sku` i `mpn` to ta sama wartość — jeden wiersz kodu producenta na pozycji karty
+        $identifiers = static fn (): array => ProductIdentifier::query()->orderBy('id')->get()
+            ->map(static fn (ProductIdentifier $i): array => [$i->product_id, $i->position_key, $i->type, $i->value, $i->source_field, $i->manufacturer])
+            ->all();
+        $this->assertSame(
+            [[$product->id, self::SKU, ProductIdentifier::TYPE_MANUFACTURER_CODE, self::SKU, 'sku', 'ATG']],
+            $identifiers(),
+        );
+        $stored = $identifiers();
+        $secondRun = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
 
         // te same pary = ten sam zapis, także data odczytu: zbędny zapis zlecałby reindeks wektora
         $this->assertSame($first, $product->refresh()->manufacturer_norms);
+        // drugi przebieg: bez duplikatów, nic nie oznaczone jako zniknięte, bez ostrzeżeń o identyfikatorach
+        $this->assertSame($stored, $identifiers());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+        foreach ([$firstRun, $secondRun] as $result) {
+            $texts = implode("\n", array_column(B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log, 'text'));
+            $this->assertStringNotContainsString('identyfikator', $texts);
+        }
+    }
+
+    public function test_numer_artykulu_z_danych_strukturalnych_jest_kodem_producenta_pozycji_karty(): void
+    {
+        $this->siteCard(self::SKU);
+        $this->fakeSite();
+
+        $connector = AtgB2bConnector::forAccount($this->account(), 0);
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(1, $products);
+        $this->assertSame(self::SKU, $products[0]->remoteId);
+        // `sku` i `mpn` dosłownie; `brand.name` („MaxiFlex® Cut™”) to seria, nie identyfikator; GTIN-u karta nie ma
+        $this->assertSame([
+            [ProductIdentifier::TYPE_MANUFACTURER_CODE, self::SKU, self::SKU, null, 'sku'],
+            [ProductIdentifier::TYPE_MANUFACTURER_CODE, self::SKU, self::SKU, null, 'mpn'],
+        ], array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $products[0]->identifiers ?? [],
+        ));
     }
 
     public function test_karta_bez_norm_zglasza_sie_w_podsumowaniu_przebiegu(): void

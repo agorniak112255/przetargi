@@ -6,8 +6,10 @@ namespace Tests\Feature;
 
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
@@ -170,6 +172,16 @@ final class MaviboConnectorTest extends TestCase
         );
         $this->assertSame('Produkt dostępny: S; Produkt z wydłużonym czasem dostawy: M', $card->availability);
         $this->assertSame('Rozmiary: S (51005_21_S); M (51005_21_M)', $card->variantSummary);
+        // model z data-product na całą kartę, indeks każdej kombinacji na jej pozycji; indeks koloru (SKU) składamy
+        // sami — nie jest identyfikatorem
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MODEL_CODE, '51005', null, null, 'reference'],
+                [ProductIdentifier::TYPE_SOURCE_CODE, '51005_21_S', '368_6076', '21 S', 'Indeks'],
+                [ProductIdentifier::TYPE_SOURCE_CODE, '51005_21_M', '368_6078', '21 M', 'Indeks'],
+            ],
+            self::identifiers($card),
+        );
 
         $price = $connector->price($card);
         $this->assertSame(54.25, $price?->net);
@@ -214,6 +226,15 @@ final class MaviboConnectorTest extends TestCase
         );
         $this->assertSame([self::BASE.'/3990-large_default/nimbo.jpg'], $connector->imageUrls($black));
         $this->assertSame('Produkt niedostępny', $black->availability);
+        // każda karta podaje tylko swoje kombinacje
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MODEL_CODE, '51005', null, null, 'reference'],
+                [ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_S', '368_6077', '26 S', 'Indeks'],
+                [ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_M', '368_6079', '26 M', 'Indeks'],
+            ],
+            self::identifiers($black),
+        );
     }
 
     public function test_sizes_in_two_prices_are_two_cards_named_with_their_sizes(): void
@@ -232,6 +253,15 @@ final class MaviboConnectorTest extends TestCase
         $this->assertSame('PROMOSTARS NIMBO 51005, kolor 26 (rozm. 3XL)', $black[1]->name);
         $this->assertSame(59.5, $connector->price($black[1])?->net);
         $this->assertSame(85.0, $connector->price($black[1])?->base);
+        // karta rozmiarów w innej cenie podaje indeksy tylko swoich rozmiarów
+        $this->assertSame(
+            [[ProductIdentifier::TYPE_MODEL_CODE, '51005', null, null, 'reference'], [ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_S', '368_6077', '26 S', 'Indeks']],
+            self::identifiers($black[0]),
+        );
+        $this->assertSame(
+            [[ProductIdentifier::TYPE_MODEL_CODE, '51005', null, null, 'reference'], [ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_3XL', '368_6091', '26 3XL', 'Indeks']],
+            self::identifiers($black[1]),
+        );
         $this->assertStringContainsString('Karty: 3 (1 kolorów w kilku cenach', implode("\n", $connector->runSummary()));
     }
 
@@ -292,9 +322,13 @@ final class MaviboConnectorTest extends TestCase
         $this->assertSame('skipped', $products[0]->raw['status']);
         $this->assertStringContainsString('bez tabeli kombinacji z ceną', $products[0]->raw['reason']);
         $this->assertSame('model_367', $products[0]->remoteId);
+        // pominięty model nie podaje identyfikatorów (zapisane zostają)
+        $this->assertNull($products[0]->identifiers);
 
         // kombinacje bez indeksu: SKU z klucza kombinacji; brak marki — producent przyjęty jako MAVIBO
         $card = $products[1];
+        // indeks „—” i pusty model to brak kodu — podane, ale żadnego nie ma
+        $this->assertSame([], $card->identifiers);
         $this->assertSame('MAVIBO 365_5835', $card->sku);
         $this->assertSame(['365_5835', '365_5841'], array_column($card->members, 'remote_id'));
         $this->assertSame(['365_5835', '365_5841'], array_column($card->members, 'sku'));
@@ -314,6 +348,11 @@ final class MaviboConnectorTest extends TestCase
         $products = iterator_to_array($connector->products(), false);
 
         $this->assertSame(['93100', 'MAVIBO 63_1089'], array_map(static fn (B2bRemoteProduct $p): string => $p->sku, $products));
+        // indeks równy numerowi modelu zostaje indeksem kombinacji — dosłownie, obok modelu
+        $this->assertSame(
+            [[ProductIdentifier::TYPE_MODEL_CODE, '93100', null, null, 'reference'], [ProductIdentifier::TYPE_SOURCE_CODE, '93100', '63_1089', '26 S', 'Indeks']],
+            self::identifiers($products[1]),
+        );
     }
 
     public function test_guest_page_that_is_an_account_page_leaves_the_card_without_the_catalog_price(): void
@@ -409,6 +448,27 @@ final class MaviboConnectorTest extends TestCase
         $dearer = Product::query()->where('sku', '51005_26_3XL')->sole();
         $this->assertSame('59.50', (string) ProductSourcePrice::query()->where('product_id', $dearer->id)->value('purchase_price'));
 
+        // identyfikatory: model pod pozycją karty (pierwsza kombinacja), indeks pod każdą kombinacją
+        $this->assertSame(
+            [
+                ['368_6076', ProductIdentifier::TYPE_MODEL_CODE, '51005', null, 'reference', 'PROMOSTARS'],
+                ['368_6076', ProductIdentifier::TYPE_SOURCE_CODE, '51005_21_S', '21 S', 'Indeks', 'PROMOSTARS'],
+                ['368_6078', ProductIdentifier::TYPE_SOURCE_CODE, '51005_21_M', '21 M', 'Indeks', 'PROMOSTARS'],
+            ],
+            ProductIdentifier::query()->where('product_id', $card->id)->orderBy('position_key')->orderBy('type')->get()
+                ->map(static fn (ProductIdentifier $i): array => [$i->position_key, $i->type, $i->value, $i->variant_label, $i->source_field, $i->manufacturer])
+                ->all(),
+        );
+        $this->assertSame(
+            [['368_6091', ProductIdentifier::TYPE_MODEL_CODE, '51005'], ['368_6091', ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_3XL']],
+            ProductIdentifier::query()->where('product_id', $dearer->id)->orderBy('type')->get()
+                ->map(static fn (ProductIdentifier $i): array => [$i->position_key, $i->type, $i->value])->all(),
+        );
+        // 3 karty × model + 4 kombinacje; pominięty model (DRYON 51003) nie ma karty ani identyfikatorów
+        $this->assertSame(7, ProductIdentifier::query()->count());
+        $this->assertFalse(ProductIdentifier::query()->where('value', '51003')->exists());
+        $identifiers = ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray();
+
         $before = $this->snapshot();
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
 
@@ -416,6 +476,14 @@ final class MaviboConnectorTest extends TestCase
         $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
         $this->assertSame(3, $second['unchanged'], implode(' | ', $second['errors']));
         $this->assertSame($before, $this->snapshot());
+        // drugi przebieg identyfikatorów nie dubluje ani nie oznacza jako zniknięte
+        $this->assertSame($identifiers, ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray());
+        $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+        // żaden identyfikator nie wskazał pozycji spoza swojej karty
+        $this->assertSame(2, B2bSyncRun::query()->count());
+        foreach (B2bSyncRun::query()->get() as $run) {
+            $this->assertSame([], preg_grep('/identyfikator /', array_column((array) $run->log, 'text')));
+        }
     }
 
     public function test_registry_detects_mavibo_by_host_as_a_distributor(): void
@@ -445,6 +513,17 @@ final class MaviboConnectorTest extends TestCase
     }
 
     // ---- pomocnicze ----
+
+    /**
+     * @return list<array{0: string, 1: string, 2: string|null, 3: string|null, 4: string|null}>
+     */
+    private static function identifiers(B2bRemoteProduct $product): array
+    {
+        return array_map(
+            static fn ($i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
+            $product->identifiers ?? [],
+        );
+    }
 
     private function client(): MaviboB2bClient
     {

@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use DOMDocument;
 use DOMElement;
 use DOMNode;
@@ -637,7 +638,41 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bIm
                 $group,
             )),
             members: $members,
+            identifiers: self::identifiers($page['model'], $group),
         );
+    }
+
+    /**
+     * Model wyrobu z data-product („reference”, np. „51005” — kod rodziny bez koloru i rozmiaru) na całą kartę
+     * i indeks każdej kombinacji z tabeli (kolumna „Indeks”) na jej pozycji, dosłownie. MAVIBO jest dystrybutorem,
+     * więc indeks to jego własny kod, nie kod producenta. Indeks pusty („—”) pomijamy; indeksy niespójne w jednym
+     * modelu („21172 20 XS” obok „21172_20_S”) zostają tak, jak je podał sklep. Indeks koloru („51005_21”, SKU karty)
+     * składamy sami — nie jest identyfikatorem. Etykieta = kolor i rozmiar kombinacji dosłownie z tabeli.
+     *
+     * @param  list<array<string, mixed>>  $group
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(string $model, array $group): array
+    {
+        $out = [];
+        if ($model !== '') {
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MODEL_CODE, value: $model, field: 'reference');
+        }
+        foreach ($group as $combination) {
+            if ($combination['reference'] === '') {
+                continue;
+            }
+            $label = trim(implode(' ', array_column($combination['attributes'], 1)));
+            $out[] = new B2bRemoteIdentifier(
+                type: ProductIdentifier::TYPE_SOURCE_CODE,
+                value: $combination['reference'],
+                remoteId: $combination['key'],
+                label: $label !== '' ? $label : null,
+                field: 'Indeks',
+            );
+        }
+
+        return $out;
     }
 
     /**

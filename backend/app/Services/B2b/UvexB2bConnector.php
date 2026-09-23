@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
+use App\Models\ProductIdentifier;
 use DOMElement;
 use DOMNode;
 use DOMXPath;
@@ -293,6 +294,18 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         if ($texts === []) {
             $texts[] = ['code' => $product->sku, 'name' => $product->name];
         }
+
+        return self::brandOf($texts);
+    }
+
+    /**
+     * Producent z kodów i nazw pozycji karty (założenie opisane przy klasie) — ta sama decyzja dla manufacturer()
+     * i dla rodzaju kodu w identifiers().
+     *
+     * @param  list<array{code: string, name: string}>  $texts
+     */
+    private static function brandOf(array $texts): string
+    {
         foreach ($texts as $text) {
             if (mb_stripos($text['code'].' '.$text['name'], 'heckel') !== false) {
                 return 'HECKEL';
@@ -1046,7 +1059,42 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             availability: $availability,
             variantSummary: $summary,
             members: $members,
+            identifiers: self::identifiers($group, self::brandOf($rows)),
         );
+    }
+
+    /**
+     * Kod panelu każdej pozycji karty (codeViewProductDane, dosłownie; pozycja = ten sam kod, remote_id
+     * powiązania). Sklep należy do UVEX, więc kod wyrobu UVEX jest kodem producenta; HECKEL i HexArmor sklep
+     * tylko sprzedaje — ich kody („HECKEL6273/3/36”, „HA2023(L)”) to kody źródła. Rozmiar dosłownie z nazwy
+     * albo kodu, tylko na karcie z rozmiarami (tam jest też w podsumowaniu rozmiarów).
+     *
+     * Nie podajemy: numeru modelu (jest tylko w nazwie), kodu cennika bazowego (cennik wczytuje się po liście,
+     * już po zbudowaniu kart — basePrice()) ani numeru katalogowego i GTIN ze strony producenta (pobieranej
+     * dopiero przy opisie albo karcie wyrobu u dostawcy).
+     *
+     * @param  list<array{row: array<string, mixed>, size: array{size: string, expr: string|null, stem: string|null, raw: string}|null}>  $group
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(array $group, string $brand): array
+    {
+        $type = $brand === 'UVEX' ? ProductIdentifier::TYPE_MANUFACTURER_CODE : ProductIdentifier::TYPE_SOURCE_CODE;
+        $out = [];
+        foreach ($group as $member) {
+            $code = (string) $member['row']['code'];
+            if ($code === '') {
+                continue;
+            }
+            $out[] = new B2bRemoteIdentifier(
+                type: $type,
+                value: $code,
+                remoteId: $code,
+                label: count($group) > 1 ? ($member['size']['raw'] ?? null) : null,
+                field: 'Kod',
+            );
+        }
+
+        return $out;
     }
 
     /**

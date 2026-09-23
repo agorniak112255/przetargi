@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
+use App\Models\ProductIdentifier;
 use DOMElement;
 use DOMNode;
 use DOMXPath;
@@ -289,6 +290,15 @@ final class JspB2bConnector implements B2bConnector, B2bManufacturerSite, B2bSho
                 'weights' => self::weightRows(self::tabLines($xpath, 'weights')),
                 'image_url' => self::metaProperty($xpath, 'og:image'),
             ],
+            // Kod JSP ze strony (ProductTitleBar_PartNo), dosłownie — witryna producenta, karta = jeden kod, więc to
+            // kod producenta pozycji karty. Kod z mapy strony (remoteId) jest tylko adresem. Odnośniki „Other Colours”
+            // to inne wyroby; EAN-u zapisane strony sklepu (tests/Fixtures/jsp) nie mają — nic więcej tu nie podajemy.
+            identifiers: [new B2bRemoteIdentifier(
+                type: ProductIdentifier::TYPE_MANUFACTURER_CODE,
+                value: $shownCode,
+                remoteId: $code,
+                field: 'PartNo',
+            )],
         );
     }
 

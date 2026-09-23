@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
+use App\Models\ProductIdentifier;
 use RuntimeException;
 
 /**
@@ -370,6 +371,16 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
             category: $path,
             sourceUrl: $url,
             raw: $raw,
+            // Kod towaru Bolle (itemid), dosłownie — sklep producenta, karta = jedna pozycja, więc to kod producenta
+            // pozycji karty (internalid). internalid to wewnętrzny numer NetSuite, nie identyfikator wyrobu. Kodu
+            // kreskowego (upccode) nie podajemy: atrapa testów (dane syntetyczne) go nie ma, a żywej odpowiedzi
+            // fieldset=details pod tym kątem nie sprawdzono — bez potwierdzenia pola nie zgadujemy, czy to EAN sztuki.
+            identifiers: $sku !== '' ? [new B2bRemoteIdentifier(
+                type: ProductIdentifier::TYPE_MANUFACTURER_CODE,
+                value: $sku,
+                remoteId: $id,
+                field: 'itemid',
+            )] : [],
         );
     }
 

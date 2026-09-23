@@ -75,21 +75,22 @@ final class UvexSizeGroups
     }
 
     /**
-     * Rozmiar pozycji; expr = dopasowany fragment nazwy, stem = kod bez końcówki rozmiaru (tylko rozmiar z kodu).
+     * Rozmiar pozycji; expr = dopasowany fragment nazwy, stem = kod bez końcówki rozmiaru (tylko rozmiar z kodu),
+     * raw = rozmiar dosłownie tak, jak stoi w nazwie albo kodzie (size to jego zapis ujednolicony do porównań).
      *
-     * @return array{size: string, expr: string|null, stem: string|null}|null
+     * @return array{size: string, expr: string|null, stem: string|null, raw: string}|null
      */
     public function sizeOf(string $name, string $code): ?array
     {
         $code = trim($code);
         if (preg_match('~(?:\brozm(?:iar)?\.?|\bsize|(?:^|\s)r\.)\s*:?\s*'.self::SIZE.'(?![\w.,/])~iu', $name, $m) === 1) {
-            return ['size' => self::sizeLabel($m[1]), 'expr' => $m[0], 'stem' => null];
+            return ['size' => self::sizeLabel($m[1]), 'expr' => $m[0], 'stem' => null, 'raw' => $m[1]];
         }
         if (preg_match('~\(\s*'.self::SIZE.'\s*\)\s*$~iu', $name, $m) === 1) {
-            return ['size' => self::sizeLabel($m[1]), 'expr' => $m[0], 'stem' => null];
+            return ['size' => self::sizeLabel($m[1]), 'expr' => $m[0], 'stem' => null, 'raw' => $m[1]];
         }
         if (preg_match('~[/\-]'.self::SIZE.'$~iu', $code, $m) === 1 && $this->sizes->looksLikeWearSize($m[1])) {
-            return ['size' => self::sizeLabel($m[1]), 'expr' => null, 'stem' => substr($code, 0, -strlen($m[0]))];
+            return ['size' => self::sizeLabel($m[1]), 'expr' => null, 'stem' => substr($code, 0, -strlen($m[0])), 'raw' => $m[1]];
         }
 
         return null;
