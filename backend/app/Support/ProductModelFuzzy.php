@@ -239,7 +239,9 @@ final class ProductModelFuzzy
             }
         }
 
-        $tokens = preg_split('/[\s,;:·•\/|+]+/u', $text) ?: [];
+        // Nawiasy też dzielą: „EN420(2)(brak rozmiaru)” po wycięciu normy zostawiał „(2)(brak”,
+        // który sklejony w „2brak” był kodem modelu i trafiał w ABRAK (zapytanie #54, poz. 7).
+        $tokens = preg_split('/[\s,;:·•\/|+()\[\]]+/u', $text) ?: [];
         $tokens = array_values(array_filter($tokens, static fn (string $t): bool => $t !== ''));
         $count = count($tokens);
         for ($i = 0; $i < $count; $i++) {
@@ -319,13 +321,25 @@ final class ProductModelFuzzy
             $this->pushNeedle($out, $line);
         }
 
+        // Sąsiednie słowa KAPITALIKAMI to jedna nazwa („EASYGRIP PURPLE”) — jedna igła. Osobno
+        // wystarczało trafienie samego koloru: „Purple” dawało 94% rękawicy Kleenguard G60
+        // pod MedaSept EASYGRIP PURPLE (zapytanie #54, poz. 6).
         $capsDescription = $this->capsDescriptionWords($requirement);
-        foreach ($tokens as $token) {
+        $groups = [];
+        $previous = null;
+        foreach ($tokens as $i => $token) {
             if (! $this->isSiwxUpperModelToken($token, $requirement)
                 || isset($capsDescription[$this->lettersOnly($token)])) {
                 continue;
             }
-            $letters = $this->lettersOnly($token);
+            if ($previous !== null && $previous === $i - 1) {
+                $groups[count($groups) - 1] .= $this->lettersOnly($token);
+            } else {
+                $groups[] = $this->lettersOnly($token);
+            }
+            $previous = $i;
+        }
+        foreach ($groups as $letters) {
             if ($this->hasNumberedNeedleForPrefix($out, $letters)) {
                 continue;
             }

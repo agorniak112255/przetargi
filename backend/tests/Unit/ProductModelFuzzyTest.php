@@ -459,10 +459,27 @@ final class ProductModelFuzzyTest extends TestCase
 
         // KAPITALIKI wyróżnione w zwykłym tekście dalej są modelem
         $this->assertContains('tronchetto', $this->fuzzy->needles('Obuwie TRONCHETTO'));
-        $this->assertSame(['easygrip', 'purple'], $this->fuzzy->needles('Rękawiczki nitrylowe "MedaSept" EASYGRIP PURPLE - 50 opk'));
+        // (sąsiednie słowa KAPITALIKAMI to jedna nazwa — zob. caps_model_words_form_one_name…)
+        $this->assertSame(['easygrippurple'], $this->fuzzy->needles('Rękawiczki nitrylowe "MedaSept" EASYGRIP PURPLE - 50 opk'));
         // linia po znanej marce i numerowany model nie zależą od wielkości liter
         $this->assertContains('ultrane', $this->fuzzy->needles('RĘKAWICE MAPA ULTRANE'));
         $this->assertContains('perspecta010', $this->fuzzy->needles('OKULARY OCHRONNE MSA PERSPECTA 010'));
+    }
+
+    /** Zapytanie #54 z 23.09.2026, poz. 6 i 7: fałszywe trafienia „Marka i model z SIWZ” oznaczone jako pewne. */
+    #[Test]
+    public function caps_model_words_form_one_name_and_brackets_split_tokens(): void
+    {
+        // poz. 6: sam kolor z nazwy modelu trafiał w Kleenguard G60 Purple
+        $medasept = 'Rękawiczki nitrylowe "MedaSept" EASYGRIP PURPLE - 50 opk';
+        $this->assertSame(['easygrippurple'], $this->fuzzy->needles($medasept));
+        $this->assertFalse($this->fuzzy->matches($medasept, $this->product('97434', 'KLNGD G60 Glove Lvl 3 Purple Nitrile 11', 'Ansell')));
+        $this->assertTrue($this->fuzzy->matches($medasept, $this->product('MS-EGP', 'Rękawiczki nitrylowe MedaSept Easygrip Purple', 'Medasept')));
+
+        // poz. 7: „EN420(2)(brak rozmiaru)” sklejał „2brak” — kod o literę od ABRAK
+        $drill = 'Rękawice drelichowe pięciopalcowe EN374,EN420(2)(brak rozmiaru)';
+        $this->assertSame([], $this->fuzzy->needles($drill));
+        $this->assertFalse($this->fuzzy->matches($drill, $this->product('3410-064-000-00', 'Gloves ABRAK, nitrile coated, white-grey, blister', 'Canis')));
     }
 
     /** Etykieta stoi też przed zwykłymi słowami — te nie są kodem. */
