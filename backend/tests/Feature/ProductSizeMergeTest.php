@@ -695,6 +695,35 @@ final class ProductSizeMergeTest extends TestCase
         $this->assertSame(1, ProductDocument::query()->count());
     }
 
+    public function test_does_not_merge_dotted_digit_codes_by_code_tail(): void
+    {
+        Queue::fake();
+
+        // Po kropce stoi wersja albo model, nie rozmiar: kolory K JUNIOR, klasy spawalnicze i-5, modele TEGERA.
+        $cards = [
+            ['2600.011', 'Ochronniki słuchu uvex K JUNIOR limonka 2600.011', 'UVEX'],
+            ['2600.013', 'Ochronniki słuchu uvex K JUNIOR różowy 2600.013', 'UVEX'],
+            ['9183.043', 'Okulary i-5 spawalnicze 9183.043', 'UVEX'],
+            ['9183.045', 'Okulary i-5 spawalnicze 9183.045', 'UVEX'],
+            ['12.012', 'Rękawice TEGERA 12 kozia skóra licowa, mankiet', 'TEGERA'],
+            ['12.013', 'Rękawice TEGERA 13 kozia skóra licowa, sciągacz zapięcie na rzep', 'TEGERA'],
+        ];
+        foreach ($cards as [$sku, $name, $manufacturer]) {
+            Product::query()->create([
+                'sku' => $sku,
+                'name' => $name,
+                'manufacturer' => $manufacturer,
+                'catalog_price_net' => 62.30,
+                'purchase_price' => 62.30,
+            ]);
+        }
+
+        $result = app(ProductSizeMergeService::class)->merge(null, false);
+
+        $this->assertSame(0, $result['groups']);
+        $this->assertSame(6, Product::query()->count());
+    }
+
     public function test_merge_moves_b2b_links_shop_cards_and_image_rejections_to_winner(): void
     {
         Queue::fake();

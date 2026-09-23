@@ -1476,8 +1476,12 @@ final class ProductSizeVariant
         if (preg_match('/[\/\-_]/u', $sku) === 1) {
             return null;
         }
-        // 1260348 to kod 3M, nie „model 12603 + but 48”.
-        if (preg_match('/^\d+$/', $sku) === 1) {
+        // 1260348 to kod 3M, nie „model 12603 + but 48”. Tak samo kod z kropką: po kropce stoi numer wersji
+        // albo modelu — UVEX 2600.011/2600.013 to K JUNIOR limonka/różowy, 9183.043/9183.045 okulary i-5 w klasie
+        // spawalniczej 3/5, TEGERA 12.012/12.013 to modele 12 i 13 (sprawdzone na produkcji 23.09.2026). Nawet gdy
+        // końcówka bywa rozmiarem (kombinezon UVEX 89843.10 = M wg uvex-safety.com), nie jest nim w skali, którą
+        // tu czytamy — rozmiar takich kart musi przyjść z nazwy albo z listy rozmiarów.
+        if (preg_match('/^\d+(?:\.\d+)?$/', $sku) === 1) {
             return null;
         }
         if (preg_match('/s[1-3](?:ps|p)?$/i', $sku) === 1) {
