@@ -1184,7 +1184,7 @@ final class ProductAiSearchService
         AiTask $task,
     ): array {
         $rewritten = $this->clock('rewrite_llm', fn (): ?array => $this->rewriteCatalogIntent($query, $task));
-        if ($rewritten === null || ! $this->searchIntentChanged($query, $usedIntent, $rewritten)) {
+        if ($rewritten === null || ! $this->rewriteChangesSearch($query, $usedIntent, $rewritten)) {
             return $firstResult;
         }
 
@@ -1271,6 +1271,36 @@ final class ProductAiSearchService
             $this->applySlangIntent($query, $searched),
             $this->applySlangIntent($query, $candidate),
         );
+    }
+
+    /**
+     * Czy przepisanie zapytania zmienia szukanie. Poza frazami i nazwą (searchIntentChanged) liczą się kroki kaskady,
+     * producent i model — o nowe kroki prompt przepisania prosi wprost, a kaskada katalogu i skrót nazwanego modelu
+     * z nich korzystają; dotąd przepisanie zmieniające same kroki przepadało jako „bez zmian”. Porównanie w tym widoku,
+     * który dostaje retrieval (retrieveCandidates): po normalizacji żargonu i bez marki spoza katalogu — różnice,
+     * których retrieval nie używa, nie są zmianą. Tylko dla przepisania: odpowiedź rankingu nie ma kroków ani producenta.
+     *
+     * @param  array<string, mixed>  $searched
+     * @param  array<string, mixed>  $rewritten
+     */
+    private function rewriteChangesSearch(string $query, array $searched, array $rewritten): bool
+    {
+        if ($this->searchIntentChanged($query, $searched, $rewritten)) {
+            return true;
+        }
+        $view = fn (array $intent): array => $this->applySlangIntent(
+            $query,
+            $this->intentForRetrieval($this->applySlangIntent($query, $intent)),
+        );
+        $before = $view($searched);
+        $after = $view($rewritten);
+        // Kolejność kroków się liczy — kaskada zdejmuje je od końca.
+        $steps = fn (array $intent): array => array_map(fn (string $step): string => $this->compactLex($step), $intent['search_steps']);
+
+        return $steps($before) !== $steps($after)
+            || $before['manufacturer_absent_in_catalog'] !== $after['manufacturer_absent_in_catalog']
+            || $this->compactLex((string) $before['manufacturer']) !== $this->compactLex((string) $after['manufacturer'])
+            || $this->compactLex((string) $before['model_name']) !== $this->compactLex((string) $after['model_name']);
     }
 
     /**
@@ -1381,7 +1411,7 @@ final class ProductAiSearchService
                 // Porównanie z intencją, z którą szukano kart (jak retryAfterRewrite). Intencja z odpowiedzi rankingu
                 // bywa jej podzbiorem — wtedy przepisanie powtarzające zrozumienie wyglądało na zmianę i ta sama pula
                 // szła drugi raz do oceny.
-                if (! $this->searchIntentChanged($clean[$i], $retrieveIntents[$i], $rewritten)) {
+                if (! $this->rewriteChangesSearch($clean[$i], $retrieveIntents[$i], $rewritten)) {
                     continue;
                 }
                 $intents[$i] = $rewritten;

@@ -374,6 +374,34 @@ final class ProductAiSearchRewriteAfterEmptyRankTest extends TestCase
         $this->assertSame([], array_column($result['products'] ?? [], 'sku'));
     }
 
+    /** @return iterable<string, array{0: bool, 1: list<string>, 2: int}> */
+    public static function rewrittenSteps(): iterable
+    {
+        yield 'nowe kroki, fala' => [true, ['rękawice', 'nitrylowe', 'montażowe'], 2];
+        yield 'nowe kroki, pojedyncze' => [false, ['rękawice', 'nitrylowe', 'montażowe'], 2];
+        yield 'te same kroki inną pisownią, fala' => [true, ['Rękawice', 'Powlekane nitrylem'], 1];
+        yield 'te same kroki inną pisownią, pojedyncze' => [false, ['Rękawice', 'Powlekane nitrylem'], 1];
+    }
+
+    /**
+     * Prompt przepisania prosi wprost o nowe kroki wyszukiwania, a kaskada katalogu z nich korzysta. Przepisanie,
+     * które zmienia tylko kroki (te same frazy i nazwa), było brane za „bez zmian” i nowe kroki przepadały.
+     * Ta sama lista w innej pisowni nie jest zmianą — inaczej ta sama pula szłaby drugi raz do oceny.
+     *
+     * @param  list<string>  $steps
+     */
+    #[DataProvider('rewrittenSteps')]
+    public function test_rewrite_changing_only_search_steps_searches_again(bool $batch, array $steps, int $expectedRanks): void
+    {
+        $this->llm(rewrite: fn (): array => [...$this->glovesIntent(), 'search_steps' => $steps]);
+
+        $result = $this->searchGloves($batch);
+
+        $this->assertSame(1, $this->calls['rewrite']);
+        $this->assertSame($expectedRanks, $this->calls['rank']);
+        $this->assertSame($expectedRanks === 2 ? ['RKW-NITRYL-1'] : [], array_column($result['products'] ?? [], 'sku'));
+    }
+
     /** @return array<string, mixed> */
     private function searchGloves(bool $batch): array
     {
