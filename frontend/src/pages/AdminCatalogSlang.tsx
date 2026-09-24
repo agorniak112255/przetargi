@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 
 type CatalogSlangEntry = {
@@ -13,6 +13,9 @@ type CatalogSlangEntry = {
   keywords: string[]
   tags: string[]
 }
+
+/** Wiersz tabeli: `key` tylko w panelu (zaznaczanie), nie trafia do zapisu. */
+type Row = CatalogSlangEntry & { key: string }
 
 type Payload = {
   entries: CatalogSlangEntry[]
@@ -48,40 +51,55 @@ function emptyRow(category: string): CatalogSlangEntry {
   }
 }
 
+/** „22, 30 35” → [22, 30, 35]; null, gdy to nie jest lista co najmniej dwóch numerów. */
+function idList(needle: string): Set<number> | null {
+  if (!/^[#\d\s,;]+$/.test(needle)) return null
+  const ids = needle
+    .split(/[\s,;]+/)
+    .map((s) => s.replace(/^#/, ''))
+    .filter((s) => /^\d+$/.test(s))
+    .map(Number)
+  return ids.length >= 2 ? new Set(ids) : null
+}
+
 function SortMark({ active, dir }: { active: boolean; dir: 'asc' | 'desc' }) {
   if (!active) return <span className="ml-1 text-slate-300">↕</span>
   return <span className="ml-1 text-sky-600">{dir === 'asc' ? '↑' : '↓'}</span>
 }
 
 export function AdminCatalogSlang() {
-  const [rows, setRows] = useState<CatalogSlangEntry[]>([])
+  const [rows, setRows] = useState<Row[]>([])
   const [defaults, setDefaults] = useState<CatalogSlangEntry[]>([])
   const [categories, setCategories] = useState<Record<string, string>>({})
   const [cat, setCat] = useState('')
   const [q, setQ] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('category')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
+  const newKey = useRef(0)
+
+  function toRows(list: CatalogSlangEntry[]): Row[] {
+    return list.map((row) => ({
+      ...row,
+      keywords: row.keywords ?? [],
+      tags: row.tags ?? [],
+      key: row.id ? `id-${row.id}` : `nowy-${++newKey.current}`,
+    }))
+  }
+
+  function replaceRows(list: CatalogSlangEntry[]) {
+    setRows(toRows(list))
+    setSelected(new Set())
+  }
 
   async function load() {
     setErr('')
     const data = await api<Payload>('/admin/catalog-slang')
-    setRows(
-      (data.entries ?? []).map((row) => ({
-        ...row,
-        keywords: row.keywords ?? [],
-        tags: row.tags ?? [],
-      })),
-    )
-    setDefaults(
-      (data.defaults ?? []).map((row) => ({
-        ...row,
-        keywords: row.keywords ?? [],
-        tags: row.tags ?? [],
-      })),
-    )
+    replaceRows(data.entries ?? [])
+    setDefaults(data.defaults ?? [])
     setCategories(data.categories ?? {})
   }
 
@@ -91,10 +109,13 @@ export function AdminCatalogSlang() {
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase()
+    const ids = idList(needle)
     const idNeedle = /^#?\d+$/.test(needle) ? Number(needle.replace('#', '')) : null
     let list = rows.map((row, index) => ({ row, index }))
     if (cat) list = list.filter((item) => item.row.category === cat)
-    if (needle) list = list.filter((item) => item.row.id === idNeedle || hay(item.row).includes(needle))
+    // Lista numerów (np. wklejona z przeglądu słownika) — tylko te wpisy, bez szukania w treści.
+    if (ids) list = list.filter((item) => item.row.id !== undefined && ids.has(item.row.id))
+    else if (needle) list = list.filter((item) => item.row.id === idNeedle || hay(item.row).includes(needle))
     list.sort((a, b) => {
       if (sortKey === 'id') {
         // Nowe, jeszcze niezapisane wpisy (bez numeru) na końcu.
@@ -115,17 +136,68 @@ export function AdminCatalogSlang() {
     return list
   }, [rows, cat, q, sortKey, sortDir, categories])
 
-  function patch(index: number, next: CatalogSlangEntry) {
+  function patch(index: number, next: Row) {
     setRows((prev) => prev.map((row, i) => (i === index ? next : row)))
     setMsg('')
   }
 
-  function remove(index: number, row: CatalogSlangEntry) {
+  function remove(index: number, row: Row) {
     const label = row.terms.join(', ') || 'pusty wpis'
     const nr = row.id ? `nr ${row.id} ` : ''
     if (!window.confirm(`Usunąć wpis ${nr}„${label}”? Zmiana trafi do słownika po kliknięciu „Zapisz”.`)) return
     setRows((prev) => prev.filter((_, i) => i !== index))
+    setSelected((prev) => {
+      const next = new Set(prev)
+      next.delete(row.key)
+      return next
+    })
     setMsg('')
+  }
+
+  function toggleSelected(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const allVisibleSelected = visible.length > 0 && visible.every(({ row }) => selected.has(row.key))
+  const someVisibleSelected = visible.some(({ row }) => selected.has(row.key))
+
+  function toggleVisible() {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      for (const { row } of visible) {
+        if (allVisibleSelected) next.delete(row.key)
+        else next.add(row.key)
+      }
+      return next
+    })
+  }
+
+  function removeSelected() {
+    const picked = rows.filter((row) => selected.has(row.key))
+    if (picked.length === 0) return
+    const numbers = picked
+      .map((row) => row.id)
+      .filter((id): id is number => id !== undefined)
+      .sort((a, b) => a - b)
+    const fresh = picked.length - numbers.length
+    const list = [numbers.length > 0 ? `nr ${numbers.join(', ')}` : '', fresh > 0 ? `nowe bez numeru: ${fresh}` : '']
+      .filter(Boolean)
+      .join('; ')
+    if (
+      !window.confirm(
+        `Usunąć zaznaczone wpisy (${picked.length}): ${list}? Zmiana trafi do słownika po kliknięciu „Zapisz”.`,
+      )
+    ) {
+      return
+    }
+    setRows((prev) => prev.filter((row) => !selected.has(row.key)))
+    setSelected(new Set())
+    setMsg(`Usunięto z listy wpisów: ${picked.length} — kliknij Zapisz, żeby utrwalić.`)
   }
 
   function toggleSort(key: SortKey) {
@@ -159,13 +231,7 @@ export function AdminCatalogSlang() {
         method: 'PUT',
         body: JSON.stringify({ catalog_slang }),
       })
-      setRows(
-        (data.entries ?? []).map((row) => ({
-          ...row,
-          keywords: row.keywords ?? [],
-          tags: row.tags ?? [],
-        })),
-      )
+      replaceRows(data.entries ?? [])
       setMsg(`Zapisano ${data.entries?.length ?? 0} wpisów.`)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się zapisać słownika')
@@ -208,14 +274,14 @@ export function AdminCatalogSlang() {
         </select>
         <input
           className="min-w-[12rem] flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
-          placeholder="Filtruj żargon albo numer wpisu…"
+          placeholder="Filtruj żargon albo numery wpisów (np. 22, 30, 35)…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
         <button
           type="button"
           className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
-          onClick={() => setRows((prev) => [...prev, emptyRow(cat || 'rece')])}
+          onClick={() => setRows((prev) => [...prev, ...toRows([emptyRow(cat || 'rece')])])}
         >
           Dodaj wpis
         </button>
@@ -223,11 +289,19 @@ export function AdminCatalogSlang() {
           type="button"
           className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
           onClick={() => {
-            setRows(defaults)
+            replaceRows(defaults)
             setMsg('Przywrócono zestaw startowy — kliknij Zapisz, żeby utrwalić.')
           }}
         >
           Przywróć zestaw startowy
+        </button>
+        <button
+          type="button"
+          disabled={selected.size === 0}
+          onClick={removeSelected}
+          className="rounded-lg border border-red-300 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50 disabled:border-slate-200 disabled:text-slate-400 disabled:hover:bg-transparent"
+        >
+          Usuń zaznaczone ({selected.size})
         </button>
         <button
           type="button"
@@ -240,6 +314,15 @@ export function AdminCatalogSlang() {
         <span className="text-[11px] text-slate-500">
           {visible.length} z {rows.length}
         </span>
+        {selected.size > 0 && (
+          <button
+            type="button"
+            className="text-[11px] text-slate-500 underline hover:text-slate-700"
+            onClick={() => setSelected(new Set())}
+          >
+            Odznacz wszystkie
+          </button>
+        )}
       </div>
 
       {err && (
@@ -253,6 +336,19 @@ export function AdminCatalogSlang() {
         <table className="w-full min-w-[64rem] text-left text-[13px]">
           <thead>
             <tr className="border-b bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+              <th className="w-8 p-2">
+                <input
+                  type="checkbox"
+                  aria-label="Zaznacz widoczne wpisy"
+                  title="Zaznacz widoczne wpisy"
+                  checked={allVisibleSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someVisibleSelected && !allVisibleSelected
+                  }}
+                  disabled={visible.length === 0}
+                  onChange={toggleVisible}
+                />
+              </th>
               {headers.map((h) => (
                 <th key={h.key} className="p-2">
                   <button
@@ -272,7 +368,18 @@ export function AdminCatalogSlang() {
           </thead>
           <tbody>
             {visible.map(({ row, index }) => (
-              <tr key={row.id ?? `nowy-${index}`} className="border-b align-top last:border-b-0">
+              <tr
+                key={row.key}
+                className={`border-b align-top last:border-b-0 ${selected.has(row.key) ? 'bg-red-50/60' : ''}`}
+              >
+                <td className="p-2 pt-3">
+                  <input
+                    type="checkbox"
+                    aria-label={`Zaznacz wpis ${row.id ?? 'nowy'}`}
+                    checked={selected.has(row.key)}
+                    onChange={() => toggleSelected(row.key)}
+                  />
+                </td>
                 <td className="whitespace-nowrap p-2 pt-3 text-right text-xs tabular-nums text-slate-500">
                   {row.id ?? <span className="text-slate-400">nowy</span>}
                 </td>
