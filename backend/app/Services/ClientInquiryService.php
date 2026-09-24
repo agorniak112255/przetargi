@@ -895,6 +895,50 @@ final class ClientInquiryService
     }
 
     /**
+     * List zapisany przy ostatnim złożeniu, przeliczony przy otwarciu zapytania tym samym
+     * kodem i z tych samych danych co panel. Panel liczy pozycje na bieżąco, a list był kopią
+     * z chwili zapisu — po wdrożeniu zmiany listu panel i list mówiły co innego (#73: panel
+     * z wyceną według rozmiarów, list jeszcze bez niej).
+     *
+     * Nie ruszamy listu wysłanego ani czekającego na wysyłkę — klient dostał albo ma dostać
+     * zatwierdzoną treść — ani poprawionego ręcznie (poprawka treści kasuje `reply_html`).
+     * Temat zostaje: handlowiec mógł go zmienić, a ta poprawka tabeli nie kasuje. Data zmiany
+     * zapytania też zostaje — przeliczenie nie jest pracą handlowca.
+     */
+    public function refreshStoredReply(ClientInquiry $inquiry): ClientInquiry
+    {
+        if ($inquiry->replied_at !== null
+            || $inquiry->send_requested_at !== null
+            || trim((string) $inquiry->reply_body) === ''
+            || trim((string) $inquiry->reply_html) === '') {
+            return $inquiry;
+        }
+
+        $answers = is_array($inquiry->answers) ? $inquiry->answers : [];
+        try {
+            $draft = $this->writeReply($inquiry, $answers, $this->nullable($inquiry->extra_note));
+        } catch (Throwable $e) {
+            // Przeliczenie to dodatek do otwarcia strony — błąd trafia do logu, a handlowiec
+            // dostaje zapisany list zamiast strony z błędem.
+            report($e);
+
+            return $inquiry;
+        }
+        if ($draft['body'] === (string) $inquiry->reply_body && $draft['html'] === (string) $inquiry->reply_html) {
+            return $inquiry;
+        }
+
+        $inquiry->timestamps = false;
+        try {
+            $inquiry->forceFill(['reply_body' => $draft['body'], 'reply_html' => $draft['html']])->save();
+        } finally {
+            $inquiry->timestamps = true;
+        }
+
+        return $inquiry;
+    }
+
+    /**
      * Tabela HTML do maila. Kolumna bywa pusta przy listach napisanych, zanim
      * tabela powstała — wtedy odtwarzamy ją z zapisanych odpowiedzi. Robimy to
      * tylko wtedy, gdy zapisany list to wciąż nasz tekst: po ręcznej poprawce

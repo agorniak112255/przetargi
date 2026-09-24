@@ -333,6 +333,10 @@ class ClientInquiryController extends Controller
         if (! $request->user()->can('inquiries.view_others')) {
             $this->assertOwner($request, $inquiry);
         }
+        // List przeliczamy tylko autorowi — podgląd cudzego zapytania niczego w nim nie zapisuje.
+        if ((int) $inquiry->user_id === (int) $request->user()->id) {
+            $this->inquiries->refreshStoredReply($inquiry);
+        }
 
         return response()->json($this->inquiries->present($inquiry->load('client')));
     }
