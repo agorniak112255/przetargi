@@ -12,6 +12,8 @@ use App\Support\SearchEvalMetrics;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
+use Mockery;
+use RuntimeException;
 use Tests\Support\FakeSearchLlm;
 use Tests\Support\Opisowy15Fixture;
 use Tests\TestCase;
@@ -175,5 +177,49 @@ final class SearchEvalRunnerTest extends TestCase
         $this->assertSame(1, $summary['violations']);
         $this->assertSame(0, $summary['errors']);
         $this->assertEqualsWithDelta(($apteczka['retrieval_recall'] + $unknown['retrieval_recall'] + $violation['retrieval_recall']) / 3, $summary['retrieval_recall'], 0.0001);
+    }
+
+    /**
+     * Raport „przed/po” zmiany ścieżki po pustej ocenie (intentChanged, 24.09.2026) pokazywał tylko metryki —
+     * nie było widać, które przypadki poszły drugą oceną albo przepisaniem zapytania. Każdy wiersz niesie więc
+     * stan modelu, liczbę odpowiedzi rankingu i znacznik przepisania.
+     */
+    public function test_evaluate_reports_model_path_of_each_case(): void
+    {
+        Opisowy15Fixture::seed();
+
+        // Model ocenia karty i coś wskazuje: jedna odpowiedź rankingu, bez przepisania.
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(static function (array $messages): array {
+            if (FakeSearchLlm::kind($messages) !== FakeSearchLlm::KIND_RANK) {
+                throw new RuntimeException('bez zrozumienia — intencja lokalna');
+            }
+            preg_match('/"id":(\d+)/', (string) ($messages[1]['content'] ?? ''), $m);
+
+            return ['matches' => [['id' => (int) ($m[1] ?? 0), 'score' => 80, 'reason' => 'stub']]];
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        // Runner dopiero po podstawieniu modelu — inaczej trzyma prawdziwego klienta.
+        $runner = app(SearchEvalRunner::class);
+        $cases = [];
+        foreach ($runner->loadCases(base_path(self::GOLDEN)) as $case) {
+            $cases[$case['id']] = $case;
+        }
+        $case = $cases['opisowy15-10-apteczka-scienna-mini'];
+
+        $row = $runner->evaluate($case, self::K, ProductAiSearchService::CATALOG_LIMIT);
+
+        $this->assertNull($row['error']);
+        $this->assertSame(ProductAiSearchService::MODEL_STATE_RANKED, $row['model_state']);
+        $this->assertSame(1, $row['rank_passes']);
+        $this->assertFalse($row['rewrite']);
+
+        // Wyszukiwanie się wywróciło (puste wymaganie) — wiersz ma te same klucze, z wartościami „nic się nie wydarzyło”.
+        $error = $runner->evaluate([...$case, 'query' => '   '], self::K, ProductAiSearchService::CATALOG_LIMIT);
+
+        $this->assertNotNull($error['error']);
+        $this->assertNull($error['model_state']);
+        $this->assertSame(0, $error['rank_passes']);
+        $this->assertFalse($error['rewrite']);
     }
 }

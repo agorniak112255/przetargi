@@ -95,6 +95,9 @@ final class SearchEvalRunner
                 'returned' => 0,
                 'candidates' => 0,
                 'duration_ms' => (int) round((hrtime(true) - $started) / 1e6),
+                'model_state' => null,
+                'rank_passes' => 0,
+                'rewrite' => false,
             ];
         }
 
@@ -136,6 +139,11 @@ final class SearchEvalRunner
             'returned' => count($rankedSkus),
             'candidates' => count($trace['candidate_ids'] ?? []),
             'duration_ms' => (int) round((hrtime(true) - $started) / 1e6),
+            // Droga przez model: bez niej raport „przed/po” zmiany w ścieżce po pustej ocenie pokazywał same
+            // metryki, a nie które przypadki poszły drugą oceną albo przepisaniem zapytania (24.09.2026).
+            'model_state' => is_string($result['model_state'] ?? null) ? $result['model_state'] : null,
+            'rank_passes' => (int) ($trace['passes'] ?? 0),
+            'rewrite' => array_key_exists('rewrite_llm', is_array($trace['timings_ms'] ?? null) ? $trace['timings_ms'] : []),
         ];
     }
 
