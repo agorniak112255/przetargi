@@ -41,9 +41,10 @@ final class FakeSearchLlm
     private const REQUIREMENT_PREFIX = 60;
 
     /**
-     * Model nic nie wnosi: „zrozum”/„przepisz” kończą się intencją lokalną (wyjątek w chatJson,
-     * pusta odpowiedź w chatJsonMany — dokładnie tak sygnalizuje awarię prawdziwy klient),
-     * a ranking jest pusty. Odtwarza ścieżkę deterministyczną dopasowania (AUDYT_D §4.2).
+     * Model nic nie wnosi: „zrozum” kończy się intencją lokalną, „przepisz” niczego nie zmienia — pozycja
+     * zostaje z wynikiem pierwszego przebiegu (wyjątek w chatJson, pusta odpowiedź w chatJsonMany — dokładnie
+     * tak sygnalizuje awarię prawdziwy klient), a ranking jest pusty. Odtwarza ścieżkę deterministyczną
+     * dopasowania (AUDYT_D §4.2).
      */
     public static function empty(): OpenAiCompatibleClient
     {

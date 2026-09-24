@@ -529,7 +529,8 @@ final class ProductAiSearchService
             );
             $done[$i]['model_providers'] = [
                 'understand' => $this->understandProviders[$i] ?? null,
-                'rank' => $rankProviderByIndex[$i] ?? null,
+                // Wynik bez oceny (ponowne szukanie nie znalazło kart) — dostawca pierwszej oceny nie oceniał tych wierszy.
+                'rank' => $state === self::MODEL_STATE_SKIPPED ? null : ($rankProviderByIndex[$i] ?? null),
             ];
         }
         ksort($done);
@@ -1069,7 +1070,7 @@ final class ProductAiSearchService
             // Bez rankingu (nazwany model, brak kart) — model nie był pytany, jak w fali.
             $result['model_state'] = self::MODEL_STATE_SKIPPED;
             if ($allowRewrite && $result['products'] === [] && ! $this->normalizeIntent($intent)['manufacturer_absent_in_catalog']) {
-                return $this->retryAfterRewrite($query, $retrieveIntent, $limit, $withExternalHint, $task, self::MODEL_STATE_SKIPPED);
+                return $this->retryAfterRewrite($query, $retrieveIntent, $result, $limit, $withExternalHint, $task);
             }
 
             return $result;
@@ -1137,22 +1138,23 @@ final class ProductAiSearchService
             // nie odpowiedział, a pozycja czeka na ponowne dopasowanie (jak w fali).
             return $result;
         }
-        if ($this->intentChanged($retrieveIntent, $rankedIntent)) {
+        if ($this->searchIntentChanged($query, $retrieveIntent, $rankedIntent)) {
             return $this->finishSearch($query, $rankedIntent, $limit, $withExternalHint, $task, false);
         }
 
-        return $this->retryAfterRewrite($query, $retrieveIntent, $limit, $withExternalHint, $task, $result['model_state']);
+        return $this->retryAfterRewrite($query, $retrieveIntent, $result, $limit, $withExternalHint, $task);
     }
 
     /**
-     * Stan modelu po nałożeniu zapasów — wspólna reguła obu ścieżek: awaria zostaje awarią,
-     * a „ranked” wymaga karty, którą model faktycznie ocenił (nie z reguły ani listy katalogowej).
+     * Stan modelu po nałożeniu zapasów — wspólna reguła obu ścieżek: awaria zostaje awarią, pominięcie
+     * pominięciem (model wierszy wyniku nie oceniał — np. skrót nazwanego modelu, którego wiersze nie mają
+     * ai_match_source), a „ranked” wymaga karty, którą model faktycznie ocenił (nie z reguły ani listy katalogowej).
      *
      * @param  list<array<string, mixed>>  $rows
      */
     private function modelStateForRows(array $rows, string $modelState): string
     {
-        if ($modelState === self::MODEL_STATE_UNAVAILABLE) {
+        if ($modelState === self::MODEL_STATE_UNAVAILABLE || $modelState === self::MODEL_STATE_SKIPPED) {
             return $modelState;
         }
         foreach ($rows as $row) {
@@ -1165,55 +1167,50 @@ final class ProductAiSearchService
     }
 
     /**
-     * @param  array{needed: string, search_phrases: list<string>, constraints: list<string>}  $usedIntent
-     * @return array{
-     *     query: string,
-     *     total: int,
-     *     products: list<array<string, mixed>>,
-     *     needed: string,
-     *     search_phrases: list<string>,
-     *     ai_note: string|null,
-     *     external_hint: array{url: string, title: string}|null
-     * }
+     * Przepisanie zapytania po pustym wyniku. Gdy padnie albo nic nie zmieni, zostaje wynik pierwszego przebiegu —
+     * jego komunikat („brak kart z opisem”, „marki nie ma w katalogu”), intencja i stan oceny, tak jak w fali.
+     * Wcześniej ta gałąź składała ogólne „model nie znalazł”, także gdy model żadnej karty nie widział.
+     *
+     * @param  array{needed: string, search_phrases: list<string>, constraints: list<string>}  $usedIntent  intencja, z którą szukano kart
+     * @param  array<string, mixed>  $firstResult  wynik pierwszego przebiegu (pusty)
+     * @return array<string, mixed>
      */
     private function retryAfterRewrite(
         string $query,
         array $usedIntent,
+        array $firstResult,
         int $limit,
         bool $withExternalHint,
         AiTask $task,
-        string $modelState = self::MODEL_STATE_EMPTY,
     ): array {
-        $rewritten = $this->clock('rewrite_llm', fn (): array => $this->rewriteCatalogIntent($query, $task));
-        if (! $this->intentChanged($usedIntent, $rewritten)) {
-            // Przepisanie nic nie zmieniło — stan i komunikat z rankingu zostają: awaria modelu
-            // nie może po przepisaniu wyglądać jak „nie znalazł”.
-            $result = $this->emptyResult(
-                $query,
-                $rewritten,
-                $withExternalHint,
-                $modelState === self::MODEL_STATE_UNAVAILABLE ? self::NOTE_MODEL_FAILED : self::NOTE_MODEL_EMPTY,
-            );
-            $result['model_state'] = $modelState;
-
-            return $result;
+        $rewritten = $this->clock('rewrite_llm', fn (): ?array => $this->rewriteCatalogIntent($query, $task));
+        if ($rewritten === null || ! $this->searchIntentChanged($query, $usedIntent, $rewritten)) {
+            return $firstResult;
         }
 
         return $this->finishSearch($query, $rewritten, $limit, $withExternalHint, $task, false);
     }
 
     /**
-     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
+     * Null = przepisanie padło (wyjątek albo pusta odpowiedź — kontrakt jak w fali).
+     *
+     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}|null
      */
-    private function rewriteCatalogIntent(string $query, AiTask $task): array
+    private function rewriteCatalogIntent(string $query, AiTask $task): ?array
     {
         try {
             $raw = $this->llm->chatJson($this->rewriteMessages($query), null, 900, null, $task);
+        } catch (Throwable $e) {
+            // Tylko log, jak przy awarii oceny: intent_error w śladzie znaczy awarię kroku „zrozum” (SearchEventRecorder
+            // zapisuje go jako błąd modelu przy intencji), a intencja wyniku pochodzi wtedy z modelu.
+            Log::warning('product-ai-search.rewrite-failed', ['message' => $e->getMessage()]);
 
-            return $this->intentFromRewrite(is_array($raw) ? $raw : [], $query);
-        } catch (Throwable) {
-            return $this->localIntent($query);
+            return null;
         }
+
+        // Dotąd awaria dawała intencję lokalną z całym wymaganiem jako „szukany produkt”, z której finishSearch
+        // szukał kart od nowa i pytał model drugi raz (24.09.2026).
+        return is_array($raw) && $raw !== [] ? $this->intentFromRewrite($raw, $query) : null;
     }
 
     /**
@@ -1248,13 +1245,32 @@ final class ProductAiSearchService
     private function intentChanged(array $before, array $after): bool
     {
         $beforeSet = $this->normalizedPhraseSet($before['search_phrases']);
-        foreach ($this->normalizedPhraseSet($after['search_phrases']) as $phrase) {
+        // Frazy są kluczami zbioru. Do 24.09.2026 pętla szła po wartościach (same `true`), więc intencja zawsze
+        // wyglądała na zmienioną: przepisanie zapytania się nie wykonywało, a pusta ocena kończyła się drugą oceną.
+        foreach (array_keys($this->normalizedPhraseSet($after['search_phrases'])) as $phrase) {
             if (! isset($beforeSet[$phrase])) {
                 return true;
             }
         }
 
         return $this->lexicalNormalize($before['needed']) !== $this->lexicalNormalize($after['needed']);
+    }
+
+    /**
+     * Czy nowa intencja da inne szukanie niż ta, z którą szukano kart. Obie strony w tej postaci, w jakiej bierze je
+     * prepareSearch (applySlangIntent): intencja szukania jest już po normalizacji żargonu, a odpowiedź modelu nie —
+     * normalizacja wycina słabe słowa z zapytania („nitrylki”), więc ta sama intencja wyglądała na zmienioną
+     * i ta sama pula szła drugi raz do oceny.
+     *
+     * @param  array<string, mixed>  $searched
+     * @param  array<string, mixed>  $candidate
+     */
+    private function searchIntentChanged(string $query, array $searched, array $candidate): bool
+    {
+        return $this->intentChanged(
+            $this->applySlangIntent($query, $searched),
+            $this->applySlangIntent($query, $candidate),
+        );
     }
 
     /**
@@ -1297,9 +1313,16 @@ final class ProductAiSearchService
         foreach ($done as $i => $row) {
             // Pusta pozycja po awarii oceny to nie „nic nie znaleziono” — przepisanie zapytania pytałoby model
             // o nową pulę tuż po tym, jak nie odpowiedział. Pozycja czeka na ponowne dopasowanie.
-            if (($row['products'] ?? []) === [] && ($modelStates[$i] ?? null) !== self::MODEL_STATE_UNAVAILABLE) {
-                $empty[] = $i;
+            if (($row['products'] ?? []) !== [] || ($modelStates[$i] ?? null) === self::MODEL_STATE_UNAVAILABLE) {
+                continue;
             }
+            // Jak w pojedynczym wyszukiwaniu (finishSearch): bez kart do oceny przy marce spoza katalogu nie ma
+            // czego przepisywać — zostaje komunikat o brakującej marce, bez dodatkowego pytania modelu.
+            if (($row['model_state'] ?? null) === self::MODEL_STATE_SKIPPED
+                && $this->normalizeIntent($retrieveIntents[$i])['manufacturer_absent_in_catalog']) {
+                continue;
+            }
+            $empty[] = $i;
         }
         if ($empty === []) {
             return;
@@ -1309,7 +1332,7 @@ final class ProductAiSearchService
         $needLlm = [];
         foreach ($empty as $i) {
             $current = $intents[$i];
-            if ($this->intentChanged($retrieveIntents[$i], $current)) {
+            if ($this->searchIntentChanged($clean[$i], $retrieveIntents[$i], $current)) {
                 // Przepisanie zastępuje wynik pozycji, więc zastępuje też jej ślad.
                 $this->trace = self::EMPTY_TRACE;
                 $prepared = $this->clock('catalog', fn (): array => $this->prepareSearch($clean[$i], $current, $limit));
@@ -1322,6 +1345,9 @@ final class ProductAiSearchService
                         $prepared['note'],
                         $withExternalHint,
                     );
+                    // Jak w pierwszym przebiegu i w finishSearch: bez kart do oceny model nie był pytany. Stan idzie do
+                    // $modelStates — inaczej końcowa pętla nadpisałaby go stanem pierwszej oceny.
+                    $modelStates[$i] = self::MODEL_STATE_SKIPPED;
                 } else {
                     $pending[$i] = $prepared;
                 }
@@ -1347,8 +1373,15 @@ final class ProductAiSearchService
             ));
             foreach ($needLlm as $pos => $i) {
                 $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
+                if ($raw === []) {
+                    // Przepisanie padło — intencja z pustej odpowiedzi to cały akapit SIWZ, nie nowe zrozumienie.
+                    continue;
+                }
                 $rewritten = $this->intentFromRewrite($raw, $clean[$i]);
-                if (! $this->intentChanged($intents[$i], $rewritten)) {
+                // Porównanie z intencją, z którą szukano kart (jak retryAfterRewrite). Intencja z odpowiedzi rankingu
+                // bywa jej podzbiorem — wtedy przepisanie powtarzające zrozumienie wyglądało na zmianę i ta sama pula
+                // szła drugi raz do oceny.
+                if (! $this->searchIntentChanged($clean[$i], $retrieveIntents[$i], $rewritten)) {
                     continue;
                 }
                 $intents[$i] = $rewritten;
@@ -1363,6 +1396,7 @@ final class ProductAiSearchService
                         $prepared['note'],
                         $withExternalHint,
                     );
+                    $modelStates[$i] = self::MODEL_STATE_SKIPPED;
                 } else {
                     $pending[$i] = $prepared;
                 }
@@ -1396,6 +1430,11 @@ final class ProductAiSearchService
             $this->trace = $this->tracesByIndex[$i] ?? self::EMPTY_TRACE;
             if ($raw !== []) {
                 $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
+                // Wiersze wyniku pochodzą z tej oceny, więc i stan (jak finishSearch po przepisaniu). Pozycja bez kart
+                // w pierwszym przebiegu (skipped) nie miała go wcale i wracała bez model_state.
+                $modelStates[$i] = is_array($raw['matches'] ?? null) && $raw['matches'] !== []
+                    ? self::MODEL_STATE_RANKED
+                    : self::MODEL_STATE_EMPTY;
             } else {
                 // Ocena po przepisaniu padła — pozycja ma stan awarii, nie „model nic nie znalazł”.
                 $modelStates[$i] = self::MODEL_STATE_UNAVAILABLE;
