@@ -44,6 +44,34 @@ function mailDate(value: string): string {
     : d.toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' })
 }
 
+/**
+ * Zapasowe kopiowanie HTML: list wstawiony poza ekranem, zaznaczony i skopiowany jak zaznaczenie
+ * na stronie — schowek dostaje wtedy wersję z formatowaniem. HTML pochodzi z naszego serwera.
+ */
+function copyHtmlBySelection(html: string): boolean {
+  const holder = document.createElement('div')
+  holder.innerHTML = html
+  holder.setAttribute('aria-hidden', 'true')
+  holder.style.position = 'fixed'
+  holder.style.left = '-10000px'
+  holder.style.top = '0'
+  document.body.appendChild(holder)
+  const selection = window.getSelection()
+  const range = document.createRange()
+  range.selectNodeContents(holder)
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } catch {
+    ok = false
+  }
+  selection?.removeAllRanges()
+  holder.remove()
+  return ok
+}
+
 function priceByMode(
   p: { catalog_pln: number | null; offer_pln: number | null },
   mode: InquiryPriceMode,
@@ -625,18 +653,22 @@ export function InquiryReply() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
-  async function saveEdits(): Promise<void> {
-    if (!inquiry) return
+  /** Zapisuje poprawki tematu i treści; zwraca zapytanie po zapisie albo null, gdy nie było czego zapisać. */
+  async function saveEdits(): Promise<InquiryPayload | null> {
+    if (!inquiry) return null
     const next: Draft = { subject, body }
     const prev = serverRef.current
-    if (next.subject === prev.subject && next.body === prev.body) return
+    if (next.subject === prev.subject && next.body === prev.body) return null
     serverRef.current = next
     setSaving(true)
     const p = api<InquiryPayload>(`/inquiries/${inquiry.id}`, {
       method: 'PATCH',
       body: JSON.stringify({ reply_subject: next.subject, reply_body: next.body }),
     })
-      .then((res) => setInquiry(res))
+      .then((res) => {
+        setInquiry(res)
+        return res
+      })
       .catch((ex: unknown) => {
         serverRef.current = prev
         setErr(ex instanceof Error ? ex.message : 'Nie udało się zapisać zmian')
@@ -644,7 +676,7 @@ export function InquiryReply() {
       })
       .finally(() => setSaving(false))
     pendingSave.current = p
-    await p
+    return await p
   }
 
   /** Przepisanie listu kasuje ręczne poprawki treści — pytamy o zgodę raz, przed żądaniem. */
@@ -791,6 +823,45 @@ export function InquiryReply() {
       return
     }
     if (await copyText(body)) setMsg('Skopiowano treść.')
+  }
+
+  /**
+   * List z tabelą do dowolnej poczty: w schowku jest HTML i zwykły tekst naraz, więc Outlook czy Gmail
+   * wklejają tabelę, a pole bez formatowania sam tekst. Tabela z chwili po zapisie — ręczna poprawka
+   * treści ją kasuje (serwer nie odda tabeli mówiącej co innego niż zatwierdzony tekst).
+   */
+  async function copyWithTable() {
+    if (!inquiry) return
+    setMsg('')
+    let saved: InquiryPayload | null
+    try {
+      saved = await saveEdits()
+    } catch {
+      return
+    }
+    const html = (saved ?? inquiry).reply_html
+    if (!html) {
+      setErr('Po ręcznej poprawce treści list nie ma tabeli — skopiuj samą treść.')
+      return
+    }
+    if (await copyHtml(html, body)) setMsg('Skopiowano list z tabelą — wklej go w treść wiadomości (Ctrl+V).')
+  }
+
+  async function copyHtml(html: string, text: string): Promise<boolean> {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+        }),
+      ])
+      return true
+    } catch {
+      // Przeglądarka bez ClipboardItem (starszy Firefox): kopiujemy zaznaczenie wstawionego listu.
+      if (copyHtmlBySelection(html)) return true
+      setErr('Nie udało się skopiować do schowka.')
+      return false
+    }
   }
 
   async function copyAndMarkSent() {
@@ -1040,6 +1111,17 @@ export function InquiryReply() {
               >
                 Kopiuj treść
               </button>
+              {inquiry.reply_html && (
+                <button
+                  type="button"
+                  disabled={busy || saving}
+                  onClick={() => void copyWithTable()}
+                  title="Wkleja się do Outlooka, Gmaila i innej poczty razem z tabelą"
+                  className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Kopiuj z tabelą (HTML)
+                </button>
+              )}
               {!readOnly && inquiry.send_requested_at && (
                 <button
                   type="button"
