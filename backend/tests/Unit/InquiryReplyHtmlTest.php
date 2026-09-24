@@ -100,6 +100,8 @@ final class InquiryReplyHtmlTest extends TestCase
         $this->assertStringContainsString('netto / para', $html);
         $this->assertStringContainsString('535,68 zł', $html);
         $this->assertStringContainsString('892,80 zł', $html);
+        // rozmiar jest z zapytania klienta, nie potwierdzony w karcie — kafelek mówi to wprost
+        $this->assertSame(3, substr_count($html, '>rozmiar z zapytania</div>'));
     }
 
     public function test_different_description_or_price_keeps_its_own_information(): void

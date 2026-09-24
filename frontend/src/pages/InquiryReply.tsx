@@ -127,6 +127,7 @@ const flagLabel: Record<InquiryFlag, string> = {
   model_failed: 'wyszukaj ponownie przyciskiem „Szukaj AI”',
   requirement_conflict: 'możliwa sprzeczność w wierszu klienta',
   brand_not_in_catalog: 'zamiennik innej marki',
+  size_mismatch: 'karta w innym rozmiarze',
 }
 
 /** Barwa adnotacji: czerwień = sprzeczność albo niepotwierdzony warunek, bursztyn = do sprawdzenia, fiolet = pytanie AI. */
@@ -142,6 +143,7 @@ const flagTone: Record<InquiryFlag, { cls: string; dot: string }> = {
   model_failed: { cls: 'border-slate-300 bg-slate-100 text-slate-700', dot: 'bg-slate-500' },
   requirement_conflict: { cls: 'border-red-500 bg-red-50 font-semibold text-red-800', dot: 'bg-red-600' },
   brand_not_in_catalog: { cls: 'border-orange-300 bg-orange-50 text-orange-800', dot: 'bg-orange-500' },
+  size_mismatch: { cls: 'border-red-300 bg-red-50 text-red-800', dot: 'bg-red-600' },
 }
 
 /** Pasmo wyniku alternatywy; 80 = próg pewnego dopasowania (CONFIDENT_SCORE w ClientInquiryService). */
@@ -575,6 +577,16 @@ function ItemRow({
             </button>
           </div>
         </div>
+
+        {/* Tylko dla handlowca: list podaje rozmiar z zapytania, więc przy karcie innego wariantu wyglądałby jak
+            potwierdzenie rozmiaru, którego nie oferujemy. Wyboru nie zmieniamy za handlowca. */}
+        {item.size_mismatch && item.size && (
+          <p className="rounded-lg border-2 border-red-500 bg-red-50 px-2.5 py-1.5 text-xs leading-relaxed text-red-900">
+            <span className="font-semibold">Rozmiar się nie zgadza:</span> klient pyta o rozmiar {item.size}, a
+            wybrana karta ma w nazwie rozmiar {item.size_mismatch}. List poda „rozmiar z zapytania: {item.size}” —
+            wybierz kartę w tym rozmiarze albo wyjaśnij z klientem.
+          </p>
+        )}
 
         {/* Jedna siatka na całą listę: kolumna znaczków i „Opis” ma wspólną szerokość, więc wiersze wyboru są równe. */}
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1.5 gap-y-1">

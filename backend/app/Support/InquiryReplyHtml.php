@@ -366,8 +366,11 @@ final class InquiryReplyHtml
                 continue;
             }
 
+            // Rozmiar jest z zapytania klienta, nie z naszej karty — kafelek pod nazwą wyrobu z samym
+            // „rozmiar” czytał się jak potwierdzenie (karta „rozmiar S” z kafelkiem „M-XL”). Tak samo
+            // pisze wersja tekstowa listu.
             [$label, $value] = $size !== ''
-                ? ['rozmiar', $size]
+                ? ['rozmiar z zapytania', $size]
                 : ['pozycja', (string) ($numbers[$index] ?? $index + 1)];
             $line = '';
             if ($qty !== '') {

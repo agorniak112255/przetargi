@@ -22,6 +22,7 @@ use App\Support\InquirySignature;
 use App\Support\OfferPricing;
 use App\Support\OfferProductText;
 use App\Support\OfferTermText;
+use App\Support\ProductSizeVariant;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -1181,6 +1182,16 @@ final class ClientInquiryService
                 $flags[] = 'qty_unknown';
             }
             $product = $this->candidateById($candidates, $chosen);
+            $cardSize = $this->chosenSizeMismatch($item, $product);
+            if ($cardSize !== null) {
+                // Wybrana karta to wariant w innym rozmiarze, a list podaje rozmiar z zapytania — oferta
+                // wyglądałaby jak potwierdzenie rozmiaru, którego nie dajemy. Wyboru nie zmieniamy: to decyzja
+                // handlowca. Wysoka ocena modelu mówi „pasuje do wymagania”, nie „to ten rozmiar”.
+                $flags[] = 'size_mismatch';
+                if ($confidence === 'high') {
+                    $confidence = 'medium';
+                }
+            }
             $manualPrice = $this->manualPriceFor($item, $product, $answers);
             if ($product !== null && $priceMode !== 'none' && $manualPrice === null
                 && $this->letterPrice($product, $priceMode, $margin) === null) {
@@ -1244,6 +1255,8 @@ final class ClientInquiryService
                 'conflict' => $conflict,
                 // Marka z zapytania, której nie ma w katalogu (kandydaci to zamienniki); null = brak takiej sytuacji.
                 'brand_not_in_catalog' => $absentBrand,
+                // Rozmiar z nazwy wybranej karty, gdy inny niż w zapytaniu; null = zgodny albo nie do stwierdzenia.
+                'size_mismatch' => $cardSize,
                 // Fraza, którą ta pozycja szukała w katalogu — podpowiedź dla
                 // ręcznego wyszukiwania przy pozycji, nie nowe źródło danych.
                 'query' => $this->nullable($item['search_query'] ?? null)
@@ -1946,6 +1959,32 @@ final class ClientInquiryService
         }
 
         return null;
+    }
+
+    /**
+     * Rozmiar z nazwy wybranej karty („P-50mX - Szelki bezpieczeństwa - rozmiar S”), gdy różni się od rozmiaru
+     * z zapytania. Zgodna jest tylko karta dokładnie w rozmiarze klienta: zapytanie o „M-XL” to trzy rozmiary,
+     * więc karta M też go nie pokrywa. Null, gdy rozmiar się zgadza albo nie da się tego stwierdzić — pozycja
+     * bez rozmiaru, rozmiar klienta, którego nie czytamy („L/52”), albo karta bez jednego rozmiaru w nazwie
+     * (model z listą rozmiarów, zakres „rozmiar M-XL”). Rozmiaru z kodu SKU nie zgadujemy.
+     *
+     * @param  array<string, mixed>  $item
+     * @param  array<string, mixed>|null  $product
+     */
+    private function chosenSizeMismatch(array $item, ?array $product): ?string
+    {
+        $requested = trim((string) ($item['size'] ?? ''));
+        if ($product === null || $requested === '') {
+            return null;
+        }
+        $sizes = new ProductSizeVariant;
+        $card = $sizes->singleSizeFromName((string) ($product['name'] ?? ''));
+        $wanted = $sizes->parseSizeList($requested);
+        if ($card === null || $wanted === [] || $wanted === [$card]) {
+            return null;
+        }
+
+        return mb_strtoupper($card);
     }
 
     /**

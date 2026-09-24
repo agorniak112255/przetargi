@@ -69,6 +69,7 @@ export type InquiryFlag =
   | 'model_failed'
   | 'requirement_conflict'
   | 'brand_not_in_catalog'
+  | 'size_mismatch'
 
 /**
  * Warunek szczególny z wiersza klienta („w szczególności na kwas siarkowy 96%”).
@@ -92,6 +93,8 @@ export type InquiryItem = {
   conflict?: string | null
   /** Marka z zapytania, której nie ma w katalogu — kandydaci to zamienniki innej marki; null = brak. */
   brand_not_in_catalog?: string | null
+  /** Rozmiar z nazwy wybranej karty, gdy inny niż `size` z zapytania; null = zgodny albo nie do stwierdzenia. */
+  size_mismatch?: string | null
   /** Fraza, którą pozycja szukała w katalogu — startowe zapytanie ręcznego wyszukiwania. */
   query: string | null
   answer_key: string

@@ -1654,7 +1654,7 @@ function InquiriesHelp() {
         {
           action: 'List od razu, pozycje do sprawdzenia oflagowane',
           does: 'Baner u góry mówi, ile pozycji wymaga sprawdzenia. Pod nim pasek z przyciskami listu — zostaje u góry ekranu, gdy przewijasz pozycje. Niżej, na całą szerokość, każda pozycja z cytatem klienta, dobranym towarem i plakietką: zielona „pewne”, żółta „sprawdź”, czerwona „brak w katalogu”. Gotowy list otwiera „Podgląd odpowiedzi”.',
-          click: 'Przejrzyj tylko pozycje z żółtą lub czerwoną plakietką. Pozycje „pewne” nie wymagają nic. Gdy klient postawił warunek („w szczególności na kwas siarkowy 96%”), pod pozycją stoi ten warunek i werdykt karty; karta, która go nie potwierdza, nie wchodzi do listu — pozycja idzie jako „potwierdzimy po weryfikacji”.',
+          click: 'Przejrzyj tylko pozycje z żółtą lub czerwoną plakietką. Pozycje „pewne” nie wymagają nic. Gdy klient postawił warunek („w szczególności na kwas siarkowy 96%”), pod pozycją stoi ten warunek i werdykt karty; karta, która go nie potwierdza, nie wchodzi do listu — pozycja idzie jako „potwierdzimy po weryfikacji”. Gdy wybrana karta ma w nazwie inny rozmiar niż pozycja klienta (np. „rozmiar S” przy zapytaniu o M-XL), przy propozycji stoi czerwone „Rozmiar się nie zgadza” — list i tak poda rozmiar z zapytania, więc wybierz kartę we właściwym rozmiarze albo wyjaśnij to z klientem.',
           tone: 'amber',
           screen: (
             <AppFrame nav="Zapytania">

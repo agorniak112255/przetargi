@@ -370,7 +370,7 @@ final class ProductSizeVariant
      * nie rozmiar 7, a końcówka „065-13” u Ringers nie jest pewna), bez gołej litery na końcu (ucięta nazwa
      * Ansella „… NO THUMB S” to „SLOT”) i bez zakresów („size S - 3XL”, „sizes 46-64”).
      */
-    private function singleSizeFromName(string $name): ?string
+    public function singleSizeFromName(string $name): ?string
     {
         $name = trim($name);
         if ($name === '') {
