@@ -531,15 +531,31 @@ final class ProductAiSearchRewriteAfterEmptyRankTest extends TestCase
         $this->assertNotContains('powlekane nitrylem', $wave['parsed_intent']['search_steps'] ?? [], 'fala zwróciła kroki z pierwszego przebiegu');
     }
 
-    public function test_rewrite_without_steps_keeps_searched_steps_in_both_paths(): void
+    /** @return iterable<string, array{0: string, 1: string|null, 2: string|null}> */
+    public static function stepless(): iterable
     {
-        // Przepisanie bez kroków (reszta jak zrozumienie): kroki domyślne z zapytania różnią się od kroków szukania,
-        // więc bez dziedziczenia (jak mergeRetrieveIntent) wyglądałyby na zmianę i ta sama pula szłaby drugi raz.
-        [, $waveCalls, , $singleCalls] = $this->bothPaths(self::GLOVES, [
-            'rewrite' => fn (): array => [...$this->glovesIntent(), 'search_steps' => []],
+        yield 'bez marki' => [self::GLOVES, null, null];
+        yield 'marka z katalogu w treści' => ['Rękawice powlekane nitrylem TEST EN 388 do prac montażowych', 'TEST', 'TEST'];
+        yield 'marka spoza katalogu' => [self::ABSENT_BRAND, 'Zzqbrand', 'Zzqbrand'];
+        yield 'przepisanie zmyśla markę' => [self::ABSENT_BRAND, 'Zzqbrand', 'Qqxinvented'];
+    }
+
+    /**
+     * Przepisanie bez kroków (reszta jak zrozumienie): kroki domyślne różnią się od kroków szukania, więc bez
+     * dziedziczenia (jak mergeRetrieveIntent) wyglądałyby na zmianę i ta sama pula szłaby drugi raz. Decyzja na surowej
+     * odpowiedzi: parseIntent dokłada krok marki, więc przy marce lista po nim nigdy nie jest pusta.
+     */
+    #[DataProvider('stepless')]
+    public function test_rewrite_without_steps_keeps_searched_steps_in_both_paths(string $query, ?string $understoodBrand, ?string $rewriteBrand): void
+    {
+        $understood = [...$this->glovesIntent(), 'manufacturer' => $understoodBrand];
+        [, $waveCalls, , $singleCalls] = $this->bothPaths($query, [
+            'rewrite' => static fn (): array => [...$understood, 'manufacturer' => $rewriteBrand, 'search_steps' => []],
+            'understand' => $understood,
+            'firstRank' => [...$understood, 'matches' => []],
         ]);
 
-        $this->assertSame(['rank' => 1, 'rewrite' => 1], $waveCalls);
+        $this->assertSame(['rank' => 1, 'rewrite' => 1], $waveCalls, 'przepisanie bez kroków wzięte za zmianę — ta sama pula drugi raz do oceny');
         $this->assertSame($waveCalls, $singleCalls);
     }
 

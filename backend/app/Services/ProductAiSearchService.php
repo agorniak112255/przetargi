@@ -1236,12 +1236,10 @@ final class ProductAiSearchService
         }
         $base = $this->normalizeIntent($searched);
         $rewritten = $this->intentFromRewrite($raw, $query);
-        if (($rewritten['search_steps'] ?? []) === []) {
-            $rewritten['search_steps'] = $base['search_steps'];
-        }
         $requested = trim((string) ($rewritten['manufacturer_requested'] ?? ''));
-        if (($rewritten['manufacturer'] ?? null) === null
-            && ($requested === '' || ! $this->nameAppearsInQuery($query, $requested))) {
+        $inheritsBrand = ($rewritten['manufacturer'] ?? null) === null
+            && ($requested === '' || ! $this->nameAppearsInQuery($query, $requested));
+        if ($inheritsBrand) {
             if ($rewritten['manufacturer_absent_in_catalog'] ?? false) {
                 // Zmyślona marka spoza katalogu: parseIntent dołożył z nią krok i frazy — zdejmujemy je, zanim
                 // przyjdzie marka szukanej intencji, inaczej wyglądałyby na zmianę szukania.
@@ -1250,12 +1248,17 @@ final class ProductAiSearchService
             $rewritten['manufacturer'] = $base['manufacturer'];
             $rewritten['manufacturer_requested'] = $base['manufacturer_requested'];
             $rewritten['manufacturer_absent_in_catalog'] = $base['manufacturer_absent_in_catalog'];
-            if ($base['manufacturer_absent_in_catalog']) {
-                $rewritten = [
-                    ...$rewritten,
-                    ...$this->stripAbsentManufacturerNoise($this->dropAbsentBrandSteps($rewritten)),
-                ];
-            }
+        }
+        // Decyzja na surowej odpowiedzi: parseIntent (sanitizeSearchSteps) dokłada krok marki, więc przy marce lista
+        // kroków po nim nigdy nie jest pusta. Kroki szukania przechodzą ten sam sanitizer z marką przepisania.
+        if ($this->stringStepList($raw['search_steps'] ?? $raw['steps'] ?? []) === []) {
+            $rewritten['search_steps'] = $this->sanitizeSearchSteps($base['search_steps'], $rewritten);
+        }
+        if ($inheritsBrand && $base['manufacturer_absent_in_catalog']) {
+            $rewritten = [
+                ...$rewritten,
+                ...$this->stripAbsentManufacturerNoise($this->dropAbsentBrandSteps($rewritten)),
+            ];
         }
 
         return $this->rewriteChangesSearch($query, $searched, $rewritten) ? $rewritten : null;
