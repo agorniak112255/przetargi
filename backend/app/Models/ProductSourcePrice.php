@@ -41,6 +41,9 @@ class ProductSourcePrice extends Model
         'order_unit',
         // rozmiary karty mają różne warunki (min i step null) — widoki: „zależy od rozmiaru”
         'order_varies',
+        // warunek ceny konta (Delta Plus: cena za pełny karton) — przypis dosłownie i ilość w kartonie
+        'price_note',
+        'price_carton_qty',
         'checked_at',
         'migrated',
     ];
@@ -57,6 +60,7 @@ class ProductSourcePrice extends Model
             'order_min_qty' => 'float',
             'order_step_qty' => 'float',
             'order_varies' => 'boolean',
+            'price_carton_qty' => 'float',
             'checked_at' => 'datetime',
             'migrated' => 'boolean',
         ];

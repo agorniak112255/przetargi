@@ -925,11 +925,13 @@ final class B2bCatalogSync
             // jej nie podaje, zapisana wartość zostaje
             $availabilityChanged = $remote->availability !== null && $slot?->availability !== $remote->availability;
             $orderChanged = $slot !== null && self::orderChanged($slot, $price->order);
+            $conditionChanged = $slot !== null && self::priceConditionChanged($slot, $price->condition);
             $slotChanged = $slot === null
                 || $priceChange !== null
                 || strtoupper((string) $slot->currency) !== strtoupper($price->currency)
                 || $availabilityChanged
-                || $orderChanged;
+                || $orderChanged
+                || $conditionChanged;
             $existing->fill($payload);
             $dirty = $existing->isDirty();
             // summarizeUpdate nie zna tych pól — jak „wersje” w ścieżce z wersjami
@@ -937,6 +939,7 @@ final class B2bCatalogSync
                 ...$this->unsummarizedCardFields($existing),
                 ...($availabilityChanged ? ['dostępność'] : []),
                 ...($orderChanged ? ['warunek zamawiania'] : []),
+                ...($conditionChanged ? ['warunek ceny'] : []),
                 ...($firstAccountPrice ? ['cena z nowego konta'] : []),
             ];
             if ($extraFields !== []) {
@@ -988,6 +991,8 @@ final class B2bCatalogSync
                     ...($remote->availability !== null ? ['availability' => $remote->availability] : []),
                     // null = źródło nie podaje warunku zamawiania — zapisany zostaje
                     ...($price?->order !== null ? $price->order->slotValues() : []),
+                    // null = łącznik nie czyta warunku ceny — zapisany zostaje
+                    ...($price?->condition !== null ? $price->condition->slotValues() : []),
                 ])['slot'];
 
                 // pierwszy wiersz konta na karcie to punkt odniesienia dla jego kolejnych zmian
@@ -1429,6 +1434,24 @@ final class B2bCatalogSync
             'last_currency' => $price->currency,
             'last_price_at' => now(),
         ];
+    }
+
+    /**
+     * Warunek ceny zmienił się względem zapisanego: inny przypis albo karton, albo przypis zniknął. Pierwszy zapis
+     * (slot bez przypisu) nie jest zmianą — tak po wdrożeniu przypis Delta Plus nie ogłasza się na każdej z 999 kart.
+     * null ze źródła = łącznik warunku nie czyta, brak zmiany.
+     */
+    private static function priceConditionChanged(ProductSourcePrice $slot, ?B2bPriceCondition $condition): bool
+    {
+        if ($condition === null || $slot->price_note === null) {
+            return false;
+        }
+        $fresh = $condition->slotValues();
+        $sameQty = $slot->price_carton_qty === null || $fresh['price_carton_qty'] === null
+            ? $slot->price_carton_qty === $fresh['price_carton_qty']
+            : abs($slot->price_carton_qty - $fresh['price_carton_qty']) < 0.00005;
+
+        return $slot->price_note !== $fresh['price_note'] || ! $sameQty;
     }
 
     /**

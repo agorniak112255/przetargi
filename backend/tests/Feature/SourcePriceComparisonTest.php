@@ -340,6 +340,8 @@ final class SourcePriceComparisonTest extends TestCase
             'step' => 10.0,
             'unit' => 'szt',
             'varies' => false,
+            'price_note' => null,
+            'price_carton_qty' => null,
             'source_key' => ProductSourcePrice::b2bKey($uvex->id),
             'source_label' => 'B2B UVEX',
         ], $this->comparison->orderQuantities(collect([$card->fresh()]))[$card->id]);
@@ -404,6 +406,30 @@ final class SourcePriceComparisonTest extends TestCase
         $this->assertNull($result[$varies->id]['min']);
         $this->assertNull($result[$varies->id]['step']);
         $this->assertSame('szt', $result[$varies->id]['unit']);
+    }
+
+    public function test_price_condition_alone_gives_the_card_its_purchase_terms_without_an_order_condition(): void
+    {
+        // Delta Plus: „Min. zam.” 1, ale cena konta tylko przy pełnym kartonie 120
+        $card = $this->card('Delta Plus');
+        $deltaplus = $this->account('deltaplus');
+        $this->link($card, $deltaplus);
+        $this->b2bSlot($card, $deltaplus, 14.07, 'PLN', '2026-09-22 10:00');
+        $this->order($card, $deltaplus, 1.0, null, null);
+        ProductSourcePrice::query()->where('product_id', $card->id)->update([
+            'price_note' => 'Cena jednostkowa za pełny karton tego samego rozmiaru i koloru',
+            'price_carton_qty' => 120,
+        ]);
+
+        $terms = $this->comparison->orderQuantities(collect([$card->fresh()]))[$card->id];
+
+        // bez ograniczenia zamówienia min i step puste — widok pokazuje sam warunek ceny
+        $this->assertNull($terms['min']);
+        $this->assertNull($terms['step']);
+        $this->assertFalse($terms['varies']);
+        $this->assertSame('Cena jednostkowa za pełny karton tego samego rozmiaru i koloru', $terms['price_note']);
+        $this->assertSame(120.0, $terms['price_carton_qty']);
+        $this->assertSame(ProductSourcePrice::b2bKey($deltaplus->id), $terms['source_key']);
     }
 
     /**

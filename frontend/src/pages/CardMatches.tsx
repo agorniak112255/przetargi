@@ -259,6 +259,8 @@ function briefOrderQuantity(s: BriefSource): OrderQuantity {
     step: s.order_step_qty ?? null,
     unit: s.order_unit ?? null,
     varies: s.order_varies ?? false,
+    price_note: s.price_note ?? null,
+    price_carton_qty: s.price_carton_qty ?? null,
     source_key: s.source_key,
     source_label: s.label,
   }

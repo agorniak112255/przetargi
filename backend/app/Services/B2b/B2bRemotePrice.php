@@ -10,6 +10,7 @@ final readonly class B2bRemotePrice
      * @param  float  $net  cena netto konta (po rabacie klienta)
      * @param  float|null  $base  cena bazowa/katalogowa netto, gdy dostawca ją podaje
      * @param  B2bOrderQuantity|null  $order  warunek zamawiania; null = źródło go nie podaje (zapisany zostaje)
+     * @param  B2bPriceCondition|null  $condition  warunek ceny (np. tylko pełny karton); null = łącznik go nie czyta
      */
     public function __construct(
         public float $net,
@@ -17,5 +18,6 @@ final readonly class B2bRemotePrice
         public float $discountPercent = 0.0,
         public string $currency = 'PLN',
         public ?B2bOrderQuantity $order = null,
+        public ?B2bPriceCondition $condition = null,
     ) {}
 }

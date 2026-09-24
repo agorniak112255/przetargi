@@ -307,7 +307,7 @@ class CardMatchController extends Controller
                 ->orderBy('id')
                 ->get([
                     'id', 'product_id', 'source_key', 'b2b_account_id', 'price_list_id', 'purchase_price', 'currency',
-                    'order_min_qty', 'order_step_qty', 'order_unit', 'order_varies',
+                    'order_min_qty', 'order_step_qty', 'order_unit', 'order_varies', 'price_note', 'price_carton_qty',
                 ])
                 ->groupBy('product_id');
             $accountIds = $slots->flatten(1)
@@ -348,6 +348,8 @@ class CardMatchController extends Controller
                         'order_step_qty' => $slot->order_step_qty,
                         'order_unit' => $slot->order_unit,
                         'order_varies' => (bool) $slot->order_varies,
+                        'price_note' => $slot->price_note,
+                        'price_carton_qty' => $slot->price_carton_qty,
                     ])
                     ->values()
                     ->all(),

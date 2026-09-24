@@ -863,7 +863,13 @@ export function ProductDetail() {
                           {s.migrated && <span className="ml-1 text-[11px] text-slate-400">(z historii cen)</span>}
                         </td>
                         <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.catalog_price_net)}</td>
-                        <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.purchase_price)}</td>
+                        <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                          {formatPrice(s.purchase_price)}
+                          {/* warunek ceny tego źródła (Delta Plus: cena przy pełnym kartonie) — przy samej cenie */}
+                          <div className="flex justify-end empty:hidden">
+                            <SlotOrderQuantity slot={s} show="price" className="mt-1" />
+                          </div>
+                        </td>
                         <td className="whitespace-nowrap p-2 text-right tabular-nums">
                           {s.discount_percent !== null && s.discount_percent !== ''
                             ? formatPct(Number(s.discount_percent), false)
@@ -891,7 +897,7 @@ export function ProductDetail() {
                         <td className="p-2">
                           {s.availability ?? '—'}
                           <div className="empty:hidden">
-                            <SlotOrderQuantity slot={s} className="mt-1" />
+                            <SlotOrderQuantity slot={s} show="order" className="mt-1" />
                           </div>
                         </td>
                         <td className="whitespace-nowrap p-2 tabular-nums">

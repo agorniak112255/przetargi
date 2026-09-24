@@ -49,6 +49,45 @@ export function orderableQty(qty: number | null | undefined, oq: Condition | nul
   return Math.abs(need - qty) < 1e-9 ? null : Number(need.toFixed(4))
 }
 
+type PriceCondition = Pick<OrderQuantity, 'price_note' | 'price_carton_qty' | 'unit'>
+
+/** Czy cena obowiązującego źródła ma warunek (np. Delta Plus: cena tylko za pełny karton). */
+export function hasPriceCondition(pc: PriceCondition | null | undefined): boolean {
+  return (pc?.price_note ?? '').trim() !== ''
+}
+
+/** Krótki napis: „cena przy pełnym kartonie (120)”; bez jednej ilości w kartonie — „cena warunkowa”. */
+export function priceConditionLabel(pc: PriceCondition): string {
+  return pc.price_carton_qty != null
+    ? `cena przy pełnym kartonie (${formatOrderQty(pc.price_carton_qty)}${unitSuffix(pc.unit)})`
+    : 'cena warunkowa'
+}
+
+/**
+ * Ilość, która nie jest pełnym kartonem (ani wielokrotnością kartonu) — cena źródła jej nie dotyczy. false, gdy ilość
+ * albo karton nieznane.
+ */
+export function partialCarton(qty: number | null | undefined, pc: PriceCondition | null | undefined): boolean {
+  const carton = pc?.price_carton_qty
+  if (!hasPriceCondition(pc) || carton == null || carton <= 0 || qty == null || !Number.isFinite(qty) || qty <= 0) {
+    return false
+  }
+  const cartons = qty / carton
+  return Math.abs(cartons - Math.round(cartons)) > 1e-9 || Math.round(cartons) === 0
+}
+
+/** Podpowiedź warunku ceny: przypis źródła dosłownie i ilość w kartonie. */
+export function priceConditionTitle(oq: OrderQuantity): string {
+  const lines = [`${oq.source_label}: „${(oq.price_note ?? '').trim()}”`]
+  lines.push(
+    oq.price_carton_qty != null
+      ? `Ilość w kartonie: ${formatOrderQty(oq.price_carton_qty)}${unitSuffix(oq.unit)}`
+      : 'Ilość w kartonie różna dla rozmiarów albo nieczytelna — szczegóły na karcie dostawcy.',
+  )
+  lines.push('Przy niepełnym kartonie ta cena nie obowiązuje — cenę potwierdź u dostawcy.')
+  return lines.join('\n')
+}
+
 /** Pełny opis do podpowiedzi: źródło, minimum i krok. */
 export function orderQtyTitle(oq: OrderQuantity): string {
   if (oq.varies) {

@@ -182,7 +182,7 @@ final class SourcePriceComparisonApiTest extends TestCase
         ProductSourcePrice::query()->where('product_id', $card->id)->where('source_key', ProductSourcePrice::b2bKey($ardon->id))
             ->update(['order_min_qty' => 12, 'order_step_qty' => 12, 'order_unit' => 'par']);
         $expected = [
-            'min' => 10, 'step' => 10, 'unit' => 'szt', 'varies' => false,
+            'min' => 10, 'step' => 10, 'unit' => 'szt', 'varies' => false, 'price_note' => null, 'price_carton_qty' => null,
             'source_key' => ProductSourcePrice::b2bKey($uvex->id), 'source_label' => 'B2B UVEX',
         ];
 
@@ -197,7 +197,9 @@ final class SourcePriceComparisonApiTest extends TestCase
             ->assertJsonPath('source_prices.0.order_min_qty', 10)
             ->assertJsonPath('source_prices.0.order_step_qty', 10)
             ->assertJsonPath('source_prices.0.order_unit', 'szt')
-            ->assertJsonPath('source_prices.0.order_varies', false);
+            ->assertJsonPath('source_prices.0.order_varies', false)
+            ->assertJsonPath('source_prices.0.price_note', null)
+            ->assertJsonPath('source_prices.0.price_carton_qty', null);
         $this->getJson('/api/products/'.$card->id)
             ->assertOk()
             ->assertJsonPath('order_quantity', null)

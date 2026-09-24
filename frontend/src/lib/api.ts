@@ -362,8 +362,8 @@ export const B2B_DESCRIPTION_OVERWRITE_CONFIRM =
   'Ta karta ma opis ze sklepu dostawcy (cennik B2B).\n\nUzupełnianie AI zastąpi go opisem z internetu, a kolejne pobranie cennika go nie przywróci.\n\nNadpisać opis?'
 
 /**
- * Warunek zamawiania obowiązującego źródła ceny karty (od niego kupujemy), np. UVEX: tylko po 10 szt.
- * Backend podaje go tylko, gdy ogranicza zamówienie (minimum > 1 albo krok > 1); inaczej null.
+ * Warunki zakupu u obowiązującego źródła ceny karty (od niego kupujemy): warunek zamawiania (UVEX: tylko po 10 szt.)
+ * i warunek ceny (Delta Plus: cena za pełny karton). Backend podaje obiekt tylko, gdy któryś z nich jest; inaczej null.
  */
 export type OrderQuantity = {
   min: number | null
@@ -371,6 +371,10 @@ export type OrderQuantity = {
   unit: string | null
   /** Rozmiary karty mają różne warunki (min i step null) — szczegóły na karcie dostawcy. */
   varies?: boolean
+  /** Warunek ceny dosłownie ze źródła (Delta Plus: „Cena jednostkowa za pełny karton…”); null = brak. */
+  price_note?: string | null
+  /** Ilość w kartonie, dla której obowiązuje cena; null przy przypisie = różne kartony rozmiarów. */
+  price_carton_qty?: number | null
   source_key: string
   source_label: string
 }
@@ -391,6 +395,9 @@ export type ProductSourcePrice = {
   order_unit?: string | null
   /** Rozmiary karty mają u tego dostawcy różne warunki zamawiania. */
   order_varies?: boolean
+  /** Warunek ceny tego źródła (np. cena tylko za pełny karton) i ilość w kartonie. */
+  price_note?: string | null
+  price_carton_qty?: number | null
   checked_at: string | null
   migrated: boolean
   is_effective: boolean
@@ -638,6 +645,8 @@ export type CardBrief = {
     order_step_qty?: number | null
     order_unit?: string | null
     order_varies?: boolean
+    price_note?: string | null
+    price_carton_qty?: number | null
   }>
 }
 

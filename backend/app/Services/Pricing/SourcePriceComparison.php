@@ -132,12 +132,12 @@ final class SourcePriceComparison
     /**
      * Warunek zamawiania obowiązującego źródła (od niego kupujemy) dla wielu kart — lista, przetarg, zapytanie.
      * Tylko karty, których obowiązujący slot ogranicza zamówienie (minimum > 1 albo krok > 1, np. UVEX „po 10 szt.”)
-     * albo ma warunek zależny od rozmiaru (varies);
+     * albo ma warunek zależny od rozmiaru (varies), albo warunek ceny (price_note, np. Delta Plus: pełny karton);
      * warunek przegranego źródła tu nie trafia (jest w wierszach „Ceny ze źródeł” na karcie). Karta z aktywnymi
      * wersjami nie ma obowiązującego slotu. Stała liczba zapytań na 1000 kart; slotów bez warunku nie czytamy.
      *
      * @param  Collection<int, Product>  $products  karty z id i manufacturer
-     * @return array<int, array{min: float|null, step: float|null, unit: string|null, varies: bool, source_key: string, source_label: string}>
+     * @return array<int, array{min: float|null, step: float|null, unit: string|null, varies: bool, price_note: string|null, price_carton_qty: float|null, source_key: string, source_label: string}>
      */
     public function orderQuantities(Collection $products): array
     {
@@ -149,7 +149,10 @@ final class SourcePriceComparison
         foreach (array_chunk(array_keys($byId), 1000) as $chunk) {
             $restricted = ProductSourcePrice::query()
                 ->whereIn('product_id', $chunk)
-                ->where(static fn ($q) => $q->where('order_min_qty', '>', 1)->orWhere('order_step_qty', '>', 1)->orWhere('order_varies', true))
+                ->where(static fn ($q) => $q->where('order_min_qty', '>', 1)
+                    ->orWhere('order_step_qty', '>', 1)
+                    ->orWhere('order_varies', true)
+                    ->orWhereNotNull('price_note'))
                 ->distinct()
                 ->pluck('product_id')
                 ->map(static fn (mixed $id): int => (int) $id)
@@ -179,24 +182,29 @@ final class SourcePriceComparison
     }
 
     /**
-     * Warunek zamawiania jednego slotu w kształcie dla widoków (order_quantity) — null, gdy slot nie ogranicza
-     * zamówienia i nie ma warunku zależnego od rozmiaru. Karta wyrobu podaje tu zwycięzcę explain().
+     * Warunki zakupu jednego slotu w kształcie dla widoków (order_quantity): warunek zamawiania i warunek ceny
+     * (price_note, price_carton_qty — Delta Plus: cena za pełny karton). null, gdy slot nie ogranicza zamówienia,
+     * nie ma warunku zależnego od rozmiaru ani warunku ceny. Karta wyrobu podaje tu zwycięzcę explain().
      *
      * @param  Collection<int, B2bAccount>|null  $accounts  konta po id (lista); null = relacja account slotu
-     * @return array{min: float|null, step: float|null, unit: string|null, varies: bool, source_key: string, source_label: string}|null
+     * @return array{min: float|null, step: float|null, unit: string|null, varies: bool, price_note: string|null, price_carton_qty: float|null, source_key: string, source_label: string}|null
      */
     public function orderQuantityOf(ProductSourcePrice $slot, ?Collection $accounts = null): ?array
     {
         $varies = (bool) $slot->order_varies;
-        if (! $varies && ! B2bOrderQuantity::restricting($slot->order_min_qty, $slot->order_step_qty)) {
+        $restricts = B2bOrderQuantity::restricting($slot->order_min_qty, $slot->order_step_qty);
+        if (! $varies && ! $restricts && $slot->price_note === null) {
             return null;
         }
 
         return [
-            'min' => $varies ? null : $slot->order_min_qty,
-            'step' => $varies ? null : $slot->order_step_qty,
+            // warunek zamawiania tylko, gdy ogranicza (albo zależy od rozmiaru) — sam warunek ceny go nie wnosi
+            'min' => $varies || ! $restricts ? null : $slot->order_min_qty,
+            'step' => $varies || ! $restricts ? null : $slot->order_step_qty,
             'unit' => $slot->order_unit,
             'varies' => $varies,
+            'price_note' => $slot->price_note,
+            'price_carton_qty' => $slot->price_carton_qty,
             'source_key' => (string) $slot->source_key,
             'source_label' => $this->sourceLabel($slot, $accounts),
         ];
@@ -217,7 +225,7 @@ final class SourcePriceComparison
             ->orderBy('id')
             ->get([
                 'id', 'product_id', 'source_key', 'b2b_account_id', 'price_list_id', 'catalog_price_net',
-                'purchase_price', 'currency', 'pack_qty', 'order_min_qty', 'order_step_qty', 'order_unit', 'order_varies', 'checked_at',
+                'purchase_price', 'currency', 'pack_qty', 'order_min_qty', 'order_step_qty', 'order_unit', 'order_varies', 'price_note', 'price_carton_qty', 'checked_at',
             ])
             ->groupBy('product_id');
         $accountIds = $this->accountIds($slotsByProduct->flatten(1));

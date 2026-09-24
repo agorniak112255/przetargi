@@ -205,7 +205,33 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
             base: is_float($base) ? round($base, 2) : null,
             discountPercent: is_float($base) ? round((1 - $net / $base) * 100, 2) : 0.0,
             order: self::orderQuantity(is_array($product->raw['versions'] ?? null) ? $product->raw['versions'] : []),
+            condition: self::priceCondition(
+                (string) ($product->raw['price_note'] ?? ''),
+                is_array($product->raw['versions'] ?? null) ? $product->raw['versions'] : [],
+            ),
         );
+    }
+
+    /**
+     * Warunek ceny konta: kolumna „Cena jeśli cały karton*” z przypisem „*Cena jednostkowa za pełny karton tego
+     * samego rozmiaru i koloru” (na każdej z 999 kart, sprawdzone na koncie 24.09.2026) — cena obowiązuje przy
+     * pełnych kartonach. Przypis dosłownie; ilość z kolumny „Ilość w kart.”, gdy wszystkie referencje karty mają ten
+     * sam karton (14 kart ma różne kartony rozmiarów — wtedy null). Strona bez przypisu = warunku nie ma (czyści).
+     *
+     * @param  list<array<string, mixed>>  $versions
+     */
+    private static function priceCondition(string $note, array $versions): B2bPriceCondition
+    {
+        if (trim($note) === '') {
+            return new B2bPriceCondition(null);
+        }
+        $cartons = [];
+        foreach ($versions as $version) {
+            $cartons[] = B2bOrderQuantity::attribute((string) ($version['carton'] ?? ''));
+        }
+        $distinct = array_unique(array_map(static fn (?float $qty): string => $qty === null ? '-' : (string) $qty, $cartons));
+
+        return new B2bPriceCondition($note, count($distinct) === 1 && $cartons[0] !== null ? $cartons[0] : null);
     }
 
     /**

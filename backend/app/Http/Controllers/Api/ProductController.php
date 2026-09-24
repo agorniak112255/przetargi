@@ -588,6 +588,9 @@ class ProductController extends Controller
                 'order_step_qty' => $slot->order_step_qty,
                 'order_unit' => $slot->order_unit,
                 'order_varies' => (bool) $slot->order_varies,
+                // warunek ceny dosłownie ze slotu (Delta Plus: cena za pełny karton); null = źródło go nie podaje
+                'price_note' => $slot->price_note,
+                'price_carton_qty' => $slot->price_carton_qty,
                 'checked_at' => $slot->checked_at?->toISOString(),
                 'migrated' => (bool) $slot->migrated,
                 'is_effective' => $effectiveKey !== null && $slot->source_key === $effectiveKey,

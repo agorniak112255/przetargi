@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
@@ -354,6 +355,70 @@ final class DeltaplusConnectorTest extends TestCase
             ['order_min_qty' => null, 'order_step_qty' => null, 'order_unit' => null, 'order_varies' => true],
             $connector->price($card)?->order?->slotValues(),
         );
+    }
+
+    public function test_account_price_carries_the_full_carton_condition_with_the_carton_of_all_references(): void
+    {
+        // NEPTUN: kartony 120 i 100 (rozmiar 10) — przypis jest, ilości kartonu karta nie ma jednej
+        $this->pages['neptun-tt733'] = self::neptun();
+        $uniform = self::neptun();
+        foreach (array_keys($uniform['rows']) as $i) {
+            $uniform['rows'][$i][5] = '120';
+        }
+        $this->lists['hand-protection'] = [1 => ['neptun-tt733']];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $card = iterator_to_array($connector->products(), false)[0];
+
+        $this->assertSame(
+            ['price_note' => 'Cena jednostkowa za pełny karton tego samego rozmiaru i koloru', 'price_carton_qty' => null],
+            $connector->price($card)?->condition?->slotValues(),
+        );
+
+        $this->pages['neptun-tt733'] = $uniform;
+        $card = iterator_to_array($this->connector()->products(), false)[0];
+        $this->assertSame(
+            ['price_note' => 'Cena jednostkowa za pełny karton tego samego rozmiaru i koloru', 'price_carton_qty' => 120.0],
+            $this->connector()->price($card)?->condition?->slotValues(),
+        );
+    }
+
+    public function test_sync_stores_the_price_condition_and_reports_only_a_change_of_a_known_one(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $page = self::neptun();
+        foreach (array_keys($page['rows']) as $i) {
+            $page['rows'][$i][5] = '120';
+        }
+        $this->pages['neptun-tt733'] = $page;
+        $this->lists['hand-protection'] = [1 => ['neptun-tt733']];
+        $this->fakeSite();
+        $slot = fn (): ProductSourcePrice => ProductSourcePrice::query()
+            ->where('product_id', Product::query()->where('sku', 'TT733')->value('id'))
+            ->sole();
+        $fields = fn (): array => collect(PriceList::query()->latest('id')->firstOrFail()->updated_products)
+            ->firstWhere('sku', 'TT733')['fields'] ?? [];
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+        $this->assertSame('Cena jednostkowa za pełny karton tego samego rozmiaru i koloru', $slot()->price_note);
+        $this->assertSame(120.0, $slot()->price_carton_qty);
+
+        // slot sprzed wdrożenia (bez przypisu): pierwszy zapis przypisu nie jest zmianą karty
+        ProductSourcePrice::query()->update(['price_note' => null, 'price_carton_qty' => null]);
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+        $this->assertSame(120.0, $slot()->price_carton_qty);
+        $this->assertNotContains('warunek ceny', $fields());
+
+        // karton zmienił się u dostawcy — to zmiana warunku ceny
+        foreach (array_keys($page['rows']) as $i) {
+            $page['rows'][$i][5] = '100';
+        }
+        $this->pages['neptun-tt733'] = $page;
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+        $this->assertSame(100.0, $slot()->price_carton_qty);
+        $this->assertContains('warunek ceny', $fields());
     }
 
     public function test_card_content_description_shop_fields_norms_documents_and_images(): void
