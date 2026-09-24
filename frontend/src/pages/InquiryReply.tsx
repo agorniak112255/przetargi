@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { BusyLabel, useBusySeconds } from '../components/Busy'
 import { InquiryContactChip, InquiryContactModal } from '../components/InquiryContact'
@@ -105,10 +105,11 @@ function qtyForOrderCondition(item: InquiryItem, oq: OrderQuantity | null | unde
   return Number.isFinite(qty) && qty > 0 ? qty : null
 }
 
+// Kolumna statusu pozycji: im większa uwaga potrzebna, tym mocniejsza barwa (pewne jasne, brak pełna czerwień).
 const confidenceBadge: Record<InquiryConfidence, { label: string; cls: string }> = {
   high: { label: 'pewne', cls: 'bg-emerald-100 text-emerald-800' },
-  medium: { label: 'sprawdź', cls: 'bg-amber-100 text-amber-800' },
-  none: { label: 'brak w katalogu', cls: 'bg-red-100 text-red-800' },
+  medium: { label: 'sprawdź', cls: 'bg-amber-400 text-amber-950' },
+  none: { label: 'brak w katalogu', cls: 'bg-red-700 text-white' },
 }
 
 // Model nie ocenił kart — o katalogu nic nie wiemy, więc nie wolno pisać „brak w katalogu”.
@@ -126,6 +127,71 @@ const flagLabel: Record<InquiryFlag, string> = {
   model_failed: 'wyszukaj ponownie przyciskiem „Szukaj AI”',
   requirement_conflict: 'możliwa sprzeczność w wierszu klienta',
   brand_not_in_catalog: 'zamiennik innej marki',
+}
+
+/** Barwa adnotacji: czerwień = sprzeczność albo niepotwierdzony warunek, bursztyn = do sprawdzenia, fiolet = pytanie AI. */
+const flagTone: Record<InquiryFlag, { cls: string; dot: string }> = {
+  low_score: { cls: 'border-slate-300 bg-slate-100 text-slate-700', dot: 'bg-slate-500' },
+  ambiguous: { cls: 'border-amber-300 bg-amber-50 text-amber-800', dot: 'bg-amber-500' },
+  no_price: { cls: 'border-amber-300 bg-amber-50 text-amber-800', dot: 'bg-amber-500' },
+  card_default: { cls: 'border-violet-200 bg-violet-50 text-violet-800', dot: 'bg-violet-500' },
+  qty_unknown: { cls: 'border-amber-300 bg-amber-50 text-amber-800', dot: 'bg-amber-500' },
+  requirement_unconfirmed: { cls: 'border-red-300 bg-red-50 text-red-800', dot: 'bg-red-600' },
+  requirement_note: { cls: 'border-amber-300 bg-amber-50 text-amber-800', dot: 'bg-amber-500' },
+  product_from_subject: { cls: 'border-sky-200 bg-sky-50 text-sky-800', dot: 'bg-sky-500' },
+  model_failed: { cls: 'border-slate-300 bg-slate-100 text-slate-700', dot: 'bg-slate-500' },
+  requirement_conflict: { cls: 'border-red-500 bg-red-50 font-semibold text-red-800', dot: 'bg-red-600' },
+  brand_not_in_catalog: { cls: 'border-orange-300 bg-orange-50 text-orange-800', dot: 'bg-orange-500' },
+}
+
+/** Pasmo wyniku alternatywy; 80 = próg pewnego dopasowania (CONFIDENT_SCORE w ClientInquiryService). */
+function scoreTone(score: number): string {
+  if (score >= 80) return 'bg-emerald-100 text-emerald-800'
+  if (score >= 60) return 'bg-amber-100 text-amber-800'
+  return 'bg-red-100 text-red-800'
+}
+
+/** Układ wiersza pozycji: status | co napisał klient | nasza propozycja (od 42rem szerokości listy). */
+const itemGrid = '@2xl:grid-cols-[6.5rem_minmax(0,1fr)_minmax(0,1.3fr)]'
+
+function StatusIcon({ kind }: { kind: InquiryConfidence | 'model_failed' }) {
+  if (kind === 'model_failed') return null
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-4 w-4 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {kind === 'high' && <polyline points="20 6 9 17 4 12" />}
+      {kind === 'medium' && (
+        <>
+          <circle cx="11" cy="11" r="7" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </>
+      )}
+      {kind === 'none' && (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <line x1="15" y1="9" x2="9" y2="15" />
+          <line x1="9" y1="9" x2="15" y2="15" />
+        </>
+      )}
+    </svg>
+  )
+}
+
+/** Kółko wyboru przy alternatywie — jedna pozycja listu, jak przycisk opcji. */
+function RadioDot({ on }: { on: boolean }) {
+  return (
+    <span
+      className={`h-3.5 w-3.5 shrink-0 rounded-full bg-white ${on ? 'border-4 border-blue-600' : 'border-2 border-slate-400'}`}
+    />
+  )
 }
 
 const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
@@ -353,205 +419,122 @@ function ItemRow({
   onManualDraft: (value: string) => void
   onManualPriceBlur: () => void
 }) {
-  const badge = item.flags.includes('model_failed') ? modelFailedBadge : confidenceBadge[item.confidence]
+  const failed = item.flags.includes('model_failed')
+  const badge = failed ? modelFailedBadge : confidenceBadge[item.confidence]
   const chosenId = item.chosen.startsWith('p:') ? Number(item.chosen.slice(2)) : null
   const chosen = chosenId != null ? item.candidates.find((c) => c.id === chosenId) ?? null : null
   const computedPrice = chosen ? priceByMode(chosen, priceMode) : null
   const chosenPrice = item.manual_price != null && priceMode !== 'none' ? PLN.format(item.manual_price) : computedPrice
   const subAnswer = item.substitute_key ? answers[item.substitute_key]?.option_id ?? 'no' : null
   const meta = [item.qty, item.unit].filter(Boolean).join(' ')
+  const checking = item.chosen === 'check'
+  const inLetter = chosen
+    ? chosen.sku
+    : chosenId != null
+      ? `towar #${chosenId} (spoza listy kandydatów)`
+      : 'sprawdzimy i wrócimy — bez SKU'
+  // Zebra: sąsiednie pozycje mają inne tło, żeby nie mylić, do której należy alternatywa albo pytanie.
+  const zebra = index % 2 === 0 ? 'bg-white' : 'bg-slate-100'
+  const optionCls = (on: boolean) =>
+    `flex w-full min-w-0 items-center gap-2 rounded-lg border px-2 py-1.5 text-left text-xs leading-snug disabled:opacity-50 ${
+      on ? 'border-blue-600 bg-blue-50' : 'border-slate-300 bg-white hover:border-blue-300'
+    }`
 
   return (
-    <div className="border-t border-slate-100 pt-3 first:border-t-0 first:pt-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded bg-slate-800 px-1.5 text-xs font-semibold text-white">
-          {index + 1}
-        </span>
-        {meta && <span className="text-xs font-medium text-slate-800">{meta}</span>}
-        {item.size && <span className="text-xs text-slate-600">rozm. {item.size}</span>}
-        <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${badge.cls}`}>{badge.label}</span>
-        {item.flags.length > 0 && (
-          <span className="text-[11px] text-slate-500">
-            {item.flags.map((f) => flagLabel[f]).join(' · ')}
-          </span>
+    <div
+      className={`grid grid-cols-[5.5rem_minmax(0,1fr)] overflow-hidden rounded-xl border border-slate-300 shadow-sm ${itemGrid} ${zebra}`}
+    >
+      <div className={`row-span-2 flex flex-col gap-1.5 p-3 @2xl:row-span-1 ${badge.cls}`}>
+        <div className="flex items-center gap-1.5">
+          <span className="text-2xl font-extrabold leading-none">{index + 1}</span>
+          <StatusIcon kind={failed ? 'model_failed' : item.confidence} />
+        </div>
+        <p className="text-[11px] font-extrabold uppercase leading-tight tracking-wide">{badge.label}</p>
+        {meta && <p className="text-xs font-semibold">{meta}</p>}
+        {item.size && <p className="text-xs">rozm. {item.size}</p>}
+      </div>
+
+      <div className="min-w-0 space-y-2 p-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 @2xl:hidden">Klient napisał</p>
+        {item.quote && (
+          <blockquote className="rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[13px] leading-relaxed text-slate-800">
+            {item.quote}
+          </blockquote>
         )}
-      </div>
 
-      {item.quote && (
-        <blockquote className="mt-2 border-l-4 border-amber-400 bg-amber-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-800">
-          {item.quote}
-        </blockquote>
-      )}
-
-      {/* Wniosek modelu, nie fakt z maila — dlatego „możliwa” i prośba o wyjaśnienie z klientem. */}
-      {item.conflict && (
-        <p className="mt-1.5 rounded border border-orange-300 bg-orange-50 px-2.5 py-1.5 text-xs text-orange-900">
-          <span className="font-semibold">Możliwa sprzeczność w zapytaniu</span> (ocena AI — wyjaśnij z klientem):{' '}
-          {item.conflict}
-        </p>
-      )}
-
-      {item.brand_not_in_catalog && (
-        <p className="mt-1.5 rounded border border-orange-300 bg-orange-50 px-2.5 py-1.5 text-xs text-orange-900">
-          <span className="font-semibold">Marki „{item.brand_not_in_catalog}” nie ma w katalogu</span> — kandydaci poniżej
-          to zamienniki innej marki. Do listu wejdzie dopiero ten, który wybierzesz.
-        </p>
-      )}
-
-      {/* Warunki szczególne klienta: wprost, z werdyktem karty. Karta bez
-          potwierdzenia nie wchodzi do listu, więc handlowiec musi wiedzieć,
-          czego brakuje i gdzie sam ma to sprawdzić. */}
-      {item.requirements.length > 0 && (
-        <ul className="mt-2 space-y-1">
-          {item.requirements.map((req) => (
-            <li key={req.text} className="text-[11px] leading-relaxed">
-              <span className="font-semibold text-slate-800">Warunek z zapytania:</span>{' '}
-              <span className="text-slate-800">{req.text}</span>{' '}
-              {!req.checkable ? (
-                <span className="text-slate-500">— sprawdź sam, tego nie sprawdzi żadna reguła</span>
-              ) : req.ok === true ? (
-                <span className="text-emerald-700">— potwierdzony w karcie</span>
-              ) : (
-                <span className="text-red-700">— karta tego nie potwierdza</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="mt-2 flex items-start justify-between gap-2 text-xs">
-        <div className="min-w-0">
-          {chosen ? (
-            <>
-              <p className="text-slate-800">
-                <span className="font-semibold">{chosen.sku}</span> · {chosen.name}
-                {chosen.manufacturer ? ` · ${chosen.manufacturer}` : ''}
-                {chosenPrice ? ` · ${chosenPrice}` : priceMode !== 'none' ? ' · cena do potwierdzenia' : ''}
-                {item.manual_price != null && priceMode !== 'none' && ' (ręcznie)'}
-              </p>
-              <OrderQuantityBadge
-                oq={chosen.order_quantity}
-                qty={qtyForOrderCondition(item, chosen.order_quantity)}
-                block
-                className="mt-0.5"
-              />
-              {chosen.reason && <p className="text-[11px] text-slate-500">{chosen.reason}</p>}
-              {/* Cena z negocjacji albo promocji: wchodzi do tekstu i do tabeli listu,
-                  więc nie trzeba poprawiać treści ręcznie (to kasowało tabelę). */}
-              {priceMode !== 'none' && (
-                <label className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
-                  Cena ręczna
-                  <input
-                    className="w-24 rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-800"
-                    disabled={busy}
-                    inputMode="decimal"
-                    placeholder={computedPrice ?? 'np. 159,00'}
-                    value={manualDraft}
-                    onChange={(e) => onManualDraft(e.target.value)}
-                    onBlur={onManualPriceBlur}
-                  />
-                  zł netto
-                  <span className="text-slate-400">
-                    {item.manual_price != null && computedPrice
-                      ? `wyliczona: ${computedPrice} · puste pole = cena wyliczona`
-                      : 'puste pole = cena wyliczona'}
-                  </span>
-                </label>
-              )}
-            </>
-          ) : chosenId != null ? (
-            <p className="text-slate-800">Towar #{chosenId} (spoza listy kandydatów)</p>
-          ) : (
-            <p className="text-slate-600">W liście: sprawdzimy i wrócimy z propozycją — bez SKU.</p>
-          )}
-        </div>
-        {/* Model podsunął nie to, czego szukał klient — handlowiec szuka sam:
-            po nazwie/kodzie albo opisem przez AI. Wybrany wyrób wchodzi do listu. */}
-        <div className="flex shrink-0 gap-1.5">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onSearch('catalog')}
-            title="Szukanie po nazwie i kodzie w katalogu"
-            className="rounded-full border border-sky-300 bg-white px-2 py-0.5 text-[11px] font-medium text-sky-800 hover:bg-sky-50 disabled:opacity-50"
-          >
-            Szukaj
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onSearch('ai')}
-            title="Szukanie AI po opisie wymagania"
-            className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
-          >
-            Szukaj AI
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Alternatywy</p>
-        <div className="mt-1 flex flex-wrap items-center gap-1.5">
-          {item.candidates.map((c) => (
-            <span key={c.id} className="inline-flex items-center gap-1">
-              <Chip
-                active={item.chosen === `p:${c.id}`}
-                disabled={busy}
-                onClick={() => onAnswer(item.answer_key, { option_id: `p:${c.id}` })}
+        {item.flags.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {item.flags.map((f) => (
+              <span
+                key={f}
+                className={`inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-[11px] ${flagTone[f].cls}`}
               >
-                {c.sku} · {c.name} · {c.source === 'manual' ? 'ręcznie' : c.source === 'link' ? 'z linku' : `${c.score}%`}
-              </Chip>
-              <OrderQuantityBadge oq={c.order_quantity} />
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onPreview(c.id, item.quote ?? '')}
-                className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
-              >
-                Opis
-              </button>
-            </span>
-          ))}
-          <Chip
-            active={item.chosen === 'check'}
-            disabled={busy}
-            onClick={() => onAnswer(item.answer_key, { option_id: 'check' })}
-          >
-            Sprawdzimy i wrócimy
-          </Chip>
-        </div>
-      </div>
-
-      {item.substitute_key && (
-        <div className="mt-2">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Zamienniki</p>
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            <Chip
-              active={subAnswer === 'no'}
-              disabled={busy}
-              onClick={() => onAnswer(item.substitute_key!, { option_id: 'no' })}
-            >
-              Tylko wskazany
-            </Chip>
-            {item.substitutes.map((s) => (
-              <Chip
-                key={s.id}
-                active={subAnswer === `p:${s.id}`}
-                disabled={busy}
-                onClick={() => onAnswer(item.substitute_key!, { option_id: `p:${s.id}` })}
-              >
-                Zamiennik: {s.sku} · {s.name}
-              </Chip>
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${flagTone[f].dot}`} />
+                {flagLabel[f]}
+              </span>
             ))}
           </div>
-        </div>
-      )}
+        )}
 
-      {item.cards.length > 0 && (
-        <div className="mt-2 space-y-2">
-          {item.cards.map((card) => (
+        {/* Wniosek modelu, nie fakt z maila — dlatego dopisek o ocenie AI i prośba o wyjaśnienie z klientem. */}
+        {item.conflict && (
+          <div className="flex items-start gap-2 rounded-lg border-2 border-red-500 bg-red-50 px-2.5 py-2 text-xs leading-relaxed text-red-900">
+            <svg
+              viewBox="0 0 24 24"
+              className="mt-px h-4 w-4 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2.2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <div>
+              <p className="font-bold">Sprzeczność w zapytaniu — wyjaśnij z klientem</p>
+              <p>{item.conflict}</p>
+              <p className="mt-0.5 text-[11px] text-red-700">Ocena AI, nie fakt z maila.</p>
+            </div>
+          </div>
+        )}
+
+        {item.brand_not_in_catalog && (
+          <p className="rounded-lg border-2 border-orange-400 bg-orange-50 px-2.5 py-1.5 text-xs leading-relaxed text-orange-900">
+            <span className="font-semibold">Marki „{item.brand_not_in_catalog}” nie ma w katalogu.</span> Kandydaci to
+            zamienniki innej marki — do listu wejdzie dopiero ten, który wybierzesz.
+          </p>
+        )}
+
+        {/* Warunki szczególne klienta: wprost, z werdyktem karty. Karta bez
+            potwierdzenia nie wchodzi do listu, więc handlowiec musi wiedzieć,
+            czego brakuje i gdzie sam ma to sprawdzić. */}
+        {item.requirements.length > 0 && (
+          <ul className="space-y-1">
+            {item.requirements.map((req) => (
+              <li key={req.text} className="text-[11px] leading-relaxed">
+                <span className="font-semibold text-slate-800">Warunek z zapytania:</span>{' '}
+                <span className="text-slate-800">{req.text}</span>{' '}
+                {!req.checkable ? (
+                  <span className="text-slate-500">— sprawdź sam, tego nie sprawdzi żadna reguła</span>
+                ) : req.ok === true ? (
+                  <span className="text-emerald-700">— potwierdzony w karcie</span>
+                ) : (
+                  <span className="text-red-700">— karta tego nie potwierdza</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {item.cards.map((card) => (
+          <div key={card.id} className="rounded-lg border border-violet-200 bg-white p-2.5">
+            <span className="mb-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-800">
+              {answers[card.id] ? 'Pytanie AI' : 'Pytanie AI · bez odpowiedzi'}
+            </span>
             <CardChips
-              key={card.id}
               card={card}
               answers={answers}
               busy={busy}
@@ -559,9 +542,148 @@ function ItemRow({
               onCustomDraft={(v) => onCustomDraft(card.id, v)}
               onAnswer={onAnswer}
             />
-          ))}
+          </div>
+        ))}
+      </div>
+
+      <div className="col-start-2 min-w-0 space-y-2 border-t border-slate-200 p-3 @2xl:col-start-auto @2xl:border-l @2xl:border-t-0">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 @2xl:hidden">Nasza propozycja</p>
+        {/* Model podsunął nie to, czego szukał klient — handlowiec szuka sam:
+            po nazwie/kodzie albo opisem przez AI. Wybrany wyrób wchodzi do listu. */}
+        <div className="flex items-center justify-between gap-2">
+          <p className="min-w-0 text-xs text-slate-800">
+            <span className="text-slate-500">W liście:</span> <span className="font-semibold">{inLetter}</span>
+          </p>
+          <div className="flex shrink-0 gap-1.5">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onSearch('catalog')}
+              title="Szukanie po nazwie i kodzie w katalogu"
+              className="rounded-full border border-sky-300 bg-white px-2 py-0.5 text-[11px] font-medium text-sky-800 hover:bg-sky-50 disabled:opacity-50"
+            >
+              Szukaj
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onSearch('ai')}
+              title="Szukanie AI po opisie wymagania"
+              className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
+            >
+              Szukaj AI
+            </button>
+          </div>
         </div>
-      )}
+
+        {/* Jedna siatka na całą listę: kolumna znaczków i „Opis” ma wspólną szerokość, więc wiersze wyboru są równe. */}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1.5 gap-y-1">
+          {item.candidates.map((c) => {
+            const on = item.chosen === `p:${c.id}`
+            const label = c.source === 'manual' ? 'ręcznie' : c.source === 'link' ? 'z linku' : `${c.score}%`
+            const tone = c.source === 'manual' || c.source === 'link' ? 'bg-slate-200 text-slate-800' : scoreTone(c.score)
+            return (
+              <Fragment key={c.id}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  aria-pressed={on}
+                  onClick={() => onAnswer(item.answer_key, { option_id: `p:${c.id}` })}
+                  className={optionCls(on)}
+                >
+                  <RadioDot on={on} />
+                  <span className="min-w-0 flex-1 text-slate-800">
+                    <span className="font-semibold">{c.sku}</span> · {c.name}
+                    {c.manufacturer && <span className="text-slate-500"> · {c.manufacturer}</span>}
+                  </span>
+                  <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-bold ${tone}`}>{label}</span>
+                </button>
+                <span className="flex items-center justify-end gap-1">
+                  {!on && <OrderQuantityBadge oq={c.order_quantity} />}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onPreview(c.id, item.quote ?? '')}
+                    className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
+                  >
+                    Opis
+                  </button>
+                </span>
+                {on && (
+                  <div className="col-span-2 space-y-1 pb-1 pl-7 text-[11px] text-slate-600">
+                    {(chosenPrice || priceMode !== 'none') && (
+                      <p className="text-xs text-slate-800">
+                        Cena: {chosenPrice ?? 'do potwierdzenia'}
+                        {item.manual_price != null && priceMode !== 'none' && ' (ręcznie)'}
+                      </p>
+                    )}
+                    <OrderQuantityBadge oq={c.order_quantity} qty={qtyForOrderCondition(item, c.order_quantity)} block />
+                    {c.reason && <p>{c.reason}</p>}
+                    {/* Cena z negocjacji albo promocji: wchodzi do tekstu i do tabeli listu,
+                        więc nie trzeba poprawiać treści ręcznie (to kasowało tabelę). */}
+                    {priceMode !== 'none' && (
+                      <label className="flex flex-wrap items-center gap-1.5">
+                        Cena ręczna
+                        <input
+                          className="w-24 rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-800"
+                          disabled={busy}
+                          inputMode="decimal"
+                          placeholder={computedPrice ?? 'np. 159,00'}
+                          value={manualDraft}
+                          onChange={(e) => onManualDraft(e.target.value)}
+                          onBlur={onManualPriceBlur}
+                        />
+                        zł netto
+                        <span className="text-slate-400">
+                          {item.manual_price != null && computedPrice
+                            ? `wyliczona: ${computedPrice} · puste pole = cena wyliczona`
+                            : 'puste pole = cena wyliczona'}
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                )}
+              </Fragment>
+            )
+          })}
+          <button
+            type="button"
+            disabled={busy}
+            aria-pressed={checking}
+            onClick={() => onAnswer(item.answer_key, { option_id: 'check' })}
+            className={optionCls(checking)}
+          >
+            <RadioDot on={checking} />
+            <span className="text-slate-800">Sprawdzimy i wrócimy — bez SKU</span>
+          </button>
+          <span />
+        </div>
+
+        {item.substitute_key && (
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Zamienniki</p>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              <Chip
+                active={subAnswer === 'no'}
+                disabled={busy}
+                onClick={() => onAnswer(item.substitute_key!, { option_id: 'no' })}
+              >
+                Tylko wskazany
+              </Chip>
+              {item.substitutes.map((s) => (
+                <Chip
+                  key={s.id}
+                  active={subAnswer === `p:${s.id}`}
+                  disabled={busy}
+                  onClick={() => onAnswer(item.substitute_key!, { option_id: `p:${s.id}` })}
+                >
+                  Zamiennik: {s.sku} · {s.name}
+                </Chip>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -1248,7 +1370,14 @@ export function InquiryReply() {
             {inquiry.items.length === 0 ? (
               <p className="text-xs text-slate-500">Brak pozycji.</p>
             ) : (
-              <div className="space-y-3">
+              <div className="@container space-y-3">
+                <div
+                  className={`hidden text-[11px] font-semibold uppercase tracking-wide text-slate-500 @2xl:grid ${itemGrid}`}
+                >
+                  <span className="px-3">Poz. · status</span>
+                  <span className="px-3">Klient napisał</span>
+                  <span className="px-3">Nasza propozycja</span>
+                </div>
                 {inquiry.items.map((item, i) => (
                   <ItemRow
                     key={item.id}
