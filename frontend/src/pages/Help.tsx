@@ -1769,7 +1769,7 @@ function InquiriesHelp() {
         {
           action: 'Podgląd listu, kopiowanie i oznaczenie jako wysłane',
           does: '„Podgląd odpowiedzi” otwiera okno: po lewej zapytanie klienta, po prawej list tak, jak zobaczy go klient (z tabelą). „Kopiuj z tabelą (HTML)” albo „Kopiuj treść” — i wklejasz do swojej poczty; zapytanie z Thunderbirda wysyłasz przyciskiem „Zapisz i wyślij w Thunderbirdzie”. „Popraw treść ręcznie” zmienia tekst listu (zapisuje się po opuszczeniu pola; poprawka usuwa tabelę). Po wysłaniu z innej poczty „Oznacz, że wysłano” daje zapytaniu zielone „Wysłano” na liście. System sam nie wysyła maila.',
-          click: '„Podgląd odpowiedzi” → skopiuj list → wklej do poczty → „Oznacz, że wysłano”. Pomyłka? „Cofnij oznaczenie”.',
+          click: '„Podgląd odpowiedzi” → skopiuj list → wklej do poczty → „Oznacz, że wysłano”.',
           tone: 'green',
           screen: (
             <AppFrame nav="Zapytania">
