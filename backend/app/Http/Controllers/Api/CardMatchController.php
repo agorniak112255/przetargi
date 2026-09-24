@@ -13,6 +13,8 @@ use App\Models\ProductSourcePrice;
 use App\Models\User;
 use App\Services\Catalog\CardMatchFinder;
 use App\Services\Catalog\CardMatchMerger;
+use App\Services\Catalog\CardMatchPlanChanged;
+use App\Services\Catalog\CardMatchSizeMerger;
 use App\Services\Pricing\SourcePriceComparison;
 use DomainException;
 use Illuminate\Http\JsonResponse;
@@ -39,6 +41,7 @@ class CardMatchController extends Controller
     public function __construct(
         private readonly CardMatchMerger $merger,
         private readonly SourcePriceComparison $comparison,
+        private readonly CardMatchSizeMerger $sizeMerger,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -92,6 +95,42 @@ class CardMatchController extends Controller
         }
 
         return response()->json($this->present(collect([$candidate->refresh()->load('decider:id,name')]))[0]);
+    }
+
+    /**
+     * „Połącz rozmiary” (krok 6): karty rozmiarów producenta w jedną kartę modelu i dołączenie karty dystrybutora.
+     * Front nie wysyła listy rozmiarów — domyślna z planu (plan.suggested.variant_summary).
+     */
+    public function mergeSizes(Request $request, CardMatchCandidate $candidate): JsonResponse
+    {
+        $data = $request->validate([
+            'keep_product_id' => ['required', 'integer'],
+            'name' => ['required', 'string', 'min:3', 'max:1000'],
+            'variant_summary' => ['nullable', 'string', 'max:1500'],
+            'plan_hash' => ['required', 'string', 'size:40'],
+            'confirm_sizes_only' => ['required', 'accepted'],
+        ]);
+
+        try {
+            $merged = $this->sizeMerger->merge(
+                $candidate,
+                $this->user($request),
+                (int) $data['keep_product_id'],
+                (string) $data['name'],
+                isset($data['variant_summary']) ? (string) $data['variant_summary'] : null,
+                (string) $data['plan_hash'],
+            );
+        } catch (CardMatchPlanChanged $e) {
+            return response()->json(['message' => $e->getMessage(), 'code' => 'plan_changed'], 409);
+        } catch (DomainException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (Throwable $e) {
+            report($e);
+
+            return response()->json(['message' => 'Łączenie rozmiarów nie powiodło się: '.rtrim($e->getMessage(), '.').' — nic nie zmieniono.'], 500);
+        }
+
+        return response()->json($this->present(collect([$merged->load('decider:id,name')]))[0]);
     }
 
     public function reject(Request $request, CardMatchCandidate $candidate): JsonResponse
@@ -307,13 +346,16 @@ class CardMatchController extends Controller
             ];
         };
 
+        $skus = $products->map(static fn (Product $p): string => (string) $p->sku)->all();
+
         return $candidates->map(static fn (CardMatchCandidate $c): array => [
             'id' => (int) $c->id,
             'status' => (string) $c->status,
             'kind' => (string) ($c->kind ?? CardMatchCandidate::KIND_MERGE),
             'signal' => is_array($c->plan) && is_string($c->plan['signal'] ?? null) ? $c->plan['signal'] : null,
             'plan_hash' => $c->plan_hash,
-            'plan' => self::presentPlan($c->plan, $brief),
+            'plan' => self::presentPlan($c->plan, $brief, (string) ($c->kind ?? CardMatchCandidate::KIND_MERGE), $skus),
+            'decision_input' => is_array($c->decision_input) ? $c->decision_input : null,
             'matched_by' => $c->matched_by,
             'matched_value' => $c->matched_value,
             'matched_source_key' => $c->matched_source_key,
@@ -363,13 +405,23 @@ class CardMatchController extends Controller
      * Plan jak w bazie (CardMatchFinder), każda pozycja z kartą producenta w kształcie CardBrief (null: pozycja bez
      * karty albo trafiająca w kilka kart — wtedy target_ids). Karta usunięta po odświeżeniu też daje null.
      *
+     * Łączenie rozmiarów: do podpowiedzi dochodzi lista rozmiarów liczona przy odczycie (ta sama, którą zapisze
+     * „Połącz rozmiary” bez własnej listy) — SKU kart docelowych z tej samej hurtowej listy kart.
+     *
      * @param  callable(?int): ?array<string, mixed>  $brief
+     * @param  array<int, string>  $skus  SKU kart strony
      * @return array<string, mixed>|null
      */
-    private static function presentPlan(mixed $plan, callable $brief): ?array
+    private static function presentPlan(mixed $plan, callable $brief, string $kind, array $skus): ?array
     {
         if (! is_array($plan)) {
             return null;
+        }
+        if ($kind === CardMatchCandidate::KIND_SIZE_MERGE && is_array($plan['suggested'] ?? null)) {
+            $plan['suggested']['variant_summary'] = CardMatchSizeMerger::defaultVariantSummary(
+                is_array($plan['suggested']['sizes'] ?? null) ? $plan['suggested']['sizes'] : [],
+                $skus,
+            );
         }
         if (is_array($plan['positions'] ?? null)) {
             $plan['positions'] = array_values(array_map(

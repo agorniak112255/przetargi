@@ -89,7 +89,8 @@ use Throwable;
  */
 final class B2bCatalogSync
 {
-    private const VARIANT_SUMMARY_LIMIT = 1500;
+    /** Limit listy rozmiarów/kodów karty — także lista rozmiarów karty modelu (ProductSizeMergeService::mergeSizeCards). */
+    public const VARIANT_SUMMARY_LIMIT = 1500;
 
     /** Nazwy pól karty w podsumowaniu aktualizacji; pole spoza listy — nazwą kolumny. */
     private const CARD_FIELD_LABELS = [
@@ -266,6 +267,8 @@ final class B2bCatalogSync
         // Mapa połączeń konta (card_redirects, decyzje człowieka „pozycja → karta”) — raz na przebieg, bez zapytań na
         // pozycję; decyzja zapisana w trakcie przebiegu działa od następnego. Łącznik z wersjami ma własne karty wersji.
         $redirects = $variantConnector === null ? $this->redirectMap($account) : [];
+        /** @var array<string, true> $listedPositions pozycje z listy dostawcy (klucz mapy połączeń), także pominięte */
+        $listedPositions = [];
 
         // długie pobieranie listy przed pierwszym produktem — komunikaty są sygnałem życia przebiegu,
         // a przy okazji jedynym miejscem, w którym widać prośbę o zatrzymanie (pętli produktów jeszcze nie ma)
@@ -312,6 +315,9 @@ final class B2bCatalogSync
             // grupa rozdzielona mapą połączeń (tryb pojedynczy): pozycje nieudane osobno — reszta grupy zapisana
             $failed = array_flip(array_map('strval', $outcome['failed_positions'] ?? []));
             foreach (self::positionIds($remote) as $position) {
+                if ($redirects !== []) {
+                    $listedPositions[CardRedirectStore::key(ProductSourcePrice::b2bKey((int) $account->id), $position)] = true;
+                }
                 if (! $saved || isset($failed[$position])) {
                     $taintedPositions[$position] = true;
                 } elseif ($remote->identifiers !== null) {
@@ -472,6 +478,31 @@ final class B2bCatalogSync
             $identifiersRemoved = $this->identifiers->sweepB2b($account, array_map('strval', $sweepable), $runId, $startedAt);
             if ($identifiersRemoved > 0) {
                 $progress?->log('info', 'Identyfikatory, których dostawca już nie podaje (oznaczone, nie skasowane): '.$identifiersRemoved);
+            }
+        }
+
+        // Pozycja wiodąca karty modelu (łączenie rozmiarów) zniknęła z listy dostawcy: pozostałe rozmiary odświeżają
+        // tylko powiązania, więc cena, opis i zdjęcia karty stoją. Tylko ostrzeżenie — bez automatycznej zamiany
+        // pozycji wiodącej (inny rozmiar mógłby mieć inną cenę albo opis); zamianę robi człowiek poleceniem.
+        // Jak przy sprzątaniu identyfikatorów: tylko pełny przebieg wie, czego na liście nie ma.
+        if (! $cancelled && ! $partial && ! $dryRun && $limit === null) {
+            $sourceKey = ProductSourcePrice::b2bKey((int) $account->id);
+            foreach ($redirects as $key => $entry) {
+                if (! $entry['is_anchor'] || $entry['reason'] !== CardRedirect::REASON_SIZE_MERGE
+                    || $entry['product_id'] === null || isset($listedPositions[$key])) {
+                    continue;
+                }
+                $card = Product::query()->find($entry['product_id'], ['id', 'sku']);
+                $warning = sprintf(
+                    'Pozycja wiodąca %s karty modelu #%d (%s) nie przyszła w tym przebiegu — cena, opis i zdjęcia tej karty nie są odświeżane. Zmień pozycję wiodącą: php artisan card-redirects:anchor %d <pozycja> --source=%s --apply',
+                    $entry['position_key'],
+                    $entry['product_id'],
+                    $card !== null ? (string) $card->sku : '—',
+                    $entry['product_id'],
+                    $sourceKey,
+                );
+                $progress?->log('warn', $warning);
+                $addError($warning);
             }
         }
 
@@ -647,13 +678,15 @@ final class B2bCatalogSync
      * - grupa, której wpisy wskazują ≥ 2 różne karty albo któryś ma powód „split” → tryb pojedynczy (syncMembersSeparately:
      *   P4S „6X00 Półmaska 3M 6000” rozdzielona na karty 3M rozmiarów S/M/L);
      * - grupa z wpisami na dokładnie jedną kartę → karta grupy = ta karta, rozmiary bez wpisu dołączają (połączenie);
-     * - wpis bez karty (karta docelowa usunięta) → ostrzeżenie i zwykła droga.
+     * - wpis bez karty (karta docelowa usunięta) → ostrzeżenie i zwykła droga;
+     * - karta modelu z łączenia rozmiarów (powód „size_merge”, krok 6): pełny zapis tylko z pozycji wiodącej (is_anchor),
+     *   pozostałe rozmiary zawsze tylko powiązania (refreshSharedCardLink), niezależnie od kolejności na liście.
      * $origin — produkt łącznika, gdy $remote to jedna pozycja jego grupy (tryb pojedynczy): łącznik dostaje zawsze swój
      * produkt (cena, opis, pliki, zdjęcia, tabelka grupy), a karta, powiązanie i identyfikatory idą za pozycją.
      *
      * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed  karty użyte w tym przebiegu
      * @param  array<string, array{price: bool, description: bool}>  $rules  wyłączenia konta po kluczu producenta
-     * @param  array<string, array{product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects  mapa konta (redirectMap)
+     * @param  array<string, array{position_key: string, product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects  mapa konta (redirectMap)
      * @return array<string, mixed>
      */
     private function syncProduct(
@@ -679,6 +712,11 @@ final class B2bCatalogSync
         $joinsMerged = false;
         // karta wskazana mapą połączeń — użyta w tym przebiegu przez inną pozycję: tylko powiązania (refreshSharedCardLink)
         $mapTarget = false;
+        // pozycja karty modelu z łączenia rozmiarów, która nie jest wiodąca (card_redirects.is_anchor) — zawsze tylko
+        // powiązania, niezależnie od kolejności na liście dostawcy: 3M 6200 M i 6300 L na karcie #40819 (6100 S) nie
+        // mogą nadpisywać opisu, slotu ceny ani zdjęć pozycją innego rozmiaru; nie zajmują też karty (claim), więc
+        // pozycja wiodąca przetworzona po nich robi pełny zapis
+        $nonAnchor = false;
         // ostrzeżenia z mapy połączeń trafiają do wyniku każdej ścieżki, także pominięcia
         $warnings = [];
         if ($members === []) {
@@ -701,6 +739,7 @@ final class B2bCatalogSync
                 }
                 $linked = $target;
                 $existing = $target;
+                $nonAnchor = $entry['reason'] === CardRedirect::REASON_SIZE_MERGE && ! $entry['is_anchor'];
             } else {
                 $linked = $link?->product;
                 $existing = $linked ?? Product::query()->where('sku', $remote->sku)->first();
@@ -748,6 +787,14 @@ final class B2bCatalogSync
                     ?? $memberLinks->first($onTarget);
                 $linked = $target;
                 $existing = $target;
+                // grupa, której wszystkie wpisy to niewiodące pozycje łączenia rozmiarów — jak pozycja pojedyncza
+                // (dziś łączenie rozmiarów dotyczy kont z pozycjami pojedynczymi; reguła ma być spójna)
+                $nonAnchor = $entries !== [];
+                foreach ($entries as $memberEntry) {
+                    if ($memberEntry['reason'] !== CardRedirect::REASON_SIZE_MERGE || $memberEntry['is_anchor']) {
+                        $nonAnchor = false;
+                    }
+                }
             } else {
                 $group = $this->resolveGroupCard($account, $remote, $members, $claimed, $entries);
                 if ($group['reason'] !== null) {
@@ -802,8 +849,10 @@ final class B2bCatalogSync
         // odświeża tylko swoje powiązanie. Grupy rozmiarów (members) omijają takie karty w resolveGroupCard, poza
         // kartą scaloną z rozmiarów (joins_merged) — wtedy grupa odświeża powiązania wszystkich swoich pozycji. Tak samo
         // grupa wskazana mapą połączeń na kartę użytą już w tym przebiegu (grupy cenowe dostawcy po połączeniu).
-        if (($members === [] || $joinsMerged || $mapTarget) && $existing !== null && isset($claimed['products'][(int) $existing->id])) {
-            $shared = $this->refreshSharedCardLink($account, $remote, $members, $existing, $manufacturer, $price, $dryRun, $runId, $ruleOutcome);
+        // Niewiodąca pozycja łączenia rozmiarów — zawsze tylko powiązania, bez claim (kartę zapisuje pozycja wiodąca).
+        if ($existing !== null && ($nonAnchor
+            || (($members === [] || $joinsMerged || $mapTarget) && isset($claimed['products'][(int) $existing->id])))) {
+            $shared = $this->refreshSharedCardLink($account, $remote, $members, $existing, $manufacturer, $price, $dryRun, $runId, $ruleOutcome, $nonAnchor);
 
             return [...$shared, 'warnings' => [...$warnings, ...$shared['warnings']]];
         }
@@ -1067,6 +1116,8 @@ final class B2bCatalogSync
      * ginie po cichu — ostrzeżenie w dzienniku przebiegu, a cena pozycji zostaje przy jej powiązaniu
      * (last_purchase_price). Grupa rozmiarów ($members) odświeża powiązanie każdej
      * swojej pozycji (kod i nazwa pozycji dosłownie).
+     * $sizeMergeMember — niewiodąca pozycja karty modelu z łączenia rozmiarów (card_redirects size_merge): ta droga
+     * zawsze, a ostrzeżenie o innej cenie mówi o rozmiarze i pozycji wiodącej (sygnał, że karta może wymagać rozdzielenia).
      *
      * @param  list<array{remote_id: string, sku: string, name: string}>  $members
      * @param  array<string, mixed>  $ruleOutcome
@@ -1082,6 +1133,7 @@ final class B2bCatalogSync
         bool $dryRun,
         ?int $runId,
         array $ruleOutcome,
+        bool $sizeMergeMember = false,
     ): array {
         $warnings = [];
         if ($price !== null) {
@@ -1091,7 +1143,17 @@ final class B2bCatalogSync
                 ->first();
             if ($slot !== null && (round((float) $slot->purchase_price, 2) !== round($price->net, 2)
                 || strtoupper((string) $slot->currency) !== strtoupper($price->currency))) {
-                $warnings[] = sprintf(
+                // rozmiar karty modelu w innej cenie niż pozycja wiodąca — może to nie są same rozmiary jednego wyrobu
+                $warnings[] = $sizeMergeMember ? sprintf(
+                    'karta modelu #%d (%s): rozmiar %s ma cenę %s %s, pozycja wiodąca %s %s — do sprawdzenia w Łączenie kart (rozdzielenie?)',
+                    $card->id,
+                    (string) $card->sku,
+                    $remote->sku,
+                    number_format($price->net, 2, ',', ''),
+                    $price->currency,
+                    number_format((float) $slot->purchase_price, 2, ',', ''),
+                    (string) $slot->currency,
+                ) : sprintf(
                     'karta #%d (%s) ma już cenę z innego kodu tego konta (%s %s) — cena tego kodu (%s %s) pominięta',
                     $card->id,
                     (string) $card->sku,
@@ -1149,7 +1211,7 @@ final class B2bCatalogSync
      * @param  list<array{remote_id: string, sku: string, name: string, availability: string|null}>  $members
      * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed
      * @param  array<string, array{price: bool, description: bool}>  $rules
-     * @param  array<string, array{product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects
+     * @param  array<string, array{position_key: string, product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects
      * @return array<string, mixed> wynik zbiorczy (combinedOutcome)
      */
     private function syncMembersSeparately(
@@ -1280,7 +1342,7 @@ final class B2bCatalogSync
      * Mapa połączeń konta (card_redirects, source_key „b2b:{id}”) po kluczu pozycji — jak porównanie w UNIQUE tabeli
      * (CardRedirectStore::key: bez wielkości liter i akcentów). Jedno zapytanie na przebieg.
      *
-     * @return array<string, array{product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>
+     * @return array<string, array{position_key: string, product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>
      */
     private function redirectMap(B2bAccount $account): array
     {
@@ -1292,6 +1354,7 @@ final class B2bCatalogSync
             ->get(['position_key', 'product_id', 'reason', 'is_anchor', 'target_snapshot']);
         foreach ($rows as $row) {
             $map[CardRedirectStore::key($sourceKey, (string) $row->position_key)] ??= [
+                'position_key' => (string) $row->position_key,
                 'product_id' => $row->product_id !== null ? (int) $row->product_id : null,
                 'reason' => (string) $row->reason,
                 'is_anchor' => (bool) $row->is_anchor,
@@ -1303,8 +1366,8 @@ final class B2bCatalogSync
     }
 
     /**
-     * @param  array<string, array{product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects
-     * @return array{product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}|null
+     * @param  array<string, array{position_key: string, product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects
+     * @return array{position_key: string, product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}|null
      */
     private static function redirectOf(array $redirects, B2bAccount $account, string $position): ?array
     {

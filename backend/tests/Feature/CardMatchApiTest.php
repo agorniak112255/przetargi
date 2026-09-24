@@ -79,9 +79,16 @@ final class CardMatchApiTest extends TestCase
         parent::tearDown();
     }
 
+    /** @var array<int, list<array<string, mixed>|null>> kolejne wyniki evaluate() po id karty — mają pierwszeństwo przed stałym wynikiem */
+    private array $evaluationQueue = [];
+
     /** @return array<string, mixed>|null */
     public function evaluationFor(int $sourceId): ?array
     {
+        if (($this->evaluationQueue[$sourceId] ?? []) !== []) {
+            return array_shift($this->evaluationQueue[$sourceId]);
+        }
+
         return $this->evaluations[$sourceId] ?? null;
     }
 
@@ -487,12 +494,12 @@ final class CardMatchApiTest extends TestCase
 
         $this->postJson("/api/card-matches/{$sizes->id}/merge")
             ->assertStatus(422)
-            ->assertJsonPath('message', 'Ta propozycja to łączenie rozmiarów — ta decyzja będzie dostępna w kolejnej wersji ekranu. Możesz ją odrzucić.');
+            ->assertJsonPath('message', 'Ta propozycja to łączenie rozmiarów — połącz ją przyciskiem „Połącz rozmiary” na zakładce „Łączenie rozmiarów” albo odrzuć.');
         // rodzaj sprawdzany przed statusem — niepewna propozycja rozmiarów mówi to samo
         $sizes->forceFill(['status' => CardMatchCandidate::STATUS_CONFLICT])->save();
         $this->postJson("/api/card-matches/{$sizes->id}/merge")
             ->assertStatus(422)
-            ->assertJsonPath('message', 'Ta propozycja to łączenie rozmiarów — ta decyzja będzie dostępna w kolejnej wersji ekranu. Możesz ją odrzucić.');
+            ->assertJsonPath('message', 'Ta propozycja to łączenie rozmiarów — połącz ją przyciskiem „Połącz rozmiary” na zakładce „Łączenie rozmiarów” albo odrzuć.');
 
         $results = $this->postJson('/api/card-matches/bulk', ['action' => 'merge', 'ids' => [$split->id, $okPair->id]])
             ->assertOk()
@@ -542,6 +549,98 @@ final class CardMatchApiTest extends TestCase
         $twenty = $this->countQueries($url);
 
         $this->assertSame($one, $twenty);
+    }
+
+    public function test_merge_sizes_requires_decide_permission_and_valid_input(): void
+    {
+        $this->actingAsRole('handlowiec')->givePermissionTo('card_matches.view');
+        [, $targets, $sizes] = $this->sizeMergeCandidate('6X00');
+        $body = ['keep_product_id' => $targets[0]->id, 'name' => '6X00 Półmaska 3M 6000', 'plan_hash' => $sizes->plan_hash, 'confirm_sizes_only' => true];
+        $this->postJson("/api/card-matches/{$sizes->id}/merge-sizes", $body)->assertForbidden();
+
+        $this->actingAsRole('admin');
+        $this->postJson("/api/card-matches/{$sizes->id}/merge-sizes", [])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['keep_product_id', 'name', 'plan_hash', 'confirm_sizes_only']);
+        $this->postJson("/api/card-matches/{$sizes->id}/merge-sizes", ['name' => 'ab', 'plan_hash' => 'x', 'confirm_sizes_only' => false] + $body)
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['name', 'plan_hash', 'confirm_sizes_only']);
+        $this->postJson("/api/card-matches/{$sizes->id}/merge-sizes", ['variant_summary' => str_repeat('x', 1501)] + $body)
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['variant_summary']);
+
+        $this->assertSame(CardMatchCandidate::STATUS_PENDING, $sizes->fresh()->status);
+        $this->assertSame(3, Product::query()->where('manufacturer', '3M')->where('sku', 'like', '70001468%')->count());
+    }
+
+    public function test_merge_sizes_returns_merged_row_with_decision_input_and_409_when_plan_changed(): void
+    {
+        $admin = $this->actingAsRole('admin');
+        [$source, $targets, $sizes] = $this->sizeMergeCandidate('6X00');
+        // karty rozmiarów z pozycją konta 3M (właściciel marki) — jedna pozycja na kartę
+        foreach ($targets as $target) {
+            B2bProductLink::query()->create(['b2b_account_id' => $this->mmm?->id, 'remote_id' => $target->sku, 'remote_sku' => $target->sku, 'product_id' => $target->id]);
+        }
+        B2bProductLink::query()->create(['b2b_account_id' => $this->p4s->id, 'remote_id' => 'p4s-6X00', 'product_id' => $source->id]);
+        $body = ['keep_product_id' => $targets[0]->id, 'name' => '6X00 Półmaska 3M 6000', 'plan_hash' => $sizes->plan_hash, 'confirm_sizes_only' => true];
+
+        // ekran wczytał inny plan
+        $this->postJson("/api/card-matches/{$sizes->id}/merge-sizes", ['plan_hash' => str_repeat('0', 40)] + $body)
+            ->assertStatus(409)
+            ->assertExactJson(['message' => 'Propozycja zmieniła się od wczytania ekranu — odśwież listę.', 'code' => 'plan_changed']);
+        // ponowne sprawdzenie daje inny skrót planu
+        $this->evaluationQueue[$source->id] = [['kind' => 'size_merge', 'status' => 'pending', 'plan_hash' => str_repeat('1', 40)]];
+        $this->postJson("/api/card-matches/{$sizes->id}/merge-sizes", $body)
+            ->assertStatus(409)
+            ->assertJsonPath('code', 'plan_changed');
+        $this->assertSame(CardMatchCandidate::STATUS_PENDING, $sizes->fresh()->status);
+
+        // plan jak na ekranie, potem pewna para karty dystrybutora z kartą modelu
+        $this->evaluationQueue[$source->id] = [
+            ['kind' => 'size_merge', 'status' => 'pending', 'plan_hash' => $sizes->plan_hash],
+            $this->evaluation((int) $targets[0]->id),
+        ];
+        $row = $this->postJson("/api/card-matches/{$sizes->id}/merge-sizes", $body)
+            ->assertOk()
+            ->assertJsonPath('id', $sizes->id)
+            ->assertJsonPath('status', 'merged')
+            ->assertJsonPath('kind', 'size_merge')
+            ->assertJsonPath('decided_by.id', $admin->id)
+            ->assertJsonPath('source', null)
+            ->assertJsonPath('source_snapshot.sku', '6X00')
+            ->json();
+        $this->assertSame([
+            'keep_product_id', 'drop_product_ids', 'attached_source_product_id', 'name', 'name_suggested', 'variant_summary',
+            'confirm_sizes_only', 'plan_hash', 'cards_before', 'anchors',
+        ], array_keys($row['decision_input']));
+        $this->assertSame([$targets[1]->id, $targets[2]->id], $row['decision_input']['drop_product_ids']);
+        $this->assertSame('Rozmiary: S (mały) (700014686X00S); M (średni) (700014686X00M); L (duży) (700014686X00L)', $row['decision_input']['variant_summary']);
+        $this->assertSame([['source_key' => 'b2b:'.$this->mmm?->id, 'position_key' => '700014686X00S']], $row['decision_input']['anchors']);
+        $this->assertSame('61.38', $row['decision_input']['cards_before'][0]['purchase_price']);
+        $this->assertSame('6X00 Półmaska 3M 6000', $targets[0]->fresh()->name);
+        $this->assertNull($source->fresh());
+        $this->assertFileExists((string) $sizes->fresh()->backup_path);
+
+        // „Zrobione”: ten sam kształt z decision_input
+        $this->getJson('/api/card-matches?status=merged&kind=size_merge')
+            ->assertOk()
+            ->assertJsonPath('data.0.id', $sizes->id)
+            ->assertJsonPath('data.0.decision_input.keep_product_id', $targets[0]->id);
+    }
+
+    public function test_list_presents_default_variant_summary_of_size_merge_plans(): void
+    {
+        $this->actingAsRole('admin');
+        [, , $pair] = $this->pair('IF/016/F/PS', 'ZPPV99C');
+        $this->sizeMergeCandidate('6X00');
+        $this->sizeMergeCandidate('KLODKA', CardMatchCandidate::KIND_SPLIT, CardMatchCandidate::SIGNAL_COLOR);
+
+        $this->getJson('/api/card-matches?kind=size_merge')
+            ->assertOk()
+            ->assertJsonPath('data.0.plan.suggested.variant_summary', 'Rozmiary: S (mały) (700014686X00S); M (średni) (700014686X00M); L (duży) (700014686X00L)')
+            ->assertJsonPath('data.0.decision_input', null);
+        $this->getJson('/api/card-matches?kind=split')->assertJsonPath('data.0.plan.suggested', null);
+        $this->getJson('/api/card-matches?kind=merge')->assertJsonPath('data.0.id', $pair->id)->assertJsonPath('data.0.decision_input', null);
     }
 
     private function countQueries(string $url): int

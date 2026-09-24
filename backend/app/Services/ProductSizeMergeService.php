@@ -18,12 +18,14 @@ use App\Models\ProductSourcePrice;
 use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
 use App\Services\B2b\B2bCatalogSync;
+use App\Services\Catalog\CardOwnership;
 use App\Services\Catalog\CardRedirectStore;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Support\ProductSizeVariant;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use InvalidArgumentException;
 use Throwable;
 
 final class ProductSizeMergeService
@@ -32,6 +34,7 @@ final class ProductSizeMergeService
         private readonly ProductSizeVariant $sizes,
         private readonly ProductEffectivePrice $effectivePrices,
         private readonly CardRedirectStore $redirects,
+        private readonly CardOwnership $ownership,
     ) {}
 
     /**
@@ -204,6 +207,215 @@ final class ProductSizeMergeService
     public function mergeDuplicate(Product $keep, Product $drop): void
     {
         $this->absorb($keep, [$drop], null, true, 'merged_duplicate_skus');
+    }
+
+    /**
+     * Łączenie rozmiarów z decyzji człowieka (ekran „Łączenie kart”, zakładka „Łączenie rozmiarów”, plan łączenia kart,
+     * krok 6): karty rozmiarów $drops wchodzą w kartę modelu $keep. Przykład z produkcji: 3M ma kartę na rozmiar
+     * (6100 S #40819, 6200 M #40815, 6300 L #40814) — zostaje #40819 z nazwą „6X00 Półmaska 3M 6000” i listą rozmiarów.
+     *
+     * Inaczej niż absorb (łączenie automatyczne): tożsamość $keep (id, SKU, packaging, opis, producent) zostaje, nazwa
+     * i lista rozmiarów pochodzą z decyzji człowieka, a przy tym samym źródle wygrywa zawsze $keep (slot ceny, tabelka
+     * sklepu właściciela, zdjęcie główne) — to jego pozycja jest wiodąca w mapie połączeń (card_redirects.is_anchor)
+     * i to z niej synchronizacja dalej odświeża cenę, opis i zdjęcia. Historia cen łączonych kart znika (jest w kopii
+     * zapasowej wywołującego): wiersze trzech rozmiarów na jednej karcie wyglądałyby jak skoki ceny jednego wyrobu.
+     *
+     * Wołać w transakcji wywołującego PO CardRedirectStore::recordSizeMerge (powiązania i identyfikatory są wtedy
+     * jeszcze na kartach źródłowych). Warunki (ta sama marka, brak wersji, przetargów itp.) sprawdza wywołujący.
+     *
+     * @param  list<Product>  $drops  karty łączone (bez $keep, co najmniej jedna)
+     * @return array{image_ids_keep: list<int>, image_ids_drops: list<int>} zdjęcia $keep sprzed łączenia (główne
+     *                                                                      pierwsze) i przeniesione z $drops — do orderSizeMergeImages
+     */
+    public function mergeSizeCards(Product $keep, array $drops, string $name, string $variantSummary): array
+    {
+        $drops = array_values(array_filter($drops, static fn (Product $p): bool => (int) $p->id !== (int) $keep->id));
+        if ($drops === []) {
+            throw new InvalidArgumentException('Łączenie rozmiarów wymaga co najmniej jednej karty poza kartą, która zostaje.');
+        }
+        $name = mb_substr(trim($name), 0, 1000);
+        if ($name === '') {
+            throw new InvalidArgumentException('Nazwa karty modelu nie może być pusta.');
+        }
+        $keepId = (int) $keep->id;
+        $dropIds = array_map(static fn (Product $p): int => (int) $p->id, $drops);
+        $map = array_fill_keys($dropIds, $keepId);
+
+        return DB::transaction(function () use ($keep, $drops, $name, $variantSummary, $keepId, $dropIds, $map): array {
+            // właściciele przed przeniesieniem powiązań — potem karty łączone nie mają już żadnego
+            $ownerAccounts = [];
+            foreach ([$keep, ...$drops] as $card) {
+                foreach ($this->ownership->ownerSourceKeys($card) as $key) {
+                    if (str_starts_with($key, 'b2b:')) {
+                        $ownerAccounts[(int) substr($key, 4)] = true;
+                    }
+                }
+            }
+
+            // 1) odwołania
+            $this->remapTenderItems($map);
+            $this->remapSubstitutes($keepId, $dropIds);
+            $this->remapPresta($keepId, $dropIds);
+            $this->remapPriceLists($map);
+
+            // 2) zdjęcia: główne i kolejność $keep zostają, przeniesione na koniec (od 1000)
+            $keepImageIds = $this->imageIds([$keepId]);
+            $dropImageIds = $this->imageIds($dropIds);
+            $this->moveMedia($keep, $dropIds);
+            $moved = ProductImage::query()
+                ->where('product_id', $keepId)
+                ->whereIn('id', $dropImageIds === [] ? [0] : $dropImageIds)
+                ->get()
+                ->keyBy('id');
+            $movedIds = [];
+            foreach ($dropImageIds as $id) {
+                $image = $moved->get($id);
+                if ($image === null) {
+                    continue; // duplikat (ta sama suma) — usunięty w moveMedia
+                }
+                $position = 1000 + count($movedIds);
+                if ((bool) $image->is_primary || (int) $image->sort_order !== $position) {
+                    $image->forceFill(['is_primary' => false, 'sort_order' => $position])->save();
+                }
+                $movedIds[] = $id;
+            }
+
+            // 3) historia cen: tylko $keep (łączonych — w kopii zapasowej wywołującego)
+            if (Schema::hasTable('product_price_history')) {
+                ProductPriceHistory::query()->whereIn('product_id', $dropIds)->delete();
+            }
+
+            // 4–6) sloty, powiązania, tabelki
+            $this->moveSourcePricesKeeperFirst($keepId, $dropIds);
+            $this->moveB2bLinks($keepId, $dropIds);
+            $this->moveShopCardsKeeperFirst($keepId, $dropIds, array_keys($ownerAccounts));
+
+            // 7) odrzucone zdjęcia, identyfikatory, mapa połączeń
+            $this->moveImageRejections($keepId, $dropIds);
+            ProductIdentifier::query()->whereIn('product_id', $dropIds)->update(['product_id' => $keepId]);
+            $this->redirects->repoint($dropIds, $keepId);
+
+            // 8) karta modelu: nazwa i lista rozmiarów z decyzji; SKU, packaging, opis i producent bez zmian
+            $payload = is_array($keep->enrichment_payload) ? $keep->enrichment_payload : [];
+            $mergedSkus = is_array($payload['merged_size_skus'] ?? null) ? $payload['merged_size_skus'] : [];
+            $stock = (int) $keep->stock;
+            $category = trim((string) $keep->category);
+            $sizes = [['product_id' => $keepId, 'sku' => (string) $keep->sku]];
+            foreach ($drops as $drop) {
+                // łączona karta modelu z wcześniejszego łączenia — jej scalone kody też zostają na liście
+                $dropPayload = is_array($drop->enrichment_payload) ? $drop->enrichment_payload : [];
+                array_push($mergedSkus, ...(is_array($dropPayload['merged_size_skus'] ?? null) ? array_values($dropPayload['merged_size_skus']) : []));
+                $mergedSkus[] = (string) $drop->sku;
+                $stock += (int) $drop->stock;
+                if ($category === '' && trim((string) $drop->category) !== '') {
+                    $category = trim((string) $drop->category);
+                }
+                $sizes[] = ['product_id' => (int) $drop->id, 'sku' => (string) $drop->sku];
+            }
+            $payload['merged_size_skus'] = array_values(array_unique(array_filter(array_map('strval', $mergedSkus))));
+            $payload['size_merge'] = ['at' => now()->toIso8601String(), 'sizes' => $sizes];
+            $summary = trim($variantSummary);
+            $keep->forceFill([
+                'name' => $name,
+                'variant_summary' => $summary === '' ? null : mb_substr($summary, 0, B2bCatalogSync::VARIANT_SUMMARY_LIMIT),
+                'stock' => $stock,
+                'category' => $category === '' ? $keep->category : $category,
+                'enrichment_payload' => $payload,
+            ]);
+            // zwykły save(): hak modelu przelicza indeks tekstowy (nazwa i lista rozmiarów to kolumny wyszukiwania)
+            $keep->save();
+
+            // 9) karty łączone znikają (ich wiersze są już przeniesione albo w kopii zapasowej)
+            Product::query()->whereIn('id', $dropIds)->delete();
+            B2bCatalogSync::refreshShopFieldsSummary($keep);
+            $this->effectivePrices->refresh($keep);
+            DB::afterCommit(static function () use ($keepId): void {
+                try {
+                    ReindexProductEmbeddingJob::dispatch($keepId, true);
+                } catch (Throwable) {
+                    // kolejka embeddingów nie blokuje łączenia
+                }
+            });
+
+            return ['image_ids_keep' => $keepImageIds, 'image_ids_drops' => $movedIds];
+        });
+    }
+
+    /**
+     * Kolejność zdjęć karty modelu po łączeniu rozmiarów i dołączeniu karty dystrybutora: zdjęcia $keep (jak były,
+     * pierwsze główne), potem pozostałe (np. przeniesione z karty dystrybutora), na końcu zdjęcia kart łączonych od
+     * 1000 — ProductImage::resequence z kontem producenta (3M) stawia jego zdjęcia przed dystrybutorem po sort_order,
+     * więc zdjęcie główne dalej pochodzi z pozycji wiodącej. Zapis tylko wierszy, które się zmieniają.
+     *
+     * @param  list<int>  $keepImageIds  image_ids_keep z mergeSizeCards
+     * @param  list<int>  $dropImageIds  image_ids_drops z mergeSizeCards
+     */
+    public function orderSizeMergeImages(Product $keep, array $keepImageIds, array $dropImageIds): void
+    {
+        $images = ProductImage::query()
+            ->where('product_id', $keep->id)
+            ->orderByDesc('is_primary')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get()
+            ->keyBy('id');
+        $head = [];
+        foreach ($keepImageIds as $id) {
+            if ($images->has($id)) {
+                $head[] = $images->get($id);
+                $images->forget($id);
+            }
+        }
+        $tail = [];
+        foreach ($dropImageIds as $id) {
+            if ($images->has($id)) {
+                $tail[] = $images->get($id);
+                $images->forget($id);
+            }
+        }
+        $ordered = [];
+        foreach ([...$head, ...$images->values()->all()] as $position => $image) {
+            $ordered[] = [$image, $position];
+        }
+        foreach ($tail as $i => $image) {
+            $ordered[] = [$image, 1000 + $i];
+        }
+
+        foreach ($ordered as $index => [$image, $position]) {
+            $primary = $index === 0;
+            if ((int) $image->sort_order !== $position || (bool) $image->is_primary !== $primary) {
+                $image->forceFill(['sort_order' => $position, 'is_primary' => $primary])->save();
+            }
+        }
+    }
+
+    /**
+     * Zdjęcia kart w kolejności: karty jak na liście, w karcie główne pierwsze, potem sort_order i id.
+     *
+     * @param  list<int>  $productIds
+     * @return list<int>
+     */
+    private function imageIds(array $productIds): array
+    {
+        if (! Schema::hasTable('product_images') || $productIds === []) {
+            return [];
+        }
+        $rows = ProductImage::query()
+            ->whereIn('product_id', $productIds)
+            ->orderByDesc('is_primary')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get(['id', 'product_id']);
+        $ids = [];
+        foreach ($productIds as $productId) {
+            foreach ($rows as $row) {
+                if ((int) $row->product_id === $productId) {
+                    $ids[] = (int) $row->id;
+                }
+            }
+        }
+
+        return $ids;
     }
 
     /** Klucz kodu w mapie kart modelu — z producentem, bo merge(null) obejmuje cały katalog. */
@@ -435,7 +647,15 @@ final class ProductSizeMergeService
         }
         foreach ($map as $from => $to) {
             TenderItem::query()->where('main_product_id', $from)->update(['main_product_id' => $to]);
+            // produkt dodatkowy pozycji (np. filtr do półmaski) — usunięcie karty wyzerowałoby go po cichu (nullOnDelete)
+            TenderItem::query()->where('companion_product_id', $from)->update(['companion_product_id' => $to]);
         }
+        // produkt dodatkowy równy głównemu po scaleniu (półmaska i jej duplikat jako „drugi”) to ta sama karta — ekran
+        // przetargu nie dopuszcza takiej pary, więc dodatkowy znika zamiast wskazywać produkt główny
+        TenderItem::query()
+            ->whereIn('main_product_id', array_values(array_unique(array_map('intval', $map))))
+            ->whereColumn('companion_product_id', 'main_product_id')
+            ->update(['companion_product_id' => null]);
     }
 
     /**
@@ -556,6 +776,92 @@ final class ProductSizeMergeService
             $slot->product_id = $winnerId;
             $slot->save();
             $kept[$key] = $slot;
+        }
+    }
+
+    /**
+     * Sloty cen przy łączeniu rozmiarów (mergeSizeCards): slot $keep o danym source_key zostaje zawsze — to cena
+     * pozycji wiodącej, z której synchronizacja dalej go odświeża; sloty łączonych kart o tym źródle znikają (są
+     * w kopii zapasowej). Źródło, którego $keep nie ma, przechodzi ze slotem o najnowszym checked_at.
+     *
+     * @param  list<int>  $dropIds
+     */
+    private function moveSourcePricesKeeperFirst(int $keepId, array $dropIds): void
+    {
+        if (! Schema::hasTable('product_source_prices') || $dropIds === []) {
+            return;
+        }
+        $keepKeys = array_fill_keys(
+            ProductSourcePrice::query()->where('product_id', $keepId)->pluck('source_key')->map(static fn ($k): string => (string) $k)->all(),
+            true,
+        );
+        /** @var array<string, ProductSourcePrice> $best */
+        $best = [];
+        foreach (ProductSourcePrice::query()->whereIn('product_id', $dropIds)->orderBy('id')->get() as $slot) {
+            $key = (string) $slot->source_key;
+            if (isset($keepKeys[$key])) {
+                $slot->delete();
+
+                continue;
+            }
+            $current = $best[$key] ?? null;
+            if ($current !== null) {
+                if (($slot->checked_at?->getTimestamp() ?? 0) <= ($current->checked_at?->getTimestamp() ?? 0)) {
+                    $slot->delete();
+
+                    continue;
+                }
+                $current->delete();
+            }
+            $best[$key] = $slot;
+        }
+        foreach ($best as $slot) {
+            $slot->product_id = $keepId;
+            $slot->save();
+        }
+    }
+
+    /**
+     * Tabelki sklepu przy łączeniu rozmiarów: konto-właściciel którejkolwiek karty (3M) — tylko tabelka $keep, bo
+     * pozycja wiodąca odświeża ją dalej, a tabelki pozostałych rozmiarów opisywałyby inny rozmiar (usunięte, są
+     * w kopii zapasowej); inne konta — tabelka $keep, a gdy jej nie ma, najnowsza z łączonych kart.
+     *
+     * @param  list<int>  $dropIds
+     * @param  list<int>  $ownerAccountIds
+     */
+    private function moveShopCardsKeeperFirst(int $keepId, array $dropIds, array $ownerAccountIds): void
+    {
+        if (! Schema::hasTable('product_shop_cards') || $dropIds === []) {
+            return;
+        }
+        $owners = array_fill_keys($ownerAccountIds, true);
+        $keepAccounts = array_fill_keys(
+            ProductShopCard::query()->where('product_id', $keepId)->pluck('b2b_account_id')->map(static fn ($id): int => (int) $id)->all(),
+            true,
+        );
+        /** @var array<int, ProductShopCard> $best */
+        $best = [];
+        foreach (ProductShopCard::query()->whereIn('product_id', $dropIds)->orderBy('id')->get() as $card) {
+            $accountId = (int) $card->b2b_account_id;
+            if (isset($owners[$accountId]) || isset($keepAccounts[$accountId])) {
+                $card->delete();
+
+                continue;
+            }
+            $current = $best[$accountId] ?? null;
+            if ($current !== null) {
+                if (($card->synced_at?->getTimestamp() ?? 0) <= ($current->synced_at?->getTimestamp() ?? 0)) {
+                    $card->delete();
+
+                    continue;
+                }
+                $current->delete();
+            }
+            $best[$accountId] = $card;
+        }
+        foreach ($best as $card) {
+            $card->product_id = $keepId;
+            $card->save();
         }
     }
 

@@ -222,6 +222,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::post('/card-matches/{candidate}/merge', [CardMatchController::class, 'merge'])
         ->whereNumber('candidate')
         ->middleware('permission:card_matches.decide');
+    Route::post('/card-matches/{candidate}/merge-sizes', [CardMatchController::class, 'mergeSizes'])
+        ->whereNumber('candidate')
+        ->middleware('permission:card_matches.decide');
     Route::post('/card-matches/{candidate}/reject', [CardMatchController::class, 'reject'])
         ->whereNumber('candidate')
         ->middleware('permission:card_matches.decide');

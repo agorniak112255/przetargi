@@ -72,6 +72,7 @@ class CardMatchCandidate extends Model
         'plan',
         'targets_key',
         'plan_hash',
+        'decision_input',
         'source_snapshot',
         'backup_path',
         'decided_by',
@@ -89,6 +90,7 @@ class CardMatchCandidate extends Model
             'conflict_product_ids' => 'array',
             'plan' => 'array',
             'source_snapshot' => 'array',
+            'decision_input' => 'array',
             'decided_at' => 'datetime',
             'last_seen_at' => 'datetime',
         ];

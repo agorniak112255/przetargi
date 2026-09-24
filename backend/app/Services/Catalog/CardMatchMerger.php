@@ -32,8 +32,11 @@ use JsonException;
  */
 final class CardMatchMerger
 {
-    /** tabela => kolumna karty — wiersze obu kart, które mergeDuplicate przenosi albo kasuje (kopia zapasowa) */
-    private const BACKUP_TABLES = [
+    /**
+     * tabela => kolumna karty — wiersze obu kart, które mergeDuplicate przenosi albo kasuje (kopia zapasowa); te same
+     * tabele w kopii łączenia rozmiarów (CardMatchSizeMerger)
+     */
+    public const BACKUP_TABLES = [
         'b2b_product_links' => 'product_id',
         'product_source_prices' => 'product_id',
         'product_shop_cards' => 'product_id',
@@ -87,8 +90,9 @@ final class CardMatchMerger
                 if ($target === null) {
                     throw new DomainException('Karta producenta #'.($locked->target_product_id ?? '—').' już nie istnieje — odśwież propozycje.');
                 }
+                // strażnicy i ponowna weryfikacja przed kopią zapasową — odmowa nie zostawia pliku kopii
                 $this->guard($source, $target);
-                $this->verify($locked, $source);
+                $this->verifyPair($source, (int) $locked->target_product_id);
 
                 $backupPath = $this->writeBackup($locked, $source, $target, $user);
                 $snapshot = [
@@ -96,28 +100,7 @@ final class CardMatchMerger
                     'name' => (string) $source->name,
                     'manufacturer' => (string) $source->manufacturer,
                 ];
-                $sourceCategory = trim((string) $source->category);
-                $targetImages = ProductImage::query()
-                    ->where('product_id', $target->id)
-                    ->orderByDesc('is_primary')
-                    ->orderBy('sort_order')
-                    ->orderBy('id')
-                    ->pluck('id')
-                    ->map(static fn (mixed $id): int => (int) $id)
-                    ->all();
-
-                // mapa połączeń przed scaleniem — powiązania i identyfikatory są jeszcze na karcie dystrybutora
-                $this->redirects->recordMerge($source, $target, CardRedirect::REASON_MERGE, $locked, $user);
-                $this->sizeMerge->mergeDuplicate($target, $source);
-
-                $this->keepTargetImageOrder((int) $target->id, $targetImages);
-                $target->refresh();
-                // jak products:merge-duplicate: pusta kategoria karty producenta bierze kategorię duplikatu
-                if (trim((string) $target->category) === '' && $sourceCategory !== '') {
-                    $target->category = $sourceCategory;
-                    // zwykły save(): hak modelu przelicza indeks tekstowy i zleca reindeks wektora
-                    $target->save();
-                }
+                $this->attach($locked, $source, $target, $user, true);
 
                 $locked->forceFill([
                     'status' => CardMatchCandidate::STATUS_MERGED,
@@ -139,6 +122,55 @@ final class CardMatchMerger
         }
 
         return $candidate->refresh();
+    }
+
+    /**
+     * Dołączenie karty dystrybutora do karty producenta w transakcji wywołującego: strażnicy, ponowna weryfikacja
+     * (verifyPair), mapa połączeń (reason merge, $candidate), scalenie (mergeDuplicate), kolejność zdjęć (gdy
+     * $orderImages) i kategoria. Bez kopii zapasowej i bez zmiany statusu propozycji — to robi wywołujący. Łączenie
+     * rozmiarów (CardMatchSizeMerger) dołącza tak kartę P4S 6X00 do karty modelu 3M po połączeniu jej rozmiarów,
+     * a kolejność zdjęć ustawia samo (zdjęcia kart rozmiarów na końcu).
+     *
+     * @throws DomainException z powodem po polsku (wywołujący wycofuje transakcję)
+     */
+    public function attachWithin(CardMatchCandidate $candidate, Product $source, Product $target, User $user, bool $orderImages = true): void
+    {
+        $this->guard($source, $target);
+        $this->verifyPair($source, (int) $target->id);
+        $this->attach($candidate, $source, $target, $user, $orderImages);
+    }
+
+    /**
+     * Mapa połączeń przed scaleniem (powiązania i identyfikatory są jeszcze na karcie dystrybutora), scalenie,
+     * kolejność zdjęć i kategoria — po strażnikach i weryfikacji.
+     */
+    private function attach(CardMatchCandidate $candidate, Product $source, Product $target, User $user, bool $orderImages): void
+    {
+        $sourceCategory = trim((string) $source->category);
+        $targetImages = $orderImages
+            ? ProductImage::query()
+                ->where('product_id', $target->id)
+                ->orderByDesc('is_primary')
+                ->orderBy('sort_order')
+                ->orderBy('id')
+                ->pluck('id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->all()
+            : [];
+
+        $this->redirects->recordMerge($source, $target, CardRedirect::REASON_MERGE, $candidate, $user);
+        $this->sizeMerge->mergeDuplicate($target, $source);
+
+        if ($orderImages) {
+            $this->keepTargetImageOrder((int) $target->id, $targetImages);
+        }
+        $target->refresh();
+        // jak products:merge-duplicate: pusta kategoria karty producenta bierze kategorię duplikatu
+        if (trim((string) $target->category) === '' && $sourceCategory !== '') {
+            $target->category = $sourceCategory;
+            // zwykły save(): hak modelu przelicza indeks tekstowy i zleca reindeks wektora
+            $target->save();
+        }
     }
 
     /**
@@ -199,13 +231,11 @@ final class CardMatchMerger
         if ($kind === CardMatchCandidate::KIND_MERGE) {
             return;
         }
-        $what = match ($kind) {
-            CardMatchCandidate::KIND_SIZE_MERGE => 'łączenie rozmiarów',
-            CardMatchCandidate::KIND_SPLIT => 'rozdzielanie',
-            default => 'nieznany rodzaj („'.$kind.'”)',
-        };
-
-        throw new DomainException('Ta propozycja to '.$what.' — ta decyzja będzie dostępna w kolejnej wersji ekranu. Możesz ją odrzucić.');
+        throw new DomainException(match ($kind) {
+            CardMatchCandidate::KIND_SIZE_MERGE => 'Ta propozycja to łączenie rozmiarów — połącz ją przyciskiem „Połącz rozmiary” na zakładce „Łączenie rozmiarów” albo odrzuć.',
+            CardMatchCandidate::KIND_SPLIT => 'Ta propozycja to rozdzielanie — ta decyzja będzie dostępna w kolejnej wersji ekranu. Możesz ją odrzucić.',
+            default => 'Ta propozycja ma nieznany rodzaj („'.$kind.'”) — nie da się jej połączyć. Możesz ją odrzucić.',
+        });
     }
 
     /**
@@ -237,8 +267,8 @@ final class CardMatchMerger
         }
     }
 
-    /** Ponowna weryfikacja kluczem: ten sam cel i pewna para (nie konflikt). */
-    private function verify(CardMatchCandidate $candidate, Product $source): void
+    /** Ponowna weryfikacja kluczem: ta sama karta producenta ($expectedTargetId) i pewna para (nie konflikt). */
+    private function verifyPair(Product $source, int $expectedTargetId): void
     {
         $result = $this->container->make(CardMatchFinder::class)->evaluate($source, true);
         if ($result === null) {
@@ -257,7 +287,7 @@ final class CardMatchMerger
 
             throw new DomainException('Ponowne sprawdzenie dało propozycję niepewną'.($reason !== '' ? ': '.$reason : '').'.');
         }
-        if ($targetId !== (int) $candidate->target_product_id) {
+        if ($targetId !== $expectedTargetId) {
             throw new DomainException('Klucz wskazuje teraz inną kartę producenta (#'.($targetId ?? '—').') — odśwież propozycje.');
         }
     }

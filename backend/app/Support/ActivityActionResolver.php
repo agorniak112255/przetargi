@@ -116,6 +116,7 @@ final class ActivityActionResolver
             ['POST', '#^card-matches/refresh$#', 'card_match.refreshed', 'Odświeżono propozycje łączenia kart'],
             ['POST', '#^card-matches/bulk$#', 'card_match.bulk', 'Łączenie kart zbiorczo'],
             ['POST', '#^card-matches/\d+/merge$#', 'card_match.merged', 'Połączono kartę dystrybutora z kartą producenta'],
+            ['POST', '#^card-matches/\d+/merge-sizes$#', 'card_match.sizes_merged', 'Połączono karty rozmiarów w kartę modelu'],
             ['POST', '#^card-matches/\d+/reject$#', 'card_match.rejected', 'Odrzucono propozycję łączenia kart'],
             ['POST', '#^product-enrichment-batches/\d+/cancel$#', 'product.enrichment_cancelled', 'Anulowano wzbogacanie'],
             ['POST', '#^product-enrichment-batches/stop-all$#', 'product.enrichment_cancelled', 'Zatrzymano wszystkie pobierania opisów'],
