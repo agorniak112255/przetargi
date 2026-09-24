@@ -15,3 +15,11 @@ body {
 #root {
   min-height: 100vh;
 }
+
+/* Pasek akcji odpowiedzi na zapytanie przykleja się u góry ekranu (sticky). Przewija się cała
+   strona, a obszar główny z overflow:auto łapie sticky w swoim pudełku, które się nie przewija —
+   więc na tym ekranie nie jest kontenerem przewijania. Inne ekrany bez zmian. */
+.app-main:has(.app-inquiry-reply) {
+  overflow: visible;
+  min-width: 0;
+}

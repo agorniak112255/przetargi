@@ -729,6 +729,197 @@ function termsPayload(draft: TermsDraft): InquiryTerms {
   }
 }
 
+/**
+ * List w oknie: tak, jak zobaczy go klient (z tabelą), albo pole do ręcznej poprawki treści.
+ * Ręczna poprawka zapisana na serwerze kasuje tabelę — do maila idzie wtedy sam tekst.
+ */
+function ReplyPreviewModal({
+  subject,
+  body,
+  html,
+  locked,
+  saving,
+  msg,
+  err,
+  editHint,
+  onSubject,
+  onBody,
+  onSave,
+  onCopyWithTable,
+  onCopyBody,
+  onClose,
+}: {
+  subject: string
+  body: string
+  html: string | null
+  locked: boolean
+  saving: boolean
+  msg: string
+  err: string
+  editHint: string
+  onSubject: (value: string) => void
+  onBody: (value: string) => void
+  onSave: () => void
+  onCopyWithTable: () => void
+  onCopyBody: () => void
+  onClose: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const showText = editing || !html
+  const boxRef = useRef<HTMLDivElement>(null)
+  // Zaznaczanie tekstu w polu treści kończone poza oknem to „kliknięcie” w tło — nie zamyka okna.
+  const downOnBackdrop = useRef(false)
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    boxRef.current?.focus()
+    return () => previous?.focus?.()
+  }, [])
+
+  useEffect(() => {
+    // Nasłuch w fazie capture, jak w innych oknach: Escape zamyka tylko to wierzchnie.
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4"
+      onMouseDown={(e) => {
+        downOnBackdrop.current = e.target === e.currentTarget
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && downOnBackdrop.current) onClose()
+      }}
+    >
+      <div
+        ref={boxRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="reply-preview-title"
+        tabIndex={-1}
+        className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-xl outline-none"
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+          <p id="reply-preview-title" className="text-sm font-semibold text-slate-800">
+            Podgląd odpowiedzi
+          </p>
+          <div className="flex items-center gap-2">
+            {saving && <span className="text-[11px] text-slate-400">Zapisuję…</span>}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Zamknij podgląd"
+              className="rounded px-2 py-0.5 text-sm text-slate-500 hover:bg-slate-100"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
+          <label className="block text-xs font-medium text-slate-600">
+            Temat
+            <input
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+              value={subject}
+              disabled={locked}
+              onChange={(e) => onSubject(e.target.value)}
+              onBlur={onSave}
+            />
+          </label>
+          {showText ? (
+            <label className="block text-xs font-medium text-slate-600">
+              Treść
+              <textarea
+                className="mt-1 min-h-[420px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm leading-relaxed"
+                value={body}
+                disabled={locked}
+                onChange={(e) => onBody(e.target.value)}
+                onBlur={onSave}
+              />
+            </label>
+          ) : (
+            <div>
+              <p className="text-xs font-medium text-slate-600">List tak, jak zobaczy go klient</p>
+              {/* Treść z naszego serwera, zbudowana z danych zapytania — bez znaczników od klienta. */}
+              <div
+                className="mt-1 overflow-x-auto rounded border border-slate-200 bg-white p-3"
+                dangerouslySetInnerHTML={{ __html: html ?? '' }}
+              />
+            </div>
+          )}
+          <p className="text-[11px] text-slate-400">
+            {showText
+              ? editHint
+              : 'Do maila pójdzie tabela: po lewej pozycja z zapytania, po prawej nasza propozycja.'}
+          </p>
+          {editing && html && (
+            <p className="text-[11px] text-amber-800">
+              Zapisana poprawka treści usuwa tabelę — do maila pójdzie sam tekst. Tabela wróci po zmianie
+              wyboru produktu lub cen.
+            </p>
+          )}
+          {!html && (
+            <p className="text-[11px] text-slate-400">
+              Po ręcznej poprawce treści wysyłamy sam tekst, bez tabeli. Tabela wróci po zmianie wyboru
+              produktu lub cen.
+            </p>
+          )}
+        </div>
+
+        <div className="border-t border-slate-100 px-4 py-3">
+          {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
+          {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+          <div className="flex flex-wrap items-center gap-2">
+            {html && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={onCopyWithTable}
+                title="Wkleja się do Outlooka, Gmaila i innej poczty razem z tabelą"
+                className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                Kopiuj z tabelą (HTML)
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={saving}
+              onClick={onCopyBody}
+              className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+            >
+              Kopiuj treść
+            </button>
+            {html && !locked && (
+              <button
+                type="button"
+                onClick={() => setEditing((on) => !on)}
+                className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
+              >
+                {editing ? 'Pokaż list z tabelą' : 'Popraw treść ręcznie'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
+            >
+              Zamknij
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function InquiryReply() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -756,6 +947,7 @@ export function InquiryReply() {
   const [previewQuery, setPreviewQuery] = useState('')
   const [searchFor, setSearchFor] = useState<SearchFor | null>(null)
   const [contactOpen, setContactOpen] = useState(false)
+  const [replyOpen, setReplyOpen] = useState(false)
   const composeSec = useBusySeconds(composeBusy)
 
   // Treść zapisana na serwerze (PATCH) — do wykrywania niezapisanych edycji.
@@ -1177,7 +1369,7 @@ export function InquiryReply() {
         }
 
   return (
-    <div className="space-y-4">
+    <div className="app-inquiry-reply space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-lg font-semibold">Odpowiedź na zapytanie</h1>
@@ -1210,302 +1402,265 @@ export function InquiryReply() {
       <p className={`rounded px-3 py-2 text-sm font-medium ${banner.cls}`}>{banner.text}</p>
       {omitted.length > 0 && <OmittedItemsBar list={omitted} limit={inquiry.omitted_limit} />}
 
-      {msg && <p className="rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
-      {err && <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {/* Przyciski listu zostają u góry ekranu przy przewijaniu pozycji (reguła .app-inquiry-reply w index.css). */}
+      <div className="sticky top-0 z-30 rounded-xl bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200">
+        <div className="flex flex-wrap items-center gap-2">
+          {!readOnly && inquiry.source_message_id && (
+            <button
+              type="button"
+              disabled={busy || saving}
+              onClick={() => void sendViaThunderbird()}
+              className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              Zapisz i wyślij w Thunderbirdzie
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setReplyOpen(true)}
+            className="rounded border border-slate-300 px-3 py-1.5 text-xs font-medium hover:bg-slate-50"
+          >
+            Podgląd odpowiedzi
+          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              disabled={busy || saving}
+              onClick={() => void copyAndMarkSent()}
+              className={
+                inquiry.source_message_id
+                  ? 'rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50'
+                  : 'rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50'
+              }
+            >
+              Kopiuj i oznacz jako wysłane
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={busy || saving}
+            onClick={() => void copyBody()}
+            className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+          >
+            Kopiuj treść
+          </button>
+          {inquiry.reply_html && (
+            <button
+              type="button"
+              disabled={busy || saving}
+              onClick={() => void copyWithTable()}
+              title="Wkleja się do Outlooka, Gmaila i innej poczty razem z tabelą"
+              className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+            >
+              Kopiuj z tabelą (HTML)
+            </button>
+          )}
+          {!readOnly && inquiry.send_requested_at && (
+            <button
+              type="button"
+              disabled={locked}
+              onClick={() => void cancelThunderbird()}
+              className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+            >
+              Anuluj wysyłkę
+            </button>
+          )}
+          {!readOnly && inquiry.replied_at && (
+            <button
+              type="button"
+              disabled={locked}
+              onClick={() => void unmarkSent()}
+              className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+            >
+              Cofnij oznaczenie
+            </button>
+          )}
+          <Link
+            to="/inquiries"
+            className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
+          >
+            Wróć do zapytań
+          </Link>
+          {!readOnly && (
+            <button
+              type="button"
+              disabled={busy || saving}
+              onClick={() => void removeInquiry()}
+              className="rounded border border-red-300 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+            >
+              Usuń zapytanie
+            </button>
+          )}
+          {saving && <span className="text-[11px] text-slate-400">Zapisuję…</span>}
+          {busy && (
+            <span className="text-xs text-violet-800">
+              <BusyLabel label="Piszę list" seconds={composeSec} />
+            </span>
+          )}
+        </div>
+        {/* Komunikaty w pasku — widać je także przy pozycji na dole listy. */}
+        {!readOnly && inquiry.send_requested_at && (
+          <p className="mt-2 text-[11px] text-slate-500">
+            List czeka na Thunderbirda — otworzy okno odpowiedzi w ciągu kilku sekund. Maila wysyłasz sam, z
+            Thunderbirda.
+          </p>
+        )}
+        {msg && <p className="mt-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
+        {err && <p className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      </div>
+
+      <div className="rounded-xl bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">Pozycje</h2>
+          {busy ? (
+            <span className="text-xs text-violet-800">
+              <BusyLabel label="Piszę list" seconds={composeSec} />
+            </span>
+          ) : readOnly ? null : (
+            <span className="text-[11px] text-slate-400">Kliknięcie alternatywy od razu przepisuje list.</span>
+          )}
+        </div>
+        {inquiry.items.length === 0 ? (
+          <p className="text-xs text-slate-500">Brak pozycji.</p>
+        ) : (
+          <div className="@container space-y-3">
+            <div
+              className={`hidden text-[11px] font-semibold uppercase tracking-wide text-slate-500 @2xl:grid ${itemGrid}`}
+            >
+              <span className="px-3">Poz. · status</span>
+              <span className="px-3">Klient napisał</span>
+              <span className="px-3">Nasza propozycja</span>
+            </div>
+            {inquiry.items.map((item, i) => (
+              <ItemRow
+                key={item.id}
+                item={item}
+                index={i}
+                priceMode={inquiry.price.mode}
+                answers={inquiry.answers}
+                busy={locked}
+                customDrafts={customDrafts}
+                onCustomDraft={(cardId, v) => setCustomDrafts((d) => ({ ...d, [cardId]: v }))}
+                onAnswer={onAnswer}
+                manualDraft={manualDrafts[item.id] ?? ''}
+                onManualDraft={(v) => setManualDrafts((d) => ({ ...d, [item.id]: v }))}
+                onManualPriceBlur={() => onManualPriceBlur(item)}
+                onPreview={(pid, q) => {
+                  setPreviewId(pid)
+                  setPreviewQuery(q.trim())
+                }}
+                onSearch={(mode) =>
+                  setSearchFor({
+                    itemId: item.id,
+                    mode,
+                    query: (item.query ?? item.quote ?? '').trim(),
+                  })
+                }
+              />
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="grid items-start gap-4 lg:grid-cols-2">
-        <div className="space-y-4">
-          <div className="rounded-xl bg-white p-4 shadow-sm">
-            <label className="block text-xs font-medium text-slate-600">
-              Temat
-              <input
-                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-                value={subject}
+        <div className="rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="mb-2 text-sm font-semibold">Dla całej oferty</h2>
+          <p className="text-xs font-semibold text-slate-700">Szablon listu</p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {toneOptions.map((opt) => (
+              <Chip
+                key={opt.id}
+                active={inquiry.tone === opt.id}
                 disabled={locked}
-                onChange={(e) => setSubject(e.target.value)}
-                onBlur={() => void saveEdits().catch(() => undefined)}
-              />
-            </label>
-            <label className="mt-3 block text-xs font-medium text-slate-600">
-              Treść
-              <textarea
-                className="mt-1 min-h-[420px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm leading-relaxed"
-                value={body}
+                onClick={() => onTone(opt.id)}
+              >
+                {opt.label}
+              </Chip>
+            ))}
+          </div>
+          <p className="mt-1 text-[11px] text-slate-500">{toneHint(inquiry.tone)}</p>
+          <p className="mt-3 text-xs font-semibold text-slate-700">Ceny w liście</p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {priceModeOptions.map((opt) => (
+              <Chip
+                key={opt.id}
+                active={inquiry.price.mode === opt.id}
                 disabled={locked}
-                onChange={(e) => setBody(e.target.value)}
-                onBlur={() => void saveEdits().catch(() => undefined)}
-              />
-            </label>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {!readOnly && inquiry.source_message_id && (
-                <button
-                  type="button"
-                  disabled={busy || saving}
-                  onClick={() => void sendViaThunderbird()}
-                  className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-                >
-                  Zapisz i wyślij w Thunderbirdzie
-                </button>
-              )}
-              {!readOnly && (
-                <button
-                  type="button"
-                  disabled={busy || saving}
-                  onClick={() => void copyAndMarkSent()}
-                  className={
-                    inquiry.source_message_id
-                      ? 'rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50'
-                      : 'rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50'
-                  }
-                >
-                  Kopiuj i oznacz jako wysłane
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={busy || saving}
-                onClick={() => void copyBody()}
-                className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+                onClick={() => onPriceMode(opt.id)}
               >
-                Kopiuj treść
-              </button>
-              {inquiry.reply_html && (
-                <button
-                  type="button"
-                  disabled={busy || saving}
-                  onClick={() => void copyWithTable()}
-                  title="Wkleja się do Outlooka, Gmaila i innej poczty razem z tabelą"
-                  className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Kopiuj z tabelą (HTML)
-                </button>
-              )}
-              {!readOnly && inquiry.send_requested_at && (
-                <button
-                  type="button"
+                {opt.label}
+              </Chip>
+            ))}
+            {inquiry.price.mode === 'catalog_margin' && (
+              <label className="ml-1 inline-flex items-center gap-1 text-xs text-slate-700">
+                Marża
+                <input
+                  type="number"
+                  min={0}
+                  max={inquiry.price.margin_max}
+                  step={0.5}
                   disabled={locked}
-                  onClick={() => void cancelThunderbird()}
-                  className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Anuluj wysyłkę
-                </button>
-              )}
-              {!readOnly && inquiry.replied_at && (
-                <button
-                  type="button"
-                  disabled={locked}
-                  onClick={() => void unmarkSent()}
-                  className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Cofnij oznaczenie
-                </button>
-              )}
-              <Link
-                to="/inquiries"
-                className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
-              >
-                Wróć do zapytań
-              </Link>
-              {!readOnly && (
-                <button
-                  type="button"
-                  disabled={busy || saving}
-                  onClick={() => void removeInquiry()}
-                  className="rounded border border-red-300 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
-                >
-                  Usuń zapytanie
-                </button>
-              )}
-              {saving && <span className="text-[11px] text-slate-400">Zapisuję…</span>}
-            </div>
-            <p className="mt-2 text-[11px] text-slate-400">
-              {readOnly
-                ? 'Tylko podgląd — treść listu możesz skopiować, ale zmienić go może wyłącznie autor.'
-                : inquiry.send_requested_at
-                  ? 'List czeka na Thunderbirda — otworzy okno odpowiedzi w ciągu kilku sekund. Maila wysyłasz sam, z Thunderbirda.'
-                  : inquiry.source_message_id
-                    ? 'Edycje zapisują się po opuszczeniu pola. Thunderbird otworzy odpowiedź na ten mail — wysyłasz ją sam, po sprawdzeniu.'
-                    : 'Edycje zapisują się po opuszczeniu pola. System nie wysyła maila — wklej treść do swojej poczty.'}
-            </p>
-            <p className="mt-1 text-[11px] text-slate-400">
-              {inquiry.reply_html
-                ? 'Do maila pójdzie tabela: po lewej pozycja z zapytania, po prawej nasza propozycja. Podgląd niżej.'
-                : 'Po ręcznej poprawce treści wysyłamy sam tekst, bez tabeli. Tabela wróci po zmianie wyboru produktu lub cen.'}
-            </p>
-            {inquiry.reply_html && (
-              <details className="mt-2 rounded border border-slate-200 bg-slate-50 p-2">
-                <summary className="cursor-pointer text-[11px] font-medium text-slate-600">
-                  Podgląd tabeli, którą zobaczy klient
-                </summary>
-                {/* Treść z naszego serwera, zbudowana z danych zapytania — bez znaczników od klienta. */}
-                <div
-                  className="mt-2 overflow-x-auto rounded bg-white p-2"
-                  dangerouslySetInnerHTML={{ __html: inquiry.reply_html }}
+                  className="w-20 rounded border border-slate-300 px-2 py-1 text-xs"
+                  value={marginDraft}
+                  onChange={(e) => setMarginDraft(e.target.value)}
+                  onBlur={onMarginBlur}
                 />
-              </details>
+                %
+              </label>
             )}
           </div>
-
-          <details className="rounded-xl bg-white p-4 text-xs shadow-sm">
-            <summary className="cursor-pointer font-semibold text-slate-800">Zapytanie klienta</summary>
-            {inquiry.source_subject && (
-              <p className="mt-2 font-medium text-slate-700">{inquiry.source_subject}</p>
-            )}
-            <pre className="mt-2 whitespace-pre-wrap font-sans text-slate-600">{inquiry.source_body}</pre>
-          </details>
+          {/* Klient pyta o te cztery rzeczy wprost w mailu; bez pól handlowiec
+              musiał je dopisywać ręcznie na końcu listu. */}
+          <p className="mt-3 text-xs font-semibold text-slate-700">Warunki oferty</p>
+          <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+            {termFields.map((field) => (
+              <label key={field.key} className="block text-[11px] font-medium text-slate-600">
+                {field.label}
+                <input
+                  className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1 text-xs font-normal"
+                  disabled={locked}
+                  maxLength={TERM_MAX}
+                  value={termsDraft[field.key]}
+                  onChange={(e) => setTermsDraft((d) => ({ ...d, [field.key]: e.target.value }))}
+                  onBlur={() => onTermsBlur(field.key)}
+                  placeholder={field.placeholder}
+                />
+              </label>
+            ))}
+          </div>
+          <p className="mt-1 text-[11px] text-slate-500">
+            Puste pola nie trafiają do listu. Sama liczba dostaje w liście jednostkę (7 → „7 dni”,
+            20 → „20,00 zł netto”); tekst idzie tak, jak go wpiszesz.
+          </p>
+          {inquiry.global_cards.length > 0 && (
+            <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+              {inquiry.global_cards.map((card) => (
+                <CardChips
+                  key={card.id}
+                  card={card}
+                  answers={inquiry.answers}
+                  busy={locked}
+                  customDraft={customDrafts[card.id] ?? ''}
+                  onCustomDraft={(v) => setCustomDrafts((d) => ({ ...d, [card.id]: v }))}
+                  onAnswer={onAnswer}
+                />
+              ))}
+            </div>
+          )}
+          <label className="mt-3 block border-t border-slate-100 pt-3 text-xs font-semibold text-slate-700">
+            Dopisek do listu (klient go zobaczy)
+            <textarea
+              className="mt-1 min-h-[56px] w-full rounded border border-slate-300 px-2 py-1 text-xs font-normal"
+              disabled={locked}
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              onBlur={onNoteBlur}
+              placeholder="np. uwaga do pozycji, informacja o dostępności…"
+            />
+          </label>
         </div>
 
         <div className="space-y-4">
-          <div className="rounded-xl bg-white p-4 shadow-sm">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold">Pozycje</h2>
-              {busy ? (
-                <span className="text-xs text-violet-800">
-                  <BusyLabel label="Piszę list" seconds={composeSec} />
-                </span>
-              ) : readOnly ? null : (
-                <span className="text-[11px] text-slate-400">Kliknięcie alternatywy od razu przepisuje list.</span>
-              )}
-            </div>
-            {inquiry.items.length === 0 ? (
-              <p className="text-xs text-slate-500">Brak pozycji.</p>
-            ) : (
-              <div className="@container space-y-3">
-                <div
-                  className={`hidden text-[11px] font-semibold uppercase tracking-wide text-slate-500 @2xl:grid ${itemGrid}`}
-                >
-                  <span className="px-3">Poz. · status</span>
-                  <span className="px-3">Klient napisał</span>
-                  <span className="px-3">Nasza propozycja</span>
-                </div>
-                {inquiry.items.map((item, i) => (
-                  <ItemRow
-                    key={item.id}
-                    item={item}
-                    index={i}
-                    priceMode={inquiry.price.mode}
-                    answers={inquiry.answers}
-                    busy={locked}
-                    customDrafts={customDrafts}
-                    onCustomDraft={(cardId, v) => setCustomDrafts((d) => ({ ...d, [cardId]: v }))}
-                    onAnswer={onAnswer}
-                    manualDraft={manualDrafts[item.id] ?? ''}
-                    onManualDraft={(v) => setManualDrafts((d) => ({ ...d, [item.id]: v }))}
-                    onManualPriceBlur={() => onManualPriceBlur(item)}
-                    onPreview={(pid, q) => {
-                      setPreviewId(pid)
-                      setPreviewQuery(q.trim())
-                    }}
-                    onSearch={(mode) =>
-                      setSearchFor({
-                        itemId: item.id,
-                        mode,
-                        query: (item.query ?? item.quote ?? '').trim(),
-                      })
-                    }
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-xl bg-white p-4 shadow-sm">
-            <h2 className="mb-2 text-sm font-semibold">Dla całej oferty</h2>
-            <p className="text-xs font-semibold text-slate-700">Szablon listu</p>
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {toneOptions.map((opt) => (
-                <Chip
-                  key={opt.id}
-                  active={inquiry.tone === opt.id}
-                  disabled={locked}
-                  onClick={() => onTone(opt.id)}
-                >
-                  {opt.label}
-                </Chip>
-              ))}
-            </div>
-            <p className="mt-1 text-[11px] text-slate-500">{toneHint(inquiry.tone)}</p>
-            <p className="mt-3 text-xs font-semibold text-slate-700">Ceny w liście</p>
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              {priceModeOptions.map((opt) => (
-                <Chip
-                  key={opt.id}
-                  active={inquiry.price.mode === opt.id}
-                  disabled={locked}
-                  onClick={() => onPriceMode(opt.id)}
-                >
-                  {opt.label}
-                </Chip>
-              ))}
-              {inquiry.price.mode === 'catalog_margin' && (
-                <label className="ml-1 inline-flex items-center gap-1 text-xs text-slate-700">
-                  Marża
-                  <input
-                    type="number"
-                    min={0}
-                    max={inquiry.price.margin_max}
-                    step={0.5}
-                    disabled={locked}
-                    className="w-20 rounded border border-slate-300 px-2 py-1 text-xs"
-                    value={marginDraft}
-                    onChange={(e) => setMarginDraft(e.target.value)}
-                    onBlur={onMarginBlur}
-                  />
-                  %
-                </label>
-              )}
-            </div>
-            {/* Klient pyta o te cztery rzeczy wprost w mailu; bez pól handlowiec
-                musiał je dopisywać ręcznie na końcu listu. */}
-            <p className="mt-3 text-xs font-semibold text-slate-700">Warunki oferty</p>
-            <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
-              {termFields.map((field) => (
-                <label key={field.key} className="block text-[11px] font-medium text-slate-600">
-                  {field.label}
-                  <input
-                    className="mt-0.5 w-full rounded border border-slate-300 px-2 py-1 text-xs font-normal"
-                    disabled={locked}
-                    maxLength={TERM_MAX}
-                    value={termsDraft[field.key]}
-                    onChange={(e) => setTermsDraft((d) => ({ ...d, [field.key]: e.target.value }))}
-                    onBlur={() => onTermsBlur(field.key)}
-                    placeholder={field.placeholder}
-                  />
-                </label>
-              ))}
-            </div>
-            <p className="mt-1 text-[11px] text-slate-500">
-              Puste pola nie trafiają do listu. Sama liczba dostaje w liście jednostkę (7 → „7 dni”,
-              20 → „20,00 zł netto”); tekst idzie tak, jak go wpiszesz.
-            </p>
-            {inquiry.global_cards.length > 0 && (
-              <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
-                {inquiry.global_cards.map((card) => (
-                  <CardChips
-                    key={card.id}
-                    card={card}
-                    answers={inquiry.answers}
-                    busy={locked}
-                    customDraft={customDrafts[card.id] ?? ''}
-                    onCustomDraft={(v) => setCustomDrafts((d) => ({ ...d, [card.id]: v }))}
-                    onAnswer={onAnswer}
-                  />
-                ))}
-              </div>
-            )}
-            <label className="mt-3 block border-t border-slate-100 pt-3 text-xs font-semibold text-slate-700">
-              Dopisek do listu (klient go zobaczy)
-              <textarea
-                className="mt-1 min-h-[56px] w-full rounded border border-slate-300 px-2 py-1 text-xs font-normal"
-                disabled={locked}
-                value={noteDraft}
-                onChange={(e) => setNoteDraft(e.target.value)}
-                onBlur={onNoteBlur}
-                placeholder="np. uwaga do pozycji, informacja o dostępności…"
-              />
-            </label>
-          </div>
-
           {inquiry.questions.length > 0 && (
             <div className="rounded-xl bg-white p-4 shadow-sm">
               <h2 className="mb-1 text-sm font-semibold">Klient pyta o…</h2>
@@ -1529,8 +1684,45 @@ export function InquiryReply() {
               </ul>
             </div>
           )}
+
+          <details className="rounded-xl bg-white p-4 text-xs shadow-sm">
+            <summary className="cursor-pointer font-semibold text-slate-800">Zapytanie klienta</summary>
+            {inquiry.source_subject && (
+              <p className="mt-2 font-medium text-slate-700">{inquiry.source_subject}</p>
+            )}
+            <pre className="mt-2 whitespace-pre-wrap font-sans text-slate-600">{inquiry.source_body}</pre>
+          </details>
         </div>
       </div>
+
+      {replyOpen && (
+        <ReplyPreviewModal
+          subject={subject}
+          body={body}
+          html={inquiry.reply_html}
+          locked={locked}
+          saving={saving}
+          msg={msg}
+          err={err}
+          editHint={
+            readOnly
+              ? 'Tylko podgląd — treść listu możesz skopiować, ale zmienić go może wyłącznie autor.'
+              : inquiry.source_message_id
+                ? 'Edycje zapisują się po opuszczeniu pola. Thunderbird otworzy odpowiedź na ten mail — wysyłasz ją sam, po sprawdzeniu.'
+                : 'Edycje zapisują się po opuszczeniu pola. System nie wysyła maila — wklej treść do swojej poczty.'
+          }
+          onSubject={setSubject}
+          onBody={setBody}
+          onSave={() => void saveEdits().catch(() => undefined)}
+          onCopyWithTable={() => void copyWithTable()}
+          onCopyBody={() => void copyBody()}
+          onClose={() => {
+            // pole zamknięte Escape'em nie dostaje blur — niezapisana poprawka szłaby w niepamięć
+            void saveEdits().catch(() => undefined)
+            setReplyOpen(false)
+          }}
+        />
+      )}
 
       <InquiryContactModal
         contact={contactOpen ? inquiry.contact : null}
