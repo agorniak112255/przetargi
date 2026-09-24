@@ -1022,6 +1022,15 @@ final class ClientInquiryService
                 // model nie ocenił kart — o katalogu nic nie wiemy, więc nie „brak w katalogu”
                 $flags[] = 'model_failed';
             }
+            $absentBrand = $this->requestedBrandAbsent($candidates);
+            if ($absentBrand !== null) {
+                // Klient prosił o markę spoza katalogu: kandydaci to zamienniki. Wysoka ocena modelu mówi
+                // „pasuje do wymagania”, nie „to ta marka” — dlatego najwyżej „sprawdź”.
+                $flags[] = 'brand_not_in_catalog';
+                if ($confidence === 'high') {
+                    $confidence = 'medium';
+                }
+            }
             if ($this->isAmbiguous($candidates, $item)) {
                 $flags[] = 'ambiguous';
             }
@@ -1093,6 +1102,8 @@ final class ClientInquiryService
                 'size' => $this->nullable($item['size'] ?? null),
                 // Sprzeczność w wierszu klienta wskazana przez model; null = brak albo stary rekord.
                 'conflict' => $conflict,
+                // Marka z zapytania, której nie ma w katalogu (kandydaci to zamienniki); null = brak takiej sytuacji.
+                'brand_not_in_catalog' => $absentBrand,
                 // Fraza, którą ta pozycja szukała w katalogu — podpowiedź dla
                 // ręcznego wyszukiwania przy pozycji, nie nowe źródło danych.
                 'query' => $this->nullable($item['search_query'] ?? null)
@@ -1179,6 +1190,11 @@ final class ClientInquiryService
         if ($this->confidenceFor($candidates, $item) === 'none') {
             return 'check';
         }
+        // Marki z zapytania nie ma w katalogu — zamiennik innej marki wybiera handlowiec, nie list.
+        // Zapytanie #67: „MedaSept EASYGRIP PURPLE” → Unicare niebieskie z 95% szło do listu jak trafienie.
+        if ($this->requestedBrandAbsent($candidates) !== null) {
+            return 'check';
+        }
 
         // Klient postawił warunek („w szczególności na kwas siarkowy 96%”):
         // do listu wchodzi tylko karta, która ten warunek potwierdza. Gdy żadna
@@ -1202,6 +1218,17 @@ final class ClientInquiryService
         }
 
         return 'check';
+    }
+
+    /**
+     * Marka nazwana w zapytaniu, której nie ma w katalogu — kandydaci z wyszukiwania to zamienniki innej marki.
+     * Liczy się pierwszy kandydat: karta z linku czy wybrana ręcznie stoi przed nimi i znacznika nie ma.
+     *
+     * @param  list<array<string, mixed>>  $candidates
+     */
+    private function requestedBrandAbsent(array $candidates): ?string
+    {
+        return $this->nullable($candidates[0]['requested_brand_absent'] ?? null);
     }
 
     /**
@@ -1922,6 +1949,9 @@ final class ClientInquiryService
         $groups = [];
         foreach ($rawGroups as $i => $result) {
             $query = (string) ($result['query'] ?? $sliced[$i] ?? '');
+            // Klient nazwał markę, której nie ma w katalogu: każdy wynik to zamiennik innej marki.
+            // Znacznik na wierszu, bo pewność i wybór domyślny liczą się z samych kandydatów.
+            $absentBrand = $this->nullable($result['requested_brand_absent'] ?? null);
             $products = [];
             foreach ($result['products'] ?? [] as $row) {
                 if (! is_array($row)) {
@@ -1929,6 +1959,9 @@ final class ClientInquiryService
                 }
                 $safe = $this->safeProduct($row);
                 if ($safe !== null) {
+                    if ($absentBrand !== null) {
+                        $safe['requested_brand_absent'] = $absentBrand;
+                    }
                     $products[] = $safe;
                 }
             }

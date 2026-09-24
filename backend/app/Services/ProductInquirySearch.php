@@ -29,7 +29,7 @@ class ProductInquirySearch
 
     /**
      * @param  list<string>  $queries
-     * @return list<array{query: string, products: list<array<string, mixed>>, model_state: string|null}>
+     * @return list<array{query: string, products: list<array<string, mixed>>, model_state: string|null, requested_brand_absent: string|null}>
      */
     public function findMany(array $queries, int $limit): array
     {
@@ -46,9 +46,23 @@ class ProductInquirySearch
                 'products' => is_array($result['products'] ?? null) ? $result['products'] : [],
                 // „unavailable” = model nie odpowiedział; pusta lista nie znaczy wtedy „brak w katalogu”
                 'model_state' => is_string($result['model_state'] ?? null) ? $result['model_state'] : null,
+                // Marka z zapytania, której nie ma w katalogu — wtedy wyniki to zamienniki innej marki.
+                'requested_brand_absent' => $this->absentBrand($result),
             ];
         }
 
         return $out;
+    }
+
+    /** @param  array<string, mixed>  $result */
+    private function absentBrand(array $result): ?string
+    {
+        $intent = is_array($result['parsed_intent'] ?? null) ? $result['parsed_intent'] : [];
+        if (($intent['manufacturer_absent_in_catalog'] ?? false) !== true) {
+            return null;
+        }
+        $name = trim((string) ($intent['manufacturer_requested'] ?? ''));
+
+        return $name !== '' ? $name : null;
     }
 }

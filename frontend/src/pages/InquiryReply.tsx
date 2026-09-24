@@ -95,6 +95,7 @@ const flagLabel: Record<InquiryFlag, string> = {
   product_from_subject: 'wyrób wzięty z tematu maila',
   model_failed: 'wyszukaj ponownie przyciskiem „Szukaj AI”',
   requirement_conflict: 'możliwa sprzeczność w wierszu klienta',
+  brand_not_in_catalog: 'zamiennik innej marki',
 }
 
 const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
@@ -332,6 +333,13 @@ function ItemRow({
         <p className="mt-1.5 rounded border border-orange-300 bg-orange-50 px-2.5 py-1.5 text-xs text-orange-900">
           <span className="font-semibold">Możliwa sprzeczność w zapytaniu</span> (ocena AI — wyjaśnij z klientem):{' '}
           {item.conflict}
+        </p>
+      )}
+
+      {item.brand_not_in_catalog && (
+        <p className="mt-1.5 rounded border border-orange-300 bg-orange-50 px-2.5 py-1.5 text-xs text-orange-900">
+          <span className="font-semibold">Marki „{item.brand_not_in_catalog}” nie ma w katalogu</span> — kandydaci poniżej
+          to zamienniki innej marki. Do listu wejdzie dopiero ten, który wybierzesz.
         </p>
       )}
 
