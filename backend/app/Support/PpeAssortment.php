@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Support;
 
 use App\Models\Product;
+use App\Support\RequirementCheck\En388Code;
 use Illuminate\Support\Str;
 
 /**
@@ -628,6 +629,28 @@ final class PpeAssortment
     }
 
     /**
+     * Karta bez litery ISO 13997, która podaje przecięcie Coup Test tylko 0 albo 1 („2131X”, stare „3131”, Canis
+     * „przecięcie 1”). Decyzja użytkownika 24.09 po uwagach eksperta do poz. 2 (RCFB-2369 COVENT FOAM 2131X podane
+     * jako antyprzecięciowe): najniższy wynik Coup Test to nie „lekka odporność na przecięcie” (B), więc przy wymaganym
+     * poziomie B i wyższym karta odpada. Wyższych cyfr Coup Test na litery nie przeliczamy — to zostaje brakiem danych.
+     */
+    public function onlyLowCoupCut(string $productText): bool
+    {
+        if ($this->cutLevelsIn($productText) !== []) {
+            return false;
+        }
+        $coups = [];
+        foreach (En388Code::allIn($productText) as $code) {
+            $coupe = $code->levels['coupe'] ?? null;
+            if ($coupe !== null && $coupe !== 'X') {
+                $coups[] = (int) $coupe;
+            }
+        }
+
+        return $coups !== [] && max($coups) <= 1;
+    }
+
+    /**
      * Litery poziomu cięcia ISO 13997. Kod EN 388:2016 („4331B”, „4X21A”, „2.X.4.2.C”) — z tekstu po normalize(), tylko
      * w pobliżu numeru normy 388, więc „2021A” w nazwie modelu to nie poziom. Zapis słowny — z oryginalnego tekstu, tylko
      * wielka litera A–F po „ISO 13997”, „EN ISO” albo po „przecięcie … poziom”: polskie „a” ani litera przed kolejną normą
@@ -644,8 +667,9 @@ final class PpeAssortment
         $worded = [
             // „przecięcie ISO 13977: B”, „przecięcie wg ISO 13977 - B”, „ISO 13997 poziom C”
             '/(?i:iso)\s*139[79]7\s*[:\-–—]?\s*(?:(?i:poziom)\w*\s*)?([A-F])\b/u',
-            // „odporność na przecięcie poziom C”, „przecięcie wg metody ISO – poziom B”
-            '/(?i:przecię|przecie|przeciec)\w*[^0-9\n]{0,30}?(?i:poziom)\w*\s*[:\-–—]?\s*([A-F])\b/u',
+            // „odporność na przecięcie poziom C”, „przecięcie wg metody ISO – poziom B”; „przecięcie ISO – klasa D”,
+            // „przecięciowe klasy C” (6 kart na produkcji 24.09, m.in. Canis 3630-020-000-00)
+            '/(?i:przecię|przecie|przeciec)\w*[^0-9\n]{0,30}?(?i:poziom|klas)\w*\s*[:\-–—]?\s*([A-F])\b/u',
             // „ochrona przed przecięciem EN ISO B”
             '/(?i:en\s*iso)\s+([A-F])\b/u',
         ];

@@ -1360,6 +1360,27 @@ final class PpeAssortmentTest extends TestCase
         $this->assertSame('E', $this->assortment->cutLevel('EN 388:2016 (4X21A) w wersji podstawowej, wersja wzmocniona EN 388:2016 (4X43E)'), 'najwyższy podany');
         $this->assertNull($this->assortment->cutLevel('Rękawice robocze model 2021A, EN 420'), 'numer modelu to nie poziom');
         $this->assertNull($this->assortment->cutLevel('Rękawice nitrylowe EN 388 4131, EN 420'), 'EN 388:2003 bez litery');
+        // „klasa” zamiast „poziom” (Canis 3630-020-000-00, ATG 34615048 na produkcji 24.09)
+        $this->assertSame('D', $this->assortment->cutLevel('EN 388: odporność na przecięcie ISO – klasa D, EN 420'));
+        $this->assertSame('C', $this->assortment->cutLevel('Rękawice antyprzecięciowe klasy C, powlekane nitrylem'));
+        $this->assertNull($this->assortment->cutLevel('Rękawice z high cut resistance, class 5'), 'cyfra klasy to nie litera ISO');
+    }
+
+    /**
+     * Decyzja użytkownika 24.09 (uwagi eksperta, przetarg 1 poz. 2): sam Coup Test 0–1 bez litery ISO to nie odporność
+     * na przecięcie. Wyższa cyfra albo litera gdziekolwiek na karcie — nie ten przypadek.
+     */
+    #[Test]
+    public function only_low_coup_without_iso_letter(): void
+    {
+        $this->assertTrue($this->assortment->onlyLowCoupCut('EN 388:2016+A1:2018 – poziom 2131X, EN ISO 21420:2020'));
+        $this->assertTrue($this->assortment->onlyLowCoupCut('Rękawice nitrylowe EN 388 3131, EN 420'), 'stary kod EN 388:2003');
+        $this->assertTrue($this->assortment->onlyLowCoupCut('Spełnia EN 388 (przetarcie 2, przecięcie 1, rozerwanie 3, przekłucie 1).'));
+        $this->assertFalse($this->assortment->onlyLowCoupCut('EN 388:2016 – 4343X'), 'Coup Test 3 — nie przeliczamy');
+        $this->assertFalse($this->assortment->onlyLowCoupCut('EN 388: 2X31X, EN 511: X2X'), 'Coup Test nie badany');
+        $this->assertFalse($this->assortment->onlyLowCoupCut('EN 388 4131X, przecięcie wg ISO 13997 - B'), 'litera ISO rozstrzyga');
+        $this->assertFalse($this->assortment->onlyLowCoupCut('EN 388:2003 (1111), EN 388:2016 (2X43C)'), 'litera na drugim kodzie');
+        $this->assertFalse($this->assortment->onlyLowCoupCut('Rękawice robocze EN 420'));
     }
 
     /** Decyzja użytkownika 14.09: wymaganie „do 120 m/s” odrzuca gogle z samym FT (45 m/s); karta bez klasy uderzenia zostaje. */

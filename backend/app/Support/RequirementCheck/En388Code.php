@@ -217,7 +217,8 @@ final readonly class En388Code
             'puncture' => ['/(?i:przekłu|przeklu|przebic)\p{L}*'.self::GAP.'([0-4Xx])(?![\p{L}\d])/u'],
             'iso' => [
                 '/(?i:iso)\s*139[79]7\s*[:\-–—]?\s*(?:(?i:poziom)\p{L}*\s*)?([A-F])(?![\p{L}\d])/u',
-                '/'.$cut.'(?![^;,\d]{0,30}?(?i:coup))[^;,\d]{0,40}?(?i:poziom)\p{L}*\s*[:\-–—]?\s*([A-F])(?![\p{L}\d])/u',
+                // „przecięcie ISO – klasa D” (Canis) jak „poziom D”
+                '/'.$cut.'(?![^;,\d]{0,30}?(?i:coup))[^;,\d]{0,40}?(?i:poziom|klas)\p{L}*\s*[:\-–—]?\s*([A-F])(?![\p{L}\d])/u',
             ],
         ];
 

@@ -3957,16 +3957,18 @@ function ItemRow({
               canEdit
                 ? (p: BattlecardProduct) => {
                     applyCatalogPrice(p.purchase_price)
+                    // wynik ze wspólnych słów to nie ocena dopasowania — nie zapisujemy go jako „Dopasowanie AI”
+                    const percent = p.match_basis === 'words' ? null : p.match_percent
                     return onSave(item.id, {
                       main_product_id: p.product_id,
                       quantity: Number(qty) || 1,
-                      ai_match_percent: p.match_percent,
+                      ai_match_percent: percent,
                       match_source: 'battlecard',
                       ai_match_reasons: [
                         {
                           code: 'battlecard',
                           label: `Wybrano ${p.sku} z porównania zamienników`,
-                          points: p.match_percent,
+                          points: percent ?? 0,
                         },
                       ],
                     })

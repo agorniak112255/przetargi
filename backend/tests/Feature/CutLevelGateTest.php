@@ -44,6 +44,26 @@ final class CutLevelGateTest extends TestCase
         $this->assertTrue($service->debugCompatibilityGates(self::POZ2, 'rękawice antyprzecięciowe', $maxiflex)['poziom cięcia']);
     }
 
+    /**
+     * Uwagi eksperta 24.09 do przetargu 1, poz. 2: RCFB-2369 COVENT FOAM (EN 388 2131X — Coup Test 1, ISO nie badano)
+     * przechodziło jako „bez danych”. Decyzja użytkownika: sam Coup Test 0–1 bez litery ISO przy wymaganym B odpada;
+     * wyższa cyfra Coup Test bez litery zostaje (nie przeliczamy).
+     */
+    public function test_glove_with_only_coup_1_and_no_iso_letter_is_rejected(): void
+    {
+        $rcfb = $this->glove('RCFB-2369', 'RĘKAWICE COVENT FOAM Kat.2 NA BLISTRZE', 'Polstar',
+            'EN 388:2016+A1:2018 – poziom 2131X, EN ISO 21420:2020',
+            'Dziane rękawice poliestrowe z powłoką ze spienionego lateksu do prac wymagających ochrony przed uszkodzeniami mechanicznymi.');
+        $coup3 = $this->glove('COUP-3', 'Rękawice powlekane', 'TEST', 'EN 388:2016 – 4343X',
+            'Rękawice z dzianiny powlekane nitrylem.');
+        $service = app(ProductAiSearchService::class);
+
+        $this->assertFalse($service->debugCompatibilityGates(self::POZ2, 'rękawice antyprzecięciowe', $rcfb)['poziom cięcia']);
+        $this->assertTrue($service->debugCompatibilityGates(self::POZ2, 'rękawice antyprzecięciowe', $coup3)['poziom cięcia']);
+        // wymaganie bez odporności na przecięcie — Coup Test 1 nie przeszkadza
+        $this->assertTrue($service->debugCompatibilityGates('Rękawice powlekane lateksem do prac montażowych, EN 388', null, $rcfb)['poziom cięcia']);
+    }
+
     public function test_requirement_without_cut_protection_does_not_filter_by_cut_level(): void
     {
         $ultrane = $this->glove('34681008', 'ULTRANE 681', 'MAPA',

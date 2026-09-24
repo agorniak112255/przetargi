@@ -13,17 +13,36 @@ use App\Services\Search\AiProductSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
+use App\Support\RequirementCheck\CardSources;
+use App\Support\RequirementCheck\LevelChecker;
+use App\Support\RequirementCheck\Status;
 use Throwable;
 
 /**
  * Snapshot pozycji SIWZ: propozycja główna + do 8 zamienników z katalogu.
  * (Katalog = oferta ogólnie dostępna wielu marek — bez bloku „konkurencja”.)
+ *
+ * Zamiennik z katalogu dobiera ocena słowna (explainMatch) albo — po ręcznym dopasowaniu — wyszukiwarka z modelem.
+ * Ocena słowna liczy wspólne słowa i obecność nazw norm, nie ich poziomy: uwagi eksperta 24.09 (przetarg 1, poz. 7)
+ * — zimowe rękawice Canis EN 388 2X31X dostały 99% przy wymaganym 4341B. Dlatego każdy zamiennik przechodzi przez
+ * Weryfikację karty (poziomy i klasy): kartę z katalogu, która przeczy wymaganiu albo nie podaje wymaganego poziomu,
+ * pomijamy; zamiennik przypięty przez człowieka zostaje z wynikiem weryfikacji. „Tańszy o X%” i zbiorcza zamiana na
+ * tańszy tylko dla zamiennika zgodnego z SIWZ albo zatwierdzonego.
  */
 final class BattlecardService
 {
     private const SUBSTITUTE_LIMIT = 8;
 
     private const CATALOG_ALT_MIN_SCORE = 55;
+
+    /** Wynik liczony ze wspólnych słów (explainMatch) — nie pokazujemy go jako „% dopasowania”. */
+    private const BASIS_WORDS = 'words';
+
+    /** Ocena modelu z wyszukiwarki AI. */
+    private const BASIS_MODEL = 'model';
+
+    /** Procent zapisany przy zamienniku przez człowieka (Zamienniki). */
+    private const BASIS_RELATION = 'relation';
 
     public function __construct(
         private readonly ProductMatchService $matcher,
@@ -32,6 +51,7 @@ final class BattlecardService
         private readonly BhpAttributeNormalizer $bhpAttributes,
         private readonly PpeAssortment $assortment,
         private readonly NbpExchangeRateService $fx,
+        private readonly LevelChecker $levels,
     ) {}
 
     /**
@@ -106,6 +126,7 @@ final class BattlecardService
     {
         $markupPercent = $item->tender?->targetMarkupPercent();
         $oursId = $item->mainProduct?->id;
+        $requirement = (string) $item->requirement;
         $rows = is_array($item->battlecard_substitutes) ? $item->battlecard_substitutes : [];
         $ids = [];
         foreach ($rows as $row) {
@@ -131,6 +152,12 @@ final class BattlecardService
             if (! $product instanceof Product) {
                 continue;
             }
+            $source = $row['source'] ?? 'catalog';
+            // Zapisane przed weryfikacją (24.09) listy trzymały karty sprzeczne z SIWZ — sprawdzamy przy każdym odczycie.
+            $verification = $this->verify($requirement, $product);
+            if ($source !== 'relation' && ! $this->catalogVerificationAllows($verification)) {
+                continue;
+            }
             $snap = $this->productSnapshot(
                 $product,
                 (int) ($row['match_percent'] ?? 0),
@@ -143,8 +170,10 @@ final class BattlecardService
             $snap['substitute_type'] = $row['substitute_type'] ?? null;
             $snap['approval_status'] = $row['approval_status'] ?? null;
             $snap['reason'] = $row['reason'] ?? null;
-            $snap['source'] = $row['source'] ?? 'catalog';
-            $substitutes[] = $snap;
+            $snap['source'] = $source;
+            // lista bez podstawy wyniku powstała przed 24.09 z oceny słownej (albo z relacji)
+            $snap['match_basis'] = $row['match_basis'] ?? ($source === 'relation' ? self::BASIS_RELATION : self::BASIS_WORDS);
+            $substitutes[] = $this->withVerification($snap, $verification);
         }
 
         return $this->assembleCard($item, $substitutes, $markupPercent);
@@ -201,6 +230,7 @@ final class BattlecardService
                 'product_id' => $id,
                 'match_percent' => (int) ($snap['match_percent'] ?? 0),
                 'source' => $snap['source'] ?? null,
+                'match_basis' => $snap['match_basis'] ?? null,
                 'substitute_type' => $snap['substitute_type'] ?? null,
                 'approval_status' => $snap['approval_status'] ?? null,
                 'reason' => $snap['reason'] ?? null,
@@ -250,7 +280,8 @@ final class BattlecardService
             $snap['approval_status'] = $row->approval_status;
             $snap['reason'] = $row->reason;
             $snap['source'] = 'relation';
-            $out[] = $snap;
+            $snap['match_basis'] = self::BASIS_RELATION;
+            $out[] = $this->withVerification($snap, $this->verify($requirement, $p));
         }
 
         return $out;
@@ -285,10 +316,15 @@ final class BattlecardService
             if ($row['score'] < $minKeep) {
                 continue;
             }
+            $verification = $this->verify($requirement, $row['product']);
+            if (! $this->catalogVerificationAllows($verification)) {
+                continue;
+            }
             $snap = $this->productSnapshot($row['product'], $row['score'], null, [], null, 'substitute', $markupPercent);
             $snap['source'] = 'catalog';
             $snap['substitute_type'] = 'katalog';
-            $existing[] = $snap;
+            $snap['match_basis'] = $row['basis'];
+            $existing[] = $this->withVerification($snap, $verification);
             if (count($existing) >= self::SUBSTITUTE_LIMIT) {
                 break;
             }
@@ -301,7 +337,7 @@ final class BattlecardService
      * Kolejne wyniki z tej samej ścieżki co „Szukaj w katalogu”, nie pierwsze 500 kart po cenie.
      *
      * @param  list<int>  $excludeIds
-     * @return list<array{product: Product, score: int}>
+     * @return list<array{product: Product, score: int, basis: string}>
      */
     private function scoreCatalogAlternates(string $requirement, array $excludeIds, int $limit, bool $allowAi = false): array
     {
@@ -341,13 +377,12 @@ final class BattlecardService
             if (($explained['reasons'][0]['code'] ?? '') === 'asortyment_reject') {
                 continue;
             }
-            $score = $fromLlm
-                ? (int) ($row['ai_match_percent'] ?? $explained['score'])
-                : $explained['score'];
+            $modelScore = $fromLlm && isset($row['ai_match_percent']) ? (int) $row['ai_match_percent'] : null;
+            $score = $modelScore ?? $explained['score'];
             if ($score < self::CATALOG_ALT_MIN_SCORE) {
                 continue;
             }
-            $scored[] = ['product' => $product, 'score' => $score];
+            $scored[] = ['product' => $product, 'score' => $score, 'basis' => $modelScore !== null ? self::BASIS_MODEL : self::BASIS_WORDS];
         }
         usort($scored, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
 
@@ -356,7 +391,7 @@ final class BattlecardService
 
     /**
      * @param  array<int, true>  $blocked
-     * @return list<array{product: Product, score: int}>
+     * @return list<array{product: Product, score: int, basis: string}>
      */
     private function scoreRetrievedAlternates(string $requirement, array $blocked, int $limit): array
     {
@@ -376,7 +411,7 @@ final class BattlecardService
                 || $explained['score'] < self::CATALOG_ALT_MIN_SCORE) {
                 continue;
             }
-            $scored[] = ['product' => $product, 'score' => $explained['score']];
+            $scored[] = ['product' => $product, 'score' => $explained['score'], 'basis' => self::BASIS_WORDS];
         }
         usort($scored, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
 
@@ -479,6 +514,9 @@ final class BattlecardService
         $best = null;
         $bestPrice = $ourPurchase;
         foreach ($card['substitutes'] as $sub) {
+            if (! ($sub['price_comparable'] ?? false)) {
+                continue;
+            }
             $price = $this->effectivePurchase($sub);
             if ($price <= 0 || $price >= $bestPrice) {
                 continue;
@@ -498,6 +536,65 @@ final class BattlecardService
         }
 
         return $best;
+    }
+
+    /**
+     * Weryfikacja karty — tylko poziomy i klasy (EN 388, poziom cięcia, EN 407, kategoria ŚOI, klasa obuwia, FFP, SNR,
+     * klasa uderzenia). Wymiary, cechy tak/nie i kolor dają w pomiarze za dużo fałszywych alarmów, żeby odrzucać nimi
+     * zamienniki. Status: fail — któryś poziom przeczy; missing — karta nie podaje któregoś; check — pola karty sobie
+     * przeczą; ok — wszystkie podane i spełnione; none — wymaganie nie podaje poziomów, nie ma czego sprawdzić.
+     *
+     * @return array{status: string, rows: list<array{label: string, status: string, note: ?string}>}
+     */
+    private function verify(string $requirement, Product $product): array
+    {
+        if (trim($requirement) === '') {
+            return ['status' => 'none', 'rows' => []];
+        }
+        $rows = [];
+        $statuses = [];
+        foreach ($this->levels->check($requirement, CardSources::fromProduct($product)) as $row) {
+            $rows[] = ['label' => $row->label, 'status' => $row->status->value, 'note' => $row->note];
+            $statuses[] = $row->status;
+        }
+        if ($statuses === []) {
+            return ['status' => 'none', 'rows' => []];
+        }
+        $status = match (Status::worst($statuses)) {
+            Status::Fail => 'fail',
+            Status::Missing => 'missing',
+            Status::Unclear => 'check',
+            Status::Ok => 'ok',
+        };
+
+        return ['status' => $status, 'rows' => $rows];
+    }
+
+    /**
+     * Kartę z katalogu proponujemy, gdy nie przeczy wymaganiu i podaje wymagane poziomy. Brak poziomu to nie
+     * sprzeczność, ale zamiennik bez dowodu to karta „podobna słowami” — tego ekspert nie chce widzieć jako 99%.
+     *
+     * @param  array{status: string}  $verification
+     */
+    private function catalogVerificationAllows(array $verification): bool
+    {
+        return $verification['status'] !== 'fail' && $verification['status'] !== 'missing';
+    }
+
+    /**
+     * @param  array<string, mixed>  $snap
+     * @param  array{status: string, rows: list<array<string, mixed>>}  $verification
+     * @return array<string, mixed>
+     */
+    private function withVerification(array $snap, array $verification): array
+    {
+        $snap['verification'] = $verification;
+        // cenę porównujemy tylko z zamiennikiem, który na pewno spełnia SIWZ albo zatwierdził go człowiek — i nie przeczy SIWZ
+        $snap['price_comparable'] = $verification['status'] === 'ok'
+            || ($verification['status'] !== 'fail'
+                && ($snap['source'] ?? null) === 'relation' && ($snap['approval_status'] ?? null) === 'zatwierdzony');
+
+        return $snap;
     }
 
     /** @param  array<string, mixed>  $snap */
@@ -535,6 +632,9 @@ final class BattlecardService
 
         $ourPrice = $ours['purchase_price'] ?? $ours['catalog_price_net'] ?? null;
         foreach ($card['substitutes'] as $sub) {
+            if (! ($sub['price_comparable'] ?? false)) {
+                continue;
+            }
             $subPrice = $sub['purchase_price'] ?? $sub['catalog_price_net'] ?? null;
             if ($ourPrice === null || $subPrice === null || (float) $subPrice <= 0 || (float) $ourPrice <= 0) {
                 continue;

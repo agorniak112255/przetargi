@@ -32,6 +32,39 @@ export type BattlecardProduct = {
   approval_status?: string
   reason?: string | null
   source?: string
+  /** words = wspólne słowa (nie pokazujemy jako %), model = ocena modelu, relation = procent z Zamienników */
+  match_basis?: 'words' | 'model' | 'relation' | null
+  verification?: SubstituteVerification
+  /** „Tańszy o X%” tylko dla zamiennika zgodnego z SIWZ albo zatwierdzonego */
+  price_comparable?: boolean
+}
+
+export type SubstituteVerification = {
+  status: 'ok' | 'check' | 'missing' | 'fail' | 'none'
+  rows: { label: string; status: 'ok' | 'fail' | 'missing' | 'unclear'; note: string | null }[]
+}
+
+const VERIFICATION_BADGE: Record<SubstituteVerification['status'], { label: string; cls: string }> = {
+  ok: { label: 'zgodny z SIWZ', cls: 'bg-emerald-100 text-emerald-800' },
+  check: { label: 'do sprawdzenia', cls: 'bg-amber-100 text-amber-800' },
+  missing: { label: 'brak danych', cls: 'bg-amber-100 text-amber-800' },
+  fail: { label: 'nie spełnia SIWZ', cls: 'bg-rose-100 text-rose-800' },
+  none: { label: 'niesprawdzony', cls: 'bg-slate-100 text-slate-600' },
+}
+
+const ROW_MARK: Record<string, string> = { ok: '✓', fail: '✗', missing: 'brak', unclear: '?' }
+
+function VerificationBadge({ v }: { v: SubstituteVerification }) {
+  const badge = VERIFICATION_BADGE[v.status]
+  const title =
+    v.rows.length > 0
+      ? v.rows.map((r) => `${r.label}: ${ROW_MARK[r.status] ?? r.status}${r.note ? ` — ${r.note}` : ''}`).join('\n')
+      : 'SIWZ nie podaje poziomów ani klas — karta wybrana po podobieństwie opisu, sprawdź ręcznie.'
+  return (
+    <span className={`rounded px-1 py-0.5 text-[9px] font-semibold ${badge.cls}`} title={title}>
+      {badge.label}
+    </span>
+  )
 }
 
 export type Battlecard = {
@@ -52,6 +85,7 @@ function cheaperSaveBadge(
   sub: BattlecardProduct | null,
 ): string | null {
   if (!ours || !sub) return null
+  if (!sub.price_comparable) return null
   const ourP = ours.purchase_price ?? ours.catalog_price_net
   const subP = sub.purchase_price ?? sub.catalog_price_net
   if (ourP == null || subP == null || ourP <= 0 || subP <= 0) return null
@@ -112,7 +146,10 @@ function Col({
               {cheaperBadge}
             </span>
           ) : null}
-          <span className="text-[10px] font-bold text-violet-700">{p.match_percent}%</span>
+          {tone === 'sub' && p.verification ? <VerificationBadge v={p.verification} /> : null}
+          {(tone === 'main' ? p.match_percent > 0 : p.match_basis !== 'words') ? (
+            <span className="text-[10px] font-bold text-violet-700">{p.match_percent}%</span>
+          ) : null}
         </span>
       </div>
       <p className="mt-0.5 break-all text-[11px] font-medium text-slate-900" title={p.sku}>
@@ -157,6 +194,11 @@ function Col({
       {p.norms ? (
         <p className="mt-0.5 truncate text-[9px] text-slate-500" title={p.norms}>
           {p.norms}
+        </p>
+      ) : null}
+      {tone === 'sub' && p.verification && p.verification.rows.length > 0 ? (
+        <p className="mt-0.5 truncate text-[9px] text-slate-600" title={p.verification.rows.map((r) => r.note ?? '').filter(Boolean).join('\n')}>
+          {p.verification.rows.map((r) => `${r.label} ${ROW_MARK[r.status] ?? r.status}`).join(' · ')}
         </p>
       ) : null}
       {p.substitute_type ? (

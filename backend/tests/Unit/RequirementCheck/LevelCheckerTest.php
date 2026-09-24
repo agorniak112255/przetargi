@@ -90,7 +90,7 @@ final class LevelCheckerTest extends TestCase
     }
 
     #[Test]
-    public function cut_level_row_only_for_explicit_letter_without_en388_code(): void
+    public function cut_level_row_for_explicit_letter_without_en388_code(): void
     {
         $card = [
             new CardSource(CardSource::FEATURES, 'Ochrona przed przecięciami (ANSI A3 / EN ISO C)'),
@@ -102,10 +102,55 @@ final class LevelCheckerTest extends TestCase
         $this->assertSame(['EN ISO C', 'ISO 13997 - B'], array_column($rows['cut_level']->card, 'text'));
         $this->assertSame(['ok', 'fail'], array_column($rows['cut_level']->card, 'verdict'));
 
-        // bez litery nie dopisujemy domyślnego B z bramki dopasowania
-        $this->assertSame([], $this->rows('Rękawice ochronne odporne na przecięcie, do pracy ze szkłem.', $card));
         // kod EN 388 z pozycjami porównuje wiersz en388
         $this->assertArrayNotHasKey('cut_level', $this->rows('EN 388 z poziomami min. 2.X.4.2.C', $card));
+        // bez rękawic i bez odporności na przecięcie wiersza nie ma
+        $this->assertSame([], $this->rows('Rękawice powlekane nitrylem do prac montażowych.', $card));
+    }
+
+    /**
+     * Decyzja użytkownika 24.09 (uwagi eksperta do przetargu 1, poz. 2): rękawice „odporne na przecięcie” bez poziomu —
+     * co najmniej B, jak bramka dopasowania. Wiersz mówi, że poziom jest przyjęty, a nie podany w SIWZ.
+     */
+    #[Test]
+    public function cut_resistant_gloves_without_level_require_at_least_b(): void
+    {
+        $requirement = 'Rękawice ochronne odporne na przecięcie, do pracy ze szkłem. Oznakowanie zgodnie z EN 388; elastyczność.';
+
+        $ok = $this->rows($requirement, [new CardSource(CardSource::NORMS, 'EN ISO 21420:2020, EN 388:2016+A1:2019 (4544C)')])['cut_level'];
+        $this->assertSame(Status::Ok, $ok->status);
+        $this->assertSame(['text' => 'min. B (przyjęte)', 'value' => 'B', 'inferred' => true], array_diff_key($ok->required, ['quote' => 1]));
+        $this->assertStringContainsString('odporne na przecięcie', $ok->required['quote']);
+        $this->assertSame('SIWZ nie podaje poziomu przecięcia — przyjęto minimum B (lekka odporność na przecięcie).', $ok->note);
+
+        $this->assertSame(Status::Fail, $this->rows($requirement, [new CardSource(CardSource::NORMS, 'EN 388: 4X21A')])['cut_level']->status);
+    }
+
+    /** RCFB-2369 COVENT FOAM (produkcja): „2131X” — Coup Test 1, ISO nie badano. Przy wymaganym B nie spełnia. */
+    #[Test]
+    public function card_with_only_coup_1_and_no_iso_letter_fails_required_b(): void
+    {
+        $requirement = 'Rękawice ochronne odporne na przecięcie, przeznaczone do prac z narzędziami tnącymi.';
+        $rcfb = [new CardSource(CardSource::NORMS, 'EN 388:2016+A1:2018 – poziom 2131X, EN ISO 21420:2020')];
+
+        $row = $this->rows($requirement, $rcfb)['cut_level'];
+        $this->assertSame(Status::Fail, $row->status);
+        $this->assertSame('2131X', $row->card[0]['text']);
+        $this->assertStringContainsString('Coup Test 1 bez litery ISO 13997', (string) $row->note);
+
+        // Canis: zapis słowny „przecięcie 1” to też Coup Test
+        $canis = [new CardSource(CardSource::DESCRIPTION, 'Spełnia EN 388 (przetarcie 2, przecięcie 1, rozerwanie 3, przekłucie 1).')];
+        $this->assertSame(Status::Fail, $this->rows($requirement, $canis)['cut_level']->status);
+
+        // wyższej cyfry Coup Test nie przeliczamy na literę — brak z notką
+        $coup3 = $this->rows($requirement, [new CardSource(CardSource::NORMS, 'EN 388:2016 – 4343X')])['cut_level'];
+        $this->assertSame(Status::Missing, $coup3->status);
+        $this->assertSame([], $coup3->card);
+        $this->assertStringContainsString('Coup Test 3 bez litery ISO 13997', (string) $coup3->note);
+
+        // litera na innym polu karty rozstrzyga — Coup Test 1 bez znaczenia
+        $withLetter = [...$rcfb, new CardSource(CardSource::SPECS, 'Odporność na przecięcie wg ISO 13997 - B')];
+        $this->assertSame(Status::Ok, $this->rows($requirement, $withLetter)['cut_level']->status);
     }
 
     #[Test]

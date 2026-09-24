@@ -3736,7 +3736,8 @@ final class ProductAiSearchService
 
     /**
      * Poziom cięcia ISO 13997 jak SNR: wymagany (wprost albo B dla rękawic „odpornych na przecięcie”), a karta podaje
-     * niższy → odpada. Karta bez podanego poziomu zostaje — brak danych to nie sprzeczność.
+     * niższy → odpada. Karta bez podanego poziomu zostaje — brak danych to nie sprzeczność — chyba że podaje tylko
+     * Coup Test 0–1 bez litery ISO: przy wymaganym B i wyżej też odpada (PpeAssortment::onlyLowCoupCut).
      */
     private function meetsRequiredCutLevel(string $query, Product $product): bool
     {
@@ -3744,16 +3745,20 @@ final class ProductAiSearchService
         if ($min === null) {
             return true;
         }
-        $have = $this->assortment->cutLevel(implode(' ', [
+        $text = implode(' ', [
             (string) $product->name,
             (string) ($product->norms ?? ''),
             (string) ($product->description ?? ''),
             // Poziom cięcia bywa wierszem tabelki sklepu, nie zdaniem opisu — bez tego karta z poziomem
             // podanym przez dostawcę byłaby czytana jako „bez danych”.
             (string) ($product->shop_fields_summary ?? ''),
-        ]));
+        ]);
+        $have = $this->assortment->cutLevel($text);
+        if ($have !== null) {
+            return $have >= $min;
+        }
 
-        return $have === null || $have >= $min;
+        return $min < 'B' || ! $this->assortment->onlyLowCoupCut($text);
     }
 
     private function meetsRequiredSnr(string $query, Product $product): bool

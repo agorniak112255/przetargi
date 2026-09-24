@@ -34,6 +34,16 @@ final class LevelChecker implements ParameterChecker
 
     private const SNR = '/(?<![\p{L}\d])SNR(?![\p{L}\d])[^0-9]{0,12}(\d{2,3})(?!\d)(?:\s*dB)?/iu';
 
+    /** Dosłowny zapis „odporne na przecięcie” do cytatu — te same zwroty, które czyta PpeAssortment::requiredCutLevel. */
+    private const CUT_RESISTANCE_WORDS = [
+        '/(?i:antyprzeci)\p{L}*/u',
+        '/(?i:odporn)\p{L}*\s+(?i:na)\s+(?i:przeci)\p{L}*/u',
+        '/(?i:ryzyk)\p{L}*\s+(?i:przeci)\p{L}*/u',
+        '/(?i:przed)\s+(?i:przeci)\p{L}*/u',
+        '/(?i:przeci)\p{L}*(?i:ciow)\p{L}*/u',
+        '/(?i:cut)\s*(?i:resist|protect)\p{L}*/u',
+    ];
+
     /** Dłuższy fragment z kilkoma klasami pokazujemy jako pierwsze trafienie, a klasy wymieniamy w notce. */
     private const VARIANTS_SPAN_MAX = 80;
 
@@ -190,19 +200,30 @@ final class LevelChecker implements ParameterChecker
     }
 
     /**
-     * Litera ISO 13997 podana wprost, gdy wymaganie nie ma kodu EN 388 z pozycjami (ten porównuje wiersz en388).
-     * Bez domyślnego „B” z PpeAssortment::requiredCutLevel — to byłoby dopisanie wymagania.
+     * Litera ISO 13997, gdy wymaganie nie ma kodu EN 388 z pozycjami przecięcia (ten porównuje wiersz en388). Rękawice
+     * „odporne na przecięcie” bez poziomu — co najmniej B, jak bramka dopasowania (PpeAssortment::requiredCutLevel);
+     * decyzja użytkownika 24.09: wiersz pokazuje, że poziom jest przyjęty, a nie podany w SIWZ. Karta bez litery, która
+     * podaje tylko Coup Test 0–1, przy wymaganym B i wyżej nie spełnia (PpeAssortment::onlyLowCoupCut); wyższych cyfr
+     * Coup Test nie przeliczamy — brak z notką.
      *
      * @param  list<CardSource>  $sources
      */
     private function cutLevel(string $requirement, array $sources): ?CheckRow
     {
-        if (En388Code::first($requirement) !== null) {
+        $code = En388Code::first($requirement);
+        if ($code !== null && ($code->levels['coupe'] !== null || $code->levels['iso'] !== null)) {
             return null;
         }
         $required = $this->cutLevels($requirement);
+        $inferred = false;
         if ($required === []) {
-            return null;
+            // Litera, której cutLevels nie potwierdza zapisem, to szum odczytu („EN 388:2015 D”) — nie zgadujemy.
+            $default = $this->assortment->cutLevelsIn($requirement) === [] ? $this->assortment->requiredCutLevel($requirement) : null;
+            if ($default === null) {
+                return null;
+            }
+            $required = [[$default, $this->locate($requirement, self::CUT_RESISTANCE_WORDS) ?? 'odporność na przecięcie']];
+            $inferred = true;
         }
         $letters = array_column($required, 0);
         $min = min($letters);
@@ -218,8 +239,58 @@ final class LevelChecker implements ParameterChecker
                 $findings[] = CheckRow::finding($source, $text, strcmp($letter, $min) >= 0 ? Status::Ok : Status::Fail, ['value' => $letter]);
             }
         }
+        $coupNote = null;
+        if ($findings === [] && strcmp($min, 'B') >= 0) {
+            [$coupFindings, $coupNote] = $this->coupOnlyFindings($sources);
+            $findings = $coupFindings;
+        }
 
-        return $this->valueRow('cut_level', 'Poziom cięcia ISO 13997', 'cut_level', $requirement, $requiredText, $min, $findings);
+        $row = $this->valueRow('cut_level', 'Poziom cięcia ISO 13997', 'cut_level', $requirement, $requiredText, $min, $findings);
+        $notes = array_values(array_filter([
+            $inferred ? "SIWZ nie podaje poziomu przecięcia — przyjęto minimum {$min} (lekka odporność na przecięcie)." : null,
+            $row->note,
+            $coupNote,
+        ]));
+        $required = $inferred
+            ? ['text' => "min. {$min} (przyjęte)", 'quote' => CheckRow::quote($requirement, $requiredText), 'value' => $min, 'inferred' => true]
+            : $row->required;
+
+        return new CheckRow($row->key, $row->label, $required, $row->card, $row->status, $notes === [] ? null : implode(' ', $notes), $row->positions, $row->gate);
+    }
+
+    /**
+     * Karta bez litery ISO 13997: kody EN 388 z cyfrą Coup Test. Same 0–1 → znaleziska „nie spełnia” (jak
+     * PpeAssortment::onlyLowCoupCut); wyższa cyfra → bez znalezisk, tylko notka, bo Coup Test to nie litera ISO.
+     *
+     * @param  list<CardSource>  $sources
+     * @return array{0: list<array<string, mixed>>, 1: ?string}
+     */
+    private function coupOnlyFindings(array $sources): array
+    {
+        $coups = [];
+        $seen = [];
+        foreach ($sources as $source) {
+            foreach (En388Code::allIn($source->text) as $code) {
+                $coupe = $code->levels['coupe'] ?? null;
+                if ($coupe === null || $coupe === 'X' || $this->seen($seen, $source, $code->text)) {
+                    continue;
+                }
+                $coups[] = [$source, $code->text, (int) $coupe];
+            }
+        }
+        if ($coups === []) {
+            return [[], null];
+        }
+        $max = max(array_column($coups, 2));
+        if ($max > 1) {
+            return [[], "Karta podaje tylko przecięcie Coup Test {$max} bez litery ISO 13997 — poziomów nie przeliczamy, do sprawdzenia."];
+        }
+        $findings = [];
+        foreach ($coups as [$source, $text, $coupe]) {
+            $findings[] = CheckRow::finding($source, $text, Status::Fail, ['coupe' => $coupe]);
+        }
+
+        return [$findings, "Karta podaje tylko przecięcie Coup Test {$max} bez litery ISO 13997 — najniższy poziom, to nie odporność na przecięcie."];
     }
 
     /**
@@ -776,7 +847,7 @@ final class LevelChecker implements ParameterChecker
     {
         return $this->locate($text, [
             '/(?i:iso)\s*139[79]7\s*[:\-–—]?\s*(?:(?i:poziom)\p{L}*\s*)?'.$letter.'(?![\p{L}\d])/u',
-            '/(?i:przecię|przecie|przeciec)\p{L}*[^0-9\n]{0,30}?(?i:poziom)\p{L}*\s*[:\-–—]?\s*'.$letter.'(?![\p{L}\d])/u',
+            '/(?i:przecię|przecie|przeciec)\p{L}*[^0-9\n]{0,30}?(?i:poziom|klas)\p{L}*\s*[:\-–—]?\s*'.$letter.'(?![\p{L}\d])/u',
             '/(?i:en\s*iso)\s+'.$letter.'(?![\p{L}\d])/u',
         ]);
     }
