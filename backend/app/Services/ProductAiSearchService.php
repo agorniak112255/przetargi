@@ -1885,10 +1885,10 @@ final class ProductAiSearchService
             // Żargon (wampirki) nie jest krokiem — kaskada szuka po cenniku. Ale
             // termin, który sam jest frazą cennika („narękawniki”), to rzeczownik
             // katalogowy; cechy techniczne (S5, antyprzebiciowe) mają `jargon=false`
-            // i tu nie wpadają.
+            // i tu nie wpadają, a słowa z nazw kart (nitrylowe) zostają mimo flagi.
             $norm = trim($this->lexicalNormalize($step));
             if (
-                $this->catalogSlang->isJargonNorm($norm)
+                $this->isStepJargon($norm)
                 && ! $this->assortment->isCatalogNounStep($step)
                 && ! $this->catalogSlang->isCatalogPhraseTerm($norm)
             ) {
@@ -2006,7 +2006,7 @@ final class ProductAiSearchService
             if (mb_strlen($token) < 4 && ! $this->catalogSlang->isIndexedTerm($token)) {
                 continue;
             }
-            if ($this->catalogSlang->isJargonNorm($token) && ! $this->catalogSlang->isCatalogPhraseTerm($token)) {
+            if ($this->isStepJargon($token) && ! $this->catalogSlang->isCatalogPhraseTerm($token)) {
                 continue;
             }
             if (preg_match('/^(ochrona|przed|ciecz|olej|plyn|proste|uniwersaln|lekki|cienki)/u', $token) === 1) {
@@ -2815,6 +2815,9 @@ final class ProductAiSearchService
      */
     private const RARE_NAME_WORD_MAX_CARDS = 60;
 
+    /** Słowo w tylu nazwach kart to słowo katalogu, nie żargon (24.09: „wampirki” 1 nazwa, „nitrylowe” 121). */
+    private const CATALOG_WORD_MIN_NAMES = 5;
+
     /** Ile takich słów dopisujemy na wymaganie — długi akapit SIWZ nie może przestawić całej listy fraz. */
     private const RARE_NAME_WORDS_PER_QUERY = 2;
 
@@ -2888,6 +2891,32 @@ final class ProductAiSearchService
 
             return $inNames * 2 > $query->count();
         });
+    }
+
+    /**
+     * Żargon do zdjęcia z kroków: termin z flagą `jargon=true`, którego katalog nie ma w nazwach kart. Flaga stoi
+     * na całym wpisie („nitryle, nitrylki, nitrylowe”), a „nitrylowe” jest w nazwach 121 kart — bez tego kroku
+     * kaskada zostawała z samym „rękawice” (24.09: 16 ze 115 zapisanych rozumień traciło tak krok modelu).
+     */
+    private function isStepJargon(string $norm): bool
+    {
+        if (! $this->catalogSlang->isJargonNorm($norm)) {
+            return false;
+        }
+        $counts = $this->catalogNameWordCounts();
+        $words = 0;
+        foreach (explode(' ', trim($norm)) as $word) {
+            $word = (string) preg_replace('/[0-9]+/', '', $word);
+            if (mb_strlen($word) < 3) {
+                continue;
+            }
+            if (($counts[$word] ?? 0) < self::CATALOG_WORD_MIN_NAMES) {
+                return true;
+            }
+            $words++;
+        }
+
+        return $words === 0;
     }
 
     /**

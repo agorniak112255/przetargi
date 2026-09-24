@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use App\Models\Product;
 use App\Services\ProductAiSearchService;
 use App\Support\CatalogSlangDictionary;
+use App\Support\PpeAssortment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use ReflectionMethod;
 use Tests\Support\Opisowy15Fixture;
@@ -47,6 +49,58 @@ final class ProductAiSearchIntentSanitizerTest extends TestCase
             $this->invokePrivate($svc, 'localIntent', 'Rękawice wampirki uniwersalne'),
         );
         $this->assertSame(['rękawice', 'dłoń powlekana'], $vampire);
+    }
+
+    /**
+     * Wpis żargonu „nitryle, nitrylki, nitrylowe” ma flagę jargon=true na całości, a „nitrylowe” stoi w nazwach setek
+     * kart. Zdjęty krok zostawiał kaskadzie samo „rękawice” (24.09: 16 ze 115 zapisanych rozumień).
+     */
+    public function test_catalog_name_words_stay_steps_despite_jargon_flag(): void
+    {
+        foreach (range(1, 5) as $i) {
+            Product::query()->create([
+                'sku' => 'NIT-'.$i,
+                'name' => 'Rękawice nitrylowe jednorazowe bezpudrowe '.$i,
+                'manufacturer' => 'Delta Plus',
+                'catalog_price_net' => 8,
+                'purchase_price' => 4,
+                'stock' => 1,
+                'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            ]);
+        }
+        // Jedna karta ze słowem żargonu to nie słowo katalogu.
+        Product::query()->create([
+            'sku' => 'WAMP-1',
+            'name' => 'Rękawice wampirki powlekane',
+            'manufacturer' => 'Delta Plus',
+            'catalog_price_net' => 5,
+            'purchase_price' => 2,
+            'stock' => 1,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+        ]);
+        $svc = $this->service();
+
+        $steps = $this->invokePrivate($svc, 'sanitizeSearchSteps',
+            ['rękawice', 'nitrylowe', 'jednorazowe', 'wampirki'],
+            $this->invokePrivate($svc, 'localIntent', 'Rękawice nitrylowe jednorazowe'),
+        );
+
+        $this->assertSame(['rękawice', 'nitrylowe', 'jednorazowe'], $steps);
+        $this->assertFalse($this->invokePrivate($svc, 'isWeakSearchStep', 'nitrylowe'));
+        $this->assertTrue($this->invokePrivate($svc, 'isWeakSearchStep', 'wampirki'));
+    }
+
+    public function test_jargon_flag_still_strips_words_the_catalog_does_not_name(): void
+    {
+        // Pusty katalog: „nitrylowe” nie stoi w żadnej nazwie — jak dotąd traktujemy je jak żargon wpisu.
+        $svc = $this->service();
+
+        $steps = $this->invokePrivate($svc, 'sanitizeSearchSteps',
+            ['rękawice', 'nitrylowe'],
+            $this->invokePrivate($svc, 'localIntent', 'Rękawice nitrylowe'),
+        );
+
+        $this->assertSame(['rękawice'], $steps);
     }
 
     public function test_class_or_norm_token_is_a_strong_step(): void
