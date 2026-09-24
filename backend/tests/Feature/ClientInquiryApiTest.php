@@ -1177,7 +1177,7 @@ final class ClientInquiryApiTest extends TestCase
             ->assertJsonPath('terms.validity', '14 dni');
 
         $body = (string) $res->json('reply_body');
-        $this->assertStringContainsString("Warunki:\nTermin realizacji: 3 dni robocze od zamówienia\nDostawa: kurier, 25 zł netto\nWażność oferty: 14 dni", $body);
+        $this->assertStringContainsString("Warunki:\nTermin realizacji: 3 dni robocze od zamówienia\nKoszt dostawy: kurier, 25 zł netto\nWażność oferty: 14 dni", $body);
         $this->assertStringNotContainsString('Płatność:', $body);
 
         $html = (string) $res->json('reply_html');

@@ -80,7 +80,7 @@ const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
  */
 const termFields: { key: keyof InquiryTerms; label: string; placeholder: string }[] = [
   { key: 'lead_time', label: 'Termin realizacji', placeholder: 'np. 3 dni robocze od zamówienia' },
-  { key: 'delivery', label: 'Dostawa', placeholder: 'np. kurier, koszt 25 zł netto' },
+  { key: 'delivery', label: 'Koszt dostawy', placeholder: 'np. 25 zł netto, kurier' },
   { key: 'payment', label: 'Płatność', placeholder: 'np. przelew 30 dni' },
   { key: 'validity', label: 'Ważność oferty', placeholder: 'np. 14 dni' },
 ]

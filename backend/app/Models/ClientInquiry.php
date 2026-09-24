@@ -27,7 +27,7 @@ class ClientInquiry extends Model
      */
     public const OFFER_TERMS = [
         'lead_time' => 'Termin realizacji',
-        'delivery' => 'Dostawa',
+        'delivery' => 'Koszt dostawy',
         'payment' => 'Płatność',
         'validity' => 'Ważność oferty',
     ];
