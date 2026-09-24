@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Services\Search\UnderstandingAudit;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class UnderstandingAuditTest extends TestCase
@@ -83,6 +84,43 @@ final class UnderstandingAuditTest extends TestCase
                 $answer,
             ),
         );
+    }
+
+    /**
+     * Zapisy skasowane 24.09.2026 na serwerze po przeglądzie jako błędne — zawężona reguła ma je dalej wskazywać.
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function wrongUnderstandings(): array
+    {
+        return [
+            '98 zmyślony wyrób' => ['Sperian tudzież HONEYWELL - 10 130 47', 'zapalniczki'],
+            '99 zgadnięty rodzaj' => ['Sperian HONEYWELL 10 130 47', 'okulary ochronne'],
+            '104 wyrób spoza wiersza' => ['Zamów proszę - kolor czarny', 'rękawice'],
+            '111 zgubiony materiał' => ['spodnie do pasa z polipropylenu', 'spodnie robocze'],
+            '64 zmyślony materiał' => ['Rękawice MAxicut 44-3745 10 12 par', 'rękawice ochronne z włókna aramidowego'],
+            '57 zmyślone cechy' => ['rękawice r. 11.40-50', 'rękawice robocze'],
+            '80 nakrapiane to nie powlekane' => ['rękawice białe dziane nakrapiane EN ISO 21420', 'rękawice dzianinowe z powlekana dłonią'],
+            '87 przekręcona marka' => ['Rękawiczki nitrylowe "MedaSept" EASYGRIP PURPLE - 50 opk', 'rękawice nitrylowe jednorazowe'],
+            '89 przekręcona marka' => ['rękawiczki nitrylowe MedaSept EASYGRIP PURPLE', 'rękawice nitrylowe jednorazowe'],
+            '20 zgubiona seria' => ['Rękawice Ultrane', 'rękawice'],
+        ];
+    }
+
+    #[DataProvider('wrongUnderstandings')]
+    public function test_understandings_found_wrong_on_production_stay_flagged(string $requirement, string $needed): void
+    {
+        $r = (new UnderstandingAudit)->check($requirement, ['needed' => $needed, 'search_steps' => [], 'constraints' => []]);
+
+        $this->assertNotSame(['dropped' => [], 'added' => []], $r);
+    }
+
+    /** Żargon przełożony w krokach wyszukiwania to nie błąd — kroki nie są nazwą wyrobu. */
+    public function test_translated_search_steps_are_not_flagged_as_added(): void
+    {
+        $answer = ['needed' => 'buty spawalnicze', 'search_steps' => ['buty', 'podeszwa żaroodporna'], 'constraints' => []];
+
+        $this->assertSame(['dropped' => [], 'added' => []], (new UnderstandingAudit)->check('Buty spawalnicze HRO', $answer));
     }
 
     public function test_stem_inside_a_longer_word_matches(): void

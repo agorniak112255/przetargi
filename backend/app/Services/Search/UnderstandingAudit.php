@@ -10,7 +10,7 @@ namespace App\Services\Search;
  * zgubił materiał i dopisał słowo, którego w wymaganiu nie ma.
  *
  * Porównanie jest czysto słownikowe i tylko wskazuje zapisy do obejrzenia przez człowieka: poprawiona literówka
- * albo rozwinięty slang (wampirki → dzianinowe) też zostaną pokazane, choć zrozumienie jest dobre.
+ * albo slang przełożony w samej nazwie wyrobu (wampirki → dzianinowe) też zostaną pokazane, choć są dobre.
  */
 final class UnderstandingAudit
 {
@@ -28,20 +28,30 @@ final class UnderstandingAudit
     private const DROPPED_MAX_TOKENS = 8;
 
     /**
-     * Słowa bez treści wyrobu (ilości, opakowania, zwroty z SIWZ) — ich brak w zrozumieniu nie jest błędem.
+     * Słowa bez treści wyrobu (ilości, opakowania, zwroty z SIWZ i maili, ogólniki „ochronne … przed”) — ich brak
+     * albo dopisanie nie jest błędem. Wypełniacze dopisane 24.09.2026 po przeglądzie 103 zapisów z serwera
+     * („ilość około”, „zestaw … kompletów”, „o wymiarach”, „z funkcją ESD”, „z normą”, „wersja nagłowna”).
      * Zapis bez polskich znaków, bo porównanie idzie po złożeniu diakrytyków.
      */
     private const IGNORED = [
-        'sztuk', 'sztuki', 'rozmiar', 'rozmiarze', 'rozmiary', 'opakowanie', 'opakowania',
+        'sztuk', 'sztuki', 'rozmiar', 'rozmiarze', 'rozmiary', 'rozmiaru', 'opakowanie', 'opakowania',
         'zgodnie', 'wymagania', 'wymaganiami', 'ktore', 'ktora', 'ktory',
         'ponizej', 'powyzej', 'prosze', 'oferte', 'wycene', 'zakup', 'zakupu', 'dostawa', 'dostawy',
+        'ilosc', 'okolo', 'zestaw', 'komplet', 'kompletu', 'kompletow', 'wymiarach', 'wymiary',
+        'funkcja', 'funkcji', 'norma', 'normy', 'norme', 'wersja', 'wersji', 'szczegolnosci', 'takze', 'wyposazenie',
+        'ochrona', 'ochronne', 'ochronny', 'ochronna', 'ochronnych', 'przed',
     ];
 
     /** Pola odpowiedzi, które sterują wyszukiwaniem. search_phrases celowo pominięte — materiał tylko tam nie pomógł. */
     private const RETRIEVAL_FIELDS = ['needed', 'search_steps', 'constraints', 'model_name', 'manufacturer'];
 
-    /** Pola, w których model nazywa wyrób — dopisane tu słowo zmienia to, czego szukamy. */
-    private const NAMING_FIELDS = ['needed', 'search_steps'];
+    /**
+     * Nazwa wyrobu w zrozumieniu — dopisane tu słowo zmienia to, czego szukamy („spodnie robocze”, „zapalniczki”).
+     * Kroki wyszukiwania pominięte: tam model tłumaczy żargon na słowa katalogu (wampirki → dzianinowe, HRO →
+     * podeszwa żaroodporna) i z nimi lista 103 zapisów z serwera miała 60 oznaczeń; sama nazwa i wypełniacze — 33,
+     * a każdy z 10 zapisów skasowanych 24.09.2026 jako błędne dalej jest oznaczony.
+     */
+    private const NAMING_FIELDS = ['needed'];
 
     private const DIACRITICS = [
         'ą' => 'a', 'ę' => 'e', 'ł' => 'l', 'ó' => 'o', 'ś' => 's', 'ć' => 'c', 'ń' => 'n', 'ź' => 'z', 'ż' => 'z',
