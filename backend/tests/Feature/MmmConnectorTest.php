@@ -336,6 +336,29 @@ final class MmmConnectorTest extends TestCase
         $this->assertStringContainsString('Lista 3M (ŚOI, aktywne): 4 wyrobów z 1 grup kategorii', $summary);
     }
 
+    public function test_order_condition_comes_from_the_base_unit_row_of_the_list(): void
+    {
+        $this->fakeSite();
+        $this->catalog();
+        // jak na żywo (7100265270): sprzedaż w kartonach po 24, w jednostce bazowej moq 24 i moi 24; karton moq 1
+        foreach ([0, 3] as $i) {
+            $this->items[$i]['orderUnits'][1]['moq'] = '24.0';
+            $this->items[$i]['orderUnits'][1]['moi'] = '24.0';
+        }
+        $connector = $this->connector();
+
+        $products = self::byId(iterator_to_array($connector->products(), false));
+
+        $this->assertSame(
+            ['order_min_qty' => 24.0, 'order_step_qty' => 24.0, 'order_unit' => 'szt', 'order_varies' => false],
+            $connector->price($products['7000009701'])?->order?->slotValues(),
+        );
+        // moq 1 / moi 1 w jednostce bazowej — bez ograniczenia
+        $plugs = $connector->price($products['7100100637'])?->order;
+        $this->assertSame(['order_min_qty' => 1.0, 'order_step_qty' => 1.0, 'order_unit' => 'para', 'order_varies' => false], $plugs?->slotValues());
+        $this->assertFalse($plugs->restricts());
+    }
+
     public function test_list_goes_by_category_groups_splits_a_large_leaf_by_brand_and_rereads_an_unstable_group(): void
     {
         $this->fakeSite();

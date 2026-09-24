@@ -217,7 +217,26 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
             throw new RuntimeException((string) ($product->raw['reason'] ?? 'karta wyrobu nieodczytana'));
         }
 
-        return new B2bRemotePrice(net: round((int) $product->raw['cents'] / 100, 2));
+        return new B2bRemotePrice(net: round((int) $product->raw['cents'] / 100, 2), order: self::orderQuantity($product->raw));
+    }
+
+    /**
+     * Warunek zamawiania z karty wyrobu: minimumQuantity to zarazem krok — przyciski +/− koszyka dodają i odejmują
+     * minimumQuantity, a platforma odpowiada „Minimalne zamówienie to XX lub wielokrotność” (sprawdzone na koncie
+     * 24.09.2026: 92538 po 10 szt., 100080 po 6 par). Jednostka = measureUnit wyrobu. Karta bez pola = null
+     * (źródło warunku nie podało, zapisany zostaje).
+     *
+     * @param  array<string, mixed>  $raw
+     */
+    private static function orderQuantity(array $raw): ?B2bOrderQuantity
+    {
+        $minimum = $raw['minimum_quantity'] ?? null;
+        if (! is_int($minimum) || $minimum < 1) {
+            return null;
+        }
+        $unit = trim((string) ($raw['unit'] ?? ''));
+
+        return new B2bOrderQuantity((float) $minimum, (float) $minimum, $unit !== '' ? $unit : null);
     }
 
     public function description(B2bRemoteProduct $product): string
@@ -348,7 +367,7 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
      * Karta wyrobu → pola karty. Nieczytelna budowa = wyjątek z powodem (wyrób pominięty, reszta przebiegu idzie dalej).
      *
      * @param  array<string, mixed>  $product
-     * @return array{code: string, name: string, brand: string, group: string, manufacturer_code: string, unit: string, minimum_quantity: int, packings: list<string>, tax_rate: string, expiration_date: string, norms: string, category_ce: string, application: string, marks: list<array{0: string, 1: string}>, technical: list<array{0: string, 1: string}>, description: string, documents: list<array{title: string, url: string, kind: string}>, image_urls: list<string>}
+     * @return array{code: string, name: string, brand: string, group: string, manufacturer_code: string, unit: string, minimum_quantity: int|null, packings: list<string>, tax_rate: string, expiration_date: string, norms: string, category_ce: string, application: string, marks: list<array{0: string, 1: string}>, technical: list<array{0: string, 1: string}>, description: string, documents: list<array{title: string, url: string, kind: string}>, image_urls: list<string>}
      */
     public static function parseProduct(array $product): array
     {
@@ -399,7 +418,8 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
             'group' => self::field($product['group'] ?? ''),
             'manufacturer_code' => self::field($product['manufacturerCode'] ?? ''),
             'unit' => self::field($product['measureUnit'] ?? ''),
-            'minimum_quantity' => is_int($product['minimumQuantity'] ?? null) ? $product['minimumQuantity'] : 1,
+            // null = karta nie podaje (warunek zamawiania nieznany, nie „bez ograniczeń”)
+            'minimum_quantity' => is_int($product['minimumQuantity'] ?? null) ? $product['minimumQuantity'] : null,
             'packings' => $packings,
             'tax_rate' => self::field($product['taxRate'] ?? ''),
             'expiration_date' => self::field($product['expirationDate'] ?? ''),

@@ -331,6 +331,29 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame(12.01, $price->base);
         $this->assertSame(round((1 - 5.7 / 12.01) * 100, 2), $price->discountPercent);
         $this->assertSame('PLN', $price->currency);
+        // „Min. zam.” 12 we wszystkich referencjach: samo minimum — kroku witryna nie podaje, koszyk go nie wymusza
+        // (Liferay multipleOrderQuantity 0), jednostki tabela nie podaje
+        $this->assertSame(
+            ['order_min_qty' => 12.0, 'order_step_qty' => null, 'order_unit' => null, 'order_varies' => false],
+            $price->order?->slotValues(),
+        );
+    }
+
+    public function test_references_of_one_card_with_different_minimum_orders_give_a_size_dependent_condition(): void
+    {
+        $page = self::neptun();
+        $page['rows'][0][6] = '6';
+        $this->pages['neptun-tt733'] = $page;
+        $this->lists['hand-protection'] = [1 => ['neptun-tt733']];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $card = iterator_to_array($connector->products(), false)[0];
+
+        $this->assertSame(
+            ['order_min_qty' => null, 'order_step_qty' => null, 'order_unit' => null, 'order_varies' => true],
+            $connector->price($card)?->order?->slotValues(),
+        );
     }
 
     public function test_card_content_description_shop_fields_norms_documents_and_images(): void

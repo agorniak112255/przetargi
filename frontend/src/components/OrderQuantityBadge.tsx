@@ -22,7 +22,7 @@ export function OrderQuantityBadge({
   if (!oq || (!oq.varies && !orderRestricts(oq))) return null
   const title = orderQtyTitle(oq)
   const order = orderableQty(qty, oq)
-  const unit = (oq.unit ?? '').trim() || 'szt.'
+  const unit = (oq.unit ?? '').trim()
   return (
     <span className={`${block ? 'block w-fit' : 'inline-flex'} items-center gap-1 ${className}`} title={title}>
       <span className="inline-block whitespace-nowrap rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
@@ -30,7 +30,7 @@ export function OrderQuantityBadge({
       </span>
       {order != null && (
         <span className="whitespace-nowrap text-[10px] font-semibold text-amber-800">
-          → zamówisz {formatOrderQty(order)} {unit}
+          → zamówisz {formatOrderQty(order)}{unit !== '' ? ` ${unit}` : ''}
         </span>
       )}
     </span>

@@ -52,7 +52,7 @@ function priceByMode(
   return v == null ? null : PLN.format(v)
 }
 
-/** Klucz jednostki do porównania („szt.”, „sztuk” → „szt”); brak jednostki = sztuki, jak w znaczku warunku. */
+/** Klucz jednostki do porównania („szt.”, „sztuk” → „szt”); brak jednostki pozycji zapytania = sztuki. */
 function unitKey(unit: string | null | undefined): string {
   const u = (unit ?? '').trim().toLowerCase().replace(/[.\s]/g, '')
   if (u === '' || u.startsWith('szt')) return 'szt'
@@ -67,7 +67,8 @@ function unitKey(unit: string | null | undefined): string {
  * klient liczy w innej jednostce niż sklep (np. „op.” wobec „szt.”) — wtedy sam znaczek, bez zgadywania.
  */
 function qtyForOrderCondition(item: InquiryItem, oq: OrderQuantity | null | undefined): number | null {
-  if (!oq) return null
+  // jednostka warunku nieznana (np. Delta Plus) — nie wiadomo, czy klient liczy w tym samym; sam znaczek
+  if (!oq || !(oq.unit ?? '').trim()) return null
   const m = /^\s*(\d+(?:[.,]\d+)?)\s*(.*)$/u.exec(item.qty ?? '')
   if (!m) return null
   if (unitKey(item.unit || m[2]) !== unitKey(oq.unit)) return null

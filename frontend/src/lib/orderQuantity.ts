@@ -7,9 +7,10 @@ export function formatOrderQty(qty: number): string {
   return String(Number(qty.toFixed(4))).replace('.', ',')
 }
 
+/** Jednostka ze źródła; brak (np. Delta Plus nie podaje jednostki ceny) — bez jednostki, nie zgadujemy „szt.”. */
 function unitSuffix(unit: string | null | undefined): string {
   const u = (unit ?? '').trim()
-  return u !== '' ? ` ${u}` : ' szt.'
+  return u !== '' ? ` ${u}` : ''
 }
 
 /** Czy warunek ogranicza zamówienie (minimum > 1 albo krok > 1). Warunek zależny od rozmiaru — osobno (varies). */
@@ -54,9 +55,10 @@ export function orderQtyTitle(oq: OrderQuantity): string {
     return `${oq.source_label}: rozmiary tej karty mają różne warunki zamawiania — szczegóły na karcie dostawcy (Informacje handlowe).`
   }
   const unit = unitSuffix(oq.unit)
-  const lines = [`${oq.source_label}: zamówienie tylko ${orderQtyLabel(oq)}`]
+  const lines = [`${oq.source_label}: zamawianie ${orderQtyLabel(oq)}`]
   if (oq.min != null) lines.push(`Najmniejsza ilość: ${formatOrderQty(oq.min)}${unit}`)
   if (oq.step != null && oq.step > 1) lines.push(`Krok ilości: ${formatOrderQty(oq.step)}${unit}`)
-  lines.push('Warunek ze sklepu dostawcy (pole ilości w koszyku).')
+  if (oq.step == null) lines.push('Kroku sklep nie podaje — ponad minimum dowolna ilość.')
+  lines.push('Warunek ze sklepu dostawcy.')
   return lines.join('\n')
 }

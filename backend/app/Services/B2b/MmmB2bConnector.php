@@ -221,7 +221,38 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
             net: round($net, 2),
             base: $base !== null ? round($base, 2) : null,
             discountPercent: $base !== null && $base > 0 ? round((1 - $net / $base) * 100, 2) : 0.0,
+            order: self::orderQuantity(is_array($product->raw['item'] ?? null) ? $product->raw['item'] : []),
         );
+    }
+
+    /**
+     * Warunek zamawiania w jednostce ceny (bazowej): moq i moi wiersza orderUnits tej jednostki — minimum i krok,
+     * które 3M liczy już w sztukach bazowych (sprawdzone na koncie 24.09.2026: 7100265270 szt moq 20 moi 20, karton
+     * 20 szt moq 1; 7100001829 szt moq 40 = 1 karton). „Minimalne zamówienie” z odpowiedzi ceny jest w jednostce
+     * sprzedaży („1 karton”), więc do warunku go nie bierzemy. Brak wiersza jednostki bazowej = null.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private static function orderQuantity(array $item): ?B2bOrderQuantity
+    {
+        $base = (string) ($item['base_unit'] ?? '');
+        if ($base === '') {
+            return null;
+        }
+        foreach (is_array($item['order_units'] ?? null) ? $item['order_units'] : [] as $unit) {
+            if (! is_array($unit) || ($unit['code'] ?? '') !== $base) {
+                continue;
+            }
+            $min = B2bOrderQuantity::attribute((string) ($unit['moq'] ?? ''));
+            if ($min === null) {
+                return null;
+            }
+            $name = trim((string) ($unit['name'] ?? ''));
+
+            return new B2bOrderQuantity($min, B2bOrderQuantity::attribute((string) ($unit['moi'] ?? '')), $name !== '' ? $name : null);
+        }
+
+        return null;
     }
 
     /**
@@ -640,6 +671,9 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
                 'name' => self::value($unit['orderUnitName'] ?? null),
                 'default' => self::isTrue($unit['defaultOrderUnit'] ?? null),
                 'conversion' => self::value(is_array($unit['uomData'] ?? null) ? ($unit['uomData']['conversion'] ?? null) : null),
+                // minimum i krok zamówienia w tej jednostce (moq/moi, np. „20.0”) — warunek zamawiania (orderQuantity())
+                'moq' => self::value($unit['moq'] ?? null),
+                'moi' => self::value($unit['moi'] ?? null),
             ];
         }
         $image = $row['main_image'] ?? null;

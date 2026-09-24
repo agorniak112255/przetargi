@@ -223,6 +223,17 @@ final class P4sConnectorTest extends TestCase
         $this->assertContains(['Oznaczenia', 'EN 388:2016', '4 X 4 3 D'], $fields);
         $this->assertContains(['Opis techniczny', 'Rozmiary', '7-9'], $fields);
         $this->assertContains(['Informacje handlowe', 'Minimalna ilość zamówienia', '120 para'], $fields);
+        // minimumQuantity to zarazem krok (koszyk +/− o minimumQuantity, „… lub wielokrotność”) — po 120 par
+        $this->assertSame(
+            ['order_min_qty' => 120.0, 'order_step_qty' => 120.0, 'order_unit' => 'para', 'order_varies' => false],
+            $connector->price($card)?->order?->slotValues(),
+        );
+    }
+
+    public function test_card_without_minimum_quantity_gives_no_order_condition(): void
+    {
+        $this->assertNull(P4sB2bConnector::parseProduct(['id' => 1, 'code' => 'X1', 'name' => 'Wyrób'])['minimum_quantity']);
+        $this->assertSame(1, P4sB2bConnector::parseProduct(['id' => 1, 'code' => 'X1', 'name' => 'Wyrób', 'minimumQuantity' => 1])['minimum_quantity']);
     }
 
     public function test_sizes_in_two_prices_are_two_cards_coded_with_their_first_size(): void

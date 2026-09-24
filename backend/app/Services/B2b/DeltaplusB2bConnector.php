@@ -204,7 +204,39 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
             net: round($net, 2),
             base: is_float($base) ? round($base, 2) : null,
             discountPercent: is_float($base) ? round((1 - $net / $base) * 100, 2) : 0.0,
+            order: self::orderQuantity(is_array($product->raw['versions'] ?? null) ? $product->raw['versions'] : []),
         );
+    }
+
+    /**
+     * Warunek zamawiania z kolumny „Min. zam.” referencji karty — samo minimum, dosłownie. Kroku witryna nie podaje,
+     * a koszyk go nie wymusza (productConfiguration każdej referencji: minOrderQuantity 1, multipleOrderQuantity 0
+     * — sprawdzone na koncie 24.09.2026 na 50MAC z „Min. zam.” 12), więc step null. Jednostki tabela nie podaje
+     * (cena „jednostkowa”) — unit null. Referencje karty z różnym minimum = „zależy od rozmiaru”; kolumna pusta albo
+     * nieczytelna we wszystkich = null (źródło warunku nie podało).
+     *
+     * @param  list<array<string, mixed>>  $versions
+     */
+    private static function orderQuantity(array $versions): ?B2bOrderQuantity
+    {
+        $minimums = [];
+        $unread = 0;
+        foreach ($versions as $version) {
+            $min = B2bOrderQuantity::attribute((string) ($version['min_order'] ?? ''));
+            if ($min === null) {
+                $unread++;
+            } else {
+                $minimums[(string) $min] = $min;
+            }
+        }
+        if ($minimums === []) {
+            return null;
+        }
+        if (count($minimums) > 1 || $unread > 0) {
+            return new B2bOrderQuantity(null, null, varies: true);
+        }
+
+        return new B2bOrderQuantity(array_values($minimums)[0], null);
     }
 
     /** Krótki opis i zalety wyrobu — proza producenta, dosłownie; '' gdy strona żadnej nie ma. */
