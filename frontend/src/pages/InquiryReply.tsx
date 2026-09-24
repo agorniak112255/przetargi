@@ -445,7 +445,7 @@ function ItemRow({
                 disabled={busy}
                 onClick={() => onAnswer(item.answer_key, { option_id: `p:${c.id}` })}
               >
-                {c.sku} · {c.name} · {c.source === 'manual' ? 'ręcznie' : `${c.score}%`}
+                {c.sku} · {c.name} · {c.source === 'manual' ? 'ręcznie' : c.source === 'link' ? 'z linku' : `${c.score}%`}
               </Chip>
               <OrderQuantityBadge oq={c.order_quantity} />
               <button

@@ -13,6 +13,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Pricing\SourcePriceComparison;
+use App\Support\InquiryLinks;
 use App\Support\InquiryMailText;
 use App\Support\InquiryQueryText;
 use App\Support\InquiryReplyHtml;
@@ -117,12 +118,15 @@ final class ClientInquiryService
             ?? InquiryQueryText::subjectProductHint($subject);
         $extracted = $this->extract($analysisBody, $forwardedSubject ?? $this->nullable($subject));
         $lineItems = $this->resolveLineItems($analysisBody, $extracted['line_items'], $subjectHint);
+        // Link w pozycji wskazuje kartę wprost — ten sam adres zapisał przy karcie łącznik B2B.
+        $linked = app(InquiryProductLinks::class)->attach($lineItems, $analysisBody);
+        $lineItems = $linked['items'];
         $queries = $this->uniqueQueries(
             $lineItems,
             // mail bez żadnej pozycji („Proszę o ofertę”) — szukamy przynajmniej wyrobu z tematu
             $lineItems === [] && $extracted['product_queries'] === [] && $subjectHint !== null
                 ? [$subjectHint]
-                : $extracted['product_queries']
+                : array_map(InquiryLinks::withoutUrls(...), $extracted['product_queries'])
         );
         $matches = $this->matchProducts($queries);
         $substitutes = $this->loadSubstitutes($matches);
@@ -160,6 +164,8 @@ final class ClientInquiryService
                 'product_queries' => $queries,
                 'line_items' => $lineItems,
                 'matches' => $matches,
+                // karty wskazane linkiem z maila, po pozycjach (InquiryProductLinks)
+                'link_candidates' => $this->linkCandidates($linked['products']),
                 'substitutes' => $substitutes,
                 'cards' => $cards,
                 'margin_used' => $preferences['margin'],
@@ -1195,6 +1201,14 @@ final class ClientInquiryService
         if ($this->requestedBrandAbsent($candidates) !== null) {
             return 'check';
         }
+        // Klient wskazał kartę linkiem: domyślnie wchodzi ona albo nic. Inny wyrób, który
+        // „lepiej potwierdza warunek”, byłby naszym wyborem wbrew linkowi.
+        if (($candidates[0]['source'] ?? null) === 'link') {
+            $candidates = array_values(array_filter(
+                $candidates,
+                static fn (array $p): bool => ($p['source'] ?? null) === 'link',
+            ));
+        }
 
         // Klient postawił warunek („w szczególności na kwas siarkowy 96%”):
         // do listu wchodzi tylko karta, która ten warunek potwierdza. Gdy żadna
@@ -1241,6 +1255,10 @@ final class ClientInquiryService
         $best = $candidates[0] ?? null;
         if ($best === null) {
             return 'none';
+        }
+        // Karta z linku nie ma oceny modelu — o pewności decyduje adres, nie wynik.
+        if (($best['source'] ?? null) === 'link') {
+            return $this->linkedSingle($candidates) ? 'high' : 'medium';
         }
         $score = (int) ($best['score'] ?? 0);
         // Klient wpisał dokładny kod z katalogu — to nie jest zgadywanie modelu.
@@ -1296,6 +1314,10 @@ final class ClientInquiryService
     {
         if (count($candidates) < 2 || $this->skuQuotedIndex($item, $candidates) === 0) {
             return false;
+        }
+        if (($candidates[0]['source'] ?? null) === 'link') {
+            // pod linkiem stoi kilka kart albo inny wariant adresu — wybiera handlowiec
+            return ! $this->linkedSingle($candidates);
         }
         $best = (int) ($candidates[0]['score'] ?? 0);
         $second = (int) ($candidates[1]['score'] ?? 0);
@@ -1436,6 +1458,18 @@ final class ClientInquiryService
             array_unshift($products, $hit);
         }
 
+        // Karta wskazana linkiem z maila staje na czele, przed oceną modelu: klient pokazał
+        // ją adresem strony, który łącznik B2B zapisał przy karcie (#69: ROLEX 5, a model dał
+        // po 99% ROLEX-om 1, 2 i 3). Ta sama karta z wyszukiwarki drugi raz się nie pokazuje.
+        $linked = $this->linkedCandidates($analysis, (string) ($item['id'] ?? ''));
+        if ($linked !== []) {
+            $linkedIds = array_map(static fn (array $p): int => (int) $p['id'], $linked);
+            $products = [...$linked, ...array_values(array_filter(
+                $products,
+                static fn (array $p): bool => ! in_array((int) ($p['id'] ?? 0), $linkedIds, true),
+            ))];
+        }
+
         $seen = [];
         foreach ($products as $product) {
             $seen[(int) ($product['id'] ?? 0)] = true;
@@ -1447,6 +1481,86 @@ final class ClientInquiryService
         }
 
         return $products;
+    }
+
+    /**
+     * Karty wskazane linkiem z maila przy tej pozycji (zapis z chwili analizy).
+     *
+     * @param  array<string, mixed>  $analysis
+     * @return list<array<string, mixed>>
+     */
+    private function linkedCandidates(array $analysis, string $itemId): array
+    {
+        $byItem = is_array($analysis['link_candidates'] ?? null) ? $analysis['link_candidates'] : [];
+        $out = [];
+        foreach (is_array($byItem[$itemId] ?? null) ? $byItem[$itemId] : [] as $row) {
+            if (is_array($row) && (int) ($row['id'] ?? 0) > 0) {
+                $out[] = $row;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Karty z linków jako wiersze kandydatów. Oceny modelu nie mają — tej karty nikt nie
+     * porównywał z wierszem, wskazał ją adres — więc wynik zostaje 0, a powód mówi, skąd są.
+     *
+     * @param  array<string, list<array{product: Product, url: string, match: string, variant: string|null}>>  $byItem
+     * @return array<string, list<array<string, mixed>>>
+     */
+    private function linkCandidates(array $byItem): array
+    {
+        $out = [];
+        foreach ($byItem as $itemId => $hits) {
+            foreach ($hits as $hit) {
+                $product = $hit['product'];
+                $host = (string) preg_replace('/^www\./', '', mb_strtolower((string) parse_url($hit['url'], PHP_URL_HOST)));
+                $variant = $hit['variant'] === null ? '' : ' Wariant z linku: '.$hit['variant'].'.';
+                $safe = $this->safeProduct([
+                    'id' => $product->id,
+                    'sku' => $product->sku,
+                    'name' => $product->name,
+                    'manufacturer' => $product->manufacturer,
+                    'norms' => $product->norms,
+                    'catalog_price_net' => $product->catalog_price_net,
+                    'purchase_price' => $product->purchase_price,
+                    'currency' => $product->currency ?? 'PLN',
+                    'stock' => $product->stock,
+                    'ai_match_source' => 'link',
+                    'reason' => ($hit['match'] === 'exact'
+                        ? 'Link z zapytania prowadzi do strony tej karty ('.$host.').'
+                        : 'Link z zapytania prowadzi do tego wyrobu na '.$host.', ale w innym wariancie adresu (kolor, rozmiar) — sprawdź wariant.')
+                        .$variant,
+                ]);
+                if ($safe === null) {
+                    continue;
+                }
+                // ślad: który adres z maila i jak zgodny wskazał kartę
+                $safe['link'] = ['url' => $hit['url'], 'match' => $hit['match']];
+                $out[(string) $itemId][] = $safe;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Czy na czele stoi jedyna karta z linku o tym samym adresie — pewne wskazanie klienta.
+     * Kilka kart pod jednym adresem (kolory, rozmiary) albo inny wariant adresu wybiera handlowiec.
+     *
+     * @param  list<array<string, mixed>>  $candidates
+     */
+    private function linkedSingle(array $candidates): bool
+    {
+        $linked = array_values(array_filter(
+            $candidates,
+            static fn (array $p): bool => ($p['source'] ?? null) === 'link',
+        ));
+
+        return count($linked) === 1
+            && ($candidates[0]['source'] ?? null) === 'link'
+            && ($linked[0]['link']['match'] ?? null) === 'exact';
     }
 
     /**

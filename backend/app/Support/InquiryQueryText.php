@@ -70,6 +70,10 @@ final class InquiryQueryText
             return '';
         }
 
+        // Adres strony nie opisuje wyrobu, a jego słowa bywają wspólne dla całej rodziny
+        // („urzadzenie-samohamowne-do-pracy-w-pionie” pasowało do każdego ROLEX-a, #69).
+        // Kartę, do której prowadzi, wskazuje InquiryProductLinks.
+        $text = InquiryLinks::withoutUrls($text);
         $text = self::dropPositionMarkers($text);
         $text = self::dropPrices($text);
 
