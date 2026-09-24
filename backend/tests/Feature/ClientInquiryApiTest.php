@@ -14,6 +14,7 @@ use App\Services\ProductInquirySearch;
 use Carbon\CarbonImmutable;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Testing\TestResponse;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -1631,5 +1632,73 @@ final class ClientInquiryApiTest extends TestCase
     {
         $keys = AiTask::keys();
         $this->assertContains('client_inquiry', $keys);
+    }
+
+    /**
+     * Produkcja 24.09.2026: lokalny model nie odpowiadał, ocena kart padła, a pozycja RS SPLIT KEV —
+     * która jest w katalogu — dostała „brak w katalogu”. Pusta lista po awarii modelu to nie brak towaru.
+     */
+    public function test_item_without_model_answer_is_flagged_instead_of_missing_from_catalog(): void
+    {
+        $res = $this->analyzeWithEmptySearch('unavailable');
+
+        $this->assertContains('model_failed', (array) $res->json('items.0.flags'));
+        $this->assertGreaterThanOrEqual(1, (int) $res->json('attention_count'), 'pozycja po awarii modelu wymaga sprawdzenia');
+    }
+
+    /** Model ocenił karty i nic nie pasowało — to jest prawdziwy „brak w katalogu”. */
+    public function test_item_rated_empty_by_model_is_not_flagged_as_model_failure(): void
+    {
+        $res = $this->analyzeWithEmptySearch('empty');
+
+        $this->assertNotContains('model_failed', (array) $res->json('items.0.flags'));
+    }
+
+    /** Model padł przy ogólnej frazie: zostają wiersze „ten sam rodzaj”, które widok odsiewa. */
+    public function test_item_with_only_unrated_fallback_rows_after_model_failure_is_flagged(): void
+    {
+        $res = $this->analyzeWithEmptySearch('unavailable', [[
+            'id' => 22,
+            'sku' => 'FW94',
+            'name' => 'Rękawice skórzane',
+            'manufacturer' => 'Portwest',
+            'catalog_price_net' => '5.00',
+            'currency' => 'PLN',
+            'ai_match_percent' => 46,
+            'ai_match_source' => 'catalog',
+        ]]);
+
+        $this->assertSame([], $res->json('items.0.candidates'));
+        $this->assertContains('model_failed', (array) $res->json('items.0.flags'));
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $products
+     */
+    private function analyzeWithEmptySearch(string $modelState, array $products = []): TestResponse
+    {
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Rękawice spawalnicze',
+                'questions' => [],
+                'product_queries' => ['rękawice spawalnicze RS SPLIT KEV'],
+                'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock) use ($modelState, $products): void {
+            $mock->shouldReceive('findMany')->once()->andReturn([[
+                'query' => 'rękawice spawalnicze RS SPLIT KEV',
+                'products' => $products,
+                'model_state' => $modelState,
+            ]]);
+        });
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+
+        return $this->postJson('/api/inquiries', [
+            'body' => 'Dzień dobry, proszę o ofertę na rękawice spawalnicze RS SPLIT KEV.',
+            'tone' => 'handlowy',
+        ])->assertCreated()
+            ->assertJsonPath('items.0.confidence', 'none')
+            ->assertJsonPath('items.0.chosen', 'check');
     }
 }

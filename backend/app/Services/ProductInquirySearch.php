@@ -29,7 +29,7 @@ class ProductInquirySearch
 
     /**
      * @param  list<string>  $queries
-     * @return list<array{query: string, products: list<array<string, mixed>>}>
+     * @return list<array{query: string, products: list<array<string, mixed>>, model_state: string|null}>
      */
     public function findMany(array $queries, int $limit): array
     {
@@ -44,6 +44,8 @@ class ProductInquirySearch
             $out[] = [
                 'query' => $queries[$i] ?? (string) ($result['query'] ?? ''),
                 'products' => is_array($result['products'] ?? null) ? $result['products'] : [],
+                // „unavailable” = model nie odpowiedział; pusta lista nie znaczy wtedy „brak w katalogu”
+                'model_state' => is_string($result['model_state'] ?? null) ? $result['model_state'] : null,
             ];
         }
 

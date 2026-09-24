@@ -21,6 +21,7 @@ use App\Support\OfferPricing;
 use App\Support\OfferProductText;
 use App\Support\OfferTermText;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
 
@@ -817,6 +818,10 @@ final class ClientInquiryService
             if ($confidence === 'none' && $candidates !== []) {
                 $flags[] = 'low_score';
             }
+            if ($candidates === [] && $this->searchFailedForItem($matches, $item)) {
+                // model nie ocenił kart — o katalogu nic nie wiemy, więc nie „brak w katalogu”
+                $flags[] = 'model_failed';
+            }
             if ($this->isAmbiguous($candidates, $item)) {
                 $flags[] = 'ambiguous';
             }
@@ -1092,7 +1097,11 @@ final class ClientInquiryService
                     $products[] = $product;
                 }
             }
-            $out[] = ['query' => (string) ($group['query'] ?? ''), 'products' => $products];
+            $out[] = [
+                'query' => (string) ($group['query'] ?? ''),
+                'products' => $products,
+                'model_failed' => ($group['model_failed'] ?? false) === true,
+            ];
         }
 
         return $out;
@@ -1655,10 +1664,11 @@ final class ClientInquiryService
             // z zapasem: wiersze nieocenione odsiewamy dopiero przy pokazywaniu,
             // więc przycięcie do trójki przed odsiewem zabrałoby dobre trafienia
             $rawGroups = $this->search->findMany($sliced, self::MAX_MATCHES_PER_QUERY * 3);
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            Log::warning('Zapytanie klienta: wyszukiwanie w katalogu padło', ['error' => $e->getMessage()]);
             $rawGroups = [];
             foreach ($sliced as $query) {
-                $rawGroups[] = ['query' => $query, 'products' => []];
+                $rawGroups[] = ['query' => $query, 'products' => [], 'model_state' => ProductAiSearchService::MODEL_STATE_UNAVAILABLE];
             }
         }
 
@@ -1675,7 +1685,13 @@ final class ClientInquiryService
                     $products[] = $safe;
                 }
             }
-            $groups[] = ['query' => $query, 'products' => $products];
+            $group = ['query' => $query, 'products' => $products];
+            // Po awarii modelu nikt kart nie ocenił — pusta lista w widoku to wtedy nie „brak
+            // w katalogu”. Także gdy zostały wiersze zapasowe („ten sam rodzaj”), bo widok je odsiewa.
+            if (($result['model_state'] ?? null) === ProductAiSearchService::MODEL_STATE_UNAVAILABLE) {
+                $group['model_failed'] = true;
+            }
+            $groups[] = $group;
         }
 
         return $groups;
@@ -2926,6 +2942,41 @@ final class ClientInquiryService
      */
     private function productsForItem(array $matches, array $item): array
     {
+        [$first, $second] = $this->groupsForItem($matches, $item);
+        $found = $first['products'] ?? [];
+        if ($found !== []) {
+            return $found;
+        }
+
+        return $second['products'] ?? [];
+    }
+
+    /**
+     * Wyszukiwanie tej pozycji skończyło się awarią modelu, nie pustym katalogiem.
+     *
+     * @param  list<array<string, mixed>>  $matches
+     * @param  array<string, mixed>  $item
+     */
+    private function searchFailedForItem(array $matches, array $item): bool
+    {
+        foreach ($this->groupsForItem($matches, $item) as $group) {
+            if (($group['model_failed'] ?? false) === true) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Grupa wyników po kluczu wyszukiwania pozycji i grupa po jej frazie (stare rekordy).
+     *
+     * @param  list<array<string, mixed>>  $matches
+     * @param  array<string, mixed>  $item
+     * @return array{0: array<string, mixed>|null, 1: array<string, mixed>|null}
+     */
+    private function groupsForItem(array $matches, array $item): array
+    {
         // zapisany klucz z chwili analizy; stare rekordy go nie mają i liczą po staremu
         $search = $this->nullable($item['search_query'] ?? null) ?? $this->catalogSearchQuery(
             (string) ($item['query'] ?? ''),
@@ -2939,33 +2990,32 @@ final class ClientInquiryService
         $quote = (string) ($item['quote'] ?? '');
         $hasQuery = trim((string) ($item['query'] ?? '')) !== ''
             || ! InquiryQueryText::hasProductWord($quote);
-        $found = $this->productsForQuery($matches, $search, $hasQuery);
-        if ($found !== []) {
-            return $found;
-        }
 
-        return $this->productsForQuery($matches, (string) ($item['query'] ?? ''), $hasQuery);
+        return [
+            $this->groupForQuery($matches, $search, $hasQuery),
+            $this->groupForQuery($matches, (string) ($item['query'] ?? ''), $hasQuery),
+        ];
     }
 
     /**
-     * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
-     * @return list<array<string, mixed>>
+     * @param  list<array<string, mixed>>  $matches
+     * @return array<string, mixed>|null
      */
-    private function productsForQuery(array $matches, string $query, bool $allowOnlyGroup = true): array
+    private function groupForQuery(array $matches, string $query, bool $allowOnlyGroup = true): ?array
     {
         $key = mb_strtolower(trim($query));
         foreach ($matches as $group) {
             if (mb_strtolower(trim((string) ($group['query'] ?? ''))) === $key) {
-                return $group['products'];
+                return $group;
             }
         }
         // Stare rekordy trzymały w kluczu grupy cały cytat („rękawice nitrylowe rozmiar 9”),
         // więc przy jednej grupie bierzemy ją mimo innego klucza.
         if ($allowOnlyGroup && count($matches) === 1) {
-            return $matches[0]['products'];
+            return $matches[0];
         }
 
-        return [];
+        return null;
     }
 
     /**

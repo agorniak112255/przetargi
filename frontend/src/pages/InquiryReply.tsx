@@ -57,6 +57,9 @@ const confidenceBadge: Record<InquiryConfidence, { label: string; cls: string }>
   none: { label: 'brak w katalogu', cls: 'bg-red-100 text-red-800' },
 }
 
+// Model nie ocenił kart — o katalogu nic nie wiemy, więc nie wolno pisać „brak w katalogu”.
+const modelFailedBadge = { label: 'model nie odpowiedział', cls: 'bg-slate-200 text-slate-800' }
+
 const flagLabel: Record<InquiryFlag, string> = {
   low_score: 'niski wynik dopasowania',
   ambiguous: 'kilku podobnych kandydatów',
@@ -66,6 +69,7 @@ const flagLabel: Record<InquiryFlag, string> = {
   requirement_unconfirmed: 'karta nie potwierdza warunku z zapytania',
   requirement_note: 'warunek szczególny do przeczytania',
   product_from_subject: 'wyrób wzięty z tematu maila',
+  model_failed: 'wyszukaj ponownie przyciskiem „Szukaj AI”',
 }
 
 const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
@@ -268,7 +272,7 @@ function ItemRow({
   onManualDraft: (value: string) => void
   onManualPriceBlur: () => void
 }) {
-  const badge = confidenceBadge[item.confidence]
+  const badge = item.flags.includes('model_failed') ? modelFailedBadge : confidenceBadge[item.confidence]
   const chosenId = item.chosen.startsWith('p:') ? Number(item.chosen.slice(2)) : null
   const chosen = chosenId != null ? item.candidates.find((c) => c.id === chosenId) ?? null : null
   const computedPrice = chosen ? priceByMode(chosen, priceMode) : null

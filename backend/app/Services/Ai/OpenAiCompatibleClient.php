@@ -170,7 +170,13 @@ class OpenAiCompatibleClient
 
         $profile = $this->withProviderPinPolicy($this->settings->profileForTask($task), $task);
         try {
-            return $this->chatManyWithProfile($profile, $messageSets, $jsonMode, $extra, $onAnswered);
+            $unreachable = [];
+            $rows = $this->chatManyWithProfile($profile, $messageSets, $jsonMode, $extra, $onAnswered, $unreachable);
+            if ($profile['is_default'] || $unreachable === []) {
+                return $rows;
+            }
+
+            return $this->retryUnreachableOnMain($rows, $unreachable, $messageSets, $jsonMode, $extra, $task, $profile['label']);
         } catch (RuntimeException $e) {
             if ($profile['is_default']) {
                 $failed = [];
@@ -339,6 +345,69 @@ class OpenAiCompatibleClient
         }
     }
 
+    /**
+     * Pula na profilu nie rzuca wyjątku, gdy serwer modelu leży — każde zapytanie wraca
+     * osobno jako błąd, więc fallback z chat() tu nie działał. Log produkcji 24.09.2026:
+     * lokalny vLLM za bramką nie odpowiadał (HTTP 500 „Cannot connect to host”), ocena kart
+     * padała w całej fali i zapytania klientów pokazywały „brak w katalogu” przy wyrobach,
+     * które są w bazie. Te zapytania idą raz jeszcze na konfigurację główną.
+     *
+     * Tylko „serwer nie odpowiada” (brak połączenia, HTTP 5xx) — limit 429 i odpowiedź bez
+     * treści zostają przy profilu: ocena kart czeka na przypiętego dostawcę.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @param  list<int>  $unreachable
+     * @param  list<list<array{role: string, content: mixed}>>  $messageSets
+     * @return list<array<string, mixed>>
+     */
+    private function retryUnreachableOnMain(
+        array $rows,
+        array $unreachable,
+        array $messageSets,
+        bool $jsonMode,
+        ?array $extra,
+        ?AiTask $task,
+        string $profileLabel,
+    ): array {
+        $main = $this->settings->profileForTask(null);
+        if ($this->isUnreachableBaseUrl($main['base_url'])) {
+            return $rows;
+        }
+
+        $retrySets = [];
+        foreach ($unreachable as $i) {
+            $retrySets[] = $messageSets[$i];
+        }
+        Log::warning('Profil AI nie odpowiada — zapytania z puli idą na konfigurację główną', [
+            'task' => $task?->value,
+            'profile' => $profileLabel,
+            'count' => count($retrySets),
+            'of' => count($messageSets),
+            'error' => $rows[$unreachable[0]]['error'] ?? null,
+        ]);
+        app(AiServedProviderTally::class)->profileFallback();
+
+        try {
+            $mainRows = $this->chatManyWithProfile($this->withProviderPinPolicy($main, $task), $retrySets, $jsonMode, $extra);
+        } catch (RuntimeException $e) {
+            Log::warning('Profil AI nie odpowiada — konfiguracja główna też zawiodła, zostawiam błąd profilu', [
+                'task' => $task?->value,
+                'profile' => $profileLabel,
+                'main_error' => $e->getMessage(),
+            ]);
+
+            return $rows;
+        }
+        foreach ($unreachable as $pos => $i) {
+            // Gdy i główna nie odpowie, zostaje błąd profilu — to on mówi, co naprawdę padło.
+            if (($mainRows[$pos]['ok'] ?? false) === true) {
+                $rows[$i] = $mainRows[$pos];
+            }
+        }
+
+        return $rows;
+    }
+
     private function isUnreachableBaseUrl(string $baseUrl): bool
     {
         $host = parse_url($baseUrl, PHP_URL_HOST);
@@ -368,6 +437,7 @@ class OpenAiCompatibleClient
     /**
      * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}  $profile
      * @param  list<list<array{role: string, content: mixed}>>  $messageSets
+     * @param  list<int>  $unreachable  indeksy zapytań, na które serwer modelu nie odpowiedział
      * @return list<array{ok: bool, content?: string, model?: string, error?: string}>
      */
     private function chatManyWithProfile(
@@ -376,6 +446,7 @@ class OpenAiCompatibleClient
         bool $jsonMode,
         ?array $extra,
         ?callable $onAnswered = null,
+        array &$unreachable = [],
     ): array {
         if (! $this->settings->resolve()['enabled']) {
             throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
@@ -402,8 +473,13 @@ class OpenAiCompatibleClient
         $responses = $this->retryChatManyEmptyTruncated($url, $apiKey, $timeout, $profile, $bodies, $responses);
 
         $out = [];
+        $unreachable = [];
         foreach ($messageSets as $i => $_) {
-            $out[] = $this->chatManyItemFromResponse($responses[$i] ?? null, $profile);
+            $response = $responses[$i] ?? null;
+            $out[] = $this->chatManyItemFromResponse($response, $profile);
+            if (! $response instanceof Response || $response->serverError()) {
+                $unreachable[] = $i;
+            }
         }
 
         return $out;
