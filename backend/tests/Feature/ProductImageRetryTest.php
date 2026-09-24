@@ -178,7 +178,8 @@ final class ProductImageRetryTest extends TestCase
         $product->refresh();
         $state = $product->enrichment_payload[ProductImageRetry::PAYLOAD_KEY];
         $this->assertSame(1, $state['attempts']);
-        $this->assertSame([self::BARRELS, self::PRIMARY], $state['urls']);
+        // packshot karty przed zdjęciem z zastosowania — w tej kolejności idzie też następna próba
+        $this->assertSame([self::PRIMARY, self::BARRELS], $state['urls']);
         $this->assertStringEndsWith(ProductImageRetry::ERROR_NOTE, (string) $product->enrichment_error);
 
         $payload = $product->enrichment_payload;
@@ -258,6 +259,29 @@ final class ProductImageRetryTest extends TestCase
         $this->assertArrayNotHasKey(ProductImageRetry::PAYLOAD_KEY, $tooSmall->enrichment_payload);
         $this->assertStringEndsWith('.', (string) $tooSmall->enrichment_error);
         $this->assertStringNotContainsString('Ponowimy', (string) $tooSmall->enrichment_error);
+    }
+
+    /**
+     * Karta 8564 (24.09.2026): ślad przebiegu ma kolejność beczki → przenoszenie → packshot. Ponowienie pobiera jedno
+     * zdjęcie — pierwsze przepuszczone przez zaporę zostałoby zdjęciem głównym. Ikona z widżetu rozmiarów (#8565)
+     * nie jest zdjęciem wyrobu, nawet gdy przebieg sprzed poprawki zapisał ją do ponowienia.
+     */
+    public function test_retry_takes_packshot_before_application_shots_and_never_site_graphics(): void
+    {
+        $sizeFinder = 'https://www.ansell.com/-/media/projects/ansell/website/glove-size-finder/chemical.ashx?rev=2fd4c3969ec5448492eab78af81490dc&mh=270&h=270&w=270&la=en&hash=D8A8B36C8E2AD98A1B9F3A112F2E6C3C';
+        $product = $this->product(retry: [$sizeFinder, self::BARRELS, self::PRIMARY], attempts: 1);
+        Http::fake(['*' => Http::response($this->jpeg(), 200, ['Content-Type' => 'image/jpeg'])]);
+
+        $this->assertSame('saved', app(ProductImageRetry::class)->retry($product));
+
+        $this->assertSame(self::PRIMARY, ProductImage::query()->where('product_id', $product->id)->sole()->source_url);
+        Http::assertNotSent(static fn (Request $request): bool => str_contains($request->url(), 'glove-size-finder'));
+
+        $traced = $this->product(sku: 'R075');
+        $traced->forceFill(['enrichment_trace' => ['steps' => [
+            ['t' => 'image', 'm' => 'nie pobrano: odpowiedź nie jest obrazem (text/html) ×3', 'urls' => [$sizeFinder, self::BARRELS, self::PRIMARY]],
+        ]]])->save();
+        $this->assertSame([self::BARRELS, self::PRIMARY], app(ProductImageRetry::class)->urlsFromTrace($traced));
     }
 
     public function test_truncated_trace_url_is_not_used(): void

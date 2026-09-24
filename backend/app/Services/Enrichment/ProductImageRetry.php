@@ -94,7 +94,8 @@ final class ProductImageRetry
                 continue;
             }
             foreach ((array) ($step['urls'] ?? []) as $url) {
-                if (is_string($url) && str_starts_with($url, 'http') && mb_strlen($url) < self::TRACE_URL_LIMIT) {
+                if (is_string($url) && str_starts_with($url, 'http') && mb_strlen($url) < self::TRACE_URL_LIMIT
+                    && ! ProductImageDownloader::isManufacturerSiteGraphicUrl($url)) {
                     $urls[] = $url;
                 }
             }
@@ -133,10 +134,14 @@ final class ProductImageRetry
             return 'skipped';
         }
         $state = $payload[self::PAYLOAD_KEY];
-        $urls = array_values(array_filter(
+        // Adresy zapisał przebieg sprzed poprawki wyboru (albo ślad w jego kolejności): #8564 ma beczki przed
+        // packshotem, a pobierane jest jedno zdjęcie — pierwsze, które zapora przepuści. Grafika witryny
+        // (widżet rozmiarów) nie jest zdjęciem wyrobu, nawet jeśli wtedy trafiła do kolejki.
+        $urls = ProductImageDownloader::packshotsFirst(array_values(array_filter(
             (array) ($state['urls'] ?? []),
             static fn ($url): bool => is_string($url) && str_starts_with($url, 'http')
-        ));
+                && ! ProductImageDownloader::isManufacturerSiteGraphicUrl($url)
+        )));
 
         // Zdjęcie przyszło inną drogą (galeria B2B, nowy przebieg) — nie ma czego ponawiać.
         if ($product->images()->exists()) {
