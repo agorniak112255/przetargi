@@ -85,6 +85,10 @@ export type InquiryItem = {
   query: string | null
   answer_key: string
   substitute_key: string | null
+  /** Klucz `answers` ceny ręcznej: `{ option_id: "p:<id wyrobu>", custom: "159,00" }`; pusta kwota kasuje cenę. */
+  manual_price_key: string
+  /** Cena netto wpisana ręcznie dla wybranego wyrobu; null = cena z trybu cen. */
+  manual_price: number | null
   confidence: InquiryConfidence
   chosen: string
   flags: InquiryFlag[]

@@ -1071,6 +1071,83 @@ final class ClientInquiryApiTest extends TestCase
         $this->assertStringContainsString('Cena: 24,40 zl netto', str_replace(['ł', 'ę'], ['l', 'e'], (string) $res->json('reply_body')));
     }
 
+    public function test_manual_item_price_goes_to_text_and_table_for_the_product_it_was_set_for(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'handlowy',
+            'source_subject' => 'Ogrodniczki',
+            'source_body' => '2 szt. ogrodniczki ostrzegawcze S489',
+            'analysis' => [
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => '2 szt. ogrodniczki ostrzegawcze S489', 'qty' => '2', 'unit' => 'szt', 'query' => 'ogrodniczki S489'],
+                ],
+                'matches' => [
+                    ['query' => 'ogrodniczki S489', 'products' => [
+                        ['id' => 21, 'sku' => '18 289 000', 'name' => 'Spodnie ogrodniczki S489', 'manufacturer' => 'PORTWEST', 'norms' => '', 'catalog_price_net' => '250.00', 'currency' => 'PLN', 'catalog_pln' => 250.0, 'offer_pln' => 202.48, 'stock' => 3, 'score' => 94],
+                        ['id' => 22, 'sku' => 'S489-Y', 'name' => 'Ogrodniczki S489 inny kolor', 'manufacturer' => 'PORTWEST', 'norms' => '', 'catalog_price_net' => '240.00', 'currency' => 'PLN', 'catalog_pln' => 240.0, 'offer_pln' => 190.0, 'stock' => 1, 'score' => 90],
+                    ]],
+                ],
+                'cards' => [],
+            ],
+            'answers' => [
+                'product:item_1' => ['option_id' => 'p:21'],
+                'price' => ['option_id' => 'catalog_margin', 'custom' => '18'],
+            ],
+        ]);
+
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => ['manual_price:item_1' => ['option_id' => 'p:21', 'custom' => '159,00 zł']],
+        ])->assertOk()
+            ->assertJsonPath('items.0.manual_price_key', 'manual_price:item_1')
+            ->assertJsonPath('items.0.manual_price', 159);
+
+        $body = (string) $res->json('reply_body');
+        $html = (string) $res->json('reply_html');
+        $this->assertStringContainsString('Cena: 159,00 zł netto', $body);
+        $this->assertStringNotContainsString('202,48', $body);
+        // tabela idzie z tą samą ceną co tekst, a wartość pozycji liczy się z niej
+        $this->assertStringContainsString('159,00 zł', $html);
+        $this->assertStringContainsString('318,00 zł', $html);
+        $this->assertStringNotContainsString('202,48', $html);
+        $this->assertSame('159.00', $inquiry->fresh()->answers['manual_price:item_1']['custom']);
+
+        // „Bez cen” zostaje listem bez cen, także ręcznych
+        $none = $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => ['price' => ['option_id' => 'none', 'custom' => null]],
+        ])->assertOk();
+        $this->assertStringNotContainsString('159,00', (string) $none->json('reply_body'));
+        $this->assertStringNotContainsString('159,00', (string) $none->json('reply_html'));
+        $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => ['price' => ['option_id' => 'catalog_margin', 'custom' => '18']],
+        ])->assertOk()->assertJsonPath('items.0.manual_price', 159);
+
+        // cena należała do wyrobu 21 — inny wyrób dostaje swoją cenę wyliczoną
+        $other = $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => ['product:item_1' => ['option_id' => 'p:22']],
+        ])->assertOk()->assertJsonPath('items.0.manual_price', null);
+        $this->assertStringContainsString('Cena: 190,00 zł netto', (string) $other->json('reply_body'));
+
+        // nieczytelna kwota jest błędem, a nie cichym powrotem do ceny wyliczonej
+        foreach (['sto', '0', '12,345', '-5'] as $bad) {
+            $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+                'answers' => ['manual_price:item_1' => ['option_id' => 'p:22', 'custom' => $bad]],
+            ])->assertStatus(422)->assertJsonValidationErrors('answers.manual_price:item_1.custom');
+        }
+
+        // puste pole kasuje cenę ręczną
+        $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => [
+                'product:item_1' => ['option_id' => 'p:21'],
+                'manual_price:item_1' => ['option_id' => 'p:21', 'custom' => ''],
+            ],
+        ])->assertOk()->assertJsonPath('items.0.manual_price', null);
+        $this->assertArrayNotHasKey('manual_price:item_1', $inquiry->fresh()->answers);
+    }
+
     public function test_margin_outside_the_range_is_rejected_instead_of_silently_trimmed(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

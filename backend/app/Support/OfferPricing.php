@@ -66,6 +66,40 @@ final class OfferPricing
         return null;
     }
 
+    /** Najwyższa cena jednostkowa wpisywana ręcznie — wyżej to niemal na pewno literówka. */
+    public const MANUAL_PRICE_MAX = 1_000_000.0;
+
+    /**
+     * Cena netto w zł wpisana ręcznie przez handlowca: „159”, „159,00”, „1 234,50 zł”.
+     * Więcej niż dwa miejsca po przecinku albo cokolwiek poza liczbą = null —
+     * do listu idzie dokładnie ta kwota, którą handlowiec zobaczył w polu.
+     */
+    public static function plnFromInput(mixed $raw): ?float
+    {
+        if (is_int($raw) || is_float($raw)) {
+            $raw = (string) $raw;
+        }
+        if (! is_string($raw)) {
+            return null;
+        }
+        $clean = preg_replace('/\s*(?:zł|zl|pln)\.?$/iu', '', trim($raw)) ?? '';
+        $clean = str_replace([',', ' ', "\u{00A0}", "\u{202F}"], ['.', '', '', ''], $clean);
+        if (preg_match('/^\d+(?:\.\d{1,2})?$/', $clean) !== 1) {
+            return null;
+        }
+        $value = (float) $clean;
+
+        return $value > 0 && $value <= self::MANUAL_PRICE_MAX ? round($value, 2) : null;
+    }
+
+    /** Komunikat błędu dla ceny wpisanej ręcznie albo null, gdy jest poprawna. */
+    public static function plnInputError(mixed $raw): ?string
+    {
+        return self::plnFromInput($raw) === null
+            ? 'Cena musi być kwotą w zł netto większą od zera, np. 159 albo 159,90.'
+            : null;
+    }
+
     public static function factorFromPercent(?float $percent): float
     {
         $p = $percent ?? self::markupPercent();

@@ -250,6 +250,9 @@ function ItemRow({
   onAnswer,
   onPreview,
   onSearch,
+  manualDraft,
+  onManualDraft,
+  onManualPriceBlur,
 }: {
   item: InquiryItem
   index: number
@@ -261,11 +264,15 @@ function ItemRow({
   onAnswer: (key: string, answer: InquiryAnswer) => void
   onPreview: (productId: number, query: string) => void
   onSearch: (mode: SearchMode) => void
+  manualDraft: string
+  onManualDraft: (value: string) => void
+  onManualPriceBlur: () => void
 }) {
   const badge = confidenceBadge[item.confidence]
   const chosenId = item.chosen.startsWith('p:') ? Number(item.chosen.slice(2)) : null
   const chosen = chosenId != null ? item.candidates.find((c) => c.id === chosenId) ?? null : null
-  const chosenPrice = chosen ? priceByMode(chosen, priceMode) : null
+  const computedPrice = chosen ? priceByMode(chosen, priceMode) : null
+  const chosenPrice = item.manual_price != null && priceMode !== 'none' ? PLN.format(item.manual_price) : computedPrice
   const subAnswer = item.substitute_key ? answers[item.substitute_key]?.option_id ?? 'no' : null
   const meta = [item.qty, item.unit].filter(Boolean).join(' ')
 
@@ -320,8 +327,31 @@ function ItemRow({
                 <span className="font-semibold">{chosen.sku}</span> · {chosen.name}
                 {chosen.manufacturer ? ` · ${chosen.manufacturer}` : ''}
                 {chosenPrice ? ` · ${chosenPrice}` : priceMode !== 'none' ? ' · cena do potwierdzenia' : ''}
+                {item.manual_price != null && priceMode !== 'none' && ' (ręcznie)'}
               </p>
               {chosen.reason && <p className="text-[11px] text-slate-500">{chosen.reason}</p>}
+              {/* Cena z negocjacji albo promocji: wchodzi do tekstu i do tabeli listu,
+                  więc nie trzeba poprawiać treści ręcznie (to kasowało tabelę). */}
+              {priceMode !== 'none' && (
+                <label className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
+                  Cena ręczna
+                  <input
+                    className="w-24 rounded border border-slate-300 px-2 py-0.5 text-xs text-slate-800"
+                    disabled={busy}
+                    inputMode="decimal"
+                    placeholder={computedPrice ?? 'np. 159,00'}
+                    value={manualDraft}
+                    onChange={(e) => onManualDraft(e.target.value)}
+                    onBlur={onManualPriceBlur}
+                  />
+                  zł netto
+                  <span className="text-slate-400">
+                    {item.manual_price != null && computedPrice
+                      ? `wyliczona: ${computedPrice} · puste pole = cena wyliczona`
+                      : 'puste pole = cena wyliczona'}
+                  </span>
+                </label>
+              )}
             </>
           ) : chosenId != null ? (
             <p className="text-slate-800">Towar #{chosenId} (spoza listy kandydatów)</p>
@@ -438,6 +468,17 @@ function customDraftsFrom(p: InquiryPayload): Record<string, string> {
   return out
 }
 
+/** Cena ręczna w polskim zapisie („159,00”); pozycja bez niej = puste pole. */
+function manualPriceText(value: number | null | undefined): string {
+  return value == null ? '' : value.toFixed(2).replace('.', ',')
+}
+
+function manualDraftsFrom(p: InquiryPayload): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const item of p.items) out[item.id] = manualPriceText(item.manual_price)
+  return out
+}
+
 /** Warunki z serwera do pól; pole dochodzi po stronie API, więc czytamy ostrożnie. */
 function termsDraftFrom(p: InquiryPayload): TermsDraft {
   const saved: Partial<InquiryTerms> = p.terms ?? {}
@@ -480,6 +521,7 @@ export function InquiryReply() {
     validity: '',
   })
   const [customDrafts, setCustomDrafts] = useState<Record<string, string>>({})
+  const [manualDrafts, setManualDrafts] = useState<Record<string, string>>({})
   const [checked, setChecked] = useState<Record<number, boolean>>({})
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [previewQuery, setPreviewQuery] = useState('')
@@ -501,6 +543,7 @@ export function InquiryReply() {
     setNoteDraft(p.extra_note ?? '')
     setTermsDraft(termsDraftFrom(p))
     setCustomDrafts(customDraftsFrom(p))
+    setManualDrafts(manualDraftsFrom(p))
   }
 
   function applyComposed(p: InquiryPayload) {
@@ -647,6 +690,20 @@ export function InquiryReply() {
     // odrzuconą marżę cofamy do zapisanej, żeby w polu nie została liczba spoza oferty
     void compose({ price: { option_id: 'catalog_margin', custom: value } }).then((ok) => {
       if (!ok) setMarginDraft(String(inquiry.price.margin))
+    })
+  }
+
+  /**
+   * Cena ręczna należy do wyrobu wybranego w tej chwili — po zmianie wyrobu
+   * serwer przestaje ją stosować. Nieprzyjętą kwotę cofamy do zapisanej.
+   */
+  function onManualPriceBlur(item: InquiryItem) {
+    if (!inquiry || !item.chosen.startsWith('p:')) return
+    const value = (manualDrafts[item.id] ?? '').trim()
+    const saved = manualPriceText(item.manual_price)
+    if (value === saved) return
+    void compose({ [item.manual_price_key]: { option_id: item.chosen, custom: value || null } }).then((ok) => {
+      if (!ok) setManualDrafts((d) => ({ ...d, [item.id]: saved }))
     })
   }
 
@@ -1032,6 +1089,9 @@ export function InquiryReply() {
                     customDrafts={customDrafts}
                     onCustomDraft={(cardId, v) => setCustomDrafts((d) => ({ ...d, [cardId]: v }))}
                     onAnswer={onAnswer}
+                    manualDraft={manualDrafts[item.id] ?? ''}
+                    onManualDraft={(v) => setManualDrafts((d) => ({ ...d, [item.id]: v }))}
+                    onManualPriceBlur={() => onManualPriceBlur(item)}
                     onPreview={(pid, q) => {
                       setPreviewId(pid)
                       setPreviewQuery(q.trim())

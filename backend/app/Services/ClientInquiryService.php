@@ -44,6 +44,13 @@ final class ClientInquiryService
 
     private const PRICE_MODES = ['none', 'catalog', 'catalog_margin'];
 
+    /**
+     * Klucz `answers` z ceną wpisaną ręcznie przy pozycji: `manual_price:item_N` =>
+     * ['option_id' => 'p:<id wyrobu>', 'custom' => '159.00']. Cena należy do wyrobu,
+     * przy którym ją wpisano — po wyborze innego wyrobu przestaje obowiązywać.
+     */
+    public const MANUAL_PRICE_PREFIX = 'manual_price:';
+
     /** Zdanie zamykające list; podpis zostawiamy stopce handlowca w poczcie. */
     private const OUTRO = 'W razie pytań zapraszamy do kontaktu.';
 
@@ -173,6 +180,22 @@ final class ClientInquiryService
     ): ClientInquiry {
         $saved = is_array($inquiry->answers) ? $inquiry->answers : [];
         $merged = array_merge($saved, $answers);
+        foreach ($answers as $key => $answer) {
+            if (! str_starts_with((string) $key, self::MANUAL_PRICE_PREFIX)) {
+                continue;
+            }
+            // Puste pole kasuje cenę ręczną; zapisujemy kwotę w jednym zapisie,
+            // żeby list i panel czytały tę samą liczbę.
+            $pln = OfferPricing::plnFromInput(is_array($answer) ? ($answer['custom'] ?? null) : null);
+            if ($pln === null) {
+                unset($merged[$key]);
+            } else {
+                $merged[$key] = [
+                    'option_id' => (string) ($answer['option_id'] ?? ''),
+                    'custom' => number_format($pln, 2, '.', ''),
+                ];
+            }
+        }
         foreach ($this->defaultAnswers($inquiry, $this->priceModeOf($merged), $this->marginPercent($merged)) as $key => $answer) {
             $merged[$key] ??= $answer;
         }
@@ -803,7 +826,9 @@ final class ClientInquiryService
                 $flags[] = 'qty_unknown';
             }
             $product = $this->candidateById($candidates, $chosen);
-            if ($product !== null && $priceMode !== 'none' && $this->letterPrice($product, $priceMode, $margin) === null) {
+            $manualPrice = $this->manualPriceFor($item, $product, $answers);
+            if ($product !== null && $priceMode !== 'none' && $manualPrice === null
+                && $this->letterPrice($product, $priceMode, $margin) === null) {
                 $flags[] = 'no_price';
             }
 
@@ -861,6 +886,9 @@ final class ClientInquiryService
                     ?? $this->nullable($item['query'] ?? null),
                 'answer_key' => 'product:'.$itemId,
                 'substitute_key' => $substitutes !== [] ? 'substitutes:'.$itemId : null,
+                'manual_price_key' => self::MANUAL_PRICE_PREFIX.$itemId,
+                // cena wpisana przez handlowca dla wybranego wyrobu; null = liczymy z trybu cen
+                'manual_price' => $manualPrice,
                 'confidence' => $confidence,
                 'chosen' => $chosen,
                 'flags' => $flags,
@@ -3243,7 +3271,13 @@ final class ClientInquiryService
             $substitute = $product === null
                 ? null
                 : $this->chosenSubstituteForItem($item, $this->substitutesForItem($analysis, $candidates), $answers);
-            $picked[] = ['n' => $index + 1, 'item' => $item, 'product' => $product, 'substitute' => $substitute];
+            $picked[] = [
+                'n' => $index + 1,
+                'item' => $item,
+                'product' => $product,
+                'substitute' => $substitute,
+                'manual_price' => $this->manualPriceFor($item, $product, $answers),
+            ];
         }
 
         // Szablon handlowy pisze się z samego zapytania, więc do bazy nie idziemy.
@@ -3271,10 +3305,31 @@ final class ClientInquiryService
                 $margin,
                 $tone,
                 $cards,
+                $row['manual_price'],
             );
         }
 
         return $rows;
+    }
+
+    /**
+     * Cena wpisana ręcznie przy pozycji — tylko dla wyrobu, przy którym ją wpisano.
+     *
+     * @param  array<string, mixed>  $item
+     * @param  array<string, mixed>|null  $product
+     * @param  array<string, mixed>  $answers
+     */
+    private function manualPriceFor(array $item, ?array $product, array $answers): ?float
+    {
+        if ($product === null || ! isset($product['id'])) {
+            return null;
+        }
+        $answer = $answers[self::MANUAL_PRICE_PREFIX.(string) ($item['id'] ?? '')] ?? null;
+        if (! is_array($answer) || trim((string) ($answer['option_id'] ?? '')) !== 'p:'.(int) $product['id']) {
+            return null;
+        }
+
+        return OfferPricing::plnFromInput($answer['custom'] ?? null);
     }
 
     /**
@@ -3320,6 +3375,7 @@ final class ClientInquiryService
         float $margin,
         string $tone = ClientInquiry::TONE_HANDLOWY,
         array $cards = [],
+        ?float $manualPln = null,
     ): array {
         $size = trim((string) ($item['size'] ?? ''));
         // cytat idzie do klienta — bez ceny z cudzej oferty, reszta słowo w słowo
@@ -3360,6 +3416,8 @@ final class ClientInquiryService
             $tone,
             $cards[(int) $product['id']] ?? [],
             $fallback,
+            '',
+            $manualPln,
         );
         if ($substitute !== null) {
             // Zamiennika nie opisujemy słowami klienta — pytał o coś innego,
@@ -3383,7 +3441,7 @@ final class ClientInquiryService
             'quote' => $quote === '' ? null : $quote,
             'answer' => array_column($answer, 'text'),
             'answer_roles' => array_column($answer, 'role'),
-            'facts' => $this->offerFacts($n, $item, $product, $priceMode, $margin, $tone),
+            'facts' => $this->offerFacts($n, $item, $product, $priceMode, $margin, $tone, $manualPln),
         ];
     }
 
@@ -3404,6 +3462,7 @@ final class ClientInquiryService
         string $priceMode,
         float $margin,
         string $tone,
+        ?float $manualPln = null,
     ): array {
         $size = $this->nullable($item['size'] ?? null);
         $qu = $this->qtyUnit($item);
@@ -3425,9 +3484,12 @@ final class ClientInquiryService
             ];
         }
 
-        $unitPln = $priceMode === 'catalog'
-            ? $this->catalogPln($product)
-            : ($priceMode === 'catalog_margin' ? $this->offerPln($product, $margin) : null);
+        // Cena ręczna zastępuje wyliczoną, ale „Bez cen” zostaje listem bez cen.
+        $unitPln = $priceMode === 'none' || $priceMode === ''
+            ? null
+            : ($manualPln ?? ($priceMode === 'catalog'
+                ? $this->catalogPln($product)
+                : ($priceMode === 'catalog_margin' ? $this->offerPln($product, $margin) : null)));
         $pieces = $qu['qty'] === null ? null : (float) str_replace(',', '.', $qu['qty']);
         $totalPln = $unitPln !== null && $pieces !== null && $pieces > 0 ? $unitPln * $pieces : null;
 
@@ -3475,6 +3537,7 @@ final class ClientInquiryService
         array $card = [],
         ?string $fallback = null,
         string $rolePrefix = '',
+        ?float $manualPln = null,
     ): array {
         $lines = $this->productHeadLines($label, $product, $tone, $card, $fallback);
         if ($lines === []) {
@@ -3495,7 +3558,9 @@ final class ClientInquiryService
             $out[] = ['text' => 'Normy: '.$norms, 'role' => $rolePrefix.'meta'];
         }
         if ($priceMode !== '' && $priceMode !== 'none') {
-            $price = $this->letterPrice($product, $priceMode, $margin);
+            $price = $manualPln !== null
+                ? $this->formatPln($manualPln)
+                : $this->letterPrice($product, $priceMode, $margin);
             // Jednostki naszej ceny nie znamy — karta jej nie niesie. Doklejana była jednostka z maila
             // klienta, więc przy zapytaniu „20 op.” cena za sztukę wychodziła jako cena za opakowanie.
             // Ilość i jednostka klienta stoją w nagłówku pozycji i tam jest ich miejsce.
