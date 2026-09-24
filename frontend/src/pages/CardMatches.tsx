@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { applyCheckboxRange } from '../lib/checkboxRange'
 import {
   api,
+  ApiError,
   can,
   type CardBrief,
   type CardMatch,
@@ -429,7 +430,7 @@ function PlanTable({ m, plan }: { m: CardMatch; plan: CardMatchPlan }) {
       {suggested && (
         <div className="mt-1 space-y-px rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-700">
           <p>
-            Zostanie karta:{' '}
+            Proponowana karta, która zostaje:{' '}
             <Link
               to={`/products/${suggested.keep_product_id}`}
               target="_blank"
@@ -499,6 +500,264 @@ function PlanProposal({ m, showKind, collapsed }: { m: CardMatch; showKind: bool
   )
 }
 
+/** Stan panelu „Połącz rozmiary…” jednej propozycji (otwarty najwyżej jeden naraz). */
+type SizeMergeForm = {
+  candidateId: number
+  keepId: number
+  name: string
+  /** Człowiek zmienił nazwę — zmiana karty, która zostaje, już jej nie podmienia. */
+  nameEdited: boolean
+  /**
+   * plan_hash, przy którym zaznaczono „tylko rozmiar”. Potwierdzenie dotyczy tego planu — gdy po odświeżeniu listy
+   * plan jest inny (np. doszła pozycja), pole samo się odznacza i trzeba spojrzeć na plan jeszcze raz.
+   */
+  confirmedHash: string | null
+}
+
+/** Granice nazwy karty modelu — jak walidacja API (name min:3 max:1000). */
+const NAME_MIN = 3
+const NAME_MAX = 1000
+
+/** Karty producenta z planu w kolejności rozmiarów z podpowiedzi (S, M, L), potem pozostałe z pozycji. */
+function sizeMergeCards(plan: CardMatchPlan): CardBrief[] {
+  const cards = planCards(plan)
+  const ordered: CardBrief[] = []
+  for (const s of plan.suggested?.sizes ?? []) {
+    const c = cards.get(s.product_id)
+    if (c && !ordered.includes(c)) ordered.push(c)
+  }
+  for (const c of cards.values()) {
+    if (!ordered.includes(c)) ordered.push(c)
+  }
+  return ordered
+}
+
+/** Rozmiar karty producenta: z podpowiedzi, a bez niej z pozycji dystrybutora wskazującej tę kartę; null = nie wiemy. */
+function sizeLabelFor(plan: CardMatchPlan, productId: number): string | null {
+  const s = plan.suggested?.sizes.find((x) => x.product_id === productId)
+  if (s?.label) return s.label
+  return plan.positions.find((p) => p.target_product_id === productId && p.size_label)?.size_label ?? null
+}
+
+/** Formularz na start: karta i nazwa z podpowiedzi (bez podpowiedzi nazwy — nazwa karty, która zostaje), bez potwierdzenia. */
+function defaultSizeMergeForm(m: CardMatch): SizeMergeForm | null {
+  const suggested = m.plan?.suggested
+  if (!m.plan || !suggested) return null
+  const keep = planCards(m.plan).get(suggested.keep_product_id)
+  return {
+    candidateId: m.id,
+    keepId: suggested.keep_product_id,
+    name: suggested.common_name ?? keep?.name ?? '',
+    nameEdited: false,
+    confirmedHash: null,
+  }
+}
+
+/**
+ * Panel „Połącz rozmiary” pod wierszem propozycji: która karta zostaje, nazwa karty modelu, lista rozmiarów (tylko
+ * podgląd — wylicza ją serwer), co się stanie i obowiązkowe potwierdzenie. Przycisk aktywny dopiero po potwierdzeniu
+ * i z nazwą ≥ 3 znaki; samo łączenie (z oknem potwierdzenia) robi rodzic.
+ */
+function SizeMergePanel({
+  m,
+  form,
+  busy,
+  working,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  m: CardMatch
+  form: SizeMergeForm
+  busy: boolean
+  working: boolean
+  onChange: (patch: Partial<SizeMergeForm>) => void
+  onSubmit: (keep: CardBrief, drops: CardBrief[], name: string) => void
+  onCancel: () => void
+}) {
+  const plan = m.plan
+  const suggested = plan?.suggested
+  if (!plan || !suggested) {
+    return <p className="text-amber-800">Brak planu łączenia tej propozycji — odśwież propozycje.</p>
+  }
+
+  const cards = sizeMergeCards(plan)
+  // wybór z formularza, o ile karta jest jeszcze w planie; po zmianie planu wraca podpowiedź
+  const keepId = cards.some((c) => c.id === form.keepId) ? form.keepId : suggested.keep_product_id
+  const keep = cards.find((c) => c.id === keepId) ?? null
+  const drops = cards.filter((c) => c.id !== keepId)
+  const producer = keep?.manufacturer ?? m.brand ?? 'producent'
+  const distributor = plan.source_label
+  const keepSize = keep ? sizeLabelFor(plan, keep.id) : null
+  const trimmed = form.name.trim()
+  const nameOk = trimmed.length >= NAME_MIN
+  const confirmed = form.confirmedHash !== null && form.confirmedHash === m.plan_hash
+  const staleConfirm = form.confirmedHash !== null && !confirmed
+  // pozycja wskazuje kartę, której skrótu nie ma (np. usunięta) — lista „co zniknie” byłaby niepełna, więc bez łączenia
+  const missingCard = plan.positions.some((p) => p.target_product_id !== null && !p.target)
+  const ready = keep !== null && drops.length > 0 && m.source !== null && m.plan_hash !== null && !missingCard
+  const canSubmit = !busy && ready && confirmed && nameOk
+
+  return (
+    <div className="rounded-lg border border-blue-200 bg-blue-50/40 p-3 text-xs">
+      <p className="text-sm font-semibold text-slate-900">Połącz rozmiary w jedną kartę {producer}</p>
+      <p className="mt-0.5 text-[11px] text-slate-600">
+        Sprawdź trzy rzeczy: która karta zostaje, jaka będzie nazwa i jakie rozmiary. Nic się nie zmieni, dopóki nie
+        potwierdzisz.
+      </p>
+
+      <fieldset className="mt-3" disabled={busy}>
+        <legend className="font-medium text-slate-800">1. Zostaje karta</legend>
+        <div className="mt-1 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {cards.map((c) => {
+            const checked = c.id === keepId
+            const size = sizeLabelFor(plan, c.id)
+            return (
+              <label
+                key={c.id}
+                className={`flex cursor-pointer gap-2 rounded border bg-white p-2 ${
+                  checked ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name={`size-merge-keep-${m.id}`}
+                  className="mt-1"
+                  checked={checked}
+                  onChange={() =>
+                    onChange({
+                      keepId: c.id,
+                      // bez podpowiedzi wspólnej nazwy domyślna nazwa idzie za wybraną kartą, dopóki nikt jej nie zmienił
+                      ...(!form.nameEdited && !suggested.common_name ? { name: c.name } : {}),
+                    })
+                  }
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="mb-1 flex flex-wrap items-center gap-1">
+                    {size && <SignalBadge signal="size" sizeLabel={size} />}
+                    {checked ? (
+                      <span className="text-[11px] font-medium text-blue-700">zostaje</span>
+                    ) : (
+                      <span className="text-[11px] text-slate-500">zniknie — przejdzie do wybranej</span>
+                    )}
+                  </p>
+                  <CardSide card={c} />
+                </div>
+              </label>
+            )
+          })}
+        </div>
+        {keep && (
+          <p className="mt-1 text-[11px] text-slate-700">
+            Opis, zdjęcie główne i tabelka sklepu zostają z tej karty{keepSize ? ` (rozmiar ${keepSize})` : ''};{' '}
+            {producer} będzie je dalej odświeżać z tej pozycji. Numer karty i SKU {keep.sku} się nie zmieniają.
+          </p>
+        )}
+      </fieldset>
+
+      <div className="mt-3">
+        <label className="font-medium text-slate-800" htmlFor={`size-merge-name-${m.id}`}>
+          2. Nazwa karty modelu
+        </label>
+        <input
+          id={`size-merge-name-${m.id}`}
+          type="text"
+          value={form.name}
+          maxLength={NAME_MAX}
+          disabled={busy}
+          required
+          onChange={(e) => onChange({ name: e.target.value, nameEdited: true })}
+          className="mt-1 block w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+        />
+        <p className="mt-0.5 flex flex-wrap justify-between gap-2 text-[11px]">
+          <span className={nameOk ? 'text-slate-600' : 'text-red-700'}>
+            {nameOk
+              ? 'Nazwa karty zostanie zmieniona na tę — nikt jej potem automatycznie nie nadpisze.'
+              : `Nazwa musi mieć co najmniej ${NAME_MIN} znaki.`}
+          </span>
+          <span className="tabular-nums text-slate-500">
+            {form.name.length}/{NAME_MAX}
+          </span>
+        </p>
+      </div>
+
+      <div className="mt-3">
+        <p className="font-medium text-slate-800">3. Lista rozmiarów na karcie modelu</p>
+        <p className="mt-1 whitespace-pre-line break-words rounded border border-slate-200 bg-white px-2 py-1 text-slate-800">
+          {suggested.variant_summary || '—'}
+        </p>
+        <p className="mt-0.5 text-[11px] text-slate-500">Zapisze się tak, jak widać — tego pola się nie edytuje.</p>
+      </div>
+
+      {keep && m.source && (
+        <div className="mt-3 rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-700">
+          <p className="font-medium text-slate-800">Co się stanie</p>
+          <ul className="mt-0.5 list-disc space-y-px pl-5">
+            <li>
+              Zostaje karta <b className="font-mono">{keep.sku}</b> z nową nazwą i listą rozmiarów.
+            </li>
+            <li>
+              {drops.length === 1 ? 'Zniknie karta' : 'Znikną karty'}{' '}
+              <b className="font-mono">{drops.map((c) => c.sku).join(', ')}</b> — ich ceny, powiązania, identyfikatory
+              i zdjęcia przejdą do karty {keep.sku}.
+            </li>
+            <li>
+              Karta {distributor} <b className="font-mono">{m.source.sku}</b> zostanie dołączona do karty modelu (jej
+              cena będzie obok w „Ceny ze źródeł”).
+            </li>
+            <li>Przed zmianą zapisuje się pełna kopia zapasowa.</li>
+          </ul>
+        </div>
+      )}
+
+      <label className="mt-3 flex items-start gap-2 font-medium text-slate-800">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={confirmed}
+          disabled={busy || m.plan_hash === null}
+          onChange={(e) => onChange({ confirmedHash: e.target.checked ? m.plan_hash : null })}
+        />
+        <span>4. Pozycje różnią się tylko rozmiarem (to ten sam wyrób).</span>
+      </label>
+      {staleConfirm && (
+        <p className="mt-0.5 text-[11px] text-amber-800">
+          Plan zmienił się od zaznaczenia — sprawdź go i potwierdź jeszcze raz.
+        </p>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={() => {
+            if (canSubmit && keep) onSubmit(keep, drops, trimmed)
+          }}
+          className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+        >
+          {working ? 'Łączę…' : 'Połącz rozmiary'}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onCancel}
+          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+        >
+          Anuluj
+        </button>
+        {!busy && ready && (!confirmed || !nameOk) && (
+          <span className="text-[11px] text-slate-500">
+            {!confirmed ? 'Zaznacz potwierdzenie z punktu 4, żeby połączyć.' : 'Popraw nazwę karty modelu.'}
+          </span>
+        )}
+        {!ready && (
+          <span className="text-[11px] text-amber-800">Tej propozycji nie da się teraz połączyć — odśwież listę.</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function CardMatches() {
   const { user } = useAuth()
   const canDecide = can(user, 'card_matches.decide')
@@ -520,6 +779,8 @@ export function CardMatches() {
   /** Błąd z API przy konkretnym wierszu (pojedynczo albo z wyniku zbiorczego). */
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({})
   const [selected, setSelected] = useState<Record<number, boolean>>({})
+  /** Otwarty panel „Połącz rozmiary…” (zostaje otwarty z danymi po błędzie z API). */
+  const [sizeForm, setSizeForm] = useState<SizeMergeForm | null>(null)
   const lastSelectIndex = useRef<number | null>(null)
   const requestSeq = useRef(0)
 
@@ -570,6 +831,7 @@ export function CardMatches() {
     setMsg('')
     setErr('')
     setRowErrors({})
+    setSizeForm(null)
     // Inna zakładka: nie pokazuj przez chwilę wierszy poprzedniej pod nowymi nagłówkami.
     if (nextTab !== tabKey) setResult(null)
     setParams((prev) => {
@@ -672,6 +934,72 @@ export function CardMatches() {
     }
   }
 
+  function toggleSizeMerge(m: CardMatch) {
+    setSizeForm((prev) => (prev?.candidateId === m.id ? null : defaultSizeMergeForm(m)))
+  }
+
+  function patchSizeForm(id: number, patch: Partial<SizeMergeForm>) {
+    setSizeForm((prev) => (prev && prev.candidateId === id ? { ...prev, ...patch } : prev))
+  }
+
+  /**
+   * „Połącz rozmiary”: okno potwierdzenia, potem POST merge-sizes z plan_hash wczytanego planu. 409 = plan zmienił
+   * się od wczytania (lista odświeżona, potwierdzenie do ponowienia); 422 i inne — powód przy wierszu i w pasku
+   * błędu, panel zostaje otwarty z danymi. variant_summary nie wysyłamy — serwer zapisze listę z podpowiedzi.
+   */
+  async function mergeSizes(m: CardMatch, keep: CardBrief, drops: CardBrief[], name: string) {
+    if (!m.plan || !m.source || !m.plan_hash || drops.length === 0) return
+    const all = [keep, ...drops]
+    const cardsInOrder = sizeMergeCards(m.plan).filter((c) => all.some((x) => x.id === c.id))
+    const producer = keep.manufacturer ?? m.brand ?? 'producenta'
+    const n = cardsInOrder.length
+    const ok = window.confirm(
+      `Połączyć ${n} ${plural(n, 'kartę', 'karty', 'kart')} ${producer} (${cardsInOrder.map((c) => c.sku).join(', ')}) ` +
+        `w jedną kartę ${keep.sku} „${name}”?\n\n` +
+        `Zostaje karta ${keep.sku}; pozostałe znikną (ich ceny, powiązania, identyfikatory i zdjęcia przejdą do niej). ` +
+        `Karta ${m.plan.source_label} ${m.source.sku} zostanie dołączona do karty modelu. ` +
+        'Przed zmianą zapisuje się pełna kopia zapasowa.',
+    )
+    if (!ok) return
+    const planHash = m.plan_hash
+    const sourceSku = m.source.sku
+    setBusy(true)
+    setBusyRowId(m.id)
+    setMsg('')
+    setErr('')
+    setRowErrors((prev) => {
+      const next = { ...prev }
+      delete next[m.id]
+      return next
+    })
+    try {
+      await api<CardMatch>(`/card-matches/${m.id}/merge-sizes`, {
+        method: 'POST',
+        body: JSON.stringify({ keep_product_id: keep.id, name, plan_hash: planHash, confirm_sizes_only: true }),
+      })
+      setMsg(
+        `Połączono rozmiary: ${drops.map((c) => c.sku).join(', ')} → ${keep.sku}. Karta ${sourceSku} dołączona.`,
+      )
+      setSizeForm((prev) => (prev?.candidateId === m.id ? null : prev))
+    } catch (ex) {
+      if (ex instanceof ApiError && ex.status === 409) {
+        const text = 'Propozycja zmieniła się od wczytania — lista została odświeżona. Sprawdź plan jeszcze raz.'
+        setRowErrors((prev) => ({ ...prev, [m.id]: text }))
+        setErr(text)
+        // potwierdzenie dotyczyło starego planu — do zaznaczenia od nowa po obejrzeniu odświeżonego
+        patchSizeForm(m.id, { confirmedHash: null })
+      } else {
+        const reason = ex instanceof Error ? ex.message : 'Błąd'
+        setRowErrors((prev) => ({ ...prev, [m.id]: reason }))
+        setErr(`Nie połączono rozmiarów ${rowLabel(m)}: ${reason}`)
+      }
+    } finally {
+      setBusy(false)
+      setBusyRowId(null)
+      await load()
+    }
+  }
+
   async function runBulk(action: 'merge' | 'reject') {
     const ids = selectedIds.slice(0, 200)
     if (ids.length === 0) return
@@ -757,6 +1085,15 @@ export function CardMatches() {
   function renderActions(m: CardMatch) {
     const rowErr = rowErrors[m.id]
     const isPlan = m.kind === 'size_merge' || m.kind === 'split'
+    // Zrobione łączenie rozmiarów: co zatwierdzono (decision_input) — SKU karty, która została, z kart sprzed połączenia
+    const di = m.status === 'merged' && m.kind === 'size_merge' ? m.decision_input : null
+    const sizeMergeDone = di
+      ? {
+          keepSku: di.cards_before.find((c) => c.id === di.keep_product_id)?.sku ?? `#${di.keep_product_id}`,
+          name: di.name,
+          sourceSku: m.source_snapshot?.sku ?? m.source?.sku ?? `#${di.attached_source_product_id}`,
+        }
+      : null
     const rejectButton = (
       <button
         type="button"
@@ -782,12 +1119,26 @@ export function CardMatches() {
             {rejectButton}
           </div>
         )}
-        {m.status === 'pending' && canDecide && isPlan && <div className="flex flex-wrap gap-1">{rejectButton}</div>}
+        {m.status === 'pending' && canDecide && isPlan && (
+          <div className="flex flex-wrap gap-1">
+            {m.kind === 'size_merge' && (
+              <button
+                type="button"
+                disabled={busy || !m.plan?.suggested || !m.plan_hash || !m.source}
+                onClick={() => toggleSizeMerge(m)}
+                aria-expanded={sizeForm?.candidateId === m.id}
+                className="rounded bg-blue-600 px-2.5 py-1 text-[11px] text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {sizeForm?.candidateId === m.id ? 'Zwiń' : 'Połącz rozmiary…'}
+              </button>
+            )}
+            {rejectButton}
+          </div>
+        )}
         {m.status === 'pending' && !canDecide && <span className="text-slate-400">czeka na decyzję</span>}
-        {m.status === 'pending' && isPlan && (
+        {m.status === 'pending' && m.kind === 'split' && (
           <p className="mt-1 text-[11px] text-slate-500">
-            Decyzja o {m.kind === 'size_merge' ? 'połączeniu rozmiarów' : 'rozdzieleniu'} będzie dostępna wkrótce — na
-            razie sprawdź plan albo odrzuć.
+            Decyzja o rozdzieleniu będzie dostępna wkrótce — na razie sprawdź plan albo odrzuć.
           </p>
         )}
         {m.status === 'conflict' && (
@@ -814,15 +1165,23 @@ export function CardMatches() {
         )}
         {decided && (
           <div className="text-[11px] text-slate-600">
-            <p className={m.status === 'merged' ? 'font-medium text-emerald-700' : 'font-medium text-slate-700'}>
-              {m.status === 'rejected'
-                ? 'Odrzucono'
-                : m.kind === 'size_merge'
-                  ? 'Połączono rozmiary'
-                  : m.kind === 'split'
-                    ? 'Rozdzielono'
-                    : 'Połączono'}
-            </p>
+            {sizeMergeDone ? (
+              <p className="text-emerald-800">
+                <span className="font-medium text-emerald-700">Połączono rozmiary</span> — zostaje{' '}
+                <span className="font-mono">{sizeMergeDone.keepSku}</span>, nazwa „{sizeMergeDone.name}”; dołączono
+                kartę <span className="font-mono">{sizeMergeDone.sourceSku}</span>.
+              </p>
+            ) : (
+              <p className={m.status === 'merged' ? 'font-medium text-emerald-700' : 'font-medium text-slate-700'}>
+                {m.status === 'rejected'
+                  ? 'Odrzucono'
+                  : m.kind === 'size_merge'
+                    ? 'Połączono rozmiary'
+                    : m.kind === 'split'
+                      ? 'Rozdzielono'
+                      : 'Połączono'}
+              </p>
+            )}
             <p>{m.decided_by?.name ?? '—'}</p>
             <p className="text-slate-500">{m.decided_at ? formatDateTime(m.decided_at) : '—'}</p>
             {m.reason && <p className="mt-0.5 text-slate-500">{m.reason}</p>}
@@ -990,18 +1349,38 @@ export function CardMatches() {
               const stripe = i % 2 === 1 ? 'bg-slate-100/60' : ''
               if (m.kind === 'size_merge' || m.kind === 'split') {
                 // plan „pozycja → karta”: karta dystrybutora · zdanie + tabelka (w zakładkach mieszanych na dwie
-                // kolumny) · odrzucenie; bez zaznaczania i akcji zbiorczych
+                // kolumny) · odrzucenie; bez zaznaczania i akcji zbiorczych. Łączenie rozmiarów: panel decyzji
+                // rozwijany w wierszu pod spodem na całą szerokość.
+                const panelOpen =
+                  sizeForm?.candidateId === m.id && m.kind === 'size_merge' && m.status === 'pending' && canDecide
                 return (
-                  <tr key={m.id} className={`border-b align-top ${stripe}`}>
-                    {showSelect && <td className="p-2" />}
-                    <td className="min-w-[16rem] max-w-[24rem] p-2">
-                      <CardSide card={m.source} snapshot={m.source_snapshot} />
-                    </td>
-                    <td className="p-2" colSpan={planTab ? 1 : 2}>
-                      <PlanProposal m={m} showKind={mixedTab} collapsed={decided} />
-                    </td>
-                    <td className="p-2">{renderActions(m)}</td>
-                  </tr>
+                  <Fragment key={m.id}>
+                    <tr className={`align-top ${panelOpen ? '' : 'border-b'} ${stripe}`}>
+                      {showSelect && <td className="p-2" />}
+                      <td className="min-w-[16rem] max-w-[24rem] p-2">
+                        <CardSide card={m.source} snapshot={m.source_snapshot} />
+                      </td>
+                      <td className="p-2" colSpan={planTab ? 1 : 2}>
+                        <PlanProposal m={m} showKind={mixedTab} collapsed={decided} />
+                      </td>
+                      <td className="p-2">{renderActions(m)}</td>
+                    </tr>
+                    {panelOpen && sizeForm && (
+                      <tr className={`border-b ${stripe}`}>
+                        <td className="px-2 pb-3" colSpan={colCount}>
+                          <SizeMergePanel
+                            m={m}
+                            form={sizeForm}
+                            busy={busy}
+                            working={busyRowId === m.id}
+                            onChange={(patch) => patchSizeForm(m.id, patch)}
+                            onSubmit={(keep, drops, name) => void mergeSizes(m, keep, drops, name)}
+                            onCancel={() => setSizeForm(null)}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 )
               }
               return (

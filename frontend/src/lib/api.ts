@@ -643,6 +643,31 @@ export type CardMatch = {
   signal: CardMatchSignal | null
   plan_hash: string | null
   plan: CardMatchPlan | null
+  /** Zapis decyzji z ekranu (dziś tylko łączenie rozmiarów); null dla pozostałych. */
+  decision_input: CardMatchDecisionInput | null
+}
+
+/**
+ * Co zatwierdził człowiek przy „Połącz rozmiary” (POST /card-matches/{id}/merge-sizes): karta, która zostaje,
+ * łączone karty, nazwa i lista rozmiarów, stan kart sprzed połączenia i pozycje wiodące kont producenta.
+ */
+export type CardMatchDecisionInput = {
+  keep_product_id: number
+  drop_product_ids: number[]
+  attached_source_product_id: number
+  name: string
+  name_suggested: string | null
+  variant_summary: string
+  confirm_sizes_only: boolean
+  plan_hash: string
+  cards_before: Array<{
+    id: number
+    sku: string
+    name: string
+    purchase_price: string | null
+    currency: string | null
+  }>
+  anchors: Array<{ source_key: string; position_key: string }>
 }
 
 /**
@@ -688,11 +713,15 @@ export type CardMatchPlan = {
   }>
   blockers: Array<{ code: string; text: string }>
   positions: CardMatchPlanPosition[]
-  /** Tylko size_merge: która karta zostaje, podpowiedź nazwy i kody rozmiarów. */
+  /**
+   * Tylko size_merge: która karta zostaje, podpowiedź nazwy, kody rozmiarów i lista rozmiarów, jaka trafi na kartę
+   * modelu (variant_summary — wyliczana przy odczycie, np. „Rozmiary: S (mały) (7000146845); M (średni) (…)”).
+   */
   suggested: {
     keep_product_id: number
     common_name: string | null
     sizes: Array<{ product_id: number; label: string | null; code: string }>
+    variant_summary: string
   } | null
 }
 
