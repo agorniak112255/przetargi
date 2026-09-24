@@ -22,6 +22,7 @@ use App\Support\OfferPricing;
 use App\Support\OfferProductText;
 use App\Support\OfferTermText;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 use Throwable;
@@ -33,6 +34,9 @@ final class ClientInquiryService
     private const MAX_MATCHES_PER_QUERY = 3;
 
     private const MAX_LINE_ITEMS = 8;
+
+    /** Uwaga o sprzeczności w wierszu klienta — jedno zdanie, nie akapit. */
+    private const CONFLICT_MAX = 300;
 
     /** Ile wyrobów dobranych ręcznie trzymamy przy jednej pozycji. */
     private const MAX_MANUAL_CANDIDATES = 3;
@@ -285,6 +289,200 @@ final class ClientInquiryService
             null,
             $terms,
         );
+    }
+
+    /**
+     * Ponowne szukanie w katalogu dla zapisanego zapytania — tymi samymi frazami
+     * (`analysis.product_queries`) i tą samą drogą co analyze(). Na to, że wynik
+     * z chwili analizy bywa zły: model nie odpowiadał albo wyszukiwarka miała błąd
+     * (24.09.2026, zapytania #64, #65, #67 z „brak w katalogu” dla wyrobów z katalogu).
+     *
+     * Wymieniamy tylko `matches` i `substitutes`; pozycje, karty, wyroby dobrane
+     * ręcznie i pytania zostają. Decyzje handlowca też zostają — zmienia się tylko
+     * „do sprawdzenia” przy pozycji, która przed ponownym szukaniem nie miała żadnego
+     * kandydata: tam nikt niczego nie wybierał, więc wybór liczymy od nowa.
+     *
+     * Bez `$apply` nic nie zapisujemy — ale wyszukiwarka i model są pytane naprawdę.
+     *
+     * @return array{
+     *     inquiry_id: int,
+     *     skipped: string|null,
+     *     warnings: list<string>,
+     *     items: list<array{id: string, before: array{sku: string, name: string, score: int}|null, after: array{sku: string, name: string, score: int}|null, answer_before: string|null, answer_after: string|null}>
+     * }
+     */
+    public function rematch(ClientInquiry $inquiry, bool $apply): array
+    {
+        $report = ['inquiry_id' => (int) $inquiry->id, 'skipped' => null, 'warnings' => [], 'items' => []];
+        $blocker = $this->rematchBlocker($inquiry);
+        if ($blocker !== null) {
+            $report['skipped'] = $blocker;
+
+            return $report;
+        }
+
+        // Szukanie trwa (model ocenia karty), więc idzie przed jakimkolwiek zapisem.
+        $matches = $this->matchProducts($this->stringList($inquiry->analysis['product_queries'] ?? null));
+        $substitutes = $this->loadSubstitutes($matches);
+        $rematchedAt = CarbonImmutable::now()->toIso8601String();
+
+        if (! $apply) {
+            $plan = $this->rematchPlan($inquiry, $matches, $substitutes, $rematchedAt);
+
+            return array_merge($report, ['warnings' => $plan['warnings'], 'items' => $plan['items']]);
+        }
+
+        return DB::transaction(function () use ($inquiry, $matches, $substitutes, $rematchedAt, $report): array {
+            // Handlowiec mógł w tym czasie wysłać list albo coś wybrać — decyduje stan z bazy.
+            $fresh = ClientInquiry::query()->lockForUpdate()->find($inquiry->id);
+            if ($fresh === null) {
+                $report['skipped'] = 'zapytanie usunięte w trakcie szukania';
+
+                return $report;
+            }
+            $blocker = $this->rematchBlocker($fresh);
+            if ($blocker !== null) {
+                $report['skipped'] = $blocker;
+
+                return $report;
+            }
+
+            $plan = $this->rematchPlan($fresh, $matches, $substitutes, $rematchedAt);
+            $fresh->forceFill(['analysis' => $plan['analysis'], 'answers' => $plan['answers']])->save();
+            // Ta sama droga co zmiana wyboru na ekranie: brakujące odpowiedzi dostają
+            // wybór domyślny, dopisek i warunki oferty zostają.
+            $saved = $this->compose($fresh, [], false, null, false);
+
+            $answers = is_array($saved->answers) ? $saved->answers : [];
+            foreach ($plan['items'] as $i => $row) {
+                $plan['items'][$i]['answer_after'] = $this->chosenOptionFor(
+                    $plan['after_items'][$row['id']]['item'],
+                    $plan['after_items'][$row['id']]['candidates'],
+                    $answers,
+                );
+            }
+
+            return array_merge($report, ['warnings' => $plan['warnings'], 'items' => $plan['items']]);
+        });
+    }
+
+    /** Powód, dla którego zapytania nie wolno już przeliczać; null = można. */
+    private function rematchBlocker(ClientInquiry $inquiry): ?string
+    {
+        if ($inquiry->replied_at !== null) {
+            return 'odpowiedź już wysłana';
+        }
+        if ($inquiry->send_requested_at !== null) {
+            return 'list czeka na wysłanie';
+        }
+        // Bez zapisanych fraz szukanie dałoby pustą listę i skasowało to, co było.
+        if ($this->stringList($inquiry->analysis['product_queries'] ?? null) === []) {
+            return 'brak zapisanych fraz wyszukiwania';
+        }
+        // Ręczna poprawka treści kasuje tabelę HTML, a zapis składa list od nowa — poprawki handlowca
+        // by przepadły. Takie zapytanie poprawia się przy pozycji („Szukaj AI”), nie hurtem.
+        if (trim((string) $inquiry->reply_body) !== '' && $inquiry->reply_html === null) {
+            return 'list poprawiony ręcznie — nowy wynik nadpisałby poprawki; użyj „Szukaj AI” przy pozycji';
+        }
+
+        return null;
+    }
+
+    /**
+     * Stan po ponownym szukaniu, liczony w pamięci: nowa analiza, odpowiedzi po zdjęciu
+     * „do sprawdzenia” bez wyboru i raport pozycji. `answer_after` odtwarza to, co
+     * zrobi compose() — brakującą odpowiedź zastępuje wybór domyślny.
+     *
+     * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
+     * @param  array<int, list<array<string, mixed>>>  $substitutes
+     * @return array{
+     *     analysis: array<string, mixed>,
+     *     answers: array<string, mixed>,
+     *     warnings: list<string>,
+     *     items: list<array{id: string, before: array{sku: string, name: string, score: int}|null, after: array{sku: string, name: string, score: int}|null, answer_before: string|null, answer_after: string|null}>,
+     *     after_items: array<string, array{item: array<string, mixed>, candidates: list<array<string, mixed>>}>
+     * }
+     */
+    private function rematchPlan(ClientInquiry $inquiry, array $matches, array $substitutes, string $rematchedAt): array
+    {
+        $old = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $new = array_merge($old, [
+            'matches' => $matches,
+            'substitutes' => $substitutes,
+            // ślad audytowy: kiedy wynik szukania zastąpił ten z chwili analizy
+            'rematched_at' => $rematchedAt,
+        ]);
+        $answers = is_array($inquiry->answers) ? $inquiry->answers : [];
+        $kept = $answers;
+        $oldGroups = $this->matchGroups($old);
+        $newGroups = $this->matchGroups($new);
+
+        $warnings = [];
+        $rows = [];
+        foreach ($this->lineItemsOf($new) as $item) {
+            $itemId = (string) $item['id'];
+            $key = 'product:'.$itemId;
+            $before = $this->candidatesForItem($oldGroups, $item, $old);
+            $after = $this->candidatesForItem($newGroups, $item, $new);
+            $saved = trim((string) ($answers[$key]['option_id'] ?? ''));
+            // „Do sprawdzenia” przy pustej liście nie było wyborem — nie było z czego wybrać.
+            if (in_array($saved, ['check', 'category'], true) && $before === []) {
+                unset($kept[$key]);
+            }
+            if (str_starts_with($saved, 'p:') && $this->candidateById($before, $saved) !== null
+                && $this->candidateById($after, $saved) === null) {
+                $warnings[] = "{$itemId}: wybrany wyrób {$saved} nie jest już kandydatem — pozycja dostanie wybór domyślny.";
+            }
+            $rows[$itemId] = ['item' => $item, 'before' => $before, 'after' => $after];
+        }
+
+        // Jak compose(): brakującą odpowiedź zastępuje domyślna z nowych kandydatów.
+        $simulated = $kept;
+        foreach ($rows as $itemId => $row) {
+            $simulated['product:'.$itemId] ??= ['option_id' => $this->defaultOptionFor($row['item'], $row['after'])];
+        }
+
+        $items = [];
+        $afterItems = [];
+        foreach ($rows as $itemId => $row) {
+            $items[] = [
+                'id' => (string) $itemId,
+                'before' => $this->rematchTop($row['before']),
+                'after' => $this->rematchTop($row['after']),
+                // wybór widoczny na ekranie i w liście, nie surowy klucz z `answers`
+                'answer_before' => $this->chosenOptionFor($row['item'], $row['before'], $answers),
+                'answer_after' => $this->chosenOptionFor($row['item'], $row['after'], $simulated),
+            ];
+            $afterItems[(string) $itemId] = ['item' => $row['item'], 'candidates' => $row['after']];
+        }
+
+        return [
+            'analysis' => $new,
+            'answers' => $kept,
+            'warnings' => $warnings,
+            'items' => $items,
+            'after_items' => $afterItems,
+        ];
+    }
+
+    /**
+     * Pierwszy kandydat pozycji tak, jak stoi na ekranie.
+     *
+     * @param  list<array<string, mixed>>  $candidates
+     * @return array{sku: string, name: string, score: int}|null
+     */
+    private function rematchTop(array $candidates): ?array
+    {
+        $top = $candidates[0] ?? null;
+        if ($top === null) {
+            return null;
+        }
+
+        return [
+            'sku' => (string) ($top['sku'] ?? ''),
+            'name' => (string) ($top['name'] ?? ''),
+            'score' => (int) ($top['score'] ?? 0),
+        ];
     }
 
     /**
@@ -870,6 +1068,11 @@ final class ClientInquiryService
                 // Klauzula, której nie da się sprawdzić regułą — musi ją przeczytać człowiek.
                 $flags[] = 'requirement_note';
             }
+            $conflict = $this->nullable($item['conflict'] ?? null);
+            if ($conflict !== null) {
+                // wiersz klienta sam sobie przeczy (ocena modelu) — handlowiec powinien to wyjaśnić
+                $flags[] = 'requirement_conflict';
+            }
             if (($item['query_source'] ?? null) === 'subject') {
                 // wiersz nie nazywał wyrobu — szukaliśmy tym z tematu maila (nasz wniosek)
                 $flags[] = 'product_from_subject';
@@ -888,6 +1091,8 @@ final class ClientInquiryService
                 'qty' => $qtyUnit['qty'],
                 'unit' => $qtyUnit['unit'],
                 'size' => $this->nullable($item['size'] ?? null),
+                // Sprzeczność w wierszu klienta wskazana przez model; null = brak albo stary rekord.
+                'conflict' => $conflict,
                 // Fraza, którą ta pozycja szukała w katalogu — podpowiedź dla
                 // ręcznego wyszukiwania przy pozycji, nie nowe źródło danych.
                 'query' => $this->nullable($item['search_query'] ?? null)
@@ -1642,7 +1847,11 @@ final class ClientInquiryService
                         .'Nie łącz „rękawice 9” i „rękawice 10” w jedną. Max 8. '
                         .'Każda pozycja: id (item_1…), quote (DOKŁADNY cytat wiersza z maila), '
                         .'qty (SAMA liczba jako string, np. „30”; brak → null), unit (jednostka DOKŁADNIE jak w mailu: „szt.”, „par”, „op.”; brak → null), '
-                        .'query (fraza do katalogu BEZ rozmiaru, Z warunkiem: substancja, norma, typ), size (lub null). '
+                        .'query (fraza do katalogu BEZ rozmiaru, Z warunkiem: substancja, norma, typ), size (lub null), '
+                        .'conflict: TYLKO gdy wiersz sam sobie przeczy — np. materiał, który z natury nie spełnia normy podanej '
+                        .'w tym samym wierszu (drelich, bawełna albo dzianina bez powłoki a EN 374: tkanina przepuszcza '
+                        .'chemikalia) — jedno zdanie po polsku, co z czym się kłóci; w każdym innym wypadku null. '
+                        .'Nie oceniaj katalogu, ceny ani dostępności. '
                         .'Temat maila (pierwszy wiersz, jeśli jest) bywa nazwą albo kodem wyrobu: gdy pozycja w treści podaje '
                         .'tylko ilość i rozmiar, weź do query nazwę albo kod z tematu. Temat nie jest osobną pozycją. '
                         .'Nie dopisuj rodzaju wyrobu, którego nie ma ani w temacie, ani w treści. '
@@ -1893,12 +2102,56 @@ final class ClientInquiryService
         // przegłosowywały poprawną odpowiedź modelu samą liczbą.
         $credible = count(array_filter($parsed, fn (array $item): bool => $this->isCredibleRow($item)));
         $items = $parsed !== [] && $credible > count($fromAi)
-            ? $parsed
+            ? $this->withAiConflicts($parsed, $fromAi)
             : ($fromAi !== []
                 ? $this->withProductRowQuotes($this->quantitiesCheckedAgainstQuote($fromAi), $parsed, $body)
                 : $parsed);
 
         return $this->withSearchQueries($items, $subjectHint);
+    }
+
+    /**
+     * Gdy wygrał nasz parser, uwaga modelu o sprzeczności w wierszu nie może zginąć — przypisujemy ją
+     * pozycji, której cytat zawiera cytat modelu albo w nim się zawiera. Bez pewnego dopasowania nie
+     * przypisujemy: uwaga przy cudzym wierszu byłaby gorsza niż jej brak.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @param  list<array<string, mixed>>  $fromAi
+     * @return list<array<string, mixed>>
+     */
+    private function withAiConflicts(array $items, array $fromAi): array
+    {
+        $conflicts = [];
+        foreach ($fromAi as $row) {
+            $text = $this->nullable($row['conflict'] ?? null);
+            $quote = $this->comparableQuote((string) ($row['quote'] ?? ''));
+            if ($text !== null && mb_strlen($quote) >= 8) {
+                $conflicts[] = ['quote' => $quote, 'text' => $text];
+            }
+        }
+        if ($conflicts === []) {
+            return $items;
+        }
+        foreach ($items as $i => $item) {
+            $quote = $this->comparableQuote((string) ($item['quote'] ?? ''));
+            if (mb_strlen($quote) < 8) {
+                continue;
+            }
+            foreach ($conflicts as $conflict) {
+                if (str_contains($quote, $conflict['quote']) || str_contains($conflict['quote'], $quote)) {
+                    $items[$i]['conflict'] = $conflict['text'];
+
+                    break;
+                }
+            }
+        }
+
+        return $items;
+    }
+
+    private function comparableQuote(string $quote): string
+    {
+        return mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', $quote)));
     }
 
     /**
@@ -3133,6 +3386,10 @@ final class ClientInquiryService
             'unit' => $qtyUnit['unit'],
             'query' => $query !== '' ? $query : $quote,
             'size' => $this->nullable($item['size'] ?? null),
+            // Sprzeczność wewnątrz wiersza klienta wskazana przez model — wniosek, nie fakt z maila.
+            'conflict' => is_string($item['conflict'] ?? null) && trim($item['conflict']) !== ''
+                ? mb_substr(trim($item['conflict']), 0, self::CONFLICT_MAX)
+                : null,
         ];
     }
 

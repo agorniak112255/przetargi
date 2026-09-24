@@ -67,6 +67,7 @@ export type InquiryFlag =
   | 'requirement_note'
   | 'product_from_subject'
   | 'model_failed'
+  | 'requirement_conflict'
 
 /**
  * Warunek szczególny z wiersza klienta („w szczególności na kwas siarkowy 96%”).
@@ -86,6 +87,8 @@ export type InquiryItem = {
   qty: string | null
   unit: string | null
   size: string | null
+  /** Sprzeczność w wierszu klienta wskazana przez model (wniosek AI, nie fakt z maila); null = brak. */
+  conflict?: string | null
   /** Fraza, którą pozycja szukała w katalogu — startowe zapytanie ręcznego wyszukiwania. */
   query: string | null
   answer_key: string

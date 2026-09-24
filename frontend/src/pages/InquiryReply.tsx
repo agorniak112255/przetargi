@@ -94,6 +94,7 @@ const flagLabel: Record<InquiryFlag, string> = {
   requirement_note: 'warunek szczególny do przeczytania',
   product_from_subject: 'wyrób wzięty z tematu maila',
   model_failed: 'wyszukaj ponownie przyciskiem „Szukaj AI”',
+  requirement_conflict: 'możliwa sprzeczność w wierszu klienta',
 }
 
 const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
@@ -324,6 +325,14 @@ function ItemRow({
         <blockquote className="mt-2 border-l-4 border-amber-400 bg-amber-50 px-2.5 py-1.5 text-xs leading-relaxed text-slate-800">
           {item.quote}
         </blockquote>
+      )}
+
+      {/* Wniosek modelu, nie fakt z maila — dlatego „możliwa” i prośba o wyjaśnienie z klientem. */}
+      {item.conflict && (
+        <p className="mt-1.5 rounded border border-orange-300 bg-orange-50 px-2.5 py-1.5 text-xs text-orange-900">
+          <span className="font-semibold">Możliwa sprzeczność w zapytaniu</span> (ocena AI — wyjaśnij z klientem):{' '}
+          {item.conflict}
+        </p>
       )}
 
       {/* Warunki szczególne klienta: wprost, z werdyktem karty. Karta bez
