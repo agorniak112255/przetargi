@@ -346,7 +346,30 @@ final class AiModelProfileTest extends TestCase
             $data = $request->data();
 
             return ! array_key_exists('reasoning_effort', $data)
-                && ($data['chat_template_kwargs']['enable_thinking'] ?? null) === false;
+                && ($data['chat_template_kwargs']['enable_thinking'] ?? null) === false
+                && ! array_key_exists('thinking', $data['chat_template_kwargs']);
+        });
+    }
+
+    public function test_none_reasoning_disables_thinking_for_local_deepseek(): void
+    {
+        $this->seedMainConfig();
+        AiSetting::query()->first()?->forceFill([
+            'model' => 'deepseek-v4-flash',
+            'reasoning_effort' => 'none',
+        ])->save();
+        Http::fake(['*' => Http::response(self::jsonReply('{"ok":true}'))]);
+
+        app(OpenAiCompatibleClient::class)->chatJson(
+            [['role' => 'user', 'content' => 'test']]
+        );
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return $request['model'] === 'deepseek-v4-flash'
+                && ! array_key_exists('reasoning_effort', $data)
+                && ($data['chat_template_kwargs']['thinking'] ?? null) === false;
         });
     }
 

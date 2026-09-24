@@ -2216,7 +2216,7 @@ class OpenAiCompatibleClient
         $kwargs = is_array($payload['chat_template_kwargs'] ?? null)
             ? $payload['chat_template_kwargs']
             : [];
-        $kwargs['enable_thinking'] = false;
+        $kwargs = $this->disableThinkingKwargs($kwargs, (string) ($payload['model'] ?? ''));
         $payload['chat_template_kwargs'] = $kwargs;
         $payload['reasoning'] = ['enabled' => false, 'exclude' => true];
         unset($payload['reasoning_effort']);
@@ -2225,12 +2225,30 @@ class OpenAiCompatibleClient
     }
 
     /**
+     * Qwen wyłącza myślenie przez enable_thinking, DeepSeek przez thinking — ten drugi
+     * pomija enable_thinking i myśli dalej.
+     *
+     * @param  array<string, mixed>  $kwargs
+     * @return array<string, mixed>
+     */
+    private function disableThinkingKwargs(array $kwargs, string $model): array
+    {
+        $kwargs['enable_thinking'] = false;
+        if (preg_match('/deepseek/i', $model) === 1) {
+            $kwargs['thinking'] = false;
+        }
+
+        return $kwargs;
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      */
     private function payloadDisablesReasoning(array $payload): bool
     {
         return ($payload['reasoning']['enabled'] ?? null) === false
-            || ($payload['chat_template_kwargs']['enable_thinking'] ?? null) === false;
+            || ($payload['chat_template_kwargs']['enable_thinking'] ?? null) === false
+            || ($payload['chat_template_kwargs']['thinking'] ?? null) === false;
     }
 
     /**
@@ -2242,7 +2260,7 @@ class OpenAiCompatibleClient
         unset($payload['reasoning']);
         $kwargs = $payload['chat_template_kwargs'] ?? null;
         if (is_array($kwargs)) {
-            unset($kwargs['enable_thinking']);
+            unset($kwargs['enable_thinking'], $kwargs['thinking']);
             if ($kwargs === []) {
                 unset($payload['chat_template_kwargs']);
             } else {
@@ -2293,8 +2311,7 @@ class OpenAiCompatibleClient
             : [];
 
         if ($effort === ReasoningEffort::NONE) {
-            $kwargs['enable_thinking'] = false;
-            $payload['chat_template_kwargs'] = $kwargs;
+            $payload['chat_template_kwargs'] = $this->disableThinkingKwargs($kwargs, $model);
 
             return $payload;
         }
