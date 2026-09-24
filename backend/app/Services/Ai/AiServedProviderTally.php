@@ -22,34 +22,74 @@ final class AiServedProviderTally
     /** @var list<?string> */
     private array $lastBatch = [];
 
+    /** @var list<?array{model: ?string, provider: ?string, profile: ?string, fallback: bool}> */
+    private array $lastBatchOrigins = [];
+
+    /** @var array{model: ?string, provider: ?string, profile: ?string, fallback: bool}|null */
+    private ?array $lastJsonOrigin = null;
+
     public function reset(): void
     {
         $this->served = [];
         $this->relaxedPins = 0;
         $this->profileFallbacks = 0;
         $this->lastBatch = [];
+        $this->lastBatchOrigins = [];
+        $this->lastJsonOrigin = null;
     }
 
     /**
      * Dostawca każdej odpowiedzi ostatniego chatJsonMany w kolejności zapytań; null = brak odpowiedzi albo API
      * bez pola „provider”. Wyszukiwanie przypisuje go pozycji, pomiar łączy złe karty z dostawcą modelu.
+     * Obok pełne pochodzenie odpowiedzi (model, dostawca, profil, zejście na konfigurację główną) — magazyn zrozumień
+     * zapisuje je przy wpisie i nie zapisuje odpowiedzi z zejścia.
      *
      * @param  list<?string>  $providers
+     * @param  list<?array{model: ?string, provider: ?string, profile: ?string, fallback: bool}>  $origins
      */
-    public function recordBatch(array $providers): void
+    public function recordBatch(array $providers, array $origins = []): void
     {
         $this->lastBatch = array_values($providers);
+        $this->lastBatchOrigins = array_values($origins);
     }
 
     public function forgetBatch(): void
     {
         $this->lastBatch = [];
+        $this->lastBatchOrigins = [];
     }
 
     /** @return list<?string> */
     public function lastBatch(): array
     {
         return $this->lastBatch;
+    }
+
+    /** @return list<?array{model: ?string, provider: ?string, profile: ?string, fallback: bool}> */
+    public function lastBatchOrigins(): array
+    {
+        return $this->lastBatchOrigins;
+    }
+
+    /**
+     * Pochodzenie odpowiedzi ostatniego chatJson; null = wywołanie padło albo nie szło przez prawdziwego klienta.
+     *
+     * @param  array{model: ?string, provider: ?string, profile: ?string, fallback: bool}  $origin
+     */
+    public function recordJsonOrigin(array $origin): void
+    {
+        $this->lastJsonOrigin = $origin;
+    }
+
+    public function forgetJsonOrigin(): void
+    {
+        $this->lastJsonOrigin = null;
+    }
+
+    /** @return array{model: ?string, provider: ?string, profile: ?string, fallback: bool}|null */
+    public function lastJsonOrigin(): ?array
+    {
+        return $this->lastJsonOrigin;
     }
 
     /** Odpowiedź OpenRoutera niesie pole „provider”; inne API go nie mają i nic się nie liczy. */

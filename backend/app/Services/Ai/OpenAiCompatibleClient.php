@@ -59,10 +59,11 @@ class OpenAiCompatibleClient
     ) {}
 
     /**
-     * $task wskazuje profil modelu z Ustawień AI; bez niego działa konfiguracja główna.
+     * $task wskazuje profil modelu z Ustawień AI; bez niego działa konfiguracja główna. W wyniku `profile` to profil,
+     * który odpowiedział, a `fallback` — czy odpowiedź przyszła z zejścia na konfigurację główną po awarii profilu.
      *
      * @param  list<array{role: string, content: mixed}>  $messages
-     * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string, provider: ?string}
+     * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string, provider: ?string, profile: string, fallback: bool}
      */
     public function chat(
         array $messages,
@@ -162,7 +163,15 @@ class OpenAiCompatibleClient
             try {
                 $raw = $this->chat($messageSets[0], null, $jsonMode, $extra, $task);
 
-                return [['ok' => true, 'content' => $raw['content'], 'model' => $raw['model'], 'provider' => $raw['provider'] ?? null, 'finish_reason' => $raw['finish_reason'] ?? null]];
+                return [[
+                    'ok' => true,
+                    'content' => $raw['content'],
+                    'model' => $raw['model'],
+                    'provider' => $raw['provider'] ?? null,
+                    'finish_reason' => $raw['finish_reason'] ?? null,
+                    'profile' => $raw['profile'] ?? null,
+                    'fallback' => (bool) ($raw['fallback'] ?? false),
+                ]];
             } catch (RuntimeException $e) {
                 return [['ok' => false, 'error' => $e->getMessage()]];
             }
@@ -171,7 +180,13 @@ class OpenAiCompatibleClient
         $profile = $this->withProviderPinPolicy($this->settings->profileForTask($task), $task);
         try {
             $unreachable = [];
-            $rows = $this->chatManyWithProfile($profile, $messageSets, $jsonMode, $extra, $onAnswered, $unreachable);
+            $rateLimited = [];
+            $rows = $this->chatManyWithProfile($profile, $messageSets, $jsonMode, $extra, $onAnswered, $unreachable, $rateLimited);
+            if ($task === AiTask::ProductSearch) {
+                // Limit, po którym przyszedł błąd serwera, to dalej limit — ocena kart nie idzie do zastępczego modelu
+                // (jak pojedyncze zapytanie w runOnMainOrRethrow).
+                $unreachable = array_values(array_diff($unreachable, $rateLimited));
+            }
             if ($profile['is_default'] || $unreachable === []) {
                 return $rows;
             }
@@ -219,6 +234,7 @@ class OpenAiCompatibleClient
         $maxConcurrent = max(1, min(AiSettingsService::CONCURRENCY_MAX, $maxConcurrent));
         $parsed = [];
         $providers = [];
+        $origins = [];
         // $onProgress(odpowiedzi, wszystkie) — okno „Trwa dopasowanie” liczy każdą odpowiedź modelu,
         // nie całą paczkę naraz. Tylko w górę: ponowienie na profilu głównym nie cofa licznika.
         $total = count($messageSets);
@@ -246,6 +262,7 @@ class OpenAiCompatibleClient
                     ]);
                     $parsed[] = [];
                     $providers[] = null;
+                    $origins[] = null;
 
                     continue;
                 }
@@ -265,18 +282,38 @@ class OpenAiCompatibleClient
                 }
                 $parsed[] = $json ?? [];
                 $providers[] = is_string($row['provider'] ?? null) ? $row['provider'] : null;
+                $origins[] = $this->answerOrigin($row, (bool) ($row['fallback'] ?? false));
             }
             // pojedyncze zapytanie idzie bez puli, a ponowienia mogą nie wywołać licznika — wyrównanie
             $report(count($parsed));
         }
-        app(AiServedProviderTally::class)->recordBatch($providers);
+        app(AiServedProviderTally::class)->recordBatch($providers, $origins);
 
         return $parsed;
     }
 
     /**
-     * Fallback na model główny przy 402/429 — ale nie gdy lokalny endpoint nie odpowiada,
-     * bo wtedy użytkownik widzi cURL do trycloudflare zamiast błędu profilu.
+     * Skąd przyszła odpowiedź: model, dostawca OpenRoutera, profil i czy z zejścia na konfigurację główną.
+     *
+     * @param  array<string, mixed>  $result  wynik chat() albo wiersz chatMany()
+     * @return array{model: ?string, provider: ?string, profile: ?string, fallback: bool}
+     */
+    private function answerOrigin(array $result, bool $fallback): array
+    {
+        $text = static fn (mixed $value): ?string => is_string($value) && trim($value) !== '' ? trim($value) : null;
+
+        return [
+            'model' => $text($result['model'] ?? null),
+            'provider' => $text($result['provider'] ?? null),
+            'profile' => $text($result['profile'] ?? null),
+            'fallback' => $fallback,
+        ];
+    }
+
+    /**
+     * Fallback na model główny przy 402/429/5xx — ale nie gdy lokalny endpoint nie odpowiada,
+     * bo wtedy użytkownik widzi cURL do trycloudflare zamiast błędu profilu. Limit 429 w wyszukiwarce
+     * zostaje przy profilu (runOnMainOrRethrow).
      *
      * @param  callable(array<string, mixed>): array<string, mixed>  $run
      * @return array<string, mixed>
@@ -297,6 +334,14 @@ class OpenAiCompatibleClient
     }
 
     /**
+     * Konfiguracja główna dostaje znacznik `served_as_fallback` — odpowiedź z niej niesie `fallback` = true, a magazyn
+     * zrozumień jej nie zapisuje.
+     *
+     * Limit zapytań (429) w wyszukiwarce nie schodzi na konfigurację główną. 24.09.2026 przy serii 429 od przypiętego
+     * dostawcy odpowiedź zastępczego modelu (OpenRouter bez przypięcia) źle dobierała karty do przetargu; brak odpowiedzi
+     * daje pozycję „model nie odpowiedział”, którą widać. Pula robiła tak już wcześniej (limit nie trafia do
+     * retryUnreachableOnMain), teraz także pojedyncze zapytanie i ostatnia jednoelementowa paczka fali.
+     *
      * @template T
      *
      * @param  callable(array<string, mixed>): T  $run
@@ -308,6 +353,15 @@ class OpenAiCompatibleClient
         ?AiTask $task,
         string $profileLabel
     ): mixed {
+        if ($profileError instanceof AiRateLimitedException && $task === AiTask::ProductSearch) {
+            Log::warning('Profil AI: limit zapytań — wyszukiwarka zostaje przy profilu, bez konfiguracji głównej', [
+                'task' => $task->value,
+                'profile' => $profileLabel,
+                'error' => $profileError->getMessage(),
+            ]);
+
+            throw $profileError;
+        }
         $main = $this->settings->profileForTask(null);
         if ($this->isUnreachableBaseUrl($main['base_url'])) {
             Log::warning('Profil AI zawiódł — konfiguracja główna nieosiągalna, zostawiam błąd profilu', [
@@ -328,7 +382,7 @@ class OpenAiCompatibleClient
         app(AiServedProviderTally::class)->profileFallback();
 
         try {
-            return $run($main);
+            return $run($main + ['served_as_fallback' => true]);
         } catch (RuntimeException $fallbackError) {
             if ($this->isUnreachableEndpointError($fallbackError)) {
                 Log::warning('Profil AI zawiódł — konfiguracja główna też nie odpowiada, zostawiam błąd profilu', [
@@ -353,7 +407,8 @@ class OpenAiCompatibleClient
      * które są w bazie. Te zapytania idą raz jeszcze na konfigurację główną.
      *
      * Tylko „serwer nie odpowiada” (brak połączenia, HTTP 5xx) — limit 429 i odpowiedź bez
-     * treści zostają przy profilu: ocena kart czeka na przypiętego dostawcę.
+     * treści zostają przy profilu: ocena kart czeka na przypiętego dostawcę. W wyszukiwarce także
+     * 5xx po limicie 429 (chatMany odfiltrowuje takie zapytania).
      *
      * @param  list<array<string, mixed>>  $rows
      * @param  list<int>  $unreachable
@@ -388,7 +443,7 @@ class OpenAiCompatibleClient
         app(AiServedProviderTally::class)->profileFallback();
 
         try {
-            $mainRows = $this->chatManyWithProfile($this->withProviderPinPolicy($main, $task), $retrySets, $jsonMode, $extra);
+            $mainRows = $this->chatManyWithProfile($this->withProviderPinPolicy($main + ['served_as_fallback' => true], $task), $retrySets, $jsonMode, $extra);
         } catch (RuntimeException $e) {
             Log::warning('Profil AI nie odpowiada — konfiguracja główna też zawiodła, zostawiam błąd profilu', [
                 'task' => $task?->value,
@@ -438,6 +493,7 @@ class OpenAiCompatibleClient
      * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}  $profile
      * @param  list<list<array{role: string, content: mixed}>>  $messageSets
      * @param  list<int>  $unreachable  indeksy zapytań, na które serwer modelu nie odpowiedział
+     * @param  list<int>  $rateLimited  indeksy zapytań, które choć raz dostały 429
      * @return list<array{ok: bool, content?: string, model?: string, error?: string}>
      */
     private function chatManyWithProfile(
@@ -447,6 +503,7 @@ class OpenAiCompatibleClient
         ?array $extra,
         ?callable $onAnswered = null,
         array &$unreachable = [],
+        array &$rateLimited = [],
     ): array {
         if (! $this->settings->resolve()['enabled']) {
             throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
@@ -468,7 +525,8 @@ class OpenAiCompatibleClient
         }
 
         $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies, $onAnswered);
-        $responses = $this->retryChatManyOverloaded($url, $apiKey, $timeout, $profile, $bodies, $responses);
+        $rateLimited = [];
+        $responses = $this->retryChatManyOverloaded($url, $apiKey, $timeout, $profile, $bodies, $responses, $rateLimited);
         $responses = $this->retryChatManyRejected($url, $apiKey, $timeout, $profile, $bodies, $responses);
         $responses = $this->retryChatManyEmptyTruncated($url, $apiKey, $timeout, $profile, $bodies, $responses);
 
@@ -599,6 +657,7 @@ class OpenAiCompatibleClient
      * @param  array<string, mixed>  $profile
      * @param  array<int, array<string, mixed>>  $bodies
      * @param  array<int, mixed>  $responses
+     * @param  list<int>  $rateLimited  indeksy zapytań, które choć raz dostały 429
      * @return array<int, mixed>
      */
     private function retryChatManyOverloaded(
@@ -607,9 +666,19 @@ class OpenAiCompatibleClient
         int $timeout,
         array $profile,
         array $bodies,
-        array $responses
+        array $responses,
+        array &$rateLimited = [],
     ): array {
-        $rateLimited = 0;
+        $seen = [];
+        $note = static function (array $responses) use (&$seen): void {
+            foreach ($responses as $i => $response) {
+                if ($response instanceof Response && $response->status() === 429) {
+                    $seen[$i] = true;
+                }
+            }
+        };
+        $note($responses);
+        $rateLimitRounds = 0;
         for ($attempt = 0; $attempt < self::OVERLOAD_RETRIES; $attempt++) {
             $retryBodies = [];
             $wait = 0;
@@ -626,10 +695,10 @@ class OpenAiCompatibleClient
                     : $body;
             }
             if ($retryBodies === []) {
-                return $responses;
+                break;
             }
-            if ($saw429 && ++$rateLimited > self::RATE_LIMIT_RETRIES) {
-                return $responses;
+            if ($saw429 && ++$rateLimitRounds > self::RATE_LIMIT_RETRIES) {
+                break;
             }
             Log::info('AI chatMany: limit/przeciążenie dostawcy — ponawiam odrzucone zapytania', [
                 'count' => count($retryBodies),
@@ -641,11 +710,14 @@ class OpenAiCompatibleClient
             if ($wait > 0) {
                 sleep($wait);
             }
-            foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies) as $i => $response) {
+            $retried = $this->postChatPool($url, $apiKey, $timeout, $retryBodies);
+            $note($retried);
+            foreach ($retried as $i => $response) {
                 $responses[$i] = $response;
                 $bodies[$i] = $retryBodies[$i];
             }
         }
+        $rateLimited = array_keys($seen);
 
         return $responses;
     }
@@ -705,7 +777,7 @@ class OpenAiCompatibleClient
 
     /**
      * @param  array<string, mixed>  $profile
-     * @return array{ok: bool, content?: string, model?: string, provider?: string|null, finish_reason?: string, error?: string}
+     * @return array{ok: bool, content?: string, model?: string, provider?: string|null, finish_reason?: string, profile?: string, fallback?: bool, error?: string}
      */
     private function chatManyItemFromResponse(mixed $response, array $profile): array
     {
@@ -741,6 +813,8 @@ class OpenAiCompatibleClient
             'model' => (string) data_get($payload, 'model', $profile['model'] ?? ''),
             'provider' => is_string(data_get($payload, 'provider')) ? (string) data_get($payload, 'provider') : null,
             'finish_reason' => $this->contentReader->finishReason($payload),
+            'profile' => (string) ($profile['label'] ?? ''),
+            'fallback' => (bool) ($profile['served_as_fallback'] ?? false),
         ];
     }
 
@@ -814,7 +888,7 @@ class OpenAiCompatibleClient
     /**
      * @param  array{label: string, base_url: string, api_key: ?string, model: string, timeout_seconds: int, temperature: float, reasoning_effort: string, is_default: bool}  $profile
      * @param  list<array{role: string, content: mixed}>  $messages
-     * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string, provider: ?string}
+     * @return array{content: string, model: string, usage: array<string, mixed>|null, finish_reason: string, provider: ?string, profile: string, fallback: bool}
      */
     private function chatWithProfile(
         array $profile,
@@ -866,12 +940,15 @@ class OpenAiCompatibleClient
         $started = microtime(true);
         $usage = null;
         $resultModel = $model;
+        // Limit 429 w którymkolwiek podejściu tego zapytania — błąd na końcu jest wtedy błędem limitu (AiRateLimitedException),
+        // nawet gdy ostatnie podejście skończyło się przeciążeniem, błędem serwera albo pustą odpowiedzią.
+        $rateLimited = false;
         $this->reportLiveWaiting($profile, $model);
         try {
             try {
-                $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout, ! ($profile['keep_provider_pin'] ?? false));
+                $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout, ! ($profile['keep_provider_pin'] ?? false), $rateLimited);
             } catch (ConnectionException $e) {
-                throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
+                throw $this->chatFailure('Nie można połączyć z API AI: '.$e->getMessage(), $rateLimited, $e);
             }
 
             if (! $response->successful() && $this->isContextOverflow($response)) {
@@ -892,14 +969,14 @@ class OpenAiCompatibleClient
                     'max_tokens' => $maxTokens,
                 ]);
                 try {
-                    $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout, ! ($profile['keep_provider_pin'] ?? false));
+                    $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout, ! ($profile['keep_provider_pin'] ?? false), $rateLimited);
                 } catch (ConnectionException $e) {
-                    throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
+                    throw $this->chatFailure('Nie można połączyć z API AI: '.$e->getMessage(), $rateLimited, $e);
                 }
             }
 
             if (! $response->successful()) {
-                throw new RuntimeException($this->formatHttpError($response, $profile));
+                throw $this->chatFailure($this->formatHttpError($response, $profile), $rateLimited);
             }
 
             $payload = $response->json();
@@ -917,18 +994,20 @@ class OpenAiCompatibleClient
                     try {
                         $response = $this->postChat($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout);
                     } catch (ConnectionException $e) {
-                        throw new RuntimeException('Nie można połączyć z API AI: '.$e->getMessage(), 0, $e);
+                        throw $this->chatFailure('Nie można połączyć z API AI: '.$e->getMessage(), $rateLimited, $e);
                     }
                     if ($response->successful()) {
                         $payload = $response->json();
                         $content = $this->contentReader->fromPayload($payload);
+                    } elseif ($response->status() === 429) {
+                        throw $this->chatFailure($this->formatHttpError($response, $profile), true);
                     }
                 }
             }
 
             if ($content === '') {
                 Log::warning('AI empty content', ['body' => $payload, 'model' => $model]);
-                throw new RuntimeException('API AI zwróciło pustą odpowiedź (model reasoning potrzebuje więcej tokenów na wynik JSON).');
+                throw $this->chatFailure('API AI zwróciło pustą odpowiedź (model reasoning potrzebuje więcej tokenów na wynik JSON).', $rateLimited);
             }
 
             $resultModel = (string) data_get($payload, 'model', $profile['model']);
@@ -941,10 +1020,19 @@ class OpenAiCompatibleClient
                 'usage' => $usage,
                 'finish_reason' => $this->contentReader->finishReason($payload),
                 'provider' => is_string(data_get($payload, 'provider')) ? (string) data_get($payload, 'provider') : null,
+                'profile' => (string) $profile['label'],
+                'fallback' => (bool) ($profile['served_as_fallback'] ?? false),
             ];
         } finally {
             $this->reportLiveDone($profile, $resultModel, $started, $usage);
         }
+    }
+
+    private function chatFailure(string $message, bool $rateLimited, ?Throwable $previous = null): RuntimeException
+    {
+        return $rateLimited
+            ? new AiRateLimitedException($message, 0, $previous)
+            : new RuntimeException($message, 0, $previous);
     }
 
     /**
@@ -1055,7 +1143,12 @@ class OpenAiCompatibleClient
         if ($model !== null && trim($model) !== '') {
             $extra['model'] = trim($model);
         }
+        // Pochodzenie odpowiedzi dla magazynu zrozumień: model, dostawca i profil wywołania, z którego jest treść;
+        // zejście na konfigurację główną w którymkolwiek wywołaniu (także w naprawie JSON) — odpowiedź nie jest z profilu.
+        $tally = app(AiServedProviderTally::class);
+        $tally->forgetJsonOrigin();
         $result = $this->chat($messages, $temperature, true, $extra !== [] ? $extra : null, $task);
+        $fallback = (bool) ($result['fallback'] ?? false);
         $parsed = $this->tryParseJson($result['content']);
         if ($this->shouldRetryTruncated($result, $parsed)) {
             Log::info('AI JSON ucięty (finish_reason=length) — ponawiam ze skróconymi źródłami', [
@@ -1072,10 +1165,13 @@ class OpenAiCompatibleClient
                 $retryExtra !== [] ? $retryExtra : null,
                 $task
             );
+            $fallback = $fallback || (bool) ($result['fallback'] ?? false);
             $parsed = $this->tryParseJson($result['content']);
         }
 
         if ($parsed !== null) {
+            $tally->recordJsonOrigin($this->answerOrigin($result, $fallback));
+
             return $parsed;
         }
 
@@ -1089,12 +1185,19 @@ class OpenAiCompatibleClient
                 'content' => "Popraw poniższy tekst do walidnego JSON:\n\n".$result['content'],
             ],
         ], 0.0, true, $extra !== [] ? $extra : null, $task);
+        // naprawa tylko formatuje treść z $result — pochodzenie z $result, zejście z obu wywołań
+        $origin = $this->answerOrigin($result, $fallback || (bool) ($repair['fallback'] ?? false));
 
         try {
-            return $this->jsonParser->parse($repair['content']);
+            $repaired = $this->jsonParser->parse($repair['content']);
+            $tally->recordJsonOrigin($origin);
+
+            return $repaired;
         } catch (RuntimeException $e) {
             $recovered = $this->tryParseJson((string) ($result['content'] ?? ''));
             if ($recovered !== null) {
+                $tally->recordJsonOrigin($origin);
+
                 return $recovered;
             }
 
@@ -1523,6 +1626,7 @@ class OpenAiCompatibleClient
 
     /**
      * @param  array<string, mixed>  $payload
+     * @param  bool  $rateLimited  ustawiane, gdy dostawca choć raz odpowiedział 429 — także gdy potem przyszło co innego
      */
     private function postChatWithRetry(
         string $url,
@@ -1532,14 +1636,16 @@ class OpenAiCompatibleClient
         bool $reasoning,
         int $timeout,
         bool $relaxPin = true,
+        bool &$rateLimited = false,
     ): Response {
         $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
         $attempt = 0;
-        $rateLimited = 0;
+        $rateLimitHits = 0;
         while (in_array($response->status(), self::OVERLOAD_STATUSES, true) && $attempt < self::OVERLOAD_RETRIES) {
             if ($response->status() === 429) {
-                $rateLimited++;
-                if ($rateLimited > self::RATE_LIMIT_RETRIES) {
+                $rateLimited = true;
+                $rateLimitHits++;
+                if ($rateLimitHits > self::RATE_LIMIT_RETRIES) {
                     break;
                 }
             }
@@ -1554,6 +1660,9 @@ class OpenAiCompatibleClient
             }
             $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
             $attempt++;
+        }
+        if ($response->status() === 429) {
+            $rateLimited = true;
         }
 
         return $response;

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Product;
+use App\Services\Ai\AiRateLimitedException;
 use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
@@ -1791,9 +1792,12 @@ final class ProductAiSearchService
         if ($stored !== null) {
             return $this->withCatalogAliases($this->parseIntent($stored, $query), $query);
         }
+        $providerTally = app(AiServedProviderTally::class);
         try {
+            $providerTally->forgetJsonOrigin();
             $raw = $this->llm->chatJson($this->understandMessages($query), null, 900, null, $task);
-            $understandings->put($query, self::UNDERSTAND_PROMPT_VERSION, $raw);
+            // z pochodzeniem: odpowiedź z zejścia na konfigurację główną magazyn pomija
+            $understandings->put($query, self::UNDERSTAND_PROMPT_VERSION, $raw, $providerTally->lastJsonOrigin());
 
             return $this->withCatalogAliases($this->parseIntent($raw, $query), $query);
         } catch (Throwable $first) {
@@ -1801,6 +1805,10 @@ final class ProductAiSearchService
             // nie przy pustej odpowiedzi (tę obsługuje parseIntent). Pusta odpowiedź
             // to decyzja modelu, wyjątek to awaria transportu albo limitu czasu.
             $this->noteIntentFailure($first, 'understand');
+            if ($first instanceof AiRateLimitedException) {
+                // Limit zapytań nie mija od razu — krótszy prompt trafiłby w ten sam limit i znowu czekał na ponowienia.
+                return $this->localIntentAfterModelFailure($query);
+            }
             try {
                 $raw = $this->llm->chatJson($this->understandMessagesShort($query), null, 600, null, $task);
 
@@ -1936,9 +1944,10 @@ final class ProductAiSearchService
             $report === null ? null : static fn (int $done, int $total) => $report(self::PROGRESS_STAGE_UNDERSTAND, $done, $total),
         );
         $understandProviders = $providerTally->lastBatch();
+        $understandOrigins = $providerTally->lastBatchOrigins();
         foreach ($need as $pos => $i) {
             $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
-            $understandings->put($queries[$i], self::UNDERSTAND_PROMPT_VERSION, $raw);
+            $understandings->put($queries[$i], self::UNDERSTAND_PROMPT_VERSION, $raw, $understandOrigins[$pos] ?? null);
             $this->understandProviders[$i] = $understandProviders[$pos] ?? null;
             $intents[$i] = $this->applySlangIntent(
                 $queries[$i],

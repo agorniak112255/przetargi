@@ -40,22 +40,47 @@ final class RequirementUnderstandingStore
 
     /**
      * Zapis tylko prawdziwej odpowiedzi modelu — pusta odpowiedź albo awaria nie mogą zostać „zrozumieniem” na stałe.
+     * Odpowiedź z zejścia na konfigurację główną po awarii profilu (dowolna przyczyna: 5xx, brak połączenia, 402…)
+     * służy tylko bieżącemu wyszukiwaniu: zapisana, zostałaby na stałe zrozumieniem innego modelu niż przypisany.
+     * Bez znanego pochodzenia (null — np. atrapa klienta) zapis bez niego.
      *
      * @param  array<string, mixed>  $answer
+     * @param  array{model?: ?string, provider?: ?string, profile?: ?string, fallback?: bool}|null  $origin
      */
-    public function put(string $requirement, string $promptVersion, array $answer): void
+    public function put(string $requirement, string $promptVersion, array $answer, ?array $origin = null): void
     {
         if (! $this->isUsable($answer)) {
+            return;
+        }
+        if (($origin['fallback'] ?? false) === true) {
+            Log::info('Zrozumienie wymagania z konfiguracji głównej po awarii profilu — bez zapisu', [
+                'model' => $origin['model'] ?? null,
+                'profile' => $origin['profile'] ?? null,
+            ]);
+
             return;
         }
         try {
             RequirementUnderstanding::query()->firstOrCreate(
                 ['requirement_hash' => $this->hash($requirement), 'prompt_version' => $promptVersion],
-                ['requirement' => mb_substr(trim($requirement), 0, 20000), 'answer' => $answer],
+                [
+                    'requirement' => mb_substr(trim($requirement), 0, 20000),
+                    'answer' => $answer,
+                    'model' => $this->originField($origin['model'] ?? null),
+                    'provider' => $this->originField($origin['provider'] ?? null),
+                    'profile' => $this->originField($origin['profile'] ?? null),
+                ],
             );
         } catch (Throwable $e) {
             Log::info('Zrozumienie wymagania nie zostało zapisane', ['error' => $e->getMessage()]);
         }
+    }
+
+    private function originField(mixed $value): ?string
+    {
+        $value = is_string($value) ? trim($value) : '';
+
+        return $value === '' ? null : mb_substr($value, 0, 191);
     }
 
     /** @param  array<string, mixed>  $answer */
