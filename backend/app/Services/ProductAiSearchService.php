@@ -138,6 +138,16 @@ final class ProductAiSearchService
 
     private const RRF_WEIGHT_VECTOR = 1.0;
 
+    /**
+     * Wektor po treści wymagania, obok wektora po `needed` ze zrozumienia. Zrozumienie to parafraza modelu i bywa
+     * uboższe od źródła — zapisane raz, psuje każdy kolejny przebieg: „spodnie do pasa z polipropylenu” zapisane jako
+     * „spodnie robocze” (karta Reis SFI „100% polipropylen” poza pulą), „… RS SPLIT KEV” jako „rękawice spawalnicze
+     * trudnopalne” (karta SPLIT KEV 36. w puli, poza oceną). Symulacja 24.09.2026 na serwerze (golden 41 + te dwa
+     * maile, zapisane zrozumienie): wzorcowa w kartach oceny 37 → 39 z 43, żadna nie wypada z puli, zakazanych
+     * w ocenie bez zmian (6); przy wadze 1,0 spodnie zostają 25. — poza 24 kartami oceny.
+     */
+    private const RRF_WEIGHT_VECTOR_QUERY = 2.0;
+
     /** Karta bez opisu mówi o sobie mniej, więc jej trafienie waży mniej. */
     private const RRF_WEIGHT_UNCLASSIFIED = 0.6;
 
@@ -3512,18 +3522,26 @@ final class ProductAiSearchService
                 fn (): array => $this->retrieveVectorIds($searchText, self::VECTOR_POOL)
             ),
         ];
+        $weights = [
+            'priority' => self::RRF_WEIGHT_PRIORITY,
+            'cascade' => $cascadeWeight,
+            'text' => self::RRF_WEIGHT_TEXT,
+            'unclassified' => self::RRF_WEIGHT_UNCLASSIFIED,
+            'vector' => self::RRF_WEIGHT_VECTOR,
+        ];
+        // Źródło, nie parafraza: to, czego zrozumienie nie przeniosło (materiał, kod modelu), zostaje w treści.
+        // Gdy `needed` to sama treść (zrozumienie lokalne), druga lista powtórzyłaby pierwszą. Bez niej także
+        // w trybie „marki nie ma w katalogu” i przy szukaniu zamienników (candidatePool $anyBrand): `needed` celowo
+        // nie ma marki ani modelu, a treść je ma — wektor po treści ściągałby z powrotem karty tej samej marki.
+        if (! $intent['manufacturer_absent_in_catalog'] && trim($searchText) !== trim($query)) {
+            $rankings['vector_query'] = $this->clock(
+                'retrieve_vector_query',
+                fn (): array => $this->retrieveVectorIds($query, self::VECTOR_POOL)
+            );
+            $weights['vector_query'] = self::RRF_WEIGHT_VECTOR_QUERY;
+        }
 
-        $fused = $this->rrf->fuse(
-            $rankings,
-            [
-                'priority' => self::RRF_WEIGHT_PRIORITY,
-                'cascade' => $cascadeWeight,
-                'text' => self::RRF_WEIGHT_TEXT,
-                'unclassified' => self::RRF_WEIGHT_UNCLASSIFIED,
-                'vector' => self::RRF_WEIGHT_VECTOR,
-            ],
-            $limit * 2,
-        );
+        $fused = $this->rrf->fuse($rankings, $weights, $limit * 2);
         if ($this->traceSources) {
             $this->trace['sources'][] = [
                 'priority' => $rankings['priority'],
@@ -3532,6 +3550,7 @@ final class ProductAiSearchService
                 'text' => $rankings['text'],
                 'unclassified' => $rankings['unclassified'],
                 'vector' => $rankings['vector'],
+                'vector_query' => $rankings['vector_query'] ?? [],
                 'fused' => $fused,
                 'fused_cap' => $limit * 2,
             ];
