@@ -107,6 +107,8 @@ final class MmmConnectorTest extends TestCase
     /** @var array<string, array<string, mixed>> numer magazynowy → karta pdp */
     private array $pdps = [];
 
+    private ?string $jwt = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -700,11 +702,16 @@ final class MmmConnectorTest extends TestCase
         );
     }
 
-    private static function jwt(): string
+    /**
+     * Token wyszukiwarki wydany raz na test (ważny godzinę, jak na żywo). Liczony od nowa przy każdym zapytaniu
+     * zmieniał się z sekundą zegara (exp), więc atrapa wyszukiwarki odrzucała token wydany sekundę wcześniej —
+     * pod obciążeniem pakietu równoległego klient odświeżał token i pytał o kartę pdp drugi raz.
+     */
+    private function jwt(): string
     {
         $encode = static fn (array $data): string => rtrim(strtr(base64_encode((string) json_encode($data)), '+/', '-_'), '=');
 
-        return $encode(['alg' => 'HS256', 'typ' => 'JWT']).'.'
+        return $this->jwt ??= $encode(['alg' => 'HS256', 'typ' => 'JWT']).'.'
             .$encode(['exp' => time() + 3600, 'entitlementsPayload' => ['userId' => self::USER_ID, 'soldTo' => '16102804', 'salesDistrict' => '410027']])
             .'.c2lnbmF0dXJh';
     }
@@ -918,7 +925,7 @@ final class MmmConnectorTest extends TestCase
                 }
                 if ($path === '/store/escatalog/GPH10008') {
                     return $signedIn
-                        ? Http::response("<html><head><script>var currentUserJWT='".self::jwt()."';</script></head><body><a href=\"/store/logout\">Wyloguj</a></body></html>", 200, $html)
+                        ? Http::response("<html><head><script>var currentUserJWT='".$this->jwt()."';</script></head><body><a href=\"/store/logout\">Wyloguj</a></body></html>", 200, $html)
                         : Http::response(self::storeLoginPage(), 200, $html);
                 }
                 if (str_ends_with($path, '/productdetails/productPrice')) {
@@ -982,7 +989,7 @@ final class MmmConnectorTest extends TestCase
             }
 
             if ($host === 'searchapi.3m.com') {
-                if (($request->header('Authorization')[0] ?? '') !== 'Bearer '.self::jwt()) {
+                if (($request->header('Authorization')[0] ?? '') !== 'Bearer '.$this->jwt()) {
                     return Http::response(['error' => 'Internal Server Error'], 500, $json);
                 }
                 $body = $request->data();
