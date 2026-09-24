@@ -471,7 +471,7 @@ final class ProductAiSearchService
             // z kroku „zrozum” na cały akapit SIWZ, a przepisanie szukało z niej kart od nowa i pytało model
             // drugi raz — przy serii HTTP 429 karta z tej oceny trafiała do przetargu (24.09.2026).
             if ($raw !== []) {
-                $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
+                $intents[$i] = $this->rankedIntentFrom($clean[$i], $raw, $retrieveIntents[$i]);
             }
             $retrieveIntent = $this->mergeRetrieveIntent($intents[$i], $retrieveIntents[$i]);
             $ranked = $this->rowsFromLlmMatches(
@@ -1183,8 +1183,9 @@ final class ProductAiSearchService
         bool $withExternalHint,
         AiTask $task,
     ): array {
-        $rewritten = $this->clock('rewrite_llm', fn (): ?array => $this->rewriteCatalogIntent($query, $task));
-        if ($rewritten === null || ! $this->rewriteChangesSearch($query, $usedIntent, $rewritten)) {
+        $raw = $this->clock('rewrite_llm', fn (): ?array => $this->requestCatalogRewrite($query, $task));
+        $rewritten = $this->rewriteSearchIntent($query, $usedIntent, $raw);
+        if ($rewritten === null) {
             return $firstResult;
         }
 
@@ -1192,11 +1193,12 @@ final class ProductAiSearchService
     }
 
     /**
-     * Null = przepisanie padło (wyjątek albo pusta odpowiedź — kontrakt jak w fali).
+     * Surowa odpowiedź modelu na przepisanie zapytania; null = wywołanie padło. Dotąd awaria dawała intencję lokalną
+     * z całym wymaganiem jako „szukany produkt”, z której finishSearch szukał kart od nowa i pytał model drugi raz.
      *
-     * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}|null
+     * @return array<string, mixed>|null
      */
-    private function rewriteCatalogIntent(string $query, AiTask $task): ?array
+    private function requestCatalogRewrite(string $query, AiTask $task): ?array
     {
         try {
             $raw = $this->llm->chatJson($this->rewriteMessages($query), null, 900, null, $task);
@@ -1208,9 +1210,69 @@ final class ProductAiSearchService
             return null;
         }
 
-        // Dotąd awaria dawała intencję lokalną z całym wymaganiem jako „szukany produkt”, z której finishSearch
-        // szukał kart od nowa i pytał model drugi raz (24.09.2026).
-        return is_array($raw) && $raw !== [] ? $this->intentFromRewrite($raw, $query) : null;
+        return is_array($raw) ? $raw : null;
+    }
+
+    /**
+     * Intencja z odpowiedzi na przepisanie, gotowa do nowego szukania — albo null, gdy przepisanie padło (brak albo
+     * pusta odpowiedź, kontrakt jak w fali) lub nic w szukaniu nie zmienia. Wspólne dla fali i pojedynczego
+     * wyszukiwania, żeby obie ścieżki podejmowały tę samą decyzję z tą samą intencją.
+     *
+     * Kroki: gdy przepisanie ich nie podaje, zostają kroki szukania (jak mergeRetrieveIntent) — inaczej kroki domyślne
+     * wyglądałyby na zmianę. Marka: podana w przepisaniu wygrywa (np. poprawia błędne „marki nie ma w katalogu”);
+     * pominięta albo zmyślona (spoza treści wymagania) jest dziedziczona z intencji szukania — samo pominięcie marki
+     * spoza katalogu nie zmienia szukania (retrieval i tak ją zdejmuje), a komunikat o brakującej marce ma zostać.
+     * Warunek na intencji po parseIntent/reconcileManufacturerIntent, nie na surowym polu: marka z katalogu spoza
+     * treści wymagania jest tam już wyzerowana.
+     *
+     * @param  array<string, mixed>  $searched  intencja, z którą szukano kart
+     * @param  array<string, mixed>|null  $raw
+     * @return array<string, mixed>|null
+     */
+    private function rewriteSearchIntent(string $query, array $searched, ?array $raw): ?array
+    {
+        if ($raw === null || $raw === []) {
+            return null;
+        }
+        $base = $this->normalizeIntent($searched);
+        $rewritten = $this->intentFromRewrite($raw, $query);
+        if (($rewritten['search_steps'] ?? []) === []) {
+            $rewritten['search_steps'] = $base['search_steps'];
+        }
+        $requested = trim((string) ($rewritten['manufacturer_requested'] ?? ''));
+        if (($rewritten['manufacturer'] ?? null) === null
+            && ($requested === '' || ! $this->nameAppearsInQuery($query, $requested))) {
+            if ($rewritten['manufacturer_absent_in_catalog'] ?? false) {
+                // Zmyślona marka spoza katalogu: parseIntent dołożył z nią krok i frazy — zdejmujemy je, zanim
+                // przyjdzie marka szukanej intencji, inaczej wyglądałyby na zmianę szukania.
+                $rewritten = [...$rewritten, ...$this->stripAbsentManufacturerNoise($this->dropAbsentBrandSteps($rewritten))];
+            }
+            $rewritten['manufacturer'] = $base['manufacturer'];
+            $rewritten['manufacturer_requested'] = $base['manufacturer_requested'];
+            $rewritten['manufacturer_absent_in_catalog'] = $base['manufacturer_absent_in_catalog'];
+            if ($base['manufacturer_absent_in_catalog']) {
+                $rewritten = [
+                    ...$rewritten,
+                    ...$this->stripAbsentManufacturerNoise($this->dropAbsentBrandSteps($rewritten)),
+                ];
+            }
+        }
+
+        return $this->rewriteChangesSearch($query, $searched, $rewritten) ? $rewritten : null;
+    }
+
+    /**
+     * Intencja z odpowiedzi rankingu scalona z intencją, z którą szukano kart — jak analyzeAndRank w pojedynczym
+     * wyszukiwaniu: kroki z szukania, gdy ranking ich nie podał, i flaga marki spoza katalogu. Bez scalenia fala
+     * porównywała i szukała z intencją bez kroków, a fraza z marką spoza katalogu wyglądała na zmianę.
+     *
+     * @param  array<string, mixed>  $raw
+     * @param  array<string, mixed>  $searched
+     * @return array<string, mixed>
+     */
+    private function rankedIntentFrom(string $query, array $raw, array $searched): array
+    {
+        return $this->mergeRetrieveIntent($this->withCatalogAliases($this->parseIntent($raw, $query), $query), $searched);
     }
 
     /**
@@ -1379,7 +1441,8 @@ final class ProductAiSearchService
                     // $modelStates — inaczej końcowa pętla nadpisałaby go stanem pierwszej oceny.
                     $modelStates[$i] = self::MODEL_STATE_SKIPPED;
                 } else {
-                    $pending[$i] = $prepared;
+                    // Druga ocena scala się z intencją, z którą faktycznie szukano (jak finishSearch).
+                    $pending[$i] = [...$prepared, 'searched' => $current];
                 }
             } else {
                 $needLlm[] = $i;
@@ -1402,16 +1465,14 @@ final class ProductAiSearchService
                 $report === null ? null : static fn (int $done, int $total) => $report(self::PROGRESS_STAGE_REWRITE, $done, $total),
             ));
             foreach ($needLlm as $pos => $i) {
-                $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
-                if ($raw === []) {
-                    // Przepisanie padło — intencja z pustej odpowiedzi to cały akapit SIWZ, nie nowe zrozumienie.
-                    continue;
-                }
-                $rewritten = $this->intentFromRewrite($raw, $clean[$i]);
-                // Porównanie z intencją, z którą szukano kart (jak retryAfterRewrite). Intencja z odpowiedzi rankingu
-                // bywa jej podzbiorem — wtedy przepisanie powtarzające zrozumienie wyglądało na zmianę i ta sama pula
-                // szła drugi raz do oceny.
-                if (! $this->rewriteChangesSearch($clean[$i], $retrieveIntents[$i], $rewritten)) {
+                // Porównanie z intencją, z którą szukano kart (jak retryAfterRewrite) — intencja z odpowiedzi rankingu
+                // bywa jej podzbiorem. Przepisanie, które padło albo nic nie zmienia, zostawia wynik pierwszej oceny.
+                $rewritten = $this->rewriteSearchIntent(
+                    $clean[$i],
+                    $retrieveIntents[$i],
+                    is_array($raws[$pos] ?? null) ? $raws[$pos] : null,
+                );
+                if ($rewritten === null) {
                     continue;
                 }
                 $intents[$i] = $rewritten;
@@ -1428,7 +1489,7 @@ final class ProductAiSearchService
                     );
                     $modelStates[$i] = self::MODEL_STATE_SKIPPED;
                 } else {
-                    $pending[$i] = $prepared;
+                    $pending[$i] = [...$prepared, 'searched' => $rewritten];
                 }
             }
         }
@@ -1458,8 +1519,12 @@ final class ProductAiSearchService
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
             $this->trace = $this->tracesByIndex[$i] ?? self::EMPTY_TRACE;
+            // Intencja, z którą szukano tej puli (po przepisaniu — przepisana), nie zrozumienie z pierwszego przebiegu:
+            // inaczej błędne „marki nie ma w katalogu” z pierwszego przebiegu wyłączało bramkę marki, choć przepisanie
+            // podało markę z katalogu, a kroki z przepisania nie trafiały do wyniku.
+            $searched = $pending[$i]['searched'] ?? $intents[$i];
             if ($raw !== []) {
-                $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
+                $intents[$i] = $this->rankedIntentFrom($clean[$i], $raw, $searched);
                 // Wiersze wyniku pochodzą z tej oceny, więc i stan (jak finishSearch po przepisaniu). Pozycja bez kart
                 // w pierwszym przebiegu (skipped) nie miała go wcale i wracała bez model_state.
                 $modelStates[$i] = is_array($raw['matches'] ?? null) && $raw['matches'] !== []
@@ -1469,7 +1534,7 @@ final class ProductAiSearchService
                 // Ocena po przepisaniu padła — pozycja ma stan awarii, nie „model nic nie znalazł”.
                 $modelStates[$i] = self::MODEL_STATE_UNAVAILABLE;
             }
-            $retrieveIntent = $this->mergeRetrieveIntent($intents[$i], $retrieveIntents[$i] ?? $intents[$i]);
+            $retrieveIntent = $this->mergeRetrieveIntent($intents[$i], $searched);
             $ranked = $this->rowsFromLlmMatches(
                 $clean[$i],
                 $pending[$i]['rank_cards'] ?? $pending[$i]['candidates'],
