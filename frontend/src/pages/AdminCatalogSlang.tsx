@@ -2,10 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
 
 type CatalogSlangEntry = {
+  /** Stały numer wpisu z backendu; nowy wpis dostaje go dopiero po zapisie. */
+  id?: number
   category: string
   terms: string[]
   phrases: string[]
   note: string
+  /** `false` = cecha techniczna (S5, antyprzebiciowe), nie żargon — panel jej nie edytuje, ale musi ją odesłać. */
+  jargon?: boolean
   keywords: string[]
   tags: string[]
 }
@@ -16,7 +20,7 @@ type Payload = {
   categories: Record<string, string>
 }
 
-type SortKey = 'category' | 'terms' | 'phrases'
+type SortKey = 'id' | 'category' | 'terms' | 'phrases'
 
 function csv(list: string[] | undefined): string {
   return (list ?? []).join(', ')
@@ -87,10 +91,16 @@ export function AdminCatalogSlang() {
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase()
+    const idNeedle = /^#?\d+$/.test(needle) ? Number(needle.replace('#', '')) : null
     let list = rows.map((row, index) => ({ row, index }))
     if (cat) list = list.filter((item) => item.row.category === cat)
-    if (needle) list = list.filter((item) => hay(item.row).includes(needle))
+    if (needle) list = list.filter((item) => item.row.id === idNeedle || hay(item.row).includes(needle))
     list.sort((a, b) => {
+      if (sortKey === 'id') {
+        // Nowe, jeszcze niezapisane wpisy (bez numeru) na końcu.
+        const cmp = (a.row.id ?? Number.MAX_SAFE_INTEGER) - (b.row.id ?? Number.MAX_SAFE_INTEGER)
+        return sortDir === 'asc' ? cmp : -cmp
+      }
       const av =
         sortKey === 'category'
           ? (categories[a.row.category] ?? a.row.category)
@@ -107,6 +117,14 @@ export function AdminCatalogSlang() {
 
   function patch(index: number, next: CatalogSlangEntry) {
     setRows((prev) => prev.map((row, i) => (i === index ? next : row)))
+    setMsg('')
+  }
+
+  function remove(index: number, row: CatalogSlangEntry) {
+    const label = row.terms.join(', ') || 'pusty wpis'
+    const nr = row.id ? `nr ${row.id} ` : ''
+    if (!window.confirm(`Usunąć wpis ${nr}„${label}”? Zmiana trafi do słownika po kliknięciu „Zapisz”.`)) return
+    setRows((prev) => prev.filter((_, i) => i !== index))
     setMsg('')
   }
 
@@ -127,10 +145,13 @@ export function AdminCatalogSlang() {
       const catalog_slang = rows
         .filter((row) => row.terms.some((t) => t.trim() !== '') && row.phrases.some((p) => p.trim() !== ''))
         .map((row) => ({
+          id: row.id ?? null,
           category: row.category,
           terms: row.terms,
           phrases: row.phrases,
           note: row.note,
+          // Bez flagi backend uznaje wpis za żargon — tak jak dotąd dla nowych wpisów.
+          jargon: row.jargon ?? true,
           keywords: row.keywords ?? [],
           tags: row.tags ?? [],
         }))
@@ -154,6 +175,7 @@ export function AdminCatalogSlang() {
   }
 
   const headers: { key: SortKey; label: string }[] = [
+    { key: 'id', label: 'Nr' },
     { key: 'category', label: 'Kategoria' },
     { key: 'terms', label: 'Żargon' },
     { key: 'phrases', label: 'Frazy z cennika' },
@@ -186,7 +208,7 @@ export function AdminCatalogSlang() {
         </select>
         <input
           className="min-w-[12rem] flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-xs"
-          placeholder="Filtruj żargon…"
+          placeholder="Filtruj żargon albo numer wpisu…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -250,7 +272,10 @@ export function AdminCatalogSlang() {
           </thead>
           <tbody>
             {visible.map(({ row, index }) => (
-              <tr key={`${row.category}-${index}`} className="border-b align-top last:border-b-0">
+              <tr key={row.id ?? `nowy-${index}`} className="border-b align-top last:border-b-0">
+                <td className="whitespace-nowrap p-2 pt-3 text-right text-xs tabular-nums text-slate-500">
+                  {row.id ?? <span className="text-slate-400">nowy</span>}
+                </td>
                 <td className="p-2">
                   <select
                     className="w-full min-w-[8rem] rounded border border-slate-300 px-1 py-1 text-xs"
@@ -300,7 +325,7 @@ export function AdminCatalogSlang() {
                   <button
                     type="button"
                     className="text-xs text-red-700 underline"
-                    onClick={() => setRows((prev) => prev.filter((_, i) => i !== index))}
+                    onClick={() => remove(index, row)}
                   >
                     Usuń
                   </button>

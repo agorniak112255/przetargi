@@ -9,11 +9,14 @@ use App\Services\Ai\AiSettingsService;
 /**
  * Żargon SIWZ (wampirki, gumiaki…) → frazy jak w cenniku, z filtrem kategorii.
  *
- * @phpstan-type SlangEntry array{category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string>}
+ * @phpstan-type SlangEntry array{id: int, category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string>}
  */
 final class CatalogSlangDictionary
 {
     public const MAX_ENTRIES = 600;
+
+    /** Górna granica numeru wpisu (kolumna licznika to unsigned int). */
+    public const MAX_ID = 1_000_000_000;
 
     public const MAX_TERMS = 12;
 
@@ -781,14 +784,20 @@ final class CatalogSlangDictionary
     }
 
     /**
+     * Numer wpisu (`id`) jest stały: usunięcie wpisu nie przenumerowuje pozostałych.
+     * Wpis bez numeru (nowy z panelu, domyślny z config) albo z numerem powtórzonym
+     * dostaje kolejny numer powyżej `$lastId` i powyżej numerów z listy.
+     *
+     * @param  int  $lastId  najwyższy numer, jaki słownik już nadał (także wpisom później usuniętym)
      * @return list<SlangEntry>
      */
-    public static function normalize(mixed $raw): array
+    public static function normalize(mixed $raw, int $lastId = 0): array
     {
         if (! is_array($raw)) {
             return [];
         }
         $out = [];
+        $taken = [];
         foreach ($raw as $row) {
             if (! is_array($row)) {
                 continue;
@@ -808,7 +817,15 @@ final class CatalogSlangDictionary
                 $label = self::CATEGORY_LABELS[$category] ?? $category;
                 $tags = array_values(array_filter(['BHP', $label]));
             }
+            $id = self::entryId($row['id'] ?? null);
+            if ($id !== null && isset($taken[$id])) {
+                $id = null;
+            }
+            if ($id !== null) {
+                $taken[$id] = true;
+            }
             $out[] = [
+                'id' => $id,
                 'category' => $category,
                 'terms' => $terms,
                 'phrases' => $phrases,
@@ -824,8 +841,37 @@ final class CatalogSlangDictionary
                 break;
             }
         }
+        $next = max($lastId, $taken === [] ? 0 : max(array_keys($taken)));
+        foreach ($out as $i => $entry) {
+            if ($entry['id'] === null) {
+                $out[$i]['id'] = ++$next;
+            }
+        }
 
         return $out;
+    }
+
+    /**
+     * @param  list<array{id?: int}>  $entries
+     */
+    public static function maxId(array $entries): int
+    {
+        $max = 0;
+        foreach ($entries as $entry) {
+            $max = max($max, (int) ($entry['id'] ?? 0));
+        }
+
+        return $max;
+    }
+
+    private static function entryId(mixed $value): ?int
+    {
+        if (! is_int($value) && ! is_string($value)) {
+            return null;
+        }
+        $id = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => self::MAX_ID]]);
+
+        return is_int($id) ? $id : null;
     }
 
     /**

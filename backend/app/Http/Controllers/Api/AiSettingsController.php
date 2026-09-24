@@ -112,6 +112,7 @@ class AiSettingsController extends Controller
             'model_profiles.*.tasks' => ['nullable', 'array'],
             'model_profiles.*.tasks.*' => ['string', 'in:'.implode(',', AiTask::keys())],
             'catalog_slang' => ['sometimes', 'array', 'max:'.CatalogSlangDictionary::MAX_ENTRIES],
+            'catalog_slang.*.id' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:'.CatalogSlangDictionary::MAX_ID],
             'catalog_slang.*.category' => ['nullable', 'string', 'in:'.implode(',', CatalogSlangDictionary::CATEGORIES)],
             'catalog_slang.*.terms' => ['required', 'array', 'min:1', 'max:'.CatalogSlangDictionary::MAX_TERMS],
             'catalog_slang.*.terms.*' => ['string', 'max:'.CatalogSlangDictionary::MAX_TERM_LEN],

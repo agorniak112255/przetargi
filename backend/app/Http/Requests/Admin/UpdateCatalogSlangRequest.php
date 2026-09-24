@@ -21,6 +21,7 @@ class UpdateCatalogSlangRequest extends FormRequest
     {
         return [
             'catalog_slang' => ['required', 'array', 'max:'.CatalogSlangDictionary::MAX_ENTRIES],
+            'catalog_slang.*.id' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:'.CatalogSlangDictionary::MAX_ID],
             'catalog_slang.*.category' => ['nullable', 'string', 'in:'.implode(',', CatalogSlangDictionary::CATEGORIES)],
             'catalog_slang.*.terms' => ['required', 'array', 'min:1', 'max:'.CatalogSlangDictionary::MAX_TERMS],
             'catalog_slang.*.terms.*' => ['string', 'max:'.CatalogSlangDictionary::MAX_TERM_LEN],

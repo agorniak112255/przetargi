@@ -130,7 +130,7 @@ final class AiSettingsService
      *     has_embedding_api_key: bool,
      *     has_embedding_cloud_api_key: bool,
      *     model_profiles: list<array<string, mixed>>,
-     *     catalog_slang: list<array{category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string}>,
+     *     catalog_slang: list<array{id: int, category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string}>,
      *     source: string
      * }
      */
@@ -527,7 +527,19 @@ final class AiSettingsService
         }
 
         if (array_key_exists('catalog_slang', $data) && Schema::hasColumn('ai_settings', 'catalog_slang')) {
-            $row->catalog_slang = CatalogSlangDictionary::normalize($data['catalog_slang']);
+            $hasLastId = Schema::hasColumn('ai_settings', 'catalog_slang_last_id');
+            // Nowy wpis dostaje numer powyżej każdego już nadanego: zapisanego, startowego
+            // z config i usuniętego (licznik) — numer usuniętego wpisu nie wraca.
+            $lastId = max(
+                $hasLastId ? (int) $row->catalog_slang_last_id : 0,
+                CatalogSlangDictionary::maxId($this->slangFromRow($row)),
+                CatalogSlangDictionary::maxId(CatalogSlangDictionary::defaults()),
+            );
+            $slang = CatalogSlangDictionary::normalize($data['catalog_slang'], $lastId);
+            $row->catalog_slang = $slang;
+            if ($hasLastId) {
+                $row->catalog_slang_last_id = max($lastId, CatalogSlangDictionary::maxId($slang));
+            }
         }
 
         $this->applySecret($row, 'api_key', $data);
@@ -922,7 +934,7 @@ final class AiSettingsService
     }
 
     /**
-     * @return list<array{category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string>}>
+     * @return list<array{id: int, category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string>}>
      */
     public function catalogSlang(): array
     {
@@ -930,7 +942,7 @@ final class AiSettingsService
     }
 
     /**
-     * @return list<array{category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string>}>
+     * @return list<array{id: int, category: string, terms: list<string>, phrases: list<string>, note: string, jargon: bool, keywords: list<string>, tags: list<string>}>
      */
     private function slangFromRow(AiSetting $row): array
     {

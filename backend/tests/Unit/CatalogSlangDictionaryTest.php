@@ -354,6 +354,26 @@ final class CatalogSlangDictionaryTest extends TestCase
         $this->assertTrue($dict->isJargonNorm('wampirki'));
     }
 
+    public function test_normalize_keeps_entry_numbers_and_numbers_new_entries_above_last_id(): void
+    {
+        $rows = CatalogSlangDictionary::normalize([
+            ['category' => 'rece', 'terms' => ['gumówki'], 'phrases' => ['rękawice gumowe']],
+            ['id' => 12, 'category' => 'rece', 'terms' => ['wampirki'], 'phrases' => ['rękawice powlekane']],
+            // Wpis odrzucony (bez fraz) nie zabiera numeru.
+            ['category' => 'rece', 'terms' => ['pianki'], 'phrases' => []],
+            ['id' => '5', 'category' => 'stopy', 'terms' => ['S5'], 'phrases' => ['obuwie ochronne']],
+            ['id' => 12, 'category' => 'rece', 'terms' => ['nitrylki'], 'phrases' => ['rękawice nitrylowe']],
+        ], 20);
+
+        $this->assertSame([21, 12, 5, 22], array_column($rows, 'id'));
+        $this->assertSame(22, CatalogSlangDictionary::maxId($rows));
+        // Bez licznika nowy numer idzie za najwyższym z listy.
+        $this->assertSame([13, 12], array_column(CatalogSlangDictionary::normalize([
+            ['category' => 'rece', 'terms' => ['gumówki'], 'phrases' => ['rękawice gumowe']],
+            ['id' => 12, 'category' => 'rece', 'terms' => ['wampirki'], 'phrases' => ['rękawice powlekane']],
+        ]), 'id'));
+    }
+
     public function test_polmaska_is_a_family_noun_not_jargon(): void
     {
         // Wpis „półmaska → półmaska wielorazowa” usunięty: „półmaska” to rodzina wyrobu,
