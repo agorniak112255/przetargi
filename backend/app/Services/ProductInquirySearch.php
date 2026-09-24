@@ -29,7 +29,7 @@ class ProductInquirySearch
 
     /**
      * @param  list<string>  $queries
-     * @return list<array{query: string, products: list<array<string, mixed>>, model_state: string|null, requested_brand_absent: string|null}>
+     * @return list<array{query: string, products: list<array<string, mixed>>, model_state: string|null, requested_brand_absent: string|null, timings_ms: array<string, int>}>
      */
     public function findMany(array $queries, int $limit): array
     {
@@ -48,6 +48,8 @@ class ProductInquirySearch
                 'model_state' => is_string($result['model_state'] ?? null) ? $result['model_state'] : null,
                 // Marka z zapytania, której nie ma w katalogu — wtedy wyniki to zamienniki innej marki.
                 'requested_brand_absent' => $this->absentBrand($result),
+                // Czasy etapów całej fali (zrozumienie, katalog, ocena modelu) — te same w każdym wierszu.
+                'timings_ms' => is_array($result['trace']['timings_ms'] ?? null) ? $result['trace']['timings_ms'] : [],
             ];
         }
 

@@ -258,7 +258,7 @@ final class ClientInquiryRematchTest extends TestCase
         $searched = [];
         $this->mock(ProductInquirySearch::class, function ($mock) use (&$searched, $rolex1, $rolex5, $linostop): void {
             $mock->shouldReceive('findMany')->twice()->andReturnUsing(function (array $queries) use (&$searched, $rolex1, $rolex5, $linostop): array {
-                $searched = $queries;
+                $searched = [...$searched, ...$queries];
 
                 return array_map(fn (string $q): array => ['query' => $q, 'products' => str_contains(mb_strtolower($q), 'linostop')
                     ? [$this->row($linostop, 95)]
@@ -270,6 +270,7 @@ final class ClientInquiryRematchTest extends TestCase
             ->expectsOutputToContain('(z linku)')
             ->expectsOutputToContain('link z zapytania wskazuje WRAH220')
             ->assertSuccessful();
+        $searched = [];
         // usługa po podmianie wyszukiwarki — ta sprzed atrapy trzyma prawdziwą
         $report = app(ClientInquiryService::class)->rematch($inquiry->fresh(), true);
 
@@ -284,7 +285,17 @@ final class ClientInquiryRematchTest extends TestCase
         }
 
         $after = $inquiry->fresh();
-        $this->assertSame($searched, $after->analysis['product_queries']);
+        // W planie fraz zostają zapasy pozycji — bez adresu — ale szukamy ich dopiero wtedy,
+        // gdy klucz pozycji nic nie znajdzie (matchInRounds). Tu oba klucze znalazły karty.
+        $this->assertSame([
+            $after->analysis['line_items'][0]['search_query'],
+            $oldQuery2,
+        ], $searched);
+        $this->assertSame([
+            ...$searched,
+            'urządzenie samohamowne do pracy w pionie',
+            'Linostop linka długości min. 15 m',
+        ], $after->analysis['product_queries']);
         $this->assertSame([$rolex5->id], array_column($after->analysis['link_candidates']['item_1'], 'id'));
         $item = $after->analysis['line_items'][0];
         $this->assertStringStartsWith('ROLEX 5', $item['search_query']);
@@ -347,8 +358,9 @@ final class ClientInquiryRematchTest extends TestCase
 
         $searched = [];
         $this->mock(ProductInquirySearch::class, function ($mock) use (&$searched): void {
-            $mock->shouldReceive('findMany')->once()->andReturnUsing(function (array $queries) use (&$searched): array {
-                $searched = $queries;
+            // klucz z nazwą karty nic nie znalazł, więc druga runda szuka jeszcze frazy pozycji
+            $mock->shouldReceive('findMany')->twice()->andReturnUsing(function (array $queries) use (&$searched): array {
+                $searched = [...$searched, ...$queries];
 
                 return array_map(static fn (string $q): array => ['query' => $q, 'products' => []], $queries);
             });

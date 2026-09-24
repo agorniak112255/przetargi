@@ -88,6 +88,13 @@ final class ClientInquiryService
      */
     private array $cardCheckTexts = [];
 
+    /**
+     * Rundy szukania w katalogu od ostatniego wyzerowania — do logu `client-inquiry.timings`.
+     *
+     * @var list<array{queries: int, ms: int, stages_ms: array<string, int>}>
+     */
+    private array $searchRounds = [];
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly ProductInquirySearch $search,
@@ -106,6 +113,7 @@ final class ClientInquiryService
         ?string $subject,
         array $source = [],
     ): ClientInquiry {
+        $started = hrtime(true);
         // Do bazy trafia cały mail; model i parser pozycji dostają wersję bez
         // cytatu, nagłówka przekazania i stopki — inaczej adres albo telefon
         // z podpisu stają się pozycjami zamówienia.
@@ -116,7 +124,9 @@ final class ClientInquiryService
         $forwardedSubject = InquiryMailText::forwardedSubject($body);
         $subjectHint = InquiryQueryText::subjectProductHint($forwardedSubject)
             ?? InquiryQueryText::subjectProductHint($subject);
+        $extractStarted = hrtime(true);
         $extracted = $this->extract($analysisBody, $forwardedSubject ?? $this->nullable($subject));
+        $extractMs = self::msSince($extractStarted);
         $lineItems = $this->resolveLineItems($analysisBody, $extracted['line_items'], $subjectHint);
         // Link w pozycji wskazuje kartę wprost — ten sam adres zapisał przy karcie łącznik B2B.
         $linked = app(InquiryProductLinks::class)->attach($lineItems, $analysisBody);
@@ -128,7 +138,10 @@ final class ClientInquiryService
                 ? [$subjectHint]
                 : array_map(InquiryLinks::withoutUrls(...), $extracted['product_queries'])
         );
-        $matches = $this->matchProducts($queries);
+        $this->searchRounds = [];
+        $searchStarted = hrtime(true);
+        $matches = $this->matchInRounds($lineItems, $queries);
+        $searchMs = self::msSince($searchStarted);
         $substitutes = $this->loadSubstitutes($matches);
         $cards = $this->buildCards($extracted['cards'], $matches, $lineItems, $substitutes);
         $preferences = $this->lastPreferences($user);
@@ -174,8 +187,24 @@ final class ClientInquiryService
 
         // Pracownik ma od razu zobaczyć gotowy list: domyślne decyzje + szkic.
         $answers = $this->defaultAnswers($inquiry, $preferences['price_mode'], $preferences['margin']);
+        $saved = $this->saveReply($inquiry, $answers, null);
 
-        return $this->saveReply($inquiry, $answers, null);
+        // Gdzie idzie czas analizy (#71 MESKO, 24.09.2026: 160 s, a z dat w bazie dało się
+        // odtworzyć tylko dwa odcinki). `other` = parser pozycji, linki, zamienniki i zapis listu.
+        $totalMs = self::msSince($started);
+        Log::info('client-inquiry.timings', [
+            'inquiry_id' => $saved->id,
+            'line_items' => count($lineItems),
+            'timings_ms' => [
+                'extract' => $extractMs,
+                'search' => $searchMs,
+                'other' => max(0, $totalMs - $extractMs - $searchMs),
+                'total' => $totalMs,
+            ],
+            'search_rounds' => $this->searchRounds,
+        ]);
+
+        return $saved;
     }
 
     /**
@@ -339,7 +368,9 @@ final class ClientInquiryService
         }
 
         // Szukanie trwa (model ocenia karty), więc idzie przed jakimkolwiek zapisem.
-        $matches = $this->matchProducts($relinked['queries']);
+        // Rundy liczy tylko log analizy — polecenie przelicza wiele zapytań jedną usługą.
+        $this->searchRounds = [];
+        $matches = $this->matchInRounds($relinked['items'], $relinked['queries']);
         $substitutes = $this->loadSubstitutes($matches);
         $rematchedAt = CarbonImmutable::now()->toIso8601String();
 
@@ -414,7 +445,7 @@ final class ClientInquiryService
      * Frazy przeliczamy tylko wtedy, gdy zmieniła się pozycja albo któraś fraza ma adres —
      * pozostałe zapytania szukają dokładnie tym, co zapisała analiza.
      *
-     * @return array{queries: list<string>, analysis: array<string, mixed>}
+     * @return array{queries: list<string>, items: list<array<string, mixed>>, analysis: array<string, mixed>}
      */
     private function relinked(ClientInquiry $inquiry): array
     {
@@ -434,7 +465,7 @@ final class ClientInquiryService
         }
         $withUrl = array_filter($stored, static fn (string $query): bool => InquiryLinks::extract($query) !== []);
         if ($linked['items'] === $items && $withUrl === []) {
-            return ['queries' => $stored, 'analysis' => $patch];
+            return ['queries' => $stored, 'items' => $items, 'analysis' => $patch];
         }
 
         // W zapisie stoją stare klucze wyszukiwania pozycji — zastępują je nowe z uniqueQueries() —
@@ -444,11 +475,7 @@ final class ClientInquiryService
         $itemKeys = [];
         $itemQueries = [];
         foreach ($items as $item) {
-            $key = $this->nullable($item['search_query'] ?? null) ?? $this->catalogSearchQuery(
-                (string) ($item['query'] ?? ''),
-                (string) ($item['quote'] ?? '')
-            );
-            $itemKeys[mb_strtolower(trim($key))] = true;
+            $itemKeys[mb_strtolower(trim($this->itemSearchKey($item)))] = true;
             $itemQueries[mb_strtolower(trim((string) ($item['query'] ?? '')))] = true;
         }
         $modelQueries = [];
@@ -462,6 +489,7 @@ final class ClientInquiryService
 
         return [
             'queries' => $queries,
+            'items' => $linked['items'],
             'analysis' => [...$patch, 'line_items' => $linked['items'], 'product_queries' => $queries],
         ];
     }
@@ -2132,12 +2160,110 @@ final class ClientInquiryService
     }
 
     /**
+     * Szukanie planu fraz w dwóch rundach. Fraza modelu dla pozycji (`query`, inna niż jej klucz)
+     * jest tylko zapasem — groupsForItem() sięga po nią, gdy klucz pozycji nic nie znalazł — więc
+     * szukamy jej dopiero wtedy. Dotąd szła w tej samej fali co klucze: na produkcji 37 z 96 szukań
+     * (zapytania #41–#71) to były takie frazy i żadna nie została użyta, a każda to osobna ocena
+     * kart przez model, który liczy lokalnie — #71 (MESKO): 10 ocen dla 5 wyrobów, 160 s.
+     *
+     * W pierwszej rundzie zostaje wszystko, czego nie da się przypisać pozycji jako zapasu: fraza,
+     * której pozycja nie ma swojego klucza w planie (stare rekordy, przycięcie do
+     * MAX_PRODUCT_QUERIES), jest jej jedynym szukaniem. Po awarii modelu drugiej rundy nie ma —
+     * kazałaby czekać drugi raz na model, który przed chwilą nie odpowiedział, a pozycja i tak
+     * pokazuje „model nie odpowiedział”.
+     *
+     * @param  list<array<string, mixed>>  $lineItems
+     * @param  list<string>  $queries  plan z uniqueQueries() (`analysis.product_queries`)
+     * @return list<array{query: string, products: list<array<string, mixed>>}>
+     */
+    private function matchInRounds(array $lineItems, array $queries): array
+    {
+        $planned = [];
+        foreach ($queries as $query) {
+            $planned[mb_strtolower(trim($query))] = true;
+        }
+        $itemKeys = [];
+        foreach ($lineItems as $item) {
+            $itemKeys[mb_strtolower(trim($this->itemSearchKey($item)))] = true;
+        }
+        // fraza zapasowa → klucze pozycji, które po nią sięgają; null = jedyne szukanie którejś pozycji
+        $spareFor = [];
+        foreach ($lineItems as $item) {
+            $key = mb_strtolower(trim($this->itemSearchKey($item)));
+            $phrase = mb_strtolower(trim((string) ($item['query'] ?? '')));
+            if ($phrase === '' || isset($itemKeys[$phrase]) || ! isset($planned[$phrase])) {
+                continue;
+            }
+            if (! isset($planned[$key]) || (array_key_exists($phrase, $spareFor) && $spareFor[$phrase] === null)) {
+                $spareFor[$phrase] = null;
+
+                continue;
+            }
+            $spareFor[$phrase][] = $key;
+        }
+
+        $first = [];
+        $spare = [];
+        foreach ($queries as $query) {
+            $lower = mb_strtolower(trim($query));
+            // isset() na null daje false — fraza, która jest czyimś jedynym szukaniem, idzie od razu
+            if (isset($spareFor[$lower])) {
+                $spare[$lower] = $query;
+            } else {
+                $first[] = $query;
+            }
+        }
+        $matches = $this->matchProducts($first);
+        if ($spare === []) {
+            return $matches;
+        }
+
+        $byQuery = [];
+        foreach ($matches as $group) {
+            $byQuery[mb_strtolower(trim($group['query']))] = $group;
+        }
+        $retry = [];
+        foreach ($spare as $lower => $query) {
+            foreach ($spareFor[$lower] as $key) {
+                $group = $byQuery[$key] ?? null;
+                if ($group !== null && $group['products'] === [] && ($group['model_failed'] ?? false) !== true) {
+                    $retry[] = $query;
+
+                    break;
+                }
+            }
+        }
+
+        return $retry === [] ? $matches : [...$matches, ...$this->matchProducts($retry)];
+    }
+
+    /**
+     * Klucz, pod którym pozycja szuka w katalogu: zapisany przy analizie albo — w starych
+     * rekordach — liczony z frazy i cytatu.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private function itemSearchKey(array $item): string
+    {
+        return $this->nullable($item['search_query'] ?? null) ?? $this->catalogSearchQuery(
+            (string) ($item['query'] ?? ''),
+            (string) ($item['quote'] ?? '')
+        );
+    }
+
+    private static function msSince(int|float $started): int
+    {
+        return (int) round((hrtime(true) - $started) / 1e6);
+    }
+
+    /**
      * @param  list<string>  $queries
      * @return list<array{query: string, products: list<array<string, mixed>>}>
      */
     private function matchProducts(array $queries): array
     {
         $sliced = array_values(array_slice($queries, 0, self::MAX_PRODUCT_QUERIES));
+        $started = hrtime(true);
         try {
             // z zapasem: wiersze nieocenione odsiewamy dopiero przy pokazywaniu,
             // więc przycięcie do trójki przed odsiewem zabrałoby dobre trafienia
@@ -2149,6 +2275,11 @@ final class ClientInquiryService
                 $rawGroups[] = ['query' => $query, 'products' => [], 'model_state' => ProductAiSearchService::MODEL_STATE_UNAVAILABLE];
             }
         }
+        $this->searchRounds[] = [
+            'queries' => count($sliced),
+            'ms' => self::msSince($started),
+            'stages_ms' => is_array($rawGroups[0]['timings_ms'] ?? null) ? $rawGroups[0]['timings_ms'] : [],
+        ];
 
         $groups = [];
         foreach ($rawGroups as $i => $result) {
@@ -3237,10 +3368,7 @@ final class ClientInquiryService
         foreach ($lineItems as $item) {
             // ten sam klucz, który zapisaliśmy przy pozycji — inaczej wynik
             // wyszukiwania nie trafiłby potem do swojej pozycji
-            $query = $this->nullable($item['search_query'] ?? null) ?? $this->catalogSearchQuery(
-                (string) ($item['query'] ?? ''),
-                (string) ($item['quote'] ?? '')
-            );
+            $query = $this->itemSearchKey($item);
             if (($item['query_source'] ?? null) === 'subject') {
                 $subjectQueries[] = $query;
             }
@@ -3513,10 +3641,7 @@ final class ClientInquiryService
     private function groupsForItem(array $matches, array $item): array
     {
         // zapisany klucz z chwili analizy; stare rekordy go nie mają i liczą po staremu
-        $search = $this->nullable($item['search_query'] ?? null) ?? $this->catalogSearchQuery(
-            (string) ($item['query'] ?? ''),
-            (string) ($item['quote'] ?? '')
-        );
+        $search = $this->itemSearchKey($item);
         // Pozycja bez frazy („proszę o wycenę”) niczego w katalogu nie szukała, więc
         // nie wolno jej podstawić wyników jedynej grupy — byliby to kandydaci, których
         // nikt do tej pozycji nie dopasował. Wiersz z samym wymiarem („3 szt. rozm:

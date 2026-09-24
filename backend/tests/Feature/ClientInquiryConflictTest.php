@@ -56,6 +56,8 @@ final class ClientInquiryConflictTest extends TestCase
             $row,
             'Drelich nie spełnia EN 374.',
             "Dzień dobry,\nproszę o ofertę:\n1. Kalosze gumowe S5 rozmiar 43 4 pary\n2. ".$row."\n3. Okulary ochronne bezbarwne 10 szt.\nPozdrawiam",
+            // wiersze parsera nie mają frazy „rękawice”, więc nie jest niczyim zapasem — idzie w pierwszej rundzie
+            searchRounds: 1,
         );
 
         $items = (array) $res->json('items');
@@ -66,7 +68,7 @@ final class ClientInquiryConflictTest extends TestCase
         }
     }
 
-    private function analyzeRow(string $row, ?string $conflict, ?string $body = null): TestResponse
+    private function analyzeRow(string $row, ?string $conflict, ?string $body = null, int $searchRounds = 2): TestResponse
     {
         $this->mock(OpenAiCompatibleClient::class, function ($mock) use ($row, $conflict): void {
             $mock->shouldReceive('chatJson')->once()->andReturn([
@@ -85,8 +87,9 @@ final class ClientInquiryConflictTest extends TestCase
                 'cards' => [],
             ]);
         });
-        $this->mock(ProductInquirySearch::class, function ($mock): void {
-            $mock->shouldReceive('findMany')->once()->andReturnUsing(
+        $this->mock(ProductInquirySearch::class, function ($mock) use ($searchRounds): void {
+            // klucz pozycji nic nie znalazł, więc druga runda szuka jeszcze frazy modelu „rękawice”
+            $mock->shouldReceive('findMany')->times($searchRounds)->andReturnUsing(
                 static fn (array $queries): array => array_map(
                     static fn (string $q): array => ['query' => $q, 'products' => [], 'model_state' => 'empty'],
                     $queries

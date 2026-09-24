@@ -412,7 +412,7 @@ final class ProductAiSearchService
         };
         $intents = $this->clock('understand', fn (): array => $this->analyzeQueriesForRetrieve($clean, $task, $maxConcurrent, $report));
         $report(self::PROGRESS_STAGE_CATALOG, 0, count($clean));
-        $this->prefetchVectorQueries($clean, $intents);
+        $this->clock('vector_prefetch', fn () => $this->prefetchVectorQueries($clean, $intents));
         $retrieveIntents = [];
         $modelStates = [];
         foreach ($clean as $i => $query) {
@@ -451,13 +451,13 @@ final class ProductAiSearchService
         $report(self::PROGRESS_STAGE_RANK, 0, count($rankMessages));
         $providerTally = app(AiServedProviderTally::class);
         $providerTally->forgetBatch();
-        $rankRaws = $this->llm->chatJsonMany(
+        $rankRaws = $this->clock('rank_llm', fn (): array => $this->llm->chatJsonMany(
             $rankMessages,
             $this->rankMaxTokens($task),
             $task,
             $maxConcurrent,
             static fn (int $done, int $total) => $report(self::PROGRESS_STAGE_RANK, $done, $total),
-        );
+        ));
         // Dostawca OpenRoutera, który ocenił pozycję. Raport 20260914_131814: 15 poluzowań przypięcia dostawcy w przebiegu
         // z 6 złymi kartami ocenionymi na 95 — bez dostawcy przy pozycji nie da się tego powiązać.
         $rankProviders = $providerTally->lastBatch();
@@ -1324,13 +1324,13 @@ final class ProductAiSearchService
             if ($report !== null) {
                 $report(self::PROGRESS_STAGE_REWRITE, 0, count($messages));
             }
-            $raws = $this->llm->chatJsonMany(
+            $raws = $this->clock('rewrite_llm', fn (): array => $this->llm->chatJsonMany(
                 $messages,
                 900,
                 $task,
                 $maxConcurrent,
                 $report === null ? null : static fn (int $done, int $total) => $report(self::PROGRESS_STAGE_REWRITE, $done, $total),
-            );
+            ));
             foreach ($needLlm as $pos => $i) {
                 $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
                 $rewritten = $this->intentFromRewrite($raw, $clean[$i]);
@@ -1376,7 +1376,7 @@ final class ProductAiSearchService
                 $intents[$i],
             );
         }
-        $rankRaws = $this->llm->chatJsonMany($rankMessages, $this->rankMaxTokens($task), $task, $maxConcurrent);
+        $rankRaws = $this->clock('rank_llm', fn (): array => $this->llm->chatJsonMany($rankMessages, $this->rankMaxTokens($task), $task, $maxConcurrent));
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
             $this->trace = $this->tracesByIndex[$i] ?? self::EMPTY_TRACE;
