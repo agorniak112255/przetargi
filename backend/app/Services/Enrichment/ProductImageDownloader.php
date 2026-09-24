@@ -308,6 +308,72 @@ final class ProductImageDownloader
         return $m[1].'/userdata/public/gfx/'.$m[2].'/'.$file;
     }
 
+    /**
+     * Grafika witryny Ansella, nie zdjęcie wyrobu: widżet doboru rozmiaru („glove-size-finder/chemical.ashx”
+     * trafiło jako zdjęcie karty RINGERS), piktogramy norm z taksonomii PIM, ikony (social media, zmiana
+     * regionu) i grafika zrównoważonego rozwoju. Leżą pod tym samym /-/media/ co packshoty i są poprawnymi
+     * obrazkami, więc żaden późniejszy próg ich nie zatrzymuje.
+     */
+    public static function isManufacturerSiteGraphicUrl(string $url): bool
+    {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        if ($host !== 'ansell.com' && ! str_ends_with($host, '.ansell.com')) {
+            return false;
+        }
+        $path = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+
+        return preg_match('#/(?:glove-size-finder|pim/taxonomy|icon|sustainability)/#', $path) === 1;
+    }
+
+    /** Zdjęcie wyrobu w użyciu („ringers-074-chemical-application---examining-barrels.ashx”), nie packshot. */
+    public static function isApplicationShotUrl(string $url): bool
+    {
+        $path = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+
+        return str_contains(basename($path), 'application');
+    }
+
+    /**
+     * Packshot karty („ringers074.ashx”) przed jej zdjęciami z zastosowania — przy jednym zdjęciu
+     * na kartę głównym zostawało zdjęcie beczek. Karta to host i katalog pliku (Ansell trzyma pliki
+     * modelu w …/product-assets/ringers/r-074/). Zmienia się tylko kolejność w obrębie jednej karty;
+     * pozostałe adresy zostają na swoich miejscach, a karta bez packshotu — bez zmian.
+     *
+     * @param  list<string>  $urls
+     * @return list<string>
+     */
+    public static function packshotsFirst(array $urls): array
+    {
+        $urls = array_values($urls);
+        $positions = [];
+        foreach ($urls as $i => $url) {
+            $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+            $dir = dirname(mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+            $positions[$host.$dir][] = $i;
+        }
+
+        $out = $urls;
+        foreach ($positions as $group) {
+            $packshots = [];
+            $shots = [];
+            foreach ($group as $i) {
+                if (self::isApplicationShotUrl($urls[$i])) {
+                    $shots[] = $urls[$i];
+                } else {
+                    $packshots[] = $urls[$i];
+                }
+            }
+            if ($packshots === [] || $shots === []) {
+                continue;
+            }
+            foreach ([...$packshots, ...$shots] as $k => $url) {
+                $out[$group[$k]] = $url;
+            }
+        }
+
+        return $out;
+    }
+
     /** Shoper: _120_120 / _300_300 to kafle; _0_0 i ≥400 to karta. */
     public static function isSmallShoperCacheUrl(string $url): bool
     {

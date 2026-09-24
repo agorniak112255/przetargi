@@ -2129,7 +2129,8 @@ final class ProductPageFetcher
             $out[] = $row['url'];
         }
 
-        return array_slice(array_values(array_unique($out)), 0, 6);
+        // limit 6 nie może odciąć packshotu, gdy karta wymienia najpierw zdjęcia z zastosowania
+        return array_slice(ProductImageDownloader::packshotsFirst(array_values(array_unique($out))), 0, 6);
     }
 
     /**
@@ -2254,6 +2255,9 @@ final class ProductPageFetcher
 
     private function isJunkImageUrl(string $url): bool
     {
+        if (ProductImageDownloader::isManufacturerSiteGraphicUrl($url)) {
+            return true;
+        }
         $u = mb_strtolower($url);
         foreach ([
             'logo', 'icon', 'sprite', 'favicon', 'banner', 'payment',

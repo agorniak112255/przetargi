@@ -452,6 +452,10 @@ final class BlockedPageReader
             if ($url === null || ! ProductImageDownloader::looksLikeImageUrl($url)) {
                 continue;
             }
+            // czytnik oddaje całą stronę: widżet rozmiarów, piktogramy norm, stopkę z ikonami
+            if (ProductImageDownloader::isManufacturerSiteGraphicUrl($url)) {
+                continue;
+            }
             $out[] = $url;
         }
 

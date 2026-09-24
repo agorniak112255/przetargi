@@ -55,6 +55,13 @@ final class ProductImageCandidateVerifier
             static fn (string $url): string => ProductImageDownloader::preferFullSizeUrl($url),
             $urls
         );
+        // Grafika witryny producenta nie jest kandydatem nawet dla modelu wizyjnego (ikona
+        // rękawicy z widżetu rozmiarów przeszła jako zdjęcie), a packshot karty idzie przed
+        // jej zdjęciami z zastosowania — od tej kolejności zależy, co przetrwa limit $max.
+        $urls = ProductImageDownloader::packshotsFirst(array_values(array_filter(
+            $urls,
+            static fn (string $url): bool => ! ProductImageDownloader::isManufacturerSiteGraphicUrl($url)
+        )));
         $trusted = [];
         foreach ($trustedUrls as $url) {
             if (is_string($url) && str_starts_with($url, 'http')) {
