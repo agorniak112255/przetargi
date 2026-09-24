@@ -387,4 +387,4 @@ zgadza się z tym, co faktycznie jest zainstalowane.
 - Załączniki (PDF, Excel) nie są wysyłane — do analizy idzie sam tekst maila.
 - Maile zaszyfrowane (OpenPGP, S/MIME) nie są odczytywane.
 - Jeśli zamkniesz okno odpowiedzi i wyślesz ją później ręcznie, zapytanie trzeba
-  oznaczyć w aplikacji przyciskiem „Kopiuj i oznacz wysłane”.
+  oznaczyć w aplikacji przyciskiem „Oznacz, że wysłano”.

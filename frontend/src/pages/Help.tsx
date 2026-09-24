@@ -1653,7 +1653,7 @@ function InquiriesHelp() {
         },
         {
           action: 'List od razu, pozycje do sprawdzenia oflagowane',
-          does: 'Po lewej gotowy temat i treść. Po prawej każda pozycja z cytatem klienta, dobranym towarem i plakietką: zielona „pewne”, żółta „sprawdź”, czerwona „brak w katalogu”. Baner u góry mówi, ile pozycji wymaga sprawdzenia.',
+          does: 'Baner u góry mówi, ile pozycji wymaga sprawdzenia. Pod nim pasek z przyciskami listu — zostaje u góry ekranu, gdy przewijasz pozycje. Niżej, na całą szerokość, każda pozycja z cytatem klienta, dobranym towarem i plakietką: zielona „pewne”, żółta „sprawdź”, czerwona „brak w katalogu”. Gotowy list otwiera „Podgląd odpowiedzi”.',
           click: 'Przejrzyj tylko pozycje z żółtą lub czerwoną plakietką. Pozycje „pewne” nie wymagają nic. Gdy klient postawił warunek („w szczególności na kwas siarkowy 96%”), pod pozycją stoi ten warunek i werdykt karty; karta, która go nie potwierdza, nie wchodzi do listu — pozycja idzie jako „potwierdzimy po weryfikacji”.',
           tone: 'amber',
           screen: (
@@ -1661,15 +1661,14 @@ function InquiriesHelp() {
               <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
                 1 z 2 pozycji wymaga sprawdzenia
               </p>
-              <div className="grid gap-3 lg:grid-cols-2">
+              <div className="grid gap-3">
                 <Card>
-                  <p className="text-xs font-medium text-slate-600">Temat</p>
-                  <p className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm">Oferta — Rękawice i kalosze</p>
-                  <p className="mt-3 text-xs font-medium text-slate-600">Treść</p>
-                  <p className="mt-1 min-h-[72px] rounded border border-slate-300 px-2 py-1.5 text-xs text-slate-700">
-                    Dzień dobry, dziękujemy za zapytanie. 1. Rękawice chemoodporne — AlphaTec 37900VP (Ansell), 30 szt., 22,15 zł
-                    netto / szt. 2. Kalosze chemoodporne — pozycję potwierdzimy po weryfikacji dostępności…
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Btn label="Zapisz i wyślij w Thunderbirdzie" />
+                    <Btn label="Podgląd odpowiedzi" color="border" />
+                    <Btn label="Oznacz, że wysłano" color="border" />
+                    <Btn label="Kopiuj treść" color="border" />
+                  </div>
                 </Card>
                 <Card>
                   <p className="mb-2 text-sm font-semibold">Pozycje</p>
@@ -1768,9 +1767,9 @@ function InquiriesHelp() {
           ),
         },
         {
-          action: 'Kopiowanie i oznaczenie jako wysłane',
-          does: 'Ręczne poprawki w temacie i treści zapisują się same po opuszczeniu pola. „Kopiuj i oznacz jako wysłane” kopiuje temat + treść do schowka i oznacza zapytanie zielonym „Wysłano” na liście. System nie wysyła maila — wklej treść do swojej poczty.',
-          click: '„Kopiuj i oznacz jako wysłane”. Pomyłka? „Cofnij oznaczenie”.',
+          action: 'Podgląd listu, kopiowanie i oznaczenie jako wysłane',
+          does: '„Podgląd odpowiedzi” otwiera okno: po lewej zapytanie klienta, po prawej list tak, jak zobaczy go klient (z tabelą). „Kopiuj z tabelą (HTML)” albo „Kopiuj treść” — i wklejasz do swojej poczty; zapytanie z Thunderbirda wysyłasz przyciskiem „Zapisz i wyślij w Thunderbirdzie”. „Popraw treść ręcznie” zmienia tekst listu (zapisuje się po opuszczeniu pola; poprawka usuwa tabelę). Po wysłaniu z innej poczty „Oznacz, że wysłano” daje zapytaniu zielone „Wysłano” na liście. System sam nie wysyła maila.',
+          click: '„Podgląd odpowiedzi” → skopiuj list → wklej do poczty → „Oznacz, że wysłano”. Pomyłka? „Cofnij oznaczenie”.',
           tone: 'green',
           screen: (
             <AppFrame nav="Zapytania">
@@ -1778,18 +1777,15 @@ function InquiriesHelp() {
                 Wszystkie pozycje pewne — list gotowy do skopiowania
               </p>
               <Card>
-                <p className="text-xs font-medium text-slate-600">Temat</p>
-                <p className="mt-1 rounded border border-slate-300 px-2 py-1.5 text-sm">Oferta — Rękawice i kalosze</p>
-                <p className="mt-3 text-xs font-medium text-slate-600">Treść</p>
-                <p className="mt-1 min-h-[72px] rounded border border-slate-300 px-2 py-1.5 text-xs text-slate-700">
-                  Dzień dobry, dziękujemy za zapytanie…
-                </p>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Mark>
-                    <Btn label="Kopiuj i oznacz jako wysłane" />
+                    <Btn label="Podgląd odpowiedzi" color="border" />
+                  </Mark>
+                  <Mark>
+                    <Btn label="Oznacz, że wysłano" />
                   </Mark>
                   <Btn label="Kopiuj treść" color="border" />
-                  <Btn label="Wróć do zapytań" color="border" />
+                  <Btn label="Kopiuj z tabelą (HTML)" color="border" />
                 </div>
               </Card>
             </AppFrame>

@@ -730,10 +730,12 @@ function termsPayload(draft: TermsDraft): InquiryTerms {
 }
 
 /**
- * List w oknie: tak, jak zobaczy go klient (z tabelą), albo pole do ręcznej poprawki treści.
- * Ręczna poprawka zapisana na serwerze kasuje tabelę — do maila idzie wtedy sam tekst.
+ * Okno na prawie cały ekran: po lewej zapytanie klienta, po prawej list tak, jak zobaczy go klient
+ * (z tabelą), albo pole do ręcznej poprawki treści. Ręczna poprawka zapisana na serwerze kasuje
+ * tabelę — do maila idzie wtedy sam tekst.
  */
 function ReplyPreviewModal({
+  mail,
   subject,
   body,
   html,
@@ -745,10 +747,13 @@ function ReplyPreviewModal({
   onSubject,
   onBody,
   onSave,
+  onThunderbird,
   onCopyWithTable,
   onCopyBody,
   onClose,
 }: {
+  /** Mail klienta dokładnie tak, jak przyszedł. */
+  mail: { subject: string | null; from: string; sentAt: string | null; body: string }
   subject: string
   body: string
   html: string | null
@@ -760,6 +765,8 @@ function ReplyPreviewModal({
   onSubject: (value: string) => void
   onBody: (value: string) => void
   onSave: () => void
+  /** Tylko dla zapytania z Thunderbirda — odpowiedź idzie na ten sam mail. */
+  onThunderbird?: () => void
   onCopyWithTable: () => void
   onCopyBody: () => void
   onClose: () => void
@@ -790,7 +797,7 @@ function ReplyPreviewModal({
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-4"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/50 p-3"
       onMouseDown={(e) => {
         downOnBackdrop.current = e.target === e.currentTarget
       }}
@@ -804,7 +811,7 @@ function ReplyPreviewModal({
         aria-modal="true"
         aria-labelledby="reply-preview-title"
         tabIndex={-1}
-        className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-xl outline-none"
+        className="flex h-[94vh] w-full max-w-[1600px] flex-col overflow-hidden rounded-lg bg-white shadow-xl outline-none"
       >
         <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
           <p id="reply-preview-title" className="text-sm font-semibold text-slate-800">
@@ -823,68 +830,100 @@ function ReplyPreviewModal({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
-          <label className="block text-xs font-medium text-slate-600">
-            Temat
-            <input
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-              value={subject}
-              disabled={locked}
-              onChange={(e) => onSubject(e.target.value)}
-              onBlur={onSave}
-            />
-          </label>
-          {showText ? (
+        {/* Na szerokim ekranie dwie kolumny przewijane osobno; na wąskim jedna pod drugą. */}
+        <div className="min-h-0 flex-1 overflow-y-auto lg:grid lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:overflow-hidden">
+          <section className="max-h-[35vh] overflow-y-auto border-b border-slate-100 bg-slate-50 px-4 py-3 text-xs lg:max-h-none lg:min-h-0 lg:border-r lg:border-b-0">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Zapytanie klienta</p>
+            {mail.subject && <p className="mt-2 text-sm font-medium text-slate-800">{mail.subject}</p>}
+            {(mail.from || mail.sentAt) && (
+              <p className="mt-1 text-[11px] text-slate-500">
+                {[mail.from && `Od: ${mail.from}`, mail.sentAt && `Mail z ${mailDate(mail.sentAt)}`]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            )}
+            <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-slate-700">{mail.body}</pre>
+          </section>
+
+          <section className="flex flex-col gap-3 px-4 py-3 lg:min-h-0 lg:overflow-y-auto">
             <label className="block text-xs font-medium text-slate-600">
-              Treść
-              <textarea
-                className="mt-1 min-h-[420px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm leading-relaxed"
-                value={body}
+              Temat
+              <input
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                value={subject}
                 disabled={locked}
-                onChange={(e) => onBody(e.target.value)}
+                onChange={(e) => onSubject(e.target.value)}
                 onBlur={onSave}
               />
             </label>
-          ) : (
-            <div>
-              <p className="text-xs font-medium text-slate-600">List tak, jak zobaczy go klient</p>
-              {/* Treść z naszego serwera, zbudowana z danych zapytania — bez znaczników od klienta. */}
-              <div
-                className="mt-1 overflow-x-auto rounded border border-slate-200 bg-white p-3"
-                dangerouslySetInnerHTML={{ __html: html ?? '' }}
-              />
-            </div>
-          )}
-          <p className="text-[11px] text-slate-400">
-            {showText
-              ? editHint
-              : 'Do maila pójdzie tabela: po lewej pozycja z zapytania, po prawej nasza propozycja.'}
-          </p>
-          {editing && html && (
-            <p className="text-[11px] text-amber-800">
-              Zapisana poprawka treści usuwa tabelę — do maila pójdzie sam tekst. Tabela wróci po zmianie
-              wyboru produktu lub cen.
-            </p>
-          )}
-          {!html && (
+            {showText ? (
+              <label className="flex flex-1 flex-col text-xs font-medium text-slate-600">
+                Treść
+                <textarea
+                  className="mt-1 min-h-[420px] w-full flex-1 rounded border border-slate-300 px-2 py-1.5 text-sm leading-relaxed"
+                  value={body}
+                  disabled={locked}
+                  onChange={(e) => onBody(e.target.value)}
+                  onBlur={onSave}
+                />
+              </label>
+            ) : (
+              <div>
+                <p className="text-xs font-medium text-slate-600">List tak, jak zobaczy go klient</p>
+                {/* Treść z naszego serwera, zbudowana z danych zapytania — bez znaczników od klienta.
+                    List ma 60% szerokości okna poczty; w podglądzie wypełnia swoją kolumnę, bo ta jest
+                    węższa od okna poczty i przy 60% zostawał pusty pas. Do schowka idzie bez zmian. */}
+                <div
+                  className="mt-1 overflow-x-auto rounded border border-slate-200 bg-white p-3 [&>div]:w-full!"
+                  dangerouslySetInnerHTML={{ __html: html ?? '' }}
+                />
+              </div>
+            )}
             <p className="text-[11px] text-slate-400">
-              Po ręcznej poprawce treści wysyłamy sam tekst, bez tabeli. Tabela wróci po zmianie wyboru
-              produktu lub cen.
+              {showText
+                ? editHint
+                : 'Do maila pójdzie tabela: po lewej pozycja z zapytania, po prawej nasza propozycja.'}
             </p>
-          )}
+            {editing && html && (
+              <p className="text-[11px] text-amber-800">
+                Zapisana poprawka treści usuwa tabelę — do maila pójdzie sam tekst. Tabela wróci po zmianie
+                wyboru produktu lub cen.
+              </p>
+            )}
+            {!html && (
+              <p className="text-[11px] text-slate-400">
+                Po ręcznej poprawce treści wysyłamy sam tekst, bez tabeli. Tabela wróci po zmianie wyboru
+                produktu lub cen.
+              </p>
+            )}
+          </section>
         </div>
 
         <div className="border-t border-slate-100 px-4 py-3">
           {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
           {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
           <div className="flex flex-wrap items-center gap-2">
+            {onThunderbird && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={onThunderbird}
+                className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                Zapisz i wyślij w Thunderbirdzie
+              </button>
+            )}
             {html && (
               <button
                 type="button"
                 disabled={saving}
                 onClick={onCopyWithTable}
                 title="Wkleja się do Outlooka, Gmaila i innej poczty razem z tabelą"
-                className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                className={
+                  onThunderbird
+                    ? 'rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50'
+                    : 'rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50'
+                }
               >
                 Kopiuj z tabelą (HTML)
               </button>
@@ -954,6 +993,8 @@ export function InquiryReply() {
   // Numer otwartego zapytania dla pilnowania Thunderbirda: po przejściu na inne
   // zapytanie stary nasłuch nie ma prawa nadpisać komunikatu na ekranie.
   const inquiryRef = useRef<number | null>(null)
+  // Numer bieżącego pilnowania Thunderbirda — „Anuluj wysyłkę” i nowa prośba unieważniają stare.
+  const watchRef = useRef(0)
   const serverRef = useRef<Draft>({ subject: '', body: '' })
   // Treść ostatnio wygenerowana przez compose/wczytana — do ochrony ręcznych zmian przed regeneracją.
   const composedRef = useRef<Draft>({ subject: '', body: '' })
@@ -1204,7 +1245,11 @@ export function InquiryReply() {
     }
   }
 
-  async function copyAndMarkSent() {
+  /**
+   * Samo oznaczenie — bez kopiowania. List kopiuje się osobnym przyciskiem (z tabelą albo
+   * sama treść); kopia przy oznaczaniu nadpisywała schowek z listem z tabelą.
+   */
+  async function markSent() {
     if (!inquiry) return
     setMsg('')
     try {
@@ -1212,32 +1257,31 @@ export function InquiryReply() {
     } catch {
       return
     }
-    const text = [subject.trim(), '', body].filter(Boolean).join('\n')
-    if (!(await copyText(text))) return
     try {
       const res = await api<InquiryPayload>(`/inquiries/${inquiry.id}/replied`, {
         method: 'POST',
         body: JSON.stringify({ replied: true }),
       })
       setInquiry(res)
-      setMsg('Skopiowano temat i treść. Zapytanie oznaczone jako wysłane.')
+      setMsg('Zapytanie oznaczone jako wysłane.')
     } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Skopiowano, ale nie udało się oznaczyć jako wysłane.')
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się oznaczyć jako wysłane.')
     }
   }
 
   /**
    * Przeglądarka nie sięgnie do poczty na komputerze, więc zostawiamy prośbę
    * na serwerze — dodatek do Thunderbirda podejmuje ją w ciągu kilku sekund
-   * i otwiera okno odpowiedzi na tym samym mailu.
+   * i otwiera okno odpowiedzi na tym samym mailu. true = list przekazany
+   * (okno podglądu może się wtedy zamknąć).
    */
-  async function sendViaThunderbird() {
-    if (!inquiry) return
+  async function sendViaThunderbird(): Promise<boolean> {
+    if (!inquiry) return false
     setMsg('')
     try {
       await saveEdits()
     } catch {
-      return
+      return false
     }
     try {
       const res = await api<InquiryPayload>(`/inquiries/${inquiry.id}/queue-reply`, {
@@ -1247,8 +1291,10 @@ export function InquiryReply() {
       setInquiry(res)
       setMsg('Zapisano. Thunderbird otworzy okno odpowiedzi w ciągu kilku sekund.')
       void watchThunderbird(inquiry.id)
+      return true
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się przekazać listu do Thunderbirda.')
+      return false
     }
   }
 
@@ -1258,6 +1304,10 @@ export function InquiryReply() {
    * kasuje dodatek w chwili podjęcia, więc jej zniknięcie jest potwierdzeniem.
    */
   async function watchThunderbird(inquiryId: number) {
+    const ticket = ++watchRef.current
+    // inne zapytanie na ekranie albo ręczne anulowanie (nowy numer) — przestajemy pilnować;
+    // po anulowaniu prośba też znika, ale to nie znaczy, że Thunderbird ją podjął
+    const stale = () => inquiryRef.current !== inquiryId || watchRef.current !== ticket
     for (let i = 0; i < WATCH_TRIES; i += 1) {
       await new Promise((done) => setTimeout(done, WATCH_EVERY_MS))
       let row: InquiryPayload
@@ -1266,8 +1316,7 @@ export function InquiryReply() {
       } catch {
         return
       }
-      // inne zapytanie na ekranie albo ręczne anulowanie — przestajemy pilnować
-      if (inquiryRef.current !== inquiryId) return
+      if (stale()) return
       if (row.send_requested_at === null) {
         setInquiry(row)
         setMsg('Thunderbird otworzył okno odpowiedzi. Maila wysyłasz stamtąd.')
@@ -1275,13 +1324,14 @@ export function InquiryReply() {
         return
       }
     }
-    if (inquiryRef.current === inquiryId) {
+    if (!stale()) {
       setMsg('Thunderbird jeszcze nie odebrał listu — sprawdź, czy jest uruchomiony i zalogowany w dodatku.')
     }
   }
 
   async function cancelThunderbird() {
     if (!inquiry) return
+    watchRef.current += 1
     setMsg('')
     try {
       const res = await api<InquiryPayload>(`/inquiries/${inquiry.id}/queue-reply`, {
@@ -1426,14 +1476,14 @@ export function InquiryReply() {
             <button
               type="button"
               disabled={busy || saving}
-              onClick={() => void copyAndMarkSent()}
+              onClick={() => void markSent()}
               className={
                 inquiry.source_message_id
                   ? 'rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50'
                   : 'rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50'
               }
             >
-              Kopiuj i oznacz jako wysłane
+              Oznacz, że wysłano
             </button>
           )}
           <button
@@ -1697,6 +1747,12 @@ export function InquiryReply() {
 
       {replyOpen && (
         <ReplyPreviewModal
+          mail={{
+            subject: inquiry.source_subject,
+            from: sender,
+            sentAt: inquiry.source_sent_at,
+            body: inquiry.source_body,
+          }}
           subject={subject}
           body={body}
           html={inquiry.reply_html}
@@ -1714,6 +1770,14 @@ export function InquiryReply() {
           onSubject={setSubject}
           onBody={setBody}
           onSave={() => void saveEdits().catch(() => undefined)}
+          onThunderbird={
+            !readOnly && inquiry.source_message_id
+              ? () =>
+                  void sendViaThunderbird().then((sent) => {
+                    if (sent) setReplyOpen(false)
+                  })
+              : undefined
+          }
           onCopyWithTable={() => void copyWithTable()}
           onCopyBody={() => void copyBody()}
           onClose={() => {
