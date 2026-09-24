@@ -27,10 +27,6 @@ final class ProductImageDownloader
         'image/gif' => 'gif',
     ];
 
-    public function __construct(
-        private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
-    ) {}
-
     /**
      * Odrzuca URL karty produktu (HTML) — wcześniej SKU w ścieżce dawało fałszywy „hit”.
      */
@@ -194,49 +190,6 @@ final class ProductImageDownloader
         }
 
         return $saved;
-    }
-
-    /**
-     * Ostatnia deska: zrzut karty producenta (gdy pliki mediów za bot-wallem).
-     *
-     * @param  list<string>  $pageUrls
-     */
-    public function downloadPageScreenshot(Product $product, array $pageUrls, int $sortOrder = 0): ?ProductImage
-    {
-        foreach (array_values(array_unique($pageUrls)) as $pageUrl) {
-            if (! is_string($pageUrl) || ! str_starts_with($pageUrl, 'http')) {
-                continue;
-            }
-            // tylko sensowna karta produktu, nie listing
-            $path = mb_strtolower((string) (parse_url($pageUrl, PHP_URL_PATH) ?? ''));
-            if ($path === '' || str_contains($path, '/search') || str_contains($path, '/category')) {
-                continue;
-            }
-
-            try {
-                $bytes = $this->blockedPages->fetchScreenshot($pageUrl);
-            } catch (Throwable $e) {
-                Log::info('Product page screenshot skipped', [
-                    'product_id' => $product->id,
-                    'url' => $pageUrl,
-                    'error' => $e->getMessage(),
-                ]);
-
-                continue;
-            }
-
-            if ($bytes === null) {
-                continue;
-            }
-
-            $mime = str_starts_with($bytes, "\x89PNG") ? 'image/png' : 'image/jpeg';
-            $image = $this->storeBytes($product, $bytes, $mime, $pageUrl.'#screenshot', $sortOrder);
-            if ($image !== null) {
-                return $image;
-            }
-        }
-
-        return null;
     }
 
     /**
@@ -412,21 +365,20 @@ final class ProductImageDownloader
             || $bytes === ''
             || str_contains($mime, 'text/html')
             || str_contains($mime, 'application/json');
+        // Bez zrzutu przez Jinę: dla adresu pliku (nie strony HTML) r.jina.ai nie oddaje ani bajtów,
+        // ani zrzutu — tylko 200 text/plain „Markdown Content: undefined” (bpbhp .jpg, Ansell .ashx,
+        // sprawdzone 24.09.2026), a dla nieistniejącego pliku zrzut strony 404 w PNG, który szedłby
+        // na kartę jako zdjęcie. Zablokowany plik wraca do ponowienia (products:retry-images).
         if ($blocked) {
-            $shot = $this->blockedPages->fetchScreenshot($url);
-            if ($shot === null) {
-                $status = $response->status();
-                // strona zapory zamiast pliku albo odmowa chwilowa — nie 404 i nie błąd klienta
-                $later = $response->successful() || in_array($status, [403, 429], true) || $status >= 500;
-                throw new \RuntimeException(
-                    $response->successful()
-                        ? 'Odpowiedź nie jest obrazem ('.$mime.')'
-                        : 'HTTP '.$status,
-                    $later ? self::RETRY_LATER : 0
-                );
-            }
-            $bytes = $shot;
-            $mime = str_starts_with($shot, "\x89PNG") ? 'image/png' : 'image/jpeg';
+            $status = $response->status();
+            // strona zapory zamiast pliku albo odmowa chwilowa — nie 404 i nie błąd klienta
+            $later = $response->successful() || in_array($status, [403, 429], true) || $status >= 500;
+            throw new \RuntimeException(
+                $response->successful()
+                    ? 'Odpowiedź nie jest obrazem ('.$mime.')'
+                    : 'HTTP '.$status,
+                $later ? self::RETRY_LATER : 0
+            );
         }
 
         $size = strlen($bytes);

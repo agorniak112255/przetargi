@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Services\Enrichment\ProductImageDownloader;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -16,21 +17,21 @@ final class ProductImageWafDownloadTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_downloads_bpbhp_packshot_via_reader_when_shop_returns_403(): void
+    /**
+     * bpbhp odpowiada 403 na plik packshotu. Dawniej szedł wtedy zrzut przez r.jina.ai, ale dla adresu pliku
+     * Jina oddaje tylko 200 text/plain „Markdown Content: undefined” (sprawdzone na żywo 24.09.2026) — ani bajtów,
+     * ani zrzutu. Plik ma wrócić do ponowienia bez wywołania Jiny i bez żadnego obrazu na karcie.
+     */
+    public function test_blocked_bpbhp_packshot_goes_to_retry_without_reader_screenshot(): void
     {
-        if (! function_exists('imagecreatetruecolor')) {
-            $this->markTestSkipped('GD jest wymagane');
-        }
-
         Storage::fake('public');
-        $shot = $this->packshotJpeg();
         $pageUrl = 'https://bpbhp.pl/rekawice-jednorazowe-mapa-solo-987';
         $imageUrl = 'https://bpbhp.pl/media/catalog/product/s/o/solo_987_1.jpg';
 
-        Http::fake(function (Request $request) use ($imageUrl, $shot) {
+        Http::fake(function (Request $request) use ($imageUrl) {
             $url = $request->url();
             if (str_contains($url, 'r.jina.ai')) {
-                return Http::response($shot, 200, ['Content-Type' => 'image/jpeg']);
+                return Http::response($this->jinaFileResponse('solo_987_1.jpg', $imageUrl), 200, ['Content-Type' => 'text/plain; charset=utf-8']);
             }
             if ($url === $imageUrl) {
                 return Http::response('<html>403 Forbidden</html>', 403, ['Content-Type' => 'text/html']);
@@ -49,11 +50,15 @@ final class ProductImageWafDownloadTest extends TestCase
             'shop_source_url' => $pageUrl,
         ]);
 
-        $saved = (new ProductImageDownloader)->downloadMany($product, [$imageUrl], 1);
+        $downloader = new ProductImageDownloader;
+        $saved = $downloader->downloadMany($product, [$imageUrl], 1);
 
-        $this->assertCount(1, $saved);
-        $this->assertSame($imageUrl, $saved[0]->source_url);
-        $this->assertTrue(Storage::disk('public')->exists((string) $saved[0]->path));
+        $this->assertSame([], $saved);
+        $this->assertSame(0, ProductImage::query()->where('product_id', $product->id)->count());
+        $this->assertSame([], Storage::disk('public')->allFiles());
+        $this->assertSame([$imageUrl], $downloader->lastRetryLaterUrls());
+        $this->assertStringContainsString('HTTP 403', $downloader->lastFailures()[$imageUrl] ?? '');
+        Http::assertNotSent(static fn (Request $request): bool => str_contains($request->url(), 'r.jina.ai'));
     }
 
     public function test_narrow_packshot_is_kept_and_thumbnail_is_rejected(): void
@@ -104,22 +109,9 @@ final class ProductImageWafDownloadTest extends TestCase
         return (string) ob_get_clean();
     }
 
-    private function packshotJpeg(): string
+    /** Prawdziwa odpowiedź r.jina.ai z X-Return-Format: screenshot dla adresu pliku (nie strony HTML). */
+    private function jinaFileResponse(string $title, string $url): string
     {
-        $im = imagecreatetruecolor(640, 640);
-        $this->assertNotFalse($im);
-        imagefill($im, 0, 0, imagecolorallocate($im, 255, 255, 255));
-        $ink = imagecolorallocate($im, 30, 30, 30);
-        imagefilledellipse($im, 320, 320, 220, 340, $ink);
-        for ($y = 0; $y < 640; $y += 4) {
-            imageline($im, 0, $y, 639, $y, imagecolorallocate($im, $y % 200, 40, 80));
-        }
-        ob_start();
-        imagejpeg($im, null, 95);
-        $bytes = (string) ob_get_clean();
-        imagedestroy($im);
-        $this->assertGreaterThanOrEqual(8000, strlen($bytes));
-
-        return $bytes;
+        return "Title: {$title}\n\nURL Source: {$url}\n\nMarkdown Content:\nundefined";
     }
 }
