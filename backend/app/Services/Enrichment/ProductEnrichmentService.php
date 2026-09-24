@@ -1845,7 +1845,7 @@ final class ProductEnrichmentService
             }
         }
         if ($trustedClean !== []) {
-            return array_values(array_unique(array_slice($trustedClean, 0, 3)));
+            return array_values(array_unique(array_slice(ProductImageDownloader::packshotsFirst($trustedClean), 0, 3)));
         }
 
         $hosts = [];
@@ -1867,7 +1867,7 @@ final class ProductEnrichmentService
         }
         $chosen = $sameHost !== [] ? $sameHost : $other;
 
-        return array_values(array_unique(array_slice($chosen, 0, 3)));
+        return array_values(array_unique(array_slice(ProductImageDownloader::packshotsFirst($chosen), 0, 3)));
     }
 
     /**
@@ -2087,10 +2087,12 @@ final class ProductEnrichmentService
 
         usort($ranked, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
 
-        return array_values(array_map(
+        // Zdjęcia z zastosowania zbierają punkty za słowa z nazwy („chemical”) i wyprzedzały
+        // packshot tej samej karty — a pobierane jest tylko pierwsze.
+        return array_slice(ProductImageDownloader::packshotsFirst(array_map(
             static fn (array $row): string => $row['url'],
-            array_slice($ranked, 0, 4)
-        ));
+            $ranked
+        )), 0, 4);
     }
 
     /**
@@ -3933,6 +3935,9 @@ final class ProductEnrichmentService
 
     private function isJunkImageUrl(string $url): bool
     {
+        if (ProductImageDownloader::isManufacturerSiteGraphicUrl($url)) {
+            return true;
+        }
         $u = mb_strtolower($url);
         $blocked = [
             'logo', 'icon', 'sprite', 'favicon', 'banner', 'payment',

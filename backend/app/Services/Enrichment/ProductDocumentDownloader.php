@@ -7,7 +7,6 @@ namespace App\Services\Enrichment;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Services\B2b\B2bDocumentText;
-use Dompdf\Dompdf;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -114,7 +113,6 @@ final class ProductDocumentDownloader
     private array $prefetched = [];
 
     public function __construct(
-        private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
         private readonly ProductSearchIdentity $identity = new ProductSearchIdentity,
         private readonly B2bDocumentText $documentText = new B2bDocumentText,
     ) {}
@@ -441,11 +439,9 @@ final class ProductDocumentDownloader
             ->withOptions(['allow_redirects' => true])
             ->get($url);
 
+        // Bez zrzutu przez Jinę: dla plików Ansella (/pds, /doc) r.jina.ai nie oddaje ani PDF,
+        // ani zrzutu — tylko pusty tekst „undefined” (sprawdzone 24.09.2026).
         if (! $response->successful()) {
-            $fallback = $this->downloadBlockedDocument($product, $url, $sortOrder, $label);
-            if ($fallback !== null) {
-                return $fallback;
-            }
             throw new \RuntimeException('HTTP '.$response->status());
         }
 
@@ -460,10 +456,6 @@ final class ProductDocumentDownloader
             if ($fromHtml !== null && $fromHtml !== $url) {
                 // etykieta opisuje ten sam dokument, nawet jeśli PDF leży pod innym adresem
                 return $this->downloadOne($product, $fromHtml, $sortOrder, $label);
-            }
-            $fallback = $this->downloadBlockedDocument($product, $url, $sortOrder, $label);
-            if ($fallback !== null) {
-                return $fallback;
             }
             throw new \RuntimeException('Plik nie wygląda na PDF');
         }
@@ -626,45 +618,6 @@ final class ProductDocumentDownloader
         }
 
         return false;
-    }
-
-    private function downloadBlockedDocument(
-        Product $product,
-        string $url,
-        int $sortOrder,
-        string $label = '',
-    ): ?ProductDocument {
-        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
-        $path = mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? ''));
-        if (! str_contains($host, 'ansell.com')
-            || preg_match('#/(pds|doc|ukdoc)/#i', $path) !== 1) {
-            return null;
-        }
-
-        $imageBytes = $this->blockedPages->fetchScreenshot($url);
-        if ($imageBytes === null) {
-            return null;
-        }
-        $mime = str_starts_with($imageBytes, "\x89PNG") ? 'image/png' : 'image/jpeg';
-        $pdfBytes = $this->renderImageAsPdf($imageBytes, $mime);
-
-        return $this->storePdfBytes($product, $pdfBytes, $url, $sortOrder, null, $label);
-    }
-
-    private function renderImageAsPdf(string $imageBytes, string $mime): string
-    {
-        $dompdf = new Dompdf;
-        $dompdf->setPaper('A4', 'portrait');
-        $dompdf->loadHtml(
-            '<!doctype html><html><head><meta charset="utf-8"><style>'
-            .'@page{margin:0}html,body{margin:0;padding:0}img{width:100%;height:auto;display:block}'
-            .'</style></head><body><img src="data:'.$mime.';base64,'
-            .base64_encode($imageBytes)
-            .'"></body></html>'
-        );
-        $dompdf->render();
-
-        return $dompdf->output();
     }
 
     /**

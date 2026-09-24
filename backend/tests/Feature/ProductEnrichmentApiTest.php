@@ -4221,12 +4221,14 @@ final class ProductEnrichmentApiTest extends TestCase
         Http::assertSent(static fn ($request): bool => str_contains($request->url(), '/chat/completions'));
     }
 
-    public function test_ansell_declaration_is_saved_when_direct_pdf_is_blocked(): void
+    /**
+     * Ansell /doc/ za Incapsulą. Dawniej zamiast pliku szedł zrzut przez r.jina.ai sklejony w PDF, ale dla adresu
+     * pliku Jina oddaje tylko 200 text/plain „Markdown Content: undefined” (sprawdzone na żywo 24.09.2026) —
+     * zablokowany plik nie daje więc dokumentu i nie kosztuje wywołania Jiny. Gdy zapora przepuści plik
+     * (odpada losowo), deklaracja zapisuje się z tytułem i rodzajem z adresu.
+     */
+    public function test_blocked_ansell_declaration_skips_reader_and_is_saved_once_pdf_passes(): void
     {
-        if (! function_exists('imagecreatetruecolor')) {
-            $this->markTestSkipped('Test wymaga rozszerzenia GD.');
-        }
-
         Storage::fake('public');
         $product = $this->makeProduct([
             'sku' => '065-06',
@@ -4234,20 +4236,27 @@ final class ProductEnrichmentApiTest extends TestCase
             'manufacturer' => 'Ansell',
         ]);
         $url = 'https://www.ansell.com/pl/pl/products/ringers-r065/doc/Go87cSZ9VhPOWkcvnKfw6Q';
+        $wallUp = true;
 
-        Http::fake([
-            'https://r.jina.ai/*' => Http::response(
-                $this->certificatePng(),
-                200,
-                ['Content-Type' => 'image/png']
-            ),
-            'https://www.ansell.com/*' => Http::response(
-                '<html>Incapsula</html>',
-                403,
-                ['Content-Type' => 'text/html']
-            ),
-        ]);
+        Http::fake(static function ($request) use ($url, &$wallUp) {
+            if (str_contains($request->url(), 'r.jina.ai')) {
+                return Http::response(
+                    "Title: \n\nURL Source: {$url}\n\nMarkdown Content:\nundefined",
+                    200,
+                    ['Content-Type' => 'text/plain; charset=utf-8']
+                );
+            }
 
+            return $wallUp
+                ? Http::response('<html>Incapsula</html>', 403, ['Content-Type' => 'text/html'])
+                : Http::response("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n", 200, ['Content-Type' => 'application/pdf']);
+        });
+
+        $this->assertSame([], app(ProductDocumentDownloader::class)->downloadMany($product, [$url], 1));
+        $this->assertSame(0, ProductDocument::query()->where('product_id', $product->id)->count());
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'r.jina.ai'));
+
+        $wallUp = false;
         $documents = app(ProductDocumentDownloader::class)->downloadMany($product, [$url], 1);
 
         $this->assertCount(1, $documents);
@@ -4671,28 +4680,6 @@ final class ProductEnrichmentApiTest extends TestCase
         return base64_decode(
             '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAGfAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQMBAT8Bf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQIBAT8Bf//Z'
         ) ?: '';
-    }
-
-    private function certificatePng(): string
-    {
-        $image = imagecreatetruecolor(1190, 1684);
-        $white = imagecolorallocate($image, 255, 255, 255);
-        imagefill($image, 0, 0, $white);
-        for ($y = 0; $y < 1684; $y += 4) {
-            $color = imagecolorallocate(
-                $image,
-                ($y * 17) % 230,
-                ($y * 29) % 230,
-                ($y * 43) % 230
-            );
-            imageline($image, 0, $y, 1189, $y, $color);
-        }
-        ob_start();
-        imagepng($image);
-        imagedestroy($image);
-        $bytes = ob_get_clean();
-
-        return is_string($bytes) ? $bytes : '';
     }
 
     public function test_active_batches_releases_product_stuck_in_running(): void

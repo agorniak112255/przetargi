@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use App\Models\Product;
+use App\Services\Enrichment\BlockedPageReader;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Services\Enrichment\ProductImageCandidateVerifier;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\Enrichment\ProductPageFetcher;
 use App\Services\Enrichment\ProductSearchIdentity;
+use Illuminate\Support\Facades\Http;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -454,5 +456,120 @@ final class ProductImageRelevanceTest extends TestCase
             'https://sklep.example/wkladki-zapasowe-do-butow-artra-softyum-3d-esd-s3.webp',
             $card('SOFTYUM 3D ESD czarna'),
         ));
+    }
+
+    private const ANSELL_MEDIA = 'https://www.ansell.com/-/media/projects/ansell/website/';
+
+    /** Grafiki witryny z karty https://www.ansell.com/pl/pl/products/ringers-r074 (czytnik r.jina.ai, 24.09.2026). */
+    private const ANSELL_SITE_GRAPHICS = [
+        // produkcja 23.09.2026: zdjęcie karty #8565 (RINGERS)
+        self::ANSELL_MEDIA.'glove-size-finder/chemical.ashx?rev=2fd4c3969ec5448492eab78af81490dc&mh=270&h=270&w=270&la=en&hash=D8A8B36C8E2AD98A1B9F3A112F2E6C3C',
+        self::ANSELL_MEDIA.'glove-size-finder/glove-size-finder.ashx?rev=0018beca482b4fab87e208366ee2c12d&mh=872&h=381&w=883&la=en&hash=E18877CA0C5DB324422AE503DFFB552A',
+        self::ANSELL_MEDIA.'pim/taxonomy/standards/en-388/en388_2016.ashx?mh=50&la=pl&h=50&w=42&mw=50&hash=5035B4E795FC225BACDBC04D2540B7AD',
+        self::ANSELL_MEDIA.'pim/taxonomy/standards/en-iso/en-iso-374-1_type-a.ashx?mh=50&la=pl&h=38&w=50&mw=50&hash=3650EB9C2AA7366C7A86A185C43326EC',
+        self::ANSELL_MEDIA.'icon/social-media/facebook.ashx?h=25&w=25&la=pl&hash=79AAA2046D7061D07A23FBE844477137',
+        self::ANSELL_MEDIA.'icon/change-region.ashx?h=21&w=20&la=pl&hash=0B4E4CB034CB9AE09EC370893D1B31FD',
+        self::ANSELL_MEDIA.'sustainability/ansell-earth.ashx?rev=dbb7e7957b6844d0801d769dd2e0ca59&h=1833&w=2239&la=en&hash=F7745EEB267D20C2C5A5C71F3583BEE4',
+    ];
+
+    private const R074_PACKSHOT = self::ANSELL_MEDIA.'pim/product-assets/ringers/r-074/ringers074.ashx?rev=6dd6124447874cdeb6f5bfc23ad23498&hash=49083572DE68764E41CF9B71E12BEC76';
+
+    private const R074_BARRELS = self::ANSELL_MEDIA.'pim/product-assets/ringers/r-074/ringers-074-chemical-application---examining-barrels.ashx?rev=7cc96bad7f0a4a61a7d5ee83fb21ce6e&hash=0ACC8834E1294F8B8DDB843D4F99B23E';
+
+    private const R074_MOVING = self::ANSELL_MEDIA.'pim/product-assets/ringers/r-074/ringers-074-chemical-and-gas-application---moving-chemicals.ashx?rev=2507cd9b5c4d4018a6300b9b6b9fe200&hash=BD8AE51308EAF72AB974BF0EE6737031';
+
+    private const R065_PACKSHOT = self::ANSELL_MEDIA.'pim/product-assets/ringers/r-065/065g_primary.ashx?rev=cd696ac2260143aab174ee202c40eea5&mw=320&hash=46E8F9D71FE4B3F3BFB73359EA26EFD2';
+
+    public function test_ansell_site_graphics_are_never_image_candidates(): void
+    {
+        $serviceJunk = new ReflectionMethod(ProductEnrichmentService::class, 'isJunkImageUrl');
+        $fetcherJunk = new ReflectionMethod(ProductPageFetcher::class, 'isJunkImageUrl');
+        $service = app(ProductEnrichmentService::class);
+        $fetcher = app(ProductPageFetcher::class);
+
+        foreach (self::ANSELL_SITE_GRAPHICS as $url) {
+            $this->assertTrue(ProductImageDownloader::isManufacturerSiteGraphicUrl($url), $url);
+            $this->assertTrue($serviceJunk->invoke($service, $url), $url);
+            $this->assertTrue($fetcherJunk->invoke($fetcher, $url), $url);
+        }
+        foreach ([self::R074_PACKSHOT, self::R074_BARRELS, self::R065_PACKSHOT] as $url) {
+            $this->assertFalse(ProductImageDownloader::isManufacturerSiteGraphicUrl($url), $url);
+            $this->assertFalse($serviceJunk->invoke($service, $url), $url);
+            $this->assertFalse($fetcherJunk->invoke($fetcher, $url), $url);
+        }
+        // ta sama ścieżka poza witryną Ansella nie jest z góry grafiką
+        $this->assertFalse(ProductImageDownloader::isManufacturerSiteGraphicUrl(
+            'https://sklep.example/media/sustainability/ringers-r074.jpg'
+        ));
+
+        // czytnik stron zablokowanych oddaje całą kartę — grafiki witryny odpadają już tam
+        $markdown = implode("\n", array_map(
+            static fn (string $url): string => '![Image]('.$url.')',
+            [...self::ANSELL_SITE_GRAPHICS, self::R074_PACKSHOT]
+        ));
+        $extract = new ReflectionMethod(BlockedPageReader::class, 'extractImageUrls');
+        $this->assertSame(
+            [self::R074_PACKSHOT],
+            $extract->invoke(new BlockedPageReader, $markdown, 'https://www.ansell.com/pl/pl/products/ringers-r074')
+        );
+
+        // ikona z widżetu rozmiarów nie trafia nawet do modelu wizyjnego
+        Http::fake(['*' => Http::response('', 404)]);
+        $picked = app(ProductImageCandidateVerifier::class)->select(
+            new Product(['sku' => 'R074', 'name' => 'RINGERS R074', 'manufacturer' => 'Ansell']),
+            [self::ANSELL_SITE_GRAPHICS[0]],
+            [['url' => 'https://www.ansell.com/pl/pl/products/ringers-r074', 'text' => 'RINGERS R074']],
+            1,
+            [self::ANSELL_SITE_GRAPHICS[0]]
+        );
+        $this->assertSame([], $picked);
+        Http::assertNothingSent();
+    }
+
+    public function test_packshot_precedes_application_shots_of_the_same_card(): void
+    {
+        // Produkcja 23.09.2026, karta #8564 (R074): kolejność wybranych zdjęć — przy jednym
+        // pobieranym zdjęciu głównym zostawało zdjęcie beczek.
+        $observed = [self::R074_BARRELS, self::R074_MOVING, self::R074_PACKSHOT];
+
+        $this->assertTrue(ProductImageDownloader::isApplicationShotUrl(self::R074_BARRELS));
+        $this->assertTrue(ProductImageDownloader::isApplicationShotUrl(self::R074_MOVING));
+        $this->assertFalse(ProductImageDownloader::isApplicationShotUrl(self::R074_PACKSHOT));
+        $this->assertFalse(ProductImageDownloader::isApplicationShotUrl(self::R065_PACKSHOT));
+
+        $this->assertSame(
+            [self::R074_PACKSHOT, self::R074_BARRELS, self::R074_MOVING],
+            ProductImageDownloader::packshotsFirst($observed)
+        );
+        // inna karta (katalog r-065) zostaje na swoim miejscu; karta bez packshotu — bez zmian
+        $this->assertSame(
+            [self::R074_PACKSHOT, self::R065_PACKSHOT, self::R074_BARRELS],
+            ProductImageDownloader::packshotsFirst([self::R074_BARRELS, self::R065_PACKSHOT, self::R074_PACKSHOT])
+        );
+        $this->assertSame(
+            [self::R074_BARRELS, self::R074_MOVING],
+            ProductImageDownloader::packshotsFirst([self::R074_BARRELS, self::R074_MOVING])
+        );
+
+        $product = new Product([
+            'sku' => 'R074',
+            'name' => 'RINGERS R074 Chemical Glove',
+            'manufacturer' => 'Ansell',
+        ]);
+        $service = app(ProductEnrichmentService::class);
+        $pick = new ReflectionMethod($service, 'pickPrimaryImageUrls');
+        $picked = $pick->invoke($service, $observed, [], 'R074', 'RINGERS R074 Chemical Glove', $product);
+        $this->assertSame(self::R074_PACKSHOT, $picked[0] ?? null);
+
+        // weryfikator: limit $max nie odcina packshotu, gdy zdjęcia z zastosowania są pierwsze
+        Http::fake(['*' => Http::response('', 404)]);
+        $selected = app(ProductImageCandidateVerifier::class)->select(
+            $product,
+            $observed,
+            [['url' => 'https://www.ansell.com/pl/pl/products/ringers-r074', 'text' => 'RINGERS R074']],
+            1,
+            $observed
+        );
+        $this->assertSame([self::R074_PACKSHOT], $selected);
     }
 }

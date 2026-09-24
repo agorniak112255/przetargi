@@ -27,10 +27,6 @@ final class ProductImageDownloader
         'image/gif' => 'gif',
     ];
 
-    public function __construct(
-        private readonly BlockedPageReader $blockedPages = new BlockedPageReader,
-    ) {}
-
     /**
      * Odrzuca URL karty produktu (HTML) — wcześniej SKU w ścieżce dawało fałszywy „hit”.
      */
@@ -197,49 +193,6 @@ final class ProductImageDownloader
     }
 
     /**
-     * Ostatnia deska: zrzut karty producenta (gdy pliki mediów za bot-wallem).
-     *
-     * @param  list<string>  $pageUrls
-     */
-    public function downloadPageScreenshot(Product $product, array $pageUrls, int $sortOrder = 0): ?ProductImage
-    {
-        foreach (array_values(array_unique($pageUrls)) as $pageUrl) {
-            if (! is_string($pageUrl) || ! str_starts_with($pageUrl, 'http')) {
-                continue;
-            }
-            // tylko sensowna karta produktu, nie listing
-            $path = mb_strtolower((string) (parse_url($pageUrl, PHP_URL_PATH) ?? ''));
-            if ($path === '' || str_contains($path, '/search') || str_contains($path, '/category')) {
-                continue;
-            }
-
-            try {
-                $bytes = $this->blockedPages->fetchScreenshot($pageUrl);
-            } catch (Throwable $e) {
-                Log::info('Product page screenshot skipped', [
-                    'product_id' => $product->id,
-                    'url' => $pageUrl,
-                    'error' => $e->getMessage(),
-                ]);
-
-                continue;
-            }
-
-            if ($bytes === null) {
-                continue;
-            }
-
-            $mime = str_starts_with($bytes, "\x89PNG") ? 'image/png' : 'image/jpeg';
-            $image = $this->storeBytes($product, $bytes, $mime, $pageUrl.'#screenshot', $sortOrder);
-            if ($image !== null) {
-                return $image;
-            }
-        }
-
-        return null;
-    }
-
-    /**
      * Klucz pliku zdjęcia: dwa adresy o tym samym kluczu to dla karty ten sam obraz.
      *
      * Shopify wydaje ten sam plik pod domeną sklepu i pod cdn.shopify.com, a do tego dokleja żądany rozmiar
@@ -308,6 +261,72 @@ final class ProductImageDownloader
         return $m[1].'/userdata/public/gfx/'.$m[2].'/'.$file;
     }
 
+    /**
+     * Grafika witryny Ansella, nie zdjęcie wyrobu: widżet doboru rozmiaru („glove-size-finder/chemical.ashx”
+     * trafiło jako zdjęcie karty RINGERS), piktogramy norm z taksonomii PIM, ikony (social media, zmiana
+     * regionu) i grafika zrównoważonego rozwoju. Leżą pod tym samym /-/media/ co packshoty i są poprawnymi
+     * obrazkami, więc żaden późniejszy próg ich nie zatrzymuje.
+     */
+    public static function isManufacturerSiteGraphicUrl(string $url): bool
+    {
+        $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        if ($host !== 'ansell.com' && ! str_ends_with($host, '.ansell.com')) {
+            return false;
+        }
+        $path = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+
+        return preg_match('#/(?:glove-size-finder|pim/taxonomy|icon|sustainability)/#', $path) === 1;
+    }
+
+    /** Zdjęcie wyrobu w użyciu („ringers-074-chemical-application---examining-barrels.ashx”), nie packshot. */
+    public static function isApplicationShotUrl(string $url): bool
+    {
+        $path = mb_strtolower(urldecode((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+
+        return str_contains(basename($path), 'application');
+    }
+
+    /**
+     * Packshot karty („ringers074.ashx”) przed jej zdjęciami z zastosowania — przy jednym zdjęciu
+     * na kartę głównym zostawało zdjęcie beczek. Karta to host i katalog pliku (Ansell trzyma pliki
+     * modelu w …/product-assets/ringers/r-074/). Zmienia się tylko kolejność w obrębie jednej karty;
+     * pozostałe adresy zostają na swoich miejscach, a karta bez packshotu — bez zmian.
+     *
+     * @param  list<string>  $urls
+     * @return list<string>
+     */
+    public static function packshotsFirst(array $urls): array
+    {
+        $urls = array_values($urls);
+        $positions = [];
+        foreach ($urls as $i => $url) {
+            $host = mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+            $dir = dirname(mb_strtolower((string) (parse_url($url, PHP_URL_PATH) ?? '')));
+            $positions[$host.$dir][] = $i;
+        }
+
+        $out = $urls;
+        foreach ($positions as $group) {
+            $packshots = [];
+            $shots = [];
+            foreach ($group as $i) {
+                if (self::isApplicationShotUrl($urls[$i])) {
+                    $shots[] = $urls[$i];
+                } else {
+                    $packshots[] = $urls[$i];
+                }
+            }
+            if ($packshots === [] || $shots === []) {
+                continue;
+            }
+            foreach ([...$packshots, ...$shots] as $k => $url) {
+                $out[$group[$k]] = $url;
+            }
+        }
+
+        return $out;
+    }
+
     /** Shoper: _120_120 / _300_300 to kafle; _0_0 i ≥400 to karta. */
     public static function isSmallShoperCacheUrl(string $url): bool
     {
@@ -346,21 +365,20 @@ final class ProductImageDownloader
             || $bytes === ''
             || str_contains($mime, 'text/html')
             || str_contains($mime, 'application/json');
+        // Bez zrzutu przez Jinę: dla adresu pliku (nie strony HTML) r.jina.ai nie oddaje ani bajtów,
+        // ani zrzutu — tylko 200 text/plain „Markdown Content: undefined” (bpbhp .jpg, Ansell .ashx,
+        // sprawdzone 24.09.2026), a dla nieistniejącego pliku zrzut strony 404 w PNG, który szedłby
+        // na kartę jako zdjęcie. Zablokowany plik wraca do ponowienia (products:retry-images).
         if ($blocked) {
-            $shot = $this->blockedPages->fetchScreenshot($url);
-            if ($shot === null) {
-                $status = $response->status();
-                // strona zapory zamiast pliku albo odmowa chwilowa — nie 404 i nie błąd klienta
-                $later = $response->successful() || in_array($status, [403, 429], true) || $status >= 500;
-                throw new \RuntimeException(
-                    $response->successful()
-                        ? 'Odpowiedź nie jest obrazem ('.$mime.')'
-                        : 'HTTP '.$status,
-                    $later ? self::RETRY_LATER : 0
-                );
-            }
-            $bytes = $shot;
-            $mime = str_starts_with($shot, "\x89PNG") ? 'image/png' : 'image/jpeg';
+            $status = $response->status();
+            // strona zapory zamiast pliku albo odmowa chwilowa — nie 404 i nie błąd klienta
+            $later = $response->successful() || in_array($status, [403, 429], true) || $status >= 500;
+            throw new \RuntimeException(
+                $response->successful()
+                    ? 'Odpowiedź nie jest obrazem ('.$mime.')'
+                    : 'HTTP '.$status,
+                $later ? self::RETRY_LATER : 0
+            );
         }
 
         $size = strlen($bytes);

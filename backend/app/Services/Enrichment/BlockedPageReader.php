@@ -19,8 +19,6 @@ final class BlockedPageReader
 {
     private const MAX_TEXT_BYTES = 400000;
 
-    private const MAX_SCREENSHOT_BYTES = 8000000;
-
     /** Druga próba po 429/5xx — limit Jiny przy wielu workerach bywa chwilowy. */
     private const READER_ATTEMPTS = 2;
 
@@ -41,47 +39,6 @@ final class BlockedPageReader
      * @var array<string, string>
      */
     private array $failures = [];
-
-    /**
-     * Zrzut karty produktu (PNG) — gdy CDN obrazków też za Incapsulą (Ansell .ashx).
-     */
-    public function fetchScreenshot(string $url): ?string
-    {
-        $url = trim($url);
-        if ($url === '' || (! str_starts_with($url, 'http://') && ! str_starts_with($url, 'https://'))) {
-            return null;
-        }
-
-        try {
-            $response = Http::timeout(55)
-                ->connectTimeout(8)
-                ->withHeaders([
-                    'Accept' => 'image/png,image/jpeg,*/*',
-                    'X-Return-Format' => 'screenshot',
-                    'User-Agent' => 'Mozilla/5.0 (compatible; SUPON-Enrichment/1.4)',
-                ])
-                ->withOptions(['allow_redirects' => true, 'stream' => true])
-                ->get('https://r.jina.ai/'.$url);
-        } catch (Throwable $e) {
-            Log::info('Blocked page screenshot failed', ['url' => $url, 'error' => $e->getMessage()]);
-
-            return null;
-        }
-
-        if (! $response->successful()) {
-            return null;
-        }
-
-        $bytes = $this->readLimitedBody($response, self::MAX_SCREENSHOT_BYTES);
-        if ($bytes === '' || strlen($bytes) < 8000) {
-            return null;
-        }
-        if (! str_starts_with($bytes, "\x89PNG") && ! str_starts_with($bytes, "\xFF\xD8")) {
-            return null;
-        }
-
-        return $bytes;
-    }
 
     /**
      * @return array{
@@ -450,6 +407,10 @@ final class BlockedPageReader
         $out = [];
         foreach ($found as $url) {
             if ($url === null || ! ProductImageDownloader::looksLikeImageUrl($url)) {
+                continue;
+            }
+            // czytnik oddaje całą stronę: widżet rozmiarów, piktogramy norm, stopkę z ikonami
+            if (ProductImageDownloader::isManufacturerSiteGraphicUrl($url)) {
                 continue;
             }
             $out[] = $url;
