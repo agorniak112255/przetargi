@@ -9,6 +9,7 @@ use App\Support\CatalogCascadeRecall;
 use App\Support\CatalogManufacturerContext;
 use App\Support\PpeAssortment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 final class CatalogCascadeRecallTest extends TestCase
@@ -427,5 +428,127 @@ final class CatalogCascadeRecallTest extends TestCase
         $this->assertStringStartsWith('steps_', (string) $hit['level']);
         $this->assertContains('KOLDYPANTS', $skus);
         $this->assertNotContains('H5131', $skus);
+    }
+
+    /**
+     * Runda 7 przeglądu (25.09.2026): krok marki filtrował producenta po etykiecie kroku. Zapis z wymagania
+     * („Mapa Professional”, „Rękawice Mapa Professional”) nie łapał kart producenta „MAPA”, krok spadał i kaskada
+     * oddawała rękawice wszystkich marek — w pierwszym szukaniu i po przepisaniu zapytania.
+     *
+     * @return iterable<string, array{list<string>}>
+     */
+    public static function brandStepsInRequirementSpelling(): iterable
+    {
+        yield 'marka z wymagania jako osobny krok' => [['rękawice', 'Mapa Professional']];
+        yield 'marka z wymagania w kroku z rzeczownikiem' => [['powlekane nitrylem', 'Rękawice Mapa Professional']];
+    }
+
+    /** @param  list<string>  $steps */
+    #[DataProvider('brandStepsInRequirementSpelling')]
+    public function test_brand_step_in_requirement_spelling_filters_by_catalog_manufacturer(array $steps): void
+    {
+        foreach (['MAPA' => 'MAPA-N1', 'TEST' => 'TEST-N1', 'Ansell' => 'ANS-N1'] as $maker => $sku) {
+            $this->glove($sku, 'Rękawice montażowe powlekane nitrylem', $maker);
+        }
+        CatalogManufacturerContext::forgetCache();
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'Rękawice Mapa Professional powlekane nitrylem EN 388',
+            [
+                'needed' => 'rękawice powlekane nitrylem',
+                'search_phrases' => ['rękawice powlekane nitrylem'],
+                'search_steps' => $steps,
+                'constraints' => [],
+                'manufacturer' => 'MAPA',
+                'manufacturer_requested' => 'Mapa Professional',
+                'manufacturer_absent_in_catalog' => false,
+            ],
+            'Rękawice Mapa Professional powlekane nitrylem EN 388',
+            20
+        );
+
+        $this->assertSame('steps_2', $hit['level']);
+        $this->assertSame(0, $hit['dropped_steps'], 'krok marki spadł — kaskada szuka bez marki');
+        $this->assertSame(['MAPA'], $hit['products']->pluck('manufacturer')->unique()->values()->all());
+    }
+
+    /** Podmarka ze słownika („Peltor” → 3M): krok z podmarką zawęża do producenta z katalogu, zamiast spadać. */
+    public function test_sub_brand_step_filters_by_its_catalog_manufacturer(): void
+    {
+        $this->earMuff('3M-X2A', 'Nauszniki przeciwhałasowe Peltor X2A', '3M');
+        $this->earMuff('UVEX-K2', 'Nauszniki przeciwhałasowe K2', 'UVEX');
+        CatalogManufacturerContext::forgetCache();
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'Nauszniki przeciwhałasowe Peltor X2 EN 352-1',
+            [
+                'needed' => 'nauszniki przeciwhałasowe',
+                'search_phrases' => ['nauszniki przeciwhałasowe'],
+                'search_steps' => ['nauszniki', 'Peltor X2'],
+                'constraints' => [],
+                'manufacturer' => '3M',
+                'manufacturer_requested' => 'Peltor',
+                'manufacturer_absent_in_catalog' => false,
+            ],
+            'Nauszniki przeciwhałasowe Peltor X2 EN 352-1',
+            20
+        );
+
+        $this->assertSame('steps_2', $hit['level']);
+        $this->assertSame(['3M-X2A'], $hit['products']->pluck('sku')->all());
+    }
+
+    /** Marka spoza katalogu nie jest krokiem kaskady — bez zmian. */
+    public function test_absent_brand_step_is_still_skipped(): void
+    {
+        $this->glove('TEST-N1', 'Rękawice montażowe powlekane nitrylem', 'TEST');
+        CatalogManufacturerContext::forgetCache();
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'Rękawice RTELA powlekane nitrylem',
+            [
+                'needed' => 'rękawice powlekane nitrylem',
+                'search_phrases' => ['rękawice powlekane nitrylem'],
+                'search_steps' => ['powlekane nitrylem', 'RTELA'],
+                'constraints' => [],
+                'manufacturer' => null,
+                'manufacturer_requested' => 'RTELA',
+                'manufacturer_absent_in_catalog' => true,
+            ],
+            'Rękawice RTELA powlekane nitrylem',
+            20
+        );
+
+        $this->assertSame('steps_1', $hit['level']);
+        $this->assertSame(0, $hit['dropped_steps']);
+        $this->assertSame(['TEST-N1'], $hit['products']->pluck('sku')->all());
+    }
+
+    private function glove(string $sku, string $name, string $manufacturer): Product
+    {
+        return Product::query()->create([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => $manufacturer,
+            'description' => $name.', EN 388.',
+            'catalog_price_net' => 9,
+            'purchase_price' => 6,
+            'stock' => 10,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+        ]);
+    }
+
+    private function earMuff(string $sku, string $name, string $manufacturer): Product
+    {
+        return Product::query()->create([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => $manufacturer,
+            'description' => $name.', EN 352-1.',
+            'catalog_price_net' => 60,
+            'purchase_price' => 40,
+            'stock' => 5,
+            'ppe_family' => PpeAssortment::FAMILY_HEARING,
+        ]);
     }
 }

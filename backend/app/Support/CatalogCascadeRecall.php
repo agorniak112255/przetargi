@@ -123,9 +123,14 @@ final class CatalogCascadeRecall
     }
 
     /**
+     * Krok marki filtruje po producencie z katalogu (`brand`), nie po etykiecie: zapis z wymagania („Mapa Professional”,
+     * „Rękawice Mapa Professional”, „Peltor X2”) nie łapał kart producenta „MAPA” czy „3M”, krok spadał i kaskada
+     * oddawała karty wszystkich marek (runda 7 przeglądu, 25.09.2026). Producent jak w ścieżce warstwowej
+     * (`layers`: sprawdzony, ma karty); bez niego — etykieta, jak dotąd.
+     *
      * @param  array<string, mixed>  $intent
-     * @param  array{family: ?string, family_nouns: list<string>}  $layers
-     * @return list<array{label: string, kind: 'text'|'brand', tokens: list<string>}>
+     * @param  array{family: ?string, family_nouns: list<string>, manufacturer?: ?string}  $layers
+     * @return list<array{label: string, kind: 'text'|'brand', tokens: list<string>, brand?: string}>
      */
     private function intentSteps(array $intent, array $layers): array
     {
@@ -140,7 +145,7 @@ final class CatalogCascadeRecall
             }
             if ($this->isBrandLabel($label, $brand, $requested)) {
                 if ($brand !== '' && empty($intent['manufacturer_absent_in_catalog'])) {
-                    $out[] = ['label' => $label, 'kind' => 'brand', 'tokens' => []];
+                    $out[] = ['label' => $label, 'kind' => 'brand', 'tokens' => [], 'brand' => $layers['manufacturer'] ?? $label];
                 }
 
                 continue;
@@ -157,7 +162,7 @@ final class CatalogCascadeRecall
 
     /**
      * @param  array{family: ?string, family_nouns: list<string>}  $layers
-     * @param  list<array{label: string, kind: 'text'|'brand', tokens: list<string>}>  $steps
+     * @param  list<array{label: string, kind: 'text'|'brand', tokens: list<string>, brand?: string}>  $steps
      * @return array{products: Collection<int, Product>, level: ?string, dropped_steps: int}
      */
     private function retrieveBySteps(
@@ -195,7 +200,7 @@ final class CatalogCascadeRecall
 
     /**
      * @param  array{family: ?string, family_nouns: list<string>}  $layers
-     * @param  list<array{label: string, kind: 'text'|'brand', tokens: list<string>}>  $steps
+     * @param  list<array{label: string, kind: 'text'|'brand', tokens: list<string>, brand?: string}>  $steps
      * @return Collection<int, Product>
      */
     private function querySteps(array $layers, array $steps, int $limit): Collection
@@ -204,7 +209,7 @@ final class CatalogCascadeRecall
         $this->applyFamilyScope($builder, $layers);
         foreach ($steps as $step) {
             if ($step['kind'] === 'brand') {
-                $brand = $step['label'];
+                $brand = $step['brand'] ?? $step['label'];
                 $like = '%'.addcslashes($brand, '%_\\').'%';
                 $builder->where(function (Builder $outer) use ($brand, $like): void {
                     $outer->where('manufacturer', $brand)

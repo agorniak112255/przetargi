@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\BrandDictionaryEntry;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\AiServedProviderTally;
@@ -11,6 +12,9 @@ use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductAiSearchService;
 use App\Services\Search\AiProductSearch;
+use App\Support\BrandDictionary;
+use App\Support\CatalogManufacturerContext;
+use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
@@ -750,6 +754,56 @@ final class ProductAiSearchRewriteAfterEmptyRankTest extends TestCase
 
         $this->assertSame(['rank' => 1, 'rewrite' => 1], $waveCalls, 'inny zapis tej samej marki wzięty za zmianę');
         $this->assertSame($waveCalls, $singleCalls);
+    }
+
+    /**
+     * Runda 7: przy tej samej marce i nowych krokach krok marki zostaje w zapisie z wymagania (podmarka „Peltor”
+     * przy producencie 3M) — kaskada filtruje go po producencie z katalogu, więc drugie szukanie dalej zawęża do kart
+     * 3M, zamiast zdjąć krok i oddać nauszniki wszystkich marek.
+     */
+    public function test_sub_brand_step_keeps_filtering_after_rewrite_in_both_paths(): void
+    {
+        BrandDictionaryEntry::query()->create(['term' => 'Peltor', 'kind' => BrandDictionaryEntry::KIND_BRAND, 'manufacturer' => '3M']);
+        app(BrandDictionary::class)->reset();
+        foreach (['3M' => 'NAU-3M', 'UVEX' => 'NAU-UVEX'] as $maker => $sku) {
+            Product::query()->create([
+                'sku' => $sku,
+                'name' => 'Nauszniki przeciwhałasowe nagłowne',
+                'manufacturer' => $maker,
+                'description' => null,
+                'catalog_price_net' => 60,
+                'purchase_price' => 40,
+                'stock' => 5,
+                'ppe_family' => PpeAssortment::FAMILY_HEARING,
+                'enrichment_status' => Product::ENRICHMENT_NONE,
+            ]);
+        }
+        CatalogManufacturerContext::forgetCache();
+        $understood = [
+            'needed' => 'nauszniki przeciwhałasowe',
+            'search_steps' => ['nauszniki', 'Peltor'],
+            'manufacturer' => 'Peltor',
+            'model_name' => null,
+            'search_phrases' => ['nauszniki przeciwhałasowe'],
+            'constraints' => ['EN 352-1'],
+        ];
+        [$wave, $waveCalls, $single, $singleCalls] = $this->bothPaths('Nauszniki przeciwhałasowe Peltor EN 352-1 do pracy w hałasie', [
+            'rewrite' => fn (): array => [...$understood, 'manufacturer' => '3M', 'search_steps' => ['nauszniki', 'nagłowne', '3M']],
+            'understand' => $understood,
+            'firstRank' => [...$understood, 'matches' => []],
+        ]);
+
+        $this->assertSame(['rank' => 2, 'rewrite' => 1], $waveCalls, 'fixture: nowy krok przepisania to zmiana szukania');
+        $this->assertSame($waveCalls, $singleCalls);
+        foreach (['fala' => $wave, 'pojedyncze' => $single] as $path => $result) {
+            $cascade = (array) ($result['trace']['cascade'] ?? []);
+            $this->assertNotSame([], $cascade, $path.': fixture — drugie szukanie przeszło przez kaskadę');
+            $last = $cascade[array_key_last($cascade)];
+            $this->assertSame(['nauszniki', 'nagłowne', 'Peltor'], array_slice($last['steps'], 0, 3), $path.': fixture — krok marki w zapisie z wymagania');
+            $this->assertSame(0, $last['dropped_steps'], $path.': krok marki spadł w drugim szukaniu');
+            $this->assertSame('steps_'.count($last['steps']), $last['level'], $path);
+            $this->assertSame(1, $last['found'], $path.': kaskada oddała nauszniki innych marek');
+        }
     }
 
     public function test_switch_between_two_absent_brands_is_not_a_change_in_both_paths(): void
