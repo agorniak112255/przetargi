@@ -1364,21 +1364,6 @@ export function InquiryReply() {
     }
   }
 
-  async function unmarkSent() {
-    if (!inquiry) return
-    setMsg('')
-    try {
-      const res = await api<InquiryPayload>(`/inquiries/${inquiry.id}/replied`, {
-        method: 'POST',
-        body: JSON.stringify({ replied: false }),
-      })
-      setInquiry(res)
-      setMsg('Oznaczenie cofnięte.')
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Nie udało się cofnąć oznaczenia')
-    }
-  }
-
   if (loading) return <p className="text-sm text-slate-500">Ładowanie…</p>
   if (!inquiry) return <p className="text-sm text-red-600">{err || 'Brak zapytania.'}</p>
 
@@ -1434,7 +1419,11 @@ export function InquiryReply() {
             <InquiryContactChip contact={inquiry.contact} onOpen={() => setContactOpen(true)} />
           </div>
         </div>
-        <Link to="/inquiries" className="text-xs text-blue-600 hover:underline">
+        {/* Jedyne wyjście do listy — kafelek, żeby nie ginął w nagłówku (pasek przycisków go nie powtarza). */}
+        <Link
+          to="/inquiries"
+          className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 shadow-sm ring-1 ring-slate-200 hover:bg-blue-50"
+        >
           ← Wróć do zapytań
         </Link>
       </div>
@@ -1515,22 +1504,6 @@ export function InquiryReply() {
               Anuluj wysyłkę
             </button>
           )}
-          {!readOnly && inquiry.replied_at && (
-            <button
-              type="button"
-              disabled={locked}
-              onClick={() => void unmarkSent()}
-              className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
-            >
-              Cofnij oznaczenie
-            </button>
-          )}
-          <Link
-            to="/inquiries"
-            className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50"
-          >
-            Wróć do zapytań
-          </Link>
           {!readOnly && (
             <button
               type="button"

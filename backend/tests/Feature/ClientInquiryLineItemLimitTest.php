@@ -100,7 +100,11 @@ final class ClientInquiryLineItemLimitTest extends TestCase
         $this->assertStringContainsString('Amortyzator bezpieczeństwa', (string) $items[6]['quote']);
         $this->assertSame(['rnitz_color'], array_column($items[1]['cards'], 'id'), 'karta rozmiaru idzie do pozycji, która została');
         $res->assertJsonPath('omitted_items', []);
-        $this->assertStringContainsString('Amortyzator', (string) $res->json('reply_body'));
+        $reply = (string) $res->json('reply_body');
+        $this->assertStringContainsString('Amortyzator', $reply);
+        // numer wiersza z maila nie idzie do listu w cytacie pozycji (#72: „Poz. 2 … 2. Rękawice…”)
+        $this->assertStringNotContainsString('2. Rękawice ochronne', $reply);
+        $this->assertStringContainsString('Rozmiar: 8-108par,9-108par,10-216par', $reply);
     }
 
     public function test_rows_over_the_limit_are_shown_and_need_attention(): void

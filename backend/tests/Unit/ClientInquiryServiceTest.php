@@ -583,7 +583,12 @@ final class ClientInquiryServiceTest extends TestCase
         // limit 8 pozycji nie zmieściłby dwóch ostatnich wierszy maila
         $this->assertCount(7, $resolved);
         $this->assertSame(['432', 'pary', null], [$resolved[1]['qty'], $resolved[1]['unit'], $resolved[1]['size']]);
-        $this->assertStringContainsString('Rozmiar: 8-108par,9-108par,10-216par.', $resolved[1]['quote']);
+        // wiersz z linią rozmiarów, jak stoi w mailu — bez numeru pozycji („2. ”), który szedł do listu (#72)
+        $this->assertSame(
+            'Rękawice ochronne tkaninowe pięciopalcowe, powlekane nitrylem żółtym, zakończone ściągaczem-symbol RNITz  - 432 pary'
+            .' Rozmiar: 8-108par,9-108par,10-216par.',
+            $resolved[1]['quote'],
+        );
         foreach (['RĘKAWICZKI DIAGNOSTYCZNE', 'RNITz', 'Rękawice białe dziane', 'MedaSept', 'Rękawice drelichowe', 'Szelki bezpieczeństwa', 'Amortyzator bezpieczeństwa'] as $i => $text) {
             $this->assertStringContainsString($text, $resolved[$i]['quote']);
         }
