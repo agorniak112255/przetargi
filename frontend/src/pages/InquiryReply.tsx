@@ -595,20 +595,20 @@ function ItemRow({
                   <span className="min-w-0 flex-1 text-slate-800">
                     <span className="font-semibold">{c.sku}</span> · {c.name}
                     {c.manufacturer && <span className="text-slate-500"> · {c.manufacturer}</span>}
+                    {/* Warunki zamawiania pod nazwą — obok poszerzały kolumnę przycisków i ściskały nazwę do słowa w linii.
+                        Wybrana alternatywa pokazuje je niżej, razem z ilością do zamówienia. */}
+                    {!on && <OrderQuantityBadge oq={c.order_quantity} block className="mt-1" />}
                   </span>
                   <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[11px] font-bold ${tone}`}>{label}</span>
                 </button>
-                <span className="flex items-center justify-end gap-1">
-                  {!on && <OrderQuantityBadge oq={c.order_quantity} />}
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onPreview(c.id, item.quote ?? '')}
-                    className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
-                  >
-                    Opis
-                  </button>
-                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onPreview(c.id, item.quote ?? '')}
+                  className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
+                >
+                  Opis
+                </button>
                 {on && (
                   <div className="col-span-2 space-y-1 pb-1 pl-7 text-[11px] text-slate-600">
                     {(chosenPrice || priceMode !== 'none') && (

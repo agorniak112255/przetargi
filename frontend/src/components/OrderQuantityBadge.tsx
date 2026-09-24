@@ -43,7 +43,7 @@ export function OrderQuantityBadge({
   return (
     <span className={`${block ? 'flex w-fit' : 'inline-flex'} flex-wrap items-center gap-1 ${className}`}>
       {showOrder && (
-        <span className="inline-flex items-center gap-1" title={orderQtyTitle(oq)}>
+        <span className="inline-flex flex-wrap items-center gap-1" title={orderQtyTitle(oq)}>
           <span className="inline-block whitespace-nowrap rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
             zamawiane {orderQtyLabel(oq)}
           </span>
@@ -55,7 +55,7 @@ export function OrderQuantityBadge({
         </span>
       )}
       {showPrice && (
-        <span className="inline-flex items-center gap-1" title={priceConditionTitle(oq)}>
+        <span className="inline-flex flex-wrap items-center gap-1" title={priceConditionTitle(oq)}>
           <span className="inline-block whitespace-nowrap rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">
             {priceConditionLabel(oq)}
           </span>
