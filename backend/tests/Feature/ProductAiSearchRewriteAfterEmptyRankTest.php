@@ -48,6 +48,9 @@ final class ProductAiSearchRewriteAfterEmptyRankTest extends TestCase
     /** @var array{rank: int, rewrite: int} */
     private array $calls = ['rank' => 0, 'rewrite' => 0];
 
+    /** @var list<string> wiadomości użytkownika w kolejnych promptach rankingu */
+    private array $rankPrompts = [];
+
     private int $gloveId = 0;
 
     protected function setUp(): void
@@ -621,6 +624,7 @@ final class ProductAiSearchRewriteAfterEmptyRankTest extends TestCase
         $this->assertSame('Rękawice', $cut('Rękawice Portwest-Pro', ['Portwest Pro']), 'marka wielowyrazowa, łącznik albo spacja');
         $this->assertSame('Kombinezon 13M', $cut('Kombinezon 13M', ['3M']), 'marka nie jest wycinana ze środka słowa');
         $this->assertSame('Rękawice Ansellite', $cut('Rękawice Ansellite', ['Ansell']));
+        $this->assertSame('', $cut('Mapa Professional', ['MAPA', 'Mapa Professional']), 'najpierw dłuższy zapis marki, inaczej zostaje „Professional”');
     }
 
     /**
@@ -668,6 +672,137 @@ final class ProductAiSearchRewriteAfterEmptyRankTest extends TestCase
 
         $this->assertSame(['rank' => 1, 'rewrite' => 1], $waveCalls, 'krok marki spoza wymagania wzięty za zmianę szukania');
         $this->assertSame($waveCalls, $singleCalls);
+    }
+
+    /** @return iterable<string, array{0: string, 1: string|null, 2: array<string, mixed>, 3: string}> */
+    public static function brandNoiseInRewrite(): iterable
+    {
+        yield 'odziedziczona marka spoza katalogu' => [self::ABSENT_BRAND, 'Zzqbrand', [
+            'manufacturer' => null, 'model_name' => 'Zzqbrand', 'constraints' => ['EN 388', 'producent Zzqbrand'],
+        ], 'Zzqbrand'];
+        yield 'zmyślona marka' => [self::GLOVES, null, [
+            'manufacturer' => 'Qqxinvented', 'constraints' => ['EN 388', 'marka Qqxinvented'],
+        ], 'Qqxinvented'];
+    }
+
+    /**
+     * Marka spoza katalogu (odziedziczona albo zmyślona w przepisaniu) nie może wejść do promptu drugiej oceny jako
+     * warunek ani model — ten sam prompt mówi, że marka nie jest warunkiem. intentFromRewrite podmienia warunki surowymi
+     * z modelu po parseIntent, a przy odziedziczonej marce parseIntent jej nie znał.
+     *
+     * @param  array<string, mixed>  $rewriteFields
+     */
+    #[DataProvider('brandNoiseInRewrite')]
+    public function test_absent_or_invented_brand_is_not_a_condition_in_second_rank_prompt(string $query, ?string $brand, array $rewriteFields, string $noise): void
+    {
+        $understood = [...$this->glovesIntent(), 'manufacturer' => $brand];
+        foreach ([true, false] as $batch) {
+            $this->calls = ['rank' => 0, 'rewrite' => 0];
+            $this->rankPrompts = [];
+            $this->llm(
+                rewrite: fn (): array => [...$this->glovesIntent(), 'needed' => 'rękawice montażowe nitrylowe', 'search_phrases' => ['rękawice montażowe'], ...$rewriteFields],
+                understand: $understood,
+                firstRank: [...$understood, 'matches' => []],
+                secondRank: [...$this->glovesIntent(), 'matches' => []],
+            );
+            $batch
+                ? $this->app->make(AiProductSearch::class)->findMany([$query], 10, AiTask::ProductSearch, 2)
+                : $this->app->make(AiProductSearch::class)->find($query, 10, AiTask::ProductSearch);
+
+            $path = $batch ? 'fala' : 'pojedyncze';
+            $this->assertCount(2, $this->rankPrompts, $path.': fixture — przepisanie zmieniło frazy, więc druga ocena');
+            $second = $this->rankPrompts[1];
+            $this->assertStringNotContainsString('Model z analizy: '.$noise, $second, $path.': marka jako model w drugiej ocenie');
+            foreach (preg_split('/\R/u', $second) ?: [] as $line) {
+                if (str_starts_with(trim($line), '- ')) {
+                    $this->assertStringNotContainsString($noise, $line, $path.': marka jako warunek w drugiej ocenie');
+                }
+            }
+        }
+    }
+
+    /** @return iterable<string, array{0: list<string>, 1: list<string>}> */
+    public static function aliasSteps(): iterable
+    {
+        yield 'bez kroków' => [[], ['rękawice', 'powlekane nitrylem']];
+        yield 'te same kroki' => [['rękawice', 'powlekane nitrylem'], ['rękawice', 'powlekane nitrylem']];
+        // krok marki w zapisie z wymagania — przepisanie z nowymi krokami nie może go zamienić na kanoniczne „MAPA”
+        yield 'te same kroki, krok marki w zapisie z wymagania' => [['rękawice', 'powlekane nitrylem'], ['rękawice', 'powlekane nitrylem', 'Mapa Professional']];
+    }
+
+    /**
+     * Ta sama marka z katalogu zapisana inaczej („Mapa Professional” w wymaganiu, „MAPA” w przepisaniu) to nie zmiana
+     * szukania — dotąd stary zapis lądował w markach obcych, krok marki był wycinany i ta sama pula szła drugi raz.
+     *
+     * @param  list<string>  $steps
+     * @param  list<string>  $understoodSteps
+     */
+    #[DataProvider('aliasSteps')]
+    public function test_same_catalog_brand_spelled_differently_is_not_a_change_in_both_paths(array $steps, array $understoodSteps): void
+    {
+        $this->card('RKW-MAPA', 'MAPA');
+        $understood = [...$this->glovesIntent(), 'manufacturer' => 'Mapa Professional', 'search_steps' => $understoodSteps];
+        [, $waveCalls, , $singleCalls] = $this->bothPaths('Rękawice Mapa Professional powlekane nitrylem EN 388 do prac montażowych', [
+            'rewrite' => fn (): array => [...$this->glovesIntent(), 'manufacturer' => 'MAPA', 'search_steps' => $steps],
+            'understand' => $understood,
+            'firstRank' => [...$understood, 'matches' => []],
+        ]);
+
+        $this->assertSame(['rank' => 1, 'rewrite' => 1], $waveCalls, 'inny zapis tej samej marki wzięty za zmianę');
+        $this->assertSame($waveCalls, $singleCalls);
+    }
+
+    public function test_switch_between_two_absent_brands_is_not_a_change_in_both_paths(): void
+    {
+        // Wymaganie wymienia dwie marki spoza katalogu; przepisanie przechodzi z jednej na drugą i nie podaje kroków.
+        // Retrieval pomija marki spoza katalogu, więc pula ta sama — krok starej marki nie może udawać zmiany szukania.
+        $understood = [...$this->glovesIntent(), 'manufacturer' => 'Zzqbrand'];
+        [, $waveCalls, , $singleCalls] = $this->bothPaths('Rękawice Zzqbrand lub Yyqbrand powlekane nitrylem EN 388 do prac montażowych', [
+            'rewrite' => fn (): array => [...$this->glovesIntent(), 'manufacturer' => 'Yyqbrand', 'search_steps' => []],
+            'understand' => $understood,
+            'firstRank' => [...$understood, 'matches' => []],
+        ]);
+
+        $this->assertSame(['rank' => 1, 'rewrite' => 1], $waveCalls, 'krok starej marki spoza katalogu wzięty za zmianę');
+        $this->assertSame($waveCalls, $singleCalls);
+    }
+
+    public function test_compound_step_of_old_brand_keeps_its_noun_when_brand_changes_in_both_paths(): void
+    {
+        // „Rękawice TEST” przy zmianie marki na MAPA → „Rękawice” (rzeczownik zostaje, bez dubla z „rękawice”).
+        $this->card('RKW-MAPA', 'MAPA');
+        $understood = [...$this->glovesIntent(), 'manufacturer' => 'TEST', 'search_steps' => ['rękawice', 'Rękawice TEST', 'powlekane nitrylem']];
+        [$wave, , $single] = $this->bothPaths('Rękawice powlekane nitrylem TEST lub MAPA EN 388 do prac montażowych', [
+            'rewrite' => fn (): array => [...$this->glovesIntent(), 'manufacturer' => 'MAPA', 'search_steps' => []],
+            'understand' => $understood,
+            'firstRank' => [...$understood, 'matches' => []],
+        ]);
+
+        foreach (['fala' => $wave, 'pojedyncze' => $single] as $path => $result) {
+            $steps = array_map('mb_strtolower', $this->lastCascadeSteps($result));
+            $this->assertNotContains('rękawice test', $steps, $path);
+            $this->assertSame(1, count(array_filter($steps, static fn (string $s): bool => $s === 'rękawice')), $path.': rzeczownik raz, bez dubla');
+            $this->assertSame('mapa', end($steps), $path.': ostatni krok to nowa marka');
+        }
+    }
+
+    public function test_result_steps_after_rewrite_look_like_first_pass_in_both_paths(): void
+    {
+        // Przepisanie pomija markę spoza katalogu i zmienia frazy: kroki wyniku jak w pierwszym przebiegu — bez kroku
+        // marki spoza katalogu (scalanie z intencją szukania go zdejmuje) i takie same w obu ścieżkach.
+        $understood = [...$this->glovesIntent(), 'manufacturer' => 'Zzqbrand'];
+        [$wave, , $single] = $this->bothPaths(self::ABSENT_BRAND, [
+            'rewrite' => fn (): array => [...$this->glovesIntent(), 'needed' => 'rękawice montażowe nitrylowe', 'search_phrases' => ['rękawice montażowe']],
+            'understand' => $understood,
+            'firstRank' => [...$understood, 'matches' => []],
+            'secondRank' => [...$this->glovesIntent(), 'search_steps' => [], 'matches' => []],
+        ]);
+
+        $this->assertSame($single['parsed_intent']['search_steps'] ?? null, $wave['parsed_intent']['search_steps'] ?? null);
+        $this->assertNotSame([], $wave['parsed_intent']['search_steps'] ?? []);
+        foreach ($wave['parsed_intent']['search_steps'] ?? [] as $step) {
+            $this->assertStringNotContainsStringIgnoringCase('Zzqbrand', $step, 'krok marki spoza katalogu w wyniku');
+        }
     }
 
     public function test_ranked_state_after_second_rank_in_both_paths(): void
@@ -776,6 +911,7 @@ final class ProductAiSearchRewriteAfterEmptyRankTest extends TestCase
             if ($kind !== FakeSearchLlm::KIND_RANK) {
                 return $understand ?? $this->glovesIntent();
             }
+            $this->rankPrompts[] = (string) ($messages[1]['content'] ?? '');
 
             return ++$this->calls['rank'] === 1
                 ? ($firstRank ?? [...$this->glovesIntent(), 'matches' => []])

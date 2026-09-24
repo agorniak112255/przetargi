@@ -1240,12 +1240,19 @@ final class ProductAiSearchService
         $inheritsBrand = ($rewritten['manufacturer'] ?? null) === null
             && ($requested === '' || ! $this->nameAppearsInQuery($query, $requested));
         if ($inheritsBrand) {
-            // Frazy zmyślonej marki zdjął już parseIntent (stripAbsentManufacturerNoise), jej krok — rewriteSearchSteps.
+            // Frazy, warunki i model zmyślonej marki zdjęły już parseIntent i intentFromRewrite, jej krok — rewriteSearchSteps.
             $rewritten['manufacturer'] = $base['manufacturer'];
             $rewritten['manufacturer_requested'] = $base['manufacturer_requested'];
             $rewritten['manufacturer_absent_in_catalog'] = $base['manufacturer_absent_in_catalog'];
+            if ($base['manufacturer_absent_in_catalog']) {
+                // Odziedziczonej marki spoza katalogu parseIntent nie znał — jej frazy, warunki i model zdejmujemy z samej
+                // intencji, bo prompt oceny bierze warunki i model bez applySlangIntent. Kroki — z rewriteSearchSteps.
+                $clean = $this->stripAbsentManufacturerNoise($rewritten);
+                $rewritten['search_phrases'] = $clean['search_phrases'];
+                $rewritten['constraints'] = $clean['constraints'];
+                $rewritten['model_name'] = $clean['model_name'];
+            }
         }
-        // Frazy i kroki odziedziczonej marki spoza katalogu zdejmuje applySlangIntent w porównaniu i w prepareSearch.
         $rewritten['search_steps'] = $this->rewriteSearchSteps($raw, $rewritten, $base);
 
         return $this->rewriteChangesSearch($query, $searched, $rewritten) ? $rewritten : null;
@@ -1255,10 +1262,11 @@ final class ProductAiSearchService
      * Kroki szukania po przepisaniu. Kroki modelu liczą się tylko wtedy, gdy po zdjęciu marek i słabych słów coś z nich
      * zostaje — inaczej (brak, pusta lista, same słabe słowa, sama marka) zostają kroki szukania, jak w mergeRetrieveIntent.
      * Decyzja na krokach po parseIntent nie działała (sanitizer dokleja krok marki, więc przy marce lista nigdy nie była
-     * pusta), a na surowej liście — brała za nowe kroki te, które sanitizer w całości odrzuca. Z wybranych kroków wycinana
-     * jest tylko marka obca: stara po zmianie marki (kaskada zdejmuje kroki od końca i wracała do jej kart), zmyślona albo
-     * wyzerowana przez reconcileManufacturerIntent. Krok z rzeczownikiem zostaje („Rękawice Ansell” → „Rękawice”), a na
-     * koniec sanitizer dokleja markę obowiązującą.
+     * pusta), a na surowej liście — brała za nowe kroki te, które sanitizer w całości odrzuca. Przy tej samej marce
+     * (kanonicznie) bez nowych kroków zostają kroki szukania dosłownie; przy nowych — krok marki w zapisie z szukania.
+     * Przy innej marce z kroków wycinany jest każdy zapis marki: stara (kaskada zdejmuje kroki od końca i wracała do jej
+     * kart), zmyślona albo wyzerowana przez reconcileManufacturerIntent; krok z rzeczownikiem zostaje („Rękawice Ansell”
+     * → „Rękawice”), a sanitizer dokleja markę obowiązującą.
      *
      * @param  array<string, mixed>  $raw  odpowiedź modelu na przepisanie
      * @param  array<string, mixed>  $rewritten  intencja przepisania po dziedziczeniu marki
@@ -1277,37 +1285,56 @@ final class ProductAiSearchService
                 $seen[$key] = $brand;
             }
         }
-        $effective = array_map(fn (string $brand): string => $this->compactLex($brand), $this->intentBrands($rewritten));
-        $foreign = [];
-        foreach ($seen as $key => $brand) {
-            if (! in_array($key, $effective, true)) {
-                $foreign[] = $brand;
-            }
-        }
+        $seen = array_values($seen);
+        // Ta sama marka („Mapa Professional” w wymaganiu i „MAPA” w przepisaniu) — też odziedziczona spoza katalogu —
+        // to nie zmiana marki.
+        $sameBrand = $this->brandKey($rewritten) === $this->brandKey($base);
 
         $brandless = [...$rewritten, 'manufacturer' => null, 'manufacturer_requested' => null, 'manufacturer_absent_in_catalog' => false];
         $useful = [];
         foreach ($this->sanitizeSearchSteps($this->stringStepList($raw['search_steps'] ?? $raw['steps'] ?? []), $brandless) as $step) {
-            $rest = $this->withoutBrandTokens($step, array_values($seen));
+            $rest = $this->withoutBrandTokens($step, $seen);
             if ($rest !== '' && ! $this->isWeakSearchStep($rest)) {
                 $useful[] = $rest;
             }
         }
+        if ($useful === [] && $sameBrand) {
+            // Nic nowego od modelu i ta sama marka — kroki szukania dosłownie, jak mergeRetrieveIntent.
+            return $base['search_steps'];
+        }
 
+        // Kroki bez żadnego zapisu marki; rzeczownik z kroku złożonego zostaje, bez dubla („Rękawice TEST” → „Rękawice”).
         $out = [];
         foreach ($useful === [] ? $base['search_steps'] : $rewritten['search_steps'] as $step) {
-            $rest = $this->withoutBrandTokens($step, $foreign);
-            if ($rest === $step) {
-                $out[] = $step;
-
-                continue;
-            }
+            $rest = $this->withoutBrandTokens($step, $seen);
             if ($rest !== '' && ! $this->isWeakSearchStep($rest) && ! $this->stepAlreadyListed($out, $rest)) {
                 $out[] = $rest;
             }
         }
+        if ($sameBrand) {
+            // Krok marki w zapisie z szukania, nie kanonicznym z przepisania — inaczej wyglądałby na zmianę szukania.
+            $baseBrands = $this->intentBrands($base);
+            foreach ($base['search_steps'] as $step) {
+                if ($this->withoutBrandTokens($step, $baseBrands) !== $this->withoutBrandTokens($step, [])) {
+                    $out[] = $step;
+                }
+            }
+        }
 
+        // Przy innej marce sanitizer dokleja markę obowiązującą (stara wycięta, więc kaskada do niej nie wraca).
         return $this->sanitizeSearchSteps($out, $rewritten);
+    }
+
+    /**
+     * Klucz marki intencji: producent z katalogu. Po parseIntent jest zawsze kanoniczny (matchManufacturer: słownik marek
+     * i podmarek), więc różne zapisy tej samej marki („Mapa Professional”, „MAPA”) dają ten sam klucz. Marki spoza
+     * katalogu się nie liczą — retrieval je pomija (intentForRetrieval), a ich kroki zdejmuje applySlangIntent.
+     *
+     * @param  array<string, mixed>  $intent
+     */
+    private function brandKey(array $intent): string
+    {
+        return $this->compactLex(trim((string) ($this->normalizeIntent($intent)['manufacturer'] ?? '')));
     }
 
     /**
@@ -1337,6 +1364,8 @@ final class ProductAiSearchService
      */
     private function withoutBrandTokens(string $step, array $brands): string
     {
+        // Najpierw dłuższy zapis: „MAPA” wycięte z „Mapa Professional” zostawiłoby „Professional” jako krok.
+        usort($brands, static fn (string $a, string $b): int => mb_strlen($b) <=> mb_strlen($a));
         foreach ($brands as $brand) {
             $words = array_values(array_filter(
                 preg_split('/[\s\-]+/u', trim($brand)) ?: [],
@@ -1387,6 +1416,9 @@ final class ProductAiSearchService
         $intent['constraints'] = $this->sanitizeConstraints(
             $modelConstraints !== [] ? $modelConstraints : $this->fallbackConstraints($intent['needed'])
         );
+        // Warunki podmieniamy po parseIntent, więc jego stripAbsentManufacturerNoise ich nie dotknął: marka spoza katalogu
+        // (także zmyślona) nie może wejść do promptu oceny jako warunek (runda 6 przeglądu, 25.09.2026).
+        $intent['constraints'] = $this->stripAbsentManufacturerNoise($intent)['constraints'];
 
         return $intent;
     }
