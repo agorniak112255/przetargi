@@ -559,6 +559,117 @@ final class ProductAiSearchRewriteAfterEmptyRankTest extends TestCase
         $this->assertSame($waveCalls, $singleCalls);
     }
 
+    /** @return iterable<string, array{0: string, 1: bool}> */
+    public static function switchedBrands(): iterable
+    {
+        yield 'MAPA, kroki []' => ['MAPA', true];
+        yield 'MAPA, bez klucza kroków' => ['MAPA', false];
+        yield '3M, kroki []' => ['3M', true];
+        yield '3M, bez klucza kroków' => ['3M', false];
+    }
+
+    /**
+     * R1: wymaganie wymienia dwie marki z katalogu, szukano z TEST, przepisanie przechodzi na drugą i nie podaje kroków.
+     * Odziedziczone kroki zachowywały krok „TEST”, a kaskada zdejmuje kroki od końca — wracała do kart starej marki.
+     */
+    #[DataProvider('switchedBrands')]
+    public function test_rewrite_switching_catalog_brand_drops_old_brand_step_in_both_paths(string $newBrand, bool $emptySteps): void
+    {
+        $this->card('RKW-'.$newBrand, $newBrand);
+        $understood = [...$this->glovesIntent(), 'manufacturer' => 'TEST'];
+        $rewrite = [...$this->glovesIntent(), 'manufacturer' => $newBrand];
+        if ($emptySteps) {
+            $rewrite['search_steps'] = [];
+        } else {
+            unset($rewrite['search_steps']);
+        }
+        [$wave, , $single] = $this->bothPaths('Rękawice powlekane nitrylem TEST lub '.$newBrand.' EN 388 do prac montażowych', [
+            'rewrite' => static fn (): array => $rewrite,
+            'understand' => $understood,
+            'firstRank' => [...$understood, 'matches' => []],
+        ]);
+
+        foreach (['fala' => $wave, 'pojedyncze' => $single] as $path => $result) {
+            $steps = $this->lastCascadeSteps($result);
+            $this->assertNotSame([], $steps, $path.': fixture — ponowne szukanie przeszło przez kaskadę');
+            $this->assertSame(mb_strtolower($newBrand), mb_strtolower((string) end($steps)), $path.': ostatni krok to nowa marka');
+            foreach ($steps as $step) {
+                $this->assertStringNotContainsStringIgnoringCase('TEST', $step, $path.': krok starej marki został w kaskadzie');
+            }
+        }
+    }
+
+    /** @return iterable<string, array{0: string, 1: string|null, 2: list<string>, 3: string|null}> */
+    public static function uselessRewriteSteps(): iterable
+    {
+        yield 'tylko słaby krok' => [self::GLOVES, null, ['ochrona rąk'], null];
+        // marka zmyślona w przepisaniu (pole producenta i jedyny krok) — bez pola producenta byłby to zwykły nowy krok
+        yield 'tylko zmyślona marka' => [self::GLOVES, null, ['Qqxinvented'], 'Qqxinvented'];
+        yield 'tylko marka spoza katalogu' => [self::ABSENT_BRAND, 'Zzqbrand', ['Zzqbrand'], 'Zzqbrand'];
+        yield 'marka spoza katalogu i słaby krok' => [self::ABSENT_BRAND, 'Zzqbrand', ['Zzqbrand', 'ochrona rąk'], 'Zzqbrand'];
+        // jeden krok: słabe słowa + marka — sam w sobie nie jest słaby, ale bez marki zostaje słaba reszta
+        yield 'słaby krok złączony z marką' => [self::ABSENT_BRAND, 'Zzqbrand', ['ochrona rąk Zzqbrand'], 'Zzqbrand'];
+    }
+
+    public function test_brand_is_cut_from_step_as_whole_word(): void
+    {
+        $cut = fn (string $step, array $brands): string => (new \ReflectionMethod(ProductAiSearchService::class, 'withoutBrandTokens'))
+            ->invoke($this->app->make(ProductAiSearchService::class), $step, $brands);
+
+        $this->assertSame('Rękawice', $cut('Rękawice 3M', ['3M']));
+        $this->assertSame('rękawice', $cut('ANSELL rękawice', ['Ansell']), 'bez względu na wielkość liter');
+        $this->assertSame('Rękawice', $cut('Rękawice Portwest-Pro', ['Portwest Pro']), 'marka wielowyrazowa, łącznik albo spacja');
+        $this->assertSame('Kombinezon 13M', $cut('Kombinezon 13M', ['3M']), 'marka nie jest wycinana ze środka słowa');
+        $this->assertSame('Rękawice Ansellite', $cut('Rękawice Ansellite', ['Ansell']));
+    }
+
+    /**
+     * R2: kroki przepisania, które sanitizer usuwa w całości (słabe, sama marka), to „przepisanie bez kroków” — kroki
+     * szukania zostają. Decyzja na surowej liście brała je za nowe kroki, a kroki domyślne wyglądały na zmianę.
+     *
+     * @param  list<string>  $steps
+     */
+    #[DataProvider('uselessRewriteSteps')]
+    public function test_rewrite_with_only_useless_steps_keeps_searched_steps_in_both_paths(string $query, ?string $brand, array $steps, ?string $rewriteBrand): void
+    {
+        $understood = [...$this->glovesIntent(), 'manufacturer' => $brand];
+        [, $waveCalls, , $singleCalls] = $this->bothPaths($query, [
+            'rewrite' => static fn (): array => [...$understood, 'manufacturer' => $rewriteBrand, 'search_steps' => $steps],
+            'understand' => $understood,
+            'firstRank' => [...$understood, 'matches' => []],
+        ]);
+
+        $this->assertSame(['rank' => 1, 'rewrite' => 1], $waveCalls, 'kroki bez treści wzięte za zmianę — ta sama pula drugi raz do oceny');
+        $this->assertSame($waveCalls, $singleCalls);
+    }
+
+    public function test_compound_brand_step_is_kept_when_rewrite_omits_steps_in_both_paths(): void
+    {
+        // Krok „Rękawice TEST” (rzeczownik z marką) przy tej samej marce i przepisaniu bez kroków — bez zmian.
+        $understood = [...$this->glovesIntent(), 'manufacturer' => 'TEST', 'search_steps' => ['Rękawice TEST', 'powlekane nitrylem']];
+        [, $waveCalls, , $singleCalls] = $this->bothPaths('Rękawice powlekane nitrylem TEST EN 388 do prac montażowych', [
+            'rewrite' => static fn (): array => [...$understood, 'search_steps' => []],
+            'understand' => $understood,
+            'firstRank' => [...$understood, 'matches' => []],
+        ]);
+
+        $this->assertSame(['rank' => 1, 'rewrite' => 1], $waveCalls);
+        $this->assertSame($waveCalls, $singleCalls);
+    }
+
+    public function test_step_of_brand_zeroed_by_reconcile_is_not_a_change_in_both_paths(): void
+    {
+        // Przepisanie podaje markę z katalogu, której nie ma w treści wymagania (reconcile ją zeruje), i te same kroki
+        // plus ta marka. Krok marki zostawał zwykłym krokiem i wyglądał na zmianę szukania.
+        $this->card('RKW-MAPA', 'MAPA');
+        [, $waveCalls, , $singleCalls] = $this->bothPaths(self::GLOVES, [
+            'rewrite' => fn (): array => [...$this->glovesIntent(), 'manufacturer' => 'MAPA', 'search_steps' => ['rękawice', 'powlekane nitrylem', 'MAPA']],
+        ]);
+
+        $this->assertSame(['rank' => 1, 'rewrite' => 1], $waveCalls, 'krok marki spoza wymagania wzięty za zmianę szukania');
+        $this->assertSame($waveCalls, $singleCalls);
+    }
+
     public function test_ranked_state_after_second_rank_in_both_paths(): void
     {
         // C3: druga ocena wskazała kartę poniżej progu — model ocenił (ranked), choć lista jest pusta.
@@ -591,6 +702,34 @@ final class ProductAiSearchRewriteAfterEmptyRankTest extends TestCase
         $single = $this->app->make(AiProductSearch::class)->find($query, 10, AiTask::ProductSearch);
 
         return [$wave, $waveCalls, $single, $this->calls];
+    }
+
+    /**
+     * Kroki ostatniego przejścia kaskady katalogu (po przepisaniu — ponownego szukania).
+     *
+     * @param  array<string, mixed>  $result
+     * @return list<string>
+     */
+    private function lastCascadeSteps(array $result): array
+    {
+        $cascade = is_array($result['trace']['cascade'] ?? null) ? $result['trace']['cascade'] : [];
+        $last = $cascade === [] ? [] : $cascade[array_key_last($cascade)];
+
+        return array_values(array_map('strval', (array) ($last['steps'] ?? [])));
+    }
+
+    private function card(string $sku, string $manufacturer): void
+    {
+        Product::query()->create([
+            'sku' => $sku,
+            'name' => 'Rękawice powlekane nitrylem',
+            'manufacturer' => $manufacturer,
+            'description' => null,
+            'catalog_price_net' => 20,
+            'purchase_price' => 12,
+            'stock' => 10,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
     }
 
     /** @return array<string, mixed> */

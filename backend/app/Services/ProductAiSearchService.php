@@ -1240,28 +1240,116 @@ final class ProductAiSearchService
         $inheritsBrand = ($rewritten['manufacturer'] ?? null) === null
             && ($requested === '' || ! $this->nameAppearsInQuery($query, $requested));
         if ($inheritsBrand) {
-            if ($rewritten['manufacturer_absent_in_catalog'] ?? false) {
-                // Zmyślona marka spoza katalogu: parseIntent dołożył z nią krok i frazy — zdejmujemy je, zanim
-                // przyjdzie marka szukanej intencji, inaczej wyglądałyby na zmianę szukania.
-                $rewritten = [...$rewritten, ...$this->stripAbsentManufacturerNoise($this->dropAbsentBrandSteps($rewritten))];
-            }
+            // Frazy zmyślonej marki zdjął już parseIntent (stripAbsentManufacturerNoise), jej krok — rewriteSearchSteps.
             $rewritten['manufacturer'] = $base['manufacturer'];
             $rewritten['manufacturer_requested'] = $base['manufacturer_requested'];
             $rewritten['manufacturer_absent_in_catalog'] = $base['manufacturer_absent_in_catalog'];
         }
-        // Decyzja na surowej odpowiedzi: parseIntent (sanitizeSearchSteps) dokłada krok marki, więc przy marce lista
-        // kroków po nim nigdy nie jest pusta. Kroki szukania przechodzą ten sam sanitizer z marką przepisania.
-        if ($this->stringStepList($raw['search_steps'] ?? $raw['steps'] ?? []) === []) {
-            $rewritten['search_steps'] = $this->sanitizeSearchSteps($base['search_steps'], $rewritten);
-        }
-        if ($inheritsBrand && $base['manufacturer_absent_in_catalog']) {
-            $rewritten = [
-                ...$rewritten,
-                ...$this->stripAbsentManufacturerNoise($this->dropAbsentBrandSteps($rewritten)),
-            ];
-        }
+        // Frazy i kroki odziedziczonej marki spoza katalogu zdejmuje applySlangIntent w porównaniu i w prepareSearch.
+        $rewritten['search_steps'] = $this->rewriteSearchSteps($raw, $rewritten, $base);
 
         return $this->rewriteChangesSearch($query, $searched, $rewritten) ? $rewritten : null;
+    }
+
+    /**
+     * Kroki szukania po przepisaniu. Kroki modelu liczą się tylko wtedy, gdy po zdjęciu marek i słabych słów coś z nich
+     * zostaje — inaczej (brak, pusta lista, same słabe słowa, sama marka) zostają kroki szukania, jak w mergeRetrieveIntent.
+     * Decyzja na krokach po parseIntent nie działała (sanitizer dokleja krok marki, więc przy marce lista nigdy nie była
+     * pusta), a na surowej liście — brała za nowe kroki te, które sanitizer w całości odrzuca. Z wybranych kroków wycinana
+     * jest tylko marka obca: stara po zmianie marki (kaskada zdejmuje kroki od końca i wracała do jej kart), zmyślona albo
+     * wyzerowana przez reconcileManufacturerIntent. Krok z rzeczownikiem zostaje („Rękawice Ansell” → „Rękawice”), a na
+     * koniec sanitizer dokleja markę obowiązującą.
+     *
+     * @param  array<string, mixed>  $raw  odpowiedź modelu na przepisanie
+     * @param  array<string, mixed>  $rewritten  intencja przepisania po dziedziczeniu marki
+     * @param  array<string, mixed>  $base  intencja szukania (po normalizeIntent)
+     * @return list<string>
+     */
+    private function rewriteSearchSteps(array $raw, array $rewritten, array $base): array
+    {
+        $seen = [];
+        // Surowa marka z odpowiedzi: po dziedziczeniu albo po reconcileManufacturerIntent (marka spoza treści wymagania)
+        // nie ma jej już w polach intencji, a jej krok został.
+        $rawBrand = is_string($raw['manufacturer'] ?? null) ? trim($raw['manufacturer']) : '';
+        foreach ([$rawBrand, ...$this->intentBrands($rewritten), ...$this->intentBrands($base)] as $brand) {
+            $key = $this->compactLex($brand);
+            if ($key !== '' && ! isset($seen[$key])) {
+                $seen[$key] = $brand;
+            }
+        }
+        $effective = array_map(fn (string $brand): string => $this->compactLex($brand), $this->intentBrands($rewritten));
+        $foreign = [];
+        foreach ($seen as $key => $brand) {
+            if (! in_array($key, $effective, true)) {
+                $foreign[] = $brand;
+            }
+        }
+
+        $brandless = [...$rewritten, 'manufacturer' => null, 'manufacturer_requested' => null, 'manufacturer_absent_in_catalog' => false];
+        $useful = [];
+        foreach ($this->sanitizeSearchSteps($this->stringStepList($raw['search_steps'] ?? $raw['steps'] ?? []), $brandless) as $step) {
+            $rest = $this->withoutBrandTokens($step, array_values($seen));
+            if ($rest !== '' && ! $this->isWeakSearchStep($rest)) {
+                $useful[] = $rest;
+            }
+        }
+
+        $out = [];
+        foreach ($useful === [] ? $base['search_steps'] : $rewritten['search_steps'] as $step) {
+            $rest = $this->withoutBrandTokens($step, $foreign);
+            if ($rest === $step) {
+                $out[] = $step;
+
+                continue;
+            }
+            if ($rest !== '' && ! $this->isWeakSearchStep($rest) && ! $this->stepAlreadyListed($out, $rest)) {
+                $out[] = $rest;
+            }
+        }
+
+        return $this->sanitizeSearchSteps($out, $rewritten);
+    }
+
+    /**
+     * Niepuste nazwy marki intencji: producent z katalogu i marka z wymagania.
+     *
+     * @param  array<string, mixed>  $intent
+     * @return list<string>
+     */
+    private function intentBrands(array $intent): array
+    {
+        $out = [];
+        foreach ([$intent['manufacturer'] ?? null, $intent['manufacturer_requested'] ?? null] as $brand) {
+            $brand = is_string($brand) ? trim($brand) : '';
+            if ($brand !== '') {
+                $out[] = $brand;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Krok bez nazw marek: marka jako całe słowo (granice liter i cyfr), także wielowyrazowa i krótka („3M”) — wycina
+     * ją z kroku złożonego („Rękawice 3M” → „Rękawice”), nie trafia w środek słowa („13M”).
+     *
+     * @param  list<string>  $brands
+     */
+    private function withoutBrandTokens(string $step, array $brands): string
+    {
+        foreach ($brands as $brand) {
+            $words = array_values(array_filter(
+                preg_split('/[\s\-]+/u', trim($brand)) ?: [],
+                static fn (string $word): bool => $word !== '',
+            ));
+            if ($words === []) {
+                continue;
+            }
+            $body = implode('[\s\-]*', array_map(static fn (string $word): string => preg_quote($word, '/'), $words));
+            $step = (string) preg_replace('/(?<![\p{L}\p{N}])'.$body.'(?![\p{L}\p{N}])/iu', ' ', $step);
+        }
+
+        return trim((string) preg_replace('/\s+/u', ' ', $step));
     }
 
     /**
