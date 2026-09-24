@@ -303,10 +303,12 @@ final class ClientInquiryService
      * z chwili analizy bywa zły: model nie odpowiadał albo wyszukiwarka miała błąd
      * (24.09.2026, zapytania #64, #65, #67 z „brak w katalogu” dla wyrobów z katalogu).
      *
-     * Wymieniamy tylko `matches` i `substitutes`; pozycje, karty, wyroby dobrane
-     * ręcznie i pytania zostają. Decyzje handlowca też zostają — zmienia się tylko
-     * „do sprawdzenia” przy pozycji, która przed ponownym szukaniem nie miała żadnego
-     * kandydata: tam nikt niczego nie wybierał, więc wybór liczymy od nowa.
+     * Wymieniamy `matches` i `substitutes`; karty, wyroby dobrane ręcznie i pytania
+     * zostają. Linki z maila liczymy od nowa (relinked()): zapytania sprzed rozpoznawania
+     * linków mają adres strony we frazie i nie mają kart z linku (#69). Decyzje handlowca
+     * zostają — zmienia się tylko „do sprawdzenia” przy pozycji, która przed ponownym
+     * szukaniem nie miała żadnego kandydata: tam nikt niczego nie wybierał, więc wybór
+     * liczymy od nowa.
      *
      * Bez `$apply` nic nie zapisujemy — ale wyszukiwarka i model są pytane naprawdę.
      *
@@ -314,7 +316,7 @@ final class ClientInquiryService
      *     inquiry_id: int,
      *     skipped: string|null,
      *     warnings: list<string>,
-     *     items: list<array{id: string, before: array{sku: string, name: string, score: int}|null, after: array{sku: string, name: string, score: int}|null, answer_before: string|null, answer_after: string|null}>
+     *     items: list<array{id: string, before: array{sku: string, name: string, score: int, link: bool}|null, after: array{sku: string, name: string, score: int, link: bool}|null, answer_before: string|null, answer_after: string|null}>
      * }
      */
     public function rematch(ClientInquiry $inquiry, bool $apply): array
@@ -327,18 +329,27 @@ final class ClientInquiryService
             return $report;
         }
 
+        // Pozycje i ich frazy zapisuje tylko analiza, więc wynik z tego odczytu obowiązuje
+        // też w transakcji niżej.
+        $relinked = $this->relinked($inquiry);
+        if ($relinked['queries'] === []) {
+            $report['skipped'] = 'brak fraz wyszukiwania po wycięciu adresów stron';
+
+            return $report;
+        }
+
         // Szukanie trwa (model ocenia karty), więc idzie przed jakimkolwiek zapisem.
-        $matches = $this->matchProducts($this->stringList($inquiry->analysis['product_queries'] ?? null));
+        $matches = $this->matchProducts($relinked['queries']);
         $substitutes = $this->loadSubstitutes($matches);
         $rematchedAt = CarbonImmutable::now()->toIso8601String();
 
         if (! $apply) {
-            $plan = $this->rematchPlan($inquiry, $matches, $substitutes, $rematchedAt);
+            $plan = $this->rematchPlan($inquiry, $relinked['analysis'], $matches, $substitutes, $rematchedAt);
 
             return array_merge($report, ['warnings' => $plan['warnings'], 'items' => $plan['items']]);
         }
 
-        return DB::transaction(function () use ($inquiry, $matches, $substitutes, $rematchedAt, $report): array {
+        return DB::transaction(function () use ($inquiry, $relinked, $matches, $substitutes, $rematchedAt, $report): array {
             // Handlowiec mógł w tym czasie wysłać list albo coś wybrać — decyduje stan z bazy.
             $fresh = ClientInquiry::query()->lockForUpdate()->find($inquiry->id);
             if ($fresh === null) {
@@ -353,7 +364,7 @@ final class ClientInquiryService
                 return $report;
             }
 
-            $plan = $this->rematchPlan($fresh, $matches, $substitutes, $rematchedAt);
+            $plan = $this->rematchPlan($fresh, $relinked['analysis'], $matches, $substitutes, $rematchedAt);
             $fresh->forceFill(['analysis' => $plan['analysis'], 'answers' => $plan['answers']])->save();
             // Ta sama droga co zmiana wyboru na ekranie: brakujące odpowiedzi dostają
             // wybór domyślny, dopisek i warunki oferty zostają.
@@ -395,24 +406,86 @@ final class ClientInquiryService
     }
 
     /**
+     * Linki z maila przy zapisanych pozycjach, liczone tak jak w analyze(): karty spod adresu
+     * (`link_candidates`), fraza pozycji bez adresu i z nazwą karty, `product_queries` bez adresów.
+     * Zapytania sprzed rozpoznawania linków (#69) szukały frazą z adresem strony, a jego słowa
+     * pasowały do całej rodziny (ROLEX 1 po 99%, klient wskazał ROLEX 5).
+     *
+     * Frazy przeliczamy tylko wtedy, gdy zmieniła się pozycja albo któraś fraza ma adres —
+     * pozostałe zapytania szukają dokładnie tym, co zapisała analiza.
+     *
+     * @return array{queries: list<string>, analysis: array<string, mixed>}
+     */
+    private function relinked(ClientInquiry $inquiry): array
+    {
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+        $stored = $this->stringList($analysis['product_queries'] ?? null);
+        $items = array_values(array_filter(
+            is_array($analysis['line_items'] ?? null) ? $analysis['line_items'] : [],
+            'is_array',
+        ));
+        // analyze() zapisuje przycięty mail tylko wtedy, gdy różni się od całego
+        $body = is_string($analysis['analyzed_body'] ?? null) ? $analysis['analyzed_body'] : (string) $inquiry->source_body;
+        $linked = app(InquiryProductLinks::class)->attach($items, $body);
+
+        $patch = [];
+        if ($linked['products'] !== [] || array_key_exists('link_candidates', $analysis)) {
+            $patch['link_candidates'] = $this->linkCandidates($linked['products']);
+        }
+        $withUrl = array_filter($stored, static fn (string $query): bool => InquiryLinks::extract($query) !== []);
+        if ($linked['items'] === $items && $withUrl === []) {
+            return ['queries' => $stored, 'analysis' => $patch];
+        }
+
+        // W zapisie stoją stare klucze wyszukiwania pozycji — zastępują je nowe z uniqueQueries() —
+        // i frazy modelu, które w analyze() idą bez adresów. Klucz równy frazie pozycji z modelu
+        // bywa też frazą modelu (model podaje te same), a jego grupa jest zapasem pozycji
+        // (groupsForItem), więc zostaje.
+        $itemKeys = [];
+        $itemQueries = [];
+        foreach ($items as $item) {
+            $key = $this->nullable($item['search_query'] ?? null) ?? $this->catalogSearchQuery(
+                (string) ($item['query'] ?? ''),
+                (string) ($item['quote'] ?? '')
+            );
+            $itemKeys[mb_strtolower(trim($key))] = true;
+            $itemQueries[mb_strtolower(trim((string) ($item['query'] ?? '')))] = true;
+        }
+        $modelQueries = [];
+        foreach ($stored as $query) {
+            $lower = mb_strtolower(trim($query));
+            if (! isset($itemKeys[$lower]) || isset($itemQueries[$lower])) {
+                $modelQueries[] = InquiryLinks::withoutUrls($query);
+            }
+        }
+        $queries = $this->uniqueQueries($linked['items'], $modelQueries);
+
+        return [
+            'queries' => $queries,
+            'analysis' => [...$patch, 'line_items' => $linked['items'], 'product_queries' => $queries],
+        ];
+    }
+
+    /**
      * Stan po ponownym szukaniu, liczony w pamięci: nowa analiza, odpowiedzi po zdjęciu
      * „do sprawdzenia” bez wyboru i raport pozycji. `answer_after` odtwarza to, co
      * zrobi compose() — brakującą odpowiedź zastępuje wybór domyślny.
      *
+     * @param  array<string, mixed>  $relinked  pola analizy przeliczone z linków (relinked())
      * @param  list<array{query: string, products: list<array<string, mixed>>}>  $matches
      * @param  array<int, list<array<string, mixed>>>  $substitutes
      * @return array{
      *     analysis: array<string, mixed>,
      *     answers: array<string, mixed>,
      *     warnings: list<string>,
-     *     items: list<array{id: string, before: array{sku: string, name: string, score: int}|null, after: array{sku: string, name: string, score: int}|null, answer_before: string|null, answer_after: string|null}>,
+     *     items: list<array{id: string, before: array{sku: string, name: string, score: int, link: bool}|null, after: array{sku: string, name: string, score: int, link: bool}|null, answer_before: string|null, answer_after: string|null}>,
      *     after_items: array<string, array{item: array<string, mixed>, candidates: list<array<string, mixed>>}>
      * }
      */
-    private function rematchPlan(ClientInquiry $inquiry, array $matches, array $substitutes, string $rematchedAt): array
+    private function rematchPlan(ClientInquiry $inquiry, array $relinked, array $matches, array $substitutes, string $rematchedAt): array
     {
         $old = is_array($inquiry->analysis) ? $inquiry->analysis : [];
-        $new = array_merge($old, [
+        $new = array_merge($old, $relinked, [
             'matches' => $matches,
             'substitutes' => $substitutes,
             // ślad audytowy: kiedy wynik szukania zastąpił ten z chwili analizy
@@ -422,13 +495,19 @@ final class ClientInquiryService
         $kept = $answers;
         $oldGroups = $this->matchGroups($old);
         $newGroups = $this->matchGroups($new);
+        // „Było” liczymy starą pozycją: jej stara fraza jest kluczem starej grupy wyników.
+        $oldItems = [];
+        foreach ($this->lineItemsOf($old) as $item) {
+            $oldItems[(string) $item['id']] = $item;
+        }
 
         $warnings = [];
         $rows = [];
         foreach ($this->lineItemsOf($new) as $item) {
             $itemId = (string) $item['id'];
             $key = 'product:'.$itemId;
-            $before = $this->candidatesForItem($oldGroups, $item, $old);
+            $oldItem = $oldItems[$itemId] ?? $item;
+            $before = $this->candidatesForItem($oldGroups, $oldItem, $old);
             $after = $this->candidatesForItem($newGroups, $item, $new);
             $saved = trim((string) ($answers[$key]['option_id'] ?? ''));
             // „Do sprawdzenia” przy pustej liście nie było wyborem — nie było z czego wybrać.
@@ -439,7 +518,14 @@ final class ClientInquiryService
                 && $this->candidateById($after, $saved) === null) {
                 $warnings[] = "{$itemId}: wybrany wyrób {$saved} nie jest już kandydatem — pozycja dostanie wybór domyślny.";
             }
-            $rows[$itemId] = ['item' => $item, 'before' => $before, 'after' => $after];
+            // Zapisany wybór zostaje, choć klient wskazał linkiem inną kartę (stare zapytania
+            // wybierały bez linków, #69) — decyzję zmienia handlowiec przy pozycji.
+            $chosen = $this->candidateById($after, $saved);
+            if (($after[0]['source'] ?? null) === 'link' && ($before[0]['source'] ?? null) !== 'link'
+                && $chosen !== null && ($chosen['source'] ?? null) !== 'link') {
+                $warnings[] = "{$itemId}: link z zapytania wskazuje {$after[0]['sku']}, a zapisany wybór {$saved} ({$chosen['sku']}) zostaje — zmień go przy pozycji.";
+            }
+            $rows[$itemId] = ['item' => $item, 'old_item' => $oldItem, 'before' => $before, 'after' => $after];
         }
 
         // Jak compose(): brakującą odpowiedź zastępuje domyślna z nowych kandydatów.
@@ -456,7 +542,7 @@ final class ClientInquiryService
                 'before' => $this->rematchTop($row['before']),
                 'after' => $this->rematchTop($row['after']),
                 // wybór widoczny na ekranie i w liście, nie surowy klucz z `answers`
-                'answer_before' => $this->chosenOptionFor($row['item'], $row['before'], $answers),
+                'answer_before' => $this->chosenOptionFor($row['old_item'], $row['before'], $answers),
                 'answer_after' => $this->chosenOptionFor($row['item'], $row['after'], $simulated),
             ];
             $afterItems[(string) $itemId] = ['item' => $row['item'], 'candidates' => $row['after']];
@@ -475,7 +561,7 @@ final class ClientInquiryService
      * Pierwszy kandydat pozycji tak, jak stoi na ekranie.
      *
      * @param  list<array<string, mixed>>  $candidates
-     * @return array{sku: string, name: string, score: int}|null
+     * @return array{sku: string, name: string, score: int, link: bool}|null
      */
     private function rematchTop(array $candidates): ?array
     {
@@ -488,6 +574,8 @@ final class ClientInquiryService
             'sku' => (string) ($top['sku'] ?? ''),
             'name' => (string) ($top['name'] ?? ''),
             'score' => (int) ($top['score'] ?? 0),
+            // karta spod adresu z maila nie ma oceny modelu — jej 0 to nie wynik
+            'link' => ($top['source'] ?? null) === 'link',
         ];
     }
 

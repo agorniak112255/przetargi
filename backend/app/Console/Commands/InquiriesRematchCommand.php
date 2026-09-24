@@ -70,7 +70,7 @@ final class InquiriesRematchCommand extends Command
     }
 
     /**
-     * @param  array{sku: string, name: string, score: int}|null  $candidate
+     * @param  array{sku: string, name: string, score: int, link: bool}|null  $candidate
      */
     private function candidateLabel(?array $candidate): string
     {
@@ -78,6 +78,7 @@ final class InquiriesRematchCommand extends Command
             return 'brak kandydata';
         }
 
-        return $candidate['sku'].' '.mb_substr($candidate['name'], 0, 40).' ('.$candidate['score'].')';
+        return $candidate['sku'].' '.mb_substr($candidate['name'], 0, 40)
+            .' ('.($candidate['link'] ? 'z linku' : $candidate['score']).')';
     }
 }
