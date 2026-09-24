@@ -2780,17 +2780,25 @@ final class ClientInquiryService
     /**
      * Cytat sumy, gdy zostaje zamiast rozmiarów: najdłuższy cytat grupy, który go zawiera —
      * wiersz razem z linią rozmiarów, żeby handlowiec widział rozbicie, jak stoi w mailu.
+     * Cytat rozmiaru bywa wierszem parsera z numerem pozycji („2. Rękawice…”) — bierzemy go
+     * od miejsca, w którym zaczyna się cytat sumy, inaczej numer wiersza szedł do listu
+     * (zapytanie #72: „Poz. 2 … 2. Rękawice ochronne…”).
      *
      * @param  list<array<string, mixed>>  $items
      * @param  list<int>  $sized
      */
     private function fullestQuote(array $items, int $total, array $sized): string
     {
-        $quote = (string) ($items[$total]['quote'] ?? '');
-        $own = $this->comparableQuote($quote);
+        $own = (string) ($items[$total]['quote'] ?? '');
+        $quote = $own;
         foreach ($sized as $s) {
             $candidate = (string) ($items[$s]['quote'] ?? '');
-            if (mb_strlen($candidate) > mb_strlen($quote) && str_contains($this->comparableQuote($candidate), $own)) {
+            $at = $own === '' ? false : mb_strpos($candidate, $own);
+            if ($at !== false) {
+                $candidate = mb_substr($candidate, $at);
+            }
+            if (mb_strlen($candidate) > mb_strlen($quote)
+                && str_contains($this->comparableQuote($candidate), $this->comparableQuote($own))) {
                 $quote = $candidate;
             }
         }
