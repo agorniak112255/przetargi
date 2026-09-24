@@ -66,6 +66,46 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertSame(1, $result['model_failed']);
     }
 
+    /**
+     * 24.09.2026: ocena pozycji padła (seria HTTP 429), a fala budowała z pustej odpowiedzi intencję z całym
+     * wymaganiem jako „szukany produkt”, szukała kart od nowa i pytała model drugi raz. Karta z tej drugiej
+     * oceny trafiała do pozycji, choć stan mówił „model nie odpowiedział”.
+     */
+    public function test_card_from_second_rank_after_failed_rank_is_not_saved(): void
+    {
+        $gloveId = (int) $this->glove('RNITZ-M')->id;
+        $ranks = 0;
+        $this->stubModel(static function (array $messages) use ($gloveId, &$ranks): array {
+            $kind = FakeSearchLlm::kind($messages);
+            if ($kind === FakeSearchLlm::KIND_UNDERSTAND) {
+                return [
+                    'needed' => 'rękawice nitrylowe ze ściągaczem',
+                    'search_steps' => ['rękawice', 'nitrylowe', 'ze ściągaczem'],
+                    'manufacturer' => null,
+                    'model_name' => null,
+                    'size_note' => null,
+                    'search_phrases' => ['rękawice nitrylowe', 'rękawice robocze ze ściągaczem'],
+                    'constraints' => ['dzianina bawełniana'],
+                ];
+            }
+            if ($kind !== FakeSearchLlm::KIND_RANK) {
+                return [];
+            }
+
+            // pierwsza ocena padła (pusta tablica z klienta), każda kolejna „odpowiada”
+            return ++$ranks === 1 ? [] : ['matches' => [['id' => $gloveId, 'score' => 95, 'reason' => 'ocena puli z intencji zbudowanej z awarii']]];
+        });
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+
+        $result = app(ProductMatchService::class)->matchTender($tender, true);
+        $item->refresh();
+
+        $this->assertNull($item->main_product_id, 'karta z drugiej oceny trafiła do pozycji, której ocena padła');
+        $this->assertSame('model_unavailable', $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertSame(1, $ranks, 'po awarii oceny fala zapytała model drugi raz');
+        $this->assertSame(1, $result['model_failed']);
+    }
+
     public function test_single_item_waits_when_model_did_not_answer(): void
     {
         // Pojedyncza pozycja idzie przez search(), nie przez falę. Ta ścieżka nie zwracała

@@ -467,7 +467,12 @@ final class ProductAiSearchService
             $rankProviderByIndex[$i] = $rankProviders[$pos] ?? null;
             // Wracamy do śladu tego wymagania, żeby trafienia modelu dopisały się do właściwej pozycji.
             $this->trace = $this->tracesByIndex[$i] ?? self::EMPTY_TRACE;
-            $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
+            // Pusta tablica = wywołanie padło, nie odpowiedź modelu. Dotąd parseIntent([]) podmieniał intencję
+            // z kroku „zrozum” na cały akapit SIWZ, a przepisanie szukało z niej kart od nowa i pytało model
+            // drugi raz — przy serii HTTP 429 karta z tej oceny trafiała do przetargu (24.09.2026).
+            if ($raw !== []) {
+                $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
+            }
             $retrieveIntent = $this->mergeRetrieveIntent($intents[$i], $retrieveIntents[$i]);
             $ranked = $this->rowsFromLlmMatches(
                 $clean[$i],
@@ -514,7 +519,7 @@ final class ProductAiSearchService
                     : self::MODEL_STATE_EMPTY);
             $this->tracesByIndex[$i] = $this->trace;
         }
-        $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $limit, $withExternalHint, $task, $maxConcurrent, $report);
+        $this->rewriteEmptySearchMany($clean, $done, $intents, $retrieveIntents, $modelStates, $limit, $withExternalHint, $task, $maxConcurrent, $report);
         foreach ($modelStates as $i => $state) {
             // Po przepisaniu zapytania model mógł jednak coś ocenić — ale wiersze zapasu (reguła, lista katalogowa)
             // to nie ocena modelu; dotąd dawały stan „ranked” i pomiar nie widział pustych odpowiedzi (błąd E).
@@ -1269,12 +1274,14 @@ final class ProductAiSearchService
      * @param  array<int, array<string, mixed>>  $done
      * @param  array<int, array{needed: string, search_phrases: list<string>, constraints: list<string>}>  $intents
      * @param  array<int, array{needed: string, search_phrases: list<string>, constraints: list<string>}>  $retrieveIntents
+     * @param  array<int, string>  $modelStates  stan oceny pozycji; ocena po przepisaniu, która padła, ustawia „unavailable”
      */
     private function rewriteEmptySearchMany(
         array $clean,
         array &$done,
         array &$intents,
         array $retrieveIntents,
+        array &$modelStates,
         int $limit,
         bool $withExternalHint,
         AiTask $task,
@@ -1283,7 +1290,9 @@ final class ProductAiSearchService
     ): void {
         $empty = [];
         foreach ($done as $i => $row) {
-            if (($row['products'] ?? []) === []) {
+            // Pusta pozycja po awarii oceny to nie „nic nie znaleziono” — przepisanie zapytania pytałoby model
+            // o nową pulę tuż po tym, jak nie odpowiedział. Pozycja czeka na ponowne dopasowanie.
+            if (($row['products'] ?? []) === [] && ($modelStates[$i] ?? null) !== self::MODEL_STATE_UNAVAILABLE) {
                 $empty[] = $i;
             }
         }
@@ -1380,7 +1389,12 @@ final class ProductAiSearchService
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
             $this->trace = $this->tracesByIndex[$i] ?? self::EMPTY_TRACE;
-            $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
+            if ($raw !== []) {
+                $intents[$i] = $this->withCatalogAliases($this->parseIntent($raw, $clean[$i]), $clean[$i]);
+            } else {
+                // Ocena po przepisaniu padła — pozycja ma stan awarii, nie „model nic nie znalazł”.
+                $modelStates[$i] = self::MODEL_STATE_UNAVAILABLE;
+            }
             $retrieveIntent = $this->mergeRetrieveIntent($intents[$i], $retrieveIntents[$i] ?? $intents[$i]);
             $ranked = $this->rowsFromLlmMatches(
                 $clean[$i],
