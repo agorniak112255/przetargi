@@ -19,6 +19,7 @@ use App\Support\InquiryRequirements;
 use App\Support\InquirySignature;
 use App\Support\OfferPricing;
 use App\Support\OfferProductText;
+use App\Support\OfferTermText;
 use Carbon\CarbonImmutable;
 use RuntimeException;
 use Throwable;
@@ -3061,7 +3062,11 @@ final class ClientInquiryService
             '',
             $this->offerPositionBlocks($inquiry, $answers, $priceMode, $margin),
         ];
-        $terms = $this->termsOf($inquiry);
+        // Jednostka dla samej liczby („7” → „7 dni”) — ta sama w tekście i w tabeli.
+        $terms = [];
+        foreach ($this->termsOf($inquiry) as $key => $value) {
+            $terms[$key] = OfferTermText::forLetter($key, $value);
+        }
         if ($terms !== []) {
             // Odpowiedź na pytania, które klient zadał wprost — pod pozycjami, przed dopiskiem.
             $parts[] = '';

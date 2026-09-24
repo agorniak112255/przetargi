@@ -1175,7 +1175,8 @@ export function InquiryReply() {
               ))}
             </div>
             <p className="mt-1 text-[11px] text-slate-500">
-              Puste pola nie trafiają do listu — klient zobaczy tylko to, co wpiszesz.
+              Puste pola nie trafiają do listu. Sama liczba dostaje w liście jednostkę (7 → „7 dni”,
+              20 → „20,00 zł netto”); tekst idzie tak, jak go wpiszesz.
             </p>
             {inquiry.global_cards.length > 0 && (
               <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">

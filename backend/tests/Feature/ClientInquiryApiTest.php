@@ -1265,6 +1265,21 @@ final class ClientInquiryApiTest extends TestCase
         $this->postJson("/api/inquiries/{$inquiry->id}/compose", ['answers' => []])
             ->assertOk()
             ->assertJsonPath('terms.lead_time', '3 dni robocze od zamówienia');
+
+        // sama liczba dostaje w liście jednostkę pola, w formularzu zostaje liczbą
+        $bare = $this->postJson("/api/inquiries/{$inquiry->id}/compose", [
+            'answers' => [],
+            'terms' => ['lead_time' => '3', 'delivery' => '22', 'payment' => '3', 'validity' => '12'],
+        ])->assertOk()
+            ->assertJsonPath('terms.lead_time', '3')
+            ->assertJsonPath('terms.delivery', '22');
+        $this->assertStringContainsString(
+            "Warunki:\nTermin realizacji: 3 dni\nKoszt dostawy: 22,00 zł netto\nPłatność: 3 dni\nWażność oferty: 12 dni",
+            (string) $bare->json('reply_body'),
+        );
+        $bareHtml = (string) $bare->json('reply_html');
+        $this->assertStringContainsString('22,00 zł netto', $bareHtml);
+        $this->assertStringContainsString('12 dni', $bareHtml);
     }
 
     public function test_other_user_cannot_edit_or_mark_inquiry(): void
