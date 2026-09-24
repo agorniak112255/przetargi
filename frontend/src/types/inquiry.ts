@@ -83,6 +83,18 @@ export type InquiryFlag =
   | 'brand_not_in_catalog'
   | 'size_mismatch'
   | 'withdrawn'
+  | 'size_breakdown_mismatch'
+
+/**
+ * Rozmiary i ilości z cytatu pozycji-sumy („432 pary Rozmiar: 8-108par,9-108par,10-216par”) — słowa klienta,
+ * nie potwierdzenie z karty. `matches_qty` null = pozycja bez ilości do porównania.
+ */
+export type InquirySizeBreakdown = {
+  rows: { size: string; qty: string; unit: string }[]
+  /** Ilość klienta, gdy rozmiary się do niej sumują; inaczej suma rozmiarów. */
+  total_qty: string
+  matches_qty: boolean | null
+}
 
 /**
  * Warunek szczególny z wiersza klienta („w szczególności na kwas siarkowy 96%”).
@@ -108,6 +120,8 @@ export type InquiryItem = {
   brand_not_in_catalog?: string | null
   /** Rozmiar z nazwy wybranej karty, gdy inny niż `size` z zapytania; null = zgodny albo nie do stwierdzenia. */
   size_mismatch?: string | null
+  /** Rozbicie pozycji-sumy na rozmiary z zapytania; null = pozycja bez takiego rozbicia. */
+  size_breakdown?: InquirySizeBreakdown | null
   /** Fraza, którą pozycja szukała w katalogu — startowe zapytanie ręcznego wyszukiwania. */
   query: string | null
   answer_key: string

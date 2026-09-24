@@ -1201,6 +1201,15 @@ final class ClientInquiryService
                     $confidence = 'medium';
                 }
             }
+            $breakdown = $this->sizeBreakdownOf($item);
+            if ($breakdown !== null && $breakdown['matches_qty'] === false) {
+                // Rozmiary z maila nie sumują się do ilości pozycji: list liczy wartość z rozmiarów,
+                // a która liczba jest prawdziwa, wie dopiero klient — handlowiec ma to zobaczyć.
+                $flags[] = 'size_breakdown_mismatch';
+                if ($confidence === 'high') {
+                    $confidence = 'medium';
+                }
+            }
             $manualPrice = $this->manualPriceFor($item, $product, $answers);
             if ($product !== null && $priceMode !== 'none' && $manualPrice === null
                 && $this->letterPrice($product, $priceMode, $margin) === null) {
@@ -1266,6 +1275,8 @@ final class ClientInquiryService
                 'brand_not_in_catalog' => $absentBrand,
                 // Rozmiar z nazwy wybranej karty, gdy inny niż w zapytaniu; null = zgodny albo nie do stwierdzenia.
                 'size_mismatch' => $cardSize,
+                // Rozmiary i ilości z cytatu pozycji-sumy (słowa klienta); null = pozycja bez takiego rozbicia.
+                'size_breakdown' => $breakdown,
                 // Fraza, którą ta pozycja szukała w katalogu — podpowiedź dla
                 // ręcznego wyszukiwania przy pozycji, nie nowe źródło danych.
                 'query' => $this->nullable($item['search_query'] ?? null)
@@ -3201,6 +3212,51 @@ final class ClientInquiryService
         return $out;
     }
 
+    /**
+     * Rozbicie pozycji-sumy na rozmiary z cytatu klienta („432 pary Rozmiar: 8-108par,9-108par,10-216par”).
+     * Tylko pozycja bez własnego rozmiaru i co najmniej dwie pary w jednej jednostce — par i kartonów
+     * nie dodajemy. Rozmiary i ilości to słowa klienta, nie potwierdzenie z karty.
+     *
+     * `matches_qty`: czy pary sumują się do ilości pozycji; null, gdy pozycja nie ma ilości do porównania.
+     * `total_qty`: ilość klienta, gdy suma się zgadza — inaczej suma par w ich jednostce.
+     *
+     * @param  array<string, mixed>  $item
+     * @return array{rows: list<array{size: string, qty: string, unit: string}>, total_qty: string, matches_qty: bool|null}|null
+     */
+    private function sizeBreakdownOf(array $item): ?array
+    {
+        if ($this->nullable($item['size'] ?? null) !== null) {
+            return null;
+        }
+        $pairs = $this->sizeBreakdownPairs((string) ($item['quote'] ?? ''));
+        if (count($pairs) < 2) {
+            return null;
+        }
+        $unit = $this->unitKind($pairs[0]['unit']);
+        $sum = 0.0;
+        foreach ($pairs as $pair) {
+            if ($this->unitKind($pair['unit']) !== $unit) {
+                return null;
+            }
+            $sum += (float) $pair['qty'];
+        }
+
+        $qu = $this->qtyUnit($item);
+        $itemQty = $this->numericQty($qu['qty']);
+        // ilość bez jednostki („432”) porównujemy samą liczbą — jednostkę podają pary
+        $matches = $itemQty === null
+            ? null
+            : ($qu['unit'] === null || $this->unitKind($qu['unit']) === $unit) && abs($sum - $itemQty) < 0.001;
+
+        return [
+            'rows' => $pairs,
+            'total_qty' => $matches === true && $qu['unit'] !== null
+                ? $qu['qty'].' '.$qu['unit']
+                : $this->formatQty((string) $sum).' '.$pairs[0]['unit'],
+            'matches_qty' => $matches,
+        ];
+    }
+
     /** Czy taka liczba stoi w cytacie jako osobny zapis (a nie jako część innej liczby). */
     private function quoteHasNumber(string $quote, string $digits): bool
     {
@@ -4611,6 +4667,7 @@ final class ClientInquiryService
         // z zapytania — krócej, ale prawdziwie, bez dopisywania czegokolwiek.
         $fallback = $quote === '' ? null : mb_substr($quote, 0, 200);
 
+        $facts = $this->offerFacts($n, $item, $product, $priceMode, $margin, $tone, $manualPln);
         $answer = $this->productLines(
             'Produkt',
             $product,
@@ -4622,6 +4679,10 @@ final class ClientInquiryService
             '',
             $manualPln,
         );
+        if ($answer !== []) {
+            // bez opisu wyrobu (szablon „bez SKU”) nie ma pod czym wypisać rozmiarów
+            $answer = array_merge($answer, $this->sizeLines($facts));
+        }
         if ($substitute !== null) {
             // Zamiennika nie opisujemy słowami klienta — pytał o coś innego,
             // a podstawienie jego słów pod nasz zamiennik wprowadzałoby w błąd.
@@ -4644,7 +4705,7 @@ final class ClientInquiryService
             'quote' => $quote === '' ? null : $quote,
             'answer' => array_column($answer, 'text'),
             'answer_roles' => array_column($answer, 'role'),
-            'facts' => $this->offerFacts($n, $item, $product, $priceMode, $margin, $tone, $manualPln),
+            'facts' => $facts,
         ];
     }
 
@@ -4656,7 +4717,7 @@ final class ClientInquiryService
      *
      * @param  array<string, mixed>  $item
      * @param  array<string, mixed>|null  $product
-     * @return array{no: int, name: string|null, code: string|null, size: string|null, qty: string|null, norms: string|null, price: string|null, total: string|null, total_pln: float|null}
+     * @return array{no: int, name: string|null, code: string|null, size: string|null, qty: string|null, norms: string|null, price: string|null, total: string|null, total_pln: float|null, sizes: list<array{size: string, qty: string, price: string, total: string}>, sizes_qty: string|null}
      */
     private function offerFacts(
         int $n,
@@ -4684,6 +4745,8 @@ final class ClientInquiryService
                 'price' => null,
                 'total' => null,
                 'total_pln' => null,
+                'sizes' => [],
+                'sizes_qty' => null,
             ];
         }
 
@@ -4695,6 +4758,28 @@ final class ClientInquiryService
                 : ($priceMode === 'catalog_margin' ? $this->offerPln($product, $margin) : null)));
         $pieces = $qu['qty'] === null ? null : (float) str_replace(',', '.', $qu['qty']);
         $totalPln = $unitPln !== null && $pieces !== null && $pieces > 0 ? $unitPln * $pieces : null;
+
+        // Pozycja-suma z rozmiarami w cytacie: wartość każdego rozmiaru osobno, a wartość pozycji to ich
+        // suma — także wtedy, gdy rozmiary nie dają ilości klienta (panel ostrzega o tym handlowca).
+        // Cena jest jedna, z karty albo ręczna: karta nie ma cen per rozmiar, więc żadnych nie zgadujemy.
+        $sizes = [];
+        $sizesQty = null;
+        $breakdown = $unitPln === null ? null : $this->sizeBreakdownOf($item);
+        if ($breakdown !== null) {
+            $sum = 0.0;
+            foreach ($breakdown['rows'] as $row) {
+                $value = round((float) $row['qty'] * $unitPln, 2);
+                $sum += $value;
+                $sizes[] = [
+                    'size' => $row['size'],
+                    'qty' => $row['qty'].' '.$row['unit'],
+                    'price' => $this->formatPln($unitPln),
+                    'total' => $this->formatPln($value),
+                ];
+            }
+            $totalPln = $sum;
+            $sizesQty = $breakdown['total_qty'];
+        }
 
         return [
             'no' => $n,
@@ -4713,7 +4798,34 @@ final class ClientInquiryService
             'price' => $unitPln === null ? null : $this->formatPln($unitPln),
             'total' => $totalPln === null ? null : $this->formatPln($totalPln),
             'total_pln' => $totalPln,
+            'sizes' => $sizes,
+            'sizes_qty' => $sizesQty,
         ];
+    }
+
+    /**
+     * Wycena według rozmiarów w treści listu, pod ceną wyrobu. Rola „sizes”: list HTML
+     * pokazuje te same liczby w tabelce, więc nie powtarza tych linii jako opisu.
+     *
+     * @param  array<string, mixed>  $facts
+     * @return list<array{text: string, role: string}>
+     */
+    private function sizeLines(array $facts): array
+    {
+        $sizes = is_array($facts['sizes'] ?? null) ? $facts['sizes'] : [];
+        if ($sizes === []) {
+            return [];
+        }
+        $out = [['text' => 'Według rozmiarów z zapytania:', 'role' => 'sizes']];
+        foreach ($sizes as $size) {
+            $out[] = [
+                'text' => '– rozm. '.$size['size'].': '.$size['qty'].' × '.$size['price'].' = '.$size['total'].' netto',
+                'role' => 'sizes',
+            ];
+        }
+        $out[] = ['text' => 'Razem: '.$facts['sizes_qty'].' – '.$facts['total'].' netto', 'role' => 'sizes'];
+
+        return $out;
     }
 
     /**

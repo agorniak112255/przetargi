@@ -230,4 +230,48 @@ final class InquiryReplyHtmlTest extends TestCase
         // kwota nie łamie się w połowie liczby
         $this->assertMatchesRegularExpression('/white-space:nowrap">1 395,36 zł</', $html);
     }
+
+    /**
+     * Pozycja-suma z rozmiarami w cytacie (#71, poz. 2): tabelka rozmiarów pod ceną, ilość w wierszu „Razem”,
+     * a linie wersji tekstowej (rola „sizes”) nie wracają jako opis wyrobu.
+     */
+    public function test_size_breakdown_is_a_table_under_the_price(): void
+    {
+        $html = InquiryReplyHtml::render('Dzień dobry,', [[
+            'head' => 'Poz. 2 — ilość: 432 pary',
+            'quote' => 'RNITz - 432 pary Rozmiar: 8-108par,9-108par,10-216par.',
+            'answer' => ['Produkt: Rękawice ochronne NITZ. (SKU RNITZ), Reis', 'Cena: 3,23 zł netto', 'Według rozmiarów z zapytania:', '– rozm. 8: 108 par × 3,23 zł = 348,84 zł netto', 'Razem: 432 pary – 1 395,36 zł netto'],
+            'answer_roles' => ['name', 'price', 'sizes', 'sizes', 'sizes'],
+            'facts' => [
+                'name' => 'Rękawice ochronne NITZ.',
+                'code' => 'RNITZ',
+                'qty' => '432 pary',
+                'price' => '3,23 zł',
+                'total' => '1 395,36 zł',
+                'total_pln' => 1395.36,
+                'sizes' => [
+                    ['size' => '8', 'qty' => '108 par', 'price' => '3,23 zł', 'total' => '348,84 zł'],
+                    ['size' => '9', 'qty' => '108 par', 'price' => '3,23 zł', 'total' => '348,84 zł'],
+                    ['size' => '10', 'qty' => '216 par', 'price' => '3,23 zł', 'total' => '697,68 zł'],
+                ],
+                'sizes_qty' => '432 pary',
+            ],
+        ]], null, ['Pozdrawiam']);
+
+        $this->assertStringContainsString('Wycena według rozmiarów z Państwa zapytania:', $html);
+        $this->assertMatchesRegularExpression('/>216 par<\/td><td[^>]*>3,23 zł<\/td><td[^>]*>697,68 zł</', $html);
+        $this->assertMatchesRegularExpression('/>Razem<\/td><td[^>]*>432 pary</', $html);
+        $this->assertStringNotContainsString('Ilość: ', $html);
+        $this->assertStringNotContainsString('rozm. 8', $html);
+        $this->assertStringNotContainsString('Według rozmiarów z zapytania:', $html);
+
+        // każdy tekst tabelki ma własny kolor (ciemny motyw Thunderbirda)
+        $dom = new DOMDocument;
+        $dom->loadHTML('<?xml encoding="UTF-8"><body>'.$html.'</body>', LIBXML_NOERROR);
+        foreach ((new DOMXPath($dom))->query('//table//td/text()[normalize-space()]') ?: [] as $node) {
+            $parent = $node->parentNode;
+            $this->assertInstanceOf(DOMElement::class, $parent);
+            $this->assertMatchesRegularExpression('/(?:^|;)\s*color:/', $parent->getAttribute('style'), (string) $node->textContent);
+        }
+    }
 }

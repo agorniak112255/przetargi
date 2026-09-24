@@ -18,6 +18,7 @@ import type {
   InquiryOmittedItem,
   InquiryPayload,
   InquiryPriceMode,
+  InquirySizeBreakdown,
   InquiryTerms,
   InquiryTone,
 } from '../types/inquiry'
@@ -73,12 +74,25 @@ function copyHtmlBySelection(html: string): boolean {
   return ok
 }
 
+function pricePlnByMode(
+  p: { catalog_pln: number | null; offer_pln: number | null },
+  mode: InquiryPriceMode,
+): number | null {
+  return mode === 'catalog' ? p.catalog_pln : mode === 'catalog_margin' ? p.offer_pln : null
+}
+
 function priceByMode(
   p: { catalog_pln: number | null; offer_pln: number | null },
   mode: InquiryPriceMode,
 ): string | null {
-  const v = mode === 'catalog' ? p.catalog_pln : mode === 'catalog_margin' ? p.offer_pln : null
+  const v = pricePlnByMode(p, mode)
   return v == null ? null : PLN.format(v)
+}
+
+/** „3 rozmiary”, „5 rozmiarów”. */
+function sizeCount(n: number): string {
+  const few = n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14)
+  return `${n} ${few ? 'rozmiary' : 'rozmiarów'}`
 }
 
 /** Klucz jednostki do porównania („szt.”, „sztuk” → „szt”); brak jednostki pozycji zapytania = sztuki. */
@@ -129,6 +143,7 @@ const flagLabel: Record<InquiryFlag, string> = {
   brand_not_in_catalog: 'zamiennik innej marki',
   size_mismatch: 'karta w innym rozmiarze',
   withdrawn: 'wyrób wycofany przez producenta',
+  size_breakdown_mismatch: 'rozmiary nie sumują się do ilości',
 }
 
 /** Barwa adnotacji: czerwień = sprzeczność albo niepotwierdzony warunek, bursztyn = do sprawdzenia, fiolet = pytanie AI. */
@@ -146,6 +161,7 @@ const flagTone: Record<InquiryFlag, { cls: string; dot: string }> = {
   brand_not_in_catalog: { cls: 'border-orange-300 bg-orange-50 text-orange-800', dot: 'bg-orange-500' },
   size_mismatch: { cls: 'border-red-300 bg-red-50 text-red-800', dot: 'bg-red-600' },
   withdrawn: { cls: 'border-red-300 bg-red-50 text-red-800', dot: 'bg-red-600' },
+  size_breakdown_mismatch: { cls: 'border-amber-300 bg-amber-50 text-amber-800', dot: 'bg-amber-500' },
 }
 
 /** Pasmo wyniku alternatywy; 80 = próg pewnego dopasowania (CONFIDENT_SCORE w ClientInquiryService). */
@@ -186,6 +202,74 @@ function StatusIcon({ kind }: { kind: InquiryConfidence | 'model_failed' }) {
         </>
       )}
     </svg>
+  )
+}
+
+/**
+ * Wycena pozycji-sumy według rozmiarów z zapytania (#71, poz. 2): jedna cena karty razy ilość każdego
+ * rozmiaru, zaokrąglona do grosza jak w liście. Rozmiary i ilości to słowa klienta — karta ich nie potwierdza.
+ */
+function SizeBreakdownTable({
+  breakdown,
+  itemQty,
+  priceMode,
+  unitPln,
+}: {
+  breakdown: InquirySizeBreakdown
+  itemQty: string
+  priceMode: InquiryPriceMode
+  unitPln: number | null
+}) {
+  const priced = priceMode !== 'none'
+  const rows = breakdown.rows.map((r) => {
+    const qty = Number(r.qty.replace(',', '.'))
+    const value = unitPln != null && Number.isFinite(qty) ? Math.round(qty * unitPln * 100) / 100 : null
+    return { ...r, value }
+  })
+  const sum = unitPln != null && rows.every((r) => r.value != null) ? rows.reduce((s, r) => s + (r.value ?? 0), 0) : null
+  const cols = priced
+    ? 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)]'
+    : 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'
+  return (
+    <div className="space-y-1">
+      <div className="overflow-hidden rounded-lg border border-slate-300 bg-white text-xs text-slate-800">
+        <div className={`grid ${cols} gap-2 bg-slate-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500`}>
+          <span>Rozmiar z zapytania</span>
+          <span className="text-right">Ilość</span>
+          {priced && <span className="text-right">Cena netto</span>}
+          {priced && <span className="text-right">Wartość netto</span>}
+        </div>
+        {rows.map((r, i) => (
+          <div key={`${r.size}-${i}`} className={`grid ${cols} gap-2 border-t border-slate-200 px-2 py-1 tabular-nums`}>
+            <span>rozm. {r.size}</span>
+            <span className="text-right">
+              {r.qty} {r.unit}
+            </span>
+            {priced && <span className="text-right">{unitPln != null ? PLN.format(unitPln) : 'do potwierdzenia'}</span>}
+            {priced && <span className="text-right">{r.value != null ? PLN.format(r.value) : '—'}</span>}
+          </div>
+        ))}
+        <div className={`grid ${cols} gap-2 border-t border-slate-300 bg-slate-50 px-2 py-1 font-semibold tabular-nums`}>
+          <span>Razem</span>
+          <span className="text-right">{breakdown.total_qty}</span>
+          {priced && <span />}
+          {priced && <span className="text-right">{sum != null ? PLN.format(sum) : '—'}</span>}
+        </div>
+      </div>
+      {breakdown.matches_qty === true && (
+        <p className="text-emerald-700">✓ Suma rozmiarów ({breakdown.total_qty}) zgadza się z ilością w wierszu klienta.</p>
+      )}
+      {breakdown.matches_qty === false && (
+        <p className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-amber-900">
+          Rozmiary z maila dają {breakdown.total_qty}, a w wierszu klienta jest {itemQty || 'inna ilość'} — list liczy
+          wartość z rozmiarów. Sprawdź z klientem.
+        </p>
+      )}
+      <p className="text-slate-500">
+        {priced ? 'Jedna cena karty dla wszystkich rozmiarów. ' : ''}Rozmiary i ilości z maila — karta nie potwierdza
+        dostępności rozmiarów.
+      </p>
+    </div>
   )
 }
 
@@ -464,6 +548,7 @@ function ItemRow({
         <p className="text-[11px] font-extrabold uppercase leading-tight tracking-wide">{badge.label}</p>
         {meta && <p className="text-xs font-semibold">{meta}</p>}
         {item.size && <p className="text-xs">rozm. {item.size}</p>}
+        {item.size_breakdown && <p className="text-xs">{sizeCount(item.size_breakdown.rows.length)}</p>}
       </div>
 
       <div className="min-w-0 space-y-2 p-3">
@@ -679,6 +764,16 @@ function ItemRow({
                         {item.manual_price != null && priceMode !== 'none' && ' (ręcznie)'}
                       </p>
                     )}
+                    {item.size_breakdown && (
+                      <SizeBreakdownTable
+                        breakdown={item.size_breakdown}
+                        itemQty={meta}
+                        priceMode={priceMode}
+                        unitPln={
+                          priceMode === 'none' ? null : item.manual_price ?? pricePlnByMode(c, priceMode)
+                        }
+                      />
+                    )}
                     <OrderQuantityBadge oq={c.order_quantity} qty={qtyForOrderCondition(item, c.order_quantity)} block />
                     {c.reason && <p>{c.reason}</p>}
                     {/* Cena z negocjacji albo promocji: wchodzi do tekstu i do tabeli listu,
@@ -695,7 +790,7 @@ function ItemRow({
                           onChange={(e) => onManualDraft(e.target.value)}
                           onBlur={onManualPriceBlur}
                         />
-                        zł netto
+                        zł netto{item.size_breakdown ? ' dla wszystkich rozmiarów' : ''}
                         <span className="text-slate-400">
                           {item.manual_price != null && computedPrice
                             ? `wyliczona: ${computedPrice} · puste pole = cena wyliczona`

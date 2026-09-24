@@ -388,16 +388,60 @@ final class InquiryReplyHtml
         } elseif (($said = self::lineWithRole($row, 'price')) !== null) {
             $parts[] = self::text($said);
         }
+        $sizes = self::sizesTable($facts);
         $qty = trim((string) ($facts['qty'] ?? ''));
-        if ($qty !== '') {
+        // przy rozmiarach ilość stoi w wierszu „Razem” tabelki
+        if ($qty !== '' && $sizes === '') {
             $parts[] = self::text('Ilość: ').self::strong($qty);
         }
-        if ($parts === []) {
+        if ($parts === [] && $sizes === '') {
             return '';
         }
 
         return '<div style="font-size:12px;color:'.self::BODY.';margin-top:8px;padding-top:7px;border-top:1px solid '.self::BORDER.'">'
-            .implode(self::text(' · '), $parts).'</div>';
+            .implode(self::text(' · '), $parts).'</div>'
+            .$sizes;
+    }
+
+    /**
+     * Wycena według rozmiarów z zapytania klienta: rozmiar, ilość, cena i wartość, pod spodem „Razem”.
+     * Podpis mówi, skąd są rozmiary — z zapytania, nie z naszej karty.
+     *
+     * @param  array<string, mixed>  $facts
+     */
+    private static function sizesTable(array $facts): string
+    {
+        $sizes = is_array($facts['sizes'] ?? null) ? $facts['sizes'] : [];
+        if ($sizes === []) {
+            return '';
+        }
+
+        $cell = 'padding:2px 0;font-size:12px;color:'.self::BODY;
+        $num = $cell.';text-align:right;white-space:nowrap;padding-left:10px';
+        $head = 'padding:0 0 2px;font-size:11px;color:'.self::MUTED.';border-bottom:1px solid '.self::BORDER;
+        $headNum = $head.';text-align:right;white-space:nowrap;padding-left:10px';
+        $sum = 'padding:4px 0 0;font-size:12px;font-weight:bold;color:'.self::TEXT.';border-top:1px solid '.self::BORDER;
+        $sumNum = $sum.';text-align:right;white-space:nowrap;padding-left:10px';
+
+        $html = '<div style="font-size:11px;color:'.self::MUTED.';margin-top:6px">'
+            .self::text('Wycena według rozmiarów z Państwa zapytania:').'</div>'
+            .'<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin-top:2px"><tr>'
+            .'<td style="'.$head.'">'.self::text('Rozmiar').'</td>'
+            .'<td style="'.$headNum.'">'.self::text('Ilość').'</td>'
+            .'<td style="'.$headNum.'">'.self::text('Cena netto').'</td>'
+            .'<td style="'.$headNum.'">'.self::text('Wartość netto').'</td></tr>';
+        foreach ($sizes as $size) {
+            $html .= '<tr><td style="'.$cell.'">'.self::text((string) ($size['size'] ?? '')).'</td>'
+                .'<td style="'.$num.'">'.self::text((string) ($size['qty'] ?? '')).'</td>'
+                .'<td style="'.$num.'">'.self::text((string) ($size['price'] ?? '')).'</td>'
+                .'<td style="'.$num.'">'.self::text((string) ($size['total'] ?? '')).'</td></tr>';
+        }
+        $html .= '<tr><td style="'.$sum.'">'.self::text('Razem').'</td>'
+            .'<td style="'.$sumNum.'">'.self::text((string) ($facts['sizes_qty'] ?? '')).'</td>'
+            .'<td style="'.$sum.'"></td>'
+            .'<td style="'.$sumNum.'">'.self::text((string) ($facts['total'] ?? '')).'</td></tr>';
+
+        return $html.'</table>';
     }
 
     /**
@@ -573,7 +617,9 @@ final class InquiryReplyHtml
         $sum = 0.0;
         $unit = null;
         foreach ($rows as $row) {
-            $qty = trim((string) (self::facts($row)['qty'] ?? ''));
+            $facts = self::facts($row);
+            // pozycja z rozmiarami ma wartość policzoną z rozmiarów — i ich ilość idzie do sumy
+            $qty = trim((string) ($facts['sizes_qty'] ?? $facts['qty'] ?? ''));
             if (preg_match('/^(\d+(?:[.,]\d+)?)\s*(\S.*)$/u', $qty, $m) !== 1) {
                 return null;
             }
@@ -663,8 +709,8 @@ final class InquiryReplyHtml
             if ($text === '') {
                 continue;
             }
-            // Nazwa, normy i cena wyrobu mają już swoje miejsce w bloku.
-            if (in_array($role, ['name', 'meta', 'price'], true)) {
+            // Nazwa, normy, cena i wycena według rozmiarów mają już swoje miejsce w bloku.
+            if (in_array($role, ['name', 'meta', 'price', 'sizes'], true)) {
                 continue;
             }
             if (str_starts_with($role, 'sub_')) {
