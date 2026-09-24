@@ -2073,6 +2073,8 @@ final class ClientInquiryService
                         .'subject: krótki temat odpowiedzi (bez Re:). '
                         .'questions: konkretne pytania klienta. '
                         .'line_items: KAŻDA osobna pozycja (osobny wiersz, ilość albo rozmiar = osobna pozycja). '
+                        .'Prośby o dokumenty (deklaracja zgodności, instrukcja, karta produktu, certyfikat, atest) '
+                        .'i o warunki (termin realizacji, dostawa, płatność, ważność oferty) to NIE pozycje — wpisz je do questions. '
                         .'Nie łącz „rękawice 9” i „rękawice 10” w jedną. Max 8. '
                         .'Każda pozycja: id (item_1…), quote (DOKŁADNY cytat wiersza z maila), '
                         .'qty (SAMA liczba jako string, np. „30”; brak → null), unit (jednostka DOKŁADNIE jak w mailu: „szt.”, „par”, „op.”; brak → null), '
@@ -2966,7 +2968,14 @@ final class ClientInquiryService
      */
     private function isInfoRequestHeader(string $line): bool
     {
-        $line = trim($line);
+        // Mail z HTML zostawia znaczniki wyróżnienia wokół nagłówka („*_Proszę również o podanie:_*”) — dwukropek
+        // nie stał wtedy na końcu, lista warunków szła jako 5 pozycji i przegłosowała jedyny wyrób (zapytanie #44).
+        $line = trim($line, " \t*_");
+        // Lista dokumentów do wyrobu („*Dokumenty dotyczące wkładek*”, „Wymagane dokumenty:”) to prośba o papiery,
+        // nie pozycje zamówienia — zapytanie #57: deklaracja CE, instrukcja i karta produktu szły do katalogu.
+        if (preg_match('/^(?:wymagane\s+|potrzebne\s+)?dokument(?:y|acja|ów)\b[^.:\d]{0,60}:?$/iu', $line) === 1) {
+            return true;
+        }
         if (! str_ends_with($line, ':')) {
             return false;
         }
