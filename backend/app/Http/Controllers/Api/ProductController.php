@@ -289,9 +289,12 @@ class ProductController extends Controller
             ->all();
         // „taniej u …” przy cenie — informacja, cena karty bez zmian; stała liczba zapytań na stronę
         $cheaper = $this->comparison->cheaperSources(collect(array_values($models)));
-        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $evaluable, $models, $slotCounts, $cheaper): array {
+        // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — stała liczba zapytań na stronę
+        $orderQuantities = $this->comparison->orderQuantities(collect(array_values($models)));
+        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities): array {
             $id = (int) $row['id'];
             $row['cheaper_source'] = $cheaper[$id] ?? null;
+            $row['order_quantity'] = $orderQuantities[$id] ?? null;
             $candidates = $this->slotsAtCardPrice($row['purchase_price'] ?? null, $row['currency'] ?? null, $evaluable[$id] ?? []);
             // explain() tylko dla kart ze slotem ocenionym w cenie karty — pozostałe i tak nie mają znacznika
             $winner = match (true) {
@@ -441,6 +444,11 @@ class ProductController extends Controller
         $comparison = $this->comparison->forCard($product, $slots, $explain);
         $payload['source_prices'] = $this->sourcePricesPayload($slots, $explain, $comparison['rows']);
         $payload['source_prices_rates'] = $comparison['rates'];
+        // warunek zamawiania slotu obowiązującego (ten, od którego kupujemy); slot z $slots ma wczytane konto
+        $winnerSlot = $explain['winner'] === null
+            ? null
+            : $slots->first(static fn (ProductSourcePrice $s): bool => $s->source_key === $explain['winner']->source_key);
+        $payload['order_quantity'] = $winnerSlot === null ? null : $this->comparison->orderQuantityOf($winnerSlot);
         // ta sama reguła co na liście: ocena tylko dla slotu obowiązującego, którego cena jest ceną karty
         $payload['supplier_special'] = $this->cardSupplierSpecial(
             $this->slotsAtCardPrice($product->purchase_price, $product->currency, $slots),
@@ -575,6 +583,11 @@ class ProductController extends Controller
                 'supplier_special' => SupplierSpecialPrice::forSlot($slot),
                 'currency' => $slot->currency,
                 'availability' => $slot->availability,
+                // warunek zamawiania dosłownie ze slotu (tylko B2B); varies = rozmiary karty mają różne warunki
+                'order_min_qty' => $slot->order_min_qty,
+                'order_step_qty' => $slot->order_step_qty,
+                'order_unit' => $slot->order_unit,
+                'order_varies' => (bool) $slot->order_varies,
                 'checked_at' => $slot->checked_at?->toISOString(),
                 'migrated' => (bool) $slot->migrated,
                 'is_effective' => $effectiveKey !== null && $slot->source_key === $effectiveKey,

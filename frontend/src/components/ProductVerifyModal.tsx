@@ -13,6 +13,7 @@ import { CardConflictsModal } from './CardConflictsModal'
 import { SupplierSpecialPanel } from './SupplierSpecialPanel'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 import { NormPictograms } from './NormPictograms'
+import { OrderQuantityBadge } from './OrderQuantityBadge'
 import { RequirementCheckList } from './RequirementCheckList'
 import { ShopFieldsTables } from './ShopFieldsTables'
 import { SourcePricesRanked } from './SourcePricesRanked'
@@ -407,6 +408,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
                   {(product.currency ?? 'PLN').toUpperCase() !== 'PLN' && product.purchase_price_pln != null ? (
                     <span className="block text-[10px] text-slate-500">≈ {product.purchase_price_pln} zł</span>
                   ) : null}
+                  <OrderQuantityBadge oq={product.order_quantity} block className="mt-0.5" />
                 </span>
                 <span>
                   Katalog: <b>{product.catalog_price_net} {product.currency ?? 'PLN'}</b>

@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Product;
 use App\Models\SearchEvent;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\NbpExchangeRateService;
+use App\Services\Pricing\SourcePriceComparison;
 use App\Services\ProductAiSearchService;
 use App\Services\Search\AiProductSearch;
 use App\Services\Search\SearchEventRecorder;
@@ -24,6 +26,7 @@ class ProductAiSearchController extends Controller
         private readonly NbpExchangeRateService $fx,
         private readonly AiSettingsService $aiSettings,
         private readonly SearchEventRecorder $events,
+        private readonly SourcePriceComparison $comparison,
     ) {}
 
     public function __invoke(Request $request): JsonResponse
@@ -74,6 +77,19 @@ class ProductAiSearchController extends Controller
             $webOnly ? SearchEvent::TASK_PRODUCT_SEARCH_WEB : SearchEvent::TASK_PRODUCT_SEARCH,
         );
         $result['search_event_id'] = $event?->id;
+
+        // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — hurtem, po telemetrii (nie trafia do śladu)
+        $ids = array_values(array_unique(array_filter(array_map(
+            static fn (array $row): int => (int) ($row['id'] ?? 0),
+            $result['products'],
+        ))));
+        $quantities = $ids === []
+            ? []
+            : $this->comparison->orderQuantities(Product::query()->whereIn('id', $ids)->get(['id', 'manufacturer']));
+        $result['products'] = array_map(
+            static fn (array $row): array => $row + ['order_quantity' => $quantities[(int) ($row['id'] ?? 0)] ?? null],
+            $result['products'],
+        );
 
         return response()->json($result);
     }

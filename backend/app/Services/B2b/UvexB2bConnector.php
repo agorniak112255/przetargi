@@ -340,7 +340,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             return null;
         }
 
-        return new B2bRemotePrice(net: $cents / 100, base: null, discountPercent: 0.0, currency: 'PLN');
+        return new B2bRemotePrice(net: $cents / 100, base: null, discountPercent: 0.0, currency: 'PLN', order: self::orderQuantity($product));
     }
 
     public function basePriceListLoaded(): bool
@@ -520,6 +520,13 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         $unit = trim((string) ($product->raw['unit'] ?? ''));
         if ($unit !== '') {
             $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Jednostka sprzedaży', $unit);
+        }
+        $order = $product->raw['order'] ?? null;
+        if (is_array($order) && $order['by_size'] !== null) {
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Zamawianie (różne dla rozmiarów)', $order['by_size']);
+        } elseif (is_array($order) && $order['min'] !== null && (new B2bOrderQuantity($order['min'], $order['step']))->restricts()) {
+            // bez ograniczenia (min 1, step any albo 1) — nie dopisujemy „bez ograniczeń” do tysiąca kart
+            $fields[] = new B2bRemoteShopField(self::SHOP_SECTION_TRADE, 'Zamawianie', self::orderLabel($order['min'], $order['step'], $unit));
         }
 
         return [...$fields, ...$this->manufacturerFor($product)['fields']];
@@ -1058,6 +1065,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
                 'code' => $first['code'],
                 'price_text' => $first['price_text'],
                 'unit' => $first['unit'],
+                'order' => self::groupOrder($group),
                 'detail_url' => $first['detail_url'],
                 'image_url' => $first['image_url'],
                 'rows' => $rows,
@@ -1104,6 +1112,78 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     }
 
     /**
+     * Warunek zamawiania karty z pól ilości jej pozycji. Wszystkie pozycje z tym samym min/step — ten warunek;
+     * różne albo część nieodczytana — min i step null (warunku nie przypisujemy karcie, zapis czyści poprzedni)
+     * i w by_size warunek każdego rozmiaru dosłownie, na kartę dostawcy. Żadna pozycja bez pola ilości = null
+     * (źródło warunku nie podało, zapisany zostaje).
+     *
+     * @param  list<array{row: array<string, mixed>, size: array{size: string}|null}>  $group
+     * @return array{min: float|null, step: float|null, by_size: string|null}|null
+     */
+    private static function groupOrder(array $group): ?array
+    {
+        $conditions = [];
+        $read = 0;
+        foreach ($group as $member) {
+            $min = B2bOrderQuantity::attribute((string) ($member['row']['order_min'] ?? ''));
+            $step = B2bOrderQuantity::attribute((string) ($member['row']['order_step'] ?? ''));
+            if ($min !== null) {
+                $read++;
+            }
+            $label = $min === null ? 'nieodczytane' : self::orderLabel($min, $step, '');
+            $conditions[$label][] = $member['size']['size'] ?? (string) $member['row']['code'];
+        }
+        if ($read === 0) {
+            return null;
+        }
+        if (count($conditions) === 1 && $read === count($group)) {
+            $row = $group[0]['row'];
+
+            return [
+                'min' => B2bOrderQuantity::attribute((string) $row['order_min']),
+                'step' => B2bOrderQuantity::attribute((string) $row['order_step']),
+                'by_size' => null,
+            ];
+        }
+        $parts = [];
+        foreach ($conditions as $label => $sizes) {
+            $parts[] = $label.': '.implode(', ', $sizes);
+        }
+
+        return ['min' => null, 'step' => null, 'by_size' => implode('; ', $parts)];
+    }
+
+    /** „po 10 szt.”, „min. 5 szt., po 5 szt.”, „bez ograniczeń” — do karty dostawcy i opisu różnic rozmiarów. */
+    private static function orderLabel(float $min, ?float $step, string $unit): string
+    {
+        $unit = $unit !== '' ? ' '.$unit : '';
+        if ($step !== null && $step > 1 && abs($min - $step) < 0.0001) {
+            return 'po '.B2bOrderQuantity::format($step).$unit;
+        }
+        $parts = [];
+        if ($min > 1) {
+            $parts[] = 'min. '.B2bOrderQuantity::format($min).$unit;
+        }
+        if ($step !== null && $step > 1) {
+            $parts[] = 'po '.B2bOrderQuantity::format($step).$unit;
+        }
+
+        return $parts !== [] ? implode(', ', $parts) : 'bez ograniczeń';
+    }
+
+    /** Warunek zamawiania do slotu ceny; null = lista nie podała pola ilości. */
+    private static function orderQuantity(B2bRemoteProduct $product): ?B2bOrderQuantity
+    {
+        $order = $product->raw['order'] ?? null;
+        if (! is_array($order)) {
+            return null;
+        }
+        $unit = trim((string) ($product->raw['unit'] ?? ''));
+
+        return new B2bOrderQuantity($order['min'], $order['step'], $unit !== '' ? $unit : null, varies: $order['by_size'] !== null);
+    }
+
+    /**
      * Jedna dostępność dla wszystkich rozmiarów — dosłownie; różne — „Dostępny: 39, 41; Na zamówienie: 40, 42”.
      *
      * @param  list<array{row: array<string, mixed>, size: array{size: string}}>  $bySize
@@ -1133,7 +1213,10 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
      * z tym samym numerem. Nie przez <tr>: wiersz ma formularz koszyka w komórce tabeli, a parser HTML (libxml)
      * przestawia takie zagnieżdżenie — odnośniki pojawiają się podwójnie i poza swoim wierszem. Pozycja = unikalne id.
      *
-     * @return list<array{id: string, code: string, name: string, price_text: string, price_cents: int|null, availability: string, unit: string, detail_url: string, image_url: string, page: int}>
+     * Pole ilości koszyka niesie warunek zamawiania: min="10.0000" step="10.0000" = tylko po 10 szt., min="1" step="any"
+     * = bez ograniczenia (sprawdzone na koncie 24.09.2026: 9307.375 po 10, 9169.543 po 8). Atrybuty dosłownie.
+     *
+     * @return list<array{id: string, code: string, name: string, price_text: string, price_cents: int|null, availability: string, unit: string, order_min: string, order_step: string, detail_url: string, image_url: string, page: int}>
      */
     private static function parseRows(DOMXPath $xpath, int $page): array
     {
@@ -1154,6 +1237,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
                 : null;
             $priceText = self::text($xpath->query($byClass('twojaCenaNetto_'))->item(0));
             $image = $xpath->query('//*[@id="B2B_fotorama-'.$id.'"]//a[@data-full]')->item(0);
+            $quantity = $xpath->query($byClass('panelDodawaniaProduktuDoKoszyka_').'//input[@name="quantity"]')->item(0);
 
             $rows[$id] = [
                 'id' => $id,
@@ -1163,6 +1247,8 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
                 'price_cents' => self::priceCents($priceText),
                 'availability' => self::text($xpath->query($byClass('stanViewProductDane_'))->item(0)),
                 'unit' => self::text($xpath->query($byClass('panelDodawaniaProduktuDoKoszyka_').'//*['.JspB2bClient::classPredicate('input-group-addon').']')->item(0)),
+                'order_min' => $quantity instanceof DOMElement ? trim($quantity->getAttribute('min')) : '',
+                'order_step' => $quantity instanceof DOMElement ? trim($quantity->getAttribute('step')) : '',
                 'detail_url' => UvexB2bClient::isShopUrl($link->getAttribute('href')) ? $link->getAttribute('href') : '',
                 'image_url' => $image instanceof DOMElement ? trim($image->getAttribute('data-full')) : '',
                 'page' => $page,

@@ -14,7 +14,9 @@ import {
   type CardMatchSignal,
   type CardMatchStatus,
   type CardMatchSummary,
+  type OrderQuantity,
 } from '../lib/api'
+import { OrderQuantityBadge } from '../components/OrderQuantityBadge'
 import { currencyLabel, formatDateTime, formatPrice } from '../lib/priceChange'
 
 type Page = {
@@ -250,6 +252,18 @@ function sourceLabelFor(m: CardMatch): string | null {
 
 type BriefSource = CardBrief['sources'][number]
 
+/** Warunek zamawiania źródła w kształcie znaczka karty; starsza odpowiedź API bez pól — znaczek nic nie pokaże. */
+function briefOrderQuantity(s: BriefSource): OrderQuantity {
+  return {
+    min: s.order_min_qty ?? null,
+    step: s.order_step_qty ?? null,
+    unit: s.order_unit ?? null,
+    varies: s.order_varies ?? false,
+    source_key: s.source_key,
+    source_label: s.label,
+  }
+}
+
 /**
  * Ceny źródeł od najtańszej zakupu. Tylko przy jednej walucie — bez kursu (CardBrief nie niesie ceny w PLN)
  * EUR i PLN nie da się uczciwie ułożyć, wtedy kolejność z API. Źródło bez ceny zakupu na końcu.
@@ -349,6 +363,7 @@ function CardSide({
                 title={s.source_key === highlightSourceKey ? 'Z tego źródła pochodzi klucz dopasowania' : undefined}
               >
                 {s.label}: <span className="tabular-nums">{priceText(s.purchase_price, s.currency)}</span>
+                <OrderQuantityBadge oq={briefOrderQuantity(s)} className="ml-1" />
               </li>
             ))}
           </ul>
@@ -1445,6 +1460,7 @@ export function CardMatches() {
                               <li key={s.source_key} className={i === 0 && s.purchase_price ? 'font-medium text-emerald-800' : undefined}>
                                 {s.label}: <span className="tabular-nums">{priceText(s.purchase_price, s.currency)}</span>
                                 {i === 0 && s.purchase_price ? ' · najtaniej' : null}
+                                <OrderQuantityBadge oq={briefOrderQuantity(s)} className="ml-1" />
                               </li>
                             ))}
                           </ol>

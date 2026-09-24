@@ -1,6 +1,7 @@
 import type { Product } from '../lib/api'
 import { currencyLabel, formatPct, formatPrice, pctClass } from '../lib/priceChange'
 import { sortSourcePrices } from '../lib/sourcePrices'
+import { SlotOrderQuantity } from './OrderQuantityBadge'
 
 /**
  * Zwarta lista cen wszystkich źródeł karty od najtańszej — do okna weryfikacji karty, gdzie pełnej tabeli z karty
@@ -44,6 +45,7 @@ export function SourcePricesRanked({ product }: { product: Product }) {
                   {outside && s.not_comparable_reason && (
                     <span className="text-[10px] text-slate-500">{s.not_comparable_reason}</span>
                   )}
+                  <SlotOrderQuantity slot={s} />
                 </div>
               </div>
               <div className="shrink-0 text-right tabular-nums">

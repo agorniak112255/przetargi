@@ -305,7 +305,10 @@ class CardMatchController extends Controller
                 ->with('priceList:id,manufacturer,version')
                 ->whereIn('product_id', $productIds)
                 ->orderBy('id')
-                ->get(['id', 'product_id', 'source_key', 'b2b_account_id', 'price_list_id', 'purchase_price', 'currency'])
+                ->get([
+                    'id', 'product_id', 'source_key', 'b2b_account_id', 'price_list_id', 'purchase_price', 'currency',
+                    'order_min_qty', 'order_step_qty', 'order_unit', 'order_varies',
+                ])
                 ->groupBy('product_id');
             $accountIds = $slots->flatten(1)
                 ->filter(static fn (ProductSourcePrice $s): bool => $s->isB2b())
@@ -340,6 +343,11 @@ class CardMatchController extends Controller
                         'label' => $this->comparison->sourceLabel($slot, $accounts),
                         'purchase_price' => $slot->purchase_price,
                         'currency' => $slot->currency,
+                        // warunek zamawiania dosłownie ze slotu (tylko B2B)
+                        'order_min_qty' => $slot->order_min_qty,
+                        'order_step_qty' => $slot->order_step_qty,
+                        'order_unit' => $slot->order_unit,
+                        'order_varies' => (bool) $slot->order_varies,
                     ])
                     ->values()
                     ->all(),

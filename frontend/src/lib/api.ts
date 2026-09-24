@@ -327,6 +327,8 @@ export type Product = {
   has_shop_fields?: boolean
   /** Lista produktów: ocena ceny konta B2B z karty względem cennika bazowego dostawcy; null = brak oceny. */
   supplier_special?: SupplierSpecial | null
+  /** Lista i karta szczegółów: warunek zamawiania obowiązującego źródła ceny (np. po 10 szt.); null = brak. */
+  order_quantity?: OrderQuantity | null
   special_prices?: Array<{
     id: number
     client_id: number | null
@@ -359,6 +361,20 @@ export type ProductAccessory = {
 export const B2B_DESCRIPTION_OVERWRITE_CONFIRM =
   'Ta karta ma opis ze sklepu dostawcy (cennik B2B).\n\nUzupełnianie AI zastąpi go opisem z internetu, a kolejne pobranie cennika go nie przywróci.\n\nNadpisać opis?'
 
+/**
+ * Warunek zamawiania obowiązującego źródła ceny karty (od niego kupujemy), np. UVEX: tylko po 10 szt.
+ * Backend podaje go tylko, gdy ogranicza zamówienie (minimum > 1 albo krok > 1); inaczej null.
+ */
+export type OrderQuantity = {
+  min: number | null
+  step: number | null
+  unit: string | null
+  /** Rozmiary karty mają różne warunki (min i step null) — szczegóły na karcie dostawcy. */
+  varies?: boolean
+  source_key: string
+  source_label: string
+}
+
 /** Cena karty z jednego źródła (product_source_prices); is_effective = z tego slotu pochodzi cena karty. */
 export type ProductSourcePrice = {
   source_key: string
@@ -369,6 +385,12 @@ export type ProductSourcePrice = {
   currency: string | null
   /** Dostępność u dostawcy dosłownie ze źródła; null = źródło jej nie podaje. */
   availability: string | null
+  /** Warunek zamawiania u dostawcy (sklep B2B): najmniejsza ilość i krok; step null = bez kroku; null = źródło nie podaje. */
+  order_min_qty?: number | null
+  order_step_qty?: number | null
+  order_unit?: string | null
+  /** Rozmiary karty mają u tego dostawcy różne warunki zamawiania. */
+  order_varies?: boolean
   checked_at: string | null
   migrated: boolean
   is_effective: boolean
@@ -611,6 +633,11 @@ export type CardBrief = {
     label: string
     purchase_price: string | null
     currency: string | null
+    /** Warunek zamawiania u dostawcy (jak ProductSourcePrice); brak pola = starsza odpowiedź API. */
+    order_min_qty?: number | null
+    order_step_qty?: number | null
+    order_unit?: string | null
+    order_varies?: boolean
   }>
 }
 

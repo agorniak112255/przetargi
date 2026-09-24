@@ -174,6 +174,90 @@ final class SourcePriceComparisonApiTest extends TestCase
         $this->assertSame('12.00', $items[1]['offer_price']);
     }
 
+    public function test_list_and_show_carry_order_quantity_of_effective_source(): void
+    {
+        [$goggles, $uvex] = $this->uvexGogglesCard();
+        // warunek przegranego dystrybutora: tylko w wierszu źródła, nie przy cenie karty
+        [$card, , $ardon] = $this->manufacturerAndDistributorCard();
+        ProductSourcePrice::query()->where('product_id', $card->id)->where('source_key', ProductSourcePrice::b2bKey($ardon->id))
+            ->update(['order_min_qty' => 12, 'order_step_qty' => 12, 'order_unit' => 'par']);
+        $expected = [
+            'min' => 10, 'step' => 10, 'unit' => 'szt', 'varies' => false,
+            'source_key' => ProductSourcePrice::b2bKey($uvex->id), 'source_label' => 'B2B UVEX',
+        ];
+
+        $rows = collect($this->getJson('/api/products?sort=sku')->assertOk()->json('data'))->keyBy('id');
+        $this->assertSame($expected, $rows[$goggles->id]['order_quantity']);
+        $this->assertArrayHasKey('order_quantity', $rows[$card->id]);
+        $this->assertNull($rows[$card->id]['order_quantity']);
+
+        $this->getJson('/api/products/'.$goggles->id)
+            ->assertOk()
+            ->assertJsonPath('order_quantity', $expected)
+            ->assertJsonPath('source_prices.0.order_min_qty', 10)
+            ->assertJsonPath('source_prices.0.order_step_qty', 10)
+            ->assertJsonPath('source_prices.0.order_unit', 'szt')
+            ->assertJsonPath('source_prices.0.order_varies', false);
+        $this->getJson('/api/products/'.$card->id)
+            ->assertOk()
+            ->assertJsonPath('order_quantity', null)
+            ->assertJsonPath('source_prices.0.order_min_qty', null)
+            ->assertJsonPath('source_prices.0.order_varies', false)
+            ->assertJsonPath('source_prices.1.source_key', ProductSourcePrice::b2bKey($ardon->id))
+            ->assertJsonPath('source_prices.1.order_min_qty', 12)
+            ->assertJsonPath('source_prices.1.order_step_qty', 12)
+            ->assertJsonPath('source_prices.1.order_unit', 'par');
+    }
+
+    public function test_tender_main_product_carries_order_quantity(): void
+    {
+        [$goggles, $uvex] = $this->uvexGogglesCard();
+        $other = $this->card('Ansell');
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/OQ/1',
+            'title' => 'Gogle',
+            'client_id' => Client::query()->create(['name' => 'Klient'])->id,
+            'owner_id' => $this->user->id,
+            'status' => 'wycena',
+            'ai_percent' => 0,
+            'target_margin_percent' => 20,
+            'last_activity_at' => now(),
+        ]);
+        foreach ([[1, $goggles], [2, $other]] as [$lineNo, $product]) {
+            TenderItem::query()->create([
+                'tender_id' => $tender->id, 'line_no' => $lineNo, 'requirement' => 'Gogle ochronne', 'quantity' => 25,
+                'main_product_id' => $product->id, 'offer_price' => 50.00, 'ai_match_percent' => 90, 'status' => 'ok',
+                'ai_match_reasons' => ['dopasowanie ręczne'],
+            ]);
+        }
+
+        $items = collect($this->getJson('/api/tenders/'.$tender->id)->assertOk()->json('tender.items'))->keyBy('line_no');
+
+        $this->assertSame(10, $items[1]['main_product']['order_quantity']['step']);
+        $this->assertSame(ProductSourcePrice::b2bKey($uvex->id), $items[1]['main_product']['order_quantity']['source_key']);
+        $this->assertArrayHasKey('order_quantity', $items[2]['main_product']);
+        $this->assertNull($items[2]['main_product']['order_quantity']);
+    }
+
+    /**
+     * Gogle UVEX: jedno konto producenta, koszyk przyjmuje tylko wielokrotności 10 szt.
+     *
+     * @return array{0: Product, 1: B2bAccount}
+     */
+    private function uvexGogglesCard(): array
+    {
+        $card = $this->card('UVEX');
+        $uvex = $this->account('uvex');
+        B2bProductLink::query()->create(['b2b_account_id' => $uvex->id, 'remote_id' => 'R'.$uvex->id, 'product_id' => $card->id]);
+        app(ProductEffectivePrice::class)->saveSlot($card, ProductSourcePrice::b2bKey($uvex->id), [
+            'b2b_account_id' => $uvex->id, 'catalog_price_net' => 45.00, 'purchase_price' => 40.00, 'currency' => 'PLN',
+            'order_min_qty' => 10, 'order_step_qty' => 10, 'order_unit' => 'szt', 'order_varies' => false,
+            'checked_at' => Carbon::parse('2026-09-22 10:00'),
+        ]);
+
+        return [$card->fresh(), $uvex];
+    }
+
     /**
      * Karta ATG: konto producenta 10,00 zł obowiązuje, dystrybutor Ardon 9,00 zł.
      *

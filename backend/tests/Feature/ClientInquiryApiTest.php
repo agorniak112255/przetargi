@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\B2bAccount;
+use App\Models\B2bProductLink;
 use App\Models\Client;
 use App\Models\ClientInquiry;
 use App\Models\Product;
+use App\Models\ProductSourcePrice;
 use App\Models\User;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\ProductInquirySearch;
 use Carbon\CarbonImmutable;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -305,6 +309,63 @@ final class ClientInquiryApiTest extends TestCase
         $this->assertStringContainsString("Poz. 1 — ilość: 30 szt, rozmiar z zapytania: 10\n30szt Rękawice chemoodporne rozmiar 10\nProdukt: Rękawice chemoodporne (SKU G10), Supon", $body);
         // cena oferty z domyślnej marży konta: 5,00 × 1,18
         $this->assertStringContainsString('5,90', $body);
+    }
+
+    public function test_candidate_carries_live_order_quantity_not_saved_in_analysis(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $goggles = Product::query()->create([
+            'sku' => '9164.285', 'name' => 'Gogle ochronne', 'manufacturer' => 'UVEX',
+            'catalog_price_net' => 45.00, 'purchase_price' => 40.00, 'stock' => 30,
+        ]);
+        $plain = Product::query()->create([
+            'sku' => 'GOG-2', 'name' => 'Gogle ochronne proste', 'manufacturer' => 'Supon',
+            'catalog_price_net' => 20.00, 'purchase_price' => 10.00, 'stock' => 30,
+        ]);
+        // koszyk konta UVEX przyjmuje gogle tylko po 10 szt.
+        $uvex = B2bAccount::query()->create([
+            'username' => 'uvex-login', 'password' => 'sekret', 'sites' => ['b2b.example.pl'], 'connector' => 'uvex',
+            'created_by' => $user->id, 'updated_by' => $user->id,
+        ]);
+        B2bProductLink::query()->create(['b2b_account_id' => $uvex->id, 'remote_id' => 'R1', 'product_id' => $goggles->id]);
+        app(ProductEffectivePrice::class)->saveSlot($goggles, ProductSourcePrice::b2bKey($uvex->id), [
+            'b2b_account_id' => $uvex->id, 'catalog_price_net' => 45.00, 'purchase_price' => 40.00, 'currency' => 'PLN',
+            'order_min_qty' => 10, 'order_step_qty' => 10, 'order_unit' => 'szt', 'order_varies' => false,
+        ]);
+
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Gogle', 'questions' => [], 'product_queries' => ['gogle ochronne'], 'line_items' => [], 'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock) use ($goggles, $plain): void {
+            $row = static fn (Product $p, int $score): array => [
+                'id' => $p->id, 'sku' => $p->sku, 'name' => $p->name, 'manufacturer' => $p->manufacturer, 'norms' => '',
+                'catalog_price_net' => (string) $p->catalog_price_net, 'purchase_price' => (string) $p->purchase_price,
+                'currency' => 'PLN', 'stock' => 30, 'ai_match_percent' => $score,
+            ];
+            $mock->shouldReceive('findMany')->once()->andReturn([[
+                'query' => 'gogle ochronne', 'products' => [$row($goggles, 90), $row($plain, 80)],
+            ]]);
+        });
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', ['body' => 'Proszę o ofertę na gogle ochronne.', 'tone' => 'handlowy'])
+            ->assertCreated()
+            ->assertJsonPath('items.0.candidates.0.id', $goggles->id)
+            ->assertJsonPath('items.0.candidates.0.order_quantity.min', 10)
+            ->assertJsonPath('items.0.candidates.0.order_quantity.step', 10)
+            ->assertJsonPath('items.0.candidates.0.order_quantity.source_key', ProductSourcePrice::b2bKey($uvex->id))
+            ->assertJsonPath('items.0.candidates.1.id', $plain->id)
+            ->assertJsonPath('items.0.candidates.1.order_quantity', null);
+
+        // migawka analizy bez warunku — liczony przy każdej odpowiedzi ze stanu konta
+        $inquiry = ClientInquiry::query()->findOrFail($res->json('id'));
+        $this->assertStringNotContainsString('order_quantity', json_encode($inquiry->analysis, JSON_THROW_ON_ERROR));
+        ProductSourcePrice::query()->where('product_id', $goggles->id)->update(['order_step_qty' => 5, 'order_min_qty' => 5]);
+        $this->getJson('/api/inquiries/'.$inquiry->id)
+            ->assertOk()
+            ->assertJsonPath('items.0.candidates.0.order_quantity.step', 5);
     }
 
     public function test_store_prices_with_account_default_margin_not_last_inquiry(): void

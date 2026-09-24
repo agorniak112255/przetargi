@@ -260,9 +260,12 @@ class TenderController extends Controller
         // kart). Hurtem dla wszystkich kart przetargu, nie zapytania na pozycję.
         $mainProducts = $tender->items->pluck('mainProduct')->filter()->unique('id')->values();
         $cheaper = $this->comparison->cheaperSources($mainProducts);
+        // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — też hurtem
+        $orderQuantities = $this->comparison->orderQuantities($mainProducts);
         foreach ($tender->items as $item) {
             if ($item->mainProduct !== null) {
                 $item->mainProduct->setAttribute('cheaper_source', $cheaper[(int) $item->mainProduct->id] ?? null);
+                $item->mainProduct->setAttribute('order_quantity', $orderQuantities[(int) $item->mainProduct->id] ?? null);
             }
         }
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { api } from '../lib/api'
+import { api, type OrderQuantity } from '../lib/api'
 import { productDisplayName, suggestedOfferPrice } from '../lib/productLabel'
+import { OrderQuantityBadge } from './OrderQuantityBadge'
 import { ProductVerifyModal } from './ProductVerifyModal'
 
 export type BattlecardProduct = {
@@ -37,6 +38,8 @@ export type BattlecardProduct = {
   verification?: SubstituteVerification
   /** „Tańszy o X%” tylko dla zamiennika zgodnego z SIWZ albo zatwierdzonego */
   price_comparable?: boolean
+  /** Warunek zamawiania obowiązującego źródła ceny (np. po 10 szt.); null = brak ograniczenia. */
+  order_quantity?: OrderQuantity | null
 }
 
 export type SubstituteVerification = {
@@ -184,6 +187,7 @@ function Col({
             <span className="text-slate-500"> (prop. +{markupPercent}%)</span>
           ) : null}
         </p>
+        <OrderQuantityBadge oq={p.order_quantity} block />
       </div>
       {p.attributes?.material || p.attributes?.klasa_ochrony || p.attributes?.poziomy_en388 ? (
         <p className="mt-0.5 truncate text-[9px] text-slate-600">

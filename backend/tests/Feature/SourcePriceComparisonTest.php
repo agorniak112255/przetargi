@@ -326,6 +326,86 @@ final class SourcePriceComparisonTest extends TestCase
         $this->assertSame($count($few), $count($many));
     }
 
+    public function test_order_quantity_comes_from_effective_uvex_slot(): void
+    {
+        // gogle UVEX: koszyk konta przyjmuje tylko wielokrotności 10 szt.
+        $card = $this->card('UVEX');
+        $uvex = $this->account('uvex');
+        $this->link($card, $uvex);
+        $this->b2bSlot($card, $uvex, 40.00, 'PLN', '2026-09-22 10:00');
+        $this->order($card, $uvex, 10.0, 10.0, 'szt');
+
+        $this->assertSame([
+            'min' => 10.0,
+            'step' => 10.0,
+            'unit' => 'szt',
+            'varies' => false,
+            'source_key' => ProductSourcePrice::b2bKey($uvex->id),
+            'source_label' => 'B2B UVEX',
+        ], $this->comparison->orderQuantities(collect([$card->fresh()]))[$card->id]);
+        // karta wyrobu liczy to samo ze zwycięzcy explain()
+        $winner = $this->prices->explain($card->fresh())['winner'];
+        $this->assertNotNull($winner);
+        $this->assertSame(
+            $this->comparison->orderQuantities(collect([$card->fresh()]))[$card->id],
+            $this->comparison->orderQuantityOf($winner),
+        );
+    }
+
+    public function test_restricted_distributor_losing_to_manufacturer_has_no_order_quantity(): void
+    {
+        // konto producenta ATG bez warunku obowiązuje, warunek Ardonu (przegranego) nie trafia do listy
+        $own = $this->card('ATG');
+        $atg = $this->account('atg');
+        $ardon = $this->account('ardon');
+        $this->link($own, $atg);
+        $this->link($own, $ardon);
+        $this->b2bSlot($own, $atg, 10.00, 'PLN', '2026-09-20 10:00');
+        $this->b2bSlot($own, $ardon, 9.00, 'PLN', '2026-09-22 10:00');
+        $this->order($own, $ardon, 12.0, 12.0, 'szt');
+
+        // cennik producenta z pliku wygrywa z dystrybutorem
+        $file = $this->card('ATG');
+        $list = PriceList::query()->create(['manufacturer' => 'ATG', 'manufacturer_key' => 'atg', 'version' => '2026']);
+        $this->link($file, $ardon);
+        $this->b2bSlot($file, $ardon, 9.00, 'PLN', '2026-09-22 10:00');
+        $this->order($file, $ardon, 12.0, 12.0, 'szt');
+        $this->fileSlot($file, $list, 10.00);
+
+        $this->assertSame([], $this->comparison->orderQuantities(collect([$own->fresh(), $file->fresh()])));
+    }
+
+    public function test_order_quantity_without_restriction_varies_and_variants(): void
+    {
+        $uvex = $this->account('uvex');
+        // min 1 bez kroku = zwykłe zamówienie
+        $plain = $this->card('UVEX');
+        $this->link($plain, $uvex);
+        $this->b2bSlot($plain, $uvex, 40.00, 'PLN', '2026-09-22 10:00');
+        $this->order($plain, $uvex, 1.0, null, 'szt');
+        // rozmiary karty mają różne warunki
+        $varies = $this->card('UVEX');
+        $this->link($varies, $uvex);
+        $this->b2bSlot($varies, $uvex, 40.00, 'PLN', '2026-09-22 10:00');
+        $this->order($varies, $uvex, null, null, 'szt', true);
+        // karta z aktywnymi wersjami nie ma obowiązującego slotu
+        $withVariants = $this->card('UVEX');
+        $this->link($withVariants, $uvex);
+        $this->b2bSlot($withVariants, $uvex, 40.00, 'PLN', '2026-09-22 10:00');
+        $this->order($withVariants, $uvex, 10.0, 10.0, 'szt');
+        ProductVariant::query()->create([
+            'product_id' => $withVariants->id, 'source' => 'b2b:'.$uvex->id, 'remote_id' => 'W1', 'label' => 'wersja', 'purchase_price' => 1.00, 'currency' => 'PLN',
+        ]);
+
+        $result = $this->comparison->orderQuantities(collect([$plain->fresh(), $varies->fresh(), $withVariants->fresh()]));
+
+        $this->assertSame([$varies->id], array_keys($result));
+        $this->assertTrue($result[$varies->id]['varies']);
+        $this->assertNull($result[$varies->id]['min']);
+        $this->assertNull($result[$varies->id]['step']);
+        $this->assertSame('szt', $result[$varies->id]['unit']);
+    }
+
     /**
      * forCard jak w GET /products/{id}: sloty z account i priceList, explain z ProductEffectivePrice.
      *
@@ -401,6 +481,16 @@ final class SourcePriceComparisonTest extends TestCase
             'b2b_account_id' => $account->id, 'catalog_price_net' => $catalog ?? $purchase, 'purchase_price' => $purchase,
             'currency' => $currency, 'checked_at' => Carbon::parse($checkedAt),
         ]);
+    }
+
+    /** Warunek zamawiania w slocie konta — jak zapis synchronizacji (B2bOrderQuantity::slotValues). */
+    private function order(Product $card, B2bAccount $account, ?float $min, ?float $step, ?string $unit, bool $varies = false): void
+    {
+        ProductSourcePrice::query()
+            ->where('product_id', $card->id)
+            ->where('source_key', ProductSourcePrice::b2bKey($account->id))
+            ->firstOrFail()
+            ->update(['order_min_qty' => $min, 'order_step_qty' => $step, 'order_unit' => $unit, 'order_varies' => $varies]);
     }
 
     private function fileSlot(Product $card, PriceList $list, float $purchase, ?int $packQty = null): void

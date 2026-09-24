@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Pricing\SourcePriceComparison;
 use App\Support\InquiryMailText;
 use App\Support\InquiryQueryText;
 use App\Support\InquiryReplyHtml;
@@ -738,7 +739,8 @@ final class ClientInquiryService
         $client = $inquiry->relationLoaded('client') ? $inquiry->client : null;
         // Jedno zapytanie do bazy i tylko wtedy, gdy autor nie był wcześniej wczytany.
         $author = $inquiry->loadMissing('user')->user;
-        $items = $this->itemsView($inquiry);
+        // warunek zamawiania (UVEX „po 10 szt.”) tylko w odpowiedzi — itemsView() zostaje widokiem zapisanej analizy
+        $items = $this->withOrderQuantities($this->itemsView($inquiry));
 
         return [
             'id' => $inquiry->id,
@@ -925,6 +927,40 @@ final class ClientInquiryService
         }
 
         return $out;
+    }
+
+    /**
+     * Warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) przy kandydatach i zamiennikach — liczony przy
+     * odpowiedzi, jednym przebiegiem dla wszystkich pozycji. Do zapisanej analizy nie trafia: stan konta B2B się
+     * zmienia, a analysis to migawka z chwili analizy.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @return list<array<string, mixed>>
+     */
+    private function withOrderQuantities(array $items): array
+    {
+        $ids = [];
+        foreach ($items as $item) {
+            foreach ([...$item['candidates'], ...$item['substitutes']] as $product) {
+                $ids[(int) $product['id']] = true;
+            }
+        }
+        unset($ids[0]);
+        if ($ids === []) {
+            return $items;
+        }
+        $quantities = app(SourcePriceComparison::class)->orderQuantities(
+            Product::query()->whereIn('id', array_keys($ids))->get(['id', 'manufacturer']),
+        );
+        foreach ($items as $i => $item) {
+            foreach (['candidates', 'substitutes'] as $list) {
+                foreach ($item[$list] as $j => $product) {
+                    $items[$i][$list][$j]['order_quantity'] = $quantities[(int) $product['id']] ?? null;
+                }
+            }
+        }
+
+        return $items;
     }
 
     /**
@@ -1426,6 +1462,8 @@ final class ClientInquiryService
             'score' => (int) ($product['score'] ?? 0),
             'reason' => $this->nullable($product['reason'] ?? null),
             'source' => $this->nullable($product['source'] ?? null),
+            // uzupełnia present() hurtem (withOrderQuantities); null = brak warunku
+            'order_quantity' => null,
         ];
     }
 

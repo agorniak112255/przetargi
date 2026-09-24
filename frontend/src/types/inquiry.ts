@@ -1,5 +1,7 @@
 // Typy 1:1 z kontraktem API „Zapytania” (PLAN_ZAPYTANIA_v2).
 
+import type { OrderQuantity } from '../lib/api'
+
 /** Szablon listu do klienta; nazwy w src/lib/inquiryTone.ts. */
 export type InquiryTone = 'formal' | 'handlowy' | 'bez_sku'
 
@@ -36,6 +38,8 @@ export type InquiryCandidate = {
   source: string | null
   /** null = pozycja bez warunków do sprawdzenia w karcie */
   requirements_ok: boolean | null
+  /** Warunek zamawiania obowiązującego źródła ceny (np. po 10 szt.); null = brak ograniczenia. */
+  order_quantity?: OrderQuantity | null
 }
 
 export type InquirySubstitute = {

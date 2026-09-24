@@ -924,16 +924,19 @@ final class B2bCatalogSync
             // dostępność tylko w slocie (poza $prices — te idą na nową kartę i do detectPriceChange); null = źródło
             // jej nie podaje, zapisana wartość zostaje
             $availabilityChanged = $remote->availability !== null && $slot?->availability !== $remote->availability;
+            $orderChanged = $slot !== null && self::orderChanged($slot, $price->order);
             $slotChanged = $slot === null
                 || $priceChange !== null
                 || strtoupper((string) $slot->currency) !== strtoupper($price->currency)
-                || $availabilityChanged;
+                || $availabilityChanged
+                || $orderChanged;
             $existing->fill($payload);
             $dirty = $existing->isDirty();
             // summarizeUpdate nie zna tych pól — jak „wersje” w ścieżce z wersjami
             $extraFields = [
                 ...$this->unsummarizedCardFields($existing),
                 ...($availabilityChanged ? ['dostępność'] : []),
+                ...($orderChanged ? ['warunek zamawiania'] : []),
                 ...($firstAccountPrice ? ['cena z nowego konta'] : []),
             ];
             if ($extraFields !== []) {
@@ -983,6 +986,8 @@ final class B2bCatalogSync
                     'b2b_account_id' => $account->id,
                     // null = źródło nie podaje dostępności — zapisana wartość zostaje
                     ...($remote->availability !== null ? ['availability' => $remote->availability] : []),
+                    // null = źródło nie podaje warunku zamawiania — zapisany zostaje
+                    ...($price?->order !== null ? $price->order->slotValues() : []),
                 ])['slot'];
 
                 // pierwszy wiersz konta na karcie to punkt odniesienia dla jego kolejnych zmian
@@ -1424,6 +1429,33 @@ final class B2bCatalogSync
             'last_currency' => $price->currency,
             'last_price_at' => now(),
         ];
+    }
+
+    /**
+     * Warunek zamawiania ze źródła zmienił ZNACZENIE względem zapisanego: ograniczenie pojawiło się, zniknęło albo
+     * ma inne wartości, albo zmieniło się „zależy od rozmiaru”. Brak warunku i warunek bez ograniczenia (min 1,
+     * step any) to to samo — pierwszy przebieg po wdrożeniu nie ogłasza zmiany na każdej karcie. Wartości i tak
+     * idą do slotu. null ze źródła = brak zmiany (zapisany zostaje).
+     */
+    private static function orderChanged(ProductSourcePrice $slot, ?B2bOrderQuantity $order): bool
+    {
+        if ($order === null) {
+            return false;
+        }
+        $meaning = static function (?float $min, ?float $step, ?string $unit, bool $varies): ?string {
+            if ($varies) {
+                return 'varies|'.$unit;
+            }
+            if (! B2bOrderQuantity::restricting($min, $step)) {
+                return null;
+            }
+
+            return sprintf('%.4f|%s|%s', $min ?? 0, $step === null ? '-' : sprintf('%.4f', $step), $unit);
+        };
+        $fresh = $order->slotValues();
+
+        return $meaning($slot->order_min_qty, $slot->order_step_qty, $slot->order_unit, (bool) $slot->order_varies)
+            !== $meaning($fresh['order_min_qty'], $fresh['order_step_qty'], $fresh['order_unit'], $fresh['order_varies']);
     }
 
     /**

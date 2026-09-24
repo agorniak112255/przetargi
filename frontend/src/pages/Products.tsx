@@ -5,6 +5,7 @@ import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
 import { CheaperSourceNote } from '../components/CheaperSourceNote'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
+import { OrderQuantityBadge } from '../components/OrderQuantityBadge'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductAiSearchModal } from '../components/ProductAiSearchModal'
 import { PriceChangeNote } from '../components/ProductPriceChange'
@@ -1243,6 +1244,7 @@ export function Products() {
                         <CheaperSourceNote cheaper={p.cheaper_source} className="mt-0.5" />
                       </>
                     )}
+                    <OrderQuantityBadge oq={p.order_quantity} block className="mt-0.5" />
                   </td>
                   <td className="p-2">{p.currency ?? 'PLN'}</td>
                   <td className="p-2">

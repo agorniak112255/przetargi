@@ -3,9 +3,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { BusyLabel, useBusySeconds } from '../components/Busy'
 import { InquiryContactChip, InquiryContactModal } from '../components/InquiryContact'
 import { ProductAiMatchModal, type AiMatchPick } from '../components/ProductAiMatchModal'
+import { OrderQuantityBadge } from '../components/OrderQuantityBadge'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { useAuth } from '../auth'
-import { api } from '../lib/api'
+import { api, type OrderQuantity } from '../lib/api'
 import { toneHint, toneOptions } from '../lib/inquiryTone'
 import type {
   InquiryAnswer,
@@ -49,6 +50,29 @@ function priceByMode(
 ): string | null {
   const v = mode === 'catalog' ? p.catalog_pln : mode === 'catalog_margin' ? p.offer_pln : null
   return v == null ? null : PLN.format(v)
+}
+
+/** Klucz jednostki do porównania („szt.”, „sztuk” → „szt”); brak jednostki = sztuki, jak w znaczku warunku. */
+function unitKey(unit: string | null | undefined): string {
+  const u = (unit ?? '').trim().toLowerCase().replace(/[.\s]/g, '')
+  if (u === '' || u.startsWith('szt')) return 'szt'
+  if (u.startsWith('par')) return 'par'
+  if (u.startsWith('op')) return 'op'
+  if (u.startsWith('kpl') || u.startsWith('komplet')) return 'kpl'
+  return u
+}
+
+/**
+ * Ilość pozycji zapytania do podpowiedzi „→ zamówisz N” przy warunku zamawiania. null = ilość nieznana albo
+ * klient liczy w innej jednostce niż sklep (np. „op.” wobec „szt.”) — wtedy sam znaczek, bez zgadywania.
+ */
+function qtyForOrderCondition(item: InquiryItem, oq: OrderQuantity | null | undefined): number | null {
+  if (!oq) return null
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(.*)$/u.exec(item.qty ?? '')
+  if (!m) return null
+  if (unitKey(item.unit || m[2]) !== unitKey(oq.unit)) return null
+  const qty = Number(m[1].replace(',', '.'))
+  return Number.isFinite(qty) && qty > 0 ? qty : null
 }
 
 const confidenceBadge: Record<InquiryConfidence, { label: string; cls: string }> = {
@@ -333,6 +357,12 @@ function ItemRow({
                 {chosenPrice ? ` · ${chosenPrice}` : priceMode !== 'none' ? ' · cena do potwierdzenia' : ''}
                 {item.manual_price != null && priceMode !== 'none' && ' (ręcznie)'}
               </p>
+              <OrderQuantityBadge
+                oq={chosen.order_quantity}
+                qty={qtyForOrderCondition(item, chosen.order_quantity)}
+                block
+                className="mt-0.5"
+              />
               {chosen.reason && <p className="text-[11px] text-slate-500">{chosen.reason}</p>}
               {/* Cena z negocjacji albo promocji: wchodzi do tekstu i do tabeli listu,
                   więc nie trzeba poprawiać treści ręcznie (to kasowało tabelę). */}
@@ -399,6 +429,7 @@ function ItemRow({
               >
                 {c.sku} · {c.name} · {c.source === 'manual' ? 'ręcznie' : `${c.score}%`}
               </Chip>
+              <OrderQuantityBadge oq={c.order_quantity} />
               <button
                 type="button"
                 disabled={busy}

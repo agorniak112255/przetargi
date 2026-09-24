@@ -9,6 +9,7 @@ use App\Models\B2bAccount;
 use App\Models\B2bDiscountRule;
 use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
@@ -17,6 +18,7 @@ use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
+use App\Services\B2b\B2bOrderQuantity;
 use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
@@ -538,6 +540,106 @@ final class UvexConnectorTest extends TestCase
 
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
         $this->assertContains('Lista UVEX: 13 pozycji → 8 kart (4 grup rozmiarów o tej samej cenie)', $log);
+    }
+
+    public function test_order_quantity_is_read_from_the_cart_field_and_sizes_with_different_packs_get_none(): void
+    {
+        // jak na żywej stronie 24.09.2026: gogle 9307.375 tylko po 10 szt. (min="10.0000" step="10.0000")
+        $this->rows[7] += ['min' => '10.0000', 'step' => '10.0000'];
+        // półbuty: 39 i 40 po 2 pary, 41 bez ograniczenia — karta z trzech rozmiarów nie ma jednego warunku
+        $this->rows[4] += ['min' => '2.0000', 'step' => '2.0000'];
+        $this->rows[5] += ['min' => '2.0000', 'step' => '2.0000'];
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $products = $this->productsByCode($connector);
+
+        $cleaner = $connector->price($products['9970.005'])?->order;
+        $this->assertNotNull($cleaner);
+        $this->assertSame(['order_min_qty' => 10.0, 'order_step_qty' => 10.0, 'order_unit' => 'szt.', 'order_varies' => false], $cleaner->slotValues());
+        $this->assertTrue($cleaner->restricts());
+        $connector->description($products['9970.005']);
+        $this->assertSame([
+            ['Informacje handlowe', 'Kod', '9970.005'],
+            ['Informacje handlowe', 'Jednostka sprzedaży', 'szt.'],
+            ['Informacje handlowe', 'Zamawianie', 'po 10 szt.'],
+        ], self::rows($connector->shopFields($products['9970.005'])));
+
+        // min="1" step="any" — sklep nie ogranicza: minimum 1, bez kroku (na karcie dostawcy bez wiersza)
+        $free = $connector->price($products['000P1D011003'])?->order;
+        $this->assertSame(['order_min_qty' => 1.0, 'order_step_qty' => null, 'order_unit' => 'szt.', 'order_varies' => false], $free?->slotValues());
+        $this->assertFalse($free->restricts());
+
+        // rozmiary z różnymi paczkami: warunku nie przypisujemy karcie, na karcie dostawcy każdy rozmiar osobno
+        $shoes = $connector->price($products['8430/2/39'])?->order;
+        $this->assertSame(['order_min_qty' => null, 'order_step_qty' => null, 'order_unit' => 'par.', 'order_varies' => true], $shoes?->slotValues());
+        $this->assertSame('po 2: 39, 40; bez ograniczeń: 41', $products['8430/2/39']->raw['order']['by_size']);
+        // ten sam warunek we wszystkich rozmiarach — jeden warunek karty
+        $this->assertSame(['min' => 1.0, 'step' => null, 'by_size' => null], $products['HA2023(L)']->raw['order']);
+    }
+
+    public function test_order_quantity_attribute_and_format(): void
+    {
+        $this->assertSame(10.0, B2bOrderQuantity::attribute('10.0000'));
+        $this->assertSame(2.5, B2bOrderQuantity::attribute('2,5'));
+        $this->assertNull(B2bOrderQuantity::attribute('any'));
+        $this->assertNull(B2bOrderQuantity::attribute(''));
+        $this->assertNull(B2bOrderQuantity::attribute('0'));
+        $this->assertSame('10', B2bOrderQuantity::format(10.0));
+        $this->assertSame('2,5', B2bOrderQuantity::format(2.5));
+        $this->assertFalse((new B2bOrderQuantity(1.0, 1.0))->restricts());
+        $this->assertTrue((new B2bOrderQuantity(1.0, 5.0))->restricts());
+    }
+
+    public function test_sync_stores_the_order_quantity_in_the_account_slot_and_updates_it_when_the_shop_changes(): void
+    {
+        Storage::fake('public');
+        $this->rows[7] += ['min' => '10.0000', 'step' => '10.0000'];
+        $this->fakeSite();
+        $slotOf = fn (): ProductSourcePrice => ProductSourcePrice::query()
+            ->where('product_id', Product::query()->where('sku', '9970.005')->value('id'))
+            ->where('source_key', ProductSourcePrice::b2bKey((int) $this->account()->id))
+            ->sole();
+
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $slot = $slotOf();
+        $this->assertSame(10.0, $slot->order_min_qty);
+        $this->assertSame(10.0, $slot->order_step_qty);
+        $this->assertSame('szt.', $slot->order_unit);
+
+        // sklep zmienia paczkę na 8 szt. — zmiana warunku to aktualizacja karty, nie „bez zmian”
+        $this->rows[7]['min'] = '8.0000';
+        $this->rows[7]['step'] = '8.0000';
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame(8.0, $slotOf()->order_step_qty);
+        $updated = collect(PriceList::query()->latest('id')->firstOrFail()->updated_products)->firstWhere('sku', '9970.005');
+        $this->assertNotNull($updated);
+        $this->assertContains('warunek zamawiania', $updated['fields']);
+
+        // warunek zniknął ze sklepu (step="any") — zapis czyści krok, nie zostawia starego
+        $this->rows[7]['min'] = '1';
+        $this->rows[7]['step'] = 'any';
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame(1.0, $slotOf()->order_min_qty);
+        $this->assertNull($slotOf()->order_step_qty);
+    }
+
+    public function test_first_sync_after_the_order_columns_appear_does_not_report_every_card_as_changed(): void
+    {
+        Storage::fake('public');
+        $this->fakeSite();
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+        $baseline = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0)['updated'];
+
+        // sloty sprzed wdrożenia: warunku nie ma; sklep podaje min="1" step="any" — to nie jest zmiana
+        ProductSourcePrice::query()->update(['order_min_qty' => null, 'order_step_qty' => null, 'order_unit' => null]);
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame($baseline, $result['updated']);
+        $this->assertSame(1.0, ProductSourcePrice::query()->whereHas('product', fn ($q) => $q->where('sku', '9970.005'))->firstOrFail()->order_min_qty);
     }
 
     public function test_sync_stores_panel_codes_as_identifiers_and_the_second_run_neither_duplicates_nor_removes_them(): void
@@ -1439,6 +1541,9 @@ final class UvexConnectorTest extends TestCase
                 '{{PRICE}}' => (string) $row['price'],
                 '{{AVAIL}}' => $row['avail'],
                 '{{UNIT}}' => $row['unit'],
+                // pole ilości koszyka jak na żywej stronie: większość pozycji min="1" step="any" (24.09.2026)
+                '{{MIN}}' => $row['min'] ?? '1',
+                '{{STEP}}' => $row['step'] ?? 'any',
                 '{{IMAGE}}' => '<a data-img="'.$row['img'].'" data-full="'.$row['img'].'"></a>',
             ]);
             if ($row['price'] === null) {

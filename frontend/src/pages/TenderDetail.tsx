@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CheaperSourceNote } from '../components/CheaperSourceNote'
+import { OrderQuantityBadge } from '../components/OrderQuantityBadge'
 import { ItemBattlecard, type BattlecardProduct } from '../components/ItemBattlecard'
 import { ProductAiMatchModal } from '../components/ProductAiMatchModal'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
@@ -2736,6 +2737,12 @@ export function TenderDetail() {
                       ) : (
                         (item.main_product?.sku ?? item.custom_name ?? '—')
                       )}
+                      <OrderQuantityBadge
+                        oq={item.main_product?.order_quantity}
+                        qty={item.quantity}
+                        block
+                        className="mt-0.5"
+                      />
                     </td>
                     <td className="p-2">{item.offer_price ?? '—'}</td>
                     <td className="p-2">{item.margin_percent ?? '—'}%</td>
@@ -3745,6 +3752,16 @@ function ItemRow({
               {/* Tańsze źródło liczy backend dla zapisanej karty — przy niezapisanym wyborze w edycji go nie ma. */}
               {item.main_product != null && productId === String(item.main_product.id) && (
                 <CheaperSourceNote cheaper={item.main_product.cheaper_source} className="mt-1" />
+              )}
+              {/* Warunek zamawiania też liczy backend dla zapisanej karty; ilości pozycji nie zmienia, tylko podpowiada.
+                  Ilość jak w szkicu zapisu (Number(qty) || 1), żeby podpowiedź zgadzała się z tym, co pójdzie do zapisu. */}
+              {item.main_product != null && productId === String(item.main_product.id) && (
+                <OrderQuantityBadge
+                  oq={item.main_product.order_quantity}
+                  qty={canEdit ? Number(qty) || 1 : item.quantity}
+                  block
+                  className="mt-1"
+                />
               )}
               {companionPicked && (
                 <div className="mt-1 text-[10px] text-slate-500">

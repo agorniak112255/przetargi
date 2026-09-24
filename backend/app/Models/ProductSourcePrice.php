@@ -35,6 +35,12 @@ class ProductSourcePrice extends Model
         'pack_qty',
         // dostępność u dostawcy dosłownie ze źródła (tylko sloty B2B; null = źródło jej nie podaje)
         'availability',
+        // warunek zamawiania u dostawcy (tylko sloty B2B): najmniejsza ilość i krok; step null przy minimum = bez kroku
+        'order_min_qty',
+        'order_step_qty',
+        'order_unit',
+        // rozmiary karty mają różne warunki (min i step null) — widoki: „zależy od rozmiaru”
+        'order_varies',
         'checked_at',
         'migrated',
     ];
@@ -48,6 +54,9 @@ class ProductSourcePrice extends Model
             'base_price_net' => 'decimal:2',
             'standard_discount_percent' => 'decimal:2',
             'pack_qty' => 'integer',
+            'order_min_qty' => 'float',
+            'order_step_qty' => 'float',
+            'order_varies' => 'boolean',
             'checked_at' => 'datetime',
             'migrated' => 'boolean',
         ];

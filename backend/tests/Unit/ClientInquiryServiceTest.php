@@ -11,12 +11,16 @@ use App\Services\ClientInquiryService;
 use App\Services\NbpExchangeRateService;
 use App\Services\ProductInquirySearch;
 use App\Support\InquiryMailText;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Mockery;
 use Tests\TestCase;
 
 final class ClientInquiryServiceTest extends TestCase
 {
+    // present() czyta z katalogu warunek zamawiania kandydatów (order_quantity) — potrzebny schemat bazy
+    use RefreshDatabase;
+
     private function service(): ClientInquiryService
     {
         return new ClientInquiryService(

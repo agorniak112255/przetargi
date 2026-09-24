@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type Product } from '../lib/api'
+import { api, type OrderQuantity, type Product } from '../lib/api'
 import {
   AI_SEARCH_MIN_CHARS,
   externalHintsFrom,
@@ -7,6 +7,7 @@ import {
   logAiSearchAction,
   searchProductsByAiWithTimeout,
 } from '../lib/productAiSearch'
+import { OrderQuantityBadge } from './OrderQuantityBadge'
 import { ProductVerifyModal } from './ProductVerifyModal'
 
 export type AiMatchPick = {
@@ -22,6 +23,8 @@ export type AiMatchPick = {
   score: number
   reason?: string | null
   source?: 'ai' | 'catalog'
+  /** Warunek zamawiania obowiązującego źródła ceny (np. po 10 szt.); null = brak ograniczenia. */
+  order_quantity?: OrderQuantity | null
 }
 
 type ExternalHint = { url: string; title: string }
@@ -128,6 +131,7 @@ export function ProductAiMatchModal({
         purchase_price_pln: p.purchase_price_pln ?? null,
         catalog_price_net: p.catalog_price_net,
         currency: p.currency ?? 'PLN',
+        order_quantity: p.order_quantity ?? null,
         score: 100,
         reason: 'Trafienie w nazwę / SKU',
         source: 'catalog',
@@ -165,6 +169,7 @@ export function ProductAiMatchModal({
         purchase_price_pln: p.purchase_price_pln ?? null,
         catalog_price_net: p.catalog_price_net,
         currency: p.currency ?? 'PLN',
+        order_quantity: p.order_quantity ?? null,
         score: p.ai_match_percent ?? 0,
         reason: p.ai_match_reason ?? null,
         source: 'ai',
@@ -407,6 +412,7 @@ export function ProductAiMatchModal({
                         Katalog: <b>{r.catalog_price_net} {r.currency ?? 'PLN'}</b>
                       </span>
                     )}
+                    <OrderQuantityBadge oq={r.order_quantity} />
                   </div>
                   {r.reason && <p className="mt-0.5 text-[11px] text-slate-600">{r.reason}</p>}
                   <div className="mt-2 flex flex-wrap gap-1.5">

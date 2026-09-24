@@ -7,6 +7,7 @@ import { NormPictograms } from '../components/NormPictograms'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { PrestaKitBadge, ProductKitModal } from '../components/ProductKitModal'
 import { PriceStep } from '../components/ProductPriceChange'
+import { OrderQuantityBadge, SlotOrderQuantity } from '../components/OrderQuantityBadge'
 import { ProductVariantsTable } from '../components/ProductVariantsTable'
 import { ShopFieldsTables } from '../components/ShopFieldsTables'
 import { SupplierSpecialBadge } from '../components/SupplierSpecialBadge'
@@ -780,6 +781,7 @@ export function ProductDetail() {
               </>
             )}
             {variants.source_label && <span className="text-slate-500"> (ceny konta {variants.source_label})</span>}
+            <OrderQuantityBadge oq={p.order_quantity} className="ml-2" />
           </div>
           <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             Ceny są w wersjach — auto-oferta w przetargu nie przyjmie ceny tej karty; wpisz cenę wybranej wersji ręcznie.
@@ -792,6 +794,7 @@ export function ProductDetail() {
           </div>
           <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
             Zakup: <b>{p.purchase_price} {currency}</b>
+            <OrderQuantityBadge oq={p.order_quantity} block className="mt-1" />
           </div>
           <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
             Upust:{' '}
@@ -885,7 +888,12 @@ export function ProductDetail() {
                             </td>
                           </>
                         )}
-                        <td className="p-2">{s.availability ?? '—'}</td>
+                        <td className="p-2">
+                          {s.availability ?? '—'}
+                          <div className="empty:hidden">
+                            <SlotOrderQuantity slot={s} className="mt-1" />
+                          </div>
+                        </td>
                         <td className="whitespace-nowrap p-2 tabular-nums">
                           {s.checked_at ? formatDateTime(s.checked_at) : '—'}
                         </td>

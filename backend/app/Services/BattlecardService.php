@@ -9,6 +9,7 @@ use App\Models\ProductSubstitute;
 use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
+use App\Services\Pricing\SourcePriceComparison;
 use App\Services\Search\AiProductSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
@@ -56,6 +57,7 @@ final class BattlecardService
         private readonly NbpExchangeRateService $fx,
         private readonly LevelChecker $levels,
         private readonly PackageChecker $package,
+        private readonly SourcePriceComparison $comparison,
     ) {}
 
     /**
@@ -214,7 +216,35 @@ final class BattlecardService
             'competitors' => [],
             'highlights' => [],
         ];
+        $card = $this->withOrderQuantities($card);
         $card['highlights'] = $this->buildHighlights($card);
+
+        return $card;
+    }
+
+    /**
+     * Warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) przy propozycji i zamiennikach — liczony przy
+     * każdej odpowiedzi, hurtem dla całej karty; do battlecard_substitutes nie trafia (persistSubstitutes).
+     *
+     * @param  array<string, mixed>  $card
+     * @return array<string, mixed>
+     */
+    private function withOrderQuantities(array $card): array
+    {
+        $snaps = array_values(array_filter([$card['ours'], ...$card['substitutes']], 'is_array'));
+        $ids = array_values(array_unique(array_filter(array_map(
+            static fn (array $snap): int => (int) ($snap['product_id'] ?? 0),
+            $snaps,
+        ))));
+        $quantities = $ids === []
+            ? []
+            : $this->comparison->orderQuantities(Product::query()->whereIn('id', $ids)->get(['id', 'manufacturer']));
+        if ($card['ours'] !== null) {
+            $card['ours']['order_quantity'] = $quantities[(int) $card['ours']['product_id']] ?? null;
+        }
+        foreach ($card['substitutes'] as $i => $snap) {
+            $card['substitutes'][$i]['order_quantity'] = $quantities[(int) ($snap['product_id'] ?? 0)] ?? null;
+        }
 
         return $card;
     }
