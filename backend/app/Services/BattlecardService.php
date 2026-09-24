@@ -17,6 +17,7 @@ use App\Support\RequirementCheck\CardSources;
 use App\Support\RequirementCheck\CheckRow;
 use App\Support\RequirementCheck\En388Code;
 use App\Support\RequirementCheck\LevelChecker;
+use App\Support\RequirementCheck\PackageChecker;
 use App\Support\RequirementCheck\Status;
 use Throwable;
 
@@ -27,7 +28,7 @@ use Throwable;
  * Zamiennik z katalogu dobiera ocena słowna (explainMatch) albo — po ręcznym dopasowaniu — wyszukiwarka z modelem.
  * Ocena słowna liczy wspólne słowa i obecność nazw norm, nie ich poziomy: uwagi eksperta 24.09 (przetarg 1, poz. 7)
  * — zimowe rękawice Canis EN 388 2X31X dostały 99% przy wymaganym 4341B. Dlatego każdy zamiennik przechodzi przez
- * Weryfikację karty (poziomy i klasy): kartę z katalogu, która przeczy wymaganiu albo nie podaje wymaganego poziomu,
+ * Weryfikację karty (poziomy i klasy, pojemność i zestaw): kartę z katalogu, która przeczy wymaganiu albo nie podaje wymaganego poziomu,
  * pomijamy; zamiennik przypięty przez człowieka zostaje z wynikiem weryfikacji. „Tańszy o X%” i zbiorcza zamiana na
  * tańszy tylko dla zamiennika zgodnego z SIWZ albo zatwierdzonego.
  */
@@ -54,6 +55,7 @@ final class BattlecardService
         private readonly PpeAssortment $assortment,
         private readonly NbpExchangeRateService $fx,
         private readonly LevelChecker $levels,
+        private readonly PackageChecker $package,
     ) {}
 
     /**
@@ -541,10 +543,11 @@ final class BattlecardService
     }
 
     /**
-     * Weryfikacja karty — tylko poziomy i klasy (EN 388, poziom cięcia, EN 407, kategoria ŚOI, klasa obuwia, FFP, SNR,
-     * klasa uderzenia). Wymiary, cechy tak/nie i kolor dają w pomiarze za dużo fałszywych alarmów, żeby odrzucać nimi
-     * zamienniki. Status: fail — któryś poziom przeczy; missing — karta nie podaje któregoś; check — pola karty sobie
-     * przeczą; ok — wszystkie podane i spełnione; none — wymaganie nie podaje poziomów, nie ma czego sprawdzić.
+     * Weryfikacja karty — poziomy i klasy (EN 388, poziom cięcia, EN 407, kategoria ŚOI, klasa obuwia, FFP, SNR, klasa
+     * uderzenia) oraz opakowanie (pojemność, sztuka czy zestaw; pomiar na produkcji 24.09 w PackageChecker). Wymiarów,
+     * cech tak/nie i koloru tu nie używamy: cechy dały w pomiarze sprzeczności kart same fałszywe alarmy, a wymiarów
+     * i koloru jako sita zamienników nikt nie zmierzył. Status: fail — któryś parametr przeczy; missing — karta nie podaje
+     * któregoś; check — pola karty sobie przeczą; ok — wszystkie podane i spełnione; none — nie ma czego sprawdzić.
      *
      * @return array{status: string, rows: list<array{label: string, status: string, note: ?string}>}
      */
@@ -555,7 +558,8 @@ final class BattlecardService
         }
         $rows = [];
         $statuses = [];
-        foreach ($this->levels->check($requirement, CardSources::fromProduct($product)) as $row) {
+        $sources = CardSources::fromProduct($product);
+        foreach ([...$this->levels->check($requirement, $sources), ...$this->package->check($requirement, $sources)] as $row) {
             $status = $this->coupXWithIsoMet($row) ? Status::Unclear : $row->status;
             $rows[] = ['label' => $row->label, 'status' => $status->value, 'note' => $row->note];
             $statuses[] = $status;

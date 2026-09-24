@@ -19,6 +19,7 @@ final class RequirementCheck
         'levels' => 'Poziomy i klasy',
         'flags' => 'Cechy',
         'color' => 'Kolor',
+        'package' => 'Opakowanie',
     ];
 
     /** @var list<ParameterChecker> */
@@ -29,8 +30,9 @@ final class RequirementCheck
         private readonly LevelChecker $levels,
         FeatureFlagChecker $flags,
         ColorChecker $color,
+        PackageChecker $package = new PackageChecker,
     ) {
-        $this->checkers = [$dimensions, $levels, $flags, $color];
+        $this->checkers = [$dimensions, $levels, $flags, $color, $package];
     }
 
     /**

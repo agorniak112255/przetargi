@@ -108,6 +108,27 @@ final class BattlecardSubstituteVerificationTest extends TestCase
         ));
     }
 
+    /** Poz. 11 (płukanka, butelka 500 ml): zestawy, szafki, stacje i inne pojemności nie są zamiennikami. */
+    public function test_line_11_sets_and_other_capacities_are_dropped(): void
+    {
+        $ours = $this->glove('7251', 'Płukanka do oczu Cederroth Eye Wash 500 ml', 'CEDERROTH', '', 53.31);
+        $this->glove('ASE060-000-000', '500 ml roztworu do płukania oczu', 'JSP', '', 27.11);
+        $this->glove('7221', 'Płukanka do oczu Cederroth Eye Wash Pocket, 235 ml', 'CEDERROTH', '', 45.23);
+        $this->glove('725200', 'Płukanka do oczu Cederroth Eye Wash 2-pack, 2x500 ml', 'CEDERROTH', '', 106.6);
+        $this->glove('721500', 'Stacja do płukania oczu Cederroth Eye Wash Station, 2x500 ml', 'CEDERROTH', '', 475.92);
+        [$tender, $item] = $this->item(Opisowy15Fixture::requirement(11), $ours);
+
+        $card = $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")->assertOk()->json('battlecard');
+        $subs = collect($card['substitutes'])->keyBy('sku');
+
+        $this->assertSame(['ASE060-000-000'], array_map('strval', $subs->keys()->all()));
+        $this->assertSame('ok', $subs['ASE060-000-000']['verification']['status']);
+        $this->assertSame([['label' => 'Pojemność', 'status' => 'ok']], array_map(
+            static fn (array $row): array => ['label' => $row['label'], 'status' => $row['status']],
+            $subs['ASE060-000-000']['verification']['rows'],
+        ));
+    }
+
     public function test_requirement_without_levels_keeps_substitute_but_not_for_price_swap(): void
     {
         $ours = $this->glove('NITRYL-MAIN', 'Rękawice robocze nitrylowe ze ściągaczem', 'REJS', '', 10);

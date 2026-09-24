@@ -45,11 +45,12 @@ export type SubstituteVerification = {
 }
 
 const VERIFICATION_BADGE: Record<SubstituteVerification['status'], { label: string; cls: string }> = {
-  ok: { label: 'zgodny z SIWZ', cls: 'bg-emerald-100 text-emerald-800' },
+  // „zgodny” dotyczy tylko sprawdzonych parametrów — lista pod kafelkiem mówi których
+  ok: { label: 'zgodny (sprawdzone)', cls: 'bg-emerald-100 text-emerald-800' },
   check: { label: 'do sprawdzenia', cls: 'bg-amber-100 text-amber-800' },
   missing: { label: 'brak danych', cls: 'bg-amber-100 text-amber-800' },
   fail: { label: 'nie spełnia SIWZ', cls: 'bg-rose-100 text-rose-800' },
-  none: { label: 'niesprawdzony', cls: 'bg-slate-100 text-slate-600' },
+  none: { label: 'bez porównania', cls: 'bg-slate-100 text-slate-600' },
 }
 
 const ROW_MARK: Record<string, string> = { ok: '✓', fail: '✗', missing: 'brak', unclear: '?' }
@@ -59,7 +60,7 @@ function VerificationBadge({ v }: { v: SubstituteVerification }) {
   const title =
     v.rows.length > 0
       ? v.rows.map((r) => `${r.label}: ${ROW_MARK[r.status] ?? r.status}${r.note ? ` — ${r.note}` : ''}`).join('\n')
-      : 'SIWZ nie podaje poziomów ani klas — karta wybrana po podobieństwie opisu, sprawdź ręcznie.'
+      : 'SIWZ nie podaje norm, poziomów, klas ani pojemności, które system umie porównać — karta dobrana po podobieństwie opisu, sprawdź ręcznie.'
   return (
     <span className={`rounded px-1 py-0.5 text-[9px] font-semibold ${badge.cls}`} title={title}>
       {badge.label}

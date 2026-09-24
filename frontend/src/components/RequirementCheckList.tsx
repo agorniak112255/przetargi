@@ -57,7 +57,7 @@ export type RequirementConflicts = {
 }
 
 export type RequirementCheck = {
-  groups: { key: 'dimensions' | 'levels' | 'flags' | 'color'; label: string; rows: CheckRow[] }[]
+  groups: { key: 'dimensions' | 'levels' | 'flags' | 'color' | 'package'; label: string; rows: CheckRow[] }[]
   conflicts: RequirementConflicts
   /** skąd są normy producenta (pola „producent”); null — karta ich nie ma */
   manufacturer_source?: { url: string | null; connector: string | null; synced_at: string | null; verified: boolean } | null
@@ -87,7 +87,7 @@ type Props = {
 
 const SOURCE_LABEL: Record<CheckSource, string> = {
   name: 'nazwa',
-  norms: 'normy',
+  norms: 'normy',
   price_list: 'cennik dostawcy',
   shop_fields: 'tabela dostawcy',
   specs: 'specyfikacja',
