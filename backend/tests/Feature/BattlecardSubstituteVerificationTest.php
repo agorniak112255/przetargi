@@ -54,6 +54,23 @@ final class BattlecardSubstituteVerificationTest extends TestCase
         $this->assertSame(['Zamiennik 44-304 (ATG) tańszy o ok. 33% (po upuście).'], $card['highlights']);
     }
 
+    /** MAPA KryTech 644 „4X43D” przy wymaganym „4341B”: Coup X przy spełnionej literze ISO — do sprawdzenia, nie ukryty. */
+    public function test_coup_x_with_iso_letter_met_is_shown_for_review_but_not_for_price(): void
+    {
+        $ours = $this->glove('44-305', 'MaxiCut Oil rękawice antyprzecięciowe powlekane NBR', 'ATG', 'EN 388:2016 + A1:2018 – 4341B, EN 407:2004 – X1XXXX', 30);
+        $this->glove('34644018', 'KryTech 644 rękawice antyprzecięciowe powlekane NBR, ściągacz', 'MAPA', 'EN 388:2016 – 4X43D, EN 407:2020 – X1XXXX', 12);
+        $this->glove('4X4XD', 'Rękawice antyprzecięciowe powlekane NBR, ściągacz', 'TEST', 'EN 388:2016 – 4X4XD, EN 407:2020 – X1XXXX', 11);
+        [$tender, $item] = $this->item(Opisowy15Fixture::requirement(7), $ours);
+
+        $card = $this->getJson("/api/tenders/{$tender->id}/items/{$item->id}/battlecard")->assertOk()->json('battlecard');
+        $subs = collect($card['substitutes'])->keyBy('sku');
+
+        $this->assertSame(['34644018'], array_map('strval', $subs->keys()->all()), 'przekłucie X to prawdziwy brak — karta ukryta');
+        $this->assertSame('check', $subs['34644018']['verification']['status']);
+        $this->assertFalse($subs['34644018']['price_comparable']);
+        $this->assertSame([], $card['highlights']);
+    }
+
     public function test_saved_list_from_before_verification_is_filtered_on_read(): void
     {
         $ours = $this->glove('44-305', 'MaxiCut Oil rękawice antyprzecięciowe powlekane NBR', 'ATG', 'EN 388:2016 + A1:2018 – 4341B, EN 407:2004 – X1XXXX', 30);

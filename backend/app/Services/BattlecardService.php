@@ -14,6 +14,8 @@ use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
 use App\Support\RequirementCheck\CardSources;
+use App\Support\RequirementCheck\CheckRow;
+use App\Support\RequirementCheck\En388Code;
 use App\Support\RequirementCheck\LevelChecker;
 use App\Support\RequirementCheck\Status;
 use Throwable;
@@ -554,8 +556,9 @@ final class BattlecardService
         $rows = [];
         $statuses = [];
         foreach ($this->levels->check($requirement, CardSources::fromProduct($product)) as $row) {
-            $rows[] = ['label' => $row->label, 'status' => $row->status->value, 'note' => $row->note];
-            $statuses[] = $row->status;
+            $status = $this->coupXWithIsoMet($row) ? Status::Unclear : $row->status;
+            $rows[] = ['label' => $row->label, 'status' => $status->value, 'note' => $row->note];
+            $statuses[] = $status;
         }
         if ($statuses === []) {
             return ['status' => 'none', 'rows' => []];
@@ -568,6 +571,31 @@ final class BattlecardService
         };
 
         return ['status' => $status, 'rows' => $rows];
+    }
+
+    /**
+     * EN 388:2016 — Coup Test „X” przy zbadanej literze ISO 13997 to zwykły zapis (ostrze tępieje, rozstrzyga ISO):
+     * MAPA KryTech 644 „4X43D” przy wymaganym „4341B”. Wiersz ma status „brak” (cyfr i liter nie przeliczamy), ale
+     * jedyny brak to Coup X, a wymagana litera ISO jest spełniona — zamiennik pokazujemy „do sprawdzenia”, nie ukrywamy.
+     */
+    private function coupXWithIsoMet(CheckRow $row): bool
+    {
+        if ($row->key !== 'en388' || $row->status !== Status::Missing || $row->positions === null) {
+            return false;
+        }
+        $coupeName = En388Code::POSITIONS['coupe'];
+        $isoName = En388Code::POSITIONS['iso'];
+        $isoMet = false;
+        foreach ($row->positions as $position) {
+            $missingCoupX = $position['name'] === $coupeName && $position['card'] === 'X';
+            if ($position['name'] === $isoName && $position['status'] === Status::Ok->value) {
+                $isoMet = true;
+            } elseif ($position['status'] === Status::Missing->value && ! $missingCoupX) {
+                return false;
+            }
+        }
+
+        return $isoMet;
     }
 
     /**
