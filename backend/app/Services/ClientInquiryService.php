@@ -127,7 +127,15 @@ final class ClientInquiryService
         $extractStarted = hrtime(true);
         $extracted = $this->extract($analysisBody, $forwardedSubject ?? $this->nullable($subject));
         $extractMs = self::msSince($extractStarted);
-        $lineItems = $this->resolveLineItems($analysisBody, $extracted['line_items'], $subjectHint);
+        $resolved = $this->resolveLineItemsWithOmitted($analysisBody, $extracted['line_items'], $subjectHint);
+        $lineItems = $resolved['items'];
+        // karta modelu przy pozycji, którą scaliliśmy z sumą albo rozmiarami, idzie do tej, która została
+        foreach ($extracted['cards'] as $i => $card) {
+            $target = $resolved['merged_ids'][trim((string) ($card['item_id'] ?? ''))] ?? null;
+            if ($target !== null) {
+                $extracted['cards'][$i]['item_id'] = $target;
+            }
+        }
         // Link w pozycji wskazuje kartę wprost — ten sam adres zapisał przy karcie łącznik B2B.
         $linked = app(InquiryProductLinks::class)->attach($lineItems, $analysisBody);
         $lineItems = $linked['items'];
@@ -176,6 +184,8 @@ final class ClientInquiryService
                 'questions' => $extracted['questions'],
                 'product_queries' => $queries,
                 'line_items' => $lineItems,
+                // wiersze maila poza pozycjami (ponad limit albo niepewne pokrycie) — handlowiec dopisuje je ręcznie
+                'omitted_items' => $resolved['omitted'],
                 'matches' => $matches,
                 // karty wskazane linkiem z maila, po pozycjach (InquiryProductLinks)
                 'link_candidates' => $this->linkCandidates($linked['products']),
@@ -1061,6 +1071,7 @@ final class ClientInquiryService
         $author = $inquiry->loadMissing('user')->user;
         // warunek zamawiania (UVEX „po 10 szt.”) tylko w odpowiedzi — itemsView() zostaje widokiem zapisanej analizy
         $items = $this->withOrderQuantities($this->itemsView($inquiry));
+        $omitted = $this->omittedItemsOf($analysis);
 
         return [
             'id' => $inquiry->id,
@@ -1081,7 +1092,8 @@ final class ClientInquiryService
                 : null,
             'source_body' => (string) $inquiry->source_body,
             'questions' => $this->stringList($analysis['questions'] ?? null),
-            'attention_count' => $this->countAttention($items),
+            // wiersz maila, który nie wszedł do pozycji, zawsze wymaga ręki handlowca
+            'attention_count' => $this->countAttention($items) + count($omitted),
             'replied_at' => $inquiry->replied_at?->toIso8601String(),
             'duplicate_of' => $inquiry->duplicate_of_id === null
                 ? null
@@ -1095,6 +1107,9 @@ final class ClientInquiryService
                 'margin_max' => OfferPricing::marginMax(),
             ],
             'items' => $items,
+            // wiersze maila poza pozycjami — nie ma ich w liście, handlowiec dopisuje je sam
+            'omitted_items' => $omitted,
+            'omitted_limit' => self::MAX_LINE_ITEMS,
             'global_cards' => $this->globalCards($analysis),
             'cards' => $this->storedCards($analysis),
             'answers' => $answers,
@@ -1110,7 +1125,10 @@ final class ClientInquiryService
     /** Liczba pozycji do sprawdzenia — liczona w PHP z zapisanego analysis + answers. */
     public function attentionCount(ClientInquiry $inquiry): int
     {
-        return $this->countAttention($this->itemsView($inquiry));
+        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
+
+        // wiersz maila, który nie wszedł do pozycji, zawsze wymaga ręki handlowca
+        return $this->countAttention($this->itemsView($inquiry)) + count($this->omittedItemsOf($analysis));
     }
 
     /**
@@ -1507,6 +1525,31 @@ final class ClientInquiryService
                 'query' => (string) ($group['query'] ?? ''),
                 'products' => $products,
                 'model_failed' => ($group['model_failed'] ?? false) === true,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Wiersze maila poza pozycjami (resolveLineItemsWithOmitted()); stare rekordy ich nie mają.
+     *
+     * @param  array<string, mixed>  $analysis
+     * @return list<array{quote: string, qty: string|null, unit: string|null, size: string|null}>
+     */
+    private function omittedItemsOf(array $analysis): array
+    {
+        $out = [];
+        foreach (is_array($analysis['omitted_items'] ?? null) ? $analysis['omitted_items'] : [] as $row) {
+            $quote = is_array($row) ? $this->nullable($row['quote'] ?? null) : null;
+            if ($quote === null) {
+                continue;
+            }
+            $out[] = [
+                'quote' => $quote,
+                'qty' => $this->nullable($row['qty'] ?? null),
+                'unit' => $this->nullable($row['unit'] ?? null),
+                'size' => $this->nullable($row['size'] ?? null),
             ];
         }
 
@@ -2137,6 +2180,9 @@ final class ClientInquiryService
             }
         }
 
+        // Bez przycinania do limitu pozycji: model rozbija wiersz na rozmiary i bywa, że
+        // podaje go jeszcze raz jako sumę — przycięcie przed scaleniem zabierało ostatnie
+        // wiersze maila (#71). Limit liczy resolveLineItemsWithOmitted(), a nadmiar pokazuje.
         $lineItems = [];
         $index = 1;
         foreach ($raw['line_items'] ?? [] as $row) {
@@ -2144,9 +2190,6 @@ final class ClientInquiryService
             if ($normalized !== null) {
                 $lineItems[] = $normalized;
                 $index++;
-            }
-            if (count($lineItems) >= self::MAX_LINE_ITEMS) {
-                break;
             }
         }
 
@@ -2464,18 +2507,313 @@ final class ClientInquiryService
      */
     public function resolveLineItems(string $body, array $fromAi, ?string $subjectHint = null): array
     {
+        return $this->resolveLineItemsWithOmitted($body, $fromAi, $subjectHint)['items'];
+    }
+
+    /**
+     * Pozycje zapytania i wiersze maila, które do nich nie weszły (ponad limit pozycji albo
+     * o niepewnym pokryciu). Nie mogą zniknąć po cichu (zapytanie #71: szelki i amortyzator
+     * przepadły bez śladu) — handlowiec widzi je jako wiersze do dopisania ręcznie.
+     *
+     * `merged_ids`: pozycja modelu → pozycja, która ją zastąpiła (suma i jej rozmiary),
+     * żeby karty modelu wskazujące usuniętą pozycję nie przepadły.
+     *
+     * @param  list<array<string, mixed>>  $fromAi
+     * @return array{
+     *     items: list<array<string, mixed>>,
+     *     omitted: list<array{quote: string, qty: string|null, unit: string|null, size: string|null}>,
+     *     merged_ids: array<string, string>
+     * }
+     */
+    public function resolveLineItemsWithOmitted(string $body, array $fromAi, ?string $subjectHint = null): array
+    {
         $parsed = $this->parseLineItemsFromBody($body);
         // Parser przeważa nad modelem, gdy znalazł więcej pozycji — ale liczą się tylko
         // wiersze ze znamionami wyrobu. Inaczej telefon czy urwany wiersz ze stopki
-        // przegłosowywały poprawną odpowiedź modelu samą liczbą.
-        $credible = count(array_filter($parsed, fn (array $item): bool => $this->isCredibleRow($item)));
-        $items = $parsed !== [] && $credible > count($fromAi)
-            ? $this->withAiConflicts($parsed, $fromAi)
-            : ($fromAi !== []
-                ? $this->withProductRowQuotes($this->quantitiesCheckedAgainstQuote($fromAi), $parsed, $body)
-                : $parsed);
+        // przegłosowywały poprawną odpowiedź modelu samą liczbą. Liczymy jak dawniej
+        // w granicach limitu: dłuższy mail nie może przez to zabrać pozycji modelowi.
+        $credible = count(array_filter(
+            array_slice($parsed, 0, self::MAX_LINE_ITEMS),
+            fn (array $item): bool => $this->isCredibleRow($item),
+        ));
+        $merged = [];
+        $unplaced = [];
+        if ($parsed !== [] && $credible > count($fromAi)) {
+            $items = $this->withAiConflicts($parsed, $fromAi);
+        } elseif ($fromAi !== []) {
+            $items = $this->withProductRowQuotes($this->quantitiesCheckedAgainstQuote($fromAi), $parsed, $body);
+            ['items' => $items, 'merged_ids' => $merged, 'unplaced' => $unplaced]
+                = $this->withoutDoubledSizeBreakdowns($items, $parsed, count($fromAi) >= self::MAX_LINE_ITEMS);
+        } else {
+            $items = $parsed;
+        }
 
-        return $this->withSearchQueries($items, $subjectHint);
+        $omitted = [];
+        foreach ([...array_slice($items, self::MAX_LINE_ITEMS), ...$unplaced] as $item) {
+            $qtyUnit = $this->qtyUnit($item);
+            $omitted[] = [
+                'quote' => (string) ($this->nullable($item['quote'] ?? null) ?? $item['query'] ?? ''),
+                'qty' => $qtyUnit['qty'],
+                'unit' => $qtyUnit['unit'],
+                'size' => $this->nullable($item['size'] ?? null),
+            ];
+        }
+
+        return [
+            'items' => $this->withSearchQueries(array_slice($items, 0, self::MAX_LINE_ITEMS), $subjectHint),
+            'omitted' => $omitted,
+            'merged_ids' => $merged,
+        ];
+    }
+
+    /**
+     * Wiersz z rozbiciem na rozmiary („432 pary / Rozmiar: 8-108par,9-108par,10-216par.”)
+     * model podaje raz jako sumę, raz po rozmiarach — a bywa, że oba naraz (zapytanie #71:
+     * pozycja 432 pary i trzy pozycje rozmiarów, w ofercie 864 pary). Zostaje jedno z dwóch,
+     * nigdy oba. Suma i rozmiary to jeden wiersz, gdy wskazują ten sam wiersz parsera
+     * (bez parsera: ten sam cytat), a do tego:
+     *
+     * - rozmiary modelu sumują się do sumy — wybór postaci niżej;
+     * - nie sumują się (model pominął rozmiar), ale rozbicie w samym cytacie sumuje się
+     *   do sumy — zostaje suma, bo tę liczbę napisał klient;
+     * - poza tym niczego nie ruszamy: to mogą być dwa wyroby w jednym wierszu.
+     *
+     * Postać wybieramy raz dla całego maila: rozmiary, jeśli wszystkie wiersze mieszczą się
+     * wtedy w limicie pozycji, inaczej sumy (z cytatem, w którym widać rozbicie). Cały
+     * wiersz maila jest ważniejszy niż rozbicie innego wiersza na rozmiary.
+     *
+     * Gdy model skończył na limicie pozycji, wiersze parsera za ostatnim zacytowanym
+     * dopisujemy — model przestał wypisywać przed końcem maila (#50, #71). Jeśli nie każda
+     * pozycja modelu wskazuje swój wiersz, pokrycia nie znamy: takie wiersze idą tylko do
+     * pominiętych (`unplaced`), żeby nie powtórzyć pozycji, którą model zacytował inaczej.
+     *
+     * @param  list<array<string, mixed>>  $items  pozycje modelu po sprawdzeniu ilości i cytatów
+     * @param  list<array<string, mixed>>  $parsed  wiersze parsera, w kolejności maila
+     * @return array{items: list<array<string, mixed>>, merged_ids: array<string, string>, unplaced: list<array<string, mixed>>}
+     */
+    private function withoutDoubledSizeBreakdowns(array $items, array $parsed, bool $modelHitLimit): array
+    {
+        $rows = [];
+        foreach ($parsed as $r => $row) {
+            $quote = (string) ($row['quote'] ?? '');
+            $rows[$r] = [
+                'full' => $this->comparableQuote($quote),
+                'text' => $this->comparableQuote($this->rowTextWithoutNumber($quote)),
+            ];
+        }
+
+        $rowOf = [];
+        $groups = [];
+        foreach ($items as $i => $item) {
+            $quote = (string) ($item['quote'] ?? '');
+            $rowOf[$i] = $this->parsedRowOf($quote, $rows);
+            $key = $rowOf[$i] !== null ? 'row:'.$rowOf[$i] : 'quote:'.$this->comparableQuote($quote);
+            $groups[$key][] = $i;
+        }
+
+        // [indeks sumy, indeksy rozmiarów] — wiersze do zwinięcia albo rozwinięcia
+        $splits = [];
+        $folds = [];
+        foreach ($groups as $members) {
+            $totals = array_values(array_filter(
+                $members,
+                static fn (int $i): bool => trim((string) ($items[$i]['size'] ?? '')) === '',
+            ));
+            $sized = array_values(array_diff($members, $totals));
+            if (count($totals) !== 1 || $sized === []) {
+                continue;
+            }
+            $total = $totals[0];
+            $totalQty = $this->numericQty($items[$total]['qty'] ?? null);
+            $unit = $this->unitKind($items[$total]['unit'] ?? null);
+            if ($totalQty === null) {
+                continue;
+            }
+            $sum = 0.0;
+            $complete = true;
+            foreach ($sized as $s) {
+                $qty = $this->numericQty($items[$s]['qty'] ?? null);
+                $complete = $complete && $qty !== null && $this->unitKind($items[$s]['unit'] ?? null) === $unit;
+                $sum += $qty ?? 0.0;
+            }
+            if ($complete && abs($sum - $totalQty) < 0.001) {
+                $splits[] = [$total, $sized];
+
+                continue;
+            }
+            // rozbicie z samego cytatu (co najmniej dwa rozmiary) sumuje się do sumy klienta
+            $pairs = $this->sizeBreakdownPairs($this->fullestQuote($items, $total, $sized));
+            $pairsSum = 0.0;
+            foreach ($pairs as $pair) {
+                $pairsSum += $this->unitKind($pair['unit']) === $unit ? (float) $pair['qty'] : NAN;
+            }
+            if (count($pairs) >= 2 && abs($pairsSum - $totalQty) < 0.001) {
+                $folds[] = [$total, $sized];
+            }
+        }
+
+        $missing = [];
+        $unplaced = [];
+        $placed = array_filter($rowOf, static fn (?int $r): bool => $r !== null);
+        if ($modelHitLimit && $placed !== []) {
+            $certain = count($placed) === count($rowOf);
+            $lastPlaced = max($placed);
+            foreach ($parsed as $r => $row) {
+                if ($r > $lastPlaced && $this->isCredibleRow($row)) {
+                    if ($certain) {
+                        $missing[] = $row;
+                    } else {
+                        $unplaced[] = $row;
+                    }
+                }
+            }
+        }
+
+        // rozmiary zostają, gdy wszystko mieści się w limicie; inaczej każdy taki wiersz to suma
+        $foldedCount = count($items) + count($missing);
+        foreach ([...$splits, ...$folds] as [$total, $sized]) {
+            $foldedCount -= count($sized);
+        }
+        $expandedCount = $foldedCount;
+        foreach ($splits as [$total, $sized]) {
+            $expandedCount += count($sized) - 1;
+        }
+        if ($expandedCount > self::MAX_LINE_ITEMS) {
+            $folds = [...$folds, ...$splits];
+            $splits = [];
+        }
+
+        $drop = [];
+        $merged = [];
+        foreach ($splits as [$total, $sized]) {
+            $drop[] = $total;
+            $merged[(string) $items[$total]['id']] = (string) $items[$sized[0]]['id'];
+            foreach ($sized as $s) {
+                // uwaga modelu o sprzeczności dotyczy wiersza, więc i każdego rozmiaru
+                $items[$s]['conflict'] = $this->nullable($items[$s]['conflict'] ?? null) ?? $this->nullable($items[$total]['conflict'] ?? null);
+            }
+        }
+        foreach ($folds as [$total, $sized]) {
+            $items[$total]['quote'] = $this->fullestQuote($items, $total, $sized);
+            foreach ($sized as $s) {
+                $drop[] = $s;
+                $merged[(string) $items[$s]['id']] = (string) $items[$total]['id'];
+                $items[$total]['conflict'] = $this->nullable($items[$total]['conflict'] ?? null) ?? $this->nullable($items[$s]['conflict'] ?? null);
+            }
+        }
+
+        $out = [];
+        $next = 0;
+        foreach ($items as $i => $item) {
+            if (preg_match('/^item_(\d+)$/', (string) ($item['id'] ?? ''), $m) === 1) {
+                $next = max($next, (int) $m[1]);
+            }
+            if (! in_array($i, $drop, true)) {
+                $out[] = $item;
+            }
+        }
+        foreach ($missing as $row) {
+            // numeracja parsera zderzyłaby się z numeracją modelu (karty modelu wskazują item_N)
+            $row['id'] = 'item_'.(++$next);
+            $out[] = $row;
+        }
+
+        return ['items' => $out, 'merged_ids' => $merged, 'unplaced' => $unplaced];
+    }
+
+    /**
+     * Wiersz parsera, z którego pochodzi cytat pozycji: cytat obejmuje treść wiersza (bez numeru
+     * pozycji) albo sam jest kawałkiem jednego wiersza. Niejednoznacznie — null: lepiej nie
+     * łączyć pozycji, niż złączyć dwa różne wyroby.
+     *
+     * @param  array<int, array{full: string, text: string}>  $rows
+     */
+    private function parsedRowOf(string $quote, array $rows): ?int
+    {
+        $quote = $this->comparableQuote($quote);
+        if (mb_strlen($quote) < 8) {
+            return null;
+        }
+        // cytat obejmuje wiersz (np. wiersz + linia rozmiarów) — wygrywa najdłuższy objęty wiersz
+        $best = null;
+        $bestLength = 0;
+        $tie = false;
+        // cytat jest kawałkiem wiersza — tylko gdy nie ma go w żadnym innym
+        $inside = [];
+        foreach ($rows as $r => $row) {
+            $length = mb_strlen($row['text']);
+            if ($length >= 4 && $this->containsWords($quote, $row['text'])) {
+                if ($length > $bestLength) {
+                    [$best, $bestLength, $tie] = [$r, $length, false];
+                } elseif ($length === $bestLength) {
+                    $tie = true;
+                }
+            } elseif ($this->containsWords($row['full'], $quote)) {
+                $inside[] = $r;
+            }
+        }
+        if ($best !== null) {
+            return $tie ? null : $best;
+        }
+
+        return count($inside) === 1 ? $inside[0] : null;
+    }
+
+    /** Czy tekst zawiera fragment w granicach słów („kask” nie trafia w „kaskiem”). */
+    private function containsWords(string $haystack, string $needle): bool
+    {
+        return $needle !== ''
+            && preg_match('/(?<![\p{L}\d])'.preg_quote($needle, '/').'(?![\p{L}\d])/u', $haystack) === 1;
+    }
+
+    /** Treść wiersza bez numeru pozycji z przodu („2. Rękawice…” → „Rękawice…”). */
+    private function rowTextWithoutNumber(string $line): string
+    {
+        $marked = $this->positionMarker($line);
+        if ($marked !== null) {
+            return $marked['rest'];
+        }
+
+        return preg_match(self::ROW_NUMBER, trim($line), $m) === 1 ? trim($m[3]) : $line;
+    }
+
+    /**
+     * Cytat sumy, gdy zostaje zamiast rozmiarów: najdłuższy cytat grupy, który go zawiera —
+     * wiersz razem z linią rozmiarów, żeby handlowiec widział rozbicie, jak stoi w mailu.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @param  list<int>  $sized
+     */
+    private function fullestQuote(array $items, int $total, array $sized): string
+    {
+        $quote = (string) ($items[$total]['quote'] ?? '');
+        $own = $this->comparableQuote($quote);
+        foreach ($sized as $s) {
+            $candidate = (string) ($items[$s]['quote'] ?? '');
+            if (mb_strlen($candidate) > mb_strlen($quote) && str_contains($this->comparableQuote($candidate), $own)) {
+                $quote = $candidate;
+            }
+        }
+
+        return $quote;
+    }
+
+    private function numericQty(mixed $qty): ?float
+    {
+        $qty = str_replace(',', '.', trim((string) $qty));
+
+        return is_numeric($qty) ? (float) $qty : null;
+    }
+
+    /**
+     * Rodzaj jednostki do porównania ilości: „pary” i „par” to jedno, „op.” i „szt.” nie.
+     * Brak jednostki to osobny rodzaj — nie zgadujemy, że chodziło o pary.
+     */
+    private function unitKind(mixed $unit): string
+    {
+        $letters = preg_replace('/[^\p{L}]+/u', '', mb_strtolower(trim((string) $unit))) ?? '';
+
+        return mb_substr($letters, 0, 2);
     }
 
     /**
@@ -2697,20 +3035,34 @@ final class ClientInquiryService
         if ($size === '') {
             return null;
         }
-        // pary stoją po przecinku („8-108par,9-108par”), ale nie w środku liczby („10,5”)
-        $pair = '(?<![\p{L}\d])(?<!\d[.,])([\p{L}\d]{1,4}(?:[.,]\d)?)\s*[-–:=]\s*(\d{1,5})\s*('.self::UNIT_PATTERN.')';
-        if (preg_match_all('/'.$pair.'/iu', $quote, $all, PREG_SET_ORDER) < 1) {
-            return null;
-        }
-        foreach ($all as $match) {
-            if (mb_strtolower($match[1]) === mb_strtolower($size)) {
-                $digits = ltrim($match[2], '0');
-
-                return ['qty' => $this->formatQty($digits === '' ? '0' : $digits), 'unit' => trim($match[3])];
+        foreach ($this->sizeBreakdownPairs($quote) as $pair) {
+            if (mb_strtolower($pair['size']) === mb_strtolower($size)) {
+                return ['qty' => $pair['qty'], 'unit' => $pair['unit']];
             }
         }
 
         return null;
+    }
+
+    /**
+     * Pary rozmiar–ilość z cytatu, jak stoją: „8-108par,9-108par,10-216par.” → 8/108/par, 9/108/par, 10/216/par.
+     *
+     * @return list<array{size: string, qty: string, unit: string}>
+     */
+    private function sizeBreakdownPairs(string $quote): array
+    {
+        // pary stoją po przecinku („8-108par,9-108par”), ale nie w środku liczby („10,5”)
+        $pair = '(?<![\p{L}\d])(?<!\d[.,])([\p{L}\d]{1,4}(?:[.,]\d)?)\s*[-–:=]\s*(\d{1,5})\s*('.self::UNIT_PATTERN.')';
+        if (preg_match_all('/'.$pair.'/iu', $quote, $all, PREG_SET_ORDER) < 1) {
+            return [];
+        }
+        $out = [];
+        foreach ($all as $match) {
+            $digits = ltrim($match[2], '0');
+            $out[] = ['size' => $match[1], 'qty' => $this->formatQty($digits === '' ? '0' : $digits), 'unit' => trim($match[3])];
+        }
+
+        return $out;
     }
 
     /** Czy taka liczba stoi w cytacie jako osobny zapis (a nie jako część innej liczby). */
@@ -2832,9 +3184,15 @@ final class ClientInquiryService
         // inna lista, a ta bywa listą wyrobów.
         $infoRequest = false;
         $infoLast = 0;
+        // ile numerów stało do pozycji z końca limitu — o numeracji decydują, jak dawniej,
+        // tylko one: druga lista dalej w mailu nie może oddać numerów wierszy jako ilości
+        $numbersAtLimit = null;
         foreach ($this->bodyLines($body) as $line) {
             if ($line === '') {
                 continue;
+            }
+            if ($numbersAtLimit === null && count($items) >= self::MAX_LINE_ITEMS) {
+                $numbersAtLimit = count($leadingNumbers);
             }
             // Telefon, numer konta i data z przodu wiersza to liczby, ale nie ilości:
             // „600 903 483 <tel:…>” ze stopki wchodziło do oferty jako 600 sztuk.
@@ -2903,9 +3261,6 @@ final class ClientInquiryService
                     'size' => $this->sizeFromLine($rest),
                 ];
                 $index++;
-                if (count($items) >= self::MAX_LINE_ITEMS) {
-                    break;
-                }
 
                 continue;
             }
@@ -2928,12 +3283,14 @@ final class ClientInquiryService
                 'size' => $size,
             ];
             $index++;
-            if (count($items) >= self::MAX_LINE_ITEMS) {
-                break;
-            }
         }
 
-        return $this->dropEnumerationQty($items, $leadingNumbers);
+        // Wszystkie wiersze, także ponad limit pozycji — limit liczy resolveLineItemsWithOmitted()
+        // i to, co się nie zmieściło, pokazuje handlowcowi zamiast gubić.
+        return $this->dropEnumerationQty(
+            $items,
+            $numbersAtLimit === null ? $leadingNumbers : array_slice($leadingNumbers, 0, $numbersAtLimit),
+        );
     }
 
     /**
@@ -3038,7 +3395,11 @@ final class ClientInquiryService
      */
     private function dropEnumerationQty(array $items, array $numbers): array
     {
-        $unitGiven = array_map(static fn (array $item): bool => ($item['qty_unit_given'] ?? false) === true, $items);
+        // o numeracji decyduje lista w granicach limitu pozycji (parseLineItemsFromBody())
+        $unitGiven = array_map(
+            static fn (array $item): bool => ($item['qty_unit_given'] ?? false) === true,
+            array_slice($items, 0, self::MAX_LINE_ITEMS),
+        );
         // liczy się, ile wierszy było ponumerowanych — pominięte pytanie też było
         if (count($numbers) < 2 || ! $this->looksLikeEnumeration($numbers, $unitGiven)) {
             return array_map(function (array $item): array {

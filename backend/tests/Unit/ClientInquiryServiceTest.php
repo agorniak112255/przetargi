@@ -461,12 +461,16 @@ final class ClientInquiryServiceTest extends TestCase
         $this->assertSame(['216', 'par'], [$composed[0]['qty'], $composed[0]['unit']]);
 
         // litery też są rozmiarem; pozycja bez rozmiaru zostaje przy sumie z wiersza
+        // (osobno: obie naraz z jednego wiersza to suma i rozbicie, z których zostaje jedno —
+        // zob. test_size_split_replaces_the_total_row_when_it_fits)
         $letters = $this->service()->resolveLineItems('x', [
             ['id' => 'item_1', 'quote' => 'Kurtka robocza 30 szt: S - 10 szt, M - 20 szt', 'qty' => '30', 'unit' => 'szt', 'query' => 'Kurtka robocza', 'size' => 'M'],
-            ['id' => 'item_2', 'quote' => 'Kurtka robocza 30 szt: S - 10 szt, M - 20 szt', 'qty' => '30', 'unit' => 'szt', 'query' => 'Kurtka robocza', 'size' => null],
         ]);
         $this->assertSame('20', $letters[0]['qty']);
-        $this->assertSame('30', $letters[1]['qty']);
+        $whole = $this->service()->resolveLineItems('x', [
+            ['id' => 'item_2', 'quote' => 'Kurtka robocza 30 szt: S - 10 szt, M - 20 szt', 'qty' => '30', 'unit' => 'szt', 'query' => 'Kurtka robocza', 'size' => null],
+        ]);
+        $this->assertSame('30', $whole[0]['qty']);
 
         // jedna para to nie rozbicie — ilość czyta dotychczasowa reguła
         $single = $this->service()->resolveLineItems('x', [
@@ -494,6 +498,176 @@ final class ClientInquiryServiceTest extends TestCase
             ['id' => 'item_3', 'quote' => '108 par', 'qty' => '108', 'unit' => 'par', 'query' => 'Rękawice nitrylowe RNITZ', 'size' => '8'],
         ]);
         $this->assertSame('108 par', $resolved[1]['quote']);
+    }
+
+    /** Treść maila MESKO z zapytań #50, #67 i #71 (po odcięciu nagłówka i stopki). */
+    private const MESKO_BODY = "1. RĘKAWICZKI DIAGNOSTYCZNE BEZPUDROWE,(wyposażenie apteczek) -10 OPAKOWAŃ PO 50 PAR = 500par\n"
+        ."2. Rękawice ochronne tkaninowe pięciopalcowe, powlekane nitrylem żółtym, zakończone ściągaczem-symbol RNITz  - 432 pary\n"
+        ."Rozmiar: 8-108par,9-108par,10-216par.\n"
+        ."3.Rękawice białe dziane nakrapiane EN ISO 21420- 108 par,rozm.8\n"
+        ."4. Rękawiczki nitrylowe \"MedaSept\" EASYGRIP PURPLE - 50 opk ,rozmiar:M\n"
+        ."5. Rękawice drelichowe pięciopalcowe EN374,EN420(2)(brak rozmiaru) - 200 par\n"
+        ."6.Szelki bezpieczeństwa Protekt p-50mX rozmiar M-XL AB15021- 1 szt\n"
+        .'7.Amortyzator bezpieczeństwa z linką 1,5m BW100SCF/LB101/AZ011/023 PROTEKT z zatrzaskiem  - 1 szt';
+
+    /**
+     * Pozycje modelu z zapytania #71: wiersz 2 raz jako suma (432 pary) i drugi raz rozbity na rozmiary.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function meskoModelItems(): array
+    {
+        $rnitz = 'rękawice ochronne tkaninowe powlekane nitrylem żółtym zakończone ściągaczem';
+
+        return [
+            'diag' => ['id' => 'item_1', 'quote' => 'RĘKAWICZKI DIAGNOSTYCZNE BEZPUDROWE,(wyposażenie apteczek) -10 OPAKOWAŃ PO 50 PAR = 500par', 'qty' => '10', 'unit' => 'opakowań', 'query' => 'rękawiczki diagnostyczne bezpudrowe', 'size' => null],
+            'total' => ['id' => 'item_2', 'quote' => 'Rękawice ochronne tkaninowe pięciopalcowe, powlekane nitrylem żółtym, zakończone ściągaczem-symbol RNITz  - 432 pary', 'qty' => '432', 'unit' => 'pary', 'query' => $rnitz, 'size' => null],
+            's8' => ['id' => 'item_3', 'quote' => 'Rozmiar: 8-108par', 'qty' => '108', 'unit' => 'par', 'query' => $rnitz, 'size' => '8'],
+            's9' => ['id' => 'item_4', 'quote' => '9-108par', 'qty' => '108', 'unit' => 'par', 'query' => $rnitz, 'size' => '9'],
+            's10' => ['id' => 'item_5', 'quote' => '10-216par', 'qty' => '216', 'unit' => 'par', 'query' => $rnitz, 'size' => '10'],
+            'white' => ['id' => 'item_6', 'quote' => 'Rękawice białe dziane nakrapiane EN ISO 21420- 108 par,rozm.8', 'qty' => '108', 'unit' => 'par', 'query' => 'rękawice białe dziane nakrapiane EN ISO 21420', 'size' => '8'],
+            'meda' => ['id' => 'item_7', 'quote' => 'Rękawiczki nitrylowe "MedaSept" EASYGRIP PURPLE - 50 opk ,rozmiar:M', 'qty' => '50', 'unit' => 'opk', 'query' => 'rękawiczki nitrylowe MedaSept EASYGRIP PURPLE', 'size' => 'M'],
+            'drill' => ['id' => 'item_8', 'quote' => 'Rękawice drelichowe pięciopalcowe EN374,EN420(2)(brak rozmiaru) - 200 par', 'qty' => '200', 'unit' => 'par', 'query' => 'rękawice drelichowe pięciopalcowe EN374 EN420', 'size' => null],
+            'harness' => ['id' => 'item_9', 'quote' => 'Szelki bezpieczeństwa Protekt p-50mX rozmiar M-XL AB15021- 1 szt', 'qty' => '1', 'unit' => 'szt', 'query' => 'szelki bezpieczeństwa Protekt p-50mX AB15021', 'size' => 'M-XL'],
+            'absorber' => ['id' => 'item_10', 'quote' => 'Amortyzator bezpieczeństwa z linką 1,5m BW100SCF/LB101/AZ011/023 PROTEKT z zatrzaskiem  - 1 szt', 'qty' => '1', 'unit' => 'szt', 'query' => 'amortyzator bezpieczeństwa z linką 1,5m PROTEKT', 'size' => null],
+        ];
+    }
+
+    /**
+     * Pary rękawic RNITz we wszystkich pozycjach — klient zamówił 432.
+     *
+     * @param  list<array<string, mixed>>  $items
+     */
+    private function rnitzPairs(array $items): int
+    {
+        $sum = 0;
+        foreach ($items as $item) {
+            if (str_contains((string) $item['quote'], 'RNITz')) {
+                $sum += (int) $item['qty'];
+            }
+        }
+
+        return $sum;
+    }
+
+    /**
+     * Zapytanie #71 z 24.09.2026: model podał wiersz 2 raz jako sumę i drugi raz po rozmiarach
+     * (oferta na 864 pary), a limit 8 pozycji zjadł szelki i amortyzator bez śladu.
+     */
+    public function test_total_row_and_its_size_split_are_not_both_positions(): void
+    {
+        $model = $this->meskoModelItems();
+        // #71: model skończył na ósmej pozycji — wierszy 6 i 7 nie podał wcale
+        $fromAi = array_values(array_intersect_key($model, array_flip(['diag', 'total', 's8', 's9', 's10', 'white', 'meda', 'drill'])));
+        $report = $this->service()->resolveLineItemsWithOmitted(self::MESKO_BODY, $fromAi);
+        $this->assertMeskoRows($report);
+        // szelek i amortyzatora model nie podał — to wiersze maila z parsera, pod nowymi numerami
+        $this->assertSame(['item_9', 'item_10'], [$report['items'][5]['id'], $report['items'][6]['id']]);
+        $this->assertStringStartsWith('6.Szelki', $report['items'][5]['quote']);
+        // pozycja z sumą została — rozmiary, które ją powtarzały, wskazują teraz na nią (karty modelu)
+        $this->assertSame('item_2', $report['items'][1]['id']);
+        $this->assertSame(['item_3' => 'item_2', 'item_4' => 'item_2', 'item_5' => 'item_2'], $report['merged_ids']);
+
+        // model, który podał wszystkie wiersze (10 pozycji) — ten sam wynik, nic nie przepada
+        $this->assertMeskoRows($this->service()->resolveLineItemsWithOmitted(self::MESKO_BODY, array_values($model)));
+    }
+
+    /**
+     * @param  array{items: list<array<string, mixed>>, omitted: list<array<string, mixed>>}  $report
+     */
+    private function assertMeskoRows(array $report): void
+    {
+        $resolved = $report['items'];
+        $this->assertSame(432, $this->rnitzPairs($resolved));
+        // wiersz 2 jako jedna pozycja z rozbiciem na rozmiary w cytacie (jak #67) — bo inaczej
+        // limit 8 pozycji nie zmieściłby dwóch ostatnich wierszy maila
+        $this->assertCount(7, $resolved);
+        $this->assertSame(['432', 'pary', null], [$resolved[1]['qty'], $resolved[1]['unit'], $resolved[1]['size']]);
+        $this->assertStringContainsString('Rozmiar: 8-108par,9-108par,10-216par.', $resolved[1]['quote']);
+        foreach (['RĘKAWICZKI DIAGNOSTYCZNE', 'RNITz', 'Rękawice białe dziane', 'MedaSept', 'Rękawice drelichowe', 'Szelki bezpieczeństwa', 'Amortyzator bezpieczeństwa'] as $i => $text) {
+            $this->assertStringContainsString($text, $resolved[$i]['quote']);
+        }
+        $this->assertSame(['1', 'szt'], [$resolved[5]['qty'], $resolved[5]['unit']]);
+        $this->assertSame(['1', 'szt'], [$resolved[6]['qty'], $resolved[6]['unit']]);
+        $this->assertStringContainsString('symbol RNITz', $resolved[1]['search_query']);
+        $this->assertSame([], $report['omitted']);
+        $ids = array_column($resolved, 'id');
+        $this->assertSame($ids, array_values(array_unique($ids)));
+    }
+
+    /** Bez limitu na karku zostaje rozbicie na rozmiary — ale bez pozycji z sumą. */
+    public function test_size_split_replaces_the_total_row_when_it_fits(): void
+    {
+        $model = $this->meskoModelItems();
+        $body = implode("\n", array_slice(explode("\n", self::MESKO_BODY), 0, 3));
+        $resolved = $this->service()->resolveLineItems($body, [$model['diag'], $model['total'], $model['s8'], $model['s9'], $model['s10']]);
+
+        $this->assertSame(432, $this->rnitzPairs($resolved));
+        $this->assertSame([['108', '8'], ['108', '9'], ['216', '10']], array_map(
+            static fn (array $item): array => [$item['qty'], $item['size']],
+            array_slice($resolved, 1),
+        ));
+
+        // model pominął rozmiar S, ale rozbicie w cytacie sumuje się do sumy (10 + 20 = 30) —
+        // jedna pozycja z sumą klienta, nie 30 + 20 sztuk
+        $letters = $this->service()->resolveLineItems('x', [
+            ['id' => 'item_1', 'quote' => 'Kurtka robocza 30 szt: S - 10 szt, M - 20 szt', 'qty' => '30', 'unit' => 'szt', 'query' => 'Kurtka robocza', 'size' => null],
+            ['id' => 'item_2', 'quote' => 'Kurtka robocza 30 szt: S - 10 szt, M - 20 szt', 'qty' => '30', 'unit' => 'szt', 'query' => 'Kurtka robocza', 'size' => 'M'],
+        ]);
+        $this->assertSame([['30', null]], array_map(static fn (array $i): array => [$i['qty'], $i['size']], $letters));
+
+        // dwa różne wyroby w jednym wierszu (inna fraza, ilości się nie sumują) — oba zostają
+        $two = $this->service()->resolveLineItems('x', [
+            ['id' => 'item_1', 'quote' => 'Rękawice nitrylowe 100 par, rękawice lateksowe rozm. 8 - 50 par', 'qty' => '100', 'unit' => 'par', 'query' => 'rękawice nitrylowe', 'size' => null],
+            ['id' => 'item_2', 'quote' => 'Rękawice nitrylowe 100 par, rękawice lateksowe rozm. 8 - 50 par', 'qty' => '50', 'unit' => 'par', 'query' => 'rękawice lateksowe', 'size' => '8'],
+        ]);
+        $this->assertCount(2, $two);
+    }
+
+    /** Wiersze ponad limit pozycji nie znikają po cichu — wracają jako pominięte. */
+    public function test_rows_over_the_line_item_limit_are_reported_as_omitted(): void
+    {
+        $lines = [];
+        $fromAi = [];
+        foreach (range(1, 10) as $n) {
+            $lines[] = $n.'. Rękawice robocze model R'.$n.' - '.($n * 10).' par';
+            if ($n <= 8) {
+                $fromAi[] = ['id' => 'item_'.$n, 'quote' => 'Rękawice robocze model R'.$n.' - '.($n * 10).' par', 'qty' => (string) ($n * 10), 'unit' => 'par', 'query' => 'rękawice robocze R'.$n, 'size' => null];
+            }
+        }
+        $report = $this->service()->resolveLineItemsWithOmitted(implode("\n", $lines), $fromAi);
+
+        $this->assertCount(8, $report['items']);
+        $this->assertSame(['9. Rękawice robocze model R9 - 90 par', '10. Rękawice robocze model R10 - 100 par'], array_column($report['omitted'], 'quote'));
+        $this->assertSame(['90', '100'], array_column($report['omitted'], 'qty'));
+
+        // parser przegłosował model (więcej wierszy niż pozycji modelu) — nadmiar też wraca
+        $parsed = $this->service()->resolveLineItemsWithOmitted(implode("\n", $lines), [$fromAi[0]]);
+        $this->assertCount(8, $parsed['items']);
+        $this->assertSame(['90', '100'], array_column($parsed['omitted'], 'qty'));
+
+        // Model przepisał cytat po swojemu, więc nie wiemy, które wiersze pokrył: nie dopisujemy
+        // ich (to mógłby być duplikat), tylko pokazujemy jako pominięte.
+        $rewritten = $fromAi;
+        $rewritten[7]['quote'] = 'Rękawice robocze typu R8 (80 par)';
+        $unsure = $this->service()->resolveLineItemsWithOmitted(implode("\n", $lines), $rewritten);
+        $this->assertCount(8, $unsure['items']);
+        $this->assertSame(['8. Rękawice robocze model R8 - 80 par', '9. Rękawice robocze model R9 - 90 par', '10. Rękawice robocze model R10 - 100 par'], array_column($unsure['omitted'], 'quote'));
+    }
+
+    /** Wiersze za limitem nie zmieniają decyzji o numeracji pierwszych ośmiu (jak przed zniesieniem limitu parsera). */
+    public function test_rows_after_the_limit_do_not_turn_list_numbers_into_quantities(): void
+    {
+        $lines = [];
+        foreach (range(1, 8) as $n) {
+            $lines[] = $n.'. Rękawice robocze model R'.$n;
+        }
+        // druga lista od nowa — sama psułaby ciąg 1…8 numerów
+        $lines[] = '1. Buty robocze S3';
+        $items = $this->service()->parseLineItemsFromBody(implode("\n", $lines));
+
+        $this->assertCount(9, $items);
+        $this->assertSame(array_fill(0, 9, null), array_column($items, 'qty'));
     }
 
     public function test_cederroth_mail_gives_both_positions_and_nothing_from_the_footer(): void

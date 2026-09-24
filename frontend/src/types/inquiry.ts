@@ -183,6 +183,14 @@ export type InquiryContact = {
   raw: string | null
 }
 
+/** Wiersz maila, którego nie ma w pozycjach: ponad limit pozycji albo niepewne pokrycie. */
+export type InquiryOmittedItem = {
+  quote: string
+  qty: string | null
+  unit: string | null
+  size: string | null
+}
+
 export type InquiryPayload = {
   id: number
   client_id: number | null
@@ -206,6 +214,10 @@ export type InquiryPayload = {
   send_requested_at: string | null
   price: InquiryPrice
   items: InquiryItem[]
+  /** Wiersze maila poza pozycjami i poza listem — handlowiec dopisuje je sam. Wliczone w attention_count. */
+  omitted_items?: InquiryOmittedItem[]
+  /** Ile pozycji obejmuje analiza jednego zapytania. */
+  omitted_limit?: number
   global_cards: InquiryCard[]
   /** Stare karty — front ich nie czyta. */
   cards: InquiryCard[]

@@ -15,6 +15,7 @@ import type {
   InquiryDuplicateRef,
   InquiryFlag,
   InquiryItem,
+  InquiryOmittedItem,
   InquiryPayload,
   InquiryPriceMode,
   InquiryTerms,
@@ -172,6 +173,31 @@ function DuplicateOfBar({ origin }: { origin: InquiryDuplicateRef }) {
         Otwórz tamto zapytanie
       </Link>
     </p>
+  )
+}
+
+/**
+ * Wiersze maila, których nie ma w pozycjach — ponad limit pozycji na zapytanie albo
+ * wiersze, których pokrycia nie jesteśmy pewni. Nie wchodzą do listu, więc bez tego
+ * paska oferta byłaby po cichu niepełna.
+ */
+function OmittedItemsBar({ list, limit }: { list: InquiryOmittedItem[]; limit?: number }) {
+  return (
+    <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+      <p className="font-medium">
+        Wiersze z maila poza pozycjami ({list.length}) — nie ma ich w liście. Sprawdź je i dopisz
+        brakujące ręcznie.
+      </p>
+      {limit ? <p className="text-xs">Analiza obejmuje najwyżej {limit} pozycji jednego zapytania.</p> : null}
+      <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs">
+        {list.map((row, i) => (
+          <li key={i}>
+            {row.quote}
+            {row.size && !row.quote.includes(row.size) ? ` · rozm. ${row.size}` : ''}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -1004,6 +1030,10 @@ export function InquiryReply() {
   const sender = [inquiry.source_from_name, inquiry.source_from_email]
     .filter(Boolean)
     .join(inquiry.source_from_name && inquiry.source_from_email ? ' · ' : '')
+  // Wiersze maila poza pozycjami; pole dochodzi po stronie API, więc czytamy ostrożnie.
+  const omitted = Array.isArray(inquiry.omitted_items) ? inquiry.omitted_items : []
+  // attention_count liczy też pominięte wiersze — „X z {total} pozycji” dotyczy samych pozycji
+  const itemAttention = Math.max(0, inquiry.attention_count - omitted.length)
   const banner = inquiry.replied_at
     ? {
         cls: 'bg-emerald-50 text-emerald-800',
@@ -1012,7 +1042,12 @@ export function InquiryReply() {
     : inquiry.attention_count > 0
       ? {
           cls: 'bg-amber-50 text-amber-800',
-          text: `${inquiry.attention_count} z ${total} pozycji wymaga sprawdzenia`,
+          text: [
+            itemAttention > 0 ? `${itemAttention} z ${total} pozycji wymaga sprawdzenia` : '',
+            omitted.length > 0 ? `wiersze z maila poza pozycjami: ${omitted.length}` : '',
+          ]
+            .filter(Boolean)
+            .join(' · '),
         }
       : {
           cls: 'bg-emerald-50 text-emerald-800',
@@ -1051,6 +1086,7 @@ export function InquiryReply() {
       )}
 
       <p className={`rounded px-3 py-2 text-sm font-medium ${banner.cls}`}>{banner.text}</p>
+      {omitted.length > 0 && <OmittedItemsBar list={omitted} limit={inquiry.omitted_limit} />}
 
       {msg && <p className="rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
       {err && <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
