@@ -4319,34 +4319,19 @@ final class ClientInquiryService
     }
 
     /**
-     * Zapytanie klienta nad ofertą: numer sprawy, data i pozycje jego słowami.
-     * Klient ma od razu widzieć, na co odpowiadamy — zwłaszcza gdy przysłał
-     * kilka zapytań tego samego dnia.
+     * Zapytanie klienta nad ofertą: temat i data. Klient ma od razu widzieć, na co
+     * odpowiadamy — zwłaszcza gdy przysłał kilka zapytań tego samego dnia. Pozycje
+     * jego słowami stoją w liście przy każdej naszej propozycji.
      *
-     * @return array{title: string|null, date: string|null, lines: list<string>}
+     * @return array{title: string|null, date: string|null}
      */
     private function askedBlock(ClientInquiry $inquiry): array
     {
-        $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
         $sent = $inquiry->source_sent_at ?? $inquiry->created_at;
-
-        $lines = [];
-        foreach ($this->lineItemsOf($analysis) as $index => $item) {
-            $quote = trim(InquiryQueryText::withoutPrice((string) ($item['quote'] ?? '')));
-            if ($quote === '') {
-                $quote = trim((string) ($item['query'] ?? ''));
-            }
-            if ($quote === '') {
-                continue;
-            }
-            $qty = $this->qtyLabel($item);
-            $lines[] = ($index + 1).'. '.$quote.($qty === null ? '' : ' — '.$qty);
-        }
 
         return [
             'title' => $this->nullable($inquiry->source_subject),
             'date' => $sent?->format('d.m.Y'),
-            'lines' => $lines,
         ];
     }
 
@@ -4472,7 +4457,7 @@ final class ClientInquiryService
      * obie wersje listu mogłyby się rozjechać.
      *
      * @param  array<string, array{option_id: string, custom?: string|null}>  $answers
-     * @return list<array{head: string, quote: string|null, answer: list<string>, answer_roles: list<string>}>
+     * @return list<array{head: string, quote: string|null, answer: list<string>, answer_roles: list<string>, facts: array<string, mixed>}>
      */
     private function offerRows(ClientInquiry $inquiry, array $answers, string $priceMode, float $margin): array
     {
@@ -4580,7 +4565,7 @@ final class ClientInquiryService
      * @param  array<string, mixed>  $item
      * @param  array<string, mixed>|null  $product
      * @param  array<string, mixed>|null  $substitute
-     * @return array{head: string, quote: string|null, answer: list<string>, answer_roles: list<string>}
+     * @return array{head: string, quote: string|null, answer: list<string>, answer_roles: list<string>, facts: array<string, mixed>}
      */
     private function offerRow(
         int $n,
@@ -4617,6 +4602,8 @@ final class ClientInquiryService
                 'quote' => $quote === '' ? null : $quote,
                 'answer' => ['Pozycję potwierdzimy po weryfikacji dostępności i wrócimy z propozycją.'],
                 'answer_roles' => ['note'],
+                // ilość i rozmiar klienta — list pokazuje je przy pozycji także bez naszego wyrobu
+                'facts' => $this->offerFacts($n, $item, null, $priceMode, $margin, $tone),
             ];
         }
 

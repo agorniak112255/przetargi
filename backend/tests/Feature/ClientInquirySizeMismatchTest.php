@@ -46,8 +46,11 @@ final class ClientInquirySizeMismatchTest extends TestCase
         $body = (string) $res->json('reply_body');
         $this->assertStringContainsString('rozmiar z zapytania: M-XL', $body);
         $this->assertStringContainsString('P-50mX - Szelki bezpieczeństwa - rozmiar S', $body);
-        // kafelek listu HTML mówi wprost, że rozmiar jest z zapytania, a nie z karty
-        $this->assertStringContainsString('>rozmiar z zapytania</div>', (string) $res->json('reply_html'));
+        // list HTML: rozmiar stoi tylko w bloku „Państwa zapytanie”, a nasza propozycja go nie powtarza —
+        // nie wygląda na potwierdzenie z karty
+        $html = (string) $res->json('reply_html');
+        $this->assertStringContainsString('M-XL', (string) strstr($html, 'Nasza propozycja', true));
+        $this->assertStringNotContainsString('M-XL', (string) strstr($html, 'Nasza propozycja'));
     }
 
     public function test_card_in_the_inquired_size_is_not_flagged(): void
