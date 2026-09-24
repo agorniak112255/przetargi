@@ -62,6 +62,30 @@ final class OfferProductTextTest extends TestCase
         $this->assertStringNotContainsString('8543.8.', $cut);
     }
 
+    public function test_withdrawal_note_is_not_part_of_the_letter(): void
+    {
+        // Zapytanie #67 (24.09.2026): dopisek łącznika PROTEKT poszedł do klienta dosłownie,
+        // z „Wycofany” dwa razy i kodem następcy sklejonym ze słowem. To stan karty dla
+        // handlowca (panel zapytania), nie opis wyrobu.
+        $description = "UWAGA: produkt wycofany przez producenta — Wycofany — zastąpiony przezBW100.\n\n"
+            ."Cechy szczególne:\n- Dopuszczone do prac w strefach zagrożonych wybuchem";
+
+        $paragraph = OfferProductText::paragraph($description);
+        $this->assertNotNull($paragraph);
+        $this->assertStringNotContainsString('wycofany', mb_strtolower($paragraph));
+        $this->assertStringNotContainsString('BW100', $paragraph);
+        $this->assertStringContainsString('Dopuszczone do prac w strefach zagrożonych wybuchem', $paragraph);
+
+        // Szablon bez SKU brał pierwsze zdanie — czyli sam dopisek z kodem następcy.
+        $lead = OfferProductText::genericLead($description, 'PROTEKT', null, 'ABM - Amortyzator bezpieczeństwa');
+        $this->assertNotNull($lead);
+        $this->assertStringNotContainsString('BW100', $lead);
+        $this->assertStringNotContainsString('wycofany', mb_strtolower($lead));
+
+        // Karta, której opis to tylko dopisek, nie ma opisu do listu.
+        $this->assertNull(OfferProductText::paragraph('UWAGA: produkt wycofany przez producenta — Wycofany.'));
+    }
+
     public function test_paragraph_is_null_when_the_card_has_no_description(): void
     {
         $this->assertNull(OfferProductText::paragraph(''));

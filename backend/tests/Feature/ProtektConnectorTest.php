@@ -18,6 +18,7 @@ use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\ProtektB2bClient;
 use App\Services\B2b\ProtektB2bConnector;
 use App\Support\ManufacturerNormFacts;
+use App\Support\WithdrawnProductNote;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -249,6 +250,8 @@ final class ProtektConnectorTest extends TestCase
         $description = (string) $product->description;
         $this->assertStringContainsString('produkt wycofany przez producenta', $description);
         $this->assertStringContainsString('zastąpiony przez BW100/2LE111', $description);
+        // Panel zapytania czyta wycofanie z tego opisu — łącznik i czytnik muszą mówić jednym formatem.
+        $this->assertSame(['successor' => 'BW100/2LE111'], WithdrawnProductNote::parse($description));
         // Proza zostaje w opisie, pary „nazwa → wartość” tylko w tabelce karty wyrobu u dostawcy.
         $this->assertStringContainsString('Cechy szczególne:', $description);
         $this->assertStringNotContainsString('Normy: EN 355', $description);

@@ -7,6 +7,7 @@ namespace App\Services\B2b;
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
+use App\Support\WithdrawnProductNote;
 use DOMNode;
 use DOMXPath;
 use RuntimeException;
@@ -167,7 +168,8 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bM
 
         $withdrawn = (string) ($raw['withdrawn'] ?? '');
         if ($withdrawn !== '') {
-            $sections[] = 'UWAGA: produkt wycofany przez producenta — '.$withdrawn.'.';
+            // Jedyny trwały ślad wycofania — panel zapytania czyta go stąd (WithdrawnProductNote::parse).
+            $sections[] = WithdrawnProductNote::forDescription($withdrawn);
         }
 
         $features = $raw['features'] ?? [];

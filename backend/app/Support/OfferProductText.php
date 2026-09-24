@@ -16,6 +16,10 @@ namespace App\Support;
  * ze strony dostawcy („NORMY I CERTYFIKATY:”, potem linie „10 par/worek”).
  * Do listu wchodzi sama proza — normy stoją w liście w osobnej linii, a dane
  * opakowań nie są opisem wyrobu.
+ *
+ * Dopisek o wycofaniu (WithdrawnProductNote) też nie wchodzi: to stan karty
+ * dla handlowca, nie opis wyrobu. Panel zapytania pokazuje go przy pozycji,
+ * a to, czy oferować wyrób wycofany albo następcę, rozstrzyga handlowiec.
  */
 final class OfferProductText
 {
@@ -41,7 +45,7 @@ final class OfferProductText
      */
     public static function prose(string $description): string
     {
-        $lines = preg_split('/\R/u', trim($description)) ?: [];
+        $lines = preg_split('/\R/u', trim(WithdrawnProductNote::strip($description))) ?: [];
 
         $kept = [];
         foreach ($lines as $line) {

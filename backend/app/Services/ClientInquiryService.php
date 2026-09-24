@@ -23,6 +23,7 @@ use App\Support\OfferPricing;
 use App\Support\OfferProductText;
 use App\Support\OfferTermText;
 use App\Support\ProductSizeVariant;
+use App\Support\WithdrawnProductNote;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -88,6 +89,14 @@ final class ClientInquiryService
      * @var array<int, string>
      */
     private array $cardCheckTexts = [];
+
+    /**
+     * Wycofanie przez producenta z opisu karty, id → wynik WithdrawnProductNote::parse (null = nie wycofany).
+     * Na czas żądania, jak $cardCheckTexts — lista zapytań liczy „do sprawdzenia” dla wielu wierszy naraz.
+     *
+     * @var array<int, array{successor: ?string}|null>
+     */
+    private array $withdrawnNotes = [];
 
     /**
      * Rundy szukania w katalogu od ostatniego wyzerowania — do logu `client-inquiry.timings`.
@@ -1293,6 +1302,86 @@ final class ClientInquiryService
                 ),
                 'cards' => $cards,
             ];
+        }
+
+        return $this->withWithdrawal($out, $answers);
+    }
+
+    /**
+     * Wycofanie przez producenta przy każdym kandydacie i zamienniku, a przy pozycji flaga `withdrawn`, gdy wycofany
+     * jest wyrób, który wejdzie do listu (wybrany albo zatwierdzony zamiennik). Stan karty z chwili odpowiedzi —
+     * w analizie opisu nie ma, a producent wycofuje wyroby także po założeniu zapytania.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @param  array<string, mixed>  $answers
+     * @return list<array<string, mixed>>
+     */
+    private function withWithdrawal(array $items, array $answers): array
+    {
+        $ids = [];
+        foreach ($items as $item) {
+            foreach ([...$item['candidates'], ...$item['substitutes']] as $product) {
+                $ids[] = (int) $product['id'];
+            }
+        }
+        $notes = $this->withdrawnNotesFor($ids);
+
+        foreach ($items as $i => $item) {
+            foreach (['candidates', 'substitutes'] as $list) {
+                foreach ($item[$list] as $j => $product) {
+                    $items[$i][$list][$j]['withdrawn'] = $notes[(int) $product['id']] ?? null;
+                }
+            }
+
+            $inLetter = [(string) $item['chosen']];
+            if ($item['substitute_key'] !== null) {
+                $inLetter[] = trim((string) ($answers[$item['substitute_key']]['option_id'] ?? ''));
+            }
+            foreach ($inLetter as $option) {
+                if (str_starts_with($option, 'p:') && ($notes[(int) substr($option, 2)] ?? null) !== null) {
+                    $items[$i]['flags'][] = 'withdrawn';
+                    // Jak przy marce spoza katalogu: wysoka ocena mówi „pasuje do wymagania”, nie „da się
+                    // zamówić” — o ofercie wycofanego wyrobu albo następcy decyduje handlowiec, więc najwyżej „sprawdź”.
+                    if ($items[$i]['confidence'] === 'high') {
+                        $items[$i]['confidence'] = 'medium';
+                    }
+                    break;
+                }
+            }
+        }
+
+        return $items;
+    }
+
+    /**
+     * @param  list<int>  $ids
+     * @return array<int, array{successor: ?string}|null>
+     */
+    private function withdrawnNotesFor(array $ids): array
+    {
+        $missing = [];
+        foreach ($ids as $id) {
+            if ($id > 0 && ! array_key_exists($id, $this->withdrawnNotes)) {
+                $missing[$id] = true;
+            }
+        }
+        if ($missing !== []) {
+            // Tylko karty z dopiskiem — reszta paczki nie przenosi opisów z bazy.
+            $rows = Product::query()
+                ->whereIn('id', array_keys($missing))
+                ->where('description', 'like', '%'.WithdrawnProductNote::PREFIX.'%')
+                ->get(['id', 'description']);
+            foreach ($rows as $product) {
+                $this->withdrawnNotes[(int) $product->id] = WithdrawnProductNote::parse((string) $product->description);
+            }
+            foreach (array_keys($missing) as $id) {
+                $this->withdrawnNotes[$id] ??= null;
+            }
+        }
+
+        $out = [];
+        foreach ($ids as $id) {
+            $out[$id] = $this->withdrawnNotes[$id] ?? null;
         }
 
         return $out;

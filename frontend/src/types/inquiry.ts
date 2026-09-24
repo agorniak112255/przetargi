@@ -23,6 +23,15 @@ export type InquiryCard = {
   allow_custom: boolean
 }
 
+/**
+ * Wyrób wycofany przez producenta (dopisek w opisie karty ze strony producenta, dziś PROTEKT).
+ * `successor` — nazwa następcy dosłownie z linku na stronie („BW100”, „PROTON 100”); to nie musi być
+ * kod karty w naszym katalogu. null = strona nie podała następcy.
+ */
+export type InquiryWithdrawn = {
+  successor: string | null
+}
+
 export type InquiryCandidate = {
   id: number
   sku: string
@@ -40,6 +49,8 @@ export type InquiryCandidate = {
   requirements_ok: boolean | null
   /** Warunek zamawiania obowiązującego źródła ceny (np. po 10 szt.); null = brak ograniczenia. */
   order_quantity?: OrderQuantity | null
+  /** null = wyrób w bieżącej ofercie producenta (albo karta o wycofaniu nie mówi). */
+  withdrawn?: InquiryWithdrawn | null
 }
 
 export type InquirySubstitute = {
@@ -53,6 +64,7 @@ export type InquirySubstitute = {
   stock: number | null
   score: number | null
   reason: string | null
+  withdrawn?: InquiryWithdrawn | null
 }
 
 export type InquiryConfidence = 'high' | 'medium' | 'none'
@@ -70,6 +82,7 @@ export type InquiryFlag =
   | 'requirement_conflict'
   | 'brand_not_in_catalog'
   | 'size_mismatch'
+  | 'withdrawn'
 
 /**
  * Warunek szczególny z wiersza klienta („w szczególności na kwas siarkowy 96%”).

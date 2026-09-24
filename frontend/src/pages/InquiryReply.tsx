@@ -128,6 +128,7 @@ const flagLabel: Record<InquiryFlag, string> = {
   requirement_conflict: 'możliwa sprzeczność w wierszu klienta',
   brand_not_in_catalog: 'zamiennik innej marki',
   size_mismatch: 'karta w innym rozmiarze',
+  withdrawn: 'wyrób wycofany przez producenta',
 }
 
 /** Barwa adnotacji: czerwień = sprzeczność albo niepotwierdzony warunek, bursztyn = do sprawdzenia, fiolet = pytanie AI. */
@@ -144,6 +145,7 @@ const flagTone: Record<InquiryFlag, { cls: string; dot: string }> = {
   requirement_conflict: { cls: 'border-red-500 bg-red-50 font-semibold text-red-800', dot: 'bg-red-600' },
   brand_not_in_catalog: { cls: 'border-orange-300 bg-orange-50 text-orange-800', dot: 'bg-orange-500' },
   size_mismatch: { cls: 'border-red-300 bg-red-50 text-red-800', dot: 'bg-red-600' },
+  withdrawn: { cls: 'border-red-300 bg-red-50 text-red-800', dot: 'bg-red-600' },
 }
 
 /** Pasmo wyniku alternatywy; 80 = próg pewnego dopasowania (CONFIDENT_SCORE w ClientInquiryService). */
@@ -416,7 +418,8 @@ function ItemRow({
   onCustomDraft: (cardId: string, value: string) => void
   onAnswer: (key: string, answer: InquiryAnswer) => void
   onPreview: (productId: number, query: string) => void
-  onSearch: (mode: SearchMode) => void
+  /** `query` — fraza startowa zamiast frazy pozycji (np. nazwa następcy wycofanego wyrobu). */
+  onSearch: (mode: SearchMode, query?: string) => void
   manualDraft: string
   onManualDraft: (value: string) => void
   onManualPriceBlur: () => void
@@ -428,6 +431,13 @@ function ItemRow({
   const computedPrice = chosen ? priceByMode(chosen, priceMode) : null
   const chosenPrice = item.manual_price != null && priceMode !== 'none' ? PLN.format(item.manual_price) : computedPrice
   const subAnswer = item.substitute_key ? answers[item.substitute_key]?.option_id ?? 'no' : null
+  const chosenSub = subAnswer?.startsWith('p:')
+    ? item.substitutes.find((s) => s.id === Number(subAnswer.slice(2))) ?? null
+    : null
+  // Wyroby, które wejdą do listu, a producent je wycofał — o każdym osobna ramka.
+  const withdrawnInLetter = [chosen, chosenSub].flatMap((p) =>
+    p?.withdrawn ? [{ id: p.id, sku: p.sku, successor: p.withdrawn.successor }] : [],
+  )
   const meta = [item.qty, item.unit].filter(Boolean).join(' ')
   const checking = item.chosen === 'check'
   const inLetter = chosen
@@ -509,6 +519,38 @@ function ItemRow({
             zamienniki innej marki — do listu wejdzie dopiero ten, który wybierzesz.
           </p>
         )}
+
+        {/* Stan karty ze strony producenta, nie ocena AI. Do listu dopisek nie wchodzi — decyzja należy do handlowca. */}
+        {withdrawnInLetter.map((w) => (
+          <div
+            key={w.id}
+            className="rounded-lg border-2 border-red-500 bg-red-50 px-2.5 py-1.5 text-xs leading-relaxed text-red-900"
+          >
+            <p>
+              <span className="font-semibold">{w.sku} — wyrób wycofany przez producenta.</span>{' '}
+              {w.successor ? (
+                <>
+                  Następca według strony producenta: <span className="font-semibold">{w.successor}</span>.
+                </>
+              ) : (
+                'Strona producenta nie podaje następcy.'
+              )}
+            </p>
+            <p className="mt-0.5 text-[11px] text-red-700">
+              Klient tej informacji w liście nie zobaczy — zdecyduj, czy oferować ten wyrób, czy następcę.
+            </p>
+            {w.successor && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => onSearch('catalog', w.successor!)}
+                className="mt-1 rounded-full border border-sky-300 bg-white px-2 py-0.5 text-[11px] font-medium text-sky-800 hover:bg-sky-50 disabled:opacity-50"
+              >
+                Szukaj następcy w katalogu
+              </button>
+            )}
+          </div>
+        ))}
 
         {/* Warunki szczególne klienta: wprost, z werdyktem karty. Karta bez
             potwierdzenia nie wchodzi do listu, więc handlowiec musi wiedzieć,
@@ -607,6 +649,14 @@ function ItemRow({
                   <span className="min-w-0 flex-1 text-slate-800">
                     <span className="font-semibold">{c.sku}</span> · {c.name}
                     {c.manufacturer && <span className="text-slate-500"> · {c.manufacturer}</span>}
+                    {c.withdrawn && (
+                      <span
+                        title={c.withdrawn.successor ? `Następca według strony producenta: ${c.withdrawn.successor}` : undefined}
+                        className="ml-1 rounded bg-red-100 px-1 py-px text-[10px] font-semibold uppercase text-red-800"
+                      >
+                        wycofany
+                      </span>
+                    )}
                     {/* Warunki zamawiania pod nazwą — obok poszerzały kolumnę przycisków i ściskały nazwę do słowa w linii.
                         Wybrana alternatywa pokazuje je niżej, razem z ilością do zamówienia. */}
                     {!on && <OrderQuantityBadge oq={c.order_quantity} block className="mt-1" />}
@@ -690,6 +740,7 @@ function ItemRow({
                   onClick={() => onAnswer(item.substitute_key!, { option_id: `p:${s.id}` })}
                 >
                   Zamiennik: {s.sku} · {s.name}
+                  {s.withdrawn && ' · wycofany'}
                 </Chip>
               ))}
             </div>
@@ -1584,11 +1635,11 @@ export function InquiryReply() {
                   setPreviewId(pid)
                   setPreviewQuery(q.trim())
                 }}
-                onSearch={(mode) =>
+                onSearch={(mode, query) =>
                   setSearchFor({
                     itemId: item.id,
                     mode,
-                    query: (item.query ?? item.quote ?? '').trim(),
+                    query: (query ?? item.query ?? item.quote ?? '').trim(),
                   })
                 }
               />
