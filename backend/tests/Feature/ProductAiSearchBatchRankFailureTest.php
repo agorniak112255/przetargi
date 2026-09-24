@@ -47,8 +47,12 @@ final class ProductAiSearchBatchRankFailureTest extends TestCase
         $glove = $this->product('RKW-NITRYL-OPIS', 'Rękawice robocze powlekane nitrylem', 'Rękawice robocze powlekane nitrylem, EN 388, do prac montażowych.');
         $goggles = $this->product('OKL-166', 'Okulary ochronne bezbarwne', 'Okulary ochronne bezbarwne, EN 166, regulowane zauszniki.');
         $rankCalls = ['gloves' => 0, 'goggles' => 0];
-        $this->llm(function (string $kind, string $user) use ($glove, $goggles, &$rankCalls): array {
+        $rewrites = 0;
+        $this->llm(function (string $kind, string $user) use ($glove, $goggles, &$rankCalls, &$rewrites): array {
             $line = str_contains($user, self::GLOVES) ? 'gloves' : 'goggles';
+            if ($kind === FakeSearchLlm::KIND_REWRITE) {
+                $rewrites++;
+            }
             if ($kind === FakeSearchLlm::KIND_UNDERSTAND || $kind === FakeSearchLlm::KIND_REWRITE) {
                 return $line === 'gloves' ? $this->glovesIntent() : $this->gogglesIntent();
             }
@@ -67,6 +71,8 @@ final class ProductAiSearchBatchRankFailureTest extends TestCase
 
         $this->assertSame([], array_column($gloves['products'] ?? [], 'sku'), 'karta z drugiej oceny weszła do wyniku pozycji, której ocena padła');
         $this->assertSame(1, $rankCalls['gloves'], 'po awarii oceny fala zapytała model drugi raz o pulę z intencji zbudowanej z pustej odpowiedzi');
+        // Wprost, nie przez intentChanged(): przepisanie to też pytanie do modelu, który przed chwilą nie odpowiedział.
+        $this->assertSame(0, $rewrites, 'pozycja z awarią oceny poszła do przepisania zapytania');
         $this->assertSame(ProductAiSearchService::MODEL_STATE_UNAVAILABLE, $gloves['model_state'] ?? null);
         $this->assertSame(ProductAiSearchService::NOTE_MODEL_FAILED, $gloves['ai_note'] ?? null);
         $this->assertSame(self::GLOVES_NEEDED, $gloves['needed'] ?? null, 'awaria oceny nadpisała intencję z kroku „zrozum”');

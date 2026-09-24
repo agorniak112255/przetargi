@@ -75,8 +75,12 @@ final class TenderMatchModelStateTest extends TestCase
     {
         $gloveId = (int) $this->glove('RNITZ-M')->id;
         $ranks = 0;
-        $this->stubModel(static function (array $messages) use ($gloveId, &$ranks): array {
+        $rewrites = 0;
+        $this->stubModel(static function (array $messages) use ($gloveId, &$ranks, &$rewrites): array {
             $kind = FakeSearchLlm::kind($messages);
+            if ($kind === FakeSearchLlm::KIND_REWRITE) {
+                $rewrites++;
+            }
             if ($kind === FakeSearchLlm::KIND_UNDERSTAND) {
                 return [
                     'needed' => 'rękawice nitrylowe ze ściągaczem',
@@ -103,6 +107,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertNull($item->main_product_id, 'karta z drugiej oceny trafiła do pozycji, której ocena padła');
         $this->assertSame('model_unavailable', $item->ai_match_reasons[0]['code'] ?? null);
         $this->assertSame(1, $ranks, 'po awarii oceny fala zapytała model drugi raz');
+        $this->assertSame(0, $rewrites, 'po awarii oceny fala przepisywała zapytanie');
         $this->assertSame(1, $result['model_failed']);
     }
 
@@ -122,6 +127,50 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertSame('brak', $item->status);
         $this->assertNull($item->ai_match_percent);
         $this->assertSame('model_unavailable', $item->ai_match_reasons[0]['code'] ?? null);
+    }
+
+    /** Ścieżka pojedyncza, ten sam błąd co w fali: po awarii oceny druga ocena dawała kartę zapisaną z 95%. */
+    public function test_single_item_does_not_save_card_from_second_rank_after_failed_rank(): void
+    {
+        $gloveId = (int) $this->glove('RNITZ-M')->id;
+        $ranks = 0;
+        $rewrites = 0;
+        $answer = static function (array $messages) use ($gloveId, &$ranks, &$rewrites): array {
+            $kind = FakeSearchLlm::kind($messages);
+            if ($kind === FakeSearchLlm::KIND_REWRITE) {
+                $rewrites++;
+            }
+            if ($kind !== FakeSearchLlm::KIND_RANK) {
+                return [
+                    'needed' => 'rękawice nitrylowe ze ściągaczem',
+                    'search_steps' => ['rękawice', 'nitrylowe', 'ze ściągaczem'],
+                    'manufacturer' => null,
+                    'model_name' => null,
+                    'size_note' => null,
+                    'search_phrases' => ['rękawice nitrylowe', 'rękawice robocze ze ściągaczem'],
+                    'constraints' => ['dzianina bawełniana'],
+                ];
+            }
+            if (++$ranks === 1) {
+                throw new RuntimeException('Limit zapytań modelu AI (HTTP 429).');
+            }
+
+            return ['matches' => [['id' => $gloveId, 'score' => 95, 'reason' => 'ocena puli z intencji zbudowanej z awarii']]];
+        };
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing($answer);
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
+        $llm->shouldNotReceive('chat');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+        [, $item] = $this->tenderWith(self::DESCRIPTIVE);
+
+        app(ProductMatchService::class)->matchItem($item, true);
+        $item->refresh();
+
+        $this->assertNull($item->main_product_id, 'karta z drugiej oceny trafiła do pozycji, której ocena padła');
+        $this->assertSame('model_unavailable', $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertSame(1, $ranks, 'po awarii oceny pojedyncza pozycja zapytała model drugi raz');
+        $this->assertSame(0, $rewrites, 'po awarii oceny pojedyncza pozycja przepisywała zapytanie');
     }
 
     public function test_descriptive_line_gets_capped_heuristic_when_model_found_nothing(): void

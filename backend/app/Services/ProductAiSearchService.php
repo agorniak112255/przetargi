@@ -1132,6 +1132,11 @@ final class ProductAiSearchService
         if ($result['products'] !== [] || ! $allowRewrite) {
             return $result;
         }
+        if ($rankFailed) {
+            // Awaria oceny to nie „nic nie znaleziono”: bez ponownego szukania i przepisania — model przed chwilą
+            // nie odpowiedział, a pozycja czeka na ponowne dopasowanie (jak w fali).
+            return $result;
+        }
         if ($this->intentChanged($retrieveIntent, $rankedIntent)) {
             return $this->finishSearch($query, $rankedIntent, $limit, $withExternalHint, $task, false);
         }
@@ -5300,18 +5305,21 @@ final class ProductAiSearchService
             );
         } catch (Throwable $e) {
             Log::warning('product-ai-search.rank-failed', ['message' => $e->getMessage()]);
-
-            return [$this->localIntent($query), [], true, self::MODEL_STATE_UNAVAILABLE];
+            $raw = [];
         }
-        $intent = $this->mergeRetrieveIntent($this->parseIntent($raw, $query), $retrieveIntent);
         // Ten sam kontrakt co w fali: pusta tablica = wywołanie padło; obiekt z pustym `matches` =
         // model odpowiedział „nic nie pasuje”. Bez tego stanu dopasowanie pojedynczej pozycji
         // widziało „unknown” i ochrona „model padł → nie podstawiaj karty po słowach” nie działała.
-        $modelState = $raw === []
-            ? self::MODEL_STATE_UNAVAILABLE
-            : ((is_array($raw['matches'] ?? null) && $raw['matches'] !== [])
-                ? self::MODEL_STATE_RANKED
-                : self::MODEL_STATE_EMPTY);
+        if ($raw === []) {
+            // Awaria to nie odpowiedź: intencja zostaje ta, z którą szukano kart. Dotąd wracała intencja lokalna
+            // z całym wymaganiem jako „szukany produkt”, a finishSearch szukał z niej od nowa i pytał model
+            // drugi raz — karta z tej oceny wracała jako „ranked” (24.09.2026).
+            return [$retrieveIntent !== [] ? $retrieveIntent : $this->localIntent($query), [], true, self::MODEL_STATE_UNAVAILABLE];
+        }
+        $intent = $this->mergeRetrieveIntent($this->parseIntent($raw, $query), $retrieveIntent);
+        $modelState = (is_array($raw['matches'] ?? null) && $raw['matches'] !== [])
+            ? self::MODEL_STATE_RANKED
+            : self::MODEL_STATE_EMPTY;
 
         return [
             $intent,
