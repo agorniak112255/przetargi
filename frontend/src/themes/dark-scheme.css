@@ -323,5 +323,11 @@
       :where(:root[data-scheme="dark"]) .hover\:text-rose-900:hover { color: oklch(94.1% 0.03 12.58); }
       :where(:root[data-scheme="dark"]) .hover\:text-rose-950:hover { color: oklch(94.1% 0.03 12.58); }
     }
+
+    /* Warianty disabled: za blokiem hover — jak w Tailwindzie wyłączony przycisk pod kursorem
+       zachowuje kolor disabled: (ta sama specyficzność 0,2,0, wygrywa późniejsza reguła).
+       Wyłączony tekst ma być bledszy od text-slate-400/500, więc --t-dim, a nie jasne
+       mapowanie .text-slate-300 (to jest dla tekstu na ciemnych wyspach). */
+    :where(:root[data-scheme="dark"]) .disabled\:text-slate-300:disabled { color: var(--t-dim); }
   }
 }
