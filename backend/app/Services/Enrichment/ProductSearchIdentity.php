@@ -4374,6 +4374,34 @@ final class ProductSearchIdentity
     }
 
     /**
+     * Marka z listy `enrichment.manufacturer_only_sources`: gdy jej karta jest w puli, opis pisze się wyłącznie ze stron
+     * producenta. Klucz marki jak w manufacturer_domains; „MAPA Professional” i „PROS EXTREME” trafiają przez przedrostek
+     * klucza z myślnikiem, a nie przez samo zawieranie — „DUPONT PROSHIELD” to nie PROS.
+     */
+    public function usesManufacturerSourcesOnly(Product $product): bool
+    {
+        $keys = [];
+        foreach ((array) config('enrichment.manufacturer_only_sources', []) as $key) {
+            $nk = is_string($key) ? trim((string) preg_replace('/[^a-z0-9]+/u', '-', mb_strtolower($key)), '-') : '';
+            if ($nk !== '') {
+                $keys[] = $nk;
+            }
+        }
+        if ($keys === []) {
+            return false;
+        }
+        foreach ($this->manufacturerKeyCandidates($product) as $candidate) {
+            foreach ($keys as $key) {
+                if ($candidate === $key || str_starts_with($candidate, $key.'-')) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Oficjalne domeny z config — bez tabeli discovered sites.
      *
      * @return list<string>

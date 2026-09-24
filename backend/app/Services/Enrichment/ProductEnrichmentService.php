@@ -406,35 +406,13 @@ final class ProductEnrichmentService
      * @param  list<array<string, mixed>>  $results
      * @return list<array<string, mixed>>
      */
-    private function dropBlockedSourceHosts(array $results): array
+    private function dropBlockedSourceHosts(array $results, ?Product $product = null): array
     {
-        $ownShopHost = parse_url(trim((string) config('prestashop.shop_url', '')), PHP_URL_HOST);
-        $blocked = array_values(array_unique(array_filter(array_map(
-            static fn ($host): string => is_string($host)
-                ? preg_replace('/^www\./', '', mb_strtolower(trim($host))) ?? ''
-                : '',
-            [...(array) config('enrichment.blocked_source_hosts', []), is_string($ownShopHost) ? $ownShopHost : '']
-        ))));
-        if ($blocked === []) {
-            return array_values($results);
-        }
         $dropped = [];
         $out = [];
         foreach ($results as $row) {
             $url = (string) ($row['url'] ?? '');
-            $host = preg_replace(
-                '/^www\./',
-                '',
-                mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))
-            ) ?? '';
-            $hit = false;
-            foreach ($blocked as $needle) {
-                if ($host === $needle || str_ends_with($host, '.'.$needle)) {
-                    $hit = true;
-                    break;
-                }
-            }
-            if ($hit) {
+            if ($this->isBlockedSourceUrl($url) && ! ($product?->isTrustedShopUrl($url) ?? false)) {
                 $dropped[] = ['url' => $url, 'reason' => CandidateRejection::BLOCKED_HOST];
 
                 continue;
@@ -446,6 +424,30 @@ final class ProductEnrichmentService
         }
 
         return $out;
+    }
+
+    /**
+     * Host (albo jego subdomena) z `enrichment.blocked_source_hosts` lub host naszego sklepu. Sprawdzane na wynikach
+     * wyszukiwania i przed każdym kolejnym pobraniem kart (indeks, zmapowane sklepy, otwarty internet, uzupełnienie,
+     * zdjęcia z innych kart) — te ścieżki omijają wyniki wyszukiwania, a outlet.pros.pl wracał nimi do puli.
+     * Celowo nie w keepConfirmedCardPages: tam jest bramka tożsamości (miara EnrichmentTester51Test), a wykluczenie
+     * hosta to decyzja o źródłach, nie o tożsamości strony.
+     */
+    private function isBlockedSourceUrl(string $url): bool
+    {
+        $host = preg_replace('/^www\./', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))) ?? '';
+        if ($host === '') {
+            return false;
+        }
+        $ownShopHost = parse_url(trim((string) config('prestashop.shop_url', '')), PHP_URL_HOST);
+        foreach ([...(array) config('enrichment.blocked_source_hosts', []), is_string($ownShopHost) ? $ownShopHost : ''] as $needle) {
+            $needle = is_string($needle) ? preg_replace('/^www\./', '', mb_strtolower(trim($needle))) ?? '' : '';
+            if ($needle !== '' && ($host === $needle || str_ends_with($host, '.'.$needle))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -515,10 +517,12 @@ final class ProductEnrichmentService
      * Używane przy drugim podejściu, gdy pierwsze karty nie dały opisu.
      *
      * @param  list<array{url?: string, text?: string}>  $pages
-     * @return array{description: string, extracted: array<string, mixed>, pages: list<array{url?: string, text?: string}>}
+     * @return array{description: string, extracted: array<string, mixed>, pages: list<array{url?: string, text?: string}>, cut: bool}
      */
     private function describeFromPages(Product $product, array $pages): array
     {
+        // Druga pula (indeks, sklepy, otwarty internet) bywa kartą producenta razem ze sklepami — ta sama reguła.
+        ['pages' => $pages, 'cut' => $cut] = $this->manufacturerOnlyPages($product, $pages);
         $clean = $this->rememberOptionSizes(
             $this->sanitizePagesWithLlm($product, $pages),
             $this->collectOptionSizes($pages, $this->sizeCategoryHint($product))
@@ -537,7 +541,7 @@ final class ProductEnrichmentService
             $description = '';
         }
 
-        return ['description' => $description, 'extracted' => $extracted, 'pages' => $clean];
+        return ['description' => $description, 'extracted' => $extracted, 'pages' => $clean, 'cut' => $cut];
     }
 
     /**
@@ -863,6 +867,10 @@ final class ProductEnrichmentService
 
             $this->assertBatchNotCancelled($batchId);
 
+            // Marka „tylko producent” z jego kartą w puli — od tego miejsca sklepy nie wchodzą ani do rozmiarów,
+            // ani do filtra stron, ani do opisu, ani do zdjęć (te biorą się z kart źródłowych opisu).
+            ['pages' => $pageSnippets, 'cut' => $manufacturerOnly] = $this->manufacturerOnlyPages($product, $pageSnippets);
+
             // opcje zakupu (radio/select) — zanim LLM wytnie je z tekstu karty
             $optionSizes = $this->collectOptionSizes(
                 $pageSnippets,
@@ -908,9 +916,15 @@ final class ProductEnrichmentService
             }
 
             // niepełny opis / puste listy → doszukaj na kolejnych sklepach
-            if ($description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)
+            $needsSupplement = $description === '' || $this->looksLikeMissingCardMeta($description) || $this->looksLikeThinDescription($description)
                 || $this->looksLikeIncompleteDescription($description)
-                || $this->looksLikeSparsePayload($extracted)) {
+                || $this->looksLikeSparsePayload($extracted);
+            // Uzupełnienie dokłada wyłącznie sklepy — przy marce „tylko producent” brak danych zostaje brakiem.
+            // Pusty albo cienki opis idzie dalej jak dotąd: druga próba bierze całą nową pulę kart (bez mieszania).
+            if ($needsSupplement && $manufacturerOnly) {
+                $this->attemptLog()->add('desc', 'tylko strony producenta — bez uzupełniania opisu ze sklepów');
+            }
+            if ($needsSupplement && ! $manufacturerOnly) {
                 $this->liveProgress()->step('uzupełnienie');
                 $t = microtime(true);
                 $supplement = $this->supplementDescriptionFromOtherSites(
@@ -992,6 +1006,8 @@ final class ProductEnrichmentService
                     $retry = $this->describeFromPages($product, $retryPages);
                     if ($retry['description'] !== '') {
                         $pageSnippets = $retry['pages'];
+                        // nowa pula zastępuje starą w całości — reguła „tylko producent” wg tej puli
+                        $manufacturerOnly = $retry['cut'];
                         $extracted = $this->enrichStructuredFieldsFromPages($retry['extracted'], $pageSnippets);
                         $description = $retry['description'];
                         $confirmed = ! $this->looksLikeMissingCardMeta($description)
@@ -1086,6 +1102,20 @@ final class ProductEnrichmentService
                 $sourceUrls,
                 fn (string $url): bool => $this->sourceUrlIsConfirmedCard($url, $pageSnippets, $product)
             ));
+            // Model wymienia w source_urls także adresy z wyników wyszukiwania, których nie czytał — przy marce
+            // „tylko producent” źródłem jest wyłącznie strona z puli (inaczej sklep wracał jako źródło i dawca zdjęć).
+            if ($manufacturerOnly) {
+                $poolUrls = [];
+                foreach ($pageSnippets as $page) {
+                    $url = (string) ($page['url'] ?? '');
+                    $poolUrls[mb_strtolower($url)] = true;
+                    $poolUrls[mb_strtolower($this->identity->preferredLocaleUrl($url, $product))] = true;
+                }
+                $sourceUrls = array_values(array_filter(
+                    $sourceUrls,
+                    static fn (string $url): bool => isset($poolUrls[mb_strtolower($url)])
+                ));
+            }
             if ($sourceUrls === []) {
                 $sourceUrls = array_column(array_slice($pageSnippets, 0, 3), 'url');
             }
@@ -1161,11 +1191,11 @@ final class ProductEnrichmentService
                 'from_cache' => false,
             ];
 
-            // zaktualizuj też pole norms produktu, jeśli puste
-            if (($product->norms === null || trim((string) $product->norms) === '') && $payload['norms'] !== []) {
-                $product->norms = implode(', ', array_slice($payload['norms'], 0, 8));
-                $product->save();
-            }
+            // Kolumna norm idzie za nowym opisem, także gdy nowa lista jest pusta. Zapis „tylko gdy puste” zostawiał
+            // normy z poprzedniego (złego) pobrania na zawsze — AJ GROUP 906, 304/K, 604/K. Poza wzbogacaniem kolumnę
+            // piszą tylko opis B2B (karta z nim nie przechodzi tej ścieżki bez potwierdzenia nadpisania) i Presta
+            // (nasz własny dawny tekst, wykluczony jako źródło) — w obu przypadkach nowy opis i tak je zastępuje.
+            $this->writeNormsColumn($product, $payload['norms']);
 
             $primaryImageUrls = $this->pickPrimaryImageUrls(
                 $imageUrls,
@@ -1188,6 +1218,11 @@ final class ProductEnrichmentService
             // przed tryImagesFromOtherCards — kolejne downloadMany czyści listę
             $imageRetryUrls = $this->images->lastRetryLaterUrls();
             if ($savedImages === []) {
+                // Świadomie także przy marce „tylko producent”: zdjęcie z potwierdzonej karty sklepu (bez outletu —
+                // blocked_source_hosts) jest lepsze niż karta bez zdjęcia; opis i listy zostają z producenta.
+                if ($manufacturerOnly) {
+                    $this->attemptLog()->add('image', 'zdjęcie producenta nie pobrało się — szukam na kartach sklepów');
+                }
                 $savedImages = $this->tryImagesFromOtherCards(
                     $product,
                     $searchResults,
@@ -1335,6 +1370,8 @@ final class ProductEnrichmentService
                     if ($old !== '' && ! $this->descriptionMentionsProduct($old, $product)) {
                         $failed['description'] = '';
                         $failed['enrichment_payload'] = null;
+                        // normy należą do tego samego cudzego opisu (writeNormsColumn)
+                        $failed['norms'] = null;
                         // cudzy opis przyszedł z cudzej karty — jej zdjęcia i PDF-y też
                         $this->clearProductImages($product);
                         $this->clearProductDocuments($product);
@@ -1545,7 +1582,8 @@ final class ProductEnrichmentService
                 'sku' => (string) $product->sku,
                 'name' => (string) $product->name,
                 'description' => $cacheDescription,
-                'norms_column' => (string) ($product->norms ?? ''),
+                // kolumna norm to wynik poprzedniego wzbogacania, nie tożsamość — patrz payloadFromExtraction
+                'norms_column' => '',
                 // te same źródła co BhpAttributeNormalizer::forProduct — inaczej zapisana klasa nie zna cennika
                 // ani tabelki dostawcy i bierze ją ze strony sklepu, która bywa kartą wariantu
                 'shop_fields' => (string) ($product->shop_fields_summary ?? ''),
@@ -1585,6 +1623,8 @@ final class ProductEnrichmentService
             );
         }
 
+        // kolumna norm za opisem z cache, jak w pełnym przebiegu — wcześniej ta ścieżka jej nie pisała wcale
+        $this->writeNormsColumn($product, $this->stringList($payload['norms'] ?? null));
         $product->refresh();
         $cached = [
             'description' => mb_substr($cacheDescription, 0, 10000),
@@ -1660,7 +1700,8 @@ final class ProductEnrichmentService
         }
 
         $candidates = [];
-        foreach ($searchResults as $row) {
+        // po drugiej próbie $searchResults niesie też karty z indeksu i sklepów — bez filtra wykluczonych hostów
+        foreach ($this->dropBlockedSourceHosts($searchResults, $product) as $row) {
             $url = (string) ($row['url'] ?? '');
             $key = mb_strtolower($url);
             if ($url === '' || isset($tried[$key]) || ! str_starts_with($url, 'http')) {
@@ -2309,7 +2350,8 @@ final class ProductEnrichmentService
                 'indeks: partia '.$round.' — '.count($hits).' kolejnych kart',
                 urls: array_column($hits, 'url')
             );
-            $more = $this->pages->fetch($hits, (string) $product->sku, 3, [], $product);
+            // do $tried idą wszystkie trafienia (także wykluczone), żeby kolejna partia ich nie powtarzała
+            $more = $this->pages->fetch($this->dropBlockedSourceHosts($hits, $product), (string) $product->sku, 3, [], $product);
             $confirmed = $this->keepConfirmedCardPages($product, $more['pages'] ?? []);
             if ($confirmed !== []) {
                 $this->mergeDocumentLabels($fetched, $more);
@@ -2495,7 +2537,7 @@ final class ProductEnrichmentService
 
         $pack = $this->search->searchWebWithoutLocalIndex($product);
         $fresh = [];
-        foreach ($pack['results'] as $row) {
+        foreach ($this->dropBlockedSourceHosts($pack['results'], $product) as $row) {
             $url = mb_strtolower((string) ($row['url'] ?? ''));
             if ($url !== '' && ! isset($seen[$url])) {
                 $fresh[] = $row;
@@ -2548,7 +2590,7 @@ final class ProductEnrichmentService
             }
         }
 
-        $shopResults = $this->search->searchMappedRetailers($product, $tried);
+        $shopResults = $this->dropBlockedSourceHosts($this->search->searchMappedRetailers($product, $tried), $product);
         if ($shopResults === []) {
             return [[], $fetched, []];
         }
@@ -2592,7 +2634,7 @@ final class ProductEnrichmentService
         }
 
         $extraResults = [];
-        foreach ($searchResults as $row) {
+        foreach ($this->dropBlockedSourceHosts($searchResults, $product) as $row) {
             $u = mb_strtolower((string) ($row['url'] ?? ''));
             if ($u === '' || isset($used[$u])) {
                 continue;
@@ -2866,6 +2908,79 @@ final class ProductEnrichmentService
         usort($ranked, static fn (array $a, array $b): int => [$a['rank'], $a['position']] <=> [$b['rank'], $b['position']]);
 
         return array_values(array_merge($manufacturer, array_column($ranked, 'page'), $rest));
+    }
+
+    /**
+     * Kolumna products.norms = lista norm zapisanego właśnie opisu (null przy pustej) — jak w ProductEnrichmentResetter,
+     * kolumna należy do opisu i razem z nim się zmienia.
+     *
+     * @param  list<string>  $norms
+     */
+    private function writeNormsColumn(Product $product, array $norms): void
+    {
+        $column = $norms !== [] ? implode(', ', array_slice($norms, 0, 8)) : null;
+        if ($product->norms === $column) {
+            return;
+        }
+        if (trim((string) $product->norms) !== '') {
+            $this->attemptLog()->add('desc', 'normy karty: „'.$product->norms.'” → „'.($column ?? 'brak').'”');
+        }
+        $product->norms = $column;
+        $product->save();
+    }
+
+    /**
+     * Marka z `enrichment.manufacturer_only_sources` z kartą producenta w puli: zostają wyłącznie strony producenta
+     * (karta HTML, karta PDF z jego witryny, blok katalogu PDF) i adres wskazany przez człowieka. Tester (AJ GROUP 906,
+     * 24.09.2026): behapownia.pl dokładała swoją ogólną listę rozmiarów (34…74 i XXS…6XL) do XS/48…4XL/62 producenta —
+     * sama kolejność stron (orderPagesForDescription) nie wystarczała, bo sklep dalej trafiał do modelu i do rozmiarów.
+     *
+     * Hosty producenta wyłącznie z konfiguracji (isOfficialCatalogUrl): domeny odgadnięte z wyników wyszukiwania
+     * dopasowują markę po fragmencie nazwy hosta i uznałyby za producenta sklep z „pros” w adresie.
+     * Bez karty producenta w puli nic się nie zmienia — sklepy zostają źródłem.
+     *
+     * @param  list<array<string, mixed>>  $pages
+     * @return array{pages: list<array<string, mixed>>, cut: bool}
+     */
+    private function manufacturerOnlyPages(Product $product, array $pages): array
+    {
+        if ($pages === [] || ! $this->identity->usesManufacturerSourcesOnly($product)) {
+            return ['pages' => $pages, 'cut' => false];
+        }
+        $hasCard = false;
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '' && mb_strlen(trim((string) ($page['text'] ?? ''))) >= self::MFR_CARD_MIN_CHARS
+                && $this->identity->isOfficialCatalogUrl($url, $product)) {
+                $hasCard = true;
+                break;
+            }
+        }
+        if (! $hasCard) {
+            return ['pages' => $pages, 'cut' => false];
+        }
+        $kept = [];
+        $dropped = [];
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '' && ($this->identity->isOfficialCatalogUrl($url, $product)
+                || $this->catalogPdf()->isConfiguredCatalogUrl($url)
+                || $product->isTrustedShopUrl($url))) {
+                $kept[] = $page;
+
+                continue;
+            }
+            $dropped[] = $url;
+        }
+        if ($dropped !== []) {
+            $this->attemptLog()->add(
+                'page',
+                'tylko strony producenta — pominięte strony sklepów: '.count($dropped),
+                urls: array_values(array_filter($dropped))
+            );
+        }
+
+        return ['pages' => $kept, 'cut' => true];
     }
 
     /**
@@ -3449,7 +3564,8 @@ final class ProductEnrichmentService
                     'category' => (string) $product?->categoryAsEvidence(),
                     'sku' => (string) ($product?->sku ?? ''),
                     'name' => (string) ($product?->name ?? ''),
-                    'norms_column' => (string) ($product?->norms ?? ''),
+                    // kolumna norm to wynik poprzedniego wzbogacania, nie tożsamość — patrz payloadFromExtraction
+                    'norms_column' => '',
                     'shop_fields' => (string) ($product?->shop_fields_summary ?? ''),
                     'price_list' => is_array($product?->price_list_attributes) ? $product->price_list_attributes : [],
                 ]
@@ -4938,7 +5054,12 @@ SYS,
                 'sku' => (string) $product->sku,
                 'name' => (string) $product->name,
                 'description' => $description,
-                'norms_column' => (string) ($product->norms ?? ''),
+                // Kolumnę norm zapisuje wzbogacanie (ProductEnrichmentResetter kasuje ją razem z opisem), więc tu jest
+                // wynikiem POPRZEDNIEGO przebiegu, a normalizer bierze norms_column za tożsamość bez przesiewu. Karta
+                // AJ GROUP 906 (24.09.2026): „EN 471 klasa 3, EN 533 indeks 1” z pobrania z 10.09 wracały do normy_en
+                // przy każdym „Pobierz ponownie”, choć obie strony źródłowe tych norm nie znają. Nowa lista wchodzi
+                // przez 'norms' (przesiewana); kolumna dostaje ją po zapisie.
+                'norms_column' => '',
                 // te same źródła co BhpAttributeNormalizer::forProduct (cennik, tabelka dostawcy)
                 'shop_fields' => (string) ($product->shop_fields_summary ?? ''),
                 'price_list' => is_array($product->price_list_attributes) ? $product->price_list_attributes : [],

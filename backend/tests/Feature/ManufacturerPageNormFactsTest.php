@@ -132,9 +132,23 @@ final class ManufacturerPageNormFactsTest extends TestCase
 
     public function test_page_norms_come_only_from_the_card_chosen_as_description_source(): void
     {
+        // MAPA jest na liście „tylko producent” (sklep nie wchodzi do puli) — mechanizm sprawdzamy dla marki spoza listy
+        config(['enrichment.manufacturer_only_sources' => []]);
         $product = $this->enrichWithModelFollowingTheShop(null, null, [self::SHOP]);
 
         $this->assertNull($product->manufacturer_norms, 'opis powstał ze sklepu — ramki norm strony producenta z puli nie bierzemy');
+    }
+
+    public function test_with_manufacturer_only_rule_the_shop_cannot_become_the_description_source(): void
+    {
+        $prompts = new \ArrayObject;
+        $product = $this->enrichWithModelFollowingTheShop($prompts, null, [self::SHOP]);
+
+        $this->assertSame([self::MAPA], $product->enrichment_payload['source_urls'] ?? null);
+        $this->assertSame('manufacturer', $product->enrichment_payload['primary_source_kind'] ?? null);
+        $this->assertSame('1121X', $product->manufacturer_norms['en388'] ?? null, 'źródłem jest karta MAPA — jej ramka norm');
+        $extraction = collect($prompts->getArrayCopy())->first(fn (string $p): bool => str_contains($p, 'Strony (po filtrze AI)'));
+        $this->assertStringNotContainsString('cas-technik', (string) $extraction, 'sklep nie idzie do modelu');
     }
 
     public function test_description_code_of_another_edition_is_not_replaced(): void

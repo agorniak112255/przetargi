@@ -205,6 +205,14 @@ return [
     ],
 
     /*
+    | Marki, których opis powstaje wyłącznie ze stron producenta (domeny z manufacturer_domains), gdy jego karta
+    | jest w puli. Zgłoszenie testera z ręcznych testów cenników (AJ GROUP / PROS, jak wcześniej MAPA): karty
+    | sklepów mieszały rozmiarówkę ze swoją ogólną tabelą i dokładały dane innego wyrobu. Bez karty producenta
+    | w puli sklepy zostają źródłem jak dotąd. Klucze jak w manufacturer_domains.
+    */
+    'manufacturer_only_sources' => ['pros', 'aj-group', 'ajgroup', 'mapa'],
+
+    /*
     | Hosty do zapytań site: (katalog + sklepy, które ten asortyment indeksują).
     | Gdy brak wpisu, bierzemy manufacturer_domains.
     */
@@ -561,6 +569,9 @@ return [
     */
     'blocked_source_hosts' => [
         'supon.rzeszow.pl',
+        // Outlet PROS sprzedaje pojedyncze sztuki z odzysku: zdjęcie to konkretna sztuka na podłodze, nie zdjęcie
+        // katalogowe (karta 106 R, zgłoszenie testera 24.09.2026). Karta wyrobu jest na pros.pl.
+        'outlet.pros.pl',
     ],
 
     /*
