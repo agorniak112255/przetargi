@@ -66,6 +66,28 @@ final class ProductSizeVariantTest extends TestCase
     }
 
     #[Test]
+    public function strips_short_roz_label_and_the_separator_it_leaves(): void
+    {
+        $svc = new ProductSizeVariant;
+
+        // Karty UVEX #25211 i PROTEKT #26176 zostały po łączeniu rozmiarów z nazwą „… roz.” — obcinana była sama liczba.
+        $this->assertSame('Rękawice C500 Dry - nakrapiane', $svc->stripSizeFromName('Rękawice C500 Dry - nakrapiane roz. 7'));
+        $this->assertSame(
+            'PB 66 - Pas bojowy strażacki z linką bezpieczeństwa',
+            $svc->stripSizeFromName('PB 66 - Pas bojowy strażacki z linką bezpieczeństwa - roz. S'),
+        );
+        $this->assertSame('PB 31 - Pas do pracy w podparciu', $svc->stripSizeFromName('PB 31 - Pas do pracy w podparciu - roz. M-XL'));
+        // rozmiar kończący nazwę nie zostawia myślnika ani przecinka — rozmiar pojedynczy i zakres dają ten sam klucz
+        $this->assertSame('P-50mX - Szelki bezpieczeństwa', $svc->stripSizeFromName('P-50mX - Szelki bezpieczeństwa - rozmiar S'));
+        $range = $svc->groupKey('Canis', 'Fleece jacket, navy blue colour, size XS-5XL', '1');
+        $this->assertNotNull($range);
+        $this->assertSame($range, $svc->groupKey('Canis', 'Fleece jacket, navy blue colour, size 6XL', '2'));
+        // separator przed resztą nazwy zostaje — obcinany jest tylko koniec nazwy
+        $this->assertSame('Rękawice nitrylowe', $svc->stripSizeFromName('Rękawice roz. 7 nitrylowe'));
+        $this->assertSame('Szelki -', $svc->stripSizeFromName('Szelki -'));
+    }
+
+    #[Test]
     public function groups_letter_size_suffix_on_sku_and_name(): void
     {
         $svc = new ProductSizeVariant;

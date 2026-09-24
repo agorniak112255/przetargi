@@ -102,6 +102,35 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bM
         return 'PROTEKT';
     }
 
+    /**
+     * Nazwa karty bez rozmiaru z nagłówka strony; null, gdy nagłówek rozmiaru nie podaje.
+     *
+     * Każdy rozmiar ma u Protektu osobny adres z tym samym numerem katalogowym (P-50mX, AB 150 21: „rozmiar S”,
+     * „rozmiar M - XL”, „rozmiar XXL”), a karta jest jedna na numer — nazwa z rozmiarem pierwszego adresu mówiła
+     * o jednym rozmiarze karty obejmującej wszystkie (24.09.2026: 231 kart; zapytanie „P-50mX rozmiar M-XL” trafiało
+     * na kartę „… rozmiar S”). Zapisy ze strony: „- rozmiar S”, „, rozmiar M”, „- roz. M-XL”, „- rozmiar szelek M-XL”
+     * (zestawy); rozmiar szelek „M - XL” to jeden rozmiar, nie zakres. Samo „- rozmiar” na końcu (P-51E: strona
+     * bez wartości) też znika. Tylko rozmiary literowe — liczba („rozmiar 52-63” hełmu) to cecha wyrobu, a nie
+     * podstrona. Reszta nagłówka zostaje dosłownie.
+     */
+    public static function cardNameWithoutSize(string $name): ?string
+    {
+        $size = '(?:[2-7]XL|X{0,4}L|X{0,3}S|M)';
+        $stripped = preg_replace(
+            '/(?:\s*[-,])?\s*\b(?:rozmiar(?:\s+szelek)?|roz\.)(?:\s*'.$size.'(?:\s*-\s*'.$size.')?(?![\p{L}\p{N}])|\s*$)/iu',
+            '',
+            $name,
+            1,
+            $count,
+        );
+        if ($stripped === null || $count === 0) {
+            return null;
+        }
+        $stripped = trim(preg_replace('/\s{2,}/u', ' ', $stripped) ?? $stripped, " \t\n\r\0\x0B-,");
+
+        return $stripped !== '' ? $stripped : null;
+    }
+
     public function price(B2bRemoteProduct $product): ?B2bRemotePrice
     {
         if (($product->raw['status'] ?? null) !== 'ok') {
@@ -364,6 +393,7 @@ final class ProtektB2bConnector implements B2bConnector, B2bDocumentSource, B2bM
             ],
             availability: self::availability($xpath),
             identifiers: self::identifiersFor($sku, $catalogNo, $supplierIndex, $ean, $ownColour),
+            cardName: self::cardNameWithoutSize($name),
         );
     }
 

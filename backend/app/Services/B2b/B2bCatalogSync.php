@@ -859,7 +859,7 @@ final class B2bCatalogSync
 
         // pola opisowe karty; ceny idą do slotu konta, nie do fill karty
         $payload = [
-            'name' => mb_substr($remote->name, 0, 1000),
+            'name' => mb_substr($remote->cardName ?? $remote->name, 0, 1000),
             'manufacturer' => $manufacturer,
         ];
         // każdy łącznik (decyzja użytkownika 15.09.2026): nazwa ze źródła tylko na nową kartę — przed
@@ -1940,7 +1940,7 @@ final class B2bCatalogSync
         }
 
         $payload = [
-            'name' => mb_substr($remote->name, 0, 1000),
+            'name' => mb_substr($remote->cardName ?? $remote->name, 0, 1000),
             'manufacturer' => $manufacturer,
             // 0 = „brak ceny” (oferta, dopasowanie, wycena) — ceny są tylko w wersjach
             'catalog_price_net' => 0,

@@ -18,6 +18,9 @@ final readonly class B2bRemoteProduct
      *                                                                                                     w tę kartę (np. rozmiary o tej samej cenie), razem z remoteId; [] = jedna pozycja
      * @param  list<B2bRemoteIdentifier>|null  $identifiers  identyfikatory pozycji (EAN, kod producenta); null = łącznik ich
      *                                                       nie podaje (zapisane zostają), [] = podaje i nie ma żadnych
+     * @param  string|null  $cardName  nazwa nowej karty, gdy nazwa u dostawcy opisuje tylko część pozycji (Protekt: nagłówek
+     *                                 podaje rozmiar jednej podstrony, a numer katalogowy obejmuje wszystkie rozmiary); null =
+     *                                 $name. $name zostaje dosłowną nazwą ze źródła (b2b_product_links.remote_name, dziennik).
      */
     public function __construct(
         public string $remoteId,
@@ -30,5 +33,6 @@ final readonly class B2bRemoteProduct
         public ?string $variantSummary = null,
         public array $members = [],
         public ?array $identifiers = null,
+        public ?string $cardName = null,
     ) {}
 }

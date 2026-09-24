@@ -488,11 +488,19 @@ final class ProductSizeVariant
             '',
             $t
         ) ?? $t;
+        // „roz.” to skrót UVEX i Protektu („Rękawice C500 Dry - nakrapiane roz. 7”) — bez niego łączenie obcinało samą
+        // liczbę i karta zostawała z nazwą „… nakrapiane roz.”. Separator przed rozmiarem kończącym nazwę też znika
+        // („P-50mX - Szelki bezpieczeństwa - rozmiar S” → bez wiszącego „-”).
         $t = preg_replace(
-            '/\b(?:size|rozmiar|taille|rozm\.?)\s*:?\s*(?:\d{1,2}(?:[.,]\d)?|[2-6]\s*xl|xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l)\b/iu',
+            '/\b(?:size|rozmiar|taille|rozm\.?|roz\.)\s*:?\s*(?:\d{1,2}(?:[.,]\d)?|[2-6]\s*xl|xxxxl|xxxl|xxl|xl|xxs|xs|s|m|l)\b/iu',
             '',
-            $t
+            $t,
+            -1,
+            $labelled
         ) ?? $t;
+        if ($labelled > 0) {
+            $t = preg_replace('/[\s,;:\-–—\/]+$/u', '', $t) ?? $t;
+        }
         if (preg_match('/^(.*?)[\s,\/]+(\d{1,2}(?:[.,]\d)?)\s*$/u', $t, $m) === 1
             && $this->normalizeSizeToken($m[2]) !== null) {
             $t = $m[1];

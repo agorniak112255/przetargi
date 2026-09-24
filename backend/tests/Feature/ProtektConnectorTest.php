@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\B2bAccount;
 use App\Models\B2bDiscountRule;
+use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
@@ -192,6 +193,59 @@ final class ProtektConnectorTest extends TestCase
             ['name' => 'Kolor', 'value' => 'czarny, czerwony, niebieski'],
             self::sectionRows(ProductShopCard::query()->where('product_id', $product->id)->sole(), 'Specyfikacja techniczna'),
         );
+    }
+
+    public function test_rozmiary_jednego_numeru_daja_karte_z_nazwa_bez_rozmiaru(): void
+    {
+        // Strona P-50mX odczytana 24.09.2026: każdy rozmiar pod osobnym adresem, numer AB 150 21 wspólny. Karta
+        // z nazwą „… - rozmiar S” obejmowała wszystkie rozmiary, a zapytanie „rozmiar M-XL” dostawało ostrzeżenie.
+        $this->rule(1, 'Szelki', B2bDiscountRule::TYPE_PREFIX, 'AB', 40.0);
+        foreach (['S', 'M - XL', 'XXL'] as $i => $size) {
+            $this->page('/szelki-bezpieczenstwa-'.$i.'~p'.(8553 + $i).'~c40', $this->card(
+                name: 'P-50mX - Szelki bezpieczeństwa - rozmiar '.$size,
+                catalogNo: 'AB 150 21',
+                price: '300,00',
+            ));
+        }
+        $this->fakeSite();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame(1, $result['created'], implode(' | ', $result['errors']));
+        $product = Product::query()->where('sku', 'AB 150 21')->sole();
+        $this->assertSame('P-50mX - Szelki bezpieczeństwa', $product->name);
+        // nazwa ze źródła zostaje dosłownie w powiązaniu — to ostatni odczytany adres
+        $this->assertSame(
+            'P-50mX - Szelki bezpieczeństwa - rozmiar XXL',
+            B2bProductLink::query()->where('product_id', $product->id)->sole()->remote_name,
+        );
+
+        // istniejącej karty synchronizacja nie przemianowuje (decyzja użytkownika 15.09.2026)
+        $product->update(['name' => 'Szelki P-50mX (nazwa handlowca)']);
+        app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+        $this->assertSame('Szelki P-50mX (nazwa handlowca)', $product->fresh()->name);
+    }
+
+    public function test_nazwa_karty_bez_rozmiaru_z_kazdego_zapisu_na_stronie(): void
+    {
+        $cases = [
+            'P-50mX - Szelki bezpieczeństwa - rozmiar S' => 'P-50mX - Szelki bezpieczeństwa',
+            'P-01 - Szelki bezpieczeństwa - rozmiar M - XL' => 'P-01 - Szelki bezpieczeństwa',
+            'P-04 - Kamizelka szelkowa - kolor , rozmiar M' => 'P-04 - Kamizelka szelkowa - kolor',
+            'VS 020 - Kamizelka do szelek bezpieczeństwa - rozmiar M - XL, kolor' => 'VS 020 - Kamizelka do szelek bezpieczeństwa, kolor',
+            'PB 31 - Pas do pracy w podparciu - roz. M-XL' => 'PB 31 - Pas do pracy w podparciu',
+            'LIFTER - Zestaw do prac głębokościowych - rozmiar szelek M-XL' => 'LIFTER - Zestaw do prac głębokościowych',
+            'P-600 - Szelki bezpieczeństwa z pasem do pracy w podparciu - rozmiar XXXL' => 'P-600 - Szelki bezpieczeństwa z pasem do pracy w podparciu',
+            'P-51E - Szelki bezpieczeństwa z taśmami elastycznymi - rozmiar' => 'P-51E - Szelki bezpieczeństwa z taśmami elastycznymi',
+            'PB 66 - Pas bojowy strażacki z linką bezpieczeństwa - roz.' => 'PB 66 - Pas bojowy strażacki z linką bezpieczeństwa',
+        ];
+        foreach ($cases as $name => $expected) {
+            $this->assertSame($expected, ProtektB2bConnector::cardNameWithoutSize($name), $name);
+        }
+        // bez rozmiaru literowego nazwa zostaje: „szelek” to nie rozmiar S, liczba to cecha wyrobu
+        $this->assertNull(ProtektB2bConnector::cardNameWithoutSize('BW140 - Amortyzator bezpieczeństwa'));
+        $this->assertNull(ProtektB2bConnector::cardNameWithoutSize('Kamizelka do szelek - rozmiary uniwersalne'));
+        $this->assertNull(ProtektB2bConnector::cardNameWithoutSize('KASK - Hełm - rozmiar 52-63'));
     }
 
     public function test_ten_sam_numer_z_rozna_cena_nie_jest_przemilczany(): void
