@@ -205,8 +205,9 @@ final class ProductMatchService
         ?array $itemIds = null,
         int $progressOffset = 0,
         ?int $progressTotal = null,
+        ?string $runId = null,
     ): array {
-        $this->searchEventContext = $this->newSearchEventContext((int) $tender->id);
+        $this->searchEventContext = $this->newSearchEventContext((int) $tender->id, [], $runId);
         try {
             return $this->runMatchTender($tender, $onlyEmpty, $itemIds, $progressOffset, $progressTotal);
         } finally {
@@ -400,17 +401,7 @@ final class ProductMatchService
             $startedAt
         );
 
-        $allScores = $tender->items()->whereNotNull('ai_match_percent')->pluck('ai_match_percent');
-        $avgAll = $allScores->isEmpty() ? 0.0 : (float) $allScores->avg();
-
-        $tender->ai_percent = (int) round($avgAll);
-        $tender->last_activity_at = now();
-        if ($tender->status === 'draft') {
-            $tender->status = 'wycena';
-        }
-        $tender->save();
-
-        $this->pricing->recalculateTenderTotals($tender->fresh(['items.mainProduct']));
+        $this->refreshTenderTotals($tender);
 
         $avg = $scores === [] ? 0.0 : array_sum($scores) / count($scores);
 
@@ -443,6 +434,27 @@ final class ProductMatchService
             'changes' => $changedRows,
             'processed_item_ids' => $processedIds,
         ];
+    }
+
+    /**
+     * Średni procent AI i sumy oferty z pozycji zapisanych w bazie. Przeglądarka dopasowuje pozycje równolegle
+     * (kilka żądań naraz), a każde żądanie liczy sumy po swojej pozycji — żądanie, które przeczytało pozycje przed
+     * zapisem sąsiada, mogło zapisać sumy później. Po ostatniej pozycji przeglądarka woła to raz jeszcze
+     * (POST /tenders/{id}/match/finish).
+     */
+    public function refreshTenderTotals(Tender $tender): void
+    {
+        $allScores = $tender->items()->whereNotNull('ai_match_percent')->pluck('ai_match_percent');
+        $avgAll = $allScores->isEmpty() ? 0.0 : (float) $allScores->avg();
+
+        $tender->ai_percent = (int) round($avgAll);
+        $tender->last_activity_at = now();
+        if ($tender->status === 'draft') {
+            $tender->status = 'wycena';
+        }
+        $tender->save();
+
+        $this->pricing->recalculateTenderTotals($tender->fresh(['items.mainProduct']));
     }
 
     public static function progressCacheKey(int $tenderId): string
@@ -2396,12 +2408,13 @@ final class ProductMatchService
      * @param  array<string, list<int>>  $items  treść wymagania => numery pozycji
      * @return array{run_id: string, context_id: int, user_id: ?int, items: array<string, list<int>>}
      */
-    private function newSearchEventContext(int $tenderId, array $items = []): array
+    private function newSearchEventContext(int $tenderId, array $items = [], ?string $runId = null): array
     {
         $userId = auth()->id();
 
         return [
-            'run_id' => (string) Str::ulid(),
+            // jedno kliknięcie „Dopasuj” to wiele żądań (pozycje równolegle) — przeglądarka podaje wspólny przebieg
+            'run_id' => $runId ?? (string) Str::ulid(),
             'context_id' => $tenderId,
             'user_id' => $userId !== null ? (int) $userId : null,
             'items' => $items,

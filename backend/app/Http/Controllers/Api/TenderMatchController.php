@@ -36,6 +36,8 @@ class TenderMatchController extends Controller
             'item_ids.*' => ['integer'],
             'progress_offset' => ['sometimes', 'integer', 'min:0'],
             'progress_total' => ['sometimes', 'integer', 'min:0'],
+            // wspólny przebieg w Statystykach AI dla pozycji wysyłanych równolegle z jednego kliknięcia
+            'run_id' => ['sometimes', 'string', 'ulid'],
         ]);
 
         $itemIds = $request->has('item_ids') ? array_values($request->input('item_ids', [])) : null;
@@ -52,7 +54,8 @@ class TenderMatchController extends Controller
             $request->boolean('only_empty', true),
             $itemIds,
             (int) $request->input('progress_offset', 0),
-            $request->has('progress_total') ? (int) $request->input('progress_total') : null
+            $request->has('progress_total') ? (int) $request->input('progress_total') : null,
+            $request->filled('run_id') ? strtoupper((string) $request->input('run_id')) : null,
         );
 
         $refreshIds = $result['processed_item_ids'] ?? [];
@@ -72,6 +75,23 @@ class TenderMatchController extends Controller
 
         return response()->json([
             ...$result,
+            'tender_id' => $tender->id,
+            'ai_percent' => $tender->fresh()->ai_percent,
+        ]);
+    }
+
+    /** Koniec „Dopasuj” z przeglądarki: sumy i procent AI przetargu po wszystkich równoległych żądaniach. */
+    public function finish(Tender $tender): JsonResponse
+    {
+        if (! $this->workflow->canEditOffer($tender)) {
+            throw ValidationException::withMessages([
+                'tender' => ['Dopasowanie zablokowane — status: '.$tender->status],
+            ]);
+        }
+
+        $this->matcher->refreshTenderTotals($tender);
+
+        return response()->json([
             'tender_id' => $tender->id,
             'ai_percent' => $tender->fresh()->ai_percent,
         ]);

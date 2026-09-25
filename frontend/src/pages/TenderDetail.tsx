@@ -350,7 +350,7 @@ type MatchReport = {
   model_failed?: number
   /** tryb „tylko puste”: pozycje z produktem ≥ progu lub własne — nie wysłane do modelu */
   left_as_is?: number
-  /** paczki, których wynik dokończył serwer po zerwaniu żądania — liczby wyżej ich nie obejmują */
+  /** pozycje, których żądanie przeglądarka zerwała po limicie czasu — serwer liczy je dalej, liczby wyżej ich nie obejmują */
   finished_in_background?: number
   avg_score: number
   changes: MatchChange[]
@@ -358,24 +358,14 @@ type MatchReport = {
 }
 
 type MatchProgress = {
-  status: string
   done: number
   total: number
-  line_no: number | null
-  requirement: string | null
-  started_at: number | null
-  /** etap bieżącej paczki na serwerze: prepare | understand | catalog | rank | rewrite | save */
-  stage?: string | null
-  stage_done?: number
-  stage_total?: number
+  /** pozycje (id), na które przeglądarka czeka w tej chwili — najwyżej „Ile zapytań AI naraz” */
+  inFlight: number[]
 }
 
 function matchReportStorageKey(tenderId: string): string {
   return `tender-match-report-${tenderId}`
-}
-
-function matchBatchSize(concurrency: number): number {
-  return Math.max(1, concurrency)
 }
 
 function matchTargetIds(
@@ -405,94 +395,37 @@ function matchTargetIds(
 }
 
 /**
- * Etapy paczki na serwerze i ich udział w czasie paczki (szacunek: ranking w modelu trwa najdłużej).
- * `model` = czekamy na odpowiedź modelu dla całej paczki naraz — pasek pulsuje, żeby było widać pracę.
+ * Limit czasu jednej pozycji: zrozumienie, ocena kart i ewentualne przepisanie zapytania idą po kolei, a każde
+ * zapytanie do modelu ma własny limit i ponowienia przy przeciążeniu.
  */
-const MATCH_STAGES: Record<
-  string,
-  { label: string; unit: string; from: number; to: number; model: boolean }
-> = {
-  prepare: { label: 'Przygotowanie paczki (kody z SIWZ)', unit: 'pozycji w paczce', from: 0, to: 0.05, model: false },
-  understand: {
-    label: 'Model czyta opisy pozycji',
-    unit: 'opisów przeczytanych przez model',
-    from: 0.05,
-    to: 0.15,
-    model: true,
-  },
-  catalog: {
-    label: 'Szukanie kandydatów w katalogu',
-    unit: 'pozycji z kandydatami z katalogu',
-    from: 0.15,
-    to: 0.35,
-    model: false,
-  },
-  rank: {
-    label: 'Model ocenia karty kandydatów',
-    unit: 'pozycji ocenionych przez model',
-    from: 0.35,
-    to: 0.85,
-    model: true,
-  },
-  rewrite: {
-    label: 'Model przepisuje zapytania bez wyników',
-    unit: 'zapytań przepisanych przez model',
-    from: 0.85,
-    to: 0.92,
-    model: true,
-  },
-  save: { label: 'Wybór i zapis pozycji', unit: 'pozycji zapisanych w ofercie', from: 0.92, to: 1, model: false },
-}
-
-/** Szacunkowy postęp całości: pozycje z zamkniętych paczek + ułamek bieżącej paczki według etapu. */
-function matchProgressFraction(p: MatchProgress | null, batchSize: number): number {
-  const total = Math.max(p?.total ?? 0, 0)
-  if (total === 0) {
-    return 0
-  }
-  const done = Math.min(p?.done ?? 0, total)
-  const stage = p?.stage ? MATCH_STAGES[p.stage] : undefined
-  if (!stage || done >= total) {
-    return done / total
-  }
-  const chunk = Math.min(Math.max(1, batchSize), total - done)
-  const stageTotal = p?.stage_total ?? 0
-  const inner = stageTotal > 0 ? Math.min(1, (p?.stage_done ?? 0) / stageTotal) : 0
-  const stageFraction = stage.from + (stage.to - stage.from) * inner
-  return Math.min(1, (done + chunk * stageFraction) / total)
-}
-
-/** Limit czasu paczki: model odpowiada do 240 s na zapytanie, pozycje w paczce idą równolegle. */
-function matchAbortMs(chunkSize: number): number {
-  return 600_000 + Math.max(0, chunkSize) * 30_000
-}
+const MATCH_ITEM_ABORT_MS = 900_000
 
 /**
- * Po zerwaniu żądania serwer dokańcza paczkę (ignore_user_abort) — czekamy, aż /match/progress
- * przestanie zgłaszać „running” dla tego przebiegu, żeby kolejna paczka nie ruszyła równolegle
- * i żeby końcowe odświeżenie listy zobaczyło już zapisane wyniki.
+ * Każda pozycja w toku zajmuje proces PHP na cały czas pracy modelu, a serwer ma ich 40 (pm.max_children, 25.09.2026)
+ * dla wszystkich użytkowników i dodatku Thunderbirda — wyższe „Ile zapytań AI naraz” nie zajmie reszty.
  */
-async function waitForServerChunk(
-  tenderId: string,
-  startedAt: number,
-  expectedDone: number,
-  maxWaitMs: number,
-): Promise<boolean> {
-  const deadline = Date.now() + maxWaitMs
-  while (Date.now() < deadline) {
-    try {
-      const p = await api<MatchProgress>(`/tenders/${tenderId}/match/progress`)
-      const ours = p.started_at == null || p.started_at >= startedAt - 5
-      // paczka pośrednia kończy się statusem „running” z done = offset + rozmiar paczki
-      if (!ours || p.status !== 'running' || (p.done ?? 0) >= expectedDone) {
-        return true
-      }
-    } catch {
-      /* postęp jest pomocniczy — próbujemy dalej */
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 2000))
+const MATCH_MAX_PARALLEL_ITEMS = 24
+
+function matchParallelItems(concurrency: number | undefined): number {
+  return Math.min(clampAiConcurrency(concurrency), MATCH_MAX_PARALLEL_ITEMS)
+}
+
+const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+/** Numer przebiegu (ULID) — wszystkie pozycje jednego kliknięcia to jeden przebieg w Statystykach AI. */
+function newMatchRunId(): string {
+  let time = Date.now()
+  let out = ''
+  for (let i = 0; i < 10; i += 1) {
+    out = ULID_ALPHABET[time % 32] + out
+    time = Math.floor(time / 32)
   }
-  return false
+  const random = new Uint8Array(16)
+  crypto.getRandomValues(random)
+  for (const byte of random) {
+    out += ULID_ALPHABET[byte % 32]
+  }
+  return out
 }
 
 function formatMatchEta(seconds: number): string {
@@ -646,13 +579,6 @@ export function TenderDetail() {
   const [matchBusy, setMatchBusy] = useState(false)
   const [matchElapsed, setMatchElapsed] = useState(0)
   const [matchProgress, setMatchProgress] = useState<MatchProgress | null>(null)
-  /** kiedy zaczął się bieżący etap paczki — „etap trwa N s” w oknie postępu */
-  const [matchStageSince, setMatchStageSince] = useState(0)
-  const matchStageKeyRef = useRef('')
-  const matchStartedAtRef = useRef(0)
-  const matchDoneRef = useRef(0)
-  /** najwyższy pokazany procent w tym przebiegu — procent w oknie nigdy się nie cofa */
-  const matchPctRef = useRef(0)
   const [matchReport, setMatchReport] = useState<MatchReport | null>(null)
   const [showAiChanges, setShowAiChanges] = useState(false)
   const [focusItemId, setFocusItemId] = useState<number | null>(null)
@@ -765,49 +691,6 @@ export function TenderDetail() {
     }, 1000)
     return () => window.clearInterval(timer)
   }, [matchBusy])
-
-  useEffect(() => {
-    if (!matchBusy || !id) {
-      return
-    }
-    let cancelled = false
-    const started = matchStartedAtRef.current
-    const pull = async () => {
-      try {
-        const p = await api<MatchProgress>(`/tenders/${id}/match/progress`)
-        if (cancelled) {
-          return
-        }
-        if (p.started_at != null && p.started_at < started - 5) {
-          return
-        }
-        const stageKey = `${p.stage ?? ''}|${p.started_at ?? ''}`
-        if (stageKey !== matchStageKeyRef.current) {
-          matchStageKeyRef.current = stageKey
-          setMatchStageSince(Date.now())
-        }
-        setMatchProgress((prev) => ({
-          status: 'running',
-          done: Math.max(matchDoneRef.current, p.done ?? 0),
-          total: prev?.total ?? p.total,
-          line_no: p.line_no,
-          requirement: p.requirement,
-          started_at: started,
-          stage: p.stage ?? null,
-          stage_done: p.stage_done ?? 0,
-          stage_total: p.stage_total ?? 0,
-        }))
-      } catch {
-        /* postęp jest pomocniczy */
-      }
-    }
-    void pull()
-    const poll = window.setInterval(() => void pull(), 1000)
-    return () => {
-      cancelled = true
-      window.clearInterval(poll)
-    }
-  }, [matchBusy, id])
 
   useEffect(() => {
     if (tab === 'zaproszenia') void loadDirectory(inviteQ)
@@ -1368,9 +1251,6 @@ export function TenderDetail() {
     setBusy(true)
     setMatchBusy(true)
     setShowAiChanges(false)
-    matchStartedAtRef.current = Math.floor(Date.now() / 1000)
-    matchDoneRef.current = 0
-    matchPctRef.current = 0
     const scopedItems = itemIds
       ? (data?.tender.items ?? []).filter((i) => itemIds.includes(i.id))
       : (data?.tender.items ?? [])
@@ -1382,14 +1262,10 @@ export function TenderDetail() {
     )
     const estimated = targets.length
     const leftAsIs = Math.max(0, scopedItems.length - targets.length)
-    setMatchProgress({
-      status: 'running',
-      done: 0,
-      total: estimated,
-      line_no: null,
-      requirement: null,
-      started_at: matchStartedAtRef.current,
-    })
+    let done = 0
+    const inFlight = new Set<number>()
+    const showProgress = () => setMatchProgress({ done, total: estimated, inFlight: [...inFlight] })
+    showProgress()
     type MatchApiRes = {
       matched: number
       skipped: number
@@ -1419,28 +1295,23 @@ export function TenderDetail() {
       changes: [],
     }
     const scoreParts: number[] = []
-    const concurrency = clampAiConcurrency(data?.coverage?.thresholds.match_concurrency)
-    const batchSize = matchBatchSize(concurrency)
-    const chunks: number[][] = []
-    for (let i = 0; i < targets.length; i += batchSize) {
-      chunks.push(targets.slice(i, i + batchSize))
-    }
+    const concurrency = matchParallelItems(data?.coverage?.thresholds.match_concurrency)
+    const runId = newMatchRunId()
     const errors: string[] = []
     let finishedInBackground = 0
     try {
-      await mapPool(chunks, 1, async (chunk) => {
+      // Przesuwane okno: każda pozycja to osobne żądanie, w toku najwyżej „Ile zapytań AI naraz”. Gdy jedna
+      // pozycja się skończy, od razu rusza następna — paczki czekały na swoją najwolniejszą pozycję, a model
+      // stał w tym czasie bez pracy (25.09.2026).
+      await mapPool(targets, concurrency, async (itemId) => {
+        inFlight.add(itemId)
+        showProgress()
         const ac = new AbortController()
-        const abortMs = matchAbortMs(chunk.length)
-        const abortTimer = window.setTimeout(() => ac.abort(), abortMs)
+        const abortTimer = window.setTimeout(() => ac.abort(), MATCH_ITEM_ABORT_MS)
         try {
           const res = await api<MatchApiRes>(`/tenders/${id}/match`, {
             method: 'POST',
-            body: JSON.stringify({
-              only_empty: onlyEmpty,
-              item_ids: chunk,
-              progress_offset: matchDoneRef.current,
-              progress_total: estimated,
-            }),
+            body: JSON.stringify({ only_empty: onlyEmpty, item_ids: [itemId], run_id: runId }),
             signal: ac.signal,
           })
           merged.matched += res.matched
@@ -1461,37 +1332,31 @@ export function TenderDetail() {
           const aborted =
             (e instanceof DOMException && e.name === 'AbortError') ||
             (e instanceof Error && /abort/i.test(e.message))
-          if (aborted && id) {
-            // serwer dokańcza paczkę mimo zerwania — czekamy na jej koniec, zamiast zostawić
-            // pozycje ze starym wynikiem i ruszyć następną paczkę równolegle
-            const finished = await waitForServerChunk(
-              id,
-              matchStartedAtRef.current,
-              matchDoneRef.current + chunk.length,
-              abortMs,
-            )
+          if (aborted) {
+            // serwer liczy pozycję dalej (ignore_user_abort) i zapisze wynik — nie ma go tylko w raporcie
             finishedInBackground += 1
             errors.push(
-              finished
-                ? `Paczka przekroczyła ${Math.round(abortMs / 60_000)} min — serwer dokończył ją w tle; jej liczby nie weszły do raportu.`
-                : `Paczka przekroczyła ${Math.round(abortMs / 60_000)} min i serwer nadal ją liczy — odśwież stronę za chwilę.`,
+              `Pozycja przekroczyła ${Math.round(MATCH_ITEM_ABORT_MS / 60_000)} min — serwer liczy ją dalej w tle; odśwież stronę za kilka minut.`,
             )
           } else {
             errors.push(e instanceof Error ? e.message : 'Błąd dopasowania')
           }
         } finally {
           window.clearTimeout(abortTimer)
+          inFlight.delete(itemId)
+          done += 1
+          showProgress()
         }
-        matchDoneRef.current += chunk.length
-        setMatchProgress({
-          status: matchDoneRef.current >= estimated ? 'done' : 'running',
-          done: Math.min(matchDoneRef.current, estimated),
-          total: estimated,
-          line_no: null,
-          requirement: null,
-          started_at: matchStartedAtRef.current,
-        })
       })
+      if (targets.length > 0) {
+        try {
+          // każde żądanie liczyło sumy przetargu po swojej pozycji, równolegle z innymi — końcowe przeliczenie z bazy
+          await api(`/tenders/${id}/match/finish`, { method: 'POST' })
+        } catch (e) {
+          errors.push(e instanceof Error ? e.message : 'Nie udało się przeliczyć sum przetargu')
+        }
+      }
+      merged.changes = [...(merged.changes ?? [])].sort((a, b) => a.line_no - b.line_no)
       merged.avg_score =
         scoreParts.length === 0
           ? 0
@@ -1534,7 +1399,7 @@ export function TenderDetail() {
             'Te pozycje nie mają świeżej oceny — zostały z poprzednią kartą (najwyżej 70%) albo czekają bez produktu. ' +
             'Zmniejsz „Ile zapytań AI naraz” w Ustawieniach AI i uruchom dopasowanie ponownie.'
           : ''
-      const batchWarning = errors.length > 0 ? `Część paczek nie przeszła (${errors.length}): ${errors[0]}` : ''
+      const batchWarning = errors.length > 0 ? `Część pozycji nie przeszła (${errors.length}): ${errors[0]}` : ''
       if (modelWarning !== '' || batchWarning !== '') {
         setErr([modelWarning, batchWarning].filter((part) => part !== '').join(' '))
       }
@@ -1748,60 +1613,50 @@ export function TenderDetail() {
           <div className="w-full max-w-md rounded-xl bg-white p-4 text-sm shadow-xl">
             <p className="font-semibold text-slate-900">Trwa dopasowanie AI…</p>
             <p className="mt-1 text-xs text-slate-600">
-              Nie odświeżaj strony. W paczce leci {clampAiConcurrency(coverage?.thresholds.match_concurrency)}{' '}
-              pozycji naraz (równoległy ranking w modelu).
+              Nie odświeżaj strony. Model dostaje naraz do{' '}
+              {matchParallelItems(coverage?.thresholds.match_concurrency)} pozycji — gdy jedna się skończy, od razu
+              rusza następna.
             </p>
             {(() => {
               const total = Math.max(matchProgress?.total ?? 0, 0)
-              const done = Math.min(matchProgress?.done ?? 0, total || (matchProgress?.done ?? 0))
-              const batch = matchBatchSize(clampAiConcurrency(coverage?.thresholds.match_concurrency))
-              // Etapy mają własne liczniki (14/15 w katalogu, potem 0/15 w modelu) — na górze tylko procent
-              // całości, a między paczkami i etapami nie może się cofnąć.
-              const pct = Math.max(matchPctRef.current, Math.round(matchProgressFraction(matchProgress, batch) * 100))
-              matchPctRef.current = pct
-              const stage = matchProgress?.stage ? MATCH_STAGES[matchProgress.stage] : undefined
-              const stageDone = matchProgress?.stage_done ?? 0
-              const stageTotal = matchProgress?.stage_total ?? 0
-              // bieżący etap i jego licznik tylko jako mały opis pod procentem
-              const shown = stage && stageTotal > 0 ? stage : undefined
-              const stageSeconds =
-                matchStageSince > 0 ? Math.max(0, Math.floor((Date.now() - matchStageSince) / 1000)) : 0
+              const done = Math.min(matchProgress?.done ?? 0, total)
+              const pct = total > 0 ? Math.round((done / total) * 100) : 0
+              const inFlight = matchProgress?.inFlight ?? []
+              const lineOf = new Map((data?.tender.items ?? []).map((i) => [i.id, i.line_no]))
+              const inFlightLines = inFlight
+                .map((itemId) => lineOf.get(itemId))
+                .filter((line): line is number => line != null)
+                .sort((a, b) => a - b)
+              // wszystkie pozostałe pozycje są już w modelu — średnia z dotychczasowych nie mówi, ile to potrwa
+              const onlyTailLeft = done < total && total - done <= inFlight.length
               const eta =
-                done > 0 && total > done
+                done > 0 && total > done && !onlyTailLeft
                   ? formatMatchEta(Math.round((matchElapsed * (total - done)) / done))
                   : null
               return (
                 <>
                   <p className="mt-3 font-mono text-2xl font-semibold text-violet-800">{pct}%</p>
-                  <p className="text-xs text-slate-600">
-                    {shown
-                      ? `${shown.label}${shown.model ? ' · czeka na odpowiedzi modelu' : ''} · ${stageDone} z ${stageTotal}`
-                      : 'postęp dopasowania'}
-                  </p>
                   <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
                     <div
-                      className={`h-full rounded-full bg-violet-600 transition-all${stage?.model ? ' animate-pulse' : ''}`}
-                      style={{ width: `${Math.max(pct, stage ? 2 : 0)}%` }}
+                      className={`h-full rounded-full bg-violet-600 transition-all${inFlight.length > 0 ? ' animate-pulse' : ''}`}
+                      style={{ width: `${Math.max(pct, inFlight.length > 0 ? 2 : 0)}%` }}
                     />
                   </div>
                   <p className="mt-2 text-xs text-slate-600">
-                    Zapisane w ofercie: {done} / {total || '…'}
-                    {shown ? ` · etap trwa ${stageSeconds} s` : ''}
-                    <span className="text-slate-400"> · procent szacunkowy</span>
+                    Gotowe: {done} / {total || '…'} · w toku: {inFlight.length}
                   </p>
-                  {matchProgress?.line_no != null && (
+                  {inFlightLines.length > 0 && (
                     <p className="mt-2 truncate text-xs text-slate-600">
-                      Teraz: poz. {matchProgress.line_no}
-                      {matchProgress.requirement ? ` · ${matchProgress.requirement}` : ''}
+                      Teraz: poz. {inFlightLines.join(', ')}
                     </p>
                   )}
-                  {total > 0 && done === total - 1 && (
+                  {onlyTailLeft && (
                     <p className="mt-2 text-xs text-amber-800">
-                      Ostatnia pozycja czeka na model — to bywa 2–4 min, ETA z średniej kłamie.
+                      Ostatnie pozycje czekają na model — to bywa 2–4 min.
                     </p>
                   )}
                   <p className="mt-2 font-mono text-sm text-violet-800">
-                    {matchElapsed} s{eta && done < total - 1 ? ` · zostało ${eta}` : ''}
+                    {matchElapsed} s{eta ? ` · zostało ${eta}` : ''}
                   </p>
                 </>
               )
@@ -1842,8 +1697,8 @@ export function TenderDetail() {
               </p>
               {(matchReport.finished_in_background ?? 0) > 0 && (
                 <p className="mt-1 text-amber-800">
-                  {matchReport.finished_in_background} paczek dokończył serwer po zerwaniu żądania — ich
-                  pozycje są już zapisane, ale liczby wyżej ich nie obejmują.
+                  {matchReport.finished_in_background} poz. przekroczyło limit czasu — serwer liczy je dalej w tle
+                  i zapisze wynik w ofercie, ale liczby wyżej ich nie obejmują.
                 </p>
               )}
               <p className="mt-1 text-violet-800/80">

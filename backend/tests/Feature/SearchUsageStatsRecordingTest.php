@@ -180,6 +180,44 @@ final class SearchUsageStatsRecordingTest extends TestCase
         $this->assertSame(11800, $event->prompt_tokens);
     }
 
+    /**
+     * „Dopasuj wszystkie” wysyła pozycje osobnymi żądaniami, kilka naraz (przesuwane okno) — w statystykach to nadal
+     * jeden przebieg: numer przebiegu podaje przeglądarka.
+     */
+    public function test_items_sent_as_separate_requests_share_run_id_from_browser(): void
+    {
+        $this->enableAi();
+        $this->llmWithRewrite();
+        $tender = $this->tender();
+        $ids = [];
+        foreach ([1, 2] as $line) {
+            $ids[] = TenderItem::query()->create([
+                'tender_id' => $tender->id, 'line_no' => $line, 'requirement' => self::GLOVES, 'quantity' => 10, 'status' => 'brak',
+            ])->id;
+        }
+        $runId = '01JABCDEFGHJKMNPQRSTVWXYZ0';
+
+        foreach ($ids as $id) {
+            $this->postJson("/api/tenders/{$tender->id}/match", ['only_empty' => true, 'item_ids' => [$id], 'run_id' => strtolower($runId)])
+                ->assertOk()
+                ->assertJsonPath('processed', 1);
+        }
+
+        $events = SearchEvent::query()->orderBy('id')->get();
+        $this->assertCount(2, $events);
+        $this->assertSame([$runId, $runId], $events->pluck('run_id')->all());
+        $this->assertSame([[1], [2]], $events->pluck('context_items')->all());
+    }
+
+    public function test_match_rejects_run_id_that_is_not_ulid(): void
+    {
+        $tender = $this->tender();
+
+        $this->postJson("/api/tenders/{$tender->id}/match", ['run_id' => 'przebieg-1'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('run_id');
+    }
+
     /** tenders:eval, jego odtworzenie i tenders:debug-match idą przez debugPick — pomiar nie brudzi statystyk. */
     public function test_debug_pick_used_by_tender_eval_records_nothing(): void
     {

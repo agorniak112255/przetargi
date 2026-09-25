@@ -162,4 +162,61 @@ final class TenderMatchProgressTest extends TestCase
         $this->assertSame('done', $final['status']);
         $this->assertSame(1, $final['done']);
     }
+
+    /**
+     * Pozycje dopasowywane równolegle liczą sumy przetargu każda po swojej — ostatni zapis mógł przyjść z żądania,
+     * które czytało pozycje przed zapisem sąsiada. Koniec przebiegu liczy procent AI i wartość oferty z bazy.
+     */
+    public function test_finish_recomputes_ai_percent_and_offer_totals_from_saved_items(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/PROG/3',
+            'title' => 'Koniec przebiegu',
+            'client_id' => Client::query()->create(['name' => 'K'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wycena',
+            'ai_percent' => 10,
+            'offer_value_net' => 1,
+            'last_activity_at' => now(),
+        ]);
+        foreach ([[1, 80, 12.5, 4], [2, 90, 3, 10]] as [$line, $percent, $price, $qty]) {
+            TenderItem::query()->create([
+                'tender_id' => $tender->id,
+                'line_no' => $line,
+                'requirement' => 'Pozycja '.$line,
+                'quantity' => $qty,
+                'status' => 'brak',
+                'ai_match_percent' => $percent,
+                'offer_price' => $price,
+            ]);
+        }
+
+        $this->postJson("/api/tenders/{$tender->id}/match/finish")
+            ->assertOk()
+            ->assertJsonPath('ai_percent', 85);
+
+        $tender->refresh();
+        $this->assertSame(85, (int) $tender->ai_percent);
+        $this->assertEqualsWithDelta(80.0, (float) $tender->offer_value_net, 0.001);
+    }
+
+    public function test_finish_is_blocked_when_offer_is_not_editable(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/PROG/4',
+            'title' => 'Oferta wysłana',
+            'client_id' => Client::query()->create(['name' => 'K'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wyslany',
+            'ai_percent' => 10,
+            'last_activity_at' => now(),
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/match/finish")
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('tender');
+        $this->assertSame(10, (int) $tender->fresh()->ai_percent);
+    }
 }

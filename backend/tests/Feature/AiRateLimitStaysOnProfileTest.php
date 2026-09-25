@@ -86,7 +86,10 @@ final class AiRateLimitStaysOnProfileTest extends TestCase
         Http::assertNotSent(fn (Request $r): bool => self::toMain($r));
     }
 
-    /** Fala kroi zapytania w paczki po maxConcurrent — ostatnia paczka z jednym zapytaniem idzie bez puli. */
+    /**
+     * Fala większa niż maxConcurrent (przesuwane okno w jednej puli; wcześniej paczki, z ostatnią jednoelementową
+     * bez puli) — limit przy żadnym zapytaniu nie schodzi na konfigurację główną.
+     */
     public function test_last_single_request_chunk_of_a_wave_stays_on_profile(): void
     {
         $this->profileAnswers(fn (): PromiseInterface => self::rateLimited());

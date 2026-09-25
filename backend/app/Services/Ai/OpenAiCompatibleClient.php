@@ -150,7 +150,8 @@ class OpenAiCompatibleClient
     }
 
     /**
-     * Równoległe chat/completions (curl_multi) — tyle requestów, ile caller trzyma slotów.
+     * Równoległe chat/completions (curl_multi) — tyle requestów, ile caller trzyma slotów; $concurrency ogranicza
+     * liczbę połączeń naraz (przesuwane okno, null = wszystkie od razu).
      * `usage` w każdym wierszu (także ok=false) to suma wszystkich prób tego zapytania (AiUsage), null = żadna próba
      * nie podała tokenów ani nie padła.
      *
@@ -163,6 +164,7 @@ class OpenAiCompatibleClient
         ?array $extra = null,
         ?AiTask $task = null,
         ?callable $onAnswered = null,
+        ?int $concurrency = null,
     ): array {
         if ($messageSets === []) {
             return [];
@@ -192,7 +194,7 @@ class OpenAiCompatibleClient
         try {
             $unreachable = [];
             $rateLimited = [];
-            $rows = $this->chatManyWithProfile($profile, $messageSets, $jsonMode, $extra, $onAnswered, $unreachable, $rateLimited);
+            $rows = $this->chatManyWithProfile($profile, $messageSets, $jsonMode, $extra, $onAnswered, $unreachable, $rateLimited, $concurrency);
             if ($task === AiTask::ProductSearch) {
                 // Limit, po którym przyszedł błąd serwera, to dalej limit — ocena kart nie idzie do zastępczego modelu
                 // (jak pojedyncze zapytanie w runOnMainOrRethrow).
@@ -202,7 +204,7 @@ class OpenAiCompatibleClient
                 return $rows;
             }
 
-            return $this->retryUnreachableOnMain($rows, $unreachable, $messageSets, $jsonMode, $extra, $task, $profile['label']);
+            return $this->retryUnreachableOnMain($rows, $unreachable, $messageSets, $jsonMode, $extra, $task, $profile['label'], $concurrency);
         } catch (RuntimeException $e) {
             if ($profile['is_default']) {
                 $failed = [];
@@ -215,7 +217,7 @@ class OpenAiCompatibleClient
 
             return $this->runOnMainOrRethrow(
                 $e,
-                fn (array $main): array => $this->chatManyWithProfile($this->withTaskPolicy($main, $task), $messageSets, $jsonMode, $extra, $onAnswered),
+                fn (array $main): array => $this->chatManyWithProfile($this->withTaskPolicy($main, $task), $messageSets, $jsonMode, $extra, $onAnswered, concurrency: $concurrency),
                 $task,
                 $profile['label']
             );
@@ -223,7 +225,7 @@ class OpenAiCompatibleClient
     }
 
     /**
-     * Równoległe chat/completions w paczkach — max $maxConcurrent połączeń naraz.
+     * Równoległe chat/completions — najwyżej $maxConcurrent połączeń naraz, kolejne rusza po każdej odpowiedzi.
      *
      * @param  list<list<array{role: string, content: mixed}>>  $messageSets
      * @return list<array<string, mixed>>
@@ -258,58 +260,55 @@ class OpenAiCompatibleClient
                 $onProgress($count, $total);
             }
         };
-        foreach (array_chunk($messageSets, $maxConcurrent) as $chunk) {
-            $chunkStart = count($parsed);
-            $chunkSize = count($chunk);
-            $inChunk = 0;
-            $onAnswered = $onProgress === null ? null : static function () use (&$inChunk, $chunkStart, $chunkSize, $report): void {
-                $inChunk++;
-                $report($chunkStart + min($inChunk, $chunkSize));
-            };
-            foreach ($this->chatMany($chunk, true, $extra !== [] ? $extra : null, $task, $onAnswered) as $row) {
-                $usages[] = $row['usage'] ?? null;
-                if (! ($row['ok'] ?? false)) {
-                    Log::warning('AI chatJsonMany failed', [
-                        'task' => $task?->value,
-                        'error' => $row['error'] ?? 'unknown',
-                    ]);
-                    $parsed[] = [];
-                    $providers[] = null;
-                    $origins[] = null;
+        $answered = 0;
+        $onAnswered = $onProgress === null ? null : static function () use (&$answered, $report): void {
+            $report(++$answered);
+        };
+        // Jedna pula z przesuwanym oknem: gdy wróci jedna odpowiedź, od razu rusza następne zapytanie. Paczki po
+        // $maxConcurrent czekały na najwolniejsze zapytanie paczki, a model stał w tym czasie bez pracy (25.09.2026).
+        foreach ($this->chatMany($messageSets, true, $extra !== [] ? $extra : null, $task, $onAnswered, $maxConcurrent) as $row) {
+            $usages[] = $row['usage'] ?? null;
+            if (! ($row['ok'] ?? false)) {
+                Log::warning('AI chatJsonMany failed', [
+                    'task' => $task?->value,
+                    'error' => $row['error'] ?? 'unknown',
+                ]);
+                $parsed[] = [];
+                $providers[] = null;
+                $origins[] = null;
 
-                    continue;
-                }
-                $content = (string) ($row['content'] ?? '');
-                $json = $this->tryParseJson($content);
-                if ($json === null) {
-                    // Pusta tablica niżej znaczy dla wołającego „model nie odpowiedział” — bez tego wpisu przetarg
-                    // pokazywał „model nie odpowiedział” przy czystym logu (21.09.2026, lokalny Qwen na profilu).
-                    Log::warning('AI chatJsonMany: odpowiedź bez poprawnego JSON', [
-                        'task' => $task?->value,
-                        'model' => $row['model'] ?? null,
-                        'finish_reason' => $row['finish_reason'] ?? null,
-                        'length' => mb_strlen($content),
-                        'head' => mb_substr($content, 0, 300),
-                        'tail' => mb_strlen($content) > 300 ? mb_substr($content, -200) : null,
-                    ]);
-                } elseif (($row['finish_reason'] ?? null) === 'length') {
-                    // Ucięty JSON parser składa z tego, co przyszło — odpowiedź jest poprawna, ale niepełna
-                    // (ocena części kart). Bez wpisu wyglądało to jak model, który resztę kart odrzucił.
-                    Log::warning('AI chatJsonMany: odpowiedź ucięta na limicie tokenów (finish_reason=length)', [
-                        'task' => $task?->value,
-                        'model' => $row['model'] ?? null,
-                        'max_tokens' => $extra['max_tokens'] ?? null,
-                        'matches' => is_array($json['matches'] ?? null) ? count($json['matches']) : null,
-                        'length' => mb_strlen($content),
-                    ]);
-                }
-                $parsed[] = $json ?? [];
-                $providers[] = is_string($row['provider'] ?? null) ? $row['provider'] : null;
-                $origins[] = $this->answerOrigin($row, (bool) ($row['fallback'] ?? false));
+                continue;
             }
-            // pojedyncze zapytanie idzie bez puli, a ponowienia mogą nie wywołać licznika — wyrównanie
-            $report(count($parsed));
+            $content = (string) ($row['content'] ?? '');
+            $json = $this->tryParseJson($content);
+            if ($json === null) {
+                // Pusta tablica niżej znaczy dla wołającego „model nie odpowiedział” — bez tego wpisu przetarg
+                // pokazywał „model nie odpowiedział” przy czystym logu (21.09.2026, lokalny Qwen na profilu).
+                Log::warning('AI chatJsonMany: odpowiedź bez poprawnego JSON', [
+                    'task' => $task?->value,
+                    'model' => $row['model'] ?? null,
+                    'finish_reason' => $row['finish_reason'] ?? null,
+                    'length' => mb_strlen($content),
+                    'head' => mb_substr($content, 0, 300),
+                    'tail' => mb_strlen($content) > 300 ? mb_substr($content, -200) : null,
+                ]);
+            } elseif (($row['finish_reason'] ?? null) === 'length') {
+                // Ucięty JSON parser składa z tego, co przyszło — odpowiedź jest poprawna, ale niepełna
+                // (ocena części kart). Bez wpisu wyglądało to jak model, który resztę kart odrzucił.
+                Log::warning('AI chatJsonMany: odpowiedź ucięta na limicie tokenów (finish_reason=length)', [
+                    'task' => $task?->value,
+                    'model' => $row['model'] ?? null,
+                    'max_tokens' => $extra['max_tokens'] ?? null,
+                    'matches' => is_array($json['matches'] ?? null) ? count($json['matches']) : null,
+                    'length' => mb_strlen($content),
+                ]);
+            }
+            $parsed[] = $json ?? [];
+            $providers[] = is_string($row['provider'] ?? null) ? $row['provider'] : null;
+            $origins[] = $this->answerOrigin($row, (bool) ($row['fallback'] ?? false));
         }
+        // pojedyncze zapytanie idzie bez puli, a ponowienia mogą nie wywołać licznika — wyrównanie
+        $report(count($parsed));
         app(AiServedProviderTally::class)->recordBatch($providers, $origins, $usages);
 
         return $parsed;
@@ -363,7 +362,7 @@ class OpenAiCompatibleClient
      * Limit zapytań (429) w wyszukiwarce nie schodzi na konfigurację główną. 24.09.2026 przy serii 429 od przypiętego
      * dostawcy odpowiedź zastępczego modelu (OpenRouter bez przypięcia) źle dobierała karty do przetargu; brak odpowiedzi
      * daje pozycję „model nie odpowiedział”, którą widać. Pula robiła tak już wcześniej (limit nie trafia do
-     * retryUnreachableOnMain), teraz także pojedyncze zapytanie i ostatnia jednoelementowa paczka fali.
+     * retryUnreachableOnMain), teraz także pojedyncze zapytanie (fala z jednym zapytaniem idzie bez puli).
      *
      * @template T
      *
@@ -446,6 +445,7 @@ class OpenAiCompatibleClient
         ?array $extra,
         ?AiTask $task,
         string $profileLabel,
+        ?int $concurrency = null,
     ): array {
         $main = $this->settings->profileForTask(null);
         if ($this->isUnreachableBaseUrl($main['base_url'])) {
@@ -466,7 +466,7 @@ class OpenAiCompatibleClient
         app(AiServedProviderTally::class)->profileFallback();
 
         try {
-            $mainRows = $this->chatManyWithProfile($this->withTaskPolicy($main + ['served_as_fallback' => true], $task), $retrySets, $jsonMode, $extra);
+            $mainRows = $this->chatManyWithProfile($this->withTaskPolicy($main + ['served_as_fallback' => true], $task), $retrySets, $jsonMode, $extra, concurrency: $concurrency);
         } catch (RuntimeException $e) {
             Log::warning('Profil AI nie odpowiada — konfiguracja główna też zawiodła, zostawiam błąd profilu', [
                 'task' => $task?->value,
@@ -530,6 +530,7 @@ class OpenAiCompatibleClient
         ?callable $onAnswered = null,
         array &$unreachable = [],
         array &$rateLimited = [],
+        ?int $concurrency = null,
     ): array {
         if (! $this->settings->resolve()['enabled']) {
             throw new RuntimeException('Integracja AI jest wyłączona. Włącz ją w Ustawieniach AI.');
@@ -553,16 +554,16 @@ class OpenAiCompatibleClient
 
         // tokeny i próby per indeks zapytania — ponowienia niżej są kluczowane tym samym indeksem
         $usages = [];
-        $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies, $onAnswered, $usages);
+        $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies, $onAnswered, $usages, $concurrency);
         // Najpierw zapytania, które nie dotarły do modelu — jak pierwsze podejście w postChatWithRetry; limit albo
         // przeciążenie po tej powtórce obsługuje dalej retryChatManyOverloaded (i liczy 429 w $rateLimited).
         if ($profile['retry_unreached'] ?? false) {
-            $responses = $this->retryChatManyUnreached($url, $apiKey, $timeout, $profile, $bodies, $responses, $usages);
+            $responses = $this->retryChatManyUnreached($url, $apiKey, $timeout, $profile, $bodies, $responses, $usages, $concurrency);
         }
         $rateLimited = [];
-        $responses = $this->retryChatManyOverloaded($url, $apiKey, $timeout, $profile, $bodies, $responses, $rateLimited, $usages);
-        $responses = $this->retryChatManyRejected($url, $apiKey, $timeout, $profile, $bodies, $responses, $usages);
-        $responses = $this->retryChatManyEmptyTruncated($url, $apiKey, $timeout, $profile, $bodies, $responses, $usages);
+        $responses = $this->retryChatManyOverloaded($url, $apiKey, $timeout, $profile, $bodies, $responses, $rateLimited, $usages, $concurrency);
+        $responses = $this->retryChatManyRejected($url, $apiKey, $timeout, $profile, $bodies, $responses, $usages, $concurrency);
+        $responses = $this->retryChatManyEmptyTruncated($url, $apiKey, $timeout, $profile, $bodies, $responses, $usages, $concurrency);
 
         $out = [];
         $unreachable = [];
@@ -582,8 +583,15 @@ class OpenAiCompatibleClient
      * @param  array<int, array<string, mixed>>  $usages  tokeny i próby per indeks zapytania — dopisywane do tego, co już jest
      * @return array<int, mixed>
      */
-    private function postChatPool(string $url, string $apiKey, int $timeout, array $bodies, ?callable $onAnswered = null, array &$usages = []): array
-    {
+    private function postChatPool(
+        string $url,
+        string $apiKey,
+        int $timeout,
+        array $bodies,
+        ?callable $onAnswered = null,
+        array &$usages = [],
+        ?int $concurrency = null,
+    ): array {
         $responses = Http::pool(function (Pool $pool) use ($bodies, $url, $apiKey, $timeout, $onAnswered) {
             foreach ($bodies as $i => $body) {
                 $req = $pool->as((string) $i)
@@ -618,7 +626,7 @@ class OpenAiCompatibleClient
                     );
                 }
             }
-        });
+        }, $concurrency !== null && $concurrency < count($bodies) ? max(1, $concurrency) : null);
 
         $out = [];
         foreach ($bodies as $i => $_) {
@@ -647,6 +655,7 @@ class OpenAiCompatibleClient
         array $bodies,
         array $responses,
         array &$usages = [],
+        ?int $concurrency = null,
     ): array {
         $retryBodies = [];
         foreach ($bodies as $i => $body) {
@@ -682,7 +691,7 @@ class OpenAiCompatibleClient
             return $responses;
         }
 
-        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages) as $i => $response) {
+        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages, $concurrency) as $i => $response) {
             $responses[$i] = $response;
         }
 
@@ -711,6 +720,7 @@ class OpenAiCompatibleClient
         array $responses,
         array &$rateLimited = [],
         array &$usages = [],
+        ?int $concurrency = null,
     ): array {
         $seen = [];
         $note = static function (array $responses) use (&$seen): void {
@@ -753,7 +763,7 @@ class OpenAiCompatibleClient
             if ($wait > 0) {
                 sleep($wait);
             }
-            $retried = $this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages);
+            $retried = $this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages, $concurrency);
             $note($retried);
             foreach ($retried as $i => $response) {
                 $responses[$i] = $response;
@@ -784,6 +794,7 @@ class OpenAiCompatibleClient
         array $bodies,
         array $responses,
         array &$usages = [],
+        ?int $concurrency = null,
     ): array {
         $retryBodies = [];
         $firstError = null;
@@ -808,7 +819,7 @@ class OpenAiCompatibleClient
             'error' => mb_substr((string) $firstError, 0, 300),
             'messages_sha1' => array_map(fn (array $body): string => $this->messagesDigest($body), $retryBodies),
         ]);
-        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages) as $i => $response) {
+        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages, $concurrency) as $i => $response) {
             $responses[$i] = $response;
         }
 
@@ -834,6 +845,7 @@ class OpenAiCompatibleClient
         array $bodies,
         array $responses,
         array &$usages = [],
+        ?int $concurrency = null,
     ): array {
         $retryBodies = [];
         foreach ($bodies as $i => $body) {
@@ -863,7 +875,7 @@ class OpenAiCompatibleClient
             'max_tokens' => max(array_map(static fn (array $b): int => (int) ($b['max_tokens'] ?? 0), $retryBodies)),
             'profile' => $profile['label'] ?? '',
         ]);
-        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages) as $i => $response) {
+        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages, $concurrency) as $i => $response) {
             $responses[$i] = $response;
         }
 
