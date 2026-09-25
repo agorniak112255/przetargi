@@ -74,6 +74,11 @@ final class LogApiActivity
             return false;
         }
 
+        // Wylogowanie starych sesji zapisuje kontroler — z liczbą usuniętych sesji, której tu nie widać.
+        if ($path === 'admin/sessions/stale') {
+            return false;
+        }
+
         if (in_array($method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
             return true;
         }

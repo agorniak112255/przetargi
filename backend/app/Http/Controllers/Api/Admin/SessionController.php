@@ -6,8 +6,11 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\ActivityLogger;
 use Carbon\CarbonInterface;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Laravel\Sanctum\PersonalAccessToken;
 
 /**
@@ -21,6 +24,9 @@ class SessionController extends Controller
 
     /** Sesje bez obecności ani zapytania w tym oknie nie są pokazywane. */
     public const WINDOW_MINUTES = 15;
+
+    /** Sesja bez zapytania, sygnału obecności i logowania przez tyle dni jest „stara” (można ją wylogować). */
+    public const STALE_DAYS = 30;
 
     public function index(): JsonResponse
     {
@@ -91,6 +97,7 @@ class SessionController extends Controller
     {
         $now = now();
         $activeSince = $now->copy()->subMinutes(self::ACTIVE_MINUTES);
+        $staleBefore = $now->copy()->subDays(self::STALE_DAYS);
 
         $onlineIds = PersonalAccessToken::query()
             ->where('tokenable_type', (new User)->getMorphClass())
@@ -102,7 +109,12 @@ class SessionController extends Controller
 
         $users = User::query()
             ->with('roles')
-            ->withCount('tokens')
+            ->withCount([
+                'tokens',
+                'tokens as recent_tokens_count' => static function (Builder $query) use ($staleBefore): void {
+                    self::whereRecent($query, $staleBefore);
+                },
+            ])
             ->orderByRaw('last_seen_at IS NULL')
             ->orderByDesc('last_seen_at')
             ->orderBy('name')
@@ -115,12 +127,101 @@ class SessionController extends Controller
                 'last_seen_at' => $user->last_seen_at?->toIso8601String(),
                 'online' => $onlineIds->has((int) $user->id),
                 'sessions_count' => (int) $user->tokens_count,
+                'recent_sessions_count' => (int) $user->recent_tokens_count,
+                'stale_sessions_count' => (int) $user->tokens_count - (int) $user->recent_tokens_count,
             ])->values(),
             'meta' => [
                 'active_minutes' => self::ACTIVE_MINUTES,
+                'stale_days' => self::STALE_DAYS,
                 'generated_at' => $now->toIso8601String(),
             ],
         ]);
+    }
+
+    /**
+     * Wylogowuje stare sesje: usuwa ich tokeny, więc zostawiona przeglądarka albo dodatek w Thunderbirdzie
+     * przy następnym wejściu poprosi o logowanie. Usuwa dokładnie to, co tabela użytkowników liczy jako stare.
+     * Bieżąca sesja nigdy nie jest stara — Sanctum zapisał jej użycie przed wejściem do kontrolera.
+     */
+    public function destroyStale(Request $request, ActivityLogger $activityLogger): JsonResponse
+    {
+        $staleBefore = now()->subDays(self::STALE_DAYS);
+        $staleTokens = static function () use ($staleBefore): Builder {
+            $query = PersonalAccessToken::query()->where('tokenable_type', (new User)->getMorphClass());
+            self::whereStale($query, $staleBefore);
+
+            return $query;
+        };
+
+        $userIds = $staleTokens()
+            ->whereIn('tokenable_id', User::query()->select('id'))
+            ->distinct()
+            ->pluck('tokenable_id');
+
+        // Osobno dla każdego konta i z warunkiem powtórzonym przy usuwaniu: sesja, która ożyła od odczytu,
+        // zostaje, a liczby w dzienniku to faktycznie usunięte tokeny.
+        $removed = [];
+        foreach ($userIds as $userId) {
+            $count = $staleTokens()->where('tokenable_id', $userId)->delete();
+            if ($count > 0) {
+                $removed[(int) $userId] = $count;
+            }
+        }
+
+        $total = array_sum($removed);
+        $owners = User::query()->whereKey(array_keys($removed))->get(['id', 'name', 'email'])->keyBy('id');
+
+        $activityLogger->log(
+            action: 'sessions.stale_revoked',
+            user: $request->user(),
+            meta: [
+                'label' => 'Wylogowanie starych sesji: '.$total,
+                'count' => $total,
+                'stale_days' => self::STALE_DAYS,
+                'users' => array_map(static fn (int $userId, int $count): array => [
+                    'id' => $userId,
+                    'name' => (string) $owners->get($userId)?->name,
+                    'email' => (string) $owners->get($userId)?->email,
+                    'count' => $count,
+                ], array_keys($removed), array_values($removed)),
+            ],
+            request: $request,
+        );
+
+        return response()->json([
+            'deleted' => $total,
+            'stale_days' => self::STALE_DAYS,
+        ]);
+    }
+
+    /**
+     * Sesja z ruchem od $since: zapytanie z tym tokenem, sygnał obecności albo samo logowanie.
+     *
+     * @param  Builder<PersonalAccessToken>  $query
+     */
+    private static function whereRecent(Builder $query, CarbonInterface $since): void
+    {
+        $query->where(static function (Builder $query) use ($since): void {
+            $query->where($query->qualifyColumn('last_used_at'), '>=', $since)
+                ->orWhere($query->qualifyColumn('presence_at'), '>=', $since)
+                ->orWhere($query->qualifyColumn('created_at'), '>=', $since);
+        });
+    }
+
+    /**
+     * Dokładne dopełnienie whereRecent: pusty znacznik czasu znaczy „nie było ruchu”. Samo NOT (whereRecent)
+     * pominęłoby wiersz z samymi pustymi znacznikami, bo porównanie z NULL nie daje ani prawdy, ani fałszu.
+     *
+     * @param  Builder<PersonalAccessToken>  $query
+     */
+    private static function whereStale(Builder $query, CarbonInterface $before): void
+    {
+        foreach (['last_used_at', 'presence_at', 'created_at'] as $column) {
+            $query->where(static function (Builder $query) use ($column, $before): void {
+                $query->whereNull($query->qualifyColumn($column))
+                    ->orWhere($query->qualifyColumn($column), '<', $before);
+            });
+        }
     }
 
     /**

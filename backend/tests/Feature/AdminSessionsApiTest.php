@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\ActivityLog;
 use App\Models\Role;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -155,6 +156,115 @@ final class AdminSessionsApiTest extends TestCase
             ->assertJsonPath('data.2.last_login_at', null);
 
         $this->assertArrayNotHasKey('token', $response->json('data.0'));
+    }
+
+    public function test_users_activity_splits_sessions_into_recent_and_stale(): void
+    {
+        $admin = User::factory()->withRole('admin')->create();
+        $worker = User::factory()->withRole('handlowiec')->create();
+
+        // Świeże: wystarczy jeden ślad ruchu z ostatnich 30 dni, a równo 30 dni jeszcze się liczy.
+        $this->tokenFor($worker, ['created_at' => now()->subDays(90), 'last_used_at' => now()->subDays(2)]);
+        $this->tokenFor($worker, ['created_at' => now()->subDays(90), 'presence_at' => now()->subDays(10)]);
+        $this->tokenFor($worker, ['created_at' => now()->subDays(5)]);
+        $this->tokenFor($worker, ['created_at' => now()->subDays(90), 'last_used_at' => now()->subDays(30)]);
+        // Stare: ostatni ruch sprzed ponad 30 dni albo logowanie, po którym nic się nie działo.
+        $this->tokenFor($worker, [
+            'created_at' => now()->subDays(90),
+            'last_used_at' => now()->subDays(31),
+            'presence_at' => now()->subDays(40),
+        ]);
+        $this->tokenFor($worker, ['created_at' => now()->subDays(30)->subSecond()]);
+
+        Sanctum::actingAs($admin);
+
+        $response = $this->getJson('/api/admin/users-activity')
+            ->assertOk()
+            ->assertJsonPath('meta.stale_days', 30);
+
+        $row = collect($response->json('data'))->firstWhere('id', $worker->id);
+        $this->assertSame(6, $row['sessions_count']);
+        $this->assertSame(4, $row['recent_sessions_count']);
+        $this->assertSame(2, $row['stale_sessions_count']);
+    }
+
+    public function test_admin_logs_out_exactly_the_stale_sessions_counted_in_the_table(): void
+    {
+        $admin = User::factory()->withRole('admin')->create();
+        $worker = User::factory()->withRole('handlowiec')->create(['name' => 'Jan Handlowiec', 'email' => 'jan@test.local']);
+        $other = User::factory()->withRole('kierownik')->create();
+
+        $keepWorker = $this->tokenFor($worker, ['created_at' => now()->subDays(90), 'last_used_at' => now()->subDay()]);
+        $this->tokenFor($worker, ['created_at' => now()->subDays(90), 'last_used_at' => now()->subDays(45)]);
+        $this->tokenFor($worker, ['created_at' => now()->subDays(60)]);
+        $keepOther = $this->tokenFor($other, ['created_at' => now()->subDays(90), 'presence_at' => now()->subDays(3)]);
+        // Token osierocony (konta już nie ma): tabela go nie liczy, więc przycisk też go nie rusza.
+        $orphanId = (int) DB::table('personal_access_tokens')->insertGetId([
+            'tokenable_type' => User::class,
+            'tokenable_id' => 999999,
+            'name' => 'spa',
+            'token' => hash('sha256', Str::random(40)),
+            'created_at' => now()->subDays(90),
+            'updated_at' => now()->subDays(90),
+        ]);
+
+        Sanctum::actingAs($admin);
+
+        $shown = collect($this->getJson('/api/admin/users-activity')->json('data'))->sum('stale_sessions_count');
+        $this->assertSame(2, $shown);
+
+        $this->deleteJson('/api/admin/sessions/stale')
+            ->assertOk()
+            ->assertJsonPath('deleted', 2)
+            ->assertJsonPath('stale_days', 30);
+
+        $remaining = DB::table('personal_access_tokens')->orderBy('id')->pluck('id')->map(static fn ($id): int => (int) $id)->all();
+        $expected = [$keepWorker, $keepOther, $orphanId];
+        sort($expected);
+        $this->assertSame($expected, $remaining);
+
+        // Jeden wpis w dzienniku — z kontrolera, z liczbą i kontem; bez drugiego, ogólnego wpisu z middleware'u.
+        $log = ActivityLog::query()->sole();
+        $this->assertSame('sessions.stale_revoked', $log->action);
+        $this->assertSame($admin->id, (int) $log->user_id);
+        $this->assertSame('Wylogowanie starych sesji: 2', $log->meta['label']);
+        $this->assertSame(2, $log->meta['count']);
+        $this->assertSame(30, $log->meta['stale_days']);
+        $this->assertSame(
+            [['id' => $worker->id, 'name' => 'Jan Handlowiec', 'email' => 'jan@test.local', 'count' => 2]],
+            $log->meta['users'],
+        );
+    }
+
+    public function test_current_session_survives_even_when_logged_in_long_ago(): void
+    {
+        $admin = User::factory()->withRole('admin')->create();
+        $token = $admin->createToken('spa');
+        $token->accessToken->forceFill(['created_at' => now()->subDays(90)])->save();
+
+        $this->withHeader('Authorization', 'Bearer '.$token->plainTextToken)
+            ->deleteJson('/api/admin/sessions/stale')
+            ->assertOk()
+            ->assertJsonPath('deleted', 0);
+
+        $this->assertDatabaseHas('personal_access_tokens', ['id' => $token->accessToken->id]);
+    }
+
+    public function test_viewing_sessions_does_not_allow_logging_them_out(): void
+    {
+        $worker = User::factory()->withRole('handlowiec')->create();
+        $staleId = $this->tokenFor($worker, ['created_at' => now()->subDays(90)]);
+
+        $role = Role::findOrCreate('podglad_sesji', 'web');
+        $role->givePermissionTo(['admin.access', 'admin.sessions.view']);
+
+        Sanctum::actingAs(User::factory()->withRole('podglad_sesji')->create());
+        $this->deleteJson('/api/admin/sessions/stale')->assertForbidden();
+
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $this->deleteJson('/api/admin/sessions/stale')->assertForbidden();
+
+        $this->assertDatabaseHas('personal_access_tokens', ['id' => $staleId]);
     }
 
     public function test_handlowiec_cannot_view_sessions(): void

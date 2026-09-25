@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '../lib/api'
+import { useAuth } from '../auth'
+import { api, can } from '../lib/api'
 import { pageLabel } from '../lib/pageLabel'
 
 type SessionRow = {
@@ -28,12 +29,17 @@ type UserActivityRow = {
   last_login_at: string | null
   last_seen_at: string | null
   online: boolean
+  /** Wszystkie niewylogowane logowania konta. */
   sessions_count: number
+  /** Z ruchem w ostatnich meta.stale_days dniach. */
+  recent_sessions_count: number
+  /** Bez ruchu dłużej — nadal otwierają konto, dopóki ktoś ich nie wyloguje. */
+  stale_sessions_count: number
 }
 
 type UsersActivityResponse = {
   data: UserActivityRow[]
-  meta: { active_minutes: number; generated_at: string }
+  meta: { active_minutes: number; stale_days: number; generated_at: string }
 }
 
 const REFRESH_MS = 30_000
@@ -107,10 +113,13 @@ function StatusDot({ active, label }: { active: boolean; label: string }) {
 }
 
 export function AdminSessions() {
+  const { user } = useAuth()
   const [sessions, setSessions] = useState<SessionsResponse | null>(null)
   const [users, setUsers] = useState<UsersActivityResponse | null>(null)
   const [err, setErr] = useState('')
+  const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [revoking, setRevoking] = useState(false)
   const [now, setNow] = useState(() => Date.now())
 
   const load = useCallback(async () => {
@@ -144,7 +153,30 @@ export function AdminSessions() {
   const activeCount = sessionRows.filter((r) => r.status === 'active').length
   const activeMinutes = sessions?.meta.active_minutes ?? users?.meta.active_minutes ?? 3
   const windowMinutes = sessions?.meta.window_minutes ?? 15
+  const staleDays = users?.meta.stale_days ?? 30
+  const staleTotal = userRows.reduce((sum, r) => sum + r.stale_sessions_count, 0)
+  const canRevoke = can(user, 'admin.sessions.manage')
   const generatedAt = sessions?.meta.generated_at ?? users?.meta.generated_at ?? null
+
+  async function revokeStale() {
+    const question =
+      `Wylogować sesje nieużywane od ponad ${staleDays} dni? Liczba sesji: ${staleTotal}.\n\n` +
+      'Kto wróci do takiej przeglądarki albo do dodatku w Thunderbirdzie, zaloguje się ponownie. ' +
+      `Sesje używane w ostatnich ${staleDays} dniach zostają.`
+    if (!confirm(question)) return
+    setRevoking(true)
+    setErr('')
+    setNotice('')
+    try {
+      const res = await api<{ deleted: number }>('/admin/sessions/stale', { method: 'DELETE' })
+      setNotice(`Wylogowane stare sesje: ${res.deleted}.`)
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd')
+    } finally {
+      setRevoking(false)
+    }
+  }
 
   return (
     <div>
@@ -236,7 +268,25 @@ export function AdminSessions() {
       </section>
 
       <section>
-        <h2 className="mb-3 text-base font-semibold text-slate-800">Użytkownicy — ostatnie korzystanie</h2>
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-base font-semibold text-slate-800">Użytkownicy — ostatnie korzystanie</h2>
+          {canRevoke && (
+            <button
+              type="button"
+              disabled={revoking || !users || staleTotal === 0}
+              onClick={() => void revokeStale()}
+              className="rounded bg-red-100 px-3 py-1.5 text-sm text-red-700 hover:bg-red-200 disabled:opacity-50"
+            >
+              {revoking ? 'Wylogowuję…' : `Wyloguj stare sesje (${staleTotal})`}
+            </button>
+          )}
+        </div>
+        <p className="mb-3 text-sm text-slate-600">
+          Sesja = jedno logowanie (przeglądarka albo dodatek w Thunderbirdzie), które nie zostało wylogowane. W użyciu =
+          z ruchem w ostatnich {staleDays} dniach. Stara = bez ruchu dłużej, np. przeglądarka na innym komputerze — nadal
+          otwiera konto, dopóki jej nie wylogujesz.
+        </p>
+        {notice && <p className="mb-2 text-sm text-emerald-700">{notice}</p>}
         <div className="overflow-x-auto rounded-xl bg-white shadow-sm">
           <table className="min-w-full text-left text-sm">
             <thead className="border-b bg-slate-50 text-xs uppercase text-slate-500">
@@ -246,13 +296,14 @@ export function AdminSessions() {
                 <th className="px-3 py-2">Teraz</th>
                 <th className="px-3 py-2">Ostatnio aktywny</th>
                 <th className="px-3 py-2">Ostatnie logowanie</th>
-                <th className="px-3 py-2">Sesje</th>
+                <th className="px-3 py-2">Sesje w użyciu</th>
+                <th className="px-3 py-2">Stare sesje</th>
               </tr>
             </thead>
             <tbody>
               {userRows.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-slate-500">
+                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
                     {busy && !users ? 'Ładowanie…' : 'Brak użytkowników.'}
                   </td>
                 </tr>
@@ -274,7 +325,10 @@ export function AdminSessions() {
                   <td className="whitespace-nowrap px-3 py-2 text-slate-700">
                     {row.last_login_at ? formatWhen(row.last_login_at) : <span className="text-slate-500">brak danych</span>}
                   </td>
-                  <td className="px-3 py-2 text-slate-700">{row.sessions_count}</td>
+                  <td className="px-3 py-2 text-slate-700">{row.recent_sessions_count}</td>
+                  <td className={`px-3 py-2 ${row.stale_sessions_count > 0 ? 'text-amber-700' : 'text-slate-400'}`}>
+                    {row.stale_sessions_count}
+                  </td>
                 </tr>
               ))}
             </tbody>

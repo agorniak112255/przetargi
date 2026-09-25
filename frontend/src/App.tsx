@@ -35,11 +35,66 @@ import { Substitutes } from './pages/Substitutes'
 import { TenderDetail } from './pages/TenderDetail'
 import { Tenders } from './pages/Tenders'
 import { can } from './lib/api'
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+
+const RETRY_MS = 15_000
+
+/**
+ * Serwer nie odpowiedział przy sprawdzaniu zapisanego logowania (np. w trakcie wdrożenia). Zamiast wylogowywać,
+ * czekamy na serwer: klucz zostaje, a po jego powrocie strona sama wpuszcza dalej.
+ */
+function ConnectionProblem({ message }: { message: string }) {
+  const { retry, logout } = useAuth()
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void retry()
+    }, RETRY_MS)
+    return () => window.clearInterval(timer)
+  }, [retry])
+
+  async function tryNow() {
+    setBusy(true)
+    try {
+      await retry()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="app-login flex min-h-screen items-center justify-center bg-slate-900 p-4">
+      <div className="app-login-card w-full max-w-sm rounded-xl bg-white p-6 shadow-lg">
+        <h1 className="mb-1 text-xl font-bold text-slate-900">Przetargi Supon</h1>
+        <p className="mb-2 text-sm text-slate-700">
+          Serwer chwilowo nie odpowiada. Nadal jesteś zalogowany — strona sama spróbuje ponownie co 15 sekund.
+        </p>
+        <p className="mb-4 text-xs text-slate-500">{message}</p>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void tryNow()}
+          className="w-full rounded bg-blue-600 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {busy ? 'Sprawdzam…' : 'Spróbuj teraz'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void logout().catch(() => {})}
+          className="mt-3 w-full text-sm text-slate-500 hover:underline"
+        >
+          Zaloguj się od nowa
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function Guard({ children }: { children: ReactNode }) {
-  const { user, loading } = useAuth()
+  const { user, loading, connectionError } = useAuth()
   if (loading) return <p className="p-8 text-sm text-slate-500">Ładowanie…</p>
+  if (!user && connectionError) return <ConnectionProblem message={connectionError} />
   if (!user) return <Navigate to="/login" replace />
   return children
 }

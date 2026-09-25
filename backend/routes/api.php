@@ -324,6 +324,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
             ->middleware('permission:admin.activity.view');
         Route::get('/sessions', [AdminSessionController::class, 'index'])->middleware('permission:admin.sessions.view');
         Route::get('/users-activity', [AdminSessionController::class, 'users'])->middleware('permission:admin.sessions.view');
+        Route::delete('/sessions/stale', [AdminSessionController::class, 'destroyStale'])->middleware('permission:admin.sessions.manage');
 
         Route::get('/mail-settings', [AdminMailSettingsController::class, 'show'])
             ->middleware('permission:admin.mail.manage');
