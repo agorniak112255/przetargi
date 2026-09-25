@@ -11,9 +11,15 @@
             ],
             "forbidden_skus": [
                 "7000103987",
-                "7000103990"
+                "7000103990",
+                "229070",
+                "7100383158",
+                "7000104046",
+                "7100326939",
+                "7100095525",
+                "3M-PELTOR-X2-H"
             ],
-            "note": "Marka + model X2A w wersji nagłownej. Katalog prowadzi te nauszniki pod numerami 3M, nie pod kodem EU — zakazane: X1A (inny model) i X2P3 (wersja nahełmowa)."
+            "note": "Marka + model X2A w wersji nagłownej. Katalog prowadzi te nauszniki pod numerami 3M, nie pod kodem EU — zakazane: X1A (inny model) i X2P3 (wersja nahełmowa). 25.09.2026: zakazane także zestawy HYX2 (229070 części zamienne, 7100383158 i 7000104046 zestawy higieniczne — to nie nauszniki) i wersje nahełmowe X2P3E (7100326939), X2P5E (7100095525) oraz X2P3 z karty dystrybutora 3M-PELTOR-X2-H (ten sam EAN co 7000103990; po połączeniu kart usunąć z listy)."
         },
         {
             "id": "nauszniki-snr-30",
@@ -26,9 +32,31 @@
             ],
             "forbidden_skus": [
                 "7000039616",
-                "7000103987"
+                "7000103987",
+                "AEB010-0AY-800",
+                "AEB010-0B1-B00",
+                "AEB040-0C1-A00",
+                "AEB030-0CY-000",
+                "AEB030-0DY-000"
             ],
-            "note": "Bez marki, warunek liczbowy z karty: Optime II/III i X4A maja SNR 31-35 dB, Optime I i X1A po 27 dB i nie spelniaja progu. Katalog prowadzi te nauszniki pod numerami 3M, nie pod kodami EU."
+            "acceptable_skus": [
+                "7000039619",
+                "7000103995",
+                "7100333470",
+                "7000103989",
+                "7100141454",
+                "2630.010",
+                "2630.020",
+                "2630.030",
+                "AEB030-0AY-000",
+                "AEB030-0B1-D00",
+                "AEB040-0A1-A00",
+                "AEB040-0B1-E00",
+                "AEB020-0AY-900",
+                "AEB020-0B1-C00"
+            ],
+            "note": "Bez marki, warunek liczbowy z karty: Optime II/III i X4A maja SNR 31-35 dB, Optime I i X1A po 27 dB i nie spelniaja progu. Katalog prowadzi te nauszniki pod numerami 3M, nie pod kodami EU. 25.09.2026: zakazane także JSP Sonis 1 (AEB010-0AY-800, AEB010-0B1-B00: „27 dB SNR” w nazwie) i dohełmowe JSP (AEB040-0C1-A00, AEB030-0CY-000, AEB030-0DY-000: opis albo nazwa „Dohełmowe ochronniki słuchu”, więc nie nagłowne).",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: ochronniki słuchu, nagłowne (pałąk nad głową), SNR ≥ 30 dB. Tylko karty producenta; karty dystrybutora z tym samym EAN albo kodem (3M-OPTIME2/3, 3M-PELTOR-X*, C3002, C3003) właściciel połączy z kartami 3M. 7000039619 – 3M PELTOR Optime II (id 50407): „nagłowne, H520A-407-GQ”, „tłumienia do 31 dB”. 7000103995 – 3M PELTOR X5A (id 50411): „nagłowne, X5A”, „redukują hałas nawet o 37 dB”. 7100333470 – 3M 90563E (id 50430): „wyściełany pałąk nagłowny”, „wartość SNR 30 dB”, EN 352-1:2020. 7000103989 – 3M PELTOR X2A (id 50416): „nagłowne, X2A”, „Wskaźnik tłumienia (SNR): 31 dB”. 7100141454 – 3M PELTOR X2A (id 50427): „Styl nauszników przeciwhałasowych: Nad głową”, „Wskaźnik tłumienia (SNR): 31 dB”. 2630.010 – UVEX K10 (id 23236): „składany, wyściełany pałąk”, „SNR 30 dB”. 2630.020 – UVEX K20 (id 23238): „składanemu pałąkowi”, „SNR 33 dB”, EN 352-1. 2630.030 – UVEX K30 (id 23240): „składanemu pałąkowi”, „SNR 36 dB”. AEB030-0AY-000 i AEB030-0B1-D00 – JSP Sonis Compact (id 18157, 18159): „na pałąku”, „32dB SNR” / „32 dB SNR”. AEB040-0A1-A00 i AEB040-0B1-E00 – JSP Sonis 3 (id 18162, 18163): „na pałąku”, „37dB SNR”. AEB020-0AY-900 i AEB020-0B1-C00 – JSP Sonis 2 (id 18155, 18156): „na pałąku”, „31dB SNR” (odczyt SNR w kodzie bierze dziś 20 z SKU)."
         },
         {
             "id": "peltor-nahelmowe",
@@ -44,19 +72,37 @@
                 "7000103989",
                 "7000103987"
             ],
-            "note": "Wariant mocowania: wynik ma zawierać wyłącznie nauszniki nahełmowe, nagłowne są zakazane."
+            "acceptable_skus": [
+                "7000039617",
+                "7000107754",
+                "7100326938",
+                "7100095551",
+                "7100095525",
+                "7000038210",
+                "7000039621",
+                "7000107763",
+                "7000038212",
+                "7000039624",
+                "2630.210",
+                "2630.230",
+                "AEB040-0C1-A00",
+                "AEB030-0CY-000"
+            ],
+            "note": "Wariant mocowania: wynik ma zawierać wyłącznie nauszniki nahełmowe, nagłowne są zakazane.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: nauszniki przeciwhałasowe, montowane na hełm ochronny, bez zawężenia na karcie do jednej linii hełmów. Tylko karty producenta; duplikaty dystrybutora (225060, C1045, 3M-PELTOR-X*-H) właściciel połączy z kartami 3M. 7000039617 – 3M PELTOR Optime I (id 50450): „nahełmowe, H510P3E-405-GU”. 7000107754 – 3M PELTOR H31P3E (id 50422): „nahełmowe”, „Specjalny kształt czasz do hełmu ochronnego”. 7100326938 – 3M PELTOR X4P3E (id 50449): „mocowane do hełmu”. 7100095551 – 3M PELTOR X4P5 (id 50426): „nahełmowe, X4P5”. 7100095525 – 3M PELTOR X2P5E (id 50444): „mocowane na kasku”. 7000038210 – 3M PELTOR Optime II (id 50425): „nahełmowe, H520P3E-467-GB”. 7000039621 – 3M PELTOR Optime II (id 50408): „nahełmowe, H520P3E-410-GQ”. 7000107763 – 3M PELTOR Optime II (id 50440): „nahełmowe, H520P3E-410-GQ-01” (inny EAN niż 7000039621). 7000038212 – 3M PELTOR Optime III (id 50447): „nahełmowe, H540P3E-475-GB”. 7000039624 – 3M PELTOR Optime III (id 50409): „nahełmowe, H540P3E-413-SV”. 2630.210 – UVEX K10H (id 23241): „przeznaczona do montażu na kasku ochronnym”. 2630.230 – UVEX K30H (id 23243): „przeznaczone do montażu na kaskach ochronnych”. AEB040-0C1-A00 – JSP Sonis 3 (id 18165): opis „Dohełmowe ochronniki słuchu Sonis® 3”, „Adapter hełmu”. AEB030-0CY-000 – JSP Sonis Compact (id 18160): opis „Dohełmowe ochronniki słuchu Sonis® C”."
         },
         {
             "id": "uvex-phynomic-esd",
             "query": "Rękawice montażowe powlekane uvex phynomic z funkcją ESD",
             "expected_skus": [
-                "6003805"
+                "6003805",
+                "6004806"
             ],
             "forbidden_skus": [
                 "6004005",
                 "6004105"
             ],
-            "note": "ESD jest warunkiem twardym — phynomic lite bez ESD nie może wejść do wyniku."
+            "note": "ESD jest warunkiem twardym — phynomic lite bez ESD nie może wejść do wyniku. 25.09.2026: + 6004806 (UVEX, „Rękawice uvex phynomic C XG ESD”: ESD w nazwie, „Powłoka Xtra-Grip zapewnia doskonałą przyczepność”). Żadna z dwóch kart nie potwierdza zastosowania montażowego, a 6003805 także powłoki — to brak danych, nie spełniony warunek. 60040 nie dopisujemy: to karta dystrybutora tego samego wyrobu co zakazana 6004005."
         },
         {
             "id": "spodniobuty-s5",
@@ -208,13 +254,17 @@
             "forbidden_skus": [
                 "56-426"
             ],
-            "note": "Opis źródłowy to ogólny tekst kategorii 'rękawice antyprzecięciowe' (zastosowania, odniesienie do EN 388) bez parametrów tego modelu – brak poziomów EN 388, materiału, rozmiarów i grubości; opis celowo krótki, nic nie dodano."
+            "acceptable_skus": [
+                "11739110",
+                "6003006*"
+            ],
+            "note": "Opis źródłowy to ogólny tekst kategorii 'rękawice antyprzecięciowe' (zastosowania, odniesienie do EN 388) bez parametrów tego modelu – brak poziomów EN 388, materiału, rozmiarów i grubości; opis celowo krótki, nic nie dodano.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: W1 odporne na przecięcie, min. poziom ISO B (decyzja 14.09); W2 przecięcie i ścieranie w oznaczeniu EN 388; W3 narzędzia tnące, ostre elementy, szkło; W4 elastyczność, wygoda i precyzja. 11739110 – Ansell HyFlex 11-739 (id 8758): W1 „wkładką o wysokiej odporności na przecięcia”, poziom D; W2 opis „EN 388 z poziomem przecięcia D (4.X.4.3.D)” (ścieranie 4; kolumna norm zniekształcona); W3 „do bezpiecznej pracy z ostrymi i szorstkimi elementami”, zastosowanie „Praca z metalem i szkłem”; W4 „zachowuje komfort i zręczność”, „elastycznej dzianinie”; karta modelu, rozmiary 6–11. 6003006* – UVEX athletic D5XP (id 25144): W1 „Rękawice antyprzecięciowe”, poziom D; W2 norma „EN 388: 4 X 4 3 D” (ścieranie 4); W3 „prac o podwyższonym ryzyku mechanicznym”, zastosowanie „Przemysł szklarski” (dane wzbogacenia); W4 „elastyczności i bardzo dobrego czucia”, „umożliwiające precyzyjną pracę”; karta modelu, rozmiary 6–11."
         },
         {
             "id": "opisowy15-03-sandaly-s1p-esd",
             "query": "Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, do prac w suchych pomieszczeniach – przemysł elektroniczny, logistyka, montaż. Wymagane: zabudowana pięta; podnosek ochronny; właściwości antyelektrostatyczne (ESD) umożliwiające kontrolę ładunków elektrostatycznych; podeszwa odporna na oleje i paliwa (FO) oraz antypoślizgowa; cholewka z materiałów przewiewnych; lekka konstrukcja odpowiednia do prac wymagających częstego przemieszczania się. Rozmiary: 35–48.",
             "expected_skus": [
-                "ARMEN 9007 6660 S1 P",
                 "ARSO 701 616560 S1 P ESD",
                 "2136-025-808-00"
             ],
@@ -222,9 +272,12 @@
                 "AROX 733 641460 S1 ESD",
                 "ARDEUS 350 Air 618080 S1 PL ESD",
                 "AROSIO 730 Air 618080 S1 P ESD",
-                "ARDESIO 731 Air 618080 S1 P ESD"
+                "ARDESIO 731 Air 618080 S1 P ESD",
+                "AROSIO 730 Air 616560 S1 P ESD",
+                "ARMEN 9007 6660 S1 P"
             ],
-            "note": "Z opisu: sandały, EN ISO 20345 klasa S1, zabudowana pięta, podnosek, ESD, podeszwa FO, antypoślizgowa, przewiewna cholewka, suche pomieszczenia, rozmiary 35–48. Oznaczenie 'P' pochodzi wyłącznie z nazwy/SKU – opis nie wspomina wprost o wkładce antyprzebiciowej."
+            "note": "Z opisu: sandały, EN ISO 20345 klasa S1, zabudowana pięta, podnosek, ESD, podeszwa FO, antypoślizgowa, przewiewna cholewka, suche pomieszczenia, rozmiary 35–48. Oznaczenie 'P' pochodzi wyłącznie z nazwy/SKU – opis nie wspomina wprost o wkładce antyprzebiciowej.",
+            "catalog_note": "25.09.2026, decyzja właściciela: dowód ESD obuwia to „ESD” albo EN 61340. Karta ARMEN 9007 6660 S1 P (id 9530) ma na produkcji normę „EN ISO 20345:2011 S1 P SRC”, a w opisie i tabelce nie ma ESD ani EN 61340 (warianty ESD mają „norma: ESD według EN IEC 61340-4-3:2018”), więc w pomiarze jest zakazana. Wzorcowe: ARSO 701 616560 S1 P ESD (id 9490) i Canis 2136-025-808-00 (id 11966). AROSIO 730 Air 616560 S1 P ESD (id 9494) to „półbuty bezpieczne”, nie sandały – zakazana jak siostrzana 618080. ARMEN 9007 1010 S1 P ESD i ARSO 701 618080 S1 P ESD czekają na decyzję, czy FO i zabudowana pięta wynikają z klasy S1 wydania 2011 (brak ich na karcie)."
         },
         {
             "id": "opisowy15-04-fartuch-wodoochronny-120x75",
@@ -290,14 +343,15 @@
             "id": "opisowy15-09-gogle-spawalnicze-5",
             "query": "Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0 – do ochrony oczu podczas spawania gazowego i cięcia metalu oraz przed pyłem, odpryskami i chemikaliami. Wymagane: soczewka poliwęglanowa o odporności na uderzenia do 120 m/s; powłoka przeciwmgielna oraz powłoka odporna na zarysowania; wentylacja szczelna chroniąca przed drobnymi cząstkami pyłu i gazem, ograniczająca zamglenie; cylindryczna, zakrzywiona soczewka o polu widzenia 180° bez zniekształceń optycznych; wysoki profil umożliwiający noszenie na okularach korekcyjnych; szeroki, regulowany pasek nylonowy; miękka uszczelka z elastomeru; możliwość stosowania łącznie z półmaskami oddechowymi. Zgodność z EN 166, oznakowanie CE.",
             "expected_skus": [
-                "1406213"
+                "7100010431"
             ],
             "forbidden_skus": [
                 "9310+",
                 "9312+"
             ],
             "tender_expect_empty": true,
-            "note": "Z nazwy i opisu: gogle szczelne spawalnicze, zaciemnienie 5.0, spawanie gazowe/cięcie metalu, soczewka PC do 120 m/s, powłoki anti-fog i anti-scratch (bez nazwy własnej), wentylacja szczelna, pole widzenia 180°, miejsce na okulary korekcyjne, pasek nylonowy, uszczelka elastomerowa, kompatybilność z półmaskami, EN 166, CE. Pominięto producenta, serię i numery modelu."
+            "note": "Z nazwy i opisu: gogle szczelne spawalnicze, zaciemnienie 5.0, spawanie gazowe/cięcie metalu, soczewka PC do 120 m/s, powłoki anti-fog i anti-scratch (bez nazwy własnej), wentylacja szczelna, pole widzenia 180°, miejsce na okulary korekcyjne, pasek nylonowy, uszczelka elastomerowa, kompatybilność z półmaskami, EN 166, CE. Pominięto producenta, serię i numery modelu.",
+            "catalog_note": "25.09.2026: karty 1406213 nie ma w katalogu produkcji. Ten sam wyrób to karta 3M 7100010431 (id 48253): „Numer katalogowy 3M: 1406213”, EAN 04046719420872 jak na karcie migawki. Na karcie: szczelne („Typ gogli: Uszczelniane”, „Odpowietrzanie: Brak”), „Przyciemnienie 5,0 IR”, „Materiał soczewki: Poliwęglan”, powłoka „Odporność na zarysowanie i zaparowanie”, duży profil na okulary korekcyjne, dopasowanie do półmasek, spawanie gazowe i cięcie metalu. 120 m/s tylko jako odczyt litery B z „5 3M 1 B K N” (wniosek). Brak na karcie: 180°, pasek nylonowy, uszczelka z elastomeru, EN 166 i CE wprost. Żadna inna karta katalogu nie spełnia warunków (sonda S12). eval_expect_empty bez zmian do decyzji o oprawce (D3)."
         },
         {
             "id": "opisowy15-10-apteczka-scienna-mini",
@@ -385,9 +439,12 @@
             "forbidden_skus": [
                 "ARMEN 9007 1010 O1 FO",
                 "ARMEN 9007 1010 O1 FO ESD",
-                "ARMEN 9007 6660 S1"
+                "ARMEN 9007 6660 S1",
+                "ARMEN 9007 6660 S1 P",
+                "ARMEN 9007 6660 S1 ESD",
+                "ARMEN 9007 9360 S1"
             ],
-            "note": "Zapytanie klienta z poczty. Marka, model i klasa podane wprost. O1 to obuwie zawodowe bez podnoska — nie spełnia S1; 6660 to inny wariant niż 1010."
+            "note": "Zapytanie klienta z poczty. Marka, model i klasa podane wprost. O1 to obuwie zawodowe bez podnoska — nie spełnia S1; 6660 to inny wariant niż 1010. 25.09.2026: zakazane także pozostałe kolory ARMEN 9007 (6660 S1 P, 6660 S1 ESD, 9360 S1), bo zapytanie żąda wariantu 1010. Inny kolor pokazany jako propozycja poniżej progu zapisu pod właściwą kartą to ostrzeżenie z informacją o kolorze, nie błąd blokujący (decyzja 25.09.2026). „ARMEN 9007 Clip 1010 S1” neutralna: osobny wyrób, karta nie mówi, czym jest Clip."
         },
         {
             "id": "mail-artra-arica-6207-1010-s2",
@@ -420,11 +477,26 @@
                 "37900VP110",
                 "58270PRO110",
                 "58530B110",
-                "8352100",
-                "NB35A/7"
+                "8352100"
             ],
             "forbidden_skus": [],
-            "note": "Zapytanie klienta z poczty — opis bez marki i modelu. Oczekiwane karty mają w opisie albo normach jednocześnie EN ISO 374 i EN 1149 (albo ESD w nazwie); wymagane są oba warunki naraz."
+            "acceptable_skus": [
+                "38001PP110",
+                "37155110",
+                "39122100",
+                "79700110BP",
+                "53002110",
+                "37900110BP",
+                "37185110",
+                "53001110",
+                "38003PP110",
+                "37675110",
+                "37310110",
+                "58530W110",
+                "58735110"
+            ],
+            "note": "Zapytanie klienta z poczty — opis bez marki i modelu. Wzorcowe mają na karcie jednocześnie EN ISO 374 i dowód antyelektrostatyczności; wymagane są oba warunki naraz. Dowód antyelektrostatyczności rękawic (decyzja 25.09.2026): „ESD”, EN 1149 albo EN 16350 — samo słowo „antyelektrostatyczne” to propozycja do sprawdzenia, nie trafienie. 25.09.2026: NB35A/7 usunięta — EN 374 nie ma w nazwie, opisie ani normach karty, jest tylko w atrybucie bez źródła. 8352100 zostaje: opis „EN ISO 374-1 Typ A (ochrona chemiczna)”, normy „EN 1149”.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: rękawice chemoodporne; antyelektrostatyczne = „ESD”, EN 1149 albo EN 16350; EN ISO 374-1 — „EN 374 typ A/B” czytamy jako EN ISO 374-1:2016, bo typy A/B/C są tylko w tym wydaniu (wniosek); rozmiar 10 dobiera handlowiec, poniżej wyłącznie karty modelu. Wszystkie karty to Ansell. 38001PP110 – AlphaTec 38-001 (id 8620): „specjalistyczne rękawice chemiczne”, „EN ISO 374-1 Type A”, „EN 16350 – ochrona elektrostatyczna”. 37155110 – AlphaTec Solvex 37-155 (id 8821): „odporne na działanie substancji chemicznych”, „EN ISO 374 (typ A)”, „antyelektrostatyczne (EN 1149)”. 39122100 – AlphaTec 39-122 (id 8832): „przeznaczone do pracy z chemikaliami”, „EN 374-1 typ B”, „EN 1149”, „Rozmiar: 10”. 79700110BP – AlphaTec 79-700 (id 8948): „lekkie rękawice chemiczne”, „EN 374 typ B”, „antyelektrostatyczne (EN 1149)”. 53002110 – AlphaTec 53-002 (id 8882): „EN 374:2016 – ochrona chemiczna”, „EN 1149-3 – właściwości antystatyczne”. 37900110BP – AlphaTec 37-900 (id 8831), ten sam model co wzorcowa 37900VP110 w innym opakowaniu (inny EAN): „chemoodporne rękawice nitrylowe”, „EN ISO 374-1:2016 Typ A (AJKLOPT)”, „EN1149”. 37185110 – AlphaTec Solvex 37-185 (id 8822): „profesjonalne rękawice chemiczne”, „EN 374 typ A, EN 1149”. 53001110 – AlphaTec 53-001 (id 8881): „przeznaczone do pracy z chemikaliami”, „EN 374 typ A”, „EN 1149 (antystatyczność)”. 38003PP110 – AlphaTec 38-003 (id 8622): „do pracy z agresywnymi chemikaliami”, „EN ISO 374-1 Type A”, „EN 16350 (antyelektrostatyczne)”. 37675110 – AlphaTec Solvex 37-675 (id 8828): „przy pracy z substancjami chemicznymi”, „EN ISO 374-1 Typ A”, „EN 1149 (właściwości antyelektrostatyczne)”. 37310110 – AlphaTec 37-310 (id 8824): „lekką ochronę przed chemikaliami”, „EN 374 typ B, EN 1149”. 58530W110 – AlphaTec 58-530W (id 8639), biały wariant wzorcowej 58530B110: „chemoodporne i antystatyczne rękawice”, „EN 374 typ A”, „EN 1149 (właściwości antyelektrostatyczne)”. 58735110 – AlphaTec 58-735 (id 8911): „wielofunkcyjne rękawice chemoodporne”, „EN ISO 374-1:2016 Typ A (AJKLMNOPT)”, „EN 1149”."
         },
         {
             "id": "mail-kalosze-chemoodporne-esd",
@@ -449,9 +521,13 @@
             ],
             "forbidden_skus": [
                 "1150-008-100-00",
-                "1160-011-100-00"
+                "1160-011-100-00",
+                "V-BRUDPUR",
+                "GB041",
+                "KOMODO2",
+                "KOMODO2HV"
             ],
-            "note": "Zapytanie klienta z poczty. Katalog nie ma kombinezonu z udokumentowaną odpornością na kwas siarkowy 96% — wynik ma pokazać najbliższe bariery chemiczne i nazwać brak. Ścierka bawełniana i rękaw Tyvek to nie kombinezon."
+            "note": "Zapytanie klienta z poczty. Katalog nie ma kombinezonu z udokumentowaną odpornością na kwas siarkowy 96% — wynik ma pokazać najbliższe bariery chemiczne i nazwać brak. Ścierka bawełniana i rękaw Tyvek to nie kombinezon. 25.09.2026: zakazane także karty, które nie są kombinezonem: V-BRUDPUR (środek do usuwania brudu, „nie jest środkiem ochrony indywidualnej”), GB041 (arkusz naklejek), KOMODO2 i KOMODO2HV (opis: „Kurtka wodoodporna”)."
         },
         {
             "id": "mail-rekawice-ultrane",

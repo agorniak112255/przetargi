@@ -195,6 +195,38 @@ final class ProductModelFuzzy
     }
 
     /**
+     * Oznaczenia wariantu na karcie, których wymaganie nie ma („ARMEN 9007 6660 S1” pod „ARMEN 9007 1010 S1” → 6660).
+     * Liczone tylko przy wymaganiu z oznaczeniem wariantu; numer modelu z igły („9007”) nie jest wariantem.
+     *
+     * @return list<string>
+     */
+    public function otherVariantCodes(string $requirement, Product $product): array
+    {
+        $codes = $this->variantCodes($requirement);
+        if ($codes === []) {
+            return [];
+        }
+        $needles = $this->needles($requirement);
+        // Normy z rokiem i numerem („EN ISO 20345:2011”, „EN 1149-5”) to nie wariant — jak w variantCodes().
+        preg_match_all('/\b\d{4}\b/u', $this->stripNorms((string) $product->name.' '.(string) $product->sku), $m);
+        $out = [];
+        foreach (array_unique($m[0] ?? []) as $code) {
+            $code = (string) $code;
+            if (in_array($code, $codes, true)) {
+                continue;
+            }
+            foreach ($needles as $needle) {
+                if (str_contains($needle, $code)) {
+                    continue 2;
+                }
+            }
+            $out[] = $code;
+        }
+
+        return $out;
+    }
+
+    /**
      * @return list<string>
      */
     public function needles(string $requirement): array

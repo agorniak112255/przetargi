@@ -981,7 +981,12 @@ final class ProductAiSearchService
             }
             $id = (int) ($match['id'] ?? 0);
             if ($id > 0) {
-                $this->trace['llm_matches'][] = ['id' => $id, 'score' => (int) ($match['score'] ?? 0)];
+                // missing_key: diagnoza remisów w raporcie search:eval — kod obcina ocenę za brak kluczowego warunku.
+                $this->trace['llm_matches'][] = [
+                    'id' => $id,
+                    'score' => (int) ($match['score'] ?? 0),
+                    'missing_key' => $this->stringList($match['missing_key'] ?? null),
+                ];
             }
         }
     }
@@ -1151,7 +1156,10 @@ final class ProductAiSearchService
     /**
      * Stan modelu po nałożeniu zapasów — wspólna reguła obu ścieżek: awaria zostaje awarią, pominięcie
      * pominięciem (model wierszy wyniku nie oceniał — np. skrót nazwanego modelu, którego wiersze nie mają
-     * ai_match_source), a „ranked” wymaga karty, którą model faktycznie ocenił (nie z reguły ani listy katalogowej).
+     * ai_match_source). Wiersz oceniony przez model (nie z reguły ani listy katalogowej) podnosi stan do „ranked”;
+     * poza tym stan zostaje, jaki był — także „ranked”, gdy model odpowiedział, a wynik to same wiersze zapasowe
+     * (kontrakt: „ranked” = model odpowiedział, ProductAiSearchRewriteAfterEmptyRankTest). Ile wierszy nie ma oceny
+     * modelu, pokazuje raport search:eval (`unrated_rows`).
      *
      * @param  list<array<string, mixed>>  $rows
      */
@@ -2426,7 +2434,7 @@ final class ProductAiSearchService
         $intent = $this->normalizeIntent($intent);
         $catalogQ = $this->catalogSearchQuery($query, $intent);
         if ($this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent)) {
-            return $this->rowsFromRequirementCatalog($catalogQ, $limit);
+            return $this->rowsFromRequirementCatalog($catalogQ, $limit, $this->requestedProducerForNote($intent));
         }
         if ($candidates->isEmpty()) {
             return [];
@@ -2578,6 +2586,93 @@ final class ProductAiSearchService
         return ' Uwaga: karta nie potwierdza modelu z zapytania.';
     }
 
+    /**
+     * Dopisek przy karcie innego producenta niż nazwany w wymaganiu. Porównanie po producencie z intencji (kanoniczny,
+     * także z podmarki słownika: „Peltor” → 3M), nie po surowych słowach wymagania — linia modelu albo słowo
+     * pospolite nie może oznaczyć karty samego producenta jako „inny producent” (recenzja 25.09.2026). Karta
+     * dystrybutora z producentem albo podmarką w nazwie („Rękawice Uvex …”, „Nauszniki PELTOR …”) to ten sam producent.
+     *
+     * @param  array{keys: list<string>, label: string}  $producer  wynik requestedProducerForNote()
+     */
+    private function otherManufacturerNote(Product $product, array $producer): string
+    {
+        if ($producer['keys'] === []) {
+            return '';
+        }
+        // Str::ascii jak w nameAppearsInQuery: „Bollé” i „Bolle” to to samo słowo (lexicalNormalize zna tylko polskie litery).
+        $words = preg_split('/\s+/u', trim($this->lexicalNormalize(Str::ascii((string) $product->manufacturer.' '.(string) $product->name)))) ?: [];
+        foreach ($producer['keys'] as $key) {
+            if ($this->wordsContainName($words, $key)) {
+                return '';
+            }
+        }
+
+        return ' Uwaga: inny producent niż w wymaganiu ('.$producer['label'].') — równoważnik do sprawdzenia.';
+    }
+
+    /**
+     * Nazwa producenta w słowach karty — tylko całe słowa (druga recenzja 25.09.2026: podciąg „3m” trafiał w „0,3 mm”,
+     * „dł. 3 m” i kod „H3M-100”, a karta innego producenta traciła dopisek). Ciąg słów nazwy albo sklejenie kolejnych
+     * słów karty („Delta Plus” ↔ „DeltaPlus”), w którym każde słowo ma co najmniej 2 znaki — „3 m” to nie „3M”.
+     *
+     * @param  list<string>  $words  słowa karty po lexicalNormalize
+     * @param  string  $name  nazwa po lexicalNormalize
+     */
+    private function wordsContainName(array $words, string $name): bool
+    {
+        $nameWords = preg_split('/\s+/u', trim($name)) ?: [];
+        $compact = implode('', $nameWords);
+        if ($compact === '') {
+            return false;
+        }
+        $count = count($words);
+        for ($i = 0; $i < $count; $i++) {
+            if (array_slice($words, $i, count($nameWords)) === $nameWords) {
+                return true;
+            }
+            $glued = '';
+            for ($j = $i; $j < $count && mb_strlen($words[$j]) >= 2; $j++) {
+                $glued .= $words[$j];
+                if ($glued === $compact) {
+                    return true;
+                }
+                if (mb_strlen($glued) >= mb_strlen($compact)) {
+                    break;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Producent nazwany w wymaganiu (z katalogu) — jego nazwa i marka z wymagania, którą na niego przetłumaczono
+     * (podmarka), jako klucze porównania, oraz nazwa do dopisku. Puste, gdy wymaganie nie nazywa producenta albo marki
+     * nie ma w katalogu (tam wynik ma własną uwagę o zamienniku).
+     *
+     * @param  array<string, mixed>  $intent
+     * @return array{keys: list<string>, label: string}
+     */
+    private function requestedProducerForNote(array $intent): array
+    {
+        $intent = $this->normalizeIntent($intent);
+        $name = $intent['manufacturer_absent_in_catalog'] ? '' : trim((string) ($intent['manufacturer'] ?? ''));
+        if ($name === '') {
+            return ['keys' => [], 'label' => ''];
+        }
+        $key = fn (string $brand): string => trim((string) preg_replace('/\s+/u', ' ', $this->lexicalNormalize(Str::ascii($brand))));
+        $keys = [$key($name)];
+        // Marka z wymagania tylko jako alias ze słownika (Peltor → 3M). Luźne dopasowanie producenta („DELTA” → Delta
+        // Plus, „3M Polska” → 3M) to początek tej samej nazwy — osobny klucz tylko poszerzałby dopasowanie i ukrywał
+        // dopisek przy karcie innego producenta z linią „Delta” w nazwie.
+        $requested = $key(trim((string) ($intent['manufacturer_requested'] ?? '')));
+        if ($requested !== '' && ! str_starts_with($keys[0].' ', $requested.' ') && ! str_starts_with($requested.' ', $keys[0].' ')) {
+            $keys[] = $requested;
+        }
+
+        return ['keys' => array_values(array_filter($keys, static fn (string $k): bool => $k !== '')), 'label' => $name];
+    }
+
     /** Karta opisana (albo świadomie oznaczona jako ręczna) — jest czym uzasadnić trafienie. */
     private function hasSomethingToShow(Product $product): bool
     {
@@ -2586,9 +2681,14 @@ final class ProductAiSearchService
     }
 
     /**
+     * $producer: producent nazwany w oryginalnym wymaganiu (lista szuka po cesze, bez marki i modelu). Karta innego
+     * producenta zostaje propozycją z dopiskiem — decyzja właściciela z 25.09.2026: równoważnik innej marki jest
+     * dopuszczalny, ale handlowiec ma to widzieć (uvex-phynomic-esd: 40 wierszy ARDON/Canis/Polstar bez słowa o marce).
+     *
+     * @param  array{keys: list<string>, label: string}  $producer  wynik requestedProducerForNote()
      * @return list<array<string, mixed>>
      */
-    private function rowsFromRequirementCatalog(string $query, int $limit): array
+    private function rowsFromRequirementCatalog(string $query, int $limit, array $producer = ['keys' => [], 'label' => '']): array
     {
         $products = $this->withResponseRelations(
             $this->retrieveByRequirementCatalog($query, max(40, $limit))
@@ -2617,7 +2717,8 @@ final class ProductAiSearchService
             $row['ai_match_percent'] = min(50, max(40, 30 + $this->requirementCatalogScore($query, $product)));
             $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON.' ('.rtrim($reason, '.').')'
                 .$this->unratedTypeGapNote($wantType, $this->assortment->articleType($product->name.' '.$product->sku))
-                .$this->unratedModelGapNote($query, $product);
+                .$this->unratedModelGapNote($query, $product)
+                .$this->otherManufacturerNote($product, $producer);
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $out[] = $row;
         }
@@ -2639,7 +2740,7 @@ final class ProductAiSearchService
         foreach ($ranked as $row) {
             $seen[(int) ($row['id'] ?? 0)] = true;
         }
-        foreach ($this->rowsFromRequirementCatalog($catalogQ, $limit) as $row) {
+        foreach ($this->rowsFromRequirementCatalog($catalogQ, $limit, $this->requestedProducerForNote($intent)) as $row) {
             $id = (int) ($row['id'] ?? 0);
             if ($id <= 0 || isset($seen[$id])) {
                 continue;
@@ -5222,8 +5323,14 @@ final class ProductAiSearchService
                 // zamiast żądanego. Karta zostaje widoczną propozycją, ale poniżej progu zapisu,
                 // żeby o podmianie wariantu decydował człowiek.
                 $row['ai_match_percent'] = self::VARIANT_MISMATCH_SCORE;
-                $row['ai_match_reason'] = 'Ta sama rodzina modelu, ale karta nie ma oznaczenia z zapytania: '
-                    .implode(', ', $missingCodes).'.';
+                // Decyzja właściciela z 25.09.2026: wiersz mówi, jaki wariant ma karta — handlowiec widzi różnicę
+                // („w zapytaniu 1010, na karcie 6660”), zamiast szukać jej w nazwie.
+                $cardCodes = $this->modelFuzzy->otherVariantCodes($query, $product);
+                $row['ai_match_reason'] = $cardCodes !== []
+                    ? 'Ta sama rodzina modelu, ale inny wariant (np. kolor): w zapytaniu '.implode(', ', $missingCodes)
+                        .', na karcie '.implode(', ', $cardCodes).' — sprawdź, czy zamiana jest dopuszczalna.'
+                    : 'Ta sama rodzina modelu, ale karta nie ma oznaczenia z zapytania (np. koloru): '
+                        .implode(', ', $missingCodes).'.';
             }
             $out[] = $row;
         }

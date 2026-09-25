@@ -367,6 +367,68 @@ final class TenderEvalCommandTest extends TestCase
         }
     }
 
+    /**
+     * Decyzja z 25.09.2026: karta innego producenta/modelu z `acceptable_skus` golden setu (spełnia wszystkie warunki)
+     * to trafny wybór przetargu, oznaczony jako równoważnik — dotąd liczyła się jako „inna”.
+     */
+    public function test_pick_of_acceptable_equivalent_counts_as_hit_marked_as_equivalent(): void
+    {
+        $sandal = Product::query()->create([
+            'sku' => 'ARSO 701 616560 S1 P ESD',
+            'name' => 'ARSO 701 616560 S1 P ESD',
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'ppe_family' => PpeAssortment::FAMILY_FOOTWEAR,
+            'catalog_price_net' => 46,
+            'purchase_price' => 46.26,
+            'stock' => 0,
+            'norms' => 'EN ISO 20345 S1 P, EN IEC 61340-4-3 ESD',
+            'description' => 'Sandały bezpieczne ARSO 701 616560 S1 P ESD, podnosek, zabudowana pięta, wkładka antyprzebiciowa, ESD, podeszwa FO.',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldNotReceive('chatJson');
+        $llm->shouldNotReceive('chatJsonMany');
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        @mkdir(dirname($this->golden), 0775, true);
+        file_put_contents($this->golden, json_encode(['cases' => [[
+            'id' => 'test-sandaly-rownowaznik',
+            'query' => 'Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, zabudowana pięta, podnosek, ESD, podeszwa FO.',
+            'expected_skus' => ['INNY-PRODUCENT-SANDAL'],
+            'acceptable_skus' => ['ARSO 701 616560 S1 P ESD'],
+            'acceptable_note' => 'ARTRA — wszystkie warunki na karcie',
+            'forbidden_skus' => [],
+            'note' => '',
+        ]]], JSON_UNESCAPED_UNICODE));
+        $recorded = storage_path('framework/testing/tender-eval-recorded-'.uniqid().'.json');
+        file_put_contents($recorded, json_encode(['cases' => [[
+            'id' => 'test-sandaly-rownowaznik',
+            'runs' => [
+                ['verdict' => 'pusta', 'search' => ['model_state' => 'ranked', 'external_hint' => null, 'products' => [
+                    ['id' => (int) $sandal->id, 'sku' => $sandal->sku, 'name' => $sandal->name, 'ai_match_percent' => 95, 'ai_match_reason' => 'Sandały S1 P ESD', 'ai_match_source' => null],
+                ]]],
+            ],
+        ]]], JSON_UNESCAPED_UNICODE));
+        $before = glob($this->reportDir.'/*.json') ?: [];
+        try {
+            $this->artisan('tenders:eval', ['--file' => $this->golden, '--filter' => '', '--replay' => $recorded, '--save' => true])
+                ->expectsOutputToContain('równoważnik, inny producent/model')
+                ->assertSuccessful();
+
+            $created = array_values(array_diff(glob($this->reportDir.'/*.json') ?: [], $before));
+            $this->assertCount(1, $created);
+            $report = json_decode((string) file_get_contents($created[0]), true);
+            @unlink($created[0]);
+            $run = $report['cases'][0]['runs'][0];
+            $this->assertSame('trafna', $run['verdict']);
+            $this->assertTrue($run['acceptable']);
+        } finally {
+            @unlink($recorded);
+        }
+    }
+
     /** Raport 20260914_161701 poz. 1: 40 wierszy listy zapasowej (48) nad oceną modelu — ocena karty 11202000 nie trafiła do raportu. */
     public function test_recorded_search_keeps_model_rows_below_first_forty_rows(): void
     {

@@ -202,7 +202,7 @@ final class TenderEvalCommand extends Command
     }
 
     /**
-     * @param  array{id: string, query: string, expected_skus: list<string>, forbidden_skus: list<string>, expect_empty?: bool}  $case
+     * @param  array{id: string, query: string, expected_skus: list<string>, acceptable_skus?: list<string>, forbidden_skus: list<string>, expect_empty?: bool}  $case
      * @param  array{candidates: list<array<string, mixed>>, pick: array{sku: string, score: int, source: string, heuristic_only: bool}|null, reason: string|null}  $decision
      * @param  array<string, mixed>  $row
      * @return array{verdict: string, sku: string|null, score: int|null, source: string|null, top_model: string|null, model_state: string|null, reason: string|null}
@@ -229,14 +229,20 @@ final class TenderEvalCommand extends Command
         }
 
         $sku = SearchEvalMetrics::normalizeAll([$pick['sku']])[0] ?? $pick['sku'];
+        // Decyzja z 25.09.2026: równoważnik z golden (inny producent/model spełniający wszystkie warunki) to trafienie,
+        // oznaczone w raporcie, żeby było widać, że automat wybrał inną markę niż wzorcowa.
+        $acceptable = ! $expectEmpty
+            && in_array($sku, SearchEvalMetrics::normalizeAll($case['acceptable_skus'] ?? []), true);
         $verdict = match (true) {
             ! $expectEmpty && in_array($sku, SearchEvalMetrics::normalizeAll($case['expected_skus']), true) => self::VERDICT_HIT,
             in_array($sku, SearchEvalMetrics::normalizeAll($case['forbidden_skus']), true) => self::VERDICT_FORBIDDEN,
+            $acceptable => self::VERDICT_HIT,
             default => self::VERDICT_OTHER,
         };
 
         return [
             'verdict' => $verdict,
+            'acceptable' => $acceptable && $verdict === self::VERDICT_HIT,
             'sku' => $pick['sku'],
             'score' => $pick['score'],
             'source' => $pick['source'].($pick['heuristic_only'] ? ' (po słowach)' : '').(($pick['proposal'] ?? false) ? ' (propozycja)' : ''),
@@ -331,7 +337,8 @@ final class TenderEvalCommand extends Command
                 return [
                     mb_substr($result['id'], 0, 34),
                     mb_substr($expected, 0, 30),
-                    ($first['sku'] ?? null) === null ? '—' : mb_substr((string) $first['sku'], 0, 30).' ('.$first['score'].'%, '.$first['source'].')',
+                    ($first['sku'] ?? null) === null ? '—' : mb_substr((string) $first['sku'], 0, 30).' ('.$first['score'].'%, '.$first['source'].')'
+                        .(($first['acceptable'] ?? false) === true ? ' — równoważnik, inny producent/model' : ''),
                     implode(' / ', array_map(static fn (array $run): string => (string) $run['verdict'], $result['runs'])),
                     implode(' / ', array_map(static fn (array $run): string => (string) ($run['model_state'] ?? '—'), $result['runs'])),
                     (string) ($first['top_model'] ?? '—'),

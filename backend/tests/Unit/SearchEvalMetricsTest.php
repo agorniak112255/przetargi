@@ -58,6 +58,19 @@ final class SearchEvalMetricsTest extends TestCase
         $this->assertSame(1.0, SearchEvalMetrics::ndcgAt(['A-1', 'B-2'], ['A-1', 'B-2', 'X'], 10));
     }
 
+    /**
+     * Równoważniki (idealny DCG z samych wzorcowych, 25.09.2026): nadmiarowe trafienia nie podnoszą nDCG ponad wynik
+     * z ich właściwej pozycji — karta spoza list na 1. miejscu dalej obniża ocenę.
+     */
+    public function test_ndcg_with_equivalents_counts_only_as_many_hits_as_ideal_slots(): void
+    {
+        $this->assertEqualsWithDelta(0.6309, SearchEvalMetrics::ndcgAt(['E', 'A1'], ['X', 'E', 'A1'], 10, 1), 1e-4);
+        $this->assertEqualsWithDelta(0.5, SearchEvalMetrics::ndcgAt(['E', 'A1', 'A2'], ['X1', 'X2', 'A1', 'A2', 'E'], 10, 1), 1e-9);
+        $this->assertSame(1.0, SearchEvalMetrics::ndcgAt(['E', 'A1'], ['A1', 'E'], 10, 1), 'równoważnik na 1. miejscu zastępuje wzorcową');
+        // Bez $idealCount — jak przed zmianą.
+        $this->assertSame(SearchEvalMetrics::ndcgAt(['E'], ['X', 'E'], 10), SearchEvalMetrics::ndcgAt(['E'], ['X', 'E'], 10, 1));
+    }
+
     public function test_reciprocal_rank_uses_first_hit_position(): void
     {
         $this->assertSame(1.0, SearchEvalMetrics::reciprocalRank(['A-1'], ['A-1', 'X']));

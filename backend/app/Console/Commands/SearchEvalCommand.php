@@ -8,6 +8,7 @@ use App\Services\Ai\AiServedProviderTally;
 use App\Services\ProductAiSearchService;
 use App\Services\Search\SearchEvalRunner;
 use App\Services\Vector\ProductVectorSearch;
+use App\Support\SearchEvalMetrics;
 use Illuminate\Console\Command;
 use Throwable;
 
@@ -101,7 +102,7 @@ class SearchEvalCommand extends Command
 
         $this->renderCases($rows, $k);
         $summary = $runner->summarize($rows);
-        $this->renderSummary($summary, $k);
+        $this->renderSummary($summary, $k, $runner->matchMinScore());
         $this->renderProfileFallbacks($fallbacks);
         $this->renderProblems($rows);
         $this->renderWorst($rows, max(0, (int) $this->option('worst')));
@@ -113,6 +114,11 @@ class SearchEvalCommand extends Command
             'limit' => $limit,
             'prompt_version' => ProductAiSearchService::RANK_PROMPT_VERSION,
             'vector_disabled' => $noVector,
+            // Próg zapisu, względem którego forbidden_shown oddziela ostrzeżenia od naruszeń blokujących.
+            'match_min_score' => $runner->matchMinScore(),
+            // Podpis list golden setu: inny podpis w raporcie bazowym = zmiana miary (wzorcowe, zakazane, równoważniki),
+            // nie wyszukiwarki — porównanie ostrzega o tym także wtedy, gdy obie strony mają pola z 25.09.2026.
+            'golden_signature' => $this->goldenSignature($cases),
             'profile_fallbacks' => $fallbacks,
             'summary' => $summary,
             'cases' => $rows,
@@ -120,7 +126,8 @@ class SearchEvalCommand extends Command
 
         $baseline = trim((string) $this->option('baseline'));
         if ($baseline !== '') {
-            $this->renderBaseline($baseline, $summary);
+            $withAcceptable = array_filter($cases, static fn (array $case): bool => $case['acceptable_skus'] !== []) !== [];
+            $this->renderBaseline($baseline, $summary, $withAcceptable, $report['golden_signature']);
         }
 
         if ($this->option('save')) {
@@ -166,7 +173,7 @@ class SearchEvalCommand extends Command
     }
 
     /** @param array<string, float|int> $summary */
-    private function renderSummary(array $summary, int $k): void
+    private function renderSummary(array $summary, int $k, int $minScore): void
     {
         $this->line('<options=bold>Podsumowanie</>');
         $this->table(['metryka', 'wartość', 'co mówi'], [
@@ -175,7 +182,10 @@ class SearchEvalCommand extends Command
             ["precision@{$k}", number_format((float) $summary['precision_at_k'], 3), 'dzielone przez k — tylko do porównań między przebiegami'],
             ["nDCG@{$k}", number_format((float) $summary['ndcg_at_k'], 3), 'jakość kolejności'],
             ['MRR', number_format((float) $summary['mrr'], 3), 'jak wysoko pierwsze trafienie'],
-            ['naruszenia', (string) $summary['violations'], 'zwrócone SKU z listy zakazanych (fałszywe pozytywy)'],
+            ['naruszenia', (string) $summary['violations'], 'zwrócone SKU z listy zakazanych (ścisłe, z propozycjami pod właściwą kartą)'],
+            ['naruszenia blokujące', (string) $summary['violations_blocking'], 'zakazane SKU, które automat przetargu mógłby wybrać — bramka porównań'],
+            ['zakazane pod właściwą kartą', (string) $summary['forbidden_shown'], "propozycja poniżej {$minScore}% pod kartą wzorcową/równoważną ≥ {$minScore}% — ostrzeżenie (np. inny kolor)"],
+            ["równoważniki w top-{$k}", (string) $summary['acceptable_hits'], 'karty z acceptable_skus (inny producent/model) — liczą się w precision, nDCG i MRR, nie w recall'],
             ['błędy', (string) $summary['errors'], 'przypadki, które się wywróciły'],
             ['średni czas', $summary['avg_ms'].' ms', ''],
         ]);
@@ -185,14 +195,25 @@ class SearchEvalCommand extends Command
     private function renderProblems(array $rows): void
     {
         $unknown = [];
-        $violations = [];
+        $blocking = [];
+        $shown = [];
         $errors = [];
         foreach ($rows as $row) {
             foreach ($row['unknown_skus'] as $sku) {
                 $unknown[] = $row['id'].': '.$sku;
             }
-            foreach ($row['violations'] as $sku) {
-                $violations[] = $row['id'].': '.$sku;
+            // Zakazane spoza katalogu (np. po łączeniu kart) po cichu przestają cokolwiek pilnować.
+            foreach ($row['unknown_forbidden_skus'] ?? [] as $sku) {
+                $unknown[] = $row['id'].': '.$sku.' (zakazane)';
+            }
+            foreach ($row['unknown_acceptable_skus'] ?? [] as $sku) {
+                $unknown[] = $row['id'].': '.$sku.' (równoważnik)';
+            }
+            foreach ($row['violations_blocking'] ?? $row['violations'] as $sku) {
+                $blocking[] = $row['id'].': '.$sku;
+            }
+            foreach ($row['forbidden_shown'] ?? [] as $sku) {
+                $shown[] = $row['id'].': '.$sku.$this->percentLabel($row, (string) $sku);
             }
             if ($row['error'] !== null) {
                 $errors[] = $row['id'].': '.$row['error'];
@@ -205,9 +226,15 @@ class SearchEvalCommand extends Command
                 $this->line('  - '.$line);
             }
         }
-        if ($violations !== []) {
-            $this->warn('Zwrócone SKU z listy zakazanych:');
-            foreach ($violations as $line) {
+        if ($blocking !== []) {
+            $this->warn('Zwrócone SKU z listy zakazanych — blokujące (automat przetargu mógłby je wybrać):');
+            foreach ($blocking as $line) {
+                $this->line('  - '.$line);
+            }
+        }
+        if ($shown !== []) {
+            $this->line('Zwrócone SKU z listy zakazanych — propozycje poniżej progu zapisu pod właściwą kartą (ostrzeżenie):');
+            foreach ($shown as $line) {
                 $this->line('  - '.$line);
             }
         }
@@ -217,6 +244,22 @@ class SearchEvalCommand extends Command
                 $this->line('  - '.$line);
             }
         }
+    }
+
+    /**
+     * „ (60%)” z listy wyniku przypadku — przy ostrzeżeniu widać, jak nisko stoi propozycja.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private function percentLabel(array $row, string $sku): string
+    {
+        foreach ($row['returned_top'] ?? [] as $top) {
+            if (SearchEvalMetrics::normalize((string) ($top['sku'] ?? '')) === $sku && is_int($top['percent'] ?? null)) {
+                return ' ('.$top['percent'].'%)';
+            }
+        }
+
+        return '';
     }
 
     /** @param list<array<string, mixed>> $rows */
@@ -241,20 +284,26 @@ class SearchEvalCommand extends Command
             // Retrieval ma dobrą kartę, a wynik jej nie ma → problem w rankingu, nie w recallu.
             $where = (float) $row['retrieval_recall'] > (float) $row['recall_at_k'] ? 'ranking' : 'retrieval';
             $this->line(sprintf(
-                '  %s [%s] recall_retr=%.2f recall@k=%.2f nDCG=%.2f · brakuje: %s',
+                '  %s [%s] recall_retr=%.2f recall@k=%.2f nDCG=%.2f · brakuje: %s%s',
                 $row['id'],
                 $where,
                 (float) $row['retrieval_recall'],
                 (float) $row['recall_at_k'],
                 (float) $row['ndcg_at_k'],
                 $row['missing_skus'] === [] ? '—' : implode(', ', array_slice($row['missing_skus'], 0, 5)),
+                ($row['acceptable_hits'] ?? []) === []
+                    ? ''
+                    : ' · równoważniki (inny producent/model): '.implode(', ', array_slice($row['acceptable_hits'], 0, 5)),
             ));
             $this->line('      '.mb_substr((string) $row['query'], 0, 110));
         }
     }
 
-    /** @param array<string, float|int> $summary */
-    private function renderBaseline(string $path, array $summary): void
+    /**
+     * @param  array<string, float|int>  $summary
+     * @param  bool  $withAcceptable  golden set tego przebiegu ma choć jedną listę acceptable_skus
+     */
+    private function renderBaseline(string $path, array $summary, bool $withAcceptable, string $goldenSignature = ''): void
     {
         if (! is_file($path)) {
             $this->warn("Nie ma raportu bazowego: {$path}");
@@ -288,7 +337,45 @@ class SearchEvalCommand extends Command
             (string) $summary['violations'],
             sprintf('%+d', $summary['violations'] - (int) ($base['violations'] ?? 0)),
         ];
+        // Pola z 25.09.2026 — raport bazowy sprzed nich nie ma czym się porównać, więc „—” zamiast zera.
+        foreach (['violations_blocking', 'forbidden_shown', 'acceptable_hits'] as $key) {
+            $known = array_key_exists($key, $base);
+            $lines[] = [
+                $key,
+                $known ? (string) (int) $base[$key] : '—',
+                (string) $summary[$key],
+                $known ? sprintf('%+d', $summary[$key] - (int) $base[$key]) : '—',
+            ];
+        }
         $this->table(['metryka', 'przed', 'po', 'delta'], $lines);
+        $baseSignature = is_string($raw['golden_signature'] ?? null) ? $raw['golden_signature'] : null;
+        if ($baseSignature !== null && $goldenSignature !== '' && $baseSignature !== $goldenSignature) {
+            $this->warn('Golden set różni się od użytego w raporcie bazowym (wzorcowe, zakazane albo równoważniki) — część różnic to zmiana miary, nie wyszukiwarki.');
+        } elseif ($baseSignature === null && $withAcceptable) {
+            $this->warn('Raport bazowy powstał bez acceptable_skus — precision, nDCG i MRR liczą teraz także równoważniki (zmiana miary, nie wyszukiwarki).');
+        }
+    }
+
+    /**
+     * Skrót list golden setu, od których zależą metryki — kolejność przypadków i SKU bez znaczenia.
+     *
+     * @param  list<array<string, mixed>>  $cases
+     */
+    private function goldenSignature(array $cases): string
+    {
+        $lists = [];
+        foreach ($cases as $case) {
+            $entry = [];
+            foreach (['expected_skus', 'forbidden_skus', 'acceptable_skus'] as $key) {
+                $skus = SearchEvalMetrics::normalizeAll(is_array($case[$key] ?? null) ? $case[$key] : []);
+                sort($skus);
+                $entry[$key] = $skus;
+            }
+            $lists[(string) ($case['id'] ?? $case['query'] ?? '')] = $entry;
+        }
+        ksort($lists);
+
+        return substr(sha1((string) json_encode($lists)), 0, 16);
     }
 
     /** @param array<string, mixed> $report */

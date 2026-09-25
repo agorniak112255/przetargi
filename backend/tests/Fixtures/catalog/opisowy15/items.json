@@ -67,6 +67,11 @@
             "3690-052-000-00",
             "34580008"
         ],
+        "eval_acceptable_skus": [
+            "11739110",
+            "6003006*"
+        ],
+        "eval_acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: W1 odporne na przecięcie, min. poziom ISO B (decyzja 14.09); W2 przecięcie i ścieranie w oznaczeniu EN 388; W3 narzędzia tnące, ostre elementy, szkło; W4 elastyczność, wygoda i precyzja. 11739110 – Ansell HyFlex 11-739 (id 8758): W1 „wkładką o wysokiej odporności na przecięcia”, poziom D; W2 opis „EN 388 z poziomem przecięcia D (4.X.4.3.D)” (ścieranie 4; kolumna norm zniekształcona); W3 „do bezpiecznej pracy z ostrymi i szorstkimi elementami”, zastosowanie „Praca z metalem i szkłem”; W4 „zachowuje komfort i zręczność”, „elastycznej dzianinie”; karta modelu, rozmiary 6–11. 6003006* – UVEX athletic D5XP (id 25144): W1 „Rękawice antyprzecięciowe”, poziom D; W2 norma „EN 388: 4 X 4 3 D” (ścieranie 4); W3 „prac o podwyższonym ryzyku mechanicznym”, zastosowanie „Przemysł szklarski” (dane wzbogacenia); W4 „elastyczności i bardzo dobrego czucia”, „umożliwiające precyzyjną pracę”; karta modelu, rozmiary 6–11.",
         "prod_search": {
             "needed": null,
             "rank_of_expected": null,
@@ -98,13 +103,16 @@
             "AROX 733 641460 S1 ESD",
             "ARDEUS 350 Air 618080 S1 PL ESD"
         ],
-        "eval_extra_expected_skus": [
+        "eval_catalog_expected_skus": [
             "ARSO 701 616560 S1 P ESD",
             "2136-025-808-00"
         ],
+        "eval_catalog_note": "25.09.2026, decyzja właściciela: dowód ESD obuwia to „ESD” albo EN 61340. Karta ARMEN 9007 6660 S1 P (id 9530) ma na produkcji normę „EN ISO 20345:2011 S1 P SRC”, a w opisie i tabelce nie ma ESD ani EN 61340 (warianty ESD mają „norma: ESD według EN IEC 61340-4-3:2018”), więc w pomiarze jest zakazana. Wzorcowe: ARSO 701 616560 S1 P ESD (id 9490) i Canis 2136-025-808-00 (id 11966). AROSIO 730 Air 616560 S1 P ESD (id 9494) to „półbuty bezpieczne”, nie sandały – zakazana jak siostrzana 618080. ARMEN 9007 1010 S1 P ESD i ARSO 701 618080 S1 P ESD czekają na decyzję, czy FO i zabudowana pięta wynikają z klasy S1 wydania 2011 (brak ich na karcie).",
         "eval_extra_forbidden_skus": [
             "AROSIO 730 Air 618080 S1 P ESD",
-            "ARDESIO 731 Air 618080 S1 P ESD"
+            "ARDESIO 731 Air 618080 S1 P ESD",
+            "AROSIO 730 Air 616560 S1 P ESD",
+            "ARMEN 9007 6660 S1 P"
         ],
         "prod_search": {
             "needed": "sandały ochronne",
@@ -422,7 +430,10 @@
             "9310+",
             "9312+"
         ],
-        "eval_extra_expected_skus": [],
+        "eval_catalog_expected_skus": [
+            "7100010431"
+        ],
+        "eval_catalog_note": "25.09.2026: karty 1406213 nie ma w katalogu produkcji. Ten sam wyrób to karta 3M 7100010431 (id 48253): „Numer katalogowy 3M: 1406213”, EAN 04046719420872 jak na karcie migawki. Na karcie: szczelne („Typ gogli: Uszczelniane”, „Odpowietrzanie: Brak”), „Przyciemnienie 5,0 IR”, „Materiał soczewki: Poliwęglan”, powłoka „Odporność na zarysowanie i zaparowanie”, duży profil na okulary korekcyjne, dopasowanie do półmasek, spawanie gazowe i cięcie metalu. 120 m/s tylko jako odczyt litery B z „5 3M 1 B K N” (wniosek). Brak na karcie: 180°, pasek nylonowy, uszczelka z elastomeru, EN 166 i CE wprost. Żadna inna karta katalogu nie spełnia warunków (sonda S12). eval_expect_empty bez zmian do decyzji o oprawce (D3).",
         "eval_expect_empty": true,
         "prod_search": {
             "needed": "gogle ochronne spawalnicze",

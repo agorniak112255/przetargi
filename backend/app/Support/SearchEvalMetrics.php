@@ -90,10 +90,15 @@ final class SearchEvalMetrics
     /**
      * nDCG@k przy relewancji 0/1 — kara za to, że trafienie leży nisko.
      *
+     * $idealCount: z ilu kart liczyć idealny DCG, gdy $expected to wzorcowe ∪ równoważniki — z samych wzorcowych.
+     * Dopisanie równoważnika do golden setu nie może obniżyć nDCG przy tym samym wyniku (recenzja 25.09.2026:
+     * 3 wzorcowe na miejscach 1–3 i 16 równoważników poza top‑10 dawały 0,469 zamiast 1,0); równoważnik w wyniku
+     * zastępuje brakującą wzorcową, a trafień liczy się najwyżej tyle, ile miejsc ma idealny ranking.
+     *
      * @param  list<string>  $expected
      * @param  list<string>  $ranked
      */
-    public static function ndcgAt(array $expected, array $ranked, int $k): float
+    public static function ndcgAt(array $expected, array $ranked, int $k, ?int $idealCount = null): float
     {
         $k = max(1, $k);
         $expected = self::normalizeAll($expected);
@@ -102,15 +107,21 @@ final class SearchEvalMetrics
         }
         $set = array_flip($expected);
 
+        $slots = min($k, max(1, $idealCount ?? count($expected)));
         $dcg = 0.0;
+        $hits = 0;
         foreach (array_slice(self::normalizeAll($ranked), 0, $k) as $i => $sku) {
-            if (isset($set[$sku])) {
+            // Liczy się tyle pierwszych trafień, ile miejsc ma idealny ranking: równoważnik zajmuje miejsce brakującej
+            // wzorcowej, a nadmiarowe trafienia niczego nie dodają — inaczej karta obca na 1. miejscu i dość równoważników
+            // niżej dawały 1,0 (recenzja 25.09.2026).
+            if (isset($set[$sku]) && $hits < $slots) {
                 $dcg += 1.0 / log(($i + 2), 2);
+                $hits++;
             }
         }
 
         $ideal = 0.0;
-        foreach (range(0, min($k, count($expected)) - 1) as $i) {
+        foreach (range(0, $slots - 1) as $i) {
             $ideal += 1.0 / log(($i + 2), 2);
         }
 
@@ -145,10 +156,74 @@ final class SearchEvalMetrics
      */
     public static function violations(array $forbidden, array $ranked, int $k): array
     {
+        return self::hitsAt($forbidden, $ranked, $k);
+    }
+
+    /**
+     * SKU z listy, które stoją w top‑k wyniku (w kolejności listy, po normalizacji). Dla zakazanych
+     * to `violations`, dla równoważników (`acceptable_skus`) — trafienia innego producenta/modelu.
+     *
+     * @param  list<string>  $skus
+     * @param  list<string>  $ranked
+     * @return list<string>
+     */
+    public static function hitsAt(array $skus, array $ranked, int $k): array
+    {
         $set = array_flip(self::normalizeAll(array_slice($ranked, 0, max(1, $k))));
         $out = [];
-        foreach (self::normalizeAll($forbidden) as $sku) {
+        foreach (self::normalizeAll($skus) as $sku) {
             if (isset($set[$sku])) {
+                $out[] = $sku;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Zakazane SKU z top‑k, które są tylko propozycją pod właściwą kartą: ocena poniżej progu zapisu,
+     * a wyżej w wyniku stoi karta wzorcowa albo akceptowalna z oceną ≥ progu. Decyzja z 25.09.2026:
+     * ARMEN 6660 (inny kolor) z 60% pod 1010 z 99% to ostrzeżenie, nie błąd blokujący. Wiersz bez oceny,
+     * zakazany z oceną ≥ progu albo bez właściwej karty nad sobą zostaje blokujący — taki automat przetargu
+     * mógłby wybrać. SKU powtórzone w top‑k jest pokazane tylko wtedy, gdy każde wystąpienie spełnia warunek.
+     *
+     * @param  list<string>  $forbidden
+     * @param  list<string>  $relevant  wzorcowe ∪ akceptowalne
+     * @param  list<array{sku: string, percent: int|null, source?: string|null}>  $rows  wiersze wyniku w kolejności wyniku
+     * @return list<string> podzbiór `violations()` w jego kolejności
+     */
+    public static function forbiddenShown(array $forbidden, array $relevant, array $rows, int $k, int $minScore): array
+    {
+        $forbidden = self::normalizeAll($forbidden);
+        $forbiddenSet = array_flip($forbidden);
+        $relevantSet = array_flip(self::normalizeAll($relevant));
+        $covered = false;
+        $shown = [];
+        $blocking = [];
+        foreach (array_slice($rows, 0, max(1, $k)) as $row) {
+            $sku = self::normalize((string) ($row['sku'] ?? ''));
+            $percent = $row['percent'] ?? null;
+            // Zakaz wygrywa, jak w violations(): zakazana karta nie osłania innej zakazanej.
+            if (isset($forbiddenSet[$sku])) {
+                if ($covered && is_int($percent) && $percent < $minScore) {
+                    $shown[$sku] = true;
+                } else {
+                    $blocking[$sku] = true;
+                }
+
+                continue;
+            }
+            // Wiersz listy zapasowej (catalog) albo skrótu reguły (rule) nie osłania: jego procent to kolejność z puli,
+            // nie ocena karty, i automat przetargu nie zapisze go bez zgody na wiersze katalogowe.
+            $unrated = in_array($row['source'] ?? null, ['catalog', 'rule'], true);
+            if (isset($relevantSet[$sku]) && is_int($percent) && $percent >= $minScore && ! $unrated) {
+                $covered = true;
+            }
+        }
+
+        $out = [];
+        foreach ($forbidden as $sku) {
+            if (isset($shown[$sku]) && ! isset($blocking[$sku])) {
                 $out[] = $sku;
             }
         }
