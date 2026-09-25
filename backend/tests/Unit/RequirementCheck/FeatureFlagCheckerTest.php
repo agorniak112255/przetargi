@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Unit\RequirementCheck;
 
+use App\Models\Product;
+use App\Support\PpeAssortment;
 use App\Support\RequirementCheck\CardSource;
 use App\Support\RequirementCheck\CardSources;
 use App\Support\RequirementCheck\CheckRow;
@@ -14,6 +16,11 @@ use Tests\TestCase;
 
 final class FeatureFlagCheckerTest extends TestCase
 {
+    /** Opis karty 6003805 z produkcji (sonda S01, 25.09.2026) — bez słowa o antystatyce. */
+    private const PHYNOMIC_AIRLITE_DESCRIPTION = 'uvex phynomic airLite - to najlżejsze rękawice ochronne w swojej klasie gwarantujące '
+        .'wysoki komfort noszenia, bardzo dobrą manualność, lekkość oraz niezwykłą oddychalność. Są idealne do precyzyjnej '
+        .'pracy, wymagającej również obsługi ekranów dotykowych.';
+
     public function test_poz_1_karta_11202000_cechy_wprost_ok_a_bezpieczny_dla_zywnosci_do_sprawdzenia(): void
     {
         $rows = $this->rows(Opisowy15Fixture::requirement(1), CardSources::fromProduct(Opisowy15Fixture::product('11202000')));
@@ -101,18 +108,240 @@ final class FeatureFlagCheckerTest extends TestCase
         $this->assertSame('missing', $this->statusFor('seamless', 'Kaptur bezszwowy', ['Szwy zgrzewane taśmą']));
     }
 
-    public function test_esd_nie_jest_antystatycznoscia_i_odwrotnie(): void
+    /**
+     * Decyzja właściciela z 25.09.2026 (C, D7a): ESD i normy antystatyki są dowodem antystatyki, nie osobną cechą —
+     * jeden wiersz „Antystatyczny”, bez wiersza „ESD” i bez notki „ESD to nie to samo co antystatyczny”.
+     */
+    public function test_esd_to_dowod_antystatyki_a_nie_osobna_cecha(): void
     {
         $rows = $this->rows('Obuwie antystatyczne S3', [new CardSource(CardSource::NAME, 'Półbuty S1 ESD')]);
-        $this->assertSame('unclear', $rows['antistatic']->status->value);
-        $this->assertSame('ESD to nie to samo co antystatyczny — sprawdź', $rows['antistatic']->note);
+        $this->assertSame('ok', $rows['antistatic']->status->value);
+        $this->assertSame('ESD', $rows['antistatic']->card[0]['text']);
+        $this->assertNull($rows['antistatic']->note);
         $this->assertArrayNotHasKey('esd', $rows);
 
+        // EN 1149 to norma odzieży — na bucie nie jest dowodem ESD, którego żąda wymaganie
         $rows = $this->rows('Obuwie ESD zgodne z EN 61340-5-1', [new CardSource(CardSource::NORMS, 'EN 1149-5')]);
-        $this->assertSame('unclear', $rows['esd']->status->value);
+        $this->assertArrayNotHasKey('esd', $rows);
+        $this->assertSame('unclear', $rows['antistatic']->status->value);
+        $this->assertSame('Karta podaje EN 1149, a to nie jest dowód ESD dla tego rodzaju wyrobu — propozycja do sprawdzenia', $rows['antistatic']->note);
 
         // przy wprost antystatycznym ESD obok nie obniża wyniku
         $this->assertSame('ok', $this->statusFor('antistatic', 'Obuwie antystatyczne', ['Obuwie antystatyczne, ESD']));
+    }
+
+    /** Zgłoszenie z recenzji: karta 6003805 z produkcji — ESD tylko w nazwie, opis bez słowa o antystatyce. */
+    public function test_rekawice_antystatyczne_i_karta_6003805_z_esd_w_nazwie_spelniaja(): void
+    {
+        $card = (new Product)->forceFill([
+            'sku' => '6003805',
+            'name' => 'Rękawice Phynomic airLite A ESD',
+            'description' => self::PHYNOMIC_AIRLITE_DESCRIPTION,
+        ]);
+
+        $rows = $this->rows('Rękawice ochronne antystatyczne', CardSources::fromProduct($card));
+
+        $this->assertSame('ok', $rows['antistatic']->status->value);
+        $this->assertSame(
+            ['text' => 'ESD', 'source' => 'name', 'verdict' => 'ok'],
+            array_intersect_key($rows['antistatic']->card[0], array_flip(['text', 'source', 'verdict'])),
+        );
+        $this->assertNull($rows['antistatic']->note);
+        // ta sama karta przy wymaganiu, które samo żąda ESD albo normy rękawic
+        $this->assertSame('ok', $this->rows('Rękawice antyelektrostatyczne wg EN 16350', CardSources::fromProduct($card))['antistatic']->status->value);
+    }
+
+    /** Rękawice, odzież i pozostałe: „ESD”, EN 1149 albo EN 16350; EN 61340 decyzja wymienia tylko przy obuwiu. */
+    public function test_dowod_antystatyki_rekawic_i_odziezy(): void
+    {
+        $gloves = 'Rękawice montażowe powlekane z funkcją ESD';
+        $this->assertSame('ok', $this->statusFor('antistatic', $gloves, ['Rękawice Phynomic airLite A ESD']));
+        $this->assertSame('ok', $this->statusFor('antistatic', $gloves, ['EN 388:2016, EN 1149-5:2018']));
+        $this->assertSame('ok', $this->statusFor('antistatic', $gloves, ['EN 388:2016 4131X, EN 16350:2014']));
+        $this->assertSame('ok', $this->statusFor('antistatic', $gloves, ['Rękawice powlekane nitrylem, EN ISO 16350']));
+        $rows = $this->rows($gloves, [new CardSource(CardSource::NORMS, 'IEC 61340-5-1')]);
+        $this->assertSame('unclear', $rows['antistatic']->status->value);
+        $this->assertSame('IEC 61340-5-1', $rows['antistatic']->card[0]['text']);
+        $this->assertSame('Karta podaje EN 61340, a to nie jest dowód ESD dla tego rodzaju wyrobu — propozycja do sprawdzenia', $rows['antistatic']->note);
+
+        $coverall = 'Kombinezon ochronny typ 5/6, EN 1149-5';
+        $this->assertSame('ok', $this->statusFor('antistatic', $coverall, ['EN 14605, EN 1149-5']));
+        $this->assertSame('unclear', $this->statusFor('antistatic', $coverall, ['Kombinezon antyelektrostatyczny typ 5/6']));
+    }
+
+    /** Obuwie: „ESD” albo EN 61340; EN 1149 i EN 16350 (normy odzieży i rękawic) to przy nim propozycja do sprawdzenia. */
+    public function test_dowod_antystatyki_obuwia(): void
+    {
+        $sandals = 'Sandały ochronne S1 P wg EN ISO 20345, właściwości antyelektrostatyczne (ESD)';
+        $this->assertSame('ok', $this->statusFor('antistatic', $sandals, ['ARSO 701 616560 S1 P ESD']));
+        $this->assertSame('ok', $this->statusFor('antistatic', $sandals, ['Spełnia normę EN ISO 20347:2012 oraz wymagania EN IEC 61340-4-3:2018.']));
+        // sklejony zapis normy też jest normą
+        $this->assertSame('ok', $this->statusFor('antistatic', $sandals, ['Sandały S1 P, EN61340-4-3']));
+        $this->assertSame('unclear', $this->statusFor('antistatic', $sandals, ['Trzewiki S3 EN 1149-5']));
+        $this->assertSame('unclear', $this->statusFor('antistatic', $sandals, ['Półbuty S3, EN 16350:2014']));
+
+        // karta poz. 3 z produkcji: ESD w specyfikacji, cechach i opisie
+        $rows = $this->rows(Opisowy15Fixture::requirement(3), CardSources::fromProduct(Opisowy15Fixture::product('ARMEN 9007 6660 S1 P')));
+        $this->assertSame('ok', $rows['antistatic']->status->value);
+        $this->assertArrayNotHasKey('esd', $rows);
+    }
+
+    /**
+     * Gdy wymaganie żąda ESD albo normy, samo słowo na karcie to propozycja do sprawdzenia (jak limit oceny w
+     * wyszukiwarce), a obok dowodu wprost słowo nie obniża wyniku i nie jest pokazywane jako „do sprawdzenia”.
+     */
+    public function test_samo_slowo_przy_zadaniu_esd_albo_normy_to_propozycja(): void
+    {
+        $rows = $this->rows('Rękawice antyelektrostatyczne wg EN 16350', [new CardSource(CardSource::FEATURES, 'Rękawice antystatyczne powlekane poliuretanem')]);
+        $this->assertSame('unclear', $rows['antistatic']->status->value);
+        $this->assertSame(['antystatyczne'], array_column($rows['antistatic']->card, 'text'));
+        $this->assertSame('Karta podaje antystatykę tylko słownie, bez oznaczenia ESD ani normy — propozycja do sprawdzenia', $rows['antistatic']->note);
+
+        $rows = $this->rows('Rękawice antyelektrostatyczne wg EN 16350', [
+            new CardSource(CardSource::FEATURES, 'Rękawice antystatyczne powlekane poliuretanem'),
+            new CardSource(CardSource::NORMS, 'EN 388:2016, EN 16350:2014'),
+        ]);
+        $this->assertSame('ok', $rows['antistatic']->status->value);
+        $this->assertSame(['EN 16350'], array_column($rows['antistatic']->card, 'text'));
+        $this->assertNull($rows['antistatic']->note);
+
+        // rękaw HyFlex 11-202 (samo „antistatic”) przy sandałach z poz. 3, które żądają ESD
+        $rows = $this->rows(Opisowy15Fixture::requirement(3), CardSources::fromProduct(Opisowy15Fixture::product('11202000')));
+        $this->assertSame('unclear', $rows['antistatic']->status->value);
+        $this->assertSame('Karta podaje antystatykę tylko słownie, bez oznaczenia ESD ani normy — propozycja do sprawdzenia', $rows['antistatic']->note);
+    }
+
+    /** Wymaganie z samym słowem nie żąda normy — to samo słowo na karcie jest trafieniem (rękawice z zapytania 374). */
+    public function test_samo_slowo_w_wymaganiu_i_na_karcie_spelnia(): void
+    {
+        $requirement = 'Rękawice chemoodporne, antyelektrostatyczne z normą EN ISO 374-1, rozmiar 10';
+        $this->assertSame('ok', $this->statusFor('antistatic', $requirement, ['Rękawice antystatyczne']));
+        $this->assertSame('ok', $this->statusFor('antistatic', $requirement, ['Anti-static PU coated gloves']));
+    }
+
+    /** Wymaganie wymienia normę, którą karta ma — spełnia je wprost, niezależnie od reguły rodzaju wyrobu. */
+    public function test_norma_wymieniona_w_wymaganiu_spelnia_je_wprost(): void
+    {
+        $requirement = 'Trzewiki S3 antyelektrostatyczne EN 1149-5';
+        $this->assertSame('ok', $this->statusFor('antistatic', $requirement, ['EN ISO 20345 S3, EN 1149-5']));
+        $this->assertSame('unclear', $this->statusFor('antistatic', $requirement, ['Podeszwa antystatyczna']));
+    }
+
+    /**
+     * „ESD: nie” przeczy dowodowi, nie antystatyczności: przy wymaganiu z samym słowem nie psuje „Antystatyczne: tak”
+     * (i nie jest sprzecznością pól karty), a przy żądaniu ESD nie spełnia. Zaprzeczone ESD w wymaganiu go nie żąda.
+     */
+    public function test_zaprzeczenie_esd_liczy_sie_tylko_gdy_wymaganie_zada_esd(): void
+    {
+        $card = [new CardSource(CardSource::FEATURES, 'Antystatyczne: tak'), new CardSource(CardSource::FEATURES, 'ESD: nie')];
+
+        $rows = $this->rows('Rękawice ochronne antystatyczne', $card);
+        $this->assertSame('ok', $rows['antistatic']->status->value);
+        $this->assertSame(['Antystatyczne'], array_column($rows['antistatic']->card, 'text'));
+
+        $rows = $this->rows('Rękawice ochronne antystatyczne', [new CardSource(CardSource::FEATURES, 'ESD: nie')]);
+        $this->assertSame('unclear', $rows['antistatic']->status->value);
+        $this->assertSame('Wymaganie żąda samej antystatyczności, a karta mówi tylko o ESD albo normie — sprawdź', $rows['antistatic']->note);
+
+        $rows = $this->rows('Obuwie ESD', $card);
+        $this->assertSame('fail', $rows['antistatic']->status->value);
+        $this->assertSame(['unclear', 'fail'], array_column($rows['antistatic']->card, 'verdict'));
+
+        // Karta pokazuje antystatykę tylko normą i zaprzecza innej — sprzeczność do sprawdzenia, nie ✓ (szorty ARDON
+        // REFIWAN 29058 z produkcji); przy żądaniu ESD od odzieży zaprzeczona EN 1149-5 nie spełnia.
+        $shorts = [
+            new CardSource(CardSource::DESCRIPTION, 'Szorty do stref EPA zgodne z EN 61340-5-1. Szorty nie spełniają wymagań norm EN 1149–5.'),
+        ];
+        $rows = $this->rows('Odzież ochronna antystatyczna', $shorts);
+        $this->assertSame('unclear', $rows['antistatic']->status->value);
+        $this->assertSame(['ok', 'fail'], array_column($rows['antistatic']->card, 'verdict'));
+        $this->assertSame('fail', $this->rows('Odzież ochronna ESD', $shorts)['antistatic']->status->value);
+        // mata ESD, której opis wspomina inną wersję bez ESD
+        $this->assertSame('unclear', $this->statusFor('antistatic', 'Mata antystatyczna', [
+            'Ochrona elektrostatyczna (ESD) zgodnie z IEC 61340-4-1',
+            'Dostępna jest również wersja bez właściwości ESD.',
+        ]));
+
+        // tabela SIWZ „ESD: nie” nie żąda ESD, więc samo słowo na karcie wystarcza
+        $this->assertSame('ok', $this->statusFor('antistatic', 'Obuwie antystatyczne S3, ESD: nie', ['Obuwie antystatyczne']));
+        $this->assertSame('ok', $this->statusFor('antistatic', 'Obuwie antystatyczne S3, nie musi spełniać EN 61340-5-1', ['Obuwie antystatyczne']));
+    }
+
+    /**
+     * Przy żądaniu ESD wątpliwość co do samego słowa (wątpliwy szyk, „nie dotyczy”) nie przeważa nad jawnym ESD —
+     * taśma 3M z katalogu: „bez typowych wad taśm antystatycznych” obok ESD. Wprost zaprzeczone słowo dalej przeczy.
+     */
+    public function test_watpliwe_slowo_nie_przewaza_nad_jawnym_esd(): void
+    {
+        $card = [
+            new CardSource(CardSource::NAME, 'Taśma poliimidowa o właściwościach antystatycznych'),
+            new CardSource(CardSource::DESCRIPTION, 'Taśma chroni elementy wrażliwe na ESD, bez typowych wad taśm antystatycznych.'),
+        ];
+        $rows = $this->rows('Taśma ESD', $card);
+        $this->assertSame('ok', $rows['antistatic']->status->value);
+        $this->assertSame(['ESD'], array_column($rows['antistatic']->card, 'text'));
+        // przy wymaganiu z samym słowem wątpliwość dotyczy tego, czego żąda wymaganie — jak dotąd „do sprawdzenia”
+        $this->assertSame('unclear', $this->rows('Taśma antystatyczna', $card)['antistatic']->status->value);
+
+        $rows = $this->rows('Obuwie ESD', [new CardSource(CardSource::FEATURES, 'Antystatyczne: nie dotyczy')]);
+        $this->assertSame('unclear', $rows['antistatic']->status->value);
+        $this->assertNull($rows['antistatic']->note);
+
+        $rows = $this->rows('Obuwie ESD', [new CardSource(CardSource::NAME, 'Półbuty S1 ESD'), new CardSource(CardSource::FEATURES, 'Nie jest antystatyczne')]);
+        $this->assertSame('unclear', $rows['antistatic']->status->value);
+        $this->assertSame(['ok', 'fail'], array_column($rows['antistatic']->card, 'verdict'));
+    }
+
+    /** Liczba z cyfrą obok to kod wyrobu, nie norma — w wymaganiu i na karcie, jak w bramce dopasowania. */
+    public function test_kod_wyrobu_to_nie_norma_antystatyki(): void
+    {
+        $this->assertSame('missing', $this->statusFor('antistatic', 'Rękawice ochronne antystatyczne', ['Rękawice powlekane 11495']));
+        $this->assertSame('missing', $this->statusFor('antistatic', 'Rękawice ochronne antystatyczne', ['Rękawice nitrylowe 16350 szt.']));
+        $this->assertArrayNotHasKey('antistatic', $this->rows('Linka bezpieczeństwa z amortyzatorem DBI-SALA 6134006', [new CardSource(CardSource::NAME, 'Linka DBI-SALA 6134006')]));
+        $this->assertArrayNotHasKey('antistatic', $this->rows('Rękawice powlekane 11495, rozmiar 9', [new CardSource(CardSource::NAME, 'Rękawice powlekane 11495')]));
+    }
+
+    /**
+     * Okno pokazuje antystatykę na karcie dokładnie wtedy, gdy widzi ją bramka dopasowania
+     * (PpeAssortment::productShowsAntistatic) — te same zapisy norm, te same kody wyrobów odrzucone.
+     */
+    #[DataProvider('gateTexts')]
+    public function test_antystatyka_na_karcie_jak_w_bramce_dopasowania(string $text): void
+    {
+        $this->assertSame(
+            (new PpeAssortment)->productShowsAntistatic($text),
+            $this->statusFor('antistatic', 'Rękawice ochronne antystatyczne', [$text]) === 'ok',
+        );
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function gateTexts(): array
+    {
+        $texts = [
+            'ARSO 701 616560 S1 P ESD',
+            'EN IEC 61340-4-3:2018',
+            'Rękawice, IEC 61340-5-1',
+            'Sandały S1 P, EN61340-4-3',
+            'Rękawice, IEC61340-5-1',
+            'antyelektrostatyczna podeszwa',
+            'Anti-static PU coated gloves',
+            'Trzewiki S3 EN 1149-5',
+            'Rękawice powlekane PU, EN1149-5',
+            'Rękawice powlekane PU, 1149-5',
+            'PN-EN 1149-5:2018',
+            'Rękawice EN 16350:2014',
+            'Rękawice powlekane nitrylem, EN ISO 16350',
+            'Rękawice montażowe powlekane poliuretanem, EN 388 4131X',
+            'Rękawice Phynomic lite',
+            'Rękawice powlekane 11495',
+            'Rękawice kod 11490',
+            'Rękawice nitrylowe 16350 szt.',
+            'Linka DBI-SALA 6134006',
+        ];
+
+        return array_combine($texts, array_map(static fn (string $text): array => [$text], $texts));
     }
 
     public function test_bezpieczny_dla_zywnosci_to_nie_deklaracja_kontaktu_z_zywnoscia(): void
@@ -160,7 +389,7 @@ final class FeatureFlagCheckerTest extends TestCase
         $this->assertSame('fail', $this->statusFor('food_contact', 'Rękawice do kontaktu z żywnością', ['Nie są odpowiednie do kontaktu z żywnością']));
         $this->assertSame('fail', $this->statusFor('food_contact', 'Rękawice do kontaktu z żywnością', ['Unsuitable for food contact']));
         $this->assertSame('fail', $this->statusFor('hook_and_loop', 'Buty z zapięciem na rzep', ['Zapięcie na sznurówki, bez rzepów']));
-        $this->assertSame('fail', $this->statusFor('esd', 'Obuwie ESD', ['Nie jest to obuwie ESD.']));
+        $this->assertSame('fail', $this->statusFor('antistatic', 'Obuwie ESD', ['Nie jest to obuwie ESD.']));
         // zaprzeczenie w wątpliwym szyku — nie ok
         $this->assertSame('unclear', $this->statusFor('antistatic', 'Obuwie antystatyczne', ['Obuwie nie przemakające antystatyczne']));
     }
@@ -244,7 +473,9 @@ final class FeatureFlagCheckerTest extends TestCase
             'nie są odpowiednie' => ['food_contact', 'Rękawice do kontaktu z żywnością', 'Nie są odpowiednie do kontaktu z żywnością'],
             'unsuitable' => ['food_contact', 'Rękawice do kontaktu z żywnością', 'Unsuitable for food contact'],
             'bez rzepów' => ['hook_and_loop', 'Buty z zapięciem na rzep', 'Zapięcie na sznurówki, bez rzepów'],
-            'nie jest to obuwie esd' => ['esd', 'Obuwie ESD', 'Nie jest to obuwie ESD.'],
+            'nie jest to obuwie esd' => ['antistatic', 'Obuwie ESD', 'Nie jest to obuwie ESD.'],
+            'esd nie przy żądaniu esd' => ['antistatic', 'Obuwie ESD', "Antystatyczne: tak\nESD: nie"],
+            'samo słowo przy żądaniu normy' => ['antistatic', 'Rękawice antyelektrostatyczne wg EN 16350', 'Rękawice antystatyczne'],
             'wymaganie nie musi być' => ['antistatic', 'Obuwie nie musi być antystatyczne', 'Obuwie antystatyczne'],
             'wymaganie nie wymaga się' => ['antistatic', 'Nie wymaga się właściwości antystatycznych', 'Obuwie antystatyczne'],
         ];
