@@ -1784,6 +1784,17 @@ final class PpeAssortment
      * porównują z innymi modelami, więc ich nie czytamy. Wynik liczy się dopiero, gdy nazwa
      * karty to goły kod bez typu (W3‑10).
      */
+    /**
+     * Typ obuwia karty tak, jak czyta go bramka asortymentu: z nazwy i numeru, a gdy nazwa to goły kod — z pierwszego
+     * zdania opisu. Dopisek przy wierszu zapasowym czytał sam kod i przy „ARSO 701 616560 S1 P ESD” (opis: „Sandał
+     * bezpieczny…”) pisał „karta nie potwierdza, że to sandał” (golden opisowy15-03, 9507 i 9490).
+     */
+    public function footwearCardType(Product $product): ?string
+    {
+        return $this->footwearType($this->normalize((string) $product->name.' '.(string) $product->sku))
+            ?? $this->productDescriptionFootwearType($product);
+    }
+
     private function productDescriptionFootwearType(Product $product): ?string
     {
         if (! $this->descriptionNamesProduct($product)) {

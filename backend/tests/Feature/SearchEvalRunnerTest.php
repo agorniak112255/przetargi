@@ -127,7 +127,13 @@ final class SearchEvalRunnerTest extends TestCase
                 $case['forbidden_skus'],
             );
             $this->assertSame(trim((string) $line['source_facts']), $case['note']);
-            $this->assertSame(($line['eval_expect_empty'] ?? false) === true, $case['expect_empty'], "poz. {$line['line_no']}: tender_expect_empty w golden.json");
+            // eval_catalog_expect_empty: werdykt dla karty z katalogu produkcji, gdy różni się od migawki (poz. 9, decyzja
+            // D3 z 25.09.2026: 7100010431 spełnia 120 m/s, karta migawki 1406213 z oprawką FT — nie).
+            $this->assertSame(
+                ($line['eval_catalog_expect_empty'] ?? $line['eval_expect_empty'] ?? false) === true,
+                $case['expect_empty'],
+                "poz. {$line['line_no']}: tender_expect_empty w golden.json",
+            );
         }
     }
 

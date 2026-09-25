@@ -2758,7 +2758,7 @@ final class ProductAiSearchService
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON
                 .($slang !== null ? ' (żargon SIWZ → '.$slang['needed'].')' : '')
-                .$this->unratedTypeGapNote($wantType, $cardType)
+                .$this->unratedTypeGapNote($wantType, $this->noteCardType($requirement, $product, $cardType))
                 .$this->unratedModelGapNote($query, $product);
             $out[] = $row;
         }
@@ -2838,6 +2838,19 @@ final class ProductAiSearchService
      * półbuty bez słowa o tym, że to inny wyrób. Wiersza nie usuwamy (ma być propozycja),
      * ale różnicę nazywamy wprost.
      */
+    /**
+     * Typ karty do dopisku przy wierszu zapasowym. Przy obuwiu tak jak bramka asortymentu (z nazwy, a przy gołym kodzie
+     * z pierwszego zdania opisu); procent i dopuszczenie wiersza liczą się dalej z samej nazwy.
+     */
+    private function noteCardType(string $requirement, Product $product, ?string $nameType): ?string
+    {
+        if ($nameType !== null || $this->assortment->family($requirement) !== PpeAssortment::FAMILY_FOOTWEAR) {
+            return $nameType;
+        }
+
+        return $this->assortment->footwearCardType($product);
+    }
+
     private function unratedTypeGapNote(?string $wantType, ?string $cardType): string
     {
         if ($wantType === null || $wantType === $cardType) {
@@ -2993,7 +3006,7 @@ final class ProductAiSearchService
             // więc procent zostaje poniżej progu zapisu przetargu, jak w rowsFromGenericCatalog.
             $row['ai_match_percent'] = min(50, max(40, 30 + $this->requirementCatalogScore($query, $product)));
             $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON.' ('.rtrim($reason, '.').')'
-                .$this->unratedTypeGapNote($wantType, $this->assortment->articleType($product->name.' '.$product->sku))
+                .$this->unratedTypeGapNote($wantType, $this->noteCardType($query, $product, $this->assortment->articleType($product->name.' '.$product->sku)))
                 .$this->unratedModelGapNote($query, $product)
                 .$this->otherManufacturerNote($product, $producer);
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
