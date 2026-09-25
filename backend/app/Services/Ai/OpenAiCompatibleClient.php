@@ -292,6 +292,16 @@ class OpenAiCompatibleClient
                         'head' => mb_substr($content, 0, 300),
                         'tail' => mb_strlen($content) > 300 ? mb_substr($content, -200) : null,
                     ]);
+                } elseif (($row['finish_reason'] ?? null) === 'length') {
+                    // Ucięty JSON parser składa z tego, co przyszło — odpowiedź jest poprawna, ale niepełna
+                    // (ocena części kart). Bez wpisu wyglądało to jak model, który resztę kart odrzucił.
+                    Log::warning('AI chatJsonMany: odpowiedź ucięta na limicie tokenów (finish_reason=length)', [
+                        'task' => $task?->value,
+                        'model' => $row['model'] ?? null,
+                        'max_tokens' => $extra['max_tokens'] ?? null,
+                        'matches' => is_array($json['matches'] ?? null) ? count($json['matches']) : null,
+                        'length' => mb_strlen($content),
+                    ]);
                 }
                 $parsed[] = $json ?? [];
                 $providers[] = is_string($row['provider'] ?? null) ? $row['provider'] : null;
@@ -1252,6 +1262,15 @@ class OpenAiCompatibleClient
             );
             $fallback = $fallback || (bool) ($result['fallback'] ?? false);
             $parsed = $this->tryParseJson($result['content']);
+        }
+        if ($parsed !== null && ($result['finish_reason'] ?? null) === 'length') {
+            Log::warning('AI chatJson: odpowiedź ucięta na limicie tokenów (finish_reason=length)', [
+                'task' => $task?->value,
+                'model' => $result['model'] ?? null,
+                'max_tokens' => $extra['max_tokens'] ?? null,
+                'matches' => is_array($parsed['matches'] ?? null) ? count($parsed['matches']) : null,
+                'length' => mb_strlen($result['content']),
+            ]);
         }
 
         if ($parsed !== null) {

@@ -150,7 +150,13 @@ final class ProductAiSearchService
 
     public const WEB_LIMIT = 8;
 
-    private const RANK_MAX_TOKENS_LONG = 2500;
+    /**
+     * Statystyki AI z 25.09.2026 (produkcja, przetarg 15 pozycji): 13 z 60 ocen kończyło się na dawnym limicie 2500
+     * tokenów. Ucięta odpowiedź przechodzi jako częściowa, więc model oceniał 1–21 z 24 kart, a reszta szła bez oceny
+     * (rękawice antyprzecięciowe: 1 ocena, 73 wiersze zapasowe). 24 oceny z uzasadnieniem to ok. 2200 tokenów,
+     * a model czasem pisze jeszcze wstęp przed JSON-em — limit z zapasem, uzasadnienie skrócone w prompcie.
+     */
+    private const RANK_MAX_TOKENS_LONG = 4000;
 
     private const RANK_MAX_TOKENS_SHORT = 800;
 
@@ -189,7 +195,7 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-25-dowod-esd';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-25-uzasadnienie-20-slow';
 
     /**
      * Wersja instrukcji kroku „zrozum wymaganie”. Zrozumienie zapisujemy raz na treść wymagania i tę wersję
@@ -6384,7 +6390,7 @@ final class ProductAiSearchService
                 .implode("\n- ", $constraints);
         $maxMatches = max(1, min($limit, self::MAX_MATCHES));
         $json = json_encode($cards, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $reasonHint = $short ? 'reason: max 8 słów. ' : '';
+        $reasonHint = $short ? 'reason: max 8 słów. ' : 'reason: max 20 słów. ';
 
         return [
             [
