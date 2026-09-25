@@ -30,6 +30,12 @@ class OpenAiCompatibleClient
      */
     private const RATE_LIMIT_RETRIES = 2;
 
+    /** Najkrótszy limit pojedynczego zapytania (post) — i puli wyszukiwarki, która czeka na model tak samo długo. */
+    private const REQUEST_TIMEOUT_FLOOR = 240;
+
+    /** Najkrótszy limit zapytania w puli pozostałych zadań (np. filtr stron przy opisach). */
+    private const POOL_TIMEOUT_FLOOR = 60;
+
     /** Domyślny budżet odpowiedzi. vLLM odrzuca prompt + max_tokens > --max-model-len. */
     private const DEFAULT_MAX_TOKENS = 6000;
 
@@ -74,7 +80,7 @@ class OpenAiCompatibleClient
     ): array {
         return $this->withProfileFallback(
             $task,
-            fn (array $profile): array => $this->chatWithProfile($this->withProviderPinPolicy($profile, $task), $messages, $temperature, $jsonMode, $extra)
+            fn (array $profile): array => $this->chatWithProfile($this->withTaskPolicy($profile, $task), $messages, $temperature, $jsonMode, $extra)
         );
     }
 
@@ -177,7 +183,7 @@ class OpenAiCompatibleClient
             }
         }
 
-        $profile = $this->withProviderPinPolicy($this->settings->profileForTask($task), $task);
+        $profile = $this->withTaskPolicy($this->settings->profileForTask($task), $task);
         try {
             $unreachable = [];
             $rateLimited = [];
@@ -204,7 +210,7 @@ class OpenAiCompatibleClient
 
             return $this->runOnMainOrRethrow(
                 $e,
-                fn (array $main): array => $this->chatManyWithProfile($this->withProviderPinPolicy($main, $task), $messageSets, $jsonMode, $extra, $onAnswered),
+                fn (array $main): array => $this->chatManyWithProfile($this->withTaskPolicy($main, $task), $messageSets, $jsonMode, $extra, $onAnswered),
                 $task,
                 $profile['label']
             );
@@ -443,7 +449,7 @@ class OpenAiCompatibleClient
         app(AiServedProviderTally::class)->profileFallback();
 
         try {
-            $mainRows = $this->chatManyWithProfile($this->withProviderPinPolicy($main + ['served_as_fallback' => true], $task), $retrySets, $jsonMode, $extra);
+            $mainRows = $this->chatManyWithProfile($this->withTaskPolicy($main + ['served_as_fallback' => true], $task), $retrySets, $jsonMode, $extra);
         } catch (RuntimeException $e) {
             Log::warning('Profil AI nie odpowiada — konfiguracja główna też zawiodła, zostawiam błąd profilu', [
                 'task' => $task?->value,
@@ -518,13 +524,19 @@ class OpenAiCompatibleClient
         $apiKey = $profile['api_key'];
         // Krok pomocniczy (filtr stron) dostawał sztywno co najmniej 4 minuty, także gdy
         // profil mówił mniej — jeden zawieszony request wstrzymywał cały produkt.
-        $timeout = max(60, $profile['timeout_seconds']);
+        // Wyszukiwarka czeka jak pojedyncze zapytanie (withTaskPolicy): przy 60 s pula zrywała ranking gęstego modelu.
+        $timeout = max((int) ($profile['pool_timeout_floor'] ?? self::POOL_TIMEOUT_FLOOR), $profile['timeout_seconds']);
         $bodies = [];
         foreach ($messageSets as $messages) {
             $bodies[] = $this->buildChatPayload($profile, $messages, null, $extra, $jsonMode);
         }
 
         $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies, $onAnswered);
+        // Najpierw zapytania, które nie dotarły do modelu — jak pierwsze podejście w postChatWithRetry; limit albo
+        // przeciążenie po tej powtórce obsługuje dalej retryChatManyOverloaded (i liczy 429 w $rateLimited).
+        if ($profile['retry_unreached'] ?? false) {
+            $responses = $this->retryChatManyUnreached($url, $apiKey, $timeout, $profile, $bodies, $responses);
+        }
         $rateLimited = [];
         $responses = $this->retryChatManyOverloaded($url, $apiKey, $timeout, $profile, $bodies, $responses, $rateLimited);
         $responses = $this->retryChatManyRejected($url, $apiKey, $timeout, $profile, $bodies, $responses);
@@ -718,6 +730,54 @@ class OpenAiCompatibleClient
             }
         }
         $rateLimited = array_keys($seen);
+
+        return $responses;
+    }
+
+    /**
+     * Jak postChatReachingModel dla puli: zapytania, które nie dotarły do modelu (neverReachedModel), idą raz jeszcze
+     * na ten sam profil, zanim retryUnreachableOnMain odda je konfiguracji głównej. Bez przerwy — to błędy połączenia,
+     * nie przeciążenia; przeciążenie (także po tej powtórce) ponawia retryChatManyOverloaded.
+     *
+     * @param  array<string, mixed>  $profile
+     * @param  array<int, array<string, mixed>>  $bodies
+     * @param  array<int, mixed>  $responses
+     * @return array<int, mixed>
+     */
+    private function retryChatManyUnreached(
+        string $url,
+        string $apiKey,
+        int $timeout,
+        array $profile,
+        array $bodies,
+        array $responses,
+    ): array {
+        $retryBodies = [];
+        $firstError = null;
+        foreach ($bodies as $i => $body) {
+            $response = $responses[$i] ?? null;
+            if (! $this->neverReachedModel($response)) {
+                continue;
+            }
+            $retryBodies[$i] = $body;
+            $firstError ??= $response instanceof Throwable
+                ? $response->getMessage()
+                : 'HTTP '.$response->status().': '.mb_substr($response->body(), 0, 300);
+        }
+        if ($retryBodies === []) {
+            return $responses;
+        }
+
+        Log::warning('AI chatMany: zapytania nie dotarły do modelu — ponawiam raz na tym samym profilu', [
+            'count' => count($retryBodies),
+            'of' => count($bodies),
+            'profile' => $profile['label'] ?? '',
+            'error' => mb_substr((string) $firstError, 0, 300),
+            'messages_sha1' => array_map(fn (array $body): string => $this->messagesDigest($body), $retryBodies),
+        ]);
+        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies) as $i => $response) {
+            $responses[$i] = $response;
+        }
 
         return $responses;
     }
@@ -946,7 +1006,7 @@ class OpenAiCompatibleClient
         $this->reportLiveWaiting($profile, $model);
         try {
             try {
-                $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout, ! ($profile['keep_provider_pin'] ?? false), $rateLimited);
+                $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout, ! ($profile['keep_provider_pin'] ?? false), $rateLimited, (bool) ($profile['retry_unreached'] ?? false));
             } catch (ConnectionException $e) {
                 throw $this->chatFailure('Nie można połączyć z API AI: '.$e->getMessage(), $rateLimited, $e);
             }
@@ -969,7 +1029,7 @@ class OpenAiCompatibleClient
                     'max_tokens' => $maxTokens,
                 ]);
                 try {
-                    $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout, ! ($profile['keep_provider_pin'] ?? false), $rateLimited);
+                    $response = $this->postChatWithRetry($url, $profile['api_key'], $basePayload, $jsonMode, $reasoning, $timeout, ! ($profile['keep_provider_pin'] ?? false), $rateLimited, (bool) ($profile['retry_unreached'] ?? false));
                 } catch (ConnectionException $e) {
                     throw $this->chatFailure('Nie można połączyć z API AI: '.$e->getMessage(), $rateLimited, $e);
                 }
@@ -1627,6 +1687,7 @@ class OpenAiCompatibleClient
     /**
      * @param  array<string, mixed>  $payload
      * @param  bool  $rateLimited  ustawiane, gdy dostawca choć raz odpowiedział 429 — także gdy potem przyszło co innego
+     * @param  bool  $retryUnreached  jedna powtórka zapytania, które nie dotarło do modelu (withTaskPolicy)
      */
     private function postChatWithRetry(
         string $url,
@@ -1637,8 +1698,9 @@ class OpenAiCompatibleClient
         int $timeout,
         bool $relaxPin = true,
         bool &$rateLimited = false,
+        bool $retryUnreached = false,
     ): Response {
-        $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
+        $response = $this->postChatReachingModel($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout, $retryUnreached);
         $attempt = 0;
         $rateLimitHits = 0;
         while (in_array($response->status(), self::OVERLOAD_STATUSES, true) && $attempt < self::OVERLOAD_RETRIES) {
@@ -1650,6 +1712,14 @@ class OpenAiCompatibleClient
                 }
             }
             $wait = $this->retryAfterSeconds($response, $attempt);
+            Log::info('AI chat: limit/przeciążenie dostawcy — ponawiam zapytanie', [
+                'status' => $response->status(),
+                'attempt' => $attempt + 1,
+                'wait_seconds' => $wait,
+                'retry_after' => $response->header('Retry-After') !== '' ? $response->header('Retry-After') : null,
+                'model' => $payload['model'] ?? null,
+                'messages_sha1' => $this->messagesDigest($payload),
+            ]);
             if ($wait > 0) {
                 sleep($wait);
             }
@@ -1669,18 +1739,98 @@ class OpenAiCompatibleClient
     }
 
     /**
+     * Pierwsze podejście zapytania; gdy nie dotarło do modelu (neverReachedModel) i zadanie na to pozwala — jeszcze raz
+     * to samo body. Bramka LiteLLM kieruje zapytania na zmianę do węzłów vLLM, więc powtórka zwykle trafia w zdrowy węzeł.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function postChatReachingModel(
+        string $url,
+        string $apiKey,
+        array $payload,
+        bool $jsonMode,
+        bool $reasoning,
+        int $timeout,
+        bool $retryUnreached,
+    ): Response {
+        try {
+            $response = $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
+        } catch (ConnectionException $e) {
+            if (! $retryUnreached || ! $this->neverReachedModel($e)) {
+                throw $e;
+            }
+            $this->logUnreachedRetry($payload, $e->getMessage());
+
+            return $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
+        }
+        if ($retryUnreached && $this->neverReachedModel($response)) {
+            $this->logUnreachedRetry($payload, 'HTTP '.$response->status().': '.mb_substr($response->body(), 0, 300));
+
+            return $this->postChat($url, $apiKey, $payload, $jsonMode, $reasoning, $timeout);
+        }
+
+        return $response;
+    }
+
+    /**
+     * Zapytanie nie dotarło do modelu: po stronie klienta odmowa albo timeout łączenia, nierozwiązany adres; bramka
+     * zwraca 502 albo 500 „Cannot connect to host … [Connect call failed]” (LiteLLM bez połączenia z węzłem vLLM —
+     * 24 z 43 zejść wyszukiwarki na konfigurację główną 22–24.09.2026). Timeout zapytania (cURL 28 „Operation timed
+     * out/too slow”), 504 i inne 5xx się nie liczą: model mógł liczyć, powtórka podwoiłaby obciążenie.
+     */
+    private function neverReachedModel(mixed $failure): bool
+    {
+        if ($failure instanceof Throwable) {
+            return preg_match('/cURL error (6|7):|Failed to connect|Connection refused|Connection timed out after|Could not resolve host/i', $failure->getMessage()) === 1;
+        }
+        if (! $failure instanceof Response) {
+            return false;
+        }
+
+        return $failure->status() === 502
+            || ($failure->status() === 500 && preg_match('/Cannot connect to host|Connect call failed|Connection refused|Failed to connect/i', $failure->body()) === 1);
+    }
+
+    /** @param  array<string, mixed>  $payload */
+    private function logUnreachedRetry(array $payload, string $error): void
+    {
+        Log::warning('AI chat: zapytanie nie dotarło do modelu — ponawiam raz na tym samym profilu', [
+            'model' => $payload['model'] ?? null,
+            'error' => mb_substr($error, 0, 300),
+            'messages_sha1' => $this->messagesDigest($payload),
+        ]);
+    }
+
+    /**
+     * Skrót treści wiadomości — w logu ponowień widać, że powtórka wysłała to samo.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function messagesDigest(array $payload): string
+    {
+        return sha1((string) json_encode($payload['messages'] ?? [], JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
      * Ocena kart i zrozumienie wymagań (wyszukiwarka, dopasowanie przetargu) nie przechodzą po limicie zapytań na zastępczych
      * dostawców modelu. Pomiar 20260914_154500: przypięty Makora ocenił 40 pozycji z 1 złą kartą, zastępczy OpenInference
      * 5 pozycji z 3 złymi kartami z oceną 95 (wcześniej StreamLake i DeepInfra w przebiegach z seriami złych kart).
      * Brak odpowiedzi daje pustą pozycję, którą widać; zła karta z oceną 95 wyglądała jak pewny wybór.
      * Opisy produktów i pozostałe zadania dalej mogą wziąć zastępcę, żeby nie czekać minutami.
      *
+     * Wyszukiwarka dodatkowo (25.09.2026): pula czeka na model tak długo jak pojedyncze zapytanie, a zapytanie, które nie
+     * dotarło do modelu (bramka bez połączenia z węzłem vLLM, odmowa połączenia), idzie raz jeszcze na ten sam profil,
+     * zanim trafi do konfiguracji głównej. Pozostałe zadania bez zmian: opisy i cenniki mają własne limity czasu i blokady.
+     *
      * @param  array<string, mixed>  $profile
      * @return array<string, mixed>
      */
-    private function withProviderPinPolicy(array $profile, ?AiTask $task): array
+    private function withTaskPolicy(array $profile, ?AiTask $task): array
     {
-        $profile['keep_provider_pin'] = $task === AiTask::ProductSearch;
+        $search = $task === AiTask::ProductSearch;
+        $profile['keep_provider_pin'] = $search;
+        $profile['retry_unreached'] = $search;
+        $profile['pool_timeout_floor'] = $search ? self::REQUEST_TIMEOUT_FLOOR : self::POOL_TIMEOUT_FLOOR;
 
         return $profile;
     }
@@ -2201,9 +2351,9 @@ class OpenAiCompatibleClient
      */
     private function post(string $url, string $apiKey, array $payload, int $timeoutSeconds): Response
     {
-        $timeout = max(240, $timeoutSeconds);
+        $timeout = max(self::REQUEST_TIMEOUT_FLOOR, $timeoutSeconds);
         if ($this->isReasoningModel((string) ($payload['model'] ?? ''))) {
-            $timeout = max(240, $timeout);
+            $timeout = max(self::REQUEST_TIMEOUT_FLOOR, $timeout);
         }
 
         return $this->aiHttp($apiKey, $timeout)->post($url, $payload);
