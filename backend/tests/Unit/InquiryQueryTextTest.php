@@ -313,4 +313,53 @@ final class InquiryQueryTextTest extends TestCase
     {
         $this->assertSame($expected, InquiryQueryText::namesProduct($line));
     }
+
+    /**
+     * Znaki, które dzielą bajty z pauzą (E2 80 94) i półpauzą (E2 80 93) z listy
+     * przycinania: polski cudzysłów otwierający (E2 80 9E) na początku, „Ó” (C3 93),
+     * „Ô” (C3 94) i cyrylickie „р” (D1 80) na końcu.
+     *
+     * @return list<array{0: string}>
+     */
+    public static function edgeCharacterLines(): array
+    {
+        return array_map(static fn (string $line): array => [$line], [
+            '„Rękawice antystatyczne”',
+            'Rękawice Ó',
+            'Rękawice Ô',
+            'Респіратор',
+        ]);
+    }
+
+    /**
+     * trim() czytał listę znaków bajt po bajcie: cytat tracił bajty z brzegów
+     * i do katalogu oraz listu szedł zepsuty UTF-8.
+     */
+    #[DataProvider('edgeCharacterLines')]
+    public function test_trimming_keeps_characters_sharing_bytes_with_dashes(string $line): void
+    {
+        foreach (['forCatalog' => InquiryQueryText::forCatalog($line), 'withoutPrice' => InquiryQueryText::withoutPrice($line)] as $method => $clean) {
+            $this->assertTrue(mb_check_encoding($clean, 'UTF-8'), $method.': zepsuty UTF-8 '.bin2hex($clean));
+            $this->assertSame($line, $clean, $method);
+        }
+
+        $name = InquiryQueryText::productNameOnly($line.' rozm. 9');
+        $this->assertTrue(mb_check_encoding($name, 'UTF-8'), 'productNameOnly: zepsuty UTF-8 '.bin2hex($name));
+        $this->assertSame($line, $name, 'productNameOnly');
+    }
+
+    public function test_subject_hint_keeps_characters_sharing_bytes_with_dashes(): void
+    {
+        // zepsuty UTF-8 nie przechodził namesProduct i temat przepadał w całości
+        $this->assertSame('„Rękawice antystatyczne”', InquiryQueryText::subjectProductHint('Fwd: „Rękawice antystatyczne”'));
+        $this->assertSame('Rękawice Ó', InquiryQueryText::subjectProductHint('Fwd: Rękawice Ó'));
+    }
+
+    public function test_dashes_and_punctuation_are_still_trimmed(): void
+    {
+        $this->assertSame('Rękawice nitrylowe', InquiryQueryText::forCatalog('– Rękawice nitrylowe —?!'));
+        $this->assertSame('Rękawice nitrylowe', InquiryQueryText::withoutPrice('— Rękawice nitrylowe –'));
+        $this->assertSame('Rękawice nitrylowe', InquiryQueryText::productNameOnly('– Rękawice nitrylowe rozm. 9 —'));
+        $this->assertSame('Rękawice PX140', InquiryQueryText::subjectProductHint('Fwd: – Rękawice PX140 —'));
+    }
 }

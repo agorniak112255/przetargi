@@ -7,6 +7,7 @@ namespace App\Services\Enrichment;
 use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ProductSizeVariant;
+use App\Support\Utf8Trim;
 use Illuminate\Support\Str;
 
 /**
@@ -7085,7 +7086,7 @@ final class ProductSearchIdentity
             $name
         ) ?? $name;
 
-        return trim($name, " \t-–()");
+        return Utf8Trim::trim($name, " \t-–()");
     }
 
     private function seriesFromDescriptiveName(string $name): string

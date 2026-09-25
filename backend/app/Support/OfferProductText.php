@@ -207,7 +207,7 @@ final class OfferProductText
         $out = (string) preg_replace('/\s+/u', ' ', $text);
         $out = (string) preg_replace('/\s+([,.;:])/u', '$1', $out);
         $out = (string) preg_replace('/([,;:])\s*(?=[,.;:])/u', '', $out);
-        $out = trim($out, " \t\n\r,;:-–—");
+        $out = Utf8Trim::trim($out, " \t\n\r,;:-–—");
 
         if ($out === '') {
             return '';

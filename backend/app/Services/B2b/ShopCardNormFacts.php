@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\ProductShopCard;
 use App\Support\BrandKey;
 use App\Support\ManufacturerNormFacts;
+use App\Support\Utf8Trim;
 
 /**
  * Normy producenta z tabelki karty wyrobu w jego własnym sklepie B2B (łącznik B2bShopFieldNormSource) — plan norm
@@ -132,7 +133,7 @@ final class ShopCardNormFacts
                 continue;
             }
             $label = trim($m[0]);
-            $rest = trim(mb_substr($item, mb_strlen($m[0])), " \t:;,–—-");
+            $rest = Utf8Trim::trim(mb_substr($item, mb_strlen($m[0])), " \t:;,–—-");
             $out[] = ['label' => $label, 'value' => $rest === '' ? null : $rest];
         }
 

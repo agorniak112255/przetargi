@@ -739,7 +739,7 @@ final class CatalogSlangDictionary
         $query = trim($query);
         // Kropka po skrócie („ok. 475 mm”, „np. biura”, „rozm. 35-41”) nie kończy zdania.
         $parts = preg_split('/(?:(?<!\bok|\bnp|\btj|\bwg|\btzn|\bok|\brozm|\bszt|\bkat|\bpoz|\bmin|\bmax)[.;!?]\s|\s[–—-]\s|\n)/u', $query, 2) ?: [$query];
-        $head = trim((string) ($parts[0] ?? ''), " \t,.;:–—-");
+        $head = Utf8Trim::trim((string) ($parts[0] ?? ''), " \t,.;:–—-");
         if ($head === '' || preg_match('/\p{L}/u', $head) !== 1) {
             return $query;
         }

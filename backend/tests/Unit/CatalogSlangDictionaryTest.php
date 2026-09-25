@@ -521,6 +521,11 @@ final class CatalogSlangDictionaryTest extends TestCase
             'Apteczka ścienna pierwszej pomocy (panel) w wersji mini',
             CatalogSlangDictionary::requirementHead('Apteczka ścienna pierwszej pomocy (panel) w wersji mini, do mniejszych pomieszczeń (np. biura) lub jako uzupełnienie innych zestawów pierwszej pomocy. Wymagane: konstrukcja otwarta.')
         );
+        // zepsuty przez trim() cudzysłów nie przechodził \p{L}/u i wracało całe wymaganie zamiast nagłówka
+        $this->assertSame(
+            '„Rękawice antystatyczne”',
+            CatalogSlangDictionary::requirementHead('„Rękawice antystatyczne” – do pracy w strefie zagrożonej wybuchem')
+        );
     }
 
     private function dict(): CatalogSlangDictionary

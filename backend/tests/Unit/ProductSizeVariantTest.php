@@ -34,6 +34,8 @@ final class ProductSizeVariantTest extends TestCase
             $svc->stripSizeLabelFromName('Kaptur 3M Versaflo ze zintegrowaną więźbą, rozmiar L, S-133L')
         );
         $this->assertSame('Spodnie wodoochronne  ogrodniczki', $svc->stripSizeLabelFromName('Spodnie wodoochronne  ogrodniczki'));
+        // cudzysłów na początku nazwy dzieli bajty z półpauzą z listy przycinania
+        $this->assertSame('„Bartek” półbuty robocze', $svc->stripSizeLabelFromName('„Bartek” półbuty robocze rozmiar 42'));
         $this->assertSame(
             'Scotchlite 8725 N, srebrny,rozmiar 25,4 mm x 100 m',
             $svc->stripSizeLabelFromName('Scotchlite 8725 N, srebrny,rozmiar 25,4 mm x 100 m')

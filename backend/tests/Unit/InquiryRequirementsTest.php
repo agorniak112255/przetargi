@@ -109,6 +109,16 @@ final class InquiryRequirementsTest extends TestCase
         $this->assertSame([], InquiryRequirements::unconfirmed($found, 'Obuwie S3 do prac budowlanych.'));
     }
 
+    public function test_clause_in_polish_quotes_is_not_lost(): void
+    {
+        // trim() zdejmował z „ bajty wspólne z półpauzą, a na zepsutym UTF-8 klauzula przepadała w całości
+        $found = InquiryRequirements::fromQuote('Rękawice nitrylowe odporne na „olej napędowy”');
+
+        $this->assertCount(1, $found);
+        $this->assertSame('„olej napędowy”', $found[0]['text']);
+        $this->assertFalse($found[0]['checkable']);
+    }
+
     public function test_declensions_are_read_as_the_base_name(): void
     {
         $found = InquiryRequirements::fromQuote('Fartuch z odpornością na kwasu siarkowego 96%');

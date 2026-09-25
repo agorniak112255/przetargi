@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\CatalogPage;
+use App\Support\Utf8Trim;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -1344,7 +1345,7 @@ final class CatalogSitemapIndexer
 
         $out = [];
         foreach (preg_split('/[\s,;()\[\]|]+/u', $text) ?: [] as $raw) {
-            $token = trim($raw, ".:\"'„”«»*");
+            $token = Utf8Trim::trim($raw, ".:\"'„”«»*");
             if (! $this->looksLikeVariantCode($token)) {
                 continue;
             }

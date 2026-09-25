@@ -34,6 +34,7 @@ use App\Support\PpeAssortment;
 use App\Support\ProductDescriptionText;
 use App\Support\ProductSizeVariant;
 use App\Support\RequirementCheck\En388Code;
+use App\Support\Utf8Trim;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -3786,7 +3787,7 @@ final class ProductEnrichmentService
         $headings = 0;
         $families = [];
         foreach ($chunks as $chunk) {
-            $line = trim((string) $chunk, " \t-*•");
+            $line = Utf8Trim::trim((string) $chunk, " \t-*•");
             if ($line === '' || mb_strlen($line) > 70) {
                 continue;
             }

@@ -104,6 +104,15 @@ final class OfferProductTextTest extends TestCase
         );
     }
 
+    public function test_generic_lead_keeps_the_opening_polish_quote(): void
+    {
+        // po wycięciu marki zdanie zaczyna się cudzysłowem, któremu trim() obcinał bajty wspólne z półpauzą
+        $this->assertSame(
+            '„Solo” to rękawice nitrylowe do pracy z olejami i smarami.',
+            OfferProductText::genericLead('MAPA „Solo” to rękawice nitrylowe do pracy z olejami i smarami.', 'MAPA'),
+        );
+    }
+
     public function test_generic_lead_takes_only_the_first_sentence(): void
     {
         $lead = OfferProductText::genericLead(self::VITAL, 'MAPA', null, 'VITAL 175');

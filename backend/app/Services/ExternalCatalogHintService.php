@@ -9,6 +9,7 @@ use App\Services\Enrichment\DuckDuckGoHtmlSearch;
 use App\Services\Enrichment\TavilyQuotaGuard;
 use App\Support\PpeAssortment;
 use App\Support\PpeFilterType;
+use App\Support\Utf8Trim;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
@@ -224,7 +225,7 @@ final class ExternalCatalogHintService
     {
         $text = trim((string) preg_replace('/[\s,;]+/u', ' ', $text));
         if (preg_match('/^(.{12,200}?)\s*:\s*[A-ZĄĆĘŁŃÓŚŹŻ(]/u', $text, $m) === 1) {
-            return trim($m[1], " \t-–·•");
+            return Utf8Trim::trim($m[1], " \t-–·•");
         }
         $words = preg_split('/\s+/u', $text) ?: [];
 

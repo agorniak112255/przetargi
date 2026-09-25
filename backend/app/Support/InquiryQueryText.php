@@ -88,7 +88,7 @@ final class InquiryQueryText
         // po wycietej cenie zostawala osierocona spacja przed przecinkiem
         $text = preg_replace('/\s+([,;])/u', '$1', $text) ?? $text;
         $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
-        $text = trim($text, " \t\n\r\0\x0B,;:.-–—?!");
+        $text = Utf8Trim::trim($text, " \t\n\r\0\x0B,;:.-–—?!");
 
         return mb_substr(trim($text), 0, 140);
     }
@@ -110,7 +110,7 @@ final class InquiryQueryText
         $clean = preg_replace('/\s+([,;])/u', '$1', $clean) ?? $clean;
         // „Rekawice 24,00 (netto)” — po kwocie zostawal pusty nawias
         $clean = preg_replace('/\s*[(\[]\s*[)\]]/u', '', $clean) ?? $clean;
-        $clean = trim($clean, " \t\n\r\0\x0B,;:.-–—");
+        $clean = Utf8Trim::trim($clean, " \t\n\r\0\x0B,;:.-–—");
 
         // Gdyby z cytatu został sam ogryzek, lepszy jest oryginał niż strzępek —
         // chyba że oryginał był samą ceną z cudzej oferty. Wtedy pusty cytat jest
@@ -140,7 +140,7 @@ final class InquiryQueryText
         $name = preg_replace('/\b[\d.,]+\s*(?:x|×)\s*[\d.,]+\s*(?:mm|cm|m)?\b/iu', ' ', $name) ?? $name;
         $name = preg_replace('/\s+/u', ' ', $name) ?? $name;
 
-        return trim($name, " \t\n\r\0\x0B,;:.-–—");
+        return Utf8Trim::trim($name, " \t\n\r\0\x0B,;:.-–—");
     }
 
     /**
@@ -164,7 +164,7 @@ final class InquiryQueryText
         // „Zapytanie ofertowe 056646136” — w temacie goły ciąg cyfr to numer sprawy
         $text = preg_replace('/(?<![\p{L}\d.\-])\d{5,}(?![\p{L}\d.\-])/u', ' ', $text) ?? $text;
         $text = self::withoutWords($text, self::INQUIRY_WORDS);
-        $text = trim(preg_replace('/\s+/u', ' ', $text) ?? $text, " \t\n\r\0\x0B,;:.-–—?!*\"'()");
+        $text = Utf8Trim::trim(preg_replace('/\s+/u', ' ', $text) ?? $text, " \t\n\r\0\x0B,;:.-–—?!*\"'()");
 
         if ($text === '' || ! self::namesProduct($text)) {
             return null;

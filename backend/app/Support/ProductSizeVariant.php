@@ -546,7 +546,7 @@ final class ProductSizeVariant
         }
         $next = preg_replace('/\s*,\s*,+/u', ',', $next) ?? $next;
         $next = trim(preg_replace('/[ \t]+/u', ' ', $next) ?? $next);
-        $next = trim($next, " \t,;–-");
+        $next = Utf8Trim::trim($next, " \t,;–-");
 
         return $next !== '' ? $next : $t;
     }

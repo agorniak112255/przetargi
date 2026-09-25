@@ -26,6 +26,7 @@ use App\Support\ProductModelFuzzy;
 use App\Support\RequirementCodeNoise;
 use App\Support\RrfFusion;
 use App\Support\TechnicalAbbreviations;
+use App\Support\Utf8Trim;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -2095,7 +2096,7 @@ final class ProductAiSearchService
         foreach ($this->fallbackPhrases($query) as $token) {
             // Surowy token z SIWZ niesie interpunkcję („cholewką)”, „(smoke)”) —
             // do fraz idzie samo słowo.
-            $token = trim($token, " \t\n\r\0\x0B.,;:!?()[]{}\"'„”“«»");
+            $token = Utf8Trim::trim($token, " \t\n\r\0\x0B.,;:!?()[]{}\"'„”“«»");
             $norm = $this->lexicalNormalize($token);
             if (
                 $token === ''

@@ -238,7 +238,7 @@ final class InquiryRequirements
                 $from = $found + mb_strlen($marker);
                 $rest = mb_substr($line, $from);
                 $cut = preg_split('/[)\];.]|\s+(?:oraz|albo)\s+/u', $rest) ?: [];
-                $clause = trim((string) ($cut[0] ?? ''), " \t,:-–—*");
+                $clause = Utf8Trim::trim((string) ($cut[0] ?? ''), " \t,:-–—*");
                 // „na” zostaje po samym zwrocie („w szczególności na kwas…”).
                 $clause = trim((string) preg_replace('/^na\s+/iu', '', $clause));
                 if (mb_strlen($clause) >= 3) {
