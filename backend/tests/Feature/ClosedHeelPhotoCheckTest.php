@@ -162,8 +162,8 @@ final class ClosedHeelPhotoCheckTest extends TestCase
 
     public function test_check_of_an_image_moved_to_another_card_is_not_used(): void
     {
-        $a = $this->sandal('S-12', 'Sandał ochronny ESD.', 'Sandał ochronny ESD S-12');
-        $b = $this->sandal('S-13', 'Sandał ochronny ESD.', 'Sandał ochronny ESD S-13');
+        $a = $this->sandal('S-12', 'Sandał ochronny ESD.', 'Sandał ochronny S1 ESD S-12');
+        $b = $this->sandal('S-13', 'Sandał ochronny ESD.', 'Sandał ochronny S1 ESD S-13');
         $image = $this->supplierImage($b);
         $this->saveCheck($a, $image, 'closed');
         $service = app(ProductAiSearchService::class);
@@ -201,7 +201,7 @@ final class ClosedHeelPhotoCheckTest extends TestCase
 
     public function test_check_made_with_older_question_is_redone_and_not_used_in_search(): void
     {
-        $card = $this->sandal('S-14', 'Sandał ochronny ESD.', 'Sandał ochronny ESD S-14');
+        $card = $this->sandal('S-14', 'Sandał ochronny ESD.', 'Sandał ochronny S1 ESD S-14');
         $image = $this->supplierImage($card);
         ProductVisualCheck::query()->create([
             'product_id' => $card->id,
@@ -244,7 +244,7 @@ final class ClosedHeelPhotoCheckTest extends TestCase
 
     public function test_search_shows_photo_inference_only_for_heel_requirement_and_current_image(): void
     {
-        $card = $this->sandal('S-7', 'Sandał ochronny ESD, podeszwa olejoodporna FO.', 'Sandał ochronny SB ESD S-7');
+        $card = $this->sandal('S-7', 'Sandał ochronny ESD, podeszwa olejoodporna FO.', 'Sandał ochronny S1 ESD S-7');
         $image = $this->supplierImage($card);
         $this->saveCheck($card, $image, 'closed');
         $service = app(ProductAiSearchService::class);
@@ -268,9 +268,30 @@ final class ClosedHeelPhotoCheckTest extends TestCase
         $this->assertSame([], (new \ReflectionMethod($service, 'photoHeelInferences'))->invoke($service, self::REQUIREMENT, null, [], collect([$card])));
     }
 
+    /**
+     * Pełny przebieg 25.09.2026: czarne klapki ARVA 6017 6660 SB/OB z paskiem za piętą oba pytania oceniły jako
+     * „zabudowana”. Przy SB/OB i bez klasy tył bywa otwarty — „zabudowana” ze zdjęcia idzie do modelu tylko przy klasie
+     * S1–S7 albo O1–O7, której norma wymaga zamkniętej części piętowej.
+     */
+    public function test_closed_heel_from_photo_needs_class_with_closed_seat_region(): void
+    {
+        $sb = $this->sandal('S-15', 'Obuwie ochronne ESD.', 'ARVA 6017 6660 SB A E FO');
+        $o1 = $this->sandal('S-16', 'Obuwie zawodowe ESD.', 'ARMEN 9007 6660 O1 FO');
+        $none = $this->sandal('S-17', 'Sandał ESD.', 'Sandał ochronny ESD S-17');
+        foreach ([$sb, $o1, $none] as $card) {
+            $this->saveCheck($card, $this->supplierImage($card), 'closed');
+        }
+        $service = app(ProductAiSearchService::class);
+
+        $this->assertSame(
+            [$o1->id => 'closed'],
+            (new \ReflectionMethod($service, 'photoHeelInferences'))->invoke($service, self::REQUIREMENT, null, [], collect([$sb, $o1, $none])),
+        );
+    }
+
     public function test_rank_card_gets_separate_field_and_reason_gets_provenance(): void
     {
-        $card = $this->sandal('S-9', 'Sandał ochronny ESD, podeszwa olejoodporna FO.', 'Sandał ochronny ESD S-9');
+        $card = $this->sandal('S-9', 'Sandał ochronny ESD, podeszwa olejoodporna FO.', 'Sandał ochronny S1 ESD S-9');
         $this->saveCheck($card, $this->supplierImage($card), 'closed');
         $service = app(ProductAiSearchService::class);
 

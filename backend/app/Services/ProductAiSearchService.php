@@ -6764,6 +6764,10 @@ final class ProductAiSearchService
      * Ocena pięty ze zdjęcia dla kart, które nie mówią o pięcie słowami — tylko gdy wymaganie, analiza albo warunki mówią
      * o pięcie, tylko dla aktualnego zdjęcia głównego i tylko closed/open. „Odkryta” przy klasie S1–S5 (norma wymaga
      * zamkniętej części piętowej) to raczej pomyłka oceny — nie idzie do modelu, komenda oznacza ją do przejrzenia.
+     * „Zabudowana” tylko przy klasie S1–S7 albo O1–O7 (norma wymaga zamkniętej części piętowej, zdjęcie i klasa mówią to
+     * samo): pełny przebieg 25.09.2026 (268 kart) — 20 losowych „zabudowanych” zgodnych ze zdjęciem, ale czarne klapki
+     * ARVA 6017 6660 SB/OB z paskiem za piętą oba pytania oceniły jako zabudowane. Przy SB/OB i bez klasy tył bywa otwarty,
+     * więc sam wniosek ze zdjęcia nie wystarcza.
      *
      * @param  list<mixed>  $constraints
      * @param  Collection<int, Product>  $candidates
@@ -6798,8 +6802,13 @@ final class ProductAiSearchService
             if ($check === null || $this->assortment->heelWording($product) !== null) {
                 continue;
             }
+            $classText = (string) $product->name.' '.(string) $product->norms;
             if ($check->answer === ProductVisualCheck::ANSWER_OPEN
-                && preg_match('/(?<![\p{L}\d])S[1-5]/u', (string) $product->name.' '.(string) $product->norms) === 1) {
+                && preg_match('/(?<![\p{L}\d])S[1-5]/u', $classText) === 1) {
+                continue;
+            }
+            if ($check->answer === ProductVisualCheck::ANSWER_CLOSED
+                && preg_match('/(?<![\p{L}\d])[SO][1-7]/u', $classText) !== 1) {
                 continue;
             }
             $out[(int) $product->id] = (string) $check->answer;
