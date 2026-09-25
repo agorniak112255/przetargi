@@ -29,6 +29,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
@@ -1280,6 +1281,11 @@ final class ProductAiSearchService
         // Surowa marka z odpowiedzi: po dziedziczeniu albo po reconcileManufacturerIntent (marka spoza treści wymagania)
         // nie ma jej już w polach intencji, a jej krok został.
         $rawBrand = is_string($raw['manufacturer'] ?? null) ? trim($raw['manufacturer']) : '';
+        if ($rawBrand !== '' && $this->isCatalogLineName($rawBrand)) {
+            // Nazwa linii („MaxiCut” na kartach ATG) nie jest marką — parseIntent ją odrzucił, a pierwsze szukanie
+            // zostawiło jej krok („Rękawice MaxiCut Ultra”); wycięta tu dawałaby „Rękawice Ultra”.
+            $rawBrand = '';
+        }
         foreach ([$rawBrand, ...$this->intentBrands($rewritten), ...$this->intentBrands($base)] as $brand) {
             $key = $this->compactLex($brand);
             if ($key !== '' && ! isset($seen[$key])) {
@@ -3066,7 +3072,13 @@ final class ProductAiSearchService
             : null;
         $manufacturerAbsent = false;
         if ($manufacturerRequested !== '' && $canonical === null) {
-            $manufacturerAbsent = true;
+            // Linia albo podmarka, którą katalog wymienia w nazwach kart innego producenta („MaxiCut” → karty ATG),
+            // to nie marka spoza katalogu — zgadnięcie modelu odpada tak, jakby producenta nie podał.
+            if ($this->isCatalogLineName($manufacturerRequested)) {
+                $manufacturerRequested = '';
+            } else {
+                $manufacturerAbsent = true;
+            }
         } elseif ($canonical !== null && ! $this->manufacturerContext->hasProductsForManufacturer($canonical)) {
             $manufacturerAbsent = true;
             $canonical = null;
@@ -3205,6 +3217,32 @@ final class ProductAiSearchService
     }
 
     /**
+     * Zgadnięcie modelu, które nie jest producentem z katalogu, tylko nazwą linii z nazw kart („MaxiCut” na kartach ATG).
+     * Jeden warunek dla parseIntent (zgadnięcie odpada) i rewriteSearchSteps (nie wycinamy go z kroków).
+     */
+    private function isCatalogLineName(string $brand): bool
+    {
+        return $this->manufacturerContext->matchManufacturer($brand) === null && $this->catalogNamesBrand($brand);
+    }
+
+    /**
+     * Jednowyrazowa marka stoi w nazwach kart jako całe słowo („MaxiCut” na kartach ATG, „CXS” na kartach Canis, „kask”).
+     * Tylko nazwy i tylko całe słowa: podciąg w nazwie albo w SKU („CERVA” w kodzie karty zamiennika) to nie wyrób tej
+     * marki. Marka wielowyrazowa się nie liczy — jej słowa stoją osobno w nazwach różnych kart („Safety Jogger”), także
+     * z krótkim członem („KS Tools”).
+     */
+    private function catalogNamesBrand(string $brand): bool
+    {
+        $words = preg_split('/\s+/', trim($this->lexicalNormalize($brand)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if (count($words) !== 1) {
+            return false;
+        }
+        $word = (string) preg_replace('/[0-9]+/', '', $words[0]);
+
+        return mb_strlen($word) >= 3 && ($this->catalogNameWordCounts()[$word] ?? 0) > 0;
+    }
+
+    /**
      * W ilu nazwach kart stoi każde słowo (małe litery, bez polskich znaków i cyfr — tak jak słowa z brandHints).
      * Budowane raz na dobę z samych nazw; w pamięci obiektu na czas żądania.
      *
@@ -3243,13 +3281,20 @@ final class ProductAiSearchService
         }
         foreach ($this->modelFuzzy->catalogBrands($query) as $token) {
             $canonical = $this->manufacturerContext->matchManufacturer($token);
-            if ($canonical === null) {
-                $intent['manufacturer_requested'] = strtoupper($token);
-                $intent['manufacturer_absent_in_catalog'] = true;
+            if ($canonical !== null) {
+                $intent['manufacturer'] = $canonical;
 
                 return $intent;
             }
-            $intent['manufacturer'] = $canonical;
+            // Marka z konfiguracji bez producenta w katalogu, ale w nazwach kart („kask”, „MaxiCut” ATG, „CXS” Canis),
+            // nie jest spoza katalogu — tak samo słowa wersalikami w reconcileManufacturerIntent. Od 23.09.2026 takie
+            // klucze łapał przypadkiem producent „.....” (pusty zapis nazwy), wcześniej każde zapytanie o kask
+            // dostawało markę spoza katalogu „KASK”, a ta wycina słowo z fraz i kroków.
+            if ($this->catalogNamesBrand($token)) {
+                continue;
+            }
+            $intent['manufacturer_requested'] = strtoupper($token);
+            $intent['manufacturer_absent_in_catalog'] = true;
 
             return $intent;
         }
@@ -3397,8 +3442,9 @@ final class ProductAiSearchService
 
     private function nameAppearsInQuery(string $query, string $name): bool
     {
-        $needle = $this->compactLex($name);
-        $hay = $this->compactLex($query);
+        // Litery z akcentem jako zwykłe po obu stronach: model oddaje „Bolle” z listy producentów, wymaganie pisze „Bollé”.
+        $needle = $this->compactLex(Str::ascii($name));
+        $hay = $this->compactLex(Str::ascii($query));
 
         return $needle !== '' && mb_strlen($needle) >= 2 && str_contains($hay, $needle);
     }

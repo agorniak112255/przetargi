@@ -2154,9 +2154,10 @@ final class ProductMatchService
      */
     public function requestedManufacturerFromSiwz(string $requirement): ?string
     {
-        if (preg_match('/\b(?i:prod(?:\.|ucent\w*\.?:?))\s*([A-Z0-9][A-Za-z0-9\-]+)/u', $requirement, $m) === 1) {
+        // Litery z akcentem należą do nazwy: „prod. Bollé” ucinało się do „Boll”.
+        if (preg_match('/\b(?i:prod(?:\.|ucent\w*\.?:?))\s*([\p{Lu}0-9][\p{L}0-9\-]+)/u', $requirement, $m) === 1) {
             $token = trim($m[1]);
-            if ($token !== '' && preg_match('/[A-Za-z]/', $token) === 1) {
+            if ($token !== '' && preg_match('/\p{L}/u', $token) === 1) {
                 return $token;
             }
         }

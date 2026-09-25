@@ -6,6 +6,7 @@ namespace App\Support;
 
 use App\Models\Product;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -69,25 +70,60 @@ final class CatalogManufacturerContext
         if ($viaDictionary !== null) {
             return $viaDictionary;
         }
+        // Luźny etap: dłuższy zapis marki („Mapa Professional” → MAPA, „3M Polska” → 3M) albo pierwsze słowa dłuższej
+        // nazwy producenta („DELTA” → Delta Plus). Tylko całe słowa od początku — do 25.09.2026 wystarczał podciąg
+        // i słowo z SIWZ wersalikami stawało się marką: „PROSTY” → PROS, „OKULARY” → Okula, „SZELKI” → „TOP SAFETY
+        // Szelki bezpieczeństwa”. Marka z intencji zawęża pulę, więc wyroby innych producentów znikały przed oceną.
         foreach ($this->catalogManufacturers() as $canonical) {
-            $c = $this->compact($canonical);
-            if ($c !== '' && (str_contains($c, $needle) || str_contains($needle, $c))) {
+            if ($this->startsWithWords($guess, $canonical) || $this->startsWithWords($canonical, $guess)) {
                 return $canonical;
             }
         }
-        foreach ($this->configAliasKeys() as $alias) {
-            if ($alias === $needle) {
-                foreach ($this->catalogManufacturers() as $canonical) {
-                    if (str_contains($this->compact($canonical), $alias) || str_contains($alias, $this->compact($canonical))) {
-                        return $canonical;
-                    }
+        // Klucz z konfiguracji przychodzi z zapytania zbity, bez separatorów („msasafety” z „MSA-Safety”) — granice
+        // słów bierzemy z zapisu klucza w konfiguracji („msa-safety”).
+        foreach ($this->configAliasSpellings() as $alias) {
+            if ($this->compact($alias) !== $needle) {
+                continue;
+            }
+            foreach ($this->catalogManufacturers() as $canonical) {
+                if ($this->startsWithWords($alias, $canonical) || $this->startsWithWords($canonical, $alias)) {
+                    return $canonical;
                 }
-
-                return null;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Czy $text zaczyna się od $head jako od całych słów: „Mapa Professional” od „MAPA”, „Delta-Plus Group” od
+     * „Delta Plus”, ale „PROSTY” nie od „PROS”, a „UVEX9160” nie od „UVEX”. Litery z akcentem jako zwykłe („Bollé” to
+     * „Bolle”, „Sundstrom” to „Sundström”) — compact() je wycina, a „boll” trafiało w „bolle” tylko jako podciąg.
+     */
+    private function startsWithWords(string $text, string $head): bool
+    {
+        $want = $this->fold($head);
+        if ($want === '') {
+            return false;
+        }
+        $joined = '';
+        foreach (preg_split('/[^\p{L}\p{N}]+/u', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $word) {
+            $joined .= $this->fold($word);
+            if ($joined === $want) {
+                return true;
+            }
+            if (! str_starts_with($want, $joined)) {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /** Jak compact(), ale litery z akcentem zamienione na zwykłe, nie wycięte. Tylko do porównań, nie do kluczy słownika. */
+    private function fold(string $text): string
+    {
+        return (string) preg_replace('/[^a-z0-9]/', '', Str::ascii(mb_strtolower($text)));
     }
 
     public function hasProductsForManufacturer(string $canonical): bool
@@ -111,19 +147,13 @@ final class CatalogManufacturerContext
     }
 
     /**
+     * Klucze z konfiguracji w oryginalnym zapisie, z separatorami słów („msa-safety”, „coba-europe”).
+     *
      * @return list<string>
      */
-    public function configAliasKeys(): array
+    private function configAliasSpellings(): array
     {
-        $out = [];
-        foreach (array_keys((array) config('enrichment.manufacturer_domains', [])) as $key) {
-            $c = $this->compact((string) $key);
-            if ($c !== '') {
-                $out[] = $c;
-            }
-        }
-
-        return array_values(array_unique($out));
+        return array_map('strval', array_keys((array) config('enrichment.manufacturer_domains', [])));
     }
 
     /** Kanoniczny producent z katalogu dla marki ze słownika; null, gdy to nie marka albo producenta nie ma w katalogu. */
