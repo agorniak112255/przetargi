@@ -28,6 +28,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
 use Laravel\Sanctum\Sanctum;
+use Tests\Support\FakeQdrant;
 use Tests\TestCase;
 
 /**
@@ -164,6 +165,19 @@ final class CardMatchSizeMergerTest extends TestCase
         $this->assertSame(0, CardMatchCandidate::query()->whereIn('status', ['pending', 'conflict'])->count());
     }
 
+    public function test_vectors_of_merged_size_cards_and_attached_distributor_card_are_deleted(): void
+    {
+        FakeQdrant::enable();
+        [$s, $m, $l, $source] = $this->halfMask();
+        $candidate = $this->refreshed($source);
+
+        $this->postSizes($candidate, $s)->assertOk();
+
+        // karty rozmiarów M i L (mergeSizeCards) i karta P4S (mergeDuplicate) — po commit całej decyzji; karta modelu S
+        // zostaje ze swoim wektorem (reindeks w kolejce)
+        $this->assertSame([(int) $m->id, (int) $l->id, (int) $source->id], FakeQdrant::deletedIds());
+    }
+
     public function test_plan_hash_from_screen_or_changed_data_gives_409_and_changes_nothing(): void
     {
         [$s, , , $source] = $this->halfMask();
@@ -261,6 +275,7 @@ final class CardMatchSizeMergerTest extends TestCase
 
     public function test_failed_attach_of_distributor_card_rolls_everything_back(): void
     {
+        FakeQdrant::enable();
         [$s, , , $source] = $this->halfMask();
         $candidate = $this->refreshed($source);
         // pierwsze sprawdzenie (plan) prawdziwe, drugie (dołączenie po łączeniu rozmiarów) — karta modelu ma już
@@ -292,6 +307,8 @@ final class CardMatchSizeMergerTest extends TestCase
                 .'karta producenta ma już pozycję tego konta (B2B P4S: 2001) — sztuka czy karton? — nic nie zmieniono.');
 
         $this->assertNothingChanged($candidate, 4);
+        // karty rozmiarów skasowane w wycofanej transakcji wróciły — ich wektory też zostają
+        $this->assertSame([], FakeQdrant::deletedIds());
     }
 
     public function test_6x00p_candidate_disappears_and_comes_back_as_conflict_merge(): void

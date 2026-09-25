@@ -21,6 +21,7 @@ use App\Services\B2b\B2bCatalogSync;
 use App\Services\Catalog\CardOwnership;
 use App\Services\Catalog\CardRedirectStore;
 use App\Services\Pricing\ProductEffectivePrice;
+use App\Services\Vector\ProductEmbeddingIndexer;
 use App\Support\ProductSizeVariant;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -35,6 +36,7 @@ final class ProductSizeMergeService
         private readonly ProductEffectivePrice $effectivePrices,
         private readonly CardRedirectStore $redirects,
         private readonly CardOwnership $ownership,
+        private readonly ProductEmbeddingIndexer $embeddings,
     ) {}
 
     /**
@@ -202,7 +204,8 @@ final class ProductSizeMergeService
      * Duplikat tego samego wyrobu (np. karta dystrybutora założona obok karty producenta): powiązania B2B, sloty cen,
      * tabelki, media, historia, identyfikatory i odwołania przechodzą na $keep, $drop znika. Nazwa, SKU i lista
      * rozmiarów $keep zostają; kod duplikatu trafia do merged_duplicate_skus (nie do listy rozmiarów, z której
-     * korzysta łączenie rozmiarów). Warunki (ten sam producent, brak wersji itp.) sprawdza wywołujący.
+     * korzysta łączenie rozmiarów). Warunki (ten sam producent, brak wersji itp.) sprawdza wywołujący. Wektor $drop
+     * znika z Qdrant po commit (deleteVectorsAfterCommit).
      */
     public function mergeDuplicate(Product $keep, Product $drop): void
     {
@@ -325,8 +328,9 @@ final class ProductSizeMergeService
             // zwykły save(): hak modelu przelicza indeks tekstowy (nazwa i lista rozmiarów to kolumny wyszukiwania)
             $keep->save();
 
-            // 9) karty łączone znikają (ich wiersze są już przeniesione albo w kopii zapasowej)
+            // 9) karty łączone znikają (ich wiersze są już przeniesione albo w kopii zapasowej), wektory po commit
             Product::query()->whereIn('id', $dropIds)->delete();
+            $this->deleteVectorsAfterCommit($dropIds);
             B2bCatalogSync::refreshShopFieldsSummary($keep);
             $this->effectivePrices->refresh($keep);
             DB::afterCommit(static function () use ($keepId): void {
@@ -623,6 +627,7 @@ final class ProductSizeMergeService
             ProductIdentifier::query()->whereIn('product_id', $loserIds)->update(['product_id' => $winner->id]);
             $winner->update($updates);
             Product::query()->whereIn('id', $loserIds)->delete();
+            $this->deleteVectorsAfterCommit($loserIds);
             if ($newSku !== null) {
                 $winner->update(['sku' => $newSku]);
             }
@@ -635,6 +640,28 @@ final class ProductSizeMergeService
         } catch (Throwable) {
             // kolejka embeddingów nie blokuje scalenia
         }
+    }
+
+    /**
+     * Wektory usuniętych kart w Qdrant — po commit, bo scalenie bywa częścią większej transakcji („Połącz”
+     * i „Połącz rozmiary” na ekranie „Łączenie kart”): wycofana transakcja zostawia karty, więc i ich wektory.
+     * Wektor bez karty nie trafia do wyników (wyszukiwanie pomija numery bez wiersza w bazie), ale zajmuje miejsce
+     * w puli wektorowej i w fuzji rang, a duplikat tego samego wyrobu stoi w niej tuż przy karcie, która zostaje —
+     * i wypycha z puli inną kartę. Błąd Qdrant tylko w logu (ProductEmbeddingIndexer::delete), scalenie zostaje.
+     *
+     * @param  list<int>  $productIds
+     */
+    private function deleteVectorsAfterCommit(array $productIds): void
+    {
+        DB::afterCommit(function () use ($productIds): void {
+            foreach ($productIds as $id) {
+                try {
+                    $this->embeddings->delete($id);
+                } catch (Throwable) {
+                    // sprzątanie wektora nie blokuje scalenia
+                }
+            }
+        });
     }
 
     /**

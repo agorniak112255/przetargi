@@ -267,3 +267,12 @@ Przypadek z produkcji: P4S „2365X0 Hełm 3M SecureFit X5000VE-CE” (391,60 z�
 - Wspólna kopia zapasowa decyzji z usuwaniem kart: CardMatchBackup (kroki 6 i 7); card-redirects:backfill czyta
   tylko zwykłe połączenia.
 
+## C2 pkt 5 — wektor karty-duplikatu (25.09.2026)
+Wektor bez karty nie trafiał do wyników (ProductAiSearchService::hydrate pomija numery bez wiersza), ale zajmował
+miejsce w puli wektorowej (150) i w fuzji rang — duplikat tego samego wyrobu tuż przy karcie, która zostaje.
+ProductSizeMergeService kasuje wektor każdej karty usuniętej przy scalaniu: absorb („Połącz”, products:merge-duplicate,
+automatyczne łączenie rozmiarów) i mergeSizeCards („Połącz rozmiary”) — DB::afterCommit, więc dopiero po commit całej
+decyzji (wycofanie zostawia karty i wektory); błąd Qdrant tylko w logu. Wektory kart scalonych przed tą zmianą zostają
+w Qdrant. Z punktu 5 zostaje: „Połącz” nie blokuje ani nie przepina akcesoriów innych kart wskazujących kartę
+dystrybutora (product_accessories.related_product_id — po usunięciu karty NULL); rozdzielanie ich odmawia.
+

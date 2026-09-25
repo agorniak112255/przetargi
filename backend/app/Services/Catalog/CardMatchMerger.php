@@ -28,7 +28,8 @@ use JsonException;
  * a kliknięciem dystrybutor mógł zmienić kod, a karta producenta stracić właściciela), strażnicy jak
  * w products:merge-duplicate i pełna kopia zapasowa JSON wierszy, które scalenie przenosi albo kasuje (slot ceny tego
  * samego źródła na obu kartach — zostaje nowszy, starszy znika). Wszystko w jednej transakcji: przy błędzie nic się
- * nie zmienia, propozycja zostaje w swoim statusie, wyjątek niesie powód po polsku.
+ * nie zmienia, propozycja zostaje w swoim statusie, wyjątek niesie powód po polsku. Wektor karty dystrybutora
+ * mergeDuplicate kasuje w Qdrant dopiero po commit tej transakcji.
  */
 final class CardMatchMerger
 {

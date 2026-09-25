@@ -26,6 +26,7 @@ use Illuminate\Bus\UniqueLock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Tests\Support\FakeQdrant;
 use Tests\TestCase;
 
 /**
@@ -178,10 +179,11 @@ final class ProductSizeMergeSizeCardsTest extends TestCase
         $this->assertEquals(61.38, (float) $card->purchase_price);
     }
 
-    public function test_reindex_with_force_is_dispatched_after_commit(): void
+    public function test_reindex_with_force_and_vector_delete_run_after_commit(): void
     {
         // reindeks wektorów kolejkuje się tylko przy włączonym wyszukiwaniu wektorowym (ReindexProductEmbeddingJob::dispatch)
-        config(['ai.vector_enabled' => true, 'ai.qdrant_url' => 'http://qdrant.test:6333']);
+        // — tu na atrapie Qdrant, która przyjmuje też kasowanie wektora karty łączonej
+        FakeQdrant::enable();
         [$s, $m] = $this->halfMasks();
 
         DB::transaction(function () use ($s, $m): void {
@@ -189,12 +191,15 @@ final class ProductSizeMergeSizeCardsTest extends TestCase
             // zlecenie z haka modelu (zapis nazwy) trzyma blokadę ShouldBeUnique — jak po jego przetworzeniu
             app(UniqueLock::class)->release(new ReindexProductEmbeddingJob($s->id));
             Queue::assertNotPushed(ReindexProductEmbeddingJob::class, static fn (ReindexProductEmbeddingJob $job): bool => $job->force);
+            $this->assertSame([], FakeQdrant::deletedIds());
         });
 
         Queue::assertPushed(
             ReindexProductEmbeddingJob::class,
             static fn (ReindexProductEmbeddingJob $job): bool => $job->force && $job->productId === $s->id,
         );
+        // wektor karty łączonej (M) znika, karty modelu (S) zostaje
+        $this->assertSame([(int) $m->id], FakeQdrant::deletedIds());
     }
 
     public function test_order_images_after_attaching_distributor_card(): void
