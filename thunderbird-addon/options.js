@@ -52,6 +52,7 @@ async function login() {
   busy(true)
   status('Łączę…')
   try {
+    const previous = await getSettings()
     const res = await api('/api/login', {
       method: 'POST',
       body: { email, password },
@@ -65,6 +66,11 @@ async function login() {
     await setSettings({ baseUrl, token: res.token })
     // Hasło zostaje tylko w polu formularza — nigdzie go nie zapisujemy.
     el('password').value = ''
+    // Poprzedni klucz dodatku przestaje być potrzebny — bez tego każde „Połącz” dokładałoby
+    // w aplikacji kolejną sesję. Klucz z innego adresu aplikacji zostawiamy: tam go nie wylogujemy.
+    if (previous.token !== '' && previous.token !== res.token && previous.baseUrl === baseUrl) {
+      await revokeToken(previous.token, baseUrl)
+    }
     status('Połączono.', 'ok')
     await refresh()
   } catch (e) {
@@ -87,9 +93,36 @@ async function check() {
   }
 }
 
+/**
+ * Wylogowuje klucz dodatku w aplikacji. Zwraca pusty tekst, gdy klucza na serwerze już nie ma
+ * (także 401 — ktoś go wcześniej wylogował), albo opis problemu, gdy serwer tego nie potwierdził.
+ */
+async function revokeToken(token, baseUrl) {
+  try {
+    await api('/api/logout', { method: 'POST', token, baseUrl })
+
+    return ''
+  } catch (e) {
+    return e.status === 401 ? '' : e.message
+  }
+}
+
 async function logout() {
-  await setSettings({ token: '' })
-  status('Odłączono. Token pozostaje aktywny na serwerze.', 'info')
+  busy(true)
+  try {
+    const settings = await getSettings()
+    const problem = settings.token === '' ? '' : await revokeToken(settings.token, settings.baseUrl)
+    await setSettings({ token: '' })
+    status(
+      problem === ''
+        ? 'Odłączono. Sesja dodatku w aplikacji jest wylogowana.'
+        : 'Odłączono w dodatku, ale aplikacja nie potwierdziła wylogowania (' + problem + '). '
+          + 'Nieużywaną sesję administrator wyloguje przyciskiem „Wyloguj stare sesje” (Administracja → Aktywne sesje).',
+      problem === '' ? 'ok' : 'warn',
+    )
+  } finally {
+    busy(false)
+  }
   await refresh()
 }
 

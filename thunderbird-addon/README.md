@@ -265,6 +265,8 @@ Dodatek nie jest podpisany przez Mozillę, więc trzeba raz wyłączyć wymóg p
    swój e-mail i hasło → **Połącz**.
 
 Hasło nie jest zapisywane — służy tylko do jednorazowego pobrania klucza dostępu.
+Ponowne **Połącz** i **Odłącz** wylogowują w aplikacji dotychczasowy klucz dodatku, żeby nie
+zostawał w Administracja → Aktywne sesje jako stara sesja.
 
 ## Aktualizacja
 
@@ -346,7 +348,7 @@ aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa
 ## Wymagania po stronie aplikacji
 
 - konto z uprawnieniem `inquiries.use`,
-- API: `POST /api/login`, `POST /api/inquiries`, `GET /api/inquiries/{id}`,
+- API: `POST /api/login`, `POST /api/logout`, `POST /api/inquiries`, `GET /api/inquiries/{id}`,
   `POST /api/inquiries/{id}/replied`, `GET /api/inquiries/queued`,
   `POST /api/inquiries/{id}/queue-reply`.
 - oznaczanie maili: `POST /api/inquiries/lookup` (paczka do 200 `message_ids`;
