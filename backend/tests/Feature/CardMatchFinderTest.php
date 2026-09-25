@@ -14,6 +14,7 @@ use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Services\Catalog\CardMatchFinder;
 use App\Support\ProductIdentifierCode;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -360,6 +361,57 @@ final class CardMatchFinderTest extends TestCase
         $after = $this->countQueries(fn () => $finder->refresh());
 
         $this->assertSame($before, $after);
+    }
+
+    public function test_refresh_does_not_load_producer_cards_whose_code_matches_only_their_own_link(): void
+    {
+        // produkcja 25.09.2026: łącznik producenta zapisuje kod producenta równy SKU własnego powiązania — przebieg
+        // ładował 10,8 tys. takich kart i przekraczał 128 MB, choć żadna z nich nie ma drugiej karty z tym kodem
+        $anroCard = $this->anroCard('IF/016/F/PS');
+        $p4sCard = $this->p4sCard('ZPPV99C', 'ANRO', 'IF/016/F/PS');
+        $alone = [];
+        for ($i = 0; $i < 5; $i++) {
+            $code = 'IF/7'.$i.'0/Q';
+            $card = $this->anroCard($code);
+            $this->identifier($card, 'b2b:'.$this->anro->id, 'A-'.$code, 'manufacturer_code', $code);
+            $alone[] = $card->id;
+        }
+        $loaded = [];
+        DB::listen(static function (QueryExecuted $query) use (&$loaded): void {
+            if (str_contains($query->sql, 'from "products" where "id" in')) {
+                array_push($loaded, ...$query->bindings);
+            }
+        });
+
+        $summary = app(CardMatchFinder::class)->refresh();
+
+        $this->assertSame(1, $summary['pending']);
+        $this->assertSame($anroCard->id, CardMatchCandidate::query()->where('source_product_id', $p4sCard->id)->value('target_product_id'));
+        // para jest w przebiegu, karty trafiające kodem same w siebie — nie
+        $this->assertContains($anroCard->id, $loaded);
+        $this->assertContains($p4sCard->id, $loaded);
+        $this->assertSame([], array_values(array_intersect($alone, $loaded)));
+    }
+
+    public function test_own_link_of_producer_card_counts_when_code_is_on_several_cards(): void
+    {
+        // kod producenta jest też na karcie Anro (identyfikator P4S po ręcznym połączeniu), więc nie jest jedyny —
+        // własne powiązanie Anro zostaje kluczem nowej karty P4S z tym kodem (karton obok połączonej sztuki)
+        $anroCard = $this->anroCard('IF/016/F/PS');
+        $this->link($anroCard, $this->p4s, 'P-1', 'ZPPV99C', merged: true);
+        $this->identifier($anroCard, 'b2b:'.$this->p4s->id, 'P-1', 'manufacturer_code', 'IF/016/F/PS');
+        $carton = $this->p4sCard('ZPPV99CK', 'ANRO', 'IF/016/F/PS');
+
+        $result = app(CardMatchFinder::class)->evaluate($carton);
+
+        $this->assertSame('conflict', $result['status']);
+        $this->assertSame($anroCard->id, $result['target_product_id']);
+        $this->assertSame('b2b:'.$this->anro->id, $result['matched_source_key']);
+        $this->assertStringContainsString('ma już pozycję tego konta', (string) $result['reason']);
+
+        $summary = app(CardMatchFinder::class)->refresh();
+        $this->assertSame(['pending' => 0, 'conflict' => 1], array_slice($summary, 0, 2));
+        $this->assertSame($anroCard->id, CardMatchCandidate::query()->where('source_product_id', $carton->id)->value('target_product_id'));
     }
 
     public function test_command_refreshes_prints_and_writes_csv_without_merging(): void

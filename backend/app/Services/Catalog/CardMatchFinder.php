@@ -185,7 +185,7 @@ final class CardMatchFinder
         $codeValues = array_map('strval', array_keys($codeValues));
         // kod trafia tylko w tej samej marce, więc powiązania kart innych marek nic nie zmienią
         $linkHits = $codeValues !== []
-            ? $this->linksWithManufacturerCodeSku(array_fill_keys($codeValues, true), $this->brandKey($current->manufacturer))
+            ? $this->linksWithManufacturerCodeSku(array_fill_keys($codeValues, 0), $this->brandKey($current->manufacturer))
             : [];
 
         return $this->analyze(array_map('strval', $eanValues), $codeValues, $linkHits, (int) $source->id)[(int) $source->id] ?? null;
@@ -251,21 +251,26 @@ final class CardMatchFinder
     }
 
     /**
-     * Wszystkie aktywne kody producenta (≥ 5 znaków) — do porównania z remote_sku powiązań kont producentów.
+     * Wszystkie aktywne kody producenta (≥ 5 znaków) — do porównania z remote_sku powiązań kont producentów — z kartą,
+     * na której kod jest jedyny (0 — kod jest na kilku kartach). Powiązanie tej jedynej karty pary nie da (karta-cel
+     * to inna karta niż źródło z tym kodem), a to zwykły przypadek: u producenta remote_sku to jego własny kod
+     * producenta. Bez tego sita przebieg ładował niemal każdą kartę producenta (produkcja 25.09.2026: 25 tys. kodów
+     * z powiązań, 10,8 tys. kart, ponad 128 MB), choć kod na innej karcie miało nieco ponad 400 z nich.
      *
-     * @return array<string, true>
+     * @return array<string, int>
      */
     private function manufacturerCodeValues(): array
     {
         $out = [];
         foreach (ProductIdentifier::query()->toBase()
+            ->selectRaw('normalized, MIN(product_id) AS product_id, COUNT(DISTINCT product_id) AS cards')
             ->where('type', ProductIdentifier::TYPE_MANUFACTURER_CODE)
             ->whereNotNull('normalized')
             ->whereNull('removed_at')
             ->whereRaw('LENGTH(normalized) >= ?', [self::CODE_MIN_LENGTH])
-            ->distinct()
-            ->pluck('normalized') as $value) {
-            $out[(string) $value] = true;
+            ->groupBy('normalized')
+            ->cursor() as $row) {
+            $out[(string) $row->normalized] = (int) $row->cards > 1 ? 0 : (int) $row->product_id;
         }
 
         return $out;
@@ -276,7 +281,8 @@ final class CardMatchFinder
      * to kod producenta). Kolumna remote_sku nie ma postaci znormalizowanej, więc odczyt strumieniem po id.
      * Czy konto jest właścicielem karty, rozstrzyga później CardOwnership — tu tylko wstępne sito.
      *
-     * @param  array<string, true>  $codes
+     * @param  array<string, int>  $codes  kod => jedyna karta z tym kodem producenta, której własne powiązania nic nie
+     *                                     dadzą (0 — bez pomijania)
      * @param  string|null  $brand  tylko karty tej marki kanonicznej (evaluate jednej karty)
      * @return array<string, list<array{product: int, account: int}>>
      */
@@ -301,6 +307,10 @@ final class CardMatchFinder
         foreach ($query->lazyById(5000, 'b2b_product_links.id', 'id') as $link) {
             $code = ProductIdentifierCode::code((string) $link->remote_sku);
             if ($code === null || strlen($code) < self::CODE_MIN_LENGTH || ! isset($codes[$code])) {
+                continue;
+            }
+            // karta trafia własnym kodem sama w siebie — nie ma drugiej karty z tym kodem producenta
+            if ($codes[$code] === (int) $link->product_id) {
                 continue;
             }
             $out[$code][] = ['product' => (int) $link->product_id, 'account' => (int) $link->b2b_account_id];
