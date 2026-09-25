@@ -15,6 +15,12 @@ class ProductVisualCheck extends Model
 {
     public const FEATURE_CLOSED_HEEL = 'closed_heel';
 
+    /**
+     * Wersja pytania do modelu obrazu. Ocena starszą wersją nie idzie do wyszukiwarki, a komenda ocenia zdjęcie od nowa
+     * (25.09.2026: pierwsza wersja „closed/open” myliła klapki z paskiem za piętą — 50 ocen do powtórzenia).
+     */
+    public const CURRENT_PROMPT_VERSION = 'heel-2026-09-25-dwa-pytania';
+
     public const ANSWER_CLOSED = 'closed';
 
     public const ANSWER_OPEN = 'open';

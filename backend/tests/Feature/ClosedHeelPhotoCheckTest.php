@@ -17,6 +17,7 @@ use App\Support\PpeAssortment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -77,7 +78,7 @@ final class ClosedHeelPhotoCheckTest extends TestCase
     {
         $card = $this->sandal('S-1', 'Sandał ochronny S1 P ESD.');
         $image = $this->supplierImage($card);
-        $this->stubVision(['shoe_visible' => true, 'heel' => 'closed', 'what_i_see' => 'zamknięty zapiętek otacza piętę']);
+        $this->stubVision([['back' => 'full', 'shoe_visible' => true, 'what_i_see' => 'cholewka zamyka tył wokół pięty'], ['back' => 'full', 'strap_behind_heel' => false, 'shoe_visible' => true, 'what_i_see' => 'zamknięty tył, brak paska']]);
 
         $result = app(ProductVisualFeatureCheck::class)->checkClosedHeel($card);
 
@@ -117,7 +118,7 @@ final class ClosedHeelPhotoCheckTest extends TestCase
     {
         $card = $this->sandal('S-4', 'Sandał ochronny S1 P ESD.');
         $this->supplierImage($card);
-        $this->stubVision(['shoe_visible' => true, 'heel' => 'closed', 'what_i_see' => 'x'], fallback: true);
+        $this->stubVision([['back' => 'full', 'shoe_visible' => true, 'what_i_see' => 'cholewka zamyka tył wokół pięty'], ['back' => 'full', 'strap_behind_heel' => false, 'shoe_visible' => true, 'what_i_see' => 'zamknięty tył, brak paska']], fallback: true);
 
         $result = app(ProductVisualFeatureCheck::class)->checkClosedHeel($card);
 
@@ -129,7 +130,7 @@ final class ClosedHeelPhotoCheckTest extends TestCase
     {
         $card = $this->sandal('S-5', 'Sandał ochronny S1 P ESD.');
         $this->supplierImage($card);
-        $this->stubVision(['shoe_visible' => false, 'heel' => 'closed']);
+        $this->stubVision([['back' => 'not_visible', 'shoe_visible' => false], ['back' => 'full', 'strap_behind_heel' => false, 'shoe_visible' => true, 'what_i_see' => 'zamknięty tył, brak paska']]);
 
         app(ProductVisualFeatureCheck::class)->checkClosedHeel($card);
 
@@ -140,7 +141,7 @@ final class ClosedHeelPhotoCheckTest extends TestCase
     {
         $card = $this->sandal('S-10', 'Sandał ochronny S1 P ESD.');
         $this->supplierImage($card);
-        $this->stubVision(['shoe_visible' => 'true', 'heel' => ' Closed ', 'what_i_see' => 'x']);
+        $this->stubVision([['back' => ' Full ', 'shoe_visible' => 'true'], ['back' => 'FULL', 'strap_behind_heel' => 'false', 'shoe_visible' => true]]);
 
         app(ProductVisualFeatureCheck::class)->checkClosedHeel($card);
 
@@ -151,7 +152,7 @@ final class ClosedHeelPhotoCheckTest extends TestCase
     {
         $card = $this->sandal('S-11', 'Sandał ochronny S1 P ESD.');
         $this->supplierImage($card);
-        $this->stubVision(['heel' => 'maybe']);
+        $this->stubVision([['back' => 'maybe', 'shoe_visible' => true], ['back' => 'full', 'strap_behind_heel' => false, 'shoe_visible' => true, 'what_i_see' => 'zamknięty tył, brak paska']]);
 
         $result = app(ProductVisualFeatureCheck::class)->checkClosedHeel($card);
 
@@ -168,6 +169,58 @@ final class ClosedHeelPhotoCheckTest extends TestCase
         $service = app(ProductAiSearchService::class);
 
         $this->assertSame([], (new \ReflectionMethod($service, 'photoHeelInferences'))->invoke($service, self::REQUIREMENT, null, [], collect([$a, $b])));
+    }
+
+    /**
+     * Pomiar 25.09.2026 (14 zdjęć z oceną wzorcową): każde z dwóch pytań pomyliło po jednym klapku z paskiem za piętą,
+     * każde inny — „zabudowana” tylko przy zgodzie obu i bez paska za piętą.
+     *
+     * @return iterable<string, array{0: array<string, mixed>, 1: array<string, mixed>, 2: string}>
+     */
+    public static function twoQuestionAnswers(): iterable
+    {
+        $full = ['back' => 'full', 'shoe_visible' => true];
+        $fullNoStrap = ['back' => 'full', 'strap_behind_heel' => false, 'shoe_visible' => true];
+        yield 'oba pełny tył' => [$full, $fullNoStrap, 'closed'];
+        yield 'drugie widzi sam pasek' => [$full, ['back' => 'strap', 'strap_behind_heel' => true, 'shoe_visible' => true], 'unclear'];
+        yield 'pierwsze widzi sam pasek' => [['back' => 'strap', 'shoe_visible' => true], $fullNoStrap, 'unclear'];
+        yield 'pełny tył, ale pasek za piętą' => [$full, ['back' => 'full', 'strap_behind_heel' => true, 'shoe_visible' => true], 'unclear'];
+        yield 'oba pasek albo nic' => [['back' => 'none', 'shoe_visible' => true], ['back' => 'strap', 'strap_behind_heel' => true, 'shoe_visible' => true], 'open'];
+        yield 'tyłu nie widać' => [['back' => 'not_visible', 'shoe_visible' => true], $fullNoStrap, 'unclear'];
+    }
+
+    /**
+     * @param  array<string, mixed>  $back
+     * @param  array<string, mixed>  $strap
+     */
+    #[DataProvider('twoQuestionAnswers')]
+    public function test_closed_only_when_both_questions_agree(array $back, array $strap, string $expected): void
+    {
+        $this->assertSame($expected, app(ProductVisualFeatureCheck::class)->decide($back, $strap));
+    }
+
+    public function test_check_made_with_older_question_is_redone_and_not_used_in_search(): void
+    {
+        $card = $this->sandal('S-14', 'Sandał ochronny ESD.', 'Sandał ochronny ESD S-14');
+        $image = $this->supplierImage($card);
+        ProductVisualCheck::query()->create([
+            'product_id' => $card->id,
+            'product_image_id' => $image->id,
+            'feature' => ProductVisualCheck::FEATURE_CLOSED_HEEL,
+            'answer' => 'closed',
+            'prompt_version' => 'heel-2026-09-25',
+        ]);
+        $service = app(ProductAiSearchService::class);
+
+        $this->assertSame([], (new \ReflectionMethod($service, 'photoHeelInferences'))->invoke($service, self::REQUIREMENT, null, [], collect([$card])));
+        $this->assertNull(app(ProductVisualFeatureCheck::class)->plan($card)['skip'], 'stara wersja pytania — do oceny od nowa');
+
+        $this->stubVision([['back' => 'strap', 'shoe_visible' => true], ['back' => 'strap', 'strap_behind_heel' => true, 'shoe_visible' => true]]);
+        app(ProductVisualFeatureCheck::class)->checkClosedHeel($card);
+
+        $check = ProductVisualCheck::query()->sole();
+        $this->assertSame('open', $check->answer);
+        $this->assertSame(ProductVisualCheck::CURRENT_PROMPT_VERSION, $check->prompt_version);
     }
 
     public function test_dry_run_does_not_call_the_model_or_save(): void
@@ -280,14 +333,18 @@ final class ClosedHeelPhotoCheckTest extends TestCase
         ]);
     }
 
-    /** @param  array<string, mixed>  $answer */
-    private function stubVision(array $answer, bool $fallback = false): void
+    /**
+     * Kolejne odpowiedzi modelu obrazu: pytanie o budowę tyłu, potem o tył i pasek za piętą.
+     *
+     * @param  list<array<string, mixed>>  $answers
+     */
+    private function stubVision(array $answers, bool $fallback = false): void
     {
         $llm = Mockery::mock(OpenAiCompatibleClient::class);
-        $llm->shouldReceive('chatJson')->once()->andReturnUsing(function () use ($answer, $fallback): array {
+        $llm->shouldReceive('chatJson')->andReturnUsing(function () use (&$answers, $fallback): array {
             app(AiServedProviderTally::class)->recordJsonOrigin(['model' => 'vision-test', 'provider' => null, 'profile' => 'Obraz', 'fallback' => $fallback]);
 
-            return $answer;
+            return (array) array_shift($answers);
         });
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
     }

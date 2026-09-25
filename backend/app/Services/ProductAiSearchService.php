@@ -6784,6 +6784,7 @@ final class ProductAiSearchService
                     ->where('product_images.is_primary', true);
             })
             ->where('product_visual_checks.feature', ProductVisualCheck::FEATURE_CLOSED_HEEL)
+            ->where('product_visual_checks.prompt_version', ProductVisualCheck::CURRENT_PROMPT_VERSION)
             ->whereIn('product_visual_checks.answer', [ProductVisualCheck::ANSWER_CLOSED, ProductVisualCheck::ANSWER_OPEN])
             ->whereIn('product_visual_checks.product_id', $ids)
             ->get(['product_visual_checks.product_id', 'product_visual_checks.answer'])
