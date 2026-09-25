@@ -100,13 +100,6 @@ final class ProductAiSearchService
     /** Karta z niepustym `missing_key` w rankingu: kod egzekwuje limit z promptu (model dawał 70 mimo „kluczowy warunek”). */
     private const MISSING_KEY_SCORE_CAP = 50;
 
-    /**
-     * Pole wiersza: ocena modelu sprzed limitu `missing_key` (95 → 50). Rozstrzyga wyłącznie remis procentów
-     * w sortRankedByMatchPercent i nie wychodzi z wyszukiwarki (searchResult je zdejmuje) — procentem karty
-     * zostaje ai_match_percent.
-     */
-    private const MODEL_SCORE_BEFORE_CAP = 'model_score_before_cap';
-
     public const PROGRESS_STAGE_CATALOG = 'catalog';
 
     public const PROGRESS_STAGE_RANK = 'rank';
@@ -883,11 +876,7 @@ final class ProductAiSearchService
         return [
             'query' => $this->displayQuery($query, $intent),
             'total' => count($products),
-            // Ocena sprzed limitu służy tylko kolejności — do przetargu, zapytań klientów i API idzie sam procent.
-            'products' => array_map(
-                static fn (array $row): array => array_diff_key($row, [self::MODEL_SCORE_BEFORE_CAP => true]),
-                $products,
-            ),
+            'products' => $products,
             'needed' => $intent['needed'],
             'search_phrases' => $intent['search_phrases'],
             'parsed_intent' => $this->publicIntentSlice($intent),
@@ -2699,28 +2688,11 @@ final class ProductAiSearchService
             if ($byRated !== 0) {
                 return $byRated;
             }
-            // Potem wyższa ocena modelu sprzed limitu `missing_key`. Golden opisowy15-01 (25.09.2026): trzy właściwe
-            // rękawy HyFlex 95 → 50, rękawom złej długości model dawał raz 40, raz 50 — przy 50 remis rozstrzygała
-            // cena i właściwe karty spadały z 1.–3. na 9.–12. miejsce.
-            $byModel = $this->rowModelScore($b) <=> $this->rowModelScore($a);
-            if ($byModel !== 0) {
-                return $byModel;
-            }
 
             return $this->rowPurchasePln($a) <=> $this->rowPurchasePln($b);
         });
 
         return $ranked;
-    }
-
-    /**
-     * Ocena modelu do remisu: sprzed limitu `missing_key` (pole z rowsFromLlmMatches), a bez tego pola procent wiersza.
-     *
-     * @param  array<string, mixed>  $row
-     */
-    private function rowModelScore(array $row): int
-    {
-        return (int) ($row[self::MODEL_SCORE_BEFORE_CAP] ?? $row['ai_match_percent'] ?? 0);
     }
 
     /**
@@ -6087,9 +6059,6 @@ final class ProductAiSearchService
                 continue;
             }
             $reason = is_string($m['reason'] ?? null) ? $m['reason'] : null;
-            // Ocena modelu sprzed jego własnego limitu `missing_key` rozstrzyga remis procentów. Limity kodu niżej (typ
-            // obuwia, filtr spawalniczy, seria) obniżają ją razem z procentem: tam kod podważył samą ocenę modelu.
-            $modelScore = $score;
             $missingKey = $this->stringList($m['missing_key'] ?? null);
             if ($missingKey !== []) {
                 // Model sam nazwał kluczowy warunek bez dowodu — limit z promptu egzekwuje kod
@@ -6099,13 +6068,13 @@ final class ProductAiSearchService
             }
             $typeGap = $this->missingRequiredFootwearTypeEvidence($requirement, $product);
             if ($typeGap !== null) {
-                $score = $modelScore = min($score, self::MISSING_KEY_SCORE_CAP);
+                $score = min($score, self::MISSING_KEY_SCORE_CAP);
                 $reason = trim(($reason ?? '').' Brak dowodu typu obuwia: '.$typeGap.'.');
             }
             if ($this->assortment->missingWeldingFilterEvidence($requirement, $product)) {
                 // Ten sam wzorzec co wyżej: cecha ochronna sprawdzana deterministycznie, bo model
                 // degradował ją do „drugorzędnej” (poz. 9: gogle bez filtra 90–95% w pięciu biegach).
-                $score = $modelScore = min($score, self::MISSING_KEY_SCORE_CAP);
+                $score = min($score, self::MISSING_KEY_SCORE_CAP);
                 $reason = trim(($reason ?? '').' Brak dowodu kluczowego warunku: filtr spawalniczy / stopień zaciemnienia.');
             }
             $missingSeries = $this->missingSeriesWords($series, $product, $query);
@@ -6113,16 +6082,13 @@ final class ProductAiSearchService
                 // Klient żąda serii, a karta jej nie ma — to inny model, nie spełnienie wymagania. 21.09.2026:
                 // „Rękawice Ultrane” → model dał 90% rękawicy FAWA („zgodne z wymaganiem … rękawice ochronne”).
                 // Karta zostaje widoczną propozycją poniżej progu zapisu, jak inny wariant w rowsFromNamedModels.
-                $score = $modelScore = min($score, self::VARIANT_MISMATCH_SCORE);
+                $score = min($score, self::VARIANT_MISMATCH_SCORE);
                 $reason = trim(($reason ?? '').' Zapytanie wymienia serię „'.implode('”, „', $missingSeries)
                     .'”, a karta jej nie ma — inny model; sprawdź, czy zamiennik jest dopuszczalny.');
             }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(0, $score));
             $row['ai_match_reason'] = $reason;
-            if ($modelScore > $score) {
-                $row[self::MODEL_SCORE_BEFORE_CAP] = min(99, $modelScore);
-            }
             $out[] = $row;
         }
 

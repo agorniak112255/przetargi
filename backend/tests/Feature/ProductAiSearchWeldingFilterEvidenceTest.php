@@ -56,29 +56,6 @@ final class ProductAiSearchWeldingFilterEvidenceTest extends TestCase
         $this->assertSame('GOGLE-Z-FILTREM', $rows->keys()->first(), 'karta z dowodem ma stać przed kartą bez dowodu');
     }
 
-    /**
-     * Remis 50%: pierwszeństwo daje tylko limit `missing_key`, który model nałożył sam. Tu 95 obciął kod, bo karta
-     * nie pokazuje filtra — ta utracona ocena nie wypycha gogli bez filtra przed tańsze gogle z filtrem.
-     */
-    public function test_card_capped_by_code_does_not_jump_ahead_on_its_lost_model_score(): void
-    {
-        $silent = $this->goggles('GOGLE-BEZ-FILTRA', 'Gogle ochronne szczelne', 'Gogle ochronne EN 166, odporność B 120 m/s, odporne na iskry spawalnicze, można nosić na okularach korekcyjnych.');
-        $proven = $this->goggles('GOGLE-Z-FILTREM', 'Gogle spawalnicze szczelne', 'Gogle szczelne, zaciemnienie spawalnicze 5.0, EN 166, EN 169.');
-        $proven->forceFill(['purchase_price' => 10])->save();
-        $this->stubRanking([
-            ['id' => $silent->id, 'score' => 95, 'reason' => 'Gogle szczelne EN 166. Brak dowodu na zaciemnienie 5.0 (drugorzędne).', 'missing_key' => []],
-            ['id' => $proven->id, 'score' => 50, 'reason' => 'Gogle spawalnicze 5.0, szczelność bez dowodu.', 'missing_key' => []],
-        ]);
-
-        $rows = $this->postJson('/api/products/ai-search', ['query' => self::REQUIREMENT, 'limit' => 10])
-            ->assertOk()
-            ->json('products');
-
-        $seen = implode(', ', array_map(static fn (array $r): string => $r['sku'].'='.$r['ai_match_percent'], $rows));
-        $this->assertSame(['GOGLE-Z-FILTREM', 'GOGLE-BEZ-FILTRA'], array_slice(array_column($rows, 'sku'), 0, 2), $seen);
-        $this->assertSame(50, (int) $rows[1]['ai_match_percent']);
-    }
-
     public function test_requirement_without_welding_filter_does_not_cap_plain_goggles(): void
     {
         $plain = $this->goggles('GOGLE-ZWYKLE', 'Gogle ochronne szczelne', 'Gogle ochronne EN 166, odporność B 120 m/s.');
