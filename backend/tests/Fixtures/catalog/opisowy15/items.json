@@ -69,9 +69,13 @@
         ],
         "eval_acceptable_skus": [
             "11739110",
-            "6003006*"
+            "6003006*",
+            "SHARK 6",
+            "3630-031-000-08",
+            "HA3071(L)",
+            "HA3013IMP (L)"
         ],
-        "eval_acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: W1 odporne na przecięcie, min. poziom ISO B (decyzja 14.09); W2 przecięcie i ścieranie w oznaczeniu EN 388; W3 narzędzia tnące, ostre elementy, szkło; W4 elastyczność, wygoda i precyzja. 11739110 – Ansell HyFlex 11-739 (id 8758): W1 „wkładką o wysokiej odporności na przecięcia”, poziom D; W2 opis „EN 388 z poziomem przecięcia D (4.X.4.3.D)” (ścieranie 4; kolumna norm zniekształcona); W3 „do bezpiecznej pracy z ostrymi i szorstkimi elementami”, zastosowanie „Praca z metalem i szkłem”; W4 „zachowuje komfort i zręczność”, „elastycznej dzianinie”; karta modelu, rozmiary 6–11. 6003006* – UVEX athletic D5XP (id 25144): W1 „Rękawice antyprzecięciowe”, poziom D; W2 norma „EN 388: 4 X 4 3 D” (ścieranie 4); W3 „prac o podwyższonym ryzyku mechanicznym”, zastosowanie „Przemysł szklarski” (dane wzbogacenia); W4 „elastyczności i bardzo dobrego czucia”, „umożliwiające precyzyjną pracę”; karta modelu, rozmiary 6–11.",
+        "eval_acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: W1 odporne na przecięcie, min. poziom ISO B (decyzja 14.09); W2 przecięcie i ścieranie w oznaczeniu EN 388; W3 narzędzia tnące, ostre elementy, szkło; W4 elastyczność, wygoda i precyzja. 11739110 – Ansell HyFlex 11-739 (id 8758): W1 „wkładką o wysokiej odporności na przecięcia”, poziom D; W2 opis „EN 388 z poziomem przecięcia D (4.X.4.3.D)” (ścieranie 4; kolumna norm zniekształcona); W3 „do bezpiecznej pracy z ostrymi i szorstkimi elementami”, zastosowanie „Praca z metalem i szkłem”; W4 „zachowuje komfort i zręczność”, „elastycznej dzianinie”; karta modelu, rozmiary 6–11. 6003006* – UVEX athletic D5XP (id 25144): W1 „Rękawice antyprzecięciowe”, poziom D; W2 norma „EN 388: 4 X 4 3 D” (ścieranie 4); W3 „prac o podwyższonym ryzyku mechanicznym”, zastosowanie „Przemysł szklarski” (dane wzbogacenia); W4 „elastyczności i bardzo dobrego czucia”, „umożliwiające precyzyjną pracę”; karta modelu, rozmiary 6–11. Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): SHARK 6 – TK Gloves SHARK (id 26694): W1/W2 „EN 388:2016+A1:2019 (4544C)”; W3 „w przemyśle szklarskim, metalowym, budowlanym”; W4 „komfortu i elastyczności”; karta modelu, rozmiary 6–11. 3630-031-000-08 – Canis RITA w blistrze (id 12613), ten sam model co wzorcowa 3630-020-000-00: W1/W2 „EN 388 (poziomy: 4544C)”; W3 „do pracy z ostrymi przedmiotami, nożami oraz narzędziami”; W4 „komfort noszenia i dobrą czułość palców” (elastyczność — wniosek z dzianiny bezszwowej). HA3071(L) – HexArmor Helix 3071 (id 25459): W1/W2 „EN 388:2016 – poziom 4X43D”; W3 „ostrymi narzędziami; obróbka metali, szkła”; W4 „elastyczne wykończenie”. HA3013IMP (L) – HexArmor Helix 3013 IMP (id 25449): W1/W2 „EN 388:2016 – 3X42FP”; W3 „ostrymi przedmiotami; obróbka metali, szkła”; W4 „oddychające, elastyczne”.",
         "prod_search": {
             "needed": null,
             "rank_of_expected": null,
@@ -104,10 +108,9 @@
             "ARDEUS 350 Air 618080 S1 PL ESD"
         ],
         "eval_catalog_expected_skus": [
-            "ARSO 701 616560 S1 P ESD",
-            "2136-025-808-00"
+            "ARSO 701 616560 S1 P ESD"
         ],
-        "eval_catalog_note": "25.09.2026, decyzja właściciela: dowód ESD obuwia to „ESD” albo EN 61340. Karta ARMEN 9007 6660 S1 P (id 9530) ma na produkcji normę „EN ISO 20345:2011 S1 P SRC”, a w opisie i tabelce nie ma ESD ani EN 61340 (warianty ESD mają „norma: ESD według EN IEC 61340-4-3:2018”), więc w pomiarze jest zakazana. Wzorcowe: ARSO 701 616560 S1 P ESD (id 9490) i Canis 2136-025-808-00 (id 11966). AROSIO 730 Air 616560 S1 P ESD (id 9494) to „półbuty bezpieczne”, nie sandały – zakazana jak siostrzana 618080. ARMEN 9007 1010 S1 P ESD i ARSO 701 618080 S1 P ESD czekają na decyzję, czy FO i zabudowana pięta wynikają z klasy S1 wydania 2011 (brak ich na karcie).",
+        "eval_catalog_note": "25.09.2026, decyzja właściciela: dowód ESD obuwia to „ESD” albo EN 61340. Karta ARMEN 9007 6660 S1 P (id 9530) ma na produkcji normę „EN ISO 20345:2011 S1 P SRC”, a w opisie i tabelce nie ma ESD ani EN 61340 (warianty ESD mają „norma: ESD według EN IEC 61340-4-3:2018”), więc w pomiarze jest zakazana. Wzorcowe: ARSO 701 616560 S1 P ESD (id 9490) i Canis 2136-025-808-00 (id 11966). AROSIO 730 Air 616560 S1 P ESD (id 9494) to „półbuty bezpieczne”, nie sandały – zakazana jak siostrzana 618080. ARMEN 9007 1010 S1 P ESD i ARSO 701 618080 S1 P ESD czekają na decyzję, czy FO i zabudowana pięta wynikają z klasy S1 wydania 2011 (brak ich na karcie). Decyzja D9 (25.09.2026): Canis 2136-025-808-00 (S1PS z wydania 2022) przeszła ze wzorcowych do równoważników.",
         "eval_extra_forbidden_skus": [
             "AROSIO 730 Air 618080 S1 P ESD",
             "ARDESIO 731 Air 618080 S1 P ESD",
@@ -161,7 +164,18 @@
                 "similar"
             ]
         },
-        "source_facts": "Z opisu: sandały, EN ISO 20345 klasa S1, zabudowana pięta, podnosek, ESD, podeszwa FO, antypoślizgowa, przewiewna cholewka, suche pomieszczenia, rozmiary 35–48. Oznaczenie 'P' pochodzi wyłącznie z nazwy/SKU – opis nie wspomina wprost o wkładce antyprzebiciowej."
+        "source_facts": "Z opisu: sandały, EN ISO 20345 klasa S1, zabudowana pięta, podnosek, ESD, podeszwa FO, antypoślizgowa, przewiewna cholewka, suche pomieszczenia, rozmiary 35–48. Oznaczenie 'P' pochodzi wyłącznie z nazwy/SKU – opis nie wspomina wprost o wkładce antyprzebiciowej.",
+        "eval_acceptable_skus": [
+            "2136-025-808-00",
+            "G3444",
+            "G3501",
+            "ARDEA 310 618080 S1 PL ESD",
+            "ARDEA 310 619060 S1 PL ESD",
+            "ARDEA 310 611460 S1 PL ESD",
+            "31 00 064",
+            "31 01 002"
+        ],
+        "eval_acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Decyzja D9 (25.09.2026): klasy z wydania 2022 (S1PS, S1PL) wobec „S1 P” to równoważniki, nie wzorcowe — 2136-025-808-00 – Canis sandał (id 11966) przechodzi ze wzorcowych („EN ISO 20345:2022 S1PS FO SR”, ESD w opisie); G3444 – ARDON BRIMSAN (id 28189): „Rodzaj obuwia: Sandał”, „S1PS SR FO ESD”, „EN IEC 61340-4-3:2018”; G3501 – ARDON REFIWAN SAN (id 28234): „Rodzaj obuwia: Sandał”, „S1PS SR FO ESD”, „ESD: Tak”; ARDEA 310 618080 S1 PL ESD, ARDEA 310 619060 S1 PL ESD, ARDEA 310 611460 S1 PL ESD – ARTRA (id 9439, 9448, 9453): sandał, „EN ISO 20345:2022 S1 PL FO SR”, „EN IEC 61340-4-3:2018 (ESD)”, kolory jednego modelu. Inni producenci: 31 00 064 – Adamant ALEGRO ESD (id 55144): „Przewiewne sandały”, „ESD, S1P, SRC”, metalowy podnosek; 31 01 002 – PPO Sporty X-treme (id 55210): „S1P SRC ESD”, „duża liczba otworów”, podnosek z włókna szklanego; FO i zabudowana pięta — wniosek z S1P wg EN ISO 20345:2011."
     },
     {
         "line_no": 4,
@@ -216,10 +230,6 @@
         "forbidden_skus": [
             "AB178"
         ],
-        "eval_extra_expected_skus": [
-            "SBM01 FLUO",
-            "WRM02 FLUO"
-        ],
         "prod_search": {
             "needed": "Spodniobuty wodoochronne z kaloszami",
             "rank_of_expected": null,
@@ -263,7 +273,15 @@
                 "similar"
             ]
         },
-        "source_facts": "Z opisu: kalosze S5 z wkładką antyprzebiciową, EN ISO 20345 S5 SRC, tkanina poliestrowa powlekana PVC, fluo/zwiększona widzialność, odporność na rozdarcie, EN 343, zgrzewane szwy, wzmocnienia kolan, sznurek w pasie, wymienne szelki, -50°C, rozmiary 39–48 (z pola packaging). Określenie 'oddychające' z nazwy pominięto – opis go nie potwierdza."
+        "source_facts": "Z opisu: kalosze S5 z wkładką antyprzebiciową, EN ISO 20345 S5 SRC, tkanina poliestrowa powlekana PVC, fluo/zwiększona widzialność, odporność na rozdarcie, EN 343, zgrzewane szwy, wzmocnienia kolan, sznurek w pasie, wymienne szelki, -50°C, rozmiary 39–48 (z pola packaging). Określenie 'oddychające' z nazwy pominięto – opis go nie potwierdza.",
+        "eval_catalog_expected_skus": [
+            "SBM01 FLUO"
+        ],
+        "eval_catalog_note": "25.09.2026: SB04 AIR (id z migawki) usunięta ze wzorcowych — norma „EN ISO 20347 - FO O4 SR” to obuwie zawodowe bez podnoska i wkładki antyprzebiciowej, membrana XT4L, a nie S5 SRC. Decyzja D9: WRM02 FLUO (S5 SR z wydania 2022) przeszła do równoważników; SBM01 FLUO zostaje wzorcowa jako najlepsza dostępna, choć też ma „S5 SR” (brak karty S5 SRC z pełnym opisem).",
+        "eval_acceptable_skus": [
+            "WRM02 FLUO"
+        ],
+        "eval_acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Decyzja D9 (25.09.2026): S5 SR z wydania 2022 wobec „S5 SRC” to równoważnik — WRM02 FLUO (id 317) przechodzi ze wzorcowych; uwaga: karta podaje „mocowania podtrzymujące do paska spodni” zamiast szelek i regulacji w pasie — do sprawdzenia."
     },
     {
         "line_no": 6,
@@ -517,7 +535,11 @@
                 "similar"
             ]
         },
-        "source_facts": "Z opisu: apteczka ścienna mini, niezamykana, stałe miejsca i instrukcje, dozownik plastrów z częściowym odklejaniem i blokadą na klucz, uzupełnialne wkłady, wyposażenie (1 zestaw 4-w-1, 3 zestawy 4-w-1 mini, dozownik z 2 wkładami tekstylne/plastikowe, klucz), CE, kolor zielony, waga 1,981 kg. Pominięto producenta, nazwy linii i numery katalogowe wkładów."
+        "source_facts": "Z opisu: apteczka ścienna mini, niezamykana, stałe miejsca i instrukcje, dozownik plastrów z częściowym odklejaniem i blokadą na klucz, uzupełnialne wkłady, wyposażenie (1 zestaw 4-w-1, 3 zestawy 4-w-1 mini, dozownik z 2 wkładami tekstylne/plastikowe, klucz), CE, kolor zielony, waga 1,981 kg. Pominięto producenta, nazwy linii i numery katalogowe wkładów.",
+        "eval_acceptable_skus": [
+            "1914"
+        ],
+        "eval_acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Duplikat: 1914 – Apteczka ścienna CEDERROTH mała (id 54770), karta dystrybutora z tym samym kodem producenta 191400 co wzorcowa."
     },
     {
         "line_no": 11,

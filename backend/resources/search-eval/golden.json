@@ -19,7 +19,11 @@
                 "7100095525",
                 "3M-PELTOR-X2-H"
             ],
-            "note": "Marka + model X2A w wersji nagłownej. Katalog prowadzi te nauszniki pod numerami 3M, nie pod kodem EU — zakazane: X1A (inny model) i X2P3 (wersja nahełmowa). 25.09.2026: zakazane także zestawy HYX2 (229070 części zamienne, 7100383158 i 7000104046 zestawy higieniczne — to nie nauszniki) i wersje nahełmowe X2P3E (7100326939), X2P5E (7100095525) oraz X2P3 z karty dystrybutora 3M-PELTOR-X2-H (ten sam EAN co 7000103990; po połączeniu kart usunąć z listy)."
+            "acceptable_skus": [
+                "3M-PELTOR-X2"
+            ],
+            "note": "Marka + model X2A w wersji nagłownej. Katalog prowadzi te nauszniki pod numerami 3M, nie pod kodem EU — zakazane: X1A (inny model) i X2P3 (wersja nahełmowa). 25.09.2026: zakazane także zestawy HYX2 (229070 części zamienne, 7100383158 i 7000104046 zestawy higieniczne — to nie nauszniki) i wersje nahełmowe X2P3E (7100326939), X2P5E (7100095525) oraz X2P3 z karty dystrybutora 3M-PELTOR-X2-H (ten sam EAN co 7000103990; po połączeniu kart usunąć z listy).",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Duplikat: 3M-PELTOR-X2 (id 34076): „Nauszniki ochronne na pałąku nagłownym 3M™ Peltor™ X2A.”"
         },
         {
             "id": "nauszniki-snr-30",
@@ -53,10 +57,14 @@
                 "AEB040-0A1-A00",
                 "AEB040-0B1-E00",
                 "AEB020-0AY-900",
-                "AEB020-0B1-C00"
+                "AEB020-0B1-C00",
+                "2630.021",
+                "C1129",
+                "C3002",
+                "3M-OPTIME2"
             ],
             "note": "Bez marki, warunek liczbowy z karty: Optime II/III i X4A maja SNR 31-35 dB, Optime I i X1A po 27 dB i nie spelniaja progu. Katalog prowadzi te nauszniki pod numerami 3M, nie pod kodami EU. 25.09.2026: zakazane także JSP Sonis 1 (AEB010-0AY-800, AEB010-0B1-B00: „27 dB SNR” w nazwie) i dohełmowe JSP (AEB040-0C1-A00, AEB030-0CY-000, AEB030-0DY-000: opis albo nazwa „Dohełmowe ochronniki słuchu”, więc nie nagłowne).",
-            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: ochronniki słuchu, nagłowne (pałąk nad głową), SNR ≥ 30 dB. Tylko karty producenta; karty dystrybutora z tym samym EAN albo kodem (3M-OPTIME2/3, 3M-PELTOR-X*, C3002, C3003) właściciel połączy z kartami 3M. 7000039619 – 3M PELTOR Optime II (id 50407): „nagłowne, H520A-407-GQ”, „tłumienia do 31 dB”. 7000103995 – 3M PELTOR X5A (id 50411): „nagłowne, X5A”, „redukują hałas nawet o 37 dB”. 7100333470 – 3M 90563E (id 50430): „wyściełany pałąk nagłowny”, „wartość SNR 30 dB”, EN 352-1:2020. 7000103989 – 3M PELTOR X2A (id 50416): „nagłowne, X2A”, „Wskaźnik tłumienia (SNR): 31 dB”. 7100141454 – 3M PELTOR X2A (id 50427): „Styl nauszników przeciwhałasowych: Nad głową”, „Wskaźnik tłumienia (SNR): 31 dB”. 2630.010 – UVEX K10 (id 23236): „składany, wyściełany pałąk”, „SNR 30 dB”. 2630.020 – UVEX K20 (id 23238): „składanemu pałąkowi”, „SNR 33 dB”, EN 352-1. 2630.030 – UVEX K30 (id 23240): „składanemu pałąkowi”, „SNR 36 dB”. AEB030-0AY-000 i AEB030-0B1-D00 – JSP Sonis Compact (id 18157, 18159): „na pałąku”, „32dB SNR” / „32 dB SNR”. AEB040-0A1-A00 i AEB040-0B1-E00 – JSP Sonis 3 (id 18162, 18163): „na pałąku”, „37dB SNR”. AEB020-0AY-900 i AEB020-0B1-C00 – JSP Sonis 2 (id 18155, 18156): „na pałąku”, „31dB SNR” (odczyt SNR w kodzie bierze dziś 20 z SKU)."
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: ochronniki słuchu, nagłowne (pałąk nad głową), SNR ≥ 30 dB. Tylko karty producenta; karty dystrybutora z tym samym EAN albo kodem (3M-OPTIME2/3, 3M-PELTOR-X*, C3002, C3003) właściciel połączy z kartami 3M. 7000039619 – 3M PELTOR Optime II (id 50407): „nagłowne, H520A-407-GQ”, „tłumienia do 31 dB”. 7000103995 – 3M PELTOR X5A (id 50411): „nagłowne, X5A”, „redukują hałas nawet o 37 dB”. 7100333470 – 3M 90563E (id 50430): „wyściełany pałąk nagłowny”, „wartość SNR 30 dB”, EN 352-1:2020. 7000103989 – 3M PELTOR X2A (id 50416): „nagłowne, X2A”, „Wskaźnik tłumienia (SNR): 31 dB”. 7100141454 – 3M PELTOR X2A (id 50427): „Styl nauszników przeciwhałasowych: Nad głową”, „Wskaźnik tłumienia (SNR): 31 dB”. 2630.010 – UVEX K10 (id 23236): „składany, wyściełany pałąk”, „SNR 30 dB”. 2630.020 – UVEX K20 (id 23238): „składanemu pałąkowi”, „SNR 33 dB”, EN 352-1. 2630.030 – UVEX K30 (id 23240): „składanemu pałąkowi”, „SNR 36 dB”. AEB030-0AY-000 i AEB030-0B1-D00 – JSP Sonis Compact (id 18157, 18159): „na pałąku”, „32dB SNR” / „32 dB SNR”. AEB040-0A1-A00 i AEB040-0B1-E00 – JSP Sonis 3 (id 18162, 18163): „na pałąku”, „37dB SNR”. AEB020-0AY-900 i AEB020-0B1-C00 – JSP Sonis 2 (id 18155, 18156): „na pałąku”, „31dB SNR” (odczyt SNR w kodzie bierze dziś 20 z SKU). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): 2630.021 – uvex K20 hi-viz (id 23239): „wyściełany pałąk”, „SNR 33 dB”, kolor nie jest warunkiem. C1129 – Honeywell Verishield VS 130 (id 27649): „teleskopowa regulacja wysokości pałąka”, „wygłuszenie SNR: 35 dB”. Duplikaty: C3002 – 3M Peltor Optime II H520A (id 27652): „z pałąkiem nagłownym”, „wytłumienie SNR: 31 dB”; 3M-OPTIME2 (id 30736): „Ochronniki słuchu na pałąku nagłownym Peltor™ OPTIME™ II.”, „SNR=31 dB”."
         },
         {
             "id": "peltor-nahelmowe",
@@ -86,10 +94,17 @@
                 "2630.210",
                 "2630.230",
                 "AEB040-0C1-A00",
-                "AEB030-0CY-000"
+                "AEB030-0CY-000",
+                "HW-OS-VS110-H",
+                "HW-OS-VS120-H",
+                "HW-OS-VS130-H",
+                "2600.201",
+                "2600.202",
+                "C1045",
+                "C3079"
             ],
             "note": "Wariant mocowania: wynik ma zawierać wyłącznie nauszniki nahełmowe, nagłowne są zakazane.",
-            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: nauszniki przeciwhałasowe, montowane na hełm ochronny, bez zawężenia na karcie do jednej linii hełmów. Tylko karty producenta; duplikaty dystrybutora (225060, C1045, 3M-PELTOR-X*-H) właściciel połączy z kartami 3M. 7000039617 – 3M PELTOR Optime I (id 50450): „nahełmowe, H510P3E-405-GU”. 7000107754 – 3M PELTOR H31P3E (id 50422): „nahełmowe”, „Specjalny kształt czasz do hełmu ochronnego”. 7100326938 – 3M PELTOR X4P3E (id 50449): „mocowane do hełmu”. 7100095551 – 3M PELTOR X4P5 (id 50426): „nahełmowe, X4P5”. 7100095525 – 3M PELTOR X2P5E (id 50444): „mocowane na kasku”. 7000038210 – 3M PELTOR Optime II (id 50425): „nahełmowe, H520P3E-467-GB”. 7000039621 – 3M PELTOR Optime II (id 50408): „nahełmowe, H520P3E-410-GQ”. 7000107763 – 3M PELTOR Optime II (id 50440): „nahełmowe, H520P3E-410-GQ-01” (inny EAN niż 7000039621). 7000038212 – 3M PELTOR Optime III (id 50447): „nahełmowe, H540P3E-475-GB”. 7000039624 – 3M PELTOR Optime III (id 50409): „nahełmowe, H540P3E-413-SV”. 2630.210 – UVEX K10H (id 23241): „przeznaczona do montażu na kasku ochronnym”. 2630.230 – UVEX K30H (id 23243): „przeznaczone do montażu na kaskach ochronnych”. AEB040-0C1-A00 – JSP Sonis 3 (id 18165): opis „Dohełmowe ochronniki słuchu Sonis® 3”, „Adapter hełmu”. AEB030-0CY-000 – JSP Sonis Compact (id 18160): opis „Dohełmowe ochronniki słuchu Sonis® C”."
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: nauszniki przeciwhałasowe, montowane na hełm ochronny, bez zawężenia na karcie do jednej linii hełmów. Tylko karty producenta; duplikaty dystrybutora (225060, C1045, 3M-PELTOR-X*-H) właściciel połączy z kartami 3M. 7000039617 – 3M PELTOR Optime I (id 50450): „nahełmowe, H510P3E-405-GU”. 7000107754 – 3M PELTOR H31P3E (id 50422): „nahełmowe”, „Specjalny kształt czasz do hełmu ochronnego”. 7100326938 – 3M PELTOR X4P3E (id 50449): „mocowane do hełmu”. 7100095551 – 3M PELTOR X4P5 (id 50426): „nahełmowe, X4P5”. 7100095525 – 3M PELTOR X2P5E (id 50444): „mocowane na kasku”. 7000038210 – 3M PELTOR Optime II (id 50425): „nahełmowe, H520P3E-467-GB”. 7000039621 – 3M PELTOR Optime II (id 50408): „nahełmowe, H520P3E-410-GQ”. 7000107763 – 3M PELTOR Optime II (id 50440): „nahełmowe, H520P3E-410-GQ-01” (inny EAN niż 7000039621). 7000038212 – 3M PELTOR Optime III (id 50447): „nahełmowe, H540P3E-475-GB”. 7000039624 – 3M PELTOR Optime III (id 50409): „nahełmowe, H540P3E-413-SV”. 2630.210 – UVEX K10H (id 23241): „przeznaczona do montażu na kasku ochronnym”. 2630.230 – UVEX K30H (id 23243): „przeznaczone do montażu na kaskach ochronnych”. AEB040-0C1-A00 – JSP Sonis 3 (id 18165): opis „Dohełmowe ochronniki słuchu Sonis® 3”, „Adapter hełmu”. AEB030-0CY-000 – JSP Sonis Compact (id 18160): opis „Dohełmowe ochronniki słuchu Sonis® C”. Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): HW-OS-VS110-H, HW-OS-VS120-H, HW-OS-VS130-H – Howard Leight VeriShield VS110H/VS120H/VS130H (id 36154, 36155, 36156): „nahełmowe”, „Norma: EN352-3”, „nauszniki pasują do szerokiego asortymentu hełmów” (opis podaje też błędnie EN352-1). 2600.201 – uvex K1H (id 23231) i 2600.202 – uvex K2H (id 23232): nahełmowe, „Pasują do wszystkich modeli hełmów uvex”, kilka linii hełmów (pheos, airwing, super boss) — decyzja właściciela z 25.09.2026: równoważnik, choć tylko hełmy uvex. Duplikaty: C1045 – 3M Peltor Optime I H510P3E (id 27622, dystrybutor 7000039617): „Z adapterem do kasku: Tak”, „Akcesoria do kasków: uniwersalny”; C3079 – 3M Peltor X1P3 (id 27658, dystrybutor wzorcowej 7000103988): „nahełmowe, X1P3”."
         },
         {
             "id": "uvex-phynomic-esd",
@@ -112,7 +127,17 @@
                 "SBM01 FLUO"
             ],
             "forbidden_skus": [],
-            "note": "Asortyment niszowy — sprawdza, czy kaskada odzyskiwania go w ogóle znajduje."
+            "acceptable_skus": [
+                "WRM02B",
+                "WRM02 FLUO",
+                "AJ-WRM02FS5",
+                "12 012 540",
+                "AJ-SBM01FS5",
+                "12 011 000",
+                "SBH01 Fluo"
+            ],
+            "note": "Asortyment niszowy — sprawdza, czy kaskada odzyskiwania go w ogóle znajduje.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Warunki: spodniobuty (wodery z wgrzanymi kaloszami = spodniobuty, decyzja 14.09), wodoodporne, z kaloszem, typ S5. WRM02B – AJ GROUP Wodery Max (id 316): „wgrane na stałe wysokiej jakości kalosze”, „EN ISO 20345 - S5 SR”. WRM02 FLUO (id 317): „wgrzanym na stałe kaloszom z PVC”, „S5 SR”. AJ-WRM02FS5 – PROS Wodery MAX S5 (id 34937): „wgrzane na stałe … kalosze”, „S5 SRC” (pole „Kategoria I” to błąd danych). 12 012 540 – PROS SBM01B MAX S5 (id 54028) i 12 011 000 – PROS SBM01 MAX S5 (id 54027): karty wzorcowych modeli z pełną rozmiarówką. AJ-SBM01FS5 – PROS Spodniobuty MAX S5 (id 34974): „wgrzane na stałe … kalosze”, „S5 SRC” (pole „nie jest ŚOI” to błąd danych). SBH01 Fluo – AJ GROUP spodniobuty z uprzężą (id 307): „obuwie jest zintegrowane ze spodniami”, „S5 SRC”; szelki bezpieczeństwa ponad wymaganie."
         },
         {
             "id": "kombinezon-wodoochronny-wgrzane-kalosze",
@@ -132,7 +157,11 @@
                 "4310-163-001-00"
             ],
             "forbidden_skus": [],
-            "note": "Hełm MSA V-Gard 500 wentylowany — katalog prowadzi go pod numerami Canis."
+            "acceptable_skus": [
+                "MSA-KAS-VG500-W"
+            ],
+            "note": "Hełm MSA V-Gard 500 wentylowany — katalog prowadzi go pod numerami Canis.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Duplikat: MSA-KAS-VG500-W – karta producenta MSA (id 34035): „Antyelektrostatyczny hełm V-GARD 500, wentylowany”, „wykonany z tworzywa ABS”, „system Fas-Trac”."
         },
         {
             "id": "rekawice-mapa-telsol-351-katiii-rozmiar-od-8-do",
@@ -150,16 +179,24 @@
                 "27600110"
             ],
             "forbidden_skus": [],
-            "note": "Linia SIWZ: Ansell Hycron 27-600. W katalogu ActivArmr Hycron 27600."
+            "acceptable_skus": [
+                "27-600"
+            ],
+            "note": "Linia SIWZ: Ansell Hycron 27-600. W katalogu ActivArmr Hycron 27600.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Duplikat: 27-600 – ANSELL (id 55081): „Rękawice ACTIVEARMR powlekane niebieskim nitrylem, powleczenie 3/4” — ten sam model 27-600 u dystrybutora."
         },
         {
             "id": "okulary-ochronne-3m-solus-s1201sgaf-eu",
             "query": "Okulary ochronne 3M SOLUS S1201SGAF - EU",
             "expected_skus": [
-                "7100244066"
+                "7100078882"
             ],
             "forbidden_skus": [],
-            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+            "acceptable_skus": [
+                "3M-OO-SOLUS1000"
+            ],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie. 25.09.2026: wzorcowa 7100078882 (id 47049) — „przezroczyste soczewki, S1201SGAF-EU”; dotychczasowa 7100244066 to zestaw S1201SGAF-TSKT-EU (wkładka TPE i taśma), a 7100078881 zestaw S1201SGAFKT-EU — neutralne, nie wzorcowe.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Duplikat: 3M-OO-SOLUS1000 (id 35581): „Okulary ochronne Solus™ S1201SGAF.”"
         },
         {
             "id": "pasek-podbrodkowy-3-punktowy-do-helmu-g3000",
@@ -168,7 +205,11 @@
                 "7000108175"
             ],
             "forbidden_skus": [],
-            "note": "Pasek podbródkowy GH4 do hełmu G3000 — karta 3M pod numerem katalogowym."
+            "acceptable_skus": [
+                "3MGH4"
+            ],
+            "note": "Pasek podbródkowy GH4 do hełmu G3000 — karta 3M pod numerem katalogowym.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Duplikat: 3MGH4 – 3M GH4 (id 38269): „Pasek podbródkowy 3-punktowy do hełmów ochronnych 3M G3000”, ten sam EAN co wzorcowa 7000108175."
         },
         {
             "id": "trzewiki-araukan-940-6060-s3-en-iso-20345",
@@ -206,7 +247,11 @@
                 "S5923000"
             ],
             "forbidden_skus": [],
-            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie."
+            "acceptable_skus": [
+                "RELSEC-10"
+            ],
+            "note": "Linia SIWZ z oferty — SKU wstawione do oferty, model z wymagania jest na karcie.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Duplikat: RELSEC-10 – SECURA (id 34975): „Rękawice elektroizolacyjne ELSEC 10 kV, klasa 1.”"
         },
         {
             "id": "rekawice-mapa-tepm-ice-700-en-388-en-511-en-is",
@@ -256,17 +301,20 @@
             ],
             "acceptable_skus": [
                 "11739110",
-                "6003006*"
+                "6003006*",
+                "SHARK 6",
+                "3630-031-000-08",
+                "HA3071(L)",
+                "HA3013IMP (L)"
             ],
             "note": "Opis źródłowy to ogólny tekst kategorii 'rękawice antyprzecięciowe' (zastosowania, odniesienie do EN 388) bez parametrów tego modelu – brak poziomów EN 388, materiału, rozmiarów i grubości; opis celowo krótki, nic nie dodano.",
-            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: W1 odporne na przecięcie, min. poziom ISO B (decyzja 14.09); W2 przecięcie i ścieranie w oznaczeniu EN 388; W3 narzędzia tnące, ostre elementy, szkło; W4 elastyczność, wygoda i precyzja. 11739110 – Ansell HyFlex 11-739 (id 8758): W1 „wkładką o wysokiej odporności na przecięcia”, poziom D; W2 opis „EN 388 z poziomem przecięcia D (4.X.4.3.D)” (ścieranie 4; kolumna norm zniekształcona); W3 „do bezpiecznej pracy z ostrymi i szorstkimi elementami”, zastosowanie „Praca z metalem i szkłem”; W4 „zachowuje komfort i zręczność”, „elastycznej dzianinie”; karta modelu, rozmiary 6–11. 6003006* – UVEX athletic D5XP (id 25144): W1 „Rękawice antyprzecięciowe”, poziom D; W2 norma „EN 388: 4 X 4 3 D” (ścieranie 4); W3 „prac o podwyższonym ryzyku mechanicznym”, zastosowanie „Przemysł szklarski” (dane wzbogacenia); W4 „elastyczności i bardzo dobrego czucia”, „umożliwiające precyzyjną pracę”; karta modelu, rozmiary 6–11."
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Warunki: W1 odporne na przecięcie, min. poziom ISO B (decyzja 14.09); W2 przecięcie i ścieranie w oznaczeniu EN 388; W3 narzędzia tnące, ostre elementy, szkło; W4 elastyczność, wygoda i precyzja. 11739110 – Ansell HyFlex 11-739 (id 8758): W1 „wkładką o wysokiej odporności na przecięcia”, poziom D; W2 opis „EN 388 z poziomem przecięcia D (4.X.4.3.D)” (ścieranie 4; kolumna norm zniekształcona); W3 „do bezpiecznej pracy z ostrymi i szorstkimi elementami”, zastosowanie „Praca z metalem i szkłem”; W4 „zachowuje komfort i zręczność”, „elastycznej dzianinie”; karta modelu, rozmiary 6–11. 6003006* – UVEX athletic D5XP (id 25144): W1 „Rękawice antyprzecięciowe”, poziom D; W2 norma „EN 388: 4 X 4 3 D” (ścieranie 4); W3 „prac o podwyższonym ryzyku mechanicznym”, zastosowanie „Przemysł szklarski” (dane wzbogacenia); W4 „elastyczności i bardzo dobrego czucia”, „umożliwiające precyzyjną pracę”; karta modelu, rozmiary 6–11. Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): SHARK 6 – TK Gloves SHARK (id 26694): W1/W2 „EN 388:2016+A1:2019 (4544C)”; W3 „w przemyśle szklarskim, metalowym, budowlanym”; W4 „komfortu i elastyczności”; karta modelu, rozmiary 6–11. 3630-031-000-08 – Canis RITA w blistrze (id 12613), ten sam model co wzorcowa 3630-020-000-00: W1/W2 „EN 388 (poziomy: 4544C)”; W3 „do pracy z ostrymi przedmiotami, nożami oraz narzędziami”; W4 „komfort noszenia i dobrą czułość palców” (elastyczność — wniosek z dzianiny bezszwowej). HA3071(L) – HexArmor Helix 3071 (id 25459): W1/W2 „EN 388:2016 – poziom 4X43D”; W3 „ostrymi narzędziami; obróbka metali, szkła”; W4 „elastyczne wykończenie”. HA3013IMP (L) – HexArmor Helix 3013 IMP (id 25449): W1/W2 „EN 388:2016 – 3X42FP”; W3 „ostrymi przedmiotami; obróbka metali, szkła”; W4 „oddychające, elastyczne”."
         },
         {
             "id": "opisowy15-03-sandaly-s1p-esd",
             "query": "Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, do prac w suchych pomieszczeniach – przemysł elektroniczny, logistyka, montaż. Wymagane: zabudowana pięta; podnosek ochronny; właściwości antyelektrostatyczne (ESD) umożliwiające kontrolę ładunków elektrostatycznych; podeszwa odporna na oleje i paliwa (FO) oraz antypoślizgowa; cholewka z materiałów przewiewnych; lekka konstrukcja odpowiednia do prac wymagających częstego przemieszczania się. Rozmiary: 35–48.",
             "expected_skus": [
-                "ARSO 701 616560 S1 P ESD",
-                "2136-025-808-00"
+                "ARSO 701 616560 S1 P ESD"
             ],
             "forbidden_skus": [
                 "AROX 733 641460 S1 ESD",
@@ -276,8 +324,19 @@
                 "AROSIO 730 Air 616560 S1 P ESD",
                 "ARMEN 9007 6660 S1 P"
             ],
+            "acceptable_skus": [
+                "2136-025-808-00",
+                "G3444",
+                "G3501",
+                "ARDEA 310 618080 S1 PL ESD",
+                "ARDEA 310 619060 S1 PL ESD",
+                "ARDEA 310 611460 S1 PL ESD",
+                "31 00 064",
+                "31 01 002"
+            ],
             "note": "Z opisu: sandały, EN ISO 20345 klasa S1, zabudowana pięta, podnosek, ESD, podeszwa FO, antypoślizgowa, przewiewna cholewka, suche pomieszczenia, rozmiary 35–48. Oznaczenie 'P' pochodzi wyłącznie z nazwy/SKU – opis nie wspomina wprost o wkładce antyprzebiciowej.",
-            "catalog_note": "25.09.2026, decyzja właściciela: dowód ESD obuwia to „ESD” albo EN 61340. Karta ARMEN 9007 6660 S1 P (id 9530) ma na produkcji normę „EN ISO 20345:2011 S1 P SRC”, a w opisie i tabelce nie ma ESD ani EN 61340 (warianty ESD mają „norma: ESD według EN IEC 61340-4-3:2018”), więc w pomiarze jest zakazana. Wzorcowe: ARSO 701 616560 S1 P ESD (id 9490) i Canis 2136-025-808-00 (id 11966). AROSIO 730 Air 616560 S1 P ESD (id 9494) to „półbuty bezpieczne”, nie sandały – zakazana jak siostrzana 618080. ARMEN 9007 1010 S1 P ESD i ARSO 701 618080 S1 P ESD czekają na decyzję, czy FO i zabudowana pięta wynikają z klasy S1 wydania 2011 (brak ich na karcie)."
+            "catalog_note": "25.09.2026, decyzja właściciela: dowód ESD obuwia to „ESD” albo EN 61340. Karta ARMEN 9007 6660 S1 P (id 9530) ma na produkcji normę „EN ISO 20345:2011 S1 P SRC”, a w opisie i tabelce nie ma ESD ani EN 61340 (warianty ESD mają „norma: ESD według EN IEC 61340-4-3:2018”), więc w pomiarze jest zakazana. Wzorcowe: ARSO 701 616560 S1 P ESD (id 9490) i Canis 2136-025-808-00 (id 11966). AROSIO 730 Air 616560 S1 P ESD (id 9494) to „półbuty bezpieczne”, nie sandały – zakazana jak siostrzana 618080. ARMEN 9007 1010 S1 P ESD i ARSO 701 618080 S1 P ESD czekają na decyzję, czy FO i zabudowana pięta wynikają z klasy S1 wydania 2011 (brak ich na karcie). Decyzja D9 (25.09.2026): Canis 2136-025-808-00 (S1PS z wydania 2022) przeszła ze wzorcowych do równoważników.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Decyzja D9 (25.09.2026): klasy z wydania 2022 (S1PS, S1PL) wobec „S1 P” to równoważniki, nie wzorcowe — 2136-025-808-00 – Canis sandał (id 11966) przechodzi ze wzorcowych („EN ISO 20345:2022 S1PS FO SR”, ESD w opisie); G3444 – ARDON BRIMSAN (id 28189): „Rodzaj obuwia: Sandał”, „S1PS SR FO ESD”, „EN IEC 61340-4-3:2018”; G3501 – ARDON REFIWAN SAN (id 28234): „Rodzaj obuwia: Sandał”, „S1PS SR FO ESD”, „ESD: Tak”; ARDEA 310 618080 S1 PL ESD, ARDEA 310 619060 S1 PL ESD, ARDEA 310 611460 S1 PL ESD – ARTRA (id 9439, 9448, 9453): sandał, „EN ISO 20345:2022 S1 PL FO SR”, „EN IEC 61340-4-3:2018 (ESD)”, kolory jednego modelu. Inni producenci: 31 00 064 – Adamant ALEGRO ESD (id 55144): „Przewiewne sandały”, „ESD, S1P, SRC”, metalowy podnosek; 31 01 002 – PPO Sporty X-treme (id 55210): „S1P SRC ESD”, „duża liczba otworów”, podnosek z włókna szklanego; FO i zabudowana pięta — wniosek z S1P wg EN ISO 20345:2011."
         },
         {
             "id": "opisowy15-04-fartuch-wodoochronny-120x75",
@@ -294,14 +353,17 @@
             "id": "opisowy15-05-spodniobuty-s5-src",
             "query": "Spodniobuty wodoochronne z wgrzanymi na stałe kaloszami – obuwie bezpieczne typu S5 SRC wg EN ISO 20345, z wkładką antyprzebiciową. Wymagane: tkanina na podkładzie poliestrowym, jednostronnie powlekana PVC, o zwiększonej widzialności (kolor fluorescencyjny) i odporności na rozdzieranie, spełniająca wymagania EN 343; szwy zgrzewane obustronnie (szczelność i wytrzymałość); wzmocnienia na kolanach; regulacja w pasie sznurkiem; wymienne szelki z szerokiej elastycznej gumy; materiał odporny na zginanie bez pękania w temperaturze do -50°C; przeznaczenie do pracy w warunkach ograniczonej widoczności. Rozmiary: 39–48.",
             "expected_skus": [
-                "SB04 AIR",
-                "SBM01 FLUO",
-                "WRM02 FLUO"
+                "SBM01 FLUO"
             ],
             "forbidden_skus": [
                 "AB178"
             ],
-            "note": "Z opisu: kalosze S5 z wkładką antyprzebiciową, EN ISO 20345 S5 SRC, tkanina poliestrowa powlekana PVC, fluo/zwiększona widzialność, odporność na rozdarcie, EN 343, zgrzewane szwy, wzmocnienia kolan, sznurek w pasie, wymienne szelki, -50°C, rozmiary 39–48 (z pola packaging). Określenie 'oddychające' z nazwy pominięto – opis go nie potwierdza."
+            "acceptable_skus": [
+                "WRM02 FLUO"
+            ],
+            "note": "Z opisu: kalosze S5 z wkładką antyprzebiciową, EN ISO 20345 S5 SRC, tkanina poliestrowa powlekana PVC, fluo/zwiększona widzialność, odporność na rozdarcie, EN 343, zgrzewane szwy, wzmocnienia kolan, sznurek w pasie, wymienne szelki, -50°C, rozmiary 39–48 (z pola packaging). Określenie 'oddychające' z nazwy pominięto – opis go nie potwierdza.",
+            "catalog_note": "25.09.2026: SB04 AIR (id z migawki) usunięta ze wzorcowych — norma „EN ISO 20347 - FO O4 SR” to obuwie zawodowe bez podnoska i wkładki antyprzebiciowej, membrana XT4L, a nie S5 SRC. Decyzja D9: WRM02 FLUO (S5 SR z wydania 2022) przeszła do równoważników; SBM01 FLUO zostaje wzorcowa jako najlepsza dostępna, choć też ma „S5 SR” (brak karty S5 SRC z pełnym opisem).",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Decyzja D9 (25.09.2026): S5 SR z wydania 2022 wobec „S5 SRC” to równoważnik — WRM02 FLUO (id 317) przechodzi ze wzorcowych; uwaga: karta podaje „mocowania podtrzymujące do paska spodni” zamiast szelek i regulacji w pasie — do sprawdzenia."
         },
         {
             "id": "opisowy15-06-okulary-smoke-pc-tpr",
@@ -360,7 +422,11 @@
                 "191400"
             ],
             "forbidden_skus": [],
-            "note": "Z opisu: apteczka ścienna mini, niezamykana, stałe miejsca i instrukcje, dozownik plastrów z częściowym odklejaniem i blokadą na klucz, uzupełnialne wkłady, wyposażenie (1 zestaw 4-w-1, 3 zestawy 4-w-1 mini, dozownik z 2 wkładami tekstylne/plastikowe, klucz), CE, kolor zielony, waga 1,981 kg. Pominięto producenta, nazwy linii i numery katalogowe wkładów."
+            "acceptable_skus": [
+                "1914"
+            ],
+            "note": "Z opisu: apteczka ścienna mini, niezamykana, stałe miejsca i instrukcje, dozownik plastrów z częściowym odklejaniem i blokadą na klucz, uzupełnialne wkłady, wyposażenie (1 zestaw 4-w-1, 3 zestawy 4-w-1 mini, dozownik z 2 wkładami tekstylne/plastikowe, klucz), CE, kolor zielony, waga 1,981 kg. Pominięto producenta, nazwy linii i numery katalogowe wkładów.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Duplikat: 1914 – Apteczka ścienna CEDERROTH mała (id 54770), karta dystrybutora z tym samym kodem producenta 191400 co wzorcowa."
         },
         {
             "id": "opisowy15-11-plukanka-500ml",
@@ -426,7 +492,11 @@
                 "AROX 733 641460 S1 PL ESD",
                 "AROX 733 648080 S1 PL ESD"
             ],
-            "note": "Zapytanie z maila klienta: kod z kropką, katalog trzyma go z ukośnikami, a „S1” wygląda jak kod i zalewa pulę kodową. Spadek tutaj oznacza powrót puli zapchanej klasą obuwia."
+            "acceptable_skus": [
+                "8543/8"
+            ],
+            "note": "Zapytanie z maila klienta: kod z kropką, katalog trzyma go z ukośnikami, a „S1” wygląda jak kod i zalewa pulę kodową. Spadek tutaj oznacza powrót puli zapchanej klasą obuwia.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Duplikat: 8543/8 – UVEX Obuwie (id 56591): „Półbuty UVEX 1 S1 SRC, ESD, perforowane”, ten sam model uvex 1 8543.8."
         },
         {
             "id": "mail-artra-armen-9007-1010-s1",
@@ -467,7 +537,11 @@
             "forbidden_skus": [
                 "8534/8/35"
             ],
-            "note": "Zapytanie klienta z poczty. Kod z kropką (8543.8) wobec zapisu katalogowego 8543/8; 8534 to inny model o przestawionych cyfrach."
+            "acceptable_skus": [
+                "8543/8"
+            ],
+            "note": "Zapytanie klienta z poczty. Kod z kropką (8543.8) wobec zapisu katalogowego 8543/8; 8534 to inny model o przestawionych cyfrach.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Duplikat: 8543/8 – UVEX Obuwie (id 56591): „Półbuty UVEX 1 S1 SRC, ESD, perforowane”, ten sam model uvex 1 8543.8."
         },
         {
             "id": "mail-rekawice-chemoodporne-esd-374",
@@ -504,15 +578,20 @@
             "id": "mail-kalosze-chemoodporne-esd",
             "query": "Kalosze chemoodporne antyelektrostatyczne rozmiar 43",
             "expected_skus": [
-                "2471-001-800-00",
-                "2461-001-800-00"
+                "17 095 000"
             ],
             "forbidden_skus": [
                 "6528/2/35",
                 "6529/2/35",
                 "6522/2/35"
             ],
-            "note": "Zapytanie klienta z poczty. Katalog nie ma kalosza z potwierdzoną odpornością chemiczną, więc wynikiem są kalosze PVC z antystatyczną podeszwą — braki ma nazwać uzasadnienie. Półbuty i trzewiki UVEX to inny wyrób i nie mogą tu wejść."
+            "acceptable_skus": [
+                "2471-001-800-00",
+                "2461-001-800-00",
+                "CARDIFF"
+            ],
+            "note": "Zapytanie klienta z poczty. Katalog nie ma kalosza z potwierdzoną odpornością chemiczną, więc wynikiem są kalosze PVC z antystatyczną podeszwą — braki ma nazwać uzasadnienie. Półbuty i trzewiki UVEX to inny wyrób i nie mogą tu wejść. 25.09.2026 (decyzja właściciela): wzorcowa 17 095 000 – Kalosze Total Safety S5 PCV/Nitryl (id 54595): „Korpus buta jest wodo, olejo, paliwo i kwasoodporny.”, „Obuwie antystatyczne”, rozmiary 36–49 — najmocniejszy dowód chemoodporności w katalogu (bez EN 13832); dotychczasowe wzorcowe Canis przeszły do równoważników.",
+            "acceptable_note": "Równoważniki (decyzja 25.09.2026: inny producent albo model spełniający wszystkie warunki liczy się jako trafienie). Przegląd wzorców 25.09.2026 (karty ocenione przez model na ≥ 90%, sprawdzone warunek po warunku; duplikat = ten sam wyrób na innej karcie, do połączenia w aplikacji — decyzja D): Decyzja właściciela z 25.09.2026: żadna karta nie dowodzi chemoodporności (EN 13832 ani „odporne na chemikalia”); wzorcowa jest karta z najmocniejszym dowodem, a karty „najlepsze dostępne” to równoważniki. 2471-001-800-00 – Canis damskie PVC (id 12065) i 2461-001-800-00 – Canis PVC (id 12063): tylko „olejoodporna podeszwa”, antystatyka słowem (EN ISO 20347 bez litery A). CARDIFF – Procera kalosze PCV (id 38402): „Antyelektrostatyczna, antypoślizgowa i olejoodporna podeszwa”, rozmiary 40–47 — ten sam poziom dowodu co Canis."
         },
         {
             "id": "mail-kombinezon-chemo-kwas-siarkowy",
