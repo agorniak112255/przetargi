@@ -23,6 +23,7 @@ use App\Support\InquirySignature;
 use App\Support\OfferPricing;
 use App\Support\OfferProductText;
 use App\Support\OfferTermText;
+use App\Support\PpeAssortment;
 use App\Support\ProductSizeVariant;
 use App\Support\WithdrawnProductNote;
 use Carbon\CarbonImmutable;
@@ -74,6 +75,19 @@ final class ClientInquiryService
     /** Data na początku wiersza („24.07.2026 płatności…”) — nie numer pozycji ani ilość. */
     private const LEADING_DATE = '/^\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{2,4}(?!\d)/u';
 
+    /** „ESD” we frazie ekstraktora, także „ESD-owe” — do wycięcia, gdy klient go nie napisał. */
+    private const ESD_MENTION = '/(?<![\p{L}\d])esd(?:-(?:ow\p{L}*|safe))?(?![\p{L}\d])/iu';
+
+    /**
+     * Norma antystatyki o numerze %s we frazie ekstraktora — z oznaczeniem („PN-EN ISO”, „IEC”), częściami i rokiem
+     * („EN 1149-5:2018”, „IEC 61340-5-1”, „EN 1149-1, -3, -5”) i słowem, które ją wprowadza („zgodne z”, „wg”, „normą”).
+     */
+    private const NORM_MENTION = '/(?:(?<![\p{L}\d])(?:zgodn\p{L}*\s+z|wg\.?|według|spełniając\p{L}*|certyfikat\p{L}*|norm\p{L}*)(?:\s+norm\p{L}*)?\s+)?'
+        .'(?:(?<![\p{L}\d])(?:pn|en|iso|iec)(?:[\s-]*(?:en|iso|iec)(?![\p{L}]))*[\s-]*)?(?<!\d)%s(?:[-\/]{1,2}\d{1,2}|,\s*-\d{1,2}|:\s?\d{4})*(?!\d)/iu';
+
+    /** Miejsce po wyciętym zapisie (znak z obszaru prywatnego Unicode — nie stoi w tekście maila). */
+    private const CUT_MARK = "\u{E000}";
+
     /**
      * Mail łamany w stałej szerokości (ok. 72–78 znaków) tnie wiersz pozycji w połowie.
      * Wiersz od tej długości, po którym treść idzie dalej małą literą, uznajemy za złamany.
@@ -111,6 +125,7 @@ final class ClientInquiryService
         private readonly ProductInquirySearch $search,
         private readonly NbpExchangeRateService $fx,
         private readonly AiSettingsService $aiSettings,
+        private readonly PpeAssortment $assortment = new PpeAssortment,
     ) {}
 
     /**
@@ -136,9 +151,10 @@ final class ClientInquiryService
         $subjectHint = InquiryQueryText::subjectProductHint($forwardedSubject)
             ?? InquiryQueryText::subjectProductHint($subject);
         $extractStarted = hrtime(true);
-        $extracted = $this->extract($analysisBody, $forwardedSubject ?? $this->nullable($subject));
+        $extractSubject = $forwardedSubject ?? $this->nullable($subject);
+        $extracted = $this->extract($analysisBody, $extractSubject);
         $extractMs = self::msSince($extractStarted);
-        $resolved = $this->resolveLineItemsWithOmitted($analysisBody, $extracted['line_items'], $subjectHint);
+        $resolved = $this->resolveLineItemsWithOmitted($analysisBody, $extracted['line_items'], $subjectHint, $extractSubject);
         $lineItems = $resolved['items'];
         // karta modelu przy pozycji, którą scaliliśmy z sumą albo rozmiarami, idzie do tej, która została
         foreach ($extracted['cards'] as $i => $card) {
@@ -2752,13 +2768,14 @@ final class ClientInquiryService
      * żeby karty modelu wskazujące usuniętą pozycję nie przepadły.
      *
      * @param  list<array<string, mixed>>  $fromAi
+     * @param  string|null  $subject  temat maila, który widział ekstraktor — razem z treścią to słowa klienta
      * @return array{
      *     items: list<array<string, mixed>>,
      *     omitted: list<array{quote: string, qty: string|null, unit: string|null, size: string|null}>,
      *     merged_ids: array<string, string>
      * }
      */
-    public function resolveLineItemsWithOmitted(string $body, array $fromAi, ?string $subjectHint = null): array
+    public function resolveLineItemsWithOmitted(string $body, array $fromAi, ?string $subjectHint = null, ?string $subject = null): array
     {
         $parsed = $this->parseLineItemsFromBody($body);
         // Parser przeważa nad modelem, gdy znalazł więcej pozycji — ale liczą się tylko
@@ -2793,7 +2810,11 @@ final class ClientInquiryService
         }
 
         return [
-            'items' => $this->withSearchQueries(array_slice($items, 0, self::MAX_LINE_ITEMS), $subjectHint),
+            'items' => $this->withSearchQueries(
+                array_slice($items, 0, self::MAX_LINE_ITEMS),
+                $subjectHint,
+                trim(($subject ?? '')."\n".$body),
+            ),
             'omitted' => $omitted,
             'merged_ids' => $merged,
         ];
@@ -3371,9 +3392,10 @@ final class ClientInquiryService
      * wyrobu („rękawice”), którego klient nie napisał.
      *
      * @param  list<array<string, mixed>>  $items
+     * @param  string  $clientText  temat i treść maila, które widział ekstraktor
      * @return list<array<string, mixed>>
      */
-    private function withSearchQueries(array $items, ?string $subjectHint = null): array
+    private function withSearchQueries(array $items, ?string $subjectHint = null, string $clientText = ''): array
     {
         $out = [];
         // sama nazwa wyrobu z ostatniej pozycji, która ją miała w mailu
@@ -3383,7 +3405,8 @@ final class ClientInquiryService
             $own = $this->catalogSearchQuery(
                 (string) ($item['query'] ?? ''),
                 (string) ($item['quote'] ?? ''),
-                $item
+                $item,
+                $clientText,
             );
             $item['query_source'] = 'mail';
 
@@ -3982,10 +4005,15 @@ final class ClientInquiryService
      * Do katalogu idzie cytat z warunkiem, nie sama nazwa z ekstraktora („kombinezon”).
      *
      * @param  array<string, mixed>|null  $item  pozycja, której ilość i rozmiar wycinamy z cytatu
+     * @param  string  $clientText  temat i treść maila, które widział ekstraktor (withoutInventedAntistaticDemands)
      */
-    public function catalogSearchQuery(string $query, string $quote, ?array $item = null): string
+    public function catalogSearchQuery(string $query, string $quote, ?array $item = null, string $clientText = ''): string
     {
         $query = trim($query);
+        if ($item !== null) {
+            // Stare rekordy (bez $item) liczą klucz grupy po staremu — frazą, jak ją zapisała analiza.
+            $query = $this->withoutInventedAntistaticDemands($query, $clientText."\n".$quote);
+        }
         $fromQuote = $this->queryFromLine($quote);
         if ($fromQuote === '') {
             return $query;
@@ -4000,6 +4028,50 @@ final class ClientInquiryService
         }
 
         return $query;
+    }
+
+    /**
+     * Fraza ekstraktora bez „ESD” i norm antystatyki (EN 1149, EN 16350, EN 61340), których klient nie napisał.
+     *
+     * Wyszukiwarka czyta frazę jak słowa klienta: „ESD” albo numer normy robi z „rękawic antystatycznych” żądanie
+     * dowodu ESD — karta z samym słowem dostaje najwyżej 60 (decyzja właściciela z 25.09.2026: tylko gdy klient sam
+     * żąda ESD albo normy) — a przy wierszu bez antystatyki włącza jej bramkę. Ekstraktor ma w prompcie „Z warunkiem:
+     * substancja, norma, typ” i dopisuje je od siebie. Odniesieniem jest to, co model widział (temat i treść maila),
+     * a nie sam cytat: wiersz z samym rozmiarem pod wstępem „Proszę o rękawice antystatyczne ESD:” ma warunek tylko we
+     * wstępie, a fraza modelu słusznie go przenosi. Reszta frazy zostaje — niesie nazwę wyrobu z nagłówka albo tematu.
+     *
+     * Fraza zostaje, jak była, gdy wzorzec nie wyciął wszystkiego (zapis, którego nie zna) albo gdy po wycięciu
+     * straciłaby antystatykę, o którą klient w mailu prosi: model zapisał wtedy jego słowo jako ESD i bez niego
+     * szukanie pominęłoby warunek. Samego słowa („antystatyczne”) nie ruszamy — nie żąda normy.
+     */
+    private function withoutInventedAntistaticDemands(string $phrase, string $clientText): string
+    {
+        $written = $this->assortment->strongAntistaticDemands($clientText);
+        $invented = array_diff($this->assortment->strongAntistaticDemands($phrase), $written);
+        if ($invented === []) {
+            return $phrase;
+        }
+        $clean = $phrase;
+        foreach ($invented as $demand) {
+            $pattern = $demand === 'esd' ? self::ESD_MENTION : sprintf(self::NORM_MENTION, $demand);
+            $clean = preg_replace($pattern, self::CUT_MARK, $clean) ?? $clean;
+        }
+        // Separatory przy wyciętym zapisie odchodzą razem z nim („ESD/antystatyczne”, „(ESD, EN 1149-5)”), potem pusty
+        // nawias i spójnik, za którym nic nie zostało („EN 1149-5 i EN 16350” → „EN 1149-5”).
+        $clean = preg_replace('/[\s,;\/+]*'.self::CUT_MARK.'[\s,;\/+]*/u', ' ', $clean) ?? $clean;
+        $clean = preg_replace('/[(\[]\s*[)\]]/u', ' ', $clean) ?? $clean;
+        $clean = preg_replace('/([(\[])\s+|\s+([)\]])/u', '$1$2', $clean) ?? $clean;
+        $clean = preg_replace('/\s+(?:i|oraz|lub|albo|z|wg)\s*(?=[,;)\]]|$)/u', '', $clean) ?? $clean;
+        $clean = preg_replace('/\s+/u', ' ', $clean) ?? $clean;
+        // wyrażeniem, nie trim(): trim() tnie bajty, a „–—” na jego liście psuje „„” i „Ó” na brzegu frazy
+        $clean = preg_replace('/^[\s,;:\/+\-–—]+|[\s,;:\/+\-–—]+$/u', '', $clean) ?? $clean;
+
+        if (array_diff($this->assortment->strongAntistaticDemands($clean), $written) !== []
+            || (! $this->assortment->requiresAntistatic($clean) && $this->assortment->requiresAntistatic($clientText))) {
+            return $phrase;
+        }
+
+        return $clean;
     }
 
     /**

@@ -11,6 +11,7 @@ use App\Services\ClientInquiryService;
 use App\Services\NbpExchangeRateService;
 use App\Services\ProductInquirySearch;
 use App\Support\InquiryMailText;
+use App\Support\PpeAssortment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Mockery;
@@ -391,6 +392,101 @@ final class ClientInquiryServiceTest extends TestCase
             'Rękawice chemoodporne',
             $svc->catalogSearchQuery('Rękawice chemoodporne', '30szt Rękawice chemoodporne rozmiar 10')
         );
+    }
+
+    /**
+     * Ekstraktor ma w prompcie „Z warunkiem: substancja, norma, typ” i dopisuje do frazy ESD albo normę antystatyki,
+     * której klient nie napisał. Wyszukiwarka czyta frazę jak słowa klienta: dopisane „ESD” robiło z „rękawic
+     * antystatycznych” żądanie dowodu ESD — karta z samym słowem dostawała najwyżej 60 (decyzja z 25.09.2026: tylko gdy
+     * klient sam żąda ESD albo normy) — a przy wierszu bez antystatyki włączało jej bramkę.
+     */
+    public function test_search_query_drops_antistatic_demands_the_client_never_wrote(): void
+    {
+        $assortment = new PpeAssortment;
+        $body = "Dzień dobry,\nproszę o ofertę:\n20 par Rękawice antystatyczne rozmiar 9\n5 par Rękawice antystatyczne rozmiar 10\n"
+            ."3 szt. Kurtka antystatyczna rozmiar XL\nPozdrawiam";
+        $items = $this->service()->resolveLineItems($body, [
+            // fraza modelu dłuższa od cytatu bez ilości i rozmiaru — dotąd szła do katalogu razem z ESD
+            ['id' => 'item_1', 'quote' => '20 par Rękawice antystatyczne rozmiar 9', 'qty' => '20', 'unit' => 'par', 'query' => 'rękawice antystatyczne ESD', 'size' => '9'],
+            ['id' => 'item_2', 'quote' => '5 par Rękawice antystatyczne rozmiar 10', 'qty' => '5', 'unit' => 'par', 'query' => 'rękawice antystatyczne (ESD, EN 1149-5)', 'size' => '10'],
+            ['id' => 'item_3', 'quote' => '3 szt. Kurtka antystatyczna rozmiar XL', 'qty' => '3', 'unit' => 'szt.', 'query' => 'kurtka antystatyczna zgodna z PN-EN 1149-5:2018', 'size' => 'XL'],
+        ]);
+
+        $this->assertSame(
+            ['rękawice antystatyczne', 'rękawice antystatyczne', 'kurtka antystatyczna'],
+            array_column($items, 'search_query'),
+        );
+        foreach ($items as $item) {
+            // samo słowo klienta zostaje — bramka antystatyki tak, żądanie dowodu ESD nie
+            $this->assertFalse($assortment->requiresStrongAntistatic($item['search_query']), $item['search_query']);
+            $this->assertTrue($assortment->requiresAntistatic($item['search_query']), $item['search_query']);
+        }
+        // fraza modelu zostaje w pozycji, jak ją zapisał — zmienia się tylko klucz szukania
+        $this->assertSame('rękawice antystatyczne ESD', $items[0]['query']);
+
+        // polski cudzysłów na brzegu frazy zostaje cały (trim() ciąłby jego bajty)
+        $this->assertSame('„Ultrane” rękawice antystatyczne', $this->service()->catalogSearchQuery(
+            '„Ultrane” rękawice antystatyczne ESD',
+            '20 par Rękawice antystatyczne Ultrane rozmiar 9',
+            ['qty' => '20', 'unit' => 'par', 'size' => '9'],
+            '20 par Rękawice antystatyczne Ultrane rozmiar 9',
+        ));
+
+        // norma antystatyki dopisana do wiersza bez antystatyki włączała jej bramkę
+        $items = $this->service()->resolveLineItems("Proszę o ofertę:\n10 par Rękawice nitrylowe rozmiar 8", [
+            ['id' => 'item_1', 'quote' => '10 par Rękawice nitrylowe rozmiar 8', 'qty' => '10', 'unit' => 'par', 'query' => 'rękawice nitrylowe zgodne z EN 16350', 'size' => '8'],
+        ]);
+        $this->assertSame('rękawice nitrylowe', $items[0]['search_query']);
+        $this->assertFalse($assortment->requiresAntistatic($items[0]['search_query']));
+    }
+
+    /** ESD i normę, które klient sam napisał — w wierszu, we wstępie albo w temacie maila — fraza modelu zachowuje. */
+    public function test_search_query_keeps_antistatic_demands_the_client_wrote(): void
+    {
+        $svc = $this->service();
+        $item = ['qty' => '10', 'unit' => 'par', 'size' => '8'];
+
+        // wiersz z samym rozmiarem: warunek stoi tylko we wstępie, a fraza modelu go przenosi
+        $this->assertSame('rękawice antystatyczne ESD', $svc->catalogSearchQuery(
+            'rękawice antystatyczne ESD',
+            'rozm. 8 - 10 par',
+            $item,
+            "Proszę o rękawice antystatyczne ESD w rozmiarach:\nrozm. 8 - 10 par",
+        ));
+        // ESD z tematu maila
+        $this->assertSame('rękawice antystatyczne ESD', $svc->catalogSearchQuery(
+            'rękawice antystatyczne ESD',
+            '10 par Rękawice antystatyczne rozmiar 8',
+            $item,
+            "Temat maila: Rękawice ESD\n\n10 par Rękawice antystatyczne rozmiar 8",
+        ));
+        // ESD klienta z wiersza zostaje, dopisana norma odpada
+        $this->assertSame('rękawice antystatyczne ESD', $svc->catalogSearchQuery(
+            'rękawice antystatyczne ESD EN 16350',
+            '10 par Rękawice ESD rozmiar 8',
+            $item,
+            '10 par Rękawice ESD rozmiar 8',
+        ));
+        // normę z wymaganiem części („EN 1149-5”) klient napisał gołym numerem — to ta sama norma
+        $this->assertSame('rękawice antystatyczne EN 1149-5', $svc->catalogSearchQuery(
+            'rękawice antystatyczne EN 1149-5',
+            '10 par Rękawice antystatyczne wg 1149 rozmiar 8',
+            $item,
+            '10 par Rękawice antystatyczne wg 1149 rozmiar 8',
+        ));
+        // Model zamienił słowo klienta na ESD: po wycięciu szukanie zgubiłoby antystatykę, o którą klient prosi —
+        // fraza zostaje, jak była (ostrzej niż klient, ale bez pominięcia warunku).
+        $this->assertSame('rękawice ochronne nitrylowe ESD', $svc->catalogSearchQuery(
+            'rękawice ochronne nitrylowe ESD',
+            '10 par Rękawice antystatyczne rozmiar 8',
+            $item,
+            '10 par Rękawice antystatyczne rozmiar 8',
+        ));
+        // stare rekordy (bez pozycji) liczą klucz grupy po staremu — jak go zapisała analiza
+        $this->assertSame('rękawice antystatyczne ESD', $svc->catalogSearchQuery(
+            'rękawice antystatyczne ESD',
+            '20 par Rękawice antystatyczne rozmiar 9',
+        ));
     }
 
     public function test_resolve_line_items_prefers_more_body_rows_than_ai(): void

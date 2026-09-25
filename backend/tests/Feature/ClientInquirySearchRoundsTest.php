@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ClientInquiryService;
 use App\Services\ProductInquirySearch;
+use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
@@ -139,6 +140,76 @@ final class ClientInquirySearchRoundsTest extends TestCase
 
             return true;
         }))->once();
+    }
+
+    /**
+     * Wyszukiwarka czyta frazę jak słowa klienta, więc „ESD” i norma antystatyki dopisane przez ekstraktor nie idą do
+     * niej z kluczem pozycji — dotąd „rękawice antystatyczne ESD” obniżały karty z samym słowem do 60. Fraza modelu
+     * zostaje zapasem pozycji: szukamy nią dopiero wtedy, gdy klucz nic nie znalazł, jak każdą inną frazą modelu.
+     */
+    public function test_item_key_does_not_carry_antistatic_demands_the_client_never_wrote(): void
+    {
+        $gloves = $this->product('AS-9', 'Rękawice antystatyczne nitrylowe');
+        $calls = $this->mockSearch(fn (string $q): array => [$this->row($gloves, 90)]);
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Rękawice i kurtki',
+                'questions' => [],
+                'product_queries' => ['rękawice antystatyczne ESD', 'kurtka antystatyczna EN 1149-5'],
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => '20 par Rękawice antystatyczne rozmiar 9', 'qty' => '20', 'unit' => 'par', 'query' => 'rękawice antystatyczne ESD', 'size' => '9'],
+                    ['id' => 'item_2', 'quote' => '3 szt. Kurtka antystatyczna rozmiar XL', 'qty' => '3', 'unit' => 'szt.', 'query' => 'kurtka antystatyczna EN 1149-5', 'size' => 'XL'],
+                ],
+                'cards' => [],
+            ]);
+        });
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $id = $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry,\nproszę o ofertę:\n20 par Rękawice antystatyczne rozmiar 9\n3 szt. Kurtka antystatyczna rozmiar XL\nPozdrawiam",
+            'subject' => 'Zapytanie ofertowe',
+            'tone' => 'handlowy',
+        ])->assertCreated()->json('id');
+        $inquiry = ClientInquiry::query()->findOrFail($id);
+
+        $this->assertSame(
+            ['rękawice antystatyczne', 'kurtka antystatyczna'],
+            array_column($inquiry->analysis['line_items'], 'search_query'),
+        );
+        $this->assertSame([['rękawice antystatyczne', 'kurtka antystatyczna']], $calls->getArrayCopy(), 'klucze znalazły karty — bez drugiej rundy');
+        $assortment = new PpeAssortment;
+        foreach ($calls[0] as $query) {
+            $this->assertFalse($assortment->requiresStrongAntistatic($query), $query);
+        }
+        // fraza modelu zostaje w planie jako zapas pozycji
+        $this->assertContains('rękawice antystatyczne ESD', $inquiry->analysis['product_queries']);
+    }
+
+    /** „ESD” z tematu maila to słowa klienta — klucz pozycji go zachowuje. */
+    public function test_item_key_keeps_esd_from_the_mail_subject(): void
+    {
+        $gloves = $this->product('AS-9', 'Rękawice antystatyczne ESD');
+        $calls = $this->mockSearch(fn (string $q): array => [$this->row($gloves, 90)]);
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Rękawice ESD',
+                'questions' => [],
+                'product_queries' => ['rękawice antystatyczne ESD'],
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => '20 par Rękawice antystatyczne rozmiar 9', 'qty' => '20', 'unit' => 'par', 'query' => 'rękawice antystatyczne ESD', 'size' => '9'],
+                ],
+                'cards' => [],
+            ]);
+        });
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $id = $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry,\nproszę o ofertę:\n20 par Rękawice antystatyczne rozmiar 9\nPozdrawiam",
+            'subject' => 'Rękawice ESD - zapytanie',
+            'tone' => 'handlowy',
+        ])->assertCreated()->json('id');
+        $inquiry = ClientInquiry::query()->findOrFail($id);
+
+        $this->assertSame('rękawice antystatyczne ESD', $inquiry->analysis['line_items'][0]['search_query']);
+        $this->assertSame([['rękawice antystatyczne ESD']], $calls->getArrayCopy());
     }
 
     private function analyze(): ClientInquiry

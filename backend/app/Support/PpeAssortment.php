@@ -1967,13 +1967,25 @@ final class PpeAssortment
      */
     public function requiresStrongAntistatic(string $requirement): bool
     {
-        return preg_match('/\besd\b/u', $this->normalize($requirement)) === 1
-            || $this->antistaticNormsIn($requirement) !== [];
+        return $this->strongAntistaticDemands($requirement) !== [];
+    }
+
+    /**
+     * Żądania dowodu antystatyki w tekście: „esd” i numery norm (antistaticNormsIn) — to, co czyta
+     * requiresStrongAntistatic. ClientInquiryService porównuje nimi frazę ekstraktora z mailem klienta.
+     *
+     * @return list<string>
+     */
+    public function strongAntistaticDemands(string $text): array
+    {
+        $esd = preg_match('/\besd\b/u', $this->normalize($text)) === 1 ? ['esd'] : [];
+
+        return [...$esd, ...$this->antistaticNormsIn($text)];
     }
 
     /**
      * Numery norm antystatyki w wymaganiu (1149, 16350, 61340), także goła liczba („wg 1149”) — w tekście wymagania to
-     * norma. Do requiresStrongAntistatic i do sprawdzenia, czy karta ma normę wymienioną w wymaganiu.
+     * norma. Do strongAntistaticDemands i do sprawdzenia, czy karta ma normę wymienioną w wymaganiu.
      *
      * @return list<string>
      */
