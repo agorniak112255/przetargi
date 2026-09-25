@@ -105,6 +105,31 @@ final class ProductAiSearchWeakAntistaticTest extends TestCase
     }
 
     /**
+     * Jedna definicja dowodu w bramce i w prompcie (D7a, 25.09.2026). Prompt mówił „antystatyczny = EN 1149”, a reguła
+     * żargonu „sama norma EN nie zastępuje tego słowa” — model mógł odrzucić rękawicę z samym EN 16350 albo wpisać ją do
+     * missing_key (limit 50), choć bramka i grupa dowodu żargonu uznają normę za dowód. Inny żargon zostaje przy słowie.
+     */
+    public function test_rank_prompt_names_esd_en_1149_and_en_16350_as_antistatic_proof(): void
+    {
+        $prompt = $this->rankPromptFor(self::QUERY, $this->glove('G-16350', 'Rękawice chemoodporne butylowe', 'EN ISO 374-1:2016 typ A, EN 16350:2014'));
+
+        $this->assertMatchesRegularExpression('/antystatyczny = „ESD”, EN 1149 albo EN 16350/u', $prompt);
+        $this->assertStringContainsString('albo normę antystatyki (EN 1149, EN 16350, EN 61340) w polach dowodu', $prompt);
+        $this->assertStringNotContainsString('sama norma EN nie zastępuje tego słowa', $prompt);
+    }
+
+    public function test_other_slang_still_requires_the_word_in_rank_prompt(): void
+    {
+        $prompt = $this->rankPromptFor(
+            'Rękawice wampirki, rozmiar 9',
+            $this->glove('W-1', 'Rękawice dzianinowe powlekane nitrylem na dłoni', 'EN 388:2016 4121X'),
+        );
+
+        $this->assertStringContainsString('sama norma EN nie zastępuje tego słowa', $prompt);
+        $this->assertStringNotContainsString('normę antystatyki', $prompt);
+    }
+
+    /**
      * Żądanie ESD liczy się z tekstu klienta, nie ze streszczenia modelu: rękaw HyFlex 11-202 z przetargu 1 („wyrób
      * antystatyczny”) — model streścił wymaganie jako narękawniki „(ESD)”, a rodzaju wyrobu nie ma w tekście klienta,
      * więc streszczenie wchodzi do tekstu bramek. Klient normy nie żądał, więc słowo na karcie jest trafieniem.
@@ -169,6 +194,36 @@ final class ProductAiSearchWeakAntistaticTest extends TestCase
         $llm->shouldReceive('chatJson')->andReturnUsing($answer);
         $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
+    }
+
+    /** Prompt systemowy rankingu wysłany dla zapytania (model ocenia kartę na 95). */
+    private function rankPromptFor(string $query, Product $card): string
+    {
+        $prompts = [];
+        $answer = static function (array $messages) use ($card, &$prompts): array {
+            if (FakeSearchLlm::kind($messages) !== FakeSearchLlm::KIND_RANK) {
+                return [
+                    'needed' => 'rękawice',
+                    'search_steps' => ['rękawice'],
+                    'search_phrases' => ['rękawice'],
+                    'constraints' => [],
+                ];
+            }
+            $prompts[] = (string) ($messages[0]['content'] ?? '');
+
+            return ['matches' => [['id' => $card->id, 'score' => 95, 'reason' => 'spełnia', 'missing_key' => []]]];
+        };
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing($answer);
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $this->app->make(AiProductSearch::class)->find($query, 10);
+
+        $this->assertNotEmpty($prompts, 'fixture: ranking wysłany do modelu');
+        $this->assertStringContainsString('Gdy wymaganie ma żargon/słowo cechy', $prompts[0], 'fixture: zapytanie ma żargon');
+
+        return $prompts[0];
     }
 
     private function glove(string $sku, string $name, string $norms): Product

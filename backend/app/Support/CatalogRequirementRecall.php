@@ -291,8 +291,12 @@ final class CatalogRequirementRecall
 
         $evidence = [];
         if ($antistatic) {
-            // Te same dowody co bramka productShowsAntistatic — karta z samym EN 16350 bez tej normy tu nie wchodziła.
-            foreach (['%esd%', '%antyelektro%', '%antystat%', '%1149%', '%61340%', '%16350%'] as $like) {
+            // Te same dowody co bramka productShowsAntistatic — karta z samym EN 16350 albo z angielskim „antistatic”
+            // (bez polskiego słowa) tu nie wchodziła. Prefiltr jest luźny: kod z cyfrą obok odsiewa bramka.
+            foreach ([
+                '%esd%', '%antyelektro%', '%antystat%', '%antistatic%', '%anti-static%', '%anti static%',
+                '%1149%', '%61340%', '%16350%',
+            ] as $like) {
                 $evidence[] = $like;
             }
         }

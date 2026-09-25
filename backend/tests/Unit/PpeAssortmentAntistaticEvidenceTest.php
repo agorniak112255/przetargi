@@ -124,6 +124,38 @@ final class PpeAssortmentAntistaticEvidenceTest extends TestCase
         $this->assertSame([], $this->assortment->productAntistaticNorms($this->card('R-5', 'Rękawice nitrylowe 16350 szt.')));
     }
 
+    /**
+     * Przegląd tury B: liczba z cyfrą obok to kod wyrobu, nie norma — sklejone „11495” czytało się jak EN 1149-5,
+     * a SKU linki DBI-SALA 6134006 jak EN 61340 (także w wymaganiu, które wtedy włączało bramkę antystatyki).
+     * Sklejony zapis normy (EN61340, IEC61340) jest normą — dotąd bramka go nie widziała.
+     */
+    #[Test]
+    public function product_codes_are_not_antistatic_norms_but_glued_norm_notation_is(): void
+    {
+        $this->assertFalse($this->assortment->productShowsAntistatic('Rękawice powlekane 11495'));
+        $this->assertFalse($this->assortment->productShowsAntistatic('Linka bezpieczeństwa DBI-SALA 6134006'));
+        $this->assertFalse($this->assortment->requiresAntistatic('Linka bezpieczeństwa z amortyzatorem DBI-SALA 6134006'));
+        $this->assertFalse($this->assortment->requiresAntistatic('Rękawice powlekane 11495, rozmiar 9'));
+        $this->assertSame([], $this->assortment->productAntistaticNorms($this->card('R-11495', 'Rękawice antystatyczne 11495')));
+        $this->assertFalse($this->assortment->productMeetsAntistaticRequirement(
+            'Półbuty ochronne S1P ESD',
+            $this->card('P-11495', 'Półbuty ochronne S1P 11495', ['norms' => 'EN ISO 20345:2011 S1P'])
+        ));
+
+        $this->assertTrue($this->assortment->productShowsAntistatic('Sandały S1 P, EN61340-4-3'));
+        $this->assertTrue($this->assortment->productShowsAntistatic('Sandały S1 P, IEC61340-4-3'));
+        $this->assertTrue($this->assortment->requiresAntistatic('Obuwie wg EN61340-4-3'));
+        $this->assertSame('strong', $this->assortment->antistaticEvidence(self::FOOTWEAR, 'Sandały S1 P, EN61340-4-3'));
+        $this->assertSame(['61340'], $this->assortment->productAntistaticNorms($this->card('S-1', 'Sandały S1 P, IEC61340-4-3')));
+        $this->assertTrue($this->assortment->productMeetsAntistaticRequirement(
+            'Półbuty ochronne S1P ESD',
+            $this->card('P-61340', 'Półbuty ochronne S1P', ['norms' => 'EN ISO 20345:2011 S1P, EN61340-4-3'])
+        ));
+        // Zapis z myślnikiem i spacją dalej jest normą.
+        $this->assertTrue($this->assortment->productShowsAntistatic('Rękawice powlekane, 1149-5'));
+        $this->assertTrue($this->assortment->productShowsAntistatic('Rękawice powlekane, EN1149-5'));
+    }
+
     /** Siła dowodu dzieli dokładnie to, co bramka przepuszcza — nic nie jest „strong” ani „weak” poza nią. */
     #[Test]
     public function evidence_is_present_exactly_when_gate_shows_antistatic(): void
@@ -138,6 +170,10 @@ final class PpeAssortmentAntistaticEvidenceTest extends TestCase
             'Anti-static PU coated gloves',
             'Rękawice montażowe powlekane poliuretanem, EN 388 4131X',
             'Rękawice Phynomic lite',
+            'Rękawice powlekane 11495',
+            'Linka DBI-SALA 6134006',
+            'Sandały S1 P, EN61340-4-3',
+            'Rękawice, IEC61340-5-1',
         ];
         foreach ([self::FOOTWEAR, self::GLOVES, self::COVERALL] as $requirement) {
             foreach ($texts as $text) {

@@ -93,6 +93,37 @@ final class CatalogRequirementRecallTest extends TestCase
         $this->assertSame(['R-16350'], $found);
     }
 
+    /** Angielski opis („extra features: antistatic”, Ansell HyFlex 11-202) bramka uznaje — prefiltr SQL też musi. */
+    #[Test]
+    public function antistatic_recall_keeps_cards_with_english_antistatic_word(): void
+    {
+        foreach (['antistatic', 'anti-static', 'anti static'] as $i => $word) {
+            Product::query()->create([
+                'sku' => 'R-EN-'.$i,
+                'name' => 'Rękawice powlekane nitrylem',
+                'manufacturer' => 'Ansell',
+                'category' => 'Rękawice',
+                'description' => 'Rękawice powlekane nitrylem. Extra features: '.$word.'.',
+                'catalog_price_net' => 50,
+                'purchase_price' => 30,
+                'stock' => 5,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+
+        $found = $this->recall->retrieve(
+            fn (): Builder => Product::query(),
+            'Rękawice antystatyczne powlekane',
+            20,
+            fn (Product $p): string => $p->name.' '.(string) $p->description,
+            fn (string $q, Product $p): int => 0,
+            fn (Product $p): ?int => null,
+        )->pluck('sku')->sort()->values()->all();
+
+        $this->assertSame(['R-EN-0', 'R-EN-1', 'R-EN-2'], $found);
+    }
+
     private function boot(string $sku, string $name): Product
     {
         return Product::query()->create([

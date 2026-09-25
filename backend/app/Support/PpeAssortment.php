@@ -59,6 +59,18 @@ final class PpeAssortment
     /** Dowód antystatyki do sprawdzenia (antistaticEvidence): samo słowo albo norma innego rodzaju wyrobu. */
     public const ANTISTATIC_WEAK = 'weak';
 
+    /**
+     * Normy antystatyki w tekście po normalize() — jeden zapis dla bramki, siły dowodu i uzasadnienia limitu. Liczba
+     * z cyfrą obok to kod wyrobu, nie norma: sklejone „11495” nie jest EN 1149-5, SKU linki DBI-SALA 6134006 nie jest
+     * EN 61340. EN 1149-5 po normalize() to „1149 5”.
+     */
+    private const NORM_1149 = '\ben\s*1149(?!\d)|(?<!\d)1149\s+5(?!\d)';
+
+    /** Także sklejone „en61340” / „iec61340” (EN61340-4-3 na karcie). */
+    private const NORM_61340 = '(?:\b|(?<=en)|(?<=iec))61340(?!\d)';
+
+    private const NORM_16350 = '\ben\s*(?:iso\s*)?16350(?!\d)';
+
     /** @var array<string, string> */
     private const KATEGORIA_TO_FAMILY = [
         'rekawice' => self::FAMILY_GLOVES,
@@ -1901,7 +1913,7 @@ final class PpeAssortment
         $t = $this->normalize($text);
 
         return preg_match(
-            '/\b(esd|antyelektrostat|antystatyczn|en\s*1149|1149[\s-]*5|61340|en\s*(?:iso\s*)?16350(?!\d))\w*/u',
+            '/\b(?:esd|antyelektrostat|antystatyczn)|'.self::NORM_1149.'|'.self::NORM_61340.'|'.self::NORM_16350.'/u',
             $t
         ) === 1;
     }
@@ -1918,7 +1930,7 @@ final class PpeAssortment
 
         // „antistatic” / „anti-static”: karty z angielskim opisem (Ansell HyFlex 11-202: „extra features: antistatic”).
         return preg_match(
-            '/\b(esd|antyelektrostat|antystatyczn|anti\s?static|en\s*1149|1149[\s-]*5|61340|en\s*(?:iso\s*)?16350(?!\d))\w*/u',
+            '/\b(?:esd|antyelektrostat|antystatyczn|anti\s?static)|'.self::NORM_1149.'|'.self::NORM_61340.'|'.self::NORM_16350.'/u',
             $t
         ) === 1;
     }
@@ -1941,9 +1953,9 @@ final class PpeAssortment
         }
         $t = $this->normalize($productText);
         $strong = $this->family($requirement) === self::FAMILY_FOOTWEAR
-            ? '/\besd\b|\b(?:en\s*)?61340(?!\d)/u'
+            ? '/\besd\b|'.self::NORM_61340.'/u'
             // Decyzja C dosłownie: rękawice i odzież — ESD, EN 1149 albo EN 16350; samo EN 61340 to tu propozycja.
-            : '/\besd\b|\ben\s*1149(?!\d)|\b1149\s*5(?!\d)|\ben\s*(?:iso\s*)?16350(?!\d)/u';
+            : '/\besd\b|'.self::NORM_1149.'|'.self::NORM_16350.'/u';
 
         return preg_match($strong, $t) === 1 ? self::ANTISTATIC_STRONG : self::ANTISTATIC_WEAK;
     }
@@ -1981,13 +1993,16 @@ final class PpeAssortment
      */
     public function productAntistaticNorms(Product $product): array
     {
-        preg_match_all(
-            '/(?|\ben\s*(1149)(?!\d)|\b(1149)\s*5(?!\d)|\b(61340)(?!\d)|\ben\s*(?:iso\s*)?(16350)(?!\d))/u',
-            $this->normalize($this->productCatalogEvidenceText($product)),
-            $m
-        );
+        $t = $this->normalize($this->productCatalogEvidenceText($product));
+        $norms = [];
+        // Pary zamiast kluczy: klucz „1149” PHP zamienia na int, a uzasadnienie limitu przyjmuje string.
+        foreach ([['1149', self::NORM_1149], ['16350', self::NORM_16350], ['61340', self::NORM_61340]] as [$number, $pattern]) {
+            if (preg_match('/'.$pattern.'/u', $t) === 1) {
+                $norms[] = $number;
+            }
+        }
 
-        return array_values(array_unique($m[1]));
+        return $norms;
     }
 
     /**
@@ -2026,7 +2041,8 @@ final class PpeAssortment
             $product->categoryAsEvidence(),
         ])));
         $idN = $this->normalize($identity);
-        if (preg_match('/\b(esd|antyelektrostat|1149[\s-]*5|61340)\b/u', $idN) === 1) {
+        // Numery norm w tym samym zapisie co bramka (NORM_*): kod „11495” ani SKU 6134006 nie są normą.
+        if (preg_match('/\b(?:esd|antyelektrostat)\b|(?<!\d)1149\s+5(?!\d)|'.self::NORM_61340.'/u', $idN) === 1) {
             return true;
         }
         $desc = $this->normalize((string) ($product->description ?? ''));

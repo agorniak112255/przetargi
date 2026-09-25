@@ -169,7 +169,7 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-21-pelna-karta';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-25-dowod-esd';
 
     /**
      * Wersja instrukcji kroku „zrozum wymaganie”. Zrozumienie zapisujemy raz na treść wymagania i tę wersję
@@ -5989,9 +5989,16 @@ final class ProductAiSearchService
             return '';
         }
 
-        return 'Gdy wymaganie ma żargon/słowo cechy, karta musi mieć to słowo albo synonim ('
+        $rule = 'Gdy wymaganie ma żargon/słowo cechy, karta musi mieć to słowo albo synonim ('
             .implode(', ', $hints)
-            .') w name/description — sama norma EN nie zastępuje tego słowa. ';
+            .') w name/description';
+        // Antystatyka (D7a, 25.09.2026): norma jest dowodem jak w bramce (productShowsAntistatic) i w grupie dowodu żargonu —
+        // bez tego model odrzucał rękawicę z samym EN 16350 za brak słowa. Siłę dowodu wobec rodzaju wyrobu ocenia kod.
+        if ($this->assortment->requiresAntistatic(implode(' ', $hints))) {
+            return $rule.' albo normę antystatyki (EN 1149, EN 16350, EN 61340) w polach dowodu. ';
+        }
+
+        return $rule.' — sama norma EN nie zastępuje tego słowa. ';
     }
 
     /**
@@ -6072,7 +6079,7 @@ final class ProductAiSearchService
                     .'spełnia „do 17 kV” (20 kV to napięcie próby); wyższa klasa spełnia niższą. '
                     .'Równoważny dowód = spełnione: synonim katalogowy, norma/klasa, materiał konstrukcyjny '
                     .'(metalowy nosek = podnosek stalowy/steel toe; chemoodporny = EN 374 / Typ 3/4 / Tychem; '
-                    .'antystatyczny = EN 1149). Nie wymagaj dosłownego cytatu z SIWZ. '
+                    .'antystatyczny = „ESD”, EN 1149 albo EN 16350). Nie wymagaj dosłownego cytatu z SIWZ. '
                     .'Klasa i oznaczenia w name (S1 P, O1, FFP1, A2) są dowodem — nie wpisuj ich do missing_key. '
                     .$this->slangWordProofRule($query)
                     .'Obuwie: antyelektrostatyczne/ESD z SIWZ to nie to samo co antystatyczna podeszwa '
