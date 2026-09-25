@@ -2040,6 +2040,36 @@ final class PpeAssortment
         );
     }
 
+    /**
+     * Decyzje właściciela z 25.09.2026 (C z doprecyzowaniem, „wszędzie 60%”): gdy klient sam żąda ESD albo normy
+     * antystatyki, karta ze słabym dowodem — samo słowo, a dla rękawic i odzieży bez „ESD” / EN 1149 / EN 16350, dla
+     * obuwia bez „ESD” / EN 61340 — to propozycja do sprawdzenia, nie trafienie: w wyszukiwarce najwyżej 60 na każdej
+     * ścieżce wyniku, w automacie przetargu nie jest wyborem po kodzie. Wymaganie z samym słowem normy nie żąda —
+     * wtedy samo słowo na karcie wystarcza. Karta z normą wymienioną w wymaganiu spełnia je wprost.
+     *
+     * Żądanie czytamy z tekstu klienta ($clientQuery), rodzaj wyrobu z $requirement (w wyszukiwarce bywa w nim
+     * streszczenie modelu, gdy klient rodzaju nie podał; model dopisywał „(ESD)” do „wyrób antystatyczny”).
+     *
+     * @return string|null zdanie do uzasadnienia wiersza albo null, gdy karta nie jest słabym dowodem
+     */
+    public function weakAntistaticEvidenceNote(string $clientQuery, string $requirement, Product $product): ?string
+    {
+        if (! $this->requiresStrongAntistatic($clientQuery)
+            || $this->productAntistaticEvidence($requirement, $product) !== self::ANTISTATIC_WEAK) {
+            return null;
+        }
+        $cardNorms = $this->productAntistaticNorms($product);
+        if (array_intersect($cardNorms, $this->antistaticNormsIn($clientQuery)) !== []) {
+            return null;
+        }
+
+        // Uzasadnienie oddziela brak normy od normy, która dla tego wyrobu nie jest dowodem ESD (EN 1149 na bucie).
+        return $cardNorms === []
+            ? 'Karta podaje antystatykę tylko słownie, bez oznaczenia ESD ani normy — propozycja do sprawdzenia.'
+            : 'Karta podaje '.implode(', ', array_map(static fn (string $n): string => 'EN '.$n, $cardNorms))
+                .', a to nie jest dowód ESD dla tego rodzaju wyrobu — propozycja do sprawdzenia.';
+    }
+
     /** Obuwie: S1P + „antystatyczna podeszwa” ≠ ESD z SIWZ — stosuj przy dopisywaniu katalogu (PHP %), nie przy ocenie modelu. */
     public function productMeetsAntistaticRequirement(string $requirement, Product $product): bool
     {

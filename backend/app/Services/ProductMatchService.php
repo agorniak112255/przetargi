@@ -1690,6 +1690,13 @@ final class ProductMatchService
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
             }
+            // Bramka antystatyki jak w wyszukiwarce: compatibleProduct sprawdza ją tylko przy obuwiu, więc nazwany model
+            // „phynomic” bez ESD szedł do przetargu z 99% (tenders:eval 20260925_155130). Słaby dowód przy żądaniu ESD
+            // to propozycja (decyzja właściciela z 25.09.2026), nie wybór automatu po kodzie.
+            if (! $this->assortment->productMeetsAntistaticRequirement($requirement, $product)
+                || $this->assortment->weakAntistaticEvidenceNote($requirement, $requirement, $product) !== null) {
+                continue;
+            }
             // fuzzy rozstrzyga jak SKU tylko na mocnych igłach (z cyfrą, URG-A, linia po marce) —
             // „FFP1” czy goły wyraz nie może zablokować pozycji przed oceną modelu
             $score = max(

@@ -5322,34 +5322,15 @@ final class ProductAiSearchService
     }
 
     /**
-     * Decyzje właściciela z 25.09.2026 (C z doprecyzowaniem, „wszędzie 60%”): gdy klient sam żąda ESD albo normy
-     * antystatyki, karta ze słabym dowodem — samo słowo, a dla rękawic i odzieży bez „ESD” / EN 1149 / EN 16350, dla
-     * obuwia bez „ESD” / EN 61340 — to propozycja do sprawdzenia, nie trafienie: najwyżej VARIANT_MISMATCH_SCORE, jak
-     * inny wariant modelu, na każdej ścieżce wyniku (ocena modelu, nazwany model, wiersze reguł, drugi element
-     * kompletu). Wymaganie z samym słowem normy nie żąda — wtedy samo słowo na karcie wystarcza.
-     *
-     * Żądanie czytamy z tekstu klienta ($clientQuery), nie z $requirement: gdy rodzaju wyrobu nie ma w zapytaniu,
-     * $requirement zawiera streszczenie modelu, a model dopisywał „(ESD)” do „wyrób antystatyczny”.
+     * Słaby dowód ESD przy żądaniu klienta (PpeAssortment::weakAntistaticEvidenceNote) — w wyszukiwarce najwyżej
+     * VARIANT_MISMATCH_SCORE, jak inny wariant modelu, na każdej ścieżce wyniku (ocena modelu, nazwany model, wiersze
+     * reguł, drugi element kompletu).
      *
      * @return string|null zdanie do uzasadnienia wiersza albo null, gdy limitu nie ma
      */
     private function weakAntistaticNote(string $clientQuery, string $requirement, Product $product): ?string
     {
-        if (! $this->assortment->requiresStrongAntistatic($clientQuery)
-            || $this->assortment->productAntistaticEvidence($requirement, $product) !== PpeAssortment::ANTISTATIC_WEAK) {
-            return null;
-        }
-        $cardNorms = $this->assortment->productAntistaticNorms($product);
-        // Wymaganie wymienia normę, którą karta ma — spełnia je wprost, niezależnie od reguły rodzaju wyrobu.
-        if (array_intersect($cardNorms, $this->assortment->antistaticNormsIn($clientQuery)) !== []) {
-            return null;
-        }
-
-        // Uzasadnienie oddziela brak normy od normy, która dla tego wyrobu nie jest dowodem ESD (EN 1149 na bucie).
-        return $cardNorms === []
-            ? 'Karta podaje antystatykę tylko słownie, bez oznaczenia ESD ani normy — propozycja do sprawdzenia.'
-            : 'Karta podaje '.implode(', ', array_map(static fn (string $n): string => 'EN '.$n, $cardNorms))
-                .', a to nie jest dowód ESD dla tego rodzaju wyrobu — propozycja do sprawdzenia.';
+        return $this->assortment->weakAntistaticEvidenceNote($clientQuery, $requirement, $product);
     }
 
     /**
