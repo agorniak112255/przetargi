@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Product;
+use App\Models\ProductVisualCheck;
 use App\Services\Ai\AiRateLimitedException;
 use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\AiSettingsService;
@@ -202,7 +203,7 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-25-uzasadnienie-20-slow';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-25-pieta-ze-zdjecia';
 
     /**
      * Wersja instrukcji kroku „zrozum wymaganie”. Zrozumienie zapisujemy raz na treść wymagania i tę wersję
@@ -6453,6 +6454,16 @@ final class ProductAiSearchService
     ): array {
         $short = $this->useShortSearchCards($task);
         $cards = $candidates->map(fn (Product $p): array => $this->rankCard($p, $short, $constraints))->values()->all();
+        // Zabudowana pięta ze zdjęcia (decyzja właściciela z 25.09.2026) — osobnym polem, nie jako cytat z karty.
+        $photo = $this->photoHeelInferences($query, $needed, $constraints, $candidates);
+        foreach ($cards as $i => $card) {
+            $answer = $photo[(int) $card['id']] ?? null;
+            if ($answer !== null) {
+                $cards[$i]['photo_inference'] = $answer === ProductVisualCheck::ANSWER_CLOSED
+                    ? 'zdjęcie karty: pięta zabudowana'
+                    : 'zdjęcie karty: pięta odkryta';
+            }
+        }
 
         $neededLine = is_string($needed) && trim($needed) !== ''
             ? "\nSzukany produkt (z analizy):\n".trim($needed)
@@ -6538,6 +6549,9 @@ final class ProductAiSearchService
                     .'score>=40 tylko przy zgodnej nazwie i bez sprzeczności z warunkiem. Max '.$maxMatches.'. '
                     .'Zwróć każdą kartę, która spełnia wymaganie — nie skracaj listy na siłę. '
                     .$this->dualRequirementPromptRule()
+                    .($photo === [] ? '' : 'Pole photo_inference to wniosek modelu ze zdjęcia karty, nie tekst karty: potwierdza tylko '
+                        .'kształt pięty (zabudowana albo odkryta), nigdy normy ani klasy. Gdy potwierdza zabudowaną piętę, nie wpisuj '
+                        .'pięty do missing_key i napisz w reason „ze zdjęcia”; „pięta odkryta” przy wymaganiu zabudowanej to sprzeczność. ')
                     .'Tylko id z listy. Nie wymyślaj.',
             ],
             [
@@ -6570,6 +6584,7 @@ final class ProductAiSearchService
         $series = $this->requestedSeriesWords($query, $candidates);
         $normEvidence = $matches !== [] ? $this->requiredNormEvidence($intent['constraints'], $candidates, $query) : ['required' => [], 'cards' => []];
         $checksDimensions = $matches !== [] && $this->contradictionDimensions()->check($query, []) !== [];
+        $photo = $matches !== [] ? $this->photoHeelInferences($query, $needed, $intent['constraints'], $candidates) : [];
         $out = [];
 
         foreach ($matches as $m) {
@@ -6658,6 +6673,12 @@ final class ProductAiSearchService
                 $score = min($score, self::CHEMICAL_BARRIER_SCORE_CAP);
                 $reason = trim(($reason ?? '').' Karta nie dowodzi ochrony przed cieczą — brak dowodu bariery (typ 3/4, EN 14605 / EN 943).');
             }
+            if (isset($photo[$id])) {
+                // Pochodzenie dopisuje kod, nie model: 20 słów uzasadnienia nie gwarantuje wzmianki o zdjęciu.
+                $reason = trim(($reason ?? '').($photo[$id] === ProductVisualCheck::ANSWER_CLOSED
+                    ? ' Pięta zabudowana — wniosek modelu ze zdjęcia karty, karta tego nie podaje.'
+                    : ' Pięta odkryta — wniosek modelu ze zdjęcia karty, karta tego nie podaje.'));
+            }
             $missingSeries = $this->missingSeriesWords($series, $product, $query);
             if ($missingSeries !== []) {
                 // Klient żąda serii, a karta jej nie ma — to inny model, nie spełnienie wymagania. 21.09.2026:
@@ -6737,6 +6758,53 @@ final class ProductAiSearchService
     private function seriesHaystack(Product $product): string
     {
         return str_replace(' ', '', $this->lexicalNormalize($product->name.' '.$product->sku));
+    }
+
+    /**
+     * Ocena pięty ze zdjęcia dla kart, które nie mówią o pięcie słowami — tylko gdy wymaganie, analiza albo warunki mówią
+     * o pięcie, tylko dla aktualnego zdjęcia głównego i tylko closed/open. „Odkryta” przy klasie S1–S5 (norma wymaga
+     * zamkniętej części piętowej) to raczej pomyłka oceny — nie idzie do modelu, komenda oznacza ją do przejrzenia.
+     *
+     * @param  list<mixed>  $constraints
+     * @param  Collection<int, Product>  $candidates
+     * @return array<int, string> product_id => closed|open
+     */
+    private function photoHeelInferences(string $query, ?string $needed, array $constraints, Collection $candidates): array
+    {
+        if ($candidates->isEmpty()
+            || ! $this->assortment->mentionsHeel($query.' '.(string) $needed.' '.implode(' ', $this->stringList($constraints)))) {
+            return [];
+        }
+        $ids = $candidates->pluck('id')->map(static fn ($id): int => (int) $id)->all();
+        // Ocena zdjęcia głównego TEJ karty — zdjęcie przeniesione na inną kartę nie niesie cudzej oceny.
+        $checks = ProductVisualCheck::query()
+            ->join('product_images', function ($join): void {
+                $join->on('product_images.id', '=', 'product_visual_checks.product_image_id')
+                    ->on('product_images.product_id', '=', 'product_visual_checks.product_id')
+                    ->where('product_images.is_primary', true);
+            })
+            ->where('product_visual_checks.feature', ProductVisualCheck::FEATURE_CLOSED_HEEL)
+            ->whereIn('product_visual_checks.answer', [ProductVisualCheck::ANSWER_CLOSED, ProductVisualCheck::ANSWER_OPEN])
+            ->whereIn('product_visual_checks.product_id', $ids)
+            ->get(['product_visual_checks.product_id', 'product_visual_checks.answer'])
+            ->keyBy('product_id');
+        if ($checks->isEmpty()) {
+            return [];
+        }
+        $out = [];
+        foreach ($candidates as $product) {
+            $check = $checks->get((int) $product->id);
+            if ($check === null || $this->assortment->heelWording($product) !== null) {
+                continue;
+            }
+            if ($check->answer === ProductVisualCheck::ANSWER_OPEN
+                && preg_match('/(?<![\p{L}\d])S[1-5]/u', (string) $product->name.' '.(string) $product->norms) === 1) {
+                continue;
+            }
+            $out[(int) $product->id] = (string) $check->answer;
+        }
+
+        return $out;
     }
 
     /**

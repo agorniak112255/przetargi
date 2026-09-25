@@ -1864,6 +1864,122 @@ final class PpeAssortment
             ?? $this->productDescriptionFootwearType($product);
     }
 
+    /** Rzeczownik „pięta” po normalize() — bez „piętowej” (absorpcja energii w części piętowej to nie zabudowa). */
+    private const HEEL_NOUN = '(?:piet(?:a|y|e|ie|ami|om)?|piecie)\b';
+
+    /** Zapiętek / napiętek we wszystkich formach („zapiętek”, „zapiętkiem”). */
+    private const HEEL_COUNTER = '(?:zapiet(?:e)?k|napiet(?:e)?k)\w*';
+
+    /**
+     * Zabudowana pięta słowami, w obrębie jednego zdania po normalize(): „zabudowana pięta”, „pięta zakryta”, „zamknięta
+     * część piętowa”, „zabudowany tył”, zapiętek (nie „bez zapiętka”), „closed heel”.
+     */
+    private function heelClosedPattern(): string
+    {
+        return '/\b(?:zabudowan|zakryt|zamkniet)\w*\s+(?:'.self::HEEL_NOUN.'|czesc\w*\s+pietow|obszar\w*\s+piet|ty(?:l|lu|lem)\b)'
+            .'|\b'.self::HEEL_NOUN.'\s+(?:jest\s+)?(?:zabudowan|zakryt|zamkniet)'
+            .'|(?<!bez )\b'.self::HEEL_COUNTER
+            .'|\bclosed\s+(?:heel|back|seat)/u';
+    }
+
+    /** Odkryta pięta słowami: „odkryta pięta”, pasek na piętę, „bez zapiętka”, „open heel”, slingback. */
+    private function heelOpenPattern(): string
+    {
+        return '/\b(?:odkryt|otwart|odslonie?t)\w*\s+(?:'.self::HEEL_NOUN.')'
+            .'|\b'.self::HEEL_NOUN.'\s+(?:jest\s+)?(?:odkryt|otwart)'
+            .'|\bpas(?:ek|ka|ki|kiem|kami)\s+(?:na\s+)?(?:'.self::HEEL_NOUN.'|pietow)'
+            .'|\bbez\s+(?:'.self::HEEL_COUNTER.'|'.self::HEEL_NOUN.')'
+            .'|\bopen\s+heel|\bheel\s+strap|\bslingback/u';
+    }
+
+    /**
+     * Zdania tekstu po normalize() — dopasowanie nie przeskakuje kropki ani średnika („…w części piętowej. Zakryte palce.”).
+     *
+     * @return list<string>
+     */
+    private function normalizedSentences(string $text): array
+    {
+        $out = [];
+        foreach (preg_split('/[.;!?\n]+/u', $text) ?: [] as $sentence) {
+            $normalized = trim($this->normalize($sentence));
+            if ($normalized !== '') {
+                $out[] = $normalized;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Co karta sama mówi o pięcie: 'closed', 'open' albo null (nic). Każde słowne trafienie — w którąkolwiek stronę —
+     * znaczy, że karta mówi sama i ocena zdjęcia jej nie zastępuje (decyzja właściciela z 25.09.2026: zdjęcie tylko
+     * przy braku trafień słownych). „Absorpcja energii w części piętowej” nie mówi nic o zabudowie.
+     */
+    public function heelWording(Product $product): ?string
+    {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $parts = [];
+        foreach (CardSources::fromProduct($product) as $source) {
+            $parts[] = $source->text;
+        }
+        foreach (['specs', 'features'] as $key) {
+            foreach (is_array($payload[$key] ?? null) ? $payload[$key] : [] as $item) {
+                if (is_string($item)) {
+                    $parts[] = $item;
+                }
+            }
+        }
+        $closed = false;
+        foreach ($this->normalizedSentences(implode("\n", $parts)) as $sentence) {
+            if (preg_match($this->heelOpenPattern(), $sentence) === 1) {
+                return 'open';
+            }
+            $closed = $closed || preg_match($this->heelClosedPattern(), $sentence) === 1;
+        }
+
+        return $closed ? 'closed' : null;
+    }
+
+    /**
+     * Wymaganie mówi o pięcie: rzeczownik „pięta” (nie „piętowa”), zapiętek, „zabudowany tył” — nie „przypięty”,
+     * „zapięcie” ani „absorpcja energii w części piętowej”, która stoi w prawie każdym wymaganiu na obuwie S1+.
+     */
+    public function mentionsHeel(string $text): bool
+    {
+        foreach ($this->normalizedSentences($text) as $sentence) {
+            if (preg_match('/\b(?:'.self::HEEL_NOUN.')|\b'.self::HEEL_COUNTER.'|\bclosed\s+heel/u', $sentence) === 1
+                || preg_match($this->heelClosedPattern(), $sentence) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Karta sandała: typ jak w bramce (nazwa, pierwsze zdanie opisu) albo „sandał” w opisie, specyfikacji, cechach,
+     * tabelce dostawcy lub atrybucie typu — ARDON BRIMSAN ma „Rodzaj obuwia: Sandał” tylko w tabelce.
+     */
+    public function isSandalCard(Product $product): bool
+    {
+        if ($this->footwearCardType($product) === self::TYPE_SANDAL) {
+            return true;
+        }
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        if (($payload['attributes']['typ_wyrobu'] ?? null) === self::TYPE_SANDAL) {
+            return true;
+        }
+        $text = mb_strtolower(implode(' ', [
+            (string) $product->name,
+            (string) ($product->description ?? ''),
+            (string) ($product->shop_fields_summary ?? ''),
+            implode(' ', array_filter(is_array($payload['specs'] ?? null) ? $payload['specs'] : [], 'is_string')),
+            implode(' ', array_filter(is_array($payload['features'] ?? null) ? $payload['features'] : [], 'is_string')),
+        ]));
+
+        return preg_match('/sand[aá][lł]/u', $text) === 1;
+    }
+
     private function productDescriptionFootwearType(Product $product): ?string
     {
         if (! $this->descriptionNamesProduct($product)) {
