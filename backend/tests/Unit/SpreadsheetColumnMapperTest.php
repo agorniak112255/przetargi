@@ -215,4 +215,20 @@ final class SpreadsheetColumnMapperTest extends TestCase
 
         $this->assertNull($m->mapLabels(['2026 PRICE LIST'])['catalog_price']);
     }
+
+    public function test_row_made_of_column_labels_is_not_a_product(): void
+    {
+        // karta 10134: model czytający PDF przepisał przykład z polecenia ["SKU","nazwa",12.5,"grupa"]
+        $this->assertTrue(SpreadsheetColumnMapper::isColumnLabelRow('SKU', 'nazwa'));
+        $this->assertTrue(SpreadsheetColumnMapper::isColumnLabelRow('Kod produktu:', 'Płukanka do oczu'));
+        $this->assertTrue(SpreadsheetColumnMapper::isColumnLabelRow('7251', ' Nazwa '));
+        $this->assertTrue(SpreadsheetColumnMapper::isColumnLabelRow('L.p.', 'Wyszczególnienie'));
+        $this->assertTrue(SpreadsheetColumnMapper::isColumnLabelRow('ARTYKUŁ', ''));
+
+        // cała komórka, nie podciąg: kod i nazwa zawierające słowo z nagłówka to dalej wyrób
+        $this->assertFalse(SpreadsheetColumnMapper::isColumnLabelRow('KOD-12', 'Kask ochronny'));
+        $this->assertFalse(SpreadsheetColumnMapper::isColumnLabelRow('SKU-100', 'Nazwa handlowa X'));
+        $this->assertFalse(SpreadsheetColumnMapper::isColumnLabelRow('7251', 'Płukanka do oczu Cederroth Eye Wash 500 ml'));
+        $this->assertFalse(SpreadsheetColumnMapper::isColumnLabelRow('146a', '146a'));
+    }
 }

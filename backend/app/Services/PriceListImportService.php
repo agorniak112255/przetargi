@@ -193,6 +193,19 @@ final class PriceListImportService
 
                 continue;
             }
+            // nagłówek tabeli z ceną z przykładu polecenia — tak powstała karta 10134 („SKU” / „nazwa”, 12,50 zł)
+            if (SpreadsheetColumnMapper::isColumnLabelRow($sku, $name)) {
+                $skipped++;
+                $skippedDetails[] = [
+                    'reason' => 'Pozycja '.($index + 1).': nagłówek tabeli („'.$sku.'” / „'.$name.'”), nie produkt',
+                    'row' => $index + 1,
+                    'sheet' => null,
+                    'sku' => $sku,
+                    'name' => $name,
+                ];
+
+                continue;
+            }
             $discount = is_numeric($row['discount_percent'] ?? $row['discount'] ?? null)
                 ? (float) ($row['discount_percent'] ?? $row['discount'])
                 : 0.0;

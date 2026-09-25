@@ -11,6 +11,7 @@ use App\Services\Ai\AiTask;
 use App\Services\Ai\JsonResponseParser;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Enrichment\EnrichmentSlots;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -58,6 +59,15 @@ final class PriceListAiAnalyzer
      * to, co trzeba — różnice w cennikach widać na pierwszych kilkudziesięciu wierszach.
      */
     private const PREVIEW_ROWS = 50;
+
+    /**
+     * Przykładowe wiersze [kod, nazwa, cena, grupa] z polecenia odczytu PDF. Model potrafi przepisać przykład jako
+     * pozycję cennika — tak powstała karta 10134 (CEDERROTH, SKU „SKU”, nazwa „nazwa”, 12,50 zł).
+     */
+    private const PDF_PROMPT_EXAMPLE_ROWS = [
+        ['SKU', 'nazwa', 12.5, 'grupa'],
+        ['146a', '146a', 155, 'PU Skóra'],
+    ];
 
     public function analyze(string $path, ?string $manufacturerHint = null, ?string $originalName = null): array
     {
@@ -437,13 +447,13 @@ final class PriceListAiAnalyzer
                 @set_time_limit(600);
             }
             if ($this->pdfRunResultsReady($runId, count($chunks))) {
-                return $this->collectPdfChunkResults($runId, count($chunks), $manufacturerHint);
+                return $this->collectPdfChunkResults($runId, count($chunks), $manufacturerHint, $chunks);
             }
             usleep(400_000);
         }
         $this->discardPdfChunkJobs($runId);
 
-        return $this->collectPdfChunkResults($runId, count($chunks), $manufacturerHint);
+        return $this->collectPdfChunkResults($runId, count($chunks), $manufacturerHint, $chunks);
     }
 
     /**
@@ -488,7 +498,8 @@ final class PriceListAiAnalyzer
                     $parsed = $this->productsFromChunkContent(
                         (string) ($result['content'] ?? ''),
                         (string) ($result['model'] ?? ''),
-                        $manufacturerHint
+                        $manufacturerHint,
+                        $batch[$i]['text'],
                     );
                     $model = $parsed['model'] !== '' ? $parsed['model'] : $model;
                     $manufacturer ??= $parsed['manufacturer'];
@@ -516,9 +527,10 @@ final class PriceListAiAnalyzer
     }
 
     /**
+     * @param  list<string>  $chunks  teksty części w kolejności zadań
      * @return array{products: list<array<string, mixed>>, model: string, manufacturer: mixed, currency: mixed, errors: int}
      */
-    private function collectPdfChunkResults(string $runId, int $total, ?string $manufacturerHint): array
+    private function collectPdfChunkResults(string $runId, int $total, ?string $manufacturerHint, array $chunks): array
     {
         $aiProducts = [];
         $model = '';
@@ -535,7 +547,8 @@ final class PriceListAiAnalyzer
             $parsed = $this->productsFromChunkContent(
                 (string) ($raw['content'] ?? ''),
                 (string) ($raw['model'] ?? ''),
-                $manufacturerHint
+                $manufacturerHint,
+                $chunks[$i] ?? null,
             );
             $model = $parsed['model'] !== '' ? $parsed['model'] : $model;
             $manufacturer ??= $parsed['manufacturer'];
@@ -555,9 +568,10 @@ final class PriceListAiAnalyzer
 
     /**
      * @param  array<string, mixed>  $json
+     * @param  string|null  $sourceText  tekst części PDF, z której model czytał; null = strony-obrazy
      * @return list<array<string, mixed>>
      */
-    private function rowsFromAiChunk(array $json): array
+    private function rowsFromAiChunk(array $json, ?string $sourceText = null): array
     {
         $rows = $json['products'] ?? $json['p'] ?? [];
         if (! is_array($rows)) {
@@ -573,7 +587,7 @@ final class PriceListAiAnalyzer
                 $group = isset($row[3]) && is_string($row[3]) && trim($row[3]) !== ''
                     ? trim($row[3])
                     : null;
-                $out[] = [
+                $row = [
                     'sku' => (string) $row[0],
                     'name' => (string) ($row[1] ?? $row[0]),
                     'catalog_price' => $price,
@@ -581,7 +595,8 @@ final class PriceListAiAnalyzer
                     'purchase' => $price,
                     'category' => $group,
                 ];
-
+            }
+            if ($this->echoesPromptExample($row, $sourceText)) {
                 continue;
             }
             $out[] = $row;
@@ -591,15 +606,16 @@ final class PriceListAiAnalyzer
     }
 
     /**
+     * @param  string|null  $sourceText  tekst części PDF wysłanej modelowi
      * @return array{products: list<array<string, mixed>>, model: string, manufacturer: mixed, currency: mixed, errors: int}
      */
-    private function productsFromChunkContent(string $content, string $model, ?string $manufacturerHint): array
+    private function productsFromChunkContent(string $content, string $model, ?string $manufacturerHint, ?string $sourceText = null): array
     {
         try {
             $partJson = $this->jsonParser->parse($content);
 
             return [
-                'products' => $this->normalizeProducts($this->rowsFromAiChunk($partJson), $manufacturerHint),
+                'products' => $this->normalizeProducts($this->rowsFromAiChunk($partJson, $sourceText), $manufacturerHint),
                 'model' => $model,
                 'manufacturer' => is_string($partJson['manufacturer_detected'] ?? $partJson['m'] ?? null)
                     ? ($partJson['manufacturer_detected'] ?? $partJson['m'])
@@ -661,7 +677,7 @@ final class PriceListAiAnalyzer
     }
 
     /**
-     * @return list<\Illuminate\Contracts\Cache\Lock>
+     * @return list<Lock>
      */
     private function acquirePdfWaveSlots(int $want): array
     {
@@ -864,14 +880,42 @@ final class PriceListAiAnalyzer
 
     private function pdfCompactChunkPrompt(string $hint): string
     {
+        [$format, $codeAsName] = array_map(
+            static fn (array $row): string => (string) json_encode($row, JSON_UNESCAPED_UNICODE),
+            self::PDF_PROMPT_EXAMPLE_ROWS,
+        );
+
         return <<<PROMPT
 {$hint}
 Wypisz produkty z tekstu. Tylko JSON:
-{"c":"PLN","p":[["SKU","nazwa",12.5,"grupa"]]}
+{"c":"PLN","p":[{$format}]}
 p = [kod, nazwa, cena, grupa z nagłówka sekcji]. Bez markdown.
 Nazwa = tylko prawdziwy opis produktu. U/D/M, w/p, √, rozmiar, materiały — to nie nazwa.
-Gdy nie ma opisu — w nazwie wpisz ponownie ten sam kod (np. ["146a","146a",155,"PU Skóra"]).
+Gdy nie ma opisu — w nazwie wpisz ponownie ten sam kod (np. {$codeAsName}).
 PROMPT;
+    }
+
+    /**
+     * Wiersz przepisany z przykładu w poleceniu, a nie z cennika: kod i nazwa jak w przykładzie, a kodu nie ma
+     * w czytanym tekście. Przykład „146a” wzięto z prawdziwego cennika obuwia, więc gdy kod jest w tekście,
+     * wiersz zostaje. Odczyt stron-obrazów nie ma tekstu do sprawdzenia — tam przykład odpada zawsze.
+     *
+     * @param  array<string, mixed>  $row
+     */
+    private function echoesPromptExample(array $row, ?string $sourceText): bool
+    {
+        $sku = mb_strtolower(trim((string) ($row['sku'] ?? $row['symbol'] ?? $row['kod'] ?? $row['model'] ?? '')));
+        $name = mb_strtolower(trim((string) ($row['name'] ?? $row['opis'] ?? '')));
+        foreach (self::PDF_PROMPT_EXAMPLE_ROWS as [$exampleSku, $exampleName]) {
+            if ($sku !== mb_strtolower($exampleSku) || $name !== mb_strtolower($exampleName)) {
+                continue;
+            }
+
+            return $sourceText === null
+                || preg_match('/(?<![\p{L}\p{N}])'.preg_quote($exampleSku, '/').'(?![\p{L}\p{N}])/iu', $sourceText) !== 1;
+        }
+
+        return false;
     }
 
     /**
@@ -1072,6 +1116,10 @@ PROMPT;
             $i++;
             $name = trim((string) ($row['name'] ?? $row['opis'] ?? ''));
             $sku = trim((string) ($row['sku'] ?? $row['symbol'] ?? $row['kod'] ?? $row['model'] ?? ''));
+            // nagłówek tabeli („SKU”, „nazwa”) to nie pozycja cennika, także gdy model dopisał mu cenę
+            if (SpreadsheetColumnMapper::isColumnLabelRow($sku, $name)) {
+                continue;
+            }
             // odrzuć SKU będące ceną (np. 80.92 albo 3280.92)
             if ($sku !== '' && preg_match('/^\d+[.,]\d{2}$/', $sku) === 1) {
                 $sku = '';

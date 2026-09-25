@@ -58,6 +58,30 @@ final class PriceListScanVisionTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_scan_reading_drops_rows_copied_from_the_prompt_example(): void
+    {
+        // skan nie ma tekstu, w którym dałoby się znaleźć kod przykładu — oba przykłady z polecenia odpadają
+        Http::fake([
+            'openrouter.ai/api/v1/chat/completions' => Http::response([
+                'choices' => [[
+                    'message' => ['content' => '{"c":"PLN","p":[["SKU","nazwa",12.5,"grupa"],["146a","146a",155,"PU Skóra"],'
+                        .'["MT-212-2","Maska MT-212-2",199.0,"Maski"]]}'],
+                    'finish_reason' => 'stop',
+                ]],
+                'model' => 'openai/gpt-4o',
+            ], 200),
+        ]);
+
+        $path = $this->writeFlateDctScanPdf();
+        try {
+            $result = app(PriceListAiAnalyzer::class)->analyze($path, 'Maskpol', 'Cennik BHP nowe produkty.pdf');
+        } finally {
+            @unlink($path);
+        }
+
+        $this->assertSame(['MT-212-2'], array_column($result['products'], 'sku'));
+    }
+
     private function writeFlateDctScanPdf(): string
     {
         $im = imagecreatetruecolor(32, 32);

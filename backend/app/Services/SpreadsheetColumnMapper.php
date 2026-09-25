@@ -35,11 +35,38 @@ final class SpreadsheetColumnMapper
     ];
 
     /**
+     * Całe komórki, które w cenniku są tylko podpisem kolumny kodu albo nazwy, nigdy pozycją.
+     */
+    private const SKU_COLUMN_LABELS = [
+        'sku', 'kod', 'kod produktu', 'kod towaru', 'symbol', 'indeks', 'index', 'nr katalogowy', 'numer katalogowy',
+        'nr kat', 'nr art', 'numer artykułu', 'art. nr', 'article number', 'product code', 'item code', 'code', 'ref',
+        'reference', 'lp', 'l.p', 'artykuł', 'model', 'style',
+    ];
+
+    private const NAME_COLUMN_LABELS = [
+        'nazwa', 'nazwa produktu', 'nazwa towaru', 'nazwa handlowa', 'opis', 'opis produktu', 'name', 'product name',
+        'description', 'product description', 'produkt', 'towar', 'artykuł', 'asortyment', 'wyszczególnienie', 'název',
+    ];
+
+    /**
      * @return list<string>
      */
     public static function attributeFields(): array
     {
         return array_keys(self::ATTRIBUTE_SCORERS);
+    }
+
+    /**
+     * Pozycja, której kod albo nazwa to sam podpis kolumny („SKU”, „nazwa”), jest wierszem nagłówka tabeli, nie
+     * produktem. Tak powstała karta 10134 (CEDERROTH, 12,50 zł): model czytający PDF przepisał przykład z polecenia
+     * ["SKU","nazwa",12.5,"grupa"] jako pozycję cennika. Porównujemy całe komórki — kod „KOD-12” to już wyrób.
+     */
+    public static function isColumnLabelRow(string $sku, string $name): bool
+    {
+        $cell = static fn (string $value): string => rtrim(mb_strtolower(trim($value)), " .:\t");
+
+        return in_array($cell($sku), self::SKU_COLUMN_LABELS, true)
+            || in_array($cell($name), self::NAME_COLUMN_LABELS, true);
     }
 
     /**
