@@ -117,6 +117,63 @@ final class BrandDictionaryWiringTest extends TestCase
         $this->assertSame('3M', $this->context()->matchManufacturer('3M'));
     }
 
+    /**
+     * Wykluczenie obowiązuje bez względu na zapis słowa. Honorowało je tylko rozpoznawanie marki (catalogBrands),
+     * a słowo wersalikami albo w cudzysłowie brała za markę druga ścieżka — tokeny z treści zapytania
+     * (reconcileManufacturerIntent). „PILNE rękawice nitrylowe” dawało „Marki PILNE nie ma w katalogu”, zamienniki
+     * i słowo wycięte z fraz i kroków, a „pilne rękawice nitrylowe” — nic z tego.
+     */
+    public function test_excluded_word_is_not_a_brand_whatever_its_case(): void
+    {
+        $this->catalog();
+        $service = $this->app->make(ProductAiSearchService::class);
+        $localIntent = new ReflectionMethod(ProductAiSearchService::class, 'localIntent');
+
+        // bez wpisu jak dotąd: wersaliki spoza katalogu w krótkim zapytaniu to marka spoza katalogu
+        $intent = $localIntent->invoke($service, 'PILNE rękawice nitrylowe');
+        $this->assertTrue($intent['manufacturer_absent_in_catalog']);
+        $this->assertSame('PILNE', $intent['manufacturer_requested']);
+
+        BrandDictionaryEntry::query()->create(['term' => 'pilne', 'kind' => BrandDictionaryEntry::KIND_EXCLUSION]);
+
+        foreach (['PILNE rękawice nitrylowe', 'pilne rękawice nitrylowe', 'Rękawice nitrylowe „Pilne”'] as $query) {
+            $intent = $localIntent->invoke($service, $query);
+            $this->assertFalse($intent['manufacturer_absent_in_catalog'], $query);
+            $this->assertNull($intent['manufacturer_requested'], $query);
+            $this->assertNull($intent['manufacturer'], $query);
+        }
+
+        // warunki jak przy małych literach — słowo nie wypada z nich jako marka spoza katalogu
+        $this->assertSame(
+            $localIntent->invoke($service, 'pilne rękawice nitrylowe')['constraints'],
+            $localIntent->invoke($service, 'PILNE rękawice nitrylowe')['constraints'],
+        );
+
+        // wykluczenie zdejmuje tylko swoje słowo — dalsza marka spoza katalogu nadal nią jest
+        $intent = $localIntent->invoke($service, 'PILNE rękawice nitrylowe RTELA');
+        $this->assertTrue($intent['manufacturer_absent_in_catalog']);
+        $this->assertSame('RTELA', $intent['manufacturer_requested']);
+    }
+
+    /**
+     * JSP nie ma w zbiorze marek z konfiguracji, więc producenta z zapytania brała dotąd wyłącznie ścieżka wersalików —
+     * wyłączone rozpoznawanie w panelu jej nie dotyczyło.
+     */
+    public function test_switched_off_producer_is_not_taken_from_capitals_in_a_query(): void
+    {
+        $this->catalog();
+        $service = $this->app->make(ProductAiSearchService::class);
+        $localIntent = new ReflectionMethod(ProductAiSearchService::class, 'localIntent');
+
+        $this->assertSame('JSP', $localIntent->invoke($service, 'Ochronniki słuchu JSP')['manufacturer']);
+
+        BrandDictionaryEntry::query()->create(['term' => 'JSP', 'kind' => BrandDictionaryEntry::KIND_PRODUCER, 'detect_in_query' => false]);
+
+        $intent = $localIntent->invoke($service, 'Ochronniki słuchu JSP');
+        $this->assertNull($intent['manufacturer']);
+        $this->assertFalse($intent['manufacturer_absent_in_catalog']);
+    }
+
     public function test_producer_from_a_fresh_price_list_is_known_at_once(): void
     {
         $this->catalog();

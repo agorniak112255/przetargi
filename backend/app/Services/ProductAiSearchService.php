@@ -14,6 +14,7 @@ use App\Services\Search\ProductTextSearch;
 use App\Services\Search\RequirementUnderstandingStore;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
+use App\Support\BrandDictionary;
 use App\Support\CatalogCascadeRecall;
 use App\Support\CatalogManufacturerContext;
 use App\Support\CatalogRequirementRecall;
@@ -3324,6 +3325,9 @@ final class ProductAiSearchService
 
         if ($intent['manufacturer'] === null && ! $intent['manufacturer_absent_in_catalog']) {
             foreach ($this->manufacturerTokensFromQuery($query) as $token) {
+                if ($this->isSuppressedBrandWord($token)) {
+                    continue;
+                }
                 $canonical = $this->manufacturerContext->matchManufacturer($token);
                 if ($canonical !== null) {
                     $intent['manufacturer'] = $canonical;
@@ -3539,7 +3543,7 @@ final class ProductAiSearchService
         // tokenu podniesionego do wersalików przechodziło zawsze i zdejmowało
         // z warunków każde słowo techniczne spoza katalogu („amoniakiem”).
         $raw = $this->queryTokenForCompact($query, $token) ?? $token;
-        if (! $this->looksLikeManufacturerToken($raw)) {
+        if (! $this->looksLikeManufacturerToken($raw) || $this->isSuppressedBrandWord($raw)) {
             return false;
         }
         if ($this->manufacturerContext->matchManufacturer($raw) !== null) {
@@ -3547,6 +3551,16 @@ final class ProductAiSearchService
         }
 
         return ! $this->catalogHasIdentityToken($raw);
+    }
+
+    /**
+     * Słowo, którego słownik z administracji nie pozwala brać za markę z treści zapytania: wykluczenie („pilne”) albo
+     * producent i marka z wyłączonym rozpoznawaniem. Obowiązuje jak w ProductModelFuzzy::catalogBrands, bez względu na
+     * zapis — wersaliki i cudzysłów nie robią z takiego słowa marki. Pusty słownik niczego nie zdejmuje.
+     */
+    private function isSuppressedBrandWord(string $word): bool
+    {
+        return isset(app(BrandDictionary::class)->suppressed()[BrandDictionary::key($word)]);
     }
 
     private function queryTokenForCompact(string $query, string $token): ?string
