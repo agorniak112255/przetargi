@@ -549,6 +549,33 @@ final class TenderMatchModelStateTest extends TestCase
     }
 
     /**
+     * Remis 50% w propozycji: karta, której model dał 95 i sam nazwał brak kluczowego dowodu, a nie tańsza karta,
+     * której model dał 50 — golden opisowy15-01 (25.09.2026): właściwe rękawy HyFlex 95 → 50, rękawy złej długości 50.
+     */
+    public function test_proposal_prefers_card_capped_by_missing_key_over_cheaper_card_scored_fifty(): void
+    {
+        $capped = $this->glove('RNITZ-M');
+        $cheaper = $this->glove('RNITZ-L');
+        $cheaper->forceFill(['purchase_price' => 1])->save();
+        $cappedId = (int) $capped->id;
+        $cheaperId = (int) $cheaper->id;
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => [
+                ['id' => $cheaperId, 'score' => 50, 'reason' => 'Nitryl ze ściągaczem, dzianina bez dowodu bawełny.', 'missing_key' => []],
+                ['id' => $cappedId, 'score' => 95, 'reason' => 'Nitryl ze ściągaczem, dzianina bawełniana.', 'missing_key' => ['kategoria III']],
+            ]]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
+
+        app(ProductMatchService::class)->matchTender($tender, true);
+        $item->refresh();
+
+        $this->assertSame($cappedId, (int) $item->main_product_id, 'propozycją jest karta ścięta z 95, nie tańsza z 50');
+        $this->assertSame(50, (int) $item->ai_match_percent, 'limit missing_key zostaje w procencie pozycji');
+        $this->assertSame(ProductMatchService::PROPOSAL, $item->ai_match_reasons[0]['code'] ?? null);
+    }
+
+    /**
      * Przetarg 1: model nie wskazał właściwych kart przy poz. 5 (wodery przy „spodniobutach”) i 12
      * (brak rozmiarów/numerów seryjnych na karcie odrzucał kartę), a dał 95% karcie bez węgla aktywnego
      * przy poz. 8. Ranking dostaje trzy przypadki: sprzeczność, brak kluczowego, brak drugorzędnego.
