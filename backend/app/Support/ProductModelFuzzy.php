@@ -713,10 +713,11 @@ final class ProductModelFuzzy
             return 0;
         }
 
+        // Tekst sklejony (do odległości) i z odstępami (do granic liczb: „araukan 9403” to nie „araukan 940”).
         $hays = array_values(array_filter([
-            $this->compact((string) $product->name),
-            $this->compact((string) $product->sku),
-        ], static fn (string $h): bool => $h !== ''));
+            [$this->compact((string) $product->name), $this->spaced((string) $product->name)],
+            [$this->compact((string) $product->sku), $this->spaced((string) $product->sku)],
+        ], static fn (array $h): bool => $h[0] !== ''));
         if ($hays === []) {
             return 0;
         }
@@ -734,8 +735,8 @@ final class ProductModelFuzzy
                 continue;
             }
             $allowed = isset($declared[$needle]) ? 0 : $this->maxDistance(mb_strlen($needle));
-            foreach ($hays as $hay) {
-                $dist = $this->windowDistance($needle, $hay);
+            foreach ($hays as [$hay, $spacedHay]) {
+                $dist = $this->windowDistance($needle, $hay, $spacedHay);
                 if ($dist <= $allowed && ($dist < $best || ($dist === $best && mb_strlen($needle) > $bestLen))) {
                     $best = $dist;
                     $bestLen = mb_strlen($needle);
@@ -773,13 +774,17 @@ final class ProductModelFuzzy
             return false;
         }
         $brand = mb_substr($needle, 0, mb_strlen($needle) - mb_strlen($sku));
-        $manufacturer = $this->compact((string) $product->manufacturer);
         // Marka kończy się literą — inaczej SKU „6036” byłby tylko ogonem dłuższego numeru („16036”).
-        if ($manufacturer === '' || preg_match('/[a-z]$/', $brand) !== 1) {
+        if (preg_match('/[a-z]$/', $brand) !== 1) {
             return false;
         }
+        $manufacturer = $this->compact((string) $product->manufacturer);
+        if ($manufacturer !== '' && ($brand === $manufacturer || (mb_strlen($brand) >= 3 && str_contains($manufacturer, $brand)))) {
+            return true;
+        }
 
-        return $brand === $manufacturer || (mb_strlen($brand) >= 3 && str_contains($manufacturer, $brand));
+        // Linia zamiast marki: „HYCRON 27-600” to karta dystrybutora SKU „27-600”, nazwa „… (dawniej HYCRON)”.
+        return mb_strlen($brand) >= 4 && str_contains($this->compact((string) $product->name), $brand);
     }
 
     public function matches(string $requirement, Product $product): bool
@@ -1028,17 +1033,27 @@ final class ProductModelFuzzy
         return $n;
     }
 
-    private function windowDistance(string $needle, string $hay): int
+    private function windowDistance(string $needle, string $hay, string $spacedHay): int
     {
         if ($needle === '' || $hay === '') {
             return 99;
         }
-        if (preg_match('/^(.*[a-z])(\d{3,5})$/u', $needle, $m) === 1) {
-            $digits = $m[2];
-            $bounded = preg_match('/(?<![0-9])'.preg_quote($digits, '/').'(?![0-9])/u', $hay) === 1;
-            if (! $bounded && ! str_contains($hay, $needle)) {
-                return 99;
+        // Numer w kodzie modelu to nie literówka do wybaczenia: każda seria co najmniej 3 cyfr igły musi stać na karcie
+        // jako cała liczba. Inaczej S1202SGAF (szare soczewki) był „literówką” S1201SGAF, a „araukan940” trafiał
+        // w „araukan9403” — w tekście sklejonym bez spacji nie widać, gdzie kończy się numer, więc granice liczy
+        // tekst z odstępami. Literówki w literach nazwy zostają tolerowane jak dotąd.
+        if (preg_match_all('/\d{3,}/u', $needle, $runs) > 0) {
+            foreach ($runs[0] as $digits) {
+                if (! $this->numberStandsAlone($digits, $spacedHay)) {
+                    return 99;
+                }
             }
+        }
+        // Litery tuż przed numerem kodu (G3000, S1201SGAF) należą do kodu, nie do słowa z literówką:
+        // „r3000” w „SECAIR 3000.02” to jedna zmiana od „g3000”, a to filtr, nie pasek do hełmu.
+        if (preg_match('/^([a-z]{1,3})(\d{3,})/u', $needle, $code) === 1
+            && ! $this->numberStandsAlone($code[2], $spacedHay, $code[1])) {
+            return 99;
         }
         if (preg_match('/[a-z]\d{1,2}$/u', $needle) === 1 && ! str_contains($hay, $needle)) {
             return 99;
@@ -1105,6 +1120,30 @@ final class ProductModelFuzzy
         return preg_replace('/[^a-z0-9]/', '', strtr($s, $map)) ?? '';
     }
 
+    /** Małe litery bez polskich znaków, każdy znak spoza liter i cyfr zamieniony na jedną spację. */
+    private function spaced(string $s): string
+    {
+        $s = mb_strtolower($s);
+        $map = ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z'];
+
+        return trim(preg_replace('/[^a-z0-9]+/', ' ', strtr($s, $map)) ?? '');
+    }
+
+    /**
+     * Liczba stoi na karcie w całości: nie jest częścią dłuższej liczby („940” w „9403”). Separator w środku jest
+     * dozwolony — „27600” to na karcie także „27-600”. Z literami kodu ($prefix) liczba stoi zaraz za nimi,
+     * a litery zaczynają słowo („g3000” w „3M G3000”, nie w „XG3000”).
+     */
+    private function numberStandsAlone(string $digits, string $spacedHay, string $prefix = ''): bool
+    {
+        $number = implode(' ?', str_split($digits)).'(?![0-9])';
+        $pattern = $prefix === ''
+            ? '/(?<![0-9])'.$number.'/u'
+            : '/(?<![a-z0-9])'.preg_quote($prefix, '/').' ?'.$number.'/u';
+
+        return preg_match($pattern, $spacedHay) === 1;
+    }
+
     private function lettersOnly(string $s): string
     {
         $c = $this->compact($s);
@@ -1133,8 +1172,16 @@ final class ProductModelFuzzy
     private function isSizeRangeToken(string $raw): bool
     {
         $norm = preg_replace('/\s/u', '', $raw) ?? '';
+        if (preg_match('/^(\d{2,3})-(\d{2,3})$/', $norm, $m) !== 1) {
+            return false;
+        }
+        $from = (int) $m[1];
+        $to = (int) $m[2];
 
-        return preg_match('/^\d{2,3}-\d{2,3}$/', $norm) === 1;
+        // Zakres rozmiarów rośnie, kończy się na wzroście człowieka i nie jest szerszy niż obwód klatki
+        // (36-48, 46-64, 84-140, 164-176). Kod Ansella „27-600”, „23-202”, „11-100” nim nie jest — brany za zakres
+        // zostawiał igłą samą linię „hycron”, a 27-805 i 27-602 dostawały te same 94%.
+        return $to >= $from && $to <= 200 && $to - $from <= 70;
     }
 
     private function isSizeRangeDigits(string $digits, string $rawToken): bool
