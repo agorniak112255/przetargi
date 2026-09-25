@@ -67,6 +67,12 @@ export const adminTiles: AdminTile[] = [
     permission: 'admin.ai_tuning.manage',
   },
   {
+    to: '/admin/statystyki-ai',
+    label: 'Statystyki AI',
+    description: 'Koszt i przebieg wyszukiwań AI',
+    permission: 'admin.ai_stats.view',
+  },
+  {
     to: '/admin/zargon',
     label: 'Żargon SIWZ',
     description: 'Słownik potocznych nazw z przetargów',

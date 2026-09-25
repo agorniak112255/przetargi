@@ -50,6 +50,13 @@ class ProductInquirySearch
                 'requested_brand_absent' => $this->absentBrand($result),
                 // Czasy etapów całej fali (zrozumienie, katalog, ocena modelu) — te same w każdym wierszu.
                 'timings_ms' => is_array($result['trace']['timings_ms'] ?? null) ? $result['trace']['timings_ms'] : [],
+                // Koszt pozycji, ślad (pula, karty oceny) i to, co zrozumiał model — do zdarzenia wyszukiwania
+                // (ekran „Statystyki AI”: lista awarii i pustych ocen pokazuje uwagę i szukany produkt).
+                'ai_usage' => is_array($result['ai_usage'] ?? null) ? $result['ai_usage'] : null,
+                'trace' => is_array($result['trace'] ?? null) ? $result['trace'] : [],
+                'needed' => is_string($result['needed'] ?? null) ? $result['needed'] : null,
+                'search_phrases' => is_array($result['search_phrases'] ?? null) ? $result['search_phrases'] : [],
+                'ai_note' => is_string($result['ai_note'] ?? null) ? $result['ai_note'] : null,
             ];
         }
 

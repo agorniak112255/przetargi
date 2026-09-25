@@ -77,6 +77,8 @@ class ProductAiSearchController extends Controller
             $webOnly ? SearchEvent::TASK_PRODUCT_SEARCH_WEB : SearchEvent::TASK_PRODUCT_SEARCH,
         );
         $result['search_event_id'] = $event?->id;
+        // Koszt pozycji (tokeny, etapy) to też telemetria — zapisany w zdarzeniu, do odpowiedzi API nie wchodzi.
+        unset($result['ai_usage']);
 
         // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — hurtem, po telemetrii (nie trafia do śladu)
         $ids = array_values(array_unique(array_filter(array_map(

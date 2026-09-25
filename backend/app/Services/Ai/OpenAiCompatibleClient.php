@@ -151,9 +151,11 @@ class OpenAiCompatibleClient
 
     /**
      * Równoległe chat/completions (curl_multi) — tyle requestów, ile caller trzyma slotów.
+     * `usage` w każdym wierszu (także ok=false) to suma wszystkich prób tego zapytania (AiUsage), null = żadna próba
+     * nie podała tokenów ani nie padła.
      *
      * @param  list<list<array{role: string, content: mixed}>>  $messageSets
-     * @return list<array{ok: bool, content?: string, model?: string, error?: string}>
+     * @return list<array{ok: bool, content?: string, model?: string, error?: string, usage: ?array<string, mixed>}>
      */
     public function chatMany(
         array $messageSets,
@@ -166,6 +168,8 @@ class OpenAiCompatibleClient
             return [];
         }
         if (count($messageSets) === 1) {
+            // pojedyncze zapytanie idzie przez chat() — jego próby liczy licznik narastający
+            $mark = app(AiServedProviderTally::class)->usageMark();
             try {
                 $raw = $this->chat($messageSets[0], null, $jsonMode, $extra, $task);
 
@@ -177,9 +181,10 @@ class OpenAiCompatibleClient
                     'finish_reason' => $raw['finish_reason'] ?? null,
                     'profile' => $raw['profile'] ?? null,
                     'fallback' => (bool) ($raw['fallback'] ?? false),
+                    'usage' => $this->usageSince($mark),
                 ]];
             } catch (RuntimeException $e) {
-                return [['ok' => false, 'error' => $e->getMessage()]];
+                return [['ok' => false, 'error' => $e->getMessage(), 'usage' => $this->usageSince($mark)]];
             }
         }
 
@@ -202,7 +207,7 @@ class OpenAiCompatibleClient
             if ($profile['is_default']) {
                 $failed = [];
                 foreach ($messageSets as $_) {
-                    $failed[] = ['ok' => false, 'error' => $e->getMessage()];
+                    $failed[] = ['ok' => false, 'error' => $e->getMessage(), 'usage' => null];
                 }
 
                 return $failed;
@@ -241,6 +246,7 @@ class OpenAiCompatibleClient
         $parsed = [];
         $providers = [];
         $origins = [];
+        $usages = [];
         // $onProgress(odpowiedzi, wszystkie) — okno „Trwa dopasowanie” liczy każdą odpowiedź modelu,
         // nie całą paczkę naraz. Tylko w górę: ponowienie na profilu głównym nie cofa licznika.
         $total = count($messageSets);
@@ -261,6 +267,7 @@ class OpenAiCompatibleClient
                 $report($chunkStart + min($inChunk, $chunkSize));
             };
             foreach ($this->chatMany($chunk, true, $extra !== [] ? $extra : null, $task, $onAnswered) as $row) {
+                $usages[] = $row['usage'] ?? null;
                 if (! ($row['ok'] ?? false)) {
                     Log::warning('AI chatJsonMany failed', [
                         'task' => $task?->value,
@@ -293,7 +300,7 @@ class OpenAiCompatibleClient
             // pojedyncze zapytanie idzie bez puli, a ponowienia mogą nie wywołać licznika — wyrównanie
             $report(count($parsed));
         }
-        app(AiServedProviderTally::class)->recordBatch($providers, $origins);
+        app(AiServedProviderTally::class)->recordBatch($providers, $origins, $usages);
 
         return $parsed;
     }
@@ -460,10 +467,13 @@ class OpenAiCompatibleClient
             return $rows;
         }
         foreach ($unreachable as $pos => $i) {
+            // próby na profilu i na konfiguracji głównej — koszt zapytania to obie
+            $usage = $this->sumUsage($rows[$i]['usage'] ?? null, $mainRows[$pos]['usage'] ?? null);
             // Gdy i główna nie odpowie, zostaje błąd profilu — to on mówi, co naprawdę padło.
             if (($mainRows[$pos]['ok'] ?? false) === true) {
                 $rows[$i] = $mainRows[$pos];
             }
+            $rows[$i]['usage'] = $usage;
         }
 
         return $rows;
@@ -500,7 +510,7 @@ class OpenAiCompatibleClient
      * @param  list<list<array{role: string, content: mixed}>>  $messageSets
      * @param  list<int>  $unreachable  indeksy zapytań, na które serwer modelu nie odpowiedział
      * @param  list<int>  $rateLimited  indeksy zapytań, które choć raz dostały 429
-     * @return list<array{ok: bool, content?: string, model?: string, error?: string}>
+     * @return list<array{ok: bool, content?: string, model?: string, error?: string, usage: ?array<string, mixed>}>
      */
     private function chatManyWithProfile(
         array $profile,
@@ -531,22 +541,24 @@ class OpenAiCompatibleClient
             $bodies[] = $this->buildChatPayload($profile, $messages, null, $extra, $jsonMode);
         }
 
-        $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies, $onAnswered);
+        // tokeny i próby per indeks zapytania — ponowienia niżej są kluczowane tym samym indeksem
+        $usages = [];
+        $responses = $this->postChatPool($url, $apiKey, $timeout, $bodies, $onAnswered, $usages);
         // Najpierw zapytania, które nie dotarły do modelu — jak pierwsze podejście w postChatWithRetry; limit albo
         // przeciążenie po tej powtórce obsługuje dalej retryChatManyOverloaded (i liczy 429 w $rateLimited).
         if ($profile['retry_unreached'] ?? false) {
-            $responses = $this->retryChatManyUnreached($url, $apiKey, $timeout, $profile, $bodies, $responses);
+            $responses = $this->retryChatManyUnreached($url, $apiKey, $timeout, $profile, $bodies, $responses, $usages);
         }
         $rateLimited = [];
-        $responses = $this->retryChatManyOverloaded($url, $apiKey, $timeout, $profile, $bodies, $responses, $rateLimited);
-        $responses = $this->retryChatManyRejected($url, $apiKey, $timeout, $profile, $bodies, $responses);
-        $responses = $this->retryChatManyEmptyTruncated($url, $apiKey, $timeout, $profile, $bodies, $responses);
+        $responses = $this->retryChatManyOverloaded($url, $apiKey, $timeout, $profile, $bodies, $responses, $rateLimited, $usages);
+        $responses = $this->retryChatManyRejected($url, $apiKey, $timeout, $profile, $bodies, $responses, $usages);
+        $responses = $this->retryChatManyEmptyTruncated($url, $apiKey, $timeout, $profile, $bodies, $responses, $usages);
 
         $out = [];
         $unreachable = [];
         foreach ($messageSets as $i => $_) {
             $response = $responses[$i] ?? null;
-            $out[] = $this->chatManyItemFromResponse($response, $profile);
+            $out[] = $this->chatManyItemFromResponse($response, $profile) + ['usage' => $usages[$i] ?? null];
             if (! $response instanceof Response || $response->serverError()) {
                 $unreachable[] = $i;
             }
@@ -557,9 +569,10 @@ class OpenAiCompatibleClient
 
     /**
      * @param  array<int, array<string, mixed>>  $bodies
+     * @param  array<int, array<string, mixed>>  $usages  tokeny i próby per indeks zapytania — dopisywane do tego, co już jest
      * @return array<int, mixed>
      */
-    private function postChatPool(string $url, string $apiKey, int $timeout, array $bodies, ?callable $onAnswered = null): array
+    private function postChatPool(string $url, string $apiKey, int $timeout, array $bodies, ?callable $onAnswered = null, array &$usages = []): array
     {
         $responses = Http::pool(function (Pool $pool) use ($bodies, $url, $apiKey, $timeout, $onAnswered) {
             foreach ($bodies as $i => $body) {
@@ -600,6 +613,10 @@ class OpenAiCompatibleClient
         $out = [];
         foreach ($bodies as $i => $_) {
             $out[$i] = $responses[(string) $i] ?? $responses[$i] ?? null;
+            $usage = $this->countUsage($out[$i]);
+            if ($usage !== null) {
+                $usages[$i] = AiUsage::add($usages[$i] ?? null, $usage);
+            }
         }
 
         return $out;
@@ -609,6 +626,7 @@ class OpenAiCompatibleClient
      * @param  array<string, mixed>  $profile
      * @param  array<int, array<string, mixed>>  $bodies
      * @param  array<int, mixed>  $responses
+     * @param  array<int, array<string, mixed>>  $usages  tokeny i próby per indeks (postChatPool)
      * @return array<int, mixed>
      */
     private function retryChatManyRejected(
@@ -617,7 +635,8 @@ class OpenAiCompatibleClient
         int $timeout,
         array $profile,
         array $bodies,
-        array $responses
+        array $responses,
+        array &$usages = [],
     ): array {
         $retryBodies = [];
         foreach ($bodies as $i => $body) {
@@ -653,7 +672,7 @@ class OpenAiCompatibleClient
             return $responses;
         }
 
-        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies) as $i => $response) {
+        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages) as $i => $response) {
             $responses[$i] = $response;
         }
 
@@ -670,6 +689,7 @@ class OpenAiCompatibleClient
      * @param  array<int, array<string, mixed>>  $bodies
      * @param  array<int, mixed>  $responses
      * @param  list<int>  $rateLimited  indeksy zapytań, które choć raz dostały 429
+     * @param  array<int, array<string, mixed>>  $usages  tokeny i próby per indeks (postChatPool)
      * @return array<int, mixed>
      */
     private function retryChatManyOverloaded(
@@ -680,6 +700,7 @@ class OpenAiCompatibleClient
         array $bodies,
         array $responses,
         array &$rateLimited = [],
+        array &$usages = [],
     ): array {
         $seen = [];
         $note = static function (array $responses) use (&$seen): void {
@@ -722,7 +743,7 @@ class OpenAiCompatibleClient
             if ($wait > 0) {
                 sleep($wait);
             }
-            $retried = $this->postChatPool($url, $apiKey, $timeout, $retryBodies);
+            $retried = $this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages);
             $note($retried);
             foreach ($retried as $i => $response) {
                 $responses[$i] = $response;
@@ -742,6 +763,7 @@ class OpenAiCompatibleClient
      * @param  array<string, mixed>  $profile
      * @param  array<int, array<string, mixed>>  $bodies
      * @param  array<int, mixed>  $responses
+     * @param  array<int, array<string, mixed>>  $usages  tokeny i próby per indeks (postChatPool)
      * @return array<int, mixed>
      */
     private function retryChatManyUnreached(
@@ -751,6 +773,7 @@ class OpenAiCompatibleClient
         array $profile,
         array $bodies,
         array $responses,
+        array &$usages = [],
     ): array {
         $retryBodies = [];
         $firstError = null;
@@ -775,7 +798,7 @@ class OpenAiCompatibleClient
             'error' => mb_substr((string) $firstError, 0, 300),
             'messages_sha1' => array_map(fn (array $body): string => $this->messagesDigest($body), $retryBodies),
         ]);
-        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies) as $i => $response) {
+        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages) as $i => $response) {
             $responses[$i] = $response;
         }
 
@@ -790,6 +813,7 @@ class OpenAiCompatibleClient
      * @param  array<string, mixed>  $profile
      * @param  array<int, array<string, mixed>>  $bodies
      * @param  array<int, mixed>  $responses
+     * @param  array<int, array<string, mixed>>  $usages  tokeny i próby per indeks (postChatPool)
      * @return array<int, mixed>
      */
     private function retryChatManyEmptyTruncated(
@@ -798,7 +822,8 @@ class OpenAiCompatibleClient
         int $timeout,
         array $profile,
         array $bodies,
-        array $responses
+        array $responses,
+        array &$usages = [],
     ): array {
         $retryBodies = [];
         foreach ($bodies as $i => $body) {
@@ -828,7 +853,7 @@ class OpenAiCompatibleClient
             'max_tokens' => max(array_map(static fn (array $b): int => (int) ($b['max_tokens'] ?? 0), $retryBodies)),
             'profile' => $profile['label'] ?? '',
         ]);
-        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies) as $i => $response) {
+        foreach ($this->postChatPool($url, $apiKey, $timeout, $retryBodies, null, $usages) as $i => $response) {
             $responses[$i] = $response;
         }
 
@@ -1452,9 +1477,11 @@ class OpenAiCompatibleClient
         $this->reportLiveWaiting($profile, $profile['model']);
         try {
             try {
-                $response = $this->aiHttp($profile['api_key'], max(30, $timeoutSeconds))
-                    ->connectTimeout(15)
-                    ->post($url, $payload);
+                $response = $this->postCounted(
+                    $this->aiHttp($profile['api_key'], max(30, $timeoutSeconds))->connectTimeout(15),
+                    $url,
+                    $payload
+                );
             } catch (ConnectionException $e) {
                 throw new RuntimeException('Nie można połączyć z API AI (web search): '.$e->getMessage(), 0, $e);
             }
@@ -1530,10 +1557,13 @@ class OpenAiCompatibleClient
         $payload = $this->applyOpenRouterProvider($payload, $profile);
 
         try {
-            $response = $this->aiHttp($profile['api_key'], max(10, $timeoutSeconds))
-                ->timeout(max(10, $timeoutSeconds))
-                ->connectTimeout(10)
-                ->post($url, $payload);
+            $response = $this->postCounted(
+                $this->aiHttp($profile['api_key'], max(10, $timeoutSeconds))
+                    ->timeout(max(10, $timeoutSeconds))
+                    ->connectTimeout(10),
+                $url,
+                $payload
+            );
         } catch (ConnectionException $e) {
             throw new RuntimeException('Nie można połączyć z API AI (web search): '.$e->getMessage(), 0, $e);
         }
@@ -2356,7 +2386,75 @@ class OpenAiCompatibleClient
             $timeout = max(self::REQUEST_TIMEOUT_FLOOR, $timeout);
         }
 
-        return $this->aiHttp($apiKey, $timeout)->post($url, $payload);
+        return $this->postCounted($this->aiHttp($apiKey, $timeout), $url, $payload);
+    }
+
+    /**
+     * Każde pojedyncze wywołanie modelu przechodzi tędy (post(), web search) — licznik tokenów widzi też odpowiedzi,
+     * których wynik dalej odrzuca: pustą przez `length`, uciętą, ze złym JSON-em, ponowienia i naprawę JSON.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function postCounted(PendingRequest $request, string $url, array $payload): Response
+    {
+        try {
+            $response = $request->post($url, $payload);
+        } catch (Throwable $e) {
+            $this->countUsage(null);
+
+            throw $e;
+        }
+        $this->countUsage($response);
+
+        return $response;
+    }
+
+    /**
+     * Tokeny jednej odpowiedzi modelu do licznika żądania (AiServedProviderTally): odpowiedź 2xx — `usage` z payloadu
+     * (także przy pustej albo niepoprawnej treści), inaczej (4xx, 5xx, 100, błąd połączenia, timeout) próba bez tokenów.
+     *
+     * @return array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}|null doliczone; null = odpowiedź 2xx bez `usage`
+     */
+    private function countUsage(mixed $response): ?array
+    {
+        if ($response instanceof Response && $response->successful()) {
+            try {
+                $usage = AiUsage::fromPayload($response->json());
+            } catch (Throwable) {
+                $usage = null;
+            }
+            // Bramka albo dostawca bez pola `usage`: wywołanie się odbyło, tylko tokenów nie znamy — liczy się jako
+            // wywołanie z zerowymi tokenami (inaczej pozycja wyglądałaby, jakby model nie był pytany).
+            $usage ??= ['calls' => 1] + AiUsage::empty();
+        } else {
+            $usage = AiUsage::failed();
+        }
+        app(AiServedProviderTally::class)->addUsage($usage);
+
+        return $usage;
+    }
+
+    /**
+     * Przyrost licznika od znacznika; null, gdy żadne wywołanie nie podało tokenów ani nie padło.
+     *
+     * @param  array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}  $mark
+     * @return array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}|null
+     */
+    private function usageSince(array $mark): ?array
+    {
+        $usage = app(AiServedProviderTally::class)->usageSince($mark);
+
+        return AiUsage::isEmpty($usage) ? null : $usage;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $a
+     * @param  array<string, mixed>|null  $b
+     * @return array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}|null
+     */
+    private function sumUsage(?array $a, ?array $b): ?array
+    {
+        return $a === null && $b === null ? null : AiUsage::add($a, $b);
     }
 
     /**

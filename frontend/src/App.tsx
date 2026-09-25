@@ -12,6 +12,7 @@ import { AdminPresta } from './pages/AdminPresta'
 import { AdminSearchSites } from './pages/AdminSearchSites'
 import { AdminSessions } from './pages/AdminSessions'
 import { AdminAiTuning } from './pages/AdminAiTuning'
+import { AdminAiStats } from './pages/AdminAiStats'
 import { AdminCatalogSlang } from './pages/AdminCatalogSlang'
 import { AdminDescriptionTemplates } from './pages/AdminDescriptionTemplates'
 import { AdminDictionaries } from './pages/AdminDictionaries'
@@ -258,6 +259,14 @@ export default function App() {
                 element={
                   <PermissionGuard permission="admin.ai_tuning.manage">
                     <AdminAiTuning />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="statystyki-ai"
+                element={
+                  <PermissionGuard permission="admin.ai_stats.view">
+                    <AdminAiStats />
                   </PermissionGuard>
                 }
               />

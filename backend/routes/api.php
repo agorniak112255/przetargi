@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Http\Controllers\Api\Admin\ActivityLogController as AdminActivityLogController;
+use App\Http\Controllers\Api\Admin\AdminAiStatsController;
 use App\Http\Controllers\Api\Admin\AiTuningController as AdminAiTuningController;
 use App\Http\Controllers\Api\Admin\BrandDictionaryController as AdminBrandDictionaryController;
 use App\Http\Controllers\Api\Admin\CatalogSearchSiteController as AdminCatalogSearchSiteController;
@@ -347,6 +348,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
             Route::post('/presta-categories/rewrite', [AdminPrestaCategoryController::class, 'rewrite']);
             Route::put('/presta-categories/maps', [AdminPrestaCategoryController::class, 'updateMaps']);
         });
+
+        Route::get('/ai-stats', [AdminAiStatsController::class, 'index'])
+            ->middleware('permission:admin.ai_stats.view');
 
         Route::middleware('permission:admin.ai_tuning.manage')->group(function (): void {
             Route::get('/ai-tuning', [AdminAiTuningController::class, 'show']);

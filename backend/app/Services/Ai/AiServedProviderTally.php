@@ -28,6 +28,17 @@ final class AiServedProviderTally
     /** @var array{model: ?string, provider: ?string, profile: ?string, fallback: bool}|null */
     private ?array $lastJsonOrigin = null;
 
+    /**
+     * Tokeny i próby wszystkich wywołań modelu w tym żądaniu/procesie (AiUsage) — wyszukiwarka bierze z niego
+     * różnicę wokół etapu (usageMark/usageSince), a nie z wyniku chat(), który zna tylko ostatnią odpowiedź.
+     *
+     * @var array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}|null
+     */
+    private ?array $usageTotal = null;
+
+    /** @var list<?array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}> */
+    private array $lastBatchUsage = [];
+
     public function reset(): void
     {
         $this->served = [];
@@ -35,7 +46,9 @@ final class AiServedProviderTally
         $this->profileFallbacks = 0;
         $this->lastBatch = [];
         $this->lastBatchOrigins = [];
+        $this->lastBatchUsage = [];
         $this->lastJsonOrigin = null;
+        $this->usageTotal = null;
     }
 
     /**
@@ -44,19 +57,25 @@ final class AiServedProviderTally
      * Obok pełne pochodzenie odpowiedzi (model, dostawca, profil, zejście na konfigurację główną) — magazyn zrozumień
      * zapisuje je przy wpisie i nie zapisuje odpowiedzi z zejścia.
      *
+     * Do tego tokeny każdej pozycji paczki — suma wszystkich prób tego zapytania (ponowienia, zejście na konfigurację
+     * główną); null = żadne wywołanie nie podało tokenów ani nie padło.
+     *
      * @param  list<?string>  $providers
      * @param  list<?array{model: ?string, provider: ?string, profile: ?string, fallback: bool}>  $origins
+     * @param  list<?array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}>  $usages
      */
-    public function recordBatch(array $providers, array $origins = []): void
+    public function recordBatch(array $providers, array $origins = [], array $usages = []): void
     {
         $this->lastBatch = array_values($providers);
         $this->lastBatchOrigins = array_values($origins);
+        $this->lastBatchUsage = array_values($usages);
     }
 
     public function forgetBatch(): void
     {
         $this->lastBatch = [];
         $this->lastBatchOrigins = [];
+        $this->lastBatchUsage = [];
     }
 
     /** @return list<?string> */
@@ -69,6 +88,46 @@ final class AiServedProviderTally
     public function lastBatchOrigins(): array
     {
         return $this->lastBatchOrigins;
+    }
+
+    /**
+     * Per indeks ostatniej paczki chatJsonMany: suma wszystkich prób tego indeksu (AiUsage) albo null.
+     *
+     * @return list<?array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}>
+     */
+    public function lastBatchUsage(): array
+    {
+        return $this->lastBatchUsage;
+    }
+
+    /** @param  array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}|null  $usage */
+    public function addUsage(?array $usage): void
+    {
+        if ($usage === null) {
+            return;
+        }
+        $this->usageTotal = AiUsage::add($this->usageTotal, $usage);
+    }
+
+    /** @return array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int} */
+    public function usageTotal(): array
+    {
+        return $this->usageTotal ?? AiUsage::empty();
+    }
+
+    /** @return array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int} */
+    public function usageMark(): array
+    {
+        return $this->usageTotal();
+    }
+
+    /**
+     * @param  array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}  $mark  z usageMark()
+     * @return array{prompt_tokens: int, completion_tokens: int, reasoning_tokens: int, cached_tokens: int, cost: ?float, calls: int, failed_calls: int}
+     */
+    public function usageSince(array $mark): array
+    {
+        return AiUsage::diff($this->usageTotal(), $mark);
     }
 
     /**

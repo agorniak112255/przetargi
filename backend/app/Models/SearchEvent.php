@@ -22,6 +22,31 @@ class SearchEvent extends Model
 
     public const TASK_PRODUCT_SEARCH_WEB = 'product_search_web';
 
+    /** Pozycja z fali „Dopasuj wszystkie” (prefetch paczki pozycji przetargu). */
+    public const TASK_TENDER_MATCH = 'tender_match';
+
+    /** Pojedyncze wyszukiwanie pozycji przetargu („Dopasuj” jednej pozycji albo zapas po awarii fali). */
+    public const TASK_TENDER_ITEM = 'tender_item';
+
+    /** Pozycja zapytania z poczty (przy tworzeniu zapytania i przy inquiries:rematch). */
+    public const TASK_INQUIRY = 'inquiry';
+
+    /** Druga runda wyszukiwania pod zamienniki pozycji przetargu (BattlecardService). */
+    public const TASK_BATTLECARD = 'battlecard';
+
+    /** @var list<string> rodzaje pozycji, które wołają model — ekran „Statystyki AI” */
+    public const AI_TASKS = [
+        self::TASK_PRODUCT_SEARCH,
+        self::TASK_TENDER_MATCH,
+        self::TASK_TENDER_ITEM,
+        self::TASK_INQUIRY,
+        self::TASK_BATTLECARD,
+    ];
+
+    public const CONTEXT_TENDER = 'tender';
+
+    public const CONTEXT_INQUIRY = 'inquiry';
+
     /**
      * @var list<string>
      */
@@ -42,6 +67,21 @@ class SearchEvent extends Model
         'duration_ms',
         'timings_ms',
         'ai_note',
+        'prompt_tokens',
+        'completion_tokens',
+        'reasoning_tokens',
+        'llm_calls',
+        'rank_calls',
+        'rank_card_count',
+        'model_state',
+        'model',
+        'provider',
+        'fallback',
+        'usage',
+        'run_id',
+        'context_type',
+        'context_id',
+        'context_items',
     ];
 
     protected function casts(): array
@@ -57,6 +97,16 @@ class SearchEvent extends Model
             'candidate_count' => 'integer',
             'passes' => 'integer',
             'duration_ms' => 'integer',
+            'prompt_tokens' => 'integer',
+            'completion_tokens' => 'integer',
+            'reasoning_tokens' => 'integer',
+            'llm_calls' => 'integer',
+            'rank_calls' => 'integer',
+            'rank_card_count' => 'integer',
+            'fallback' => 'boolean',
+            'usage' => 'array',
+            'context_id' => 'integer',
+            'context_items' => 'array',
         ];
     }
 

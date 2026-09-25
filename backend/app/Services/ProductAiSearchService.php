@@ -9,6 +9,7 @@ use App\Services\Ai\AiRateLimitedException;
 use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
+use App\Services\Ai\AiUsage;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Search\ProductTextSearch;
 use App\Services\Search\RequirementUnderstandingStore;
@@ -94,6 +95,24 @@ final class ProductAiSearchService
     public const MODEL_STATE_UNAVAILABLE = 'unavailable';
 
     public const MODEL_STATE_SKIPPED = 'skipped';
+
+    /** Etapy kosztu pozycji (`ai_usage.stages`) — ekran „Statystyki AI”. */
+    public const USAGE_STAGE_UNDERSTAND = 'understand';
+
+    public const USAGE_STAGE_RANK = 'rank';
+
+    public const USAGE_STAGE_REWRITE = 'rewrite';
+
+    public const USAGE_STAGE_RANK_AFTER_REWRITE = 'rank_after_rewrite';
+
+    /** Skąd zrozumienie wymagania: model w tym wywołaniu, magazyn zrozumień, lokalnie bez modelu, awaria modelu. */
+    public const UNDERSTAND_SOURCE_MODEL = 'model';
+
+    public const UNDERSTAND_SOURCE_STORED = 'stored';
+
+    public const UNDERSTAND_SOURCE_LOCAL = 'local';
+
+    public const UNDERSTAND_SOURCE_FAILED = 'failed';
 
     /** Etapy searchMany dla paska postępu: model czyta opisy, katalog, ranking modelu, przepisanie pustych. */
     public const PROGRESS_STAGE_UNDERSTAND = 'understand';
@@ -212,6 +231,17 @@ final class ProductAiSearchService
     /** @var array<int, ?string> dostawca modelu, który zrozumiał zapytanie (indeks zapytania w searchMany) */
     private array $understandProviders = [];
 
+    /**
+     * Koszt pozycji fali (ekran „Statystyki AI”): etapy wywołań modelu z tokenami, po indeksie zapytania. Poza śladem,
+     * bo przepisanie zapytania zeruje ślad pozycji — a pozycje z dwiema ocenami są właśnie najdroższe.
+     *
+     * @var array<int, array{stages: list<array<string, mixed>>, understand_source: ?string, origin?: array<string, mixed>|null}>
+     */
+    private array $usageByIndex = [];
+
+    /** @var array{stages: list<array<string, mixed>>, understand_source: ?string, origin?: array<string, mixed>|null} koszt ostatniego search() */
+    private array $usageSingle = ['stages' => [], 'understand_source' => null];
+
     private bool $traceSources = false;
 
     private const EMPTY_TRACE = [
@@ -294,6 +324,7 @@ final class ProductAiSearchService
 
         $wanted = min($wanted, $this->catalogLimit());
         $this->timingMs = [];
+        $this->usageSingle = ['stages' => [], 'understand_source' => null];
         $started = hrtime(true);
         $intent = $this->clock('intent', fn (): array => $this->intentForSearch($query, $task));
         $result = $this->clipResult(
@@ -310,6 +341,7 @@ final class ProductAiSearchService
         $result['timings_ms'] = $this->timingMs;
         // Ślad w odpowiedzi — tak samo jak w fali, żeby wywołujący nie musiał sięgać po stan serwisu.
         $result['trace'] = $this->lastTrace();
+        $result['ai_usage'] = $this->aiUsageSummary($this->usageSingle);
         Log::info('product-ai-search.timings', [
             'query' => mb_substr($query, 0, 80),
             'timings_ms' => $this->timingMs,
@@ -404,6 +436,7 @@ final class ProductAiSearchService
         // Fala zaczyna z czystym śladem i czasami — dotąd zostawały po poprzednim wywołaniu.
         $this->trace = self::EMPTY_TRACE;
         $this->tracesByIndex = [];
+        $this->usageByIndex = [];
         $this->timingMs = [];
 
         $pending = [];
@@ -465,10 +498,14 @@ final class ProductAiSearchService
         // Dostawca OpenRoutera, który ocenił pozycję. Raport 20260914_131814: 15 poluzowań przypięcia dostawcy w przebiegu
         // z 6 złymi kartami ocenionymi na 95 — bez dostawcy przy pozycji nie da się tego powiązać.
         $rankProviders = $providerTally->lastBatch();
+        $rankUsages = $providerTally->lastBatchUsage();
+        $rankOrigins = $providerTally->lastBatchOrigins();
         $rankProviderByIndex = [];
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
             $rankProviderByIndex[$i] = $rankProviders[$pos] ?? null;
+            $this->recordStageUsage($i, self::USAGE_STAGE_RANK, $rankUsages[$pos] ?? null, $this->rankCardCount($pending[$i]));
+            $this->noteUsageOrigin($i, $rankOrigins[$pos] ?? null);
             // Wracamy do śladu tego wymagania, żeby trafienia modelu dopisały się do właściwej pozycji.
             $this->trace = $this->tracesByIndex[$i] ?? self::EMPTY_TRACE;
             // Pusta tablica = wywołanie padło, nie odpowiedź modelu. Dotąd parseIntent([]) podmieniał intencję
@@ -540,6 +577,7 @@ final class ProductAiSearchService
         ksort($done);
         foreach ($done as $i => $row) {
             $done[$i]['trace'] = $this->traceFor($i);
+            $done[$i]['ai_usage'] = $this->aiUsageSummary($this->usageByIndex[$i] ?? ['stages' => [], 'understand_source' => null]);
         }
         // Zgodność dla wywołujących, którzy czytają ślad po fali: ostatnie wymaganie, jak dotąd.
         $lastIndex = array_key_last($this->tracesByIndex);
@@ -948,6 +986,169 @@ final class ProductAiSearchService
     }
 
     /**
+     * Etap wywołania modelu w koszcie pozycji. Indeks null = pojedyncze search(). Brak danych o zużyciu (atrapa klienta
+     * bez licznika) liczy się jako zero, ale etap zostaje — rank_calls mówi, ile razy model oceniał karty.
+     *
+     * @param  array<string, mixed>|null  $usage  AiUsage
+     */
+    private function recordStageUsage(?int $index, string $stage, ?array $usage, ?int $cards = null): void
+    {
+        $u = AiUsage::add(null, $usage);
+        $entry = ['stage' => $stage]
+            + ($cards !== null ? ['cards' => $cards] : [])
+            + [
+                'prompt_tokens' => $u['prompt_tokens'],
+                'completion_tokens' => $u['completion_tokens'],
+                'reasoning_tokens' => $u['reasoning_tokens'],
+                'cached_tokens' => $u['cached_tokens'],
+                'cost' => $u['cost'],
+                'calls' => $u['calls'],
+                'failed_calls' => $u['failed_calls'],
+            ];
+        if ($index === null) {
+            $this->usageSingle['stages'][] = $entry;
+
+            return;
+        }
+        $this->usageByIndex[$index] ??= ['stages' => [], 'understand_source' => null];
+        $this->usageByIndex[$index]['stages'][] = $entry;
+    }
+
+    /**
+     * Model i dostawca, który obsłużył pozycję — ostatni etap wygrywa (ocena po zrozumieniu); zejście na konfigurację
+     * główną to inny model w innej cenie, więc idzie do statystyki razem z kosztem.
+     *
+     * @param  array<string, mixed>|null  $origin  answerOrigin z AiServedProviderTally
+     */
+    private function noteUsageOrigin(?int $index, ?array $origin): void
+    {
+        if ($origin === null) {
+            return;
+        }
+        if ($index === null) {
+            $this->usageSingle['origin'] = $origin;
+
+            return;
+        }
+        $this->usageByIndex[$index] ??= ['stages' => [], 'understand_source' => null];
+        $this->usageByIndex[$index]['origin'] = $origin;
+    }
+
+    private function noteUnderstandSource(int $index, string $source): void
+    {
+        $this->usageByIndex[$index] ??= ['stages' => [], 'understand_source' => null];
+        $this->usageByIndex[$index]['understand_source'] = $source;
+    }
+
+    /**
+     * Wywołanie modelu w pojedynczym search() z kosztem etapu: różnica licznika narastającego klienta wokół wywołania,
+     * także gdy wywołanie rzuci wyjątek (za odpowiedzi przed awarią też się płaci).
+     *
+     * @template T
+     *
+     * @param  callable(): T  $call
+     * @return T
+     */
+    private function meteredCall(string $stage, ?int $cards, callable $call): mixed
+    {
+        $tally = app(AiServedProviderTally::class);
+        $mark = $tally->usageMark();
+        try {
+            return $call();
+        } finally {
+            $this->recordStageUsage(null, $stage, $tally->usageSince($mark), $cards);
+        }
+    }
+
+    /** @param  array<string, mixed>  $prepared  wynik prepareSearch */
+    private function rankCardCount(array $prepared): int
+    {
+        $cards = $prepared['rank_cards'] ?? null;
+
+        return $cards instanceof Collection ? $cards->count() : 0;
+    }
+
+    /**
+     * Koszt pozycji do wyniku (`ai_usage`, kontrakt ekranu „Statystyki AI”): suma etapów, liczba ocen kart
+     * i karty ostatniej oceny.
+     *
+     * @param  array{stages: list<array<string, mixed>>, understand_source: ?string}  $record
+     * @return array<string, mixed>
+     */
+    private function aiUsageSummary(array $record): array
+    {
+        $total = AiUsage::empty();
+        $rankCalls = 0;
+        $rankCards = null;
+        $stages = $this->stagesWithUnderstandSource($record['stages'], $record['understand_source']);
+        foreach ($stages as $stage) {
+            $total = AiUsage::add($total, [
+                'prompt_tokens' => (int) ($stage['prompt_tokens'] ?? 0),
+                'completion_tokens' => (int) ($stage['completion_tokens'] ?? 0),
+                'reasoning_tokens' => (int) ($stage['reasoning_tokens'] ?? 0),
+                'cached_tokens' => (int) ($stage['cached_tokens'] ?? 0),
+                'cost' => isset($stage['cost']) ? (float) $stage['cost'] : null,
+                'calls' => (int) ($stage['calls'] ?? 0),
+                'failed_calls' => (int) ($stage['failed_calls'] ?? 0),
+            ]);
+            // Ocena liczy się, gdy poszło żądanie (odpowiedź albo nieudana próba) — AI wyłączone albo brak klucza
+            // rzuca przed żądaniem i nie jest „modelem pytanym”.
+            $asked = (int) ($stage['calls'] ?? 0) + (int) ($stage['failed_calls'] ?? 0) > 0;
+            if ($asked && in_array($stage['stage'] ?? null, [self::USAGE_STAGE_RANK, self::USAGE_STAGE_RANK_AFTER_REWRITE], true)) {
+                $rankCalls++;
+                $rankCards = isset($stage['cards']) ? (int) $stage['cards'] : $rankCards;
+            }
+        }
+
+        $origin = is_array($record['origin'] ?? null) ? $record['origin'] : [];
+
+        return $total + [
+            'rank_calls' => $rankCalls,
+            'rank_card_count' => $rankCards,
+            'understand_source' => $record['understand_source'],
+            'model' => is_string($origin['model'] ?? null) ? $origin['model'] : null,
+            'provider' => is_string($origin['provider'] ?? null) ? $origin['provider'] : null,
+            'fallback' => $origin === [] ? null : (bool) ($origin['fallback'] ?? false),
+            'stages' => $stages,
+        ];
+    }
+
+    /**
+     * Źródło zrozumienia przy etapie „zrozum” (ostatnim), a przy zrozumieniu zapamiętanym albo lokalnym — etap bez
+     * kosztu: zerowe tokeny zrozumienia mają wtedy wyjaśnienie w statystyce.
+     *
+     * @param  list<array<string, mixed>>  $stages
+     * @return list<array<string, mixed>>
+     */
+    private function stagesWithUnderstandSource(array $stages, ?string $source): array
+    {
+        if ($source === null) {
+            return $stages;
+        }
+        for ($k = count($stages) - 1; $k >= 0; $k--) {
+            if (($stages[$k]['stage'] ?? null) === self::USAGE_STAGE_UNDERSTAND) {
+                $stages[$k]['source'] = $source;
+
+                return $stages;
+            }
+        }
+        $zero = AiUsage::empty();
+        array_unshift($stages, [
+            'stage' => self::USAGE_STAGE_UNDERSTAND,
+            'source' => $source,
+            'prompt_tokens' => $zero['prompt_tokens'],
+            'completion_tokens' => $zero['completion_tokens'],
+            'reasoning_tokens' => $zero['reasoning_tokens'],
+            'cached_tokens' => $zero['cached_tokens'],
+            'cost' => $zero['cost'],
+            'calls' => $zero['calls'],
+            'failed_calls' => $zero['failed_calls'],
+        ]);
+
+        return $stages;
+    }
+
+    /**
      * Ślad jednego wymagania z fali, w tym samym kształcie co lastTrace(). Czasy zostają wspólne
      * dla całej fali — model ocenia wymagania jednym wywołaniem wsadowym, więc rozbicie ich na
      * pozycje byłoby zmyśleniem.
@@ -1237,7 +1438,11 @@ final class ProductAiSearchService
     private function requestCatalogRewrite(string $query, AiTask $task): ?array
     {
         try {
-            $raw = $this->llm->chatJson($this->rewriteMessages($query), null, 900, null, $task);
+            $raw = $this->meteredCall(
+                self::USAGE_STAGE_REWRITE,
+                null,
+                fn (): array => $this->llm->chatJson($this->rewriteMessages($query), null, 900, null, $task),
+            );
         } catch (Throwable $e) {
             // Tylko log, jak przy awarii oceny: intent_error w śladzie znaczy awarię kroku „zrozum” (SearchEventRecorder
             // zapisuje go jako błąd modelu przy intencji), a intencja wyniku pochodzi wtedy z modelu.
@@ -1621,6 +1826,8 @@ final class ProductAiSearchService
             if ($report !== null) {
                 $report(self::PROGRESS_STAGE_REWRITE, 0, count($messages));
             }
+            $providerTally = app(AiServedProviderTally::class);
+            $providerTally->forgetBatch();
             $raws = $this->clock('rewrite_llm', fn (): array => $this->llm->chatJsonMany(
                 $messages,
                 900,
@@ -1628,7 +1835,9 @@ final class ProductAiSearchService
                 $maxConcurrent,
                 $report === null ? null : static fn (int $done, int $total) => $report(self::PROGRESS_STAGE_REWRITE, $done, $total),
             ));
+            $rewriteUsages = $providerTally->lastBatchUsage();
             foreach ($needLlm as $pos => $i) {
+                $this->recordStageUsage($i, self::USAGE_STAGE_REWRITE, $rewriteUsages[$pos] ?? null);
                 // Porównanie z intencją, z którą szukano kart (jak retryAfterRewrite) — intencja z odpowiedzi rankingu
                 // bywa jej podzbiorem. Przepisanie, które padło albo nic nie zmienia, zostawia wynik pierwszej oceny.
                 $rewritten = $this->rewriteSearchIntent(
@@ -1653,7 +1862,7 @@ final class ProductAiSearchService
                     );
                     $modelStates[$i] = self::MODEL_STATE_SKIPPED;
                 } else {
-                    $pending[$i] = [...$prepared, 'searched' => $rewritten];
+                    $pending[$i] = [...$prepared, 'searched' => $rewritten, 'rewritten' => true];
                 }
             }
         }
@@ -1679,9 +1888,21 @@ final class ProductAiSearchService
                 $intents[$i],
             );
         }
+        $rankTally = app(AiServedProviderTally::class);
+        $rankTally->forgetBatch();
         $rankRaws = $this->clock('rank_llm', fn (): array => $this->llm->chatJsonMany($rankMessages, $this->rankMaxTokens($task), $task, $maxConcurrent));
+        $rankUsages = $rankTally->lastBatchUsage();
+        $rankOrigins = $rankTally->lastBatchOrigins();
         foreach ($rankOrder as $pos => $i) {
             $raw = is_array($rankRaws[$pos] ?? null) ? $rankRaws[$pos] : [];
+            // Druga ocena po zmianie intencji bez przepisania to zwykła ocena — jak w search() (finishSearch).
+            $this->recordStageUsage(
+                $i,
+                ($pending[$i]['rewritten'] ?? false) === true ? self::USAGE_STAGE_RANK_AFTER_REWRITE : self::USAGE_STAGE_RANK,
+                $rankUsages[$pos] ?? null,
+                $this->rankCardCount($pending[$i]),
+            );
+            $this->noteUsageOrigin($i, $rankOrigins[$pos] ?? null);
             $this->trace = $this->tracesByIndex[$i] ?? self::EMPTY_TRACE;
             // Intencja, z którą szukano tej puli (po przepisaniu — przepisana), nie zrozumienie z pierwszego przebiegu:
             // inaczej błędne „marki nie ma w katalogu” z pierwszego przebiegu wyłączało bramkę marki, choć przepisanie
@@ -1830,12 +2051,21 @@ final class ProductAiSearchService
         $understandings = app(RequirementUnderstandingStore::class);
         $stored = $understandings->get($query, self::UNDERSTAND_PROMPT_VERSION);
         if ($stored !== null) {
+            $this->usageSingle['understand_source'] = self::UNDERSTAND_SOURCE_STORED;
+
             return $this->withCatalogAliases($this->parseIntent($stored, $query), $query);
         }
         $providerTally = app(AiServedProviderTally::class);
+        $this->usageSingle['understand_source'] = self::UNDERSTAND_SOURCE_FAILED;
         try {
             $providerTally->forgetJsonOrigin();
-            $raw = $this->llm->chatJson($this->understandMessages($query), null, 900, null, $task);
+            $raw = $this->meteredCall(
+                self::USAGE_STAGE_UNDERSTAND,
+                null,
+                fn (): array => $this->llm->chatJson($this->understandMessages($query), null, 900, null, $task),
+            );
+            $this->usageSingle['understand_source'] = self::UNDERSTAND_SOURCE_MODEL;
+            $this->noteUsageOrigin(null, $providerTally->lastJsonOrigin());
             // z pochodzeniem: odpowiedź z zejścia na konfigurację główną magazyn pomija
             $understandings->put($query, self::UNDERSTAND_PROMPT_VERSION, $raw, $providerTally->lastJsonOrigin());
 
@@ -1850,7 +2080,12 @@ final class ProductAiSearchService
                 return $this->localIntentAfterModelFailure($query);
             }
             try {
-                $raw = $this->llm->chatJson($this->understandMessagesShort($query), null, 600, null, $task);
+                $raw = $this->meteredCall(
+                    self::USAGE_STAGE_UNDERSTAND,
+                    null,
+                    fn (): array => $this->llm->chatJson($this->understandMessagesShort($query), null, 600, null, $task),
+                );
+                $this->usageSingle['understand_source'] = self::UNDERSTAND_SOURCE_MODEL;
 
                 return $this->withCatalogAliases($this->parseIntent($raw, $query), $query);
             } catch (Throwable $retry) {
@@ -1925,6 +2160,8 @@ final class ProductAiSearchService
     private function intentForSearch(string $query, AiTask $task): array
     {
         if (! $this->needsStructuredIntent($query)) {
+            $this->usageSingle['understand_source'] = self::UNDERSTAND_SOURCE_LOCAL;
+
             return $this->applySlangIntent($query, $this->normalizeIntent($this->localIntent($query)));
         }
 
@@ -1947,6 +2184,7 @@ final class ProductAiSearchService
         foreach ($queries as $i => $query) {
             if (! $this->needsStructuredIntent($query)) {
                 $intents[$i] = $this->applySlangIntent($query, $this->normalizeIntent($this->localIntent($query)));
+                $this->noteUnderstandSource($i, self::UNDERSTAND_SOURCE_LOCAL);
 
                 continue;
             }
@@ -1958,6 +2196,7 @@ final class ProductAiSearchService
                     $query,
                     $this->normalizeIntent($this->withCatalogAliases($this->parseIntent($stored, $query), $query))
                 );
+                $this->noteUnderstandSource($i, self::UNDERSTAND_SOURCE_STORED);
 
                 continue;
             }
@@ -1985,8 +2224,12 @@ final class ProductAiSearchService
         );
         $understandProviders = $providerTally->lastBatch();
         $understandOrigins = $providerTally->lastBatchOrigins();
+        $understandUsages = $providerTally->lastBatchUsage();
         foreach ($need as $pos => $i) {
             $raw = is_array($raws[$pos] ?? null) ? $raws[$pos] : [];
+            $this->recordStageUsage($i, self::USAGE_STAGE_UNDERSTAND, $understandUsages[$pos] ?? null);
+            $this->noteUnderstandSource($i, $raw === [] ? self::UNDERSTAND_SOURCE_FAILED : self::UNDERSTAND_SOURCE_MODEL);
+            $this->noteUsageOrigin($i, $understandOrigins[$pos] ?? null);
             $understandings->put($queries[$i], self::UNDERSTAND_PROMPT_VERSION, $raw, $understandOrigins[$pos] ?? null);
             $this->understandProviders[$i] = $understandProviders[$pos] ?? null;
             $intents[$i] = $this->applySlangIntent(
@@ -5810,14 +6053,23 @@ final class ProductAiSearchService
         array $constraints,
         array $retrieveIntent = [],
     ): array {
+        // Ocena po przepisaniu zapytania (drugie przejście finishSearch) to osobny etap kosztu pozycji.
+        $rankStage = in_array(self::USAGE_STAGE_REWRITE, array_column($this->usageSingle['stages'], 'stage'), true)
+            ? self::USAGE_STAGE_RANK_AFTER_REWRITE
+            : self::USAGE_STAGE_RANK;
         try {
-            $raw = $this->llm->chatJson(
-                $this->analyzeAndRankMessages($query, $candidates, $limit, null, $constraints, $task, $retrieveIntent),
-                null,
-                $this->rankMaxTokens($task),
-                null,
-                $task,
+            $raw = $this->meteredCall(
+                $rankStage,
+                $candidates->count(),
+                fn (): array => $this->llm->chatJson(
+                    $this->analyzeAndRankMessages($query, $candidates, $limit, null, $constraints, $task, $retrieveIntent),
+                    null,
+                    $this->rankMaxTokens($task),
+                    null,
+                    $task,
+                ),
             );
+            $this->noteUsageOrigin(null, app(AiServedProviderTally::class)->lastJsonOrigin());
         } catch (Throwable $e) {
             Log::warning('product-ai-search.rank-failed', ['message' => $e->getMessage()]);
             $raw = [];

@@ -9,11 +9,13 @@ use App\Models\ClientInquiry;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\ProductSubstitute;
+use App\Models\SearchEvent;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Pricing\SourcePriceComparison;
+use App\Services\Search\SearchEventRecorder;
 use App\Support\InquiryLinks;
 use App\Support\InquiryMailText;
 use App\Support\InquiryQueryText;
@@ -29,6 +31,7 @@ use App\Support\WithdrawnProductNote;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
@@ -120,6 +123,14 @@ final class ClientInquiryService
      */
     private array $searchRounds = [];
 
+    /**
+     * Zdarzenia wyszukiwania pozycji (ekran „Statystyki AI”) czekające na numer zapytania — szukanie idzie przed
+     * ClientInquiry::create. Zerowane na każde wywołanie, bo usługa przelicza wiele zapytań w jednej pętli (rematch).
+     *
+     * @var list<array{query: string, result: array<string, mixed>}>
+     */
+    private array $pendingSearchEvents = [];
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly ProductInquirySearch $search,
@@ -174,6 +185,7 @@ final class ClientInquiryService
                 : array_map(InquiryLinks::withoutUrls(...), $extracted['product_queries'])
         );
         $this->searchRounds = [];
+        $this->pendingSearchEvents = [];
         $searchStarted = hrtime(true);
         $matches = $this->matchInRounds($lineItems, $queries);
         $searchMs = self::msSince($searchStarted);
@@ -221,6 +233,7 @@ final class ClientInquiryService
                 'margin_used' => $preferences['margin'],
             ],
         ]);
+        $this->flushSearchEvents((int) $inquiry->id, (int) $user->id);
 
         // Pracownik ma od razu zobaczyć gotowy list: domyślne decyzje + szkic.
         $answers = $this->defaultAnswers($inquiry, $preferences['price_mode'], $preferences['margin']);
@@ -407,15 +420,21 @@ final class ClientInquiryService
         // Szukanie trwa (model ocenia karty), więc idzie przed jakimkolwiek zapisem.
         // Rundy liczy tylko log analizy — polecenie przelicza wiele zapytań jedną usługą.
         $this->searchRounds = [];
+        $this->pendingSearchEvents = [];
         $matches = $this->matchInRounds($relinked['items'], $relinked['queries']);
         $substitutes = $this->loadSubstitutes($matches);
         $rematchedAt = CarbonImmutable::now()->toIso8601String();
 
         if (! $apply) {
+            // Podgląd obiecuje „nic się nie zapisuje” (polecenie bywa uruchamiane na produkcji do odczytu) —
+            // zdarzeń wyszukiwania też nie zapisujemy.
+            $this->pendingSearchEvents = [];
             $plan = $this->rematchPlan($inquiry, $relinked['analysis'], $matches, $substitutes, $rematchedAt);
 
             return array_merge($report, ['warnings' => $plan['warnings'], 'items' => $plan['items']]);
         }
+        // Zapis przed transakcją, żeby statystyka nie mieszała się z zapisem zapytania.
+        $this->flushSearchEvents((int) $inquiry->id, auth()->id() !== null ? (int) auth()->id() : null);
 
         return DB::transaction(function () use ($inquiry, $relinked, $matches, $substitutes, $rematchedAt, $report): array {
             // Handlowiec mógł w tym czasie wysłać list albo coś wybrać — decyduje stan z bazy.
@@ -2549,6 +2568,31 @@ final class ClientInquiryService
     }
 
     /**
+     * Zapis zdarzeń wyszukiwania pozycji zapytania (koszt, pula, karty oceny) z numerem zapytania. Recorder połyka
+     * własne błędy, więc statystyka nie psuje analizy maila.
+     */
+    private function flushSearchEvents(int $inquiryId, ?int $userId): void
+    {
+        $events = $this->pendingSearchEvents;
+        $this->pendingSearchEvents = [];
+        if ($events === []) {
+            return;
+        }
+        $recorder = app(SearchEventRecorder::class);
+        $runId = (string) Str::ulid();
+        foreach ($events as $event) {
+            $recorder->record(
+                $event['query'],
+                $event['result'],
+                is_array($event['result']['trace'] ?? null) ? $event['result']['trace'] : [],
+                $userId,
+                SearchEvent::TASK_INQUIRY,
+                ['run_id' => $runId, 'context_type' => SearchEvent::CONTEXT_INQUIRY, 'context_id' => $inquiryId],
+            );
+        }
+    }
+
+    /**
      * @param  list<string>  $queries
      * @return list<array{query: string, products: list<array<string, mixed>>}>
      */
@@ -2576,6 +2620,9 @@ final class ClientInquiryService
         $groups = [];
         foreach ($rawGroups as $i => $result) {
             $query = (string) ($result['query'] ?? $sliced[$i] ?? '');
+            if (is_array($result['ai_usage'] ?? null)) {
+                $this->pendingSearchEvents[] = ['query' => $query, 'result' => $result];
+            }
             // Klient nazwał markę, której nie ma w katalogu: każdy wynik to zamiennik innej marki.
             // Znacznik na wierszu, bo pewność i wybór domyślny liczą się z samych kandydatów.
             $absentBrand = $this->nullable($result['requested_brand_absent'] ?? null);

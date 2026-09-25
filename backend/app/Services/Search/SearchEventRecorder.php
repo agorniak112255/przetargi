@@ -24,8 +24,9 @@ final class SearchEventRecorder
     }
 
     /**
-     * @param  array<string, mixed>  $result  odpowiedź z ProductAiSearchService::search()
-     * @param  array<string, mixed>  $trace  ProductAiSearchService::lastTrace()
+     * @param  array<string, mixed>  $result  odpowiedź z ProductAiSearchService::search() albo wiersz searchMany()
+     * @param  array<string, mixed>  $trace  ProductAiSearchService::lastTrace() albo `trace` wiersza fali
+     * @param  array{run_id?: ?string, context_type?: ?string, context_id?: ?int, context_items?: list<int>}  $context  przetarg / zapytanie i przebieg
      */
     public function record(
         string $query,
@@ -33,6 +34,7 @@ final class SearchEventRecorder
         array $trace,
         ?int $userId,
         string $task = SearchEvent::TASK_PRODUCT_SEARCH,
+        array $context = [],
     ): ?SearchEvent {
         if (! $this->enabled()) {
             return null;
@@ -44,6 +46,8 @@ final class SearchEventRecorder
             $timings = is_array($trace['timings_ms'] ?? null) ? $trace['timings_ms'] : [];
 
             return SearchEvent::query()->create([
+                ...$this->usageColumns($result),
+                ...$this->contextColumns($context),
                 'user_id' => $userId,
                 'task' => $task,
                 'prompt_version' => (string) ($trace['prompt_version'] ?? ''),
@@ -176,6 +180,59 @@ final class SearchEventRecorder
         }
 
         return array_slice($out, 0, self::MAX_IDS);
+    }
+
+    /**
+     * Koszt pozycji z `ai_usage` wyniku wyszukiwarki (kontrakt „Statystyki AI”). Brak `ai_usage` (stary wywołujący,
+     * wyszukiwanie w sieci) zostawia kolumny puste — statystyka liczy tylko pozycje z danymi.
+     *
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    private function usageColumns(array $result): array
+    {
+        $state = is_string($result['model_state'] ?? null) ? mb_substr($result['model_state'], 0, 16) : null;
+        $usage = is_array($result['ai_usage'] ?? null) ? $result['ai_usage'] : null;
+        if ($usage === null) {
+            return ['model_state' => $state];
+        }
+        $int = static fn (string $key): int => max(0, (int) ($usage[$key] ?? 0));
+        $stages = is_array($usage['stages'] ?? null) ? array_values(array_slice($usage['stages'], 0, 20)) : [];
+
+        return [
+            'model_state' => $state,
+            'prompt_tokens' => $int('prompt_tokens'),
+            'completion_tokens' => $int('completion_tokens'),
+            'reasoning_tokens' => $int('reasoning_tokens'),
+            'llm_calls' => min(65535, $int('calls') + $int('failed_calls')),
+            'rank_calls' => min(255, $int('rank_calls')),
+            'rank_card_count' => isset($usage['rank_card_count']) ? min(65535, max(0, (int) $usage['rank_card_count'])) : null,
+            'model' => $this->clip($usage['model'] ?? null, 191),
+            'provider' => $this->clip($usage['provider'] ?? null, 191),
+            'fallback' => isset($usage['fallback']) ? (bool) $usage['fallback'] : null,
+            'usage' => $stages,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     * @return array<string, mixed>
+     */
+    private function contextColumns(array $context): array
+    {
+        $items = [];
+        foreach (is_array($context['context_items'] ?? null) ? $context['context_items'] : [] as $item) {
+            if (is_numeric($item)) {
+                $items[] = (int) $item;
+            }
+        }
+
+        return [
+            'run_id' => $this->clip($context['run_id'] ?? null, 26),
+            'context_type' => $this->clip($context['context_type'] ?? null, 24),
+            'context_id' => isset($context['context_id']) ? (int) $context['context_id'] : null,
+            'context_items' => $items === [] ? null : array_slice(array_values(array_unique($items)), 0, 200),
+        ];
     }
 
     private function clip(mixed $value, int $length): ?string

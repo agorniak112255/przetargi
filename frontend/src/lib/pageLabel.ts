@@ -21,6 +21,7 @@ const staticLabels: Record<string, string> = {
   '/admin/presta': 'Administracja — Sklep Presta',
   '/admin/strony-wyszukiwarka': 'Administracja — Strony wyszukiwarka',
   '/admin/strojenie-ai': 'Administracja — Strojenie AI',
+  '/admin/statystyki-ai': 'Administracja — Statystyki AI',
   '/admin/zargon': 'Administracja — Żargon SIWZ',
   '/admin/szablony-opisow': 'Administracja — Szablony opisów',
   '/help': 'Pomoc',

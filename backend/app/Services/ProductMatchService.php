@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Product;
+use App\Models\SearchEvent;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Search\AiProductSearch;
+use App\Services\Search\SearchEventRecorder;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\CatalogManufacturerContext;
@@ -22,6 +24,7 @@ use App\Support\RequirementCodeNoise;
 use App\Support\TechnicalAbbreviations;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 use Throwable;
 
 final class ProductMatchService
@@ -158,6 +161,14 @@ final class ProductMatchService
     /** Oznaczenia klas ochrony (FFP1, S1P, OB, A2, K2) — nie marka ani kod modelu. */
     private const PROTECTION_CLASS_CODE = '/^(?:ffp[1-3]|s[1-7]p?l?|sb|ob|o[1-7]|a[1-3]|b[1-3]|e[1-2]|k[1-2]|p[1-3])$/';
 
+    /**
+     * Kontekst zdarzeń wyszukiwania (ekran „Statystyki AI”) — ustawiany tylko w matchTender/matchItem i czyszczony
+     * w finally, żeby tenders:eval, jego odtworzenie i tenders:debug-match (debugPick) nie zapisywały pozycji.
+     *
+     * @var array{run_id: string, context_id: int, user_id: ?int, items: array<string, list<int>>}|null
+     */
+    private ?array $searchEventContext = null;
+
     public function __construct(
         private readonly TenderPricingService $pricing,
         private readonly AiProductSearch $aiSearch,
@@ -194,6 +205,25 @@ final class ProductMatchService
         ?array $itemIds = null,
         int $progressOffset = 0,
         ?int $progressTotal = null,
+    ): array {
+        $this->searchEventContext = $this->newSearchEventContext((int) $tender->id);
+        try {
+            return $this->runMatchTender($tender, $onlyEmpty, $itemIds, $progressOffset, $progressTotal);
+        } finally {
+            $this->searchEventContext = null;
+        }
+    }
+
+    /**
+     * @param  list<int>|null  $itemIds
+     * @return array<string, mixed> jak matchTender()
+     */
+    private function runMatchTender(
+        Tender $tender,
+        bool $onlyEmpty,
+        ?array $itemIds,
+        int $progressOffset,
+        ?int $progressTotal,
     ): array {
         $matched = 0;
         $skipped = 0;
@@ -260,6 +290,7 @@ final class ProductMatchService
         $stageProgress(self::PROGRESS_STAGE_PREPARE, 0, $batchCount);
 
         $products = $this->productsForItems($items);
+        $this->noteSearchEventItems($items);
 
         $this->prefetchAiCandidates(
             $items
@@ -1301,6 +1332,18 @@ final class ProductMatchService
      */
     public function matchItem(TenderItem $item, bool $force = false): array
     {
+        $this->searchEventContext = $this->newSearchEventContext((int) $item->tender_id);
+        $this->noteSearchEventItems(collect([$item]));
+        try {
+            return $this->runMatchItem($item, $force);
+        } finally {
+            $this->searchEventContext = null;
+        }
+    }
+
+    /** @return array<string, mixed> jak matchItem() */
+    private function runMatchItem(TenderItem $item, bool $force): array
+    {
         // zapisana pozycja z produktem — nie nadpisuj przy ponownym wejściu / kliku
         if (! $force && $item->hasCustomOffer()) {
             return [
@@ -2225,6 +2268,9 @@ final class ProductMatchService
 
         $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
         foreach ($queries as $i => $requirement) {
+            if (is_array($rows[$i] ?? null)) {
+                $this->recordSearchEvent($requirement, $rows[$i], SearchEvent::TASK_TENDER_MATCH);
+            }
             $this->rememberAiCandidates(
                 $requirement,
                 is_array($rows[$i] ?? null) ? $rows[$i] : [],
@@ -2339,10 +2385,69 @@ final class ProductMatchService
         } catch (Throwable) {
             return [];
         }
+        $this->recordSearchEvent($requirement, $result, SearchEvent::TASK_TENDER_ITEM);
 
         $source = $this->vectorSearch->enabled() ? 'vector' : 'ai';
 
         return $this->rememberAiCandidates($requirement, $result, $limit, $source);
+    }
+
+    /**
+     * @param  array<string, list<int>>  $items  treść wymagania => numery pozycji
+     * @return array{run_id: string, context_id: int, user_id: ?int, items: array<string, list<int>>}
+     */
+    private function newSearchEventContext(int $tenderId, array $items = []): array
+    {
+        $userId = auth()->id();
+
+        return [
+            'run_id' => (string) Str::ulid(),
+            'context_id' => $tenderId,
+            'user_id' => $userId !== null ? (int) $userId : null,
+            'items' => $items,
+        ];
+    }
+
+    /** @param  Collection<int, TenderItem>  $items */
+    private function noteSearchEventItems(Collection $items): void
+    {
+        if ($this->searchEventContext === null) {
+            return;
+        }
+        foreach ($items as $item) {
+            $key = trim((string) $item->requirement);
+            if ($key !== '') {
+                $this->searchEventContext['items'][$key][] = (int) $item->line_no;
+            }
+        }
+    }
+
+    /**
+     * Zdarzenie wyszukiwania pozycji przetargu (ekran „Statystyki AI”): koszt i przebieg, z przetargiem i numerami
+     * pozycji. Tylko w kontekście matchTender/matchItem — bez niego (debugPick, tenders:eval) nic nie zapisujemy.
+     * Recorder połyka własne błędy, więc zapis nie psuje dopasowania.
+     *
+     * @param  array<string, mixed>  $result  wynik search() albo wiersz findMany()
+     */
+    private function recordSearchEvent(string $requirement, array $result, string $task): void
+    {
+        $context = $this->searchEventContext;
+        if ($context === null) {
+            return;
+        }
+        app(SearchEventRecorder::class)->record(
+            $requirement,
+            $result,
+            is_array($result['trace'] ?? null) ? $result['trace'] : [],
+            $context['user_id'],
+            $task,
+            [
+                'run_id' => $context['run_id'],
+                'context_type' => SearchEvent::CONTEXT_TENDER,
+                'context_id' => $context['context_id'],
+                'context_items' => $context['items'][trim($requirement)] ?? [],
+            ],
+        );
     }
 
     /**

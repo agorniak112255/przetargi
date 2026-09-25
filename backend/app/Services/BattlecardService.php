@@ -6,11 +6,13 @@ namespace App\Services;
 
 use App\Models\Product;
 use App\Models\ProductSubstitute;
+use App\Models\SearchEvent;
 use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Pricing\SourcePriceComparison;
 use App\Services\Search\AiProductSearch;
+use App\Services\Search\SearchEventRecorder;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
@@ -20,6 +22,7 @@ use App\Support\RequirementCheck\En388Code;
 use App\Support\RequirementCheck\LevelChecker;
 use App\Support\RequirementCheck\PackageChecker;
 use App\Support\RequirementCheck\Status;
+use Illuminate\Support\Str;
 use Throwable;
 
 /**
@@ -60,6 +63,9 @@ final class BattlecardService
         private readonly SourcePriceComparison $comparison,
     ) {}
 
+    /** Pozycja, dla której liczymy zamienniki — do zdarzenia wyszukiwania (ekran „Statystyki AI”); tylko w forItem(). */
+    private ?TenderItem $eventItem = null;
+
     /**
      * @return array{
      *     requirement: array{line_no: int, text: string},
@@ -82,7 +88,12 @@ final class BattlecardService
             return $this->cardFromStored($item);
         }
 
-        $card = $this->buildCard($item, $allowAi ?? $refresh);
+        $this->eventItem = $item;
+        try {
+            $card = $this->buildCard($item, $allowAi ?? $refresh);
+        } finally {
+            $this->eventItem = null;
+        }
         $this->persistSubstitutes($item, $card['substitutes']);
 
         return $card;
@@ -368,6 +379,34 @@ final class BattlecardService
     }
 
     /**
+     * Druga runda wyszukiwania (zamienniki) to osobny koszt modelu — zdarzenie z przetargiem i numerem pozycji.
+     * Recorder połyka własne błędy.
+     *
+     * @param  array<string, mixed>  $result  wynik search()
+     */
+    private function recordSearchEvent(string $requirement, array $result): void
+    {
+        $item = $this->eventItem;
+        if ($item === null) {
+            return;
+        }
+        $userId = auth()->id();
+        app(SearchEventRecorder::class)->record(
+            $requirement,
+            $result,
+            is_array($result['trace'] ?? null) ? $result['trace'] : [],
+            $userId !== null ? (int) $userId : null,
+            SearchEvent::TASK_BATTLECARD,
+            [
+                'run_id' => (string) Str::ulid(),
+                'context_type' => SearchEvent::CONTEXT_TENDER,
+                'context_id' => (int) $item->tender_id,
+                'context_items' => [(int) $item->line_no],
+            ],
+        );
+    }
+
+    /**
      * Kolejne wyniki z tej samej ścieżki co „Szukaj w katalogu”, nie pierwsze 500 kart po cenie.
      *
      * @param  list<int>  $excludeIds
@@ -380,6 +419,7 @@ final class BattlecardService
         if ($allowAi && $this->aiSettings->isReady()) {
             try {
                 $result = $this->aiSearch->find($requirement, max(8, $limit), AiTask::ProductSearch);
+                $this->recordSearchEvent($requirement, $result);
                 $rows = is_array($result['products'] ?? null) ? $result['products'] : [];
                 $fromLlm = $rows !== [];
             } catch (Throwable) {
