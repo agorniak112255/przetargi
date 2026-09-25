@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Support;
 
 use App\Models\Product;
+use App\Support\RequirementCheck\CardSources;
 use App\Support\RequirementCheck\En388Code;
 use Illuminate\Support\Str;
 
@@ -30,6 +31,8 @@ final class PpeAssortment
     public const MOUNT_HELMET = 'helmet';
 
     public const MOUNT_HEADBAND = 'headband';
+
+    public const MOUNT_NECKBAND = 'neckband';
 
     public const HARNESS_FASTRAC = 'fastrac';
 
@@ -780,6 +783,72 @@ final class PpeAssortment
         $t = $this->normalize($requirement);
 
         return preg_match('/\bspawal/u', $t) === 1 && $this->showsWeldingFilter($t);
+    }
+
+    /**
+     * Wymagany kombinezon chroniący przed chemikaliami w cieczy („chemoodporny”, „kwasoodporny”, „na kwas siarkowy”),
+     * a karta nie pokazuje bariery dla cieczy: typu 1–4, EN 14605, EN 943 ani Tychem. Typ 5/6 (EN ISO 13982-1, EN 13034)
+     * to pyły i ograniczone rozpryski — bramka zgodności go przepuszcza, ale model dawał mu tyle co typowi 3/4
+     * (mail-kombinezon-chemo-kwas-siarkowy). Decyzja właściciela z 25.09.2026: zostaje na liście, pod progiem zapisu.
+     * Wymaganie, które samo podaje tylko typ 5/6, nie jest sprawdzane — wtedy typ 5/6 jest tym, o co proszono.
+     */
+    public function missingChemicalBarrierEvidence(string $requirement, Product $product): bool
+    {
+        if ($this->family($requirement) !== self::FAMILY_APPAREL || $this->garment($requirement) !== 'coverall') {
+            return false;
+        }
+        $req = $this->normalize($requirement);
+        if (preg_match(self::CHEMICAL_BARRIER_REQUIREMENT, $req) !== 1) {
+            return false;
+        }
+        if (! $this->showsChemicalBarrier($req) && preg_match(self::SPLASH_ONLY_TYPES, $req) === 1) {
+            return false;
+        }
+
+        return ! $this->showsChemicalBarrier($this->normalize($this->chemicalBarrierText($product)));
+    }
+
+    /** Słowa bariery chemicznej po normalize(): chemoodporny, przeciwchemiczny, kwaso-/ługoodporny, kwas z nazwą, kwasy i ługi. */
+    private const CHEMICAL_BARRIER_REQUIREMENT = '/\b(?:chemoodporn|przeciwchemiczn|kwasoodporn|lugoodporn)\w*'
+        .'|\bkwas\w*\s+(?:siarkow|soln|azotow|fluorowodorow|chlorowodorow|fosforow|octow|mrowkow)\w*'
+        .'|\b(?:kwasy|kwasow|kwasami|lugi|lugow|lugami)\b|\blug\w*\s+(?:sodow|potasow)\w*/u';
+
+    /** Typ 5 albo 6 (EN ISO 13982-1, EN 13034) — ochrona przed pyłem i ograniczonymi rozpryskami, nie bariera dla cieczy. */
+    private const SPLASH_ONLY_TYPES = '/\bty(?:p|pu|py|pow|pe)\s+(?:ochrony\s+)?[56](?!\d)|\ben\s*(?:iso\s*)?(?:13034|13982)\b/u';
+
+    /**
+     * Bariera dla cieczy w tekście po normalize() („4/5/6” → „4 5 6”, „3-B” → „3 b”): typ 1–4 jako pierwszy numer po słowie
+     * „typ”, EN 14605, EN 943, Tychem. „typ 5/6” i „typ 5 i 6” nie są dowodem.
+     */
+    private function showsChemicalBarrier(string $normalized): bool
+    {
+        return preg_match('/\bty(?:p|pu|py|pow|pe)\s+(?:ochrony\s+)?[1-4](?!\d)|\ben\s*(?:iso\s*)?(?:14605|943)(?!\d)|\btychem/u', $normalized) === 1;
+    }
+
+    /**
+     * Karta do dowodu bariery: pełny tekst (nazwa, opis, tabelka dostawcy, normy), wszystkie pola karty jak w oknie
+     * „Weryfikacja karty” (parametry wpisane ręcznie, cennik) oraz normy, parametry i cechy z opisu pobranego. Bez pól
+     * ręcznych i cennika karta z „Typ ochrony: 3B, 4B” tylko w parametrach dostawała limit 45.
+     */
+    private function chemicalBarrierText(Product $product): string
+    {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $parts = [$this->productFullText($product)];
+        foreach (CardSources::fromProduct($product) as $source) {
+            $parts[] = $source->text;
+        }
+        foreach (['norms', 'specs', 'features'] as $key) {
+            foreach (is_array($payload[$key] ?? null) ? $payload[$key] : [] as $item) {
+                if (is_string($item)) {
+                    $parts[] = $item;
+                }
+            }
+        }
+        foreach (ManufacturerNormFacts::rows($product->manufacturer_norms) as $row) {
+            $parts[] = $row['label'].' '.$row['value'];
+        }
+
+        return implode("\n", $parts);
     }
 
     private function weldingFilterAllows(string $requirement, string $productText): bool
@@ -2176,24 +2245,49 @@ final class PpeAssortment
         return $reqType === $prodType;
     }
 
-    /** Wkładki / komplet higieniczny do nauszników — nie jest ochronnikiem słuchu. */
+    /**
+     * Wkładki / komplet higieniczny / części zamienne do nauszników — nie jest ochronnikiem słuchu.
+     * „Zestaw części zamiennych … HYX2” i „Zestaw do higienicznej wymiany nauszników … HYX2, X2” (25.09.2026)
+     * przechodziły jako nauszniki X2. Gołe „części zamienne” zostają poza regułą: „Części zamienne do przyłbicy”.
+     */
     public function isHearingHygieneKit(string $text): bool
     {
         $t = $this->normalize($text);
 
         return preg_match(
-            '/\b(komplet\s+higien|zestaw\s+higien|wkladk\w*\s+higien|higieniczn\w*\s+(komplet|zestaw|wklad)'
-            .'|hygiene\s+kit|poduszk\w*\s+higien|cushion\s+kit|hygiene\s+pad)\w*/u',
+            '/\b(komplet\s+higien|zestaw\s+higien|wkladk\w*\s+higien|higieniczn\w*\s+(komplet|zestaw|wklad|wymian)'
+            .'|zestaw\w*\s+czesci\s+zamienn|hygiene\s+kit|poduszk\w*\s+higien|cushion\s+kit|hygiene\s+pad)\w*/u',
             $t
         ) === 1;
     }
 
-    private function hearingCompatible(string $requirement, Product $product): bool
+    /**
+     * Karta to inny wariant ochronnika niż w wymaganiu słuchu: zestaw (higieniczny, części) pod wymaganie nauszników
+     * albo inne mocowanie, gdy oba są znane. Wspólne dla bramki zgodności i nazwanego modelu — trafienie w model
+     * („Peltor X2”) nie może przepuścić zestawu HYX2 ani wersji nahełmowej X2P3 pod „wersja nagłowna”
+     * (25.09.2026: zestaw części był 1. z 99%, X2P3 3.).
+     */
+    public function hearingVariantConflict(string $requirement, Product $product): bool
     {
-        $identity = $this->productIdentityText($product);
-        if ($this->isHearingHygieneKit($identity) && ! $this->isHearingHygieneKit($requirement)) {
+        if ($this->family($requirement) !== self::FAMILY_HEARING) {
             return false;
         }
+        $identity = $this->productIdentityText($product);
+        if ($this->isHearingHygieneKit($identity) && ! $this->isHearingHygieneKit($requirement)) {
+            return true;
+        }
+        $reqMount = $this->hearingMount($requirement);
+        $prodMount = $this->hearingMount($identity);
+
+        return $reqMount !== null && $prodMount !== null && $reqMount !== $prodMount;
+    }
+
+    private function hearingCompatible(string $requirement, Product $product): bool
+    {
+        if ($this->hearingVariantConflict($requirement, $product)) {
+            return false;
+        }
+        $identity = $this->productIdentityText($product);
         $fromName = $this->family((string) $product->name);
         $prodFamily = $fromName
             ?? ($product->ppe_family !== null && $product->ppe_family !== '' ? (string) $product->ppe_family : null)
@@ -2204,11 +2298,6 @@ final class PpeAssortment
         $reqType = $this->articleType($requirement, self::FAMILY_HEARING);
         $prodType = $this->articleType($identity, self::FAMILY_HEARING);
         if ($reqType !== null && $prodType !== null && $reqType !== $prodType) {
-            return false;
-        }
-        $reqMount = $this->hearingMount($requirement);
-        $prodMount = $this->hearingMount($identity);
-        if ($reqMount !== null && $prodMount !== null && $reqMount !== $prodMount) {
             return false;
         }
 
@@ -2276,7 +2365,7 @@ final class PpeAssortment
         return null;
     }
 
-    /** Nahełmowe / do hełmu vs nagłowne / na pałąku. */
+    /** Nahełmowe / do hełmu vs nagłowne / na pałąku vs nakarkowe. */
     public function hearingMount(string $text): ?string
     {
         $t = $this->normalize($text);
@@ -2289,13 +2378,27 @@ final class PpeAssortment
         if (preg_match('/\bnaglown\w*/u', $t) === 1) {
             return self::MOUNT_HEADBAND;
         }
-        if (preg_match(
-            '/\b(do\s+helm|na\s+helm|montowan\w*\s+(na\s+)?helm|na\s+palak|palak)\w*/u',
-            $t
-        ) === 1) {
-            return str_contains($t, 'palak') ? self::MOUNT_HEADBAND : self::MOUNT_HELMET;
+        // „Dohełmowe” i „na/do kasku” tylko przy nausznikach: ocieplacze i więźby dohełmowe (15 kart) to nie
+        // ochronniki, a „Nauszniki 3M PELTOR … mocowane na kasku, X2P5E” to wersja nahełmowa.
+        $earmuff = $this->hearingType($t) === 'earmuff';
+        if ($earmuff && preg_match('/\b(dohelmow|(na|do)\s+kask)\w*/u', $t) === 1) {
+            return self::MOUNT_HELMET;
         }
-        if (preg_match('/p3e/u', $t) === 1 && $this->hearingType($t) === 'earmuff') {
+        // Jak dotąd: „pałąk” obok „do hełmu” rozstrzyga na nagłowne.
+        if (! str_contains($t, 'palak') && preg_match('/\b(do\s+helm|na\s+helm|montowan\w*\s+(na\s+)?helm)\w*/u', $t) === 1) {
+            return self::MOUNT_HELMET;
+        }
+        // Przed „pałąkiem”: „Ochronniki słuchu na pałąku nakarkowym Peltor OPTIME II” to nie nagłowne
+        // (5 kart nakarkowych uchodziło za nagłowne w pulach snr-30 i x2). Po hełmie: „osłona nakarkowa” to część
+        // hełmu, a „Nauszniki do hełmu z osłoną nakarkową” to wersja nahełmowa.
+        if (preg_match('/\bnakarkow\w*/u', $t) === 1 && preg_match('/\boslon\w*\s+nakarkow/u', $t) !== 1) {
+            return self::MOUNT_NECKBAND;
+        }
+        if (preg_match('/\b(na\s+palak|palak)\w*/u', $t) === 1) {
+            return self::MOUNT_HEADBAND;
+        }
+        // Kod mocowania 3M: P3E i P5E to adaptery hełmowe (X2P3E, X2P5E).
+        if ($earmuff && preg_match('/p[35]e/u', $t) === 1) {
             return self::MOUNT_HELMET;
         }
 

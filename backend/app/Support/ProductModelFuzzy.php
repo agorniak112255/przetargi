@@ -20,6 +20,14 @@ final class ProductModelFuzzy
      */
     private array $needlesCache = [];
 
+    /**
+     * Igły „linia + krótki kod” z tego samego wymagania: igła => [linia, kod] („peltorx2” => [peltor, x2]).
+     * Liczone razem z igłami i czyszczone razem z ich pamięcią.
+     *
+     * @var array<string, array<string, array{0: string, 1: string}>>
+     */
+    private array $lineCodeCache = [];
+
     private const STOP = [
         'rekawice', 'rekawica', 'ochronne', 'ochronna', 'ochronny', 'robocze', 'robocza',
         'produkt', 'art', 'kat', 'para', 'par', 'szt', 'sztuk', 'the', 'and', 'for',
@@ -117,7 +125,8 @@ final class ProductModelFuzzy
     /**
      * Czterocyfrowe oznaczenia wariantu podane obok modelu, których nie niesie sama igła:
      * „ARMEN 9007 1010 S1” → 1010 (9007 siedzi już w igle „armen9007”). Numery norm odpadają
-     * razem z rokiem, a wymiary i rozmiary są krótsze, więc nie wchodzą.
+     * razem z rokiem, a wymiary i rozmiary są krótsze, więc nie wchodzą. Liczba z jednostką to ilość
+     * albo miara: przy „…Peltor X2 wersja nagłowna 1500 szt” kod „1500” dawał wszystkim kartom modelu 60%.
      *
      * @return list<string>
      */
@@ -127,8 +136,19 @@ final class ProductModelFuzzy
         if ($needles === []) {
             return [];
         }
-        preg_match_all('/\b\d{4}\b/u', $this->stripNorms($requirement), $m);
-        $codes = array_unique($m[0] ?? []);
+        $text = $this->stripNorms($requirement);
+        preg_match_all('/\b\d{4}\b/u', $text, $m, PREG_OFFSET_CAPTURE);
+        $codes = [];
+        foreach ($m[0] ?? [] as [$code, $offset]) {
+            // Cały token z liczbą i następny token — „1500 szt.”, „1200 par”, „2000ml” to nie wariant.
+            $rest = substr($text, $offset);
+            $parts = preg_split('/\s+/u', $rest, 3) ?: [];
+            if ($this->isQuantity($parts[0] ?? '', $parts[1] ?? null)) {
+                continue;
+            }
+            $codes[] = (string) $code;
+        }
+        $codes = array_unique($codes);
         if ($codes === []) {
             return [];
         }
@@ -233,9 +253,20 @@ final class ProductModelFuzzy
     {
         if (count($this->needlesCache) >= 256) {
             $this->needlesCache = [];
+            $this->lineCodeCache = [];
         }
 
         return $this->needlesCache[$requirement] ??= $this->computeNeedles($requirement);
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    private function lineCodePairs(string $requirement): array
+    {
+        $this->needles($requirement);
+
+        return $this->lineCodeCache[$requirement] ?? [];
     }
 
     /**
@@ -245,6 +276,7 @@ final class ProductModelFuzzy
     {
         $text = $this->stripNorms($requirement);
         $out = [];
+        $lineCodes = [];
 
         if (preg_match_all('/\b[a-z]{2,14}(?:-[a-z0-9]{1,12}){1,4}\b/u', $text, $m, PREG_OFFSET_CAPTURE)) {
             foreach ($m[0] as [$raw, $offset]) {
@@ -309,6 +341,9 @@ final class ProductModelFuzzy
                 && $this->isShortAlnumModel($nextCompact)
             ) {
                 $this->pushNeedle($out, $a.$nextCompact);
+                if (in_array($a.$nextCompact, $out, true)) {
+                    $lineCodes[$a.$nextCompact] = [$a, $nextCompact];
+                }
             }
             $b = isset($tokens[$i + 1]) ? $this->lettersOnly($tokens[$i + 1]) : '';
             if ($a === '' || $b === '' || $this->isStop($a) || $this->isStop($b)) {
@@ -384,6 +419,8 @@ final class ProductModelFuzzy
                 $this->pushNeedle($out, $c);
             }
         }
+
+        $this->lineCodeCache[$requirement] = $lineCodes;
 
         // Kod zapowiedziany przez klienta zostaje także obok igieł z cyfrą — to on nazywa wyrób.
         return array_values(array_unique(array_merge(
@@ -727,8 +764,11 @@ final class ProductModelFuzzy
         // Kod przepisany przez klienta z katalogu nie ma literówki do wybaczenia: pod „symbol RNITz”
         // tolerancja jednej litery wpuszczała RNITNL i RNITNS jako „ten sam model”.
         $declared = array_flip($this->declaredCodes($requirement));
+        $lineCodes = $this->lineCodePairs($requirement);
+        $spacedName = $lineCodes === [] ? '' : $this->spaced((string) $product->name);
         foreach ($needles as $needle) {
-            if ($this->brandAndSkuMatch($needle, $product)) {
+            if ($this->brandAndSkuMatch($needle, $product)
+                || (isset($lineCodes[$needle]) && $this->lineAndCodeApart($lineCodes[$needle][0], $lineCodes[$needle][1], $spacedName))) {
                 $best = 0;
                 $bestLen = max($bestLen, mb_strlen($needle));
 
@@ -785,6 +825,26 @@ final class ProductModelFuzzy
 
         // Linia zamiast marki: „HYCRON 27-600” to karta dystrybutora SKU „27-600”, nazwa „… (dawniej HYCRON)”.
         return mb_strlen($brand) >= 4 && str_contains($this->compact((string) $product->name), $brand);
+    }
+
+    /**
+     * Linia i krótki kod zapisane na karcie osobno: „3M™ PELTOR™ Nauszniki przeciwhałasowe, żółte, nagłowne, X2A”
+     * pod „Peltor X2”. Linia to całe słowo nazwy, a kod zaczyna osobny token, po którym stoją co najwyżej 3 znaki
+     * (X2A, X2P3E). Cyfra zaraz po kodzie to inny numer (X200), a kod w środku słowa to inny wyrób (HYX2, FLX2-200).
+     * Wersję nahełmową i zestawy odrzuca dalej PpeAssortment::hearingVariantConflict.
+     */
+    private function lineAndCodeApart(string $line, string $code, string $spacedName): bool
+    {
+        if ($spacedName === '') {
+            return false;
+        }
+        $afterCode = preg_match('/\d$/', $code) === 1 ? '(?![0-9])' : '';
+
+        return preg_match('/(?<![a-z0-9])'.preg_quote($line, '/').'(?![a-z0-9])/u', $spacedName) === 1
+            && preg_match(
+                '/(?<![a-z0-9])'.preg_quote($code, '/').$afterCode.'[a-z0-9]{0,3}(?![a-z0-9])/u',
+                $spacedName
+            ) === 1;
     }
 
     public function matches(string $requirement, Product $product): bool
@@ -941,6 +1001,23 @@ final class ProductModelFuzzy
         $next = mb_strtolower(trim($nextRaw, " \t.,;:()[]"));
 
         return preg_match('/^(?:'.$units.')$/u', $next) === 1;
+    }
+
+    /**
+     * Ilość albo miara przy czterocyfrowej liczbie („1500 szt.”, „1200 par”, „2000ml”) — nie oznaczenie wariantu.
+     * Bez jednostek jednoliterowych: „ARMEN 9007 1010 L” to kolor 1010 w rozmiarze L, nie 1010 litrów.
+     */
+    private function isQuantity(string $numberToken, ?string $nextToken): bool
+    {
+        $units = 'szt|sztuk\w*|par|pary|par\w*|kpl|komplet\w*|op|opak\w*|ml|kg|mm|cm|litr\w*|gram\w*|db|kv';
+        if (preg_match('/^\d{4}(?:'.$units.')[.,;:)]?$/u', mb_strtolower(trim($numberToken))) === 1) {
+            return true;
+        }
+        if ($nextToken === null) {
+            return false;
+        }
+
+        return preg_match('/^(?:'.$units.')$/u', mb_strtolower(trim($nextToken, " \t.,;:()[]"))) === 1;
     }
 
     /** 010 / 2047W — numer modelu, także z literą na końcu. */

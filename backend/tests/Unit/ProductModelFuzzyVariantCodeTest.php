@@ -81,6 +81,20 @@ final class ProductModelFuzzyVariantCodeTest extends TestCase
         $this->assertSame([], $fuzzy->variantCodes('BUTY UVEX BUSINESS CASUAL 8543.8 S1 SRC ROZMIAR 44'));
     }
 
+    /** Ilość z zamówienia to nie oznaczenie wariantu: przy „…X2 nagłowna 1500 szt” wszystkie karty modelu miały 60%. */
+    public function test_ordered_quantity_is_not_a_variant_code(): void
+    {
+        $fuzzy = $this->fuzzy();
+
+        $this->assertSame([], $fuzzy->variantCodes('Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna 1500 szt'));
+        $this->assertSame([], $fuzzy->variantCodes('Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna 2000 szt.'));
+        $this->assertSame(['1010'], $fuzzy->variantCodes('Półbuty ARTRA ARMEN 9007 1010 S1 SRC, ilość 1200 par'));
+        $this->assertSame(['6060'], $fuzzy->variantCodes('Trzewiki ARTRA ARAUKAN 940 6060 S3'));
+        // Litera rozmiaru po kolorze to nie jednostka („L” to nie litry, „M” to nie metry).
+        $this->assertSame(['1010'], $fuzzy->variantCodes('Półbuty ARTRA ARMEN 9007 1010 L'));
+        $this->assertSame(['1010'], $fuzzy->variantCodes('Półbuty ARTRA ARMEN 9007 1010 M'));
+    }
+
     public function test_query_without_named_model_has_no_variant_codes(): void
     {
         $this->assertSame([], $this->fuzzy()->variantCodes('Kalosze chemoodporne antyelektrostatyczne rozmiar 43'));

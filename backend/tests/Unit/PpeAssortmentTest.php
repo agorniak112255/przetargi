@@ -1482,4 +1482,115 @@ final class PpeAssortmentTest extends TestCase
         $this->assertSame('electric', $a->purpose('Kurtka EN 1149-5'));
         $this->assertSame('electric', $a->purpose('Półbuty S1 antystatyczne'));
     }
+
+    /**
+     * 25.09.2026, golden peltor-x2-naglowne: pod „Peltor X2 wersja nagłowna” zestaw części HYX2 był 1. z 99%,
+     * a X2P3 nahełmowe 3. — trafienie w model przepuszczało je obok bramki zestawu i mocowania.
+     */
+    #[Test]
+    public function hearing_variant_conflict_rejects_kits_and_other_mounts_of_the_named_model(): void
+    {
+        $req = 'Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna';
+        $conflicting = [
+            '229070' => 'Zestaw części zamiennych 3M PELTOR HYX2 (dawnej HY52) do nauszników PELTOR X2-A, H31, H520 Optime II',
+            '7100383166' => 'Zestaw do higienicznej wymiany nauszników 3M™ PELTOR™, Optime II, HYX2, X2',
+            '7000104046' => '3M™ PELTOR™ Zestaw higieniczny, HYX2',
+            '7000103990' => '3M™ PELTOR™ Nauszniki przeciwhałasowe, żółte, nahełmowe, X2P3',
+            '7100326939' => 'Nauszniki przeciwhałasowe mocowane do hełmu 3M™ PELTOR™, pomarańczowe, X2P3E',
+            '7100095525' => 'Nauszniki 3M™ PELTOR™, 30 dB, żółte, mocowane na kasku, X2P5E',
+        ];
+        foreach ($conflicting as $sku => $name) {
+            $card = $this->hearingCard((string) $sku, $name);
+            $this->assertTrue($this->assortment->hearingVariantConflict($req, $card), $name);
+            $this->assertFalse($this->assortment->compatibleProduct($req, $card), $name);
+        }
+        foreach ([
+            '7000103989' => '3M™ PELTOR™ Nauszniki przeciwhałasowe, żółte, nagłowne, X2A',
+            '7100141454' => 'Nauszniki Ochronne 3M™ PELTOR™ X2A',
+        ] as $sku => $name) {
+            $card = $this->hearingCard((string) $sku, $name);
+            $this->assertFalse($this->assortment->hearingVariantConflict($req, $card), $name);
+            $this->assertTrue($this->assortment->compatibleProduct($req, $card), $name);
+        }
+
+        // Zestaw pod wymaganie zestawu i wymaganie spoza słuchu — bez konfliktu.
+        $kit = $this->hearingCard('7000104046', '3M™ PELTOR™ Zestaw higieniczny, HYX2');
+        $this->assertFalse($this->assortment->hearingVariantConflict('Zestaw higieniczny do nauszników 3M Peltor X2 HYX2', $kit));
+        $this->assertFalse($this->assortment->hearingVariantConflict('Pasek podbródkowy do hełmu 3M G3000', $kit));
+    }
+
+    /** „Dohełmowe” i „na kasku” to mocowanie tylko u nauszników — ocieplacze i więźby dohełmowe nie są ochronnikami. */
+    #[Test]
+    public function helmet_mount_words_count_only_for_earmuffs(): void
+    {
+        foreach ([
+            'Dohełmowe ochronniki słuchu Sonis® Compact do Full Brim',
+            'Nauszniki 3M™ PELTOR™, 30 dB, żółte, mocowane na kasku, X2P5E',
+            'Nauszniki przeciwhałasowe mocowane do kasku',
+        ] as $text) {
+            $this->assertSame(PpeAssortment::MOUNT_HELMET, $this->assortment->hearingMount($text), $text);
+        }
+        foreach ([
+            'Surefit™ ocieplacz dohełmowy - M/L',
+            'SureFit™ ocieplacz dohełmowy ze zdejmowaną ochroną twarzy - M/L - czarny',
+            '3M™ G2D Wymienna więźba dohełmowa',
+            'Ocieplacz dohełmowy Cold Weather JSP - żółty',
+            'Dohełmowa osłona twarzy UVEX pheos visior 9906, mocowanie mechaniczne, nieparująca, bezbarwna',
+            'Części zamienne do przyłbicy',
+        ] as $text) {
+            $this->assertNull($this->assortment->hearingMount($text), $text);
+        }
+        // Gołe „części zamienne” to nie zestaw do nauszników.
+        $this->assertFalse($this->assortment->isHearingHygieneKit('Części zamienne do przyłbicy'));
+        $this->assertTrue($this->assortment->isHearingHygieneKit(
+            'Zestaw części zamiennych 3M PELTOR HYX2 (dawnej HY52) do nauszników PELTOR X2-A, H31, H520 Optime II'
+        ));
+        $this->assertTrue($this->assortment->isHearingHygieneKit('Zestaw do higienicznej wymiany nauszników 3M™ PELTOR™, Optime II, HYX2, X2'));
+    }
+
+    /** Nakarkowe to osobne mocowanie: „na pałąku nakarkowym” nie jest nagłowne (5 kart w pulach snr-30 i x2). */
+    #[Test]
+    public function neckband_earmuffs_are_a_separate_mount(): void
+    {
+        foreach ([
+            'Ochronniki słuchu na pałąku nakarkowym Peltor™ OPTIME™ II.',
+            '3M™ PELTOR™ Optime™ I Nauszniki przeciwhałasowe, żółte, nakarkowe, H510B-403-GU',
+            'Nauszniki p/hałasowe nakarkowe PELTOR Optime II H520B',
+        ] as $text) {
+            $this->assertSame(PpeAssortment::MOUNT_NECKBAND, $this->assortment->hearingMount($text), $text);
+        }
+        $this->assertSame(PpeAssortment::MOUNT_HEADBAND, $this->assortment->hearingMount(
+            'Ochronniki słuchu na pałąku nagłownym Peltor™ OPTIME™ II.'
+        ));
+        $this->assertSame(PpeAssortment::MOUNT_HEADBAND, $this->assortment->hearingMount(
+            'Ochronniki słuchu na pałąku Sonis®2 — 31dB SNR'
+        ));
+        // „Osłona nakarkowa” to część hełmu, nie mocowanie nauszników (przegląd 25.09.2026).
+        $this->assertSame(PpeAssortment::MOUNT_HELMET, $this->assortment->hearingMount(
+            'Nauszniki przeciwhałasowe do hełmu z osłoną nakarkową'
+        ));
+        $this->assertSame(PpeAssortment::MOUNT_HELMET, $this->assortment->hearingMount(
+            'Nauszniki mocowane na kasku, osłona nakarkowa'
+        ));
+
+        $neckband = $this->hearingCard('3M-OPTIME2-K', 'Ochronniki słuchu na pałąku nakarkowym Peltor™ OPTIME™ II.');
+        $headband = $this->hearingCard('3M-OPTIME2', 'Ochronniki słuchu na pałąku nagłownym Peltor™ OPTIME™ II.');
+        $this->assertFalse($this->assortment->compatibleProduct('Nauszniki przeciwhałasowe nagłowne Optime II', $neckband));
+        $this->assertTrue($this->assortment->compatibleProduct('Nauszniki przeciwhałasowe nagłowne Optime II', $headband));
+        $this->assertTrue($this->assortment->compatibleProduct('Nauszniki przeciwhałasowe nakarkowe', $neckband));
+        $this->assertFalse($this->assortment->compatibleProduct('Nauszniki przeciwhałasowe nakarkowe', $headband));
+    }
+
+    private function hearingCard(string $sku, string $name): Product
+    {
+        $p = new Product;
+        $p->forceFill([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => '3M',
+            'category' => 'Ochrona słuchu',
+        ]);
+
+        return $p;
+    }
 }

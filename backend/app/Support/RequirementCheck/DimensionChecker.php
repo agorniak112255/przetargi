@@ -34,7 +34,25 @@ final class DimensionChecker implements ParameterChecker
 
     private const BUCKET_VARIANT = 'variant';
 
-    public function __construct(private readonly DimensionParser $parser = new DimensionParser) {}
+    /**
+     * @param  float|null  $minimumTolerancePct  null — okno „Weryfikacja karty” (porównanie dokładne, TOLERANCE_PCT);
+     *                                           liczba — tryb sprzeczności z forContradictions()
+     */
+    public function __construct(
+        private readonly DimensionParser $parser = new DimensionParser,
+        private readonly ?float $minimumTolerancePct = null,
+    ) {}
+
+    /**
+     * Tryb do limitu oceny w wyszukiwarce: „fail” tylko przy wprost sprzecznym wymiarze. Wymiar bez „min./max.” (także
+     * „ok.”) to minimum — decyzja właściciela 25.09.2026: dłuższy rękaw czy większy fartuch nie przeczy wymaganiu.
+     * „max.” to maksimum, zakres — oba końce; każda granica z tolerancją $tolerancePct, więc karta krótsza o 3% nie spada.
+     * Wiersze i znaleziska są te same co w oknie, zmienia się tylko przedział akceptowany przez wymaganie.
+     */
+    public static function forContradictions(float $tolerancePct = 5.0): self
+    {
+        return new self(new DimensionParser, $tolerancePct);
+    }
 
     public function group(): string
     {
@@ -162,7 +180,7 @@ final class DimensionChecker implements ParameterChecker
         }
 
         [$lo, $hi] = self::cardInterval($m);
-        $verdict = self::verdict($lo, $hi, ...self::acceptance($req['op'], $req['values_mm']));
+        $verdict = self::verdict($lo, $hi, ...$this->acceptance($req['op'], $req['values_mm']));
         if ($m['listed']) {
             return self::variant($source, $m, $verdict);
         }
@@ -225,7 +243,7 @@ final class DimensionChecker implements ParameterChecker
         $verdicts = [];
         foreach (self::sortedDesc($m['values_mm']) as $i => $value) {
             [$lo, $hi] = $m['op'] === 'approx' ? self::approxInterval($value) : [$value, $value];
-            $verdicts[] = self::verdict($lo, $hi, ...self::acceptance($req['op'], [$required[$i]]));
+            $verdicts[] = self::verdict($lo, $hi, ...$this->acceptance($req['op'], [$required[$i]]));
         }
         $verdict = Status::worst($verdicts);
 
@@ -242,9 +260,19 @@ final class DimensionChecker implements ParameterChecker
      * @param  list<float>  $values
      * @return array{0: float, 1: float}
      */
-    private static function acceptance(string $op, array $values): array
+    private function acceptance(string $op, array $values): array
     {
         $value = $values[0];
+        if ($this->minimumTolerancePct !== null) {
+            $low = 1 - $this->minimumTolerancePct / 100;
+            $high = 1 + $this->minimumTolerancePct / 100;
+
+            return match ($op) {
+                'max' => [0.0, $value * $high],
+                'range' => [$values[0] * $low, $values[1] * $high],
+                default => [$value * $low, INF],
+            };
+        }
 
         return match ($op) {
             'approx', 'exact' => [$value * (1 - self::TOLERANCE_PCT[$op] / 100), $value * (1 + self::TOLERANCE_PCT[$op] / 100)],

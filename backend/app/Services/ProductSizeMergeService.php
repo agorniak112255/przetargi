@@ -203,10 +203,11 @@ final class ProductSizeMergeService
 
     /**
      * Duplikat tego samego wyrobu (np. karta dystrybutora założona obok karty producenta): powiązania B2B, sloty cen,
-     * tabelki, media, historia, identyfikatory i odwołania (przetargi, zamienniki, akcesoria innych kart, Presta,
-     * cenniki) przechodzą na $keep, $drop znika. Nazwa, SKU i lista rozmiarów $keep zostają; kod duplikatu trafia do
-     * merged_duplicate_skus (nie do listy rozmiarów, z której korzysta łączenie rozmiarów). Warunki (ten sam producent,
-     * brak wersji itp.) sprawdza wywołujący. Wektor $drop znika z Qdrant po commit (deleteVectorsAfterCommit).
+     * tabelki, media, historia, identyfikatory, własne akcesoria i odwołania (przetargi, zamienniki, akcesoria innych
+     * kart, Presta, cenniki) przechodzą na $keep, $drop znika. Nazwa, SKU i lista rozmiarów $keep zostają; kod
+     * duplikatu trafia do merged_duplicate_skus (nie do listy rozmiarów, z której korzysta łączenie rozmiarów). Warunki
+     * (ten sam producent, brak wersji itp.) sprawdza wywołujący. Wektor $drop znika z Qdrant po commit
+     * (deleteVectorsAfterCommit).
      */
     public function mergeDuplicate(Product $keep, Product $drop): void
     {
@@ -260,6 +261,7 @@ final class ProductSizeMergeService
             $this->remapTenderItems($map);
             $this->remapSubstitutes($keepId, $dropIds);
             $this->remapAccessories($keepId, $dropIds);
+            $this->moveOwnAccessories($keepId, $dropIds);
             $this->remapPresta($keepId, $dropIds);
             $this->remapPriceLists($map);
 
@@ -570,6 +572,7 @@ final class ProductSizeMergeService
             $this->remapTenderItems($map);
             $this->remapSubstitutes((int) $winner->id, $loserIds);
             $this->remapAccessories((int) $winner->id, $loserIds);
+            $this->moveOwnAccessories((int) $winner->id, $loserIds);
             $this->moveMedia($winner, $loserIds);
             $this->remapPriceHistory((int) $winner->id, $loserIds);
             $this->remapPresta((int) $winner->id, $loserIds);
@@ -731,8 +734,8 @@ final class ProductSizeMergeService
      * akcesorium wskazujące kartę, która zostaje). Numer Presty akcesorium (presta_related_id) zostaje — to produkt,
      * który sklep ma już podpięty: eksport tylko dopisuje akcesoria (ensureAccessories), więc nowy numer dałby w sklepie
      * drugi odnośnik do tego samego wyrobu, a karta bez dopasowania do Presty zostałaby przy eksporcie założona albo
-     * nadpisałaby produkt sklepu znaleziony po jej kodzie. Własne akcesoria scalanych kart (product_id) nie
-     * przechodzą — „Połącz” i products:merge-duplicate odmawiają przy nich.
+     * nadpisałaby produkt sklepu znaleziony po jej kodzie. Własne akcesoria scalanych kart (product_id) przenosi
+     * moveOwnAccessories — wołać po tej metodzie (wiersze karty, która zostaje, wskazujące scalone już zniknęły).
      *
      * @param  list<int>  $loserIds
      */
@@ -741,7 +744,7 @@ final class ProductSizeMergeService
         if (! Schema::hasTable('product_accessories') || $loserIds === []) {
             return;
         }
-        // wiersze scalanych kart i tak znikają z nimi (kaskada)
+        // tu tylko akcesoria innych kart — własne wiersze scalanych kart przenosi potem moveOwnAccessories
         $rows = ProductAccessory::query()
             ->whereIn('related_product_id', $loserIds)
             ->whereNotIn('product_id', $loserIds)
@@ -765,6 +768,74 @@ final class ProductSizeMergeService
             }
             $row->forceFill($updates)->save();
         }
+    }
+
+    /**
+     * Własne akcesoria scalanych kart (product_id) przechodzą na kartę, która zostaje (decyzja właściciela z 25.09.2026:
+     * scalana karta to ten sam wyrób, więc jej akcesoria są akcesoriami karty, która zostaje) — dotąd kasowała je kaskada
+     * razem z kartą (cascadeOnDelete), np. przy automatycznym łączeniu rozmiarów po imporcie cennika. Wiersz przechodzi
+     * bez zmian (to samo id — kopia zapasowa odtwarza stan po id): link_key, source, metoda i numery Presty
+     * (presta_parent_id, presta_related_id) to ślad źródła — jak w remapAccessories numer akcesorium zostaje, a eksport
+     * tylko dopisuje akcesoria produktu w sklepie.
+     *
+     * Znikają (są w kopii zapasowej wywołującego, gdy ją robi):
+     * - samo-powiązanie: wiersz wskazuje kartę, która zostaje, albo inną scalaną kartę (po scaleniu to ta sama karta);
+     * - powtórzenie: karta, która zostaje, ma już wiersz z tym samym link_key (UNIQUE product_id + link_key) albo tą samą
+     *   parą karta → akcesorium. Zostaje wiersz silniejszy (rank), przy remisie wiersz karty, która zostaje — słabszy
+     *   wiersz karty, która zostaje, ustępuje przenoszonemu.
+     *
+     * @param  list<int>  $loserIds
+     */
+    private function moveOwnAccessories(int $winnerId, array $loserIds): void
+    {
+        if (! Schema::hasTable('product_accessories') || $loserIds === []) {
+            return;
+        }
+        $merged = [...$loserIds, $winnerId];
+        $rows = ProductAccessory::query()->whereIn('product_id', $loserIds)->orderBy('id')->get();
+        foreach ($rows as $row) {
+            $related = $row->related_product_id !== null ? (int) $row->related_product_id : null;
+            if ($related !== null && in_array($related, $merged, true)) {
+                $row->delete();
+
+                continue;
+            }
+            $conflicts = ProductAccessory::query()
+                ->where('product_id', $winnerId)
+                ->where(static function ($q) use ($row, $related): void {
+                    $q->where('link_key', $row->link_key);
+                    if ($related !== null) {
+                        $q->orWhere('related_product_id', $related);
+                    }
+                })
+                ->get();
+            $stronger = $conflicts->every(fn (ProductAccessory $c): bool => $this->accessoryRank($row) > $this->accessoryRank($c));
+            if (! $stronger) {
+                $row->delete();
+
+                continue;
+            }
+            foreach ($conflicts as $conflict) {
+                $conflict->delete();
+            }
+            $row->forceFill(['product_id' => $winnerId])->save();
+        }
+    }
+
+    /**
+     * Który z dwóch wierszy tej samej pary (albo tego samego dowodu) zostaje: dopasowany do karty przed niedopasowanym,
+     * potem ręczny (decyzja człowieka) przed Prestą (sklep, ponowna synchronizacja go odtworzy) przed wzbogacaniem
+     * (reset wzbogacania kasuje wiersze „enrichment” — ręczne akcesorium nie może ustąpić wierszowi z sieci).
+     */
+    private function accessoryRank(ProductAccessory $row): int
+    {
+        $source = match ($row->source) {
+            ProductAccessory::SOURCE_MANUAL => 2,
+            ProductAccessory::SOURCE_PRESTA => 1,
+            default => 0,
+        };
+
+        return ($row->related_product_id !== null ? 10 : 0) + $source;
     }
 
     /**

@@ -71,6 +71,62 @@ final class ProductAiSearchPeltorX2Test extends TestCase
         $this->assertContains($hitId, $search->lastTrace()['candidate_ids'] ?? []);
     }
 
+    /**
+     * 25.09.2026 (golden peltor-x2-naglowne): zestaw części HYX2 był 1. z 99%, X2P3 nahełmowe 3., a karta 3M z linią
+     * i kodem zapisanymi osobno („PELTOR™ …, nagłowne, X2A”) nie była nazwanym modelem. Nazwy kart jak na produkcji.
+     */
+    public function test_named_model_keeps_headband_x2a_and_drops_kits_and_helmet_versions(): void
+    {
+        $base = [
+            'manufacturer' => '3M',
+            'category' => 'Ochrona słuchu / Nauszniki przeciwhałasowe',
+            'catalog_price_net' => 100,
+            'purchase_price' => 60,
+            'stock' => 4,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now()->subMonth(),
+        ];
+        $wanted = [
+            '7000103989' => '3M™ PELTOR™ Nauszniki przeciwhałasowe, żółte, nagłowne, X2A',
+            '7100141454' => 'Nauszniki Ochronne 3M™ PELTOR™ X2A',
+        ];
+        $forbidden = [
+            '229070' => 'Zestaw części zamiennych 3M PELTOR HYX2 (dawnej HY52) do nauszników PELTOR X2-A, H31, H520 Optime II',
+            '7100383166' => 'Zestaw do higienicznej wymiany nauszników 3M™ PELTOR™, Optime II, HYX2, X2',
+            '7000103990' => '3M™ PELTOR™ Nauszniki przeciwhałasowe, żółte, nahełmowe, X2P3',
+            '7100326939' => 'Nauszniki przeciwhałasowe mocowane do hełmu 3M™ PELTOR™, pomarańczowe, X2P3E',
+            '7100095525' => 'Nauszniki 3M™ PELTOR™, 30 dB, żółte, mocowane na kasku, X2P5E',
+            '7000103987' => '3M™ PELTOR™ Nauszniki przeciwhałasowe, żółte, nagłowne, X1A',
+        ];
+        foreach ($wanted + $forbidden as $sku => $name) {
+            Product::query()->create($base + [
+                'sku' => (string) $sku,
+                'name' => $name,
+                'description' => $name,
+                'ppe_family' => PpeAssortment::FAMILY_HEARING,
+            ]);
+        }
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturn([
+            'needed' => self::QUERY,
+            'search_phrases' => ['nauszniki przeciwhałasowe'],
+            'matches' => [],
+        ]);
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $search = $this->app->make(ProductAiSearchService::class);
+        $skus = array_map('strval', array_column($search->search(self::QUERY, 10)['products'] ?? [], 'sku'));
+
+        foreach (array_keys($wanted) as $sku) {
+            $this->assertContains((string) $sku, $skus);
+        }
+        foreach ($forbidden as $sku => $name) {
+            $this->assertNotContains((string) $sku, $skus, $name);
+        }
+        // Nazwany model rozstrzyga bez rankingu modelu.
+        $this->assertSame([], $search->lastTrace()['rank_card_ids'] ?? []);
+    }
+
     private function seedPeltorX2AmongDecoys(): Product
     {
         $hit = Product::query()->create([

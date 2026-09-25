@@ -18,37 +18,39 @@ use Throwable;
  * synchronizacja dystrybutora nie trafiła po SKU (23.09.2026: P4S założyło 2111.235, 9169.541, 9183.041 obok kart
  * UVEX z obciętym SKU). Przenoszenie to samo co przy łączeniu rozmiarów (ProductSizeMergeService::mergeDuplicate):
  * powiązania B2B (kolejna synchronizacja trafia już w kartę, która zostaje), sloty cen, tabelki ze sklepu, zdjęcia
- * i dokumenty bez powtórzeń, historia cen, identyfikatory, pozycje przetargów, zamienniki, akcesoria innych kart
- * wskazujące duplikat, PrestaShop, cenniki.
+ * i dokumenty bez powtórzeń, historia cen, identyfikatory, pozycje przetargów, zamienniki, własne akcesoria duplikatu
+ * (bez powtórzeń tej samej pary), akcesoria innych kart wskazujące duplikat, PrestaShop, cenniki.
  *
  * Nazwa, opis i SKU karty, która zostaje, się nie zmieniają. --take-sku przejmuje SKU duplikatu (po jego usunięciu
  * kod jest wolny) — dla karty z obciętym SKU. Pusta kategoria karty, która zostaje, bierze kategorię duplikatu.
- * Odmowa, gdy producent jest inny albo duplikat ma dane, których przenoszenie nie obejmuje (wersje, ceny specjalne,
- * akcesoria). Domyślnie podgląd; --apply zapisuje kopię zapasową obu kart i scala. Kody duplikatu (powiązania B2B,
- * pozycje cenników z pliku) trafiają do mapy połączeń (card_redirects) jako decyzja bez propozycji i autora.
+ * Odmowa, gdy producent jest inny albo duplikat ma dane, których przenoszenie nie obejmuje (wersje, ceny specjalne).
+ * Domyślnie podgląd; --apply zapisuje kopię zapasową obu kart (z wierszami akcesoriów) i scala. Kody duplikatu
+ * (powiązania B2B, pozycje cenników z pliku) trafiają do mapy połączeń (card_redirects) jako decyzja bez propozycji
+ * i autora.
  */
 final class MergeDuplicateProductsCommand extends Command
 {
-    /** tabela => [kolumna karty, opis] — to, co przenosi mergeDuplicate */
+    /** [tabela, kolumna karty, opis] — to, co przenosi mergeDuplicate */
     private const MOVED = [
-        'b2b_product_links' => ['product_id', 'powiązania B2B'],
-        'product_source_prices' => ['product_id', 'sloty cen'],
-        'product_shop_cards' => ['product_id', 'tabelki ze sklepu'],
-        'product_images' => ['product_id', 'zdjęcia'],
-        'product_documents' => ['product_id', 'dokumenty'],
-        'product_price_history' => ['product_id', 'historia cen'],
-        'product_identifiers' => ['product_id', 'identyfikatory'],
-        'tender_items' => ['main_product_id', 'pozycje przetargów'],
-        'presta_product_matches' => ['product_id', 'dopasowania PrestaShop'],
+        ['b2b_product_links', 'product_id', 'powiązania B2B'],
+        ['product_source_prices', 'product_id', 'sloty cen'],
+        ['product_shop_cards', 'product_id', 'tabelki ze sklepu'],
+        ['product_images', 'product_id', 'zdjęcia'],
+        ['product_documents', 'product_id', 'dokumenty'],
+        ['product_price_history', 'product_id', 'historia cen'],
+        ['product_identifiers', 'product_id', 'identyfikatory'],
+        ['tender_items', 'main_product_id', 'pozycje przetargów'],
+        ['presta_product_matches', 'product_id', 'dopasowania PrestaShop'],
+        // własne akcesoria duplikatu — bez powtórzeń tej samej pary na karcie, która zostaje
+        ['product_accessories', 'product_id', 'akcesoria'],
         // akcesoria innych kart wskazujące duplikat — potem wskazują kartę, która zostaje
-        'product_accessories' => ['related_product_id', 'jako akcesorium innych kart'],
+        ['product_accessories', 'related_product_id', 'jako akcesorium innych kart'],
     ];
 
     /** tabela => opis — dane, których mergeDuplicate nie przenosi; kaskada skasowałaby je razem z duplikatem */
     private const BLOCKING = [
         'product_variants' => 'wersje',
         'product_special_prices' => 'ceny specjalne',
-        'product_accessories' => 'akcesoria',
     ];
 
     protected $signature = 'products:merge-duplicate
@@ -85,7 +87,7 @@ final class MergeDuplicateProductsCommand extends Command
 
                 continue;
             }
-            foreach (self::MOVED as $table => [$column, $label]) {
+            foreach (self::MOVED as [$table, $column, $label]) {
                 $count = DB::table($table)->where($column, $drop->id)->count();
                 if ($count > 0) {
                     $this->line("   {$label}: {$count}");
@@ -119,9 +121,17 @@ final class MergeDuplicateProductsCommand extends Command
             if (! is_dir(dirname($path))) {
                 mkdir(dirname($path), 0775, true);
             }
+            // akcesoria obu kart i wskazujące którąś z nich — scalenie je przenosi, przepina albo kasuje (powtórzenia)
             $backup = array_map(static fn (array $pair): array => [
                 'keep' => $pair[0]->getAttributes(),
                 'drop' => $pair[1]->getAttributes(),
+                'product_accessories' => DB::table('product_accessories')
+                    ->where(static fn ($q) => $q->whereIn('product_id', [$pair[0]->id, $pair[1]->id])
+                        ->orWhereIn('related_product_id', [$pair[0]->id, $pair[1]->id]))
+                    ->orderBy('id')
+                    ->get()
+                    ->map(static fn (object $row): array => (array) $row)
+                    ->all(),
             ], $ready);
             file_put_contents($path, json_encode($backup, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
         } catch (JsonException $e) {

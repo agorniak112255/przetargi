@@ -24,6 +24,10 @@ use App\Support\PpeAssortment;
 use App\Support\PpeFilterType;
 use App\Support\ProductFeatureMatch;
 use App\Support\ProductModelFuzzy;
+use App\Support\RequirementCheck\CardSource;
+use App\Support\RequirementCheck\CardSources;
+use App\Support\RequirementCheck\DimensionChecker;
+use App\Support\RequirementCheck\Status;
 use App\Support\RequirementCodeNoise;
 use App\Support\RrfFusion;
 use App\Support\TechnicalAbbreviations;
@@ -4543,12 +4547,14 @@ final class ProductAiSearchService
 
     /**
      * Trafienie w model ratuje kartę, której rodziny klasyfikator nie odczytał z zapytania (adapter P3E do hełmu),
-     * ale nie zamienia rodzaju ubioru: kombinezon TYVEK 500 to nie osłona na buty Tyvek 500.
+     * ale nie zamienia rodzaju ubioru: kombinezon TYVEK 500 to nie osłona na buty Tyvek 500. Ani wariantu ochronnika
+     * słuchu: zestaw HYX2 i nahełmowe X2P3 to nie „Peltor X2 wersja nagłowna”.
      */
     private function namedModelKeepsFamily(string $query, Product $product): bool
     {
         return $this->modelFuzzy->matches($query, $product)
-            && ! $this->assortment->wearFamilyConflict($query, $product);
+            && ! $this->assortment->wearFamilyConflict($query, $product)
+            && ! $this->assortment->hearingVariantConflict($query, $product);
     }
 
     /**
@@ -4759,7 +4765,11 @@ final class ProductAiSearchService
 
                 return;
             }
-            foreach (['%naglown%', '%nagłown%', '%pałąk%', '%palak%'] as $like) {
+            // Nakarkowe to osobne mocowanie (K9) — karta „Nauszniki … nakarkowe” bywa bez słowa „pałąk”.
+            $likes = $want === PpeAssortment::MOUNT_NECKBAND
+                ? ['%nakark%']
+                : ['%naglown%', '%nagłown%', '%pałąk%', '%palak%'];
+            foreach ($likes as $like) {
                 $outer->orWhere('name', 'like', $like)
                     ->orWhere('description', 'like', $like)
                     ->orWhere('search_blob', 'like', $like);
@@ -6558,6 +6568,8 @@ final class ProductAiSearchService
         $byId = $candidates->keyBy('id');
         $this->traceModelRejected($matches, $byId);
         $series = $this->requestedSeriesWords($query, $candidates);
+        $normEvidence = $matches !== [] ? $this->requiredNormEvidence($intent['constraints'], $candidates, $query) : ['required' => [], 'cards' => []];
+        $checksDimensions = $matches !== [] && $this->contradictionDimensions()->check($query, []) !== [];
         $out = [];
 
         foreach ($matches as $m) {
@@ -6621,6 +6633,30 @@ final class ProductAiSearchService
                 // degradował ją do „drugorzędnej” (poz. 9: gogle bez filtra 90–95% w pięciu biegach).
                 $score = min($score, self::MISSING_KEY_SCORE_CAP);
                 $reason = trim(($reason ?? '').' Brak dowodu kluczowego warunku: filtr spawalniczy / stopień zaciemnienia.');
+            }
+            // Trzy limity z decyzji właściciela z 25.09.2026, niezależne od siebie i od oceny modelu: każdy tylko obniża
+            // procent (min) i dopisuje, czego brakuje, cytując kartę i wymaganie. Remis procentu rozstrzyga dalej cena.
+            $missingNorms = array_filter(
+                array_diff_key($normEvidence['required'], array_flip($normEvidence['cards'][$id] ?? [])),
+                // Model sam wpisał tę normę do missing_key — limit już jest, drugi dopisek niczego nie dodaje.
+                static fn (string $number): bool => ! str_contains(implode(' ', $missingKey), $number),
+            );
+            if ($missingNorms !== []) {
+                // Numer normy z warunku zrozumienia, którego karta nigdzie nie podaje, choć inna oceniana karta go ma.
+                $score = min($score, self::MISSING_KEY_SCORE_CAP);
+                $reason = trim(($reason ?? '').' Brak dowodu normy EN '.implode(', EN ', $missingNorms).' na karcie.');
+            }
+            $contradictions = $checksDimensions ? $this->dimensionContradictions($query, $product) : [];
+            if ($contradictions !== []) {
+                // Wymiar wprost mniejszy od wymaganego (bez „max.” wymaganie to minimum) o więcej niż 5%.
+                $score = min($score, self::MISSING_KEY_SCORE_CAP);
+                $reason = trim(($reason ?? '').' Karta przeczy wymaganiu: '.implode('; ', $contradictions).'.');
+            }
+            if ($this->assortment->missingChemicalBarrierEvidence($requirement, $product)) {
+                // Kombinezon „chemoodporny” bez bariery dla cieczy (typ 5/6) zostaje propozycją pod progiem zapisu
+                // i pod kartą typu 3/4, której brakuje tylko dowodu odporności na konkretną substancję (50).
+                $score = min($score, self::CHEMICAL_BARRIER_SCORE_CAP);
+                $reason = trim(($reason ?? '').' Karta nie dowodzi ochrony przed cieczą — brak dowodu bariery (typ 3/4, EN 14605 / EN 943).');
             }
             $missingSeries = $this->missingSeriesWords($series, $product, $query);
             if ($missingSeries !== []) {
@@ -6726,6 +6762,165 @@ final class ProductAiSearchService
         ]));
 
         return preg_match('/sand[aá][lł]/u', $evidence) === 1 ? null : 'sandały (karta nie nazywa produktu sandałem)';
+    }
+
+    /**
+     * Kombinezon „chemoodporny” bez dowodu bariery dla cieczy (PpeAssortment::missingChemicalBarrierEvidence). Poniżej
+     * MISSING_KEY_SCORE_CAP, żeby kombinezon typu 3/4, któremu brakuje tylko dowodu na konkretną substancję, stał wyżej,
+     * i poniżej progu zapisu przetargu (AiSettingsService::MATCH_MIN_SCORE_DEFAULT = 65), a nad progiem propozycji (40).
+     */
+    private const CHEMICAL_BARRIER_SCORE_CAP = 45;
+
+    /**
+     * Równoważne numery norm (lista z planu limitu P8), sprowadzane do jednego: dawne EN i wydanie EN ISO
+     * (EN 345 = EN ISO 20345) oraz EN 50321 i EN 60903 — obie normy izolacji elektrycznej do pracy pod napięciem.
+     */
+    private const NORM_NUMBER_EQUIVALENTS = [
+        '345' => '20345', '347' => '20347', '471' => '20471', '50321' => '60903',
+        // Starsze wydania pod nowym numerem — SIWZ często cytuje stary numer, a karta nowy (przegląd 25.09.2026).
+        '420' => '21420', '340' => '13688', '531' => '11612', '470' => '11611', '346' => '20346',
+    ];
+
+    /** Klasa obuwia bezpiecznego (S1–S7, SB, S1P, S1 PS, S3L) na karcie = EN ISO 20345. Wielkie litery — „s3” w kodzie to nie klasa. */
+    private const FOOTWEAR_SAFETY_CLASS = '/(?<![\p{L}\d])(?:S[1-7]|SB)(?:\h?(?:P[LS]?|[LS]))?(?![\p{L}\d])/u';
+
+    /** Klasa obuwia zawodowego (O1–O7, OB) na karcie = EN ISO 20347. */
+    private const FOOTWEAR_OCCUPATIONAL_CLASS = '/(?<![\p{L}\d])(?:O[1-7]|OB)(?![\p{L}\d])/u';
+
+    /**
+     * Pełne oznaczenie soczewki wg EN 166 = dowód normy 166 (decyzja właściciela D3 z 25.09.2026, karta 3M 7100010431
+     * „5 3M 1 B K N”): numer skali („5”, „2C-1.2”), znak producenta (z wielką literą: „3M”, „W”), klasa optyczna 1–3
+     * i wytrzymałość S/F/B/A (z T: „FT”). Wąsko, żeby samo „1 B” w innym tekście nie udawało normy.
+     */
+    private const EN166_LENS_MARKING = '/(?<![\p{L}\d.,\-])\d{1,2}(?:[.,]\d)?C?(?:-\d{1,2}(?:[.,]\d)?)?\h+'
+        .'(?=[A-Za-z\d]*[A-Z])[A-Z\d][A-Za-z\d]{0,7}\h+[123]\h+[SFBA]T?(?![\p{L}\d])/u';
+
+    /** Instancja tylko dla limitu oceny: wymiar bez „min./max.” to minimum, tolerancja 5% (okno karty ma własną). */
+    private ?DimensionChecker $contradictionDimensions = null;
+
+    /**
+     * Numery norm z warunków zrozumienia ($intent['constraints'], nie akapit SIWZ) i numery na każdej ocenianej karcie.
+     * Do limitu idzie tylko numer, który ma co najmniej jedna oceniana karta — gdy nie ma go żadna, brak normy to cecha
+     * katalogu, nie wada karty, i ocena modelu zostaje.
+     *
+     * @param  list<mixed>  $constraints
+     * @param  Collection<int, Product>  $candidates
+     * @return array{required: array<string, string>, cards: array<int, list<string>>} required: numer sprowadzony => zapis z warunku
+     */
+    private function requiredNormEvidence(array $constraints, Collection $candidates, string $query): array
+    {
+        // Tylko norma, którą podał klient: warunki pisze model, a normy dopisanej przez model (fraza ekstraktora
+        // z maila, zrozumienie) nie wolno egzekwować limitem wobec kart, które spełniają to, o co proszono.
+        $named = array_flip($this->normNumbersIn($query));
+        $required = [];
+        foreach ($this->stringList($constraints) as $constraint) {
+            $numbers = $this->featureMatch->norms($constraint);
+            // „EN 374 lub EN 455”, „EN 166/EN 170” — wystarczy jedna z norm, więc żadna nie jest wymagana osobno.
+            if (count($numbers) > 1 && preg_match('/\b(?:lub|albo|or)\b|\d\s*\/\s*(?:pn|en|iso)/iu', $constraint) === 1) {
+                continue;
+            }
+            foreach ($numbers as $number) {
+                $key = self::NORM_NUMBER_EQUIVALENTS[$number] ?? $number;
+                if (isset($named[$key])) {
+                    $required[$key] ??= $number;
+                }
+            }
+        }
+        if ($required === []) {
+            return ['required' => [], 'cards' => []];
+        }
+        $cards = [];
+        $onAnyCard = [];
+        foreach ($candidates as $product) {
+            $numbers = $this->cardNormNumbers($product);
+            $cards[(int) $product->id] = $numbers;
+            foreach ($numbers as $number) {
+                $onAnyCard[$number] = true;
+            }
+        }
+
+        return ['required' => array_intersect_key($required, $onAnyCard), 'cards' => $cards];
+    }
+
+    /**
+     * Numery norm na karcie (sprowadzone przez NORM_NUMBER_EQUIVALENTS): wszystkie pola karty jak w oknie „Weryfikacja karty”
+     * (CardSources: nazwa, normy, normy producenta, cennik, parametry ręczne, tabelka dostawcy, specyfikacja, cechy, normy
+     * z opisu, opis) oraz klasa i normy z atrybutów opisu pobranego — tu tylko zdejmują limit, więc szerzej = ostrożniej.
+     * Klasa obuwia S/O i pełne oznaczenie soczewki EN 166 też są dowodem numeru.
+     *
+     * @return list<string>
+     */
+    private function cardNormNumbers(Product $product): array
+    {
+        $texts = array_map(static fn (CardSource $source): string => $source->text, CardSources::fromProduct($product));
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $attributes = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : [];
+        if (is_string($attributes['klasa_ochrony'] ?? null)) {
+            $texts[] = $attributes['klasa_ochrony'];
+        }
+        array_push($texts, ...$this->stringList($attributes['normy_en'] ?? null));
+        $raw = implode("\n", $texts);
+
+        $numbers = $this->normNumbersIn($raw);
+        if (preg_match(self::FOOTWEAR_SAFETY_CLASS, $raw) === 1) {
+            $numbers[] = '20345';
+        }
+        if (preg_match(self::FOOTWEAR_OCCUPATIONAL_CLASS, $raw) === 1) {
+            $numbers[] = '20347';
+        }
+        if (preg_match(self::EN166_LENS_MARKING, $raw) === 1) {
+            $numbers[] = '166';
+        }
+        // Litera przecięcia w kodzie EN 388:2016 („4X44F”) to wynik badania wg EN ISO 13997.
+        if ($this->assortment->cutLevel($raw) !== null) {
+            $numbers[] = '13997';
+        }
+
+        return array_values(array_unique($numbers));
+    }
+
+    /**
+     * Numery norm po EN, ISO albo IEC, sprowadzone przez NORM_NUMBER_EQUIVALENTS.
+     *
+     * @return list<string>
+     */
+    private function normNumbersIn(string $text): array
+    {
+        $numbers = [];
+        if (preg_match_all('/\b(?:en|iso|iec)[\s\-]*(?:iso[\s\-]*)?(\d{3,5})/u', $this->featureMatch->normalize($text), $m) > 0) {
+            foreach ($m[1] as $number) {
+                $numbers[] = self::NORM_NUMBER_EQUIVALENTS[$number] ?? $number;
+            }
+        }
+
+        return array_values(array_unique($numbers));
+    }
+
+    private function contradictionDimensions(): DimensionChecker
+    {
+        return $this->contradictionDimensions ??= DimensionChecker::forContradictions();
+    }
+
+    /**
+     * Wymiary, którym karta wprost przeczy (DimensionChecker w trybie sprzeczności: „fail” = wartość z nazwą wymiaru
+     * i jednostką poza wymaganiem o więcej niż 5%). Cytaty są dosłowne: znalezisko karty i zapis z wymagania.
+     * Pola karty, które sobie przeczą (jedno spełnia, drugie nie), dają „do sprawdzenia”, nie sprzeczność.
+     *
+     * @return list<string>
+     */
+    private function dimensionContradictions(string $query, Product $product): array
+    {
+        $out = [];
+        foreach ($this->contradictionDimensions()->check($query, CardSources::fromProduct($product)) as $row) {
+            if ($row->status !== Status::Fail) {
+                continue;
+            }
+            $failed = array_filter($row->card, static fn (array $finding): bool => ($finding['verdict'] ?? null) === Status::Fail->value);
+            $cardTexts = array_values(array_unique(array_map(static fn (array $finding): string => (string) $finding['text'], $failed)));
+            $out[] = $row->label.': karta '.implode(' / ', $cardTexts).', wymagane '.(string) ($row->required['text'] ?? '');
+        }
+
+        return $out;
     }
 
     private function filterHaystack(Product $product): string

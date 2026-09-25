@@ -323,6 +323,7 @@ Zostaje świadomie, do osobnej decyzji:
   przechodzi) i od razu znika odmowa „ma akcesoria” w „Połącz”, products:merge-duplicate i CardMatchFinder (inaczej jej
   powód „scalenie ich nie przenosi” byłby nieprawdziwy); rozdzielanie bez zmian. To zmiana decyzji etapu C — czeka
   na Twoją zgodę. Dziś żadna z 314 otwartych propozycji nie ma akcesoriów, więc zdjęcie odmowy niczego nie przestawi.
+  → Zgoda właściciela 25.09.2026 („tak, przenoś”) — zrobione, sekcja niżej.
 - Przepięcie nie jest trwałe: ProductAccessoryMatcher szuka karty tylko po numerze Presty, products.ean i products.sku,
   a upsert nadpisuje related_product_id. Ponowne wzbogacenie karty-rodzica (wiersz „s:{kod dystrybutora}”,
   „e:{EAN}”) albo presta:sync-accessories (wiersz dopasowany po EAN/kodzie, nie po numerze Presty) znów wyzeruje
@@ -330,8 +331,33 @@ Zostaje świadomie, do osobnej decyzji:
   i product_identifiers. Poprawka osobno: zapasowe szukanie matchera w product_identifiers.
 - Łączenie rozmiarów z ekranu dalej odmawia, gdy karta dystrybutora jest akcesorium innej karty (powody planu
   w CardMatchFinder: „plan ich nie przenosi”), choć dołączenie jej przez absorb już je przepina — zdjęcie tej części
-  odmowy to zmiana strażnika planu.
+  odmowy to zmiana strażnika planu. → Zdjęte razem z własnymi akcesoriami (sekcja niżej), odmowa została tylko przy
+  rozdzielaniu i przy kartach producenta w łączeniu rozmiarów.
 - Kopia „Połącz” (niezależnie od akcesoriów) nie zawiera wpisów mapy połączeń pozycji karty dystrybutora wskazujących
   trzecią kartę (recordMerge je nadpisuje) ani innych propozycji tej karty, które połączenie usuwa — CardMatchBackup
   (kroki 6 i 7) ma jedno i drugie.
+
+## C2 pkt 5 — własne akcesoria scalanej karty (25.09.2026, zgoda właściciela)
+ProductSizeMergeService::moveOwnAccessories — w absorb („Połącz”, products:merge-duplicate, automatyczne łączenie
+rozmiarów po imporcie cennika) i w mergeSizeCards, w tej samej transakcji, po remapAccessories (wiersze karty, która
+zostaje, wskazujące scalone już zniknęły), przed usunięciem kart. Wiersz przechodzi bez zmian poza product_id (to samo
+id — kopia „Połącz” odtwarza stan po id); link_key, source, method, related_sku i numery Presty (presta_parent_id,
+presta_related_id) zostają jako ślad źródła — spójnie z przepinaniem akcesoriów innych kart (eksport tylko dopisuje
+akcesoria produktu w sklepie). Znikają:
+- samo-powiązanie — wiersz wskazuje kartę, która zostaje, albo inną scalaną;
+- powtórzenie — karta, która zostaje, ma już wiersz z tym samym link_key (UNIQUE) albo tą samą parą karta → akcesorium.
+  Zostaje wiersz silniejszy: dopasowany przed niedopasowanym, potem ręczny > Presta > opis (reset wzbogacania kasuje
+  wiersze „enrichment”, więc ręczna decyzja nie może ustąpić wierszowi z sieci); przy remisie wiersz karty, która
+  zostaje. Odejście od rekomendacji wyżej („zostaje wiersz karty, która zostaje”) tylko wtedy, gdy przenoszony jest
+  silniejszy. Uwaga: dla akcesoriów INNYCH kart remapAccessories dalej zostawia dwa wiersze tej samej pary z różnym
+  dowodem — dla własnych akcesoriów para się nie dubluje (lista zestawu karty pokazywałaby wyrób dwa razy).
+Bolle z produkcji (wg odczytu z 25.09, bez ponownego sprawdzenia): 10256 → 10255 — wiersze „pending” o tych samych
+kodach co na 10255 (ten sam link_key) zostają na 10255, a te z 10256 znikają (niedopasowane, remis); 10254 → 10240 —
+4 wiersze przechodzą.
+
+Odmowa „ma akcesoria” zdjęta w „Połącz” (CardMatchMerger::guard, także dołączenie karty dystrybutora przy łączeniu
+rozmiarów), products:merge-duplicate (podgląd: „akcesoria: N”; kopia zapasowa ma teraz wiersze akcesoriów obu kart)
+i CardMatchFinder (powód niepewnej pary i blokada planu size_merge po stronie karty dystrybutora). Zostaje przy
+rozdzielaniu (kilka kart docelowych) i przy kartach producenta w łączeniu rozmiarów (strażnik CardMatchSizeMerger
+i blokada target_accessories — osobna decyzja; mergeSizeCards przenosi je już jako zabezpieczenie).
 

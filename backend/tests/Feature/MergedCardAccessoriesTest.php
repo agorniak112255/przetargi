@@ -17,10 +17,13 @@ use App\Services\Catalog\CardMatchFinder;
 use App\Services\Catalog\CardMatchMerger;
 use App\Services\Presta\PrestaExportGateway;
 use App\Services\Presta\PrestaProductExportService;
+use App\Services\PriceListImportService;
 use App\Services\ProductKitService;
 use App\Services\ProductSizeMergeService;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Tests\Support\FakePrestaExportGateway;
 use Tests\TestCase;
@@ -259,6 +262,239 @@ final class MergedCardAccessoriesTest extends TestCase
 
         $this->assertNull($drop->fresh());
         $this->assertSame((int) $keep->id, $row->fresh()->related_product_id);
+    }
+
+    /**
+     * Własne akcesoria karty dystrybutora (product_id) przechodzą na kartę producenta zamiast zniknąć kaskadą —
+     * decyzja właściciela z 25.09.2026 („tak, przenoś”); „Połącz” już przy nich nie odmawia.
+     */
+    public function test_card_match_merge_moves_own_accessories_of_distributor_card(): void
+    {
+        $user = User::factory()->create();
+        [$target, $source] = $this->cards();
+        $candidate = $this->candidate($source, $target);
+        $filter = Product::query()->create(['sku' => 'FP3', 'name' => 'Filtr ANRO P3', 'manufacturer' => 'ANRO']);
+        $bag = Product::query()->create(['sku' => 'TOR-1', 'name' => 'Torba na półmaskę', 'manufacturer' => 'ANRO']);
+        $strap = Product::query()->create(['sku' => 'PAS-1', 'name' => 'Pasek nagłowia', 'manufacturer' => 'ANRO']);
+        // z opisu karty dystrybutora: filtr po kodzie, z numerem Presty podpiętym w sklepie
+        $fromPage = $this->accessory($source, $filter, ProductAccessory::SOURCE_ENRICHMENT, 's:fp3', [
+            'related_sku' => 'FP3', 'method' => 'sku', 'score' => 96, 'presta_related_id' => 601,
+        ]);
+        // relacja z Presty: numery rodzica i dziecka to numery sklepu — zostają jako ślad źródła
+        $fromPresta = $this->accessory($source, $bag, ProductAccessory::SOURCE_PRESTA, 'p:602', [
+            'presta_parent_id' => 13, 'presta_related_id' => 602, 'method' => 'presta_id', 'score' => 99,
+        ]);
+        $manual = $this->manual($source, $strap);
+        // niedopasowane (bez karty) — dowód ze strony też przechodzi
+        $pending = ProductAccessory::query()->create([
+            'product_id' => $source->id, 'related_product_id' => null, 'source' => ProductAccessory::SOURCE_ENRICHMENT,
+            'link_key' => 's:zzz900', 'related_sku' => 'ZZZ900', 'method' => 'pending',
+        ]);
+        // karta dystrybutora miała kartę producenta za akcesorium — po scaleniu byłoby to samo-powiązanie
+        $self = $this->accessory($source, $target, ProductAccessory::SOURCE_ENRICHMENT, 's:iff016fps', ['related_sku' => 'IF/016/F/PS', 'method' => 'sku']);
+
+        app(CardMatchMerger::class)->merge($candidate, $user);
+
+        $this->assertNull(Product::query()->find($source->id));
+        $this->assertSame(CardMatchCandidate::STATUS_MERGED, $candidate->fresh()->status);
+        foreach ([$fromPage, $fromPresta, $manual, $pending] as $row) {
+            $this->assertSame((int) $target->id, $row->fresh()?->product_id, 'wiersz #'.$row->id.' został na karcie producenta');
+        }
+        $page = $fromPage->fresh();
+        $this->assertSame((int) $filter->id, $page->related_product_id);
+        $this->assertSame('s:fp3', $page->link_key);
+        $this->assertSame(601, $page->presta_related_id);
+        $presta = $fromPresta->fresh();
+        $this->assertSame(13, $presta->presta_parent_id);
+        $this->assertSame(602, $presta->presta_related_id);
+        $this->assertSame('p:602', $presta->link_key);
+        $this->assertSame('m:'.$strap->id, $manual->fresh()->link_key);
+        $this->assertNull($pending->fresh()->related_product_id);
+        $this->assertNull($self->fresh());
+        $this->assertSame(4, ProductAccessory::query()->count());
+    }
+
+    /**
+     * Ta sama para karta → akcesorium nie dubluje się: zostaje jeden wiersz — ręczny przed Prestą przed wzbogacaniem
+     * (reset wzbogacania kasuje wiersze „enrichment”, więc ręczna decyzja nie może ustąpić wierszowi z sieci), przy
+     * remisie wiersz karty, która zostaje. Ten sam dowód (link_key, klucz UNIQUE) — zostaje wiersz z dopasowaną kartą.
+     */
+    public function test_card_match_merge_does_not_duplicate_own_accessories(): void
+    {
+        $user = User::factory()->create();
+        [$target, $source] = $this->cards();
+        $candidate = $this->candidate($source, $target);
+        $filter = Product::query()->create(['sku' => 'FP3', 'name' => 'Filtr ANRO P3', 'manufacturer' => 'ANRO']);
+        $bag = Product::query()->create(['sku' => 'TOR-1', 'name' => 'Torba na półmaskę', 'manufacturer' => 'ANRO']);
+        $strap = Product::query()->create(['sku' => 'PAS-1', 'name' => 'Pasek nagłowia', 'manufacturer' => 'ANRO']);
+        $visor = Product::query()->create(['sku' => 'OSL-1', 'name' => 'Osłona filtra', 'manufacturer' => 'ANRO']);
+        // filtr: obie karty z sieci (inne dowody) — zostaje wiersz karty producenta
+        $keptFilter = $this->accessory($target, $filter, ProductAccessory::SOURCE_ENRICHMENT, 'e:5900000000011', ['method' => 'ean']);
+        $dupFilter = $this->accessory($source, $filter, ProductAccessory::SOURCE_ENRICHMENT, 's:fp3', ['method' => 'sku']);
+        // torba: karta producenta z sieci, dystrybutora ręcznie — zostaje ręczny
+        $weakBag = $this->accessory($target, $bag, ProductAccessory::SOURCE_ENRICHMENT, 's:tor1', ['method' => 'sku']);
+        $manualBag = $this->manual($source, $bag);
+        // ten sam numer Presty: na karcie producenta bez karty, na karcie dystrybutora dopasowany — zostaje dopasowany
+        $unmatched = ProductAccessory::query()->create([
+            'product_id' => $target->id, 'related_product_id' => null, 'source' => ProductAccessory::SOURCE_PRESTA,
+            'link_key' => 'p:700', 'presta_related_id' => 700,
+        ]);
+        $matched = $this->accessory($source, $visor, ProductAccessory::SOURCE_PRESTA, 'p:700', ['presta_related_id' => 700, 'method' => 'presta_id']);
+        // ten sam numer Presty dopasowany na obu kartach — zostaje wiersz karty producenta
+        $keptPresta = $this->accessory($target, $strap, ProductAccessory::SOURCE_PRESTA, 'p:701', ['presta_related_id' => 701]);
+        $dupPresta = $this->accessory($source, $strap, ProductAccessory::SOURCE_PRESTA, 'p:701', ['presta_related_id' => 701]);
+
+        app(CardMatchMerger::class)->merge($candidate, $user);
+
+        $this->assertNotNull($keptFilter->fresh());
+        $this->assertNull($dupFilter->fresh());
+        $this->assertNull($weakBag->fresh());
+        $this->assertSame((int) $target->id, $manualBag->fresh()->product_id);
+        $this->assertNull($unmatched->fresh());
+        $this->assertSame((int) $target->id, $matched->fresh()->product_id);
+        $this->assertSame((int) $visor->id, $matched->fresh()->related_product_id);
+        $this->assertNotNull($keptPresta->fresh());
+        $this->assertNull($dupPresta->fresh());
+        $pairs = ProductAccessory::query()->where('product_id', $target->id)->pluck('related_product_id')->all();
+        sort($pairs);
+        $this->assertSame([(int) $filter->id, (int) $bag->id, (int) $strap->id, (int) $visor->id], $pairs);
+        $this->assertSame(4, ProductAccessory::query()->count());
+    }
+
+    /**
+     * Cofnięcie „Połącz” z kopii zapasowej: wiersze akcesoriów obu kart w kopii to stan sprzed scalenia (przepięte
+     * i skasowane), a scalenie nie zakłada nowych wierszy — przywrócenie karty i wierszy po id odtwarza stan.
+     */
+    public function test_card_match_backup_restores_own_accessories(): void
+    {
+        $user = User::factory()->create();
+        [$target, $source] = $this->cards();
+        $candidate = $this->candidate($source, $target);
+        $filter = Product::query()->create(['sku' => 'FP3', 'name' => 'Filtr ANRO P3', 'manufacturer' => 'ANRO']);
+        $mask = Product::query()->create(['sku' => 'IF/017', 'name' => 'Półmaska ANRO IF/017', 'manufacturer' => 'ANRO']);
+        $this->accessory($source, $filter, ProductAccessory::SOURCE_ENRICHMENT, 's:fp3', ['method' => 'sku']);
+        $this->accessory($target, $filter, ProductAccessory::SOURCE_ENRICHMENT, 'e:5900000000011', ['method' => 'ean']);
+        $this->accessory($source, $target, ProductAccessory::SOURCE_ENRICHMENT, 's:iff016fps', ['method' => 'sku']);
+        $this->manual($source, $mask);
+        $this->manual($mask, $source);
+        $before = $this->accessoryRows();
+
+        app(CardMatchMerger::class)->merge($candidate, $user);
+        $this->assertNotSame($before, $this->accessoryRows());
+
+        $backup = json_decode((string) file_get_contents((string) $candidate->fresh()->backup_path), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame($before, $backup['product_accessories']);
+        $ids = array_column($backup['product_accessories'], 'id');
+        // po scaleniu nie ma wierszy spoza kopii — przywrócenie po id jest pełne
+        $this->assertSame([], array_diff(ProductAccessory::query()->pluck('id')->all(), $ids));
+
+        DB::table('products')->insert($backup['cards']['source']['product']);
+        DB::table('product_accessories')->whereIn('id', $ids)->delete();
+        DB::table('product_accessories')->insert($backup['product_accessories']);
+
+        $this->assertSame($before, $this->accessoryRows());
+    }
+
+    public function test_automatic_size_merge_on_price_list_import_keeps_own_accessories(): void
+    {
+        // scenariusz Bollé 10254/10256: import cennika uruchamia merge() producenta, a karta rozmiaru, która znika,
+        // ma własne akcesoria — dotąd kasowała je kaskada
+        $t8 = Product::query()->create([
+            'sku' => 'CRIOT08', 'name' => 'CRYOGENIC GLOVES T8 -196°C LEATHER  40CM', 'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 82.99, 'purchase_price' => 37.51, 'stock' => 1,
+        ]);
+        $t9 = Product::query()->create([
+            'sku' => 'CRIOT09', 'name' => 'CRYOGENIC GLOVES T9 -196°C LEATHER  40 CM', 'manufacturer' => 'Rostaing',
+            'catalog_price_net' => 82.99, 'purchase_price' => 37.51, 'stock' => 1,
+        ]);
+        $liner = Product::query()->create(['sku' => 'LINER-1', 'name' => 'Wkładka do rękawic', 'manufacturer' => 'Rostaing']);
+        $clip = Product::query()->create(['sku' => 'CLIP-1', 'name' => 'Klips do rękawic', 'manufacturer' => 'Rostaing']);
+        $rows = [
+            $this->accessory($t8, $liner, ProductAccessory::SOURCE_PRESTA, 'p:31', ['presta_related_id' => 31, 'method' => 'presta_id']),
+            $this->accessory($t9, $liner, ProductAccessory::SOURCE_PRESTA, 'p:31', ['presta_related_id' => 31, 'method' => 'presta_id']),
+            $this->manual($t9, $clip),
+            // rozmiar wskazywał drugi rozmiar — po scaleniu to ta sama karta
+            $this->accessory($t9, $t8, ProductAccessory::SOURCE_ENRICHMENT, 's:criot08', ['method' => 'sku']),
+        ];
+
+        $path = tempnam(sys_get_temp_dir(), 'criotacc').'.pdf';
+        file_put_contents($path, "%PDF-1.4\n");
+        try {
+            app(PriceListImportService::class)->importFromProducts(
+                new UploadedFile($path, 'rostaing.pdf', 'application/pdf', null, true),
+                'Rostaing',
+                '2026',
+                User::factory()->create(),
+                [
+                    ['sku' => 'CRIOT08', 'name' => 'CRYOGENIC GLOVES T8 -196°C LEATHER  40CM', 'catalog_price_net' => 82.99, 'purchase_price' => 37.51],
+                    ['sku' => 'CRIOT09', 'name' => 'CRYOGENIC GLOVES T9 -196°C LEATHER  40 CM', 'catalog_price_net' => 82.99, 'purchase_price' => 37.51],
+                ],
+            );
+        } finally {
+            @unlink($path);
+        }
+
+        $kept = Product::query()->where('manufacturer', 'Rostaing')->where('sku', 'CRIOT')->sole();
+        $this->assertSame(1, Product::query()->whereIn('id', [$t8->id, $t9->id])->count());
+        $this->assertSame(
+            [(int) $liner->id, (int) $clip->id],
+            ProductAccessory::query()->where('product_id', $kept->id)->orderBy('related_product_id')->pluck('related_product_id')->all()
+        );
+        $this->assertSame(['m:'.$clip->id, 'p:31'], ProductAccessory::query()->where('product_id', $kept->id)->orderBy('link_key')->pluck('link_key')->all());
+        $this->assertNull($rows[3]->fresh());
+        $this->assertSame(2, ProductAccessory::query()->count());
+    }
+
+    public function test_size_cards_merge_moves_own_accessories_to_model_card(): void
+    {
+        [$s, $m, $l] = $this->halfMasks();
+        $filter = Product::query()->create(['sku' => '6035', 'name' => 'Filtr 3M 6035 P3', 'manufacturer' => '3M']);
+        $cartridge = Product::query()->create(['sku' => '6055', 'name' => 'Pochłaniacz 3M 6055', 'manufacturer' => '3M']);
+        $keptFilter = $this->accessory($s, $filter, ProductAccessory::SOURCE_ENRICHMENT, 's:6035', ['method' => 'sku']);
+        $dupFilter = $this->accessory($m, $filter, ProductAccessory::SOURCE_ENRICHMENT, 's:6035', ['method' => 'sku']);
+        $moved = $this->accessory($l, $cartridge, ProductAccessory::SOURCE_ENRICHMENT, 's:6055', ['method' => 'sku', 'presta_related_id' => 45]);
+        $sibling = $this->accessory($m, $l, ProductAccessory::SOURCE_ENRICHMENT, 's:7000146849', ['method' => 'sku']);
+
+        app(ProductSizeMergeService::class)->mergeSizeCards($s, [$m, $l], '6X00 Półmaska 3M 6000', 'Rozmiary: S; M; L');
+
+        $this->assertNotNull($keptFilter->fresh());
+        $this->assertNull($dupFilter->fresh());
+        $this->assertSame((int) $s->id, $moved->fresh()->product_id);
+        $this->assertSame(45, $moved->fresh()->presta_related_id);
+        $this->assertNull($sibling->fresh());
+        $this->assertSame(2, ProductAccessory::query()->count());
+    }
+
+    public function test_merge_duplicate_command_moves_own_accessories(): void
+    {
+        $keep = Product::query()->create(['sku' => '9169.5', 'name' => 'Okulary UVEX super f OTG 9169.541', 'manufacturer' => 'UVEX']);
+        $drop = Product::query()->create(['sku' => '9169.541', 'name' => 'Okulary UVEX SUPER f OTG 9169', 'manufacturer' => 'UVEX']);
+        $case = Product::query()->create(['sku' => '9954.500', 'name' => 'Etui na okulary UVEX', 'manufacturer' => 'UVEX']);
+        $row = $this->accessory($drop, $case, ProductAccessory::SOURCE_ENRICHMENT, 's:9954500', ['related_sku' => '9954.500', 'method' => 'sku']);
+        $pair = [$keep->id.':'.$drop->id];
+        $backup = $this->storage.DIRECTORY_SEPARATOR.'merge-duplicate.json';
+
+        $this->artisan('products:merge-duplicate', ['--pair' => $pair])
+            ->expectsOutputToContain('akcesoria: 1')
+            ->expectsOutputToContain('Podgląd: 1 par do scalenia.')
+            ->assertSuccessful();
+        $this->assertSame((int) $drop->id, $row->fresh()->product_id);
+
+        $this->artisan('products:merge-duplicate', ['--pair' => $pair, '--apply' => true, '--backup' => $backup])
+            ->expectsOutputToContain('Scalono 1 par.')
+            ->assertSuccessful();
+
+        $this->assertNull($drop->fresh());
+        $this->assertSame((int) $keep->id, $row->fresh()->product_id);
+        $saved = json_decode((string) file_get_contents($backup), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame([(int) $row->id], array_column($saved[0]['product_accessories'], 'id'));
+        $this->assertSame((int) $drop->id, $saved[0]['product_accessories'][0]['product_id']);
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function accessoryRows(): array
+    {
+        return DB::table('product_accessories')->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all();
     }
 
     /**

@@ -265,6 +265,38 @@ final class ProductModelFuzzyTest extends TestCase
         ));
     }
 
+    /**
+     * Karta 3M pisze linię i kod osobno („3M™ PELTOR™ Nauszniki …, nagłowne, X2A”), a igła „peltorx2” wymagała
+     * ciągłego zapisu — 25.09.2026 wzorcowa 7000103989 nie była nazwanym modelem pod „Peltor X2”.
+     */
+    #[Test]
+    public function peltor_x2_matches_line_and_short_code_written_apart(): void
+    {
+        $req = 'Nauszniki przeciwhałasowe 3M Peltor X2 wersja nagłowna';
+
+        $x2a = $this->product('7000103989', '3M™ PELTOR™ Nauszniki przeciwhałasowe, żółte, nagłowne, X2A', '3M');
+        $this->assertTrue($this->fuzzy->matches($req, $x2a));
+        $this->assertGreaterThanOrEqual(80, $this->fuzzy->strongSkuScore($req, $x2a));
+        // Wersję nahełmową model przepuszcza — odrzuca ją sprzeczność mocowania (PpeAssortment::hearingVariantConflict).
+        $this->assertTrue($this->fuzzy->matches($req, $this->product(
+            '7000103990',
+            '3M™ PELTOR™ Nauszniki przeciwhałasowe, żółte, nahełmowe, X2P3',
+            '3M',
+        )));
+
+        foreach ([
+            ['7000103987', '3M™ PELTOR™ Nauszniki przeciwhałasowe, żółte, nagłowne, X1A'],
+            ['7000104046', '3M™ PELTOR™ Zestaw higieniczny, HYX2'],
+            ['FLX2-200', '3M™ PELTOR™ FLX2 Kabel J11 standardowy, Ex, FLX2-200'],
+            ['X200', '3M™ PELTOR™ Nauszniki przeciwhałasowe X200'],
+            // linia bez kodu i kod bez linii
+            ['7100000001', '3M™ PELTOR™ Nauszniki przeciwhałasowe, żółte, nagłowne'],
+            ['7100000002', 'Nauszniki przeciwhałasowe X2A'],
+        ] as [$sku, $name]) {
+            $this->assertFalse($this->fuzzy->matches($req, $this->product($sku, $name, '3M')), $name);
+        }
+    }
+
     #[Test]
     public function tychem_4000_s_is_a_named_model_and_not_tychem_c(): void
     {

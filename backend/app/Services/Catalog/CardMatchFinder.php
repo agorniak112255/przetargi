@@ -371,7 +371,7 @@ final class CardMatchFinder
             return [];
         }
         $identifiers = $this->sourceIdentifiers($sources);
-        [$specialPrices, $accessories] = $this->blockingCounts($sources);
+        $specialPrices = $this->specialPriceCounts($sources);
 
         $hits = [];
         $planSources = [];
@@ -398,7 +398,7 @@ final class CardMatchFinder
         foreach ($hits as $sourceId => $hit) {
             $out[$sourceId] = count($hit['targets']) > 1
                 ? $this->evaluatePlan($sourceId, $hit)
-                : $this->evaluateSource($sourceId, $hit, $specialPrices[$sourceId] ?? 0, $accessories[$sourceId] ?? 0);
+                : $this->evaluateSource($sourceId, $hit, $specialPrices[$sourceId] ?? 0);
         }
 
         return $out;
@@ -504,20 +504,19 @@ final class CardMatchFinder
     }
 
     /**
-     * Ceny specjalne i akcesoria kart-źródeł — scalenie ich nie przenosi (products:merge-duplicate odmawia).
+     * Ceny specjalne kart-źródeł — scalenie ich nie przenosi (products:merge-duplicate odmawia). Akcesoria scalenie
+     * przenosi (ProductSizeMergeService::moveOwnAccessories) — nie są już powodem niepewnej propozycji.
      *
      * @param  list<int>  $ids
-     * @return array{0: array<int, int>, 1: array<int, int>}
+     * @return array<int, int>
      */
-    private function blockingCounts(array $ids): array
+    private function specialPriceCounts(array $ids): array
     {
-        $counts = [[], []];
-        foreach (['product_special_prices', 'product_accessories'] as $i => $table) {
-            foreach (array_chunk($ids, self::CHUNK) as $chunk) {
-                foreach (DB::table($table)->whereIn('product_id', $chunk)
-                    ->selectRaw('product_id, COUNT(*) AS n')->groupBy('product_id')->get() as $row) {
-                    $counts[$i][(int) $row->product_id] = (int) $row->n;
-                }
+        $counts = [];
+        foreach (array_chunk($ids, self::CHUNK) as $chunk) {
+            foreach (DB::table('product_special_prices')->whereIn('product_id', $chunk)
+                ->selectRaw('product_id, COUNT(*) AS n')->groupBy('product_id')->get() as $row) {
+                $counts[(int) $row->product_id] = (int) $row->n;
             }
         }
 
@@ -760,11 +759,11 @@ final class CardMatchFinder
      * @param  array{targets: array<int, array{positions: array<string, true>, ean: array<string, string>, code: array<string, string>}>, positions: array<string, true>, by_position: array<string, mixed>}  $hits
      * @return array<string, mixed>
      */
-    private function evaluateSource(int $sourceId, array $hits, int $specialPrices, int $accessories): array
+    private function evaluateSource(int $sourceId, array $hits, int $specialPrices): array
     {
         $targetId = (int) array_key_first($hits['targets']);
         $target = $hits['targets'][$targetId];
-        $reasons = $this->conflictReasons($sourceId, $targetId, $target['ean'] !== [], $specialPrices, $accessories);
+        $reasons = $this->conflictReasons($sourceId, $targetId, $target['ean'] !== [], $specialPrices);
 
         return [
             'status' => $reasons === [] ? CardMatchCandidate::STATUS_PENDING : CardMatchCandidate::STATUS_CONFLICT,
@@ -980,7 +979,7 @@ final class CardMatchFinder
 
     /**
      * Blokady planu po stronie kart (A6): karty producenta (marka, wersje, pozycja tego konta), karta dystrybutora
-     * (ceny specjalne, akcesoria, wycofane wersje, slot pliku) i zależne od rodzaju.
+     * (ceny specjalne, wycofane wersje, slot pliku; akcesoria tylko przy rozdzielaniu) i zależne od rodzaju.
      *
      * @param  list<int>  $ids
      * @return list<array{code: string, text: string}>
@@ -1018,7 +1017,10 @@ final class CardMatchFinder
         if (($n = $count('special', $sourceId)) > 0) {
             $out[] = ['code' => 'source_special_prices', 'text' => 'karta dystrybutora ma ceny specjalne ('.$n.') — plan ich nie przenosi'];
         }
-        if (($n = $count('accessory', $sourceId) + $count('accessory_related', $sourceId)) > 0) {
+        // łączenie rozmiarów dołącza kartę dystrybutora przez mergeDuplicate, które akcesoria przenosi; rozdzielanie nie
+        // ma dla nich jednej karty docelowej (CardMatchSplitter odmawia)
+        if ($kind === CardMatchCandidate::KIND_SPLIT
+            && ($n = $count('accessory', $sourceId) + $count('accessory_related', $sourceId)) > 0) {
             $out[] = ['code' => 'source_accessories', 'text' => 'karta dystrybutora ma akcesoria albo jest akcesorium innej karty ('.$n.') — plan ich nie przenosi'];
         }
         if (($this->allVariants[$sourceId] ?? 0) > 0) {
@@ -1207,7 +1209,7 @@ final class CardMatchFinder
      *
      * @return list<string>
      */
-    private function conflictReasons(int $sourceId, int $targetId, bool $byEan, int $specialPrices, int $accessories): array
+    private function conflictReasons(int $sourceId, int $targetId, bool $byEan, int $specialPrices): array
     {
         $source = $this->cards[$sourceId];
         $target = $this->cards[$targetId];
@@ -1237,9 +1239,6 @@ final class CardMatchFinder
         }
         if ($specialPrices > 0) {
             $reasons[] = 'karta dystrybutora ma ceny specjalne ('.$specialPrices.') — scalenie ich nie przenosi';
-        }
-        if ($accessories > 0) {
-            $reasons[] = 'karta dystrybutora ma akcesoria ('.$accessories.') — scalenie ich nie przenosi';
         }
         // aktywne wersje wykluczają kartę ze źródeł; wycofane skasowałaby kaskada razem z kartą
         if (($this->allVariants[$sourceId] ?? 0) > 0) {

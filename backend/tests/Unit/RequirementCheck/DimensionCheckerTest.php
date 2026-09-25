@@ -315,6 +315,48 @@ final class DimensionCheckerTest extends TestCase
     }
 
     /**
+     * Tryb sprzeczności dla limitu oceny w wyszukiwarce (decyzja właściciela 25.09.2026): wymiar bez „min./max.” to minimum,
+     * więc karta większa nie przeczy wymaganiu, a mniejsza o więcej niż 5% — tak.
+     *
+     * @return array<string, array{0: string, 1: string, 2: string}>
+     */
+    public static function contradictionVerdicts(): array
+    {
+        return [
+            'liczba: większa karta' => ['długość 300 mm', 'Długość: 320 mm', 'ok'],
+            'liczba: mniejsza w 5%' => ['długość 300 mm', 'Długość: 290 mm', 'ok'],
+            'liczba: mniejsza o więcej niż 5%' => ['długość 300 mm', 'Długość: 280 mm', 'fail'],
+            'ok.: dłuższy rękaw' => ['Rękaw ochronny, długość ok. 475 mm', 'Długość: 60 cm', 'ok'],
+            'ok.: krótszy rękaw' => ['Rękaw ochronny, długość ok. 475 mm', 'Długość: 30 cm', 'fail'],
+            'min.: mniejsza w 5%' => ['długość min. 30 cm', 'Długość: 29 cm', 'ok'],
+            'min.: mniejsza o więcej niż 5%' => ['długość min. 30 cm', 'Długość: 28 cm', 'fail'],
+            'max.: mniejsza' => ['długość max. 30 cm', 'Długość: 20 cm', 'ok'],
+            'max.: większa w 5%' => ['długość max. 30 cm', 'Długość: 31 cm', 'ok'],
+            'max.: większa o więcej niż 5%' => ['długość max. 30 cm', 'Długość: 32 cm', 'fail'],
+            'wymiary: większy fartuch' => ['Fartuch wodoochronny 120 × 75 cm', 'Wymiary: 130 x 80 cm', 'ok'],
+            'wymiary: krótszy fartuch' => ['Fartuch wodoochronny 120 × 75 cm', 'Wymiary: 110 x 75 cm', 'fail'],
+        ];
+    }
+
+    #[DataProvider('contradictionVerdicts')]
+    public function test_tryb_sprzecznosci_wymiar_bez_min_max_to_minimum(string $requirement, string $card, string $expected): void
+    {
+        $rows = DimensionChecker::forContradictions()->check($requirement, [new CardSource(CardSource::SPECS, $card)]);
+
+        $this->assertCount(1, $rows);
+        $this->assertSame($expected, $rows[0]->status->value, $rows[0]->key);
+    }
+
+    public function test_okno_weryfikacji_karty_bez_zmian_po_trybie_sprzecznosci(): void
+    {
+        // Okno „Weryfikacja karty” porównuje dokładnie (±2%, ok. ±5%) w obie strony — większy wymiar to tam dalej „nie spełnia”.
+        $this->assertSame('fail', $this->rows('długość 300 mm', [new CardSource(CardSource::SPECS, 'Długość: 320 mm')])['length']['status']);
+        $this->assertSame('fail', $this->rows('długość 300 mm', [new CardSource(CardSource::SPECS, 'Długość: 290 mm')])['length']['status']);
+        $this->assertSame('fail', $this->rows('Rękaw ochronny, długość ok. 475 mm', [new CardSource(CardSource::SPECS, 'Długość: 60 cm')])['length']['status']);
+        $this->assertSame(2, $this->rows('długość 300 mm', [new CardSource(CardSource::SPECS, 'Długość: 300 mm')])['length']['required']['tolerance_pct']);
+    }
+
+    /**
      * @param  list<CardSource>  $sources
      * @return array<string, array<string, mixed>>
      */

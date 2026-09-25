@@ -47,6 +47,24 @@ final class CardMatchFinderTest extends TestCase
         $this->procera = $this->account('procera');
     }
 
+    public function test_distributor_card_with_own_accessories_gives_pending_pair(): void
+    {
+        // własne akcesoria karty dystrybutora przechodzą przy scaleniu (ProductSizeMergeService::moveOwnAccessories)
+        $anroCard = $this->anroCard('IF/016/F/PS');
+        $p4sCard = $this->p4sCard('ZPPV99C', 'ANRO', 'IF/016/F/PS');
+        $filter = $this->card('FP3', 'ANRO');
+        DB::table('product_accessories')->insert([
+            ['product_id' => $p4sCard->id, 'related_product_id' => $filter->id, 'source' => 'enrichment', 'link_key' => 's:fp3', 'created_at' => now(), 'updated_at' => now()],
+            ['product_id' => $filter->id, 'related_product_id' => $p4sCard->id, 'source' => 'manual', 'link_key' => 'm:'.$p4sCard->id, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        $result = app(CardMatchFinder::class)->evaluate($p4sCard);
+
+        $this->assertSame('pending', $result['status']);
+        $this->assertSame($anroCard->id, $result['target_product_id']);
+        $this->assertNull($result['reason']);
+    }
+
     public function test_p4s_manufacturer_code_equal_to_anro_remote_sku_gives_pending_pair(): void
     {
         $anroCard = $this->anroCard('IF/016/F/PS');
@@ -288,7 +306,8 @@ final class CardMatchFinderTest extends TestCase
         $reason = (string) $finder->evaluate($p4sBlocked)['reason'];
         $this->assertStringContainsString('karta producenta ma wersje', $reason);
         $this->assertStringContainsString('ceny specjalne', $reason);
-        $this->assertStringContainsString('akcesoria', $reason);
+        // akcesoria karty dystrybutora scalenie przenosi (decyzja właściciela 25.09.2026) — nie są już powodem
+        $this->assertStringNotContainsString('akcesoria', $reason);
         $this->assertStringContainsString('wycofane wersje', $reason);
 
         // karta dystrybutora z aktywną wersją nie jest duplikatem

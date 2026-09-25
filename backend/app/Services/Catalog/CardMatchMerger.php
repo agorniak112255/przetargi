@@ -24,7 +24,8 @@ use JsonException;
  *
  * Połączenie = ProductSizeMergeService::mergeDuplicate(zostaje: karta producenta, znika: karta dystrybutora) — nazwa,
  * opis i SKU karty producenta zostają, sloty cen, powiązania B2B, tabelki, zdjęcia, identyfikatory i historia cen
- * przechodzą, akcesoria innych kart wskazujące kartę dystrybutora wskazują potem kartę producenta. Przed połączeniem:
+ * przechodzą, własne akcesoria karty dystrybutora przechodzą na kartę producenta (bez powtórzeń tej samej pary),
+ * a akcesoria innych kart wskazujące kartę dystrybutora wskazują potem kartę producenta. Przed połączeniem:
  * ponowna weryfikacja kluczem (CardMatchFinder::evaluate — między odświeżeniem a kliknięciem dystrybutor mógł zmienić
  * kod, a karta producenta stracić właściciela), strażnicy jak w products:merge-duplicate i pełna kopia zapasowa JSON
  * wierszy, które scalenie przenosi albo kasuje (slot ceny tego samego źródła na obu kartach — zostaje nowszy, starszy
@@ -52,11 +53,13 @@ final class CardMatchMerger
         'card_redirects' => 'product_id',
     ];
 
-    /** tabela => opis — dane duplikatu, których mergeDuplicate nie przenosi; kaskada skasowałaby je razem z kartą */
+    /**
+     * tabela => opis — dane duplikatu, których mergeDuplicate nie przenosi; kaskada skasowałaby je razem z kartą.
+     * Akcesoria (własne i wskazujące kartę) mergeDuplicate przenosi — nie blokują.
+     */
     private const BLOCKING = [
         'product_variants' => 'wersje',
         'product_special_prices' => 'ceny specjalne',
-        'product_accessories' => 'akcesoria',
     ];
 
     /**
@@ -364,7 +367,8 @@ final class CardMatchMerger
                 ->map(static fn (object $row): array => (array) $row)
                 ->all()
             : [];
-        // akcesorium innej karty wskazujące kartę dystrybutora — scalenie je przepina albo kasuje (remapAccessories)
+        // akcesoria obu kart i akcesoria innych kart wskazujące którąś z nich — scalenie je przenosi, przepina albo kasuje
+        // (remapAccessories, moveOwnAccessories); wiersze przechodzą z tym samym id, więc przywrócenie po id jest pełne
         $accessories = Schema::hasTable('product_accessories')
             ? DB::table('product_accessories')
                 ->where(static fn ($q) => $q->whereIn('product_id', $ids)->orWhereIn('related_product_id', $ids))

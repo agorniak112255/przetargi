@@ -265,6 +265,31 @@ final class CardMatchPlanTest extends TestCase
         $this->assertNotNull($row->plan['suggested']);
     }
 
+    public function test_distributor_card_accessories_block_split_but_not_size_merge(): void
+    {
+        // łączenie rozmiarów dołącza kartę dystrybutora przez mergeDuplicate — jej akcesoria przechodzą na kartę modelu
+        [, , , $halfMask] = $this->halfMask();
+        // rozdzielanie nie ma jednej karty docelowej dla akcesoriów karty dystrybutora — odmowa zostaje
+        [, $padlock] = $this->padlocks();
+        $filter = Product::query()->create(['sku' => 'FILTR', 'name' => 'Filtr', 'manufacturer' => '3M']);
+        $key = Product::query()->create(['sku' => 'KLUCZ', 'name' => 'Klucz', 'manufacturer' => 'ABUS']);
+        DB::table('product_accessories')->insert([
+            ['product_id' => $halfMask->id, 'related_product_id' => $filter->id, 'source' => 'enrichment', 'link_key' => 's:filtr', 'created_at' => now(), 'updated_at' => now()],
+            ['product_id' => $padlock->id, 'related_product_id' => $key->id, 'source' => 'enrichment', 'link_key' => 's:klucz', 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        app(CardMatchFinder::class)->refresh();
+
+        $sizeMerge = CardMatchCandidate::query()->where('source_product_id', $halfMask->id)->sole();
+        $this->assertSame('size_merge', $sizeMerge->kind);
+        $this->assertSame('pending', $sizeMerge->status);
+        $this->assertSame([], $sizeMerge->plan['blockers']);
+        $split = CardMatchCandidate::query()->where('source_product_id', $padlock->id)->sole();
+        $this->assertSame('split', $split->kind);
+        $this->assertSame('conflict', $split->status);
+        $this->assertSame(['source_accessories'], array_column($split->plan['blockers'], 'code'));
+    }
+
     public function test_split_blockers_on_distributor_card(): void
     {
         [, $source] = $this->padlocks();
