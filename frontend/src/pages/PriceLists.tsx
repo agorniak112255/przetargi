@@ -116,7 +116,10 @@ type PriceList = {
   price_changes?: PriceChange[] | null
   updated_products?: UpdatedProduct[] | null
   skipped_details?: SkippedDetail[] | null
+  /** Karty cennika — razem ze szczegółami aktualizacji wyżej tylko w /price-lists/{id}, lista ich nie wysyła. */
   product_ids?: number[] | null
+  /** Liczba kart cennika — w liście zamiast product_ids. */
+  product_count?: number
   enrichment_done?: number
   enrichment_failed?: number
   enrichment_queued?: number
@@ -303,6 +306,10 @@ const HISTORY_SORT_DESC_FIRST: ReadonlySet<HistorySortKey> = new Set([
   'enrichment',
 ])
 
+function priceListProductCount(row: PriceList, cached?: PriceList): number {
+  return row.product_count ?? (row.product_ids ?? cached?.product_ids ?? []).length
+}
+
 // karty z opisem z cennika B2B liczą się jako gotowe — zbiorcze AI ich nie rusza (serwer je pomija)
 function enrichmentCoverage(
   row: PriceList,
@@ -319,7 +326,7 @@ function enrichmentCoverage(
   queued: number
   running: number
 } {
-  const total = row.enrichment_total ?? (row.product_ids ?? cached?.product_ids ?? []).length
+  const total = row.enrichment_total ?? priceListProductCount(row, cached)
   const done = row.enrichment_done ?? 0
   const fromB2b = row.enrichment_from_b2b ?? 0
   const failed = row.enrichment_failed ?? 0
@@ -482,6 +489,10 @@ export function PriceLists() {
   const canDelete = can(user, 'price_lists.delete')
   const historyColSpan = 10 + (canEnrich ? 1 : 0) + (canEnrich || canDelete ? 1 : 0)
   const [rows, setRows] = useState<PriceList[]>([])
+  // numer ostatniego zapytania o listę, liczba zapytań w toku i czy lista pokazuje pobieranie AI — load(), pollRows()
+  const rowsRequest = useRef(0)
+  const rowsLoading = useRef(0)
+  const rowsShowDownloading = useRef(false)
   const [historyQuery, setHistoryQuery] = useState(() => searchParams.get('manufacturer') ?? '')
   const [deleteBusyId, setDeleteBusyId] = useState<number | null>(null)
   const [undoImportId, setUndoImportId] = useState<number | null>(null)
@@ -517,6 +528,9 @@ export function PriceLists() {
   )
   const [historyCache, setHistoryCache] = useState<Record<number, PriceList>>({})
   const [historyDetailsLoading, setHistoryDetailsLoading] = useState<number | null>(null)
+  const [historyDetailsError, setHistoryDetailsError] = useState<{ id: number; message: string } | null>(
+    null,
+  )
   const [groupRows, setGroupRows] = useState<AssortmentGroupRow[]>([])
   const [defaultDiscount, setDefaultDiscount] = useState('0')
   const [ungroupedFallback, setUngroupedFallback] = useState('')
@@ -574,21 +588,36 @@ export function PriceLists() {
       })
   }, [canEnrich])
 
+  // Liczniki opisów w liście zmienia tylko pobieranie AI (partia albo pojedyncze karty w kolejce): lista idzie
+  // ponownie co 2,5 s wyłącznie wtedy i raz po końcu, po liczby końcowe. Wcześniej szła co 2,5 s przez cały czas
+  // otwarcia strony, a jej przeliczenie zajmowało serwer ponad 2 s (opisy ~40 tys. kart, 25.09.2026).
   useEffect(() => {
     if (!canEnrich) return
 
     let cancelled = false
+    // po końcu pobierania lista musi przyjść jeszcze raz — także gdy takt trafił na zapytanie wysłane w trakcie
+    let refreshAfterEnd = false
     const pull = () => {
       void api<unknown>('/product-enrichment-batches/active')
         .then((res) => {
           if (cancelled) return
-          const next = indexActiveBatches(parseActiveEnrichment(res).batches)
-          setEnrichBatches(next)
+          const state = parseActiveEnrichment(res)
+          setEnrichBatches(indexActiveBatches(state.batches))
+          const active =
+            state.batches.length > 0 || state.queued_products + state.running_products > 0
+          // Także lista z pobieraniem, którego serwer już nie widzi: partię zawieszoną w „running” domyka dopiero
+          // zapytanie o kolejkę, a lista wysłana równolegle przy wejściu mogła ją jeszcze policzyć jako trwającą.
+          const staleRows = refreshAfterEnd || rowsShowDownloading.current
+          if (active) {
+            refreshAfterEnd = true
+            pollRows()
+          } else if (staleRows && pollRows()) {
+            refreshAfterEnd = false
+          }
         })
         .catch(() => {
           /* brak uprawnień / sieć — zostaw ostatni stan */
         })
-      void load().catch(() => {})
     }
 
     pull()
@@ -664,7 +693,7 @@ export function PriceLists() {
     ) {
       return
     }
-    const productCount = (row.product_ids ?? []).length
+    const productCount = priceListProductCount(row)
     if (
       manufacturer !== row.manufacturer &&
       productCount > 0 &&
@@ -758,7 +787,7 @@ export function PriceLists() {
   })
 
   async function exportPriceListToPresta(row: PriceList) {
-    const count = (row.product_ids ?? historyCache[row.id]?.product_ids ?? []).length
+    const count = priceListProductCount(row, historyCache[row.id])
     const ok = window.confirm(
       `Wysłać ${count} produktów z „${row.manufacturer} / ${row.version}” do Presty?\n` +
         'Wejdą opisy (atrybuty BHP i listy jak w przetargach), rozmiary i termin „Na zamówienie”.\n' +
@@ -908,12 +937,18 @@ export function PriceLists() {
     // Skrótu „wiersz listy ma już szczegóły” tu nie ma: lista nie niesie historii aktualizacji,
     // a przy cenniku ze zmianami cen skrót przerywał pobieranie i rozwinięcie zostawało puste.
     setHistoryDetailsLoading(row.id)
+    setHistoryDetailsError(null)
     try {
       const full = await api<PriceList>(`/price-lists/${row.id}`)
       setHistoryCache((prev) => ({ ...prev, [row.id]: full }))
       return full
-    } catch {
-      setHistoryCache((prev) => ({ ...prev, [row.id]: row }))
+    } catch (ex) {
+      // Wiersz listy nie ma szczegółów aktualizacji — w pamięci podręcznej udawałby cennik bez zapisanych zmian.
+      // Bez wpisu kolejne rozwinięcie pobiera je jeszcze raz.
+      setHistoryDetailsError({
+        id: row.id,
+        message: `Nie udało się pobrać szczegółów cennika${ex instanceof Error ? `: ${ex.message}` : '.'}`,
+      })
       return row
     } finally {
       setHistoryDetailsLoading(null)
@@ -1269,7 +1304,29 @@ export function PriceLists() {
   }, [])
 
   async function load() {
-    setRows(await api<PriceList[]>('/price-lists'))
+    const request = ++rowsRequest.current
+    rowsLoading.current++
+    try {
+      const next = await api<PriceList[]>('/price-lists')
+      // odpowiedź starszego zapytania nie nadpisuje nowszej listy (np. odświeżenie w trakcie pobierania AI
+      // wysłane przed usunięciem cennika)
+      if (request === rowsRequest.current) {
+        setRows(next)
+        rowsShowDownloading.current = next.some((row) => isPriceListDownloading(row, undefined))
+      }
+    } finally {
+      rowsLoading.current--
+    }
+  }
+
+  /**
+   * Odświeżenie w trakcie pobierania AI — pomija takt, gdy poprzednie zapytanie o listę jeszcze trwa (zapytania nie
+   * piętrzą się, gdy serwer odpowiada wolniej niż co 2,5 s). Zwraca, czy wysłało nowe zapytanie.
+   */
+  function pollRows(): boolean {
+    if (rowsLoading.current > 0) return false
+    void load().catch(() => {})
+    return true
   }
 
   useEffect(() => {
@@ -2543,6 +2600,8 @@ export function PriceLists() {
                       </p>
                       {historyDetailsLoading === r.id ? (
                         <p className="text-slate-500">Ładowanie szczegółów…</p>
+                      ) : historyDetailsError?.id === r.id ? (
+                        <p className="text-red-700">{historyDetailsError.message}</p>
                       ) : kind === 'prices' ? (
                         renderPriceChangesTable(cached.price_changes ?? [], r.prices_changed)
                       ) : kind === 'updates' ? (
@@ -2670,11 +2729,7 @@ export function PriceLists() {
               Usuń cennik — {deleteConfirm.manufacturer} / {deleteConfirm.version}
             </p>
             {(() => {
-              const count = (
-                deleteConfirm.product_ids ??
-                historyCache[deleteConfirm.id]?.product_ids ??
-                []
-              ).length
+              const count = priceListProductCount(deleteConfirm, historyCache[deleteConfirm.id])
               return (
                 <>
                 <p className="mt-2 text-xs text-slate-600">

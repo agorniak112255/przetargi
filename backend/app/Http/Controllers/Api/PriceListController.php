@@ -23,6 +23,12 @@ use Throwable;
 
 class PriceListController extends Controller
 {
+    /**
+     * Szczegóły ostatniej aktualizacji — lista ich nie pokazuje (rozwinięcie wiersza bierze je z show()), a było to 97%
+     * z ~780 kB odpowiedzi listy, pobieranej przy każdym wejściu i w trakcie pobierania opisów AI co 2,5 s (25.09.2026).
+     */
+    private const LIST_DETAIL_FIELDS = ['product_ids', 'price_changes', 'updated_products', 'skipped_details', 'errors'];
+
     public function __construct(
         private readonly PriceListDeletionService $deletion,
         private readonly B2bAccountPriceList $b2bLists,
@@ -61,9 +67,11 @@ class PriceListController extends Controller
             Product::ENRICHMENT_RUNNING => [],
         ];
         if ($allIds !== []) {
+            // Po samym statusie, bez listy id: cenniki obejmują cały katalog (48 tys. id w jednym IN, blisko limitu
+            // 65 535 parametrów zapytania MySQL), a karta spoza cenników i tak nie trafi do żadnego licznika.
             $statusRows = Product::query()
-                ->whereIn('id', $allIds)
                 ->whereIn('enrichment_status', array_keys($statusSets))
+                ->toBase()
                 ->get(['id', 'enrichment_status']);
             foreach ($statusRows as $product) {
                 $status = (string) $product->enrichment_status;
@@ -129,7 +137,8 @@ class PriceListController extends Controller
 
                 return $n;
             };
-            $row = $list->toArray();
+            $row = $list->makeHidden(self::LIST_DETAIL_FIELDS)->toArray();
+            $row['product_count'] = count($ids);
             $row['enrichment_done'] = $countStatus($statusSets[Product::ENRICHMENT_DONE]);
             $row['enrichment_failed'] = $countStatus($statusSets[Product::ENRICHMENT_FAILED]);
             $row['enrichment_queued'] = $countStatus($statusSets[Product::ENRICHMENT_QUEUED]);

@@ -134,6 +134,31 @@ final class B2bDescriptionEnrichmentGuardTest extends TestCase
         $guard->assertMayOverwrite($fromB2b, false);
     }
 
+    public function test_card_with_several_links_counts_when_any_link_holds_its_current_description(): void
+    {
+        // Karta ma zwykle kilka powiązań (konta, wersje) — skrót starszego tekstu na jednym z nich nie może
+        // przesłonić powiązania, które zapisało obecny opis. Kolejność powiązań bez znaczenia.
+        $older = sha1('Starszy opis z innego pobrania, zastąpiony później tekstem ze sklepu dostawcy.');
+        $current = $this->product('UVEX-1', self::B2B_TEXT);
+        $this->link($current, 'UVEX-1-A', $older);
+        $this->link($current, 'UVEX-1-B', sha1(self::B2B_TEXT));
+        $edited = $this->product('UVEX-2', 'Opis poprawiony ręcznie przez handlowca w katalogu produktów.');
+        $this->link($edited, 'UVEX-2-A', $older);
+        $this->link($edited, 'UVEX-2-B', sha1(self::B2B_TEXT));
+        $noHash = $this->product('UVEX-3', self::B2B_TEXT);
+        $this->link($noHash, 'UVEX-3-A', null);
+
+        $guard = app(B2bDescriptionSource::class);
+        $ids = [(int) $current->id, (int) $edited->id, (int) $noHash->id];
+
+        $this->assertSame([(int) $current->id => true], $guard->productIds($ids));
+        $this->assertSame([(int) $current->id => true], $guard->filterByDescription([
+            (int) $current->id => self::B2B_TEXT,
+            (int) $edited->id => 'Opis poprawiony ręcznie przez handlowca w katalogu produktów.',
+            (int) $noHash->id => self::B2B_TEXT,
+        ]));
+    }
+
     public function test_catalog_health_counts_b2b_description_as_ready(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
@@ -208,6 +233,13 @@ final class B2bDescriptionEnrichmentGuardTest extends TestCase
     private function b2bProduct(string $sku): Product
     {
         $product = $this->product($sku, self::B2B_TEXT);
+        $this->link($product, $sku, sha1(self::B2B_TEXT));
+
+        return $product;
+    }
+
+    private function link(Product $product, string $remoteId, ?string $descriptionHash): void
+    {
         $account = B2bAccount::query()->firstOrCreate(
             ['username' => 'jan'],
             ['contractor_code' => 'K123', 'password' => 'haslo', 'sites' => ['izam.system-b2b.pl'], 'connector' => 'uvex'],
@@ -215,12 +247,10 @@ final class B2bDescriptionEnrichmentGuardTest extends TestCase
         B2bProductLink::query()->create([
             'b2b_account_id' => $account->id,
             'product_id' => $product->id,
-            'remote_id' => $sku,
-            'remote_sku' => $sku,
-            'description_hash' => sha1(self::B2B_TEXT),
+            'remote_id' => $remoteId,
+            'remote_sku' => $remoteId,
+            'description_hash' => $descriptionHash,
             'last_seen_at' => now(),
         ]);
-
-        return $product;
     }
 }

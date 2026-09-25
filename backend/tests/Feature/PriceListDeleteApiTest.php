@@ -139,6 +139,76 @@ final class PriceListDeleteApiTest extends TestCase
             ]);
     }
 
+    public function test_index_sends_card_count_instead_of_update_details(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $done = Product::query()->create([
+            'sku' => 'DONE-1',
+            'name' => 'Z opisem',
+            'manufacturer' => 'ATG',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        $pending = Product::query()->create([
+            'sku' => 'PEND-1',
+            'name' => 'Bez opisu',
+            'manufacturer' => 'ATG',
+            'catalog_price_net' => 11,
+            'purchase_price' => 6,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_NONE,
+        ]);
+        // karta z opisem AI spoza cennika nie trafia do jego liczników
+        Product::query()->create([
+            'sku' => 'OUT-1',
+            'name' => 'Poza cennikiem',
+            'manufacturer' => 'ATG',
+            'catalog_price_net' => 12,
+            'purchase_price' => 7,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+
+        $list = PriceList::query()->create([
+            'manufacturer' => 'ATG',
+            'version' => 'v-details',
+            'original_filename' => 'd.xlsx',
+            'rows_total' => 3,
+            'products_created' => 2,
+            'products_updated' => 0,
+            'prices_changed' => 1,
+            'rows_skipped' => 1,
+            'errors' => ['Wiersz 7: brak ceny'],
+            'price_changes' => [['sku' => 'DONE-1', 'purchase_old' => 5, 'purchase_new' => 6]],
+            'updated_products' => [['sku' => 'DONE-1', 'fields' => ['purchase_price']]],
+            'skipped_details' => [['reason' => 'Brak ceny', 'row' => 7]],
+            'product_ids' => [$done->id, $pending->id],
+        ]);
+
+        $row = collect($this->getJson('/api/price-lists')->assertOk()->json())->firstWhere('id', $list->id);
+
+        $this->assertSame(2, $row['product_count']);
+        $this->assertSame(2, $row['enrichment_total']);
+        $this->assertSame(1, $row['enrichment_done']);
+        $this->assertSame(1, $row['prices_changed']);
+        $this->assertSame(1, $row['rows_skipped']);
+        foreach (['product_ids', 'price_changes', 'updated_products', 'skipped_details', 'errors'] as $field) {
+            $this->assertArrayNotHasKey($field, $row, $field);
+        }
+
+        // szczegóły zostają w show() — z niego korzysta rozwinięcie wiersza
+        $this->getJson("/api/price-lists/{$list->id}")
+            ->assertOk()
+            ->assertJsonPath('product_ids', [$done->id, $pending->id])
+            ->assertJsonPath('errors', ['Wiersz 7: brak ceny'])
+            ->assertJsonPath('price_changes.0.sku', 'DONE-1')
+            ->assertJsonPath('updated_products.0.sku', 'DONE-1')
+            ->assertJsonPath('skipped_details.0.row', 7);
+    }
+
     public function test_index_marks_price_list_with_queued_enrichment(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
