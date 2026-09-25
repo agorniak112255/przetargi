@@ -18,7 +18,8 @@ use Throwable;
  * synchronizacja dystrybutora nie trafiła po SKU (23.09.2026: P4S założyło 2111.235, 9169.541, 9183.041 obok kart
  * UVEX z obciętym SKU). Przenoszenie to samo co przy łączeniu rozmiarów (ProductSizeMergeService::mergeDuplicate):
  * powiązania B2B (kolejna synchronizacja trafia już w kartę, która zostaje), sloty cen, tabelki ze sklepu, zdjęcia
- * i dokumenty bez powtórzeń, historia cen, identyfikatory, pozycje przetargów, zamienniki, PrestaShop, cenniki.
+ * i dokumenty bez powtórzeń, historia cen, identyfikatory, pozycje przetargów, zamienniki, akcesoria innych kart
+ * wskazujące duplikat, PrestaShop, cenniki.
  *
  * Nazwa, opis i SKU karty, która zostaje, się nie zmieniają. --take-sku przejmuje SKU duplikatu (po jego usunięciu
  * kod jest wolny) — dla karty z obciętym SKU. Pusta kategoria karty, która zostaje, bierze kategorię duplikatu.
@@ -39,6 +40,8 @@ final class MergeDuplicateProductsCommand extends Command
         'product_identifiers' => ['product_id', 'identyfikatory'],
         'tender_items' => ['main_product_id', 'pozycje przetargów'],
         'presta_product_matches' => ['product_id', 'dopasowania PrestaShop'],
+        // akcesoria innych kart wskazujące duplikat — potem wskazują kartę, która zostaje
+        'product_accessories' => ['related_product_id', 'jako akcesorium innych kart'],
     ];
 
     /** tabela => opis — dane, których mergeDuplicate nie przenosi; kaskada skasowałaby je razem z duplikatem */

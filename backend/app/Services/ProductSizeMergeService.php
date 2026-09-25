@@ -8,6 +8,7 @@ use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\B2bProductLink;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductAccessory;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
@@ -202,10 +203,10 @@ final class ProductSizeMergeService
 
     /**
      * Duplikat tego samego wyrobu (np. karta dystrybutora założona obok karty producenta): powiązania B2B, sloty cen,
-     * tabelki, media, historia, identyfikatory i odwołania przechodzą na $keep, $drop znika. Nazwa, SKU i lista
-     * rozmiarów $keep zostają; kod duplikatu trafia do merged_duplicate_skus (nie do listy rozmiarów, z której
-     * korzysta łączenie rozmiarów). Warunki (ten sam producent, brak wersji itp.) sprawdza wywołujący. Wektor $drop
-     * znika z Qdrant po commit (deleteVectorsAfterCommit).
+     * tabelki, media, historia, identyfikatory i odwołania (przetargi, zamienniki, akcesoria innych kart, Presta,
+     * cenniki) przechodzą na $keep, $drop znika. Nazwa, SKU i lista rozmiarów $keep zostają; kod duplikatu trafia do
+     * merged_duplicate_skus (nie do listy rozmiarów, z której korzysta łączenie rozmiarów). Warunki (ten sam producent,
+     * brak wersji itp.) sprawdza wywołujący. Wektor $drop znika z Qdrant po commit (deleteVectorsAfterCommit).
      */
     public function mergeDuplicate(Product $keep, Product $drop): void
     {
@@ -258,6 +259,7 @@ final class ProductSizeMergeService
             // 1) odwołania
             $this->remapTenderItems($map);
             $this->remapSubstitutes($keepId, $dropIds);
+            $this->remapAccessories($keepId, $dropIds);
             $this->remapPresta($keepId, $dropIds);
             $this->remapPriceLists($map);
 
@@ -567,6 +569,7 @@ final class ProductSizeMergeService
         DB::transaction(function () use ($winner, $losers, $loserIds, $map, $midSizes, $keepIdentity, $mergedKey): void {
             $this->remapTenderItems($map);
             $this->remapSubstitutes((int) $winner->id, $loserIds);
+            $this->remapAccessories((int) $winner->id, $loserIds);
             $this->moveMedia($winner, $loserIds);
             $this->remapPriceHistory((int) $winner->id, $loserIds);
             $this->remapPresta((int) $winner->id, $loserIds);
@@ -716,6 +719,51 @@ final class ProductSizeMergeService
                 continue;
             }
             $seen[$pair] = true;
+        }
+    }
+
+    /**
+     * Akcesoria innych kart wskazujące scalane karty (related_product_id) przechodzą na kartę, która zostaje: scalana
+     * karta to ten sam wyrób (klucz „Połącz”, rozmiar karty modelu), a usunięcie karty wyzerowałoby wskazanie po cichu
+     * (nullOnDelete). link_key opisuje dowód ze źródła (numer Presty, EAN, kod ze strony) i zostaje — poza ręcznym
+     * „m:{karta}” (ProductKitService::attach), który idzie za kartą. Znikają: akcesorium samej siebie (karta, która
+     * zostaje, wskazywała scaloną — upsert i attach takich nie zapisują) i ręczne powtórzenie (karta ma już ręczne
+     * akcesorium wskazujące kartę, która zostaje). Numer Presty akcesorium (presta_related_id) zostaje — to produkt,
+     * który sklep ma już podpięty: eksport tylko dopisuje akcesoria (ensureAccessories), więc nowy numer dałby w sklepie
+     * drugi odnośnik do tego samego wyrobu, a karta bez dopasowania do Presty zostałaby przy eksporcie założona albo
+     * nadpisałaby produkt sklepu znaleziony po jej kodzie. Własne akcesoria scalanych kart (product_id) nie
+     * przechodzą — „Połącz” i products:merge-duplicate odmawiają przy nich.
+     *
+     * @param  list<int>  $loserIds
+     */
+    private function remapAccessories(int $winnerId, array $loserIds): void
+    {
+        if (! Schema::hasTable('product_accessories') || $loserIds === []) {
+            return;
+        }
+        // wiersze scalanych kart i tak znikają z nimi (kaskada)
+        $rows = ProductAccessory::query()
+            ->whereIn('related_product_id', $loserIds)
+            ->whereNotIn('product_id', $loserIds)
+            ->orderBy('id')
+            ->get();
+        foreach ($rows as $row) {
+            if ((int) $row->product_id === $winnerId) {
+                $row->delete();
+
+                continue;
+            }
+            $updates = ['related_product_id' => $winnerId];
+            if ($row->source === ProductAccessory::SOURCE_MANUAL && $row->link_key === 'm:'.$row->related_product_id) {
+                $key = 'm:'.$winnerId;
+                if (ProductAccessory::query()->where('product_id', $row->product_id)->where('link_key', $key)->exists()) {
+                    $row->delete();
+
+                    continue;
+                }
+                $updates['link_key'] = $key;
+            }
+            $row->forceFill($updates)->save();
         }
     }
 

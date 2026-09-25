@@ -24,12 +24,12 @@ use JsonException;
  *
  * Połączenie = ProductSizeMergeService::mergeDuplicate(zostaje: karta producenta, znika: karta dystrybutora) — nazwa,
  * opis i SKU karty producenta zostają, sloty cen, powiązania B2B, tabelki, zdjęcia, identyfikatory i historia cen
- * przechodzą. Przed połączeniem: ponowna weryfikacja kluczem (CardMatchFinder::evaluate — między odświeżeniem
- * a kliknięciem dystrybutor mógł zmienić kod, a karta producenta stracić właściciela), strażnicy jak
- * w products:merge-duplicate i pełna kopia zapasowa JSON wierszy, które scalenie przenosi albo kasuje (slot ceny tego
- * samego źródła na obu kartach — zostaje nowszy, starszy znika). Wszystko w jednej transakcji: przy błędzie nic się
- * nie zmienia, propozycja zostaje w swoim statusie, wyjątek niesie powód po polsku. Wektor karty dystrybutora
- * mergeDuplicate kasuje w Qdrant dopiero po commit tej transakcji.
+ * przechodzą, akcesoria innych kart wskazujące kartę dystrybutora wskazują potem kartę producenta. Przed połączeniem:
+ * ponowna weryfikacja kluczem (CardMatchFinder::evaluate — między odświeżeniem a kliknięciem dystrybutor mógł zmienić
+ * kod, a karta producenta stracić właściciela), strażnicy jak w products:merge-duplicate i pełna kopia zapasowa JSON
+ * wierszy, które scalenie przenosi albo kasuje (slot ceny tego samego źródła na obu kartach — zostaje nowszy, starszy
+ * znika). Wszystko w jednej transakcji: przy błędzie nic się nie zmienia, propozycja zostaje w swoim statusie, wyjątek
+ * niesie powód po polsku. Wektor karty dystrybutora mergeDuplicate kasuje w Qdrant dopiero po commit tej transakcji.
  */
 final class CardMatchMerger
 {
@@ -329,7 +329,8 @@ final class CardMatchMerger
     /**
      * Pełna kopia zapasowa przed połączeniem: obie karty i wszystkie wiersze, które scalenie przenosi albo kasuje
      * (także karty producenta — jej slot ceny, tabelka czy zamiennik tego samego źródła może zniknąć), cenniki
-     * z kartą dystrybutora na liście i zamienniki obu kart.
+     * z kartą dystrybutora na liście, zamienniki i akcesoria obu kart (także akcesoria innych kart wskazujące
+     * którąś z nich) oraz pozycje przetargów z nimi jako produktem dodatkowym — jak CardMatchBackup.
      *
      * @throws JsonException
      */
@@ -363,6 +364,24 @@ final class CardMatchMerger
                 ->map(static fn (object $row): array => (array) $row)
                 ->all()
             : [];
+        // akcesorium innej karty wskazujące kartę dystrybutora — scalenie je przepina albo kasuje (remapAccessories)
+        $accessories = Schema::hasTable('product_accessories')
+            ? DB::table('product_accessories')
+                ->where(static fn ($q) => $q->whereIn('product_id', $ids)->orWhereIn('related_product_id', $ids))
+                ->orderBy('id')
+                ->get()
+                ->map(static fn (object $row): array => (array) $row)
+                ->all()
+            : [];
+        // produkt dodatkowy pozycji przetargu — scalenie go przepina albo zeruje (remapTenderItems)
+        $companions = Schema::hasTable('tender_items')
+            ? DB::table('tender_items')
+                ->whereIn('companion_product_id', $ids)
+                ->orderBy('id')
+                ->get()
+                ->map(static fn (object $row): array => (array) $row)
+                ->all()
+            : [];
         $priceLists = [];
         if (Schema::hasTable('price_lists')) {
             foreach (PriceList::query()->whereNotNull('product_ids')->cursor() as $list) {
@@ -382,6 +401,8 @@ final class CardMatchMerger
             'drop_product_id' => (int) $source->id,
             'cards' => $cards,
             'product_substitutes' => $substitutes,
+            'product_accessories' => $accessories,
+            'tender_items_companion' => $companions,
             'price_lists' => $priceLists,
         ];
 
