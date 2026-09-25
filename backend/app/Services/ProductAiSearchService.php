@@ -6178,6 +6178,24 @@ final class ProductAiSearchService
                 $score = min($score, self::MISSING_KEY_SCORE_CAP);
                 $reason = trim(($reason ?? '').' Brak dowodu typu obuwia: '.$typeGap.'.');
             }
+            $cardAntistaticNorms = $this->assortment->productAntistaticNorms($product);
+            // Żądanie ESD / normy czytamy z tekstu klienta ($query), nie z $requirement: gdy rodzaju wyrobu nie ma
+            // w zapytaniu, $requirement zawiera streszczenie modelu, a model dopisywał „(ESD)” do „wyrób antystatyczny”.
+            if ($this->assortment->requiresStrongAntistatic($query)
+                && $this->assortment->productAntistaticEvidence($requirement, $product) === PpeAssortment::ANTISTATIC_WEAK
+                // Wymaganie wymienia normę, którą karta ma — spełnia je wprost, niezależnie od reguły rodzaju wyrobu.
+                && array_intersect($cardAntistaticNorms, $this->assortment->antistaticNormsIn($query)) === []) {
+                // Decyzje właściciela z 25.09.2026: gdy wymaganie żąda ESD albo normy antystatyki, karta z samym słowem
+                // (bez „ESD”, a dla rękawic i odzieży bez EN 1149 / EN 16350, dla obuwia bez EN 61340) to propozycja do
+                // sprawdzenia, nie trafienie — poniżej progu zapisu, jak inny wariant. Wymaganie z samym słowem nie żąda
+                // normy, więc takie samo słowo na karcie wystarcza.
+                $score = min($score, self::VARIANT_MISMATCH_SCORE);
+                // Uzasadnienie oddziela brak normy od normy, która dla tego wyrobu nie jest dowodem ESD (EN 1149 na bucie).
+                $reason = trim(($reason ?? '').($cardAntistaticNorms === []
+                    ? ' Karta podaje antystatykę tylko słownie, bez oznaczenia ESD ani normy — propozycja do sprawdzenia.'
+                    : ' Karta podaje '.implode(', ', array_map(static fn (string $n): string => 'EN '.$n, $cardAntistaticNorms))
+                        .', a to nie jest dowód ESD dla tego rodzaju wyrobu — propozycja do sprawdzenia.'));
+            }
             if ($this->assortment->missingWeldingFilterEvidence($requirement, $product)) {
                 // Ten sam wzorzec co wyżej: cecha ochronna sprawdzana deterministycznie, bo model
                 // degradował ją do „drugorzędnej” (poz. 9: gogle bez filtra 90–95% w pięciu biegach).

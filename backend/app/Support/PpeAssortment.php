@@ -53,6 +53,12 @@ final class PpeAssortment
 
     public const TYPE_SANDAL = 'sandal';
 
+    /** Dowód ESD wprost (antistaticEvidence): „ESD” albo norma właściwa dla rodzaju wyrobu. */
+    public const ANTISTATIC_STRONG = 'strong';
+
+    /** Dowód antystatyki do sprawdzenia (antistaticEvidence): samo słowo albo norma innego rodzaju wyrobu. */
+    public const ANTISTATIC_WEAK = 'weak';
+
     /** @var array<string, string> */
     private const KATEGORIA_TO_FAMILY = [
         'rekawice' => self::FAMILY_GLOVES,
@@ -1889,25 +1895,112 @@ final class PpeAssortment
         ) === 1;
     }
 
+    /** EN 16350 (właściwości elektrostatyczne rękawic) to wymóg antystatyki tak jak EN 1149 (decyzja 25.09.2026). */
     public function requiresAntistatic(string $text): bool
     {
         $t = $this->normalize($text);
 
         return preg_match(
-            '/\b(esd|antyelektrostat|antystatyczn|en\s*1149|1149[\s-]*5|61340)\w*/u',
+            '/\b(esd|antyelektrostat|antystatyczn|en\s*1149|1149[\s-]*5|61340|en\s*(?:iso\s*)?16350(?!\d))\w*/u',
             $t
         ) === 1;
     }
 
+    /**
+     * Karta pokazuje antystatykę słowem albo normą — mocnym albo słabym dowodem (antistaticEvidence). Słaby dowód
+     * (samo „antystatyczne” na rękawicy) przechodzi bramkę; gdy wymaganie żąda ESD albo normy (requiresStrongAntistatic),
+     * ocenę modelu ogranicza wyszukiwarka (rowsFromLlmMatches) — karta zostaje propozycją do sprawdzenia. Obuwie
+     * w wyszukiwarce i liście zapasowej sprawdza dodatkowo footwearMeetsAntistaticRequirement.
+     */
     public function productShowsAntistatic(string $text): bool
     {
         $t = $this->normalize($text);
 
         // „antistatic” / „anti-static”: karty z angielskim opisem (Ansell HyFlex 11-202: „extra features: antistatic”).
         return preg_match(
-            '/\b(esd|antyelektrostat|antystatyczn|anti\s?static|en\s*1149|1149[\s-]*5|61340)\w*/u',
+            '/\b(esd|antyelektrostat|antystatyczn|anti\s?static|en\s*1149|1149[\s-]*5|61340|en\s*(?:iso\s*)?16350(?!\d))\w*/u',
             $t
         ) === 1;
+    }
+
+    /**
+     * Siła dowodu antystatyki na karcie wobec wymagania (decyzja właściciela 25.09.2026, D7a):
+     * - `strong`: obuwie — „ESD” albo EN 61340; rękawice, odzież i pozostałe — „ESD”, EN 1149, EN 16350;
+     * - `weak`: bramka przepuszcza, ale to propozycja do sprawdzenia, nie trafienie — samo słowo
+     *   („antyelektrostatyczna podeszwa”, „antystatyczne”, „anti-static”), przy obuwiu też EN 1149 / EN 16350
+     *   (normy odzieży i rękawic), a przy rękawicach i odzieży samo EN 61340 (decyzja wymienia je tylko przy obuwiu);
+     * - null: karta nie pokazuje antystatyki (productShowsAntistatic = false).
+     *
+     * Nie-null dokładnie wtedy, gdy productShowsAntistatic — siła dzieli to, co bramka przepuszcza, nic nie dokłada.
+     * Samo nie jest bramką: o tym, co przechodzi, dalej rozstrzygają productShowsAntistatic i reguła obuwia.
+     */
+    public function antistaticEvidence(string $requirement, string $productText): ?string
+    {
+        if (! $this->productShowsAntistatic($productText)) {
+            return null;
+        }
+        $t = $this->normalize($productText);
+        $strong = $this->family($requirement) === self::FAMILY_FOOTWEAR
+            ? '/\besd\b|\b(?:en\s*)?61340(?!\d)/u'
+            // Decyzja C dosłownie: rękawice i odzież — ESD, EN 1149 albo EN 16350; samo EN 61340 to tu propozycja.
+            : '/\besd\b|\ben\s*1149(?!\d)|\b1149\s*5(?!\d)|\ben\s*(?:iso\s*)?16350(?!\d)/u';
+
+        return preg_match($strong, $t) === 1 ? self::ANTISTATIC_STRONG : self::ANTISTATIC_WEAK;
+    }
+
+    /**
+     * Wymaganie żąda dowodu antystatyki wprost: „ESD” albo numer normy (EN 1149, EN 16350, EN 61340). Samo słowo
+     * („wyrób antystatyczny”, „antyelektrostatyczne”) nie żąda normy — decyzja właściciela z 25.09.2026: wtedy to samo
+     * słowo na karcie jest trafieniem (rękaw HyFlex 11-202 z przetargu 1, rękawice chemoodporne z zapytania 374).
+     */
+    public function requiresStrongAntistatic(string $requirement): bool
+    {
+        return preg_match('/\besd\b/u', $this->normalize($requirement)) === 1
+            || $this->antistaticNormsIn($requirement) !== [];
+    }
+
+    /**
+     * Numery norm antystatyki w wymaganiu (1149, 16350, 61340), także goła liczba („wg 1149”) — w tekście wymagania to
+     * norma. Do requiresStrongAntistatic i do sprawdzenia, czy karta ma normę wymienioną w wymaganiu.
+     *
+     * @return list<string>
+     */
+    public function antistaticNormsIn(string $text): array
+    {
+        preg_match_all('/(?<!\d)(1149|16350|61340)(?!\d)/u', $this->normalize($text), $m);
+
+        return array_values(array_unique($m[1]));
+    }
+
+    /**
+     * Numery norm antystatyki na karcie — tylko w zapisie, który czytają bramka i siła dowodu (EN 1149, 1149-5, 61340,
+     * EN 16350): goła liczba na karcie bywa kodem wyrobu. Do uzasadnienia limitu (karta ma normę, ale nie tę, która jest
+     * dowodem ESD dla jej rodzaju wyrobu) i do sprawdzenia normy wymienionej w wymaganiu.
+     *
+     * @return list<string>
+     */
+    public function productAntistaticNorms(Product $product): array
+    {
+        preg_match_all(
+            '/(?|\ben\s*(1149)(?!\d)|\b(1149)\s*5(?!\d)|\b(61340)(?!\d)|\ben\s*(?:iso\s*)?(16350)(?!\d))/u',
+            $this->normalize($this->productCatalogEvidenceText($product)),
+            $m
+        );
+
+        return array_values(array_unique($m[1]));
+    }
+
+    /**
+     * Siła dowodu antystatyki na karcie (antistaticEvidence) z tego samego tekstu, który czyta bramka: nazwa, SKU, normy,
+     * opis. null także wtedy, gdy wymaganie antystatyki nie żąda.
+     */
+    public function productAntistaticEvidence(string $requirement, Product $product): ?string
+    {
+        if (! $this->requiresAntistatic($requirement)) {
+            return null;
+        }
+
+        return $this->antistaticEvidence($requirement, $this->productCatalogEvidenceText($product));
     }
 
     /** Obuwie: S1P + „antystatyczna podeszwa” ≠ ESD z SIWZ — stosuj przy dopisywaniu katalogu (PHP %), nie przy ocenie modelu. */

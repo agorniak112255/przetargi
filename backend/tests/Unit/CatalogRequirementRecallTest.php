@@ -55,6 +55,44 @@ final class CatalogRequirementRecallTest extends TestCase
         $this->assertNotContains('TRZ-S1P', $found);
     }
 
+    /**
+     * EN 16350 to dowód antystatyki rękawic (decyzja 25.09.2026) — prefiltr SQL listy zapasowej musi wpuścić kartę,
+     * której jedynym dowodem jest ta norma, bo bramka ją przepuszcza (na produkcji 9 takich rękawic, m.in. UVEX Profabutyl).
+     */
+    #[Test]
+    public function antistatic_recall_keeps_gloves_proven_only_by_en_16350(): void
+    {
+        foreach ([
+            ['R-16350', 'Rękawice chemoodporne butylowe', 'EN ISO 374-1:2016 typ A, EN 16350:2014'],
+            ['R-388', 'Rękawice chemoodporne nitrylowe', 'EN ISO 374-1:2016 typ A'],
+        ] as [$sku, $name, $norms]) {
+            Product::query()->create([
+                'sku' => $sku,
+                'name' => $name,
+                'manufacturer' => 'UVEX',
+                'category' => 'Rękawice',
+                'description' => $name.' do pracy z chemikaliami.',
+                'norms' => $norms,
+                'catalog_price_net' => 50,
+                'purchase_price' => 30,
+                'stock' => 5,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enriched_at' => now(),
+            ]);
+        }
+
+        $found = $this->recall->retrieve(
+            fn (): Builder => Product::query(),
+            'Rękawice chemoodporne zgodne z EN ISO 374-1 oraz PN-EN 16350:2014',
+            20,
+            fn (Product $p): string => $p->name.' '.(string) $p->description,
+            fn (string $q, Product $p): int => 0,
+            fn (Product $p): ?int => null,
+        )->pluck('sku')->all();
+
+        $this->assertSame(['R-16350'], $found);
+    }
+
     private function boot(string $sku, string $name): Product
     {
         return Product::query()->create([

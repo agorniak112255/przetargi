@@ -503,6 +503,12 @@ final class CatalogSlangDictionary
             if (! $hit && $this->isSleeveEvidenceGroup($group) && $this->assortment->isArmSleeve($productText)) {
                 $hit = true;
             }
+            // Karta oznaczona tylko „ESD” / EN 1149 / EN 16350 albo słowem „antyelektrostatyczne” nie ma igły „antystaty”,
+            // a 3-znakowej igły „esd” słownik nie buduje (uvex phynomic airLite A ESD 6003805 odpadała, 0 trafień — 25.09.2026).
+            // Grupę antystatyki rozstrzyga ta sama reguła co bramka antystatyki.
+            if (! $hit && $this->isAntistaticEvidenceGroup($group) && $this->assortment->productShowsAntistatic($productText)) {
+                $hit = true;
+            }
             if (! $hit) {
                 return false;
             }
@@ -516,6 +522,18 @@ final class CatalogSlangDictionary
     {
         foreach ($group as $needle) {
             if (preg_match('/^(narekaw|zarekaw|naramien|rekaw(y|ow)?)$/u', (string) $needle) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @param list<string> $group */
+    private function isAntistaticEvidenceGroup(array $group): bool
+    {
+        foreach ($group as $needle) {
+            if (preg_match('/^(antysta|antyelektro)/u', (string) $needle) === 1) {
                 return true;
             }
         }
