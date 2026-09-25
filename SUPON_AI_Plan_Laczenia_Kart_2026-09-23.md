@@ -273,7 +273,8 @@ miejsce w puli wektorowej (150) i w fuzji rang — duplikat tego samego wyrobu t
 ProductSizeMergeService kasuje wektor każdej karty usuniętej przy scalaniu: absorb („Połącz”, products:merge-duplicate,
 automatyczne łączenie rozmiarów) i mergeSizeCards („Połącz rozmiary”) — DB::afterCommit, więc dopiero po commit całej
 decyzji (wycofanie zostawia karty i wektory); błąd Qdrant tylko w logu. Wektory kart scalonych przed tą zmianą zostają
-w Qdrant. Akcesoria innych kart wskazujące kartę dystrybutora — sekcja niżej.
+w Qdrant — sprząta je products:prune-orphan-vectors (produkcja 25.09.2026: 90 punktów bez karty na 48 442).
+Akcesoria innych kart wskazujące kartę dystrybutora — sekcja niżej.
 
 ## C2 pkt 5 — akcesoria innych kart wskazujące scalaną kartę (25.09.2026)
 Było: usunięcie karty przy scalaniu zerowało product_accessories.related_product_id po cichu (nullOnDelete, zostawały

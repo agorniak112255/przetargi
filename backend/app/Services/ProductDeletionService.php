@@ -45,11 +45,11 @@ final class ProductDeletionService
         return DB::transaction(function () use ($ids, $actor): array {
             $this->deleteStoredFiles($ids);
             $this->deleteEnrichmentCaches($ids);
-            foreach ($ids as $productId) {
-                $this->embeddings->delete($productId);
-            }
             $this->detachFromPriceLists($ids);
             Product::query()->whereIn('id', $ids)->delete();
+            // wektory po commit: wycofana transakcja zostawia karty z embedding_hash, a karty bez punktu w Qdrant
+            // zwykły reindeks (bez --force) by nie odtworzył — zniknęłyby z wyszukiwania wektorowego
+            DB::afterCommit(fn () => $this->embeddings->deleteMany($ids));
 
             Log::info('Products deleted', [
                 'actor_id' => $actor->id,

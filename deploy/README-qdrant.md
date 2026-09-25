@@ -33,3 +33,13 @@ php artisan products:reindex-embeddings --sync --force
 ```
 
 Indeks aktualizuje się też po enrichmentcie i imporcie cennika (kolejka).
+
+## Wektory kart, których nie ma w bazie
+
+```bash
+php artisan products:prune-orphan-vectors          # podgląd: liczba, producenci, przykłady
+php artisan products:prune-orphan-vectors --apply  # kasowanie porcjami (--chunk, domyślnie 500)
+```
+
+Punkt bez karty nie wraca w wynikach, ale zajmuje miejsce w puli wektorowej. Zostaje po kartach scalonych
+przed 25.09.2026 i wtedy, gdy Qdrant nie odpowie przy usuwaniu karty (błąd tylko w logu).

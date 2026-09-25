@@ -57,10 +57,8 @@ final class PriceListDeletionService
             if ($toDelete !== []) {
                 $this->deleteProductFiles($toDelete);
                 $this->deleteEnrichmentCaches($toDelete);
-                foreach ($toDelete as $productId) {
-                    $this->embeddings->delete($productId);
-                }
                 Product::query()->whereIn('id', $toDelete)->delete();
+                $this->deleteVectorsAfterCommit($toDelete);
             }
 
             $meta = [
@@ -115,11 +113,9 @@ final class PriceListDeletionService
             if ($toDelete !== []) {
                 $this->deleteProductFiles($toDelete);
                 $this->deleteEnrichmentCaches($toDelete);
-                foreach ($toDelete as $productId) {
-                    $this->embeddings->delete($productId);
-                }
                 // sloty cen kasowanych kart znikają kaskadą
                 Product::query()->whereIn('id', $toDelete)->delete();
+                $this->deleteVectorsAfterCommit($toDelete);
             }
 
             $this->deleteFileSlotsOfPriceList($priceList->id, $toDelete);
@@ -300,5 +296,17 @@ final class PriceListDeletionService
                 ->where('sku', $key['sku'])
                 ->delete();
         }
+    }
+
+    /**
+     * Wektory usuniętych kart w Qdrant — po commit. Wycofana transakcja zostawia karty razem z embedding_hash, a karty
+     * bez punktu w Qdrant zwykły reindeks (bez --force) by nie odtworzył — zniknęłyby z wyszukiwania wektorowego.
+     * Błąd Qdrant tylko w logu (ProductEmbeddingIndexer::deleteMany), usunięcie zostaje.
+     *
+     * @param  list<int>  $productIds
+     */
+    private function deleteVectorsAfterCommit(array $productIds): void
+    {
+        DB::afterCommit(fn () => $this->embeddings->deleteMany($productIds));
     }
 }

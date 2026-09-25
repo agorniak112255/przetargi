@@ -17,6 +17,9 @@ final class ProductEmbeddingIndexer
     /** Ile znaków karty technicznej wchodzi do dokumentu wyrobu (zob. datasheetText). */
     private const DATASHEET_LIMIT = 2000;
 
+    /** Ile wektorów kasuje jedno żądanie do Qdrant (deleteMany). */
+    private const DELETE_CHUNK = 500;
+
     public function __construct(
         private readonly AiSettingsService $settings,
         private readonly EmbeddingClient $embeddings,
@@ -78,6 +81,36 @@ final class ProductEmbeddingIndexer
                 'product_id' => $productId,
                 'error' => $e->getMessage(),
             ]);
+        }
+    }
+
+    /**
+     * Wektory usuniętych kart porcjami po DELETE_CHUNK. Nie rzuca: błąd porcji trafia do logu, następne porcje idą
+     * dalej — sprzątanie wektorów nie może cofnąć usunięcia kart. Resztki zbiera products:prune-orphan-vectors.
+     *
+     * @param  list<int>  $productIds
+     */
+    public function deleteMany(array $productIds): void
+    {
+        try {
+            if ($productIds === [] || ! $this->shouldIndex()) {
+                return;
+            }
+        } catch (Throwable $e) {
+            Log::warning('Product embeddings delete skipped', ['error' => $e->getMessage()]);
+
+            return;
+        }
+
+        foreach (array_chunk(array_values(array_unique($productIds)), self::DELETE_CHUNK) as $chunk) {
+            try {
+                $this->qdrant->deleteMany($chunk);
+            } catch (Throwable $e) {
+                Log::warning('Product embeddings delete failed', [
+                    'product_ids' => $chunk,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
     }
 
