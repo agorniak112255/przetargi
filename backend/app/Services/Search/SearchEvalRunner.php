@@ -101,38 +101,50 @@ final class SearchEvalRunner
         try {
             $result = $this->search->find($case['query'], $limit);
         } catch (Throwable $e) {
-            return [
-                'id' => $case['id'],
-                'query' => $case['query'],
-                'error' => $e->getMessage(),
-                'retrieval_recall' => 0.0,
-                'recall_at_k' => 0.0,
-                'precision_at_k' => 0.0,
-                'ndcg_at_k' => 0.0,
-                'mrr' => 0.0,
-                'violations' => [],
-                'violations_blocking' => [],
-                'forbidden_shown' => [],
-                'acceptable_hits' => [],
-                'missing_skus' => SearchEvalMetrics::normalizeAll($case['expected_skus']),
-                'unknown_skus' => [],
-                'unknown_forbidden_skus' => [],
-                'unknown_acceptable_skus' => [],
-                'returned' => 0,
-                'unrated_rows' => 0,
-                'returned_top' => [],
-                'candidates' => 0,
-                'duration_ms' => (int) round((hrtime(true) - $started) / 1e6),
-                'model_state' => null,
-                'rank_passes' => 0,
-                'rewrite' => false,
-            ];
+            return $this->errorRow($case, $e->getMessage(), (int) round((hrtime(true) - $started) / 1e6));
         }
 
         $row = $this->scoreResult($case, $result, $this->search->lastTrace(), $k);
         $row['duration_ms'] = (int) round((hrtime(true) - $started) / 1e6);
 
         return $row;
+    }
+
+    /**
+     * Wiersz przypadku, który się wywrócił (wyjątek wyszukiwania albo proces równoległy bez wyniku) — liczy się jako
+     * błąd w podsumowaniu, a nie jako zero trafień.
+     *
+     * @param  array{id: string, query: string, expected_skus: list<string>}  $case
+     * @return array<string, mixed>
+     */
+    public function errorRow(array $case, string $message, int $durationMs = 0): array
+    {
+        return [
+            'id' => $case['id'],
+            'query' => $case['query'],
+            'error' => $message,
+            'retrieval_recall' => 0.0,
+            'recall_at_k' => 0.0,
+            'precision_at_k' => 0.0,
+            'ndcg_at_k' => 0.0,
+            'mrr' => 0.0,
+            'violations' => [],
+            'violations_blocking' => [],
+            'forbidden_shown' => [],
+            'acceptable_hits' => [],
+            'missing_skus' => SearchEvalMetrics::normalizeAll($case['expected_skus']),
+            'unknown_skus' => [],
+            'unknown_forbidden_skus' => [],
+            'unknown_acceptable_skus' => [],
+            'returned' => 0,
+            'unrated_rows' => 0,
+            'returned_top' => [],
+            'candidates' => 0,
+            'duration_ms' => $durationMs,
+            'model_state' => null,
+            'rank_passes' => 0,
+            'rewrite' => false,
+        ];
     }
 
     /**

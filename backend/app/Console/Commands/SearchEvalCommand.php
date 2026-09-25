@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Console\Commands;
 
 use App\Services\Ai\AiServedProviderTally;
+use App\Services\Ai\AiSettingsService;
 use App\Services\ProductAiSearchService;
+use App\Services\Search\SearchEvalParallel;
 use App\Services\Search\SearchEvalRunner;
 use App\Services\Vector\ProductVectorSearch;
 use App\Support\SearchEvalMetrics;
@@ -30,7 +32,8 @@ class SearchEvalCommand extends Command
         {--worst=10 : Ile najgorszych przypadków wypisać}
         {--save : Zapisz raport JSON w storage/app/search-eval/reports}
         {--baseline= : Raport do porównania (ścieżka JSON z poprzedniego przebiegu)}
-        {--no-vector : Ablacja — wyłącz Qdrant tylko w tym procesie, bez zapisu Ustawień AI}';
+        {--no-vector : Ablacja — wyłącz Qdrant tylko w tym procesie, bez zapisu Ustawień AI}
+        {--parallel= : Ile przypadków liczyć naraz w osobnych procesach (domyślnie równoległość z Ustawień AI, 1 = po kolei)}';
 
     protected $description = 'Mierzy jakość wyszukiwania AI: recall retrievalu i ranking (recall@k, nDCG@k, MRR)';
 
@@ -38,6 +41,8 @@ class SearchEvalCommand extends Command
         SearchEvalRunner $runner,
         ProductAiSearchService $search,
         ProductVectorSearch $vectorSearch,
+        AiSettingsService $settings,
+        SearchEvalParallel $parallelRunner,
     ): int {
         $file = (string) ($this->option('file') ?: base_path('resources/search-eval/golden.json'));
         $k = max(1, (int) $this->option('k'));
@@ -68,10 +73,20 @@ class SearchEvalCommand extends Command
             }
         }
 
+        // Równolegle tylko osobnymi procesami (każdy przypadek dalej idzie drogą pojedynczego wyszukiwania); id przypadków
+        // muszą być jednoznaczne, bo po nich wiersze wracają na swoje miejsce.
+        $option = $this->option('parallel');
+        $parallel = $option === null || $option === '' ? $settings->matchConcurrency() : (int) $option;
+        $parallel = max(1, min($parallel, count($cases), SearchEvalParallel::MAX_WORKERS));
+        if (count(array_unique(array_column($cases, 'id'))) !== count($cases)) {
+            $parallel = 1;
+        }
+
         $this->info(sprintf(
-            'Golden set: %s · przypadków: %d · k=%d · limit=%d · prompt=%s · wektor=%s',
+            'Golden set: %s · przypadków: %d · równolegle: %d · k=%d · limit=%d · prompt=%s · wektor=%s',
             $file,
             count($cases),
+            $parallel,
             $k,
             $limit,
             ProductAiSearchService::RANK_PROMPT_VERSION,
@@ -91,14 +106,26 @@ class SearchEvalCommand extends Command
 
         $bar = $this->output->createProgressBar(count($cases));
         $bar->start();
-        foreach ($cases as $case) {
-            $rows[] = $runner->evaluate($case, $k, $limit);
-            $bar->advance();
+        $failures = [];
+        if ($parallel > 1) {
+            $outcome = $parallelRunner->run($cases, $file, $k, $limit, $noVector, $parallel, static function () use ($bar): void {
+                $bar->advance();
+            });
+            $rows = $outcome['rows'];
+            $fallbacks = $outcome['profile_fallbacks'];
+            $failures = $outcome['failures'];
+        } else {
+            foreach ($cases as $case) {
+                $rows[] = $runner->evaluate($case, $k, $limit);
+                $bar->advance();
+            }
+            $fallbacks = $tally->profileFallbacks();
         }
         $bar->finish();
         $this->newLine(2);
-
-        $fallbacks = $tally->profileFallbacks();
+        foreach ($failures as $failure) {
+            $this->error('Proces równoległy padł — '.$failure);
+        }
 
         $this->renderCases($rows, $k);
         $summary = $runner->summarize($rows);
@@ -114,6 +141,9 @@ class SearchEvalCommand extends Command
             'limit' => $limit,
             'prompt_version' => ProductAiSearchService::RANK_PROMPT_VERSION,
             'vector_disabled' => $noVector,
+            // Przy kilku procesach naraz czas przypadku (duration_ms) obejmuje czekanie na model — nie porównuj go 1:1
+            // z przebiegiem po kolei.
+            'parallel' => $parallel,
             // Próg zapisu, względem którego forbidden_shown oddziela ostrzeżenia od naruszeń blokujących.
             'match_min_score' => $runner->matchMinScore(),
             // Podpis list golden setu: inny podpis w raporcie bazowym = zmiana miary (wzorcowe, zakazane, równoważniki),
