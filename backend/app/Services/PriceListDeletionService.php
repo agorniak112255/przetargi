@@ -9,20 +9,19 @@ use App\Models\PriceList;
 use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductEnrichmentCache;
-use App\Models\ProductImage;
 use App\Models\ProductSourcePrice;
 use App\Models\User;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Vector\ProductEmbeddingIndexer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 
 final class PriceListDeletionService
 {
     public function __construct(
         private readonly ProductEmbeddingIndexer $embeddings,
         private readonly ProductEffectivePrice $effectivePrices,
+        private readonly ProductStoredFiles $files,
     ) {}
 
     /**
@@ -55,10 +54,12 @@ final class PriceListDeletionService
             $toDelete = array_values(array_diff($ids, $shared));
 
             if ($toDelete !== []) {
-                $this->deleteProductFiles($toDelete);
+                // ścieżki przed usunięciem kart — kaskada kasuje wiersze zdjęć i dokumentów; pliki znikają po commit
+                $paths = $this->files->pathsOf($toDelete);
                 $this->deleteEnrichmentCaches($toDelete);
                 Product::query()->whereIn('id', $toDelete)->delete();
                 $this->deleteVectorsAfterCommit($toDelete);
+                $this->files->deleteAfterCommit($paths);
             }
 
             $meta = [
@@ -111,11 +112,13 @@ final class PriceListDeletionService
             $toDelete = array_values(array_diff($ids, $shared));
 
             if ($toDelete !== []) {
-                $this->deleteProductFiles($toDelete);
+                // ścieżki przed usunięciem kart — kaskada kasuje wiersze zdjęć i dokumentów; pliki znikają po commit
+                $paths = $this->files->pathsOf($toDelete);
                 $this->deleteEnrichmentCaches($toDelete);
                 // sloty cen kasowanych kart znikają kaskadą
                 Product::query()->whereIn('id', $toDelete)->delete();
                 $this->deleteVectorsAfterCommit($toDelete);
+                $this->files->deleteAfterCommit($paths);
             }
 
             $this->deleteFileSlotsOfPriceList($priceList->id, $toDelete);
@@ -252,28 +255,6 @@ final class PriceListDeletionService
 
         foreach (Product::query()->whereIn('id', $productIds)->get() as $product) {
             $this->effectivePrices->deleteSlot($product, ProductSourcePrice::SOURCE_FILE);
-        }
-    }
-
-    /**
-     * @param  list<int>  $productIds
-     */
-    private function deleteProductFiles(array $productIds): void
-    {
-        $paths = ProductImage::query()
-            ->whereIn('product_id', $productIds)
-            ->pluck('path')
-            ->filter(static fn ($p): bool => is_string($p) && $p !== '')
-            ->unique()
-            ->values()
-            ->all();
-
-        foreach ($paths as $path) {
-            try {
-                Storage::disk('public')->delete($path);
-            } catch (\Throwable) {
-                // plik mógł już nie istnieć
-            }
         }
     }
 

@@ -6,19 +6,17 @@ namespace App\Services;
 
 use App\Models\PriceList;
 use App\Models\Product;
-use App\Models\ProductDocument;
 use App\Models\ProductEnrichmentCache;
-use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\Vector\ProductEmbeddingIndexer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 
 final class ProductDeletionService
 {
     public function __construct(
         private readonly ProductEmbeddingIndexer $embeddings,
+        private readonly ProductStoredFiles $files,
     ) {}
 
     /**
@@ -43,13 +41,16 @@ final class ProductDeletionService
         }
 
         return DB::transaction(function () use ($ids, $actor): array {
-            $this->deleteStoredFiles($ids);
+            // ścieżki przed usunięciem kart — kaskada kasuje wiersze zdjęć i dokumentów
+            $paths = $this->files->pathsOf($ids);
             $this->deleteEnrichmentCaches($ids);
             $this->detachFromPriceLists($ids);
             Product::query()->whereIn('id', $ids)->delete();
             // wektory po commit: wycofana transakcja zostawia karty z embedding_hash, a karty bez punktu w Qdrant
             // zwykły reindeks (bez --force) by nie odtworzył — zniknęłyby z wyszukiwania wektorowego
             DB::afterCommit(fn () => $this->embeddings->deleteMany($ids));
+            // pliki też po commit: wycofanie zostawia karty z wierszami zdjęć i dokumentów, a pliku nie odtworzymy
+            $this->files->deleteAfterCommit($paths);
 
             Log::info('Products deleted', [
                 'actor_id' => $actor->id,
@@ -63,40 +64,6 @@ final class ProductDeletionService
                 'product_ids_deleted' => $ids,
             ];
         });
-    }
-
-    /**
-     * @param  list<int>  $productIds
-     */
-    private function deleteStoredFiles(array $productIds): void
-    {
-        $imagePaths = ProductImage::query()
-            ->whereIn('product_id', $productIds)
-            ->pluck('path')
-            ->all();
-        $documentPaths = ProductDocument::query()
-            ->whereIn('product_id', $productIds)
-            ->pluck('path')
-            ->all();
-
-        foreach ([...$imagePaths, ...$documentPaths] as $path) {
-            if (! is_string($path) || ! $this->isStoredPath($path)) {
-                continue;
-            }
-            try {
-                Storage::disk('public')->delete($path);
-            } catch (\Throwable) {
-                // plik mógł już nie istnieć
-            }
-        }
-    }
-
-    private function isStoredPath(string $path): bool
-    {
-        return $path !== ''
-            && $path !== 'remote'
-            && ! str_starts_with($path, 'http://')
-            && ! str_starts_with($path, 'https://');
     }
 
     /**
