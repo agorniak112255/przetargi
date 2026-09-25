@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Support\OfferPricing;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -70,8 +71,11 @@ final class ProductCatalogHealthTest extends TestCase
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
         // Raport czyta enrichment_payload z wierszy bez modeli — wynik ma być taki jak z rzutowania 'array'.
+        // Tekst zamiast tablicy trafia do bazy z pominięciem rzutowania (pusty tekst, uszkodzony JSON).
         $cards = [
             'NULL' => [null, false],
+            'EMPTY-TEXT' => ['', false],
+            'BROKEN-JSON' => ['{"attributes": {"material": "nitryl"', false],
             'NO-ATTR' => [['sources' => ['https://example.com/karta']], false],
             'ATTR-TEXT' => [['attributes' => 'rękawice nitrylowe'], false],
             'EMPTY-NORMS' => [['attributes' => ['material' => null, 'kategoria_bhp' => null, 'normy_en' => []]], false],
@@ -90,8 +94,11 @@ final class ProductCatalogHealthTest extends TestCase
                 'purchase_price' => 8,
                 'stock' => 1,
                 'enrichment_status' => Product::ENRICHMENT_DONE,
-                'enrichment_payload' => $payload,
+                'enrichment_payload' => is_string($payload) ? null : $payload,
             ]);
+            if (is_string($payload)) {
+                DB::table('products')->where('id', $product->id)->update(['enrichment_payload' => $payload]);
+            }
             if (! $useful) {
                 $missing[] = $product->id;
             }
@@ -110,19 +117,19 @@ final class ProductCatalogHealthTest extends TestCase
 
         $this->getJson('/api/products/catalog-health')
             ->assertOk()
-            ->assertJsonPath('total', 8)
-            ->assertJsonPath('missing_attributes', 5)
+            ->assertJsonPath('total', 10)
+            ->assertJsonPath('missing_attributes', 7)
             ->assertJsonPath('sample_ids.missing_attributes', $missing)
             ->assertJsonPath('missing_description', 0)
             ->assertJsonPath('not_enriched', 0)
             ->assertJsonPath('manual_review', 1)
-            ->assertJsonPath('with_description', 7);
+            ->assertJsonPath('with_description', 9);
 
         $this->getJson('/api/products/catalog-health?manufacturer=ATG')
             ->assertOk()
-            ->assertJsonPath('total', 7)
-            ->assertJsonPath('missing_attributes', 4)
-            ->assertJsonPath('sample_ids.missing_attributes', array_slice($missing, 0, 4));
+            ->assertJsonPath('total', 9)
+            ->assertJsonPath('missing_attributes', 6)
+            ->assertJsonPath('sample_ids.missing_attributes', array_slice($missing, 0, 6));
     }
 
     public function test_backfill_attributes_endpoint(): void
