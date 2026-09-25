@@ -670,7 +670,8 @@ export function PriceLists() {
       productCount > 0 &&
       !confirm(
         `Zmienić producenta „${row.manufacturer}” → „${manufacturer}”?\n` +
-          `Zaktualizuje też producenta na ${productCount} produktach z tego importu.`,
+          `Nowa nazwa przejdzie też na karty tego cennika z producentem „${row.manufacturer}”. ` +
+          'Karty innych producentów (np. u dystrybutora wielu marek) zostają bez zmian.',
       )
     ) {
       return

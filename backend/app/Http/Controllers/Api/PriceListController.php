@@ -229,7 +229,8 @@ class PriceListController extends Controller
     }
 
     /**
-     * Edycja metadanych cennika — zmiana producenta/wersji propaguje się na produkty z product_ids.
+     * Edycja metadanych cennika — nowa nazwa producenta przechodzi na karty z product_ids zapisane pod dotychczasową
+     * nazwą cennika (cardsNamedAs).
      */
     public function update(Request $request, PriceList $priceList): JsonResponse
     {
@@ -247,16 +248,33 @@ class PriceListController extends Controller
         // na producenta ten sam wiersz obsługuje import z pliku, więc blokada zabierałaby edycję czegoś,
         // co z kontem nie ma nic wspólnego. Przebieg B2B nie nadpisuje już nazwy istniejącego wpisu,
         // a odnajduje go po wskaźniku konta — zmiana zostaje. Usuwanie zostaje zablokowane.
+        // Nowa nazwa przechodzi tylko na karty zapisane pod dotychczasową nazwą cennika: karty wpisu konta dystrybutora
+        // wielu marek (P4S) i karty producenta przepięte na jego listę przy łączeniu kart (CardMatchMerger,
+        // CardMatchSplitter, ProductSizeMergeService) mają innego producenta — od niego zależą właściciel karty
+        // (CardOwnership) i wybór ceny (ProductEffectivePrice).
         $oldManufacturer = (string) $priceList->manufacturer;
+        // formularz wysyła nazwę przy każdym zapisie, także samej wersji, rabatu czy znacznika cennika sugerowanego
+        $renamed = array_key_exists('manufacturer', $data) && trim($data['manufacturer']) !== $oldManufacturer;
         $productIds = array_values(array_unique(array_filter(array_map(
             static fn ($id): int => (int) $id,
             $priceList->product_ids ?? []
         ))));
 
         $productsUpdated = 0;
+        $productsOtherManufacturer = 0;
+        $renamedIds = [];
         $suggestedChanged = array_key_exists('suggested_prices', $data)
             && (bool) $data['suggested_prices'] !== (bool) $priceList->suggested_prices;
-        DB::transaction(function () use ($priceList, $data, $productIds, &$productsUpdated): void {
+        DB::transaction(function () use (
+            $priceList,
+            $data,
+            $productIds,
+            $oldManufacturer,
+            $renamed,
+            &$productsUpdated,
+            &$productsOtherManufacturer,
+            &$renamedIds,
+        ): void {
             if (array_key_exists('manufacturer', $data)) {
                 $priceList->manufacturer = trim($data['manufacturer']);
                 // klucz idzie za nazwą — po nim kolejny import odnajduje cennik tego producenta
@@ -270,10 +288,13 @@ class PriceListController extends Controller
             }
             $priceList->save();
 
-            if (array_key_exists('manufacturer', $data) && $productIds !== []) {
-                $productsUpdated = Product::query()
-                    ->whereIn('id', $productIds)
-                    ->update(['manufacturer' => $priceList->manufacturer]);
+            if ($renamed && $productIds !== []) {
+                [$renamedIds, $productsOtherManufacturer] = $this->cardsNamedAs($productIds, $oldManufacturer);
+                foreach (array_chunk($renamedIds, 1000) as $chunk) {
+                    $productsUpdated += Product::query()
+                        ->whereIn('id', $chunk)
+                        ->update(['manufacturer' => $priceList->manufacturer]);
+                }
             }
         });
 
@@ -297,25 +318,30 @@ class PriceListController extends Controller
 
         $priceList->load('importer:id,name');
 
-        if (array_key_exists('manufacturer', $data)
-            && $oldManufacturer !== $priceList->manufacturer) {
+        if ($renamed) {
+            // Przykładowa karta tylko spośród przemianowanych: rejestracja szuka domen po producencie karty,
+            // a zapisuje je pod nową nazwą — karta 3M z wpisu P4S dopisałaby stronę 3M do P4S.
             RegisterManufacturerCatalogJob::dispatch(
                 (string) $priceList->manufacturer,
-                $productIds[0] ?? 0
+                $renamedIds[0] ?? 0
             );
         }
 
         return response()->json([
             'price_list' => $priceList,
             'products_updated' => $productsUpdated,
+            'products_other_manufacturer' => $productsOtherManufacturer,
             'prices_changed' => $pricesChanged,
             'message' => sprintf(
-                'Zapisano cennik%s%s%s.',
-                array_key_exists('manufacturer', $data) && $oldManufacturer !== $priceList->manufacturer
+                'Zapisano cennik%s%s%s%s.',
+                $renamed
                     ? sprintf(' (producent: „%s” → „%s”)', $oldManufacturer, $priceList->manufacturer)
                     : '',
                 $productsUpdated > 0
                     ? sprintf(', zaktualizowano producent na %d produktach', $productsUpdated)
+                    : '',
+                $productsOtherManufacturer > 0
+                    ? sprintf(', karty z innym producentem bez zmian: %d', $productsOtherManufacturer)
                     : '',
                 $suggestedChanged
                     ? sprintf(
@@ -326,6 +352,33 @@ class PriceListController extends Controller
                     : ''
             ),
         ]);
+    }
+
+    /**
+     * Karty zapisane pod nazwą cennika — ten sam klucz co price_lists.manufacturer_key (wielkość liter, interpunkcja),
+     * w kolejności product_ids — i liczba pozostałych istniejących kart. Nie CanonicalBrand::same: ono zrównuje markę
+     * z producentem („PELTOR” = 3M, „ARTRA SAFETY” = ARTRA), a zmiana nazwy cennika nie ma prawa zabrać karcie marki.
+     * Karta bez producenta też zostaje — cennik go nie dopisuje.
+     *
+     * @param  list<int>  $productIds
+     * @return array{0: list<int>, 1: int}
+     */
+    private function cardsNamedAs(array $productIds, string $manufacturer): array
+    {
+        $key = PriceList::manufacturerKey($manufacturer);
+        $named = [];
+        $others = 0;
+        foreach (array_chunk($productIds, 1000) as $chunk) {
+            foreach (Product::query()->whereIn('id', $chunk)->pluck('manufacturer', 'id') as $id => $cardManufacturer) {
+                if ($key !== '' && PriceList::manufacturerKey((string) $cardManufacturer) === $key) {
+                    $named[(int) $id] = true;
+                } else {
+                    $others++;
+                }
+            }
+        }
+
+        return [array_values(array_filter($productIds, static fn (int $id): bool => isset($named[$id]))), $others];
     }
 
     /**
