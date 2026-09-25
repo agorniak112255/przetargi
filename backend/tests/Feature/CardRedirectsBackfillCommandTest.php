@@ -186,6 +186,28 @@ final class CardRedirectsBackfillCommandTest extends TestCase
         $this->assertSame('IF/016/F/PS', $row->target_snapshot['sku']);
     }
 
+    public function test_size_merge_and_split_decisions_are_not_backfilled_nor_reported(): void
+    {
+        $user = User::factory()->create();
+        $target = $this->card('7100175101', 'Hełm ochronny 3M™ SecureFit™ X5000, biały');
+        foreach ([55801 => [CardMatchCandidate::KIND_SIZE_MERGE, 'card-match-size-merge'], 55802 => [CardMatchCandidate::KIND_SPLIT, 'card-match-split']] as $sourceId => [$kind, $backupKind]) {
+            $candidate = CardMatchCandidate::query()->create([
+                'source_product_id' => $sourceId, 'status' => CardMatchCandidate::STATUS_MERGED, 'kind' => $kind,
+                'conflict_product_ids' => [$target->id, 99999], 'decided_by' => $user->id, 'decided_at' => now(),
+            ]);
+            $path = storage_path('framework/testing/card-match-backfill-'.$candidate->id.'.json');
+            $this->files[] = $path;
+            file_put_contents($path, json_encode(['kind' => $backupKind, 'source_product_id' => $sourceId, 'cards' => []], JSON_THROW_ON_ERROR));
+            $candidate->forceFill(['backup_path' => $path])->save();
+        }
+
+        $this->artisan('card-redirects:backfill', ['--apply' => true])
+            ->doesntExpectOutputToContain('nie pasuje do propozycji')
+            ->expectsOutputToContain('Zapisano 0 wierszy mapy połączeń.')
+            ->assertSuccessful();
+        $this->assertSame(0, CardRedirect::query()->count());
+    }
+
     /** @param  array<string, mixed>  $payload */
     private function card(string $sku, string $name, array $payload = []): Product
     {

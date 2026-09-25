@@ -4,16 +4,13 @@ declare(strict_types=1);
 
 namespace App\Services\Catalog;
 
-use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
-use App\Models\B2bSyncRun;
 use App\Models\CardMatchCandidate;
-use App\Models\PriceList;
 use App\Models\Product;
-use App\Models\ProductIdentifier;
 use App\Models\ProductSourcePrice;
 use App\Models\User;
 use App\Services\ActivityLogger;
+use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bCatalogSync;
 use App\Services\Pricing\SourcePriceComparison;
 use App\Services\ProductSizeMergeService;
@@ -22,7 +19,6 @@ use DomainException;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use JsonException;
 use Throwable;
 
@@ -59,6 +55,7 @@ final class CardMatchSizeMerger
         private readonly ActivityLogger $activity,
         private readonly Container $container,
         private readonly SourcePriceComparison $labels,
+        private readonly CardMatchBackup $backup,
     ) {}
 
     /**
@@ -153,6 +150,11 @@ final class CardMatchSizeMerger
             throw new DomainException('Karta #'.$keepProductId.' nie jest w planie tej propozycji — wybierz jedną z kart planu.');
         }
         $sourceId = (int) $locked->source_product_id;
+
+        // 4) trwająca synchronizacja konta dystrybutora albo producenta zapisałaby w połowie łączenia; blokada kont
+        // przed kartami — przebieg, który zechce zająć konto teraz, poczeka na commit i wczyta już nową mapę
+        $this->lockAccounts($sourceId, $targetIds);
+
         $cards = Product::query()->whereIn('id', [$sourceId, ...$targetIds])->lockForUpdate()->get()->keyBy('id');
         foreach ([$sourceId, ...$targetIds] as $id) {
             if (! $cards->has($id)) {
@@ -173,12 +175,10 @@ final class CardMatchSizeMerger
         $drops = array_values(array_filter($targets, static fn (Product $p): bool => (int) $p->id !== $keepProductId));
         $dropIds = array_map(static fn (Product $p): int => (int) $p->id, $drops);
 
-        // 4) trwająca synchronizacja konta dystrybutora albo producenta zapisałaby w połowie łączenia
         $owners = [];
         foreach ($targets as $target) {
             $owners[(int) $target->id] = $this->ownership->ownerSourceKeys($target);
         }
-        $this->refuseRunningSync($source, $owners);
 
         // 5) ponowne sprawdzenie: ten sam rodzaj i ten sam plan co na ekranie
         $this->verifyPlan($source, $locked);
@@ -285,31 +285,25 @@ final class CardMatchSizeMerger
     }
 
     /**
-     * @param  array<int, list<string>>  $owners  karta docelowa => źródła-właściciele
+     * Konta, których przebieg zapisałby w połowie łączenia — konta powiązań karty dystrybutora i konta-właściciele kart
+     * rozmiarów: wiersze zablokowane do końca transakcji (B2bAccountSyncRunner::lockIdle), konto z przebiegiem → odmowa.
+     *
+     * @param  list<int>  $targetIds
      */
-    private function refuseRunningSync(Product $source, array $owners): void
+    private function lockAccounts(int $sourceId, array $targetIds): void
     {
-        $accountIds = B2bProductLink::query()->where('product_id', $source->id)->distinct()->pluck('b2b_account_id')
+        $accountIds = B2bProductLink::query()->where('product_id', $sourceId)->distinct()->pluck('b2b_account_id')
             ->map(static fn (mixed $id): int => (int) $id)->all();
-        foreach ($owners as $keys) {
-            foreach ($keys as $key) {
+        foreach (Product::query()->whereIn('id', $targetIds)->get() as $target) {
+            foreach ($this->ownership->ownerSourceKeys($target) as $key) {
                 if (str_starts_with($key, 'b2b:')) {
                     $accountIds[] = (int) substr($key, 4);
                 }
             }
         }
-        $accountIds = array_values(array_unique($accountIds));
-        if ($accountIds === []) {
-            return;
-        }
-        $run = B2bSyncRun::query()
-            ->whereIn('b2b_account_id', $accountIds)
-            ->where('status', B2bSyncRun::STATUS_RUNNING)
-            ->orderBy('id')
-            ->first();
-        if ($run !== null) {
-            throw new DomainException('Trwa synchronizacja konta '.$this->labels->accountLabel(B2bAccount::query()->find($run->b2b_account_id))
-                .' — spróbuj po jej zakończeniu.');
+        $running = B2bAccountSyncRunner::lockIdle($accountIds);
+        if ($running !== null) {
+            throw new DomainException('Trwa synchronizacja konta '.$this->labels->accountLabel($running).' — spróbuj po jej zakończeniu.');
         }
     }
 
@@ -408,7 +402,7 @@ final class CardMatchSizeMerger
             ->where('id', '!=', $locked->id)
             ->where(static function ($q) use ($sourceId, $dropIds): void {
                 $q->where('source_product_id', $sourceId)->orWhereIn('target_product_id', $dropIds);
-                self::whereTargetsKeyContains($q, $dropIds);
+                CardMatchCandidate::whereTargetsKeyContains($q, $dropIds);
             })
             ->orderBy('id')
             ->get();
@@ -440,21 +434,6 @@ final class CardMatchSizeMerger
     }
 
     /**
-     * targets_key zawiera jedną z kart (lista id po przecinku; „gone:” i „sha1:” pomijane — nie niosą id).
-     *
-     * @param  list<int>  $ids
-     */
-    private static function whereTargetsKeyContains(mixed $query, array $ids): void
-    {
-        foreach ($ids as $id) {
-            $query->orWhere('targets_key', (string) $id)
-                ->orWhere('targets_key', 'like', $id.',%')
-                ->orWhere('targets_key', 'like', '%,'.$id)
-                ->orWhere('targets_key', 'like', '%,'.$id.',%');
-        }
-    }
-
-    /**
      * @param  list<int>  $ids
      */
     private static function touchesCards(CardMatchCandidate $row, array $ids): bool
@@ -471,10 +450,8 @@ final class CardMatchSizeMerger
     }
 
     /**
-     * Pełna kopia zapasowa przed łączeniem: wszystkie karty (dystrybutora i rozmiarów) z wierszami, które scalenia
-     * przenoszą albo kasują, wpisy mapy połączeń tych kart i ich pozycji (nowa decyzja nadpisuje wiersz pozycji),
-     * propozycje z tymi kartami, zamienniki, akcesoria, pozycje przetargów (także produkt dodatkowy) i cenniki z tymi
-     * kartami na liście.
+     * Pełna kopia zapasowa przed łączeniem (CardMatchBackup): karta dystrybutora, karta, która zostaje, i karty
+     * rozmiarów z wierszami, które scalenia przenoszą albo kasują, oraz wszystko, co na te karty wskazuje.
      *
      * @param  list<Product>  $targets
      *
@@ -482,101 +459,23 @@ final class CardMatchSizeMerger
      */
     private function writeBackup(CardMatchCandidate $candidate, Product $source, Product $keep, array $targets, User $user): string
     {
-        $ids = [(int) $source->id];
+        $cards = [['role' => 'source', 'product' => $source]];
+        $dropIds = [];
         foreach ($targets as $target) {
-            $ids[] = (int) $target->id;
-        }
-
-        $cards = [];
-        foreach ([$source, ...$targets] as $product) {
-            $rows = [];
-            foreach (CardMatchMerger::BACKUP_TABLES as $table => $column) {
-                if (Schema::hasTable($table)) {
-                    $rows[$table] = self::rows(DB::table($table)->where($column, $product->id));
-                }
-            }
-            $cards[] = [
-                'role' => match (true) {
-                    (int) $product->id === (int) $source->id => 'source',
-                    (int) $product->id === (int) $keep->id => 'keep',
-                    default => 'drop',
-                },
-                'product' => (array) DB::table('products')->where('id', $product->id)->first(),
-                'rows' => $rows,
-            ];
-        }
-
-        // pozycje kart (powiązania B2B i pozycje z pliku) — wpis mapy tej pozycji mógł wskazywać inną kartę
-        $pairs = [];
-        foreach (B2bProductLink::query()->toBase()->whereIn('product_id', $ids)->get(['b2b_account_id', 'remote_id']) as $link) {
-            $pairs[] = [ProductSourcePrice::b2bKey((int) $link->b2b_account_id), (string) $link->remote_id];
-        }
-        foreach (ProductIdentifier::query()->toBase()->whereIn('product_id', $ids)->where('source_key', 'like', 'file:%')
-            ->distinct()->get(['source_key', 'position_key']) as $row) {
-            $pairs[] = [(string) $row->source_key, (string) $row->position_key];
-        }
-        $redirects = self::rows(DB::table('card_redirects')->where(static function (Builder $q) use ($ids, $pairs): void {
-            $q->whereIn('product_id', $ids);
-            foreach ($pairs as [$sourceKey, $positionKey]) {
-                $q->orWhere(static fn (Builder $w) => $w->where('source_key', $sourceKey)->where('position_key', $positionKey));
-            }
-        }));
-
-        $candidates = self::rows(DB::table('card_match_candidates')->where(static function (Builder $q) use ($ids): void {
-            $q->whereIn('source_product_id', $ids)->orWhereIn('target_product_id', $ids);
-            self::whereTargetsKeyContains($q, $ids);
-        }));
-        $substitutes = Schema::hasTable('product_substitutes')
-            ? self::rows(DB::table('product_substitutes')->where(static fn (Builder $q) => $q->whereIn('main_product_id', $ids)->orWhereIn('substitute_product_id', $ids)))
-            : [];
-        $accessories = Schema::hasTable('product_accessories')
-            ? self::rows(DB::table('product_accessories')->where(static fn (Builder $q) => $q->whereIn('product_id', $ids)->orWhereIn('related_product_id', $ids)))
-            : [];
-        $companions = self::rows(DB::table('tender_items')->whereIn('companion_product_id', $ids));
-        $priceLists = [];
-        foreach (PriceList::query()->whereNotNull('product_ids')->cursor() as $list) {
-            $productIds = is_array($list->product_ids) ? array_map('intval', $list->product_ids) : [];
-            if (array_intersect($productIds, $ids) !== []) {
-                $priceLists[] = ['id' => (int) $list->id, 'product_ids' => $list->product_ids];
+            $isKeep = (int) $target->id === (int) $keep->id;
+            $cards[] = ['role' => $isKeep ? 'keep' : 'drop', 'product' => $target];
+            if (! $isKeep) {
+                $dropIds[] = (int) $target->id;
             }
         }
 
-        $payload = [
-            'kind' => 'card-match-size-merge',
-            'created_at' => now()->toIso8601String(),
-            'user' => ['id' => (int) $user->id, 'name' => (string) $user->name],
-            'candidate' => $candidate->getAttributes(),
+        $path = $this->backup->write('card-match-size-merge', 'card-match-sizes', 'nic nie połączono', $candidate, $user, $cards, [
             'source_product_id' => (int) $source->id,
             'keep_product_id' => (int) $keep->id,
-            'drop_product_ids' => array_values(array_diff(array_slice($ids, 1), [(int) $keep->id])),
-            'cards' => $cards,
-            'card_redirects' => $redirects,
-            'card_match_candidates' => $candidates,
-            'product_substitutes' => $substitutes,
-            'product_accessories' => $accessories,
-            'tender_items_companion' => $companions,
-            'price_lists' => $priceLists,
-        ];
-
-        $dir = storage_path('app/repair-backups');
-        if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
-            throw new DomainException('Kopia zapasowa nie powstała: brak katalogu '.$dir.' — nic nie połączono.');
-        }
-        $path = $dir.DIRECTORY_SEPARATOR.'card-match-sizes-'.$candidate->id.'-'.now()->format('Ymd-His').'.json';
-        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-        if (@file_put_contents($path, $json) === false) {
-            throw new DomainException('Kopia zapasowa nie powstała: zapis '.$path.' się nie udał — nic nie połączono.');
-        }
+            'drop_product_ids' => $dropIds,
+        ]);
         $this->backupPath = $path;
 
         return $path;
-    }
-
-    /**
-     * @return list<array<string, mixed>>
-     */
-    private static function rows(Builder $query): array
-    {
-        return $query->orderBy('id')->get()->map(static fn (object $row): array => (array) $row)->all();
     }
 }

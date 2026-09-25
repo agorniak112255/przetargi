@@ -159,6 +159,52 @@ final class CardRedirectStore
     }
 
     /**
+     * Rozdzielenie z decyzji człowieka (krok 7): każda pozycja karty dystrybutora trafia na swoją kartę producenta
+     * — wiersz na pozycję planu ze świeżej oceny (CardMatchFinder::evaluate), powód split, bez pozycji wiodącej.
+     * Pozycje z planu, nie z powiązań karty: pozycja z kluczem bywa bez powiązania na karcie dystrybutora, a też ma
+     * trafić na kartę producenta. Tylko pozycje kont B2B (pozycję z pliku import zapisałby do slotu „file” karty
+     * producenta — plan z nią nie jest do decyzji). Wiersz o tej samej parze (source_key, position_key) nadpisuje nowa
+     * decyzja. Wołać PRZED przeniesieniem powiązań i identyfikatorów.
+     *
+     * @param  list<array{source_key: string, position_key: string, remote_sku: string|null, label: string|null, target: Product}>  $positions
+     * @return int liczba zapisanych wierszy
+     */
+    public function recordSplit(array $positions, CardMatchCandidate $candidate, User $user): int
+    {
+        foreach ($positions as $position) {
+            if (! str_starts_with($position['source_key'], 'b2b:')) {
+                throw new InvalidArgumentException('Rozdzielenie zapisuje tylko pozycje kont B2B, nie „'.$position['source_key'].'”.');
+            }
+        }
+
+        $now = now();
+        foreach ($positions as $position) {
+            $row = CardRedirect::query()->firstOrNew([
+                'source_key' => $position['source_key'],
+                'position_key' => $position['position_key'],
+            ]);
+            // nowa decyzja zastępuje starą w całości — także autora, czas i pozycję wiodącą
+            $row->forceFill([
+                'source_key' => $position['source_key'],
+                'position_key' => $position['position_key'],
+                'b2b_account_id' => (int) substr($position['source_key'], 4),
+                'price_list_id' => null,
+                'remote_sku' => self::cut($position['remote_sku'], 255),
+                'position_label' => self::cut($position['label'], 120),
+                'product_id' => (int) $position['target']->id,
+                'reason' => CardRedirect::REASON_SPLIT,
+                'is_anchor' => false,
+                'target_snapshot' => self::snapshot($position['target']),
+                'card_match_candidate_id' => $candidate->id,
+                'created_by' => $user->id,
+                'created_at' => $now,
+            ])->save();
+        }
+
+        return count($positions);
+    }
+
+    /**
      * Scalenie kart: wiersze wskazujące karty $fromIds przechodzą na $toId. target_snapshot bez zmian — to ślad decyzji.
      *
      * @param  list<int>  $fromIds

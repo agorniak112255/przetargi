@@ -246,3 +246,24 @@ Zrobione: 1 (0acdf91), 2 (2449f04), 3 (d173764), 4 (36b3621), 5 (8b11654, 7a86f0
 Następne: wdrożenie → „Odśwież propozycje” → pomiar (rozmiary / kolory / niepewne) → decyzja → 6 (akcja łączenia
 rozmiarów z nazwą karty modelu zatwierdzaną przez człowieka, pozycja wiodąca) → 7 (akcja rozdzielania).
 
+## Krok 7 — „Rozdziel” (25.09.2026, po recenzji agenta)
+Przypadek z produkcji: P4S „2365X0 Hełm 3M SecureFit X5000VE-CE” (391,60 zł) — cztery kolory, każdy z kodem 3M
+(7100175101 / 7100175511 / 7100175512 / 7100175534, karty 3M po 269,99 zł). CardMatchSplitter + POST
+/card-matches/{id}/split, przycisk „Rozdziel…” w zakładce „Rozdzielanie”.
+- Blokady: propozycja → wiersze kont (B2bAccountSyncRunner::lockIdle — przebieg zajmujący konto czeka na commit
+  i wczytuje wpisy split; bez tego mógł wczytać mapę przed commitem i zebrać kolory na jednej karcie) → karty rosnąco.
+  Ta sama kolejność w łączeniu rozmiarów.
+- Każda pozycja: powiązanie (merged_at NULL), identyfikatory (także wycofane), wpis mapy split z planu świeżej oceny.
+  Karta producenta: kopia slotu konta (checked_at bez zmian; dostępność NULL przy kilku pozycjach konta — to tekst
+  grupy), wiersz historii z przebiegu konta (inaczej pierwsza zmiana ceny wyglądałaby jak dodanie), tabelka sklepu,
+  odrzucone zdjęcia. Slot/tabelka-sierota tego konta na karcie producenta — zastępowane (decision_input.slots_replaced).
+  Cenniki: wpis konta dostaje karty jego pozycji, z pozostałych karta znika. Karta dystrybutora usunięta (pliki
+  zostają na dysku, wiersze w kopii), wektor po commit.
+- Strażnicy (niezależni od reguł propozycji): karta dystrybutora w przetargu / zamiennikach / akcesoriach / Preście,
+  z cenami specjalnymi, wersjami, ceną z pliku; karta producenta innej marki, z wersjami, bez właściciela, z pozycją
+  konta przenoszonych pozycji; powiązanie pozycji na innej karcie; wpis mapy pozycji na inną kartę; cena pozycji
+  (last_purchase_price) inna niż slot karty; zmiana ceny karty producenta w przetargu (cena właściciela nie wygrywa).
+- Pozycja z pliku w planie split → „niepewne” (import zapisałby ją do slotu „file” karty producenta).
+- Wspólna kopia zapasowa decyzji z usuwaniem kart: CardMatchBackup (kroki 6 i 7); card-redirects:backfill czyta
+  tylko zwykłe połączenia.
+

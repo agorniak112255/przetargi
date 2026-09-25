@@ -334,6 +334,36 @@ final class B2bAccountSyncRunner
     }
 
     /**
+     * Blokada wierszy kont do końca transakcji wywołującego — decyzje z ekranu „Łączenie kart” zmieniają mapę połączeń
+     * i powiązania tych kont. Przebieg, który zechce zająć konto w tym czasie (claim — warunkowy UPDATE tego samego
+     * wiersza), czeka na commit decyzji i wczytuje już nową mapę; bez blokady mógł ją wczytać przed commitem i przepiąć
+     * rozdzielone pozycje z powrotem na jedną kartę. Wynik: konto, które już ma przebieg (status konta albo wpis
+     * przebiegu „running”), albo null. Wołać w transakcji, przed blokadą kart.
+     *
+     * @param  list<int>  $accountIds
+     */
+    public static function lockIdle(array $accountIds): ?B2bAccount
+    {
+        $accountIds = array_values(array_unique(array_filter(array_map('intval', $accountIds), static fn (int $id): bool => $id > 0)));
+        if ($accountIds === []) {
+            return null;
+        }
+        sort($accountIds);
+        $accounts = B2bAccount::query()->whereIn('id', $accountIds)->orderBy('id')->lockForUpdate()->get();
+        $running = $accounts->first(static fn (B2bAccount $account): bool => $account->last_sync_status === 'running');
+        if ($running !== null) {
+            return $running;
+        }
+        $runAccountId = B2bSyncRun::query()
+            ->whereIn('b2b_account_id', $accountIds)
+            ->where('status', B2bSyncRun::STATUS_RUNNING)
+            ->orderBy('id')
+            ->value('b2b_account_id');
+
+        return $runAccountId !== null ? $accounts->firstWhere('id', (int) $runAccountId) : null;
+    }
+
+    /**
      * Zajęcie konta jednym warunkowym UPDATE (harmonogram, „Sprawdź teraz” i CLI nie pobierają naraz tego samego
      * konta) i wpis przebiegu w tej samej transakcji — nie zostaje konto „running” bez przebiegu, którego
      * b2b:sync-due nie umiałby uznać za przerwany.

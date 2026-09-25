@@ -6,12 +6,14 @@ import {
   api,
   ApiError,
   can,
+  isSplitDecision,
   type CardBrief,
   type CardMatch,
   type CardMatchKind,
   type CardMatchPlan,
   type CardMatchPlanPosition,
   type CardMatchSignal,
+  type CardMatchSplitDecisionInput,
   type CardMatchStatus,
   type CardMatchSummary,
   type OrderQuantity,
@@ -775,6 +777,41 @@ function SizeMergePanel({
   )
 }
 
+/** 409 z decyzji na planie (Połącz rozmiary / Rozdziel): serwer ocenił propozycję od nowa i plan jest już inny. */
+const PLAN_CHANGED_TEXT = 'Propozycja zmieniła się od wczytania — lista została odświeżona. Sprawdź plan jeszcze raz.'
+
+/**
+ * Czy rozdzielenie da się zatwierdzić z ekranu: null = tak, inaczej powód (dymek wyłączonego „Rozdziel…”). Każda
+ * pozycja musi mieć swoją kartę producenta ze skrótem z API — bez tego okno potwierdzenia nie pokaże pełnego planu
+ * (serwer i tak by odmówił).
+ */
+function splitBlockedReason(m: CardMatch): string | null {
+  const plan = m.plan
+  if (!plan || !m.plan_hash) return 'Brak planu tej propozycji — odśwież listę.'
+  if (!m.source) return 'Karty dystrybutora już nie ma — odśwież listę.'
+  if (plan.blockers.length > 0) return 'Plan ma przeszkody (opis obok) — tej propozycji nie da się rozdzielić.'
+  if (plan.positions.length === 0 || plan.positions.some((p) => p.target_product_id === null)) {
+    return 'Nie każda pozycja ma swoją kartę producenta — tej propozycji nie da się rozdzielić.'
+  }
+  if (plan.positions.some((p) => !p.target)) return 'Karty producenta z planu już nie ma — odśwież listę.'
+  return null
+}
+
+/** Pozycja u dystrybutora po ludzku: „kolor biały (236510)”; bez etykiety sam kod, bez kodu — klucz pozycji. */
+function splitPositionLabel(p: CardMatchPlanPosition): string {
+  if (p.label && p.remote_sku) return `${p.label} (${p.remote_sku})`
+  return p.label || p.remote_sku || p.position_key
+}
+
+/** SKU kart producenta z zapisu rozdzielenia w kolejności pozycji planu, każda karta raz. */
+function splitTargetSkus(di: CardMatchSplitDecisionInput): string[] {
+  const skus = new Map<number, string>()
+  for (const p of di.positions) {
+    if (!skus.has(p.target_product_id)) skus.set(p.target_product_id, p.target_sku)
+  }
+  return [...skus.values()]
+}
+
 export function CardMatches() {
   const { user } = useAuth()
   const canDecide = can(user, 'card_matches.decide')
@@ -1000,15 +1037,74 @@ export function CardMatches() {
       setSizeForm((prev) => (prev?.candidateId === m.id ? null : prev))
     } catch (ex) {
       if (ex instanceof ApiError && ex.status === 409) {
-        const text = 'Propozycja zmieniła się od wczytania — lista została odświeżona. Sprawdź plan jeszcze raz.'
-        setRowErrors((prev) => ({ ...prev, [m.id]: text }))
-        setErr(text)
+        setRowErrors((prev) => ({ ...prev, [m.id]: PLAN_CHANGED_TEXT }))
+        setErr(PLAN_CHANGED_TEXT)
         // potwierdzenie dotyczyło starego planu — do zaznaczenia od nowa po obejrzeniu odświeżonego
         patchSizeForm(m.id, { confirmedHash: null })
       } else {
         const reason = ex instanceof Error ? ex.message : 'Błąd'
         setRowErrors((prev) => ({ ...prev, [m.id]: reason }))
         setErr(`Nie połączono rozmiarów ${rowLabel(m)}: ${reason}`)
+      }
+    } finally {
+      setBusy(false)
+      setBusyRowId(null)
+      await load()
+    }
+  }
+
+  /**
+   * „Rozdziel”: okno potwierdzenia z planem pozycja po pozycji, potem POST split z plan_hash wczytanego planu.
+   * 409 = plan zmienił się od wczytania (lista odświeżona — do obejrzenia jeszcze raz); 422 i inne — powód przy
+   * wierszu i w pasku błędu. Nazwy, opisy i ceny producenta na kartach producenta się nie zmieniają.
+   */
+  async function splitOne(m: CardMatch) {
+    const plan = m.plan
+    if (!plan || !m.plan_hash || !m.source || splitBlockedReason(m) !== null) return
+    const distributor = plan.source_label
+    const sourceSku = m.source.sku
+    const producer = plan.positions[0]?.target?.manufacturer ?? m.brand ?? 'producenta'
+    // karty producenta w kolejności pozycji, każda raz (dwie pozycje mogą trafić w tę samą kartę)
+    const targetSkus = [...planCards(plan).values()].map((c) => c.sku)
+    const n = targetSkus.length
+    const cardsWord = plural(n, 'kartę', 'karty', 'kart')
+    const lines = plan.positions.map(
+      (p) =>
+        `${splitPositionLabel(p)}${p.source_label !== distributor ? ` u ${p.source_label}` : ''} → ` +
+        (p.target?.sku ?? `#${p.target_product_id}`),
+    )
+    const ok = window.confirm(
+      `Rozdzielić kartę ${distributor} ${sourceSku} na ${n} ${cardsWord} ${producer}?\n\n` +
+        `${lines.join('\n')}\n\n` +
+        `Karta ${distributor} ${sourceSku} zniknie; jej cena, powiązania i identyfikatory przejdą na karty ${producer}. ` +
+        `Karty ${producer} zostają bez zmian (nazwa, opis, cena producenta). ` +
+        'Przed zmianą zapisuje się pełna kopia zapasowa.',
+    )
+    if (!ok) return
+    const planHash = m.plan_hash
+    setBusy(true)
+    setBusyRowId(m.id)
+    setMsg('')
+    setErr('')
+    setRowErrors((prev) => {
+      const next = { ...prev }
+      delete next[m.id]
+      return next
+    })
+    try {
+      await api<CardMatch>(`/card-matches/${m.id}/split`, {
+        method: 'POST',
+        body: JSON.stringify({ plan_hash: planHash, confirm_split: true }),
+      })
+      setMsg(`Rozdzielono kartę ${sourceSku} na ${n} ${cardsWord} ${producer}: ${targetSkus.join(', ')}.`)
+    } catch (ex) {
+      if (ex instanceof ApiError && ex.status === 409) {
+        setRowErrors((prev) => ({ ...prev, [m.id]: PLAN_CHANGED_TEXT }))
+        setErr(PLAN_CHANGED_TEXT)
+      } else {
+        const reason = ex instanceof Error ? ex.message : 'Błąd'
+        setRowErrors((prev) => ({ ...prev, [m.id]: reason }))
+        setErr(`Nie rozdzielono karty ${sourceSku}: ${reason}`)
       }
     } finally {
       setBusy(false)
@@ -1092,18 +1188,22 @@ export function CardMatches() {
   }
 
   const decided = status === 'merged' || status === 'rejected'
-  // „Łączenie rozmiarów” / „Rozdzielanie”: tylko do odczytu i odrzucenia — trzy kolumny, bez zaznaczania
+  // „Łączenie rozmiarów” / „Rozdzielanie”: decyzja pojedynczo przy wierszu — trzy kolumny, bez zaznaczania
   const planTab = tabKey === 'size_merge' || tabKey === 'split'
   // Niepewne / Odrzucone / Zrobione mieszają rodzaje — przy każdym wierszu plakietka rodzaju
   const mixedTab = !planTab && tabKey !== 'merge'
   const colCount = planTab ? 3 : 4 + (showSelect ? 1 : 0)
 
-  /** Ostatnia kolumna wiersza: akcje (Połącz tylko dla kind=merge), powód niepewnej pary albo zapis decyzji. */
+  /**
+   * Ostatnia kolumna wiersza: akcje (Połącz tylko dla kind=merge, Połącz rozmiary… / Rozdziel… dla planów), powód
+   * niepewnej pary albo zapis decyzji.
+   */
   function renderActions(m: CardMatch) {
     const rowErr = rowErrors[m.id]
     const isPlan = m.kind === 'size_merge' || m.kind === 'split'
     // Zrobione łączenie rozmiarów: co zatwierdzono (decision_input) — SKU karty, która została, z kart sprzed połączenia
-    const di = m.status === 'merged' && m.kind === 'size_merge' ? m.decision_input : null
+    const di =
+      m.status === 'merged' && m.kind === 'size_merge' && !isSplitDecision(m.decision_input) ? m.decision_input : null
     const sizeMergeDone = di
       ? {
           keepSku: di.cards_before.find((c) => c.id === di.keep_product_id)?.sku ?? `#${di.keep_product_id}`,
@@ -1111,6 +1211,19 @@ export function CardMatches() {
           sourceSku: m.source_snapshot?.sku ?? m.source?.sku ?? `#${di.attached_source_product_id}`,
         }
       : null
+    // Zrobione rozdzielenie: karty dystrybutora już nie ma (SKU z source_snapshot), karty producenta z zapisu decyzji
+    const splitDi =
+      m.status === 'merged' && m.kind === 'split' && isSplitDecision(m.decision_input) ? m.decision_input : null
+    const splitDone = splitDi
+      ? {
+          sourceSku:
+            m.source_snapshot?.sku ??
+            splitDi.cards_before.find((c) => c.id === splitDi.source_product_id)?.sku ??
+            `#${splitDi.source_product_id}`,
+          targetSkus: splitTargetSkus(splitDi),
+        }
+      : null
+    const splitBlocked = m.status === 'pending' && m.kind === 'split' ? splitBlockedReason(m) : null
     const rejectButton = (
       <button
         type="button"
@@ -1149,15 +1262,21 @@ export function CardMatches() {
                 {sizeForm?.candidateId === m.id ? 'Zwiń' : 'Połącz rozmiary…'}
               </button>
             )}
+            {m.kind === 'split' && (
+              <button
+                type="button"
+                disabled={busy || splitBlocked !== null}
+                onClick={() => void splitOne(m)}
+                title={splitBlocked ?? undefined}
+                className="rounded bg-blue-600 px-2.5 py-1 text-[11px] text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {busyRowId === m.id ? '…' : 'Rozdziel…'}
+              </button>
+            )}
             {rejectButton}
           </div>
         )}
         {m.status === 'pending' && !canDecide && <span className="text-slate-400">czeka na decyzję</span>}
-        {m.status === 'pending' && m.kind === 'split' && (
-          <p className="mt-1 text-[11px] text-slate-500">
-            Decyzja o rozdzieleniu będzie dostępna wkrótce — na razie sprawdź plan albo odrzuć.
-          </p>
-        )}
         {m.status === 'conflict' && (
           <div>
             {/* przy planie powody są w „Co proponujemy” — tu bez powtórzenia */}
@@ -1187,6 +1306,13 @@ export function CardMatches() {
                 <span className="font-medium text-emerald-700">Połączono rozmiary</span> — zostaje{' '}
                 <span className="font-mono">{sizeMergeDone.keepSku}</span>, nazwa „{sizeMergeDone.name}”; dołączono
                 kartę <span className="font-mono">{sizeMergeDone.sourceSku}</span>.
+              </p>
+            ) : splitDone ? (
+              <p className="text-emerald-800">
+                <span className="font-medium text-emerald-700">Rozdzielono</span> kartę{' '}
+                <span className="font-mono">{splitDone.sourceSku}</span> na {splitDone.targetSkus.length}{' '}
+                {plural(splitDone.targetSkus.length, 'kartę', 'karty', 'kart')}:{' '}
+                <span className="font-mono">{splitDone.targetSkus.join(', ')}</span>.
               </p>
             ) : (
               <p className={m.status === 'merged' ? 'font-medium text-emerald-700' : 'font-medium text-slate-700'}>
@@ -1366,8 +1492,8 @@ export function CardMatches() {
               const stripe = i % 2 === 1 ? 'bg-slate-100/60' : ''
               if (m.kind === 'size_merge' || m.kind === 'split') {
                 // plan „pozycja → karta”: karta dystrybutora · zdanie + tabelka (w zakładkach mieszanych na dwie
-                // kolumny) · odrzucenie; bez zaznaczania i akcji zbiorczych. Łączenie rozmiarów: panel decyzji
-                // rozwijany w wierszu pod spodem na całą szerokość.
+                // kolumny) · decyzja; bez zaznaczania i akcji zbiorczych. Łączenie rozmiarów: panel decyzji
+                // rozwijany w wierszu pod spodem na całą szerokość; rozdzielenie: okno potwierdzenia z planem.
                 const panelOpen =
                   sizeForm?.candidateId === m.id && m.kind === 'size_merge' && m.status === 'pending' && canDecide
                 return (

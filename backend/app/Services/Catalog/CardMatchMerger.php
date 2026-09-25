@@ -222,7 +222,7 @@ final class CardMatchMerger
 
     /**
      * „Połącz” łączy tylko parę karta dystrybutora → jedna karta producenta (kind=merge). Łączenie rozmiarów
-     * i rozdzielanie (plan „pozycja → karta”) mają w tej wersji tylko podgląd i odrzucenie — mergeDuplicate
+     * i rozdzielanie (plan „pozycja → karta”) mają własne akcje (CardMatchSizeMerger, CardMatchSplitter) — mergeDuplicate
      * z target_product_id=null i tak by nie zadziałało, ale powód ma mówić, co zrobić.
      */
     private function refuseOtherKinds(CardMatchCandidate $locked): void
@@ -233,7 +233,7 @@ final class CardMatchMerger
         }
         throw new DomainException(match ($kind) {
             CardMatchCandidate::KIND_SIZE_MERGE => 'Ta propozycja to łączenie rozmiarów — połącz ją przyciskiem „Połącz rozmiary” na zakładce „Łączenie rozmiarów” albo odrzuć.',
-            CardMatchCandidate::KIND_SPLIT => 'Ta propozycja to rozdzielanie — ta decyzja będzie dostępna w kolejnej wersji ekranu. Możesz ją odrzucić.',
+            CardMatchCandidate::KIND_SPLIT => 'Ta propozycja to rozdzielanie — rozdziel ją przyciskiem „Rozdziel” na zakładce „Rozdzielanie” albo odrzuć.',
             default => 'Ta propozycja ma nieznany rodzaj („'.$kind.'”) — nie da się jej połączyć. Możesz ją odrzucić.',
         });
     }

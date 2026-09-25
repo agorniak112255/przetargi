@@ -112,6 +112,22 @@ class CardMatchCandidate extends Model
     }
 
     /**
+     * Warunek „targets_key zawiera jedną z kart” dopisywany przez orWhere do grupy warunków zapytania (Eloquent albo
+     * Query Builder) — lista id po przecinku; „gone:” i „sha1:” nie niosą id i nie pasują.
+     *
+     * @param  list<int>  $ids
+     */
+    public static function whereTargetsKeyContains(mixed $query, array $ids): void
+    {
+        foreach ($ids as $id) {
+            $query->orWhere('targets_key', (string) $id)
+                ->orWhere('targets_key', 'like', $id.',%')
+                ->orWhere('targets_key', 'like', '%,'.$id)
+                ->orWhere('targets_key', 'like', '%,'.$id.',%');
+        }
+    }
+
+    /**
      * Wiersz zapisany bez targets_key (ręcznie, w testach, sprzed kroku 5): klucz z karty docelowej albo z listy kart
      * konfliktu; wiersz bez żadnej karty — „gone:{id}” (jak w migracji), do czasu nadania id klucz tymczasowy
      * unikalny, żeby UNIQUE nie łączyło dwóch takich wierszy jednej karty.

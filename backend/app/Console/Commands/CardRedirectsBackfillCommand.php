@@ -157,6 +157,9 @@ final class CardRedirectsBackfillCommand extends Command
         $proposals = [];
         $candidates = CardMatchCandidate::query()
             ->where('status', CardMatchCandidate::STATUS_MERGED)
+            // łączenie rozmiarów i rozdzielanie zapisują mapę same przy decyzji (recordSizeMerge, recordSplit), a ich
+            // kopie mają inny kształt — każda dawała ostrzeżenie „kopia nie pasuje do propozycji”
+            ->where('kind', CardMatchCandidate::KIND_MERGE)
             ->whereNotNull('backup_path')
             ->orderBy('decided_at')
             ->orderBy('id')

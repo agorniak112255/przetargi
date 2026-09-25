@@ -679,13 +679,17 @@ export type CardMatch = {
   signal: CardMatchSignal | null
   plan_hash: string | null
   plan: CardMatchPlan | null
-  /** Zapis decyzji z ekranu (dziś tylko łączenie rozmiarów); null dla pozostałych. */
-  decision_input: CardMatchDecisionInput | null
+  /**
+   * Zapis decyzji z ekranu: łączenie rozmiarów (CardMatchDecisionInput, bez pola kind) albo rozdzielenie
+   * (CardMatchSplitDecisionInput, kind „split” — odróżnia isSplitDecision); null dla pozostałych.
+   */
+  decision_input: CardMatchDecisionInput | CardMatchSplitDecisionInput | null
 }
 
 /**
  * Co zatwierdził człowiek przy „Połącz rozmiary” (POST /card-matches/{id}/merge-sizes): karta, która zostaje,
  * łączone karty, nazwa i lista rozmiarów, stan kart sprzed połączenia i pozycje wiodące kont producenta.
+ * Bez pola kind — po tym odróżnia się od zapisu rozdzielenia.
  */
 export type CardMatchDecisionInput = {
   keep_product_id: number
@@ -704,6 +708,61 @@ export type CardMatchDecisionInput = {
     currency: string | null
   }>
   anchors: Array<{ source_key: string; position_key: string }>
+}
+
+/**
+ * Co zatwierdził człowiek przy „Rozdziel” (POST /card-matches/{id}/split): karta dystrybutora (po rozdzieleniu
+ * usunięta), karty producenta, pozycja po pozycji, do której karty trafiła, stan kart sprzed zmiany i co przeniesiono.
+ */
+export type CardMatchSplitDecisionInput = {
+  kind: 'split'
+  plan_hash: string
+  source_product_id: number
+  /** Karty producenta rosnąco po id. */
+  target_product_ids: number[]
+  /** Kolejność jak w planie. */
+  positions: Array<{
+    /** „b2b:{id konta}”. */
+    source_key: string
+    /** Np. „B2B P4S”. */
+    source_label: string
+    /** remote_id pozycji u dostawcy. */
+    position_key: string
+    /** Kod pozycji u dostawcy, np. „236510”. */
+    remote_sku: string | null
+    /** Etykieta pozycji, np. „kolor biały”. */
+    label: string | null
+    target_product_id: number
+    target_sku: string
+  }>
+  /** Pierwsza = karta dystrybutora, potem karty producenta rosnąco. */
+  cards_before: Array<{
+    id: number
+    sku: string
+    name: string
+    purchase_price: string | null
+    currency: string | null
+  }>
+  /** {id karty producenta: {pole: [stara, nowa]}}; puste, gdy ceny kart bez zmian. */
+  card_changes: Record<string, Record<string, [unknown, unknown]>>
+  slots_replaced: Array<{
+    product_id: number
+    source_key: string
+    purchase_price: string | null
+    currency: string | null
+    checked_at: string | null
+  }>
+  redirects_orphaned: Array<{ source_key: string; position_key: string }>
+  identifiers_moved: number
+  /** Identyfikatory karty dystrybutora spoza pozycji planu — usunięte z kartą (są w kopii zapasowej). */
+  identifiers_dropped: number
+  /** Cenniki, w których karta dystrybutora była na liście (wpis konta dostał karty producenta). */
+  price_lists: number[]
+}
+
+/** Zapis rozdzielenia (kind „split”); zapis łączenia rozmiarów pola kind nie ma. */
+export function isSplitDecision(di: CardMatch['decision_input'] | undefined): di is CardMatchSplitDecisionInput {
+  return di != null && 'kind' in di && di.kind === 'split'
 }
 
 /**

@@ -15,6 +15,7 @@ use App\Services\Catalog\CardMatchFinder;
 use App\Services\Catalog\CardMatchMerger;
 use App\Services\Catalog\CardMatchPlanChanged;
 use App\Services\Catalog\CardMatchSizeMerger;
+use App\Services\Catalog\CardMatchSplitter;
 use App\Services\Pricing\SourcePriceComparison;
 use DomainException;
 use Illuminate\Http\JsonResponse;
@@ -42,6 +43,7 @@ class CardMatchController extends Controller
         private readonly CardMatchMerger $merger,
         private readonly SourcePriceComparison $comparison,
         private readonly CardMatchSizeMerger $sizeMerger,
+        private readonly CardMatchSplitter $splitter,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -131,6 +133,32 @@ class CardMatchController extends Controller
         }
 
         return response()->json($this->present(collect([$merged->load('decider:id,name')]))[0]);
+    }
+
+    /**
+     * „Rozdziel” (krok 7): pozycje karty dystrybutora przechodzą na karty producenta z planu, karta dystrybutora
+     * znika. Front wysyła tylko skrót planu, który pokazywał — plan pozycja → karta liczy serwer od nowa.
+     */
+    public function split(Request $request, CardMatchCandidate $candidate): JsonResponse
+    {
+        $data = $request->validate([
+            'plan_hash' => ['required', 'string', 'size:40'],
+            'confirm_split' => ['required', 'accepted'],
+        ]);
+
+        try {
+            $split = $this->splitter->split($candidate, $this->user($request), (string) $data['plan_hash']);
+        } catch (CardMatchPlanChanged $e) {
+            return response()->json(['message' => $e->getMessage(), 'code' => 'plan_changed'], 409);
+        } catch (DomainException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (Throwable $e) {
+            report($e);
+
+            return response()->json(['message' => 'Rozdzielenie nie powiodło się: '.rtrim($e->getMessage(), '.').' — nic nie zmieniono.'], 500);
+        }
+
+        return response()->json($this->present(collect([$split->load('decider:id,name')]))[0]);
     }
 
     public function reject(Request $request, CardMatchCandidate $candidate): JsonResponse

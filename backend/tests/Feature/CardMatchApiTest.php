@@ -506,7 +506,7 @@ final class CardMatchApiTest extends TestCase
             ->json('results');
         $this->assertSame([
             'id' => $split->id, 'ok' => false,
-            'error' => 'Ta propozycja to rozdzielanie — ta decyzja będzie dostępna w kolejnej wersji ekranu. Możesz ją odrzucić.',
+            'error' => 'Ta propozycja to rozdzielanie — rozdziel ją przyciskiem „Rozdziel” na zakładce „Rozdzielanie” albo odrzuć.',
         ], $results[0]);
         $this->assertSame(['id' => $okPair->id, 'ok' => true, 'error' => null], $results[1]);
 

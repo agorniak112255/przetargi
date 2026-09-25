@@ -886,6 +886,16 @@ final class CardMatchFinder
             : CardMatchCandidate::KIND_SPLIT;
 
         array_push($blockers, ...$this->planBlockers($sourceId, $ids, $kind));
+        if ($kind === CardMatchCandidate::KIND_SPLIT) {
+            // pozycję z pliku import po rozdzieleniu zapisałby do jedynego slotu „file” karty producenta — nadpisałby
+            // cenę z pliku producenta (PriceListImportService czyta mapę file:{cennik})
+            foreach ($positions as $position) {
+                if (! str_starts_with($position['source_key'], 'b2b:')) {
+                    $blockers[] = ['code' => 'split_file_position', 'text' => 'pozycja '.($position['remote_sku'] ?? $position['position_key'])
+                        .' pochodzi z pliku ('.$position['source_label'].') — rozdzielenie przenosi tylko pozycje kont B2B'];
+                }
+            }
+        }
         if ($kind === CardMatchCandidate::KIND_SPLIT && $signal === CardMatchCandidate::SIGNAL_UNKNOWN && $equalPrices) {
             $text = 'nie wiadomo, czy pozycje różnią się rozmiarem czy kolorem';
             foreach (array_keys($keepsSeparate) as $account) {
