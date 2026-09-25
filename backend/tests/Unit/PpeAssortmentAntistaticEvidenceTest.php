@@ -156,6 +156,25 @@ final class PpeAssortmentAntistaticEvidenceTest extends TestCase
         $this->assertTrue($this->assortment->productShowsAntistatic('Rękawice powlekane, EN1149-5'));
     }
 
+    /**
+     * Wymaganie bez rodzaju wyrobu (sam model: „ARSO 701 616560 ESD”) — o regule dowodu decyduje rodzaj z karty. Dotąd
+     * but z EN 61340 szedł regułą rękawic (ESD / EN 1149 / EN 16350) i wychodził „weak”, choć dla obuwia to dowód ESD.
+     */
+    #[Test]
+    public function product_family_decides_evidence_rule_when_requirement_names_no_family(): void
+    {
+        $requirement = 'ARSO 701 616560 ESD';
+        $this->assertNull($this->assortment->family($requirement), 'fixture: wymaganie bez rodzaju wyrobu');
+        $sandal = $this->card('616560', 'Sandały ARSO 701 616560 S1 P', ['norms' => 'EN ISO 20345:2011 S1 P, EN IEC 61340-4-3:2018']);
+
+        $this->assertSame(PpeAssortment::ANTISTATIC_STRONG, $this->assortment->productAntistaticEvidence($requirement, $sandal));
+        // Rodzaj z wymagania nadal wygrywa z rodzajem karty.
+        $this->assertSame(PpeAssortment::ANTISTATIC_WEAK, $this->assortment->productAntistaticEvidence(
+            'Rękawice ochronne ESD',
+            $this->card('R-61340', 'Rękawice powlekane', ['norms' => 'EN 388:2016, IEC 61340-5-1'])
+        ));
+    }
+
     /** Siła dowodu dzieli dokładnie to, co bramka przepuszcza — nic nie jest „strong” ani „weak” poza nią. */
     #[Test]
     public function evidence_is_present_exactly_when_gate_shows_antistatic(): void

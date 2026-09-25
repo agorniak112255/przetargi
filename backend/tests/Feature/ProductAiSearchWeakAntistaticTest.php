@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ProductAiSearchService;
 use App\Services\Search\AiProductSearch;
 use App\Support\PpeAssortment;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -102,6 +103,81 @@ final class ProductAiSearchWeakAntistaticTest extends TestCase
         $this->assertNotNull($row, 'fixture');
         $this->assertSame(95, (int) $row['ai_match_percent']);
         $this->assertStringNotContainsString('tylko słownie', (string) $row['ai_match_reason']);
+    }
+
+    /**
+     * Decyzja właściciela z 25.09.2026 („wszędzie 60%”): nazwany model idzie bez oceny modelu (trafienie jak kod), ale
+     * przy żądaniu ESD karta modelu z samym słowem jest propozycją 60 z uzasadnieniem — jak inny kolor modelu.
+     */
+    public function test_named_model_with_esd_demand_caps_word_only_card(): void
+    {
+        foreach ([
+            ['6003805', 'Rękawice Phynomic airLite A ESD', 'Lekkie rękawice montażowe powlekane.'],
+            ['6004006', 'Rękawice Phynomic Foam', 'Lekkie rękawice montażowe powlekane, antystatyczne.'],
+        ] as [$sku, $name, $description]) {
+            Product::query()->create([
+                'sku' => $sku,
+                'name' => $name,
+                'manufacturer' => 'UVEX',
+                'description' => $description,
+                'catalog_price_net' => 20,
+                'purchase_price' => 10,
+                'stock' => 5,
+            ]);
+        }
+        $this->app->instance(OpenAiCompatibleClient::class, FakeSearchLlm::empty());
+
+        $result = $this->app->make(ProductAiSearchService::class)->search('Rękawice montażowe powlekane uvex phynomic z funkcją ESD', 10);
+
+        $rows = collect($result['products'])->keyBy('sku');
+        $this->assertSame(ProductAiSearchService::MODEL_STATE_SKIPPED, $result['model_state'] ?? null, 'fixture: ścieżka nazwanego modelu');
+        $this->assertTrue($rows->has('6003805') && $rows->has('6004006'), 'fixture: obie karty modelu w wyniku');
+        $this->assertGreaterThanOrEqual(80, (int) $rows['6003805']['ai_match_percent']);
+        $this->assertLessThanOrEqual(60, (int) $rows['6004006']['ai_match_percent']);
+        $this->assertStringContainsString('tylko słownie', (string) $rows['6004006']['ai_match_reason']);
+        $this->assertSame('6003805', $result['products'][0]['sku']);
+    }
+
+    /**
+     * Wiersze reguły klasy obuwia (92) zostają wynikiem, gdy model nic nie zwróci — przy żądaniu ESD but z samym słowem
+     * „antyelektrostatyczna” w opisie to propozycja 60 za trafieniami reguły.
+     */
+    public function test_footwear_class_rule_rows_cap_word_only_boot_when_model_returns_nothing(): void
+    {
+        $this->boot('P-WORD', 'Półbuty ochronne S1P', 'Półbuty ochronne, podeszwa antyelektrostatyczna, podnosek kompozytowy.');
+        $this->boot('P-ESD', 'Półbuty ochronne S1P ESD', 'Półbuty ochronne ESD, podnosek kompozytowy.');
+        $this->app->instance(OpenAiCompatibleClient::class, FakeSearchLlm::empty());
+
+        $result = $this->app->make(ProductAiSearchService::class)->search('Półbuty ochronne S1P ESD', 10);
+
+        $rows = collect($result['products'])->keyBy('sku');
+        $this->assertTrue($rows->has('P-ESD') && $rows->has('P-WORD'), 'fixture: oba buty z reguły klasy');
+        $this->assertSame(ProductAiSearchService::MATCH_SOURCE_RULE, $rows['P-WORD']['ai_match_source'] ?? null, 'fixture: wiersz reguły');
+        $this->assertSame(92, (int) $rows['P-ESD']['ai_match_percent']);
+        $this->assertLessThanOrEqual(60, (int) $rows['P-WORD']['ai_match_percent']);
+        $this->assertStringContainsString('tylko słownie', (string) $rows['P-WORD']['ai_match_reason']);
+        $this->assertSame('P-ESD', $result['products'][0]['sku']);
+    }
+
+    /** Drugi element kompletu dokładany z katalogu (68) — przy żądaniu ESD karta z samym słowem to propozycja 60. */
+    public function test_apparel_set_complement_with_word_only_evidence_is_capped(): void
+    {
+        $jacket = $this->apparel('B-ESD', 'Bluza robocza ESD', 'Bluza robocza ESD z tkaniny z włóknem węglowym.');
+        $this->apparel('S-WORD', 'Spodnie robocze antyelektrostatyczne', 'Spodnie robocze do pracy w strefach zagrożenia wyładowaniem.');
+        $this->llmScoring([$jacket->id => 95], [
+            'needed' => 'bluza i spodnie robocze ESD',
+            'search_steps' => ['bluza', 'spodnie'],
+            'search_phrases' => ['bluza robocza ESD', 'spodnie robocze ESD'],
+            'constraints' => [],
+        ]);
+
+        $result = $this->app->make(AiProductSearch::class)->find('Ubranie robocze ESD: bluza + spodnie', 10);
+
+        $rows = collect($result['products'])->keyBy('sku');
+        $this->assertSame(95, (int) ($rows['B-ESD']['ai_match_percent'] ?? 0), 'fixture: bluza oceniona przez model');
+        $this->assertTrue($rows->has('S-WORD'), 'fixture: spodnie dołożone jako drugi element kompletu');
+        $this->assertLessThanOrEqual(60, (int) $rows['S-WORD']['ai_match_percent']);
+        $this->assertStringContainsString('tylko słownie', (string) $rows['S-WORD']['ai_match_reason']);
     }
 
     /**
@@ -224,6 +300,41 @@ final class ProductAiSearchWeakAntistaticTest extends TestCase
         $this->assertStringContainsString('Gdy wymaganie ma żargon/słowo cechy', $prompts[0], 'fixture: zapytanie ma żargon');
 
         return $prompts[0];
+    }
+
+    private function apparel(string $sku, string $name, string $description): Product
+    {
+        return Product::query()->create([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => 'Portwest',
+            'category' => 'Odzież robocza',
+            'description' => $description,
+            'catalog_price_net' => 90,
+            'purchase_price' => 60,
+            'stock' => 5,
+            'ppe_family' => PpeAssortment::FAMILY_APPAREL,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now()->subYear(),
+        ]);
+    }
+
+    private function boot(string $sku, string $name, string $description): Product
+    {
+        return Product::query()->create([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'description' => $description,
+            'norms' => 'EN ISO 20345:2011 S1P',
+            'catalog_price_net' => 150,
+            'purchase_price' => 100,
+            'stock' => 5,
+            'ppe_family' => PpeAssortment::FAMILY_FOOTWEAR,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now()->subYear(),
+        ]);
     }
 
     private function glove(string $sku, string $name, string $norms): Product

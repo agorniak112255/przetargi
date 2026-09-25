@@ -567,8 +567,9 @@ final class ProductAiSearchService
         $intent = $this->applySlangIntent($query, $this->normalizeIntent($intent));
         $searchIntent = $this->intentForRetrieval($intent);
         $modelQuery = $this->intentModelQuery($query, $searchIntent);
+        $requirement = $this->assortmentText($query, $intent['needed']);
         $candidates = $this->keepCompatible(
-            $this->assortmentText($query, $intent['needed']),
+            $requirement,
             $this->retrieveCandidates($query, $searchIntent, self::CANDIDATE_POOL)
         );
         $candidates = $this->mergeEyeWearSetCandidates($query, $candidates);
@@ -578,7 +579,14 @@ final class ProductAiSearchService
                 && $this->filterType->covers($query, $this->filterHaystack($p))
         )->values();
         if ($named->isNotEmpty()) {
-            $namedRows = $this->rowsFromNamedModels($modelQuery, $named, $limit);
+            // Słaby dowód ESD przy żądaniu klienta to propozycja także tu (decyzja właściciela z 25.09.2026: „wszędzie
+            // 60%”); żądanie z $query, bo $modelQuery bywa streszczeniem modelu (marka spoza katalogu).
+            $namedRows = $this->capWeakAntistaticRows(
+                $query,
+                $requirement,
+                $this->rowsFromNamedModels($modelQuery, $named, $limit),
+                $candidates
+            );
             if ($namedRows !== []) {
                 // Nazwany model (marka + model z SIWZ na karcie) to trafienie jak kod produktu (D7), nie reguła —
                 // bez rankingu modelu; ProductAiSearchApiTest pilnuje, że taka pozycja nie zużywa wywołania modelu.
@@ -590,13 +598,19 @@ final class ProductAiSearchService
                 ];
             }
         }
-        $snrRows = $this->rowsFromSnrMatches($query, $candidates, $limit);
+        // Wiersze reguł zostają wynikiem, gdy model nic nie zwróci — ten sam limit słabego dowodu ESD co w ocenie modelu.
+        $snrRows = $this->capWeakAntistaticRows($query, $requirement, $this->rowsFromSnrMatches($query, $candidates, $limit), $candidates);
         if ($snrRows !== []) {
             // Próg SNR na karcie to warunek konieczny, nie ocena: nagłowne vs nahełmowe, wkładki, zestaw ocenia model.
             // Dotąd wiersze reguły (80–99) szły do przetargu jako ocena modelu, choć model ich nie widział.
             return $this->ruleRowsRankedByModel($query, $snrRows, $candidates, $intent['constraints']);
         }
-        $classRows = $this->rowsFromFootwearClassMatches($query, $candidates, $limit);
+        $classRows = $this->capWeakAntistaticRows(
+            $query,
+            $requirement,
+            $this->rowsFromFootwearClassMatches($query, $candidates, $limit),
+            $candidates
+        );
         if ($classRows !== []) {
             // Klasa na karcie to warunek konieczny, nie werdykt: sandał vs trzewik, ESD, FO ocenia model.
             // Przetarg 1: poz. 3/5/12 dostawały płaskie 92 z reguły, przetarg ich nie ufał i model nie był
@@ -616,14 +630,24 @@ final class ProductAiSearchService
                 'candidates' => $candidates,
             ];
         }
-        $cutRows = $this->rowsFromCutResistanceMatches($query, $candidates, $limit);
+        $cutRows = $this->capWeakAntistaticRows(
+            $query,
+            $requirement,
+            $this->rowsFromCutResistanceMatches($query, $candidates, $limit),
+            $candidates
+        );
         if ($cutRows !== []) {
             // Jak reguła klasy obuwia (poz. 3): „odporność na przecięcie na nazwie” to warunek konieczny, nie
             // werdykt — powłoka (NBR vs PU), EN 407, poziom ISO ocenia model. tenders:eval: poz. 7 miała ranking
             // „skipped” w każdym przebiegu, przetarg nie ufał wierszom reguły (80) i brał KRYTECH 578 po słowach.
             return $this->ruleRowsRankedByModel($query, $cutRows, $candidates, $intent['constraints']);
         }
-        $bootRows = $this->rowsFromWeldedBootsCoverallMatches($query, $candidates, $limit);
+        $bootRows = $this->capWeakAntistaticRows(
+            $query,
+            $requirement,
+            $this->rowsFromWeldedBootsCoverallMatches($query, $candidates, $limit),
+            $candidates
+        );
         if ($bootRows !== []) {
             // Kaloszy na nazwie karty to warunek konieczny: materiał, S5, EN 343 ocenia model; reguła jest zapasem.
             return $this->ruleRowsRankedByModel($query, $bootRows, $candidates, $intent['constraints']);
@@ -2835,7 +2859,9 @@ final class ProductAiSearchService
                 $row = $this->productToRow($product);
                 $row['ai_match_percent'] = 68;
                 $row['ai_match_reason'] = 'Drugi element kompletu z katalogu.';
-                $ranked[] = $row;
+                // Element dokładany bez oceny modelu — ten sam limit słabego dowodu ESD co na innych ścieżkach.
+                $antistaticNote = $this->weakAntistaticNote($query, $query, $product);
+                $ranked[] = $antistaticNote === null ? $row : $this->withWeakAntistaticNote($row, $antistaticNote);
                 break;
             }
         }
@@ -2880,7 +2906,8 @@ final class ProductAiSearchService
                 $row['ai_match_reason'] = $need === 'case'
                     ? 'Etui z katalogu do kompletu z okularami.'
                     : 'Okulary z katalogu do kompletu z etui.';
-                $ranked[] = $row;
+                $antistaticNote = $this->weakAntistaticNote($query, $query, $product);
+                $ranked[] = $antistaticNote === null ? $row : $this->withWeakAntistaticNote($row, $antistaticNote);
                 $seen[(int) $product->id] = true;
                 break;
             }
@@ -5295,6 +5322,79 @@ final class ProductAiSearchService
     }
 
     /**
+     * Decyzje właściciela z 25.09.2026 (C z doprecyzowaniem, „wszędzie 60%”): gdy klient sam żąda ESD albo normy
+     * antystatyki, karta ze słabym dowodem — samo słowo, a dla rękawic i odzieży bez „ESD” / EN 1149 / EN 16350, dla
+     * obuwia bez „ESD” / EN 61340 — to propozycja do sprawdzenia, nie trafienie: najwyżej VARIANT_MISMATCH_SCORE, jak
+     * inny wariant modelu, na każdej ścieżce wyniku (ocena modelu, nazwany model, wiersze reguł, drugi element
+     * kompletu). Wymaganie z samym słowem normy nie żąda — wtedy samo słowo na karcie wystarcza.
+     *
+     * Żądanie czytamy z tekstu klienta ($clientQuery), nie z $requirement: gdy rodzaju wyrobu nie ma w zapytaniu,
+     * $requirement zawiera streszczenie modelu, a model dopisywał „(ESD)” do „wyrób antystatyczny”.
+     *
+     * @return string|null zdanie do uzasadnienia wiersza albo null, gdy limitu nie ma
+     */
+    private function weakAntistaticNote(string $clientQuery, string $requirement, Product $product): ?string
+    {
+        if (! $this->assortment->requiresStrongAntistatic($clientQuery)
+            || $this->assortment->productAntistaticEvidence($requirement, $product) !== PpeAssortment::ANTISTATIC_WEAK) {
+            return null;
+        }
+        $cardNorms = $this->assortment->productAntistaticNorms($product);
+        // Wymaganie wymienia normę, którą karta ma — spełnia je wprost, niezależnie od reguły rodzaju wyrobu.
+        if (array_intersect($cardNorms, $this->assortment->antistaticNormsIn($clientQuery)) !== []) {
+            return null;
+        }
+
+        // Uzasadnienie oddziela brak normy od normy, która dla tego wyrobu nie jest dowodem ESD (EN 1149 na bucie).
+        return $cardNorms === []
+            ? 'Karta podaje antystatykę tylko słownie, bez oznaczenia ESD ani normy — propozycja do sprawdzenia.'
+            : 'Karta podaje '.implode(', ', array_map(static fn (string $n): string => 'EN '.$n, $cardNorms))
+                .', a to nie jest dowód ESD dla tego rodzaju wyrobu — propozycja do sprawdzenia.';
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    private function withWeakAntistaticNote(array $row, string $note): array
+    {
+        $row['ai_match_percent'] = min((int) ($row['ai_match_percent'] ?? 0), self::VARIANT_MISMATCH_SCORE);
+        $row['ai_match_reason'] = trim((string) ($row['ai_match_reason'] ?? '').' '.$note);
+
+        return $row;
+    }
+
+    /**
+     * Limit słabego dowodu ESD (weakAntistaticNote) dla wierszy spoza oceny modelu: nazwany model (trafienie jak kod)
+     * i wiersze reguł, które zostają wynikiem, gdy model nic nie zwróci. Karty z limitem idą za resztą, bez zmiany
+     * kolejności w obu grupach — zapytania bez żądania ESD wychodzą bez zmian.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @param  Collection<int, Product>  $candidates
+     * @return list<array<string, mixed>>
+     */
+    private function capWeakAntistaticRows(string $clientQuery, string $requirement, array $rows, Collection $candidates): array
+    {
+        if ($rows === [] || ! $this->assortment->requiresStrongAntistatic($clientQuery)) {
+            return $rows;
+        }
+        $byId = $candidates->keyBy('id');
+        $kept = [];
+        $capped = [];
+        foreach ($rows as $row) {
+            $product = $byId->get((int) ($row['id'] ?? 0));
+            $note = $product instanceof Product ? $this->weakAntistaticNote($clientQuery, $requirement, $product) : null;
+            if ($note === null) {
+                $kept[] = $row;
+            } else {
+                $capped[] = $this->withWeakAntistaticNote($row, $note);
+            }
+        }
+
+        return [...$kept, ...$capped];
+    }
+
+    /**
      * @param  Collection<int, Product>  $products
      * @return list<array<string, mixed>>
      */
@@ -6186,23 +6286,10 @@ final class ProductAiSearchService
                 $score = min($score, self::MISSING_KEY_SCORE_CAP);
                 $reason = trim(($reason ?? '').' Brak dowodu typu obuwia: '.$typeGap.'.');
             }
-            $cardAntistaticNorms = $this->assortment->productAntistaticNorms($product);
-            // Żądanie ESD / normy czytamy z tekstu klienta ($query), nie z $requirement: gdy rodzaju wyrobu nie ma
-            // w zapytaniu, $requirement zawiera streszczenie modelu, a model dopisywał „(ESD)” do „wyrób antystatyczny”.
-            if ($this->assortment->requiresStrongAntistatic($query)
-                && $this->assortment->productAntistaticEvidence($requirement, $product) === PpeAssortment::ANTISTATIC_WEAK
-                // Wymaganie wymienia normę, którą karta ma — spełnia je wprost, niezależnie od reguły rodzaju wyrobu.
-                && array_intersect($cardAntistaticNorms, $this->assortment->antistaticNormsIn($query)) === []) {
-                // Decyzje właściciela z 25.09.2026: gdy wymaganie żąda ESD albo normy antystatyki, karta z samym słowem
-                // (bez „ESD”, a dla rękawic i odzieży bez EN 1149 / EN 16350, dla obuwia bez EN 61340) to propozycja do
-                // sprawdzenia, nie trafienie — poniżej progu zapisu, jak inny wariant. Wymaganie z samym słowem nie żąda
-                // normy, więc takie samo słowo na karcie wystarcza.
+            $antistaticNote = $this->weakAntistaticNote($query, $requirement, $product);
+            if ($antistaticNote !== null) {
                 $score = min($score, self::VARIANT_MISMATCH_SCORE);
-                // Uzasadnienie oddziela brak normy od normy, która dla tego wyrobu nie jest dowodem ESD (EN 1149 na bucie).
-                $reason = trim(($reason ?? '').($cardAntistaticNorms === []
-                    ? ' Karta podaje antystatykę tylko słownie, bez oznaczenia ESD ani normy — propozycja do sprawdzenia.'
-                    : ' Karta podaje '.implode(', ', array_map(static fn (string $n): string => 'EN '.$n, $cardAntistaticNorms))
-                        .', a to nie jest dowód ESD dla tego rodzaju wyrobu — propozycja do sprawdzenia.'));
+                $reason = trim(($reason ?? '').' '.$antistaticNote);
             }
             if ($this->assortment->missingWeldingFilterEvidence($requirement, $product)) {
                 // Ten sam wzorzec co wyżej: cecha ochronna sprawdzana deterministycznie, bo model

@@ -1948,11 +1948,17 @@ final class PpeAssortment
      */
     public function antistaticEvidence(string $requirement, string $productText): ?string
     {
+        return $this->antistaticEvidenceFor($this->family($requirement), $productText);
+    }
+
+    /** Siła dowodu dla danego rodzaju wyrobu (antistaticEvidence); null rodzaju = reguła rękawic i odzieży. */
+    private function antistaticEvidenceFor(?string $family, string $productText): ?string
+    {
         if (! $this->productShowsAntistatic($productText)) {
             return null;
         }
         $t = $this->normalize($productText);
-        $strong = $this->family($requirement) === self::FAMILY_FOOTWEAR
+        $strong = $family === self::FAMILY_FOOTWEAR
             ? '/\besd\b|'.self::NORM_61340.'/u'
             // Decyzja C dosłownie: rękawice i odzież — ESD, EN 1149 albo EN 16350; samo EN 61340 to tu propozycja.
             : '/\besd\b|'.self::NORM_1149.'|'.self::NORM_16350.'/u';
@@ -2019,7 +2025,8 @@ final class PpeAssortment
 
     /**
      * Siła dowodu antystatyki na karcie (antistaticEvidence) z tego samego tekstu, który czyta bramka: nazwa, SKU, normy,
-     * opis. null także wtedy, gdy wymaganie antystatyki nie żąda.
+     * opis. null także wtedy, gdy wymaganie antystatyki nie żąda. Rodzaj wyrobu z wymagania, a gdy wymaganie go nie
+     * podaje (sam model: „ARSO 701 616560 ESD”) — z karty; inaczej but z EN 61340 szedłby regułą rękawic.
      */
     public function productAntistaticEvidence(string $requirement, Product $product): ?string
     {
@@ -2027,7 +2034,10 @@ final class PpeAssortment
             return null;
         }
 
-        return $this->antistaticEvidence($requirement, $this->productCatalogEvidenceText($product));
+        return $this->antistaticEvidenceFor(
+            $this->family($requirement) ?? $this->productFamily($product),
+            $this->productCatalogEvidenceText($product)
+        );
     }
 
     /** Obuwie: S1P + „antystatyczna podeszwa” ≠ ESD z SIWZ — stosuj przy dopisywaniu katalogu (PHP %), nie przy ocenie modelu. */
