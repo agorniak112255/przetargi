@@ -65,6 +65,66 @@ final class ProductCatalogHealthTest extends TestCase
         $this->assertSame(9.44, OfferPricing::fromPurchase(8.0));
     }
 
+    public function test_report_counts_missing_attributes_by_payload(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        // Raport czyta enrichment_payload z wierszy bez modeli — wynik ma być taki jak z rzutowania 'array'.
+        $cards = [
+            'NULL' => [null, false],
+            'NO-ATTR' => [['sources' => ['https://example.com/karta']], false],
+            'ATTR-TEXT' => [['attributes' => 'rękawice nitrylowe'], false],
+            'EMPTY-NORMS' => [['attributes' => ['material' => null, 'kategoria_bhp' => null, 'normy_en' => []]], false],
+            'NORMS' => [['attributes' => ['normy_en' => ['EN 388']]], true],
+            'MATERIAL' => [['attributes' => ['material' => 'nitryl', 'kategoria_bhp' => null]], true],
+            'CATEGORY' => [['attributes' => ['kategoria_bhp' => 'rekawice']], true],
+        ];
+        $missing = [];
+        foreach ($cards as $sku => [$payload, $useful]) {
+            $product = Product::query()->create([
+                'sku' => $sku,
+                'name' => 'Karta '.$sku,
+                'manufacturer' => 'ATG',
+                'description' => 'Rękawica ochronna z powłoką nitrylową, EN 388.',
+                'catalog_price_net' => 10,
+                'purchase_price' => 8,
+                'stock' => 1,
+                'enrichment_status' => Product::ENRICHMENT_DONE,
+                'enrichment_payload' => $payload,
+            ]);
+            if (! $useful) {
+                $missing[] = $product->id;
+            }
+        }
+        // pozycja do ręcznego opisu nie jest ani „bez opisu”, ani „nie wzbogacona” — atrybuty liczą się jak u innych
+        $manual = Product::query()->create([
+            'sku' => 'MANUAL',
+            'name' => 'Do ręcznego opisu',
+            'manufacturer' => 'CANIS',
+            'catalog_price_net' => 10,
+            'purchase_price' => 8,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_MANUAL,
+        ]);
+        $missing[] = $manual->id;
+
+        $this->getJson('/api/products/catalog-health')
+            ->assertOk()
+            ->assertJsonPath('total', 8)
+            ->assertJsonPath('missing_attributes', 5)
+            ->assertJsonPath('sample_ids.missing_attributes', $missing)
+            ->assertJsonPath('missing_description', 0)
+            ->assertJsonPath('not_enriched', 0)
+            ->assertJsonPath('manual_review', 1)
+            ->assertJsonPath('with_description', 7);
+
+        $this->getJson('/api/products/catalog-health?manufacturer=ATG')
+            ->assertOk()
+            ->assertJsonPath('total', 7)
+            ->assertJsonPath('missing_attributes', 4)
+            ->assertJsonPath('sample_ids.missing_attributes', array_slice($missing, 0, 4));
+    }
+
     public function test_backfill_attributes_endpoint(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

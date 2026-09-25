@@ -13,6 +13,7 @@ use App\Services\Enrichment\ProductEnrichmentService;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ProductSizeVariant;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Casts\Json;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use RuntimeException;
@@ -69,10 +70,12 @@ final class ProductCatalogHealthService
         $idsNotEnriched = [];
         $idsMissingAttributes = [];
 
+        // Raport idzie przy każdym wejściu na Produkty i przechodzi przez cały katalog (25.09.2026: 48 tys. kart, 35 MB
+        // opisów, 17 MB enrichment_payload) — stąd wiersze bez modeli Eloquent i porcje po 1000 zamiast 200.
         (clone $base)
-            ->select(['id', 'description', 'enrichment_status', 'enrichment_payload', 'manufacturer'])
-            ->orderBy('id')
-            ->chunkById(200, function ($products) use (
+            ->select(['id', 'description', 'enrichment_status', 'enrichment_payload'])
+            ->toBase()
+            ->chunkById(1000, function ($products) use (
                 &$missingAttributes,
                 &$withDescription,
                 &$fromB2b,
@@ -91,7 +94,6 @@ final class ProductCatalogHealthService
                 );
 
                 foreach ($products as $product) {
-                    /** @var Product $product */
                     $manual = $product->enrichment_status === Product::ENRICHMENT_MANUAL;
                     $desc = trim((string) ($product->description ?? ''));
                     $b2b = isset($b2bDescribed[(int) $product->id]);
@@ -107,7 +109,11 @@ final class ProductCatalogHealthService
                     if ($product->enrichment_status !== Product::ENRICHMENT_DONE && ! $manual && ! $b2b) {
                         $idsNotEnriched[] = (int) $product->id;
                     }
-                    if (! $this->hasUsefulAttributes($product)) {
+                    // tak samo jak rzutowanie 'array' modelu (HasAttributes::fromJson)
+                    $payload = $product->enrichment_payload === null || $product->enrichment_payload === ''
+                        ? null
+                        : Json::decode($product->enrichment_payload, true);
+                    if (! $this->payloadHasUsefulAttributes($payload)) {
                         $missingAttributes++;
                         $idsMissingAttributes[] = (int) $product->id;
                     }
@@ -375,7 +381,13 @@ final class ProductCatalogHealthService
 
     private function hasUsefulAttributes(Product $product): bool
     {
-        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        return $this->payloadHasUsefulAttributes($product->enrichment_payload);
+    }
+
+    /** @param  mixed  $payload  zdekodowany enrichment_payload karty */
+    private function payloadHasUsefulAttributes(mixed $payload): bool
+    {
+        $payload = is_array($payload) ? $payload : [];
         $attrs = is_array($payload['attributes'] ?? null) ? $payload['attributes'] : null;
 
         return $attrs !== null && $this->attributesAreUseful($attrs);
