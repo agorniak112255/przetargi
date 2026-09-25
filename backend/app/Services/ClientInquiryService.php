@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Models\Client;
 use App\Models\ClientInquiry;
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Models\ProductSubstitute;
 use App\Models\User;
 use App\Services\Ai\AiSettingsService;
@@ -1123,8 +1124,8 @@ final class ClientInquiryService
         $client = $inquiry->relationLoaded('client') ? $inquiry->client : null;
         // Jedno zapytanie do bazy i tylko wtedy, gdy autor nie był wcześniej wczytany.
         $author = $inquiry->loadMissing('user')->user;
-        // warunek zamawiania (UVEX „po 10 szt.”) tylko w odpowiedzi — itemsView() zostaje widokiem zapisanej analizy
-        $items = $this->withOrderQuantities($this->itemsView($inquiry));
+        // warunek zamawiania (UVEX „po 10 szt.”) i zdjęcie karty tylko w odpowiedzi — itemsView() zostaje widokiem zapisanej analizy
+        $items = $this->withImages($this->withOrderQuantities($this->itemsView($inquiry)));
         $omitted = $this->omittedItemsOf($analysis);
 
         return [
@@ -1469,6 +1470,52 @@ final class ClientInquiryService
             foreach (['candidates', 'substitutes'] as $list) {
                 foreach ($item[$list] as $j => $product) {
                     $items[$i][$list][$j]['order_quantity'] = $quantities[(int) $product['id']] ?? null;
+                }
+            }
+        }
+
+        return $items;
+    }
+
+    /**
+     * Zdjęcie główne karty (a bez znacznika pierwsze w kolejności karty) przy kandydatach i zamiennikach: miniatura
+     * do widoku pozycji i pełne zdjęcie po jej kliknięciu — jednym zapytaniem dla wszystkich pozycji. Stan karty
+     * z chwili odpowiedzi: zdjęcia dochodzą z synchronizacji i znikają po odrzuceniu, więc do zapisanej analizy
+     * nie trafiają. null = karta bez zdjęcia.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @return list<array<string, mixed>>
+     */
+    private function withImages(array $items): array
+    {
+        $ids = [];
+        foreach ($items as $item) {
+            foreach ([...$item['candidates'], ...$item['substitutes']] as $product) {
+                $ids[(int) $product['id']] = true;
+            }
+        }
+        unset($ids[0]);
+        if ($ids === []) {
+            return $items;
+        }
+        $images = [];
+        foreach (ProductImage::query()
+            ->whereIn('product_id', array_keys($ids))
+            ->orderByDesc('is_primary')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get(['id', 'product_id', 'path', 'source_url']) as $image) {
+            $images[(int) $image->product_id] ??= [
+                'thumb_url' => $image->thumbUrl(),
+                'image_url' => $image->url(),
+            ];
+        }
+        foreach ($items as $i => $item) {
+            foreach (['candidates', 'substitutes'] as $list) {
+                foreach ($item[$list] as $j => $product) {
+                    $image = $images[(int) $product['id']] ?? null;
+                    $items[$i][$list][$j]['thumb_url'] = $image['thumb_url'] ?? null;
+                    $items[$i][$list][$j]['image_url'] = $image['image_url'] ?? null;
                 }
             }
         }
@@ -2152,6 +2199,9 @@ final class ClientInquiryService
             'source' => $this->nullable($product['source'] ?? null),
             // uzupełnia present() hurtem (withOrderQuantities); null = brak warunku
             'order_quantity' => null,
+            // uzupełnia present() hurtem (withImages): miniatura i pełne zdjęcie; null = karta bez zdjęcia
+            'thumb_url' => null,
+            'image_url' => null,
         ];
     }
 

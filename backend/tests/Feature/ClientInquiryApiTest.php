@@ -9,7 +9,9 @@ use App\Models\B2bProductLink;
 use App\Models\Client;
 use App\Models\ClientInquiry;
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductSubstitute;
 use App\Models\User;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
@@ -366,6 +368,75 @@ final class ClientInquiryApiTest extends TestCase
         $this->getJson('/api/inquiries/'.$inquiry->id)
             ->assertOk()
             ->assertJsonPath('items.0.candidates.0.order_quantity.step', 5);
+    }
+
+    public function test_candidate_and_substitute_carry_live_primary_image_not_saved_in_analysis(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $gloves = Product::query()->create([
+            'sku' => 'RNITZ', 'name' => 'Rękawice ochronne NITZ', 'manufacturer' => 'Reis',
+            'catalog_price_net' => 3.23, 'purchase_price' => 2.00, 'stock' => 30,
+        ]);
+        $bare = Product::query()->create([
+            'sku' => 'RNITRIO', 'name' => 'Rękawice nitrylowe NITRIO', 'manufacturer' => 'Reis',
+            'catalog_price_net' => 2.10, 'purchase_price' => 1.00, 'stock' => 30,
+        ]);
+        $substitute = Product::query()->create([
+            'sku' => 'RNITREX', 'name' => 'Rękawice powlekane NITREX', 'manufacturer' => 'Reis',
+            'catalog_price_net' => 3.50, 'purchase_price' => 2.20, 'stock' => 30,
+        ]);
+        ProductSubstitute::query()->create([
+            'main_product_id' => $gloves->id, 'substitute_product_id' => $substitute->id,
+            'type' => 'tanszy', 'match_percent' => 80, 'approval_status' => 'zatwierdzony',
+        ]);
+        // starsze zdjęcie bez znacznika głównego — widok pokazuje główne, nie pierwsze założone
+        $side = ProductImage::query()->create(['product_id' => $gloves->id, 'path' => 'bok.jpg', 'is_primary' => false, 'sort_order' => 1]);
+        $primary = ProductImage::query()->create(['product_id' => $gloves->id, 'path' => 'front.jpg', 'is_primary' => true, 'sort_order' => 0]);
+        // zdjęcie z sieci bez pliku u nas: pełne zdjęcie to adres źródła, miniaturę robi nasz serwer
+        $remote = ProductImage::query()->create([
+            'product_id' => $substitute->id, 'path' => 'remote', 'source_url' => 'https://example.com/nitrex.jpg',
+            'is_primary' => true, 'sort_order' => 0,
+        ]);
+
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Rękawice', 'questions' => [], 'product_queries' => ['rękawice nitz'], 'line_items' => [], 'cards' => [],
+            ]);
+        });
+        $this->mock(ProductInquirySearch::class, function ($mock) use ($gloves, $bare): void {
+            $row = static fn (Product $p, int $score): array => [
+                'id' => $p->id, 'sku' => $p->sku, 'name' => $p->name, 'manufacturer' => $p->manufacturer, 'norms' => '',
+                'catalog_price_net' => (string) $p->catalog_price_net, 'purchase_price' => (string) $p->purchase_price,
+                'currency' => 'PLN', 'stock' => 30, 'ai_match_percent' => $score,
+            ];
+            $mock->shouldReceive('findMany')->once()->andReturn([[
+                'query' => 'rękawice nitz', 'products' => [$row($gloves, 94), $row($bare, 60)],
+            ]]);
+        });
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', ['body' => 'Proszę o ofertę na rękawice NITZ.', 'tone' => 'handlowy'])
+            ->assertCreated()
+            ->assertJsonPath('items.0.candidates.0.id', $gloves->id)
+            ->assertJsonPath('items.0.candidates.0.thumb_url', route('product-images.thumb', $primary))
+            ->assertJsonPath('items.0.candidates.0.image_url', $primary->url())
+            ->assertJsonPath('items.0.candidates.1.id', $bare->id)
+            ->assertJsonPath('items.0.candidates.1.thumb_url', null)
+            ->assertJsonPath('items.0.candidates.1.image_url', null)
+            ->assertJsonPath('items.0.substitutes.0.id', $substitute->id)
+            ->assertJsonPath('items.0.substitutes.0.thumb_url', route('product-images.thumb', $remote))
+            ->assertJsonPath('items.0.substitutes.0.image_url', 'https://example.com/nitrex.jpg');
+
+        // migawka analizy bez zdjęć — zdjęcie z chwili odpowiedzi, np. po usunięciu złego zdjęcia z karty
+        $inquiry = ClientInquiry::query()->findOrFail($res->json('id'));
+        $snapshot = json_encode($inquiry->analysis, JSON_THROW_ON_ERROR);
+        $this->assertStringNotContainsString('thumb_url', $snapshot);
+        $this->assertStringNotContainsString('image_url', $snapshot);
+        $primary->delete();
+        $this->getJson('/api/inquiries/'.$inquiry->id)
+            ->assertOk()
+            ->assertJsonPath('items.0.candidates.0.thumb_url', route('product-images.thumb', $side))
+            ->assertJsonPath('items.0.candidates.0.image_url', $side->url());
     }
 
     public function test_store_prices_with_account_default_margin_not_last_inquiry(): void

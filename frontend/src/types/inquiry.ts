@@ -51,6 +51,10 @@ export type InquiryCandidate = {
   order_quantity?: OrderQuantity | null
   /** null = wyrób w bieżącej ofercie producenta (albo karta o wycofaniu nie mówi). */
   withdrawn?: InquiryWithdrawn | null
+  /** Miniatura zdjęcia głównego karty z chwili odpowiedzi; null = karta bez zdjęcia. */
+  thumb_url?: string | null
+  /** Pełne zdjęcie główne karty (po kliknięciu miniatury); null = karta bez zdjęcia. */
+  image_url?: string | null
 }
 
 export type InquirySubstitute = {
@@ -65,6 +69,10 @@ export type InquirySubstitute = {
   score: number | null
   reason: string | null
   withdrawn?: InquiryWithdrawn | null
+  /** Miniatura zdjęcia głównego karty z chwili odpowiedzi; null = karta bez zdjęcia. */
+  thumb_url?: string | null
+  /** Pełne zdjęcie główne karty (po kliknięciu miniatury); null = karta bez zdjęcia. */
+  image_url?: string | null
 }
 
 export type InquiryConfidence = 'high' | 'medium' | 'none'

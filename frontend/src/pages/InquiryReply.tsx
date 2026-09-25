@@ -10,6 +10,7 @@ import { api, type OrderQuantity } from '../lib/api'
 import { toneHint, toneOptions } from '../lib/inquiryTone'
 import type {
   InquiryAnswer,
+  InquiryCandidate,
   InquiryCard,
   InquiryConfidence,
   InquiryDuplicateRef,
@@ -31,6 +32,10 @@ type SearchFor = { itemId: string; mode: SearchMode; query: string }
 type Answers = Record<string, InquiryAnswer>
 /** Warunki w polach formularza — pusty string zamiast null, bo tak działa `<input>`. */
 type TermsDraft = Record<keyof InquiryTerms, string>
+/** Karta ze zdjęciem przy pozycji: wybrany wyrób albo wybrany zamiennik (zamiennik ma te same pola). */
+type PhotoCard = Pick<InquiryCandidate, 'id' | 'sku' | 'name' | 'manufacturer' | 'thumb_url' | 'image_url'>
+/** Otwarte pełne zdjęcie; `fallback` — miniatura, gdy pełnego nie da się wczytać. */
+type OpenPhoto = { url: string; fallback: string | null; title: string }
 
 const PLN = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' })
 
@@ -282,6 +287,106 @@ function RadioDot({ on }: { on: boolean }) {
   )
 }
 
+/**
+ * Miniatura zdjęcia karty, która wejdzie do listu — handlowiec widzi, czy to ten wyrób, bez otwierania karty.
+ * Kliknięcie pokazuje pełne zdjęcie. Karta bez zdjęcia albo zdjęcie, którego nie da się wczytać = puste pole z napisem.
+ */
+function ProductThumb({ card, label, onOpen }: { card: PhotoCard; label: string; onOpen: (photo: OpenPhoto) => void }) {
+  const [broken, setBroken] = useState(false)
+  const thumb = card.thumb_url || card.image_url || null
+  const full = card.image_url || thumb
+  const title = [card.sku, card.name, card.manufacturer].filter(Boolean).join(' · ')
+  // 128 px dopiero na szerokiej liście — przy węższej kolumnie „Klient napisał” duża miniatura ściskała uwagi obok
+  const box = 'flex h-20 w-20 items-center justify-center overflow-hidden rounded-lg border bg-white @5xl:h-32 @5xl:w-32'
+  return (
+    <figure className="w-20 @5xl:w-32">
+      {thumb && full && !broken ? (
+        <button
+          type="button"
+          onClick={() => onOpen({ url: full, fallback: thumb, title })}
+          title="Pokaż pełne zdjęcie"
+          className={`${box} border-slate-300 hover:border-blue-400`}
+        >
+          <img
+            src={thumb}
+            alt={title}
+            loading="lazy"
+            className="h-full w-full object-contain"
+            onError={() => setBroken(true)}
+          />
+        </button>
+      ) : (
+        <div className={`${box} border-dashed border-slate-300 px-1 text-center text-[10px] leading-tight text-slate-400`}>
+          {thumb ? 'zdjęcie niedostępne' : 'karta bez zdjęcia'}
+        </div>
+      )}
+      <figcaption className="mt-0.5 truncate text-center text-[10px] text-slate-500" title={title}>
+        {label}
+      </figcaption>
+    </figure>
+  )
+}
+
+/** Pełne zdjęcie karty; gdy serwer źródła go nie odda, zostaje miniatura z naszego serwera. */
+function ProductPhotoModal({ photo, onClose }: { photo: OpenPhoto; onClose: () => void }) {
+  const [src, setSrc] = useState(photo.url)
+  const [failed, setFailed] = useState(false)
+  const closeRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    closeRef.current?.focus()
+    return () => previous?.focus?.()
+  }, [])
+
+  useEffect(() => {
+    // Nasłuch w fazie capture, jak w innych oknach: Escape zamyka tylko to wierzchnie.
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={photo.title}
+      onClick={onClose}
+    >
+      <div className="relative max-h-[90vh] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
+        <button
+          ref={closeRef}
+          type="button"
+          onClick={onClose}
+          className="absolute -right-2 -top-2 rounded bg-white px-2 py-1 text-xs shadow"
+        >
+          Zamknij
+        </button>
+        {failed ? (
+          <p className="rounded bg-white px-4 py-3 text-sm text-slate-700">Nie można wyświetlić zdjęcia.</p>
+        ) : (
+          <img
+            src={src}
+            alt={photo.title}
+            className="max-h-[80vh] max-w-[90vw] rounded bg-white object-contain"
+            onError={() => {
+              if (photo.fallback && src !== photo.fallback) setSrc(photo.fallback)
+              else setFailed(true)
+            }}
+          />
+        )}
+        <p className="mt-1 max-w-[90vw] truncate text-center text-xs text-white">{photo.title}</p>
+      </div>
+    </div>
+  )
+}
+
 const priceModeOptions: { id: InquiryPriceMode; label: string }[] = [
   { id: 'none', label: 'Bez cen' },
   { id: 'catalog', label: 'Cena katalogowa' },
@@ -488,6 +593,7 @@ function ItemRow({
   onCustomDraft,
   onAnswer,
   onPreview,
+  onPhoto,
   onSearch,
   manualDraft,
   onManualDraft,
@@ -502,6 +608,7 @@ function ItemRow({
   onCustomDraft: (cardId: string, value: string) => void
   onAnswer: (key: string, answer: InquiryAnswer) => void
   onPreview: (productId: number, query: string) => void
+  onPhoto: (photo: OpenPhoto) => void
   /** `query` — fraza startowa zamiast frazy pozycji (np. nazwa następcy wycofanego wyrobu). */
   onSearch: (mode: SearchMode, query?: string) => void
   manualDraft: string
@@ -522,6 +629,11 @@ function ItemRow({
   const withdrawnInLetter = [chosen, chosenSub].flatMap((p) =>
     p?.withdrawn ? [{ id: p.id, sku: p.sku, successor: p.withdrawn.successor }] : [],
   )
+  // Zdjęcia tych samych wyrobów: wybrana karta i wybrany zamiennik; „Sprawdzimy i wrócimy” — bez zdjęcia.
+  const photos: { card: PhotoCard; label: string }[] = [
+    ...(chosen ? [{ card: chosen, label: chosen.sku }] : []),
+    ...(chosenSub ? [{ card: chosenSub, label: `zamiennik: ${chosenSub.sku}` }] : []),
+  ]
   const meta = [item.qty, item.unit].filter(Boolean).join(' ')
   const checking = item.chosen === 'check'
   const inLetter = chosen
@@ -559,120 +671,132 @@ function ItemRow({
           </blockquote>
         )}
 
-        {item.flags.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {item.flags.map((f) => (
-              <span
-                key={f}
-                className={`inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-[11px] ${flagTone[f].cls}`}
-              >
-                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${flagTone[f].dot}`} />
-                {flagLabel[f]}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {/* Wniosek modelu, nie fakt z maila — dlatego dopisek o ocenie AI i prośba o wyjaśnienie z klientem. */}
-        {item.conflict && (
-          <div className="flex items-start gap-2 rounded-lg border-2 border-red-500 bg-red-50 px-2.5 py-2 text-xs leading-relaxed text-red-900">
-            <svg
-              viewBox="0 0 24 24"
-              className="mt-px h-4 w-4 shrink-0"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={2.2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-              <line x1="12" y1="9" x2="12" y2="13" />
-              <line x1="12" y1="17" x2="12.01" y2="17" />
-            </svg>
-            <div>
-              <p className="font-bold">Sprzeczność w zapytaniu — wyjaśnij z klientem</p>
-              <p>{item.conflict}</p>
-              <p className="mt-0.5 text-[11px] text-red-700">Ocena AI, nie fakt z maila.</p>
-            </div>
-          </div>
-        )}
-
-        {item.brand_not_in_catalog && (
-          <p className="rounded-lg border-2 border-orange-400 bg-orange-50 px-2.5 py-1.5 text-xs leading-relaxed text-orange-900">
-            <span className="font-semibold">Marki „{item.brand_not_in_catalog}” nie ma w katalogu.</span> Kandydaci to
-            zamienniki innej marki — do listu wejdzie dopiero ten, który wybierzesz.
-          </p>
-        )}
-
-        {/* Stan karty ze strony producenta, nie ocena AI. Do listu dopisek nie wchodzi — decyzja należy do handlowca. */}
-        {withdrawnInLetter.map((w) => (
-          <div
-            key={w.id}
-            className="rounded-lg border-2 border-red-500 bg-red-50 px-2.5 py-1.5 text-xs leading-relaxed text-red-900"
-          >
-            <p>
-              <span className="font-semibold">{w.sku} — wyrób wycofany przez producenta.</span>{' '}
-              {w.successor ? (
-                <>
-                  Następca według strony producenta: <span className="font-semibold">{w.successor}</span>.
-                </>
-              ) : (
-                'Strona producenta nie podaje następcy.'
-              )}
-            </p>
-            <p className="mt-0.5 text-[11px] text-red-700">
-              Klient tej informacji w liście nie zobaczy — zdecyduj, czy oferować ten wyrób, czy następcę.
-            </p>
-            {w.successor && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => onSearch('catalog', w.successor!)}
-                className="mt-1 rounded-full border border-sky-300 bg-white px-2 py-0.5 text-[11px] font-medium text-sky-800 hover:bg-sky-50 disabled:opacity-50"
-              >
-                Szukaj następcy w katalogu
-              </button>
+        {/* Uwagi do pozycji po lewej, a po prawej, pod cytatem klienta, zdjęcia wyrobów, które wejdą do listu. */}
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1 space-y-2">
+            {item.flags.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {item.flags.map((f) => (
+                  <span
+                    key={f}
+                    className={`inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5 text-[11px] ${flagTone[f].cls}`}
+                  >
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${flagTone[f].dot}`} />
+                    {flagLabel[f]}
+                  </span>
+                ))}
+              </div>
             )}
-          </div>
-        ))}
 
-        {/* Warunki szczególne klienta: wprost, z werdyktem karty. Karta bez
-            potwierdzenia nie wchodzi do listu, więc handlowiec musi wiedzieć,
-            czego brakuje i gdzie sam ma to sprawdzić. */}
-        {item.requirements.length > 0 && (
-          <ul className="space-y-1">
-            {item.requirements.map((req) => (
-              <li key={req.text} className="text-[11px] leading-relaxed">
-                <span className="font-semibold text-slate-800">Warunek z zapytania:</span>{' '}
-                <span className="text-slate-800">{req.text}</span>{' '}
-                {!req.checkable ? (
-                  <span className="text-slate-500">— sprawdź sam, tego nie sprawdzi żadna reguła</span>
-                ) : req.ok === true ? (
-                  <span className="text-emerald-700">— potwierdzony w karcie</span>
-                ) : (
-                  <span className="text-red-700">— karta tego nie potwierdza</span>
+            {/* Wniosek modelu, nie fakt z maila — dlatego dopisek o ocenie AI i prośba o wyjaśnienie z klientem. */}
+            {item.conflict && (
+              <div className="flex items-start gap-2 rounded-lg border-2 border-red-500 bg-red-50 px-2.5 py-2 text-xs leading-relaxed text-red-900">
+                <svg
+                  viewBox="0 0 24 24"
+                  className="mt-px h-4 w-4 shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2.2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                <div>
+                  <p className="font-bold">Sprzeczność w zapytaniu — wyjaśnij z klientem</p>
+                  <p>{item.conflict}</p>
+                  <p className="mt-0.5 text-[11px] text-red-700">Ocena AI, nie fakt z maila.</p>
+                </div>
+              </div>
+            )}
+
+            {item.brand_not_in_catalog && (
+              <p className="rounded-lg border-2 border-orange-400 bg-orange-50 px-2.5 py-1.5 text-xs leading-relaxed text-orange-900">
+                <span className="font-semibold">Marki „{item.brand_not_in_catalog}” nie ma w katalogu.</span> Kandydaci to
+                zamienniki innej marki — do listu wejdzie dopiero ten, który wybierzesz.
+              </p>
+            )}
+
+            {/* Stan karty ze strony producenta, nie ocena AI. Do listu dopisek nie wchodzi — decyzja należy do handlowca. */}
+            {withdrawnInLetter.map((w) => (
+              <div
+                key={w.id}
+                className="rounded-lg border-2 border-red-500 bg-red-50 px-2.5 py-1.5 text-xs leading-relaxed text-red-900"
+              >
+                <p>
+                  <span className="font-semibold">{w.sku} — wyrób wycofany przez producenta.</span>{' '}
+                  {w.successor ? (
+                    <>
+                      Następca według strony producenta: <span className="font-semibold">{w.successor}</span>.
+                    </>
+                  ) : (
+                    'Strona producenta nie podaje następcy.'
+                  )}
+                </p>
+                <p className="mt-0.5 text-[11px] text-red-700">
+                  Klient tej informacji w liście nie zobaczy — zdecyduj, czy oferować ten wyrób, czy następcę.
+                </p>
+                {w.successor && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onSearch('catalog', w.successor!)}
+                    className="mt-1 rounded-full border border-sky-300 bg-white px-2 py-0.5 text-[11px] font-medium text-sky-800 hover:bg-sky-50 disabled:opacity-50"
+                  >
+                    Szukaj następcy w katalogu
+                  </button>
                 )}
-              </li>
+              </div>
             ))}
-          </ul>
-        )}
 
-        {item.cards.map((card) => (
-          <div key={card.id} className="rounded-lg border border-violet-200 bg-white p-2.5">
-            <span className="mb-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-800">
-              {answers[card.id] ? 'Pytanie AI' : 'Pytanie AI · bez odpowiedzi'}
-            </span>
-            <CardChips
-              card={card}
-              answers={answers}
-              busy={busy}
-              customDraft={customDrafts[card.id] ?? ''}
-              onCustomDraft={(v) => onCustomDraft(card.id, v)}
-              onAnswer={onAnswer}
-            />
+            {/* Warunki szczególne klienta: wprost, z werdyktem karty. Karta bez
+                potwierdzenia nie wchodzi do listu, więc handlowiec musi wiedzieć,
+                czego brakuje i gdzie sam ma to sprawdzić. */}
+            {item.requirements.length > 0 && (
+              <ul className="space-y-1">
+                {item.requirements.map((req) => (
+                  <li key={req.text} className="text-[11px] leading-relaxed">
+                    <span className="font-semibold text-slate-800">Warunek z zapytania:</span>{' '}
+                    <span className="text-slate-800">{req.text}</span>{' '}
+                    {!req.checkable ? (
+                      <span className="text-slate-500">— sprawdź sam, tego nie sprawdzi żadna reguła</span>
+                    ) : req.ok === true ? (
+                      <span className="text-emerald-700">— potwierdzony w karcie</span>
+                    ) : (
+                      <span className="text-red-700">— karta tego nie potwierdza</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {item.cards.map((card) => (
+              <div key={card.id} className="rounded-lg border border-violet-200 bg-white p-2.5">
+                <span className="mb-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-800">
+                  {answers[card.id] ? 'Pytanie AI' : 'Pytanie AI · bez odpowiedzi'}
+                </span>
+                <CardChips
+                  card={card}
+                  answers={answers}
+                  busy={busy}
+                  customDraft={customDrafts[card.id] ?? ''}
+                  onCustomDraft={(v) => onCustomDraft(card.id, v)}
+                  onAnswer={onAnswer}
+                />
+              </div>
+            ))}
           </div>
-        ))}
+          {photos.length > 0 && (
+            <div className="flex shrink-0 gap-2">
+              {photos.map((p, i) => (
+                <ProductThumb key={`${i}:${p.card.id}:${p.card.thumb_url ?? ''}`} card={p.card} label={p.label} onOpen={onPhoto} />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="col-start-2 min-w-0 space-y-2 border-t border-slate-200 p-3 @2xl:col-start-auto @2xl:border-l @2xl:border-t-0">
@@ -1142,6 +1266,7 @@ export function InquiryReply() {
   const [checked, setChecked] = useState<Record<number, boolean>>({})
   const [previewId, setPreviewId] = useState<number | null>(null)
   const [previewQuery, setPreviewQuery] = useState('')
+  const [photo, setPhoto] = useState<OpenPhoto | null>(null)
   const [searchFor, setSearchFor] = useState<SearchFor | null>(null)
   const [contactOpen, setContactOpen] = useState(false)
   const [replyOpen, setReplyOpen] = useState(false)
@@ -1730,6 +1855,7 @@ export function InquiryReply() {
                   setPreviewId(pid)
                   setPreviewQuery(q.trim())
                 }}
+                onPhoto={setPhoto}
                 onSearch={(mode, query) =>
                   setSearchFor({
                     itemId: item.id,
@@ -1933,6 +2059,9 @@ export function InquiryReply() {
           setPreviewQuery('')
         }}
       />
+
+      {/* Poza listą pozycji: jej @container zamyka elementy „fixed” w swoim obrysie. */}
+      {photo && <ProductPhotoModal key={photo.url} photo={photo} onClose={() => setPhoto(null)} />}
 
       <ProductAiMatchModal
         open={searchFor !== null}
