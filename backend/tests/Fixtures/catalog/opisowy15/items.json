@@ -48,7 +48,9 @@
                 "similar"
             ]
         },
-        "source_facts": "Z opisu: rękaw antyprzecięciowy 475 mm, hi-vis fluo żółty, rzep, bezszwowy, nylon/poliester/włókno szklane, antystatyczny, bez lateksu i silikonu, FDA, kat. III, EN 420:2003+A1:2009, EN 388 (2.X.4.2.C), EN 407 (X.1.X.X.X), ciepło kontaktowe do 100°C. Pominięto marketingowe 'cut level 5' (niespójne z oznaczeniem EN 388 X w teście coupe)."
+        "source_facts": "Z opisu: rękaw antyprzecięciowy 475 mm, hi-vis fluo żółty, rzep, bezszwowy, nylon/poliester/włókno szklane, antystatyczny, bez lateksu i silikonu, FDA, kat. III, EN 420:2003+A1:2009, EN 388 (2.X.4.2.C), EN 407 (X.1.X.X.X), ciepło kontaktowe do 100°C. Pominięto marketingowe 'cut level 5' (niespójne z oznaczeniem EN 388 X w teście coupe).",
+        "eval_catalog_note": "Decyzja właściciela (25.09.2026): katalog nie ma rękawa spełniającego wymaganie. 11202000 – Ansell HyFlex 11-202 (id 8681) zostaje najlepszą kartą katalogu dla pomiaru wyszukiwania, ale nie spełnia: EN 388 „1X42C” (ścieranie 1, wymagane 2), „kat. II” (wymagana III) oraz rękaw jest cięty i szyty — przetarg ma zostawić pozycję pustą (tender_expect_empty).",
+        "eval_catalog_expect_empty": true
     },
     {
         "line_no": 2,
@@ -217,7 +219,11 @@
                 "similar"
             ]
         },
-        "source_facts": "Z opisu: poliester powlekany PU, pionowe pasy, regulacja paska szyjnego, szeroka szelka, wiązanie z tyłu, odporność na tłuszcze/enzymy/soki trawienne/słabe kwasy i zasady, niskie temperatury, EN ISO 13688, EN 343, branże. Wymiar 120/75 wzięto z nazwy (opis wymienia warianty 75x75 i 100x75)."
+        "source_facts": "Z opisu: poliester powlekany PU, pionowe pasy, regulacja paska szyjnego, szeroka szelka, wiązanie z tyłu, odporność na tłuszcze/enzymy/soki trawienne/słabe kwasy i zasady, niskie temperatury, EN ISO 13688, EN 343, branże. Wymiar 120/75 wzięto z nazwy (opis wymienia warianty 75x75 i 100x75).",
+        "eval_catalog_expected_skus": [
+            "203"
+        ],
+        "eval_catalog_note": "Decyzja właściciela (25.09.2026): wzorcowa 203 – AJ GROUP „Fartuch dla przemysłu mięsnego” (id 269): opis pokrywa się z wymaganiem prawie dosłownie, „EN ISO 13688, EN 343”; różnica: podkład poliamidowy zamiast poliestrowego. 202 (id 278) zostaje neutralna — nie dowodzi większości warunków."
     },
     {
         "line_no": 5,
@@ -582,7 +588,11 @@
                 "similar"
             ]
         },
-        "source_facts": "Z opisu źródłowego: sterylny izotoniczny roztwór NaCl bez konserwantów, neutralizacja kwasów i zasad, butelka 500 ml z wanienką, otwieranie przez przekręcenie, korek, montaż w uchwycie ściennym, wymiary Ø 6,6 x 23,5 cm, przydatność 5 lat, wyrób medyczny CE, obszary zastosowania."
+        "source_facts": "Z opisu źródłowego: sterylny izotoniczny roztwór NaCl bez konserwantów, neutralizacja kwasów i zasad, butelka 500 ml z wanienką, otwieranie przez przekręcenie, korek, montaż w uchwycie ściennym, wymiary Ø 6,6 x 23,5 cm, przydatność 5 lat, wyrób medyczny CE, obszary zastosowania.",
+        "eval_acceptable_skus": [
+            "725200"
+        ],
+        "eval_acceptable_note": "Równoważnik (decyzja właściciela 25.09.2026): 725200 – CEDERROTH Eye Wash 2-pack (id 26560): „2x500 ml”, sterylny, izotoniczny roztwór — ten sam płyn w dwupaku, nie pojedyncza butelka."
     },
     {
         "line_no": 12,
@@ -741,7 +751,12 @@
                 "similar"
             ]
         },
-        "source_facts": "Z opisu źródłowego: klasa A2 wg EN 14387, gazy i pary organiczne o temp. wrzenia >65°C, lista związków, stężenie do 0,5% (5000 ppm), obudowa z tworzywa, złącze bagnetowe, łączenie z filtrami cząstek, 2 szt. na komplet, obszary zastosowania."
+        "source_facts": "Z opisu źródłowego: klasa A2 wg EN 14387, gazy i pary organiczne o temp. wrzenia >65°C, lista związków, stężenie do 0,5% (5000 ppm), obudowa z tworzywa, złącze bagnetowe, łączenie z filtrami cząstek, 2 szt. na komplet, obszary zastosowania.",
+        "eval_acceptable_skus": [
+            "7000034749",
+            "MSA-PO-A2"
+        ],
+        "eval_acceptable_note": "Równoważniki (decyzja właściciela 25.09.2026): spełniają warunki kluczowe (A2, złącze bagnetowe, para), karta nie podaje tylko obudowy z tworzywa. 7000034749 – 3M 6055 (id 40757): „A2, 6055”, „złączem bagnetowym”; MSA-PO-A2 – MSA (id 34046): „typ A2”, „podwójnym połączeniem bagnetowym”, „EN14387”, opakowanie 2 szt."
     },
     {
         "line_no": 15,

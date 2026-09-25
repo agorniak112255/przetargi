@@ -281,7 +281,9 @@
                 "48130110",
                 "3440-003-100-00"
             ],
-            "note": "Z opisu: rękaw antyprzecięciowy 475 mm, hi-vis fluo żółty, rzep, bezszwowy, nylon/poliester/włókno szklane, antystatyczny, bez lateksu i silikonu, FDA, kat. III, EN 420:2003+A1:2009, EN 388 (2.X.4.2.C), EN 407 (X.1.X.X.X), ciepło kontaktowe do 100°C. Pominięto marketingowe 'cut level 5' (niespójne z oznaczeniem EN 388 X w teście coupe)."
+            "note": "Z opisu: rękaw antyprzecięciowy 475 mm, hi-vis fluo żółty, rzep, bezszwowy, nylon/poliester/włókno szklane, antystatyczny, bez lateksu i silikonu, FDA, kat. III, EN 420:2003+A1:2009, EN 388 (2.X.4.2.C), EN 407 (X.1.X.X.X), ciepło kontaktowe do 100°C. Pominięto marketingowe 'cut level 5' (niespójne z oznaczeniem EN 388 X w teście coupe).",
+            "catalog_note": "Decyzja właściciela (25.09.2026): katalog nie ma rękawa spełniającego wymaganie. 11202000 – Ansell HyFlex 11-202 (id 8681) zostaje najlepszą kartą katalogu dla pomiaru wyszukiwania, ale nie spełnia: EN 388 „1X42C” (ścieranie 1, wymagane 2), „kat. II” (wymagana III) oraz rękaw jest cięty i szyty — przetarg ma zostawić pozycję pustą (tender_expect_empty).",
+            "tender_expect_empty": true
         },
         {
             "id": "opisowy15-02-rekawice-antyprzecieciowe-en388",
@@ -339,12 +341,13 @@
             "id": "opisowy15-04-fartuch-wodoochronny-120x75",
             "query": "Fartuch przedni wodoochronny, wymiary 120 × 75 cm, z lekkiej tkaniny poliestrowej powlekanej poliuretanem, we wzór w pionowe pasy. Wymagane: regulacja na pasku szyjnym; szeroka szelka i wiązanie z tyłu; ochrona przed wilgocią; zwiększona odporność na tłuszcze, enzymy, soki trawienne oraz słabe kwasy i zasady; materiał zachowujący właściwości również w niskich temperaturach; zgodność z EN ISO 13688 i EN 343. Zastosowanie: przetwórstwo spożywcze (owocowo-warzywne, mięsne, rybne), gastronomia, rolnictwo, ogrodnictwo, weterynaria, segregacja odpadów.",
             "expected_skus": [
-                "202"
+                "203"
             ],
             "forbidden_skus": [
                 "3112"
             ],
-            "note": "Z opisu: poliester powlekany PU, pionowe pasy, regulacja paska szyjnego, szeroka szelka, wiązanie z tyłu, odporność na tłuszcze/enzymy/soki trawienne/słabe kwasy i zasady, niskie temperatury, EN ISO 13688, EN 343, branże. Wymiar 120/75 wzięto z nazwy (opis wymienia warianty 75x75 i 100x75)."
+            "note": "Z opisu: poliester powlekany PU, pionowe pasy, regulacja paska szyjnego, szeroka szelka, wiązanie z tyłu, odporność na tłuszcze/enzymy/soki trawienne/słabe kwasy i zasady, niskie temperatury, EN ISO 13688, EN 343, branże. Wymiar 120/75 wzięto z nazwy (opis wymienia warianty 75x75 i 100x75).",
+            "catalog_note": "Decyzja właściciela (25.09.2026): wzorcowa 203 – AJ GROUP „Fartuch dla przemysłu mięsnego” (id 269): opis pokrywa się z wymaganiem prawie dosłownie, „EN ISO 13688, EN 343”; różnica: podkład poliamidowy zamiast poliestrowego. 202 (id 278) zostaje neutralna — nie dowodzi większości warunków."
         },
         {
             "id": "opisowy15-05-spodniobuty-s5-src",
@@ -433,7 +436,11 @@
             "forbidden_skus": [
                 "7251-7200"
             ],
-            "note": "Z opisu źródłowego: sterylny izotoniczny roztwór NaCl bez konserwantów, neutralizacja kwasów i zasad, butelka 500 ml z wanienką, otwieranie przez przekręcenie, korek, montaż w uchwycie ściennym, wymiary Ø 6,6 x 23,5 cm, przydatność 5 lat, wyrób medyczny CE, obszary zastosowania."
+            "note": "Z opisu źródłowego: sterylny izotoniczny roztwór NaCl bez konserwantów, neutralizacja kwasów i zasad, butelka 500 ml z wanienką, otwieranie przez przekręcenie, korek, montaż w uchwycie ściennym, wymiary Ø 6,6 x 23,5 cm, przydatność 5 lat, wyrób medyczny CE, obszary zastosowania.",
+            "acceptable_skus": [
+                "725200"
+            ],
+            "acceptable_note": "Równoważnik (decyzja właściciela 25.09.2026): 725200 – CEDERROTH Eye Wash 2-pack (id 26560): „2x500 ml”, sterylny, izotoniczny roztwór — ten sam płyn w dwupaku, nie pojedyncza butelka."
         },
         {
             "id": "opisowy15-12-polbuty-elektroizolacyjne-20kv",
@@ -464,7 +471,12 @@
                 "S565A202"
             ],
             "forbidden_skus": [],
-            "note": "Z opisu źródłowego: klasa A2 wg EN 14387, gazy i pary organiczne o temp. wrzenia >65°C, lista związków, stężenie do 0,5% (5000 ppm), obudowa z tworzywa, złącze bagnetowe, łączenie z filtrami cząstek, 2 szt. na komplet, obszary zastosowania."
+            "note": "Z opisu źródłowego: klasa A2 wg EN 14387, gazy i pary organiczne o temp. wrzenia >65°C, lista związków, stężenie do 0,5% (5000 ppm), obudowa z tworzywa, złącze bagnetowe, łączenie z filtrami cząstek, 2 szt. na komplet, obszary zastosowania.",
+            "acceptable_skus": [
+                "7000034749",
+                "MSA-PO-A2"
+            ],
+            "acceptable_note": "Równoważniki (decyzja właściciela 25.09.2026): spełniają warunki kluczowe (A2, złącze bagnetowe, para), karta nie podaje tylko obudowy z tworzywa. 7000034749 – 3M 6055 (id 40757): „A2, 6055”, „złączem bagnetowym”; MSA-PO-A2 – MSA (id 34046): „typ A2”, „podwójnym połączeniem bagnetowym”, „EN14387”, opakowanie 2 szt."
         },
         {
             "id": "opisowy15-15-rekawice-lateks-flok-87-320",
@@ -510,7 +522,11 @@
                 "ARMEN 9007 6660 S1 ESD",
                 "ARMEN 9007 9360 S1"
             ],
-            "note": "Zapytanie klienta z poczty. Marka, model i klasa podane wprost. O1 to obuwie zawodowe bez podnoska — nie spełnia S1; 6660 to inny wariant niż 1010. 25.09.2026: zakazane także pozostałe kolory ARMEN 9007 (6660 S1 P, 6660 S1 ESD, 9360 S1), bo zapytanie żąda wariantu 1010. Inny kolor pokazany jako propozycja poniżej progu zapisu pod właściwą kartą to ostrzeżenie z informacją o kolorze, nie błąd blokujący (decyzja 25.09.2026). „ARMEN 9007 Clip 1010 S1” neutralna: osobny wyrób, karta nie mówi, czym jest Clip."
+            "note": "Zapytanie klienta z poczty. Marka, model i klasa podane wprost. O1 to obuwie zawodowe bez podnoska — nie spełnia S1; 6660 to inny wariant niż 1010. 25.09.2026: zakazane także pozostałe kolory ARMEN 9007 (6660 S1 P, 6660 S1 ESD, 9360 S1), bo zapytanie żąda wariantu 1010. Inny kolor pokazany jako propozycja poniżej progu zapisu pod właściwą kartą to ostrzeżenie z informacją o kolorze, nie błąd blokujący (decyzja 25.09.2026). „ARMEN 9007 Clip 1010 S1” neutralna: osobny wyrób, karta nie mówi, czym jest Clip.",
+            "acceptable_skus": [
+                "ARMEN 9007 Clip 1010 S1"
+            ],
+            "acceptable_note": "Decyzja właściciela (25.09.2026): ARMEN 9007 Clip 1010 S1 (id 9597, „EN ISO 20345:2011 S1 SRC”, kolor 1010) to ten sam model ARMEN 9007 w wersji Clip."
         },
         {
             "id": "mail-artra-arica-6207-1010-s2",
