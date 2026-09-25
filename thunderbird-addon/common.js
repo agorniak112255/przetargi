@@ -48,7 +48,11 @@ class ApiError extends Error {
   }
 }
 
-async function api(path, { method = 'GET', body = null, token = null, baseUrl = null } = {}) {
+/**
+ * `onResponse` dostaje surową odpowiedź przed odczytem treści — także przy 204 i przy błędzie — dla wywołań, które
+ * czytają nagłówki (X-Poll-After przy kolejce wysyłki).
+ */
+async function api(path, { method = 'GET', body = null, token = null, baseUrl = null, onResponse = null } = {}) {
   const settings = await getSettings()
   const url = (baseUrl || settings.baseUrl) + path
   const headers = { Accept: 'application/json' }
@@ -66,6 +70,8 @@ async function api(path, { method = 'GET', body = null, token = null, baseUrl = 
   } catch (e) {
     throw new ApiError(0, 'Brak połączenia z ' + url)
   }
+
+  if (onResponse !== null) onResponse(res)
 
   if (res.status === 204) return null
 

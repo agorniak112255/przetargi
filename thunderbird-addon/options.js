@@ -28,6 +28,7 @@ async function refresh() {
   el('useAppSubject').checked = settings.useAppSubject
   await showIdentityState()
   await showLastTiming()
+  await showQueuePace()
   el('connected').hidden = !settings.token
   el('connected').textContent = settings.token ? 'Dodatek jest połączony z aplikacją.' : ''
 
@@ -358,6 +359,21 @@ async function showLastTiming() {
   const seconds = (Number(lastReplyTiming.total || 0) / 1000).toFixed(1)
   el('lastTiming').textContent = 'Ostatnie otwarcie odpowiedzi: ' + seconds + ' s ('
     + lastReplyTiming.text + ').'
+}
+
+/**
+ * Co ile sekund tło pyta o prośby „Zapisz i wyślij” z aplikacji: 5 s, gdy handlowiec jest
+ * w aplikacji, 30 s, gdy nie ma go tam od kwadransa, dłużej przy błędach połączenia.
+ */
+async function showQueuePace() {
+  const { queuePace } = await browser.storage.local.get({ queuePace: null })
+  if (!queuePace || !queuePace.seconds) {
+    el('queuePace').textContent = 'Prośby „Zapisz i wyślij” z aplikacji: jeszcze nie sprawdzane.'
+
+    return
+  }
+  el('queuePace').textContent = 'Prośby „Zapisz i wyślij” z aplikacji: sprawdzane co ' + queuePace.seconds
+    + ' s (od ' + new Date(queuePace.at).toLocaleTimeString('pl-PL') + ').'
 }
 
 el('useAppSubject').addEventListener('change', async (event) => {

@@ -74,6 +74,9 @@ async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentA
       console.warn('Oznaczenie maila po założeniu zapytania się nie powiodło:', e.message)
     }
 
+    // Handlowiec idzie teraz do przeglądarki i zaraz może kliknąć „Zapisz i wyślij”.
+    hurryQueue()
+
     const { baseUrl } = await getSettings()
     await browser.windows.openDefaultBrowser(baseUrl + '/inquiries/' + inquiry.id)
     await notify('Zapytanie #' + inquiry.id + ' gotowe', 'Otworzyłem je w przeglądarce — wybierz produkty.')
@@ -346,15 +349,75 @@ async function reportTiming(marks) {
 /* ---------------- wysyłka zlecona z aplikacji w przeglądarce ---------------- */
 
 /**
- * Co ile sekund pytamy serwer o listy czekające na wysłanie. Pytanie jest tanie
- * (jedno zapytanie po zapytaniach tego handlowca z ostatniej doby, ~60 ms), a to
- * ono decyduje, ile handlowiec czeka po kliknięciu „Zapisz i wyślij” w aplikacji:
- * przy 15 sekundach czekał średnio 7 sekund na sam początek pracy dodatku.
+ * Co ile sekund pytamy serwer o listy czekające na wysłanie, gdy handlowiec pracuje
+ * w aplikacji. Pytanie jest tanie (jedno zapytanie po zapytaniach tego handlowca
+ * z ostatniej doby, ~60 ms), a to ono decyduje, ile handlowiec czeka po kliknięciu
+ * „Zapisz i wyślij” w aplikacji: przy 15 sekundach czekał średnio 7 sekund na sam
+ * początek pracy dodatku. To jest też takt zegara — dłuższe odstępy go przeskakują.
  */
 const QUEUE_POLL_SECONDS = 5
 
+/**
+ * Najdłuższy odstęp z podpowiedzi serwera (nagłówek X-Poll-After). Serwer podaje
+ * 30 s, gdy handlowca nie ma w aplikacji od kwadransa — z 6–7 komputerów pytających
+ * co 5 s szło 82% wszystkich zapytań do aplikacji (25.09.2026). Więcej nie przyjmujemy:
+ * po kliknięciu „Zapisz i wyślij” aplikacja czeka na odebranie listu ok. 40 s,
+ * a potem pisze, że Thunderbird go nie odebrał.
+ */
+const QUEUE_POLL_MAX_SECONDS = 30
+
+/** Brak połączenia albo błąd serwera — pytanie co 5 s nic tu nie da. */
+const QUEUE_RETRY_SECONDS = 15
+
+/** Serwer odrzucił klucz (401/403, np. po zmianie hasła) — do ponownego „Połącz” co 5 minut. */
+const QUEUE_REJECTED_SECONDS = 300
+
+/**
+ * Po założeniu zapytania handlowiec idzie do przeglądarki i zaraz może kliknąć
+ * „Zapisz i wyślij” — przez ten czas pytamy co QUEUE_POLL_SECONDS bez względu na
+ * podpowiedź serwera (sygnał obecności z aplikacji dotarłby dopiero z następnym pytaniem).
+ */
+const QUEUE_FAST_AFTER_INQUIRY_MINUTES = 15
+
 /** Jedno przejście naraz: okno odpowiedzi otwiera się dłużej niż odstęp między przejściami. */
 let queueBusy = false
+
+/** Najwcześniejsza chwila następnego pytania (ms); 0 = przy najbliższym takcie. */
+let queueNextAt = 0
+
+/** Do tej chwili (ms) pytamy co QUEUE_POLL_SECONDS bez względu na podpowiedź serwera. */
+let queueFastUntil = 0
+
+/** Ostatnio zapisany odstęp — do ustawień dodatku trafia tylko zmiana trybu. */
+let queuePaceSaved = 0
+
+/** Odstęp z nagłówka X-Poll-After przycięty do 5–30 s; brak albo bzdura (starszy serwer) = co 5 s jak dotąd. */
+function queueSecondsFromHeader(value) {
+  const seconds = Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(seconds)) return QUEUE_POLL_SECONDS
+
+  return Math.min(QUEUE_POLL_MAX_SECONDS, Math.max(QUEUE_POLL_SECONDS, seconds))
+}
+
+/**
+ * Następne pytanie najwcześniej `seconds` od początku tego. Zegar tyka co
+ * QUEUE_POLL_SECONDS, więc sekunda zapasu na jego rozjazd — inaczej 30 s robiłoby się 35 s.
+ */
+function scheduleQueue(startedAt, seconds) {
+  queueNextAt = startedAt + (seconds - 1) * 1000
+  if (seconds === queuePaceSaved) return
+
+  queuePaceSaved = seconds
+  // W ustawieniach widać tryb — przy zgłoszeniu „Thunderbird reaguje wolno” od razu wiadomo dlaczego.
+  browser.storage.local.set({ queuePace: { seconds, at: Date.now() } })
+    .catch((e) => console.warn('Nie udało się zapisać odstępu kolejki:', e.message))
+}
+
+/** Handlowiec właśnie idzie do aplikacji — przez kwadrans pytamy co 5 s, od najbliższego taktu. */
+function hurryQueue() {
+  queueFastUntil = Date.now() + QUEUE_FAST_AFTER_INQUIRY_MINUTES * 60 * 1000
+  queueNextAt = 0
+}
 
 /**
  * Mail o podanym Message-ID. Numeryczne id wiadomości ważne są tylko w tej
@@ -419,13 +482,22 @@ async function pollQueue() {
   if (!token) return
 
   queueBusy = true
+  const startedAt = Date.now()
   try {
     let rows
+    let hint = null
     try {
-      rows = await api('/api/inquiries/queued')
+      rows = await api('/api/inquiries/queued', {
+        onResponse: (res) => {
+          hint = res.headers.get('X-Poll-After')
+        },
+      })
     } catch (e) {
+      scheduleQueue(startedAt, e.status === 401 || e.status === 403 ? QUEUE_REJECTED_SECONDS : QUEUE_RETRY_SECONDS)
+
       return
     }
+    scheduleQueue(startedAt, Date.now() < queueFastUntil ? QUEUE_POLL_SECONDS : queueSecondsFromHeader(hint))
 
     for (const row of Array.isArray(rows) ? rows : []) {
       try {
@@ -450,9 +522,17 @@ async function pollQueue() {
   }
 }
 
+// Zegar tyka zawsze co 5 s, a o pytaniu decyduje bramka czasu — błąd w przejściu nie
+// zatrzyma harmonogramu ani nie zapętli pytań.
 setInterval(() => {
+  if (Date.now() < queueNextAt) return
   pollQueue().catch((e) => console.warn('Sprawdzenie kolejki się nie powiodło:', e.message))
 }, QUEUE_POLL_SECONDS * 1000)
+
+// Nowy klucz po „Połącz” albo inny adres aplikacji — pytamy od razu, a nie po 5 minutach od odrzuconego klucza.
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && (changes.token || changes.baseUrl)) queueNextAt = 0
+})
 
 /* --------------------------- aktualizacje dodatku --------------------------- */
 

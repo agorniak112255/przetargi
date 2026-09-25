@@ -968,6 +968,55 @@ final class ClientInquiryApiTest extends TestCase
         $this->postJson("/api/inquiries/{$theirs->id}/queue-reply", ['queued' => true])->assertStatus(403);
     }
 
+    public function test_queued_tells_the_addon_to_poll_fast_only_while_the_user_is_in_the_app(): void
+    {
+        $this->freezeSecond();
+        $user = User::factory()->withRole('handlowiec')->create();
+        // dwie sesje jak na produkcji: dodatek pyta o prośby, aplikacja w przeglądarce wysyła sygnał obecności
+        $addon = $user->createToken('thunderbird')->plainTextToken;
+        $spa = $user->createToken('spa')->plainTextToken;
+
+        // granica włącznie: 15 min od ostatniego sygnału obecności to jeszcze „w aplikacji”; ciało bez zmian — tablica
+        $user->forceFill(['last_seen_at' => now()->subMinutes(15)])->save();
+        $this->pollQueue($addon)->assertOk()->assertExactJson([])->assertHeader('X-Poll-After', '5');
+
+        $user->forceFill(['last_seen_at' => now()->subMinutes(16)])->save();
+        $this->pollQueue($addon)->assertOk()->assertExactJson([])->assertHeader('X-Poll-After', '30');
+
+        $user->forceFill(['last_seen_at' => null])->save();
+        $this->pollQueue($addon)->assertOk()->assertHeader('X-Poll-After', '30');
+
+        // sygnał obecności z aplikacji w przeglądarce przestawia dodatek z powrotem na co 5 s
+        $this->app['auth']->forgetGuards();
+        $this->withToken($spa)->postJson('/api/me/presence', ['path' => '/inquiries/12'])->assertNoContent();
+        $this->pollQueue($addon)->assertOk()->assertHeader('X-Poll-After', '5');
+    }
+
+    public function test_queued_polls_fast_while_a_request_waits_even_without_presence(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $inquiry = ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'tone' => 'formal',
+            'source_channel' => 'thunderbird',
+            'source_message_id' => 'czeka@poczta.example',
+            'source_body' => 'Proszę o wycenę.',
+            'analysis' => [],
+            'answers' => [],
+            'reply_body' => 'Dzień dobry, w załączeniu oferta.',
+            'send_requested_at' => now(),
+        ]);
+
+        Sanctum::actingAs($user);
+        $user->forceFill(['last_seen_at' => now()->subHours(2)])->save();
+
+        $this->getJson('/api/inquiries/queued')
+            ->assertOk()
+            ->assertJsonCount(1)
+            ->assertJsonPath('0.id', $inquiry->id)
+            ->assertHeader('X-Poll-After', '5');
+    }
+
     public function test_store_without_source_stays_web(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();
@@ -1802,6 +1851,14 @@ final class ClientInquiryApiTest extends TestCase
 
         $this->assertSame([], $res->json('items.0.candidates'));
         $this->assertContains('model_failed', (array) $res->json('items.0.flags'));
+    }
+
+    /** Każde zapytanie od nowa przez strażnika Sanctum — inaczej trzyma użytkownika z poprzedniego zapytania testu. */
+    private function pollQueue(string $token): TestResponse
+    {
+        $this->app['auth']->forgetGuards();
+
+        return $this->withToken($token)->getJson('/api/inquiries/queued');
     }
 
     /**

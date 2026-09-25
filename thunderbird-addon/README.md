@@ -23,7 +23,7 @@ liście wiadomości. Dotyczy to obu drog:
 
 - „Wstaw odpowiedź do maila” w okienku nad mailem,
 - „Zapisz i wyślij w Thunderbirdzie” w aplikacji (dodatek podejmuje prośbę
-  z serwera w ciągu kilkunastu sekund).
+  z serwera zwykle w ciągu kilku sekund — zob. „Jak często dodatek pyta aplikację”).
 
 Gdy tego maila nie ma w tym Thunderbirdzie, dodatek **nie otwiera żadnej
 odpowiedzi** — mówi wprost, którego identyfikatora nie znalazł. Wcześniej brał
@@ -36,6 +36,30 @@ jest kopia ze zwykłego folderu — nie z Wysłanych, Kosza ani Szkiców.
 Zapytanie wklejone w przeglądarce nie ma `Message-ID`; wtedy jedynym wskazaniem
 jest mail otwarty w okienku dodatku, a z aplikacji taka odpowiedź nie da się
 wysłać przez Thunderbirda (dodatek to mówi).
+
+## Jak często dodatek pyta aplikację
+
+O prośby „Zapisz i wyślij w Thunderbirdzie” dodatek pyta aplikację sam, w tle:
+
+- **co 5 sekund**, gdy handlowiec pracuje w aplikacji (przeglądarka wysłała sygnał
+  obecności w ostatnich 15 minutach), gdy prośba już czeka, i przez kwadrans po
+  założeniu zapytania z maila — wtedy handlowiec właśnie idzie do przeglądarki,
+- **co 30 sekund**, gdy nie ma go w aplikacji od kwadransa,
+- co 15 sekund, gdy nie ma połączenia z aplikacją albo serwer zgłasza błąd,
+- co 5 minut, gdy aplikacja odrzuca klucz dodatku (np. po zmianie hasła) — aż do
+  ponownego **Połącz**, po którym pyta od razu.
+
+Odstęp podpowiada aplikacja nagłówkiem `X-Poll-After`. Dodatek przyjmuje najwyżej
+30 sekund, bo po kliknięciu „Zapisz i wyślij” aplikacja czeka na odebranie listu
+około 40 sekund, a potem pisze, że Thunderbird go nie odebrał. Starsza wersja
+aplikacji nagłówka nie wysyła — wtedy dodatek pyta co 5 sekund, jak dotąd.
+
+Powód: 25.09.2026 z 6–7 komputerów pytających co 5 sekund szło 82% wszystkich
+zapytań do aplikacji, także wtedy, gdy nikt z niej nie korzystał.
+
+Bieżący odstęp widać w **Ustawieniach → Odpowiedzi** („Prośby „Zapisz i wyślij”
+z aplikacji: sprawdzane co … s”) — przy zgłoszeniu „Thunderbird reaguje wolno”
+od razu wiadomo, w jakim trybie jest dodatek.
 
 ## Szablony listu
 
@@ -351,6 +375,8 @@ aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa
 - API: `POST /api/login`, `POST /api/logout`, `POST /api/inquiries`, `GET /api/inquiries/{id}`,
   `POST /api/inquiries/{id}/replied`, `GET /api/inquiries/queued`,
   `POST /api/inquiries/{id}/queue-reply`.
+- `GET /api/inquiries/queued` odpowiada tablicą próśb i nagłówkiem `X-Poll-After`
+  (sekundy do następnego pytania: 5 albo 30; dodatek przyjmuje 5–30, brak nagłówka = 5).
 - oznaczanie maili: `POST /api/inquiries/lookup` (paczka do 200 `message_ids`;
   odpowiedź to mapa `Message-ID → lista zapytań` z `id`, `user`, `mine`,
   `created_at`, `replied_at`; **brak klucza znaczy „sprawdzone, nie ma nic”** —

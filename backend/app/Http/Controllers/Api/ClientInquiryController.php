@@ -12,6 +12,7 @@ use App\Http\Requests\QueueClientInquiryReplyRequest;
 use App\Http\Requests\StoreClientInquiryRequest;
 use App\Http\Requests\UpdateClientInquiryRequest;
 use App\Models\ClientInquiry;
+use App\Models\User;
 use App\Services\ClientInquiryService;
 use App\Support\InquiryMailText;
 use Carbon\CarbonImmutable;
@@ -23,6 +24,22 @@ use Throwable;
 
 class ClientInquiryController extends Controller
 {
+    /**
+     * Odstęp, po jakim dodatek do Thunderbirda pyta znowu o prośby „Zapisz i wyślij” (nagłówek X-Poll-After), gdy
+     * handlowiec jest w aplikacji — tylko tam może kliknąć „Zapisz i wyślij”. Przy 15 s czekał średnio 7 s na okno
+     * odpowiedzi, stąd 5 s.
+     */
+    private const QUEUE_POLL_FAST_SECONDS = 5;
+
+    /**
+     * Handlowca nie ma w aplikacji od QUEUE_PRESENCE_MINUTES. Najwyżej 30 s: po kliknięciu aplikacja czeka na odebranie
+     * listu ok. 40 s (InquiryReply: WATCH_TRIES × WATCH_EVERY_MS), potem pisze, że Thunderbird go nie odebrał.
+     */
+    private const QUEUE_POLL_SLOW_SECONDS = 30;
+
+    /** Sygnał obecności z aplikacji (usePresence → users.last_seen_at) idzie co minutę przy widocznej karcie. */
+    private const QUEUE_PRESENCE_MINUTES = 15;
+
     public function __construct(
         private readonly ClientInquiryService $inquiries,
     ) {}
@@ -467,8 +484,10 @@ class ClientInquiryController extends Controller
      */
     public function queued(Request $request): JsonResponse
     {
+        /** @var User $user */
+        $user = $request->user();
         $rows = ClientInquiry::query()
-            ->where('user_id', $request->user()->id)
+            ->where('user_id', $user->id)
             ->whereNotNull('send_requested_at')
             ->whereNotNull('source_message_id')
             // stare prośby pomijamy — dodatek mógł być wtedy wyłączony
@@ -485,7 +504,23 @@ class ClientInquiryController extends Controller
                 'requested_at' => $row->send_requested_at?->toIso8601String(),
             ]);
 
-        return response()->json($rows);
+        // 82% zapytań do API szło stąd (25.09.2026: 22,7 tys. w 5 h, dodatek co 5 s na 6–7 komputerach). Ciało zostaje
+        // tablicą — dodatek sprzed 1.23.0 nagłówka nie czyta i pyta co 5 s jak dotąd.
+        return response()->json($rows)
+            ->header('X-Poll-After', (string) $this->queuePollSeconds($user, $rows->isNotEmpty()));
+    }
+
+    /** Co ile sekund dodatek ma zapytać znowu: szybko, gdy prośba czeka albo handlowiec jest w aplikacji. */
+    private function queuePollSeconds(User $user, bool $pending): int
+    {
+        if ($pending) {
+            return self::QUEUE_POLL_FAST_SECONDS;
+        }
+        $seen = $user->last_seen_at;
+
+        return $seen !== null && $seen->gte(now()->subMinutes(self::QUEUE_PRESENCE_MINUTES))
+            ? self::QUEUE_POLL_FAST_SECONDS
+            : self::QUEUE_POLL_SLOW_SECONDS;
     }
 
     /**
