@@ -249,6 +249,85 @@ final class RankCardsConstraintEvidenceTest extends TestCase
         $this->assertCount(2, $short['specs']);
     }
 
+    /**
+     * Golden nauszniki-snr-30 (pomiar 25.09.2026 na produkcji): igła „30” z warunku „SNR min 30 dB” trafiała w numery
+     * kart (2630.030, AEB030-…), które szły do modelu pierwsze; wzorcowe bez „30” w tekście zostawały poza 24.
+     */
+    public function test_snr_threshold_number_is_not_evidence_when_choosing_cards(): void
+    {
+        $base = [
+            'manufacturer' => 'JSP',
+            'category' => 'Ochrona słuchu',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ];
+        $pool = collect();
+        for ($i = 1; $i <= 8; $i++) {
+            $pool->push(Product::query()->create($base + ['sku' => 'TOP-'.$i, 'name' => 'Nauszniki nagłowne SNR 32 dB model '.$i]));
+        }
+        foreach (['X34-A', 'X34-B'] as $sku) {
+            $pool->push(Product::query()->create($base + ['sku' => $sku, 'name' => 'Nauszniki nagłowne SNR 34 dB '.$sku]));
+        }
+        for ($i = 1; $i <= 16; $i++) {
+            $pool->push(Product::query()->create($base + ['sku' => '2630.030-'.$i, 'name' => 'Nauszniki nagłowne SNR 32 dB wariant '.$i]));
+        }
+
+        $service = app(ProductAiSearchService::class);
+        $cards = (new \ReflectionMethod($service, 'cardsForRanking'))->invoke(
+            $service,
+            'Ochronniki słuchu nagłowne o tłumieniu SNR minimum 30 dB',
+            $pool,
+            ['SNR min 30 dB'],
+        )->pluck('sku')->all();
+
+        $this->assertCount(24, $cards);
+        $this->assertContains('X34-A', $cards);
+        $this->assertContains('X34-B', $cards);
+        $this->assertSame('TOP-1', $cards[0], 'bez igieł kolejność puli');
+    }
+
+    /**
+     * Decyzja właściciela z 25.09.2026 (D12): karta z literą poziomu cięcia ISO 13997 nie niższą od wymaganej idzie do
+     * oceny przed kartami bez poziomu. Golden opisowy15-02: wzorcowe z „4X43D” stały na 16.–57. miejscu puli i część
+     * nie docierała do modelu, a miejsca zajmowały karty z tą samą liczbą słów warunku, bez litery ISO.
+     */
+    public function test_cards_with_proven_cut_level_reach_ranking_first(): void
+    {
+        $base = [
+            'manufacturer' => 'MAPA',
+            'category' => 'Rękawice',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ];
+        $pool = collect();
+        for ($i = 1; $i <= 28; $i++) {
+            $pool->push(Product::query()->create($base + [
+                'sku' => 'NOLVL-'.$i,
+                'name' => 'Rękawice antyprzecięciowe powlekane '.$i,
+                'norms' => 'EN 388:2016 4X42X',
+            ]));
+        }
+        $pool->push(Product::query()->create($base + ['sku' => 'LVL-A', 'name' => 'Rękawice antyprzecięciowe HPPE', 'norms' => 'EN 388:2016 4X43A']));
+        $pool->push(Product::query()->create($base + ['sku' => 'LVL-D', 'name' => 'Rękawice antyprzecięciowe HPPE', 'norms' => 'EN 388:2016 4X43D']));
+
+        $service = app(ProductAiSearchService::class);
+        $cards = (new \ReflectionMethod($service, 'cardsForRanking'))->invoke(
+            $service,
+            'Rękawice ochronne antyprzecięciowe powlekane EN 388, odporność na przecięcie poziom B',
+            $pool,
+            ['EN 388', 'odporność na przecięcie poziom B'],
+        )->pluck('sku')->all();
+
+        $this->assertCount(24, $cards);
+        $this->assertSame('LVL-D', $cards[0], 'poziom D ≥ B — dowód, idzie pierwsza');
+        $this->assertNotContains('LVL-A', array_slice($cards, 0, 1), 'poziom A < B nie jest dowodem');
+    }
+
     public function test_complete_cascade_does_not_end_retrieval_before_text_search(): void
     {
         Http::fake();

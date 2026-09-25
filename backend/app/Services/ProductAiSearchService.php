@@ -41,6 +41,9 @@ final class ProductAiSearchService
     /** Retrieval ma być szeroki — do puli dla modelu zawęża dopiero fuzja rang. */
     private const TEXT_POOL = 300;
 
+    /** Ile pierwszych kart wyszukiwania tekstowego trafia do puli kandydatów zawsze, także po przegranej fuzji rang. */
+    private const TEXT_HEAD_IN_POOL = 3;
+
     private const VECTOR_POOL = 150;
 
     /** Kart bez rozpoznanej rodziny są tysiące — bierzemy tylko czubek trafień. */
@@ -4329,7 +4332,58 @@ final class ProductAiSearchService
         });
         $branded = $this->preferCatalogBrands($query, $merged, $intent);
 
-        return $this->uniqueProducts($branded, $limit)->values();
+        return $this->appendTextHead(
+            $query,
+            $intent,
+            $requirement,
+            $this->uniqueProducts($branded, $limit)->values(),
+            $merged,
+            $rankings['text'],
+            $limit,
+        );
+    }
+
+    /**
+     * Czołówka wyszukiwania tekstowego zawsze w puli 80 (na końcu, po bramkach zgodności i filtrze marki). Pomiar
+     * 25.09.2026 (golden opisowy15-07, produkcja): ATG 44-304 był 1. w wyszukiwaniu tekstowym, ale po fuzji rang
+     * dopiero 167. — poza pulą, choć ma dowód wszystkich warunków; wektor go nie widzi. Z puli do 24 kart oceny
+     * wybiera go potem liczba potwierdzonych warunków (cardsForRanking). Tylko pula wyszukiwarki i przetargu —
+     * krótkie listy (12, 40) i zamienniki bez dokładki.
+     *
+     * @param  Collection<int, Product>  $pool
+     * @param  Collection<int, Product>  $merged  pula po bramkach, przed filtrem marki
+     * @param  list<int>  $textIds  wyszukiwanie tekstowe w kolejności trafności
+     * @return Collection<int, Product>
+     */
+    private function appendTextHead(
+        string $query,
+        array $intent,
+        string $requirement,
+        Collection $pool,
+        Collection $merged,
+        array $textIds,
+        int $limit,
+    ): Collection {
+        if ($limit !== self::CANDIDATE_POOL || $textIds === []) {
+            return $pool;
+        }
+        $inPool = [];
+        foreach ($pool as $product) {
+            $inPool[(int) $product->id] = true;
+        }
+        $head = $this->keepCompatible($requirement, $this->hydrate(array_slice($textIds, 0, self::TEXT_HEAD_IN_POOL)))
+            ->reject(static fn (Product $p): bool => isset($inPool[(int) $p->id]))
+            ->values();
+        if ($head->isEmpty()) {
+            return $pool;
+        }
+        // Ten sam filtr marki co reszta puli: przy marce z zapytania karta innej marki nie wchodzi.
+        $allowed = [];
+        foreach ($this->preferCatalogBrands($query, $merged->concat($head), $intent) as $product) {
+            $allowed[(int) $product->id] = true;
+        }
+
+        return $pool->concat($head->filter(static fn (Product $p): bool => isset($allowed[(int) $p->id])))->values();
     }
 
     /**
@@ -4516,7 +4570,18 @@ final class ProductAiSearchService
         if ($min === null) {
             return true;
         }
-        $text = implode(' ', [
+        $text = $this->cutLevelText($product);
+        $have = $this->assortment->cutLevel($text);
+        if ($have !== null) {
+            return $have >= $min;
+        }
+
+        return $min < 'B' || ! $this->assortment->onlyLowCoupCut($text);
+    }
+
+    private function cutLevelText(Product $product): string
+    {
+        return implode(' ', [
             (string) $product->name,
             (string) ($product->norms ?? ''),
             (string) ($product->description ?? ''),
@@ -4524,12 +4589,6 @@ final class ProductAiSearchService
             // podanym przez dostawcę byłaby czytana jako „bez danych”.
             (string) ($product->shop_fields_summary ?? ''),
         ]);
-        $have = $this->assortment->cutLevel($text);
-        if ($have !== null) {
-            return $have >= $min;
-        }
-
-        return $min < 'B' || ! $this->assortment->onlyLowCoupCut($text);
     }
 
     private function meetsRequiredSnr(string $query, Product $product): bool
@@ -5240,8 +5299,18 @@ final class ProductAiSearchService
 
         $needles = $this->constraintNeedles($constraints);
         $minSnr = $this->bhpAttributes->requiredSnr($query);
+        if ($minSnr !== null) {
+            // Liczba z progu („SNR min 30 dB” → „30”) nie jest dowodem warunku — próg sprawdza productMeetsSnr, a igła
+            // trafiała w numery kart (2630.030, AEB030-…). Pomiar 25.09.2026 (golden, produkcja): karty z „30” w SKU
+            // szły do modelu pierwsze, wzorcowe 7000039622 (17. w puli) i 7000038211 (28.) zostawały poza 24.
+            $needles = array_values(array_filter(
+                $needles,
+                static fn (string $needle): bool => preg_replace('/db$/u', '', $needle) !== (string) $minSnr,
+            ));
+        }
         $wantClass = $this->bhpAttributes->footwearClass($query);
-        if ($needles === [] && $minSnr === null && $wantClass === null) {
+        $minCut = $this->assortment->requiredCutLevel($query);
+        if ($needles === [] && $minSnr === null && $wantClass === null && $minCut === null) {
             return $candidates->take(self::RANK_CARDS)->values();
         }
 
@@ -5253,17 +5322,21 @@ final class ProductAiSearchService
             }
             $meetsSnr = $minSnr !== null && $this->productMeetsSnr($product, $minSnr);
             $meetsClass = $wantClass !== null && $this->productMeetsFootwearClass($product, $wantClass);
+            // Poziom cięcia ISO 13997 podany na karcie i nie niższy od wymaganego — dowód, a nie brak danych (decyzja
+            // właściciela z 25.09.2026, D12). Karty bez litery zostają w puli, ale do oceny idą po kartach z dowodem.
+            $cutLevel = $minCut === null ? null : $this->assortment->cutLevel($this->cutLevelText($product));
+            $provenCut = $cutLevel !== null && $cutLevel >= $minCut;
             $needleHits = $needles === [] ? 0 : $this->haystackNeedleHits($this->rankingHaystack($product), $needles);
-            if ($meetsSnr || $meetsClass || ($minSnr === null && $wantClass === null && $needleHits > 0)) {
-                $with[] = ['product' => $product, 'hits' => $needleHits, 'position' => $position];
+            if ($meetsSnr || $meetsClass || $provenCut || ($minSnr === null && $wantClass === null && $needleHits > 0)) {
+                $with[] = ['product' => $product, 'cut' => $provenCut ? 1 : 0, 'hits' => $needleHits, 'position' => $position];
             } else {
                 $without->push($product);
             }
         }
-        // Najpierw karty z dowodem największej liczby warunków, w remisie kolejność puli. Dotąd liczyło się
-        // „ma jakąkolwiek igłę”: przetarg 1 poz. 7 — ATG 44-304 z dowodem wszystkich 8 igieł stała na 53. miejscu
-        // puli za kartami z jedną igłą („100”) i nie trafiała do 24 kart rankingu.
-        usort($with, static fn (array $a, array $b): int => [$b['hits'], $a['position']] <=> [$a['hits'], $b['position']]);
+        // Najpierw karty z dowodem poziomu cięcia, potem z dowodem największej liczby warunków, w remisie kolejność puli.
+        // Dotąd liczyło się „ma jakąkolwiek igłę”: przetarg 1 poz. 7 — ATG 44-304 z dowodem wszystkich 8 igieł stała
+        // na 53. miejscu puli za kartami z jedną igłą („100”) i nie trafiała do 24 kart rankingu.
+        usort($with, static fn (array $a, array $b): int => [$b['cut'], $b['hits'], $a['position']] <=> [$a['cut'], $a['hits'], $b['position']]);
         $withProducts = collect(array_map(static fn (array $row): Product => $row['product'], $with));
 
         // Czołówka puli ma zagwarantowane miejsca. Dowód warunku z normy wypychał karty najlepiej zgodne z rodzajem
