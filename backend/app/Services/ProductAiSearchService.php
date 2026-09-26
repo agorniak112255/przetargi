@@ -2897,6 +2897,28 @@ final class ProductAiSearchService
     }
 
     /**
+     * Karta innego producenta niż nazwany w wymaganiu wg intencji z wyniku wyszukiwania (parsed_intent) — ta sama
+     * reguła co lista zapasowa (D5). Dla dopasowania przetargu: karta innej marki wybrana bez oceny modelu jest tylko
+     * propozycją (ProductMatchService). Bez producenta z katalogu (także manufacturer_absent_in_catalog) — false.
+     *
+     * @param  array<string, mixed>  $parsedIntent
+     */
+    public function isOtherRequestedProducer(array $parsedIntent, Product $product): bool
+    {
+        return $this->isOtherManufacturer($product, $this->requestedProducer($parsedIntent));
+    }
+
+    /**
+     * Nazwa producenta z wymagania wg parsed_intent (pusta, gdy wymaganie nie nazywa producenta z katalogu).
+     *
+     * @param  array<string, mixed>  $parsedIntent
+     */
+    public function requestedProducerName(array $parsedIntent): string
+    {
+        return $this->requestedProducer($parsedIntent)['label'];
+    }
+
+    /**
      * @param  array{keys: list<string>, label: string}  $producer
      */
     private function isOtherProducerText(string $text, array $producer): bool

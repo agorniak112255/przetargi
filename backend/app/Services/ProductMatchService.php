@@ -88,6 +88,14 @@ final class ProductMatchService
      */
     private array $aiModelRejected = [];
 
+    /**
+     * Producent z wymagania wg wyszukiwarki (parsed_intent: po uzgodnieniu z treścią zapytania, z oznaczeniem marki
+     * nieobecnej w katalogu) — tym samym kluczem co aiCandidatesCache. Z niego „karta innej marki” (isOtherRequestedBrand).
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    private array $aiParsedIntent = [];
+
     /** Powód, dla którego bieżąca pozycja zostaje bez produktu (poza „nic nie pasuje”). */
     private ?string $lastNoMatchReason = null;
 
@@ -2177,6 +2185,19 @@ final class ProductMatchService
             if ($honest !== null) {
                 $score = min($honest, self::HEURISTIC_ONLY_CAP);
                 if ($this->meetsPersistThreshold($requirement, $heuristic['product'], $score, 'heuristic')) {
+                    // Decyzja właściciela z 26.09.2026: karta innej marki niż nazwana w wymaganiu, wybrana bez oceny modelu,
+                    // jest tylko propozycją — zamianę marki zatwierdza handlowiec. Dotyczy tylko karty, którą automat by
+                    // zapisał; słabsza idzie do proposalPick jak dotąd. Zamiennik oceniony przez model (pętla ocen wyżej)
+                    // zapisuje się jak dotąd. Pod „rękawice uvex … ESD” wchodził tak Ansell ESD z 70%, bo uvex nie ma ESD.
+                    if ($this->isOtherRequestedBrand($requirement, $heuristic['product'])) {
+                        return [
+                            'product' => $heuristic['product'],
+                            'score' => min($score, $this->minMatchScore() - 1),
+                            'source' => 'heuristic',
+                            'proposal' => true,
+                        ];
+                    }
+
                     return [
                         'product' => $heuristic['product'],
                         'score' => $score,
@@ -2532,6 +2553,7 @@ final class ProductMatchService
     {
         $cacheKey = $this->aiCandidatesCacheKey($requirement);
         $this->aiModelState[$cacheKey] = is_string($result['model_state'] ?? null) ? $result['model_state'] : 'unknown';
+        $this->aiParsedIntent[$cacheKey] = is_array($result['parsed_intent'] ?? null) ? $result['parsed_intent'] : [];
         $this->aiModelRejected[$cacheKey] = [];
         foreach (is_array($result['trace']['model_rejected'] ?? null) ? $result['trace']['model_rejected'] : [] as $rejected) {
             if (is_array($rejected) && (int) ($rejected['id'] ?? 0) > 0) {
@@ -2924,9 +2946,12 @@ final class ProductMatchService
         if ($proposal) {
             array_unshift($reasons, [
                 'code' => self::PROPOSAL,
-                'label' => $this->modelFuzzy->isOtherVariant($item->requirement, $product)
-                    ? $this->otherVariantLabel($item->requirement, $product)
-                    : $this->proposalLabel($honest, $aiReason),
+                'label' => match (true) {
+                    $this->modelFuzzy->isOtherVariant($item->requirement, $product) => $this->otherVariantLabel($item->requirement, $product),
+                    // propozycja z gałęzi bez oceny modelu (pickAuto) — model tej karty nie oceniał
+                    $source === 'heuristic' && $this->isOtherRequestedBrand($item->requirement, $product) => $this->otherBrandLabel($item->requirement, $product),
+                    default => $this->proposalLabel($honest, $aiReason),
+                },
                 'points' => $honest,
             ]);
         }
@@ -2968,6 +2993,31 @@ final class ProductMatchService
         }
 
         return $label.' Czego brakuje — w ocenie modelu poniżej.';
+    }
+
+    /** Karta innej marki niż nazwana w wymaganiu, wybrana po słowach karty — model jej nie oceniał. */
+    private function otherBrandLabel(string $requirement, Product $product): string
+    {
+        $maker = trim((string) $product->manufacturer);
+        $requested = $this->aiSearch->requestedProducerName($this->aiParsedIntent[$this->aiCandidatesCacheKey($requirement)] ?? []);
+
+        return 'Propozycja do sprawdzenia — karta innego producenta'.($maker !== '' ? ' ('.$maker.')' : '')
+            .' niż nazwany w zapytaniu'.($requested !== '' ? ' ('.$requested.')' : '')
+            .', wybrana po słowach karty, bez oceny modelu. Automat zapisuje inną markę tylko po ocenie modelu — '
+            .'zamianę marki zatwierdza handlowiec.';
+    }
+
+    /**
+     * Wymaganie nazywa producenta z katalogu, a karta jest innego producenta — wg producenta rozpoznanego przez
+     * wyszukiwarkę dla tej pozycji (parsed_intent, ta sama reguła co lista zapasowa D5). Surowa lista znanych marek
+     * brała słowa pospolite („mat.”, „kask”, „delta”) za markę (przegląd 26.09.2026). Bez wyniku wyszukiwania (AI
+     * wyłączone) albo przy marce spoza katalogu — false, jak dotąd.
+     */
+    private function isOtherRequestedBrand(string $requirement, Product $product): bool
+    {
+        $intent = $this->aiParsedIntent[$this->aiCandidatesCacheKey($requirement)] ?? [];
+
+        return $intent !== [] && $this->aiSearch->isOtherRequestedProducer($intent, $product);
     }
 
     /** Inny wariant nazwanego modelu jako propozycja — co zamówił klient i co jest na karcie; model tej karty nie oceniał. */
@@ -3156,6 +3206,22 @@ final class ProductMatchService
             array_unshift($reasons, [
                 'code' => self::NOT_RECONFIRMED,
                 'label' => $this->otherVariantLabel($item->requirement, $existing),
+                'points' => $score,
+            ]);
+            $item->ai_match_percent = $score;
+            $item->ai_match_reasons = $reasons;
+
+            return;
+        }
+        // Karta innej marki zapisana wcześniej po słowach karty (70% „bez oceny modelu”) — dziś byłaby tylko propozycją
+        // (decyzja właściciela z 26.09.2026). Źródło „heuristic” bez kodu z SIWZ, nie import z własnym SKU (bez źródła).
+        if ($item->match_source === 'heuristic'
+            && ! $this->hasStrongSkuInRequirement($item->requirement, $existing)
+            && $this->isOtherRequestedBrand($item->requirement, $existing)) {
+            $score = min($score, $this->minMatchScore() - 1);
+            array_unshift($reasons, [
+                'code' => self::NOT_RECONFIRMED,
+                'label' => $this->otherBrandLabel($item->requirement, $existing),
                 'points' => $score,
             ]);
             $item->ai_match_percent = $score;

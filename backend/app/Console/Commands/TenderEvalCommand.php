@@ -623,6 +623,9 @@ final class TenderEvalCommand extends Command
             'products' => $products,
             // Karty odrzucone przez model (< 40) — bez nich --replay wybierałby je po słowach z 70%.
             'trace' => ['model_rejected' => is_array($row['trace']['model_rejected'] ?? null) ? $row['trace']['model_rejected'] : []],
+            // Producent z wymagania wg wyszukiwarki — z niego „karta innej marki bez oceny modelu to tylko propozycja”;
+            // raporty sprzed 26.09.2026 go nie mają, więc ich --replay liczy bez tej bramki.
+            'parsed_intent' => is_array($row['parsed_intent'] ?? null) ? $row['parsed_intent'] : [],
         ];
     }
 

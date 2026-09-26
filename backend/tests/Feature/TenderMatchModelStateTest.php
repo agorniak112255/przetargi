@@ -32,6 +32,8 @@ final class TenderMatchModelStateTest extends TestCase
 
     private const DESCRIPTIVE = 'Rękawice robocze nitrylowe ze ściągaczem, dzianina bawełniana, do prac montażowych';
 
+    private const UVEX_LINE = 'Rękawice robocze nitrylowe uvex ze ściągaczem, dzianina bawełniana, do prac montażowych';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -191,6 +193,170 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertSame('heuristic_only', $item->ai_match_reasons[0]['code'] ?? null);
         $this->assertSame(0, $result['model_unavailable']);
         $this->assertSame(0, $result['model_failed'], 'model odpowiedział „nic nie pasuje” — to nie awaria');
+    }
+
+    /**
+     * Decyzja właściciela z 26.09.2026: marka w wymaganiu (uvex), a po słowach karty wychodzi karta innego producenta
+     * i model nic nie ocenił — to tylko propozycja poniżej progu, nie zapis z 70%.
+     */
+    public function test_word_only_pick_of_another_brand_than_requested_is_only_a_proposal(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $this->uvexGoggles();
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => []]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::UVEX_LINE);
+
+        app(ProductMatchService::class)->matchTender($tender, true);
+        $item->refresh();
+
+        $this->assertSame((int) $glove->id, (int) $item->main_product_id, 'karta zostaje jako propozycja');
+        $this->assertLessThan(app(ProductMatchService::class)->minMatchScore(), (int) $item->ai_match_percent);
+        $this->assertSame(ProductMatchService::PROPOSAL, $item->ai_match_reasons[0]['code'] ?? null);
+        $label = (string) ($item->ai_match_reasons[0]['label'] ?? '');
+        $this->assertStringContainsString('innego producenta (REJS) niż nazwany w zapytaniu (UVEX)', $label);
+        $this->assertStringContainsString('bez oceny modelu', $label);
+    }
+
+    /** Marki z zapytania nie ma w katalogu — karta innej marki jest zamiennikiem jak dotąd (zapis z sufitem 70%). */
+    public function test_word_only_pick_is_saved_when_the_requested_brand_is_not_in_catalog(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => []]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::UVEX_LINE);
+
+        app(ProductMatchService::class)->matchTender($tender, true);
+        $item->refresh();
+
+        $this->assertSame((int) $glove->id, (int) $item->main_product_id);
+        $this->assertSame('heuristic_only', $item->ai_match_reasons[0]['code'] ?? null);
+    }
+
+    /** Przegląd 26.09.2026: „mat.” (materiał) to nie marka „MAT” — zapis jak bez tego słowa. */
+    public function test_common_word_is_not_taken_for_a_requested_brand(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $this->uvexGoggles();
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => []]
+            : []);
+        [$tender, $item] = $this->tenderWith('Rękawice robocze nitrylowe ze ściągaczem, mat. dzianina bawełniana, do prac montażowych');
+
+        app(ProductMatchService::class)->matchTender($tender, true);
+        $item->refresh();
+
+        $this->assertSame((int) $glove->id, (int) $item->main_product_id);
+        $this->assertSame('heuristic_only', $item->ai_match_reasons[0]['code'] ?? null);
+    }
+
+    /**
+     * Słaba karta innej marki (automat by jej nie zapisał) nie wypiera propozycji ocenionej przez model — jak przed
+     * decyzją z 26.09.2026 idzie dalej proposalPick.
+     */
+    public function test_weak_word_only_other_brand_does_not_push_out_the_model_proposal(): void
+    {
+        $weak = Product::query()->create([
+            'sku' => 'WEAK-1', 'name' => 'Rękawice robocze', 'manufacturer' => 'REJS', 'category' => 'Rękawice',
+            'description' => 'Rękawice robocze, rozmiary 7–10.', 'purchase_price' => 2, 'catalog_price_net' => 3, 'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        $rated = Product::query()->create([
+            'sku' => 'RATED-1', 'name' => 'Rękawice nitrylowe montażowe', 'manufacturer' => 'Ansell', 'category' => 'Rękawice',
+            'description' => 'Rękawice nitrylowe montażowe, dzianina.', 'purchase_price' => 5, 'catalog_price_net' => 7, 'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ]);
+        $matcher = app(ProductMatchService::class);
+        $parsed = new \ReflectionProperty($matcher, 'aiParsedIntent');
+        $parsed->setValue($matcher, [md5(self::UVEX_LINE) => ['manufacturer' => 'UVEX', 'manufacturer_requested' => 'uvex']]);
+
+        $pick = (new \ReflectionMethod($matcher, 'pickAuto'))->invoke(
+            $matcher,
+            self::UVEX_LINE,
+            ['product' => $weak, 'score' => 50],
+            [['id' => (int) $rated->id, 'sku' => 'RATED-1', 'name' => (string) $rated->name, 'score' => 55, 'reason' => 'brak dowodu kluczowego warunku', 'source' => 'ai']],
+            Product::query()->get(),
+        );
+
+        $this->assertSame('RATED-1', $pick['product']->sku ?? null);
+        $this->assertSame('ai', $pick['source'] ?? null);
+    }
+
+    /**
+     * Karta innej marki zapisana przed decyzją po słowach karty (70%) spada przy pełnym ponownym dopasowaniu poniżej
+     * progu, także gdy nowa propozycja to inna karta (propozycja nie wypiera zapisanej karty).
+     */
+    public function test_earlier_word_only_save_of_another_brand_drops_below_threshold_on_rematch(): void
+    {
+        $old = $this->glove('RNITZ-OLD');
+        $cheaper = $this->glove('RNITZ-NEW');
+        $cheaper->forceFill(['manufacturer' => 'INNY', 'purchase_price' => 1])->save();
+        $this->uvexGoggles();
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => []]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::UVEX_LINE);
+        $item->forceFill([
+            'main_product_id' => $old->id,
+            'status' => 'matched',
+            'match_source' => 'heuristic',
+            'ai_match_percent' => 70,
+            'ai_match_reasons' => [['code' => 'heuristic_only', 'label' => 'po słowach', 'points' => 70]],
+        ])->save();
+
+        app(ProductMatchService::class)->matchTender($tender, false);
+        $item->refresh();
+
+        $this->assertSame((int) $old->id, (int) $item->main_product_id, 'propozycja nie wypiera zapisanej karty');
+        $this->assertLessThan(app(ProductMatchService::class)->minMatchScore(), (int) $item->ai_match_percent);
+        $this->assertStringContainsString('innego producenta (REJS)', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+    }
+
+    /** Pozycja z importu z własnym SKU (bez źródła dopasowania) nie dostaje etykiety „wybrana po słowach karty”. */
+    public function test_imported_item_of_another_brand_is_not_labelled_as_word_only_pick(): void
+    {
+        $old = $this->glove('RNITZ-OLD');
+        $cheaper = $this->glove('RNITZ-NEW');
+        $cheaper->forceFill(['manufacturer' => 'INNY', 'purchase_price' => 1])->save();
+        $this->uvexGoggles();
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => []]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::UVEX_LINE);
+        $item->forceFill([
+            'main_product_id' => $old->id,
+            'status' => 'matched',
+            'match_source' => null,
+            'ai_match_percent' => 100,
+        ])->save();
+
+        app(ProductMatchService::class)->matchTender($tender, false);
+        $item->refresh();
+
+        $this->assertSame((int) $old->id, (int) $item->main_product_id);
+        foreach ($item->ai_match_reasons ?? [] as $reason) {
+            $this->assertStringNotContainsString('po słowach karty', (string) ($reason['label'] ?? ''));
+        }
+    }
+
+    /** Karta marki z wymagania wybrana po słowach — jak dotąd zapis z sufitem 70%. */
+    public function test_word_only_pick_of_the_requested_brand_is_still_saved(): void
+    {
+        $glove = $this->glove('RNITZ-M');
+        $glove->forceFill(['manufacturer' => 'UVEX'])->save();
+        $this->stubModel(static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => []]
+            : []);
+        [$tender, $item] = $this->tenderWith(self::UVEX_LINE);
+
+        app(ProductMatchService::class)->matchTender($tender, true);
+        $item->refresh();
+
+        $this->assertSame((int) $glove->id, (int) $item->main_product_id);
+        $this->assertSame('heuristic_only', $item->ai_match_reasons[0]['code'] ?? null);
+        $this->assertGreaterThanOrEqual(app(ProductMatchService::class)->minMatchScore(), (int) $item->ai_match_percent);
     }
 
     public function test_line_with_sku_code_matches_without_model(): void
@@ -619,6 +785,23 @@ final class TenderMatchModelStateTest extends TestCase
             'stock' => 10,
             'enrichment_status' => Product::ENRICHMENT_DONE,
             'enrichment_payload' => ['materials' => ['nitryl', 'bawełna']],
+            'enriched_at' => now(),
+        ]);
+    }
+
+    /** Karta UVEX innego rodzaju — marka jest w katalogu, ale nie ma rękawic z tego wymagania. */
+    private function uvexGoggles(): Product
+    {
+        return Product::query()->create([
+            'sku' => 'UVX-GOGLE',
+            'name' => 'Gogle ochronne uvex ultrasonic',
+            'manufacturer' => 'UVEX',
+            'category' => 'Okulary i gogle',
+            'description' => 'Gogle ochronne uvex ultrasonic, szybka poliwęglanowa, EN 166.',
+            'catalog_price_net' => 40,
+            'purchase_price' => 30,
+            'stock' => 3,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
             'enriched_at' => now(),
         ]);
     }

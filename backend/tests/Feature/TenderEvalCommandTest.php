@@ -445,6 +445,17 @@ final class TenderEvalCommandTest extends TestCase
         $this->assertSame(['11202000', 30], [$recorded['products'][40]['sku'], $recorded['products'][40]['ai_match_percent']]);
     }
 
+    /** --replay ma widzieć producenta z wymagania (karta innej marki bez oceny modelu = propozycja, 26.09.2026). */
+    public function test_recorded_search_keeps_parsed_intent(): void
+    {
+        $command = app(TenderEvalCommand::class);
+        $intent = ['manufacturer' => 'UVEX', 'manufacturer_requested' => 'uvex'];
+
+        $recorded = (new \ReflectionMethod($command, 'recordedSearch'))->invoke($command, ['model_state' => 'empty', 'products' => [], 'parsed_intent' => $intent]);
+
+        $this->assertSame($intent, $recorded['parsed_intent']);
+    }
+
     public function test_replay_of_report_without_recorded_search_fails_clearly(): void
     {
         $recorded = storage_path('framework/testing/tender-eval-old-'.uniqid().'.json');

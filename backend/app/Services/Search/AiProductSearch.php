@@ -88,6 +88,25 @@ final class AiProductSearch
     }
 
     /**
+     * Karta innego producenta niż nazwany w wymaganiu, wg `parsed_intent` z odpowiedzi `find()`/`findMany()` — ta sama
+     * reguła co lista zapasowa wyszukiwarki (całe słowa, podmarka ze słownika).
+     *
+     * @param  array<string, mixed>  $parsedIntent
+     */
+    public function isOtherRequestedProducer(array $parsedIntent, Product $product): bool
+    {
+        return $this->engine->isOtherRequestedProducer($parsedIntent, $product);
+    }
+
+    /**
+     * @param  array<string, mixed>  $parsedIntent
+     */
+    public function requestedProducerName(array $parsedIntent): string
+    {
+        return $this->engine->requestedProducerName($parsedIntent);
+    }
+
+    /**
      * Ślad ostatniego wywołania `find()` — pula kandydatów, karty wysłane do modelu, czasy.
      * Sensowny wyłącznie zaraz po wywołaniu; `find()` zwraca go też w odpowiedzi.
      *
