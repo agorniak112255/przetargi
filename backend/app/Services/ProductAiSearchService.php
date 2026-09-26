@@ -204,7 +204,7 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-25-pieta-ze-zdjecia';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-26-dowod-z-karty';
 
     /**
      * Wersja instrukcji kroku „zrozum wymaganie”. Zrozumienie zapisujemy raz na treść wymagania i tę wersję
@@ -6625,6 +6625,10 @@ final class ProductAiSearchService
                     .'nie zwracaj trzewika/półbuta tylko dlatego, że w opisie jest „funkcja ESD”. '
                     .'Przeciwieństwo cechy (kompozyt vs metal, Typ 6 vs Typ 3) → nie zwracaj. '
                     .'Nie zgaduj z nazwy handlowej. '
+                    // M11 (diagnoza 25.09.2026, opisowy15-11): płukanka 7251-7200 dostawała 90–93 z cechami karty 7251
+                    // („sterylny”, „izotoniczny”), których jej własna karta nie ma.
+                    .'Dowód tylko z tej karty: cecha innej karty z listy, tej samej serii albo wyrobu wskazanego kodem '
+                    .'w opisie to wniosek, nie dowód — taki warunek kluczowy wpisz do missing_key. '
                     .'Wspólna cecha (siatkowa) albo przypadkowa norma EN NIE wystarczy. '
                     .$brandRule
                     .'Marka/model z SIWZ wygrywa przy literówce (TEPM-ICE=TEMP-ICE); nie zmieniaj marki przez EN. '
@@ -6633,7 +6637,8 @@ final class ProductAiSearchService
                     .'(podnie = spodnie, rekawice = rękawice). '
                     .'Brak zgodnej nazwy albo sprzeczność / brak dowodu kluczowego warunku na każdej karcie: {"matches":[]}. '
                     .'W matches TYLKO id, score, reason, missing_key — bez sku, name, specs, opisu i karty. '
-                    .'missing_key: lista KLUCZOWYCH warunków bez dowodu na karcie (pusta, gdy brakuje tylko drugorzędnych). '
+                    .'missing_key: lista KLUCZOWYCH warunków bez dowodu na karcie (pusta, gdy brakuje tylko drugorzędnych); '
+                    .'każdy kluczowy warunek, którego brak opisujesz w reason, musi być w missing_key. '
                     .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}]}. '
                     .$reasonHint
                     .'score>=40 tylko przy zgodnej nazwie i bez sprzeczności z warunkiem. Max '.$maxMatches.'. '

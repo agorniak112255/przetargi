@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ProductAiSearchService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -59,6 +60,10 @@ final class RankAnswerLengthTest extends TestCase
         $this->assertNotNull($rank);
         $this->assertGreaterThanOrEqual(4000, $rank['max_tokens']);
         $this->assertStringContainsString('reason: max 20 słów', $rank['system']);
+        // M11 (26.09.2026): cecha innej karty, serii albo wyrobu wskazanego kodem to nie dowód; brak z reason → missing_key
+        $this->assertStringContainsString('Dowód tylko z tej karty', $rank['system']);
+        $this->assertStringContainsString('każdy kluczowy warunek, którego brak opisujesz w reason, musi być w missing_key', $rank['system']);
+        $this->assertSame('rank-2026-09-26-dowod-z-karty', ProductAiSearchService::RANK_PROMPT_VERSION);
     }
 
     public function test_truncated_answer_in_batch_is_logged_with_number_of_rated_cards(): void
