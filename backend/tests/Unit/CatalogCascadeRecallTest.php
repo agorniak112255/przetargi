@@ -172,6 +172,49 @@ final class CatalogCascadeRecallTest extends TestCase
         $this->assertSame($delta->id, $hit['products']->first()?->id);
     }
 
+    /**
+     * M10 z planu napraw 25.09.2026 (golden opisowy15-15): kroki „lateksowe”, „flokowane” wymagały dokładnie tych słów,
+     * a karta AlphaTec 87-320 pisze „z naturalnego lateksu … wyłożone flokiem”. Rdzeń przymiotnika jest dodatkową igłą
+     * OR, pełne słowo zostaje; karta bez „flok” dalej nie spełnia kroku „flokowane”.
+     */
+    public function test_adjective_step_also_matches_its_noun_stem(): void
+    {
+        $base = [
+            'manufacturer' => 'Ansell',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 2,
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+        ];
+        Product::query()->create($base + [
+            'sku' => '87320100-PAIR',
+            'name' => 'Rękawice AlphaTec 87-320',
+            'description' => 'Rękawice z naturalnego lateksu, wnętrze wyłożone flokiem bawełnianym, mankiet rolowany.',
+        ]);
+        Product::query()->create($base + [
+            'sku' => 'LATEX-NOFLOCK',
+            'name' => 'Rękawice gospodarcze',
+            'description' => 'Rękawice z naturalnego lateksu, wnętrze gładkie.',
+        ]);
+
+        $hit = $this->app->make(CatalogCascadeRecall::class)->retrieve(
+            'Rękawice ochronne z lateksu naturalnego, flokowane',
+            [
+                'needed' => 'rękawice lateksowe flokowane',
+                'search_phrases' => ['rękawice lateksowe flokowane'],
+                'search_steps' => ['rękawice', 'lateksowe', 'flokowane'],
+                'constraints' => [],
+            ],
+            'Rękawice ochronne z lateksu naturalnego, flokowane',
+            20
+        );
+
+        $this->assertSame('steps_3', $hit['level']);
+        $skus = $hit['products']->pluck('sku')->all();
+        $this->assertContains('87320100-PAIR', $skus);
+        $this->assertNotContains('LATEX-NOFLOCK', $skus, 'bez „flok” krok „flokowane” niespełniony');
+    }
+
     public function test_pcv_query_keeps_pvc_token_and_finds_pvc_glove(): void
     {
         Product::query()->create([

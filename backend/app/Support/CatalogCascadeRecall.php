@@ -271,6 +271,7 @@ final class CatalogCascadeRecall
         if ($needles === []) {
             $needles = [$token];
         }
+        $needles = array_values(array_unique([...$needles, ...$this->stepTokenVariants($token)]));
         $builder->where(function (Builder $outer) use ($needles, $nameOnly): void {
             foreach ($needles as $needle) {
                 $like = '%'.addcslashes($needle, '%_\\').'%';
@@ -283,6 +284,24 @@ final class CatalogCascadeRecall
                 }
             }
         });
+    }
+
+    /**
+     * Rdzeń przymiotnika na -owe / -owany jako dodatkowa igła OR tokenu kroku (M10 z planu napraw 25.09.2026); pełne
+     * słowo zostaje, więc warunek AND między krokami się nie zmienia. „lateksowe” → „lateks” („z naturalnego lateksu”),
+     * „flokowane” → „flok” („wyłożone flokiem”) — karta AlphaTec 87-320 odpadała z kroków „lateksowe”, „flokowane”.
+     * Synonimów antystatyki (ESD, EN 1149) tu nie dokładamy: w pomiarze na 41 wzorcach nic nie dały, a w 374 wypychały
+     * trafną kartę z 24 kart oceny.
+     *
+     * @return list<string>
+     */
+    private function stepTokenVariants(string $token): array
+    {
+        if (preg_match('/^(\p{L}{4,}?)ow(?:e|a|y|ej|ych|ym|ane|ana|any|anej|anych)$/u', $token, $m) === 1) {
+            return [$m[1]];
+        }
+
+        return [];
     }
 
     /** @return list<string> */
