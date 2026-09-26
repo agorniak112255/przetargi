@@ -100,6 +100,17 @@ final class ProductMatchService
     /** Karta wskazana kodem z SIWZ, pominięta, bo nie ma opisu — inna karta automatyczna jej nie zastępuje. */
     private ?int $lastUndescribedCodePickId = null;
 
+    /**
+     * Nazwany model jest w katalogu tylko w innych wariantach (pod „ARMEN 9007 1010 S1” same 6660 i 9360): żądane kody
+     * i karty innych wariantów — do powodu braku karty; inna karta automatyczna ich nie zastępuje.
+     *
+     * @var array{codes: list<string>, ids: list<int>, skus: list<string>}|null
+     */
+    private ?array $lastOtherVariantOnly = null;
+
+    /** Nazwany model jest w katalogu tylko w innym wariancie — o zamianie wariantu decyduje człowiek. */
+    public const NO_MATCH_OTHER_VARIANT = 'other_variant_only';
+
     /** Wybór heurystyczny bez potwierdzenia modelu przy opisie bez kodu — tyle najwyżej. */
     private const HEURISTIC_ONLY_CAP = 70;
 
@@ -330,6 +341,7 @@ final class ProductMatchService
                 $this->lastModelLowScore = null;
                 $this->lastUndescribedSku = null;
                 $this->lastUndescribedCodePickId = null;
+                $this->lastOtherVariantOnly = null;
                 $pick = $this->resolveBestPick($item->requirement, $products);
                 // Zapytanie do modelu padło (limit tempa, timeout, błąd API). Liczymy każdą taką pozycję,
                 // także tę, która zachowała poprzednią kartę — inaczej awaria dostawcy wygląda w raporcie
@@ -582,7 +594,14 @@ final class ProductMatchService
                 $compatibleNamed = $named->filter(
                     fn (Product $p): bool => $this->assortment->compatibleProduct($requirement, $p)
                 );
-                $products = $compatibleNamed->isNotEmpty() ? $compatibleNamed : $products;
+                // Żądany wariant przed innymi kolorami: lista jest potem układana od najtańszej, więc bez tego
+                // heurystyka brała tańszy 6660 także wtedy, gdy 1010 jest w katalogu.
+                $requested = $compatibleNamed->reject(
+                    fn (Product $p): bool => $this->modelFuzzy->isOtherVariant($requirement, $p)
+                );
+                $products = $requested->isNotEmpty()
+                    ? $requested
+                    : ($compatibleNamed->isNotEmpty() ? $compatibleNamed : $products);
             }
         }
         $scored = [];
@@ -1015,11 +1034,12 @@ final class ProductMatchService
     }
 
     /**
-     * 1) dokładny SKU w SIWZ, 2) mocny kod modelowy — bez „600” ⊂ „60028”.
+     * 1) dokładny SKU w SIWZ, 2) mocny kod modelowy — bez „600” ⊂ „60028”. SKU z $notSkus nie trafia regułą 1.
      *
      * @param  list<string>  $reqCodes
+     * @param  list<string>  $notSkus
      */
-    private function skuMatchScore(string $req, array $reqCodes, Product $product): int
+    private function skuMatchScore(string $req, array $reqCodes, Product $product, array $notSkus = []): int
     {
         $skuNorm = $this->normalize($product->sku);
         $skuCompact = preg_replace('/\s+/', '', $skuNorm) ?? $skuNorm;
@@ -1030,7 +1050,7 @@ final class ProductMatchService
         $reqNoNorms = $this->stripNormNumbers($req);
 
         // pełny SKU jako osobny token — POLA nie trafia w POLAR
-        if (mb_strlen($skuCompact) >= 4 && preg_match(
+        if (mb_strlen($skuCompact) >= 4 && ! in_array($skuCompact, $notSkus, true) && preg_match(
             '/(^|[^a-z0-9])'.preg_quote($skuCompact, '/').'([^a-z0-9]|$)/u',
             $reqNoNorms
         ) === 1) {
@@ -1422,6 +1442,7 @@ final class ProductMatchService
         $this->lastModelLowScore = null;
         $this->lastUndescribedSku = null;
         $this->lastUndescribedCodePickId = null;
+        $this->lastOtherVariantOnly = null;
         $pick = $this->resolveBestPick($item->requirement, $products, $aiCandidates);
 
         if ($pick === null) {
@@ -1510,7 +1531,27 @@ final class ProductMatchService
      */
     private function resolveBestPick(string $requirement, Collection $products, ?array $aiCandidates = null): ?array
     {
-        $skuPick = $this->strongSkuPick($requirement, $products);
+        $matches = $this->strongSkuMatches($requirement, $products);
+        $skuPick = $this->bestStrongSkuPick($requirement, $matches);
+        if ($skuPick === null && $this->modelFuzzy->variantCodes($requirement) !== []) {
+            // Pula po kodzie bywa przycięta (LIKE, limit 80), więc przy oznaczeniu wariantu sprawdzamy jeszcze karty
+            // z wyniku wyszukiwania: żądany wariant stamtąd wchodzi tą samą drogą co z puli (bramki, remis, a bez opisu —
+            // czekanie na opis tej karty zamiast propozycji innego koloru).
+            $aiCandidates ??= $this->aiTopCandidates($requirement);
+            $matches = $this->withSearchMatches($requirement, $matches, $aiCandidates, $products);
+            $skuPick = $this->bestStrongSkuPick($requirement, $matches);
+            if ($skuPick === null && $this->hasOtherVariant($requirement, $matches)) {
+                return $this->otherVariantProposal(
+                    $requirement,
+                    array_values(array_filter(
+                        $matches,
+                        fn (array $match): bool => $this->modelFuzzy->isOtherVariant($requirement, $match['product'])
+                    )),
+                    $aiCandidates,
+                    $products,
+                );
+            }
+        }
         if ($skuPick !== null) {
             $honest = $this->persistableScore($requirement, $skuPick['product'], $skuPick['score']);
             if ($honest !== null) {
@@ -1563,8 +1604,112 @@ final class ProductMatchService
             return null;
         }
         $picked['score'] = $honest;
+        // Zabezpieczenie: inny wariant nazwanego modelu nigdy nie jest zapisem, którąkolwiek drogą by przyszedł.
+        if ($this->modelFuzzy->isOtherVariant($requirement, $picked['product'])) {
+            return [
+                'product' => $picked['product'],
+                'score' => min($honest, $this->otherVariantProposalScore()),
+                'source' => $source,
+                'proposal' => true,
+            ];
+        }
 
         return $picked;
+    }
+
+    /**
+     * Nazwany model jest w katalogu tylko w innych wariantach (pod „ARMEN 9007 1010 S1” same 6660 i 9360): automat nie
+     * zapisuje innego koloru ani nie podstawia innego wyrobu dobranego po słowach karty. Pozycja dostaje propozycję poniżej
+     * progu — najlepszą kartę innego wariantu z wyniku wyszukiwania (wyszukiwarka daje im VARIANT_MISMATCH_SCORE) —
+     * albo zostaje pusta z powodem, który nazywa żądany wariant i warianty z katalogu.
+     *
+     * @param  list<array{product: Product, score: int}>  $otherVariants
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     * @param  Collection<int, Product>  $products
+     * @return array{product: Product, score: int, source: string, proposal: true}|null
+     */
+    private function otherVariantProposal(string $requirement, array $otherVariants, array $aiCandidates, Collection $products): ?array
+    {
+        $ids = [];
+        foreach ($otherVariants as $match) {
+            $ids[(int) $match['product']->id] = true;
+        }
+        // Tylko wiersze innych wariantów: proposalPick bierze każdy wiersz 40–64, więc bez tego zawężenia mógłby
+        // zaproponować wyrób innego modelu. Próg zapisu jest ustawieniem — propozycja zostaje zawsze poniżej niego.
+        $rows = [];
+        foreach ($aiCandidates as $row) {
+            if (isset($ids[(int) $row['id']])) {
+                $rows[] = ['score' => min((int) $row['score'], $this->otherVariantProposalScore())] + $row;
+            }
+        }
+        $proposal = $this->proposalPick($requirement, $rows, $products);
+        if ($proposal === null) {
+            $missing = [];
+            foreach ($otherVariants as $match) {
+                $missing = [...$missing, ...$this->modelFuzzy->missingVariantCodes($requirement, $match['product'])];
+            }
+            $this->lastOtherVariantOnly = [
+                'codes' => array_values(array_unique($missing)),
+                'ids' => array_keys($ids),
+                'skus' => array_values(array_unique(array_map(
+                    static fn (array $match): string => (string) $match['product']->sku,
+                    $otherVariants
+                ))),
+            ];
+            $this->lastNoMatchReason ??= self::NO_MATCH_OTHER_VARIANT;
+        }
+
+        return $proposal;
+    }
+
+    /**
+     * @param  list<array{product: Product, score: int}>  $matches
+     */
+    private function hasOtherVariant(string $requirement, array $matches): bool
+    {
+        foreach ($matches as $match) {
+            if ($this->modelFuzzy->isOtherVariant($requirement, $match['product'])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Karty wskazane kodem z SIWZ uzupełnione o karty z wyniku wyszukiwania — te same bramki i próg co pula po kodzie.
+     *
+     * @param  list<array{product: Product, score: int}>  $matches
+     * @param  list<array{id: int, sku: string, name: string, score: int, reason: ?string, source: string}>  $aiCandidates
+     * @param  Collection<int, Product>  $products
+     * @return list<array{product: Product, score: int}>
+     */
+    private function withSearchMatches(string $requirement, array $matches, array $aiCandidates, Collection $products): array
+    {
+        $have = [];
+        foreach ($matches as $match) {
+            $have[(int) $match['product']->id] = true;
+        }
+        $extra = [];
+        foreach ($aiCandidates as $row) {
+            $id = (int) ($row['id'] ?? 0);
+            if ($id <= 0 || isset($have[$id])) {
+                continue;
+            }
+            $product = $products->firstWhere('id', $id) ?? Product::query()->find($id);
+            if ($product instanceof Product) {
+                $extra[] = $product;
+                $have[$id] = true;
+            }
+        }
+
+        return $extra === [] ? $matches : [...$matches, ...$this->strongSkuMatches($requirement, collect($extra))];
+    }
+
+    /** Ocena innego wariantu — jak w wyszukiwarce (60), ale zawsze poniżej progu zapisu z ustawień. */
+    private function otherVariantProposalScore(): int
+    {
+        return min(ProductAiSearchService::VARIANT_MISMATCH_SCORE, $this->minMatchScore() - 1);
     }
 
     /**
@@ -1716,6 +1861,21 @@ final class ProductMatchService
                     ->orWhere('name', 'like', $like);
             }
         });
+        // Przy oznaczeniu wariantu karty z największą liczbą żądanych kodów i numerów modelu idą pierwsze: bez kolejności
+        // limit 80 odcinał ARMEN 9007 1010 przy 130 kartach „… 1010 …” innych modeli, a zostawiał 6660 — i wtedy
+        // „w katalogu tylko inny wariant”. Karta z numerem modelu i kodem wariantu wyprzedza karty z jednym z nich.
+        $codes = $this->modelFuzzy->variantCodes($requirement);
+        if ($codes !== []) {
+            $contains = [];
+            $bindings = [];
+            foreach (array_values(array_unique([...$codes, ...$this->modelFuzzy->modelNumbers($requirement)])) as $code) {
+                $contains[] = '(CASE WHEN name LIKE ? OR sku LIKE ? THEN 1 ELSE 0 END)';
+                $like = '%'.addcslashes($code, '%_\\').'%';
+                $bindings[] = $like;
+                $bindings[] = $like;
+            }
+            $query->orderByRaw(implode(' + ', $contains).' DESC', $bindings)->orderBy('id');
+        }
 
         return $query->limit(80)->get();
     }
@@ -1726,21 +1886,28 @@ final class ProductMatchService
      */
     private function strongSkuPick(string $requirement, Collection $products): ?array
     {
-        $best = null;
+        return $this->bestStrongSkuPick($requirement, $this->strongSkuMatches($requirement, $products));
+    }
+
+    /**
+     * Karty wskazane kodem albo nazwanym modelem z SIWZ (wynik ≥ 70) po bramkach asortymentu i antystatyki — także
+     * inne warianty nazwanego modelu; odsiewa je dopiero wybór (bestStrongSkuPick), a resolveBestPick po nich poznaje,
+     * że model jest w katalogu tylko w innym wariancie.
+     *
+     * @param  Collection<int, Product>  $products
+     * @return list<array{product: Product, score: int}>
+     */
+    private function strongSkuMatches(string $requirement, Collection $products): array
+    {
         $reqNorm = $this->normalize($requirement);
         $reqCodes = $this->codeCandidates($requirement);
         $hasNamed = $this->modelFuzzy->hasNamedModel($requirement);
         if ($products->count() > 120 || ($products->isEmpty() && ($reqCodes !== [] || $hasNamed))) {
             $products = $this->narrowSkuPool($requirement, $reqCodes, $hasNamed);
         }
-        if ($products->isEmpty()) {
-            return null;
-        }
-        // remis punktów: najpierw więcej dowodów z karty (explainMatch), dopiero potem cena
-        $explained = [];
-        $evidence = function (Product $p) use (&$explained, $requirement): int {
-            return $explained[spl_object_id($p)] ??= (int) $this->explainMatch($requirement, $p)['score'];
-        };
+        // słowo, numer i kod koloru nazwanego modelu („ARMEN 9007 1010 S1” → armen, 9007, 1010) — pusta bez kodu wariantu
+        $modelParts = $this->modelFuzzy->variantAnchorParts($requirement);
+        $out = [];
         foreach ($products as $product) {
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
                 continue;
@@ -1758,12 +1925,46 @@ final class ProductMatchService
                 $this->skuMatchScore($reqNorm, $reqCodes, $product),
                 $this->modelFuzzy->strongSkuScore($requirement, $product)
             );
-            if ($score < 70) {
+            // Części oznaczenia nazwanego modelu są dowodem kodu tylko dla kart tego modelu: SKU „1010” albo „9007”
+            // innego wyrobu to przypadek. Przy samych innych kolorach taka karta wchodziła do oferty z 85% (przegląd
+            // 26.09.2026), a bliższy wyrób — inny kolor modelu — był tylko propozycją.
+            if ($score >= 70 && $modelParts !== [] && ! $this->modelFuzzy->isVariantModelCard($requirement, $product)) {
+                $score = max(
+                    $this->skuMatchScore($reqNorm, array_values(array_diff($reqCodes, $modelParts)), $product, $modelParts),
+                    $this->modelFuzzy->strongSkuScore($requirement, $product)
+                );
+            }
+            if ($score >= 70) {
+                $out[] = ['product' => $product, 'score' => $score];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  list<array{product: Product, score: int}>  $matches
+     * @return array{product: Product, score: int, source: string}|null
+     */
+    private function bestStrongSkuPick(string $requirement, array $matches): ?array
+    {
+        $best = null;
+        // remis punktów: najpierw więcej dowodów z karty (explainMatch), dopiero potem cena
+        $explained = [];
+        $evidence = function (Product $p) use (&$explained, $requirement): int {
+            return $explained[spl_object_id($p)] ??= (int) $this->explainMatch($requirement, $p)['score'];
+        };
+        foreach ($matches as $match) {
+            $product = $match['product'];
+            // Inny wariant nazwanego modelu nie jest wyborem po kodzie: pod „ARMEN 9007 1010 S1” igła „armen9007” dawała
+            // 99 każdemu kolorowi, a remis wygrywał najtańszy 6660 (tenders:eval na produkcji). Taka karta jest najwyżej
+            // propozycją poniżej progu (resolveBestPick, gdy żądanego wariantu brak w katalogu).
+            if ($this->modelFuzzy->isOtherVariant($requirement, $product)) {
                 continue;
             }
             $candidate = [
                 'product' => $product,
-                'score' => max($this->minMatchScore(), $score),
+                'score' => max($this->minMatchScore(), $match['score']),
                 'source' => 'heuristic',
             ];
             if ($best === null || $candidate['score'] > $best['score']) {
@@ -1775,6 +1976,11 @@ final class ProductMatchService
                 continue;
             }
             $gap = $evidence($product) <=> $evidence($best['product']);
+            if ($gap === 0) {
+                // kod karty przepisany przez klienta przed ceną — jak w wyszukiwarce (rowsFromNamedModels)
+                $gap = (int) $this->modelFuzzy->variantSkuWrittenInQuery($requirement, $product)
+                    <=> (int) $this->modelFuzzy->variantSkuWrittenInQuery($requirement, $best['product']);
+            }
             if ($gap > 0 || ($gap === 0 && $this->purchasePln($product) < $this->purchasePln($best['product']))) {
                 $best = $candidate;
             }
@@ -1834,7 +2040,10 @@ final class ProductMatchService
      */
     private function pickAuto(string $requirement, ?array $heuristic, array $aiCandidates, Collection $products): ?array
     {
-        if ($heuristic !== null && $heuristic['score'] >= $this->applyMatchScore()
+        // Inny wariant nazwanego modelu (pod „ARMEN 9007 1010 S1” karta 6660) nie jest zapisem na żadnej z trzech dróg
+        // niżej — zostaje mu tylko proposalPick, jak w wyszukiwarce (VARIANT_MISMATCH_SCORE poniżej progu).
+        $heuristicOtherVariant = $heuristic !== null && $this->modelFuzzy->isOtherVariant($requirement, $heuristic['product']);
+        if ($heuristic !== null && ! $heuristicOtherVariant && $heuristic['score'] >= $this->applyMatchScore()
             && $this->hasStrongSkuInRequirement($requirement, $heuristic['product'])
             && $this->persistableScore($requirement, $heuristic['product'], $heuristic['score']) !== null) {
             return [
@@ -1852,6 +2061,10 @@ final class ProductMatchService
                 continue;
             }
             if (! $this->assortment->compatibleProduct($requirement, $product)) {
+                continue;
+            }
+            // Przed sprawdzeniem opisu: inny kolor bez opisu nie może skończyć prośbą o opis złej karty.
+            if ($this->modelFuzzy->isOtherVariant($requirement, $product)) {
                 continue;
             }
             // Karta bez opisu nie trafia do propozycji — nawet z wysoką oceną modelu (ocena z samej nazwy).
@@ -1941,6 +2154,9 @@ final class ProductMatchService
                 $this->lastNoMatchReason = self::NO_MATCH_MODEL_UNAVAILABLE;
 
                 return null;
+            }
+            if ($heuristicOtherVariant) {
+                return $this->proposalPick($requirement, $aiCandidates, $products);
             }
             // Model ocenił tę kartę poniżej progu (ranking: brak dowodu kluczowego warunku → najwyżej 50,
             // np. 9312+ bez węgla aktywnego) — słowa karty nie odwracają tej oceny i nie dopisują
@@ -2051,6 +2267,9 @@ final class ProductMatchService
 
         $this->lastNoMatchReason = null;
         $this->lastModelLowScore = null;
+        $this->lastUndescribedSku = null;
+        $this->lastUndescribedCodePickId = null;
+        $this->lastOtherVariantOnly = null;
         $pick = $this->resolveBestPick($requirement, $products, $candidates);
         $reason = null;
         if ($pick === null) {
@@ -2077,6 +2296,10 @@ final class ProductMatchService
     {
         if (! $this->assortment->compatibleProduct($requirement, $product)) {
             return 'odrzucona: bramka asortymentu';
+        }
+        if ($this->modelFuzzy->isOtherVariant($requirement, $product)) {
+            return 'odrzucona: inny wariant nazwanego modelu ('.implode(', ', $this->modelFuzzy->missingVariantCodes($requirement, $product))
+                .' w zapytaniu) — tylko propozycja';
         }
         if (! $product->hasDescriptionText()) {
             return 'odrzucona: karta bez opisu';
@@ -2701,7 +2924,9 @@ final class ProductMatchService
         if ($proposal) {
             array_unshift($reasons, [
                 'code' => self::PROPOSAL,
-                'label' => $this->proposalLabel($honest, $aiReason),
+                'label' => $this->modelFuzzy->isOtherVariant($item->requirement, $product)
+                    ? $this->otherVariantLabel($item->requirement, $product)
+                    : $this->proposalLabel($honest, $aiReason),
                 'points' => $honest,
             ]);
         }
@@ -2745,6 +2970,17 @@ final class ProductMatchService
         return $label.' Czego brakuje — w ocenie modelu poniżej.';
     }
 
+    /** Inny wariant nazwanego modelu jako propozycja — co zamówił klient i co jest na karcie; model tej karty nie oceniał. */
+    private function otherVariantLabel(string $requirement, Product $product): string
+    {
+        $cardCodes = $this->modelFuzzy->otherVariantCodes($requirement, $product);
+
+        return 'Propozycja do sprawdzenia — inny wariant modelu niż w zapytaniu: w zapytaniu '
+            .implode(', ', $this->modelFuzzy->missingVariantCodes($requirement, $product))
+            .($cardCodes !== [] ? ', na karcie '.implode(', ', $cardCodes) : '')
+            .'. Automat zapisuje tylko żądany wariant — zamianę (np. koloru) zatwierdza handlowiec.';
+    }
+
     private function substituteReasonLabel(string $requirement): string
     {
         $parts = ['Zamiennik — inna marka/model niż w SIWZ'];
@@ -2779,8 +3015,13 @@ final class ProductMatchService
             $userDecided = in_array($item->match_source, self::USER_DECIDED_SOURCES, true);
             // Automatyczna karta bez opisu nie zostaje w propozycji; wybór ręczny i z battlecard — tak. Nie zostaje też
             // inna karta automatyczna, gdy kod z SIWZ wskazał kartę bez opisu (HF-803 przy „Półmaska 3M 6503”).
-            $codeCardElsewhere = $this->lastUndescribedCodePickId !== null
-                && $this->lastUndescribedCodePickId !== (int) $existing->id;
+            $codeCardElsewhere = ($this->lastUndescribedCodePickId !== null
+                && $this->lastUndescribedCodePickId !== (int) $existing->id)
+                // Nazwany model jest w katalogu tylko w innym wariancie — inna karta automatyczna (innego wyrobu) go nie zastępuje.
+                // Karta z żądanym wariantem zostaje zawsze: jej brak w tym przebiegu to przycięta pula, nie katalog.
+                || ($this->lastOtherVariantOnly !== null
+                    && ! in_array((int) $existing->id, $this->lastOtherVariantOnly['ids'], true)
+                    && ! $this->modelFuzzy->isRequestedVariant($item->requirement, $existing));
             if ($honest !== null && ! $userDecided && (! $existing->hasDescriptionText() || $codeCardElsewhere)) {
                 $this->lastUndescribedSku ??= (string) $existing->sku;
                 $honest = null;
@@ -2807,6 +3048,15 @@ final class ProductMatchService
                     'label' => 'Model nie odpowiedział — pozycja czeka na ponowne dopasowanie (opis bez kodu nie jest dobierany po samych słowach karty).',
                     'points' => 0,
                 ]
+                : ($this->lastOtherVariantOnly !== null
+                ? [
+                    'code' => self::NO_MATCH_OTHER_VARIANT,
+                    'label' => 'W katalogu jest tylko inny wariant modelu (w zapytaniu '
+                        .implode(', ', $this->lastOtherVariantOnly['codes']).'; karty: '
+                        .implode(', ', array_slice($this->lastOtherVariantOnly['skus'], 0, 4))
+                        .') — automat nie zapisuje innego wariantu; wybierz kartę ręcznie, jeśli zamiana jest dopuszczalna.',
+                    'points' => 0,
+                ]
                 : ($this->lastUndescribedSku !== null
                     ? [
                         'code' => self::NO_MATCH_NO_DESCRIPTION,
@@ -2829,7 +3079,7 @@ final class ProductMatchService
                         'code' => 'no_match',
                         'label' => 'Brak produktu w katalogu (szukano w opisach).',
                         'points' => 0,
-                    ])),
+                    ]))),
         ];
         $item->save();
         $this->pricing->recalculateItemMargin($item);
@@ -2899,6 +3149,20 @@ final class ProductMatchService
     {
         $score = min($honest, (int) ($item->ai_match_percent ?? $honest), self::HEURISTIC_ONLY_CAP);
         $reasons = $this->explainMatch($item->requirement, $existing)['reasons'];
+        // Inny wariant zapisany przez automat przed poprawką (6660 pod „ARMEN 9007 1010 S1”, 99%) zostaje w pozycji
+        // najwyżej jako propozycja — pełne dopasowanie od nowa go nie potwierdzi, a 70% liczyło się jako trafienie.
+        if ($this->modelFuzzy->isOtherVariant($item->requirement, $existing)) {
+            $score = min($score, $this->otherVariantProposalScore());
+            array_unshift($reasons, [
+                'code' => self::NOT_RECONFIRMED,
+                'label' => $this->otherVariantLabel($item->requirement, $existing),
+                'points' => $score,
+            ]);
+            $item->ai_match_percent = $score;
+            $item->ai_match_reasons = $reasons;
+
+            return;
+        }
         $rated = $this->withModelRejected(
             $item->requirement,
             $this->aiCandidatesCache[$this->aiCandidatesCacheKey($item->requirement)] ?? [],

@@ -16,6 +16,7 @@ use App\Services\Search\SearchEventRecorder;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
+use App\Support\ProductModelFuzzy;
 use App\Support\RequirementCheck\CardSources;
 use App\Support\RequirementCheck\CheckRow;
 use App\Support\RequirementCheck\En388Code;
@@ -61,6 +62,7 @@ final class BattlecardService
         private readonly LevelChecker $levels,
         private readonly PackageChecker $package,
         private readonly SourcePriceComparison $comparison,
+        private readonly ProductModelFuzzy $modelFuzzy,
     ) {}
 
     /** Pozycja, dla której liczymy zamienniki — do zdarzenia wyszukiwania (ekran „Statystyki AI”); tylko w forItem(). */
@@ -597,6 +599,12 @@ final class BattlecardService
             }
             $save = ($ourPurchase - $price) / $ourPurchase * 100;
             if ($save < $minSavePercent) {
+                continue;
+            }
+            // Zbiorcza zamiana na tańszy zamiennik nie podmienia wariantu nazwanego modelu (1010 na tańszy 6660 pod
+            // „ARMEN 9007 1010 S1”) — na liście zamienników karta zostaje, ale zamianę wariantu zatwierdza człowiek.
+            $subProduct = Product::query()->find((int) ($sub['product_id'] ?? 0));
+            if ($subProduct instanceof Product && $this->modelFuzzy->isOtherVariant((string) $item->requirement, $subProduct)) {
                 continue;
             }
             $best = [

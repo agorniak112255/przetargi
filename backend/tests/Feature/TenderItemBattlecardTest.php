@@ -210,6 +210,123 @@ final class TenderItemBattlecardTest extends TestCase
         $this->assertEquals(5.9, (float) $item->offer_price);
     }
 
+    /**
+     * Zbiorcza zamiana na tańszy zamiennik nie podmienia wariantu nazwanego modelu: pod „ARMEN 9007 1010 S1” tańszy
+     * kolor 6660 zostaje na liście zamienników, ale zamianę wariantu zatwierdza człowiek (recenzja planu 26.09.2026).
+     */
+    public function test_apply_cheaper_substitutes_does_not_swap_to_other_variant(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $shoe = static fn (string $sku, float $price): Product => Product::query()->create([
+            'sku' => $sku,
+            'name' => $sku,
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'description' => 'Półbuty bezpieczne '.$sku.' z podnoskiem.',
+            'norms' => 'EN ISO 20345 S1',
+            'catalog_price_net' => $price,
+            'purchase_price' => $price,
+            'stock' => 10,
+            'ppe_family' => 'footwear',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $ours = $shoe('ARMEN 9007 1010 S1', 30.44);
+        $otherColour = $shoe('ARMEN 9007 6660 S1', 20.0);
+        ProductSubstitute::query()->create([
+            'main_product_id' => $ours->id,
+            'substitute_product_id' => $otherColour->id,
+            'type' => 'tanszy',
+            'match_percent' => 90,
+            'approval_status' => 'zatwierdzony',
+        ]);
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/BC/WARIANT',
+            'title' => 'Wariant',
+            'client_id' => Client::query()->create(['name' => 'Klient W'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wycena',
+            'ai_percent' => 50,
+            'last_activity_at' => now(),
+        ]);
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'buty firmy ARTRA model ARMEN 9007 1010 S1',
+            'main_product_id' => $ours->id,
+            'ai_match_percent' => 99,
+            'quantity' => 10,
+            'offer_price' => 40,
+            'status' => 'ok',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/items/apply-cheaper-substitutes", [
+            'dry_run' => false,
+            'min_save_percent' => 3,
+        ])
+            ->assertOk()
+            ->assertJsonPath('applied_count', 0);
+
+        $this->assertSame($ours->id, $item->fresh()->main_product_id);
+    }
+
+    /** Zamiennik innej marki nie jest „innym wariantem” nazwanego modelu — zbiorcza zamiana dalej go stosuje. */
+    public function test_apply_cheaper_substitutes_keeps_cross_brand_substitute_with_colour_code(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $shoe = static fn (string $sku, string $manufacturer, float $price): Product => Product::query()->create([
+            'sku' => $sku,
+            'name' => $sku,
+            'manufacturer' => $manufacturer,
+            'category' => 'Obuwie',
+            'description' => 'Półbuty bezpieczne '.$sku.' z podnoskiem.',
+            'norms' => 'EN ISO 20345 S1',
+            'catalog_price_net' => $price,
+            'purchase_price' => $price,
+            'stock' => 10,
+            'ppe_family' => 'footwear',
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $ours = $shoe('ARMEN 9007 1010 S1', 'ARTRA', 30.44);
+        $crossBrand = $shoe('REIS BRS S1', 'REIS', 20.0);
+        ProductSubstitute::query()->create([
+            'main_product_id' => $ours->id,
+            'substitute_product_id' => $crossBrand->id,
+            'type' => 'tanszy',
+            'match_percent' => 90,
+            'approval_status' => 'zatwierdzony',
+        ]);
+        $tender = Tender::query()->create([
+            'number' => 'PRZ/BC/INNA-MARKA',
+            'title' => 'Inna marka',
+            'client_id' => Client::query()->create(['name' => 'Klient IM'])->id,
+            'owner_id' => User::factory()->create()->id,
+            'status' => 'wycena',
+            'ai_percent' => 50,
+            'last_activity_at' => now(),
+        ]);
+        $item = TenderItem::query()->create([
+            'tender_id' => $tender->id,
+            'line_no' => 1,
+            'requirement' => 'buty firmy ARTRA model ARMEN 9007 1010 S1',
+            'main_product_id' => $ours->id,
+            'ai_match_percent' => 99,
+            'quantity' => 10,
+            'offer_price' => 40,
+            'status' => 'ok',
+        ]);
+
+        $this->postJson("/api/tenders/{$tender->id}/items/apply-cheaper-substitutes", [
+            'dry_run' => false,
+            'min_save_percent' => 3,
+        ])
+            ->assertOk()
+            ->assertJsonPath('applied_count', 1);
+
+        $this->assertSame($crossBrand->id, $item->fresh()->main_product_id);
+    }
+
     public function test_batch_refresh_builds_battlecard_without_second_ai_search(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

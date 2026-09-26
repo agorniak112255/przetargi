@@ -149,9 +149,10 @@ final class ProductAiSearchService
     /**
      * Karta z rodziny nazwanego modelu, ale bez oznaczenia wariantu z wymagania. Poniżej
      * domyślnego progu zapisu pozycji przetargu (AiSettingsService::MATCH_MIN_SCORE_DEFAULT = 65),
-     * więc zostaje propozycją do decyzji człowieka, a nie automatycznym wpisem do oferty.
+     * więc zostaje propozycją do decyzji człowieka, a nie automatycznym wpisem do oferty. Tę samą ocenę dostaje inny
+     * wariant w dopasowaniu przetargu (ProductMatchService::otherVariantProposalScore).
      */
-    private const VARIANT_MISMATCH_SCORE = 60;
+    public const VARIANT_MISMATCH_SCORE = 60;
 
     /** Limit listy /products „Szukaj w katalogu” — ranking zawsze do tego progu. */
     public const CATALOG_LIMIT = 40;
@@ -5785,6 +5786,12 @@ final class ProductAiSearchService
                 $byModel = $this->modelFuzzy->score($query, $pb) <=> $this->modelFuzzy->score($query, $pa);
                 if ($byModel !== 0) {
                     return $byModel;
+                }
+                // Kod karty przepisany przez klienta przed ceną: „ARMEN 9007 1010 S1” przed tańszym „…Clip 1010 S1”.
+                $byCode = (int) $this->modelFuzzy->variantSkuWrittenInQuery($query, $pb)
+                    <=> (int) $this->modelFuzzy->variantSkuWrittenInQuery($query, $pa);
+                if ($byCode !== 0) {
+                    return $byCode;
                 }
             }
 

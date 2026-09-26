@@ -336,6 +336,70 @@ final class ProductMatchNeedlesTest extends TestCase
         $this->assertSame('34700019', $this->strongSkuPick($req, new Collection([$full, $bare]))['product']->sku ?? null);
     }
 
+    /**
+     * tenders:eval na produkcji: pod „ARMEN 9007 1010 S1” igła „armen9007” dawała 99 każdemu kolorowi i automat brał
+     * najtańszy 6660. Inny wariant nie jest wyborem po kodzie, a przy remisie kart z żądanym wariantem wygrywa karta,
+     * której kod klient przepisał, przed tańszą „Clip”. Ceny jak na produkcji (EUR).
+     */
+    #[Test]
+    public function strong_sku_pick_takes_the_requested_variant_written_by_the_client(): void
+    {
+        $req = 'buty firmy ARTRA model ARMEN 9007 1010 S1';
+        $other = $this->card('ARMEN 9007 6660 S1', 'ARMEN 9007 6660 S1', 'ARTRA', 28.67);
+        $clip = $this->card('ARMEN 9007 Clip 1010 S1', 'ARMEN 9007 Clip 1010 S1', 'ARTRA', 29.69);
+        $exact = $this->card('ARMEN 9007 1010 S1', 'ARMEN 9007 1010 S1', 'ARTRA', 30.44);
+        $this->assertSame(
+            $this->fuzzy->strongSkuScore($req, $clip),
+            $this->fuzzy->strongSkuScore($req, $exact),
+            'fixture: Clip i dokładny kod remisują na fuzzy'
+        );
+        $this->assertSame(
+            $this->matcher->explainMatch($req, $clip)['score'],
+            $this->matcher->explainMatch($req, $exact)['score'],
+            'fixture: i na dowodach — remis rozstrzyga kod z zapytania, nie liczba słów'
+        );
+
+        $this->assertSame('ARMEN 9007 1010 S1', $this->strongSkuPick($req, new Collection([$other, $clip, $exact]))['product']->sku ?? null);
+        $this->assertSame('ARMEN 9007 1010 S1', $this->strongSkuPick($req, new Collection([$exact, $clip, $other]))['product']->sku ?? null);
+        $this->assertSame('ARICA 6207 1010 S2', $this->strongSkuPick('buty firmy ARTRA model ARICA 6207 1010 S2', new Collection([
+            $this->card('ARICA 6207 6660 S2', 'ARICA 6207 6660 S2', 'ARTRA', 28.0),
+            $this->card('ARICA 6207 1010 S2', 'ARICA 6207 1010 S2', 'ARTRA', 31.0),
+        ]))['product']->sku ?? null);
+    }
+
+    /**
+     * Żądanego wariantu brak w katalogu: wybór po kodzie nie bierze innego koloru. Co dostaje wtedy pozycja (propozycja
+     * poniżej progu albo powód braku karty) — TenderOtherVariantMatchTest.
+     */
+    #[Test]
+    public function strong_sku_pick_does_not_take_other_variant(): void
+    {
+        $this->assertNull($this->strongSkuPick('buty firmy ARTRA model ARMEN 9007 1010 S1', new Collection([
+            $this->card('ARMEN 9007 6660 S1', 'ARMEN 9007 6660 S1', 'ARTRA', 28.67),
+            $this->card('ARMEN 9007 9360 S1', 'ARMEN 9007 9360 S1', 'ARTRA', 29.0),
+        ])));
+    }
+
+    /**
+     * Bez oznaczenia wariantu remis dalej rozstrzyga cena: kod dystrybutora złożony z nazwy modelu („27-600”) nie
+     * wygrywa z tańszą kartą producenta (sonda automatu przetargu z 26.09.2026).
+     */
+    #[Test]
+    public function exact_code_tie_break_needs_a_variant_code(): void
+    {
+        $req = 'Rękawice powlekane nitrylem Ansell HYCRON 27-600 · EN ISO 21420 EN 388';
+        $own = $this->card('27600110', 'HyCron 27-600', 'Ansell', 20.0);
+        $distributor = $this->card('27-600', 'HyCron 27-600', 'ANSELL', 25.0);
+        $this->assertSame(
+            $this->fuzzy->strongSkuScore($req, $own),
+            $this->fuzzy->strongSkuScore($req, $distributor),
+            'fixture: obie karty remisują na fuzzy'
+        );
+
+        $this->assertSame('27600110', $this->strongSkuPick($req, new Collection([$distributor, $own]))['product']->sku ?? null);
+        $this->assertSame('27600110', $this->strongSkuPick($req, new Collection([$own, $distributor]))['product']->sku ?? null);
+    }
+
     /** @return list<string> */
     private function reasonCodes(string $requirement, Product $product): array
     {

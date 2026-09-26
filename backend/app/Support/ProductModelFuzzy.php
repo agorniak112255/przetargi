@@ -28,6 +28,15 @@ final class ProductModelFuzzy
      */
     private array $lineCodeCache = [];
 
+    /**
+     * Oznaczenia wariantu razem z modelem, za którym stoją — zależą tylko od wymagania, a isOtherVariant()
+     * i variantSkuWrittenInQuery() idą dla każdej karty, także w porównaniu przy sortowaniu (ok. 0,25 ms na
+     * wyliczenie). Pamięć na ostatnie wymagania, potem od nowa.
+     *
+     * @var array<string, list<array{kind: string, word: string, number: string, needles: list<string>, codes: list<string>}>>
+     */
+    private array $variantAnchorsCache = [];
+
     private const STOP = [
         'rekawice', 'rekawica', 'ochronne', 'ochronna', 'ochronny', 'robocze', 'robocza',
         'produkt', 'art', 'kat', 'para', 'par', 'szt', 'sztuk', 'the', 'and', 'for',
@@ -54,6 +63,25 @@ final class ProductModelFuzzy
 
     /** Słowo, którym klient zapowiada numer katalogowy („symbol RNITz”, „indeks: ABC”). */
     private const CODE_LABEL = '(?:symbol(?:u|em)?|indeks(?:u|em)?|kod(?:u|em)?)';
+
+    /** Słowa, po których stoi oznaczenie koloru albo wariantu („w kolorze 1010”, „wariant 1010”). */
+    private const VARIANT_WORDS = ['kolor', 'koloru', 'kolorze', 'kolorem', 'kol', 'wariant', 'wariantu', 'wariancie'];
+
+    /** Klasy i cechy obuwia (EN ISO 20345/20346/20347): S1, S1P, S3L, SB, O1, OB, P, PL, ESD, SRC, CI, HI, HRO, WRU, FO… */
+    private const FOOTWEAR_MARKER = 's[1-7](?:p[ls]?|[ls])?|sbp?|o[1-7]|ob|p[lsb]?|esd|sr[abc]?|[ch]i|hro|wru?|wpa|fo|lg|sc|cr|an';
+
+    /** Te same oznaczenia i słowa koloru po lettersOnly() — z nich bywa sklejona igła „src1010”, „kolorze1010”. */
+    private const MARKER_NEEDLE_LETTERS = 's(?:p[ls]?|[ls])?|sbp?|ob?|p[lsb]?|esd|sr[abc]?|[ch]i|hro|wru?|wpa|fo|lg|sc|cr|an'
+        .'|kol(?:or(?:u|ze|em)?)?|warian(?:tu?|cie)';
+
+    /** „serii 6000 i 7500” to lista modeli, do których pasuje wyrób, nie model z kolorem. */
+    private const SERIES_WORDS = ['seria', 'serii', 'serie', 'series'];
+
+    /**
+     * Spójnik albo przyimek kończy opis modelu: za nim stoi inny wyrób („do 7002 i 7003”, „dla 3000 pracowników”,
+     * „oraz ARICA 6207 6660”). Tak samo przecinek, ukośnik, średnik i punkt listy (variantWindowTokens).
+     */
+    private const WINDOW_END_WORDS = ['i', 'oraz', 'lub', 'albo', 'czy', 'do', 'dla', 'z', 'ze'];
 
     public function hasNamedModel(string $requirement): bool
     {
@@ -124,46 +152,316 @@ final class ProductModelFuzzy
 
     /**
      * Czterocyfrowe oznaczenia wariantu podane obok modelu, których nie niesie sama igła:
-     * „ARMEN 9007 1010 S1” → 1010 (9007 siedzi już w igle „armen9007”). Numery norm odpadają
-     * razem z rokiem, a wymiary i rozmiary są krótsze, więc nie wchodzą. Liczba z jednostką to ilość
-     * albo miara: przy „…Peltor X2 wersja nagłowna 1500 szt” kod „1500” dawał wszystkim kartom modelu 60%.
+     * „ARMEN 9007 1010 S1” → 1010 (9007 siedzi już w igle „armen9007”). Suma kodów wszystkich kotwic
+     * z variantAnchors() — o karcie rozstrzygają tylko kotwice jej modelu (missingVariantCodes).
      *
      * @return list<string>
      */
     public function variantCodes(string $requirement): array
     {
+        $codes = [];
+        foreach ($this->variantAnchors($requirement) as $anchor) {
+            foreach ($anchor['codes'] as $code) {
+                if (! in_array($code, $codes, true)) {
+                    $codes[] = $code;
+                }
+            }
+        }
+
+        return $codes;
+    }
+
+    /**
+     * Oznaczenia wariantu razem z tym, za czym stoją:
+     * - „model”: para słowo + numer modelu jak w catalogModelWordDigitPairs („ARMEN 9007 1010” → armen9007: 1010);
+     * - „article”: słowo nazwy modelu z igły i numer katalogowy z kreską albo kropką, za długi na parę słowo + numer
+     *   („MaxiFlex Cut 34-8743” → maxiflex: 8743, „ACCELERATE 19999-249-1809” → 1809, „ARMEN 9007-1010”);
+     * - „colour”: słowo „kolor”/„wariant” („w kolorze 1010”) — bez własnego modelu.
+     *
+     * Liczy się miejsce, nie sama liczba: najwyżej dwa słowa za kotwicą, oznaczenia klas obuwia („S1 P SRC ESD”)
+     * nie zajmują miejsca, a spójnik, przyimek, przecinek i ukośnik kończą okno. Każda czterocyfrowa liczba z dalszej
+     * części opisu — „(UE) 2016/425”, „1000 V”, data, „do półmasek serii 6000 i 7500” — robiła z każdej karty modelu
+     * inny wariant, a automat przetargu takie karty odrzuca. Liczba z jednostką to ilość albo miara: przy „…Peltor X2
+     * wersja nagłowna 1500 szt” kod „1500” dawał wszystkim kartom modelu 60%. Kotwicy bez kodu nie ma na liście.
+     *
+     * @return list<array{kind: string, word: string, number: string, needles: list<string>, codes: list<string>}>
+     */
+    private function variantAnchors(string $requirement): array
+    {
+        if (count($this->variantAnchorsCache) >= 256) {
+            $this->variantAnchorsCache = [];
+        }
+
+        return $this->variantAnchorsCache[$requirement] ??= $this->computeVariantAnchors($requirement);
+    }
+
+    /**
+     * @return list<array{kind: string, word: string, number: string, needles: list<string>, codes: list<string>}>
+     */
+    private function computeVariantAnchors(string $requirement): array
+    {
         $needles = $this->needles($requirement);
         if ($needles === []) {
             return [];
         }
-        $text = $this->stripNorms($requirement);
-        preg_match_all('/\b\d{4}\b/u', $text, $m, PREG_OFFSET_CAPTURE);
-        $codes = [];
-        foreach ($m[0] ?? [] as [$code, $offset]) {
-            // Cały token z liczbą i następny token — „1500 szt.”, „1200 par”, „2000ml” to nie wariant.
-            $rest = substr($text, $offset);
-            $parts = preg_split('/\s+/u', $rest, 3) ?: [];
-            if ($this->isQuantity($parts[0] ?? '', $parts[1] ?? null)) {
+        $modelPairs = [];
+        foreach ($this->catalogModelWordDigitPairs($requirement) as [$word, $number]) {
+            $modelPairs[$word.' '.$number] = true;
+        }
+        [$tokens, $breaks] = $this->variantWindowTokens($requirement);
+        $anchors = [];
+        foreach ($tokens as $i => $token) {
+            $word = $this->lettersOnly($token);
+            // „SRC 1010” i „serii 6000” to też para słowo + numer, ale numer jest tam wariantem albo modelem z listy.
+            if ($word === '' || $this->isFootwearMarker($token) || in_array($word, self::SERIES_WORDS, true)) {
                 continue;
             }
-            $codes[] = (string) $code;
+            $isWord = $word === $this->compact($token);
+            $isVariantWord = in_array($word, self::VARIANT_WORDS, true);
+            $number = isset($tokens[$i + 1]) ? $this->compact($tokens[$i + 1]) : '';
+            if (! $isVariantWord && isset($modelPairs[$word.' '.$number])) {
+                $anchors[] = [
+                    'kind' => 'model', 'word' => $word, 'number' => $number, 'needles' => [$word.$number],
+                    'codes' => $this->windowCodes($tokens, $breaks, $i + 1, false, $needles),
+                ];
+            }
+            if ($isWord && $isVariantWord) {
+                $anchors[] = [
+                    'kind' => 'colour', 'word' => $word, 'number' => '', 'needles' => [],
+                    'codes' => $this->windowCodes($tokens, $breaks, $i, false, $needles),
+                ];
+            }
+            $modelNeedles = $isWord && ! $isVariantWord && mb_strlen($word) >= 4 ? $this->needlesWithWord($word, $needles) : [];
+            if ($modelNeedles !== []) {
+                $anchors[] = [
+                    'kind' => 'article', 'word' => $word, 'number' => '', 'needles' => $modelNeedles,
+                    'codes' => $this->windowCodes($tokens, $breaks, $i, true, $needles),
+                ];
+            }
         }
-        $codes = array_unique($codes);
-        if ($codes === []) {
+
+        return array_values(array_filter($anchors, static fn (array $anchor): bool => $anchor['codes'] !== []));
+    }
+
+    /**
+     * Kody z okna za kotwicą bez ilości i miar („1500 szt”, „1000 V”, „2026 r.”) i bez numerów innych modeli.
+     *
+     * @param  list<string>  $tokens
+     * @param  list<bool>  $breaks
+     * @param  list<string>  $needles
+     * @return list<string>
+     */
+    private function windowCodes(array $tokens, array $breaks, int $anchor, bool $articleNumber, array $needles): array
+    {
+        $codes = [];
+        foreach ($this->variantWindow($tokens, $breaks, $anchor, $articleNumber) as [$k, $code]) {
+            if (! in_array($code, $codes, true)
+                && ! $this->isQuantity($code, $tokens[$k + 1] ?? null)
+                && ! $this->isInModelNeedle($code, $needles)) {
+                $codes[] = $code;
+            }
+        }
+
+        return $codes;
+    }
+
+    /**
+     * Słowa tekstu bez norm, podzielone jak w catalogModelWordDigitPairs() — pozycje par słowo + numer muszą się
+     * zgadzać z oknem wariantu — i przy każdym słowie, czy przed nim stał przecinek, ukośnik, średnik albo punkt listy.
+     * Tam kończy się opis modelu: „ARMEN 9007 1010 S1, izolacja do 1000 V”, „do półmasek serii 6000/7500”.
+     *
+     * @return array{0: list<string>, 1: list<bool>}
+     */
+    private function variantWindowTokens(string $text): array
+    {
+        $parts = preg_split('/([\s,;:·•\/|+]+)/u', $this->stripNorms($text), -1, PREG_SPLIT_DELIM_CAPTURE) ?: [];
+        $tokens = [];
+        $breaks = [];
+        $break = false;
+        foreach ($parts as $n => $part) {
+            if ($n % 2 === 1) {
+                $break = $break || preg_match('/[,;\/·•|]/u', $part) === 1;
+
+                continue;
+            }
+            if ($part === '') {
+                continue;
+            }
+            $tokens[] = $part;
+            $breaks[] = $break;
+            $break = false;
+        }
+
+        return [$tokens, $breaks];
+    }
+
+    /**
+     * Kody w oknie dwóch słów za pozycją $anchor; oznaczenia klas obuwia go nie zajmują („ARMEN 9007 S1 SRC 1010”
+     * → 1010), a separator, spójnik i przyimek go zamykają. Samodzielna czterocyfrowa liczba („1010”, „(1010)”,
+     * „1010.”) albo — za słowem nazwy modelu — czterocyfrowe człony numeru katalogowego („34-8743” → 8743).
+     *
+     * @param  list<string>  $tokens
+     * @param  list<bool>  $breaks
+     * @return list<array{0: int, 1: string}> [indeks słowa, kod]
+     */
+    private function variantWindow(array $tokens, array $breaks, int $anchor, bool $articleNumber): array
+    {
+        $out = [];
+        $seen = 0;
+        $count = count($tokens);
+        for ($k = $anchor + 1; $k < $count && $seen < 2; $k++) {
+            // „Moldex 9430 do 7000”, „Optime 1000 dla 3000 pracowników”, „ARMEN 9007 1010 S1 oraz ARICA 6207 6660”
+            if ($breaks[$k] || in_array($this->compact($tokens[$k]), self::WINDOW_END_WORDS, true)) {
+                break;
+            }
+            if ($this->isFootwearMarker($tokens[$k])) {
+                continue;
+            }
+            $seen++;
+            $core = preg_replace('/^[^\p{L}\d]+|[^\p{L}\d]+$/u', '', $tokens[$k]) ?? '';
+            $candidates = $articleNumber ? $this->articleNumberCodes($core) : [$core];
+            foreach ($candidates as $code) {
+                if (preg_match('/^\d{4}$/', $code) === 1) {
+                    $out[] = [$k, $code];
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Czterocyfrowe człony numeru katalogowego z kreską albo kropką („34-8743” → 8743, „19999-249-1809” → 1809,
+     * „9169.541” → 9169). Data („09.03.2025”, „2025-09-01”, „03.2026”) to nie numer katalogowy.
+     *
+     * @return list<string>
+     */
+    private function articleNumberCodes(string $core): array
+    {
+        if (preg_match('/^\d+(?:[.\-]\d+)+$/', $core) !== 1) {
+            return [];
+        }
+        $groups = preg_split('/[.\-]/', $core) ?: [];
+        $years = preg_grep('/^(?:19|20)\d{2}$/', $groups) ?: [];
+        $dayOrMonth = preg_grep('/^\d{1,2}$/', $groups) ?: [];
+        if (count($years) === 1 && count($dayOrMonth) === count($groups) - 1) {
             return [];
         }
 
+        return array_values(preg_grep('/^\d{4}$/', $groups) ?: []);
+    }
+
+    /**
+     * Igły nazwanego modelu, w których literach stoi słowo („maxiflex”, „accelerate” w „mascotaccelerate”,
+     * „armen” w „armen9007”). Do nich karta musi pasować, żeby należeć do kotwicy numeru katalogowego.
+     *
+     * @param  list<string>  $needles
+     * @return list<string>
+     */
+    private function needlesWithWord(string $word, array $needles): array
+    {
+        return array_values(array_filter(
+            $needles,
+            fn (string $needle): bool => str_contains($this->lettersOnly($needle), $word)
+        ));
+    }
+
+    /**
+     * Kotwice wariantu, do których należy karta: ten sam model z tolerancją literówki jak w matches() („ARMEM 9007”,
+     * „ARMEN 9007-6660”), także z numerem zapisanym osobno („ARMEN czarne S1 (9007/6660)”). Karta innego wyrobu
+     * (REIS BRS pod ARMEN, HyFlex pod MaxiFlex) nie należy do żadnej — nie jest ani innym, ani żądanym wariantem.
+     *
+     * @param  list<array{kind: string, word: string, number: string, needles: list<string>, codes: list<string>}>|null  $anchors
+     * @return list<array{kind: string, word: string, number: string, needles: list<string>, codes: list<string>}>
+     */
+    private function memberAnchors(string $requirement, Product $product, ?array $anchors = null): array
+    {
         $out = [];
-        foreach ($codes as $code) {
-            foreach ($needles as $needle) {
-                if (str_contains($needle, (string) $code)) {
-                    continue 2;
-                }
+        foreach ($anchors ?? $this->variantAnchors($requirement) as $anchor) {
+            $member = match ($anchor['kind']) {
+                'model' => $this->scoreNeedles($anchor['needles'], $requirement, $product) >= 80
+                    || $this->cardNamesModelApart($anchor['word'], $anchor['number'], $product),
+                'article' => $this->scoreNeedles($anchor['needles'], $requirement, $product) >= 80,
+                // „w kolorze 1010” nie mówi, którego modelu dotyczy — każdego nazwanego w wymaganiu
+                default => $this->matches($requirement, $product),
+            };
+            if ($member) {
+                $out[] = $anchor;
             }
-            $out[] = (string) $code;
         }
 
-        return array_values($out);
+        return $out;
+    }
+
+    /** Słowo modelu i numer osobno na karcie: „Półbuty ARTRA ARMEN czarne S1 (9007/6660)”. */
+    private function cardNamesModelApart(string $word, string $number, Product $product): bool
+    {
+        $spaced = $this->spaced((string) $product->name.' '.(string) $product->sku);
+        if ($number === '' || ! $this->numberStandsAlone($number, $spaced)) {
+            return false;
+        }
+        foreach (explode(' ', $spaced) as $token) {
+            if (str_starts_with($token, $word)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  list<array{codes: list<string>}>  $anchors
+     * @return list<string>
+     */
+    private function codesMissingOnCard(array $anchors, Product $product): array
+    {
+        if ($anchors === []) {
+            return [];
+        }
+        $hay = $this->compact((string) $product->name.' '.(string) $product->sku);
+        $missing = [];
+        foreach ($anchors as $anchor) {
+            foreach ($anchor['codes'] as $code) {
+                if (! str_contains($hay, $code) && ! in_array($code, $missing, true)) {
+                    $missing[] = $code;
+                }
+            }
+        }
+
+        return $missing;
+    }
+
+    /** Oznaczenie klasy i cechy obuwia wg EN ISO 20345/20347 („S1”, „S1P”, „P”, „SRC”, „ESD”, „S3-SRC”). */
+    private function isFootwearMarker(string $token): bool
+    {
+        $parts = preg_split('/[^a-z0-9]+/', $this->spaced($token), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        foreach ($parts as $part) {
+            if (preg_match('/^(?:'.self::FOOTWEAR_MARKER.')$/', $part) !== 1) {
+                return false;
+            }
+        }
+
+        return $parts !== [];
+    }
+
+    /**
+     * Kod stoi w igle innego modelu („ARMEN 9007 ARICA 9003” → 9003 to model, nie wariant). Igła sklejona tylko
+     * z oznaczeń klas i słów „kolor”/„wariant” z kodem („src1010”, „srcesd1010”, „kolorze1010”) nie jest modelem.
+     *
+     * @param  list<string>  $needles
+     */
+    private function isInModelNeedle(string $code, array $needles): bool
+    {
+        foreach ($needles as $needle) {
+            if (! str_contains($needle, $code)) {
+                continue;
+            }
+            if (preg_match('/^(?:'.self::MARKER_NEEDLE_LETTERS.')+'.$code.'$/', $needle) !== 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -193,52 +491,162 @@ final class ProductModelFuzzy
     }
 
     /**
-     * Oznaczenia wariantu z wymagania, których karta nie niesie.
+     * Oznaczenia wariantu z wymagania, których karta nie niesie — liczone tylko z kotwic modelu, do którego karta
+     * należy. Pod „ARMEN 9007 1010 S1 oraz ARICA 6207 6660 S2” karcie „ARICA 6207 1010 S2” brakuje 6660, a karcie
+     * innego wyrobu („REIS BRS S1”) nie brakuje niczego — to nie jest inny wariant nazwanego modelu. Kotwice karty
+     * (decidingAnchors) są alternatywami („ARMEN 9007 1010 S1 lub ARMEN 9007 6660 S1”): spełniona w całości którakolwiek
+     * z nich znaczy, że nic nie brakuje; w jednej kotwicy potrzeba wszystkich kodów („9007-1010”).
      *
      * @return list<string>
      */
     public function missingVariantCodes(string $requirement, Product $product): array
     {
-        $codes = $this->variantCodes($requirement);
-        if ($codes === []) {
+        $anchors = $this->variantAnchors($requirement);
+        // karta z każdym kodem z wymagania — przynależności (dopasowania z tolerancją) nie liczymy, pula ma setki kart
+        if ($anchors === [] || $this->codesMissingOnCard($anchors, $product) === []) {
             return [];
         }
-        $hay = $this->compact((string) $product->name.' '.(string) $product->sku);
         $missing = [];
-        foreach ($codes as $code) {
-            if (! str_contains($hay, $code)) {
-                $missing[] = $code;
+        foreach ($this->decidingAnchors($requirement, $product, $anchors) as $anchor) {
+            $lacking = $this->codesMissingOnCard([$anchor], $product);
+            if ($lacking === []) {
+                return [];
             }
+            $missing = array_values(array_unique([...$missing, ...$lacking]));
         }
 
         return $missing;
     }
 
     /**
+     * Karta nazwanego modelu z każdym oznaczeniem wariantu, które wymaganie podaje przy tym modelu („ARMEN 9007 1010
+     * S1” pod „…ARMEN 9007 1010 S1”) — przy kolorach do wyboru z którymkolwiek z nich. Wymaganie bez oznaczenia
+     * wariantu i karta innego wyrobu — false: nie ma czego potwierdzić.
+     */
+    public function isRequestedVariant(string $requirement, Product $product): bool
+    {
+        foreach ($this->decidingAnchors($requirement, $product, $this->variantAnchors($requirement)) as $anchor) {
+            if ($this->codesMissingOnCard([$anchor], $product) === []) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Kotwice, o których karta rozstrzyga: jej kotwice modelu i numeru katalogowego, a gdy żadnej nie ma — kotwice
+     * słowa „kolor”. Kod z „w kolorze …” nie jest alternatywą dla kodu stojącego przy modelu: przy „ARMEN 9007 1010 S1,
+     * sznurówki zapasowe w kolorze 6660” kolor sznurówek robił z butów 6660 żądany wariant (trzeci przegląd 26.09.2026).
+     *
+     * @param  list<array{kind: string, word: string, number: string, needles: list<string>, codes: list<string>}>  $anchors
+     * @return list<array{kind: string, word: string, number: string, needles: list<string>, codes: list<string>}>
+     */
+    private function decidingAnchors(string $requirement, Product $product, array $anchors): array
+    {
+        $model = $this->memberAnchors(
+            $requirement,
+            $product,
+            array_values(array_filter($anchors, static fn (array $anchor): bool => $anchor['kind'] !== 'colour'))
+        );
+
+        return $model !== [] ? $model : $this->memberAnchors(
+            $requirement,
+            $product,
+            array_values(array_filter($anchors, static fn (array $anchor): bool => $anchor['kind'] === 'colour'))
+        );
+    }
+
+    /** Karta nazwanego modelu, przy którym wymaganie podaje oznaczenie wariantu — żądany albo inny wariant. */
+    public function isVariantModelCard(string $requirement, Product $product): bool
+    {
+        return $this->memberAnchors($requirement, $product) !== [];
+    }
+
+    /**
+     * Części oznaczenia nazwanego modelu w wymaganiu z oznaczeniem wariantu — słowo i numer modelu oraz kody wariantu,
+     * zwarte i małymi literami jak kody z SIWZ („ARMEN 9007 1010 S1” → armen, 9007, 1010). Dowodem kodu są tylko dla
+     * kart tego modelu (isVariantModelCard): SKU „1010” albo „9007” innego wyrobu to przypadek, nie kod z zapytania.
+     *
+     * @return list<string>
+     */
+    public function variantAnchorParts(string $requirement): array
+    {
+        $parts = [];
+        foreach ($this->variantAnchors($requirement) as $anchor) {
+            // „kolor”/„wariant” to nie część oznaczenia modelu
+            $model = $anchor['kind'] === 'colour' ? [] : [$anchor['word'], $anchor['number']];
+            foreach ([...$model, ...$anchor['codes']] as $part) {
+                if ($part !== '' && ! in_array($part, $parts, true)) {
+                    $parts[] = $part;
+                }
+            }
+        }
+
+        return $parts;
+    }
+
+    /**
+     * Karta to inny wariant nazwanego modelu: wymaganie podaje oznaczenie wariantu („ARMEN 9007 1010 S1”), a karta
+     * tego samego modelu go nie ma („ARMEN 9007 6660 S1”, także z literówką „ARMEM 9007 6660 S1”). Karta innego
+     * wyrobu nie jest innym wariantem. Taka karta jest najwyżej propozycją — nigdy wyborem automatu ani zamiennikiem.
+     */
+    public function isOtherVariant(string $requirement, Product $product): bool
+    {
+        return $this->missingVariantCodes($requirement, $product) !== [];
+    }
+
+    /**
+     * Klient podał oznaczenie wariantu, a każde słowo kodu karty (litery i cyfry) stoi w zapytaniu jako osobne słowo:
+     * pod „…ARMEN 9007 1010 S1…” karta „ARMEN 9007 1010 S1” tak, a „ARMEN 9007 Clip 1010 S1” nie, bo klient nie
+     * napisał „Clip”. Rozstrzyga remis ocen przed ceną — przy równych 99 wygrywał tańszy wyrób z dopiskiem, o który
+     * klient nie prosił. Tylko przy oznaczeniu wariantu: bez niego wygrywałby kod dystrybutora złożony z nazwy modelu
+     * („27-600” pod „HYCRON 27-600” zamiast karty Ansella 27600110 — sonda automatu przetargu z 26.09.2026).
+     */
+    public function variantSkuWrittenInQuery(string $query, Product $product): bool
+    {
+        $sku = $this->spaced((string) $product->sku);
+        if ($sku === '' || $this->variantCodes($query) === []) {
+            return false;
+        }
+        $words = array_flip(explode(' ', $this->spaced($query)));
+        foreach (explode(' ', $sku) as $token) {
+            if (! isset($words[$token])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Oznaczenia wariantu na karcie, których wymaganie nie ma („ARMEN 9007 6660 S1” pod „ARMEN 9007 1010 S1” → 6660).
-     * Liczone tylko przy wymaganiu z oznaczeniem wariantu; numer modelu z igły („9007”) nie jest wariantem.
+     * Liczone tylko dla karty modelu, przy którym wymaganie podaje oznaczenie wariantu, i tylko wobec kotwic tej karty
+     * (decidingAnchors, jak missingVariantCodes); numer modelu z igły („9007”) nie jest wariantem.
      *
      * @return list<string>
      */
     public function otherVariantCodes(string $requirement, Product $product): array
     {
-        $codes = $this->variantCodes($requirement);
-        if ($codes === []) {
+        $anchors = $this->decidingAnchors($requirement, $product, $this->variantAnchors($requirement));
+        if ($anchors === []) {
             return [];
         }
+        $codes = array_merge(...array_map(static fn (array $anchor): array => $anchor['codes'], $anchors));
         $needles = $this->needles($requirement);
-        // Normy z rokiem i numerem („EN ISO 20345:2011”, „EN 1149-5”) to nie wariant — jak w variantCodes().
-        preg_match_all('/\b\d{4}\b/u', $this->stripNorms((string) $product->name.' '.(string) $product->sku), $m);
+        // Normy z rokiem i numerem („EN ISO 20345:2011”, „EN 1149-5”) i akty prawne to nie wariant — jak w variantCodes().
+        $text = $this->stripNorms((string) $product->name.' '.(string) $product->sku);
+        preg_match_all('/\b\d{4}\b/u', $text, $m, PREG_OFFSET_CAPTURE);
         $out = [];
-        foreach (array_unique($m[0] ?? []) as $code) {
+        foreach ($m[0] ?? [] as [$code, $offset]) {
             $code = (string) $code;
-            if (in_array($code, $codes, true)) {
+            if (in_array($code, $codes, true) || in_array($code, $out, true) || $this->isInModelNeedle($code, $needles)) {
                 continue;
             }
-            foreach ($needles as $needle) {
-                if (str_contains($needle, $code)) {
-                    continue 2;
-                }
+            // „1000 V”, „2021 r.” na karcie to miara i data, nie wariant — jak w variantCodes()
+            $parts = preg_split('/\s+/u', substr($text, $offset), 3) ?: [];
+            if ($this->isQuantity($parts[0] ?? '', $parts[1] ?? null)) {
+                continue;
             }
             $out[] = $code;
         }
@@ -1004,20 +1412,26 @@ final class ProductModelFuzzy
     }
 
     /**
-     * Ilość albo miara przy czterocyfrowej liczbie („1500 szt.”, „1200 par”, „2000ml”) — nie oznaczenie wariantu.
-     * Bez jednostek jednoliterowych: „ARMEN 9007 1010 L” to kolor 1010 w rozmiarze L, nie 1010 litrów.
+     * Ilość, miara albo rok przy czterocyfrowej liczbie („1500 szt.”, „1200 par”, „2000ml”, „1000 V”, „1100 N”,
+     * „2026 r.”) — nie oznaczenie wariantu. Bez liter rozmiaru: „ARMEN 9007 1010 L” to kolor 1010 w rozmiarze L,
+     * nie 1010 litrów (tak samo M). „º” (wskaźnik liczebnika) bywa wpisywane zamiast „°”.
      */
     private function isQuantity(string $numberToken, ?string $nextToken): bool
     {
-        $units = 'szt|sztuk\w*|par|pary|par\w*|kpl|komplet\w*|op|opak\w*|ml|kg|mm|cm|litr\w*|gram\w*|db|kv';
-        if (preg_match('/^\d{4}(?:'.$units.')[.,;:)]?$/u', mb_strtolower(trim($numberToken))) === 1) {
+        $units = 'szt|sztuk\w*|par|pary|par\w*|kpl|komplet\w*|op|opak\w*|ml|kg|mm|cm|litr\w*|gram\w*|db|kv'
+            .'|v|g|n|j|lm|kn|mah|[°º]c';
+        $number = mb_strtolower(trim($numberToken));
+        if (preg_match('/^\d{4}(?:'.$units.')[.,;:)]?$/u', $number) === 1) {
             return true;
         }
         if ($nextToken === null) {
             return false;
         }
+        $next = mb_strtolower(trim($nextToken, " \t.,;:()[]"));
+        // „2021 r.”, „2025 roku” — data, nie kolor („2026r.” sklejone nie jest czterocyfrowym słowem, więc tu nie trafia)
+        $year = preg_match('/^(?:19|20)\d{2}/u', $number) === 1;
 
-        return preg_match('/^(?:'.$units.')$/u', mb_strtolower(trim($nextToken, " \t.,;:()[]"))) === 1;
+        return preg_match('/^(?:'.$units.')$/u', $next) === 1 || ($year && in_array($next, ['r', 'roku'], true));
     }
 
     /** 010 / 2047W — numer modelu, także z literą na końcu. */
@@ -1171,7 +1585,12 @@ final class ProductModelFuzzy
         return 2;
     }
 
-    /** Tekst bez numerów norm — także dla ProductMatchService::codeCandidates (lata i poprawki norm to nie kody). */
+    /**
+     * Tekst bez numerów norm i aktów prawnych, małymi literami i bez polskich znaków — podstawa igieł modelu, par
+     * słowo + numer, marek i oznaczeń wariantu w tej klasie (lata i poprawki norm to nie kody). Kody z SIWZ
+     * w ProductMatchService::codeCandidates i ProductAiSearchService::modelCodePhrases czyści RequirementCodeNoise::strip,
+     * który zdejmuje też liczby z jednostką; tu miary („500 ml”) zostają dla reguł miar przy parach słowo + numer.
+     */
     public function stripNorms(string $text): string
     {
         $t = mb_strtolower($text);
@@ -1185,6 +1604,9 @@ final class ProductModelFuzzy
             $t
         ) ?? $t;
         $t = preg_replace('/\biso\s*\d+(?:[\s\-:]+\d+\b)*/u', ' ', $t) ?? $t;
+        // „(UE) 2016/425”, „REACH 1907/2006”, „EN IEC 61340-4-3:2018”, „/A1:2016” — tak samo jak kody z SIWZ;
+        // „rozporządzeniem 2016” było igłą modelu, a „2016” oznaczeniem wariantu przy każdej karcie modelu.
+        $t = RequirementCodeNoise::stripRegulations($t);
 
         return trim(preg_replace('/\s+/u', ' ', $t) ?? $t);
     }

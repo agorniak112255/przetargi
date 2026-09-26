@@ -53,6 +53,28 @@ final class ProductAiSearchRowNotesTest extends TestCase
         $this->assertStringNotContainsString('6660', (string) $rows['ARMEN 9007 1010 S1']['ai_match_reason']);
     }
 
+    /**
+     * Remis 99 kart z żądanym wariantem rozstrzygała cena, więc tańsza „ARMEN 9007 Clip 1010 S1” stała przed kartą,
+     * której kod klient przepisał (golden mail-artra-armen, pomiar 26.09.2026 na produkcji).
+     */
+    public function test_card_whose_code_the_client_wrote_leads_the_named_model_tie(): void
+    {
+        $this->shoe('ARMEN 9007 1010 S1');
+        $clip = $this->shoe('ARMEN 9007 Clip 1010 S1');
+        $clip->forceFill(['catalog_price_net' => 190, 'purchase_price' => 120])->save();
+        $this->app->instance(OpenAiCompatibleClient::class, $this->emptyRankLlm());
+
+        $result = $this->app->make(AiProductSearch::class)->find('buty firmy ARTRA model ARMEN 9007 1010 S1', 10);
+
+        $skus = array_column($result['products'], 'sku');
+        $this->assertSame(['ARMEN 9007 1010 S1', 'ARMEN 9007 Clip 1010 S1'], array_slice($skus, 0, 2));
+        $this->assertSame(
+            $result['products'][0]['ai_match_percent'] ?? null,
+            $result['products'][1]['ai_match_percent'] ?? null,
+            'fixture: obie karty mają żądany wariant i remisują'
+        );
+    }
+
     public function test_fallback_row_of_other_manufacturer_than_requested_is_marked(): void
     {
         // Jak na produkcji (uvex-phynomic-esd): wymaganie z marką, modelem i cechą ESD, lista zapasowa szuka po cesze
