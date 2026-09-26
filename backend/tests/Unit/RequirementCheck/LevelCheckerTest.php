@@ -246,6 +246,53 @@ final class LevelCheckerTest extends TestCase
     }
 
     /**
+     * M4 (25.09.2026): nazwa JSP podaje SNR przed „dB SNR” — wiersz cytuje ją zamiast „brak danych”, a zapis HML daje
+     * jedną wartość (SNR), nie „różne wartości” z L.
+     */
+    #[Test]
+    public function snr_before_db_snr_in_jsp_name_and_hml_table_are_read_like_the_search(): void
+    {
+        $requirement = 'Nauszniki przeciwhałasowe, SNR minimum 30 dB.';
+
+        $sonis2 = $this->rows($requirement, [new CardSource(CardSource::NAME, 'Ochronniki słuchu na pałąku Sonis®2 — 31dB SNR')])['snr'];
+        $this->assertSame(Status::Ok, $sonis2->status);
+        $this->assertSame('31dB SNR', $sonis2->card[0]['text'] ?? null);
+
+        $sonis1 = $this->rows($requirement, [new CardSource(CardSource::NAME, 'Ochronniki słuchu na pałąku Sonis®1 - 27 dB SNR - szaro-zielone')])['snr'];
+        $this->assertSame(Status::Fail, $sonis1->status);
+
+        $hml = $this->rows($requirement, [new CardSource(CardSource::SPECS, 'Tłumienie: H 32 dB M 29 dB L 22 dB SNR 31 dB')])['snr'];
+        $this->assertSame(Status::Ok, $hml->status);
+        $this->assertSame(31, $hml->card[0]['value'] ?? null);
+
+        $tail = $this->rows($requirement, [new CardSource(CardSource::DESCRIPTION, 'Zestaw higieniczny, SNR AEB020')])['snr'];
+        $this->assertSame(Status::Missing, $tail->status, 'ogon kodu to nie SNR 20');
+    }
+
+    /**
+     * M4 (26.09.2026, sonda na produkcji): opis Sonis 3 (37 dB) ma też wklejone „36dB SNR” innego wariantu i szczytowe
+     * SNR serii. Kilka wartości spełniających próg nie podważa nazwy z jedną spełniającą wartością; bez takiej nazwy
+     * zostaje „niejasne”, a nazwa poniżej progu daje „nie spełnia”.
+     */
+    #[Test]
+    public function snr_variants_all_meeting_threshold_do_not_override_single_matching_name(): void
+    {
+        $requirement = 'Nauszniki przeciwhałasowe, SNR minimum 30 dB.';
+        $description = new CardSource(CardSource::DESCRIPTION, "Sonis® 3 na pałąku 37dB SNR\nOpracowali oni serię ochronników słuchu, których "
+            ."szczytowa wartość współczynnika SNR wynosi 37.\nDohełmowe ochronniki słuchu Sonis® 3 - 36dB SNR mogą być używane do prac.");
+
+        $sonis3 = $this->rows($requirement, [new CardSource(CardSource::NAME, 'Ochronniki słuchu na pałąku Sonis®3 — 37dB SNR'), $description])['snr'];
+        $this->assertSame(Status::Ok, $sonis3->status);
+        $this->assertNull($sonis3->note);
+
+        $onlyVariants = $this->rows($requirement, [$description])['snr'];
+        $this->assertSame(Status::Unclear, $onlyVariants->status, 'same warianty bez pola z jedną wartością');
+
+        $nameBelow = $this->rows($requirement, [new CardSource(CardSource::NAME, 'Ochronniki słuchu Sonis®1 - 27 dB SNR'), $description])['snr'];
+        $this->assertSame(Status::Fail, $nameBelow->status);
+    }
+
+    /**
      * Przypadki z recenzji, które dawały fałszywe ok albo fail: karta nie podaje kodu ani litery, więc tylko brak.
      *
      * @return iterable<string, array{string, string, string}>

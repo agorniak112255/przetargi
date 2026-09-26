@@ -48,6 +48,19 @@ final class BhpAttributeNormalizer
     private const FOOTWEAR_CLASS_CODE_RE = '/(?<![^\s,;:(])('.self::FOOTWEAR_CLASS.')(?![^\s,;:)])/u';
 
     /**
+     * SNR na karcie, liczba w grupie 1 — wspólny odczyt snrRating i wiersza „Tłumienie SNR” weryfikacji karty.
+     * „SNR 31 dB”, „SNR=27”, „SNR of 31dB”, ale nie ogon kodu: w „31dB SNR AEB020-0AY-900” (nazwa i SKU JSP)
+     * to nie SNR 20. Także liczba 15–45 przed „dB SNR” („Sonis®2 — 31dB SNR”, „27 dB SNR - szaro-zielone”), ale nie
+     * wartość L z tabeli HML („H 32 dB M 29 dB L 22 dB SNR 31 dB” to SNR 31, „32/29/22 dB SNR” i „L-22 dB SNR” to
+     * nie SNR 22) ani liczba przed „SNR”, za którym stoi jego własna liczba. Zakres w tej gałęzi, żeby „hałas do
+     * 85 dB SNR wg normy: 28 dB” nie zjadał „SNR” przed prawdziwą wartością. M4 z planu napraw 25.09.2026: Sonis 2
+     * odpadał przy „SNR min. 30 dB” jako SNR 20.
+     */
+    public const SNR_RE = '/(?|(?<![\p{L}\d=.,\/])(?<!\/\s)(?<!\b[hml]\s)(?<!\b[hml][:=-])(?<!\b[hml][:=-]\s)(?<!\b[hml]\s-\s)'
+        .'(1[5-9]|[23]\d|4[0-5])\s*dB\s*SNR(?![\p{L}\d])(?![^\p{L}\d]{0,4}\d)'
+        .'|(?<![\p{L}\d])SNR(?![\p{L}\d])[^0-9]{0,12}(?<![\p{L}\d])(\d{2,3})(?!\d)(?:\s*dB)?)/iu';
+
+    /**
      * @return array{
      *     kategoria_bhp: ?string,
      *     kod_producenta: ?string,
@@ -1032,11 +1045,20 @@ final class BhpAttributeNormalizer
         return null;
     }
 
-    /** SNR z nazwy / opisu karty („SNR 31 dB”). */
+    /**
+     * SNR z nazwy / opisu karty („SNR 31 dB”, „31dB SNR”) — pierwszy zapis w tekście z wartością 15–45 dB, więc przy
+     * tekście z nazwą na początku (filterHaystack) wartość z nazwy wygrywa ze szczytowym SNR serii z opisu
+     * („szczytowa wartość współczynnika SNR wynosi 37” na karcie Sonis 1 o 27 dB).
+     */
     public function snrRating(string $text): ?int
     {
-        if (preg_match('/\bsnr\b[^0-9]{0,12}(\d{2,3})\s*(?:db)?/iu', $text, $m) === 1) {
-            return $this->snrInRange((int) $m[1]);
+        if (preg_match_all(self::SNR_RE, $text, $m) < 1) {
+            return null;
+        }
+        foreach ($m[1] as $n) {
+            if (($snr = $this->snrInRange((int) $n)) !== null) {
+                return $snr;
+            }
         }
 
         return null;

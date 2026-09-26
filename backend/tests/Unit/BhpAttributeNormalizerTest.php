@@ -290,6 +290,37 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertNull($n->snrRating('Nauszniki przeciwhałasowe bez podanego tłumienia'));
     }
 
+    /**
+     * M4 z planu napraw 25.09.2026: w nazwie i SKU JSP („31dB SNR AEB020-0AY-900”) liczba po „SNR” to ogon kodu,
+     * a SNR stoi przed „dB SNR”. Szczytowe SNR serii z opisu („SNR wynosi 37”) nie jest SNR karty Sonis 1 (27 dB).
+     * Zapis HML dalej daje SNR, nie wartość L.
+     */
+    public function test_snr_rating_reads_jsp_name_and_skips_code_tail_and_hml_values(): void
+    {
+        $n = new BhpAttributeNormalizer;
+
+        $this->assertSame(31, $n->snrRating('Ochronniki słuchu na pałąku Sonis®2 — 31dB SNR AEB020-0AY-900 JSP Sonis® 2 na pałąku 31dB SNR'));
+        $this->assertSame(27, $n->snrRating(
+            "Ochronniki słuchu na pałąku Sonis®1 - 27 dB SNR - szaro-zielone AEB010-0AY-800 JSP Sonis® 1 na pałąku 27dB SNR\n"
+            ."Opracowali oni serię ochronników słuchu, których szczytowa wartość współczynnika SNR wynosi 37.\nSNR 27"
+        ));
+        $this->assertNull($n->snrRating('Zestaw higieniczny do ochronników, SNR AEB020'), 'ogon kodu to nie SNR');
+        $this->assertSame(27, $n->snrRating('SNR=27 dB, H=29 dB'));
+        $this->assertSame(31, $n->snrRating('H=32 dB SNR=31 dB'));
+        $this->assertSame(31, $n->snrRating('Tłumienie: H 32 dB M 29 dB L 22 dB SNR 31 dB'));
+        $this->assertSame(30, $n->snrRating('HML 32 dB / 29 dB / 22 dB SNR 30 dB'));
+        $this->assertSame(33, $n->snrRating('Parametry: H: 34 dB, M: 31 dB, L: 23 dB; SNR: 33 dB'));
+        $this->assertSame(31, $n->snrRating('L 22 dB SNR (31 dB)'));
+        $this->assertNull($n->snrRating('L: 22 dB SNR'), 'wartość L z HML to nie SNR');
+        $this->assertSame(34, $n->snrRating('NRR 26 dB SNR 34 dB'));
+        $this->assertSame(31, $n->snrRating('tłumienie na poziomie SNR of 31dB'));
+        // recenzja M4: tabela HML z ukośnikami i myślnikiem bez własnej wartości SNR, liczba spoza zakresu przed „dB SNR”
+        $this->assertNull($n->snrRating('HML 32/29/22 dB SNR'), 'L z tabeli HML to nie SNR');
+        $this->assertNull($n->snrRating('HML 32 / 29 / 22 dB SNR'));
+        $this->assertNull($n->snrRating('H-32 M-29 L-22 dB SNR'));
+        $this->assertSame(28, $n->snrRating('Do pracy w hałasie do 85 dB SNR wg normy: 28 dB'));
+    }
+
     public function test_drops_foreign_model_code_when_name_has_other_word_digit_pair(): void
     {
         $attrs = (new BhpAttributeNormalizer)->normalize(

@@ -32,7 +32,8 @@ final class LevelChecker implements ParameterChecker
 
     private const FFP = '/(?<![\p{L}\d])FFP\s*-?([123])(?!\d)/iu';
 
-    private const SNR = '/(?<![\p{L}\d])SNR(?![\p{L}\d])[^0-9]{0,12}(\d{2,3})(?!\d)(?:\s*dB)?/iu';
+    /** Ten sam odczyt co BhpAttributeNormalizer::snrRating — „31dB SNR” z nazwy, bez ogona kodu i wartości L z HML. */
+    private const SNR = BhpAttributeNormalizer::SNR_RE;
 
     /** Dosłowny zapis „odporne na przecięcie” do cytatu — te same zwroty, które czyta PpeAssortment::requiredCutLevel. */
     private const CUT_RESISTANCE_WORDS = [
@@ -508,6 +509,8 @@ final class LevelChecker implements ParameterChecker
         $findings = [];
         $seen = [];
         $variants = [];
+        // pola z kilkoma wartościami, z których każda spełnia próg: indeks znaleziska => indeks w $variants
+        $allMeet = [];
         foreach ($sources as $source) {
             // zakres jak BhpAttributeNormalizer::snrRating — liczba spoza 15–45 dB to nie SNR
             $have = $this->attributes->snrRating($source->text) === null
@@ -517,6 +520,9 @@ final class LevelChecker implements ParameterChecker
                 continue;
             }
             if (count($have['values']) > 1) {
+                if (min(array_map('intval', $have['values'])) >= $required) {
+                    $allMeet[count($findings)] = count($variants);
+                }
                 $findings[] = CheckRow::finding($source, $have['text'], Status::Unclear, ['value' => implode('/', $have['values'])]);
                 $variants[] = "{$have['label']} ({$source->source})";
 
@@ -524,6 +530,17 @@ final class LevelChecker implements ParameterChecker
             }
             $value = (int) $have['values'][0];
             $findings[] = CheckRow::finding($source, $have['text'], $value >= $required ? Status::Ok : Status::Fail, ['value' => $value]);
+        }
+        // Pole z kilkoma wartościami, z których każda spełnia próg, nie podważa pola z jedną spełniającą wartością: Sonis 3
+        // ma w nazwie „37dB SNR”, a w opisie JSP także wklejone „36dB SNR” innego wariantu i szczytowe SNR serii. Bez
+        // takiego pola zostaje „niejasne” — same warianty nie mówią, który dotyczy wyrobu, a „ok” byłoby brakiem danych
+        // podanym jako fakt (M4 z planu napraw 25.09.2026, uzgodnione z recenzentem).
+        if ($allMeet !== [] && in_array(Status::Ok->value, array_column($findings, 'verdict'), true)) {
+            foreach ($allMeet as $finding => $variant) {
+                $findings[$finding]['verdict'] = Status::Ok->value;
+                unset($variants[$variant]);
+            }
+            $variants = array_values($variants);
         }
         $row = $this->valueRow('snr', 'Tłumienie SNR', 'snr', $requirement, $requiredText, $required, $findings);
 

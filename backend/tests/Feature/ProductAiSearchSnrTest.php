@@ -124,6 +124,38 @@ final class ProductAiSearchSnrTest extends TestCase
         }
     }
 
+    /**
+     * M4 z planu napraw 25.09.2026 (sonda S17/S18 z produkcji): karty JSP mają SNR w nazwie przed „dB SNR”, a za nazwą
+     * w tekście stoi SKU — „31dB SNR AEB020-0AY-900” czytane było jako SNR 20, więc Sonis 2 (31 dB) odpadał przy progu 30,
+     * a Sonis 1 (27 dB) przechodził ze szczytowym SNR serii z opisu („SNR wynosi 37”).
+     */
+    public function test_jsp_cards_pass_snr_threshold_by_name_value(): void
+    {
+        $card = fn (string $sku, string $name, string $description): Product => Product::query()->create([
+            'sku' => $sku,
+            'name' => $name,
+            'manufacturer' => 'JSP',
+            'category' => 'Ochrona słuchu / Nauszniki przeciwhałasowe',
+            'description' => $description,
+            'catalog_price_net' => 60,
+            'purchase_price' => 30,
+            'stock' => 2,
+            'ppe_family' => PpeAssortment::FAMILY_HEARING,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $card('AEB020-0AY-900', 'Ochronniki słuchu na pałąku Sonis®2 — 31dB SNR', "Sonis® 2 na pałąku 31dB SNR\nGama Sonis ® została stylowo zaprojektowana.");
+        $card('AEB010-0AY-800', 'Ochronniki słuchu na pałąku Sonis®1 - 27 dB SNR - szaro-zielone', "Sonis® 1 na pałąku 27dB SNR\n"
+            ."Opracowali oni serię ochronników słuchu, których szczytowa wartość współczynnika SNR wynosi 37.\nSNR 27");
+        $search = $this->app->make(ProductAiSearchService::class);
+        $retrieve = new \ReflectionMethod($search, 'retrieveBySnr');
+
+        $skus = $retrieve->invoke($search, self::QUERY, 10)->pluck('sku')->all();
+
+        $this->assertContains('AEB020-0AY-900', $skus, 'Sonis 2: 31 dB z nazwy, nie 20 z SKU');
+        $this->assertNotContains('AEB010-0AY-800', $skus, 'Sonis 1: 27 dB z nazwy, nie szczytowe 37 serii');
+    }
+
     private function seedSnrCatalog(): Product
     {
         $hit = Product::query()->create([
