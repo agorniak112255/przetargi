@@ -4234,6 +4234,7 @@ final class ProductAiSearchService
             'ended_retrieval' => false,
         ];
         $cascadeKept = collect();
+        $cascadeRanking = collect();
         if ($cascaded->isNotEmpty()) {
             $fromNameSteps = is_string($cascadeLevel) && str_starts_with($cascadeLevel, 'steps_');
             $pool = $fromNameSteps
@@ -4243,7 +4244,14 @@ final class ProductAiSearchService
                     : $priority->concat($cascaded));
 
             $cascadeKept = $this->keepCompatible($requirement, $this->uniqueProducts($pool, $limit));
-            $this->traceCascadeOutcome($cascadeKept->count(), false);
+            // Lista „kaskada” w fuzji rang to znaleziska kroków z nazwy. Karty reguł (kod, SNR, montaż, cięcie) mają
+            // własną listę „priorytet”; doklejone na początek zapełniały limit (przy „nahełmowe” reguła montażu daje
+            // dziesiątki kart bez kolejności), więc własne znaleziska kaskady nie wchodziły do fuzji, a te same karty
+            // reguły liczyły się podwójnie.
+            $cascadeRanking = $fromNameSteps
+                ? $this->keepCompatible($requirement, $this->uniqueProducts($cascaded, $limit))
+                : $cascadeKept;
+            $this->traceCascadeOutcome($cascadeRanking->count(), false);
         }
         if ($this->catalogSlang->requiresTightEvidence($query)) {
             // Żargon wymaga twardego dowodu na karcie, ale sprawdza go bramka zgodności,
@@ -4276,7 +4284,7 @@ final class ProductAiSearchService
         $family = $this->searchFamily($query, $intent['needed']);
         $rankings = [
             'priority' => $priority->pluck('id')->map(intval(...))->all(),
-            'cascade' => $cascadeKept->pluck('id')->map(intval(...))->all(),
+            'cascade' => $cascadeRanking->pluck('id')->map(intval(...))->all(),
             'text' => $this->clock(
                 'retrieve_text',
                 fn (): array => $this->textSearch->search($intent['search_phrases'], $family, self::TEXT_POOL)
