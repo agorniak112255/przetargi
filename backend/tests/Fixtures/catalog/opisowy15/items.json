@@ -593,9 +593,11 @@
         },
         "source_facts": "Z opisu źródłowego: sterylny izotoniczny roztwór NaCl bez konserwantów, neutralizacja kwasów i zasad, butelka 500 ml z wanienką, otwieranie przez przekręcenie, korek, montaż w uchwycie ściennym, wymiary Ø 6,6 x 23,5 cm, przydatność 5 lat, wyrób medyczny CE, obszary zastosowania.",
         "eval_acceptable_skus": [
-            "725200"
+            "725200",
+            "7251-7200"
         ],
-        "eval_acceptable_note": "Równoważnik (decyzja właściciela 25.09.2026): 725200 – CEDERROTH Eye Wash 2-pack (id 26560): „2x500 ml”, sterylny, izotoniczny roztwór — ten sam płyn w dwupaku, nie pojedyncza butelka."
+        "eval_acceptable_note": "Równoważnik (decyzja właściciela 25.09.2026): 725200 – CEDERROTH Eye Wash 2-pack (id 26560): „2x500 ml”, sterylny, izotoniczny roztwór — ten sam płyn w dwupaku, nie pojedyncza butelka. Równoważnik (decyzja właściciela 26.09.2026): 7251-7200 – Płukanka Cederroth 500ml z uchwytem 7200 (id 10132): ta sama butelka 7251 w zestawie z uchwytem ściennym 7200; karta nie powtarza „sterylny, izotoniczny, bez konserwantów” ani „5 lat” — to cechy karty 7251. Na migawce zostaje zakazana (forbidden_skus): automat ma wybrać samą butelkę.",
+        "eval_catalog_forbidden_skus": []
     },
     {
         "line_no": 12,

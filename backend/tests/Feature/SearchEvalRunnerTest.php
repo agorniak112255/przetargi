@@ -122,8 +122,20 @@ final class SearchEvalRunnerTest extends TestCase
             $this->assertSame(trim((string) ($line['eval_catalog_note'] ?? '')), trim((string) ($raw[$case['id']]['catalog_note'] ?? '')), "poz. {$line['line_no']}: catalog_note w golden.json");
             $this->assertSame(array_values($line['eval_acceptable_skus'] ?? []), $raw[$case['id']]['acceptable_skus'] ?? [], "poz. {$line['line_no']}: acceptable_skus w golden.json");
             $this->assertSame(trim((string) ($line['eval_acceptable_note'] ?? '')), trim((string) ($raw[$case['id']]['acceptable_note'] ?? '')), "poz. {$line['line_no']}: acceptable_note w golden.json");
+            // eval_catalog_forbidden_skus zastępuje listę zakazanych w pomiarze na katalogu produkcji (decyzja właściciela
+            // 26.09.2026, poz. 11: zestaw 7251-7200 to równoważnik), a forbidden_skus fixture dalej sprawdza wybór automatu
+            // na migawce. Karta zdjęta z zakazanych musi mieć uzasadnienie wśród równoważników.
+            $catalogForbidden = $line['eval_catalog_forbidden_skus'] ?? null;
+            if ($catalogForbidden !== null) {
+                $this->assertArrayNotHasKey('eval_extra_forbidden_skus', $line, "poz. {$line['line_no']}: lista zastępcza zakazanych nie łączy się z dopiskami");
+                foreach (array_diff($line['forbidden_skus'], $catalogForbidden) as $dropped) {
+                    $this->assertContains($dropped, $line['eval_acceptable_skus'] ?? [], "poz. {$line['line_no']}: {$dropped} zdjęta z zakazanych bez decyzji o równoważniku");
+                }
+            }
             $this->assertSame(
-                [...array_values($line['forbidden_skus']), ...array_values($line['eval_extra_forbidden_skus'] ?? [])],
+                $catalogForbidden !== null
+                    ? array_values($catalogForbidden)
+                    : [...array_values($line['forbidden_skus']), ...array_values($line['eval_extra_forbidden_skus'] ?? [])],
                 $case['forbidden_skus'],
             );
             $this->assertSame(trim((string) $line['source_facts']), $case['note']);
