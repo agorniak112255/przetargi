@@ -1863,12 +1863,6 @@ final class PpeAssortment
     }
 
     /**
-     * Typ obuwia z opisu karty — tylko gdy opis nazywa ten model (SKU, marka albo słowo z nazwy)
-     * i typ stoi w pierwszym zdaniu („Trzewik bezpieczny ARDEUS 350 Air…”). Dalsze zdania
-     * porównują z innymi modelami, więc ich nie czytamy. Wynik liczy się dopiero, gdy nazwa
-     * karty to goły kod bez typu (W3‑10).
-     */
-    /**
      * Typ obuwia karty tak, jak czyta go bramka asortymentu: z nazwy i numeru, a gdy nazwa to goły kod — z pierwszego
      * zdania opisu. Dopisek przy wierszu zapasowym czytał sam kod i przy „ARSO 701 616560 S1 P ESD” (opis: „Sandał
      * bezpieczny…”) pisał „karta nie potwierdza, że to sandał” (golden opisowy15-03, 9507 i 9490).
@@ -1995,13 +1989,22 @@ final class PpeAssortment
         return preg_match('/sand[aá][lł]/u', $text) === 1;
     }
 
+    /**
+     * Typ obuwia z opisu karty — tylko gdy opis nazywa ten model (SKU, marka albo słowo z nazwy)
+     * i typ stoi w pierwszym zdaniu („Trzewik bezpieczny ARDEUS 350 Air…”). Dalsze zdania
+     * porównują z innymi modelami, więc ich nie czytamy. Zdanie kończy kropka przed wielką literą: skrót
+     * („nr art. 616560”, „np.”) i wypunktowanie („YES-T-S1P.\n- buty typu trzewik”) zdania nie kończą, a przy opisie
+     * w punktach czytane jest okno 200 znaków — M5 z planu napraw 25.09.2026: AROSIO 730 Air „(nr art. 616560) to
+     * półbuty” i Reis YES-T z typem w punktach przechodziły bramkę sandałów. Wynik liczy się dopiero, gdy nazwa
+     * karty to goły kod bez typu (W3‑10).
+     */
     private function productDescriptionFootwearType(Product $product): ?string
     {
         if (! $this->descriptionNamesProduct($product)) {
             return null;
         }
         $description = trim((string) ($product->description ?? ''));
-        $lead = preg_split('/(?<=[.!?])\s+/u', $description, 2)[0] ?? $description;
+        $lead = preg_split('/(?<=[.!?])\s+(?=\p{Lu})/u', $description, 2)[0] ?? $description;
 
         return $this->footwearType($this->normalize(mb_substr($lead, 0, 200)));
     }

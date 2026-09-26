@@ -1170,6 +1170,38 @@ final class PpeAssortmentTest extends TestCase
         $this->assertFalse($this->assortment->compatibleProduct($req, $lowShoe), 'półbut (low shoe) to nie sandał');
     }
 
+    /**
+     * M5 z planu napraw 25.09.2026 (golden opisowy15-03, sonda S23/S24): pierwsze zdanie kończyło się na skrócie
+     * „nr art.” i na kropce przed wypunktowaniem, więc typ z opisu był pusty, a półbuty AROSIO i trzewiki Reis
+     * przechodziły bramkę sandałów.
+     */
+    #[Test]
+    public function description_type_is_read_past_abbreviation_and_into_bullet_list(): void
+    {
+        $req = 'Sandały ochronne (obuwie bezpieczne z odkrytą cholewką) kategorii S1 P wg EN ISO 20345, do prac w suchych '
+            .'pomieszczeniach. Wymagane: zabudowana pięta; podnosek ochronny; właściwości antyelektrostatyczne (ESD); podeszwa FO.';
+        $arosio = $this->card('AROSIO 730 Air 616560 S1 P ESD', 'AROSIO 730 Air 616560 S1 P ESD', [
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'description' => 'Obuwie ochronne AROSIO 730 Air (nr art. 616560) to półbuty bezpieczne z podnoskiem. Właściwości ESD.',
+        ]);
+        $bulletBoot = $this->card('BRYES-T-S1P', 'Buty bezpieczne YES-T-S1P', [
+            'manufacturer' => 'REIS',
+            'category' => 'Obuwie',
+            'description' => "Buty bezpieczne YES-T-S1P.\n- wierzch ze skóry licowej\n- buty typu trzewik, podnosek kompozytowy\n- ESD",
+        ]);
+        $bulletSandal = $this->card('BRYES-S-S1P', 'Buty bezpieczne YES-S-S1P', [
+            'manufacturer' => 'REIS',
+            'category' => 'Obuwie',
+            'description' => "Buty bezpieczne YES-S-S1P.\n- buty typu sandał z zabudowaną piętą\n- podeszwa olejoodporna, ESD",
+        ]);
+
+        $this->assertFalse($this->assortment->compatibleProduct($req, $arosio), '„nr art.” nie kończy zdania: to półbuty');
+        $this->assertFalse($this->assortment->compatibleProduct($req, $bulletBoot), 'typ w punktach: trzewik');
+        $this->assertTrue($this->assortment->compatibleProduct($req, $bulletSandal), 'typ w punktach: sandał');
+        $this->assertSame(PpeAssortment::TYPE_POLBUT, $this->assortment->footwearCardType($arosio));
+    }
+
     #[Test]
     public function glasses_named_by_lens_are_not_rejected_for_missing_noun(): void
     {
