@@ -1424,6 +1424,51 @@ final class PpeAssortmentTest extends TestCase
         $this->assertNull($this->assortment->impactClass('Okulary ochronne, EN 166, klasa optyczna 1, rozmiar S'), 'karta bez klasy uderzenia');
     }
 
+    /**
+     * M6 z planu napraw 25.09.2026: ARDON pisze wytrzymałość jako „OM: F”, a oznaczenie soczewki wg EN 166 ma klasę
+     * optyczną tuż przed literą („1 F”, „5 3M 1 B”). Gogle E4101 z „OM: F” przechodziły bramkę „do 120 m/s”.
+     */
+    #[Test]
+    public function impact_class_from_ardon_om_and_en166_lens_marking(): void
+    {
+        $this->assertSame('F', $this->assortment->impactClass("norma: EN 175\nOM: F\noznakowanie: 1 F (bezbarwny), 5 1 DIN 0196 (spawalnicze)"));
+        $this->assertSame('B', $this->assortment->impactClass('Oznaczenie powłoki soczewki: 5 3M 1 B K N'));
+        $this->assertSame('B', $this->assortment->impactClass('OM: B'));
+        $this->assertNull($this->assortment->impactClass('Oznakowanie: CE. A także gogle z paskiem.'));
+        $this->assertNull($this->assortment->impactClass('oznaczenie soczewek: A'));
+        $this->assertNull($this->assortment->impactClass('Oznakowanie opakowania: 10 szt. A'));
+
+        $poz9 = 'Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0. Wymagane: soczewka poliwęglanowa o odporności na uderzenia '
+            .'do 120 m/s; powłoka przeciwmgielna. Zgodność z EN 166, oznakowanie CE.';
+        $this->assertSame('B', $this->assortment->requiredImpactClass($poz9), 'wymaganie bez zmian');
+        $ardon = $this->card('E4101', 'Gogle spawalnicze ARDON E4101', [
+            'ppe_family' => PpeAssortment::FAMILY_EYES,
+            'description' => "Gogle z wentylacją pośrednią.\nnorma: EN 175\nOM: F\noznakowanie: 1 F (bezbarwny), 5 1 DIN 0196 (spawalnicze)",
+        ]);
+        $this->assertFalse($this->assortment->meetsRequiredImpactClass($poz9, $ardon), 'OM: F (45 m/s) przy wymaganych 120 m/s');
+    }
+
+    /**
+     * M7 z planu napraw 25.09.2026: 3M zapisuje filtr spawalniczy jako „zaciemnienie spawalnicze IR5” albo „Przyciemnienie
+     * 5,0 IR” — gogle GG6001SGAF-IR5 odpadały przy wymaganiu spawalniczym. Samo „przyciemnienie 3” bez IR to nie filtr.
+     */
+    #[Test]
+    public function welding_filter_is_read_from_3m_ir_notation(): void
+    {
+        $poz9 = 'Gogle ochronne szczelne, spawalnicze, z zaciemnieniem 5.0 – do ochrony oczu podczas spawania gazowego i cięcia metalu. '
+            .'Zgodność z EN 166, oznakowanie CE.';
+        $ir5 = $this->card('GG6001SGAF-IR5', '3M™ GoggleGear 6000 gogle, bezbarwna szybka zewnętrzna, zaciemnienie spawalnicze IR5, GG6001SGAF-IR5', [
+            'ppe_family' => PpeAssortment::FAMILY_EYES,
+        ]);
+        $irComma = $this->card('GG-IR', '3M gogle spawalnicze, Przyciemnienie 5,0 IR, szybka przezroczysta zewnętrzna', ['ppe_family' => PpeAssortment::FAMILY_EYES]);
+        $sun = $this->card('OK-3', 'Okulary przyciemnione, przyciemnienie 3', ['ppe_family' => PpeAssortment::FAMILY_EYES]);
+
+        $this->assertTrue($this->assortment->meetsRequiredWeldingFilter($poz9, $ir5));
+        $this->assertTrue($this->assortment->meetsRequiredWeldingFilter($poz9, $irComma));
+        $this->assertFalse($this->assortment->missingWeldingFilterEvidence($poz9, $ir5));
+        $this->assertTrue($this->assortment->missingWeldingFilterEvidence($poz9, $sun), 'przyciemnienie bez IR to nie filtr spawalniczy');
+    }
+
     /** Pomiar 20260914_191625 poz. 9: bezbarwne gogle 3M 2891S-SGAF z oceną 90 modelu przy wymaganiu gogli spawalniczych z zaciemnieniem 5.0. */
     #[Test]
     public function welding_filter_required_rejects_explicitly_clear_lens_only(): void

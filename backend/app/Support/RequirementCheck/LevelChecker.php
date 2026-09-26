@@ -865,6 +865,9 @@ final class LevelChecker implements ParameterChecker
             '/(?<![\p{L}\d])(?:EN\s?166|166)(?::\s?2001)?\s*[:\-–]?\s*(?:[0-9]\s+){0,4}'.$class.'T?(?![\p{L}\d])/u',
             '/(?<![\p{L}\d])'.$class.'T(?![\p{L}\d])/u',
             '/(?i:klas|oznacz)\p{L}*\s*[:\-–]?\s*\(?'.$class.'T?\)?(?![\p{L}\d])/u',
+            // te same zapisy co PpeAssortment::impactClassesIn: ARDON „OM: F” i oznaczenie soczewki „1 B”
+            '/(?<![\p{L}\d])OM\s*:\s*'.$class.'T?(?![\p{L}\d])/u',
+            '/(?i:oznakowanie|oznaczenie)[^:\n]{0,30}:\s*(?:[^\s:]+\s+){0,2}?[123]\s+'.$class.'T?(?![\p{L}\d])/u',
         ]);
     }
 

@@ -187,6 +187,18 @@ final class LevelCheckerTest extends TestCase
         $this->assertSame('impact', $rows['impact_class']->gate);
     }
 
+    /** M6 (25.09.2026): zapis ARDON „OM: F” jest klasą i werdykt cytuje go, a nie zastępcze „klasa F”. */
+    #[Test]
+    public function ardon_om_impact_class_is_cited(): void
+    {
+        $rows = $this->rows('Gogle, soczewka o odporności na uderzenia do 120 m/s.', [
+            new CardSource(CardSource::DESCRIPTION, "norma: EN 175\nOM: F\noznakowanie: 1 F (bezbarwny)"),
+        ]);
+
+        $this->assertSame(Status::Fail, $rows['impact_class']->status);
+        $this->assertSame('OM: F', $rows['impact_class']->card[0]['text'] ?? null);
+    }
+
     #[Test]
     public function line_3_sandal_name_and_specs_contradict_each_other(): void
     {

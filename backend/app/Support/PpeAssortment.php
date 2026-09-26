@@ -869,14 +869,18 @@ final class PpeAssortment
 
     /**
      * Filtr spawalniczy w tekście po normalize(): zaciemnienie z numerem („zaciemnieniem spawalniczym 5 0”, „zaciemnienie nr 5”),
-     * normy filtrów EN 169 i EN 379, DIN z numerem, filtr samościemniający. Samo „zaciemnienie 3” okularów przeciwsłonecznych
-     * liczy się tylko przy słowie „spawal” w wymaganiu — karta z takim zapisem zostaje, bo to brak sprzeczności, nie dowód.
+     * zapis 3M z IR („zaciemnienie spawalnicze IR5”, „Przyciemnienie 5,0 IR” — M7 z planu napraw 25.09.2026: gogle
+     * GG6001SGAF-IR5 odpadały przy „spawalnicze, zaciemnienie 5”), normy filtrów EN 169 i EN 379, DIN z numerem, filtr
+     * samościemniający. Samo „zaciemnienie 3” okularów przeciwsłonecznych liczy się tylko przy słowie „spawal” w wymaganiu
+     * — karta z takim zapisem zostaje, bo to brak sprzeczności, nie dowód. Samo „ir 5” i „przyciemnienie 3” bez IR dowodem
+     * nie są (okulary przeciwsłoneczne).
      */
     private function showsWeldingFilter(string $normalized): bool
     {
         return preg_match(
             '/\bzaciemn\w*\s+(?:spawal\w*\s+)?(?:nr\s+|stopni\w*\s+|o\s+stopniu\s+)?\d|\bstopni\w*\s+zaciemn\w*\s+\d|\b(?:en\s*)?(?:169|379)\b'
-            .'|\bdin\s*\d|\bsamosciemn|\bfiltr\w*\s+spawal|\bspawal\w*\s+(?:filtr|szyb|soczew|wizjer)\w*\s+\d|\bshade\s*\d/u',
+            .'|\bdin\s*\d|\bsamosciemn|\bfiltr\w*\s+spawal|\bspawal\w*\s+(?:filtr|szyb|soczew|wizjer)\w*\s+\d|\bshade\s*\d'
+            .'|\bzaciemn\w*\s+(?:spawal\w*\s+)?ir\s*\d|\bprzyciemn\w*\s+\d(?:\s+\d)?\s+ir\b/u',
             $normalized
         ) === 1;
     }
@@ -896,7 +900,10 @@ final class PpeAssortment
      * Klasy uderzenia z tekstu. Z tekstu po normalize(): prędkość („do 120 m/s”) i energia przy uderzeniu lub cząstkach
      * („uderzenia przy niskiej energii”) — „promieniowanie o wysokiej energii” to nie klasa. Z oryginalnego tekstu, tylko
      * wielkie litery: oznaczenie przy EN 166 („EN 166 FT”, „EN166:BT”, „EN 166:2001 B”, „EN166 3 4 BT”), samodzielne
-     * FT/BT/AT oraz „klasa F”, „oznaczenia FT”. Klasa S (5,1 m/s) nie jest odczytywana.
+     * FT/BT/AT, „klasa F”, „oznaczenia FT”, zapis ARDON „OM: F” oraz oznaczenie soczewki wg EN 166 z klasą optyczną
+     * tuż przed literą („oznakowanie: 1 F”, „Oznaczenie powłoki soczewki: 5 3M 1 B”) — M6 z planu napraw 25.09.2026:
+     * gogle ARDON E4101 z „OM: F” przechodziły bramkę „do 120 m/s” jako karta bez klasy. Klasa S (5,1 m/s) nie jest
+     * odczytywana.
      *
      * @return list<string>
      */
@@ -921,6 +928,11 @@ final class PpeAssortment
             '/\b(?:EN\s?166|166)(?::\s?2001)?\s*[:\-–]?\s*(?:[0-9]\s+){0,4}([FBA])T?\b/u',
             '/\b([FBA])T\b/u',
             '/(?i:klas|oznacz)\w*\s*[:\-–]?\s*\(?([FBA])T?\)?(?![\p{L}\d])/u',
+            // ARDON: „OM: F” — wytrzymałość mechaniczna
+            '/\bOM\s*:\s*([FBA])T?\b/u',
+            // oznaczenie soczewki wg EN 166: [filtr] [producent] klasa optyczna 1–3, potem wytrzymałość; samo
+            // „oznaczenie soczewek: A” czy „Oznakowanie: CE. A także” klasą nie jest
+            '/(?i:oznakowanie|oznaczenie)[^:\n]{0,30}:\s*(?:[^\s:]+\s+){0,2}?[123]\s+([FBA])T?(?![\p{L}\d])/u',
         ];
         foreach ($marks as $pattern) {
             if (preg_match_all($pattern, $text, $m) > 0) {
