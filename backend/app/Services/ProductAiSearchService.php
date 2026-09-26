@@ -5418,7 +5418,13 @@ final class ProductAiSearchService
         }
         $wantClass = $this->bhpAttributes->footwearClass($query);
         $minCut = $this->assortment->requiredCutLevel($query);
-        if ($needles === [] && $minSnr === null && $wantClass === null && $minCut === null) {
+        // Klient żąda ESD albo normy antystatyki: dowód na karcie, który nie jest słaby (decyzja D7a — obuwie „ESD” albo
+        // EN 61340, rękawice i odzież „ESD”, EN 1149, EN 16350, albo norma wymieniona w wymaganiu), liczy się jak trafiona
+        // igła. Samo „ESD” ma trzy litery i nie przechodzi progu igieł słownych — M16 z planu napraw 25.09.2026: sandały
+        // ARTRA z „ESD” w opisie (9490, 9482, 9507) miały jedną igłę („s1”) i przegrywały miejsca w 24 kartach z kartami
+        // z dwiema. Karta ze słabym dowodem i tak dostaje w ocenie najwyżej 60 (weakAntistaticEvidenceNote).
+        $strongAntistatic = $this->assortment->requiresStrongAntistatic($query);
+        if ($needles === [] && $minSnr === null && $wantClass === null && $minCut === null && ! $strongAntistatic) {
             return $candidates->take(self::RANK_CARDS)->values();
         }
 
@@ -5434,7 +5440,11 @@ final class ProductAiSearchService
             // właściciela z 25.09.2026, D12). Karty bez litery zostają w puli, ale do oceny idą po kartach z dowodem.
             $cutLevel = $minCut === null ? null : $this->assortment->cutLevel($this->cutLevelText($product));
             $provenCut = $cutLevel !== null && $cutLevel >= $minCut;
-            $needleHits = $needles === [] ? 0 : $this->haystackNeedleHits($this->rankingHaystack($product), $needles);
+            $antistaticProof = $strongAntistatic
+                && $this->assortment->productAntistaticEvidence($query, $product) !== null
+                && $this->assortment->weakAntistaticEvidenceNote($query, $query, $product) === null;
+            $needleHits = ($needles === [] ? 0 : $this->haystackNeedleHits($this->rankingHaystack($product), $needles))
+                + ($antistaticProof ? 1 : 0);
             if ($meetsSnr || $meetsClass || $provenCut || ($minSnr === null && $wantClass === null && $needleHits > 0)) {
                 $with[] = ['product' => $product, 'cut' => $provenCut ? 1 : 0, 'hits' => $needleHits, 'position' => $position];
             } else {

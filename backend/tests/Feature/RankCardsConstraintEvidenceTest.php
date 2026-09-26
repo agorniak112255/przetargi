@@ -63,6 +63,67 @@ final class RankCardsConstraintEvidenceTest extends TestCase
     }
 
     /**
+     * M16 z planu napraw 25.09.2026 (golden opisowy15-03, sonda S25): „ESD” ma trzy litery i nie było igłą warunku, więc
+     * sandały ARTRA z „ESD” w opisie stały w wyborze 24 kart na równi z sandałami bez antystatyki i dalej w puli
+     * odpadały. Przy żądaniu ESD mocny dowód (D7a: obuwie „ESD” albo EN 61340) liczy się jak igła; samo słowo
+     * („antyelektrostatyczna podeszwa”) nie. Bez żądania ESD w zapytaniu kolejność się nie zmienia.
+     */
+    public function test_strong_esd_evidence_counts_like_a_needle_when_client_demands_esd(): void
+    {
+        $base = [
+            'manufacturer' => 'ARTRA',
+            'category' => 'Obuwie',
+            'ppe_family' => PpeAssortment::FAMILY_FOOTWEAR,
+            'catalog_price_net' => 40,
+            'purchase_price' => 20,
+            'stock' => 1,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+        ];
+        $pool = collect();
+        for ($i = 1; $i <= 30; $i++) {
+            $pool->push(Product::query()->create($base + [
+                'sku' => 'SAND-'.$i,
+                'name' => 'Sandały ochronne SAND '.$i.' S1P',
+                'description' => 'Sandały ochronne SAND '.$i.' z podnoskiem.',
+            ]));
+        }
+        foreach (['ESD-1', 'ESD-2', 'ESD-3'] as $sku) {
+            $pool->push(Product::query()->create($base + [
+                'sku' => $sku,
+                'name' => 'Sandały ochronne '.$sku.' S1P',
+                'description' => 'Sandały ochronne z podnoskiem, właściwości ESD według EN 61340-4-3.',
+            ]));
+        }
+        $pool->push(Product::query()->create($base + [
+            'sku' => 'WORD-1',
+            'name' => 'Sandały ochronne WORD-1 S1P',
+            'description' => 'Sandały ochronne z podnoskiem, podeszwa antyelektrostatyczna.',
+        ]));
+        $pool->push(Product::query()->create($base + [
+            'sku' => 'NORM-1',
+            'name' => 'Sandały ochronne NORM-1 S1P',
+            'description' => 'Sandały ochronne z podnoskiem, zgodne z EN 1149-5.',
+        ]));
+        $service = app(ProductAiSearchService::class);
+        $rank = fn (string $query, array $constraints): array => (new \ReflectionMethod($service, 'cardsForRanking'))
+            ->invoke($service, $query, $pool, $constraints)->pluck('sku')->all();
+
+        $esd = $rank('Sandały ochronne S1 P, właściwości antyelektrostatyczne (ESD).', ['S1 P', 'ESD']);
+        $this->assertCount(24, $esd);
+        foreach (['ESD-1', 'ESD-2', 'ESD-3'] as $sku) {
+            $this->assertContains($sku, $esd, $sku.': mocny dowód ESD przy żądaniu ESD');
+        }
+        $this->assertNotContains('WORD-1', $esd, 'samo słowo to słaby dowód, nie igła');
+        $this->assertNotContains('NORM-1', $esd, 'EN 1149 na obuwiu to przy żądaniu ESD słaby dowód');
+
+        $norm = $rank('Sandały ochronne S1 P antystatyczne wg EN 1149.', ['S1 P']);
+        $this->assertContains('NORM-1', $norm, 'norma wymieniona w wymaganiu spełnia je wprost');
+
+        $plain = $rank('Sandały ochronne S1 P.', ['S1 P']);
+        $this->assertNotContains('ESD-1', $plain, 'bez żądania ESD kolejność puli bez zmian');
+    }
+
+    /**
      * Zapytanie #55 z 23.09.2026: „Rękawice drelichowe pięciopalcowe EN374, EN420”. Drelichowe RD, RDP, RN stały
      * w czołówce puli, ale bez norm na karcie — 24 miejsca zajęły rękawice chemiczne z EN 374 i pozycja wyszła
      * „brak w katalogu”. Czołówka puli ma miejsca zagwarantowane; kolejność dalej od dowodu warunków.
