@@ -1367,6 +1367,21 @@ final class PpeAssortmentTest extends TestCase
     }
 
     /**
+     * „P” za literą ISO to ochrona przed uderzeniem (EN 388:2016+A1:2018) — HexArmor 3013IMP „3X42FP” i ARDON „4442DP”
+     * nie miały poziomu cięcia, choć En388Code czytał z nich F i D (diagnoza przypadku 02 z 25.09.2026).
+     */
+    #[Test]
+    public function cut_level_is_read_from_codes_with_impact_protection(): void
+    {
+        $this->assertSame('F', $this->assortment->cutLevel('EN 388:2016 – 3X42FP'));
+        $this->assertSame('D', $this->assortment->cutLevel('EN388: 4442DP'));
+        $this->assertSame('D', $this->assortment->cutLevel('EN 388:2016+A1:2018 4X43D P, EN ISO 21420'));
+        $this->assertSame('D', $this->assortment->requiredCutLevel('Rękawice antyprzecięciowe z ochroną knykci, EN 388 4X43DP'), 'wymaganie z kodem też');
+        $this->assertNull($this->assortment->cutLevel('EN 388 4131 PU'), 'litera P bez litery ISO to nie poziom');
+        $this->assertNull($this->assortment->cutLevel('Rękawice EN 388:2016 4X42FX-500'), 'litera sklejona z dalszym słowem');
+    }
+
+    /**
      * Decyzja użytkownika 24.09 (uwagi eksperta, przetarg 1 poz. 2): sam Coup Test 0–1 bez litery ISO to nie odporność
      * na przecięcie. Wyższa cyfra albo litera gdziekolwiek na karcie — nie ten przypadek.
      */

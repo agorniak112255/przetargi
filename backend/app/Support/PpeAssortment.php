@@ -672,17 +672,20 @@ final class PpeAssortment
     }
 
     /**
-     * Litery poziomu cięcia ISO 13997. Kod EN 388:2016 („4331B”, „4X21A”, „2.X.4.2.C”) — z tekstu po normalize(), tylko
-     * w pobliżu numeru normy 388, więc „2021A” w nazwie modelu to nie poziom. Zapis słowny — z oryginalnego tekstu, tylko
-     * wielka litera A–F po „ISO 13997”, „EN ISO” albo po „przecięcie … poziom”: polskie „a” ani litera przed kolejną normą
-     * („B, EN 407”) nie mylą odczytu. Literówka 13977 zamiast 13997 jest w opisach kart ATG i MAPA.
+     * Litery poziomu cięcia ISO 13997. Kod EN 388:2016 („4331B”, „4X21A”, „2.X.4.2.C”, z ochroną przed uderzeniem
+     * „3X42FP”, „4442D P”) — z tekstu po normalize(), tylko w pobliżu numeru normy 388, więc „2021A” w nazwie modelu to
+     * nie poziom. Zapis słowny — z oryginalnego tekstu, tylko wielka litera A–F po „ISO 13997”, „EN ISO” albo po
+     * „przecięcie … poziom”: polskie „a” ani litera przed kolejną normą („B, EN 407”) nie mylą odczytu. Literówka 13977
+     * zamiast 13997 jest w opisach kart ATG i MAPA.
      *
      * @return list<string>
      */
     public function cutLevelsIn(string $text): array
     {
         $levels = [];
-        if (preg_match_all('/388[^a-z]{0,1}.{0,80}?\b(?=[0-5x\s]*\d)([0-5x])\s?([0-5x])\s?([0-5x])\s?([0-5x])\s?([a-f])\b/u', $this->normalize($text), $m) > 0) {
+        // „P” za literą ISO to ochrona przed uderzeniem (EN 388:2016+A1:2018) — bez niej HexArmor 3013IMP „3X42FP”
+        // i ARDON „4442DP” nie miały poziomu, choć En388Code czytał z nich F i D (diagnoza 02 z 25.09.2026).
+        if (preg_match_all('/388[^a-z]{0,1}.{0,80}?\b(?=[0-5x\s]*\d)([0-5x])\s?([0-5x])\s?([0-5x])\s?([0-5x])\s?([a-f])(?:\s?p)?\b/u', $this->normalize($text), $m) > 0) {
             $levels = array_merge($levels, array_map('strtoupper', $m[5]));
         }
         $worded = [
