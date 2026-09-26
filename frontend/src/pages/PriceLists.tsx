@@ -232,6 +232,8 @@ type Analysis = {
   model: string
   meta?: { manufacturer: string; version: string; source: string }
   assortment_groups?: AssortmentGroupsSummary
+  /** Cennik wielomarkowy (Canis): pozycje, które przy imporcie dostaną markę z nazwy wyrobu zamiast producenta pliku. */
+  brand_from_name?: { brand: string; count: number; skus: string[] }[]
 }
 
 /** Szybka podpowiedź z nazwy pliku (docelowo serwer i tak zweryfikuje). */
@@ -1809,6 +1811,14 @@ export function PriceLists() {
               ? ` · wykryty producent: ${analysis.mapping.manufacturer_detected}`
               : ''}
           </p>
+          {(analysis.brand_from_name?.length ?? 0) > 0 && (
+            <p className="mb-2 rounded bg-amber-50 px-3 py-2 text-amber-900">
+              Marka z nazwy wyrobu (cennik wielomarkowy):{' '}
+              {(analysis.brand_from_name ?? []).map((b) => `${b.brand} ${b.count}`).join(', ')} pozycji — te karty
+              dostaną tę markę zamiast producenta cennika. Przykłady:{' '}
+              {(analysis.brand_from_name ?? []).flatMap((b) => b.skus.slice(0, 3)).join(', ')}
+            </p>
+          )}
           <div className="mb-3 flex flex-wrap items-center gap-2 rounded bg-slate-50 px-3 py-2">
             <span className="font-medium text-slate-700">
               Do importu: <span className="text-blue-700">{analysis.products_found}</span> unikalnych SKU

@@ -203,6 +203,8 @@ final class PriceListAiAnalyzer
             'skipped' => $stats['skipped'],
             'errors_count' => $stats['errors_count'],
             'assortment_groups' => $assortmentGroups,
+            // cennik wielomarkowy: pozycje, które przy imporcie dostaną markę z nazwy wyrobu
+            'brand_from_name' => app(PriceListGoodsBrand::class)->summarize($allProducts, (string) $meta['manufacturer']),
             'sample' => [
                 'sheets' => array_map(
                     static fn (array $s): array => [

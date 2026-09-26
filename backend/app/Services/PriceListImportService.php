@@ -51,6 +51,7 @@ final class PriceListImportService
         private readonly PrestaCategoryRewriteService $prestaCategories,
         private readonly ProductIdentifierStore $identifiers = new ProductIdentifierStore,
         private readonly CardOwnership $ownership = new CardOwnership,
+        private readonly PriceListGoodsBrand $goodsBrand = new PriceListGoodsBrand,
     ) {}
 
     /**
@@ -409,6 +410,20 @@ final class PriceListImportService
         array $collected,
     ): array {
         $collected['products'] = $this->categoriesFromTree($collected['products']);
+        // Cennik wielomarkowy (Canis, decyzja właściciela z 26.09.2026): wiersz z marką towaru w nazwie („Respirator 3M
+        // 9914”) dostaje tę markę zamiast producenta pliku. Znacznik _goods_brand zdejmuje pętla zapisu.
+        /** @var array<string, int> $goodsBrandRows marka => liczba wierszy */
+        $goodsBrandRows = [];
+        if ($this->goodsBrand->enabledFor($manufacturer)) {
+            foreach ($collected['products'] as $i => $product) {
+                $brand = is_array($product) ? $this->goodsBrand->brandOf($product, $manufacturer) : null;
+                if ($brand !== null) {
+                    $collected['products'][$i]['manufacturer'] = $brand;
+                    $collected['products'][$i]['_goods_brand'] = $brand;
+                    $goodsBrandRows[$brand] = ($goodsBrandRows[$brand] ?? 0) + 1;
+                }
+            }
+        }
         $created = 0;
         $updated = 0;
         $priceChanges = [];
@@ -420,7 +435,7 @@ final class PriceListImportService
         // Wpis cennika powstaje na początku tej samej transakcji — sloty ceny pliku wskazują cennik, z którego
         // pochodzą (usunięcie cennika usuwa tylko jego slot). Liczniki uzupełniane na końcu; import dalej atomowy.
         /** @var PriceList $priceList */
-        $priceList = DB::transaction(function () use ($file, $manufacturer, $version, $user, &$collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds, &$skippedDetails, &$importRow): PriceList {
+        $priceList = DB::transaction(function () use ($file, $manufacturer, $version, $user, $goodsBrandRows, &$collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds, &$skippedDetails, &$importRow): PriceList {
             // Jeden wpis na producenta: kolejna aktualizacja odnajduje swój cennik zamiast zakładać
             // następny. Pola opisują ostatnią aktualizację, historia idzie do price_list_imports.
             $priceList = PriceList::query()
@@ -451,10 +466,25 @@ final class PriceListImportService
             $redirectGroups = [];
             /** @var list<string> $redirectWarnings ostrzeżenia mapy do uwag importu */
             $redirectWarnings = [];
+            // Karty tego cennika (slot „file” z tym cennikiem) nie są pomijane z powodu marki: markę mogła podnieść nazwa
+            // wyrobu (Canis → 3M) albo poprawić człowiek, a cena z pliku ma dalej trafiać na kartę (26.09.2026).
+            /** @var array<int, int> $listCardIds id karty => indeks */
+            $listCardIds = ProductSourcePrice::query()
+                ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+                ->where('price_list_id', $priceList->id)
+                ->pluck('product_id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->flip()
+                ->all();
+            /** @var array<string, list<string>> $brandRaised marka => SKU kart, którym import podniósł markę */
+            $brandRaised = [];
+            /** @var list<string> $brandKeptB2b SKU kart z powiązaniem B2B, które zostają przy marce pliku */
+            $brandKeptB2b = [];
             foreach ($collected['products'] as $payload) {
                 $sku = (string) $payload['sku'];
                 $rowIdentifiers = is_array($payload['_identifiers'] ?? null) ? $payload['_identifiers'] : [];
-                unset($payload['sku'], $payload['_purchase_from_file'], $payload['_identifiers']);
+                $goodsBrand = is_string($payload['_goods_brand'] ?? null) ? $payload['_goods_brand'] : null;
+                unset($payload['sku'], $payload['_purchase_from_file'], $payload['_identifiers'], $payload['_goods_brand']);
                 $payload = $this->clampProductFields($payload);
                 if (($payload['description'] ?? null) === null) {
                     unset($payload['description']);
@@ -468,7 +498,7 @@ final class PriceListImportService
                     unset($payload['ean']);
                 }
                 // mapa połączeń ma pierwszeństwo przed dopasowaniem kodu, rdzenia i nazwy (findExistingProduct)
-                $route = $this->redirectRoute($rowIdentifiers, $redirects, (string) ($payload['manufacturer'] ?? ''));
+                $route = $this->redirectRoute($rowIdentifiers, $redirects, (string) ($payload['manufacturer'] ?? ''), $listCardIds, $manufacturer);
                 foreach ($route['warnings'] as $warning) {
                     $redirectWarnings[] = $sku.': '.$warning;
                 }
@@ -481,14 +511,37 @@ final class PriceListImportService
 
                     continue;
                 }
-                $existing = $route['card'] ?? $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots);
+                $existing = $route['card'];
+                if ($existing === null) {
+                    // Wiersz z marką z nazwy szuka najpierw jak dotąd, wśród kart producenta pliku (stare karty Canis,
+                    // także znajdowane rdzeniem albo nazwą), a potem wśród kart swojej marki, ale tylko kart tego cennika —
+                    // rdzeń albo nazwa nie mogą podpiąć ceny Canis pod cudzą kartę 3M.
+                    $existing = $goodsBrand === null
+                        ? $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots)
+                        : ($this->findExistingProduct($sku, ['manufacturer' => $manufacturer] + $payload, $byManufacturer, $fileSlots)
+                            ?? $this->findExistingProduct($sku, $payload, $byManufacturer, $fileSlots, $listCardIds));
+                }
+                $ownCard = $existing !== null && isset($listCardIds[(int) $existing->id]);
                 // sku jest UNIQUE — kod karty innego producenta: pozycja pominięta, bez drugiej karty i bez nadpisania
-                // (karta z mapy przeszła już porównanie marki kanonicznej w redirectRoute)
-                if ($route['card'] === null && $existing !== null
-                    && $this->foreignManufacturer($existing, (string) ($payload['manufacturer'] ?? ''))) {
+                // (karta z mapy przeszła już porównanie marki kanonicznej w redirectRoute; karta tego cennika — patrz wyżej).
+                // Wiersz z marką z nazwy porównuje kartę z producentem pliku, jak przed 26.09.2026: stara karta Canis bez
+                // slotu tego cennika dalej się aktualizuje, a karta 3M od P4S z tym samym kodem nie dostaje danych Canis
+                // (to decyzja człowieka w Łączenie kart).
+                if ($route['card'] === null && $existing !== null && ! $ownCard
+                    && $this->foreignManufacturer($existing, $goodsBrand !== null ? $manufacturer : (string) ($payload['manufacturer'] ?? ''))) {
                     $this->skipRow($collected, $sku, $payload, 'kod należy do karty producenta '.$existing->manufacturer);
 
                     continue;
+                }
+                // Karta ma jeden slot „file”: wiersz z marką z nazwy nie nadpisuje ceny innego cennika (także na karcie
+                // z mapy połączeń) — cena przerzucałaby się między cennikami przy kolejnych importach.
+                if ($goodsBrand !== null && $existing !== null && ! $ownCard) {
+                    $otherList = $this->fileSlot($existing, $fileSlots)?->price_list_id;
+                    if ($otherList !== null && (int) $otherList !== (int) $priceList->id) {
+                        $this->skipRow($collected, $sku, $payload, 'karta '.$existing->manufacturer.' ma już cenę z innego cennika (#'.$otherList.')');
+
+                        continue;
+                    }
                 }
                 // karta docelowa mapy tego cennika (z mapy albo trafiona zwykłym dopasowaniem, np. własny wiersz karty
                 // po łączeniu rozmiarów): wiersze zbierane i zapisywane razem po pętli (applyRedirectGroup)
@@ -521,9 +574,36 @@ final class PriceListImportService
                     $cardPayload = $payload;
                     // karta z powiązaniem B2B: nazwa i producent zostają na karcie (decyzja użytkownika 15.09.2026) —
                     // poza cennikiem producenta marki karty, gdy powiązania są tylko od dystrybutorów (producerFileOwnsCard)
-                    if (B2bProductLink::query()->where('product_id', $existing->id)->exists()
-                        && ! $this->producerFileOwnsCard($existing, $manufacturer)) {
+                    $hasB2bLink = B2bProductLink::query()->where('product_id', $existing->id)->exists();
+                    if ($hasB2bLink && ! $this->producerFileOwnsCard($existing, $manufacturer)) {
                         unset($cardPayload['name'], $cardPayload['manufacturer']);
+                    }
+                    // Marka karty (26.09.2026): import podnosi ją z nazwy wyrobu tylko na karcie z marką pliku (Canis → 3M)
+                    // i bez powiązań B2B. Innej marki karty nie nadpisuje i nie cofa do producenta pliku — wiersz bez marki
+                    // w nazwie (nowa wersja pliku) nie zamienia 3M z powrotem w Canis.
+                    $cardBrand = (string) $existing->manufacturer;
+                    // marka pliku albo pusta — jak przed 26.09.2026 (foreignManufacturer); inny zapis marki kanonicznej
+                    // („PELTOR” na karcie cennika 3M) zostaje na karcie
+                    $cardBrandIsList = ! $this->foreignManufacturer($existing, $manufacturer);
+                    $raisesBrand = $goodsBrand !== null && $cardBrandIsList && ! CanonicalBrand::same($cardBrand, $goodsBrand);
+                    if (! $cardBrandIsList || ($raisesBrand && $hasB2bLink)) {
+                        unset($cardPayload['manufacturer']);
+                    }
+                    if ($raisesBrand) {
+                        if ($hasB2bLink) {
+                            $brandKeptB2b[] = $sku;
+                        } else {
+                            $brandRaised[$goodsBrand][] = $sku;
+                        }
+                    }
+                    // Karta innej marki z ceną z tego cennika (marka z nazwy wyrobu, poprawiona ręcznie): plik uzupełnia
+                    // tylko puste pola — nazwy, opisu, kodu ani kategorii karty nie nadpisuje; cena idzie do slotu.
+                    if (! $cardBrandIsList) {
+                        $priceFields = array_flip(ProductEffectivePrice::PRICE_FIELDS);
+                        $cardPayload = [
+                            ...$this->onlyEmptyCardFields($existing, array_diff_key($cardPayload, $priceFields)),
+                            ...array_intersect_key($cardPayload, $priceFields),
+                        ];
                     }
                     // kategoria wybrana ręcznie w panelu zostaje — cennik ani drzewo sklepu jej po cichu nie nadpisują
                     if ($existing->category_source === Product::CATEGORY_SOURCE_MANUAL) {
@@ -540,7 +620,7 @@ final class PriceListImportService
                     $updatedProducts[] = $this->summarizeUpdate($before, $cardPayload, $sku, $change !== null);
                     $updates = array_diff_key($cardPayload, array_flip(ProductEffectivePrice::PRICE_FIELDS));
                     // producent zgodny (sprawdzone wyżej), a nowy kod nie jest zajęty przez inną kartę
-                    if ($sku !== (string) $existing->sku) {
+                    if ($cardBrandIsList && $sku !== (string) $existing->sku) {
                         $taken = Product::query()
                             ->where('sku', $sku)
                             ->where('id', '!=', $existing->id)
@@ -593,7 +673,11 @@ final class PriceListImportService
                 ? array_slice($collected['skipped_details'], 0, 100)
                 : $this->skippedDetailsFromErrors($collected['errors'] ?? [], (int) $collected['skipped']);
             // ostrzeżenia mapy to nie pominięte wiersze (poza skipped_details); na początku uwag, żeby limit ich nie uciął
-            $collected['errors'] = [...$redirectWarnings, ...$collected['errors']];
+            $collected['errors'] = [
+                ...$this->goodsBrandNotes($manufacturer, $goodsBrandRows, $brandRaised, $brandKeptB2b),
+                ...$redirectWarnings,
+                ...$collected['errors'],
+            ];
 
             $priceList->update([
                 'products_created' => $created,
@@ -660,13 +744,26 @@ final class PriceListImportService
         $realPath = $file->getRealPath();
         if ($realPath !== false && $this->isSpreadsheetUpload($file)) {
             try {
-                $specialCount = $this->specialPrices->importFromPath($realPath, $manufacturer);
+                $specialCount = $this->specialPrices->importFromPath($realPath, $manufacturer, (int) $priceList->id);
             } catch (Throwable) {
                 $specialCount = 0;
             }
         }
 
-        RegisterManufacturerCatalogJob::dispatch($manufacturer, $productIds[0] ?? 0);
+        // Przykładowa karta tylko z marką pliku: rejestracja szuka domen po producencie karty, a zapisuje je pod marką
+        // pliku — karta 3M z cennika Canis dopisałaby stronę 3M do Canis (jak przy zmianie nazwy cennika).
+        $cardBrands = $productIds === [] ? [] : Product::query()
+            ->whereIn('id', $productIds)
+            ->pluck('manufacturer', 'id')
+            ->all();
+        $sampleId = 0;
+        foreach ($productIds as $productId) {
+            if (array_key_exists($productId, $cardBrands) && CanonicalBrand::same((string) $cardBrands[$productId], $manufacturer)) {
+                $sampleId = $productId;
+                break;
+            }
+        }
+        RegisterManufacturerCatalogJob::dispatch($manufacturer, $sampleId);
 
         try {
             $this->sizeMerge->merge($manufacturer, false);
@@ -688,6 +785,36 @@ final class PriceListImportService
             'product_ids' => $productIds,
             'special_prices' => $specialCount,
         ];
+    }
+
+    /**
+     * Uwagi importu cennika wielomarkowego — po jednej linii, na początku listy uwag (limit 50 pozycji ucinał koniec).
+     *
+     * @param  array<string, int>  $rows  marka => liczba wierszy z tą marką w nazwie
+     * @param  array<string, list<string>>  $raised  marka => SKU kart, którym import podniósł markę
+     * @param  list<string>  $keptB2b  SKU kart z powiązaniem B2B, które zostają przy marce pliku
+     * @return list<string>
+     */
+    private function goodsBrandNotes(string $manufacturer, array $rows, array $raised, array $keptB2b): array
+    {
+        if ($rows === []) {
+            return [];
+        }
+        $sample = static fn (array $skus): string => implode(', ', array_slice($skus, 0, 12)).(count($skus) > 12 ? ', …' : '');
+        $counts = [];
+        foreach ($rows as $brand => $count) {
+            $counts[] = $brand.' '.$count;
+        }
+        $notes = ['Marka z nazwy wyrobu (cennik wielomarkowy '.$manufacturer.'): '.implode(', ', $counts).' pozycji.'];
+        foreach ($raised as $brand => $skus) {
+            $notes[] = 'Producent karty ustawiony na '.$brand.' (zamiast '.$manufacturer.'): '.count($skus).' kart ('.$sample($skus).').';
+        }
+        if ($keptB2b !== []) {
+            $notes[] = 'Karty z powiązaniem B2B zostają przy dotychczasowym producencie (cena z pliku zaktualizowana): '
+                .count($keptB2b).' ('.$sample($keptB2b).').';
+        }
+
+        return $notes;
     }
 
     /**
@@ -1337,8 +1464,10 @@ final class PriceListImportService
      * @param  array<string, mixed>  $payload
      * @param  array<string, Collection<int, Product>>  $byManufacturer
      * @param  array<int, ProductSourcePrice|null>  $fileSlots  product_id => slot „file” (null = brak slotu)
+     * @param  array<int, int>|null  $onlyIds  id karty => … — dopasowanie rdzeniem i nazwą tylko wśród tych kart (wiersz
+     *                                         z marką z nazwy szuka w tej marce wyłącznie kart swojego cennika)
      */
-    private function findExistingProduct(string $sku, array $payload, array &$byManufacturer, array &$fileSlots): ?Product
+    private function findExistingProduct(string $sku, array $payload, array &$byManufacturer, array &$fileSlots, ?array $onlyIds = null): ?Product
     {
         // karta po samym kodzie może należeć do innego producenta — persistImport pomija wtedy pozycję
         $hit = Product::query()->where('sku', $sku)->first();
@@ -1368,9 +1497,12 @@ final class PriceListImportService
                 }
             }
         }
+        $candidates = $onlyIds === null
+            ? $byManufacturer[$mfr]
+            : $byManufacturer[$mfr]->filter(static fn (Product $product): bool => isset($onlyIds[(int) $product->id]))->values();
 
         $knownStems = [];
-        foreach ($byManufacturer[$mfr] as $product) {
+        foreach ($candidates as $product) {
             $stem = $this->sizes->skuTailStem((string) $product->sku);
             if ($stem !== null) {
                 $knownStems[mb_strtolower($stem)] = $stem;
@@ -1379,7 +1511,7 @@ final class PriceListImportService
         $incomingStem = $this->sizes->resolveMergeStem($sku, $knownStems);
         if ($incomingStem !== null) {
             $stemHit = null;
-            foreach ($byManufacturer[$mfr] as $product) {
+            foreach ($candidates as $product) {
                 $pStem = $this->sizes->resolveMergeStem((string) $product->sku, $knownStems);
                 if ($pStem === null || mb_strtolower($pStem) !== mb_strtolower($incomingStem)) {
                     continue;
@@ -1406,7 +1538,7 @@ final class PriceListImportService
         if ($key === null) {
             return null;
         }
-        foreach ($byManufacturer[$mfr] as $product) {
+        foreach ($candidates as $product) {
             $pk = $this->sizes->groupKey(
                 (string) $product->manufacturer,
                 (string) $product->name,
@@ -1523,13 +1655,17 @@ final class PriceListImportService
     /**
      * Karta wiersza wg mapy połączeń. Wszystkie zmapowane pozycje wiersza wskazują jedną kartę → ta karta (pozycje
      * bez wpisu idą z wierszem); różne karty albo inna marka producenta niż karta → wiersz pominięty z powodem
-     * (bez zgadywania). Wpis z usuniętą kartą → ostrzeżenie, pozycja bez przekierowania. Brak wpisów → zwykła ścieżka.
+     * (bez zgadywania) — chyba że karta ma już cenę z tego cennika albo markę producenta pliku (wiersz z marką
+     * z nazwy wyrobu, 26.09.2026). Wpis z usuniętą kartą → ostrzeżenie, pozycja bez przekierowania. Brak wpisów →
+     * zwykła ścieżka.
      *
      * @param  list<array<string, mixed>>  $rowIdentifiers
      * @param  array{source_key: string, entries: array<string, CardRedirect>, cards: array<int, Product>}  $redirects
+     * @param  array<int, int>  $listCardIds  id karty ze slotem „file” tego cennika => indeks
+     * @param  string  $listManufacturer  producent pliku (wiersz z marką z nazwy ma w $manufacturer markę wyrobu)
      * @return array{card: Product|null, skip: string|null, warnings: list<string>, identifiers: array<int, list<array<string, mixed>>>}
      */
-    private function redirectRoute(array $rowIdentifiers, array $redirects, string $manufacturer): array
+    private function redirectRoute(array $rowIdentifiers, array $redirects, string $manufacturer, array $listCardIds = [], string $listManufacturer = ''): array
     {
         $route = ['card' => null, 'skip' => null, 'warnings' => [], 'identifiers' => []];
         if ($redirects['entries'] === []) {
@@ -1568,7 +1704,9 @@ final class PriceListImportService
             sort($targets);
             $route['skip'] = 'pozycje wiersza należą do różnych połączonych kart (#'.implode(', #', $targets)
                 .') — sprawdź w Łączenie kart';
-        } elseif ($manufacturer !== '' && $cardManufacturer !== '' && ! CanonicalBrand::same($manufacturer, $cardManufacturer)) {
+        } elseif ($manufacturer !== '' && $cardManufacturer !== '' && ! CanonicalBrand::same($manufacturer, $cardManufacturer)
+            && ! isset($listCardIds[(int) $card->id])
+            && ($listManufacturer === '' || ! CanonicalBrand::same($listManufacturer, $cardManufacturer))) {
             // marka kanoniczna, nie dosłowny zapis: „ANRO”/„Anro” i marka ze słownika nie blokują decyzji
             $route['skip'] = 'pozycja połączona z kartą #'.$card->id.' producenta '.$cardManufacturer
                 .', a cennik podaje producenta '.$manufacturer.' — sprawdź w Łączenie kart';
@@ -1634,10 +1772,12 @@ final class PriceListImportService
         // właściciel sprzed zapisu slotu (slot „file” tego importu zmienia wynik ownerSourceKeys)
         // (właściciel „file” = slot pliku marki karty; ten cennik jest właścicielem, gdy to jego slot)
         $owners = $this->ownership->ownerSourceKeys($card);
-        $fillEmptyOnly = $owners !== []
+        // karta innej marki niż plik (marka z nazwy wyrobu, poprawiona ręcznie; 26.09.2026) — jak w zwykłej ścieżce
+        $fillEmptyOnly = ($owners !== []
             && ! (in_array(ProductSourcePrice::SOURCE_FILE, $owners, true)
                 && (int) $this->fileSlot($card, $fileSlots)?->price_list_id === $priceListId
-                && CanonicalBrand::same($listManufacturer, (string) $card->manufacturer));
+                && CanonicalBrand::same($listManufacturer, (string) $card->manufacturer)))
+            || $this->foreignManufacturer($card, $listManufacturer);
         $payloads = array_column($rows, 'payload');
         $first = $payloads[0];
 

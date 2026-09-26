@@ -118,8 +118,9 @@ final class ProductSearchIdentity
         'msa' => ['/(?<![\p{L}\p{N}])MSA(?![\p{L}\p{N}])/u'],
         // Dystrybutor wystawia kombinezony Ansella pod swoją marką: „Kombinezon AlphaTec 2000”
         // w cenniku SECURA. Bez tego karta szukała się na stronie dystrybutora i zostawała pusta.
-        // Marki w cenniku NIE zmieniamy — zmiana zerwałaby aktualizację cen (import pomija kod
-        // należący do karty innego producenta).
+        // Od 26.09.2026 import cennika wielomarkowego z konfiguracji (price_lists.brand_from_name, Canis)
+        // sam nadaje karcie markę z tej listy (PriceListGoodsBrand), a karty cennika z inną marką nie są
+        // już pomijane przy imporcie — ceny z pliku idą dalej.
         'ansell' => [
             '/(?<![\p{L}\p{N}])Ansell(?![\p{L}\p{N}])/iu',
             '/(?<![\p{L}\p{N}])AlphaTec(?![\p{L}\p{N}])/iu',

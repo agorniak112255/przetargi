@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Services\Ai\AiSettingsService;
 use App\Services\AssortmentGroupService;
 use App\Services\PriceListAiAnalyzer;
+use App\Services\PriceListGoodsBrand;
 use App\Services\PriceListImportService;
 use App\Services\PriceListMetaDetector;
 use Illuminate\Http\JsonResponse;
@@ -276,6 +277,8 @@ class PriceListImportController extends Controller
                 $products,
                 $manufacturer !== '' ? $manufacturer : 'Nieznany',
             ),
+            // cennik wielomarkowy: pozycje, które przy imporcie dostaną markę z nazwy wyrobu (wszystkie, nie przykładowe)
+            'brand_from_name' => app(PriceListGoodsBrand::class)->summarize($products, $manufacturer),
         ]);
     }
 

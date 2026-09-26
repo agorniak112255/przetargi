@@ -17,12 +17,11 @@ use Illuminate\Console\Command;
  * pole `manufacturer`; opisu, zdjęć ani dokumentów nie rusza (do ponownego pobrania służy
  * `products:recheck-skus`, które trzeba uruchomić osobno).
  *
- * UWAGA na wyrób cudzej marki sprzedawany przez dystrybutora (AlphaTec w cenniku SECURA,
- * Tyvek u Canisa): TAM MARKI ZWYKLE NIE ZMIENIAMY. Import cennika pomija wiersz, którego kod
- * należy już do karty innego producenta, więc po zmianie marki przestałyby się aktualizować
- * ceny. Wzbogacanie radzi sobie z tym inaczej — rozpoznaje markę towaru z nazwy
- * (`ProductSearchIdentity::goodsBrandKeys`). To polecenie jest do kart, które mają markę
- * po prostu błędną, a nie do towaru dystrybuowanego.
+ * Wyrób cudzej marki sprzedawany przez dystrybutora (AlphaTec w cenniku SECURA, Tyvek u Canisa):
+ * od 26.09.2026 import nie pomija już wiersza na karcie, która ma cenę z tego cennika, a innej
+ * marki karty nie cofa — zmiana marki tutaj nie zatrzymuje cen z pliku (pola karty plik już tylko
+ * uzupełnia, gdy są puste). Cennik wielomarkowy
+ * z konfiguracji (price_lists.brand_from_name, Canis) nadaje markę z nazwy sam (PriceListGoodsBrand).
  */
 final class SetProductManufacturerCommand extends Command
 {
@@ -84,9 +83,8 @@ final class SetProductManufacturerCommand extends Command
 
             return self::SUCCESS;
         }
-        $this->warn('Po zmianie marki import cennika pomija te kody („kod należy do karty producenta …”),'
-            .' więc ceny przestaną się aktualizować. Dla wyrobu cudzej marki sprzedawanego przez'
-            .' dystrybutora zostaw markę z cennika — wzbogacanie rozpozna markę towaru z nazwy.');
+        $this->warn('Po zmianie marki import cennika, z którego karta ma cenę, dalej aktualizuje jej cenę,'
+            .' ale nazwy, opisu ani kodu już nie nadpisuje — uzupełnia tylko puste pola.');
         if (! $this->option('apply')) {
             $this->info('Do zmiany: '.$changing->count().' kart. Uruchom z --apply, żeby zapisać.');
 

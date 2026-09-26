@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Models\Client;
 use App\Models\Product;
+use App\Models\ProductSourcePrice;
 use App\Models\ProductSpecialPrice;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -20,7 +21,11 @@ final class ProductSpecialPriceImporter
         private readonly SpreadsheetCellReader $cells,
     ) {}
 
-    public function importFromPath(string $path, string $manufacturer): int
+    /**
+     * @param  int|null  $priceListId  cennik pliku — jego karty z marką podniesioną z nazwy wyrobu (Canis → 3M) też
+     *                                 dostają ceny specjalne (26.09.2026)
+     */
+    public function importFromPath(string $path, string $manufacturer, ?int $priceListId = null): int
     {
         if (! $this->looksLikeSpreadsheet($path)) {
             return 0;
@@ -58,7 +63,7 @@ final class ProductSpecialPriceImporter
             }
 
             foreach (array_slice($rows, 1) as $row) {
-                $imported += $this->persistRow($row, $map, $manufacturer, $source) ? 1 : 0;
+                $imported += $this->persistRow($row, $map, $manufacturer, $source, $priceListId) ? 1 : 0;
             }
         }
         $spreadsheet->disconnectWorksheets();
@@ -89,7 +94,7 @@ final class ProductSpecialPriceImporter
      * @param  array<int, mixed>  $row
      * @param  array<string, int|null>  $map
      */
-    private function persistRow(array $row, array $map, string $manufacturer, string $source): bool
+    private function persistRow(array $row, array $map, string $manufacturer, string $source, ?int $priceListId = null): bool
     {
         $clientName = trim((string) ($row[$map['client_name']] ?? ''));
         $price = $this->toPrice($row[$map['purchase']] ?? null);
@@ -100,7 +105,7 @@ final class ProductSpecialPriceImporter
         $sku = isset($map['sku']) ? $this->normCode((string) ($row[$map['sku']] ?? '')) : '';
         $skuAlt = isset($map['sku_alt']) ? $this->normCode((string) ($row[$map['sku_alt']] ?? '')) : '';
         $ean = isset($map['ean']) ? $this->normCode((string) ($row[$map['ean']] ?? '')) : '';
-        $product = $this->findProduct($manufacturer, $sku, $skuAlt, $ean);
+        $product = $this->findProduct($manufacturer, $sku, $skuAlt, $ean, $priceListId);
         if ($product === null) {
             return false;
         }
@@ -138,7 +143,7 @@ final class ProductSpecialPriceImporter
         return true;
     }
 
-    private function findProduct(string $manufacturer, string $sku, string $skuAlt, string $ean): ?Product
+    private function findProduct(string $manufacturer, string $sku, string $skuAlt, string $ean, ?int $priceListId = null): ?Product
     {
         $codes = array_values(array_filter([$sku, $skuAlt], static fn (string $v) => $v !== ''));
         if ($codes === [] && $ean === '') {
@@ -146,7 +151,15 @@ final class ProductSpecialPriceImporter
         }
 
         return Product::query()
-            ->where('manufacturer', $manufacturer)
+            ->where(function ($query) use ($manufacturer, $priceListId): void {
+                $query->where('manufacturer', $manufacturer);
+                if ($priceListId !== null) {
+                    $query->orWhereIn('id', ProductSourcePrice::query()
+                        ->select('product_id')
+                        ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+                        ->where('price_list_id', $priceListId));
+                }
+            })
             ->where(function ($query) use ($codes, $ean): void {
                 if ($codes !== []) {
                     $query->whereIn('sku', $codes);
