@@ -20,8 +20,9 @@ use Tests\TestCase;
 
 /**
  * Decyzje właściciela z 25.09.2026 (diagnoza najsłabszych przypadków golden setu): propozycja w innym wariancie
- * (kolor ARTRA 6660 pod zapytaniem o 1010) i karta innego producenta niż w wymaganiu zostają w wyniku, ale wiersz
- * mówi wprost, czym się różni — handlowiec widział dotąd tylko „nie ma oznaczenia z zapytania” albo nic.
+ * (kolor ARTRA 6660 pod zapytaniem o 1010) zostaje w wyniku, ale wiersz mówi wprost, czym się różni — handlowiec
+ * widział dotąd tylko „nie ma oznaczenia z zapytania”. Karta innego producenta niż nazwany w wymaganiu miała na liście
+ * zapasowej dopisek; od decyzji D5 z 26.09.2026 lista zapasowa wyszukiwarki pokazuje tylko producenta z wymagania.
  */
 final class ProductAiSearchRowNotesTest extends TestCase
 {
@@ -75,10 +76,10 @@ final class ProductAiSearchRowNotesTest extends TestCase
         );
     }
 
-    public function test_fallback_row_of_other_manufacturer_than_requested_is_marked(): void
+    public function test_fallback_list_keeps_only_the_requested_producer(): void
     {
         // Jak na produkcji (uvex-phynomic-esd): wymaganie z marką, modelem i cechą ESD, lista zapasowa szuka po cesze
-        // (bez marki i modelu). Karta innej marki zostaje propozycją, ale z dopiskiem; karta marki z wymagania — bez.
+        // (bez marki i modelu). Decyzja D5 (26.09.2026): karta innej marki nie wchodzi na listę, karta marki z wymagania tak.
         $this->glove('UVX-ESD', 'Rękawice montażowe uvex ESD', 'UVEX', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
         $this->glove('ANS-ESD', 'Rękawice montażowe antyelektrostatyczne ESD', 'Ansell', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
         $query = 'Rękawice montażowe powlekane uvex phynomic z funkcją ESD';
@@ -97,17 +98,15 @@ final class ProductAiSearchRowNotesTest extends TestCase
 
         $rows = collect($merge->invoke($engine, $query, [], 10, $intent))->keyBy('sku');
 
-        $this->assertTrue($rows->has('ANS-ESD'), 'fixture: karta innej marki w liście zapasowej');
-        $this->assertStringContainsString('inny producent niż w wymaganiu (UVEX)', (string) $rows['ANS-ESD']['ai_match_reason']);
-        $this->assertTrue($rows->has('UVX-ESD'), 'fixture: karta marki z wymagania w liście zapasowej');
-        $this->assertStringNotContainsString('inny producent', (string) $rows['UVX-ESD']['ai_match_reason']);
+        $this->assertFalse($rows->has('ANS-ESD'), 'karta innej marki nie wchodzi na listę zapasową');
+        $this->assertTrue($rows->has('UVX-ESD'), 'karta marki z wymagania na liście zapasowej');
     }
 
     /**
-     * Recenzja 25.09.2026: dopisek po producencie z intencji, nie po surowych słowach wymagania — bez nazwanego
-     * producenta nie ma dopisku, a karta producenta podmarki (Peltor → 3M) nie jest „innym producentem”.
+     * Recenzja 25.09.2026: producent z intencji, nie surowe słowa wymagania — bez nazwanego producenta lista zostaje
+     * bez zawężenia, a karta producenta podmarki (Peltor → 3M) nie jest „innym producentem”.
      */
-    public function test_fallback_note_follows_producer_from_intent_not_raw_words(): void
+    public function test_fallback_producer_follows_intent_not_raw_words(): void
     {
         $this->glove('ANS-ESD', 'Rękawice montażowe antyelektrostatyczne ESD', 'Ansell', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
         $this->glove('3M-ESD', 'Rękawice montażowe ESD', '3M', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
@@ -122,15 +121,122 @@ final class ProductAiSearchRowNotesTest extends TestCase
         ];
 
         $noProducer = collect($merge->invoke($engine, 'Rękawice montażowe z funkcją ESD', [], 10, [...$base, 'manufacturer' => null]))->keyBy('sku');
-        $this->assertTrue($noProducer->has('ANS-ESD'), 'fixture');
-        foreach ($noProducer as $sku => $row) {
-            $this->assertStringNotContainsString('inny producent', (string) $row['ai_match_reason'], $sku.': wymaganie bez producenta');
-        }
+        $this->assertTrue($noProducer->has('ANS-ESD'), 'wymaganie bez producenta: lista bez zawężenia');
+        $this->assertTrue($noProducer->has('3M-ESD'), 'wymaganie bez producenta: lista bez zawężenia');
 
         $subBrand = collect($merge->invoke($engine, 'Rękawice montażowe Peltor z funkcją ESD', [], 10, [...$base, 'manufacturer' => '3M', 'manufacturer_requested' => 'Peltor']))->keyBy('sku');
-        $this->assertTrue($subBrand->has('3M-ESD'), 'fixture');
-        $this->assertStringNotContainsString('inny producent', (string) $subBrand['3M-ESD']['ai_match_reason'], 'karta producenta podmarki');
-        $this->assertStringContainsString('inny producent niż w wymaganiu (3M)', (string) $subBrand['ANS-ESD']['ai_match_reason']);
+        $this->assertTrue($subBrand->has('3M-ESD'), 'karta producenta podmarki zostaje');
+        $this->assertFalse($subBrand->has('ANS-ESD'), 'karta innego producenta odpada');
+    }
+
+    /**
+     * Producent z wymagania nie ma w katalogu karty z tą cechą (uvex jest, ale bez ESD) — wyszukiwarka zostaje bez
+     * listy zapasowej zamiast podstawiać inną markę; drugie wywołanie listy w finishSearch też dostaje producenta.
+     */
+    public function test_search_fallback_stays_empty_when_producer_has_no_card_with_the_feature(): void
+    {
+        $this->glove('UVX-CUT', 'Rękawice antyprzecięciowe uvex', 'UVEX', 'Rękawice antyprzecięciowe, EN 388.');
+        $this->glove('ANS-ESD', 'Rękawice montażowe antyelektrostatyczne ESD', 'Ansell', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $answer = static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => []]
+            : [
+                'needed' => 'rękawice montażowe',
+                'search_steps' => ['rękawice', 'montażowe'],
+                'search_phrases' => ['rękawice montażowe', 'rękawice ESD'],
+                'constraints' => ['ESD'],
+                'manufacturer' => 'UVEX',
+                'manufacturer_requested' => 'uvex',
+            ];
+        $llm->shouldReceive('chatJson')->andReturnUsing($answer);
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $result = $this->app->make(AiProductSearch::class)->find('Rękawice montażowe uvex z funkcją ESD', 10);
+
+        $this->assertNotContains('ANS-ESD', array_column($result['products'], 'sku'));
+    }
+
+    /**
+     * Zawężenie SQL jest luźniejsze niż reguła całych słów (LIKE „%3m%” łapie kod „H3M-100”) — kartę innego producenta
+     * odcina dopiero bramka listy, ta sama co dawniej przy dopisku (druga recenzja 25.09.2026).
+     */
+    public function test_fallback_list_drops_card_with_producer_letters_inside_a_code(): void
+    {
+        $this->glove('3M-ESD', 'Rękawice montażowe ESD', '3M', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
+        $this->glove('JSP-ESD', 'Rękawice montażowe ESD H3M-100', 'JSP', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
+        $engine = $this->app->make(ProductAiSearchService::class);
+        $merge = new \ReflectionMethod($engine, 'mergeRequirementCatalogRows');
+
+        $rows = $merge->invoke($engine, 'Rękawice montażowe Peltor z funkcją ESD', [], 10, [
+            'needed' => 'rękawice montażowe ESD',
+            'search_steps' => ['rękawice', 'montażowe', 'ESD'],
+            'search_phrases' => ['rękawice montażowe', 'rękawice ESD'],
+            'constraints' => ['ESD'],
+            'manufacturer' => '3M',
+            'manufacturer_requested' => 'Peltor',
+            'manufacturer_absent_in_catalog' => false,
+        ]);
+
+        $this->assertSame(['3M-ESD'], array_column($rows, 'sku'));
+    }
+
+    /**
+     * Recall listy zapasowej bierze z bazy 500 kart bez kolejności i 40 najlepszych po ocenie cechy — zawężenie do
+     * producenta musi stać przed tym limitem. Na produkcji (uvex-phynomic-esd, 25.09) w 40 najlepszych kartach ESD był
+     * jeden uvex, więc filtr po nich zostawiłby prawie pustą listę.
+     */
+    public function test_fallback_list_reaches_producer_cards_beyond_the_recall_limit(): void
+    {
+        for ($i = 0; $i < 45; $i++) {
+            $this->glove('ANS-ESD-'.$i, 'Rękawice montażowe antyelektrostatyczne ESD '.$i, 'Ansell', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
+        }
+        $this->glove('UVX-ESD-1', 'Rękawice montażowe uvex ESD', 'UVEX', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
+        $this->glove('HURT-UVX', 'Rękawice Uvex montażowe ESD', 'Hurtownia BHP', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
+        $engine = $this->app->make(ProductAiSearchService::class);
+        $merge = new \ReflectionMethod($engine, 'mergeRequirementCatalogRows');
+
+        $rows = $merge->invoke($engine, 'Rękawice montażowe uvex z funkcją ESD', [], 40, [
+            'needed' => 'rękawice montażowe ESD',
+            'search_steps' => ['rękawice', 'montażowe', 'ESD', 'uvex'],
+            'search_phrases' => ['rękawice montażowe', 'rękawice ESD'],
+            'constraints' => ['ESD'],
+            'manufacturer' => 'UVEX',
+            'manufacturer_requested' => 'uvex',
+            'manufacturer_absent_in_catalog' => false,
+        ]);
+
+        $skus = array_column($rows, 'sku');
+        sort($skus);
+        $this->assertSame(['HURT-UVX', 'UVX-ESD-1'], $skus, 'karta producenta i karta dystrybutora z marką w nazwie');
+    }
+
+    /**
+     * Ta sama zasada przez wyszukiwarkę (find — też okno kandydatów przetargu): model rozumie wymaganie z marką, nic
+     * nie ocenia, a lista zapasowa szuka po samej cesze („rękawice montażowe ESD”) — jak w uvex-phynomic-esd.
+     */
+    public function test_search_fallback_shows_only_the_requested_producer(): void
+    {
+        $this->glove('UVX-ESD', 'Rękawice montażowe uvex ESD', 'UVEX', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
+        $this->glove('ANS-ESD', 'Rękawice montażowe antyelektrostatyczne ESD', 'Ansell', 'Rękawice montażowe, ESD, EN 16350, EN 388.');
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $answer = static fn (array $messages): array => FakeSearchLlm::kind($messages) === FakeSearchLlm::KIND_RANK
+            ? ['matches' => []]
+            : [
+                'needed' => 'rękawice montażowe',
+                'search_steps' => ['rękawice', 'montażowe'],
+                'search_phrases' => ['rękawice montażowe', 'rękawice ESD'],
+                'constraints' => ['ESD'],
+                'manufacturer' => 'UVEX',
+                'manufacturer_requested' => 'uvex',
+            ];
+        $llm->shouldReceive('chatJson')->andReturnUsing($answer);
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(static fn (array $sets): array => array_map($answer, $sets));
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $result = $this->app->make(AiProductSearch::class)->find('Rękawice montażowe uvex z funkcją ESD', 10);
+
+        $this->assertSame(['UVX-ESD'], array_column($result['products'], 'sku'));
     }
 
     /**
@@ -159,36 +265,36 @@ final class ProductAiSearchRowNotesTest extends TestCase
     public function test_loose_requested_brand_is_not_a_producer_key(): void
     {
         $engine = $this->app->make(ProductAiSearchService::class);
-        $requested = (new \ReflectionMethod($engine, 'requestedProducerForNote'))->invoke($engine, [
+        $requested = (new \ReflectionMethod($engine, 'requestedProducer'))->invoke($engine, [
             'needed' => 'x', 'manufacturer' => 'Delta Plus', 'manufacturer_requested' => 'DELTA', 'manufacturer_absent_in_catalog' => false,
         ]);
-        $note = (new \ReflectionMethod($engine, 'otherManufacturerNote'))->invoke(
+        $other = (new \ReflectionMethod($engine, 'isOtherManufacturer'))->invoke(
             $engine,
             new Product(['sku' => 'X-1', 'name' => 'Kamizelka linia Delta', 'manufacturer' => 'Portwest']),
             $requested,
         );
 
         $this->assertSame(['delta plus'], $requested['keys']);
-        $this->assertStringContainsString('inny producent niż w wymaganiu (Delta Plus)', $note);
+        $this->assertTrue($other, 'linia „Delta” u Portwestu to inny producent niż Delta Plus');
     }
 
     #[DataProvider('producerNoteCases')]
     public function test_other_producer_is_recognized_by_whole_words(string $manufacturer, string $name, string $producer, bool $noted): void
     {
         $engine = $this->app->make(ProductAiSearchService::class);
-        $requested = (new \ReflectionMethod($engine, 'requestedProducerForNote'))->invoke($engine, [
+        $requested = (new \ReflectionMethod($engine, 'requestedProducer'))->invoke($engine, [
             'needed' => 'x',
             'manufacturer' => $producer,
             'manufacturer_requested' => $producer === '3M' ? 'Peltor' : $producer,
             'manufacturer_absent_in_catalog' => false,
         ]);
-        $note = (new \ReflectionMethod($engine, 'otherManufacturerNote'))->invoke(
+        $other = (new \ReflectionMethod($engine, 'isOtherManufacturer'))->invoke(
             $engine,
             new Product(['sku' => 'X-1', 'name' => $name, 'manufacturer' => $manufacturer]),
             $requested,
         );
 
-        $this->assertSame($noted, str_contains($note, 'inny producent'), $name);
+        $this->assertSame($noted, $other, $name);
     }
 
     /** Diagnoza remisów 50%: ślad oceny ma brakujący kluczowy warunek, który podał model. */

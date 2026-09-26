@@ -1355,7 +1355,7 @@ final class ProductAiSearchService
                 $ranked = $this->mergeRequirementCatalogRows($query, $ranked, $limit, $intent);
             }
             if ($ranked === [] && $useCatalog) {
-                $ranked = $this->rowsFromRequirementCatalog($catalogQ, $limit);
+                $ranked = $this->rowsFromRequirementCatalog($catalogQ, $limit, $this->requestedProducer($intent));
             } elseif ($ranked === [] && ! $noGuessing) {
                 // Najsłabszy poziom („ten sam rodzaj w katalogu”). O tym, czy taki wiersz wolno
                 // wpisać do pozycji oferty, decyduje dopasowanie przetargu (match_allow_catalog_rows),
@@ -2717,7 +2717,7 @@ final class ProductAiSearchService
         $intent = $this->normalizeIntent($intent);
         $catalogQ = $this->catalogSearchQuery($query, $intent);
         if ($this->catalogRecall->shouldBackfillCatalog($catalogQ, $intent)) {
-            return $this->rowsFromRequirementCatalog($catalogQ, $limit, $this->requestedProducerForNote($intent));
+            return $this->rowsFromRequirementCatalog($catalogQ, $limit, $this->requestedProducer($intent));
         }
         if ($candidates->isEmpty()) {
             return [];
@@ -2883,27 +2883,75 @@ final class ProductAiSearchService
     }
 
     /**
-     * Dopisek przy karcie innego producenta niż nazwany w wymaganiu. Porównanie po producencie z intencji (kanoniczny,
-     * także z podmarki słownika: „Peltor” → 3M), nie po surowych słowach wymagania — linia modelu albo słowo
-     * pospolite nie może oznaczyć karty samego producenta jako „inny producent” (recenzja 25.09.2026). Karta
-     * dystrybutora z producentem albo podmarką w nazwie („Rękawice Uvex …”, „Nauszniki PELTOR …”) to ten sam producent.
+     * Karta innego producenta niż nazwany w wymaganiu. Porównanie po producencie z intencji (kanoniczny, także
+     * z podmarki słownika: „Peltor” → 3M), nie po surowych słowach wymagania — linia modelu albo słowo pospolite nie
+     * może oznaczyć karty samego producenta jako „inny producent” (recenzja 25.09.2026). Karta dystrybutora
+     * z producentem albo podmarką w nazwie („Rękawice Uvex …”, „Nauszniki PELTOR …”) to ten sam producent.
+     * Wymaganie bez producenta z katalogu — false.
      *
-     * @param  array{keys: list<string>, label: string}  $producer  wynik requestedProducerForNote()
+     * @param  array{keys: list<string>, label: string}  $producer  wynik requestedProducer()
      */
-    private function otherManufacturerNote(Product $product, array $producer): string
+    private function isOtherManufacturer(Product $product, array $producer): bool
+    {
+        return $this->isOtherProducerText((string) $product->manufacturer.' '.(string) $product->name, $producer);
+    }
+
+    /**
+     * @param  array{keys: list<string>, label: string}  $producer
+     */
+    private function isOtherProducerText(string $text, array $producer): bool
     {
         if ($producer['keys'] === []) {
-            return '';
+            return false;
         }
         // Str::ascii jak w nameAppearsInQuery: „Bollé” i „Bolle” to to samo słowo (lexicalNormalize zna tylko polskie litery).
-        $words = preg_split('/\s+/u', trim($this->lexicalNormalize(Str::ascii((string) $product->manufacturer.' '.(string) $product->name)))) ?: [];
+        $words = preg_split('/\s+/u', trim($this->lexicalNormalize(Str::ascii($text)))) ?: [];
         foreach ($producer['keys'] as $key) {
             if ($this->wordsContainName($words, $key)) {
-                return '';
+                return false;
             }
         }
 
-        return ' Uwaga: inny producent niż w wymaganiu ('.$producer['label'].') — równoważnik do sprawdzenia.';
+        return true;
+    }
+
+    /**
+     * Zawężenie SQL listy zapasowej do producenta z wymagania — przed limitem 500 bez kolejności w
+     * CatalogRequirementRecall. Filtr za nim zostawiał z 40 najlepszych kart cechy jedną kartę uvex (sonda produkcji
+     * 25.09, uvex-phynomic-esd), a pozostałe karty marki nie docierały do listy. Nadzbiór bramki isOtherManufacturer:
+     * producenci z katalogu rozpoznani tą samą regułą albo nazwa producenta w nazwie karty (karta dystrybutora).
+     *
+     * @param  array{keys: list<string>, label: string}  $producer
+     * @return (callable(Builder): void)|null
+     */
+    private function producerScope(array $producer): ?callable
+    {
+        if ($producer['keys'] === []) {
+            return null;
+        }
+        $names = array_values(array_filter(
+            $this->manufacturerContext->catalogManufacturers(),
+            fn (string $name): bool => ! $this->isOtherProducerText($name, $producer)
+        ));
+        $patterns = [];
+        foreach ([...$producer['keys'], $producer['label']] as $spelling) {
+            $words = preg_split('/[^\p{L}\p{N}]+/u', $spelling, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            if ($words !== []) {
+                // „delta plus” łapie też „DeltaPlus” i „Delta-Plus” — jak sklejanie słów w wordsContainName
+                $patterns['%'.implode('%', array_map(static fn (string $w): string => addcslashes($w, '%_\\'), $words)).'%'] = true;
+            }
+        }
+
+        return static function (Builder $builder) use ($names, $patterns): void {
+            $builder->where(function (Builder $outer) use ($names, $patterns): void {
+                if ($names !== []) {
+                    $outer->whereIn('manufacturer', $names);
+                }
+                foreach (array_keys($patterns) as $pattern) {
+                    $outer->orWhere('name', 'like', $pattern);
+                }
+            });
+        };
     }
 
     /**
@@ -2943,13 +2991,13 @@ final class ProductAiSearchService
 
     /**
      * Producent nazwany w wymaganiu (z katalogu) — jego nazwa i marka z wymagania, którą na niego przetłumaczono
-     * (podmarka), jako klucze porównania, oraz nazwa do dopisku. Puste, gdy wymaganie nie nazywa producenta albo marki
-     * nie ma w katalogu (tam wynik ma własną uwagę o zamienniku).
+     * (podmarka), jako klucze porównania, oraz nazwa. Puste, gdy wymaganie nie nazywa producenta albo marki nie ma
+     * w katalogu (tam wynik ma własną uwagę o zamienniku).
      *
      * @param  array<string, mixed>  $intent
      * @return array{keys: list<string>, label: string}
      */
-    private function requestedProducerForNote(array $intent): array
+    private function requestedProducer(array $intent): array
     {
         $intent = $this->normalizeIntent($intent);
         $name = $intent['manufacturer_absent_in_catalog'] ? '' : trim((string) ($intent['manufacturer'] ?? ''));
@@ -2977,17 +3025,18 @@ final class ProductAiSearchService
     }
 
     /**
-     * $producer: producent nazwany w oryginalnym wymaganiu (lista szuka po cesze, bez marki i modelu). Karta innego
-     * producenta zostaje propozycją z dopiskiem — decyzja właściciela z 25.09.2026: równoważnik innej marki jest
-     * dopuszczalny, ale handlowiec ma to widzieć (uvex-phynomic-esd: 40 wierszy ARDON/Canis/Polstar bez słowa o marce).
+     * $producer: producent nazwany w oryginalnym wymaganiu (lista szuka po cesze, bez marki i modelu). Decyzja
+     * właściciela z 26.09.2026 (D5): lista zapasowa wyszukiwarki i okna kandydatów przetargu pokazuje wtedy tylko karty
+     * tego producenta. Wcześniej (25.09) karta innej marki zostawała z dopiskiem „inny producent” — uvex-phynomic-esd
+     * dawał 40 wierszy ARDON/Canis/Polstar. Bez producenta (lista katalogowa przetargu, requirementCatalogRows) — bez zmian.
      *
-     * @param  array{keys: list<string>, label: string}  $producer  wynik requestedProducerForNote()
+     * @param  array{keys: list<string>, label: string}  $producer  wynik requestedProducer()
      * @return list<array<string, mixed>>
      */
     private function rowsFromRequirementCatalog(string $query, int $limit, array $producer = ['keys' => [], 'label' => '']): array
     {
         $products = $this->withResponseRelations(
-            $this->retrieveByRequirementCatalog($query, max(40, $limit))
+            $this->retrieveByRequirementCatalog($query, max(40, $limit), $this->producerScope($producer))
         );
         $reason = $this->catalogRecall->catalogMatchReason($query);
         // Backfill jest odpowiedzią na wymaganie z warunkiem (norma, materiał, klasa).
@@ -3007,14 +3056,16 @@ final class ProductAiSearchService
             if (! $this->unratedRowAllowed($query, $product, $wantType)) {
                 continue;
             }
+            if ($this->isOtherManufacturer($product, $producer)) {
+                continue;
+            }
             $row = $this->productToRow($product);
             // Lista zapasowa z cechy (ESD, klasa, °C) — nieoceniona przez model,
             // więc procent zostaje poniżej progu zapisu przetargu, jak w rowsFromGenericCatalog.
             $row['ai_match_percent'] = min(50, max(40, 30 + $this->requirementCatalogScore($query, $product)));
             $row['ai_match_reason'] = self::UNRATED_CATALOG_REASON.' ('.rtrim($reason, '.').')'
                 .$this->unratedTypeGapNote($wantType, $this->noteCardType($query, $product, $this->assortment->articleType($product->name.' '.$product->sku)))
-                .$this->unratedModelGapNote($query, $product)
-                .$this->otherManufacturerNote($product, $producer);
+                .$this->unratedModelGapNote($query, $product);
             $row['ai_match_source'] = self::MATCH_SOURCE_CATALOG;
             $out[] = $row;
         }
@@ -3036,7 +3087,7 @@ final class ProductAiSearchService
         foreach ($ranked as $row) {
             $seen[(int) ($row['id'] ?? 0)] = true;
         }
-        foreach ($this->rowsFromRequirementCatalog($catalogQ, $limit, $this->requestedProducerForNote($intent)) as $row) {
+        foreach ($this->rowsFromRequirementCatalog($catalogQ, $limit, $this->requestedProducer($intent)) as $row) {
             $id = (int) ($row['id'] ?? 0);
             if ($id <= 0 || isset($seen[$id])) {
                 continue;
@@ -3359,9 +3410,10 @@ final class ProductAiSearchService
     }
 
     /**
+     * @param  (callable(Builder): void)|null  $narrow  warunek SQL przed limitem recallu (producerScope)
      * @return Collection<int, Product>
      */
-    private function retrieveByRequirementCatalog(string $query, int $limit): Collection
+    private function retrieveByRequirementCatalog(string $query, int $limit, ?callable $narrow = null): Collection
     {
         $rows = $this->catalogRecall->retrieve(
             fn (): Builder => $this->productBaseQuery(),
@@ -3370,6 +3422,7 @@ final class ProductAiSearchService
             fn (Product $p): string => $this->filterHaystack($p),
             fn (string $q, Product $p): int => $this->requirementCatalogScore($q, $p),
             fn (Product $p): ?int => $this->productHeatCelsius($p),
+            $narrow,
         );
 
         return $this->preferQueryManufacturers($query, $rows)->values();

@@ -80,6 +80,7 @@ final class CatalogRequirementRecall
      * @param  callable(Product): string  $haystack
      * @param  callable(string, Product): int  $score
      * @param  callable(Product): (?int)  $heatCelsius
+     * @param  (callable(Builder): void)|null  $narrow  dodatkowy warunek SQL przed limitem 500 (np. producent z wymagania)
      * @return Collection<int, Product>
      */
     public function retrieve(
@@ -89,6 +90,7 @@ final class CatalogRequirementRecall
         callable $haystack,
         callable $score,
         callable $heatCelsius,
+        ?callable $narrow = null,
     ): Collection {
         $profile = $this->profile($query);
         if ($profile === null) {
@@ -183,6 +185,11 @@ final class CatalogRequirementRecall
                         ->orWhere('norms', 'like', $like);
                 }
             });
+        }
+
+        // Limit 500 nie ma kolejności — zawężenie, które ma przetrwać, musi stać w SQL przed nim, nie w filtrze niżej.
+        if ($narrow !== null) {
+            $narrow($builder);
         }
 
         $rows = $builder->limit(500)->get()->filter(function (Product $product) use (
