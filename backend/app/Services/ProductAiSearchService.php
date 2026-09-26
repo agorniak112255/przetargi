@@ -6132,8 +6132,15 @@ final class ProductAiSearchService
                 $ids[] = $id;
             }
         }
+        $ids = array_values(array_unique($ids));
+        if ($ids === []) {
+            return [];
+        }
+        // Punkt Qdrant po usuniętej karcie (sierota, K8 z planu napraw 25.09.2026 — 25.09 było ich 90) zajmowałby miejsce
+        // w fuzji rang przed prawdziwymi kartami, a karty i tak nie da się wczytać.
+        $existing = array_flip(Product::query()->whereIn('id', $ids)->pluck('id')->map(intval(...))->all());
 
-        return array_values(array_unique($ids));
+        return array_values(array_filter($ids, static fn (int $id): bool => isset($existing[$id])));
     }
 
     /**

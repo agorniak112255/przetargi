@@ -189,4 +189,54 @@ final class ProductAiSearchQueryVectorTest extends TestCase
         $this->assertIsArray($sources, 'ślad źródeł puli zapisany');
         $this->assertSame([], $sources['vector_query'], 'bez listy wektorowej po treści z marką');
     }
+
+    /**
+     * K8 z planu napraw 25.09.2026: punkt Qdrant po usuniętej karcie (25.09 było ich 90) nie zajmuje miejsca na liście
+     * wektorowej w fuzji rang — karty i tak nie da się wczytać.
+     */
+    public function test_vector_hit_without_card_is_dropped(): void
+    {
+        Queue::fake([ReindexProductEmbeddingJob::class]);
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'https://api.openai.com/v1',
+            'api_key' => 'sk-test-key-1234567890',
+            'model' => 'gpt-4o-mini',
+            'timeout_seconds' => 60,
+            'temperature' => 0.1,
+            'vector_enabled' => true,
+            'qdrant_url' => 'http://qdrant.test:6333',
+            'qdrant_collection' => 'products',
+            'embedding_model' => 'text-embedding-3-small',
+        ]);
+        $card = Product::query()->create([
+            'sku' => 'SFI',
+            'name' => 'SFI',
+            'manufacturer' => 'Reis',
+            'category' => 'Odzież robocza',
+            'description' => 'Włóknina 100% polipropylen.',
+            'catalog_price_net' => 3,
+            'purchase_price' => 2,
+            'stock' => 100,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
+        $orphan = $card->id + 1000;
+        Http::fake(function (Request $request) use ($card, $orphan) {
+            if (str_contains($request->url(), '/embeddings')) {
+                return Http::response(['data' => [['embedding' => [1.0, 0.0]]]]);
+            }
+            if (str_contains($request->url(), '/points/search')) {
+                return Http::response(['result' => [['id' => $orphan, 'score' => 0.95], ['id' => $card->id, 'score' => 0.9]]]);
+            }
+
+            return Http::response(['result' => ['status' => 'green']]);
+        });
+        $search = app(ProductAiSearchService::class);
+
+        $ids = (new \ReflectionMethod($search, 'retrieveVectorIds'))->invoke($search, self::QUERY, 40);
+
+        $this->assertSame([$card->id], $ids);
+    }
 }
