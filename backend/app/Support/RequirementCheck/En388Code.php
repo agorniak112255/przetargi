@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace App\Support\RequirementCheck;
 
 /**
- * Poziomy EN 388 odczytane z tekstu: kod („4X42C”, „4 3 4 1 B”, „2.X.4.2.C”, „(1X42C)”, stary „4131”, końcowe „P”)
+ * Poziomy EN 388 odczytane z tekstu: kod („4X42C”, „4 3 4 1 B”, „2.X.4.2.C”, „2-1-2-1”, „4/1/2/1/X”, „(1X42C)”,
+ * „(poziom 4.1.2.1.A)”, stary „4131”, końcowe „P”)
  * albo zapis słowny („ścieranie 4, przecięcie (Coup Test) 3, … przecięcie wg metody ISO – poziom B”). Czytamy tylko
  * fragment za numerem normy, do następnej normy albo średnika — „EN 388 (2.X.4.2.C), EN 407 (X.1.X.X.X)” nie może
  * oddać kodu EN 407, a „EN 3880” nie jest EN 388. Kod musi stać tuż za numerem normy (LEAD) albo w nawiasie za samym
@@ -30,10 +31,11 @@ final readonly class En388Code
 
     /**
      * Między numerem normy a kodem tylko ciasny łącznik w jednej linii: separatory, rok w nawiasie („(2003) 4X43C”),
-     * „z poziomami min.”, „poziom”, „kod”. Przecinek, kropka kończąca zdanie, nowa linia czy dowolne słowa — to już
-     * nie kod. Wspólne z En407Code.
+     * „z poziomami min.”, „poziom”, „kod”, nawias przed „poziomy” (Canis: „EN 388:2016 (poziomy: 2-1-1-2)”). Przecinek,
+     * kropka kończąca zdanie, nowa linia czy dowolne słowa — to już nie kod. Sam nawias nie jest łącznikiem: „EN 388
+     * (2003) 4131” ma rok w nawiasie, a nie kod „2003”. Wspólne z En407Code.
      */
-    public const LEAD = '(?:[\h:\-–—]+|\(\h*(?:19|20)\d{2}\h*\)|(?i:z\h+poziom\p{L}*|poziom\p{L}*|level\p{L}*|min\.|minimum|min|co\h+najmniej|kod\p{L}*)(?![\p{L}\d]))*\(?\h*';
+    public const LEAD = '(?:[\h:\-–—]+|\(\h*(?:19|20)\d{2}\h*\)|\((?=\h*(?i:poziom|level))|(?i:z\h+poziom\p{L}*|poziom\p{L}*|level\p{L}*|min\.|minimum|min|co\h+najmniej|kod\p{L}*)(?![\p{L}\d]))*\(?\h*';
 
     /** Tytuł normy z samych liter, a za nim kod w nawiasie: „EN 388:2016 – Rękawice chroniące … (4343B)”. */
     public const TITLE = '[\h:\-–—]*[\p{L}\h\-–]{3,120}?\(\h*';
@@ -47,8 +49,12 @@ final readonly class En388Code
     /** Koniec fragmentu normy: średnik albo numer kolejnej normy („EN 407”, „EN ISO 21420”, „ANSI”). */
     private const STOP = '/;|(?<![\p{L}\d])(?:EN\s?(?:ISO\s?)?\d{3,5}(?!\d)|ANSI)/iu';
 
-    /** Jednakowy separator między pozycjami — „2.X.4 2C” to nie kod. Małe litery też: „4x43c”. */
-    private const CODE = '(?<![\p{L}\d.])([0-5Xx])([ .]?)([0-5Xx])\2([0-5Xx])\2([0-5Xx])(?:\2([A-Fa-fXx]))?(?:\h?([Pp]))?(?![\p{L}\d])';
+    /**
+     * Jednakowy separator między pozycjami — „2.X.4 2C” to nie kod. Małe litery też: „4x43c”. Myślnik jak u Canis
+     * („2-1-2-1”, „4-1-2-1”) i ukośnik („4/1/2/1/X”) — separatory z planu norm z 23.09.2026 (etap 1), dopisane
+     * 26.09.2026 (M8 z planu napraw 25.09): 10 kart Canis z myślnikami nie miało odczytanych poziomów.
+     */
+    private const CODE = '(?<![\p{L}\d.])([0-5Xx])([ .\/-]?)([0-5Xx])\2([0-5Xx])\2([0-5Xx])(?:\2([A-Fa-fXx]))?(?:\h?([Pp]))?(?![\p{L}\d])';
 
     private const GAP = '\s*(?:\([^()]{0,20}\)\s*)?[:\-–—]?\s*(?:(?i:poziom|level)\p{L}*\s*[:\-–—]?\s*)?';
 
@@ -82,8 +88,9 @@ final readonly class En388Code
     }
 
     /**
-     * Pełny kod zapisany kodem (nie słowami) — dosłowny, bez spacji i kropek między pozycjami: „4 1 2 1 X” → „4121X”,
-     * „1.1.2.2” → „1122”. Null dla zapisu słownego: ten bywa częściowy („ścieranie 4”) i nie jest kodem karty.
+     * Pełny kod zapisany kodem (nie słowami) — dosłowny, bez separatorów między pozycjami: „4 1 2 1 X” → „4121X”,
+     * „1.1.2.2” → „1122”, „2-1-1-2” → „2112”, „4/1/2/1/X” → „4121X”. Null dla zapisu słownego: ten bywa częściowy
+     * („ścieranie 4”) i nie jest kodem karty.
      */
     public function compact(): ?string
     {
@@ -91,7 +98,7 @@ final readonly class En388Code
             return null;
         }
 
-        return mb_strtoupper(preg_replace('/[\h.]/u', '', $this->text) ?? $this->text);
+        return mb_strtoupper(preg_replace('/[\h.\/\-]/u', '', $this->text) ?? $this->text);
     }
 
     /**

@@ -57,9 +57,9 @@ final class ManufacturerNormFactsTest extends TestCase
 
     public function test_nieczytelny_kod_nie_zostaje_zapisany_jako_poziom(): void
     {
-        // Tak wyglądały kody wyciągnięte przez model z opisów sklepowych: sam stopień przecięcia
-        // („3”) albo kod z myślnikami („4-1-3-1-A”). Karta ma zostać bez poziomów producenta.
-        foreach (['3', '5', '4-1-3-1-A', 'poziom 3'] as $value) {
+        // Tak wyglądały kody wyciągnięte przez model z opisów sklepowych: sam stopień przecięcia („3”).
+        // Karta ma zostać bez poziomów producenta.
+        foreach (['3', '5', 'poziom 3'] as $value) {
             $column = ManufacturerNormFacts::build(
                 [['label' => 'EN 388:2016 + A1:2018', 'value' => $value]],
                 'atg',
@@ -69,6 +69,26 @@ final class ManufacturerNormFactsTest extends TestCase
 
             $this->assertNotNull($column);
             $this->assertArrayNotHasKey('en388', $column, 'kod „'.$value.'” nie powinien przejść');
+        }
+    }
+
+    /**
+     * Zmiana reguły z 26.09.2026 (plan norm z 23.09, etap 1: separatory „4-1-2-1-X”, „4/1/2/1/X”): kod z myślnikami
+     * En388Code czyta jak każdy inny, a do dopasowania trafia zwarty — ProductMatchService i ProductCrossRefService
+     * porównują kod bez separatorów. Audyt ATG z 20.09 nazywał go nieczytelnym, bo stary czytnik go nie widział.
+     */
+    public function test_kod_z_myslnikami_zapisany_zwarty(): void
+    {
+        foreach (['4-1-3-1-A' => '4131A', '2-1-1-2' => '2112', '4/1/2/1/X' => '4121X'] as $value => $en388) {
+            $column = ManufacturerNormFacts::build(
+                [['label' => 'EN 388:2016 + A1:2018', 'value' => $value]],
+                'atg',
+                'ATG',
+                'https://example.test/karta',
+            );
+
+            $this->assertSame($en388, ManufacturerNormFacts::context($column)['en388'] ?? null, $value);
+            $this->assertSame($value, $column['rows'][0]['value'] ?? null, 'dosłowny zapis zostaje w rows');
         }
     }
 

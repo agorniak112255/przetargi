@@ -323,7 +323,9 @@ final class ManufacturerNormFacts
 
     /**
      * Kod EN 388 z par — tylko gdy etykieta jest tą normą, a wartość da się odczytać jako jej kod.
-     * „3”, „4-1-3-1-A” czy poziom EN 407 wpisany przy EN 388 nie przechodzą: karta zostaje bez poziomów.
+     * „3”, „poziom 3” czy poziom EN 407 wpisany przy EN 388 nie przechodzą: karta zostaje bez poziomów. Kod
+     * z myślnikami („4-1-3-1-A”, audyt ATG z 20.09 nazywał go nieczytelnym) En388Code czyta od 26.09.2026 — separatory
+     * z planu norm z 23.09 (etap 1) — i zapisujemy go zwarty („4131A”).
      *
      * @param  list<array{label: string, value?: string}>  $rows
      */
@@ -351,12 +353,12 @@ final class ManufacturerNormFacts
     }
 
     /**
-     * Kod rozstrzelony spacjami albo kropkami („2 1 2 1 X”, „3.1.2.1.X”) — zwarty („2121X”); każda inna wartość
-     * bez zmian. PO CO: witryna Delta Plus podaje przy „EN 388” kod ze spacjami, a ProductMatchService szuka
-     * `en388` w wymaganiu przetargu bez spacji („4331B”) — rozstrzelony kod nigdy by nie trafił, a porównanie
-     * dokładne w ProductCrossRefService rozdzieliłoby ten sam poziom na dwa. Zwieramy tylko, gdy wartość to w całości
-     * sam kod (dosłowny zapis kodu z En388Code, czyli z jednolitym separatorem) — kod z dopiskiem zostaje dosłownie.
-     * Dosłowny zapis z karty i tak zostaje w `rows`.
+     * Kod rozstrzelony spacjami, kropkami, myślnikami albo ukośnikami („2 1 2 1 X”, „3.1.2.1.X”, „4-1-3-1-A”) — zwarty
+     * („2121X”); każda inna wartość bez zmian. PO CO: witryna Delta Plus podaje przy „EN 388” kod ze spacjami,
+     * a ProductMatchService szuka `en388` w wymaganiu przetargu bez spacji („4331B”) — rozstrzelony kod nigdy by nie
+     * trafił, a porównanie dokładne w ProductCrossRefService rozdzieliłoby ten sam poziom na dwa. Zwieramy tylko, gdy
+     * wartość to w całości sam kod (dosłowny zapis kodu z En388Code, czyli z jednolitym separatorem) — kod z dopiskiem
+     * zostaje dosłownie. Dosłowny zapis z karty i tak zostaje w `rows`.
      */
     private static function compactSpacedCode(string $value, En388Code $code): string
     {
@@ -364,7 +366,7 @@ final class ManufacturerNormFacts
             return $value;
         }
 
-        return preg_replace('/[\h.]/u', '', $value) ?? $value;
+        return preg_replace('/[\h.\/\-]/u', '', $value) ?? $value;
     }
 
     /**

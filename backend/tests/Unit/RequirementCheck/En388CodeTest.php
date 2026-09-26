@@ -27,6 +27,21 @@ final class En388CodeTest extends TestCase
         yield 'małe litery' => ['EN 388: 4x43c', '4x43c', '4X43C'];
         yield 'rok w nawiasie przed kodem' => ['EN 388 (2003) 4X43C', '4X43C', '4X43C'];
         yield 'min. przed kodem' => ['EN 388 min. 2121', '2121', '2121-'];
+        // M8 z planu napraw 25.09.2026: zapis Canis z myślnikami, także w nawiasie za „poziomy:”
+        yield 'myślniki w nawiasie za poziomy (Canis)' => ['EN 388:2016 (poziomy: 2-1-1-2), EN 420', '2-1-1-2', '2112-'];
+        yield 'myślniki za dwukropkiem (Canis)' => ['EN 388: 2-1-2-1', '2-1-2-1', '2121-'];
+        yield 'myślniki z literą ISO' => ['EN 388 (poziomy: 4-1-2-1-X)', '4-1-2-1-X', '4121X'];
+        yield 'ukośniki (plan norm z 23.09)' => ['EN 388: 4/1/2/1/X', '4/1/2/1/X', '4121X'];
+        // ten sam łącznik w opisach Ansell i MAPA oraz w kolumnie norm Polstar — dotąd nieczytany
+        yield 'nawias z „poziom” (Ansell)' => ['Spełniają normy EN 420 oraz EN 388 (poziom 1.1.3.X.A) – zapewniają', '1.1.3.X.A', '113XA'];
+        yield 'nawias z „poziom” (Polstar, kolumna norm)' => ['EN 388:2016 (poziom 1131X), EN 21420:2020', '1131X', '1131X'];
+    }
+
+    #[Test]
+    public function hyphenated_code_compacts_without_hyphens(): void
+    {
+        $this->assertSame('2112', En388Code::first('EN 388:2016 (poziomy: 2-1-1-2)')?->compact());
+        $this->assertSame('4X43C', En388Code::first('EN 388 (2003) 4X43C')?->compact(), 'rok w nawiasie dalej nie jest kodem');
     }
 
     #[Test]
@@ -159,6 +174,8 @@ final class En388CodeTest extends TestCase
         yield 'liczba w nowej linii' => ["EN 388\n1200 szt."];
         yield 'rozmiar małymi literami' => ['en 388, rozm. 8x10'];
         yield 'kod dalej w tekście opisu' => ['EN 388 rękawice w rozmiarze 9, kolor 4131'];
+        yield 'nawias bez „poziomy” to nie łącznik kodu' => ['EN 388 (nr kat. 4-1-2-1)'];
+        yield 'rozmiary z myślnikami za numerem artykułu' => ['EN 388, rozmiary 7-8-9-10'];
     }
 
     #[Test]

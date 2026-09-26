@@ -36,6 +36,16 @@ final class En407CodeTest extends TestCase
         $this->assertSame('X1XXX-', En407Code::first('Standards: EN 420:2003 + A1:2009, Cat.III EN 407(X.1.X.X.X), EN388 (2.X.4.2.C),')?->canonical());
     }
 
+    /** Canis zapisuje kod z myślnikami, także w nawiasie za „poziomy:” — jak EN 388 (M8 z planu napraw 25.09.2026). */
+    #[Test]
+    public function reads_hyphenated_code_after_poziomy(): void
+    {
+        $code = En407Code::first('EN 388:2016 (poziomy: 2-1-3-1-X), EN 407:2020 (poziomy: X-2-X-X-X-X), EN 420');
+
+        $this->assertSame('X-2-X-X-X-X', $code?->text);
+        $this->assertSame('X2XXXX', $code->canonical());
+    }
+
     #[Test]
     public function digits_later_in_the_text_are_not_a_code(): void
     {

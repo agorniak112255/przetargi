@@ -26,8 +26,8 @@ final readonly class En407Code
 
     private const STOP = '/;|(?<![\p{L}\d])(?:EN\s?(?:ISO\s?)?\d{3,5}(?!\d)|ANSI)/iu';
 
-    /** 4–6 pozycji z jednakowym separatorem. */
-    private const CODE = '(?<![\p{L}\d.])([0-4Xx])([ .]?)([0-4Xx])\2([0-4Xx])\2([0-4Xx])(?:\2([0-4Xx]))?(?:\2([0-4Xx]))?(?![\p{L}\d])';
+    /** 4–6 pozycji z jednakowym separatorem — także myślnikiem i ukośnikiem, jak EN 388 („X-1-X-X-X-X” u Canis). */
+    private const CODE = '(?<![\p{L}\d.])([0-4Xx])([ .\/-]?)([0-4Xx])\2([0-4Xx])\2([0-4Xx])(?:\2([0-4Xx]))?(?:\2([0-4Xx]))?(?![\p{L}\d])';
 
     private const GAP = '\s*[:\-–—]?\s*(?:(?i:poziom|level)\p{L}*\s*[:\-–—]?\s*)?';
 
