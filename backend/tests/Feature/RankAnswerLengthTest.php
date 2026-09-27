@@ -79,7 +79,13 @@ final class RankAnswerLengthTest extends TestCase
         // M11 (26.09.2026): cecha innej karty, serii albo wyrobu wskazanego kodem to nie dowód; brak z reason → missing_key
         $this->assertStringContainsString('Dowód tylko z tej karty', $rank['system']);
         $this->assertStringContainsString('każdy kluczowy warunek, którego brak opisujesz w reason, musi być w missing_key', $rank['system']);
-        $this->assertSame('rank-2026-09-27-same-braki', ProductAiSearchService::RANK_PROMPT_VERSION);
+        // 27.09.2026: najwolniejsze pozycje przetargu wypisywały po 20 kart (do 2500 tokenów), a przetarg bierze 10 najlepszych
+        // — lista do 10 kart, przy nadmiarze te z najwyższym score. Karty < 40 wolno dalej oceniać jawnie (model_rejected
+        // blokuje wiersz katalogowy w przetargu), więc prompt nie każe ich pomijać.
+        $this->assertStringContainsString('Max 10 — gdy pasuje więcej kart, zwróć te z najwyższym score. ', $rank['system']);
+        $this->assertStringNotContainsString('poniżej 40 nie zwracaj', $rank['system']);
+        $this->assertStringNotContainsString('Max 20', $rank['system']);
+        $this->assertSame('rank-2026-09-27-max10', ProductAiSearchService::RANK_PROMPT_VERSION);
     }
 
     /**

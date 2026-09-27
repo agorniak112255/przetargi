@@ -66,7 +66,12 @@ final class ProductAiSearchService
      */
     private const RANK_CARDS_POOL_TOP = 8;
 
-    private const MAX_MATCHES = 20;
+    /**
+     * Najwięcej kart w odpowiedzi rankingu. 27.09.2026 (Flash-Next na Sparkach): przetarg 15 pozycji trwał 2 min 10 s,
+     * a najwolniejsze pozycje wypisywały po 20 kart (2000–2500 tokenów, z czego 18 poniżej 50) — dopasowanie przetargu
+     * i tak bierze 10 najlepszych (ProductMatchService::AI_CANDIDATE_WINDOW).
+     */
+    private const MAX_MATCHES = 10;
 
     /**
      * Ile kart wolno wnieść do puli krótkiemu oznaczeniu z zapytania („s1”, „p3”).
@@ -205,7 +210,7 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-27-same-braki';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-27-max10';
 
     /** Jedna karta w odpowiedzi rankingu. */
     private const RANK_MATCH_JSON = '{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}';
@@ -6673,8 +6678,11 @@ final class ProductAiSearchService
                     .'każdy kluczowy warunek, którego brak opisujesz w reason, musi być w missing_key. '
                     .self::RANK_JSON_LINE.' '
                     .$reasonHint
-                    .'score>=40 tylko przy zgodnej nazwie i bez sprzeczności z warunkiem. Max '.$maxMatches.'. '
-                    .'Zwróć każdą kartę, która spełnia wymaganie — nie skracaj listy na siłę. '
+                    // Bez „karty poniżej 40 nie zwracaj”: jawna ocena < 40 to model_rejected, który blokuje wiersz
+                    // katalogowy tej karty w dopasowaniu przetargu (ProductMatchService::rejectedByModel).
+                    .'score>=40 tylko przy zgodnej nazwie i bez sprzeczności z warunkiem. '
+                    .'Max '.$maxMatches.' — gdy pasuje więcej kart, zwróć te z najwyższym score. '
+                    .'W tym limicie zwróć każdą kartę, która spełnia wymaganie — nie skracaj listy na siłę. '
                     .$this->dualRequirementPromptRule()
                     .($photo === [] ? '' : 'Pole photo_inference to wniosek modelu ze zdjęcia karty, nie tekst karty: potwierdza tylko '
                         .'kształt pięty (zabudowana albo odkryta), nigdy normy ani klasy. Gdy potwierdza zabudowaną piętę, nie wpisuj '
