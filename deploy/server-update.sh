@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Uruchom na serwerze (najlepiej jako root).
-# Aktualizuje kod z GitHub + migracje. NIE kopiuje lokalnej bazy.
+# Aktualizuje kod z GitHub, zależności wg composer.lock + migracje. NIE kopiuje lokalnej bazy.
 # .htaccess na serwerze jest lokalny — pull go NIE nadpisuje.
 #
 #   bash deploy/server-update.sh              # sam kod (szybko)
@@ -87,6 +87,23 @@ elif [[ ! -f "$HTACCESS" && -f "$APP_ROOT/deploy/htaccess.production" ]]; then
   echo "==> skopiowano deploy/htaccess.production → backend/public/.htaccess"
 fi
 
+# Zawsze, nie tylko gdy brak vendor: dotąd serwer został przy paczkach z 19.07.2026 mimo nowego composer.lock
+# (guzzlehttp/promises 2.5.1 zrywał Http::pool z limitem równoległości — „Invoking the wait callback did not
+# resolve the promise”, 27.09.2026 — i nie doszły poprawki bezpieczeństwa z 12.09). Przy zgodnym vendor
+# composer kończy po kilku sekundach bez zmian. Przed chown, żeby nowe pliki vendor dostały właściciela aplikacji.
+echo "==> composer install (vendor zgodny z composer.lock)"
+cd "$APP_ROOT/backend"
+if command -v composer >/dev/null 2>&1; then
+  COMPOSER_BIN="$(command -v composer)"
+elif [[ -f /usr/local/psa/var/modules/composer/composer.phar ]]; then
+  COMPOSER_BIN=/usr/local/psa/var/modules/composer/composer.phar
+else
+  echo "Brak composera — vendor zostałby niezgodny z composer.lock. Zainstaluj composera albo zależności w Plesku (PHP Composer) i uruchom skrypt ponownie." >&2
+  exit 1
+fi
+COMPOSER_ALLOW_SUPERUSER=1 "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --optimize-autoloader --no-interaction
+cd "$APP_ROOT"
+
 echo "==> uprawnienia"
 chown -R "$OWNER:$GROUP" "$APP_ROOT" || true
 chmod -R ug+rwx "$APP_ROOT/backend/storage" "$APP_ROOT/backend/bootstrap/cache" || true
@@ -102,17 +119,6 @@ if [[ -f "$APP_ROOT/backend/public/index.html" ]]; then
 fi
 
 cd "$APP_ROOT/backend"
-
-if [[ ! -d vendor ]]; then
-  echo "==> composer install"
-  if command -v composer >/dev/null 2>&1; then
-    "$PHP_BIN" "$(command -v composer)" install --no-dev --optimize-autoloader
-  elif [[ -f /usr/local/psa/var/modules/composer/composer.phar ]]; then
-    "$PHP_BIN" /usr/local/psa/var/modules/composer/composer.phar install --no-dev --optimize-autoloader
-  else
-    echo "Brak composera — zainstaluj zależności w Plesku (PHP Composer)."
-  fi
-fi
 
 echo "==> storage:link"
 if [[ -L "$APP_ROOT/backend/public/storage" ]]; then
