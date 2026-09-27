@@ -3153,6 +3153,95 @@ final class ProductEnrichmentApiTest extends TestCase
         );
     }
 
+    /**
+     * 27.09.2026 (CDR0400): obok karty wskazanej przez człowieka pobrała się strona innej maty Coba i lista arkuszy
+     * producenta — obie „potwierdzone” marką i słowami nazwy. Pliki idą tylko ze stron opisu (jak zdjęcia) albo z kodem
+     * wyrobu; własny arkusz nie może wypaść przez limit plików.
+     */
+    #[DataProvider('ownPageSources')]
+    public function test_documents_come_only_from_description_pages_or_carry_product_code(bool $humanLink): void
+    {
+        Storage::fake('public');
+        $own = 'https://www.coba.com/pl/produkt/mata-przewodzaca-stolowa';
+        $sibling = 'https://www.coba.com/pl/produkt/work-deck';
+        $listing = 'https://www.coba.com/pl/karty-produktow';
+        $product = $this->makeProduct([
+            'sku' => 'CDR0400',
+            'name' => 'Mata przewodząca stołowa Zielony 0.6m x 1.2m (2mm)',
+            'manufacturer' => 'Coba',
+            'shop_source_url' => $humanLink ? $own : null,
+        ]);
+
+        $search = $this->searchMock();
+        $search->shouldReceive('searchBothPhases')->once()->andReturn([
+            'results' => [
+                ...($humanLink ? [] : [['url' => $own, 'title' => 'Mata przewodząca stołowa - COBA PL', 'snippet' => 'CDR040004 Mata przewodząca stołowa COBA']]),
+                ['url' => $sibling, 'title' => 'Work Deck - COBA PL', 'snippet' => 'Mata przewodząca stołowa COBA'],
+                ['url' => $listing, 'title' => 'Karty produktów - COBA PL', 'snippet' => 'Mata przewodząca stołowa'],
+            ],
+            'errors' => [],
+        ]);
+        $llm = $this->mockLlmWithSanitize([
+            'description' => 'Dwuwarstwowa mata przewodząca stołowa COBA do stref ESD, górna warstwa rozpraszająca 0,5 mm, '
+                .'zatrzask uziemiający 10 mm, zgodna z IEC 61340-5-1. Wymiary 0,6 m x 1,2 m, grubość 2 mm, kolor zielony.',
+            'features' => ['warstwa rozpraszająca'],
+            'specs' => ['Wymiary: 0,6 m x 1,2 m'],
+            'norms' => ['IEC 61340-5-1'],
+            'certificates' => [],
+            'materials' => ['guma'],
+            'use_cases' => ['stanowiska ESD'],
+            'image_urls' => [],
+            'document_urls' => [],
+            'source_urls' => [$own],
+            'confidence' => 0.9,
+        ]);
+        $page = static fn (string $title, string $body, array $sheets): string => '<html><head><title>'.$title.' - COBA PL</title></head>'
+            .'<body><h1>'.$title.'</h1><p>'.str_repeat($body.' ', 20).'</p>'
+            .implode('', array_map(static fn (string $s): string => '<a href="https://www.coba.com/datasheets/'.$s.'-pl_PL.pdf">Arkusz danych</a>', $sheets))
+            .'</body></html>';
+        $pdf = "%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n";
+        Http::fake([
+            'https://api.tavily.com/*' => Http::response(['results' => []], 200),
+            'https://www.coba.com/datasheets/*' => Http::response($pdf, 200, ['Content-Type' => 'application/pdf']),
+            $own => Http::response($page('Mata przewodząca stołowa', 'Mata przewodząca stołowa COBA, zielona, 0,6 m x 1,2 m, 2 mm, CDR040004, IEC 61340-5-1.',
+                ['mata-przewodzaca-stolowa']), 200, ['Content-Type' => 'text/html']),
+            $sibling => Http::response($page('Work Deck', 'Mata przewodząca stołowa COBA Work Deck, zielona, 0,6 m x 1,2 m, do stanowisk ESD.',
+                ['work-deck', 'tough-lock-anti-fatigue-tile', 'tough-lock-anti-fatigue-edges', 'fatigue-lock-edges', 'solid-fatigue-step-esd']), 200, ['Content-Type' => 'text/html']),
+            $listing => Http::response($page('Karty produktów', 'Mata przewodząca stołowa COBA. Mata przewodząca z gumy neoprenowej COBA. COBAswitch.',
+                ['deckplate-anti-static', 'cobaswitch', 'fatigue-lock-with-holes']), 200, ['Content-Type' => 'text/html']),
+        ]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            new ProductImageCandidateVerifier(app(ProductSearchIdentity::class), $llm),
+            app(PpeAssortment::class),
+        );
+        $service->enrichProduct($product, true);
+
+        $product->refresh();
+        $this->assertStringContainsString('mata przewodząca stołowa', mb_strtolower((string) $product->description));
+        $this->assertSame(
+            ['https://www.coba.com/datasheets/mata-przewodzaca-stolowa-pl_PL.pdf'],
+            ProductDocument::query()->where('product_id', $product->id)->pluck('source_url')->all(),
+        );
+    }
+
+    /**
+     * @return array<string, array{bool}>
+     */
+    public static function ownPageSources(): array
+    {
+        return ['link człowieka' => [true], 'strona z wyszukiwarki' => [false]];
+    }
+
     public function test_keeps_shop_radio_sizes_after_llm_drops_them_from_text(): void
     {
         Storage::fake('public');

@@ -44,6 +44,8 @@ final class GeneratedProductCardPdfTest extends TestCase
 
         $this->assertCount(1, $fetched['pages']);
         $this->assertSame([self::CARD], $fetched['document_urls']);
+        // karta idzie też przy stronie — serwis bierze pliki tylko ze stron opisu, a adres karty nie ma kodu wyrobu
+        $this->assertSame([self::CARD], $fetched['pages'][0]['document_urls'] ?? null);
         $this->assertSame('Pobierz kartę produktu w pliku PDF', $fetched['document_labels'][self::CARD] ?? null);
     }
 

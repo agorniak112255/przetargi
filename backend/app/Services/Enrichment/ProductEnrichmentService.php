@@ -1242,14 +1242,32 @@ final class ProductEnrichmentService
             }
             $timing['images_ms'] = $this->elapsedMs($t);
             $t = microtime(true);
+            // Pliki pochodzą z tych samych stron co opis i zdjęcia ($descPages) — pierwsze, żeby limit plików nie wypchnął
+            // arkusza karty. Z pozostałych pobranych stron (także „potwierdzonych” słabo: lista arkuszy producenta, karta
+            // siostrzanego wyrobu) tylko plik z kodem wyrobu w adresie albo opisie linku (27.09.2026: CDR0400 dostał pięć
+            // arkuszy innych mat Coba i stracił własny).
             $documentUrls = [];
+            $descriptionPageDocs = [];
+            foreach ($descPages as $page) {
+                foreach ($page['document_urls'] ?? [] as $url) {
+                    if (is_string($url) && $url !== '') {
+                        $documentUrls[] = $url;
+                        $descriptionPageDocs[$url] = true;
+                    }
+                }
+            }
+            $fetchedLabels = is_array($fetched['document_labels'] ?? null) ? $fetched['document_labels'] : [];
+            $namesProduct = fn (string $url): bool => isset($descriptionPageDocs[$url]) || $this->identity->hayHasProductCode(
+                mb_strtolower(urldecode($url).' '.($fetchedLabels[$url] ?? '')),
+                $product,
+            );
             foreach ($extracted['document_urls'] ?? [] as $url) {
-                if (is_string($url) && ProductDocumentDownloader::looksLikeDocumentUrl($url)) {
+                if (is_string($url) && ProductDocumentDownloader::looksLikeDocumentUrl($url) && $namesProduct($url)) {
                     $documentUrls[] = $url;
                 }
             }
             foreach ($fetched['document_urls'] ?? [] as $url) {
-                if (is_string($url)) {
+                if (is_string($url) && $namesProduct($url)) {
                     $documentUrls[] = $url;
                 }
             }
@@ -1925,7 +1943,7 @@ final class ProductEnrichmentService
      */
     private function copyPageMeta(array $from, array $to): array
     {
-        foreach (['option_sizes', 'accessories', 'image_urls', 'trusted_image_urls', 'norm_facts'] as $key) {
+        foreach (['option_sizes', 'accessories', 'image_urls', 'trusted_image_urls', 'norm_facts', 'document_urls'] as $key) {
             if (isset($from[$key]) && is_array($from[$key])) {
                 $to[$key] = $from[$key];
             }

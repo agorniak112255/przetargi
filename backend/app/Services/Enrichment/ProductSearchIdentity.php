@@ -2906,6 +2906,12 @@ final class ProductSearchIdentity
         if (preg_match('#/(?:about-us|about|o-nas|o-firmie|contact-us|press-releases)(/|$)#', $path) === 1) {
             return true;
         }
+        // Centrum pobierania producenta (coba.com/pl/karty-produktow) wymienia arkusze wszystkich wyrobów — nazwa
+        // naszego wyrobu stoi tam jako jedna z pozycji, więc strona przechodziła jako karta (27.09.2026, CDR0400).
+        // Sam plik PDF z katalogu „/datasheets/…pdf” to karta jednego wyrobu — ta reguła go nie dotyczy.
+        if (preg_match('#/(?:karty-produktow|arkusze-danych|do-pobrania|pliki-do-pobrania|download-cent(?:er|re))/?$#', $path) === 1) {
+            return true;
+        }
         // Producent trzyma na własnej domenie także komunikaty giełdowe. „Ansell
         // to acquire Ringers Gloves” niesie markę i słowo „gloves”, więc filtr
         // treści je przepuszcza — a to komunikat prasowy, nie karta produktu.

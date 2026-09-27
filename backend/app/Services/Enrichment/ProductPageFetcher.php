@@ -506,6 +506,7 @@ final class ProductPageFetcher
         if ($readerPage !== null) {
             $readerPage['image_urls'] = array_values(array_unique($pageImages));
             $readerPage['trusted_image_urls'] = array_values(array_unique($pageTrusted));
+            $readerPage['document_urls'] = array_values(array_filter($viaReader['document_urls'], 'is_string'));
             $goodPages[] = $readerPage;
         }
         foreach ($viaReader['document_urls'] as $doc) {
@@ -721,6 +722,22 @@ final class ProductPageFetcher
             }
         }
 
+        $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
+        // Karta PDF składana na żądanie nie ma kodu w adresie — z wyrobem wiąże ją tylko strona, na której
+        // stoi link: potwierdzona karta tego wyrobu u producenta. Pierwsze pobranie i karty z indeksu katalogu
+        // nie podają domen producenta, stąd druga droga przez listę oficjalnych hostów.
+        $bindsGeneratedCard = $this->matchingProduct !== null && $pageLooksLikeProduct && $text !== ''
+            && ($fromManufacturer || $this->identity->isOfficialCatalogUrl($url, $this->matchingProduct));
+        $pageDocuments = $this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer, $bindsGeneratedCard);
+        // Strona innego wyrobu (albo bez treści) nie daje swoich plików jak zdjęć — zostają tylko pliki z kodem naszego
+        // wyrobu w adresie albo opisie linku (27.09.2026: karty siostrzane coba.com dokładały cudze arkusze danych).
+        $strict = $this->matchingProduct !== null && ($text === '' || ! $pageLooksLikeProduct);
+        foreach ($pageDocuments as $doc) {
+            if (! $strict || $this->documentNamesProduct($doc)) {
+                $documents[] = $doc;
+            }
+        }
+
         if ($text !== '' && ($this->matchingProduct === null || $pageLooksLikeProduct)) {
             $page = [
                 'url' => $url,
@@ -728,6 +745,8 @@ final class ProductPageFetcher
                 'text' => mb_substr($text, 0, 12000),
                 'image_urls' => array_values(array_unique($pageImages)),
                 'trusted_image_urls' => array_values(array_unique($pageTrusted)),
+                // pliki tej strony — serwis bierze je tylko ze stron, z których powstał opis (jak zdjęcia)
+                'document_urls' => $pageDocuments,
             ];
             if ($optionSizes !== []) {
                 $page['option_sizes'] = $optionSizes;
@@ -744,20 +763,6 @@ final class ProductPageFetcher
             $goodPages[] = $page;
         } elseif ($this->matchingProduct !== null) {
             $this->rejections[] = $this->unconfirmedRejection($url, $title, $text);
-        }
-        $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
-        // Karta PDF składana na żądanie nie ma kodu w adresie — z wyrobem wiąże ją tylko strona, na której
-        // stoi link: potwierdzona karta tego wyrobu u producenta. Pierwsze pobranie i karty z indeksu katalogu
-        // nie podają domen producenta, stąd druga droga przez listę oficjalnych hostów.
-        $bindsGeneratedCard = $this->matchingProduct !== null && $pageLooksLikeProduct && $text !== ''
-            && ($fromManufacturer || $this->identity->isOfficialCatalogUrl($url, $this->matchingProduct));
-        // Strona innego wyrobu (albo bez treści) nie daje swoich plików jak zdjęć — zostają tylko pliki z kodem naszego
-        // wyrobu w adresie albo opisie linku (27.09.2026: karty siostrzane coba.com dokładały cudze arkusze danych).
-        $strict = $this->matchingProduct !== null && ($text === '' || ! $pageLooksLikeProduct);
-        foreach ($this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer, $bindsGeneratedCard) as $doc) {
-            if (! $strict || $this->documentNamesProduct($doc)) {
-                $documents[] = $doc;
-            }
         }
     }
 

@@ -363,6 +363,18 @@ final class ProductPageFetcherTest extends TestCase
         $this->assertSame(['https://www.coba.com/datasheets/mata-przewodzaca-z-gumy-neoprenowej-pl_PL.pdf'], $fetched['document_urls']);
     }
 
+    /** Lista arkuszy producenta wymienia wszystkie wyroby — nie jest kartą żadnego z nich; sam arkusz PDF z niej tak. */
+    public function test_manufacturer_download_center_is_not_a_product_card(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+
+        $this->assertTrue($identity->looksLikeNonProductCardUrl('https://www.coba.com/pl/karty-produktow'));
+        $this->assertTrue($identity->looksLikeNonProductCardUrl('https://www.coba.com/pl/arkusze-danych/'));
+        $this->assertTrue($identity->looksLikeNonProductCardUrl('https://www.example.com/download-center'));
+        $this->assertFalse($identity->looksLikeNonProductCardUrl('https://www.coba.com/datasheets/mata-przewodzaca-stolowa-pl_PL.pdf'));
+        $this->assertFalse($identity->looksLikeNonProductCardUrl('https://www.coba.com/pl/produkt/mata-przewodzaca-stolowa'));
+    }
+
     public function test_other_code_families_come_only_from_a_parts_table_of_another_family(): void
     {
         $identity = app(ProductSearchIdentity::class);
@@ -560,7 +572,8 @@ final class ProductPageFetcherTest extends TestCase
             'https://r.jina.ai/*' => Http::response(
                 "Title: 3M 470\n\n# Taśma do galwanizacji 3M 470\n\n"
                 .'![packshot]('.$photo.")\n\n"
-                .'Taśma galwanizacyjna 3M 470, 25 mm x 33 m, kod 716973. Norma EN ISO 9001.',
+                .'Taśma galwanizacyjna 3M 470, 25 mm x 33 m, kod 716973. Norma EN ISO 9001.'
+                ."\n\n[Karta techniczna](https://multimedia.3m.com/mws/media/470-karta-techniczna.pdf)",
                 200
             ),
             '*' => Http::response('', 403),
@@ -585,6 +598,8 @@ final class ProductPageFetcherTest extends TestCase
         $this->assertSame($card, $page['url']);
         $this->assertContains($photo, $page['image_urls'] ?? []);
         $this->assertContains($photo, $fetched['image_urls']);
+        // pliki strony z czytnika idą przy stronie — serwis bierze je tylko ze stron opisu
+        $this->assertSame(['https://multimedia.3m.com/mws/media/470-karta-techniczna.pdf'], $page['document_urls'] ?? null);
     }
 
     /**
