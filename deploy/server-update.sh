@@ -91,16 +91,28 @@ fi
 # (guzzlehttp/promises 2.5.1 zrywał Http::pool z limitem równoległości — „Invoking the wait callback did not
 # resolve the promise”, 27.09.2026 — i nie doszły poprawki bezpieczeństwa z 12.09). Przy zgodnym vendor
 # composer kończy po kilku sekundach bez zmian. Przed chown, żeby nowe pliki vendor dostały właściciela aplikacji.
+# Tylko plik PHP (phar): `composer` w PATH to u Pleska skrypt Bash, który puszcza phar systemowym PHP 7.4, a podany
+# do "$PHP_BIN" zostaje tylko wypisany z kodem 0 — composer nie ruszał, vendor został stary (27.09.2026).
+is_php_file() {
+  local first=""
+  [[ -f "$1" ]] || return 1
+  IFS= read -r first < "$1" || true
+  [[ "$first" == "<?php"* || "$first" == "#!"*php* ]]
+}
 echo "==> composer install (vendor zgodny z composer.lock)"
 cd "$APP_ROOT/backend"
-if command -v composer >/dev/null 2>&1; then
-  COMPOSER_BIN="$(command -v composer)"
-elif [[ -f /usr/local/psa/var/modules/composer/composer.phar ]]; then
-  COMPOSER_BIN=/usr/local/psa/var/modules/composer/composer.phar
-else
-  echo "Brak composera — vendor zostałby niezgodny z composer.lock. Zainstaluj composera albo zależności w Plesku (PHP Composer) i uruchom skrypt ponownie." >&2
+COMPOSER_BIN=""
+for candidate in /usr/local/psa/var/modules/composer/composer.phar /usr/lib/plesk-9.0/composer.phar "$(command -v composer 2>/dev/null || true)"; do
+  if [[ -n "$candidate" ]] && is_php_file "$candidate"; then
+    COMPOSER_BIN="$candidate"
+    break
+  fi
+done
+if [[ -z "$COMPOSER_BIN" ]]; then
+  echo "Brak composer.phar — vendor zostałby niezgodny z composer.lock. Zainstaluj composera albo zależności w Plesku (PHP Composer) i uruchom skrypt ponownie." >&2
   exit 1
 fi
+echo "    $PHP_BIN $COMPOSER_BIN"
 COMPOSER_ALLOW_SUPERUSER=1 "$PHP_BIN" "$COMPOSER_BIN" install --no-dev --optimize-autoloader --no-interaction
 cd "$APP_ROOT"
 
