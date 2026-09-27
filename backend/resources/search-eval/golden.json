@@ -399,14 +399,14 @@
             "id": "opisowy15-08-polmaska-ffp1-zawor-pary-org",
             "query": "Półmaska filtrująca klasy FFP1 z zaworem wydechowym, specjalistyczna – do ochrony dróg oddechowych przed pyłami, mgłami oraz uciążliwym poziomem par organicznych. Wymagane: warstwa węgla aktywowanego eliminująca drażniące zapachy par organicznych poniżej NDS; zawór wydechowy odprowadzający nagromadzone ciepło i wydychane powietrze, ograniczający parowanie okularów; mocna konstrukcja kopułkowa dopasowująca się do większości kształtów i rozmiarów twarzy, nieodkształcająca się i niezapadająca; lekka, kompatybilna ze środkami ochrony wzroku i słuchu. Zakres stosowania: do 4 x NDS dla cząstek; poniżej NDS dla par organicznych. Zgodność z EN 149. Opakowanie: 10 szt., karton 100 szt.",
             "expected_skus": [
-                "9914",
                 "4510-016-000-00"
             ],
             "forbidden_skus": [
                 "9310+",
                 "7100329384"
             ],
-            "note": "Z nazwy i opisu: FFP1, zawór (funkcja opisana bez nazwy własnej), pyły/mgły/pary organiczne, węgiel aktywowany, konstrukcja kopułkowa, zakres 4 x NDS cząstki i < NDS pary organiczne, EN 149, pakowanie 10/100 szt. Pominięto producenta i numer modelu."
+            "note": "Z nazwy i opisu: FFP1, zawór (funkcja opisana bez nazwy własnej), pyły/mgły/pary organiczne, węgiel aktywowany, konstrukcja kopułkowa, zakres 4 x NDS cząstki i < NDS pary organiczne, EN 149, pakowanie 10/100 szt. Pominięto producenta i numer modelu.",
+            "catalog_note": "27.09.2026: karta P4S 9914 (id 56957) scalona z kartą Canis 4510-016-000-00 (id 12444) poleceniem products:merge-duplicate — po ponownym imporcie cennika Canis karta ma producenta 3M (marka z nazwy wyrobu, decyzja właściciela z 26.09.2026). Kod 9914 jest w merged_duplicate_skus karty 12444, powiązanie P4S i jego cena przeszły na nią; w katalogu produkcji zostaje jedna karta tego wyrobu."
         },
         {
             "id": "opisowy15-09-gogle-spawalnicze-5",
