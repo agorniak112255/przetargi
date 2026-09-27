@@ -231,6 +231,9 @@ final class CatalogIndexSearch
         foreach ($this->gluedNumericTokenPageIds($codes, $typePrefixes) + $this->splitModelTokenPageIds($codes) as $id => $code) {
             $scores[$id] = max($scores[$id] ?? 0, $weights[$code] ?? 0);
         }
+        foreach ($this->familySizeCodePageIds($product) as $id => $code) {
+            $scores[$id] = max($scores[$id] ?? 0, $weights[$code] ?? $this->tokenWeights([$code])[$code]);
+        }
 
         return $this->pages($this->rankedIds($scores), $product);
     }
@@ -632,6 +635,40 @@ final class CatalogIndexSearch
                 ->pluck('w.catalog_page_id');
             foreach ($found as $id) {
                 $ids[(int) $id] ??= $code;
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Skrócony kod z cennika (CBF0100, CDR0400, AF0100) stoi w indeksie strony producenta tylko w pełnej postaci z rozmiarem
+     * (CBF010004 w tabeli części, dopisanej do tytułu przy indeksowaniu). Ten sam warunek co przy potwierdzaniu karty
+     * (ProductSearchIdentity::officialFamilyPageListsSizeCodes): dopisek to cyfry rozmiaru, najwyżej z „C”/„C5”, i tylko
+     * strona z domeny producenta — sklep z tą samą tabelą się nie liczy (27.09.2026: wyszukiwarka dawała dla CBF0100
+     * strony przewodów i środków czyszczących z icd.pl).
+     *
+     * @return array<int, string> id strony → kod karty, który ją znalazł
+     */
+    private function familySizeCodePageIds(Product $product): array
+    {
+        $sku = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(trim((string) $product->sku))) ?? '';
+        if (mb_strlen($sku) < 5 || preg_match('/^[a-z]{2,4}\d{3,}$/u', $sku) !== 1) {
+            return [];
+        }
+        $rows = DB::table('catalog_page_tokens as t')
+            ->join('catalog_pages as p', 'p.id', '=', 't.catalog_page_id')
+            ->where('t.token', 'like', $sku.'%')
+            ->whereRaw('LENGTH(t.token) > ?', [strlen($sku)])
+            ->select(['t.catalog_page_id', 't.token', 'p.url'])
+            ->limit(self::SQL_LIMIT * 3)
+            ->get();
+        $ids = [];
+        foreach ($rows as $row) {
+            $suffix = substr((string) $row->token, strlen($sku));
+            if (preg_match('/^\d{1,4}[a-z]{0,2}\d?$/u', $suffix) === 1
+                && $this->identity->isOfficialCatalogUrl((string) $row->url, $product)) {
+                $ids[(int) $row->catalog_page_id] ??= $sku;
             }
         }
 

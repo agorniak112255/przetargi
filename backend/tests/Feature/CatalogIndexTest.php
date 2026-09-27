@@ -2731,6 +2731,67 @@ final class CatalogIndexTest extends TestCase
             || str_contains($r->url(), 'duckduckgo.') || str_contains($r->url(), 's.jina.ai'));
     }
 
+    /**
+     * 27.09.2026: cennik podaje skrócony kod rodziny (CBF0100), a tabela części na stronie producenta tylko pełny kod
+     * z rozmiarem (CBF010004). Indeks znajduje kartę producenta po kodzie z dopiskiem rozmiaru, zamiast oddawać wyszukiwarce
+     * (która dawała strony przewodów z icd.pl, a pobranie przyjmowało siostrzaną stronę COBAswitch).
+     */
+    public function test_short_catalog_code_finds_manufacturer_family_page_by_size_code(): void
+    {
+        $page = static fn (string $title, array $codes): string => '<!DOCTYPE html><html><head><title>'.$title.' - COBA PL</title></head>'
+            .'<body><h1>'.$title.'</h1><table><tr><th>Numer części</th><th>Rozmiar</th></tr>'
+            .implode('', array_map(static fn (string $c): string => '<tr><td>'.$c.'</td><td>0,6 m x 1,2 m</td></tr>', $codes))
+            .'</table></body></html>';
+        $this->fakeHttp([
+            'https://coba.com/robots.txt' => Http::response("Sitemap: https://coba.com/sitemap.xml\n", 200),
+            'https://coba.com/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset>'
+                .'<url><loc>https://www.coba.com/pl/produkt/mata-przewodzaca-z-gumy-neoprenowej</loc></url>'
+                .'<url><loc>https://www.coba.com/pl/produkt/cobaswitch</loc></url>'
+                .'<url><loc>https://www.coba.com/pl/produkt/zestaw-uziemiajacy</loc></url>'
+                .'</urlset>',
+                200
+            ),
+            'https://www.coba.com/pl/produkt/mata-przewodzaca-z-gumy-neoprenowej' => Http::response(
+                $page('Mata przewodząca z gumy neoprenowej', ['CBF010004']), 200, ['Content-Type' => 'text/html']),
+            'https://www.coba.com/pl/produkt/cobaswitch' => Http::response(
+                $page('COBAswitch', ['SM010020', 'SM010030']), 200, ['Content-Type' => 'text/html']),
+            'https://www.coba.com/pl/produkt/zestaw-uziemiajacy' => Http::response(
+                $page('Zestaw uziemiający', ['CBF0100123456', 'GK010001']), 200, ['Content-Type' => 'text/html']),
+            'https://sklep-maty.pl/robots.txt' => Http::response("Sitemap: https://sklep-maty.pl/sitemap.xml\n", 200),
+            'https://sklep-maty.pl/sitemap.xml' => Http::response(
+                '<?xml version="1.0"?><urlset><url><loc>https://sklep-maty.pl/produkt/mata-cbf010004</loc></url></urlset>',
+                200
+            ),
+        ]);
+        app(CatalogSitemapIndexer::class)->index('coba.com');
+        // sklep z tym samym pełnym kodem w adresie — skrócony kod prowadzi tylko do strony producenta
+        app(CatalogSitemapIndexer::class)->index('sklep-maty.pl');
+        $product = Product::query()->create([
+            'sku' => 'CBF0100',
+            'name' => 'Mata przewodząca z gumy neoprenowej 0.6m x 1.2m (2mm)',
+            'manufacturer' => 'Coba',
+            'catalog_price_net' => 10,
+            'purchase_price' => 5,
+            'stock' => 1,
+        ]);
+
+        $search = app(CatalogIndexSearch::class);
+        $hits = $search->findFor($product);
+
+        $this->assertContains('https://www.coba.com/pl/produkt/mata-przewodzaca-z-gumy-neoprenowej', array_column($hits, 'url'));
+        $this->assertNotContains('https://www.coba.com/pl/produkt/cobaswitch', array_column($hits, 'url'));
+        // sam kod, bez nazwy: dawniej wygrywały strony z tokenami „cbf” i „0100…” (w prawdziwym indeksie tysiące)
+        $codeOnly = app(CatalogIndexSearch::class)->findFor(new Product(['sku' => 'CBF0100', 'name' => 'Wyrób testowy', 'manufacturer' => 'Coba']));
+        $this->assertContains('https://www.coba.com/pl/produkt/mata-przewodzaca-z-gumy-neoprenowej', array_column($codeOnly, 'url'));
+        // droga po kodzie z rozmiarem: tylko strona producenta i tylko dopisek rozmiaru (CBF0100123456 to nie rozmiar)
+        $byFamilyCode = (new \ReflectionMethod($search, 'familySizeCodePageIds'))->invoke($search, $product);
+        $this->assertSame(
+            ['https://www.coba.com/pl/produkt/mata-przewodzaca-z-gumy-neoprenowej'],
+            CatalogPage::query()->whereIn('id', array_keys($byFamilyCode))->pluck('url')->all(),
+        );
+    }
+
     public function test_shop_host_does_not_read_pages_for_variant_codes(): void
     {
         $this->fakeHttp([
