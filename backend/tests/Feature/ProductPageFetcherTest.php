@@ -327,6 +327,137 @@ final class ProductPageFetcherTest extends TestCase
         }
     }
 
+    /**
+     * 27.09.2026: strona COBAswitch (mata elektroizolacyjna) przechodziła jako karta maty przewodzącej CBF0100 — marka
+     * i słowa „mata”, „gumy”, wymiar się zgadzały. Jej tabela części wymienia same kody SM…, więc to karta innego wyrobu:
+     * bez opisu z niej i bez jej arkusza danych, a w przebiegu osobny powód z rodziną kodów.
+     */
+    public function test_manufacturer_page_listing_only_other_code_family_is_not_the_card(): void
+    {
+        $switch = 'https://www.coba.com/pl/produkt/cobaswitch';
+        $own = 'https://www.coba.com/pl/produkt/mata-przewodzaca-z-gumy-neoprenowej';
+        $page = static fn (string $title, string $body, array $codes, string $sheet): string => '<!DOCTYPE html><html lang="pl"><head>'
+            .'<meta charset="utf-8"><title>'.$title.' - COBA PL</title></head><body><main><h1>'.$title.'</h1><p>'
+            .str_repeat($body.' ', 6).'</p><table><tr><th>Numer części</th><th>Rozmiar</th></tr>'
+            .implode('', array_map(static fn (string $c): string => '<tr><td>'.$c.'</td><td>0,6 m x 1,2 m</td></tr>', $codes))
+            .'</table><a href="https://www.coba.com/datasheets/'.$sheet.'-pl_PL.pdf">Arkusz danych</a></main></body></html>';
+        Http::fake([
+            $switch => Http::response($page('COBAswitch', 'Mata elektroizolacyjna COBA z gumy, czarna, 0,6 m x 1,2 m, do rozdzielnic. Norma EN 61111.',
+                ['SM010020', 'SM010030', 'SM010040C'], 'cobaswitch'), 200),
+            $own => Http::response($page('Mata przewodząca z gumy neoprenowej', 'Mata przewodząca COBA z gumy neoprenowej, 0,6 m x 1,2 m, zatrzask 10 mm. IEC 61340-5-1.',
+                ['CBF010004'], 'mata-przewodzaca-z-gumy-neoprenowej'), 200),
+            '*' => Http::response('', 404),
+        ]);
+        $product = new Product(['sku' => 'CBF0100', 'name' => 'Mata przewodząca z gumy neoprenowej 0.6m x 1.2m (2mm)', 'manufacturer' => 'Coba']);
+
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [['url' => $switch, 'title' => '', 'snippet' => ''], ['url' => $own, 'title' => '', 'snippet' => '']],
+            'CBF0100',
+            3,
+            ['coba.com', 'www.coba.com'],
+            $product,
+        );
+
+        $this->assertSame([$own], array_column($fetched['pages'], 'url'));
+        $this->assertContains(['url' => $switch, 'reason' => CandidateRejection::OTHER_CODE_FAMILY, 'detail' => 'SM'], $fetched['rejected']);
+        $this->assertSame(['https://www.coba.com/datasheets/mata-przewodzaca-z-gumy-neoprenowej-pl_PL.pdf'], $fetched['document_urls']);
+    }
+
+    public function test_other_code_families_come_only_from_a_parts_table_of_another_family(): void
+    {
+        $identity = app(ProductSearchIdentity::class);
+        $coba = static fn (string $sku): Product => new Product(['sku' => $sku, 'name' => 'Mata COBA', 'manufacturer' => 'Coba']);
+        $deckplate = 'Deckplate Anti-Static. Numer części: DPS010005C, DPS010005, DPS010915, DPS010609. EN 14041, DIN 51130.';
+
+        $this->assertSame(['dps'], $identity->officialPageOtherCodeFamilies('https://www.coba.com/pl/produkt/deckplate-anti-static', 'Deckplate Anti-Static', $deckplate, $coba('HR060004C')));
+        $this->assertSame([], $identity->officialPageOtherCodeFamilies('https://www.coba.com/pl/produkt/deckplate-anti-static', 'Deckplate Anti-Static', $deckplate, $coba('DPS010005C')), 'nasza rodzina na stronie');
+        $this->assertSame([], $identity->officialPageOtherCodeFamilies(
+            'https://www.coba.com/product/orthomat-diamond',
+            'Orthomat Diamond',
+            'Part numbers: DAF010705C12, DAF01070512, DAF010703C09, DAF01070309.',
+            $coba('DAF0107-4'),
+        ), 'skrócony kod z cennika z dopiskiem: ta sama rodzina DAF');
+        $this->assertSame([], $identity->officialPageOtherCodeFamilies(
+            'https://www.coba.com/pl/produkt/cobagrip-light',
+            'COBAGRiP Light',
+            'Reakcja na ogień EN 13501-1, DIN 51130 R13, BS 7976-2, kolor RAL 7035, obciążenie do 1500 kg, both 2021, EAN 5012345678901.'
+            .' Tabela: EN13501, DIN51130, BS7976, IEC61340, RAL7035, NZS1716.',
+            $coba('GRP070001L'),
+        ), 'same normy, kolor, wymiary i EAN to nie tabela części');
+        $this->assertSame([], $identity->officialPageOtherCodeFamilies('https://sklep-bhp.pl/deckplate', 'Deckplate', $deckplate, $coba('HR060004C')), 'sklep, nie producent');
+        $this->assertSame([], $identity->officialPageOtherCodeFamilies('https://www.coba.com/pl/produkt/deckplate-anti-static', 'Deckplate', $deckplate, $coba('P317-DRUM')), 'kod magazynowy spoza kształtu');
+    }
+
+    /**
+     * 27.09.2026: strona innego wyrobu u producenta (coba.com/…/cobaswitch przy macie przewodzącej) dokładała swój arkusz
+     * danych. Pliki z niepotwierdzonej strony zostają tylko z kodem naszego wyrobu — jak zdjęcia, które taka strona
+     * i tak odrzucała.
+     */
+    public function test_unconfirmed_manufacturer_page_contributes_only_documents_with_product_code(): void
+    {
+        $other = 'https://artra.pl/products/3813240-aral-927-6160-s3';
+        Http::fake([
+            self::RIGHT => Http::response($this->card('ARYA 300 673560 S1 P')
+                .'<a href="/pliki/deklaracja-673560.pdf">Deklaracja zgodności UE</a>', 200),
+            $other => Http::response($this->card('ARAL 927 6160 S3')
+                .'<a href="https://artra.pl/cdn/shop/files/PL-KP-ARAL_927_6160_S3.pdf">Karta produktu</a>'
+                .'<a href="https://artra.pl/cdn/shop/files/deklaracja-zgodnosci-ue.pdf">Deklaracja zgodności UE</a>'
+                .'<a href="https://artra.pl/cdn/shop/files/PL-KP-673560.pdf">Karta produktu</a>', 200),
+            '*' => Http::response('', 404),
+        ]);
+        $product = new Product(['sku' => '673560', 'name' => 'ARYA 300 673560 S1 P', 'manufacturer' => 'ARTRA']);
+
+        $fetched = app(ProductPageFetcher::class)->fetch(
+            [['url' => self::RIGHT, 'title' => 'ARYA 300 673560 S1 P', 'snippet' => ''], ['url' => $other, 'title' => '', 'snippet' => '']],
+            '673560',
+            3,
+            ['artra.pl'],
+            $product,
+        );
+
+        $this->assertNotContains($other, array_column($fetched['pages'], 'url'), 'strona innego modelu nie jest kartą');
+        $this->assertContains('https://sklep-bhp.pl/pliki/deklaracja-673560.pdf', $fetched['document_urls']);
+        $this->assertContains('https://artra.pl/cdn/shop/files/PL-KP-673560.pdf', $fetched['document_urls'], 'plik z kodem wyrobu');
+        $this->assertNotContains('https://artra.pl/cdn/shop/files/PL-KP-ARAL_927_6160_S3.pdf', $fetched['document_urls']);
+        $this->assertNotContains('https://artra.pl/cdn/shop/files/deklaracja-zgodnosci-ue.pdf', $fetched['document_urls']);
+    }
+
+    /** Strona przeczytana czytnikiem, ale innego wyrobu — ta sama zasada co w zwykłym pobraniu. */
+    public function test_reader_page_of_other_product_contributes_only_documents_with_product_code(): void
+    {
+        $card = 'https://www.3mpolska.pl/3M/pl_PL/p/d/v101476099/';
+        Http::fake([
+            'https://r.jina.ai/*' => Http::response(
+                "Title: 3M 471\n\n# Taśma winylowa 3M 471\n\n"
+                ."Taśma winylowa 3M 471 do oznaczania podłóg, kod 700001.\n\n"
+                ."[Karta techniczna](https://multimedia.3m.com/mws/media/471-karta-techniczna.pdf)\n"
+                .'[Karta 716973](https://multimedia.3m.com/mws/media/716973-karta.pdf)',
+                200
+            ),
+            '*' => Http::response('', 403),
+        ]);
+        $product = new Product(['sku' => '716973', 'name' => 'Taśma do galwanizacji 3M 470', 'manufacturer' => '3M']);
+
+        $fetched = app(ProductPageFetcher::class)->fetch([['url' => $card, 'title' => '', 'snippet' => '']], '716973', 1, [], $product);
+
+        $this->assertSame([], $fetched['pages'], 'karta innej taśmy');
+        $this->assertSame(['https://multimedia.3m.com/mws/media/716973-karta.pdf'], $fetched['document_urls']);
+    }
+
+    /** PDF podany wprost przez wyszukiwarkę nie ma strony, która wiąże go z wyrobem — liczy się kod w adresie albo tytule. */
+    public function test_search_result_pdf_needs_product_code(): void
+    {
+        Http::fake(['*' => Http::response('', 404)]);
+        $product = new Product(['sku' => '673560', 'name' => 'ARYA 300 673560 S1 P', 'manufacturer' => 'ARTRA']);
+
+        $fetched = app(ProductPageFetcher::class)->fetch([
+            ['url' => 'https://sklep-bhp.pl/pliki/karta-katalogowa-obuwia.pdf', 'title' => 'Karta katalogowa ARTRA', 'snippet' => ''],
+            ['url' => 'https://sklep-bhp.pl/pliki/karta.pdf', 'title' => 'Karta katalogowa ARYA 300 673560', 'snippet' => ''],
+        ], '673560', 3, [], $product);
+
+        $this->assertSame(['https://sklep-bhp.pl/pliki/karta.pdf'], $fetched['document_urls']);
+    }
+
     private function card(string $model): string
     {
         $specs = '';

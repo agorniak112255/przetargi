@@ -19,6 +19,15 @@ final class ProductSearchIdentity
     /** Prefiksy norm i certyfikatów — „EN 166” to nie oznaczenie modelu. */
     private const NORM_PREFIXES = ['en', 'iso', 'pn', 'din', 'ansi', 'astm', 'nfpa', 'ce', 'sr', 'nbr'];
 
+    /**
+     * Litery przed liczbą, które na stronie producenta nie są kodem części (officialPageOtherCodeFamilies): inne normy
+     * (AS/NZS → „NZS 1716”, BS, IEC, VDE), kolory RAL, identyfikatory (EAN, NIP) i skróty „nr”, „art.”, „kod”.
+     */
+    private const NON_PART_CODE_PREFIXES = [
+        'bs', 'iec', 'vde', 'csa', 'gost', 'ul', 'nzs', 'ral', 'ean', 'gtin', 'cas', 'nip', 'krs', 'regon',
+        'nr', 'art', 'ref', 'kod',
+    ];
+
     /** /pl/pl bywa 404, a karta żyje na /us/en lub /gb/en. */
     private const ANSELL_CARD_LOCALES = ['pl/pl', 'gb/en', 'us/en'];
 
@@ -2549,6 +2558,11 @@ final class ProductSearchIdentity
                 return true;
             }
         }
+        // Tabela części na stronie producenta wymienia same kody innej rodziny — to karta innego wyrobu, choć marka
+        // i słowa nazwy się zgadzają (27.09.2026: mata przewodząca CBF0100 opisana ze strony COBAswitch).
+        if ($this->officialPageOtherCodeFamilies($url, $title, $text, $product) !== []) {
+            return false;
+        }
         $hay = $url.' '.$title.' '.$text;
         if ($this->officialFamilyPageListsSizeCodes($url, $title, $text, $product)
             && ! $this->pageClaimsAnotherCode($url, $title, $product)) {
@@ -2786,6 +2800,49 @@ final class ProductSearchIdentity
         $ascii = mb_strtolower(Str::ascii($text));
 
         return (string) preg_replace('/[^a-z0-9]+/u', ' ', $ascii);
+    }
+
+    /**
+     * Rodziny kodów z tabeli części oficjalnej strony producenta, gdy żadna nie jest rodziną naszego kodu — strona
+     * opisuje inny wyrób. Rodzina to litery na początku kodu: Coba numeruje wyroby literami rodziny i cyframi koloru
+     * i rozmiaru (CBF010004 — mata przewodząca neoprenowa, SM010020 — COBAswitch, DPS010005C — Deckplate Anti-Static).
+     *
+     * Pusta lista, gdy reguła nie ma zastosowania albo strona może być naszą kartą:
+     * - strona spoza domeny producenta (sklep z tą samą tabelą) albo nasz kod nie ma kształtu „litery + cyfry”
+     *   (CBF0100, DAF0107-4, HR060004C; bez kodów magazynowych i numerów samych cyfr),
+     * - mniej niż dwa kody na stronie — to nie tabela części,
+     * - któryś kod ma litery naszej rodziny (także pełny kod ze skróconego kodu z cennika).
+     *
+     * Kody tylko w oryginalnej pisowni wielkimi literami i bez sklejania spacji („do 1500”, „RAL 7035” to nie kody);
+     * oznaczenia norm i identyfikatory (EN 13501, DIN 51130, EAN, NIP) nie tworzą rodziny.
+     *
+     * @return list<string> rodziny kodów strony (małe litery), np. ['sm'] albo ['dps']
+     */
+    public function officialPageOtherCodeFamilies(string $url, string $title, string $text, Product $product): array
+    {
+        if (! $this->isOfficialCatalogUrl($url, $product)) {
+            return [];
+        }
+        $own = preg_replace('/[^a-z0-9]+/u', '', mb_strtolower(trim((string) $product->sku))) ?? '';
+        if (preg_match('/^([a-z]{2,4})\d{4,}[a-z]{0,2}\d{0,2}$/u', $own, $ownMatch) !== 1) {
+            return [];
+        }
+        $hay = preg_replace('/(?<=[A-Z])-(?=\d)/u', '', $title.' '.$text) ?? '';
+        if (preg_match_all('/(?<![A-Za-z0-9])([A-Z]{2,4})\d{4,}[A-Z]{0,2}\d{0,2}(?![A-Za-z0-9])/u', $hay, $codes) < 2) {
+            return [];
+        }
+        $families = [];
+        foreach ($codes[1] as $letters) {
+            $family = mb_strtolower($letters);
+            if (! in_array($family, self::NORM_PREFIXES, true) && ! in_array($family, self::NON_PART_CODE_PREFIXES, true)) {
+                $families[$family] = ($families[$family] ?? 0) + 1;
+            }
+        }
+        if (array_sum($families) < 2 || isset($families[$ownMatch[1]])) {
+            return [];
+        }
+
+        return array_keys($families);
     }
 
     /**

@@ -242,7 +242,9 @@ final class ProductPageFetcher
         $documents = [];
         foreach ($results as $row) {
             $u = (string) ($row['url'] ?? '');
-            if (ProductDocumentDownloader::looksLikeDocumentUrl($u)) {
+            // PDF wprost z wyszukiwarki nie ma strony, która wiąże go z wyrobem — tylko z kodem w adresie, tytule albo opisie
+            if (ProductDocumentDownloader::looksLikeDocumentUrl($u)
+                && $this->documentNamesProduct($u, ($row['title'] ?? '').' '.($row['snippet'] ?? ''))) {
                 $documents[] = $u;
             }
         }
@@ -468,7 +470,7 @@ final class ProductPageFetcher
                 && ($this->matchingProduct === null || $this->pageConfirmsMatchingProduct($url, '', $text));
             if ($text !== '' && ! $confirmed) {
                 // strona przeczytana, ale innego wariantu — nie zajmuje miejsca właściwej karty
-                $this->rejections[] = ['url' => $url, 'reason' => $this->unconfirmedReason()];
+                $this->rejections[] = $this->unconfirmedRejection($url, '', $text);
                 $used = true;
             } elseif ($text !== '') {
                 $optionSizes = (new ProductSizeVariant)->parseShopOptionSizes($text);
@@ -507,8 +509,11 @@ final class ProductPageFetcher
             $goodPages[] = $readerPage;
         }
         foreach ($viaReader['document_urls'] as $doc) {
-            $documents[] = $doc;
             $this->rememberDocumentLabel((string) $doc, (string) (($viaReader['document_labels'] ?? [])[$doc] ?? ''));
+            // strona z czytnika niepotwierdzona albo bez tekstu — tylko pliki z kodem wyrobu (jak w zwykłym pobraniu)
+            if ($confirmed === true || $this->documentNamesProduct((string) $doc)) {
+                $documents[] = $doc;
+            }
         }
 
         return $used;
@@ -531,6 +536,23 @@ final class ProductPageFetcher
 
         return ! $this->identity->requiresExactSkuOrNameOnCard($product)
             && $this->identity->isConfirmedProductCard($url, $title, $text, $product);
+    }
+
+    /**
+     * Wpis odrzucenia niepotwierdzonej strony — z rodzinami kodów, gdy tabela części producenta wymienia same cudze kody
+     * (bez tego w przebiegu widać tylko „treść nie potwierdza produktu” i nie wiadomo, czemu karta poszła do ręki).
+     *
+     * @return array{url: string, reason: string, detail?: string}
+     */
+    private function unconfirmedRejection(string $url, string $title, string $text): array
+    {
+        $families = $this->matchingProduct !== null
+            ? $this->identity->officialPageOtherCodeFamilies($url, $title, $text, $this->matchingProduct)
+            : [];
+
+        return $families === []
+            ? ['url' => $url, 'reason' => $this->unconfirmedReason()]
+            : ['url' => $url, 'reason' => CandidateRejection::OTHER_CODE_FAMILY, 'detail' => mb_strtoupper(implode(', ', $families))];
     }
 
     private function unconfirmedReason(): string
@@ -609,7 +631,8 @@ final class ProductPageFetcher
             if (str_contains($contentType, 'pdf') || str_starts_with(ltrim($html), '%PDF')) {
                 // Karta składana na żądanie podana wprost przez wyszukiwarkę nie ma strony, która wiąże ją
                 // z wyrobem (adres bez kodu) — przyjmujemy ją tylko jako link z potwierdzonej karty producenta.
-                if (! ProductDocumentDownloader::looksLikeGeneratedCardUrl($url)) {
+                if (! ProductDocumentDownloader::looksLikeGeneratedCardUrl($url)
+                    && $this->documentNamesProduct($url, ($row['title'] ?? '').' '.($row['snippet'] ?? ''))) {
                     $documents[] = $url;
                 }
             } else {
@@ -720,7 +743,7 @@ final class ProductPageFetcher
             }
             $goodPages[] = $page;
         } elseif ($this->matchingProduct !== null) {
-            $this->rejections[] = ['url' => $url, 'reason' => $this->unconfirmedReason()];
+            $this->rejections[] = $this->unconfirmedRejection($url, $title, $text);
         }
         $fromManufacturer = $this->hostMatchesDomains($url, $manufacturerDomains);
         // Karta PDF składana na żądanie nie ma kodu w adresie — z wyrobem wiąże ją tylko strona, na której
@@ -728,9 +751,28 @@ final class ProductPageFetcher
         // nie podają domen producenta, stąd druga droga przez listę oficjalnych hostów.
         $bindsGeneratedCard = $this->matchingProduct !== null && $pageLooksLikeProduct && $text !== ''
             && ($fromManufacturer || $this->identity->isOfficialCatalogUrl($url, $this->matchingProduct));
+        // Strona innego wyrobu (albo bez treści) nie daje swoich plików jak zdjęć — zostają tylko pliki z kodem naszego
+        // wyrobu w adresie albo opisie linku (27.09.2026: karty siostrzane coba.com dokładały cudze arkusze danych).
+        $strict = $this->matchingProduct !== null && ($text === '' || ! $pageLooksLikeProduct);
         foreach ($this->extractDocumentUrls($html, $url, $skuNorm, $fromManufacturer, $bindsGeneratedCard) as $doc) {
-            $documents[] = $doc;
+            if (! $strict || $this->documentNamesProduct($doc)) {
+                $documents[] = $doc;
+            }
         }
+    }
+
+    /**
+     * Plik wiąże z wyrobem sam, bez strony, na której stoi: kod wyrobu w adresie albo opisie linku (reguła kodu
+     * z granicami, nie podciąg — krótkie „202” nie trafia w „2020”). Bez karty do porównania — plik zostaje jak dotąd.
+     */
+    private function documentNamesProduct(string $doc, string $context = ''): bool
+    {
+        if ($this->matchingProduct === null) {
+            return true;
+        }
+        $hay = mb_strtolower(urldecode($doc).' '.($this->documentLabels[$doc] ?? '').' '.$context);
+
+        return $this->identity->hayHasProductCode($hay, $this->matchingProduct);
     }
 
     /**

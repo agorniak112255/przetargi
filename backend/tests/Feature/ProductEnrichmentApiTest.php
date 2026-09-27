@@ -3041,6 +3041,118 @@ final class ProductEnrichmentApiTest extends TestCase
         Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'tavily.com'));
     }
 
+    /**
+     * 27.09.2026: PDF podany wprost przez wyszukiwarkę, bez kodu wyrobu w adresie, tytule i opisie, nie trafia do plików
+     * karty — nic go nie wiąże z wyrobem (sąsiednie arkusze danych producenta).
+     */
+    public function test_search_result_pdf_without_product_code_is_not_attached(): void
+    {
+        Storage::fake('public');
+
+        $product = $this->makeProduct();
+
+        $search = $this->searchMock();
+        $shopUrl = 'https://bhp-sklep.com.pl/produkt/'.$product->sku;
+        $mfrUrl = 'https://www.ansell.com/product/'.$product->sku;
+
+        $search->shouldReceive('searchBothPhases')
+            ->once()
+            ->andReturn([
+                'results' => [
+                    [
+                        'url' => $mfrUrl,
+                        'title' => 'Ansell official',
+                        'snippet' => 'Datasheet '.$product->sku,
+                    ],
+                    [
+                        'url' => $shopUrl,
+                        'title' => 'Karta sklep',
+                        'snippet' => 'Rękawice ochronne nitrylowe EN 388',
+                    ],
+                    [
+                        'url' => 'https://www.ansell.com/docs/karta-produktu-rekawice.pdf',
+                        'title' => 'Karta produktu Ansell',
+                        'snippet' => 'Rękawice ochronne nitrylowe',
+                    ],
+                ],
+                'errors' => [],
+            ]);
+
+        $richDescription = 'Rękawice nitrylowe Ansell '.$product->sku.' do pracy w przemyśle. '
+            .'Spełniają normy EN 388 i chronią przed ścieraniem. '
+            .'Przeznaczone do montażu oraz prac precyzyjnych w warunkach suchych. '
+            .'Trwała powłoka nitrylowa zwiększa żywotność przy codziennym użytkowaniu w zakładzie.';
+
+        $llm = $this->mockLlmWithSanitize([
+            'description' => $richDescription,
+            'features' => ['nitryl', 'antypoślizgowe'],
+            'specs' => ['Długość: 30 cm'],
+            'norms' => ['EN 388'],
+            'certificates' => ['CE'],
+            'materials' => ['nitryl'],
+            'use_cases' => ['montaż'],
+            'image_urls' => ['https://cdn.example.com/glove-'.$product->sku.'.jpg'],
+            'document_urls' => [],
+            'source_urls' => [$shopUrl],
+            'confidence' => 0.9,
+        ]);
+
+        $pdf = "%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n";
+
+        Http::fake([
+            'https://api.tavily.com/*' => Http::response(['results' => []], 200),
+            'https://www.ansell.com/docs/*' => Http::response(
+                $pdf,
+                200,
+                ['Content-Type' => 'application/pdf']
+            ),
+            'https://cdn.example.com/*' => Http::response(
+                $this->tinyJpeg(),
+                200,
+                ['Content-Type' => 'image/jpeg']
+            ),
+            'https://bhp-sklep.com.pl/*' => Http::response(
+                '<html><body>Rękawice '.$product->sku.' EN 388 '
+                .'<img src="https://cdn.example.com/glove-'.$product->sku.'.jpg" alt="glove '.$product->sku.'">'
+                .'</body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+            'https://www.ansell.com/*' => Http::response(
+                '<html><body>Rękawice '.$product->sku
+                .' <a href="https://www.ansell.com/docs/cert-'.$product->sku.'.pdf">Certificate PDF</a></body></html>',
+                200,
+                ['Content-Type' => 'text/html']
+            ),
+        ]);
+
+        $service = new ProductEnrichmentService(
+            $search,
+            app(ProductImageDownloader::class),
+            app(ProductDocumentDownloader::class),
+            app(ProductPageFetcher::class),
+            app(ManufacturerDomainResolver::class),
+            $llm,
+            app(AiSettingsService::class),
+            app(BhpAttributeNormalizer::class),
+            app(ProductSearchIdentity::class),
+            new ProductImageCandidateVerifier(
+                app(ProductSearchIdentity::class),
+                $llm,
+            ),
+            app(PpeAssortment::class),
+        );
+
+        $service->enrichProduct($product, false);
+
+        $product->refresh();
+        $this->assertSame(Product::ENRICHMENT_DONE, $product->enrichment_status);
+        $this->assertSame(
+            ['https://www.ansell.com/docs/cert-'.$product->sku.'.pdf'],
+            ProductDocument::query()->where('product_id', $product->id)->pluck('source_url')->all(),
+        );
+    }
+
     public function test_keeps_shop_radio_sizes_after_llm_drops_them_from_text(): void
     {
         Storage::fake('public');

@@ -1255,7 +1255,13 @@ final class ProductEnrichmentService
             }
             foreach ($searchResults as $row) {
                 $u = (string) ($row['url'] ?? '');
-                if (ProductDocumentDownloader::looksLikeDocumentUrl($u)) {
+                // PDF wprost z wyszukiwarki — tylko z kodem wyrobu w adresie, tytule albo opisie (27.09.2026: bez strony
+                // nic go nie wiąże z wyrobem, a trafiały arkusze sąsiednich wyrobów producenta)
+                $bound = $this->identity->hayHasProductCode(
+                    mb_strtolower(urldecode($u).' '.($row['title'] ?? '').' '.($row['snippet'] ?? '')),
+                    $product,
+                );
+                if ($bound && ProductDocumentDownloader::looksLikeDocumentUrl($u)) {
                     $documentUrls[] = $u;
                 }
             }

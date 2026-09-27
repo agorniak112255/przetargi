@@ -46,6 +46,8 @@ final class CandidateRejection
 
     public const BLOCKED_HOST = 'blocked_host';
 
+    public const OTHER_CODE_FAMILY = 'other_code_family';
+
     private const LABELS = [
         self::NOISE_URL => 'adres kontaktu/kuponu, nie karta',
         self::MANUFACTURER_CONFLICT => 'strona innego producenta',
@@ -65,6 +67,7 @@ final class CandidateRejection
         self::UNCONFIRMED_STRICT => 'brak dokładnego SKU albo pełnej nazwy',
         self::SCRIPT_SHELL => 'sklep rysowany skryptem, bez treści karty',
         self::BLOCKED_HOST => 'host wykluczony jako źródło',
+        self::OTHER_CODE_FAMILY => 'strona producenta wymienia kody innej rodziny',
     ];
 
     public static function label(string $reason): string
