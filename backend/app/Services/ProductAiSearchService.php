@@ -28,6 +28,7 @@ use App\Support\ProductModelFuzzy;
 use App\Support\RequirementCheck\CardSource;
 use App\Support\RequirementCheck\CardSources;
 use App\Support\RequirementCheck\DimensionChecker;
+use App\Support\RequirementCheck\PackageChecker;
 use App\Support\RequirementCheck\Status;
 use App\Support\RequirementCodeNoise;
 use App\Support\RrfFusion;
@@ -204,7 +205,13 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-26-dowod-z-karty';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-27-same-braki';
+
+    /** Jedna karta w odpowiedzi rankingu. */
+    private const RANK_MATCH_JSON = '{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}';
+
+    /** Szablon odpowiedzi rankingu; analyzeAndRankMessages podmienia go na wersję z polami zrozumienia (pilnuje test). */
+    private const RANK_JSON_LINE = 'JSON: {"matches":['.self::RANK_MATCH_JSON.']}.';
 
     /**
      * Wersja instrukcji kroku „zrozum wymaganie”. Zrozumienie zapisujemy raz na treść wymagania i tę wersję
@@ -6348,11 +6355,11 @@ final class ProductAiSearchService
         );
         $messages = $this->rankMessages($query, $candidates, $limit, $needed, $constraints, $task, $retrieveIntent);
         $messages[0]['content'] = str_replace(
-            'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}]}.',
+            self::RANK_JSON_LINE,
             'needed: krótka nazwa (rzeczownik); search_phrases: 2-8, pierwsze 2 = nazwa; constraints: 0-6. '
             .'Popraw literówki (podnie→spodnie, rekawice→rękawice, kamizelaka→kamizelka, TEPM-ICE→TEMP-ICE). '
             .'JSON: {"needed":"nazwa","search_phrases":["najpierw nazwa"],"constraints":[],'
-            .'"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}]}.',
+            .'"matches":['.self::RANK_MATCH_JSON.']}.',
             $messages[0]['content'],
         );
 
@@ -6604,7 +6611,15 @@ final class ProductAiSearchService
                 .implode("\n- ", $constraints);
         $maxMatches = max(1, min($limit, self::MAX_MATCHES));
         $json = json_encode($cards, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        $reasonHint = $short ? 'reason: max 8 słów. ' : 'reason: max 20 słów. ';
+        // Decyzja właściciela z 27.09.2026: pisanie odpowiedzi to 88% czasu oceny na Sparkach, a wyliczanie potwierdzonych
+        // cech powtarzało kartę. Golden (41 × 3 przebiegi): 33,7 trafnej wobec 34,3, ok. 440 zamiast 970 tokenów, ocena
+        // 27 s zamiast 60 s; model rzadziej wpisuje missing_key — pojemności pilnuje więc kod (capacityContradiction).
+        // „(drugorzędne)” trzyma podział z reguły missing_key (bez niego półmaska EN 140 spadała z 95 do 50). Bez przykładu
+        // z konkretnym wyrobem — model przenosił jego braki na ocenianą kartę. Lista kontrolna przed score (27.09) wydłużała
+        // odpowiedź i znów wpychała drugorzędne braki do missing_key — odrzucona.
+        $reasonHint = 'reason: tylko braki i sprzeczności karty wobec wymagania, bez wyliczania potwierdzonych cech, '
+            .'max '.($short ? 8 : 15).' słów; brak drugorzędny oznacz „(drugorzędne)” i nie wpisuj go do missing_key; '
+            .'nic nie brakuje → pomiń reason; pusty missing_key pomiń. ';
 
         return [
             [
@@ -6656,7 +6671,7 @@ final class ProductAiSearchService
                     .'W matches TYLKO id, score, reason, missing_key — bez sku, name, specs, opisu i karty. '
                     .'missing_key: lista KLUCZOWYCH warunków bez dowodu na karcie (pusta, gdy brakuje tylko drugorzędnych); '
                     .'każdy kluczowy warunek, którego brak opisujesz w reason, musi być w missing_key. '
-                    .'JSON: {"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}]}. '
+                    .self::RANK_JSON_LINE.' '
                     .$reasonHint
                     .'score>=40 tylko przy zgodnej nazwie i bez sprzeczności z warunkiem. Max '.$maxMatches.'. '
                     .'Zwróć każdą kartę, która spełnia wymaganie — nie skracaj listy na siłę. '
@@ -6696,6 +6711,7 @@ final class ProductAiSearchService
         $series = $this->requestedSeriesWords($query, $candidates);
         $normEvidence = $matches !== [] ? $this->requiredNormEvidence($intent['constraints'], $candidates, $query) : ['required' => [], 'cards' => []];
         $checksDimensions = $matches !== [] && $this->contradictionDimensions()->check($query, []) !== [];
+        $checksCapacity = $matches !== [] && PackageChecker::capacities($query) !== [];
         $photo = $matches !== [] ? $this->photoHeelInferences($query, $needed, $intent['constraints'], $candidates) : [];
         $out = [];
 
@@ -6774,8 +6790,12 @@ final class ProductAiSearchService
                 $reason = trim(($reason ?? '').' Brak dowodu normy EN '.implode(', EN ', $missingNorms).' na karcie.');
             }
             $contradictions = $checksDimensions ? $this->dimensionContradictions($query, $product) : [];
+            $capacity = $checksCapacity ? $this->capacityContradiction($query, $product) : null;
+            if ($capacity !== null) {
+                $contradictions[] = $capacity;
+            }
             if ($contradictions !== []) {
-                // Wymiar wprost mniejszy od wymaganego (bez „max.” wymaganie to minimum) o więcej niż 5%.
+                // Wymiar albo pojemność wprost mniejsza od wymaganej (bez „max.” wymaganie to minimum) o więcej niż 5%.
                 $score = min($score, self::MISSING_KEY_SCORE_CAP);
                 $reason = trim(($reason ?? '').' Karta przeczy wymaganiu: '.implode('; ', $contradictions).'.');
             }
@@ -6786,7 +6806,7 @@ final class ProductAiSearchService
                 $reason = trim(($reason ?? '').' Karta nie dowodzi ochrony przed cieczą — brak dowodu bariery (typ 3/4, EN 14605 / EN 943).');
             }
             if (isset($photo[$id])) {
-                // Pochodzenie dopisuje kod, nie model: 20 słów uzasadnienia nie gwarantuje wzmianki o zdjęciu.
+                // Pochodzenie dopisuje kod, nie model: krótkie uzasadnienie nie gwarantuje wzmianki o zdjęciu.
                 $reason = trim(($reason ?? '').($photo[$id] === ProductVisualCheck::ANSWER_CLOSED
                     ? ' Pięta zabudowana — wniosek modelu ze zdjęcia karty, karta tego nie podaje.'
                     : ' Pięta odkryta — wniosek modelu ze zdjęcia karty, karta tego nie podaje.'));
@@ -6988,6 +7008,8 @@ final class ProductAiSearchService
     /** Instancja tylko dla limitu oceny: wymiar bez „min./max.” to minimum, tolerancja 5% (okno karty ma własną). */
     private ?DimensionChecker $contradictionDimensions = null;
 
+    private ?PackageChecker $packageChecker = null;
+
     /**
      * Numery norm z warunków zrozumienia ($intent['constraints'], nie akapit SIWZ) i numery na każdej ocenianej karcie.
      * Do limitu idzie tylko numer, który ma co najmniej jedna oceniana karta — gdy nie ma go żadna, brak normy to cecha
@@ -7111,6 +7133,40 @@ final class ProductAiSearchService
         }
 
         return $out;
+    }
+
+    /**
+     * Pojemność mniejsza od wymaganej (decyzja właściciela z 27.09.2026: krótsze uzasadnienie modelu przepuściło płukankę
+     * 200 ml jako „pełna zgodność” przy wymaganiu butelki 500 ml). PackageChecker rozstrzyga nazwą karty, a kilka
+     * pojemności w jednym polu to „do sprawdzenia”, nie sprzeczność; zestaw „2x500 ml” liczy się pojemnością sztuki.
+     * Tylko karta MNIEJSZA od wymagania — większa butelka nie przeczy wprost (jak wymiary bez „max.”).
+     */
+    private function capacityContradiction(string $query, Product $product): ?string
+    {
+        foreach ($this->packageChecker()->check($query, CardSources::fromProduct($product)) as $row) {
+            if ($row->key !== 'capacity' || $row->status !== Status::Fail) {
+                continue;
+            }
+            $want = (float) ($row->required['ml'] ?? 0);
+            $failed = array_filter($row->card, static fn (array $finding): bool => ($finding['verdict'] ?? null) === Status::Fail->value);
+            $smaller = $failed !== [] && $want > 0 && array_filter(
+                $failed,
+                static fn (array $finding): bool => (float) ($finding['ml'] ?? 0) >= $want,
+            ) === [];
+            if (! $smaller) {
+                continue;
+            }
+            $cardTexts = array_values(array_unique(array_map(static fn (array $finding): string => (string) $finding['text'], $failed)));
+
+            return $row->label.': karta '.implode(' / ', $cardTexts).', wymagane '.(string) ($row->required['text'] ?? '');
+        }
+
+        return null;
+    }
+
+    private function packageChecker(): PackageChecker
+    {
+        return $this->packageChecker ??= new PackageChecker;
     }
 
     private function filterHaystack(Product $product): string

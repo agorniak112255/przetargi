@@ -59,11 +59,64 @@ final class RankAnswerLengthTest extends TestCase
 
         $this->assertNotNull($rank);
         $this->assertGreaterThanOrEqual(4000, $rank['max_tokens']);
-        $this->assertStringContainsString('reason: max 20 słów', $rank['system']);
+        // 27.09.2026: reason bez wyliczania potwierdzonych cech — to one wydłużały odpowiedź (golden: ~440 zamiast ~970
+        // tokenów, trafność w szumie). Brak drugorzędny oznaczony w reason nie idzie do missing_key (bez tego zdania model
+        // wpisywał tam każdy brak i ocena spadała do 50). Puste pola model pomija — odczyt bierze brak pola jako pusty.
+        $this->assertStringContainsString(
+            'reason: tylko braki i sprzeczności karty wobec wymagania, bez wyliczania potwierdzonych cech, max 15 słów; '
+            .'brak drugorzędny oznacz „(drugorzędne)” i nie wpisuj go do missing_key; nic nie brakuje → pomiń reason; '
+            .'pusty missing_key pomiń. ',
+            $rank['system'],
+        );
+        // Szablon odpowiedzi musi przejść przez podmianę w analyzeAndRankMessages — inaczej model po cichu przestaje
+        // zwracać needed/search_phrases/constraints (intencja z oceny, przepisanie zapytania).
+        $this->assertStringContainsString(
+            'JSON: {"needed":"nazwa","search_phrases":["najpierw nazwa"],"constraints":[],'
+            .'"matches":[{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}]}.',
+            $rank['system'],
+        );
+        $this->assertStringNotContainsString('JSON: {"matches":[', $rank['system'], 'szablon bez pól zrozumienia został w prompcie');
         // M11 (26.09.2026): cecha innej karty, serii albo wyrobu wskazanego kodem to nie dowód; brak z reason → missing_key
         $this->assertStringContainsString('Dowód tylko z tej karty', $rank['system']);
         $this->assertStringContainsString('każdy kluczowy warunek, którego brak opisujesz w reason, musi być w missing_key', $rank['system']);
-        $this->assertSame('rank-2026-09-26-dowod-z-karty', ProductAiSearchService::RANK_PROMPT_VERSION);
+        $this->assertSame('rank-2026-09-27-same-braki', ProductAiSearchService::RANK_PROMPT_VERSION);
+    }
+
+    /**
+     * Odporność odczytu (27.09.2026: prompt każe pomijać pusty missing_key): karta bez reason i bez missing_key zachowuje
+     * ocenę bez sztucznego uzasadnienia, brak drugorzędny nie obcina oceny, niepusty missing_key obcina do 50.
+     */
+    public function test_rank_answer_without_reason_and_empty_missing_key_keeps_model_score(): void
+    {
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $full = $this->gloves('REK-PELNA', 'Rękawice nitrylowe odporne na oleje, długość 300 mm.');
+        $secondary = $this->gloves('REK-DRUGO', 'Rękawice nitrylowe odporne na oleje.');
+        $key = $this->gloves('REK-KLUCZ', 'Rękawice nitrylowe do prac ogólnych.');
+        $matches = [
+            ['id' => $full->id, 'score' => 95],
+            ['id' => $secondary->id, 'score' => 80, 'reason' => 'Brak dowodu długości 300 mm (drugorzędne).'],
+            ['id' => $key->id, 'score' => 85, 'reason' => 'Brak dowodu odporności na oleje.', 'missing_key' => ['odporność na oleje']],
+        ];
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $llm->shouldReceive('chatJson')->andReturnUsing(static function (array $messages) use ($matches): array {
+            $intent = ['needed' => 'rękawice nitrylowe', 'search_phrases' => ['rękawice nitrylowe'], 'constraints' => ['odporność na oleje']];
+
+            return str_contains((string) ($messages[0]['content'] ?? ''), '"matches"') ? $intent + ['matches' => $matches] : $intent;
+        });
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $rows = collect(
+            $this->postJson('/api/products/ai-search', ['query' => 'rękawice nitrylowe olejoodporne długość 300 mm', 'limit' => 10])
+                ->assertOk()
+                ->json('products')
+        )->keyBy('sku');
+
+        $this->assertSame(95, $rows['REK-PELNA']['ai_match_percent'] ?? null);
+        $this->assertNull($rows['REK-PELNA']['ai_match_reason'] ?? null, 'brak reason nie może stać się tekstem uzasadnienia');
+        $this->assertSame(80, $rows['REK-DRUGO']['ai_match_percent'] ?? null, 'brak drugorzędny bez missing_key nie obcina oceny');
+        $this->assertStringContainsString('(drugorzędne)', (string) ($rows['REK-DRUGO']['ai_match_reason'] ?? ''));
+        $this->assertSame(50, $rows['REK-KLUCZ']['ai_match_percent'] ?? null, 'niepusty missing_key dalej obcina ocenę');
     }
 
     public function test_truncated_answer_in_batch_is_logged_with_number_of_rated_cards(): void
@@ -107,6 +160,22 @@ final class RankAnswerLengthTest extends TestCase
         app(OpenAiCompatibleClient::class)->chatJsonMany([self::messages(), self::messages()], 4000, AiTask::ProductSearch, 2);
 
         Log::shouldNotHaveReceived('warning');
+    }
+
+    private function gloves(string $sku, string $description): Product
+    {
+        return Product::query()->create([
+            'sku' => $sku,
+            'name' => 'Rękawice nitrylowe',
+            'manufacturer' => 'TEST',
+            'category' => 'Rękawice',
+            'description' => $description,
+            'catalog_price_net' => 60,
+            'purchase_price' => 40,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ]);
     }
 
     private function seedAi(): void
