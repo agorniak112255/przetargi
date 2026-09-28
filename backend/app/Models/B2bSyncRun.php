@@ -40,9 +40,10 @@ class B2bSyncRun extends Model
 
     /**
      * Tyle wyrobów z rozmiarami na kilku kartach zapisujemy przy przebiegu (size_spread: {total, truncated, groups});
-     * total liczy wszystkie.
+     * total liczy wszystkie. 5000 — Mascot (2557 wyrobów rozbitych 22.09.2026) w jednej liście; ok. 5 MB JSON przy
+     * max_allowed_packet 16 MB na produkcji (zapis razem z dziennikiem w finish()).
      */
-    public const SIZE_SPREAD_LIMIT = 2000;
+    public const SIZE_SPREAD_LIMIT = 5000;
 
     /** Przebieg „running” bez postępu dłużej niż tyle minut uznajemy za przerwany. */
     public const STALE_MINUTES = 30;

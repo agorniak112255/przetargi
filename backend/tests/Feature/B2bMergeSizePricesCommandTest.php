@@ -1,0 +1,431 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Models\B2bAccount;
+use App\Models\B2bProductLink;
+use App\Models\B2bSyncRun;
+use App\Models\CardRedirect;
+use App\Models\Client;
+use App\Models\Product;
+use App\Models\ProductPriceHistory;
+use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
+use App\Models\ProductVariantPriceHistory;
+use App\Models\Tender;
+use App\Models\TenderItem;
+use App\Models\User;
+use App\Services\B2b\B2bAccountSyncRunner;
+use App\Services\B2b\B2bConnector;
+use App\Services\B2b\B2bGroupsSizes;
+use App\Services\B2b\B2bManufacturerSite;
+use App\Services\B2b\B2bRemoteImage;
+use App\Services\B2b\B2bRemotePrice;
+use App\Services\B2b\B2bRemoteProduct;
+use App\Services\Catalog\CardRedirectStore;
+use Database\Seeders\RolesAndPermissionsSeeder;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
+use Tests\TestCase;
+
+/**
+ * Etap 2 (28.09.2026): b2b:merge-size-prices scala karty rozbite dawniej według ceny rozmiaru, z listy size_spread
+ * pełnego przebiegu. Stan tworzony drogą synchronizacji: stary podział (grupy bez cen pozycji) → przebieg po zmianie
+ * (ceny rozmiarów, lista do scalenia) → polecenie → kolejny przebieg nie widzi zmiany ceny ani kart do scalenia.
+ */
+final class B2bMergeSizePricesCommandTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private const DESCRIPTION = 'Kurtka robocza z membraną. Wodoszczelna, oddychająca.';
+
+    private User $user;
+
+    private B2bAccount $account;
+
+    private MergeSizePriceFakeConnector $connector;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->seed(RolesAndPermissionsSeeder::class);
+        Queue::fake();
+        $this->user = User::factory()->withRole('admin')->create();
+        // konto łącznika mascot — karty marki MASCOT są jego kartami producenta (CardOwnership)
+        $this->account = B2bAccount::query()->create([
+            'username' => '15744', 'password' => 'sekret', 'sites' => ['b2b.mascot.dk'], 'connector' => 'mascot',
+            'created_by' => $this->user->id, 'updated_by' => $this->user->id,
+        ]);
+        $this->connector = new MergeSizePriceFakeConnector;
+    }
+
+    public function test_preview_lists_the_group_and_writes_nothing(): void
+    {
+        [$small, $large] = $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+        $before = $this->state();
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id])
+            ->expectsOutputToContain('K1: zostaje #'.$small->id.' (K1 S) ← #'.$large->id.' · rozmiarów 4 · 100,00–120,00 PLN · SKU → K1')
+            ->expectsOutputToContain('Do scalenia: 1')
+            ->assertSuccessful();
+
+        $this->assertSame($before, $this->state());
+    }
+
+    public function test_apply_merges_cards_moves_sizes_and_the_next_sync_sees_no_change(): void
+    {
+        [$small, $large] = $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+        $sizeIds = ProductVariant::query()->orderBy('id')->pluck('id')->all();
+        $variantHistory = ProductVariantPriceHistory::query()->count();
+        $tender = $this->tender();
+        $cheap = TenderItem::query()->create(['tender_id' => $tender->id, 'line_no' => 1, 'requirement' => 'Kurtka', 'main_product_id' => $small->id]);
+        $event = DB::table('search_events')->insertGetId(['query' => 'kurtka', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('search_event_actions')->insert([
+            ['search_event_id' => $event, 'product_id' => $small->id, 'action' => 'open', 'created_at' => now(), 'updated_at' => now()],
+            ['search_event_id' => $event, 'product_id' => $large->id, 'action' => 'open', 'created_at' => now(), 'updated_at' => now()],
+            ['search_event_id' => $event, 'product_id' => $large->id, 'action' => 'pick', 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])
+            ->expectsOutputToContain('Scalono wyrobów: 1')
+            ->assertSuccessful();
+
+        $this->assertNull(Product::query()->find($large->id));
+        $keep = $small->fresh();
+        $this->assertSame('K1', $keep->sku);
+        $this->assertSame('Kurtka K1', $keep->name);
+        $this->assertSame(self::DESCRIPTION, $keep->description);
+        $this->assertSame('Rozmiary: S; M; L; XL', $keep->variant_summary);
+        // kody łączonych kart, potem dawny kod karty, która zostaje
+        $this->assertSame(['K1 XL', 'K1 S'], $keep->enrichment_payload['merged_size_skus']);
+        // rozmiary przeniesione (te same wiersze, historia cen przy nich), powiązania na karcie, która zostaje
+        $this->assertSame($sizeIds, ProductVariant::query()->where('product_id', $keep->id)->orderBy('id')->pluck('id')->all());
+        $this->assertSame($variantHistory, ProductVariantPriceHistory::query()->count());
+        $this->assertSame(4, B2bProductLink::query()->where('product_id', $keep->id)->count());
+        // cena karty = najniższy rozmiar, najwyższa przy slocie
+        $slot = ProductSourcePrice::query()->where('product_id', $keep->id)->sole();
+        $this->assertSame(['100.00', '120.00'], [(string) $slot->purchase_price, (string) $slot->size_price_max]);
+        $this->assertSame('100.00', (string) $keep->purchase_price);
+        $this->assertSame($keep->id, (int) $cheap->fresh()->main_product_id);
+        // działania z wyszukiwarki: „open” już jest na karcie, która zostaje — duplikat znika z kartą; „pick” przechodzi
+        $this->assertSame(['open', 'pick'], DB::table('search_event_actions')->where('product_id', $keep->id)->orderBy('action')->pluck('action')->all());
+
+        $backup = glob(storage_path('app/repair-backups/size-prices-'.$this->account->id.'-*.jsonl'));
+        $this->assertNotEmpty($backup);
+        $lines = array_map(static fn (string $l): array => json_decode($l, true), file(end($backup), FILE_IGNORE_NEW_LINES));
+        $this->assertSame(['before', 'committed'], array_column($lines, 'status'));
+        $this->assertSame([$large->id], $lines[0]['drop_product_ids']);
+        $this->assertSame(['keep', 'drop'], array_column($lines[0]['cards'], 'role'));
+        $this->assertCount(1, $lines[0]['cards'][1]['rows']['product_variants']);
+        foreach ($backup as $file) {
+            @unlink($file);
+        }
+
+        // kolejny przebieg: zwykła droga grupy na karcie, która zostaje — bez zmian cen, nowych kart i listy do scalenia
+        $this->travel(5)->minutes();
+        $next = $this->sync();
+        $this->assertSame(0, $next['created'], implode(' | ', $next['errors']));
+        $this->assertSame(0, $next['prices_changed']);
+        $this->assertSame(0, $next['skipped']);
+        $this->assertSame(0, B2bSyncRun::query()->findOrFail($next['sync_run_id'])->size_spread['total']);
+        $this->assertSame(1, Product::query()->count());
+        $this->assertSame(self::DESCRIPTION, $keep->fresh()->description);
+        $this->assertSame('100.00', (string) $keep->fresh()->purchase_price);
+        $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
+    }
+
+    public function test_expensive_keeper_gets_the_lowest_size_price_and_a_history_row(): void
+    {
+        // karta 120 zł ma więcej rozmiarów — zostaje ona, a jej cena spada do najtańszego rozmiaru
+        [$small, $large] = $this->legacySplit(['S'], 100.0, ['M', 'L', 'XL'], 120.0);
+        $history = ProductPriceHistory::query()->where('product_id', $large->id)->count();
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])->assertSuccessful();
+
+        $this->assertNull(Product::query()->find($small->id));
+        $keep = $large->fresh();
+        $this->assertSame('100.00', (string) $keep->purchase_price);
+        $this->assertSame('120.00', (string) ProductSourcePrice::query()->where('product_id', $keep->id)->value('size_price_max'));
+        $this->assertSame($history + 1, ProductPriceHistory::query()->where('product_id', $keep->id)->count());
+        $this->assertSame('100.00', (string) ProductPriceHistory::query()->where('product_id', $keep->id)->orderByDesc('id')->value('purchase_price'));
+        $this->cleanBackups();
+
+        $this->travel(5)->minutes();
+        $next = $this->sync();
+        $this->assertSame(0, $next['prices_changed'], implode(' | ', $next['errors']));
+    }
+
+    public function test_tender_item_on_the_more_expensive_card_needs_with_tenders(): void
+    {
+        [$small, $large] = $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+        $item = TenderItem::query()->create(['tender_id' => $this->tender()->id, 'line_no' => 1, 'requirement' => 'Kurtka XL', 'main_product_id' => $large->id]);
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])
+            ->expectsOutputToContain('(droższy rozmiar) jest w pozycjach przetargów')
+            ->expectsOutputToContain('Scalono wyrobów: 0')
+            ->assertSuccessful();
+        $this->assertNotNull(Product::query()->find($large->id));
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true, '--with-tenders' => true])
+            ->expectsOutputToContain('Scalono wyrobów: 1')
+            ->assertSuccessful();
+        $this->assertSame($small->id, (int) $item->fresh()->main_product_id);
+        $this->cleanBackups();
+    }
+
+    public function test_stale_link_redirect_and_file_slot_skip_the_group(): void
+    {
+        [$small, $large] = $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+
+        // pozycja przeniesiona na inną kartę po przebiegu
+        B2bProductLink::query()->where('remote_id', 'K1-XL')->update(['product_id' => $small->id]);
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id])
+            ->expectsOutputToContain('pozycja K1-XL nie jest już na karcie #'.$large->id)
+            ->expectsOutputToContain('Do scalenia: 0')
+            ->assertSuccessful();
+        B2bProductLink::query()->where('remote_id', 'K1-XL')->update(['product_id' => $large->id]);
+
+        // decyzja człowieka w mapie połączeń
+        CardRedirect::query()->create([
+            'source_key' => ProductSourcePrice::b2bKey((int) $this->account->id), 'position_key' => 'K1-XL',
+            'b2b_account_id' => $this->account->id, 'product_id' => $large->id, 'reason' => CardRedirect::REASON_SPLIT,
+            'target_snapshot' => CardRedirectStore::snapshot($large), 'created_by' => $this->user->id,
+        ]);
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id])
+            ->expectsOutputToContain('decyzje w mapie połączeń')
+            ->assertSuccessful();
+        CardRedirect::query()->delete();
+
+        // cennik z pliku: import po SKU odtworzyłby łączoną kartę
+        ProductSourcePrice::query()->create([
+            'product_id' => $large->id, 'source_key' => ProductSourcePrice::SOURCE_FILE, 'purchase_price' => 110,
+            'catalog_price_net' => 130, 'currency' => 'PLN', 'checked_at' => now(),
+        ]);
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])
+            ->expectsOutputToContain('cennika z pliku')
+            ->expectsOutputToContain('Scalono wyrobów: 0')
+            ->assertSuccessful();
+        $this->assertNotNull(Product::query()->find($large->id));
+        $this->cleanBackups();
+    }
+
+    public function test_running_sync_stops_the_command_and_limit_merges_only_the_first_groups(): void
+    {
+        $this->connector->items = [
+            $this->legacyGroup('K1', ['S', 'M'], 100.0), $this->legacyGroup('K1', ['XL'], 120.0),
+            $this->legacyGroup('K2', ['S', 'M'], 50.0), $this->legacyGroup('K2', ['XL'], 60.0),
+        ];
+        $this->assertSame(4, $this->sync()['created']);
+        $this->travel(5)->minutes();
+        $this->connector->items = [
+            $this->jacket('K1', ['S' => 100.0, 'M' => 100.0, 'XL' => 120.0]),
+            $this->jacket('K2', ['S' => 50.0, 'M' => 50.0, 'XL' => 60.0]),
+        ];
+        $this->assertSame(2, B2bSyncRun::query()->findOrFail($this->sync()['sync_run_id'])->size_spread['total']);
+
+        $this->account->forceFill(['last_sync_status' => B2bSyncRun::STATUS_RUNNING])->save();
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])
+            ->expectsOutputToContain('Trwa synchronizacja konta')
+            ->assertFailed();
+        $this->assertSame(4, Product::query()->count());
+        $this->account->forceFill(['last_sync_status' => B2bSyncRun::STATUS_OK])->save();
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true, '--limit' => 1])
+            ->expectsOutputToContain('Scalono wyrobów: 1')
+            ->assertSuccessful();
+        $this->assertSame(3, Product::query()->count());
+        $this->assertTrue(Product::query()->where('sku', 'K1')->exists());
+        $this->assertTrue(Product::query()->where('sku', 'K2 S')->exists());
+        $this->cleanBackups();
+    }
+
+    public function test_run_without_spread_is_refused(): void
+    {
+        $this->connector->items = [$this->legacyGroup('K1', ['S'], 100.0)];
+        $this->sync();
+        B2bSyncRun::query()->update(['size_spread' => null]);
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id])
+            ->expectsOutputToContain('nie ma listy kart rozbitych według ceny')
+            ->assertFailed();
+    }
+
+    /**
+     * Stary podział (grupy bez cen pozycji), potem przebieg po zmianie — karty dostają rozmiary, wyrób trafia do listy.
+     *
+     * @param  list<string>  $smallSizes
+     * @param  list<string>  $largeSizes
+     * @return array{0: Product, 1: Product}
+     */
+    private function legacySplit(array $smallSizes, float $smallPrice, array $largeSizes, float $largePrice): array
+    {
+        $this->connector->items = [$this->legacyGroup('K1', $smallSizes, $smallPrice), $this->legacyGroup('K1', $largeSizes, $largePrice)];
+        $legacy = $this->sync();
+        $this->assertSame(2, $legacy['created'], implode(' | ', $legacy['errors']));
+        $small = Product::query()->where('sku', 'K1 '.$smallSizes[0])->sole();
+        $large = Product::query()->where('sku', 'K1 '.$largeSizes[0])->sole();
+
+        $this->travel(5)->minutes();
+        $prices = [];
+        foreach ($smallSizes as $size) {
+            $prices[$size] = $smallPrice;
+        }
+        foreach ($largeSizes as $size) {
+            $prices[$size] = $largePrice;
+        }
+        $this->connector->items = [$this->jacket('K1', $prices)];
+        $after = $this->sync();
+        $this->assertSame(0, $after['prices_changed'], implode(' | ', $after['errors']));
+        $this->assertSame(1, B2bSyncRun::query()->findOrFail($after['sync_run_id'])->size_spread['total']);
+        $this->travel(5)->minutes();
+
+        return [$small, $large];
+    }
+
+    /**
+     * @param  list<string>  $sizes
+     */
+    private function legacyGroup(string $code, array $sizes, float $price): B2bRemoteProduct
+    {
+        return new B2bRemoteProduct(
+            remoteId: $code.'-'.$sizes[0],
+            sku: $code.' '.$sizes[0],
+            name: 'Kurtka '.$code.' (rozm. '.implode(', ', $sizes).')',
+            raw: ['price' => $price, 'description' => self::DESCRIPTION],
+            availability: 'Na stanie',
+            variantSummary: 'Rozmiary: '.implode('; ', $sizes),
+            members: array_map(static fn (string $size): array => [
+                'remote_id' => $code.'-'.$size, 'sku' => $code.' '.$size, 'name' => 'Kurtka '.$code.' '.$size,
+            ], $sizes),
+        );
+    }
+
+    /**
+     * @param  array<string, float>  $prices  rozmiar => cena konta
+     */
+    private function jacket(string $code, array $prices): B2bRemoteProduct
+    {
+        $members = [];
+        foreach ($prices as $size => $net) {
+            $members[] = [
+                'remote_id' => $code.'-'.$size, 'sku' => $code.' '.$size, 'name' => 'Kurtka '.$code.' '.$size,
+                'availability' => 'Na stanie', 'size' => (string) $size, 'price' => new B2bRemotePrice(net: $net),
+            ];
+        }
+
+        return new B2bRemoteProduct(
+            remoteId: $members[0]['remote_id'],
+            sku: $code,
+            name: 'Kurtka '.$code,
+            raw: ['price' => min($prices), 'description' => self::DESCRIPTION],
+            availability: 'Na stanie',
+            variantSummary: 'Rozmiary: '.implode('; ', array_map('strval', array_keys($prices))),
+            members: $members,
+        );
+    }
+
+    private function tender(): Tender
+    {
+        return Tender::query()->create([
+            'number' => 'PRZ/'.random_int(1, 99999), 'title' => 'Test', 'client_id' => Client::query()->create(['name' => 'K'])->id,
+            'owner_id' => $this->user->id, 'status' => 'wycena', 'ai_percent' => 0, 'last_activity_at' => now(),
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function state(): array
+    {
+        return [
+            'products' => Product::query()->orderBy('id')->get(['id', 'sku', 'name', 'purchase_price', 'variant_summary'])->toArray(),
+            'links' => B2bProductLink::query()->orderBy('id')->get(['remote_id', 'product_id', 'merged_at'])->toArray(),
+            'sizes' => ProductVariant::query()->orderBy('id')->get(['id', 'product_id'])->toArray(),
+            'slots' => ProductSourcePrice::query()->orderBy('id')->get(['product_id', 'purchase_price', 'size_price_max'])->toArray(),
+        ];
+    }
+
+    private function cleanBackups(): void
+    {
+        foreach (glob(storage_path('app/repair-backups/size-prices-'.$this->account->id.'-*.jsonl')) ?: [] as $file) {
+            @unlink($file);
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sync(): array
+    {
+        return app(B2bAccountSyncRunner::class)->run($this->account->fresh(), delayMs: 0, connector: $this->connector);
+    }
+}
+
+/** Łącznik testowy marki MASCOT (konto łącznika mascot) bez sieci — cena grupy z raw['price']. */
+final class MergeSizePriceFakeConnector implements B2bConnector, B2bGroupsSizes, B2bManufacturerSite
+{
+    /** @var list<B2bRemoteProduct> */
+    public array $items = [];
+
+    public static function key(): string
+    {
+        return 'mascot';
+    }
+
+    public static function label(): string
+    {
+        return 'Mascot';
+    }
+
+    public static function host(): string
+    {
+        return 'b2b.mascot.dk';
+    }
+
+    public static function ownBrand(): string
+    {
+        return 'MASCOT';
+    }
+
+    public static function forAccount(B2bAccount $account, int $delayMs): self
+    {
+        return new self;
+    }
+
+    public function login(): void {}
+
+    public function products(): iterable
+    {
+        yield from $this->items;
+    }
+
+    public function totalProducts(): int
+    {
+        return count($this->items);
+    }
+
+    public function manufacturer(B2bRemoteProduct $product): string
+    {
+        return 'MASCOT';
+    }
+
+    public function price(B2bRemoteProduct $product): ?B2bRemotePrice
+    {
+        $net = $product->raw['price'] ?? null;
+
+        return $net !== null ? new B2bRemotePrice(net: (float) $net) : null;
+    }
+
+    public function description(B2bRemoteProduct $product): string
+    {
+        return (string) ($product->raw['description'] ?? '');
+    }
+
+    public function image(B2bRemoteProduct $product): ?B2bRemoteImage
+    {
+        return null;
+    }
+}

@@ -219,7 +219,7 @@ final class CardMatchSizeMerger
 
         // 11) propozycje z kartami, które znikną — przed scaleniem: usunięcie karty zeruje target_product_id
         // (klucz obcy), a przepięcie odrzuconej pary na kartę modelu musi wiedzieć, którą kartę wskazywała
-        $this->settleOtherCandidates($locked, $sourceId, $keepProductId, $dropIds);
+        $this->settleOtherCandidates((int) $locked->id, $sourceId, $keepProductId, $dropIds);
 
         // 9) karty rozmiarów wchodzą w kartę modelu
         $images = $this->sizeMerge->mergeSizeCards($keep, $drops, $name, $summary);
@@ -396,14 +396,18 @@ final class CardMatchSizeMerger
      * z jedną łączoną kartą — przepięte na kartę modelu, żeby odrzucenie dalej obowiązywało (Raw-Pol → #40815 nie
      * wraca jako Raw-Pol → karta modelu); gdy taka para już jest — bez zmian.
      *
+     * Także scalanie kart rozbitych według ceny (B2bSizePriceMerger, 28.09.2026): bez propozycji i karty dystrybutora
+     * ($exceptId, $sourceId = null) — wtedy liczą się tylko łączone karty (także jako karta dystrybutora propozycji).
+     *
      * @param  list<int>  $dropIds
      */
-    private function settleOtherCandidates(CardMatchCandidate $locked, int $sourceId, int $keepId, array $dropIds): void
+    public function settleOtherCandidates(?int $exceptId, ?int $sourceId, int $keepId, array $dropIds): void
     {
         $rows = CardMatchCandidate::query()
-            ->where('id', '!=', $locked->id)
+            ->when($exceptId !== null, static fn ($q) => $q->where('id', '!=', $exceptId))
             ->where(static function ($q) use ($sourceId, $dropIds): void {
-                $q->where('source_product_id', $sourceId)->orWhereIn('target_product_id', $dropIds);
+                $q->whereIn('source_product_id', $sourceId !== null ? [$sourceId, ...$dropIds] : $dropIds)
+                    ->orWhereIn('target_product_id', $dropIds);
                 CardMatchCandidate::whereTargetsKeyContains($q, $dropIds);
             })
             ->orderBy('id')
@@ -412,7 +416,8 @@ final class CardMatchSizeMerger
         $delete = [];
         foreach ($rows as $row) {
             if (in_array($row->status, [CardMatchCandidate::STATUS_PENDING, CardMatchCandidate::STATUS_CONFLICT], true)) {
-                if ((int) $row->source_product_id === $sourceId || self::touchesCards($row, $dropIds)) {
+                if ((int) $row->source_product_id === $sourceId || in_array((int) $row->source_product_id, $dropIds, true)
+                    || self::touchesCards($row, $dropIds)) {
                     $delete[] = (int) $row->id;
                 }
 

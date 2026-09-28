@@ -159,9 +159,9 @@ final class B2bAccountSyncRunner
 
     /**
      * Limit pamięci procesu — tylko w górę. Tutaj, a nie w poleceniu: ten sam przebieg rusza z b2b:sync,
-     * z b2b:sync-due (na Windows i w testach bez osobnego procesu) i z panelu.
+     * z b2b:sync-due (na Windows i w testach bez osobnego procesu) i z panelu. Także b2b:merge-size-prices.
      */
-    private static function raiseMemoryLimit(): void
+    public static function raiseMemoryLimit(): void
     {
         if (! function_exists('ini_set')) {
             return;

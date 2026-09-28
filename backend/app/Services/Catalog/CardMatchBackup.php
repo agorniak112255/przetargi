@@ -39,16 +39,52 @@ final class CardMatchBackup
      */
     public function write(string $kind, string $filePrefix, string $nothingDone, CardMatchCandidate $candidate, User $user, array $cards, array $head): string
     {
+        $payload = [
+            'kind' => $kind,
+            'created_at' => now()->toIso8601String(),
+            'user' => ['id' => (int) $user->id, 'name' => (string) $user->name],
+            'candidate' => $candidate->getAttributes(),
+            ...$head,
+            ...$this->snapshot($cards),
+        ];
+
+        $dir = storage_path('app/repair-backups');
+        if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
+            throw new DomainException('Kopia zapasowa nie powstała: brak katalogu '.$dir.' — '.$nothingDone.'.');
+        }
+        $path = $dir.DIRECTORY_SEPARATOR.$filePrefix.'-'.$candidate->id.'-'.now()->format('Ymd-His').'.json';
+        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        if (@file_put_contents($path, $json) === false) {
+            throw new DomainException('Kopia zapasowa nie powstała: zapis '.$path.' się nie udał — '.$nothingDone.'.');
+        }
+
+        return $path;
+    }
+
+    /**
+     * Wiersze kopii bez nagłówka decyzji: karty z wierszami (BACKUP_TABLES i EXTRA_TABLES, wersje/rozmiary z historią
+     * cen), mapa połączeń, propozycje, zamienniki, akcesoria, pozycje przetargów z kartą jako produktem dodatkowym,
+     * cenniki. Także dla scalania kart rozbitych według ceny (B2bSizePriceMerger — jedna linia JSONL na wyrób).
+     *
+     * @param  list<array{role: string, product: Product}>  $cards
+     * @return array<string, mixed>
+     */
+    public function snapshot(array $cards): array
+    {
         $ids = array_values(array_unique(array_map(static fn (array $card): int => (int) $card['product']->id, $cards)));
 
         $rowsOfCards = [];
         foreach ($cards as $card) {
             $product = $card['product'];
             $rows = [];
-            foreach (CardMatchMerger::BACKUP_TABLES as $table => $column) {
+            foreach ([...CardMatchMerger::BACKUP_TABLES, ...self::EXTRA_TABLES] as $table => $column) {
                 if (Schema::hasTable($table)) {
                     $rows[$table] = self::rows(DB::table($table)->where($column, $product->id));
                 }
+            }
+            if (Schema::hasTable('product_variant_price_history') && ($rows['product_variants'] ?? []) !== []) {
+                $rows['product_variant_price_history'] = self::rows(DB::table('product_variant_price_history')
+                    ->whereIn('product_variant_id', array_map(static fn (array $row): int => (int) $row['id'], $rows['product_variants'])));
             }
             $rowsOfCards[] = [
                 'role' => $card['role'],
@@ -92,12 +128,7 @@ final class CardMatchBackup
             }
         }
 
-        $payload = [
-            'kind' => $kind,
-            'created_at' => now()->toIso8601String(),
-            'user' => ['id' => (int) $user->id, 'name' => (string) $user->name],
-            'candidate' => $candidate->getAttributes(),
-            ...$head,
+        return [
             'cards' => $rowsOfCards,
             'card_redirects' => $redirects,
             'card_match_candidates' => $candidates,
@@ -106,19 +137,19 @@ final class CardMatchBackup
             'tender_items_companion' => $companions,
             'price_lists' => $priceLists,
         ];
-
-        $dir = storage_path('app/repair-backups');
-        if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
-            throw new DomainException('Kopia zapasowa nie powstała: brak katalogu '.$dir.' — '.$nothingDone.'.');
-        }
-        $path = $dir.DIRECTORY_SEPARATOR.$filePrefix.'-'.$candidate->id.'-'.now()->format('Ymd-His').'.json';
-        $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
-        if (@file_put_contents($path, $json) === false) {
-            throw new DomainException('Kopia zapasowa nie powstała: zapis '.$path.' się nie udał — '.$nothingDone.'.');
-        }
-
-        return $path;
     }
+
+    /**
+     * tabela => kolumna karty: wiersze, które kaskada skasowałaby razem z kartą, a których BACKUP_TABLES nie obejmuje
+     * (wersje i rozmiary z cenami, ceny specjalne, działania z wyszukiwarki, sprawdzenia zdjęć, pozycje partii opisów).
+     */
+    private const EXTRA_TABLES = [
+        'product_variants' => 'product_id',
+        'product_special_prices' => 'product_id',
+        'search_event_actions' => 'product_id',
+        'product_visual_checks' => 'product_id',
+        'product_enrichment_batch_items' => 'product_id',
+    ];
 
     /**
      * @return list<array<string, mixed>>
