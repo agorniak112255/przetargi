@@ -264,7 +264,17 @@ final class B2bMergeSizePricesCommandTest extends TestCase
             'target_snapshot' => CardRedirectStore::snapshot($large), 'created_by' => $this->user->id,
         ]);
         $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id])
-            ->expectsOutputToContain('decyzje w mapie połączeń')
+            ->expectsOutputToContain('pozycja K1-XL ma decyzję w mapie połączeń')
+            ->assertSuccessful();
+        CardRedirect::query()->delete();
+
+        // pozycja innego źródła wskazana ręcznie na łączoną kartę — decyzja człowieka o tej karcie
+        CardRedirect::query()->create([
+            'source_key' => 'b2b:999', 'position_key' => 'DYST-XL', 'product_id' => $large->id, 'reason' => 'merge',
+            'target_snapshot' => CardRedirectStore::snapshot($large), 'created_by' => $this->user->id,
+        ]);
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id])
+            ->expectsOutputToContain('łączona karta #'.$large->id.' ma decyzje w mapie połączeń')
             ->assertSuccessful();
         CardRedirect::query()->delete();
 
@@ -278,6 +288,24 @@ final class B2bMergeSizePricesCommandTest extends TestCase
             ->expectsOutputToContain('Scalono wyrobów: 0')
             ->assertSuccessful();
         $this->assertNotNull(Product::query()->find($large->id));
+        $this->cleanBackups();
+    }
+
+    public function test_redirect_of_another_source_on_the_card_that_stays_does_not_block_and_stays_on_it(): void
+    {
+        [$small, $large] = $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+        // 28.09.2026: pozycja dystrybutora „G3000 biały” połączona ręcznie z kartą białego hełmu 3M, która zostaje
+        $redirect = CardRedirect::query()->create([
+            'source_key' => 'b2b:999', 'position_key' => 'DYST-S', 'product_id' => $small->id, 'reason' => 'merge',
+            'target_snapshot' => CardRedirectStore::snapshot($small), 'created_by' => $this->user->id,
+        ]);
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])
+            ->expectsOutputToContain('Scalono wyrobów: 1')
+            ->assertSuccessful();
+
+        $this->assertNull(Product::query()->find($large->id));
+        $this->assertSame($small->id, (int) $redirect->fresh()->product_id);
         $this->cleanBackups();
     }
 

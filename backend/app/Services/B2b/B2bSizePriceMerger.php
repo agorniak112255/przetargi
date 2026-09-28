@@ -235,7 +235,6 @@ final class B2bSizePriceMerger
         foreach ([
             'product_variants' => ['wersje Sign Project', static fn ($q) => $q->where('kind', ProductVariant::KIND_VERSION)],
             'product_special_prices' => ['ceny specjalne', null],
-            'card_redirects' => ['decyzje w mapie połączeń („Łączenie kart”)', null],
         ] as $table => [$label, $scope]) {
             if (! Schema::hasTable($table)) {
                 continue;
@@ -277,6 +276,12 @@ final class B2bSizePriceMerger
         $out = [...$out, 'keep_id' => $keepId, 'drop_ids' => $dropIds];
         $skip = static fn (string $reason): array => [...$out, 'reason' => $reason];
 
+        // decyzja z „Łączenia kart” na karcie, która zostaje, zostaje prawdziwa (pozycja dystrybutora „G3000 biały” wskazuje
+        // kartę ze wszystkimi kolorami, decyzja właściciela 28.09.2026); na karcie łączonej — decyzja człowieka o tej karcie
+        $redirected = DB::table('card_redirects')->whereIn('product_id', $dropIds)->value('product_id');
+        if ($redirected !== null) {
+            return $skip('łączona karta #'.$redirected.' ma decyzje w mapie połączeń („Łączenie kart”)');
+        }
         $foreign = B2bProductLink::query()->whereIn('product_id', $dropIds)->where('b2b_account_id', '!=', $account->id)->value('product_id')
             ?? ProductSourcePrice::query()->whereIn('product_id', $dropIds)->where('source_key', '!=', $source)->value('product_id');
         if ($foreign !== null) {
