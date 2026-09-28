@@ -3507,6 +3507,10 @@ final class B2bCatalogSync
 
         try {
             $facts = $connector->normFacts($remote);
+            // Pary z dokumentu innego niż strona wyrobu (karta techniczna PDF) — skąd dokładnie, do `source`.
+            $provenance = $facts !== [] && $connector instanceof B2bNormFactProvenance
+                ? $connector->normFactProvenance($remote)
+                : [];
         } catch (B2bFatalException $e) {
             throw $e;
         } catch (Throwable $e) {
@@ -3523,6 +3527,7 @@ final class B2bCatalogSync
             $connector::key(),
             $connector::ownBrand(),
             (string) ($remote->sourceUrl ?? ''),
+            provenance: $provenance,
         );
         if ($column === null || ManufacturerNormFacts::sameFacts($product->manufacturer_norms, $column)) {
             return false;

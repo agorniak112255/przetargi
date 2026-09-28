@@ -14,10 +14,12 @@ use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bForeignLanguageSource;
 use App\Services\B2b\B2bKeepsExistingNames;
 use App\Services\B2b\B2bRemoteIdentifier;
+use App\Services\B2b\B2bRemoteNormFact;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\BolleB2bClient;
 use App\Services\B2b\BolleB2bConnector;
+use App\Support\ManufacturerNormFacts;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -41,6 +43,14 @@ final class BolleConnectorTest extends TestCase
     private const IMAGE_URL = 'https://b2b.bolle-safety.com/core/media/media.nl?id=123456&c=5230881&h=0123456789abcdef0123';
 
     private const CLEAR = 'SAFETY GLASSES › Clear [lens] "K"';
+
+    private const SHEET_EN = '/core/media/media.nl?id=777&c=5230881&h=baxterEN0123&_xt=.pdf';
+
+    private const SHEET_FR = '/core/media/media.nl?id=776&c=5230881&h=baxterFR0123&_xt=.pdf';
+
+    private const SHEET_DOC = '/core/media/media.nl?id=775&c=5230881&h=baxterDOC012&_xt=.pdf';
+
+    private const SHEET_US = '/core/media/media.nl?id=774&c=5230881&h=baxterUS0123&_xt=.pdf';
 
     /** @var array<string, list<array<string, mixed>>> fullurl liścia → pozycje */
     private array $leaves = [];
@@ -67,6 +77,9 @@ final class BolleConnectorTest extends TestCase
     private ?int $dropSessionsAfterListings = null;
 
     private int $listings = 0;
+
+    /** @var array<string, array{0: string, 1: int, 2: string}> id pliku media.nl → [treść, status, Content-Type] */
+    private array $media = [];
 
     protected function setUp(): void
     {
@@ -571,6 +584,240 @@ final class BolleConnectorTest extends TestCase
         $this->assertSame('Bolle', $connector->manufacturer(new B2bRemoteProduct('1', 'X', 'X')));
     }
 
+    public function test_raw_keeps_only_the_file_list_and_ean_from_the_item(): void
+    {
+        $this->leaves['/goggles'][] = $this->baxterItem(105, 'BAXCSP', '3660740007768');
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $products = $this->productsById($connector);
+
+        $raw = $products['105']->raw;
+        $this->assertSame('3660740007768', $raw['upccode']);
+        $this->assertSame([
+            ['name' => 'BAXTER-INDUSTRIAL-FT-EMEA_FR.pdf', 'displayname' => 'Technical Sheet', 'url' => BolleB2bClient::BASE.self::SHEET_FR],
+            ['name' => 'BAXTER-INDUSTRIAL-FT-EMEA_EN.pdf', 'displayname' => 'Technical Sheet', 'url' => BolleB2bClient::BASE.self::SHEET_EN],
+            ['name' => 'BAXTER-DOC-EMEA_EN.pdf', 'displayname' => 'Declaration of Conformity', 'url' => BolleB2bClient::BASE.self::SHEET_DOC],
+            ['name' => 'BAXTER-INDUSTRIAL-FT-NAM_EN-US.pdf', 'displayname' => 'Technical Sheet', 'url' => BolleB2bClient::BASE.self::SHEET_US],
+        ], $raw['downloads']);
+        // stany, zamówienia i odznaki z tego samego pola nie trafiają do raw
+        $this->assertArrayNotHasKey('custitem_c25_web_nextdelivery', $raw);
+        $encoded = (string) json_encode($raw);
+        foreach (['POFS', 'allocated', 'badges'] as $absent) {
+            $this->assertStringNotContainsString($absent, $encoded);
+        }
+        // pole w starym kształcie (sama data dostawy) = brak plików
+        $this->assertArrayNotHasKey('downloads', $products['101']->raw);
+    }
+
+    public function test_norm_facts_come_from_the_english_technical_sheet_and_the_parsed_table_is_cached_per_file(): void
+    {
+        $this->leaves['/goggles'][] = $this->baxterItem(105, 'BAXCSP', '3660740007768');
+        $this->media['777'] = [$this->fixture('datasheet-baxter.pdf'), 200, 'application/pdf'];
+        $this->fakeSite();
+        $connector = $this->connector();
+        $connector->login();
+        $product = $this->productsById($connector)['105'];
+
+        $facts = $connector->normFacts($product);
+
+        $this->assertSame([
+            ['EN166', null],
+            ['EN172', null],
+            ['Oznaczenie soczewki', '5-1.4 1 BT K N'],
+        ], array_map(static fn (B2bRemoteNormFact $f): array => [$f->label, $f->value], $facts));
+        // tylko karta EN (EMEA): nie wersja FR, nie deklaracja zgodności, nie karta rynku USA
+        $media = Http::recorded(static fn (Request $r): bool => str_contains($r->url(), '/core/media/media.nl'));
+        $this->assertCount(1, $media);
+        $this->assertSame(BolleB2bClient::BASE.self::SHEET_EN, $media->first()[0]->url());
+
+        $provenance = $connector->normFactProvenance($product);
+        $this->assertSame('datasheet', $provenance['kind']);
+        $this->assertSame(BolleB2bClient::BASE.self::SHEET_EN, $provenance['document_url']);
+        $this->assertSame('BAXTER-INDUSTRIAL-FT-EMEA_EN.pdf', $provenance['document_name']);
+        $this->assertSame(2, $provenance['page']);
+        $this->assertSame(['by' => 'reference', 'value' => 'BAXCSP', 'ean' => '3660740007768'], $provenance['identity']);
+        $this->assertStringContainsString('BAXCSP', $provenance['block']);
+        $this->assertStringContainsString('EN166 - EN172', $provenance['block']);
+        $this->assertSame(hash('sha256', $provenance['block']), $provenance['block_sha256']);
+        $this->assertSame([], $connector->normFactProvenance(new B2bRemoteProduct('999', 'X', 'X')));
+
+        // Kolumna producenta: normy na liście, oznaczenie soczewki tylko jako para (to nie kod EN 388)
+        $column = ManufacturerNormFacts::build(
+            array_map(static fn (B2bRemoteNormFact $f): array => ['label' => $f->label, 'value' => $f->value], $facts),
+            'bolle',
+            'Bolle',
+            'https://b2b.bolle-safety.com/x',
+        );
+        $this->assertSame(['EN166', 'EN172'], $column['normy_en'] ?? null);
+        $this->assertArrayNotHasKey('en388', $column ?? []);
+
+        // Inna pozycja tej rodziny w nowym przebiegu (nowy łącznik): odczyt z pamięci podręcznej, bez pobrania
+        $sent = Http::recorded()->count();
+        $sibling = $this->connector()->normFacts($this->remoteWithSheets('BAXPSI', '3660740007744'));
+        $this->assertSame(['EN166', 'EN170', 'Oznaczenie soczewki'], array_map(static fn (B2bRemoteNormFact $f): string => $f->label, $sibling));
+        Http::assertSentCount($sent);
+    }
+
+    public function test_norm_facts_are_empty_without_english_sheet_own_row_or_matching_ean(): void
+    {
+        $this->media['777'] = [$this->fixture('datasheet-baxter.pdf'), 200, 'application/pdf'];
+        $this->media['778'] = [$this->fixture('datasheet-tryon-rx.pdf'), 200, 'application/pdf'];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        // pozycja bez plików (SPICMX11U-F) i pozycja z samą kartą FR / rynku USA — bez żadnego pobrania
+        $this->assertSame([], $connector->normFacts(new B2bRemoteProduct('1', 'SPICMX11U-F', 'X', raw: ['status' => 'ok', 'itemid' => 'SPICMX11U-F'])));
+        $this->assertSame([], $connector->normFacts(new B2bRemoteProduct('2', 'BAXCSP', 'X', raw: [
+            'status' => 'ok', 'itemid' => 'BAXCSP', 'downloads' => [
+                ['name' => 'BAXTER-INDUSTRIAL-FT-EMEA_FR.pdf', 'displayname' => 'Technical Sheet', 'url' => BolleB2bClient::BASE.self::SHEET_EN],
+                ['name' => 'BAXTER-INDUSTRIAL-FT-NAM_EN-US.pdf', 'displayname' => 'Technical Sheet', 'url' => BolleB2bClient::BASE.self::SHEET_EN],
+            ],
+        ])));
+        Http::assertNothingSent();
+
+        // TRYON RX: w kolumnie REFERENCE nazwa rodziny, nie kod pozycji
+        $tryon = new B2bRemoteProduct('3', 'TRYONN10E', 'X', raw: ['status' => 'ok', 'itemid' => 'TRYONN10E', 'upccode' => '3660740020132', 'downloads' => [
+            ['name' => 'TRYON-PRESCRIPTION-RX-FT-EMEA_EN.pdf', 'displayname' => 'Technical Sheet', 'url' => BolleB2bClient::BASE.'/core/media/media.nl?id=778&c=5230881&h=tryon&_xt=.pdf'],
+        ]]);
+        $this->assertSame([], $connector->normFacts($tryon));
+        $this->assertSame([], $connector->normFactProvenance($tryon));
+
+        // kod się zgadza, EAN wiersza nie — to nie ten wyrób
+        $this->assertSame([], $connector->normFacts($this->remoteWithSheets('BAXCSP', '3660740007751')));
+        // pozycja pominięta (macierz) niczego nie czyta
+        $this->assertSame([], $connector->normFacts(new B2bRemoteProduct('4', 'BAXCSP', 'X', raw: ['status' => 'skipped', 'itemid' => 'BAXCSP'])));
+    }
+
+    public function test_datasheet_outside_the_shop_host_is_rejected_without_a_request(): void
+    {
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        foreach (['https://obcy.example.com/core/media/media.nl?id=1&_xt=.pdf', '//obcy.example.com/karta_EN.pdf'] as $url) {
+            try {
+                $connector->normFacts(new B2bRemoteProduct('1', 'BAXCSP', 'X', raw: ['status' => 'ok', 'itemid' => 'BAXCSP', 'downloads' => [
+                    ['name' => 'BAXTER-INDUSTRIAL-FT-EMEA_EN.pdf', 'displayname' => 'Technical Sheet', 'url' => $url],
+                ]]));
+                $this->fail('Obcy host powinien być odrzucony: '.$url);
+            } catch (RuntimeException $e) {
+                $this->assertStringContainsString('odrzucony', $e->getMessage());
+            }
+        }
+        Http::assertNothingSent();
+    }
+
+    public function test_failed_download_is_an_error_not_repeated_in_the_same_run_and_not_cached(): void
+    {
+        $this->media['777'] = ['blad serwera', 500, 'text/html'];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        foreach (['BAXCSP', 'BAXPSI'] as $code) {
+            try {
+                $connector->normFacts($this->remoteWithSheets($code, null));
+                $this->fail('Błąd pobrania karty technicznej powinien być wyjątkiem');
+            } catch (RuntimeException $e) {
+                $this->assertStringContainsString('karta techniczna', $e->getMessage());
+            }
+        }
+        Http::assertSentCount(1);
+
+        // następny przebieg próbuje znowu — błąd nie trafił do pamięci podręcznej
+        $this->media['777'] = [$this->fixture('datasheet-baxter.pdf'), 200, 'application/pdf'];
+        $this->assertCount(3, $this->connector()->normFacts($this->remoteWithSheets('BAXCSP', null)));
+        Http::assertSentCount(2);
+    }
+
+    public function test_sync_saves_datasheet_norms_with_provenance_and_identical_second_run_does_not_rewrite_them(): void
+    {
+        Queue::fake();
+        Storage::fake('public');
+        $this->leaves['/goggles'][] = $this->baxterItem(105, 'BAXCSP', '3660740007768');
+        $this->media['777'] = [$this->fixture('datasheet-baxter.pdf'), 200, 'application/pdf'];
+        $this->fakeSite();
+        $account = B2bAccount::query()->create([
+            'username' => 'jan@example.com',
+            'password' => 'dobre-haslo',
+            'sites' => ['https://b2b.bolle-safety.com/'],
+            'connector' => 'bolle',
+        ]);
+
+        $first = app(B2bAccountSyncRunner::class)->run($account->fresh(), delayMs: 0, withImages: false);
+
+        $this->assertSame(3, $first['created'], implode(' | ', $first['errors']));
+        $column = Product::query()->where('sku', 'BAXCSP')->firstOrFail()->manufacturer_norms;
+        $this->assertSame([['label' => 'EN166'], ['label' => 'EN172'], ['label' => 'Oznaczenie soczewki', 'value' => '5-1.4 1 BT K N']], $column['rows']);
+        $this->assertSame(['EN166', 'EN172'], $column['normy_en']);
+        $this->assertSame('bolle', $column['source']['connector']);
+        $this->assertSame('Bolle', $column['source']['brand']);
+        $this->assertSame('datasheet', $column['source']['kind']);
+        $this->assertSame(BolleB2bClient::BASE.self::SHEET_EN, $column['source']['document_url']);
+        $this->assertSame('BAXTER-INDUSTRIAL-FT-EMEA_EN.pdf', $column['source']['document_name']);
+        $this->assertSame(2, $column['source']['page']);
+        $this->assertSame(['by' => 'reference', 'value' => 'BAXCSP', 'ean' => '3660740007768'], $column['source']['identity']);
+        $this->assertSame(hash('sha256', $column['source']['block']), $column['source']['block_sha256']);
+        // pozycje bez karty technicznej nie dostają norm producenta
+        $this->assertNull(Product::query()->where('sku', 'PSSTRYOC13B')->firstOrFail()->manufacturer_norms);
+
+        $this->travel(2)->days();
+        $second = app(B2bAccountSyncRunner::class)->run($account->fresh(), delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
+        foreach ([$first, $second] as $result) {
+            $texts = implode("\n", array_column(B2bSyncRun::query()->findOrFail($result['sync_run_id'])->log, 'text'));
+            $this->assertStringNotContainsString('normy z karty producenta nie zostały odczytane', $texts);
+        }
+        $again = Product::query()->where('sku', 'BAXCSP')->firstOrFail()->manufacturer_norms;
+        // te same fakty i to samo źródło — bez ponownego zapisu (data odczytu z pierwszego przebiegu)
+        $this->assertSame($column['source']['synced_at'], $again['source']['synced_at']);
+        $this->assertEquals($column, $again);
+        // karta techniczna rodziny pobrana raz na oba przebiegi
+        $this->assertCount(1, Http::recorded(static fn (Request $r): bool => str_contains($r->url(), 'id=777')));
+    }
+
+    /**
+     * Pozycja rodziny BAXTER z plikami w polu custitem_c25_web_nextdelivery (kształt żywego API z 28.09.2026: JSON
+     * z item.downloads obok stanów i zamówień). Adresy i identyfikatory plików są syntetyczne.
+     *
+     * @return array<string, mixed>
+     */
+    private function baxterItem(int $id, string $itemId, string $upc): array
+    {
+        $downloads = [];
+        foreach ([
+            [self::SHEET_FR, 'BAXTER-INDUSTRIAL-FT-EMEA_FR.pdf', 'Technical Sheet'],
+            [self::SHEET_EN, 'BAXTER-INDUSTRIAL-FT-EMEA_EN.pdf', 'Technical Sheet'],
+            [self::SHEET_DOC, 'BAXTER-DOC-EMEA_EN.pdf', 'Declaration of Conformity'],
+            [self::SHEET_US, 'BAXTER-INDUSTRIAL-FT-NAM_EN-US.pdf', 'Technical Sheet'],
+        ] as $i => [$url, $name, $label]) {
+            $downloads[(string) (413 + $i)] = ['file' => (string) (12131900 + $i), 'url' => $url, 'name' => $name, 'displayname' => $label];
+        }
+
+        return $this->item($id, [
+            'itemid' => $itemId,
+            'upccode' => $upc,
+            'urlcomponent' => 'BAXTER_'.$itemId,
+            'custitem_c25_web_nextdelivery' => (string) json_encode([
+                'v' => 5,
+                'item' => ['downloads' => $downloads, 'badges' => ['NEW'], 'allocated' => ['qty' => 12]],
+                'POFS0079223' => ['qty' => 300, 'date' => '2026-10-01'],
+            ]),
+        ]);
+    }
+
+    private function remoteWithSheets(string $itemId, ?string $upc): B2bRemoteProduct
+    {
+        return new B2bRemoteProduct('50'.$itemId, $itemId, $itemId, raw: array_filter([
+            'status' => 'ok',
+            'itemid' => $itemId,
+            'upccode' => $upc,
+            'downloads' => [
+                ['name' => 'BAXTER-INDUSTRIAL-FT-EMEA_EN.pdf', 'displayname' => 'Technical Sheet', 'url' => BolleB2bClient::BASE.self::SHEET_EN],
+            ],
+        ], static fn (mixed $value): bool => $value !== null));
+    }
+
     /**
      * @return list<array{0: string, 1: string, 2: string|null, 3: string|null, 4: string|null}>
      */
@@ -718,6 +965,12 @@ final class BolleConnectorTest extends TestCase
                 return Http::response($response, 200, ['Cache-Control' => 'private, max-age=300']);
             }
             if ($path === '/core/media/media.nl') {
+                if (isset($this->media[(string) ($query['id'] ?? '')])) {
+                    [$body, $status, $type] = $this->media[(string) $query['id']];
+
+                    return Http::response($body, $status, ['Content-Type' => $type]);
+                }
+
                 return isset($query['h'])
                     ? Http::response(self::JPEG, 200, ['Content-Type' => 'image/jpeg'])
                     : Http::response('', 403);

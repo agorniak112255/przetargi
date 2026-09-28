@@ -281,8 +281,27 @@ final class BolleB2bClient
      */
     public function imageBytes(string $url): array
     {
+        return $this->shopFile($url, 'zdjęcia');
+    }
+
+    /**
+     * Plik dokumentu pozycji (karta techniczna PDF z core/media/media.nl — pobiera się bez sesji, sprawdzone
+     * 28.09.2026). Ta sama zasada co przy zdjęciach: tylko adresy sklepu, obcy host = wyjątek.
+     *
+     * @return array{bytes: string, mime: string}
+     */
+    public function documentBytes(string $url): array
+    {
+        return $this->shopFile($url, 'dokumentu');
+    }
+
+    /**
+     * @return array{bytes: string, mime: string}
+     */
+    private function shopFile(string $url, string $what): array
+    {
         if (! str_starts_with($url, self::BASE.'/')) {
-            throw new RuntimeException('adres zdjęcia spoza '.self::BASE.' odrzucony ('.$url.')');
+            throw new RuntimeException('adres '.$what.' spoza '.self::BASE.' odrzucony ('.$url.')');
         }
         $response = $this->send(static fn (PendingRequest $http): Response => $http->get($url));
         $mime = strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]));

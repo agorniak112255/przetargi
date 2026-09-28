@@ -6,7 +6,9 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductIdentifier;
+use Illuminate\Support\Facades\Cache;
 use RuntimeException;
+use Throwable;
 
 /**
  * b2b.bolle-safety.com — jedna pozycja NetSuite (internalid) = jedna karta. Pozycje z liści drzewa kategorii
@@ -31,8 +33,15 @@ use RuntimeException;
  * przez import i nazwa nowej karty są tłumaczone na polski po zapisie (TranslateB2bProductTextJob). Łącznik
  * podaje tekst dosłownie; tylko etykiety cech w tabelce „Parametry” (shopFields) są naszymi stałymi polskimi
  * odpowiednikami.
+ *
+ * Normy producenta (B2bNormFactSource, 28.09.2026) — z karty technicznej PDF rodziny, którą API podaje przy pozycji
+ * (custitem_c25_web_nextdelivery → item.downloads, „Technical Sheet” *_EN.pdf), z tabeli wersji: kolumna STANDARD
+ * wiersza z kodem pozycji (BolleDatasheetTable). Dotąd karty Bolle miały normy tylko ze wzbogacania AI, często
+ * błędne (BAXCSP: AI „EN166, EN169”, karta techniczna „EN166 - EN172”). Witryny bolle-safety.com (DataDome, 403)
+ * nie pobieramy — tylko pliki z b2b.bolle-safety.com. Jeden PDF opisuje całą rodzinę (ok. 400 pozycji, ok. 120
+ * plików), więc odczyt tabeli trzymamy w pamięci podręcznej na adres pliku (adres zawiera hash treści h=).
  */
-final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource, B2bKeepsExistingNames, B2bManufacturerSite, B2bShopFieldSource
+final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource, B2bKeepsExistingNames, B2bManufacturerSite, B2bNormFactProvenance, B2bNormFactSource, B2bShopFieldSource
 {
     private const SESSION_LOST = 'Utracono sesję konta bolle-safety.com — ceny konta niedostępne';
 
@@ -59,15 +68,33 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
         'custitem_bb_safety_lens_shade' => 'Kolor soczewki',
     ];
 
-    /** Pola pozycji zachowywane w raw (reszta odpowiedzi nie jest potrzebna). */
+    /**
+     * Pola pozycji zachowywane w raw (reszta odpowiedzi nie jest potrzebna). upccode = EAN sztuki (BAXCSP:
+     * 3660740007768, ten sam co w wierszu karty technicznej) — tylko do sprawdzenia wiersza tabeli norm.
+     * Z custitem_c25_web_nextdelivery bierzemy wyłącznie listę plików (raw['downloads']), bez stanów i zamówień.
+     */
     private const RAW_FIELDS = [
-        'internalid', 'itemid', 'storedisplayname2', 'displayname', 'storedescription', 'storedetaileddescription',
+        'internalid', 'itemid', 'upccode', 'storedisplayname2', 'displayname', 'storedescription', 'storedetaileddescription',
         'featureddescription', 'onlinecustomerprice_detail', 'onlinecustomerprice', 'pricelevel1', 'dontshowprice',
         'ispurchasable', 'urlcomponent', 'custitem_atlas_item_image',
         'custitem_bb_fm_product_material', 'custitem_bb_specific_technology', 'custitem_bb_safety_lens_coating', 'custitem_bb_safety_lens_shade',
     ];
 
+    /** Pole pozycji z napisem JSON: {"v":5,"item":{"downloads":{…},"badges":…,"allocated":…},"POFS…":…}. */
+    private const DOWNLOADS_FIELD = 'custitem_c25_web_nextdelivery';
+
+    private const DATASHEET_DISPLAYNAME = 'Technical Sheet';
+
+    /** Odczyt tabeli karty technicznej na adres pliku — plik rodziny pobierany najwyżej raz na ten okres. */
+    private const DATASHEET_CACHE_DAYS = 30;
+
     private int $total = 0;
+
+    /** @var array<string, string> adres karty technicznej → błąd pobrania/odczytu w tym przebiegu (bez ponawiania) */
+    private array $failedDatasheets = [];
+
+    /** @var array{remote_id: string, fields: array<string, mixed>}|null źródło par z ostatniego normFacts() */
+    private ?array $lastNormProvenance = null;
 
     private ?int $controlId = null;
 
@@ -266,6 +293,171 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
     }
 
     /**
+     * Normy z karty technicznej pozycji (BolleDatasheetTable::match): jedna para na oznaczenie z kolumny STANDARD,
+     * dosłownie i bez poziomu („EN166”, „EN ISO 16321-1”), oraz „Oznaczenie soczewki” z kolumny LENS MARKING, gdy
+     * jest. Karta = „Technical Sheet” z nazwą pliku kończącą się na „_EN.pdf” (EMEA po angielsku; _EN-US, _EN-AU
+     * to inne rynki). Kilka takich kart — wiersz pozycji musi dać ten sam odczyt we wszystkich, w których jest.
+     *
+     * [] = pozycja bez karty, bez swojego wiersza (TRYON RX: w kolumnie REFERENCE nazwa rodziny), wiersz bez normy
+     * (VOLT 2.0 HEADGEAR), inny EAN w wierszu albo komórka nieczytelna — zapisane normy zostają bez zmian.
+     * Błąd pobrania albo nieczytelny PDF = wyjątek (synchronizacja zgłasza ostrzeżenie i też niczego nie zmienia).
+     *
+     * @return list<B2bRemoteNormFact>
+     */
+    public function normFacts(B2bRemoteProduct $product): array
+    {
+        $this->lastNormProvenance = null;
+        if (($product->raw['status'] ?? null) !== 'ok') {
+            return [];
+        }
+        $reference = trim((string) ($product->raw['itemid'] ?? $product->sku));
+        $sheets = self::englishDatasheets($product->raw['downloads'] ?? null);
+        if ($reference === '' || $sheets === []) {
+            return [];
+        }
+        $upc = $product->raw['upccode'] ?? null;
+        $ean = is_scalar($upc) && preg_match('/^\d{8,14}$/', trim((string) $upc)) === 1 ? trim((string) $upc) : null;
+
+        $found = null;
+        foreach ($sheets as $sheet) {
+            $match = BolleDatasheetTable::match($this->datasheetRows($sheet['url']), $reference, $ean);
+            if ($match === null) {
+                continue;
+            }
+            if ($found !== null && ($found['match']['norms'] !== $match['norms'] || $found['match']['lens'] !== $match['lens'])) {
+                return [];
+            }
+            $found ??= ['sheet' => $sheet, 'match' => $match];
+        }
+        if ($found === null) {
+            return [];
+        }
+
+        $facts = array_map(static fn (string $norm): B2bRemoteNormFact => new B2bRemoteNormFact($norm), $found['match']['norms']);
+        if ($found['match']['lens'] !== null) {
+            $facts[] = new B2bRemoteNormFact(BolleDatasheetTable::LENS_LABEL, $found['match']['lens']);
+        }
+
+        $row = $found['match']['row'];
+        $this->lastNormProvenance = [
+            'remote_id' => $product->remoteId,
+            'fields' => [
+                'kind' => 'datasheet',
+                'document_url' => $found['sheet']['url'],
+                'document_name' => $found['sheet']['name'],
+                'page' => $row['page'],
+                'identity' => array_filter(
+                    ['by' => 'reference', 'value' => $reference, 'ean' => $ean !== null ? $row['ean'] : null],
+                    static fn (?string $value): bool => $value !== null,
+                ),
+                'block' => $row['block'],
+                'block_sha256' => hash('sha256', $row['block']),
+            ],
+        ];
+
+        return $facts;
+    }
+
+    /**
+     * Karta techniczna, wiersz i dosłowny tekst wiersza, z których normFacts() wziął pary tego produktu.
+     *
+     * @return array<string, mixed>
+     */
+    public function normFactProvenance(B2bRemoteProduct $product): array
+    {
+        return $this->lastNormProvenance !== null && $this->lastNormProvenance['remote_id'] === $product->remoteId
+            ? $this->lastNormProvenance['fields']
+            : [];
+    }
+
+    /**
+     * Wiersze tabeli karty technicznej: z pamięci podręcznej (klucz = wersja odczytu + adres pliku z hashem treści),
+     * inaczej pobranie i odczyt — jeden plik naraz, bajty PDF nie zostają w pamięci po odczycie. Błąd pobrania albo
+     * odczytu zapamiętujemy do końca przebiegu, żeby kolejne pozycje tej rodziny nie pobierały pliku ponownie; do
+     * pamięci podręcznej błąd nie trafia (następny przebieg próbuje znowu).
+     *
+     * @return list<array{page: int, reference: string, lens: string|null, standard: string|null, ean: string|null, ambiguous: list<string>, block: string}>
+     */
+    private function datasheetRows(string $url): array
+    {
+        $key = 'bolle-datasheet:v'.BolleDatasheetTable::VERSION.':'.sha1($url);
+        $cached = Cache::get($key);
+        if (is_array($cached)) {
+            return $cached;
+        }
+        if (isset($this->failedDatasheets[$url])) {
+            throw new RuntimeException($this->failedDatasheets[$url]);
+        }
+
+        try {
+            $rows = BolleDatasheetTable::parse($this->client->documentBytes($url)['bytes']);
+        } catch (B2bFatalException $e) {
+            throw $e;
+        } catch (Throwable $e) {
+            $this->failedDatasheets[$url] = 'karta techniczna '.$url.': '.$e->getMessage();
+
+            throw new RuntimeException($this->failedDatasheets[$url], 0, $e);
+        }
+        Cache::put($key, $rows, now()->addDays(self::DATASHEET_CACHE_DAYS));
+
+        return $rows;
+    }
+
+    /**
+     * Pliki pozycji z pola DOWNLOADS_FIELD (napis JSON) — tylko nazwa, nazwa wyświetlana i adres (pełny, ze ścieżki
+     * sklepu). Pole w innym kształcie (data najbliższej dostawy w starszych pozycjach) = brak plików.
+     *
+     * @return list<array{name: string, displayname: string, url: string}>
+     */
+    private static function downloads(mixed $field): array
+    {
+        $json = is_string($field) ? json_decode($field, true) : null;
+        $downloads = is_array($json) && is_array($json['item'] ?? null) ? ($json['item']['downloads'] ?? null) : null;
+        if (! is_array($downloads)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($downloads as $download) {
+            if (! is_array($download) || ! is_string($download['url'] ?? null)) {
+                continue;
+            }
+            $url = trim($download['url']);
+            if (str_starts_with($url, '/') && ! str_starts_with($url, '//')) {
+                $url = BolleB2bClient::BASE.$url;
+            }
+            if ($url === '') {
+                continue;
+            }
+            $out[] = [
+                'name' => trim((string) ($download['name'] ?? '')),
+                'displayname' => trim((string) ($download['displayname'] ?? '')),
+                'url' => $url,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return list<array{name: string, displayname: string, url: string}>
+     */
+    private static function englishDatasheets(mixed $downloads): array
+    {
+        if (! is_array($downloads)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $downloads,
+            static fn (mixed $download): bool => is_array($download)
+                && is_string($download['url'] ?? null)
+                && strcasecmp(trim((string) ($download['displayname'] ?? '')), self::DATASHEET_DISPLAYNAME) === 0
+                && str_ends_with(strtolower(trim((string) ($download['name'] ?? ''))), '_en.pdf'),
+        ));
+    }
+
+    /**
      * Wszystkie strony liścia, bez powtórzeń po internalid. Liczba pozycji ≠ total sklepu = B2bFatalException.
      * Przy okazji zapamiętuje cenę kontrolną (pierwsza pozycja z ceną konta niższą od katalogowej).
      *
@@ -363,6 +555,10 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
                 $raw[$field] = $item[$field];
             }
         }
+        $downloads = self::downloads($item[self::DOWNLOADS_FIELD] ?? null);
+        if ($downloads !== []) {
+            $raw['downloads'] = $downloads;
+        }
 
         return new B2bRemoteProduct(
             remoteId: $id,
@@ -375,6 +571,7 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
             // pozycji karty (internalid). internalid to wewnętrzny numer NetSuite, nie identyfikator wyrobu. Kodu
             // kreskowego (upccode) nie podajemy: atrapa testów (dane syntetyczne) go nie ma, a żywej odpowiedzi
             // fieldset=details pod tym kątem nie sprawdzono — bez potwierdzenia pola nie zgadujemy, czy to EAN sztuki.
+            // (28.09.2026 upccode trafił do raw wyłącznie do sprawdzenia wiersza karty technicznej — normFacts().)
             identifiers: $sku !== '' ? [new B2bRemoteIdentifier(
                 type: ProductIdentifier::TYPE_MANUFACTURER_CODE,
                 value: $sku,
