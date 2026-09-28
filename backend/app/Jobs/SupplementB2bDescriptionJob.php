@@ -19,11 +19,13 @@ use App\Services\Enrichment\ProductEnrichmentService;
 use App\Support\BhpAttributeNormalizer;
 use Carbon\CarbonInterface;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Cache\Lock;
 use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -84,6 +86,11 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
 
     public const OUTAGE_WAIT_BUDGET_SECONDS = 7200;
 
+    /** Klucz blokady miejsca na pracę uzupełniania (acquireRunSlot) i odstęp ponowienia, gdy wszystkie zajęte. */
+    public const RUN_SLOT_KEY = 'b2b_supplement_run_slot:';
+
+    public const RUN_SLOT_RETRY_SECONDS = 30;
+
     /**
      * Unix time pierwszego czekania na wyszukiwarkę. Zwykłe pole z wartością domyślną, nie parametr promowany: job
      * zapisany w kolejce przed dodaniem pola nie ma go w danych (patrz DescribeB2bProductFromDatasheetJob::$redo).
@@ -125,11 +132,21 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
             return;
         }
 
+        $runLock = self::acquireRunSlot($this->timeout + 60);
+        if ($runLock === null) {
+            // Limit uzupełniania obłożony — karta wraca do kolejki bez zużycia próby (patrz acquireRunSlot).
+            self::dispatch($this->productId, $this->b2bAccountId, $this->outageWaitSince)
+                ->delay(now()->addSeconds(self::RUN_SLOT_RETRY_SECONDS));
+            $this->delete();
+
+            return;
+        }
         $slot = $slots->acquire(
             $this->timeout + 60,
             (float) config('ai.enrichment_slot_wait_seconds', 120)
         );
         if ($slot === null) {
+            $runLock->release();
             // Limit z Ustawień AI obłożony — karta wraca do kolejki bez zużycia próby.
             self::dispatch($this->productId, $this->b2bAccountId, $this->outageWaitSince)->delay(now()->addSeconds(10));
             $this->delete();
@@ -187,6 +204,7 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
             throw $e;
         } finally {
             $slot->release();
+            $runLock->release();
         }
 
         $skipReason = $this->store($context, $result);
@@ -233,6 +251,25 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
                 'retry_at' => null,
                 'updated_at' => now(),
             ]);
+    }
+
+    /**
+     * Miejsce na pracę uzupełniania (najwyżej enrichment.supplement_concurrency kart naraz, decyzja użytkownika
+     * 28.09.2026). Produkcja: kilkanaście kart Bolle naraz, każda z kilkoma zapytaniami site: i zwykłym szukaniem,
+     * zablokowało Google (zgoda/captcha) — SearXNG robi wtedy 10 min przerwy, a Jina zwraca 422. Limit własny,
+     * niezależny od limitu zadań AI (EnrichmentSlots), bo hamulcem jest tu wyszukiwarka, nie model.
+     */
+    private static function acquireRunSlot(int $ttlSeconds): ?Lock
+    {
+        $limit = max(1, (int) config('enrichment.supplement_concurrency', 2));
+        for ($i = 0; $i < $limit; $i++) {
+            $lock = Cache::lock(self::RUN_SLOT_KEY.$i, max(60, $ttlSeconds));
+            if ($lock->get()) {
+                return $lock;
+            }
+        }
+
+        return null;
     }
 
     /** Stan próby tej karty w bazie (null = brak próby). */

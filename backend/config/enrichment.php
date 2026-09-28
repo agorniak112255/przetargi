@@ -514,6 +514,12 @@ return [
     'prefetch_concurrency' => max(1, min(16, (int) env('ENRICHMENT_PREFETCH_CONCURRENCY', 5))),
 
     /*
+    | Ile kart naraz uzupełnia krótki opis B2B ze stron konta (SupplementB2bDescriptionJob). Decyzja użytkownika
+    | 28.09.2026: najwyżej 2 — kilkanaście kart Bolle naraz zablokowało Google (captcha) i SearXNG stał 10 min.
+    */
+    'supplement_concurrency' => max(1, min(8, (int) env('ENRICHMENT_SUPPLEMENT_CONCURRENCY', 2))),
+
+    /*
     | Domeny pomijane przy „catalog:index” — globalne serwisy korporacyjne mają
     | sitemapy liczone w setkach MB i prawie nic po polsku. Nadal można je
     | zaindeksować, podając host wprost: „artisan catalog:index 3m.com”.

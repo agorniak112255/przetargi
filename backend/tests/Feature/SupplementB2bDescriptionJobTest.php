@@ -24,6 +24,7 @@ use App\Services\Enrichment\B2bSupplementNoPages;
 use App\Services\Enrichment\B2bSupplementSearchOutage;
 use App\Services\Enrichment\ProductEnrichmentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
 use Mockery;
 use Mockery\MockInterface;
@@ -132,6 +133,35 @@ final class SupplementB2bDescriptionJobTest extends TestCase
         $this->assertNull($attempt->message);
         // opis już nie jest tekstem z B2B — karta nie wraca do uzupełniania
         $this->assertSame([], app(B2bDescriptionSupplement::class)->candidateIds($this->account, false));
+    }
+
+    public function test_at_most_two_cards_work_at_once(): void
+    {
+        Queue::fake();
+        [$card, $before] = $this->untouchedSetup();
+        // dwie inne karty pracują — oba miejsca zajęte
+        $held = [
+            Cache::lock(SupplementB2bDescriptionJob::RUN_SLOT_KEY.'0', 600),
+            Cache::lock(SupplementB2bDescriptionJob::RUN_SLOT_KEY.'1', 600),
+        ];
+        foreach ($held as $lock) {
+            $this->assertTrue($lock->get());
+        }
+        $this->enrichment->shouldNotReceive('supplementB2bDescription');
+
+        $this->runJob($card);
+
+        $this->assertUntouched($card, $before);
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_QUEUED, $this->attemptOf($card)->status);
+        $this->assertSame(0, $this->attemptOf($card)->attempts);
+        Queue::assertPushed(SupplementB2bDescriptionJob::class, fn (SupplementB2bDescriptionJob $job): bool => $job->productId === (int) $card->id && $job->delay !== null);
+
+        // miejsce zwolnione — karta pracuje
+        $held[0]->release();
+        $this->enrichment->shouldReceive('supplementB2bDescription')->once()->andReturn($this->modelResult());
+        $this->runJob($card);
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_REPLACED, $this->attemptOf($card)->status);
+        $held[1]->release();
     }
 
     public function test_running_card_shows_its_stage_and_start(): void
