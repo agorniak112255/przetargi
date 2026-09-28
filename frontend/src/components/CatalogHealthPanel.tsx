@@ -88,38 +88,6 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
     }
   }
 
-  async function mergeSizes() {
-    if (
-      !window.confirm(
-        'Złączyć produkty różniące się tylko rozmiarem? Zostaje karta z opisem i zdjęciem; przy różnej cenie warianty zostają osobno.',
-      )
-    ) {
-      return
-    }
-    setBusy(true)
-    setMsg('')
-    setErr('')
-    try {
-      const res = await api<{ message: string }>(
-        '/products/catalog-health/merge-sizes',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            manufacturer: manufacturerFilter || null,
-            dry_run: false,
-          }),
-        },
-      )
-      setMsg(res.message)
-      await load()
-      onChanged?.()
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Błąd scalania rozmiarów')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   async function backfillSizes() {
     if (
       !window.confirm(
@@ -263,14 +231,6 @@ export function CatalogHealthPanel({ canQueue, manufacturerFilter = '', onQueued
             className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1.5 text-[11px] font-semibold text-emerald-950 disabled:opacity-50"
           >
             Uzupełnij rozmiary z opisów ({report.empty_packaging ?? 0})
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void mergeSizes()}
-            className="rounded border border-orange-300 bg-orange-50 px-2 py-1.5 text-[11px] font-semibold text-orange-950 disabled:opacity-50"
-          >
-            Scal rozmiary
           </button>
         </div>
       )}

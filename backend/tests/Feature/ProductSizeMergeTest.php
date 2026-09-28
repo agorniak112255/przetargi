@@ -20,7 +20,6 @@ use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
-use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 final class ProductSizeMergeTest extends TestCase
@@ -629,34 +628,6 @@ final class ProductSizeMergeTest extends TestCase
 
         $this->assertSame(0, $result['groups']);
         $this->assertSame(2, Product::query()->count());
-    }
-
-    public function test_merge_sizes_endpoint(): void
-    {
-        Sanctum::actingAs(User::factory()->withRole('admin')->create());
-        Queue::fake();
-
-        Product::query()->create([
-            'sku' => '37695VP070',
-            'name' => 'AlphaTec 37695VP Size 7.0',
-            'manufacturer' => 'Ansell',
-            'catalog_price_net' => 2.85,
-            'purchase_price' => 2.85,
-        ]);
-        Product::query()->create([
-            'sku' => '37695VP100',
-            'name' => 'AlphaTec 37695VP Size 10.0',
-            'manufacturer' => 'Ansell',
-            'catalog_price_net' => 2.85,
-            'purchase_price' => 2.85,
-        ]);
-
-        $this->postJson('/api/products/catalog-health/merge-sizes', [
-            'manufacturer' => 'Ansell',
-        ])
-            ->assertOk()
-            ->assertJsonPath('groups', 1)
-            ->assertJsonPath('deleted', 1);
     }
 
     public function test_merge_skips_duplicate_document_checksums(): void
