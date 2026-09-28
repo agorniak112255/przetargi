@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\Product;
 use App\Models\ProductVariant;
+use App\Services\ProductMatchService;
 use App\Support\ProductModelFuzzy;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -87,6 +88,36 @@ final class ProductModelFuzzyVariantRowsTest extends TestCase
         $this->assertSame([], $this->fuzzy()->missingVariantCodes(self::QUERY, $card));
         $this->assertFalse($this->fuzzy()->isRequestedVariant(self::QUERY, $card), 'przynależność do modelu tylko z nazwy i SKU');
         $this->assertFalse($this->fuzzy()->isVariantModelCard(self::QUERY, $card));
+    }
+
+    public function test_exact_variant_code_from_the_query_is_recognised_only_as_a_whole_word(): void
+    {
+        // karta kolorów 3M po scaleniu: kod koloru tylko w wierszu wariantu
+        $colours = $this->card('Hełm ochronny 3M™, wskaźnik Uvicator, regulacja śrubowa, wentylowany, G3000NUV');
+        $this->variant($colours, 'G3000NUV-RD', 'czerwony');
+        $this->variant($colours, 'G3000NUV-BB', 'niebieski');
+        $reflective = $this->card('Hełm ochronny 3M™, wskaźnik Uvicator, regulacja śrubowa, wentylowany, odblaskowy, G3000NUV-R');
+        $this->variant($reflective, 'G3000NUV-R-RD', 'czerwony');
+        $query = 'Hełm ochronny 3M G3000NUV-RD, kolor czerwony, wskaźnik UV';
+
+        $this->assertTrue($this->fuzzy()->variantCodeWrittenInQuery($query, $colours));
+        $this->assertFalse($this->fuzzy()->variantCodeWrittenInQuery($query, $reflective));
+        $this->assertFalse($this->fuzzy()->variantCodeWrittenInQuery('Hełm ochronny 3M G3000NUV, kolor czerwony', $colours));
+        $this->assertFalse($this->fuzzy()->variantCodeWrittenInQuery($query, new Product(['sku' => 'X', 'name' => 'X'])));
+    }
+
+    public function test_tender_heuristic_prefers_the_card_with_the_exact_variant_code(): void
+    {
+        $colours = $this->card('Hełm ochronny 3M™, wskaźnik Uvicator, regulacja śrubowa, wentylowany, G3000NUV');
+        $this->variant($colours, 'G3000NUV-RD', 'czerwony');
+        $reflective = $this->card('Hełm ochronny 3M™, wskaźnik Uvicator, regulacja śrubowa, wentylowany, odblaskowy, G3000NUV-R');
+        $this->variant($reflective, 'G3000NUV-R-RD', 'czerwony');
+        $colours->forceFill(['purchase_price' => 90, 'manufacturer' => '3M'])->save();
+        $reflective->forceFill(['purchase_price' => 60, 'manufacturer' => '3M'])->save();
+
+        $rows = app(ProductMatchService::class)->rankProducts('Hełm ochronny 3M G3000NUV-RD, kolor czerwony', collect([$reflective, $colours]));
+
+        $this->assertSame($colours->id, (int) $rows[0]['product']->id);
     }
 
     public function test_unsaved_card_is_read_without_variants(): void

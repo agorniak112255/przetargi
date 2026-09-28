@@ -667,6 +667,37 @@ final class ProductModelFuzzy
     }
 
     /**
+     * Klient przepisał dokładny kod wiersza wariantu karty („G3000NUV-RD” pod kartą kolorów „…, G3000NUV”): słowo
+     * zapytania bez separatorów = kod aktywnego wariantu (od 5 znaków, z cyfrą). Po scaleniu kolorów kod koloru stoi
+     * tylko w wierszu wariantu, a podobieństwo nazw stawiało wyżej inną linię („G3000NUV-R” to początek „G3000NUV-RD”).
+     */
+    public function variantCodeWrittenInQuery(string $query, Product $product): bool
+    {
+        $words = [];
+        foreach (preg_split('/[\s,;()]+/u', $query) ?: [] as $word) {
+            $code = $this->compact($word);
+            if (mb_strlen($code) >= 5 && preg_match('/\d/', $code) === 1) {
+                $words[$code] = true;
+            }
+        }
+        if ($words === [] || $product->id === null) {
+            return false;
+        }
+        try {
+            $rows = app(ProductVariantFacts::class)->activeRows($product);
+        } catch (Throwable) {
+            return false;
+        }
+        foreach ($rows as $row) {
+            if ($row['sku'] !== null && isset($words[$this->compact($row['sku'])])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Oznaczenia wariantu na karcie, których wymaganie nie ma („ARMEN 9007 6660 S1” pod „ARMEN 9007 1010 S1” → 6660).
      * Liczone tylko dla karty modelu, przy którym wymaganie podaje oznaczenie wariantu, i tylko wobec kotwic tej karty
      * (decidingAnchors, jak missingVariantCodes); numer modelu z igły („9007”) nie jest wariantem.

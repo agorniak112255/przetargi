@@ -610,6 +610,13 @@ final class ProductMatchService
                 $requested = $compatibleNamed->reject(
                     fn (Product $p): bool => $this->modelFuzzy->isOtherVariant($requirement, $p)
                 );
+                // dokładny kod wiersza wariantu z wymagania (kolor karty kolorów 3M „G3000NUV-RD”) przed podobną linią
+                $byVariantCode = $requested->filter(
+                    fn (Product $p): bool => $this->modelFuzzy->variantCodeWrittenInQuery($requirement, $p)
+                );
+                if ($byVariantCode->isNotEmpty()) {
+                    $requested = $byVariantCode;
+                }
                 $products = $requested->isNotEmpty()
                     ? $requested
                     : ($compatibleNamed->isNotEmpty() ? $compatibleNamed : $products);

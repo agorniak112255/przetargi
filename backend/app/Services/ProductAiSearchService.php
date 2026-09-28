@@ -5873,7 +5873,11 @@ final class ProductAiSearchService
             }
             $row = $this->productToRow($product);
             $missingCodes = $this->modelFuzzy->missingVariantCodes($query, $product);
-            if ($missingCodes === []) {
+            if ($missingCodes === [] && $this->modelFuzzy->variantCodeWrittenInQuery($query, $product)) {
+                // dokładny kod wiersza wariantu (kolor karty kolorów) — jak kod karty przepisany przez klienta
+                $row['ai_match_percent'] = 99;
+                $row['ai_match_reason'] = 'Kod wariantu karty z zapytania klienta.';
+            } elseif ($missingCodes === []) {
                 $row['ai_match_percent'] = min(99, max(80, $this->modelFuzzy->score($query, $product)));
                 // Kod przepisany przez klienta nie ma literówki — stary opis sugerował zgadywanie.
                 $row['ai_match_reason'] = $this->modelFuzzy->matchesDeclaredCode($query, $product)
@@ -5904,6 +5908,11 @@ final class ProductAiSearchService
             $pa = $products->firstWhere('id', (int) ($a['id'] ?? 0));
             $pb = $products->firstWhere('id', (int) ($b['id'] ?? 0));
             if ($pa instanceof Product && $pb instanceof Product) {
+                $byVariantCode = (int) $this->modelFuzzy->variantCodeWrittenInQuery($query, $pb)
+                    <=> (int) $this->modelFuzzy->variantCodeWrittenInQuery($query, $pa);
+                if ($byVariantCode !== 0) {
+                    return $byVariantCode;
+                }
                 $byType = $this->namedModelTypeScore($query, $pb) <=> $this->namedModelTypeScore($query, $pa);
                 if ($byType !== 0) {
                     return $byType;
