@@ -5520,7 +5520,7 @@ SYS,
             // statusem no_pages dla tych samych źródeł
             $outage = $this->engineOutageDetail(implode(' | ', array_slice($searchErrors, 0, 2)));
             if ($outage !== null) {
-                throw new RuntimeException('Wyszukiwarka nie odpowiedziała przy uzupełnianiu opisu '.$product->sku
+                throw new B2bSupplementSearchOutage('Wyszukiwarka nie odpowiedziała przy uzupełnianiu opisu '.$product->sku
                     .' — nie wiadomo, czy strona wyrobu istnieje. '.$outage);
             }
             $this->attemptLog()->add('desc', 'uzupełnienie opisu B2B: brak potwierdzonej strony wyrobu');

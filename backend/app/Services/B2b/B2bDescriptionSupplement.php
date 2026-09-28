@@ -455,10 +455,14 @@ final class B2bDescriptionSupplement
         $out = [];
         $rows = B2bDescriptionSupplementAttempt::query()
             ->where('b2b_account_id', $accountId)
-            // błąd powtarzający się dla tego samego wejścia (model, strona) też kończy ponowienia przy synchronizacji
+            // błąd powtarzający się dla tego samego wejścia (model, strona) też kończy ponowienia przy synchronizacji;
+            // karta czekająca w kolejce (także po przerwie wyszukiwarki) nie jest kandydatem drugi raz — zlecenie z
+            // ostatniej doby uznajemy za żywe (dłuższe czekanie = job zgubiony, karta wraca do kandydatów)
             ->where(static fn ($q) => $q->whereIn('status', B2bDescriptionSupplementAttempt::FINAL_STATUSES)
                 ->orWhere(static fn ($f) => $f->where('status', B2bDescriptionSupplementAttempt::STATUS_FAILED)
-                    ->where('attempts', '>=', B2bDescriptionSupplementAttempt::MAX_FAILED_ATTEMPTS)))
+                    ->where('attempts', '>=', B2bDescriptionSupplementAttempt::MAX_FAILED_ATTEMPTS))
+                ->orWhere(static fn ($f) => $f->where('status', B2bDescriptionSupplementAttempt::STATUS_QUEUED)
+                    ->where('updated_at', '>=', now()->subDay())))
             ->where('hosts_sha1', $hostsSha1)
             ->toBase()
             ->get(['product_id', 'source_sha1']);

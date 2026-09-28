@@ -21,6 +21,7 @@ use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bSupplementContext;
 use App\Services\Enrichment\B2bSourcesDescriptionRejected;
 use App\Services\Enrichment\B2bSupplementNoPages;
+use App\Services\Enrichment\B2bSupplementSearchOutage;
 use App\Services\Enrichment\ProductEnrichmentService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -131,6 +132,43 @@ final class SupplementB2bDescriptionJobTest extends TestCase
         $this->assertNull($attempt->message);
         // opis już nie jest tekstem z B2B — karta nie wraca do uzupełniania
         $this->assertSame([], app(B2bDescriptionSupplement::class)->candidateIds($this->account, false));
+    }
+
+    public function test_search_outage_requeues_the_card_without_counting_an_attempt(): void
+    {
+        Queue::fake();
+        [$card, $before] = $this->untouchedSetup();
+        $this->enrichment->shouldReceive('supplementB2bDescription')->once()
+            ->andThrow(new B2bSupplementSearchOutage('Wyszukiwarka nie odpowiedziała przy uzupełnianiu opisu R-1'));
+
+        $this->runJob($card);
+
+        $this->assertUntouched($card, $before);
+        $attempt = $this->attemptOf($card);
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_QUEUED, $attempt->status);
+        $this->assertSame(0, $attempt->attempts);
+        $this->assertStringStartsWith('Wyszukiwarka niedostępna — ponowię o ', (string) $attempt->message);
+        Queue::assertPushed(SupplementB2bDescriptionJob::class, fn (SupplementB2bDescriptionJob $job): bool => $job->productId === (int) $card->id
+            && $job->outageWaitSince !== null
+            && $job->delay !== null);
+        // czekająca karta nie jest kandydatem drugi raz
+        $this->assertSame([], app(B2bDescriptionSupplement::class)->candidateIds($this->account));
+    }
+
+    public function test_search_outage_after_the_wait_budget_is_a_failure(): void
+    {
+        Queue::fake();
+        [$card] = $this->untouchedSetup();
+        $this->enrichment->shouldReceive('supplementB2bDescription')->once()
+            ->andThrow(new B2bSupplementSearchOutage('Wyszukiwarka nie odpowiedziała'));
+
+        $since = now()->getTimestamp() - SupplementB2bDescriptionJob::OUTAGE_WAIT_BUDGET_SECONDS;
+        app()->call([new SupplementB2bDescriptionJob((int) $card->id, (int) $this->account->id, $since), 'handle']);
+
+        $attempt = $this->attemptOf($card);
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_FAILED, $attempt->status);
+        $this->assertSame(1, $attempt->attempts);
+        Queue::assertNothingPushed();
     }
 
     public function test_trace_marks_variant_gate_and_keeps_previous_payload(): void

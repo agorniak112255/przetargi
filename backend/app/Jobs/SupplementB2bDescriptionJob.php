@@ -12,6 +12,7 @@ use App\Services\B2b\B2bDescriptionSupplement;
 use App\Services\B2b\B2bSupplementContext;
 use App\Services\Enrichment\B2bSourcesDescriptionRejected;
 use App\Services\Enrichment\B2bSupplementNoPages;
+use App\Services\Enrichment\B2bSupplementSearchOutage;
 use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Support\BhpAttributeNormalizer;
@@ -72,10 +73,27 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
 
     public int $uniqueFor = 3600;
 
+    /**
+     * Przerwa wyszukiwarki (B2bSupplementSearchOutage): karta wraca do kolejki po czasie przerwy bezpiecznika SearXNG,
+     * bez liczenia próby — produkcja 28.09.2026: pełna kolejka Bolle wyczerpała silniki i 59 kart skończyło jako błąd.
+     * Budżet czekania dłuższy niż w EnrichProductJob — to praca w tle bez człowieka czekającego na wynik.
+     */
+    public const OUTAGE_RETRY_SECONDS = 600;
+
+    public const OUTAGE_WAIT_BUDGET_SECONDS = 7200;
+
+    /**
+     * Unix time pierwszego czekania na wyszukiwarkę. Zwykłe pole z wartością domyślną, nie parametr promowany: job
+     * zapisany w kolejce przed dodaniem pola nie ma go w danych (patrz DescribeB2bProductFromDatasheetJob::$redo).
+     */
+    public ?int $outageWaitSince = null;
+
     public function __construct(
         public readonly int $productId,
         public readonly int $b2bAccountId,
+        ?int $outageWaitSince = null,
     ) {
+        $this->outageWaitSince = $outageWaitSince;
         $this->onQueue(self::QUEUE);
     }
 
@@ -107,7 +125,7 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
         );
         if ($slot === null) {
             // Limit z Ustawień AI obłożony — karta wraca do kolejki bez zużycia próby.
-            self::dispatch($this->productId, $this->b2bAccountId)->delay(now()->addSeconds(10));
+            self::dispatch($this->productId, $this->b2bAccountId, $this->outageWaitSince)->delay(now()->addSeconds(10));
             $this->delete();
 
             return;
@@ -120,6 +138,24 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
             $result = $enrichment->supplementB2bDescription($product, $context);
         } catch (B2bSupplementNoPages $e) {
             $this->recordAttempt(B2bDescriptionSupplementAttempt::STATUS_NO_PAGES, $context, $e->getMessage());
+
+            return;
+        } catch (B2bSupplementSearchOutage $e) {
+            $since = $this->outageWaitSince ?? now()->getTimestamp();
+            if (now()->getTimestamp() - $since < self::OUTAGE_WAIT_BUDGET_SECONDS) {
+                $retryAt = now()->addSeconds(self::OUTAGE_RETRY_SECONDS);
+                // karta czeka dalej — próba „w kolejce”, bez liczenia (to nie wynik dla tego wejścia)
+                $this->recordAttempt(
+                    B2bDescriptionSupplementAttempt::STATUS_QUEUED,
+                    $context,
+                    'Wyszukiwarka niedostępna — ponowię o '.$retryAt->format('H:i'),
+                    countAttempt: false,
+                );
+                self::dispatch($this->productId, $this->b2bAccountId, $since)->delay($retryAt);
+
+                return;
+            }
+            $this->recordAttempt(B2bDescriptionSupplementAttempt::STATUS_FAILED, $context, $e->getMessage());
 
             return;
         } catch (B2bSourcesDescriptionRejected $e) {

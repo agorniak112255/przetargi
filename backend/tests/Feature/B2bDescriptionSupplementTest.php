@@ -174,6 +174,20 @@ final class B2bDescriptionSupplementTest extends TestCase
         }
     }
 
+    public function test_card_waiting_in_the_queue_is_not_a_candidate_again(): void
+    {
+        $card = $this->card('Q-1', self::SHORT);
+        $this->link($this->account, $card, 'q1', sha1(self::SHORT));
+        $this->attempt($card, B2bDescriptionSupplementAttempt::STATUS_QUEUED, sha1(self::SHORT), $this->account->enrichmentHostsSha1(), 0);
+
+        $this->assertSame([], $this->service()->candidateIds($this->account));
+        $this->assertSame([(int) $card->id], $this->service()->candidateIds($this->account, false));
+
+        // zlecenie sprzed doby — job zgubiony, karta wraca do kandydatów
+        B2bDescriptionSupplementAttempt::query()->update(['updated_at' => now()->subDays(2)]);
+        $this->assertSame([(int) $card->id], $this->service()->candidateIds($this->account));
+    }
+
     public function test_repeated_failures_for_the_same_input_stop_automatic_retries(): void
     {
         $card = $this->card('F-1', self::SHORT);
