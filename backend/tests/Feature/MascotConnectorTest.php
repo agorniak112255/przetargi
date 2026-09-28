@@ -326,7 +326,7 @@ final class MascotConnectorTest extends TestCase
         $summary = implode("\n", $connector->runSummary());
         $this->assertStringNotContainsString('Modele w kilku kolorach', $summary);
         // buty: jedyny kolor z ceną to nie rozdzielenie modelu
-        $this->assertStringContainsString('Modele z kolorami na osobnych kartach (nazwa, rodzaj, kategoria, materiał, opis albo nazwy kolorów się nie zgadzają): 1, np. 19999-249', $summary);
+        $this->assertStringContainsString('Modele z kolorami na osobnych kartach (powód w nawiasie): 1, np. 19999-249 (inny materiał)', $summary);
     }
 
     /**
@@ -379,6 +379,42 @@ final class MascotConnectorTest extends TestCase
         $ean = array_values(array_filter($connector->shopFields($products[0]), static fn ($f): bool => $f->name === 'EAN'))[0]->value;
         $this->assertLessThanOrEqual(ProductShopCard::MAX_VALUE_CHARS, mb_strlen($ean));
         $this->assertStringEndsWith('; … (pełna lista w tabeli wariantów)', $ean);
+    }
+
+    /**
+     * Przebieg 147 na produkcji: nazwy kolorów jednego modelu różnie zapisane i opis pusty po jednej stronie — to dalej
+     * jeden wyrób (artykuł i kod tkaniny). Nazwa karty z koloru wiodącego, opis — pierwszy niepusty; inny opis zostaje
+     * osobno z powodem w podsumowaniu.
+     */
+    public function test_colours_with_differently_written_names_or_one_empty_description_join_and_a_different_description_stays_apart(): void
+    {
+        $jacket = [...self::jacket(), 'Number' => '180012491809', 'Description' => 'Lekka kurtka membranowa. Wodoszczelna.'];
+        $this->addArticle(self::colourOf($jacket, '180012491809', 'ciemny antracyt/czerń', [self::sizeRow('M', '5700000001001', 539, 'G', '')]));
+        $this->addArticle([...self::colourOf($jacket, '1800124933303', 'szary', [self::sizeRow('M', '5700000001002', 539, 'G', '')]), 'Name' => 'Kurtka membranowa, niska waga', 'Description' => '']);
+        $macklin = [...self::jacket(), 'Name' => 'MASCOT® MacKlin na zatrzaski', 'Group' => 'ORIGINALS', 'Type' => 'Kurtka', 'Description' => ''];
+        $this->addArticle(self::colourOf($macklin, '1701465001', 'granat', [self::sizeRow('L', '5700000002001', 399, 'G', '')]));
+        $this->addArticle([...self::colourOf($macklin, '1701465011', 'zieleń butelkowa', [self::sizeRow('L', '5700000002002', 399, 'G', '')]), 'Name' => 'MASCOT® MacKlin', 'Description' => 'Kurtka z kieszeniami. 65% poliester, 35% bawełna.']);
+        $this->addArticle(self::colourOf(self::jacket(), '199992491809', 'ciemny antracyt/czerń', [self::sizeRow('S', '5700000003001', 539, 'G', '')]));
+        $this->addArticle([...self::colourOf(self::jacket(), '19999249010', 'granat', [self::sizeRow('S', '5700000003002', 539, 'G', '')]), 'Description' => 'Ciężka kurtka zimowa z kapturem, ocieplana.']);
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertSame(
+            [
+                ['18001-249', 'Kurtka membranowa MASCOT ACCELERATE 18001-249', 2],
+                ['17014-650', 'MASCOT® MacKlin na zatrzaski MASCOT ORIGINALS 17014-650', 2],
+                ['19999-249-1809', null, 1],
+                ['19999-249-010', null, 1],
+            ],
+            array_map(static fn (B2bRemoteProduct $p): array => [$p->sku, $p->cardName, count($p->members)], $products),
+        );
+        $this->assertSame('Lekka kurtka membranowa. Wodoszczelna.', $connector->description($products[0]));
+        // kolor wiodący 01 bez opisu — karta dostaje opis koloru 11
+        $this->assertSame('Kurtka z kieszeniami. 65% poliester, 35% bawełna.', $connector->description($products[1]));
+        $this->assertStringContainsString('Modele z kolorami na osobnych kartach (powód w nawiasie): 1, np. 19999-249 (inny opis)', implode('
+', $connector->runSummary()));
     }
 
     public function test_missing_translation_is_an_empty_field_and_hidden_or_unpriced_sizes_stay_off_the_card(): void

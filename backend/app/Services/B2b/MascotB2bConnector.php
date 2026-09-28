@@ -7,6 +7,7 @@ namespace App\Services\B2b;
 use App\Models\B2bAccount;
 use App\Models\ProductIdentifier;
 use App\Models\ProductShopCard;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
@@ -28,8 +29,9 @@ use RuntimeException;
  * dotąd: SKU = kod artykułu z myślnikami („18001-249-1809”), nazwa z kolorem, pozycja = rozmiar. Model w kilku kolorach
  * (modelProducts) = SKU kodu modelu („18001-249”), nazwa nowej karty bez koloru (cardName), pozycja = kolor × rozmiar
  * z etykietą „{kolor z portalu} / {rozmiar}” i kodem „18001-249-1809 S”. Łączymy ostrożnie: tylko pozycje listy o tym
- * samym artykule i jakości, które w szczegółach mają tę samą nazwę, kolekcję, rodzaj, kategorię, materiał i opis,
- * różne nazwy kolorów i różne EAN-y — inaczej każdy kolor zostaje osobną kartą (lista w podsumowaniu przebiegu).
+ * samym artykule i jakości (kod tkaniny), które w szczegółach mają ten sam rodzaj, kategorię i materiał, zgodny opis
+ * (albo pusty po jednej stronie), różne nazwy kolorów i różne EAN-y — inaczej każdy kolor zostaje osobną kartą
+ * (lista z powodem w podsumowaniu przebiegu); nazwa nie decyduje (modelDifference).
  * Pozycje (members): remote_id = EAN rozmiaru (jak dotąd — powiązania kart zostają), z etykietą, ceną i dostępnością;
  * cena karty = najniższa cena pozycji (raw['price'], price()), pozostałe ceny — wiersze karty. Dawne karty (kolor,
  * a do 28.09.2026 — decyzja 15.09.2026 — rozmiar w innej cenie, „18001-249-1809 3XL”) zostają, dopóki nie scali ich
@@ -67,6 +69,9 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
 
     private const SHOP_SECTION = 'Informacje z portalu Mascot';
 
+    /** Podobieństwo opisów kolorów jednego modelu po normalizacji (sameDescription). */
+    private const DESCRIPTION_SIMILARITY = 0.97;
+
     private int $total = 0;
 
     /** Karty modeli w kilku kolorach w przebiegu i liczba ich kolorów (runSummary). */
@@ -74,7 +79,7 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
 
     private int $colourArticles = 0;
 
-    /** @var list<string> kody modeli, których kolory zostały osobnymi kartami (szczegóły kolorów się różnią) */
+    /** @var list<string> kody modeli, których kolory zostały osobnymi kartami, z powodem („18001-249 (inny materiał)”) */
     private array $splitModels = [];
 
     /** @var list<string> */
@@ -201,7 +206,7 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
             $lines[] = 'Modele w kilku kolorach: '.$this->colourCards.' kart z '.$this->colourArticles.' artykułów w kolorach (tabela kolor × rozmiar)';
         }
         if ($this->splitModels !== []) {
-            $lines[] = 'Modele z kolorami na osobnych kartach (nazwa, rodzaj, kategoria, materiał, opis albo nazwy kolorów się nie zgadzają): '.self::listing($this->splitModels);
+            $lines[] = 'Modele z kolorami na osobnych kartach (powód w nawiasie): '.self::listing($this->splitModels);
         }
         $lines[] = 'Portal podaje jedną cenę rozmiaru (przyjęta jako cena konta) i nie podaje ceny katalogowej ani norm';
         if ($this->sizesWithoutPrice !== []) {
@@ -534,37 +539,108 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
             // błąd odczytu któregoś koloru — model stoi w tym przebiegu (modelNotRead)
             return $articles !== [] ? [$this->modelNotRead($articles, $failed), ...$skipped] : $skipped;
         }
-        if (count($articles) >= 2 && self::sameModel($articles)) {
+        $difference = count($articles) >= 2 ? self::modelDifference($articles) : null;
+        if (count($articles) >= 2 && $difference === null) {
             return [$this->colourProduct($articles), ...$skipped];
         }
-        if (count($articles) >= 2) {
-            $this->splitModels[] = (string) self::modelCode($group[0]['number']);
+        if ($difference !== null) {
+            $this->splitModels[] = self::modelCode($group[0]['number']).' ('.$difference.')';
         }
 
         return [...array_map(fn (array $article): B2bRemoteProduct => $this->articleProduct($article), $articles), ...$skipped];
     }
 
     /**
-     * Kolory to ten sam wyrób, gdy szczegóły każdego podają tę samą nazwę modelu (nazwa, kolekcja, kod modelu), rodzaj,
-     * kategorię, materiał i opis (karta dostaje opis jednego koloru), a kolory różnią się nazwą (bez wielkości liter —
-     * inaczej wiersze tabeli byłyby nie do odróżnienia) i nie dzielą EAN-u.
+     * Czy kolory to ten sam wyrób — u Mascot artykuł i jakość (kod tkaniny) wyznaczają wyrób, a kolory różnią się numerem
+     * koloru; nazwy kolorów w portalu bywają różnie zapisane („Kurtka membranowa” / „Kurtka membranowa, niska waga”),
+     * więc nazwa nie decyduje (nazwa karty — z koloru wiodącego). Muszą się zgadzać: rodzaj, kategoria i materiał
+     * (po normalizacji: małe litery bez znaków diakrytycznych, same litery i cyfry), opis (sameDescription; pusty po
+     * jednej stronie się nie liczy — karta dostaje pierwszy niepusty), nazwy kolorów różne (bez wielkości liter —
+     * inaczej wiersze tabeli byłyby nie do odróżnienia) i żaden wspólny EAN.
      *
      * @param  list<array{row: array{number: string, name: string, image: string}, detail: array<string, mixed>, sizes: list<array{size: string, ean: string, cents: int, availability: string}>}>  $articles
+     * @return string|null powód rozdzielenia do podsumowania przebiegu; null = ten sam wyrób
      */
-    private static function sameModel(array $articles): bool
+    private static function modelDifference(array $articles): ?string
     {
-        $models = [];
-        $colours = [];
-        $eans = [];
-        foreach ($articles as ['row' => $row, 'detail' => $detail, 'sizes' => $sizes]) {
-            $models[] = implode("\x1F", [self::modelName($row, $detail), $detail['type'], $detail['category'], $detail['quality'], $detail['description']]);
-            $colours[] = mb_strtolower(self::colourLabel($row, $detail));
-            array_push($eans, ...array_column($sizes, 'ean'));
+        foreach (['type' => 'inny rodzaj', 'category' => 'inna kategoria', 'quality' => 'inny materiał'] as $field => $reason) {
+            $values = array_map(static fn (array $a): string => self::normalised((string) $a['detail'][$field]), $articles);
+            if (count(array_unique($values)) > 1) {
+                return $reason;
+            }
+        }
+        $descriptions = array_values(array_filter(
+            array_map(static fn (array $a): string => (string) $a['detail']['description'], $articles),
+            static fn (string $d): bool => $d !== '',
+        ));
+        foreach ($descriptions as $i => $description) {
+            foreach (array_slice($descriptions, $i + 1) as $other) {
+                if (! self::sameDescription($description, $other)) {
+                    return 'inny opis';
+                }
+            }
+        }
+        $colours = array_map(static fn (array $a): string => mb_strtolower(self::colourLabel($a['row'], $a['detail'])), $articles);
+        if (count(array_unique($colours)) !== count($colours)) {
+            return 'powtórzona nazwa koloru';
+        }
+        $eans = array_merge(...array_map(static fn (array $a): array => array_column($a['sizes'], 'ean'), $articles));
+
+        return count(array_unique($eans)) !== count($eans) ? 'wspólny EAN' : null;
+    }
+
+    /**
+     * Opisy kolorów to ten sam tekst: procenty i gramatury co do jednej, reszta (po normalizacji) podobna co najmniej
+     * w DESCRIPTION_SIMILARITY — drobne różnice zapisu w portalu, nie inna treść.
+     */
+    private static function sameDescription(string $a, string $b): bool
+    {
+        if (self::descriptionNumbers($a) !== self::descriptionNumbers($b)) {
+            return false;
+        }
+        $x = self::normalised($a);
+        $y = self::normalised($b);
+        if ($x === $y) {
+            return true;
+        }
+        $longest = max(strlen($x), strlen($y));
+        // odległość jest nie mniejsza niż różnica długości — bez liczenia, gdy już ona przekracza próg
+        if (abs(strlen($x) - strlen($y)) > (1 - self::DESCRIPTION_SIMILARITY) * $longest) {
+            return false;
         }
 
-        return count(array_unique($models)) === 1
-            && count(array_unique($colours)) === count($colours)
-            && count(array_unique($eans)) === count($eans);
+        return 1 - levenshtein($x, $y) / $longest >= self::DESCRIPTION_SIMILARITY;
+    }
+
+    /**
+     * Procenty („35%”) i gramatury („155 g/m2”, „190 gr/m²”) opisu — posortowane, z powtórzeniami.
+     *
+     * @return list<string>
+     */
+    private static function descriptionNumbers(string $text): array
+    {
+        $numbers = [];
+        // „35,0” = „35.0” = „35”
+        $number = static fn (string $value): string => (string) (float) str_replace(',', '.', $value);
+        if (preg_match_all('/(\d+(?:[.,]\d+)?)\s*%/u', $text, $m) > 0) {
+            foreach ($m[1] as $value) {
+                $numbers[] = '%'.$number($value);
+            }
+        }
+        if (preg_match_all('/(\d+(?:[.,]\d+)?)\s*gr?\s*\/\s*m\s*(?:2|²)/iu', $text, $m) > 0) {
+            foreach ($m[1] as $value) {
+                $numbers[] = 'g'.$number($value);
+            }
+        }
+        sort($numbers);
+
+        return $numbers;
+    }
+
+    /** Tekst do porównania: małe litery bez znaków diakrytycznych, tylko litery i cyfry. */
+    private static function normalised(string $text): string
+    {
+        return (string) preg_replace('/[^a-z0-9]/', '', strtolower(Str::ascii($text)));
     }
 
     /**
@@ -688,7 +764,7 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
      * Karta modelu w kilku kolorach (decyzja użytkownika 28.09.2026 wieczór): pozycja = kolor × rozmiar z ceną konta,
      * etykieta „{kolor z portalu} / {rozmiar}”, kod „18001-249-1809 S” (z kodem koloru), remote_id = EAN jak dotąd.
      * Kolor wiodący = najniższy numer (niezależny od cen): jego pierwszy rozmiar daje remoteId, jego nazwa — nazwę ze
-     * źródła, jego szczegóły — opis. SKU = kod modelu („18001-249” — inny niż kody kart kolorów, więc nie koliduje z nimi
+     * źródła i nazwę karty (bez koloru); opis — pierwszy niepusty w kolejności kolorów. SKU = kod modelu („18001-249” — inny niż kody kart kolorów, więc nie koliduje z nimi
      * w przebiegu), nazwa nowej karty bez koloru. Numer koloru z portalu (identyfikator) przy pierwszym rozmiarze koloru
      * — tam, gdzie leżał na karcie koloru (jej remoteId), więc dawna karta koloru zachowuje swój numer.
      *
@@ -765,7 +841,11 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
                 // kolor jednego artykułu nie opisuje karty — kolory są w tabeli pozycji
                 'color' => '',
                 'category' => $leadDetail['category'],
-                'description' => $leadDetail['description'],
+                // pierwszy niepusty opis w kolejności kolorów (wiodący pierwszy) — opisy kolorów są zgodne (modelDifference)
+                'description' => (string) (array_values(array_filter(
+                    array_map(static fn (array $a): string => (string) $a['detail']['description'], $articles),
+                    static fn (string $d): bool => $d !== '',
+                ))[0] ?? ''),
                 'image_url' => $images[0]['url'],
                 // zdjęcie koloru dla dawnej karty koloru (image())
                 'colour_images' => $images,
