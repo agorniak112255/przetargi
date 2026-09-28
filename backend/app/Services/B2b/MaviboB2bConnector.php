@@ -7,6 +7,7 @@ namespace App\Services\B2b;
 use App\Models\B2bAccount;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
+use App\Models\ProductShopCard;
 use DOMDocument;
 use DOMElement;
 use DOMNode;
@@ -29,25 +30,37 @@ use RuntimeException;
  * od jej ceny konta albo kombinacja, której strona gościa nie zna, to rozmiar bez ceny katalogowej (liczone
  * w podsumowaniu) — ceny innej kombinacji nie przepisujemy.
  *
- * Karta = kolor modelu ze wszystkimi rozmiarami z ceną konta (decyzja użytkownika 28.09.2026: rozmiary w różnych
- * cenach to jedna karta; tu typowo XS–XXL w jednej cenie, 3XL i większe drożej). Kolor (i inne cechy poza rozmiarem)
- * nadal rozdziela karty — biały bywa tańszy od kolorów, ale to inny wyrób. Do 28.09.2026 (decyzja 15.09.2026) rozmiar
- * w innej cenie był osobną kartą z indeksem pierwszego rozmiaru („51005_26_3XL”) — takie karty zostają, dopóki nie
- * scali ich osobne polecenie (synchronizacja daje każdej jej rozmiary, B2bCatalogSync::syncMembersByCard).
+ * Karta = model (strona wyrobu) ze wszystkimi kombinacjami kolor × rozmiar z ceną konta (decyzja użytkownika
+ * 28.09.2026 wieczorem: kolory jednego modelu to jedna karta z tabelą wariantów, jak rozmiary w różnych cenach; tu
+ * typowo XS–XXL w jednej cenie, 3XL i większe drożej, biały bywa tańszy od kolorów). Łączymy tylko to, co sklep sam
+ * podaje jako jeden wyrób: kombinacje jednej strony, których jedyną cechą poza rozmiarem jest „Kolor” (niepusty),
+ * bez powtórzonej pary kolor–rozmiar; inaczej (inna cecha w tabeli, kombinacja bez koloru) karta na kolor jak dotąd
+ * (liczone w podsumowaniu). Model w jednym kolorze — karta jak dotąd („…, kolor 21”, SKU z indeksu koloru).
+ * Do 28.09.2026 karta była kolorem modelu, a jeszcze wcześniej (decyzja 15.09.2026) rozmiar w innej cenie był osobną
+ * kartą („51005_26_3XL”) — takie karty zostają, dopóki nie scali ich „Scal rozmiary” (synchronizacja daje każdej jej
+ * pozycje, B2bCatalogSync::syncMembersByCard; zdjęcia i pliki tylko jej kolorów — imageUrls/documents liczą je
+ * z pozycji produktu).
  * Pozycje (members) i remote_id = klucz kombinacji ze sklepu „{id wyrobu}_{id kombinacji}” (np. „368_6076”) — indeksy
  * sklepu nie nadają się na klucz: bywają puste („—”) i niespójne w jednym modelu („21172 20 XS” obok „21172_20_S”) —
- * z rozmiarem, dostępnością i ceną kombinacji (konta i katalogowa); cena karty = najniższa cena rozmiaru
- * (raw['price'], price()), pozostałe ceny — wiersze rozmiarów karty. Sklep podaje ceny tylko w zł (inny zapis =
- * kombinacja bez ceny) i nie podaje jednostki sprzedaży przy kombinacji. Promocja sklepu jest opisem karty (tabelka
- * sklepu): wspólna dla wszystkich rozmiarów — jak dotąd, różna — wypisana przy rozmiarach, których dotyczy.
- * SKU: indeks bez rozmiaru („51005_21”), gdy wszystkie rozmiary koloru dają ten sam (różnica tylko spacja/podkreślnik
- * to ten sam indeks); inaczej indeks pierwszego rozmiaru karty; kombinacja bez indeksu — „MAVIBO {klucz kombinacji}”.
+ * z etykietą wiersza, dostępnością i ceną kombinacji (konta i katalogowa); cena karty = najniższa cena kombinacji
+ * (raw['price'], price()), pozostałe ceny — wiersze wariantów karty. Etykieta wiersza karty z kolorami: „kolor 21 / S”
+ * (wyrób bez rozmiaru — „kolor 21”); sklep nazywa kolory tylko numerami (także w JSON-ie listy i data-product,
+ * sprawdzone 28.09.2026), więc nazwy barwy nie dopisujemy — próbka koloru (#hex) to nie nazwa. Karta jednego koloru:
+ * etykieta = rozmiar, jak dotąd. Sklep podaje ceny tylko w zł (inny zapis = kombinacja bez ceny) i nie podaje
+ * jednostki sprzedaży przy kombinacji. Promocja sklepu jest opisem karty (tabelka sklepu): wspólna dla wszystkich
+ * kombinacji — jak dotąd, różna — wypisana przy wierszach, których dotyczy.
+ * SKU karty z kolorami: model z data-product („51005” — kod rodziny bez koloru i rozmiaru), zajęty w przebiegu albo
+ * pusty — „MAVIBO {id wyrobu}”; nazwa nowej karty bez koloru (cardName, „PROMOSTARS NIMBO 51005”), nazwa ze źródła =
+ * nazwa pierwszego koloru jak dotąd. SKU karty jednego koloru: indeks bez rozmiaru („51005_21”), gdy wszystkie
+ * rozmiary koloru dają ten sam (różnica tylko spacja/podkreślnik to ten sam indeks); inaczej indeks pierwszego
+ * rozmiaru karty; kombinacja bez indeksu — „MAVIBO {klucz kombinacji}”.
  *
  * Opis: pole „description_short” (gramatura, skład) i „description” (opis z tabelą wymiarów) dosłownie, bez
  * obrazków (logo marki, ikony). Pliki: załączniki wyrobu („KARTA PRODUKTU 51005 26” — PDF albo JPG); plik przypisany
- * kolorowi (numer koloru na końcu nazwy albo w nazwie pliku) trafia tylko na karty tego koloru. Zdjęcia: galeria
- * kombinacji z okna podglądu tabeli (osobna dla każdego koloru). Sklep nie podaje norm ani certyfikatów — łącznik
- * ich nie dopisuje.
+ * kolorowi (numer koloru na końcu nazwy albo w nazwie pliku) trafia tylko na karty z tym kolorem. Zdjęcia: galeria
+ * kombinacji z okna podglądu tabeli (osobna dla każdego koloru); karta z kolorami — galeria pierwszego koloru, potem
+ * pierwsze zdjęcie każdego następnego, potem reszta. Sklep nie podaje norm ani certyfikatów — łącznik ich nie
+ * dopisuje.
  *
  * Producent: marka wyrobu ze sklepu (manufacturer_name); wyrób bez marki — „MAVIBO” (liczone w podsumowaniu).
  */
@@ -110,6 +123,14 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     /** kolory z rozmiarami w różnych cenach (jedna karta, cena od najniższej) */
     private int $multiPriceProducts = 0;
 
+    /** modele w kilku kolorach jako jedna karta i liczba ich kolorów */
+    private int $colourModels = 0;
+
+    private int $colourCount = 0;
+
+    /** @var list<string> modele w kilku kolorach zostawione jako karty kolorów (nazwa i powód) */
+    private array $colourKept = [];
+
     private int $skippedProducts = 0;
 
     /** @var (callable(string): void)|null */
@@ -160,6 +181,9 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
         $this->skus = [];
         $this->cards = 0;
         $this->multiPriceProducts = 0;
+        $this->colourModels = 0;
+        $this->colourCount = 0;
+        $this->colourKept = [];
         $this->skippedProducts = 0;
 
         if (! $this->client->isLoggedIn()) {
@@ -192,6 +216,12 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
             $this->multiPriceProducts,
             $this->skippedProducts,
         );
+        if ($this->colourModels > 0) {
+            $lines[] = 'Modele w kilku kolorach — jedna karta z tabelą kolor × rozmiar: '.$this->colourModels.' ('.$this->colourCount.' kolorów)';
+        }
+        if ($this->colourKept !== []) {
+            $lines[] = 'Modele w kilku kolorach zostawione jako karty kolorów: '.self::listing($this->colourKept);
+        }
         if ($this->withoutBrand !== []) {
             $lines[] = 'Bez marki w sklepie — producent przyjęty jako '.self::FALLBACK_BRAND.': '.count($this->withoutBrand);
         }
@@ -268,8 +298,8 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     }
 
     /**
-     * Model, indeksy rozmiarów, kolor, cechy wyrobu, kategoria, VAT i dostępność kombinacji — wszystko z raz
-     * pobranej strony; metoda niczego nie pobiera.
+     * Model, indeksy kombinacji, kolor (tylko karta jednego koloru), cechy wyrobu, kategoria, VAT i dostępność
+     * kombinacji — wszystko z raz pobranej strony; metoda niczego nie pobiera.
      *
      * @return list<B2bRemoteShopField>
      */
@@ -305,14 +335,57 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     }
 
     /**
+     * Załączniki wyrobu bez koloru i przypisane kolorom pozycji tego produktu (productColours) — dawna karta koloru
+     * dostaje od synchronizacji tylko swoje pozycje, więc nie dostaje pliku innego koloru.
+     *
      * @return list<B2bRemoteDocument>
      */
     public function documents(B2bRemoteProduct $product): array
     {
-        return array_map(
-            static fn (array $file): B2bRemoteDocument => new B2bRemoteDocument($file['title'], $file['url'], $file['kind']),
-            $product->raw['documents'] ?? [],
-        );
+        $colours = self::productColours($product);
+        $documents = [];
+        foreach ($product->raw['documents'] ?? [] as $file) {
+            $named = $file['colours'] ?? [];
+            if ($named !== [] && $colours !== null && array_intersect($named, $colours) === []) {
+                continue;
+            }
+            $documents[] = new B2bRemoteDocument($file['title'], $file['url'], $file['kind']);
+        }
+
+        return array_slice($documents, 0, self::DOCUMENTS_LIMIT);
+    }
+
+    /**
+     * Kolory (małymi literami) pozycji, które opisuje ten produkt: members, bez nich — pozycja remoteId, w kolejności
+     * pozycji. Liczone z produktu, nie z całej strony (B2bCatalogSync::syncMembersByCard podaje dawnej karcie tylko jej
+     * pozycje). null — kolor którejś pozycji nieznany: bez filtrowania.
+     *
+     * @return list<string>|null
+     */
+    private static function productColours(B2bRemoteProduct $product): ?array
+    {
+        $known = $product->raw['member_colours'] ?? [];
+        $colours = [];
+        foreach (self::productPositions($product) as $id) {
+            if (! isset($known[$id])) {
+                return null;
+            }
+            $colours[$known[$id]] = true;
+        }
+
+        return array_map('strval', array_keys($colours));
+    }
+
+    /**
+     * Klucze kombinacji produktu: members, bez nich — remoteId.
+     *
+     * @return list<string>
+     */
+    private static function productPositions(B2bRemoteProduct $product): array
+    {
+        return $product->members !== []
+            ? array_map(static fn (array $member): string => (string) ($member['remote_id'] ?? ''), $product->members)
+            : [$product->remoteId];
     }
 
     /**
@@ -329,11 +402,40 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     }
 
     /**
+     * Galerie kombinacji tego produktu (productPositions — dawna karta koloru tylko swoje), bez powtórzeń. Jeden
+     * kolor — galerie w kolejności pozycji (kolor ma zwykle jedną wspólną galerię). Kilka kolorów — cała galeria
+     * pierwszego koloru, potem pierwsze zdjęcie każdego następnego koloru, potem reszta, żeby limit pokazał
+     * możliwie wiele kolorów.
+     *
      * @return list<string>
      */
     public function imageUrls(B2bRemoteProduct $product): array
     {
-        return $product->raw['image_urls'] ?? [];
+        $images = $product->raw['member_images'] ?? [];
+        $colours = $product->raw['member_colours'] ?? [];
+        /** @var array<string, array<string, true>> $galleries */
+        $galleries = [];
+        foreach (self::productPositions($product) as $id) {
+            foreach ($images[$id] ?? [] as $url) {
+                $galleries[(string) ($colours[$id] ?? '')][$url] = true;
+            }
+        }
+        $galleries = array_values(array_map(static fn (array $urls): array => array_keys($urls), $galleries));
+        if ($galleries === []) {
+            return [];
+        }
+
+        $urls = array_fill_keys($galleries[0], true);
+        foreach (array_slice($galleries, 1) as $gallery) {
+            $urls[$gallery[0]] = true;
+        }
+        foreach (array_slice($galleries, 1) as $gallery) {
+            foreach ($gallery as $url) {
+                $urls[$url] = true;
+            }
+        }
+
+        return array_slice(array_map('strval', array_keys($urls)), 0, self::IMAGES_LIMIT);
     }
 
     public function imageAt(string $url): ?B2bRemoteImage
@@ -545,32 +647,75 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
         /** @var array<string, list<array<string, mixed>>> $colors */
         $colors = [];
         foreach ($priced as $combination) {
+            $base = $catalog[$combination['key']] ?? null;
+            // cena katalogowa kombinacji niższa od jej ceny konta nie jest ceną przed rabatem — kombinacja
+            // zostaje bez niej
+            $combination['base'] = $base !== null && $base > $combination['cents'] ? $base : null;
+            if ($combination['base'] === null) {
+                $this->withoutBase[] = $combination['reference'] !== '' ? $combination['reference'] : $combination['key'];
+            }
             $colors[self::colorKey($combination)][] = $combination;
         }
-
-        $products = [];
-        foreach ($colors as $combinations) {
-            $group = [];
-            foreach ($combinations as $combination) {
-                $base = $catalog[$combination['key']] ?? null;
-                // cena katalogowa kombinacji niższa od jej ceny konta nie jest ceną przed rabatem — kombinacja
-                // zostaje bez niej
-                $combination['base'] = $base !== null && $base > $combination['cents'] ? $base : null;
-                if ($combination['base'] === null) {
-                    $this->withoutBase[] = $combination['reference'] !== '' ? $combination['reference'] : $combination['key'];
-                }
-                $group[] = $combination;
-            }
+        foreach ($colors as $group) {
             $this->multiPriceProducts += count(array_unique(array_column($group, 'cents'))) > 1 ? 1 : 0;
-            $code = self::colorCode(array_map(
-                static fn (array $c): array => ['reference' => $c['reference'], 'size' => $c['size']],
-                $combinations,
-            ));
-            $products[] = $this->productFor($row, $page, $group, $code);
+        }
+
+        $blocker = count($colors) > 1 ? self::colourMergeBlocker($priced) : null;
+        if (count($colors) > 1 && $blocker === null) {
+            // kolory w kolejności pierwszego wystąpienia w tabeli, w kolorze — kolejność tabeli
+            $this->colourModels++;
+            $this->colourCount += count($colors);
+            $products = [$this->productFor($row, $page, array_merge(...array_values($colors)), null, true)];
+        } else {
+            if ($blocker !== null) {
+                $this->colourKept[] = $page['name'].' ('.$blocker.')';
+            }
+            $products = [];
+            foreach ($colors as $group) {
+                $code = self::colorCode(array_map(
+                    static fn (array $c): array => ['reference' => $c['reference'], 'size' => $c['size']],
+                    $group,
+                ));
+                $products[] = $this->productFor($row, $page, $group, $code, false);
+            }
         }
         $this->cards += count($products);
 
         return $products;
+    }
+
+    /**
+     * Czy kombinacje z ceną można podać jako jedną kartę z kolorami — powód, dla którego nie, albo null. Łączymy
+     * tylko to, co sklep sam podaje jako jeden wyrób różniący się kolorem: jedyną cechą kombinacji poza rozmiarem jest
+     * „Kolor” (niepusty), a para kolor–rozmiar się nie powtarza (inaczej nie wiadomo, który wiersz jest którym).
+     *
+     * @param  list<array<string, mixed>>  $combinations
+     */
+    private static function colourMergeBlocker(array $combinations): ?string
+    {
+        $seen = [];
+        foreach ($combinations as $combination) {
+            $other = array_values(array_filter(
+                $combination['attributes'],
+                static fn (array $pair): bool => mb_strtolower($pair[0]) !== self::ATTRIBUTE_SIZE,
+            ));
+            if (count($other) !== 1 || mb_strtolower($other[0][0]) !== self::ATTRIBUTE_COLOR || $combination['color'] === '') {
+                return 'kombinacja '.($combination['reference'] !== '' ? $combination['reference'] : $combination['key']).' ma cechy inne niż kolor i rozmiar albo nie ma koloru';
+            }
+            $pair = mb_strtolower($combination['color']).'|'.mb_strtolower($combination['size']);
+            if (isset($seen[$pair])) {
+                return 'powtórzony kolor '.$combination['color'].' w rozmiarze '.($combination['size'] !== '' ? $combination['size'] : '—');
+            }
+            $seen[$pair] = true;
+        }
+
+        return null;
+    }
+
+    /** Etykieta wiersza karty z kolorami: „kolor 21 / S”, wyrób bez rozmiaru — „kolor 21” (kolor dosłownie ze sklepu). */
+    private static function colourRowLabel(array $combination): string
+    {
+        return 'kolor '.$combination['color'].($combination['size'] !== '' ? ' / '.$combination['size'] : '');
     }
 
     /**
@@ -603,42 +748,59 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     }
 
     /**
-     * Karta koloru: kombinacje z ceną konta jako pozycje (members), każda ze swoją ceną konta i — gdy strona gościa
-     * podała ją dla tej kombinacji i jest wyższa od ceny konta — swoją ceną katalogową. Cena karty (raw price,
-     * base_price) = najtańsza kombinacja (remis — self::cheapest), tak jak liczy ją
-     * B2bCatalogSync.
+     * Karta: kombinacje z ceną konta jako pozycje (members), każda ze swoją ceną konta i — gdy strona gościa podała ją
+     * dla tej kombinacji i jest wyższa od ceny konta — swoją ceną katalogową. Cena karty (raw price, base_price) =
+     * najtańsza kombinacja (remis — self::cheapest), tak jak liczy ją B2bCatalogSync.
+     *
+     * Karta jednego koloru ($colours = false) — jak dotąd: nazwa „…, kolor 21”, SKU z indeksu koloru, etykieta
+     * wiersza = rozmiar, cechy kombinacji (kolor, próbka) w tabelce. Karta z kolorami — SKU z modelu, nazwa nowej karty
+     * bez koloru (cardName), nazwa ze źródła i nazwy pozycji jak dotąd (kolor pozycji w nazwie), etykieta wiersza
+     * „kolor 21 / S”; kolor i próbka koloru jednej kombinacji nie idą do tabelki — opisałyby jeden kolor całej karty.
      *
      * @param  array{id: string, url: string, name: string}  $row
      * @param  array<string, mixed>  $page
-     * @param  non-empty-list<array<string, mixed>>  $group  kombinacje koloru z ceną konta (cents) i katalogową (base albo null)
+     * @param  non-empty-list<array<string, mixed>>  $group  kombinacje z ceną konta (cents) i katalogową (base albo null)
      */
-    private function productFor(array $row, array $page, array $group, ?string $code): B2bRemoteProduct
+    private function productFor(array $row, array $page, array $group, ?string $code, bool $colours): B2bRemoteProduct
     {
         $first = $group[0];
-        $sku = $this->uniqueSku(array_values(array_filter([
-            $code,
-            $first['reference'] !== '' ? $first['reference'] : null,
-            self::FALLBACK_BRAND.' '.$first['key'],
-        ])));
+        $sku = $this->uniqueSku(array_values(array_filter($colours
+            ? [$page['model'] !== '' ? $page['model'] : null, self::FALLBACK_BRAND.' '.$row['id']]
+            : [
+                $code,
+                $first['reference'] !== '' ? $first['reference'] : null,
+                self::FALLBACK_BRAND.' '.$first['key'],
+            ])));
         $cheapest = self::cheapest($group);
 
         $name = self::cardName($page['name'], $page['brand'], $first['color']);
+        $label = $colours
+            ? static fn (array $c): string => self::colourRowLabel($c)
+            : static fn (array $c): string => $c['size'] !== '' ? $c['size'] : $c['key'];
+        // lista wierszy do pola tabelki: karta jednego koloru — jak dotąd, karta z kolorami — z jawnym ucięciem
+        $rowList = $colours
+            ? static fn (array $items): string => self::limitedList($items, 'pełna lista w tabeli wariantów')
+            : static fn (array $items): string => implode('; ', $items);
 
         $members = [];
+        $memberColours = [];
+        $memberImages = [];
         foreach ($group as $combination) {
             $members[] = [
                 'remote_id' => $combination['key'],
                 'sku' => $combination['reference'] !== '' ? $combination['reference'] : $combination['key'],
-                'name' => trim($name.' '.$combination['size']),
+                // nazwa pozycji z jej kolorem, jak nazwa dawnej karty koloru
+                'name' => trim(self::cardName($page['name'], $page['brand'], $combination['color']).' '.$combination['size']),
                 'availability' => $combination['stock'],
-                'size' => $combination['size'],
+                'size' => $colours ? self::colourRowLabel($combination) : $combination['size'],
                 'price' => self::accountPrice(
                     $combination['cents'] / 100,
                     $combination['base'] !== null ? $combination['base'] / 100 : null,
                 ),
             ];
+            $memberColours[$combination['key']] = mb_strtolower($combination['color']);
+            $memberImages[$combination['key']] = $combination['images'];
         }
-        $label = static fn (array $c): string => $c['size'] !== '' ? $c['size'] : $c['key'];
 
         return new B2bRemoteProduct(
             remoteId: $first['key'],
@@ -653,45 +815,86 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
                 'base_price' => $cheapest['base'] !== null ? (float) $cheapest['base'] / 100 : null,
                 'brand' => $page['brand'],
                 'model' => $page['model'],
-                'references' => implode('; ', array_map(
+                // karta z kolorami: lista wierszy dłuższa niż pole tabelki — jawnie ucięta (indeksy są w wierszach wariantów)
+                'references' => $rowList(array_map(
                     static fn (array $c): string => $label($c).': '.($c['reference'] !== '' ? $c['reference'] : self::NO_REFERENCE),
                     $group,
                 )),
-                // kolor i inne cechy kombinacji wspólne dla karty (rozmiar jest w liście rozmiarów)
+                // cechy kombinacji wspólne dla karty (rozmiar jest w liście rozmiarów, na karcie z kolorami — także kolor)
                 'attributes' => array_values(array_filter(
                     $first['attributes'],
-                    static fn (array $pair): bool => mb_strtolower($pair[0]) !== self::ATTRIBUTE_SIZE,
+                    static fn (array $pair): bool => mb_strtolower($pair[0]) !== self::ATTRIBUTE_SIZE
+                        && (! $colours || mb_strtolower($pair[0]) !== self::ATTRIBUTE_COLOR),
                 )),
-                'color_hex' => $first['color_hex'],
+                'color_hex' => $colours ? '' : $first['color_hex'],
                 'features' => $page['features'],
                 'category' => $page['category'],
                 'vat' => $page['vat'],
-                'stock' => array_map(static fn (array $c): string => $label($c).': '.$c['stock'], $group),
+                // jeden element — shopFields łączy listę; na karcie z kolorami już przycięty jawnie (dostępność każdego
+                // wiersza jest w wierszach wariantów)
+                'stock' => [$rowList(array_map(static fn (array $c): string => $label($c).': '.$c['stock'], $group))],
                 // cena konta w promocji sklepu — przetarg z terminem po jej końcu dostanie inną cenę
-                'promotion' => self::promotionNote($group, $label),
+                'promotion' => self::promotionNote($group, $label, $colours),
                 'description' => $page['description'],
-                'documents' => self::documentsFor($page, $first['color']),
-                'image_urls' => self::imagesFor($group),
+                // pliki i zdjęcia wybierane z pozycji produktu (documents, imageUrls)
+                'documents' => self::documentsOf($page),
+                'member_colours' => $memberColours,
+                'member_images' => $memberImages,
             ],
-            availability: self::groupAvailability($group),
-            variantSummary: 'Rozmiary: '.implode('; ', array_map(
-                static fn (array $c): string => $label($c).' ('.($c['reference'] !== '' ? $c['reference'] : $c['key']).')',
-                $group,
-            )),
+            availability: self::groupAvailability($group, $label),
+            variantSummary: $colours
+                ? self::coloursSummary($group)
+                : 'Rozmiary: '.implode('; ', array_map(
+                    static fn (array $c): string => $label($c).' ('.($c['reference'] !== '' ? $c['reference'] : $c['key']).')',
+                    $group,
+                )),
             members: $members,
-            identifiers: self::identifiers($page['model'], $group),
+            identifiers: self::identifiers($page['model'], $group, $colours),
+            cardName: $colours ? self::cardName($page['name'], $page['brand'], '') : null,
         );
+    }
+
+    /**
+     * Lista wariantów karty z kolorami: „Kolory: 21 (51005_21), 26 (51005_26); rozmiary: S, M, 3XL” — kolor dosłownie,
+     * w nawiasie indeks koloru, gdy jego rozmiary go dają (colorCode), rozmiary bez powtórzeń w kolejności tabeli.
+     *
+     * @param  non-empty-list<array<string, mixed>>  $group
+     */
+    private static function coloursSummary(array $group): string
+    {
+        /** @var array<string, list<array<string, mixed>>> $byColour */
+        $byColour = [];
+        $sizes = [];
+        foreach ($group as $combination) {
+            $byColour['c'.$combination['color']][] = $combination;
+            if ($combination['size'] !== '') {
+                $sizes['s'.$combination['size']] = $combination['size'];
+            }
+        }
+        $colours = [];
+        foreach ($byColour as $combinations) {
+            $code = self::colorCode(array_map(
+                static fn (array $c): array => ['reference' => $c['reference'], 'size' => $c['size']],
+                $combinations,
+            ));
+            $colours[] = $combinations[0]['color'].($code !== null ? ' ('.$code.')' : '');
+        }
+
+        return 'Kolory: '.implode(', ', $colours).($sizes !== [] ? '; rozmiary: '.implode(', ', $sizes) : '');
     }
 
     /**
      * Promocja sklepu na karcie: wszystkie kombinacje w tej samej promocji (albo żadna) — jak dotąd, dosłownie
      * z pierwszej („– 25% (cena konta przed promocją 40,08 zł netto)”); różne — każda promocja z rozmiarami, których
      * dotyczy („S, M: – 25% (…); 3XL: bez promocji”), żeby cena rozmiaru spoza promocji nie wyglądała na promocyjną.
+     * Karta z kolorami, gdy taki wykaz nie mieści się w polu tabelki (ProductShopCard::MAX_VALUE_CHARS) — każda
+     * promocja z liczbą kombinacji, których dotyczy, i jawną uwagą, że wykazu wierszy nie ma (przycięty wykaz
+     * wyglądałby na pełny).
      *
      * @param  non-empty-list<array<string, mixed>>  $group
      * @param  callable(array<string, mixed>): string  $label
      */
-    private static function promotionNote(array $group, callable $label): string
+    private static function promotionNote(array $group, callable $label, bool $colours = false): string
     {
         $notes = [];
         foreach ($group as $combination) {
@@ -707,8 +910,48 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
         foreach ($notes as $note => $sizes) {
             $parts[] = implode(', ', $sizes).': '.($note !== '' ? $note : 'bez promocji');
         }
+        $text = implode('; ', $parts);
+        if (! $colours || mb_strlen($text) <= ProductShopCard::MAX_VALUE_CHARS) {
+            return $text;
+        }
+        $counts = [];
+        foreach ($notes as $note => $sizes) {
+            $counts[] = ($note !== '' ? $note : 'bez promocji').': '.count($sizes).' z '.count($group).' kombinacji';
+        }
 
-        return implode('; ', $parts);
+        $remark = ' (wykaz kombinacji za długi na tabelkę — które są w promocji, pokazuje sklep)';
+
+        return self::limitedList($counts, 'pozostałych promocji', mb_strlen($remark)).$remark;
+    }
+
+    /**
+     * Lista do jednego pola tabelki sklepu: cała, gdy mieści się w ProductShopCard::MAX_VALUE_CHARS; inaczej tyle
+     * pełnych pozycji, ile się zmieści, i jawny dopisek „… (+N, {uwaga})” — nigdy lista przycięta po cichu przez zapis.
+     * $reserve — znaki, które wołający dopisze za listą.
+     *
+     * @param  list<string>  $items
+     */
+    private static function limitedList(array $items, string $note, int $reserve = 0): string
+    {
+        $all = implode('; ', $items);
+        // zapas na dopisek „; … (+N, uwaga)”
+        $limit = ProductShopCard::MAX_VALUE_CHARS - $reserve - mb_strlen($note) - 20;
+        if (mb_strlen($all) <= ProductShopCard::MAX_VALUE_CHARS - $reserve) {
+            return $all;
+        }
+        $kept = [];
+        $length = 0;
+        foreach ($items as $item) {
+            $next = $length + ($kept === [] ? 0 : 2) + mb_strlen($item);
+            if ($next > $limit) {
+                break;
+            }
+            $kept[] = $item;
+            $length = $next;
+        }
+        $suffix = '… (+'.(count($items) - count($kept)).', '.$note.')';
+
+        return $kept === [] ? $suffix : implode('; ', $kept).'; '.$suffix;
     }
 
     /**
@@ -716,12 +959,13 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
      * i indeks każdej kombinacji z tabeli (kolumna „Indeks”) na jej pozycji, dosłownie. MAVIBO jest dystrybutorem,
      * więc indeks to jego własny kod, nie kod producenta. Indeks pusty („—”) pomijamy; indeksy niespójne w jednym
      * modelu („21172 20 XS” obok „21172_20_S”) zostają tak, jak je podał sklep. Indeks koloru („51005_21”, SKU karty)
-     * składamy sami — nie jest identyfikatorem. Etykieta = kolor i rozmiar kombinacji dosłownie z tabeli.
+     * składamy sami — nie jest identyfikatorem. Etykieta = kolor i rozmiar kombinacji dosłownie z tabeli („21 S”),
+     * na karcie z kolorami — etykieta wiersza („kolor 21 / S”).
      *
      * @param  list<array<string, mixed>>  $group
      * @return list<B2bRemoteIdentifier>
      */
-    private static function identifiers(string $model, array $group): array
+    private static function identifiers(string $model, array $group, bool $colours): array
     {
         $out = [];
         if ($model !== '') {
@@ -731,7 +975,7 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
             if ($combination['reference'] === '') {
                 continue;
             }
-            $label = trim(implode(' ', array_column($combination['attributes'], 1)));
+            $label = $colours ? self::colourRowLabel($combination) : trim(implode(' ', array_column($combination['attributes'], 1)));
             $out[] = new B2bRemoteIdentifier(
                 type: ProductIdentifier::TYPE_SOURCE_CODE,
                 value: $combination['reference'],
@@ -807,15 +1051,17 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     }
 
     /**
-     * Jedna dostępność dla wszystkich rozmiarów — dosłownie; różne — „Produkt dostępny: S, M; Produkt niedostępny: XS”.
+     * Jedna dostępność dla wszystkich kombinacji — dosłownie; różne — „Produkt dostępny: S, M; Produkt niedostępny: XS”
+     * (etykiety wierszy karty).
      *
      * @param  list<array<string, mixed>>  $group
+     * @param  callable(array<string, mixed>): string  $label
      */
-    private static function groupAvailability(array $group): ?string
+    private static function groupAvailability(array $group, callable $label): ?string
     {
         $statuses = [];
         foreach ($group as $combination) {
-            $statuses[$combination['stock']][] = $combination['size'] !== '' ? $combination['size'] : $combination['key'];
+            $statuses[$combination['stock']][] = $label($combination);
         }
         if (count($statuses) === 1) {
             $only = (string) array_key_first($statuses);
@@ -1061,33 +1307,15 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     }
 
     /**
-     * Zdjęcia karty: galerie jej kombinacji bez powtórzeń (kolor ma zwykle jedną wspólną galerię).
-     *
-     * @param  list<array<string, mixed>>  $group
-     * @return list<string>
-     */
-    private static function imagesFor(array $group): array
-    {
-        $urls = [];
-        foreach ($group as $combination) {
-            foreach ($combination['images'] as $url) {
-                $urls[$url] = true;
-            }
-        }
-
-        return array_slice(array_keys($urls), 0, self::IMAGES_LIMIT);
-    }
-
-    /**
-     * Pliki karty: załącznik przypisany kolorowi (numer koloru jako ostatni wyraz nazwy — „KARTA PRODUKTU 51005 26” —
-     * albo jako człon nazwy pliku — „p_51005_21_wynik.jpg”) tylko na karty tego koloru; pozostałe na wszystkie
-     * karty modelu. Sklep bywa niekonsekwentny (nazwa „… 22”, plik „…_21_…” przy kolorach 21 i 26) — plik trafia na
-     * kolor, który którekolwiek z tych miejsc nazywa.
+     * Pliki wyrobu z kolorami, którym są przypisane (numer koloru jako ostatni wyraz nazwy — „KARTA PRODUKTU 51005
+     * 26” — albo jako człon nazwy pliku — „p_51005_21_wynik.jpg”); bez koloru — [] (plik na każdą kartę modelu).
+     * Sklep bywa niekonsekwentny (nazwa „… 22”, plik „…_21_…” przy kolorach 21 i 26) — plik należy do każdego koloru,
+     * który którekolwiek z tych miejsc nazywa. Wybór dla karty — documents() z kolorów jej pozycji.
      *
      * @param  array<string, mixed>  $page
-     * @return list<array{title: string, url: string, kind: string}>
+     * @return list<array{title: string, url: string, kind: string, colours: list<string>}>
      */
-    private static function documentsFor(array $page, string $color): array
+    private static function documentsOf(array $page): array
     {
         $colors = [];
         foreach ($page['rows'] as $combination) {
@@ -1108,18 +1336,17 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
                     $named[$part] = true;
                 }
             }
-            if ($named !== [] && ! isset($named[mb_strtolower($color)])) {
-                continue;
-            }
             $extension = mb_strtolower(pathinfo($attachment['file'], PATHINFO_EXTENSION));
             $documents[] = [
                 'title' => mb_substr($attachment['name'] !== '' ? $attachment['name'] : $attachment['file'], 0, 255),
                 'url' => MaviboB2bClient::BASE.'/index.php?controller=attachment&id_attachment='.$attachment['id'],
                 'kind' => self::documentKind($attachment['name'].' '.$attachment['file'], $extension),
+                // numery kolorów bywają kluczami liczbowymi tablicy — z powrotem tekst
+                'colours' => array_map('strval', array_keys($named)),
             ];
         }
 
-        return array_slice($documents, 0, self::DOCUMENTS_LIMIT);
+        return $documents;
     }
 
     private static function documentKind(string $name, string $extension): string

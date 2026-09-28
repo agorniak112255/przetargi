@@ -23,6 +23,7 @@ use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
+use App\Services\B2b\B2bSizePriceSource;
 use App\Services\B2b\MascotB2bClient;
 use App\Services\B2b\MascotB2bConnector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -231,6 +232,153 @@ final class MascotConnectorTest extends TestCase
         $this->assertSame(539.0, $connector->price($products[0])?->net);
         $this->assertSame(1, $connector->totalProducts());
         $this->assertStringContainsString('Karty: 1 (1 artykułów z rozmiarami w różnych cenach', implode("\n", $connector->runSummary()));
+    }
+
+    /**
+     * Decyzja użytkownika 28.09.2026 (wieczór): kolory jednego modelu to jedna karta z tabelą kolor × rozmiar. Kolor
+     * wiodący = najniższy numer (granat 010), SKU = kod modelu, nazwa nowej karty bez koloru, pozycja z nazwą koloru
+     * w etykiecie i kodem koloru w kodzie; kolor bez tłumaczenia nazwy — „kolor {kod}”.
+     */
+    public function test_colours_of_one_model_are_one_card_with_colour_size_rows_and_the_model_code(): void
+    {
+        $this->addArticle(self::jacket());
+        $this->addArticle(self::jacketNavy());
+        $this->addArticle(self::colourOf(self::jacket(), '199992490909', 'Brak tekstu w tym języku', [
+            self::sizeRow('M', '5700000000222', 549, 'Y', ''),
+        ]));
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(1, $products);
+        $card = $products[0];
+        $this->assertSame('19999-249', $card->sku);
+        $this->assertSame('5700000000211', $card->remoteId);
+        $this->assertSame('Kurtka membranowa MASCOT ACCELERATE 19999-249-010, granat', $card->name);
+        $this->assertSame('Kurtka membranowa MASCOT ACCELERATE 19999-249', $card->cardName);
+        $this->assertSame('Kurtka membranowa', $card->category);
+        $this->assertSame('https://b2b.mascot.dk/Distributor/ProductDetail?productNumber=19999249010', $card->sourceUrl);
+        $this->assertSame(
+            [
+                ['5700000000211', '19999-249-010 S', 'granat / S', 529.0],
+                ['5700000000212', '19999-249-010 M', 'granat / M', 529.0],
+                ['5700000000214', '19999-249-010 3XL', 'granat / 3XL', 609.0],
+                ['5700000000222', '19999-249-0909 M', 'kolor 0909 / M', 549.0],
+                ['5700000000201', '19999-249-1809 S', 'ciemny antracyt/czerń / S', 539.0],
+                ['5700000000202', '19999-249-1809 M', 'ciemny antracyt/czerń / M', 539.0],
+                ['5700000000203', '19999-249-1809 L', 'ciemny antracyt/czerń / L', 539.0],
+                ['5700000000204', '19999-249-1809 3XL', 'ciemny antracyt/czerń / 3XL', 599.0],
+            ],
+            array_map(static fn (array $m): array => [$m['remote_id'], $m['sku'], $m['size'], $m['price']->net], $card->members),
+        );
+        $this->assertSame('Kurtka membranowa MASCOT ACCELERATE 19999-249-1809, ciemny antracyt/czerń S', $card->members[4]['name']);
+        $this->assertSame('Kolory: granat (010), kolor 0909 (0909), ciemny antracyt/czerń (1809); rozmiary: S, M, 3XL, L', $card->variantSummary);
+        $this->assertStringContainsString('Ograniczona dostępność: kolor 0909 / M', (string) $card->availability);
+        // numer koloru z portalu przy pierwszym rozmiarze koloru (tam leżał na karcie koloru), EAN-y z etykietą wiersza
+        $identifiers = array_map(static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label], $card->identifiers ?? []);
+        $this->assertContains(['manufacturer_code', '19999249010', '5700000000211', 'granat'], $identifiers);
+        $this->assertContains(['manufacturer_code', '199992491809', '5700000000201', 'ciemny antracyt/czerń'], $identifiers);
+        $this->assertContains(['ean', '5700000000204', '5700000000204', 'ciemny antracyt/czerń / 3XL'], $identifiers);
+        $this->assertCount(11, $identifiers);
+
+        $this->assertSame(529.0, $connector->price($card)?->net);
+        $fields = array_map(static fn ($f): array => [$f->name, $f->value], $connector->shopFields($card));
+        $this->assertContains(['Kod artykułu', '19999-249'], $fields);
+        $this->assertContains(['Numer w portalu', '19999249010; 199992490909; 199992491809'], $fields);
+        $this->assertNotContains('Kolor', array_column($fields, 0));
+        // jedno zdjęcie jak dotąd — koloru wiodącego
+        $this->assertSame(self::CDN.'19999-249-010_P01_1000px.jpg', $connector->image($card)?->sourceUrl);
+        $this->assertSame(1, $connector->totalProducts());
+        $this->assertStringContainsString('Modele w kilku kolorach: 1 kart z 3 artykułów', implode("\n", $connector->runSummary()));
+    }
+
+    /**
+     * Łączymy ostrożnie: inny materiał przy tym samym kodzie modelu to dwie karty jak dotąd; kolor bez żadnej ceny
+     * zostaje pozycją pominiętą, a jedyny kolor z ceną — kartą jak przed 28.09.2026 (te same kod, nazwa, pozycje).
+     */
+    public function test_colours_that_differ_beyond_colour_or_lack_prices_stay_separate_cards_as_before(): void
+    {
+        $this->addArticle(self::jacket());
+        $other = self::colourOf(self::jacket(), '199992490909', 'czerń', [self::sizeRow('M', '5700000000222', 549, 'G', '')]);
+        $other['Quality'] = '65% poliester, 35% bawełna';
+        $this->addArticle($other);
+        $this->addArticle(self::boots());
+        $this->addArticle(self::colourOf(self::boots(), 'F999991010', 'granat', [self::sizeRow('0840', '5700000000111', 0, 'G', '')]));
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertSame(
+            [
+                ['19999-249-1809', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-1809, ciemny antracyt/czerń', ['S', 'M', 'L', '3XL'], null],
+                ['19999-249-0909', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-0909, czerń', ['M'], null],
+                ['F9999-910-09', 'Buty ochronne MASCOT FOOTWEAR TEST F9999-910-09, czerń', ['0840', '0841'], null],
+                ['F9999-910-10', 'Buty ochronne F9999-910-10', [], null],
+            ],
+            array_map(static fn (B2bRemoteProduct $p): array => [$p->sku, $p->name, array_column($p->members, 'size'), $p->cardName], $products),
+        );
+        $this->assertSame('skipped', $products[3]->raw['status']);
+        $this->assertSame('Rozmiary: 0840 (EAN 5700000000101); 0841 (EAN 5700000000102)', $products[2]->variantSummary);
+        $this->assertSame(self::CDN.'F9999-910-09_P01_1000px.jpg', $connector->image($products[2])?->sourceUrl);
+        $this->assertSame(4, $connector->totalProducts());
+        $summary = implode("\n", $connector->runSummary());
+        $this->assertStringNotContainsString('Modele w kilku kolorach', $summary);
+        // buty: jedyny kolor z ceną to nie rozdzielenie modelu
+        $this->assertStringContainsString('Modele z kolorami na osobnych kartach (nazwa, rodzaj, kategoria, materiał, opis albo nazwy kolorów się nie zgadzają): 1, np. 19999-249', $summary);
+    }
+
+    /**
+     * Błąd odczytu szczegółów jednego koloru (nie treść) — model stoi w tym przebiegu: zamiast karty pozycja pominięta
+     * z EAN-ami odczytanych kolorów jako pozycjami (synchronizacja uzna je za nieudane), bez przełączenia na układ
+     * jednego koloru.
+     */
+    public function test_colour_detail_read_error_skips_the_whole_model_with_its_known_positions(): void
+    {
+        $this->addArticle(self::jacket());
+        $navy = self::jacketNavy();
+        $navy['IsSuccess'] = false;
+        $navy['Message'] = 'Błąd serwera';
+        $this->addArticle($navy);
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertSame(
+            [
+                ['5700000000201', '19999-249', 'skipped', ['5700000000201', '5700000000202', '5700000000203', '5700000000204']],
+                ['19999249010', '19999-249-010', 'skipped', []],
+            ],
+            array_map(static fn (B2bRemoteProduct $p): array => [$p->remoteId, $p->sku, $p->raw['status'], array_column($p->members, 'remote_id')], $products),
+        );
+        $this->assertStringContainsString('19999249010', (string) $products[0]->raw['reason']);
+        $this->assertSame(2, $connector->totalProducts());
+        $this->expectException(RuntimeException::class);
+        $connector->price($products[0]);
+    }
+
+    /** Karta modelu w wielu kolorach: lista EAN-ów dłuższa niż pole tabelki kończy się jawną informacją, nie ucięciem. */
+    public function test_long_ean_list_of_a_many_colour_card_ends_with_a_note_not_a_cut(): void
+    {
+        foreach (['09' => 'czerń', '010' => 'granat', '1809' => 'ciemny antracyt/czerń', '0918' => 'czerń/ciemny antracyt'] as $code => $color) {
+            $sizes = [];
+            foreach (['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', '6XL'] as $i => $size) {
+                $sizes[] = self::sizeRow($size, '57000000'.str_pad((string) $code, 4, '0', STR_PAD_LEFT).$i, 539, 'G', '');
+            }
+            $this->addArticle(self::colourOf(self::jacket(), '19999249'.$code, $color, $sizes));
+        }
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(1, $products);
+        $this->assertCount(40, $products[0]->members);
+        $ean = array_values(array_filter($connector->shopFields($products[0]), static fn ($f): bool => $f->name === 'EAN'))[0]->value;
+        $this->assertLessThanOrEqual(ProductShopCard::MAX_VALUE_CHARS, mb_strlen($ean));
+        $this->assertStringEndsWith('; … (pełna lista w tabeli wariantów)', $ean);
     }
 
     public function test_missing_translation_is_an_empty_field_and_hidden_or_unpriced_sizes_stay_off_the_card(): void
@@ -449,6 +597,129 @@ final class MascotConnectorTest extends TestCase
         $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
     }
 
+    public function test_sync_creates_one_model_card_with_colour_rows_and_the_lead_colour_image_and_a_second_run_changes_nothing(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addArticle(self::jacket());
+        $this->addArticle(self::jacketNavy());
+        $this->fakeSite();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+
+        $this->assertSame(1, $result['created'], implode(' | ', $result['errors']));
+        $card = Product::query()->sole();
+        $this->assertSame('19999-249', $card->sku);
+        $this->assertSame('Kurtka membranowa MASCOT ACCELERATE 19999-249', $card->name);
+        $this->assertSame('Kolory: granat (010), ciemny antracyt/czerń (1809); rozmiary: S, M, 3XL, L', $card->variant_summary);
+        $this->assertSame('529.00', (string) $card->purchase_price);
+        $this->assertSame('609.00', (string) ProductSourcePrice::query()->where('product_id', $card->id)->value('size_price_max'));
+        $this->assertSame(
+            [
+                ['granat / S', '19999-249-010 S', '529.00'], ['granat / M', '19999-249-010 M', '529.00'], ['granat / 3XL', '19999-249-010 3XL', '609.00'],
+                ['ciemny antracyt/czerń / S', '19999-249-1809 S', '539.00'], ['ciemny antracyt/czerń / M', '19999-249-1809 M', '539.00'],
+                ['ciemny antracyt/czerń / L', '19999-249-1809 L', '539.00'], ['ciemny antracyt/czerń / 3XL', '19999-249-1809 3XL', '599.00'],
+            ],
+            ProductVariant::query()->where('product_id', $card->id)->where('kind', ProductVariant::KIND_SIZE)->orderBy('sort_order')->get()
+                ->map(static fn (ProductVariant $v): array => [$v->label, $v->sku, (string) $v->purchase_price])->all(),
+        );
+        $this->assertSame(7, B2bProductLink::query()->where('product_id', $card->id)->count());
+        $this->assertSame(
+            [self::CDN.'19999-249-010_P01_1000px.jpg'],
+            ProductImage::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('source_url')->all(),
+        );
+
+        $before = $this->snapshot();
+        $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+
+        $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
+        $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
+        $this->assertSame(1, $second['unchanged'], implode(' | ', $second['errors']));
+        $this->assertSame($before, $this->snapshot());
+    }
+
+    /**
+     * Pełny przebieg z błędem odczytu jednego koloru: karta modelu bez zapisu (nazwa, lista wariantów, cena bez zmian),
+     * żaden wiersz nie jest oznaczony jako wycofany, bez nowej historii ceny; następny przebieg — bez zmian.
+     */
+    public function test_sync_with_one_colour_unreadable_leaves_the_model_card_untouched_and_the_next_run_is_clean(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addArticle(self::jacket());
+        $this->addArticle(self::jacketNavy());
+        $this->fakeSite();
+        $first = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+        $this->assertSame(1, $first['created'], implode(' | ', $first['errors']));
+        $before = $this->snapshot();
+        $history = ProductVariantPriceHistory::query()->count();
+
+        $this->articles['19999249010']['IsSuccess'] = false;
+        $this->articles['19999249010']['Message'] = 'Błąd serwera';
+        $broken = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $broken['created'], implode(' | ', $broken['errors']));
+        $this->assertSame(0, $broken['updated'], implode(' | ', $broken['errors']));
+        $this->assertSame(2, $broken['skipped'], implode(' | ', $broken['errors']));
+        $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
+        $this->assertSame($history, ProductVariantPriceHistory::query()->count());
+        $this->assertSame($before, $this->snapshot());
+
+        unset($this->articles['19999249010']['IsSuccess'], $this->articles['19999249010']['Message']);
+        $clean = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $clean['updated'], implode(' | ', $clean['errors']));
+        $this->assertSame(1, $clean['unchanged'], implode(' | ', $clean['errors']));
+        $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
+        $this->assertSame($before, $this->snapshot());
+    }
+
+    /**
+     * Karty kolorów sprzed decyzji 28.09.2026 (wieczór) zostają do „Scal rozmiary”: bez nowej karty, bez zmiany kodu
+     * i nazwy; każda dostaje wiersze i zdjęcie tylko swojego koloru i zachowuje numer koloru z portalu, a model trafia
+     * do size_spread z nazwą bez koloru i listą kolorów.
+     */
+    public function test_legacy_colour_cards_stay_and_get_only_their_own_colour_rows_and_image(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addArticle(self::jacket());
+        $this->addArticle(self::jacketNavy());
+        $this->fakeSite();
+        $account = $this->account();
+        $description = 'Lekka tkanina. Oddychający, wiatro- i wodoszczelny.';
+        $black = $this->legacyCard($account, '19999-249-1809', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-1809, ciemny antracyt/czerń', $description, 539.0, ['5700000000201' => 'S', '5700000000202' => 'M', '5700000000203' => 'L', '5700000000204' => '3XL']);
+        $navy = $this->legacyCard($account, '19999-249-010', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-010, granat', $description, 529.0, ['5700000000211' => 'S', '5700000000212' => 'M', '5700000000214' => '3XL']);
+
+        $first = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: true);
+
+        $this->assertSame(0, $first['created'], implode(' | ', $first['errors']));
+        $this->assertSame(0, $first['skipped'], implode(' | ', $first['errors']));
+        $this->assertSame(
+            [['19999-249-1809', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-1809, ciemny antracyt/czerń'], ['19999-249-010', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-010, granat']],
+            Product::query()->orderBy('id')->get()->map(static fn (Product $p): array => [$p->sku, $p->name])->all(),
+        );
+        $rows = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('label')->all();
+        $this->assertSame(['ciemny antracyt/czerń / S', 'ciemny antracyt/czerń / M', 'ciemny antracyt/czerń / L', 'ciemny antracyt/czerń / 3XL'], $rows($black));
+        $this->assertSame(['granat / S', 'granat / M', 'granat / 3XL'], $rows($navy));
+        $images = static fn (Product $card): array => ProductImage::query()->where('product_id', $card->id)->pluck('source_url')->all();
+        $this->assertSame([self::CDN.'19999-249-1809_P01_1000px.jpg'], $images($black));
+        $this->assertSame([self::CDN.'19999-249-010_P01_1000px.jpg'], $images($navy));
+        $codes = static fn (Product $card): array => ProductIdentifier::query()->where('product_id', $card->id)
+            ->where('type', ProductIdentifier::TYPE_MANUFACTURER_CODE)->pluck('value')->all();
+        $this->assertSame(['199992491809'], $codes($black));
+        $this->assertSame(['19999249010'], $codes($navy));
+        $spread = B2bSyncRun::query()->findOrFail($first['sync_run_id'])->size_spread;
+        $this->assertSame([$black->id, $navy->id], $spread['groups'][0]['cards']);
+        $this->assertSame('Kurtka membranowa MASCOT ACCELERATE 19999-249', $spread['groups'][0]['name']);
+        $this->assertSame('Kolory: granat (010), ciemny antracyt/czerń (1809); rozmiary: S, M, 3XL, L', $spread['groups'][0]['variant_summary']);
+
+        $second = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: true);
+
+        $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
+        $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
+    }
+
     public function test_registry_detects_mascot_by_host_as_the_manufacturer_site(): void
     {
         $registry = app(B2bConnectorRegistry::class);
@@ -465,7 +736,7 @@ final class MascotConnectorTest extends TestCase
 
         $this->assertInstanceOf(MascotB2bConnector::class, $connector);
         $this->assertSame('MASCOT', MascotB2bConnector::ownBrand());
-        foreach ([B2bManufacturerSite::class, B2bShopFieldSource::class, B2bRunSummaryAware::class, B2bListProgressAware::class] as $interface) {
+        foreach ([B2bManufacturerSite::class, B2bShopFieldSource::class, B2bRunSummaryAware::class, B2bListProgressAware::class, B2bSizePriceSource::class] as $interface) {
             $this->assertInstanceOf($interface, $connector);
         }
     }
@@ -508,7 +779,7 @@ final class MascotConnectorTest extends TestCase
         foreach ($sizes as $ean => $size) {
             B2bProductLink::query()->create([
                 'b2b_account_id' => $account->id, 'remote_id' => (string) $ean, 'product_id' => $card->id,
-                'remote_sku' => '19999-249-1809 '.$size, 'remote_name' => $name.' '.$size, 'manufacturer' => 'MASCOT',
+                'remote_sku' => explode(' ', $sku)[0].' '.$size, 'remote_name' => $name.' '.$size, 'manufacturer' => 'MASCOT',
                 'description_hash' => sha1($description), 'last_purchase_price' => $price, 'last_currency' => 'PLN',
             ]);
         }
@@ -599,6 +870,38 @@ final class MascotConnectorTest extends TestCase
                 self::sizeRow('L', '5700000000203', 539, 'G', '30-06-2026 00:00:00'),
                 self::sizeRow('3XL', '5700000000204', 599, 'G', '30-06-2026 00:00:00'),
             ],
+        ];
+    }
+
+    /**
+     * Ta sama kurtka w granacie (kolor 010) — inne EAN-y i ceny.
+     *
+     * @return array<string, mixed>
+     */
+    private static function jacketNavy(): array
+    {
+        return self::colourOf(self::jacket(), '19999249010', 'granat', [
+            self::sizeRow('S', '5700000000211', 529, 'G', '30-06-2026 00:00:00'),
+            self::sizeRow('M', '5700000000212', 529, 'G', '30-06-2026 00:00:00'),
+            self::sizeRow('3XL', '5700000000214', 609, 'G', '30-06-2026 00:00:00'),
+        ]);
+    }
+
+    /**
+     * Artykuł w innym kolorze: numer, kolor, zdjęcie z kodem koloru i rozmiary; reszta pól jak w $article.
+     *
+     * @param  array<string, mixed>  $article
+     * @param  list<array<string, mixed>>  $sizes
+     * @return array<string, mixed>
+     */
+    private static function colourOf(array $article, string $number, string $color, array $sizes): array
+    {
+        return [
+            ...$article,
+            'Number' => $number,
+            'Color' => $color,
+            'Image' => self::CDN.MascotB2bConnector::articleCode($number).'_P01_400px.jpg',
+            'ProductSizes' => $sizes,
         ];
     }
 

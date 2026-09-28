@@ -21,7 +21,8 @@ use RuntimeException;
  * (kafle i tabelę rodzin — patrz listTiles) i łącznik czyta oba, bo widok jest ustawieniem konta. Pełna lista idzie
  * przed pierwszym zapisem, z kontrolami spójności jak u Procery (liczba stron stała, tyle samo pozycji na każdej
  * stronie poza ostatnią, unikalne adresy; zmiana w trakcie = jedno ponowne pobranie). Potem strona każdego
- * koloru — raz na kolor; dwie pozycje listy prowadzące do tej samej rodziny rozmiarów dają jedną kartę.
+ * koloru — raz na kolor, kolory jednego wyrobu jeden po drugim; dwie pozycje listy prowadzące do tej samej rodziny
+ * rozmiarów dają jedną kartę.
  *
  * Ceny: strona konta podaje w tabeli wariantów „Twoją cenę” każdego rozmiaru (cena zakupu). Ceny katalogowej
  * (detalicznej) sklep zalogowanemu podaje tylko przy rozmiarze otwartej karty, więc tę samą stronę pobieramy
@@ -33,15 +34,23 @@ use RuntimeException;
  * Cena katalogowa rozmiaru niższa od jego ceny konta albo rozmiar, którego strona gościa nie zna, to rozmiar bez ceny
  * katalogowej (liczone w podsumowaniu przebiegu) — ceny innego rozmiaru nie przepisujemy.
  *
- * Karta = kolor ze wszystkimi rozmiarami z ceną konta (decyzja użytkownika 28.09.2026: rozmiary w różnych cenach to
- * jedna karta; w JHK typowo XS–XXL w jednej cenie, 3XL droższy). Do 28.09.2026 (decyzja 15.09.2026) rozmiar w innej
- * cenie był osobną kartą z kodem pierwszego rozmiaru („JT SWCR BK 3XL”) — takie karty zostają, dopóki nie scali ich
- * osobne polecenie (synchronizacja daje każdej jej rozmiary, B2bCatalogSync::syncMembersByCard). SKU: kod wyrobu bez
- * rozmiaru („JT SWCR BK”), gdy wszystkie rozmiary mają ten sam kod z dopisanym rozmiarem; inaczej symbol pierwszego
- * rozmiaru. Pozycje (members) i remote_id = symbole rozmiarów (sklep ma je na każdej karcie), z rozmiarem, stanem
- * i ceną rozmiaru (konta i katalogowa); cena karty = najniższa cena rozmiaru (raw['price'], price()), pozostałe ceny —
- * wiersze rozmiarów karty. Sklep podaje ceny tylko w PLN (inny zapis = rozmiar bez ceny) i nie podaje jednostki
- * sprzedaży przy rozmiarze — tabela wariantów to rozmiary jednego wyrobu.
+ * Karta = wyrób ze wszystkimi kolorami i rozmiarami z ceną konta (decyzje użytkownika 28.09.2026: rozmiary w różnych
+ * cenach to jedna karta — w JHK typowo XS–XXL w jednej cenie, 3XL droższy; wieczorem: kolory jednego wyrobu też).
+ * Kolory łączą się ostrożnie (modelBatches, colourModel, colourCard): ten sam kod wyrobu bez koloru („FLRA 340” z „FLRA
+ * 340 BK/BK”, „FLRA 340 CM”), ta sama nazwa z listy bez koloru, ta sama pierwsza kategoria sklepu i ten sam rodzaj
+ * wyrobu (z rozmiarami albo bez); kolor musi być kodem z listy („BK - Black”) i ostatnim słowem kodu wyrobu. Wszystko
+ * inne (kolor w środku kodu „CZA 5P BK ZAP MET”, kolor bez kodu „Jasny szary”, powtórzony kolor) zostaje kartą koloru
+ * jak dotąd. Do 28.09.2026 karta była kolorem, a do tego dnia (decyzja 15.09.2026) rozmiar w innej cenie osobną kartą
+ * z kodem pierwszego rozmiaru („JT SWCR BK 3XL”) — takie karty zostają, dopóki nie scali ich „Scal rozmiary”
+ * (synchronizacja daje każdej jej pozycje, B2bCatalogSync::syncMembersByCard).
+ *
+ * SKU karty koloru: kod wyrobu bez rozmiaru („JT SWCR BK”), gdy wszystkie rozmiary mają ten sam kod z dopisanym
+ * rozmiarem; inaczej symbol pierwszego rozmiaru. SKU karty z kolorami: kod bez koloru („JT SWCR”), nazwa nowej karty
+ * bez koloru (cardName), nazwa ze źródła = nazwa koloru prowadzącego (pierwszego na liście). Pozycje (members)
+ * i remote_id = symbole rozmiarów (sklep ma je na każdej karcie; wyrób bez rozmiarów — jego symbol), z rozmiarem
+ * („BK - Black / XS” na karcie z kolorami), stanem i ceną pozycji (konta i katalogowa); cena karty = najniższa cena
+ * pozycji (raw['price'], price()), pozostałe ceny — wiersze wariantów karty. Sklep podaje ceny tylko w PLN (inny zapis
+ * = rozmiar bez ceny) i nie podaje jednostki sprzedaży przy rozmiarze — tabela wariantów to rozmiary jednego wyrobu.
  *
  * Opis: pole OPIS dosłownie; sekcja „Załączniki” z odnośnikami do plików do opisu nie wchodzi (to lista plików,
  * nie opis wyrobu). Pliki: karty produktu i certyfikaty ze strony (blok „Karty do pobrania” i odnośniki w opisie);
@@ -69,6 +78,9 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     private const DOCUMENTS_LIMIT = 8;
 
     private const IMAGES_LIMIT = 8;
+
+    /** Dostępność karty z kolorami dłuższa niż tyle znaków = liczby wierszy w magazynach (colourAvailability). */
+    private const AVAILABILITY_LIMIT = 1000;
 
     private const SHOP_SECTION_MARKS = 'Oznaczenia';
 
@@ -125,6 +137,17 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
 
     private int $skippedProducts = 0;
 
+    /** Karty z kilkoma kolorami jednego wyrobu w przebiegu i liczba ich kolorów (runSummary). */
+    private int $colourCards = 0;
+
+    private int $colourCount = 0;
+
+    /** @var array<string, true> SKU kart wydanych w przebiegu (małymi literami) — kod wyrobu bez koloru nie może ich powtórzyć */
+    private array $skus = [];
+
+    /** @var array<string, int> wyroby, których kolory mają różne opisy (osobne karty): klucz wyrobu => liczba kolorów */
+    private array $descriptionSplits = [];
+
     /** @var (callable(string): void)|null */
     private $listProgress = null;
 
@@ -179,17 +202,31 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         $this->cards = 0;
         $this->multiPriceProducts = 0;
         $this->skippedProducts = 0;
+        $this->colourCards = 0;
+        $this->colourCount = 0;
+        $this->skus = [];
+        $this->descriptionSplits = [];
 
         if (! $this->client->isLoggedIn()) {
             $this->client->login();
         }
 
         $rows = $this->listRows();
+        // na start każda pozycja listy to karta; kolory złączone w jedną kartę zmniejszają liczbę w trakcie przebiegu
         $this->total = count($rows);
         $this->summary[] = 'Lista JHK Polska: '.count($rows).' wyrobów w kolorach';
 
-        foreach ($rows as $row) {
-            yield $this->productFor($row);
+        foreach (self::modelBatches($rows) as $batch) {
+            if (count($batch) === 1) {
+                yield $this->productFor($batch[0]);
+
+                continue;
+            }
+            $products = $this->batchProducts($batch);
+            $this->total -= count($batch) - count($products);
+            foreach ($products as $product) {
+                yield $product;
+            }
         }
     }
 
@@ -215,6 +252,17 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         }
         if ($this->sizesWithoutPrice !== []) {
             $lines[] = 'Rozmiary bez ceny konta (poza kartami): '.self::listing($this->sizesWithoutPrice);
+        }
+        if ($this->colourCards > 0) {
+            $lines[] = 'Warianty kolorystyczne JHK: '.$this->colourCards.' wyrobów z '.$this->colourCount.' kolorów (jedna karta z tabelą kolorów i rozmiarów)';
+        }
+        if ($this->descriptionSplits !== []) {
+            $lines[] = sprintf(
+                'Kolory jednego wyrobu z różnymi opisami — karty osobno: %d wyrobów (%d kolorów), np. %s',
+                count($this->descriptionSplits),
+                array_sum($this->descriptionSplits),
+                implode(', ', array_map(static fn (string $key): string => explode('|', $key)[1], array_slice(array_keys($this->descriptionSplits), 0, 10))),
+            );
         }
 
         return $lines;
@@ -297,7 +345,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
      */
     public function shopFields(B2bRemoteProduct $product): array
     {
-        $raw = $product->raw;
+        $raw = self::colourRaw($product);
         if (($raw['status'] ?? null) !== 'ok') {
             return [];
         }
@@ -309,7 +357,11 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
             }
         };
 
-        $add(self::SHOP_SECTION_MARKS, 'Symbol', (string) ($raw['symbol'] ?? ''));
+        // karta z kilkoma kolorami: symbole i EAN-y są w wierszach wariantów i identyfikatorach pozycji — lista wszystkich
+        // kolorów i rozmiarów w jednym polu tabelki byłaby przycięta (ProductShopCard::MAX_VALUE_CHARS), a więc niepełna
+        if (count($raw['colours'] ?? []) <= 1) {
+            $add(self::SHOP_SECTION_MARKS, 'Symbol', (string) ($raw['symbol'] ?? ''));
+        }
         foreach ($raw['fields'] ?? [] as [$label, $value]) {
             $add(self::SHOP_SECTION_MARKS, $label, $value);
         }
@@ -335,7 +387,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     {
         return array_map(
             static fn (array $file): B2bRemoteDocument => new B2bRemoteDocument($file['title'], $file['url'], $file['kind']),
-            $product->raw['documents'] ?? [],
+            self::colourRaw($product)['documents'] ?? [],
         );
     }
 
@@ -357,7 +409,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
      */
     public function imageUrls(B2bRemoteProduct $product): array
     {
-        return $product->raw['image_urls'] ?? [];
+        return self::colourRaw($product)['image_urls'] ?? [];
     }
 
     public function imageAt(string $url): ?B2bRemoteImage
@@ -697,13 +749,48 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
      */
     private function productFor(array $row): B2bRemoteProduct
     {
+        $part = $this->prepared($row);
+
+        return $part instanceof B2bRemoteProduct ? $part : $this->singleColourCard($part);
+    }
+
+    /**
+     * Karta koloru z odczytanej strony (jak do 28.09.2026: karta = kolor) — gdy wyrób nie ma na liście innych kolorów
+     * albo nie da się ich pewnie złączyć (colourModel).
+     *
+     * @param  array{row: array{path: string, name: string, color: string, price_text: string}, page: array<string, mixed>, priced: non-empty-list<array{path: string, symbol: string, size: string, ean: string, cents: int, base: int|null, vat: string, stock: string}>, code: string|null, single: bool}  $part
+     */
+    private function singleColourCard(array $part): B2bRemoteProduct
+    {
+        $this->multiPriceProducts += count(array_unique(array_column($part['priced'], 'cents'))) > 1 ? 1 : 0;
+        $this->cards++;
+        // kod jak dotąd; gdy przebieg już go wydał (np. karcie z kolorami jako kod bez koloru) — symbol pierwszego
+        // rozmiaru, jak karta bez wspólnego kodu wyrobu
+        $sku = $this->uniqueSku(array_values(array_unique(array_filter(
+            [(string) $part['code'], $part['priced'][0]['symbol']],
+            static fn (string $candidate): bool => $candidate !== '',
+        ))));
+
+        return $this->cardFor($part['row'], $part['page'], $part['priced'], $sku, $part['single']);
+    }
+
+    /**
+     * Strona koloru z listy → rozmiary z ceną konta i katalogową, kod wyrobu (bez rozmiaru) i znacznik wyrobu bez
+     * rozmiarów; strona nieczytelna albo niezgodna z kaflem = pozycja pominięta z powodem (B2bRemoteProduct).
+     *
+     * @param  array{path: string, name: string, color: string, price_text: string}  $row
+     * @return B2bRemoteProduct|array{row: array{path: string, name: string, color: string, price_text: string}, page: array<string, mixed>, priced: non-empty-list<array{path: string, symbol: string, size: string, ean: string, cents: int, base: int|null, vat: string, stock: string}>, code: string|null, single: bool}
+     */
+    private function prepared(array $row): B2bRemoteProduct|array
+    {
         try {
             $html = $this->client->productPage($row['path']);
             $page = self::parsePage($html, account: true);
         } catch (B2bFatalException $e) {
             throw $e;
         } catch (RuntimeException $e) {
-            return $this->skipped($row, 'strona wyrobu: '.$e->getMessage());
+            // strona nieodczytana (błąd pobrania albo budowy) — nie wiemy, czy kolor nadal jest w sklepie (batchProducts)
+            return $this->skipped($row, 'strona wyrobu: '.$e->getMessage(), readError: true);
         }
 
         $single = $page['rows'] === [];
@@ -763,11 +850,14 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
                 $this->withoutBase[] = $size['symbol'];
             }
         }
-        $code = $single ? $page['symbol'] : self::productCode($page['rows']);
-        $this->multiPriceProducts += count(array_unique(array_column($priced, 'cents'))) > 1 ? 1 : 0;
-        $this->cards++;
 
-        return $this->cardFor($row, $page, $priced, $code, $single);
+        return [
+            'row' => $row,
+            'page' => $page,
+            'priced' => $priced,
+            'code' => $single ? $page['symbol'] : self::productCode($page['rows']),
+            'single' => $single,
+        ];
     }
 
     /**
@@ -902,21 +992,528 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     }
 
     /**
+     * Pozycje listy w paczkach jednego wyrobu: kafle o tej samej nazwie bez koloru (withoutColour) idą razem,
+     * w kolejności pierwszego z nich — ich strony są pobierane jedna po drugiej i mogą dać jedną kartę z kolorami,
+     * a w pamięci jest naraz tylko jedna paczka stron. Kafel bez rozpoznanego koloru to paczka jednej pozycji.
+     *
+     * @param  list<array{path: string, name: string, color: string, price_text: string}>  $rows
+     * @return list<non-empty-list<array{path: string, name: string, color: string, price_text: string}>>
+     */
+    private static function modelBatches(array $rows): array
+    {
+        $batches = [];
+        foreach ($rows as $i => $row) {
+            $colour = self::colourOf($row['color']);
+            $model = $colour !== null && $row['name'] !== '' ? self::withoutColour($row['name'], $colour) : null;
+            $batches[$model !== null ? 'm:'.mb_strtoupper($model) : '#'.$i][] = $row;
+        }
+
+        return array_values($batches);
+    }
+
+    /**
+     * Paczka kafli jednego wyrobu (modelBatches): najpierw strony wszystkich kolorów, potem kolory o tym samym kluczu
+     * (colourModel; co najmniej dwa, każdy kolor raz) → jedna karta z kolorami (colourCard) na miejscu pierwszego z nich.
+     * Reszta jak dotąd: karta koloru albo pozycja pominięta z powodem. Powtórzony kolor w grupie = nie wiemy, który
+     * wiersz jest którym wyrobem — cała grupa zostaje kartami kolorów (jak 3M). Kolory tego samego wyrobu z innym
+     * opisem zostają osobno (liczone w podsumowaniu przebiegu).
+     *
+     * Strona któregoś koloru nieodczytana (błąd pobrania albo budowy, nie pominięcie z powodu treści): o postaci kart
+     * rozstrzyga lista (paczka ma kilka kafli), nie liczba odczytanych stron — kolory, które mogłyby tworzyć kartę
+     * z kolorami, są w tym przebiegu wstrzymane (heldColours), a karty kolorów bez rozpoznanego koloru idą jak dotąd.
+     *
+     * Karty kolorów dostają SKU przed kartami z kolorami (uniqueSku) — kod wyrobu bez koloru nie zabierze kodu
+     * prawdziwej pozycji tej paczki.
+     *
+     * @param  non-empty-list<array{path: string, name: string, color: string, price_text: string}>  $batch
+     * @return list<B2bRemoteProduct>
+     */
+    private function batchProducts(array $batch): array
+    {
+        $parts = array_map(fn (array $row): B2bRemoteProduct|array => $this->prepared($row), $batch);
+        $models = [];
+        $groups = [];
+        $failed = [];
+        foreach ($parts as $i => $part) {
+            if ($part instanceof B2bRemoteProduct && ($part->raw['read_error'] ?? false) === true) {
+                $failed[] = $part->remoteId;
+            }
+            $model = is_array($part) ? self::colourModel($part) : null;
+            if ($model !== null) {
+                $models[$i] = $model;
+                $groups[$model['key']][] = $i;
+            }
+        }
+
+        $out = [];
+        if ($failed !== [] && $models !== []) {
+            $held = [];
+            foreach (array_keys($models) as $i) {
+                /** @var array{row: array{path: string, name: string, color: string, price_text: string}, page: array<string, mixed>, priced: non-empty-list<array{path: string, symbol: string, size: string, ean: string, cents: int, base: int|null, vat: string, stock: string}>, code: string|null, single: bool} $part */
+                $part = $parts[$i];
+                $held[] = $part;
+            }
+            $out[array_key_first($models)] = $this->heldColours($held, $failed);
+            $groups = [];
+        }
+
+        $groupOf = [];
+        $byModel = [];
+        foreach ($groups as $key => $indexes) {
+            $first = $models[$indexes[0]];
+            $byModel[$first['model_key']][] = count($indexes);
+            $colours = array_map(static fn (int $i): string => $models[$i]['colour']['key'], $indexes);
+            if (count($indexes) >= 2 && count(array_unique($colours)) === count($colours)) {
+                foreach ($indexes as $i) {
+                    $groupOf[$i] = $key;
+                }
+            }
+        }
+        foreach ($byModel as $model => $sizes) {
+            if (count($sizes) > 1) {
+                $this->descriptionSplits[$model] = array_sum($sizes);
+            }
+        }
+
+        // karty kolorów najpierw (ich SKU to kody ze sklepu), potem karty z kolorami — na miejscu pierwszego koloru
+        foreach ($parts as $i => $part) {
+            if ($part instanceof B2bRemoteProduct) {
+                $out[$i] = $part;
+            } elseif (! isset($groupOf[$i]) && ! isset($out[$i]) && ($failed === [] || ! isset($models[$i]))) {
+                $out[$i] = $this->singleColourCard($part);
+            }
+        }
+        foreach ($groupOf as $i => $key) {
+            if ($groups[$key][0] !== $i) {
+                continue;
+            }
+            $colours = [];
+            foreach ($groups[$key] as $j) {
+                /** @var array{row: array{path: string, name: string, color: string, price_text: string}, page: array<string, mixed>, priced: non-empty-list<array{path: string, symbol: string, size: string, ean: string, cents: int, base: int|null, vat: string, stock: string}>, code: string|null, single: bool} $member */
+                $member = $parts[$j];
+                $colours[] = ['part' => $member, 'model' => $models[$j]];
+            }
+            $out[$i] = $this->colourCard($colours);
+        }
+        ksort($out);
+
+        return array_values($out);
+    }
+
+    /**
+     * Kolor pozycji listy (druga linia kafla — ta sama co cecha „Kolor” strony): kod koloru sklepu i nazwa, np.
+     * „BK - Black”, „BK/BK - Black/Black”, „NY/SYF - Navy / Gold Fluor”, „BT-Buttercream”, „WH White”. Kod to wielkie
+     * litery i cyfry (człony z ukośnikiem albo myślnikiem), z co najmniej jedną literą; key = kod bez znaków
+     * rozdzielających, bo sklep zapisuje ten sam kolor różnie w nazwie, symbolu i cesze („BK-SYF”, „BK/SYF”, „BKWH”).
+     * Kolor bez kodu („Jasny szary”, „NIEBIESKA”, „25/35”) = null — takiej pozycji z innymi nie łączymy.
+     *
+     * @return array{text: string, code: string, name: string, key: string}|null
+     */
+    private static function colourOf(string $color): ?array
+    {
+        $text = self::clean($color);
+        if (preg_match('/^(\S+)\s+-\s+(\S.*)$/u', $text, $m) !== 1
+            && preg_match('/^([A-Z0-9]{1,5}(?:\/[A-Z0-9]{1,5})*)(?:-|\s+)(\p{L}.*)$/u', $text, $m) !== 1) {
+            return null;
+        }
+        if (preg_match('/^[A-Z0-9]+(?:[\/-][A-Z0-9]+)*$/', $m[1]) !== 1 || preg_match('/[A-Z]/', $m[1]) !== 1) {
+            return null;
+        }
+
+        return ['text' => $text, 'code' => $m[1], 'name' => trim($m[2]), 'key' => self::colourKey($m[1])];
+    }
+
+    /** Tekst do porównania koloru: wielkie litery i cyfry bez odstępów i znaków („BK/SYF” = „BK-SYF” = „BKSYF”). */
+    private static function colourKey(string $text): string
+    {
+        return (string) preg_replace('/[^\p{L}\p{N}]/u', '', mb_strtoupper($text));
+    }
+
+    /**
+     * Nazwa wyrobu bez koloru: znika ostatnie słowo nazwy, które jest kodem koloru („JHK FLRA 340 BK-BK” →
+     * „JHK FLRA 340”, „JHK KOC 360 BK PREMIUM” → „JHK KOC 360 PREMIUM”), a gdy takiego nie ma — nazwa koloru na końcu
+     * („Czapka Moontex trucker 5P Royal Blue-White” przy „RBWH - Royal Blue/White”). Pierwsze słowo zostaje zawsze.
+     * Nazwa bez żadnego z nich = null (nie wiemy, co w nazwie jest kolorem).
+     *
+     * @param  array{text: string, code: string, name: string, key: string}  $colour
+     */
+    private static function withoutColour(string $name, array $colour): ?string
+    {
+        $words = explode(' ', self::clean($name));
+        for ($i = count($words) - 1; $i > 0; $i--) {
+            if (self::colourKey($words[$i]) === $colour['key']) {
+                array_splice($words, $i, 1);
+
+                return implode(' ', $words);
+            }
+        }
+        $wanted = self::colourKey($colour['name']);
+        for ($k = 1; $wanted !== '' && $k < count($words); $k++) {
+            if (self::colourKey(implode(' ', array_slice($words, -$k))) === $wanted) {
+                return implode(' ', array_slice($words, 0, -$k));
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Wyrób koloru, gdy strona potwierdza kolor z listy: kod wyrobu (kod bez rozmiaru albo symbol wyrobu bez rozmiarów)
+     * kończy się słowem, które jest kodem koloru („FLRA 340 BK/BK” przy „BK/BK - Black/Black”, „CZ 5 P TRUCKER BG/WH”
+     * przy „BGWH - Bottle Green/White”), a nazwa z listy ma kolor (withoutColour). Kolory łączą się tylko przy tym samym
+     * kluczu: kod bez koloru, nazwa bez koloru, rodzaj wyrobu (z rozmiarami albo bez) i opis (bez różnic białych
+     * znaków). Kategorii sklepu klucz nie ma: kolor bywa dodatkowo w „Sublimacja” czy „Wysoka Widoczność”, a karta ma
+     * ścieżki wszystkich kolorów. Pola karty różne między kolorami (Waga otwartego rozmiaru, Kod HS) nie rozdzielają
+     * kolorów — karta z kolorami pokazuje tylko pola wspólne (colourRaw); na produkcji 28.09.2026 różniły się w 48
+     * ze 129 wyrobów. Inaczej null — kolor zostaje osobną kartą (np. „CZA 5P BK ZAP MET” — kolor w środku kodu, body
+     * „TSRB BODY BK 3 M” bez kodu wyrobu, bo rozmiar ma spację).
+     *
+     * @param  array{row: array{path: string, name: string, color: string, price_text: string}, page: array<string, mixed>, priced: non-empty-list<array<string, mixed>>, code: string|null, single: bool}  $part
+     * @return array{key: string, model_key: string, code: string, name: string, colour: array{text: string, code: string, name: string, key: string}}|null
+     */
+    private static function colourModel(array $part): ?array
+    {
+        $colour = self::colourOf($part['row']['color']);
+        $code = $part['code'];
+        if ($colour === null || $code === null || $part['row']['name'] === '') {
+            return null;
+        }
+        $name = self::withoutColour($part['row']['name'], $colour);
+        $at = mb_strrpos($code, ' ');
+        if ($name === null || $at === false || self::colourKey(mb_substr($code, $at + 1)) !== $colour['key']) {
+            return null;
+        }
+        $model = trim(mb_substr($code, 0, $at));
+        if ($model === '') {
+            return null;
+        }
+
+        $modelKey = implode('|', [mb_strtoupper($name), mb_strtoupper($model), $part['single'] ? 'bez rozmiarów' : 'rozmiary']);
+
+        return [
+            // opis to cecha wyrobu (skład, gramatura) — inny opis koloru = osobna karta; białe znaki bez znaczenia
+            'key' => $modelKey.'|'.sha1(self::clean((string) $part['page']['description'])),
+            'model_key' => $modelKey,
+            'code' => $model,
+            'name' => $name,
+            'colour' => $colour,
+        ];
+    }
+
+    /**
+     * Karta wyrobu z kolorami (decyzja użytkownika 28.09.2026: kolory jednego wyrobu to jedna karta z tabelą wariantów,
+     * jak rozmiary w różnych cenach). Pozycje (members) = każdy rozmiar każdego koloru z ceną konta — remote_id, kod
+     * i nazwa jak na dotychczasowej karcie koloru (powiązania zostają), etykieta wiersza „{kolor ze sklepu} / {rozmiar}”
+     * (wyrób bez rozmiarów — sam kolor), cena konta i katalogowa rozmiaru. Kolory w kolejności najniższego symbolu
+     * rozmiaru (nie kolejności listy, która w sklepie się zmienia); kolor prowadzący = pierwszy z nich: daje remoteId
+     * (swój pierwszy rozmiar), nazwę ze źródła i adres; opis jest wspólny (klucz colourModel). Cena karty = najtańsza
+     * pozycja wszystkich kolorów (self::cheapest, jak w silniku). SKU = kod wyrobu bez koloru („FLRA 340”), a gdy
+     * przebieg już go wydał — kod koloru prowadzącego (jak jego karta koloru); nazwa nowej karty (cardName) = nazwa bez
+     * koloru. Zdjęcia, pliki, kategorie, oznaczenia, progi, pola i cechy każdego koloru zostają przy kolorach (raw
+     * colour_parts) i liczy je colourRaw z pozycji podanego produktu. Dostępność karty — colourAvailability.
+     *
+     * @param  non-empty-list<array{part: array{row: array{path: string, name: string, color: string, price_text: string}, page: array<string, mixed>, priced: non-empty-list<array{path: string, symbol: string, size: string, ean: string, cents: int, base: int|null, vat: string, stock: string}>, code: string|null, single: bool}, model: array{key: string, code: string, name: string, colour: array{text: string, code: string, name: string, key: string}}}>  $colours
+     */
+    private function colourCard(array $colours): B2bRemoteProduct
+    {
+        // kolejność kolorów (i kolor prowadzący) nie zależy od kolejności listy: najniższy symbol rozmiaru koloru
+        $lowest = static fn (array $colour): string => min(array_column($colour['part']['priced'], 'symbol'));
+        usort($colours, static fn (array $a, array $b): int => strcmp($lowest($a), $lowest($b)));
+        $lead = $colours[0]['part'];
+        $members = [];
+        $rows = [];
+        $sizes = [];
+        $texts = [];
+        $codes = [];
+        $colourParts = [];
+        $memberColours = [];
+        foreach ($colours as $index => ['part' => $part, 'model' => $model]) {
+            $color = $part['row']['color'];
+            $texts[] = $color;
+            $codes[] = $model['colour']['code'];
+            $name = self::colourCardName($part);
+            $colourRows = [];
+            foreach ($part['priced'] as $size) {
+                $memberColours[$size['symbol']] = $index;
+                $colourRows[$size['symbol']] = ['size' => $size['size'], 'ean' => $size['ean'], 'stock' => $size['stock']];
+                $label = self::rowLabel($color, $size['size']);
+                $members[] = [
+                    'remote_id' => $size['symbol'],
+                    'sku' => $size['symbol'],
+                    'name' => trim($name.' '.$size['size']),
+                    'availability' => $size['stock'],
+                    'size' => $label,
+                    'price' => self::accountPrice($size['cents'] / 100, $size['base'] !== null ? $size['base'] / 100 : null),
+                ];
+                $rows[] = [...$size, 'size' => $label];
+                if ($size['size'] !== '' && ! in_array($size['size'], $sizes, true)) {
+                    $sizes[] = $size['size'];
+                }
+            }
+            $colourParts[] = [
+                'text' => $color,
+                'single' => $part['single'],
+                'rows' => $colourRows,
+                'images' => $part['page']['images'],
+                'documents' => $part['page']['documents'],
+                'categories' => $part['page']['categories'],
+                'labels' => $part['page']['labels'],
+                'tiers' => $part['page']['tiers'],
+                // EAN z pola karty (wyrób bez rozmiarów) i cecha „Kolor” należą do koloru — colourRaw dokłada je tylko
+                // karcie jednego koloru
+                'fields' => array_values(array_filter(
+                    $part['page']['fields'],
+                    static fn (array $field): bool => mb_strtolower(rtrim($field[0], ':')) !== 'kod kreskowy ean',
+                )),
+                'attributes' => array_values(array_filter(
+                    self::cardAttributes($part['page']['attributes'], $part['single']),
+                    static fn (array $pair): bool => mb_strtolower(rtrim($pair[0], ':')) !== 'kolor',
+                )),
+            ];
+        }
+
+        $sizeList = $sizes !== [] ? '; rozmiary: '.implode(', ', $sizes) : '';
+        $summary = 'Kolory: '.implode(', ', $texts).$sizeList;
+        if (mb_strlen($summary) > B2bCatalogSync::VARIANT_SUMMARY_LIMIT) {
+            // bardzo wiele kolorów — same kody, żeby lista nie została ucięta w połowie
+            $summary = 'Kolory: '.implode(', ', $codes).$sizeList;
+        }
+
+        $sku = $this->uniqueSku([$colours[0]['model']['code'], (string) $lead['code']]);
+        $name = self::colourCardName($lead);
+        $symbols = implode('; ', array_column($rows, 'symbol'));
+        $moontex = self::isMoontex($name, $sku, $symbols);
+        $identifiers = [];
+        foreach ($colours as ['part' => $part]) {
+            array_push($identifiers, ...self::identifiers($part['priced'], $part['single'], $moontex, $part['row']['color']));
+        }
+        $cheapest = self::cheapest($rows);
+        $this->colourCards++;
+        $this->colourCount += count($colours);
+        $this->cards++;
+        $this->multiPriceProducts += count(array_unique(array_column($rows, 'cents'))) > 1 ? 1 : 0;
+
+        return new B2bRemoteProduct(
+            remoteId: $lead['priced'][0]['symbol'],
+            sku: $sku,
+            name: $name,
+            category: $lead['page']['categories'][0] ?? null,
+            sourceUrl: JhkB2bClient::BASE.$lead['row']['path'],
+            raw: [
+                'status' => 'ok',
+                // cena karty = najtańsza pozycja wszystkich kolorów (B2bCatalogSync liczy ją też z members[].price)
+                'price' => (float) $cheapest['cents'] / 100,
+                'base_price' => $cheapest['base'] !== null ? (float) $cheapest['base'] / 100 : null,
+                // symbole do rozpoznania marki (manufacturer); w tabelce tylko przy jednym kolorze (colourRaw)
+                'symbol' => $symbols,
+                // dane każdego koloru i kolor każdej pozycji — zdjęcia, pliki i pola liczone z pozycji podanego produktu
+                // (colourRaw); dawna karta koloru dostaje przy zdjęciach i plikach tylko swoje pozycje
+                'colour_parts' => $colourParts,
+                'member_colours' => $memberColours,
+                // opis taki sam we wszystkich kolorach (klucz colourModel)
+                'description' => $lead['page']['description'],
+                'vat' => $lead['priced'][0]['vat'],
+            ],
+            availability: self::colourAvailability($rows),
+            variantSummary: $summary,
+            members: $members,
+            identifiers: $identifiers,
+            cardName: self::cardName($colours[0]['model']['name'], '', $sku),
+        );
+    }
+
+    /**
+     * Pola karty z kolorami dla kolorów pozycji TEGO produktu: members, bez nich — pozycja remoteId. Cała grupa ma
+     * wszystkie kolory. Dawna karta koloru przed „Scal rozmiary”: B2bCatalogSync::syncMembersByCard podaje jej produkt
+     * z jej pozycjami przy zdjęciach (imageUrls) i plikach (documents), więc nie dostaje zdjęć ani plików innego koloru;
+     * tabelkę (shopFields) silnik zapisuje z produktu całej grupy (storeShopFields z $origin), więc tam ma pola całego
+     * wyrobu. Pozycja o nieznanym kolorze = wszystkie kolory (bez filtrowania). Zdjęcia: pierwszy z kolorów w całości,
+     * potem główne zdjęcie każdego następnego, potem reszta (IMAGES_LIMIT); pliki bez powtórzeń (DOCUMENTS_LIMIT);
+     * progi ilościowe, pola i cechy — tylko takie same we wszystkich kolorach. Jeden kolor — tabelka jak na karcie
+     * koloru: jego pola, symbole, EAN-y, stany i cecha „Kolor” (tylko pozycje produktu); kilka — bez list wierszy (są
+     * przy wierszach wariantów, w jednym polu zostałyby przycięte). Produkt bez kolorów (karta koloru) — raw bez zmian.
+     *
+     * @return array<string, mixed>
+     */
+    private static function colourRaw(B2bRemoteProduct $product): array
+    {
+        $raw = $product->raw;
+        $parts = $raw['colour_parts'] ?? null;
+        if (! is_array($parts) || $parts === []) {
+            return $raw;
+        }
+        $positions = $product->members !== []
+            ? array_map(static fn (array $member): string => (string) ($member['remote_id'] ?? ''), $product->members)
+            : [$product->remoteId];
+        $chosen = [];
+        $present = [];
+        foreach ($positions as $id) {
+            $index = $raw['member_colours'][$id] ?? null;
+            if (! is_int($index) || ! isset($parts[$index])) {
+                $chosen = array_fill_keys(array_keys($parts), true);
+                $present = null;
+                break;
+            }
+            $chosen[$index] = true;
+            $present[$id] = true;
+        }
+        ksort($chosen);
+        $selected = array_values(array_intersect_key($parts, $chosen));
+
+        $images = $selected[0]['images'];
+        foreach (array_slice($selected, 1) as $part) {
+            if (isset($part['images'][0])) {
+                $images[] = $part['images'][0];
+            }
+        }
+        foreach (array_slice($selected, 1) as $part) {
+            array_push($images, ...array_slice($part['images'], 1));
+        }
+        $documents = [];
+        $categories = [];
+        $labels = [];
+        $tiers = $selected[0]['tiers'];
+        foreach ($selected as $part) {
+            foreach ($part['documents'] as $document) {
+                $documents[$document['url']] ??= $document;
+            }
+            foreach ($part['categories'] as $path) {
+                $categories[$path] = true;
+            }
+            foreach ($part['labels'] as $text) {
+                $labels[$text] = true;
+            }
+            if ($part['tiers'] !== $tiers) {
+                $tiers = [];
+            }
+        }
+
+        $raw['colours'] = array_column($selected, 'text');
+        $raw['image_urls'] = array_slice(array_values(array_unique($images)), 0, self::IMAGES_LIMIT);
+        $raw['documents'] = array_slice(array_values($documents), 0, self::DOCUMENTS_LIMIT);
+        $raw['category_path'] = implode(' | ', array_keys($categories));
+        $raw['labels'] = array_keys($labels);
+        $raw['tiers'] = $selected[0]['single'] ? $tiers : [];
+        $raw['stock'] = [];
+        // pola i cechy wspólne wszystkim kolorom (Waga otwartego rozmiaru czy Kod HS bywają różne — wtedy ich nie ma)
+        $common = static function (string $key) use ($selected): array {
+            $out = $selected[0][$key];
+            foreach (array_slice($selected, 1) as $part) {
+                $out = array_values(array_filter($out, static fn (array $pair): bool => in_array($pair, $part[$key], true)));
+            }
+
+            return $out;
+        };
+        $raw['fields'] = $common('fields');
+        $raw['attributes'] = $common('attributes');
+        if (count($selected) === 1) {
+            $part = $selected[0];
+            $rows = $present === null ? $part['rows'] : array_intersect_key($part['rows'], $present);
+            $raw['symbol'] = implode('; ', array_keys($rows));
+            $raw['stock'] = array_values(array_map(
+                static fn (array $row): string => ($row['size'] !== '' ? $row['size'].': ' : '').$row['stock'],
+                $rows,
+            ));
+            $eans = array_filter($rows, static fn (array $row): bool => $row['ean'] !== '');
+            if ($eans !== []) {
+                $raw['fields'][] = $part['single']
+                    ? ['Kod kreskowy EAN', implode('; ', array_column($eans, 'ean'))]
+                    : ['EAN', implode('; ', array_map(static fn (array $row): string => $row['size'].': '.$row['ean'], $eans))];
+            }
+            $raw['attributes'][] = ['Kolor', $part['text']];
+        }
+
+        return $raw;
+    }
+
+    /**
+     * Nazwa karty koloru ze źródła (jak dotąd: „JHK Bluza JT SWCR BK, BK - Black”) — na karcie z kolorami nazwa koloru
+     * prowadzącego i nazwy pozycji.
+     *
+     * @param  array{row: array{path: string, name: string, color: string, price_text: string}, page: array<string, mixed>, priced: non-empty-list<array{symbol: string}>, code: string|null, single: bool}  $part
+     */
+    private static function colourCardName(array $part): string
+    {
+        return self::cardName(
+            $part['row']['name'] !== '' ? $part['row']['name'] : (string) $part['page']['name'],
+            $part['row']['color'],
+            $part['code'] ?? $part['priced'][0]['symbol'],
+        );
+    }
+
+    /**
+     * Dostępność karty z kolorami: jak groupAvailability (dosłownie ze sklepu), a gdy taka lista wierszy byłaby dłuższa
+     * niż AVAILABILITY_LIMIT (dziesiątki kolorów po kilka rozmiarów) — w ilu wierszach karty sklep pokazuje towar
+     * w każdym magazynie (nazwy magazynów dosłownie). Stan każdego wiersza zostaje przy wierszu wariantu.
+     *
+     * @param  list<array{size: string, symbol: string, stock: string}>  $rows
+     */
+    private static function colourAvailability(array $rows): ?string
+    {
+        $literal = self::groupAvailability($rows);
+        if ($literal === null || mb_strlen($literal) <= self::AVAILABILITY_LIMIT) {
+            return $literal;
+        }
+        $counts = [];
+        foreach ($rows as $row) {
+            foreach (explode('; ', $row['stock']) as $part) {
+                $place = preg_match('/^(.+): \d+ szt\.$/u', $part, $m) === 1 ? $m[1] : ($part !== '' ? $part : 'brak informacji');
+                $counts[$place] = ($counts[$place] ?? 0) + 1;
+            }
+        }
+        $parts = [];
+        foreach ($counts as $place => $count) {
+            $parts[] = $place.': '.$count.' z '.count($rows).' wierszy';
+        }
+
+        return implode('; ', $parts).' (stan każdego koloru i rozmiaru w tabeli wariantów)';
+    }
+
+    /** Etykieta wiersza karty z kolorami: „BK - Black / XS”; wyrób bez rozmiarów — sam kolor. */
+    private static function rowLabel(string $colour, string $size): string
+    {
+        return $size !== '' ? $colour.' / '.$size : $colour;
+    }
+
+    /**
+     * Pierwszy kod z kandydatów, którego przebieg jeszcze nie wydał — dwie karty przebiegu z tym samym SKU złamałyby
+     * UNIQUE products.sku i synchronizacja pominęłaby drugą. Ostatni kandydat (kod koloru ze sklepu) zostaje także
+     * zajęty — jak karta tego koloru do tej pory.
+     *
+     * @param  non-empty-list<string>  $candidates
+     */
+    private function uniqueSku(array $candidates): string
+    {
+        foreach ($candidates as $candidate) {
+            $key = mb_strtolower($candidate);
+            if ($candidate !== '' && ! isset($this->skus[$key])) {
+                $this->skus[$key] = true;
+
+                return $candidate;
+            }
+        }
+
+        return $candidates[array_key_last($candidates)];
+    }
+
+    /**
      * Symbol i EAN każdego rozmiaru karty; pozycja = symbol rozmiaru (remote_id powiązania), a wyrób bez rozmiarów
      * ma jedną pozycję — swój symbol, zarazem remoteId karty. Symbol to własny kod sklepu producenta: przy wyrobie
      * JHK jest kodem producenta, przy MOONTEX (inna marka w tym sklepie) tylko kodem źródła. Kod wyrobu bez rozmiaru
      * (productCode) składamy sami z symboli — nie jest identyfikatorem ze źródła i tu nie trafia.
      *
+     * Na karcie z kolorami etykieta pozycji to wiersz wariantu („BK - Black / XS”, rowLabel) — $colour = kolor strony.
+     *
      * @param  list<array{path: string, symbol: string, size: string, ean: string, cents: int|null, vat: string, stock: string}>  $group
      * @return list<B2bRemoteIdentifier>
      */
-    private static function identifiers(array $group, bool $single, bool $moontex): array
+    private static function identifiers(array $group, bool $single, bool $moontex, ?string $colour = null): array
     {
         $codeType = $moontex ? ProductIdentifier::TYPE_SOURCE_CODE : ProductIdentifier::TYPE_MANUFACTURER_CODE;
         $out = [];
         foreach ($group as $size) {
             $position = $size['symbol'];
-            $label = $size['size'] !== '' ? $size['size'] : null;
+            $label = $colour !== null ? self::rowLabel($colour, $size['size']) : ($size['size'] !== '' ? $size['size'] : null);
             $out[] = new B2bRemoteIdentifier(type: $codeType, value: $position, remoteId: $position, label: $label, field: 'Symbol');
             if ($size['ean'] !== '') {
                 $out[] = new B2bRemoteIdentifier(
@@ -968,7 +1565,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     /**
      * @param  array{path: string, name: string, color: string, price_text: string}  $row
      */
-    private function skipped(array $row, string $reason): B2bRemoteProduct
+    private function skipped(array $row, string $reason, bool $readError = false): B2bRemoteProduct
     {
         $this->skippedProducts++;
         $name = $row['name'] !== '' ? $row['name'] : $row['path'];
@@ -978,7 +1575,42 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
             sku: $name,
             name: $name,
             sourceUrl: JhkB2bClient::BASE.$row['path'],
-            raw: ['status' => 'skipped', 'reason' => $reason],
+            raw: ['status' => 'skipped', 'reason' => $reason, 'read_error' => $readError],
+        );
+    }
+
+    /**
+     * Kolory wyrobu wstrzymane w tym przebiegu, bo strona innego koloru tego wyrobu nie dała się odczytać: pozycja
+     * pominięta z powodem, której pozycje (members) to wiersze odczytanych kolorów. Synchronizacja uznaje je za nieudane
+     * (B2bCatalogSync: pozycje produktu pominiętego) — karta wyrobu i dawne karty kolorów zostają bez zmian, a ich
+     * wiersze nie są oznaczane jako usunięte na końcu przebiegu. Karta z samych odczytanych kolorów zmieniłaby tabelę
+     * wariantów (bez koloru nieodczytanego) albo wróciła do postaci karty koloru — i z powrotem w następnym przebiegu.
+     *
+     * @param  non-empty-list<array{row: array{path: string, name: string, color: string, price_text: string}, page: array<string, mixed>, priced: non-empty-list<array{symbol: string}>, code: string|null, single: bool}>  $parts
+     * @param  list<string>  $failed  adresy kolorów, których strony się nie odczytały
+     */
+    private function heldColours(array $parts, array $failed): B2bRemoteProduct
+    {
+        $this->skippedProducts++;
+        $members = [];
+        foreach ($parts as $part) {
+            $name = self::colourCardName($part);
+            foreach ($part['priced'] as $size) {
+                $members[] = ['remote_id' => $size['symbol'], 'sku' => $size['symbol'], 'name' => $name];
+            }
+        }
+        $lead = $parts[0]['row'];
+
+        return new B2bRemoteProduct(
+            remoteId: $members[0]['remote_id'],
+            sku: $lead['name'] !== '' ? $lead['name'] : $lead['path'],
+            name: $members[0]['name'],
+            sourceUrl: JhkB2bClient::BASE.$lead['path'],
+            raw: [
+                'status' => 'skipped',
+                'reason' => 'kolory wyrobu bez zmian w tym przebiegu — nie odczytano strony koloru '.implode(', ', $failed),
+            ],
+            members: $members,
         );
     }
 

@@ -78,6 +78,9 @@ final class JhkConnectorTest extends TestCase
 
     private bool $pageCountChangesOnce = false;
 
+    /** @var list<string> strony wyrobów, które sklep zwraca z błędem HTTP 500 */
+    private array $failingPaths = [];
+
     /** @var list<string> */
     private array $requests = [];
 
@@ -468,6 +471,307 @@ final class JhkConnectorTest extends TestCase
         $this->assertStringContainsString('JT TEST BK XXL', implode("\n", $connector->runSummary()));
     }
 
+    /**
+     * Decyzja użytkownika 28.09.2026 (wieczór): kolory jednego wyrobu to jedna karta. Czarna i granatowa bluza (dwie
+     * pozycje listy, między nimi czapka) → jedna karta „JT TEST” z wierszami kolor × rozmiar; pozycje zachowują symbole
+     * rozmiarów jako remote_id, kody i nazwy kart kolorów, a cena karty to najtańszy wiersz (granatowy XS).
+     */
+    public function test_colours_of_one_model_are_one_card_with_colour_and_size_rows(): void
+    {
+        $black = self::sweatshirt();
+        $black['documents'] = ['/zasoby/import/j/jt-test-karta.pdf'];
+        $this->addProduct($black);
+        $this->addProduct(self::beanie());
+        $navy = self::navySweatshirt();
+        // granat bywa też w innej kategorii sklepu, a waga otwartej karty to waga innego rozmiaru — to nie rozdziela kolorów
+        $navy['categories'][] = ['Sublimacja', 'JT TEST NAVY'];
+        $navy['fields'] = [['Kod kreskowy EAN', '5900000000112'], ['Kod HS', '61109000'], ['Waga:', '0.52 kg']];
+        $this->addProduct($navy);
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        // karta z kolorami na miejscu pierwszego koloru, czapka (inny wyrób) bez zmian
+        $this->assertSame(['JT TEST', 'CZZIM TEST BK'], array_map(static fn (B2bRemoteProduct $p): string => $p->sku, $products));
+        $this->assertSame(2, $connector->totalProducts());
+        $card = $products[0];
+        $this->assertSame('JT TEST BK XS', $card->remoteId);
+        $this->assertSame('JHK Bluza JT TEST BK, BK - Black', $card->name);
+        $this->assertSame('JHK Bluza JT TEST', $card->cardName);
+        $this->assertSame(self::BASE.'/pl/bluza-jt-test-bk-xxl', $card->sourceUrl);
+        $this->assertSame('Bluzy Dresowe > Męskie > JHK JT TEST', $card->category);
+        $this->assertSame(
+            [
+                ['JT TEST BK XS', 'JT TEST BK XS', 'JHK Bluza JT TEST BK, BK - Black XS', 'BK - Black / XS', 25.76, 46.0, 44.0],
+                ['JT TEST BK XXL', 'JT TEST BK XXL', 'JHK Bluza JT TEST BK, BK - Black XXL', 'BK - Black / XXL', 25.76, 46.0, 44.0],
+                ['JT TEST NY XS', 'JT TEST NY XS', 'JHK Bluza JT TEST NY, NY - Navy XS', 'NY - Navy / XS', 24.0, 46.0, 47.83],
+                ['JT TEST NY XXL', 'JT TEST NY XXL', 'JHK Bluza JT TEST NY, NY - Navy XXL', 'NY - Navy / XXL', 25.76, 46.0, 44.0],
+                ['JT TEST NY 3XL', 'JT TEST NY 3XL', 'JHK Bluza JT TEST NY, NY - Navy 3XL', 'NY - Navy / 3XL', 26.32, 47.0, 44.0],
+            ],
+            array_map(static fn (array $m): array => [
+                $m['remote_id'], $m['sku'], $m['name'], $m['size'], $m['price']->net, $m['price']->base, $m['price']->discountPercent,
+            ], $card->members),
+        );
+        $this->assertSame('Kolory: BK - Black, NY - Navy; rozmiary: XS, XXL, 3XL', $card->variantSummary);
+        $price = $connector->price($card);
+        $this->assertSame([24.0, 46.0, 47.83], [$price?->net, $price?->base, $price?->discountPercent]);
+        $this->assertSame('JHK', $connector->manufacturer($card));
+        $this->assertStringStartsWith('Bluza unisex', $connector->description($card));
+
+        // tabelka: bez koloru jednej pozycji i bez list wszystkich wierszy (symbole, EAN-y i stany są przy wierszach
+        // wariantów i identyfikatorach pozycji)
+        $fields = array_map(static fn ($f): array => [$f->section, $f->name, $f->value], $connector->shopFields($card));
+        $names = array_column($fields, 1);
+        foreach (['Kolor', 'Symbol', 'EAN', 'Kod kreskowy EAN', 'Rozmiar', 'Produkt niekupiony', 'Stan magazynowy'] as $name) {
+            $this->assertNotContains($name, $names);
+        }
+        $this->assertContains(['Oznaczenia', 'Kod HS', '61109000'], $fields);
+        $this->assertContains(['Informacje handlowe', 'Kategoria w sklepie', 'Bluzy Dresowe > Męskie > JHK JT TEST | Sublimacja > JT TEST NAVY'], $fields);
+        // pole różne między kolorami (waga otwartego rozmiaru) — na karcie z kolorami go nie ma, zamiast wagi jednego koloru
+        $this->assertNotContains('Waga', $names);
+        $this->assertSame(
+            'Magazyn w Polsce - dostępne 24 h: 45 szt.; Magazyn producenta - dostępne 14 dni: 216 szt.: BK - Black / XS, NY - Navy / XS;'
+            .' Magazyn w Polsce - dostępne 24 h: 200 szt.: BK - Black / XXL, NY - Navy / XXL;'
+            .' Magazyn w Polsce - dostępne 24 h: 12 szt.: NY - Navy / 3XL',
+            $card->availability,
+        );
+        $this->assertSame(
+            'Magazyn w Polsce - dostępne 24 h: 12 szt.',
+            $card->members[4]['availability'],
+        );
+
+        // zdjęcia koloru prowadzącego, potem granatowe; pliki obu kolorów bez powtórzeń
+        $this->assertSame(
+            [
+                self::BASE.'/zasoby/import/j/jt-test-bk-xs_01.jpg', self::BASE.'/zasoby/import/j/jt-test-bk-xs_02.jpg',
+                self::BASE.'/zasoby/import/j/jt-test-ny-xs_01.jpg', self::BASE.'/zasoby/import/j/jt-test-ny-xs_02.jpg',
+            ],
+            $connector->imageUrls($card),
+        );
+        $this->assertSame(
+            [self::BASE.'/zasoby/import/j/jt-test-karta.pdf', self::BASE.'/zasoby/import/j/jt-test-ny-certyfikat.pdf'],
+            array_map(static fn ($d): string => $d->sourceUrl, $connector->documents($card)),
+        );
+
+        // symbol i EAN każdej pozycji z etykietą jej wiersza (kolor i rozmiar)
+        $this->assertSame(
+            [
+                ['manufacturer_code', 'JT TEST BK XS', 'JT TEST BK XS', 'BK - Black / XS', 'Symbol'],
+                ['ean', '5900000000101', 'JT TEST BK XS', 'BK - Black / XS', 'EAN'],
+                ['manufacturer_code', 'JT TEST BK XXL', 'JT TEST BK XXL', 'BK - Black / XXL', 'Symbol'],
+                ['ean', '5900000000102', 'JT TEST BK XXL', 'BK - Black / XXL', 'EAN'],
+                ['manufacturer_code', 'JT TEST NY XS', 'JT TEST NY XS', 'NY - Navy / XS', 'Symbol'],
+                ['ean', '5900000000111', 'JT TEST NY XS', 'NY - Navy / XS', 'EAN'],
+                ['manufacturer_code', 'JT TEST NY XXL', 'JT TEST NY XXL', 'NY - Navy / XXL', 'Symbol'],
+                ['ean', '5900000000112', 'JT TEST NY XXL', 'NY - Navy / XXL', 'EAN'],
+                ['manufacturer_code', 'JT TEST NY 3XL', 'JT TEST NY 3XL', 'NY - Navy / 3XL', 'Symbol'],
+                ['ean', '5900000000113', 'JT TEST NY 3XL', 'NY - Navy / 3XL', 'EAN'],
+            ],
+            self::identifierRows($card),
+        );
+
+        // dawna karta koloru przed „Scal rozmiary”: synchronizacja podaje jej tylko jej pozycje (syncMembersByCard) —
+        // zdjęcia, pliki i tabelka tylko granatowe, jak na karcie koloru dotąd
+        $navy = new B2bRemoteProduct(
+            remoteId: 'JT TEST NY XS',
+            sku: 'JT TEST NY',
+            name: $card->name,
+            raw: $card->raw,
+            members: array_values(array_filter($card->members, static fn (array $m): bool => str_starts_with($m['remote_id'], 'JT TEST NY'))),
+        );
+        $this->assertSame(
+            [self::BASE.'/zasoby/import/j/jt-test-ny-xs_01.jpg', self::BASE.'/zasoby/import/j/jt-test-ny-xs_02.jpg'],
+            $connector->imageUrls($navy),
+        );
+        $this->assertSame(
+            [self::BASE.'/zasoby/import/j/jt-test-karta.pdf', self::BASE.'/zasoby/import/j/jt-test-ny-certyfikat.pdf'],
+            array_map(static fn ($d): string => $d->sourceUrl, $connector->documents($navy)),
+        );
+        $navyFields = array_map(static fn ($f): array => [$f->name, $f->value], $connector->shopFields($navy));
+        $this->assertContains(['Kolor', 'NY - Navy'], $navyFields);
+        $this->assertContains(['Symbol', 'JT TEST NY XS; JT TEST NY XXL; JT TEST NY 3XL'], $navyFields);
+        $this->assertContains(['EAN', 'XS: 5900000000111; XXL: 5900000000112; 3XL: 5900000000113'], $navyFields);
+        $this->assertContains([
+            'Stan magazynowy',
+            'XS: Magazyn w Polsce - dostępne 24 h: 45 szt.; Magazyn producenta - dostępne 14 dni: 216 szt.;'
+            .' XXL: Magazyn w Polsce - dostępne 24 h: 200 szt.; 3XL: Magazyn w Polsce - dostępne 24 h: 12 szt.',
+        ], $navyFields);
+        // czarna karta: tylko czarne zdjęcia i wspólna karta produktu (certyfikat granatu nie jej)
+        $black = new B2bRemoteProduct(remoteId: 'JT TEST BK XS', sku: 'JT TEST BK', name: $card->name, raw: $card->raw, members: array_slice($card->members, 0, 2));
+        $this->assertSame(
+            [self::BASE.'/zasoby/import/j/jt-test-bk-xs_01.jpg', self::BASE.'/zasoby/import/j/jt-test-bk-xs_02.jpg'],
+            $connector->imageUrls($black),
+        );
+        $this->assertSame(
+            [self::BASE.'/zasoby/import/j/jt-test-karta.pdf'],
+            array_map(static fn ($d): string => $d->sourceUrl, $connector->documents($black)),
+        );
+
+        $summary = implode("\n", $connector->runSummary());
+        $this->assertStringContainsString('Warianty kolorystyczne JHK: 1 wyrobów z 2 kolorów', $summary);
+        $this->assertStringContainsString('Karty: 2 (1 wyrobów z rozmiarami w różnych cenach', $summary);
+    }
+
+    /**
+     * Wyrób w kilkunastu kolorach (produkcja: TSRA 150 ma 87 kolorów): dostępność karty jako lista wierszy byłaby
+     * nieczytelna — karta podaje, w ilu wierszach jest towar w każdym magazynie, a stan wiersza zostaje przy nim.
+     */
+    public function test_many_colours_give_the_card_availability_as_row_counts_per_warehouse(): void
+    {
+        $codes = ['BK' => 'Black', 'NY' => 'Navy', 'RD' => 'Red', 'WH' => 'White', 'GN' => 'Green', 'OR' => 'Orange',
+            'YE' => 'Yellow', 'PK' => 'Pink', 'GR' => 'Grey', 'BL' => 'Blue', 'BR' => 'Brown', 'VI' => 'Violet'];
+        $i = 0;
+        foreach ($codes as $code => $name) {
+            $product = self::recoloured(self::sweatshirt(), $code, $code.' - '.$name, 10 * $i);
+            $product['sizes'][0]['stock'] = [$i + 1, 5];
+            $product['sizes'][1]['stock'] = [$i + 100, 0];
+            $this->addProduct($product);
+            $i++;
+        }
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(1, $products);
+        $this->assertCount(24, $products[0]->members);
+        $this->assertSame(
+            'Magazyn w Polsce - dostępne 24 h: 24 z 24 wierszy; Magazyn producenta - dostępne 14 dni: 12 z 24 wierszy'
+            .' (stan każdego koloru i rozmiaru w tabeli wariantów)',
+            $products[0]->availability,
+        );
+        // ostatni wiersz: XXL koloru o najwyższym symbolu (YE, siódmy na liście)
+        $this->assertSame(['JT TEST YE XXL', 'Magazyn w Polsce - dostępne 24 h: 106 szt.'], [$products[0]->members[23]['remote_id'], $products[0]->members[23]['availability']]);
+        $this->assertStringContainsString('Warianty kolorystyczne JHK: 1 wyrobów z 12 kolorów', implode("\n", $connector->runSummary()));
+    }
+
+    /**
+     * Czapki bez rozmiarów w dwóch kolorach (kolor zapisany „WH White”, bez myślnika) → jedna karta; wiersz = sam kolor,
+     * EAN z pola karty jednego koloru nie trafia do tabelki, a zostaje przy pozycji.
+     */
+    public function test_colours_of_a_product_without_sizes_are_one_card_with_colour_rows(): void
+    {
+        $this->addProduct(self::beanie());
+        $white = self::recoloured(self::beanie(), 'WH', 'WH White', 5);
+        $white['account'] = 700;
+        $white['catalog'] = 1200;
+        $this->addProduct($white);
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(1, $products);
+        $card = $products[0];
+        $this->assertSame(['CZZIM TEST', 'CZZIM TEST BK', 'JHK CZZIM TEST BK, BK - Black', 'JHK CZZIM TEST'], [$card->sku, $card->remoteId, $card->name, $card->cardName]);
+        $this->assertSame(
+            [
+                ['CZZIM TEST BK', 'CZZIM TEST BK', 'JHK CZZIM TEST BK, BK - Black', 'BK - Black', 6.16, 11.0],
+                ['CZZIM TEST WH', 'CZZIM TEST WH', 'JHK CZZIM TEST WH, WH White', 'WH White', 7.0, 12.0],
+            ],
+            array_map(static fn (array $m): array => [$m['remote_id'], $m['sku'], $m['name'], $m['size'], $m['price']->net, $m['price']->base], $card->members),
+        );
+        $this->assertSame('Kolory: BK - Black, WH White', $card->variantSummary);
+        $this->assertSame(6.16, $connector->price($card)?->net);
+        $fields = array_map(static fn ($f): array => [$f->name, $f->value], $connector->shopFields($card));
+        $this->assertContains(['Rozmiar', 'Uni'], $fields);
+        $this->assertNotContains('Kod kreskowy EAN', array_column($fields, 0));
+        $this->assertSame(
+            [
+                ['manufacturer_code', 'CZZIM TEST BK', 'CZZIM TEST BK', 'BK - Black', 'Symbol'],
+                ['ean', '5900000000201', 'CZZIM TEST BK', 'BK - Black', 'Kod kreskowy EAN'],
+                ['manufacturer_code', 'CZZIM TEST WH', 'CZZIM TEST WH', 'WH White', 'Symbol'],
+                ['ean', '5900000000206', 'CZZIM TEST WH', 'WH White', 'Kod kreskowy EAN'],
+            ],
+            self::identifierRows($card),
+        );
+    }
+
+    /**
+     * Łączymy tylko to, co sklep sam pokazuje jako jeden wyrób w kolorach. Zostają kartami kolorów jak dotąd: ten sam
+     * wyrób w innej kategorii, kolor w środku kodu („CZA TEST BK ZAP”), kolor bez kodu („Jasny szary”) i ten sam kolor
+     * dwa razy. Wyrób o innej nazwie („Polo JT TEST”) to osobna grupa kolorów.
+     */
+    public function test_colours_are_joined_only_when_the_source_presents_them_as_one_model(): void
+    {
+        // inny opis (skład koloru melanż)
+        $this->addProduct(self::sweatshirt());
+        $other = self::recoloured(self::sweatshirt(), 'NY', 'NY - Navy', 10);
+        $other['description'] = '<p>Bluza unisex z okrągłym dekoltem.</p><ul><li>Skład: 85% bawełna, 15% wiskoza</li></ul>';
+        $this->addProduct($other);
+        // kolor w środku kodu
+        $metal = self::beanie();
+        $metal['tile_path'] = '/pl/czapka-cza-test-bk-zap';
+        $metal['tile_name'] = $metal['name'] = $metal['symbol'] = 'CZA TEST BK ZAP';
+        $this->addProduct($metal);
+        $this->addProduct(self::recoloured($metal, 'WH', 'WH White', 5));
+        // kolor bez kodu
+        foreach (['Jasny szary' => 'JS', 'Ciemny szary' => 'CS'] as $colour => $code) {
+            $grey = self::beanie();
+            $grey['tile_path'] = '/pl/czapka-cz-test-'.strtolower($code);
+            $grey['tile_name'] = $grey['name'] = 'CZA TEST '.mb_strtoupper($colour);
+            $grey['symbol'] = 'CZ TEST '.$code;
+            $grey['color'] = $colour;
+            $this->addProduct($grey);
+        }
+        // ten sam kolor dwa razy (dwie rodziny rozmiarów pod tym samym kodem koloru)
+        $first = self::recoloured(self::sweatshirt(), 'BK', 'BK - Black', 20);
+        foreach (['tile_path', 'tile_name', 'name'] as $key) {
+            $first[$key] = str_replace(['TEST', 'test'], ['DUP', 'dup'], $first[$key]);
+        }
+        $first['sizes'] = array_map(static fn (array $s): array => [...$s, 'symbol' => str_replace('TEST', 'DUP', $s['symbol']), 'path' => str_replace('test', 'dup', $s['path'])], $first['sizes']);
+        $second = $first;
+        $second['tile_path'] = '/pl/bluza-jt-dup-bk-3xl';
+        $second['sizes'] = [['size' => '3XL', 'symbol' => 'JT DUP BK 3XL', 'ean' => '5900000000190', 'account' => 2632, 'catalog' => 4700, 'path' => '/pl/bluza-jt-dup-bk-3xl', 'stock' => [1, 0]]];
+        $this->addProduct($first);
+        $this->addProduct($second);
+        // inna nazwa, ten sam kod bez koloru: „Polo JT TEST” w czerwieni i zieleni
+        $this->addProduct(self::polo('RD', 'RD - Red', 30));
+        $this->addProduct(self::polo('GN', 'GN - Green', 40));
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertSame(
+            [
+                ['JT TEST BK', null], ['JT TEST NY', null],
+                ['CZA TEST BK ZAP', null], ['CZA TEST WH ZAP', null],
+                ['CZ TEST JS', null], ['CZ TEST CS', null],
+                // ten sam kod dwa razy złamałby UNIQUE products.sku — druga karta ma symbol pierwszego rozmiaru
+                ['JT DUP BK', null], ['JT DUP BK 3XL', null],
+                ['JT TEST', 'JHK Polo JT TEST'],
+            ],
+            array_map(static fn (B2bRemoteProduct $p): array => [$p->sku, $p->cardName], $products),
+        );
+        // karta koloru jak dotąd: etykieta wiersza = sam rozmiar
+        $this->assertSame(['XS', 'XXL'], array_column($products[0]->members, 'size'));
+        $this->assertSame('JHK Bluza JT TEST NY, NY - Navy', $products[1]->name);
+        // kolory w kolejności najniższego symbolu rozmiaru (GN przed RD), nie kolejności listy
+        $this->assertSame(['GN - Green / XS', 'GN - Green / XXL', 'RD - Red / XS', 'RD - Red / XXL'], array_column($products[8]->members, 'size'));
+        $summary = implode("\n", $connector->runSummary());
+        $this->assertStringContainsString('Kolory jednego wyrobu z różnymi opisami — karty osobno: 1 wyrobów (2 kolorów), np. JT TEST', $summary);
+    }
+
+    /** Dwa wyroby o tym samym kodzie bez koloru i innych nazwach — drugi dostaje kod koloru prowadzącego (UNIQUE sku). */
+    public function test_second_model_with_the_same_code_without_colour_takes_its_lead_colour_code(): void
+    {
+        $this->addProduct(self::sweatshirt());
+        $this->addProduct(self::navySweatshirt());
+        $this->addProduct(self::polo('RD', 'RD - Red', 30));
+        $this->addProduct(self::polo('GN', 'GN - Green', 40));
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertSame(
+            [['JT TEST', 'JHK Bluza JT TEST'], ['JT TEST GN', 'JHK Polo JT TEST']],
+            array_map(static fn (B2bRemoteProduct $p): array => [$p->sku, $p->cardName], $products),
+        );
+    }
+
     public function test_files_keep_the_polish_version_and_stay_out_of_the_description(): void
     {
         $this->addProduct(self::jacket());
@@ -675,6 +979,154 @@ final class JhkConnectorTest extends TestCase
         $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
     }
 
+    public function test_sync_creates_one_card_for_the_colours_with_colour_and_size_rows_and_a_second_run_changes_nothing(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addProduct(self::sweatshirt());
+        $this->addProduct(self::navySweatshirt());
+        $this->fakeShop();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+
+        $this->assertSame(1, $result['created'], implode(' | ', $result['errors']));
+        $card = Product::query()->sole();
+        $this->assertSame(['JT TEST', 'JHK Bluza JT TEST', 'JHK'], [$card->sku, $card->name, $card->manufacturer]);
+        $this->assertSame('Kolory: BK - Black, NY - Navy; rozmiary: XS, XXL, 3XL', $card->variant_summary);
+        $this->assertSame(
+            ['JT TEST BK XS', 'JT TEST BK XXL', 'JT TEST NY 3XL', 'JT TEST NY XS', 'JT TEST NY XXL'],
+            B2bProductLink::query()->where('product_id', $card->id)->orderBy('remote_id')->pluck('remote_id')->all(),
+        );
+        $slot = ProductSourcePrice::query()->where('product_id', $card->id)->sole();
+        $this->assertSame(['24.00', '46.00', '26.32'], [(string) $slot->purchase_price, (string) $slot->catalog_price_net, (string) $slot->size_price_max]);
+        $this->assertSame(
+            [
+                ['BK - Black / XS', 'JT TEST BK XS', '25.76'], ['BK - Black / XXL', 'JT TEST BK XXL', '25.76'],
+                ['NY - Navy / XS', 'JT TEST NY XS', '24.00'], ['NY - Navy / XXL', 'JT TEST NY XXL', '25.76'],
+                ['NY - Navy / 3XL', 'JT TEST NY 3XL', '26.32'],
+            ],
+            ProductVariant::query()->where('product_id', $card->id)->orderBy('sort_order')->get()
+                ->map(static fn (ProductVariant $v): array => [$v->label, $v->sku, (string) $v->purchase_price])->all(),
+        );
+        $this->assertSame(10, ProductIdentifier::query()->where('product_id', $card->id)->count());
+
+        $before = $this->snapshot();
+        $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
+
+        $this->assertSame([0, 0, 1], [$second['created'], $second['updated'], $second['unchanged']], implode(' | ', $second['errors']));
+        $this->assertSame($before, $this->snapshot());
+    }
+
+    /** Kolejność kolorów na liście sklepu się zmienia — karta (kolor prowadzący, kolejność wierszy) nie. */
+    public function test_colour_card_does_not_depend_on_the_list_order(): void
+    {
+        $this->addProduct(self::navySweatshirt());
+        $this->addProduct(self::sweatshirt());
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(1, $products);
+        $card = $products[0];
+        $this->assertSame(
+            ['JT TEST', 'JT TEST BK XS', 'JHK Bluza JT TEST BK, BK - Black', self::BASE.'/pl/bluza-jt-test-bk-xxl'],
+            [$card->sku, $card->remoteId, $card->name, $card->sourceUrl],
+        );
+        $this->assertSame(
+            ['JT TEST BK XS', 'JT TEST BK XXL', 'JT TEST NY XS', 'JT TEST NY XXL', 'JT TEST NY 3XL'],
+            array_column($card->members, 'remote_id'),
+        );
+        $this->assertSame('Kolory: BK - Black, NY - Navy; rozmiary: XS, XXL, 3XL', $card->variantSummary);
+    }
+
+    /**
+     * Strona jednego koloru nieodczytana (HTTP 500): karta z kolorami nie jest w tym przebiegu zapisywana ani
+     * przerabiana na kartę koloru — pozycja pominięta z wierszami odczytanych kolorów chroni jej wiersze przed
+     * oznaczeniem jako usunięte na końcu przebiegu; następny przebieg bez błędu niczego nie zmienia.
+     */
+    public function test_unread_colour_page_leaves_the_colour_card_and_its_rows_untouched(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addProduct(self::sweatshirt());
+        $this->addProduct(self::navySweatshirt());
+        $this->fakeShop();
+        $account = $this->account();
+
+        $first = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: false);
+        $this->assertSame(1, $first['created'], implode(' | ', $first['errors']));
+        $card = Product::query()->sole();
+        $before = $this->snapshot();
+        $activeRows = static fn (): int => ProductVariant::query()->where('product_id', $card->id)->whereNull('removed_at')->count();
+        $this->assertSame(5, $activeRows());
+
+        $this->failingPaths = ['/pl/bluza-jt-test-ny-xxl'];
+        $second = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: false);
+        $this->assertSame(5, $activeRows());
+        $this->assertSame($before, $this->snapshot());
+        $this->assertSame([0, 0, 0], [$second['created'], $second['updated'], $second['unchanged']], implode(' | ', $second['errors']));
+        $errors = implode(' | ', $second['errors']);
+        $this->assertStringContainsString('/pl/bluza-jt-test-ny-xxl', $errors);
+        $this->assertStringContainsString('kolory wyrobu bez zmian w tym przebiegu', $errors);
+
+        $this->failingPaths = [];
+        $third = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: false);
+
+        $this->assertSame([0, 0, 1], [$third['created'], $third['updated'], $third['unchanged']], implode(' | ', $third['errors']));
+        $this->assertSame(5, $activeRows());
+        $this->assertSame($before, $this->snapshot());
+    }
+
+    /**
+     * Karty kolorów sprzed decyzji 28.09.2026 (czarna i granatowa bluza) zostają: przebieg nie tworzy nowej karty i nie
+     * przepina powiązań (remote_id = symbole rozmiarów jak dotąd), każda karta dostaje swoje wiersze, a wyrób trafia
+     * do size_spread z nazwą bez koloru i listą kolorów — do scalenia przyciskiem „Scal rozmiary”.
+     */
+    public function test_legacy_colour_cards_stay_and_are_listed_for_the_merge(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $blackProduct = self::sweatshirt();
+        $blackProduct['documents'] = ['/zasoby/import/j/jt-test-bk-certyfikat.pdf'];
+        $this->addProduct($blackProduct);
+        $this->addProduct(self::navySweatshirt());
+        $this->fakeShop();
+        $account = $this->account();
+        $description = "Bluza unisex z okrągłym dekoltem.\n- Gramatura: 260 g/m²\n- Pakowanie: 25 szt. (karton)";
+        $black = $this->legacyCard($account, 'JT TEST BK', 'JHK Bluza JT TEST BK, BK - Black', $description, 25.76, 46.0, ['XS', 'XXL']);
+        $navy = $this->legacyCard($account, 'JT TEST NY', 'JHK Bluza JT TEST NY, NY - Navy', $description, 24.0, 46.0, ['XS', 'XXL', '3XL'], 'JT TEST NY');
+        $cards = fn (): array => Product::query()->orderBy('id')->get()->map(fn (Product $p): array => [
+            $p->sku, $p->name,
+            B2bProductLink::query()->where('product_id', $p->id)->orderBy('remote_id')->pluck('remote_id')->all(),
+        ])->all();
+        $before = $cards();
+
+        $first = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: true);
+
+        $this->assertSame([0, 0], [$first['created'], $first['skipped']], implode(' | ', $first['errors']));
+        $this->assertSame($before, $cards());
+        $labels = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('label')->all();
+        $this->assertSame(['BK - Black / XS', 'BK - Black / XXL'], $labels($black));
+        $this->assertSame(['NY - Navy / XS', 'NY - Navy / XXL', 'NY - Navy / 3XL'], $labels($navy));
+        $spread = B2bSyncRun::query()->findOrFail($first['sync_run_id'])->size_spread;
+        $this->assertSame(1, $spread['total']);
+        $this->assertSame([$black->id, $navy->id], $spread['groups'][0]['cards']);
+        $this->assertSame('JHK Bluza JT TEST', $spread['groups'][0]['name']);
+        $this->assertSame('Kolory: BK - Black, NY - Navy; rozmiary: XS, XXL, 3XL', $spread['groups'][0]['variant_summary']);
+
+        // każda karta koloru ma tylko zdjęcia i pliki swojego koloru (tabelkę silnik zapisuje z produktu całej grupy)
+        $images = static fn (Product $card): array => ProductImage::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('source_url')->all();
+        $documents = static fn (Product $card): array => ProductDocument::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('source_url')->all();
+        $this->assertSame([self::BASE.'/zasoby/import/j/jt-test-bk-xs_01.jpg', self::BASE.'/zasoby/import/j/jt-test-bk-xs_02.jpg'], $images($black));
+        $this->assertSame([self::BASE.'/zasoby/import/j/jt-test-ny-xs_01.jpg', self::BASE.'/zasoby/import/j/jt-test-ny-xs_02.jpg'], $images($navy));
+        $this->assertSame([self::BASE.'/zasoby/import/j/jt-test-bk-certyfikat.pdf'], $documents($black));
+        $this->assertSame(
+            [self::BASE.'/zasoby/import/j/jt-test-karta.pdf', self::BASE.'/zasoby/import/j/jt-test-ny-certyfikat.pdf'],
+            $documents($navy),
+        );
+    }
+
     public function test_sync_reports_a_skipped_tile_and_saves_the_rest(): void
     {
         Storage::fake('public');
@@ -776,8 +1228,9 @@ final class JhkConnectorTest extends TestCase
      * i nazwa z rozmiarami; pozycje = symbole rozmiarów.
      *
      * @param  list<string>  $sizes
+     * @param  string  $code  kod koloru, do którego sklep dopisuje rozmiar (symbol rozmiaru = remote_id powiązania)
      */
-    private function legacyCard(B2bAccount $account, string $sku, string $name, string $description, float $price, float $catalog, array $sizes): Product
+    private function legacyCard(B2bAccount $account, string $sku, string $name, string $description, float $price, float $catalog, array $sizes, string $code = 'JT TEST BK'): Product
     {
         $discount = round((1 - $price / $catalog) * 100, 2);
         $card = Product::query()->create([
@@ -786,8 +1239,8 @@ final class JhkConnectorTest extends TestCase
         ]);
         foreach ($sizes as $size) {
             B2bProductLink::query()->create([
-                'b2b_account_id' => $account->id, 'remote_id' => 'JT TEST BK '.$size, 'product_id' => $card->id,
-                'remote_sku' => 'JT TEST BK '.$size, 'remote_name' => $name.' '.$size, 'manufacturer' => 'JHK',
+                'b2b_account_id' => $account->id, 'remote_id' => $code.' '.$size, 'product_id' => $card->id,
+                'remote_sku' => $code.' '.$size, 'remote_name' => $name.' '.$size, 'manufacturer' => 'JHK',
                 'description_hash' => sha1($description), 'last_purchase_price' => $price, 'last_currency' => 'PLN',
             ]);
         }
@@ -873,6 +1326,76 @@ final class JhkConnectorTest extends TestCase
             'size' => '3XL', 'symbol' => 'JT TEST BK 3XL', 'ean' => '5900000000103', 'account' => 2632, 'catalog' => 4700,
             'path' => '/pl/bluza-jt-test-bk-3xl', 'stock' => [12, 0],
         ];
+
+        return $product;
+    }
+
+    /**
+     * Ta sama bluza w granacie (osobna pozycja listy i strona koloru): XS tańszy niż w czerni, 3XL droższy, pliki —
+     * wspólna karta produktu i certyfikat tylko tego koloru.
+     *
+     * @return array<string, mixed>
+     */
+    private static function navySweatshirt(): array
+    {
+        $product = self::recoloured(self::sweatshirtSplit(), 'NY', 'NY - Navy', 10);
+        $product['sizes'][0]['account'] = 2400;
+        $product['documents'] = ['/zasoby/import/j/jt-test-karta.pdf', '/zasoby/import/j/jt-test-ny-certyfikat.pdf'];
+
+        return $product;
+    }
+
+    /**
+     * Inny wyrób o tym samym kodzie bez koloru co bluza („JT TEST”): polo w kolorze $code.
+     *
+     * @return array<string, mixed>
+     */
+    private static function polo(string $code, string $colour, int $eanShift): array
+    {
+        $product = self::recoloured(self::sweatshirt(), $code, $colour, $eanShift);
+        foreach (['tile_name', 'name'] as $key) {
+            $product[$key] = str_replace('Bluza', 'Polo', $product[$key]);
+        }
+
+        return $product;
+    }
+
+    /**
+     * Wyrób w innym kolorze: kod koloru zamiast „BK” w nazwie, symbolach, adresach i zdjęciach, kolor w liście
+     * i w cesze „Kolor”, inne EAN-y (+$eanShift).
+     *
+     * @param  array<string, mixed>  $product
+     * @return array<string, mixed>
+     */
+    private static function recoloured(array $product, string $code, string $colour, int $eanShift): array
+    {
+        $slug = strtolower(str_replace('/', '-', $code));
+        $swap = static fn (string $text): string => str_replace(
+            [' BK', '-bk-', '-bk.'],
+            [' '.$code, '-'.$slug.'-', '-'.$slug.'.'],
+            (string) preg_replace('/-bk$/', '-'.$slug, $text),
+        );
+        $ean = static fn (string $value): string => (string) ((int) $value + $eanShift);
+        foreach (['tile_path', 'tile_name', 'name', 'main_image'] as $key) {
+            $product[$key] = $swap($product[$key]);
+        }
+        if (isset($product['symbol'])) {
+            $product['symbol'] = $swap($product['symbol']);
+        }
+        $product['color'] = $colour;
+        $product['gallery'] = array_map($swap, $product['gallery']);
+        $product['attributes'] = array_map(
+            static fn (array $a): array => rtrim($a[0], ':') === 'Kolor' ? [$a[0], $colour] : $a,
+            $product['attributes'],
+        );
+        $product['fields'] = array_map(
+            static fn (array $f): array => $f[0] === 'Kod kreskowy EAN' ? [$f[0], $ean($f[1])] : $f,
+            $product['fields'],
+        );
+        $product['sizes'] = array_map(
+            static fn (array $s): array => [...$s, 'symbol' => $swap($s['symbol']), 'path' => $swap($s['path']), 'ean' => $ean($s['ean'])],
+            $product['sizes'],
+        );
 
         return $product;
     }
@@ -1034,10 +1557,14 @@ final class JhkConnectorTest extends TestCase
 
             if (str_starts_with($path, '/zasoby/')) {
                 return str_ends_with($path, '.pdf')
-                    ? Http::response('%PDF-1.4 atrapa', 200, ['Content-Type' => 'application/pdf'])
+                    // treść zależna od pliku — pobieranie plików odrzuca drugi plik o tej samej treści (suma kontrolna)
+                    ? Http::response('%PDF-1.4 atrapa '.$path, 200, ['Content-Type' => 'application/pdf'])
                     : Http::response(self::jpeg($path), 200, ['Content-Type' => 'image/jpeg']);
             }
 
+            if (in_array($path, $this->failingPaths, true)) {
+                return Http::response('Błąd serwera', 500, ['Content-Type' => 'text/html']);
+            }
             $product = $this->productAt($path);
             if ($product === null) {
                 return Http::response('Nie znaleziono '.$url, 404, ['Content-Type' => 'text/html']);
