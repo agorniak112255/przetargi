@@ -33,7 +33,8 @@ use Throwable;
  * b2b_sync_runs.size_spread — ta lista jest jedynym źródłem grupowania (grupowanie zna tylko dostawca).
  *
  * Każdy wyrób jest sprawdzany na bazie TERAZ (dane z przebiegu mogą być nieaktualne) i scalany tylko w prostym
- * przypadku; każdy nietypowy — pominięty z powodem, bez zgadywania: karty konta-właściciela tej samej marki, każde
+ * przypadku; każdy nietypowy — pominięty z powodem, bez zgadywania: karty tej samej marki bez właściciela albo tego
+ * konta (dystrybutor wielu marek też — Raw-Pol), każde
  * powiązanie konta na kartach to rozmiar tego wyrobu (karta z pozycją innego wyrobu skleiłaby dwa wyroby), każdy
  * rozmiar ma wiersz ceny na swojej karcie, bez wersji Sign Project, cen specjalnych, cennika z pliku (import po SKU
  * odtworzyłby skasowane karty), decyzji w mapie połączeń (człowiek już rozstrzygnął), trwających opisów, powiązań
@@ -172,8 +173,12 @@ final class B2bSizePriceMerger
             if (! CanonicalBrand::same($first->manufacturer, $card->manufacturer)) {
                 return $skip('karty różnych marek („'.$first->manufacturer.'” / „'.$card->manufacturer.'”)');
             }
-            if (! $this->ownership->isOwnerAccount($card, $account)) {
-                return $skip('karta #'.$card->id.' nie jest kartą producenta tego konta');
+            // karta, której właścicielem jest inne źródło (konto producenta marki albo jego cennik z pliku) — nie nasza
+            // decyzja; karta bez właściciela (założona przez dystrybutora, np. Raw-Pol z wieloma markami) i karta konta-
+            // producenta — tak (28.09.2026: warunek „tylko konto producenta” pominął wszystkie 1200 wyrobów Raw-Pol)
+            $owners = $this->ownership->ownerSourceKeys($card);
+            if ($owners !== [] && ! in_array(ProductSourcePrice::b2bKey((int) $account->id), $owners, true)) {
+                return $skip('karta #'.$card->id.' należy do innego źródła ('.implode(', ', $owners).') — łącz ręcznie w „Łączenie kart”');
             }
         }
 

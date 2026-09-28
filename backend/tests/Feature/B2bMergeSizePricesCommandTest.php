@@ -10,6 +10,7 @@ use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
 use App\Models\CardRedirect;
 use App\Models\Client;
+use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
@@ -359,6 +360,34 @@ final class B2bMergeSizePricesCommandTest extends TestCase
         $this->cleanBackups();
     }
 
+    public function test_distributor_cards_of_other_brands_merge_but_a_card_owned_by_the_brand_account_does_not(): void
+    {
+        // konto rawpol (dystrybutor wielu marek) — jego karty BUFF nie mają właściciela
+        $this->account = B2bAccount::query()->create([
+            'username' => 'supon123', 'password' => 'sekret', 'sites' => ['b2b.raw-pol.com'], 'connector' => 'rawpol',
+            'created_by' => $this->user->id, 'updated_by' => $this->user->id,
+        ]);
+        $this->connector->brand = 'BUFF';
+        [$small, $large] = $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id])
+            ->expectsOutputToContain('Do scalenia: 1')
+            ->assertSuccessful();
+
+        // karta z cennikiem producenta z pliku ma właściciela — dystrybutor jej nie scala
+        $list = PriceList::query()->create([
+            'manufacturer' => 'BUFF', 'version' => '1', 'original_filename' => 'buff.xlsx', 'imported_by' => $this->user->id,
+        ]);
+        ProductSourcePrice::query()->create([
+            'product_id' => $large->id, 'source_key' => ProductSourcePrice::SOURCE_FILE, 'price_list_id' => $list->id,
+            'purchase_price' => 110, 'catalog_price_net' => 130, 'currency' => 'PLN', 'checked_at' => now(),
+        ]);
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id])
+            ->expectsOutputToContain('Do scalenia: 0')
+            ->assertSuccessful();
+        $this->assertNotNull($small->fresh());
+    }
+
     public function test_process_stops_at_the_deadline_and_resumes_from_the_offset(): void
     {
         $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
@@ -500,6 +529,9 @@ final class MergeSizePriceFakeConnector implements B2bConnector, B2bGroupsSizes,
     /** @var list<B2bRemoteProduct> */
     public array $items = [];
 
+    /** marka pozycji — dystrybutor wielu marek (Raw-Pol) podaje cudzą */
+    public string $brand = 'MASCOT';
+
     public static function key(): string
     {
         return 'mascot';
@@ -539,7 +571,7 @@ final class MergeSizePriceFakeConnector implements B2bConnector, B2bGroupsSizes,
 
     public function manufacturer(B2bRemoteProduct $product): string
     {
-        return 'MASCOT';
+        return $this->brand;
     }
 
     public function price(B2bRemoteProduct $product): ?B2bRemotePrice
