@@ -55,6 +55,8 @@ final class SearchEvalParallelTest extends TestCase
         sort($done);
         $this->assertSame(['c0', 'c1', 'c2', 'c3', 'c4'], $done, 'każdy skończony przypadek przesuwa pasek postępu');
         Process::assertRanTimes(fn (PendingProcess $process): bool => in_array('search:eval-worker', (array) $process->command, true), 2);
+        // podproces w katalogu aplikacji — bieżący katalog terminala bywa niedostępny dla konta aplikacji (28.09.2026)
+        Process::assertRanTimes(fn (PendingProcess $process): bool => $process->path === base_path(), 2);
     }
 
     public function test_cases_of_a_crashed_worker_are_errors_not_zero_hits(): void

@@ -67,7 +67,8 @@ final class SearchEvalParallel
         try {
             $pool = Process::pool(function (Pool $pool) use ($shards, $idsFiles, $file, $k, $limit, $noVector): void {
                 foreach (array_keys($shards) as $i) {
-                    $pool->as((string) $i)->forever()->command([
+                    // katalog aplikacji, nie bieżący katalog terminala (root w katalogu, którego supon nie widzi → Process nie startuje)
+                    $pool->as((string) $i)->path(base_path())->forever()->command([
                         PHP_BINARY,
                         '-d',
                         'memory_limit='.(string) ini_get('memory_limit'),
