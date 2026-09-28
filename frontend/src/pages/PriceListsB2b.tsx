@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { B2bDiscountRulesModal } from '../components/B2bDiscountRulesModal'
 import { B2bManufacturerRulesModal } from '../components/B2bManufacturerRulesModal'
+import { B2bSizeMergeModal } from '../components/B2bSizeMergeModal'
 import { B2bSyncProgressModal } from '../components/B2bSyncProgressModal'
 import { PriceListsTabs } from '../components/PriceListsTabs'
 import { api, can } from '../lib/api'
@@ -30,6 +31,8 @@ type B2bAccount = {
   requires_login_code: boolean
   /** Kiedy ostatnio zapisano sesję sklepu po logowaniu kodem (ISO 8601). */
   connector_session_saved_at: string | null
+  /** Łącznik podaje ceny rozmiarów — przycisk „Scal rozmiary” (karty rozbite dawniej według ceny rozmiaru). */
+  size_price_merge: boolean
   created_by: { id: number; name: string } | null
   updated_by: { id: number; name: string } | null
   updated_at: string | null
@@ -124,6 +127,7 @@ export function PriceListsB2b() {
   const [progressAccount, setProgressAccount] = useState<B2bAccount | null>(null)
   const [discountAccount, setDiscountAccount] = useState<B2bAccount | null>(null)
   const [manufacturersAccount, setManufacturersAccount] = useState<B2bAccount | null>(null)
+  const [sizeMergeAccount, setSizeMergeAccount] = useState<B2bAccount | null>(null)
   const [codeLoginAccount, setCodeLoginAccount] = useState<B2bAccount | null>(null)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
@@ -607,6 +611,16 @@ export function PriceListsB2b() {
                       >
                         Producenci
                       </button>
+                      {row.size_price_merge && (
+                        <button
+                          type="button"
+                          className={actionBtn}
+                          onClick={() => setSizeMergeAccount(row)}
+                          title="Karty rozbite dawniej według ceny rozmiaru — scalanie w jedną kartę z tabelą rozmiarów"
+                        >
+                          Scal rozmiary
+                        </button>
+                      )}
                       {usesStandardDiscounts(row.connector) && (
                         <Link
                           className={specialActionBtn}
@@ -701,6 +715,14 @@ export function PriceListsB2b() {
           account={manufacturersAccount}
           canManage={canManage}
           onClose={() => setManufacturersAccount(null)}
+        />
+      )}
+
+      {sizeMergeAccount && (
+        <B2bSizeMergeModal
+          account={sizeMergeAccount}
+          canManage={canManage}
+          onClose={() => setSizeMergeAccount(null)}
         />
       )}
     </div>

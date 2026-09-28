@@ -293,6 +293,11 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:b2b_accounts.view');
     Route::post('/b2b-accounts/{b2bAccount}/sync-cancel', [B2bAccountController::class, 'cancelSync'])
         ->middleware('permission:b2b_accounts.manage');
+    // „Scal rozmiary” — karty rozbite dawniej według ceny rozmiaru (zadanie w tle, B2bSizePriceMerger)
+    Route::get('/b2b-accounts/{b2bAccount}/size-merge', [B2bAccountController::class, 'sizeMerge'])
+        ->middleware('permission:b2b_accounts.view');
+    Route::post('/b2b-accounts/{b2bAccount}/size-merge', [B2bAccountController::class, 'startSizeMerge'])
+        ->middleware('permission:b2b_accounts.manage');
     Route::get('/b2b-accounts/{b2bAccount}/discount-rules', [B2bDiscountRuleController::class, 'index'])
         ->middleware('permission:b2b_accounts.view');
     Route::put('/b2b-accounts/{b2bAccount}/discount-rules', [B2bDiscountRuleController::class, 'update'])

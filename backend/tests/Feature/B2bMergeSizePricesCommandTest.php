@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Jobs\MergeB2bSizePricesJob;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
@@ -24,11 +25,13 @@ use App\Services\B2b\B2bManufacturerSite;
 use App\Services\B2b\B2bRemoteImage;
 use App\Services\B2b\B2bRemotePrice;
 use App\Services\B2b\B2bRemoteProduct;
+use App\Services\B2b\B2bSizePriceMerger;
 use App\Services\Catalog\CardRedirectStore;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
@@ -251,6 +254,91 @@ final class B2bMergeSizePricesCommandTest extends TestCase
         $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id])
             ->expectsOutputToContain('nie ma listy kart rozbitych według ceny')
             ->assertFailed();
+    }
+
+    public function test_panel_preview_then_apply_run_as_background_job(): void
+    {
+        [$small, $large] = $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+        Sanctum::actingAs($this->user);
+
+        $this->getJson('/api/b2b-accounts')->assertOk()->assertJsonPath('0.size_price_merge', true);
+        $this->getJson('/api/b2b-accounts/'.$this->account->id.'/size-merge')
+            ->assertOk()
+            ->assertJsonPath('spread.total', 1)
+            ->assertJsonPath('spread.reason', null)
+            ->assertJsonPath('state', null);
+
+        $this->postJson('/api/b2b-accounts/'.$this->account->id.'/size-merge', ['mode' => 'preview'])
+            ->assertStatus(202)
+            ->assertJsonPath('state.status', 'queued');
+        // drugie uruchomienie w trakcie — odmowa
+        $this->postJson('/api/b2b-accounts/'.$this->account->id.'/size-merge', ['mode' => 'apply'])->assertStatus(409);
+        $this->runQueuedMergeJob();
+        $preview = $this->getJson('/api/b2b-accounts/'.$this->account->id.'/size-merge')->assertOk()->json('state');
+        $this->assertSame(['done', 1, 1, 0], [$preview['status'], $preview['processed'], $preview['to_merge'], $preview['merged']]);
+        $this->assertStringContainsString('+ K1: zostaje #'.$small->id, $preview['lines'][0]);
+        $this->assertNotNull(Product::query()->find($large->id));
+
+        $this->postJson('/api/b2b-accounts/'.$this->account->id.'/size-merge', ['mode' => 'apply', 'limit' => 10])->assertStatus(202);
+        $this->runQueuedMergeJob();
+        $applied = $this->getJson('/api/b2b-accounts/'.$this->account->id.'/size-merge')->assertOk()->json('state');
+        $this->assertSame(['done', 1, null], [$applied['status'], $applied['merged'], $applied['error']]);
+        $this->assertStringContainsString('✓ K1: zostaje #'.$small->id.' (K1)', $applied['lines'][0]);
+        $this->assertNull(Product::query()->find($large->id));
+        $this->assertFileExists($applied['backup_path']);
+        $this->cleanBackups();
+    }
+
+    public function test_panel_refuses_accounts_without_size_prices_and_running_sync(): void
+    {
+        Sanctum::actingAs($this->user);
+        $other = B2bAccount::query()->create([
+            'username' => 'x', 'password' => 'y', 'sites' => ['b2b.p4s.example'], 'connector' => 'p4s',
+            'created_by' => $this->user->id, 'updated_by' => $this->user->id,
+        ]);
+        $this->postJson('/api/b2b-accounts/'.$other->id.'/size-merge', ['mode' => 'preview'])->assertStatus(422);
+
+        $this->postJson('/api/b2b-accounts/'.$this->account->id.'/size-merge', ['mode' => 'preview'])
+            ->assertStatus(422)
+            ->assertJsonPath('message', fn (string $m): bool => str_contains($m, 'udanego przebiegu'));
+
+        $this->account->forceFill(['last_sync_status' => B2bSyncRun::STATUS_RUNNING])->save();
+        $this->postJson('/api/b2b-accounts/'.$this->account->id.'/size-merge', ['mode' => 'apply'])->assertStatus(409);
+    }
+
+    public function test_job_of_an_older_start_does_nothing(): void
+    {
+        $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+        Sanctum::actingAs($this->user);
+        $this->postJson('/api/b2b-accounts/'.$this->account->id.'/size-merge', ['mode' => 'preview'])->assertStatus(202);
+
+        (new MergeB2bSizePricesJob((int) $this->account->id, 'inny-znacznik'))->handle(app(B2bSizePriceMerger::class));
+
+        $this->assertSame('queued', MergeB2bSizePricesJob::state((int) $this->account->id)['status']);
+    }
+
+    public function test_process_stops_at_the_deadline_and_resumes_from_the_offset(): void
+    {
+        $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+        $merger = app(B2bSizePriceMerger::class);
+        $groups = $merger->spread($this->account)['groups'];
+
+        $paused = $merger->process($this->account, $groups, 0, false, false, null, 0, null, microtime(true) - 1);
+        $this->assertSame([0, false, 0, []], [$paused['offset'], $paused['done'], $paused['to_merge'], $paused['lines']]);
+
+        $resumed = $merger->process($this->account, $groups, $paused['offset'], false, false, null, 0, null, null);
+        $this->assertSame([1, true, 1], [$resumed['offset'], $resumed['done'], $resumed['to_merge']]);
+        // limit liczony razem z poprzednimi porcjami
+        $limited = $merger->process($this->account, $groups, 0, false, false, 1, 1, null, null);
+        $this->assertSame([0, true, 0], [$limited['offset'], $limited['done'], $limited['to_merge']]);
+    }
+
+    /** Zadanie zlecone przez panel (Queue::fake) — wykonane tak, jak zrobiłby to worker. */
+    private function runQueuedMergeJob(): void
+    {
+        $jobs = Queue::pushed(MergeB2bSizePricesJob::class);
+        $this->assertNotEmpty($jobs);
+        $jobs->last()->handle(app(B2bSizePriceMerger::class));
     }
 
     /**

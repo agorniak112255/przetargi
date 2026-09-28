@@ -22,7 +22,9 @@ use App\Support\CanonicalBrand;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use JsonException;
 use RuntimeException;
+use Throwable;
 
 /**
  * Scalanie kart rozbitych według ceny rozmiaru (etap 2 decyzji użytkownika 28.09.2026). Do 28.09.2026 łączniki B2B
@@ -85,6 +87,39 @@ final class B2bSizePriceMerger
             'groups' => $groups,
             'total' => (int) ($spread['total'] ?? count($groups)),
             'truncated' => (bool) ($spread['truncated'] ?? false),
+            'reason' => null,
+        ];
+    }
+
+    /**
+     * To samo co spread() bez listy wyrobów (do 5 MB JSON) — okno „Scal rozmiary” odpytuje co 2,5 s; z bazy tylko
+     * total i truncated.
+     *
+     * @return array{run_id: int|null, finished_at: string|null, total: int, truncated: bool, reason: string|null}
+     */
+    public function spreadSummary(B2bAccount $account): array
+    {
+        $run = B2bSyncRun::query()
+            ->where('b2b_account_id', $account->id)
+            ->where('status', B2bSyncRun::STATUS_OK)
+            ->orderByDesc('id')
+            ->first(['id', 'finished_at']);
+        if ($run === null) {
+            return ['run_id' => null, 'finished_at' => null, 'total' => 0, 'truncated' => false,
+                'reason' => 'konto nie ma udanego przebiegu synchronizacji — uruchom synchronizację'];
+        }
+        $row = DB::table('b2b_sync_runs')->where('id', $run->id)->whereNotNull('size_spread')
+            ->first(['size_spread->total as total', 'size_spread->truncated as truncated']);
+        if ($row === null) {
+            return ['run_id' => (int) $run->id, 'finished_at' => $run->finished_at?->toIso8601String(), 'total' => 0, 'truncated' => false,
+                'reason' => 'ostatni udany przebieg #'.$run->id.' nie ma listy kart rozbitych według ceny (przebieg sprzed 28.09.2026) — uruchom pełną synchronizację'];
+        }
+
+        return [
+            'run_id' => (int) $run->id,
+            'finished_at' => $run->finished_at?->toIso8601String(),
+            'total' => (int) $row->total,
+            'truncated' => in_array(strtolower((string) $row->truncated), ['1', 'true'], true),
             'reason' => null,
         ];
     }
@@ -246,7 +281,7 @@ final class B2bSizePriceMerger
             foreach ($tenders as $item) {
                 foreach ([(int) $item->main_product_id, (int) $item->companion_product_id] as $id) {
                     if (isset($minByCard[$id]) && $minByCard[$id] > $min + 0.004) {
-                        return $skip('karta #'.$id.' (droższy rozmiar) jest w pozycjach przetargów — scal z --with-tenders albo ręcznie');
+                        return $skip('karta #'.$id.' (droższy rozmiar) jest w pozycjach przetargów — scal z opcją „także z przetargami na droższym rozmiarze” (--with-tenders)');
                     }
                 }
             }
@@ -372,6 +407,156 @@ final class B2bSizePriceMerger
     }
 
     public const SYNC_RUNNING = 7301;
+
+    public const BACKUP_FAILED = 7302;
+
+    /**
+     * Przejście po liście od $offset — podgląd albo scalanie (polecenie b2b:merge-size-prices w całości, zadanie w tle
+     * porcjami do $deadline). $limit — najwyżej tyle wyrobów do scalenia łącznie ($toMergeBefore policzone w
+     * poprzednich porcjach). Scalanie dopisuje do kopii JSONL ($backupPath): przed wyrobem jego wiersze („before”), po
+     * commit „committed”, po błędzie „rolled_back”. stop — trwająca synchronizacja albo nieudany zapis kopii: dalej nie
+     * idziemy (scalone wyroby zostają).
+     *
+     * @param  list<array<string, mixed>>  $groups
+     * @return array{offset: int, done: bool, stop: string|null, to_merge: int, merged: int, sizes: int, tenders: int, sku_renamed: int, skipped: array<string, int>, lines: list<string>}
+     */
+    public function process(B2bAccount $account, array $groups, int $offset, bool $apply, bool $withTenders, ?int $limit, int $toMergeBefore, ?string $backupPath, ?float $deadline): array
+    {
+        $out = ['offset' => $offset, 'done' => false, 'stop' => null, 'to_merge' => 0, 'merged' => 0, 'sizes' => 0, 'tenders' => 0,
+            'sku_renamed' => 0, 'skipped' => [], 'lines' => []];
+        $handle = null;
+        if ($apply) {
+            if ($backupPath === null || ($handle = @fopen($backupPath, 'ab')) === false) {
+                return [...$out, 'done' => true, 'stop' => 'Kopia zapasowa nie powstanie ('.($backupPath ?? 'brak ścieżki').') — nic nie scalono.'];
+            }
+        }
+        try {
+            $count = count($groups);
+            for ($i = $offset; $i < $count; $i++) {
+                if ($limit !== null && $toMergeBefore + $out['to_merge'] >= $limit) {
+                    return [...$out, 'offset' => $i, 'done' => true];
+                }
+                if ($deadline !== null && microtime(true) >= $deadline) {
+                    return [...$out, 'offset' => $i];
+                }
+                $group = $groups[$i];
+                $sku = (string) ($group['sku'] ?? '?');
+                try {
+                    $plan = $apply
+                        ? $this->apply($account, $group, $withTenders, static fn (array $row) => self::writeLine($handle, ['status' => 'before', ...$row]))
+                        : $this->plan($account, $group, $withTenders);
+                } catch (RuntimeException $e) {
+                    if (in_array($e->getCode(), [self::SYNC_RUNNING, self::BACKUP_FAILED], true)) {
+                        return [...$out, 'offset' => $i, 'done' => true, 'stop' => $e->getMessage()];
+                    }
+                    $plan = ['merge' => false, 'reason' => 'błąd: '.$e->getMessage(), 'sku' => $sku];
+                    if ($apply) {
+                        self::writeLine($handle, ['status' => 'rolled_back', 'sku' => $sku]);
+                    }
+                } catch (JsonException $e) {
+                    return [...$out, 'offset' => $i, 'done' => true, 'stop' => 'Kopia zapasowa wyrobu '.$sku.' nie powstała: '.$e->getMessage().' — scalanie przerwane.'];
+                } catch (Throwable $e) {
+                    $plan = ['merge' => false, 'reason' => 'błąd: '.$e->getMessage(), 'sku' => $sku];
+                    if ($apply) {
+                        self::writeLine($handle, ['status' => 'rolled_back', 'sku' => $sku]);
+                    }
+                }
+
+                if (! $plan['merge']) {
+                    $kind = self::reasonKind((string) $plan['reason']);
+                    $out['skipped'][$kind] = ($out['skipped'][$kind] ?? 0) + 1;
+                    $out['lines'][] = '– '.$plan['sku'].': pominięty — '.$plan['reason'];
+
+                    continue;
+                }
+                $out['to_merge']++;
+                $out['sizes'] += (int) $plan['sizes'];
+                $out['tenders'] += (int) $plan['tenders'];
+                $out['sku_renamed'] += $plan['sku_to'] !== null ? 1 : 0;
+                if ($apply) {
+                    $out['merged']++;
+                    self::writeLine($handle, ['status' => 'committed', 'sku' => $plan['sku'], 'keep_product_id' => $plan['keep_id']]);
+                }
+                $out['lines'][] = self::planLine($plan, $apply);
+            }
+
+            return [...$out, 'offset' => $count, 'done' => true];
+        } catch (RuntimeException $e) {
+            // zapis „committed” po scaleniu się nie udał — wyrób scalony, dalej nie idziemy
+            return [...$out, 'done' => true, 'stop' => $e->getMessage()];
+        } finally {
+            if (is_resource($handle)) {
+                fclose($handle);
+            }
+        }
+    }
+
+    /**
+     * Rodzaj powodu do podsumowania: bez numerów kart, kodów pozycji i wartości w nawiasach — 2557 wyrobów Mascot
+     * daje wtedy kilka wierszy zamiast tysięcy jednostkowych.
+     */
+    public static function reasonKind(string $reason): string
+    {
+        return (string) preg_replace(
+            ['/#\d+/u', '/\b(pozycja|pozycję|rozmiar|kod) \S+/u', '/\([^)]*\)/u', '/„[^”]*”/u', '/\s+/u'],
+            ['#…', '$1 …', '(…)', '„…”', ' '],
+            $reason,
+        );
+    }
+
+    /**
+     * „+ K1: zostaje #12 (K1 S) ← #13 · rozmiarów 4 · 100,00–120,00 PLN · SKU → K1” (scalony — „✓”).
+     *
+     * @param  array<string, mixed>  $plan
+     */
+    public static function planLine(array $plan, bool $applied): string
+    {
+        return sprintf(
+            '%s %s: zostaje #%d (%s) ← %s · rozmiarów %d · %s–%s %s%s%s%s',
+            $applied ? '✓' : '+',
+            $plan['sku'],
+            $plan['keep_id'],
+            $applied && $plan['sku_to'] !== null ? $plan['sku_to'] : ($plan['keep']?->sku ?? '?'),
+            implode(', ', array_map(static fn (int $id): string => '#'.$id, $plan['drop_ids'])),
+            $plan['sizes'],
+            number_format((float) $plan['min'], 2, ',', ''),
+            number_format((float) $plan['max'], 2, ',', ''),
+            $plan['currency'],
+            $plan['tenders'] > 0 ? ' · przetargi '.$plan['tenders'] : '',
+            $plan['sku_to'] !== null ? ' · SKU → '.$plan['sku_to'] : '',
+            $plan['sku_note'] !== null ? ' · '.$plan['sku_note'] : '',
+        );
+    }
+
+    /** Ścieżka nowej kopii zapasowej scalania konta (storage/app/repair-backups); null — brak katalogu. */
+    public static function newBackupPath(B2bAccount $account): ?string
+    {
+        $dir = storage_path('app/repair-backups');
+        if (! is_dir($dir) && ! @mkdir($dir, 0775, true) && ! is_dir($dir)) {
+            return null;
+        }
+
+        return $dir.DIRECTORY_SEPARATOR.'size-prices-'.$account->id.'-'.now()->format('Ymd-His').'.jsonl';
+    }
+
+    /**
+     * Jedna linia JSONL, od razu na dysk — kopia wyrobu jest w pliku przed jego scaleniem.
+     *
+     * @param  resource|null  $handle
+     * @param  array<string, mixed>  $row
+     *
+     * @throws JsonException
+     */
+    private static function writeLine($handle, array $row): void
+    {
+        if (! is_resource($handle)) {
+            return;
+        }
+        $json = json_encode($row, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        if (@fwrite($handle, $json."\n") === false || ! fflush($handle)) {
+            throw new RuntimeException('Zapis kopii zapasowej się nie udał — scalanie przerwane.', self::BACKUP_FAILED);
+        }
+    }
 
     /**
      * Slot konta z wierszy rozmiarów na karcie — ta sama reguła co synchronizacja (B2bCatalogSync::sizePricing):

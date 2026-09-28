@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\MergeB2bSizePricesJob;
 use App\Models\B2bAccount;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
@@ -12,6 +13,7 @@ use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Services\B2b\B2bCodeLoginSite;
 use App\Services\B2b\B2bConnectorRegistry;
+use App\Services\B2b\B2bSizePriceMerger;
 use App\Services\Pricing\ProductEffectivePrice;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Http\Client\HttpClientException;
@@ -21,6 +23,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use JsonException;
@@ -288,6 +291,131 @@ class B2bAccountController extends Controller
         return response()->json(['ok' => true]);
     }
 
+    /**
+     * „Scal rozmiary”: lista kart rozbitych według ceny z ostatniego przebiegu i stan zadania w tle (podgląd albo
+     * scalanie). Zadanie „w kolejce/trwa” bez znaku życia dłużej niż STALE_MINUTES — pokazane jako błąd.
+     */
+    public function sizeMerge(B2bAccount $b2bAccount, B2bSizePriceMerger $merger): JsonResponse
+    {
+        return response()->json($this->sizeMergeView($b2bAccount, $merger));
+    }
+
+    /**
+     * Start podglądu albo scalania w tle. Odmowa: łącznik bez cen rozmiarów, brak listy, trwająca synchronizacja
+     * albo trwające scalanie tego konta.
+     */
+    public function startSizeMerge(Request $request, B2bAccount $b2bAccount, B2bSizePriceMerger $merger): JsonResponse
+    {
+        $data = $request->validate([
+            'mode' => ['required', Rule::in(['preview', 'apply'])],
+            'limit' => ['nullable', 'integer', 'min:1', 'max:100000'],
+            'with_tenders' => ['sometimes', 'boolean'],
+        ]);
+        if (! $this->connectors->sendsSizePrices($b2bAccount->connector)) {
+            return response()->json(['message' => 'Łącznik tego konta nie podaje cen rozmiarów — scalanie nie dotyczy jego kart.'], 422);
+        }
+        if ($this->syncIsRunning($b2bAccount)) {
+            return response()->json(['message' => 'Trwa synchronizacja tego konta — scal po jej zakończeniu.'], 409);
+        }
+        $current = $this->sizeMergeState($b2bAccount);
+        if ($current !== null && in_array($current['status'], ['queued', 'running'], true)) {
+            return response()->json(['message' => 'Scalanie tego konta już trwa.'], 409);
+        }
+        $spread = $merger->spread($b2bAccount);
+        if ($spread['reason'] !== null) {
+            return response()->json(['message' => ucfirst($spread['reason']).'.'], 422);
+        }
+        $apply = $data['mode'] === 'apply';
+        $backupPath = $apply ? B2bSizePriceMerger::newBackupPath($b2bAccount) : null;
+        if ($apply && $backupPath === null) {
+            return response()->json(['message' => 'Kopia zapasowa nie powstanie (brak katalogu storage/app/repair-backups) — nic nie scalono.'], 422);
+        }
+
+        $token = (string) Str::uuid();
+        MergeB2bSizePricesJob::saveState((int) $b2bAccount->id, [
+            'token' => $token,
+            'mode' => $data['mode'],
+            'status' => 'queued',
+            'with_tenders' => (bool) ($data['with_tenders'] ?? false),
+            'limit' => isset($data['limit']) ? (int) $data['limit'] : null,
+            'run_id' => (int) $spread['run']->id,
+            'started_at' => now()->toIso8601String(),
+            'finished_at' => null,
+            'processed' => 0,
+            'total' => count($spread['groups']),
+            'to_merge' => 0,
+            'merged' => 0,
+            'sizes' => 0,
+            'tenders' => 0,
+            'sku_renamed' => 0,
+            'skipped' => [],
+            'lines' => [],
+            'backup_path' => $backupPath,
+            'error' => null,
+            'user_id' => $request->user()?->id,
+        ]);
+        MergeB2bSizePricesJob::dispatch((int) $b2bAccount->id, $token);
+
+        return response()->json($this->sizeMergeView($b2bAccount, $merger), 202);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sizeMergeView(B2bAccount $account, B2bSizePriceMerger $merger): array
+    {
+        $spread = $merger->spreadSummary($account);
+        $state = $this->sizeMergeState($account);
+
+        return [
+            'spread' => [...$spread, 'reason' => $spread['reason'] !== null ? ucfirst($spread['reason']).'.' : null],
+            'state' => $state === null ? null : [
+                ...array_intersect_key($state, array_flip([
+                    'mode', 'status', 'with_tenders', 'limit', 'started_at', 'updated_at', 'finished_at', 'processed', 'total',
+                    'to_merge', 'merged', 'sizes', 'tenders', 'sku_renamed', 'lines', 'backup_path', 'error',
+                ])),
+                'skipped' => $this->skippedList(is_array($state['skipped'] ?? null) ? $state['skipped'] : []),
+            ],
+            'sync_running' => $this->syncIsRunning($account),
+        ];
+    }
+
+    /**
+     * Stan zadania; „w kolejce/trwa” bez znaku życia od STALE_MINUTES — błąd (worker zatrzymany, zadanie przerwane).
+     *
+     * @return array<string, mixed>|null
+     */
+    private function sizeMergeState(B2bAccount $account): ?array
+    {
+        $state = MergeB2bSizePricesJob::state((int) $account->id);
+        if ($state === null) {
+            return null;
+        }
+        $updated = is_string($state['updated_at'] ?? null) ? Carbon::parse($state['updated_at']) : null;
+        if (in_array($state['status'] ?? null, ['queued', 'running'], true)
+            && ($updated === null || $updated->lt(now()->subMinutes(MergeB2bSizePricesJob::STALE_MINUTES)))) {
+            $state['status'] = 'failed';
+            $state['error'] = 'Zadanie w tle nie odpowiada od ponad '.MergeB2bSizePricesJob::STALE_MINUTES.' min (kolejka zatrzymana albo zadanie przerwane) — uruchom ponownie.';
+        }
+
+        return $state;
+    }
+
+    /**
+     * @param  array<string, int>  $skipped
+     * @return list<array{reason: string, count: int}>
+     */
+    private function skippedList(array $skipped): array
+    {
+        arsort($skipped);
+        $out = [];
+        foreach ($skipped as $reason => $count) {
+            $out[] = ['reason' => (string) $reason, 'count' => (int) $count];
+        }
+
+        return $out;
+    }
+
     private const CODE_LOGIN_TTL_MINUTES = 15;
 
     private function syncIsRunning(B2bAccount $account): bool
@@ -429,6 +557,8 @@ class B2bAccountController extends Controller
             // Sama sesja (ciasteczka sklepu) nigdy nie wychodzi do panelu — tylko kiedy ją zapisano.
             'connector_session_saved_at' => $account->connector_session_saved_at?->toIso8601String(),
             'requires_login_code' => $this->connectors->requiresLoginCode($account->connector),
+            // łącznik z cenami rozmiarów — przycisk „Scal rozmiary” (karty rozbite dawniej według ceny)
+            'size_price_merge' => $this->connectors->sendsSizePrices($account->connector),
             'created_by' => $account->creator?->only(['id', 'name']),
             'updated_by' => $account->updater?->only(['id', 'name']),
             'created_at' => $account->created_at?->toIso8601String(),

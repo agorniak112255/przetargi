@@ -503,6 +503,47 @@ export type ProductShopCardSource = {
   sections: ProductShopCardSection[]
 }
 
+/** Przebieg scalania kart rozbitych dawniej według ceny rozmiaru (b2b:merge-size-prices) zlecony z panelu. */
+export type B2bSizeMergeState = {
+  mode: 'preview' | 'apply'
+  status: 'queued' | 'running' | 'done' | 'failed'
+  with_tenders: boolean
+  limit: number | null
+  started_at: string
+  updated_at: string
+  finished_at: string | null
+  /** Grupy z listy już przejrzane. */
+  processed: number
+  /** Grupy na liście. */
+  total: number
+  /** Grupy, które można scalić (podgląd) albo były do scalenia (scalanie). */
+  to_merge: number
+  /** Scalone do tej pory (w podglądzie 0). */
+  merged: number
+  sizes: number
+  tenders: number
+  sku_renamed: number
+  /** Rodzaje pominięć z liczbą, od najczęstszego. */
+  skipped: { reason: string; count: number }[]
+  /** Ostatnie (do 300) wiersze po grupie: „+ …” scalona / do scalenia, „– …” pominięta z powodem. */
+  lines: string[]
+  backup_path: string | null
+  error: string | null
+}
+
+export type B2bSizeMerge = {
+  /** Lista wyrobów rozbitych na kilka kart z ostatniego przebiegu; reason = czemu listy nie ma. */
+  spread: {
+    run_id: number | null
+    finished_at: string | null
+    total: number
+    truncated: boolean
+    reason: string | null
+  }
+  state: B2bSizeMergeState | null
+  sync_running: boolean
+}
+
 export type ProductKitSuggestion = {
   id: number
   sku: string | null
