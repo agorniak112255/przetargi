@@ -24,7 +24,8 @@ use JsonException;
  *
  * Rozmiar karty = etykiety kodów Tegro tej karty (product_identifiers source_code konta, variant_label), a bez etykiet —
  * wiersz „Rozmiar” tabelki sklepu tego konta (product_shop_cards, sekcja „Parametry produktu”), gdy to jedna wartość
- * (nie zakres „7-11”). Nic nie zgadujemy z samej nazwy ani kodu:
+ * albo zakres liczbowy z liczbą, na którą kończy się nazwa pozycji („9-10” przy „… DUPLO/27 10”;
+ * TegroB2bConnector::sizeFromShopValue). Nic nie zgadujemy z samej nazwy ani kodu:
  * - kod: obecny kod kończy się na „ rozmiar” — nowy kod to reszta, a gdy są kody z etykietą, KAŻDY musi być
  *   „reszta rozmiar” (inaczej kod zostaje);
  * - nazwa: tylko nazwa równa nazwie pozycji z powiązania tego konta (remote_name) i kończąca się na „ rozmiar” — karta
@@ -252,7 +253,7 @@ final class RepairTegroCodesCommand extends Command
     {
         $labelled = $identifiers->filter(static fn (ProductIdentifier $i): bool => trim((string) $i->variant_label) !== '');
         $labels = $labelled->map(static fn (ProductIdentifier $i): string => trim((string) $i->variant_label))->unique()->values()->all();
-        $shopSize = $labels === [] ? self::shopSize($shopCard) : null;
+        $shopSize = $labels === [] ? self::shopSize($shopCard, $remoteNames) : null;
         if ($shopSize !== null) {
             $labels = [$shopSize];
         }
@@ -314,11 +315,18 @@ final class RepairTegroCodesCommand extends Command
     }
 
     /**
-     * Wiersz „Rozmiar” sekcji „Parametry produktu” tabelki sklepu: jedna wartość bez białych znaków, nie zakres ani lista
-     * (ta sama reguła co TegroB2bConnector::pageSizeOf).
+     * Wiersz „Rozmiar” sekcji „Parametry produktu” tabelki sklepu potwierdzający rozmiar na końcu nazwy pozycji (jedyna
+     * nazwa z powiązań konta): wartość pojedyncza albo zakres liczbowy z tą liczbą — ta sama reguła co łącznik
+     * (TegroB2bConnector::sizeFromShopValue).
+     *
+     * @param  list<string>  $remoteNames
      */
-    private static function shopSize(?ProductShopCard $card): ?string
+    private static function shopSize(?ProductShopCard $card, array $remoteNames): ?string
     {
+        $names = array_values(array_unique($remoteNames));
+        if (count($names) !== 1) {
+            return null;
+        }
         $values = [];
         foreach ((array) ($card?->fields ?? []) as $section) {
             if (! is_array($section) || trim((string) ($section['section'] ?? '')) !== 'Parametry produktu') {
@@ -330,12 +338,8 @@ final class RepairTegroCodesCommand extends Command
                 }
             }
         }
-        if (count($values) !== 1) {
-            return null;
-        }
-        $size = (string) array_key_first($values);
 
-        return $size !== '' && preg_match('/[\s\-\x{2013}\x{2014},;\/]/u', $size) !== 1 ? $size : null;
+        return count($values) === 1 ? TegroB2bConnector::sizeFromShopValue((string) array_key_first($values), $names[0]) : null;
     }
 
     /** Karta (inna niż $exceptId) z tym kodem, bez rozróżniania wielkości liter — products.sku jest unikalne. */

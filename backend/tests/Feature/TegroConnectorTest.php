@@ -142,7 +142,8 @@ final class TegroConnectorTest extends TestCase
 
         $products = $this->productsBySku($this->connector());
 
-        $this->assertSame(['F09 PLUS', 'HEAVY', 'ALASKA 10', 'ODD 8', 'NOPRICE 9'], array_keys($products));
+        // ALASKA 10 bez modelu, strona z zakresem „6-11” — 10 mieści się w zakresie, kod bez rozmiaru (decyzja 28.09.2026)
+        $this->assertSame(['F09 PLUS', 'HEAVY', 'ALASKA', 'ODD 8', 'NOPRICE 9'], array_keys($products));
         $f09 = $products['F09 PLUS'];
         $this->assertSame('4634', $f09->remoteId);
         $this->assertSame(self::F09, $f09->name);
@@ -297,16 +298,20 @@ final class TegroConnectorTest extends TestCase
 
     /**
      * Pozycja z pustym Modelem (u Tegro 18 z 455): rozmiar tylko z wiersza „Rozmiar” strony produktu. Pojedyncza wartość,
-     * na którą kończy się nazwa, schodzi z nazwy i z kodu („POLAR I” — kod bez rozmiaru zostaje); zakres, brak wiersza,
-     * inna wartość niż końcówka nazwy albo błąd strony — kod i nazwa jak w sklepie. Strona pobrana raz na kartę.
+     * na którą kończy się nazwa, albo liczba na końcu nazwy z zakresu liczbowego wiersza („6-11” przy „SPLIT 10”) schodzi
+     * z nazwy i z kodu („POLAR I” — kod bez rozmiaru zostaje); liczba spoza zakresu, zakres literowy, brak wiersza, inna
+     * wartość niż końcówka nazwy albo błąd strony — kod i nazwa jak w sklepie. Strona pobrana raz na kartę.
      */
     public function test_item_without_model_takes_its_single_size_from_the_page_row(): void
     {
         $this->items = [
             $this->item(8001, 'COMFORT PREMIUM 10', 'RĘKAWICE RS ARBEITSSCHUTZ COMFORT PREMIUM 10', null, 4.0, 5.0, '5900000000810'),
             $this->item(8002, 'POLAR I', 'RĘKAWICE RS ARBEITSSCHUTZ POLAR I 10', '', 4.0, 5.0, ''),
-            // strona z zakresem „6-11” (domyślna) — bez zmian
+            // strona z zakresem „6-11” (domyślna), a nazwa kończy się liczbą z zakresu — rozmiar schodzi (decyzja 28.09.2026)
             $this->item(8003, 'SPLIT 10', 'RĘKAWICE RS ARBEITSSCHUTZ SPLIT 10', null, 4.0, 5.0, ''),
+            // liczba spoza zakresu „6-11” i zakres literowy — bez zgadywania
+            $this->item(8007, 'LUWAC 12', 'RĘKAWICE RS ARBEITSSCHUTZ LUWAC 12', null, 4.0, 5.0, ''),
+            $this->item(8008, 'BUFFALO XL', 'RĘKAWICE RS ARBEITSSCHUTZ BUFFALO XL', null, 4.0, 5.0, ''),
             // strona bez wiersza „Rozmiar”
             $this->item(8004, 'BUDGIE 11', 'RĘKAWICE RS ARBEITSSCHUTZ BUDGIE 11', null, 4.0, 5.0, ''),
             // wiersz „Rozmiar” = 9, a nazwa kończy się na 10 — bez zgadywania
@@ -320,6 +325,7 @@ final class TegroConnectorTest extends TestCase
             '/pl/rekawice-budgie-11' => null,
             '/pl/rekawice-drum-10' => '9',
             '/pl/rekawice-zirkon-800-10' => '10',
+            '/pl/rekawice-buffalo-xl' => 'S-XXL',
         ];
         $this->failingPages = ['/pl/rekawice-zirkon-800-10'];
         $this->fakeSite();
@@ -327,7 +333,9 @@ final class TegroConnectorTest extends TestCase
 
         $products = $this->productsBySku($connector);
 
-        $this->assertSame(['COMFORT PREMIUM', 'POLAR I', 'SPLIT 10', 'BUDGIE 11', 'DRUM 10', 'ZIRKON 800 10'], array_keys($products));
+        $this->assertSame(['COMFORT PREMIUM', 'POLAR I', 'SPLIT', 'LUWAC 12', 'BUFFALO XL', 'BUDGIE 11', 'DRUM 10', 'ZIRKON 800 10'], array_keys($products));
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ SPLIT', $products['SPLIT']->cardName);
+        $this->assertSame('Rozmiary: 10 (SPLIT 10)', $products['SPLIT']->variantSummary);
         $comfort = $products['COMFORT PREMIUM'];
         $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ COMFORT PREMIUM', $comfort->cardName);
         $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ COMFORT PREMIUM 10', $comfort->name);
@@ -340,15 +348,15 @@ final class TegroConnectorTest extends TestCase
         );
         $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ POLAR I', $products['POLAR I']->cardName);
         $this->assertSame('Rozmiary: 10 (POLAR I)', $products['POLAR I']->variantSummary);
-        foreach (['SPLIT 10', 'BUDGIE 11', 'DRUM 10', 'ZIRKON 800 10'] as $sku) {
+        foreach (['LUWAC 12', 'BUFFALO XL', 'BUDGIE 11', 'DRUM 10', 'ZIRKON 800 10'] as $sku) {
             $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ '.$sku, $products[$sku]->name);
             $this->assertNull($products[$sku]->cardName);
             $this->assertNull($products[$sku]->variantSummary);
             $this->assertSame([null], array_map(static fn (B2bRemoteIdentifier $i): ?string => $i->label, $products[$sku]->identifiers ?? []));
         }
         $this->assertSame([
-            'Lista Tegro: 6 pozycji → 6 kart (0 grup rozmiarów, w tym 0 z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)',
-            'Pozycje bez modelu ze stroną produktu: 6, rozmiar z wiersza „Rozmiar” strony: 2 — ich kod i nazwa karty bez rozmiaru',
+            'Lista Tegro: 8 pozycji → 8 kart (0 grup rozmiarów, w tym 0 z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)',
+            'Pozycje bez modelu ze stroną produktu: 8, rozmiar z wiersza „Rozmiar” strony: 3 — ich kod i nazwa karty bez rozmiaru',
             'Strona produktu pozycji bez modelu nie została pobrana (1): ZIRKON 800 10 (b2b.tegro.pl odpowiedziało HTTP 500) — kod i nazwa tych kart zostają z rozmiarem',
         ], $connector->runSummary());
 
@@ -492,7 +500,7 @@ final class TegroConnectorTest extends TestCase
         $products = $this->productsBySku($connector);
 
         $norms = array_values(array_filter(
-            $connector->shopFields($products['ALASKA 10']),
+            $connector->shopFields($products['ALASKA']),
             static fn (B2bRemoteShopField $f): bool => $f->name === 'Normy',
         ));
 

@@ -44,11 +44,14 @@ final class RepairTegroCodesCommandTest extends TestCase
         $comfort = $this->card('COMFORT PREMIUM 10', self::RS.'COMFORT PREMIUM 10', [['COMFORT PREMIUM 10', self::RS.'COMFORT PREMIUM 10', null]], '10');
         // kod bez rozmiaru — zostaje, z nazwy rozmiar schodzi
         $polar = $this->card('POLAR I', self::RS.'POLAR I 10', [['POLAR I', self::RS.'POLAR I 10', null]], '10');
-        // zakres w tabelce — bez rozmiaru nic nie zgadujemy
+        // zakres liczbowy w tabelce z liczbą, na którą kończy się nazwa — rozmiar schodzi (decyzja 28.09.2026)
         $split = $this->card('SPLIT 10', self::RS.'SPLIT 10', [['SPLIT 10', self::RS.'SPLIT 10', null]], '7-11');
+        // liczba spoza zakresu i zakres literowy — nic nie zgadujemy
+        $luwac = $this->card('LUWAC 12', self::RS.'LUWAC 12', [['LUWAC 12', self::RS.'LUWAC 12', null]], '6-11');
+        $buffalo = $this->card('BUFFALO XL', self::RS.'BUFFALO XL', [['BUFFALO XL', self::RS.'BUFFALO XL', null]], 'S-XXL');
 
         $this->artisan('products:repair-tegro-codes', ['--account' => $this->tegro->id])
-            ->expectsOutputToContain('do zmiany: 3 (kodów 2, nazw 2)')
+            ->expectsOutputToContain('do zmiany: 4 (kodów 3, nazw 3)')
             ->expectsOutputToContain('Podgląd — uruchom z --apply')
             ->assertSuccessful();
         $this->assertSame('CITRIN 7', $citrin->fresh()?->sku);
@@ -57,13 +60,15 @@ final class RepairTegroCodesCommandTest extends TestCase
         $backup = storage_path('framework/testing/tegro-codes.json');
         @unlink($backup);
         $this->artisan('products:repair-tegro-codes', ['--account' => $this->tegro->id, '--apply' => true, '--backup' => $backup])
-            ->expectsOutputToContain('Poprawiono 3 kart.')
+            ->expectsOutputToContain('Poprawiono 4 kart.')
             ->assertSuccessful();
 
         $this->assertSame(['CITRIN', self::RS.'CITRIN'], [$citrin->fresh()?->sku, $citrin->fresh()?->name]);
         $this->assertSame(['COMFORT PREMIUM', self::RS.'COMFORT PREMIUM'], [$comfort->fresh()?->sku, $comfort->fresh()?->name]);
         $this->assertSame(['POLAR I', self::RS.'POLAR I'], [$polar->fresh()?->sku, $polar->fresh()?->name]);
-        $this->assertSame(['SPLIT 10', self::RS.'SPLIT 10'], [$split->fresh()?->sku, $split->fresh()?->name]);
+        $this->assertSame(['SPLIT', self::RS.'SPLIT'], [$split->fresh()?->sku, $split->fresh()?->name]);
+        $this->assertSame(['LUWAC 12', self::RS.'LUWAC 12'], [$luwac->fresh()?->sku, $luwac->fresh()?->name]);
+        $this->assertSame(['BUFFALO XL', self::RS.'BUFFALO XL'], [$buffalo->fresh()?->sku, $buffalo->fresh()?->name]);
         // kody i nazwy pozycji u dostawcy zostają dosłownie
         $this->assertSame(['COMFORT PREMIUM 10', self::RS.'COMFORT PREMIUM 10'], [
             B2bProductLink::query()->where('product_id', $comfort->id)->value('remote_sku'),
@@ -81,7 +86,7 @@ final class RepairTegroCodesCommandTest extends TestCase
         // przywracanie omija kartę zmienioną po naprawie
         $citrin->fresh()?->update(['name' => self::RS.'CITRIN (poprawiona ręcznie)']);
         $this->artisan('products:repair-tegro-codes', ['--restore' => $backup])
-            ->expectsOutputToContain('Przywrócono 2 kart')
+            ->expectsOutputToContain('Przywrócono 3 kart')
             ->expectsOutputToContain('#'.$citrin->id.' (karta zmieniła się od naprawy)')
             ->assertSuccessful();
         $this->assertSame(['COMFORT PREMIUM 10', self::RS.'COMFORT PREMIUM 10'], [$comfort->fresh()?->sku, $comfort->fresh()?->name]);

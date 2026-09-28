@@ -33,8 +33,9 @@ use RuntimeException;
  * Kod bez rozmiaru bierzemy tylko wtedy, gdy KAŻDA pozycja karty ma kod X + spacja + jej rozmiar z tym samym X —
  * inaczej, jak do 28.09.2026, kod najmniejszego rozmiaru. Nazwa = Model także przy jednym rozmiarze z modelem, a lista
  * „Rozmiary: …” także przy jednym rozmiarze. Pozycja z pustym Modelem (18 z 455, np. „COMFORT PREMIUM 10”) ma rozmiar
- * tylko w wierszu „Rozmiar” tabelki strony produktu — pojedyncza wartość (bez spacji, nie zakres „7-11”), na którą
- * kończy się nazwa, schodzi z nazwy i z kodu (kod bez tej końcówki zostaje bez zmian — „POLAR I” przy nazwie
+ * tylko w wierszu „Rozmiar” tabelki strony produktu — pojedyncza wartość (bez spacji), na którą kończy się nazwa, albo
+ * liczba na końcu nazwy mieszcząca się w zakresie liczbowym wiersza („9-10” przy „… DUPLO/27 10”; sizeFromShopValue),
+ * schodzi z nazwy i z kodu (kod bez tej końcówki zostaje bez zmian — „POLAR I” przy nazwie
  * „… POLAR I 10”); samej nazwy nie tniemy na zgadywany rozmiar. Strona takiej pozycji jest pobierana w products()
  * i trzymana do shopFields()/documents() tej karty (bez drugiego pobrania). Dwie karty przebiegu z tym samym kodem
  * albo nazwą po zmianie — wszystkie zostają z kodem i nazwą sprzed zmiany (bez zgadywania), wpis w podsumowaniu.
@@ -441,9 +442,7 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
     }
 
     /**
-     * Rozmiar pozycji bez modelu z wiersza „Rozmiar” tabelki strony: jedna wartość (jeden wiersz albo te same), bez
-     * białych znaków, nie zakres ani lista („7-11”, „7–11”, „8,9”), a nazwa pozycji kończy się na „ wartość” i przed
-     * nią coś zostaje. Inaczej null — nazwa i kod zostają jak w sklepie.
+     * Rozmiar pozycji bez modelu z wiersza „Rozmiar” tabelki strony (jeden wiersz albo te same) — sizeFromShopValue.
      */
     private static function pageSizeOf(DOMXPath $xpath, string $name): ?string
     {
@@ -453,11 +452,32 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
                 $values[$value] = true;
             }
         }
-        if (count($values) !== 1) {
-            return null;
+
+        return count($values) === 1 ? self::sizeFromShopValue((string) array_key_first($values), $name) : null;
+    }
+
+    /**
+     * Rozmiar na końcu nazwy pozycji potwierdzony wierszem „Rozmiar” sklepu (ta sama reguła w łączniku i w
+     * products:repair-tegro-codes): wartość pojedyncza bez białych znaków, na którą kończy się nazwa („10” przy
+     * „… COMFORT PREMIUM 10”), albo zakres liczbowy „A-B”, w którym mieści się liczba na końcu nazwy („9-10” przy
+     * „… DUPLO/27 10”, „6-11” przy „… BUDGIE 11” — decyzja właściciela 28.09.2026: sklep ma w ofercie jeden rozmiar
+     * modelu dostępnego w zakresie). Zakres literowy („S-XL”) i lista („8,9”) — null: kolejności nie zgadujemy. Przed
+     * rozmiarem musi coś zostać. Null = nazwa i kod zostają jak w sklepie.
+     */
+    public static function sizeFromShopValue(string $value, string $name): ?string
+    {
+        $value = trim($value);
+        $size = null;
+        if (preg_match('/^(\d+)\s*[-\x{2013}\x{2014}]\s*(\d+)$/u', $value, $range) === 1) {
+            $words = preg_split('/\s+/u', trim($name)) ?: [];
+            $last = (string) end($words);
+            if (ctype_digit($last) && (int) $range[1] <= (int) $last && (int) $last <= (int) $range[2]) {
+                $size = $last;
+            }
+        } elseif ($value !== '' && preg_match('/[\s\-\x{2013}\x{2014},;\/]/u', $value) !== 1) {
+            $size = $value;
         }
-        $size = (string) array_key_first($values);
-        if (preg_match('/[\s\-\x{2013}\x{2014},;\/]/u', $size) === 1 || ! str_ends_with($name, ' '.$size)) {
+        if ($size === null || ! str_ends_with($name, ' '.$size)) {
             return null;
         }
 
