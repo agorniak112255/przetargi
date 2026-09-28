@@ -686,13 +686,17 @@ class ProductController extends Controller
      * Stan uzupełniania opisu B2B ze stron konta (SupplementB2bDescriptionJob) — znacznik na liście i karcie
      * (prośba użytkownika 28.09.2026: po „Uzupełnij krótkie opisy” każda karta dalej pokazywała „Z B2B” i nie było
      * widać, że coś się dzieje):
-     * - `queued` — karta czeka w kolejce uzupełniania (wiersz próby w stanie queued),
+     * - `queued` — karta czeka w kolejce uzupełniania,
+     * - `running` — job właśnie nad nią pracuje (`stage` — bieżący etap),
+     * - `waiting_search` — czeka w kolejce na wyszukiwarkę (przerwa po blokadzie), `retry_at` — ponowienie (UTC),
+     * - `cancelled` — uzupełnianie zatrzymane przyciskiem (tylko gdy karta nie ma opisu z uzupełnienia),
      * - `supplemented` — obecny opis napisało uzupełnianie (B2bDescriptionSupplement::isSupplementResult), `hosts` to
      *   strony z internetu, z których wziął tekst.
+     * Karta w toku (queued, running, waiting_search) pokazuje stan w toku, nawet gdy ma już opis z uzupełnienia.
      * Karta bez żadnego z tych stanów nie ma wpisu. Dwa zapytania na 1000 kart; payload tylko kart ze śladem.
      *
      * @param  list<int>  $productIds
-     * @return array<int, array{state: 'queued'|'supplemented', hosts: list<string>, described_at: string|null}>
+     * @return array<int, array{state: 'queued'|'running'|'waiting_search'|'cancelled'|'supplemented', hosts: list<string>, described_at: string|null, stage: string|null, retry_at: string|null}>
      */
     private function descriptionOrigins(array $productIds): array
     {
@@ -720,14 +724,33 @@ class ProductController extends Controller
                     'state' => 'supplemented',
                     'hosts' => $hosts,
                     'described_at' => is_string($trace['described_at'] ?? null) ? $trace['described_at'] : null,
+                    'stage' => null,
+                    'retry_at' => null,
                 ];
             }
-            $queued = B2bDescriptionSupplementAttempt::query()
+            $attempts = B2bDescriptionSupplementAttempt::query()
                 ->whereIn('product_id', $chunk)
-                ->where('status', B2bDescriptionSupplementAttempt::STATUS_QUEUED)
-                ->pluck('product_id');
-            foreach ($queued as $productId) {
-                $out[(int) $productId] = ['state' => 'queued', 'hosts' => [], 'described_at' => null];
+                ->whereIn('status', [...B2bDescriptionSupplementAttempt::PENDING_STATUSES, B2bDescriptionSupplementAttempt::STATUS_CANCELLED])
+                ->get(['product_id', 'status', 'stage', 'retry_at']);
+            foreach ($attempts as $attempt) {
+                $id = (int) $attempt->product_id;
+                $state = match (true) {
+                    $attempt->status === B2bDescriptionSupplementAttempt::STATUS_RUNNING => 'running',
+                    $attempt->status === B2bDescriptionSupplementAttempt::STATUS_CANCELLED => 'cancelled',
+                    $attempt->retry_at !== null && $attempt->retry_at->isFuture() => 'waiting_search',
+                    default => 'queued',
+                };
+                // zatrzymane przyciskiem nie zasłania opisu, który karta już ma z uzupełnienia
+                if ($state === 'cancelled' && isset($out[$id])) {
+                    continue;
+                }
+                $out[$id] = [
+                    'state' => $state,
+                    'hosts' => [],
+                    'described_at' => null,
+                    'stage' => $state === 'running' ? $attempt->stage : null,
+                    'retry_at' => $state === 'waiting_search' ? $attempt->retry_at?->toIso8601String() : null,
+                ];
             }
         }
 

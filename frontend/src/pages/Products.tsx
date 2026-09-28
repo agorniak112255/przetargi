@@ -21,6 +21,8 @@ import {
   api,
   B2B_DESCRIPTION_OVERWRITE_CONFIRM,
   can,
+  descriptionSupplementLabel,
+  descriptionSupplementPending,
   parseActiveEnrichment,
   type EnrichmentBatch,
   type ManualMergeCard,
@@ -56,6 +58,14 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 const STATUS_FILTERS = ['', 'none', 'queued', 'running', 'done', 'failed', 'manual'] as const
+
+/** Kolor etykiety uzupełniania opisu ze stron konta B2B (descriptionSupplementLabel). */
+const SUPPLEMENT_TONE_CLASS = {
+  progress: 'text-blue-700',
+  waiting: 'text-amber-700',
+  stopped: 'text-slate-500',
+  done: 'text-emerald-700',
+} as const
 
 const PER_PAGE_CHOICES = ['100', '200', '500', '1000', 'all'] as const
 type PerPageChoice = (typeof PER_PAGE_CHOICES)[number]
@@ -528,9 +538,9 @@ export function Products() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batch, page, debouncedQ, sort, dir])
 
-  // Karty w kolejce uzupełniania opisu ze stron konta B2B — lista odświeża się sama, dopóki na stronie są takie karty,
-  // żeby było widać postęp („Uzupełnianie w kolejce” → „Z B2B + strony”).
-  const supplementQueued = (result?.data ?? []).some((p) => p.description_supplement?.state === 'queued')
+  // Karty w toku uzupełniania opisu ze stron konta B2B (kolejka, praca, czekanie na wyszukiwarkę) — lista odświeża się
+  // sama, dopóki na stronie są takie karty, żeby było widać postęp („Uzupełnianie w kolejce” → „Z B2B + strony”).
+  const supplementQueued = (result?.data ?? []).some((p) => descriptionSupplementPending(p.description_supplement))
   useEffect(() => {
     if (!supplementQueued || aiMode) return
     const t = window.setInterval(() => {
@@ -1163,6 +1173,7 @@ export function Products() {
           <tbody>
             {displayRows.map((p, i) => {
               const status = p.enrichment_status ?? 'none'
+              const supplement = descriptionSupplementLabel(p.description_supplement)
               const thumb = p.images?.find((img) => img.is_primary) ?? p.images?.[0]
               return (
                 <tr
@@ -1218,21 +1229,9 @@ export function Products() {
                     </td>
                   )}
                   <td className="p-2">
-                    {p.description_supplement?.state === 'queued' ? (
-                      <span
-                        className="text-blue-700"
-                        title="Opis z cennika B2B czeka w kolejce na uzupełnienie ze stron wskazanych przy koncie"
-                      >
-                        Uzupełnianie w kolejce
-                      </span>
-                    ) : p.description_supplement?.state === 'supplemented' ? (
-                      <span
-                        className="text-emerald-700"
-                        title={`Opis z cennika B2B uzupełniony ze stron${
-                          p.description_supplement.hosts.length > 0 ? `: ${p.description_supplement.hosts.join(', ')}` : ''
-                        }`}
-                      >
-                        Z B2B + strony
+                    {supplement ? (
+                      <span className={SUPPLEMENT_TONE_CLASS[supplement.tone]} title={supplement.title}>
+                        {supplement.label}
                       </span>
                     ) : status === 'none' && p.description_from_b2b ? (
                       <span

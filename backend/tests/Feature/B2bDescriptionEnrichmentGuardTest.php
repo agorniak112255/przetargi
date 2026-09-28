@@ -96,14 +96,36 @@ final class B2bDescriptionEnrichmentGuardTest extends TestCase
             'attempts' => 0,
         ]);
 
+        $attempt = static fn (Product $product, array $values): B2bDescriptionSupplementAttempt => B2bDescriptionSupplementAttempt::query()->create([
+            'product_id' => $product->id,
+            'b2b_account_id' => B2bProductLink::query()->where('product_id', $product->id)->value('b2b_account_id'),
+            'source_sha1' => sha1(self::B2B_TEXT),
+            'hosts_sha1' => sha1('specshop.pl'),
+            'attempts' => 1,
+            ...$values,
+        ]);
+        $attempt($running = $this->b2bProduct('UVEX-4'), ['status' => B2bDescriptionSupplementAttempt::STATUS_RUNNING, 'stage' => 'szukanie stron']);
+        $attempt($this->b2bProduct('UVEX-5'), ['status' => B2bDescriptionSupplementAttempt::STATUS_QUEUED, 'retry_at' => now()->addMinutes(7), 'stage' => 'czeka na wyszukiwarkę']);
+        $attempt($this->b2bProduct('UVEX-6'), ['status' => B2bDescriptionSupplementAttempt::STATUS_QUEUED, 'retry_at' => now()->subMinute()]);
+        $attempt($this->b2bProduct('UVEX-7'), ['status' => B2bDescriptionSupplementAttempt::STATUS_CANCELLED]);
+        // zatrzymane przyciskiem nie zasłania opisu, który karta ma już z uzupełnienia
+        $attempt($supplemented, ['status' => B2bDescriptionSupplementAttempt::STATUS_CANCELLED]);
+
         $rows = collect($this->getJson('/api/products?per_page=50')->assertOk()->json('data'))->keyBy('sku');
 
         $this->assertSame(
-            ['state' => 'supplemented', 'hosts' => ['specshop.pl', 'balticbhp.pl'], 'described_at' => '2026-09-28T17:07:22+00:00'],
+            ['state' => 'supplemented', 'hosts' => ['specshop.pl', 'balticbhp.pl'], 'described_at' => '2026-09-28T17:07:22+00:00', 'stage' => null, 'retry_at' => null],
             $rows['UVEX-1']['description_supplement'],
         );
         $this->assertNull($rows['UVEX-2']['description_supplement']);
         $this->assertSame('queued', $rows['UVEX-3']['description_supplement']['state']);
+        $this->assertSame(['running', 'szukanie stron'], [$rows['UVEX-4']['description_supplement']['state'], $rows['UVEX-4']['description_supplement']['stage']]);
+        $this->assertSame('waiting_search', $rows['UVEX-5']['description_supplement']['state']);
+        $this->assertNotNull($rows['UVEX-5']['description_supplement']['retry_at']);
+        // termin ponowienia minął — karta czeka już zwyczajnie na swoją kolej
+        $this->assertSame('queued', $rows['UVEX-6']['description_supplement']['state']);
+        $this->assertSame('cancelled', $rows['UVEX-7']['description_supplement']['state']);
+        $this->getJson("/api/products/{$running->id}")->assertOk()->assertJsonPath('description_supplement.state', 'running');
         $this->getJson("/api/products/{$supplemented->id}")->assertOk()
             ->assertJsonPath('description_supplement.state', 'supplemented')
             ->assertJsonPath('description_supplement.hosts', ['specshop.pl', 'balticbhp.pl']);

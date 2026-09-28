@@ -20,6 +20,7 @@ import {
   api,
   B2B_DESCRIPTION_OVERWRITE_CONFIRM,
   can,
+  descriptionSupplementLabel,
   type EnrichmentBatch,
   type PrestaExportResult,
   type Product,
@@ -476,6 +477,7 @@ export function ProductDetail() {
   if (!p) return <p className="text-sm text-slate-500">Ładowanie…</p>
 
   const status = p.enrichment_status ?? 'none'
+  const supplementLabel = descriptionSupplementLabel(p.description_supplement)
   const currency = p.currency?.trim() || 'PLN'
   const variants = p.variants ?? null
   // Wersje Sign Project: karta z ceną 0, ceny w wersjach. Rozmiary w różnych cenach (kind „size”): karta ma zwykłą
@@ -596,13 +598,15 @@ export function ProductDetail() {
           <p className="text-xs text-slate-500">
             Opis/zdjęcia:{' '}
             <b>
-              {p.description_supplement?.state === 'queued'
-                ? 'Z B2B — uzupełnianie ze stron w kolejce'
-                : p.description_supplement?.state === 'supplemented'
-                  ? `Z B2B uzupełniony ze stron${
-                      p.description_supplement.hosts.length > 0 ? ` (${p.description_supplement.hosts.join(', ')})` : ''
+              {supplementLabel
+                ? supplementLabel.tone === 'done'
+                  ? supplementLabel.title
+                  : `Z B2B — ${supplementLabel.label.toLowerCase()}${
+                      p.description_supplement?.state === 'running' && p.description_supplement.stage
+                        ? ` (${p.description_supplement.stage})`
+                        : ''
                     }`
-                  : status === 'none' && p.description_from_b2b
+                : status === 'none' && p.description_from_b2b
                     ? 'Z B2B (opis ze sklepu dostawcy)'
                     : (STATUS_LABEL[status] ?? status)}
             </b>

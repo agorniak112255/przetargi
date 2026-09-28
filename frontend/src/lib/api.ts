@@ -291,11 +291,7 @@ export type Product = {
   /** Opis zapisany przez cennik B2B i niezmieniony — AI nie nadpisuje go zbiorczo, pojedynczo po potwierdzeniu. */
   description_from_b2b?: boolean
   /** Uzupełnianie opisu B2B ze stron konta: karta w kolejce albo obecny opis z uzupełnienia (hosts = strony źródłowe). */
-  description_supplement?: {
-    state: 'queued' | 'supplemented'
-    hosts: string[]
-    described_at: string | null
-  } | null
+  description_supplement?: DescriptionSupplement | null
   enriched_at?: string | null
   enrichment_error?: string | null
   enrichment_trace?: {
@@ -389,6 +385,49 @@ export type ProductAccessory = {
   presta_id?: number | null
   presta_url?: string | null
   matched: boolean
+}
+
+/**
+ * Uzupełnianie opisu B2B ze stron konta (ProductController::descriptionOrigins): stan w toku albo obecny opis
+ * z uzupełnienia. retry_at w UTC (ISO) — w panelu pokazujemy czas lokalny.
+ */
+export type DescriptionSupplement = {
+  state: 'queued' | 'running' | 'waiting_search' | 'cancelled' | 'supplemented'
+  hosts: string[]
+  described_at: string | null
+  stage: string | null
+  retry_at: string | null
+}
+
+/** Karta w toku uzupełniania — lista odświeża się, dopóki na stronie są takie karty. */
+export function descriptionSupplementPending(s: DescriptionSupplement | null | undefined): boolean {
+  return s?.state === 'queued' || s?.state === 'running' || s?.state === 'waiting_search'
+}
+
+/** Etykieta stanu uzupełniania na liście i karcie; null = karta bez stanu uzupełniania. */
+export function descriptionSupplementLabel(
+  s: DescriptionSupplement | null | undefined,
+): { label: string; title: string; tone: 'progress' | 'waiting' | 'stopped' | 'done' } | null {
+  if (!s) return null
+  const hosts = s.hosts.length > 0 ? `: ${s.hosts.join(', ')}` : ''
+  switch (s.state) {
+    case 'queued':
+      return { label: 'Uzupełnianie w kolejce', title: 'Opis z cennika B2B czeka w kolejce na uzupełnienie ze stron wskazanych przy koncie', tone: 'progress' }
+    case 'running':
+      return { label: 'Uzupełnianie w toku', title: s.stage ? `Etap: ${s.stage}` : 'Model uzupełnia opis ze stron konta', tone: 'progress' }
+    case 'waiting_search': {
+      const at = s.retry_at ? new Date(s.retry_at).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' }) : null
+      return {
+        label: at ? `Czeka na wyszukiwarkę (ponowienie o ${at})` : 'Czeka na wyszukiwarkę',
+        title: 'Wyszukiwarka ma przerwę po blokadzie — karta wróci do uzupełniania sama',
+        tone: 'waiting',
+      }
+    }
+    case 'cancelled':
+      return { label: 'Uzupełnianie zatrzymane', title: 'Zatrzymane przyciskiem — „Uzupełnij krótkie opisy” wznowi kartę', tone: 'stopped' }
+    case 'supplemented':
+      return { label: 'Z B2B + strony', title: `Opis z cennika B2B uzupełniony ze stron${hosts}`, tone: 'done' }
+  }
 }
 
 /** Pytanie przed uzupełnianiem AI karty z opisem z cennika B2B (description_from_b2b). */
