@@ -172,13 +172,18 @@ export function PriceListsB2b() {
   }, [])
 
   const syncInProgress = rows.some((r) => r.last_sync_status === 'running' || r.sync_requested_at !== null)
+  /** Uzupełnianie krótkich opisów w kolejce — liczniki przy koncie odświeżane częściej niż przy pobieraniu cennika. */
+  const supplementInProgress = rows.some((r) => r.supplement_stats.queued > 0)
   useEffect(() => {
-    if (!syncInProgress) return
-    const timer = window.setInterval(() => {
-      void load().catch(() => {})
-    }, 30000)
+    if (!syncInProgress && !supplementInProgress) return
+    const timer = window.setInterval(
+      () => {
+        void load().catch(() => {})
+      },
+      supplementInProgress ? 15000 : 30000,
+    )
     return () => window.clearInterval(timer)
-  }, [syncInProgress])
+  }, [syncInProgress, supplementInProgress])
 
   async function fetchPassword(id: number): Promise<string> {
     if (revealed[id] !== undefined) return revealed[id]
@@ -341,6 +346,12 @@ export function PriceListsB2b() {
         <p>
           Strony z opisami: <b>{row.enrichment_sites.join(', ')}</b> · próg {row.enrichment_min_chars_effective} znaków
         </p>
+        {s.queued > 0 && (
+          <p className="font-medium text-blue-700">
+            Trwa uzupełnianie opisów: sprawdzono {s.replaced + s.kept_b2b + s.no_pages + s.failed} z{' '}
+            {s.replaced + s.kept_b2b + s.no_pages + s.failed + s.queued} kart (odświeża się samo)
+          </p>
+        )}
         <p className="text-slate-500">
           Krótkie opisy: uzupełnione {s.replaced} · bez zmian {s.kept_b2b} · brak stron {s.no_pages} · w kolejce{' '}
           {s.queued} · do ponowienia {s.failed}

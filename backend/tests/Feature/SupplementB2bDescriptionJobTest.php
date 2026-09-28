@@ -133,6 +133,140 @@ final class SupplementB2bDescriptionJobTest extends TestCase
         $this->assertSame([], app(B2bDescriptionSupplement::class)->candidateIds($this->account, false));
     }
 
+    public function test_trace_marks_variant_gate_and_keeps_previous_payload(): void
+    {
+        $card = $this->card(self::SHORT, ['enrichment_payload' => ['merged_size_skus' => ['R-1-S'], 'attributes' => ['x' => 'y']]]);
+        $this->link($card, 'a', sha1(self::SHORT));
+        $this->enrichment->shouldReceive('supplementB2bDescription')->once()->andReturn($this->modelResult());
+
+        $this->runJob($card);
+
+        $trace = ((array) $card->refresh()->enrichment_payload)['b2b_supplement'];
+        $this->assertSame(SupplementB2bDescriptionJob::VARIANT_GATE, $trace['variant_gate']);
+        // stan sprzed uzupełnienia bez atrybutów (liczone z karty)
+        $this->assertSame(['merged_size_skus' => ['R-1-S']], $trace['previous_payload']);
+    }
+
+    public function test_undo_ungated_restores_b2b_text_payload_and_hashes_then_requeues(): void
+    {
+        Queue::fake();
+        $card = $this->card(self::SHORT, ['enrichment_payload' => ['merged_size_skus' => ['R-1-S']]]);
+        $links = [$this->link($card, 'a', sha1(self::SHORT)), $this->link($card, 'b', sha1(self::SHORT))];
+        $this->enrichment->shouldReceive('supplementB2bDescription')->once()->andReturn($this->modelResult());
+        $this->runJob($card);
+        // opis sprzed bramki wariantu: ślad bez znacznika
+        $payload = (array) $card->refresh()->enrichment_payload;
+        unset($payload['b2b_supplement']['variant_gate']);
+        $card->forceFill(['enrichment_payload' => $payload])->saveQuietly();
+        // uzupełniony już z bramką — nie ruszać
+        $gated = $this->card($this->shortOther(), ['sku' => 'R-2']);
+        $this->link($gated, 'g', sha1($this->shortOther()));
+        $this->enrichment->shouldReceive('supplementB2bDescription')->once()->andReturn($this->modelResult());
+        $this->runJob($gated);
+
+        $supplement = app(B2bDescriptionSupplement::class);
+        $preview = $supplement->undoUngated($this->account, false);
+        $this->assertSame([(int) $card->id], $preview['candidates']);
+        $this->assertSame(self::AI_TEXT, $card->refresh()->description);
+
+        $result = $supplement->undoUngated($this->account, true);
+
+        $this->assertSame([(int) $card->id], $result['undone']);
+        $card->refresh();
+        $this->assertSame(self::SHORT, $card->description);
+        $payload = (array) $card->enrichment_payload;
+        $this->assertSame(['R-1-S'], $payload['merged_size_skus']);
+        $this->assertArrayNotHasKey('b2b_supplement', $payload);
+        $this->assertArrayNotHasKey('features', $payload);
+        $this->assertArrayNotHasKey('replaced_description', $payload);
+        $this->assertSame(self::AI_TEXT, $payload['b2b_supplement_undone']['description']);
+        foreach ($links as $link) {
+            $link->refresh();
+            $this->assertSame(sha1(self::SHORT), $link->description_hash);
+            $this->assertNull($link->source_description_hash);
+        }
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_FAILED, $this->attemptOf($card)->status);
+        // karta znów czeka na uzupełnienie, ta z bramką — nie
+        $this->assertSame(self::AI_TEXT, $gated->refresh()->description);
+        $this->assertSame([(int) $card->id], $supplement->candidateIds($this->account));
+    }
+
+    public function test_undo_command_previews_then_undoes_and_requeues(): void
+    {
+        Queue::fake();
+        $card = $this->card(self::SHORT);
+        $this->link($card, 'a', sha1(self::SHORT));
+        $this->enrichment->shouldReceive('supplementB2bDescription')->once()->andReturn($this->modelResult());
+        $this->runJob($card);
+        $payload = (array) $card->refresh()->enrichment_payload;
+        unset($payload['b2b_supplement']['variant_gate']);
+        $card->forceFill(['enrichment_payload' => $payload])->saveQuietly();
+        // artisan buduje wszystkie komendy — atrapa usługi (bez typu) nie przejdzie przez ich konstruktory
+        $this->app->forgetInstance(ProductEnrichmentService::class);
+
+        $this->artisan('b2b:supplement-descriptions', ['--account' => $this->account->id, '--undo-ungated' => true])
+            ->expectsOutputToContain('opisów uzupełnionych przed bramką wariantu: 1')
+            ->assertSuccessful();
+        $this->assertSame(self::AI_TEXT, $card->refresh()->description);
+        Queue::assertNothingPushed();
+
+        $this->artisan('b2b:supplement-descriptions', ['--account' => $this->account->id, '--undo-ungated' => true, '--apply' => true])
+            ->expectsOutputToContain('zlecono ponownie: 1')
+            ->assertSuccessful();
+        $this->assertSame(self::SHORT, $card->refresh()->description);
+        Queue::assertPushed(SupplementB2bDescriptionJob::class, 1);
+    }
+
+    public function test_undo_of_legacy_trace_drops_supplement_keys_and_keeps_translation_hash(): void
+    {
+        // dawny ślad (bez previous_payload) na karcie z tłumaczeniem: source hash = tekst obcy
+        $english = 'Nitrile coated protective glove, category II.';
+        $card = $this->card(self::AI_TEXT, ['enrichment_payload' => [
+            'features' => ['powłoka nitrylowa'],
+            'source_urls' => [self::WEB_URL],
+            'primary_source_kind' => 'b2b_supplement',
+            'replaced_description' => self::SHORT,
+            'replaced_description_hash' => sha1(self::AI_TEXT),
+            'b2b_sources' => ['described_at' => 'x'],
+            'b2b_supplement' => [
+                'b2b_account_id' => $this->account->id,
+                'b2b_text' => self::SHORT,
+                'source_sha1' => sha1($english),
+                'result_sha1' => sha1(self::AI_TEXT),
+                'web_source_urls' => [self::WEB_URL],
+            ],
+        ]]);
+        $link = $this->link($card, 'a', sha1(self::AI_TEXT), sha1($english));
+        B2bDescriptionSupplementAttempt::query()->create([
+            'product_id' => $card->id, 'b2b_account_id' => $this->account->id, 'source_sha1' => sha1($english),
+            'hosts_sha1' => $this->account->enrichmentHostsSha1(), 'status' => B2bDescriptionSupplementAttempt::STATUS_REPLACED,
+            'attempts' => 1, 'result_sha1' => sha1(self::AI_TEXT),
+        ]);
+        // opis zmieniony po uzupełnieniu — zostaje
+        $edited = $this->card('Opis poprawiony ręcznie przez dział zakupów.', ['sku' => 'R-3', 'enrichment_payload' => [
+            'b2b_supplement' => ['b2b_text' => self::SHORT, 'source_sha1' => sha1(self::SHORT), 'result_sha1' => sha1(self::AI_TEXT)],
+        ]]);
+        B2bDescriptionSupplementAttempt::query()->create([
+            'product_id' => $edited->id, 'b2b_account_id' => $this->account->id, 'source_sha1' => sha1(self::SHORT),
+            'hosts_sha1' => $this->account->enrichmentHostsSha1(), 'status' => B2bDescriptionSupplementAttempt::STATUS_REPLACED,
+        ]);
+
+        $result = app(B2bDescriptionSupplement::class)->undoUngated($this->account, true);
+
+        $this->assertSame([(int) $card->id], $result['undone']);
+        $this->assertSame('opis zmieniony od uzupełnienia', $result['skipped'][(int) $edited->id]);
+        $payload = (array) $card->refresh()->enrichment_payload;
+        $this->assertSame(self::SHORT, $card->description);
+        foreach (['features', 'source_urls', 'primary_source_kind', 'replaced_description', 'b2b_supplement'] as $key) {
+            $this->assertArrayNotHasKey($key, $payload, $key);
+        }
+        $this->assertSame(['described_at' => 'x'], $payload['b2b_sources']);
+        $link->refresh();
+        $this->assertSame(sha1(self::SHORT), $link->description_hash);
+        $this->assertSame(sha1($english), $link->source_description_hash);
+        $this->assertSame('Opis poprawiony ręcznie przez dział zakupów.', $edited->refresh()->description);
+    }
+
     public function test_existing_replaced_description_is_not_overwritten(): void
     {
         $card = $this->card(self::SHORT, ['enrichment_payload' => [
@@ -459,7 +593,7 @@ final class SupplementB2bDescriptionJobTest extends TestCase
         return $product->refresh();
     }
 
-    private function link(Product $product, string $remoteId, string $descriptionHash): B2bProductLink
+    private function link(Product $product, string $remoteId, string $descriptionHash, ?string $sourceHash = null): B2bProductLink
     {
         return B2bProductLink::query()->create([
             'b2b_account_id' => $this->account->id,
@@ -467,7 +601,14 @@ final class SupplementB2bDescriptionJobTest extends TestCase
             'product_id' => $product->id,
             'remote_sku' => $product->sku,
             'description_hash' => $descriptionHash,
+            'source_description_hash' => $sourceHash,
         ]);
+    }
+
+    /** Drugi krótki tekst z B2B (inna karta). */
+    private function shortOther(): string
+    {
+        return self::SHORT.' Wariant 2.';
     }
 
     private function attemptOf(Product $product): B2bDescriptionSupplementAttempt

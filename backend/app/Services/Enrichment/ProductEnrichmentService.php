@@ -5544,10 +5544,138 @@ SYS,
         $fetched = $this->pages->fetch($fresh, (string) $product->sku, self::SUPPLEMENT_WEB_PAGES, [], $product);
         $this->attemptLog()->add('fetch', count($fetched['pages']).' stron HTML', urls: array_column($fetched['pages'], 'url'));
 
-        return array_values(array_filter(
-            $this->keepConfirmedCardPages($product, $fetched['pages']),
-            static fn (array $page): bool => ! $supplierUrl((string) ($page['url'] ?? ''))
-        ));
+        $kept = [];
+        foreach ($this->keepConfirmedCardPages($product, $fetched['pages']) as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($supplierUrl($url)) {
+                continue;
+            }
+            if (! $this->supplementPageNamesCardVariant($product, $page)) {
+                $this->attemptLog()->add('page', 'uzupełnienie opisu B2B: strona innego wariantu albo bez kodu karty — pominięta', urls: [$url]);
+
+                continue;
+            }
+            $kept[] = $page;
+        }
+
+        return $kept;
+    }
+
+    /**
+     * Strona z internetu opisuje wariant tej karty, a nie tylko model (produkcja 28.09.2026, Bolle): bramka tożsamości
+     * (keepConfirmedCardPages) przyjmuje stronę po samej nazwie modelu, a u Bolle warianty różnią się wyłącznie kodem —
+     * TRACPSF dostał strony TRACPSI i TRACPSJ (inna soczewka), PSSNESF028 cztery warianty NESS+, a przez nazwę serii
+     * także SILIUM i SLAM (inne wyroby). Do uzupełnienia wolno więc tylko stronę:
+     * - z kodem karty (SKU albo kod bez rozmiaru) w adresie albo tytule, albo
+     * - z kodem karty w treści, gdy adres i tytuł nie niosą kodu innej karty tego producenta z naszego katalogu
+     *   (strona innego wariantu wymienia nasz kod w „podobnych produktach”).
+     * Kod krótszy niż SUPPLEMENT_MIN_CODE_CHARS znaków (litery i cyfry) zostaje przy samej bramce tożsamości — w treści
+     * strony trafiałby przypadkiem.
+     *
+     * @param  array<string, mixed>  $page
+     */
+    private function supplementPageNamesCardVariant(Product $product, array $page): bool
+    {
+        $own = [];
+        foreach ([(string) $product->sku, $this->identity->catalogSkuWithoutSize($product)] as $code) {
+            $key = self::supplementCodeKey($code);
+            if (mb_strlen($key) >= self::SUPPLEMENT_MIN_CODE_CHARS) {
+                $own[$key] = true;
+            }
+        }
+        if ($own === []) {
+            return true;
+        }
+        $head = rawurldecode((string) ($page['url'] ?? ''))."\n".(string) ($page['title'] ?? '');
+        foreach (array_keys($own) as $key) {
+            if (self::textCarriesCode($head, $key)) {
+                return true;
+            }
+        }
+        $inText = false;
+        foreach (array_keys($own) as $key) {
+            if (self::textCarriesCode((string) ($page['text'] ?? ''), $key)) {
+                $inText = true;
+                break;
+            }
+        }
+        if (! $inText) {
+            return false;
+        }
+        $headKey = self::supplementCodeKey($head);
+        foreach ($this->manufacturerCatalogCodes($product) as $foreign) {
+            if (isset($own[$foreign])) {
+                continue;
+            }
+            // kod innej karty zawarty w naszym (COBPSI w COBPSIX) to nie inny wariant na stronie
+            $insideOwn = false;
+            foreach (array_keys($own) as $key) {
+                if (str_contains($key, $foreign)) {
+                    $insideOwn = true;
+                    break;
+                }
+            }
+            if (! $insideOwn && str_contains($headKey, $foreign) && self::textCarriesCode($head, $foreign)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** Najkrótszy kod (litery i cyfry), który przy uzupełnianiu opisu B2B musi stać na stronie wyrobu. */
+    private const SUPPLEMENT_MIN_CODE_CHARS = 5;
+
+    /** @var array<string, list<string>> producent => kody jego kart (supplementCodeKey), na czas przebiegu */
+    private array $manufacturerCatalogCodes = [];
+
+    /**
+     * Kody kart tego samego producenta z katalogu (bez tej karty), w postaci supplementCodeKey, co najmniej
+     * SUPPLEMENT_MIN_CODE_CHARS znaków.
+     *
+     * @return list<string>
+     */
+    private function manufacturerCatalogCodes(Product $product): array
+    {
+        $manufacturer = mb_strtolower(trim((string) $product->manufacturer));
+        if ($manufacturer === '') {
+            return [];
+        }
+        if (! isset($this->manufacturerCatalogCodes[$manufacturer])) {
+            $codes = [];
+            foreach (Product::query()->whereRaw('LOWER(TRIM(manufacturer)) = ?', [$manufacturer])->toBase()->pluck('sku', 'id') as $id => $sku) {
+                $key = self::supplementCodeKey((string) $sku);
+                if (mb_strlen($key) >= self::SUPPLEMENT_MIN_CODE_CHARS) {
+                    $codes[(int) $id] = $key;
+                }
+            }
+            $this->manufacturerCatalogCodes[$manufacturer] = $codes;
+        }
+        $codes = $this->manufacturerCatalogCodes[$manufacturer];
+        unset($codes[(int) $product->id]);
+
+        return array_values(array_unique($codes));
+    }
+
+    /** Kod do porównania: małe litery i cyfry, bez separatorów („PSSBL30-014” → „pssbl30014”). */
+    private static function supplementCodeKey(string $code): string
+    {
+        return (string) preg_replace('/[^\p{L}\p{N}]+/u', '', mb_strtolower($code));
+    }
+
+    /**
+     * Kod stoi w tekście jako osobny ciąg — między znakami kodu wolno separator („PSSBL30-014”, „TRACPSF”), przed
+     * i za nim nie ma litery ani cyfry (TRACPSF nie trafia w TRACPSFX).
+     */
+    private static function textCarriesCode(string $text, string $key): bool
+    {
+        if ($key === '' || $text === '') {
+            return false;
+        }
+        $chars = preg_split('//u', $key, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $pattern = implode('[\s._\/-]?', array_map(static fn (string $c): string => preg_quote($c, '/'), $chars));
+
+        return preg_match('/(?<![\p{L}\p{N}])'.$pattern.'(?![\p{L}\p{N}])/iu', $text) === 1;
     }
 
     /**

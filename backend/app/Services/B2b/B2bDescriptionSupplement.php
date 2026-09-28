@@ -9,7 +9,9 @@ use App\Models\B2bAccount;
 use App\Models\B2bDescriptionSupplementAttempt;
 use App\Models\B2bProductLink;
 use App\Models\Product;
+use App\Support\BhpAttributeNormalizer;
 use App\Support\ProductDescriptionText;
+use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
 /**
@@ -130,6 +132,139 @@ final class B2bDescriptionSupplement
         }
 
         return null;
+    }
+
+    /**
+     * Karty konta, których obecny opis napisało uzupełnianie przed bramką wariantu (ślad bez
+     * SupplementB2bDescriptionJob::VARIANT_GATE) — produkcja 28.09.2026: źródłami były strony innych wariantów tego
+     * samego modelu (TRACPSI przy TRACPSF) i innych wyrobów serii. $apply = false — sama lista.
+     *
+     * Przy $apply karta wraca do stanu sprzed uzupełnienia, compare-and-set jak w jobie: opis = tekst z B2B ze śladu,
+     * enrichment_payload = stan sprzed uzupełnienia (ślad previous_payload; dawny ślad bez niego — payload bez kluczy
+     * wyniku uzupełnienia), hashe powiązań konta jak przed uzupełnieniem, próba „failed” z komunikatem — kolejne
+     * zlecenie (queue) opisze kartę od nowa, już z bramką wariantu. Ślad cofniętego opisu zostaje w
+     * enrichment_payload.b2b_supplement_undone.
+     *
+     * @return array{candidates: list<int>, undone: list<int>, skipped: array<int, string>}
+     */
+    public function undoUngated(B2bAccount $account, bool $apply): array
+    {
+        $out = ['candidates' => [], 'undone' => [], 'skipped' => []];
+        $attempts = B2bDescriptionSupplementAttempt::query()
+            ->where('b2b_account_id', $account->id)
+            ->where('status', B2bDescriptionSupplementAttempt::STATUS_REPLACED)
+            ->orderBy('product_id')
+            ->pluck('product_id');
+        foreach ($attempts as $productId) {
+            $productId = (int) $productId;
+            $product = Product::query()->find($productId);
+            if ($product === null) {
+                continue;
+            }
+            $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+            $trace = is_array($payload['b2b_supplement'] ?? null) ? $payload['b2b_supplement'] : [];
+            if ((int) ($trace['variant_gate'] ?? 0) >= SupplementB2bDescriptionJob::VARIANT_GATE) {
+                continue;
+            }
+            if (! self::isSupplementResult((string) ($product->description ?? ''), $payload)) {
+                $out['skipped'][$productId] = 'opis zmieniony od uzupełnienia';
+
+                continue;
+            }
+            if (trim((string) ($trace['b2b_text'] ?? '')) === '' || trim((string) ($trace['source_sha1'] ?? '')) === '') {
+                $out['skipped'][$productId] = 'ślad bez tekstu z B2B';
+
+                continue;
+            }
+            $out['candidates'][] = $productId;
+            if (! $apply) {
+                continue;
+            }
+            $reason = $this->undoOne($productId, (int) $account->id);
+            if ($reason === null) {
+                $out['undone'][] = $productId;
+            } else {
+                $out['skipped'][$productId] = $reason;
+            }
+        }
+
+        return $out;
+    }
+
+    /** Klucze enrichment_payload z wyniku uzupełnienia (ProductEnrichmentService::supplementB2bDescription + ślad). */
+    private const SUPPLEMENT_PAYLOAD_KEYS = [
+        'features', 'norms', 'certificates', 'materials', 'use_cases', 'specs', 'attributes', 'source_urls',
+        'primary_source_url', 'primary_source_kind', 'confidence', 'from_cache', 'b2b_supplement',
+    ];
+
+    /** Cofnięcie jednej karty (compare-and-set); powód pominięcia albo null. */
+    private function undoOne(int $productId, int $accountId): ?string
+    {
+        return DB::transaction(function () use ($productId, $accountId): ?string {
+            $product = Product::query()->lockForUpdate()->find($productId);
+            $links = B2bProductLink::query()
+                ->where('b2b_account_id', $accountId)
+                ->where('product_id', $productId)
+                ->lockForUpdate()
+                ->get();
+            if ($product === null || $links->isEmpty()) {
+                return 'karta albo powiązanie usunięte';
+            }
+            $description = (string) ($product->description ?? '');
+            $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+            if (! self::isSupplementResult($description, $payload)) {
+                return 'opis zmieniony od uzupełnienia';
+            }
+            $trace = $payload['b2b_supplement'];
+            $sourceSha1 = (string) $trace['source_sha1'];
+            foreach ($links as $link) {
+                if ($link->description_hash !== sha1($description) || $link->source_description_hash !== $sourceSha1) {
+                    return 'powiązania konta zmienione od uzupełnienia';
+                }
+            }
+            $b2bText = (string) $trace['b2b_text'];
+
+            if (is_array($trace['previous_payload'] ?? null)) {
+                $restored = $trace['previous_payload'];
+            } else {
+                $restored = array_diff_key($payload, array_flip(self::SUPPLEMENT_PAYLOAD_KEYS));
+                // miejsce na opis sprzed tekstu z B2B zajął wtedy sam tekst z B2B — zwalniamy je
+                if (($restored['replaced_description_hash'] ?? null) === ($trace['result_sha1'] ?? null)) {
+                    unset($restored['replaced_description'], $restored['replaced_description_at'], $restored['replaced_description_hash']);
+                }
+            }
+            $restored['b2b_supplement_undone'] = [
+                'b2b_account_id' => $accountId,
+                'description' => mb_substr($description, 0, 10000),
+                'web_source_urls' => $trace['web_source_urls'] ?? [],
+                'described_at' => $trace['described_at'] ?? null,
+                'undone_at' => now()->toIso8601String(),
+                'reason' => 'źródła sprzed bramki wariantu (strony innych wariantów)',
+            ];
+            $product->description = $b2bText;
+            $product->enrichment_payload = $restored;
+            $restored['attributes'] = app(BhpAttributeNormalizer::class)->forProduct($product);
+            $product->enrichment_payload = $restored;
+            $product->save();
+            foreach ($links as $link) {
+                $link->description_hash = sha1($b2bText);
+                // tekst z B2B wprost ze sklepu: odcisk źródła = odcisk opisu, source hash pusty; tłumaczenie: source hash
+                $link->source_description_hash = hash_equals($sourceSha1, sha1($b2bText)) ? null : $sourceSha1;
+                $link->save();
+            }
+            B2bDescriptionSupplementAttempt::query()
+                ->where('product_id', $productId)
+                ->where('b2b_account_id', $accountId)
+                ->update([
+                    'status' => B2bDescriptionSupplementAttempt::STATUS_FAILED,
+                    'result_sha1' => null,
+                    'source_urls' => null,
+                    'message' => 'cofnięte — źródła sprzed bramki wariantu, do ponownego uzupełnienia',
+                    'updated_at' => now(),
+                ]);
+
+            return null;
+        });
     }
 
     /**

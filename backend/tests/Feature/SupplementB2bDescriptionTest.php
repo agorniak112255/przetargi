@@ -124,6 +124,52 @@ final class SupplementB2bDescriptionTest extends TestCase
         $this->assertStringContainsString('Brak informacji = pomiń', $prompt);
     }
 
+    public function test_pages_of_another_variant_are_skipped(): void
+    {
+        // produkcja 28.09.2026 (Bolle): TRACPSF dostał strony TRACPSI/TRACPSJ — ten sam model, inny wariant
+        $product = $this->product();
+        Product::query()->create([
+            'sku' => 'KX-2211', 'name' => 'Rękawice ochronne Norvik KX-2211', 'manufacturer' => 'NORVIK',
+            'catalog_price_net' => 10, 'purchase_price' => 5, 'currency' => 'PLN',
+        ]);
+        $other = 'https://www.konto-sklep.example/rekawice-norvik-kx-2211';
+        // strona innego wariantu wymienia nasz kod w „podobnych produktach”
+        $this->pagesHtml[$other] = '<html><head><title>Rękawice Norvik KX-2211</title></head><body><h1>Rękawice ochronne NORVIK KX-2211</h1>'
+            .'<div class="product-description"><p>Rękawice NORVIK z dzianiny, powlekane nitrylem. Podobne produkty: KX-2210.</p><p>'
+            .str_repeat('Powłoka nitrylowa na części chwytnej rękawic NORVIK. ', 20).'</p></div></body></html>';
+        $familyNoCode = 'https://www.konto-sklep.example/rekawice-norvik-seria-kx';
+        $this->pagesHtml[$familyNoCode] = '<html><head><title>Rękawice Norvik seria KX</title></head><body><h1>Rękawice ochronne NORVIK KX</h1>'
+            .'<div class="product-description"><p>Rękawice ochronne NORVIK KX-2210 i pokrewne — patrz tabela.</p><p>'
+            .str_repeat('Powłoka nitrylowa na części chwytnej rękawic NORVIK. ', 20).'</p></div></body></html>';
+        $this->search(fn (MockInterface $search) => $search->shouldReceive('searchOnHosts')->once()->andReturn([
+            ['url' => $other, 'title' => 'Norvik KX-2211', 'snippet' => ''],
+            ['url' => $familyNoCode, 'title' => 'Norvik seria KX', 'snippet' => ''],
+        ]));
+        $this->answer = $this->answerWith(self::LONG_DESCRIPTION);
+
+        $result = $this->supplement($product);
+
+        // strona serii z naszym kodem w treści i bez cudzego kodu w adresie/tytule zostaje; strona KX-2211 — nie
+        $this->assertSame([$familyNoCode], $result['web_source_urls']);
+        $this->assertStringNotContainsString('Podobne produkty', $this->prompts[0]);
+    }
+
+    public function test_page_without_the_card_code_gives_no_pages(): void
+    {
+        $product = $this->product();
+        $noCode = 'https://www.konto-sklep.example/rekawice-norvik-nitrylowe';
+        // model i marka są (bramka tożsamości je przyjmuje), kodu wariantu brak
+        $this->pagesHtml[$noCode] = '<html><head><title>Rękawice Norvik nitrylowe</title></head><body><h1>Rękawice ochronne NORVIK KX</h1>'
+            .'<div class="product-description"><p>Rękawice NORVIK KX z dzianiny poliestrowej, powlekane nitrylem.</p><p>'
+            .str_repeat('Powłoka nitrylowa na części chwytnej rękawic NORVIK KX. ', 20).'</p></div></body></html>';
+        $this->search(fn (MockInterface $search) => $search->shouldReceive('searchOnHosts')->once()
+            ->andReturn([['url' => $noCode, 'title' => 'Norvik KX nitrylowe', 'snippet' => '']]));
+        $this->answer = $this->answerWith(self::LONG_DESCRIPTION);
+
+        $this->expectException(B2bSupplementNoPages::class);
+        $this->supplement($product);
+    }
+
     public function test_account_datasheet_goes_to_the_model_and_is_cited(): void
     {
         $product = $this->product();

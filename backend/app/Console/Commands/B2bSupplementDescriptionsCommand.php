@@ -24,6 +24,7 @@ final class B2bSupplementDescriptionsCommand extends Command
     protected $signature = 'b2b:supplement-descriptions
         {--account= : Jedno konto B2B — id albo klucz łącznika (domyślnie wszystkie konta ze stronami z opisami)}
         {--all : Także karty już próbowane (bez tej flagi tylko karty bez ostatecznej próby dla obecnego tekstu i stron)}
+        {--undo-ungated : Cofnij opisy uzupełnione przed bramką wariantu (28.09.2026) i zleć je ponownie}
         {--apply : Zleć uzupełnianie (bez tej flagi tylko podgląd)}';
 
     protected $description = 'Zleca uzupełnianie krótkich opisów z B2B ze stron z opisami konta (podgląd bez --apply)';
@@ -53,6 +54,12 @@ final class B2bSupplementDescriptionsCommand extends Command
 
             $this->line("{$label}: strony ".implode(', ', $account->enrichmentHosts())
                 .", próg {$account->enrichmentMinChars()} znaków");
+
+            if ($this->option('undo-ungated')) {
+                $this->undoUngated($supplement, $account, $apply);
+
+                continue;
+            }
 
             if ($apply) {
                 $result = $supplement->queue($account, null, $onlyUntried);
@@ -86,6 +93,34 @@ final class B2bSupplementDescriptionsCommand extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Opisy uzupełnione przed bramką wariantu (strony innych wariantów w źródłach): podgląd listy albo cofnięcie
+     * (tekst z B2B wraca na kartę) i ponowne zlecenie tych kart.
+     */
+    private function undoUngated(B2bDescriptionSupplement $supplement, B2bAccount $account, bool $apply): void
+    {
+        $result = $supplement->undoUngated($account, $apply);
+        $this->info('  opisów uzupełnionych przed bramką wariantu: '.count($result['candidates']));
+        if ($result['candidates'] !== []) {
+            $this->table(
+                ['id', 'SKU'],
+                Product::query()->whereIn('id', array_slice($result['candidates'], 0, 50))->orderBy('id')->get(['id', 'sku'])
+                    ->map(static fn (Product $product): array => [$product->id, (string) $product->sku])->all(),
+            );
+        }
+        foreach ($result['skipped'] as $productId => $reason) {
+            $this->warn("  karta #{$productId} pominięta: {$reason}");
+        }
+        if (! $apply) {
+            return;
+        }
+        $this->info('  cofnięto: '.count($result['undone']));
+        if ($result['undone'] !== []) {
+            $queued = $supplement->queue($account, $result['undone'], true);
+            $this->info("  zlecono ponownie: {$queued['queued']}");
+        }
     }
 
     /**

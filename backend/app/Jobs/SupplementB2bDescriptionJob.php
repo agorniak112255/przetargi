@@ -55,6 +55,13 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
 
     public const NOT_ELIGIBLE_MESSAGE = 'karta już się nie kwalifikuje';
 
+    /**
+     * Wersja bramki stron zapisana w śladzie (b2b_supplement.variant_gate). 1 = strona z internetu musi nieść kod
+     * wariantu karty (28.09.2026, ProductEnrichmentService::supplementPageNamesCardVariant). Opis bez tego znacznika
+     * powstał przed bramką i b2b:supplement-descriptions --undo-ungated go cofa.
+     */
+    public const VARIANT_GATE = 1;
+
     public int $tries = 2;
 
     /** @var list<int> */
@@ -212,6 +219,9 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
 
             $description = $result['description'];
             $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+            // stan sprzed uzupełnienia (bez atrybutów — liczone z karty) — B2bDescriptionSupplement::undoUngated przywraca go 1:1
+            $previousPayload = $payload;
+            unset($previousPayload['attributes'], $previousPayload['b2b_supplement']);
             // atrybuty liczone od nowa z karty po zmianie — stare mogły nieść cechy spoza nowych źródeł
             unset($payload['attributes']);
             $payload = [
@@ -227,6 +237,8 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
                     'dropped_claims' => $result['dropped_claims'],
                     'described_at' => now()->toIso8601String(),
                     'result_sha1' => sha1($description),
+                    'variant_gate' => self::VARIANT_GATE,
+                    'previous_payload' => $previousPayload,
                 ],
             ];
             // Jeden poziom historii: tekst z B2B zostaje w śladzie b2b_supplement, a replaced_description tylko wtedy,
