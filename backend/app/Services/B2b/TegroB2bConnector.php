@@ -26,7 +26,25 @@ use RuntimeException;
  * gdy nazwa pozycji to dokładnie Model + spacja + rozmiar — inaczej pozycja zostaje osobną kartą, bez zgadywania.
  * Pozycje (members) = rozmiary z ceną konta (PriceAfterDiscountNet) i ceną katalogową (RetailPriceNet w tej samej
  * walucie) tego rozmiaru; cena karty = najniższa cena rozmiaru (raw['price'], price()), pozostałe — wiersze rozmiarów
- * karty. SKU karty = kod Tegro najmniejszego rozmiaru (sklep nie ma kodu modelu), jak dotąd.
+ * karty.
+ *
+ * Kod i nazwa karty (decyzja właściciela 28.09.2026): kod karty = kod modelu bez rozmiaru. Sklep nie ma pola kodu
+ * modelu, ale kod pozycji to u 108 ze 113 kart „kod modelu + spacja + rozmiar” („CITRIN 7” … „CITRIN 11” → „CITRIN”).
+ * Kod bez rozmiaru bierzemy tylko wtedy, gdy KAŻDA pozycja karty ma kod X + spacja + jej rozmiar z tym samym X —
+ * inaczej, jak do 28.09.2026, kod najmniejszego rozmiaru. Nazwa = Model także przy jednym rozmiarze z modelem, a lista
+ * „Rozmiary: …” także przy jednym rozmiarze. Pozycja z pustym Modelem (18 z 455, np. „COMFORT PREMIUM 10”) ma rozmiar
+ * tylko w wierszu „Rozmiar” tabelki strony produktu — pojedyncza wartość (bez spacji, nie zakres „7-11”), na którą
+ * kończy się nazwa, schodzi z nazwy i z kodu (kod bez tej końcówki zostaje bez zmian — „POLAR I” przy nazwie
+ * „… POLAR I 10”); samej nazwy nie tniemy na zgadywany rozmiar. Strona takiej pozycji jest pobierana w products()
+ * i trzymana do shopFields()/documents() tej karty (bez drugiego pobrania). Dwie karty przebiegu z tym samym kodem
+ * albo nazwą po zmianie — wszystkie zostają z kodem i nazwą sprzed zmiany (bez zgadywania), wpis w podsumowaniu.
+ * Karta z jedną pozycją: nazwa bez rozmiaru idzie jako cardName (nazwa nowej karty), a name zostaje dosłowną nazwą
+ * pozycji (b2b_product_links.remote_name); kod powiązania takiej karty synchronizacja bierze z kodu karty, więc kod
+ * pozycji dosłownie zostaje w identyfikatorze source_code (etykieta = rozmiar).
+ * Synchronizacja nie zmienia kodu ani nazwy zastanej karty (tylko nowej) — zastane karty poprawia
+ * products:repair-tegro-codes. Nowa karta, której kod modelu jest kodem karty innego producenta („ALASKA”, „BASIC”),
+ * zostaje przez synchronizację pominięta („kod należy do karty producenta …”), a przy tym samym producencie —
+ * dopasowana do tej karty po kodzie (dotychczasowa reguła kodu w B2bCatalogSync).
  *
  * Tegro nie jest producentem tych marek, więc łącznik nie jest B2bManufacturerSite: opis ze sklepu nie nadpisuje
  * opisu z witryny producenta, a normy trafiają do tabelki sklepu (B2bShopFieldSource), nie do norm producenta.
@@ -47,6 +65,9 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
 
     /** @var array{url: string, xpath: DOMXPath}|null ostatnio pobrana strona produktu (tabelka i pliki są na tej samej) */
     private ?array $lastPage = null;
+
+    /** @var array<string, string> strony pobrane w products() dla pozycji bez modelu (adres → HTML), do pierwszego odczytu karty */
+    private array $prefetchedPages = [];
 
     public function __construct(private readonly TegroB2bClient $client) {}
 
@@ -102,8 +123,51 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
             $this->summary[] = 'Plik oferty XML nie został pobrany ('.$e->getMessage().') — karty bez tabelki parametrów i plików PDF';
         }
 
-        foreach ($cards as $group) {
-            yield $this->productFor($group, $urls);
+        // pozycja bez modelu: rozmiar tylko z wiersza „Rozmiar” strony produktu — strona pobrana raz, na kartę
+        $this->prefetchedPages = [];
+        $pageSizes = [];
+        $checked = 0;
+        $failed = [];
+        foreach ($cards as $index => $group) {
+            $item = $group[0]['item'];
+            $url = $urls[self::text($item['Id'] ?? null)] ?? null;
+            if (count($group) !== 1 || $group[0]['size'] !== null || self::text($item['Model'] ?? null) !== ''
+                || self::sizePrice($item) === null || $url === null || ! TegroB2bClient::isOwnUrl($url)) {
+                continue;
+            }
+            $checked++;
+            try {
+                $html = $this->client->page($url);
+            } catch (B2bFatalException $e) {
+                throw $e;
+            } catch (RuntimeException $e) {
+                $failed[] = self::text($item['Sku'] ?? null).' ('.$e->getMessage().')';
+
+                continue;
+            }
+            $this->prefetchedPages[$url] = $html;
+            $size = self::pageSizeOf(self::parsePage($html), self::text($item['Name'] ?? null));
+            if ($size !== null) {
+                $pageSizes[$index] = $size;
+            }
+        }
+        if ($checked > 0) {
+            $this->summary[] = 'Pozycje bez modelu ze stroną produktu: '.$checked.', rozmiar z wiersza „Rozmiar” strony: '.count($pageSizes)
+                .' — ich kod i nazwa karty bez rozmiaru';
+        }
+        if ($failed !== []) {
+            $this->summary[] = 'Strona produktu pozycji bez modelu nie została pobrana ('.count($failed).'): '.implode('; ', $failed)
+                .' — kod i nazwa tych kart zostają z rozmiarem';
+        }
+
+        $plans = [];
+        foreach ($cards as $index => $group) {
+            $plans[$index] = self::naming($group, $pageSizes[$index] ?? null);
+        }
+        $this->keepOriginalOnCollision($plans);
+
+        foreach ($cards as $index => $group) {
+            yield $this->productFor($group, $urls, $plans[$index]);
         }
     }
 
@@ -316,22 +380,151 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
     }
 
     /**
+     * Kod i nazwa karty (decyzja właściciela 28.09.2026, opis klasy): karta z rozmiarami z Modelu — nazwa = Model, kod
+     * modelu bez rozmiaru (modelCode), bez niego kod najmniejszego rozmiaru; pozycja bez modelu z rozmiarem ze strony
+     * ($pageSize) — nazwa i kod bez końcowego „ rozmiar”. „original_*” = kod i nazwa sprzed 28.09.2026 (powrót przy
+     * kolizji, keepOriginalOnCollision).
+     *
+     * @param  list<array{item: array<string, mixed>, size: string|null}>  $group
+     * @return array{sku: string, name: string, original_sku: string, original_name: string, sizes: list<string|null>}
+     */
+    private static function naming(array $group, ?string $pageSize): array
+    {
+        $first = $group[0]['item'];
+        $firstSku = self::text($first['Sku'] ?? null);
+        $firstName = self::text($first['Name'] ?? null);
+        $model = self::text($first['Model'] ?? null);
+        $plan = [
+            'sku' => $firstSku,
+            'name' => count($group) > 1 ? $model : $firstName,
+            'original_sku' => $firstSku,
+            'original_name' => count($group) > 1 ? $model : $firstName,
+            'sizes' => array_map(static fn (array $m): ?string => $m['size'], $group),
+        ];
+        if ($group[0]['size'] !== null) {
+            // rozmiar z Modelu (group()): nazwa = Model także przy jednym rozmiarze
+            $plan['name'] = $model;
+            $plan['sku'] = self::modelCode($group) ?? $firstSku;
+        } elseif ($pageSize !== null && count($group) === 1) {
+            // pageSizeOf sprawdził, że nazwa kończy się na „ rozmiar” i coś przed nim zostaje
+            $plan['name'] = trim(substr($firstName, 0, -strlen(' '.$pageSize)));
+            $code = str_ends_with($firstSku, ' '.$pageSize) ? trim(substr($firstSku, 0, -strlen(' '.$pageSize))) : '';
+            $plan['sku'] = $code !== '' ? $code : $firstSku;
+            $plan['sizes'] = [$pageSize];
+        }
+
+        return $plan;
+    }
+
+    /**
+     * Kod modelu: każda pozycja karty ma kod „X rozmiar” z tym samym niepustym X; inaczej null (bez zgadywania).
+     *
+     * @param  list<array{item: array<string, mixed>, size: string|null}>  $group
+     */
+    private static function modelCode(array $group): ?string
+    {
+        $code = null;
+        foreach ($group as $member) {
+            $sku = self::text($member['item']['Sku'] ?? null);
+            $suffix = ' '.$member['size'];
+            if ($member['size'] === null || ! str_ends_with($sku, $suffix)) {
+                return null;
+            }
+            $prefix = trim(substr($sku, 0, -strlen($suffix)));
+            if ($prefix === '' || ($code !== null && $prefix !== $code)) {
+                return null;
+            }
+            $code = $prefix;
+        }
+
+        return $code;
+    }
+
+    /**
+     * Rozmiar pozycji bez modelu z wiersza „Rozmiar” tabelki strony: jedna wartość (jeden wiersz albo te same), bez
+     * białych znaków, nie zakres ani lista („7-11”, „7–11”, „8,9”), a nazwa pozycji kończy się na „ wartość” i przed
+     * nią coś zostaje. Inaczej null — nazwa i kod zostają jak w sklepie.
+     */
+    private static function pageSizeOf(DOMXPath $xpath, string $name): ?string
+    {
+        $values = [];
+        foreach (self::pageParameters($xpath) as [$label, $value]) {
+            if (mb_strtolower($label) === 'rozmiar') {
+                $values[$value] = true;
+            }
+        }
+        if (count($values) !== 1) {
+            return null;
+        }
+        $size = (string) array_key_first($values);
+        if (preg_match('/[\s\-\x{2013}\x{2014},;\/]/u', $size) === 1 || ! str_ends_with($name, ' '.$size)) {
+            return null;
+        }
+
+        return trim(substr($name, 0, -strlen(' '.$size))) !== '' ? $size : null;
+    }
+
+    /**
+     * Dwie karty przebiegu z tym samym kodem albo tą samą nazwą (bez rozróżniania wielkości liter), z których choć
+     * jedna zmieniła kod lub nazwę według reguły z 28.09.2026 — wszystkie z tej grupy wracają do kodu i nazwy sprzed
+     * zmiany (bez zgadywania, która jest „prawdziwa”), wpis w podsumowaniu przebiegu. Rozmiar karty (lista rozmiarów,
+     * etykiety kodów) zostaje — to wartość ze sklepu, nie z przycinania.
+     *
+     * @param  array<int|string, array{sku: string, name: string, original_sku: string, original_name: string, sizes: list<string|null>}>  $plans
+     */
+    private function keepOriginalOnCollision(array &$plans): void
+    {
+        $notes = [];
+        do {
+            $reverted = false;
+            foreach (['sku', 'name'] as $field) {
+                $byValue = [];
+                foreach ($plans as $index => $plan) {
+                    $byValue[mb_strtolower($plan[$field])][] = $index;
+                }
+                foreach ($byValue as $value => $indexes) {
+                    if ($value === '' || count($indexes) < 2) {
+                        continue;
+                    }
+                    $changed = array_filter($indexes, static fn (int|string $i): bool => $plans[$i]['sku'] !== $plans[$i]['original_sku']
+                        || $plans[$i]['name'] !== $plans[$i]['original_name']);
+                    if ($changed === []) {
+                        continue;
+                    }
+                    $notes[] = ($field === 'sku' ? 'kod' : 'nazwa').' „'.$plans[$indexes[0]][$field].'”: '
+                        .implode(', ', array_map(static fn (int|string $i): string => $plans[$i]['original_sku'], $indexes));
+                    foreach ($indexes as $i) {
+                        $plans[$i]['sku'] = $plans[$i]['original_sku'];
+                        $plans[$i]['name'] = $plans[$i]['original_name'];
+                    }
+                    $reverted = true;
+                }
+            }
+        } while ($reverted);
+
+        if ($notes !== []) {
+            $this->summary[] = 'Kod albo nazwa bez rozmiaru wspólne dla kilku kart — te karty zostają z kodem i nazwą pozycji: '.implode('; ', $notes);
+        }
+    }
+
+    /**
      * @param  list<array{item: array<string, mixed>, size: string|null}>  $group
      * @param  array<string, string>  $urls  id produktu → adres strony
+     * @param  array{sku: string, name: string, original_sku: string, original_name: string, sizes: list<string|null>}  $plan
      */
-    private function productFor(array $group, array $urls): B2bRemoteProduct
+    private function productFor(array $group, array $urls, array $plan): B2bRemoteProduct
     {
         $first = $group[0]['item'];
         $id = self::text($first['Id'] ?? null);
         $grouped = count($group) > 1;
 
-        $items = array_map(static fn (array $m): array => [
+        $items = array_map(static fn (array $m, ?string $size): array => [
             'id' => self::text($m['item']['Id'] ?? null),
             'sku' => self::text($m['item']['Sku'] ?? null),
             'name' => self::text($m['item']['Name'] ?? null),
             'ean' => self::text($m['item']['Ean'] ?? null),
-            'size' => $m['size'],
-        ], $group);
+            'size' => $size,
+        ], $group, $plan['sizes']);
         // pozycje grupy mają cenę konta w jednej walucie (group()) — cena rozmiaru przy każdej
         $members = [];
         if ($grouped) {
@@ -378,8 +571,10 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
 
         return new B2bRemoteProduct(
             remoteId: $id,
-            sku: $items[0]['sku'],
-            name: $grouped ? self::text($first['Model'] ?? null) : $items[0]['name'],
+            sku: $plan['sku'],
+            // pojedyncza pozycja: nazwa pozycji dosłownie (b2b_product_links.remote_name), nazwa bez rozmiaru tylko na nową
+            // kartę (cardName, jak u Protektu); karta z rozmiarami — nazwa modelu, jak dotąd
+            name: $grouped ? $plan['name'] : $items[0]['name'],
             category: $categories[0] ?? null,
             sourceUrl: $url,
             raw: [
@@ -398,11 +593,13 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
                 'items' => $items,
                 'page_url' => $url,
             ],
-            variantSummary: $grouped
+            // lista rozmiarów także przy jednym rozmiarze (z Modelu albo z wiersza „Rozmiar” strony), decyzja 28.09.2026
+            variantSummary: $items[0]['size'] !== null
                 ? 'Rozmiary: '.implode('; ', array_map(static fn (array $i): string => $i['size'].' ('.$i['sku'].')', $items))
                 : null,
             members: $members,
             identifiers: self::identifiers($items),
+            cardName: ! $grouped && $plan['name'] !== $items[0]['name'] ? $plan['name'] : null,
         );
     }
 
@@ -442,15 +639,24 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
             return $this->lastPage['xpath'];
         }
 
-        $document = new DOMDocument;
-        $previous = libxml_use_internal_errors(true);
-        $document->loadHTML('<?xml encoding="UTF-8">'.$this->client->page($url), LIBXML_NONET);
-        libxml_clear_errors();
-        libxml_use_internal_errors($previous);
-        $xpath = new DOMXPath($document);
+        // strona pozycji bez modelu jest już pobrana w products() — oddajemy ją raz, bez drugiego zapytania
+        $html = $this->prefetchedPages[$url] ?? $this->client->page($url);
+        unset($this->prefetchedPages[$url]);
+        $xpath = self::parsePage($html);
         $this->lastPage = ['url' => $url, 'xpath' => $xpath];
 
         return $xpath;
+    }
+
+    private static function parsePage(string $html): DOMXPath
+    {
+        $document = new DOMDocument;
+        $previous = libxml_use_internal_errors(true);
+        $document->loadHTML('<?xml encoding="UTF-8">'.$html, LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        return new DOMXPath($document);
     }
 
     /**

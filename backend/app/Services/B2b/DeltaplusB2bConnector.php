@@ -27,6 +27,9 @@ use RuntimeException;
  * idzie jako cena do sklepu (PrestaProductExportService), więc bez niej karta sprzedawałaby się po cenie zakupu. Bierzemy
  * ją dla każdej wersji osobno — tylko przy jednoznacznym trafieniu jej modelu i koloru w jedną cenę wyższą od ceny konta
  * tej wersji; inaczej wersja jej nie ma (nigdy cena innej wersji), a karta trafia do podsumowania przebiegu.
+ * Z tego samego pliku (kolumna OPIS) — nazwa karty, której h1 jest samym kodem: opis do pierwszego przecinka dosłownie
+ * + kod (decyzja właściciela 28.09.2026, cardName; wcześniej przedrostkiem był nagłówek kategorii — sektor albo
+ * zastosowanie, nie rodzaj wyrobu). Stare nazwy kart naprawia products:repair-deltaplus-names.
  *
  * Karta = strona modelu ze wszystkimi wersjami z ceną konta (kolory × rozmiary; decyzja użytkownika 28.09.2026: rozmiary
  * w różnych cenach to jedna karta). Do 28.09.2026 (decyzja 15.09.2026) wersje w innej cenie były osobną kartą z SKU =
@@ -76,6 +79,9 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
     /** Krótki opis dłuższy niż tyle znaków nie nadaje się na nazwę karty, której h1 jest samym kodem. */
     private const NAME_PREFIX_MAX = 60;
 
+    /** Opis z cennika publicznego (do pierwszego przecinka) dłuższy niż tyle znaków to zdanie, nie nazwa wyrobu. */
+    private const NAME_FROM_PRICE_LIST_MAX = 80;
+
     /** Tyle zalogowanych stron z rzędu bez kolumny ceny = witryna zmieniła układ, dalsze pobieranie nie ma sensu. */
     private const MAX_PAGES_WITHOUT_PRICE_COLUMN = 20;
 
@@ -91,6 +97,9 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
 
     /** @var array<string, list<float>> cennik publiczny: klucz MODEL|KOLOR → ceny */
     private array $publicPrices = [];
+
+    /** @var array<string, string> cennik publiczny: MODEL → przedrostek nazwy z kolumny OPIS (publicNames) */
+    private array $publicNames = [];
 
     /** @var list<string> */
     private array $summary = [];
@@ -480,6 +489,34 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
      */
     public static function publicPrices(string $xlsxBytes): array
     {
+        return self::pricesFromRows(self::sheetRows($xlsxBytes));
+    }
+
+    /**
+     * Cennik publiczny: MODEL → przedrostek nazwy karty, której h1 jest samym kodem (decyzja właściciela 28.09.2026:
+     * „RĘKAWICE ZE SKÓRY LICOWEJ KOZIEJ CT402” zamiast „Prace w środowisku zaolejonym i tłustym CT402”). Przedrostek =
+     * kolumna OPIS do pierwszego przecinka, DOSŁOWNIE (wielkie litery jak w pliku — skróty FFP2, PU, SNR nie mogą się
+     * rozjechać), tylko ze zwiniętymi odstępami; przecinek między cyframi to przecinek dziesiętny, nie koniec
+     * przedrostka („RĘKAWICE NITRYLOWE 0,1 MM, 100 SZT” → „RĘKAWICE NITRYLOWE 0,1 MM”). Model znormalizowany jak w kluczu ceny (wielkie litery, zwinięte
+     * odstępy, bez znaków zerowej szerokości). Wpisu nie ma, gdy wiersze modelu z niepustym OPIS dają różne
+     * przedrostki (na produkcji 3 modele mają kilka OPIS — nie wybieramy), gdy przedrostek jest pusty albo dłuższy niż
+     * NAME_FROM_PRICE_LIST_MAX (bez przecinka OPIS bywa całym zdaniem: „4 X WKŁADY FILTRUJĄCE P3 DO PÓŁMASKI…”).
+     * Wiersze grup („OCHRONA WZROKU”) nie mają OPIS. Arkusz bez kolumny OPIS → [].
+     *
+     * @return array<string, string>
+     */
+    public static function publicNames(string $xlsxBytes): array
+    {
+        return self::namesFromRows(self::sheetRows($xlsxBytes));
+    }
+
+    /**
+     * Pierwszy arkusz cennika publicznego jako wiersze komórek (jedno odczytanie pliku dla cen i nazw).
+     *
+     * @return list<list<mixed>>
+     */
+    private static function sheetRows(string $xlsxBytes): array
+    {
         $path = tempnam(sys_get_temp_dir(), 'dp-cennik-');
         if ($path === false) {
             throw new RuntimeException('nie udało się utworzyć pliku tymczasowego cennika');
@@ -488,11 +525,60 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
             file_put_contents($path, $xlsxBytes);
             $reader = IOFactory::createReader('Xlsx');
             $reader->setReadDataOnly(true);
-            $rows = $reader->load($path)->getSheet(0)->toArray(null, true, false, false);
+
+            return array_values($reader->load($path)->getSheet(0)->toArray(null, true, false, false));
         } finally {
             @unlink($path);
         }
+    }
 
+    /**
+     * @param  list<list<mixed>>  $rows
+     * @return array<string, string>
+     */
+    private static function namesFromRows(array $rows): array
+    {
+        $columns = null;
+        /** @var array<string, array<string, true>> $found model → przedrostki */
+        $found = [];
+        foreach ($rows as $row) {
+            $cells = array_map(static fn (mixed $cell): string => is_scalar($cell) ? self::clean((string) $cell) : '', $row);
+            if ($columns === null) {
+                $upper = array_map('mb_strtoupper', $cells);
+                $model = array_search('MODEL', $upper, true);
+                $opis = array_search('OPIS', $upper, true);
+                if ($model !== false && $opis !== false) {
+                    $columns = ['model' => $model, 'opis' => $opis];
+                }
+
+                continue;
+            }
+            $model = self::modelKey($cells[$columns['model']] ?? '');
+            $opis = $cells[$columns['opis']] ?? '';
+            if ($model === '' || $opis === '') {
+                continue;
+            }
+            // przecinek dziesiętny („0,1 MM”) nie kończy przedrostka — ucięty dałby inną liczbę („… 0”)
+            $found[$model][trim((preg_split('/(?<!\d),|,(?!\d)/u', $opis, 2) ?: [$opis])[0])] = true;
+        }
+
+        $names = [];
+        foreach ($found as $model => $prefixes) {
+            $prefix = (string) array_key_first($prefixes);
+            if (count($prefixes) === 1 && $prefix !== '' && mb_strlen($prefix) <= self::NAME_FROM_PRICE_LIST_MAX) {
+                $names[(string) $model] = $prefix;
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * @param  list<list<mixed>>  $rows
+     * @return array<string, list<float>>
+     */
+    private static function pricesFromRows(array $rows): array
+    {
         $columns = null;
         $prices = [];
         foreach ($rows as $row) {
@@ -697,10 +783,14 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
         return array_map('strval', array_keys($slugs));
     }
 
-    /** Cennik publiczny raz na przebieg; jego brak nie przerywa przebiegu — karty dostaną samą cenę konta. */
+    /**
+     * Cennik publiczny raz na przebieg (ceny katalogowe i nazwy kart z kodem w h1 z jednego odczytu arkusza); jego brak
+     * nie przerywa przebiegu — karty dostaną samą cenę konta, a nazwę z krótkiego opisu albo kategorii (cardName).
+     */
     private function loadPublicPrices(): void
     {
         $this->publicPrices = [];
+        $this->publicNames = [];
         try {
             $file = $this->client->publicPriceListXlsx();
             if ($file === null) {
@@ -708,10 +798,15 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
 
                 return;
             }
-            $this->publicPrices = self::publicPrices($file['bytes']);
+            $rows = self::sheetRows($file['bytes']);
+            $this->publicPrices = self::pricesFromRows($rows);
+            $this->publicNames = self::namesFromRows($rows);
             $this->summary[] = $this->publicPrices === []
                 ? 'Cennik publiczny '.$file['name'].' nie dał żadnej ceny (zmieniony układ arkusza?) — karty bez ceny katalogowej'
                 : 'Cennik publiczny: '.$file['name'].' ('.count($this->publicPrices).' pozycji model+kolor)';
+            $this->summary[] = $this->publicNames === []
+                ? 'Cennik publiczny: kolumna OPIS nie dała żadnej nazwy — nowe karty z kodem w h1 nazwane z krótkiego opisu albo kategorii'
+                : 'Cennik publiczny: nazwy z kolumny OPIS dla '.count($this->publicNames).' modeli (nowe karty z kodem w h1)';
         } catch (B2bFatalException $e) {
             throw $e;
         } catch (\Throwable $e) {
@@ -778,7 +873,7 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
         $versions = $group['versions'];
         $first = $versions[0];
         // karta innego modelu ze strony — nazwa z jej modelu (kolumna Model), Ref. strony opisuje model główny
-        $name = self::cardName($group['main'] || $group['model'] === '' ? $page : [...$page, 'name' => $group['model']]);
+        $name = $this->cardName($group['main'] || $group['model'] === '' ? $page : [...$page, 'name' => $group['model']]);
 
         $items = [];
         $withoutBase = 0;
@@ -886,16 +981,28 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
     }
 
     /**
-     * Nazwa h1; gdy h1 to sam kod (jedno słowo z cyfrą: „22180”, „AM002”) — z krótkim opisem („Sznurowadła okrągłe
-     * 22180”), a gdy ten jest długim zdaniem albo go nie ma — z nagłówkiem kategorii („Ostrzegawcza zewnętrzna 208V2”).
+     * Nazwa h1; gdy h1 to sam kod (jedno słowo z cyfrą: „22180”, „AM002”) — przedrostek przed kodem, po kolei:
+     * 1) opis modelu z cennika publicznego do pierwszego przecinka, dosłownie („RĘKAWICE ZE SKÓRY LICOWEJ KOZIEJ
+     *    CT402”; decyzja właściciela 28.09.2026, publicNames) — nagłówek kategorii to sektor albo zastosowanie, nie
+     *    rodzaj wyrobu („Kształtowanie krajobrazu DPVE733”, „Prace w środowisku zaolejonym i tłustym …”: 441 z 999 kart
+     *    Delta Plus na produkcji 28.09.2026), a krótki opis bywa hasłem reklamowym („Pracujemy jak dorośli …”);
+     * 2) krótki opis do NAME_PREFIX_MAX znaków („Sznurowadła okrągłe 22180”);
+     * 3) nagłówek kategorii („Ostrzegawcza zewnętrzna 208V2”);
+     * 4) sam kod.
+     * Opis szukany po nazwie, która jest kodem: h1, a dla innego modelu strony — model z tabeli ($page['name'] podmienione
+     * w cardFor). Istniejących kart synchronizacja nie przemianowuje — stare nazwy naprawia products:repair-deltaplus-names.
      *
      * @param  array<string, mixed>  $page
      */
-    private static function cardName(array $page): string
+    private function cardName(array $page): string
     {
         $name = $page['name'];
         if (str_contains($name, ' ') || preg_match('/\d/', $name) !== 1) {
             return $name;
+        }
+        $fromPriceList = $this->publicNames[self::modelKey($name)] ?? null;
+        if ($fromPriceList !== null) {
+            return $fromPriceList.' '.$name;
         }
         if ($page['short'] !== '' && mb_strlen($page['short']) <= self::NAME_PREFIX_MAX) {
             return $page['short'].' '.$name;
@@ -1261,7 +1368,16 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
 
     private static function priceKey(string $model, string $color): string
     {
-        return mb_strtoupper(self::clean($model)).'|'.mb_strtoupper(self::clean($color));
+        return self::modelKey($model).'|'.self::modelKey($color);
+    }
+
+    /**
+     * Klucz modelu cennika publicznego (publicNames, publicPrices): wielkie litery, zwinięte odstępy, bez znaków
+     * zerowej szerokości. Tak samo porównuje przedrostki nazw products:repair-deltaplus-names.
+     */
+    public static function modelKey(string $text): string
+    {
+        return mb_strtoupper(self::clean($text));
     }
 
     /**

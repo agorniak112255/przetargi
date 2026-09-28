@@ -765,6 +765,116 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame('TS211', $cards['TS211']->name);
     }
 
+    /**
+     * Decyzja właściciela 28.09.2026: przedrostek nazwy karty z kodem w h1 = OPIS z cennika publicznego do pierwszego
+     * przecinka, dosłownie (wielkie litery, skróty jak FFP1 nietknięte). Wiersze grup nie mają OPIS; model
+     * znormalizowany jak w kluczu ceny; różne przedrostki jednego modelu, przedrostek pusty albo dłuższy niż 80 znaków
+     * — bez wpisu (nazwa z krótkiego opisu albo kategorii).
+     */
+    public function test_public_names_take_the_description_up_to_the_first_comma_literally(): void
+    {
+        $row = static fn (string $model, string $color, string $opis): array => [$model, '', $color, 10, 1, $opis, 'M-XL', 10.0];
+        $names = DeltaplusB2bConnector::publicNames(self::xlsx([
+            [null, null, null, 'CENNIK PUBLICZNY 01/01/2026'],
+            ['MODEL', 'STATUS', 'KOLOR', 'ILOŚĆ W KARTONIE', 'MIN ZAM.', 'OPIS', 'ROZMIARY', 'CENA PLN NETTO 01/2026'],
+            ['OCHRONA RĄK'],
+            $row('CT402', 'BRĄZOWY', 'RĘKAWICE ZE SKÓRY LICOWEJ KOZIEJ, STRONA GRZBIETOWA Z DRELICHU BAWEŁNIANEGO'),
+            $row('CT402', 'CZARNY', 'RĘKAWICE ZE SKÓRY LICOWEJ KOZIEJ, STRONA GRZBIETOWA Z DRELICHU BAWEŁNIANEGO'),
+            // wiersz modelu bez OPIS nie jest sprzecznym opisem
+            $row('CT402', 'SZARY', ''),
+            // małe litery, podwójne spacje, U+200B w MODEL — klucz jak w cenniku; odstępy w OPIS zwinięte
+            $row(" ca515r\u{200B} ", 'SZARY', "RĘKAWICE SPAWALNICZE Z DWOINY  BYDLĘCEJ\u{00A0}, 35 CM"),
+            // różne OPIS, ten sam przedrostek — wpis zostaje
+            $row('DC103', 'SZARY', 'RĘKAWICE DOKER Z DWOINY BYDLĘCEJ'),
+            $row('DC103', 'ŻÓŁTY', 'RĘKAWICE DOKER Z DWOINY BYDLĘCEJ, WZMOCNIONE'),
+            // różne przedrostki — nie wybieramy
+            $row('HEKLA2', 'BEZBARWNY', 'NADOKULARY Z POLIWĘGLANU, AR*, UV400'),
+            $row('HEKLA2', 'SZARY', 'OKULARY Z POLIWĘGLANU, UV400'),
+            ['OCHRONA DRÓG ODDECHOWYCH'],
+            $row('M1100VB', 'BIAŁY', 'OPAKOWANIE 10 PÓŁMASEK Z FILTREM FFP1, Z ZAWOREM, SKŁADANE W PIONIE, Z TESTEM DOLOMITOWYM'),
+            // bez przecinka całe zdanie — ponad 80 znaków, bez wpisu
+            $row('AIRSTORMREFP3', '', '4 X WKŁADY FILTRUJĄCE P3 DO PÓŁMASKI AIRSTORM W WORECZKACH STRUNOWYCH ZABEZPIECZAJĄCYCH PRZED WILGOCIĄ'),
+            $row('LEN80', '', str_repeat('Ł', 80).', RESZTA'),
+            $row('LEN81', '', str_repeat('Ł', 81).', RESZTA'),
+            // pusty przedrostek
+            $row('PRZECINEK1', '', ', SAM PRZECINEK'),
+            // dosłownie — bez zmiany wielkości liter
+            $row('M6200', '', 'Półmaska z filtrem FFP2, bez zaworu'),
+            $row('22180', 'CZARNY', 'SZNURÓWKI OKRĄGŁE, 120 CM'),
+            // przecinek dziesiętny nie kończy przedrostka
+            $row('NI015', 'NIEBIESKI', 'RĘKAWICE NITRYLOWE 0,1 MM, 100 SZT'),
+        ]));
+
+        $this->assertSame([
+            'CT402' => 'RĘKAWICE ZE SKÓRY LICOWEJ KOZIEJ',
+            'CA515R' => 'RĘKAWICE SPAWALNICZE Z DWOINY BYDLĘCEJ',
+            'DC103' => 'RĘKAWICE DOKER Z DWOINY BYDLĘCEJ',
+            'M1100VB' => 'OPAKOWANIE 10 PÓŁMASEK Z FILTREM FFP1',
+            'LEN80' => str_repeat('Ł', 80),
+            'M6200' => 'Półmaska z filtrem FFP2',
+            '22180' => 'SZNURÓWKI OKRĄGŁE',
+            'NI015' => 'RĘKAWICE NITRYLOWE 0,1 MM',
+        ], $names);
+        // arkusz bez kolumny OPIS — żadnej nazwy (ceny czyta dalej)
+        $withoutOpis = self::xlsx([['MODEL', 'KOLOR', 'CENA PLN NETTO 01/2026'], ['CT402', 'BRĄZOWY', 10.0]]);
+        $this->assertSame([], DeltaplusB2bConnector::publicNames($withoutOpis));
+        $this->assertSame(['CT402|BRĄZOWY' => [10.0]], DeltaplusB2bConnector::publicPrices($withoutOpis));
+    }
+
+    /**
+     * Karta z kodem w h1 bierze nazwę z OPIS cennika przed krótkim opisem i kategorią (decyzja właściciela 28.09.2026);
+     * karta innego modelu strony — po swoim modelu z tabeli, nie po h1. h1 z odstępem zostaje, choć jego model ma OPIS.
+     * Model bez jednoznacznego OPIS — jak dotąd: krótki opis (≤ 60 znaków), dalej kategoria.
+     */
+    public function test_name_of_a_code_titled_product_takes_the_price_list_description_before_short_and_category(): void
+    {
+        $row = static fn (string $model, string $color, string $opis, float $price): array => [$model, '', $color, 10, 1, $opis, 'M-XL', $price];
+        $this->assetFiles[self::PRICE_LIST] = self::xlsx([
+            ['MODEL', 'STATUS', 'KOLOR', 'ILOŚĆ W KARTONIE', 'MIN ZAM.', 'OPIS', 'ROZMIARY', 'CENA PLN NETTO 01/2026'],
+            ['OCHRONA RĄK'],
+            $row('CT402', 'BRĄZOWY', 'RĘKAWICE ZE SKÓRY LICOWEJ KOZIEJ, STRONA GRZBIETOWA Z DRELICHU BAWEŁNIANEGO', 21.0),
+            $row('HEKLA2', 'BEZBARWNY', 'NADOKULARY Z POLIWĘGLANU, AR*, UV400', 30.0),
+            $row('HEKLA2', 'SZARY', 'OKULARY Z POLIWĘGLANU, UV400', 30.0),
+            ['OCHRONA GŁOWY'],
+            $row('AERO TC100', 'CZARNO-CZERWONY', 'HEŁM LEKKI, WENTYLOWANY', 90.0),
+            $row('TC200', 'GRANATOWO-POMARAŃCZOWY', 'HEŁM OCHRONNY Z ABS, WENTYLOWANY', 97.0),
+        ]);
+        $this->pages['ct402'] = self::codeNamed('CT402', 'Prace w środowisku zaolejonym i tłustym', 'Pracujemy jak dorośli', 'CT402BR09', 'Brązowy', '09', '10,00 zł');
+        $this->pages['hekla2'] = self::codeNamed('HEKLA2', 'Ochrona oczu', 'Nadokulary', 'HEKLA2IN', 'Bezbarwny', 'Uniwersalny', '14,00 zł');
+        $aero = self::aero();
+        $aero['models'] = ['TC100BMSH' => 'TC200'];
+        $this->pages['aero-tc100'] = $aero;
+        $this->lists['hand-protection'] = [1 => ['ct402', 'hekla2']];
+        $this->lists['head-protection'] = [1 => ['aero-tc100']];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $names = [];
+        foreach ($connector->products() as $product) {
+            $names[$product->sku] = $product->name;
+        }
+
+        $this->assertSame([
+            // inny model strony — OPIS jego modelu z tabeli
+            'TC100BMSH' => 'HEŁM OCHRONNY Z ABS TC200',
+            // h1 z odstępem bez zmian
+            'TC100' => 'AERO TC100',
+            'CT402' => 'RĘKAWICE ZE SKÓRY LICOWEJ KOZIEJ CT402',
+            // dwa różne przedrostki w cenniku — krótki opis
+            'HEKLA2' => 'Nadokulary HEKLA2',
+        ], $names);
+        $this->assertStringContainsString('nazwy z kolumny OPIS dla 3 modeli', implode("\n", $connector->runSummary()));
+
+        // bez cennika publicznego — jak dotąd: krótki opis, a gdy dłuższy niż 60 znaków — kategoria
+        $this->offerLinks = [self::ASSETS.self::PROMO_LIST];
+        $names = [];
+        foreach ($this->connector()->products() as $product) {
+            $names[$product->sku] = $product->name;
+        }
+        $this->assertSame('Pracujemy jak dorośli CT402', $names['CT402']);
+        $this->assertSame('Hełmy lekkie TC200', $names['TC100BMSH']);
+    }
+
     public function test_ref_with_trailing_underscore_gives_the_sku_without_it_and_stays_literal_in_the_shop_fields(): void
     {
         // jak na żywej stronie 22180 (21.09.2026): h1 „22180”, Ref. „22180_”, jedna wersja o referencji „22180”
@@ -1506,7 +1616,9 @@ final class DeltaplusConnectorTest extends TestCase
             ['AERO TC100', 'WYPRZEDAŻ', 'CZARNO-CZERWONY', 20, 1, 'Hełm lekki', 'Długi daszek', 95.0],
             ['aero  tc100 ', '', "\u{200B}granatowo-pomarańczowy ", 20, 1, 'Hełm lekki', 'Krótki daszek', 97.0],
             ['OCHRONA PRZED UPADKIEM'],
-            ['AM902', '', 'STALOWY', 10, 1, 'Zatrzaśnik', 'Uniwersalny', 184],
+            // bez OPIS — karta AM902 (h1 = kod) nazwana z krótkiego opisu (reguła zapasowa cardName); nazwę z OPIS
+            // sprawdza test_name_of_a_code_titled_product_takes_the_price_list_description_before_short_and_category
+            ['AM902', '', 'STALOWY', 10, 1, '', 'Uniwersalny', 184],
             ['OCHRONA CIAŁA'],
             // cena zerowa — w cenniku brak ceny
             ['TS208', '', 'ŻÓŁTY FLUO', 10, 1, 'Kamizelka', 'M-XXL', 0],

@@ -122,6 +122,9 @@ export function B2bManufacturerRulesModal({ account, canManage, onClose }: Props
   const changedRows = rows.filter((r) => edits[r.key] !== undefined)
   const priceOff = rows.filter((r) => !flagsOf(r).take_price).length
   const descriptionOff = rows.filter((r) => !flagsOf(r).take_description).length
+  /** Bez ceny i bez opisu pobieranie pomija wyroby producenta w całości (B2bCatalogSync, status „excluded”). */
+  const isSkipped = (flags: Flags) => usesPriceRules && !flags.take_price && !flags.take_description
+  const skipped = rows.filter((r) => isSkipped(flagsOf(r))).length
 
   const onSave = async () => {
     if (changedRows.length === 0) return
@@ -235,7 +238,13 @@ export function B2bManufacturerRulesModal({ account, canManage, onClose }: Props
                   {usesPriceRules ? 'ich' : 'go'} ustalać dla danego producenta. Cennik producenta (jego konto B2B
                   albo plik) zawsze ma pierwszeństwo przed dystrybutorem.
                 </p>
-                {!usesPriceRules && (
+                {usesPriceRules ? (
+                  <p>
+                    Odznaczone oba — cena i opis — pomijają wyroby producenta przy pobieraniu: nie powstają nowe
+                    karty, a istniejące nie są aktualizowane. Karty już pobrane zostają w cenniku, dopóki ich nie
+                    usuniesz.
+                  </p>
+                ) : (
                   <p>Ten importer nie ustala cen kart — można wyłączyć tylko opis.</p>
                 )}
                 {syncRunning && (
@@ -260,6 +269,7 @@ export function B2bManufacturerRulesModal({ account, canManage, onClose }: Props
                     : `Producentów: ${rows.length.toLocaleString('pl-PL')}`}
                   {usesPriceRules && priceOff > 0 && ` · bez ceny: ${priceOff.toLocaleString('pl-PL')}`}
                   {descriptionOff > 0 && ` · bez opisu: ${descriptionOff.toLocaleString('pl-PL')}`}
+                  {skipped > 0 && ` · pomijanych: ${skipped.toLocaleString('pl-PL')}`}
                 </span>
               </div>
 
@@ -328,6 +338,14 @@ export function B2bManufacturerRulesModal({ account, canManage, onClose }: Props
                             />
                           </td>
                           <td className={`${td} truncate text-slate-500`} title={row.own_source ?? undefined}>
+                            {isSkipped(flags) && (
+                              <span
+                                className="mr-1 text-amber-700"
+                                title="Bez ceny i bez opisu — pobieranie pomija wyroby tego producenta"
+                              >
+                                pomijany przy pobieraniu{row.own_source ? ' ·' : ''}
+                              </span>
+                            )}
                             {row.own_source ?? ''}
                           </td>
                         </tr>

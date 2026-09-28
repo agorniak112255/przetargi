@@ -229,7 +229,7 @@ final class TegroDatasheetDescriptionTest extends TestCase
     public function test_manual_edit_while_the_model_answers_wins(): void
     {
         $this->duringModel = function (): void {
-            Product::query()->where('sku', 'F09 PLUS 6')->update(['description' => 'Opis poprawiony ręcznie przez handlowca w trakcie.']);
+            Product::query()->where('sku', 'F09 PLUS')->update(['description' => 'Opis poprawiony ręcznie przez handlowca w trakcie.']);
         };
         $this->fakeSite();
 
@@ -255,7 +255,8 @@ final class TegroDatasheetDescriptionTest extends TestCase
 
     private function card(): Product
     {
-        return Product::query()->where('sku', 'F09 PLUS 6')->sole();
+        // kod karty = kod modelu bez rozmiaru (decyzja właściciela 28.09.2026; dawniej „F09 PLUS 6”)
+        return Product::query()->where('sku', 'F09 PLUS')->sole();
     }
 
     private function account(): B2bAccount

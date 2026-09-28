@@ -66,6 +66,15 @@ final class TegroConnectorTest extends TestCase
 
     private int $pageHits = 0;
 
+    /** @var array<string, int> pobrania strony wg ścieżki */
+    private array $pageHitsByPath = [];
+
+    /** @var array<string, string|null> ścieżka strony → wartość wiersza „Rozmiar” (null = bez wiersza); brak = „6-11” */
+    private array $pageSizeRows = [];
+
+    /** @var list<string> ścieżki stron odpowiadające HTTP 500 */
+    private array $failingPages = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -123,7 +132,9 @@ final class TegroConnectorTest extends TestCase
 
     /**
      * Do 28.09.2026 (decyzja 15.09.2026) rozmiar modelu w innej cenie był osobną kartą (HEAVY 8 i HEAVY 9). Od decyzji
-     * użytkownika 28.09.2026 rozmiary jednego modelu w różnych cenach to jedna karta z ceną każdego rozmiaru.
+     * użytkownika 28.09.2026 rozmiary jednego modelu w różnych cenach to jedna karta z ceną każdego rozmiaru. Kod karty
+     * od decyzji właściciela 28.09.2026 = kod modelu bez rozmiaru („F09 PLUS”, „HEAVY”; dawniej kod najmniejszego
+     * rozmiaru „F09 PLUS 6”, „HEAVY 8”) — kody rozmiarów zostają przy pozycjach i identyfikatorach.
      */
     public function test_sizes_of_one_model_are_one_card_also_when_their_prices_differ(): void
     {
@@ -131,8 +142,8 @@ final class TegroConnectorTest extends TestCase
 
         $products = $this->productsBySku($this->connector());
 
-        $this->assertSame(['F09 PLUS 6', 'HEAVY 8', 'ALASKA 10', 'ODD 8', 'NOPRICE 9'], array_keys($products));
-        $f09 = $products['F09 PLUS 6'];
+        $this->assertSame(['F09 PLUS', 'HEAVY', 'ALASKA 10', 'ODD 8', 'NOPRICE 9'], array_keys($products));
+        $f09 = $products['F09 PLUS'];
         $this->assertSame('4634', $f09->remoteId);
         $this->assertSame(self::F09, $f09->name);
         $this->assertSame('RĘKAWICE DZIANE POWLEKANE PIANĄ', $f09->category);
@@ -164,9 +175,9 @@ final class TegroConnectorTest extends TestCase
             array_map(static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId], $products['ODD 8']->identifiers ?? []),
         );
 
-        // rozmiary w dwóch cenach: jedna karta z nazwą modelu, pozycja wiodąca = najmniejszy rozmiar, cena i cena
+        // rozmiary w dwóch cenach: jedna karta z nazwą i kodem modelu, pozycja wiodąca = najmniejszy rozmiar, cena i cena
         // katalogowa każdego rozmiaru przy jego pozycji, cena karty = najtańszy rozmiar
-        $heavy = $products['HEAVY 8'];
+        $heavy = $products['HEAVY'];
         $this->assertSame('2000', $heavy->remoteId);
         $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ HEAVY', $heavy->name);
         $this->assertSame('Rozmiary: 8 (HEAVY 8); 9 (HEAVY 9)', $heavy->variantSummary);
@@ -202,8 +213,8 @@ final class TegroConnectorTest extends TestCase
 
         $products = $this->productsBySku($connector);
 
-        $this->assertSame([null, 6.5], array_map(static fn (array $m): ?float => $m['price']->base, $products['TIE 8']->members));
-        $price = $connector->price($products['TIE 8']);
+        $this->assertSame([null, 6.5], array_map(static fn (array $m): ?float => $m['price']->base, $products['TIE']->members));
+        $price = $connector->price($products['TIE']);
         $this->assertSame(5.0, $price?->net);
         $this->assertSame(6.5, $price->base);
     }
@@ -234,6 +245,191 @@ final class TegroConnectorTest extends TestCase
         $this->assertSame([], $products['UNIT 10']->members);
         $this->assertSame(50.0, $connector->price($products['UNIT 10'])?->net);
         $this->assertSame('EUR', $connector->price($products['UNIT 11'])?->currency);
+        // kod modelu „UNIT” wyszedłby na trzech kartach — wszystkie zostają z kodem i nazwą pozycji (bez zgadywania)
+        $this->assertSame(
+            ['UNIT 8' => 'RĘKAWICE UNIT', 'UNIT 10' => 'RĘKAWICE UNIT 10', 'UNIT 11' => 'RĘKAWICE UNIT 11'],
+            array_map(static fn (B2bRemoteProduct $p): string => $p->cardName ?? $p->name, $products),
+        );
+        $this->assertContains(
+            'Kod albo nazwa bez rozmiaru wspólne dla kilku kart — te karty zostają z kodem i nazwą pozycji: kod „UNIT”: UNIT 8, UNIT 10, UNIT 11',
+            $connector->runSummary(),
+        );
+    }
+
+    /**
+     * Decyzja właściciela 28.09.2026: kod karty = kod modelu bez rozmiaru, także przy jednym rozmiarze z modelem (nazwa =
+     * Model, lista rozmiarów z jednym rozmiarem). Kod pozycji, który nie jest „X rozmiar” z jednym X dla całej karty —
+     * jak dotąd kod najmniejszego rozmiaru.
+     */
+    public function test_card_code_is_the_model_code_without_the_size_only_when_every_size_code_follows_it(): void
+    {
+        $this->items = [
+            $this->item(7001, 'CITRIN 7', 'RĘKAWICE RS ARBEITSSCHUTZ CITRIN 7', 'RĘKAWICE RS ARBEITSSCHUTZ CITRIN', 3.0, 4.0, '5900000000707'),
+            // kod bez spacji przed rozmiarem
+            $this->item(7101, 'MIX-7', 'RĘKAWICE MIX 7', 'RĘKAWICE MIX', 3.0, 4.0, ''),
+            $this->item(7102, 'MIX 8', 'RĘKAWICE MIX 8', 'RĘKAWICE MIX', 3.0, 4.0, ''),
+            // dwa różne kody modelu w jednej karcie
+            $this->item(7201, 'AAA 8', 'RĘKAWICE DUO 8', 'RĘKAWICE DUO', 3.0, 4.0, ''),
+            $this->item(7202, 'BBB 9', 'RĘKAWICE DUO 9', 'RĘKAWICE DUO', 3.0, 4.0, ''),
+        ];
+        $this->fakeSite();
+
+        $products = $this->productsBySku($this->connector());
+
+        $this->assertSame(['CITRIN', 'MIX-7', 'AAA 8'], array_keys($products));
+        $citrin = $products['CITRIN'];
+        // nazwa nowej karty = Model (cardName); nazwa pozycji dosłownie zostaje dla powiązania
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ CITRIN', $citrin->cardName);
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ CITRIN 7', $citrin->name);
+        $this->assertSame('Rozmiary: 7 (CITRIN 7)', $citrin->variantSummary);
+        $this->assertSame([], $citrin->members);
+        $this->assertSame(
+            [['ean', '5900000000707', '7001', '7'], ['source_code', 'CITRIN 7', '7001', '7']],
+            array_map(static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label], $citrin->identifiers ?? []),
+        );
+        $this->assertSame('RĘKAWICE MIX', $products['MIX-7']->name);
+        $this->assertNull($products['MIX-7']->cardName);
+        $this->assertSame(['MIX-7', 'MIX 8'], array_column($products['MIX-7']->members, 'sku'));
+        $this->assertSame('RĘKAWICE DUO', $products['AAA 8']->name);
+        // pozycja z modelem nie czyta strony (rozmiar jest w Modelu)
+        $this->assertSame(0, $this->pageHits);
+    }
+
+    /**
+     * Pozycja z pustym Modelem (u Tegro 18 z 455): rozmiar tylko z wiersza „Rozmiar” strony produktu. Pojedyncza wartość,
+     * na którą kończy się nazwa, schodzi z nazwy i z kodu („POLAR I” — kod bez rozmiaru zostaje); zakres, brak wiersza,
+     * inna wartość niż końcówka nazwy albo błąd strony — kod i nazwa jak w sklepie. Strona pobrana raz na kartę.
+     */
+    public function test_item_without_model_takes_its_single_size_from_the_page_row(): void
+    {
+        $this->items = [
+            $this->item(8001, 'COMFORT PREMIUM 10', 'RĘKAWICE RS ARBEITSSCHUTZ COMFORT PREMIUM 10', null, 4.0, 5.0, '5900000000810'),
+            $this->item(8002, 'POLAR I', 'RĘKAWICE RS ARBEITSSCHUTZ POLAR I 10', '', 4.0, 5.0, ''),
+            // strona z zakresem „6-11” (domyślna) — bez zmian
+            $this->item(8003, 'SPLIT 10', 'RĘKAWICE RS ARBEITSSCHUTZ SPLIT 10', null, 4.0, 5.0, ''),
+            // strona bez wiersza „Rozmiar”
+            $this->item(8004, 'BUDGIE 11', 'RĘKAWICE RS ARBEITSSCHUTZ BUDGIE 11', null, 4.0, 5.0, ''),
+            // wiersz „Rozmiar” = 9, a nazwa kończy się na 10 — bez zgadywania
+            $this->item(8005, 'DRUM 10', 'RĘKAWICE RS ARBEITSSCHUTZ DRUM 10', null, 4.0, 5.0, ''),
+            // strona nie odpowiada
+            $this->item(8006, 'ZIRKON 800 10', 'RĘKAWICE RS ARBEITSSCHUTZ ZIRKON 800 10', null, 4.0, 5.0, ''),
+        ];
+        $this->pageSizeRows = [
+            '/pl/rekawice-comfort-premium-10' => '10',
+            '/pl/rekawice-polar-i' => '10',
+            '/pl/rekawice-budgie-11' => null,
+            '/pl/rekawice-drum-10' => '9',
+            '/pl/rekawice-zirkon-800-10' => '10',
+        ];
+        $this->failingPages = ['/pl/rekawice-zirkon-800-10'];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = $this->productsBySku($connector);
+
+        $this->assertSame(['COMFORT PREMIUM', 'POLAR I', 'SPLIT 10', 'BUDGIE 11', 'DRUM 10', 'ZIRKON 800 10'], array_keys($products));
+        $comfort = $products['COMFORT PREMIUM'];
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ COMFORT PREMIUM', $comfort->cardName);
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ COMFORT PREMIUM 10', $comfort->name);
+        $this->assertSame('Rozmiary: 10 (COMFORT PREMIUM 10)', $comfort->variantSummary);
+        $this->assertSame([], $comfort->members);
+        // kod pozycji w identyfikatorach dosłownie, z rozmiarem ze strony
+        $this->assertSame(
+            [['ean', '5900000000810', '10'], ['source_code', 'COMFORT PREMIUM 10', '10']],
+            array_map(static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->label], $comfort->identifiers ?? []),
+        );
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ POLAR I', $products['POLAR I']->cardName);
+        $this->assertSame('Rozmiary: 10 (POLAR I)', $products['POLAR I']->variantSummary);
+        foreach (['SPLIT 10', 'BUDGIE 11', 'DRUM 10', 'ZIRKON 800 10'] as $sku) {
+            $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ '.$sku, $products[$sku]->name);
+            $this->assertNull($products[$sku]->cardName);
+            $this->assertNull($products[$sku]->variantSummary);
+            $this->assertSame([null], array_map(static fn (B2bRemoteIdentifier $i): ?string => $i->label, $products[$sku]->identifiers ?? []));
+        }
+        $this->assertSame([
+            'Lista Tegro: 6 pozycji → 6 kart (0 grup rozmiarów, w tym 0 z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)',
+            'Pozycje bez modelu ze stroną produktu: 6, rozmiar z wiersza „Rozmiar” strony: 2 — ich kod i nazwa karty bez rozmiaru',
+            'Strona produktu pozycji bez modelu nie została pobrana (1): ZIRKON 800 10 (b2b.tegro.pl odpowiedziało HTTP 500) — kod i nazwa tych kart zostają z rozmiarem',
+        ], $connector->runSummary());
+
+        // tabelka i pliki karty czytają stronę pobraną w products() — bez drugiego zapytania
+        $this->assertSame(1, $this->pageHitsByPath['/pl/rekawice-comfort-premium-10']);
+        $rows = array_map(static fn (B2bRemoteShopField $f): string => $f->name.' | '.$f->value, $connector->shopFields($comfort));
+        $this->assertContains('Rozmiar | 10', $rows);
+        $this->assertNotSame([], $connector->documents($comfort));
+        $this->assertSame(1, $this->pageHitsByPath['/pl/rekawice-comfort-premium-10']);
+    }
+
+    /**
+     * Kod albo nazwa bez rozmiaru, które wyszłyby na dwóch kartach przebiegu: obie karty zostają z kodem i nazwą sprzed
+     * zmiany (nie zgadujemy, która jest właściwa).
+     */
+    public function test_code_or_name_shared_after_removing_the_size_keeps_the_shop_values(): void
+    {
+        $this->items = [
+            // kod modelu „ZIRKON” to już kod innej pozycji tej listy
+            $this->item(9001, 'ZIRKON 7', 'RĘKAWICE ZIRKON 7', 'RĘKAWICE ZIRKON', 3.0, 4.0, ''),
+            $this->item(9002, 'ZIRKON', 'RĘKAWICE ZIRKON STARY', 'RĘKAWICE ZIRKON STARY', 3.0, 4.0, ''),
+            // nazwa bez rozmiaru pozycji bez modelu = nazwa modelu innej karty
+            $this->item(9101, 'DRUM 10', 'RĘKAWICE DRUM 10', null, 3.0, 4.0, ''),
+            $this->item(9102, 'DRM 8', 'RĘKAWICE DRUM 8', 'RĘKAWICE DRUM', 3.0, 4.0, ''),
+            $this->item(9103, 'DRM 9', 'RĘKAWICE DRUM 9', 'RĘKAWICE DRUM', 3.0, 4.0, ''),
+            // bez kolizji — kod modelu
+            $this->item(9201, 'BASS 7', 'RĘKAWICE BASS 7', 'RĘKAWICE BASS', 3.0, 4.0, ''),
+        ];
+        $this->pageSizeRows = ['/pl/rekawice-drum-10' => '10'];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = $this->productsBySku($connector);
+
+        $this->assertSame(
+            ['ZIRKON 7' => 'RĘKAWICE ZIRKON 7', 'ZIRKON' => 'RĘKAWICE ZIRKON STARY', 'DRUM 10' => 'RĘKAWICE DRUM 10', 'DRM 8' => 'RĘKAWICE DRUM', 'BASS' => 'RĘKAWICE BASS'],
+            array_map(static fn (B2bRemoteProduct $p): string => $p->cardName ?? $p->name, $products),
+        );
+        // rozmiar ze sklepu zostaje przy karcie — wraca tylko kod i nazwa
+        $this->assertSame('Rozmiary: 10 (DRUM 10)', $products['DRUM 10']->variantSummary);
+        $this->assertContains(
+            'Kod albo nazwa bez rozmiaru wspólne dla kilku kart — te karty zostają z kodem i nazwą pozycji: kod „ZIRKON”: ZIRKON 7, ZIRKON; nazwa „RĘKAWICE DRUM”: DRUM 10, DRM 8',
+            $connector->runSummary(),
+        );
+    }
+
+    /**
+     * Nowe karty przez synchronizację: kod i nazwa bez rozmiaru, lista rozmiarów na karcie, jedno pobranie strony.
+     */
+    public function test_sync_creates_cards_with_the_model_code_and_the_size_in_the_size_summary(): void
+    {
+        Storage::fake('public');
+        $this->items = [
+            $this->item(7001, 'CITRIN 7', 'RĘKAWICE RS ARBEITSSCHUTZ CITRIN 7', 'RĘKAWICE RS ARBEITSSCHUTZ CITRIN', 3.0, 4.0, ''),
+            $this->item(8001, 'COMFORT PREMIUM 10', 'RĘKAWICE RS ARBEITSSCHUTZ COMFORT PREMIUM 10', null, 4.0, 5.0, ''),
+        ];
+        $this->pageSizeRows = ['/pl/rekawice-comfort-premium-10' => '10'];
+        $this->fakeSite();
+
+        $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
+
+        $this->assertSame(2, $result['created'], implode(' | ', $result['errors']));
+        $citrin = Product::query()->where('sku', 'CITRIN')->sole();
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ CITRIN', $citrin->name);
+        $this->assertSame('Rozmiary: 7 (CITRIN 7)', $citrin->variant_summary);
+        $comfort = Product::query()->where('sku', 'COMFORT PREMIUM')->sole();
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ COMFORT PREMIUM', $comfort->name);
+        $this->assertSame('Rozmiary: 10 (COMFORT PREMIUM 10)', $comfort->variant_summary);
+        // powiązanie ma nazwę pozycji dosłownie (cardName tylko na kartę); kod powiązania pojedynczej karty synchronizacja
+        // bierze z kodu karty (B2bCatalogSync) — kod pozycji dosłownie zostaje w identyfikatorze
+        $this->assertSame(['COMFORT PREMIUM', 'RĘKAWICE RS ARBEITSSCHUTZ COMFORT PREMIUM 10'], [
+            B2bProductLink::query()->where('product_id', $comfort->id)->value('remote_sku'),
+            B2bProductLink::query()->where('product_id', $comfort->id)->value('remote_name'),
+        ]);
+        $this->assertSame(
+            [['COMFORT PREMIUM 10', '10']],
+            ProductIdentifier::query()->where('product_id', $comfort->id)->where('type', ProductIdentifier::TYPE_SOURCE_CODE)->get()
+                ->map(static fn (ProductIdentifier $i): array => [$i->value, $i->variant_label])->all(),
+        );
+        $this->assertTrue(ProductShopCard::query()->where('product_id', $comfort->id)->exists());
+        $this->assertSame(1, $this->pageHitsByPath['/pl/rekawice-comfort-premium-10']);
     }
 
     public function test_price_is_the_account_price_with_catalog_price_and_no_invented_discount(): void
@@ -242,7 +438,7 @@ final class TegroConnectorTest extends TestCase
         $connector = $this->connector();
         $products = $this->productsBySku($connector);
 
-        $price = $connector->price($products['F09 PLUS 6']);
+        $price = $connector->price($products['F09 PLUS']);
         $this->assertNotNull($price);
         $this->assertSame(5.1, $price->net);
         $this->assertSame(6.0, $price->base);
@@ -250,9 +446,9 @@ final class TegroConnectorTest extends TestCase
         $this->assertSame('PLN', $price->currency);
 
         $this->assertNull($connector->price($products['NOPRICE 9']));
-        $this->assertSame('Rękawica ochronna kat. II, nitryl.'."\n".'Druga linia opisu.', $connector->description($products['F09 PLUS 6']));
-        $this->assertSame('G-REX', $connector->manufacturer($products['F09 PLUS 6']));
-        $this->assertSame('Rękawica ochronna kat. II, nitryl.'."\n".'Druga linia opisu.', $connector->description($products['F09 PLUS 6']));
+        $this->assertSame('Rękawica ochronna kat. II, nitryl.'."\n".'Druga linia opisu.', $connector->description($products['F09 PLUS']));
+        $this->assertSame('G-REX', $connector->manufacturer($products['F09 PLUS']));
+        $this->assertSame('Rękawica ochronna kat. II, nitryl.'."\n".'Druga linia opisu.', $connector->description($products['F09 PLUS']));
     }
 
     public function test_shop_card_has_page_parameters_norms_and_trade_data_of_every_size(): void
@@ -260,10 +456,12 @@ final class TegroConnectorTest extends TestCase
         $this->fakeSite();
         $connector = $this->connector();
         $products = $this->productsBySku($connector);
+        // od 28.09.2026 products() pobiera stronę pozycji bez modelu (ALASKA 10, wiersz „Rozmiar”) — liczymy od tego miejsca
+        $hitsBefore = $this->pageHits;
 
         $rows = array_map(
             static fn (B2bRemoteShopField $f): string => $f->section.' | '.$f->name.' | '.$f->value,
-            $connector->shopFields($products['F09 PLUS 6']),
+            $connector->shopFields($products['F09 PLUS']),
         );
 
         $this->assertSame([
@@ -283,8 +481,8 @@ final class TegroConnectorTest extends TestCase
             'Informacje handlowe | EAN | 5900000000010 (F09 PLUS 10)',
         ], $rows);
         // tabelka i pliki czytają tę samą stronę
-        $connector->documents($products['F09 PLUS 6']);
-        $this->assertSame(1, $this->pageHits);
+        $connector->documents($products['F09 PLUS']);
+        $this->assertSame(1, $this->pageHits - $hitsBefore);
     }
 
     public function test_norms_from_the_api_are_kept_once_when_the_page_repeats_them(): void
@@ -308,7 +506,7 @@ final class TegroConnectorTest extends TestCase
         $connector = $this->connector();
         $products = $this->productsBySku($connector);
 
-        $documents = $connector->documents($products['F09 PLUS 6']);
+        $documents = $connector->documents($products['F09 PLUS']);
 
         $this->assertSame([
             ['g-rex-f09-plus-karta-katalogowa-pl.pdf', 'https://b2b.tegro.pl/zasoby/import/g/g-rex-f09-plus-karta-katalogowa-pl.pdf', ProductDocument::KIND_DATASHEET],
@@ -328,7 +526,7 @@ final class TegroConnectorTest extends TestCase
         $connector = $this->connector();
         $products = $this->productsBySku($connector);
 
-        $image = $connector->image($products['F09 PLUS 6']);
+        $image = $connector->image($products['F09 PLUS']);
 
         $this->assertNotNull($image);
         $this->assertSame('https://b2b.tegro.pl/zasoby/import/f/f09-plus.jpg', $image->sourceUrl);
@@ -376,8 +574,8 @@ final class TegroConnectorTest extends TestCase
 
         $products = $this->productsBySku($connector);
 
-        $this->assertNull($products['F09 PLUS 6']->sourceUrl);
-        $this->assertSame([], $connector->documents($products['F09 PLUS 6']));
+        $this->assertNull($products['F09 PLUS']->sourceUrl);
+        $this->assertSame([], $connector->documents($products['F09 PLUS']));
         $this->assertSame(0, $this->pageHits);
         $this->assertSame([
             'Lista Tegro: 8 pozycji → 5 kart (2 grup rozmiarów, w tym 1 z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)',
@@ -397,11 +595,11 @@ final class TegroConnectorTest extends TestCase
         $this->assertSame(4, $result['created']);
         $this->assertContains('NOPRICE 9: brak ceny w B2B', $result['errors']);
 
-        $f09 = Product::query()->where('sku', 'F09 PLUS 6')->sole();
+        $f09 = Product::query()->where('sku', 'F09 PLUS')->sole();
         $this->assertSame(self::F09, $f09->name);
         $this->assertSame('G-REX', $f09->manufacturer);
         $this->assertSame('Rozmiary: 6 (F09 PLUS 6); 7 (F09 PLUS 7); 10 (F09 PLUS 10)', $f09->variant_summary);
-        $this->assertFalse(Product::query()->whereIn('sku', ['F09 PLUS 7', 'F09 PLUS 10'])->exists());
+        $this->assertFalse(Product::query()->whereIn('sku', ['F09 PLUS 6', 'F09 PLUS 7', 'F09 PLUS 10'])->exists());
         $this->assertSame(
             ['4634' => self::F09.' 6', '4635' => self::F09.' 7', '4638' => self::F09.' 10'],
             B2bProductLink::query()->where('product_id', $f09->id)->orderBy('remote_id')->pluck('remote_name', 'remote_id')->all(),
@@ -409,9 +607,9 @@ final class TegroConnectorTest extends TestCase
         $slot = ProductSourcePrice::query()->where('product_id', $f09->id)->where('source_key', ProductSourcePrice::b2bKey((int) $this->account()->id))->sole();
         $this->assertSame('5.10', (string) $slot->purchase_price);
 
-        $heavy = Product::query()->where('sku', 'HEAVY 8')->sole();
+        $heavy = Product::query()->where('sku', 'HEAVY')->sole();
         $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ HEAVY', $heavy->name);
-        $this->assertFalse(Product::query()->where('sku', 'HEAVY 9')->exists());
+        $this->assertFalse(Product::query()->whereIn('sku', ['HEAVY 8', 'HEAVY 9'])->exists());
         $heavySlot = ProductSourcePrice::query()->where('product_id', $heavy->id)->sole();
         // cena karty = najtańszy rozmiar (9) z jego ceną katalogową, najwyższa cena rozmiaru przy slocie
         $this->assertSame('5.90', (string) $heavySlot->purchase_price);
@@ -440,7 +638,7 @@ final class TegroConnectorTest extends TestCase
         Storage::fake('public');
         $this->fakeSite();
         app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
-        $f09 = Product::query()->where('sku', 'F09 PLUS 6')->sole();
+        $f09 = Product::query()->where('sku', 'F09 PLUS')->sole();
         $description = (string) $f09->description;
         $documents = ProductDocument::query()->where('product_id', $f09->id)->count();
         $pdfDownloads = count(Http::recorded(fn (Request $r): bool => str_ends_with((string) parse_url($r->url(), PHP_URL_PATH), '.pdf')));
@@ -462,7 +660,8 @@ final class TegroConnectorTest extends TestCase
 
     /**
      * Karty sprzed 28.09.2026 (HEAVY 8 i HEAVY 9 — rozmiary w różnych cenach jako osobne karty): przebieg po zmianie
-     * nie zakłada nowej karty (kod nowego wyrobu „HEAVY 8” to kod dawnej karty rozmiaru 8 — bez konfliktu), nie przepina
+     * nie zakłada nowej karty (karty grupy znalezione po powiązaniach rozmiarów; kod wyrobu od 28.09.2026 to „HEAVY”, nie
+     * kod żadnej z dawnych kart — synchronizacja nie zmienia kodu zastanej karty), nie przepina
      * powiązań i nie zmienia cen kart; każda karta dostaje swój rozmiar, a wyrób trafia do size_spread przebiegu.
      */
     public function test_legacy_price_split_cards_stay_and_get_their_own_sizes(): void
@@ -482,6 +681,8 @@ final class TegroConnectorTest extends TestCase
         $this->assertSame([$small->id], B2bProductLink::query()->where('remote_id', '2000')->pluck('product_id')->map(static fn (mixed $id): int => (int) $id)->all());
         $this->assertSame([$large->id], B2bProductLink::query()->where('remote_id', '2001')->pluck('product_id')->map(static fn (mixed $id): int => (int) $id)->all());
         $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ HEAVY 8', $small->fresh()?->name);
+        // kodu zastanej karty synchronizacja nie zmienia (tylko products:repair-tegro-codes)
+        $this->assertSame(['HEAVY 8', 'HEAVY 9'], [$small->fresh()?->sku, $large->fresh()?->sku]);
         $this->assertSame('6.24', (string) ProductSourcePrice::query()->where('product_id', $small->id)->value('purchase_price'));
         $this->assertSame('5.90', (string) ProductSourcePrice::query()->where('product_id', $large->id)->value('purchase_price'));
         $this->assertSame(['8'], ProductVariant::query()->where('product_id', $small->id)->pluck('label')->all());
@@ -709,7 +910,16 @@ final class TegroConnectorTest extends TestCase
             }
             if (str_starts_with($path, '/pl/rekawice-')) {
                 $this->pageHits++;
+                $this->pageHitsByPath[$path] = ($this->pageHitsByPath[$path] ?? 0) + 1;
+                if (in_array($path, $this->failingPages, true)) {
+                    return Http::response('błąd', 500);
+                }
                 $page = self::productPage();
+                if (array_key_exists($path, $this->pageSizeRows)) {
+                    $row = '<div class="row"><div class="col-6"> Rozmiar </div><div class="col-6"><a>6-11</a></div></div>';
+                    $size = $this->pageSizeRows[$path];
+                    $page = str_replace($row, $size === null ? '' : str_replace('6-11', $size, $row), $page);
+                }
                 if ($path === '/pl/rekawice-alaska-10') {
                     // jak w sklepie: wiersz „Normy” strony ma to samo brzmienie co atrybut API
                     $page = str_replace('EN ISO 21420:2020;EN 388:2016+A1:2018;EN 407:2020', 'EN 388:2016(3122X), EN 511:2006(X1X)', $page);
