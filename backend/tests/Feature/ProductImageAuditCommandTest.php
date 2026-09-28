@@ -96,6 +96,42 @@ final class ProductImageAuditCommandTest extends TestCase
         $this->assertSame(ProductImageRejection::REASON_AUDIT, $rejection->reason);
     }
 
+    public function test_web_photos_go_only_with_the_flag_and_only_when_the_manufacturer_account_has_a_photo(): void
+    {
+        // Bolle 28.09.2026: karta z importu pliku ze zdjęciami ze sklepów, a konto producenta dało już swoje
+        $user = User::factory()->create();
+        $bolle = B2bAccount::query()->create([
+            'username' => 'bolle', 'password' => 'sekret', 'sites' => ['b2b.bolle-safety.com'], 'connector' => 'bolle',
+            'created_by' => $user->id, 'updated_by' => $user->id,
+        ]);
+        $withOwn = Product::query()->create(['sku' => 'BAXCSP', 'name' => 'BAXTER – Miedziane okulary ochronne', 'manufacturer' => 'Bolle']);
+        $this->image($withOwn, 'https://b2b.bolle-safety.com/core/media/media.nl?id=900&h=main', $bolle->id, 0);
+        $shop = $this->image($withOwn, 'https://www.specshop.pl/okulary-bolle-baxter.jpg', null, 1);
+        // karta bez zdjęcia producenta — zdjęcie ze sklepu zostaje, innego nie ma
+        $withoutOwn = Product::query()->create(['sku' => 'BAXPSI', 'name' => 'BAXTER – Przezroczyste okulary ochronne', 'manufacturer' => 'Bolle']);
+        $this->image($withoutOwn, 'https://www.specshop.pl/okulary-bolle-baxter-clear.jpg', null, 0);
+        // zdjęcie od konta, które nie jest producentem marki karty (dystrybutor) nie wystarcza
+        $distributor = $this->account();
+        $viaDistributor = Product::query()->create(['sku' => 'BAXPSF', 'name' => 'BAXTER – Przyciemniane okulary ochronne', 'manufacturer' => 'Bolle']);
+        $this->image($viaDistributor, 'https://artra.example.test/baxpsf.jpg', $distributor->id, 0);
+        $this->image($viaDistributor, 'https://www.specshop.pl/okulary-bolle-baxter-smoke.jpg', null, 1);
+
+        $this->artisan('products:images-audit --apply')->assertSuccessful();
+        $this->assertSame(5, ProductImage::query()->count());
+
+        $this->artisan('products:images-audit --web-with-manufacturer')
+            ->expectsOutputToContain('Obce zdjęcie z sieci:    1')
+            ->expectsOutputToContain('products:images-audit --web-with-manufacturer --apply')
+            ->assertSuccessful();
+        $this->artisan('products:images-audit --web-with-manufacturer --apply')->assertSuccessful();
+
+        $this->assertNull(ProductImage::query()->find($shop->id));
+        $this->assertSame(1, ProductImage::query()->where('product_id', $withOwn->id)->count());
+        $this->assertSame(1, ProductImage::query()->where('product_id', $withoutOwn->id)->count());
+        $this->assertSame(2, ProductImage::query()->where('product_id', $viaDistributor->id)->count());
+        $this->assertSame(ProductImageRejection::REASON_AUDIT, ProductImageRejection::query()->where('product_id', $withOwn->id)->sole()->reason);
+    }
+
     public function test_report_names_cards_left_without_a_photo(): void
     {
         $product = Product::query()->create([

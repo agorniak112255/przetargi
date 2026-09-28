@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use App\Models\B2bAccount;
 use App\Models\ProductIdentifier;
+use App\Support\ProductIdentifierCode;
 use Illuminate\Support\Facades\Cache;
 use RuntimeException;
 use Throwable;
@@ -35,13 +36,13 @@ use Throwable;
  * odpowiednikami.
  *
  * Normy producenta (B2bNormFactSource, 28.09.2026) — z karty technicznej PDF rodziny, którą API podaje przy pozycji
- * (custitem_c25_web_nextdelivery → item.downloads, „Technical Sheet” *_EN.pdf), z tabeli wersji: kolumna STANDARD
+ * (custitem_c25_web_nextdelivery → item.downloads, karta techniczna po angielsku), z tabeli wersji: kolumna STANDARD
  * wiersza z kodem pozycji (BolleDatasheetTable). Dotąd karty Bolle miały normy tylko ze wzbogacania AI, często
  * błędne (BAXCSP: AI „EN166, EN169”, karta techniczna „EN166 - EN172”). Witryny bolle-safety.com (DataDome, 403)
  * nie pobieramy — tylko pliki z b2b.bolle-safety.com. Jeden PDF opisuje całą rodzinę (ok. 400 pozycji, ok. 120
  * plików), więc odczyt tabeli trzymamy w pamięci podręcznej na adres pliku (adres zawiera hash treści h=).
  */
-final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource, B2bKeepsExistingNames, B2bManufacturerSite, B2bNormFactProvenance, B2bNormFactSource, B2bShopFieldSource
+final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource, B2bImageGallery, B2bKeepsExistingNames, B2bManufacturerSite, B2bNormFactProvenance, B2bNormFactSource, B2bShopFieldSource
 {
     private const SESSION_LOST = 'Utracono sesję konta bolle-safety.com — ceny konta niedostępne';
 
@@ -77,6 +78,9 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
         'internalid', 'itemid', 'upccode', 'storedisplayname2', 'displayname', 'storedescription', 'storedetaileddescription',
         'featureddescription', 'onlinecustomerprice_detail', 'onlinecustomerprice', 'pricelevel1', 'dontshowprice',
         'ispurchasable', 'urlcomponent', 'custitem_atlas_item_image',
+        'custitem_bb_item_image_2', 'custitem_bb_item_image_3', 'custitem_bb_item_image_4', 'custitem_bb_item_image_5',
+        'custitem_bb_item_image_6', 'custitem_bb_item_image_7', 'custitem_bb_item_image_8', 'custitem_bb_item_image_9',
+        'custitem_bb_item_image_10', 'custitem_bb_item_image_11',
         'custitem_bb_fm_product_material', 'custitem_bb_specific_technology', 'custitem_bb_safety_lens_coating', 'custitem_bb_safety_lens_shade',
     ];
 
@@ -277,13 +281,46 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
      */
     public function image(B2bRemoteProduct $product): ?B2bRemoteImage
     {
-        $url = trim((string) ($product->raw['custitem_atlas_item_image'] ?? ''));
-        if ($url === '') {
-            return null;
+        $url = $this->imageUrls($product)[0] ?? null;
+
+        return $url === null ? null : $this->imageAt($url);
+    }
+
+    /**
+     * Galeria pozycji (B2bImageGallery, 28.09.2026): zdjęcie główne z custitem_atlas_item_image, potem kolejne ujęcia
+     * z custitem_bb_item_image_2…11 (w sklepie 0–6 dodatkowych na pozycję). Galeria, a nie pojedyncze zdjęcie, bo
+     * synchronizacja dokłada wtedy zdjęcie producenta także karcie, która ma już zdjęcia — 207 kart z importu pliku
+     * z 12.09 miało tylko zdjęcia wyłowione z obcych sklepów (specshop.pl, e-militaria.eu…), a pojedyncze zdjęcie
+     * zapisujemy tylko karcie bez żadnego. Zdjęcie spod adresu Bolle, które karta już ma, dostaje stempel konta
+     * i miejsce z galerii (ProductImage::resequence stawia zdjęcia producenta przed resztą).
+     *
+     * @return list<string>
+     */
+    public function imageUrls(B2bRemoteProduct $product): array
+    {
+        $fields = ['custitem_atlas_item_image'];
+        for ($i = 2; $i <= 11; $i++) {
+            $fields[] = 'custitem_bb_item_image_'.$i;
         }
-        if (str_starts_with($url, '/') && ! str_starts_with($url, '//')) {
-            $url = BolleB2bClient::BASE.$url;
+        $urls = [];
+        foreach ($fields as $field) {
+            $url = trim((string) ($product->raw[$field] ?? ''));
+            if ($url === '') {
+                continue;
+            }
+            if (str_starts_with($url, '/') && ! str_starts_with($url, '//')) {
+                $url = BolleB2bClient::BASE.$url;
+            }
+            if (! in_array($url, $urls, true)) {
+                $urls[] = $url;
+            }
         }
+
+        return $urls;
+    }
+
+    public function imageAt(string $url): ?B2bRemoteImage
+    {
         $file = $this->client->imageBytes($url);
         if ($file['bytes'] === '' || ! str_starts_with($file['mime'], 'image/')) {
             return null;
@@ -295,8 +332,9 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
     /**
      * Normy z karty technicznej pozycji (BolleDatasheetTable::match): jedna para na oznaczenie z kolumny STANDARD,
      * dosłownie i bez poziomu („EN166”, „EN ISO 16321-1”), oraz „Oznaczenie soczewki” z kolumny LENS MARKING, gdy
-     * jest. Karta = „Technical Sheet” z nazwą pliku kończącą się na „_EN.pdf” (EMEA po angielsku; _EN-US, _EN-AU
-     * to inne rynki). Kilka takich kart — wiersz pozycji musi dać ten sam odczyt we wszystkich, w których jest.
+     * jest. Karta = europejska karta techniczna po angielsku („…_EN.pdf”, „…-EN.pdf”), a gdy jej nie ma — karta rynku
+     * USA („…_EN-US.pdf”); wybór w englishDatasheets(). Kilka takich kart — wiersz pozycji musi dać ten sam odczyt we
+     * wszystkich, w których jest.
      *
      * [] = pozycja bez karty, bez swojego wiersza (TRYON RX: w kolumnie REFERENCE nazwa rodziny), wiersz bez normy
      * (VOLT 2.0 HEADGEAR), inny EAN w wierszu albo komórka nieczytelna — zapisane normy zostają bez zmian.
@@ -448,13 +486,33 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
             return [];
         }
 
-        return array_values(array_filter(
-            $downloads,
-            static fn (mixed $download): bool => is_array($download)
-                && is_string($download['url'] ?? null)
-                && strcasecmp(trim((string) ($download['displayname'] ?? '')), self::DATASHEET_DISPLAYNAME) === 0
-                && str_ends_with(strtolower(trim((string) ($download['name'] ?? ''))), '_en.pdf'),
+        $sheets = array_values(array_filter($downloads, static fn (mixed $download): bool => is_array($download)
+            && is_string($download['url'] ?? null)
+            && self::isDatasheet($download)));
+        $named = static fn (string $pattern): array => array_values(array_filter(
+            $sheets,
+            static fn (array $sheet): bool => preg_match($pattern, trim((string) ($sheet['name'] ?? ''))) === 1,
         ));
+
+        // Europejska karta po angielsku („…-FT-EMEA_EN.pdf”, „…-FT-EMEA-EN.pdf”). Amerykańska (…_EN-US.pdf) tylko
+        // gdy europejskiej nie ma (10 pozycji, 28.09.2026) — ten sam kod i EAN w wierszu to ten sam wyrób.
+        return $named('/[_-]EN\.pdf$/i') ?: $named('/[_-]EN-US\.pdf$/i');
+    }
+
+    /**
+     * Karta techniczna: plik opisany „Technical Sheet”, a bez opisu — z nazwą karty technicznej („SWIFT
+     * OTG-DATASHEET_EN.pdf”, „…-FT-…”).
+     *
+     * @param  array<mixed>  $download
+     */
+    private static function isDatasheet(array $download): bool
+    {
+        $label = trim((string) ($download['displayname'] ?? ''));
+        if ($label !== '') {
+            return strcasecmp($label, self::DATASHEET_DISPLAYNAME) === 0;
+        }
+
+        return preg_match('/DATASHEET|-FT[-_]/i', (string) ($download['name'] ?? '')) === 1;
     }
 
     /**
@@ -568,17 +626,38 @@ final class BolleB2bConnector implements B2bConnector, B2bForeignLanguageSource,
             sourceUrl: $url,
             raw: $raw,
             // Kod towaru Bolle (itemid), dosłownie — sklep producenta, karta = jedna pozycja, więc to kod producenta
-            // pozycji karty (internalid). internalid to wewnętrzny numer NetSuite, nie identyfikator wyrobu. Kodu
-            // kreskowego (upccode) nie podajemy: atrapa testów (dane syntetyczne) go nie ma, a żywej odpowiedzi
-            // fieldset=details pod tym kątem nie sprawdzono — bez potwierdzenia pola nie zgadujemy, czy to EAN sztuki.
-            // (28.09.2026 upccode trafił do raw wyłącznie do sprawdzenia wiersza karty technicznej — normFacts().)
-            identifiers: $sku !== '' ? [new B2bRemoteIdentifier(
+            // pozycji karty (internalid). internalid to wewnętrzny numer NetSuite, nie identyfikator wyrobu.
+            // upccode to EAN sztuki: 28.09.2026 zgodny z EAN-em wiersza karty technicznej producenta dla 172 pozycji
+            // (kolumna SINGLE) — tylko z poprawną sumą kontrolną GTIN.
+            identifiers: self::identifiers($sku, $id, $item['upccode'] ?? null),
+        );
+    }
+
+    /**
+     * @return list<B2bRemoteIdentifier>
+     */
+    private static function identifiers(string $sku, string $remoteId, mixed $upc): array
+    {
+        $out = [];
+        if ($sku !== '') {
+            $out[] = new B2bRemoteIdentifier(
                 type: ProductIdentifier::TYPE_MANUFACTURER_CODE,
                 value: $sku,
-                remoteId: $id,
+                remoteId: $remoteId,
                 field: 'itemid',
-            )] : [],
-        );
+            );
+        }
+        $ean = is_scalar($upc) ? trim((string) $upc) : '';
+        if (preg_match('/^\d{8,14}$/', $ean) === 1 && ProductIdentifierCode::gtin($ean) !== null) {
+            $out[] = new B2bRemoteIdentifier(
+                type: ProductIdentifier::TYPE_EAN,
+                value: $ean,
+                remoteId: $remoteId,
+                field: 'upccode',
+            );
+        }
+
+        return $out;
     }
 
     /**

@@ -8,6 +8,7 @@ use App\Models\B2bAccount;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductIdentifier;
+use App\Models\ProductImage;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
@@ -666,15 +667,32 @@ final class BolleConnectorTest extends TestCase
         $this->fakeSite();
         $connector = $this->connector();
 
-        // pozycja bez plików (SPICMX11U-F) i pozycja z samą kartą FR / rynku USA — bez żadnego pobrania
+        // pozycja bez plików (SPICMX11U-F), z samą kartą FR i z plikiem, który nie jest kartą techniczną — bez pobrania
         $this->assertSame([], $connector->normFacts(new B2bRemoteProduct('1', 'SPICMX11U-F', 'X', raw: ['status' => 'ok', 'itemid' => 'SPICMX11U-F'])));
         $this->assertSame([], $connector->normFacts(new B2bRemoteProduct('2', 'BAXCSP', 'X', raw: [
-            'status' => 'ok', 'itemid' => 'BAXCSP', 'downloads' => [
+            'status' => 'ok', 'itemid' => 'BAXCSP', 'upccode' => '3660740007768', 'downloads' => [
                 ['name' => 'BAXTER-INDUSTRIAL-FT-EMEA_FR.pdf', 'displayname' => 'Technical Sheet', 'url' => BolleB2bClient::BASE.self::SHEET_EN],
-                ['name' => 'BAXTER-INDUSTRIAL-FT-NAM_EN-US.pdf', 'displayname' => 'Technical Sheet', 'url' => BolleB2bClient::BASE.self::SHEET_EN],
+                ['name' => 'BAXTER-DOC-EMEA_EN.pdf', 'displayname' => '', 'url' => BolleB2bClient::BASE.self::SHEET_EN],
             ],
         ])));
         Http::assertNothingSent();
+
+        // bez karty europejskiej: karta rynku USA, a plik bez opisu z nazwą karty technicznej też się liczy
+        foreach ([
+            ['BAXTER-INDUSTRIAL-FT-NAM_EN-US.pdf', 'Technical Sheet'],
+            ['BAXTER-DATASHEET-EN.pdf', ''],
+        ] as [$name, $label]) {
+            $facts = $connector->normFacts(new B2bRemoteProduct('5', 'BAXCSP', 'X', raw: [
+                'status' => 'ok', 'itemid' => 'BAXCSP', 'upccode' => '3660740007768', 'downloads' => [
+                    ['name' => 'BAXTER-INDUSTRIAL-FT-EMEA_FR.pdf', 'displayname' => 'Technical Sheet', 'url' => BolleB2bClient::BASE.self::SHEET_FR],
+                    ['name' => $name, 'displayname' => $label, 'url' => BolleB2bClient::BASE.self::SHEET_EN],
+                ],
+            ]));
+            $this->assertSame(['EN166', 'EN172'], array_values(array_filter(
+                array_map(static fn (B2bRemoteNormFact $f): string => $f->label, $facts),
+                static fn (string $label): bool => str_starts_with($label, 'EN'),
+            )), $name);
+        }
 
         // TRYON RX: w kolumnie REFERENCE nazwa rodziny, nie kod pozycji
         $tryon = new B2bRemoteProduct('3', 'TRYONN10E', 'X', raw: ['status' => 'ok', 'itemid' => 'TRYONN10E', 'upccode' => '3660740020132', 'downloads' => [
@@ -727,6 +745,81 @@ final class BolleConnectorTest extends TestCase
         $this->media['777'] = [$this->fixture('datasheet-baxter.pdf'), 200, 'application/pdf'];
         $this->assertCount(3, $this->connector()->normFacts($this->remoteWithSheets('BAXCSP', null)));
         Http::assertSentCount(2);
+    }
+
+    public function test_gallery_lists_main_and_extra_shop_images_and_ean_becomes_an_identifier(): void
+    {
+        $connector = $this->connector();
+        $product = new B2bRemoteProduct('7', 'BAXCSP', 'X', raw: [
+            'status' => 'ok',
+            'custitem_atlas_item_image' => '/core/media/media.nl?id=900&c=5230881&h=main',
+            'custitem_bb_item_image_2' => '/core/media/media.nl?id=901&c=5230881&h=second',
+            'custitem_bb_item_image_3' => '',
+            'custitem_bb_item_image_4' => '/core/media/media.nl?id=900&c=5230881&h=main',
+        ]);
+
+        $this->assertSame([
+            BolleB2bClient::BASE.'/core/media/media.nl?id=900&c=5230881&h=main',
+            BolleB2bClient::BASE.'/core/media/media.nl?id=901&c=5230881&h=second',
+        ], $connector->imageUrls($product));
+        $this->assertSame([], $connector->imageUrls(new B2bRemoteProduct('8', 'X', 'X', raw: ['status' => 'ok'])));
+
+        $this->leaves['/goggles'][] = $this->baxterItem(105, 'BAXCSP', '3660740007768');
+        $this->leaves['/goggles'][] = $this->baxterItem(106, 'BAXPSI', '3660740007745');
+        $this->fakeSite();
+        $connector->login();
+        $products = $this->productsById($connector);
+        $identifiers = static fn (B2bRemoteProduct $p): array => array_map(
+            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->field],
+            $p->identifiers ?? [],
+        );
+        $this->assertSame([
+            [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'BAXCSP', 'itemid'],
+            [ProductIdentifier::TYPE_EAN, '3660740007768', 'upccode'],
+        ], $identifiers($products['105']));
+        // zła suma kontrolna — to nie jest EAN, zostaje sam kod
+        $this->assertSame([[ProductIdentifier::TYPE_MANUFACTURER_CODE, 'BAXPSI', 'itemid']], $identifiers($products['106']));
+    }
+
+    public function test_sync_puts_bolle_images_before_images_found_on_other_shops(): void
+    {
+        Queue::fake();
+        Storage::fake('public');
+        $this->leaves = ['/goggles' => [$this->item(105, [
+            'itemid' => 'BAXCSP',
+            'urlcomponent' => 'BAXTER_BAXCSP',
+            'custitem_atlas_item_image' => '/core/media/media.nl?id=900&c=5230881&h=main',
+            'custitem_bb_item_image_2' => '/core/media/media.nl?id=901&c=5230881&h=second',
+        ])]];
+        $this->media['900'] = ["\xFF\xD8\xFF\xE0zdjecie-glowne\xFF\xD9", 200, 'image/jpeg'];
+        $this->media['901'] = ["\xFF\xD8\xFF\xE0zdjecie-drugie\xFF\xD9", 200, 'image/jpeg'];
+        $this->fakeSite();
+        $account = B2bAccount::query()->create([
+            'username' => 'jan@example.com',
+            'password' => 'dobre-haslo',
+            'sites' => ['https://b2b.bolle-safety.com/'],
+            'connector' => 'bolle',
+        ]);
+
+        $first = app(B2bAccountSyncRunner::class)->run($account->fresh(), delayMs: 0, withImages: false);
+        $this->assertSame(1, $first['created'], implode(' | ', $first['errors']));
+        $card = Product::query()->where('sku', 'BAXCSP')->firstOrFail();
+        // zdjęcie wyłowione wcześniej z obcego sklepu (import pliku z 12.09 i wzbogacanie)
+        ProductImage::query()->create([
+            'product_id' => $card->id, 'path' => 'products/obce.jpg', 'source_url' => 'https://www.specshop.pl/baxter.jpg',
+            'is_primary' => true, 'sort_order' => 0, 'checksum' => 'obce',
+        ]);
+
+        $this->travel(2)->days();
+        $second = app(B2bAccountSyncRunner::class)->run($account->fresh(), delayMs: 0, withImages: true);
+
+        $this->assertSame([], $second['errors']);
+        $images = ProductImage::query()->where('product_id', $card->id)->orderBy('sort_order')->get();
+        $this->assertSame([
+            [BolleB2bClient::BASE.'/core/media/media.nl?id=900&c=5230881&h=main', $account->id, true],
+            [BolleB2bClient::BASE.'/core/media/media.nl?id=901&c=5230881&h=second', $account->id, false],
+            ['https://www.specshop.pl/baxter.jpg', null, false],
+        ], $images->map(static fn (ProductImage $i): array => [$i->source_url, $i->b2b_account_id, (bool) $i->is_primary])->all());
     }
 
     public function test_sync_saves_datasheet_norms_with_provenance_and_identical_second_run_does_not_rewrite_them(): void

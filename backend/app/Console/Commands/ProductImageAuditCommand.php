@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Models\B2bAccount;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\ProductImageRejection;
+use App\Services\Catalog\CardOwnership;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\Enrichment\ProductSearchIdentity;
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
 
 /**
  * Zdjęcia, których dzisiejsze reguły nie wpuściłyby do galerii karty.
@@ -28,6 +31,10 @@ use Illuminate\Console\Command;
  *   także gdy nazwa pliku podaje inną klasę obuwia (23.09.2026: „ARDOR 330 Air 619060 S1 PL ESD” ze zdjęciem
  *   „ARDOR_330_619060_S3L_ESD.png” z pierwszego pobierania). Takie zdjęcie dostaje ślad odrzucenia
  *   (ProductImageRejection), żeby wzbogacanie nie dołożyło go z powrotem.
+ * - z `--web-with-manufacturer`: każde zdjęcie wyłowione z sieci na karcie, która ma już zdjęcie od konta B2B
+ *   producenta swojej marki (CardOwnership). Decyzja użytkownika 28.09.2026: zdjęcia od producenta, ze sklepów
+ *   tylko wtedy, gdy producent ich nie ma — 207 kart Bolle z importu pliku miało zdjęcia ze specshop.pl,
+ *   e-militaria.eu i innych, często innego wariantu. Ten sam ślad odrzucenia.
  *
  * Zdjęcia dostawców nie są ruszane nigdy: to, co dostawca pokazuje przy swojej karcie, jest jego decyzją.
  * Pliki na dysku zostają — sprząta je `products:media-report --apply`, które liczy też miejsce.
@@ -37,12 +44,18 @@ final class ProductImageAuditCommand extends Command
     protected $signature = 'products:images-audit
                             {--apply : Skasuj wskazane wiersze (bez tej flagi tylko raport)}
                             {--manufacturer= : Tylko karty tego producenta}
+                            {--web-with-manufacturer : Także zdjęcia z sieci na kartach, które mają zdjęcie od konta B2B producenta}
                             {--show=20 : Ile przykładów wypisać}';
 
     protected $description = 'Pokazuje powtórzone i obce zdjęcia w galeriach kart (kasuje tylko z --apply)';
 
-    public function __construct(private readonly ProductSearchIdentity $identity)
-    {
+    /** @var Collection<int, B2bAccount>|null konta B2B po id — do rozpoznania zdjęć producenta */
+    private ?Collection $accounts = null;
+
+    public function __construct(
+        private readonly ProductSearchIdentity $identity,
+        private readonly CardOwnership $ownership,
+    ) {
         parent::__construct();
     }
 
@@ -97,7 +110,8 @@ final class ProductImageAuditCommand extends Command
             $quoted = preg_match('/^[\w.-]+$/u', $manufacturer) === 1
                 ? $manufacturer
                 : '"'.str_replace('"', '\"', $manufacturer).'"';
-            $filter = $manufacturer !== '' ? ' --manufacturer='.$quoted : '';
+            $filter = ($manufacturer !== '' ? ' --manufacturer='.$quoted : '')
+                .($this->option('web-with-manufacturer') ? ' --web-with-manufacturer' : '');
             $this->warn('Raport — nic nie skasowano. Żeby usunąć te wiersze: php artisan products:images-audit'.$filter.' --apply');
 
             return self::SUCCESS;
@@ -144,6 +158,7 @@ final class ProductImageAuditCommand extends Command
             ->values();
 
         $seen = [];
+        $replacedByManufacturer = (bool) $this->option('web-with-manufacturer') && $this->hasManufacturerImage($product);
         foreach ($images as $image) {
             $url = (string) $image->source_url;
             $row = [
@@ -164,13 +179,28 @@ final class ProductImageAuditCommand extends Command
             if ($image->b2b_account_id !== null || ! str_starts_with($url, 'http')) {
                 continue;
             }
-            if ($this->identity->imageUrlMentionsForeignBrand($url, $product)
+            if ($replacedByManufacturer
+                || $this->identity->imageUrlMentionsForeignBrand($url, $product)
                 || $this->identity->imageUrlHasForeignVariantCode($url, $product)
                 || $this->identity->imageUrlHasForeignType($url, $product)
                 || $this->identity->imageUrlNamesAnotherFootwearVariant($url, $product)) {
                 $foreign[] = $row;
             }
         }
+    }
+
+    /** Karta ma zdjęcie od konta B2B, które jest cennikiem producenta jej marki. */
+    private function hasManufacturerImage(Product $product): bool
+    {
+        $this->accounts ??= B2bAccount::query()->get()->keyBy('id');
+        foreach ($product->images->pluck('b2b_account_id')->filter()->unique() as $accountId) {
+            $account = $this->accounts->get((int) $accountId);
+            if ($account !== null && $this->ownership->isOwnerAccount($product, $account)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
