@@ -142,6 +142,28 @@ final class B2bTextTranslatorTest extends TestCase
     }
 
     #[Test]
+    public function uppercase_pack_and_size_words_in_the_name_may_be_translated(): void
+    {
+        // Bolle RUSPMN14E 28.09.2026: „zgubiony token: ECO, PACK, PIECES, SIZE” przy poprawnym tłumaczeniu nazwy
+        $name = 'RUSH+ 2.0 - ECO PACK OF 20 PIECES - SIZE M – Clear safety glasses - Eco pack';
+        $translated = 'RUSH+ 2.0 - opakowanie ekologiczne 20 szt. - rozmiar M – okulary ochronne bezbarwne - opakowanie ekologiczne';
+        $translator = $this->translatorReturning(['name' => $translated, 'segments' => []]);
+
+        $this->assertSame($translated, $translator->translate('', $name)['name']);
+    }
+
+    #[Test]
+    public function uppercase_model_name_next_to_pack_words_stays_protected(): void
+    {
+        // UNIVERSAL to nazwa gogli Bolle — nie jest na liście słów do tłumaczenia
+        $this->expectException(B2bTranslationRejected::class);
+        $this->expectExceptionMessage('zgubiony token: UNIVERSAL');
+        $translator = $this->translatorReturning(['name' => null, 'segments' => ['Gogle uniwersalne, opakowanie 10 szt.']]);
+
+        $translator->translate('UNIVERSAL goggles, PACK of 10 PIECES');
+    }
+
+    #[Test]
     public function words_glued_by_punctuation_are_separate_tokens(): void
     {
         // Bollé KOVEMX10U-F 23.09.2026: „zgubiony token: D5),Overflow” — model poprawnie wstawił spację

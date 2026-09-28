@@ -35,10 +35,14 @@ class B2bTextTranslator
      * z wyniku oznacza zgubiony fakt (PVC wolno zapisać polskim skrótem PCW/PCV — TOKEN_EQUIVALENTS).
      * Do tego angielskie słowa funkcyjne pisane wersalikami dla podkreślenia („FLASH is THE reference” — 23.09.2026
      * odrzucane jako „zgubiony token: THE”); nazwą modelu nie są.
+     * I słowa opakowania i rozmiaru z nazw Bolle wersalikami („RUSH+ 2.0 - ECO PACK OF 20 PIECES - SIZE M – …”,
+     * 28.09.2026 trzy nazwy odrzucane jako „zgubiony token: ECO, PACK, PIECES, SIZE”) — „opakowanie ekologiczne 20 szt.,
+     * rozmiar M” to poprawne tłumaczenie. UNIVERSAL zostaje chronione: to też nazwa gogli Bolle.
      */
     private const TRANSLATABLE_UPPERCASE = [
         'N/A', 'PPE',
         'THE', 'AND', 'FOR', 'WITH', 'YOUR', 'YOU', 'OUR', 'ARE', 'THIS', 'THAT', 'FROM', 'BUT', 'NOT',
+        'ECO', 'PACK', 'PIECE', 'PIECES', 'SIZE',
     ];
 
     /**
