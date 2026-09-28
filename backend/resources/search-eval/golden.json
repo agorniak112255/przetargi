@@ -690,6 +690,40 @@
             ],
             "forbidden_skus": [],
             "note": "To samo zapytanie bez „Zakup i dostawa” — tu MEFISTO trafiało do modelu już przed poprawką."
+        },
+        {
+            "id": "helm-3m-g3000nuv-kod-koloru",
+            "query": "Hełm ochronny 3M G3000NUV-RD, kolor czerwony, wskaźnik UV",
+            "expected_skus": [
+                "7000009701"
+            ],
+            "forbidden_skus": [],
+            "note": "Karta kolorów 3M po scaleniu 28.09.2026 (etap B łączenia wariantów kolorystycznych): kolor jest wierszem wariantu karty, wybieranym w ofercie — mierzy, czy wymóg koloru nie odrzuca karty z listą kolorów. Kod koloru G3000NUV-RD stoi tylko w wierszu wariantu karty G3000NUV."
+        },
+        {
+            "id": "helm-3m-g3000-wentylowany-pokretlo-niebieski",
+            "query": "Hełm ochronny 3M G3000 ze wskaźnikiem Uvicator, wentylowany, regulacja pokrętłem, kolor niebieski",
+            "expected_skus": [
+                "7000009701"
+            ],
+            "forbidden_skus": [
+                "7000039722"
+            ],
+            "acceptable_skus": [
+                "7100103396",
+                "7000103770"
+            ],
+            "note": "Karta kolorów 3M po scaleniu 28.09.2026 (etap B łączenia wariantów kolorystycznych): kolor jest wierszem wariantu karty, wybieranym w ofercie — mierzy, czy wymóg koloru nie odrzuca karty z listą kolorów. Zakazana: G3001NUV (bez wentylacji). Karty Pinlock (G3000CUV/DUV) nie mają regulacji pokrętłem.",
+            "acceptable_note": "Równoważniki sprawdzone po nazwie karty 28.09.2026: G3000NUV-R (to samo + odblaskowy) i G3000NUV-10 (to samo + uchwyt na lampę) — wszystkie warunki spełnione, niebieski na liście kolorów obu."
+        },
+        {
+            "id": "czasze-peltor-sporttac-czarne",
+            "query": "Wymienne czasze do nauszników 3M PELTOR SportTac w kolorze czarnym",
+            "expected_skus": [
+                "7000107844"
+            ],
+            "forbidden_skus": [],
+            "note": "Karta kolorów 3M po scaleniu 28.09.2026 (etap B łączenia wariantów kolorystycznych): kolor jest wierszem wariantu karty, wybieranym w ofercie — mierzy, czy wymóg koloru nie odrzuca karty z listą kolorów. Czarne czasze są wariantem karty „Wymienne czasze 3M PELTOR SportTac” (białe/czarne)."
         }
     ]
 }
