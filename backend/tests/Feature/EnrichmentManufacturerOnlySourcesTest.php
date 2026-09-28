@@ -107,6 +107,47 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
         $this->assertStringContainsString('behapownia', $this->extractionPrompt($prompts), 'adres wskazany przez człowieka to jego decyzja');
     }
 
+    /**
+     * Automat na plastry CEDERROTH 51011006 (28.09.2026): link zapisany na cederroth.com, a opis i „Źródła” brały się
+     * jeszcze z dwóch sklepów. Marka spoza listy — o regule decyduje sam link na stronę producenta.
+     */
+    public function test_pinned_manufacturer_link_keeps_shops_out_for_any_brand(): void
+    {
+        config(['enrichment.manufacturer_only_sources' => []]);
+        $prompts = new \ArrayObject;
+        $product = $this->enrich($prompts, [], self::MFR);
+
+        $extraction = $this->extractionPrompt($prompts);
+        $this->assertStringContainsString(self::MFR, $extraction);
+        $this->assertStringNotContainsString('behapownia', $extraction, 'sklep nie idzie do modelu obok zapisanej strony producenta');
+
+        $payload = (array) $product->enrichment_payload;
+        $this->assertSame([self::MFR], $payload['source_urls'] ?? null, 'model wskazał też sklep — źródłem zostaje zapisany link');
+        $this->assertSame('manual', $payload['primary_source_kind'] ?? null);
+        $this->assertStringContainsString('zapisany link na stronę producenta', json_encode($product->enrichment_trace, JSON_UNESCAPED_UNICODE) ?: '');
+    }
+
+    public function test_pinned_shop_link_does_not_cut_other_sources(): void
+    {
+        config(['enrichment.manufacturer_only_sources' => []]);
+        $prompts = new \ArrayObject;
+        $this->enrich($prompts, [], self::SHOP);
+
+        $extraction = $this->extractionPrompt($prompts);
+        $this->assertStringContainsString('behapownia', $extraction);
+        $this->assertStringContainsString(self::MFR, $extraction, 'link do sklepu nie zawęża puli — reguła tylko dla strony producenta');
+    }
+
+    public function test_pinned_manufacturer_link_without_content_leaves_shops_as_sources(): void
+    {
+        config(['enrichment.manufacturer_only_sources' => []]);
+        $prompts = new \ArrayObject;
+        // adres na domenie producenta, który nie odpowiada (fake: 404)
+        $this->enrich($prompts, [], 'https://bemoregreen.eu/pl/plaszcz/906-usuniety.html');
+
+        $this->assertStringContainsString('behapownia', $this->extractionPrompt($prompts), 'strona nic nie oddała — sklepy zostają');
+    }
+
     public function test_brand_rule_matches_brand_variants_but_not_a_brand_containing_the_word(): void
     {
         $identity = app(ProductSearchIdentity::class);

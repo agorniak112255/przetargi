@@ -2966,21 +2966,31 @@ final class ProductEnrichmentService
      * dopasowują markę po fragmencie nazwy hosta i uznałyby za producenta sklep z „pros” w adresie.
      * Bez karty producenta w puli nic się nie zmienia — sklepy zostają źródłem.
      *
+     * Ta sama reguła dla każdej marki, gdy człowiek zapisał link na stronę producenta i ta strona oddała treść
+     * (trustedManufacturerCardInPool). Automat na plastry CEDERROTH 51011006 (28.09.2026): link do cederroth.com,
+     * a opis i „Źródła” brały się jeszcze z dwóch sklepów z indeksu. Gdy strona nic nie oddała, sklepy zostają.
+     *
      * @param  list<array<string, mixed>>  $pages
      * @return array{pages: list<array<string, mixed>>, cut: bool}
      */
     private function manufacturerOnlyPages(Product $product, array $pages): array
     {
-        if ($pages === [] || ! $this->identity->usesManufacturerSourcesOnly($product)) {
+        if ($pages === []) {
             return ['pages' => $pages, 'cut' => false];
         }
-        $hasCard = false;
-        foreach ($pages as $page) {
-            $url = (string) ($page['url'] ?? '');
-            if ($url !== '' && mb_strlen(trim((string) ($page['text'] ?? ''))) >= self::MFR_CARD_MIN_CHARS
-                && $this->identity->isOfficialCatalogUrl($url, $product)) {
-                $hasCard = true;
-                break;
+        $byLink = $this->trustedManufacturerCardInPool($product, $pages);
+        if (! $byLink && ! $this->identity->usesManufacturerSourcesOnly($product)) {
+            return ['pages' => $pages, 'cut' => false];
+        }
+        $hasCard = $byLink;
+        if (! $hasCard) {
+            foreach ($pages as $page) {
+                $url = (string) ($page['url'] ?? '');
+                if ($url !== '' && mb_strlen(trim((string) ($page['text'] ?? ''))) >= self::MFR_CARD_MIN_CHARS
+                    && $this->identity->isOfficialCatalogUrl($url, $product)) {
+                    $hasCard = true;
+                    break;
+                }
             }
         }
         if (! $hasCard) {
@@ -3002,12 +3012,37 @@ final class ProductEnrichmentService
         if ($dropped !== []) {
             $this->attemptLog()->add(
                 'page',
-                'tylko strony producenta — pominięte strony sklepów: '.count($dropped),
+                ($byLink ? 'zapisany link na stronę producenta' : 'tylko strony producenta')
+                    .' — pominięte strony sklepów: '.count($dropped),
                 urls: array_values(array_filter($dropped))
             );
         }
 
         return ['pages' => $kept, 'cut' => true];
+    }
+
+    /**
+     * Link wybrany przez człowieka leży na domenie producenta z konfiguracji (isOfficialCatalogUrl — nie na domenie
+     * odgadniętej z wyników) i ta strona jest w puli z treścią karty. Link z synchronizacji B2B tu nie wchodzi
+     * (trustedShopUrl), a strona pusta albo niepobrana zostawia sklepy jako źródło.
+     *
+     * @param  list<array<string, mixed>>  $pages
+     */
+    private function trustedManufacturerCardInPool(Product $product, array $pages): bool
+    {
+        $trusted = $product->trustedShopUrl();
+        if ($trusted === null || ! $this->identity->isOfficialCatalogUrl($trusted, $product)) {
+            return false;
+        }
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '' && $product->isTrustedShopUrl($url)
+                && mb_strlen(trim((string) ($page['text'] ?? ''))) >= self::MFR_CARD_MIN_CHARS) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
