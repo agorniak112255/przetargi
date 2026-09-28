@@ -152,9 +152,38 @@ final class B2bAccountSyncRunner
             }
             $progress?->log('info', strtok($summary, "\n") ?: $summary);
             $progress?->finish($status, $message);
+            if (! $result['cancelled']) {
+                $this->queueDescriptionSupplement($account);
+            }
         }
 
         return [...$result, 'sync_run_id' => $progress?->run()->id, 'price_list_id' => $priceList?->id];
+    }
+
+    /**
+     * Krótkie opisy B2B kart konta do uzupełnienia ze stron konta (decyzja użytkownika 28.09.2026) — po przebiegu,
+     * bo dopiero wtedy karty mają aktualny tekst ze sklepu; tylko karty jeszcze niepróbowane dla tego wejścia.
+     * Błąd zlecania nie psuje zakończonego przebiegu.
+     */
+    private function queueDescriptionSupplement(B2bAccount $account): void
+    {
+        try {
+            if ($account->enrichmentHosts() === []) {
+                return;
+            }
+            $queued = app(B2bDescriptionSupplement::class)->queue($account, null, true);
+            if ($queued['queued'] > 0) {
+                Log::info('Krótkie opisy B2B zlecone do uzupełnienia ze stron konta', [
+                    'b2b_account_id' => $account->id,
+                    'queued' => $queued['queued'],
+                ]);
+            }
+        } catch (Throwable $e) {
+            Log::warning('Zlecenie uzupełnienia krótkich opisów B2B nie powiodło się', [
+                'b2b_account_id' => $account->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

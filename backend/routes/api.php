@@ -299,6 +299,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:b2b_accounts.view');
     Route::post('/b2b-accounts/{b2bAccount}/size-merge', [B2bAccountController::class, 'startSizeMerge'])
         ->middleware('permission:b2b_accounts.manage');
+    // „Uzupełnij krótkie opisy” — karty z krótkim opisem z B2B szukane najpierw na stronach z opisami konta
+    Route::post('/b2b-accounts/{b2bAccount}/supplement-descriptions', [B2bAccountController::class, 'supplementDescriptions'])
+        ->middleware('permission:b2b_accounts.manage');
     Route::get('/b2b-accounts/{b2bAccount}/discount-rules', [B2bDiscountRuleController::class, 'index'])
         ->middleware('permission:b2b_accounts.view');
     Route::put('/b2b-accounts/{b2bAccount}/discount-rules', [B2bDiscountRuleController::class, 'update'])

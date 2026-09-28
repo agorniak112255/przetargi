@@ -13,6 +13,7 @@ use App\Models\ProductEnrichmentCache;
 use App\Models\ProductImage;
 use App\Models\ProductSourcePrice;
 use App\Services\B2b\B2bDescriptionSource;
+use App\Services\B2b\B2bDescriptionSupplement;
 use App\Services\Catalog\CardOwnership;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Support\BhpAttributeNormalizer;
@@ -63,6 +64,7 @@ final class B2bClearFileLegacyCommand extends Command
         'replaced_description_at',
         'replaced_description_hash',
         'b2b_sources',
+        'b2b_supplement',
         'merged_size_skus',
     ];
 
@@ -165,6 +167,10 @@ final class B2bClearFileLegacyCommand extends Command
             if (in_array($product->enrichment_status, [Product::ENRICHMENT_QUEUED, Product::ENRICHMENT_RUNNING], true)) {
                 // zadanie w kolejce i tak zapisze wynik wzbogacania — sprzątanie przed nim nic by nie dało
                 $plan['notes'][] = 'wzbogacanie w toku — dane AI zostają';
+            } elseif (B2bDescriptionSupplement::isSupplementResult((string) ($product->description ?? ''), $product->enrichment_payload)) {
+                // Opis napisało uzupełnianie krótkiego opisu B2B ze stron konta (SupplementB2bDescriptionJob), a dane
+                // w payloadzie pochodzą z tego samego opisu — decyzja użytkownika 28.09.2026: zostają.
+                $plan['notes'][] = 'opis uzupełniony ze stron konta — dane zostają';
             } elseif (isset($fromB2b[(int) $product->id])) {
                 $hasAi = $removedKeys !== [] || trim((string) $product->norms) !== ''
                     || ! in_array($product->enrichment_status, [Product::ENRICHMENT_NONE, null], true);

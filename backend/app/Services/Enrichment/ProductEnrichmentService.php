@@ -23,7 +23,9 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\B2b\B2bDescriptionSource;
+use App\Services\B2b\B2bDescriptionSupplement;
 use App\Services\B2b\B2bDocumentText;
+use App\Services\B2b\B2bSupplementContext;
 use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\ProductAccessorySyncService;
 use App\Support\BhpAttributeNormalizer;
@@ -5237,6 +5239,333 @@ SYS,
             'dropped' => array_values(array_unique($dropped)),
             'dropped_claims' => array_values(array_unique($droppedClaims)),
         ];
+    }
+
+    /** Tyle stron z internetu idzie do modelu przy uzupełnianiu krótkiego opisu B2B. */
+    private const SUPPLEMENT_WEB_PAGES = 4;
+
+    /**
+     * Krótki opis z konta B2B uzupełniony ze stron wyrobu w internecie (decyzja użytkownika 28.09.2026, kontrakt
+     * „uzupełnianie krótkich opisów B2B”). Karta konta ma opis z B2B krótszy niż próg konta — szukamy wyrobu najpierw
+     * na stronach wskazanych przy koncie ($context->hosts: indeks lokalny ograniczony do tych hostów, potem site: w
+     * wyszukiwarce), a gdy tam nic, jak zwykle (paczka wyszukiwania karty). Pobrane strony przechodzą bramkę tożsamości
+     * (keepConfirmedCardPages) i filtr stron; do modelu idą najwyżej SUPPLEMENT_WEB_PAGES stron, strony konta pierwsze.
+     *
+     * Źródła dostawcy idą do modelu bez bramki (tożsamość gwarantuje powiązanie B2B) i jako pierwszy tekst: opis z B2B,
+     * tabelka ze strony sklepu (shop_fields_summary), karta katalogowa konta i normy producenta
+     * (products.manufacturer_norms). Przy sprzeczności obowiązuje dostawca; wartości wyłącznie ze źródeł
+     * (EnrichmentDescriptionTemplates::sourcesOnlyRules).
+     *
+     * Odrzucenie (karta zostaje z opisem z B2B):
+     * - brak potwierdzonej strony z internetu przed modelem albo po filtrze stron → B2bSupplementNoPages;
+     * - model nie potwierdził źródeł (confidence 0), opis nie jest opisem wyrobu;
+     * - kod normy albo poziomu w opisie bez pokrycia w źródłach — przy niepustych normach producenta pokrycie liczy się
+     *   wyłącznie w źródłach dostawcy (sklep nie dopisuje normy wbrew producentowi);
+     * - po usunięciu zdań z twierdzeniami spoza źródeł (SourceClaimGuard) opis nie jest dłuższy od opisu z B2B.
+     *
+     * Niczego nie zapisuje w bazie (poza pamięcią wyszukiwań) — wynik zapisuje SupplementB2bDescriptionJob.
+     *
+     * @return array{description: string, payload: array<string, mixed>, norms: string|null, packaging: string|null, web_source_urls: list<string>, dropped: list<string>, dropped_claims: list<string>}
+     *
+     * @throws B2bSourcesDescriptionRejected
+     * @throws B2bSupplementNoPages
+     */
+    public function supplementB2bDescription(Product $product, B2bSupplementContext $context): array
+    {
+        $b2bText = trim($context->b2bText);
+        $this->attemptLog()->reset();
+        $this->attemptLog()->add('start', trim($product->sku.' · '.$product->name.' · uzupełnienie opisu B2B'));
+
+        $webPages = $this->supplementWebPages($product, $context);
+        if ($webPages === []) {
+            throw new B2bSupplementNoPages('brak potwierdzonej strony wyrobu w internecie');
+        }
+        $webPages = $this->sanitizePagesWithLlm($product, $webPages);
+        $webPages = $this->fitPagesToBudget($webPages, self::SUPPLEMENT_WEB_PAGES, 4000, 12000);
+        if ($webPages === []) {
+            throw new B2bSupplementNoPages('strony wyrobu z internetu nie dały faktów o wyrobie (filtr stron)');
+        }
+        $webUrls = array_values(array_unique(array_filter(array_map(
+            static fn (array $page): string => (string) ($page['url'] ?? ''),
+            $webPages
+        ))));
+
+        // źródła dostawcy — jeden tekst, przed stronami z internetu
+        $shopFields = trim((string) ($product->shop_fields_summary ?? ''));
+        $sheet = DescribeB2bProductFromDatasheetJob::datasheet((int) $product->id, $context->accountId);
+        $sheetText = $sheet !== null ? trim(B2bDocumentText::forCard((string) $sheet->text)) : '';
+        $sheetUrl = $sheet !== null ? (string) $sheet->source_url : '';
+        $normRows = ManufacturerNormFacts::rows($product->manufacturer_norms);
+        $normsText = $normRows === [] ? '' : implode("\n", array_map(
+            static fn (array $row): string => '- '.$row['label'].($row['value'] !== '' ? ': '.$row['value'] : ''),
+            $normRows
+        ));
+        // Jeden tekst dostawcy mieści się w limicie strony dla modelu (fitPagesToBudget: 8000 znaków) — resztę miejsca
+        // dostaje karta katalogowa, więc model widzi to samo, z czym potem porównujemy kody norm i twierdzenia.
+        $supplierParts = [];
+        // adresy źródeł dostawcy, które naprawdę weszły do tekstu dla modelu — pochodzenie opisu w source_urls
+        $supplierUrls = [$context->b2bUrl];
+        if ($b2bText !== '') {
+            $supplierParts[] = 'Opis wyrobu z konta B2B dostawcy'.($context->b2bUrl !== '' ? ' ('.$context->b2bUrl.')' : '').":\n"
+                .mb_substr($b2bText, 0, 3000);
+        }
+        if ($normsText !== '') {
+            $normsUrl = ManufacturerNormFacts::sourceUrl($product->manufacturer_norms);
+            $supplierParts[] = 'Normy producenta'.($normsUrl !== null ? ' ('.$normsUrl.')' : '').", dosłownie:\n"
+                .mb_substr($normsText, 0, 1500);
+            $supplierUrls[] = (string) $normsUrl;
+        }
+        if ($shopFields !== '') {
+            $supplierParts[] = "Parametry ze strony sklepu:\n".mb_substr($shopFields, 0, 1500);
+        }
+        if ($sheetText !== '') {
+            $head = 'Karta katalogowa dostawcy'.($sheetUrl !== '' ? ' ('.$sheetUrl.')' : '').":\n";
+            $room = 7900 - mb_strlen(implode("\n\n", $supplierParts)) - mb_strlen($head);
+            if ($room >= 300) {
+                $supplierParts[] = $head.mb_substr($sheetText, 0, $room);
+                $supplierUrls[] = $sheetUrl;
+            } else {
+                $sheetText = '';
+            }
+        }
+        $supplierText = implode("\n\n", $supplierParts);
+        $pages = [
+            ...($supplierText !== '' ? [['url' => $context->b2bUrl !== '' ? $context->b2bUrl : 'zrodla-dostawcy-b2b', 'text' => $supplierText]] : []),
+            ...$webPages,
+        ];
+        $withManufacturerNorms = $normRows !== [];
+
+        $extracted = $this->extractWithLlm($product, [], $pages, 'Źródła — wyłącznie teksty poniżej, nic spoza nich:'
+            ."\n1. Pierwszy tekst — źródła dostawcy: opis wyrobu z konta B2B"
+            .($shopFields !== '' ? ', parametry ze strony sklepu' : '')
+            .($sheetText !== '' ? ', karta katalogowa dostawcy' : '')
+            .($withManufacturerNorms ? ', normy producenta' : '')
+            .'. Gdy inne źródło podaje inną wartość, obowiązuje ten tekst.'
+            ."\n2. Kolejne teksty — strony tego wyrobu znalezione w internecie (".implode(', ', $webUrls).'). Uzupełniają'
+            .' opis dostawcy o fakty, których w nim brak.'
+            .($withManufacturerNorms
+                ? "\nOznaczenia norm i poziomów ochrony podawaj wyłącznie takie, jakie stoją w pierwszym tekście (źródła"
+                    .' dostawcy i normy producenta) — normy i poziomy podane tylko na stronach z internetu pomiń.'
+                : '')
+            ."\n\n".EnrichmentDescriptionTemplates::sourcesOnlyRules(
+                'ZASADY TEGO OPISU — mają pierwszeństwo przed instrukcją rodziny i przed zasadami pisania z polecenia systemowego:'
+            ));
+        $extracted = $this->enrichStructuredFieldsFromPages($extracted, $pages);
+
+        $description = ProductDescriptionText::plain($this->modelDescription($extracted));
+        if ($description === '') {
+            throw new B2bSourcesDescriptionRejected($this->composeFullDescription($extracted) !== ''
+                ? 'model nie potwierdził źródeł (confidence 0)'
+                : 'model nie zwrócił opisu');
+        }
+        if ($this->looksLikeMissingCardMeta($description) || $this->looksLikeRawLocaleDump($description)
+            || $this->looksLikeForeignOrPartsTableDump($description)) {
+            throw new B2bSourcesDescriptionRejected('opis nie jest opisem wyrobu');
+        }
+
+        // kody norm i poziomów: w tekście, który model dostał — przy normach producenta tylko w źródłach dostawcy
+        $webText = implode("\n", array_map(static fn (array $page): string => (string) ($page['text'] ?? ''), $webPages));
+        $supplierKey = self::claimKey($supplierText);
+        $allKey = self::claimKey($supplierText."\n".$webText);
+        $claimKeys = $withManufacturerNorms ? $supplierKey : $allKey;
+        $unsupported = array_values(array_filter(
+            self::sourceClaims($description),
+            static fn (string $code): bool => ! str_contains($claimKeys, $code),
+        ));
+        if ($unsupported !== []) {
+            throw new B2bSourcesDescriptionRejected(($withManufacturerNorms
+                ? 'oznaczenia albo poziomy norm spoza źródeł dostawcy (karta ma normy producenta) w opisie: '
+                : 'oznaczenia albo poziomy norm spoza źródeł w opisie: ').implode(', ', $unsupported));
+        }
+
+        $guard = new SourceClaimGuard($supplierText."\n".$webText);
+        $filtered = $guard->filterDescription($description);
+        $droppedClaims = $filtered['dropped'];
+        $description = $filtered['text'];
+        if (! Product::isDescriptionText($description)
+            || B2bDescriptionSupplement::plainLength($description) <= B2bDescriptionSupplement::plainLength($b2bText)) {
+            throw new B2bSourcesDescriptionRejected('opis nie dłuższy niż opis z B2B'
+                .($droppedClaims !== [] ? ' po usunięciu twierdzeń spoza źródeł: '.mb_substr(implode(' | ', $droppedClaims), 0, 400) : ''));
+        }
+
+        $fields = $this->payloadFromExtraction($product, $extracted, $description, $pages);
+        $dropped = [];
+        $supported = static function (string $text) use ($claimKeys, $guard, &$dropped, &$droppedClaims): bool {
+            foreach (self::sourceClaims($text) as $code) {
+                if (! str_contains($claimKeys, $code)) {
+                    $dropped[] = $text;
+
+                    return false;
+                }
+            }
+            if (! $guard->keeps($text)) {
+                $claims = $guard->uncoveredClaims($text);
+                $droppedClaims[] = ($claims !== [] ? implode(', ', $claims) : 'brak danych').': '.$text;
+
+                return false;
+            }
+
+            return true;
+        };
+        $lists = $fields['lists'];
+        foreach (['features', 'norms', 'certificates', 'materials', 'use_cases', 'specs'] as $key) {
+            $lists[$key] = array_values(array_filter($lists[$key], $supported));
+        }
+        foreach ($lists['attributes'] as $key => $value) {
+            if (is_string($value) && ! $supported($value)) {
+                unset($lists['attributes'][$key]);
+            }
+        }
+
+        return [
+            'description' => mb_substr($description, 0, 10000),
+            'payload' => [
+                ...$lists,
+                'source_urls' => array_values(array_unique(array_filter(
+                    [...$supplierUrls, ...$webUrls],
+                    static fn (string $u): bool => $u !== ''
+                ))),
+                'primary_source_url' => $webUrls[0],
+                'primary_source_kind' => 'b2b_supplement',
+                'confidence' => (float) ($extracted['confidence'] ?? 0),
+                'from_cache' => false,
+            ],
+            'norms' => $lists['norms'] !== [] ? implode(', ', array_slice($lists['norms'], 0, 8)) : null,
+            'packaging' => $fields['packaging'],
+            'web_source_urls' => $webUrls,
+            'dropped' => array_values(array_unique($dropped)),
+            'dropped_claims' => array_values(array_unique($droppedClaims)),
+        ];
+    }
+
+    /**
+     * Potwierdzone strony wyrobu z internetu dla supplementB2bDescription, przed filtrem stron: (1) indeks lokalny
+     * ograniczony do hostów konta, (2) site: na hostach konta, (3) zwykła paczka wyszukiwania. Kolejny krok tylko wtedy,
+     * gdy poprzednie nie dały żadnej potwierdzonej strony. Strony z hostów konta pierwsze, dalej jak w zwykłym opisie
+     * (producent, ranga domen); marka „tylko producent” z kartą producenta w puli — same strony producenta.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function supplementWebPages(Product $product, B2bSupplementContext $context): array
+    {
+        $hosts = [];
+        foreach ($context->hosts as $host) {
+            $bare = preg_replace('/^www\./', '', mb_strtolower(trim((string) $host))) ?? '';
+            if ($bare !== '') {
+                $hosts[$bare] = true;
+            }
+        }
+        $hosts = array_keys($hosts);
+        $tried = [];
+
+        $pages = [];
+        if ($hosts !== []) {
+            $pages = $this->fetchSupplementPages($product, $context, $this->search->catalogHitsOnHosts($product, $hosts), [], $tried);
+            if ($pages === []) {
+                $pages = $this->fetchSupplementPages($product, $context, $this->search->searchOnHosts($product, $hosts), [], $tried);
+            }
+        }
+        $mfrDomains = $this->manufacturers->domainsFor($product);
+        $searchErrors = [];
+        if ($pages === []) {
+            $pack = $this->searchPackForEnrichment($product);
+            $results = $pack['results'];
+            $searchErrors = is_array($pack['errors'] ?? null) ? $pack['errors'] : [];
+            $mfrDomains = $this->manufacturers->discoverFromResults($product, array_column($results, 'url'));
+            $pages = $this->fetchSupplementPages(
+                $product,
+                $context,
+                $this->rankResultsForDescription($results, $product, $mfrDomains),
+                $mfrDomains,
+                $tried
+            );
+        }
+        if ($pages === []) {
+            // „brak stron” przy awarii wyszukiwarki to nie wynik — próba ma wrócić do ponowienia, a nie zamknąć się
+            // statusem no_pages dla tych samych źródeł
+            $outage = $this->engineOutageDetail(implode(' | ', array_slice($searchErrors, 0, 2)));
+            if ($outage !== null) {
+                throw new RuntimeException('Wyszukiwarka nie odpowiedziała przy uzupełnianiu opisu '.$product->sku
+                    .' — nie wiadomo, czy strona wyrobu istnieje. '.$outage);
+            }
+            $this->attemptLog()->add('desc', 'uzupełnienie opisu B2B: brak potwierdzonej strony wyrobu');
+
+            return [];
+        }
+
+        $onAccount = [];
+        $rest = [];
+        foreach ($pages as $page) {
+            if ($this->urlOnHosts((string) ($page['url'] ?? ''), $hosts)) {
+                $onAccount[] = $page;
+            } else {
+                $rest[] = $page;
+            }
+        }
+        $pages = array_merge(
+            $this->orderPagesForDescription($onAccount, $product, $mfrDomains),
+            $this->orderPagesForDescription($rest, $product, $mfrDomains)
+        );
+        $pages = $this->manufacturerOnlyPages($product, $pages)['pages'];
+        $pages = array_slice($pages, 0, self::SUPPLEMENT_WEB_PAGES);
+        $this->attemptLog()->add('page', 'uzupełnienie opisu B2B: '.count($pages).' stron', urls: array_column($pages, 'url'));
+
+        return $pages;
+    }
+
+    /**
+     * Pobranie i bramka tożsamości dla jednej partii wyników. Adres karty u dostawcy (b2bUrl i link synchronizacji
+     * w shop_source_url) to źródło dostawcy, a nie strona z internetu — nie liczy się do stron; tak samo hosty
+     * wykluczone (dropBlockedSourceHosts) i adresy sprawdzone w poprzedniej partii.
+     *
+     * @param  list<array<string, mixed>>  $results
+     * @param  list<string>  $mfrDomains
+     * @param  array<string, true>  $tried
+     * @return list<array<string, mixed>>
+     */
+    private function fetchSupplementPages(Product $product, B2bSupplementContext $context, array $results, array $mfrDomains, array &$tried): array
+    {
+        $supplierUrl = static fn (string $url): bool => ($context->b2bUrl !== ''
+                && Product::normalizeShopUrl($url) === Product::normalizeShopUrl($context->b2bUrl))
+            || ($product->isHintedShopUrl($url) && ! $product->isTrustedShopUrl($url));
+        $fresh = [];
+        foreach ($this->dropBlockedSourceHosts($results, $product) as $row) {
+            $url = (string) ($row['url'] ?? '');
+            $key = mb_strtolower($url);
+            if ($url === '' || isset($tried[$key]) || $supplierUrl($url) || ProductImageDownloader::looksLikeImageUrl($url)) {
+                continue;
+            }
+            $tried[$key] = true;
+            $fresh[] = $row;
+        }
+        if ($fresh === []) {
+            return [];
+        }
+        $fetched = $this->pages->fetch($fresh, (string) $product->sku, self::SUPPLEMENT_WEB_PAGES, [], $product);
+        $this->attemptLog()->add('fetch', count($fetched['pages']).' stron HTML', urls: array_column($fetched['pages'], 'url'));
+
+        return array_values(array_filter(
+            $this->keepConfirmedCardPages($product, $fetched['pages']),
+            static fn (array $page): bool => ! $supplierUrl((string) ($page['url'] ?? ''))
+        ));
+    }
+
+    /**
+     * @param  list<string>  $hosts  bez „www.”, małymi literami
+     */
+    private function urlOnHosts(string $url, array $hosts): bool
+    {
+        $host = preg_replace('/^www\./', '', mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))) ?? '';
+        if ($host === '') {
+            return false;
+        }
+        foreach ($hosts as $allowed) {
+            if ($host === $allowed || str_ends_with($host, '.'.$allowed)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

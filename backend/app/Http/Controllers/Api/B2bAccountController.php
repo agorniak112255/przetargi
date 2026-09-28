@@ -7,12 +7,16 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Jobs\MergeB2bSizePricesJob;
 use App\Models\B2bAccount;
+use App\Models\B2bDescriptionSupplementAttempt;
 use App\Models\B2bSyncRun;
+use App\Models\CatalogSearchSite;
+use App\Models\ManufacturerSite;
 use App\Models\Product;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Services\B2b\B2bCodeLoginSite;
 use App\Services\B2b\B2bConnectorRegistry;
+use App\Services\B2b\B2bDescriptionSupplement;
 use App\Services\B2b\B2bSizePriceMerger;
 use App\Services\Pricing\ProductEffectivePrice;
 use Illuminate\Contracts\Encryption\DecryptException;
@@ -35,12 +39,20 @@ class B2bAccountController extends Controller
 
     public function index(): JsonResponse
     {
+        $accounts = B2bAccount::query()
+            ->with(['creator:id,name', 'updater:id,name'])
+            ->orderBy('id')
+            ->get();
+
+        // Liczniki prób i hosty z indeksu — po jednym zapytaniu na całą listę, nie na konto.
+        $stats = $this->supplementStats($accounts->pluck('id')->map(static fn ($id): int => (int) $id)->all());
+        $indexed = $this->indexedHosts(
+            $accounts->flatMap(static fn (B2bAccount $account): array => $account->enrichmentHosts())->unique()->values()->all()
+        );
+
         return response()->json(
-            B2bAccount::query()
-                ->with(['creator:id,name', 'updater:id,name'])
-                ->orderBy('id')
-                ->get()
-                ->map(fn (B2bAccount $account): array => $this->view($account))
+            $accounts
+                ->map(fn (B2bAccount $account): array => $this->view($account, $stats[(int) $account->id] ?? null, $indexed))
                 ->values()
         );
     }
@@ -360,6 +372,48 @@ class B2bAccountController extends Controller
     }
 
     /**
+     * „Uzupełnij krótkie opisy”: karty konta z opisem z B2B krótszym niż próg konta, szukane najpierw na stronach
+     * z opisami konta (B2bDescriptionSupplement). apply=false — sam podgląd liczby kart, nic nie zleca.
+     */
+    public function supplementDescriptions(Request $request, B2bAccount $b2bAccount, B2bDescriptionSupplement $supplement): JsonResponse
+    {
+        $data = $request->validate([
+            'apply' => ['sometimes', 'boolean'],
+            'only_untried' => ['sometimes', 'boolean'],
+        ]);
+        if ($b2bAccount->enrichmentHosts() === []) {
+            return response()->json([
+                'message' => 'Konto nie ma stron z opisami — dodaj je w edycji konta („Strony z opisami”).',
+            ], 422);
+        }
+
+        $onlyUntried = (bool) ($data['only_untried'] ?? true);
+        $minChars = $b2bAccount->enrichmentMinChars();
+
+        if (! (bool) ($data['apply'] ?? false)) {
+            $candidates = count($supplement->candidateIds($b2bAccount, $onlyUntried));
+
+            return response()->json([
+                'candidates' => $candidates,
+                'queued' => 0,
+                'message' => $candidates === 0
+                    ? "Brak kart z opisem z B2B krótszym niż {$minChars} znaków do uzupełnienia."
+                    : "Kart z opisem z B2B krótszym niż {$minChars} znaków do uzupełnienia: {$candidates}.",
+            ]);
+        }
+
+        $result = $supplement->queue($b2bAccount, null, $onlyUntried);
+
+        return response()->json([
+            'candidates' => (int) $result['candidates'],
+            'queued' => (int) $result['queued'],
+            'message' => (int) $result['queued'] === 0
+                ? 'Nic nie zlecono — brak kart do uzupełnienia.'
+                : "Zlecono uzupełnianie opisów w tle, kart: {$result['queued']}.",
+        ]);
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function sizeMergeView(B2bAccount $account, B2bSizePriceMerger $merger): array
@@ -510,7 +564,23 @@ class B2bAccountController extends Controller
             'connector' => ['nullable', 'string', Rule::in($this->connectors->keys())],
             'sync_frequency' => ['sometimes', 'string', Rule::in(B2bAccount::FREQUENCIES)],
             'sync_images' => ['sometimes', 'boolean'],
+            // Strony z opisami (uzupełnianie krótkich opisów B2B) — brak klucza w żądaniu = lista bez zmian.
+            'enrichment_sites' => ['sometimes', 'nullable', 'array', 'max:20'],
+            'enrichment_sites.*' => ['nullable', 'string', 'max:255'],
+            'enrichment_min_chars' => ['sometimes', 'nullable', 'integer', 'min:200', 'max:5000'],
+        ], [
+            'enrichment_sites.array' => 'Strony z opisami: podaj listę adresów.',
+            'enrichment_sites.max' => 'Strony z opisami: najwyżej :max stron.',
+            'enrichment_sites.*.string' => 'Strony z opisami: każdy wpis musi być adresem strony.',
+            'enrichment_sites.*.max' => 'Strony z opisami: adres dłuższy niż :max znaków.',
+            'enrichment_min_chars.integer' => 'Próg długości opisu musi być liczbą całkowitą.',
+            'enrichment_min_chars.min' => 'Próg długości opisu: co najmniej :min znaków.',
+            'enrichment_min_chars.max' => 'Próg długości opisu: najwyżej :max znaków.',
         ]);
+
+        if (array_key_exists('enrichment_sites', $data)) {
+            $data['enrichment_sites'] = $this->enrichmentSites((array) ($data['enrichment_sites'] ?? []));
+        }
 
         if (array_key_exists('contractor_code', $data)) {
             $data['contractor_code'] = trim((string) $data['contractor_code']) ?: null;
@@ -531,11 +601,103 @@ class B2bAccountController extends Controller
     }
 
     /**
+     * Wpisy „Strony z opisami” (adres strony albo domena) → hosty jak strony producentów (bez www., bez ścieżki),
+     * bez powtórzeń. Pusta lista = null (konto bez uzupełniania).
+     *
+     * @param  array<int|string, mixed>  $sites
+     * @return list<string>|null
+     *
+     * @throws ValidationException
+     */
+    private function enrichmentSites(array $sites): ?array
+    {
+        $hosts = [];
+        foreach ($sites as $site) {
+            $raw = trim((string) $site);
+            if ($raw === '') {
+                continue;
+            }
+            $host = ManufacturerSite::normalizeHost($raw);
+            // ta sama reguła co CatalogSearchHostService::looksLikeHost (Administracja → Strony wyszukiwarka)
+            if (preg_match('/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i', $host) !== 1) {
+                throw ValidationException::withMessages([
+                    'enrichment_sites' => "Strony z opisami: „{$raw}” to nie jest poprawny adres strony ani domena (np. sklepbhp.pl).",
+                ]);
+            }
+            $hosts[$host] = true;
+        }
+
+        return $hosts === [] ? null : array_keys($hosts);
+    }
+
+    /**
+     * Liczniki prób uzupełniania opisów według statusu — jednym zapytaniem grupującym dla wszystkich podanych kont.
+     *
+     * @param  list<int>  $accountIds
+     * @return array<int, array<string, int>>
+     */
+    private function supplementStats(array $accountIds): array
+    {
+        $empty = array_fill_keys([
+            B2bDescriptionSupplementAttempt::STATUS_QUEUED,
+            B2bDescriptionSupplementAttempt::STATUS_REPLACED,
+            B2bDescriptionSupplementAttempt::STATUS_KEPT,
+            B2bDescriptionSupplementAttempt::STATUS_NO_PAGES,
+            B2bDescriptionSupplementAttempt::STATUS_FAILED,
+        ], 0);
+        $out = array_fill_keys($accountIds, $empty);
+        if ($accountIds === []) {
+            return $out;
+        }
+
+        $rows = B2bDescriptionSupplementAttempt::query()
+            ->whereIn('b2b_account_id', $accountIds)
+            ->groupBy('b2b_account_id', 'status')
+            ->selectRaw('b2b_account_id, status, COUNT(*) AS n')
+            ->toBase()
+            ->get();
+        foreach ($rows as $row) {
+            $status = (string) $row->status;
+            if (isset($out[(int) $row->b2b_account_id]) && array_key_exists($status, $empty)) {
+                $out[(int) $row->b2b_account_id][$status] = (int) $row->n;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Które z podanych hostów są w domenach dodanych do indeksu (CatalogSearchSite) — reszta to podpowiedź w panelu,
+     * że program nie zna mapy tej strony.
+     *
+     * @param  list<string>  $hosts
+     * @return array<string, true>
+     */
+    private function indexedHosts(array $hosts): array
+    {
+        if ($hosts === []) {
+            return [];
+        }
+
+        $indexed = [];
+        foreach (CatalogSearchSite::query()->whereIn('host', $hosts)->pluck('host') as $host) {
+            $indexed[ManufacturerSite::normalizeHost((string) $host)] = true;
+        }
+
+        return $indexed;
+    }
+
+    /**
+     * @param  array<string, int>|null  $supplementStats  liczniki z supplementStats() (lista kont); null = policz dla konta
+     * @param  array<string, true>|null  $indexedHosts  wynik indexedHosts() (lista kont); null = sprawdź hosty konta
      * @return array<string, mixed>
      */
-    private function view(B2bAccount $account): array
+    private function view(B2bAccount $account, ?array $supplementStats = null, ?array $indexedHosts = null): array
     {
         $raw = $account->getRawOriginal('password');
+        $enrichmentHosts = $account->enrichmentHosts();
+        $supplementStats ??= $this->supplementStats([(int) $account->id])[(int) $account->id];
+        $indexedHosts ??= $this->indexedHosts($enrichmentHosts);
 
         return [
             'id' => $account->id,
@@ -548,6 +710,15 @@ class B2bAccountController extends Controller
             'connector_label' => $this->connectors->label($account->connector),
             'sync_frequency' => $account->sync_frequency ?? 'off',
             'sync_images' => (bool) ($account->sync_images ?? true),
+            // uzupełnianie krótkich opisów B2B ze stron konta (B2bDescriptionSupplement)
+            'enrichment_sites' => $enrichmentHosts,
+            'enrichment_min_chars' => $account->enrichment_min_chars,
+            'enrichment_min_chars_effective' => $account->enrichmentMinChars(),
+            'supplement_stats' => $supplementStats,
+            'enrichment_hosts_not_indexed' => array_values(array_filter(
+                $enrichmentHosts,
+                static fn (string $host): bool => ! isset($indexedHosts[$host]),
+            )),
             'sync_requested_at' => $account->sync_requested_at?->toIso8601String(),
             'last_sync_status' => $account->last_sync_status,
             'last_sync_started_at' => $account->last_sync_started_at?->toIso8601String(),

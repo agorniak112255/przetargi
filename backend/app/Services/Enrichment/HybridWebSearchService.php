@@ -749,6 +749,170 @@ class HybridWebSearchService
     }
 
     /**
+     * Karty z lokalnego indeksu ograniczone do hostów — uzupełnianie krótkiego opisu B2B zaczyna od stron wskazanych
+     * przy koncie (ProductEnrichmentService::supplementB2bDescription). Filtr hostów stoi w SQL indeksu
+     * (CatalogIndexSearch::findFor $onlyHosts), a trafienia przechodzą ten sam filtr tożsamości co zwykłe trafienia
+     * z indeksu (confirmedCatalogHits). Poza tą ścieżką nic się nie zmienia: zwykłe wyszukiwanie nie widzi tych hostów.
+     *
+     * @param  list<string>  $hosts
+     * @return list<array{url: string, title: string, snippet: string}>
+     */
+    public function catalogHitsOnHosts(Product $product, array $hosts): array
+    {
+        $hosts = $this->normalizedHosts($hosts);
+        if ($hosts === []) {
+            return [];
+        }
+        try {
+            $raw = $this->catalog->findFor($product, [], $hosts);
+        } catch (Throwable $e) {
+            Log::info('Catalog index lookup on account hosts failed', [
+                'product_id' => $product->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
+        $rejected = [];
+        $hits = array_values(array_filter(
+            $this->confirmedCatalogHits($raw, $product, $rejected),
+            fn (array $row): bool => $this->urlOnHosts((string) $row['url'], $hosts)
+        ));
+        $this->attemptLog()->addRejections(
+            'indeks — strony konta',
+            array_merge($this->catalog->lastRejections(), $rejected)
+        );
+        $this->attemptLog()->add(
+            'catalog',
+            'indeks — strony konta ('.implode(', ', array_slice($hosts, 0, 4)).'): '.count($hits).' kart',
+            urls: array_column($hits, 'url')
+        );
+
+        return $hits;
+    }
+
+    /**
+     * Szukanie karty wyrobu na wskazanych hostach — `site:{host} {fraza katalogowa}` i `site:{host} "{kod}"` przez
+     * zwykłą ścieżkę wyszukiwarki (cachedTavilySearch: pamięć po treści zapytania, filtr tożsamości, tempo i pasy
+     * wyszukiwarki). Osobne od drabinki zwykłego szukania (openSearchQueries tnie site: do 4 i pomija hosty z indeksu,
+     * a paczka prefetchu siedzi w pamięci 2 h) — tu pytamy każdy host konta, także zaindeksowany: indeks zna tylko
+     * tokeny adresu, a wyszukiwarka widzi treść strony. Host, na którym fraza dała kartę z kodem, nie dostaje już
+     * zapytania o kod; szukanie kończy się, gdy uzbiera się tyle kart z kodem, ile stron trafia do modelu.
+     *
+     * @param  list<string>  $hosts
+     * @return list<array{url: string, title: string, snippet: string}> wyłącznie adresy z tych hostów
+     */
+    public function searchOnHosts(Product $product, array $hosts): array
+    {
+        $hosts = $this->normalizedHosts($hosts);
+        if ($hosts === [] || $this->localSearchOnly) {
+            return [];
+        }
+        if ($this->settings->usesTavilySearch()) {
+            $key = $this->settings->resolve()['tavily_api_key'] ?? null;
+            if (! is_string($key) || $key === '') {
+                return [];
+            }
+        }
+        $phrase = $this->identity->catalogSitePhrase($product);
+        if ($phrase === '') {
+            $phrase = trim($this->identity->productNameWithManufacturer($product));
+        }
+        $code = trim(str_replace('"', '', $this->identity->catalogSkuWithoutSize($product)));
+        $codeQuery = $code !== '' ? '"'.$code.'"' : '';
+
+        $profile = $this->settings->tavilySearchProfile();
+        $errors = [];
+        $out = [];
+        $seen = [];
+        foreach ($hosts as $host) {
+            $queries = [];
+            foreach ([$phrase, $codeQuery] as $needle) {
+                if ($needle !== '' && ! in_array($needle, $queries, true)) {
+                    $queries[] = $needle;
+                }
+            }
+            foreach ($queries as $needle) {
+                $found = $this->cachedTavilySearch(
+                    $product,
+                    'site:'.$host.' '.$needle,
+                    [$host],
+                    $profile,
+                    $profile->mode,
+                    'account',
+                    'site',
+                    $errors
+                );
+                $hostCoded = false;
+                foreach ($found['results'] as $row) {
+                    $url = (string) ($row['url'] ?? '');
+                    $key = mb_strtolower($url);
+                    if ($url === '' || isset($seen[$key]) || ! $this->urlOnHosts($url, [$host])) {
+                        continue;
+                    }
+                    $seen[$key] = true;
+                    $out[] = [
+                        'url' => $url,
+                        'title' => (string) ($row['title'] ?? ''),
+                        'snippet' => (string) ($row['snippet'] ?? ''),
+                    ];
+                    $hostCoded = $hostCoded || $this->resultsCarryProductCode([$row], $product) !== [];
+                }
+                if ($hostCoded) {
+                    break;
+                }
+            }
+            if ($this->hasEnoughPageResults($this->resultsCarryProductCode($out, $product), self::OPEN_ENOUGH_PAGES + 1)) {
+                break;
+            }
+        }
+        if ($errors !== []) {
+            Log::info('Account host search errors', [
+                'product_id' => $product->id,
+                'errors' => array_slice($errors, 0, 4),
+            ]);
+        }
+        $coded = $this->resultsCarryProductCode($out, $product);
+
+        return $coded !== [] ? array_values(array_merge($coded, $this->hitsWithoutCodedUrls($out, $coded))) : $out;
+    }
+
+    /**
+     * @param  list<string>  $hosts
+     * @return list<string> bez schematu, ścieżki i „www.”, unikalne
+     */
+    private function normalizedHosts(array $hosts): array
+    {
+        $out = [];
+        foreach ($hosts as $host) {
+            $bare = $this->bareSearchHost(explode('/', (string) preg_replace('#^https?://#i', '', trim((string) $host)))[0]);
+            if ($bare !== '') {
+                $out[$bare] = true;
+            }
+        }
+
+        return array_keys($out);
+    }
+
+    /**
+     * @param  list<string>  $hosts  po normalizedHosts
+     */
+    private function urlOnHosts(string $url, array $hosts): bool
+    {
+        $host = $this->bareSearchHost((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        if ($host === '') {
+            return false;
+        }
+        foreach ($hosts as $allowed) {
+            if ($host === $allowed || str_ends_with($host, '.'.$allowed)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @return list<string>
      */
     private function buildQueries(Product $product, string $phase): array

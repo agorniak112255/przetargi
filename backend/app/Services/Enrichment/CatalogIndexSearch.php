@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services\Enrichment;
 
 use App\Models\CatalogPage;
+use App\Models\ManufacturerSite;
 use App\Models\Product;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\Cache;
@@ -38,6 +39,13 @@ final class CatalogIndexSearch
     /** @var array<string, true> */
     private array $except = [];
 
+    /**
+     * Hosty, do których ogranicza się bieżące findFor (null = cały indeks).
+     *
+     * @var list<string>|null
+     */
+    private ?array $onlyHosts = null;
+
     public function __construct(
         private readonly ProductSearchIdentity $identity,
         private readonly CatalogPageManufacturer $pageManufacturer,
@@ -46,9 +54,14 @@ final class CatalogIndexSearch
 
     /**
      * @param  list<string>  $exceptUrls  karty już sprawdzone — kolejne wywołanie daje następną partię
+     * @param  list<string>|null  $onlyHosts  tylko strony tych hostów (i ich subdomen) — uzupełnianie krótkiego opisu
+     *                                        B2B ze stron wskazanych przy koncie. Filtr stoi w SQL przy doborze kandydatów,
+     *                                        nie po przycięciu puli: przy pospolitym tokenie 400 najlepszych stron całego
+     *                                        indeksu mogłoby nie mieć ani jednej strony z tych hostów. Pusta lista po
+     *                                        normalizacji = brak wyników.
      * @return list<array{url: string, title: string, snippet: string}>
      */
-    public function findFor(Product $product, array $exceptUrls = []): array
+    public function findFor(Product $product, array $exceptUrls = [], ?array $onlyHosts = null): array
     {
         $this->rejections = [];
         $this->except = [];
@@ -58,19 +71,38 @@ final class CatalogIndexSearch
                 $this->except[$key] = true;
             }
         }
-
-        // Model z kolumny cennika („RADIM”, „BEDFORD”) idzie pierwszy: karta „bluza-kucharska-radim”
-        // niesie tylko to jedno rzadkie słowo i przegrywała ranking z kartami, które zbierały
-        // pospolite tokeny z angielskiej nazwy („chef”, „cotton”, „1150”) — batch #307, Canis.
-        $hits = $this->mergeHits(
-            $this->byModelName($product),
-            $this->mergeHits($this->byCode($product), $this->byBrandAndName($product))
-        );
-        if ($hits !== []) {
-            return $hits;
+        $this->onlyHosts = null;
+        if ($onlyHosts !== null) {
+            $hosts = [];
+            foreach ($onlyHosts as $host) {
+                $bare = ManufacturerSite::normalizeHost((string) $host);
+                if ($bare !== '') {
+                    $hosts[$bare] = true;
+                }
+            }
+            if ($hosts === []) {
+                return [];
+            }
+            $this->onlyHosts = array_keys($hosts);
         }
 
-        return $this->byDistinctiveName($product);
+        try {
+            // Model z kolumny cennika („RADIM”, „BEDFORD”) idzie pierwszy: karta „bluza-kucharska-radim”
+            // niesie tylko to jedno rzadkie słowo i przegrywała ranking z kartami, które zbierały
+            // pospolite tokeny z angielskiej nazwy („chef”, „cotton”, „1150”) — batch #307, Canis.
+            $hits = $this->mergeHits(
+                $this->byModelName($product),
+                $this->mergeHits($this->byCode($product), $this->byBrandAndName($product))
+            );
+            if ($hits !== []) {
+                return $hits;
+            }
+
+            return $this->byDistinctiveName($product);
+        } finally {
+            // filtr hostów dotyczy tylko tego wywołania — usługa jest współdzielona z tym samym przebiegiem
+            $this->onlyHosts = null;
+        }
     }
 
     /**
@@ -372,6 +404,7 @@ final class CatalogIndexSearch
             $bindings[] = (string) $token;
             $bindings[] = $weight;
         }
+        $this->restrictToHosts($query, 't.catalog_page_id');
         $query->select('t.catalog_page_id')
             ->selectRaw('SUM(CASE t.token '.implode(' ', $cases).' ELSE 0 END) as score', $bindings)
             ->groupBy('t.catalog_page_id');
@@ -385,6 +418,53 @@ final class CatalogIndexSearch
         }
 
         return $out;
+    }
+
+    /**
+     * Ogranicza zapytanie o tokeny do stron z hostów findFor(..., $onlyHosts): host strony w indeksie równy albo jego
+     * subdomena. Indeks zapisuje host bez „www.”, ale starsze wiersze bywały z nim — oba zapisy.
+     */
+    private function restrictToHosts(Builder $query, string $pageIdColumn): void
+    {
+        if ($this->onlyHosts === null) {
+            return;
+        }
+        $hosts = $this->onlyHosts;
+        $query->whereExists(function ($q) use ($hosts, $pageIdColumn): void {
+            $q->select(DB::raw(1))
+                ->from('catalog_pages as hp')
+                ->whereColumn('hp.id', $pageIdColumn)
+                ->where(function ($inner) use ($hosts): void {
+                    $exact = [];
+                    foreach ($hosts as $host) {
+                        $exact[] = $host;
+                        $exact[] = 'www.'.$host;
+                    }
+                    $inner->whereIn('hp.host', $exact);
+                    foreach ($hosts as $host) {
+                        $inner->orWhere('hp.host', 'like', '%.'.$host);
+                    }
+                });
+        });
+    }
+
+    /** Adres strony leży na jednym z hostów findFor(..., $onlyHosts) — druga zapora poza SQL (host wiersza ≠ host adresu). */
+    private function urlOnAllowedHost(string $url): bool
+    {
+        if ($this->onlyHosts === null) {
+            return true;
+        }
+        $host = ManufacturerSite::normalizeHost((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+        if ($host === '') {
+            return false;
+        }
+        foreach ($this->onlyHosts as $allowed) {
+            if ($host === $allowed || str_ends_with($host, '.'.$allowed)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -471,7 +551,7 @@ final class CatalogIndexSearch
                     continue;
                 }
                 $url = (string) $page->url;
-                if ($url === '' || $this->isExcluded($url, $product)) {
+                if ($url === '' || $this->isExcluded($url, $product) || ! $this->urlOnAllowedHost($url)) {
                     continue;
                 }
                 $pageManufacturer = $page->manufacturer !== null ? (string) $page->manufacturer : null;
@@ -623,16 +703,16 @@ final class CatalogIndexSearch
             }
             $word = $m[1];
             $num = $m[2];
-            $found = DB::table('catalog_page_tokens as w')
+            $query = DB::table('catalog_page_tokens as w')
                 ->where('w.token', $word)
                 ->whereExists(function ($q) use ($num): void {
                     $q->select(DB::raw(1))
                         ->from('catalog_page_tokens as n')
                         ->whereColumn('n.catalog_page_id', 'w.catalog_page_id')
                         ->where('n.token', $num);
-                })
-                ->limit(self::SQL_LIMIT)
-                ->pluck('w.catalog_page_id');
+                });
+            $this->restrictToHosts($query, 'w.catalog_page_id');
+            $found = $query->limit(self::SQL_LIMIT)->pluck('w.catalog_page_id');
             foreach ($found as $id) {
                 $ids[(int) $id] ??= $code;
             }
@@ -656,11 +736,12 @@ final class CatalogIndexSearch
         if (mb_strlen($sku) < 5 || preg_match('/^[a-z]{2,4}\d{3,}$/u', $sku) !== 1) {
             return [];
         }
-        $rows = DB::table('catalog_page_tokens as t')
+        $query = DB::table('catalog_page_tokens as t')
             ->join('catalog_pages as p', 'p.id', '=', 't.catalog_page_id')
             ->where('t.token', 'like', $sku.'%')
-            ->whereRaw('LENGTH(t.token) > ?', [strlen($sku)])
-            ->select(['t.catalog_page_id', 't.token', 'p.url'])
+            ->whereRaw('LENGTH(t.token) > ?', [strlen($sku)]);
+        $this->restrictToHosts($query, 't.catalog_page_id');
+        $rows = $query->select(['t.catalog_page_id', 't.token', 'p.url'])
             ->limit(self::SQL_LIMIT * 3)
             ->get();
         $ids = [];
@@ -695,6 +776,7 @@ final class CatalogIndexSearch
             if ($typePrefixes !== []) {
                 $this->requireTypeToken($query, $typePrefixes);
             }
+            $this->restrictToHosts($query, 't.catalog_page_id');
             foreach ($query->select(['t.catalog_page_id', 't.token'])->limit(self::SQL_LIMIT * 3)->get() as $row) {
                 $token = (string) $row->token;
                 if (ctype_digit($token) && str_starts_with($token, $code)

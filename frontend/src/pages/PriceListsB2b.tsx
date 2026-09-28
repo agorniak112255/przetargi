@@ -33,9 +33,33 @@ type B2bAccount = {
   connector_session_saved_at: string | null
   /** Łącznik podaje ceny rozmiarów — przycisk „Scal rozmiary” (karty rozbite dawniej według ceny rozmiaru). */
   size_price_merge: boolean
+  /** Strony z opisami (hosty): karta z krótkim opisem z B2B jest szukana najpierw na nich. */
+  enrichment_sites: string[]
+  /** Próg długości opisu zapisany przy koncie (null = domyślny). */
+  enrichment_min_chars: number | null
+  /** Próg obowiązujący (zapisany albo domyślny 1000). */
+  enrichment_min_chars_effective: number
+  /** Próby uzupełniania krótkich opisów według wyniku. */
+  supplement_stats: SupplementStats
+  /** Strony z opisami spoza domen dodanych do indeksu wyszukiwarki. */
+  enrichment_hosts_not_indexed: string[]
   created_by: { id: number; name: string } | null
   updated_by: { id: number; name: string } | null
   updated_at: string | null
+}
+
+type SupplementStats = {
+  queued: number
+  replaced: number
+  kept_b2b: number
+  no_pages: number
+  failed: number
+}
+
+type SupplementResult = {
+  candidates: number
+  queued: number
+  message: string
 }
 
 type Connector = {
@@ -65,6 +89,8 @@ type FormState = {
   connector: string
   sync_frequency: SyncFrequency
   sync_images: boolean
+  enrichment_sites: string
+  enrichment_min_chars: string
 }
 
 const EMPTY_FORM: FormState = {
@@ -77,6 +103,8 @@ const EMPTY_FORM: FormState = {
   connector: '',
   sync_frequency: 'off',
   sync_images: true,
+  enrichment_sites: '',
+  enrichment_min_chars: '',
 }
 
 const FREQUENCY_LABEL: Record<SyncFrequency, string> = {
@@ -100,6 +128,7 @@ function formatDate(value: string | null): string {
 export function PriceListsB2b() {
   const { user } = useAuth()
   const canManage = can(user, 'b2b_accounts.manage')
+  const canManageSearchSites = can(user, 'admin.search_sites.manage')
   /** Rabaty: witryny z samą ceną katalogową (protekt.pl) i łączniki z cennikiem bazowym (UVEX). */
   const usesDiscountRules = (key: string | null) =>
     connectors.some((c) => c.key === key && c.uses_discount_rules)
@@ -196,6 +225,8 @@ export function PriceListsB2b() {
       connector: row.connector ?? '',
       sync_frequency: row.sync_frequency,
       sync_images: row.sync_images,
+      enrichment_sites: row.enrichment_sites.join('\n'),
+      enrichment_min_chars: row.enrichment_min_chars === null ? '' : String(row.enrichment_min_chars),
     })
   }
 
@@ -215,6 +246,8 @@ export function PriceListsB2b() {
         connector: form.connector || null,
         sync_frequency: form.sync_frequency,
         sync_images: form.sync_images,
+        enrichment_sites: form.enrichment_sites.split(/[\n,]/).map((s) => s.trim()).filter(Boolean),
+        enrichment_min_chars: form.enrichment_min_chars.trim() === '' ? null : Number(form.enrichment_min_chars),
       })
       if (form.id === null) {
         await api('/b2b-accounts', { method: 'POST', body })
@@ -268,6 +301,65 @@ export function PriceListsB2b() {
     } finally {
       setBusy(false)
     }
+  }
+
+  /** „Uzupełnij krótkie opisy”: najpierw podgląd liczby kart, zlecenie dopiero po potwierdzeniu. */
+  async function onSupplement(row: B2bAccount) {
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const url = `/b2b-accounts/${row.id}/supplement-descriptions`
+      const preview = await api<SupplementResult>(url, { method: 'POST', body: JSON.stringify({ apply: false }) })
+      if (preview.candidates === 0) {
+        setMsg(preview.message)
+        return
+      }
+      if (
+        !window.confirm(
+          `Kart z opisem z B2B krótszym niż ${row.enrichment_min_chars_effective} znaków: ${preview.candidates}. ` +
+            'Zlecić uzupełnianie opisów w tle?',
+        )
+      ) {
+        return
+      }
+      const res = await api<SupplementResult>(url, { method: 'POST', body: JSON.stringify({ apply: true }) })
+      setMsg(res.message)
+      await load()
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się zlecić uzupełniania opisów')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function renderSupplementStatus(row: B2bAccount) {
+    if (row.enrichment_sites.length === 0) return null
+    const s = row.supplement_stats
+    return (
+      <div className="text-slate-600">
+        <p>
+          Strony z opisami: <b>{row.enrichment_sites.join(', ')}</b> · próg {row.enrichment_min_chars_effective} znaków
+        </p>
+        <p className="text-slate-500">
+          Krótkie opisy: uzupełnione {s.replaced} · bez zmian {s.kept_b2b} · brak stron {s.no_pages} · w kolejce{' '}
+          {s.queued} · do ponowienia {s.failed}
+        </p>
+        {row.enrichment_hosts_not_indexed.length > 0 && (
+          <p className="text-amber-700">
+            Strony spoza indeksu: {row.enrichment_hosts_not_indexed.join(', ')} — dodaj je w Administracja →{' '}
+            {canManageSearchSites ? (
+              <Link className="underline" to="/admin/strony-wyszukiwarka">
+                Strony wyszukiwarka
+              </Link>
+            ) : (
+              'Strony wyszukiwarka'
+            )}
+            , żeby program znał ich mapę.
+          </p>
+        )}
+      </div>
+    )
   }
 
   /** Dostawca z kodem z e-maila: zamiast zlecać od razu, otwórz okno logowania kodem. */
@@ -458,6 +550,33 @@ export function PriceListsB2b() {
                 Pobieraj zdjęcia
               </label>
             </div>
+            <label className="block text-xs">
+              Strony z opisami <span className="text-slate-400">(po jednej w linii)</span>
+              <textarea
+                rows={3}
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                value={form.enrichment_sites}
+                onChange={(e) => setForm({ ...form, enrichment_sites: e.target.value })}
+                placeholder="sklepbhp.pl"
+              />
+            </label>
+            <label className="block text-xs">
+              Próg długości opisu (znaki)
+              <input
+                type="number"
+                min={200}
+                max={5000}
+                step={1}
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                value={form.enrichment_min_chars}
+                onChange={(e) => setForm({ ...form, enrichment_min_chars: e.target.value })}
+                placeholder="1000"
+              />
+              <span className="mt-1 block text-slate-500">
+                Karta z opisem z B2B krótszym niż próg jest szukana najpierw na tych stronach; AI pisze opis z tekstu
+                B2B i znalezionych stron.
+              </span>
+            </label>
           </div>
           <div className="mt-3 flex gap-2">
             <button
@@ -630,6 +749,17 @@ export function PriceListsB2b() {
                           Ceny specjalne
                         </Link>
                       )}
+                      {canManage && row.enrichment_sites.length > 0 && (
+                        <button
+                          type="button"
+                          className={actionBtn}
+                          disabled={busy}
+                          onClick={() => void onSupplement(row)}
+                          title="Karty z opisem z B2B krótszym niż próg — szukane najpierw na stronach z opisami konta"
+                        >
+                          Uzupełnij krótkie opisy
+                        </button>
+                      )}
                       {canManage && (
                         <button
                           type="button"
@@ -650,6 +780,7 @@ export function PriceListsB2b() {
                     </p>
                   )}
                   {renderSyncStatus(row)}
+                  {renderSupplementStatus(row)}
                 </>
               ) : (
                 <p className="text-slate-500">Dla tej witryny nie ma jeszcze importera cennika.</p>

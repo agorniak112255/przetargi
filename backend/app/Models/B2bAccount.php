@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Services\B2b\B2bDescriptionSupplement;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
@@ -30,6 +31,8 @@ class B2bAccount extends Model
         'connector_session_saved_at',
         'sites',
         'note',
+        'enrichment_sites',
+        'enrichment_min_chars',
         'connector',
         'sync_frequency',
         'sync_images',
@@ -56,6 +59,8 @@ class B2bAccount extends Model
             'connector_session' => 'encrypted:array',
             'connector_session_saved_at' => 'datetime',
             'sites' => 'array',
+            'enrichment_sites' => 'array',
+            'enrichment_min_chars' => 'integer',
             'sync_images' => 'boolean',
             'sync_requested_at' => 'datetime',
             'last_sync_started_at' => 'datetime',
@@ -96,6 +101,39 @@ class B2bAccount extends Model
             'weekly' => $last->lessThan($boundary->subDays(6)),
             default => false,
         };
+    }
+
+    /**
+     * Strony z opisami (hosty) do uzupełniania krótkich opisów B2B — znormalizowane jak strony producentów.
+     *
+     * @return list<string>
+     */
+    public function enrichmentHosts(): array
+    {
+        $hosts = [];
+        foreach ((array) ($this->enrichment_sites ?? []) as $site) {
+            $host = is_string($site) ? ManufacturerSite::normalizeHost($site) : '';
+            if ($host !== '') {
+                $hosts[$host] = true;
+            }
+        }
+
+        return array_keys($hosts);
+    }
+
+    /** Próg długości opisu z B2B (znaki samego tekstu), poniżej którego karta jest uzupełniana ze stron konta. */
+    public function enrichmentMinChars(): int
+    {
+        return $this->enrichment_min_chars ?? B2bDescriptionSupplement::DEFAULT_MIN_CHARS;
+    }
+
+    /** Odcisk listy stron — nowa lista to nowe wejście dla kart już próbowanych. */
+    public function enrichmentHostsSha1(): string
+    {
+        $hosts = $this->enrichmentHosts();
+        sort($hosts);
+
+        return sha1(implode("\n", $hosts));
     }
 
     public function creator(): BelongsTo

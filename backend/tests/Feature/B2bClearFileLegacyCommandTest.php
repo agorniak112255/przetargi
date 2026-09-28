@@ -201,6 +201,36 @@ final class B2bClearFileLegacyCommandTest extends TestCase
         $this->assertSame(1, ProductEnrichmentCache::query()->count());
     }
 
+    public function test_opis_uzupelniony_ze_stron_konta_zachowuje_dane(): void
+    {
+        // opis napisało uzupełnianie krótkiego opisu B2B (SupplementB2bDescriptionJob): odcisk powiązania = sha1 opisu,
+        // więc karta liczy się jako „opis z B2B”, ale dane w payloadzie pochodzą z tego opisu (decyzja 28.09.2026)
+        $trace = ['b2b_account_id' => $this->bolle->id, 'result_sha1' => sha1(self::B2B_DESCRIPTION)];
+        $this->legacy->forceFill(['enrichment_payload' => [...$this->legacy->enrichment_payload, 'b2b_supplement' => $trace]])->save();
+        // ślad nieaktualny (opis zmieniony po uzupełnieniu) — zwykła reguła: dane AI znikają, ślad zostaje
+        $stale = [...$trace, 'result_sha1' => sha1('inny opis')];
+        $this->fileWins->forceFill(['enrichment_payload' => [...$this->fileWins->enrichment_payload, 'b2b_supplement' => $stale]])->save();
+
+        $this->artisan('b2b:clear-file-legacy', ['--account' => $this->bolle->id, '--apply' => true, '--backup' => storage_path('framework/testing/clear-file-legacy-'.uniqid().'.json')])
+            ->expectsOutputToContain('opis uzupełniony ze stron konta — dane zostają')
+            ->assertSuccessful();
+
+        $legacy = $this->legacy->refresh();
+        // slot pliku i tak znika (cenę ustala konto), dane z opisu zostają
+        $this->assertFalse($this->hasFileSlot($legacy));
+        $this->assertSame('EN 166, EN 169', $legacy->norms);
+        $this->assertSame(Product::ENRICHMENT_DONE, $legacy->enrichment_status);
+        $this->assertSame(['Filtr spawalniczy Shade 5'], $legacy->enrichment_payload['features']);
+        $this->assertSame($trace, $legacy->enrichment_payload['b2b_supplement']);
+        $this->assertSame(2, ProductAccessory::query()->where('product_id', $legacy->id)->count());
+
+        $fileWins = $this->fileWins->refresh();
+        $this->assertNull($fileWins->norms);
+        $this->assertSame(Product::ENRICHMENT_NONE, $fileWins->enrichment_status);
+        $this->assertSame(['replaced_description', 'b2b_supplement', 'attributes'], array_keys($fileWins->enrichment_payload));
+        $this->assertSame($stale, $fileWins->enrichment_payload['b2b_supplement']);
+    }
+
     public function test_bez_konta_blad(): void
     {
         $this->artisan('b2b:clear-file-legacy')

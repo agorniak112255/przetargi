@@ -14,7 +14,7 @@ use Throwable;
  * źródeł nie ma po co pytać modelu ponownie. Domyślnie false: odrzucenie zależne od odpowiedzi modelu (pusty albo
  * ucięty JSON, poziom normy spoza źródeł) bywa losowe i DescribeB2bProductFromDatasheetJob ponawia je do limitu prób.
  */
-final class B2bSourcesDescriptionRejected extends RuntimeException
+class B2bSourcesDescriptionRejected extends RuntimeException
 {
     public function __construct(
         string $message = '',
