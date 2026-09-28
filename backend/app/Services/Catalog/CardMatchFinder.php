@@ -10,6 +10,7 @@ use App\Models\CardMatchCandidate;
 use App\Models\Product;
 use App\Models\ProductIdentifier;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\Pricing\SourcePriceComparison;
 use App\Services\ProductSizeMergeService;
@@ -76,8 +77,17 @@ final class CardMatchFinder
     /** @var array<int, list<array{account: int, remote_id: string, remote_sku: string|null}>> */
     private array $links = [];
 
-    /** @var array<int, int> karta => liczba aktywnych wersji */
+    /**
+     * Karta => liczba aktywnych wierszy product_variants wszystkich rodzajów (wersje i rozmiary „size”) — dla kart,
+     * które plan kasuje albo przenosi (isSource, planBlockers): kaskada skasowałaby i rozmiary, dopóki etap 2 ich
+     * nie przenosi. Para dystrybutor → karta producenta (conflictReasons) liczy tylko wersje (activeVersions).
+     *
+     * @var array<int, int>
+     */
     private array $activeVariants = [];
+
+    /** @var array<int, int> karta => liczba aktywnych wersji Sign Project (kind „version”) — karta docelowa z ceną 0 */
+    private array $activeVersions = [];
 
     /** @var array<int, int> karta => liczba wszystkich wersji (także wycofanych — kaskada skasowałaby i je) */
     private array $allVariants = [];
@@ -196,6 +206,7 @@ final class CardMatchFinder
         $this->cards = [];
         $this->links = [];
         $this->activeVariants = [];
+        $this->activeVersions = [];
         $this->allVariants = [];
         $this->fileSlots = [];
         $this->accounts = null;
@@ -489,10 +500,12 @@ final class CardMatchFinder
                 ];
             }
             foreach (DB::table('product_variants')->whereIn('product_id', $chunk)
-                ->selectRaw('product_id, COUNT(*) AS total, SUM(CASE WHEN removed_at IS NULL THEN 1 ELSE 0 END) AS active')
+                ->selectRaw('product_id, COUNT(*) AS total, SUM(CASE WHEN removed_at IS NULL THEN 1 ELSE 0 END) AS active,'
+                    .' SUM(CASE WHEN removed_at IS NULL AND kind = ? THEN 1 ELSE 0 END) AS active_versions', [ProductVariant::KIND_VERSION])
                 ->groupBy('product_id')->get() as $row) {
                 $this->allVariants[(int) $row->product_id] = (int) $row->total;
                 $this->activeVariants[(int) $row->product_id] = (int) $row->active;
+                $this->activeVersions[(int) $row->product_id] = (int) $row->active_versions;
             }
             foreach (ProductSourcePrice::query()->toBase()->whereIn('product_id', $chunk)
                 ->where('source_key', ProductSourcePrice::SOURCE_FILE)
@@ -650,6 +663,8 @@ final class CardMatchFinder
     {
         $card = $this->cards[$id] ?? null;
         $links = $this->links[$id] ?? [];
+        // wszystkie rodzaje, także rozmiary „size”: karta-źródło znika przy scaleniu, a kaskada skasowałaby jej
+        // rozmiary z cenami, dopóki etap 2 (28.09.2026) nie nauczy scalenia ich przenosić
         if ($card === null || $links === [] || ($this->activeVariants[$id] ?? 0) > 0) {
             return false;
         }
@@ -995,6 +1010,9 @@ final class CardMatchFinder
                 $out[] = ['code' => 'target_brand', 'text' => 'karta producenta #'.$id.' jest innej marki ('
                     .trim((string) $source->manufacturer).' / '.trim((string) $target->manufacturer).')'];
             }
+            // wszystkie rodzaje, także rozmiary „size” (etap 1, 28.09.2026): łączenie rozmiarów kasuje karty planu poza
+            // zostającą (kaskada skasowałaby rozmiary, CardMatchSizeMerger::guard odmawia), a CardMatchSplitter::guardTargets
+            // odmawia karty docelowej z wierszami product_variants — plan bez tej blokady i tak by się nie wykonał
             if (($this->activeVariants[$id] ?? 0) > 0) {
                 $out[] = ['code' => 'target_variants', 'text' => 'karta producenta #'.$id.' ma wersje ('.$this->activeVariants[$id]
                     .') — łączenie kart z wersjami wyłączone'];
@@ -1218,8 +1236,9 @@ final class CardMatchFinder
         if ($byEan && ! $this->sameBrand($this->brandKey($source->manufacturer), $targetId)) {
             $reasons[] = 'EAN wskazuje kartę innej marki ('.trim((string) $source->manufacturer).' / '.trim((string) $target->manufacturer).')';
         }
-        if (($this->activeVariants[$targetId] ?? 0) > 0) {
-            $reasons[] = 'karta producenta ma wersje ('.$this->activeVariants[$targetId].') — łączenie kart z wersjami wyłączone';
+        // tylko wersje Sign Project — karta producenta zostaje, jej rozmiary „size” nie przeszkadzają
+        if (($this->activeVersions[$targetId] ?? 0) > 0) {
+            $reasons[] = 'karta producenta ma wersje ('.$this->activeVersions[$targetId].') — łączenie kart z wersjami wyłączone';
         }
         $targetPositions = [];
         foreach ($this->links[$targetId] ?? [] as $link) {

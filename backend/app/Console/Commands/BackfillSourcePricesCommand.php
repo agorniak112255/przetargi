@@ -127,8 +127,10 @@ final class BackfillSourcePricesCommand extends Command
     {
         $ids = $products->modelKeys();
 
+        // tylko wersje Sign Project (cena karty 0) — rozmiary w różnych cenach mają cenę w slocie konta
         $variantCards = array_flip(ProductVariant::query()
             ->whereIn('product_id', $ids)
+            ->versions()
             ->whereNull('removed_at')
             ->distinct()
             ->pluck('product_id')

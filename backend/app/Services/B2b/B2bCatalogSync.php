@@ -81,6 +81,13 @@ use Throwable;
  * użytkownika 15.09.2026): jedna karta, powiązanie dla każdej pozycji; kartę użytą w przebiegu przez inną grupę
  * pomijamy. Dostępność ze źródła tylko w slocie konta (product_source_prices.availability), dosłownie.
  *
+ * Rozmiary w różnych cenach (decyzja użytkownika 28.09.2026): grupa z cenami pozycji (members[].price) to jedna karta
+ * z ceną najtańszego rozmiaru w slocie konta (size_price_max — najwyższa, gdy ceny się różnią) i wierszem
+ * product_variants (kind „size”, source = slot konta) na każdy rozmiar, z historią ceny rozmiaru. Drugi taki sam
+ * przebieg niczego nie zmienia. Pozycje takiej grupy leżące na kilku kartach (dawny podział według ceny) nie są
+ * przepinane — każda karta dostaje swoje rozmiary (syncMembersByCard), a grupa trafia do size_spread przebiegu.
+ * Wiersz rozmiaru niewidziany w pełnym przebiegu dostaje removed_at (sweepSizeRows), nic nie jest kasowane.
+ *
  * Łącznik z wersjami (B2bVariantConnector): karta ma cenę 0 („brak ceny”), ceny konta i ich historia są w
  * product_variants / product_variant_price_history; jedna transakcja na produkt; wersje zniknięte z pełnej
  * listy dostawcy dostają removed_at; formaty/podłoża trafiają do products.variant_summary (wyszukiwanie).
@@ -195,7 +202,10 @@ final class B2bCatalogSync
      *     processed: int,
      *     progress_total: int,
      *     variants_removed: int,
-     *     translations_queued: int
+     *     translations_queued: int,
+     *     sizes_removed: int,
+     *     size_spread: list<array<string, mixed>>,
+     *     size_spread_total: int
      * }
      */
     public function run(
@@ -269,6 +279,12 @@ final class B2bCatalogSync
         $redirects = $variantConnector === null ? $this->redirectMap($account) : [];
         /** @var array<string, true> $listedPositions pozycje z listy dostawcy (klucz mapy połączeń), także pominięte */
         $listedPositions = [];
+        /** @var array<int, true> $sizeCards karty z wierszami rozmiarów zapisanymi w tym przebiegu (sprzątanie rozmiarów) */
+        $sizeCards = [];
+        // wyroby z cenami rozmiarów, których pozycje leżą na kilku kartach (dawny podział według ceny) — lista do etapu 2
+        $sizeSpread = [];
+        $sizeSpreadTotal = 0;
+        $sizesRemoved = 0;
 
         // długie pobieranie listy przed pierwszym produktem — komunikaty są sygnałem życia przebiegu,
         // a przy okazji jedynym miejscem, w którym widać prośbę o zatrzymanie (pętli produktów jeszcze nie ma)
@@ -322,6 +338,16 @@ final class B2bCatalogSync
                     $taintedPositions[$position] = true;
                 } elseif ($remote->identifiers !== null) {
                     $identifierPositions[$position] = true;
+                }
+            }
+
+            foreach ($outcome['size_cards'] ?? [] as $cardId) {
+                $sizeCards[(int) $cardId] = true;
+            }
+            if (isset($outcome['size_spread'])) {
+                $sizeSpreadTotal++;
+                if (count($sizeSpread) < B2bSyncRun::SIZE_SPREAD_LIMIT) {
+                    $sizeSpread[] = $outcome['size_spread'];
                 }
             }
 
@@ -481,6 +507,21 @@ final class B2bCatalogSync
             }
         }
 
+        // Rozmiary w różnych cenach (28.09.2026): wiersz rozmiaru, którego pełny przebieg nie widział, dostaje removed_at
+        // — jak identyfikatory: tylko pełny przebieg, tylko karty zapisane w nim, bez kart z pozycjami pominiętymi
+        if (! $cancelled && ! $partial && ! $dryRun && $limit === null && $sizeCards !== []) {
+            $sizesRemoved = $this->sweepSizeRows($account, array_keys($sizeCards), array_map('strval', array_keys($taintedPositions)), $startedAt);
+            if ($sizesRemoved > 0) {
+                $progress?->log('info', 'Rozmiary, których dostawca już nie podaje (oznaczone, nie skasowane): '.$sizesRemoved);
+            }
+        }
+        if ($sizeSpreadTotal > 0) {
+            $progress?->log('info', sprintf(
+                'Wyroby z rozmiarami na kilku kartach (dawny podział według ceny — każda karta dostała swoje rozmiary, scalenie osobnym poleceniem): %d',
+                $sizeSpreadTotal,
+            ));
+        }
+
         // Pozycja wiodąca karty modelu (łączenie rozmiarów) zniknęła z listy dostawcy: pozostałe rozmiary odświeżają
         // tylko powiązania, więc cena, opis i zdjęcia karty stoją. Tylko ostrzeżenie — bez automatycznej zamiany
         // pozycji wiodącej (inny rozmiar mógłby mieć inną cenę albo opis); zamianę robi człowiek poleceniem.
@@ -555,7 +596,74 @@ final class B2bCatalogSync
             'processed' => $variantConnector !== null ? $variantsProcessed : $stats['seen'],
             'progress_total' => $progressTotal(),
             'variants_removed' => $variantsRemoved,
+            'sizes_removed' => $sizesRemoved,
+            'size_spread' => $sizeSpread,
+            'size_spread_total' => $sizeSpreadTotal,
         ];
+    }
+
+    /**
+     * Wiersze rozmiarów konta (source „b2b:{id}”, kind „size”) na kartach zapisanych w tym przebiegu, których przebieg
+     * nie widział (last_seen_at sprzed startu) → removed_at; nic nie jest kasowane. Pomijane: karty z powiązaniem
+     * pozycji pominiętej choć raz w tym przebiegu i wiersze takich pozycji (ich rozmiary mogły nie dojść).
+     * Slotu konta nie przeliczamy z wierszy: cenę karty (najniższy rozmiar, size_price_max) zapisała w tym samym
+     * przebiegu grupa z pozycji, które przebieg widział — wiersz niewidziany do niej nie wszedł. Przeliczenie ceny
+     * obowiązującej (ProductEffectivePrice::refresh) tylko dla porządku — dziś wiersze rozmiarów jej nie zmieniają.
+     *
+     * @param  list<int>  $cardIds
+     * @param  list<string>  $tainted
+     */
+    private function sweepSizeRows(B2bAccount $account, array $cardIds, array $tainted, CarbonImmutable $runStartedAt): int
+    {
+        $source = ProductSourcePrice::b2bKey((int) $account->id);
+        $taintedSet = array_flip($tainted);
+        $blocked = [];
+        foreach (array_chunk($tainted, self::REMOVAL_CHUNK) as $chunk) {
+            foreach (B2bProductLink::query()
+                ->where('b2b_account_id', $account->id)
+                ->whereIn('remote_id', $chunk)
+                ->pluck('product_id') as $productId) {
+                $blocked[(int) $productId] = true;
+            }
+        }
+        $cards = array_values(array_filter($cardIds, static fn (int $id): bool => ! isset($blocked[$id])));
+
+        $now = now();
+        $removed = 0;
+        $touched = [];
+        foreach (array_chunk($cards, self::REMOVAL_CHUNK) as $chunk) {
+            $rows = ProductVariant::query()
+                ->toBase()
+                ->select(['id', 'remote_id', 'product_id'])
+                ->where('source', $source)
+                ->where('kind', ProductVariant::KIND_SIZE)
+                ->whereIn('product_id', $chunk)
+                ->whereNull('removed_at')
+                ->where(static function ($query) use ($runStartedAt): void {
+                    $query->whereNull('last_seen_at')->orWhere('last_seen_at', '<', $runStartedAt);
+                })
+                ->get();
+            $ids = [];
+            foreach ($rows as $row) {
+                if (isset($taintedSet[(string) $row->remote_id])) {
+                    continue;
+                }
+                $ids[] = (int) $row->id;
+                $touched[(int) $row->product_id] = true;
+            }
+            if ($ids !== []) {
+                $removed += DB::table('product_variants')->whereIn('id', $ids)->update(['removed_at' => $now, 'updated_at' => $now]);
+            }
+        }
+
+        foreach (array_keys($touched) as $productId) {
+            $product = Product::query()->find($productId);
+            if ($product !== null) {
+                $this->effectivePrices->refresh($product);
+            }
+        }
+
+        return $removed;
     }
 
     /**
@@ -683,10 +791,17 @@ final class B2bCatalogSync
      *   pozostałe rozmiary zawsze tylko powiązania (refreshSharedCardLink), niezależnie od kolejności na liście.
      * $origin — produkt łącznika, gdy $remote to jedna pozycja jego grupy (tryb pojedynczy): łącznik dostaje zawsze swój
      * produkt (cena, opis, pliki, zdjęcia, tabelka grupy), a karta, powiązanie i identyfikatory idą za pozycją.
+     * $position — pozycja grupy (wiersz memberRows) w trybie pojedynczym. Z ceną (members[].price): jej cena zastępuje
+     * cenę grupy (net, katalogowa, rabat, waluta; price($origin) jest wołane jak dotąd), a jej wiersz rozmiaru idzie na
+     * kartę pozycji — wiersz z karty grupy sprzed rozdzielenia przechodzi razem z pozycją.
+     * Grupa z cenami pozycji (28.09.2026, zob. nagłówek klasy): cena karty = najtańszy rozmiar, wiersze rozmiarów
+     * w tej samej transakcji co slot i powiązania, powiązanie pozycji z jej ceną; pozycje na kilku kartach —
+     * syncMembersByCard (tylko wywołanie z pętli przebiegu, $origin = null).
      *
      * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed  karty użyte w tym przebiegu
      * @param  array<string, array{price: bool, description: bool}>  $rules  wyłączenia konta po kluczu producenta
      * @param  array<string, array{position_key: string, product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects  mapa konta (redirectMap)
+     * @param  array{remote_id: string, sku: string, name: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}|null  $position
      * @return array<string, mixed>
      */
     private function syncProduct(
@@ -701,13 +816,22 @@ final class B2bCatalogSync
         array $rules = [],
         array $redirects = [],
         ?B2bRemoteProduct $origin = null,
+        ?array $position = null,
     ): array {
         if ($remote->remoteId === '' || $remote->sku === '' || $remote->name === '') {
             return ['status' => 'skipped', 'reason' => 'brak kodu lub nazwy'];
         }
+        // wywołanie z pętli przebiegu (nie pozycja ani część grupy) — tylko ono może rozdzielić grupę na karty
+        $topLevel = $origin === null;
         $origin ??= $remote;
 
         $members = $remote->members !== [] ? $this->memberRows($remote) : [];
+        // ceny rozmiarów od łącznika (members[].price, decyzja użytkownika 28.09.2026) — niespójne = grupa pominięta
+        $sizePricing = $this->sizePricing($members);
+        if ($sizePricing['mode'] === 'invalid') {
+            return ['status' => 'skipped', 'reason' => (string) $sizePricing['reason']];
+        }
+        $sized = $sizePricing['mode'] === 'priced';
         $memberLinks = null;
         $joinsMerged = false;
         // karta wskazana mapą połączeń — użyta w tym przebiegu przez inną pozycję: tylko powiązania (refreshSharedCardLink)
@@ -796,6 +920,15 @@ final class B2bCatalogSync
                     }
                 }
             } else {
+                // Przejście na rozmiary w różnych cenach (28.09.2026): pozycje grupy z cenami rozmiarów leżą na kilku
+                // kartach (dawny podział według ceny) — każda karta dostaje swoje rozmiary, bez przepinania powiązań.
+                // Scalenie takich kart to osobny krok (etap 2), nie uboczny skutek przebiegu.
+                if ($sized && $topLevel) {
+                    $byCard = $this->cardGroups($account, $remote, $members, $entries);
+                    if ($byCard !== null) {
+                        return $this->syncMembersByCard($account, $connector, $remote, $byCard, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $warnings);
+                    }
+                }
                 $group = $this->resolveGroupCard($account, $remote, $members, $claimed, $entries);
                 if ($group['reason'] !== null) {
                     return ['status' => 'skipped', 'reason' => $group['reason'], 'warnings' => $warnings];
@@ -831,6 +964,18 @@ final class B2bCatalogSync
         if ($price === null && ! $noPrice) {
             return ['status' => 'skipped', 'reason' => 'brak ceny w B2B', 'warnings' => $warnings];
         }
+        // Cena karty z cen pozycji: grupa z cenami rozmiarów — najtańszy rozmiar, pozycja trybu pojedynczego — jej własna
+        // cena. price() łącznika zostaje wołane jak dotąd (błąd = pominięcie; warunek zamawiania i ceny idą z niego).
+        $positionPrice = ($position['price'] ?? null) instanceof B2bRemotePrice ? $position['price'] : null;
+        $price = self::withPositionPrice($price, $sized ? $sizePricing['cheapest'] : $positionPrice);
+        // wiersze rozmiarów: grupy z cenami pozycji albo pozycji z ceną w trybie pojedynczym — tylko z ceną do zapisania
+        // (łącznik treści i cena wyłączona w oknie „Producenci” — nie)
+        $sizeMembers = $price === null ? [] : ($sized ? $members : ($positionPrice !== null && $members === [] ? [[
+            ...$position,
+            'remote_id' => $remote->remoteId,
+            'sku' => $remote->sku,
+        ]] : []));
+        $sizePriceMax = $sized && $price !== null ? $sizePricing['max'] : null;
         if ($priceOff && $existing === null) {
             return [
                 'status' => 'excluded',
@@ -852,7 +997,7 @@ final class B2bCatalogSync
         // Niewiodąca pozycja łączenia rozmiarów — zawsze tylko powiązania, bez claim (kartę zapisuje pozycja wiodąca).
         if ($existing !== null && ($nonAnchor
             || (($members === [] || $joinsMerged || $mapTarget) && isset($claimed['products'][(int) $existing->id])))) {
-            $shared = $this->refreshSharedCardLink($account, $remote, $members, $existing, $manufacturer, $price, $dryRun, $runId, $ruleOutcome, $nonAnchor);
+            $shared = $this->refreshSharedCardLink($account, $remote, $members, $existing, $manufacturer, $price, $dryRun, $runId, $ruleOutcome, $nonAnchor, $sizeMembers, 'b2b:'.$connector::key());
 
             return [...$shared, 'warnings' => [...$warnings, ...$shared['warnings']]];
         }
@@ -894,6 +1039,12 @@ final class B2bCatalogSync
             $this->keepOwnerFields($payload, $existing);
         }
 
+        // wiersze rozmiarów tej grupy (product_variants „size”) — plan w pamięci, zapis w transakcji; dry-run nic nie pisze
+        $sizePlan = $sizeMembers !== []
+            ? $this->sizeRowPlan($account, $sizeMembers, $existing, $existing !== null ? (string) $existing->sku : $remote->sku, $remote->name)
+            : null;
+        $sizesChanged = $sizePlan !== null && $sizePlan['changed'];
+
         $priceChange = null;
         $updateSummary = null;
         $dirty = true;
@@ -926,12 +1077,15 @@ final class B2bCatalogSync
             $availabilityChanged = $remote->availability !== null && $slot?->availability !== $remote->availability;
             $orderChanged = $slot !== null && self::orderChanged($slot, $price->order);
             $conditionChanged = $slot !== null && self::priceConditionChanged($slot, $price->condition);
+            // najwyższa cena rozmiaru (null = jedna cena albo grupa bez cen rozmiarów)
+            $sizeMaxChanged = $slot !== null && ! self::sameAmount($slot->size_price_max, $sizePriceMax);
             $slotChanged = $slot === null
                 || $priceChange !== null
                 || strtoupper((string) $slot->currency) !== strtoupper($price->currency)
                 || $availabilityChanged
                 || $orderChanged
-                || $conditionChanged;
+                || $conditionChanged
+                || $sizeMaxChanged;
             $existing->fill($payload);
             $dirty = $existing->isDirty();
             // summarizeUpdate nie zna tych pól — jak „wersje” w ścieżce z wersjami
@@ -941,29 +1095,42 @@ final class B2bCatalogSync
                 ...($orderChanged ? ['warunek zamawiania'] : []),
                 ...($conditionChanged ? ['warunek ceny'] : []),
                 ...($firstAccountPrice ? ['cena z nowego konta'] : []),
+                ...($sizesChanged || $sizeMaxChanged ? ['rozmiary'] : []),
             ];
             if ($extraFields !== []) {
-                $updateSummary['fields'] = [
+                $updateSummary['fields'] = array_values(array_unique([
                     ...array_values(array_diff($updateSummary['fields'], ['bez zmian wartości'])),
                     ...$extraFields,
-                ];
+                ]));
+            }
+            if ($sizePlan !== null && $sizePlan['changes'] !== []) {
+                $updateSummary['price_changed'] = true;
             }
         }
-        $status = $existing === null ? 'created' : (($dirty || $slotChanged) ? 'updated' : 'unchanged');
+        $status = $existing === null ? 'created' : (($dirty || $slotChanged || $sizesChanged) ? 'updated' : 'unchanged');
 
         if ($dryRun) {
             $this->claim($claimed, $existing !== null ? (int) $existing->id : null, $existing !== null ? (string) $existing->sku : $remote->sku);
 
-            return ['status' => $status, 'description' => isset($payload['description']), 'warnings' => $warnings, ...$ruleOutcome];
+            return [
+                'status' => $status,
+                'description' => isset($payload['description']),
+                'warnings' => $warnings,
+                ...($sizePlan !== null && $sizePlan['changes'] !== [] ? ['price_changes' => [
+                    ...($priceChange !== null && $existing !== null ? [['product_id' => (int) $existing->id, ...$priceChange]] : []),
+                    ...array_map(static fn (array $c): array => ['product_id' => $existing !== null ? (int) $existing->id : null, ...$c], $sizePlan['changes']),
+                ]] : []),
+                ...$ruleOutcome,
+            ];
         }
 
         // Karta i jej powiązanie w jednej transakcji (jak w ścieżce z wersjami): przerwany zapis zostawiłby kartę
         // z nowym opisem i powiązanie ze starym description_hash, a taka karta wygląda jak ręcznie zmieniona
         // — kolejne przebiegi nie ruszałyby już jej opisu (16.09.2026: 214 kart UVEX po błędzie pamięci podręcznej).
-        [$product, $savedLink] = DB::transaction(function () use (
+        [$product, $savedLink, $sizeChanges] = DB::transaction(function () use (
             $account, $connector, $remote, $existing, $payload, $prices, $baseSlot, $slotKey, $priceChange, $priceListId,
             $runId, $dirty, $members, $memberLinks, $descriptionHash, $sourceTextTaken, $noPrice, $manufacturer, $firstAccountPrice,
-            $price, &$claimed, &$warnings,
+            $price, $sizePriceMax, $sizePlan, &$claimed, &$warnings,
         ): array {
             if ($existing !== null) {
                 if ($dirty) {
@@ -987,6 +1154,9 @@ final class B2bCatalogSync
                     ...$prices,
                     ...$baseSlot,
                     'b2b_account_id' => $account->id,
+                    // najwyższa cena rozmiaru przy cenie karty = najniższy rozmiar (28.09.2026); grupa bez cen rozmiarów
+                    // i pozycja pojedyncza mają jedną cenę — null, żeby dawne „do Y” nie zostało przy nowej cenie
+                    'size_price_max' => $sizePriceMax,
                     // null = źródło nie podaje dostępności — zapisana wartość zostaje
                     ...($remote->availability !== null ? ['availability' => $remote->availability] : []),
                     // null = źródło nie podaje warunku zamawiania — zapisany zostaje
@@ -1016,7 +1186,7 @@ final class B2bCatalogSync
                 'manufacturer' => $manufacturer !== '' ? $manufacturer : null,
                 'description_hash' => $descriptionHash,
                 'last_seen_at' => now(),
-                // cena tej pozycji (grupa — cena grupy dla każdej pozycji); slot konta jest jeden na kartę
+                // cena tej pozycji (grupa bez cen rozmiarów — cena grupy dla każdej pozycji); slot konta jest jeden na kartę
                 ...self::lastPriceValues($price),
             ];
             // karta dostała (albo już ma) tekst źródła, więc nie jest tłumaczeniem — jedyne miejsce zerowania
@@ -1033,11 +1203,16 @@ final class B2bCatalogSync
                         ...$linkValues,
                         'remote_sku' => mb_substr($member['sku'], 0, 255),
                         'remote_name' => mb_substr($member['name'], 0, 1000),
+                        // rozmiar z własną ceną (28.09.2026) — przy powiązaniu jego cena, nie cena karty
+                        ...($price !== null && $member['price'] !== null ? self::lastPriceValues($member['price']) : []),
                     ]);
                     $savedLink ??= $saved;
                 }
                 $warnings = [...$warnings, ...$this->orphanedCardWarnings($account, $memberLinks, (int) $product->id)];
             }
+
+            // wiersze rozmiarów za powiązaniami — ta sama transakcja co slot z najniższą ceną
+            $sizeChanges = $sizePlan !== null ? $this->saveSizeRows($sizePlan, $product, $runId, 'b2b:'.$connector::key()) : [];
 
             // identyfikatory pozycji (EAN, kody) — za powiązaniami, bo należą do tych samych pozycji; statusu karty
             // nie zmieniają (pierwszy przebieg po wdrożeniu nie ma pokazać wszystkich kart jako zmienionych)
@@ -1051,7 +1226,7 @@ final class B2bCatalogSync
                 $runId,
             )];
 
-            return [$product, $savedLink];
+            return [$product, $savedLink, $sizeChanges];
         });
 
         // Hak modelu wysyła reindeks jeszcze w transakcji (kolejka bez after_commit) — worker mógłby przeczytać
@@ -1108,6 +1283,13 @@ final class B2bCatalogSync
             'documents' => $documents,
             'shop_fields' => $shopFields,
             'price_change' => $priceChange,
+            // zmiany cen rozmiarów obok zmiany ceny karty (jak zmiany wersji w syncVariantProduct)
+            ...($sizeChanges !== [] ? ['price_changes' => [
+                ...($priceChange !== null ? [['product_id' => (int) $product->id, ...$priceChange]] : []),
+                ...$sizeChanges,
+            ]] : []),
+            // karta z wierszami rozmiarów zapisanymi w tym przebiegu — sprzątanie rozmiarów na końcu przebiegu
+            'size_cards' => $sizePlan !== null ? [(int) $product->id] : [],
             'update_summary' => $status === 'updated' ? $updateSummary : null,
             'description' => isset($payload['description']),
             'image' => $image,
@@ -1128,8 +1310,13 @@ final class B2bCatalogSync
      * swojej pozycji (kod i nazwa pozycji dosłownie).
      * $sizeMergeMember — niewiodąca pozycja karty modelu z łączenia rozmiarów (card_redirects size_merge): ta droga
      * zawsze, a ostrzeżenie o innej cenie mówi o rozmiarze i pozycji wiodącej (sygnał, że karta może wymagać rozdzielenia).
+     * $sizeMembers — pozycje z cenami rozmiarów (28.09.2026, [] = brak): ich wiersze rozmiarów trafiają na tę kartę
+     * (karta modelu zachowuje ceny każdego rozmiaru), powiązanie pozycji dostaje cenę pozycji. Karta z rozmiarami ma z definicji
+     * różne ceny, więc ostrzeżenie tylko wtedy, gdy pozycja jest tańsza niż cena karty (albo w innej walucie) — wtedy
+     * cena karty nie jest najniższą ceną rozmiaru. Zmieniony wiersz rozmiaru = status „updated”.
      *
-     * @param  list<array{remote_id: string, sku: string, name: string}>  $members
+     * @param  list<array{remote_id: string, sku: string, name: string, availability?: string|null, size?: string|null, price?: B2bRemotePrice|null, order?: int}>  $members
+     * @param  list<array{remote_id: string, sku: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}>  $sizeMembers
      * @param  array<string, mixed>  $ruleOutcome
      * @return array<string, mixed>
      */
@@ -1144,15 +1331,37 @@ final class B2bCatalogSync
         ?int $runId,
         array $ruleOutcome,
         bool $sizeMergeMember = false,
+        array $sizeMembers = [],
+        string $historySource = '',
     ): array {
         $warnings = [];
+        $slotKey = ProductSourcePrice::b2bKey((int) $account->id);
         if ($price !== null) {
             $slot = ProductSourcePrice::query()
                 ->where('product_id', $card->id)
-                ->where('source_key', ProductSourcePrice::b2bKey((int) $account->id))
+                ->where('source_key', $slotKey)
                 ->first();
-            if ($slot !== null && (round((float) $slot->purchase_price, 2) !== round($price->net, 2)
-                || strtoupper((string) $slot->currency) !== strtoupper($price->currency))) {
+            $otherCurrency = $slot !== null && strtoupper((string) $slot->currency) !== strtoupper($price->currency);
+            $cardHasSizes = $sizeMembers !== [] || ProductVariant::query()
+                ->sizes()
+                ->active()
+                ->where('product_id', $card->id)
+                ->where('source', $slotKey)
+                ->exists();
+            if ($slot !== null && $cardHasSizes) {
+                if ($otherCurrency || round($price->net, 2) < round((float) $slot->purchase_price, 2) - 0.0049) {
+                    $warnings[] = sprintf(
+                        'karta #%d (%s): rozmiar %s ma cenę %s %s, niższą niż cena karty z tego konta (%s %s) — cena karty nie jest najniższą ceną rozmiaru',
+                        $card->id,
+                        (string) $card->sku,
+                        self::cheapestLabel($sizeMembers, $price, $remote->sku),
+                        number_format($price->net, 2, ',', ''),
+                        $price->currency,
+                        number_format((float) $slot->purchase_price, 2, ',', ''),
+                        (string) $slot->currency,
+                    );
+                }
+            } elseif ($slot !== null && (round((float) $slot->purchase_price, 2) !== round($price->net, 2) || $otherCurrency)) {
                 // rozmiar karty modelu w innej cenie niż pozycja wiodąca — może to nie są same rozmiary jednego wyrobu
                 $warnings[] = $sizeMergeMember ? sprintf(
                     'karta modelu #%d (%s): rozmiar %s ma cenę %s %s, pozycja wiodąca %s %s — do sprawdzenia w Łączenie kart (rozdzielenie?)',
@@ -1175,22 +1384,30 @@ final class B2bCatalogSync
             }
         }
 
+        // wiersze rozmiarów tej grupy na tej karcie — plan także w dry-run (status), zapis tylko w przebiegu
+        $sizePlan = $sizeMembers !== [] && $price !== null
+            ? $this->sizeRowPlan($account, $sizeMembers, $card, (string) $card->sku, $remote->name)
+            : null;
+        $changes = [];
+
         if (! $dryRun) {
-            $rows = $members !== [] ? $members : [['remote_id' => $remote->remoteId, 'sku' => $remote->sku, 'name' => $remote->name]];
-            $warnings = DB::transaction(function () use ($account, $remote, $rows, $card, $manufacturer, $runId, $warnings, $price): array {
+            $rows = $members !== [] ? $members : [['remote_id' => $remote->remoteId, 'sku' => $remote->sku, 'name' => $remote->name, 'price' => null]];
+            [$warnings, $changes] = DB::transaction(function () use ($account, $remote, $rows, $card, $manufacturer, $runId, $warnings, $price, $sizePlan, $historySource): array {
                 foreach ($rows as $row) {
                     $this->saveLink($account, $row['remote_id'], (int) $card->id, [
                         'remote_sku' => mb_substr($row['sku'], 0, 255),
                         'remote_name' => mb_substr($row['name'], 0, 1000),
                         'manufacturer' => $manufacturer !== '' ? $manufacturer : null,
                         'last_seen_at' => now(),
-                        // cena tej pozycji zostaje przy jej powiązaniu, także gdy slot karty ma cenę innego kodu
-                        ...self::lastPriceValues($price),
+                        // cena tej pozycji zostaje przy jej powiązaniu, także gdy slot karty ma cenę innego kodu;
+                        // rozmiar z własną ceną (28.09.2026) — jego cena
+                        ...self::lastPriceValues($price !== null ? (($row['price'] ?? null) ?? $price) : null),
                     ]);
                 }
+                $changes = $sizePlan !== null ? $this->saveSizeRows($sizePlan, $card, $runId, $historySource) : [];
 
                 // identyfikatory należą do pozycji (position_key), nie do karty — cudzych nie nadpisują
-                return [...$warnings, ...$this->identifiers->recordB2b(
+                return [[...$warnings, ...$this->identifiers->recordB2b(
                     $card,
                     $account,
                     $remote->remoteId,
@@ -1198,11 +1415,35 @@ final class B2bCatalogSync
                     $remote->identifiers,
                     $manufacturer,
                     $runId,
-                )];
+                )], $changes];
             });
         }
 
-        return ['status' => 'unchanged', 'product_id' => (int) $card->id, 'warnings' => $warnings, ...$ruleOutcome];
+        return [
+            'status' => $sizePlan !== null && $sizePlan['changed'] ? 'updated' : 'unchanged',
+            'product_id' => (int) $card->id,
+            'warnings' => $warnings,
+            ...($changes !== [] ? ['price_changes' => $changes] : []),
+            'size_cards' => $sizePlan !== null && ! $dryRun ? [(int) $card->id] : [],
+            ...$ruleOutcome,
+        ];
+    }
+
+    /**
+     * Rozmiar grupy z najniższą ceną (rozmiar, bez niego kod pozycji) — do ostrzeżeń; pozycja pojedyncza — jej kod.
+     *
+     * @param  list<array{sku: string, size?: string|null, price?: B2bRemotePrice|null}>  $members
+     */
+    private static function cheapestLabel(array $members, B2bRemotePrice $price, string $fallback): string
+    {
+        foreach ($members as $member) {
+            $own = $member['price'] ?? null;
+            if ($own !== null && abs(round($own->net, 2) - round($price->net, 2)) < 0.005) {
+                return (string) ($member['size'] ?? $member['sku']);
+            }
+        }
+
+        return $fallback;
     }
 
     /**
@@ -1218,7 +1459,10 @@ final class B2bCatalogSync
      * karty — nie opisuje karty jednego rozmiaru. Identyfikatory tylko tej pozycji; identyfikatory poziomu karty (bez
      * remoteId) dotyczą całej grupy i są pominięte.
      *
-     * @param  list<array{remote_id: string, sku: string, name: string, availability: string|null}>  $members
+     * Rozmiar z własną ceną (members[].price, 28.09.2026): karta pozycji dostaje cenę tego rozmiaru (price() łącznika
+     * wołane jak dotąd — błąd pomija, warunki zamawiania i ceny z niego), nie cenę grupy.
+     *
+     * @param  list<array{remote_id: string, sku: string, name: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}>  $members
      * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed
      * @param  array<string, array{price: bool, description: bool}>  $rules
      * @param  array<string, array{position_key: string, product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects
@@ -1256,7 +1500,8 @@ final class B2bCatalogSync
             );
             // błąd jednej pozycji nie zatrzymuje pozostałych — każda ma własną kartę i własną transakcję
             try {
-                $outcome = $this->syncProduct($account, $connector, $position, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $remote);
+                // rozmiar z własną ceną (members[].price, 28.09.2026) — karta pozycji dostaje jego cenę, nie cenę grupy
+                $outcome = $this->syncProduct($account, $connector, $position, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $remote, $member);
             } catch (B2bFatalException $e) {
                 throw $e;
             } catch (Throwable $e) {
@@ -1292,6 +1537,7 @@ final class B2bCatalogSync
         $shopFields = false;
         $translationQueued = false;
         $rule = [];
+        $sizeCards = [];
         $allExcluded = true;
         foreach ($outcomes as [$member, $outcome]) {
             $label = 'pozycja '.$member['sku'];
@@ -1308,6 +1554,7 @@ final class B2bCatalogSync
             }
             $allExcluded = false;
             $statuses[] = $outcome['status'];
+            array_push($sizeCards, ...($outcome['size_cards'] ?? []));
             array_push($priceChanges, ...$this->priceChangesOf($outcome));
             if (($outcome['update_summary'] ?? null) !== null) {
                 $summaries[] = $outcome['update_summary'];
@@ -1343,6 +1590,7 @@ final class B2bCatalogSync
             'image' => $image,
             'image_error' => $imageErrors !== [] ? implode('; ', $imageErrors) : null,
             'translation_queued' => $translationQueued,
+            'size_cards' => array_values(array_unique($sizeCards)),
             'warnings' => [...$warnings, ...array_map(static fn (string $reason): string => $reason.' — pominięta', $reasons)],
             ...$rule,
         ];
@@ -1524,14 +1772,20 @@ final class B2bCatalogSync
     /**
      * Pozycje grupy bez pustych i powtórzonych ID; pozycja remoteId zawsze pierwsza (gdy łącznik jej nie podał —
      * z kodu i nazwy produktu). Kod i nazwa pozycji dosłownie; availability — dostępność samej pozycji, gdy łącznik
-     * ją podał (null — nie podał; tylko tryb pojedynczy jej używa).
+     * ją podał (null — nie podał; tylko tryb pojedynczy jej używa). size i price — rozmiar i cena pozycji
+     * (B2bRemoteProduct::members, 28.09.2026), null = łącznik ich nie podał; pozycja remoteId dopisana z produktu nie
+     * ma ceny (sizePricing uzna wtedy grupę z cenami za niespójną). order — miejsce pozycji na liście łącznika
+     * (sort_order wiersza rozmiaru), pozycja dopisana z produktu — -1.
      *
-     * @return list<array{remote_id: string, sku: string, name: string, availability: string|null}>
+     * @return list<array{remote_id: string, sku: string, name: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}>
      */
     private function memberRows(B2bRemoteProduct $remote): array
     {
-        $rows = ['#'.$remote->remoteId => ['remote_id' => $remote->remoteId, 'sku' => $remote->sku, 'name' => $remote->name, 'availability' => null]];
-        foreach ($remote->members as $member) {
+        $rows = ['#'.$remote->remoteId => [
+            'remote_id' => $remote->remoteId, 'sku' => $remote->sku, 'name' => $remote->name, 'availability' => null,
+            'size' => null, 'price' => null, 'order' => -1,
+        ]];
+        foreach ($remote->members as $index => $member) {
             $id = (string) ($member['remote_id'] ?? '');
             if (trim($id) === '') {
                 continue;
@@ -1539,13 +1793,17 @@ final class B2bCatalogSync
             $availability = isset($member['availability']) && is_string($member['availability']) && trim($member['availability']) !== ''
                 ? $member['availability']
                 : null;
-            $row = ['remote_id' => $id, 'sku' => (string) ($member['sku'] ?? ''), 'name' => (string) ($member['name'] ?? ''), 'availability' => $availability];
+            $size = isset($member['size']) && is_string($member['size']) && trim($member['size']) !== '' ? trim($member['size']) : null;
+            $price = ($member['price'] ?? null) instanceof B2bRemotePrice ? $member['price'] : null;
+            $row = [
+                'remote_id' => $id, 'sku' => (string) ($member['sku'] ?? ''), 'name' => (string) ($member['name'] ?? ''),
+                'availability' => $availability, 'size' => $size, 'price' => $price, 'order' => (int) $index,
+            ];
             if ($id === $remote->remoteId) {
                 $rows['#'.$id] = [
-                    'remote_id' => $id,
+                    ...$row,
                     'sku' => $row['sku'] !== '' ? $row['sku'] : $remote->sku,
                     'name' => $row['name'] !== '' ? $row['name'] : $remote->name,
-                    'availability' => $availability,
                 ];
 
                 continue;
@@ -1554,6 +1812,431 @@ final class B2bCatalogSync
         }
 
         return array_values($rows);
+    }
+
+    /**
+     * Ceny pozycji grupy (members[].price, decyzja użytkownika 28.09.2026): „none” — żadna pozycja nie ma ceny (jak
+     * dotąd: cena grupy z price()); „priced” — każda ma cenę w jednej walucie: karta dostaje cenę najtańszej pozycji
+     * (remis — niższa cena katalogowa, potem kolejność na liście), max — najwyższa cena pozycji, gdy różni się od
+     * najniższej o co najmniej grosz (slot size_price_max); „invalid” — ceny tylko przy części pozycji albo w kilku
+     * walutach: kontrakt łącznika złamany, grupa pominięta z powodem (bez zgadywania, która cena jest dobra).
+     *
+     * @param  list<array{remote_id: string, sku: string, price: B2bRemotePrice|null, order: int}>  $members
+     * @return array{mode: 'none'|'priced'|'invalid', reason: string|null, cheapest: B2bRemotePrice|null, max: float|null}
+     */
+    private function sizePricing(array $members): array
+    {
+        $priced = array_values(array_filter($members, static fn (array $m): bool => $m['price'] instanceof B2bRemotePrice));
+        if ($priced === []) {
+            return ['mode' => 'none', 'reason' => null, 'cheapest' => null, 'max' => null];
+        }
+        if (count($priced) !== count($members)) {
+            $missing = array_map(
+                static fn (array $m): string => $m['sku'] !== '' ? $m['sku'] : $m['remote_id'],
+                array_values(array_filter($members, static fn (array $m): bool => ! $m['price'] instanceof B2bRemotePrice)),
+            );
+
+            return [
+                'mode' => 'invalid',
+                'reason' => 'łącznik podał ceny tylko części rozmiarów (bez ceny: '.implode(', ', array_slice($missing, 0, 10)).') — grupa pominięta',
+                'cheapest' => null,
+                'max' => null,
+            ];
+        }
+        $currencies = array_values(array_unique(array_map(
+            static fn (array $m): string => strtoupper(trim($m['price']->currency)),
+            $priced,
+        )));
+        if (count($currencies) !== 1 || $currencies[0] === '') {
+            return [
+                'mode' => 'invalid',
+                'reason' => 'ceny rozmiarów w różnych walutach lub bez waluty ('.implode(', ', $currencies).') — grupa pominięta',
+                'cheapest' => null,
+                'max' => null,
+            ];
+        }
+
+        usort($priced, static fn (array $a, array $b): int => $a['order'] <=> $b['order']);
+        $cheapest = null;
+        $max = null;
+        foreach ($priced as $member) {
+            /** @var B2bRemotePrice $price */
+            $price = $member['price'];
+            $net = round($price->net, 2);
+            $max = $max === null ? $net : max($max, $net);
+            if ($cheapest === null) {
+                $cheapest = $price;
+
+                continue;
+            }
+            $cheapestNet = round($cheapest->net, 2);
+            // remis ceny konta — niższa cena katalogowa (brak = cena konta), dalej pierwsza na liście
+            if ($net < $cheapestNet - 0.0049
+                || (abs($net - $cheapestNet) < 0.005 && round($price->base ?? $price->net, 2) < round($cheapest->base ?? $cheapest->net, 2) - 0.0049)) {
+                $cheapest = $price;
+            }
+        }
+
+        return [
+            'mode' => 'priced',
+            'reason' => null,
+            'cheapest' => $cheapest,
+            'max' => $max !== null && $cheapest !== null && $max - round($cheapest->net, 2) >= 0.005 ? $max : null,
+        ];
+    }
+
+    /**
+     * Cena karty z ceny pozycji: net, cena katalogowa, rabat i waluta z pozycji, warunek zamawiania i warunek ceny
+     * z price() łącznika (te opisują cały wyrób). Bez ceny pozycji — cena łącznika bez zmian.
+     */
+    private static function withPositionPrice(?B2bRemotePrice $connectorPrice, ?B2bRemotePrice $position): ?B2bRemotePrice
+    {
+        if ($connectorPrice === null || $position === null) {
+            return $connectorPrice;
+        }
+
+        return new B2bRemotePrice(
+            net: $position->net,
+            base: $position->base,
+            discountPercent: $position->discountPercent,
+            currency: $position->currency,
+            order: $connectorPrice->order,
+            condition: $connectorPrice->condition,
+        );
+    }
+
+    /** Ta sama kwota do grosza; null = brak kwoty (dwa null — to samo). */
+    private static function sameAmount(mixed $a, mixed $b): bool
+    {
+        if ($a === null || $b === null) {
+            return $a === null && $b === null;
+        }
+
+        return abs((float) $a - (float) $b) < 0.005;
+    }
+
+    /**
+     * Plan wierszy rozmiarów grupy na karcie (product_variants kind „size”, decyzja użytkownika 28.09.2026) — w pamięci,
+     * bez zapisu (dry-run liczy z niego status). Wiersz po kluczu slotu konta („b2b:{id}”) i remote_id pozycji; wiersz
+     * tej pozycji na innej karcie przechodzi na tę kartę. Etykieta = rozmiar dosłownie (bez niego — kod pozycji),
+     * cena katalogowa tylko gdy źródło ją podaje, dostępność null = źródło jej nie podaje (zapisana zostaje).
+     * changed — nowy rozmiar, rozmiar wracający na listę, przeniesiony z innej karty albo zmieniony (cena, kod,
+     * etykieta, dostępność, kolejność); changes — zmiany cen istniejących rozmiarów do dziennika przebiegu (jak zmiany
+     * wersji); history — nowy wiersz (punkt odniesienia) albo zmiana ceny.
+     *
+     * @param  list<array{remote_id: string, sku: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}>  $members
+     * @return array{rows: list<array{variant: ProductVariant, dirty: bool, history: bool}>, changed: bool, changes: list<array<string, mixed>>}
+     */
+    private function sizeRowPlan(B2bAccount $account, array $members, ?Product $card, string $cardSku, string $cardName): array
+    {
+        $source = ProductSourcePrice::b2bKey((int) $account->id);
+        $keys = [];
+        foreach ($members as $member) {
+            $keys[] = mb_substr($member['remote_id'], 0, 64);
+        }
+        /** @var Collection<string, ProductVariant> $stored */
+        $stored = ProductVariant::query()
+            ->where('source', $source)
+            ->whereIn('remote_id', array_values(array_unique($keys)))
+            ->get()
+            ->keyBy(static fn (ProductVariant $v): string => (string) $v->remote_id);
+
+        $rows = [];
+        $changes = [];
+        $changed = false;
+        $seen = [];
+        foreach ($members as $member) {
+            $price = $member['price'];
+            $key = mb_substr($member['remote_id'], 0, 64);
+            if ($price === null || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $model = $stored->get($key) ?? new ProductVariant(['source' => $source, 'remote_id' => $key]);
+            $isNew = ! $model->exists;
+            $oldPurchase = $model->purchase_price;
+            $oldList = $model->list_price_net;
+            $oldCurrency = $model->currency;
+
+            $model->fill([
+                'kind' => ProductVariant::KIND_SIZE,
+                'b2b_account_id' => $account->id,
+                'sku' => $member['sku'] !== '' ? mb_substr($member['sku'], 0, 255) : null,
+                'label' => mb_substr($member['size'] ?? ($member['sku'] !== '' ? $member['sku'] : $member['remote_id']), 0, 255),
+                'purchase_price' => round($price->net, 2),
+                'list_price_net' => $price->base !== null ? round($price->base, 2) : null,
+                'currency' => mb_substr(strtoupper(trim($price->currency)), 0, 3),
+                'sort_order' => max(0, $member['order']),
+                'attributes' => null,
+                'removed_at' => null,
+            ]);
+            if ($member['availability'] !== null) {
+                $model->availability = mb_substr($member['availability'], 0, 255);
+            }
+            // nowa karta (null) — wiersz istniejący i tak przechodzi na nią przy zapisie
+            if ($card !== null) {
+                $model->product_id = $card->id;
+            }
+            $dirty = $isNew || $model->isDirty() || $card === null;
+
+            $newPurchase = round($price->net, 2);
+            $purchaseChanged = $oldPurchase === null || abs((float) $oldPurchase - $newPurchase) >= 0.005;
+            $listChanged = ! $isNew && (($oldList === null) !== ($model->list_price_net === null)
+                || ($oldList !== null && $model->list_price_net !== null && abs((float) $oldList - (float) $model->list_price_net) >= 0.005));
+            $currencyChanged = ! $isNew && strtoupper((string) $oldCurrency) !== (string) $model->currency;
+            $history = $isNew || $purchaseChanged || $listChanged || $currencyChanged;
+
+            if (! $isNew && $oldPurchase !== null && ($purchaseChanged || $listChanged || $currencyChanged)) {
+                $old = round((float) $oldPurchase, 2);
+                $changes[] = [
+                    'variant_id' => (int) $model->id,
+                    'sku' => $cardSku,
+                    'name' => mb_substr($cardName, 0, 255),
+                    'variant_label' => (string) $model->label,
+                    'purchase_old' => $old,
+                    'purchase_new' => $newPurchase,
+                    'catalog_old' => null,
+                    'catalog_new' => null,
+                    'catalog_pct' => null,
+                    'discount_old' => null,
+                    'discount_new' => null,
+                    'direction' => $newPurchase - $old >= 0.005 ? 'up' : ($old - $newPurchase >= 0.005 ? 'down' : 'flat'),
+                    ...$this->changeCurrencies($oldCurrency, $model->currency),
+                ];
+            }
+            $changed = $changed || $dirty;
+            $rows[] = ['variant' => $model, 'dirty' => $dirty, 'history' => $history];
+        }
+
+        return ['rows' => $rows, 'changed' => $changed, 'changes' => $changes];
+    }
+
+    /**
+     * Zapis planu wierszy rozmiarów na karcie (w transakcji wołającego). Zmienione — zapis z datą odczytu i historią
+     * ceny przy nowym wierszu albo zmianie ceny; bez zmian — jeden UPDATE sygnału widoczności (bez updated_at), więc
+     * drugi taki sam przebieg niczego nie zmienia.
+     *
+     * @param  array{rows: list<array{variant: ProductVariant, dirty: bool, history: bool}>, changed: bool, changes: list<array<string, mixed>>}  $plan
+     * @return list<array<string, mixed>> zmiany cen rozmiarów do dziennika przebiegu
+     */
+    private function saveSizeRows(array $plan, Product $product, ?int $runId, string $historySource): array
+    {
+        $now = now();
+        $touch = [];
+        foreach ($plan['rows'] as $row) {
+            $variant = $row['variant'];
+            if ($row['dirty']) {
+                $variant->product_id = $product->id;
+                $variant->last_seen_at = $now;
+                $variant->price_checked_at = $now;
+                $variant->save();
+            } else {
+                $touch[] = (int) $variant->id;
+            }
+            if ($row['history']) {
+                ProductVariantPriceHistory::query()->create([
+                    'product_variant_id' => $variant->id,
+                    'b2b_sync_run_id' => $runId,
+                    'purchase_price' => $variant->purchase_price,
+                    'list_price_net' => $variant->list_price_net,
+                    'currency' => $variant->currency,
+                    'source' => $historySource,
+                ]);
+            }
+        }
+        if ($touch !== []) {
+            ProductVariant::query()->toBase()->whereIn('id', $touch)->update(['last_seen_at' => $now, 'price_checked_at' => $now]);
+        }
+
+        return array_map(static fn (array $change): array => ['product_id' => (int) $product->id, ...$change], $plan['changes']);
+    }
+
+    /**
+     * Pozycje grupy z cenami rozmiarów według kart, na które wskazują ich powiązania tego konta — tylko gdy tych kart
+     * jest co najmniej dwie (dawny podział wyrobu według ceny). Pozycje z wpisem mapy połączeń bez karty ($mapped) nie
+     * głosują, jak w resolveGroupCard. Pozycja bez powiązania (nowy rozmiar) dołącza do karty pozycji remoteId, inaczej
+     * do karty z największą liczbą powiązań (remis — najniższe id). null = pozycje na co najwyżej jednej karcie (zwykła
+     * droga grupy).
+     *
+     * @param  list<array{remote_id: string, sku: string, name: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}>  $members
+     * @param  array<string, mixed>  $mapped  remote_id pozycji z wpisem mapy => wpis
+     * @return array{groups: array<int, list<array{remote_id: string, sku: string, name: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}>>, cards: array<int, Product>, card_of: array<string, int>}|null
+     */
+    private function cardGroups(B2bAccount $account, B2bRemoteProduct $remote, array $members, array $mapped): ?array
+    {
+        /** @var Collection<string, B2bProductLink> $links */
+        $links = B2bProductLink::query()
+            ->where('b2b_account_id', $account->id)
+            ->whereIn('remote_id', array_column($members, 'remote_id'))
+            ->with('product')
+            ->orderBy('id')
+            ->get()
+            ->keyBy(static fn (B2bProductLink $l): string => (string) $l->remote_id);
+
+        $cardOf = [];
+        $cards = [];
+        foreach ($members as $member) {
+            if (array_key_exists($member['remote_id'], $mapped)) {
+                continue;
+            }
+            $link = $links->get($member['remote_id']);
+            if ($link?->product !== null) {
+                $cardOf[$member['remote_id']] = (int) $link->product_id;
+                $cards[(int) $link->product_id] = $link->product;
+            }
+        }
+        if (count($cards) < 2) {
+            return null;
+        }
+
+        $counts = array_count_values($cardOf);
+        ksort($counts);
+        $fallback = $cardOf[$remote->remoteId] ?? (int) array_search(max($counts), $counts, true);
+        $groups = [];
+        foreach ($members as $member) {
+            $groups[$cardOf[$member['remote_id']] ?? $fallback][] = $member;
+        }
+        ksort($groups);
+
+        return ['groups' => $groups, 'cards' => $cards, 'card_of' => $cardOf];
+    }
+
+    /**
+     * Tryb „według kart” — przejście na rozmiary w różnych cenach (decyzja użytkownika 28.09.2026). Łącznik podaje już
+     * jeden wyrób z cenami rozmiarów, a jego pozycje leżą na kilku kartach z dawnego podziału według ceny (Mascot do
+     * 28.09.2026: „18001-249-1809 S” i „18001-249-1809 3XL”). Zwykła droga grupy przepięłaby wszystkie powiązania na
+     * kartę pozycji remoteId i osierociła resztę kart, a ich ceny (i opisy, historię, oferty) zostawiła bez źródła —
+     * scalenie ma być decyzją (etap 2, polecenie z podglądem), nie ubocznym skutkiem przebiegu.
+     * Każda karta idzie jako osobna grupa (syncProduct): pozycja wiodąca = pierwsza pozycja z powiązaniem na tę kartę,
+     * kod = SKU karty (bez zmiany nazwy i kodu), pozycje = rozmiary tej karty (nowe rozmiary według cardGroups), cena karty
+     * = najtańszy z jej rozmiarów, identyfikatory poziomu karty + identyfikatory jej pozycji, lista rozmiarów bez zmian
+     * (variantSummary null), od łącznika — cały wyrób ($remote jako origin: opis, pliki, zdjęcia, tabelka).
+     * Dostępność karty z dostępności jej pozycji, gdy łącznik podał ją przy każdej (inaczej zapisana zostaje).
+     * Grupa trafia do size_spread wyniku (lista do etapu 2).
+     *
+     * @param  array{groups: array<int, list<array{remote_id: string, sku: string, name: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}>>, cards: array<int, Product>, card_of: array<string, int>}  $byCard
+     * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed
+     * @param  array<string, array{price: bool, description: bool}>  $rules
+     * @param  array<string, array{position_key: string, product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects
+     * @param  list<string>  $warnings  ostrzeżenia mapy połączeń zebrane przed rozdzieleniem
+     * @return array<string, mixed> wynik zbiorczy (combinedOutcome) z size_spread
+     */
+    private function syncMembersByCard(
+        B2bAccount $account,
+        B2bConnector $connector,
+        B2bRemoteProduct $remote,
+        array $byCard,
+        bool $dryRun,
+        bool $withImages,
+        ?int $runId,
+        ?int $priceListId,
+        array &$claimed,
+        array $rules,
+        array $redirects,
+        array $warnings,
+    ): array {
+        $outcomes = [];
+        $failed = [];
+        $spread = [];
+        foreach ($byCard['groups'] as $cardId => $group) {
+            $card = $byCard['cards'][$cardId];
+            $lead = null;
+            foreach ($group as $member) {
+                if (($byCard['card_of'][$member['remote_id']] ?? null) === $cardId) {
+                    $lead = $member;
+                    break;
+                }
+            }
+            $lead ??= $group[0];
+            $ids = array_column($group, 'remote_id');
+            foreach ($group as $member) {
+                $spread[] = [
+                    'remote_id' => $member['remote_id'],
+                    'sku' => $member['sku'],
+                    'size' => $member['size'],
+                    'card_id' => $cardId,
+                    'net' => $member['price'] !== null ? round($member['price']->net, 2) : null,
+                    'currency' => $member['price']?->currency,
+                ];
+            }
+            $position = new B2bRemoteProduct(
+                remoteId: $lead['remote_id'],
+                sku: (string) $card->sku,
+                name: $remote->name,
+                category: $remote->category,
+                sourceUrl: $remote->sourceUrl,
+                raw: $remote->raw,
+                availability: self::membersAvailability($group),
+                variantSummary: null,
+                members: array_map(static fn (array $m): array => array_filter([
+                    'remote_id' => $m['remote_id'],
+                    'sku' => $m['sku'],
+                    'name' => $m['name'],
+                    'availability' => $m['availability'],
+                    'size' => $m['size'],
+                    'price' => $m['price'],
+                ], static fn (mixed $v): bool => $v !== null), $group),
+                identifiers: $remote->identifiers === null ? null : array_values(array_filter(
+                    $remote->identifiers,
+                    static fn (B2bRemoteIdentifier $identifier): bool => $identifier->remoteId === null
+                        || in_array((string) $identifier->remoteId, $ids, true),
+                )),
+            );
+            // błąd jednej karty nie zatrzymuje pozostałych — każda ma własną transakcję
+            try {
+                $outcome = $this->syncProduct($account, $connector, $position, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $remote);
+            } catch (B2bFatalException $e) {
+                throw $e;
+            } catch (Throwable $e) {
+                $outcome = ['status' => 'skipped', 'reason' => $e->getMessage()];
+            }
+            if (! in_array($outcome['status'], ['created', 'updated', 'unchanged'], true)) {
+                array_push($failed, ...$ids);
+            }
+            $outcomes[] = [['remote_id' => $lead['remote_id'], 'sku' => (string) $card->sku], $outcome];
+        }
+
+        $combined = $this->combinedOutcome($outcomes);
+
+        return [
+            ...$combined,
+            // cała grupa karty nieudana — żadna jej pozycja nie idzie do sprzątania identyfikatorów ani rozmiarów
+            'failed_positions' => array_values(array_unique($failed)),
+            'warnings' => [...$warnings, ...$combined['warnings']],
+            'size_spread' => [
+                'sku' => $remote->sku,
+                'name' => mb_substr($remote->name, 0, 255),
+                'remote_id' => $remote->remoteId,
+                'members' => $spread,
+                'cards' => array_keys($byCard['groups']),
+            ],
+        ];
+    }
+
+    /**
+     * Dostępność karty z dostępności jej pozycji — jedna wspólna dosłownie, różne — „Na stanie: S, M; Ograniczona
+     * dostępność: 3XL” (rozmiar, bez niego kod pozycji). Któraś pozycja bez dostępności — null (zapisana zostaje).
+     *
+     * @param  list<array{sku: string, availability: string|null, size: string|null}>  $members
+     */
+    private static function membersAvailability(array $members): ?string
+    {
+        $statuses = [];
+        foreach ($members as $member) {
+            if ($member['availability'] === null) {
+                return null;
+            }
+            $statuses[$member['availability']][] = $member['size'] ?? $member['sku'];
+        }
+        if (count($statuses) === 1) {
+            return (string) array_key_first($statuses);
+        }
+        $parts = [];
+        foreach ($statuses as $status => $labels) {
+            $parts[] = $status.': '.implode(', ', $labels);
+        }
+
+        return $parts === [] ? null : implode('; ', $parts);
     }
 
     /**
@@ -1718,9 +2401,10 @@ final class B2bCatalogSync
         $claimed['skus'][mb_strtolower($sku)] ??= $productId;
     }
 
+    /** Aktywne wersje Sign Project (kind „version”) — rozmiary w różnych cenach („size”) nie blokują listy rozmiarów. */
     private function hasActiveVariants(Product $product): bool
     {
-        return ProductVariant::query()->where('product_id', $product->id)->whereNull('removed_at')->exists();
+        return ProductVariant::query()->versions()->where('product_id', $product->id)->whereNull('removed_at')->exists();
     }
 
     /**
@@ -2179,7 +2863,9 @@ final class B2bCatalogSync
         ], $rows);
 
         if ($existing !== null) {
+            // tylko wersje — wiersze rozmiarów („size”) innego źródła nie są wersjami tego znaku
             $others = ProductVariant::query()
+                ->versions()
                 ->where('product_id', $existing->id)
                 ->whereNull('removed_at')
                 ->whereNotIn('id', $stored->pluck('id')->all())
@@ -2306,6 +2992,7 @@ final class B2bCatalogSync
                 continue;
             }
             $items = ProductVariant::query()
+                ->versions()
                 ->where('product_id', $productId)
                 ->whereNull('removed_at')
                 ->orderBy('sort_order')

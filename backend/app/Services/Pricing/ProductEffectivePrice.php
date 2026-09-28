@@ -23,7 +23,8 @@ use Illuminate\Support\Facades\DB;
  * Który slot — explain() (23.09.2026): cennik producenta tej marki (konto B2B producenta, potem plik producenta)
  * ma pierwszeństwo przed dystrybutorem wielu marek, bez względu na datę; dalej B2B przed plikiem jak 15.09.
  * Cena zawsze z jednego slotu — waluty i ceny z różnych źródeł się nie mieszają.
- * Karty z aktywnymi wersjami (product_variants, cena karty 0 = „brak ceny”) nie są przeliczane.
+ * Karty z aktywnymi wersjami (product_variants kind „version”, cena karty 0 = „brak ceny”) nie są przeliczane;
+ * rozmiary w różnych cenach (kind „size”) nie blokują — slot konta ma cenę najniższego rozmiaru.
  */
 final class ProductEffectivePrice
 {
@@ -355,8 +356,12 @@ final class ProductEffectivePrice
         Product::query()->whereKey($product->id)->lockForUpdate()->first();
     }
 
+    /**
+     * Tylko wersje Sign Project (kind „version”) — rozmiary w różnych cenach (kind „size”) nie wyłączają ceny
+     * karty: slot konta niesie cenę najniższego rozmiaru (decyzja użytkownika 28.09.2026).
+     */
     private function hasActiveVariants(Product $product): bool
     {
-        return ProductVariant::query()->where('product_id', $product->id)->whereNull('removed_at')->exists();
+        return ProductVariant::query()->where('product_id', $product->id)->versions()->whereNull('removed_at')->exists();
     }
 }

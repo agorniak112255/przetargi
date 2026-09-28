@@ -6,11 +6,14 @@ namespace Tests\Feature;
 
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
+use App\Models\ProductVariantPriceHistory;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
@@ -170,10 +173,13 @@ final class MascotConnectorTest extends TestCase
         $this->assertSame('https://b2b.mascot.dk/Distributor/ProductDetail?productNumber=F999991009', $card->sourceUrl);
         $this->assertSame(
             [
-                ['remote_id' => '5700000000101', 'sku' => 'F9999-910-09 0840', 'name' => 'Buty ochronne MASCOT FOOTWEAR TEST F9999-910-09, czerń 0840'],
-                ['remote_id' => '5700000000102', 'sku' => 'F9999-910-09 0841', 'name' => 'Buty ochronne MASCOT FOOTWEAR TEST F9999-910-09, czerń 0841'],
+                ['5700000000101', 'F9999-910-09 0840', 'Buty ochronne MASCOT FOOTWEAR TEST F9999-910-09, czerń 0840', '0840', 'Na stanie', 289.95, null, 'PLN'],
+                ['5700000000102', 'F9999-910-09 0841', 'Buty ochronne MASCOT FOOTWEAR TEST F9999-910-09, czerń 0841', '0841', 'Brak na stanie, możliwość zamówienia, spodziewane od 03.11.2026', 289.95, null, 'PLN'],
             ],
-            $card->members,
+            array_map(static fn (array $m): array => [
+                $m['remote_id'], $m['sku'], $m['name'], $m['size'] ?? null, $m['availability'] ?? null,
+                $m['price']?->net, $m['price']?->base, $m['price']?->currency,
+            ], $card->members),
         );
         $this->assertSame('Na stanie: 0840; Brak na stanie, możliwość zamówienia, spodziewane od 03.11.2026: 0841', $card->availability);
         $this->assertSame('Rozmiary: 0840 (EAN 5700000000101); 0841 (EAN 5700000000102)', $card->variantSummary);
@@ -199,23 +205,32 @@ final class MascotConnectorTest extends TestCase
         $this->assertContains(['EAN', '0840: 5700000000101; 0841: 5700000000102'], $fields);
     }
 
-    public function test_sizes_in_two_prices_are_two_cards_named_with_their_sizes(): void
+    /**
+     * Do 28.09.2026 (decyzja 15.09.2026) rozmiary w dwóch cenach były dwiema kartami („19999-249-1809 S” z S, M, L
+     * i „19999-249-1809 3XL”). Od decyzji użytkownika 28.09.2026 to jedna karta z kodem artykułu i nazwą bez rozmiarów,
+     * a cena każdego rozmiaru jedzie przy jego pozycji; cena karty (price()) = najniższa cena rozmiaru.
+     */
+    public function test_sizes_in_two_prices_are_one_card_with_size_prices_and_the_lowest_card_price(): void
     {
         $this->addArticle(self::jacket());
         $this->fakeSite();
 
-        $products = $this->products();
+        $connector = $this->connector();
+        $products = iterator_to_array($connector->products(), false);
 
         $this->assertSame(
-            [
-                // przy podziale każda karta ma kod z pierwszym rozmiarem — sam kod artykułu nie przechodzi między kartami
-                ['19999-249-1809 S', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-1809, ciemny antracyt/czerń (rozm. S, M, L)', 3],
-                ['19999-249-1809 3XL', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-1809, ciemny antracyt/czerń (rozm. 3XL)', 1],
-            ],
+            [['19999-249-1809', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-1809, ciemny antracyt/czerń', 4]],
             array_map(static fn (B2bRemoteProduct $p): array => [$p->sku, $p->name, count($p->members)], $products),
         );
-        $connector = $this->connector();
-        $this->assertSame([539.0, 599.0], array_map(static fn (B2bRemoteProduct $p): ?float => $connector->price($p)?->net, $products));
+        $this->assertSame('5700000000201', $products[0]->remoteId);
+        $this->assertSame(
+            [['S', 539.0], ['M', 539.0], ['L', 539.0], ['3XL', 599.0]],
+            array_map(static fn (array $m): array => [$m['size'], $m['price']->net], $products[0]->members),
+        );
+        $this->assertSame(['S', 'M', 'L', '3XL'], array_column($products[0]->raw['sizes'], 'size'));
+        $this->assertSame(539.0, $connector->price($products[0])?->net);
+        $this->assertSame(1, $connector->totalProducts());
+        $this->assertStringContainsString('Karty: 1 (1 artykułów z rozmiarami w różnych cenach', implode("\n", $connector->runSummary()));
     }
 
     public function test_missing_translation_is_an_empty_field_and_hidden_or_unpriced_sizes_stay_off_the_card(): void
@@ -286,7 +301,8 @@ final class MascotConnectorTest extends TestCase
 
         $products = iterator_to_array($connector->products(), false);
 
-        $this->assertCount(3, $products);
+        // dwa artykuły = dwie karty (rozmiary w różnych cenach to od 28.09.2026 jedna karta)
+        $this->assertCount(2, $products);
         $this->assertStringContainsString('pobieram od nowa', implode("\n", $progress));
     }
 
@@ -339,7 +355,8 @@ final class MascotConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
 
-        $this->assertSame(3, $result['created'], implode(' | ', $result['errors']));
+        // buty i kurtka — kurtka z rozmiarami w dwóch cenach to jedna karta (decyzja użytkownika 28.09.2026)
+        $this->assertSame(2, $result['created'], implode(' | ', $result['errors']));
         $boots = Product::query()->where('sku', 'F9999-910-09')->sole();
         $this->assertSame('MASCOT', $boots->manufacturer);
         $this->assertSame(
@@ -354,8 +371,21 @@ final class MascotConnectorTest extends TestCase
             [self::CDN.'F9999-910-09_P01_1000px.jpg'],
             ProductImage::query()->where('product_id', $boots->id)->pluck('source_url')->all(),
         );
-        $this->assertSame('599.00', (string) ProductSourcePrice::query()
-            ->where('product_id', Product::query()->where('sku', '19999-249-1809 3XL')->value('id'))->value('purchase_price'));
+        $jacket = Product::query()->where('sku', '19999-249-1809')->sole();
+        $jacketSlot = ProductSourcePrice::query()->where('product_id', $jacket->id)->sole();
+        // cena karty = najtańszy rozmiar, najwyższa cena rozmiaru przy slocie
+        $this->assertSame('539.00', (string) $jacketSlot->purchase_price);
+        $this->assertSame('599.00', (string) $jacketSlot->size_price_max);
+        $this->assertSame('539.00', (string) $jacket->purchase_price);
+        $this->assertSame(
+            [['S', '539.00'], ['M', '539.00'], ['L', '539.00'], ['3XL', '599.00']],
+            ProductVariant::query()->where('product_id', $jacket->id)->where('kind', ProductVariant::KIND_SIZE)->orderBy('sort_order')->get()
+                ->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price])->all(),
+        );
+        $this->assertSame('599.00', (string) B2bProductLink::query()->where('remote_id', '5700000000204')->value('last_purchase_price'));
+        $this->assertSame('539.00', (string) B2bProductLink::query()->where('remote_id', '5700000000201')->value('last_purchase_price'));
+        // buty w jednej cenie — rozmiary też w tabeli, bez „do Y”
+        $this->assertNull(ProductSourcePrice::query()->where('product_id', $boots->id)->value('size_price_max'));
 
         $this->assertSame(
             ['0840' => '5700000000101', '0841' => '5700000000102', '' => 'F999991009'],
@@ -370,8 +400,53 @@ final class MascotConnectorTest extends TestCase
 
         $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
         $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
-        $this->assertSame(3, $second['unchanged'], implode(' | ', $second['errors']));
+        $this->assertSame(2, $second['unchanged'], implode(' | ', $second['errors']));
         $this->assertSame($before, $this->snapshot());
+    }
+
+    /**
+     * Karty sprzed 28.09.2026 (kurtka rozbita według ceny na „19999-249-1809 S” i „19999-249-1809 3XL”) — pierwszy
+     * i drugi przebieg po zmianie: bez nowej karty, bez przepinania powiązań, bez zmian cen i opisów; każda karta
+     * dostaje swoje rozmiary, a wyrób trafia do size_spread przebiegu (scalenie — etap 2).
+     */
+    public function test_legacy_price_split_cards_stay_and_get_their_own_sizes_over_two_runs(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addArticle(self::jacket());
+        $this->fakeSite();
+        $account = $this->account();
+        $description = 'Lekka tkanina. Oddychający, wiatro- i wodoszczelny.';
+        $small = $this->legacyCard($account, '19999-249-1809 S', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-1809, ciemny antracyt/czerń (rozm. S, M, L)', $description, 539.0, ['5700000000201' => 'S', '5700000000202' => 'M', '5700000000203' => 'L']);
+        $large = $this->legacyCard($account, '19999-249-1809 3XL', 'Kurtka membranowa MASCOT ACCELERATE 19999-249-1809, ciemny antracyt/czerń (rozm. 3XL)', $description, 599.0, ['5700000000204' => '3XL']);
+        $cards = fn (): array => Product::query()->orderBy('id')->get()->map(fn (Product $p): array => [
+            $p->sku, $p->name, $p->description, (string) $p->purchase_price,
+            B2bProductLink::query()->where('product_id', $p->id)->orderBy('remote_id')->pluck('remote_id')->all(),
+            (string) ProductSourcePrice::query()->where('product_id', $p->id)->value('purchase_price'),
+            ProductSourcePrice::query()->where('product_id', $p->id)->value('size_price_max'),
+        ])->all();
+        $before = $cards();
+
+        $first = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $first['created'], implode(' | ', $first['errors']));
+        $this->assertSame(0, $first['skipped'], implode(' | ', $first['errors']));
+        $this->assertSame(0, $first['prices_changed']);
+        $this->assertSame($before, $cards());
+        $sizes = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->orderBy('sort_order')->get()
+            ->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price])->all();
+        $this->assertSame([['S', '539.00'], ['M', '539.00'], ['L', '539.00']], $sizes($small));
+        $this->assertSame([['3XL', '599.00']], $sizes($large));
+        $spread = B2bSyncRun::query()->findOrFail($first['sync_run_id'])->size_spread;
+        $this->assertSame(1, $spread['total']);
+        $this->assertSame([$small->id, $large->id], $spread['groups'][0]['cards']);
+
+        $second = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
+        $this->assertSame(1, $second['unchanged']);
+        $this->assertSame($before, $cards());
+        $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
     }
 
     public function test_registry_detects_mascot_by_host_as_the_manufacturer_site(): void
@@ -418,6 +493,34 @@ final class MascotConnectorTest extends TestCase
         return iterator_to_array($this->connector()->products(), false);
     }
 
+    /**
+     * Karta zapisana przez dawny podział według ceny: opis ze źródła z odciskiem w powiązaniach, slot konta, kod
+     * i nazwa z rozmiarami.
+     *
+     * @param  array<string, string>  $sizes  EAN => rozmiar
+     */
+    private function legacyCard(B2bAccount $account, string $sku, string $name, string $description, float $price, array $sizes): Product
+    {
+        $card = Product::query()->create([
+            'sku' => $sku, 'name' => $name, 'manufacturer' => 'MASCOT', 'description' => $description,
+            'catalog_price_net' => $price, 'discount_percent' => 0, 'purchase_price' => $price, 'currency' => 'PLN',
+        ]);
+        foreach ($sizes as $ean => $size) {
+            B2bProductLink::query()->create([
+                'b2b_account_id' => $account->id, 'remote_id' => (string) $ean, 'product_id' => $card->id,
+                'remote_sku' => '19999-249-1809 '.$size, 'remote_name' => $name.' '.$size, 'manufacturer' => 'MASCOT',
+                'description_hash' => sha1($description), 'last_purchase_price' => $price, 'last_currency' => 'PLN',
+            ]);
+        }
+        ProductSourcePrice::query()->create([
+            'product_id' => $card->id, 'source_key' => ProductSourcePrice::b2bKey((int) $account->id), 'b2b_account_id' => $account->id,
+            'catalog_price_net' => $price, 'purchase_price' => $price, 'discount_percent' => 0, 'currency' => 'PLN',
+            'availability' => 'Na stanie', 'checked_at' => now()->subDay(),
+        ]);
+
+        return $card;
+    }
+
     private function account(): B2bAccount
     {
         return B2bAccount::query()->firstOrCreate(
@@ -446,7 +549,10 @@ final class MascotConnectorTest extends TestCase
             'links' => B2bProductLink::query()->where('product_id', $p->id)->orderBy('remote_id')->pluck('remote_id')->all(),
             'shop_card' => ProductShopCard::query()->where('product_id', $p->id)->value('fields'),
             'images' => ProductImage::query()->where('product_id', $p->id)->orderBy('sort_order')->pluck('source_url')->all(),
-            'price' => ProductSourcePrice::query()->where('product_id', $p->id)->get(['purchase_price', 'catalog_price_net', 'availability'])->toArray(),
+            'price' => ProductSourcePrice::query()->where('product_id', $p->id)->get(['purchase_price', 'catalog_price_net', 'size_price_max', 'availability'])->toArray(),
+            'sizes' => ProductVariant::query()->where('product_id', $p->id)->orderBy('id')
+                ->get(['remote_id', 'label', 'purchase_price', 'availability', 'removed_at', 'updated_at'])->toArray(),
+            'size_history' => ProductVariantPriceHistory::query()->count(),
         ]])->all();
     }
 

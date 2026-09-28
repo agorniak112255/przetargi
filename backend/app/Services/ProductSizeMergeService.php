@@ -70,6 +70,8 @@ final class ProductSizeMergeService
     {
         // Karta z wersjami B2B (znak w formatach × podłożach) to już jedna karta z cenami w wersjach — cena karty 0
         // skleiłaby różne znaki w jedną grupę, a usunięcie karty skasowałoby jej wersje i historię cen.
+        // Wszystkie rodzaje, także rozmiary „size” (28.09.2026): kaskada skasowałaby je z kartą, dopóki etap 2 nie
+        // nauczy łączenia ich przenosić.
         $query = Product::query()->withCount('images')->whereDoesntHave('variants')->orderBy('id');
         if ($manufacturer !== null && trim($manufacturer) !== '') {
             $query->where('manufacturer', trim($manufacturer));

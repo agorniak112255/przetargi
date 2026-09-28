@@ -343,6 +343,8 @@ final class CardMatchSizeMerger
     private function guard(Product $source, array $targets, array $owners): void
     {
         $checks = [
+            // wszystkie rodzaje, także rozmiary „size” (28.09.2026): kaskada skasowałaby je z kartą, dopóki etap 2 nie
+            // nauczy łączenia ich przenosić
             ['product_variants', ['product_id'], 'ma wersje'],
             ['product_special_prices', ['product_id'], 'ma ceny specjalne'],
             ['product_accessories', ['product_id', 'related_product_id'], 'ma akcesoria albo jest akcesorium innej karty'],

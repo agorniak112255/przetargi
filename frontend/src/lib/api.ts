@@ -181,10 +181,15 @@ export type ProductVariantPriceChange = {
   b2b_sync_run_id: number | null
 }
 
-/** Wersja karty u dostawcy (np. format × podłoże znaku) z ceną konta; etykieta i atrybuty dosłownie ze źródła. */
+/**
+ * Wersja karty u dostawcy (np. format × podłoże znaku) albo rozmiar karty z własną ceną (kind „size”) z ceną konta;
+ * etykieta i atrybuty dosłownie ze źródła.
+ */
 export type ProductVariant = {
   id: number
   remote_id: string
+  /** Kod rozmiaru u dostawcy; wersje Sign Project nie mają. */
+  sku: string | null
   label: string
   attributes: Record<string, string>
   purchase_price: string | null
@@ -192,6 +197,8 @@ export type ProductVariant = {
   currency: string | null
   vat_rate: number | null
   unit: string | null
+  /** Dostępność rozmiaru dosłownie ze sklepu dostawcy; null = sklep nie podał. */
+  availability: string | null
   source_url: string | null
   sort_order: number
   price_checked_at: string | null
@@ -202,6 +209,11 @@ export type ProductVariant = {
 }
 
 export type ProductVariants = {
+  /**
+   * „version” — wersje Sign Project (karta z ceną 0, ceny tylko w wersjach); „size” — rozmiary w różnych cenach
+   * (karta ma własną cenę = najniższy rozmiar). Karta z oboma pokazuje same wersje.
+   */
+  kind: 'version' | 'size'
   count: number
   active_count: number
   /** Tylko z aktywnych wersji z ceną; null przy różnych walutach albo braku cen. */
@@ -375,6 +387,13 @@ export type OrderQuantity = {
   price_note?: string | null
   /** Ilość w kartonie, dla której obowiązuje cena; null przy przypisie = różne kartony rozmiarów. */
   price_carton_qty?: number | null
+  /**
+   * Rozmiary w różnych cenach: cena karty to najniższy rozmiar, to najwyższa cena rozmiaru (netto, jak ceny karty);
+   * null = jedna cena.
+   */
+  size_price_max?: string | null
+  /** Waluta size_price_max (slot), np. „PLN”; null bez rozmiarów w różnych cenach. */
+  size_price_currency?: string | null
   source_key: string
   source_label: string
 }

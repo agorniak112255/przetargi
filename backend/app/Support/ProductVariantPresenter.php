@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Support;
 
+use App\Models\B2bAccount;
 use App\Models\ProductVariant;
+use App\Services\Pricing\SourcePriceComparison;
 use DateTimeInterface;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -12,6 +14,8 @@ use Illuminate\Support\Facades\DB;
 /**
  * Wersje karty (np. format × podłoże znaku) dla API: „od–do” z aktywnych wersji z ceną,
  * ostatnia zmiana ceny każdej wersji i historia cen jednej wersji.
+ * Te same pola dla rozmiarów w różnych cenach (kind „size”) — karta ma wtedy własną cenę (najniższy rozmiar),
+ * a wiersze to tylko tabela rozmiarów.
  *
  * Cena 0 albo brak ceny = wersja bez ceny (jak na karcie) — nie liczy się do „od–do”.
  * Przy różnych walutach „od–do” nie jest liczone (bez przeliczania kursem).
@@ -20,10 +24,14 @@ final class ProductVariantPresenter
 {
     private const IDS_PER_QUERY = 1000;
 
-    public function __construct(private readonly ProductPriceChangeResolver $priceChanges) {}
+    public function __construct(
+        private readonly ProductPriceChangeResolver $priceChanges,
+        private readonly SourcePriceComparison $comparison,
+    ) {}
 
     /**
-     * Pola listy produktów — jedno zapytanie grupujące na stronę.
+     * Pola listy produktów — jedno zapytanie grupujące na stronę. Tylko wersje: rozmiary nie zastępują ceny
+     * karty na liście („od X · n wersji” jest dla kart z ceną 0).
      *
      * @param  list<int>  $productIds
      * @return array<int, array{variants_count: int, variants_min_price: string|null, variants_currency: string|null}>
@@ -39,6 +47,7 @@ final class ProductVariantPresenter
                 ->selectRaw('MIN(CASE WHEN purchase_price > 0 THEN currency END) AS min_currency')
                 ->selectRaw('MAX(CASE WHEN purchase_price > 0 THEN currency END) AS max_currency')
                 ->whereIn('product_id', $chunk)
+                ->where('kind', ProductVariant::KIND_VERSION)
                 ->whereNull('removed_at')
                 ->groupBy('product_id')
                 ->get();
@@ -57,7 +66,8 @@ final class ProductVariantPresenter
     }
 
     /**
-     * Pole `variants` karty; null, gdy karta nie ma wersji.
+     * Pole `variants` karty; null, gdy karta nie ma wersji ani rozmiarów. Karta z wersjami i rozmiarami
+     * pokazuje same wersje (kind „version”) — to one decydują o cenie 0 karty.
      *
      * @return array<string, mixed>|null
      */
@@ -70,6 +80,11 @@ final class ProductVariantPresenter
             ->get();
         if ($variants->isEmpty()) {
             return null;
+        }
+        $isVersion = static fn (ProductVariant $v): bool => $v->kind !== ProductVariant::KIND_SIZE;
+        $kind = $variants->contains($isVersion) ? ProductVariant::KIND_VERSION : ProductVariant::KIND_SIZE;
+        if ($kind === ProductVariant::KIND_VERSION) {
+            $variants = $variants->filter($isVersion)->values();
         }
 
         $changes = $this->latestChanges($variants->pluck('id')->map(static fn (mixed $id): int => (int) $id)->all());
@@ -96,18 +111,18 @@ final class ProductVariantPresenter
             ->values();
 
         return [
+            'kind' => $kind,
             'count' => $variants->count(),
             'active_count' => $active->count(),
             'min_price' => $currency !== null ? $this->money($priced->min(static fn (ProductVariant $v): float => (float) $v->purchase_price)) : null,
             'max_price' => $currency !== null ? $this->money($priced->max(static fn (ProductVariant $v): float => (float) $v->purchase_price)) : null,
             'currency' => $currency,
-            'source_label' => $sources->isNotEmpty()
-                ? $sources->map(fn (string $s): string => $this->priceChanges->sourceLabel($s, false, null))->implode(', ')
-                : null,
+            'source_label' => $sources->isNotEmpty() ? $this->sourceLabels($sources->all()) : null,
             'dimensions' => $dimensions,
             'items' => $variants->map(fn (ProductVariant $v): array => [
                 'id' => (int) $v->id,
                 'remote_id' => (string) $v->remote_id,
+                'sku' => $v->sku !== null && $v->sku !== '' ? (string) $v->sku : null,
                 'label' => (string) $v->label,
                 'attributes' => is_array($v->attributes) && $v->attributes !== [] ? $v->attributes : (object) [],
                 'purchase_price' => $this->money($v->purchase_price),
@@ -115,6 +130,7 @@ final class ProductVariantPresenter
                 'currency' => $v->currency,
                 'vat_rate' => $v->vat_rate !== null ? (float) $v->vat_rate : null,
                 'unit' => $v->unit,
+                'availability' => $v->availability !== null && $v->availability !== '' ? (string) $v->availability : null,
                 'source_url' => $v->source_url,
                 'sort_order' => (int) $v->sort_order,
                 'price_checked_at' => $this->iso($v->price_checked_at),
@@ -123,6 +139,33 @@ final class ProductVariantPresenter
                 'last_price_change' => $changes[(int) $v->id] ?? null,
             ])->values()->all(),
         ];
+    }
+
+    /**
+     * Etykiety źródeł wierszy. Slot konta „b2b:{id}” (rozmiary) to konto, nie łącznik — nazwa jak w porównaniu
+     * cen karty; „b2b:{łącznik}” (wersje Sign Project) jak w historii cen.
+     *
+     * @param  list<string>  $sources
+     */
+    private function sourceLabels(array $sources): string
+    {
+        $accountIds = [];
+        foreach ($sources as $source) {
+            if (preg_match('/^b2b:(\d+)$/', $source, $m) === 1) {
+                $accountIds[] = (int) $m[1];
+            }
+        }
+        $accounts = $accountIds !== []
+            ? B2bAccount::query()->whereIn('id', array_values(array_unique($accountIds)))->get()->keyBy('id')
+            : collect();
+
+        return implode(', ', array_values(array_unique(array_map(function (string $source) use ($accounts): string {
+            if (preg_match('/^b2b:(\d+)$/', $source, $m) === 1) {
+                return $this->comparison->accountLabel($accounts->get((int) $m[1]));
+            }
+
+            return $this->priceChanges->sourceLabel($source, false, null);
+        }, $sources))));
     }
 
     /**

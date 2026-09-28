@@ -10,15 +10,24 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
- * Wersja karty u dostawcy (np. format × podłoże znaku) z ceną konta. Etykieta i atrybuty dosłownie ze źródła.
+ * Wersja karty u dostawcy z ceną konta. Etykieta i atrybuty dosłownie ze źródła.
+ * kind „version” — wersje Sign Project (format × podłoże znaku): karta ma cenę 0, ceny tylko tutaj.
+ * kind „size” — rozmiary jednej karty w różnych cenach (decyzja użytkownika 28.09.2026): karta ma cenę
+ * najniższego rozmiaru ze slotu konta, source = slot konta „b2b:{id}”.
  */
 class ProductVariant extends Model
 {
+    public const KIND_VERSION = 'version';
+
+    public const KIND_SIZE = 'size';
+
     protected $fillable = [
         'product_id',
+        'kind',
         'b2b_account_id',
         'source',
         'remote_id',
+        'sku',
         'label',
         'attributes',
         'purchase_price',
@@ -26,6 +35,7 @@ class ProductVariant extends Model
         'currency',
         'vat_rate',
         'unit',
+        'availability',
         'source_url',
         'sort_order',
         'price_checked_at',
@@ -53,6 +63,26 @@ class ProductVariant extends Model
     public function scopeActive(Builder $query): void
     {
         $query->whereNull('removed_at');
+    }
+
+    /**
+     * Wersje Sign Project — tylko one oznaczają kartę z ceną 0.
+     *
+     * @param  Builder<ProductVariant>  $query
+     */
+    public function scopeVersions(Builder $query): void
+    {
+        $query->where('kind', self::KIND_VERSION);
+    }
+
+    /**
+     * Rozmiary w różnych cenach — karta ma cenę najniższego rozmiaru.
+     *
+     * @param  Builder<ProductVariant>  $query
+     */
+    public function scopeSizes(Builder $query): void
+    {
+        $query->where('kind', self::KIND_SIZE);
     }
 
     public function product(): BelongsTo

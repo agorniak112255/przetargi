@@ -56,6 +56,8 @@ final class CardMatchSplitter
 
     /** tabela => [kolumny karty, opis] — czego rozdzielenie nie przenosi z karty dystrybutora */
     private const SOURCE_BLOCKING = [
+        // wszystkie rodzaje, także rozmiary „size” (28.09.2026): rozdzielenie ich nie przenosi, a kaskada skasowałaby
+        // je z kartą — do etapu 2
         'product_variants' => [['product_id'], 'ma wersje'],
         'product_special_prices' => [['product_id'], 'ma ceny specjalne'],
         'product_accessories' => [['product_id', 'related_product_id'], 'ma akcesoria albo jest akcesorium innej karty'],
@@ -450,6 +452,8 @@ final class CardMatchSplitter
                 throw new DomainException('Karta '.$target->sku.' jest innej marki niż karta dystrybutora („'
                     .$target->manufacturer.'” / „'.$source->manufacturer.'”).');
             }
+            // wszystkie rodzaje, także rozmiary „size” (28.09.2026) — w etapie 1 bez zmian, rozdzielanie na kartę
+            // z rozmiarami w różnych cenach dopiero z etapem 2 (CardMatchFinder::planBlockers liczy tak samo)
             $variants = DB::table('product_variants')->where('product_id', $target->id)->whereNull('removed_at')->count();
             if ($variants > 0) {
                 throw new DomainException('Karta '.$target->sku.' ma wersje ('.$variants.') — rozdzielenie wyłączone.');

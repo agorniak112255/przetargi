@@ -58,8 +58,9 @@ final class SourcePriceComparison
     {
         $accountIds = $this->accountIds($slots);
         $links = $slots->isEmpty() ? [] : ($this->linksByProduct([(int) $product->id])[(int) $product->id] ?? []);
+        // tylko wersje Sign Project — rozmiary w różnych cenach (kind „size”) mają cenę w slocie konta
         $hasVariants = $slots->isNotEmpty()
-            && ProductVariant::query()->where('product_id', $product->id)->whereNull('removed_at')->exists();
+            && ProductVariant::query()->where('product_id', $product->id)->versions()->whereNull('removed_at')->exists();
 
         return [
             'rows' => $this->rows(
@@ -132,12 +133,13 @@ final class SourcePriceComparison
     /**
      * Warunek zamawiania obowiązującego źródła (od niego kupujemy) dla wielu kart — lista, przetarg, zapytanie.
      * Tylko karty, których obowiązujący slot ogranicza zamówienie (minimum > 1 albo krok > 1, np. UVEX „po 10 szt.”)
-     * albo ma warunek zależny od rozmiaru (varies), albo warunek ceny (price_note, np. Delta Plus: pełny karton);
+     * albo ma warunek zależny od rozmiaru (varies), albo warunek ceny (price_note, np. Delta Plus: pełny karton),
+     * albo rozmiary w różnych cenach (size_price_max: cena karty to najniższa cena rozmiaru, 28.09.2026);
      * warunek przegranego źródła tu nie trafia (jest w wierszach „Ceny ze źródeł” na karcie). Karta z aktywnymi
      * wersjami nie ma obowiązującego slotu. Stała liczba zapytań na 1000 kart; slotów bez warunku nie czytamy.
      *
      * @param  Collection<int, Product>  $products  karty z id i manufacturer
-     * @return array<int, array{min: float|null, step: float|null, unit: string|null, varies: bool, price_note: string|null, price_carton_qty: float|null, source_key: string, source_label: string}>
+     * @return array<int, array{min: float|null, step: float|null, unit: string|null, varies: bool, price_note: string|null, price_carton_qty: float|null, size_price_max: string|null, size_price_currency: string|null, source_key: string, source_label: string}>
      */
     public function orderQuantities(Collection $products): array
     {
@@ -152,7 +154,8 @@ final class SourcePriceComparison
                 ->where(static fn ($q) => $q->where('order_min_qty', '>', 1)
                     ->orWhere('order_step_qty', '>', 1)
                     ->orWhere('order_varies', true)
-                    ->orWhereNotNull('price_note'))
+                    ->orWhereNotNull('price_note')
+                    ->orWhereNotNull('size_price_max'))
                 ->distinct()
                 ->pluck('product_id')
                 ->map(static fn (mixed $id): int => (int) $id)
@@ -183,17 +186,19 @@ final class SourcePriceComparison
 
     /**
      * Warunki zakupu jednego slotu w kształcie dla widoków (order_quantity): warunek zamawiania i warunek ceny
-     * (price_note, price_carton_qty — Delta Plus: cena za pełny karton). null, gdy slot nie ogranicza zamówienia,
-     * nie ma warunku zależnego od rozmiaru ani warunku ceny. Karta wyrobu podaje tu zwycięzcę explain().
+     * (price_note, price_carton_qty — Delta Plus: cena za pełny karton) i najwyższa cena rozmiaru (size_price_max —
+     * cena karty to najniższa z rozmiarów w różnych cenach). null, gdy slot nie ogranicza zamówienia, nie ma warunku
+     * zależnego od rozmiaru, warunku ceny ani rozmiarów w różnych cenach. Karta wyrobu podaje tu zwycięzcę explain().
      *
      * @param  Collection<int, B2bAccount>|null  $accounts  konta po id (lista); null = relacja account slotu
-     * @return array{min: float|null, step: float|null, unit: string|null, varies: bool, price_note: string|null, price_carton_qty: float|null, source_key: string, source_label: string}|null
+     * @return array{min: float|null, step: float|null, unit: string|null, varies: bool, price_note: string|null, price_carton_qty: float|null, size_price_max: string|null, size_price_currency: string|null, source_key: string, source_label: string}|null
      */
     public function orderQuantityOf(ProductSourcePrice $slot, ?Collection $accounts = null): ?array
     {
         $varies = (bool) $slot->order_varies;
         $restricts = B2bOrderQuantity::restricting($slot->order_min_qty, $slot->order_step_qty);
-        if (! $varies && ! $restricts && $slot->price_note === null) {
+        $sizePriceMax = $slot->size_price_max;
+        if (! $varies && ! $restricts && $slot->price_note === null && $sizePriceMax === null) {
             return null;
         }
 
@@ -205,6 +210,10 @@ final class SourcePriceComparison
             'varies' => $varies,
             'price_note' => $slot->price_note,
             'price_carton_qty' => $slot->price_carton_qty,
+            // kwota jak pozostałe ceny w API (decimal:2 jako tekst); null = rozmiary w jednej cenie
+            'size_price_max' => $sizePriceMax === null ? null : (string) $sizePriceMax,
+            // waluta tej kwoty (slot) — listy i przetarg nie mają pod ręką waluty karty
+            'size_price_currency' => $sizePriceMax === null ? null : strtoupper((string) $slot->currency),
             'source_key' => (string) $slot->source_key,
             'source_label' => $this->sourceLabel($slot, $accounts),
         ];
@@ -212,7 +221,7 @@ final class SourcePriceComparison
 
     /**
      * Sloty kart (w kolejności id, jak explain()) i wszystko, czego potrzebuje winnerKey(): konta, powiązania,
-     * reguły „Producenci”, karty z aktywnymi wersjami.
+     * reguły „Producenci”, karty z aktywnymi wersjami (tylko kind „version” — rozmiary nie wyłączają ceny karty).
      *
      * @param  list<int>  $productIds
      * @return array{0: Collection<int|string, Collection<int, ProductSourcePrice>>, 1: Collection<int, B2bAccount>, 2: array<int, array<int, string|null>>, 3: array<int, array<string, true>>, 4: array<int, int>}
@@ -225,7 +234,7 @@ final class SourcePriceComparison
             ->orderBy('id')
             ->get([
                 'id', 'product_id', 'source_key', 'b2b_account_id', 'price_list_id', 'catalog_price_net',
-                'purchase_price', 'currency', 'pack_qty', 'order_min_qty', 'order_step_qty', 'order_unit', 'order_varies', 'price_note', 'price_carton_qty', 'checked_at',
+                'purchase_price', 'currency', 'pack_qty', 'order_min_qty', 'order_step_qty', 'order_unit', 'order_varies', 'price_note', 'price_carton_qty', 'size_price_max', 'checked_at',
             ])
             ->groupBy('product_id');
         $accountIds = $this->accountIds($slotsByProduct->flatten(1));
@@ -234,6 +243,7 @@ final class SourcePriceComparison
             : B2bAccount::query()->whereIn('id', $accountIds)->get(['id', 'connector', 'sites'])->keyBy('id');
         $withVariants = array_flip(ProductVariant::query()
             ->whereIn('product_id', $productIds)
+            ->versions()
             ->whereNull('removed_at')
             ->distinct()
             ->pluck('product_id')

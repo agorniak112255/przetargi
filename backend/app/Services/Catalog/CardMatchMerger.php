@@ -58,6 +58,8 @@ final class CardMatchMerger
      * Akcesoria (własne i wskazujące kartę) mergeDuplicate przenosi — nie blokują.
      */
     private const BLOCKING = [
+        // wszystkie rodzaje, także rozmiary „size” (28.09.2026): kaskada skasowałaby je z duplikatem, dopóki etap 2
+        // nie nauczy scalenia ich przenosić
         'product_variants' => 'wersje',
         'product_special_prices' => 'ceny specjalne',
     ];

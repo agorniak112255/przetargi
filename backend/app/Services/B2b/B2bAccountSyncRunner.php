@@ -139,6 +139,17 @@ final class B2bAccountSyncRunner
             if ($result['cancelled'] || $result['partial']) {
                 $progress?->log('warn', strtok($message, "\n") ?: $message);
             }
+            // wyroby z rozmiarami na kilku kartach (dawny podział według ceny, 28.09.2026) — lista do scalenia kart;
+            // tylko przebieg prawdziwy, bez łącznika z wersjami (ten nie ma grup rozmiarów)
+            if ($progress !== null && ! $variants) {
+                $spread = array_values($result['size_spread'] ?? []);
+                $total = (int) ($result['size_spread_total'] ?? count($spread));
+                $progress->run()->forceFill(['size_spread' => [
+                    'total' => $total,
+                    'truncated' => $total > count($spread),
+                    'groups' => $spread,
+                ]]);
+            }
             $progress?->log('info', strtok($summary, "\n") ?: $summary);
             $progress?->finish($status, $message);
         }

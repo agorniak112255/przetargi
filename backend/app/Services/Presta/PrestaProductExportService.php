@@ -9,8 +9,10 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductAccessory;
 use App\Models\ProductImage;
+use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Services\NbpExchangeRateService;
+use App\Services\Pricing\ProductEffectivePrice;
 use App\Support\ProductSizeVariant;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -32,6 +34,7 @@ final class PrestaProductExportService
         private readonly NbpExchangeRateService $fx,
         private readonly PrestaCategoryMapService $categories,
         private readonly PrestaDescriptionHtml $descriptions,
+        private readonly ProductEffectivePrice $prices,
     ) {}
 
     /**
@@ -162,16 +165,40 @@ final class PrestaProductExportService
 
     /**
      * Powód, dla którego karty nie wolno wysłać do Presty; null = można.
-     * Karta z wersjami ma cenę 0 („brak ceny”) — w sklepie pojawiłaby się za 0 zł.
+     * Karta z wersjami (Sign Project) ma cenę 0 („brak ceny”) — w sklepie pojawiłaby się za 0 zł.
+     * Karta z rozmiarami w różnych cenach (obowiązujący slot ma size_price_max) ma cenę najniższego rozmiaru —
+     * eksport dałby ją wszystkim rozmiarom (decyzja użytkownika 28.09.2026: blokujemy). Rozmiary w jednej cenie
+     * można eksportować.
      */
     public function blockedReason(Product $product): ?string
     {
-        $hasVariants = ProductVariant::query()
+        $hasVersions = ProductVariant::query()
             ->where('product_id', $product->id)
+            ->versions()
             ->whereNull('removed_at')
             ->exists();
+        if ($hasVersions) {
+            return self::VARIANTS_BLOCKED_MESSAGE;
+        }
 
-        return $hasVariants ? self::VARIANTS_BLOCKED_MESSAGE : null;
+        // explain() tylko dla kart, które mają jakikolwiek slot z rozmiarami w różnych cenach
+        $hasSizePrices = ProductSourcePrice::query()
+            ->where('product_id', $product->id)
+            ->whereNotNull('size_price_max')
+            ->exists();
+        if (! $hasSizePrices) {
+            return null;
+        }
+        $winner = $this->prices->explain($product)['winner'];
+        if ($winner === null || $winner->size_price_max === null) {
+            return null;
+        }
+        $currency = strtoupper(trim((string) ($winner->currency ?: $product->currency))) ?: 'PLN';
+        $unit = $currency === 'PLN' ? 'zł' : $currency;
+        $format = static fn (mixed $amount): string => number_format((float) $amount, 2, ',', ' ');
+
+        return 'Rozmiary karty mają różne ceny (od '.$format($winner->purchase_price ?? $winner->catalog_price_net)
+            .' do '.$format($winner->size_price_max).' '.$unit.') — eksport dałby wszystkim rozmiarom cenę najniższą.';
     }
 
     public const VARIANTS_BLOCKED_MESSAGE = 'Karta ma wersje z cenami (np. formaty znaku) — eksport do Presty nie jest obsługiwany.';

@@ -1,4 +1,5 @@
 import type { OrderQuantity } from './api'
+import { formatPrice } from './priceChange'
 
 type Condition = Pick<OrderQuantity, 'min' | 'step'> & { varies?: boolean }
 
@@ -100,4 +101,28 @@ export function orderQtyTitle(oq: OrderQuantity): string {
   if (oq.step == null) lines.push('Kroku sklep nie podaje — ponad minimum dowolna ilość.')
   lines.push('Warunek ze sklepu dostawcy.')
   return lines.join('\n')
+}
+
+type SizePrices = Pick<OrderQuantity, 'size_price_max'>
+
+/** Najwyższa cena rozmiaru, gdy rozmiary karty mają różne ceny (cena karty = najniższy rozmiar); inaczej null. */
+export function sizePriceMax(oq: SizePrices | null | undefined): number | null {
+  const raw = oq?.size_price_max
+  if (raw == null || raw === '') return null
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+/** Krótki napis: „cena od · rozmiary do 99,90 zł”. */
+export function sizePriceLabel(max: number, currency = 'zł'): string {
+  return `cena od · rozmiary do ${formatPrice(max)} ${currency}`
+}
+
+/** Podpowiedź: skąd „cena od” i co sprawdzić przed ofertą. */
+export function sizePriceTitle(oq: OrderQuantity, max: number, currency = 'zł'): string {
+  return [
+    `${oq.source_label}: rozmiary tej karty mają różne ceny (do ${formatPrice(max)} ${currency} netto).`,
+    'Cena karty to najniższa cena rozmiaru — inne rozmiary są droższe.',
+    'Sprawdź cenę potrzebnego rozmiaru przed ofertą (tabela „Rozmiary” na karcie).',
+  ].join('\n')
 }

@@ -183,6 +183,8 @@ final class SourcePriceComparisonApiTest extends TestCase
             ->update(['order_min_qty' => 12, 'order_step_qty' => 12, 'order_unit' => 'par']);
         $expected = [
             'min' => 10, 'step' => 10, 'unit' => 'szt', 'varies' => false, 'price_note' => null, 'price_carton_qty' => null,
+            'size_price_max' => null,
+            'size_price_currency' => null,
             'source_key' => ProductSourcePrice::b2bKey($uvex->id), 'source_label' => 'B2B UVEX',
         ];
 

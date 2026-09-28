@@ -9,6 +9,7 @@ use App\Models\B2bAccount;
 use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
 use App\Services\B2b\B2bCodeLoginSite;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\Pricing\ProductEffectivePrice;
@@ -89,12 +90,20 @@ class B2bAccountController extends Controller
     /**
      * Ceny konta znikają z kart przed usunięciem konta: cena obowiązująca wraca do cennika z pliku albo innego konta
      * (klucz obcy slotu tylko zeruje b2b_account_id — slot „b2b:{id}” zostałby na karcie i nadal wygrywał).
+     * Rozmiary konta (product_variants „size”, source „b2b:{id}”) razem ze slotem: wycofane (removed_at), nie
+     * skasowane — klucz obcy też tylko zeruje b2b_account_id, a tabela rozmiarów pokazywałaby ceny usuniętego konta.
      */
     public function destroy(B2bAccount $b2bAccount, ProductEffectivePrice $effectivePrices): JsonResponse
     {
         $sourceKey = ProductSourcePrice::b2bKey((int) $b2bAccount->id);
 
         DB::transaction(function () use ($b2bAccount, $effectivePrices, $sourceKey): void {
+            ProductVariant::query()
+                ->sizes()
+                ->where(static fn ($q) => $q->where('b2b_account_id', $b2bAccount->id)->orWhere('source', $sourceKey))
+                ->whereNull('removed_at')
+                ->update(['removed_at' => Carbon::now()]);
+
             $productIds = ProductSourcePrice::query()
                 ->where('source_key', $sourceKey)
                 ->orderBy('product_id')
@@ -233,7 +242,11 @@ class B2bAccountController extends Controller
         $lastSeen = Cache::get(B2bSyncRun::SCHEDULER_HEARTBEAT_KEY);
         $lastSeenAt = is_string($lastSeen) && $lastSeen !== '' ? Carbon::parse($lastSeen) : null;
 
-        $latest = $b2bAccount->syncRuns()->orderByDesc('id')->first();
+        // bez size_spread (do 2000 wyrobów, czyta je tylko polecenie scalania) — okno odpytuje co 2,5 s
+        $latest = $b2bAccount->syncRuns()
+            ->select(array_merge(['id', 'b2b_account_id', 'log', 'price_changes'], self::RUN_COLUMNS))
+            ->orderByDesc('id')
+            ->first();
         $recent = $b2bAccount->syncRuns()
             ->select(array_merge(['id', 'b2b_account_id'], self::RUN_COLUMNS))
             ->orderByDesc('id')

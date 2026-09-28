@@ -9,13 +9,18 @@ import {
   partialCarton,
   priceConditionLabel,
   priceConditionTitle,
+  sizePriceLabel,
+  sizePriceMax,
+  sizePriceTitle,
 } from '../lib/orderQuantity'
+import { currencyLabel } from '../lib/priceChange'
 
 /**
  * Warunki zakupu u dostawcy obowiązującej ceny: warunek zamawiania (np. UVEX: „po 10 szt.”) i warunek ceny (Delta
  * Plus: „cena przy pełnym kartonie (120)”). Z podaną ilością (pozycja przetargu, zapytanie) dopisuje, ile trzeba
  * zamówić, gdy potrzeba nie jest pełną paczką, i że niepełny karton ma cenę do potwierdzenia — samej ilości nie
- * zmienia. Brak warunków albo warunek bez ograniczenia — nic.
+ * zmienia. Rozmiary w różnych cenach: „cena od · rozmiary do Y zł” (cena karty to najniższy rozmiar). Brak warunków
+ * albo warunek bez ograniczenia — nic.
  */
 export function OrderQuantityBadge({
   oq,
@@ -23,6 +28,8 @@ export function OrderQuantityBadge({
   className = '',
   block = false,
   show = 'all',
+  currency,
+  sizePrice = true,
 }: {
   oq: OrderQuantity | null | undefined
   /** Potrzebna ilość w jednostce karty; bez niej same znaczki. */
@@ -32,11 +39,17 @@ export function OrderQuantityBadge({
   block?: boolean
   /** Który warunek: oba, sam warunek zamawiania albo sam warunek ceny (wiersz „Ceny ze źródeł”: przy cenie). */
   show?: 'all' | 'order' | 'price'
+  /** Waluta ceny rozmiarów (currencyLabel); bez niej — waluta slotu z oq, a bez niej „zł”. */
+  currency?: string
+  /** false — bez znaczka „cena od · rozmiary do…” (karta pokazuje go pełnym zdaniem przy cenie). */
+  sizePrice?: boolean
 }) {
   if (!oq) return null
   const showOrder = show !== 'price' && (oq.varies === true || orderRestricts(oq))
   const showPrice = show !== 'order' && hasPriceCondition(oq)
-  if (!showOrder && !showPrice) return null
+  const sizeMax = show !== 'order' && sizePrice ? sizePriceMax(oq) : null
+  const sizeCurrency = currency ?? currencyLabel(oq.size_price_currency)
+  if (!showOrder && !showPrice && sizeMax === null) return null
   const order = showOrder ? orderableQty(qty, oq) : null
   const partial = showPrice && partialCarton(qty, oq)
   const unit = (oq.unit ?? '').trim()
@@ -62,6 +75,14 @@ export function OrderQuantityBadge({
           {partial && (
             <span className="whitespace-nowrap text-[10px] font-semibold text-sky-800">→ niepełny karton: cena do potwierdzenia</span>
           )}
+        </span>
+      )}
+      {sizeMax !== null && (
+        <span
+          className="inline-block whitespace-nowrap rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800"
+          title={sizePriceTitle(oq, sizeMax, sizeCurrency)}
+        >
+          {sizePriceLabel(sizeMax, sizeCurrency)}
         </span>
       )}
     </span>

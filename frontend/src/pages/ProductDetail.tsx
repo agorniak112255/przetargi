@@ -12,6 +12,7 @@ import { ProductVariantsTable } from '../components/ProductVariantsTable'
 import { ShopFieldsTables } from '../components/ShopFieldsTables'
 import { SupplierSpecialBadge } from '../components/SupplierSpecialBadge'
 import { SupplierSpecialPanel } from '../components/SupplierSpecialPanel'
+import { sizePriceMax, sizePriceTitle } from '../lib/orderQuantity'
 import { sortSourcePrices } from '../lib/sourcePrices'
 import { SUPPLIER_SPECIAL_INFERENCE_NOTE, supplierSpecialSummary } from '../lib/supplierSpecial'
 import {
@@ -492,7 +493,13 @@ export function ProductDetail() {
   const status = p.enrichment_status ?? 'none'
   const currency = p.currency?.trim() || 'PLN'
   const variants = p.variants ?? null
-  const variantsBlockExport = variants !== null && variants.active_count > 0
+  // Wersje Sign Project: karta z ceną 0, ceny w wersjach. Rozmiary w różnych cenach (kind „size”): karta ma zwykłą
+  // cenę (najniższy rozmiar), rozmiary tylko w tabeli. Starsze API bez kind = wersje.
+  const versions = variants !== null && variants.kind !== 'size' ? variants : null
+  const variantsBlockExport = versions !== null && versions.active_count > 0
+  // Jak backend (PrestaProductExportService): rozmiary w różnych cenach dostałyby w sklepie cenę najniższą.
+  const sizeMax = sizePriceMax(p.order_quantity)
+  const sizePricesBlockExport = sizeMax !== null
   // Starsza odpowiedź API bez porównania źródeł — tabela jak dotąd, bez kolumn „Zakup PLN” i „Różnica”.
   const sourceCompare = (p.source_prices ?? []).some((s) => s.comparable !== undefined)
 
@@ -657,13 +664,16 @@ export function ProductDetail() {
           {canExportPresta && (
             <button
               type="button"
-              disabled={exportBusy || variantsBlockExport}
+              disabled={exportBusy || variantsBlockExport || sizePricesBlockExport}
               onClick={() => void exportPresta()}
               className="rounded bg-violet-700 px-3 py-2 text-xs text-white disabled:opacity-50"
               title={
                 variantsBlockExport
                   ? 'Karta ma wersje z cenami (np. formaty znaku) — eksport do Presty nie jest obsługiwany.'
-                  : 'Wysyła kartę do sklepu: opis, rozmiary, termin na zamówienie'
+                  : sizePricesBlockExport
+                    ? `Rozmiary karty mają różne ceny (od ${formatPrice(p.purchase_price)} do ${formatPrice(sizeMax)} ` +
+                      `${currencyLabel(currency)}) — eksport dałby wszystkim rozmiarom cenę najniższą.`
+                    : 'Wysyła kartę do sklepu: opis, rozmiary, termin na zamówienie'
               }
             >
               {exportBusy
@@ -757,30 +767,30 @@ export function ProductDetail() {
         </p>
       )}
 
-      {variants !== null ? (
+      {versions !== null ? (
         <>
           <div className="mt-4 rounded-xl bg-white p-4 shadow-sm text-sm">
             Cena konta netto:{' '}
-            {variants.active_count === 0 ? (
-              <b>brak — wszystkie wersje wycofane ({variants.count})</b>
-            ) : variants.min_price !== null && variants.max_price !== null ? (
+            {versions.active_count === 0 ? (
+              <b>brak — wszystkie wersje wycofane ({versions.count})</b>
+            ) : versions.min_price !== null && versions.max_price !== null ? (
               <>
                 <b>
-                  {variants.min_price === variants.max_price
-                    ? formatPrice(variants.min_price)
-                    : `od ${formatPrice(variants.min_price)} do ${formatPrice(variants.max_price)}`}{' '}
-                  {currencyLabel(variants.currency)} netto
+                  {versions.min_price === versions.max_price
+                    ? formatPrice(versions.min_price)
+                    : `od ${formatPrice(versions.min_price)} do ${formatPrice(versions.max_price)}`}{' '}
+                  {currencyLabel(versions.currency)} netto
                 </b>
                 {' · '}
-                {variantCountLabel(variants.active_count)}
+                {variantCountLabel(versions.active_count)}
               </>
             ) : (
               <>
-                <b>{variantCountLabel(variants.active_count)}</b>
+                <b>{variantCountLabel(versions.active_count)}</b>
                 <span className="text-slate-500"> — brak cen do porównania (różne waluty albo wersje bez ceny)</span>
               </>
             )}
-            {variants.source_label && <span className="text-slate-500"> (ceny konta {variants.source_label})</span>}
+            {versions.source_label && <span className="text-slate-500"> (ceny konta {versions.source_label})</span>}
             <OrderQuantityBadge oq={p.order_quantity} className="ml-2" />
           </div>
           <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -794,7 +804,16 @@ export function ProductDetail() {
           </div>
           <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
             Zakup: <b>{p.purchase_price} {currency}</b>
-            <OrderQuantityBadge oq={p.order_quantity} block className="mt-1" />
+            <OrderQuantityBadge oq={p.order_quantity} block className="mt-1" sizePrice={false} />
+            {sizeMax !== null && p.order_quantity && (
+              <p
+                className="mt-1 text-[11px] text-sky-800"
+                title={sizePriceTitle(p.order_quantity, sizeMax, currencyLabel(currency))}
+              >
+                Najniższa cena z rozmiarów — rozmiary do {formatPrice(sizeMax)} {currencyLabel(currency)} netto
+                {variants?.kind === 'size' ? ' (tabela „Rozmiary” niżej)' : ''}.
+              </p>
+            )}
           </div>
           <div className="rounded-xl bg-white p-4 shadow-sm text-sm">
             Upust:{' '}

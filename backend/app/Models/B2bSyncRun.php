@@ -38,6 +38,12 @@ class B2bSyncRun extends Model
     /** Tyle zmian cen zapisujemy przy przebiegu (pełna historia jest w product_price_history). */
     public const PRICE_CHANGES_LIMIT = 1000;
 
+    /**
+     * Tyle wyrobów z rozmiarami na kilku kartach zapisujemy przy przebiegu (size_spread: {total, truncated, groups});
+     * total liczy wszystkie.
+     */
+    public const SIZE_SPREAD_LIMIT = 2000;
+
     /** Przebieg „running” bez postępu dłużej niż tyle minut uznajemy za przerwany. */
     public const STALE_MINUTES = 30;
 
@@ -65,6 +71,7 @@ class B2bSyncRun extends Model
         'cancel_requested_at',
         'log',
         'price_changes',
+        'size_spread',
     ];
 
     protected function casts(): array
@@ -84,6 +91,7 @@ class B2bSyncRun extends Model
             'images' => 'integer',
             'log' => 'array',
             'price_changes' => 'array',
+            'size_spread' => 'array',
         ];
     }
 

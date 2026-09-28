@@ -13,6 +13,9 @@ import {
 
 type PriceSort = 'none' | 'asc' | 'desc'
 
+/** Rozmiary nie mają członów do filtrowania — stała, żeby useMemo nie liczył co render. */
+const NO_DIMENSIONS: string[] = []
+
 type HistoryState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
@@ -25,7 +28,11 @@ function priceValue(v: ProductVariant): number | null {
   return Number.isFinite(n) && n > 0 ? n : null
 }
 
-/** Sekcja „Wersje (n)” karty: filtry po członach wersji, sortowanie po cenie, historia ceny po kliknięciu wiersza. */
+/**
+ * Sekcja „Wersje (n)” karty: filtry po członach wersji, sortowanie po cenie, historia ceny po kliknięciu wiersza.
+ * Rozmiary w różnych cenach (kind „size”) — sekcja „Rozmiary (n)”: rozmiar, kod dostawcy, cena konta, katalogowa
+ * i dostępność ze sklepu; szukanie po rozmiarze albo kodzie, bez filtrów członów.
+ */
 export function ProductVariantsTable({ productId, variants }: { productId: number; variants: ProductVariants }) {
   const [filters, setFilters] = useState<Record<string, string>>({})
   const [search, setSearch] = useState('')
@@ -35,7 +42,8 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
   const [history, setHistory] = useState<Record<number, HistoryState>>({})
   const [copied, setCopied] = useState<number | null>(null)
 
-  const dims = variants.dimensions
+  const sizes = variants.kind === 'size'
+  const dims = sizes ? NO_DIMENSIONS : variants.dimensions
   const removedCount = variants.count - variants.active_count
 
   const pool = useMemo(
@@ -63,7 +71,11 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
         const wanted = filters[dim] ?? ''
         if (wanted !== '' && v.attributes?.[dim] !== wanted) return false
       }
-      return needle === '' || v.label.toLocaleLowerCase('pl-PL').includes(needle)
+      return (
+        needle === '' ||
+        v.label.toLocaleLowerCase('pl-PL').includes(needle) ||
+        (sizes && (v.sku ?? '').toLocaleLowerCase('pl-PL').includes(needle))
+      )
     })
     if (sort === 'none') return filtered
     // Bez ceny zawsze na końcu, niezależnie od kierunku.
@@ -75,9 +87,9 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
       if (pb === null) return -1
       return sort === 'asc' ? pa - pb : pb - pa
     })
-  }, [pool, dims, filters, search, sort])
+  }, [pool, dims, filters, search, sort, sizes])
 
-  const columnCount = Math.max(1, dims.length) + 6
+  const columnCount = sizes ? 8 : Math.max(1, dims.length) + 6
   const filtersActive = search.trim() !== '' || Object.values(filters).some((f) => f !== '')
 
   async function toggleRow(v: ProductVariant) {
@@ -122,7 +134,9 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
   return (
     <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold">Wersje ({variants.active_count})</h2>
+        <h2 className="text-sm font-semibold">
+          {sizes ? 'Rozmiary' : 'Wersje'} ({variants.active_count})
+        </h2>
         <p className="text-[11px] text-slate-500">
           {variants.source_label ? `Ceny konta ${variants.source_label} · ` : ''}kliknij wiersz, aby zobaczyć historię ceny
         </p>
@@ -152,7 +166,7 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="w nazwie wersji"
+            placeholder={sizes ? 'rozmiar albo kod' : 'w nazwie wersji'}
             className="w-48 rounded border border-slate-300 px-2 py-1 text-xs"
           />
         </label>
@@ -183,7 +197,12 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b bg-slate-50">
-              {dims.length > 0 ? (
+              {sizes ? (
+                <>
+                  <th className="p-2">Rozmiar</th>
+                  <th className="p-2">Kod</th>
+                </>
+              ) : dims.length > 0 ? (
                 dims.map((dim) => (
                   <th key={dim} className="p-2">
                     {dim}
@@ -202,8 +221,17 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
                   Cena konta netto{sort === 'asc' ? ' ▲' : sort === 'desc' ? ' ▼' : ''}
                 </button>
               </th>
-              <th className="p-2 text-right">VAT</th>
-              <th className="p-2">Jedn.</th>
+              {sizes ? (
+                <>
+                  <th className="p-2 text-right">Cena katalogowa</th>
+                  <th className="p-2">Dostępność</th>
+                </>
+              ) : (
+                <>
+                  <th className="p-2 text-right">VAT</th>
+                  <th className="p-2">Jedn.</th>
+                </>
+              )}
               <th className="p-2">Sprawdzono</th>
               <th className="p-2 text-right">Zmiana</th>
               <th className="p-2">
@@ -222,7 +250,7 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
                   className="ml-1 rounded bg-slate-100 px-1 text-[10px] text-slate-500"
                   title={v.removed_at ? `Brak u dostawcy od ${formatDateTime(v.removed_at)}` : undefined}
                 >
-                  wycofana
+                  {sizes ? 'wycofany' : 'wycofana'}
                 </span>
               )
               return (
@@ -233,7 +261,15 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
                     title={v.label}
                     className={`cursor-pointer border-b hover:bg-slate-50 ${removed ? 'text-slate-400' : ''} ${open ? 'bg-blue-50/40' : ''}`}
                   >
-                    {dims.length === 0 || !hasAttributes ? (
+                    {sizes ? (
+                      <>
+                        <td className="whitespace-nowrap p-2">
+                          {v.label}
+                          {removedBadge}
+                        </td>
+                        <td className="whitespace-nowrap p-2 tabular-nums">{v.sku ?? '—'}</td>
+                      </>
+                    ) : dims.length === 0 || !hasAttributes ? (
                       <td className="p-2" colSpan={Math.max(1, dims.length)}>
                         {v.label}
                         {removedBadge}
@@ -264,16 +300,33 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
                       ) : (
                         <span className="text-slate-400">brak ceny</span>
                       )}
-                      {v.list_price_net !== null && (
+                      {!sizes && v.list_price_net !== null && (
                         <span className="block text-[10px] text-slate-500">
                           katalog {formatPrice(v.list_price_net)} {currencyLabel(v.currency)}
                         </span>
                       )}
                     </td>
-                    <td className="whitespace-nowrap p-2 text-right tabular-nums">
-                      {v.vat_rate !== null ? `${v.vat_rate.toLocaleString('pl-PL')}%` : '—'}
-                    </td>
-                    <td className="whitespace-nowrap p-2">{v.unit ?? '—'}</td>
+                    {sizes ? (
+                      <>
+                        <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                          {v.list_price_net !== null ? (
+                            `${formatPrice(v.list_price_net)} ${currencyLabel(v.currency)}`
+                          ) : (
+                            <span className="text-slate-300">—</span>
+                          )}
+                        </td>
+                        <td className="max-w-[14rem] truncate p-2" title={v.availability ?? undefined}>
+                          {v.availability ?? <span className="text-slate-300">—</span>}
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                          {v.vat_rate !== null ? `${v.vat_rate.toLocaleString('pl-PL')}%` : '—'}
+                        </td>
+                        <td className="whitespace-nowrap p-2">{v.unit ?? '—'}</td>
+                      </>
+                    )}
                     <td
                       className="whitespace-nowrap p-2 tabular-nums"
                       title={v.price_checked_at ? formatDateTime(v.price_checked_at) : undefined}
@@ -291,7 +344,7 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
                           rel="noreferrer"
                           onClick={(e) => e.stopPropagation()}
                           className="text-blue-700 hover:underline"
-                          title="Otwórz wersję u dostawcy"
+                          title={sizes ? 'Otwórz rozmiar u dostawcy' : 'Otwórz wersję u dostawcy'}
                         >
                           ↗
                         </a>
@@ -301,7 +354,7 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
                   {open && (
                     <tr className="border-b">
                       <td colSpan={columnCount} className="bg-slate-50 px-3 py-2">
-                        <VariantHistory state={history[v.id]} currency={v.currency} />
+                        <VariantHistory state={history[v.id]} currency={v.currency} sizes={sizes} />
                       </td>
                     </tr>
                   )}
@@ -311,7 +364,13 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
             {rows.length === 0 && (
               <tr>
                 <td colSpan={columnCount} className="p-2 text-slate-400">
-                  {pool.length === 0 ? 'Brak aktywnych wersji.' : 'Brak wersji pasujących do filtrów.'}
+                  {sizes
+                    ? pool.length === 0
+                      ? 'Brak aktywnych rozmiarów.'
+                      : 'Brak rozmiarów pasujących do filtrów.'
+                    : pool.length === 0
+                      ? 'Brak aktywnych wersji.'
+                      : 'Brak wersji pasujących do filtrów.'}
                 </td>
               </tr>
             )}
@@ -339,10 +398,20 @@ function VariantChange({ variant }: { variant: ProductVariant }) {
   )
 }
 
-function VariantHistory({ state, currency }: { state: HistoryState | undefined; currency: string | null }) {
+function VariantHistory({
+  state,
+  currency,
+  sizes,
+}: {
+  state: HistoryState | undefined
+  currency: string | null
+  sizes: boolean
+}) {
   if (!state || state.status === 'loading') return <p className="text-slate-500">Ładowanie historii ceny…</p>
   if (state.status === 'error') return <p className="text-red-700">{state.message}</p>
-  if (state.rows.length === 0) return <p className="text-slate-500">Brak historii ceny tej wersji.</p>
+  if (state.rows.length === 0) {
+    return <p className="text-slate-500">Brak historii ceny {sizes ? 'tego rozmiaru' : 'tej wersji'}.</p>
+  }
   return (
     <table className="text-left text-[11px]">
       <thead className="text-slate-500">

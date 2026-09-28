@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Jobs\ExportProductToPrestaJob;
+use App\Models\B2bAccount;
 use App\Models\Product;
+use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Models\ProductVariantPriceHistory;
 use App\Models\User;
@@ -72,6 +74,7 @@ final class ProductVariantsApiTest extends TestCase
 
         $response = $this->getJson('/api/products/'.$product->id)
             ->assertOk()
+            ->assertJsonPath('variants.kind', 'version')
             ->assertJsonPath('variants.count', 4)
             ->assertJsonPath('variants.active_count', 3)
             ->assertJsonPath('variants.min_price', '0.97')
@@ -179,6 +182,81 @@ final class ProductVariantsApiTest extends TestCase
             ->assertJsonPath('data.0.variants_min_price', '4.20')
             ->assertJsonPath('data.0.variants_currency', 'PLN')
             ->assertJsonPath('data.1.variants_count', 0);
+    }
+
+    public function test_size_rows_are_listed_as_sizes_with_code_availability_and_account_label(): void
+    {
+        $admin = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($admin);
+        $account = B2bAccount::query()->create([
+            'username' => 'mascot-konto', 'password' => 'sekret', 'sites' => ['b2b.mascot.example'], 'connector' => 'mascot',
+            'created_by' => $admin->id, 'updated_by' => $admin->id,
+        ]);
+        $product = $this->product('20079-230', 120, 89.90);
+        $small = $this->sizeRow($product, $account, 'm-s', '20079-230-S', 'S', 89.90, 129.00, 'dostępny', 0);
+        $large = $this->sizeRow($product, $account, 'm-4xl', '20079-230-4XL', '4XL', 99.90, null, null, 1);
+
+        $this->getJson('/api/products/'.$product->id)
+            ->assertOk()
+            ->assertJsonPath('variants.kind', 'size')
+            ->assertJsonPath('variants.count', 2)
+            ->assertJsonPath('variants.active_count', 2)
+            ->assertJsonPath('variants.min_price', '89.90')
+            ->assertJsonPath('variants.max_price', '99.90')
+            ->assertJsonPath('variants.source_label', 'B2B Mascot')
+            ->assertJsonPath('variants.dimensions', [])
+            ->assertJsonPath('variants.items.0.id', $small->id)
+            ->assertJsonPath('variants.items.0.sku', '20079-230-S')
+            ->assertJsonPath('variants.items.0.label', 'S')
+            ->assertJsonPath('variants.items.0.availability', 'dostępny')
+            ->assertJsonPath('variants.items.0.list_price_net', '129.00')
+            ->assertJsonPath('variants.items.1.id', $large->id)
+            ->assertJsonPath('variants.items.1.sku', '20079-230-4XL')
+            ->assertJsonPath('variants.items.1.availability', null)
+            ->assertJsonPath('variants.items.1.list_price_net', null);
+
+        // Rozmiary nie zastępują ceny karty na liście („od X · n wersji” tylko dla wersji).
+        $this->getJson('/api/products')
+            ->assertOk()
+            ->assertJsonPath('data.0.sku', '20079-230')
+            ->assertJsonPath('data.0.variants_count', 0)
+            ->assertJsonPath('data.0.variants_min_price', null)
+            ->assertJsonPath('data.0.variants_currency', null);
+
+        // Konto skasowane — etykieta jak w porównaniu cen karty, nie klucz łącznika „#id”.
+        ProductVariant::query()->update(['source' => 'b2b:999999']);
+        $this->getJson('/api/products/'.$product->id)
+            ->assertOk()
+            ->assertJsonPath('variants.source_label', 'B2B (usunięte konto)');
+    }
+
+    public function test_card_with_versions_and_sizes_lists_only_versions(): void
+    {
+        $admin = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($admin);
+        $account = B2bAccount::query()->create([
+            'username' => 'mascot-konto', 'password' => 'sekret', 'sites' => ['b2b.mascot.example'], 'connector' => 'mascot',
+            'created_by' => $admin->id, 'updated_by' => $admin->id,
+        ]);
+        $product = $this->product('BB014', 0, 0);
+        $version = $this->variant($product, '7109', 'A', ['Format' => '10 x 14,8 cm'], 0.97, 0);
+        $this->sizeRow($product, $account, 'm-s', 'BB014-S', 'S', 0.50, null, null, 1);
+
+        $this->getJson('/api/products/'.$product->id)
+            ->assertOk()
+            ->assertJsonPath('variants.kind', 'version')
+            ->assertJsonPath('variants.count', 1)
+            ->assertJsonPath('variants.min_price', '0.97')
+            ->assertJsonPath('variants.source_label', 'Anro B2B')
+            ->assertJsonPath('variants.dimensions', ['Format'])
+            ->assertJsonCount(1, 'variants.items')
+            ->assertJsonPath('variants.items.0.id', $version->id)
+            ->assertJsonPath('variants.items.0.sku', null);
+
+        $this->getJson('/api/products')
+            ->assertOk()
+            ->assertJsonPath('data.0.variants_count', 1)
+            ->assertJsonPath('data.0.variants_min_price', '0.97');
     }
 
     public function test_variant_price_history_is_newest_first_with_previous_price(): void
@@ -292,6 +370,35 @@ final class ProductVariantsApiTest extends TestCase
             'price_checked_at' => Carbon::parse('2026-09-12 02:00:00'),
             'last_seen_at' => Carbon::parse('2026-09-12 02:00:00'),
             'removed_at' => $removed ? Carbon::parse('2026-09-12 02:00:00') : null,
+        ]);
+    }
+
+    private function sizeRow(
+        Product $product,
+        B2bAccount $account,
+        string $remoteId,
+        string $sku,
+        string $label,
+        float $price,
+        ?float $listPrice,
+        ?string $availability,
+        int $sortOrder,
+    ): ProductVariant {
+        return ProductVariant::query()->create([
+            'product_id' => $product->id,
+            'kind' => ProductVariant::KIND_SIZE,
+            'b2b_account_id' => $account->id,
+            'source' => ProductSourcePrice::b2bKey((int) $account->id),
+            'remote_id' => $remoteId,
+            'sku' => $sku,
+            'label' => $label,
+            'purchase_price' => $price,
+            'list_price_net' => $listPrice,
+            'currency' => 'PLN',
+            'availability' => $availability,
+            'sort_order' => $sortOrder,
+            'price_checked_at' => Carbon::parse('2026-09-12 02:00:00'),
+            'last_seen_at' => Carbon::parse('2026-09-12 02:00:00'),
         ]);
     }
 

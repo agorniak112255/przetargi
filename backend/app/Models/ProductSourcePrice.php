@@ -24,6 +24,9 @@ class ProductSourcePrice extends Model
         'price_list_id',
         'catalog_price_net',
         'purchase_price',
+        // najwyższa cena rozmiaru, gdy purchase_price to najniższa z rozmiarów w różnych cenach (product_variants
+        // „size”); null = jedna cena
+        'size_price_max',
         'discount_percent',
         // cennik bazowy dostawcy obok ceny konta (App\Support\SupplierSpecialPrice); catalog_price_net bez zmian
         'base_price_net',
@@ -53,6 +56,7 @@ class ProductSourcePrice extends Model
         return [
             'catalog_price_net' => 'decimal:2',
             'purchase_price' => 'decimal:2',
+            'size_price_max' => 'decimal:2',
             'discount_percent' => 'decimal:2',
             'base_price_net' => 'decimal:2',
             'standard_discount_percent' => 'decimal:2',

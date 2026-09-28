@@ -21,10 +21,12 @@ use RuntimeException;
  * Cena: portal podaje JEDNĄ cenę rozmiaru (pole Price, waluta z profilu konta) — przyjmujemy ją jako cenę konta.
  * Ceny katalogowej portal nie podaje, więc karta jej nie ma (podsumowanie przebiegu to mówi).
  *
- * Karta = rozmiary jednego artykułu w jednej cenie (decyzja użytkownika 15.09.2026: rozmiar w innej cenie to
- * osobna karta; w Mascot typowo XS–2XL w jednej cenie, 3XL i 4XL droższe). SKU: kod artykułu z myślnikami, gdy
- * artykuł jest jedną kartą; przy podziale — kod artykułu i pierwszy rozmiar karty („18001-249-1809 3XL”), żeby kod
- * nie przechodził między kartami przy zmianie podziału. Pozycje (members) = rozmiary, remote_id = EAN rozmiaru.
+ * Karta = artykuł w kolorze ze wszystkimi rozmiarami z ceną (decyzja użytkownika 28.09.2026: rozmiary w różnych cenach
+ * to jedna karta; w Mascot typowo XS–2XL w jednej cenie, 3XL i 4XL droższe). Do 28.09.2026 (decyzja 15.09.2026)
+ * rozmiar w innej cenie był osobną kartą z kodem „18001-249-1809 3XL” — takie karty zostają, dopóki nie scali ich
+ * osobne polecenie (synchronizacja daje każdej jej rozmiary, B2bCatalogSync::syncMembersByCard). SKU: kod artykułu
+ * z myślnikami. Pozycje (members) = rozmiary, remote_id = EAN rozmiaru, z rozmiarem, ceną i dostępnością rozmiaru;
+ * cena karty = najniższa cena rozmiaru (raw['price'], price()), pozostałe ceny — wiersze rozmiarów karty.
  * Rozmiary bez oznaczenia dostępności portal chowa (nie da się ich zamówić) — tak samo tutaj.
  *
  * Opis: pole Description dosłownie. Portal nie podaje norm ani certyfikatów — łącznik ich nie dopisuje.
@@ -56,9 +58,6 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
 
     private const SHOP_SECTION = 'Informacje z portalu Mascot';
 
-    /** Tyle rozmiarów wypisanych w nazwie karty z podziału cenowego; więcej = skrót z liczbą. */
-    private const SIZES_IN_NAME = 8;
-
     private int $total = 0;
 
     /** @var list<string> */
@@ -72,7 +71,8 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
 
     private int $cards = 0;
 
-    private int $splitArticles = 0;
+    /** artykuły z rozmiarami w różnych cenach (jedna karta, cena od najniższej) */
+    private int $multiPriceArticles = 0;
 
     private int $skippedArticles = 0;
 
@@ -132,7 +132,7 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
         $this->sizesWithoutPrice = [];
         $this->withoutDescription = [];
         $this->cards = 0;
-        $this->splitArticles = 0;
+        $this->multiPriceArticles = 0;
         $this->skippedArticles = 0;
 
         if (! $this->client->isLoggedIn()) {
@@ -148,10 +148,7 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
         $this->summary[] = 'Lista Mascot: '.count($rows).' artykułów w kolorach';
 
         foreach ($rows as $row) {
-            $products = $this->productsFor($row);
-            // artykuł w kilku cenach to kilka kart — licznik postępu rośnie, zanim je wydamy
-            $this->total += max(0, count($products) - 1);
-            yield from $products;
+            yield $this->productFor($row);
         }
     }
 
@@ -164,9 +161,9 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
     {
         $lines = $this->summary;
         $lines[] = sprintf(
-            'Karty: %d (%d artykułów w kilku cenach — rozmiary w innej cenie to osobna karta; %d artykułów pominiętych)',
+            'Karty: %d (%d artykułów z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty; %d artykułów pominiętych)',
             $this->cards,
-            $this->splitArticles,
+            $this->multiPriceArticles,
             $this->skippedArticles,
         );
         $lines[] = 'Portal podaje jedną cenę rozmiaru (przyjęta jako cena konta) i nie podaje ceny katalogowej ani norm';
@@ -417,38 +414,37 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
     }
 
     /**
-     * Karty jednego artykułu (jedna na każdą cenę); szczegóły nieczytelne albo cudze — jedna pozycja pominięta
+     * Karta jednego artykułu ze wszystkimi rozmiarami z ceną; szczegóły nieczytelne albo cudze — pozycja pominięta
      * z powodem.
      *
      * @param  array{number: string, name: string, image: string}  $row
-     * @return list<B2bRemoteProduct>
      */
-    private function productsFor(array $row): array
+    private function productFor(array $row): B2bRemoteProduct
     {
         try {
             $json = $this->client->productDetail($row['number']);
         } catch (B2bFatalException $e) {
             throw $e;
         } catch (RuntimeException $e) {
-            return [$this->skipped($row, 'szczegóły wyrobu: '.$e->getMessage())];
+            return $this->skipped($row, 'szczegóły wyrobu: '.$e->getMessage());
         }
         if ($json['IsSuccess'] !== true || ! is_array($json['ProductDetail'] ?? null)) {
             $message = self::clean((string) ($json['Message'] ?? ''));
 
-            return [$this->skipped($row, 'portal nie podał szczegółów wyrobu'.($message !== '' ? ' ('.$message.')' : ''))];
+            return $this->skipped($row, 'portal nie podał szczegółów wyrobu'.($message !== '' ? ' ('.$message.')' : ''));
         }
 
         $detail = self::parseDetail($json['ProductDetail']);
         if ($detail['number'] !== $row['number']) {
-            return [$this->skipped($row, 'szczegóły dotyczą innego numeru ('.$detail['number'].')')];
+            return $this->skipped($row, 'szczegóły dotyczą innego numeru ('.$detail['number'].')');
         }
 
-        /** @var array<int, list<array{size: string, ean: string, cents: int|null, availability: string}>> $groups */
-        $groups = [];
+        /** @var list<array{size: string, ean: string, cents: int, availability: string}> $sizes */
+        $sizes = [];
         $missing = false;
         foreach ($detail['sizes'] as $size) {
             if ($size['cents'] !== null && $size['cents'] > 0 && $size['ean'] !== '' && $size['size'] !== '') {
-                $groups[$size['cents']][] = $size;
+                $sizes[] = $size;
             } else {
                 $missing = true;
             }
@@ -456,53 +452,40 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
         if ($missing) {
             $this->sizesWithoutPrice[] = $row['number'];
         }
-        if ($groups === []) {
-            return [$this->skipped($row, 'żaden rozmiar nie ma ceny')];
+        if ($sizes === []) {
+            return $this->skipped($row, 'żaden rozmiar nie ma ceny');
         }
         if ($detail['description'] === '') {
             $this->withoutDescription[] = $row['number'];
         }
+        $cents = array_column($sizes, 'cents');
+        $this->multiPriceArticles += count(array_unique($cents)) > 1 ? 1 : 0;
+        $this->cards++;
 
-        $split = count($groups) > 1;
-        $this->splitArticles += $split ? 1 : 0;
-
-        $products = [];
-        foreach ($groups as $cents => $group) {
-            $products[] = $this->productFor($row, $detail, $group, $cents, $split);
-        }
-        $this->cards += count($products);
-
-        return $products;
-    }
-
-    /**
-     * @param  array{number: string, name: string, image: string}  $row
-     * @param  array{number: string, name: string, type: string, group: string, category: string, quality: string, color: string, description: string, image: string, sizes: list<array{size: string, ean: string, cents: int|null, availability: string}>}  $detail
-     * @param  list<array{size: string, ean: string, cents: int|null, availability: string}>  $group
-     */
-    private function productFor(array $row, array $detail, array $group, int $cents, bool $split): B2bRemoteProduct
-    {
         $code = self::articleCode($row['number']);
-        $sku = $split ? $code.' '.$group[0]['size'] : $code;
-        $base = self::cardName($detail['name'] !== '' ? $detail['name'] : $row['name'], $detail['group'], $code, $detail['color']);
-        $name = $split ? $base.' ('.self::sizesLabel(array_column($group, 'size')).')' : $base;
+        $name = self::cardName($detail['name'] !== '' ? $detail['name'] : $row['name'], $detail['group'], $code, $detail['color']);
 
         $members = array_map(static fn (array $size): array => [
             'remote_id' => $size['ean'],
             'sku' => $code.' '.$size['size'],
-            'name' => $base.' '.$size['size'],
-        ], $group);
+            'name' => $name.' '.$size['size'],
+            'availability' => $size['availability'],
+            'size' => $size['size'],
+            // jedna cena rozmiaru = cena konta; ceny katalogowej portal nie podaje
+            'price' => new B2bRemotePrice(net: $size['cents'] / 100),
+        ], $sizes);
 
         return new B2bRemoteProduct(
-            remoteId: $group[0]['ean'],
-            sku: $sku,
+            remoteId: $sizes[0]['ean'],
+            sku: $code,
             name: $name,
             // rodzaj wyrobu po polsku („Kurtka membranowa”); pole Category portal podaje tylko po angielsku
             category: $detail['type'] !== '' ? $detail['type'] : null,
             sourceUrl: MascotB2bClient::PRODUCT_PAGE.rawurlencode($row['number']),
             raw: [
                 'status' => 'ok',
-                'price' => $cents / 100,
+                // cena karty = najniższa cena rozmiaru (B2bCatalogSync liczy ją też z members[].price)
+                'price' => min($cents) / 100,
                 'number' => $row['number'],
                 'code' => $code,
                 'group' => $detail['group'],
@@ -512,12 +495,12 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
                 'category' => $detail['category'],
                 'description' => $detail['description'],
                 'image_url' => $detail['image'] !== '' ? $detail['image'] : $row['image'],
-                'sizes' => array_map(static fn (array $s): array => ['size' => $s['size'], 'ean' => $s['ean']], $group),
+                'sizes' => array_map(static fn (array $s): array => ['size' => $s['size'], 'ean' => $s['ean']], $sizes),
             ],
-            availability: self::groupAvailability($group),
+            availability: self::groupAvailability($sizes),
             variantSummary: 'Rozmiary: '.implode('; ', array_map(
                 static fn (array $s): string => $s['size'].' (EAN '.$s['ean'].')',
-                $group,
+                $sizes,
             )),
             members: $members,
             // numer z portalu dosłownie (18001-249-1809 w nazwie to nasz zapis) i EAN każdego rozmiaru
@@ -529,7 +512,7 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
                     remoteId: $size['ean'],
                     label: $size['size'],
                     field: 'EanNumber',
-                ), $group),
+                ), $sizes),
             ],
         );
     }
@@ -541,21 +524,6 @@ final class MascotB2bConnector implements B2bConnector, B2bGroupsSizes, B2bListP
         $text = implode(' ', array_unique($parts));
 
         return $color !== '' ? $text.', '.$color : $text;
-    }
-
-    /**
-     * „rozm. 3XL, 4XL”; długa lista (spodnie mają po kilkadziesiąt rozmiarów) skrócona do pierwszych i ostatniego
-     * z liczbą — pełna lista jest w podsumowaniu rozmiarów karty.
-     *
-     * @param  list<string>  $sizes
-     */
-    private static function sizesLabel(array $sizes): string
-    {
-        if (count($sizes) <= self::SIZES_IN_NAME) {
-            return 'rozm. '.implode(', ', $sizes);
-        }
-
-        return count($sizes).' rozm.: '.implode(', ', array_slice($sizes, 0, self::SIZES_IN_NAME - 1)).' … '.$sizes[count($sizes) - 1];
     }
 
     /**
