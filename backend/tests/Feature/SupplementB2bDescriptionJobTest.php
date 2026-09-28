@@ -135,6 +135,34 @@ final class SupplementB2bDescriptionJobTest extends TestCase
         $this->assertSame([], app(B2bDescriptionSupplement::class)->candidateIds($this->account, false));
     }
 
+    public function test_duplicate_job_of_a_card_with_a_result_does_nothing(): void
+    {
+        // produkcja 28.09.2026: deadlock przy usuwaniu zadania — kolejka oddała je drugi raz po retry_after
+        $card = $this->card(self::SHORT);
+        $this->link($card, 'a', sha1(self::SHORT));
+        $this->queued($card);
+        $this->enrichment->shouldReceive('supplementB2bDescription')->once()->andReturn($this->modelResult());
+        $this->runJob($card);
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_REPLACED, $this->attemptOf($card)->status);
+
+        // duplikat: karta już nie „krótka z B2B” — dawniej zapisywał „karta już się nie kwalifikuje”
+        $this->runJob($card);
+
+        $attempt = $this->attemptOf($card);
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_REPLACED, $attempt->status);
+        $this->assertSame(sha1(self::AI_TEXT), $attempt->result_sha1);
+
+        // karta bez stron — duplikat nie szuka od nowa
+        $other = $this->card($this->shortOther(), ['sku' => 'R-2']);
+        $this->link($other, 'b', sha1($this->shortOther()));
+        B2bDescriptionSupplementAttempt::query()->create([
+            'product_id' => $other->id, 'b2b_account_id' => $this->account->id, 'source_sha1' => sha1($this->shortOther()),
+            'hosts_sha1' => $this->account->enrichmentHostsSha1(), 'status' => B2bDescriptionSupplementAttempt::STATUS_NO_PAGES, 'attempts' => 1,
+        ]);
+        $this->runJob($other);
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_NO_PAGES, $this->attemptOf($other)->status);
+    }
+
     public function test_at_most_two_cards_work_at_once(): void
     {
         Queue::fake();

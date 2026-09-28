@@ -89,7 +89,7 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
     /** Klucz blokady miejsca na pracę uzupełniania (acquireRunSlot) i odstęp ponowienia, gdy wszystkie zajęte. */
     public const RUN_SLOT_KEY = 'b2b_supplement_run_slot:';
 
-    public const RUN_SLOT_RETRY_SECONDS = 30;
+    public const RUN_SLOT_RETRY_SECONDS = 60;
 
     /**
      * Unix time pierwszego czekania na wyszukiwarkę. Zwykłe pole z wartością domyślną, nie parametr promowany: job
@@ -119,8 +119,14 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
             // próba znika razem z kartą albo kontem (klucze obce)
             return;
         }
-        // „Zatrzymaj” przy koncie (B2bDescriptionSupplement::stop): zadanie z kolejki kończy się bez pracy
-        if ($this->attemptStatus() === B2bDescriptionSupplementAttempt::STATUS_CANCELLED) {
+        // „Zatrzymaj” przy koncie (B2bDescriptionSupplement::stop): zadanie z kolejki kończy się bez pracy. Tak samo
+        // zadanie karty, która ma już wynik: produkcja 28.09.2026 — deadlock przy usuwaniu zadania z tabeli jobs
+        // zostawiał wpis zarezerwowany, a po retry_after (480 s) kolejka oddawała go drugi raz; karta z opisem
+        // uzupełnionym dostawała wtedy „karta już się nie kwalifikuje” zamiast wyniku, a karta bez stron szukała od nowa.
+        // Nowe zlecenie (queue) zawsze ustawia próbę na queued, więc wynik ostateczny = zadanie już zbędne.
+        $current = $this->attemptStatus();
+        if ($current === B2bDescriptionSupplementAttempt::STATUS_CANCELLED
+            || in_array($current, B2bDescriptionSupplementAttempt::FINAL_STATUSES, true)) {
             return;
         }
         $context = $supplement->context($product, $account);
@@ -135,8 +141,9 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
         $runLock = self::acquireRunSlot($this->timeout + 60);
         if ($runLock === null) {
             // Limit uzupełniania obłożony — karta wraca do kolejki bez zużycia próby (patrz acquireRunSlot).
+            // rozrzut: kilkadziesiąt czekających kart nie wraca w tej samej sekundzie (mniej zapisów w tabeli jobs)
             self::dispatch($this->productId, $this->b2bAccountId, $this->outageWaitSince)
-                ->delay(now()->addSeconds(self::RUN_SLOT_RETRY_SECONDS));
+                ->delay(now()->addSeconds(self::RUN_SLOT_RETRY_SECONDS + random_int(0, self::RUN_SLOT_RETRY_SECONDS)));
             $this->delete();
 
             return;
