@@ -520,6 +520,10 @@ final class ProductModelFuzzy
     public function withoutNamedModel(string $requirement): string
     {
         $anchors = array_merge($this->needles($requirement), $this->catalogBrands($requirement));
+        // podmarka przed nazwaną linią („3M PELTOR SportTac”) nie jest igłą, ale też nazywa wyrób
+        foreach (array_keys($this->subBrandLines($requirement, $this->knownCatalogBrandTokens())) as $pair) {
+            $anchors[] = (string) substr((string) strstr($pair, ' '), 1);
+        }
         if ($anchors === []) {
             return $requirement;
         }
@@ -858,16 +862,26 @@ final class ProductModelFuzzy
         }
 
         $knownBrands = $this->knownCatalogBrandTokens();
+        $subBrandLines = $this->subBrandLines($requirement, $knownBrands);
+        $subBrands = [];
         for ($i = 0; $i < $count - 1; $i++) {
             $brand = $this->compact($tokens[$i]);
             if ($brand === '' || ! isset($knownBrands[$brand])) {
                 continue;
             }
             $line = $this->lettersOnly($tokens[$i + 1]);
+            $next = $i + 2;
+            $named = $subBrandLines[$brand.' '.$line] ?? null;
+            if ($named !== null && $this->lettersOnly($tokens[$next] ?? '') === $named) {
+                // „3M PELTOR SportTac”: PELTOR to podmarka, linią jest SportTac
+                $subBrands[$line] = true;
+                $line = $named;
+                $next++;
+            }
             if ($line === '' || mb_strlen($line) < 5 || $this->isStop($line) || $this->isSizeLabelWord($line)) {
                 continue;
             }
-            $after = isset($tokens[$i + 2]) ? $this->compact($tokens[$i + 2]) : '';
+            $after = isset($tokens[$next]) ? $this->compact($tokens[$next]) : '';
             if ($after !== '' && (
                 $this->isNumberedModelToken($after)
                 || $this->isShortAlnumModel($after)
@@ -886,7 +900,8 @@ final class ProductModelFuzzy
         $previous = null;
         foreach ($tokens as $i => $token) {
             if (! $this->isSiwxUpperModelToken($token, $requirement)
-                || isset($capsDescription[$this->lettersOnly($token)])) {
+                || isset($capsDescription[$this->lettersOnly($token)])
+                || isset($subBrands[$this->lettersOnly($token)])) {
                 continue;
             }
             if ($previous !== null && $previous === $i - 1) {
@@ -1852,6 +1867,35 @@ final class ProductModelFuzzy
             }
             foreach ($words as $word) {
                 $out[$this->lettersOnly($word)] = true;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Linia nazwana za marką i podmarką: „3M PELTOR SportTac” → „3m peltor” => „sporttac”. Reguła „marka + linia”
+     * brała samo „peltor” — igłę, pod którą pasuje 525 kart PELTOR (wkładki higieniczne, okulary Solus, hełm G3000),
+     * więc gałąź nazwanego modelu zapełniała pulę nimi, a czasz SportTac w niej nie było (golden
+     * czasze-peltor-sporttac-czarne, produkcja 28.09.2026). O wszystkim rozstrzyga zapis nazwy linii: KamelCase
+     * („SportTac”, „ProTac”, „WorkTunes”) stoi o jedno słowo za znaną marką (PELTOR, Peltor). Tak nie pisze się
+     * zwykłych słów opisu, więc „3M PELTOR czarne” czy „3M PELTOR Optime II” zostają przy dawnej igle.
+     *
+     * @param  array<string, true>  $knownBrands
+     * @return array<string, string> „marka podmarka” => linia
+     */
+    private function subBrandLines(string $requirement, array $knownBrands): array
+    {
+        $pattern = '/(?<![\p{L}\d])([\p{L}\d]{2,})[™®]?\s+(\p{L}{4,})[™®]?\s+(\p{Lu}\p{Ll}+\p{Lu}\p{L}*)[™®]?(?![\p{L}\d])/u';
+        if (preg_match_all($pattern, $requirement, $m, PREG_SET_ORDER) < 1) {
+            return [];
+        }
+        $out = [];
+        foreach ($m as [, $brand, $sub, $line]) {
+            $brandKey = $this->compact($brand);
+            $lineKey = $this->lettersOnly($line);
+            if (isset($knownBrands[$brandKey]) && ! $this->isStop($lineKey)) {
+                $out[$brandKey.' '.$this->lettersOnly($sub)] = $lineKey;
             }
         }
 
