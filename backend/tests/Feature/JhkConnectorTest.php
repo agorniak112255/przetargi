@@ -760,6 +760,90 @@ final class JhkConnectorTest extends TestCase
         $this->assertStringContainsString('Kolory jednego wyrobu z różnymi opisami — karty osobno: 1 wyrobów (2 kolorów), np. JT TEST', $summary);
     }
 
+    /**
+     * Opisy kolorów z produkcji 28.09.2026 (skrócone): sklep robi literówki przy przepisywaniu opisu (PKID 210) — to
+     * nadal ten sam opis; inny skład (TSRA 150 melanże) albo inny wyrób (polo męskie PORA 210 LS i damskie z trzema
+     * guzikami) — nie.
+     */
+    public function test_colour_descriptions_are_the_same_despite_shop_typos_but_not_with_other_facts(): void
+    {
+        $pkid = "Koszulka polo dziecięca z krótkim rękawem.\nSzczegóły:\n- Dzianina pique, 100% bawełna, 210 g/m2\n"
+            ."- kołnierzyk i mankiety rękawów ze ściągacza\n- dwa guziki w kolorze dzianiny\n- szwy boczne\n- pakowanie: 50 szt.";
+        $pkidTypos = "Koszulka polo dziecięca z krótkim rękawem.\nSzczegóły;ły:\n- Dzianinapique, 100% bawełna, 210g/m2\n"
+            ."- kołnierzyk i mankiety rękawow ze ściągacza\n- dwa guziki w kolorze dzianiny\n- szwy boczne\n- pakowanie: 50 szt.";
+        $this->assertTrue(JhkB2bConnector::sameDescription($pkid, $pkidTypos));
+
+        $cotton = "Koszulka unisex z krótkim rękawem.\n- Dzianina single jersey, 100% bawełna, 155 g/m2\n- szwy boczne\n- pakowanie: 100 szt.";
+        $heather = "Koszulka unisex z krótkim rękawem.\n- Dzianina single jersey, 65% bawełna, 35% poliester, 155 g/m2\n- szwy boczne\n- pakowanie: 100 szt.";
+        $this->assertFalse(JhkB2bConnector::sameDescription($cotton, $heather));
+        // ta sama treść, inna gramatura — liczba musi się zgadzać, choć tekst różni się jedną cyfrą
+        $this->assertFalse(JhkB2bConnector::sameDescription($cotton, str_replace('155 g/m2', '150 g/m2', $cotton)));
+
+        $mensPolo = "Koszulka polo męska z długim rękawem.\n- Dzianina pique, 100% bawełna, 210 g/m2\n"
+            ."- kołnierzyk i mankiety ze ściągacza\n- dwa guziki\n- boczne rozcięcia na dole";
+        $womensPolo = "Damska koszulka polo z długim rękawem, taliowana.\n- Dzianina pique, 100% bawełna, 210 g/m2\n"
+            ."- trzy guziki w kolorze dzianiny\n- kołnierzyk ze ściągacza\n- dekolt z listwą";
+        $this->assertFalse(JhkB2bConnector::sameDescription($mensPolo, $womensPolo));
+    }
+
+    /** Opis granatu z literówkami sklepu (jak PKID 210) nie rozdziela kolorów — jedna karta. */
+    public function test_colours_whose_descriptions_differ_only_by_shop_typos_are_one_card(): void
+    {
+        $black = self::sweatshirt();
+        $black['description'] = '<p>Bluza unisex z okrągłym dekoltem.</p><p>Szczegóły:</p><ul><li>Dzianina pętelkowa, 80% bawełna, 20% poliester</li>'
+            .'<li>Gramatura: 260 g/m²</li><li>mankiety rękawów ze ściągacza</li><li>Pakowanie: 25 szt. (karton)</li></ul>';
+        $navy = self::navySweatshirt();
+        $navy['description'] = '<p>Bluza unisex z okrągłym dekoltem.</p><p>Szczegóły;ły:</p><ul><li>Dzianinapętelkowa, 80% bawełna, 20% poliester</li>'
+            .'<li>Gramatura: 260g/m²</li><li>mankiety rękawow ze ściągacza</li><li>Pakowanie: 25 szt. (karton)</li></ul>';
+        $this->addProduct($black);
+        $this->addProduct($navy);
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertSame([['JT TEST', 'JHK Bluza JT TEST', 5]], array_map(
+            static fn (B2bRemoteProduct $p): array => [$p->sku, $p->cardName, count($p->members)],
+            $products,
+        ));
+        // opis karty — koloru prowadzącego (najniższy symbol: czerń)
+        $this->assertStringContainsString('Szczegóły:', $connector->description($products[0]));
+        $this->assertStringNotContainsString('Kolory jednego wyrobu z różnymi opisami', implode("\n", $connector->runSummary()));
+    }
+
+    /**
+     * Kolory TSRA 150: bawełniane i melanże z poliestrem (inny skład) to dwie karty z kolorami tego samego wyrobu.
+     * Pierwsza w kolejności najniższego symbolu (czerń) ma nazwę bez koloru, druga — z kodami pierwszych trzech
+     * kolorów; niezależnie od kolejności listy.
+     */
+    public function test_colour_groups_with_other_composition_are_separate_cards_with_distinct_names(): void
+    {
+        $heather = '<p>Bluza unisex z okrągłym dekoltem.</p><ul><li>Skład: 65% bawełna, 35% poliester (Heather)</li><li>Gramatura: 260 g/m²</li></ul>';
+        foreach (['HR' => 'HR - Heather Red', 'HN' => 'HN - Heather Navy', 'HG' => 'HG - Heather Green', 'HB' => 'HB - Heather Blue'] as $code => $colour) {
+            $product = self::recoloured(self::sweatshirt(), $code, $colour, 100 + ord($code[1]));
+            $product['description'] = $heather;
+            $this->addProduct($product);
+        }
+        $this->addProduct(self::recoloured(self::sweatshirt(), 'WH', 'WH White', 50));
+        $this->addProduct(self::sweatshirt());
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertEqualsCanonicalizing(
+            [
+                ['JT TEST', 'JHK Bluza JT TEST', 'Kolory: BK - Black, WH White; rozmiary: XS, XXL'],
+                ['JT TEST HB', 'JHK Bluza JT TEST – kolory HB, HG, HN…', 'Kolory: HB - Heather Blue, HG - Heather Green, HN - Heather Navy, HR - Heather Red; rozmiary: XS, XXL'],
+            ],
+            array_map(static fn (B2bRemoteProduct $p): array => [$p->sku, $p->cardName, $p->variantSummary], $products),
+        );
+        $this->assertStringContainsString(
+            'Kolory jednego wyrobu z różnymi opisami — karty osobno: 1 wyrobów (6 kolorów), np. JT TEST',
+            implode("\n", $connector->runSummary()),
+        );
+    }
+
     /** Dwa wyroby o tym samym kodzie bez koloru i innych nazwach — drugi dostaje kod koloru prowadzącego (UNIQUE sku). */
     public function test_second_model_with_the_same_code_without_colour_takes_its_lead_colour_code(): void
     {

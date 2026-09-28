@@ -291,6 +291,8 @@ final class B2bMergeSizePricesCommandTest extends TestCase
         // galerie kart kolorów sprzed scalenia (dziś wszystkie na karcie modelu): karta modelu 2 zdjęcia, łączona 3
         $keepRows = [$image(1, true, 0), $image(2, false, 1)];
         $dropRows = [$image(3, false, 2), $image(4, true, 0), $image(5, false, 1)];
+        // karta, która już przed scaleniem była kartą modelu (zdjęcie na kolor) — jej galeria zostaje cała
+        $modelRows = [$image(6, true, 0), $image(7, false, 1)];
         $later = ProductImage::query()->create([
             'product_id' => $keep->id, 'path' => 'products/m1-web.jpg', 'source_url' => 'https://web.example.test/m1.jpg', 'sort_order' => 9,
         ]);
@@ -298,6 +300,7 @@ final class B2bMergeSizePricesCommandTest extends TestCase
         $cards = [
             ['role' => 'keep', 'product' => ['id' => $keep->id], 'rows' => ['product_images' => $keepRows]],
             ['role' => 'drop', 'product' => ['id' => 999001], 'rows' => ['product_images' => $dropRows]],
+            ['role' => 'drop', 'product' => ['id' => 999002, 'variant_summary' => 'Kolory: biel, czerń'], 'rows' => ['product_images' => $modelRows]],
         ];
         @mkdir(storage_path('app/repair-backups'), 0775, true);
         file_put_contents(
@@ -314,14 +317,14 @@ final class B2bMergeSizePricesCommandTest extends TestCase
         $this->artisan('b2b:trim-colour-gallery', ['account' => $this->account->id])
             ->expectsOutputToContain('Kart modeli: 1 · zdjęć ponad jedno na kolor: 3')
             ->assertSuccessful();
-        $this->assertSame(6, ProductImage::query()->where('product_id', $keep->id)->count());
+        $this->assertSame(8, ProductImage::query()->where('product_id', $keep->id)->count());
 
         $this->artisan('b2b:trim-colour-gallery', ['account' => $this->account->id, '--apply' => true])
             ->expectsOutputToContain('usunięte: 3')
             ->assertSuccessful();
         // główne zdjęcie każdej karty koloru i zdjęcie spoza scalanych galerii zostają
         $this->assertSame(
-            [$keepRows[0]['id'], $dropRows[1]['id'], $later->id],
+            [$keepRows[0]['id'], $dropRows[1]['id'], $modelRows[0]['id'], $modelRows[1]['id'], $later->id],
             ProductImage::query()->where('product_id', $keep->id)->orderBy('id')->pluck('id')->all(),
         );
         $this->artisan('b2b:trim-colour-gallery', ['account' => $this->account->id])

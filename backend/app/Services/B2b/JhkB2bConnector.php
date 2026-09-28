@@ -10,6 +10,7 @@ use App\Models\ProductIdentifier;
 use DOMElement;
 use DOMNode;
 use DOMXPath;
+use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
@@ -78,6 +79,9 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     private const DOCUMENTS_LIMIT = 8;
 
     private const IMAGES_LIMIT = 8;
+
+    /** Opisy kolorów tak podobne po normalizacji = ten sam opis (sameDescription). */
+    private const DESCRIPTION_SIMILARITY = 0.97;
 
     /** Dostępność karty z kolorami dłuższa niż tyle znaków = liczby wierszy w magazynach (colourAvailability). */
     private const AVAILABILITY_LIMIT = 1000;
@@ -148,6 +152,9 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     /** @var array<string, int> wyroby, których kolory mają różne opisy (osobne karty): klucz wyrobu => liczba kolorów */
     private array $descriptionSplits = [];
 
+    /** @var array<string, true> nazwy nowych kart z kolorami wydane w przebiegu (małymi literami) — distinctCardName */
+    private array $cardNames = [];
+
     /** @var (callable(string): void)|null */
     private $listProgress = null;
 
@@ -206,6 +213,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         $this->colourCount = 0;
         $this->skus = [];
         $this->descriptionSplits = [];
+        $this->cardNames = [];
 
         if (! $this->client->isLoggedIn()) {
             $this->client->login();
@@ -1059,23 +1067,42 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
             $groups = [];
         }
 
+        // kolory wyrobu w kolejności najniższego symbolu rozmiaru (nie listy), każdy dołącza do pierwszej grupy o tym
+        // samym opisie (sameDescription z jej pierwszym kolorem) — podział i kolejność grup nie zależą od listy
+        $lowest = static fn (int $i): string => min(array_column($parts[$i]['priced'], 'symbol'));
+        $clusters = [];
+        foreach ($groups as $modelKey => $indexes) {
+            usort($indexes, static fn (int $a, int $b): int => strcmp($lowest($a), $lowest($b)));
+            $own = [];
+            foreach ($indexes as $i) {
+                foreach ($own as $n => $cluster) {
+                    if (self::sameDescription((string) $parts[$cluster[0]]['page']['description'], (string) $parts[$i]['page']['description'])) {
+                        $own[$n][] = $i;
+
+                        continue 2;
+                    }
+                }
+                $own[] = [$i];
+            }
+            if (count($own) > 1) {
+                $this->descriptionSplits[$modelKey] = count($indexes);
+            }
+            foreach ($own as $n => $cluster) {
+                $clusters[$modelKey.'#'.$n] = $cluster;
+            }
+        }
+        $groups = [];
         $groupOf = [];
-        $byModel = [];
-        foreach ($groups as $key => $indexes) {
-            $first = $models[$indexes[0]];
-            $byModel[$first['model_key']][] = count($indexes);
+        foreach ($clusters as $key => $indexes) {
             $colours = array_map(static fn (int $i): string => $models[$i]['colour']['key'], $indexes);
             if (count($indexes) >= 2 && count(array_unique($colours)) === count($colours)) {
+                $groups[$key] = $indexes;
                 foreach ($indexes as $i) {
                     $groupOf[$i] = $key;
                 }
             }
         }
-        foreach ($byModel as $model => $sizes) {
-            if (count($sizes) > 1) {
-                $this->descriptionSplits[$model] = array_sum($sizes);
-            }
-        }
+        uasort($groups, static fn (array $a, array $b): int => strcmp($lowest($a[0]), $lowest($b[0])));
 
         // karty kolorów najpierw (ich SKU to kody ze sklepu), potem karty z kolorami — na miejscu pierwszego koloru
         foreach ($parts as $i => $part) {
@@ -1085,17 +1112,16 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
                 $out[$i] = $this->singleColourCard($part);
             }
         }
-        foreach ($groupOf as $i => $key) {
-            if ($groups[$key][0] !== $i) {
-                continue;
-            }
+        // karty z kolorami w kolejności grup (najniższy symbol) — pierwsza z tą samą nazwą bez koloru zostaje przy niej,
+        // następne dostają kody kolorów (colourCard); każda na miejscu swojego pierwszego koloru na liście
+        foreach ($groups as $indexes) {
             $colours = [];
-            foreach ($groups[$key] as $j) {
+            foreach ($indexes as $j) {
                 /** @var array{row: array{path: string, name: string, color: string, price_text: string}, page: array<string, mixed>, priced: non-empty-list<array{path: string, symbol: string, size: string, ean: string, cents: int, base: int|null, vat: string, stock: string}>, code: string|null, single: bool} $member */
                 $member = $parts[$j];
                 $colours[] = ['part' => $member, 'model' => $models[$j]];
             }
-            $out[$i] = $this->colourCard($colours);
+            $out[min($indexes)] = $this->colourCard($colours);
         }
         ksort($out);
 
@@ -1163,8 +1189,8 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
      * Wyrób koloru, gdy strona potwierdza kolor z listy: kod wyrobu (kod bez rozmiaru albo symbol wyrobu bez rozmiarów)
      * kończy się słowem, które jest kodem koloru („FLRA 340 BK/BK” przy „BK/BK - Black/Black”, „CZ 5 P TRUCKER BG/WH”
      * przy „BGWH - Bottle Green/White”), a nazwa z listy ma kolor (withoutColour). Kolory łączą się tylko przy tym samym
-     * kluczu: kod bez koloru, nazwa bez koloru, rodzaj wyrobu (z rozmiarami albo bez) i opis (bez różnic białych
-     * znaków). Kategorii sklepu klucz nie ma: kolor bywa dodatkowo w „Sublimacja” czy „Wysoka Widoczność”, a karta ma
+     * kluczu: kod bez koloru, nazwa bez koloru i rodzaj wyrobu (z rozmiarami albo bez), a w nim — przy tym samym opisie
+     * (sameDescription, batchProducts). Kategorii sklepu klucz nie ma: kolor bywa dodatkowo w „Sublimacja” czy „Wysoka Widoczność”, a karta ma
      * ścieżki wszystkich kolorów. Pola karty różne między kolorami (Waga otwartego rozmiaru, Kod HS) nie rozdzielają
      * kolorów — karta z kolorami pokazuje tylko pola wspólne (colourRaw); na produkcji 28.09.2026 różniły się w 48
      * ze 129 wyrobów. Inaczej null — kolor zostaje osobną kartą (np. „CZA 5P BK ZAP MET” — kolor w środku kodu, body
@@ -1193,8 +1219,8 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         $modelKey = implode('|', [mb_strtoupper($name), mb_strtoupper($model), $part['single'] ? 'bez rozmiarów' : 'rozmiary']);
 
         return [
-            // opis to cecha wyrobu (skład, gramatura) — inny opis koloru = osobna karta; białe znaki bez znaczenia
-            'key' => $modelKey.'|'.sha1(self::clean((string) $part['page']['description'])),
+            // opis (skład, gramatura) rozstrzyga dopiero porównanie kolorów tego klucza (batchProducts, sameDescription)
+            'key' => $modelKey,
             'model_key' => $modelKey,
             'code' => $model,
             'name' => $name,
@@ -1320,7 +1346,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
             variantSummary: $summary,
             members: $members,
             identifiers: $identifiers,
-            cardName: self::cardName($colours[0]['model']['name'], '', $sku),
+            cardName: $this->distinctCardName(self::cardName($colours[0]['model']['name'], '', $sku), $codes),
         );
     }
 
@@ -1432,6 +1458,83 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         }
 
         return $raw;
+    }
+
+    /**
+     * Ten sam opis dwóch kolorów wyrobu: sklep przepisuje opis przy każdym kolorze i robi w nim literówki („Szczegóły;ły:”
+     * zamiast „Szczegóły:”, „Dzianinapique”, „rękawow”) — tekst po normalizacji (descriptionText) zgodny co najmniej
+     * w DESCRIPTION_SIMILARITY (odległość Levenshteina do długości dłuższego; PHP 8 nie ma limitu 255 znaków), a liczby
+     * mówiące o wyrobie (procenty składu, gramatura — descriptionNumbers) dokładnie te same. Kolory melanżowe TSRA 150
+     * („35% poliester”) przy kolorach ze 100% bawełny albo polo damskie przy męskim zostają osobno.
+     */
+    public static function sameDescription(string $a, string $b): bool
+    {
+        if (self::descriptionNumbers($a) !== self::descriptionNumbers($b)) {
+            return false;
+        }
+        $x = self::descriptionText($a);
+        $y = self::descriptionText($b);
+        if ($x === $y) {
+            return true;
+        }
+        $longest = max(strlen($x), strlen($y));
+        // odległość jest nie mniejsza niż różnica długości — bez liczenia, gdy już ona przekracza próg
+        if (abs(strlen($x) - strlen($y)) > (1 - self::DESCRIPTION_SIMILARITY) * $longest) {
+            return false;
+        }
+
+        return 1 - levenshtein($x, $y) / $longest >= self::DESCRIPTION_SIMILARITY;
+    }
+
+    /** Opis do porównania: małe litery bez znaków diakrytycznych, tylko litery i cyfry (bez odstępów i interpunkcji). */
+    private static function descriptionText(string $text): string
+    {
+        return (string) preg_replace('/[^a-z0-9]/', '', strtolower(Str::ascii($text)));
+    }
+
+    /**
+     * Liczby opisu, które muszą się zgadzać co do jednej: procenty („35%”, „100 %”) i gramatura („155g/m2”,
+     * „210 g/m²”, „190 gr/m2”) — posortowany zbiór z powtórzeniami.
+     *
+     * @return list<string>
+     */
+    private static function descriptionNumbers(string $text): array
+    {
+        $numbers = [];
+        // „35,0” = „35.0” = „35”
+        $number = static fn (string $value): string => (string) (float) str_replace(',', '.', $value);
+        if (preg_match_all('/(\d+(?:[.,]\d+)?)\s*%/u', $text, $m) > 0) {
+            foreach ($m[1] as $value) {
+                $numbers[] = '%'.$number($value);
+            }
+        }
+        if (preg_match_all('/(\d+(?:[.,]\d+)?)\s*gr?\s*\/\s*m\s*(?:2|²)/iu', $text, $m) > 0) {
+            foreach ($m[1] as $value) {
+                $numbers[] = 'g'.$number($value);
+            }
+        }
+        sort($numbers);
+
+        return $numbers;
+    }
+
+    /**
+     * Nazwa nowej karty z kolorami niepowtarzalna w przebiegu: pierwsza grupa wyrobu (kolejność najniższego symbolu)
+     * zostaje przy nazwie bez koloru, następna o tej samej nazwie (kolory z innym opisem, np. TSRA 150 melanże)
+     * dostaje kody pierwszych trzech kolorów: „JHK TSRA 150 – kolory AN, APR, AQM…”.
+     *
+     * @param  list<string>  $codes  kody kolorów karty w jej kolejności
+     */
+    private function distinctCardName(string $name, array $codes): string
+    {
+        $key = mb_strtolower($name);
+        if (isset($this->cardNames[$key])) {
+            $name .= ' – kolory '.implode(', ', array_slice($codes, 0, 3)).(count($codes) > 3 ? '…' : '');
+            $key = mb_strtolower($name);
+        }
+        $this->cardNames[$key] = true;
+
+        return $name;
     }
 
     /**

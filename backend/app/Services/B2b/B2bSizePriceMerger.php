@@ -398,8 +398,13 @@ final class B2bSizePriceMerger
             // pozycje przetargów na karcie jednego rozmiaru/koloru dostaną po scaleniu ten wiersz jako wariant oferty
             $variantByItem = $this->itemVariants($account, $cardIds);
             // galerie kart sprzed scalenia — przy kolorach zostaje po jednym zdjęciu z każdej (ColourGalleryTrim)
-            $imagesByCard = ColourGalleryTrim::isColourGroup($group)
-                ? ProductImage::query()->toBase()->whereIn('product_id', $cardIds)->get(['id', 'product_id', 'is_primary', 'sort_order'])
+            // karta, która już jest kartą modelu („Kolory: …”), ma zdjęcie na każdy kolor — jej galerii nie przycinamy
+            $colourCards = array_values(array_filter(
+                array_map(static fn (Product $card): ?int => ColourGalleryTrim::isModelCard($card->variant_summary) ? null : (int) $card->id, [$keep, ...$drops]),
+                static fn (?int $id): bool => $id !== null,
+            ));
+            $imagesByCard = ColourGalleryTrim::isColourGroup($group) && $colourCards !== []
+                ? ProductImage::query()->toBase()->whereIn('product_id', $colourCards)->get(['id', 'product_id', 'is_primary', 'sort_order'])
                     ->groupBy('product_id')->map(static fn ($rows): array => $rows->map(static fn ($row): array => (array) $row)->all())->all()
                 : [];
 

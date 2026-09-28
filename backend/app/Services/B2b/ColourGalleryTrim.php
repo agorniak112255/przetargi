@@ -19,7 +19,16 @@ final class ColourGalleryTrim
     /** Scalenie kolorów, nie rozmiarów: łącznik podał listę „Kolory: …” (B2bRemoteProduct::variantSummary). */
     public static function isColourGroup(array $group): bool
     {
-        return str_starts_with(trim((string) ($group['variant_summary'] ?? '')), 'Kolory:');
+        return self::isModelCard($group['variant_summary'] ?? null);
+    }
+
+    /**
+     * Karta sprzed scalenia, która już jest kartą modelu (variant_summary „Kolory: …”) — ma po zdjęciu na kolor, więc
+     * „zdjęcie główne karty” nie jest jej jedynym zdjęciem do zostawienia. Jej galerii nie przycinamy.
+     */
+    public static function isModelCard(mixed $variantSummary): bool
+    {
+        return str_starts_with(trim((string) $variantSummary), 'Kolory:');
     }
 
     /**

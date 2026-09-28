@@ -107,7 +107,8 @@ final class B2bTrimColourGalleryCommand extends Command
                 $images = [];
                 foreach (is_array($row['cards'] ?? null) ? $row['cards'] : [] as $card) {
                     $id = (int) ($card['product']['id'] ?? 0);
-                    if ($id > 0) {
+                    // karta, która przed scaleniem już była kartą modelu, ma zdjęcie na każdy kolor — bez przycinania
+                    if ($id > 0 && ! ColourGalleryTrim::isModelCard($card['product']['variant_summary'] ?? null)) {
                         $images[$id] = array_values(array_filter(
                             is_array($card['rows']['product_images'] ?? null) ? $card['rows']['product_images'] : [],
                             'is_array',
