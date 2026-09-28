@@ -290,6 +290,12 @@ export type Product = {
   enrichment_status?: 'none' | 'queued' | 'running' | 'done' | 'failed' | 'manual'
   /** Opis zapisany przez cennik B2B i niezmieniony — AI nie nadpisuje go zbiorczo, pojedynczo po potwierdzeniu. */
   description_from_b2b?: boolean
+  /** Uzupełnianie opisu B2B ze stron konta: karta w kolejce albo obecny opis z uzupełnienia (hosts = strony źródłowe). */
+  description_supplement?: {
+    state: 'queued' | 'supplemented'
+    hosts: string[]
+    described_at: string | null
+  } | null
   enriched_at?: string | null
   enrichment_error?: string | null
   enrichment_trace?: {

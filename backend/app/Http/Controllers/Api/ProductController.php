@@ -10,6 +10,7 @@ use App\Http\Requests\UpdateProductCategoryRequest;
 use App\Http\Requests\UpdateProductManualSpecsRequest;
 use App\Http\Requests\UpdateProductShopSourceRequest;
 use App\Models\B2bAccount;
+use App\Models\B2bDescriptionSupplementAttempt;
 use App\Models\B2bProductLink;
 use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
@@ -19,6 +20,7 @@ use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Services\B2b\B2bDescriptionSource;
+use App\Services\B2b\B2bDescriptionSupplement;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\NbpExchangeRateService;
 use App\Services\Pricing\ProductEffectivePrice;
@@ -277,6 +279,8 @@ class ProductController extends Controller
         $variantSummaries = $this->variants->listSummaries($pageIds);
         // opis z cennika B2B (status AI „Z B2B”, bez zbiorczego nadpisywania) — dwa zapytania na stronę
         $fromB2b = app(B2bDescriptionSource::class)->productIds($pageIds);
+        // opis z B2B uzupełniony ze stron konta i karty w kolejce uzupełniania — dwa zapytania na stronę
+        $origins = $this->descriptionOrigins($pageIds);
         // cena specjalna dostawcy przy cenie karty (lista i ProductSearchSelect) — jedno zapytanie na stronę
         $evaluable = $this->evaluableSlotsByProduct($pageIds);
         // Karta z jednym źródłem ceny nie ma czego rozstrzygać — jej slot w cenie karty jest tym obowiązującym.
@@ -291,7 +295,7 @@ class ProductController extends Controller
         $cheaper = $this->comparison->cheaperSources(collect(array_values($models)));
         // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — stała liczba zapytań na stronę
         $orderQuantities = $this->comparison->orderQuantities(collect(array_values($models)));
-        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities): array {
+        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $origins, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities): array {
             $id = (int) $row['id'];
             $row['cheaper_source'] = $cheaper[$id] ?? null;
             $row['order_quantity'] = $orderQuantities[$id] ?? null;
@@ -305,6 +309,7 @@ class ProductController extends Controller
             $row['supplier_special'] = $winner === null ? null : $this->cardSupplierSpecial($candidates, $winner);
             $row['last_price_change'] = $changes[(int) $row['id']] ?? null;
             $row['description_from_b2b'] = isset($fromB2b[(int) $row['id']]);
+            $row['description_supplement'] = $origins[(int) $row['id']] ?? null;
             $summary = $variantSummaries[(int) $row['id']] ?? null;
             $row['variants_count'] = $summary['variants_count'] ?? 0;
             $row['variants_min_price'] = $summary['variants_min_price'] ?? null;
@@ -458,6 +463,7 @@ class ProductController extends Controller
         unset($payload['shop_cards']);
         $payload['shop_fields'] = $this->shopFieldsPayload($product);
         $payload['description_from_b2b'] = app(B2bDescriptionSource::class)->has($product);
+        $payload['description_supplement'] = $this->descriptionOrigins([(int) $product->id])[(int) $product->id] ?? null;
         $payload = $this->fx->appendPricePln($payload);
         $payload['presta_export'] = $this->prestaExportPayload($product);
         $payload['accessories'] = $this->kit->present($product);
@@ -665,6 +671,58 @@ class ProductController extends Controller
             $slotCurrency = $slot->currency !== null ? strtoupper(trim((string) $slot->currency)) : $currency;
             if ($slotCurrency === $currency && round((float) $slot->purchase_price, 2) === $price) {
                 $out[] = $slot;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Stan uzupełniania opisu B2B ze stron konta (SupplementB2bDescriptionJob) — znacznik na liście i karcie
+     * (prośba użytkownika 28.09.2026: po „Uzupełnij krótkie opisy” każda karta dalej pokazywała „Z B2B” i nie było
+     * widać, że coś się dzieje):
+     * - `queued` — karta czeka w kolejce uzupełniania (wiersz próby w stanie queued),
+     * - `supplemented` — obecny opis napisało uzupełnianie (B2bDescriptionSupplement::isSupplementResult), `hosts` to
+     *   strony z internetu, z których wziął tekst.
+     * Karta bez żadnego z tych stanów nie ma wpisu. Dwa zapytania na 1000 kart; payload tylko kart ze śladem.
+     *
+     * @param  list<int>  $productIds
+     * @return array<int, array{state: 'queued'|'supplemented', hosts: list<string>, described_at: string|null}>
+     */
+    private function descriptionOrigins(array $productIds): array
+    {
+        $out = [];
+        foreach (array_chunk($productIds, 1000) as $chunk) {
+            $rows = Product::query()
+                ->whereIn('id', $chunk)
+                ->where('enrichment_payload', 'like', '%b2b_supplement%')
+                ->toBase()
+                ->get(['id', 'description', 'enrichment_payload']);
+            foreach ($rows as $row) {
+                $payload = json_decode((string) $row->enrichment_payload, true);
+                if (! B2bDescriptionSupplement::isSupplementResult((string) $row->description, $payload)) {
+                    continue;
+                }
+                $trace = $payload['b2b_supplement'];
+                $hosts = [];
+                foreach ((array) ($trace['web_source_urls'] ?? []) as $url) {
+                    $host = preg_replace('/^www\./', '', mb_strtolower((string) parse_url((string) $url, PHP_URL_HOST)));
+                    if (is_string($host) && $host !== '' && ! in_array($host, $hosts, true)) {
+                        $hosts[] = $host;
+                    }
+                }
+                $out[(int) $row->id] = [
+                    'state' => 'supplemented',
+                    'hosts' => $hosts,
+                    'described_at' => is_string($trace['described_at'] ?? null) ? $trace['described_at'] : null,
+                ];
+            }
+            $queued = B2bDescriptionSupplementAttempt::query()
+                ->whereIn('product_id', $chunk)
+                ->where('status', B2bDescriptionSupplementAttempt::STATUS_QUEUED)
+                ->pluck('product_id');
+            foreach ($queued as $productId) {
+                $out[(int) $productId] = ['state' => 'queued', 'hosts' => [], 'described_at' => null];
             }
         }
 

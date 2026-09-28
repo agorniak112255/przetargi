@@ -609,7 +609,18 @@ export function ProductDetail() {
             </form>
           )}
           <p className="text-xs text-slate-500">
-            Opis/zdjęcia: <b>{status === 'none' && p.description_from_b2b ? 'Z B2B (opis ze sklepu dostawcy)' : (STATUS_LABEL[status] ?? status)}</b>
+            Opis/zdjęcia:{' '}
+            <b>
+              {p.description_supplement?.state === 'queued'
+                ? 'Z B2B — uzupełnianie ze stron w kolejce'
+                : p.description_supplement?.state === 'supplemented'
+                  ? `Z B2B uzupełniony ze stron${
+                      p.description_supplement.hosts.length > 0 ? ` (${p.description_supplement.hosts.join(', ')})` : ''
+                    }`
+                  : status === 'none' && p.description_from_b2b
+                    ? 'Z B2B (opis ze sklepu dostawcy)'
+                    : (STATUS_LABEL[status] ?? status)}
+            </b>
             {p.enriched_at ? ` · ${new Date(p.enriched_at).toLocaleString('pl-PL')}` : ''}
           </p>
         </div>

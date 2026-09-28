@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Jobs\PrefetchProductSourcesJob;
 use App\Models\B2bAccount;
+use App\Models\B2bDescriptionSupplementAttempt;
 use App\Models\B2bProductLink;
 use App\Models\PriceList;
 use App\Models\Product;
@@ -67,6 +68,46 @@ final class B2bDescriptionEnrichmentGuardTest extends TestCase
         Queue::assertPushed(PrefetchProductSourcesJob::class, 1);
         $this->assertSame(Product::ENRICHMENT_NONE, $fromB2b->fresh()?->enrichment_status);
         $this->assertSame(self::B2B_TEXT, $fromB2b->fresh()?->description);
+    }
+
+    public function test_list_and_detail_show_supplemented_and_queued_description_state(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $supplementedText = 'Stacja czyszcząca do okularów i gogli z chusteczkami, płynem i pompką dozującą — opis uzupełniony.';
+        $supplemented = $this->b2bProduct('UVEX-1');
+        $supplemented->update([
+            'description' => $supplementedText,
+            'enrichment_payload' => ['b2b_supplement' => [
+                'result_sha1' => sha1($supplementedText),
+                'web_source_urls' => ['https://www.specshop.pl/a.html', 'https://specshop.pl/b.html', 'https://balticbhp.pl/c'],
+                'described_at' => '2026-09-28T17:07:22+00:00',
+            ]],
+        ]);
+        // ślad uzupełnienia, ale opis zmieniony później (np. synchronizacja przywróciła tekst B2B) — bez znacznika
+        $stale = $this->b2bProduct('UVEX-2');
+        $stale->update(['enrichment_payload' => ['b2b_supplement' => ['result_sha1' => sha1('inny opis'), 'web_source_urls' => []]]]);
+        $queued = $this->b2bProduct('UVEX-3');
+        B2bDescriptionSupplementAttempt::query()->create([
+            'product_id' => $queued->id,
+            'b2b_account_id' => B2bProductLink::query()->where('product_id', $queued->id)->value('b2b_account_id'),
+            'source_sha1' => sha1(self::B2B_TEXT),
+            'hosts_sha1' => sha1('specshop.pl'),
+            'status' => B2bDescriptionSupplementAttempt::STATUS_QUEUED,
+            'attempts' => 0,
+        ]);
+
+        $rows = collect($this->getJson('/api/products?per_page=50')->assertOk()->json('data'))->keyBy('sku');
+
+        $this->assertSame(
+            ['state' => 'supplemented', 'hosts' => ['specshop.pl', 'balticbhp.pl'], 'described_at' => '2026-09-28T17:07:22+00:00'],
+            $rows['UVEX-1']['description_supplement'],
+        );
+        $this->assertNull($rows['UVEX-2']['description_supplement']);
+        $this->assertSame('queued', $rows['UVEX-3']['description_supplement']['state']);
+        $this->getJson("/api/products/{$supplemented->id}")->assertOk()
+            ->assertJsonPath('description_supplement.state', 'supplemented')
+            ->assertJsonPath('description_supplement.hosts', ['specshop.pl', 'balticbhp.pl']);
+        $this->getJson("/api/products/{$stale->id}")->assertOk()->assertJsonPath('description_supplement', null);
     }
 
     public function test_bulk_enrichment_of_only_b2b_cards_explains_why_nothing_was_queued(): void

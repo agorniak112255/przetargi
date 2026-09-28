@@ -522,6 +522,20 @@ export function Products() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batch, page, debouncedQ, sort, dir])
 
+  // Karty w kolejce uzupełniania opisu ze stron konta B2B — lista odświeża się sama, dopóki na stronie są takie karty,
+  // żeby było widać postęp („Uzupełnianie w kolejce” → „Z B2B + strony”).
+  const supplementQueued = (result?.data ?? []).some((p) => p.description_supplement?.state === 'queued')
+  useEffect(() => {
+    if (!supplementQueued || aiMode) return
+    const t = window.setInterval(() => {
+      void api<Page>(`/products?${buildParams()}`)
+        .then(setResult)
+        .catch(() => {})
+    }, 20000)
+    return () => window.clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supplementQueued, aiMode, page, debouncedQ, sort, dir])
+
   // „Ręcznie” i „Błąd” to pozycje, których kolejka normalnie nie rusza — przed
   // wymuszeniem pytamy, bo każda kosztuje wywołanie Tavily i modelu.
   function requestEnrich(ids: number[], force = false) {
@@ -1210,7 +1224,23 @@ export function Products() {
                     </td>
                   )}
                   <td className="p-2">
-                    {status === 'none' && p.description_from_b2b ? (
+                    {p.description_supplement?.state === 'queued' ? (
+                      <span
+                        className="text-blue-700"
+                        title="Opis z cennika B2B czeka w kolejce na uzupełnienie ze stron wskazanych przy koncie"
+                      >
+                        Uzupełnianie w kolejce
+                      </span>
+                    ) : p.description_supplement?.state === 'supplemented' ? (
+                      <span
+                        className="text-emerald-700"
+                        title={`Opis z cennika B2B uzupełniony ze stron${
+                          p.description_supplement.hosts.length > 0 ? `: ${p.description_supplement.hosts.join(', ')}` : ''
+                        }`}
+                      >
+                        Z B2B + strony
+                      </span>
+                    ) : status === 'none' && p.description_from_b2b ? (
                       <span
                         className="text-emerald-700"
                         title="Opis ze sklepu dostawcy (cennik B2B) — AI nie było uruchamiane i nie nadpisze go zbiorczo"
