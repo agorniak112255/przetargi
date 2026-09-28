@@ -488,8 +488,10 @@ class ProductController extends Controller
             return response()->json(['message' => 'Brak autoryzacji.'], 401);
         }
 
+        $skipImport = (bool) ($request->validate(['skip_import' => ['sometimes', 'boolean']])['skip_import'] ?? false);
+
         try {
-            $result = $this->deletion->deleteMany([(int) $product->id], $user);
+            $result = $this->deletion->deleteMany([(int) $product->id], $user, $skipImport);
         } catch (Throwable $e) {
             return response()->json([
                 'message' => 'Nie udało się usunąć produktu: '.$e->getMessage(),
@@ -497,6 +499,7 @@ class ProductController extends Controller
         }
 
         return response()->json([
+            // liczbę pomijanych pozycji (positions_excluded) okno usuwania pokazuje osobno
             'message' => sprintf('Usunięto produkt %s.', (string) $product->sku),
             ...$result,
         ]);
@@ -514,8 +517,10 @@ class ProductController extends Controller
             $request->validated('product_ids')
         );
 
+        $skipImport = $request->boolean('skip_import');
+
         try {
-            $result = $this->deletion->deleteMany($ids, $user);
+            $result = $this->deletion->deleteMany($ids, $user, $skipImport);
         } catch (Throwable $e) {
             return response()->json([
                 'message' => 'Nie udało się usunąć produktów: '.$e->getMessage(),

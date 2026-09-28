@@ -18,7 +18,9 @@ use App\Models\ProductSourcePrice;
 use App\Models\User;
 use App\Services\Catalog\CardOwnership;
 use App\Services\Catalog\CardRedirectStore;
+use App\Services\Catalog\ImportExclusionSet;
 use App\Services\Catalog\ProductIdentifierStore;
+use App\Services\Catalog\ProductImportExclusions;
 use App\Services\Presta\PrestaCategoryRewriteService;
 use App\Services\Presta\ProductCategorySanitizer;
 use App\Services\Pricing\ProductEffectivePrice;
@@ -52,6 +54,7 @@ final class PriceListImportService
         private readonly ProductIdentifierStore $identifiers = new ProductIdentifierStore,
         private readonly CardOwnership $ownership = new CardOwnership,
         private readonly PriceListGoodsBrand $goodsBrand = new PriceListGoodsBrand,
+        private readonly ProductImportExclusions $exclusions = new ProductImportExclusions,
     ) {}
 
     /**
@@ -399,7 +402,8 @@ final class PriceListImportService
      *     skipped: int,
      *     errors: list<string>,
      *     prices_changed: int,
-     *     price_changes: list<array<string, mixed>>
+     *     price_changes: list<array<string, mixed>>,
+     *     suppressed: int
      * }
      */
     private function persistImport(
@@ -431,11 +435,13 @@ final class PriceListImportService
         $productIds = [];
         $skippedDetails = [];
         $importRow = null;
+        // pozycje pliku pominięte przez blokady „Usuń i pomijaj przy imporcie” (poza rows_skipped i skipped_details)
+        $suppressed = 0;
 
         // Wpis cennika powstaje na początku tej samej transakcji — sloty ceny pliku wskazują cennik, z którego
         // pochodzą (usunięcie cennika usuwa tylko jego slot). Liczniki uzupełniane na końcu; import dalej atomowy.
         /** @var PriceList $priceList */
-        $priceList = DB::transaction(function () use ($file, $manufacturer, $version, $user, $goodsBrandRows, &$collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds, &$skippedDetails, &$importRow): PriceList {
+        $priceList = DB::transaction(function () use ($file, $manufacturer, $version, $user, $goodsBrandRows, &$collected, &$created, &$updated, &$priceChanges, &$updatedProducts, &$productIds, &$skippedDetails, &$importRow, &$suppressed): PriceList {
             // Jeden wpis na producenta: kolejna aktualizacja odnajduje swój cennik zamiast zakładać
             // następny. Pola opisują ostatnią aktualizację, historia idzie do price_list_imports.
             $priceList = PriceList::query()
@@ -466,6 +472,10 @@ final class PriceListImportService
             $redirectGroups = [];
             /** @var list<string> $redirectWarnings ostrzeżenia mapy do uwag importu */
             $redirectWarnings = [];
+            // blokady pozycji usuniętych kart — po producencie cennika (manufacturer_key), nie po numerze wpisu
+            $exclusionSet = $this->exclusions->forPriceList($priceList);
+            // wiersze z nowymi kodami pominięte, bo założyłyby od nowa kartę o SKU usuniętej karty
+            $suppressedNewCodes = 0;
             // Karty tego cennika (slot „file” z tym cennikiem) nie są pomijane z powodu marki: markę mogła podnieść nazwa
             // wyrobu (Canis → 3M) albo poprawić człowiek, a cena z pliku ma dalej trafiać na kartę (26.09.2026).
             /** @var array<int, int> $listCardIds id karty => indeks */
@@ -497,6 +507,15 @@ final class PriceListImportService
                 if (($payload['ean'] ?? null) === null) {
                     unset($payload['ean']);
                 }
+                // „Usuń i pomijaj przy imporcie” — przed mapą połączeń i dopasowaniem: wiersz ze wszystkimi pozycjami
+                // zablokowanymi nie zakłada ani nie aktualizuje karty; część zablokowana (zwinięte rozmiary) — reszta
+                // pozycji idzie zwykłą drogą bez kodów zablokowanych
+                $block = $this->exclusionBlock($sku, $rowIdentifiers, $exclusionSet);
+                $suppressed += $block['blocked'];
+                if ($block['all']) {
+                    continue;
+                }
+                $rowIdentifiers = $block['identifiers'];
                 // mapa połączeń ma pierwszeństwo przed dopasowaniem kodu, rdzenia i nazwy (findExistingProduct)
                 $route = $this->redirectRoute($rowIdentifiers, $redirects, (string) ($payload['manufacturer'] ?? ''), $listCardIds, $manufacturer);
                 foreach ($route['warnings'] as $warning) {
@@ -552,6 +571,14 @@ final class PriceListImportService
                         'positions' => $this->rowPositions($rowIdentifiers) ?: [$sku],
                     ];
                     $identifierRows[(int) $existing->id] = [...($identifierRows[(int) $existing->id] ?? []), ...$rowIdentifiers];
+
+                    continue;
+                }
+                // Wiersz z częścią pozycji zablokowanych (nowy rozmiar zwinięty z usuniętymi) zakłada kartę z resztą
+                // pozycji — poza kartą o SKU usuniętej karty tych pozycji: to byłaby ta sama karta od nowa.
+                if ($existing === null && isset($block['deleted_skus'][ProductImportExclusions::normalize($sku)])) {
+                    $suppressed += $block['remaining'];
+                    $suppressedNewCodes += $block['remaining'];
 
                     continue;
                 }
@@ -674,6 +701,7 @@ final class PriceListImportService
                 : $this->skippedDetailsFromErrors($collected['errors'] ?? [], (int) $collected['skipped']);
             // ostrzeżenia mapy to nie pominięte wiersze (poza skipped_details); na początku uwag, żeby limit ich nie uciął
             $collected['errors'] = [
+                ...$this->suppressedNotes($suppressed, $suppressedNewCodes),
                 ...$this->goodsBrandNotes($manufacturer, $goodsBrandRows, $brandRaised, $brandKeptB2b),
                 ...$redirectWarnings,
                 ...$collected['errors'],
@@ -731,6 +759,9 @@ final class PriceListImportService
                 ]);
             }
 
+            // licznik trafień blokad — raz na udany import (podgląd nie przechodzi przez persistImport)
+            $this->exclusions->registerHits($exclusionSet->hitIds());
+
             return $priceList;
         });
 
@@ -784,7 +815,98 @@ final class PriceListImportService
             'skipped_details' => $skippedDetails,
             'product_ids' => $productIds,
             'special_prices' => $specialCount,
+            'suppressed' => $suppressed,
         ];
+    }
+
+    /**
+     * Blokady „Usuń i pomijaj przy imporcie” dla wiersza pliku. Pozycja (kod wiersza, także zwiniętego rozmiaru)
+     * zablokowana, gdy trafia ją wpis „position” albo „sku”; SKU wiersza trafione wpisem „sku” (karta sprzed zapisu
+     * kodów wierszy) blokuje cały wiersz. Wiersz bez pozycji — samo SKU. Trafienia zbiera $set (hit).
+     *
+     * @param  list<array<string, mixed>>  $rowIdentifiers
+     * @return array{
+     *     all: bool,
+     *     blocked: int,
+     *     remaining: int,
+     *     identifiers: list<array<string, mixed>>,
+     *     deleted_skus: array<string, true>
+     * } all — wiersz pominięty całkowicie; blocked/remaining — liczba pozycji zablokowanych/pozostałych;
+     *   identifiers — identyfikatory bez pozycji zablokowanych; deleted_skus — SKU usuniętych kart trafionych pozycji
+     *   (ProductImportExclusions::normalize)
+     */
+    private function exclusionBlock(string $sku, array $rowIdentifiers, ImportExclusionSet $set): array
+    {
+        $none = ['all' => false, 'blocked' => 0, 'remaining' => 0, 'identifiers' => $rowIdentifiers, 'deleted_skus' => []];
+        if ($set->isEmpty()) {
+            return $none;
+        }
+
+        $positions = $this->rowPositions($rowIdentifiers);
+        if ($positions === []) {
+            $row = trim($sku) !== '' ? ($set->position($sku) ?? $set->sku($sku)) : null;
+            if ($row === null) {
+                return $none;
+            }
+            $set->hit($row);
+
+            return ['all' => true, 'blocked' => 1, 'remaining' => 0, 'identifiers' => [], 'deleted_skus' => []];
+        }
+
+        /** @var array<string, true> $blocked */
+        $blocked = [];
+        $deletedSkus = [];
+        foreach ($positions as $position) {
+            $row = $set->position($position) ?? $set->sku($position);
+            if ($row === null) {
+                continue;
+            }
+            $set->hit($row);
+            $blocked[$position] = true;
+            $deletedSku = ProductImportExclusions::normalize((string) $row->product_sku);
+            if ($deletedSku !== '') {
+                $deletedSkus[$deletedSku] = true;
+            }
+        }
+        $skuRow = trim($sku) !== '' ? $set->sku($sku) : null;
+        if ($skuRow !== null) {
+            $set->hit($skuRow);
+        }
+        if ($skuRow !== null || count($blocked) === count($positions)) {
+            return ['all' => true, 'blocked' => count($positions), 'remaining' => 0, 'identifiers' => [], 'deleted_skus' => []];
+        }
+        if ($blocked === []) {
+            return $none;
+        }
+
+        return [
+            'all' => false,
+            'blocked' => count($blocked),
+            'remaining' => count($positions) - count($blocked),
+            'identifiers' => array_values(array_filter(
+                $rowIdentifiers,
+                static fn (array $identifier): bool => ! isset($blocked[mb_substr(trim((string) ($identifier['position'] ?? '')), 0, 64)]),
+            )),
+            'deleted_skus' => $deletedSkus,
+        ];
+    }
+
+    /**
+     * Jedna linia uwag importu o pozycjach pominiętych przez blokady — na początku listy (limit 50 jej nie utnie).
+     *
+     * @return list<string>
+     */
+    private function suppressedNotes(int $suppressed, int $newCodes): array
+    {
+        if ($suppressed <= 0) {
+            return [];
+        }
+
+        return ['Pominięto pozycji usuniętych z pominięciem: '.$suppressed.' (Cenniki → Usunięte z pominięciem)'
+            .($newCodes > 0
+                ? '; w tym nowych kodów bez blokady: '.$newCodes.' — ich wiersz założyłby od nowa usuniętą kartę (to samo SKU)'
+                : '')
+            .'.'];
     }
 
     /**

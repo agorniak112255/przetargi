@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { DeleteProductsDialog } from '../components/DeleteProductsDialog'
 import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
 import { CrossRefPanel } from '../components/CrossRefPanel'
 import { NormPictograms } from '../components/NormPictograms'
@@ -165,7 +166,8 @@ export function ProductDetail() {
   const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
   const [exportBusy, setExportBusy] = useState(false)
   const [exportMsg, setExportMsg] = useState('')
-  const [deleteBusy, setDeleteBusy] = useState(false)
+  /** Okno potwierdzenia usunięcia karty (z opcją pomijania przy imporcie). */
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [imageDeleteId, setImageDeleteId] = useState<number | null>(null)
   const [priceHistory, setPriceHistory] = useState<ProductPriceHistoryRow[]>([])
   const [categoryOptions, setCategoryOptions] = useState<{ value: string; label: string }[]>([])
@@ -393,23 +395,6 @@ export function ProductDetail() {
       setErr(ex instanceof Error ? ex.message : 'Błąd wysyłki do Presty')
     } finally {
       setExportBusy(false)
-    }
-  }
-
-  async function deleteProduct() {
-    if (!id || !p) return
-    const ok = window.confirm(
-      `Usunąć ${p.sku} ${p.name} z katalogu?\n\nTej operacji nie można cofnąć.`,
-    )
-    if (!ok) return
-    setDeleteBusy(true)
-    setErr('')
-    try {
-      await api(`/products/${id}`, { method: 'DELETE' })
-      navigate('/products')
-    } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Błąd usuwania produktu')
-      setDeleteBusy(false)
     }
   }
 
@@ -697,12 +682,15 @@ export function ProductDetail() {
           {canDelete && (
             <button
               type="button"
-              disabled={deleteBusy}
-              onClick={() => void deleteProduct()}
+              disabled={deleteOpen}
+              onClick={() => {
+                setErr('')
+                setDeleteOpen(true)
+              }}
               className="rounded border border-red-300 px-3 py-2 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
               title="Usuwa tę pozycję z katalogu"
             >
-              {deleteBusy ? 'Usuwam…' : 'Usuń produkt'}
+              Usuń produkt
             </button>
           )}
           <button
@@ -1395,6 +1383,14 @@ export function ProductDetail() {
         onClose={() => setKitOpen(false)}
         onAdd={(ids) => void addToKit(ids)}
       />
+      {deleteOpen && (
+        <DeleteProductsDialog
+          productIds={[p.id]}
+          card={{ sku: p.sku, name: p.name }}
+          onClose={() => setDeleteOpen(false)}
+          onDeleted={() => navigate('/products')}
+        />
+      )}
     </div>
   )
 }

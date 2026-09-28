@@ -15,6 +15,7 @@ use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductImage;
 use App\Models\ProductImageRejection;
+use App\Models\ProductImportExclusion;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
@@ -22,7 +23,9 @@ use App\Models\ProductVariant;
 use App\Models\ProductVariantPriceHistory;
 use App\Services\Catalog\CardOwnership;
 use App\Services\Catalog\CardRedirectStore;
+use App\Services\Catalog\ImportExclusionSet;
 use App\Services\Catalog\ProductIdentifierStore;
+use App\Services\Catalog\ProductImportExclusions;
 use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\PriceListImportService;
@@ -93,6 +96,13 @@ use Throwable;
  * listy dostawcy dostają removed_at; formaty/podłoża trafiają do products.variant_summary (wyszukiwanie).
  * Tłumaczenia obsługuje tylko ścieżka bez wersji — żaden łącznik z wersjami nie ma obcojęzycznego źródła
  * (15.09.2026), znacznik B2bForeignLanguageSource na takim łączniku nic nie zleca.
+ *
+ * „Usuń i pomijaj przy imporcie” (decyzja użytkownika 28.09.2026, ProductImportExclusions): pozycja konta zablokowana
+ * przy usunięciu karty (remote_id powiązania, u pozycji grupy także legacy_remote_id) nie zakłada ani nie aktualizuje
+ * niczego — także gdy inna karta ma ten sam kod. Status „suppressed”: tylko licznik i jedna linia podsumowania, bez
+ * listy pominięć. Grupa traci zablokowane pozycje (cena, lista rozmiarów, identyfikatory i pozycja wiodąca z pozostałych);
+ * okrojona grupa nie zakłada nowej karty (pozostałe pozycje należą do usuniętego wyrobu). Przed założeniem karty blokada
+ * sprawdzana ponownie w bazie (usunięcie w trakcie przebiegu). Licznik trafień blokad — raz na koniec pełnego przebiegu.
  */
 final class B2bCatalogSync
 {
@@ -177,6 +187,7 @@ final class B2bCatalogSync
         private readonly B2bManufacturerRules $manufacturerRules = new B2bManufacturerRules,
         private readonly ProductIdentifierStore $identifiers = new ProductIdentifierStore,
         private readonly CardOwnership $ownership = new CardOwnership,
+        private readonly ProductImportExclusions $importExclusions = new ProductImportExclusions,
     ) {}
 
     /**
@@ -190,6 +201,7 @@ final class B2bCatalogSync
      *     unchanged: int,
      *     skipped: int,
      *     excluded: int,
+     *     suppressed: int,
      *     descriptions: int,
      *     images: int,
      *     documents: int,
@@ -205,7 +217,8 @@ final class B2bCatalogSync
      *     translations_queued: int,
      *     sizes_removed: int,
      *     size_spread: list<array<string, mixed>>,
-     *     size_spread_total: int
+     *     size_spread_total: int,
+     *     suppressed_positions: int
      * }
      */
     public function run(
@@ -227,9 +240,12 @@ final class B2bCatalogSync
 
         $stats = [
             'total_remote' => 0, 'seen' => 0, 'created' => 0, 'updated' => 0,
-            'unchanged' => 0, 'skipped' => 0, 'excluded' => 0, 'descriptions' => 0, 'images' => 0,
+            'unchanged' => 0, 'skipped' => 0, 'excluded' => 0, 'suppressed' => 0, 'descriptions' => 0, 'images' => 0,
             'documents' => 0, 'shop_fields' => 0, 'translations_queued' => 0,
         ];
+        // „Usuń i pomijaj przy imporcie” (28.09.2026): blokady pozycji konta — raz na przebieg, także przy łączniku
+        // z wersjami; usunięcie w trakcie przebiegu łapie ponowne sprawdzenie przed założeniem karty
+        $exclusions = $this->importExclusions->forAccount((int) $account->id);
         // Znaczniki „cena” / „opis” producenta z okna „Producenci” — raz na przebieg; zmiana w trakcie działa od
         // następnego przebiegu (cena obowiązująca czyta je na bieżąco w ProductEffectivePrice).
         $rules = $this->manufacturerRules->forAccount((int) $account->id);
@@ -312,8 +328,8 @@ final class B2bCatalogSync
 
             try {
                 $outcome = $variantConnector !== null
-                    ? $this->syncVariantProduct($account, $variantConnector, $remote, $dryRun, $withImages, $runId, $priceListId, $rules)
-                    : $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects);
+                    ? $this->syncVariantProduct($account, $variantConnector, $remote, $dryRun, $withImages, $runId, $priceListId, $rules, $exclusions)
+                    : $this->syncProduct($account, $connector, $remote, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, exclusions: $exclusions);
             } catch (B2bFatalException $e) {
                 // utrata sesji / blokada — kolejne produkty zapisałyby złe ceny; przebieg kończy się jako „failed”
                 throw $e;
@@ -334,7 +350,8 @@ final class B2bCatalogSync
                 if ($redirects !== []) {
                     $listedPositions[CardRedirectStore::key(ProductSourcePrice::b2bKey((int) $account->id), $position)] = true;
                 }
-                if (! $saved || isset($failed[$position])) {
+                // pozycja zablokowana (także odrzucona z zapisanej grupy) — nic nie zapisała, sprzątanie jej nie dotyczy
+                if (! $saved || isset($failed[$position]) || $exclusions->position($position) !== null) {
                     $taintedPositions[$position] = true;
                 } elseif ($remote->identifiers !== null) {
                     $identifierPositions[$position] = true;
@@ -362,6 +379,9 @@ final class B2bCatalogSync
             if ($outcome['status'] === 'excluded') {
                 // decyzja użytkownika, nie problem — tylko licznik i linia podsumowania, bez listy pominięć
                 $stats['excluded']++;
+            } elseif ($outcome['status'] === 'suppressed') {
+                // pozycja usunięta z pominięciem przy imporcie — decyzja użytkownika: licznik i linia podsumowania
+                $stats['suppressed']++;
             } elseif ($outcome['status'] === 'skipped') {
                 $stats['skipped']++;
                 $addError($label.': '.$outcome['reason']);
@@ -409,9 +429,10 @@ final class B2bCatalogSync
                 'updated' => 'zaktualizowany',
                 'unchanged' => 'bez zmian',
                 'excluded' => 'wyłączony w cenniku: '.$outcome['reason'],
+                'suppressed' => 'usunięty z pominięciem przy imporcie',
                 default => 'pominięty: '.$outcome['reason'],
             };
-            if ($variantConnector !== null && ! in_array($outcome['status'], ['skipped', 'excluded'], true)) {
+            if ($variantConnector !== null && ! in_array($outcome['status'], ['skipped', 'excluded', 'suppressed'], true)) {
                 $statusText .= ' · wersji: '.(int) ($outcome['variants'] ?? 0);
             }
             $line = sprintf('[%d/%d] %s — %s', $stats['seen'], $expected($stats['total_remote']), $label, $statusText);
@@ -420,9 +441,9 @@ final class B2bCatalogSync
             }
 
             if ($progress !== null) {
-                // „bez zmian” i wyłączone w oknie „Producenci” tylko w licznikach — przy pełnym cenniku to tysiące
-                // wierszy szumu
-                if (! in_array($outcome['status'], ['unchanged', 'excluded'], true)) {
+                // „bez zmian”, wyłączone w oknie „Producenci” i usunięte z pominięciem tylko w licznikach — przy pełnym
+                // cenniku to tysiące wierszy szumu
+                if (! in_array($outcome['status'], ['unchanged', 'excluded', 'suppressed'], true)) {
                     $progress->log($outcome['status'] === 'skipped' ? 'warn' : 'info', $line);
                 }
                 foreach ($outcome['warnings'] ?? [] as $warning) {
@@ -572,6 +593,18 @@ final class B2bCatalogSync
             }
         }
 
+        $suppressedPositions = count($exclusions->hitIds());
+        if ($suppressedPositions > 0) {
+            $progress?->log('info', sprintf(
+                'Pominięto %d pozycji usuniętych z pominięciem (Cenniki → Usunięte z pominięciem)',
+                $suppressedPositions,
+            ));
+        }
+        // licznik trafień blokad — jak sprzątanie: tylko pełny przebieg (próbny, z limitem albo przerwany nie liczy)
+        if (! $cancelled && ! $partial && ! $dryRun && $limit === null && $suppressedPositions > 0) {
+            $this->importExclusions->registerHits($exclusions->hitIds());
+        }
+
         // Podsumowanie własne łącznika (np. trafienia reguł rabatowych) — po przejściu całej listy.
         if ($connector instanceof B2bRunSummaryAware) {
             foreach ($connector->runSummary() as $line) {
@@ -599,6 +632,7 @@ final class B2bCatalogSync
             'sizes_removed' => $sizesRemoved,
             'size_spread' => $sizeSpread,
             'size_spread_total' => $sizeSpreadTotal,
+            'suppressed_positions' => $suppressedPositions,
         ];
     }
 
@@ -804,6 +838,8 @@ final class B2bCatalogSync
      * @param  array<string, array{price: bool, description: bool}>  $rules  wyłączenia konta po kluczu producenta
      * @param  array<string, array{position_key: string, product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects  mapa konta (redirectMap)
      * @param  array{remote_id: string, sku: string, name: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}|null  $position
+     * @param  ImportExclusionSet|null  $exclusions  blokady „Usuń i pomijaj przy imporcie” wczytane na przebieg (null = brak)
+     * @param  bool  $trimmedGroup  część grupy, z której odrzucono pozycje zablokowane — nie zakłada nowej karty
      * @return array<string, mixed>
      */
     private function syncProduct(
@@ -819,6 +855,8 @@ final class B2bCatalogSync
         array $redirects = [],
         ?B2bRemoteProduct $origin = null,
         ?array $position = null,
+        ?ImportExclusionSet $exclusions = null,
+        bool $trimmedGroup = false,
     ): array {
         if ($remote->remoteId === '' || $remote->sku === '' || $remote->name === '') {
             return ['status' => 'skipped', 'reason' => 'brak kodu lub nazwy'];
@@ -826,8 +864,31 @@ final class B2bCatalogSync
         // wywołanie z pętli przebiegu (nie pozycja ani część grupy) — tylko ono może rozdzielić grupę na karty
         $topLevel = $origin === null;
         $origin ??= $remote;
+        $exclusions ??= ImportExclusionSet::empty();
 
         $members = $remote->members !== [] ? $this->memberRows($remote) : [];
+        // „Usuń i pomijaj przy imporcie”: pozycja pojedyncza zablokowana — przed mapą połączeń, powiązaniem i kodem
+        // (Product::where('sku') nie może podpiąć jej pod inną kartę o tym samym kodzie)
+        if ($members === []) {
+            $blocked = $exclusions->position($remote->remoteId);
+            if ($blocked !== null) {
+                $exclusions->hit($blocked);
+
+                return self::suppressedOutcome();
+            }
+        } else {
+            // grupa: zablokowane pozycje odpadają przed ceną rozmiarów, mapą połączeń i wyborem karty
+            $trimmed = $this->withoutBlockedMembers($remote, $members, $exclusions);
+            if ($trimmed === null) {
+                return self::suppressedOutcome();
+            }
+            if ($trimmed !== $remote) {
+                // $origin zostaje produktem łącznika (cena, opis, pliki); karta, pozycje i identyfikatory — bez zablokowanych
+                $remote = $trimmed;
+                $members = $this->memberRows($remote);
+                $trimmedGroup = true;
+            }
+        }
         // ceny rozmiarów od łącznika (members[].price, decyzja użytkownika 28.09.2026) — niespójne = grupa pominięta
         $sizePricing = $this->sizePricing($members);
         if ($sizePricing['mode'] === 'invalid') {
@@ -885,7 +946,8 @@ final class B2bCatalogSync
             $targets = array_values(array_unique(array_filter(array_column($entries, 'product_id'), static fn ($id): bool => $id !== null)));
             $split = in_array(CardRedirect::REASON_SPLIT, array_column($entries, 'reason'), true);
             if (count($targets) >= 2 || $split) {
-                return $this->syncMembersSeparately($account, $connector, $remote, $members, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects);
+                // okrojona grupa z pętli przebiegu: łącznik dostaje dalej swój produkt ($origin), nie okrojony
+                return $this->syncMembersSeparately($account, $connector, $remote, $members, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $topLevel ? $origin : null, $exclusions, $trimmedGroup);
             }
             $target = $targets !== [] ? Product::query()->find($targets[0]) : null;
             foreach ($members as $member) {
@@ -935,7 +997,7 @@ final class B2bCatalogSync
                 if ($sized && $topLevel) {
                     $byCard = $this->cardGroups($account, $remote, $members, $entries);
                     if ($byCard !== null) {
-                        return $this->syncMembersByCard($account, $connector, $remote, $byCard, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $warnings);
+                        return $this->syncMembersByCard($account, $connector, $remote, $byCard, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $warnings, $origin, $exclusions, $trimmedGroup);
                     }
                 }
                 $group = $this->resolveGroupCard($account, $remote, $members, $claimed, $entries);
@@ -948,6 +1010,11 @@ final class B2bCatalogSync
                 $memberLinks = $group['member_links'];
                 $joinsMerged = $group['joins_merged'] ?? false;
             }
+        }
+        // grupa okrojona o pozycje usunięte z pominięciem nie zakłada nowej karty — pozostałe pozycje (np. nowy rozmiar
+        // u dostawcy) należą do usuniętego wyrobu; na istniejącą kartę trafiają jak dotąd
+        if ($trimmedGroup && $existing === null) {
+            return self::suppressedOutcome();
         }
         $manufacturer = mb_substr(trim($connector->manufacturer($origin)), 0, 100);
 
@@ -1123,6 +1190,12 @@ final class B2bCatalogSync
             }
         }
         $status = $existing === null ? 'created' : (($dirty || $slotChanged || $sizesChanged) ? 'updated' : 'unchanged');
+
+        // usunięcie z pominięciem w trakcie przebiegu (po wczytaniu blokad) — ponownie z bazy tuż przed założeniem karty;
+        // także w podglądzie, żeby nie pokazał „nowy”
+        if ($existing === null && $this->blockedNow($account, $members === [] ? [$remote->remoteId] : self::memberPositions($members)) !== null) {
+            return self::suppressedOutcome();
+        }
 
         if ($dryRun) {
             $this->claim($claimed, $existing !== null ? (int) $existing->id : null, $existing !== null ? (string) $existing->sku : $remote->sku);
@@ -1477,6 +1550,9 @@ final class B2bCatalogSync
      * Rozmiar z własną ceną (members[].price, 28.09.2026): karta pozycji dostaje cenę tego rozmiaru (price() łącznika
      * wołane jak dotąd — błąd pomija, warunki zamawiania i ceny z niego), nie cenę grupy.
      *
+     * $origin — produkt łącznika, gdy $remote to grupa okrojona o pozycje usunięte z pominięciem (null = $remote);
+     * $trimmedGroup — okrojona grupa: pozycja bez karty nie zakłada nowej (syncProduct).
+     *
      * @param  list<array{remote_id: string, sku: string, name: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}>  $members
      * @param  array{products: array<int, true>, skus: array<string, int|null>}  $claimed
      * @param  array<string, array{price: bool, description: bool}>  $rules
@@ -1495,6 +1571,9 @@ final class B2bCatalogSync
         array &$claimed,
         array $rules,
         array $redirects,
+        ?B2bRemoteProduct $origin = null,
+        ?ImportExclusionSet $exclusions = null,
+        bool $trimmedGroup = false,
     ): array {
         $outcomes = [];
         foreach ($members as $member) {
@@ -1516,7 +1595,7 @@ final class B2bCatalogSync
             // błąd jednej pozycji nie zatrzymuje pozostałych — każda ma własną kartę i własną transakcję
             try {
                 // rozmiar z własną ceną (members[].price, 28.09.2026) — karta pozycji dostaje jego cenę, nie cenę grupy
-                $outcome = $this->syncProduct($account, $connector, $position, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $remote, $member);
+                $outcome = $this->syncProduct($account, $connector, $position, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $origin ?? $remote, $member, $exclusions, $trimmedGroup);
             } catch (B2bFatalException $e) {
                 throw $e;
             } catch (Throwable $e) {
@@ -1533,6 +1612,8 @@ final class B2bCatalogSync
      * karta, inaczej „updated”, gdy choć jedna się zmieniła, inaczej „unchanged”; żadna pozycja nie zapisana —
      * „excluded” (wszystkie wyłączone w oknie „Producenci”) albo „skipped” z powodami pozycji. Pozycje nieudane
      * w failed_positions (sprzątanie identyfikatorów na końcu przebiegu ich nie obejmuje) i z powodem w ostrzeżeniach.
+     * Pozycja usunięta z pominięciem („suppressed”) — tylko w failed_positions, bez powodu i ostrzeżenia; wszystkie
+     * pozycje takie — „suppressed”.
      *
      * @param  list<array{0: array{remote_id: string, sku: string}, 1: array<string, mixed>}>  $outcomes
      * @return array<string, mixed>
@@ -1560,6 +1641,12 @@ final class B2bCatalogSync
             foreach ($outcome['warnings'] ?? [] as $warning) {
                 $warnings[] = $label.': '.$warning;
             }
+            if ($outcome['status'] === 'suppressed') {
+                // usunięta z pominięciem przy imporcie — cicho: bez powodu i ostrzeżenia, tylko poza sprzątaniem
+                $failed[] = $member['remote_id'];
+
+                continue;
+            }
             if (! in_array($outcome['status'], ['created', 'updated', 'unchanged'], true)) {
                 $failed[] = $member['remote_id'];
                 $reasons[] = $label.': '.$outcome['reason'];
@@ -1585,6 +1672,11 @@ final class B2bCatalogSync
         }
 
         if ($statuses === []) {
+            // wszystkie pozycje usunięte z pominięciem — cała grupa cicho
+            if ($reasons === []) {
+                return [...self::suppressedOutcome(), 'failed_positions' => $failed];
+            }
+
             return [
                 'status' => $allExcluded ? 'excluded' : 'skipped',
                 'reason' => implode('; ', $reasons),
@@ -1782,6 +1874,110 @@ final class B2bCatalogSync
         }
 
         return array_values(array_unique(array_filter($ids, static fn (string $id): bool => trim($id) !== '')));
+    }
+
+    /**
+     * Wynik pozycji usuniętej z pominięciem przy imporcie — bez ostrzeżeń i bez powiązania (pętla przebiegu: tylko licznik).
+     *
+     * @return array{status: 'suppressed', reason: string, warnings: list<string>}
+     */
+    private static function suppressedOutcome(): array
+    {
+        return ['status' => 'suppressed', 'reason' => 'usunięta z pominięciem przy imporcie', 'warnings' => []];
+    }
+
+    /**
+     * Pozycje grupy do sprawdzenia blokady: remote_id i dawne remote_id (legacy_remote_id).
+     *
+     * @param  list<array{remote_id: string, legacy_remote_id?: string|null}>  $members
+     * @return list<string>
+     */
+    private static function memberPositions(array $members): array
+    {
+        $ids = [];
+        foreach ($members as $member) {
+            $ids[] = $member['remote_id'];
+            if (($member['legacy_remote_id'] ?? null) !== null) {
+                $ids[] = (string) $member['legacy_remote_id'];
+            }
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    /**
+     * Blokada pozycji prosto z bazy (usunięcie z pominięciem w trakcie przebiegu, po wczytaniu blokad) — pierwsza
+     * znaleziona albo null. Tylko przed założeniem nowej karty.
+     *
+     * @param  list<string>  $positions
+     */
+    private function blockedNow(B2bAccount $account, array $positions): ?ProductImportExclusion
+    {
+        foreach ($positions as $position) {
+            $row = $this->importExclusions->activeB2bPosition((int) $account->id, $position);
+            if ($row !== null) {
+                return $row;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Grupa bez pozycji zablokowanych („Usuń i pomijaj przy imporcie” — remote_id albo legacy_remote_id pozycji).
+     * Nic nie zablokowane — ten sam obiekt; wszystko — null. Inaczej nowy produkt jak w syncMembersSeparately: pozycje
+     * tylko pozostałe, identyfikatory bez zablokowanych pozycji (identyfikatory poziomu karty zostają), lista rozmiarów
+     * nie zmieniana (null — ta od łącznika wymienia też zablokowane rozmiary), dostępność z pozostałych pozycji;
+     * pozycja wiodąca — remoteId, gdy nie jest zablokowana, inaczej pierwsza pozostała (z jej kodem), żeby cena, kod
+     * i dopasowanie karty po kodzie nie szły z zablokowanej pozycji. Trafienia blokad trafiają do $exclusions.
+     *
+     * @param  list<array{remote_id: string, sku: string, name: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int, legacy_remote_id?: string|null}>  $members  memberRows($remote)
+     */
+    private function withoutBlockedMembers(B2bRemoteProduct $remote, array $members, ImportExclusionSet $exclusions): ?B2bRemoteProduct
+    {
+        if ($exclusions->isEmpty()) {
+            return $remote;
+        }
+        $blocked = [];
+        foreach ($members as $member) {
+            $row = $exclusions->position($member['remote_id']);
+            if ($row === null && ($member['legacy_remote_id'] ?? null) !== null) {
+                $row = $exclusions->position((string) $member['legacy_remote_id']);
+            }
+            if ($row !== null) {
+                $exclusions->hit($row);
+                $blocked[$member['remote_id']] = true;
+            }
+        }
+        if ($blocked === []) {
+            return $remote;
+        }
+        $left = array_values(array_filter($members, static fn (array $m): bool => ! isset($blocked[$m['remote_id']])));
+        if ($left === []) {
+            return null;
+        }
+        $lead = isset($blocked[$remote->remoteId]) ? $left[0] : null;
+
+        return new B2bRemoteProduct(
+            remoteId: $lead !== null ? $lead['remote_id'] : $remote->remoteId,
+            sku: $lead !== null && $lead['sku'] !== '' ? $lead['sku'] : $remote->sku,
+            name: $remote->name,
+            category: $remote->category,
+            sourceUrl: $remote->sourceUrl,
+            raw: $remote->raw,
+            availability: self::membersAvailability($left) ?? $remote->availability,
+            variantSummary: null,
+            members: array_values(array_filter(
+                $remote->members,
+                static fn (array $m): bool => ! isset($blocked[(string) ($m['remote_id'] ?? '')]),
+            )),
+            identifiers: $remote->identifiers === null ? null : array_values(array_filter(
+                $remote->identifiers,
+                static fn (B2bRemoteIdentifier $identifier): bool => $identifier->remoteId === null
+                    || ! isset($blocked[(string) $identifier->remoteId]),
+            )),
+            cardName: $remote->cardName,
+        );
     }
 
     /**
@@ -2153,6 +2349,7 @@ final class B2bCatalogSync
      * @param  array<string, array{price: bool, description: bool}>  $rules
      * @param  array<string, array{position_key: string, product_id: int|null, reason: string, is_anchor: bool, snapshot: array<string, mixed>|null}>  $redirects
      * @param  list<string>  $warnings  ostrzeżenia mapy połączeń zebrane przed rozdzieleniem
+     * @param  B2bRemoteProduct|null  $origin  produkt łącznika, gdy $remote to grupa okrojona o pozycje usunięte z pominięciem
      * @return array<string, mixed> wynik zbiorczy (combinedOutcome) z size_spread
      */
     private function syncMembersByCard(
@@ -2168,6 +2365,9 @@ final class B2bCatalogSync
         array $rules,
         array $redirects,
         array $warnings,
+        ?B2bRemoteProduct $origin = null,
+        ?ImportExclusionSet $exclusions = null,
+        bool $trimmedGroup = false,
     ): array {
         $outcomes = [];
         $failed = [];
@@ -2220,7 +2420,7 @@ final class B2bCatalogSync
             );
             // błąd jednej karty nie zatrzymuje pozostałych — każda ma własną transakcję
             try {
-                $outcome = $this->syncProduct($account, $connector, $position, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $remote);
+                $outcome = $this->syncProduct($account, $connector, $position, $dryRun, $withImages, $runId, $priceListId, $claimed, $rules, $redirects, $origin ?? $remote, exclusions: $exclusions, trimmedGroup: $trimmedGroup);
             } catch (B2bFatalException $e) {
                 throw $e;
             } catch (Throwable $e) {
@@ -2461,9 +2661,20 @@ final class B2bCatalogSync
         ?int $runId,
         ?int $priceListId,
         array $rules = [],
+        ?ImportExclusionSet $exclusions = null,
     ): array {
         if ($remote->remoteId === '' || $remote->sku === '' || $remote->name === '') {
             return ['status' => 'skipped', 'reason' => 'brak kodu lub nazwy'];
+        }
+        // „Usuń i pomijaj przy imporcie”: produkt zablokowany po remote_id powiązania — przed pobraniem wersji. Luka
+        // świadomie przyjęta: produkt, który wróci pod innym remote_id, a jego wersje dopasują się po remote_id wersji
+        // (krok 1 niżej), nie jest blokowany — wersje usuniętej karty skasowała kaskada, więc dziś to nowa karta.
+        $exclusions ??= ImportExclusionSet::empty();
+        $blocked = $exclusions->position($remote->remoteId);
+        if ($blocked !== null) {
+            $exclusions->hit($blocked);
+
+            return self::suppressedOutcome();
         }
         $source = 'b2b:'.$connector::key();
 
@@ -2691,6 +2902,11 @@ final class B2bCatalogSync
         $cardDirty = $existing === null || $existing->isDirty();
         $cardFields = $existing !== null ? $this->unsummarizedCardFields($existing) : [];
         $status = $existing === null ? 'created' : (($cardDirty || $variantChanged) ? 'updated' : 'unchanged');
+
+        // usunięcie z pominięciem w trakcie przebiegu — ponownie z bazy tuż przed założeniem karty (także w podglądzie)
+        if ($existing === null && $this->blockedNow($account, [$remote->remoteId]) !== null) {
+            return [...self::suppressedOutcome(), 'variants' => $count];
+        }
 
         if ($dryRun) {
             return [

@@ -10,18 +10,27 @@ function tabClass({ isActive }: { isActive: boolean }) {
   }`
 }
 
+type Tab = { to: string; label: string; end?: boolean; permission: string | null }
+
+const TABS: Tab[] = [
+  { to: '/price-lists', label: 'Cenniki', end: true, permission: null },
+  { to: '/price-lists/b2b', label: 'B2B', permission: 'b2b_accounts.view' },
+  { to: '/price-lists/excluded', label: 'Usunięte z pominięciem', permission: 'products.delete' },
+]
+
+/** Zakładki cenników — każda według swojego uprawnienia; przy jednej dostępnej zakładce pasek się nie pokazuje. */
 export function PriceListsTabs() {
   const { user } = useAuth()
-  if (!can(user, 'b2b_accounts.view')) return null
+  const tabs = TABS.filter((t) => t.permission === null || can(user, t.permission))
+  if (tabs.length < 2) return null
 
   return (
     <nav className="mb-4 flex gap-1 border-b border-slate-200">
-      <NavLink end to="/price-lists" className={tabClass}>
-        Cenniki
-      </NavLink>
-      <NavLink to="/price-lists/b2b" className={tabClass}>
-        B2B
-      </NavLink>
+      {tabs.map((t) => (
+        <NavLink key={t.to} end={t.end} to={t.to} className={tabClass}>
+          {t.label}
+        </NavLink>
+      ))}
     </nav>
   )
 }

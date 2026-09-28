@@ -457,6 +457,9 @@ final class B2bAccountSyncRunner
         if (($result['excluded'] ?? 0) > 0) {
             $text .= sprintf(' · wyłączone w oknie „Producenci”: %d', $result['excluded']);
         }
+        if (($result['suppressed'] ?? 0) > 0) {
+            $text .= sprintf(' · usunięte z pominięciem: %d', $result['suppressed']);
+        }
         if (($result['progress_unit'] ?? null) === B2bSyncRun::UNIT_VARIANTS) {
             $text .= sprintf(
                 ' · wersje: %d/%d · wycofane wersje: %d',

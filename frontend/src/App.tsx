@@ -30,6 +30,7 @@ import { ProductDetail } from './pages/ProductDetail'
 import { AiSettingsPage } from './pages/AiSettings'
 import { PriceLists } from './pages/PriceLists'
 import { PriceListsB2b } from './pages/PriceListsB2b'
+import { PriceListsExcluded } from './pages/PriceListsExcluded'
 import { Products } from './pages/Products'
 import { Reports } from './pages/Reports'
 import { Substitutes } from './pages/Substitutes'
@@ -151,6 +152,14 @@ export default function App() {
               element={
                 <PermissionGuard permission="b2b_accounts.view">
                   <PriceListsB2b />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="price-lists/excluded"
+              element={
+                <PermissionGuard permission="products.delete">
+                  <PriceListsExcluded />
                 </PermissionGuard>
               }
             />

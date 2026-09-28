@@ -25,6 +25,7 @@ use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\ExchangeRateController;
+use App\Http\Controllers\Api\ImportExclusionController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\PrestaExportController;
 use App\Http\Controllers\Api\PrestaShopSearchController;
@@ -165,6 +166,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/products/{product}', [ProductController::class, 'show'])->middleware('permission:products.view');
     Route::delete('/products/{product}', [ProductController::class, 'destroy'])
         ->middleware('permission:products.delete');
+    // karty usunięte z pominięciem przy imporcie — podgląd i przywracanie pozycji (Cenniki → Usunięte z pominięciem)
+    Route::get('/import-exclusions', [ImportExclusionController::class, 'index'])->middleware('permission:products.delete');
+    Route::post('/import-exclusions/restore', [ImportExclusionController::class, 'restore'])->middleware('permission:products.delete');
     Route::delete('/products/{product}/images/{image}', [ProductImageController::class, 'destroy'])
         ->whereNumber('image')
         ->middleware('permission:products.images.delete');

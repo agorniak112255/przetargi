@@ -3,6 +3,8 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
 import { CheaperSourceNote } from '../components/CheaperSourceNote'
+import { DeleteProductsDialog } from '../components/DeleteProductsDialog'
+import { deleteResultText, type DeleteProductsResult } from '../lib/productDeletion'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
 import { ManualCardMergeModal } from '../components/ManualCardMergeModal'
@@ -323,8 +325,12 @@ export function Products() {
   const [prestaItems, setPrestaItems] = useState<PrestaSearchResult[]>([])
   const [exportBusy, setExportBusy] = useState(false)
   const [exportRowId, setExportRowId] = useState<number | null>(null)
-  const [deleteBusy, setDeleteBusy] = useState(false)
-  const [deleteRowId, setDeleteRowId] = useState<number | null>(null)
+  /** Karty w otwartym oknie potwierdzenia usunięcia; null = okno zamknięte. */
+  const [deleteTarget, setDeleteTarget] = useState<{
+    ids: number[]
+    card: { sku: string; name: string } | null
+  } | null>(null)
+  const deleteBusy = deleteTarget !== null
   /** Karty w otwartym oknie „Połącz zaznaczone”; null = okno zamknięte. */
   const [mergeIds, setMergeIds] = useState<number[] | null>(null)
   const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
@@ -639,37 +645,27 @@ export function Products() {
     }
   }
 
-  async function deleteProducts(ids: number[], label?: string) {
+  function deleteProducts(ids: number[], card?: { sku: string; name: string }) {
     if (ids.length === 0) return
-    const ok = window.confirm(
-      ids.length === 1
-        ? `Usunąć ${label ?? 'tę pozycję'} z katalogu?\n\nTej operacji nie można cofnąć.`
-        : `Usunąć ${ids.length} zaznaczonych produktów z katalogu?\n\nTej operacji nie można cofnąć.`,
-    )
-    if (!ok) return
-    setDeleteBusy(true)
-    if (ids.length === 1) setDeleteRowId(ids[0] ?? null)
     setErr('')
     setMsg('')
+    setDeleteTarget({ ids, card: card ?? null })
+  }
+
+  async function onProductsDeleted(res: DeleteProductsResult, skipImport: boolean) {
+    const ids = deleteTarget?.ids ?? []
+    setDeleteTarget(null)
+    setMsg(deleteResultText(res, skipImport))
+    const gone = new Set([...ids, ...res.product_ids_deleted])
+    setSelected((prev) => {
+      const next = { ...prev }
+      for (const id of gone) delete next[id]
+      return next
+    })
     try {
-      const res = await api<{ message: string }>(
-        ids.length === 1 ? `/products/${ids[0]}` : '/products/delete',
-        ids.length === 1
-          ? { method: 'DELETE' }
-          : { method: 'POST', body: JSON.stringify({ product_ids: ids }) },
-      )
-      setMsg(res.message)
-      setSelected((prev) => {
-        const next = { ...prev }
-        for (const id of ids) delete next[id]
-        return next
-      })
       setResult(await api<Page>(`/products?${buildParams()}`))
     } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Błąd usuwania produktu')
-    } finally {
-      setDeleteBusy(false)
-      setDeleteRowId(null)
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się odświeżyć listy')
     }
   }
 
@@ -993,13 +989,11 @@ export function Products() {
             <button
               type="button"
               disabled={deleteBusy || selectedIds.length === 0}
-              onClick={() => void deleteProducts(selectedIds)}
+              onClick={() => deleteProducts(selectedIds)}
               className="rounded border border-red-300 px-3 py-2 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
               title="Usuwa zaznaczone pozycje z katalogu"
             >
-              {deleteBusy
-                ? 'Usuwam…'
-                : `Usuń zaznaczone${selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}`}
+              {`Usuń zaznaczone${selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}`}
             </button>
           )}
           <select
@@ -1405,11 +1399,11 @@ export function Products() {
                           <button
                             type="button"
                             disabled={deleteBusy}
-                            onClick={() => void deleteProducts([p.id], `${p.sku} ${p.name}`)}
+                            onClick={() => deleteProducts([p.id], { sku: p.sku, name: p.name })}
                             className="rounded border border-red-300 px-2 py-1 text-[11px] text-red-700 hover:bg-red-50 disabled:opacity-50"
                             title="Usuń z katalogu"
                           >
-                            {deleteRowId === p.id ? 'Usuwam…' : 'Usuń'}
+                            Usuń
                           </button>
                         )}
                       </div>
@@ -1630,6 +1624,15 @@ export function Products() {
             productIds={mergeIds}
             onClose={() => setMergeIds(null)}
             onMerged={(res, cards) => void onManualMerged(res, cards)}
+          />
+        )}
+
+        {deleteTarget && (
+          <DeleteProductsDialog
+            productIds={deleteTarget.ids}
+            card={deleteTarget.card}
+            onClose={() => setDeleteTarget(null)}
+            onDeleted={(res, skipImport) => void onProductsDeleted(res, skipImport)}
           />
         )}
 

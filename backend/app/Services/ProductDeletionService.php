@@ -8,6 +8,7 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductEnrichmentCache;
 use App\Models\User;
+use App\Services\Catalog\ProductImportExclusions;
 use App\Services\Vector\ProductEmbeddingIndexer;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -17,16 +18,21 @@ final class ProductDeletionService
     public function __construct(
         private readonly ProductEmbeddingIndexer $embeddings,
         private readonly ProductStoredFiles $files,
+        private readonly ProductImportExclusions $exclusions,
     ) {}
 
     /**
+     * $skipOnImport — „Usuń i pomijaj przy imporcie”: pozycje źródeł kart (B2B, cennik z pliku) dostają blokadę,
+     * a synchronizacja i import nie zakładają ich od nowa.
+     *
      * @param  list<int>  $productIds
      * @return array{
      *     deleted: int,
-     *     product_ids_deleted: list<int>
+     *     product_ids_deleted: list<int>,
+     *     positions_excluded: int
      * }
      */
-    public function deleteMany(array $productIds, User $actor): array
+    public function deleteMany(array $productIds, User $actor, bool $skipOnImport = false): array
     {
         $ids = array_values(array_unique(array_filter(
             array_map('intval', $productIds),
@@ -37,10 +43,13 @@ final class ProductDeletionService
             return [
                 'deleted' => 0,
                 'product_ids_deleted' => [],
+                'positions_excluded' => 0,
             ];
         }
 
-        return DB::transaction(function () use ($ids, $actor): array {
+        return DB::transaction(function () use ($ids, $actor, $skipOnImport): array {
+            // blokady przed usunięciem kart — kaskada kasuje powiązania B2B i identyfikatory pozycji
+            $excluded = $skipOnImport ? $this->exclusions->record($ids, $actor) : 0;
             // ścieżki przed usunięciem kart — kaskada kasuje wiersze zdjęć i dokumentów
             $paths = $this->files->pathsOf($ids);
             $this->deleteEnrichmentCaches($ids);
@@ -57,11 +66,14 @@ final class ProductDeletionService
                 'actor_email' => $actor->email,
                 'deleted' => count($ids),
                 'product_ids_deleted' => $ids,
+                'skip_on_import' => $skipOnImport,
+                'positions_excluded' => $excluded,
             ]);
 
             return [
                 'deleted' => count($ids),
                 'product_ids_deleted' => $ids,
+                'positions_excluded' => $excluded,
             ];
         });
     }

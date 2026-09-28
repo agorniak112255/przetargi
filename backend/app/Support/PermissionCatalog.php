@@ -200,7 +200,7 @@ final class PermissionCatalog
             ['substitutes.approve', 'Akceptacja zamienników', 'Może zatwierdzać lub odrzucać zamienniki produktów.', 'Produkty i cenniki'],
             ['substitutes.manage', 'Zamienniki — edycja', 'Może dodawać, edytować i usuwać relacje produkt główny → zamiennik.', 'Produkty i cenniki'],
             ['products.view', 'Produkty — podgląd', 'Dostęp do katalogu produktów i listy zamienników.', 'Produkty i cenniki'],
-            ['products.delete', 'Produkty — usuwanie', 'Może usuwać pozycje z katalogu produktów. W przetargach dopasowanie zostanie odpięte.', 'Produkty i cenniki'],
+            ['products.delete', 'Produkty — usuwanie', 'Może usuwać pozycje z katalogu produktów. W przetargach dopasowanie zostanie odpięte. Może też usuwać z pominięciem przy kolejnych importach (cennik z pliku, B2B) oraz przeglądać i przywracać takie pozycje w Cenniki → Usunięte z pominięciem.', 'Produkty i cenniki'],
             ['products.images.delete', 'Produkty — usuwanie zdjęć', 'Może usunąć zdjęcie z karty produktu (przycisk × na miniaturze). Usunięte zdjęcie nie wróci przy synchronizacji z dostawcą ani przy ponownym pobieraniu danych.', 'Produkty i cenniki'],
             ['card_matches.view', 'Łączenie kart — podgląd', 'Widzi ekran „Łączenie kart”: propozycje połączenia karty dystrybutora z kartą producenta (ten sam EAN albo kod producenta) i historię decyzji.', 'Produkty i cenniki'],
             ['card_matches.decide', 'Łączenie kart — decyzje', 'Może łączyć i odrzucać propozycje oraz odświeżać ich listę. Po połączeniu zostaje karta producenta z nazwą i opisem, ceny dystrybutora dochodzą do niej, a karta dystrybutora znika (przed każdym połączeniem zapisuje się kopia zapasowa).', 'Produkty i cenniki'],

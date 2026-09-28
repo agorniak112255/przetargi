@@ -122,6 +122,9 @@ final class B2bSyncCommand extends Command
         if (($result['excluded'] ?? 0) > 0) {
             $this->info('Wyłączone w oknie „Producenci”: '.$result['excluded']);
         }
+        if (($result['suppressed'] ?? 0) > 0) {
+            $this->info('Usunięte z pominięciem przy imporcie (Cenniki → Usunięte z pominięciem): '.$result['suppressed']);
+        }
         foreach (array_slice($result['errors'], 0, 20) as $error) {
             $this->warn('  '.$error);
         }

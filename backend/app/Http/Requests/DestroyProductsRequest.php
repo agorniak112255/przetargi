@@ -21,6 +21,8 @@ class DestroyProductsRequest extends FormRequest
         return [
             'product_ids' => ['required', 'array', 'min:1', 'max:200'],
             'product_ids.*' => ['integer', 'distinct', 'exists:products,id'],
+            // „Usuń i pomijaj przy imporcie” — pozycje źródeł kart dostają blokadę (ProductImportExclusions)
+            'skip_import' => ['sometimes', 'boolean'],
         ];
     }
 }

@@ -109,6 +109,7 @@ final class ActivityActionResolver
             ['POST', '#^products/\d+/enrich$#', 'product.enriched', 'Wzbogacanie produktu'],
             ['POST', '#^products/delete$#', 'product.deleted', 'Usunięto produkty'],
             ['DELETE', '#^products/\d+$#', 'product.deleted', 'Usunięto produkt'],
+            ['POST', '#^import-exclusions/restore$#', 'import_exclusion.restored', 'Przywrócono pozycje usunięte z pominięciem przy imporcie'],
             ['POST', '#^products/catalog-health/queue$#', 'product.catalog_health_queued', 'Kolejka health katalogu'],
             ['POST', '#^products/catalog-health/backfill-attributes$#', 'product.attributes_backfilled', 'Uzupełnianie atrybutów BHP'],
             ['POST', '#^products/catalog-health/backfill-sizes$#', 'product.sizes_backfilled', 'Uzupełnianie rozmiarów z opisów'],
