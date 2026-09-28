@@ -41,7 +41,8 @@ type Props = {
   allowCompanion?: boolean
   hasMainProduct?: boolean
   onClose: () => void
-  onSelect: (product: AiMatchPick) => void
+  /** Brak = okno tylko do wglądu (wyniki i „Opis”, bez „Wybierz”). */
+  onSelect?: (product: AiMatchPick) => void
   onSelectCompanion?: (product: AiMatchPick) => void
   onSelectPair?: (main: AiMatchPick, companion: AiMatchPick) => void
   onAddExternal?: (hint: ExternalHint) => void
@@ -326,7 +327,11 @@ export function ProductAiMatchModal({
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs font-medium text-slate-600">
-                  {allowCompanion ? 'Wybierz produkt albo zaznacz dwa:' : 'Wybierz produkt:'}
+                  {!onSelect
+                    ? 'Znalezione produkty (tylko podgląd):'
+                    : allowCompanion
+                      ? 'Wybierz produkt albo zaznacz dwa:'
+                      : 'Wybierz produkt:'}
                 </p>
                 {allowCompanion && onSelectPair && (
                   <button
@@ -427,17 +432,19 @@ export function ProductAiMatchModal({
                     >
                       Opis
                     </button>
-                    <button
-                      type="button"
-                      disabled={Boolean(busy)}
-                      onClick={() => {
-                        reportPick(r)
-                        onSelect(r)
-                      }}
-                      className="rounded bg-violet-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-700 disabled:opacity-50"
-                    >
-                      Wybierz
-                    </button>
+                    {onSelect && (
+                      <button
+                        type="button"
+                        disabled={Boolean(busy)}
+                        onClick={() => {
+                          reportPick(r)
+                          onSelect(r)
+                        }}
+                        className="rounded bg-violet-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+                      >
+                        Wybierz
+                      </button>
+                    )}
                     {allowCompanion && onSelectCompanion && (
                       <button
                         type="button"

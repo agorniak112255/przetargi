@@ -589,6 +589,7 @@ function ItemRow({
   priceMode,
   answers,
   busy,
+  lookupBusy,
   customDrafts,
   onCustomDraft,
   onAnswer,
@@ -604,6 +605,8 @@ function ItemRow({
   priceMode: InquiryPriceMode
   answers: Answers
   busy: boolean
+  /** Blokada „Opis” i szukania — tylko w trakcie pisania listu; w podglądzie cudzego zapytania działają. */
+  lookupBusy: boolean
   customDrafts: Record<string, string>
   onCustomDraft: (cardId: string, value: string) => void
   onAnswer: (key: string, answer: InquiryAnswer) => void
@@ -742,7 +745,7 @@ function ItemRow({
                 {w.successor && (
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={lookupBusy}
                     onClick={() => onSearch('catalog', w.successor!)}
                     className="mt-1 rounded-full border border-sky-300 bg-white px-2 py-0.5 text-[11px] font-medium text-sky-800 hover:bg-sky-50 disabled:opacity-50"
                   >
@@ -810,7 +813,7 @@ function ItemRow({
           <div className="flex shrink-0 gap-1.5">
             <button
               type="button"
-              disabled={busy}
+              disabled={lookupBusy}
               onClick={() => onSearch('catalog')}
               title="Szukanie po nazwie i kodzie w katalogu"
               className="rounded-full border border-sky-300 bg-white px-2 py-0.5 text-[11px] font-medium text-sky-800 hover:bg-sky-50 disabled:opacity-50"
@@ -819,7 +822,7 @@ function ItemRow({
             </button>
             <button
               type="button"
-              disabled={busy}
+              disabled={lookupBusy}
               onClick={() => onSearch('ai')}
               title="Szukanie AI po opisie wymagania"
               className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
@@ -874,7 +877,7 @@ function ItemRow({
                 </button>
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={lookupBusy}
                   onClick={() => onPreview(c.id, item.quote ?? '')}
                   className="rounded-full border border-violet-300 bg-white px-2 py-0.5 text-[11px] font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50"
                 >
@@ -1845,6 +1848,7 @@ export function InquiryReply() {
                 priceMode={inquiry.price.mode}
                 answers={inquiry.answers}
                 busy={locked}
+                lookupBusy={busy}
                 customDrafts={customDrafts}
                 onCustomDraft={(cardId, v) => setCustomDrafts((d) => ({ ...d, [cardId]: v }))}
                 onAnswer={onAnswer}
@@ -2069,11 +2073,16 @@ export function InquiryReply() {
         initialMode={searchFor?.mode ?? 'catalog'}
         autoRunAi={searchFor?.mode === 'ai'}
         onClose={() => setSearchFor(null)}
-        onSelect={(p: AiMatchPick) => {
-          const target = searchFor
-          setSearchFor(null)
-          if (target) void pickProduct(target.itemId, p.id)
-        }}
+        // Cudze zapytanie: szukanie tylko do wglądu — bez „Wybierz”, bo zmieniać listę kart może wyłącznie autor.
+        onSelect={
+          readOnly
+            ? undefined
+            : (p: AiMatchPick) => {
+                const target = searchFor
+                setSearchFor(null)
+                if (target) void pickProduct(target.itemId, p.id)
+              }
+        }
       />
     </div>
   )
