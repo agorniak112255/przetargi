@@ -167,16 +167,17 @@ final class DuckDuckGoHtmlSearch
         // Silniki z kluczem (Jina, Brave) idą przed scrapowanymi: nie blokują adresu
         // serwera, więc nie dotyczy ich ani bezpiecznik publicznych silników, ani
         // 429 Google. Bez klucza są pomijane — nic się wtedy nie zmienia.
-        $keyed = $this->searchKeyedEngines($query, $keyedErrors);
+        $answered = [];
+        $keyed = $this->searchKeyedEngines($query, $keyedErrors, $answered);
         if ($keyed !== []) {
             Cache::put($cacheKey, $keyed, now()->addHours(6));
             $foundBeforeDomainFilter = count($keyed);
 
             return $this->limitResults($keyed, $maxResults, $includeDomains);
         }
-
         $blockedDetail = Cache::get(self::PUBLIC_BLOCKED_KEY);
         if (is_string($blockedDetail)) {
+            $this->throwIfKeyedEngineAnswered($answered, $keyedErrors);
             // „silniki zablokowane” — ta fraza klasyfikuje przebieg jako awarie do
             // ponowienia, nie jako brak karty; produkt pada w sekundy, nie w minuty
             throw new RuntimeException(
@@ -193,6 +194,7 @@ final class DuckDuckGoHtmlSearch
                 // odpaliłby pełną sondę trzech silników w to samo zablokowane IP.
                 $blockedDetail = Cache::get(self::PUBLIC_BLOCKED_KEY);
                 if (is_string($blockedDetail)) {
+                    $this->throwIfKeyedEngineAnswered($answered, $keyedErrors);
                     throw new RuntimeException(
                         implode(' | ', [...$keyedErrors, 'Publiczne silniki zablokowane (przerwa 10 min po: '.$blockedDetail.'). Ponow pozniej.'])
                     );
@@ -341,13 +343,35 @@ final class DuckDuckGoHtmlSearch
     }
 
     /**
+     * Publiczne silniki zablokowane, ale silnik z kluczem odpowiedział „brak wyników” i niedawno zwracał wyniki
+     * (działa, KEYED_LAST_HIT_PREFIX) — to realny brak strony, nie awaria. Bez tego każde zapytanie o dokładny kod
+     * wariantu, którego strony nigdzie nie ma, kończyło się „silniki zablokowane, ponów później”, a karta czekała
+     * 10 min (produkcja 28.09.2026, uzupełnianie opisów Bolle: Jina 422 „No search results” na
+     * „site:specshop.pl "SPECTN11W"”). Komunikat bez fraz awarii (SearchEngineOutage::matches).
+     *
+     * @param  list<string>  $answered
+     * @param  list<string>  $keyedErrors
+     */
+    private function throwIfKeyedEngineAnswered(array $answered, array $keyedErrors): void
+    {
+        foreach ($answered as $name) {
+            if (Cache::has(self::KEYED_LAST_HIT_PREFIX.$name)) {
+                throw new RuntimeException(
+                    implode(' | ', [...$keyedErrors, $name.' (silnik z kluczem, działa): brak wyników dla tego zapytania'])
+                );
+            }
+        }
+    }
+
+    /**
      * Jina (s.jina.ai) i Brave — tylko gdy skonfigurowane. Pierwszy z wynikami
      * wygrywa; pusta lista albo błąd trafia do $errors i idziemy dalej.
      *
      * @param  list<string>  $errors
+     * @param  list<string>  $answered  silniki, które odpowiedziały bez błędu (także pustą listą)
      * @return list<array{url: string, title: string, snippet: string}>
      */
-    private function searchKeyedEngines(string $query, array &$errors): array
+    private function searchKeyedEngines(string $query, array &$errors, array &$answered = []): array
     {
         foreach ($this->keyedEngines() as [$name, $client, $interval, $key]) {
             if (! $client->isConfigured()) {
@@ -373,6 +397,7 @@ final class DuckDuckGoHtmlSearch
 
                     return $results;
                 }
+                $answered[] = $name;
                 $errors[] = $name.': brak wyników';
             } catch (Throwable $e) {
                 if (preg_match('/^'.preg_quote($name, '/').' HTTP (401|402)\b/', $e->getMessage(), $m) === 1) {

@@ -49,6 +49,12 @@ final class JinaSearchClient
             throw new RuntimeException('Jina: '.$e->getMessage());
         }
 
+        // 422 z „No search results available” (status 42206) to odpowiedź, nie awaria: Jina szuka (wyniki Google)
+        // i nic nie znalazła. Produkcja 28.09.2026: „site:specshop.pl "SPECTN11W"” → 42206, a „Bolle Spectrum
+        // SPECTN11W” → wyniki. Pusta lista — DuckDuckGoHtmlSearch sam decyduje, czy to już pewny brak.
+        if ($response->status() === 422 && self::isNoResultsAnswer((string) $response->body())) {
+            return [];
+        }
         if (! $response->successful()) {
             throw new RuntimeException('Jina HTTP '.$response->status().': brak wyników wyszukiwania.');
         }
@@ -92,6 +98,20 @@ final class JinaSearchClient
         }
 
         return $out;
+    }
+
+    /** Treść 422 mówi „brak wyników dla zapytania” (status 42206, AssertionFailureError), a nie inny błąd zapytania. */
+    public static function isNoResultsAnswer(string $body): bool
+    {
+        try {
+            $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            return false;
+        }
+
+        return is_array($payload)
+            && ((int) ($payload['status'] ?? 0) === 42206
+                || str_contains(mb_strtolower((string) ($payload['message'] ?? '')), 'no search results'));
     }
 
     private function apiKey(): string

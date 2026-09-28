@@ -90,6 +90,23 @@ final class JinaSearchClientTest extends TestCase
         }
     }
 
+    public function test_422_no_search_results_is_an_empty_answer_other_422_is_an_error(): void
+    {
+        config(['enrichment.reader_api_key' => 'jina_test_key']);
+        Http::fakeSequence('s.jina.ai/*')
+            ->push([
+                'data' => null, 'code' => 422, 'name' => 'AssertionFailureError', 'status' => 42206,
+                'message' => 'No search results available for query site:specshop.pl "SPECTN11W"',
+            ], 422)
+            ->push(['data' => null, 'code' => 422, 'status' => 42201, 'message' => 'Invalid query parameter'], 422);
+
+        $this->assertSame([], (new JinaSearchClient)->search('site:specshop.pl "SPECTN11W"'));
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Jina HTTP 422');
+        (new JinaSearchClient)->search('?');
+    }
+
     public function test_empty_data_is_no_results_not_outage(): void
     {
         config(['enrichment.reader_api_key' => 'jina_test_key']);

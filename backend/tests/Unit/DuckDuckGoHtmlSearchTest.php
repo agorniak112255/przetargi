@@ -320,6 +320,57 @@ HTML;
         Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'google.'));
     }
 
+    public function test_live_keyed_engine_no_results_is_an_answer_while_public_engines_are_blocked(): void
+    {
+        // produkcja 28.09.2026: Jina 422 „No search results” na site:+kod wariantu przy zablokowanych silnikach
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => 'jina_test']);
+        Cache::flush();
+        Cache::put('free_public_engines_blocked_v1', 'Google: zgoda/captcha', now()->addMinutes(10));
+        Cache::put('keyed_search_last_hit_v1:Jina', now()->getTimestamp(), now()->addMinutes(15));
+        Http::fake([
+            's.jina.ai/*' => Http::response([
+                'data' => null, 'code' => 422, 'name' => 'AssertionFailureError', 'status' => 42206,
+                'message' => 'No search results available for query site:specshop.pl "SPECTN11W"',
+            ], 422),
+            '*' => Http::response('too many requests', 429),
+        ]);
+
+        $message = null;
+        try {
+            (new DuckDuckGoHtmlSearch)->search('site:specshop.pl "SPECTN11W"');
+        } catch (RuntimeException $e) {
+            $message = $e->getMessage();
+        }
+
+        $this->assertNotNull($message);
+        $this->assertStringContainsString('Jina (silnik z kluczem, działa): brak wyników', $message);
+        // brak wyników, nie awaria — karta nie czeka 10 min na wyszukiwarkę
+        $this->assertFalse(SearchEngineOutage::matches($message));
+        Http::assertNotSent(static fn ($request): bool => str_contains($request->url(), 'google.'));
+    }
+
+    public function test_keyed_engine_no_results_without_recent_hits_still_waits_for_blocked_engines(): void
+    {
+        // Jina bez wyników od dawna (batch #319: 422 na każde zapytanie) — nie rozstrzyga, czekamy na silniki
+        config(['enrichment.search_min_interval' => 0, 'enrichment.reader_api_key' => 'jina_test']);
+        Cache::flush();
+        Cache::put('free_public_engines_blocked_v1', 'Google: zgoda/captcha', now()->addMinutes(10));
+        Http::fake([
+            's.jina.ai/*' => Http::response(['data' => null, 'code' => 422, 'status' => 42206, 'message' => 'No search results available for query x'], 422),
+            '*' => Http::response('too many requests', 429),
+        ]);
+
+        $message = null;
+        try {
+            (new DuckDuckGoHtmlSearch)->search('SPECTN11W Bolle');
+        } catch (RuntimeException $e) {
+            $message = $e->getMessage();
+        }
+
+        $this->assertNotNull($message);
+        $this->assertTrue(SearchEngineOutage::matches($message));
+    }
+
     public function test_searxng_retries_fallback_engines_when_blocked(): void
     {
         $hit = 'https://shop.example/portwest-2205';
