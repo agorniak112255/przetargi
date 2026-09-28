@@ -444,7 +444,11 @@ final class BhpAttributeNormalizer
         // to powlekane, a nie „welding” ze zdania „nie stosować przy pracach spawalniczych” w opisie. Kategoria
         // dobrana automatem tu nie dociera (context['category'] jest już bez niej) — z nią typ kłamał
         // („Kombinezony bawełniane” przy kurtce, „Półmaski filtrujące FFP1” przy pochłaniaczu).
-        $out['typ_wyrobu'] = $outsidePpe ? null : (
+        // Akcesorium do okularów, gogli czy osłony twarzy („Płyn do czyszczenia soczewek”, „Etui na okulary”) nie jest
+        // tym wyrobem — bez typu, zamiast typu wziętego z przedmiotu w nazwie albo z opisu (PpeAssortment).
+        $eyeFaceAccessory = in_array($family, [PpeAssortment::FAMILY_EYES, PpeAssortment::FAMILY_FACE], true)
+            && $assortment->namesEyeFaceAccessory($name);
+        $out['typ_wyrobu'] = $outsidePpe || $eyeFaceAccessory ? null : (
             $assortment->articleType($nameSku, $family)
             ?? $assortment->articleType($identity, $family)
             ?? $this->nullableString($raw['typ_wyrobu'] ?? null)

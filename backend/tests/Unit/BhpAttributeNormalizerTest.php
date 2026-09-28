@@ -913,4 +913,28 @@ final class BhpAttributeNormalizerTest extends TestCase
         $this->assertNull($read('Opis bez kodu.', '2016'));
         $this->assertSame('4X42C', $read('Opis bez kodu.', '4X42C'));
     }
+
+    public function test_eye_and_face_accessory_has_no_article_type(): void
+    {
+        $type = static fn (string $name, string $description, string $category = 'INDUSTRIAL › ACCESSORIES'): ?string => (new BhpAttributeNormalizer)->forProduct(new Product([
+            'sku' => 'X1',
+            'name' => $name,
+            'manufacturer' => 'Bolle',
+            'description' => $description,
+            'category' => $category,
+            'enrichment_payload' => ['attributes' => ['kategoria_bhp' => 'ochrona_oczu', 'typ_wyrobu' => 'glasses']],
+        ]))['typ_wyrobu'];
+
+        // Bolle B412 (28.09.2026): typ „okulary” brał się z opisu „…do czyszczenia okularów”, także z zapisanego atrybutu
+        $this->assertNull($type('B412 – Płyn do czyszczenia soczewek (spray) 50 ml', 'Płyn do czyszczenia okularów ochronnych i gogli, 50 ml.'));
+        $this->assertNull($type('Etui na okulary 9954.550', 'Twarde etui na okulary ochronne.'));
+        $this->assertNull($type('Sznureczek do okularów ARDON 2002', 'Sznureczek do okularów ochronnych.'));
+        $this->assertNull($type('Szybka do gogli u-sonic 9308.048', 'Zapasowa szybka do gogli.'));
+        $this->assertNull($type('Zestaw do czyszczenia okularów', 'Płyn i ściereczka do okularów.'));
+        $this->assertNull($type('B400 – Stacja czyszcząca', 'Stacja do czyszczenia okularów.'));
+
+        // okulary z akcesorium w komplecie zostają okularami
+        $this->assertSame('glasses', $type('Okulary ochronne w etui', 'Okulary ochronne z etui i sznurkiem.', 'Okulary ochronne'));
+        $this->assertSame('goggles', $type('Gogle ochronne z paskiem', 'Gogle z regulowanym paskiem.', 'Gogle'));
+    }
 }

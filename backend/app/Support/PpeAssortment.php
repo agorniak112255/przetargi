@@ -2335,6 +2335,22 @@ final class PpeAssortment
     }
 
     /** Etui / pojemnik — nie okulary ani gogle, nawet gdy w nazwie jest „okulary”. */
+    /**
+     * Nazwa akcesorium do ochrony oczu albo twarzy: rzeczownik akcesorium, a zaraz po nim „do/na/dla” — „Płyn do
+     * czyszczenia soczewek”, „Etui na okulary”, „Sznureczek do okularów”, „Szybka do gogli”, „Uchwyt na osłonę
+     * twarzy”. Okulary czy gogle są w takiej nazwie przedmiotem, a nie wyrobem; bez tej reguły typ brał się z nich
+     * albo z opisu („do czyszczenia okularów”) i płyn Bolle B412 miał typ „okulary” (28.09.2026). Sprawdzenie na
+     * produkcji: 30 z 1295 kart z typem oczu/twarzy, wszystkie to akcesoria. „Okulary w etui” czy „Gogle z paskiem”
+     * nie pasują — tam rzeczownik akcesorium nie stoi przed „do/na/dla”.
+     */
+    public function namesEyeFaceAccessory(string $name): bool
+    {
+        return preg_match(
+            '/\b(?:(?:plyn|spray|aerozol|chusteczk|sciereczk|etui|futeral|pokrowi|sznur|link|pasek|paski|opask|woreczek|saszetk|pudelk|pojemnik|uchwyt|zaczep|adapter|mocowani|wkladk|szybk|foli|nakladk|filtr)\w*\s+(?:do|na|dla)\b|stacj\w*\s+czyszcz|zestaw\w*\s+do\s+czyszcz)/u',
+            $this->normalize($name)
+        ) === 1;
+    }
+
     public function isEyeWearAccessory(string $text): bool
     {
         $t = $this->normalize($text);
