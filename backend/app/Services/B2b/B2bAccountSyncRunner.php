@@ -171,7 +171,8 @@ final class B2bAccountSyncRunner
             if ($account->enrichmentHosts() === []) {
                 return;
             }
-            $queued = app(B2bDescriptionSupplement::class)->queue($account, null, true);
+            // karty zatrzymane przyciskiem „Zatrzymaj” wraca tylko przycisk — synchronizacja ich nie wznawia
+            $queued = app(B2bDescriptionSupplement::class)->queue($account, null, true, false);
             if ($queued['queued'] > 0) {
                 Log::info('Krótkie opisy B2B zlecone do uzupełnienia ze stron konta', [
                     'b2b_account_id' => $account->id,

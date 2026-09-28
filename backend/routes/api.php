@@ -306,6 +306,13 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     // „Uzupełnij krótkie opisy” — karty z krótkim opisem z B2B szukane najpierw na stronach z opisami konta
     Route::post('/b2b-accounts/{b2bAccount}/supplement-descriptions', [B2bAccountController::class, 'supplementDescriptions'])
         ->middleware('permission:b2b_accounts.manage');
+    // okno postępu uzupełniania opisów i „Zatrzymaj” / „Zatrzymaj wszystko”
+    Route::get('/b2b-accounts/{b2bAccount}/supplement-progress', [B2bAccountController::class, 'supplementProgress'])
+        ->middleware('permission:b2b_accounts.view');
+    Route::post('/b2b-accounts/{b2bAccount}/supplement-stop', [B2bAccountController::class, 'stopSupplement'])
+        ->middleware('permission:b2b_accounts.manage');
+    Route::post('/b2b-accounts/supplement-stop-all', [B2bAccountController::class, 'stopAllSupplements'])
+        ->middleware('permission:b2b_accounts.manage');
     Route::get('/b2b-accounts/{b2bAccount}/discount-rules', [B2bDiscountRuleController::class, 'index'])
         ->middleware('permission:b2b_accounts.view');
     Route::put('/b2b-accounts/{b2bAccount}/discount-rules', [B2bDiscountRuleController::class, 'update'])

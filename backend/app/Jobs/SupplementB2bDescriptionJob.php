@@ -9,6 +9,7 @@ use App\Models\B2bDescriptionSupplementAttempt;
 use App\Models\B2bProductLink;
 use App\Models\Product;
 use App\Services\B2b\B2bDescriptionSupplement;
+use App\Services\B2b\B2bSupplementCancelled;
 use App\Services\B2b\B2bSupplementContext;
 use App\Services\Enrichment\B2bSourcesDescriptionRejected;
 use App\Services\Enrichment\B2bSupplementNoPages;
@@ -16,6 +17,7 @@ use App\Services\Enrichment\B2bSupplementSearchOutage;
 use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
 use App\Support\BhpAttributeNormalizer;
+use Carbon\CarbonInterface;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUniqueUntilProcessing;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -110,6 +112,10 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
             // próba znika razem z kartą albo kontem (klucze obce)
             return;
         }
+        // „Zatrzymaj” przy koncie (B2bDescriptionSupplement::stop): zadanie z kolejki kończy się bez pracy
+        if ($this->attemptStatus() === B2bDescriptionSupplementAttempt::STATUS_CANCELLED) {
+            return;
+        }
         $context = $supplement->context($product, $account);
         if ($context === null) {
             // Nie wynik ostateczny: powód bywa chwilowy (wzbogacanie w toku, opis producenta wyłączony na chwilę
@@ -132,10 +138,15 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
         }
 
         try {
+            $this->markRunning($context);
             // Z kontenera przy każdym wywołaniu — usługa jest final, testy podmieniają ją w kontenerze.
             /** @var ProductEnrichmentService $enrichment */
             $enrichment = app(ProductEnrichmentService::class);
-            $result = $enrichment->supplementB2bDescription($product, $context);
+            $result = $enrichment->supplementB2bDescription($product, $context, fn (string $stage) => $this->stage($stage));
+            $this->stage('zapis opisu');
+        } catch (B2bSupplementCancelled) {
+            // próba już „zatrzymana” (stop) — karta nietknięta
+            return;
         } catch (B2bSupplementNoPages $e) {
             $this->recordAttempt(B2bDescriptionSupplementAttempt::STATUS_NO_PAGES, $context, $e->getMessage());
 
@@ -148,8 +159,10 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
                 $this->recordAttempt(
                     B2bDescriptionSupplementAttempt::STATUS_QUEUED,
                     $context,
-                    'Wyszukiwarka niedostępna — ponowię o '.$retryAt->format('H:i'),
+                    'Wyszukiwarka niedostępna — ponowię o '
+                        .$retryAt->copy()->setTimezone(B2bAccount::SYNC_TIMEZONE)->format('H:i'),
                     countAttempt: false,
+                    retryAt: $retryAt,
                 );
                 self::dispatch($this->productId, $this->b2bAccountId, $since)->delay($retryAt);
 
@@ -213,12 +226,73 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
         B2bDescriptionSupplementAttempt::query()
             ->where('product_id', $this->productId)
             ->where('b2b_account_id', $this->b2bAccountId)
-            ->where('status', B2bDescriptionSupplementAttempt::STATUS_QUEUED)
+            ->whereIn('status', B2bDescriptionSupplementAttempt::PENDING_STATUSES)
             ->update([
                 'status' => B2bDescriptionSupplementAttempt::STATUS_FAILED,
                 'message' => mb_substr((string) ($e?->getMessage() ?? 'błąd joba'), 0, 500),
+                'retry_at' => null,
                 'updated_at' => now(),
             ]);
+    }
+
+    /** Stan próby tej karty w bazie (null = brak próby). */
+    private function attemptStatus(): ?string
+    {
+        $status = B2bDescriptionSupplementAttempt::query()
+            ->where('product_id', $this->productId)
+            ->where('b2b_account_id', $this->b2bAccountId)
+            ->value('status');
+
+        return $status !== null ? (string) $status : null;
+    }
+
+    /** Job zaczyna pracę nad kartą — okno postępu pokazuje ją jako bieżącą. Próba zatrzymana w międzyczasie przerywa. */
+    private function markRunning(B2bSupplementContext $context): void
+    {
+        $updated = B2bDescriptionSupplementAttempt::query()
+            ->where('product_id', $this->productId)
+            ->where('b2b_account_id', $this->b2bAccountId)
+            ->where('status', '!=', B2bDescriptionSupplementAttempt::STATUS_CANCELLED)
+            ->update([
+                'status' => B2bDescriptionSupplementAttempt::STATUS_RUNNING,
+                'stage' => 'start',
+                'started_at' => now(),
+                'retry_at' => null,
+                'updated_at' => now(),
+            ]);
+        if ($updated === 0) {
+            if ($this->attemptStatus() === B2bDescriptionSupplementAttempt::STATUS_CANCELLED) {
+                throw new B2bSupplementCancelled('uzupełnianie zatrzymane');
+            }
+            // job zlecony bez próby (poza queue()) — próba powstaje od razu jako „w trakcie”
+            B2bDescriptionSupplementAttempt::query()->create([
+                'product_id' => $this->productId,
+                'b2b_account_id' => $this->b2bAccountId,
+                'source_sha1' => $context->sourceSha1,
+                'hosts_sha1' => $context->hostsSha1,
+                'status' => B2bDescriptionSupplementAttempt::STATUS_RUNNING,
+                'stage' => 'start',
+                'attempts' => 0,
+                'started_at' => now(),
+            ]);
+        }
+    }
+
+    /**
+     * Etap pracy (okno postępu). Próba zatrzymana przyciskiem „Zatrzymaj” przerywa pracę tu — przed kolejnym krokiem.
+     *
+     * @throws B2bSupplementCancelled
+     */
+    private function stage(string $stage): void
+    {
+        $updated = B2bDescriptionSupplementAttempt::query()
+            ->where('product_id', $this->productId)
+            ->where('b2b_account_id', $this->b2bAccountId)
+            ->where('status', B2bDescriptionSupplementAttempt::STATUS_RUNNING)
+            ->update(['stage' => mb_substr($stage, 0, 160), 'updated_at' => now()]);
+        if ($updated === 0 && $this->attemptStatus() === B2bDescriptionSupplementAttempt::STATUS_CANCELLED) {
+            throw new B2bSupplementCancelled('uzupełnianie zatrzymane');
+        }
     }
 
     /**
@@ -312,8 +386,9 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
         bool $countAttempt = true,
         ?string $resultSha1 = null,
         ?array $sourceUrls = null,
+        ?CarbonInterface $retryAt = null,
     ): void {
-        DB::transaction(function () use ($status, $context, $message, $countAttempt, $resultSha1, $sourceUrls): void {
+        DB::transaction(function () use ($status, $context, $message, $countAttempt, $resultSha1, $sourceUrls, $retryAt): void {
             $attempt = B2bDescriptionSupplementAttempt::query()
                 ->where('product_id', $this->productId)
                 ->where('b2b_account_id', $this->b2bAccountId)
@@ -336,6 +411,11 @@ class SupplementB2bDescriptionJob implements ShouldBeUniqueUntilProcessing, Shou
             }
             $attempt->status = $status;
             $attempt->message = $message !== null ? mb_substr($message, 0, 500) : null;
+            // godzina ponowienia tylko przy czekaniu na wyszukiwarkę; etap zostaje ostatni, na którym job skończył
+            $attempt->retry_at = $retryAt;
+            if ($retryAt !== null) {
+                $attempt->stage = 'czeka na wyszukiwarkę';
+            }
             if ($countAttempt) {
                 $attempt->attempts = (int) $attempt->attempts + 1;
             }

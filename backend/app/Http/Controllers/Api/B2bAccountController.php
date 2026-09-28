@@ -413,6 +413,34 @@ class B2bAccountController extends Controller
         ]);
     }
 
+    /** Okno postępu uzupełniania opisów konta: liczniki, karty w pracy z etapem, czekające na wyszukiwarkę, ostatnie wyniki. */
+    public function supplementProgress(B2bAccount $b2bAccount, B2bDescriptionSupplement $supplement): JsonResponse
+    {
+        return response()->json($supplement->progress($b2bAccount));
+    }
+
+    /** „Zatrzymaj” — karty konta w kolejce i w pracy zatrzymane (wznowienie: „Uzupełnij krótkie opisy”). */
+    public function stopSupplement(B2bAccount $b2bAccount, B2bDescriptionSupplement $supplement): JsonResponse
+    {
+        $stopped = $supplement->stop($b2bAccount);
+
+        return response()->json([
+            'stopped' => $stopped,
+            'message' => $stopped === 0 ? 'Nic nie było w toku.' : "Zatrzymano uzupełnianie opisów, kart: {$stopped}.",
+        ]);
+    }
+
+    /** „Zatrzymaj wszystko” — uzupełnianie opisów wszystkich kont. */
+    public function stopAllSupplements(B2bDescriptionSupplement $supplement): JsonResponse
+    {
+        $stopped = $supplement->stop(null);
+
+        return response()->json([
+            'stopped' => $stopped,
+            'message' => $stopped === 0 ? 'Nic nie było w toku.' : "Zatrzymano uzupełnianie opisów wszystkich kont, kart: {$stopped}.",
+        ]);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -631,20 +659,26 @@ class B2bAccountController extends Controller
     }
 
     /**
-     * Liczniki prób uzupełniania opisów według statusu — jednym zapytaniem grupującym dla wszystkich podanych kont.
+     * Liczniki prób uzupełniania opisów według statusu — jednym zapytaniem grupującym dla wszystkich podanych kont
+     * (plus drugie o karty czekające na wyszukiwarkę: waiting_search, next_retry_at).
      *
      * @param  list<int>  $accountIds
-     * @return array<int, array<string, int>>
+     * @return array<int, array<string, int|string|null>>
      */
     private function supplementStats(array $accountIds): array
     {
         $empty = array_fill_keys([
             B2bDescriptionSupplementAttempt::STATUS_QUEUED,
+            B2bDescriptionSupplementAttempt::STATUS_RUNNING,
             B2bDescriptionSupplementAttempt::STATUS_REPLACED,
             B2bDescriptionSupplementAttempt::STATUS_KEPT,
             B2bDescriptionSupplementAttempt::STATUS_NO_PAGES,
             B2bDescriptionSupplementAttempt::STATUS_FAILED,
+            B2bDescriptionSupplementAttempt::STATUS_CANCELLED,
         ], 0);
+        // karty w kolejce czekające na wyszukiwarkę (przerwa bezpiecznika) i najbliższe ponowienie
+        $empty['waiting_search'] = 0;
+        $empty['next_retry_at'] = null;
         $out = array_fill_keys($accountIds, $empty);
         if ($accountIds === []) {
             return $out;
@@ -658,8 +692,22 @@ class B2bAccountController extends Controller
             ->get();
         foreach ($rows as $row) {
             $status = (string) $row->status;
-            if (isset($out[(int) $row->b2b_account_id]) && array_key_exists($status, $empty)) {
+            if (isset($out[(int) $row->b2b_account_id]) && array_key_exists($status, $empty) && $status !== 'next_retry_at') {
                 $out[(int) $row->b2b_account_id][$status] = (int) $row->n;
+            }
+        }
+        $waiting = B2bDescriptionSupplementAttempt::query()
+            ->whereIn('b2b_account_id', $accountIds)
+            ->where('status', B2bDescriptionSupplementAttempt::STATUS_QUEUED)
+            ->whereNotNull('retry_at')
+            ->groupBy('b2b_account_id')
+            ->selectRaw('b2b_account_id, COUNT(*) AS n, MIN(retry_at) AS next_retry')
+            ->toBase()
+            ->get();
+        foreach ($waiting as $row) {
+            if (isset($out[(int) $row->b2b_account_id])) {
+                $out[(int) $row->b2b_account_id]['waiting_search'] = (int) $row->n;
+                $out[(int) $row->b2b_account_id]['next_retry_at'] = Carbon::parse((string) $row->next_retry)->toIso8601String();
             }
         }
 

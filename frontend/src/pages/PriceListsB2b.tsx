@@ -4,6 +4,7 @@ import { useAuth } from '../auth'
 import { B2bDiscountRulesModal } from '../components/B2bDiscountRulesModal'
 import { B2bManufacturerRulesModal } from '../components/B2bManufacturerRulesModal'
 import { B2bSizeMergeModal } from '../components/B2bSizeMergeModal'
+import { B2bSupplementProgressModal } from '../components/B2bSupplementProgressModal'
 import { B2bSyncProgressModal } from '../components/B2bSyncProgressModal'
 import { PriceListsTabs } from '../components/PriceListsTabs'
 import { api, can } from '../lib/api'
@@ -50,10 +51,15 @@ type B2bAccount = {
 
 type SupplementStats = {
   queued: number
+  running: number
   replaced: number
   kept_b2b: number
   no_pages: number
   failed: number
+  cancelled: number
+  /** W kolejce, czekające na wyszukiwarkę (przerwa bezpiecznika) — część `queued`. */
+  waiting_search: number
+  next_retry_at: string | null
 }
 
 type SupplementResult = {
@@ -173,7 +179,9 @@ export function PriceListsB2b() {
 
   const syncInProgress = rows.some((r) => r.last_sync_status === 'running' || r.sync_requested_at !== null)
   /** Uzupełnianie krótkich opisów w kolejce — liczniki przy koncie odświeżane częściej niż przy pobieraniu cennika. */
-  const supplementInProgress = rows.some((r) => r.supplement_stats.queued > 0)
+  const supplementInProgress = rows.some((r) => r.supplement_stats.queued + r.supplement_stats.running > 0)
+  /** Konto, którego okno postępu uzupełniania opisów jest otwarte. */
+  const [supplementAccount, setSupplementAccount] = useState<B2bAccount | null>(null)
   useEffect(() => {
     if (!syncInProgress && !supplementInProgress) return
     const timer = window.setInterval(
@@ -331,6 +339,8 @@ export function PriceListsB2b() {
       const res = await api<SupplementResult>(url, { method: 'POST', body: JSON.stringify({ apply: true }) })
       setMsg(res.message)
       await load()
+      // od razu okno postępu — widać, którą kartę obrabia i co robi
+      setSupplementAccount(row)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Nie udało się zlecić uzupełniania opisów')
     } finally {
@@ -346,15 +356,32 @@ export function PriceListsB2b() {
         <p>
           Strony z opisami: <b>{row.enrichment_sites.join(', ')}</b> · próg {row.enrichment_min_chars_effective} znaków
         </p>
-        {s.queued > 0 && (
+        {s.queued + s.running > 0 && (
           <p className="font-medium text-blue-700">
-            Trwa uzupełnianie opisów: sprawdzono {s.replaced + s.kept_b2b + s.no_pages + s.failed} z{' '}
-            {s.replaced + s.kept_b2b + s.no_pages + s.failed + s.queued} kart (odświeża się samo)
+            Trwa uzupełnianie opisów: sprawdzono {s.replaced + s.kept_b2b + s.no_pages + s.failed + s.cancelled} z{' '}
+            {s.replaced + s.kept_b2b + s.no_pages + s.failed + s.cancelled + s.queued + s.running} kart (odświeża się
+            samo)
+            {s.waiting_search > 0 && s.next_retry_at !== null && (
+              <span className="font-normal text-amber-800">
+                {' '}
+                · {s.waiting_search} czeka na wyszukiwarkę (ponowienie o{' '}
+                {new Date(s.next_retry_at).toLocaleTimeString('pl-PL', {
+                  timeZone: 'Europe/Warsaw',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+                )
+              </span>
+            )}
           </p>
         )}
         <p className="text-slate-500">
-          Krótkie opisy: uzupełnione {s.replaced} · bez zmian {s.kept_b2b} · brak stron {s.no_pages} · w kolejce{' '}
-          {s.queued} · do ponowienia {s.failed}
+          Krótkie opisy: uzupełnione {s.replaced} · bez zmian {s.kept_b2b} · brak stron {s.no_pages} · w trakcie{' '}
+          {s.running} · w kolejce {s.queued} · do ponowienia {s.failed}
+          {s.cancelled > 0 ? ` · zatrzymane ${s.cancelled}` : ''}{' '}
+          <button type="button" className="text-blue-700 underline" onClick={() => setSupplementAccount(row)}>
+            Postęp i wyniki
+          </button>
         </p>
         {row.enrichment_hosts_not_indexed.length > 0 && (
           <p className="text-amber-700">
@@ -867,6 +894,12 @@ export function PriceListsB2b() {
           onClose={() => setSizeMergeAccount(null)}
         />
       )}
+      <B2bSupplementProgressModal
+        account={supplementAccount}
+        canManage={canManage}
+        onClose={() => setSupplementAccount(null)}
+        onChanged={() => void load().catch(() => {})}
+      />
     </div>
   )
 }

@@ -27,6 +27,18 @@ class B2bDescriptionSupplementAttempt extends Model
     /** Błąd w trakcie (model, sieć) — do ponowienia. */
     public const STATUS_FAILED = 'failed';
 
+    /** Job pracuje nad kartą — etap w kolumnie stage, początek w started_at. */
+    public const STATUS_RUNNING = 'running';
+
+    /**
+     * Zatrzymane przyciskiem „Zatrzymaj” (B2bDescriptionSupplement::stop) — karta nietknięta. Nie jest wynikiem
+     * ostatecznym: przycisk „Uzupełnij krótkie opisy” ją wznawia, nocna synchronizacja nie.
+     */
+    public const STATUS_CANCELLED = 'cancelled';
+
+    /** Karta w toku — czeka w kolejce albo job nad nią pracuje. */
+    public const PENDING_STATUSES = [self::STATUS_QUEUED, self::STATUS_RUNNING];
+
     /** Wynik ostateczny dla tego wejścia (tekst źródła + lista stron) — bez ponowień, dopóki wejście się nie zmieni. */
     public const FINAL_STATUSES = [self::STATUS_REPLACED, self::STATUS_KEPT, self::STATUS_NO_PAGES];
 
@@ -43,11 +55,14 @@ class B2bDescriptionSupplementAttempt extends Model
         'source_sha1',
         'hosts_sha1',
         'status',
+        'stage',
         'attempts',
         'result_sha1',
         'source_urls',
         'message',
         'attempted_at',
+        'started_at',
+        'retry_at',
     ];
 
     protected function casts(): array
@@ -56,6 +71,8 @@ class B2bDescriptionSupplementAttempt extends Model
             'source_urls' => 'array',
             'attempts' => 'integer',
             'attempted_at' => 'datetime',
+            'started_at' => 'datetime',
+            'retry_at' => 'datetime',
         ];
     }
 

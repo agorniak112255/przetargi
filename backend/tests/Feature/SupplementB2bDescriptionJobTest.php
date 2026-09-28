@@ -134,6 +134,67 @@ final class SupplementB2bDescriptionJobTest extends TestCase
         $this->assertSame([], app(B2bDescriptionSupplement::class)->candidateIds($this->account, false));
     }
 
+    public function test_running_card_shows_its_stage_and_start(): void
+    {
+        [$card] = $this->untouchedSetup();
+        $seen = [];
+        $this->enrichment->shouldReceive('supplementB2bDescription')->once()
+            ->andReturnUsing(function (Product $product, B2bSupplementContext $context, callable $progress) use ($card, &$seen): array {
+                $progress('szukanie na stronach konta (ansell.com)');
+                $attempt = $this->attemptOf($card);
+                $seen = [$attempt->status, $attempt->stage, $attempt->started_at !== null];
+
+                return $this->modelResult();
+            });
+
+        $this->runJob($card);
+
+        $this->assertSame([B2bDescriptionSupplementAttempt::STATUS_RUNNING, 'szukanie na stronach konta (ansell.com)', true], $seen);
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_REPLACED, $this->attemptOf($card)->status);
+    }
+
+    public function test_stopped_card_is_skipped_by_the_queued_job(): void
+    {
+        [$card, $before] = $this->untouchedSetup();
+        app(B2bDescriptionSupplement::class)->stop($this->account);
+        $this->enrichment->shouldNotReceive('supplementB2bDescription');
+
+        $this->runJob($card);
+
+        $this->assertUntouched($card, $before);
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_CANCELLED, $this->attemptOf($card)->status);
+    }
+
+    public function test_stop_during_work_ends_at_the_next_stage_without_saving(): void
+    {
+        [$card, $before] = $this->untouchedSetup();
+        $this->enrichment->shouldReceive('supplementB2bDescription')->once()
+            ->andReturnUsing(function (Product $product, B2bSupplementContext $context, callable $progress): array {
+                // użytkownik klika „Zatrzymaj” w trakcie pracy modelu
+                app(B2bDescriptionSupplement::class)->stop(null);
+                $progress('model pisze opis (1 stron z internetu)');
+
+                return $this->modelResult();
+            });
+
+        $this->runJob($card);
+
+        $this->assertUntouched($card, $before);
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_CANCELLED, $this->attemptOf($card)->status);
+    }
+
+    public function test_stopped_cards_resume_by_button_not_by_sync(): void
+    {
+        [$card] = $this->untouchedSetup();
+        $supplement = app(B2bDescriptionSupplement::class);
+        $supplement->stop($this->account);
+
+        Queue::fake();
+        $this->assertSame(['candidates' => 0, 'queued' => 0], $supplement->queue($this->account, null, true, false));
+        $this->assertSame(['candidates' => 1, 'queued' => 1], $supplement->queue($this->account));
+        $this->assertSame(B2bDescriptionSupplementAttempt::STATUS_QUEUED, $this->attemptOf($card)->status);
+    }
+
     public function test_search_outage_requeues_the_card_without_counting_an_attempt(): void
     {
         Queue::fake();

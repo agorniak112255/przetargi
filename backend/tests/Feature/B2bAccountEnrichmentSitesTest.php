@@ -129,7 +129,7 @@ final class B2bAccountEnrichmentSitesTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('enrichment_sites', ['sklep-bhp.pl'])
             ->assertJsonPath('enrichment_min_chars', 600)
-            ->assertJsonPath('supplement_stats', ['queued' => 0, 'replaced' => 0, 'kept_b2b' => 0, 'no_pages' => 0, 'failed' => 0])
+            ->assertJsonPath('supplement_stats', $this->stats())
             ->assertJsonPath('enrichment_hosts_not_indexed', ['sklep-bhp.pl']);
     }
 
@@ -152,13 +152,13 @@ final class B2bAccountEnrichmentSitesTest extends TestCase
             ->assertOk()
             ->assertJsonCount(3)
             ->assertJsonPath('0.id', $first->id)
-            ->assertJsonPath('0.supplement_stats', ['queued' => 1, 'replaced' => 2, 'kept_b2b' => 1, 'no_pages' => 1, 'failed' => 1])
+            ->assertJsonPath('0.supplement_stats', $this->stats(['queued' => 1, 'replaced' => 2, 'kept_b2b' => 1, 'no_pages' => 1, 'failed' => 1]))
             ->assertJsonPath('0.enrichment_sites', ['sklep-bhp.pl', 'katalog.producent.pl'])
             ->assertJsonPath('0.enrichment_hosts_not_indexed', ['katalog.producent.pl'])
             ->assertJsonPath('0.enrichment_min_chars', null)
             ->assertJsonPath('0.enrichment_min_chars_effective', 1000)
             ->assertJsonPath('1.id', $second->id)
-            ->assertJsonPath('1.supplement_stats', ['queued' => 0, 'replaced' => 0, 'kept_b2b' => 0, 'no_pages' => 0, 'failed' => 0])
+            ->assertJsonPath('1.supplement_stats', $this->stats())
             ->assertJsonPath('1.enrichment_sites', [])
             ->assertJsonPath('1.enrichment_hosts_not_indexed', [])
             ->assertJsonPath('2.supplement_stats.no_pages', 1)
@@ -220,6 +220,66 @@ final class B2bAccountEnrichmentSitesTest extends TestCase
 
         $this->artisan('b2b:supplement-descriptions', ['--account' => $account->id, '--apply' => true])->assertSuccessful();
         Queue::assertPushed(SupplementB2bDescriptionJob::class, 1);
+    }
+
+    public function test_progress_stop_and_stop_all(): void
+    {
+        $account = $this->account(['enrichment_sites' => ['sklep-bhp.pl']]);
+        $other = $this->account(['username' => 'drugie', 'enrichment_sites' => ['sklep-bhp.pl']]);
+        $running = $this->card('R-1');
+        $this->attempt($account, $running, 'running');
+        B2bDescriptionSupplementAttempt::query()->where('product_id', $running->id)
+            ->update(['stage' => 'model pisze opis (2 stron z internetu)', 'started_at' => now()->subSeconds(20)]);
+        $waiting = $this->card('W-1');
+        $this->attempt($account, $waiting, 'queued');
+        B2bDescriptionSupplementAttempt::query()->where('product_id', $waiting->id)
+            ->update(['retry_at' => now()->addMinutes(8), 'message' => 'Wyszukiwarka niedostępna — ponowię o 20:10']);
+        $done = $this->card('D-1');
+        $this->attempt($account, $done, 'replaced');
+        $this->attempt($other, $this->card('O-1'), 'queued');
+
+        Sanctum::actingAs(User::factory()->withRole('kierownik')->create());
+        $this->postJson("/api/b2b-accounts/{$account->id}/supplement-stop")->assertForbidden();
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->getJson('/api/b2b-accounts')
+            ->assertJsonPath('0.supplement_stats.running', 1)
+            ->assertJsonPath('0.supplement_stats.waiting_search', 1);
+        $this->getJson("/api/b2b-accounts/{$account->id}/supplement-progress")
+            ->assertOk()
+            ->assertJsonPath('counts.running', 1)
+            ->assertJsonPath('counts.queued', 1)
+            ->assertJsonPath('counts.replaced', 1)
+            ->assertJsonPath('waiting_search', 1)
+            ->assertJsonPath('running.0.sku', 'R-1')
+            ->assertJsonPath('running.0.stage', 'model pisze opis (2 stron z internetu)')
+            ->assertJsonCount(2, 'recent');
+
+        $this->postJson("/api/b2b-accounts/{$account->id}/supplement-stop")
+            ->assertOk()
+            ->assertJsonPath('stopped', 2);
+        $this->assertSame(
+            ['cancelled', 'cancelled', 'replaced'],
+            B2bDescriptionSupplementAttempt::query()->where('b2b_account_id', $account->id)->orderBy('product_id')->pluck('status')->all(),
+        );
+        // drugie konto nietknięte — dopiero „Zatrzymaj wszystko”
+        $this->assertSame('queued', B2bDescriptionSupplementAttempt::query()->where('b2b_account_id', $other->id)->value('status'));
+        $this->postJson('/api/b2b-accounts/supplement-stop-all')->assertOk()->assertJsonPath('stopped', 1);
+        $this->assertSame('cancelled', B2bDescriptionSupplementAttempt::query()->where('b2b_account_id', $other->id)->value('status'));
+    }
+
+    /**
+     * Liczniki prób przy koncie (supplement_stats) — zera poza podanymi.
+     *
+     * @param  array<string, int>  $counts
+     * @return array<string, int|string|null>
+     */
+    private function stats(array $counts = []): array
+    {
+        return [
+            'queued' => 0, 'running' => 0, 'replaced' => 0, 'kept_b2b' => 0, 'no_pages' => 0, 'failed' => 0, 'cancelled' => 0,
+            'waiting_search' => 0, 'next_retry_at' => null, ...$counts,
+        ];
     }
 
     /**

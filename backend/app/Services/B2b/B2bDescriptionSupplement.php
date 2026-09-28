@@ -11,6 +11,7 @@ use App\Models\B2bProductLink;
 use App\Models\Product;
 use App\Support\BhpAttributeNormalizer;
 use App\Support\ProductDescriptionText;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -191,6 +192,97 @@ final class B2bDescriptionSupplement
         return $out;
     }
 
+    /**
+     * „Zatrzymaj” (konto) / „Zatrzymaj wszystko” ($account = null): karty w kolejce i w pracy dostają stan „zatrzymane”.
+     * Zadanie z kolejki kończy się wtedy bez pracy (SupplementB2bDescriptionJob sprawdza stan próby na starcie),
+     * a pracujące przerywa na najbliższym etapie, niczego nie zapisując. Karty wraca przycisk „Uzupełnij krótkie opisy”.
+     *
+     * @return int liczba zatrzymanych kart
+     */
+    public function stop(?B2bAccount $account): int
+    {
+        return B2bDescriptionSupplementAttempt::query()
+            ->when($account !== null, static fn ($q) => $q->where('b2b_account_id', $account->id))
+            ->whereIn('status', B2bDescriptionSupplementAttempt::PENDING_STATUSES)
+            ->update([
+                'status' => B2bDescriptionSupplementAttempt::STATUS_CANCELLED,
+                'message' => 'zatrzymane przyciskiem „Zatrzymaj” — wznowienie: „Uzupełnij krótkie opisy”',
+                'retry_at' => null,
+                'updated_at' => now(),
+            ]);
+    }
+
+    /**
+     * Stan uzupełniania konta dla okna postępu: liczniki, karty w pracy (etap, od kiedy), karty czekające na
+     * wyszukiwarkę (najbliższe ponowienie) i ostatnie wyniki z komunikatem i źródłami.
+     *
+     * @return array{counts: array<string, int>, waiting_search: int, next_retry_at: string|null, running: list<array<string, mixed>>, recent: list<array<string, mixed>>}
+     */
+    public function progress(B2bAccount $account, int $recent = 80): array
+    {
+        $counts = array_fill_keys([
+            B2bDescriptionSupplementAttempt::STATUS_QUEUED,
+            B2bDescriptionSupplementAttempt::STATUS_RUNNING,
+            B2bDescriptionSupplementAttempt::STATUS_REPLACED,
+            B2bDescriptionSupplementAttempt::STATUS_KEPT,
+            B2bDescriptionSupplementAttempt::STATUS_NO_PAGES,
+            B2bDescriptionSupplementAttempt::STATUS_FAILED,
+            B2bDescriptionSupplementAttempt::STATUS_CANCELLED,
+        ], 0);
+        foreach (B2bDescriptionSupplementAttempt::query()->where('b2b_account_id', $account->id)
+            ->groupBy('status')->selectRaw('status, COUNT(*) AS n')->toBase()->get() as $row) {
+            if (array_key_exists((string) $row->status, $counts)) {
+                $counts[(string) $row->status] = (int) $row->n;
+            }
+        }
+        $waiting = B2bDescriptionSupplementAttempt::query()
+            ->where('b2b_account_id', $account->id)
+            ->where('status', B2bDescriptionSupplementAttempt::STATUS_QUEUED)
+            ->whereNotNull('retry_at');
+        $nextRetry = (clone $waiting)->min('retry_at');
+
+        $row = static fn (B2bDescriptionSupplementAttempt $a): array => [
+            'product_id' => (int) $a->product_id,
+            'sku' => (string) ($a->product?->sku ?? ''),
+            'name' => (string) ($a->product?->name ?? ''),
+            'status' => (string) $a->status,
+            'stage' => $a->stage,
+            'message' => $a->message,
+            'source_urls' => array_values((array) ($a->source_urls ?? [])),
+            'attempts' => (int) $a->attempts,
+            'started_at' => $a->started_at?->toIso8601String(),
+            'attempted_at' => $a->attempted_at?->toIso8601String(),
+            'retry_at' => $a->retry_at?->toIso8601String(),
+            'updated_at' => $a->updated_at?->toIso8601String(),
+        ];
+
+        return [
+            'counts' => $counts,
+            'waiting_search' => (clone $waiting)->count(),
+            'next_retry_at' => $nextRetry !== null ? Carbon::parse((string) $nextRetry)->toIso8601String() : null,
+            'running' => B2bDescriptionSupplementAttempt::query()
+                ->with('product:id,sku,name')
+                ->where('b2b_account_id', $account->id)
+                ->where('status', B2bDescriptionSupplementAttempt::STATUS_RUNNING)
+                ->orderBy('started_at')
+                ->get()
+                ->map($row)
+                ->all(),
+            'recent' => B2bDescriptionSupplementAttempt::query()
+                ->with('product:id,sku,name')
+                ->where('b2b_account_id', $account->id)
+                ->whereNotIn('status', [B2bDescriptionSupplementAttempt::STATUS_RUNNING])
+                ->where(static fn ($q) => $q->where('status', '!=', B2bDescriptionSupplementAttempt::STATUS_QUEUED)
+                    ->orWhereNotNull('retry_at'))
+                ->orderByDesc('updated_at')
+                ->orderByDesc('id')
+                ->limit($recent)
+                ->get()
+                ->map($row)
+                ->all(),
+        ];
+    }
+
     /** Klucze enrichment_payload z wyniku uzupełnienia (ProductEnrichmentService::supplementB2bDescription + ślad). */
     private const SUPPLEMENT_PAYLOAD_KEYS = [
         'features', 'norms', 'certificates', 'materials', 'use_cases', 'specs', 'attributes', 'source_urls',
@@ -279,12 +371,14 @@ final class B2bDescriptionSupplement
      * Zleca uzupełnienie kartom kwalifikującym się teraz ($productIds = null: wszystkim kartom konta). Próba karty
      * dostaje stan queued z odciskiem wejścia (tekst źródła, lista stron) — ślad zostaje, nawet gdy job nic nie zapisze.
      *
+     * $resumeCancelled = false (synchronizacja) — karty zatrzymane przyciskiem „Zatrzymaj” zostają zatrzymane.
+     *
      * @param  list<int>|null  $productIds
      * @return array{candidates: int, queued: int}
      */
-    public function queue(B2bAccount $account, ?array $productIds = null, bool $onlyUntried = true): array
+    public function queue(B2bAccount $account, ?array $productIds = null, bool $onlyUntried = true, bool $resumeCancelled = true): array
     {
-        $candidates = $this->candidates($account, $productIds, $onlyUntried);
+        $candidates = $this->candidates($account, $productIds, $onlyUntried, $resumeCancelled);
         if ($candidates === []) {
             return ['candidates' => 0, 'queued' => 0];
         }
@@ -299,8 +393,10 @@ final class B2bDescriptionSupplement
                     'source_sha1' => $sourceSha1,
                     'hosts_sha1' => $hostsSha1,
                     'status' => B2bDescriptionSupplementAttempt::STATUS_QUEUED,
+                    'stage' => null,
                     'attempts' => 0,
                     'message' => null,
+                    'retry_at' => null,
                     'created_at' => $now,
                     'updated_at' => $now,
                 ];
@@ -309,7 +405,7 @@ final class B2bDescriptionSupplement
             B2bDescriptionSupplementAttempt::query()->upsert(
                 $rows,
                 ['product_id', 'b2b_account_id'],
-                ['source_sha1', 'hosts_sha1', 'status', 'message', 'updated_at'],
+                ['source_sha1', 'hosts_sha1', 'status', 'stage', 'message', 'retry_at', 'updated_at'],
             );
         }
         $queued = 0;
@@ -327,7 +423,7 @@ final class B2bDescriptionSupplement
      * @param  list<int>|null  $productIds
      * @return array<int, string>
      */
-    private function candidates(B2bAccount $account, ?array $productIds, bool $onlyUntried): array
+    private function candidates(B2bAccount $account, ?array $productIds, bool $onlyUntried, bool $resumeCancelled = true): array
     {
         $info = $this->accountInfo($account);
         if ($info === null) {
@@ -339,7 +435,7 @@ final class B2bDescriptionSupplement
         if ($groups === []) {
             return [];
         }
-        $tried = $onlyUntried ? $this->finalAttempts((int) $account->id, $info['hosts_sha1']) : [];
+        $tried = $onlyUntried ? $this->finalAttempts((int) $account->id, $info['hosts_sha1'], $resumeCancelled) : [];
         $lower = $this->lowerHostAccounts($account);
 
         $out = [];
@@ -450,19 +546,21 @@ final class B2bDescriptionSupplement
      *
      * @return array<int, string>
      */
-    private function finalAttempts(int $accountId, string $hostsSha1): array
+    private function finalAttempts(int $accountId, string $hostsSha1, bool $resumeCancelled = true): array
     {
         $out = [];
         $rows = B2bDescriptionSupplementAttempt::query()
             ->where('b2b_account_id', $accountId)
             // błąd powtarzający się dla tego samego wejścia (model, strona) też kończy ponowienia przy synchronizacji;
-            // karta czekająca w kolejce (także po przerwie wyszukiwarki) nie jest kandydatem drugi raz — zlecenie z
-            // ostatniej doby uznajemy za żywe (dłuższe czekanie = job zgubiony, karta wraca do kandydatów)
+            // karta czekająca w kolejce albo w pracy (także po przerwie wyszukiwarki) nie jest kandydatem drugi raz —
+            // zlecenie z ostatniej doby uznajemy za żywe (dłuższe czekanie = job zgubiony, karta wraca do kandydatów);
+            // zatrzymana przyciskiem wraca tylko przyciskiem, nie z synchronizacją ($resumeCancelled = false)
             ->where(static fn ($q) => $q->whereIn('status', B2bDescriptionSupplementAttempt::FINAL_STATUSES)
                 ->orWhere(static fn ($f) => $f->where('status', B2bDescriptionSupplementAttempt::STATUS_FAILED)
                     ->where('attempts', '>=', B2bDescriptionSupplementAttempt::MAX_FAILED_ATTEMPTS))
-                ->orWhere(static fn ($f) => $f->where('status', B2bDescriptionSupplementAttempt::STATUS_QUEUED)
-                    ->where('updated_at', '>=', now()->subDay())))
+                ->orWhere(static fn ($f) => $f->whereIn('status', B2bDescriptionSupplementAttempt::PENDING_STATUSES)
+                    ->where('updated_at', '>=', now()->subDay()))
+                ->when(! $resumeCancelled, static fn ($c) => $c->orWhere('status', B2bDescriptionSupplementAttempt::STATUS_CANCELLED)))
             ->where('hosts_sha1', $hostsSha1)
             ->toBase()
             ->get(['product_id', 'source_sha1']);

@@ -5305,7 +5305,35 @@ SYS,
      * @throws B2bSourcesDescriptionRejected
      * @throws B2bSupplementNoPages
      */
-    public function supplementB2bDescription(Product $product, B2bSupplementContext $context): array
+    public function supplementB2bDescription(Product $product, B2bSupplementContext $context, ?callable $progress = null): array
+    {
+        $this->supplementProgress = $progress !== null ? $progress(...) : null;
+        try {
+            return $this->supplementB2bDescriptionInner($product, $context);
+        } finally {
+            $this->supplementProgress = null;
+        }
+    }
+
+    /**
+     * Etap pracy dla okna postępu (SupplementB2bDescriptionJob zapisuje go przy próbie; może też przerwać pracę, gdy
+     * użytkownik zatrzymał uzupełnianie).
+     *
+     * @var (\Closure(string): void)|null
+     */
+    private ?\Closure $supplementProgress = null;
+
+    private function supplementStage(string $stage): void
+    {
+        if ($this->supplementProgress !== null) {
+            ($this->supplementProgress)($stage);
+        }
+    }
+
+    /**
+     * @return array{description: string, payload: array<string, mixed>, norms: string|null, packaging: string|null, web_source_urls: list<string>, dropped: list<string>, dropped_claims: list<string>}
+     */
+    private function supplementB2bDescriptionInner(Product $product, B2bSupplementContext $context): array
     {
         $b2bText = trim($context->b2bText);
         $this->attemptLog()->reset();
@@ -5315,6 +5343,7 @@ SYS,
         if ($webPages === []) {
             throw new B2bSupplementNoPages('brak potwierdzonej strony wyrobu w internecie');
         }
+        $this->supplementStage('filtr treści stron ('.count($webPages).')');
         $webPages = $this->sanitizePagesWithLlm($product, $webPages);
         $webPages = $this->fitPagesToBudget($webPages, self::SUPPLEMENT_WEB_PAGES, 4000, 12000);
         if ($webPages === []) {
@@ -5370,6 +5399,7 @@ SYS,
         ];
         $withManufacturerNorms = $normRows !== [];
 
+        $this->supplementStage('model pisze opis ('.count($webUrls).' stron z internetu)');
         $extracted = $this->extractWithLlm($product, [], $pages, 'Źródła — wyłącznie teksty poniżej, nic spoza nich:'
             ."\n1. Pierwszy tekst — źródła dostawcy: opis wyrobu z konta B2B"
             .($shopFields !== '' ? ', parametry ze strony sklepu' : '')
@@ -5397,6 +5427,7 @@ SYS,
             || $this->looksLikeForeignOrPartsTableDump($description)) {
             throw new B2bSourcesDescriptionRejected('opis nie jest opisem wyrobu');
         }
+        $this->supplementStage('sprawdzanie norm i twierdzeń ze źródłami');
 
         // kody norm i poziomów: w tekście, który model dostał — przy normach producenta tylko w źródłach dostawcy
         $webText = implode("\n", array_map(static fn (array $page): string => (string) ($page['text'] ?? ''), $webPages));
@@ -5495,14 +5526,17 @@ SYS,
 
         $pages = [];
         if ($hosts !== []) {
+            $this->supplementStage('indeks stron konta ('.implode(', ', $hosts).')');
             $pages = $this->fetchSupplementPages($product, $context, $this->search->catalogHitsOnHosts($product, $hosts), [], $tried);
             if ($pages === []) {
+                $this->supplementStage('szukanie na stronach konta ('.implode(', ', $hosts).')');
                 $pages = $this->fetchSupplementPages($product, $context, $this->search->searchOnHosts($product, $hosts), [], $tried);
             }
         }
         $mfrDomains = $this->manufacturers->domainsFor($product);
         $searchErrors = [];
         if ($pages === []) {
+            $this->supplementStage('zwykłe szukanie w internecie');
             $pack = $this->searchPackForEnrichment($product);
             $results = $pack['results'];
             $searchErrors = is_array($pack['errors'] ?? null) ? $pack['errors'] : [];
@@ -5576,6 +5610,7 @@ SYS,
         if ($fresh === []) {
             return [];
         }
+        $this->supplementStage('pobieranie stron ('.count($fresh).') i bramka wariantu');
         $fetched = $this->pages->fetch($fresh, (string) $product->sku, self::SUPPLEMENT_WEB_PAGES, [], $product);
         $this->attemptLog()->add('fetch', count($fetched['pages']).' stron HTML', urls: array_column($fetched['pages'], 'url'));
 
