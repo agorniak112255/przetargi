@@ -5,6 +5,7 @@ import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
 import { CheaperSourceNote } from '../components/CheaperSourceNote'
 import { EnrichmentProgressBanner } from '../components/EnrichmentProgressBanner'
 import { EnrichmentQueuePanel } from '../components/EnrichmentQueuePanel'
+import { ManualCardMergeModal } from '../components/ManualCardMergeModal'
 import { OrderQuantityBadge } from '../components/OrderQuantityBadge'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
 import { ProductAiSearchModal } from '../components/ProductAiSearchModal'
@@ -20,6 +21,8 @@ import {
   can,
   parseActiveEnrichment,
   type EnrichmentBatch,
+  type ManualMergeCard,
+  type ManualMergeResult,
   type PrestaExportBatch,
   type Product,
 } from '../lib/api'
@@ -276,7 +279,8 @@ export function Products() {
   const canEnrich = can(user, 'price_lists.import')
   const canExportPresta = can(user, 'presta.export')
   const canDelete = can(user, 'products.delete')
-  const canSelect = canEnrich || canDelete
+  const canMergeCards = can(user, 'card_matches.decide')
+  const canSelect = canEnrich || canDelete || canMergeCards
   const hasActions = canEnrich || canExportPresta || canDelete
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
@@ -321,6 +325,8 @@ export function Products() {
   const [exportRowId, setExportRowId] = useState<number | null>(null)
   const [deleteBusy, setDeleteBusy] = useState(false)
   const [deleteRowId, setDeleteRowId] = useState<number | null>(null)
+  /** Karty w otwartym oknie „Połącz zaznaczone”; null = okno zamknięte. */
+  const [mergeIds, setMergeIds] = useState<number[] | null>(null)
   const [visibleEnrichOpen, setVisibleEnrichOpen] = useState(false)
   const [visibleEnrichAck, setVisibleEnrichAck] = useState(false)
   const [skipPrompt, setSkipPrompt] = useState<{
@@ -728,6 +734,34 @@ export function Products() {
     }
   }
 
+  /** Po „Połącz zaznaczone”: komunikat, zaznaczenie bez połączonych kart, lista od nowa (w trybie AI bez znikniętych). */
+  async function onManualMerged(res: ManualMergeResult, cards: ManualMergeCard[]) {
+    setMergeIds(null)
+    const sku = (id: number) => cards.find((c) => c.id === id)?.sku ?? `#${id}`
+    setErr('')
+    setMsg(
+      `Połączono karty: ${res.merged_product_ids.map(sku).join(', ')} → ${sku(res.keep_product_id)}. ` +
+        'Przed zmianą zapisano kopię zapasową.',
+    )
+    const gone = new Set([res.keep_product_id, ...res.merged_product_ids, ...cards.map((c) => c.id)])
+    setSelected((prev) => {
+      const next = { ...prev }
+      for (const id of gone) delete next[id]
+      return next
+    })
+    if (aiMode) {
+      // lista z wyszukiwania AI — ponowne zapytanie do modelu byłoby drogie; usuwamy tylko karty, których już nie ma
+      const merged = new Set(res.merged_product_ids)
+      setResult((prev) => (prev ? { ...prev, data: prev.data.filter((p) => !merged.has(p.id)) } : prev))
+      return
+    }
+    try {
+      setResult(await api<Page>(`/products?${buildParams()}`))
+    } catch {
+      /* lista odświeży się przy następnej zmianie filtra */
+    }
+  }
+
   const pages = result ? pageNumbers(result.current_page, result.last_page) : []
   const displayRows = useMemo(() => {
     const data = result?.data ?? []
@@ -924,6 +958,21 @@ export function Products() {
               {exportBusy
                 ? 'Wysyłam…'
                 : `Wyślij do Presty${selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}`}
+            </button>
+          )}
+          {canMergeCards && (
+            <button
+              type="button"
+              disabled={mergeIds !== null || selectedIds.length < 2 || selectedIds.length > 10}
+              onClick={() => setMergeIds([...selectedIds].sort((a, b) => a - b))}
+              className="rounded border border-blue-300 px-3 py-2 text-xs text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+              title={
+                selectedIds.length > 10
+                  ? 'Naraz można połączyć najwyżej 10 kart'
+                  : 'Łączy zaznaczone karty tego samego wyrobu w jedną (2–10 kart) — najpierw pokazuje podgląd'
+              }
+            >
+              Połącz zaznaczone{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
             </button>
           )}
           {canDelete && (
@@ -1544,6 +1593,14 @@ export function Products() {
               </div>
             </div>
           </div>
+        )}
+
+        {mergeIds && (
+          <ManualCardMergeModal
+            productIds={mergeIds}
+            onClose={() => setMergeIds(null)}
+            onMerged={(res, cards) => void onManualMerged(res, cards)}
+          />
         )}
 
         {imageModal && (

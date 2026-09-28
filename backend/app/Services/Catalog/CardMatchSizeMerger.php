@@ -426,6 +426,13 @@ final class CardMatchSizeMerger
             if ($row->target_product_id === null || ! in_array((int) $row->target_product_id, $dropIds, true)) {
                 continue;
             }
+            // para karty, która zostaje, z łączoną kartą (np. odrzucona, a teraz połączona ręcznie) po przepięciu
+            // wskazywałaby kartę samą siebie — usunięta (jest w kopii zapasowej wywołującego)
+            if ((int) $row->source_product_id === $keepId) {
+                $delete[] = (int) $row->id;
+
+                continue;
+            }
             $taken = CardMatchCandidate::query()
                 ->where('source_product_id', $row->source_product_id)
                 ->where('targets_key', (string) $keepId)

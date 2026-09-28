@@ -219,6 +219,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/card-matches/summary', [CardMatchController::class, 'summary'])->middleware('permission:card_matches.view');
     Route::post('/card-matches/refresh', [CardMatchController::class, 'refresh'])->middleware('permission:card_matches.decide');
     Route::post('/card-matches/bulk', [CardMatchController::class, 'bulk'])->middleware('permission:card_matches.decide');
+    // ręczne łączenie zaznaczonych kart z listy produktów (podgląd i połączenie)
+    Route::post('/card-matches/manual/preview', [CardMatchController::class, 'manualPreview'])->middleware('permission:card_matches.decide');
+    Route::post('/card-matches/manual', [CardMatchController::class, 'manualMerge'])->middleware('permission:card_matches.decide');
     Route::post('/card-matches/{candidate}/merge', [CardMatchController::class, 'merge'])
         ->whereNumber('candidate')
         ->middleware('permission:card_matches.decide');

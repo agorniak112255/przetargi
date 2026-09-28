@@ -89,7 +89,12 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
     })
   }, [pool, dims, filters, search, sort, sizes])
 
-  const columnCount = sizes ? 8 : Math.max(1, dims.length) + 6
+  // Po połączeniu kart rozmiary mogą pochodzić z kilku kont — wtedy kolumna „Konto” (starsze API bez pola source).
+  const multiSource = useMemo(
+    () => new Set(variants.items.map((v) => v.source ?? '').filter((s) => s !== '')).size > 1,
+    [variants.items],
+  )
+  const columnCount = (sizes ? 8 : Math.max(1, dims.length) + 6) + (multiSource ? 1 : 0)
   const filtersActive = search.trim() !== '' || Object.values(filters).some((f) => f !== '')
 
   async function toggleRow(v: ProductVariant) {
@@ -138,7 +143,7 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
           {sizes ? 'Rozmiary' : 'Wersje'} ({variants.active_count})
         </h2>
         <p className="text-[11px] text-slate-500">
-          {variants.source_label ? `Ceny konta ${variants.source_label} · ` : ''}kliknij wiersz, aby zobaczyć historię ceny
+          {variants.source_label ? `${multiSource ? 'Ceny kont' : 'Ceny konta'} ${variants.source_label} · ` : ''}kliknij wiersz, aby zobaczyć historię ceny
         </p>
       </div>
 
@@ -211,6 +216,7 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
               ) : (
                 <th className="p-2">Wersja</th>
               )}
+              {multiSource && <th className="p-2">Konto</th>}
               <th className="p-2 text-right">
                 <button
                   type="button"
@@ -281,6 +287,11 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
                           {i === 0 && removedBadge}
                         </td>
                       ))
+                    )}
+                    {multiSource && (
+                      <td className="whitespace-nowrap p-2" title={v.source}>
+                        {v.source_label || v.source || '—'}
+                      </td>
                     )}
                     <td className="whitespace-nowrap p-2 text-right tabular-nums">
                       {price !== null ? (

@@ -17,6 +17,7 @@ use App\Models\ProductPriceHistory;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductSubstitute;
+use App\Models\ProductVariant;
 use App\Models\TenderItem;
 use App\Services\B2b\B2bCatalogSync;
 use App\Services\Catalog\CardOwnership;
@@ -70,8 +71,8 @@ final class ProductSizeMergeService
     {
         // Karta z wersjami B2B (znak w formatach × podłożach) to już jedna karta z cenami w wersjach — cena karty 0
         // skleiłaby różne znaki w jedną grupę, a usunięcie karty skasowałoby jej wersje i historię cen.
-        // Wszystkie rodzaje, także rozmiary „size” (28.09.2026): kaskada skasowałaby je z kartą, dopóki etap 2 nie
-        // nauczy łączenia ich przenosić.
+        // Wszystkie rodzaje, także rozmiary „size” (28.09.2026): automat nie rozstrzyga, czy tabele rozmiarów kart
+        // to ten sam wyrób — karty z rozmiarami łączy człowiek (ManualCardMerger, scalanie rozmiarów konta).
         $query = Product::query()->withCount('images')->whereDoesntHave('variants')->orderBy('id');
         if ($manufacturer !== null && trim($manufacturer) !== '') {
             $query->where('manufacturer', trim($manufacturer));
@@ -205,11 +206,11 @@ final class ProductSizeMergeService
 
     /**
      * Duplikat tego samego wyrobu (np. karta dystrybutora założona obok karty producenta): powiązania B2B, sloty cen,
-     * tabelki, media, historia, identyfikatory, własne akcesoria i odwołania (przetargi, zamienniki, akcesoria innych
-     * kart, Presta, cenniki) przechodzą na $keep, $drop znika. Nazwa, SKU i lista rozmiarów $keep zostają; kod
-     * duplikatu trafia do merged_duplicate_skus (nie do listy rozmiarów, z której korzysta łączenie rozmiarów). Warunki
-     * (ten sam producent, brak wersji itp.) sprawdza wywołujący. Wektor $drop znika z Qdrant po commit
-     * (deleteVectorsAfterCommit).
+     * tabelki, media, historia, identyfikatory, własne akcesoria, wiersze rozmiarów (kind=size), oceny zdjęć, działania
+     * z wyszukiwarki i odwołania (przetargi, zamienniki, akcesoria innych kart, Presta, cenniki) przechodzą na $keep,
+     * $drop znika. Nazwa, SKU i lista rozmiarów $keep zostają; kod duplikatu trafia do merged_duplicate_skus (nie do
+     * listy rozmiarów, z której korzysta łączenie rozmiarów). Warunki (ten sam producent, brak wersji itp.) sprawdza
+     * wywołujący. Wektor $drop znika z Qdrant, a reindeks $keep rusza — oba po commit transakcji wywołującego.
      */
     public function mergeDuplicate(Product $keep, Product $drop): void
     {
@@ -576,9 +577,18 @@ final class ProductSizeMergeService
             $this->remapAccessories((int) $winner->id, $loserIds);
             $this->moveOwnAccessories((int) $winner->id, $loserIds);
             $this->moveMedia($winner, $loserIds);
+            // oceny zdjęć idą za zdjęciem (moveMedia przeniosło je na kartę, która zostaje; duplikat — kaskada)
+            if (Schema::hasTable('product_visual_checks')) {
+                DB::table('product_visual_checks')->whereIn('product_id', $loserIds)->update(['product_id' => $winner->id]);
+            }
             $this->remapPriceHistory((int) $winner->id, $loserIds);
             $this->remapPresta((int) $winner->id, $loserIds);
             $this->remapPriceLists($map);
+            // wiersze rozmiarów (kind=size) z historią cen (idzie za id wiersza) — kaskada skasowałaby je z kartą, a
+            // synchronizacja szuka wiersza po (source, remote_id), więc następny przebieg odświeży go na tej karcie.
+            // Wersje Sign Project (kind=version) nie: wywołujący odmawia scalenia karty z wersjami.
+            ProductVariant::query()->sizes()->whereIn('product_id', $loserIds)->update(['product_id' => $winner->id]);
+            $this->moveSearchActions((int) $winner->id, $loserIds);
 
             $core = $this->sizes->skuCore((string) $winner->sku, (string) $winner->name);
             $stripped = $this->sizes->stripSizeFromName((string) $winner->name);
@@ -641,12 +651,41 @@ final class ProductSizeMergeService
             }
             B2bCatalogSync::refreshShopFieldsSummary($winner);
             $this->effectivePrices->refresh($winner);
+            // po commit transakcji wywołującego (ręczne łączenie kilku kart, „Połącz” na ekranie „Łączenie kart”):
+            // wycofane scalenie nie indeksuje karty w stanie, którego w bazie nie ma
+            $winnerId = (int) $winner->id;
+            DB::afterCommit(static function () use ($winnerId): void {
+                try {
+                    ReindexProductEmbeddingJob::dispatch($winnerId, true);
+                } catch (Throwable) {
+                    // kolejka embeddingów nie blokuje scalenia
+                }
+            });
         });
+    }
 
-        try {
-            ReindexProductEmbeddingJob::dispatch((int) $winner->id, true);
-        } catch (Throwable) {
-            // kolejka embeddingów nie blokuje scalenia
+    /**
+     * Działania z wyszukiwarki (klik, wybór, dodanie do oferty) łączonych kart — na kartę, która zostaje; to samo
+     * działanie tego samego wyszukiwania już na niej jest — duplikat zostaje przy karcie łączonej (kaskada).
+     *
+     * @param  list<int>  $dropIds
+     */
+    public function moveSearchActions(int $keepId, array $dropIds): void
+    {
+        if (! Schema::hasTable('search_event_actions') || $dropIds === []) {
+            return;
+        }
+        $taken = [];
+        foreach (DB::table('search_event_actions')->where('product_id', $keepId)->get(['search_event_id', 'action']) as $row) {
+            $taken[$row->search_event_id.'|'.$row->action] = true;
+        }
+        foreach (DB::table('search_event_actions')->whereIn('product_id', $dropIds)->orderBy('id')->get(['id', 'search_event_id', 'action']) as $row) {
+            $key = $row->search_event_id.'|'.$row->action;
+            if (isset($taken[$key])) {
+                continue;
+            }
+            $taken[$key] = true;
+            DB::table('search_event_actions')->where('id', $row->id)->update(['product_id' => $keepId]);
         }
     }
 

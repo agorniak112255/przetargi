@@ -381,7 +381,7 @@ final class B2bSizePriceMerger
 
             // 1) to, czego mergeSizeCards nie przenosi, a kaskada skasowałaby z kartami łączonymi
             ProductVariant::query()->sizes()->whereIn('product_id', $dropIds)->update(['product_id' => $keepId]);
-            $this->moveSearchActions($keepId, $dropIds);
+            $this->sizeMerge->moveSearchActions($keepId, $dropIds);
             // sprawdzenia zdjęć idą za zdjęciem (moveMedia przenosi je na kartę, która zostaje; duplikat — kaskada)
             DB::table('product_visual_checks')->whereIn('product_id', $dropIds)->update(['product_id' => $keepId]);
             // propozycje przed kasowaniem: usunięcie karty zeruje target_product_id
@@ -620,30 +620,5 @@ final class B2bSizePriceMerger
             ...($changed ? ['discount_percent' => null] : []),
             'checked_at' => $slot->checked_at,
         ]);
-    }
-
-    /**
-     * Działania z wyszukiwarki (klik, wybór, dodanie do oferty) łączonych kart — na kartę, która zostaje; to samo
-     * działanie tego samego wyszukiwania już na niej jest — duplikat zostaje przy karcie łączonej (kaskada).
-     *
-     * @param  list<int>  $dropIds
-     */
-    private function moveSearchActions(int $keepId, array $dropIds): void
-    {
-        if (! Schema::hasTable('search_event_actions')) {
-            return;
-        }
-        $taken = [];
-        foreach (DB::table('search_event_actions')->where('product_id', $keepId)->get(['search_event_id', 'action']) as $row) {
-            $taken[$row->search_event_id.'|'.$row->action] = true;
-        }
-        foreach (DB::table('search_event_actions')->whereIn('product_id', $dropIds)->orderBy('id')->get(['id', 'search_event_id', 'action']) as $row) {
-            $key = $row->search_event_id.'|'.$row->action;
-            if (isset($taken[$key])) {
-                continue;
-            }
-            $taken[$key] = true;
-            DB::table('search_event_actions')->where('id', $row->id)->update(['product_id' => $keepId]);
-        }
     }
 }

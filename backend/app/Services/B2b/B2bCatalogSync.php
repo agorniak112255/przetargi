@@ -777,7 +777,9 @@ final class B2bCatalogSync
      * Karta producenta chroniona przed dystrybutorem (plan łączenia kart, etap A, 23.09.2026): na karcie z właścicielem
      * (CardOwnership) konto nie-właściciel nie zmienia producenta ani nazwy, listę rozmiarów i dowód kategorii wpisuje
      * tylko do pustych pól, a zdjęcie dokłada tylko do karty bez zdjęć (keepOwnerFields, storeImage). Slot ceny,
-     * tabelka sklepu, identyfikatory, powiązanie, dokumenty i opis (mayWriteDescription) — jak dotąd.
+     * tabelka sklepu, identyfikatory, powiązanie, dokumenty i opis (mayWriteDescription) — jak dotąd. Tak samo konto
+     * nie-właściciel, którego pozycję mapa połączeń kieruje na kartę powodem „merge”, gdy karta ma pozycje innego konta
+     * — także karta bez właściciela (mergeGuestOnCard, ręczne łączenie kart 28.09.2026).
      *
      * Mapa połączeń (card_redirects — decyzja człowieka „pozycja konta → karta”, plan łączenia kart, krok 3, 24.09.2026)
      * ma pierwszeństwo przed powiązaniem i kodem, inaczej synchronizacja cofałaby połączenie przy najbliższym przebiegu
@@ -841,6 +843,9 @@ final class B2bCatalogSync
         // mogą nadpisywać opisu, slotu ceny ani zdjęć pozycją innego rozmiaru; nie zajmują też karty (claim), więc
         // pozycja wiodąca przetworzona po nich robi pełny zapis
         $nonAnchor = false;
+        // pozycja (albo pozycja grupy) dołączona do karty połączeniem (card_redirects reason „merge”) — konto, które nie
+        // jest właścicielem karty, jest na niej gościem (mergeGuestOnCard)
+        $mergedOntoCard = false;
         // ostrzeżenia z mapy połączeń trafiają do wyniku każdej ścieżki, także pominięcia
         $warnings = [];
         if ($members === []) {
@@ -864,6 +869,7 @@ final class B2bCatalogSync
                 $linked = $target;
                 $existing = $target;
                 $nonAnchor = $entry['reason'] === CardRedirect::REASON_SIZE_MERGE && ! $entry['is_anchor'];
+                $mergedOntoCard = $entry['reason'] === CardRedirect::REASON_MERGE;
             } else {
                 $linked = $link?->product;
                 $existing = $linked ?? Product::query()->where('sku', $remote->sku)->first();
@@ -917,6 +923,9 @@ final class B2bCatalogSync
                 foreach ($entries as $memberEntry) {
                     if ($memberEntry['reason'] !== CardRedirect::REASON_SIZE_MERGE || $memberEntry['is_anchor']) {
                         $nonAnchor = false;
+                    }
+                    if ($memberEntry['reason'] === CardRedirect::REASON_MERGE && $memberEntry['product_id'] === (int) $target->id) {
+                        $mergedOntoCard = true;
                     }
                 }
             } else {
@@ -1039,7 +1048,8 @@ final class B2bCatalogSync
         $card = $this->cardDocuments($connector, $remote, $existing, $warnings);
         [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $origin, $warnings, ! $descriptionOff);
         // Przed fill — właściciela liczymy z producenta zapisanego na karcie, nie z brzmienia tego konta.
-        $foreignOnProtected = $existing !== null && $this->isForeignOnProtectedCard($existing, $account);
+        $foreignOnProtected = $existing !== null
+            && ($this->isForeignOnProtectedCard($existing, $account) || ($mergedOntoCard && $this->mergeGuestOnCard($existing, $account)));
         if ($foreignOnProtected) {
             $this->keepOwnerFields($payload, $existing);
         }
@@ -3193,6 +3203,24 @@ final class B2bCatalogSync
     private function isForeignOnProtectedCard(Product $card, B2bAccount $account): bool
     {
         return ! $this->ownership->isOwnerAccount($card, $account) && $this->ownership->isProtected($card);
+    }
+
+    /**
+     * Konto, którego pozycja trafia na kartę przez wpis mapy połączeń z powodem „merge” (ręczne łączenie kart,
+     * „Połącz” na ekranie „Łączenie kart”, products:merge-duplicate), a które nie jest właścicielem karty, na karcie
+     * z pozycjami innego konta — gość na karcie połączonej, także karcie bez właściciela. Zachowuje się jak
+     * nie-właściciel na karcie chronionej (keepOwnerFields, zdjęcie tylko do karty bez zdjęć): po połączeniu kart dwóch
+     * dystrybutorów producent karty nie przeskakuje co przebieg między brzmieniami obu kont. Jedyne konto karty (karta
+     * bez pozycji innych kont, np. MAVIBO z 24.09.2026) gościem nie jest — dalej odświeża listę rozmiarów, bo nikt inny
+     * tego nie robi. Wpisy „size_merge” i „split” — bez zmian.
+     */
+    private function mergeGuestOnCard(Product $card, B2bAccount $account): bool
+    {
+        return ! $this->ownership->isOwnerAccount($card, $account)
+            && B2bProductLink::query()
+                ->where('product_id', $card->id)
+                ->where('b2b_account_id', '!=', $account->id)
+                ->exists();
     }
 
     /**

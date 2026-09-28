@@ -206,6 +206,9 @@ export type ProductVariant = {
   /** Wersja zniknęła z listy dostawcy — nie liczy się do „od–do”. */
   removed_at: string | null
   last_price_change: ProductVariantPriceChange | null
+  /** Źródło wiersza (np. „b2b:15”) i jego etykieta — po połączeniu kart rozmiary mogą być z kilku kont; starsze API bez pól. */
+  source?: string
+  source_label?: string
 }
 
 export type ProductVariants = {
@@ -717,8 +720,9 @@ export type CardBrief = {
 export type CardMatch = {
   id: number
   status: CardMatchStatus
-  matched_by: 'ean' | 'manufacturer_code' | string
-  matched_value: string
+  /** „manual” = połączone ręcznie z listy produktów (wtedy matched_value null, notatka w decision_input.note). */
+  matched_by: 'ean' | 'manufacturer_code' | 'manual' | string
+  matched_value: string | null
   matched_source_key: string | null
   /** Marka kanoniczna (klucz, np. „anro”). */
   brand: string | null
@@ -889,6 +893,100 @@ export type CardMatchSummary = {
   by_kind: Record<CardMatchKind, { pending: number; conflict: number; rejected: number; merged: number }>
   /** Pomiar: propozycje z kilkoma kartami (do decyzji + niepewne) wg sygnału planu. */
   signals: Record<CardMatchSignal, number>
+}
+
+/** Karta w podglądzie ręcznego łączenia (POST /card-matches/manual/preview); ceny jako tekst jak w API. */
+export type ManualMergeCard = {
+  id: number
+  sku: string
+  name: string
+  manufacturer: string | null
+  /** Karta ma właściciela (cennik producenta) — wtedy to ona zostaje. */
+  is_owner: boolean
+  /** Kto jest właścicielem, np. „konto B2B 3M”; null = brak. */
+  owner_label: string | null
+  has_description: boolean
+  images: number
+  size_rows: number
+  tender_items: number
+  presta: boolean
+  purchase_price: string | null
+  currency: string | null
+  sources: Array<{ source_key: string; label: string; purchase_price: string | null; currency: string | null }>
+}
+
+/** Ostrzeżenie podglądu; requires_confirm = bez potwierdzenia (confirm_brand) serwer nie połączy. */
+export type ManualMergeWarning = {
+  code: 'brand' | 'price_diff' | 'size_color' | 'tender_items' | string
+  text: string
+  requires_confirm: boolean
+}
+
+/** Co przejdzie z kart znikających do karty, która zostaje (liczby). */
+export type ManualMergeMoves = {
+  source_prices: number
+  b2b_links: number
+  images: number
+  identifiers: number
+  tender_items: number
+  size_rows: number
+  accessories: number
+}
+
+export type ManualMergePreview = {
+  cards: ManualMergeCard[]
+  /** Karta, która zostaje w tym podglądzie; null = nie da się wskazać (np. kilka kart producenta). */
+  keep_product_id: number | null
+  suggested_keep_id: number | null
+  suggestion_reason: string
+  /** Zostać może tylko podpowiedziana karta (karta producenta) — wybór innej to blokada. */
+  keep_locked: boolean
+  blockers: string[]
+  warnings: ManualMergeWarning[]
+  moves: ManualMergeMoves
+  can_merge: boolean
+  plan_hash: string
+}
+
+export type ManualMergeRequest = {
+  product_ids: number[]
+  keep_product_id: number
+  plan_hash: string
+  confirm_brand?: boolean
+  note?: string | null
+}
+
+export type ManualMergeResult = {
+  keep_product_id: number
+  merged_product_ids: number[]
+  candidate_ids: number[]
+  backup_path: string
+}
+
+/** Podgląd ręcznego połączenia kart (tylko odczyt); keepId null/brak = podpowiedź serwera. */
+export function manualMergePreview(productIds: number[], keepId?: number | null): Promise<ManualMergePreview> {
+  return api<ManualMergePreview>('/card-matches/manual/preview', {
+    method: 'POST',
+    body: JSON.stringify({ product_ids: productIds, keep_product_id: keepId ?? null }),
+  })
+}
+
+/**
+ * Ręczne połączenie kart. 409 = dane zmieniły się od podglądu — świeży podgląd w ciele błędu
+ * (manualMergeConflictPreview); 422 = blokada albo walidacja (komunikat w message).
+ */
+export function manualMerge(body: ManualMergeRequest): Promise<ManualMergeResult> {
+  return api<ManualMergeResult>('/card-matches/manual', { method: 'POST', body: JSON.stringify(body) })
+}
+
+/** Świeży podgląd z odpowiedzi 409 ręcznego połączenia; null dla innych błędów albo odpowiedzi bez podglądu. */
+export function manualMergeConflictPreview(ex: unknown): ManualMergePreview | null {
+  if (!(ex instanceof ApiError) || ex.status !== 409) return null
+  const preview = ex.body.preview
+  if (preview && typeof preview === 'object' && Array.isArray((preview as ManualMergePreview).cards)) {
+    return preview as ManualMergePreview
+  }
+  return null
 }
 
 export async function downloadFile(path: string, fallbackName: string): Promise<void> {

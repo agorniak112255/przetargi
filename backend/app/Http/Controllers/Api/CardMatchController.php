@@ -16,6 +16,7 @@ use App\Services\Catalog\CardMatchMerger;
 use App\Services\Catalog\CardMatchPlanChanged;
 use App\Services\Catalog\CardMatchSizeMerger;
 use App\Services\Catalog\CardMatchSplitter;
+use App\Services\Catalog\ManualCardMerger;
 use App\Services\Pricing\SourcePriceComparison;
 use DomainException;
 use Illuminate\Http\JsonResponse;
@@ -44,6 +45,7 @@ class CardMatchController extends Controller
         private readonly SourcePriceComparison $comparison,
         private readonly CardMatchSizeMerger $sizeMerger,
         private readonly CardMatchSplitter $splitter,
+        private readonly ManualCardMerger $manual,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -159,6 +161,72 @@ class CardMatchController extends Controller
         }
 
         return response()->json($this->present(collect([$split->load('decider:id,name')]))[0]);
+    }
+
+    /**
+     * Ręczne łączenie kart z listy produktów — podgląd (tylko odczyt). keep_product_id pusty — karta z podpowiedzi.
+     */
+    public function manualPreview(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'product_ids' => ['required', 'array', 'min:'.ManualCardMerger::MIN_CARDS, 'max:'.ManualCardMerger::MAX_CARDS],
+            'product_ids.*' => ['required', 'integer', 'distinct'],
+            'keep_product_id' => ['nullable', 'integer'],
+        ]);
+
+        try {
+            return response()->json($this->manual->preview(
+                array_map('intval', $data['product_ids']),
+                isset($data['keep_product_id']) ? (int) $data['keep_product_id'] : null,
+            ));
+        } catch (DomainException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+    }
+
+    /**
+     * Ręczne łączenie kart: front wysyła skrót podglądu, który pokazywał — serwer liczy podgląd od nowa. Inny skrót —
+     * 409 ze świeżym podglądem (okno podmienia go i prosi o ponowne zatwierdzenie).
+     */
+    public function manualMerge(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'product_ids' => ['required', 'array', 'min:'.ManualCardMerger::MIN_CARDS, 'max:'.ManualCardMerger::MAX_CARDS],
+            'product_ids.*' => ['required', 'integer', 'distinct'],
+            'keep_product_id' => ['required', 'integer'],
+            'plan_hash' => ['required', 'string', 'size:40'],
+            'confirm_brand' => ['nullable', 'boolean'],
+            'note' => ['nullable', 'string', 'max:'.ManualCardMerger::NOTE_MAX],
+        ]);
+        $ids = array_map('intval', $data['product_ids']);
+        $keepId = (int) $data['keep_product_id'];
+
+        try {
+            $result = $this->manual->merge(
+                $ids,
+                $keepId,
+                (string) $data['plan_hash'],
+                (bool) ($data['confirm_brand'] ?? false),
+                isset($data['note']) ? (string) $data['note'] : null,
+                $this->user($request),
+            );
+        } catch (CardMatchPlanChanged $e) {
+            try {
+                $preview = $this->manual->preview($ids, $keepId);
+            } catch (DomainException) {
+                $preview = null;
+            }
+
+            return response()->json(['message' => $e->getMessage(), 'code' => 'plan_changed', 'preview' => $preview], 409);
+        } catch (DomainException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (Throwable $e) {
+            report($e);
+
+            return response()->json(['message' => 'Łączenie kart nie powiodło się: '.rtrim($e->getMessage(), '.').' — nic nie zmieniono.'], 500);
+        }
+
+        return response()->json($result);
     }
 
     public function reject(Request $request, CardMatchCandidate $candidate): JsonResponse

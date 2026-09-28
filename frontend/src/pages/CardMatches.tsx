@@ -217,6 +217,7 @@ function planSentence(m: CardMatch, plan: CardMatchPlan): { intro: string; items
 }
 
 function positionKeyLabel(p: CardMatchPlanPosition): string | null {
+  if (p.matched_by === 'manual') return 'połączone ręcznie'
   if (!p.matched_value) return null
   if (p.matched_by === 'ean') return `EAN ${p.matched_value}`
   if (p.matched_by === 'manufacturer_code') return `kod producenta ${p.matched_value}`
@@ -243,7 +244,15 @@ function priceText(price: string | null, currency: string | null): string {
 function keyLabel(m: CardMatch): string {
   if (m.matched_by === 'ean') return 'ten sam EAN'
   if (m.matched_by === 'manufacturer_code') return 'ten sam kod producenta'
+  if (m.matched_by === 'manual') return 'połączone ręcznie'
   return m.matched_by
+}
+
+/** Notatka z ręcznego połączenia (decision_input.note z „Połącz zaznaczone” na liście produktów); null = brak. */
+function manualNote(m: CardMatch): string | null {
+  if (m.matched_by !== 'manual' || !m.decision_input) return null
+  const note = (m.decision_input as { note?: unknown }).note
+  return typeof note === 'string' && note.trim() !== '' ? note.trim() : null
 }
 
 function sourceLabelFor(m: CardMatch): string | null {
@@ -1489,6 +1498,7 @@ export function CardMatches() {
           <tbody>
             {rows.map((m, i) => {
               const matchedFrom = sourceLabelFor(m)
+              const note = manualNote(m)
               const stripe = i % 2 === 1 ? 'bg-slate-100/60' : ''
               if (m.kind === 'size_merge' || m.kind === 'split') {
                 // plan „pozycja → karta”: karta dystrybutora · zdanie + tabelka (w zakładkach mieszanych na dwie
@@ -1562,18 +1572,28 @@ export function CardMatches() {
                       </p>
                     )}
                     <p className="text-slate-600">{keyLabel(m)}</p>
-                    <p className="break-all font-mono text-[13px] font-semibold text-slate-900">{m.matched_value}</p>
-                    <p className="mt-1 text-[11px] text-slate-500">
-                      {m.brand ? <>marka {m.brand}</> : null}
-                      {m.brand && matchedFrom ? ' · ' : null}
-                      {matchedFrom ? <>z {matchedFrom}</> : null}
-                    </p>
-                    <p
-                      className="text-[11px] text-slate-500"
-                      title="Ile pozycji (rozmiarów) karty dystrybutora z kodem wskazuje tę kartę producenta"
-                    >
-                      trafione pozycje: {m.hits} z {m.positions}
-                    </p>
+                    {m.matched_by === 'manual' ? (
+                      note && (
+                        <p className="mt-0.5 break-words text-[11px] text-slate-700" title="Notatka przy połączeniu">
+                          „{note}”
+                        </p>
+                      )
+                    ) : (
+                      <>
+                        <p className="break-all font-mono text-[13px] font-semibold text-slate-900">{m.matched_value}</p>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {m.brand ? <>marka {m.brand}</> : null}
+                          {m.brand && matchedFrom ? ' · ' : null}
+                          {matchedFrom ? <>z {matchedFrom}</> : null}
+                        </p>
+                        <p
+                          className="text-[11px] text-slate-500"
+                          title="Ile pozycji (rozmiarów) karty dystrybutora z kodem wskazuje tę kartę producenta"
+                        >
+                          trafione pozycje: {m.hits} z {m.positions}
+                        </p>
+                      </>
+                    )}
                     <span className="mt-1 block text-lg leading-none text-slate-400" aria-hidden>
                       →
                     </span>

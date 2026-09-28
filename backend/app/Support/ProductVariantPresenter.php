@@ -104,11 +104,18 @@ final class ProductVariantPresenter
             }
         }
 
-        $sources = ($active->isNotEmpty() ? $active : $variants)
+        $sourcesOf = static fn ($rows): array => $rows
             ->map(static fn (ProductVariant $v): string => (string) $v->source)
             ->filter(static fn (string $s): bool => $s !== '')
             ->unique()
-            ->values();
+            ->values()
+            ->all();
+        // etykieta źródła każdego wiersza — karta po połączeniu ma rozmiary kilku kont (producent i dystrybutor)
+        $itemLabels = $this->labelsBySource($sourcesOf($variants));
+        $sources = $sourcesOf($active->isNotEmpty() ? $active : $variants);
+        $sourceLabel = $sources !== []
+            ? implode(', ', array_values(array_unique(array_map(static fn (string $s): string => $itemLabels[$s], $sources))))
+            : null;
 
         return [
             'kind' => $kind,
@@ -117,10 +124,12 @@ final class ProductVariantPresenter
             'min_price' => $currency !== null ? $this->money($priced->min(static fn (ProductVariant $v): float => (float) $v->purchase_price)) : null,
             'max_price' => $currency !== null ? $this->money($priced->max(static fn (ProductVariant $v): float => (float) $v->purchase_price)) : null,
             'currency' => $currency,
-            'source_label' => $sources->isNotEmpty() ? $this->sourceLabels($sources->all()) : null,
+            'source_label' => $sourceLabel,
             'dimensions' => $dimensions,
             'items' => $variants->map(fn (ProductVariant $v): array => [
                 'id' => (int) $v->id,
+                'source' => (string) $v->source,
+                'source_label' => $itemLabels[(string) $v->source] ?? null,
                 'remote_id' => (string) $v->remote_id,
                 'sku' => $v->sku !== null && $v->sku !== '' ? (string) $v->sku : null,
                 'label' => (string) $v->label,
@@ -142,12 +151,13 @@ final class ProductVariantPresenter
     }
 
     /**
-     * Etykiety źródeł wierszy. Slot konta „b2b:{id}” (rozmiary) to konto, nie łącznik — nazwa jak w porównaniu
-     * cen karty; „b2b:{łącznik}” (wersje Sign Project) jak w historii cen.
+     * Etykieta każdego źródła wierszy (jedno zapytanie o konta). Slot konta „b2b:{id}” (rozmiary) to konto, nie
+     * łącznik — nazwa jak w porównaniu cen karty; „b2b:{łącznik}” (wersje Sign Project) jak w historii cen.
      *
      * @param  list<string>  $sources
+     * @return array<string, string>
      */
-    private function sourceLabels(array $sources): string
+    private function labelsBySource(array $sources): array
     {
         $accountIds = [];
         foreach ($sources as $source) {
@@ -159,13 +169,14 @@ final class ProductVariantPresenter
             ? B2bAccount::query()->whereIn('id', array_values(array_unique($accountIds)))->get()->keyBy('id')
             : collect();
 
-        return implode(', ', array_values(array_unique(array_map(function (string $source) use ($accounts): string {
-            if (preg_match('/^b2b:(\d+)$/', $source, $m) === 1) {
-                return $this->comparison->accountLabel($accounts->get((int) $m[1]));
-            }
+        $labels = [];
+        foreach ($sources as $source) {
+            $labels[$source] = preg_match('/^b2b:(\d+)$/', $source, $m) === 1
+                ? $this->comparison->accountLabel($accounts->get((int) $m[1]))
+                : $this->priceChanges->sourceLabel($source, false, null);
+        }
 
-            return $this->priceChanges->sourceLabel($source, false, null);
-        }, $sources))));
+        return $labels;
     }
 
     /**
