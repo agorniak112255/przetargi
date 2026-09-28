@@ -162,9 +162,27 @@ final class B2bMergeSizePricesCommandTest extends TestCase
         $this->assertSame(0, $next['prices_changed'], implode(' | ', $next['errors']));
     }
 
-    public function test_tender_item_on_the_more_expensive_card_needs_with_tenders(): void
+    public function test_tender_item_on_a_single_size_card_gets_that_size_as_offer_variant(): void
     {
         [$small, $large] = $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+        $item = TenderItem::query()->create(['tender_id' => $this->tender()->id, 'line_no' => 1, 'requirement' => 'Kurtka XL', 'main_product_id' => $large->id]);
+
+        // karta XL ma jeden rozmiar — pozycja dostaje go jako wariant, marża z jego ceny, więc bez --with-tenders
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])
+            ->expectsOutputToContain('Scalono wyrobów: 1')
+            ->assertSuccessful();
+        $fresh = $item->fresh();
+        $this->assertSame($small->id, (int) $fresh->main_product_id);
+        $this->assertNotNull($fresh->offerVariant());
+        $this->assertSame('XL', $fresh->main_variant_label);
+        $this->assertSame('auto', $fresh->main_variant_source);
+        $this->assertSame('120.00', (string) $fresh->offerVariant()->purchase_price);
+        $this->cleanBackups();
+    }
+
+    public function test_tender_item_on_the_more_expensive_card_with_several_sizes_needs_with_tenders(): void
+    {
+        [$small, $large] = $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL', 'XXL'], 120.0);
         $item = TenderItem::query()->create(['tender_id' => $this->tender()->id, 'line_no' => 1, 'requirement' => 'Kurtka XL', 'main_product_id' => $large->id]);
 
         $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])
@@ -176,7 +194,54 @@ final class B2bMergeSizePricesCommandTest extends TestCase
         $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true, '--with-tenders' => true])
             ->expectsOutputToContain('Scalono wyrobów: 1')
             ->assertSuccessful();
-        $this->assertSame($small->id, (int) $item->fresh()->main_product_id);
+        $fresh = $item->fresh();
+        $this->assertSame($small->id, (int) $fresh->main_product_id);
+        // dwa rozmiary na dawnej karcie — którego dotyczyła oferta, nie wiadomo
+        $this->assertNull($fresh->main_variant_id);
+        $this->cleanBackups();
+    }
+
+    public function test_colour_group_merges_under_the_colourless_card_name_and_connector_summary(): void
+    {
+        // dawniej karta na kolor (3M: „…, biały, G3000CUV-VI”), teraz łącznik podaje kolory jako pozycje jednej karty
+        $colour = static fn (string $id, string $colour, float $net, bool $member): array => [
+            'remote_id' => $id, 'sku' => 'G3000CUV-'.$id, 'name' => 'Hełm G3000, '.$colour.', G3000CUV-'.$id,
+        ] + ($member ? ['availability' => 'Na stanie', 'size' => $colour, 'price' => new B2bRemotePrice(net: $net)] : []);
+        $this->connector->items = array_map(fn (array $m): B2bRemoteProduct => new B2bRemoteProduct(
+            remoteId: $m['remote_id'], sku: $m['remote_id'], name: $m['name'],
+            raw: ['price' => 50.0, 'description' => self::DESCRIPTION], availability: 'Na stanie',
+        ), [$colour('VI', 'biały', 50.0, false), $colour('RD', 'czerwony', 50.0, false)]);
+        $legacy = $this->sync();
+        $this->assertSame(2, $legacy['created'], implode(' | ', $legacy['errors']));
+        $white = Product::query()->where('sku', 'VI')->sole();
+        $red = Product::query()->where('sku', 'RD')->sole();
+        $item = TenderItem::query()->create(['tender_id' => $this->tender()->id, 'line_no' => 1, 'requirement' => 'Hełm czerwony', 'main_product_id' => $red->id]);
+
+        $this->travel(5)->minutes();
+        $members = [$colour('VI', 'biały', 50.0, true), $colour('RD', 'czerwony', 55.0, true)];
+        $this->connector->items = [new B2bRemoteProduct(
+            remoteId: 'VI', sku: 'VI', name: $members[0]['name'], raw: ['price' => 50.0, 'description' => self::DESCRIPTION],
+            availability: 'Na stanie', variantSummary: 'Kolory: biały (G3000CUV-VI); czerwony (G3000CUV-RD)',
+            members: $members, cardName: 'Hełm G3000, G3000CUV',
+        )];
+        $after = $this->sync();
+        $this->assertSame(1, B2bSyncRun::query()->findOrFail($after['sync_run_id'])->size_spread['total'], implode(' | ', $after['errors']));
+        $this->travel(5)->minutes();
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])
+            ->expectsOutputToContain('Scalono wyrobów: 1')
+            ->assertSuccessful();
+
+        $keep = $white->fresh();
+        $this->assertNull(Product::query()->find($red->id));
+        $this->assertSame('Hełm G3000, G3000CUV', $keep->name);
+        $this->assertSame('Kolory: biały (G3000CUV-VI); czerwony (G3000CUV-RD)', $keep->variant_summary);
+        // pozycja stała na karcie czerwonego — czerwony jest wariantem jej oferty (marża z jego ceny)
+        $fresh = $item->fresh();
+        $this->assertSame($keep->id, (int) $fresh->main_product_id);
+        $this->assertSame('czerwony', $fresh->main_variant_label);
+        $this->assertSame('G3000CUV-RD', $fresh->main_variant_sku);
+        $this->assertSame('55.00', (string) $fresh->offerVariant()?->purchase_price);
         $this->cleanBackups();
     }
 

@@ -18,7 +18,11 @@ use Throwable;
  * w grupach podkategorii (i marek) — duże wyniki wyszukiwarka stronicuje niedeterministycznie (listItems). Cała lista
  * idzie przed pierwszym produktem, deduplikowana po numerze magazynowym (mmm_id), i musi się zgadzać z licznikami.
  *
- * Karta = jeden numer magazynowy 3M (SKU = mmm_id). Ceny konta w paczkach po 50 za JEDNOSTKĘ BAZOWĄ wyrobu
+ * Karta = jeden numer magazynowy 3M (SKU = mmm_id); wyjątek — warianty kolorystyczne jednego wyrobu (decyzja użytkownika
+ * 28.09.2026): pozycje o nazwie „{wspólny początek}, {kolor}, {kod}” z kodami różnymi tylko końcówką koloru to jedna
+ * karta z tabelą kolorów (colourVariantKey, colourProducts; B2bSizePriceSource — „Scal rozmiary”). Rozmiarów 3M nie
+ * łączy (bez B2bGroupsSizes): półmaski 6200 S/M/L to osobne numery i osobne karty, które „Łączenie kart” może
+ * zaproponować jako rozmiary. Ceny konta w paczkach po 50 za JEDNOSTKĘ BAZOWĄ wyrobu
  * (materialUnits = baseUomCode) — 3M sam przelicza cenę kartonu na sztukę/parę, my niczego nie dzielimy. Odpowiedź
  * mówi, za co jest cena („pricePer”: „1 szt”); inna jednostka niż bazowa = brak ceny z powodem w podsumowaniu.
  *
@@ -28,7 +32,7 @@ use Throwable;
  * Logowanie kodem z e-maila (B2bCodeLoginSite): przebieg korzysta z sesji zapisanej na koncie, a po udanym login()
  * i na końcu przebiegu zapisuje odnowione ciasteczka z powrotem na koncie.
  */
-final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource
+final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocumentSource, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bSizePriceSource
 {
     public const BRAND = '3M';
 
@@ -59,7 +63,21 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
 
     private const SHOP_SECTION_PACKAGING = 'Opakowanie';
 
+    /** Parametr barwy na karcie 3M (classified, „Kolor produktu”) — małymi literami do porównania. */
+    private const COLOUR_FIELD = 'kolor produktu';
+
+    /**
+     * Człon koloru w nazwie 3M — cały człon to jedna barwa (rdzeń z dowolną polską końcówką: „biały”, „zielone”,
+     * „pomarańczowe”, z jasno-/ciemno-) albo „o zwiększonej widzialności” (hełmy G3000, żółto-zielony fluo).
+     */
+    private const COLOUR_SEGMENT = '/^(?:(?:jasno|ciemno)-?)?(?:czerwon|niebiesk|zielon|żółt|biał|pomarańczow|czarn|szar|granatow|fioletow|różow|srebrn|brązow|beżow|limonkow|oliwkow|grafitow)\p{L}*$|^o zwiększonej widzialności$/iu';
+
     private int $total = 0;
+
+    /** Karty z wariantami kolorystycznymi w przebiegu i liczba ich pozycji (runSummary). */
+    private int $colourCards = 0;
+
+    private int $colourMembers = 0;
 
     /** @var list<string> */
     private array $summary = [];
@@ -161,16 +179,156 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         $this->withoutDescription = [];
         $this->pdpId = null;
         $this->pdp = [];
+        $this->colourCards = 0;
+        $this->colourMembers = 0;
 
         $items = $this->listItems();
-        $this->total = count($items);
+        $colours = self::colourGroups($items);
+        // na start zakładamy, że każda grupa kolorów da jedną kartę; po cenach — liczba faktycznie wydanych produktów
+        $this->total = count($items) - count($colours) + count(array_unique(array_column($colours, 'key')));
 
+        /** @var array<string, list<array{item: array<string, mixed>, price: array<string, mixed>, colour: array{key: string, colour: string, code: string, prefix: string, stem: string}}>> $stash */
+        $stash = [];
         foreach (array_chunk($items, self::PRICE_CHUNK) as $chunk) {
             [$prices, $errors] = $this->chunkPrices($chunk);
             foreach ($chunk as $item) {
-                yield $this->productFor($item, $prices, $errors[(string) $item['id']] ?? null);
+                $id = (string) $item['id'];
+                $price = $this->priceFor($item, $prices, $errors[$id] ?? null);
+                if (isset($colours[$id])) {
+                    // grupa kolorów rozstrzyga się dopiero, gdy są ceny wszystkich jej pozycji (paczki cen idą po liście)
+                    $stash[$colours[$id]['key']][] = ['item' => $item, 'price' => $price, 'colour' => $colours[$id]];
+
+                    continue;
+                }
+                yield $this->productFor($item, $price);
             }
         }
+
+        $grouped = [];
+        foreach ($stash as $group) {
+            array_push($grouped, ...$this->colourProducts($group));
+        }
+        $this->total = count($items) - count($colours) + count($grouped);
+        foreach ($grouped as $product) {
+            yield $product;
+        }
+    }
+
+    /**
+     * Wariant kolorystyczny z nazwy pozycji listy 3M: „{początek}, {kolor}, {kod}” — przedostatni człon to sama barwa
+     * (COLOUR_SEGMENT), ostatni to kod bez spacji z cyfrą, zakończony członem koloru „-XX” (1–3 wielkie litery/cyfry:
+     * G3000CUV-VI, G3000NUV-10-BB, 210100-478-GN). Klucz = początek nazwy (bez wielkości liter) i kod bez końcówki —
+     * inny początek („ze skóry”, „Wymienne czasze …”) albo inny rdzeń kodu (G3001MUV100V / G3001MUV1000V) to inny wyrób.
+     * Kolor i kod dosłownie z nazwy; null = nazwa nie ma takiego układu (pozycja zostaje osobną kartą).
+     *
+     * @return array{key: string, colour: string, code: string, prefix: string, stem: string}|null
+     */
+    public static function colourVariantKey(string $name): ?array
+    {
+        if (preg_match('/^(.+),\s*([^,]+),\s*([^,\s]*\d[^,\s]*)$/u', self::clean($name), $m) !== 1) {
+            return null;
+        }
+        $prefix = trim($m[1]);
+        $colour = trim($m[2]);
+        $code = $m[3];
+        if ($prefix === '' || preg_match(self::COLOUR_SEGMENT, $colour) !== 1 || preg_match('/^(.+)-[A-Z0-9]{1,3}$/', $code, $c) !== 1) {
+            return null;
+        }
+
+        return ['key' => mb_strtolower($prefix).'|'.$c[1], 'colour' => $colour, 'code' => $code, 'prefix' => $prefix, 'stem' => $c[1]];
+    }
+
+    /**
+     * Pozycje listy w grupach kolorów (co najmniej dwie pozycje o tym samym kluczu) wg numeru magazynowego.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @return array<string, array{key: string, colour: string, code: string, prefix: string, stem: string}>
+     */
+    private static function colourGroups(array $items): array
+    {
+        $parsed = [];
+        $counts = [];
+        foreach ($items as $item) {
+            $colour = self::colourVariantKey((string) $item['name']);
+            if ($colour !== null) {
+                $parsed[(string) $item['id']] = $colour;
+                $counts[$colour['key']] = ($counts[$colour['key']] ?? 0) + 1;
+            }
+        }
+
+        return array_filter($parsed, static fn (array $colour): bool => $counts[$colour['key']] >= 2);
+    }
+
+    /**
+     * Grupa kolorów po cenach: pozycje z ceną konta (co najmniej dwie, każdy kolor raz — bez względu na wielkość
+     * liter) to jedna karta z tabelą kolorów; pozycje bez ceny albo z błędem ceny zostają osobnymi kartami jak dotąd.
+     * Powtórzony kolor wśród pozycji z ceną = nie wiemy, który wiersz jest którym wyrobem — cała grupa osobno.
+     *
+     * Karta: pozycja najtańsza (remis — niższy numer magazynowy) daje remoteId, SKU, nazwę ze źródła, kartę pdp (opis,
+     * tabelka, zdjęcia, dokumenty) i cenę karty (price()); nazwa nowej karty bez koloru („{początek}, {kod bez
+     * końcówki}”). Pozycje w kolejności kolorów, każda ze swoją ceną konta, kodem z nazwy i numerami 3M.
+     *
+     * @param  list<array{item: array<string, mixed>, price: array<string, mixed>, colour: array{key: string, colour: string, code: string, prefix: string, stem: string}}>  $group
+     * @return list<B2bRemoteProduct>
+     */
+    private function colourProducts(array $group): array
+    {
+        $priced = array_values(array_filter($group, static fn (array $m): bool => ($m['price']['status'] ?? null) === 'ok'));
+        $labels = array_map(static fn (array $m): string => mb_strtolower($m['colour']['colour']), $priced);
+        if (count($priced) < 2 || count(array_unique($labels)) !== count($labels)) {
+            return array_map(fn (array $m): B2bRemoteProduct => $this->productFor($m['item'], $m['price']), $group);
+        }
+
+        usort($priced, static fn (array $a, array $b): int => [mb_strtolower($a['colour']['colour']), (string) $a['item']['id']]
+            <=> [mb_strtolower($b['colour']['colour']), (string) $b['item']['id']]);
+        $lead = $priced[0];
+        foreach ($priced as $member) {
+            // w groszach, jak cena pozycji (remotePrice) — remis po zaokrągleniu rozstrzyga numer magazynowy
+            $cheaper = round((float) $member['price']['net'], 2) <=> round((float) $lead['price']['net'], 2);
+            if ($cheaper < 0 || ($cheaper === 0 && strcmp((string) $member['item']['id'], (string) $lead['item']['id']) < 0)) {
+                $lead = $member;
+            }
+        }
+
+        $members = [];
+        $identifiers = [];
+        foreach ($priced as $member) {
+            $item = $member['item'];
+            $members[] = [
+                'remote_id' => (string) $item['id'],
+                'sku' => $member['colour']['code'],
+                'name' => (string) $item['name'],
+                'size' => $member['colour']['colour'],
+                'price' => self::remotePrice($member['price'], $item),
+            ];
+            array_push($identifiers, ...self::identifiers($item, $member['colour']['colour']));
+        }
+        $this->colourCards++;
+        $this->colourMembers += count($priced);
+
+        $leadId = (string) $lead['item']['id'];
+        $products = [new B2bRemoteProduct(
+            remoteId: $leadId,
+            sku: $leadId,
+            name: (string) $lead['item']['name'],
+            category: null,
+            sourceUrl: MmmB2bClient::productUrl($leadId),
+            raw: ['item' => $lead['item'], 'price' => $lead['price']],
+            variantSummary: 'Kolory: '.implode('; ', array_map(
+                static fn (array $m): string => $m['colour']['colour'].' ('.$m['colour']['code'].')',
+                $priced,
+            )),
+            members: $members,
+            identifiers: $identifiers,
+            cardName: $lead['colour']['prefix'].', '.$lead['colour']['stem'],
+        )];
+        foreach ($group as $member) {
+            if (($member['price']['status'] ?? null) !== 'ok') {
+                $products[] = $this->productFor($member['item'], $member['price']);
+            }
+        }
+
+        return $products;
     }
 
     public function totalProducts(): int
@@ -189,6 +347,9 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         }
         if ($this->withoutDescription !== []) {
             $lines[] = 'Karta 3M bez opisu (brak opisu, długiego opisu i zalet): '.self::listing(array_keys($this->withoutDescription));
+        }
+        if ($this->colourCards > 0) {
+            $lines[] = 'Warianty kolorystyczne 3M: '.$this->colourCards.' wyrobów z '.$this->colourMembers.' pozycji';
         }
         if ($this->account !== null && $this->client->isLoggedIn()) {
             $lines[] = $this->saveSession() ?? 'Sesja 3M zapisana na koncie';
@@ -214,6 +375,19 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         if (($price['status'] ?? null) !== 'ok') {
             return null;
         }
+
+        return self::remotePrice($price, is_array($product->raw['item'] ?? null) ? $product->raw['item'] : []);
+    }
+
+    /**
+     * Cena konta pozycji (status „ok” z priceOf) z warunkiem zamawiania jej jednostki bazowej — dla karty (price())
+     * i każdej pozycji karty z kolorami (members[].price).
+     *
+     * @param  array<string, mixed>  $price
+     * @param  array<string, mixed>  $item
+     */
+    private static function remotePrice(array $price, array $item): B2bRemotePrice
+    {
         $net = (float) $price['net'];
         $base = is_float($price['base'] ?? null) ? $price['base'] : null;
 
@@ -221,7 +395,7 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
             net: round($net, 2),
             base: $base !== null ? round($base, 2) : null,
             discountPercent: $base !== null && $base > 0 ? round((1 - $net / $base) * 100, 2) : 0.0,
-            order: self::orderQuantity(is_array($product->raw['item'] ?? null) ? $product->raw['item'] : []),
+            order: self::orderQuantity($item),
         );
     }
 
@@ -317,20 +491,26 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
                 $add(self::SHOP_SECTION_TRADE, 'Marka', self::value($row['value'] ?? null));
             }
         }
-        $add(self::SHOP_SECTION_TRADE, 'Numer katalogowy 3M', (string) ($item['catalog'] ?? ''));
-        $add(self::SHOP_SECTION_TRADE, 'Numer magazynowy 3M', (string) ($item['id'] ?? ''));
-        $add(self::SHOP_SECTION_TRADE, 'EAN', (string) ($item['gtin'] ?? ''));
-        $add(self::SHOP_SECTION_TRADE, 'Poprzedni numer 3M', (string) ($item['legacy'] ?? ''));
+        // karta kolorów (members): numery, EAN i kolor ze strony wiodącej pozycji opisują tylko jeden kolor — każdy
+        // kolor ma swoje numery w wierszach wariantów i identyfikatorach, więc w tabelce ich nie powtarzamy
+        $grouped = count($product->members) > 1;
+        if (! $grouped) {
+            $add(self::SHOP_SECTION_TRADE, 'Numer katalogowy 3M', (string) ($item['catalog'] ?? ''));
+            $add(self::SHOP_SECTION_TRADE, 'Numer magazynowy 3M', (string) ($item['id'] ?? ''));
+            $add(self::SHOP_SECTION_TRADE, 'EAN', (string) ($item['gtin'] ?? ''));
+            $add(self::SHOP_SECTION_TRADE, 'Poprzedni numer 3M', (string) ($item['legacy'] ?? ''));
+        }
         $add(self::SHOP_SECTION_TRADE, 'Cena za', (string) ($price['price_per'] ?? ''));
         $add(self::SHOP_SECTION_TRADE, 'Minimalne zamówienie', (string) ($price['min_order'] ?? ''));
         $add(self::SHOP_SECTION_TRADE, 'Jednostka sprzedaży', self::salesUnitText($item));
 
         foreach (self::listOf($pdp['classified'] ?? null) as $row) {
-            if (is_array($row)) {
+            if (is_array($row) && ! ($grouped && mb_strtolower(self::value($row['label'] ?? null)) === self::COLOUR_FIELD)) {
                 $add(self::SHOP_SECTION_TECHNICAL, self::value($row['label'] ?? null), self::classifiedValue($row['value'] ?? null));
             }
         }
-        foreach (self::listOf($pdp['packagingIdentificationDetails'] ?? null) as $row) {
+        // kody kreskowe opakowań też są kodami jednej pozycji
+        foreach ($grouped ? [] : self::listOf($pdp['packagingIdentificationDetails'] ?? null) as $row) {
             if (is_array($row)) {
                 $add(self::SHOP_SECTION_PACKAGING, self::value($row['label'] ?? null), self::value($row['value'] ?? null));
             }
@@ -729,10 +909,23 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
     }
 
     /**
+     * Cena pozycji do raw['price']: błąd paczki cen albo odczyt odpowiedzi (priceOf — raz na pozycję, bo zapisuje
+     * powody braku ceny do podsumowania).
+     *
      * @param  array<string, mixed>  $item
      * @param  array<string, array<string, mixed>>  $prices
+     * @return array<string, mixed>
      */
-    private function productFor(array $item, array $prices, ?string $error): B2bRemoteProduct
+    private function priceFor(array $item, array $prices, ?string $error): array
+    {
+        return $error !== null ? ['status' => 'error', 'reason' => $error] : $this->priceOf($item, $prices[(string) $item['id']] ?? null);
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @param  array<string, mixed>  $price  priceFor
+     */
+    private function productFor(array $item, array $price): B2bRemoteProduct
     {
         $id = (string) $item['id'];
         $name = (string) $item['name'];
@@ -745,7 +938,7 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
             sourceUrl: MmmB2bClient::productUrl($id),
             raw: [
                 'item' => $item,
-                'price' => $error !== null ? ['status' => 'error', 'reason' => $error] : $this->priceOf($item, $prices[$id] ?? null),
+                'price' => $price,
             ],
             identifiers: self::identifiers($item),
         );
@@ -753,13 +946,14 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
 
     /**
      * Numery 3M z pozycji listy wyszukiwarki, dosłownie (GTIN-14 z zerem na początku tak, jak podaje 3M); pole = klucz
-     * wyszukiwarki. Karta = jedna pozycja (numer magazynowy). Kody kreskowe opakowań (packagingIdentificationDetails)
-     * są tylko na karcie pdp, pobieranej dopiero po wydaniu produktu — tu ich nie ma.
+     * wyszukiwarki. Karta = jedna pozycja (numer magazynowy), a na karcie z kolorami — numery każdej pozycji z jej
+     * kolorem jako etykietą. Kody kreskowe opakowań (packagingIdentificationDetails) są tylko na karcie pdp, pobieranej
+     * dopiero po wydaniu produktu — tu ich nie ma.
      *
      * @param  array<string, mixed>  $item
      * @return list<B2bRemoteIdentifier>
      */
-    private static function identifiers(array $item): array
+    private static function identifiers(array $item, ?string $label = null): array
     {
         $id = (string) $item['id'];
         $out = [];
@@ -771,7 +965,7 @@ final class MmmB2bConnector implements B2bCodeLoginSite, B2bConnector, B2bDocume
         ] as [$type, $key, $field]) {
             $value = (string) ($item[$key] ?? '');
             if ($value !== '') {
-                $out[] = new B2bRemoteIdentifier(type: $type, value: $value, remoteId: $id, field: $field);
+                $out[] = new B2bRemoteIdentifier(type: $type, value: $value, remoteId: $id, label: $label, field: $field);
             }
         }
 

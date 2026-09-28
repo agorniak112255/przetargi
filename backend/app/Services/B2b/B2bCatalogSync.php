@@ -2241,8 +2241,11 @@ final class B2bCatalogSync
             'warnings' => [...$warnings, ...$combined['warnings']],
             'size_spread' => [
                 'sku' => $remote->sku,
-                'name' => mb_substr($remote->name, 0, 255),
+                // nazwa karty po scaleniu: cardName, gdy nazwa ze źródła opisuje jedną pozycję (kolor 3M, rozmiar Protektu)
+                'name' => mb_substr($remote->cardName ?? $remote->name, 0, 255),
                 'remote_id' => $remote->remoteId,
+                // lista wariantów karty po scaleniu od łącznika („Kolory: …”); null — scalenie składa „Rozmiary: …”
+                'variant_summary' => $remote->variantSummary,
                 'members' => $spread,
                 'cards' => array_keys($byCard['groups']),
             ],

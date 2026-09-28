@@ -13,6 +13,7 @@ use App\Models\ProductIdentifier;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
+use App\Models\TenderItem;
 use App\Services\Catalog\CardMatchBackup;
 use App\Services\Catalog\CardMatchSizeMerger;
 use App\Services\Catalog\CardOwnership;
@@ -222,9 +223,11 @@ final class B2bSizePriceMerger
         $min = (float) $nets->min();
         $max = (float) $nets->max();
         $minByCard = [];
+        $rowsOnCard = [];
         foreach ($rows as $row) {
             $id = (int) $row->product_id;
             $minByCard[$id] = min($minByCard[$id] ?? PHP_FLOAT_MAX, round((float) $row->purchase_price, 2));
+            $rowsOnCard[$id] = ($rowsOnCard[$id] ?? 0) + 1;
         }
         $out = [...$out, 'min' => $min, 'max' => $max, 'currency' => $currencies[0]];
         $skip = static fn (string $reason): array => [...$out, 'reason' => $reason];
@@ -284,14 +287,18 @@ final class B2bSizePriceMerger
             return $skip('łączona karta #'.$presta.' jest powiązana z Prestą');
         }
 
-        // przetargi na droższym rozmiarze: marża od najniższej ceny karty byłaby zawyżona
+        // przetargi na droższym rozmiarze: marża od najniższej ceny karty byłaby zawyżona. Pozycja z kartą jednego
+        // rozmiaru/koloru jako produktem głównym dostaje po scaleniu ten wariant (apply) — marża z jego ceny, więc jej
+        // to nie dotyczy; produkt dodatkowy wariantu nie ma.
         $tenders = DB::table('tender_items')->where(static fn ($q) => $q->whereIn('main_product_id', $cardIds)->orWhereIn('companion_product_id', $cardIds))
             ->get(['main_product_id', 'companion_product_id']);
         $out['tenders'] = $tenders->count();
         $skip = static fn (string $reason): array => [...$out, 'reason' => $reason];
         if (! $withTenders) {
             foreach ($tenders as $item) {
-                foreach ([(int) $item->main_product_id, (int) $item->companion_product_id] as $id) {
+                $main = (int) $item->main_product_id;
+                $ids = ($rowsOnCard[$main] ?? 0) === 1 ? [(int) $item->companion_product_id] : [$main, (int) $item->companion_product_id];
+                foreach ($ids as $id) {
                     if (isset($minByCard[$id]) && $minByCard[$id] > $min + 0.004) {
                         return $skip('karta #'.$id.' (droższy rozmiar) jest w pozycjach przetargów — scal z opcją „także z przetargami na droższym rozmiarze” (--with-tenders)');
                     }
@@ -318,11 +325,13 @@ final class B2bSizePriceMerger
         foreach ($members as $member) {
             $labels[] = trim((string) ($member['size'] ?? '')) !== '' ? trim((string) $member['size']) : (string) ($member['sku'] ?? $member['remote_id']);
         }
+        // lista od łącznika (kolory 3M: „Kolory: biały (G3000CUV-VI); …”), inaczej rozmiary z pozycji
+        $connectorSummary = trim((string) ($group['variant_summary'] ?? ''));
 
         return [
             ...$out,
             'merge' => true,
-            'summary' => mb_substr('Rozmiary: '.implode('; ', $labels), 0, B2bCatalogSync::VARIANT_SUMMARY_LIMIT),
+            'summary' => mb_substr($connectorSummary !== '' ? $connectorSummary : 'Rozmiary: '.implode('; ', $labels), 0, B2bCatalogSync::VARIANT_SUMMARY_LIMIT),
             'sku_to' => $skuTo,
             'sku_note' => $skuNote,
             'keep' => $keep,
@@ -379,6 +388,9 @@ final class B2bSizePriceMerger
                 ]),
             ]);
 
+            // pozycje przetargów na karcie jednego rozmiaru/koloru dostaną po scaleniu ten wiersz jako wariant oferty
+            $variantByItem = $this->itemVariants($account, $cardIds);
+
             // 1) to, czego mergeSizeCards nie przenosi, a kaskada skasowałaby z kartami łączonymi
             ProductVariant::query()->sizes()->whereIn('product_id', $dropIds)->update(['product_id' => $keepId]);
             $this->sizeMerge->moveSearchActions($keepId, $dropIds);
@@ -394,6 +406,7 @@ final class B2bSizePriceMerger
 
             // 3) slot konta = najniższy rozmiar (jak zapis synchronizacji), SKU = kod wyrobu
             $this->recomputeSlot($keep, $account);
+            $this->assignItemVariants($variantByItem);
             if ($plan['sku_to'] !== null) {
                 $payload = is_array($keep->enrichment_payload) ? $keep->enrichment_payload : [];
                 $payload['merged_size_skus'] = array_values(array_unique([
@@ -416,6 +429,49 @@ final class B2bSizePriceMerger
 
             return [...$plan, 'keep' => $keep];
         });
+    }
+
+    /**
+     * Pozycje przetargów bez wariantu, których produktem głównym jest karta z dokładnie jednym wierszem rozmiaru konta
+     * (karta jednego koloru 3M, karta rozbita według ceny) → ten wiersz. Liczone przed scaleniem, póki wiersze stoją
+     * na swoich kartach.
+     *
+     * @param  list<int>  $cardIds
+     * @return array<int, ProductVariant> id pozycji => wiersz
+     */
+    private function itemVariants(B2bAccount $account, array $cardIds): array
+    {
+        $rows = ProductVariant::query()->sizes()->active()->where('source', ProductSourcePrice::b2bKey((int) $account->id))
+            ->whereIn('product_id', $cardIds)->get()->groupBy('product_id');
+        $single = $rows->filter(static fn ($group): bool => $group->count() === 1)->map->first();
+        if ($single->isEmpty()) {
+            return [];
+        }
+        $out = [];
+        foreach (TenderItem::query()->whereIn('main_product_id', $single->keys()->all())->whereNull('main_variant_id')
+            ->get(['id', 'main_product_id']) as $item) {
+            $out[(int) $item->id] = $single[(int) $item->main_product_id];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Wariant oferty po scaleniu: pozycja stała na karcie tego jednego wiersza, więc to jest wyrób, który oferowała
+     * (cena oferty i marża liczone z jego ceny zostają prawdziwe). Źródło „auto” — handlowiec może zmienić.
+     *
+     * @param  array<int, ProductVariant>  $variantByItem
+     */
+    private function assignItemVariants(array $variantByItem): void
+    {
+        foreach ($variantByItem as $itemId => $variant) {
+            TenderItem::query()->whereKey($itemId)->whereNull('main_variant_id')->update([
+                'main_variant_id' => $variant->id,
+                'main_variant_label' => mb_substr((string) $variant->label, 0, 255),
+                'main_variant_sku' => $variant->sku !== null ? mb_substr((string) $variant->sku, 0, 255) : null,
+                'main_variant_source' => 'auto',
+            ]);
+        }
     }
 
     public const SYNC_RUNNING = 7301;

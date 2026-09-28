@@ -16,6 +16,7 @@ use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bCodeLoginSite;
 use App\Services\B2b\B2bDocumentSource;
 use App\Services\B2b\B2bFatalException;
+use App\Services\B2b\B2bGroupsSizes;
 use App\Services\B2b\B2bImageGallery;
 use App\Services\B2b\B2bListProgressAware;
 use App\Services\B2b\B2bManufacturerSite;
@@ -23,6 +24,7 @@ use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
+use App\Services\B2b\B2bSizePriceSource;
 use App\Services\B2b\MmmB2bClient;
 use App\Services\B2b\MmmB2bConnector;
 use GuzzleHttp\Exception\ConnectException;
@@ -601,9 +603,182 @@ final class MmmConnectorTest extends TestCase
         $this->assertSame('3M', MmmB2bConnector::label());
         $this->assertSame('order.3m.com', MmmB2bConnector::host());
         $this->assertSame('3M', MmmB2bConnector::ownBrand());
-        foreach ([B2bCodeLoginSite::class, B2bManufacturerSite::class, B2bShopFieldSource::class, B2bDocumentSource::class, B2bImageGallery::class, B2bListProgressAware::class, B2bRunSummaryAware::class] as $interface) {
+        foreach ([B2bCodeLoginSite::class, B2bManufacturerSite::class, B2bShopFieldSource::class, B2bDocumentSource::class, B2bImageGallery::class, B2bListProgressAware::class, B2bRunSummaryAware::class, B2bSizePriceSource::class] as $interface) {
             $this->assertInstanceOf($interface, $connector);
         }
+        // łączy tylko kolory — rozmiary 3M (6200 S/M/L) zostają osobnymi kartami, więc „Łączenie kart” musi móc je
+        // zaproponować jako rozmiary (CardMatchFinder, warunek 3 sygnału)
+        $this->assertNotInstanceOf(B2bGroupsSizes::class, $connector);
+    }
+
+    public function test_colour_variant_key_reads_the_colour_and_the_code_suffix_from_the_list_name(): void
+    {
+        $helmet = 'Hełm ochronny 3M™, wskaźnik Uvicator, pinlock, wentylowany, opaska przeciwpotna';
+        $this->assertSame([
+            'key' => mb_strtolower($helmet).'|G3000CUV',
+            'colour' => 'biały',
+            'code' => 'G3000CUV-VI',
+            'prefix' => $helmet,
+            'stem' => 'G3000CUV',
+        ], MmmB2bConnector::colourVariantKey($helmet.', biały, G3000CUV-VI'));
+        // ta sama grupa: inny kolor i końcówka kodu, także „o zwiększonej widzialności”
+        $key = MmmB2bConnector::colourVariantKey($helmet.', biały, G3000CUV-VI')['key'] ?? null;
+        $this->assertSame($key, MmmB2bConnector::colourVariantKey($helmet.', czerwony, G3000CUV-RD')['key'] ?? null);
+        $this->assertSame($key, MmmB2bConnector::colourVariantKey($helmet.', o zwiększonej widzialności, G3000CUV-GB')['key'] ?? null);
+        // kod z członem modelu przed kolorem (G3000NUV-10-GB) — rdzeń zachowuje człon modelu
+        $nuv = MmmB2bConnector::colourVariantKey('Hełm ochronny 3M™, wentylowany, pomarańczowy, G3000NUV-10-GB');
+        $this->assertSame(['pomarańczowy', 'G3000NUV-10-GB', 'G3000NUV-10'], [$nuv['colour'] ?? null, $nuv['code'] ?? null, $nuv['stem'] ?? null]);
+        $this->assertSame('jasnoniebieskie', MmmB2bConnector::colourVariantKey('Nauszniki 3M™, jasnoniebieskie, H510A-401-GU')['colour'] ?? null);
+
+        // kod bez końcówki koloru — inne modele (100V / 1000V), nie kolory
+        $this->assertNull(MmmB2bConnector::colourVariantKey('Hełm ochronny 3M™, biały, G3001MUV100V'));
+        $this->assertNull(MmmB2bConnector::colourVariantKey('Hełm ochronny 3M™, biały, G3001MUV1000V'));
+        // pokrywy SportTac to jedna grupa, czasze SportTac (inny początek nazwy) — inna
+        $green = MmmB2bConnector::colourVariantKey('3M™ PELTOR™ SportTac™ pokrywy wymienne, zielone, 210100-478-GN')['key'] ?? null;
+        $this->assertSame($green, MmmB2bConnector::colourVariantKey('3M™ PELTOR™ SportTac™ pokrywy wymienne, pomarańczowe, 210100-478-VI')['key'] ?? null);
+        $this->assertNotSame($green, MmmB2bConnector::colourVariantKey('Wymienne czasze 3M™ PELTOR™ SportTac™, czarne, 210100-478-SV')['key'] ?? null);
+        // inny początek przy tym samym rdzeniu kodu = inny wyrób
+        $this->assertNotSame($key, MmmB2bConnector::colourVariantKey('Hełm ochronny 3M™ ze skóry, wskaźnik Uvicator, biały, G3000CUV-VI')['key'] ?? null);
+        // bez członu koloru, kolor tylko w początku nazwy, kolor z dopiskiem, kod bez cyfry
+        $this->assertNull(MmmB2bConnector::colourVariantKey('Półmaska 3M 6200, rozmiar M'));
+        $this->assertNull(MmmB2bConnector::colourVariantKey('Filtr 3M™, P3, 6035-AB'));
+        $this->assertNull(MmmB2bConnector::colourVariantKey('Hełm ochronny 3M™ biały, wentylowany, G3000CUV-VI'));
+        $this->assertNull(MmmB2bConnector::colourVariantKey('Hełm ochronny 3M™, biały z logo, G3000CUV-VI'));
+        $this->assertNull(MmmB2bConnector::colourVariantKey('Hełm ochronny 3M™, biały, GCUV-VI'));
+        $this->assertNull(MmmB2bConnector::colourVariantKey('biały, G3000CUV-VI'));
+    }
+
+    public function test_colour_variants_of_one_product_become_one_card_with_a_price_per_colour(): void
+    {
+        $this->fakeSite();
+        $helmet = 'Hełm ochronny 3M™, wskaźnik Uvicator, pinlock, wentylowany, opaska przeciwpotna';
+        $this->colourCatalog([
+            ['7100000001', 'G3000CUV-VI', $helmet.', biały, G3000CUV-VI', '60,00'],
+            ['7000009701', '6200', 'Półmaska 3M 6200, rozmiar M', '24,54'],
+            ['7100000010', 'G3001MUV100V', 'Hełm ochronny 3M™, biały, G3001MUV100V', '70,00'],
+            ['7100000003', 'G3000CUV-RD', $helmet.', czerwony, G3000CUV-RD', '55,00'],
+            ['7100000011', 'G3001MUV1000V', 'Hełm ochronny 3M™, biały, G3001MUV1000V', '71,00'],
+            ['7100000020', '210100-478-SV', 'Wymienne czasze 3M™ PELTOR™ SportTac™, czarne, 210100-478-SV', '90,00'],
+            // G3000CUV-GB: numer katalogowy 3M bywa błędny — kod pozycji bierzemy z nazwy
+            ['7100000002', 'G3000CUV-XX', $helmet.', o zwiększonej widzialności, G3000CUV-GB', '55,00'],
+        ]);
+        $this->pdps['7100000002'] = ['mmm_id' => '7100000002', 'name' => 'Hełm G3000', 'description' => 'Hełm ze wskaźnikiem UV.', 'classified' => [
+            ['label' => 'Kolor produktu', 'type' => 'enum', 'value' => [['value' => 'Żółty']]],
+            ['label' => 'Normy', 'type' => 'text', 'value' => 'EN 397'],
+        ], 'packagingIdentificationDetails' => [['label' => 'EAN karton', 'value' => '04054596000000']]];
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        // pozycje spoza grup kolorów — jak dotąd i w kolejności listy; karta z kolorami po nich
+        $this->assertSame(
+            ['7000009701', '7100000010', '7100000011', '7100000020', '7100000002'],
+            array_map(static fn (B2bRemoteProduct $p): string => $p->remoteId, $products),
+        );
+        $this->assertSame(5, $connector->totalProducts());
+        $single = $products[0];
+        $this->assertSame(['7000009701', 'Półmaska 3M 6200, rozmiar M', null, [], null], [$single->sku, $single->name, $single->cardName, $single->members, $single->variantSummary]);
+        $this->assertSame(24.54, $connector->price($single)?->net);
+
+        $card = $products[4];
+        // najtańsza pozycja (remis 55,00 — niższy numer magazynowy) daje numer, nazwę ze źródła i cenę karty
+        $this->assertSame('7100000002', $card->sku);
+        $this->assertSame($helmet.', o zwiększonej widzialności, G3000CUV-GB', $card->name);
+        $this->assertSame($helmet.', G3000CUV', $card->cardName);
+        $this->assertNull($card->category);
+        $this->assertSame(MmmB2bClient::productUrl('7100000002'), $card->sourceUrl);
+        $this->assertSame('Kolory: biały (G3000CUV-VI); czerwony (G3000CUV-RD); o zwiększonej widzialności (G3000CUV-GB)', $card->variantSummary);
+        $this->assertSame(
+            [
+                ['7100000001', 'G3000CUV-VI', $helmet.', biały, G3000CUV-VI', 'biały', 60.0, 80.0],
+                ['7100000003', 'G3000CUV-RD', $helmet.', czerwony, G3000CUV-RD', 'czerwony', 55.0, 80.0],
+                ['7100000002', 'G3000CUV-GB', $helmet.', o zwiększonej widzialności, G3000CUV-GB', 'o zwiększonej widzialności', 55.0, 80.0],
+            ],
+            array_map(static fn (array $m): array => [$m['remote_id'], $m['sku'], $m['name'], $m['size'], $m['price']->net, $m['price']->base], $card->members),
+        );
+        $this->assertSame('PLN', $card->members[0]['price']->currency);
+        $this->assertSame(25.0, $card->members[0]['price']->discountPercent);
+        $this->assertSame(['order_min_qty' => 1.0, 'order_step_qty' => 1.0, 'order_unit' => 'szt', 'order_varies' => false], $card->members[1]['price']->order?->slotValues());
+        $this->assertSame(55.0, $connector->price($card)?->net);
+        // numery 3M każdej pozycji z jej kolorem
+        $this->assertContains([ProductIdentifier::TYPE_MANUFACTURER_CODE, 'G3000CUV-VI', '7100000001', 'biały', 'mmm_catalog_number'], self::identifierRows($card));
+        $this->assertContains([ProductIdentifier::TYPE_ALT_CODE, '7100000003', '7100000003', 'czerwony', 'mmm_id'], self::identifierRows($card));
+        $this->assertContains([ProductIdentifier::TYPE_MANUFACTURER_CODE, 'G3000CUV-XX', '7100000002', 'o zwiększonej widzialności', 'mmm_catalog_number'], self::identifierRows($card));
+        $this->assertCount(9, self::identifierRows($card));
+        // opis z karty pdp pozycji prowadzącej
+        $this->assertSame('Hełm ze wskaźnikiem UV.', $connector->description($card));
+        // tabelka bez numerów, kodów opakowań i koloru jednej pozycji — każdy kolor ma je w wierszu wariantu
+        $names = array_map(static fn ($f): string => $f->name, $connector->shopFields($card));
+        $this->assertContains('Normy', $names);
+        foreach (['Kolor produktu', 'Numer katalogowy 3M', 'Numer magazynowy 3M', 'EAN', 'EAN karton'] as $perPosition) {
+            $this->assertNotContains($perPosition, $names);
+        }
+        $this->assertStringContainsString('Warianty kolorystyczne 3M: 1 wyrobów z 3 pozycji', implode("\n", $connector->runSummary()));
+    }
+
+    public function test_colour_group_member_without_price_stays_a_single_card_and_the_rest_still_groups(): void
+    {
+        $this->fakeSite();
+        $helmet = 'Hełm ochronny 3M™, wentylowany';
+        $covers = '3M™ PELTOR™ SportTac™ pokrywy wymienne';
+        $this->colourCatalog([
+            ['7100000001', 'G3000CUV-VI', $helmet.', biały, G3000CUV-VI', '60,00'],
+            ['7100000002', 'G3000CUV-RD', $helmet.', czerwony, G3000CUV-RD', '61,00'],
+            ['7100000003', 'G3000CUV-GU', $helmet.', żółty, G3000CUV-GU', null],
+            ['7100000030', '210100-478-GN', $covers.', zielone, 210100-478-GN', '20,00'],
+            ['7100000031', '210100-478-VI', $covers.', pomarańczowe, 210100-478-VI', '20,00'],
+        ]);
+        // pokrywa pomarańczowa bez ceny z błędem paczki — zostaje jedna pozycja z ceną, więc bez karty z kolorami
+        $this->brokenPriceIds = ['7100000031'];
+        $connector = $this->connector();
+
+        $products = self::byId(iterator_to_array($connector->products(), false));
+
+        $this->assertSame(['7100000001', '7100000003', '7100000030', '7100000031'], array_map(static fn (B2bRemoteProduct $p): string => $p->remoteId, array_values($products)));
+        $this->assertSame(4, $connector->totalProducts());
+        $card = $products['7100000001'];
+        $this->assertSame(['7100000001', '7100000002'], array_column($card->members, 'remote_id'));
+        $this->assertSame('Kolory: biały (G3000CUV-VI); czerwony (G3000CUV-RD)', $card->variantSummary);
+        $this->assertSame(60.0, $connector->price($card)?->net);
+        // żółty bez ceny — osobna karta jak dotąd (bez ceny z powodem)
+        $yellow = $products['7100000003'];
+        $this->assertSame([[], null, null], [$yellow->members, $yellow->cardName, $connector->price($yellow)]);
+        $this->assertSame($helmet.', żółty, G3000CUV-GU', $yellow->name);
+        $this->assertSame([], $products['7100000030']->members);
+        $this->assertSame(20.0, $connector->price($products['7100000030'])?->net);
+        try {
+            $connector->price($products['7100000031']);
+            $this->fail('błąd ceny pozycji powinien wrócić z price()');
+        } catch (RuntimeException $e) {
+            $this->assertStringContainsString('ceny 3M nie zostały pobrane', $e->getMessage());
+        }
+        $summary = implode("\n", $connector->runSummary());
+        $this->assertStringContainsString('Warianty kolorystyczne 3M: 1 wyrobów z 2 pozycji', $summary);
+        $this->assertStringContainsString('sklep nie podaje ceny: 1, np. 7100000003', $summary);
+    }
+
+    public function test_repeated_colour_in_a_group_keeps_every_position_a_separate_card(): void
+    {
+        $this->fakeSite();
+        $helmet = 'Hełm ochronny 3M™, wentylowany';
+        // jak na żywo (G3000NUV-10-GB trzy razy): ten sam kolor dwa razy — nie wiadomo, który wiersz jest którym wyrobem
+        $this->colourCatalog([
+            ['7100000001', 'G3000NUV-10-BB', $helmet.', niebieski, G3000NUV-10-BB', '60,00'],
+            ['7100000002', 'G3000NUV-10-VI', $helmet.', biały, G3000NUV-10-VI', '60,00'],
+            ['7100000003', 'G3000NUV-10-GB', $helmet.', Biały, G3000NUV-10-GB', '60,00'],
+        ]);
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertSame(['7100000001', '7100000002', '7100000003'], array_map(static fn (B2bRemoteProduct $p): string => $p->remoteId, $products));
+        $this->assertSame(3, $connector->totalProducts());
+        foreach ($products as $product) {
+            $this->assertSame([[], null, null], [$product->members, $product->cardName, $product->variantSummary]);
+            $this->assertSame($product->remoteId, $product->sku);
+            $this->assertSame(60.0, $connector->price($product)?->net);
+        }
+        $this->assertStringNotContainsString('Warianty kolorystyczne', implode("\n", $connector->runSummary()));
     }
 
     // ---- pomocnicze ----
@@ -751,6 +926,21 @@ final class MmmConnectorTest extends TestCase
             'price' => ['listPrice' => $list, 'netPriceWithoutPromotion' => $value, 'pricePer' => $per, 'value' => $value, 'currency' => '', 'message' => ''],
             'minOrderQuantity' => ['unit' => $minUnit, 'value' => '1'],
         ];
+    }
+
+    /**
+     * Wyroby w kolejności listy, każdy za szt: cena konta za szt i katalogowa 80,00 zł; cena null = sklep nie podaje ceny.
+     *
+     * @param  list<array{0: string, 1: string, 2: string, 3: string|null}>  $rows  numer magazynowy, numer katalogowy, nazwa, cena
+     */
+    private function colourCatalog(array $rows): void
+    {
+        foreach ($rows as [$id, $catalog, $name, $net]) {
+            $this->items[] = self::item($id, $catalog, $name, 'EA', 'szt', 'CS', 'karton', '20');
+            $this->prices[$id] = $net !== null
+                ? self::price($net.' PLN / szt', '80,00 PLN / szt', '1 szt')
+                : ['isCanBuy' => false, 'price' => ['value' => '', 'listPrice' => '', 'pricePer' => '', 'message' => 'Brak ceny']];
+        }
     }
 
     /** Cztery wyroby (i jedna powtórka na liście): półmaska za szt, wkładki za parę, rozjazd jednostki, brak ceny. */
