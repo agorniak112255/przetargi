@@ -317,6 +317,48 @@ final class B2bMergeSizePricesCommandTest extends TestCase
         $this->assertSame('queued', MergeB2bSizePricesJob::state((int) $this->account->id)['status']);
     }
 
+    public function test_old_card_under_a_legacy_remote_id_joins_the_spread_and_is_merged(): void
+    {
+        // Protekt do 28.09.2026: pozycje bez members, inna cena = karta „numer / kolor” (tu fałszywy podział długości)
+        $single = fn (string $remoteId, float $price): B2bRemoteProduct => new B2bRemoteProduct(
+            remoteId: $remoteId, sku: $remoteId, name: 'Linka K1', raw: ['price' => $price, 'description' => self::DESCRIPTION], availability: 'Na stanie',
+        );
+        $this->connector->items = [$single('K1', 100.0), $single('K1 / biały', 120.0)];
+        $this->assertSame(2, $this->sync()['created']);
+        $main = Product::query()->where('sku', 'K1')->sole();
+        $fake = Product::query()->where('sku', 'K1 / biały')->sole();
+        $this->travel(5)->minutes();
+
+        // po zmianie: jeden wyrób, druga długość ma nowe remote_id i dawne w legacy_remote_id
+        $this->connector->items = [new B2bRemoteProduct(
+            remoteId: 'K1',
+            sku: 'K1',
+            name: 'Linka K1',
+            raw: ['price' => 100.0, 'description' => self::DESCRIPTION],
+            availability: 'Na stanie',
+            members: [
+                ['remote_id' => 'K1', 'sku' => 'K1', 'name' => 'Linka K1 1,4 m', 'size' => '1,4 m', 'price' => new B2bRemotePrice(net: 100.0)],
+                ['remote_id' => 'K1 ~p2', 'sku' => 'K1', 'name' => 'Linka K1 2 m', 'size' => '2 m', 'price' => new B2bRemotePrice(net: 120.0), 'legacy_remote_id' => 'K1 / biały'],
+            ],
+        )];
+        $after = $this->sync();
+        $this->assertSame([0, 0], [$after['created'], $after['prices_changed']], implode(' | ', $after['errors']));
+        $spread = B2bSyncRun::query()->findOrFail($after['sync_run_id'])->size_spread;
+        $this->assertSame([$main->id, $fake->id], $spread['groups'][0]['cards']);
+        $this->assertSame($fake->id, (int) B2bProductLink::query()->where('remote_id', 'K1 ~p2')->value('product_id'));
+        $this->assertSame(['2 m'], ProductVariant::query()->where('product_id', $fake->id)->pluck('label')->all());
+        $this->travel(5)->minutes();
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])
+            ->expectsOutputToContain('Scalono wyrobów: 1')
+            ->assertSuccessful();
+        $this->assertNull(Product::query()->find($fake->id));
+        $this->assertSame(['1,4 m', '2 m'], ProductVariant::query()->where('product_id', $main->id)->orderBy('sort_order')->pluck('label')->all());
+        $this->assertSame(['K1', 'K1 / biały', 'K1 ~p2'], B2bProductLink::query()->where('product_id', $main->id)->orderBy('remote_id')->pluck('remote_id')->all());
+        $this->assertSame('120.00', (string) ProductSourcePrice::query()->where('product_id', $main->id)->value('size_price_max'));
+        $this->cleanBackups();
+    }
+
     public function test_process_stops_at_the_deadline_and_resumes_from_the_offset(): void
     {
         $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);

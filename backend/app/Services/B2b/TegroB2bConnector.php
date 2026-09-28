@@ -18,9 +18,15 @@ use RuntimeException;
  *
  * Rozmiary jednego wyrobu są u Tegro osobnymi pozycjami („RĘKAWICE G-REX F09 PLUS 6” … „11”), a sklep sam
  * podaje, które należą do jednego wyrobu — pole Model („RĘKAWICE G-REX F09 PLUS”). Karta = jeden model w jednej
- * cenie i jednostce (decyzja użytkownika 15.09.2026: rozmiar z inną ceną = osobna karta; u Tegro 21.09.2026
- * dotyczy to HEAVY, ULTRA TEC i BASS). Scalamy tylko wtedy, gdy nazwa pozycji to dokładnie Model + spacja +
- * rozmiar — inaczej pozycja zostaje osobną kartą, bez zgadywania.
+ * walucie i jednostce, ze wszystkimi rozmiarami z ceną (decyzja użytkownika 28.09.2026: rozmiary w różnych cenach to
+ * jedna karta; u Tegro 21.09.2026 dotyczyło to HEAVY, ULTRA TEC i BASS). Rozmiar w innej jednostce albo walucie to
+ * nadal osobna karta — sprzedaż na sztuki i na opakowania to nie rozmiary jednej karty. Do 28.09.2026 (decyzja
+ * 15.09.2026) rozmiar w innej cenie był osobną kartą (kod i nazwa pozycji) — takie karty zostają, dopóki nie scali ich
+ * osobne polecenie (synchronizacja daje każdej jej rozmiary, B2bCatalogSync::syncMembersByCard). Scalamy tylko wtedy,
+ * gdy nazwa pozycji to dokładnie Model + spacja + rozmiar — inaczej pozycja zostaje osobną kartą, bez zgadywania.
+ * Pozycje (members) = rozmiary z ceną konta (PriceAfterDiscountNet) i ceną katalogową (RetailPriceNet w tej samej
+ * walucie) tego rozmiaru; cena karty = najniższa cena rozmiaru (raw['price'], price()), pozostałe — wiersze rozmiarów
+ * karty. SKU karty = kod Tegro najmniejszego rozmiaru (sklep nie ma kodu modelu), jak dotąd.
  *
  * Tegro nie jest producentem tych marek, więc łącznik nie jest B2bManufacturerSite: opis ze sklepu nie nadpisuje
  * opisu z witryny producenta, a normy trafiają do tabelki sklepu (B2bShopFieldSource), nie do norm producenta.
@@ -28,7 +34,7 @@ use RuntimeException;
  * Opis w sklepie ma 1–2 zdania, a treść wyrobu (poziomy norm, powłoka, wkładka, branże) jest w karcie katalogowej
  * PDF — dlatego B2bDescribesFromDatasheet: opis karty pisze model z tych dwóch źródeł (decyzja użytkownika 21.09.2026).
  */
-final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet, B2bDocumentSource, B2bGroupsSizes, B2bRunSummaryAware, B2bShopFieldSource
+final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet, B2bDocumentSource, B2bGroupsSizes, B2bRunSummaryAware, B2bShopFieldSource, B2bSizePriceSource
 {
     private const SHOP_SECTION = 'Parametry produktu';
 
@@ -74,8 +80,13 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
         $items = $this->client->products();
         $cards = self::group($items);
         $this->total = count($cards);
-        $groups = count(array_filter($cards, static fn (array $group): bool => count($group) > 1));
-        $this->summary = ['Lista Tegro: '.count($items).' pozycji → '.count($cards).' kart ('.$groups.' grup rozmiarów o tej samej cenie)'];
+        $groups = array_filter($cards, static fn (array $group): bool => count($group) > 1);
+        $multiPrice = count(array_filter($groups, static fn (array $group): bool => count(array_unique(array_map(
+            static fn (array $m): string => number_format((float) self::sizePrice($m['item'])?->net, 2, '.', ''),
+            $group,
+        ))) > 1));
+        $this->summary = ['Lista Tegro: '.count($items).' pozycji → '.count($cards).' kart ('.count($groups).' grup rozmiarów, w tym '
+            .$multiPrice.' z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)'];
 
         // bez adresu strony cennik i opis z API wchodzą, a tabelka parametrów i pliki PDF czekają na kolejny przebieg
         try {
@@ -116,11 +127,22 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
 
     public function price(B2bRemoteProduct $product): ?B2bRemotePrice
     {
-        $net = self::money($product->raw['price'] ?? null);
+        return self::sizePrice(['PriceAfterDiscountNet' => $product->raw['price'] ?? null, 'RetailPriceNet' => $product->raw['retail_price'] ?? null]);
+    }
+
+    /**
+     * Cena pozycji listy: cena konta (PriceAfterDiscountNet) i katalogowa (RetailPriceNet) tej samej pozycji; null =
+     * brak ceny konta.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private static function sizePrice(array $item): ?B2bRemotePrice
+    {
+        $net = self::money($item['PriceAfterDiscountNet'] ?? null);
         if ($net === null || $net['value'] <= 0 || $net['currency'] === '') {
             return null;
         }
-        $base = self::money($product->raw['retail_price'] ?? null);
+        $base = self::money($item['RetailPriceNet'] ?? null);
 
         return new B2bRemotePrice(
             net: $net['value'],
@@ -250,8 +272,9 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
     }
 
     /**
-     * Pozycje listy w karty: model + cena konta + jednostka. Karta w kolejności pierwszej pozycji na liście,
-     * pozycje karty wg rozmiaru.
+     * Pozycje listy w karty: model + waluta ceny konta + jednostka (cena rozmiaru nie dzieli karty, decyzja użytkownika
+     * 28.09.2026). Pozycja bez rozmiaru w nazwie albo bez ceny konta — osobna karta. Karta w kolejności pierwszej pozycji
+     * na liście, pozycje karty wg rozmiaru.
      *
      * @param  list<array<string, mixed>>  $items
      * @return list<list<array{item: array<string, mixed>, size: string|null}>>
@@ -268,8 +291,7 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
 
                 continue;
             }
-            $key = mb_strtolower($model).'|'.number_format($price['value'], 2, '.', '').'|'.$price['currency']
-                .'|'.mb_strtolower(self::text($item['Unit'] ?? null));
+            $key = mb_strtolower($model).'|'.$price['currency'].'|'.mb_strtolower(self::text($item['Unit'] ?? null));
             $groups[$key][] = ['item' => $item, 'size' => $size];
         }
 
@@ -310,6 +332,30 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
             'ean' => self::text($m['item']['Ean'] ?? null),
             'size' => $m['size'],
         ], $group);
+        // pozycje grupy mają cenę konta w jednej walucie (group()) — cena rozmiaru przy każdej
+        $members = [];
+        if ($grouped) {
+            foreach ($group as $index => $member) {
+                $members[] = array_filter([
+                    'remote_id' => $items[$index]['id'],
+                    'sku' => $items[$index]['sku'],
+                    'name' => $items[$index]['name'],
+                    'size' => (string) $items[$index]['size'],
+                    'price' => self::sizePrice($member['item']),
+                ], static fn (mixed $value): bool => $value !== null);
+            }
+        }
+        // cena karty = najtańszy rozmiar; remis ceny konta — rozmiar ze znaną ceną katalogową, z dwóch znanych niższa,
+        // dalej pierwszy (ta sama reguła co B2bCatalogSync::winsSizePriceTie)
+        $cheapest = $group[0]['item'];
+        foreach ($group as $member) {
+            $price = self::sizePrice($member['item']);
+            $best = self::sizePrice($cheapest);
+            if ($price !== null && $best !== null && ($price->net < $best->net - 0.0049
+                || (abs($price->net - $best->net) < 0.005 && B2bCatalogSync::winsSizePriceTie($price->base, $best->base)))) {
+                $cheapest = $member['item'];
+            }
+        }
 
         $attributes = [];
         foreach ((array) ($first['Attributes'] ?? []) as $attribute) {
@@ -344,8 +390,8 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
                     ->map(static fn (array $m): string => self::text($m['item']['Description'] ?? null))
                     ->first(static fn (string $d): bool => $d !== '') ?? ''),
                 'unit' => self::text($first['Unit'] ?? null),
-                'price' => $first['PriceAfterDiscountNet'] ?? null,
-                'retail_price' => $first['RetailPriceNet'] ?? null,
+                'price' => $cheapest['PriceAfterDiscountNet'] ?? null,
+                'retail_price' => $cheapest['RetailPriceNet'] ?? null,
                 'photo' => $photo,
                 'categories' => $categories,
                 'attributes' => $attributes,
@@ -355,9 +401,7 @@ final class TegroB2bConnector implements B2bConnector, B2bDescribesFromDatasheet
             variantSummary: $grouped
                 ? 'Rozmiary: '.implode('; ', array_map(static fn (array $i): string => $i['size'].' ('.$i['sku'].')', $items))
                 : null,
-            members: $grouped
-                ? array_map(static fn (array $i): array => ['remote_id' => $i['id'], 'sku' => $i['sku'], 'name' => $i['name']], $items)
-                : [],
+            members: $members,
             identifiers: self::identifiers($items),
         );
     }

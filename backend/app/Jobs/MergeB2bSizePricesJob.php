@@ -95,6 +95,7 @@ class MergeB2bSizePricesJob implements ShouldQueue
         $state['status'] = 'running';
         self::saveState($this->accountId, $state);
         $apply = ($state['mode'] ?? 'preview') === 'apply';
+        $base = $state;
         $result = $merger->process(
             $account,
             $spread['groups'],
@@ -105,18 +106,10 @@ class MergeB2bSizePricesJob implements ShouldQueue
             (int) ($state['to_merge'] ?? 0),
             $apply ? (string) $state['backup_path'] : null,
             microtime(true) + self::BUDGET_SECONDS,
+            // postęp w oknie co kilkadziesiąt wyrobów, nie dopiero po porcji (28.09.2026: 2 min na „0 / 2557”)
+            fn (array $partial) => self::saveState($this->accountId, self::merged($base, $partial)),
         );
-
-        foreach (['to_merge', 'merged', 'sizes', 'tenders', 'sku_renamed'] as $key) {
-            $state[$key] = (int) ($state[$key] ?? 0) + $result[$key];
-        }
-        $skipped = is_array($state['skipped'] ?? null) ? $state['skipped'] : [];
-        foreach ($result['skipped'] as $reason => $count) {
-            $skipped[$reason] = ($skipped[$reason] ?? 0) + $count;
-        }
-        $state['skipped'] = $skipped;
-        $state['lines'] = array_slice([...(is_array($state['lines'] ?? null) ? $state['lines'] : []), ...$result['lines']], -self::LINES_KEPT);
-        $state['processed'] = $result['offset'];
+        $state = self::merged($base, $result);
 
         if ($result['stop'] !== null) {
             $this->finish($state, 'failed', $result['stop']);
@@ -130,6 +123,29 @@ class MergeB2bSizePricesJob implements ShouldQueue
         }
         self::saveState($this->accountId, $state);
         self::dispatch($this->accountId, $this->token);
+    }
+
+    /**
+     * Stan po porcji (albo jej części): liczniki, powody i wiersze porcji dodane do stanu sprzed niej.
+     *
+     * @param  array<string, mixed>  $state
+     * @param  array<string, mixed>  $result  wynik B2bSizePriceMerger::process (także częściowy)
+     * @return array<string, mixed>
+     */
+    private static function merged(array $state, array $result): array
+    {
+        foreach (['to_merge', 'merged', 'sizes', 'tenders', 'sku_renamed'] as $key) {
+            $state[$key] = (int) ($state[$key] ?? 0) + (int) $result[$key];
+        }
+        $skipped = is_array($state['skipped'] ?? null) ? $state['skipped'] : [];
+        foreach ($result['skipped'] as $reason => $count) {
+            $skipped[$reason] = ($skipped[$reason] ?? 0) + $count;
+        }
+        $state['skipped'] = $skipped;
+        $state['lines'] = array_slice([...(is_array($state['lines'] ?? null) ? $state['lines'] : []), ...$result['lines']], -self::LINES_KEPT);
+        $state['processed'] = $result['offset'];
+
+        return $state;
     }
 
     public function failed(?Throwable $e): void

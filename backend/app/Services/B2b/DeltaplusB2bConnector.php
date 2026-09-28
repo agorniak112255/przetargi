@@ -25,17 +25,25 @@ use RuntimeException;
  *
  * Cena katalogowa: z „Cennika publicznego” (xlsx ze strony „Cenniki i promocje”), wiersz MODEL + KOLOR. catalog_price_net
  * idzie jako cena do sklepu (PrestaProductExportService), więc bez niej karta sprzedawałaby się po cenie zakupu. Bierzemy
- * ją tylko przy jednoznacznym trafieniu każdej wersji karty w jedną cenę wyższą od ceny konta; inaczej jej nie ma, a karta
- * trafia do podsumowania przebiegu.
+ * ją dla każdej wersji osobno — tylko przy jednoznacznym trafieniu jej modelu i koloru w jedną cenę wyższą od ceny konta
+ * tej wersji; inaczej wersja jej nie ma (nigdy cena innej wersji), a karta trafia do podsumowania przebiegu.
  *
- * Karta = wyrób w jednej cenie konta (decyzja użytkownika 15.09.2026, jak Raw-Pol): SKU = Ref. producenta dla największej
- * grupy cenowej, pozostałe grupy — referencja swojej pierwszej wersji. Pozycja (remote_id) = referencja wersji.
+ * Karta = strona modelu ze wszystkimi wersjami z ceną konta (kolory × rozmiary; decyzja użytkownika 28.09.2026: rozmiary
+ * w różnych cenach to jedna karta). Do 28.09.2026 (decyzja 15.09.2026) wersje w innej cenie były osobną kartą z SKU =
+ * referencja jej pierwszej wersji — takie karty zostają, dopóki nie scali ich osobne polecenie (synchronizacja daje każdej
+ * jej wersje, B2bCatalogSync::syncMembersByCard). SKU = Ref. producenta (bez Ref. — referencja pierwszej wersji).
+ * Pozycja (remote_id) = referencja wersji; pozycje (members) z własną ceną konta, katalogową i dostępnością; cena karty
+ * = najniższa cena wersji (raw['price'], price()), pozostałe ceny — wiersze rozmiarów karty. Tabela referencji nie ma
+ * kolumny jednostki (cena „jednostkowa”) i podaje ceny tylko w złotych, więc jednostka i waluta kart nie dzielą.
+ * Strona z kilkoma modelami w kolumnie Model tabeli referencji to osobna karta na model (pageCards). Wersja bez ceny
+ * konta nie trafia na kartę (podsumowanie przebiegu ją wymienia). Zdjęcia i pliki — w kolorach pozycji, które opisuje
+ * produkt podany łącznikowi (members albo remoteId), i bez koloru.
  *
  * Co bierzemy skąd na karcie: opis = krótki opis pod nazwą i „Zalety produktu” (proza producenta); linia skrótu i strefy
  * zakładki „Opis”, normy, sektory, zagrożenia i dane handlowe wersji — do tabelki sklepu (B2bShopFieldSource), nie do
  * opisu. Normy z poziomami także jako fakty producenta (B2bNormFactSource) — dosłownie („EN 388” → „2 1 2 1 X”).
  */
-final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bNormFactSource, B2bRunSummaryAware, B2bShopFieldSource
+final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bNormFactSource, B2bRunSummaryAware, B2bShopFieldSource, B2bSizePriceSource
 {
     private const BRAND = 'Delta Plus';
 
@@ -90,8 +98,11 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
     /** @var list<string> wyroby bez żadnej wersji z ceną konta */
     private array $withoutPrice = [];
 
-    /** @var list<string> karty bez jednoznacznej ceny z cennika publicznego */
+    /** @var list<string> karty z wersjami bez jednoznacznej ceny z cennika publicznego */
     private array $withoutBase = [];
+
+    /** @var list<string> wyroby z częścią wersji bez ceny konta (te wersje poza kartą) */
+    private array $versionsWithoutPrice = [];
 
     private int $pagesWithoutPriceColumn = 0;
 
@@ -141,6 +152,7 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
         $this->summary = [];
         $this->withoutPrice = [];
         $this->withoutBase = [];
+        $this->versionsWithoutPrice = [];
         $this->pagesWithoutPriceColumn = 0;
 
         $slugs = $this->listedSlugs();
@@ -150,20 +162,27 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
         $this->loadPublicPrices();
 
         $cards = 0;
-        $split = 0;
+        $multiPrice = 0;
+        $multiModel = 0;
         foreach ($slugs as $slug) {
             $products = $this->productsFor($slug);
             $cards += count($products);
-            $split += count($products) > 1 ? 1 : 0;
-            // wyrób w kilku cenach to kilka kart — licznik postępu rośnie, zanim je wydamy
+            $multiModel += count($products) > 1 ? 1 : 0;
+            // strona z kilkoma modelami to kilka kart — licznik postępu rośnie, zanim je wydamy
             $this->total += max(0, count($products) - 1);
-            yield from $products;
+            foreach ($products as $product) {
+                $multiPrice += self::hasSeveralPrices($product) ? 1 : 0;
+                yield $product;
+            }
         }
-        $this->summary[] = 'Pozycje: '.$cards.' ('.$split.' wyrobów w kilku cenach — wersja w innej cenie to osobna karta)';
+        $this->summary[] = 'Pozycje: '.$cards.' ('.$multiPrice.' z wersjami w różnych cenach — jedna karta, cena karty'
+            .' = najniższa cena wersji, ceny wersji w tabeli rozmiarów karty; '.$multiModel.' stron z kilkoma modelami'
+            .' — osobna karta na model)';
     }
 
     /**
-     * Liczba pozycji: na początku liczba wyrobów z list, powiększana o każdą dodatkową kartę wyrobu w kilku cenach.
+     * Liczba pozycji: na początku liczba wyrobów z list, powiększana o każdą dodatkową kartę strony z kilkoma modelami
+     * (kolumna Model tabeli referencji).
      */
     public function totalProducts(): int
     {
@@ -175,6 +194,9 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
         $lines = $this->summary;
         if ($this->withoutPrice !== []) {
             $lines[] = 'Bez ceny konta: '.self::listing($this->withoutPrice).' (pominięte)';
+        }
+        if ($this->versionsWithoutPrice !== []) {
+            $lines[] = 'Wyroby z wersjami bez ceny konta (te wersje poza kartami): '.self::listing($this->versionsWithoutPrice);
         }
         if ($this->withoutBase !== []) {
             $lines[] = 'Bez ceny katalogowej z cennika publicznego (cena katalogowa = cena konta): '.self::listing($this->withoutBase);
@@ -333,13 +355,15 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
     }
 
     /**
+     * Pliki strony w kolorach pozycji karty (positionColorCodes) i pliki bez koloru.
+     *
      * @return list<B2bRemoteDocument>
      */
     public function documents(B2bRemoteProduct $product): array
     {
         return array_map(
             static fn (array $file): B2bRemoteDocument => new B2bRemoteDocument($file['title'], $file['url'], $file['kind']),
-            $product->raw['documents'] ?? [],
+            self::forColors($product->raw['documents'] ?? [], self::positionColorCodes($product)),
         );
     }
 
@@ -354,11 +378,41 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
     }
 
     /**
+     * Zdjęcia galerii w kolorach pozycji karty (positionColorCodes) i zdjęcia bez koloru, w kolejności strony.
+     *
      * @return list<string>
      */
     public function imageUrls(B2bRemoteProduct $product): array
     {
-        return $product->raw['image_urls'] ?? [];
+        return array_column(self::forColors($product->raw['images'] ?? [], self::positionColorCodes($product)), 'url');
+    }
+
+    /**
+     * Kody kolorów („c218”) pozycji, które opisuje ten produkt: members (grupa), bez nich — pozycja remoteId. Liczone
+     * z produktu, nie z całej strony: dawna karta z podziału według ceny dostaje od synchronizacji tylko swoje pozycje
+     * (B2bCatalogSync::syncMembersByCard), więc nie może dostać zdjęć i plików kolorów innej karty. null — kolor którejś
+     * pozycji nieznany: bez filtrowania (jak dotąd).
+     *
+     * @return list<string>|null
+     */
+    private static function positionColorCodes(B2bRemoteProduct $product): ?array
+    {
+        $refs = $product->members !== []
+            ? array_map(static fn (array $member): string => (string) ($member['remote_id'] ?? ''), $product->members)
+            : [$product->remoteId];
+        $versionColors = is_array($product->raw['version_colors'] ?? null) ? $product->raw['version_colors'] : [];
+        $colors = is_array($product->raw['colors'] ?? null) ? $product->raw['colors'] : [];
+        $codes = [];
+        foreach ($refs as $ref) {
+            $color = $versionColors[$ref] ?? null;
+            $code = is_string($color) ? ($colors[mb_strtolower($color)] ?? null) : null;
+            if ($code === null) {
+                return null;
+            }
+            $codes[$code] = $code;
+        }
+
+        return array_values($codes);
     }
 
     public function imageAt(string $url): ?B2bRemoteImage
@@ -472,34 +526,48 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
     }
 
     /**
-     * Wersje z ceną konta w karty: jedna karta na cenę; SKU — patrz opis klasy.
+     * Wersje z ceną konta w karty strony: jedna karta na model z kolumny Model tabeli referencji, wersje w różnych
+     * cenach na tej samej karcie (decyzja użytkownika 28.09.2026); [] gdy żadna wersja nie ma ceny. Model porównywany
+     * bez wielkości liter i nadmiarowych odstępów (jak klucz cennika); wersja z pustą komórką Model należy do modelu
+     * najczęstszego na stronie. Karta główna — z wersją, której referencja jest równa Ref. strony („22180”; inaczej ta
+     * referencja trafiłaby jako SKU na drugą kartę), dalej model o nazwie z h1, dalej pierwszy w tabeli; dostaje SKU =
+     * Ref. (bez Ref. — referencja pierwszej wersji), pozostałe — referencję swojej pierwszej wersji.
      *
-     * @param  array{ref: string, versions: list<array<string, mixed>>}  $page
-     * @return list<array{sku: string, versions: list<array<string, mixed>>}>
+     * @param  array{ref: string, name?: string, versions: list<array<string, mixed>>}  $page
+     * @return list<array{sku: string, model: string, main: bool, versions: non-empty-list<array<string, mixed>>}>
      */
-    public static function priceGroups(array $page): array
+    public static function pageCards(array $page): array
     {
-        $groups = [];
-        foreach ($page['versions'] as $version) {
-            if ($version['price'] !== null) {
-                $groups[sprintf('%.4F', $version['price'])][] = $version;
+        $versions = array_values(array_filter($page['versions'], static fn (array $version): bool => $version['price'] !== null));
+        if ($versions === []) {
+            return [];
+        }
+        $modelKey = static fn (array $version): string => mb_strtoupper(self::clean((string) ($version['model'] ?? '')));
+        $counts = [];
+        foreach ($versions as $version) {
+            $key = $modelKey($version);
+            if ($key !== '') {
+                $counts[$key] = ($counts[$key] ?? 0) + 1;
             }
         }
-        if ($groups === []) {
-            return [];
+        // najczęstszy model (remis — pierwszy w tabeli: arsort zachowuje kolejność równych)
+        arsort($counts);
+        $fallback = (string) (array_key_first($counts) ?? '');
+
+        $groups = [];
+        foreach ($versions as $version) {
+            $key = $modelKey($version);
+            $groups['#'.($key !== '' ? $key : $fallback)][] = $version;
         }
 
         $main = array_key_first($groups);
-        foreach ($groups as $key => $versions) {
-            if (count($versions) > count($groups[$main])) {
-                $main = $key;
-            }
+        $byName = '#'.mb_strtoupper(self::clean((string) ($page['name'] ?? '')));
+        if (isset($groups[$byName])) {
+            $main = $byName;
         }
-        // Referencja wersji bywa równa Ref. („22180”): Ref. dostaje grupa z tą wersją, bo inna grupa wzięłaby jej
-        // referencję jako własne SKU i dwie karty wyrobu miałyby ten sam kod.
         if ($page['ref'] !== '') {
-            foreach ($groups as $key => $versions) {
-                foreach ($versions as $version) {
+            foreach ($groups as $key => $group) {
+                foreach ($group as $version) {
                     if (strcasecmp($version['ref'], $page['ref']) === 0) {
                         $main = $key;
                     }
@@ -508,9 +576,17 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
         }
 
         $cards = [];
-        foreach ($groups as $key => $versions) {
-            $sku = $key === $main && $page['ref'] !== '' ? $page['ref'] : $versions[0]['ref'];
-            $cards[] = ['sku' => $sku, 'versions' => $versions];
+        foreach ($groups as $key => $group) {
+            $cards[] = [
+                'sku' => $key === $main && $page['ref'] !== '' ? $page['ref'] : $group[0]['ref'],
+                // model dosłownie z tabeli (pierwsza wersja z wypełnioną komórką)
+                'model' => (string) (array_values(array_filter(
+                    array_map(static fn (array $v): string => self::clean((string) ($v['model'] ?? '')), $group),
+                    static fn (string $m): bool => $m !== '',
+                ))[0] ?? ''),
+                'main' => $key === $main,
+                'versions' => $group,
+            ];
         }
 
         return $cards;
@@ -644,7 +720,7 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
     }
 
     /**
-     * Pozycje z jednej strony wyrobu: karta na każdą cenę albo jedna pozycja pominięta z powodem; [] gdy wyrób nie ma
+     * Karty z jednej strony wyrobu (jedna na model) albo jedna pozycja pominięta z powodem; [] gdy wyrób nie ma
      * żadnej wersji z ceną (liczony w podsumowaniu).
      *
      * @return list<B2bRemoteProduct>
@@ -680,37 +756,52 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
         }
         $this->pagesWithoutPriceColumn = 0;
 
-        $groups = self::priceGroups($page);
+        $groups = self::pageCards($page);
         if ($groups === []) {
             $this->withoutPrice[] = $page['ref'] !== '' ? $page['ref'] : $slug;
 
             return [];
         }
+        if (array_sum(array_map(static fn (array $g): int => count($g['versions']), $groups)) < count($page['versions'])) {
+            $this->versionsWithoutPrice[] = array_values(array_filter($groups, static fn (array $g): bool => $g['main']))[0]['sku'];
+        }
 
-        return array_map(fn (array $group): B2bRemoteProduct => $this->productFor($slug, $page, $group), $groups);
+        return array_map(fn (array $group): B2bRemoteProduct => $this->cardFor($slug, $page, $group), $groups);
     }
 
     /**
      * @param  array<string, mixed>  $page
-     * @param  array{sku: string, versions: list<array<string, mixed>>}  $group
+     * @param  array{sku: string, model: string, main: bool, versions: non-empty-list<array<string, mixed>>}  $group
      */
-    private function productFor(string $slug, array $page, array $group): B2bRemoteProduct
+    private function cardFor(string $slug, array $page, array $group): B2bRemoteProduct
     {
         $versions = $group['versions'];
         $first = $versions[0];
-        $name = self::cardName($page);
-        $base = $this->basePrice($page, $versions);
-        if ($base === null) {
-            $this->withoutBase[] = $group['sku'];
-        }
-        $colors = self::groupColorCodes($page['colors'], $versions);
+        // karta innego modelu ze strony — nazwa z jej modelu (kolumna Model), Ref. strony opisuje model główny
+        $name = self::cardName($group['main'] || $group['model'] === '' ? $page : [...$page, 'name' => $group['model']]);
 
-        $items = array_map(static fn (array $version): array => [
-            'ref' => $version['ref'],
-            'label' => trim($version['color'].' '.$version['size']),
-            'availability' => $version['availability'],
-        ], $versions);
+        $items = [];
+        $withoutBase = 0;
+        foreach ($versions as $version) {
+            $net = round((float) $version['price'], 2);
+            $base = $this->basePrice($page, $version, $group['main']);
+            $withoutBase += $base === null ? 1 : 0;
+            $items[] = [
+                'ref' => $version['ref'],
+                'label' => trim($version['color'].' '.$version['size']),
+                'availability' => $version['availability'],
+                'price' => new B2bRemotePrice(
+                    net: $net,
+                    base: $base,
+                    discountPercent: $base !== null ? round((1 - $net / $base) * 100, 2) : 0.0,
+                ),
+            ];
+        }
+        if ($withoutBase > 0) {
+            $this->withoutBase[] = $group['sku'].($withoutBase < count($items) ? ' ('.$withoutBase.' z '.count($items).' wersji)' : '');
+        }
         $labelled = array_values(array_filter($items, static fn (array $item): bool => $item['label'] !== ''));
+        $cheapest = self::cheapest($items);
 
         return new B2bRemoteProduct(
             remoteId: $first['ref'],
@@ -720,11 +811,13 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
             sourceUrl: DeltaplusB2bClient::productUrl($slug),
             raw: [
                 'status' => 'ok',
-                'price' => $first['price'],
-                'base_price' => $base,
+                // cena karty = najtańsza wersja z jej własną ceną katalogową (B2bCatalogSync liczy ją też
+                // z members[].price); ceny pozostałych wersji — w members
+                'price' => $cheapest->net,
+                'base_price' => $cheapest->base,
                 'description' => self::prose($page),
                 'headline' => $page['headline'],
-                'ref_source' => $page['ref_source'],
+                'ref_source' => $group['main'] ? $page['ref_source'] : '',
                 'zones' => $page['zones'],
                 'ce' => $page['ce'],
                 'norms' => $page['norms'],
@@ -732,39 +825,48 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
                 'hazards' => $page['hazards'],
                 'versions' => $versions,
                 'price_note' => $page['price_note'],
-                'documents' => self::forColors($page['documents'], $colors),
-                'image_urls' => array_column(self::forColors($page['images'], $colors), 'url'),
+                // pliki i zdjęcia całej strony z kolorami; documents() i imageUrls() biorą kolory pozycji produktu
+                'documents' => $page['documents'],
+                'images' => $page['images'],
+                'colors' => $page['colors'],
+                'version_colors' => array_column($versions, 'color', 'ref'),
             ],
             availability: self::availabilityText($items),
             variantSummary: $labelled !== []
                 ? 'Wersje: '.implode('; ', array_map(static fn (array $item): string => $item['label'].' ('.$item['ref'].')', $labelled))
                 : null,
+            // wyrób z jedną wersją — pozycja pojedyncza (cena z price()); kilka wersji — każda z własną ceną
             members: count($versions) > 1
-                ? array_map(static fn (array $item): array => [
+                ? array_map(static fn (array $item): array => array_filter([
                     'remote_id' => $item['ref'],
                     'sku' => $item['ref'],
                     'name' => trim($name.' '.$item['label']),
-                ], $items)
+                    'availability' => $item['availability'],
+                    // kolor i rozmiar wersji dosłownie (etykieta wiersza rozmiaru); bez nich — referencja
+                    'size' => $item['label'],
+                    'price' => $item['price'],
+                ], static fn (mixed $value): bool => $value !== ''), $items)
                 : [],
-            identifiers: self::identifiers($page, $versions),
+            identifiers: self::identifiers($group['main'] ? $page['ref_source'] : '', $versions),
         );
     }
 
     /**
      * Identyfikatory karty dosłownie ze strony: Ref. wyrobu (model bez koloru i rozmiaru, bywa z „_” na końcu) dla
-     * całej karty, a dla każdej wersji (pozycja = jej referencja) referencja jako kod producenta — witryna jest
+     * karty głównego modelu strony ($modelRef; karta innego modelu z kolumny Model go nie dostaje — Ref. jej nie
+     * opisuje), a dla każdej wersji (pozycja = jej referencja) referencja jako kod producenta — witryna jest
      * producenta i wydaje tylko wyroby Delta Plus — oraz EAN 13 sztuki i kod kartonu (GTIN opakowania zbiorczego).
-     * SKU karty nie jest identyfikatorem: przy kilku cenach to referencja wybrana przez nas.
+     * SKU karty nie jest identyfikatorem: bez Ref., dla innego modelu strony (i na dawnych kartach wersji w innej
+     * cenie) to referencja wybrana przez nas.
      *
-     * @param  array<string, mixed>  $page
      * @param  list<array<string, mixed>>  $versions
      * @return list<B2bRemoteIdentifier>
      */
-    private static function identifiers(array $page, array $versions): array
+    private static function identifiers(string $modelRef, array $versions): array
     {
         $out = [];
-        if ($page['ref_source'] !== '') {
-            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MODEL_CODE, value: $page['ref_source'], field: 'Ref.');
+        if ($modelRef !== '') {
+            $out[] = new B2bRemoteIdentifier(type: ProductIdentifier::TYPE_MODEL_CODE, value: $modelRef, field: 'Ref.');
         }
         foreach ($versions as $version) {
             $label = trim($version['color'].' '.$version['size']);
@@ -818,57 +920,69 @@ final class DeltaplusB2bConnector implements B2bConnector, B2bDocumentSource, B2
     }
 
     /**
-     * Cena z cennika publicznego: każda wersja karty musi trafić (model z h1 albo z kolumny Model tabeli + kolor)
-     * i wszystkie trafienia muszą dać jedną cenę wyższą od ceny konta. Inaczej null — cennik nie rozstrzyga.
+     * Cena wersji z cennika publicznego: wersja musi trafić (model z h1 albo z kolumny Model tabeli + jej kolor), a jej
+     * trafienia dać jedną cenę wyższą od ceny konta tej wersji. Inaczej null — cennik nie rozstrzyga (bez sięgania po
+     * cenę innej wersji). Wersja innego modelu strony ($main false) — tylko po swoim modelu z tabeli: h1 opisuje model
+     * główny, jego cena nie jest ceną innego modelu.
      *
      * @param  array<string, mixed>  $page
-     * @param  list<array<string, mixed>>  $versions
+     * @param  array<string, mixed>  $version
      */
-    private function basePrice(array $page, array $versions): ?float
+    private function basePrice(array $page, array $version, bool $main): ?float
     {
         if ($this->publicPrices === []) {
             return null;
         }
+        $prices = ($main ? $this->publicPrices[self::priceKey($page['name'], $version['color'])] ?? null : null)
+            ?? $this->publicPrices[self::priceKey($version['model'], $version['color'])]
+            ?? null;
+        if ($prices === null) {
+            return null;
+        }
         $found = [];
-        foreach ($versions as $version) {
-            $prices = $this->publicPrices[self::priceKey($page['name'], $version['color'])]
-                ?? $this->publicPrices[self::priceKey($version['model'], $version['color'])]
-                ?? null;
-            if ($prices === null) {
-                return null;
-            }
-            foreach ($prices as $price) {
-                $found[sprintf('%.2F', $price)] = $price;
-            }
+        foreach ($prices as $price) {
+            $found[sprintf('%.2F', $price)] = $price;
         }
         if (count($found) !== 1) {
             return null;
         }
         $base = reset($found);
 
-        return $base > (float) $versions[0]['price'] ? $base : null;
+        return $base > round((float) $version['price'], 2) ? $base : null;
     }
 
     /**
-     * Kody kolorów wersji karty („c218”) z pól wyboru koloru; null, gdy któregoś koloru nie da się zmapować —
-     * wtedy zdjęć i plików nie filtrujemy.
+     * Najtańsza wersja karty, ta sama reguła co w B2bCatalogSync::sizePricing: remis ceny konta rozstrzyga
+     * B2bCatalogSync::winsSizePriceTie — wygrywa wersja ZE znaną ceną katalogową, z dwóch znanych niższa, dalej
+     * pierwsza na stronie.
      *
-     * @param  array<string, string>  $colors  nazwa koloru (małe litery) → kod
-     * @param  list<array<string, mixed>>  $versions
-     * @return list<string>|null
+     * @param  non-empty-list<array{price: B2bRemotePrice}>  $items
      */
-    private static function groupColorCodes(array $colors, array $versions): ?array
+    private static function cheapest(array $items): B2bRemotePrice
     {
-        $codes = [];
-        foreach ($versions as $version) {
-            $code = $colors[mb_strtolower($version['color'])] ?? null;
-            if ($code === null) {
-                return null;
+        $cheapest = $items[0]['price'];
+        foreach ($items as $item) {
+            $price = $item['price'];
+            if ($price->net < $cheapest->net - 0.0049
+                || (abs($price->net - $cheapest->net) < 0.005 && B2bCatalogSync::winsSizePriceTie($price->base, $cheapest->base))) {
+                $cheapest = $price;
             }
-            $codes[$code] = $code;
         }
 
-        return array_values($codes);
+        return $cheapest;
+    }
+
+    /** Wersje karty w różnych cenach konta (do podsumowania przebiegu). */
+    private static function hasSeveralPrices(B2bRemoteProduct $product): bool
+    {
+        $nets = [];
+        foreach ($product->members as $member) {
+            if (($member['price'] ?? null) instanceof B2bRemotePrice) {
+                $nets[sprintf('%.2F', $member['price']->net)] = true;
+            }
+        }
+
+        return count($nets) > 1;
     }
 
     /**

@@ -12,6 +12,7 @@ use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
@@ -56,6 +57,9 @@ final class RawpolConnectorTest extends TestCase
 
     /** @var list<list<string>> kody wyrobów w kolejnych zapytaniach o ceny */
     private array $priceRequests = [];
+
+    /** @var list<string> numery wersji, których ceny serwis nie podaje */
+    private array $withoutPriceRefs = [];
 
     public function test_login_sends_the_sha1_of_the_utf16_password_in_the_body_field(): void
     {
@@ -105,17 +109,99 @@ final class RawpolConnectorTest extends TestCase
         $this->assertSame('WS', $products['ox-test']['versions'][0]['color']);
     }
 
-    public function test_versions_in_one_price_are_one_card_the_largest_group_gets_the_product_code(): void
+    /**
+     * Do 28.09.2026 (decyzja 15.09.2026) wersje w dwóch cenach były dwiema kartami („OX-TEST_WS7” za 1,02 i „OX-TEST”
+     * za 1,06). Od decyzji użytkownika 28.09.2026 to jedna karta z kodem wyrobu; osobną kartą zostaje tylko wersja
+     * sprzedawana w innej jednostce (para i opakowanie to nie rozmiary jednego wyrobu) — kod wyrobu dostaje wtedy
+     * największa grupa, pozostałe symbol swojej pierwszej wersji (SKU karty jest unikalne).
+     */
+    public function test_versions_in_different_prices_are_one_card_with_the_product_code_and_other_units_stay_separate(): void
     {
         $product = RawpolB2bConnector::listedProducts(self::coreList())['products'][1];
+        $dynamic = self::dynamic()['ox-test'];
 
-        $cards = RawpolB2bConnector::priceGroups($product, self::dynamic()['ox-test']);
+        $cards = RawpolB2bConnector::unitGroups($product, $dynamic);
 
-        $this->assertSame(['OX-TEST_WS7', 'OX-TEST'], array_column($cards, 'sku'));
+        $this->assertSame(['OX-TEST'], array_column($cards, 'sku'));
+        $this->assertSame(['OX-TEST_WS7', 'OX-TEST_BS7', 'OX-TEST_BS8'], array_column($cards[0]['versions'], 'symbol'));
+        $this->assertSame([1.02, 1.06, 1.06], array_column($cards[0]['versions'], 'price'));
+
+        // ta sama wersja w innej jednostce sprzedaży — osobna karta
+        $dynamic['wersje']['2003']['jednostka'] = 'opak.';
+        $cards = RawpolB2bConnector::unitGroups($product, $dynamic);
+        $this->assertSame([['OX-TEST_WS7', 'opak.'], ['OX-TEST', 'para']], array_map(static fn (array $c): array => [$c['sku'], $c['unit']], $cards));
         $this->assertSame(['OX-TEST_WS7'], array_column($cards[0]['versions'], 'symbol'));
         $this->assertSame(['OX-TEST_BS7', 'OX-TEST_BS8'], array_column($cards[1]['versions'], 'symbol'));
+
+        // ta sama jednostka w innej pisowni („Para”, „para.”) i wersja bez jednostki — jedna karta; jednostka karty —
+        // pierwsza podana dosłownie
+        $spelled = self::dynamic()['ox-test'];
+        $spelled['wersje']['2001']['jednostka'] = ' Para ';
+        $spelled['wersje']['2002']['jednostka'] = 'para.';
+        $spelled['wersje']['2003']['jednostka'] = '';
+        $cards = RawpolB2bConnector::unitGroups($product, $spelled);
+        $this->assertSame([['OX-TEST', 'Para', 3]], array_map(static fn (array $c): array => [$c['sku'], $c['unit'], count($c['versions'])], $cards));
+        // wersja bez jednostki należy do najczęstszej jednostki wyrobu, różne jednostki zostają osobno
+        $spelled['wersje']['2001']['jednostka'] = 'szt';
+        $spelled['wersje']['2002']['jednostka'] = 'kpl.';
+        $cards = RawpolB2bConnector::unitGroups($product, $spelled);
+        $this->assertSame(
+            [['OX-TEST', 'szt', ['OX-TEST_WS7', 'OX-TEST_BS7']], ['OX-TEST_BS8', 'kpl.', ['OX-TEST_BS8']]],
+            array_map(static fn (array $c): array => [$c['sku'], $c['unit'], array_column($c['versions'], 'symbol')], $cards),
+        );
+
         // wersja bez ceny konta nie trafia do żadnej karty
-        $this->assertSame([], RawpolB2bConnector::priceGroups($product, ['wersje' => []]));
+        $withoutBs8 = self::dynamic()['ox-test'];
+        unset($withoutBs8['wersje']['2002']);
+        $this->assertSame(['OX-TEST_WS7', 'OX-TEST_BS7'], array_column(RawpolB2bConnector::unitGroups($product, $withoutBs8)[0]['versions'], 'symbol'));
+        $this->assertSame([], RawpolB2bConnector::unitGroups($product, ['wersje' => []]));
+    }
+
+    /**
+     * Wersje w dwóch cenach: jedna karta, cena każdej wersji (konta i katalogowa tej wersji — nigdy katalogowa innej)
+     * przy jej pozycji; cena karty (price()) = najtańsza wersja z jej własną ceną katalogową.
+     */
+    public function test_product_with_versions_in_two_prices_is_one_card_with_version_prices_and_the_lowest_card_price(): void
+    {
+        $this->fakeSite();
+        $connector = $this->connector();
+        $products = $this->productsBySku($connector);
+
+        $card = $products['OX-TEST'];
+        $this->assertSame('OX-TEST_WS7', $card->remoteId);
+        $this->assertSame(
+            [
+                ['OX-TEST_WS7', 'biało-szary 7', 'Produkt dostępny', 1.02, null, 0.0, 'PLN'],
+                ['OX-TEST_BS7', 'czarno-szary 7', 'Produkt dostępny', 1.06, 1.51, 29.8, 'PLN'],
+                ['OX-TEST_BS8', 'czarno-szary 8', 'Produkt dostępny', 1.06, 1.51, 29.8, 'PLN'],
+            ],
+            array_map(static fn (array $m): array => [
+                $m['remote_id'], $m['size'] ?? null, $m['availability'] ?? null,
+                $m['price']->net, $m['price']->base, $m['price']->discountPercent, $m['price']->currency,
+            ], $card->members),
+        );
+        $price = $connector->price($card);
+        $this->assertSame(1.02, $price->net);
+        // najtańsza wersja nie ma ceny katalogowej — karta nie bierze katalogowej droższej wersji
+        $this->assertNull($price->base);
+        $this->assertSame('Wersje: biało-szary 7 (OX-TEST_WS7); czarno-szary 7 (OX-TEST_BS7); czarno-szary 8 (OX-TEST_BS8)', $card->variantSummary);
+        $this->assertSame(4, $connector->totalProducts());
+        $this->assertStringContainsString(
+            'Karty: 4 (1 z wersjami w różnych cenach — jedna karta, cena karty = najniższa cena wersji',
+            implode("\n", $connector->runSummary()),
+        );
+    }
+
+    public function test_versions_without_account_price_stay_off_the_card_and_are_named_in_the_run_summary(): void
+    {
+        $this->withoutPriceRefs = ['2002'];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $card = $this->productsBySku($connector)['OX-TEST'];
+
+        $this->assertSame(['OX-TEST_WS7', 'OX-TEST_BS7'], array_column($card->members, 'remote_id'));
+        $this->assertContains('Wyroby z wersjami bez ceny konta (te wersje poza kartami): 1, np. OX-TEST', $connector->runSummary());
     }
 
     public function test_products_carry_the_account_price_brand_description_norms_and_availability_from_the_site(): void
@@ -123,7 +209,8 @@ final class RawpolConnectorTest extends TestCase
         $this->fakeSite();
         $products = $this->productsBySku($this->connector());
 
-        $this->assertSame(['RTEST', 'OX-TEST_WS7', 'OX-TEST', 'ZZ-TEST', 'X-BEZ-MARKI'], array_keys($products));
+        // OX-TEST: wersje w dwóch cenach — jedna karta (decyzja użytkownika 28.09.2026)
+        $this->assertSame(['RTEST', 'OX-TEST', 'ZZ-TEST', 'X-BEZ-MARKI'], array_keys($products));
         $connector = $this->connector();
         $rtest = $products['RTEST'];
         $this->assertSame('RTESTS', $rtest->remoteId);
@@ -138,6 +225,11 @@ final class RawpolConnectorTest extends TestCase
         $this->assertSame("Rękawice testowe RTEST.\n- wykonane z nitrylu\n- pakowane po 100 szt.", $connector->description($rtest));
         $this->assertSame('Wersje: niebieski s (RTESTS); niebieski m (RTESTM); niebieski l (RTESTL)', $rtest->variantSummary);
         $this->assertSame(['RTESTS', 'RTESTM', 'RTESTL'], array_column($rtest->members, 'remote_id'));
+        // wersje w jednej cenie — każda i tak z własną ceną konta i katalogową
+        $this->assertSame(
+            [['niebieski s', 12.7, 18.71], ['niebieski m', 12.7, 18.71], ['niebieski l', 12.7, 18.71]],
+            array_map(static fn (array $m): array => [$m['size'], $m['price']->net, $m['price']->base], $rtest->members),
+        );
         $this->assertSame(
             'RTESTS: Produkt dostępny; RTESTM: Produkt chwilowo niedostępny, czas realizacji 14-21 dni; RTESTL: Produkt dostępny',
             $rtest->availability,
@@ -199,13 +291,16 @@ final class RawpolConnectorTest extends TestCase
             ['source_code', 'RTESTL', 'RTESTL', 'niebieski l', 'Symbol'],
             ['ean', '5900000000013', 'RTESTL', 'niebieski l', 'EAN'],
         ], $identifiers($products['RTEST']));
-        // wyrób w dwóch cenach: kod wyrobu także na karcie wersji w innej cenie (jej SKU to symbol wersji)
+        // wyrób w dwóch cenach — jedna karta: kod wyrobu, symbol i EAN każdej wersji (w obu cenach)
         $this->assertSame([
             ['model_code', 'ox-test', null, null, 'Kod wyrobu'],
             ['source_code', 'OX-TEST_WS7', 'OX-TEST_WS7', 'biało-szary 7', 'Symbol'],
             ['ean', '5900000000023', 'OX-TEST_WS7', 'biało-szary 7', 'EAN'],
-        ], $identifiers($products['OX-TEST_WS7']));
-        $this->assertSame('ox-test', $products['OX-TEST']->identifiers[0]->value);
+            ['source_code', 'OX-TEST_BS7', 'OX-TEST_BS7', 'czarno-szary 7', 'Symbol'],
+            ['ean', '5900000000021', 'OX-TEST_BS7', 'czarno-szary 7', 'EAN'],
+            ['source_code', 'OX-TEST_BS8', 'OX-TEST_BS8', 'czarno-szary 8', 'Symbol'],
+            ['ean', '5900000000022', 'OX-TEST_BS8', 'czarno-szary 8', 'EAN'],
+        ], $identifiers($products['OX-TEST']));
         // wersja bez EAN w serwisie — sam symbol, bez wymyślonego EAN
         $this->assertSame([
             ['model_code', 'zz-test', null, null, 'Kod wyrobu'],
@@ -262,7 +357,7 @@ final class RawpolConnectorTest extends TestCase
 
         $products = $this->productsBySku($this->connector());
 
-        $this->assertCount(5, $products);
+        $this->assertCount(4, $products);
         $this->assertSame(2, $this->logins);
     }
 
@@ -285,9 +380,9 @@ final class RawpolConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
 
-        // 4 wyroby w sprzedaży, OX-TEST w dwóch cenach = 5 kart
-        $this->assertSame(5, $result['total_remote']);
-        $this->assertSame(4, $result['created']);
+        // 4 wyroby w sprzedaży = 4 karty (OX-TEST w dwóch cenach to od 28.09.2026 jedna karta), bez marki — pominięty
+        $this->assertSame(4, $result['total_remote']);
+        $this->assertSame(3, $result['created']);
         $this->assertContains('X-BEZ-MARKI: serwis nie podaje marki wyrobu — pozycja pominięta', $result['errors']);
 
         $rtest = Product::query()->where('sku', 'RTEST')->sole();
@@ -304,13 +399,26 @@ final class RawpolConnectorTest extends TestCase
             ProductDocument::query()->where('product_id', $rtest->id)->orderBy('sort_order')->pluck('title')->all(),
         );
         $this->assertTrue(ProductShopCard::query()->where('product_id', $rtest->id)->exists());
-        $this->assertSame('1.02', (string) ProductSourcePrice::query()
-            ->where('product_id', Product::query()->where('sku', 'OX-TEST_WS7')->value('id'))->value('purchase_price'));
+        $ox = Product::query()->where('sku', 'OX-TEST')->sole();
+        $this->assertFalse(Product::query()->where('sku', 'OX-TEST_WS7')->exists());
+        $oxSlot = ProductSourcePrice::query()->where('product_id', $ox->id)->sole();
+        // cena karty = najtańsza wersja (bez ceny katalogowej), najwyższa cena wersji przy slocie
+        $this->assertSame('1.02', (string) $oxSlot->purchase_price);
+        $this->assertSame('1.06', (string) $oxSlot->size_price_max);
+        $this->assertSame(
+            [['OX-TEST_WS7', 'biało-szary 7', '1.02', null], ['OX-TEST_BS7', 'czarno-szary 7', '1.06', '1.51'], ['OX-TEST_BS8', 'czarno-szary 8', '1.06', '1.51']],
+            ProductVariant::query()->where('product_id', $ox->id)->where('kind', ProductVariant::KIND_SIZE)->orderBy('sort_order')->get()
+                ->map(static fn (ProductVariant $v): array => [$v->remote_id, $v->label, (string) $v->purchase_price, $v->list_price_net !== null ? (string) $v->list_price_net : null])->all(),
+        );
+        $this->assertSame(
+            ['OX-TEST_BS7', 'OX-TEST_BS8', 'OX-TEST_WS7'],
+            B2bProductLink::query()->where('product_id', $ox->id)->orderBy('remote_id')->pluck('remote_id')->all(),
+        );
         $this->assertSame('Anro', Product::query()->where('sku', 'ZZ-TEST')->value('manufacturer'));
 
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
         $this->assertContains('Katalog Raw-Pol: 5 wyrobów, w sprzedaży 4 (wersji: 8)', $log);
-        $this->assertContains('Karty: 5 (1 wyrobów w kilku cenach — rozmiar w innej cenie to osobna karta)', $log);
+        $this->assertContains('Karty: 4 (1 z wersjami w różnych cenach — jedna karta, cena karty = najniższa cena wersji, ceny wersji w tabeli rozmiarów karty; 0 wyrobów w kilku jednostkach sprzedaży — osobna karta na jednostkę)', $log);
 
         // identyfikatory: kod wyrobu pod pozycją karty (RTESTS), symbol i EAN pod każdą wersją
         $this->assertSame(
@@ -322,8 +430,7 @@ final class RawpolConnectorTest extends TestCase
             ProductIdentifier::query()->where('product_id', $rtest->id)->orderBy('position_key')->orderBy('type')->get()
                 ->map(static fn (ProductIdentifier $i): array => [$i->position_key, $i->type, $i->value])->all(),
         );
-        $wsCard = Product::query()->where('sku', 'OX-TEST_WS7')->value('id');
-        $this->assertTrue(ProductIdentifier::query()->where('product_id', $wsCard)->where('type', 'model_code')->where('value', 'ox-test')->exists());
+        $this->assertTrue(ProductIdentifier::query()->where('product_id', $ox->id)->where('type', 'model_code')->where('value', 'ox-test')->exists());
         $count = ProductIdentifier::query()->count();
 
         // drugi przebieg: identyfikatorów nie przybywa ani nie znikają
@@ -337,6 +444,48 @@ final class RawpolConnectorTest extends TestCase
         }
     }
 
+    /**
+     * Karty sprzed 28.09.2026 (OX-TEST rozbity według ceny na „OX-TEST_WS7” za 1,02 i „OX-TEST” za 1,06) — pierwszy
+     * i drugi przebieg po zmianie: bez nowej karty, bez przepinania powiązań i bez zmian cen kart; każda karta dostaje
+     * swoje wersje jako rozmiary, a wyrób trafia do size_spread przebiegu (scalenie — osobny krok).
+     */
+    public function test_legacy_price_split_cards_stay_and_get_their_own_versions_over_two_runs(): void
+    {
+        Storage::fake('public');
+        Queue::fake();
+        $this->fakeSite();
+        $account = $this->account();
+        $single = $this->legacyCard($account, 'OX-TEST_WS7', 1.02, null, ['OX-TEST_WS7']);
+        $pair = $this->legacyCard($account, 'OX-TEST', 1.06, 1.51, ['OX-TEST_BS7', 'OX-TEST_BS8']);
+        $cards = fn (): array => Product::query()->whereIn('id', [$single->id, $pair->id])->orderBy('id')->get()->map(fn (Product $p): array => [
+            $p->sku, $p->name, (string) $p->purchase_price,
+            B2bProductLink::query()->where('product_id', $p->id)->orderBy('remote_id')->pluck('remote_id')->all(),
+            (string) ProductSourcePrice::query()->where('product_id', $p->id)->value('purchase_price'),
+            ProductSourcePrice::query()->where('product_id', $p->id)->value('size_price_max'),
+        ])->all();
+        $before = $cards();
+
+        $first = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
+
+        $this->assertFalse(Product::query()->where('sku', 'like', 'OX-TEST%')->whereNotIn('id', [$single->id, $pair->id])->exists());
+        $this->assertSame(0, $first['prices_changed']);
+        $this->assertSame($before, $cards());
+        $sizes = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->orderBy('sort_order')->get()
+            ->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price])->all();
+        $this->assertSame([['biało-szary 7', '1.02']], $sizes($single));
+        $this->assertSame([['czarno-szary 7', '1.06'], ['czarno-szary 8', '1.06']], $sizes($pair));
+        $spread = B2bSyncRun::query()->findOrFail($first['sync_run_id'])->size_spread;
+        $this->assertSame(1, $spread['total']);
+        $this->assertSame([$single->id, $pair->id], $spread['groups'][0]['cards']);
+
+        $second = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
+
+        $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
+        $this->assertSame(0, $second['prices_changed']);
+        $this->assertSame($before, $cards());
+        $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
+    }
+
     public function test_registry_detects_rawpol_by_host_and_it_is_not_a_manufacturer_site(): void
     {
         $registry = app(B2bConnectorRegistry::class);
@@ -344,6 +493,8 @@ final class RawpolConnectorTest extends TestCase
         $this->assertSame('rawpol', $registry->keyForSites(['https://web.rawpol.com/?lang=pl']));
         $this->assertSame('Raw-Pol', $registry->label('rawpol'));
         $this->assertTrue($registry->requiresPassword('rawpol'));
+        // ceny wersji przy pozycjach (28.09.2026) — konto ma w panelu „Scal rozmiary”
+        $this->assertTrue($registry->sendsSizePrices('rawpol'));
         $account = B2bAccount::query()->create(['username' => 'supon-test', 'password' => 'sekret', 'sites' => ['web.rawpol.com']]);
         $connector = $registry->make($account, 0);
         $this->assertInstanceOf(RawpolB2bConnector::class, $connector);
@@ -361,6 +512,37 @@ final class RawpolConnectorTest extends TestCase
         $connector->login();
 
         return $connector;
+    }
+
+    /**
+     * Karta OX-TEST zapisana przez dawny podział według ceny: slot konta, powiązania wersji z odciskiem opisu.
+     *
+     * @param  list<string>  $symbols
+     */
+    private function legacyCard(B2bAccount $account, string $sku, float $price, ?float $base, array $symbols): Product
+    {
+        $name = 'Rękawice ochronne OX-TEST.';
+        $description = 'Rękawice ochronne OX-TEST.';
+        $catalog = $base ?? $price;
+        $discount = $base !== null ? round((1 - $price / $base) * 100, 2) : 0;
+        $card = Product::query()->create([
+            'sku' => $sku, 'name' => $name, 'manufacturer' => 'OGRIFOX', 'description' => $description,
+            'catalog_price_net' => $catalog, 'discount_percent' => $discount, 'purchase_price' => $price, 'currency' => 'PLN',
+        ]);
+        foreach ($symbols as $symbol) {
+            B2bProductLink::query()->create([
+                'b2b_account_id' => $account->id, 'remote_id' => $symbol, 'product_id' => $card->id,
+                'remote_sku' => $symbol, 'remote_name' => $name, 'manufacturer' => 'OGRIFOX',
+                'description_hash' => sha1($description), 'last_purchase_price' => $price, 'last_currency' => 'PLN',
+            ]);
+        }
+        ProductSourcePrice::query()->create([
+            'product_id' => $card->id, 'source_key' => ProductSourcePrice::b2bKey((int) $account->id), 'b2b_account_id' => $account->id,
+            'catalog_price_net' => $catalog, 'purchase_price' => $price, 'discount_percent' => $discount, 'currency' => 'PLN',
+            'availability' => 'Produkt dostępny', 'checked_at' => now()->subDay(),
+        ]);
+
+        return $card;
     }
 
     private function account(): B2bAccount
@@ -553,6 +735,11 @@ final class RawpolConnectorTest extends TestCase
         ];
         $infos = self::infos();
         $dynamic = self::dynamic();
+        foreach ($dynamic as $id => $data) {
+            foreach ($this->withoutPriceRefs as $ref) {
+                unset($dynamic[$id]['wersje'][$ref]);
+            }
+        }
 
         Http::fake(function (Request $request) use ($dictionaries, $infos, $dynamic) {
             $url = $request->url();

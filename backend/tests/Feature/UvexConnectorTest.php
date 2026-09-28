@@ -9,12 +9,14 @@ use App\Models\B2bAccount;
 use App\Models\B2bDiscountRule;
 use App\Models\B2bProductLink;
 use App\Models\B2bSyncRun;
+use App\Models\CardRedirect;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
@@ -24,6 +26,7 @@ use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRemoteShopField;
 use App\Services\B2b\UvexB2bClient;
 use App\Services\B2b\UvexB2bConnector;
+use App\Services\Catalog\CardRedirectStore;
 use App\Services\Vector\ProductEmbeddingIndexer;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -189,7 +192,12 @@ final class UvexConnectorTest extends TestCase
         $this->assertFalse($client->isLoggedIn());
     }
 
-    public function test_products_read_all_pages_and_merge_same_price_sizes_into_one_card(): void
+    /**
+     * Rozmiary jednego wyrobu to jedna karta. Do 28.09.2026 (decyzja 15.09.2026) trzewik 6935/2/38 (358,70 PLN) był
+     * osobną kartą obok 6935/2/39–40 (360,40 PLN); od decyzji użytkownika 28.09.2026 to jedna karta z ceną każdego
+     * rozmiaru przy jego pozycji, a cena karty (price()) = najniższa cena rozmiaru.
+     */
+    public function test_products_read_all_pages_and_merge_sizes_into_one_card(): void
     {
         $this->fakeSite();
         $connector = $this->connector();
@@ -201,14 +209,14 @@ final class UvexConnectorTest extends TestCase
 
         $products = $this->productsByCode($connector);
 
-        $this->assertSame(['000P1D011003', '6935/2/38', '6935/2/39', '8430/2/39', '9970.005', 'CENNIKI', 'HA2023(L)', 'HECKEL6273/3/36'], array_keys($products));
-        $this->assertSame(8, $connector->totalProducts());
+        $this->assertSame(['000P1D011003', '6935/2/38', '8430/2/39', '9970.005', 'CENNIKI', 'HA2023(L)', 'HECKEL6273/3/36'], array_keys($products));
+        $this->assertSame(7, $connector->totalProducts());
         foreach ([1, 2, 3] as $page) {
             Http::assertSent(static fn (Request $r): bool => $r->url() === 'https://izam.system-b2b.pl/public/product?query=%25&sort=code%2Basc&page='.$page);
         }
         Http::assertNotSent(static fn (Request $r): bool => str_ends_with($r->url(), 'page=4'));
         $this->assertContains('Lista produktów UVEX: 13 pozycji na 3 stronach', $messages);
-        $this->assertContains('Lista UVEX: 13 pozycji → 8 kart (4 grup rozmiarów o tej samej cenie)', $messages);
+        $this->assertContains('Lista UVEX: 13 pozycji → 7 kart (4 grup rozmiarów, w tym 1 z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)', $messages);
 
         $shoes = $products['8430/2/39'];
         $this->assertSame('8430/2/39', $shoes->sku);
@@ -216,21 +224,30 @@ final class UvexConnectorTest extends TestCase
         $this->assertSame('Dostępny: 39; Na zamówienie: 40, 41', $shoes->availability);
         $this->assertSame('Rozmiary: 39 (8430/2/39); 40 (8430/2/40); 41 (8430/2/41)', $shoes->variantSummary);
         $this->assertSame([
-            ['remote_id' => '8430/2/39', 'sku' => '8430/2/39', 'name' => 'Półbuty ochronne uvex 1 business 8430/2/39'],
-            ['remote_id' => '8430/2/40', 'sku' => '8430/2/40', 'name' => 'Półbuty ochronne uvex 1 business 8430/2/40'],
-            ['remote_id' => '8430/2/41', 'sku' => '8430/2/41', 'name' => 'Półbuty ochronne uvex 1 business 8430/2/41'],
-        ], $shoes->members);
+            ['8430/2/39', '8430/2/39', 'Półbuty ochronne uvex 1 business 8430/2/39', '39', 'Dostępny', 226.8, null, 'PLN'],
+            ['8430/2/40', '8430/2/40', 'Półbuty ochronne uvex 1 business 8430/2/40', '40', 'Na zamówienie', 226.8, null, 'PLN'],
+            ['8430/2/41', '8430/2/41', 'Półbuty ochronne uvex 1 business 8430/2/41', '41', 'Na zamówienie', 226.8, null, 'PLN'],
+        ], self::memberRows($shoes));
         $this->assertStringStartsWith('https://izam.system-b2b.pl/public/product-details/', (string) $shoes->sourceUrl);
         $this->assertSame('UVEX', $connector->manufacturer($shoes));
         $this->assertSame(226.8, $connector->price($shoes)?->net);
 
-        // 38 ma inną cenę niż 39 i 40 — osobna karta
-        $this->assertSame('Trzewik uvex 2 trend 6935/2/38', $products['6935/2/38']->name);
-        $this->assertSame('Dostępny', $products['6935/2/38']->availability);
-        $this->assertSame('', $products['6935/2/38']->variantSummary);
-        $this->assertSame([['remote_id' => '6935/2/38', 'sku' => '6935/2/38', 'name' => 'Trzewik uvex 2 trend 6935/2/38']], $products['6935/2/38']->members);
-        $this->assertSame(358.7, $connector->price($products['6935/2/38'])?->net);
-        $this->assertSame('Dostępny: 39; Na zamówienie: 40', $products['6935/2/39']->availability);
+        // 38 ma inną cenę niż 39 i 40 — ta sama karta (28.09.2026), cena karty = najtańszy rozmiar, ceny przy pozycjach
+        $boots = $products['6935/2/38'];
+        $this->assertSame('6935/2/38', $boots->sku);
+        $this->assertSame('6935/2/38', $boots->remoteId);
+        $this->assertSame('Trzewik uvex 2 trend 6935/2', $boots->name);
+        $this->assertSame('Dostępny: 38, 39; Na zamówienie: 40', $boots->availability);
+        $this->assertSame('Rozmiary: 38 (6935/2/38); 39 (6935/2/39); 40 (6935/2/40)', $boots->variantSummary);
+        $this->assertSame([
+            ['6935/2/38', '6935/2/38', 'Trzewik uvex 2 trend 6935/2/38', '38', 'Dostępny', 358.7, null, 'PLN'],
+            ['6935/2/39', '6935/2/39', 'Trzewik uvex 2 trend 6935/2/39', '39', 'Dostępny', 360.4, null, 'PLN'],
+            ['6935/2/40', '6935/2/40', 'Trzewik uvex 2 trend 6935/2/40', '40', 'Na zamówienie', 360.4, null, 'PLN'],
+        ], self::memberRows($boots));
+        $this->assertSame(358.7, $connector->price($boots)?->net);
+        // cennik bazowy dopasowujemy tylko do rozmiarów w cenie karty
+        $this->assertSame(['6935/2/38'], $boots->raw['card_price_codes']);
+        $this->assertSame(['8430/2/39', '8430/2/40', '8430/2/41'], $shoes->raw['card_price_codes']);
 
         $gloves = $products['HA2023(L)'];
         $this->assertSame('Rękawice HexArmor Rig Lizard Arctic 2023', $gloves->name);
@@ -249,7 +266,13 @@ final class UvexConnectorTest extends TestCase
             ['manufacturer_code', '8430/2/40', '8430/2/40', '40', 'Kod'],
             ['manufacturer_code', '8430/2/41', '8430/2/41', '41', 'Kod'],
         ], self::identifierRows($shoes));
-        $this->assertSame([['manufacturer_code', '6935/2/38', '6935/2/38', null, 'Kod']], self::identifierRows($products['6935/2/38']));
+        $this->assertSame([
+            ['manufacturer_code', '6935/2/38', '6935/2/38', '38', 'Kod'],
+            ['manufacturer_code', '6935/2/39', '6935/2/39', '39', 'Kod'],
+            ['manufacturer_code', '6935/2/40', '6935/2/40', '40', 'Kod'],
+        ], self::identifierRows($boots));
+        // pozycja pojedyncza — bez ceny pozycji (karta bez tabeli rozmiarów, jak dotąd)
+        $this->assertSame([['remote_id' => '9970.005', 'sku' => '9970.005', 'name' => 'Pojemnik mini na środki czyszczące - pełny 9970.005']], $products['9970.005']->members);
         $this->assertSame([['manufacturer_code', '9970.005', '9970.005', null, 'Kod']], self::identifierRows($products['9970.005']));
         $this->assertSame([
             ['source_code', 'HA2023(L)', 'HA2023(L)', '9', 'Kod'],
@@ -309,7 +332,7 @@ final class UvexConnectorTest extends TestCase
         });
         $connector->login();
 
-        $this->assertCount(8, $this->productsByCode($connector));
+        $this->assertCount(7, $this->productsByCode($connector));
         $this->assertNotEmpty(array_filter($messages, static fn (string $m): bool => str_starts_with($m, 'Lista zmieniła się w trakcie pobierania (liczba produktów zmieniła się z 13 na 14')));
     }
 
@@ -512,10 +535,11 @@ final class UvexConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
 
-        $this->assertSame(8, $result['total_remote']);
-        $this->assertSame(7, $result['created']);
+        // trzewik 6935/2 w dwóch cenach to jedna karta (decyzja użytkownika 28.09.2026; wcześniej 8 pozycji listy i 7 kart)
+        $this->assertSame(7, $result['total_remote']);
+        $this->assertSame(6, $result['created']);
         $this->assertContains('CENNIKI: brak ceny w B2B', $result['errors']);
-        $this->assertSame(7, Product::query()->count());
+        $this->assertSame(6, Product::query()->count());
 
         $shoes = Product::query()->where('sku', '8430/2/39')->sole();
         $this->assertSame('Półbuty ochronne uvex 1 business 8430/2', $shoes->name);
@@ -523,7 +547,24 @@ final class UvexConnectorTest extends TestCase
         $this->assertSame('226.80', $shoes->purchase_price);
         $this->assertSame('PLN', $shoes->currency);
         $this->assertSame('Rozmiary: 39 (8430/2/39); 40 (8430/2/40); 41 (8430/2/41)', $shoes->variant_summary);
-        $this->assertFalse(Product::query()->whereIn('sku', ['8430/2/40', '8430/2/41', '6935/2/40', 'HA2023(M)', 'HECKEL6273/3/37'])->exists());
+        $this->assertFalse(Product::query()->whereIn('sku', ['8430/2/40', '8430/2/41', '6935/2/39', '6935/2/40', 'HA2023(M)', 'HECKEL6273/3/37'])->exists());
+
+        // rozmiary w różnych cenach: cena karty = najtańszy rozmiar, najwyższa przy slocie, każdy rozmiar w tabeli
+        $boots = Product::query()->where('sku', '6935/2/38')->sole();
+        $this->assertSame('Trzewik uvex 2 trend 6935/2', $boots->name);
+        $this->assertSame('358.70', $boots->purchase_price);
+        $bootsSlot = ProductSourcePrice::query()->where('product_id', $boots->id)->sole();
+        $this->assertSame('358.70', (string) $bootsSlot->purchase_price);
+        $this->assertSame('360.40', (string) $bootsSlot->size_price_max);
+        $sizes = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->where('kind', ProductVariant::KIND_SIZE)
+            ->orderBy('sort_order')->get()->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price, $v->availability])->all();
+        $this->assertSame([['38', '358.70', 'Dostępny'], ['39', '360.40', 'Dostępny'], ['40', '360.40', 'Na zamówienie']], $sizes($boots));
+        $this->assertSame(['6935/2/38', '6935/2/39', '6935/2/40'], B2bProductLink::query()->where('product_id', $boots->id)->orderBy('remote_id')->pluck('remote_id')->all());
+        // rozmiary w jednej cenie — też w tabeli, bez „do Y”
+        $this->assertSame([['39', '226.80', 'Dostępny'], ['40', '226.80', 'Na zamówienie'], ['41', '226.80', 'Na zamówienie']], $sizes($shoes));
+        $this->assertNull(ProductSourcePrice::query()->where('product_id', $shoes->id)->value('size_price_max'));
+        // pozycja pojedyncza — bez tabeli rozmiarów
+        $this->assertSame([], $sizes(Product::query()->where('sku', '9970.005')->sole()));
 
         $slot = ProductSourcePrice::query()->where('product_id', $shoes->id)->where('source_key', ProductSourcePrice::b2bKey((int) $this->account()->id))->sole();
         $this->assertSame('Dostępny: 39; Na zamówienie: 40, 41', $slot->availability);
@@ -539,7 +580,7 @@ final class UvexConnectorTest extends TestCase
         $this->assertSame('HECKEL', Product::query()->where('sku', 'HECKEL6273/3/36')->value('manufacturer'));
 
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
-        $this->assertContains('Lista UVEX: 13 pozycji → 8 kart (4 grup rozmiarów o tej samej cenie)', $log);
+        $this->assertContains('Lista UVEX: 13 pozycji → 7 kart (4 grup rozmiarów, w tym 1 z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)', $log);
     }
 
     public function test_order_quantity_is_read_from_the_cart_field_and_sizes_with_different_packs_get_none(): void
@@ -649,7 +690,7 @@ final class UvexConnectorTest extends TestCase
 
         $first = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
 
-        $this->assertSame(7, $first['created']);
+        $this->assertSame(6, $first['created']);
         $shoes = Product::query()->where('sku', '8430/2/39')->sole();
         $this->assertSame([
             ['8430/2/39', 'manufacturer_code', '8430/2/39', '39', 'Kod', 'UVEX'],
@@ -668,7 +709,7 @@ final class UvexConnectorTest extends TestCase
             [['9970.005', 'manufacturer_code', '9970.005', null, 'Kod', 'UVEX']],
             self::storedIdentifiers((int) Product::query()->where('sku', '9970.005')->value('id')),
         );
-        // 7 kart, 12 pozycji z ceną (CENNIKI bez ceny nie jest zapisywany)
+        // 6 kart, 12 pozycji z ceną (CENNIKI bez ceny nie jest zapisywany)
         $identifiers = ProductIdentifier::query()->count();
         $this->assertSame(12, $identifiers);
         $this->assertNoIdentifierWarnings($first);
@@ -1321,7 +1362,7 @@ final class UvexConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
 
-        $this->assertSame(7, $result['created']);
+        $this->assertSame(6, $result['created']);
         $this->assertSame(0, $this->priceListHits);
         $this->assertFalse(ProductSourcePrice::query()->whereNotNull('base_price_net')->exists());
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
@@ -1346,7 +1387,7 @@ final class UvexConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
 
-        $this->assertSame(7, $result['created']);
+        $this->assertSame(6, $result['created']);
         // nowa karta (grupa rozmiarów, reguła butów) — slot z ceną bazową, karta z ceną konta
         $shoes = Product::query()->where('sku', '8430/2/39')->sole();
         $this->assertSame('226.80', $shoes->catalog_price_net);
@@ -1367,14 +1408,45 @@ final class UvexConnectorTest extends TestCase
             ['base_price_net' => null, 'base_price_category' => null, 'base_price_code' => null, 'base_price_source' => null, 'standard_discount_percent' => null],
             $this->baseFields(Product::query()->where('sku', '000P1D011003')->sole()),
         );
+        // trzewik z rozmiarami w dwóch cenach (jedna karta od 28.09.2026) — wiersz „NNNND” cennika, dopasowany kodem
+        // rozmiaru w cenie karty
+        $this->assertSame('69352', $this->baseFields(Product::query()->where('sku', '6935/2/38')->sole())['base_price_code']);
         // historia cen: jeden wpis na nową kartę — cena bazowa nie jest ceną karty
-        $this->assertSame(7, ProductPriceHistory::query()->count());
+        $this->assertSame(6, ProductPriceHistory::query()->count());
         $this->assertFalse(ProductPriceHistory::query()->where('catalog_price_net', '300.00')->exists());
 
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
-        $this->assertContains('Cennik bazowy: 6 kart dopasowanych (w tym 0 z częścią rozmiarów spoza cennika), 1 kart spoza cennika, 0 kart z niejednoznacznym wierszem', $log);
-        $this->assertContains('Rabat standardowy: 6 kart z pasującą regułą', $log);
-        $this->assertSame(5, (int) $any->fresh()->last_matched_count);
+        $this->assertContains('Cennik bazowy: 5 kart dopasowanych (w tym 0 z częścią rozmiarów spoza cennika), 1 kart spoza cennika, 0 kart z niejednoznacznym wierszem', $log);
+        $this->assertContains('Rabat standardowy: 5 kart z pasującą regułą', $log);
+        $this->assertSame(4, (int) $any->fresh()->last_matched_count);
+    }
+
+    /**
+     * Karta z rozmiarami w różnych cenach (decyzja użytkownika 28.09.2026) ma w slocie cenę najtańszego rozmiaru, więc
+     * cena bazowa musi być ceną tego samego rozmiaru — inaczej porównanie „cena specjalna” zestawiłoby cenę 38
+     * z cennikiem 39. Wiersz tylko dla droższego rozmiaru (kod dokładny 6935239) = brak ceny bazowej karty.
+     */
+    public function test_base_price_is_matched_only_by_the_sizes_in_the_card_price(): void
+    {
+        $sheets = $this->priceListSheets();
+        $sheets['Buty Uvex'] = [['Kod', 'Nazwa', 'CENA KATALOGOWA'], ['6935239', 'Trzewik uvex 2 trend rozm. 39', 425], [84302, 'Półbuty uvex 1 business', 300]];
+        $this->withPriceList($sheets);
+        $connector = $this->connector();
+        $connector->login();
+
+        $products = $this->productsByCode($connector);
+
+        $this->assertNull($connector->basePrice($products['6935/2/38']));
+        $this->assertSame('84302', $connector->basePrice($products['8430/2/39'])?->code);
+
+        // wiersz rozmiaru w cenie karty — ta cena bazowa
+        $sheets['Buty Uvex'][] = ['6935238', 'Trzewik uvex 2 trend rozm. 38', 410];
+        $this->withPriceList($sheets);
+        $connector = $this->connector();
+        $connector->login();
+
+        $base = $connector->basePrice($this->productsByCode($connector)['6935/2/38']);
+        $this->assertSame(['6935238', 410.0], [$base?->code, $base?->net]);
     }
 
     public function test_failed_price_list_keeps_previous_base_prices_and_a_card_gone_from_the_list_loses_them(): void
@@ -1405,6 +1477,118 @@ final class UvexConnectorTest extends TestCase
 
         // ceny konta bez zmian — zmiana ceny bazowej nie dopisuje historii cen
         $this->assertSame($history, ProductPriceHistory::query()->count());
+    }
+
+    /**
+     * Karty sprzed 28.09.2026 z dawnego podziału według ceny: „6935/2/38” (358,70) i „6935/2/39” z rozmiarami 39 i 40
+     * (360,40). Przebieg po zmianie nie zakłada nowej karty i nie przepina powiązań; każda stara karta dostaje swoje
+     * rozmiary i cenę bazową SWOJEGO najtańszego rozmiaru (38 — wiersz dokładny 6935238, 39/40 — wiersz modelu 69352),
+     * a nie cenę bazową najtańszego rozmiaru całego wyrobu.
+     */
+    public function test_legacy_price_split_cards_keep_their_sizes_and_get_the_base_price_of_their_own_cheapest_size(): void
+    {
+        Storage::fake('public');
+        $sheets = $this->priceListSheets();
+        $sheets['Buty Uvex'] = [
+            ['Kod', 'Nazwa', 'CENA KATALOGOWA'],
+            ['6935238', 'Trzewik uvex 2 trend rozm. 38', 410],
+            [69352, 'Trzewik uvex 2 trend', 420],
+            [84302, 'Półbuty uvex 1 business', 300],
+        ];
+        $this->withPriceList($sheets);
+        $account = $this->account();
+        $small = $this->legacyCard($account, '6935/2/38', 358.70, ['6935/2/38']);
+        $large = $this->legacyCard($account, '6935/2/39', 360.40, ['6935/2/39', '6935/2/40']);
+
+        $result = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
+
+        // nowe tylko karty spoza trzewika (półbuty, pojemnik, szyba, HexArmor, Heckel)
+        $this->assertSame(5, $result['created'], implode(' | ', $result['errors']));
+        $this->assertSame(2, Product::query()->where('sku', 'like', '6935/2/%')->count());
+        $this->assertSame(['6935/2/38'], B2bProductLink::query()->where('product_id', $small->id)->pluck('remote_id')->all());
+        $this->assertSame(['6935/2/39', '6935/2/40'], B2bProductLink::query()->where('product_id', $large->id)->orderBy('remote_id')->pluck('remote_id')->all());
+        $sizes = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->where('kind', ProductVariant::KIND_SIZE)
+            ->orderBy('sort_order')->get()->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price])->all();
+        $this->assertSame([['38', '358.70']], $sizes($small));
+        $this->assertSame([['39', '360.40'], ['40', '360.40']], $sizes($large));
+        $this->assertSame(['358.70', '6935238', '410.00'], [
+            (string) ProductSourcePrice::query()->where('product_id', $small->id)->value('purchase_price'),
+            $this->baseFields($small)['base_price_code'],
+            $this->baseFields($small)['base_price_net'],
+        ]);
+        $this->assertSame(['360.40', '69352', '420.00'], [
+            (string) ProductSourcePrice::query()->where('product_id', $large->id)->value('purchase_price'),
+            $this->baseFields($large)['base_price_code'],
+            $this->baseFields($large)['base_price_net'],
+        ]);
+        $spread = B2bSyncRun::query()->findOrFail($result['sync_run_id'])->size_spread;
+        $this->assertSame(1, $spread['total']);
+        $this->assertSame([$small->id, $large->id], $spread['groups'][0]['cards']);
+    }
+
+    /**
+     * Mapa połączeń z powodem „split” rozdziela grupę rozmiarów na pozycje (B2bCatalogSync::syncMembersSeparately).
+     * Droższy rozmiar 40 na wskazanej karcie ma cenę bazową wiersza SWOJEGO kodu (6935240), a nie kodów najtańszych
+     * rozmiarów całego wyrobu.
+     */
+    public function test_split_redirect_gives_the_separated_dearer_size_the_base_price_of_its_own_code(): void
+    {
+        Storage::fake('public');
+        $sheets = $this->priceListSheets();
+        $sheets['Buty Uvex'] = [
+            ['Kod', 'Nazwa', 'CENA KATALOGOWA'],
+            [69352, 'Trzewik uvex 2 trend', 420],
+            ['6935240', 'Trzewik uvex 2 trend rozm. 40', 430],
+            [84302, 'Półbuty uvex 1 business', 300],
+        ];
+        $this->withPriceList($sheets);
+        $account = $this->account();
+        $target = Product::query()->create([
+            'sku' => 'TRZEWIK-40', 'name' => 'Trzewik uvex 2 trend rozmiar 40', 'manufacturer' => 'UVEX', 'description' => '',
+            'catalog_price_net' => 0, 'purchase_price' => 0,
+        ]);
+        CardRedirect::query()->create([
+            'source_key' => ProductSourcePrice::b2bKey((int) $account->id), 'position_key' => '6935/2/40',
+            'b2b_account_id' => $account->id, 'product_id' => $target->id, 'reason' => CardRedirect::REASON_SPLIT,
+            'target_snapshot' => CardRedirectStore::snapshot($target),
+        ]);
+
+        $result = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
+
+        $this->assertSame(['6935/2/40'], B2bProductLink::query()->where('product_id', $target->id)->pluck('remote_id')->all(), implode(' | ', $result['errors']));
+        $slot = ProductSourcePrice::query()->where('product_id', $target->id)->sole();
+        $this->assertSame('360.40', (string) $slot->purchase_price);
+        $this->assertSame(['6935240', '430.00'], [$this->baseFields($target)['base_price_code'], $this->baseFields($target)['base_price_net']]);
+        // pozostałe rozmiary — własne karty z wierszem modelu
+        $small = Product::query()->where('sku', '6935/2/38')->sole();
+        $this->assertSame(['358.70', '69352'], [(string) ProductSourcePrice::query()->where('product_id', $small->id)->value('purchase_price'), $this->baseFields($small)['base_price_code']]);
+    }
+
+    /**
+     * Karta zapisana przez dawny podział według ceny: powiązania rozmiarów, slot konta, kod bez zmian.
+     *
+     * @param  list<string>  $codes
+     */
+    private function legacyCard(B2bAccount $account, string $sku, float $price, array $codes): Product
+    {
+        $card = Product::query()->create([
+            'sku' => $sku, 'name' => 'Trzewik uvex 2 trend '.$sku, 'manufacturer' => 'UVEX', 'description' => '',
+            'catalog_price_net' => $price, 'discount_percent' => 0, 'purchase_price' => $price, 'currency' => 'PLN',
+        ]);
+        foreach ($codes as $code) {
+            B2bProductLink::query()->create([
+                'b2b_account_id' => $account->id, 'remote_id' => $code, 'product_id' => $card->id,
+                'remote_sku' => $code, 'remote_name' => 'Trzewik uvex 2 trend '.$code, 'manufacturer' => 'UVEX',
+                'last_purchase_price' => $price, 'last_currency' => 'PLN',
+            ]);
+        }
+        ProductSourcePrice::query()->create([
+            'product_id' => $card->id, 'source_key' => ProductSourcePrice::b2bKey((int) $account->id), 'b2b_account_id' => $account->id,
+            'catalog_price_net' => $price, 'purchase_price' => $price, 'discount_percent' => 0, 'currency' => 'PLN',
+            'checked_at' => now()->subDay(),
+        ]);
+
+        return $card;
     }
 
     /**
@@ -1448,6 +1632,19 @@ final class UvexConnectorTest extends TestCase
             ->sole();
 
         return $slot->only(['base_price_net', 'base_price_category', 'base_price_code', 'base_price_source', 'standard_discount_percent']);
+    }
+
+    /**
+     * Pozycje karty: kod, SKU, nazwa, rozmiar, dostępność, cena konta, cena bazowa i waluta pozycji.
+     *
+     * @return list<list<mixed>>
+     */
+    private static function memberRows(B2bRemoteProduct $product): array
+    {
+        return array_map(static fn (array $m): array => [
+            $m['remote_id'], $m['sku'], $m['name'], $m['size'] ?? null, $m['availability'] ?? null,
+            ($m['price'] ?? null)?->net, ($m['price'] ?? null)?->base, ($m['price'] ?? null)?->currency,
+        ], $product->members);
     }
 
     /**

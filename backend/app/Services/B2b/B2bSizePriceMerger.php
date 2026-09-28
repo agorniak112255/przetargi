@@ -179,8 +179,15 @@ final class B2bSizePriceMerger
 
         // powiązania konta: każdy rozmiar na swojej karcie z przebiegu, żadna pozycja spoza wyrobu na tych kartach
         $links = B2bProductLink::query()->where('b2b_account_id', $account->id)->whereIn('product_id', $cardIds)->get(['remote_id', 'product_id']);
+        // dawne remote_id pozycji (łącznik zmienił identyfikatory, Protekt „LB100 / biały”) — należą do tego wyrobu
+        $legacy = [];
+        foreach ($members as $member) {
+            if (is_string($member['legacy_remote_id'] ?? null) && $member['legacy_remote_id'] !== '') {
+                $legacy[$member['legacy_remote_id']] = true;
+            }
+        }
         foreach ($links as $link) {
-            if (! array_key_exists((string) $link->remote_id, $cardOf)) {
+            if (! array_key_exists((string) $link->remote_id, $cardOf) && ! isset($legacy[(string) $link->remote_id])) {
                 return $skip('karta #'.$link->product_id.' ma pozycję '.$link->remote_id.' spoza tego wyrobu');
             }
         }
@@ -234,7 +241,7 @@ final class B2bSizePriceMerger
                 return $skip('karta #'.$hit.' ma '.$label);
             }
         }
-        $mapped = DB::table('card_redirects')->where('source_key', $source)->whereIn('position_key', array_keys($cardOf))->value('position_key');
+        $mapped = DB::table('card_redirects')->where('source_key', $source)->whereIn('position_key', [...array_keys($cardOf), ...array_keys($legacy)])->value('position_key');
         if ($mapped !== null) {
             return $skip('pozycja '.$mapped.' ma decyzję w mapie połączeń („Łączenie kart”)');
         }
@@ -410,17 +417,20 @@ final class B2bSizePriceMerger
 
     public const BACKUP_FAILED = 7302;
 
+    /** Co tyle wyrobów process() zgłasza postęp ($onProgress — okno „Scal rozmiary”). */
+    private const PROGRESS_EVERY = 50;
+
     /**
      * Przejście po liście od $offset — podgląd albo scalanie (polecenie b2b:merge-size-prices w całości, zadanie w tle
      * porcjami do $deadline). $limit — najwyżej tyle wyrobów do scalenia łącznie ($toMergeBefore policzone w
      * poprzednich porcjach). Scalanie dopisuje do kopii JSONL ($backupPath): przed wyrobem jego wiersze („before”), po
      * commit „committed”, po błędzie „rolled_back”. stop — trwająca synchronizacja albo nieudany zapis kopii: dalej nie
-     * idziemy (scalone wyroby zostają).
+     * idziemy (scalone wyroby zostają). $onProgress — co PROGRESS_EVERY wyrobów dostaje wynik częściowy (ten sam kształt).
      *
      * @param  list<array<string, mixed>>  $groups
      * @return array{offset: int, done: bool, stop: string|null, to_merge: int, merged: int, sizes: int, tenders: int, sku_renamed: int, skipped: array<string, int>, lines: list<string>}
      */
-    public function process(B2bAccount $account, array $groups, int $offset, bool $apply, bool $withTenders, ?int $limit, int $toMergeBefore, ?string $backupPath, ?float $deadline): array
+    public function process(B2bAccount $account, array $groups, int $offset, bool $apply, bool $withTenders, ?int $limit, int $toMergeBefore, ?string $backupPath, ?float $deadline, ?callable $onProgress = null): array
     {
         $out = ['offset' => $offset, 'done' => false, 'stop' => null, 'to_merge' => 0, 'merged' => 0, 'sizes' => 0, 'tenders' => 0,
             'sku_renamed' => 0, 'skipped' => [], 'lines' => []];
@@ -438,6 +448,9 @@ final class B2bSizePriceMerger
                 }
                 if ($deadline !== null && microtime(true) >= $deadline) {
                     return [...$out, 'offset' => $i];
+                }
+                if ($onProgress !== null && $i > $offset && ($i - $offset) % self::PROGRESS_EVERY === 0) {
+                    $onProgress([...$out, 'offset' => $i]);
                 }
                 $group = $groups[$i];
                 $sku = (string) ($group['sku'] ?? '?');
@@ -560,7 +573,7 @@ final class B2bSizePriceMerger
 
     /**
      * Slot konta z wierszy rozmiarów na karcie — ta sama reguła co synchronizacja (B2bCatalogSync::sizePricing):
-     * najtańszy rozmiar (remis — niższa cena katalogowa, potem kolejność), katalogowa = jego cena katalogowa albo
+     * najtańszy rozmiar (remis — B2bCatalogSync::winsSizePriceTie), katalogowa = jego cena katalogowa albo
      * cena konta, size_price_max = najwyższa, gdy różni się o grosz; data sprawdzenia slotu bez zmian.
      */
     private function recomputeSlot(Product $keep, B2bAccount $account): void
@@ -584,7 +597,10 @@ final class B2bSizePriceMerger
             }
             $cheapestNet = round((float) $cheapest->purchase_price, 2);
             if ($net < $cheapestNet - 0.0049
-                || (abs($net - $cheapestNet) < 0.005 && round((float) ($row->list_price_net ?? $net), 2) < round((float) ($cheapest->list_price_net ?? $cheapestNet), 2) - 0.0049)) {
+                || (abs($net - $cheapestNet) < 0.005 && B2bCatalogSync::winsSizePriceTie(
+                    $row->list_price_net !== null ? (float) $row->list_price_net : null,
+                    $cheapest->list_price_net !== null ? (float) $cheapest->list_price_net : null,
+                ))) {
                 $cheapest = $row;
             }
         }

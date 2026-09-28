@@ -6,12 +6,15 @@ namespace Tests\Feature;
 
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
+use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
+use App\Models\ProductVariantPriceHistory;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bDocumentSource;
@@ -23,6 +26,7 @@ use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
+use App\Services\B2b\B2bSizePriceSource;
 use App\Services\B2b\JhkB2bClient;
 use App\Services\B2b\JhkB2bConnector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -164,10 +168,12 @@ final class JhkConnectorTest extends TestCase
         $this->assertSame(self::BASE.'/pl/bluza-jt-test-bk-xxl', $card->sourceUrl);
         $this->assertSame(
             [
-                ['remote_id' => 'JT TEST BK XS', 'sku' => 'JT TEST BK XS', 'name' => 'JHK Bluza JT TEST BK, BK - Black XS'],
-                ['remote_id' => 'JT TEST BK XXL', 'sku' => 'JT TEST BK XXL', 'name' => 'JHK Bluza JT TEST BK, BK - Black XXL'],
+                ['JT TEST BK XS', 'JT TEST BK XS', 'JHK Bluza JT TEST BK, BK - Black XS', 'XS',
+                    'Magazyn w Polsce - dostępne 24 h: 45 szt.; Magazyn producenta - dostępne 14 dni: 216 szt.', 25.76, 46.0, 44.0, 'PLN'],
+                ['JT TEST BK XXL', 'JT TEST BK XXL', 'JHK Bluza JT TEST BK, BK - Black XXL', 'XXL',
+                    'Magazyn w Polsce - dostępne 24 h: 200 szt.', 25.76, 46.0, 44.0, 'PLN'],
             ],
-            $card->members,
+            self::memberRows($card),
         );
         $this->assertSame(
             'Magazyn w Polsce - dostępne 24 h: 45 szt.; Magazyn producenta - dostępne 14 dni: 216 szt.: XS;'
@@ -219,7 +225,13 @@ final class JhkConnectorTest extends TestCase
         );
     }
 
-    public function test_sizes_in_two_prices_are_two_cards_named_with_their_sizes(): void
+    /**
+     * Do 28.09.2026 (decyzja 15.09.2026) rozmiary w dwóch cenach były dwiema kartami („JT TEST BK XS” z XS, XXL
+     * i „JT TEST BK 3XL”, nazwy z rozmiarami). Od decyzji użytkownika 28.09.2026 to jedna karta z kodem wyrobu i nazwą
+     * bez rozmiarów, a cena każdego rozmiaru (konta i katalogowa) jedzie przy jego pozycji; cena karty (price()) =
+     * najniższa cena rozmiaru.
+     */
+    public function test_sizes_in_two_prices_are_one_card_with_size_prices_and_the_lowest_card_price(): void
     {
         $this->addProduct(self::sweatshirtSplit());
         $this->fakeShop();
@@ -228,15 +240,62 @@ final class JhkConnectorTest extends TestCase
         $products = iterator_to_array($connector->products(), false);
 
         $this->assertSame(
-            [
-                ['JT TEST BK XS', 'JHK Bluza JT TEST BK, BK - Black (rozm. XS, XXL)', 25.76, 46.0],
-                ['JT TEST BK 3XL', 'JHK Bluza JT TEST BK, BK - Black (rozm. 3XL)', 26.32, 47.0],
-            ],
+            [['JT TEST BK', 'JHK Bluza JT TEST BK, BK - Black', 3]],
+            array_map(static fn (B2bRemoteProduct $p): array => [$p->sku, $p->name, count($p->members)], $products),
+        );
+        $card = $products[0];
+        $this->assertSame('JT TEST BK XS', $card->remoteId);
+        $this->assertSame(
+            [['XS', 25.76, 46.0], ['XXL', 25.76, 46.0], ['3XL', 26.32, 47.0]],
+            array_map(static fn (array $m): array => [$m['size'], $m['price']->net, $m['price']->base], $card->members),
+        );
+        $price = $connector->price($card);
+        $this->assertSame([25.76, 46.0, 44.0], [$price?->net, $price?->base, $price?->discountPercent]);
+        $this->assertSame(
+            'Rozmiary: XS (JT TEST BK XS, EAN 5900000000101); XXL (JT TEST BK XXL, EAN 5900000000102);'
+            .' 3XL (JT TEST BK 3XL, EAN 5900000000103)',
+            $card->variantSummary,
+        );
+        // symbol i EAN każdego rozmiaru — teraz wszystkie na jednej karcie
+        $this->assertSame(
+            ['JT TEST BK XS', 'JT TEST BK XXL', 'JT TEST BK 3XL'],
+            array_values(array_unique(array_column(self::identifierRows($card), 2))),
+        );
+        $this->assertSame(1, $connector->totalProducts());
+        $this->assertStringContainsString('Karty: 1 (1 wyrobów z rozmiarami w różnych cenach', implode("\n", $connector->runSummary()));
+    }
+
+    /**
+     * Cena katalogowa należy do rozmiaru: rozmiar bez niej (tu 3XL — detaliczna niższa od ceny konta) nie dostaje
+     * ceny innego rozmiaru, a cena karty to najtańszy rozmiar z jego własną ceną katalogową, także gdy nie jest
+     * pierwszy w tabeli.
+     */
+    public function test_each_size_keeps_its_own_catalog_price_and_the_card_takes_the_cheapest_size(): void
+    {
+        $product = self::sweatshirtSplit();
+        $product['sizes'][0]['account'] = 2800;
+        $product['sizes'][0]['catalog'] = 5000;
+        $product['sizes'][2]['catalog'] = 2000;
+        $this->addProduct($product);
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(1, $products);
+        $card = $products[0];
+        $this->assertSame('JT TEST BK XS', $card->remoteId);
+        $this->assertSame(
+            [['XS', 28.0, 50.0, 44.0], ['XXL', 25.76, 46.0, 44.0], ['3XL', 26.32, null, 0.0]],
             array_map(
-                static fn (B2bRemoteProduct $p): array => [$p->sku, $p->name, $connector->price($p)?->net, $connector->price($p)?->base],
-                $products,
+                static fn (array $m): array => [$m['size'], $m['price']->net, $m['price']->base, $m['price']->discountPercent],
+                $card->members,
             ),
         );
+        $price = $connector->price($card);
+        $this->assertSame([25.76, 46.0, 44.0], [$price?->net, $price?->base, $price?->discountPercent]);
+        $this->assertStringContainsString('Bez ceny katalogowej', implode("\n", $connector->runSummary()));
+        $this->assertStringContainsString('JT TEST BK 3XL', implode("\n", $connector->runSummary()));
     }
 
     public function test_product_without_sizes_takes_both_prices_from_the_account_page(): void
@@ -388,6 +447,11 @@ final class JhkConnectorTest extends TestCase
         $this->assertCount(1, $products);
         $this->assertNull($connector->price($products[0])?->base);
         $this->assertSame(0.0, $connector->price($products[0])?->discountPercent);
+        // tak samo przy każdym rozmiarze karty
+        $this->assertSame(
+            [[25.76, null, 0.0], [25.76, null, 0.0]],
+            array_map(static fn (array $m): array => [$m['price']->net, $m['price']->base, $m['price']->discountPercent], $products[0]->members),
+        );
     }
 
     public function test_size_without_an_account_price_stays_off_the_card(): void
@@ -502,16 +566,25 @@ final class JhkConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
 
-        $this->assertSame(3, $result['created'], implode(' | ', $result['errors']));
-        $card = Product::query()->where('sku', 'JT TEST BK XS')->sole();
+        // bluza z rozmiarami w dwóch cenach to jedna karta (decyzja użytkownika 28.09.2026) i czapka
+        $this->assertSame(2, $result['created'], implode(' | ', $result['errors']));
+        $card = Product::query()->where('sku', 'JT TEST BK')->sole();
         $this->assertSame('JHK', $card->manufacturer);
+        $this->assertSame('JHK Bluza JT TEST BK, BK - Black', $card->name);
         $this->assertSame(
-            ['JT TEST BK XS', 'JT TEST BK XXL'],
+            ['JT TEST BK 3XL', 'JT TEST BK XS', 'JT TEST BK XXL'],
             B2bProductLink::query()->where('product_id', $card->id)->orderBy('remote_id')->pluck('remote_id')->all(),
         );
         $slot = ProductSourcePrice::query()->where('product_id', $card->id)->sole();
+        // cena karty = najtańszy rozmiar z jego ceną katalogową, najwyższa cena rozmiaru przy slocie
         $this->assertSame('25.76', (string) $slot->purchase_price);
         $this->assertSame('46.00', (string) $slot->catalog_price_net);
+        $this->assertSame('26.32', (string) $slot->size_price_max);
+        $this->assertSame(
+            [['XS', '25.76', '46.00'], ['XXL', '25.76', '46.00'], ['3XL', '26.32', '47.00']],
+            ProductVariant::query()->where('product_id', $card->id)->where('kind', ProductVariant::KIND_SIZE)->orderBy('sort_order')->get()
+                ->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price, (string) $v->list_price_net])->all(),
+        );
         $this->assertStringContainsString('Bluza unisex', (string) $card->description);
         $this->assertTrue(ProductShopCard::query()->where('product_id', $card->id)->exists());
         $this->assertSame(
@@ -521,23 +594,17 @@ final class JhkConnectorTest extends TestCase
         $beanie = Product::query()->where('sku', 'CZZIM TEST BK')->sole();
         $this->assertSame('6.16', (string) ProductSourcePrice::query()->where('product_id', $beanie->id)->value('purchase_price'));
 
-        // identyfikatory na pozycjach kart: rozmiar 3XL (inna cena) na swojej karcie, symbol i EAN każdego rozmiaru
+        // identyfikatory na pozycjach karty: symbol i EAN każdego rozmiaru, także 3XL w innej cenie
         $this->assertSame(
             [
+                ['JT TEST BK 3XL', 'ean', '5900000000103', '3XL', 'EAN', 'JHK'],
+                ['JT TEST BK 3XL', 'manufacturer_code', 'JT TEST BK 3XL', '3XL', 'Symbol', 'JHK'],
                 ['JT TEST BK XS', 'ean', '5900000000101', 'XS', 'EAN', 'JHK'],
                 ['JT TEST BK XS', 'manufacturer_code', 'JT TEST BK XS', 'XS', 'Symbol', 'JHK'],
                 ['JT TEST BK XXL', 'ean', '5900000000102', 'XXL', 'EAN', 'JHK'],
                 ['JT TEST BK XXL', 'manufacturer_code', 'JT TEST BK XXL', 'XXL', 'Symbol', 'JHK'],
             ],
             self::storedIdentifiers($card->id),
-        );
-        $split = Product::query()->where('sku', 'JT TEST BK 3XL')->sole();
-        $this->assertSame(
-            [
-                ['JT TEST BK 3XL', 'ean', '5900000000103', '3XL', 'EAN', 'JHK'],
-                ['JT TEST BK 3XL', 'manufacturer_code', 'JT TEST BK 3XL', '3XL', 'Symbol', 'JHK'],
-            ],
-            self::storedIdentifiers($split->id),
         );
         $this->assertSame(
             [
@@ -554,11 +621,58 @@ final class JhkConnectorTest extends TestCase
 
         $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
         $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
-        $this->assertSame(3, $second['unchanged'], implode(' | ', $second['errors']));
+        $this->assertSame(2, $second['unchanged'], implode(' | ', $second['errors']));
         $this->assertSame($before, $this->snapshot());
         // drugi przebieg nie dubluje identyfikatorów i żadnego nie uznaje za usunięty
         $this->assertSame($identifiers, ProductIdentifier::query()->count());
         $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
+    }
+
+    /**
+     * Karty sprzed 28.09.2026 (bluza rozbita według ceny na „JT TEST BK XS” z XS, XXL i „JT TEST BK 3XL”) — dwa
+     * przebiegi po zmianie łącznika: bez nowej karty, bez przepinania powiązań, bez zmian cen, kodów i nazw; każda
+     * karta dostaje swoje rozmiary, a wyrób trafia do size_spread przebiegu (do scalenia poleceniem).
+     */
+    public function test_legacy_price_split_cards_stay_and_get_their_own_sizes_over_two_runs(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addProduct(self::sweatshirtSplit());
+        $this->fakeShop();
+        $account = $this->account();
+        $description = "Bluza unisex z okrągłym dekoltem.\n- Gramatura: 260 g/m²\n- Pakowanie: 25 szt. (karton)";
+        $small = $this->legacyCard($account, 'JT TEST BK XS', 'JHK Bluza JT TEST BK, BK - Black (rozm. XS, XXL)', $description, 25.76, 46.0, ['XS', 'XXL']);
+        $large = $this->legacyCard($account, 'JT TEST BK 3XL', 'JHK Bluza JT TEST BK, BK - Black (rozm. 3XL)', $description, 26.32, 47.0, ['3XL']);
+        $cards = fn (): array => Product::query()->orderBy('id')->get()->map(fn (Product $p): array => [
+            $p->sku, $p->name, $p->description, (string) $p->purchase_price,
+            B2bProductLink::query()->where('product_id', $p->id)->orderBy('remote_id')->pluck('remote_id')->all(),
+            (string) ProductSourcePrice::query()->where('product_id', $p->id)->value('purchase_price'),
+            (string) ProductSourcePrice::query()->where('product_id', $p->id)->value('catalog_price_net'),
+            ProductSourcePrice::query()->where('product_id', $p->id)->value('size_price_max'),
+        ])->all();
+        $before = $cards();
+
+        $first = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $first['created'], implode(' | ', $first['errors']));
+        $this->assertSame(0, $first['skipped'], implode(' | ', $first['errors']));
+        $this->assertSame(0, $first['prices_changed']);
+        $this->assertSame($before, $cards());
+        $sizes = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->orderBy('sort_order')->get()
+            ->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price, (string) $v->list_price_net])->all();
+        $this->assertSame([['XS', '25.76', '46.00'], ['XXL', '25.76', '46.00']], $sizes($small));
+        $this->assertSame([['3XL', '26.32', '47.00']], $sizes($large));
+        $spread = B2bSyncRun::query()->findOrFail($first['sync_run_id'])->size_spread;
+        $this->assertSame(1, $spread['total']);
+        $this->assertSame([$small->id, $large->id], $spread['groups'][0]['cards']);
+
+        $second = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
+        $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
+        $this->assertSame(1, $second['unchanged']);
+        $this->assertSame($before, $cards());
+        $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
     }
 
     public function test_sync_reports_a_skipped_tile_and_saves_the_rest(): void
@@ -595,10 +709,12 @@ final class JhkConnectorTest extends TestCase
         $this->assertSame('JHK', JhkB2bConnector::ownBrand());
         foreach ([
             B2bManufacturerSite::class, B2bShopFieldSource::class, B2bRunSummaryAware::class,
-            B2bListProgressAware::class, B2bDocumentSource::class, B2bImageGallery::class,
+            B2bListProgressAware::class, B2bDocumentSource::class, B2bImageGallery::class, B2bSizePriceSource::class,
         ] as $interface) {
             $this->assertInstanceOf($interface, $connector);
         }
+        // ceny rozmiarów — konto ma w panelu „Scal rozmiary”
+        $this->assertTrue($registry->sendsSizePrices('jhk'));
     }
 
     // ---- pomocnicze ----
@@ -612,6 +728,19 @@ final class JhkConnectorTest extends TestCase
             static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId, $i->label, $i->field],
             $product->identifiers ?? [],
         );
+    }
+
+    /**
+     * Pozycje karty: remote_id, sku, nazwa, rozmiar, stan, cena konta, katalogowa, rabat i waluta rozmiaru.
+     *
+     * @return list<list<mixed>>
+     */
+    private static function memberRows(B2bRemoteProduct $product): array
+    {
+        return array_map(static fn (array $m): array => [
+            $m['remote_id'], $m['sku'], $m['name'], $m['size'] ?? null, $m['availability'] ?? null,
+            $m['price']?->net, $m['price']?->base, $m['price']?->discountPercent, $m['price']?->currency,
+        ], $product->members);
     }
 
     /**
@@ -642,6 +771,35 @@ final class JhkConnectorTest extends TestCase
         return $connector;
     }
 
+    /**
+     * Karta zapisana przez dawny podział według ceny: opis ze źródła z odciskiem w powiązaniach, slot konta, kod
+     * i nazwa z rozmiarami; pozycje = symbole rozmiarów.
+     *
+     * @param  list<string>  $sizes
+     */
+    private function legacyCard(B2bAccount $account, string $sku, string $name, string $description, float $price, float $catalog, array $sizes): Product
+    {
+        $discount = round((1 - $price / $catalog) * 100, 2);
+        $card = Product::query()->create([
+            'sku' => $sku, 'name' => $name, 'manufacturer' => 'JHK', 'description' => $description,
+            'catalog_price_net' => $catalog, 'discount_percent' => $discount, 'purchase_price' => $price, 'currency' => 'PLN',
+        ]);
+        foreach ($sizes as $size) {
+            B2bProductLink::query()->create([
+                'b2b_account_id' => $account->id, 'remote_id' => 'JT TEST BK '.$size, 'product_id' => $card->id,
+                'remote_sku' => 'JT TEST BK '.$size, 'remote_name' => $name.' '.$size, 'manufacturer' => 'JHK',
+                'description_hash' => sha1($description), 'last_purchase_price' => $price, 'last_currency' => 'PLN',
+            ]);
+        }
+        ProductSourcePrice::query()->create([
+            'product_id' => $card->id, 'source_key' => ProductSourcePrice::b2bKey((int) $account->id), 'b2b_account_id' => $account->id,
+            'catalog_price_net' => $catalog, 'purchase_price' => $price, 'discount_percent' => $discount, 'currency' => 'PLN',
+            'availability' => 'Magazyn w Polsce - dostępne 24 h: 12 szt.', 'checked_at' => now()->subDay(),
+        ]);
+
+        return $card;
+    }
+
     private function account(): B2bAccount
     {
         return B2bAccount::query()->firstOrCreate(
@@ -670,7 +828,10 @@ final class JhkConnectorTest extends TestCase
             'links' => B2bProductLink::query()->where('product_id', $p->id)->orderBy('remote_id')->pluck('remote_id')->all(),
             'shop_card' => ProductShopCard::query()->where('product_id', $p->id)->value('fields'),
             'images' => ProductImage::query()->where('product_id', $p->id)->orderBy('sort_order')->pluck('source_url')->all(),
-            'price' => ProductSourcePrice::query()->where('product_id', $p->id)->get(['purchase_price', 'catalog_price_net', 'availability'])->toArray(),
+            'price' => ProductSourcePrice::query()->where('product_id', $p->id)->get(['purchase_price', 'catalog_price_net', 'size_price_max', 'availability'])->toArray(),
+            'sizes' => ProductVariant::query()->where('product_id', $p->id)->orderBy('id')
+                ->get(['remote_id', 'label', 'purchase_price', 'list_price_net', 'availability', 'removed_at', 'updated_at'])->toArray(),
+            'size_history' => ProductVariantPriceHistory::query()->count(),
         ]])->all();
     }
 

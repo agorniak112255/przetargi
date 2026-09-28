@@ -19,20 +19,27 @@ use RuntimeException;
  * wyprzedawana stara wersja pod tym samym symbolem (bierzemy tylko, gdy symbol nie ma formy podstawowej).
  * Wersje z ujemnym numerem to wyroby tylko prezentowane, bez sprzedaży (21.09.2026: 1698 pozycji Honeywell) — pomijamy.
  *
- * Karta = wyrób w jednej cenie konta (decyzja użytkownika 15.09.2026: rozmiar w innej cenie = osobna karta, jak
- * u Ardona). SKU karty: kod wyrobu RAW-POL wielkimi literami („3M-MAS-6000” — tak serwis go pokazuje); przy kilku
- * cenach kod dostaje największa grupa (remis: pierwsza na liście), pozostałe — symbol swojej pierwszej wersji.
- * Pozycja karty (remote_id) = symbol wersji („RNITRIOS”) — stały i widoczny w serwisie.
+ * Karta = wyrób ze wszystkimi wersjami z ceną konta w jednej jednostce sprzedaży (decyzja użytkownika 28.09.2026:
+ * rozmiary w różnych cenach to jedna karta). Do 28.09.2026 (decyzja 15.09.2026) wersja w innej cenie była osobną kartą
+ * z SKU = symbol jej pierwszej wersji — takie karty zostają, dopóki nie scali ich osobne polecenie (synchronizacja daje
+ * każdej jej wersje, B2bCatalogSync::syncMembersByCard). Wersje sprzedawane w innej jednostce („szt.” i „opak.”) to
+ * nie rozmiary jednej karty — osobna karta na jednostkę. SKU karty: kod wyrobu RAW-POL wielkimi literami
+ * („3M-MAS-6000” — tak serwis go pokazuje); przy kilku jednostkach kod dostaje największa grupa (remis: pierwsza na
+ * liście), pozostałe — symbol swojej pierwszej wersji (SKU karty jest unikalne). Pozycja karty (remote_id) = symbol
+ * wersji („RNITRIOS”) — stały i widoczny w serwisie. Pozycje (members) = wersje z własną ceną konta, katalogową
+ * i dostępnością; cena karty = najniższa cena wersji (raw['price'], price()), pozostałe ceny — wiersze rozmiarów karty.
+ * Wersja bez ceny konta nie trafia na kartę (podsumowanie przebiegu ją wymienia).
  *
  * Cena konta = „cenaCennikowa” (cena w grupie cenowej konta — ta, którą serwis pokazuje jako cenę netto),
- * cena katalogowa = „cenaBazowa” (cennik bazowy A), gdy serwis ją podaje. Sprawdzone na koncie 21.09.2026:
+ * cena katalogowa = „cenaBazowa” (cennik bazowy A), gdy serwis ją podaje — każda wersja swoją, nigdy cena innej
+ * wersji. Sprawdzone na koncie 21.09.2026:
  * 3M-MAS-6000 — cena netto 68,06 (cenaCennikowa), katalogowa 97,16, promocja 61,25 do 30.09 (pomijana).
  * Cena dotyczy jednostki sprzedaży wersji („szt.”, „para”, „opak.”) — trafia do tabelki sklepu na karcie.
  *
  * Producent: marka z danych wyrobu (słownik marek serwisu); pisownię marek, które katalog już ma, bierzemy
  * z katalogu (BRANDS). RAW-POL nie jest producentem tych marek, więc łącznik nie jest B2bManufacturerSite.
  */
-final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bRunSummaryAware, B2bShopFieldSource
+final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bRunSummaryAware, B2bShopFieldSource, B2bSizePriceSource
 {
     private const SHOP_SECTION = 'Dane wyrobu';
 
@@ -129,6 +136,9 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     /** @var list<string> wyroby, których treści nie udało się pobrać */
     private array $withoutInfo = [];
 
+    /** @var list<string> wyroby z częścią wersji bez ceny konta (te wersje poza kartą) */
+    private array $versionsWithoutPrice = [];
+
     public function __construct(private readonly RawpolB2bClient $client) {}
 
     public static function key(): string
@@ -160,6 +170,7 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     {
         $this->withoutPrice = [];
         $this->withoutInfo = [];
+        $this->versionsWithoutPrice = [];
         $this->dictionaries = [];
         foreach (['def_marki_pl', 'def_linie_pl', 'def_kolory_pl', 'def_kategorie_ce_pl', 'def_normybazowe_pl'] as $name) {
             $this->dictionaries[$name] = $this->client->dataFile($name);
@@ -172,33 +183,45 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
         $this->summary = ['Katalog Raw-Pol: '.$listed['all'].' wyrobów, w sprzedaży '.count($products)
             .' (wersji: '.array_sum(array_map(static fn (array $p): int => count($p['versions']), $products)).')'];
         $cards = 0;
-        $split = 0;
+        $multiPrice = 0;
+        $multiUnit = 0;
 
         foreach (self::batches($products) as $batch) {
             $dynamic = $this->client->dynamicData(array_column($batch, 'id'));
             foreach ($batch as $product) {
-                $groups = self::priceGroups($product, is_array($dynamic[$product['id']] ?? null) ? $dynamic[$product['id']] : []);
+                $groups = self::unitGroups($product, is_array($dynamic[$product['id']] ?? null) ? $dynamic[$product['id']] : []);
                 if ($groups === []) {
                     $this->withoutPrice[] = mb_strtoupper($product['id']);
 
                     continue;
                 }
+                if (array_sum(array_map(static fn (array $g): int => count($g['versions']), $groups)) < count($product['versions'])) {
+                    $this->versionsWithoutPrice[] = mb_strtoupper($product['id']);
+                }
                 $info = $this->info($product);
                 $cards += count($groups);
-                $split += count($groups) > 1 ? 1 : 0;
-                // wyrób w kilku cenach to kilka kart — licznik postępu rośnie, zanim je wydamy
+                $multiUnit += count($groups) > 1 ? 1 : 0;
+                foreach ($groups as $group) {
+                    $multiPrice += count(array_unique(array_map(
+                        static fn (array $v): string => sprintf('%.2F', $v['price']),
+                        $group['versions'],
+                    ))) > 1 ? 1 : 0;
+                }
+                // wyrób w kilku jednostkach to kilka kart — licznik postępu rośnie, zanim je wydamy
                 $this->total += count($groups) - 1;
                 foreach ($groups as $group) {
                     yield $this->productFor($product, $group, $info);
                 }
             }
         }
-        $this->summary[] = 'Karty: '.$cards.' ('.$split.' wyrobów w kilku cenach — rozmiar w innej cenie to osobna karta)';
+        $this->summary[] = 'Karty: '.$cards.' ('.$multiPrice.' z wersjami w różnych cenach — jedna karta, cena karty = najniższa'
+            .' cena wersji, ceny wersji w tabeli rozmiarów karty; '.$multiUnit.' wyrobów w kilku jednostkach sprzedaży'
+            .' — osobna karta na jednostkę)';
     }
 
     /**
-     * Liczba kart: na początku liczba wyrobów w sprzedaży, powiększana o każdą dodatkową kartę wyrobu w kilku cenach
-     * (ceny znamy dopiero porcjami). Po pełnym przebiegu = liczba wydanych kart.
+     * Liczba kart: na początku liczba wyrobów w sprzedaży, powiększana o każdą dodatkową kartę wyrobu w kilku
+     * jednostkach sprzedaży (jednostki znamy dopiero z cenami, porcjami). Po pełnym przebiegu = liczba wydanych kart.
      */
     public function totalProducts(): int
     {
@@ -211,6 +234,10 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
         if ($this->withoutPrice !== []) {
             $lines[] = 'Bez ceny konta: '.count($this->withoutPrice).' wyrobów (pominięte), np. '
                 .implode(', ', array_slice($this->withoutPrice, 0, 10));
+        }
+        if ($this->versionsWithoutPrice !== []) {
+            $lines[] = 'Wyroby z wersjami bez ceny konta (te wersje poza kartami): '.count($this->versionsWithoutPrice).', np. '
+                .implode(', ', array_slice($this->versionsWithoutPrice, 0, 10));
         }
         if ($this->withoutInfo !== []) {
             $lines[] = 'Bez treści wyrobu (opis, normy, pliki): '.count($this->withoutInfo).' kart — zapisane z ceną, np. '
@@ -413,33 +440,52 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     }
 
     /**
-     * Wersje wyrobu z ceną konta w karty: jedna karta na cenę. SKU — patrz opis klasy.
+     * Wersje wyrobu z ceną konta w karty: jedna karta na jednostkę sprzedaży, wersje w różnych cenach na tej samej
+     * karcie (decyzja użytkownika 28.09.2026). Serwis podaje ceny tylko w złotych, więc waluta nie dzieli kart.
+     * Jednostka porównywana po unitKey („szt.”, „szt”, „ SZT. ” to ta sama); wersja bez jednostki należy do
+     * najczęstszej jednostki wyrobu (remis — pierwszej na liście), więc nie rozbija karty. Różne jednostki („szt.”
+     * i „opak.”, „para”, „kpl.”) zostają osobnymi kartami. Jednostka wersji w tabelce sklepu — dosłownie.
+     * SKU — patrz opis klasy.
      *
      * @param  array{id: string, versions: list<array{ref: int, symbol: string, size: string, color: string, ean: string}>}  $product
      * @param  array<string, mixed>  $dynamic  dane zmienne wyrobu z API (wersje wg numeru)
-     * @return list<array{sku: string, versions: list<array<string, mixed>>}>
+     * @return list<array{sku: string, unit: string, versions: list<array<string, mixed>>}>
      */
-    public static function priceGroups(array $product, array $dynamic): array
+    public static function unitGroups(array $product, array $dynamic): array
     {
         $remote = is_array($dynamic['wersje'] ?? null) ? $dynamic['wersje'] : [];
-        $groups = [];
+        $priced = [];
+        $counts = [];
         foreach ($product['versions'] as $version) {
             $data = $remote[(string) $version['ref']] ?? null;
             $net = is_array($data) ? self::number($data['cenaCennikowa'] ?? null) : null;
             if ($net === null || $net <= 0) {
                 continue;
             }
-            $groups[sprintf('%.4F', $net)][] = [
+            $unit = self::text($data['jednostka'] ?? null);
+            $key = self::unitKey($unit);
+            if ($key !== '') {
+                $counts[$key] = ($counts[$key] ?? 0) + 1;
+            }
+            $priced[] = [
                 ...$version,
                 'price' => $net,
                 'base_price' => self::number($data['cenaBazowa'] ?? null),
-                'unit' => self::text($data['jednostka'] ?? null),
+                'unit' => $unit,
                 'availability_key' => self::text($data['dostepnoscInfo'] ?? null),
                 'availability_params' => array_values(array_filter((array) ($data['dostepnoscInfoParams'] ?? []), 'is_scalar')),
             ];
         }
-        if ($groups === []) {
+        if ($priced === []) {
             return [];
+        }
+        // najczęstsza jednostka (remis — pierwsza na liście: arsort zachowuje kolejność równych)
+        arsort($counts);
+        $fallback = (string) (array_key_first($counts) ?? '');
+        $groups = [];
+        foreach ($priced as $version) {
+            $key = self::unitKey($version['unit']);
+            $groups['#'.($key !== '' ? $key : $fallback)][] = $version;
         }
 
         $main = array_key_first($groups);
@@ -451,13 +497,21 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
 
         $cards = [];
         foreach ($groups as $key => $versions) {
+            $units = array_values(array_filter(array_column($versions, 'unit'), static fn (string $u): bool => $u !== ''));
             $cards[] = [
                 'sku' => $key === $main ? mb_strtoupper($product['id']) : $versions[0]['symbol'],
+                'unit' => $units[0] ?? '',
                 'versions' => $versions,
             ];
         }
 
         return $cards;
+    }
+
+    /** Klucz jednostki sprzedaży: małe litery, pojedyncze odstępy, bez kropek na końcu („Szt.” → „szt”). */
+    private static function unitKey(string $unit): string
+    {
+        return rtrim(mb_strtolower(self::inline($unit)), '. ');
     }
 
     /**
@@ -617,7 +671,7 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
 
     /**
      * @param  array{id: string, brand: string, line: string, name: string, image: string}  $product
-     * @param  array{sku: string, versions: list<array<string, mixed>>}  $group
+     * @param  array{sku: string, unit: string, versions: list<array<string, mixed>>}  $group
      * @param  array{description: string, category: string, group: string, branches: list<string>, norms: list<string>, versions: array<int, array{documents: list<array{0: string, 1: string}>, norms: list<string>, ce: string}>}|null  $info
      */
     private function productFor(array $product, array $group, ?array $info): B2bRemoteProduct
@@ -649,10 +703,12 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
                 'unit' => $version['unit'],
                 'label' => $this->versionLabel($version),
                 'availability' => $this->availability($version),
+                'price' => self::versionPrice($version),
             ];
         }
 
         $labelled = array_values(array_filter($items, static fn (array $item): bool => $item['label'] !== ''));
+        $cheapest = self::cheapest($items);
 
         return new B2bRemoteProduct(
             remoteId: $first['symbol'],
@@ -665,8 +721,10 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
                 'brand' => $brand,
                 'brand_label' => $brandLabel,
                 'line' => $this->lineLabel($product['line']),
-                'price' => $first['price'],
-                'base_price' => $first['base_price'],
+                // cena karty = najtańsza wersja z jej własną ceną katalogową (B2bCatalogSync liczy ją też
+                // z members[].price); ceny pozostałych wersji — w members
+                'price' => $cheapest->net,
+                'base_price' => $cheapest->base,
                 'image' => $product['image'],
                 'description' => $info['description'] ?? '',
                 'category' => $info['category'] ?? '',
@@ -675,18 +733,27 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
                 'norms' => $norms !== [] ? array_values($norms) : ($info['norms'] ?? []),
                 'ce' => array_values($ce),
                 'documents' => $documents,
-                'versions' => $items,
+                'versions' => array_map(static function (array $item): array {
+                    unset($item['price']);
+
+                    return $item;
+                }, $items),
             ],
             availability: self::availabilityText($items),
             variantSummary: $labelled !== []
                 ? 'Wersje: '.implode('; ', array_map(static fn (array $item): string => $item['label'].' ('.$item['symbol'].')', $labelled))
                 : null,
+            // wyrób z jedną wersją — pozycja pojedyncza (cena z price()); kilka wersji — każda z własną ceną
             members: count($versions) > 1
-                ? array_map(static fn (array $item): array => [
+                ? array_map(static fn (array $item): array => array_filter([
                     'remote_id' => $item['symbol'],
                     'sku' => $item['symbol'],
                     'name' => trim($product['name'].' '.$item['label']),
-                ], $items)
+                    'availability' => $item['availability'],
+                    // kolor i rozmiar wersji dosłownie (etykieta wiersza rozmiaru); bez nich — symbol wersji
+                    'size' => $item['label'],
+                    'price' => $item['price'],
+                ], static fn (mixed $value): bool => $value !== ''), $items)
                 : [],
             identifiers: self::identifiers($product['id'], $items),
         );
@@ -694,7 +761,8 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
 
     /**
      * Kod wyrobu RAW-POL (kod rodziny wersji, bez koloru i rozmiaru) dosłownie z listy wyrobów („3m-mas-6000” —
-     * SKU karty to nasz zapis wielkimi literami) — na każdej karcie wyrobu, także na karcie wersji w innej cenie.
+     * SKU karty to nasz zapis wielkimi literami) — na każdej karcie wyrobu, także na karcie wersji w innej jednostce sprzedaży
+     * (i na dawnej karcie wersji w innej cenie, sprzed 28.09.2026).
      * Symbol i EAN każdej wersji; pozycja = symbol (remote_id powiązania). RAW-POL jest hurtownią, więc symbol to
      * jej własny kod, nie kod producenta.
      *
@@ -717,6 +785,45 @@ final class RawpolB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
         }
 
         return $out;
+    }
+
+    /**
+     * Cena wersji: cena konta („cenaCennikowa”) i katalogowa („cenaBazowa”) tej wersji, gdy serwis ją podaje — nigdy
+     * cena katalogowa innej wersji. Waluta — złote (serwis nie podaje innej).
+     *
+     * @param  array<string, mixed>  $version
+     */
+    private static function versionPrice(array $version): B2bRemotePrice
+    {
+        $net = round((float) $version['price'], 2);
+        $base = is_float($version['base_price'] ?? null) && $version['base_price'] > 0 ? round($version['base_price'], 2) : null;
+
+        return new B2bRemotePrice(
+            net: $net,
+            base: $base,
+            discountPercent: $base !== null && $base > $net ? round((1 - $net / $base) * 100, 2) : 0.0,
+        );
+    }
+
+    /**
+     * Najtańsza wersja karty, ta sama reguła co w B2bCatalogSync::sizePricing: remis ceny konta rozstrzyga
+     * B2bCatalogSync::winsSizePriceTie — wygrywa wersja ZE znaną ceną katalogową, z dwóch znanych niższa, dalej
+     * pierwsza na liście.
+     *
+     * @param  non-empty-list<array{price: B2bRemotePrice}>  $items
+     */
+    private static function cheapest(array $items): B2bRemotePrice
+    {
+        $cheapest = $items[0]['price'];
+        foreach ($items as $item) {
+            $price = $item['price'];
+            if ($price->net < $cheapest->net - 0.0049
+                || (abs($price->net - $cheapest->net) < 0.005 && B2bCatalogSync::winsSizePriceTie($price->base, $cheapest->base))) {
+                $cheapest = $price;
+            }
+        }
+
+        return $cheapest;
     }
 
     /** Nazwa linii wyrobów ze słownika serwisu („TACTICAL GUARD”); klucz dosłownie, gdy słownik go nie zna. */

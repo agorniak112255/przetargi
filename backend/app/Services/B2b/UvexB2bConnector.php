@@ -21,14 +21,19 @@ use RuntimeException;
  * strony i liczbą wierszy; zmiana w trakcie (produkt dodany/usunięty) = jedno ponowne pobranie całej listy,
  * potem błąd przebiegu bez zapisu. Wiersz bez ceny konta = błąd (utrata widoku cen), nie „brak ceny”.
  *
- * Rozmiary o tej samej cenie są jedną kartą (UvexSizeGroups); karta podaje wszystkie swoje kody (members), więc
- * synchronizacja wiąże każdy kod z kartą. Pozycja pojedyncza też podaje swój kod — dwie osobne pozycje nigdy nie
- * trafią na jedną kartę. Kod i remoteId karty = pierwszy kod grupy (sortowanie naturalne) — prawdziwy kod, bez
- * wymyślonego rdzenia; pozostałe kody i rozmiary są w variant_summary (wyszukiwanie).
+ * Rozmiary jednego wyrobu są jedną kartą (UvexSizeGroups), także w różnych cenach (decyzja użytkownika 28.09.2026;
+ * do 28.09.2026 — decyzja 15.09.2026 — rozmiar w innej cenie był osobną kartą; takie karty zostają, dopóki nie scali
+ * ich osobne polecenie, a synchronizacja daje każdej jej rozmiary — B2bCatalogSync::syncMembersByCard). Karta podaje
+ * wszystkie swoje kody (members), więc synchronizacja wiąże każdy kod z kartą; w grupie rozmiarów każda pozycja ma
+ * rozmiar, dostępność i „Twoją cenę netto” swojego kodu (wiersz tabeli rozmiarów karty), a cena karty = najniższa
+ * cena rozmiaru. Pozycja pojedyncza też podaje swój kod (bez ceny pozycji) — dwie osobne pozycje nigdy nie trafią na
+ * jedną kartę. Kod i remoteId karty = pierwszy kod grupy (sortowanie naturalne) — prawdziwy kod, bez wymyślonego
+ * rdzenia; pozostałe kody i rozmiary są w variant_summary (wyszukiwanie).
  *
  * Ceny: „Twoja cena netto” w PLN (jedyna waluta widoczna na koncie); katalogowa = zakupu (sklep nie pokazuje ceny
  * bazowej); 0,00 PLN (np. pozycje „Cenniki”, „Karty charakterystyki”) = brak ceny. Dostępność dosłownie
- * („Dostępny” / „Na zamówienie”), dla grupy z podziałem na rozmiary, gdy się różni.
+ * („Dostępny” / „Na zamówienie”), dla grupy z podziałem na rozmiary, gdy się różni. Warunek zamawiania zostaje
+ * warunkiem karty (różny w rozmiarach — „zależy od rozmiaru”, groupOrder()).
  *
  * Karta bez opisu w panelu ma tam odnośnik do strony producenta (uvex-laservision.de) — opis (zakładka
  * „Description”, a gdy jej nie ma, wstęp przy cenie), tabelę „Specifications” i poziomy ochrony bierzemy stamtąd,
@@ -53,10 +58,11 @@ use RuntimeException;
  * (nazwa pliku zmienia się z wydaniem cennika — szukamy po tekście odnośnika). Wczytywany raz na przebieg, po
  * liście, przed pierwszą kartą; każdy błąd (brak odnośnika, HTTP, plik nieczytelny) to ostrzeżenie w podsumowaniu,
  * nie przerwanie przebiegu — ceny konta nie zależą od cennika bazowego, a synchronizacja zostawia wtedy ceny
- * bazowe z poprzedniego przebiegu. Dopasowanie kodów: UvexBasePriceList. Rabat standardowy z reguł konta
+ * bazowe z poprzedniego przebiegu. Dopasowanie kodów: UvexBasePriceList — tylko kody rozmiarów w cenie karty
+ * (najtańszych), bo cena bazowa w slocie ma opisywać cenę karty (basePrice()). Rabat standardowy z reguł konta
  * (B2bDiscountRuleResolver: numer katalogowy = kod karty, kategoria = arkusz cennika, nazwa = nazwa karty).
  */
-final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bStandardDiscountSite
+final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bSizePriceSource, B2bStandardDiscountSite
 {
     /**
      * Rabaty standardowe z wiadomości dostawcy (22.09.2026): 35% ochrona wzroku; 30% hełmy, ochrona słuchu, dróg
@@ -192,7 +198,8 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
 
     /**
      * Ostatnia karta, o którą pytano basePrice() — drugie pytanie o tę samą kartę nie liczy się drugi raz
-     * w licznikach cennika ani reguł.
+     * w licznikach cennika ani reguł. Klucz = pozycja wiodąca i dopasowywane kody (część wyrobu na starej karcie
+     * ma tę samą pozycję wiodącą co cały wyrób, ale inne kody).
      *
      * @var array{remote_id: string, price: B2bBasePrice|null}|null
      */
@@ -249,18 +256,21 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
 
         $products = $skipped;
         $grouped = 0;
+        $multiPrice = 0;
         foreach ($this->groups->group($rows) as $group) {
             $products[] = $this->productFor($group);
             if (count($group) > 1) {
                 $grouped++;
+                $multiPrice += count(array_unique(array_map(static fn (array $m): int => (int) $m['row']['price_cents'], $group))) > 1 ? 1 : 0;
             }
         }
         $this->total = count($products);
         $this->progress(sprintf(
-            'Lista UVEX: %d pozycji → %d kart (%d grup rozmiarów o tej samej cenie)',
+            'Lista UVEX: %d pozycji → %d kart (%d grup rozmiarów, w tym %d z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)',
             count($rows) + count($skipped),
             $this->total,
             $grouped,
+            $multiPrice,
         ));
 
         // generator żyje do ostatniej karty — wiersze listy (tysiące pozycji) nie są już potrzebne,
@@ -349,20 +359,71 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     }
 
     /**
-     * Wiersz cennika bazowego dla wszystkich kodów karty (rozmiary) i rabat standardowy z reguł konta. Karta bez
+     * Kody pozycji w najniższej cenie (members[].price); [] — pozycje bez cen.
+     *
+     * @param  list<array<string, mixed>>  $members
+     * @return list<string>
+     */
+    private static function cheapestMemberCodes(array $members): array
+    {
+        $min = null;
+        foreach ($members as $member) {
+            if (($member['price'] ?? null) instanceof B2bRemotePrice) {
+                $net = round($member['price']->net, 2);
+                $min = $min === null ? $net : min($min, $net);
+            }
+        }
+        if ($min === null) {
+            return [];
+        }
+        $codes = [];
+        foreach ($members as $member) {
+            if (($member['price'] ?? null) instanceof B2bRemotePrice && abs(round($member['price']->net, 2) - $min) < 0.005) {
+                $codes[] = (string) $member['sku'];
+            }
+        }
+
+        return array_values(array_filter($codes, static fn (string $code): bool => $code !== ''));
+    }
+
+    /**
+     * Wiersz cennika bazowego dla kodów rozmiarów w cenie karty i rabat standardowy z reguł konta. Karta bez
      * wiersza, z niejednoznacznym wierszem albo z arkusza pominiętego = null (brak oceny ceny, nie „standard”).
+     *
+     * Od 28.09.2026 karta ma rozmiary w różnych cenach, a jej cena (slot konta) to cena najtańszego rozmiaru — cena
+     * bazowa w slocie musi opisywać tę samą cenę, bo „cena specjalna” porównuje je ze sobą (SupplierSpecialPrice).
+     * Dopasowujemy więc tylko kody rozmiarów w cenie karty (wszystkie kody, gdy rozmiary mają jedną cenę — jak dotąd).
+     * Te kody bez wiersza w cenniku = null, nawet gdy droższy rozmiar ma wiersz. Kody bierzemy z produktu, o który
+     * pyta synchronizacja: wyrób z cenami pozycji — najtańsze pozycje (także część wyrobu na starej karcie z podziału
+     * cenowego, B2bCatalogSync::syncMembersByCard); pojedyncza pozycja rozdzielona mapą połączeń (members = [],
+     * syncMembersSeparately) — tylko jej własny kod, nie raw card_price_codes całego wyrobu (raw jest wspólny);
+     * wyrób bez cen pozycji — raw card_price_codes, a bez nich wszystkie kody.
      */
     public function basePrice(B2bRemoteProduct $product): ?B2bBasePrice
     {
         if ($this->basePrices === null || ($product->raw['status'] ?? null) !== 'ok') {
             return null;
         }
-        if (($this->lastBasePrice['remote_id'] ?? null) === $product->remoteId) {
+        // kody najtańszych rozmiarów z cen pozycji — także dla części wyrobu na starej karcie z podziału cenowego
+        // (B2bCatalogSync::syncMembersByCard podaje tylko rozmiary tej karty); pozycja pojedyncza (members = []) —
+        // jej własny kod; bez cen pozycji — raw card_price_codes
+        $codes = $product->members === [] ? [$product->sku] : self::cheapestMemberCodes($product->members);
+        if ($codes === []) {
+            $codes = array_values(array_filter(
+                array_map('strval', (array) ($product->raw['card_price_codes'] ?? [])),
+                static fn (string $code): bool => $code !== '',
+            ));
+        }
+        if ($codes === []) {
+            $codes = array_map(static fn (array $member): string => (string) $member['sku'], $product->members);
+        }
+        $codes = $codes !== [] ? $codes : [$product->sku];
+        // ta sama pozycja wiodąca bywa wyrobem i częścią wyrobu (stara karta) — pamięć po pozycji i kodach
+        $key = $product->remoteId.'|'.implode('|', $codes);
+        if (($this->lastBasePrice['remote_id'] ?? null) === $key) {
             return $this->lastBasePrice['price'];
         }
-
-        $codes = array_map(static fn (array $member): string => (string) $member['sku'], $product->members);
-        $row = $this->basePrices->match($codes !== [] ? $codes : [$product->sku]);
+        $row = $this->basePrices->match($codes);
         $price = null;
         if ($row !== null) {
             $price = new B2bBasePrice(
@@ -377,7 +438,7 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
                 )?->discountPercent,
             );
         }
-        $this->lastBasePrice = ['remote_id' => $product->remoteId, 'price' => $price];
+        $this->lastBasePrice = ['remote_id' => $key, 'price' => $price];
 
         return $price;
     }
@@ -1029,11 +1090,33 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
     private function productFor(array $group): B2bRemoteProduct
     {
         $first = $group[0]['row'];
+        // Cena karty = najtańszy rozmiar (decyzja użytkownika 28.09.2026); remis — pierwszy w kolejności kodów, jak
+        // w B2bCatalogSync (bez ceny katalogowej remis rozstrzyga kolejność). Pozycja pojedyncza — jej własna cena.
+        $cheapest = $group[0]['row'];
+        foreach ($group as $member) {
+            if ((int) $member['row']['price_cents'] < (int) $cheapest['price_cents']) {
+                $cheapest = $member['row'];
+            }
+        }
+        // ceny rozmiarów tylko w grupie (każda pozycja grupy ma cenę > 0 — UvexSizeGroups nie daje rozmiaru pozycji
+        // bez ceny); pozycja pojedyncza jak dotąd bez ceny pozycji — karta bez tabeli rozmiarów
+        $sized = count($group) > 1;
         $members = array_map(static fn (array $m): array => [
             'remote_id' => (string) $m['row']['code'],
             'sku' => (string) $m['row']['code'],
             'name' => (string) $m['row']['name'],
+            ...($sized ? array_filter([
+                'availability' => (string) $m['row']['availability'] !== '' ? (string) $m['row']['availability'] : null,
+                'size' => (string) $m['size']['raw'],
+                // „Twoja cena netto” rozmiaru; ceny bazowej lista nie podaje (cennik bazowy — basePrice())
+                'price' => new B2bRemotePrice(net: (int) $m['row']['price_cents'] / 100, currency: 'PLN'),
+            ], static fn (mixed $v): bool => $v !== null) : []),
         ], $group);
+        // kody rozmiarów w cenie karty — do nich (i tylko do nich) dopasowujemy cennik bazowy (basePrice())
+        $cardPriceCodes = array_values(array_map(
+            static fn (array $m): string => (string) $m['row']['code'],
+            array_filter($group, static fn (array $m): bool => $m['row']['price_cents'] === $cheapest['price_cents']),
+        ));
         // tylko kod i nazwa — jedyne, co czyta manufacturer(); pełne wiersze listy (1302 karty × rozmiary)
         // zostawałyby w pamięci do końca przebiegu
         $rows = array_map(static fn (array $m): array => [
@@ -1063,7 +1146,9 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             raw: [
                 'status' => 'ok',
                 'code' => $first['code'],
-                'price_text' => $first['price_text'],
+                // cena karty = najtańszy rozmiar (price()); ceny pozostałych rozmiarów — members[].price
+                'price_text' => $cheapest['price_text'],
+                'card_price_codes' => $cardPriceCodes,
                 'unit' => $first['unit'],
                 'order' => self::groupOrder($group),
                 'detail_url' => $first['detail_url'],

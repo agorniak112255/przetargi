@@ -13,6 +13,8 @@ use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
+use App\Models\ProductVariantPriceHistory;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bDocumentSource;
@@ -24,6 +26,7 @@ use App\Services\B2b\B2bRemoteIdentifier;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
+use App\Services\B2b\B2bSizePriceSource;
 use App\Services\B2b\P4sB2bClient;
 use App\Services\B2b\P4sB2bConnector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -206,13 +209,14 @@ final class P4sConnectorTest extends TestCase
         $this->assertSame('Rękawice testowe powlekane nitrylem', $card->name);
         $this->assertSame(
             [
-                // dostępność każdego rozmiaru osobno (mapa połączeń: rozmiar rozdzielony na swoją kartę)
-                ['remote_id' => '900111', 'sku' => '11.999/F07,0', 'name' => 'Rękawice testowe powlekane nitrylem, rozmiar 7', 'availability' => 'Produkt dostępny'],
-                ['remote_id' => '900112', 'sku' => '11.999/F08,0', 'name' => 'Rękawice testowe powlekane nitrylem, rozmiar 8', 'availability' => 'Produkt dostępny'],
+                // dostępność każdego rozmiaru osobno (mapa połączeń: rozmiar rozdzielony na swoją kartę); cena rozmiaru
+                // = cena konta, bez ceny katalogowej (platforma jej nie podaje)
+                ['900111', '11.999/F07,0', 'Rękawice testowe powlekane nitrylem, rozmiar 7', 'Produkt dostępny', 'rozmiar 7', 45.02, null, 'PLN'],
+                ['900112', '11.999/F08,0', 'Rękawice testowe powlekane nitrylem, rozmiar 8', 'Produkt dostępny', 'rozmiar 8', 45.02, null, 'PLN'],
                 // rozmiar bez oznaczenia — reszta nazwy rozmiaru po nazwie wyrobu
-                ['remote_id' => '900113', 'sku' => '11.999/F09,0', 'name' => 'Rękawice testowe powlekane nitrylem, rozmiar 9', 'availability' => 'Produkt niedostępny'],
+                ['900113', '11.999/F09,0', 'Rękawice testowe powlekane nitrylem, rozmiar 9', 'Produkt niedostępny', 'rozmiar 9', 45.02, null, 'PLN'],
             ],
-            $card->members,
+            self::members($card),
         );
         $this->assertSame('Warianty: rozmiar 7 (11.999/F07,0); rozmiar 8 (11.999/F08,0); rozmiar 9 (11.999/F09,0)', $card->variantSummary);
         $this->assertSame('Produkt dostępny: rozmiar 7, rozmiar 8; Produkt niedostępny: rozmiar 9', $card->availability);
@@ -236,7 +240,12 @@ final class P4sConnectorTest extends TestCase
         $this->assertSame(1, P4sB2bConnector::parseProduct(['id' => 1, 'code' => 'X1', 'name' => 'Wyrób', 'minimumQuantity' => 1])['minimum_quantity']);
     }
 
-    public function test_sizes_in_two_prices_are_two_cards_coded_with_their_first_size(): void
+    /**
+     * Do 28.09.2026 (decyzja 15.09.2026) rozmiary w dwóch cenach były dwiema kartami („05 99 360 04 056” z rozmiarami
+     * 56 i „05 99 360 08 058” z 58). Od decyzji użytkownika 28.09.2026 to jedna karta z kodem matki i nazwą bez
+     * rozmiarów, a cena każdego rozmiaru jedzie przy jego pozycji; cena karty (price()) = najniższa cena rozmiaru.
+     */
+    public function test_sizes_in_two_prices_are_one_card_with_size_prices_and_the_lowest_card_price(): void
     {
         $this->addProduct(self::trousers());
         $this->fakeSite();
@@ -245,14 +254,47 @@ final class P4sConnectorTest extends TestCase
         $products = iterator_to_array($connector->products(), false);
 
         $this->assertSame(
-            [
-                ['05 99 360 04 056', 'Spodnie testowe FR360 (kolor niebieski, rozmiar 56; kolor szary, rozmiar 56)', 2],
-                ['05 99 360 08 058', 'Spodnie testowe FR360 (kolor szary, rozmiar 58)', 1],
-            ],
+            [['05 99 360 00 000', 'Spodnie testowe FR360', 3]],
             array_map(static fn (B2bRemoteProduct $p): array => [$p->sku, $p->name, count($p->members)], $products),
         );
-        $this->assertSame([134.56, 148.09], array_map(static fn (B2bRemoteProduct $p): ?float => $connector->price($p)?->net, $products));
-        $this->assertStringContainsString('1 wyrobów w kilku cenach', implode("\n", $connector->runSummary()));
+        $this->assertSame('900201', $products[0]->remoteId);
+        $this->assertSame(
+            [
+                ['900201', '05 99 360 04 056', 'Spodnie testowe FR360, kolor niebieski, rozmiar 56', 'Produkt niedostępny', 'kolor niebieski, rozmiar 56', 134.56, null, 'PLN'],
+                ['900202', '05 99 360 08 056', 'Spodnie testowe FR360, kolor szary, rozmiar 56', 'Produkt niedostępny', 'kolor szary, rozmiar 56', 134.56, null, 'PLN'],
+                ['900203', '05 99 360 08 058', 'Spodnie testowe FR360, kolor szary, rozmiar 58', 'Produkt niedostępny', 'kolor szary, rozmiar 58', 148.09, null, 'PLN'],
+            ],
+            self::members($products[0]),
+        );
+        $this->assertSame(
+            'Warianty: kolor niebieski, rozmiar 56 (05 99 360 04 056); kolor szary, rozmiar 56 (05 99 360 08 056); kolor szary, rozmiar 58 (05 99 360 08 058)',
+            $products[0]->variantSummary,
+        );
+        $this->assertSame(134.56, $connector->price($products[0])?->net);
+        $this->assertNull($connector->price($products[0])?->base);
+        $this->assertSame(1, $connector->totalProducts());
+        $this->assertInstanceOf(B2bSizePriceSource::class, $connector);
+        $this->assertStringContainsString('Karty: 1 (1 wyrobów z rozmiarami w różnych cenach — jedna karta', implode("\n", $connector->runSummary()));
+    }
+
+    /**
+     * Najtańszy rozmiar nie musi być pierwszy: pozycja wiodąca (remoteId) to pierwszy rozmiar z listy, a cena karty
+     * — najniższa cena rozmiaru.
+     */
+    public function test_card_price_is_the_cheapest_size_also_when_it_is_not_the_first(): void
+    {
+        $trousers = self::trousers();
+        $trousers['sizes'][0]['netPrice'] = '160,00 PLN';
+        $this->addProduct($trousers);
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(1, $products);
+        $this->assertSame('900201', $products[0]->remoteId);
+        $this->assertSame([160.0, 134.56, 148.09], array_map(static fn (array $m): float => $m['price']->net, $products[0]->members));
+        $this->assertSame(134.56, $connector->price($products[0])?->net);
     }
 
     public function test_cards_carry_the_manufacturer_code_the_p4s_family_code_and_each_size_code_as_identifiers(): void
@@ -273,7 +315,7 @@ final class P4sConnectorTest extends TestCase
             $p->identifiers ?? [],
         );
         $products = array_column(array_map(static fn (B2bRemoteProduct $p): array => ['sku' => $p->sku, 'product' => $p], $products), 'product', 'sku');
-        $this->assertSame(['000999', '05 99 360 04 056', '05 99 360 08 058', '11.999'], array_keys($products));
+        $this->assertSame(['000999', '05 99 360 00 000', '11.999'], array_keys($products));
         // wyrób pojedynczy: kod P4S to kod pozycji, nie kod rodziny
         $this->assertSame([
             ['manufacturer_code', 'PS99', null, null, 'manufacturerCode'],
@@ -286,27 +328,23 @@ final class P4sConnectorTest extends TestCase
             ['source_code', '11.999/F08,0', '900112', 'rozmiar 8', 'code'],
             ['source_code', '11.999/F09,0', '900113', null, 'code'],
         ], $identifiers($products['11.999']));
-        // podział cenowy: kod producenta i kod rodziny na każdej karcie
-        $this->assertSame([
-            ['manufacturer_code', 'FR360', null, null, 'manufacturerCode'],
-            ['model_code', '05 99 360 00 000', null, null, 'code'],
-            ['source_code', '05 99 360 04 056', '900201', 'kolor niebieski, rozmiar 56', 'code'],
-            ['source_code', '05 99 360 08 056', '900202', 'kolor szary, rozmiar 56', 'code'],
-        ], $identifiers($products['05 99 360 04 056']));
-        // rozmiar karty ma własny kod producenta — kod z karty wyrobu (FR360) to kod modelu, nie kod tego rozmiaru
-        // (zmiana 24.09.2026: wcześniej szedł jako kod producenta pod pozycję pierwszego rozmiaru)
+        // rozmiary w dwóch cenach = jedna karta (28.09.2026): rozmiar 58 ma własny kod producenta — kod z karty wyrobu
+        // (FR360) to kod modelu, nie kod pierwszego rozmiaru (zmiana 24.09.2026: wcześniej szedł jako kod producenta pod
+        // pozycję pierwszego rozmiaru); kod P4S i kod producenta rozmiaru pod jego pozycją
         $this->assertSame([
             ['model_code', 'FR360', null, null, 'manufacturerCode'],
             ['model_code', '05 99 360 00 000', null, null, 'code'],
+            ['source_code', '05 99 360 04 056', '900201', 'kolor niebieski, rozmiar 56', 'code'],
+            ['source_code', '05 99 360 08 056', '900202', 'kolor szary, rozmiar 56', 'code'],
             ['source_code', '05 99 360 08 058', '900203', 'kolor szary, rozmiar 58', 'code'],
             ['manufacturer_code', 'FR360-08-58', '900203', 'kolor szary, rozmiar 58', 'manufacturerCode'],
-        ], $identifiers($products['05 99 360 08 058']));
+        ], $identifiers($products['05 99 360 00 000']));
     }
 
     /**
      * P4S „6X00 Półmaska 3M 6000” (24.09.2026): kod producenta z karty wyrobu (7000146847) to kod rozmiaru M — pod
      * pozycją pierwszego rozmiaru (S) rozmiar S wskazywał dwie karty 3M. Kod karty równy kodowi rozmiaru jest pomijany,
-     * także gdy ten rozmiar jest w innej grupie cenowej (osobnej karcie P4S).
+     * także gdy ten rozmiar ma inną cenę (do 28.09.2026 osobna karta P4S, teraz ta sama karta).
      */
     public function test_card_code_equal_to_a_size_code_is_not_attached_to_the_first_size(): void
     {
@@ -326,9 +364,8 @@ final class P4sConnectorTest extends TestCase
             array_filter($p->identifiers ?? [], static fn (B2bRemoteIdentifier $i): bool => $i->type === 'manufacturer_code'),
         ));
 
-        // grupa 04 056: kod karty = kod rozmiaru z drugiej grupy cenowej — nie trafia pod rozmiar 900201
-        $this->assertSame([['FR360-04-56', '900201']], $manufacturerCodes($products['05 99 360 04 056']));
-        $this->assertSame([['FR360-08-58', '900203']], $manufacturerCodes($products['05 99 360 08 058']));
+        // kod karty = kod rozmiaru 58 (innej ceny) — nie trafia pod pierwszy rozmiar 900201, tylko kody rozmiarów
+        $this->assertSame([['FR360-04-56', '900201'], ['FR360-08-58', '900203']], $manufacturerCodes($products['05 99 360 00 000']));
     }
 
     public function test_offers_are_merged_without_duplicates_and_non_products_are_skipped(): void
@@ -409,7 +446,8 @@ final class P4sConnectorTest extends TestCase
 
         $products = iterator_to_array($connector->products(), false);
 
-        $this->assertCount(4, $products);
+        // trzy wyroby = trzy karty (rozmiary w różnych cenach to od 28.09.2026 jedna karta)
+        $this->assertCount(3, $products);
         $this->assertStringContainsString('pobieram od nowa', implode("\n", $progress));
     }
 
@@ -500,7 +538,8 @@ final class P4sConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
 
-        $this->assertSame(4, $result['created'], implode(' | ', $result['errors']));
+        // spodnie z rozmiarami w dwóch cenach to jedna karta (decyzja użytkownika 28.09.2026)
+        $this->assertSame(3, $result['created'], implode(' | ', $result['errors']));
         $gloves = Product::query()->where('sku', '11.999')->sole();
         $this->assertSame('LEBON', $gloves->manufacturer);
         $this->assertSame(
@@ -521,11 +560,22 @@ final class P4sConnectorTest extends TestCase
             ['https://b2b.p4s.pl/productDocuments/900001/1_PS99.jpg', 'https://b2b.p4s.pl/productDocuments/900001/2_PS99%20bok.jpg'],
             ProductImage::query()->where('product_id', $goggles->id)->orderBy('sort_order')->pluck('source_url')->all(),
         );
-        $this->assertSame('148.09', (string) ProductSourcePrice::query()
-            ->where('product_id', Product::query()->where('sku', '05 99 360 08 058')->value('id'))->value('purchase_price'));
+        $trousersCard = Product::query()->where('sku', '05 99 360 00 000')->sole();
+        $this->assertSame('Spodnie testowe FR360', $trousersCard->name);
+        $trousersSlot = ProductSourcePrice::query()->where('product_id', $trousersCard->id)->sole();
+        // cena karty = najtańszy rozmiar, najwyższa cena rozmiaru przy slocie, każdy rozmiar w tabeli rozmiarów
+        $this->assertSame('134.56', (string) $trousersSlot->purchase_price);
+        $this->assertSame('148.09', (string) $trousersSlot->size_price_max);
+        $this->assertSame(
+            [['kolor niebieski, rozmiar 56', '134.56'], ['kolor szary, rozmiar 56', '134.56'], ['kolor szary, rozmiar 58', '148.09']],
+            ProductVariant::query()->where('product_id', $trousersCard->id)->where('kind', ProductVariant::KIND_SIZE)->orderBy('sort_order')->get()
+                ->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price])->all(),
+        );
+        $this->assertSame('148.09', (string) B2bProductLink::query()->where('remote_id', '900203')->value('last_purchase_price'));
+        // rękawice w jednej cenie — rozmiary też w tabeli, bez „do Y”
+        $this->assertNull($slot->size_price_max);
 
-        // identyfikatory: kod producenta i kod rodziny pod pozycją karty, kod P4S pod każdym rozmiarem; kod
-        // producenta na obu kartach wyrobu w dwóch cenach
+        // identyfikatory: kod producenta i kod rodziny pod pozycją karty, kod P4S pod każdym rozmiarem
         $stored = static fn (string $sku): array => ProductIdentifier::query()
             ->where('product_id', Product::query()->where('sku', $sku)->value('id'))
             ->orderBy('position_key')->orderBy('type')->get()
@@ -542,11 +592,8 @@ final class P4sConnectorTest extends TestCase
             ['900201', 'manufacturer_code', 'FR360', null], ['900201', 'model_code', '05 99 360 00 000', null],
             ['900201', 'source_code', '05 99 360 04 056', 'kolor niebieski, rozmiar 56'],
             ['900202', 'source_code', '05 99 360 08 056', 'kolor szary, rozmiar 56'],
-        ], $stored('05 99 360 04 056'));
-        $this->assertSame([
-            ['900203', 'manufacturer_code', 'FR360', null], ['900203', 'model_code', '05 99 360 00 000', null],
             ['900203', 'source_code', '05 99 360 08 058', 'kolor szary, rozmiar 58'],
-        ], $stored('05 99 360 08 058'));
+        ], $stored('05 99 360 00 000'));
         $this->assertSame('PORTWEST', ProductIdentifier::query()->where('value', 'PS99')->value('manufacturer'));
         $count = ProductIdentifier::query()->count();
 
@@ -555,7 +602,7 @@ final class P4sConnectorTest extends TestCase
 
         $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
         $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
-        $this->assertSame(4, $second['unchanged'], implode(' | ', $second['errors']));
+        $this->assertSame(3, $second['unchanged'], implode(' | ', $second['errors']));
         $this->assertSame($before, $this->snapshot());
         // drugi przebieg: identyfikatorów nie przybywa ani nie znikają
         $this->assertSame($count, ProductIdentifier::query()->count());
@@ -564,6 +611,40 @@ final class P4sConnectorTest extends TestCase
         foreach (B2bSyncRun::query()->get() as $run) {
             $this->assertSame([], preg_grep('/identyfikator /', array_column((array) $run->log, 'text')));
         }
+    }
+
+    /**
+     * Karty sprzed 28.09.2026 (spodnie rozbite według ceny na „05 99 360 04 056” z rozmiarami 56 i „05 99 360 08 058”
+     * z 58): przebieg po zmianie nie zakłada karty z kodem matki, nie przepina powiązań i nie zmienia cen kart — każda
+     * karta dostaje swoje rozmiary, a wyrób trafia do size_spread przebiegu (scalenie — osobne polecenie).
+     */
+    public function test_legacy_price_split_cards_stay_and_get_their_own_sizes(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addProduct(self::trousers());
+        $this->fakeSite();
+        $account = $this->account();
+        $small = $this->legacyCard($account, '05 99 360 04 056', 'Spodnie testowe FR360 (kolor niebieski, rozmiar 56; kolor szary, rozmiar 56)', 134.56, ['900201' => '05 99 360 04 056', '900202' => '05 99 360 08 056']);
+        $large = $this->legacyCard($account, '05 99 360 08 058', 'Spodnie testowe FR360 (kolor szary, rozmiar 58)', 148.09, ['900203' => '05 99 360 08 058']);
+
+        $result = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $result['created'], implode(' | ', $result['errors']));
+        $this->assertSame(0, $result['skipped'], implode(' | ', $result['errors']));
+        $this->assertSame(2, Product::query()->count());
+        $this->assertFalse(Product::query()->where('sku', '05 99 360 00 000')->exists());
+        $links = static fn (Product $card): array => B2bProductLink::query()->where('product_id', $card->id)->orderBy('remote_id')->pluck('remote_id')->all();
+        $this->assertSame(['900201', '900202'], $links($small));
+        $this->assertSame(['900203'], $links($large));
+        $this->assertSame('134.56', (string) ProductSourcePrice::query()->where('product_id', $small->id)->value('purchase_price'));
+        $this->assertSame('148.09', (string) ProductSourcePrice::query()->where('product_id', $large->id)->value('purchase_price'));
+        $sizes = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('label')->all();
+        $this->assertSame(['kolor niebieski, rozmiar 56', 'kolor szary, rozmiar 56'], $sizes($small));
+        $this->assertSame(['kolor szary, rozmiar 58'], $sizes($large));
+        $spread = B2bSyncRun::query()->findOrFail($result['sync_run_id'])->size_spread;
+        $this->assertSame(1, $spread['total']);
+        $this->assertSame([$small->id, $large->id], $spread['groups'][0]['cards']);
     }
 
     public function test_a_file_added_later_under_the_same_script_address_is_stored_next_to_the_existing_ones(): void
@@ -640,6 +721,34 @@ final class P4sConnectorTest extends TestCase
     }
 
     /**
+     * Karta zapisana przez dawny podział według ceny (do 28.09.2026): kod pierwszego rozmiaru, nazwa z rozmiarami,
+     * powiązania rozmiarów i slot konta.
+     *
+     * @param  array<string, string>  $sizes  id rozmiaru => kod P4S rozmiaru
+     */
+    private function legacyCard(B2bAccount $account, string $sku, string $name, float $price, array $sizes): Product
+    {
+        $card = Product::query()->create([
+            'sku' => $sku, 'name' => $name, 'manufacturer' => 'PLANAM', 'description' => 'Spodnie spawalnicze z bawełny.',
+            'catalog_price_net' => $price, 'discount_percent' => 0, 'purchase_price' => $price, 'currency' => 'PLN',
+        ]);
+        foreach ($sizes as $id => $code) {
+            B2bProductLink::query()->create([
+                'b2b_account_id' => $account->id, 'remote_id' => (string) $id, 'product_id' => $card->id,
+                'remote_sku' => $code, 'remote_name' => $name, 'manufacturer' => 'PLANAM',
+                'last_purchase_price' => $price, 'last_currency' => 'PLN',
+            ]);
+        }
+        ProductSourcePrice::query()->create([
+            'product_id' => $card->id, 'source_key' => ProductSourcePrice::b2bKey((int) $account->id), 'b2b_account_id' => $account->id,
+            'catalog_price_net' => $price, 'purchase_price' => $price, 'discount_percent' => 0, 'currency' => 'PLN',
+            'availability' => 'Produkt niedostępny', 'checked_at' => now()->subDay(),
+        ]);
+
+        return $card;
+    }
+
+    /**
      * @param  array{row: array<string, mixed>, sizes: list<array<string, mixed>>, detail: array<string, mixed>|null}  $product
      */
     private function addProduct(array $product, bool $own = false, bool $general = true): void
@@ -675,8 +784,24 @@ final class P4sConnectorTest extends TestCase
             'shop_card' => ProductShopCard::query()->where('product_id', $p->id)->value('fields'),
             'documents' => ProductDocument::query()->where('product_id', $p->id)->orderBy('sort_order')->pluck('source_url')->all(),
             'images' => ProductImage::query()->where('product_id', $p->id)->orderBy('sort_order')->pluck('source_url')->all(),
-            'price' => ProductSourcePrice::query()->where('product_id', $p->id)->get(['purchase_price', 'catalog_price_net', 'availability'])->toArray(),
+            'price' => ProductSourcePrice::query()->where('product_id', $p->id)->get(['purchase_price', 'catalog_price_net', 'size_price_max', 'availability'])->toArray(),
+            'sizes' => ProductVariant::query()->where('product_id', $p->id)->orderBy('id')
+                ->get(['remote_id', 'label', 'purchase_price', 'availability', 'removed_at', 'updated_at'])->toArray(),
+            'size_history' => ProductVariantPriceHistory::query()->count(),
         ]])->all();
+    }
+
+    /**
+     * Pozycje karty z ceną rozmiaru: [remote_id, sku, name, availability, size, net, base, currency].
+     *
+     * @return list<list<mixed>>
+     */
+    private static function members(B2bRemoteProduct $product): array
+    {
+        return array_map(static fn (array $m): array => [
+            $m['remote_id'], $m['sku'], $m['name'], $m['availability'] ?? null, $m['size'] ?? null,
+            $m['price']?->net, $m['price']?->base, $m['price']?->currency,
+        ], $product->members);
     }
 
     /**

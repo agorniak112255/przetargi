@@ -25,16 +25,23 @@ use RuntimeException;
  * kategoria, opisy, załączniki) i tabelę WSZYSTKICH kombinacji (moduł tablecombz): indeks, kolor, rozmiar, cena
  * netto, cena brutto i dostępność. Kolumny czytamy po nagłówkach, nie po kolejności. Ceny: tabela zalogowanego
  * konta podaje cenę po rabacie grupy klienta (cena zakupu), a ceny przed rabatem nie pokazuje wcale — tę samą
- * stronę pobieramy drugi raz bez logowania i cena netto gościa jest ceną katalogową. Cena katalogowa niższa od ceny
- * konta albo kombinacja, której strona gościa nie zna, to karta bez ceny katalogowej (liczone w podsumowaniu).
+ * stronę pobieramy drugi raz bez logowania i cena netto gościa jest ceną katalogową. Cena katalogowa kombinacji niższa
+ * od jej ceny konta albo kombinacja, której strona gościa nie zna, to rozmiar bez ceny katalogowej (liczone
+ * w podsumowaniu) — ceny innej kombinacji nie przepisujemy.
  *
- * Karta = rozmiary jednego koloru modelu w tej samej parze cen (decyzja użytkownika 15.09.2026: rozmiar w innej
- * cenie to osobna karta; tu typowo XS–XXL w jednej cenie, 3XL i większe drożej, biały taniej od kolorów).
+ * Karta = kolor modelu ze wszystkimi rozmiarami z ceną konta (decyzja użytkownika 28.09.2026: rozmiary w różnych
+ * cenach to jedna karta; tu typowo XS–XXL w jednej cenie, 3XL i większe drożej). Kolor (i inne cechy poza rozmiarem)
+ * nadal rozdziela karty — biały bywa tańszy od kolorów, ale to inny wyrób. Do 28.09.2026 (decyzja 15.09.2026) rozmiar
+ * w innej cenie był osobną kartą z indeksem pierwszego rozmiaru („51005_26_3XL”) — takie karty zostają, dopóki nie
+ * scali ich osobne polecenie (synchronizacja daje każdej jej rozmiary, B2bCatalogSync::syncMembersByCard).
  * Pozycje (members) i remote_id = klucz kombinacji ze sklepu „{id wyrobu}_{id kombinacji}” (np. „368_6076”) — indeksy
- * sklepu nie nadają się na klucz: bywają puste („—”) i niespójne w jednym modelu („21172 20 XS” obok „21172_20_S”).
+ * sklepu nie nadają się na klucz: bywają puste („—”) i niespójne w jednym modelu („21172 20 XS” obok „21172_20_S”) —
+ * z rozmiarem, dostępnością i ceną kombinacji (konta i katalogowa); cena karty = najniższa cena rozmiaru
+ * (raw['price'], price()), pozostałe ceny — wiersze rozmiarów karty. Sklep podaje ceny tylko w zł (inny zapis =
+ * kombinacja bez ceny) i nie podaje jednostki sprzedaży przy kombinacji. Promocja sklepu jest opisem karty (tabelka
+ * sklepu): wspólna dla wszystkich rozmiarów — jak dotąd, różna — wypisana przy rozmiarach, których dotyczy.
  * SKU: indeks bez rozmiaru („51005_21”), gdy wszystkie rozmiary koloru dają ten sam (różnica tylko spacja/podkreślnik
- * to ten sam indeks) i kolor jest jedną kartą; inaczej — i przy podziale cenami — indeks pierwszego rozmiaru karty;
- * kombinacja bez indeksu — „MAVIBO {klucz kombinacji}”.
+ * to ten sam indeks); inaczej indeks pierwszego rozmiaru karty; kombinacja bez indeksu — „MAVIBO {klucz kombinacji}”.
  *
  * Opis: pole „description_short” (gramatura, skład) i „description” (opis z tabelą wymiarów) dosłownie, bez
  * obrazków (logo marki, ikony). Pliki: załączniki wyrobu („KARTA PRODUKTU 51005 26” — PDF albo JPG); plik przypisany
@@ -44,7 +51,7 @@ use RuntimeException;
  *
  * Producent: marka wyrobu ze sklepu (manufacturer_name); wyrób bez marki — „MAVIBO” (liczone w podsumowaniu).
  */
-final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
+final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource, B2bSizePriceSource
 {
     /** Producent przyjęty dla wyrobu, któremu sklep nie podał marki. */
     public const FALLBACK_BRAND = 'MAVIBO';
@@ -86,7 +93,7 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     /** @var list<string> */
     private array $summary = [];
 
-    /** @var list<string> karty bez ceny katalogowej */
+    /** @var list<string> kombinacje (indeks albo klucz) bez ceny katalogowej */
     private array $withoutBase = [];
 
     /** @var list<string> kombinacje bez ceny konta (poza kartami) */
@@ -100,7 +107,8 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
 
     private int $cards = 0;
 
-    private int $splitProducts = 0;
+    /** kolory z rozmiarami w różnych cenach (jedna karta, cena od najniższej) */
+    private int $multiPriceProducts = 0;
 
     private int $skippedProducts = 0;
 
@@ -151,7 +159,7 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
         $this->withoutBrand = [];
         $this->skus = [];
         $this->cards = 0;
-        $this->splitProducts = 0;
+        $this->multiPriceProducts = 0;
         $this->skippedProducts = 0;
 
         if (! $this->client->isLoggedIn()) {
@@ -164,7 +172,7 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
 
         foreach ($rows as $row) {
             $products = $this->productsFor($row);
-            // model w kilku kolorach i cenach to kilka kart — licznik postępu rośnie, zanim je wydamy
+            // model w kilku kolorach to kilka kart — licznik postępu rośnie, zanim je wydamy
             $this->total += max(0, count($products) - 1);
             yield from $products;
         }
@@ -179,9 +187,9 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     {
         $lines = $this->summary;
         $lines[] = sprintf(
-            'Karty: %d (%d kolorów w kilku cenach — rozmiar w innej cenie to osobna karta; %d modeli pominiętych)',
+            'Karty: %d (%d kolorów z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty; %d modeli pominiętych)',
             $this->cards,
-            $this->splitProducts,
+            $this->multiPriceProducts,
             $this->skippedProducts,
         );
         if ($this->withoutBrand !== []) {
@@ -214,14 +222,43 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
         if (($product->raw['status'] ?? null) !== 'ok') {
             throw new RuntimeException((string) ($product->raw['reason'] ?? 'strona wyrobu nieodczytana'));
         }
-        $net = (float) $product->raw['price'];
         $base = $product->raw['base_price'] ?? null;
 
+        return self::accountPrice((float) $product->raw['price'], is_float($base) ? $base : null);
+    }
+
+    /** Cena konta z ceną katalogową (gdy jest) i rabatem wyliczonym z obu — karta i każda kombinacja tak samo. */
+    private static function accountPrice(float $net, ?float $base): B2bRemotePrice
+    {
         return new B2bRemotePrice(
             net: round($net, 2),
-            base: is_float($base) ? round($base, 2) : null,
-            discountPercent: is_float($base) && $base > 0 ? round((1 - $net / $base) * 100, 2) : 0.0,
+            base: $base !== null ? round($base, 2) : null,
+            discountPercent: $base !== null && $base > 0 ? round((1 - $net / $base) * 100, 2) : 0.0,
         );
+    }
+
+    /**
+     * Najtańsza kombinacja: najniższa cena konta; przy remisie reguła B2bCatalogSync::winsSizePriceTie (wygrywa
+     * kombinacja ze znaną ceną katalogową, z dwóch znanych niższa), dalej pierwsza w tabeli — tak samo jak w silniku,
+     * żeby price() i cena karty z pozycji się zgadzały.
+     *
+     * @param  non-empty-list<array<string, mixed>>  $group
+     * @return array<string, mixed>
+     */
+    private static function cheapest(array $group): array
+    {
+        $best = $group[0];
+        foreach ($group as $combination) {
+            if ($combination['cents'] < $best['cents']
+                || ($combination['cents'] === $best['cents'] && B2bCatalogSync::winsSizePriceTie(
+                    $combination['base'] !== null ? $combination['base'] / 100 : null,
+                    $best['base'] !== null ? $best['base'] / 100 : null,
+                ))) {
+                $best = $combination;
+            }
+        }
+
+        return $best;
     }
 
     /** Opis ze sklepu dosłownie (krótki i pełny, bez obrazków); '' gdy strona opisu nie ma. */
@@ -471,8 +508,8 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     }
 
     /**
-     * Karty jednego modelu (jedna na każdy kolor i parę cen); strona nieczytelna albo bez cen — jedna pozycja
-     * pominięta z powodem.
+     * Karty jednego modelu (jedna na każdy kolor ze wszystkimi jego rozmiarami z ceną); strona nieczytelna albo bez
+     * cen — jedna pozycja pominięta z powodem.
      *
      * @param  array{id: string, url: string, name: string}  $row
      * @return list<B2bRemoteProduct>
@@ -513,23 +550,23 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
 
         $products = [];
         foreach ($colors as $combinations) {
-            /** @var array<string, list<array<string, mixed>>> $groups */
-            $groups = [];
+            $group = [];
             foreach ($combinations as $combination) {
                 $base = $catalog[$combination['key']] ?? null;
-                // cena katalogowa niższa od ceny konta nie jest ceną przed rabatem — karta zostaje bez niej
-                $groups[$combination['cents'].'/'.($base !== null && $base > $combination['cents'] ? $base : 'brak')][] = $combination;
+                // cena katalogowa kombinacji niższa od jej ceny konta nie jest ceną przed rabatem — kombinacja
+                // zostaje bez niej
+                $combination['base'] = $base !== null && $base > $combination['cents'] ? $base : null;
+                if ($combination['base'] === null) {
+                    $this->withoutBase[] = $combination['reference'] !== '' ? $combination['reference'] : $combination['key'];
+                }
+                $group[] = $combination;
             }
-            $split = count($groups) > 1;
-            $this->splitProducts += $split ? 1 : 0;
+            $this->multiPriceProducts += count(array_unique(array_column($group, 'cents'))) > 1 ? 1 : 0;
             $code = self::colorCode(array_map(
                 static fn (array $c): array => ['reference' => $c['reference'], 'size' => $c['size']],
                 $combinations,
             ));
-            foreach ($groups as $key => $group) {
-                [$cents, $baseKey] = explode('/', $key, 2);
-                $products[] = $this->productFor($row, $page, $group, (int) $cents, $baseKey === 'brak' ? null : (int) $baseKey, $split ? null : $code, $split);
-            }
+            $products[] = $this->productFor($row, $page, $group, $code);
         }
         $this->cards += count($products);
 
@@ -566,11 +603,16 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     }
 
     /**
+     * Karta koloru: kombinacje z ceną konta jako pozycje (members), każda ze swoją ceną konta i — gdy strona gościa
+     * podała ją dla tej kombinacji i jest wyższa od ceny konta — swoją ceną katalogową. Cena karty (raw price,
+     * base_price) = najtańsza kombinacja (remis — self::cheapest), tak jak liczy ją
+     * B2bCatalogSync.
+     *
      * @param  array{id: string, url: string, name: string}  $row
      * @param  array<string, mixed>  $page
-     * @param  list<array<string, mixed>>  $group
+     * @param  non-empty-list<array<string, mixed>>  $group  kombinacje koloru z ceną konta (cents) i katalogową (base albo null)
      */
-    private function productFor(array $row, array $page, array $group, int $cents, ?int $baseCents, ?string $code, bool $split): B2bRemoteProduct
+    private function productFor(array $row, array $page, array $group, ?string $code): B2bRemoteProduct
     {
         $first = $group[0];
         $sku = $this->uniqueSku(array_values(array_filter([
@@ -578,15 +620,9 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
             $first['reference'] !== '' ? $first['reference'] : null,
             self::FALLBACK_BRAND.' '.$first['key'],
         ])));
-        if ($baseCents === null) {
-            $this->withoutBase[] = $sku;
-        }
+        $cheapest = self::cheapest($group);
 
         $name = self::cardName($page['name'], $page['brand'], $first['color']);
-        $sizes = array_values(array_filter(array_column($group, 'size'), static fn (string $s): bool => $s !== ''));
-        if ($split && $sizes !== []) {
-            $name .= ' (rozm. '.implode(', ', $sizes).')';
-        }
 
         $members = [];
         foreach ($group as $combination) {
@@ -594,6 +630,12 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
                 'remote_id' => $combination['key'],
                 'sku' => $combination['reference'] !== '' ? $combination['reference'] : $combination['key'],
                 'name' => trim($name.' '.$combination['size']),
+                'availability' => $combination['stock'],
+                'size' => $combination['size'],
+                'price' => self::accountPrice(
+                    $combination['cents'] / 100,
+                    $combination['base'] !== null ? $combination['base'] / 100 : null,
+                ),
             ];
         }
         $label = static fn (array $c): string => $c['size'] !== '' ? $c['size'] : $c['key'];
@@ -606,8 +648,9 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
             sourceUrl: MaviboB2bClient::productUrl($row['url']),
             raw: [
                 'status' => 'ok',
-                'price' => (float) $cents / 100,
-                'base_price' => $baseCents !== null ? (float) $baseCents / 100 : null,
+                // cena karty = najtańsza kombinacja (B2bCatalogSync liczy ją też z members[].price)
+                'price' => (float) $cheapest['cents'] / 100,
+                'base_price' => $cheapest['base'] !== null ? (float) $cheapest['base'] / 100 : null,
                 'brand' => $page['brand'],
                 'model' => $page['model'],
                 'references' => implode('; ', array_map(
@@ -625,9 +668,7 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
                 'vat' => $page['vat'],
                 'stock' => array_map(static fn (array $c): string => $label($c).': '.$c['stock'], $group),
                 // cena konta w promocji sklepu — przetarg z terminem po jej końcu dostanie inną cenę
-                'promotion' => $first['promotion'] !== ''
-                    ? $first['promotion'].' (cena konta przed promocją '.number_format(((int) $first['regular_cents']) / 100, 2, ',', ' ').' zł netto)'
-                    : '',
+                'promotion' => self::promotionNote($group, $label),
                 'description' => $page['description'],
                 'documents' => self::documentsFor($page, $first['color']),
                 'image_urls' => self::imagesFor($group),
@@ -640,6 +681,34 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
             members: $members,
             identifiers: self::identifiers($page['model'], $group),
         );
+    }
+
+    /**
+     * Promocja sklepu na karcie: wszystkie kombinacje w tej samej promocji (albo żadna) — jak dotąd, dosłownie
+     * z pierwszej („– 25% (cena konta przed promocją 40,08 zł netto)”); różne — każda promocja z rozmiarami, których
+     * dotyczy („S, M: – 25% (…); 3XL: bez promocji”), żeby cena rozmiaru spoza promocji nie wyglądała na promocyjną.
+     *
+     * @param  non-empty-list<array<string, mixed>>  $group
+     * @param  callable(array<string, mixed>): string  $label
+     */
+    private static function promotionNote(array $group, callable $label): string
+    {
+        $notes = [];
+        foreach ($group as $combination) {
+            $note = $combination['promotion'] !== ''
+                ? $combination['promotion'].' (cena konta przed promocją '.number_format(((int) $combination['regular_cents']) / 100, 2, ',', ' ').' zł netto)'
+                : '';
+            $notes[$note][] = $label($combination);
+        }
+        if (count($notes) === 1) {
+            return (string) array_key_first($notes);
+        }
+        $parts = [];
+        foreach ($notes as $note => $sizes) {
+            $parts[] = implode(', ', $sizes).': '.($note !== '' ? $note : 'bez promocji');
+        }
+
+        return implode('; ', $parts);
     }
 
     /**

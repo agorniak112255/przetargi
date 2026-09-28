@@ -13,6 +13,8 @@ use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
+use App\Models\ProductVariantPriceHistory;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bDocumentSource;
@@ -23,6 +25,7 @@ use App\Services\B2b\B2bManufacturerSite;
 use App\Services\B2b\B2bRemoteProduct;
 use App\Services\B2b\B2bRunSummaryAware;
 use App\Services\B2b\B2bShopFieldSource;
+use App\Services\B2b\B2bSizePriceSource;
 use App\Services\B2b\MaviboB2bClient;
 use App\Services\B2b\MaviboB2bConnector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -165,10 +168,10 @@ final class MaviboConnectorTest extends TestCase
         $this->assertSame(self::BASE.'/kurtki/368-nimbo-51005.html', $card->sourceUrl);
         $this->assertSame(
             [
-                ['remote_id' => '368_6076', 'sku' => '51005_21_S', 'name' => 'PROMOSTARS NIMBO 51005, kolor 21 S'],
-                ['remote_id' => '368_6078', 'sku' => '51005_21_M', 'name' => 'PROMOSTARS NIMBO 51005, kolor 21 M'],
+                ['368_6076', '51005_21_S', 'PROMOSTARS NIMBO 51005, kolor 21 S', 'S', 'Produkt dostępny', 54.25, 77.5, 30.0, 'PLN'],
+                ['368_6078', '51005_21_M', 'PROMOSTARS NIMBO 51005, kolor 21 M', 'M', 'Produkt z wydłużonym czasem dostawy', 54.25, 77.5, 30.0, 'PLN'],
             ],
-            $card->members,
+            self::memberRows($card),
         );
         $this->assertSame('Produkt dostępny: S; Produkt z wydłużonym czasem dostawy: M', $card->availability);
         $this->assertSame('Rozmiary: S (51005_21_S); M (51005_21_M)', $card->variantSummary);
@@ -237,32 +240,86 @@ final class MaviboConnectorTest extends TestCase
         );
     }
 
-    public function test_sizes_in_two_prices_are_two_cards_named_with_their_sizes(): void
+    /**
+     * Do 28.09.2026 (decyzja 15.09.2026) rozmiary jednego koloru w dwóch cenach były dwiema kartami („51005_26_S”
+     * i „51005_26_3XL”, nazwy z rozmiarami). Od decyzji użytkownika 28.09.2026 kolor to jedna karta z indeksem koloru
+     * i nazwą bez rozmiarów, a cena każdej kombinacji (konta i katalogowa) jedzie przy jej pozycji; cena karty
+     * (price()) = najniższa cena rozmiaru. Kolor nadal rozdziela karty.
+     */
+    public function test_sizes_in_two_prices_are_one_card_with_size_prices_and_the_lowest_card_price(): void
     {
         $this->addProduct(self::jacketWithDearerSize());
         $this->fakeShop();
         $connector = $this->connector();
 
         $products = iterator_to_array($connector->products(), false);
-        $black = array_values(array_filter($products, static fn (B2bRemoteProduct $p): bool => str_contains($p->name, 'kolor 26')));
 
-        $this->assertCount(2, $black);
-        $this->assertSame('51005_26_S', $black[0]->sku);
-        $this->assertSame('PROMOSTARS NIMBO 51005, kolor 26 (rozm. S)', $black[0]->name);
-        $this->assertSame('51005_26_3XL', $black[1]->sku);
-        $this->assertSame('PROMOSTARS NIMBO 51005, kolor 26 (rozm. 3XL)', $black[1]->name);
-        $this->assertSame(59.5, $connector->price($black[1])?->net);
-        $this->assertSame(85.0, $connector->price($black[1])?->base);
-        // karta rozmiarów w innej cenie podaje indeksy tylko swoich rozmiarów
         $this->assertSame(
-            [[ProductIdentifier::TYPE_MODEL_CODE, '51005', null, null, 'reference'], [ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_S', '368_6077', '26 S', 'Indeks']],
-            self::identifiers($black[0]),
+            [
+                ['51005_21', 'PROMOSTARS NIMBO 51005, kolor 21', 2],
+                ['51005_26', 'PROMOSTARS NIMBO 51005, kolor 26', 2],
+            ],
+            array_map(static fn (B2bRemoteProduct $p): array => [$p->sku, $p->name, count($p->members)], $products),
         );
+        $black = $products[1];
+        $this->assertSame('368_6077', $black->remoteId);
         $this->assertSame(
-            [[ProductIdentifier::TYPE_MODEL_CODE, '51005', null, null, 'reference'], [ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_3XL', '368_6091', '26 3XL', 'Indeks']],
-            self::identifiers($black[1]),
+            [['S', 54.25, 77.5], ['3XL', 59.5, 85.0]],
+            array_map(static fn (array $m): array => [$m['size'], $m['price']->net, $m['price']->base], $black->members),
         );
-        $this->assertStringContainsString('Karty: 3 (1 kolorów w kilku cenach', implode("\n", $connector->runSummary()));
+        $this->assertSame(54.25, $connector->price($black)?->net);
+        $this->assertSame(77.5, $connector->price($black)?->base);
+        $this->assertSame('Rozmiary: S (51005_26_S); 3XL (51005_26_3XL)', $black->variantSummary);
+        // indeksy wszystkich rozmiarów koloru na jednej karcie
+        $this->assertSame(
+            [
+                [ProductIdentifier::TYPE_MODEL_CODE, '51005', null, null, 'reference'],
+                [ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_S', '368_6077', '26 S', 'Indeks'],
+                [ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_3XL', '368_6091', '26 3XL', 'Indeks'],
+            ],
+            self::identifiers($black),
+        );
+        $this->assertSame(2, $connector->totalProducts());
+        $this->assertStringContainsString('Karty: 2 (1 kolorów z rozmiarami w różnych cenach', implode("\n", $connector->runSummary()));
+    }
+
+    /**
+     * Cena katalogowa i promocja należą do kombinacji: rozmiar bez ceny katalogowej (gość podał niższą od ceny konta)
+     * nie dostaje ceny innego rozmiaru; cena karty to najtańsza kombinacja z jej ceną katalogową, także gdy nie jest
+     * pierwsza; promocja tylko części rozmiarów jest wypisana przy nich, a nie przypisana całej karcie.
+     */
+    public function test_each_combination_keeps_its_own_catalog_price_and_promotion(): void
+    {
+        $product = self::polo();
+        $product['combinations'][] = [
+            'id' => '2275', 'ref' => '42290_22/20_M', 'color' => '22/20', 'hex' => '', 'size' => 'M', 'account' => 4008, 'guest' => 3000,
+            'stock' => 'available', 'images' => ['/1556-large_default/shot.jpg'],
+        ];
+        $product['combinations'][] = [
+            'id' => '2276', 'ref' => '42290_22/20_3XL', 'color' => '22/20', 'hex' => '', 'size' => '3XL', 'account' => 2900, 'guest' => 6000,
+            'stock' => 'back-order', 'images' => ['/1556-large_default/shot.jpg'],
+        ];
+        $this->addProduct($product);
+        $this->fakeShop();
+        $connector = $this->connector();
+
+        $products = iterator_to_array($connector->products(), false);
+
+        $this->assertCount(1, $products);
+        $card = $products[0];
+        $this->assertSame('42290_22/20', $card->sku);
+        $this->assertSame('123_2274', $card->remoteId);
+        $this->assertSame(
+            [['S', 30.06, 57.25], ['M', 40.08, null], ['3XL', 29.0, 60.0]],
+            array_map(static fn (array $m): array => [$m['size'], $m['price']->net, $m['price']->base], $card->members),
+        );
+        $price = $connector->price($card);
+        $this->assertSame([29.0, 60.0, 51.67], [$price?->net, $price?->base, $price?->discountPercent]);
+        $fields = array_map(static fn ($f): array => [$f->name, $f->value], $connector->shopFields($card));
+        $this->assertContains(['Promocja w sklepie', 'S: – 25% (cena konta przed promocją 40,08 zł netto); M, 3XL: bez promocji'], $fields);
+        $summary = implode("\n", $connector->runSummary());
+        $this->assertStringContainsString('Bez ceny katalogowej', $summary);
+        $this->assertStringContainsString('42290_22/20_M', $summary);
     }
 
     public function test_promotion_takes_the_current_price_and_the_guest_price_before_the_promotion(): void
@@ -424,7 +481,8 @@ final class MaviboConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
 
-        $this->assertSame(3, $result['created'], implode(' | ', $result['errors']));
+        // dwa kolory kurtki = dwie karty; czerń z rozmiarami w dwóch cenach to jedna karta (decyzja użytkownika 28.09.2026)
+        $this->assertSame(2, $result['created'], implode(' | ', $result['errors']));
         $this->assertStringContainsString('bez tabeli kombinacji z ceną', implode(' | ', $result['errors']));
         $card = Product::query()->where('sku', '51005_21')->sole();
         $this->assertSame('PROMOSTARS', $card->manufacturer);
@@ -445,8 +503,21 @@ final class MaviboConnectorTest extends TestCase
             [self::BASE.'/index.php?controller=attachment&id_attachment=842', self::BASE.'/index.php?controller=attachment&id_attachment=900'],
             ProductDocument::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('source_url')->all(),
         );
-        $dearer = Product::query()->where('sku', '51005_26_3XL')->sole();
-        $this->assertSame('59.50', (string) ProductSourcePrice::query()->where('product_id', $dearer->id)->value('purchase_price'));
+        $black = Product::query()->where('sku', '51005_26')->sole();
+        $this->assertSame('PROMOSTARS NIMBO 51005, kolor 26', $black->name);
+        $blackSlot = ProductSourcePrice::query()->where('product_id', $black->id)->sole();
+        // cena karty = najtańszy rozmiar z jego ceną katalogową, najwyższa cena rozmiaru przy slocie
+        $this->assertSame('54.25', (string) $blackSlot->purchase_price);
+        $this->assertSame('77.50', (string) $blackSlot->catalog_price_net);
+        $this->assertSame('59.50', (string) $blackSlot->size_price_max);
+        $this->assertSame(
+            [['S', '54.25', '77.50'], ['3XL', '59.50', '85.00']],
+            ProductVariant::query()->where('product_id', $black->id)->where('kind', ProductVariant::KIND_SIZE)->orderBy('sort_order')->get()
+                ->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price, (string) $v->list_price_net])->all(),
+        );
+        $this->assertSame('59.50', (string) B2bProductLink::query()->where('remote_id', '368_6091')->value('last_purchase_price'));
+        // kurtka granatowa w jednej cenie — rozmiary też w tabeli, bez „do Y”
+        $this->assertNull($slot->size_price_max);
 
         // identyfikatory: model pod pozycją karty (pierwsza kombinacja), indeks pod każdą kombinacją
         $this->assertSame(
@@ -460,12 +531,16 @@ final class MaviboConnectorTest extends TestCase
                 ->all(),
         );
         $this->assertSame(
-            [['368_6091', ProductIdentifier::TYPE_MODEL_CODE, '51005'], ['368_6091', ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_3XL']],
-            ProductIdentifier::query()->where('product_id', $dearer->id)->orderBy('type')->get()
+            [
+                ['368_6077', ProductIdentifier::TYPE_MODEL_CODE, '51005'],
+                ['368_6077', ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_S'],
+                ['368_6091', ProductIdentifier::TYPE_SOURCE_CODE, '51005_26_3XL'],
+            ],
+            ProductIdentifier::query()->where('product_id', $black->id)->orderBy('position_key')->orderBy('type')->get()
                 ->map(static fn (ProductIdentifier $i): array => [$i->position_key, $i->type, $i->value])->all(),
         );
-        // 3 karty × model + 4 kombinacje; pominięty model (DRYON 51003) nie ma karty ani identyfikatorów
-        $this->assertSame(7, ProductIdentifier::query()->count());
+        // 2 karty × model + 4 kombinacje; pominięty model (DRYON 51003) nie ma karty ani identyfikatorów
+        $this->assertSame(6, ProductIdentifier::query()->count());
         $this->assertFalse(ProductIdentifier::query()->where('value', '51003')->exists());
         $identifiers = ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray();
 
@@ -474,7 +549,7 @@ final class MaviboConnectorTest extends TestCase
 
         $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
         $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
-        $this->assertSame(3, $second['unchanged'], implode(' | ', $second['errors']));
+        $this->assertSame(2, $second['unchanged'], implode(' | ', $second['errors']));
         $this->assertSame($before, $this->snapshot());
         // drugi przebieg identyfikatorów nie dubluje ani nie oznacza jako zniknięte
         $this->assertSame($identifiers, ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray());
@@ -484,6 +559,55 @@ final class MaviboConnectorTest extends TestCase
         foreach (B2bSyncRun::query()->get() as $run) {
             $this->assertSame([], preg_grep('/identyfikator /', array_column((array) $run->log, 'text')));
         }
+    }
+
+    /**
+     * Karty sprzed 28.09.2026 (czerń rozbita według ceny na „51005_26_S” i „51005_26_3XL”) — dwa przebiegi po zmianie
+     * łącznika: bez nowej karty czerni, bez przepinania powiązań, bez zmian cen, kodów i nazw; każda karta dostaje
+     * swoje rozmiary, a kolor trafia do size_spread przebiegu (do scalenia poleceniem). Granat (jedna cena) był
+     * jedną kartą i tu powstaje jak zwykle.
+     */
+    public function test_legacy_price_split_cards_stay_and_get_their_own_sizes_over_two_runs(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->addProduct(self::jacketWithDearerSize());
+        $this->fakeShop();
+        $account = $this->account();
+        $description = "GRAMATURA: 115 g/m2\nSKŁAD: 100% Poliester\n\n- kurtka przeciwdeszczowa\nWYMIARY: S M\nDługość 75 77\n- górne szwy klejone";
+        $small = $this->legacyCard($account, '51005_26_S', 'PROMOSTARS NIMBO 51005, kolor 26 (rozm. S)', $description, 54.25, 77.5, ['368_6077' => '51005_26_S']);
+        $large = $this->legacyCard($account, '51005_26_3XL', 'PROMOSTARS NIMBO 51005, kolor 26 (rozm. 3XL)', $description, 59.5, 85.0, ['368_6091' => '51005_26_3XL']);
+        $cards = fn (): array => Product::query()->whereKey([$small->id, $large->id])->orderBy('id')->get()->map(fn (Product $p): array => [
+            $p->sku, $p->name, $p->description, (string) $p->purchase_price,
+            B2bProductLink::query()->where('product_id', $p->id)->orderBy('remote_id')->pluck('remote_id')->all(),
+            (string) ProductSourcePrice::query()->where('product_id', $p->id)->value('purchase_price'),
+            (string) ProductSourcePrice::query()->where('product_id', $p->id)->value('catalog_price_net'),
+            ProductSourcePrice::query()->where('product_id', $p->id)->value('size_price_max'),
+        ])->all();
+        $before = $cards();
+
+        $first = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: false);
+
+        $this->assertSame(1, $first['created'], implode(' | ', $first['errors']));
+        $this->assertSame(['51005_21', '51005_26_3XL', '51005_26_S'], Product::query()->orderBy('sku')->pluck('sku')->all());
+        $this->assertSame(0, $first['skipped'], implode(' | ', $first['errors']));
+        $this->assertSame(0, $first['prices_changed']);
+        $this->assertSame($before, $cards());
+        $sizes = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->orderBy('sort_order')->get()
+            ->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price, (string) $v->list_price_net])->all();
+        $this->assertSame([['S', '54.25', '77.50']], $sizes($small));
+        $this->assertSame([['3XL', '59.50', '85.00']], $sizes($large));
+        $spread = B2bSyncRun::query()->findOrFail($first['sync_run_id'])->size_spread;
+        $this->assertSame(1, $spread['total']);
+        $this->assertSame([$small->id, $large->id], $spread['groups'][0]['cards']);
+
+        $second = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: false);
+
+        $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
+        $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
+        $this->assertSame(2, $second['unchanged']);
+        $this->assertSame($before, $cards());
+        $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
     }
 
     public function test_registry_detects_mavibo_by_host_as_a_distributor(): void
@@ -506,13 +630,28 @@ final class MaviboConnectorTest extends TestCase
         $this->assertNotInstanceOf(B2bManufacturerSite::class, $connector);
         foreach ([
             B2bShopFieldSource::class, B2bRunSummaryAware::class, B2bListProgressAware::class,
-            B2bDocumentSource::class, B2bImageGallery::class,
+            B2bDocumentSource::class, B2bImageGallery::class, B2bSizePriceSource::class,
         ] as $interface) {
             $this->assertInstanceOf($interface, $connector);
         }
+        // ceny rozmiarów — konto ma w panelu „Scal rozmiary”
+        $this->assertTrue($registry->sendsSizePrices('mavibo'));
     }
 
     // ---- pomocnicze ----
+
+    /**
+     * Pozycje karty: remote_id, sku, nazwa, rozmiar, dostępność, cena konta, katalogowa, rabat i waluta kombinacji.
+     *
+     * @return list<list<mixed>>
+     */
+    private static function memberRows(B2bRemoteProduct $product): array
+    {
+        return array_map(static fn (array $m): array => [
+            $m['remote_id'], $m['sku'], $m['name'], $m['size'] ?? null, $m['availability'] ?? null,
+            $m['price']?->net, $m['price']?->base, $m['price']?->discountPercent, $m['price']?->currency,
+        ], $product->members);
+    }
 
     /**
      * @return list<array{0: string, 1: string, 2: string|null, 3: string|null, 4: string|null}>
@@ -536,6 +675,35 @@ final class MaviboConnectorTest extends TestCase
         $connector->login();
 
         return $connector;
+    }
+
+    /**
+     * Karta zapisana przez dawny podział według ceny: opis ze źródła z odciskiem w powiązaniach, slot konta, kod
+     * i nazwa z rozmiarami.
+     *
+     * @param  array<string, string>  $combinations  klucz kombinacji => indeks
+     */
+    private function legacyCard(B2bAccount $account, string $sku, string $name, string $description, float $price, float $catalog, array $combinations): Product
+    {
+        $discount = round((1 - $price / $catalog) * 100, 2);
+        $card = Product::query()->create([
+            'sku' => $sku, 'name' => $name, 'manufacturer' => 'PROMOSTARS', 'description' => $description,
+            'catalog_price_net' => $catalog, 'discount_percent' => $discount, 'purchase_price' => $price, 'currency' => 'PLN',
+        ]);
+        foreach ($combinations as $key => $reference) {
+            B2bProductLink::query()->create([
+                'b2b_account_id' => $account->id, 'remote_id' => (string) $key, 'product_id' => $card->id,
+                'remote_sku' => $reference, 'remote_name' => $name, 'manufacturer' => 'PROMOSTARS',
+                'description_hash' => sha1($description), 'last_purchase_price' => $price, 'last_currency' => 'PLN',
+            ]);
+        }
+        ProductSourcePrice::query()->create([
+            'product_id' => $card->id, 'source_key' => ProductSourcePrice::b2bKey((int) $account->id), 'b2b_account_id' => $account->id,
+            'catalog_price_net' => $catalog, 'purchase_price' => $price, 'discount_percent' => $discount, 'currency' => 'PLN',
+            'availability' => 'Produkt dostępny', 'checked_at' => now()->subDay(),
+        ]);
+
+        return $card;
     }
 
     private function account(): B2bAccount
@@ -567,7 +735,10 @@ final class MaviboConnectorTest extends TestCase
             'shop_card' => ProductShopCard::query()->where('product_id', $p->id)->value('fields'),
             'images' => ProductImage::query()->where('product_id', $p->id)->orderBy('sort_order')->pluck('source_url')->all(),
             'documents' => ProductDocument::query()->where('product_id', $p->id)->orderBy('sort_order')->pluck('source_url')->all(),
-            'price' => ProductSourcePrice::query()->where('product_id', $p->id)->get(['purchase_price', 'catalog_price_net', 'availability'])->toArray(),
+            'price' => ProductSourcePrice::query()->where('product_id', $p->id)->get(['purchase_price', 'catalog_price_net', 'size_price_max', 'availability'])->toArray(),
+            'sizes' => ProductVariant::query()->where('product_id', $p->id)->orderBy('id')
+                ->get(['remote_id', 'label', 'purchase_price', 'list_price_net', 'availability', 'removed_at', 'updated_at'])->toArray(),
+            'size_history' => ProductVariantPriceHistory::query()->count(),
         ]])->all();
     }
 

@@ -116,6 +116,17 @@ final class B2bSizePriceSyncTest extends TestCase
         $this->assertSame(['150.00', '140.00'], $this->sizeRows(Product::query()->sole())->map(static fn (ProductVariant $v): string => (string) $v->list_price_net)->all());
     }
 
+    public function test_tie_prefers_the_size_with_a_known_catalog_price(): void
+    {
+        // Raw-Pol: rozmiar bez ceny katalogowej w tej samej cenie konta nie odbiera karcie ceny katalogowej innych
+        $this->connector->items = [$this->jacket(['S' => 100.0, 'M' => 100.0], bases: ['M' => 150.0])];
+
+        $this->sync();
+
+        $slot = ProductSourcePrice::query()->sole();
+        $this->assertSame(['100.00', '150.00'], [(string) $slot->purchase_price, (string) $slot->catalog_price_net]);
+    }
+
     public function test_second_identical_run_is_unchanged_without_history_and_keeps_description(): void
     {
         $this->connector->items = [$this->jacket(['S' => 100.0, 'M' => 100.0, 'XL' => 120.0])];

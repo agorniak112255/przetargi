@@ -19,8 +19,13 @@ use RuntimeException;
  *
  * Rozmiary jednego wyrobu są w cenniku osobnymi pozycjami z kodem „kod/rozmiar” („A3031/07”, „A1002/10,5”,
  * „A1013/10/SPE”); nazwa jest ta sama dla wszystkich rozmiarów kodu (sprawdzone na całym cenniku 21.09.2026).
- * Karta = kod bazowy w jednej cenie (decyzja użytkownika 15.09.2026: rozmiar w innej cenie = osobna karta;
- * u Ardona 21.09.2026 dotyczy to 321 z 2253 kodów).
+ * Karta = kod bazowy z nazwą, ze wszystkimi rozmiarami z ceną (decyzja użytkownika 28.09.2026: rozmiary w różnych
+ * cenach to jedna karta; u Ardona 21.09.2026 różne ceny rozmiarów miało 321 z 2253 kodów). Każdy rozmiar niesie
+ * swoją cenę konta i sugerowaną cenę detaliczną z wiersza cennika (members[].price), cena karty = najniższa cena
+ * rozmiaru. Do 28.09.2026 (decyzja 15.09.2026) rozmiar w innej cenie był osobną kartą z pełnym kodem Ardon
+ * („A5001/11”) — takie karty zostają, dopóki nie scali ich osobne polecenie (synchronizacja daje każdej jej
+ * rozmiary, B2bCatalogSync::syncMembersByCard). Pozycja bez rozmiaru albo bez ceny konta w cenniku zostaje osobną
+ * kartą, jak dotąd.
  *
  * SKU karty: kod bazowy Ardon — poza wyrobami ATG, których nazwa kończy się numerem artykułu producenta
  * („ATG® NBR-Lite® 24-985”). Katalog trzyma karty ATG pod numerem artykułu ATG i pod nim wiąże je łącznik witryny
@@ -40,7 +45,7 @@ use RuntimeException;
  * sluchu…”). Taki opis oznaczamy jako obcojęzyczny (B2bForeignTextCards), a synchronizacja zleca tłumaczenie
  * na polski. Rozpoznajemy go po literach, których polszczyzna nie ma (isForeignText).
  */
-final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bGroupsSizes, B2bRunSummaryAware, B2bShopFieldSource
+final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bForeignTextCards, B2bGroupsSizes, B2bRunSummaryAware, B2bShopFieldSource, B2bSizePriceSource
 {
     private const SHOP_SECTION = 'Parametry';
 
@@ -103,6 +108,12 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
     /** Litery polskie, których nie ma w czeskim ani słowackim. */
     private const POLISH_LETTERS = '/[ąćęłńśźż]/u';
 
+    /**
+     * Człon kodu Ardon będący rozmiarem: liczba (rękawice „07”, „10,5”, obuwie „40”, odzież „104”) albo rozmiar
+     * literowy (XS–XXXL, 2XL–6XL), także zakres z myślnikiem („S-M”). Inne człony („V1”, „SPE”, „N”, „uni”) to wersja.
+     */
+    private const SIZE_SEGMENT = '/^(?:\d{1,3}(?:[.,]\d)?|[2-6]?X{0,4}[SML]|XXS|XS)(?:-(?:\d{1,3}(?:[.,]\d)?|[2-6]?X{0,4}[SML]|XXS|XS))?$/i';
+
     /** Numer artykułu ATG na końcu nazwy pozycji („ATG® MaxiCut® Oil™ 34-504”, „ATG®MaxiChem® z TRItech™ 76-730”). */
     private const ATG_NAME = '/^ATG\b.*\s(\d{2}-\d{3,4}[A-Z]*)$/u';
 
@@ -121,8 +132,8 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
     private array $unknownManufacturers = [];
 
     /**
-     * Strony odczytane w tym przebiegu wg kodu bazowego (null = nie znaleziona) — kod w kilku cenach to kilka kart
-     * tej samej strony. Trzymamy tylko wyciąg ze strony, nie HTML.
+     * Strony odczytane w tym przebiegu wg kodu bazowego (null = nie znaleziona) — kod bazowy bywa kilkoma kartami
+     * tej samej strony (pozycja bez ceny, inna nazwa). Trzymamy tylko wyciąg ze strony, nie HTML.
      *
      * @var array<string, array<string, mixed>|null>
      */
@@ -165,7 +176,18 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
         $this->unknownManufacturers = [];
         $this->pages = [];
         $groups = count(array_filter($cards, static fn (array $card): bool => count($card['rows']) > 1));
-        $this->summary = ['Cennik Ardon: '.count($rows).' pozycji → '.count($cards).' kart ('.$groups.' grup rozmiarów o tej samej cenie)'];
+        $multiPrice = count(array_filter($cards, static fn (array $card): bool => self::sizePrices($card) !== null
+            && count(array_unique(array_map(static fn (B2bRemotePrice $p): string => sprintf('%.2F', $p->net), self::sizePrices($card)))) > 1));
+        $this->summary = ['Cennik Ardon: '.count($rows).' pozycji → '.count($cards).' kart ('.$groups.' grup rozmiarów, w tym '.$multiPrice
+            .' z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)'];
+        $unpriced = array_values(array_map(
+            static fn (array $row): string => $row['code'],
+            array_filter($rows, static fn (array $row): bool => self::splitCode($row['code'])[1] !== null && ($row['net'] === null || $row['net'] <= 0)),
+        ));
+        if ($unpriced !== []) {
+            $this->summary[] = 'Rozmiary bez ceny konta w cenniku: '.count($unpriced).' (osobne pozycje bez ceny, poza kartą wyrobu), np. '
+                .implode(', ', array_slice($unpriced, 0, 10));
+        }
 
         foreach ($cards as $card) {
             yield $this->productFor($card);
@@ -389,10 +411,16 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
     }
 
     /**
-     * Pozycje cennika w karty: kod bazowy + cena konta + nazwa. Pozycje karty wg rozmiaru; karty w kolejności
-     * pierwszej pozycji w cenniku. SKU karty — patrz opis klasy; przy kilku cenach jednego kodu klucz dostaje
-     * największa grupa (remis: pierwsza w cenniku), pozostałe — pełny kod Ardon swojej pierwszej pozycji.
-     * Grupujemy po cenie z cennika tak, jak ją podaje (3 miejsca po przecinku), nie po zaokrągleniu do groszy.
+     * Pozycje cennika w karty: kod bez członu rozmiaru + nazwa (decyzja użytkownika 28.09.2026: cena konta nie dzieli
+     * już kodu na karty — rozmiary w różnych cenach to jedna karta). Człon wersji albo dopisku („A1073/V1/07”,
+     * „A1013/10/SPE”, „G3098/35/N”, „H2017/uni/XL”) zostaje w kluczu — inna wersja to inna karta (splitCode).
+     * Powtórzony rozmiar w grupie — każda pozycja osobno. Pozycje karty wg rozmiaru; karty w kolejności pierwszej
+     * pozycji w cenniku. Pozycja bez rozmiaru albo bez ceny konta (pusta komórka) — osobna karta, jak dotąd; rozmiary
+     * z ceną 0 lub ujemną — osobna grupa kodu bez cen rozmiarów (jak dotąd grupa „w jednej cenie”, synchronizacja
+     * pomija ją bez ceny), żeby zero nie zostało najniższą ceną karty.
+     *
+     * SKU karty — patrz opis klasy; gdy kod bazowy ma kilka kart (inna nazwa, pozycje bez ceny), klucz dostaje
+     * największa karta z cenami (remis: pierwsza w cenniku), pozostałe — pełny kod Ardon swojej pierwszej pozycji.
      *
      * @param  list<array{code: string, name: string, retail: float|null, discount: float|null, net: float|null}>  $rows
      * @return list<array{sku: string, base: string, rows: list<array{code: string, name: string, retail: float|null, discount: float|null, net: float|null, size: string|null}>}>
@@ -401,13 +429,33 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
     {
         $groups = [];
         foreach ($rows as $index => $row) {
-            [$base, $size] = self::splitCode($row['code']);
-            $key = $size === null || $row['net'] === null
-                ? '#'.$index
-                : mb_strtolower($base).'|'.sprintf('%.6F', $row['net']).'|'.$row['name'];
+            [$base, $size, $variant] = self::splitCode($row['code']);
+            // klucz: kod bez samego członu rozmiaru — wersja i dopisek („V1”, „SPE”, „N”, „uni”) zostają w kluczu,
+            // więc „A1073/V1/07” nie jest rozmiarem karty „A1073/07”
+            $stem = mb_strtolower($base.($variant !== '' ? '/'.$variant : ''));
+            $key = match (true) {
+                $size === null || $row['net'] === null => '#'.$index,
+                $row['net'] <= 0 => $stem.'|0|'.$row['name'],
+                default => $stem.'|'.$row['name'],
+            };
             $groups[$key]['base'] ??= $base;
             $groups[$key]['rows'][] = [...$row, 'size' => $size];
         }
+        // ten sam rozmiar dwa razy w grupie (np. „07” i „7”) — to nie rozmiary jednego wyrobu: każda pozycja osobno
+        // (jak UvexSizeGroups przy powtórzonym rozmiarze), nigdy dwie pozycje pod jedną etykietą rozmiaru
+        $checked = [];
+        foreach ($groups as $key => $group) {
+            $labels = array_map(static fn (array $row): string => self::sizeKey((string) $row['size']), $group['rows']);
+            if (count(array_unique($labels)) === count($labels)) {
+                $checked[$key] = $group;
+
+                continue;
+            }
+            foreach ($group['rows'] as $i => $row) {
+                $checked[$key.'#'.$i] = ['base' => $group['base'], 'rows' => [$row]];
+            }
+        }
+        $groups = $checked;
 
         $byBase = [];
         foreach ($groups as $key => $group) {
@@ -415,6 +463,11 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
             $groups[$key] = $group;
             $byBase[mb_strtolower($group['base'])][] = $key;
         }
+        // karta z cenami przed kartą bez ceny, potem więcej pozycji; remis — pierwsza w cenniku
+        $rank = static fn (array $group): array => [
+            $group['rows'][0]['net'] !== null && $group['rows'][0]['net'] > 0 ? 1 : 0,
+            count($group['rows']),
+        ];
 
         $cards = [];
         foreach ($groups as $key => $group) {
@@ -422,17 +475,45 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
             $cardKey = self::atgArticle($group['rows'][0]['name']) ?? $group['base'];
             $main = $siblings[0];
             foreach ($siblings as $sibling) {
-                if (count($groups[$sibling]['rows']) > count($groups[$main]['rows'])) {
+                if ($rank($groups[$sibling]) > $rank($groups[$main])) {
                     $main = $sibling;
                 }
             }
             $first = $group['rows'][0];
-            // pozostałe grupy cenowe: pełny kod Ardon pierwszej pozycji — kod, który istnieje w cenniku
+            // pozostałe karty kodu: pełny kod Ardon pierwszej pozycji — kod, który istnieje w cenniku
             $sku = $key === $main ? $cardKey : $first['code'];
             $cards[] = ['sku' => $sku, 'base' => $group['base'], 'rows' => $group['rows']];
         }
 
         return $cards;
+    }
+
+    /**
+     * Ceny rozmiarów karty (members[].price): cena konta i sugerowana cena detaliczna z wiersza cennika tego rozmiaru
+     * (dosłownie ze źródła, zaokrąglone do groszy; bez ceny detalicznej w wierszu — base null, nigdy z innego
+     * rozmiaru), rabat z wiersza. null = karta bez cen rozmiarów: jedna pozycja albo pozycje bez ceny konta > 0.
+     *
+     * @param  array{rows: list<array{code: string, retail: float|null, discount: float|null, net: float|null}>}  $card
+     * @return list<B2bRemotePrice>|null w kolejności pozycji karty
+     */
+    public static function sizePrices(array $card): ?array
+    {
+        if (count($card['rows']) < 2) {
+            return null;
+        }
+        $prices = [];
+        foreach ($card['rows'] as $row) {
+            if ($row['net'] === null || $row['net'] <= 0) {
+                return null;
+            }
+            $prices[] = new B2bRemotePrice(
+                net: round($row['net'], 2),
+                base: $row['retail'] !== null && $row['retail'] > 0 ? round($row['retail'], 2) : null,
+                discountPercent: $row['discount'] !== null ? round($row['discount'], 2) : 0.0,
+            );
+        }
+
+        return $prices;
     }
 
     /** Numer artykułu ATG z nazwy pozycji; null = pozycja nie jest wyrobem ATG z numerem w nazwie. */
@@ -525,6 +606,22 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
         }
 
         $sized = array_values(array_filter($rows, static fn (array $row): bool => $row['size'] !== null));
+        // ceny rozmiarów (decyzja użytkownika 28.09.2026) — cena karty = najtańszy rozmiar; remis ceny konta
+        // rozstrzyga ta sama reguła co synchronizacja (B2bCatalogSync::winsSizePriceTie: znana i niższa cena
+        // detaliczna, dalej pierwszy rozmiar), żeby price() i slot karty wskazały ten sam rozmiar
+        $prices = self::sizePrices($card);
+        $cheapest = $first;
+        if ($prices !== null) {
+            $best = 0;
+            foreach ($prices as $i => $price) {
+                $current = $prices[$best];
+                if ($price->net < $current->net - 0.0049
+                    || (abs($price->net - $current->net) < 0.005 && B2bCatalogSync::winsSizePriceTie($price->base, $current->base))) {
+                    $best = $i;
+                }
+            }
+            $cheapest = $rows[$best];
+        }
 
         return new B2bRemoteProduct(
             remoteId: $first['code'],
@@ -536,9 +633,10 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
                 'manufacturer' => $manufacturer ?? '',
                 'atg' => $atg,
                 'legal_manufacturer' => $legal,
-                'price' => $first['net'],
-                'retail_price' => $first['retail'],
-                'discount' => $first['discount'],
+                // cena karty = najtańszy rozmiar (price()); ceny pozostałych rozmiarów — members[].price
+                'price' => $cheapest['net'],
+                'retail_price' => $cheapest['retail'],
+                'discount' => $cheapest['discount'],
                 'image' => $page['image'] ?? null,
                 'categories' => $page['categories'] ?? [],
                 'description' => $page['description'] ?? '',
@@ -551,7 +649,12 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
                 ? 'Rozmiary: '.implode('; ', array_map(static fn (array $row): string => $row['size'].' ('.$row['code'].')', $sized))
                 : null,
             members: $grouped
-                ? array_map(static fn (array $row): array => ['remote_id' => $row['code'], 'sku' => $row['code'], 'name' => $row['name']], $rows)
+                ? array_map(static fn (array $row, int $i): array => [
+                    'remote_id' => $row['code'],
+                    'sku' => $row['code'],
+                    'name' => $row['name'],
+                    ...($prices !== null ? ['size' => (string) $row['size'], 'price' => $prices[$i]] : []),
+                ], $rows, array_keys($rows))
                 : [],
             identifiers: self::identifiers($rows, self::text($page['mpn'] ?? null), $atg ? self::atgArticle($first['name']) : null),
         );
@@ -813,17 +916,37 @@ final class ArdonB2bConnector implements B2bConnector, B2bDocumentSource, B2bFor
     }
 
     /**
-     * @return array{0: string, 1: string|null} kod bazowy i rozmiar (reszta kodu po pierwszym „/”)
+     * Kod bazowy (przed pierwszym „/”), rozmiar i pozostałe człony. Rozmiar = ostatni człon po kodzie bazowym, który
+     * wygląda jak rozmiar (SIZE_SEGMENT: „07”, „10,5”, „40”, „XL”, „2XL”); reszta członów to wersja albo dopisek
+     * („V1”, „SPE”, „N”, „uni”) i zostaje w kluczu karty. Na cenniku 28.09.2026: „A1013/10/SPE”, „A1073/V1/07”,
+     * „G3098/35/N”, „H2017/uni/XL”, „A3123/V1/40/07” (rozmiar 07, „V1/40” — wersja). Żaden człon nie wygląda jak
+     * rozmiar — pozycja bez rozmiaru (osobna karta), a nie rozmiar „V1” cudzej karty.
+     *
+     * @return array{0: string, 1: string|null, 2: string} kod bazowy, rozmiar (dosłownie), pozostałe człony („/”)
      */
     private static function splitCode(string $code): array
     {
-        $at = strpos($code, '/');
-        if ($at === false) {
-            return [$code, null];
+        $segments = array_map('trim', explode('/', $code));
+        $base = array_shift($segments);
+        $segments = array_values(array_filter($segments, static fn (string $segment): bool => $segment !== ''));
+        $size = null;
+        for ($i = count($segments) - 1; $i >= 0; $i--) {
+            if (preg_match(self::SIZE_SEGMENT, $segments[$i]) === 1) {
+                $size = $segments[$i];
+                array_splice($segments, $i, 1);
+                break;
+            }
         }
-        $size = trim(substr($code, $at + 1));
 
-        return [substr($code, 0, $at), $size !== '' ? $size : null];
+        return [(string) $base, $size, implode('/', $segments)];
+    }
+
+    /** Rozmiar do porównań w grupie: „07” = „7”, „10,5” = „10.5”, litery bez wielkości. */
+    private static function sizeKey(string $size): string
+    {
+        $size = mb_strtoupper(str_replace(',', '.', trim($size)));
+
+        return is_numeric($size) ? (string) (float) $size : $size;
     }
 
     /** Liczba z cennika („13,857”); pusta komórka = brak. */

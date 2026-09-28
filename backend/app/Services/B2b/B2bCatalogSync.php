@@ -1028,10 +1028,15 @@ final class B2bCatalogSync
         ];
         // cennik bazowy dostawcy (B2bStandardDiscountSite) tylko do slotu konta — poza $prices, bo te idą na nową
         // kartę, do detectPriceChange/summarizeUpdate i do historii cen, a cena bazowa nie jest ceną karty
-        $baseSlot = $price === null ? [] : $this->baseSlotValues($connector, $origin);
+        // część wyrobu na karcie (stara karta z podziału cenowego — syncMembersByCard, pozycja rozdzielona mapą połączeń
+        // — syncMembersSeparately): cena bazowa dla rozmiarów tej karty, bo slot niesie cenę jej najtańszego rozmiaru
+        $baseSlot = $price === null ? [] : $this->baseSlotValues($connector, $remote);
         $slotKey = ProductSourcePrice::b2bKey((int) $account->id);
         // błąd pobrania opisu nie wstrzymuje ceny: opis zostaje bez zmian, ostrzeżenie w dzienniku przebiegu
-        $card = $this->cardDocuments($connector, $origin, $existing, $warnings);
+        // pliki i zdjęcia dla części wyrobu na tej karcie ($remote — w trybie „według kart” i pojedynczym ma raw całego
+        // wyrobu, ale tylko swoje pozycje): stara karta koloru z podziału cenowego Delta Plus nie dostaje zdjęć innego
+        // koloru; łączniki czytające tylko raw dostają to samo co dotąd
+        $card = $this->cardDocuments($connector, $remote, $existing, $warnings);
         [$descriptionHash, $sourceTextTaken] = $this->applyCardDetails($payload, $existing, $link, $connector, $origin, $warnings, ! $descriptionOff);
         // Przed fill — właściciela liczymy z producenta zapisanego na karcie, nie z brzmienia tego konta.
         $foreignOnProtected = $existing !== null && $this->isForeignOnProtectedCard($existing, $account);
@@ -1257,7 +1262,7 @@ final class B2bCatalogSync
         }
 
         [$image, $imageError] = $withImages
-            ? $this->storeImage($connector, $origin, $product, $account, $foreignOnProtected)
+            ? $this->storeImage($connector, $remote, $product, $account, $foreignOnProtected)
             : [false, null];
         $documents = $this->storeDocuments($account, $product, $connector, $card, $warnings);
         $shopFields = $this->storeShopFields($connector, $origin, $product, $account, $warnings);
@@ -1783,7 +1788,7 @@ final class B2bCatalogSync
     {
         $rows = ['#'.$remote->remoteId => [
             'remote_id' => $remote->remoteId, 'sku' => $remote->sku, 'name' => $remote->name, 'availability' => null,
-            'size' => null, 'price' => null, 'order' => -1,
+            'size' => null, 'price' => null, 'order' => -1, 'legacy_remote_id' => null,
         ]];
         foreach ($remote->members as $index => $member) {
             $id = (string) ($member['remote_id'] ?? '');
@@ -1798,6 +1803,9 @@ final class B2bCatalogSync
             $row = [
                 'remote_id' => $id, 'sku' => (string) ($member['sku'] ?? ''), 'name' => (string) ($member['name'] ?? ''),
                 'availability' => $availability, 'size' => $size, 'price' => $price, 'order' => (int) $index,
+                // dawne remote_id pozycji sprzed zmiany łącznika (Protekt „LB100 / biały”) — tylko do znalezienia jej karty
+                'legacy_remote_id' => isset($member['legacy_remote_id']) && is_string($member['legacy_remote_id'])
+                    && trim($member['legacy_remote_id']) !== '' && $member['legacy_remote_id'] !== $id ? $member['legacy_remote_id'] : null,
             ];
             if ($id === $remote->remoteId) {
                 $rows['#'.$id] = [
@@ -1817,7 +1825,7 @@ final class B2bCatalogSync
     /**
      * Ceny pozycji grupy (members[].price, decyzja użytkownika 28.09.2026): „none” — żadna pozycja nie ma ceny (jak
      * dotąd: cena grupy z price()); „priced” — każda ma cenę w jednej walucie: karta dostaje cenę najtańszej pozycji
-     * (remis — niższa cena katalogowa, potem kolejność na liście), max — najwyższa cena pozycji, gdy różni się od
+     * (remis — winsSizePriceTie: znana i niższa cena katalogowa, potem kolejność), max — najwyższa cena pozycji, gdy różni się od
      * najniższej o co najmniej grosz (slot size_price_max); „invalid” — ceny tylko przy części pozycji albo w kilku
      * walutach: kontrakt łącznika złamany, grupa pominięta z powodem (bez zgadywania, która cena jest dobra).
      *
@@ -1870,9 +1878,8 @@ final class B2bCatalogSync
                 continue;
             }
             $cheapestNet = round($cheapest->net, 2);
-            // remis ceny konta — niższa cena katalogowa (brak = cena konta), dalej pierwsza na liście
             if ($net < $cheapestNet - 0.0049
-                || (abs($net - $cheapestNet) < 0.005 && round($price->base ?? $price->net, 2) < round($cheapest->base ?? $cheapest->net, 2) - 0.0049)) {
+                || (abs($net - $cheapestNet) < 0.005 && self::winsSizePriceTie($price->base, $cheapest->base))) {
                 $cheapest = $price;
             }
         }
@@ -1883,6 +1890,20 @@ final class B2bCatalogSync
             'cheapest' => $cheapest,
             'max' => $max !== null && $cheapest !== null && $max - round($cheapest->net, 2) >= 0.005 ? $max : null,
         ];
+    }
+
+    /**
+     * Remis ceny konta dwóch rozmiarów: wygrywa rozmiar ze znaną ceną katalogową (rozmiar bez niej odebrałby karcie
+     * cenę katalogową, którą mają inne rozmiary w tej samej cenie — Raw-Pol), z dwóch znanych niższa; dalej pierwszy na
+     * liście (false). Ta sama reguła przy scalaniu (B2bSizePriceMerger::recomputeSlot).
+     */
+    public static function winsSizePriceTie(?float $candidateBase, ?float $currentBase): bool
+    {
+        if ($candidateBase === null) {
+            return false;
+        }
+
+        return $currentBase === null || round($candidateBase, 2) < round($currentBase, 2) - 0.0049;
     }
 
     /**
@@ -2055,8 +2076,9 @@ final class B2bCatalogSync
      * Pozycje grupy z cenami rozmiarów według kart, na które wskazują ich powiązania tego konta — tylko gdy tych kart
      * jest co najmniej dwie (dawny podział wyrobu według ceny). Pozycje z wpisem mapy połączeń bez karty ($mapped) nie
      * głosują, jak w resolveGroupCard. Pozycja bez powiązania (nowy rozmiar) dołącza do karty pozycji remoteId, inaczej
-     * do karty z największą liczbą powiązań (remis — najniższe id). null = pozycje na co najwyżej jednej karcie (zwykła
-     * droga grupy).
+     * do karty z największą liczbą powiązań (remis — najniższe id). Pozycja bez własnego powiązania, ale z powiązaniem
+     * spod dawnego remote_id (members[].legacy_remote_id — łącznik zmienił identyfikatory pozycji, Protekt 28.09.2026)
+     * idzie na kartę tamtego powiązania. null = pozycje na co najwyżej jednej karcie (zwykła droga grupy).
      *
      * @param  list<array{remote_id: string, sku: string, name: string, availability: string|null, size: string|null, price: B2bRemotePrice|null, order: int}>  $members
      * @param  array<string, mixed>  $mapped  remote_id pozycji z wpisem mapy => wpis
@@ -2067,7 +2089,7 @@ final class B2bCatalogSync
         /** @var Collection<string, B2bProductLink> $links */
         $links = B2bProductLink::query()
             ->where('b2b_account_id', $account->id)
-            ->whereIn('remote_id', array_column($members, 'remote_id'))
+            ->whereIn('remote_id', [...array_column($members, 'remote_id'), ...array_filter(array_column($members, 'legacy_remote_id'))])
             ->with('product')
             ->orderBy('id')
             ->get()
@@ -2079,7 +2101,9 @@ final class B2bCatalogSync
             if (array_key_exists($member['remote_id'], $mapped)) {
                 continue;
             }
-            $link = $links->get($member['remote_id']);
+            // pozycja bez własnego powiązania — powiązanie spod dawnego remote_id (zmiana łącznika, np. Protekt)
+            $link = $links->get($member['remote_id'])
+                ?? (($member['legacy_remote_id'] ?? null) !== null ? $links->get((string) $member['legacy_remote_id']) : null);
             if ($link?->product !== null) {
                 $cardOf[$member['remote_id']] = (int) $link->product_id;
                 $cards[(int) $link->product_id] = $link->product;
@@ -2156,6 +2180,8 @@ final class B2bCatalogSync
                     'size' => $member['size'],
                     'card_id' => $cardId,
                     'net' => $member['price'] !== null ? round($member['price']->net, 2) : null,
+                    // dawne powiązanie tej pozycji (zostaje na karcie do scalenia — B2bSizePriceMerger je dopuszcza)
+                    'legacy_remote_id' => $member['legacy_remote_id'] ?? null,
                     'currency' => $member['price']?->currency,
                 ];
             }

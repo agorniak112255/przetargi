@@ -12,6 +12,7 @@ use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bFatalException;
@@ -75,7 +76,7 @@ final class TegroConnectorTest extends TestCase
             // jak w sklepie 21.09.2026: najmniejszy rozmiar bez opisu, pozostałe z opisem
             $this->item(4634, 'F09 PLUS 6', self::F09.' 6', self::F09, 5.1, 6.0, '5900000000006', ['Description' => '']),
             $this->item(4638, 'F09 PLUS 10', self::F09.' 10', self::F09, 5.1, 6.0, '5900000000010'),
-            // ten sam model, rozmiar w innej cenie — osobne karty z pełną nazwą
+            // ten sam model, rozmiar w innej cenie — od 28.09.2026 jedna karta z ceną każdego rozmiaru
             $this->item(2001, 'HEAVY 9', 'RĘKAWICE RS ARBEITSSCHUTZ HEAVY 9', 'RĘKAWICE RS ARBEITSSCHUTZ HEAVY', 5.9, 6.24, '5900000000109'),
             $this->item(2000, 'HEAVY 8', 'RĘKAWICE RS ARBEITSSCHUTZ HEAVY 8', 'RĘKAWICE RS ARBEITSSCHUTZ HEAVY', 6.24, 6.24, '5900000000108'),
             // bez modelu; normy także w atrybutach API
@@ -120,13 +121,17 @@ final class TegroConnectorTest extends TestCase
         $this->assertFalse($client->isLoggedIn());
     }
 
-    public function test_sizes_of_one_model_in_one_price_are_one_card_and_a_size_in_another_price_is_its_own_card(): void
+    /**
+     * Do 28.09.2026 (decyzja 15.09.2026) rozmiar modelu w innej cenie był osobną kartą (HEAVY 8 i HEAVY 9). Od decyzji
+     * użytkownika 28.09.2026 rozmiary jednego modelu w różnych cenach to jedna karta z ceną każdego rozmiaru.
+     */
+    public function test_sizes_of_one_model_are_one_card_also_when_their_prices_differ(): void
     {
         $this->fakeSite();
 
         $products = $this->productsBySku($this->connector());
 
-        $this->assertSame(['F09 PLUS 6', 'HEAVY 9', 'HEAVY 8', 'ALASKA 10', 'ODD 8', 'NOPRICE 9'], array_keys($products));
+        $this->assertSame(['F09 PLUS 6', 'HEAVY 8', 'ALASKA 10', 'ODD 8', 'NOPRICE 9'], array_keys($products));
         $f09 = $products['F09 PLUS 6'];
         $this->assertSame('4634', $f09->remoteId);
         $this->assertSame(self::F09, $f09->name);
@@ -135,11 +140,11 @@ final class TegroConnectorTest extends TestCase
         $this->assertSame('Rozmiary: 6 (F09 PLUS 6); 7 (F09 PLUS 7); 10 (F09 PLUS 10)', $f09->variantSummary);
         $this->assertSame(
             [
-                ['remote_id' => '4634', 'sku' => 'F09 PLUS 6', 'name' => self::F09.' 6'],
-                ['remote_id' => '4635', 'sku' => 'F09 PLUS 7', 'name' => self::F09.' 7'],
-                ['remote_id' => '4638', 'sku' => 'F09 PLUS 10', 'name' => self::F09.' 10'],
+                ['4634', 'F09 PLUS 6', self::F09.' 6', '6', 5.1, 6.0, 'PLN'],
+                ['4635', 'F09 PLUS 7', self::F09.' 7', '7', 5.1, 6.0, 'PLN'],
+                ['4638', 'F09 PLUS 10', self::F09.' 10', '10', 5.1, 6.0, 'PLN'],
             ],
-            $f09->members,
+            self::members($f09),
         );
         // EAN i kod Tegro każdego rozmiaru, przy jego pozycji (Id z API)
         $this->assertSame(
@@ -159,12 +164,76 @@ final class TegroConnectorTest extends TestCase
             array_map(static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId], $products['ODD 8']->identifiers ?? []),
         );
 
+        // rozmiary w dwóch cenach: jedna karta z nazwą modelu, pozycja wiodąca = najmniejszy rozmiar, cena i cena
+        // katalogowa każdego rozmiaru przy jego pozycji, cena karty = najtańszy rozmiar
+        $heavy = $products['HEAVY 8'];
+        $this->assertSame('2000', $heavy->remoteId);
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ HEAVY', $heavy->name);
+        $this->assertSame('Rozmiary: 8 (HEAVY 8); 9 (HEAVY 9)', $heavy->variantSummary);
+        $this->assertSame(
+            [
+                ['2000', 'HEAVY 8', 'RĘKAWICE RS ARBEITSSCHUTZ HEAVY 8', '8', 6.24, 6.24, 'PLN'],
+                ['2001', 'HEAVY 9', 'RĘKAWICE RS ARBEITSSCHUTZ HEAVY 9', '9', 5.9, 6.24, 'PLN'],
+            ],
+            self::members($heavy),
+        );
+        $price = $this->connector()->price($heavy);
+        $this->assertSame(5.9, $price?->net);
+        $this->assertSame(6.24, $price->base);
+
         // pojedyncza pozycja: pełna nazwa ze sklepu, bez listy rozmiarów i bez members
-        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ HEAVY 8', $products['HEAVY 8']->name);
-        $this->assertSame([], $products['HEAVY 8']->members);
-        $this->assertNull($products['HEAVY 8']->variantSummary);
         $this->assertSame('RĘKAWICE INNA NAZWA 8', $products['ODD 8']->name);
         $this->assertSame([], $products['ODD 8']->members);
+        $this->assertNull($products['ODD 8']->variantSummary);
+    }
+
+    /**
+     * Remis ceny konta rozmiarów: cenę karty daje rozmiar ze znaną ceną katalogową (B2bCatalogSync::winsSizePriceTie),
+     * nie pierwszy rozmiar bez niej.
+     */
+    public function test_equal_size_prices_take_the_size_with_a_known_catalog_price(): void
+    {
+        $this->items = [
+            $this->item(6001, 'TIE 8', 'RĘKAWICE TIE 8', 'RĘKAWICE TIE', 5.0, 0.0, ''),
+            $this->item(6002, 'TIE 9', 'RĘKAWICE TIE 9', 'RĘKAWICE TIE', 5.0, 6.5, ''),
+        ];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = $this->productsBySku($connector);
+
+        $this->assertSame([null, 6.5], array_map(static fn (array $m): ?float => $m['price']->base, $products['TIE 8']->members));
+        $price = $connector->price($products['TIE 8']);
+        $this->assertSame(5.0, $price?->net);
+        $this->assertSame(6.5, $price->base);
+    }
+
+    /**
+     * Cena rozmiaru nie dzieli karty, ale jednostka i waluta tak: rozmiar sprzedawany na opakowania albo w innej walucie
+     * to nie rozmiar tej samej karty (synchronizacja nie porównuje jednostek).
+     */
+    public function test_sizes_in_another_unit_or_currency_stay_separate_cards(): void
+    {
+        $this->items = [
+            $this->item(5001, 'UNIT 8', 'RĘKAWICE UNIT 8', 'RĘKAWICE UNIT', 5.0, 6.0, ''),
+            $this->item(5002, 'UNIT 9', 'RĘKAWICE UNIT 9', 'RĘKAWICE UNIT', 5.5, 6.0, ''),
+            $this->item(5003, 'UNIT 10', 'RĘKAWICE UNIT 10', 'RĘKAWICE UNIT', 50.0, 60.0, '', ['Unit' => 'opak']),
+            $this->item(5004, 'UNIT 11', 'RĘKAWICE UNIT 11', 'RĘKAWICE UNIT', 1.5, 2.0, '', [
+                'PriceAfterDiscountNet' => ['Value' => 1.5, 'Currency' => 'EUR'],
+                'RetailPriceNet' => ['Value' => 2.0, 'Currency' => 'EUR'],
+            ]),
+        ];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $products = $this->productsBySku($connector);
+
+        $this->assertSame(['UNIT 8', 'UNIT 10', 'UNIT 11'], array_keys($products));
+        $this->assertSame(['UNIT 8', 'UNIT 9'], array_column($products['UNIT 8']->members, 'sku'));
+        $this->assertSame(5.0, $connector->price($products['UNIT 8'])?->net);
+        $this->assertSame([], $products['UNIT 10']->members);
+        $this->assertSame(50.0, $connector->price($products['UNIT 10'])?->net);
+        $this->assertSame('EUR', $connector->price($products['UNIT 11'])?->currency);
     }
 
     public function test_price_is_the_account_price_with_catalog_price_and_no_invented_discount(): void
@@ -274,7 +343,8 @@ final class TegroConnectorTest extends TestCase
 
         $products = $this->productsBySku($this->connector());
 
-        $this->assertCount(6, $products);
+        // 8 pozycji = 5 kart (rozmiary HEAVY w dwóch cenach to od 28.09.2026 jedna karta)
+        $this->assertCount(5, $products);
         $this->assertSame(2, $this->logins);
     }
 
@@ -310,7 +380,7 @@ final class TegroConnectorTest extends TestCase
         $this->assertSame([], $connector->documents($products['F09 PLUS 6']));
         $this->assertSame(0, $this->pageHits);
         $this->assertSame([
-            'Lista Tegro: 8 pozycji → 6 kart (1 grup rozmiarów o tej samej cenie)',
+            'Lista Tegro: 8 pozycji → 5 kart (2 grup rozmiarów, w tym 1 z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)',
             'Plik oferty XML nie został pobrany (b2b.tegro.pl odpowiedziało HTTP 500) — karty bez tabelki parametrów i plików PDF',
         ], $connector->runSummary());
     }
@@ -322,8 +392,9 @@ final class TegroConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
 
-        $this->assertSame(6, $result['total_remote']);
-        $this->assertSame(5, $result['created']);
+        // HEAVY 8 i 9 (dwie ceny) = jedna karta od 28.09.2026
+        $this->assertSame(5, $result['total_remote']);
+        $this->assertSame(4, $result['created']);
         $this->assertContains('NOPRICE 9: brak ceny w B2B', $result['errors']);
 
         $f09 = Product::query()->where('sku', 'F09 PLUS 6')->sole();
@@ -338,8 +409,20 @@ final class TegroConnectorTest extends TestCase
         $slot = ProductSourcePrice::query()->where('product_id', $f09->id)->where('source_key', ProductSourcePrice::b2bKey((int) $this->account()->id))->sole();
         $this->assertSame('5.10', (string) $slot->purchase_price);
 
-        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ HEAVY 8', Product::query()->where('sku', 'HEAVY 8')->value('name'));
-        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ HEAVY 9', Product::query()->where('sku', 'HEAVY 9')->value('name'));
+        $heavy = Product::query()->where('sku', 'HEAVY 8')->sole();
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ HEAVY', $heavy->name);
+        $this->assertFalse(Product::query()->where('sku', 'HEAVY 9')->exists());
+        $heavySlot = ProductSourcePrice::query()->where('product_id', $heavy->id)->sole();
+        // cena karty = najtańszy rozmiar (9) z jego ceną katalogową, najwyższa cena rozmiaru przy slocie
+        $this->assertSame('5.90', (string) $heavySlot->purchase_price);
+        $this->assertSame('6.24', (string) $heavySlot->catalog_price_net);
+        $this->assertSame('6.24', (string) $heavySlot->size_price_max);
+        $this->assertSame(
+            [['8', '6.24', '6.24'], ['9', '5.90', '6.24']],
+            ProductVariant::query()->where('product_id', $heavy->id)->where('kind', ProductVariant::KIND_SIZE)->orderBy('sort_order')->get()
+                ->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price, (string) $v->list_price_net])->all(),
+        );
+        $this->assertNull($slot->size_price_max);
 
         $this->assertTrue(ProductShopCard::query()->where('product_id', $f09->id)->exists());
         $this->assertStringContainsString('EN 388:2016+A1:2018', (string) $f09->fresh()?->shop_fields_summary);
@@ -349,7 +432,7 @@ final class TegroConnectorTest extends TestCase
         );
 
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
-        $this->assertContains('Lista Tegro: 8 pozycji → 6 kart (1 grup rozmiarów o tej samej cenie)', $log);
+        $this->assertContains('Lista Tegro: 8 pozycji → 5 kart (2 grup rozmiarów, w tym 1 z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)', $log);
     }
 
     public function test_second_run_on_the_same_cards_creates_nothing_and_keeps_description_and_files(): void
@@ -365,7 +448,7 @@ final class TegroConnectorTest extends TestCase
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
 
         $this->assertSame(0, $second['created']);
-        $this->assertSame(5, Product::query()->count());
+        $this->assertSame(4, Product::query()->count());
         $this->assertSame('Rękawica ochronna kat. II, nitryl.'."\n".'Druga linia opisu.', $description);
         $this->assertSame($description, (string) $f09->fresh()?->description);
         $this->assertSame($documents, ProductDocument::query()->where('product_id', $f09->id)->count());
@@ -375,6 +458,60 @@ final class TegroConnectorTest extends TestCase
         $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
         // pliki, które karta już ma, nie są pobierane drugi raz
         $this->assertSame($pdfDownloads, count(Http::recorded(fn (Request $r): bool => str_ends_with((string) parse_url($r->url(), PHP_URL_PATH), '.pdf'))));
+    }
+
+    /**
+     * Karty sprzed 28.09.2026 (HEAVY 8 i HEAVY 9 — rozmiary w różnych cenach jako osobne karty): przebieg po zmianie
+     * nie zakłada nowej karty (kod nowego wyrobu „HEAVY 8” to kod dawnej karty rozmiaru 8 — bez konfliktu), nie przepina
+     * powiązań i nie zmienia cen kart; każda karta dostaje swój rozmiar, a wyrób trafia do size_spread przebiegu.
+     */
+    public function test_legacy_price_split_cards_stay_and_get_their_own_sizes(): void
+    {
+        Storage::fake('public');
+        $this->items = array_values(array_filter($this->items, static fn (array $i): bool => in_array($i['Id'], [2000, 2001], true)));
+        $this->fakeSite();
+        $account = $this->account();
+        $small = $this->legacyCard($account, 'HEAVY 8', 'RĘKAWICE RS ARBEITSSCHUTZ HEAVY 8', 6.24, '2000');
+        $large = $this->legacyCard($account, 'HEAVY 9', 'RĘKAWICE RS ARBEITSSCHUTZ HEAVY 9', 5.9, '2001');
+
+        $result = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
+
+        $this->assertSame(0, $result['created'], implode(' | ', $result['errors']));
+        $this->assertSame(0, $result['skipped'], implode(' | ', $result['errors']));
+        $this->assertSame(2, Product::query()->count());
+        $this->assertSame([$small->id], B2bProductLink::query()->where('remote_id', '2000')->pluck('product_id')->map(static fn (mixed $id): int => (int) $id)->all());
+        $this->assertSame([$large->id], B2bProductLink::query()->where('remote_id', '2001')->pluck('product_id')->map(static fn (mixed $id): int => (int) $id)->all());
+        $this->assertSame('RĘKAWICE RS ARBEITSSCHUTZ HEAVY 8', $small->fresh()?->name);
+        $this->assertSame('6.24', (string) ProductSourcePrice::query()->where('product_id', $small->id)->value('purchase_price'));
+        $this->assertSame('5.90', (string) ProductSourcePrice::query()->where('product_id', $large->id)->value('purchase_price'));
+        $this->assertSame(['8'], ProductVariant::query()->where('product_id', $small->id)->pluck('label')->all());
+        $this->assertSame(['9'], ProductVariant::query()->where('product_id', $large->id)->pluck('label')->all());
+        $spread = B2bSyncRun::query()->findOrFail($result['sync_run_id'])->size_spread;
+        $this->assertSame(1, $spread['total']);
+        $this->assertSame([$small->id, $large->id], $spread['groups'][0]['cards']);
+    }
+
+    /**
+     * Karta zapisana przez dawny podział według ceny (do 28.09.2026): kod i nazwa pozycji, jej powiązanie i slot konta.
+     */
+    private function legacyCard(B2bAccount $account, string $sku, string $name, float $price, string $remoteId): Product
+    {
+        $card = Product::query()->create([
+            'sku' => $sku, 'name' => $name, 'manufacturer' => 'G-REX', 'description' => 'Rękawica ochronna kat. II, nitryl.',
+            'catalog_price_net' => 6.24, 'discount_percent' => 0, 'purchase_price' => $price, 'currency' => 'PLN',
+        ]);
+        B2bProductLink::query()->create([
+            'b2b_account_id' => $account->id, 'remote_id' => $remoteId, 'product_id' => $card->id,
+            'remote_sku' => $sku, 'remote_name' => $name, 'manufacturer' => 'G-REX',
+            'last_purchase_price' => $price, 'last_currency' => 'PLN',
+        ]);
+        ProductSourcePrice::query()->create([
+            'product_id' => $card->id, 'source_key' => ProductSourcePrice::b2bKey((int) $account->id), 'b2b_account_id' => $account->id,
+            'catalog_price_net' => 6.24, 'purchase_price' => $price, 'discount_percent' => 0, 'currency' => 'PLN',
+            'checked_at' => now()->subDay(),
+        ]);
+
+        return $card;
     }
 
     public function test_registry_detects_tegro_by_host_and_it_is_not_a_manufacturer_site(): void
@@ -410,6 +547,19 @@ final class TegroConnectorTest extends TestCase
             ['username' => 'jan@example.com'],
             ['password' => 'dobre-haslo', 'sites' => ['https://b2b.tegro.pl/'], 'connector' => 'tegro', 'sync_images' => false],
         )->fresh();
+    }
+
+    /**
+     * Pozycje karty z ceną rozmiaru: [remote_id, sku, name, size, net, base, currency].
+     *
+     * @return list<list<mixed>>
+     */
+    private static function members(B2bRemoteProduct $product): array
+    {
+        return array_map(static fn (array $m): array => [
+            $m['remote_id'], $m['sku'], $m['name'], $m['size'] ?? null,
+            $m['price']?->net, $m['price']?->base, $m['price']?->currency,
+        ], $product->members);
     }
 
     /**

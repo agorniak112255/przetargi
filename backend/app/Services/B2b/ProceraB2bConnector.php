@@ -25,15 +25,20 @@ use RuntimeException;
  * Model bez tabeli rozmiarów ma jedną cenę (#b2b-price-discounted). Cennik XML konta NIE jest źródłem ceny konta:
  * w 42 z 1026 modeli jego CENA_KLIENTA różni się od ceny na stronie (inna jednostka — skarpety za parę zamiast
  * opakowania, wyprzedaż rozmiarów). Z XML bierzemy tylko cenę katalogową (CENA_CENNIKOWA_HURT), i to wyłącznie gdy
- * kod modelu trafia dokładnie, a CENA_KLIENTA równa się cenie karty — wtedy wiadomo, że to ten sam wyrób w tej samej
- * jednostce. Inaczej karta nie ma ceny katalogowej (liczone w podsumowaniu przebiegu).
+ * kod modelu trafia dokładnie, a CENA_KLIENTA równa się cenie rozmiaru — wtedy wiadomo, że to ten sam wyrób w tej samej
+ * jednostce. Inaczej rozmiar nie ma ceny katalogowej (karta, której najtańszy rozmiar jej nie ma, liczona
+ * w podsumowaniu przebiegu).
  *
- * Karta = rozmiary jednego modelu w jednej cenie konta (decyzja użytkownika 15.09.2026: rozmiar w innej cenie to
- * osobna karta). SKU: kod modelu (kod rozmiaru bez oznaczenia rozmiaru, np. „X-DUOMAX 9” → „X-DUOMAX”), gdy model
- * jest jedną kartą, a cennik XML zna ten kod; inaczej — i przy modelu podzielonym cenami — kod pierwszego rozmiaru
- * karty (kod modelu nie może przechodzić między kartami, gdy zmieni się podział). Pozycje (members) = kody rozmiarów.
- * Nowa karta z przebiegu bez cennika XML zostaje z kodem rozmiaru (synchronizacja nie zmienia SKU), a kolejne
- * przebiegi i tak ją znajdą po powiązaniach rozmiarów.
+ * Karta = model ze wszystkimi rozmiarami z ceną konta (decyzja użytkownika 28.09.2026: rozmiary w różnych cenach to
+ * jedna karta). Do 28.09.2026 (decyzja 15.09.2026) rozmiar w innej cenie był osobną kartą z kodem pierwszego rozmiaru
+ * („ATLANTIS S1PL 46”) — takie karty zostają, dopóki nie scali ich osobne polecenie (synchronizacja daje każdej jej
+ * rozmiary, B2bCatalogSync::syncMembersByCard). SKU: kod modelu (kod rozmiaru bez oznaczenia rozmiaru, np.
+ * „X-DUOMAX 9” → „X-DUOMAX”), gdy cennik XML zna ten kod; inaczej kod pierwszego rozmiaru. Pozycje (members) = kody
+ * rozmiarów z oznaczeniem rozmiaru, dostępnością i ceną rozmiaru; cena karty = najniższa cena rozmiaru (raw['price'],
+ * price()), pozostałe ceny — wiersze rozmiarów karty. Cena katalogowa rozmiaru z XML na warunku jak wyżej (rozmiar
+ * w innej cenie niż CENA_KLIENTA wiersza modelu jej nie dostaje — nie przepisujemy cudzej). Jednostka (z wiersza listy)
+ * i waluta (PLN) są jedne dla całego modelu. Nowa karta z przebiegu bez cennika XML zostaje z kodem rozmiaru
+ * (synchronizacja nie zmienia SKU), a kolejne przebiegi i tak ją znajdą po powiązaniach rozmiarów.
  *
  * Wiersz listy musi się zgadzać ze stroną: kod z listy jest jednym z kodów rozmiarów, a jego cena z listy jest ceną
  * tego rozmiaru na stronie. Rozjazd = model pominięty z powodem (czytalibyśmy złe pole albo cudzą stronę).
@@ -47,7 +52,7 @@ use RuntimeException;
  * apteczki), co podsumowanie przebiegu liczy osobno. Dlatego łącznik nie jest B2bManufacturerSite: opis stąd nie
  * nadpisuje opisów z innych źródeł.
  */
-final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
+final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource, B2bSizePriceSource
 {
     public const SUPPLIER = 'Procera';
 
@@ -112,7 +117,8 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bG
 
     private int $cards = 0;
 
-    private int $splitModels = 0;
+    /** modele z rozmiarami w różnych cenach (jedna karta, cena od najniższej) */
+    private int $multiPriceModels = 0;
 
     private int $skippedModels = 0;
 
@@ -163,7 +169,7 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bG
         $this->sizesWithoutPrice = [];
         $this->supplierAsManufacturer = [];
         $this->cards = 0;
-        $this->splitModels = 0;
+        $this->multiPriceModels = 0;
         $this->skippedModels = 0;
 
         $rows = $this->listRows();
@@ -172,10 +178,7 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bG
         $this->loadPriceList();
 
         foreach ($rows as $row) {
-            $products = $this->productsFor($row);
-            // model w kilku cenach to kilka kart — licznik postępu rośnie, zanim je wydamy
-            $this->total += max(0, count($products) - 1);
-            yield from $products;
+            yield $this->productFor($row);
         }
     }
 
@@ -188,9 +191,9 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bG
     {
         $lines = $this->summary;
         $lines[] = sprintf(
-            'Karty: %d (%d modeli w kilku cenach — rozmiary w innej cenie to osobna karta; %d modeli pominiętych)',
+            'Karty: %d (%d modeli z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty; %d modeli pominiętych)',
             $this->cards,
-            $this->splitModels,
+            $this->multiPriceModels,
             $this->skippedModels,
         );
         if ($this->sizesWithoutPrice !== []) {
@@ -704,23 +707,22 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bG
     }
 
     /**
-     * Karty jednego modelu (jedna na każdą cenę konta); model nieczytelny albo niezgodny z listą — jedna pozycja
+     * Karta jednego modelu ze wszystkimi rozmiarami z ceną konta; model nieczytelny albo niezgodny z listą — pozycja
      * pominięta z powodem.
      *
      * @param  array{id: string, code: string, name: string, price_text: string, availability: string, unit: string, detail_url: string, image_url: string}  $row
-     * @return list<B2bRemoteProduct>
      */
-    private function productsFor(array $row): array
+    private function productFor(array $row): B2bRemoteProduct
     {
         if ($row['detail_url'] === '') {
-            return [$this->skipped($row, 'wiersz listy bez adresu strony wyrobu')];
+            return $this->skipped($row, 'wiersz listy bez adresu strony wyrobu');
         }
         try {
             $page = self::parsePage($this->client->productPage($row['detail_url']));
         } catch (B2bFatalException $e) {
             throw $e;
         } catch (RuntimeException $e) {
-            return [$this->skipped($row, 'strona wyrobu: '.$e->getMessage())];
+            return $this->skipped($row, 'strona wyrobu: '.$e->getMessage());
         }
 
         $listed = null;
@@ -730,24 +732,24 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bG
             }
         }
         if ($listed === null) {
-            return [$this->skipped($row, 'strona wyrobu nie pokazuje kodu z listy ('.$row['code'].')')];
+            return $this->skipped($row, 'strona wyrobu nie pokazuje kodu z listy ('.$row['code'].')');
         }
         $listCents = self::priceCents($row['price_text']);
         if ($listCents === null || $listCents !== $listed['cents']) {
-            return [$this->skipped($row, 'cena z listy („'.$row['price_text'].'”) inna niż cena rozmiaru '.$row['code'].' na stronie wyrobu')];
+            return $this->skipped($row, 'cena z listy („'.$row['price_text'].'”) inna niż cena rozmiaru '.$row['code'].' na stronie wyrobu');
         }
 
-        /** @var array<int, list<array{code: string, size: string, delivery: string, availability: string, cents: int|null}>> $groups */
-        $groups = [];
+        /** @var list<array{code: string, size: string, delivery: string, availability: string, cents: int}> $variants */
+        $variants = [];
         foreach ($page['variants'] as $variant) {
             if ($variant['cents'] !== null && $variant['cents'] > 0) {
-                $groups[$variant['cents']][] = $variant;
+                $variants[] = $variant;
             } else {
                 $this->sizesWithoutPrice[] = $variant['code'];
             }
         }
-        if ($groups === []) {
-            return [$this->skipped($row, 'żaden rozmiar nie ma ceny konta')];
+        if ($variants === []) {
+            return $this->skipped($row, 'żaden rozmiar nie ma ceny konta');
         }
 
         // kod modelu tylko potwierdzony cennikiem XML (Procera go używa) — wyliczony z kodów rozmiarów bywa kodem,
@@ -756,56 +758,50 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bG
         if (! $page['single'] && $modelCode !== null && ! isset($this->priceList[$modelCode])) {
             $modelCode = null;
         }
-        $split = count($groups) > 1;
-        $this->splitModels += $split ? 1 : 0;
+        $this->multiPriceModels += count(array_unique(array_column($variants, 'cents'))) > 1 ? 1 : 0;
+        $this->cards++;
 
-        $products = [];
-        foreach ($groups as $cents => $group) {
-            $products[] = $this->productFor($row, $page, $group, $cents, $modelCode, $split);
-        }
-        $this->cards += count($products);
-
-        return $products;
-    }
-
-    /**
-     * @param  array{id: string, code: string, name: string, price_text: string, availability: string, unit: string, detail_url: string, image_url: string}  $row
-     * @param  array<string, mixed>  $page
-     * @param  list<array{code: string, size: string, delivery: string, availability: string, cents: int|null}>  $group
-     */
-    private function productFor(array $row, array $page, array $group, int $cents, ?string $modelCode, bool $split): B2bRemoteProduct
-    {
-        $first = $group[0];
-        $sku = ! $split && $modelCode !== null ? $modelCode : $first['code'];
-        $net = $cents / 100;
-
-        $base = null;
+        $first = $variants[0];
+        $sku = $modelCode ?? $first['code'];
         $xml = $modelCode !== null ? ($this->priceList[$modelCode] ?? null) : null;
-        if ($xml !== null && abs($xml['client'] - $net) < 0.005 && $xml['catalog'] > $net) {
-            $base = $xml['catalog'];
-        } else {
-            $this->withoutBase[] = $sku;
-        }
 
-        $name = $row['name'] !== '' ? $row['name'] : $sku;
-        $sizes = array_values(array_filter(array_column($group, 'size'), static fn (string $s): bool => $s !== ''));
-        if ($split && $sizes !== []) {
-            $name .= ' (rozm. '.implode(', ', $sizes).')';
+        // cena każdego rozmiaru: cena konta ze strony, cena katalogowa z XML na tych samych warunkach co dotąd dla
+        // karty — wiersz kodu modelu, którego CENA_KLIENTA równa się cenie tego rozmiaru (ten sam wyrób w tej samej
+        // jednostce); rozmiar w innej cenie — bez ceny katalogowej (cudzej nie przepisujemy)
+        // cena karty = najtańszy rozmiar; remis ceny konta jak w B2bCatalogSync::winsSizePriceTie (tu cena katalogowa
+        // zależy tylko od ceny rozmiaru, więc remis jej nie zmienia — reguła dla spójności)
+        $prices = [];
+        $cheapest = 0;
+        foreach ($variants as $index => $variant) {
+            $prices[$index] = self::sizePrice($variant['cents'], $xml);
+            if ($prices[$index]->net < $prices[$cheapest]->net - 0.0049
+                || (abs($prices[$index]->net - $prices[$cheapest]->net) < 0.005
+                    && B2bCatalogSync::winsSizePriceTie($prices[$index]->base, $prices[$cheapest]->base))) {
+                $cheapest = $index;
+            }
+        }
+        // karta bez ceny katalogowej = jej cena (najtańszy rozmiar) bez niej, jak dotąd
+        if ($prices[$cheapest]->base === null) {
+            $this->withoutBase[] = $sku;
         }
 
         $members = [];
         $summary = '';
         if (! $page['single']) {
-            foreach ($group as $variant) {
+            foreach ($variants as $index => $variant) {
                 $members[] = [
                     'remote_id' => $variant['code'],
                     'sku' => $variant['code'],
                     'name' => trim(($row['name'] !== '' ? $row['name'] : $variant['code']).' '.$variant['size']),
+                    // dostępność rozmiaru dosłownie (z terminem dostawy), jak w zbiorczej dostępności karty
+                    'availability' => (string) self::groupAvailability([$variant]),
+                    'size' => $variant['size'],
+                    'price' => $prices[$index],
                 ];
             }
             $summary = 'Rozmiary: '.implode('; ', array_map(
                 static fn (array $v): string => ($v['size'] !== '' ? $v['size'] : '—').' ('.$v['code'].')',
-                $group,
+                $variants,
             ));
         }
 
@@ -817,12 +813,13 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bG
         return new B2bRemoteProduct(
             remoteId: $first['code'],
             sku: $sku,
-            name: $name,
+            name: $row['name'] !== '' ? $row['name'] : $sku,
             sourceUrl: $row['detail_url'],
             raw: [
                 'status' => 'ok',
-                'price' => $net,
-                'base_price' => $base,
+                // cena karty = najniższa cena rozmiaru z jej ceną katalogową (B2bCatalogSync liczy ją też z members[].price)
+                'price' => $prices[$cheapest]->net,
+                'base_price' => $prices[$cheapest]->base,
                 'model_code' => $modelCode ?? '',
                 'model_name' => $row['name'],
                 'unit' => $row['unit'],
@@ -834,10 +831,28 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bG
                 'documents' => $page['documents'],
                 'image_urls' => $images,
             ],
-            availability: self::groupAvailability($group),
+            availability: self::groupAvailability($variants),
             variantSummary: $summary,
             members: $members,
-            identifiers: $this->identifiers($page, $group, $modelCode),
+            identifiers: $this->identifiers($page, $variants, $modelCode),
+        );
+    }
+
+    /**
+     * Cena rozmiaru: cena konta ze strony; cena katalogowa (CENA_CENNIKOWA_HURT wiersza kodu modelu) tylko wtedy, gdy
+     * CENA_KLIENTA tego wiersza równa się cenie rozmiaru, a katalogowa jest od niej wyższa.
+     *
+     * @param  array{client: float, catalog: float, ean: string}|null  $xml
+     */
+    private static function sizePrice(int $cents, ?array $xml): B2bRemotePrice
+    {
+        $net = $cents / 100;
+        $base = $xml !== null && abs($xml['client'] - $net) < 0.005 && $xml['catalog'] > $net ? $xml['catalog'] : null;
+
+        return new B2bRemotePrice(
+            net: round($net, 2),
+            base: $base !== null ? round($base, 2) : null,
+            discountPercent: $base !== null ? round((1 - $net / $base) * 100, 2) : 0.0,
         );
     }
 
@@ -845,7 +860,7 @@ final class ProceraB2bConnector implements B2bConnector, B2bDocumentSource, B2bG
      * Kod każdego rozmiaru (pozycja karty) i EAN tam, gdzie wiadomo, którego rozmiaru dotyczy: „Kod EAN” strony należy
      * do kodu pokazanego obok („Kod”), EAN cennika XML — do pozycji, której kod jest dokładnie product_code wiersza.
      * EAN wiersza XML kodu modelu (bez rozmiaru) pomijamy — nie wiadomo, który to rozmiar. Kod modelu tylko
-     * potwierdzony cennikiem XML (product_code), na każdej karcie modelu; wyrób bez rozmiarów nie ma osobnego kodu
+     * potwierdzony cennikiem XML (product_code), na karcie modelu; wyrób bez rozmiarów nie ma osobnego kodu
      * modelu — jego kod to kod pozycji. Kod to własny kod Procery (source_code): przy jej liniach to zarazem kod
      * producenta, przy 3M czy Bollé — nie; rozstrzyga producent karty, nie łącznik.
      *

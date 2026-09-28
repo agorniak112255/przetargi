@@ -9,8 +9,8 @@ namespace App\Services\B2b;
  *
  * Do 28.09.2026 (decyzja użytkownika 15.09.2026) rozmiar w innej cenie był osobną kartą. Od 28.09.2026 (decyzja
  * użytkownika) rozmiary w różnych cenach to jedna karta: łącznik podaje cenę każdej pozycji (members[].price), karta
- * ma cenę najtańszego rozmiaru, a rozmiary z cenami są wierszami product_variants (kind „size”). Przeszedł na to na
- * razie tylko Mascot; pozostałe łączniki z tym znacznikiem dalej dzielą wyrób na karty według ceny.
+ * ma cenę najtańszego rozmiaru, a rozmiary z cenami są wierszami product_variants (kind „size”). Wszystkie łączniki
+ * z tym znacznikiem przeszły na to 28.09.2026 i mają znacznik B2bSizePriceSource (przycisk „Scal rozmiary”).
  *
  * Skoro takie konto trzyma dwa kody na osobnych kartach, to nie są rozmiary jednego wyrobu — propozycja „Łączenie
  * kart” nie może ich uznać za rozmiary (CardMatchFinder, warunek 3 sygnału rozmiar/kolor). Przy łącznikach po zmianie

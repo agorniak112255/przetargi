@@ -14,6 +14,7 @@ import { SupplierSpecialPanel } from './SupplierSpecialPanel'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 import { NormPictograms } from './NormPictograms'
 import { OrderQuantityBadge } from './OrderQuantityBadge'
+import { ProductVariantsTable } from './ProductVariantsTable'
 import { RequirementCheckList } from './RequirementCheckList'
 import { ShopFieldsTables } from './ShopFieldsTables'
 import { SourcePricesRanked } from './SourcePricesRanked'
@@ -442,6 +443,13 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
                   findPhrase={find}
                   activeFindIndex={safeIndex}
                 />
+                {/* Rozmiary z cenami (albo wersje Sign Project) jak na stronie karty — cena karty to najtańszy
+                    rozmiar, więc przy weryfikacji trzeba widzieć ceny pozostałych. */}
+                {product.variants && (
+                  <div className="mt-4 border-t border-slate-100 pt-3">
+                    <ProductVariantsTable productId={product.id} variants={product.variants} />
+                  </div>
+                )}
                 {/* Wiersze z karty u dostawcy pod opisem, nie zamiast niego: karta bez opisu nadal na niego czeka,
                     ale nie jest pusta — te dane trzeba widzieć przy weryfikacji. Wyszukiwarka fraz ich nie liczy,
                     bo obejmuje tylko treść opisu. */}

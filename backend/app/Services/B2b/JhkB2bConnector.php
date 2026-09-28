@@ -30,14 +30,18 @@ use RuntimeException;
  * (kamizelki ostrzegawcze, narzuty — tabela „Progi cenowe”) nie ma bloku „Twoja cena” ani ceny przed rabatem;
  * ceną konta jest próg, po którym sklep sprzedaje teraz („Twoja cena” w tabeli), a cena katalogowa pochodzi ze
  * strony gościa. Pozostałe progi idą do tabelki sklepu — w przetargu cena zależy od zamawianej ilości.
- * Cena katalogowa niższa od ceny konta albo rozmiar, którego strona gościa nie zna, to karta bez ceny katalogowej
- * (liczone w podsumowaniu przebiegu).
+ * Cena katalogowa rozmiaru niższa od jego ceny konta albo rozmiar, którego strona gościa nie zna, to rozmiar bez ceny
+ * katalogowej (liczone w podsumowaniu przebiegu) — ceny innego rozmiaru nie przepisujemy.
  *
- * Karta = rozmiary jednego koloru w tej samej parze cen (decyzja użytkownika 15.09.2026: rozmiar w innej cenie to
- * osobna karta; w JHK typowo XS–XXL w jednej cenie, 3XL droższy). SKU: kod wyrobu bez rozmiaru („JT SWCR BK”), gdy
- * wszystkie rozmiary mają ten sam kod z dopisanym rozmiarem i kolor jest jedną kartą; inaczej — i przy podziale
- * cenami — symbol pierwszego rozmiaru karty („JT SWCR BK 3XL”), żeby kod nie przechodził między kartami przy zmianie
- * podziału. Pozycje (members) i remote_id = symbole rozmiarów (sklep ma je na każdej karcie).
+ * Karta = kolor ze wszystkimi rozmiarami z ceną konta (decyzja użytkownika 28.09.2026: rozmiary w różnych cenach to
+ * jedna karta; w JHK typowo XS–XXL w jednej cenie, 3XL droższy). Do 28.09.2026 (decyzja 15.09.2026) rozmiar w innej
+ * cenie był osobną kartą z kodem pierwszego rozmiaru („JT SWCR BK 3XL”) — takie karty zostają, dopóki nie scali ich
+ * osobne polecenie (synchronizacja daje każdej jej rozmiary, B2bCatalogSync::syncMembersByCard). SKU: kod wyrobu bez
+ * rozmiaru („JT SWCR BK”), gdy wszystkie rozmiary mają ten sam kod z dopisanym rozmiarem; inaczej symbol pierwszego
+ * rozmiaru. Pozycje (members) i remote_id = symbole rozmiarów (sklep ma je na każdej karcie), z rozmiarem, stanem
+ * i ceną rozmiaru (konta i katalogowa); cena karty = najniższa cena rozmiaru (raw['price'], price()), pozostałe ceny —
+ * wiersze rozmiarów karty. Sklep podaje ceny tylko w PLN (inny zapis = rozmiar bez ceny) i nie podaje jednostki
+ * sprzedaży przy rozmiarze — tabela wariantów to rozmiary jednego wyrobu.
  *
  * Opis: pole OPIS dosłownie; sekcja „Załączniki” z odnośnikami do plików do opisu nie wchodzi (to lista plików,
  * nie opis wyrobu). Pliki: karty produktu i certyfikaty ze strony (blok „Karty do pobrania” i odnośniki w opisie);
@@ -48,7 +52,7 @@ use RuntimeException;
  * (MOO…), w pozostałych JHK. Witryna należy do producenta JHK (B2bManufacturerSite, marka JHK), więc opis stąd
  * może nadpisać opis kart JHK — kart MOONTEX już nie.
  */
-final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource
+final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldSource, B2bSizePriceSource
 {
     public const BRAND = 'JHK';
 
@@ -102,7 +106,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     /** @var list<string> */
     private array $summary = [];
 
-    /** @var list<string> karty bez ceny katalogowej */
+    /** @var list<string> rozmiary (symbole) bez ceny katalogowej */
     private array $withoutBase = [];
 
     /** @var list<string> symbole rozmiarów bez ceny konta (poza kartami swojego koloru) */
@@ -116,7 +120,8 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
 
     private int $cards = 0;
 
-    private int $splitProducts = 0;
+    /** kolory z rozmiarami w różnych cenach (jedna karta, cena od najniższej) */
+    private int $multiPriceProducts = 0;
 
     private int $skippedProducts = 0;
 
@@ -172,7 +177,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         $this->moontex = [];
         $this->families = [];
         $this->cards = 0;
-        $this->splitProducts = 0;
+        $this->multiPriceProducts = 0;
         $this->skippedProducts = 0;
 
         if (! $this->client->isLoggedIn()) {
@@ -184,10 +189,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         $this->summary[] = 'Lista JHK Polska: '.count($rows).' wyrobów w kolorach';
 
         foreach ($rows as $row) {
-            $products = $this->productsFor($row);
-            // kolor w kilku cenach to kilka kart — licznik postępu rośnie, zanim je wydamy
-            $this->total += max(0, count($products) - 1);
-            yield from $products;
+            yield $this->productFor($row);
         }
     }
 
@@ -200,16 +202,16 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     {
         $lines = $this->summary;
         $lines[] = sprintf(
-            'Karty: %d (%d wyrobów w kilku cenach — rozmiar w innej cenie to osobna karta; %d pozycji pominiętych)',
+            'Karty: %d (%d wyrobów z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty; %d pozycji pominiętych)',
             $this->cards,
-            $this->splitProducts,
+            $this->multiPriceProducts,
             $this->skippedProducts,
         );
         if ($this->moontex !== []) {
             $lines[] = 'Karty z producentem MOONTEX (reszta: JHK): '.count($this->moontex);
         }
         if ($this->withoutBase !== []) {
-            $lines[] = 'Bez ceny katalogowej (sklep bez logowania nie podał ceny detalicznej rozmiaru): '.self::listing($this->withoutBase);
+            $lines[] = 'Bez ceny katalogowej (sklep bez logowania nie podał ceny detalicznej rozmiaru albo podał niższą od ceny konta; symbole rozmiarów): '.self::listing($this->withoutBase);
         }
         if ($this->sizesWithoutPrice !== []) {
             $lines[] = 'Rozmiary bez ceny konta (poza kartami): '.self::listing($this->sizesWithoutPrice);
@@ -242,14 +244,43 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         if (($product->raw['status'] ?? null) !== 'ok') {
             throw new RuntimeException((string) ($product->raw['reason'] ?? 'strona wyrobu nieodczytana'));
         }
-        $net = (float) $product->raw['price'];
         $base = $product->raw['base_price'] ?? null;
 
+        return self::accountPrice((float) $product->raw['price'], is_float($base) ? $base : null);
+    }
+
+    /** Cena konta z ceną katalogową (gdy jest) i rabatem wyliczonym z obu — karta i każdy rozmiar tak samo. */
+    private static function accountPrice(float $net, ?float $base): B2bRemotePrice
+    {
         return new B2bRemotePrice(
             net: round($net, 2),
-            base: is_float($base) ? round($base, 2) : null,
-            discountPercent: is_float($base) && $base > 0 ? round((1 - $net / $base) * 100, 2) : 0.0,
+            base: $base !== null ? round($base, 2) : null,
+            discountPercent: $base !== null && $base > 0 ? round((1 - $net / $base) * 100, 2) : 0.0,
         );
+    }
+
+    /**
+     * Najtańszy rozmiar: najniższa cena konta; przy remisie reguła B2bCatalogSync::winsSizePriceTie (wygrywa rozmiar ze
+     * znaną ceną katalogową, z dwóch znanych niższa), dalej pierwszy w tabeli — tak samo jak w silniku, żeby price()
+     * i cena karty z pozycji się zgadzały.
+     *
+     * @param  non-empty-list<array{cents: int, base: int|null}>  $group
+     * @return array{cents: int, base: int|null}
+     */
+    private static function cheapest(array $group): array
+    {
+        $best = $group[0];
+        foreach ($group as $size) {
+            if ($size['cents'] < $best['cents']
+                || ($size['cents'] === $best['cents'] && B2bCatalogSync::winsSizePriceTie(
+                    $size['base'] !== null ? $size['base'] / 100 : null,
+                    $best['base'] !== null ? $best['base'] / 100 : null,
+                ))) {
+                $best = $size;
+            }
+        }
+
+        return $best;
     }
 
     /** Opis ze sklepu dosłownie (bez listy załączników); '' gdy strona opisu nie ma. */
@@ -659,13 +690,12 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     }
 
     /**
-     * Karty jednego koloru (jedna na każdą parę cen); strona nieczytelna albo niezgodna z kaflem — jedna pozycja
-     * pominięta z powodem.
+     * Karta jednego koloru ze wszystkimi rozmiarami z ceną konta; strona nieczytelna albo niezgodna z kaflem —
+     * pozycja pominięta z powodem.
      *
      * @param  array{path: string, name: string, color: string, price_text: string}  $row
-     * @return list<B2bRemoteProduct>
      */
-    private function productsFor(array $row): array
+    private function productFor(array $row): B2bRemoteProduct
     {
         try {
             $html = $this->client->productPage($row['path']);
@@ -673,7 +703,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         } catch (B2bFatalException $e) {
             throw $e;
         } catch (RuntimeException $e) {
-            return [$this->skipped($row, 'strona wyrobu: '.$e->getMessage())];
+            return $this->skipped($row, 'strona wyrobu: '.$e->getMessage());
         }
 
         $single = $page['rows'] === [];
@@ -698,23 +728,23 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
             }
         }
         if ($opened === null) {
-            return [$this->skipped($row, 'strona wyrobu nie pokazuje rozmiaru z listy')];
+            return $this->skipped($row, 'strona wyrobu nie pokazuje rozmiaru z listy');
         }
         if ($tileCents !== null && $opened['cents'] !== null && $tileCents !== $opened['cents']) {
-            return [$this->skipped($row, 'cena z listy („'.$row['price_text'].'”) inna niż cena rozmiaru '.$opened['symbol'].' na stronie wyrobu')];
+            return $this->skipped($row, 'cena z listy („'.$row['price_text'].'”) inna niż cena rozmiaru '.$opened['symbol'].' na stronie wyrobu');
         }
 
         // dwa kafle tej samej rodziny rozmiarów dałyby dwa razy tę samą kartę (ten sam symbol) — drugi pomijamy
         $family = $sizes[0]['symbol'];
         if (isset($this->families[$family])) {
-            return [$this->skipped($row, 'ta sama karta co kafel '.$this->families[$family].' (rodzina '.$family.')')];
+            return $this->skipped($row, 'ta sama karta co kafel '.$this->families[$family].' (rodzina '.$family.')');
         }
         $this->families[$family] = $row['path'];
 
         $catalog = $this->catalogCents($row, $page, $single, $html);
 
-        /** @var array<string, list<array{path: string, symbol: string, size: string, ean: string, cents: int|null, vat: string, stock: string}>> $groups */
-        $groups = [];
+        /** @var list<array{path: string, symbol: string, size: string, ean: string, cents: int, base: int|null, vat: string, stock: string}> $priced */
+        $priced = [];
         foreach ($sizes as $size) {
             if ($size['cents'] === null || $size['cents'] <= 0) {
                 $this->sizesWithoutPrice[] = $size['symbol'];
@@ -722,33 +752,22 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
                 continue;
             }
             $base = $catalog[$size['symbol']] ?? null;
-            // cena katalogowa niższa od ceny konta nie jest ceną przed rabatem — karta zostaje bez niej
-            $groups[$size['cents'].'/'.($base !== null && $base > $size['cents'] ? $base : 'brak')][] = $size;
+            // cena katalogowa rozmiaru niższa od jego ceny konta nie jest ceną przed rabatem — rozmiar zostaje bez niej
+            $priced[] = [...$size, 'cents' => $size['cents'], 'base' => $base !== null && $base > $size['cents'] ? $base : null];
         }
-        if ($groups === []) {
-            return [$this->skipped($row, 'żaden rozmiar nie ma ceny konta')];
+        if ($priced === []) {
+            return $this->skipped($row, 'żaden rozmiar nie ma ceny konta');
+        }
+        foreach ($priced as $size) {
+            if ($size['base'] === null) {
+                $this->withoutBase[] = $size['symbol'];
+            }
         }
         $code = $single ? $page['symbol'] : self::productCode($page['rows']);
-        $split = count($groups) > 1;
-        $this->splitProducts += $split ? 1 : 0;
+        $this->multiPriceProducts += count(array_unique(array_column($priced, 'cents'))) > 1 ? 1 : 0;
+        $this->cards++;
 
-        $products = [];
-        foreach ($groups as $key => $group) {
-            [$cents, $baseKey] = explode('/', $key, 2);
-            $products[] = $this->productFor(
-                $row,
-                $page,
-                $group,
-                (int) $cents,
-                $baseKey === 'brak' ? null : (int) $baseKey,
-                $code,
-                $split,
-                $single,
-            );
-        }
-        $this->cards += count($products);
-
-        return $products;
+        return $this->cardFor($row, $page, $priced, $code, $single);
     }
 
     /**
@@ -796,31 +815,22 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     }
 
     /**
+     * Karta koloru: rozmiary z ceną konta jako pozycje (members), każda ze swoją ceną konta i — gdy strona gościa ją
+     * podała dla tego rozmiaru i jest wyższa od ceny konta — swoją ceną katalogową. Cena karty (raw price/base_price)
+     * = najtańszy rozmiar (remis — self::cheapest), tak jak liczy ją B2bCatalogSync.
+     * Wyrób bez rozmiarów (czapka, kamizelka z progami) ma jedną pozycję — siebie — i members = [] jak dotąd.
+     *
      * @param  array{path: string, name: string, color: string, price_text: string}  $row
      * @param  array<string, mixed>  $page
-     * @param  list<array{path: string, symbol: string, size: string, ean: string, cents: int|null, vat: string, stock: string}>  $group
+     * @param  list<array{path: string, symbol: string, size: string, ean: string, cents: int, base: int|null, vat: string, stock: string}>  $group
      */
-    private function productFor(
-        array $row,
-        array $page,
-        array $group,
-        int $cents,
-        ?int $baseCents,
-        ?string $code,
-        bool $split,
-        bool $single,
-    ): B2bRemoteProduct {
+    private function cardFor(array $row, array $page, array $group, ?string $code, bool $single): B2bRemoteProduct
+    {
         $first = $group[0];
-        $sku = $split || $code === null ? $first['symbol'] : $code;
-        if ($baseCents === null) {
-            $this->withoutBase[] = $sku;
-        }
+        $sku = $code ?? $first['symbol'];
+        $cheapest = self::cheapest($group);
 
-        $name = self::cardName($row['name'] !== '' ? $row['name'] : $page['name'], $row['color'], $code ?? $first['symbol']);
-        $sizes = array_values(array_filter(array_column($group, 'size'), static fn (string $s): bool => $s !== ''));
-        if ($split && $sizes !== []) {
-            $name .= ' (rozm. '.implode(', ', $sizes).')';
-        }
+        $name = self::cardName($row['name'] !== '' ? $row['name'] : $page['name'], $row['color'], $sku);
 
         $members = [];
         $summary = '';
@@ -830,6 +840,9 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
                     'remote_id' => $size['symbol'],
                     'sku' => $size['symbol'],
                     'name' => trim($name.' '.$size['size']),
+                    'availability' => $size['stock'],
+                    'size' => $size['size'],
+                    'price' => self::accountPrice($size['cents'] / 100, $size['base'] !== null ? $size['base'] / 100 : null),
                 ];
             }
             $summary = 'Rozmiary: '.implode('; ', array_map(
@@ -859,8 +872,9 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
             sourceUrl: JhkB2bClient::BASE.$row['path'],
             raw: [
                 'status' => 'ok',
-                'price' => (float) $cents / 100,
-                'base_price' => $baseCents !== null ? (float) $baseCents / 100 : null,
+                // cena karty = najtańszy rozmiar (B2bCatalogSync liczy ją też z members[].price)
+                'price' => (float) $cheapest['cents'] / 100,
+                'base_price' => $cheapest['base'] !== null ? (float) $cheapest['base'] / 100 : null,
                 'symbol' => $symbols,
                 'description' => $page['description'],
                 'fields' => $single ? $fields : array_merge($fields, $eans !== [] ? [['EAN', implode('; ', array_map(

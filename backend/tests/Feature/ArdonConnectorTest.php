@@ -12,6 +12,7 @@ use App\Models\Product;
 use App\Models\ProductDocument;
 use App\Models\ProductIdentifier;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
 use App\Services\B2b\ArdonB2bClient;
 use App\Services\B2b\ArdonB2bConnector;
 use App\Services\B2b\B2bAccountSyncRunner;
@@ -44,6 +45,8 @@ final class ArdonConnectorTest extends TestCase
 
     private const HEADER = 'artykuł;nazwa;Sugerowana cena detaliczna bez VAT;Twój rabat;Twoja cena po rabacie bez VAT';
 
+    private const SUMMARY = 'Cennik Ardon: 10 pozycji → 6 kart (2 grup rozmiarów, w tym 1 z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty)';
+
     /** @var list<string> wiersze cennika CSV (bez nagłówka) */
     private array $rows = [];
 
@@ -69,7 +72,7 @@ final class ArdonConnectorTest extends TestCase
         parent::setUp();
 
         $this->rows = [
-            // cennik nie jest ułożony wg rozmiaru; rozmiar 11 w innej cenie — osobna karta
+            // cennik nie jest ułożony wg rozmiaru; rozmiar 11 w innej cenie — ta sama karta (decyzja 28.09.2026)
             'A5001/09;Rękawice testowe ARDON®ALFA;7,000;43,000;4,000',
             'A5001/08;Rękawice testowe ARDON®ALFA;7,000;43,000;4,000',
             'A5001/11;Rękawice testowe ARDON®ALFA;7,900;43,000;4,500',
@@ -129,14 +132,23 @@ final class ArdonConnectorTest extends TestCase
         ArdonB2bConnector::parsePriceList("artykuł;nazwa;cena\nA1;X;1,0");
     }
 
-    public function test_sizes_in_one_price_are_one_card_another_price_gets_its_ardon_code_and_atg_keeps_its_article_number(): void
+    /**
+     * Do 28.09.2026 (decyzja 15.09.2026) rozmiar w innej cenie był osobną kartą z pełnym kodem Ardon („A5001/11”).
+     * Od decyzji użytkownika 28.09.2026 wszystkie rozmiary kodu bazowego to jedna karta z kodem bazowym.
+     */
+    public function test_sizes_in_different_prices_are_one_card_and_atg_keeps_its_article_number(): void
     {
         $cards = ArdonB2bConnector::group(ArdonB2bConnector::parsePriceList(self::csv($this->rows)));
         $bySku = array_column($cards, null, 'sku');
 
-        $this->assertSame(['A5001', 'A5001/11', '24-985', 'C1020', 'E4085', 'I4999', 'X9999'], array_column($cards, 'sku'));
-        $this->assertSame(['A5001/08', 'A5001/09', 'A5001/10'], array_column($bySku['A5001']['rows'], 'code'));
-        $this->assertSame(['A5001/11'], array_column($bySku['A5001/11']['rows'], 'code'));
+        $this->assertSame(['A5001', '24-985', 'C1020', 'E4085', 'I4999', 'X9999'], array_column($cards, 'sku'));
+        $this->assertSame(['A5001/08', 'A5001/09', 'A5001/10', 'A5001/11'], array_column($bySku['A5001']['rows'], 'code'));
+        // cena konta i sugerowana detaliczna każdego rozmiaru z jego wiersza cennika
+        $this->assertSame(
+            [[4.0, 7.0, 43.0], [4.0, 7.0, 43.0], [4.0, 7.0, 43.0], [4.5, 7.9, 43.0]],
+            array_map(static fn ($p): array => [$p->net, $p->base, $p->discountPercent], (array) ArdonB2bConnector::sizePrices($bySku['A5001'])),
+        );
+        $this->assertNull(ArdonB2bConnector::sizePrices($bySku['C1020']));
         $this->assertSame(['A3031/07', 'A3031/08'], array_column($bySku['24-985']['rows'], 'code'));
         $this->assertNull($bySku['24-985']['rows'][0]['discount']);
         $this->assertSame(5.26, $bySku['24-985']['rows'][0]['net']);
@@ -146,18 +158,87 @@ final class ArdonConnectorTest extends TestCase
         $this->assertNull(ArdonB2bConnector::atgArticle('Rękawice 34-504 innej marki'));
     }
 
-    public function test_largest_price_group_of_a_code_gets_the_plain_code_whatever_its_order_in_the_price_list(): void
+    /**
+     * Do 28.09.2026 cena dzieliła kod na karty (największa grupa cenowa brała kod bazowy, pozostałe — pełny kod Ardon).
+     * Od 28.09.2026 cena kodu nie dzieli; kod bazowy dostaje karta z cenami, a osobną kartą z pełnym kodem zostaje
+     * tylko pozycja bez ceny konta (pusta komórka — jak dotąd pozycja pojedyncza) i rozmiary z ceną 0 (grupa bez cen
+     * rozmiarów, żeby zero nie zostało ceną karty) — także gdy stoją w cenniku pierwsze albo jest ich więcej.
+     */
+    public function test_prices_do_not_split_a_code_and_the_priced_card_gets_the_plain_code(): void
     {
         $cards = ArdonB2bConnector::group(ArdonB2bConnector::parsePriceList(self::csv([
             'A7000/12;Rękawice;1,000;;0,600',
             'A7000/08;Rękawice;1,000;;0,500',
             'A7000/09;Rękawice;1,000;;0,500',
-            // ceny różne dopiero w czwartym miejscu po przecinku — osobne karty, bez zaokrąglania
             'A7001/08;Inne;1,000;;0,5001',
             'A7001/09;Inne;1,000;;0,5004',
+            'A7002/08;Bez ceny;1,000;;',
+            'A7002/09;Bez ceny;1,000;;0,700',
+            'A7003/08;Zero;1,000;;0,000',
+            'A7003/09;Zero;1,000;;0,000',
+            'A7003/10;Zero;1,000;;0,800',
         ])));
 
-        $this->assertSame(['A7000/12', 'A7000', 'A7001', 'A7001/09'], array_column($cards, 'sku'));
+        $this->assertSame(
+            [
+                ['A7000', ['A7000/08', 'A7000/09', 'A7000/12']],
+                ['A7001', ['A7001/08', 'A7001/09']],
+                ['A7002/08', ['A7002/08']],
+                ['A7002', ['A7002/09']],
+                ['A7003/08', ['A7003/08', 'A7003/09']],
+                ['A7003', ['A7003/10']],
+            ],
+            array_map(static fn (array $card): array => [$card['sku'], array_column($card['rows'], 'code')], $cards),
+        );
+        $this->assertSame([0.5, 0.5, 0.6], array_map(static fn ($p): float => $p->net, (array) ArdonB2bConnector::sizePrices($cards[0])));
+        // grupa z ceną 0 — bez cen rozmiarów (synchronizacja pominie ją bez ceny, jak dotąd)
+        $this->assertNull(ArdonB2bConnector::sizePrices($cards[4]));
+    }
+
+    /**
+     * Kody z członem wersji albo dopisku po rozmiarze (cennik 28.09.2026: „A1013/10/SPE” 29×, „A1073/V1/07”, „G3098/35/N”
+     * 45×, „H2017/uni/XL”, „A3123/V1/40/07”; razem 122 kody). Rozmiar to tylko człon rozmiaru; wersja zostaje w kluczu
+     * karty — bez ceny w kluczu „A1073/V1/07” nie może zostać rozmiarem karty „A1073/07”. Człon bez rozmiaru („A1073/V1”)
+     * to pozycja bez rozmiaru — osobna karta, a nie rozmiar „V1”. Powtórzony rozmiar w grupie („07” i „7”) — pozycje osobno.
+     */
+    public function test_version_and_suffix_segments_stay_in_the_card_key_and_only_the_size_segment_is_the_size(): void
+    {
+        $cards = ArdonB2bConnector::group(ArdonB2bConnector::parsePriceList(self::csv([
+            'A1073/07;Rękawice ARDON®TEST;5,000;;3,000',
+            'A1073/08;Rękawice ARDON®TEST;5,000;;3,100',
+            'A1073/V1/07;Rękawice ARDON®TEST;5,000;;3,200',
+            'A1073/V1/08;Rękawice ARDON®TEST;5,000;;3,200',
+            'A1073/V1;Rękawice ARDON®TEST;5,000;;3,300',
+            'A1013/10/SPE;Rękawice spec;5,000;;2,000',
+            'A1013/11/SPE;Rękawice spec;5,000;;2,100',
+            'A1013/10;Rękawice spec;5,000;;1,900',
+            'G3098/35/N;Obuwie N;50,000;;30,000',
+            'G3098/36/N;Obuwie N;50,000;;31,000',
+            'H2017/uni/XL;Odzież uni;20,000;;10,000',
+            'H2017/uni/L;Odzież uni;20,000;;10,000',
+            'A3123/V1/40/07;Rękawice długie;9,000;;4,000',
+            'A3123/V1/40/08;Rękawice długie;9,000;;4,000',
+            'A3123/V1/35/07;Rękawice długie;9,000;;3,800',
+            'B1000/07;Dubel;1,000;;0,500',
+            'B1000/7;Dubel;1,000;;0,600',
+        ])));
+
+        $this->assertSame(
+            [
+                ['A1073', ['A1073/07', 'A1073/08'], ['07', '08']],
+                ['A1073/V1/07', ['A1073/V1/07', 'A1073/V1/08'], ['07', '08']],
+                ['A1073/V1', ['A1073/V1'], [null]],
+                ['A1013', ['A1013/10/SPE', 'A1013/11/SPE'], ['10', '11']],
+                ['A1013/10', ['A1013/10'], ['10']],
+                ['G3098', ['G3098/35/N', 'G3098/36/N'], ['35', '36']],
+                ['H2017', ['H2017/uni/L', 'H2017/uni/XL'], ['L', 'XL']],
+                ['A3123', ['A3123/V1/40/07', 'A3123/V1/40/08'], ['07', '08']],
+                ['A3123/V1/35/07', ['A3123/V1/35/07'], ['07']],
+                ['B1000', ['B1000/07'], ['07']],
+                ['B1000/7', ['B1000/7'], ['7']],
+            ],
+            array_map(static fn (array $card): array => [$card['sku'], array_column($card['rows'], 'code'), array_column($card['rows'], 'size')], $cards),
+        );
     }
 
     public function test_products_find_the_page_by_code_and_take_the_brand_from_the_page(): void
@@ -167,22 +248,30 @@ final class ArdonConnectorTest extends TestCase
 
         $products = $this->productsBySku($connector);
 
-        $this->assertSame(7, $connector->totalProducts());
+        $this->assertSame(6, $connector->totalProducts());
         $alfa = $products['A5001'];
         $this->assertSame('A5001/08', $alfa->remoteId);
         $this->assertSame('Rękawice testowe ARDON®ALFA', $alfa->name);
         // pierwsza podpowiedź wyszukiwarki to inny wyrób (inny mpn) — łącznik bierze drugą
         $this->assertSame('https://www.ardon.pl/rekawice-a5001', $alfa->sourceUrl);
         $this->assertSame('Rękawice robocze powlekane', $alfa->category);
-        $this->assertSame('Rozmiary: 08 (A5001/08); 09 (A5001/09); 10 (A5001/10)', $alfa->variantSummary);
+        $this->assertSame('Rozmiary: 08 (A5001/08); 09 (A5001/09); 10 (A5001/10); 11 (A5001/11)', $alfa->variantSummary);
+        // rozmiar 11 w innej cenie — pozycja tej samej karty ze swoją ceną (decyzja użytkownika 28.09.2026)
         $this->assertSame(
             [
-                ['remote_id' => 'A5001/08', 'sku' => 'A5001/08', 'name' => 'Rękawice testowe ARDON®ALFA'],
-                ['remote_id' => 'A5001/09', 'sku' => 'A5001/09', 'name' => 'Rękawice testowe ARDON®ALFA'],
-                ['remote_id' => 'A5001/10', 'sku' => 'A5001/10', 'name' => 'Rękawice testowe ARDON®ALFA'],
+                ['A5001/08', 'A5001/08', 'Rękawice testowe ARDON®ALFA', '08', 4.0, 7.0, 'PLN'],
+                ['A5001/09', 'A5001/09', 'Rękawice testowe ARDON®ALFA', '09', 4.0, 7.0, 'PLN'],
+                ['A5001/10', 'A5001/10', 'Rękawice testowe ARDON®ALFA', '10', 4.0, 7.0, 'PLN'],
+                ['A5001/11', 'A5001/11', 'Rękawice testowe ARDON®ALFA', '11', 4.5, 7.9, 'PLN'],
             ],
-            $alfa->members,
+            array_map(static fn (array $m): array => [
+                $m['remote_id'], $m['sku'], $m['name'], $m['size'] ?? null, $m['price']?->net, $m['price']?->base, $m['price']?->currency,
+            ], $alfa->members),
         );
+        // cena karty = najtańszy rozmiar
+        $this->assertSame([4.0, 7.0], [$connector->price($alfa)?->net, $connector->price($alfa)?->base]);
+        // rozmiary w jednej cenie — też z cenami pozycji
+        $this->assertSame([5.26, 5.26], array_map(static fn (array $m): float => $m['price']->net, $products['24-985']->members));
         $this->assertSame('ARDON', $connector->manufacturer($alfa));
         $this->assertSame('3M', $connector->manufacturer($products['C1020']));
         $this->assertSame('Univet', $connector->manufacturer($products['E4085']));
@@ -199,7 +288,7 @@ final class ArdonConnectorTest extends TestCase
         }
 
         $summary = $connector->runSummary();
-        $this->assertSame('Cennik Ardon: 10 pozycji → 7 kart (2 grup rozmiarów o tej samej cenie)', $summary[0]);
+        $this->assertSame(self::SUMMARY, $summary[0]);
         $this->assertStringContainsString('Bez strony produktu w sklepie: 1 kart', $summary[1]);
         $this->assertStringContainsString('X9999', $summary[1]);
         $this->assertSame('Producent spoza listy marek — zapisany dosłownie nazwą ze sklepu: HARPS Investment Asia Pte. Ltd. (1)', $summary[2]);
@@ -221,12 +310,8 @@ final class ArdonConnectorTest extends TestCase
             ['source_code', 'A5001/08', 'A5001/08', '08', 'artykuł'],
             ['source_code', 'A5001/09', 'A5001/09', '09', 'artykuł'],
             ['source_code', 'A5001/10', 'A5001/10', '10', 'artykuł'],
-        ], $identifiers($products['A5001']));
-        // rozmiar w innej cenie: ta sama strona, mpn też na tej karcie
-        $this->assertSame([
-            ['source_code', 'A5001', null, null, 'mpn'],
             ['source_code', 'A5001/11', 'A5001/11', '11', 'artykuł'],
-        ], $identifiers($products['A5001/11']));
+        ], $identifiers($products['A5001']));
         // ATG: numer artykułu producenta z nazwy w cenniku
         $this->assertSame([
             ['source_code', 'A3031', null, null, 'mpn'],
@@ -283,14 +368,20 @@ final class ArdonConnectorTest extends TestCase
         $this->assertCount(1, $connector->runSummary());
     }
 
-    public function test_a_code_in_two_prices_is_searched_and_read_once(): void
+    /**
+     * Kod bazowy bywa kilkoma kartami tej samej strony (pozycja bez ceny, inna nazwa) — strona czytana raz na przebieg.
+     * Do 28.09.2026 dotyczyło to też rozmiaru w innej cenie; od 28.09.2026 to jedna karta.
+     */
+    public function test_a_code_with_several_cards_is_searched_and_read_once(): void
     {
+        $this->rows[] = 'A5001/12;Rękawice testowe ARDON®ALFA;7,900;43,000;';
         $this->fakeSite();
 
         $products = $this->productsBySku($this->connector());
 
-        $this->assertSame('https://www.ardon.pl/rekawice-a5001', $products['A5001/11']->sourceUrl);
-        $this->assertSame('ARDON', $this->connector()->manufacturer($products['A5001/11']));
+        $this->assertSame('https://www.ardon.pl/rekawice-a5001', $products['A5001/12']->sourceUrl);
+        $this->assertSame('https://www.ardon.pl/rekawice-a5001', $products['A5001']->sourceUrl);
+        $this->assertSame('ARDON', $this->connector()->manufacturer($products['A5001/12']));
         $this->assertCount(1, Http::recorded(fn (Request $r): bool => str_contains($r->url(), '/full-text/query') && str_contains($r->url(), 'query=A5001')));
         $this->assertCount(1, Http::recorded(fn (Request $r): bool => $r->url() === 'https://www.ardon.pl/rekawice-a5001'));
     }
@@ -340,6 +431,7 @@ final class ArdonConnectorTest extends TestCase
             'Informacje handlowe | Kod towaru | A5001/08',
             'Informacje handlowe | Kod towaru | A5001/09',
             'Informacje handlowe | Kod towaru | A5001/10',
+            'Informacje handlowe | Kod towaru | A5001/11',
         ], $fields);
     }
 
@@ -426,22 +518,30 @@ final class ArdonConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
 
-        $this->assertSame(7, $result['total_remote']);
-        $this->assertSame(5, $result['created']);
+        // rozmiar A5001/11 w innej cenie — ta sama karta co 08–10 (decyzja użytkownika 28.09.2026; wcześniej 7 i 5)
+        $this->assertSame(6, $result['total_remote']);
+        $this->assertSame(4, $result['created']);
         $this->assertSame(1, $result['updated']);
         $this->assertContains('X9999: nie znaleziono strony produktu w sklepie — producent nieznany, pozycja pominięta', $result['errors']);
         $this->assertFalse(Product::query()->where('sku', 'X9999')->exists());
 
         $alfa = Product::query()->where('sku', 'A5001')->sole();
         $this->assertSame('ARDON', $alfa->manufacturer);
-        $this->assertSame('Rozmiary: 08 (A5001/08); 09 (A5001/09); 10 (A5001/10)', $alfa->variant_summary);
-        $this->assertSame(3, B2bProductLink::query()->where('product_id', $alfa->id)->count());
+        $this->assertSame('Rozmiary: 08 (A5001/08); 09 (A5001/09); 10 (A5001/10); 11 (A5001/11)', $alfa->variant_summary);
+        $this->assertSame(4, B2bProductLink::query()->where('product_id', $alfa->id)->count());
+        $this->assertFalse(Product::query()->where('sku', 'A5001/11')->exists());
         $this->assertSame(
             ['A5001-KT-PL.pdf', 'A5001-PoS-DoC-uni.pdf'],
             ProductDocument::query()->where('product_id', $alfa->id)->orderBy('sort_order')->pluck('title')->all(),
         );
-        $this->assertSame('4.50', (string) ProductSourcePrice::query()
-            ->where('product_id', Product::query()->where('sku', 'A5001/11')->value('id'))->value('purchase_price'));
+        // cena karty = najtańszy rozmiar (z jego ceną detaliczną), najwyższa przy slocie, ceny rozmiarów w tabeli
+        $alfaSlot = ProductSourcePrice::query()->where('product_id', $alfa->id)->sole();
+        $this->assertSame(['4.00', '7.00', '4.50'], [(string) $alfaSlot->purchase_price, (string) $alfaSlot->catalog_price_net, (string) $alfaSlot->size_price_max]);
+        $this->assertSame(
+            [['08', '4.00', '7.00'], ['09', '4.00', '7.00'], ['10', '4.00', '7.00'], ['11', '4.50', '7.90']],
+            ProductVariant::query()->where('product_id', $alfa->id)->where('kind', ProductVariant::KIND_SIZE)->orderBy('sort_order')->get()
+                ->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price, (string) $v->list_price_net])->all(),
+        );
 
         // istniejąca karta ATG: ta sama karta, cena konta w slocie, opis producenta i nazwa bez zmian, bez plików z Ardona
         $atg->refresh();
@@ -456,7 +556,7 @@ final class ArdonConnectorTest extends TestCase
         Queue::assertPushed(TranslateB2bProductTextJob::class, 1);
 
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
-        $this->assertContains('Cennik Ardon: 10 pozycji → 7 kart (2 grup rozmiarów o tej samej cenie)', $log);
+        $this->assertContains(self::SUMMARY, $log);
 
         // identyfikatory: mpn i numer ATG pod pozycją karty, kod Ardon pod każdym rozmiarem
         $stored = static fn (int $productId): array => ProductIdentifier::query()->where('product_id', $productId)
@@ -474,15 +574,12 @@ final class ArdonConnectorTest extends TestCase
             ['A5001/08', 'source_code', 'A5001/08', '08', 'artykuł'],
             ['A5001/09', 'source_code', 'A5001/09', '09', 'artykuł'],
             ['A5001/10', 'source_code', 'A5001/10', '10', 'artykuł'],
+            ['A5001/11', 'source_code', 'A5001/11', '11', 'artykuł'],
         ], $stored($alfa->id));
-        $this->assertSame(
-            [['A5001/11', 'source_code', 'A5001', null, 'mpn'], ['A5001/11', 'source_code', 'A5001/11', '11', 'artykuł']],
-            $stored((int) Product::query()->where('sku', 'A5001/11')->value('id')),
-        );
         // pozycja pominięta (bez strony) nic nie zapisuje
         $this->assertFalse(ProductIdentifier::query()->where('value', 'X9999')->exists());
         $count = ProductIdentifier::query()->count();
-        $this->assertSame(13, $count);
+        $this->assertSame(12, $count);
 
         // drugi przebieg: identyfikatorów nie przybywa ani nie znikają
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0);
@@ -494,6 +591,38 @@ final class ArdonConnectorTest extends TestCase
         foreach (B2bSyncRun::query()->get() as $run) {
             $this->assertSame([], preg_grep('/identyfikator /', array_column((array) $run->log, 'text')));
         }
+    }
+
+    /**
+     * Karty sprzed 28.09.2026 (A5001 z rozmiarami 08–10 i „A5001/11” w innej cenie): przebieg po zmianie nie zakłada
+     * nowej karty i nie przepina powiązań — każda karta dostaje swoje rozmiary z cenami, a wyrób trafia do size_spread
+     * przebiegu (scalenie to osobny krok).
+     */
+    public function test_legacy_price_split_cards_stay_and_get_their_own_sizes(): void
+    {
+        Storage::fake('public');
+        Queue::fake();
+        $this->fakeSite();
+        $account = $this->account();
+        $small = $this->legacyCard($account, 'A5001', 4.0, 7.0, ['A5001/08', 'A5001/09', 'A5001/10']);
+        $large = $this->legacyCard($account, 'A5001/11', 4.5, 7.9, ['A5001/11']);
+
+        $result = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0);
+
+        // nowe karty: ATG, C1020, E4085, I4999; X9999 bez strony pominięty
+        $this->assertSame(4, $result['created'], implode(' | ', $result['errors']));
+        $this->assertSame(1, $result['skipped'], implode(' | ', $result['errors']));
+        $this->assertSame(1, Product::query()->where('sku', 'A5001')->count());
+        $this->assertSame(['A5001/08', 'A5001/09', 'A5001/10'], B2bProductLink::query()->where('product_id', $small->id)->orderBy('remote_id')->pluck('remote_id')->all());
+        $this->assertSame(['A5001/11'], B2bProductLink::query()->where('product_id', $large->id)->pluck('remote_id')->all());
+        $sizes = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->where('kind', ProductVariant::KIND_SIZE)
+            ->orderBy('sort_order')->get()->map(static fn (ProductVariant $v): array => [$v->label, (string) $v->purchase_price])->all();
+        $this->assertSame([['08', '4.00'], ['09', '4.00'], ['10', '4.00']], $sizes($small));
+        $this->assertSame([['11', '4.50']], $sizes($large));
+        $this->assertSame('4.50', (string) ProductSourcePrice::query()->where('product_id', $large->id)->value('purchase_price'));
+        $spread = B2bSyncRun::query()->findOrFail($result['sync_run_id'])->size_spread;
+        $this->assertSame(1, $spread['total']);
+        $this->assertSame([$small->id, $large->id], $spread['groups'][0]['cards']);
     }
 
     public function test_page_missing_on_a_later_run_skips_the_card_instead_of_changing_its_manufacturer(): void
@@ -522,6 +651,33 @@ final class ArdonConnectorTest extends TestCase
         $connector = $registry->make($account, 0);
         $this->assertInstanceOf(ArdonB2bConnector::class, $connector);
         $this->assertNotInstanceOf(B2bManufacturerSite::class, $connector);
+    }
+
+    /**
+     * Karta zapisana przez dawny podział według ceny: powiązania rozmiarów, slot konta, kod bez zmian.
+     *
+     * @param  list<string>  $codes
+     */
+    private function legacyCard(B2bAccount $account, string $sku, float $price, float $retail, array $codes): Product
+    {
+        $card = Product::query()->create([
+            'sku' => $sku, 'name' => 'Rękawice testowe ARDON®ALFA', 'manufacturer' => 'ARDON', 'description' => '',
+            'catalog_price_net' => $retail, 'discount_percent' => 43, 'purchase_price' => $price, 'currency' => 'PLN',
+        ]);
+        foreach ($codes as $code) {
+            B2bProductLink::query()->create([
+                'b2b_account_id' => $account->id, 'remote_id' => $code, 'product_id' => $card->id,
+                'remote_sku' => $code, 'remote_name' => 'Rękawice testowe ARDON®ALFA', 'manufacturer' => 'ARDON',
+                'last_purchase_price' => $price, 'last_currency' => 'PLN',
+            ]);
+        }
+        ProductSourcePrice::query()->create([
+            'product_id' => $card->id, 'source_key' => ProductSourcePrice::b2bKey((int) $account->id), 'b2b_account_id' => $account->id,
+            'catalog_price_net' => $retail, 'purchase_price' => $price, 'discount_percent' => 43, 'currency' => 'PLN',
+            'checked_at' => now()->subDay(),
+        ]);
+
+        return $card;
     }
 
     private function client(): ArdonB2bClient

@@ -11,7 +11,8 @@ use PHPUnit\Framework\TestCase;
 /**
  * Reguła scalania rozmiarów UVEX na prawdziwych pozycjach listy konta (15.09.2026). Ostatnia kolumna
  * tests/Fixtures/uvex/size_groups.tsv to kod pierwszej pozycji grupy, do której pozycja trafiła przy analizie pełnej
- * listy (5750 pozycji) — łącznik ma dać ten sam podział.
+ * listy (5750 pozycji) — wtedy z ceną w kluczu grupy (decyzja 15.09.2026). Od decyzji użytkownika 28.09.2026 cena nie
+ * dzieli rozmiarów na karty; pozycje, których grupa zmieniła się przez to w tej próbce, są wypisane w teście wprost.
  */
 final class UvexSizeGroupsTest extends TestCase
 {
@@ -27,6 +28,21 @@ final class UvexSizeGroupsTest extends TestCase
         }
         $this->assertCount(111, $rows);
 
+        // decyzja 28.09.2026: rozmiary jednego modelu w innej cenie dołączają do grupy modelu (jedna karta z tabelą
+        // rozmiarów) — trzewik 6935/2 (38 za 358,70, 39 i 40 za 360,40) i HexArmor 2023 (M, L za 189,00, XXL i XXXL
+        // za 193,20). Poza tymi dwoma modelami podział próbki bez zmian.
+        $changed = [
+            '6935/2/39' => '6935/2/38',
+            '6935/2/40' => '6935/2/38',
+            'HA2023(XXL)' => 'HA2023(L)',
+            'HA2023(XXXL)' => 'HA2023(L)',
+        ];
+        foreach ($changed as $code => $groupFirst) {
+            $this->assertArrayHasKey('#'.$code, $expected);
+            $this->assertNotSame($groupFirst, $expected['#'.$code], 'pozycja '.$code.' miała już tę grupę — lista zmian nieaktualna');
+            $expected['#'.$code] = $groupFirst;
+        }
+
         $actual = [];
         foreach ((new UvexSizeGroups)->group($rows) as $group) {
             foreach ($group as $member) {
@@ -39,7 +55,12 @@ final class UvexSizeGroupsTest extends TestCase
         $this->assertSame($expected, $actual);
     }
 
-    public function test_same_price_sizes_merge_and_other_price_splits_off(): void
+    /**
+     * Do 28.09.2026 (decyzja 15.09.2026) rozmiar w innej cenie był osobną grupą: [[38], [39, 40]]. Od decyzji
+     * użytkownika 28.09.2026 rozmiary jednego modelu w różnych cenach to jedna grupa (jedna karta, cena każdego
+     * rozmiaru w tabeli rozmiarów karty).
+     */
+    public function test_sizes_in_different_prices_merge_into_one_group(): void
     {
         $groups = $this->codes((new UvexSizeGroups)->group([
             $this->row('6935/2/40', 'Trzewik uvex 2 trend 6935/2/40', 36040),
@@ -47,7 +68,30 @@ final class UvexSizeGroupsTest extends TestCase
             $this->row('6935/2/39', 'Trzewik uvex 2 trend 6935/2/39', 36040),
         ]));
 
-        $this->assertSame([['6935/2/38'], ['6935/2/39', '6935/2/40']], $groups);
+        $this->assertSame([['6935/2/38', '6935/2/39', '6935/2/40']], $groups);
+    }
+
+    /**
+     * Bez ceny w kluczu zabezpieczenia grupy dalej rozdzielają różne wyroby: dwa modele o tej samej nazwie (powtórzony
+     * rozmiar) — podział po rdzeniu kodu, także gdy mają różne ceny; kody z kropką (2600.010 / 2600.011 — kolory,
+     * 9183.041 / 9183.043 — klasy) nie mają rozmiaru, więc zostają osobno mimo tej samej nazwy.
+     */
+    public function test_other_models_stay_apart_without_the_price_in_the_key(): void
+    {
+        $groups = $this->codes((new UvexSizeGroups)->group([
+            $this->row('6823/2/40', 'Trzewik uvex testowy', 30000),
+            $this->row('6823/2/41', 'Trzewik uvex testowy', 30000),
+            $this->row('6824/2/40', 'Trzewik uvex testowy', 34000),
+            $this->row('6824/2/41', 'Trzewik uvex testowy', 34000),
+            $this->row('2600.010', 'Okulary uvex testowe', 5000, 'szt.'),
+            $this->row('2600.011', 'Okulary uvex testowe', 5200, 'szt.'),
+            $this->row('9183.041', 'Okulary uvex klasa', 6000, 'szt.'),
+            $this->row('9183.043', 'Okulary uvex klasa', 6000, 'szt.'),
+        ]));
+
+        $this->assertSame([
+            ['2600.010'], ['2600.011'], ['6823/2/40', '6823/2/41'], ['6824/2/40', '6824/2/41'], ['9183.041'], ['9183.043'],
+        ], $groups);
     }
 
     public function test_rows_without_size_or_price_or_with_different_unit_stay_separate(): void

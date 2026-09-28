@@ -22,12 +22,15 @@ use RuntimeException;
  * zmiana w trakcie = jedno ponowne pobranie). Potem karta wyrobu (getProduct) — raz na wyrób.
  *
  * Cena: platforma podaje jedną cenę netto (netPrice, „1 133,05 PLN”) — to cena konta; ceny katalogowej nie ma.
- * Karta = rozmiary jednej matki w jednej cenie (decyzja użytkownika 15.09.2026: rozmiar w innej cenie to osobna
- * karta; 34 z 2136 matek ma rozmiary w kilku cenach). SKU: kod P4S matki („00.196”), gdy matka jest jedną kartą;
- * przy podziale — kod pierwszego rozmiaru karty („00.196/10,0”), żeby kod matki nie przechodził między kartami przy
- * zmianie podziału. Pozycje (members) = rozmiary, remote_id = id rozmiaru w platformie. Kodu producenta (PS18,
- * 2055BOA) nie używamy jako SKU — mógłby trafić w kartę innego dostawcy; idzie do tabelki sklepu i do identyfikatorów
- * karty (identifiers()).
+ * Karta = matka ze wszystkimi rozmiarami z ceną (decyzja użytkownika 28.09.2026: rozmiary w różnych cenach to jedna
+ * karta; 23.09.2026 34 z 2136 matek miało rozmiary w kilku cenach). Do 28.09.2026 (decyzja 15.09.2026) rozmiar
+ * w innej cenie był osobną kartą z kodem pierwszego rozmiaru („00.196/10,0”) — takie karty zostają, dopóki nie scali
+ * ich osobne polecenie (synchronizacja daje każdej jej rozmiary, B2bCatalogSync::syncMembersByCard). SKU: kod P4S
+ * matki („00.196”). Pozycje (members) = rozmiary, remote_id = id rozmiaru w platformie, z oznaczeniem rozmiaru, ceną
+ * konta rozmiaru i dostępnością; cena karty = najniższa cena rozmiaru (raw['cents'], price()), pozostałe ceny —
+ * wiersze rozmiarów karty. Jednostka (measureUnit) i waluta (konto w PLN) są jedne dla całej karty wyrobu, więc
+ * rozmiary jednej matki nie różnią się jednostką. Kodu producenta (PS18, 2055BOA) nie używamy jako SKU — mógłby trafić
+ * w kartę innego dostawcy; idzie do tabelki sklepu i do identyfikatorów karty (identifiers()).
  *
  * Opis: pole characteristic dosłownie (podział linii z <br />). Normy (europeanNorms), kategoria ŚOI, oznaczenia
  * („EN 388:2016” → „4 X 4 3 D”) i opis techniczny idą do tabelki sklepu (B2bShopFieldSource). P4S jest dystrybutorem,
@@ -39,7 +42,7 @@ use RuntimeException;
  * jest pomijana — to PDF złożony przez platformę z tych samych pól karty (sprawdzone 23.09.2026 na 11.935), a ma
  * 200–360 KB na każdym z 3370 wyrobów.
  */
-final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource
+final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bRunSummaryAware, B2bShopFieldSource, B2bSizePriceSource
 {
     public const SUPPLIER = 'P4S';
 
@@ -75,9 +78,6 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
 
     private const SHOP_SECTION_TECHNICAL = 'Opis techniczny';
 
-    /** Tyle wariantów wypisanych w nazwie karty z podziału cenowego; więcej = skrót z liczbą. */
-    private const VARIANTS_IN_NAME = 8;
-
     private int $total = 0;
 
     /** @var list<string> */
@@ -94,7 +94,8 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
 
     private int $cards = 0;
 
-    private int $splitProducts = 0;
+    /** wyroby z rozmiarami w różnych cenach (jedna karta, cena od najniższej) */
+    private int $multiPriceProducts = 0;
 
     private int $skippedProducts = 0;
 
@@ -150,7 +151,7 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         $this->withoutDescription = [];
         $this->supplierAsManufacturer = [];
         $this->cards = 0;
-        $this->splitProducts = 0;
+        $this->multiPriceProducts = 0;
         $this->skippedProducts = 0;
 
         if (! $this->client->isLoggedIn()) {
@@ -165,10 +166,7 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         $this->total = count($rows);
 
         foreach ($rows as $row) {
-            $products = $this->productsFor($row, $sizes[$row['id']] ?? []);
-            // wyrób w kilku cenach to kilka kart — licznik postępu rośnie, zanim je wydamy
-            $this->total += max(0, count($products) - 1);
-            yield from $products;
+            yield $this->productFor($row, $sizes[$row['id']] ?? []);
         }
     }
 
@@ -181,9 +179,9 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     {
         $lines = $this->summary;
         $lines[] = sprintf(
-            'Karty: %d (%d wyrobów w kilku cenach — rozmiary w innej cenie to osobna karta; %d wyrobów pominiętych)',
+            'Karty: %d (%d wyrobów z rozmiarami w różnych cenach — jedna karta, cena karty = najniższa cena rozmiaru, ceny rozmiarów w tabeli rozmiarów karty; %d wyrobów pominiętych)',
             $this->cards,
-            $this->splitProducts,
+            $this->multiPriceProducts,
             $this->skippedProducts,
         );
         $lines[] = 'Platforma podaje jedną cenę (cena konta), bez ceny katalogowej; „Karta techniczna P4S” pomijana — to zestawienie pól karty';
@@ -568,13 +566,12 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     }
 
     /**
-     * Karty jednego wyrobu (jedna na każdą cenę); karta nieczytelna albo cudza — jedna pozycja pominięta z powodem.
+     * Karta jednego wyrobu ze wszystkimi rozmiarami z ceną; karta nieczytelna albo cudza — pozycja pominięta z powodem.
      *
      * @param  array<string, mixed>  $row  pozycja listy (matka albo wyrób pojedynczy)
      * @param  list<array<string, mixed>>  $sizes  rozmiary matki z listy
-     * @return list<B2bRemoteProduct>
      */
-    private function productsFor(array $row, array $sizes): array
+    private function productFor(array $row, array $sizes): B2bRemoteProduct
     {
         $id = (int) $row['id'];
         $code = self::field($row['code']);
@@ -585,7 +582,7 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         if ($row['type'] === self::TYPE_SINGLE) {
             $cents = self::priceCents((string) ($row['netPrice'] ?? ''));
             if ($cents === null || $cents <= 0) {
-                return [$this->skipped($row, 'cena „'.self::field($row['netPrice'] ?? '').'” nieczytelna')];
+                return $this->skipped($row, 'cena „'.self::field($row['netPrice'] ?? '').'” nieczytelna');
             }
             $variants[] = [
                 'id' => (string) $id,
@@ -622,99 +619,79 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
                 $this->sizesWithoutPrice[] = $code;
             }
             if ($variants === []) {
-                return [$this->skipped($row, $sizes === [] ? 'wyrób bez rozmiarów w ofercie konta' : 'żaden rozmiar nie ma ceny')];
+                return $this->skipped($row, $sizes === [] ? 'wyrób bez rozmiarów w ofercie konta' : 'żaden rozmiar nie ma ceny');
             }
         }
 
         try {
             $json = $this->client->product($id);
             if (($json['productNotInOffer'] ?? false) === true || ! is_array($json['product'] ?? null)) {
-                return [$this->skipped($row, 'platforma: wyrobu nie ma w ofercie konta')];
+                return $this->skipped($row, 'platforma: wyrobu nie ma w ofercie konta');
             }
             $detail = self::parseProduct($json['product']);
         } catch (B2bFatalException $e) {
             throw $e;
         } catch (RuntimeException $e) {
-            return [$this->skipped($row, 'karta wyrobu: '.$e->getMessage())];
+            return $this->skipped($row, 'karta wyrobu: '.$e->getMessage());
         }
         if ($detail['code'] !== $code) {
-            return [$this->skipped($row, 'karta dotyczy innego kodu ('.$detail['code'].')')];
+            return $this->skipped($row, 'karta dotyczy innego kodu ('.$detail['code'].')');
         }
         if ($detail['description'] === '') {
             $this->withoutDescription[] = $code;
         }
 
-        /** @var array<int, list<array{id: string, code: string, name: string, label: string, size_name: string, manufacturer_code: string, cents: int, available: bool}>> $groups */
-        $groups = [];
-        foreach ($variants as $variant) {
-            $groups[$variant['cents']][] = $variant;
-        }
-        $split = count($groups) > 1;
-        $this->splitProducts += $split ? 1 : 0;
+        $prices = array_column($variants, 'cents');
+        $this->multiPriceProducts += count(array_unique($prices)) > 1 ? 1 : 0;
+        $this->cards++;
 
-        $products = [];
-        foreach ($groups as $cents => $group) {
-            $products[] = $this->productFor($row, $detail, $group, $cents, $split, $variants);
-        }
-        $this->cards += count($products);
-
-        return $products;
-    }
-
-    /**
-     * @param  array<string, mixed>  $row
-     * @param  array<string, mixed>  $detail  wynik parseProduct()
-     * @param  list<array{id: string, code: string, name: string, label: string, size_name: string, manufacturer_code: string, cents: int, available: bool}>  $group
-     * @param  list<array{manufacturer_code: string}>  $allVariants  wszystkie rozmiary wyrobu (wszystkich grup cenowych)
-     */
-    private function productFor(array $row, array $detail, array $group, int $cents, bool $split, array $allVariants = []): B2bRemoteProduct
-    {
         $single = $row['type'] === self::TYPE_SINGLE;
         $base = $detail['name'] !== '' ? $detail['name'] : self::field($row['name'] ?? '');
-        $labels = array_column($group, 'label');
 
         return new B2bRemoteProduct(
-            remoteId: $group[0]['id'],
-            sku: $split ? $group[0]['code'] : $detail['code'],
-            name: $split ? $base.' ('.self::variantsLabel($labels).')' : $base,
+            remoteId: $variants[0]['id'],
+            sku: $detail['code'],
+            name: $base,
             category: $detail['group'] !== '' ? $detail['group'] : null,
             sourceUrl: P4sB2bClient::PRODUCT_PAGE.$row['id'],
-            raw: ['status' => 'ok', 'cents' => $cents, ...$detail],
-            availability: self::groupAvailability($group, $single),
+            // cena karty = najniższa cena rozmiaru (B2bCatalogSync liczy ją też z members[].price)
+            raw: ['status' => 'ok', 'cents' => min($prices), ...$detail],
+            availability: self::groupAvailability($variants, $single),
             variantSummary: $single ? '' : 'Warianty: '.implode('; ', array_map(
                 static fn (array $v): string => $v['label'].' ('.$v['code'].')',
-                $group,
+                $variants,
             )),
             // dostępność rozmiaru tekstem platformy — karta rozdzielona na rozmiary (mapa połączeń) dostaje
-            // dostępność swojego rozmiaru, nie zbiorczą listę grupy
+            // dostępność swojego rozmiaru, nie zbiorczą listę grupy; cena rozmiaru = jego netPrice (cena konta),
+            // ceny katalogowej platforma nie podaje
             members: $single ? [] : array_map(static fn (array $v): array => [
                 'remote_id' => $v['id'],
                 'sku' => $v['code'],
                 'name' => $v['name'] !== '' ? $v['name'] : $base.', '.$v['label'],
                 'availability' => self::groupAvailability([$v], true),
-            ], $group),
-            identifiers: self::identifiers($detail, $group, $single, $allVariants !== [] ? $allVariants : $group),
+                'size' => $v['label'],
+                'price' => new B2bRemotePrice(net: $v['cents'] / 100),
+            ], $variants),
+            identifiers: self::identifiers($detail, $variants, $single),
         );
     }
 
     /**
-     * Kod producenta z karty wyrobu (manufacturerCode, „PS18”) na każdej karcie wyrobu — także na każdej karcie
-     * z podziału cenowego (po nim łączymy wyroby JALAS/TEGERA z kartami Ejendals). Kod P4S wyrobu z rozmiarami
-     * („11.999”) to kod rodziny (model_code); kod P4S rozmiaru („11.999/F07,0”) i wyrobu pojedynczego („000999”)
+     * Kod producenta z karty wyrobu (manufacturerCode, „PS18”) na karcie wyrobu (po nim łączymy wyroby JALAS/TEGERA
+     * z kartami Ejendals). Kod P4S wyrobu z rozmiarami („11.999”) to kod rodziny (model_code); kod P4S rozmiaru
+     * („11.999/F07,0”) i wyrobu pojedynczego („000999”)
      * to własny kod dystrybutora (source_code) pozycji, a kod producenta z wiersza listy (manufacturerCode
      * pozycji) — kod producenta tej pozycji. Pozycja = id rozmiaru / wyrobu w platformie (remote_id powiązania);
      * etykieta = sizeName dosłownie (pusty — bez etykiety, nie składamy jej z nazwy).
      *
      * @param  array<string, mixed>  $detail  wynik parseProduct()
-     * @param  list<array{id: string, code: string, name: string, label: string, size_name: string, manufacturer_code: string, cents: int, available: bool}>  $group
-     * @param  list<array{manufacturer_code: string}>  $allVariants  wszystkie rozmiary wyrobu — kod karty równy kodowi
-     *                                                               rozmiaru z innej grupy cenowej też jest kodem rozmiaru
+     * @param  list<array{id: string, code: string, name: string, label: string, size_name: string, manufacturer_code: string, cents: int, available: bool}>  $group  wszystkie rozmiary wyrobu z ceną
      * @return list<B2bRemoteIdentifier>
      */
-    private static function identifiers(array $detail, array $group, bool $single, array $allVariants = []): array
+    private static function identifiers(array $detail, array $group, bool $single): array
     {
         $out = [];
-        $cardCode = self::cardManufacturerCodeType($detail['manufacturer_code'], $group, $single, $allVariants !== [] ? $allVariants : $group);
+        $cardCode = self::cardManufacturerCodeType($detail['manufacturer_code'], $group, $single);
         if ($cardCode !== null) {
             $out[] = new B2bRemoteIdentifier(type: $cardCode, value: $detail['manufacturer_code'], field: 'manufacturerCode');
         }
@@ -741,15 +718,13 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
      * rozmiaru M, zapisany pod rozmiarem S — S wskazywał dwie karty 3M). Dlatego:
      * - wyrób pojedynczy albo rozmiary bez własnych kodów → kod producenta jak dotąd (JALAS/TEGERA „PS18” — po nim
      *   łączymy z kartami Ejendals);
-     * - kod równy własnemu kodowi któregoś rozmiaru wyrobu (także z innej grupy cenowej) → pomijamy (to ten rozmiar,
-     *   jest pod swoją pozycją);
-     * - rozmiary tej grupy z własnymi kodami, kod karty inny → kod modelu (FR360 obok FR360-08-58): zostaje w danych,
-     *   ale nie udaje kodu producenta pierwszego rozmiaru (dopasowanie kart go nie używa).
+     * - kod równy własnemu kodowi któregoś rozmiaru wyrobu → pomijamy (to ten rozmiar, jest pod swoją pozycją);
+     * - rozmiary z własnymi kodami, kod karty inny → kod modelu (FR360 obok FR360-08-58): zostaje w danych, ale nie
+     *   udaje kodu producenta pierwszego rozmiaru (dopasowanie kart go nie używa).
      *
-     * @param  list<array{manufacturer_code: string}>  $group
-     * @param  list<array{manufacturer_code: string}>  $allVariants
+     * @param  list<array{manufacturer_code: string}>  $variants  wszystkie rozmiary wyrobu z ceną
      */
-    private static function cardManufacturerCodeType(string $code, array $group, bool $single, array $allVariants): ?string
+    private static function cardManufacturerCodeType(string $code, array $variants, bool $single): ?string
     {
         if ($code === '') {
             return null;
@@ -757,23 +732,19 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         if ($single) {
             return ProductIdentifier::TYPE_MANUFACTURER_CODE;
         }
-        $own = static function (array $variants): array {
-            $codes = [];
-            foreach ($variants as $variant) {
-                $normalized = $variant['manufacturer_code'] !== '' ? ProductIdentifierCode::code($variant['manufacturer_code']) : null;
-                if ($normalized !== null) {
-                    $codes[$normalized] = true;
-                }
+        $own = [];
+        foreach ($variants as $variant) {
+            $normalized = $variant['manufacturer_code'] !== '' ? ProductIdentifierCode::code($variant['manufacturer_code']) : null;
+            if ($normalized !== null) {
+                $own[$normalized] = true;
             }
-
-            return $codes;
-        };
+        }
         $normalized = ProductIdentifierCode::code($code);
-        if ($normalized !== null && isset($own($allVariants)[$normalized])) {
+        if ($normalized !== null && isset($own[$normalized])) {
             return null;
         }
 
-        return $own($group) === [] ? ProductIdentifier::TYPE_MANUFACTURER_CODE : ProductIdentifier::TYPE_MODEL_CODE;
+        return $own === [] ? ProductIdentifier::TYPE_MANUFACTURER_CODE : ProductIdentifier::TYPE_MODEL_CODE;
     }
 
     /**
@@ -797,21 +768,6 @@ final class P4sB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         }
 
         return self::field($size['code']);
-    }
-
-    /**
-     * „rozmiar 7; rozmiar 8”; długa lista skrócona do pierwszych i ostatniego z liczbą — pełna lista jest
-     * w podsumowaniu wariantów karty.
-     *
-     * @param  list<string>  $labels
-     */
-    private static function variantsLabel(array $labels): string
-    {
-        if (count($labels) <= self::VARIANTS_IN_NAME) {
-            return implode('; ', $labels);
-        }
-
-        return count($labels).' wariantów: '.implode('; ', array_slice($labels, 0, self::VARIANTS_IN_NAME - 1)).' … '.$labels[count($labels) - 1];
     }
 
     /**

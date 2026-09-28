@@ -7,17 +7,21 @@ namespace App\Services\B2b;
 use App\Support\ProductSizeVariant;
 
 /**
- * Scalanie pozycji listy UVEX różniących się tylko rozmiarem (decyzja użytkownika 15.09.2026: jedna karta na
- * rozmiary o tej samej cenie; rozmiar z inną ceną = osobna karta). Sklep ma każdy rozmiar jako osobny kod:
- * „8430/2/39”, „1723808 … rozm. XS”, „60542/10 … Wet/10”, „HA2023(M) … rozmiar 8 (M)”, „HECKEL 6273/3/36 …”.
+ * Scalanie pozycji listy UVEX różniących się tylko rozmiarem (decyzja użytkownika 28.09.2026: rozmiary jednego wyrobu
+ * w różnych cenach to jedna karta z tabelą rozmiarów; do 28.09.2026 — decyzja 15.09.2026 — rozmiar z inną ceną był
+ * osobną kartą). Sklep ma każdy rozmiar jako osobny kod: „8430/2/39”, „1723808 … rozm. XS”, „60542/10 … Wet/10”,
+ * „HA2023(M) … rozmiar 8 (M)”, „HECKEL 6273/3/36 …”.
  *
- * Reguła sprawdzona na pełnej liście konta (15.09.2026: 5750 pozycji → 1298 kart, 439 grup):
+ * Reguła sprawdzona na pełnej liście konta (15.09.2026: 5750 pozycji → 1298 kart, 439 grup; wtedy z ceną w kluczu):
  * - rozmiar z nazwy („rozm. XS”, „rozmiar 10”, „r.38”, „size M”, końcowe „(L)”), inaczej z końcówki kodu po „/” lub „-”,
  *   gdy to rozmiar odzieży/obuwia/rękawic (ProductSizeVariant::looksLikeWearSize); bez rozmiaru — osobna karta;
- * - klucz grupy: nazwa bez rozmiaru i bez własnego kodu (także jego końcówki, np. „6273/3/36” w nazwie Heckel) + cena
- *   w groszach + jednostka. Tylko równość nazw — literówka w nazwie daje osobną kartę, nigdy błędne scalenie;
- * - powtórzony rozmiar w grupie (dwa modele o tej samej nazwie i cenie, np. 6823/2 i 6824/2) — podział po rdzeniu kodu;
+ *   pozycja bez ceny (nieczytelna albo 0,00 PLN) też osobna karta — rozmiar grupy musi mieć cenę;
+ * - klucz grupy: nazwa bez rozmiaru i bez własnego kodu (także jego końcówki, np. „6273/3/36” w nazwie Heckel)
+ *   + jednostka (sprzedaż na sztuki i na opakowania to nie rozmiary jednej karty). Cena nie wchodzi do klucza od
+ *   28.09.2026. Tylko równość nazw — literówka w nazwie daje osobną kartę, nigdy błędne scalenie;
+ * - powtórzony rozmiar w grupie (dwa modele o tej samej nazwie, np. 6823/2 i 6824/2) — podział po rdzeniu kodu;
  *   nadal powtórzony albo kody bez wspólnego początku (najkrótszy kod minus 3 znaki) — każda pozycja osobno.
+ *   Bez ceny w kluczu te zabezpieczenia rozdzielają też modele, które dawniej rozdzielała sama różnica ceny.
  */
 final class UvexSizeGroups
 {
@@ -46,7 +50,8 @@ final class UvexSizeGroups
 
                 continue;
             }
-            $key = $this->nameKey($row['name'], $row['code'], $size).'|'.$row['price_cents'].'|'.$row['unit'];
+            // bez ceny w kluczu (decyzja użytkownika 28.09.2026) — rozmiary w różnych cenach to jedna karta
+            $key = $this->nameKey($row['name'], $row['code'], $size).'|'.$row['unit'];
             $groups[$key][] = ['row' => $row, 'size' => $size];
         }
 

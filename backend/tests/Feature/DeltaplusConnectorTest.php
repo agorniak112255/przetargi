@@ -14,6 +14,7 @@ use App\Models\ProductIdentifier;
 use App\Models\ProductImage;
 use App\Models\ProductShopCard;
 use App\Models\ProductSourcePrice;
+use App\Models\ProductVariant;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\B2bDocumentSource;
@@ -210,19 +211,133 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame(['NEPTUN TT733|ŻÓŁTY FLUO-CZARNY' => [12.01]], $prices);
     }
 
-    public function test_version_whose_reference_is_the_page_ref_keeps_the_ref_sku_so_two_cards_never_share_a_code(): void
+    /**
+     * Do 28.09.2026 wersje w dwóch cenach były dwiema kartami, a Ref. równy referencji wersji („22180”) wymagał wyboru,
+     * która karta dostaje Ref. Od decyzji użytkownika 28.09.2026 strona modelu to jedna karta ze wszystkimi wersjami
+     * z ceną: SKU = Ref., bez Ref. — referencja pierwszej wersji z ceną; wersja bez ceny poza kartą.
+     */
+    public function test_all_priced_versions_of_a_model_page_are_one_card_with_the_page_ref_as_sku(): void
     {
-        // Ref. „X” równe referencji wersji X, a większa grupa cenowa to inne wersje — Ref. dostaje grupa z wersją X,
-        // inaczej karta tej grupy wzięłaby „X” jako własne SKU obok karty głównej o SKU „X”
-        $version = static fn (string $ref, float $price): array => ['ref' => $ref, 'price' => $price];
-        $cards = DeltaplusB2bConnector::priceGroups([
-            'ref' => 'X',
-            'versions' => [$version('XA', 1.5), $version('X', 2.0), $version('XB', 1.5)],
-        ]);
+        $version = static fn (string $ref, ?float $price): array => ['ref' => $ref, 'price' => $price];
+        $versions = [$version('XA', 1.5), $version('X', 2.0), $version('XN', null), $version('XB', 1.5)];
 
-        $this->assertSame(['XA', 'X'], array_column($cards, 'sku'));
-        $this->assertSame(['XA', 'XB'], array_column($cards[0]['versions'], 'ref'));
-        $this->assertSame(['X'], array_column($cards[1]['versions'], 'ref'));
+        $cards = DeltaplusB2bConnector::pageCards(['ref' => 'X', 'versions' => $versions]);
+
+        $this->assertSame(['X'], array_column($cards, 'sku'));
+        $this->assertSame(['XA', 'X', 'XB'], array_column($cards[0]['versions'], 'ref'));
+        $this->assertSame(['XA'], array_column(DeltaplusB2bConnector::pageCards(['ref' => '', 'versions' => $versions]), 'sku'));
+        $this->assertSame([], DeltaplusB2bConnector::pageCards(['ref' => 'X', 'versions' => [$version('XN', null)]]));
+    }
+
+    /**
+     * Kolumna Model tabeli referencji: różne modele na jednej stronie to różne wyroby (reguła 1 umowy 28.09.2026 —
+     * z klucza znika tylko cena). Model bez wielkości liter i nadmiarowych odstępów; pusta komórka — model najczęstszy
+     * na stronie. Ref. strony dostaje karta modelu z h1 albo — przed nim — karta z wersją, której referencja jest
+     * równa Ref. (inaczej ta referencja zostałaby SKU drugiej karty); pozostałe karty — referencję pierwszej wersji.
+     */
+    public function test_page_with_two_models_is_one_card_per_model_with_the_ref_on_the_main_model(): void
+    {
+        $version = static fn (string $ref, string $model, float $price): array => ['ref' => $ref, 'model' => $model, 'price' => $price];
+        $versions = [
+            $version('YA', 'AERO Y', 2.0),
+            $version('XA', 'AERO X', 1.5),
+            $version('XB', '', 1.5),
+            $version('YB', 'aero  y ', 2.1),
+            $version('XC', 'AERO X', 1.6),
+            $version('XD', 'AERO X', 1.5),
+        ];
+
+        $cards = DeltaplusB2bConnector::pageCards(['ref' => 'X', 'name' => 'AERO X', 'versions' => $versions]);
+
+        $this->assertSame(
+            [
+                ['YA', 'AERO Y', false, ['YA', 'YB']],
+                // pusta komórka Model (XB) — model najczęstszy (AERO X: 3 wersje)
+                ['X', 'AERO X', true, ['XA', 'XB', 'XC', 'XD']],
+            ],
+            array_map(static fn (array $c): array => [$c['sku'], $c['model'], $c['main'], array_column($c['versions'], 'ref')], $cards),
+        );
+
+        // Ref. równy referencji wersji modelu AERO Y — Ref. dostaje karta AERO Y
+        $cards = DeltaplusB2bConnector::pageCards(['ref' => 'YB', 'name' => 'AERO X', 'versions' => $versions]);
+        $this->assertSame([['YB', true], ['XA', false]], array_map(static fn (array $c): array => [$c['sku'], $c['main']], $cards));
+    }
+
+    public function test_page_with_two_models_gives_two_cards_with_their_own_name_colours_and_catalog_price(): void
+    {
+        $page = self::aero();
+        // wersja granatowo-pomarańczowa to na stronie inny model
+        $page['models'] = ['TC100BMSH' => 'AERO TC200'];
+        $this->pages['aero-tc100'] = $page;
+        $this->lists['head-protection'] = [1 => ['aero-tc100']];
+        $this->fakeSite();
+        $connector = $this->connector();
+
+        $cards = [];
+        foreach ($connector->products() as $product) {
+            $cards[$product->sku] = $product;
+        }
+
+        $this->assertSame(['TC100BMSH', 'TC100'], array_keys($cards));
+        $this->assertSame(2, $connector->totalProducts());
+        $main = $cards['TC100'];
+        $other = $cards['TC100BMSH'];
+        $this->assertSame(['AERO TC100', 'TC100NOSH', ['TC100NOSH', 'TC100NOLG']], [$main->name, $main->remoteId, array_column($main->members, 'remote_id')]);
+        $this->assertSame(['AERO TC200', 'TC100BMSH', []], [$other->name, $other->remoteId, $other->members]);
+        // Ref. strony opisuje model główny — tylko jego karta ma kod modelu (i wiersz „Ref.” w tabelce)
+        $this->assertSame('TC100', $main->identifiers[0]->value);
+        $this->assertNotContains(ProductIdentifier::TYPE_MODEL_CODE, array_map(static fn (B2bRemoteIdentifier $i): string => $i->type, $other->identifiers ?? []));
+        $this->assertNotContains(['Informacje handlowe', 'Ref.', 'TC100'], self::fields($connector, $other));
+        // cennik: AERO TC200 nie ma wiersza — bez ceny katalogowej (nie bierzemy ceny AERO TC100 z h1)
+        $this->assertNull($connector->price($other)?->base);
+        // zdjęcia i pliki: kolory swojej karty i te bez koloru
+        $this->assertSame(
+            [self::MEDIA.'a1b2c3d4e5f60001/Liferay_Product-AERO-TC100-NORO.png', self::MEDIA.'a1b2c3d4e5f60004/Liferay_Product-AERO-TC100-DETAIL.png'],
+            $connector->imageUrls($main),
+        );
+        $this->assertSame(
+            [self::MEDIA.'a1b2c3d4e5f60002/Liferay_Product-AERO-TC100-BMOR.png', self::MEDIA.'a1b2c3d4e5f60004/Liferay_Product-AERO-TC100-DETAIL.png'],
+            $connector->imageUrls($other),
+        );
+        $this->assertSame(
+            ['AERO TC100 BLEU MARINE-ORANGE (C036) technical-sheet PL', 'AERO TC100 UI'],
+            array_map(static fn ($d): string => $d->title, $connector->documents($other)),
+        );
+    }
+
+    /**
+     * Zdjęcia i pliki liczone z pozycji produktu podanego łącznikowi, nie z całej strony: produkt z częścią pozycji
+     * (dawna karta z podziału według ceny — B2bCatalogSync::syncMembersByCard) dostaje tylko kolory swoich pozycji.
+     */
+    public function test_images_and_documents_follow_the_colours_of_the_positions_of_the_given_product(): void
+    {
+        $this->pages['aero-tc100'] = self::aero();
+        $this->lists['head-protection'] = [1 => ['aero-tc100']];
+        $this->fakeSite();
+        $connector = $this->connector();
+        $card = iterator_to_array($connector->products(), false)[0];
+        $part = static fn (array $refs): B2bRemoteProduct => new B2bRemoteProduct(
+            remoteId: $refs[0],
+            sku: $card->sku,
+            name: $card->name,
+            raw: $card->raw,
+            members: count($refs) > 1
+                ? array_values(array_filter($card->members, static fn (array $m): bool => in_array($m['remote_id'], $refs, true)))
+                : [],
+        );
+
+        $this->assertSame(
+            [self::MEDIA.'a1b2c3d4e5f60001/Liferay_Product-AERO-TC100-NORO.png', self::MEDIA.'a1b2c3d4e5f60004/Liferay_Product-AERO-TC100-DETAIL.png'],
+            $connector->imageUrls($part(['TC100NOSH', 'TC100NOLG'])),
+        );
+        $this->assertSame(
+            [self::MEDIA.'a1b2c3d4e5f60002/Liferay_Product-AERO-TC100-BMOR.png', self::MEDIA.'a1b2c3d4e5f60004/Liferay_Product-AERO-TC100-DETAIL.png'],
+            $connector->imageUrls($part(['TC100BMSH'])),
+        );
+        $this->assertSame(
+            ['AERO TC100 BLEU MARINE-ORANGE (C036) technical-sheet PL', 'AERO TC100 UI'],
+            array_map(static fn ($d): string => $d->title, $connector->documents($part(['TC100BMSH']))),
+        );
     }
 
     public function test_public_price_list_keys_rows_by_normalized_model_and_colour_and_skips_group_rows(): void
@@ -293,6 +408,12 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame(array_column($card->members, 'remote_id'), array_column($card->members, 'sku'));
         $this->assertSame('NEPTUN TT733 Pomarańczowy fluo-czarny 07', $card->members[0]['name']);
         $this->assertSame('NEPTUN TT733 Żółty fluo-czarny 10', $card->members[7]['name']);
+        // wersje w jednej cenie — każda i tak z własną ceną konta i katalogową (cennik: model + jej kolor)
+        $this->assertSame(
+            array_fill(0, 8, [5.7, 12.01, 'PLN']),
+            array_map(static fn (array $m): array => [$m['price']->net, $m['price']->base, $m['price']->currency], $card->members),
+        );
+        $this->assertSame(['Pomarańczowy fluo-czarny 07', 'Dostępne'], [$card->members[0]['size'], $card->members[0]['availability']]);
 
         // identyfikatory dosłownie ze strony: Ref. modelu dla karty, referencja (kod producenta), EAN 13 i kod
         // kartonu każdej wersji na jej pozycji; SKU karty nie jest identyfikatorem
@@ -495,46 +616,53 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertStringStartsWith('%PDF-', $file['bytes']);
     }
 
-    public function test_versions_in_two_prices_are_two_cards_with_their_own_colours_and_catalog_price_only_when_unambiguous(): void
+    /**
+     * Do 28.09.2026 (decyzja 15.09.2026) wersje AERO w dwóch cenach były dwiema kartami („TC100” z wersjami
+     * czarno-czerwonymi za 45,00 i „TC100BMSH” granatowo-pomarańczowa za 48,50), każda ze zdjęciami i plikami swoich
+     * kolorów. Od decyzji użytkownika 28.09.2026 to jedna karta z Ref. modelu: każda wersja ze swoją ceną konta
+     * i katalogową (cennik: model + kolor tej wersji, tylko jednoznaczna i wyższa od ceny konta wersji — nigdy cena
+     * innej wersji), cena karty = najtańsza wersja, zdjęcia i pliki wszystkich kolorów z ceną.
+     */
+    public function test_versions_in_two_prices_are_one_card_with_all_colours_and_catalog_price_per_version_only_when_unambiguous(): void
     {
         $this->pages['aero-tc100'] = self::aero();
         $this->lists['head-protection'] = [1 => ['aero-tc100']];
         $this->fakeSite();
         $connector = $this->connector();
 
-        $cards = [];
-        foreach ($connector->products() as $product) {
-            $cards[$product->sku] = $product;
-        }
+        $products = iterator_to_array($connector->products(), false);
 
-        $this->assertEqualsCanonicalizing(['TC100', 'TC100BMSH'], array_keys($cards));
-        // większa grupa (2 wersje) dostaje Ref., choć w tabeli stoi druga
-        $main = $cards['TC100'];
-        $this->assertSame('TC100NOSH', $main->remoteId);
-        $this->assertSame('AERO TC100', $main->name);
-        $this->assertSame(['TC100NOSH', 'TC100NOLG'], array_column($main->members, 'remote_id'));
-        $this->assertSame('TC100NOSH: Dostępne; TC100NOLG: Termin do potwierdzenia', $main->availability);
-        $other = $cards['TC100BMSH'];
-        $this->assertSame('TC100BMSH', $other->remoteId);
-        $this->assertSame([], $other->members);
-        $this->assertSame('Wersje: Granatowo-pomarańczowy Krótki daszek (TC100BMSH)', $other->variantSummary);
-        // Ref. modelu na obu kartach; wersje tylko swojej karty, wersja bez ceny (TC100JFSH) na żadnej
-        $ids = static fn (B2bRemoteProduct $p): array => array_map(
-            static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId],
-            $p->identifiers ?? [],
+        $this->assertCount(1, $products);
+        $card = $products[0];
+        $this->assertSame('TC100', $card->sku);
+        // pierwsza wersja z ceną w tabeli
+        $this->assertSame('TC100BMSH', $card->remoteId);
+        $this->assertSame('AERO TC100', $card->name);
+        // CZARNO-CZERWONY ma w cenniku dwa wiersze o różnych cenach — ta wersja nie ma ceny katalogowej
+        $this->assertSame(
+            [
+                ['TC100BMSH', 'Granatowo-pomarańczowy Krótki daszek', 'Dostępne', 48.5, 97.0, 50.0],
+                ['TC100NOSH', 'Czarno-czerwony Krótki daszek', 'Dostępne', 45.0, null, 0.0],
+                ['TC100NOLG', 'Czarno-czerwony Długi daszek', 'Termin do potwierdzenia', 45.0, null, 0.0],
+            ],
+            array_map(static fn (array $m): array => [
+                $m['remote_id'], $m['size'] ?? null, $m['availability'] ?? null,
+                $m['price']->net, $m['price']->base, $m['price']->discountPercent,
+            ], $card->members),
         );
+        $this->assertSame('TC100BMSH: Dostępne; TC100NOSH: Dostępne; TC100NOLG: Termin do potwierdzenia', $card->availability);
+        $this->assertSame(
+            'Wersje: Granatowo-pomarańczowy Krótki daszek (TC100BMSH); Czarno-czerwony Krótki daszek (TC100NOSH); '
+            .'Czarno-czerwony Długi daszek (TC100NOLG)',
+            $card->variantSummary,
+        );
+        // Ref. modelu i wersje z ceną; wersja bez ceny (TC100JFSH) poza kartą
         $this->assertSame(
             [
                 [ProductIdentifier::TYPE_MODEL_CODE, 'TC100', null],
                 [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'TC100BMSH', 'TC100BMSH'],
                 [ProductIdentifier::TYPE_EAN, '3200000000110', 'TC100BMSH'],
                 [ProductIdentifier::TYPE_PACK_EAN, '13200000000110', 'TC100BMSH'],
-            ],
-            $ids($other),
-        );
-        $this->assertSame(
-            [
-                [ProductIdentifier::TYPE_MODEL_CODE, 'TC100', null],
                 [ProductIdentifier::TYPE_MANUFACTURER_CODE, 'TC100NOSH', 'TC100NOSH'],
                 [ProductIdentifier::TYPE_EAN, '3200000000127', 'TC100NOSH'],
                 [ProductIdentifier::TYPE_PACK_EAN, '13200000000127', 'TC100NOSH'],
@@ -542,36 +670,32 @@ final class DeltaplusConnectorTest extends TestCase
                 [ProductIdentifier::TYPE_EAN, '3200000000141', 'TC100NOLG'],
                 [ProductIdentifier::TYPE_PACK_EAN, '13200000000141', 'TC100NOLG'],
             ],
-            $ids($main),
+            array_map(static fn (B2bRemoteIdentifier $i): array => [$i->type, $i->value, $i->remoteId], $card->identifiers ?? []),
         );
 
-        // CZARNO-CZERWONY ma w cenniku dwa wiersze o różnych cenach — cena katalogowa niejednoznaczna
-        $price = $connector->price($main);
+        // cena karty = najtańsza wersja z jej własną (tu: brakującą) ceną katalogową — nie katalogowa droższej wersji
+        $price = $connector->price($card);
         $this->assertSame(45.0, $price?->net);
         $this->assertNull($price->base);
         $this->assertSame(0.0, $price->discountPercent);
-        $price = $connector->price($other);
-        $this->assertSame(48.5, $price?->net);
-        $this->assertSame(97.0, $price->base);
-        $this->assertSame(50.0, $price->discountPercent);
-        $this->assertStringContainsString('bez ceny katalogowej', mb_strtolower(implode("\n", $connector->runSummary())));
+        $summary = implode("\n", $connector->runSummary());
+        $this->assertStringContainsString('Bez ceny katalogowej z cennika publicznego (cena katalogowa = cena konta): 1, np. TC100 (2 z 3 wersji)', $summary);
+        $this->assertStringContainsString('Pozycje: 1 (1 z wersjami w różnych cenach — jedna karta', $summary);
+        $this->assertStringContainsString('Wyroby z wersjami bez ceny konta (te wersje poza kartami): 1, np. TC100', $summary);
+        $this->assertSame(1, $connector->totalProducts());
 
-        // zdjęcia i pliki: kolory grupy i te bez koloru
+        // zdjęcia i pliki: kolory wersji z ceną i te bez koloru; kolor tylko wersji bez ceny (c102) poza kartą
         $this->assertSame(
-            [self::MEDIA.'a1b2c3d4e5f60001/Liferay_Product-AERO-TC100-NORO.png', self::MEDIA.'a1b2c3d4e5f60004/Liferay_Product-AERO-TC100-DETAIL.png'],
-            $connector->imageUrls($main),
+            [
+                self::MEDIA.'a1b2c3d4e5f60001/Liferay_Product-AERO-TC100-NORO.png',
+                self::MEDIA.'a1b2c3d4e5f60002/Liferay_Product-AERO-TC100-BMOR.png',
+                self::MEDIA.'a1b2c3d4e5f60004/Liferay_Product-AERO-TC100-DETAIL.png',
+            ],
+            $connector->imageUrls($card),
         );
         $this->assertSame(
-            [self::MEDIA.'a1b2c3d4e5f60002/Liferay_Product-AERO-TC100-BMOR.png', self::MEDIA.'a1b2c3d4e5f60004/Liferay_Product-AERO-TC100-DETAIL.png'],
-            $connector->imageUrls($other),
-        );
-        $this->assertSame(
-            ['AERO TC100 NOIR-ROUGE (C131) technical-sheet PL', 'AERO TC100 UI'],
-            array_map(static fn ($d): string => $d->title, $connector->documents($main)),
-        );
-        $this->assertSame(
-            ['AERO TC100 BLEU MARINE-ORANGE (C036) technical-sheet PL', 'AERO TC100 UI'],
-            array_map(static fn ($d): string => $d->title, $connector->documents($other)),
+            ['AERO TC100 NOIR-ROUGE (C131) technical-sheet PL', 'AERO TC100 BLEU MARINE-ORANGE (C036) technical-sheet PL', 'AERO TC100 UI'],
+            array_map(static fn ($d): string => $d->title, $connector->documents($card)),
         );
     }
 
@@ -815,8 +939,8 @@ final class DeltaplusConnectorTest extends TestCase
 
         $result = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: true);
 
-        // NEPTUN (jedna cena), AERO w dwóch cenach = 2 karty, AM902; TS208 bez ceny nie jest wydany
-        $this->assertSame(4, $result['created'], implode(' | ', $result['errors']));
+        // NEPTUN (jedna cena), AERO (dwie ceny — od 28.09.2026 jedna karta), AM902; TS208 bez ceny nie jest wydany
+        $this->assertSame(3, $result['created'], implode(' | ', $result['errors']));
         $this->assertSame(1, $result['skipped'], implode(' | ', $result['errors']));
         $this->assertTrue(
             collect($result['errors'])->contains(static fn (string $e): bool => str_contains(mb_strtolower($e), 'znikniety-wyrob')),
@@ -865,30 +989,43 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame('https://www.deltaplus.eu/pl/p/neptun-tt733', $norms['source']['url'] ?? null);
         $this->assertSame('deltaplus', $norms['source']['connector'] ?? null);
 
-        // AERO: ceny katalogowej brak (cennik niejednoznaczny) — katalogowa = cena konta; druga karta ma swoją
-        $aero = ProductSourcePrice::query()->where('product_id', Product::query()->where('sku', 'TC100')->value('id'))->sole();
+        // AERO: jedna karta, cena karty = najtańsza wersja; jej ceny katalogowej brak (cennik niejednoznaczny) —
+        // katalogowa = cena konta; wersja granatowo-pomarańczowa ma w wierszu rozmiaru swoją cenę i katalogową
+        $aeroCard = Product::query()->where('sku', 'TC100')->sole();
+        $this->assertFalse(Product::query()->where('sku', 'TC100BMSH')->exists());
+        $aero = ProductSourcePrice::query()->where('product_id', $aeroCard->id)->sole();
         $this->assertSame('45.00', (string) $aero->purchase_price);
         $this->assertSame('45.00', (string) $aero->catalog_price_net);
-        $aeroBlue = ProductSourcePrice::query()->where('product_id', Product::query()->where('sku', 'TC100BMSH')->value('id'))->sole();
-        $this->assertSame('48.50', (string) $aeroBlue->purchase_price);
-        $this->assertSame('97.00', (string) $aeroBlue->catalog_price_net);
+        $this->assertSame('48.50', (string) $aero->size_price_max);
+        $this->assertSame(
+            [
+                ['TC100BMSH', 'Granatowo-pomarańczowy Krótki daszek', '48.50', '97.00'],
+                ['TC100NOSH', 'Czarno-czerwony Krótki daszek', '45.00', null],
+                ['TC100NOLG', 'Czarno-czerwony Długi daszek', '45.00', null],
+            ],
+            ProductVariant::query()->where('product_id', $aeroCard->id)->where('kind', ProductVariant::KIND_SIZE)->orderBy('sort_order')->get()
+                ->map(static fn (ProductVariant $v): array => [$v->remote_id, $v->label, (string) $v->purchase_price, $v->list_price_net !== null ? (string) $v->list_price_net : null])->all(),
+        );
+        $this->assertSame(
+            ['TC100BMSH', 'TC100NOLG', 'TC100NOSH'],
+            B2bProductLink::query()->where('product_id', $aeroCard->id)->orderBy('remote_id')->pluck('remote_id')->all(),
+        );
         $this->assertSame('Zatrzaśnik śrubowy, zestaw 5 sztuk AM902', Product::query()->where('sku', 'AM902')->value('name'));
 
         $log = implode("\n", array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text'));
         $this->assertStringContainsStringIgnoringCase('TS208', $log);
         $this->assertStringNotContainsString('spoza karty', $log);
 
-        // identyfikatory: NEPTUN 1 + 8×3, AERO 1 + 2×3 i 1 + 3, AM902 1 + 3; Ref. modelu na pozycji karty
+        // identyfikatory: NEPTUN 1 + 8×3, AERO 1 + 3×3, AM902 1 + 3; Ref. modelu na pozycji karty
         $this->assertSame(25, ProductIdentifier::query()->where('product_id', $card->id)->count());
-        $this->assertSame(40, ProductIdentifier::query()->count());
+        $this->assertSame(39, ProductIdentifier::query()->count());
         $model = ProductIdentifier::query()->where('product_id', $card->id)->where('type', ProductIdentifier::TYPE_MODEL_CODE)->sole();
         $this->assertSame(['TT733', 'TT733OR07', 'Ref.', 'Delta Plus'], [$model->value, $model->position_key, $model->source_field, $model->manufacturer]);
         $ean = ProductIdentifier::query()->where('product_id', $card->id)->where('type', ProductIdentifier::TYPE_EAN)->where('position_key', 'TT73310')->sole();
         $this->assertSame(['3200000000080', 'Żółty fluo-czarny 10', 'EAN 13'], [$ean->value, $ean->variant_label, $ean->source_field]);
-        $this->assertSame(
-            ['TC100BMSH'],
-            ProductIdentifier::query()->where('product_id', Product::query()->where('sku', 'TC100BMSH')->value('id'))
-                ->distinct()->pluck('position_key')->all(),
+        $this->assertEqualsCanonicalizing(
+            ['TC100BMSH', 'TC100NOSH', 'TC100NOLG'],
+            ProductIdentifier::query()->where('product_id', $aeroCard->id)->distinct()->pluck('position_key')->all(),
         );
         $this->assertFalse(ProductIdentifier::query()->where('value', 'like', 'TC100JFSH%')->exists());
     }
@@ -907,11 +1044,11 @@ final class DeltaplusConnectorTest extends TestCase
 
         $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
         $this->assertSame(0, $second['updated'], implode(' | ', $second['errors']));
-        $this->assertSame(4, $second['unchanged'], implode(' | ', $second['errors']));
+        $this->assertSame(3, $second['unchanged'], implode(' | ', $second['errors']));
         // opis, normy producenta (z datą odczytu), tabelka, pliki, zdjęcia i powiązania — bez zmian
         $this->assertSame($before, $this->snapshot());
         // identyfikatory zapisane raz: drugi przebieg ich nie dubluje ani nie oznacza jako zniknięte
-        $this->assertCount(40, $identifiers);
+        $this->assertCount(39, $identifiers);
         $this->assertSame($identifiers, ProductIdentifier::query()->orderBy('id')->get(['id', 'product_id', 'position_key', 'type', 'value'])->toArray());
         $this->assertSame(0, ProductIdentifier::query()->whereNotNull('removed_at')->count());
     }
@@ -931,6 +1068,9 @@ final class DeltaplusConnectorTest extends TestCase
         $spec['rows'][0][8] = 'Termin do potwierdzenia';
         $spec['rows'][0][9] = '0,00 zł';
         $this->pages['neptun-tt733'] = $spec;
+        // drugi przebieg później niż pierwszy — sprzątanie wierszy rozmiarów porównuje czas ostatniego widzenia
+        // z początkiem przebiegu (w tej samej sekundzie wynik zależałby od zegara)
+        $this->travel(1)->minutes();
 
         $second = app(B2bAccountSyncRunner::class)->run($this->account(), delayMs: 0, withImages: false);
 
@@ -943,6 +1083,65 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame($card->id, Product::query()->where('sku', 'TT733')->value('id'));
         $this->assertStringNotContainsString('TT733OR07', (string) $card->refresh()->variant_summary);
         $this->assertSame('5.70', (string) ProductSourcePrice::query()->where('product_id', $card->id)->value('purchase_price'));
+        // wiersz rozmiaru wersji bez ceny nie jest kasowany — dostaje removed_at, reszta zostaje
+        $sizes = ProductVariant::query()->where('product_id', $card->id)->where('kind', ProductVariant::KIND_SIZE)->get()->keyBy('remote_id');
+        $this->assertCount(8, $sizes);
+        $this->assertNotNull($sizes['TT733OR07']->removed_at);
+        $this->assertNull($sizes['TT733OR08']->removed_at);
+    }
+
+    /**
+     * Karty sprzed 28.09.2026 (AERO rozbity według ceny na „TC100” za 45,00 i „TC100BMSH” za 48,50) — pierwszy i drugi
+     * przebieg po zmianie: bez nowej karty, bez przepinania powiązań i bez zmian cen kart; każda karta dostaje swoje
+     * wersje jako rozmiary, a wyrób trafia do size_spread przebiegu (scalenie — osobny krok).
+     */
+    public function test_legacy_price_split_cards_stay_and_get_their_own_versions_over_two_runs(): void
+    {
+        Storage::fake('public');
+        Storage::fake('local');
+        $this->pages['aero-tc100'] = self::aero();
+        $this->lists['head-protection'] = [1 => ['aero-tc100']];
+        $this->fakeSite();
+        $account = $this->account();
+        $black = $this->legacyCard($account, 'TC100', 45.0, ['TC100NOSH', 'TC100NOLG']);
+        $blue = $this->legacyCard($account, 'TC100BMSH', 48.5, ['TC100BMSH'], 97.0);
+        $cards = fn (): array => Product::query()->orderBy('id')->get()->map(fn (Product $p): array => [
+            $p->sku, $p->name, (string) $p->purchase_price,
+            B2bProductLink::query()->where('product_id', $p->id)->orderBy('remote_id')->pluck('remote_id')->all(),
+            (string) ProductSourcePrice::query()->where('product_id', $p->id)->value('purchase_price'),
+            ProductSourcePrice::query()->where('product_id', $p->id)->value('size_price_max'),
+        ])->all();
+        $before = $cards();
+
+        $first = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: true);
+
+        $this->assertSame(0, $first['created'], implode(' | ', $first['errors']));
+        $this->assertSame(0, $first['skipped'], implode(' | ', $first['errors']));
+        $this->assertSame(0, $first['prices_changed']);
+        $this->assertSame($before, $cards());
+        // zdjęcia i pliki: każda dawna karta tylko w kolorach swoich wersji (i bez koloru) — czarne zdjęcie nie trafia
+        // na kartę granatową
+        $images = static fn (Product $card): array => ProductImage::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('source_url')->all();
+        $this->assertSame([self::MEDIA.'a1b2c3d4e5f60001/Liferay_Product-AERO-TC100-NORO.png', self::MEDIA.'a1b2c3d4e5f60004/Liferay_Product-AERO-TC100-DETAIL.png'], $images($black));
+        $this->assertSame([self::MEDIA.'a1b2c3d4e5f60002/Liferay_Product-AERO-TC100-BMOR.png', self::MEDIA.'a1b2c3d4e5f60004/Liferay_Product-AERO-TC100-DETAIL.png'], $images($blue));
+        $documents = static fn (Product $card): array => ProductDocument::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('title')->all();
+        $this->assertSame(['AERO TC100 NOIR-ROUGE (C131) technical-sheet PL', 'AERO TC100 UI'], $documents($black));
+        $this->assertSame(['AERO TC100 BLEU MARINE-ORANGE (C036) technical-sheet PL', 'AERO TC100 UI'], $documents($blue));
+        $sizes = static fn (Product $card): array => ProductVariant::query()->where('product_id', $card->id)->orderBy('sort_order')->get()
+            ->map(static fn (ProductVariant $v): array => [$v->remote_id, (string) $v->purchase_price])->all();
+        $this->assertSame([['TC100NOSH', '45.00'], ['TC100NOLG', '45.00']], $sizes($black));
+        $this->assertSame([['TC100BMSH', '48.50']], $sizes($blue));
+        $spread = B2bSyncRun::query()->findOrFail($first['sync_run_id'])->size_spread;
+        $this->assertSame(1, $spread['total']);
+        $this->assertSame([$black->id, $blue->id], $spread['groups'][0]['cards']);
+
+        $second = app(B2bAccountSyncRunner::class)->run($account, delayMs: 0, withImages: true);
+
+        $this->assertSame(0, $second['created'], implode(' | ', $second['errors']));
+        $this->assertSame(0, $second['prices_changed']);
+        $this->assertSame($before, $cards());
+        $this->assertSame([self::MEDIA.'a1b2c3d4e5f60002/Liferay_Product-AERO-TC100-BMOR.png', self::MEDIA.'a1b2c3d4e5f60004/Liferay_Product-AERO-TC100-DETAIL.png'], $images($blue));
+        $this->assertSame(0, ProductVariant::query()->whereNotNull('removed_at')->count());
     }
 
     public function test_registry_detects_deltaplus_by_host_and_it_is_the_manufacturer_site(): void
@@ -953,6 +1152,8 @@ final class DeltaplusConnectorTest extends TestCase
         $this->assertSame('deltaplus', $registry->keyForSites(['deltaplus.eu']));
         $this->assertSame('Delta Plus', $registry->label('deltaplus'));
         $this->assertTrue($registry->requiresPassword('deltaplus'));
+        // ceny wersji przy pozycjach (28.09.2026) — konto ma w panelu „Scal rozmiary”
+        $this->assertTrue($registry->sendsSizePrices('deltaplus'));
         $this->assertSame('deltaplus.eu', DeltaplusB2bConnector::host());
 
         $account = B2bAccount::query()->create(['username' => self::USER, 'password' => 'sekret', 'sites' => ['https://www.deltaplus.eu/']]);
@@ -979,6 +1180,36 @@ final class DeltaplusConnectorTest extends TestCase
         $connector->login();
 
         return $connector;
+    }
+
+    /**
+     * Karta AERO zapisana przez dawny podział według ceny: slot konta i powiązania wersji z odciskiem opisu.
+     *
+     * @param  list<string>  $refs
+     */
+    private function legacyCard(B2bAccount $account, string $sku, float $price, array $refs, ?float $base = null): Product
+    {
+        $description = "Hełm lekki z wentylacją, dostępny z dwiema długościami daszka\n\nKomfort\nWentylacja ogranicza pocenie";
+        $catalog = $base ?? $price;
+        $discount = $base !== null ? round((1 - $price / $base) * 100, 2) : 0;
+        $card = Product::query()->create([
+            'sku' => $sku, 'name' => 'AERO TC100', 'manufacturer' => 'Delta Plus', 'description' => $description,
+            'catalog_price_net' => $catalog, 'discount_percent' => $discount, 'purchase_price' => $price, 'currency' => 'PLN',
+        ]);
+        foreach ($refs as $ref) {
+            B2bProductLink::query()->create([
+                'b2b_account_id' => $account->id, 'remote_id' => $ref, 'product_id' => $card->id,
+                'remote_sku' => $ref, 'remote_name' => 'AERO TC100', 'manufacturer' => 'Delta Plus',
+                'description_hash' => sha1($description), 'last_purchase_price' => $price, 'last_currency' => 'PLN',
+            ]);
+        }
+        ProductSourcePrice::query()->create([
+            'product_id' => $card->id, 'source_key' => ProductSourcePrice::b2bKey((int) $account->id), 'b2b_account_id' => $account->id,
+            'catalog_price_net' => $catalog, 'purchase_price' => $price, 'discount_percent' => $discount, 'currency' => 'PLN',
+            'availability' => 'Dostępne', 'checked_at' => now()->subDay(),
+        ]);
+
+        return $card;
     }
 
     private function account(): B2bAccount
@@ -1099,6 +1330,8 @@ final class DeltaplusConnectorTest extends TestCase
             'advantages' => [],
             'rows' => [],
             'documents' => [],
+            // kolumna Model: referencja => model; bez wpisu — nazwa z h1
+            'models' => [],
             'priceColumns' => true,
         ], $spec);
     }
@@ -1520,7 +1753,7 @@ final class DeltaplusConnectorTest extends TestCase
             $body .= "\n<tr>\n".'<td><div><a href="https://www.deltaplus.eu/pl/p/'.$slug.'">'.$ref.'</a></div></td>'
                 // widok zalogowany ma U+200B jako encję, widok gościa — jako znak
                 ."\n<td>".($withPrices ? '&#8203;' : "\u{200B}").$e($color).'</td>'
-                ."\n<td>".$e($size)."</td>\n<td>".$e($p['name'])."</td>\n<td>".$ean."</td>\n<td>".$carton
+                ."\n<td>".$e($size)."</td>\n<td>".$e($p['models'][$ref] ?? $p['name'])."</td>\n<td>".$ean."</td>\n<td>".$carton
                 ."</td>\n<td>".$qty."</td>\n<td>".$min."</td>\n<td>".$weight.'</td>';
             if ($withPrices) {
                 $body .= "\n".'<td><span class="stock" style="background-color:#768987">'.$e($availability).'</span></td>'
