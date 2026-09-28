@@ -541,12 +541,10 @@ final class JhkConnectorTest extends TestCase
             $card->members[4]['availability'],
         );
 
-        // zdjęcia koloru prowadzącego, potem granatowe; pliki obu kolorów bez powtórzeń
+        // jedno zdjęcie na kolor (decyzja właściciela 28.09.2026): główne koloru prowadzącego, potem granatowe — bez
+        // reszty galerii; pliki obu kolorów bez powtórzeń
         $this->assertSame(
-            [
-                self::BASE.'/zasoby/import/j/jt-test-bk-xs_01.jpg', self::BASE.'/zasoby/import/j/jt-test-bk-xs_02.jpg',
-                self::BASE.'/zasoby/import/j/jt-test-ny-xs_01.jpg', self::BASE.'/zasoby/import/j/jt-test-ny-xs_02.jpg',
-            ],
+            [self::BASE.'/zasoby/import/j/jt-test-bk-xs_01.jpg', self::BASE.'/zasoby/import/j/jt-test-ny-xs_01.jpg'],
             $connector->imageUrls($card),
         );
         $this->assertSame(
@@ -643,6 +641,14 @@ final class JhkConnectorTest extends TestCase
         );
         // ostatni wiersz: XXL koloru o najwyższym symbolu (YE, siódmy na liście)
         $this->assertSame(['JT TEST YE XXL', 'Magazyn w Polsce - dostępne 24 h: 106 szt.'], [$products[0]->members[23]['remote_id'], $products[0]->members[23]['availability']]);
+        // jedno (główne) zdjęcie każdego z 12 kolorów w kolejności wierszy — bez limitu galerii jednego koloru (8)
+        $this->assertSame(
+            array_map(
+                static fn (string $code): string => self::BASE.'/zasoby/import/j/jt-test-'.strtolower($code).'-xs_01.jpg',
+                ['BK', 'BL', 'BR', 'GN', 'GR', 'NY', 'OR', 'PK', 'RD', 'VI', 'WH', 'YE'],
+            ),
+            $connector->imageUrls($products[0]),
+        );
         $this->assertStringContainsString('Warianty kolorystyczne JHK: 1 wyrobów z 12 kolorów', implode("\n", $connector->runSummary()));
     }
 

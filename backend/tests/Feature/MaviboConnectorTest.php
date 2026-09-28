@@ -231,8 +231,8 @@ final class MaviboConnectorTest extends TestCase
     /**
      * Kolory jednego modelu to jedna karta (decyzja użytkownika 28.09.2026 wieczorem): wiersze kolor × rozmiar, każdy
      * ze swoją ceną, indeksem i dostępnością; SKU = model, nazwa nowej karty bez koloru; tabelka bez koloru jednej
-     * kombinacji; pliki i zdjęcia wszystkich kolorów. Dawna karta koloru (synchronizacja podaje jej tylko jej pozycje)
-     * dostaje zdjęcia i pliki tylko swojego koloru.
+     * kombinacji; pliki wszystkich kolorów, po jednym zdjęciu na kolor. Dawna karta koloru (synchronizacja podaje jej
+     * tylko jej pozycje) dostaje zdjęcia i pliki tylko swojego koloru.
      */
     public function test_colours_of_one_model_are_one_card_with_colour_and_size_rows(): void
     {
@@ -288,9 +288,10 @@ final class MaviboConnectorTest extends TestCase
             ['KARTA PRODUKTU 51005 22', 'KARTA PRODUKTU 51005 26', 'TABELA ROZMIARÓW'],
             array_map(static fn ($d): string => $d->title, $connector->documents($card)),
         );
-        // galeria pierwszego koloru, potem pierwsze zdjęcie następnego
+        // jedno zdjęcie na kolor (decyzja właściciela 28.09.2026): główne zdjęcie koloru 21, potem koloru 26 — bez reszty
+        // galerii koloru 21
         $this->assertSame(
-            [self::BASE.'/3991-large_default/nimbo.jpg', self::BASE.'/3992-large_default/nimbo.jpg', self::BASE.'/3990-large_default/nimbo.jpg'],
+            [self::BASE.'/3991-large_default/nimbo.jpg', self::BASE.'/3990-large_default/nimbo.jpg'],
             $connector->imageUrls($card),
         );
 
@@ -309,6 +310,59 @@ final class MaviboConnectorTest extends TestCase
         $summary = implode("\n", $connector->runSummary());
         $this->assertStringContainsString('Karty: 1 (0 kolorów z rozmiarami w różnych cenach', $summary);
         $this->assertStringContainsString('Modele w kilku kolorach — jedna karta z tabelą kolor × rozmiar: 1 (2 kolorów)', $summary);
+    }
+
+    /**
+     * Jedno zdjęcie na kolor (decyzja właściciela 28.09.2026) także przy wielu kolorach: główne zdjęcie każdego koloru
+     * w kolejności wierszy, bez limitu galerii jednego koloru; to samo główne zdjęcie dwóch kolorów raz, kolor bez
+     * zdjęć pominięty. Jeden kolor — jego galeria do limitu, jak dotąd.
+     */
+    public function test_colour_card_gets_exactly_the_main_image_of_each_colour(): void
+    {
+        $this->fakeShop();
+        $connector = $this->connector();
+        $members = [];
+        $colours = [];
+        $images = [];
+        foreach (['30', '21', '26', 'czarny', '11', '12', '13', '14', '15', '16', '17', '18', '19'] as $i => $colour) {
+            foreach (['S', 'M'] as $j => $size) {
+                $id = '500_'.($i * 10 + $j);
+                $members[] = ['remote_id' => $id];
+                $colours[$id] = $colour;
+                // rozmiar M ma w galerii jeszcze jedno ujęcie — też nie trafia na kartę z kolorami
+                $images[$id] = array_map(
+                    static fn (int $n): string => self::BASE.'/'.$colour.'-'.$n.'-large_default/x.jpg',
+                    $j === 0 ? [1, 2, 3] : [1, 2, 3, 4],
+                );
+            }
+        }
+        // kolor 26 ma to samo główne zdjęcie co 21, kolor 13 — żadnego
+        $images['500_20'] = $images['500_21'] = [self::BASE.'/21-1-large_default/x.jpg', self::BASE.'/26-2-large_default/x.jpg'];
+        $images['500_60'] = $images['500_61'] = [];
+        $raw = ['member_colours' => $colours, 'member_images' => $images];
+        $card = new B2bRemoteProduct(remoteId: '500_0', sku: 'M1', name: 'Model', raw: $raw, members: $members);
+
+        $this->assertSame(
+            array_map(
+                static fn (string $colour): string => self::BASE.'/'.$colour.'-1-large_default/x.jpg',
+                // 11 kolorów ze zdjęciem — więcej niż limit galerii jednego koloru (8)
+                ['30', '21', 'czarny', '11', '12', '14', '15', '16', '17', '18', '19'],
+            ),
+            $connector->imageUrls($card),
+        );
+
+        // dawna karta jednego koloru: cała galeria koloru (obu rozmiarów), bez powtórzeń, do limitu 8
+        $single = new B2bRemoteProduct(remoteId: '500_0', sku: 'M1 30', name: 'Model', raw: $raw, members: array_slice($members, 0, 2));
+        $this->assertSame(
+            array_map(static fn (int $n): string => self::BASE.'/30-'.$n.'-large_default/x.jpg', [1, 2, 3, 4]),
+            $connector->imageUrls($single),
+        );
+        $raw['member_images']['500_0'] = array_map(static fn (int $n): string => self::BASE.'/30-'.$n.'-large_default/x.jpg', range(1, 12));
+        $long = new B2bRemoteProduct(remoteId: '500_0', sku: 'M1 30', name: 'Model', raw: $raw, members: array_slice($members, 0, 2));
+        $this->assertSame(
+            array_map(static fn (int $n): string => self::BASE.'/30-'.$n.'-large_default/x.jpg', range(1, 8)),
+            $connector->imageUrls($long),
+        );
     }
 
     /**
@@ -692,8 +746,9 @@ final class MaviboConnectorTest extends TestCase
         $this->assertSame('59.50', (string) $slot->size_price_max);
         $this->assertStringContainsString('kurtka przeciwdeszczowa', (string) $card->description);
         $this->assertTrue(ProductShopCard::query()->where('product_id', $card->id)->exists());
+        // jedno zdjęcie na kolor: główne koloru 21, potem koloru 26
         $this->assertSame(
-            [self::BASE.'/3991-large_default/nimbo.jpg', self::BASE.'/3992-large_default/nimbo.jpg', self::BASE.'/3990-large_default/nimbo.jpg'],
+            [self::BASE.'/3991-large_default/nimbo.jpg', self::BASE.'/3990-large_default/nimbo.jpg'],
             ProductImage::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('source_url')->all(),
         );
         $this->assertSame(
@@ -864,9 +919,10 @@ final class MaviboConnectorTest extends TestCase
         $this->assertSame(1, Product::query()->count());
         $this->assertSame(0, B2bSyncRun::query()->findOrFail($next['sync_run_id'])->size_spread['total'] ?? 0);
         $this->assertSame(['kolor 21 / S', 'kolor 21 / M', 'kolor 26 / S', 'kolor 26 / M'], $rows());
-        // karta modelu: zdjęcia i pliki wszystkich kolorów
+        // karta modelu: pliki wszystkich kolorów, jedno zdjęcie na kolor — scalanie zostawiło główne zdjęcie każdego
+        // koloru, a następny przebieg nie dociąga reszty galerii granatu (3992)
         $this->assertEqualsCanonicalizing(
-            [self::BASE.'/3990-large_default/nimbo.jpg', self::BASE.'/3991-large_default/nimbo.jpg', self::BASE.'/3992-large_default/nimbo.jpg'],
+            [self::BASE.'/3990-large_default/nimbo.jpg', self::BASE.'/3991-large_default/nimbo.jpg'],
             $images($keep),
         );
         $this->assertEqualsCanonicalizing(['KARTA PRODUKTU 51005 22', 'KARTA PRODUKTU 51005 26', 'TABELA ROZMIARÓW'], $documents($keep));

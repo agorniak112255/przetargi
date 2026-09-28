@@ -58,9 +58,9 @@ use RuntimeException;
  * Opis: pole „description_short” (gramatura, skład) i „description” (opis z tabelą wymiarów) dosłownie, bez
  * obrazków (logo marki, ikony). Pliki: załączniki wyrobu („KARTA PRODUKTU 51005 26” — PDF albo JPG); plik przypisany
  * kolorowi (numer koloru na końcu nazwy albo w nazwie pliku) trafia tylko na karty z tym kolorem. Zdjęcia: galeria
- * kombinacji z okna podglądu tabeli (osobna dla każdego koloru); karta z kolorami — galeria pierwszego koloru, potem
- * pierwsze zdjęcie każdego następnego, potem reszta. Sklep nie podaje norm ani certyfikatów — łącznik ich nie
- * dopisuje.
+ * kombinacji z okna podglądu tabeli (osobna dla każdego koloru); karta z kolorami — tylko pierwsze (główne) zdjęcie
+ * każdego koloru, jedno na kolor (decyzja właściciela 28.09.2026). Sklep nie podaje norm ani certyfikatów — łącznik
+ * ich nie dopisuje.
  *
  * Producent: marka wyrobu ze sklepu (manufacturer_name); wyrób bez marki — „MAVIBO” (liczone w podsumowaniu).
  */
@@ -403,9 +403,11 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
 
     /**
      * Galerie kombinacji tego produktu (productPositions — dawna karta koloru tylko swoje), bez powtórzeń. Jeden
-     * kolor — galerie w kolejności pozycji (kolor ma zwykle jedną wspólną galerię). Kilka kolorów — cała galeria
-     * pierwszego koloru, potem pierwsze zdjęcie każdego następnego koloru, potem reszta, żeby limit pokazał
-     * możliwie wiele kolorów.
+     * kolor — galerie w kolejności pozycji (kolor ma zwykle jedną wspólną galerię), najwyżej IMAGES_LIMIT. Kilka
+     * kolorów (decyzja właściciela 28.09.2026: karta z kolorami ma dokładnie jedno zdjęcie na kolor) — tylko pierwsze
+     * (główne) zdjęcie każdego koloru, w kolejności wierszy (kolor prowadzący pierwszy), bez powtórzeń i bez limitu:
+     * B2bCatalogSync::storeGallery pobiera każdy podany adres, którego karta nie ma, więc reszta galerii wracałaby
+     * co przebieg. Kolor pozycji nieznany (brak w member_colours) liczy się jako osobny kolor.
      *
      * @return list<string>
      */
@@ -413,29 +415,34 @@ final class MaviboB2bConnector implements B2bConnector, B2bDocumentSource, B2bGr
     {
         $images = $product->raw['member_images'] ?? [];
         $colours = $product->raw['member_colours'] ?? [];
-        /** @var array<string, array<string, true>> $galleries */
+        /** @var array<string, array<string, true>> $galleries kolory w kolejności wierszy, także bez zdjęć */
         $galleries = [];
         foreach (self::productPositions($product) as $id) {
+            $colour = (string) ($colours[$id] ?? '');
+            $galleries[$colour] ??= [];
             foreach ($images[$id] ?? [] as $url) {
-                $galleries[(string) ($colours[$id] ?? '')][$url] = true;
+                $galleries[$colour][$url] = true;
             }
         }
-        $galleries = array_values(array_map(static fn (array $urls): array => array_keys($urls), $galleries));
+        $colourCount = count($galleries);
+        $galleries = array_values(array_filter(array_map(
+            static fn (array $urls): array => array_keys($urls),
+            $galleries,
+        ), static fn (array $urls): bool => $urls !== []));
         if ($galleries === []) {
             return [];
         }
 
-        $urls = array_fill_keys($galleries[0], true);
-        foreach (array_slice($galleries, 1) as $gallery) {
-            $urls[$gallery[0]] = true;
-        }
-        foreach (array_slice($galleries, 1) as $gallery) {
-            foreach ($gallery as $url) {
-                $urls[$url] = true;
-            }
+        if ($colourCount === 1) {
+            return array_slice(array_map('strval', $galleries[0]), 0, self::IMAGES_LIMIT);
         }
 
-        return array_slice(array_map('strval', array_keys($urls)), 0, self::IMAGES_LIMIT);
+        $urls = [];
+        foreach ($galleries as $gallery) {
+            $urls[(string) $gallery[0]] = true;
+        }
+
+        return array_map('strval', array_keys($urls));
     }
 
     public function imageAt(string $url): ?B2bRemoteImage

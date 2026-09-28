@@ -19,6 +19,9 @@ class ProductImageRejection extends Model
 
     public const REASON_AUDIT = 'audit';
 
+    /** Nadmiar galerii karty kolorów po scaleniu — zostaje jedno zdjęcie na kolor (B2b\ColourGalleryTrim). */
+    public const REASON_COLOUR_GALLERY = 'colour_gallery';
+
     protected $fillable = [
         'product_id',
         'file_key_hash',

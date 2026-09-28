@@ -405,6 +405,8 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
     }
 
     /**
+     * Karta z kolorami — jedno (główne) zdjęcie na kolor, karta jednego koloru — jego galeria (colourRaw).
+     *
      * @return list<string>
      */
     public function imageUrls(B2bRemoteProduct $product): array
@@ -1327,8 +1329,11 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
      * wszystkie kolory. Dawna karta koloru przed „Scal rozmiary”: B2bCatalogSync::syncMembersByCard podaje jej produkt
      * z jej pozycjami przy zdjęciach (imageUrls) i plikach (documents), więc nie dostaje zdjęć ani plików innego koloru;
      * tabelkę (shopFields) silnik zapisuje z produktu całej grupy (storeShopFields z $origin), więc tam ma pola całego
-     * wyrobu. Pozycja o nieznanym kolorze = wszystkie kolory (bez filtrowania). Zdjęcia: pierwszy z kolorów w całości,
-     * potem główne zdjęcie każdego następnego, potem reszta (IMAGES_LIMIT); pliki bez powtórzeń (DOCUMENTS_LIMIT);
+     * wyrobu. Pozycja o nieznanym kolorze = wszystkie kolory (bez filtrowania). Zdjęcia: jeden kolor — jego galeria
+     * (IMAGES_LIMIT); kilka (decyzja właściciela 28.09.2026: karta z kolorami ma dokładnie jedno zdjęcie na kolor) —
+     * tylko główne zdjęcie każdego koloru w kolejności wierszy, bez powtórzeń i bez limitu (wyrób bywa w 87 kolorach;
+     * B2bCatalogSync::storeGallery pobiera każdy podany adres, którego karta nie ma, więc reszta galerii wracałaby
+     * co przebieg); pliki bez powtórzeń (DOCUMENTS_LIMIT);
      * progi ilościowe, pola i cechy — tylko takie same we wszystkich kolorach. Jeden kolor — tabelka jak na karcie
      * koloru: jego pola, symbole, EAN-y, stany i cecha „Kolor” (tylko pozycje produktu); kilka — bez list wierszy (są
      * przy wierszach wariantów, w jednym polu zostałyby przycięte). Produkt bez kolorów (karta koloru) — raw bez zmian.
@@ -1360,14 +1365,17 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         ksort($chosen);
         $selected = array_values(array_intersect_key($parts, $chosen));
 
-        $images = $selected[0]['images'];
-        foreach (array_slice($selected, 1) as $part) {
-            if (isset($part['images'][0])) {
-                $images[] = $part['images'][0];
+        // jeden kolor — jego galeria (IMAGES_LIMIT); kilka — tylko główne zdjęcie każdego koloru, bez limitu
+        $images = [];
+        if (count($selected) === 1) {
+            $images = array_slice(array_values(array_unique($selected[0]['images'])), 0, self::IMAGES_LIMIT);
+        } else {
+            foreach ($selected as $part) {
+                if (isset($part['images'][0])) {
+                    $images[] = $part['images'][0];
+                }
             }
-        }
-        foreach (array_slice($selected, 1) as $part) {
-            array_push($images, ...array_slice($part['images'], 1));
+            $images = array_values(array_unique($images));
         }
         $documents = [];
         $categories = [];
@@ -1389,7 +1397,7 @@ final class JhkB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroup
         }
 
         $raw['colours'] = array_column($selected, 'text');
-        $raw['image_urls'] = array_slice(array_values(array_unique($images)), 0, self::IMAGES_LIMIT);
+        $raw['image_urls'] = $images;
         $raw['documents'] = array_slice(array_values($documents), 0, self::DOCUMENTS_LIMIT);
         $raw['category_path'] = implode(' | ', array_keys($categories));
         $raw['labels'] = array_keys($labels);

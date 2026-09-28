@@ -10,6 +10,7 @@ use App\Models\B2bSyncRun;
 use App\Models\Product;
 use App\Models\ProductEnrichmentBatchItem;
 use App\Models\ProductIdentifier;
+use App\Models\ProductImage;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
@@ -59,6 +60,7 @@ final class B2bSizePriceMerger
         private readonly CardOwnership $ownership,
         private readonly ProductEffectivePrice $prices,
         private readonly B2bConnectorRegistry $connectors,
+        private readonly ColourGalleryTrim $galleryTrim,
     ) {}
 
     /**
@@ -354,7 +356,7 @@ final class B2bSizePriceMerger
      */
     public function apply(B2bAccount $account, array $group, bool $withTenders, callable $backup): array
     {
-        return DB::transaction(function () use ($account, $group, $withTenders, $backup): array {
+        $result = DB::transaction(function () use ($account, $group, $withTenders, $backup): array {
             $cardIds = [];
             foreach (is_array($group['members'] ?? null) ? $group['members'] : [] as $member) {
                 if (is_array($member) && isset($member['card_id'])) {
@@ -395,6 +397,11 @@ final class B2bSizePriceMerger
 
             // pozycje przetargów na karcie jednego rozmiaru/koloru dostaną po scaleniu ten wiersz jako wariant oferty
             $variantByItem = $this->itemVariants($account, $cardIds);
+            // galerie kart sprzed scalenia — przy kolorach zostaje po jednym zdjęciu z każdej (ColourGalleryTrim)
+            $imagesByCard = ColourGalleryTrim::isColourGroup($group)
+                ? ProductImage::query()->toBase()->whereIn('product_id', $cardIds)->get(['id', 'product_id', 'is_primary', 'sort_order'])
+                    ->groupBy('product_id')->map(static fn ($rows): array => $rows->map(static fn ($row): array => (array) $row)->all())->all()
+                : [];
 
             // 1) to, czego mergeSizeCards nie przenosi, a kaskada skasowałaby z kartami łączonymi
             ProductVariant::query()->sizes()->whereIn('product_id', $dropIds)->update(['product_id' => $keepId]);
@@ -432,8 +439,15 @@ final class B2bSizePriceMerger
                 ]);
             }
 
-            return [...$plan, 'keep' => $keep];
+            return [...$plan, 'keep' => $keep, 'gallery_surplus' => $this->galleryTrim->surplus($imagesByCard, $keepId)];
         });
+        // po zatwierdzeniu scalenia — rejectAndDelete ma własną transakcję i przenumerowuje galerię karty
+        if (($result['gallery_surplus'] ?? []) !== []) {
+            $result['images_trimmed'] = $this->galleryTrim->remove($result['gallery_surplus']);
+            $result['keep']?->refresh();
+        }
+
+        return $result;
     }
 
     /**
@@ -604,7 +618,7 @@ final class B2bSizePriceMerger
             $plan['tenders'] > 0 ? ' · przetargi '.$plan['tenders'] : '',
             $plan['sku_to'] !== null ? ' · SKU → '.$plan['sku_to'] : '',
             $plan['sku_note'] !== null ? ' · '.$plan['sku_note'] : '',
-        );
+        ).(($plan['images_trimmed'] ?? 0) > 0 ? ' · zdjęć ponad jedno na kolor: '.$plan['images_trimmed'] : '');
     }
 
     /** Ścieżka nowej kopii zapasowej scalania konta (storage/app/repair-backups); null — brak katalogu. */

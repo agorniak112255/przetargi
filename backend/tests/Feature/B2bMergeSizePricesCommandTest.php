@@ -12,6 +12,8 @@ use App\Models\CardRedirect;
 use App\Models\Client;
 use App\Models\PriceList;
 use App\Models\Product;
+use App\Models\ProductImage;
+use App\Models\ProductImageRejection;
 use App\Models\ProductPriceHistory;
 use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
@@ -216,6 +218,13 @@ final class B2bMergeSizePricesCommandTest extends TestCase
         $white = Product::query()->where('sku', 'VI')->sole();
         $red = Product::query()->where('sku', 'RD')->sole();
         $item = TenderItem::query()->create(['tender_id' => $this->tender()->id, 'line_no' => 1, 'requirement' => 'Hełm czerwony', 'main_product_id' => $red->id]);
+        // galerie kart kolorów: po scaleniu zostaje jedno zdjęcie na kolor (decyzja właściciela 28.09.2026)
+        $gallery = fn (Product $card, int $count): array => array_map(fn (int $i): ProductImage => ProductImage::query()->create([
+            'product_id' => $card->id, 'b2b_account_id' => $this->account->id, 'path' => 'products/'.$card->sku.'-'.$i.'.jpg',
+            'source_url' => 'https://b2b.example.test/'.$card->sku.'-'.$i.'.jpg', 'is_primary' => $i === 0, 'sort_order' => $i,
+        ]), range(0, $count - 1));
+        [$whiteMain] = $gallery($white, 3);
+        [$redMain] = $gallery($red, 2);
 
         $this->travel(5)->minutes();
         $members = [$colour('VI', 'biały', 50.0, true), $colour('RD', 'czerwony', 55.0, true)];
@@ -242,6 +251,82 @@ final class B2bMergeSizePricesCommandTest extends TestCase
         $this->assertSame('czerwony', $fresh->main_variant_label);
         $this->assertSame('G3000CUV-RD', $fresh->main_variant_sku);
         $this->assertSame('55.00', (string) $fresh->offerVariant()?->purchase_price);
+        // główne zdjęcie każdej karty koloru zostaje, reszta przez odrzucenie (galeria dostawcy ich nie dołoży)
+        $this->assertSame([$whiteMain->id, $redMain->id], ProductImage::query()->where('product_id', $keep->id)->orderBy('id')->pluck('id')->all());
+        $this->assertSame(3, ProductImageRejection::query()->where('product_id', $keep->id)->where('reason', ProductImageRejection::REASON_COLOUR_GALLERY)->count());
+        // kopia scalenia ma galerie sprzed scalenia — polecenie porządkujące nie ma już czego usuwać
+        $this->artisan('b2b:trim-colour-gallery', ['account' => $this->account->id])
+            ->expectsOutputToContain('Kart modeli: 0 · zdjęć ponad jedno na kolor: 0')
+            ->assertSuccessful();
+        $this->cleanBackups();
+    }
+
+    public function test_size_merge_keeps_every_image(): void
+    {
+        [$small, $large] = $this->legacySplit(['S', 'M', 'L'], 100.0, ['XL'], 120.0);
+        foreach ([$small, $small, $large, $large] as $i => $card) {
+            ProductImage::query()->create([
+                'product_id' => $card->id, 'b2b_account_id' => $this->account->id, 'path' => 'products/k1-'.$i.'.jpg',
+                'source_url' => 'https://b2b.example.test/k1-'.$i.'.jpg', 'is_primary' => $i % 2 === 0, 'sort_order' => $i % 2,
+            ]);
+        }
+
+        $this->artisan('b2b:merge-size-prices', ['account' => $this->account->id, '--apply' => true])
+            ->expectsOutputToContain('Scalono wyrobów: 1')
+            ->assertSuccessful();
+
+        // rozmiary to jeden wyrób — galeria cała
+        $this->assertSame(4, ProductImage::query()->where('product_id', $small->id)->count());
+        $this->assertSame(0, ProductImageRejection::query()->count());
+        $this->cleanBackups();
+    }
+
+    public function test_trim_command_leaves_one_image_per_colour_card_from_the_merge_backup(): void
+    {
+        $keep = Product::query()->create(['sku' => 'M1', 'name' => 'Model M1', 'manufacturer' => 'MASCOT', 'currency' => 'PLN']);
+        $image = fn (int $i, bool $primary, int $order): array => ProductImage::query()->create([
+            'product_id' => $keep->id, 'b2b_account_id' => $this->account->id, 'path' => 'products/m1-'.$i.'.jpg',
+            'source_url' => 'https://b2b.example.test/m1-'.$i.'.jpg', 'is_primary' => $primary, 'sort_order' => $order,
+        ])->only(['id', 'is_primary', 'sort_order']);
+        // galerie kart kolorów sprzed scalenia (dziś wszystkie na karcie modelu): karta modelu 2 zdjęcia, łączona 3
+        $keepRows = [$image(1, true, 0), $image(2, false, 1)];
+        $dropRows = [$image(3, false, 2), $image(4, true, 0), $image(5, false, 1)];
+        $later = ProductImage::query()->create([
+            'product_id' => $keep->id, 'path' => 'products/m1-web.jpg', 'source_url' => 'https://web.example.test/m1.jpg', 'sort_order' => 9,
+        ]);
+        $line = static fn (array $row): string => json_encode($row, JSON_UNESCAPED_UNICODE)."\n";
+        $cards = [
+            ['role' => 'keep', 'product' => ['id' => $keep->id], 'rows' => ['product_images' => $keepRows]],
+            ['role' => 'drop', 'product' => ['id' => 999001], 'rows' => ['product_images' => $dropRows]],
+        ];
+        @mkdir(storage_path('app/repair-backups'), 0775, true);
+        file_put_contents(
+            storage_path('app/repair-backups/size-prices-'.$this->account->id.'-20260928-190000.jsonl'),
+            $line(['status' => 'before', 'sku' => 'M1', 'keep_product_id' => $keep->id, 'group' => ['variant_summary' => 'Kolory: czarny, granat'], 'cards' => $cards])
+            .$line(['status' => 'committed', 'sku' => 'M1', 'keep_product_id' => $keep->id])
+            // scalenie rozmiarów i scalenie wycofane — bez zmian
+            .$line(['status' => 'before', 'sku' => 'M2', 'keep_product_id' => $keep->id, 'group' => ['variant_summary' => 'Rozmiary: S; M'], 'cards' => $cards])
+            .$line(['status' => 'committed', 'sku' => 'M2', 'keep_product_id' => $keep->id])
+            .$line(['status' => 'before', 'sku' => 'M3', 'keep_product_id' => $keep->id, 'group' => ['variant_summary' => 'Kolory: biel'], 'cards' => $cards])
+            .$line(['status' => 'rolled_back', 'sku' => 'M3']),
+        );
+
+        $this->artisan('b2b:trim-colour-gallery', ['account' => $this->account->id])
+            ->expectsOutputToContain('Kart modeli: 1 · zdjęć ponad jedno na kolor: 3')
+            ->assertSuccessful();
+        $this->assertSame(6, ProductImage::query()->where('product_id', $keep->id)->count());
+
+        $this->artisan('b2b:trim-colour-gallery', ['account' => $this->account->id, '--apply' => true])
+            ->expectsOutputToContain('usunięte: 3')
+            ->assertSuccessful();
+        // główne zdjęcie każdej karty koloru i zdjęcie spoza scalanych galerii zostają
+        $this->assertSame(
+            [$keepRows[0]['id'], $dropRows[1]['id'], $later->id],
+            ProductImage::query()->where('product_id', $keep->id)->orderBy('id')->pluck('id')->all(),
+        );
+        $this->artisan('b2b:trim-colour-gallery', ['account' => $this->account->id])
+            ->expectsOutputToContain('Kart modeli: 0 · zdjęć ponad jedno na kolor: 0')
+            ->assertSuccessful();
         $this->cleanBackups();
     }
 
