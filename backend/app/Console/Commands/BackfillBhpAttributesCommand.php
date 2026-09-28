@@ -30,6 +30,7 @@ final class BackfillBhpAttributesCommand extends Command
 
     protected $signature = 'products:backfill-bhp-attributes
                             {--force : Przelicz też karty, które mają już użyteczne attributes}
+                            {--fresh : Licz od zera, bez zapisanych attributes — tylko karty bez danych z wzbogacania AI (z --force)}
                             {--limit=0 : Maksymalna liczba zmienianych kart (0 = bez limitu)}
                             {--manufacturer= : Tylko karty tego producenta (bez rozróżniania wielkości liter)}
                             {--price-list= : Tylko karty z tego cennika (numer)}
@@ -66,8 +67,15 @@ final class BackfillBhpAttributesCommand extends Command
         /** @var array<string, int> $fieldCounts */
         $fieldCounts = [];
 
+        $fresh = (bool) $this->option('fresh');
+        if ($fresh && ! $force) {
+            $this->error('--fresh działa razem z --force (przelicza karty, które mają już attributes).');
+
+            return self::FAILURE;
+        }
+
         $query->orderBy('id')->chunkById(100, function ($products) use (
-            $normalizer, $force, $limit, &$total, &$skipped, &$changes, &$fieldCounts,
+            $normalizer, $force, $fresh, $limit, &$total, &$skipped, &$changes, &$fieldCounts,
         ): bool {
             foreach ($products as $product) {
                 /** @var Product $product */
@@ -79,7 +87,7 @@ final class BackfillBhpAttributesCommand extends Command
 
                     continue;
                 }
-                $new = $normalizer->forProduct($product);
+                $new = $normalizer->forProduct($fresh ? $this->withoutStoredAttributes($product) : $product);
                 $fields = $this->changedFields($old, $new);
                 if ($fields === []) {
                     continue;
@@ -149,6 +157,29 @@ final class BackfillBhpAttributesCommand extends Command
         $this->line("Przywrócenie stanu sprzed: --restore=\"{$backup}\"");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Kopia karty bez zapisanych attributes (--fresh). Zapisana kategoria ma pierwszeństwo w normalizatorze, więc
+     * raz źle policzona trwa przy każdym przeliczeniu (Bolle 28.09.2026: okulary WELLINGTON jako obuwie, gogle
+     * SUPERBLAST jako półmaska). Karta z danymi z wzbogacania AI zostaje z zapisanymi attributes — tam kategoria
+     * pochodzi od modelu i to ona ma pierwszeństwo.
+     */
+    private function withoutStoredAttributes(Product $product): Product
+    {
+        $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
+        $fromEnrichment = array_intersect_key(
+            $payload,
+            array_flip(['features', 'norms', 'certificates', 'materials', 'use_cases', 'specs', 'source_urls']),
+        ) !== [];
+        if ($fromEnrichment) {
+            return $product;
+        }
+        unset($payload['attributes']);
+        $probe = $product->replicate();
+        $probe->enrichment_payload = $payload === [] ? null : $payload;
+
+        return $probe;
     }
 
     /** Zapytanie zawężone opcjami; null (z komunikatem), gdy cennika nie ma. */

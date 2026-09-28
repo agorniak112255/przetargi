@@ -65,6 +65,64 @@ final class BackfillBhpAttributesCommandTest extends TestCase
         ]);
     }
 
+    public function test_fresh_recomputes_stale_kategoria_but_keeps_the_model_one_on_enriched_cards(): void
+    {
+        // Bolle 28.09.2026: okulary WELLINGTON z zapisaną kategorią „obuwie”, której przeliczenie nie ruszało
+        $stale = Product::query()->create([
+            'sku' => 'PRBWELL20E',
+            'name' => 'WELLINGTON – Unisex okulary z filtrem światła niebieskiego, czytniki +3',
+            'manufacturer' => 'Bolle',
+            'category' => 'BLUE LIGHT › FRAME TYPE › Screeners',
+            'enrichment_payload' => ['attributes' => ['kategoria_bhp' => 'obuwie', 'typ_wyrobu' => 'kalosz'], 'replaced_description' => 'x'],
+        ]);
+        // ta sama zapisana kategoria na karcie z wzbogacania — tam decyduje model, --fresh jej nie rusza
+        $enriched = Product::query()->create([
+            'sku' => 'PRBWELL20D',
+            'name' => 'WELLINGTON – Unisex okulary z filtrem światła niebieskiego, +2.5',
+            'manufacturer' => 'Bolle',
+            'enrichment_payload' => ['attributes' => ['kategoria_bhp' => 'obuwie', 'typ_wyrobu' => 'kalosz'], 'features' => ['Filtr światła niebieskiego']],
+        ]);
+
+        $this->artisan('products:backfill-bhp-attributes', ['--fresh' => true, '--manufacturer' => 'Bolle'])
+            ->expectsOutputToContain('--fresh działa razem z --force')
+            ->assertFailed();
+        $this->artisan('products:backfill-bhp-attributes', ['--force' => true, '--manufacturer' => 'Bolle', '--apply' => true])
+            ->assertSuccessful();
+        $this->assertSame('obuwie', $stale->refresh()->enrichment_payload['attributes']['kategoria_bhp']);
+
+        $this->artisan('products:backfill-bhp-attributes', ['--force' => true, '--fresh' => true, '--manufacturer' => 'Bolle', '--apply' => true])
+            ->assertSuccessful();
+
+        $stale->refresh();
+        $this->assertSame('ochrona_oczu', $stale->enrichment_payload['attributes']['kategoria_bhp']);
+        $this->assertSame('glasses', $stale->enrichment_payload['attributes']['typ_wyrobu']);
+        $this->assertSame('x', $stale->enrichment_payload['replaced_description']);
+        $this->assertSame('obuwie', $enriched->refresh()->enrichment_payload['attributes']['kategoria_bhp']);
+    }
+
+    public function test_welding_helmet_named_in_the_name_is_face_protection_despite_the_helmets_shop_category(): void
+    {
+        $helmet = Product::query()->create([
+            'sku' => 'ELECTN80W',
+            'name' => 'ELECTRO – Przyłbica spawalnicza',
+            'manufacturer' => 'Bolle',
+            'category' => 'INDUSTRIAL › HELMETS › Welding helmets',
+        ]);
+        $visor = Product::query()->create([
+            'sku' => 'FAFLASHINT',
+            'name' => 'Wewnętrzny wizjer ochronny - 105x92 mm - do przyłbicy FLASH',
+            'manufacturer' => 'Bolle',
+            'category' => 'INDUSTRIAL › GLASSES › Spare Lens',
+        ]);
+
+        $this->artisan('products:backfill-bhp-attributes', ['--force' => true, '--fresh' => true, '--manufacturer' => 'Bolle', '--apply' => true])
+            ->assertSuccessful();
+
+        $this->assertSame('ochrona_twarzy', $helmet->refresh()->enrichment_payload['attributes']['kategoria_bhp']);
+        $this->assertSame('welding_helmet', $helmet->enrichment_payload['attributes']['typ_wyrobu']);
+        $this->assertSame('ochrona_twarzy', $visor->refresh()->enrichment_payload['attributes']['kategoria_bhp']);
+    }
+
     public function test_preview_shows_differences_and_changes_nothing(): void
     {
         $this->artisan('products:backfill-bhp-attributes', ['--force' => true, '--manufacturer' => 'cederroth'])

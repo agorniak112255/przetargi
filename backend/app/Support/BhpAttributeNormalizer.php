@@ -295,6 +295,7 @@ final class BhpAttributeNormalizer
         // opis bez klas obuwia („klasa Dfl-s1” maty to nie S1).
         $out['kategoria_bhp'] = $outsidePpe ? 'inne' : $this->normalizeKategoria(
             $this->nullableString($raw['kategoria_bhp'] ?? null)
+            ?? $this->eyeOrFaceKategoriaFromName($assortment, $context)
             ?? $this->detectKategoria($identity)
             ?? $assortment->kategoriaFromFamily($assortment->familyFromDescription($katText))
         );
@@ -620,6 +621,25 @@ final class BhpAttributeNormalizer
         ];
 
         return $map[$v] ?? (in_array($v, self::KATEGORIE, true) ? $v : null);
+    }
+
+    /**
+     * Nazwa, która mówi „przyłbica / osłona twarzy” albo „okulary / gogle”, rozstrzyga przed ścieżką kategorii sklepu.
+     * W tożsamości kategoria stoi przed nazwą, a rodzinę daje pierwsze trafienie — Bolle trzyma przyłbice spawalnicze
+     * i ich filtry w „INDUSTRIAL › HELMETS › …”, więc „ELECTRO – Przyłbica spawalnicza” była ochroną głowy, a wizjery
+     * do przyłbic z „GLASSES › Spare Lens” okularami (28.09.2026). Tylko te dwie rodziny: symulacja pełnego
+     * pierwszeństwa nazwy na produkcji zmieniała 112 kart, a część na gorzej (koszulki JHK „SB” jako obuwie,
+     * wkładki E-A-R „Caps” jako głowa); z tym zawężeniem 14 kart i wszystkie trafnie.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    private function eyeOrFaceKategoriaFromName(PpeAssortment $assortment, array $context): ?string
+    {
+        $family = $assortment->family(trim(($context['name'] ?? '').' '.($context['sku'] ?? '')));
+
+        return in_array($family, [PpeAssortment::FAMILY_FACE, PpeAssortment::FAMILY_EYES], true)
+            ? $assortment->kategoriaFromFamily($family)
+            : null;
     }
 
     private function detectKategoria(string $text): ?string
