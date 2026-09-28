@@ -54,6 +54,7 @@ export function AdminUsers() {
   const [sendOnCreate, setSendOnCreate] = useState(true)
   const [editId, setEditId] = useState<number | null>(null)
   const [editRole, setEditRole] = useState('handlowiec')
+  const [editName, setEditName] = useState('')
   const [editEmail, setEditEmail] = useState('')
   const [editPassword, setEditPassword] = useState('')
   const [editAppearance, setEditAppearance] = useState(NO_APPEARANCE)
@@ -125,6 +126,7 @@ export function AdminUsers() {
     try {
       const body: Record<string, string | null> = {
         role: editRole,
+        name: editName.trim(),
         email: editEmail.trim(),
         ...appearancePayload(editAppearance),
       }
@@ -192,7 +194,7 @@ export function AdminUsers() {
         <h2 className="sm:col-span-2 text-sm font-semibold">Nowy użytkownik</h2>
         <input
           className="rounded border px-2 py-1.5 text-sm"
-          placeholder="Imię"
+          placeholder="Imię i nazwisko"
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
@@ -251,7 +253,7 @@ export function AdminUsers() {
       <table className="w-full text-left text-sm">
         <thead>
           <tr className="border-b bg-slate-50 text-xs uppercase text-slate-500">
-            <th className="p-2">Nazwa</th>
+            <th className="p-2">Imię i nazwisko</th>
             <th className="p-2">E-mail</th>
             <th className="p-2">Rola</th>
             <th className="p-2">Wygląd</th>
@@ -261,7 +263,19 @@ export function AdminUsers() {
         <tbody>
           {users.map((u) => (
             <tr key={u.id} className="border-b">
-              <td className="p-2">{u.name}</td>
+              <td className="p-2">
+                {editId === u.id ? (
+                  <input
+                    required
+                    placeholder="Imię i nazwisko"
+                    className="w-full min-w-[160px] rounded border px-2 py-1 text-xs"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                  />
+                ) : (
+                  u.name
+                )}
+              </td>
               <td className="p-2">
                 {editId === u.id ? (
                   <input
@@ -326,7 +340,7 @@ export function AdminUsers() {
                     />
                     <button
                       type="button"
-                      disabled={busy || !editEmail.trim()}
+                      disabled={busy || !editEmail.trim() || !editName.trim()}
                       onClick={() => void onSaveEdit(u.id)}
                       className="rounded bg-green-600 px-2 py-1 text-xs text-white disabled:opacity-50"
                     >
@@ -360,6 +374,7 @@ export function AdminUsers() {
                       onClick={() => {
                         setEditId(u.id)
                         setEditRole(u.role)
+                        setEditName(u.name)
                         setEditEmail(u.email)
                         setEditPassword('')
                         setEditAppearance(appearanceValue(u))
