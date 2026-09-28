@@ -25,6 +25,7 @@ use App\Support\PpeAssortment;
 use App\Support\PpeFilterType;
 use App\Support\ProductFeatureMatch;
 use App\Support\ProductModelFuzzy;
+use App\Support\ProductVariantFacts;
 use App\Support\RequirementCheck\CardSource;
 use App\Support\RequirementCheck\CardSources;
 use App\Support\RequirementCheck\DimensionChecker;
@@ -210,7 +211,7 @@ final class ProductAiSearchService
      * Wersja promptu rankingu — ląduje w `search_events`, żeby spadek jakości dało
      * się powiązać ze zmianą instrukcji. Podnieś przy każdej zmianie rankMessages().
      */
-    public const RANK_PROMPT_VERSION = 'rank-2026-09-27-max10';
+    public const RANK_PROMPT_VERSION = 'rank-2026-09-28-variants';
 
     /** Jedna karta w odpowiedzi rankingu. */
     private const RANK_MATCH_JSON = '{"id":1,"score":0-100,"reason":"uzasadnienie","missing_key":[]}';
@@ -5291,7 +5292,34 @@ final class ProductAiSearchService
             return $this->uniqueProducts($bySku->concat($byName), $cap);
         }
 
-        return $this->uniqueProducts($this->productsByShopFieldCodes($codes, $cap), $cap);
+        // Kod koloru bywa tylko w wierszu wariantu karty („ARMEN-9007-1010-42” na karcie „ARMEN 9007 S1”) — przed
+        // tabelką sklepu, bo kod wariantu to kod tej karty, a tabelka bywa cudza.
+        return $this->uniqueProducts(
+            $this->productsByVariantSku($codes, $cap)->concat($this->productsByShopFieldCodes($codes, $cap)),
+            $cap
+        );
+    }
+
+    /**
+     * Karty, których aktywny wariant ma kod zaczynający się od podanego (ProductVariantFacts::productIdsBySku, kody od
+     * pięciu znaków), w kolejności trafień.
+     *
+     * @param  list<string>  $codes
+     * @return Collection<int, Product>
+     */
+    private function productsByVariantSku(array $codes, int $cap): Collection
+    {
+        $ids = app(ProductVariantFacts::class)->productIdsBySku($codes, $cap);
+        if ($ids === []) {
+            return collect();
+        }
+        $order = array_flip($ids);
+
+        return $this->productBaseQuery()
+            ->whereIn('id', $ids)
+            ->get()
+            ->sortBy(static fn (Product $p): int => $order[(int) $p->id] ?? PHP_INT_MAX)
+            ->values();
     }
 
     /**
@@ -6426,6 +6454,13 @@ final class ProductAiSearchService
             $card['description'] = mb_substr((string) ($product->description ?? ''), 0, self::RANK_CARD_DESCRIPTION_CHARS);
             $card['features'] = array_slice($this->stringList($payload['features'] ?? null), 0, self::RANK_CARD_LIST_ROWS);
         }
+        // Warianty do wyboru w ofercie (etap A łączenia wariantów kolorystycznych, 28.09.2026): karta scalona z kilku
+        // kolorów ma w nazwie jeden z nich, a żądany kolor stoi tylko w wierszu wariantu. Klucz tylko przy co najmniej
+        // dwóch barwach — karta bez wariantów idzie do modelu bez zmian.
+        $variants = app(ProductVariantFacts::class)->rankSummary($product);
+        if ($variants !== null) {
+            $card['variants'] = $variants;
+        }
         // Dosłowne fragmenty z CAŁEGO opisu, cech i specyfikacji, które potwierdzają warunki rankingu, a których model
         // nie widzi w przyciętych polach. Przetarg 1 poz. 5: „odporność na zginanie do -50°C” stoi w opisie SBM01 FLUO
         // na znaku 950 — model zgłaszał brak kluczowego warunku i kod obcinał ocenę 95 do 50 w każdym przebiegu.
@@ -6572,7 +6607,10 @@ final class ProductAiSearchService
         array $retrieveIntent = [],
     ): array {
         $short = $this->useShortSearchCards($task);
+        // warianty wszystkich kandydatów jednym zapytaniem, zamiast osobnego przy każdej karcie
+        app(ProductVariantFacts::class)->prime($candidates);
         $cards = $candidates->map(fn (Product $p): array => $this->rankCard($p, $short, $constraints))->values()->all();
+        $hasVariants = array_filter($cards, static fn (array $card): bool => isset($card['variants'])) !== [];
         // Zabudowana pięta ze zdjęcia (decyzja właściciela z 25.09.2026) — osobnym polem, nie jako cytat z karty.
         $photo = $this->photoHeelInferences($query, $needed, $constraints, $candidates);
         foreach ($cards as $i => $card) {
@@ -6606,9 +6644,11 @@ final class ProductAiSearchService
         }
         // shop_fields = tabelka z karty dostawcy; bez wymienienia pola model nie wie, że istnieje, i uzna
         // warunek za niepotwierdzony, choć dowód stoi na karcie.
-        $proofFields = $short
+        $proofFields = ($short
             ? 'name/norms/specs/shop_fields/payload_norms/description_norms/constraint_evidence/use_cases/heat_celsius'
-            : 'name/norms/specs/shop_fields/payload_norms/description_norms/constraint_evidence/features/use_cases/description';
+            : 'name/norms/specs/shop_fields/payload_norms/description_norms/constraint_evidence/features/use_cases/description')
+            // pole variants tylko wtedy, gdy któraś karta je ma — prompt bez wariantów zostaje taki jak był
+            .($hasVariants ? '/variants' : '');
         $constraintLine = $constraints === []
             ? ''
             : "\nWarunki z analizy (dowód z {$proofFields}, nie zgaduj; kluczowy bez dowodu → score najwyżej 50, "
@@ -6645,6 +6685,10 @@ final class ProductAiSearchService
                     .'na karcie → nie zwracaj albo score najwyżej 50 i nazwij brak w reason '
                     .'(kombinezon pszczelarski / EN 343 ≠ kwas siarkowy). '
                     .'Kolor ostrzegawczy / fluorescencyjny / odblaskowy (zwiększona widzialność) to funkcja ochronna → KLUCZOWY. '
+                    .($hasVariants ? 'Pole variants = warianty tej karty do wyboru w ofercie (kolor, rozmiar, kod): zwykły kolor, '
+                        .'rozmiar albo kod z wymagania obecny w variants = warunek spełniony, nie wpisuj go do missing_key; '
+                        .'brak na liście = brak dowodu jak dotąd. Kolor ostrzegawczy/fluorescencyjny: variants potwierdza tylko '
+                        .'barwę — wysoką widzialność (fluo, EN ISO 20471) potwierdzają wyłącznie pozostałe pola karty. ' : '')
                     .'c) Warunek DRUGORZĘDNY (rozmiary, opakowanie, zwykły kolor, długość, grubość, wzór, oznakowanie, badania '
                     .'okresowe, instrukcje) bez wzmianki na karcie → NIE odrzucaj; score 70-89 zależnie od liczby braków, '
                     .'braki w reason. Wszystkie kluczowe potwierdzone i brak sprzeczności → score 90-99. '

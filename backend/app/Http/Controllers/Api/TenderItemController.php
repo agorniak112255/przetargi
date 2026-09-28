@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
+use App\Models\ProductVariant;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\BattlecardService;
@@ -20,6 +21,9 @@ use Illuminate\Validation\ValidationException;
 
 class TenderItemController extends Controller
 {
+    /** Kolumny wariantu w odpowiedziach z pozycjami (wybór wariantu w ofercie) — także TenderController. */
+    public const VARIANT_COLUMNS = 'id,product_id,kind,sku,label,purchase_price,currency,availability,sort_order,removed_at';
+
     public function __construct(
         private readonly TenderPricingService $pricing,
         private readonly TenderWorkflowService $workflow,
@@ -241,6 +245,8 @@ class TenderItemController extends Controller
 
         $data = $request->validate([
             'main_product_id' => ['sometimes', 'nullable', 'exists:products,id'],
+            // przynależność do karty i wycofanie sprawdza applyVariant (karta może zmieniać się w tym samym żądaniu)
+            'main_variant_id' => ['sometimes', 'nullable', 'integer'],
             'companion_product_id' => ['sometimes', 'nullable', 'exists:products,id'],
             'quantity' => ['sometimes', 'integer', 'min:1'],
             'offer_price' => ['sometimes', 'nullable', 'numeric', 'min:0'],
@@ -270,6 +276,8 @@ class TenderItemController extends Controller
             'companion_offer_price' => $item->companion_offer_price,
             'ai_match_percent' => $item->ai_match_percent,
             'custom_name' => $item->custom_name,
+            'main_variant_id' => $item->main_variant_id,
+            'main_variant_label' => $item->main_variant_label,
         ];
 
         if (array_key_exists('custom_name', $data)) {
@@ -279,6 +287,7 @@ class TenderItemController extends Controller
             $item->custom_url = $this->nullableTrim($data['custom_url']);
         }
 
+        $repricedFromCard = false;
         if (array_key_exists('main_product_id', $data)) {
             $item->main_product_id = $data['main_product_id'];
             if ($data['main_product_id'] !== null) {
@@ -290,6 +299,7 @@ class TenderItemController extends Controller
                 if (! array_key_exists('offer_price', $data)
                     && $product !== null && (float) $product->purchase_price > 0) {
                     $item->offer_price = $this->pricing->offerFromProduct($tender, $product);
+                    $repricedFromCard = true;
                 }
                 // Ocena i uzasadnienie opisują kartę, nie cenę. Dotąd całe przeliczenie wisiało pod
                 // warunkiem „żądanie nie niesie ceny”, a panel przy „Zapisz” cenę wysyła zawsze —
@@ -312,6 +322,24 @@ class TenderItemController extends Controller
             if ($data['main_product_id'] === null && ! $item->hasCustomOffer()) {
                 $item->ai_match_reasons = null;
                 $item->match_source = null;
+            }
+        }
+
+        // Wariant po karcie: zmiana karty bez wariantu w żądaniu zeruje wariant przy zapisie (TenderItem::saving).
+        $variantChanged = array_key_exists('main_variant_id', $data)
+            && $this->applyVariant($item, $data['main_variant_id']);
+        // Cena oferty z wariantu, gdy ma własną cenę — także wtedy, gdy blok karty wyżej przeliczył cenę z karty,
+        // a wariant zostaje (panel wysyła main_product_id przy każdym zapisie). Zdjęty wariant = z powrotem cena karty.
+        $variant = $item->offerVariant();
+        if (! array_key_exists('offer_price', $data) && ($variant !== null || $variantChanged)
+            && ($repricedFromCard || $variantChanged)) {
+            $mainProduct = Product::query()->find($item->main_product_id);
+            $variantOffer = $variant !== null ? $this->pricing->offerFromVariant($tender, $variant, $mainProduct) : null;
+            if ($variantOffer !== null) {
+                $item->offer_price = $variantOffer;
+            } elseif ($variantChanged && ! $repricedFromCard
+                && $mainProduct !== null && (float) $mainProduct->purchase_price > 0) {
+                $item->offer_price = $this->pricing->offerFromProduct($tender, $mainProduct);
             }
         }
 
@@ -371,10 +399,22 @@ class TenderItemController extends Controller
                 'ai_match_percent' => $item->ai_match_percent,
                 'match_source' => $item->match_source,
                 'custom_name' => $item->custom_name,
+                'main_variant_id' => $item->main_variant_id,
+                'main_variant_label' => $item->main_variant_label,
             ],
         ]);
 
-        return response()->json($item->fresh(['mainProduct.images', 'companionProduct.images']));
+        $fresh = $item->fresh([
+            'mainProduct.images',
+            'mainProduct.activeVariants:'.self::VARIANT_COLUMNS,
+            'mainVariant:'.self::VARIANT_COLUMNS,
+            'companionProduct.images',
+        ]);
+        if ($fresh !== null) {
+            $this->pricing->appendVariantPricesPln($fresh);
+        }
+
+        return response()->json($fresh);
     }
 
     public function destroy(Request $request, Tender $tender, TenderItem $item): JsonResponse
@@ -435,6 +475,40 @@ class TenderItemController extends Controller
                 $item->companion_offer_price = $this->pricing->offerFromProduct($tender, $companion);
             }
         }
+    }
+
+    /**
+     * Ręczny wybór wariantu karty do oferty: tylko aktywny wiersz bieżącej karty pozycji (także karty zmienianej
+     * w tym samym żądaniu). Etykieta i kod kopiowane z chwili wyboru. Zwraca true, gdy wariant się zmienił.
+     */
+    private function applyVariant(TenderItem $item, mixed $variantId): bool
+    {
+        $before = $item->main_variant_id !== null ? (int) $item->main_variant_id : null;
+        if ($variantId === null) {
+            $item->clearVariant();
+            $item->setRelation('mainVariant', null);
+
+            return $before !== null;
+        }
+
+        $variant = $item->main_product_id === null ? null : ProductVariant::query()
+            ->whereKey((int) $variantId)
+            ->where('product_id', (int) $item->main_product_id)
+            ->whereNull('removed_at')
+            ->first();
+        if ($variant === null) {
+            throw ValidationException::withMessages([
+                'main_variant_id' => ['Wariant nie należy do karty tej pozycji albo został wycofany.'],
+            ]);
+        }
+
+        $item->main_variant_id = $variant->id;
+        $item->main_variant_label = mb_substr((string) $variant->label, 0, 255);
+        $item->main_variant_sku = $variant->sku !== null ? mb_substr((string) $variant->sku, 0, 255) : null;
+        $item->main_variant_source = 'manual';
+        $item->setRelation('mainVariant', $variant);
+
+        return $before !== (int) $variant->id;
     }
 
     private function nullableTrim(mixed $value): ?string

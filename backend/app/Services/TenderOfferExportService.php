@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Product;
+use App\Models\ProductVariant;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Support\OfferPricing;
@@ -18,6 +19,7 @@ final class TenderOfferExportService
     public function __construct(
         private readonly BattlecardService $battlecards,
         private readonly NbpExchangeRateService $fx,
+        private readonly TenderPricingService $pricing,
     ) {}
 
     /**
@@ -25,12 +27,14 @@ final class TenderOfferExportService
      */
     public function rows(Tender $tender): array
     {
-        $tender->loadMissing(['client', 'items.mainProduct', 'items.companionProduct', 'owner']);
+        $tender->loadMissing(['client', 'items.mainProduct', 'items.mainVariant', 'items.companionProduct', 'owner']);
         $rows = [];
         foreach ($tender->items as $item) {
             $product = $item->mainProduct;
             $companion = $item->companionProduct;
-            $purchase = $this->sumPurchasePln($product, $companion);
+            // wariant wybrany w ofercie: jego kod, etykieta przy nazwie i cena zakupu
+            $variant = $product !== null ? $item->offerVariant() : null;
+            $purchase = $this->sumPurchasePln($item, $product, $companion);
             $offer = $item->lineOfferUnit();
             $line = $offer !== null ? round($offer * (int) $item->quantity, 2) : null;
             $card = $this->battlecards->forItem($item);
@@ -49,8 +53,8 @@ final class TenderOfferExportService
             $rows[] = [
                 'line_no' => (int) $item->line_no,
                 'requirement' => (string) $item->requirement,
-                'sku' => $this->joinedSku($product, $companion),
-                'product_name' => $this->joinedName($item, $product, $companion),
+                'sku' => $this->joinedSku($product, $companion, $variant),
+                'product_name' => $this->joinedName($item, $product, $companion, $variant),
                 'catalog_name' => $this->joinedCatalogName($item, $product, $companion),
                 'manufacturer' => $this->joinedManufacturer($item, $product, $companion),
                 'custom_url' => $item->custom_url,
@@ -74,7 +78,7 @@ final class TenderOfferExportService
         return $rows;
     }
 
-    private function sumPurchasePln(?Product $main, ?Product $companion): ?float
+    private function sumPurchasePln(TenderItem $item, ?Product $main, ?Product $companion): ?float
     {
         $sum = 0.0;
         $has = false;
@@ -82,7 +86,7 @@ final class TenderOfferExportService
             if ($product === null) {
                 continue;
             }
-            $pln = $this->fx->purchasePln($product);
+            $pln = $product === $main ? $this->pricing->mainPurchasePln($item) : $this->fx->purchasePln($product);
             if ($pln === null || $pln <= 0) {
                 continue;
             }
@@ -93,21 +97,23 @@ final class TenderOfferExportService
         return $has ? round($sum, 2) : null;
     }
 
-    private function joinedSku(?Product $main, ?Product $companion): ?string
+    private function joinedSku(?Product $main, ?Product $companion, ?ProductVariant $variant = null): ?string
     {
+        $variantSku = trim((string) $variant?->sku);
         $parts = array_values(array_filter([
-            $main?->sku,
+            $variantSku !== '' ? $variantSku : $main?->sku,
             $companion?->sku,
         ], static fn (?string $sku): bool => is_string($sku) && $sku !== ''));
 
         return $parts === [] ? null : implode(' + ', $parts);
     }
 
-    private function joinedName(TenderItem $item, ?Product $main, ?Product $companion): string
+    private function joinedName(TenderItem $item, ?Product $main, ?Product $companion, ?ProductVariant $variant = null): string
     {
         $parts = [];
         if ($main !== null) {
-            $parts[] = ProductDisplayName::for($main, 80);
+            $label = trim((string) $variant?->label);
+            $parts[] = ProductDisplayName::for($main, 80).($label !== '' ? ' — '.$label : '');
         }
         if ($companion !== null) {
             $parts[] = ProductDisplayName::for($companion, 80);

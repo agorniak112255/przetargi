@@ -16,6 +16,7 @@ use App\Services\Presta\PrestaExportGateway;
 use App\Services\Presta\PrestaShopCatalogClient;
 use App\Services\Presta\PrestaShopExportClient;
 use App\Support\BrandDictionary;
+use App\Support\ProductVariantFacts;
 use App\Support\StorageOwnership;
 use Illuminate\Support\ServiceProvider;
 use Throwable;
@@ -29,6 +30,8 @@ class AppServiceProvider extends ServiceProvider
         $this->app->scoped(BrandDictionary::class);
         $this->app->scoped(EnrichmentAttemptLog::class);
         $this->app->scoped(EnrichmentLiveProgress::class);
+        // warianty kart czytane raz na żądanie/zadanie (bramka wariantu, ocena AI, wybór wariantu do oferty)
+        $this->app->scoped(ProductVariantFacts::class);
         $this->app->bind(PrestaCatalogGateway::class, PrestaShopCatalogClient::class);
         $this->app->bind(PrestaExportGateway::class, PrestaShopExportClient::class);
         // b2b:sync-due: w testach przebieg w tym samym procesie (bez podprocesów), poza testami — proces w tle na konto

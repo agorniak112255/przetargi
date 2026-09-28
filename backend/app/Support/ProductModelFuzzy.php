@@ -410,10 +410,14 @@ final class ProductModelFuzzy
     }
 
     /**
+     * Kody z kotwic, których karta nie niesie w nazwie ani SKU. Z $withVariants liczy się też kod albo etykieta
+     * aktywnego wariantu karty („ARMEN-9007-1010-42” na karcie „ARMEN 9007 S1”) — kolor do wyboru w ofercie to żądany
+     * wariant, nie inny. Przynależność karty do modelu (memberAnchors) dalej tylko z nazwy i SKU.
+     *
      * @param  list<array{codes: list<string>}>  $anchors
      * @return list<string>
      */
-    private function codesMissingOnCard(array $anchors, Product $product): array
+    private function codesMissingOnCard(array $anchors, Product $product, bool $withVariants = false): array
     {
         if ($anchors === []) {
             return [];
@@ -427,8 +431,51 @@ final class ProductModelFuzzy
                 }
             }
         }
+        if ($withVariants && $missing !== []) {
+            // każdy kod i etykieta wariantu osobno, kod jako cała liczba: „ARMEN-9007-1010-42” niesie 1010, numer
+            // „7000101012” (3M) już nie — w zbitym zapisie cyfry sąsiednich wartości dawały przypadkowe trafienia
+            $variantValues = $this->variantRawValues($product);
+            $missing = array_values(array_filter($missing, static function (string $code) use ($variantValues): bool {
+                $pattern = '/(?<!\d)'.preg_quote($code, '/').'(?!\d)/u';
+                foreach ($variantValues as $value) {
+                    if (preg_match($pattern, $value) === 1) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }));
+        }
 
         return $missing;
+    }
+
+    /**
+     * Surowe kody i etykiety aktywnych wariantów karty (ProductVariantFacts) — do bramki wariantu (codesMissingOnCard)
+     * i uzasadnienia (otherVariantCodes). Poza aplikacją (czysty test jednostkowy) i przy błędzie bazy — pusto.
+     *
+     * @return list<string>
+     */
+    private function variantRawValues(Product $product): array
+    {
+        if ($product->id === null) {
+            return [];
+        }
+        try {
+            $rows = app(ProductVariantFacts::class)->activeRows($product);
+        } catch (Throwable) {
+            return [];
+        }
+        $out = [];
+        foreach ($rows as $row) {
+            foreach ([(string) $row['sku'], $row['label']] as $value) {
+                if (trim($value) !== '') {
+                    $out[] = $value;
+                }
+            }
+        }
+
+        return $out;
     }
 
     /** Oznaczenie klasy i cechy obuwia wg EN ISO 20345/20347 („S1”, „S1P”, „P”, „SRC”, „ESD”, „S3-SRC”). */
@@ -508,7 +555,7 @@ final class ProductModelFuzzy
         }
         $missing = [];
         foreach ($this->decidingAnchors($requirement, $product, $anchors) as $anchor) {
-            $lacking = $this->codesMissingOnCard([$anchor], $product);
+            $lacking = $this->codesMissingOnCard([$anchor], $product, true);
             if ($lacking === []) {
                 return [];
             }
@@ -526,7 +573,7 @@ final class ProductModelFuzzy
     public function isRequestedVariant(string $requirement, Product $product): bool
     {
         foreach ($this->decidingAnchors($requirement, $product, $this->variantAnchors($requirement)) as $anchor) {
-            if ($this->codesMissingOnCard([$anchor], $product) === []) {
+            if ($this->codesMissingOnCard([$anchor], $product, true) === []) {
                 return true;
             }
         }
@@ -634,21 +681,25 @@ final class ProductModelFuzzy
         }
         $codes = array_merge(...array_map(static fn (array $anchor): array => $anchor['codes'], $anchors));
         $needles = $this->needles($requirement);
-        // Normy z rokiem i numerem („EN ISO 20345:2011”, „EN 1149-5”) i akty prawne to nie wariant — jak w variantCodes().
-        $text = $this->stripNorms((string) $product->name.' '.(string) $product->sku);
-        preg_match_all('/\b\d{4}\b/u', $text, $m, PREG_OFFSET_CAPTURE);
         $out = [];
-        foreach ($m[0] ?? [] as [$code, $offset]) {
-            $code = (string) $code;
-            if (in_array($code, $codes, true) || in_array($code, $out, true) || $this->isInModelNeedle($code, $needles)) {
-                continue;
+        // Nazwa i SKU karty, potem każdy kod i etykieta aktywnego wariantu osobno („ARMEN-9007-6660-42” → 6660) — tylko
+        // do uzasadnienia, o innym wariancie rozstrzyga missingVariantCodes.
+        foreach ([(string) $product->name.' '.(string) $product->sku, ...$this->variantRawValues($product)] as $source) {
+            // Normy z rokiem i numerem („EN ISO 20345:2011”, „EN 1149-5”) i akty prawne to nie wariant — jak w variantCodes().
+            $text = $this->stripNorms($source);
+            preg_match_all('/\b\d{4}\b/u', $text, $m, PREG_OFFSET_CAPTURE);
+            foreach ($m[0] ?? [] as [$code, $offset]) {
+                $code = (string) $code;
+                if (in_array($code, $codes, true) || in_array($code, $out, true) || $this->isInModelNeedle($code, $needles)) {
+                    continue;
+                }
+                // „1000 V”, „2021 r.” na karcie to miara i data, nie wariant — jak w variantCodes()
+                $parts = preg_split('/\s+/u', substr($text, $offset), 3) ?: [];
+                if ($this->isQuantity($parts[0] ?? '', $parts[1] ?? null)) {
+                    continue;
+                }
+                $out[] = $code;
             }
-            // „1000 V”, „2021 r.” na karcie to miara i data, nie wariant — jak w variantCodes()
-            $parts = preg_split('/\s+/u', substr($text, $offset), 3) ?: [];
-            if ($this->isQuantity($parts[0] ?? '', $parts[1] ?? null)) {
-                continue;
-            }
-            $out[] = $code;
         }
 
         return $out;

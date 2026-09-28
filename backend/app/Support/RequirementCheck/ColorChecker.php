@@ -16,6 +16,7 @@ use App\Support\CatalogSlangDictionary;
  * „Odblaskowy” nie jest fluorescencyjny: taśma odblaskowa nie czyni odzieży barwą wysokiej widzialności.
  * Wymagana barwa części („z czarnym mankietem”, „Podeszwa: czarna”), zaprzeczona („niedostępny
  * w kolorze czarnym”) albo z nazwy-marki („Blue Grip”) nie potwierdza koloru wyrobu → co najwyżej unclear.
+ * Etykieta wariantu karty (CardSource::VARIANT) w wymaganej barwie → ok z uwagą o wyborze wariantu w ofercie.
  */
 final class ColorChecker implements ParameterChecker
 {
@@ -98,6 +99,8 @@ final class ColorChecker implements ParameterChecker
 
     private const NOTE_HI_VIS_ONLY = 'Karta nie łączy barwy z wysoką widocznością w jednym zdaniu — sprawdź kolor.';
 
+    private const NOTE_VARIANT = 'Wymagana barwa jest wśród wariantów karty — wybierz wariant w ofercie.';
+
     public function group(): string
     {
         return 'color';
@@ -109,6 +112,14 @@ final class ColorChecker implements ParameterChecker
         if ($required === null) {
             return [];
         }
+
+        // Etykiety wariantów (product_variants) to barwy do wyboru w ofercie, nie barwa całej karty — oceniane
+        // osobno i tylko wtedy, gdy któraś pasuje; inaczej wynik jest dokładnie taki jak bez nich.
+        $variantFindings = self::variantFindings(
+            array_filter($cardSources, static fn (CardSource $source): bool => $source->source === CardSource::VARIANT),
+            $required,
+        );
+        $cardSources = array_values(array_filter($cardSources, static fn (CardSource $source): bool => $source->source !== CardSource::VARIANT));
 
         $direct = [];
         $hints = [];
@@ -178,21 +189,29 @@ final class ColorChecker implements ParameterChecker
             }
         }
 
-        $hasOk = in_array(Status::Ok->value, array_column($direct, 'verdict'), true);
-        $findings = $hasOk ? $direct : [...$direct, ...$hints];
-        $status = Status::fromCardVerdicts(array_map(
-            static fn (array $finding): Status => Status::from($finding['verdict']),
-            $findings,
-        ));
-        $notes = array_map(
-            static fn (string $reason): string => self::OUT_NOTES[$reason],
-            array_keys($hasOk ? $directOut : $directOut + $hintOut),
-        );
-        if ($otherColor) {
-            $notes[] = self::NOTE_OTHER_COLOR;
-        }
-        if ($notes === [] && $status === Status::Unclear) {
-            $notes[] = self::NOTE_HI_VIS_ONLY;
+        if ($variantFindings !== []) {
+            // wymagana barwa jest wariantem karty: spełnia, a inne barwy w opisie to pozostałe warianty, nie sprzeczność
+            $findings = [...$variantFindings, ...$direct];
+            $status = Status::Ok;
+            $notes = array_map(static fn (string $reason): string => self::OUT_NOTES[$reason], array_keys($directOut));
+            $notes[] = self::NOTE_VARIANT;
+        } else {
+            $hasOk = in_array(Status::Ok->value, array_column($direct, 'verdict'), true);
+            $findings = $hasOk ? $direct : [...$direct, ...$hints];
+            $status = Status::fromCardVerdicts(array_map(
+                static fn (array $finding): Status => Status::from($finding['verdict']),
+                $findings,
+            ));
+            $notes = array_map(
+                static fn (string $reason): string => self::OUT_NOTES[$reason],
+                array_keys($hasOk ? $directOut : $directOut + $hintOut),
+            );
+            if ($otherColor) {
+                $notes[] = self::NOTE_OTHER_COLOR;
+            }
+            if ($notes === [] && $status === Status::Unclear) {
+                $notes[] = self::NOTE_HI_VIS_ONLY;
+            }
         }
         $note = $notes === [] ? null : implode(' ', $notes);
 
@@ -209,6 +228,63 @@ final class ColorChecker implements ParameterChecker
             status: $status,
             note: $note,
         )];
+    }
+
+    /**
+     * Nazwy barw (klucze COLORS) wymienione w tekście, bez powtórzeń — np. etykieta wariantu „czerwony 42”.
+     *
+     * @return list<string>
+     */
+    public static function colorsIn(string $text): array
+    {
+        return array_values(array_unique(array_map(
+            static fn (array $match): string => $match[2],
+            self::colorMatches($text),
+        )));
+    }
+
+    /**
+     * Barwy wymagane w pozycji (klucze COLORS); [] gdy wymaganie barwy nie podaje.
+     *
+     * @return list<string>
+     */
+    public static function requiredColours(string $requirement): array
+    {
+        return self::requiredColor($requirement)['colors'] ?? [];
+    }
+
+    /**
+     * Warianty karty w wymaganej barwie: etykieta podaje barwy i są to te same barwy co w wymaganiu. Wymagana
+     * wysoka widoczność nigdy nie pasuje — etykieta potwierdza tylko barwę, nie fluorescencję (EN ISO 20471).
+     * Po jednym znalezisku na zestaw barw: ten sam kolor w wielu rozmiarach to jeden wiersz.
+     *
+     * @param  iterable<CardSource>  $variantSources
+     * @param  array{colors: list<string>, hi_vis: bool, alternatives: bool}  $required
+     * @return list<array<string, mixed>>
+     */
+    private static function variantFindings(iterable $variantSources, array $required): array
+    {
+        if ($required['hi_vis'] || $required['colors'] === []) {
+            return [];
+        }
+        $findings = [];
+        $seen = [];
+        foreach ($variantSources as $source) {
+            $colors = self::colorsIn($source->text);
+            if ($colors === [] || ! self::sameColor($colors, $required)) {
+                continue;
+            }
+            $key = $colors;
+            sort($key);
+            $key = implode('|', $key);
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $findings[] = CheckRow::finding($source, trim($source->text), Status::Ok, ['colors' => $colors, 'hi_vis' => false]);
+        }
+
+        return $findings;
     }
 
     /**

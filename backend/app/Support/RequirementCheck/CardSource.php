@@ -41,14 +41,17 @@ final readonly class CardSource
 
     public const DESCRIPTION = 'description';
 
+    /** Etykieta wariantu karty (product_variants) — kolor/rozmiar do wyboru w ofercie, nie cecha całej karty. */
+    public const VARIANT = 'variant';
+
     public function __construct(
         public string $source,
         public string $text,
     ) {}
 
-    /** Nazwy i tabelki dostawcy nie ma w tekście opisu okna weryfikacji — „Szukaj w opisie” nic by nie znalazło. */
+    /** Nazwy, tabelki dostawcy i etykiet wariantów nie ma w tekście opisu okna weryfikacji — „Szukaj w opisie” nic by nie znalazło. */
     public function searchable(): bool
     {
-        return $this->source !== self::NAME && $this->source !== self::SHOP_FIELDS;
+        return $this->source !== self::NAME && $this->source !== self::SHOP_FIELDS && $this->source !== self::VARIANT;
     }
 }

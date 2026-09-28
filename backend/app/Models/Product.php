@@ -302,6 +302,12 @@ class Product extends Model
         return $this->hasMany(ProductVariant::class)->orderBy('sort_order')->orderBy('id');
     }
 
+    /** Warianty do wyboru w ofercie — bez wycofanych. */
+    public function activeVariants(): HasMany
+    {
+        return $this->hasMany(ProductVariant::class)->whereNull('removed_at')->orderBy('sort_order')->orderBy('id');
+    }
+
     public function specialPrices(): HasMany
     {
         return $this->hasMany(ProductSpecialPrice::class)->orderBy('client_name');

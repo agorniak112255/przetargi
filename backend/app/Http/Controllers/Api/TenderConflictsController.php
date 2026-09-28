@@ -48,7 +48,8 @@ class TenderConflictsController extends Controller
                 continue;
             }
 
-            $conflicts = $this->check->compare($requirement, $item->mainProduct)['conflicts'];
+            // same sprzeczności: warianty karty zmieniają tylko wiersz koloru, a kolor nie daje „nie spełnia” — bez zapytania o nie
+            $conflicts = $this->check->compare($requirement, $item->mainProduct, withVariants: false)['conflicts'];
             $out[(string) $item->id] = [
                 'product_id' => (int) $item->mainProduct->id,
                 'count' => (int) $conflicts['count'],

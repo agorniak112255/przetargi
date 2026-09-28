@@ -8,7 +8,16 @@ import { ProductAiMatchModal } from '../components/ProductAiMatchModal'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
-import { api, can, downloadFile, type Product, type Substitute, type Tender } from '../lib/api'
+import {
+  api,
+  can,
+  downloadFile,
+  type Product,
+  type ProductActiveVariant,
+  type Substitute,
+  type Tender,
+} from '../lib/api'
+import { currencyLabel, formatPrice } from '../lib/priceChange'
 import { offerMarkupFactor, productDisplayName, productThumbUrl, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
 import { isDualRequirement } from '../lib/productAiSearch'
 import { SiwzItemTile, SiwzRequirementBlock, splitSiwzRequirement } from '../components/SiwzRequirementBlock'
@@ -142,6 +151,13 @@ type Item = {
   status: string
   main_product: Product | null
   main_product_id?: number | null
+  /** Wariant karty w ofercie (kolor, rozmiar, kod); etykieta i kod zapisane w chwili wyboru. */
+  main_variant_id?: number | null
+  main_variant_label?: string | null
+  main_variant_sku?: string | null
+  /** „auto” — wskazany przez dopasowanie z wymagania, „manual” — wybrany przez handlowca. */
+  main_variant_source?: 'auto' | 'manual' | null
+  main_variant?: ProductActiveVariant | null
   companion_product?: Product | null
   companion_product_id?: number | null
   custom_name?: string | null
@@ -2919,6 +2935,79 @@ export function TenderDetail() {
   )
 }
 
+/** „żółty 42 · ARMEN-9007-1010-42 · zakup 120,00 zł” — kod pomijany, gdy równy etykiecie; cena, gdy jest. */
+function variantOptionLabel(v: ProductActiveVariant): string {
+  const parts = [v.label]
+  const sku = (v.sku ?? '').trim()
+  if (sku !== '' && sku !== v.label.trim()) parts.push(sku)
+  if (v.purchase_price != null && v.purchase_price !== '') {
+    parts.push(`zakup ${formatPrice(v.purchase_price)} ${currencyLabel(v.currency)}`)
+  }
+  return parts.join(' · ')
+}
+
+/**
+ * Wariant karty w ofercie (kolor, rozmiar, kod). Lista tylko przy karcie z co najmniej dwoma aktywnymi wariantami;
+ * wybór zapisuje się od razu (main_variant_id), a backend przelicza cenę oferty i marżę z ceny wariantu.
+ * Bez prawa edycji — sama etykieta wybranego wariantu.
+ */
+function ItemVariantPicker({
+  item,
+  canEdit,
+  busy,
+  onSave,
+}: {
+  item: Item
+  canEdit: boolean
+  busy: boolean
+  onSave: (id: number, patch: Record<string, unknown>) => Promise<void>
+}) {
+  const variants = item.main_product?.active_variants ?? []
+  const selectedId = item.main_variant_id ?? null
+  const savedLabel = [item.main_variant_label, item.main_variant_sku]
+    .map((s) => (s ?? '').trim())
+    .filter((s, i, all) => s !== '' && (i === 0 || s !== all[0]))
+    .join(' · ')
+  const autoHint = item.main_variant_source === 'auto' ? 'Wariant wskazany przez dopasowanie z wymagania' : undefined
+
+  if (!canEdit || variants.length < 2) {
+    if (savedLabel === '') return null
+    return (
+      <div className="mt-1 text-[10px] text-slate-500" title={autoHint}>
+        Wariant: <span className="text-xs text-slate-800">{savedLabel}</span>
+      </div>
+    )
+  }
+
+  // wybrany wariant zniknął z listy dostawcy — zostaje widoczny zamiast udawać „—”
+  const selectedMissing = selectedId != null && !variants.some((v) => v.id === selectedId)
+  return (
+    <label className="mt-1 flex items-center gap-1 text-[10px] text-slate-500" title={autoHint}>
+      Wariant:
+      <select
+        className="min-w-0 max-w-full flex-1 rounded border border-slate-300 bg-white px-1 py-0.5 text-xs text-slate-800 disabled:opacity-50"
+        value={selectedId ?? ''}
+        disabled={busy}
+        onChange={(e) =>
+          void onSave(item.id, { main_variant_id: e.target.value === '' ? null : Number(e.target.value) })
+        }
+      >
+        <option value="">—</option>
+        {selectedMissing && (
+          <option value={selectedId} disabled>
+            {savedLabel || `#${selectedId}`} (nieaktywny)
+          </option>
+        )}
+        {variants.map((v) => (
+          <option key={v.id} value={v.id}>
+            {variantOptionLabel(v)}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
 function ItemRow({
   tenderId,
   targetMarginPercent,
@@ -3062,8 +3151,12 @@ function ItemRow({
 
   function catalogPurchase(): number | null {
     const fromList = products.find((p) => String(p.id) === productId)
+    // wybrany wariant zapisanej karty ma własną cenę (karta = najniższa z wariantów)
+    const variant =
+      item.main_variant && item.main_product && String(item.main_product.id) === productId ? item.main_variant : null
 
     return (
+      purchaseForOffer(variant) ??
       purchaseForOffer(fromList) ??
       purchaseForOffer(selectedProduct) ??
       purchaseForOffer(item.main_product)
@@ -3617,6 +3710,10 @@ function ItemRow({
                   block
                   className="mt-1"
                 />
+              )}
+              {/* Wariant dotyczy zapisanej karty — przy niezapisanym wyborze innej karty w edycji go nie ma. */}
+              {item.main_product != null && productId === String(item.main_product.id) && (
+                <ItemVariantPicker item={item} canEdit={canEdit} busy={busy} onSave={onSave} />
               )}
               {companionPicked && (
                 <div className="mt-1 text-[10px] text-slate-500">

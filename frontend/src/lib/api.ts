@@ -211,6 +211,17 @@ export type ProductVariant = {
   source_label?: string
 }
 
+/** Aktywny wariant karty wybranej w pozycji przetargu (main_product.active_variants) — skrót ProductVariant do wyboru w ofercie. */
+export type ProductActiveVariant = Pick<
+  ProductVariant,
+  'id' | 'sku' | 'label' | 'purchase_price' | 'currency' | 'availability' | 'sort_order' | 'removed_at'
+> & {
+  product_id: number
+  kind: ProductVariants['kind']
+  /** cena zakupu wariantu w PLN (backend: TenderPricingService); null = bez ceny albo waluty bez kursu */
+  purchase_price_pln?: number | null
+}
+
 export type ProductVariants = {
   /**
    * „version” — wersje Sign Project (karta z ceną 0, ceny tylko w wersjach); „size” — rozmiary w różnych cenach
@@ -297,6 +308,8 @@ export type Product = {
   variants_count?: number
   variants_min_price?: string | null
   variants_currency?: string | null
+  /** Karta pozycji przetargu: aktywne warianty (kolor, rozmiar, kod) do wyboru w ofercie. */
+  active_variants?: ProductActiveVariant[]
   enrichment_payload?: {
     features?: string[]
     specs?: string[]

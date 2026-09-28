@@ -14,6 +14,10 @@ class TenderItem extends Model
         'line_no',
         'requirement',
         'main_product_id',
+        'main_variant_id',
+        'main_variant_label',
+        'main_variant_sku',
+        'main_variant_source',
         'companion_product_id',
         'ai_match_percent',
         'ai_match_reasons',
@@ -43,6 +47,17 @@ class TenderItem extends Model
         ];
     }
 
+    protected static function booted(): void
+    {
+        // Wariant należy do karty: każda zmiana karty (dopasowanie, ręczny wybór, czyszczenie) bez
+        // jednoczesnego wyboru wariantu zeruje wariant — jedno miejsce zamiast pilnowania każdego zapisu.
+        static::saving(function (TenderItem $item): void {
+            if ($item->isDirty('main_product_id') && ! $item->isDirty('main_variant_id')) {
+                $item->clearVariant();
+            }
+        });
+    }
+
     public function tender(): BelongsTo
     {
         return $this->belongsTo(Tender::class);
@@ -51,6 +66,33 @@ class TenderItem extends Model
     public function mainProduct(): BelongsTo
     {
         return $this->belongsTo(Product::class, 'main_product_id');
+    }
+
+    public function mainVariant(): BelongsTo
+    {
+        return $this->belongsTo(ProductVariant::class, 'main_variant_id');
+    }
+
+    /**
+     * Wariant do oferty — tylko gdy należy do bieżącej karty (scalanie kart przepina main_product_id
+     * zapisem bez zdarzeń modelu, wtedy stary wariant już nie obowiązuje).
+     */
+    public function offerVariant(): ?ProductVariant
+    {
+        if ($this->main_variant_id === null || $this->main_product_id === null) {
+            return null;
+        }
+        $variant = $this->mainVariant;
+
+        return $variant !== null && (int) $variant->product_id === (int) $this->main_product_id ? $variant : null;
+    }
+
+    public function clearVariant(): void
+    {
+        $this->main_variant_id = null;
+        $this->main_variant_label = null;
+        $this->main_variant_sku = null;
+        $this->main_variant_source = null;
     }
 
     public function companionProduct(): BelongsTo

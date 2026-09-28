@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Product;
+use App\Models\ProductVariant;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Support\OfferPricing;
@@ -32,6 +33,72 @@ final class TenderPricingService
     }
 
     /**
+     * Zakup wariantu w PLN (waluta wiersza, a gdy jej brak — waluta karty). Null, gdy wariant nie ma ceny —
+     * wtedy obowiązuje cena karty.
+     */
+    public function variantPurchasePln(ProductVariant $variant, ?Product $product = null): ?float
+    {
+        return $this->fx->toPlnOrNull($variant->purchase_price, $variant->currency ?? $product?->currency);
+    }
+
+    /** Cena oferty z ceny wariantu; null, gdy wariant nie ma ceny (cenę liczy wtedy offerFromProduct). */
+    public function offerFromVariant(Tender $tender, ProductVariant $variant, ?Product $product = null): ?float
+    {
+        $purchase = $this->variantPurchasePln($variant, $product);
+
+        return $purchase === null ? null : OfferPricing::fromPurchase($purchase, $tender->targetMarkupPercent());
+    }
+
+    /**
+     * purchase_price_pln na wczytanych wariantach pozycji (wybranym i liście karty) — do odpowiedzi JSON,
+     * żeby panel liczył marżę wariantu tak jak karty. Wariant, który nie należy już do karty pozycji (scalanie
+     * kart bez zdarzeń modelu), znika z main_variant — jak w offerVariant(). Niczego nie wczytuje.
+     */
+    public function appendVariantPricesPln(TenderItem $item): void
+    {
+        $product = $item->relationLoaded('mainProduct') ? $item->mainProduct : null;
+        $variants = [];
+        if ($item->relationLoaded('mainVariant') && $item->mainVariant !== null) {
+            if ($item->offerVariant() === null) {
+                $item->setRelation('mainVariant', null);
+            } else {
+                $variants[] = $item->mainVariant;
+            }
+        }
+        if ($product !== null && $product->relationLoaded('activeVariants')) {
+            array_push($variants, ...$product->activeVariants->all());
+        }
+        foreach ($variants as $variant) {
+            $variant->setAttribute('purchase_price_pln', $this->variantPurchasePln($variant, $product));
+        }
+    }
+
+    /**
+     * Bieżący zakup głównego produktu pozycji w PLN: wariant wybrany do oferty, gdy ma cenę, inaczej karta.
+     * Karta bez ceny daje 0 (albo surową cenę) jak dotąd — o tym, czy zakup jest, rozstrzyga wywołujący (> 0).
+     * Null tylko bez karty.
+     */
+    public function mainPurchasePln(TenderItem $item): ?float
+    {
+        if ($item->main_product_id === null) {
+            return null;
+        }
+        $main = $item->mainProduct ?? Product::query()->find($item->main_product_id);
+        $variant = $item->offerVariant();
+        if ($variant !== null) {
+            $variantPurchase = $this->variantPurchasePln($variant, $main);
+            if ($variantPurchase !== null) {
+                return $variantPurchase;
+            }
+        }
+        if ($main === null) {
+            return null;
+        }
+
+        return $this->fx->purchasePln($main) ?? (float) $main->purchase_price;
+    }
+
+    /**
      * Zmiana marży docelowej przetargu. Pozycje trzymają cenę oferty z chwili dopasowania (decyzja użytkownika
      * 15.09.2026): cena karty zmieniona później przez import cennika / B2B nie może cicho zmienić oferty, więc
      * dotychczasowa cena oferty (także drugiego produktu) jest tylko przeskalowana narzutem stary → nowy — jak dla
@@ -44,15 +111,20 @@ final class TenderPricingService
             return;
         }
 
-        $tender->loadMissing(['items.mainProduct', 'items.companionProduct']);
+        $tender->loadMissing(['items.mainProduct', 'items.mainVariant', 'items.companionProduct']);
 
         foreach ($tender->items as $item) {
             if ($item->main_product_id !== null) {
-                $item->offer_price = $this->repricedOffer($item->offer_price, $item->mainProduct, $oldPercent, $newPercent);
+                $item->offer_price = $this->repricedOffer(
+                    $item->offer_price,
+                    $item->mainProduct !== null ? $this->mainPurchasePln($item) : null,
+                    $oldPercent,
+                    $newPercent,
+                );
                 if ($item->companion_product_id !== null) {
                     $item->companion_offer_price = $this->repricedOffer(
                         $item->companion_offer_price,
-                        $item->companionProduct,
+                        $item->companionProduct !== null ? $this->fx->purchasePln($item->companionProduct) : null,
                         $oldPercent,
                         $newPercent,
                     );
@@ -91,13 +163,11 @@ final class TenderPricingService
         $purchase = 0.0;
         $hasPurchase = false;
 
-        $main = $item->mainProduct ?? Product::query()->find($item->main_product_id);
-        if ($main !== null) {
-            $mainPurchase = $this->fx->purchasePln($main) ?? (float) $main->purchase_price;
-            if ($mainPurchase > 0) {
-                $purchase += $mainPurchase;
-                $hasPurchase = true;
-            }
+        // wariant wybrany do oferty ma własną cenę zakupu (karta z wariantami trzyma cenę najniższego)
+        $mainPurchase = $this->mainPurchasePln($item);
+        if ($mainPurchase !== null && $mainPurchase > 0) {
+            $purchase += $mainPurchase;
+            $hasPurchase = true;
         }
 
         if ($item->companion_product_id !== null) {
@@ -151,18 +221,18 @@ final class TenderPricingService
     }
 
     /**
-     * Cena oferty po zmianie marży: istniejąca — przeskalowana; brak ceny — z bieżącego zakupu karty (null, gdy karta
-     * nie ma zakupu).
+     * Cena oferty po zmianie marży: istniejąca — przeskalowana; brak ceny — z bieżącego zakupu w PLN (karty albo
+     * wybranego wariantu; null, gdy zakupu nie ma).
      */
-    private function repricedOffer(mixed $offer, ?Product $product, float $oldPercent, float $newPercent): ?float
+    private function repricedOffer(mixed $offer, ?float $purchasePln, float $oldPercent, float $newPercent): ?float
     {
         if ($offer !== null) {
             return OfferPricing::scaleByMarginChange((float) $offer, $oldPercent, $newPercent);
         }
-        if ($product === null || (float) $product->purchase_price <= 0) {
+        if ($purchasePln === null || $purchasePln <= 0) {
             return null;
         }
 
-        return OfferPricing::fromPurchase($this->fx->purchasePln($product), $newPercent);
+        return OfferPricing::fromPurchase($purchasePln, $newPercent);
     }
 }

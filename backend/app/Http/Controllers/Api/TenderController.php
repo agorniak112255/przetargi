@@ -201,6 +201,8 @@ class TenderController extends Controller
             'client',
             'owner:id,name,role',
             'items.mainProduct.images',
+            'items.mainProduct.activeVariants:'.TenderItemController::VARIANT_COLUMNS,
+            'items.mainVariant:'.TenderItemController::VARIANT_COLUMNS,
             'items.companionProduct.images',
             'conditions',
             'statusHistories.user:id,name,role',
@@ -255,6 +257,7 @@ class TenderController extends Controller
             $withFx = $this->fx->appendPricePln($product->toArray());
             $product->setAttribute('purchase_price_pln', $withFx['purchase_price_pln'] ?? null);
             $product->setAttribute('price_pln', $withFx['price_pln'] ?? null);
+            $this->pricing->appendVariantPricesPln($item);
         }
         // „taniej u …” przy cenie zakupu wybranej karty — informacja; cena oferty bez zmian (decyzja 2 planu łączenia
         // kart). Hurtem dla wszystkich kart przetargu, nie zapytania na pozycję.
@@ -315,14 +318,21 @@ class TenderController extends Controller
             'note' => $data['note'] ?? null,
         ]);
 
+        $tender->load([
+            'client',
+            'owner:id,name,role',
+            'items.mainProduct.images',
+            'items.mainProduct.activeVariants:'.TenderItemController::VARIANT_COLUMNS,
+            'items.mainVariant:'.TenderItemController::VARIANT_COLUMNS,
+            'items.companionProduct.images',
+            'statusHistories.user:id,name,role',
+        ]);
+        foreach ($tender->items as $item) {
+            $this->pricing->appendVariantPricesPln($item);
+        }
+
         return response()->json([
-            'tender' => $tender->load([
-                'client',
-                'owner:id,name,role',
-                'items.mainProduct.images',
-                'items.companionProduct.images',
-                'statusHistories.user:id,name,role',
-            ]),
+            'tender' => $tender,
             'can_edit' => $this->workflow->canEditOffer($tender),
             'next_statuses' => $this->workflow->nextStatusesFor($tender, $request->user()),
             'coverage' => $this->coverage->summarize($tender),

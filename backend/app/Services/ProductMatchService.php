@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Models\Product;
+use App\Models\ProductVariant;
 use App\Models\SearchEvent;
 use App\Models\Tender;
 use App\Models\TenderItem;
@@ -20,6 +21,8 @@ use App\Support\PpeAssortment;
 use App\Support\ProductFeatureMatch;
 use App\Support\ProductModelFuzzy;
 use App\Support\ProductSizeVariant;
+use App\Support\ProductVariantFacts;
+use App\Support\RequirementCheck\ColorChecker;
 use App\Support\RequirementCodeNoise;
 use App\Support\TechnicalAbbreviations;
 use Illuminate\Support\Collection;
@@ -2957,6 +2960,7 @@ final class ProductMatchService
         }
 
         $item->main_product_id = $product->id;
+        $variant = $this->applyRequestedVariant($item, $product, $proposal);
         if ($item->companion_product_id !== null && (int) $item->companion_product_id === (int) $product->id) {
             $item->clearCompanion();
         }
@@ -2967,16 +2971,71 @@ final class ProductMatchService
         $item->match_source = $source;
         $item->status = 'matched';
         $item->loadMissing('tender');
+        // wariant z własną ceną (rozmiar, kolor) — oferta z ceny wariantu; wariant bez ceny = cena karty
+        $variantPurchase = $variant !== null ? $this->pricing->variantPurchasePln($variant, $product) : null;
         if ($item->tender !== null) {
-            $item->offer_price = $this->pricing->offerFromProduct($item->tender, $product);
+            $item->offer_price = $variantPurchase !== null
+                ? $this->pricing->offerFromVariant($item->tender, $variant, $product)
+                : $this->pricing->offerFromProduct($item->tender, $product);
         } elseif ($item->offer_price === null) {
-            $item->offer_price = OfferPricing::fromPurchase($product->purchase_price);
+            $item->offer_price = OfferPricing::fromPurchase($variantPurchase ?? $product->purchase_price);
         }
         $item->save();
         $item->load('mainProduct');
+        $item->setRelation('mainVariant', $variant);
         $this->pricing->recalculateItemMargin($item);
 
         return true;
+    }
+
+    /**
+     * Wariant karty do oferty po dopasowaniu (wywołać po ustawieniu main_product_id):
+     * - wariant wybrany ręcznie na tej samej karcie zostaje (ponowne dopasowanie nie cofa decyzji handlowca);
+     * - propozycja nie wybiera wariantu — karta nie potwierdza wymagania, więc i wariant byłby zgadywaniem;
+     * - pełne dopasowanie: wariant wskazany jednoznacznie kodem albo barwą z wymagania (pickRequested), inaczej
+     *   brak wariantu (oferta z karty, rozmiar dobiera handlowiec).
+     * Karta bez wierszy wariantów kończy na clearVariant() — pozycja jak dotąd.
+     */
+    private function applyRequestedVariant(TenderItem $item, Product $product, bool $proposal): ?ProductVariant
+    {
+        if (! $item->isDirty('main_product_id') && $item->main_variant_source === 'manual') {
+            $kept = $item->offerVariant();
+            if ($kept !== null) {
+                return $kept;
+            }
+        }
+        if ($proposal) {
+            $item->clearVariant();
+
+            return null;
+        }
+
+        $requirement = (string) $item->requirement;
+        $skuNeedles = array_values(array_filter(
+            $this->modelFuzzy->needles($requirement),
+            static function (string $needle): bool {
+                $compact = preg_replace('/[^\p{L}\p{N}]/u', '', $needle) ?? '';
+
+                return mb_strlen($compact) >= 5 && preg_match('/\d/', $compact) === 1;
+            },
+        ));
+        $variant = app(ProductVariantFacts::class)->pickRequested(
+            $product,
+            $this->modelFuzzy->variantCodes($requirement),
+            $skuNeedles,
+            ColorChecker::requiredColours($requirement),
+        );
+        if ($variant === null) {
+            $item->clearVariant();
+
+            return null;
+        }
+        $item->main_variant_id = $variant->id;
+        $item->main_variant_label = mb_substr((string) $variant->label, 0, 255);
+        $item->main_variant_sku = $variant->sku !== null ? mb_substr((string) $variant->sku, 0, 255) : null;
+        $item->main_variant_source = 'auto';
+
+        return $variant;
     }
 
     /**

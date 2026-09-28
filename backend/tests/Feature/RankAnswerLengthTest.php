@@ -85,7 +85,7 @@ final class RankAnswerLengthTest extends TestCase
         $this->assertStringContainsString('Max 10 — gdy pasuje więcej kart, zwróć te z najwyższym score. ', $rank['system']);
         $this->assertStringNotContainsString('poniżej 40 nie zwracaj', $rank['system']);
         $this->assertStringNotContainsString('Max 20', $rank['system']);
-        $this->assertSame('rank-2026-09-27-max10', ProductAiSearchService::RANK_PROMPT_VERSION);
+        $this->assertSame('rank-2026-09-28-variants', ProductAiSearchService::RANK_PROMPT_VERSION);
     }
 
     /**

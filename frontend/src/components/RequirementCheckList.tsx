@@ -14,6 +14,7 @@ export type CheckSource =
   | 'payload_norms'
   | 'materials'
   | 'description'
+  | 'variant'
 
 export type CheckFinding = {
   text: string
@@ -97,6 +98,7 @@ const SOURCE_LABEL: Record<CheckSource, string> = {
   description: 'opis',
   manufacturer: 'producent',
   manual: 'wpisane ręcznie',
+  variant: 'wariant karty',
 }
 
 // „Brak na karcie” to niewiadoma, nie porażka — szary, nigdy czerwony.
