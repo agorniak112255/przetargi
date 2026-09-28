@@ -315,6 +315,30 @@ final class ClientInquiryProductLinkTest extends TestCase
         $this->assertSame([], $again['products']);
     }
 
+    public function test_colour_from_the_link_anchor_is_read_from_the_variant_rows_of_a_merged_model_card(): void
+    {
+        // MAVIBO po scaleniu kolorów (28.09.2026): karta modelu bez koloru w nazwie, kolor w wierszu wariantu
+        $url = 'https://mavibo.pl/bluzy/138-2740-geffer-620-61920.html';
+        $card = $this->product('61920', 'GEFFER 620 61920', ['manufacturer' => 'GEFFER', 'shop_source_url' => $url]);
+        foreach (['kolor 26/70 / L', 'kolor 26 / L', 'kolor 20 / L'] as $i => $label) {
+            ProductVariant::query()->create([
+                'product_id' => $card->id, 'kind' => ProductVariant::KIND_SIZE, 'source' => 'b2b:19', 'remote_id' => '368_'.$i,
+                'sku' => '61920_'.$i, 'label' => $label, 'purchase_price' => 50, 'currency' => 'PLN',
+            ]);
+        }
+        $body = $url.'#/3-rozmiar-l/34-kolor-26 — 1 szt';
+
+        $result = app(InquiryProductLinks::class)->attach(
+            [['id' => 'item_1', 'quote' => $body, 'query' => 'bluza', 'search_query' => 'bluza']],
+            $body,
+        );
+
+        $hit = $result['products']['item_1'][0];
+        $this->assertSame($card->id, $hit['product']->id);
+        // „kolor 26/70” to inny kolor — wskazany jest wiersz „kolor 26”
+        $this->assertSame('kolor 26', $hit['variant']);
+    }
+
     public function test_encoded_and_plain_polish_letters_in_the_address_are_the_same_page(): void
     {
         $card = $this->product('RK-1', 'Rękawice ochronne X', [

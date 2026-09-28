@@ -8,6 +8,7 @@ use App\Models\Product;
 use App\Models\ProductShopCard;
 use App\Models\ProductVariant;
 use App\Support\InquiryLinks;
+use App\Support\ProductVariantFacts;
 use Closure;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -28,6 +29,10 @@ final class InquiryProductLinks
 
     /** Z tylu kart spod jednego adresu wybieramy te pięć — najpierw wariant wskazany w linku. */
     private const MAX_CARDS_PER_URL = 40;
+
+    public function __construct(
+        private readonly ProductVariantFacts $variantFacts,
+    ) {}
 
     /** Tyle adresów z LIKE sprawdzamy kluczem; najkrótsze najpierw, bo szukany zawiera się w dłuższych. */
     private const MAX_URL_ROWS = 50;
@@ -129,8 +134,8 @@ final class InquiryProductLinks
                             'product' => $product,
                             'url' => $url,
                             'match' => (string) $hit['match'],
-                            // wariant z kotwicy linku, który podaje nazwa karty („kolor 26”)
-                            'variant' => InquiryLinks::variantNamedIn((string) $product->name, $options),
+                            // wariant z kotwicy linku, który podaje nazwa karty („kolor 26”) albo wiersz jej wariantu
+                            'variant' => $this->linkVariant($product, $options),
                         ];
                     }
                 }
@@ -335,6 +340,28 @@ final class InquiryProductLinks
     private function likeEscape(string $value): string
     {
         return str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $value);
+    }
+
+    /**
+     * Wariant z kotwicy linku: najpierw nazwa karty („GEFFER 620 61920, kolor 26”), potem etykiety aktywnych wierszy
+     * wariantów — po scaleniu kolorów MAVIBO (28.09.2026) karta modelu nie ma koloru w nazwie, a wiersz „kolor 26 / S” tak.
+     *
+     * @param  list<array{group: string, value: string}>  $options
+     */
+    private function linkVariant(Product $product, array $options): ?string
+    {
+        $named = InquiryLinks::variantNamedIn((string) $product->name, $options);
+        if ($named !== null || $options === []) {
+            return $named;
+        }
+        foreach ($this->variantFacts->activeRows($product) as $row) {
+            $inRow = InquiryLinks::variantNamedIn($row['label'], $options);
+            if ($inRow !== null) {
+                return $inRow;
+            }
+        }
+
+        return null;
     }
 
     /**
