@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../auth'
 import type { Product } from '../lib/api'
 import { copyRichHtml } from '../lib/clipboard'
@@ -41,10 +41,11 @@ function storedTemplate(): OfferTemplateId {
  */
 export function ClientOfferModal({ open, onClose, product }: Props) {
   const { user } = useAuth()
-  // Cena trzymana z kartą, dla której ją wpisano — inna karta zaczyna od pustego pola.
+  // Cena trzymana z kartą, dla której ją wpisano — inna karta zaczyna od swojej propozycji.
   const [priceDraft, setPriceDraft] = useState<{ productId: number; text: string } | null>(null)
   const [template, setTemplate] = useState<OfferTemplateId>(storedTemplate)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const priceRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -59,8 +60,21 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [open, onClose])
 
+  // Po otwarciu kwota zaznaczona — wpisanie własnej od razu zastępuje propozycję.
+  const productId = product?.id
+  useEffect(() => {
+    if (!open || productId == null) return
+    priceRef.current?.focus()
+    priceRef.current?.select()
+  }, [open, productId])
+
   const data = useMemo(() => (product ? buildOfferData(product, window.location.href) : null), [product])
-  const priceText = product && priceDraft?.productId === product.id ? priceDraft.text : ''
+  const marginPercent = user?.default_margin_percent ?? DEFAULT_MARGIN_PERCENT
+  const purchase = purchaseForOffer(product)
+  const proposal = suggestedOfferPrice(purchase, offerMarkupFactor(marginPercent))
+  const proposalText = proposal != null ? formatPrice(proposal) : ''
+  // Bez wpisu handlowca oferta startuje z propozycji; wyczyszczone pole to świadomie oferta bez ceny.
+  const priceText = product && priceDraft?.productId === product.id ? priceDraft.text : proposalText
   const price = parseOfferPrice(priceText)
   const priceInvalid = price != null && Number.isNaN(price)
   const offerPrice = price == null || priceInvalid ? null : price
@@ -71,10 +85,6 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
   )
 
   if (!open || !product || !data) return null
-
-  const marginPercent = user?.default_margin_percent ?? DEFAULT_MARGIN_PERCENT
-  const purchase = purchaseForOffer(product)
-  const proposal = suggestedOfferPrice(purchase, offerMarkupFactor(marginPercent))
 
   function pickTemplate(id: OfferTemplateId) {
     setTemplate(id)
@@ -146,16 +156,18 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
                       <span>
                         Proponowana cena: <b className="text-sm tabular-nums text-slate-900">{formatPrice(proposal)} zł</b>
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPriceDraft({ productId: product.id, text: formatPrice(proposal) })
-                          setMsg(null)
-                        }}
-                        className="shrink-0 rounded-md bg-violet-700 px-2 py-1 text-[11px] font-semibold text-white hover:bg-violet-800"
-                      >
-                        Wstaw
-                      </button>
+                      {priceText !== proposalText && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPriceDraft({ productId: product.id, text: proposalText })
+                            setMsg(null)
+                          }}
+                          className="shrink-0 rounded-md bg-violet-700 px-2 py-1 text-[11px] font-semibold text-white hover:bg-violet-800"
+                        >
+                          Przywróć
+                        </button>
+                      )}
                     </div>
                     <p className="mt-0.5 text-[11px] text-slate-500">
                       zakup {formatPrice(purchase)} zł + marża {formatPrice(marginPercent).replace(/,00$/, '')}% z Twojego konta
@@ -173,13 +185,13 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
               <input
                 type="text"
                 inputMode="decimal"
-                autoFocus
+                ref={priceRef}
                 value={priceText}
                 onChange={(e) => {
                   setPriceDraft({ productId: product.id, text: e.target.value })
                   setMsg(null)
                 }}
-                placeholder={proposal != null ? `np. ${formatPrice(proposal)}` : 'np. 29,90'}
+                placeholder="np. 29,90"
                 className={`mt-1 w-full rounded-md border bg-white px-2.5 py-2 text-base font-semibold tabular-nums focus:outline-none focus:ring-2 ${
                   priceInvalid
                     ? 'border-rose-400 focus:ring-rose-200'
