@@ -39,22 +39,31 @@ final class InventoryApiTest extends TestCase
 
     public function test_default_six_months_stock_in_any_warehouse_and_never_sold_only_when_lot_is_old(): void
     {
-        $this->item('OLD', stock: 10, value: 500, lastSale: '2026-01-10');
-        $this->item('RECENT', stock: 10, value: 900, lastSale: '2026-07-01');
-        $this->item('NOSTOCK', stock: 0, value: 0, lastSale: '2025-01-01');
+        // wartość = partie na stanie, a bez nich stan × cena z ostatniej PZ
+        $this->item('OLD', stock: 10, price: 50, lastSale: '2026-01-10');
+        $this->item('RECENT', stock: 10, price: 90, lastSale: '2026-07-01');
+        $this->item('NOSTOCK', stock: 0, price: 1, lastSale: '2025-01-01');
         // stan tylko poza HANDEL — liczy się (wszystkie magazyny)
-        $this->item('OUTSIDE', stock: 4, value: 40, lastSale: '2025-12-01', trade: 0);
-        $this->item('NEVER-OLD', stock: 3, value: 30, lastSale: null, oldestLot: '2025-11-01');
-        $this->item('NEVER-FRESH', stock: 3, value: 30, lastSale: null, oldestLot: '2026-09-01');
-        $this->item('NEVER-UNKNOWN', stock: 2, value: null, lastSale: null, oldestLot: null);
-        $removed = $this->item('REMOVED', stock: 5, value: 50, lastSale: '2025-01-01');
+        $this->item('OUTSIDE', stock: 4, price: 10, lastSale: '2025-12-01', trade: 0);
+        // PZ błędna (1 szt. za całą dostawę), partie po korekcie RW/PW mają właściwą wartość
+        $this->item('NEVER-OLD', stock: 3, price: 11600.6, lastSale: null, oldestLot: '2025-11-01', book: 30);
+        $this->item('NEVER-FRESH', stock: 3, price: 10, lastSale: null, oldestLot: '2026-09-01');
+        // ani partii, ani PZ z ceną — wartość nieznana
+        $this->item('NEVER-UNKNOWN', stock: 2, price: null, lastSale: null, oldestLot: null);
+        $removed = $this->item('REMOVED', stock: 5, price: 10, lastSale: '2025-01-01');
         $removed->update(['removed_at' => now()]);
 
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $res = $this->getJson('/api/inventory')->assertOk();
 
-        // domyślnie według wartości malejąco; nieznana wartość na końcu
+        // domyślnie według wartości malejąco; nieznana wartość na końcu w obu kierunkach
         $this->assertSame(['OLD', 'OUTSIDE', 'NEVER-OLD', 'NEVER-UNKNOWN'], array_column($res->json('data'), 'code'));
+        $this->assertSame(['NEVER-OLD', 'OUTSIDE', 'OLD', 'NEVER-UNKNOWN'], $this->codes('dir=asc'));
+        $this->assertNull($res->json('data.3.stock_value'));
+        $this->assertNull($res->json('data.3.value_source'));
+        $this->assertEquals(30, $res->json('data.2.stock_value'));
+        $this->assertSame('lots', $res->json('data.2.value_source'));
+        $this->assertSame('last_purchase', $res->json('data.0.value_source'));
         $this->assertSame(['items' => 4, 'value' => 570, 'value_unknown' => 1, 'without_card' => 4, 'never_sold' => 2], $res->json('summary'));
 
         $this->assertSame(['OLD', 'OUTSIDE'], $this->codes('never_sold=0'));
@@ -75,24 +84,27 @@ final class InventoryApiTest extends TestCase
 
     public function test_row_shows_card_warehouses_value_and_last_purchase(): void
     {
-        $item = $this->item('SZAT2112103', stock: 4400, value: 1830.5, lastSale: '2025-12-15', oldestLot: '2025-10-02');
+        $item = $this->item('SZAT2112103', stock: 4400, price: 0.4165, lastSale: '2025-12-15', oldestLot: '2025-10-02', book: 1830.5);
+        // starsza PZ z wyższym numerem dokumentu — liczy się data, nie numer
+        ErpItemPurchase::query()->create([
+            'erp_item_id' => $item->id, 'document_type' => 1489, 'document_id' => 99, 'document_line' => 1, 'purchased_at' => '2025-05-01',
+            'supplier' => 'UVEX', 'quantity' => 1000, 'document_unit' => 'szt', 'net_value_pln' => 400, 'unit_price_pln' => 0.4,
+            'document_price' => 0.4, 'currency' => 'PLN',
+        ]);
         $card = Product::query()->create(['sku' => '2112.103', 'name' => 'Zatyczki UVEX', 'manufacturer' => 'UVEX', 'catalog_price_net' => 1, 'purchase_price' => 0.4, 'stock' => 0]);
         $other = Product::query()->create(['sku' => '2112.103-K', 'name' => 'Zatyczki karton', 'manufacturer' => 'UVEX', 'catalog_price_net' => 1, 'purchase_price' => 0.4, 'stock' => 0]);
         $this->link($item, $other, ErpItemLink::STATUS_AUTO);
         $this->link($item, $card, ErpItemLink::STATUS_CONFIRMED);
         $this->link($item, Product::query()->create(['sku' => 'S', 'name' => 'S', 'manufacturer' => 'X', 'catalog_price_net' => 1, 'purchase_price' => 1, 'stock' => 0]), ErpItemLink::STATUS_SUGGESTED);
-        ErpItemPurchase::query()->create([
-            'erp_item_id' => $item->id, 'document_type' => 1489, 'document_id' => 1, 'document_line' => 1, 'purchased_at' => '2025-08-20',
-            'supplier' => 'UVEX', 'quantity' => 2000, 'document_unit' => 'szt', 'net_value_pln' => 833, 'unit_price_pln' => 0.4165,
-            'document_price' => 0.4165, 'currency' => 'PLN',
-        ]);
-        $this->item('BEZKARTY', stock: 1, value: 1, lastSale: '2025-01-01');
+        $this->item('BEZKARTY', stock: 1, price: 1, lastSale: '2025-01-01');
 
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $row = $this->getJson('/api/inventory?card=with')->assertOk()->json('data.0');
 
         $this->assertSame('SZAT2112103', $row['code']);
+        // wartość partii z XL ma pierwszeństwo przed 4400 × 0,4165 z ostatniej PZ
         $this->assertEquals(1830.5, $row['stock_value']);
+        $this->assertSame('lots', $row['value_source']);
         $this->assertSame('2025-10-02', $row['oldest_lot_at']);
         $this->assertSame('2025-12-15', $row['last_sale_at']);
         $this->assertSame(['01H', '01BSH'], array_column($row['warehouses'], 'code'));
@@ -115,17 +127,28 @@ final class InventoryApiTest extends TestCase
         return array_column($this->getJson('/api/inventory?'.$params)->assertOk()->json('data'), 'code');
     }
 
-    private function item(string $code, float $stock, ?float $value, ?string $lastSale, ?string $oldestLot = null, ?float $trade = null): ErpItem
+    /** $price — cena jednostkowa z ostatniej PZ (null = towar bez PZ), $book — wartość księgowa partii z XL. */
+    private function item(string $code, float $stock, ?float $price, ?string $lastSale, ?string $oldestLot = null, ?float $trade = null, ?float $book = null): ErpItem
     {
-        return ErpItem::query()->create([
-            'xl_gid' => $this->gid++, 'code' => $code, 'name' => 'Towar '.$code, 'unit' => 'szt', 'archived' => false,
-            'stock_trade' => $trade ?? min($stock, 3800), 'stock_total' => $stock, 'stock_value' => $value, 'oldest_lot_at' => $oldestLot,
+        $item = ErpItem::query()->create([
+            'xl_gid' => $this->gid, 'code' => $code, 'name' => 'Towar '.$code, 'unit' => 'szt', 'archived' => false,
+            'stock_trade' => $trade ?? min($stock, 3800), 'stock_total' => $stock, 'stock_value' => $book, 'oldest_lot_at' => $oldestLot,
             'stock_by_warehouse' => $stock > 0 ? [
                 ['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => min($stock, 3800), 'value' => null],
                 ...($stock > 3800 ? [['code' => '01BSH', 'name' => 'Magazyn BSH Rzeszów', 'quantity' => $stock - 3800, 'value' => null]] : []),
             ] : [],
             'last_sale_at' => $lastSale, 'synced_at' => now(),
         ]);
+        if ($price !== null) {
+            ErpItemPurchase::query()->create([
+                'erp_item_id' => $item->id, 'document_type' => 1489, 'document_id' => $this->gid, 'document_line' => 1, 'purchased_at' => '2025-08-20',
+                'supplier' => 'UVEX', 'quantity' => 2000, 'document_unit' => 'szt', 'net_value_pln' => round(2000 * $price, 2), 'unit_price_pln' => $price,
+                'document_price' => $price, 'currency' => 'PLN',
+            ]);
+        }
+        $this->gid++;
+
+        return $item;
     }
 
     private function link(ErpItem $item, Product $card, string $status): void

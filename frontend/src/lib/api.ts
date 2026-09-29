@@ -664,8 +664,10 @@ export type InventoryRow = {
   stock_total: number
   /** Magazyny HANDEL (informacyjnie). */
   stock_trade: number
-  /** Wartość księgowa netto partii w PLN (z XL); null = jeszcze nie pobrana. */
+  /** Ilość × cena zakupu w PLN: partie leżące na stanie (XL), a bez nich stan × cena ostatniej PZ; null = brak obu. */
   stock_value: number | null
+  /** Skąd wartość: partie na stanie albo — do pierwszego odczytu partii — ostatnia PZ. */
+  value_source: 'lots' | 'last_purchase' | null
   /** Od największego stanu. */
   warehouses: InventoryWarehouse[]
   /** 'YYYY-MM-DD'; null = nigdy (FS, paragon, WZ). */

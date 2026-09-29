@@ -18,9 +18,11 @@ use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 
 /**
- * Zakładka „Zapasy”: towary ERP XL ze stanem (wszystkie magazyny), które nie sprzedały się od N miesięcy, z wartością
- * księgową partii. Wiersz = towar XL (także bez karty katalogu — to większość towarów). Dane z nocnej kopii XL (2:00);
- * niczego nie zapisuje.
+ * Zakładka „Zapasy”: towary ERP XL ze stanem (wszystkie magazyny), które nie sprzedały się od N miesięcy. Wartość =
+ * ilość × cena zakupu (decyzja użytkownika 30.09.2026): najpierw wartość partii leżących na stanie (TwZ_KsiegowaNetto),
+ * a bez niej stan × cena z ostatniej PZ. Sama ostatnia PZ bywa błędna — SNAU51000-04-S: PZ 1 szt. za 11 600,60 zł,
+ * poprawione RW 1 szt. + PW 40 szt. po 290,02 zł; partie mają 290,02. Wiersz = towar XL (także bez karty katalogu —
+ * to większość towarów). Dane z nocnej kopii XL (2:00); niczego nie zapisuje.
  */
 class InventoryController extends Controller
 {
@@ -31,8 +33,19 @@ class InventoryController extends Controller
     /** Grupy asortymentu XL po pierwszej literze kodu towaru (jak ekran Powiązania z ERP XL). */
     private const GROUPS = ['A', 'B', 'S', 'T', 'H'];
 
+    /**
+     * Cena jednostki podstawowej w PLN z ostatniej PZ towaru (ta sama kolejność co ErpItem::purchases). Wartość zapasu
+     * w SQL, żeby sortowanie i suma szły po całej liście, nie po stronie.
+     */
+    private const LAST_PRICE_SQL = '(select p.unit_price_pln from erp_item_purchases p where p.erp_item_id = erp_items.id'
+        .' and p.unit_price_pln is not null order by p.purchased_at desc, p.document_id desc limit 1)';
+
+    private const FALLBACK_VALUE_SQL = '(erp_items.stock_total * '.self::LAST_PRICE_SQL.')';
+
+    private const VALUE_SQL = '(coalesce(erp_items.stock_value, '.self::FALLBACK_VALUE_SQL.'))';
+
     private const SORTS = [
-        'value' => 'stock_value',
+        'value' => 'value',
         'stock' => 'stock_total',
         'last_sale' => 'last_sale_at',
         'oldest_lot' => 'oldest_lot_at',
@@ -62,15 +75,22 @@ class InventoryController extends Controller
         $query = $this->filtered($v, $cutoff, $neverSold);
 
         $summary = (clone $query)->toBase()
-            ->selectRaw('count(*) as items, coalesce(sum(stock_value), 0) as value,'
-                .' sum(case when stock_value is null then 1 else 0 end) as value_unknown,'
+            ->selectRaw('count(*) as items, coalesce(sum('.self::VALUE_SQL.'), 0) as value,'
+                .' sum(case when '.self::VALUE_SQL.' is null then 1 else 0 end) as value_unknown,'
                 .' sum(case when last_sale_at is null then 1 else 0 end) as never_sold')
             ->first();
         $withoutCard = (clone $query)->whereDoesntHave('links', fn (Builder $q) => $this->linked($q))->count();
 
         $dir = ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
+        $sort = self::SORTS[$v['sort'] ?? 'value'];
+        $query->select('erp_items.*')->selectRaw(self::VALUE_SQL.' as purchase_value');
+        if ($sort === 'value') {
+            // towary bez ceny zakupu na końcu w obu kierunkach
+            $query->orderByRaw(self::VALUE_SQL.' is null')->orderByRaw(self::VALUE_SQL.' '.$dir);
+        } else {
+            $query->orderBy($sort, $dir);
+        }
         $page = $query
-            ->orderBy(self::SORTS[$v['sort'] ?? 'value'], $dir)
             ->orderBy('id')
             ->with([
                 'links' => fn ($q) => $this->linked($q)->with('product:id,sku,name,manufacturer'),
@@ -228,7 +248,13 @@ class InventoryController extends Controller
             'archived' => (bool) $item->archived,
             'stock_total' => (float) $item->stock_total,
             'stock_trade' => (float) $item->stock_trade,
-            'stock_value' => $item->stock_value !== null ? (float) $item->stock_value : null,
+            // ilość × cena zakupu: partie na stanie, a bez nich stan × ostatnia PZ; null = ani partii, ani PZ z ceną
+            'stock_value' => $item->getAttribute('purchase_value') !== null ? round((float) $item->getAttribute('purchase_value'), 2) : null,
+            'value_source' => match (true) {
+                $item->stock_value !== null => 'lots',
+                $item->getAttribute('purchase_value') !== null => 'last_purchase',
+                default => null,
+            },
             'warehouses' => array_values(array_map(static fn (array $w): array => [
                 'code' => (string) ($w['code'] ?? ''),
                 'name' => (string) ($w['name'] ?? ''),

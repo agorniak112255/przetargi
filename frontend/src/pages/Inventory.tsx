@@ -283,7 +283,8 @@ export function Inventory() {
           </p>
           <p className="mt-0.5 max-w-3xl text-xs text-slate-600">
             Towary z Comarch ERP XL, które mają stan (wszystkie magazyny) i nie sprzedały się od wybranej liczby
-            miesięcy. Wartość to wartość księgowa netto partii z XL.
+            miesięcy. Wartość = ilość × cena zakupu partii leżących na magazynie (z XL); dopóki XL nie poda partii —
+            stan × cena z ostatniej PZ.
           </p>
         </div>
         <p className="text-[11px] text-slate-500">
@@ -307,12 +308,12 @@ export function Inventory() {
           label="Wartość zapasu"
           hint={
             summary && summary.value_unknown > 0
-              ? `netto z XL · ${fmtInt(summary.value_unknown)} bez wartości z XL`
-              : 'netto, wartość księgowa partii z XL'
+              ? `netto, ilość × cena zakupu · ${fmtInt(summary.value_unknown)} bez ceny zakupu`
+              : 'netto, ilość × cena zakupu partii na stanie'
           }
           hintTitle={
             summary && summary.value_unknown > 0
-              ? 'Tych towarów nie ma jeszcze w wartości — XL nie podał wartości partii. Suma jest przez to zaniżona.'
+              ? 'Tych towarów nie ma w wartości — XL nie podał wartości partii, a towar nie ma PZ z ceną. Suma jest przez to zaniżona.'
               : undefined
           }
         />
@@ -638,9 +639,21 @@ function InventoryTableRow({
       </td>
       <td className="whitespace-nowrap p-2 text-right tabular-nums">
         {row.stock_value != null ? (
-          <span className="font-semibold text-slate-900">{fmtMoney(row.stock_value)}</span>
+          <span
+            className="block"
+            title={
+              row.value_source === 'lots'
+                ? 'Ilość × cena zakupu każdej partii leżącej na magazynie (wartość partii z XL)'
+                : `${erpQty(row.stock_total)}${unit} × ${erpUnitPrice(row.last_purchase?.unit_price_pln ?? null)} zł z ostatniej PZ — XL nie podał jeszcze wartości partii (odczyt nocny o 2:00). PZ poprawiona później przez RW/PW daje tu złą kwotę.`
+            }
+          >
+            <span className="font-semibold text-slate-900">{fmtMoney(row.stock_value)}</span>
+            {row.value_source === 'last_purchase' && (
+              <span className="block text-[10px] font-normal text-slate-500">wg ostatniej PZ</span>
+            )}
+          </span>
         ) : (
-          <span className="text-slate-400" title="Brak wartości z XL">
+          <span className="text-slate-400" title="XL nie podał wartości partii, a towar nie ma PZ z ceną">
             —
           </span>
         )}
