@@ -150,8 +150,8 @@ final class ErpItemMatcherTest extends TestCase
         $this->match();
         $this->assertSame(ErpItemLink::STATUS_AUTO, ErpItemLink::query()->where('erp_item_id', $staleItem->id)->sole()->status);
 
-        // karta zmienia kod — automatyczne powiązanie znika przy kolejnym przeliczeniu
-        $c->update(['sku' => 'INNY-KOD']);
+        // karta zmienia kod (i nazwę bez kodu) — automatyczne powiązanie znika przy kolejnym przeliczeniu
+        $c->update(['sku' => 'INNY-KOD', 'name' => 'Okulary inne']);
         $this->travel(1)->minutes();
         $stats = $this->match();
 
@@ -160,6 +160,39 @@ final class ErpItemMatcherTest extends TestCase
         $this->assertSame([$c->id], ErpItemLink::query()->where('erp_item_id', $confirmedItem->id)->pluck('product_id')->all());
         $this->assertSame(0, ErpItemLink::query()->where('erp_item_id', $staleItem->id)->count());
         $this->assertSame(0, ErpItemLink::query()->where('product_id', $b->id)->count());
+    }
+
+    public function test_code_found_in_card_name_of_same_kind_is_only_suggested(): void
+    {
+        // „OKULARY A700 BEZB.” — numer Honeywella 1015360 w Nazwa1 nie jest na kartach dystrybutora (HW-OO-A70060),
+        // kod A700 trafia w rękawice Portwest (inny rodzaj), a jako słowo stoi w nazwach kart okularów Honeywell A700
+        $gloves = $this->card('A700', 'PORTWEST', 'Rękawice A700 General Utility syntetyczna skóra');
+        $clear = $this->card('HW-OO-A70060', 'Honeywell', 'Okulary ochronne Honeywell A700.');
+        $grey = $this->card('HW-OO-A70061', 'Honeywell', 'Okulary ochronne Honeywell A700.');
+        $item = $this->item('SOK1015360', 'OKULARY A700 BEZB.', '1015360', suppliers: ['SPERIAN FRANCE / PIP']);
+
+        $stats = $this->match();
+
+        $this->assertSame(1, $stats['name_suggested']);
+        $links = ErpItemLink::query()->where('erp_item_id', $item->id)->get();
+        $this->assertEqualsCanonicalizing([$clear->id, $grey->id], $links->pluck('product_id')->all());
+        $this->assertSame([ErpItemLink::STATUS_SUGGESTED], $links->pluck('status')->unique()->values()->all());
+        $this->assertSame([ErpItemLink::METHOD_CARD_NAME], $links->pluck('method')->unique()->values()->all());
+        $this->assertNotContains($gloves->id, $links->pluck('product_id')->all());
+        $item->refresh();
+        $this->assertSame('name_suggested', $item->match_outcome);
+        $this->assertSame('A700', $item->match_value);
+    }
+
+    public function test_outcome_and_tried_code_are_saved_on_the_item(): void
+    {
+        $noCard = $this->item('SOKX', 'OKULARY 5555-99');
+        $noCode = $this->item('ARĘKTACTYL', 'RĘKAWICE TACTYL');
+
+        $this->match();
+
+        $this->assertSame(['no_match', '5555-99'], [$noCard->refresh()->match_outcome, $noCard->match_value]);
+        $this->assertSame(['no_code', null], [$noCode->refresh()->match_outcome, $noCode->match_value]);
     }
 
     public function test_confirmation_whose_card_was_deleted_does_not_block_matching(): void
@@ -218,6 +251,23 @@ final class ErpItemMatcherTest extends TestCase
 
         $this->assertSame(1, $stats['suggested']);
         $this->assertSame([], ErpItemLink::query()->sole()->evidence['shared_words']);
+    }
+
+    public function test_filter_classes_straps_and_threads_are_not_codes(): void
+    {
+        $item = $this->item('SPOCH', 'POCHŁANIACZ ABEK1P3 FORCE ABE2K1P3 FFP2 RD40 PASEK 4PKT', 'ABE1');
+
+        $codes = array_column(app(ErpItemMatcher::class)->extract($item), 'code');
+
+        foreach (['ABEK1P3', 'ABE2K1P3', 'FFP2', 'RD40', '4PKT', 'ABE1'] as $notCode) {
+            $this->assertNotContains($notCode, $codes);
+        }
+        // kody z literą i cyframi zostają (A700, B05R, E001/6)
+        $other = $this->item('SOKA700', 'OKULARY A700 B05R E001/6');
+        $this->assertSame(['A700', 'B05R', 'E0016'], array_values(array_unique(array_column(
+            array_filter(app(ErpItemMatcher::class)->extract($other), static fn (array $c): bool => $c['tier'] === 'name:token'),
+            'code',
+        ))));
     }
 
     public function test_measurements_are_not_codes(): void

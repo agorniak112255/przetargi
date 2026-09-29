@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\Admin\BrandDictionaryController as AdminBrandDictio
 use App\Http\Controllers\Api\Admin\CatalogSearchSiteController as AdminCatalogSearchSiteController;
 use App\Http\Controllers\Api\Admin\CatalogSlangController as AdminCatalogSlangController;
 use App\Http\Controllers\Api\Admin\EnrichmentDescriptionTemplateController as AdminEnrichmentDescriptionTemplateController;
+use App\Http\Controllers\Api\Admin\ErpItemController;
 use App\Http\Controllers\Api\Admin\MailSettingsController as AdminMailSettingsController;
 use App\Http\Controllers\Api\Admin\PrestaCategoryController as AdminPrestaCategoryController;
 use App\Http\Controllers\Api\Admin\PrestaShopSettingsController as AdminPrestaShopSettingsController;
@@ -372,6 +373,16 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
 
         Route::get('/ai-stats', [AdminAiStatsController::class, 'index'])
             ->middleware('permission:admin.ai_stats.view');
+
+        // Powiązania towarów Comarch ERP XL z kartami
+        Route::get('/erp-items', [ErpItemController::class, 'index'])->middleware('permission:admin.erp_links.view');
+        Route::get('/erp-items/summary', [ErpItemController::class, 'summary'])->middleware('permission:admin.erp_links.view');
+        Route::middleware('permission:admin.erp_links.manage')->group(function (): void {
+            Route::post('/erp-items/{item}/link', [ErpItemController::class, 'link']);
+            Route::post('/erp-links/bulk-confirm', [ErpItemController::class, 'bulkConfirm']);
+            Route::post('/erp-links/{link}/confirm', [ErpItemController::class, 'confirm']);
+            Route::post('/erp-links/{link}/reject', [ErpItemController::class, 'reject']);
+        });
 
         Route::middleware('permission:admin.ai_tuning.manage')->group(function (): void {
             Route::get('/ai-tuning', [AdminAiTuningController::class, 'show']);

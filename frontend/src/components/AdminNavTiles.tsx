@@ -73,6 +73,12 @@ export const adminTiles: AdminTile[] = [
     permission: 'admin.ai_stats.view',
   },
   {
+    to: '/admin/erp-xl',
+    label: 'Powiązania z ERP XL',
+    description: 'Towary XL ↔ karty, braki w mapowaniu',
+    permission: 'admin.erp_links.view',
+  },
+  {
     to: '/admin/zargon',
     label: 'Żargon SIWZ',
     description: 'Słownik potocznych nazw z przetargów',

@@ -44,6 +44,8 @@ class ErpMatchCommand extends Command
             ['połączone automatycznie', $stats['auto']],
             ['jedna karta bez dowodu (do sprawdzenia)', $stats['suggested']],
             ['kilka kart (do wyboru)', $stats['ambiguous']],
+            ['kod w nazwie karty (propozycje)', $stats['name_suggested']],
+            ['propozycje odrzucone ręcznie', $stats['rejected']],
             ['kod trafia w inny rodzaj wyrobu (odrzucone)', $stats['family_conflict']],
             ['kod bez karty w katalogu', $stats['no_match']],
             ['bez kodu w nazwie', $stats['no_code']],

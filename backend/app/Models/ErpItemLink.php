@@ -34,6 +34,9 @@ class ErpItemLink extends Model
     /** Końcówka kodu towaru XL po literowym przedrostku (SOK9301145 → 9301145). */
     public const METHOD_XL_CODE = 'xl_code';
 
+    /** Kod z XL znaleziony jako słowo w nazwie karty tego samego rodzaju — tylko propozycja. */
+    public const METHOD_CARD_NAME = 'card_name';
+
     public const METHOD_MANUAL = 'manual';
 
     protected $fillable = [
@@ -66,5 +69,10 @@ class ErpItemLink extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
+    }
+
+    public function decider(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'decided_by');
     }
 }

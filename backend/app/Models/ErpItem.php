@@ -28,6 +28,9 @@ class ErpItem extends Model
         'last_sale_at',
         'synced_at',
         'removed_at',
+        'match_outcome',
+        'match_value',
+        'last_supplier',
     ];
 
     protected function casts(): array

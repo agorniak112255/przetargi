@@ -16,6 +16,7 @@ import { AdminAiStats } from './pages/AdminAiStats'
 import { AdminCatalogSlang } from './pages/AdminCatalogSlang'
 import { AdminDescriptionTemplates } from './pages/AdminDescriptionTemplates'
 import { AdminDictionaries } from './pages/AdminDictionaries'
+import { AdminErpItems } from './pages/AdminErpItems'
 import { AdminSmtp } from './pages/AdminSmtp'
 import { AdminUsers } from './pages/AdminUsers'
 import { CardMatches } from './pages/CardMatches'
@@ -276,6 +277,14 @@ export default function App() {
                 element={
                   <PermissionGuard permission="admin.ai_stats.view">
                     <AdminAiStats />
+                  </PermissionGuard>
+                }
+              />
+              <Route
+                path="erp-xl"
+                element={
+                  <PermissionGuard permission="admin.erp_links.view">
+                    <AdminErpItems />
                   </PermissionGuard>
                 }
               />

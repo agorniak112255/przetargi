@@ -112,10 +112,12 @@ final class ErpItemSync
 
                 $itemPurchases = $purchases[$gid] ?? [];
                 $lastPurchase = null;
+                $lastSupplier = null;
                 foreach ($itemPurchases as $p) {
                     $date = ClarionDate::toDate($p['date']);
                     if ($date !== null && ($lastPurchase === null || $date->greaterThan($lastPurchase))) {
                         $lastPurchase = $date;
+                        $lastSupplier = $p['supplier'] !== '' ? mb_substr($p['supplier'], 0, 100) : null;
                     }
                 }
 
@@ -131,6 +133,7 @@ final class ErpItemSync
                     'stock_by_warehouse' => $warehouses,
                     'suppliers' => $supplierRows,
                     'last_purchase_at' => $lastPurchase?->toDateString(),
+                    'last_supplier' => $lastSupplier,
                     'last_sale_at' => ClarionDate::toDate($lastSales[$gid] ?? null)?->toDateString(),
                     'synced_at' => $now,
                     'removed_at' => null,

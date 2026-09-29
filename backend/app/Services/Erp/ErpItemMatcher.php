@@ -41,10 +41,16 @@ final class ErpItemMatcher
     private const MAX_SUGGESTIONS = 10;
 
     /** Numer normy (EN 388, DIN 13164) to nie kod wyrobu — „APTECZKA DIN 13164” trafiała we wkład do apteczki. */
-    private const NORM = '/^(EN|ISO|PN|DIN)\d/';
+    private const NORM = '/^(EN|ISO|PN|DIN|RD)\d/';
+
+    /**
+     * Klasa filtra (ABE1, ABEK1P3, ABE2K1P3, FFP2, P3R) to nie kod wyrobu — w nazwach kart stoi przy dziesiątkach
+     * filtrów i półmasek różnych producentów (przegląd propozycji z nazw kart 29.09.2026).
+     */
+    private const FILTER_CLASS = '/^(?:(?:(?:AX|SX|HG|NO|CO|A|B|E|K)[123]?)+(?:P[123])?R?D?|FFP[123]D?|P[123]R?D?)$/';
 
     /** Ilość z jednostką („600ml”, „250M”, „100X100”) to nie kod. */
-    private const MEASURE = '/^\d+([.,]\d+)?(ML|L|M|MM|CM|KG|G|SZT|PAR|MB|V|W|A|DB|X\d+.*)$/i';
+    private const MEASURE = '/^\d+([.,]\d+)?(ML|L|M|MM|CM|KG|G|SZT|PAR|MB|V|W|A|DB|PKT|X\d+.*)$/i';
 
     /** Słowa rodzaju, koloru i opisu — wspólne dla różnych wyrobów, nie są dowodem tożsamości. */
     private const GENERIC_WORDS = [
@@ -70,6 +76,9 @@ final class ErpItemMatcher
     /** @var array<string, string> słowo → klucz marki producenta ('' = nie marka) */
     private array $wordBrand = [];
 
+    /** @var array<string, list<int>>|null słowo-kod z nazwy karty → karty */
+    private ?array $cardNameIndex = null;
+
     /** @var array<string, true>|null klucze marek: producenci kart (pierwsze słowo) i marki ze słownika */
     private ?array $knownBrands = null;
 
@@ -86,8 +95,9 @@ final class ErpItemMatcher
     {
         $startedAt = CarbonImmutable::now();
         $stats = ['items' => 0, 'auto' => 0, 'suggested' => 0, 'ambiguous' => 0, 'family_conflict' => 0,
-            'no_code' => 0, 'no_match' => 0, 'confirmed_kept' => 0, 'removed_links' => 0];
+            'no_code' => 0, 'no_match' => 0, 'name_suggested' => 0, 'rejected' => 0, 'confirmed_kept' => 0, 'removed_links' => 0];
         $this->skuIndex = null;
+        $this->cardNameIndex = null;
         $this->wordBrand = [];
         $this->knownBrands = null;
 
@@ -96,7 +106,11 @@ final class ErpItemMatcher
             ->where('archived', false)
             ->select(['id', 'xl_gid', 'code', 'name', 'name1', 'suppliers', 'stock_trade', 'last_sale_at'])
             ->chunkById(500, function (Collection $items) use (&$stats, $report, $startedAt): void {
-                $this->matchBatch($items, $stats, $report, $startedAt);
+                // zapisy paczki (powiązania, wynik na każdym towarze) w jednej transakcji — pojedyncze zatwierdzenia
+                // 32 tys. towarów wydłużały przebieg z 31 s do 8 min
+                DB::transaction(function () use ($items, &$stats, $report, $startedAt): void {
+                    $this->matchBatch($items, $stats, $report, $startedAt);
+                });
             });
 
         // auto/suggested, których reguły już nie wskazały (także towary zarchiwizowane i usunięte z XL)
@@ -105,6 +119,7 @@ final class ErpItemMatcher
             ->where(fn ($q) => $q->whereNull('last_seen_at')->orWhere('last_seen_at', '<', $startedAt))
             ->delete();
         $this->skuIndex = null;
+        $this->cardNameIndex = null;
 
         return $stats;
     }
@@ -140,9 +155,19 @@ final class ErpItemMatcher
                 $codes[$c['code']] = true;
             }
         }
-        $byCode = $this->lookup(array_keys($codes));
+        // klucze z samych cyfr PHP zamienia na int — do zapytań wracają jako tekst (kolumna normalized jest tekstowa)
+        $byCode = $this->lookup(array_map('strval', array_keys($codes)));
+        $nameIndex = $this->cardNameIndex();
+        $byName = [];
+        foreach (array_keys($codes) as $code) {
+            // indeks nazw ma tylko kody ≥ 4 znaki z cyfrą — array_keys zamienia kody z samych cyfr na int
+            $code = (string) $code;
+            if (isset($nameIndex[$code]) && count($nameIndex[$code]) <= self::MAX_SUGGESTIONS * 3) {
+                $byName[$code] = $nameIndex[$code];
+            }
+        }
         $productIds = [];
-        foreach ($byCode as $ids) {
+        foreach ([...array_values($byCode), ...array_values($byName)] as $ids) {
             foreach ($ids as $id) {
                 $productIds[$id] = true;
             }
@@ -156,6 +181,7 @@ final class ErpItemMatcher
             $stats['items']++;
             if ($confirmedItems->has($item->id)) {
                 $stats['confirmed_kept']++;
+                $this->saveOutcome($item, ErpItemLink::STATUS_CONFIRMED, null);
 
                 continue;
             }
@@ -164,14 +190,121 @@ final class ErpItemMatcher
                 ...($purchaseSuppliers[$item->id] ?? []),
             ])));
             $decision = $this->decide($item, $candidates[$item->id], $byCode, $products, $suppliers, $rejected[$item->id] ?? []);
+            // kod nie trafił w kod żadnej karty (albo w inny rodzaj wyrobu) — może stoi w nazwie karty („A700”)
+            if (in_array($decision['outcome'], ['no_match', 'family_conflict'], true)) {
+                $decision = $this->decideByCardName($item, $candidates[$item->id], $byName, $products, $suppliers, $rejected[$item->id] ?? [])
+                    ?? $decision;
+            }
             $stats[$decision['outcome']]++;
             foreach ($decision['links'] as $link) {
                 $this->saveLink($item->id, $link, $now);
             }
+            $this->saveOutcome($item, $decision['outcome'], $decision['hit']['value'] ?? $this->firstCandidateValue($candidates[$item->id]));
             if ($report !== null) {
                 $report($this->reportRow($item, $decision, $products, $suppliers));
             }
         }
+    }
+
+    private function saveOutcome(ErpItem $item, string $outcome, ?string $value): void
+    {
+        ErpItem::query()->whereKey($item->id)->update([
+            'match_outcome' => $outcome,
+            'match_value' => $value !== null ? mb_substr($value, 0, 150) : null,
+        ]);
+    }
+
+    /** @param  list<array{code: string, value: string, method: string, tier: string}>  $candidates */
+    private function firstCandidateValue(array $candidates): ?string
+    {
+        foreach (self::TIERS as $tier) {
+            foreach ($candidates as $c) {
+                if ($c['tier'] === $tier) {
+                    return $c['value'];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Kod z XL jako słowo w nazwie karty tego samego rodzaju („OKULARY A700 BEZB.” → „Okulary ochronne Honeywell
+     * A700.”, a nie rękawice Portwest A700) — tylko propozycje do decyzji człowieka. Krótka sama liczba wymaga znanego
+     * i zgodnego rodzaju po obu stronach; więcej niż MAX_SUGGESTIONS kart = słowo zbyt ogólne, bez propozycji.
+     *
+     * @param  list<array{code: string, value: string, method: string, tier: string}>  $candidates
+     * @param  array<string, list<int>>  $byName
+     * @param  Collection<int, object>  $products
+     * @param  list<string>  $suppliers
+     * @param  array<int, true>  $rejected
+     * @return array{outcome: string, links: list<array<string, mixed>>, hit: array<string, string>|null, cards: list<array<string, mixed>>}|null
+     */
+    private function decideByCardName(ErpItem $item, array $candidates, array $byName, Collection $products, array $suppliers, array $rejected): ?array
+    {
+        $xlText = trim($item->name.' '.$item->name1);
+        $xlFamily = $this->assortment->family($xlText);
+        foreach (['name1:token', 'name:token', 'xl_code:suffix'] as $tier) {
+            foreach ($candidates as $c) {
+                if ($c['tier'] !== $tier || ($byName[$c['code']] ?? []) === []) {
+                    continue;
+                }
+                $weak = preg_match('/^\d{1,5}$/', $c['code']) === 1;
+                $cards = [];
+                foreach ($byName[$c['code']] as $productId) {
+                    $product = $products->get($productId);
+                    if ($product === null || isset($rejected[$productId])) {
+                        continue;
+                    }
+                    $cardFamily = $this->assortment->family((string) $product->name);
+                    if ($xlFamily !== null && $cardFamily !== null && $xlFamily !== $cardFamily) {
+                        continue;
+                    }
+                    if ($weak && ($xlFamily === null || $cardFamily === null)) {
+                        continue;
+                    }
+                    $cards[] = $product;
+                }
+                if ($cards === [] || count($cards) > self::MAX_SUGGESTIONS) {
+                    continue;
+                }
+                $hit = ['code' => $c['code'], 'value' => $c['value'], 'method' => ErpItemLink::METHOD_CARD_NAME, 'tier' => 'card_name'];
+                $xlWords = $this->words($xlText);
+                $xlBrandTokens = $this->brandTokens($xlText);
+                $evidence = array_map(fn (object $p): array => $this->evidence($p, $xlWords, $xlBrandTokens, $suppliers, $hit) + ['candidates' => count($cards)], $cards);
+
+                return [
+                    'outcome' => 'name_suggested',
+                    'links' => array_map(fn (array $e): array => $this->link(ErpItemLink::STATUS_SUGGESTED, $hit, $e), $evidence),
+                    'hit' => $hit,
+                    'cards' => $evidence,
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Słowa-kody z nazw kart (jak tokens() dla XL) → karty. Budowany raz na przebieg, strumieniowo.
+     *
+     * @return array<string, list<int>>
+     */
+    private function cardNameIndex(): array
+    {
+        if ($this->cardNameIndex !== null) {
+            return $this->cardNameIndex;
+        }
+        $index = [];
+        foreach (DB::table('products')->select(['id', 'name'])->lazyById(5000) as $row) {
+            foreach ($this->tokens((string) $row->name) as [$code, , $kind]) {
+                if ($kind === 'token' && (! isset($index[$code]) || ! in_array((int) $row->id, $index[$code], true))) {
+                    $index[$code][] = (int) $row->id;
+                }
+            }
+        }
+
+        return $this->cardNameIndex = $index;
     }
 
     /**
@@ -208,7 +341,8 @@ final class ErpItemMatcher
             $clean = trim($token, ".'\"-/");
             $code = ProductIdentifierCode::code($clean);
             if ($code !== null && strlen($code) >= 4 && preg_match('/\d/', $code) === 1
-                && preg_match(self::MEASURE, $clean) !== 1 && preg_match(self::NORM, $code) !== 1) {
+                && preg_match(self::MEASURE, $clean) !== 1 && preg_match(self::NORM, $code) !== 1
+                && preg_match(self::FILTER_CLASS, $code) !== 1) {
                 $out[] = [$code, $clean, 'token'];
             }
             // para sąsiednich słów („AZ 410”, „BASIC 5”) — druga część musi mieć cyfrę
@@ -318,9 +452,15 @@ final class ErpItemMatcher
         $xlBrandTokens = $this->brandTokens($xlText);
         $cards = [];
         $familyConflicts = [];
+        $rejectedHits = 0;
         foreach ($byCode[$hit['code']] as $productId) {
             $product = $products->get($productId);
-            if ($product === null || isset($rejected[$productId])) {
+            if ($product === null) {
+                continue;
+            }
+            if (isset($rejected[$productId])) {
+                $rejectedHits++;
+
                 continue;
             }
             $cardFamily = $this->assortment->family((string) $product->name);
@@ -334,7 +474,9 @@ final class ErpItemMatcher
         }
         if ($cards === []) {
             // karta odrzucona za rodzaj zostaje w raporcie do przeglądu, bez powiązania
-            return ['outcome' => $familyConflicts !== [] ? 'family_conflict' : 'no_match', 'links' => [], 'hit' => $hit, 'cards' => $familyConflicts];
+            $outcome = $familyConflicts !== [] ? 'family_conflict' : ($rejectedHits > 0 ? 'rejected' : 'no_match');
+
+            return ['outcome' => $outcome, 'links' => [], 'hit' => $hit, 'cards' => $familyConflicts];
         }
 
         $total = count($cards);

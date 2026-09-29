@@ -565,6 +565,77 @@ export type ErpCardStock = {
 }
 
 /**
+ * Wynik łączenia towaru XL z kartami (Administracja → Powiązania z ERP XL); null = jeszcze nie przeliczone.
+ * no_match / family_conflict = kod jest, ale bez karty w katalogu; no_code = bez kodu w nazwie XL.
+ */
+export type ErpOutcome =
+  | 'auto'
+  | 'confirmed'
+  | 'suggested'
+  | 'ambiguous'
+  | 'name_suggested'
+  | 'no_match'
+  | 'family_conflict'
+  | 'no_code'
+  | 'rejected'
+  | null
+
+/** Powiązanie towaru XL z kartą; product null = karta usunięta. */
+export type ErpAdminLink = {
+  id: number
+  status: 'auto' | 'suggested' | 'confirmed' | 'rejected'
+  /** card_name = kod XL znaleziony w NAZWIE karty. */
+  method: 'name' | 'name1' | 'xl_code' | 'card_name' | 'manual'
+  /** Kod dosłownie z XL. */
+  matched_value: string | null
+  evidence: {
+    supplier_match?: boolean
+    supplier?: string | null
+    brand_in_name?: boolean
+    other_brand?: string | null
+    shared_words?: string[]
+    weak_code?: boolean
+    candidates?: number
+    tier?: string
+  } | null
+  decided_at: string | null
+  /** Imię / nazwa użytkownika. */
+  decided_by: string | null
+  product: { id: number; sku: string; name: string; manufacturer: string | null } | null
+}
+
+/** Towar z Comarch ERP XL z powiązaniami (kolejność links: confirmed, auto, suggested, rejected). */
+export type ErpAdminItem = {
+  id: number
+  xl_gid: number
+  code: string
+  name: string
+  name1: string | null
+  unit: string | null
+  archived: boolean
+  stock_trade: number
+  stock_total: number
+  /** 'YYYY-MM-DD' */
+  last_sale_at: string | null
+  last_purchase_at: string | null
+  last_supplier: string | null
+  outcome: ErpOutcome
+  /** Kod z XL, którym próbowano łączyć (także przy no_match). */
+  match_value: string | null
+  links: ErpAdminLink[]
+}
+
+/** Liczniki ekranu powiązań — tylko towary aktywne (bez archiwalnych i usuniętych z XL). */
+export type ErpAdminSummary = {
+  total: number
+  synced_at: string | null
+  by_outcome: Partial<Record<NonNullable<ErpOutcome>, number>>
+  unlinked_sold_12m: number
+  unlinked_in_stock: number
+  groups: { group: string; total: number; linked: number }[]
+}
+
+/**
  * Tańsze porównywalne źródło niż obowiązujące (lista produktów, przetarg) — tylko informacja:
  * cena karty i oferty dalej z ceny obowiązującej (pierwszeństwo producenta).
  */
