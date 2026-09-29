@@ -7,9 +7,11 @@ odpowiedź jako odpowiedź na ten sam mail.
 
 1. Otwierasz mail od klienta i klikasz ikonę dodatku nad wiadomością.
 2. Dodatek pokazuje całą treść maila — możesz ją poprawić przed wysłaniem.
-3. Klikasz **Wyślij do Przetargów**. Analiza trwa nawet ponad minutę i idzie w tle
-   dodatku — okienko możesz zamknąć. Gdy zapytanie jest gotowe, samo otwiera się
-   w przeglądarce i pojawia się powiadomienie.
+3. Klikasz **Wyślij do Przetargów**. Zapytanie powstaje w kilka sekund, samo
+   otwiera się w przeglądarce i pojawia się powiadomienie. Pozycje i list aplikacja
+   liczy dalej w tle (od 1.27.0 powiadomienie mówi „założone”, nie „gotowe”) — przy
+   długim zapytaniu kilka minut; strona w przeglądarce pokazuje postęp i sama
+   przechodzi do listu.
 4. Wybierasz produkty w aplikacji.
 5. Wracasz do Thunderbirda, klikasz ikonę dodatku i **Wstaw odpowiedź do maila**.
    Otwiera się zwykłe okno odpowiedzi — z adresatem, cytatem i podpisem — z gotową treścią na górze.
@@ -458,7 +460,8 @@ zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia
 
-- Załączniki (PDF, Excel) nie są wysyłane — do analizy idzie sam tekst maila.
+- Załączniki (PDF, Excel, Word) nie są wysyłane — do analizy idzie sam tekst maila.
+  Plik klienta wczytuje się w aplikacji: Zapytania → **Wczytaj z pliku**.
 - Maile zaszyfrowane (OpenPGP, S/MIME) nie są odczytywane.
 - Jeśli zamkniesz okno odpowiedzi i wyślesz ją później ręcznie, zapytanie trzeba
   oznaczyć w aplikacji przyciskiem „Oznacz, że wysłano”.

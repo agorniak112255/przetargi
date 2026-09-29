@@ -79,7 +79,16 @@ async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentA
 
     const { baseUrl } = await getSettings()
     await browser.windows.openDefaultBrowser(baseUrl + '/inquiries/' + inquiry.id)
-    await notify('Zapytanie #' + inquiry.id + ' gotowe', 'Otworzyłem je w przeglądarce — wybierz produkty.')
+    // Od 29.09.2026 aplikacja zakłada zapytanie od razu, a pozycje i list liczy w tle (przy 50 pozycjach
+    // kilka minut) — „gotowe” zaraz po założeniu byłoby nieprawdą. Strona sama pokaże wynik.
+    if ((inquiry.analysis_status || 'done') === 'done') {
+      await notify('Zapytanie #' + inquiry.id + ' gotowe', 'Otworzyłem je w przeglądarce — wybierz produkty.')
+    } else {
+      await notify(
+        'Zapytanie #' + inquiry.id + ' założone',
+        'Otworzyłem je w przeglądarce. Analiza trwa w tle — przy długim zapytaniu kilka minut; strona sama pokaże wynik.',
+      )
+    }
 
     return { ok: true, id: inquiry.id }
   } catch (e) {
