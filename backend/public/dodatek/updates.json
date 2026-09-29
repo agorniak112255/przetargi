@@ -3,9 +3,9 @@
     "przetargi@supon.rzeszow.pl": {
       "updates": [
         {
-          "version": "1.23.0",
+          "version": "1.24.0",
           "update_link": "https://przetargi.supon.rzeszow.pl/dodatek/supon-przetargi.xpi",
-          "update_hash": "sha256:92857334118288c2881e4b0eab0dbaf618d5f7003420891fd587e71524ec56e3",
+          "update_hash": "sha256:a247abf0c6591b2a816dc1ad6ac23f39390c61d7ce25489037b8769faacc30af",
           "applications": {
             "gecko": {
               "strict_min_version": "115.0"
