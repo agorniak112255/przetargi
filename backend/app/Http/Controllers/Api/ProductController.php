@@ -12,6 +12,7 @@ use App\Http\Requests\UpdateProductShopSourceRequest;
 use App\Models\B2bAccount;
 use App\Models\B2bDescriptionSupplementAttempt;
 use App\Models\B2bProductLink;
+use App\Models\ErpItemLink;
 use App\Models\PrestaCategory;
 use App\Models\PrestaProductMatch;
 use App\Models\Product;
@@ -135,6 +136,16 @@ class ProductController extends Controller
 
         if ($request->boolean('has_accessories')) {
             $query->whereHas('accessories');
+        }
+
+        // „Tylko produkty XL” — karty z pewnym albo potwierdzonym powiązaniem z towarem, który jest w ERP XL
+        // (karty, które pokazują „Stan XL”; propozycje do sprawdzenia się nie liczą)
+        if ($request->boolean('erp_linked')) {
+            $query->whereIn('id', ErpItemLink::query()
+                ->whereIn('status', [ErpItemLink::STATUS_AUTO, ErpItemLink::STATUS_CONFIRMED])
+                ->whereNotNull('product_id')
+                ->whereHas('item', static fn ($q) => $q->whereNull('removed_at'))
+                ->select('product_id'));
         }
 
         // „Tylko ceny specjalne B2B” (albo ceny powyżej rabatu standardowego) — łączy się z filtrem cennika konta

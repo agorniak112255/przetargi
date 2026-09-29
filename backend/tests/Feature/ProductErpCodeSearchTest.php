@@ -94,6 +94,26 @@ final class ProductErpCodeSearchTest extends TestCase
         $this->assertSame([], array_column($this->getJson('/api/products?q=AKU2222222&manufacturer=UVEX')->json('data'), 'sku'));
     }
 
+    public function test_filter_keeps_only_cards_linked_to_xl_and_combines_with_search(): void
+    {
+        $auto = $this->card('A-1', 'Okulary A', 'UVEX');
+        $confirmed = $this->card('C-1', 'Okulary C', 'UVEX');
+        $this->card('N-1', 'Okulary bez XL', 'UVEX');
+        $this->link($this->item('SOK1000001'), $auto, ErpItemLink::STATUS_AUTO);
+        // dwa towary XL na jednej karcie — karta raz
+        $this->link($this->item('SOK1000002'), $confirmed, ErpItemLink::STATUS_CONFIRMED);
+        $this->link($this->item('SOK1000003'), $confirmed, ErpItemLink::STATUS_AUTO);
+        $this->link($this->item('SOK1000004'), $this->card('S-1', 'Okulary S', 'UVEX'), ErpItemLink::STATUS_SUGGESTED);
+        $this->link($this->item('SOK1000005'), $this->card('R-1', 'Okulary R', 'UVEX'), ErpItemLink::STATUS_REJECTED);
+        $removed = $this->item('SOK1000006');
+        $removed->update(['removed_at' => now()]);
+        $this->link($removed, $this->card('D-1', 'Okulary D', 'UVEX'), ErpItemLink::STATUS_AUTO);
+
+        $this->assertSame(['A-1', 'C-1'], array_column($this->getJson('/api/products?sort=sku&erp_linked=1')->assertOk()->json('data'), 'sku'));
+        $this->assertSame(['C-1'], array_column($this->getJson('/api/products?sort=sku&erp_linked=1&q=Okulary+C')->json('data'), 'sku'));
+        $this->assertCount(6, $this->getJson('/api/products?erp_linked=0')->json('data'));
+    }
+
     /** @return list<string> */
     private function skus(string $q): array
     {
