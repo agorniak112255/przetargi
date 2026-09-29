@@ -48,3 +48,6 @@ deploy/qdrant/
 # kopie robocze agentow Claude Code
 .claude/worktrees/
 thunderbird-addon/dist/
+
+# webserwis Comarch ERP XL (IIS) - pliki z haslami, poza repozytorium
+Webserwis/
