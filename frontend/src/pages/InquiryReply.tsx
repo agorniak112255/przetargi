@@ -7,6 +7,7 @@ import { OrderQuantityBadge } from '../components/OrderQuantityBadge'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { useAuth } from '../auth'
 import { api, type OrderQuantity } from '../lib/api'
+import { copyHtmlBySelection } from '../lib/clipboard'
 import { toneHint, toneOptions } from '../lib/inquiryTone'
 import type {
   InquiryAnswer,
@@ -49,34 +50,6 @@ function mailDate(value: string): string {
   return Number.isNaN(d.getTime())
     ? value
     : d.toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' })
-}
-
-/**
- * Zapasowe kopiowanie HTML: list wstawiony poza ekranem, zaznaczony i skopiowany jak zaznaczenie
- * na stronie — schowek dostaje wtedy wersję z formatowaniem. HTML pochodzi z naszego serwera.
- */
-function copyHtmlBySelection(html: string): boolean {
-  const holder = document.createElement('div')
-  holder.innerHTML = html
-  holder.setAttribute('aria-hidden', 'true')
-  holder.style.position = 'fixed'
-  holder.style.left = '-10000px'
-  holder.style.top = '0'
-  document.body.appendChild(holder)
-  const selection = window.getSelection()
-  const range = document.createRange()
-  range.selectNodeContents(holder)
-  selection?.removeAllRanges()
-  selection?.addRange(range)
-  let ok = false
-  try {
-    ok = document.execCommand('copy')
-  } catch {
-    ok = false
-  }
-  selection?.removeAllRanges()
-  holder.remove()
-  return ok
 }
 
 function pricePlnByMode(

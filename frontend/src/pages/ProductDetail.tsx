@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { ClientOfferModal } from '../components/ClientOfferModal'
 import { DeleteProductsDialog } from '../components/DeleteProductsDialog'
 import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
 import { ErpStockPanel } from '../components/ErpStockPanel'
@@ -187,6 +188,7 @@ export function ProductDetail() {
   const [kitData, setKitData] = useState<ProductKitSuggestions | null>(null)
   const [kitSelected, setKitSelected] = useState<Record<number, boolean>>({})
   const [kitActionBusy, setKitActionBusy] = useState(false)
+  const [offerOpen, setOfferOpen] = useState(false)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -615,6 +617,14 @@ export function ProductDetail() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setOfferOpen(true)}
+            className="rounded bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
+            title="Oferta HTML z opisem, zdjęciami i parametrami — wpisujesz tylko cenę"
+          >
+            Oferta dla klienta
+          </button>
           <a
             href="#cross-ref"
             className="rounded border border-emerald-600 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-50"
@@ -709,6 +719,8 @@ export function ProductDetail() {
           </button>
         </div>
       </div>
+
+      <ClientOfferModal open={offerOpen} onClose={() => setOfferOpen(false)} product={p} />
 
       <div id="cross-ref" className="mt-3">
         <CrossRefPanel initialCode={p.sku} />

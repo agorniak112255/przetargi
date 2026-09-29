@@ -10,6 +10,7 @@ import {
 import { productDisplayName } from '../lib/productLabel'
 import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 import { CardConflictsModal } from './CardConflictsModal'
+import { ClientOfferModal } from './ClientOfferModal'
 import { ErpStockInline } from './ErpStockInline'
 import { SupplierSpecialPanel } from './SupplierSpecialPanel'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
@@ -48,6 +49,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
   const [fetchedTerms, setFetchedTerms] = useState<{ query: string; terms: RequirementTerms } | null>(null)
   const [showAllFor, setShowAllFor] = useState<string | null>(null)
   const [conflictsOpen, setConflictsOpen] = useState(false)
+  const [offerOpen, setOfferOpen] = useState(false)
   const initialFindFor = useRef<number | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
 
@@ -82,6 +84,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
     setImageIndex(0)
     setShowAllFor(null)
     setConflictsOpen(false)
+    setOfferOpen(false)
     void api<Product>(`/products/${productId}`)
       .then(setProduct)
       .catch((e) => setError(e instanceof Error ? e.message : 'Nie udało się pobrać produktu'))
@@ -105,15 +108,15 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
   useEffect(() => {
     if (productId == null) return
     function onKey(e: KeyboardEvent) {
-      // Otwarty modal sprzeczności sam obsługuje Escape (window, capture) — zamyka tylko siebie.
-      if (e.key === 'Escape' && !conflictsOpen) {
+      // Otwarte okno sprzeczności albo oferty samo obsługuje Escape (window, capture) — zamyka tylko siebie.
+      if (e.key === 'Escape' && !conflictsOpen && !offerOpen) {
         e.stopPropagation()
         onClose()
       }
     }
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
-  }, [productId, onClose, conflictsOpen])
+  }, [productId, onClose, conflictsOpen, offerOpen])
 
   const bodyText = useMemo(() => (product ? descriptionSearchText(product) : ''), [product])
   const shopFields = product?.shop_fields ?? []
@@ -246,6 +249,16 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
                 sprawdź kartę AI
               </button>
             ) : null}
+            {product && (
+              <button
+                type="button"
+                onClick={() => setOfferOpen(true)}
+                title="Oferta HTML z opisem, zdjęciami i parametrami — wpisujesz tylko cenę"
+                className="rounded-md bg-white px-2.5 py-1 text-xs font-semibold text-violet-800 hover:bg-violet-50"
+              >
+                Oferta dla klienta
+              </button>
+            )}
             <a
               href={appHref(`/products/${productId}`)}
               target="_blank"
@@ -478,6 +491,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
         check={check}
         onFind={setFind}
       />
+      <ClientOfferModal open={offerOpen} onClose={() => setOfferOpen(false)} product={product} />
     </div>
   )
 }
