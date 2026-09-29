@@ -588,8 +588,15 @@ browser.storage.onChanged.addListener((changes, area) => {
 
 /* --------------------------- aktualizacje dodatku --------------------------- */
 
-/** Co ile godzin pytamy serwer o nową wersję dodatku. */
-const UPDATE_CHECK_HOURS = 2
+/**
+ * Co ile minut pytamy serwer o nową wersję dodatku. Od 1.25.0 dodatek instaluje ją sam (installUpdate), więc
+ * ten odstęp to czas od wdrożenia do nowej wersji u handlowca. updates.json ma kilka kB — 6–7 komputerów co
+ * kwadrans to kilkadziesiąt pytań na godzinę.
+ */
+const UPDATE_CHECK_MINUTES = 15
+
+/** Nieudaną instalację tej samej wersji ponawiamy najwcześniej po tylu minutach. */
+const UPDATE_INSTALL_RETRY_MINUTES = 60
 
 /** Po tylu godzinach przypominamy o tej samej nowej wersji jeszcze raz. */
 const UPDATE_REMIND_HOURS = 20
@@ -615,6 +622,9 @@ async function watchVersion() {
   }
   if (!state.newer) return
 
+  // Najpierw sami: po udanej instalacji Thunderbird przeładowuje dodatek i dalszy kod już nie biegnie.
+  if (await installUpdateNow(state.version)) return
+
   const { updateNotified } = await browser.storage.local.get({ updateNotified: null })
   const said = updateNotified && typeof updateNotified === 'object' ? updateNotified : {}
   const fresh = said.version !== state.version
@@ -634,7 +644,38 @@ setTimeout(() => {
 
 setInterval(() => {
   watchVersion().catch((e) => console.warn('Sprawdzenie wersji się nie powiodło:', e.message))
-}, UPDATE_CHECK_HOURS * 60 * 60 * 1000)
+}, UPDATE_CHECK_MINUTES * 60 * 1000)
+
+/**
+ * Instaluje nową wersję bez czekania na dobowy automat Thunderbirda (API eksperymentalne, experiment/columns).
+ * Funkcja jest dopiero od 1.25.0, a API eksperymentalne Thunderbird wczytuje przy starcie programu — do pierwszego
+ * restartu po aktualizacji jej nie ma i zostaje powiadomienie. true = instalacja poszła (dodatek zaraz się przeładuje).
+ */
+async function installUpdateNow(version) {
+  const api = browser.inquiryColumn
+  if (!api || typeof api.installUpdate !== 'function') return false
+
+  const { updateInstallTried } = await browser.storage.local.get({ updateInstallTried: null })
+  const tried = updateInstallTried && typeof updateInstallTried === 'object' ? updateInstallTried : {}
+  if (tried.version === version && Date.now() - (tried.at || 0) < UPDATE_INSTALL_RETRY_MINUTES * 60 * 1000) {
+    return false
+  }
+  await browser.storage.local.set({ updateInstallTried: { version, at: Date.now() } })
+
+  let result
+  try {
+    result = await api.installUpdate()
+  } catch (e) {
+    result = String(e && e.message ? e.message : e)
+  }
+  if (result === 'installed') return true
+
+  // 'none' = Thunderbird nie widzi jeszcze nowej wersji (pamięć podręczna po jego stronie) — spróbujemy za godzinę.
+  console.warn('Supon: samodzielna aktualizacja do ' + version + ' się nie udała: ' + result)
+  await browser.storage.local.set({ updateInstallError: { version, result, at: Date.now() } })
+
+  return false
+}
 
 /* ------------------------- oznaczanie maili na liście ------------------------- */
 

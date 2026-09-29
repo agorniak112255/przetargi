@@ -326,21 +326,39 @@ wiedząc o tym:
 - **Ustawienia → Aktualizacje** pokazują zainstalowaną wersję i mają przycisk
   **Sprawdź aktualizacje** (czyta ten sam `updates.json`, więc nigdy nie powie
   czegoś innego niż sam Thunderbird),
-- w tle sprawdzenie idzie 45 sekund po starcie i potem co 2 godziny; o nowej
-  wersji dodatek przypomina powiadomieniem i powtarza je raz na dobę, dopóki
-  stara wersja jest zainstalowana,
+- w tle sprawdzenie idzie 45 sekund po starcie i potem co 15 minut; nową
+  wersję dodatek (od 1.25.0) **instaluje sam** — patrz niżej; gdy nie może,
+  przypomina powiadomieniem i powtarza je raz na dobę, dopóki stara wersja jest
+  zainstalowana,
 - okienko nad mailem pisze wprost „Pracujesz na starej wersji X, na serwerze
   jest Y” i ma przycisk **Pobierz nową wersję**,
 - przycisk **Pobierz nową wersję** otwiera plik XPI w przeglądarce — to droga
   awaryjna, gdy automat zawiedzie: pobrany plik instaluje się przez
   **Dodatki i motywy → koło zębate → Zainstaluj dodatek z pliku**.
 
-Czego dodatek **nie potrafi**: sam siebie zainstalować. Aktualizację wgrywa
-Thunderbird (domyślnie raz na dobę, ustawienia `extensions.update.enabled`
-i `extensions.update.autoUpdateDefault`), a dodatek może tylko o niej
-powiedzieć i podać plik. Jedyna rzecz, która wstrzymuje cichą aktualizację, to
-nowe **wymagane** uprawnienie w manifeście — dlatego uprawnienia do znaczników
-są opcjonalne.
+Sam Thunderbird wgrywa aktualizacje domyślnie **raz na dobę** (ustawienia
+`extensions.update.enabled` i `extensions.update.autoUpdateDefault`), a zwykły
+dodatek nie może sam siebie zainstalować. Dlatego od 1.25.0 dodatek robi to
+przez API eksperymentalne (funkcja `installUpdate` w `experiment/columns`,
+przy kolumnie — osobny wpis w `experiment_apis` mógłby liczyć się jako nowe
+uprawnienie): gdy przy sprawdzeniu co 15 minut zobaczy na serwerze nowszą
+wersję, wywołuje to samo, co **Sprawdź dostępność aktualizacji**, i instaluje
+ją od razu. Po wdrożeniu nowa wersja jest więc u handlowców w ciągu około
+kwadransa, bez klikania.
+
+Ograniczenia:
+
+- API eksperymentalne Thunderbird wczytuje **przy starcie programu** — po
+  aktualizacji do 1.25.0 samodzielna aktualizacja działa od następnego
+  uruchomienia Thunderbirda (do tego czasu zostaje powiadomienie),
+- bez `extensions.experiments.enabled = true` (to samo, czego wymaga kolumna)
+  zostaje dobowy automat Thunderbirda i powiadomienie,
+- nieudaną próbę tej samej wersji dodatek ponawia najwcześniej po godzinie;
+  powód zapisuje w `storage.local` pod kluczem `updateInstallError`.
+
+Jedyna rzecz, która wstrzymuje cichą aktualizację, to nowe **wymagane**
+uprawnienie w manifeście — dlatego uprawnienia do znaczników są opcjonalne,
+a funkcja aktualizacji siedzi w istniejącym API eksperymentalnym.
 
 `updates.json` zawiera `update_hash` (SHA-256 pliku XPI). Dodatek nie jest
 podpisany przez Mozillę, więc suma kontrolna jest jedyną weryfikacją, że

@@ -51,6 +51,13 @@
         "async": true,
         "description": "Czy kolumna faktycznie stoi w liście wiadomości.",
         "parameters": []
+      },
+      {
+        "name": "installUpdate",
+        "type": "function",
+        "async": true,
+        "description": "Sprawdza aktualizację tego dodatku (update_url z manifestu) i instaluje ją od razu. Zwraca 'installed', 'none' albo powód porażki.",
+        "parameters": []
       }
     ]
   }

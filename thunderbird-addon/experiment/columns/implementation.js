@@ -136,6 +136,63 @@ var inquiryColumn = class extends ExtensionCommon.ExtensionAPI {
           columnAdded = false
         },
 
+        /**
+         * Aktualizacja dodatku od razu, jak przycisk „Sprawdź dostępność aktualizacji” w Dodatkach i motywach.
+         * Sam Thunderbird sprawdza raz na dobę, a zwykły dodatek nie może się zainstalować — stąd tu, w API
+         * eksperymentalnym (przy okazji kolumny: osobny wpis w manifeście mógłby liczyć się jako nowe
+         * uprawnienie i wstrzymać cichą aktualizację). Po udanej instalacji Thunderbird przeładowuje dodatek,
+         * więc odpowiedź 'installed' może już do tła nie dojść.
+         */
+        async installUpdate() {
+          let AddonManager
+          let setTimeout
+          try {
+            AddonManager = ChromeUtils.importESModule('resource://gre/modules/AddonManager.sys.mjs').AddonManager
+            setTimeout = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs').setTimeout
+          } catch (e) {
+            return 'Ta wersja Thunderbirda nie ma menedżera dodatków w znanym miejscu.'
+          }
+
+          const addon = await AddonManager.getAddonByID(context.extension.id)
+          if (!addon) return 'Thunderbird nie zna tego dodatku.'
+
+          return new Promise((resolve) => {
+            let settled = false
+            const done = (value) => {
+              if (settled) return
+              settled = true
+              resolve(value)
+            }
+            // Pobieranie 50 kB nie trwa minut — po dwóch mówimy, że się nie udało, i zostaje dobowy automat.
+            setTimeout(() => done('Aktualizacja nie zakończyła się w 2 minuty.'), 120000)
+
+            try {
+              addon.findUpdates(
+                {
+                  onUpdateAvailable(found, install) {
+                    install.addListener({
+                      onInstallEnded: () => done('installed'),
+                      onInstallFailed: () => done('Instalacja nowej wersji się nie powiodła.'),
+                      onDownloadFailed: () => done('Pobranie nowej wersji się nie powiodło.'),
+                      onDownloadCancelled: () => done('Pobieranie zostało anulowane.'),
+                      onInstallCancelled: () => done('Instalacja została anulowana.'),
+                    })
+                    // Porażkę zgłaszają słuchacze wyżej; odrzucona obietnica nie może zostać bez obsługi.
+                    Promise.resolve(install.install()).catch((e) => done(String(e && e.message ? e.message : e)))
+                  },
+                  onNoUpdateAvailable: () => done('none'),
+                  onUpdateFinished: (found, error) => {
+                    if (error) done('Sprawdzenie aktualizacji się nie powiodło (kod ' + error + ').')
+                  },
+                },
+                AddonManager.UPDATE_WHEN_USER_REQUESTED,
+              )
+            } catch (e) {
+              done(String(e && e.message ? e.message : e))
+            }
+          })
+        },
+
         async setEntries(next) {
           entries = next && typeof next === 'object' ? next : {}
 
