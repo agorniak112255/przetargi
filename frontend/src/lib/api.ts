@@ -349,6 +349,8 @@ export type Product = {
   source_prices?: ProductSourcePrice[]
   /** Karta szczegółów: kurs, po którym porównano ceny źródeł w PLN. */
   source_prices_rates?: SourcePricesRates | null
+  /** Karta szczegółów: stan i ostatnie zakupy z Comarch ERP XL (towary powiązane z kartą); null = brak powiązania. */
+  erp_xl?: ErpCardStock | null
   /** Lista produktów i karta pozycji przetargu: tańsze źródło niż obowiązujące; null = brak. */
   cheaper_source?: CheaperSource | null
   /** Karta szczegółów: tabelki z kart wyrobu u dostawców (product_shop_cards) — osobno od opisu. */
@@ -510,6 +512,56 @@ export type ProductSourcePrice = {
 export type SourcePricesRates = {
   as_of: string | null
   source: 'nbp' | 'fallback'
+}
+
+/** Stan towaru w jednym magazynie Comarch ERP XL. */
+export type ErpWarehouseStock = {
+  code: string
+  name: string
+  quantity: number
+}
+
+/** Pozycja PZ z ERP XL; unit_price_pln = wartość księgowa / ilość (jednostka podstawowa towaru). */
+export type ErpPurchase = {
+  date: string | null
+  supplier: string | null
+  quantity: number
+  unit: string | null
+  unit_price_pln: number | null
+  document_price: number | null
+  currency: string | null
+  document_id: number
+}
+
+export type ErpLinkedItem = {
+  xl_gid: number
+  code: string
+  name: string
+  name1: string | null
+  unit: string | null
+  archived: boolean
+  /** auto = kod + dowód (dostawca, marka, nazwa); confirmed = potwierdzone ręcznie. */
+  status: 'auto' | 'confirmed'
+  method: 'name' | 'name1' | 'xl_code' | 'manual'
+  matched_value: string | null
+  stock_trade: number
+  stock_total: number
+  warehouses: ErpWarehouseStock[]
+  last_sale_at: string | null
+  purchases: ErpPurchase[]
+}
+
+/** Blok karty „Stan w ERP XL”; sumy null przy różnych jednostkach powiązanych towarów. */
+export type ErpCardStock = {
+  items: ErpLinkedItem[]
+  unit: string | null
+  stock_trade: number | null
+  warehouses: ErpWarehouseStock[] | null
+  last_purchase: (ErpPurchase & { xl_code: string }) | null
+  /** Towary XL z niepewnym powiązaniem (do sprawdzenia) — nie liczone w stanie. */
+  suggested: number
+  synced_at: string | null
+  stale: boolean
 }
 
 /**

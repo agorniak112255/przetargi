@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { DeleteProductsDialog } from '../components/DeleteProductsDialog'
 import { DescriptionLayoutView } from '../components/DescriptionLayoutView'
+import { ErpStockPanel } from '../components/ErpStockPanel'
 import { CrossRefPanel } from '../components/CrossRefPanel'
 import { NormPictograms } from '../components/NormPictograms'
 import { PrestaSearchModal, type PrestaSearchResult } from '../components/PrestaSearchModal'
@@ -825,6 +826,7 @@ export function ProductDetail() {
           <SupplierSpecialPanel product={p} className="sm:col-span-3" />
         </div>
       )}
+      <ErpStockPanel erp={p.erp_xl} />
       {(p.source_prices?.length ?? 0) > 0 && (
         <div className="mt-3 rounded-xl bg-white p-4 shadow-sm">
           <h2 className="mb-2 text-sm font-semibold">Ceny ze źródeł</h2>

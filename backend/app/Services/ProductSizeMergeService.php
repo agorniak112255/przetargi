@@ -22,6 +22,7 @@ use App\Models\TenderItem;
 use App\Services\B2b\B2bCatalogSync;
 use App\Services\Catalog\CardOwnership;
 use App\Services\Catalog\CardRedirectStore;
+use App\Services\Erp\ErpItemLinkMover;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Vector\ProductEmbeddingIndexer;
 use App\Support\ProductSizeVariant;
@@ -37,6 +38,7 @@ final class ProductSizeMergeService
         private readonly ProductSizeVariant $sizes,
         private readonly ProductEffectivePrice $effectivePrices,
         private readonly CardRedirectStore $redirects,
+        private readonly ErpItemLinkMover $erpLinks,
         private readonly CardOwnership $ownership,
         private readonly ProductEmbeddingIndexer $embeddings,
     ) {}
@@ -304,6 +306,7 @@ final class ProductSizeMergeService
             $this->moveImageRejections($keepId, $dropIds);
             ProductIdentifier::query()->whereIn('product_id', $dropIds)->update(['product_id' => $keepId]);
             $this->redirects->repoint($dropIds, $keepId);
+            $this->erpLinks->move($dropIds, $keepId);
 
             // 8) karta modelu: nazwa i lista rozmiarów z decyzji; SKU, packaging, opis i producent bez zmian
             $payload = is_array($keep->enrichment_payload) ? $keep->enrichment_payload : [];
@@ -639,6 +642,8 @@ final class ProductSizeMergeService
             $this->moveB2bLinks((int) $winner->id, $loserIds);
             // mapa połączeń: decyzje wskazujące scalane karty idą za ich kodami (usunięcie karty wyzerowałoby wskazanie)
             $this->redirects->repoint($loserIds, (int) $winner->id);
+            // powiązania z towarami ERP XL (ręczne potwierdzenia) — jak mapa połączeń
+            $this->erpLinks->move($loserIds, (int) $winner->id);
             $this->moveShopCards((int) $winner->id, $loserIds);
             $this->moveImageRejections((int) $winner->id, $loserIds);
             // identyfikatory ze źródeł cen (EAN, kody scalanych rozmiarów) — UNIQUE bez product_id, więc bez konfliktów

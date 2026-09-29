@@ -22,6 +22,7 @@ use App\Models\ProductVariant;
 use App\Services\B2b\B2bDescriptionSource;
 use App\Services\B2b\B2bDescriptionSupplement;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
+use App\Services\Erp\ErpCardStock;
 use App\Services\NbpExchangeRateService;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Pricing\SourcePriceComparison;
@@ -468,6 +469,8 @@ class ProductController extends Controller
         $payload['presta_export'] = $this->prestaExportPayload($product);
         $payload['accessories'] = $this->kit->present($product);
         $payload['description_layout'] = $this->descriptionTemplates->resolvedForProduct($product);
+        // stan i ostatnie zakupy z Comarch ERP XL (towary powiązane z kartą); null = brak powiązania
+        $payload['erp_xl'] = app(ErpCardStock::class)->forProduct((int) $product->id);
         $payload['special_prices'] = $product->specialPrices->map(static fn ($row): array => [
             'id' => $row->id,
             'client_id' => $row->client_id,
