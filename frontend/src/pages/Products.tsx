@@ -1067,11 +1067,11 @@ export function Products() {
           <input
             id="product-catalog-search"
             className="min-w-0 flex-1 border-0 bg-transparent px-2 py-2.5 text-sm outline-none disabled:text-slate-400"
-            placeholder="Kod, nazwa lub producent…"
+            placeholder="Kod, kod XL, nazwa lub producent…"
             value={q}
             disabled={aiMode}
             onChange={(e) => setQ(e.target.value)}
-            aria-label="Szukaj produktu po kodzie, nazwie lub producencie"
+            aria-label="Szukaj produktu po kodzie, kodzie towaru ERP XL, nazwie lub producencie"
           />
           {q ? (
             <button
@@ -1269,6 +1269,14 @@ export function Products() {
                     >
                       {p.sku}
                     </Link>
+                    {p.erp_codes && p.erp_codes.length > 0 && (
+                      <div
+                        className="mt-0.5 font-mono text-[10px] text-slate-500"
+                        title="Kod towaru w ERP XL, po którym znalazła się karta (powiązanie pewne albo potwierdzone)"
+                      >
+                        XL: {p.erp_codes.join(', ')}
+                      </div>
+                    )}
                   </td>
                   <td className="p-2 min-w-[14rem] max-w-[26rem]">
                     {/* Długa nazwa do trzech linii (wiersz i tak ma wysokość zdjęcia i przycisków); pełna w podpowiedzi.

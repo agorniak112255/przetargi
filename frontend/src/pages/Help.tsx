@@ -755,7 +755,7 @@ function ProductsHelp() {
       slides={[
         {
           action: 'Przegląd katalogu',
-          does: 'Tu jest baza SKU z cenami z cenników. Szukasz po kodzie, nazwie albo producencie.',
+          does: 'Tu jest baza SKU z cenami z cenników. Szukasz po kodzie, nazwie albo producencie — także po kodzie towaru z ERP XL (np. SOK9198014): karta powiązana z tym towarem wychodzi na górę listy, a pod SKU widać „XL: …”.',
           click: 'Menu „Produkty”, potem pole „Szukaj w katalogu” albo przycisk Szukaj.',
           tone: 'slate',
           screen: (
@@ -771,7 +771,7 @@ function ProductsHelp() {
                       <input
                         readOnly
                         className="w-52 border-0 px-3 py-2 text-sm outline-none"
-                        placeholder="Kod, nazwa lub producent…"
+                        placeholder="Kod, kod XL, nazwa lub producent…"
                       />
                       <span className="bg-slate-800 px-3 py-2 text-sm text-white">Szukaj</span>
                     </div>

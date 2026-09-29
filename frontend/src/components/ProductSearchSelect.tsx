@@ -13,6 +13,7 @@ type MiniProduct = {
   purchase_price_pln?: number | null
   currency?: string | null
   images?: Product['images']
+  erp_codes?: string[]
 }
 
 type Props = {
@@ -133,7 +134,7 @@ export function ProductSearchSelect({
     const parts = needle.split(/\s+/).filter(Boolean)
     return all
       .filter((p) => {
-        const hay = norm(`${p.sku} ${p.name} ${p.manufacturer ?? ''}`)
+        const hay = norm(`${p.sku} ${p.name} ${p.manufacturer ?? ''} ${(p.erp_codes ?? []).join(' ')}`)
         return parts.every((part) => hay.includes(part))
       })
       .slice(0, 80)
@@ -225,6 +226,9 @@ export function ProductSearchSelect({
                 <span className="font-mono text-[11px] text-slate-600">{p.sku}</span>
                 <span className="text-slate-400"> · </span>
                 {productDisplayName(p, 48)}
+                {p.erp_codes && p.erp_codes.length > 0 && (
+                  <span className="ml-1 font-mono text-[10px] text-slate-500">(XL {p.erp_codes.join(', ')})</span>
+                )}
               </button>
             </li>
           ))}

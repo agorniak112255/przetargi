@@ -23,6 +23,7 @@ use App\Services\B2b\B2bDescriptionSource;
 use App\Services\B2b\B2bDescriptionSupplement;
 use App\Services\Enrichment\EnrichmentDescriptionTemplateService;
 use App\Services\Erp\ErpCardStock;
+use App\Services\Erp\ErpCodeSearch;
 use App\Services\NbpExchangeRateService;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Pricing\SourcePriceComparison;
@@ -34,6 +35,7 @@ use App\Support\ProductModelFuzzy;
 use App\Support\ProductPriceChangeResolver;
 use App\Support\ProductVariantPresenter;
 use App\Support\SupplierSpecialPrice;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -87,71 +89,19 @@ class ProductController extends Controller
             ]);
 
         $searchTerm = null;
+        // karty wskazane kodem towaru ERP XL (id → kody XL) — dochodzą do wyników obok dopasowań SKU i nazwy
+        $erpCodes = [];
         if ($request->filled('q')) {
             $term = trim((string) $request->string('q'));
             $searchTerm = $term;
-            $brands = $this->modelFuzzy->catalogBrands($term);
-            $modelNeedles = $this->modelFuzzy->catalogModelNeedles($term);
-
-            if ($modelNeedles !== []) {
-                $wordDigitPairs = $this->modelFuzzy->catalogModelWordDigitPairs($term);
-                $query->where(function ($builder) use ($modelNeedles, $wordDigitPairs) {
-                    foreach ($modelNeedles as $needle) {
-                        $esc = '%'.addcslashes($needle, '%_\\').'%';
-                        $builder->orWhere('sku', 'like', $esc)
-                            ->orWhere('name', 'like', $esc)
-                            ->orWhere('search_blob', 'like', $esc);
-                    }
-                    foreach ($wordDigitPairs as [$word, $num]) {
-                        $w = '%'.addcslashes($word, '%_\\').'%';
-                        $n = '%'.addcslashes($num, '%_\\').'%';
-                        $builder->orWhere(function ($q) use ($w, $n) {
-                            foreach (['sku', 'name', 'search_blob'] as $col) {
-                                $q->orWhere(function ($q2) use ($col, $w, $n) {
-                                    $q2->where($col, 'like', $w)->where($col, 'like', $n);
-                                });
-                            }
-                        });
-                    }
-                });
+            $erpCodes = app(ErpCodeSearch::class)->productCodes($term);
+            if ($erpCodes !== []) {
+                $erpIds = array_keys($erpCodes);
+                $query->where(fn ($outer) => $outer
+                    ->where(fn ($text) => $this->applyTextSearch($text, $term))
+                    ->orWhereIn('id', $erpIds));
             } else {
-                $like = '%'.$term.'%';
-                $codes = $this->modelFuzzy->shortCodes($term);
-                $tokens = $brands === [] ? [] : $this->queryTokens($term, $brands);
-                $query->where(function ($builder) use ($like, $term, $codes, $brands, $tokens) {
-                    $builder->where('sku', 'like', $like)
-                        ->orWhere('name', 'like', $like)
-                        ->orWhere('manufacturer', 'like', $like);
-                    if ($term !== '') {
-                        $builder->orWhere('sku', $term);
-                    }
-                    foreach ($codes as $code) {
-                        $esc = '%'.addcslashes($code, '%_\\').'%';
-                        $builder->orWhere('sku', 'like', $esc)
-                            ->orWhere('name', 'like', $esc);
-                    }
-                    foreach ($tokens as $token) {
-                        $esc = '%'.addcslashes($token, '%_\\').'%';
-                        $builder->orWhere('sku', 'like', $esc)
-                            ->orWhere('name', 'like', $esc);
-                    }
-                    if ($brands !== [] && $codes === [] && $tokens === []) {
-                        foreach ($brands as $brand) {
-                            $esc = '%'.addcslashes($brand, '%_\\').'%';
-                            $builder->orWhere('manufacturer', 'like', $esc)
-                                ->orWhere('name', 'like', $esc);
-                        }
-                    }
-                });
-            }
-            if ($brands !== []) {
-                $query->where(function ($builder) use ($brands) {
-                    foreach ($brands as $brand) {
-                        $esc = '%'.addcslashes($brand, '%_\\').'%';
-                        $builder->orWhere('manufacturer', 'like', $esc)
-                            ->orWhere('name', 'like', $esc);
-                    }
-                });
+                $this->applyTextSearch($query, $term);
             }
         }
 
@@ -213,10 +163,13 @@ class ProductController extends Controller
         // („BW200/LB202FLR/AZ003/2AZ029” → „w200”, „lb202flr”, „az003”…) i zwraca całą rodzinę wyrobu, więc
         // szukana karta stała dotąd w środku listy ułożonej alfabetycznie — na siódmej stronie wyników.
         // Zbioru wyników to nie zawęża: zmienia się tylko kolejność, wybrane sortowanie zostaje kluczem dalszym.
+        // Karta wskazana kodem ERP XL stoi razem z dokładnym SKU.
         if ($searchTerm !== null && $searchTerm !== '') {
+            $erpIds = array_keys($erpCodes);
+            $erpCase = $erpIds === [] ? '' : 'WHEN id IN ('.implode(',', array_fill(0, count($erpIds), '?')).') THEN 0 ';
             $query->orderByRaw(
-                'CASE WHEN sku = ? THEN 0 WHEN sku LIKE ? THEN 1 ELSE 2 END ASC',
-                [$searchTerm, '%'.addcslashes($searchTerm, '%_\\').'%'],
+                'CASE WHEN sku = ? THEN 0 '.$erpCase.'WHEN sku LIKE ? THEN 1 ELSE 2 END ASC',
+                [$searchTerm, ...$erpIds, '%'.addcslashes($searchTerm, '%_\\').'%'],
             );
         }
 
@@ -296,7 +249,7 @@ class ProductController extends Controller
         $cheaper = $this->comparison->cheaperSources(collect(array_values($models)));
         // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — stała liczba zapytań na stronę
         $orderQuantities = $this->comparison->orderQuantities(collect(array_values($models)));
-        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $origins, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities): array {
+        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $origins, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities, $erpCodes): array {
             $id = (int) $row['id'];
             $row['cheaper_source'] = $cheaper[$id] ?? null;
             $row['order_quantity'] = $orderQuantities[$id] ?? null;
@@ -315,6 +268,8 @@ class ProductController extends Controller
             $row['variants_count'] = $summary['variants_count'] ?? 0;
             $row['variants_min_price'] = $summary['variants_min_price'] ?? null;
             $row['variants_currency'] = $summary['variants_currency'] ?? null;
+            // kody ERP XL, po których wyszukiwarka znalazła kartę (pusta lista, gdy trafiła po SKU albo nazwie)
+            $row['erp_codes'] = $erpCodes[(int) $row['id']] ?? [];
 
             return $row;
         });
@@ -906,6 +861,78 @@ class ProductController extends Controller
         }
 
         return $out;
+    }
+
+    /**
+     * Wyszukiwanie po SKU, nazwie i producencie (z numerem modelu i marką) — warunki idą na przekazany builder.
+     *
+     * @param  Builder<Product>  $query
+     */
+    private function applyTextSearch(Builder $query, string $term): void
+    {
+        $brands = $this->modelFuzzy->catalogBrands($term);
+        $modelNeedles = $this->modelFuzzy->catalogModelNeedles($term);
+
+        if ($modelNeedles !== []) {
+            $wordDigitPairs = $this->modelFuzzy->catalogModelWordDigitPairs($term);
+            $query->where(function ($builder) use ($modelNeedles, $wordDigitPairs) {
+                foreach ($modelNeedles as $needle) {
+                    $esc = '%'.addcslashes($needle, '%_\\').'%';
+                    $builder->orWhere('sku', 'like', $esc)
+                        ->orWhere('name', 'like', $esc)
+                        ->orWhere('search_blob', 'like', $esc);
+                }
+                foreach ($wordDigitPairs as [$word, $num]) {
+                    $w = '%'.addcslashes($word, '%_\\').'%';
+                    $n = '%'.addcslashes($num, '%_\\').'%';
+                    $builder->orWhere(function ($q) use ($w, $n) {
+                        foreach (['sku', 'name', 'search_blob'] as $col) {
+                            $q->orWhere(function ($q2) use ($col, $w, $n) {
+                                $q2->where($col, 'like', $w)->where($col, 'like', $n);
+                            });
+                        }
+                    });
+                }
+            });
+        } else {
+            $like = '%'.$term.'%';
+            $codes = $this->modelFuzzy->shortCodes($term);
+            $tokens = $brands === [] ? [] : $this->queryTokens($term, $brands);
+            $query->where(function ($builder) use ($like, $term, $codes, $brands, $tokens) {
+                $builder->where('sku', 'like', $like)
+                    ->orWhere('name', 'like', $like)
+                    ->orWhere('manufacturer', 'like', $like);
+                if ($term !== '') {
+                    $builder->orWhere('sku', $term);
+                }
+                foreach ($codes as $code) {
+                    $esc = '%'.addcslashes($code, '%_\\').'%';
+                    $builder->orWhere('sku', 'like', $esc)
+                        ->orWhere('name', 'like', $esc);
+                }
+                foreach ($tokens as $token) {
+                    $esc = '%'.addcslashes($token, '%_\\').'%';
+                    $builder->orWhere('sku', 'like', $esc)
+                        ->orWhere('name', 'like', $esc);
+                }
+                if ($brands !== [] && $codes === [] && $tokens === []) {
+                    foreach ($brands as $brand) {
+                        $esc = '%'.addcslashes($brand, '%_\\').'%';
+                        $builder->orWhere('manufacturer', 'like', $esc)
+                            ->orWhere('name', 'like', $esc);
+                    }
+                }
+            });
+        }
+        if ($brands !== []) {
+            $query->where(function ($builder) use ($brands) {
+                foreach ($brands as $brand) {
+                    $esc = '%'.addcslashes($brand, '%_\\').'%';
+                    $builder->orWhere('manufacturer', 'like', $esc)
+                        ->orWhere('name', 'like', $esc);
+                }
+            });
+        }
     }
 
     /**
