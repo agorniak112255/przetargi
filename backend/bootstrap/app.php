@@ -40,6 +40,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // Comarch ERP XL: kopia towarów ze stanami i zakupami, potem powiązania z kartami — tylko przy ERPXL_ENABLED
         $schedule->command('erp:sync --match')->dailyAt('05:20')->withoutOverlapping(180)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));
+        // same stany co 2 h w dni robocze 7–17 (decyzja użytkownika 29.09.2026); zakupy i łączenie zostają w nocy
+        $schedule->command('erp:stock')->cron('0 7-17/2 * * 1-5')->withoutOverlapping(60)
+            ->when(static fn (): bool => (bool) config('erpxl.enabled'));
         // propozycje z wyszukiwarki (bez modelu) dla towarów XL bez kodu — w nocy, bo każdy towar to zapytanie wektorowe
         $schedule->command('erp:suggest --limit=2000')->dailyAt('03:30')->withoutOverlapping(240)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));

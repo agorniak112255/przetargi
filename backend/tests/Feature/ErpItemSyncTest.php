@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\ErpItem;
+use App\Models\ErpItemLink;
 use App\Models\ErpItemPurchase;
 use App\Models\Product;
+use App\Services\Erp\ErpCardStock;
 use App\Services\Erp\ErpItemSync;
 use App\Services\Erp\ErpXlGateway;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -138,6 +140,54 @@ final class ErpItemSyncTest extends TestCase
         $this->assertSame('50.00', $product->purchase_price);
         $this->assertSame('80.00', $product->catalog_price_net);
         $this->assertSame(3, (int) $product->stock);
+    }
+
+    public function test_stock_refresh_updates_only_stock_and_its_read_time(): void
+    {
+        $this->xl->items = [
+            FakeErpXlGateway::item(1, 'A1', 'Towar A'),
+            FakeErpXlGateway::item(2, 'B2', 'Towar B'),
+            FakeErpXlGateway::item(3, 'C3', 'Towar C'),
+        ];
+        $this->xl->stockRows = [
+            ['gid' => 1, 'warehouse_code' => '01H', 'warehouse_name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 10.0],
+            ['gid' => 2, 'warehouse_code' => '01H', 'warehouse_name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 5.0],
+            ['gid' => 3, 'warehouse_code' => '15H', 'warehouse_name' => 'Magazyn HANDEL Kraków', 'quantity' => 7.0],
+        ];
+        $this->xl->purchaseRows = [FakeErpXlGateway::purchase(1, 500, 82000, 'DOST', 1, 10.0)];
+        app(ErpItemSync::class)->run();
+        $nightly = ErpItem::query()->where('xl_gid', 1)->value('synced_at');
+
+        $this->travel(3)->hours();
+        // w ciągu dnia: A sprzedany do 4 i przesunięty częściowo do Krakowa, B wyprzedany, C bez zmian
+        $this->xl->stockRows = [
+            ['gid' => 1, 'warehouse_code' => '01H', 'warehouse_name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 3.0],
+            ['gid' => 1, 'warehouse_code' => '15H', 'warehouse_name' => 'Magazyn HANDEL Kraków', 'quantity' => 1.0],
+            ['gid' => 3, 'warehouse_code' => '15H', 'warehouse_name' => 'Magazyn HANDEL Kraków', 'quantity' => 7.0],
+        ];
+        $this->xl->items[0]['name'] = 'Nazwa zmieniona w XL';
+        $this->xl->purchaseRows = [];
+
+        $this->assertSame(0, Artisan::call('erp:stock'));
+
+        $a = ErpItem::query()->where('xl_gid', 1)->firstOrFail();
+        $this->assertSame('4.0000', $a->stock_trade);
+        $this->assertSame(['01H', '15H'], array_column($a->stock_by_warehouse, 'code'));
+        // bez nazw i zakupów — to robi nocna kopia
+        $this->assertSame('Towar A', $a->name);
+        $this->assertSame(1, $a->purchases()->count());
+        $this->assertEquals($nightly, $a->synced_at);
+        $this->assertTrue($a->stock_synced_at->greaterThan($a->synced_at));
+        $b = ErpItem::query()->where('xl_gid', 2)->firstOrFail();
+        $this->assertSame('0.0000', $b->stock_trade);
+        $this->assertSame([], $b->stock_by_warehouse);
+        // bez zmiany stanu też dostaje czas odczytu
+        $c = ErpItem::query()->where('xl_gid', 3)->firstOrFail();
+        $this->assertEquals($a->stock_synced_at, $c->stock_synced_at);
+
+        $card = Product::query()->create(['sku' => 'A-1', 'name' => 'Wyrób A', 'manufacturer' => 'X', 'catalog_price_net' => 1, 'purchase_price' => 1, 'stock' => 0]);
+        ErpItemLink::query()->create(['erp_item_id' => $a->id, 'product_id' => $card->id, 'status' => ErpItemLink::STATUS_AUTO, 'method' => ErpItemLink::METHOD_NAME]);
+        $this->assertSame($a->stock_synced_at->toIso8601String(), app(ErpCardStock::class)->forProduct($card->id)['synced_at']);
     }
 
     public function test_refuses_to_run_when_not_configured_and_command_skips_quietly(): void

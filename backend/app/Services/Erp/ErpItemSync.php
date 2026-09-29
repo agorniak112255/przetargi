@@ -87,18 +87,8 @@ final class ErpItemSync
         DB::transaction(function () use ($items, $stock, $suppliers, $purchases, $lastSales, $tradePrefix, $now, &$withTrade, &$savedPurchases): void {
             foreach ($items as $item) {
                 $gid = $item['gid'];
-                $warehouses = [];
-                $trade = 0.0;
-                $total = 0.0;
-                foreach ($stock[$gid] ?? [] as $row) {
-                    $warehouses[] = ['code' => $row['warehouse_code'], 'name' => $row['warehouse_name'], 'quantity' => $row['quantity']];
-                    $total += $row['quantity'];
-                    if ($tradePrefix !== '' && str_starts_with(mb_strtolower($row['warehouse_name']), $tradePrefix)) {
-                        $trade += $row['quantity'];
-                    }
-                }
-                usort($warehouses, static fn (array $a, array $b): int => $b['quantity'] <=> $a['quantity'] ?: strcmp($a['code'], $b['code']));
-                if ($trade > 0) {
+                $stockFields = $this->stockFields($stock[$gid] ?? [], $tradePrefix);
+                if ($stockFields['stock_trade'] > 0) {
                     $withTrade++;
                 }
 
@@ -128,9 +118,8 @@ final class ErpItemSync
                     'ean' => $item['ean'] !== '' ? mb_substr($item['ean'], 0, 64) : null,
                     'unit' => $item['unit'] !== '' ? mb_substr($item['unit'], 0, 20) : null,
                     'archived' => $item['archived'],
-                    'stock_trade' => $trade,
-                    'stock_total' => $total,
-                    'stock_by_warehouse' => $warehouses,
+                    ...$stockFields,
+                    'stock_synced_at' => $now,
                     'suppliers' => $supplierRows,
                     'last_purchase_at' => $lastPurchase?->toDateString(),
                     'last_supplier' => $lastSupplier,
@@ -163,6 +152,85 @@ final class ErpItemSync
         });
 
         return ['with_trade_stock' => $withTrade, 'purchases' => $savedPurchases];
+    }
+
+    /**
+     * Same stany towarów już skopiowanych (bez nazw, dostawców i zakupów) — odświeżanie w ciągu dnia. Zapis tylko
+     * zmienionych wierszy; stock_synced_at dostają wszystkie przeczytane towary (karta pokazuje czas odczytu stanu).
+     *
+     * @param  (callable(int): void)|null  $progress
+     * @return array{items: int, changed: int}
+     */
+    public function refreshStock(?callable $progress = null): array
+    {
+        if (! $this->gateway->configured()) {
+            throw new RuntimeException('Połączenie z ERP XL jest wyłączone albo nieuzupełnione (ERPXL_*).');
+        }
+        $now = CarbonImmutable::now();
+        $batch = max(1, (int) config('erpxl.batch', 500));
+        $tradePrefix = mb_strtolower((string) config('erpxl.trade_warehouse_prefix', 'Magazyn HANDEL'));
+        $stats = ['items' => 0, 'changed' => 0];
+
+        ErpItem::query()
+            ->whereNull('removed_at')
+            ->select(['id', 'xl_gid', 'stock_trade', 'stock_total', 'stock_by_warehouse'])
+            ->chunkById($batch, function ($items) use ($tradePrefix, $now, &$stats, $progress): void {
+                $stock = $this->group($this->gateway->stock($items->pluck('xl_gid')->map(fn ($g) => (int) $g)->all()));
+                DB::transaction(function () use ($items, $stock, $tradePrefix, $now, &$stats): void {
+                    $unchanged = [];
+                    foreach ($items as $item) {
+                        $fields = $this->stockFields($stock[(int) $item->xl_gid] ?? [], $tradePrefix);
+                        $same = abs((float) $item->stock_trade - $fields['stock_trade']) < 0.00005
+                            && abs((float) $item->stock_total - $fields['stock_total']) < 0.00005
+                            && ($item->stock_by_warehouse ?? []) == $fields['stock_by_warehouse'];
+                        if ($same) {
+                            $unchanged[] = $item->id;
+
+                            continue;
+                        }
+                        ErpItem::query()->whereKey($item->id)->update([
+                            'stock_trade' => $fields['stock_trade'],
+                            'stock_total' => $fields['stock_total'],
+                            'stock_by_warehouse' => json_encode($fields['stock_by_warehouse']),
+                            'stock_synced_at' => $now,
+                        ]);
+                        $stats['changed']++;
+                    }
+                    if ($unchanged !== []) {
+                        ErpItem::query()->whereIn('id', $unchanged)->update(['stock_synced_at' => $now]);
+                    }
+                });
+                $stats['items'] += $items->count();
+                if ($progress !== null) {
+                    $progress($stats['items']);
+                }
+            });
+
+        return $stats;
+    }
+
+    /**
+     * Stan towaru z wierszy XL (suma zasobów na magazyn): HANDEL = magazyny o nazwie z erpxl.trade_warehouse_prefix,
+     * rozbicie od największego stanu.
+     *
+     * @param  list<array{gid: int, warehouse_code: string, warehouse_name: string, quantity: float}>  $rows
+     * @return array{stock_trade: float, stock_total: float, stock_by_warehouse: list<array{code: string, name: string, quantity: float}>}
+     */
+    private function stockFields(array $rows, string $tradePrefix): array
+    {
+        $warehouses = [];
+        $trade = 0.0;
+        $total = 0.0;
+        foreach ($rows as $row) {
+            $warehouses[] = ['code' => $row['warehouse_code'], 'name' => $row['warehouse_name'], 'quantity' => $row['quantity']];
+            $total += $row['quantity'];
+            if ($tradePrefix !== '' && str_starts_with(mb_strtolower($row['warehouse_name']), $tradePrefix)) {
+                $trade += $row['quantity'];
+            }
+        }
+        usort($warehouses, static fn (array $a, array $b): int => $b['quantity'] <=> $a['quantity'] ?: strcmp($a['code'], $b['code']));
+
+        return ['stock_trade' => $trade, 'stock_total' => $total, 'stock_by_warehouse' => $warehouses];
     }
 
     /**

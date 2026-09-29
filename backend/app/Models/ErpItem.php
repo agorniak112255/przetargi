@@ -27,6 +27,7 @@ class ErpItem extends Model
         'last_purchase_at',
         'last_sale_at',
         'synced_at',
+        'stock_synced_at',
         'removed_at',
         'match_outcome',
         'match_value',
@@ -46,6 +47,7 @@ class ErpItem extends Model
             'last_purchase_at' => 'date',
             'last_sale_at' => 'date',
             'synced_at' => 'datetime',
+            'stock_synced_at' => 'datetime',
             'removed_at' => 'datetime',
             'search_checked_at' => 'datetime',
         ];
