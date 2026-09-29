@@ -10,6 +10,7 @@ import {
 import { productDisplayName } from '../lib/productLabel'
 import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 import { CardConflictsModal } from './CardConflictsModal'
+import { ErpStockInline } from './ErpStockInline'
 import { SupplierSpecialPanel } from './SupplierSpecialPanel'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 import { NormPictograms } from './NormPictograms'
@@ -116,6 +117,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
 
   const bodyText = useMemo(() => (product ? descriptionSearchText(product) : ''), [product])
   const shopFields = product?.shop_fields ?? []
+  const erpTitle = product ? `${product.sku} · ${productDisplayName(product, 120)}` : ''
 
   const findHits = useMemo(() => findAllOffsets(bodyText, find), [bodyText, find])
   const tokenHitCounts = useMemo(
@@ -343,11 +345,12 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
             >
               pokaż wszystkie słowa ({allTokens.length})
             </button>
+            <ErpStockInline erp={product?.erp_xl} title={erpTitle} className="ml-auto" />
           </div>
         ) : (
-          allTokens.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 border-b border-slate-100 px-5 py-2">
-              <span className="text-[11px] font-medium text-slate-500">Z zapytania:</span>
+          (allTokens.length > 0 || (product?.erp_xl?.items.length ?? 0) > 0) && (
+            <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-5 py-2">
+              {allTokens.length > 0 && <span className="text-[11px] font-medium text-slate-500">Z zapytania:</span>}
               {allTokens.map((t) => (
                 <button
                   key={t}
@@ -367,6 +370,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
                   tylko znaczące
                 </button>
               )}
+              <ErpStockInline erp={product?.erp_xl} title={erpTitle} className="ml-auto" />
             </div>
           )
         )}

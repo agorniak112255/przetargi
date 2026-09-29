@@ -1,43 +1,12 @@
-import type { ErpCardStock, ErpLinkedItem, ErpPurchase } from '../lib/api'
+import type { ErpCardStock } from '../lib/api'
+import {
+  erpLinkLabel as linkLabel,
+  erpPurchaseText as purchaseText,
+  erpQty as qty,
+  erpUnitLabel as unitLabel,
+  isTradeWarehouse,
+} from '../lib/erpStock'
 import { formatDate, formatDateTime } from '../lib/priceChange'
-
-const qtyFormat = new Intl.NumberFormat('pl-PL', { maximumFractionDigits: 2 })
-
-function qty(value: number): string {
-  return qtyFormat.format(value)
-}
-
-/** Cena jednostkowa z PZ: poniżej 1 zł z 4 miejscami (zatyczki po 0,3153 zł), wyżej z 2. */
-function unitPrice(value: number | null): string {
-  if (value == null) return '—'
-  return value.toLocaleString('pl-PL', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: Math.abs(value) < 1 ? 4 : 2,
-  })
-}
-
-function unitLabel(unit: string | null): string {
-  return unit ? ` ${unit}` : ''
-}
-
-function purchaseText(p: ErpPurchase): string {
-  const foreign = p.currency && p.currency.toUpperCase() !== 'PLN' && p.document_price != null
-  return [
-    `${unitPrice(p.unit_price_pln)} zł${p.unit ? `/${p.unit}` : ''}`,
-    foreign ? `(${unitPrice(p.document_price)} ${p.currency})` : '',
-    p.date ? `· ${formatDate(p.date)}` : '',
-    p.supplier ? `· ${p.supplier}` : '',
-    `· ${qty(p.quantity)}${unitLabel(p.unit)}`,
-  ]
-    .filter(Boolean)
-    .join(' ')
-}
-
-function linkLabel(item: ErpLinkedItem): string {
-  if (item.status === 'confirmed') return 'potwierdzone ręcznie'
-  const where = item.method === 'name1' ? 'Nazwa1' : item.method === 'xl_code' ? 'kod XL' : 'nazwa'
-  return `automatycznie — kod „${item.matched_value ?? ''}” (${where})`
-}
 
 /**
  * Stan i ostatnie zakupy z Comarch ERP XL dla towarów powiązanych z kartą. Stan HANDEL = magazyny „Magazyn HANDEL…”;
@@ -94,7 +63,7 @@ export function ErpStockPanel({ erp }: { erp: ErpCardStock | null | undefined })
               key={w.code}
               title={w.name}
               className={`rounded border px-1.5 py-0.5 tabular-nums ${
-                /^magazyn handel/i.test(w.name) ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-slate-50 text-slate-600'
+                isTradeWarehouse(w.name) ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-slate-50 text-slate-600'
               }`}
             >
               {w.code}: {qty(w.quantity)}
