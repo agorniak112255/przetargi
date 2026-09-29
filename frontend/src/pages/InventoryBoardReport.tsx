@@ -21,7 +21,7 @@ import {
  * (GET /api/inventory/board/items) albo dokumentów (GET /api/inventory/board/moves), żeby liczbę dało się
  * sprawdzić. Strona niczego nie przelicza poza formatem kwot, dat i udziałów procentowych; wszystkie liczby
  * pochodzą z serwera (program magazynowy, odczyt z nocy). Strona drukuje się na jednej kartce A4, okno —
- * przyciskiem „Drukuj tę listę” — samo.
+ * przyciskiem „Drukuj” w oknie — samo.
  */
 
 /** Twarda spacja między grupami cyfr — liczba nie łamie się na końcu wiersza. */
@@ -217,7 +217,7 @@ const WAREHOUSE_STOCK_LABEL: Record<Warehouses, string> = {
 }
 
 // Druk strony: bez menu (print:hidden w Layout) i przycisków, czarno na białym, jedna kartka A4.
-// Okno z listą (portal w <body>) w zwykłym druku znika; „Drukuj tę listę” ustawia na <body> klasę
+// Okno z listą (portal w <body>) w zwykłym druku znika; „Drukuj” w oknie ustawia na <body> klasę
 // board-print-modal i wtedy drukuje się samo okno (nagłówek + tabela), bez strony pod spodem.
 // Klasy „board-*” istnieją tylko na tej stronie, więc style nie ruszają innych widoków.
 const PRINT_CSS = `
@@ -969,8 +969,10 @@ const UNEXPLAINED_NOTE =
   'pokazuje tylko to, co jest w dokumentach, i nie mówi, dlaczego tak zrobiono. Powód może wyjaśnić osoba, która ' +
   'wystawiła dokument.'
 
-const TH = 'sticky top-0 z-10 border-b-2 border-slate-300 bg-slate-100 px-3 py-3 text-left font-semibold text-slate-900'
-const TD = 'px-3 py-3 align-top'
+const TH = 'sticky top-0 z-10 border-b-2 border-slate-300 bg-slate-100 px-3 py-1.5 text-left font-semibold whitespace-nowrap text-slate-900 print:whitespace-normal'
+const TD = 'px-3 py-1 align-top'
+// Okno listy: mniejsze przyciski i odstępy niż na stronie raportu, żeby przy dużych literach mieściło się ok. 7 wierszy.
+const MODAL_BUTTON = `rounded-lg border border-slate-300 bg-white px-4 py-1.5 text-lg font-medium text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-50 ${FOCUS}`
 
 /**
  * Okno z listą pod kwotą raportu: stronicowana tabela towarów albo dokumentów. Portal do <body>, bo przodek
@@ -992,6 +994,7 @@ function BoardDetailsModal({
   onClose: () => void
 }) {
   const [perPage, setPerPage] = useState<number>(10)
+  const [showNote, setShowNote] = useState(false)
   const [page, setPage] = useState(1)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [loading, setLoading] = useState(true)
@@ -1108,6 +1111,7 @@ function BoardDetailsModal({
   const rowCount = loaded?.res.data.length ?? 0
   const firstNr = meta ? (meta.current_page - 1) * meta.per_page + 1 : 1
   const suffix = WAREHOUSE_SUFFIX[warehouses]
+  const unexplained = request.kind === 'moves' && request.scope === 'unexplained'
 
   let title: string
   let summary: string | null = null
@@ -1136,7 +1140,7 @@ function BoardDetailsModal({
 
   const modal = (
     <div
-      className="board-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4"
+      className="board-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
@@ -1148,71 +1152,51 @@ function BoardDetailsModal({
         aria-labelledby="board-details-title"
         tabIndex={-1}
         onKeyDown={trapFocus}
-        className="board-modal-panel flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl bg-white text-lg text-slate-900 shadow-lg outline-none"
+        className="board-modal-panel flex max-h-full w-full max-w-7xl flex-col overflow-hidden rounded-2xl bg-white text-lg text-slate-900 shadow-lg outline-none"
       >
-        <div className="border-b-2 border-slate-200 px-5 py-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <h2 id="board-details-title" className="text-2xl font-semibold break-words text-slate-900">
+        <div className="border-b-2 border-slate-200 px-4 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4">
+              <h2 id="board-details-title" className="text-xl font-semibold break-words text-slate-900">
                 {title}
               </h2>
-              {summary && <p className="mt-1 text-xl text-slate-800">{summary}</p>}
+              {summary && <p className="text-lg text-slate-800">{summary}</p>}
+              {request.kind === 'items' && <p className="text-base text-slate-700">Najpierw największe kwoty</p>}
             </div>
             <div className="board-modal-noprint flex shrink-0 flex-wrap gap-2">
-              <button type="button" onClick={printList} disabled={!loaded || failed} className={BIG_BUTTON}>
-                Drukuj tę listę
+              <button type="button" onClick={printList} disabled={!loaded || failed} className={MODAL_BUTTON}>
+                Drukuj
               </button>
-              <button type="button" onClick={onClose} className={BIG_BUTTON}>
+              <button type="button" onClick={onClose} className={MODAL_BUTTON}>
                 Zamknij
               </button>
             </div>
           </div>
-          {loaded?.kind === 'moves' && (
-            <p className="mt-3 text-lg font-medium text-slate-800">
-              Tylko towar, który przed wydaniem leżał w magazynie co najmniej{' '}
-              {monthsLabel(loaded.res.min_lot_age_months)}.
+          {request.kind === 'moves' && (
+            <p className="mt-1 text-base text-slate-800">
+              <span className="mr-3 text-slate-700">Najpierw najnowsze.</span>
+              {loaded?.kind === 'moves' && (
+                <span className="mr-3 font-medium">
+                  Tylko towar, który przed wydaniem leżał w magazynie co najmniej{' '}
+                  {monthsLabel(loaded.res.min_lot_age_months)}.
+                </span>
+              )}
+              {unexplained && (
+                <button
+                  type="button"
+                  aria-expanded={showNote}
+                  onClick={() => setShowNote((v) => !v)}
+                  className={`board-modal-noprint rounded font-semibold text-blue-700 underline underline-offset-4 ${FOCUS}`}
+                >
+                  {showNote ? 'Ukryj objaśnienie' : 'Co pokazuje ta lista?'}
+                </button>
+              )}
             </p>
           )}
-          {request.kind === 'moves' && request.scope === 'unexplained' && (
-            <p className="mt-3 text-lg text-slate-800">{UNEXPLAINED_NOTE}</p>
+          {/* Długie objaśnienie zwinięte, żeby lista miała miejsce; na wydruku zawsze w całości. */}
+          {unexplained && (
+            <p className={`mt-1 text-base text-slate-800 ${showNote ? '' : 'hidden print:block'}`}>{UNEXPLAINED_NOTE}</p>
           )}
-          <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2">
-            <div className="board-modal-noprint flex flex-wrap items-center gap-3">
-              <span id="board-details-per-page" className="text-lg text-slate-800">
-                Ile wierszy na stronie:
-              </span>
-              <div
-                className="inline-flex overflow-hidden rounded-lg border-2 border-slate-300"
-                role="group"
-                aria-labelledby="board-details-per-page"
-              >
-                {PER_PAGE_OPTIONS.map((n, i) => {
-                  const active = n === perPage
-                  return (
-                    <button
-                      key={n}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => choosePerPage(n)}
-                      className={`min-w-14 px-4 py-2 text-xl tabular-nums ${i > 0 ? 'border-l-2 border-slate-300' : ''} ${FOCUS} ${
-                        active ? 'bg-blue-600 font-semibold text-white' : 'bg-white text-slate-800 hover:bg-slate-50'
-                      }`}
-                    >
-                      {n}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-            <span className="text-lg text-slate-700">
-              {request.kind === 'items' ? 'Najpierw największe kwoty' : 'Najpierw najnowsze'}
-            </span>
-            {loading && loaded && (
-              <span className="text-lg font-semibold text-slate-800" role="status">
-                Wczytywanie…
-              </span>
-            )}
-          </div>
         </div>
 
         <div
@@ -1248,26 +1232,60 @@ function BoardDetailsModal({
           )}
         </div>
 
-        {lastPage > 1 && !failed && (
-          <nav
-            className="board-modal-noprint flex flex-wrap items-center justify-center gap-4 border-t-2 border-slate-200 px-5 py-3"
-            aria-label="Strony listy"
-          >
-            <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} className={BIG_BUTTON}>
-              ‹ Poprzednie
-            </button>
-            <span className="text-xl text-slate-900 tabular-nums">
-              Strona {page} z {lastPage}
-            </span>
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.min(lastPage, p + 1))}
-              disabled={page >= lastPage}
-              className={BIG_BUTTON}
-            >
-              Następne ›
-            </button>
-          </nav>
+        {/* Liczba wierszy i strony na dole, w jednym pasku — góra okna zostaje niska, mieści się więcej wierszy. */}
+        {!failed && meta && meta.total > PER_PAGE_OPTIONS[0] && (
+          <div className="board-modal-noprint flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t-2 border-slate-200 px-4 py-1.5">
+            <div className="flex flex-wrap items-center gap-3">
+              <span id="board-details-per-page" className="text-lg text-slate-800">
+                Wierszy na stronie:
+              </span>
+              <div
+                className="inline-flex overflow-hidden rounded-lg border-2 border-slate-300"
+                role="group"
+                aria-labelledby="board-details-per-page"
+              >
+                {PER_PAGE_OPTIONS.map((n, i) => {
+                  const active = n === perPage
+                  return (
+                    <button
+                      key={n}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => choosePerPage(n)}
+                      className={`min-w-14 px-4 py-1 text-lg tabular-nums ${i > 0 ? 'border-l-2 border-slate-300' : ''} ${FOCUS} ${
+                        active ? 'bg-blue-600 font-semibold text-white' : 'bg-white text-slate-800 hover:bg-slate-50'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            {loading && loaded && (
+              <span className="text-lg font-semibold text-slate-800" role="status">
+                Wczytywanie…
+              </span>
+            )}
+            {lastPage > 1 && (
+              <nav className="flex flex-wrap items-center gap-4" aria-label="Strony listy">
+                <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} className={MODAL_BUTTON}>
+                  ‹ Poprzednie
+                </button>
+                <span className="text-lg text-slate-900 tabular-nums">
+                  Strona {page} z {lastPage}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.min(lastPage, p + 1))}
+                  disabled={page >= lastPage}
+                  className={MODAL_BUTTON}
+                >
+                  Następne ›
+                </button>
+              </nav>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -1291,13 +1309,13 @@ function ItemsTable({
   const n = rows.length
   const share = pct(pageSum, totalValue)
   return (
-    <table className="w-full border-collapse text-lg">
+    <table className="w-full border-collapse text-lg/snug">
       <thead>
         <tr>
           <th scope="col" className={`${TH} w-14`}>
             Nr
           </th>
-          <th scope="col" className={TH}>
+          <th scope="col" className={`${TH} w-full`}>
             Towar
           </th>
           <th scope="col" className={`${TH} text-right`}>
@@ -1307,10 +1325,10 @@ function ItemsTable({
             Wartość
           </th>
           <th scope="col" className={TH}>
-            Ostatnio sprzedany
+            Ostatnia sprzedaż
           </th>
           <th scope="col" className={TH}>
-            Najstarsza sztuka przyszła
+            Najstarsza dostawa
           </th>
         </tr>
       </thead>
@@ -1327,15 +1345,17 @@ function ItemsTable({
               <td className={`${TD} text-slate-700 tabular-nums`}>{firstNr + i}</td>
               <td className={TD}>
                 <span className="block font-semibold break-words text-slate-900">{r.card_name ?? r.name}</span>
-                <span className="block text-base break-words text-slate-700">{second.join(' · ')}</span>
+                <span className="block w-0 min-w-full truncate text-base/snug text-slate-700 print:w-auto print:whitespace-normal" title={second.join(' · ')}>
+                  {second.join(' · ')}
+                </span>
               </td>
               <td className={`${TD} text-right whitespace-nowrap tabular-nums`}>{fmtQuantity(r.quantity, r.unit)}</td>
               <td className={`${TD} text-right whitespace-nowrap`}>
                 <span className="block font-semibold tabular-nums">{r.value === null ? '—' : fmtZl(r.value)}</span>
                 {r.value === null ? (
-                  <span className="block text-base text-slate-700">brak ceny zakupu</span>
+                  <span className="block text-base/snug text-slate-700">brak ceny zakupu</span>
                 ) : r.unit_cost !== null ? (
-                  <span className="block text-base text-slate-700 tabular-nums">
+                  <span className="block text-base/snug text-slate-700 tabular-nums">
                     {fmtUnitCost(r.unit_cost)}
                     {r.unit ? `/${r.unit}` : ' za jednostkę'}
                   </span>
@@ -1345,7 +1365,7 @@ function ItemsTable({
                 {r.last_sale_at ? (
                   <>
                     <span className="block whitespace-nowrap">{monthName(r.last_sale_at)}</span>
-                    {since !== null && <span className="block text-base text-slate-700">{agoText(since)}</span>}
+                    {since !== null && <span className="block text-base/snug text-slate-700">{agoText(since)}</span>}
                   </>
                 ) : (
                   'ani razu'
@@ -1358,7 +1378,7 @@ function ItemsTable({
       </tbody>
       <tfoot>
         <tr className="border-t-2 border-slate-300">
-          <td colSpan={6} className="px-3 py-4 text-xl font-semibold text-slate-900">
+          <td colSpan={6} className="px-3 py-2 text-lg font-semibold text-slate-900">
             Razem {n === 1 ? 'ten' : 'te'} {goods(n)}: {fmtZl(pageSum)}
             {share ? ` — to ${share} z ${fmtBig(totalValue)}` : ''}
           </td>
@@ -1370,7 +1390,7 @@ function ItemsTable({
 
 function MovesTable({ rows, firstNr, showWho }: { rows: InventoryBoardMoveRow[]; firstNr: number; showWho: boolean }) {
   return (
-    <table className="w-full border-collapse text-lg">
+    <table className="w-full border-collapse text-lg/snug">
       <thead>
         <tr>
           <th scope="col" className={`${TH} w-14`}>
@@ -1379,7 +1399,7 @@ function MovesTable({ rows, firstNr, showWho }: { rows: InventoryBoardMoveRow[];
           <th scope="col" className={TH}>
             Data
           </th>
-          <th scope="col" className={TH}>
+          <th scope="col" className={`${TH} w-full`}>
             Towar
           </th>
           {showWho && (
@@ -1391,10 +1411,10 @@ function MovesTable({ rows, firstNr, showWho }: { rows: InventoryBoardMoveRow[];
             Ile i za ile
           </th>
           <th scope="col" className={TH}>
-            Leżał w magazynie przed wydaniem
+            Ile leżał
           </th>
-          <th scope="col" className={TH}>
-            Opis na dokumencie
+          <th scope="col" className={`${TH} min-w-56 print:min-w-0`}>
+            Opis
           </th>
         </tr>
       </thead>
@@ -1402,7 +1422,6 @@ function MovesTable({ rows, firstNr, showWho }: { rows: InventoryBoardMoveRow[];
         {rows.map((r, i) => {
           const second = [`Wydanie ${r.rw_number} → Przyjęcie ${r.pw_number}`]
           if (r.approver_name) second.push(`zatwierdził(a): ${r.approver_name}`)
-          if (!r.same_feature) second.push(`rozmiar/kolor: ${r.rw_features ?? '—'} → ${r.pw_features ?? '—'}`)
           const rwNote = r.rw_note?.trim() || null
           const pwNote = r.pw_note?.trim() || null
           return (
@@ -1411,7 +1430,14 @@ function MovesTable({ rows, firstNr, showWho }: { rows: InventoryBoardMoveRow[];
               <td className={`${TD} whitespace-nowrap`}>{longDate(r.rw_date) ?? r.rw_date}</td>
               <td className={TD}>
                 <span className="block font-semibold break-words text-slate-900">{r.card_name ?? r.item_name}</span>
-                <span className="block text-base break-words text-slate-700">{second.join(' · ')}</span>
+                <span className="block w-0 min-w-full truncate text-base/snug text-slate-700 print:w-auto print:whitespace-normal" title={second.join(' · ')}>
+                  {second.join(' · ')}
+                </span>
+                {!r.same_feature && (
+                  <span className="block text-base/snug font-medium break-words text-slate-900">
+                    Zmieniony rozmiar/kolor: {r.rw_features ?? '—'} → {r.pw_features ?? '—'}
+                  </span>
+                )}
               </td>
               {showWho && <td className={TD}>{r.operator_name ?? '—'}</td>}
               <td className={`${TD} text-right whitespace-nowrap tabular-nums`}>
@@ -1426,7 +1452,7 @@ function MovesTable({ rows, firstNr, showWho }: { rows: InventoryBoardMoveRow[];
                   <>
                     {rwNote && <span className="block">{rwNote}</span>}
                     {pwNote && pwNote !== rwNote && (
-                      <span className="block text-base text-slate-700">przy przyjęciu: {pwNote}</span>
+                      <span className="block text-base/snug text-slate-700">przy przyjęciu: {pwNote}</span>
                     )}
                   </>
                 ) : (
