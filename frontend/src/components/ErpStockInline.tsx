@@ -69,8 +69,20 @@ export function ErpStockInline({ erp, title, className = '' }: { erp: ErpCardSto
         </span>
       )}
       {more && (
-        <button type="button" onClick={() => setOpen(true)} className="font-medium text-violet-700 hover:underline">
-          zobacz więcej
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="inline-flex items-center gap-1 rounded-md border border-violet-400 bg-violet-100 px-2 py-0.5 font-semibold text-violet-900 shadow-sm hover:border-violet-500 hover:bg-violet-200 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-violet-500"
+          title="Wszystkie magazyny, towary XL i ostatnie zakupy"
+        >
+          Zobacz więcej
+          <svg aria-hidden viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3">
+            <path
+              fillRule="evenodd"
+              d="M7.2 14.8a.75.75 0 0 1 0-1.06L10.94 10 7.2 6.26a.75.75 0 1 1 1.06-1.06l4.27 4.27a.75.75 0 0 1 0 1.06L8.26 14.8a.75.75 0 0 1-1.06 0Z"
+              clipRule="evenodd"
+            />
+          </svg>
         </button>
       )}
       {open && <ErpStockDetailsModal erp={erp} title={title} onClose={() => setOpen(false)} />}
