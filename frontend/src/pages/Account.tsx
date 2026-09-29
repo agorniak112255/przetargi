@@ -188,7 +188,7 @@ function MarginForm() {
       </div>
       <p className="mt-2 text-xs text-slate-500">
         Każda nowa odpowiedź na zapytanie startuje z ceną oferty: zakup + ta marża. Dla pojedynczego listu
-        zmienisz ją na stronie odpowiedzi.
+        zmienisz ją na stronie odpowiedzi. Z tą marżą okno „Oferta dla klienta” proponuje cenę.
       </p>
       <button
         type="submit"

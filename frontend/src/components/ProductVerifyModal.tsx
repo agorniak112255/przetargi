@@ -253,7 +253,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
               <button
                 type="button"
                 onClick={() => setOfferOpen(true)}
-                title="Oferta HTML z opisem, zdjęciami i parametrami — wpisujesz tylko cenę"
+                title="Gotowa oferta do wklejenia w e-mail: opis, zdjęcia i parametry — wpisujesz tylko cenę"
                 className="rounded-md bg-white px-2.5 py-1 text-xs font-semibold text-violet-800 hover:bg-violet-50"
               >
                 Oferta dla klienta

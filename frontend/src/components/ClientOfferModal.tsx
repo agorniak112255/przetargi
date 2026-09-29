@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useAuth } from '../auth'
 import type { Product } from '../lib/api'
 import { copyRichHtml } from '../lib/clipboard'
 import {
@@ -10,7 +11,9 @@ import {
   renderOfferText,
   type OfferTemplateId,
 } from '../lib/clientOffer'
-import { productDisplayName } from '../lib/productLabel'
+import { formatPrice } from '../lib/priceChange'
+import { offerMarkupFactor, productDisplayName, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
+import { SourcePricesRanked } from './SourcePricesRanked'
 
 type Props = {
   open: boolean
@@ -19,6 +22,8 @@ type Props = {
 }
 
 const TEMPLATE_KEY = 'supon_offer_template'
+/** Domyślna marża konta w bazie (users.default_margin_percent) — gdy /me jej nie podał. */
+const DEFAULT_MARGIN_PERCENT = 18
 
 function storedTemplate(): OfferTemplateId {
   try {
@@ -30,10 +35,12 @@ function storedTemplate(): OfferTemplateId {
 }
 
 /**
- * Oferta dla klienta z karty: trzy układy HTML do skopiowania jednym przyciskiem. Handlowiec wpisuje tylko cenę —
- * reszta pochodzi z karty (bez cen zakupu, dostawców i danych z ich sklepów).
+ * Oferta dla klienta z karty: trzy układy do skopiowania jednym przyciskiem i wklejenia w e-mail. Handlowiec wpisuje tylko cenę —
+ * reszta pochodzi z karty (bez cen zakupu, dostawców i danych z ich sklepów). Na górze, tylko w panelu, ceny zakupu
+ * ze źródeł karty i propozycja: zakup obowiązujący × (1 + marża konta) — ten sam wzór co odpowiedź na zapytanie.
  */
 export function ClientOfferModal({ open, onClose, product }: Props) {
+  const { user } = useAuth()
   // Cena trzymana z kartą, dla której ją wpisano — inna karta zaczyna od pustego pola.
   const [priceDraft, setPriceDraft] = useState<{ productId: number; text: string } | null>(null)
   const [template, setTemplate] = useState<OfferTemplateId>(storedTemplate)
@@ -65,6 +72,10 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
 
   if (!open || !product || !data) return null
 
+  const marginPercent = user?.default_margin_percent ?? DEFAULT_MARGIN_PERCENT
+  const purchase = purchaseForOffer(product)
+  const proposal = suggestedOfferPrice(purchase, offerMarkupFactor(marginPercent))
+
   function pickTemplate(id: OfferTemplateId) {
     setTemplate(id)
     setMsg(null)
@@ -72,16 +83,6 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
       localStorage.setItem(TEMPLATE_KEY, id)
     } catch {
       // wybór układu to tylko wygoda — bez pamięci zostaje domyślny
-    }
-  }
-
-  async function copyCode() {
-    if (priceInvalid) return
-    try {
-      await navigator.clipboard.writeText(html)
-      setMsg({ ok: true, text: 'Skopiowano kod HTML oferty.' })
-    } catch {
-      setMsg({ ok: false, text: 'Nie udało się skopiować do schowka.' })
     }
   }
 
@@ -133,8 +134,40 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[18rem_1fr]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[20rem_1fr]">
           <div className="flex flex-col gap-4 overflow-y-auto border-b border-slate-200 bg-slate-50 p-4 lg:border-b-0 lg:border-r">
+            {/* Podpowiedź tylko dla handlowca — ceny zakupu nie trafiają do oferty. */}
+            <div className="space-y-2">
+              <SourcePricesRanked product={product} />
+              <div className="rounded border border-violet-200 bg-violet-50 px-2.5 py-2 text-xs text-slate-700">
+                {proposal != null && purchase != null ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>
+                        Proponowana cena: <b className="text-sm tabular-nums text-slate-900">{formatPrice(proposal)} zł</b>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPriceDraft({ productId: product.id, text: formatPrice(proposal) })
+                          setMsg(null)
+                        }}
+                        className="shrink-0 rounded-md bg-violet-700 px-2 py-1 text-[11px] font-semibold text-white hover:bg-violet-800"
+                      >
+                        Wstaw
+                      </button>
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      zakup {formatPrice(purchase)} zł + marża {formatPrice(marginPercent).replace(/,00$/, '')}% z Twojego konta
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-[11px] text-slate-500">
+                    Brak ceny zakupu w zł na karcie — propozycji z marżą nie da się policzyć.
+                  </p>
+                )}
+              </div>
+            </div>
             <label className="block">
               <span className="text-xs font-semibold text-slate-700">Cena netto dla klienta (zł)</span>
               <input
@@ -146,7 +179,7 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
                   setPriceDraft({ productId: product.id, text: e.target.value })
                   setMsg(null)
                 }}
-                placeholder="np. 29,90"
+                placeholder={proposal != null ? `np. ${formatPrice(proposal)}` : 'np. 29,90'}
                 className={`mt-1 w-full rounded-md border bg-white px-2.5 py-2 text-base font-semibold tabular-nums focus:outline-none focus:ring-2 ${
                   priceInvalid
                     ? 'border-rose-400 focus:ring-rose-200'
@@ -186,16 +219,8 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
               <button
                 type="button"
                 disabled={priceInvalid}
-                onClick={() => void copyCode()}
-                className="rounded-md bg-violet-700 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-800 disabled:opacity-50"
-              >
-                Kopiuj kod HTML
-              </button>
-              <button
-                type="button"
-                disabled={priceInvalid}
                 onClick={() => void copyForMail()}
-                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                className="rounded-md bg-violet-700 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-800 disabled:opacity-50"
                 title="Kopiuje gotowy wygląd — do wklejenia wprost w treść e-maila"
               >
                 Kopiuj do wklejenia w e-mail

@@ -621,7 +621,7 @@ export function ProductDetail() {
             type="button"
             onClick={() => setOfferOpen(true)}
             className="rounded bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
-            title="Oferta HTML z opisem, zdjęciami i parametrami — wpisujesz tylko cenę"
+            title="Gotowa oferta do wklejenia w e-mail: opis, zdjęcia i parametry — wpisujesz tylko cenę"
           >
             Oferta dla klienta
           </button>
