@@ -49,6 +49,7 @@ class User extends Authenticatable
             'ui_preferences' => 'array',
             'last_login_at' => 'datetime',
             'last_seen_at' => 'datetime',
+            'thunderbird_offers_seen_at' => 'datetime',
         ];
     }
 

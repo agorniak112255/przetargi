@@ -12,6 +12,7 @@ use App\Http\Requests\QueueClientInquiryReplyRequest;
 use App\Http\Requests\StoreClientInquiryRequest;
 use App\Http\Requests\UpdateClientInquiryRequest;
 use App\Models\ClientInquiry;
+use App\Models\OfferComposeRequest;
 use App\Models\User;
 use App\Services\ClientInquiryService;
 use App\Support\InquiryMailText;
@@ -504,10 +505,47 @@ class ClientInquiryController extends Controller
                 'requested_at' => $row->send_requested_at?->toIso8601String(),
             ]);
 
+        // Dodatek 1.24.0+ pyta z with_offers=1 i dostaje obiekt z ofertami „Otwórz w Thunderbirdzie”. Starszy pyta bez
+        // parametru i dostaje tablicę jak dotąd — nie umie otworzyć oferty, więc nie może jej też podjąć i zgubić.
+        if ($request->boolean('with_offers')) {
+            $this->markOfferAddonSeen($user);
+            $offers = OfferComposeRequest::query()
+                ->pendingFor($user)
+                ->orderBy('requested_at')
+                ->limit(5)
+                ->get()
+                ->map(fn (OfferComposeRequest $row): array => [
+                    'id' => $row->id,
+                    'subject' => $row->subject,
+                    'body_html' => $row->body_html,
+                    'body_text' => $row->body_text,
+                    'requested_at' => $row->requested_at?->toIso8601String(),
+                ]);
+
+            return response()->json(['inquiries' => $rows, 'offers' => $offers])
+                ->header('X-Poll-After', (string) $this->queuePollSeconds($user, $rows->isNotEmpty() || $offers->isNotEmpty()));
+        }
+
         // 82% zapytań do API szło stąd (25.09.2026: 22,7 tys. w 5 h, dodatek co 5 s na 6–7 komputerach). Ciało zostaje
         // tablicą — dodatek sprzed 1.23.0 nagłówka nie czyta i pyta co 5 s jak dotąd.
         return response()->json($rows)
             ->header('X-Poll-After', (string) $this->queuePollSeconds($user, $rows->isNotEmpty()));
+    }
+
+    /**
+     * Znacznik „dodatek umie otwierać oferty” dla okna oferty (OfferComposeController::status). Zapis najwyżej raz
+     * na minutę i jednym warunkowym UPDATE — dodatek pyta co 5–30 s z kilku komputerów.
+     */
+    private function markOfferAddonSeen(User $user): void
+    {
+        $seen = $user->thunderbird_offers_seen_at;
+        if ($seen !== null && $seen->gt(now()->subMinute())) {
+            return;
+        }
+        User::query()
+            ->whereKey($user->id)
+            ->where(fn ($q) => $q->whereNull('thunderbird_offers_seen_at')->orWhere('thunderbird_offers_seen_at', '<=', now()->subMinute()))
+            ->update(['thunderbird_offers_seen_at' => now()]);
     }
 
     /** Co ile sekund dodatek ma zapytać znowu: szybko, gdy prośba czeka albo handlowiec jest w aplikacji. */

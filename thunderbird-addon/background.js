@@ -465,6 +465,39 @@ async function findMessageByHeaderId(headerMessageId) {
   return picked
 }
 
+/**
+ * Nowy mail z ofertą dla klienta („Otwórz w Thunderbirdzie” w oknie oferty w aplikacji). Oferta nie odpowiada
+ * na żaden mail, więc adresata wpisuje handlowiec; nadawcę i podpis wybiera Thunderbird jak przy każdym nowym
+ * mailu. Ofertę wstawiamy nad podpisem, temat z aplikacji.
+ */
+async function openOffer(offer) {
+  const html = String(offer.body_html || '').trim()
+  const text = String(offer.body_text || '').trim()
+  if (html === '' && text === '') {
+    await notify('Oferta jest pusta', 'Przygotuj ją jeszcze raz w aplikacji.')
+
+    return
+  }
+
+  const tab = await browser.compose.beginNew()
+  const details = await composeDetailsWhenReady(tab.id)
+  const before = String(details.isPlainText ? details.plainTextBody : details.body || '')
+  const patch = details.isPlainText
+    ? { plainTextBody: (text || html.replace(/<[^>]+>/g, ' ')) + '\n\n' + (details.plainTextBody || '') }
+    : { body: insertIntoHtmlBody(details.body, (html || textToHtml(text)) + '<br>') }
+  if (offer.subject) patch.subject = String(offer.subject)
+
+  await browser.compose.setComposeDetails(tab.id, patch)
+
+  // Edytor potrafi odrzucić zmianę — wtedy handlowiec ma wiedzieć, że trzeba wkleić ręcznie.
+  const after = await browser.compose.getComposeDetails(tab.id)
+  const written = String(after.isPlainText ? after.plainTextBody : after.body || '')
+  if (written.length <= before.length + 20) {
+    await notify('Nie udało się wstawić oferty', 'W aplikacji kliknij „Kopiuj do wklejenia w e-mail” i wklej ją ręcznie.')
+  }
+  await raiseComposeWindow(tab)
+}
+
 async function handleQueued(row) {
   // Maila wskazuje samo zapytanie — insertReply znajdzie go po Message-ID
   // i nie otworzy odpowiedzi na żadnym innym.
@@ -484,10 +517,12 @@ async function pollQueue() {
   queueBusy = true
   const startedAt = Date.now()
   try {
-    let rows
+    let answer
     let hint = null
     try {
-      rows = await api('/api/inquiries/queued', {
+      // with_offers=1: serwer oddaje też oferty „Otwórz w Thunderbirdzie” i zapamiętuje, że ten dodatek je obsługuje
+      // (dopiero wtedy aplikacja pokazuje ten przycisk). Starszy serwer parametr pomija i oddaje samą tablicę.
+      answer = await api('/api/inquiries/queued?with_offers=1', {
         onResponse: (res) => {
           hint = res.headers.get('X-Poll-After')
         },
@@ -499,7 +534,24 @@ async function pollQueue() {
     }
     scheduleQueue(startedAt, Date.now() < queueFastUntil ? QUEUE_POLL_SECONDS : queueSecondsFromHeader(hint))
 
-    for (const row of Array.isArray(rows) ? rows : []) {
+    const rows = Array.isArray(answer) ? answer : answer && Array.isArray(answer.inquiries) ? answer.inquiries : []
+    const offers = !Array.isArray(answer) && answer && Array.isArray(answer.offers) ? answer.offers : []
+
+    for (const offer of offers) {
+      // Podjęcie przed otwarciem: drugi Thunderbird na tym samym koncie dostaje 409 i nie otworzy tej samej oferty.
+      try {
+        await api('/api/offers/compose/' + offer.id + '/claim', { method: 'POST' })
+      } catch (e) {
+        continue
+      }
+      try {
+        await openOffer(offer)
+      } catch (e) {
+        await notify('Nie udało się otworzyć oferty', e.message)
+      }
+    }
+
+    for (const row of rows) {
       try {
         await api('/api/inquiries/' + row.id + '/queue-reply', {
           method: 'POST',

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../auth'
-import type { Product } from '../lib/api'
+import { api, can, type Product } from '../lib/api'
 import { copyRichHtml } from '../lib/clipboard'
 import {
   buildOfferData,
@@ -22,6 +22,11 @@ type Props = {
 }
 
 const TEMPLATE_KEY = 'supon_offer_template'
+/** Jak przy „Zapisz i wyślij w Thunderbirdzie” (InquiryReply): ok. 40 s czekania na dodatek. */
+const WATCH_TRIES = 20
+const WATCH_EVERY_MS = 2000
+/** Co ile okno pyta, czy dodatek działa — Thunderbird uruchomiony po otwarciu okna pokaże przycisk bez odświeżania. */
+const ADDON_STATUS_EVERY_MS = 20000
 /** Domyślna marża konta w bazie (users.default_margin_percent) — gdy /me jej nie podał. */
 const DEFAULT_MARGIN_PERCENT = 18
 
@@ -48,6 +53,12 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
   const priceRef = useRef<HTMLInputElement>(null)
   // Pliki PDF odznaczone przez handlowca (adresy) — trzymane z kartą; inna karta zaczyna od wszystkich.
   const [skippedDocs, setSkippedDocs] = useState<{ productId: number; urls: string[] } | null>(null)
+  // Dodatek do Thunderbirda 1.24.0+ odezwał się niedawno (GET /offers/compose/status) — wtedy przycisk „Otwórz w Thunderbirdzie”.
+  const [addonReady, setAddonReady] = useState(false)
+  const [tbBusy, setTbBusy] = useState(false)
+  // Numer bieżącego pilnowania prośby — zamknięcie okna i nowa prośba unieważniają stare.
+  const watchRef = useRef(0)
+  const canThunderbird = can(user, 'inquiries.use')
 
   useEffect(() => {
     if (!open) return
@@ -61,6 +72,28 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [open, onClose])
+
+  useEffect(() => {
+    if (!open || !canThunderbird) return
+    let cancelled = false
+    const check = () =>
+      void api<{ addon_ready: boolean }>('/offers/compose/status')
+        .then((res) => {
+          if (!cancelled) setAddonReady(res.addon_ready)
+        })
+        // bez odpowiedzi zostaje samo kopiowanie — przycisk Thunderbirda to dodatek, nie warunek
+        .catch(() => {
+          if (!cancelled) setAddonReady(false)
+        })
+    check()
+    const timer = window.setInterval(check, ADDON_STATUS_EVERY_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+      watchRef.current += 1
+      setTbBusy(false)
+    }
+  }, [open, canThunderbird])
 
   // Po otwarciu kwota zaznaczona — wpisanie własnej od razu zastępuje propozycję.
   const productId = product?.id
@@ -121,6 +154,59 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
         ? { ok: true, text: 'Skopiowano gotową ofertę — wklej ją w treść wiadomości (Ctrl+V).' }
         : { ok: false, text: 'Nie udało się skopiować do schowka.' },
     )
+  }
+
+  /**
+   * Nowy mail z ofertą w Thunderbirdzie: prośba na serwerze, dodatek podejmuje ją przy pytaniu o kolejkę (co 5 s,
+   * gdy handlowiec jest w aplikacji). Pilnujemy podjęcia, bo okno Thunderbirda otwiera się poza przeglądarką.
+   */
+  async function sendToThunderbird() {
+    if (priceInvalid || !data || !product) return
+    const ticket = ++watchRef.current
+    setTbBusy(true)
+    setMsg(null)
+    let id: number
+    try {
+      const res = await api<{ id: number }>('/offers/compose', {
+        method: 'POST',
+        body: JSON.stringify({
+          subject: `Oferta: ${data.name}`.slice(0, 255),
+          body_html: html,
+          body_text: renderOfferText(data, offerPrice, date),
+          product_id: product.id,
+        }),
+      })
+      id = res.id
+    } catch (ex) {
+      if (watchRef.current === ticket) {
+        setTbBusy(false)
+        setMsg({ ok: false, text: ex instanceof Error ? ex.message : 'Nie udało się przekazać oferty do Thunderbirda.' })
+      }
+      return
+    }
+    if (watchRef.current !== ticket) return
+    setMsg({ ok: true, text: 'Przekazano. Thunderbird otworzy nowego maila z ofertą w ciągu kilku sekund.' })
+    for (let i = 0; i < WATCH_TRIES; i += 1) {
+      await new Promise((done) => setTimeout(done, WATCH_EVERY_MS))
+      if (watchRef.current !== ticket) return
+      try {
+        const row = await api<{ claimed_at: string | null }>(`/offers/compose/${id}`)
+        if (watchRef.current !== ticket) return
+        if (row.claimed_at) {
+          setTbBusy(false)
+          setMsg({ ok: true, text: 'Thunderbird otworzył nowego maila z ofertą — wpisz adresata i wyślij stamtąd.' })
+          return
+        }
+      } catch {
+        // chwilowy błąd sieci — pytamy dalej do końca czasu
+      }
+    }
+    if (watchRef.current !== ticket) return
+    setTbBusy(false)
+    setMsg({
+      ok: false,
+      text: 'Thunderbird jeszcze nie odebrał oferty — sprawdź, czy jest uruchomiony. Możesz też skopiować ofertę i wkleić ją ręcznie.',
+    })
   }
 
   const missing = [
@@ -280,6 +366,17 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
               >
                 Kopiuj do wklejenia w e-mail
               </button>
+              {addonReady && (
+                <button
+                  type="button"
+                  disabled={priceInvalid || tbBusy}
+                  onClick={() => void sendToThunderbird()}
+                  className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50"
+                  title="Otwiera nowego maila z tą ofertą w Thunderbirdzie — adresata wpisujesz sam"
+                >
+                  {tbBusy ? 'Czekam na Thunderbirda…' : 'Otwórz w Thunderbirdzie'}
+                </button>
+              )}
               {msg && (
                 <p className={`text-xs ${msg.ok ? 'text-emerald-700' : 'text-rose-700'}`} role="status">
                   {msg.text}

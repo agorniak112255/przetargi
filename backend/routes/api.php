@@ -28,6 +28,7 @@ use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\ExchangeRateController;
 use App\Http\Controllers\Api\ImportExclusionController;
 use App\Http\Controllers\Api\NotificationController;
+use App\Http\Controllers\Api\OfferComposeController;
 use App\Http\Controllers\Api\PrestaExportController;
 use App\Http\Controllers\Api\PrestaShopSearchController;
 use App\Http\Controllers\Api\PriceListController;
@@ -261,6 +262,12 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/inquiries/{inquiry}/queue-reply', [ClientInquiryController::class, 'queueReply']);
         // kasuje tylko autor zapytania — sprawdzenie w kontrolerze
         Route::delete('/inquiries/{inquiry}', [ClientInquiryController::class, 'destroy']);
+
+        // oferta dla klienta z karty → nowy mail w Thunderbirdzie (dodatek podejmuje prośbę przy pytaniu o kolejkę)
+        Route::get('/offers/compose/status', [OfferComposeController::class, 'status']);
+        Route::post('/offers/compose', [OfferComposeController::class, 'store']);
+        Route::get('/offers/compose/{offerCompose}', [OfferComposeController::class, 'show'])->whereNumber('offerCompose');
+        Route::post('/offers/compose/{offerCompose}/claim', [OfferComposeController::class, 'claim'])->whereNumber('offerCompose');
     });
 
     Route::get('/price-lists', [PriceListController::class, 'index'])->middleware('permission:price_lists.view');

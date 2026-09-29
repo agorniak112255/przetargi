@@ -61,6 +61,23 @@ Bieżący odstęp widać w **Ustawieniach → Odpowiedzi** („Prośby „Zapisz
 z aplikacji: sprawdzane co … s”) — przy zgłoszeniu „Thunderbird reaguje wolno”
 od razu wiadomo, w jakim trybie jest dodatek.
 
+## Oferta dla klienta w nowym mailu (od 1.24.0)
+
+W aplikacji okno **Oferta dla klienta** (weryfikacja karty albo strona karty
+produktu) ma przycisk **Otwórz w Thunderbirdzie**. Aplikacja zostawia ofertę na
+serwerze, a dodatek odbiera ją przy tym samym pytaniu co prośby „Zapisz
+i wyślij” (bez dodatkowego ruchu) i otwiera **nowego maila**: oferta nad
+podpisem, temat „Oferta: nazwa produktu”. Adresata wpisuje handlowiec — oferta
+z karty nie jest związana z żadnym mailem klienta.
+
+- Przycisk pokazuje się tylko wtedy, gdy dodatek 1.24.0+ zapytał aplikację
+  w ostatnich 3 minutach (Thunderbird uruchomiony i połączony). Starsze wersje
+  dodatku ofert nie dostają, więc ich nie zgubią.
+- Ofertę dodatek najpierw **podejmuje** na serwerze — przy dwóch Thunderbirdach
+  na jednym koncie otworzy ją tylko pierwszy.
+- Prośba niepodjęta w 15 minut przepada (oferta nie otworzy się godzinę później
+  przy innej pracy).
+
 ## Szablony listu
 
 Pod przyciskiem „Wyślij do Przetargów” wybiera się szablon listu do klienta.
@@ -374,9 +391,12 @@ aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa
 - konto z uprawnieniem `inquiries.use`,
 - API: `POST /api/login`, `POST /api/logout`, `POST /api/inquiries`, `GET /api/inquiries/{id}`,
   `POST /api/inquiries/{id}/replied`, `GET /api/inquiries/queued`,
-  `POST /api/inquiries/{id}/queue-reply`.
+  `POST /api/inquiries/{id}/queue-reply`, `POST /api/offers/compose/{id}/claim`.
 - `GET /api/inquiries/queued` odpowiada tablicą próśb i nagłówkiem `X-Poll-After`
   (sekundy do następnego pytania: 5 albo 30; dodatek przyjmuje 5–30, brak nagłówka = 5).
+  Dodatek 1.24.0+ pyta z `?with_offers=1` i dostaje obiekt `{ inquiries, offers }`
+  (oferta: `id`, `subject`, `body_html`, `body_text`, `requested_at`); starszy serwer
+  parametr pomija i oddaje tablicę — dodatek obsługuje oba kształty.
 - oznaczanie maili: `POST /api/inquiries/lookup` (paczka do 200 `message_ids`;
   odpowiedź to mapa `Message-ID → lista zapytań` z `id`, `user`, `mine`,
   `created_at`, `replied_at`; **brak klucza znaczy „sprawdzone, nie ma nic”** —
