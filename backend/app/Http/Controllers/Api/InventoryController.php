@@ -9,6 +9,7 @@ use App\Models\ErpItem;
 use App\Models\ErpItemPurchase;
 use App\Models\ErpRwPwPair;
 use App\Services\Erp\ErpItemCards;
+use App\Services\Erp\InventoryQuery;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -17,11 +18,9 @@ use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 
 /**
- * Zakładka „Zapasy”: towary ERP XL ze stanem (wszystkie magazyny), które nie sprzedały się od N miesięcy. Wartość =
- * ilość × cena zakupu (decyzja użytkownika 30.09.2026): najpierw wartość partii leżących na stanie (TwZ_KsiegowaNetto),
- * a bez niej stan × cena z ostatniej PZ. Sama ostatnia PZ bywa błędna — SNAU51000-04-S: PZ 1 szt. za 11 600,60 zł,
- * poprawione RW 1 szt. + PW 40 szt. po 290,02 zł; partie mają 290,02. Wiersz = towar XL (także bez karty katalogu —
- * to większość towarów). Dane z nocnej kopii XL (2:00); niczego nie zapisuje.
+ * Zakładka „Zapasy”: towary ERP XL ze stanem (wszystkie magazyny), które nie sprzedały się od N miesięcy albo leżą od N
+ * miesięcy. Reguły wartości i zalegania w InventoryQuery (wspólne z raportem dla zarządu). Wiersz = towar XL (także bez
+ * karty katalogu — to większość towarów). Dane z nocnej kopii XL (2:00); niczego nie zapisuje.
  */
 class InventoryController extends Controller
 {
@@ -35,16 +34,7 @@ class InventoryController extends Controller
     /** Grupy asortymentu XL po pierwszej literze kodu towaru (jak ekran Powiązania z ERP XL). */
     private const GROUPS = ['A', 'B', 'S', 'T', 'H'];
 
-    /**
-     * Cena jednostki podstawowej w PLN z ostatniej PZ towaru (ta sama kolejność co ErpItem::purchases). Wartość zapasu
-     * w SQL, żeby sortowanie i suma szły po całej liście, nie po stronie.
-     */
-    private const LAST_PRICE_SQL = '(select p.unit_price_pln from erp_item_purchases p where p.erp_item_id = erp_items.id'
-        .' and p.unit_price_pln is not null order by p.purchased_at desc, p.document_id desc limit 1)';
-
-    private const FALLBACK_VALUE_SQL = '(erp_items.stock_total * '.self::LAST_PRICE_SQL.')';
-
-    private const VALUE_SQL = '(coalesce(erp_items.stock_value, '.self::FALLBACK_VALUE_SQL.'))';
+    private const VALUE_SQL = InventoryQuery::VALUE_SQL;
 
     private const SORTS = [
         'value' => 'value',
@@ -87,11 +77,8 @@ class InventoryController extends Controller
         $neverSold = ! array_key_exists('never_sold', $v) || $v['never_sold'] === null || (bool) $v['never_sold'];
         $query = $this->filtered($v, $cutoff, $neverSold, $lotCutoff);
 
-        $summary = (clone $query)->toBase()
-            ->selectRaw('count(*) as items, coalesce(sum('.self::VALUE_SQL.'), 0) as value,'
-                .' sum(case when '.self::VALUE_SQL.' is null then 1 else 0 end) as value_unknown,'
-                .' sum(case when last_sale_at is null then 1 else 0 end) as never_sold')
-            ->first();
+        $totals = InventoryQuery::totals($query);
+        $neverSoldCount = (clone $query)->whereNull('last_sale_at')->count();
         $withoutCard = (clone $query)->whereDoesntHave('links', fn (Builder $q) => ErpItemCards::linked($q))->count();
 
         $dir = ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
@@ -121,11 +108,11 @@ class InventoryController extends Controller
                 'total' => $page->total(),
             ],
             'summary' => [
-                'items' => (int) ($summary->items ?? 0),
-                'value' => round((float) ($summary->value ?? 0), 2),
-                'value_unknown' => (int) ($summary->value_unknown ?? 0),
+                'items' => $totals['items'],
+                'value' => $totals['value'],
+                'value_unknown' => $totals['value_unknown'],
                 'without_card' => $withoutCard,
-                'never_sold' => (int) ($summary->never_sold ?? 0),
+                'never_sold' => $neverSoldCount,
             ],
             'cutoff' => $cutoff?->toDateString(),
             'lot_cutoff' => $lotCutoff?->toDateString(),
@@ -134,32 +121,17 @@ class InventoryController extends Controller
     }
 
     /**
-     * Towar ze stanem, którego ostatnia sprzedaż (FS, paragon, WZ) jest starsza niż próg. Nigdy niesprzedany liczy się
-     * tylko wtedy, gdy jego najstarsza partia leży dłużej niż próg (albo jej data jest nieznana) — inaczej świeża
-     * dostawa nowego towaru wyglądałaby jak zaleganie.
-     *
      * @param  array<string, mixed>  $v
      * @return Builder<ErpItem>
      */
     private function filtered(array $v, ?CarbonImmutable $cutoff, bool $neverSold, ?CarbonImmutable $lotCutoff = null): Builder
     {
-        $query = ErpItem::query()
-            ->whereNull('removed_at')
-            ->where('stock_total', '>', 0);
+        $query = InventoryQuery::inStock();
         if ($cutoff !== null) {
-            $date = $cutoff->toDateString();
-            $query->where(function (Builder $q) use ($date, $neverSold): void {
-                $q->where('last_sale_at', '<', $date);
-                if ($neverSold) {
-                    $q->orWhere(fn (Builder $n) => $n->whereNull('last_sale_at')
-                        ->where(fn (Builder $l) => $l->whereNull('oldest_lot_at')->orWhere('oldest_lot_at', '<=', $date)));
-                }
-            });
+            InventoryQuery::unsoldSince($query, $cutoff, $neverSold);
         }
-        // partia leży dłużej niż próg: najstarsza partia na stanie przyjęta najpóźniej w dniu progu. Uwaga: PW z pary
-        // RW → PW zakłada nową partię i „odmładza” tę datę (znacznik RW/PW przy wierszu).
         if ($lotCutoff !== null) {
-            $query->whereNotNull('oldest_lot_at')->where('oldest_lot_at', '<=', $lotCutoff->toDateString());
+            InventoryQuery::lotOlderThan($query, $lotCutoff);
         }
 
         $card = (string) ($v['card'] ?? '');

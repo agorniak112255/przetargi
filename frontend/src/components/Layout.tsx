@@ -18,6 +18,7 @@ const links: NavLinkItem[] = [
   { to: '/tenders', label: 'Przetargi', icon: 'tenders', anyOf: ['tenders.view_own', 'tenders.view_all'] },
   { to: '/products', label: 'Produkty', icon: 'products', permission: 'products.view' },
   { to: '/zapasy', label: 'Zapasy', icon: 'inventory', permission: 'inventory.view' },
+  { to: '/raport-zapasow', label: 'Raport dla zarządu', icon: 'reports', permission: 'inventory.report.view' },
   { to: '/card-matches', label: 'Łączenie kart', icon: 'substitutes', permission: 'card_matches.view' },
   { to: '/price-lists', label: 'Cenniki', icon: 'price-lists', permission: 'price_lists.view' },
   { to: '/substitutes', label: 'Zamienniki', icon: 'substitutes', permission: 'products.view' },
@@ -40,7 +41,7 @@ export function Layout() {
 
   return (
     <div className="app-shell flex min-h-screen">
-      <aside className="app-sidebar w-60 shrink-0 bg-slate-800 text-slate-100">
+      <aside className="app-sidebar w-60 shrink-0 bg-slate-800 text-slate-100 print:hidden">
         <div className="app-brand border-b border-slate-700 p-4 text-xl font-bold">
           Przetargi Supon
           <small className="app-brand-sub mt-1 block text-xs font-normal text-slate-400">

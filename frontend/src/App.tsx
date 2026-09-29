@@ -25,6 +25,7 @@ import { Inquiries } from './pages/Inquiries'
 import { InquiryReply } from './pages/InquiryReply'
 import { Inventory } from './pages/Inventory'
 import { InventoryRwPw } from './pages/InventoryRwPw'
+import { InventoryBoardReport } from './pages/InventoryBoardReport'
 import { Dashboard } from './pages/Dashboard'
 import { Help } from './pages/Help'
 import { Login } from './pages/Login'
@@ -112,6 +113,13 @@ function PermissionGuard({ permission, children }: { permission: string; childre
   return children
 }
 
+/** Zarząd z samym raportem zapasów (bez pulpitu) trafia od razu na raport zamiast na pulpit, do którego nie ma danych. */
+function HomeIndex() {
+  const { user } = useAuth()
+  if (!can(user, 'dashboard.view') && can(user, 'inventory.report.view')) return <Navigate to="/raport-zapasow" replace />
+  return <Dashboard />
+}
+
 /** Administracja bez prawa do listy pracowników otwiera pierwszy dostępny kafelek zamiast wracać na pulpit. */
 function AdminIndex() {
   const { user } = useAuth()
@@ -135,7 +143,7 @@ export default function App() {
               </Guard>
             }
           >
-            <Route index element={<Dashboard />} />
+            <Route index element={<HomeIndex />} />
             <Route path="tenders" element={<Tenders />} />
             <Route path="tenders/:id" element={<TenderDetail />} />
             <Route path="products" element={<Products />} />
@@ -154,6 +162,14 @@ export default function App() {
               element={
                 <PermissionGuard permission="inventory.view">
                   <InventoryRwPw />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="raport-zapasow"
+              element={
+                <PermissionGuard permission="inventory.report.view">
+                  <InventoryBoardReport />
                 </PermissionGuard>
               }
             />

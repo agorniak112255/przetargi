@@ -709,6 +709,50 @@ export type InventoryResponse = {
   synced_at: string | null
 }
 
+/** Próg raportu dla zarządu: towar spełniający warunek od co najmniej `months` miesięcy. */
+export type InventoryBoardBucket = { months: number; items: number; value: number }
+
+/** Raport zapasów dla zarządu (GET /api/inventory/board, uprawnienie inventory.report.view). Kwoty w zł. */
+export type InventoryBoardReport = {
+  /** ISO — kiedy odczytano dane z XL. */
+  as_of: string | null
+  /** Cały towar w magazynach (wszystkie magazyny). */
+  stock: { items: number; value: number }
+  /** months 6, 12, 24 — nie sprzedaje się od tylu miesięcy. */
+  no_sale: InventoryBoardBucket[]
+  /** Nigdy nie sprzedany (i leży dłużej niż pół roku). */
+  never_sold: { items: number; value: number }
+  /** months 12, 36, 60 — najstarszy towar leży co najmniej tyle. */
+  lot_age: InventoryBoardBucket[]
+  /** 5 najdroższych pozycji, które nie sprzedają się ponad rok. */
+  top_unsold: {
+    code: string
+    name: string
+    quantity: number
+    unit: string | null
+    value: number
+    /** 'YYYY-MM-DD'; null = nigdy. */
+    last_sale_at: string | null
+    /** Nazwa z katalogu, gdy towar ma kartę (czytelniejsza niż nazwa XL). */
+    card_name: string | null
+  }[]
+  /** Towar wydany z magazynu i przyjęty z powrotem jako nowy (pary RW → PW). */
+  internal_moves: {
+    /** 'YYYY-MM-DD' — początek okresu (12 mies.). */
+    from: string
+    /** Wszystkich takich par (najczęściej zamiany rozmiarów). */
+    total: number
+    /** Bez zmiany rozmiaru/koloru i bez wyjaśnienia na dokumencie. */
+    unexplained: number
+    /** Wartość (zł) par bez wyjaśnienia. */
+    unexplained_value: number
+    /** Do 5 osób z największą liczbą przypadków bez wyjaśnienia (zapis jak w XL, bywa „Nazwisko Imię”). */
+    people: { name: string; count: number }[]
+  }
+  /** Ile pozycji bez wartości (nie ma ich w kwotach). */
+  value_unknown: number
+}
+
 /** Dokument RW albo PW z pary (GET /api/inventory/rw-pw). */
 export type RwPwDoc = {
   /** Np. 'RW-15H/30/26/07'. */
