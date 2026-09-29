@@ -24,6 +24,7 @@ import { Clients } from './pages/Clients'
 import { Inquiries } from './pages/Inquiries'
 import { InquiryReply } from './pages/InquiryReply'
 import { Inventory } from './pages/Inventory'
+import { InventoryRwPw } from './pages/InventoryRwPw'
 import { Dashboard } from './pages/Dashboard'
 import { Help } from './pages/Help'
 import { Login } from './pages/Login'
@@ -145,6 +146,14 @@ export default function App() {
               element={
                 <PermissionGuard permission="inventory.view">
                   <Inventory />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="zapasy/rw-pw"
+              element={
+                <PermissionGuard permission="inventory.view">
+                  <InventoryRwPw />
                 </PermissionGuard>
               }
             />

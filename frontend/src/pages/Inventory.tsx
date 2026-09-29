@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
+import { InventoryTabs } from '../components/InventoryTabs'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { api, type InventoryResponse, type InventoryRow, type InventoryWarehouse } from '../lib/api'
 import { erpForeignPrice, erpQty, erpUnitLabel, erpUnitPrice, isTradeWarehouse } from '../lib/erpStock'
@@ -263,6 +264,7 @@ export function Inventory() {
 
   return (
     <div>
+      <InventoryTabs />
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Zapasy</h1>
@@ -677,6 +679,16 @@ function InventoryTableRow({
           <span className="text-slate-400" title="Data przyjęcia partii nieznana">
             —
           </span>
+        )}
+        {row.rw_pw_pairs > 0 && (
+          // Nowa partia z PW „odmładza” datę najstarszej partii — stąd znacznik w tej kolumnie.
+          <Link
+            to={`/zapasy/rw-pw?search=${encodeURIComponent(row.code)}`}
+            className="mt-1 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-amber-800 hover:underline"
+            title="W ostatnich 12 mies. towar był wydany RW i przyjęty z powrotem PW — najstarsza partia może być młodsza niż towar naprawdę leży."
+          >
+            RW/PW ×{row.rw_pw_pairs}
+          </Link>
         )}
       </td>
       <td className="p-2">

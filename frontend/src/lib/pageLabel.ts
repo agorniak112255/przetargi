@@ -6,6 +6,7 @@ const staticLabels: Record<string, string> = {
   '/products': 'Produkty',
   '/products/compare': 'Porównanie produktów',
   '/zapasy': 'Zapasy',
+  '/zapasy/rw-pw': 'Zapasy — RW → PW',
   '/price-lists': 'Cenniki',
   '/price-lists/b2b': 'Cenniki B2B',
   '/reports': 'Raporty',

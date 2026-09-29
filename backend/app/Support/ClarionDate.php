@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Support;
 
 use Carbon\CarbonImmutable;
+use Carbon\CarbonInterface;
 
 /**
  * Data w zapisie Clarion (Comarch ERP XL, np. TrN_Data2): liczba dni od 28.12.1800. 0 i puste = brak daty.
@@ -23,5 +24,11 @@ final class ClarionDate
         }
 
         return CarbonImmutable::create(1800, 12, 28)->addDays($days)->startOfDay();
+    }
+
+    /** Dzień w zapisie Clarion — do warunków na datach dokumentów XL (TrN_Data2 >= …). */
+    public static function fromDate(CarbonInterface $date): int
+    {
+        return (int) CarbonImmutable::create(1800, 12, 28)->startOfDay()->diffInDays(CarbonImmutable::parse($date->toDateString())->startOfDay());
     }
 }

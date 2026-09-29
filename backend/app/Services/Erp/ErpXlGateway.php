@@ -56,4 +56,13 @@ interface ErpXlGateway
      * @return array<int, int> gid => data
      */
     public function lastSales(array $gids): array;
+
+    /**
+     * Zatwierdzone RW (rozchód wewnętrzny) i PW (przychód wewnętrzny) od daty — suma pozycji na dokument i towar, tylko
+     * towary, które w tym okresie miały choć jedno PW. Magazyn: RW — źródłowy (MagZ), PW — docelowy (MagD).
+     * Operator: akronim z CDN.OpeKarty — kto wystawił (W) i kto zatwierdził (Z).
+     *
+     * @return list<array{type: 'rw'|'pw', document_id: int, number: string, date: int, warehouse: string|null, operator: string|null, approver: string|null, gid: int, quantity: float, value: float}>
+     */
+    public function internalMoves(int $fromClarionDate): array;
 }

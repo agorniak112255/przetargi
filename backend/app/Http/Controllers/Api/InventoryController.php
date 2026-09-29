@@ -6,12 +6,11 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ErpItem;
-use App\Models\ErpItemLink;
 use App\Models\ErpItemPurchase;
-use App\Models\Product;
+use App\Models\ErpRwPwPair;
+use App\Services\Erp\ErpItemCards;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -53,7 +52,12 @@ class InventoryController extends Controller
         'name' => 'name',
     ];
 
-    private const LINKED = [ErpItemLink::STATUS_AUTO, ErpItemLink::STATUS_CONFIRMED];
+    /** Znacznik „RW/PW ×N” przy towarze: pary z 12 miesięcy, PW do 3 dni po RW — jak domyślne filtry podzakładki. */
+    private const RW_PW_MONTHS = 12;
+
+    private const RW_PW_GAP_DAYS = 3;
+
+    public function __construct(private readonly ErpItemCards $cards) {}
 
     public function index(Request $request): JsonResponse
     {
@@ -79,7 +83,7 @@ class InventoryController extends Controller
                 .' sum(case when '.self::VALUE_SQL.' is null then 1 else 0 end) as value_unknown,'
                 .' sum(case when last_sale_at is null then 1 else 0 end) as never_sold')
             ->first();
-        $withoutCard = (clone $query)->whereDoesntHave('links', fn (Builder $q) => $this->linked($q))->count();
+        $withoutCard = (clone $query)->whereDoesntHave('links', fn (Builder $q) => ErpItemCards::linked($q))->count();
 
         $dir = ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
         $sort = self::SORTS[$v['sort'] ?? 'value'];
@@ -92,17 +96,15 @@ class InventoryController extends Controller
         }
         $page = $query
             ->orderBy('id')
-            ->with([
-                'links' => fn ($q) => $this->linked($q)->with('product:id,sku,name,manufacturer'),
-                'purchases',
-            ])
+            ->with([...ErpItemCards::eagerLinks(), 'purchases'])
             ->paginate((int) ($v['per_page'] ?? 50));
 
-        $thumbs = $this->thumbs($page->getCollection());
+        $cards = $this->cards->forItems($page->getCollection());
+        $rwPw = $this->rwPwCounts($page->getCollection()->pluck('id')->all());
         $syncedAt = ErpItem::query()->whereNull('removed_at')->max('synced_at');
 
         return response()->json([
-            'data' => $page->getCollection()->map(fn (ErpItem $item): array => $this->present($item, $thumbs))->values()->all(),
+            'data' => $page->getCollection()->map(fn (ErpItem $item): array => $this->present($item, $cards[(int) $item->id], $rwPw[(int) $item->id] ?? 0))->values()->all(),
             'meta' => [
                 'current_page' => $page->currentPage(),
                 'last_page' => $page->lastPage(),
@@ -145,9 +147,9 @@ class InventoryController extends Controller
 
         $card = (string) ($v['card'] ?? '');
         if ($card === 'with') {
-            $query->whereHas('links', fn (Builder $q) => $this->linked($q));
+            $query->whereHas('links', fn (Builder $q) => ErpItemCards::linked($q));
         } elseif ($card === 'without') {
-            $query->whereDoesntHave('links', fn (Builder $q) => $this->linked($q));
+            $query->whereDoesntHave('links', fn (Builder $q) => ErpItemCards::linked($q));
         }
         $group = (string) ($v['group'] ?? '');
         if ($group === 'other') {
@@ -167,20 +169,11 @@ class InventoryController extends Controller
             $query->where(fn (Builder $q) => $q->where('code', 'like', $like)
                 ->orWhere('name', 'like', $like)
                 ->orWhere('name1', 'like', $like)
-                ->orWhereHas('links', fn (Builder $l) => $this->linked($l)
+                ->orWhereHas('links', fn (Builder $l) => ErpItemCards::linked($l)
                     ->whereHas('product', fn (Builder $p) => $p->where('sku', 'like', $like))));
         }
 
         return $query;
-    }
-
-    /**
-     * @param  Builder<ErpItemLink>|HasMany<ErpItemLink, ErpItem>  $q
-     * @return Builder<ErpItemLink>|HasMany<ErpItemLink, ErpItem>
-     */
-    private function linked($q)
-    {
-        return $q->whereIn('status', self::LINKED)->whereNotNull('product_id');
     }
 
     private function like(string $value): string
@@ -189,52 +182,34 @@ class InventoryController extends Controller
     }
 
     /**
-     * Miniatura głównego zdjęcia karty wskazanej w wierszu — jedno zapytanie na stronę.
+     * Liczba par RW → PW towarów ze strony — jedno zapytanie.
      *
-     * @param  iterable<ErpItem>  $items
-     * @return array<int, string>
+     * @param  list<int>  $itemIds
+     * @return array<int, int>
      */
-    private function thumbs(iterable $items): array
+    private function rwPwCounts(array $itemIds): array
     {
-        $ids = [];
-        foreach ($items as $item) {
-            $link = $this->mainLink($item);
-            if ($link !== null) {
-                $ids[] = (int) $link->product_id;
-            }
-        }
-        if ($ids === []) {
+        if ($itemIds === []) {
             return [];
         }
-        $out = [];
-        foreach (Product::query()->whereIn('id', array_unique($ids))->with([
-            'images' => static fn ($q) => $q->orderByDesc('is_primary')->orderBy('sort_order')->orderBy('id'),
-        ])->get(['id']) as $product) {
-            $image = $product->images->first();
-            if ($image !== null) {
-                $out[(int) $product->id] = $image->thumbUrl();
-            }
-        }
 
-        return $out;
-    }
-
-    /** Karta w wierszu: potwierdzona przed automatyczną, potem najstarsze powiązanie. */
-    private function mainLink(ErpItem $item): ?ErpItemLink
-    {
-        return $item->links
-            ->filter(fn (ErpItemLink $l): bool => $l->product !== null)
-            ->sortBy(fn (ErpItemLink $l): string => ($l->status === ErpItemLink::STATUS_CONFIRMED ? '0' : '1').'-'.str_pad((string) $l->id, 10, '0', STR_PAD_LEFT))
-            ->first();
+        return ErpRwPwPair::query()
+            ->whereIn('erp_item_id', $itemIds)
+            ->where('rw_date', '>=', CarbonImmutable::today()->subMonthsNoOverflow(self::RW_PW_MONTHS)->toDateString())
+            ->where('gap_days', '<=', self::RW_PW_GAP_DAYS)
+            ->groupBy('erp_item_id')
+            ->selectRaw('erp_item_id, count(*) as c')
+            ->pluck('c', 'erp_item_id')
+            ->map(static fn ($c): int => (int) $c)
+            ->all();
     }
 
     /**
-     * @param  array<int, string>  $thumbs
+     * @param  array{card: array<string, mixed>|null, cards_count: int}  $card
      * @return array<string, mixed>
      */
-    private function present(ErpItem $item, array $thumbs): array
+    private function present(ErpItem $item, array $card, int $rwPwPairs): array
     {
-        $link = $this->mainLink($item);
         /** @var ErpItemPurchase|null $purchase */
         $purchase = $item->purchases->first();
 
@@ -270,15 +245,9 @@ class InventoryController extends Controller
                 'document_price' => $purchase->document_price !== null ? (float) $purchase->document_price : null,
                 'currency' => $purchase->currency,
             ],
-            'card' => $link === null ? null : [
-                'id' => (int) $link->product->id,
-                'sku' => (string) $link->product->sku,
-                'name' => (string) $link->product->name,
-                'manufacturer' => $link->product->manufacturer !== '' ? $link->product->manufacturer : null,
-                'thumb_url' => $thumbs[(int) $link->product->id] ?? null,
-                'link_status' => $link->status,
-            ],
-            'cards_count' => $item->links->filter(fn (ErpItemLink $l): bool => $l->product !== null)->pluck('product_id')->unique()->count(),
+            'card' => $card['card'],
+            'cards_count' => $card['cards_count'],
+            'rw_pw_pairs' => $rwPwPairs,
         ];
     }
 }

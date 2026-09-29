@@ -42,6 +42,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // (decyzja użytkownika 29.09.2026; erp:stock zostaje do ręcznego uruchomienia).
         $schedule->command('erp:sync --match')->dailyAt('02:00')->withoutOverlapping(180)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));
+        // Zapasy → RW → PW: pary RW i PW tego samego towaru z 12 miesięcy — jedno zapytanie XL, też tylko w nocy
+        $schedule->command('erp:rw-pw')->dailyAt('02:50')->withoutOverlapping(60)
+            ->when(static fn (): bool => (bool) config('erpxl.enabled'));
         // propozycje z wyszukiwarki (bez modelu) dla towarów XL bez kodu — w nocy, bo każdy towar to zapytanie wektorowe
         $schedule->command('erp:suggest --limit=2000')->dailyAt('03:30')->withoutOverlapping(240)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));

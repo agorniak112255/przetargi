@@ -691,6 +691,8 @@ export type InventoryRow = {
   } | null
   /** Ile kart powiązanych (pewnie / potwierdzone). */
   cards_count: number
+  /** Ile par RW → PW tego towaru w ostatnich 12 mies. (nowa partia bez ruchu towaru — do wyjaśnienia). */
+  rw_pw_pairs: number
 }
 
 export type InventoryResponse = {
@@ -702,6 +704,85 @@ export type InventoryResponse = {
   /** ISO — odczyt z XL (raz na dobę o 2:00). */
   synced_at: string | null
 }
+
+/** Dokument RW albo PW z pary (GET /api/inventory/rw-pw). */
+export type RwPwDoc = {
+  /** Np. 'RW-15H/30/26/07'. */
+  number: string
+  /** 'YYYY-MM-DD'. */
+  date: string
+  /** Kod magazynu XL, np. '15H'. */
+  warehouse: string | null
+  quantity: number
+  /** Wartość księgowa netto w PLN. */
+  value: number
+  /** Akronim operatora XL, który wystawił dokument. */
+  operator: string | null
+  /** Akronim operatora XL, który zatwierdził dokument (często ten sam). */
+  approver: string | null
+}
+
+/** Towar XL w parze RW → PW. */
+export type RwPwItemRef = {
+  erp_item_id: number | null
+  code: string
+  name: string
+  unit: string | null
+  stock_total: number | null
+  card: { id: number; sku: string; name: string; manufacturer: string | null; thumb_url: string | null } | null
+}
+
+/** RW i PW tego samego towaru w tej samej ilości w krótkim odstępie — do wyjaśnienia. */
+export type RwPwPair = {
+  id: number
+  item: RwPwItemRef
+  rw: RwPwDoc
+  pw: RwPwDoc
+  gap_days: number
+  same_value: boolean
+  same_warehouse: boolean
+}
+
+export type RwPwItemRow = {
+  item: RwPwItemRef
+  pairs: number
+  quantity: number
+  value: number
+  same_value: number
+  operators: string[]
+  first_date: string
+  last_date: string
+}
+
+/** operator = kto wystawił RW; pw_by_other = ile PW wystawił ktoś inny. */
+export type RwPwOperatorRow = {
+  operator: string
+  pairs: number
+  items: number
+  value: number
+  same_value: number
+  last_date: string
+  pw_by_other: number
+}
+
+type RwPwResponseBase = {
+  meta: { current_page: number; last_page: number; per_page: number; total: number } | null
+  /** Po tych samych filtrach co lista. */
+  summary: { pairs: number; items: number; value: number; same_value: number; operators: number }
+  /** Akronimy do listy wyboru (w okresie, bez filtra operatora). */
+  operators: string[]
+  /** 'YYYY-MM-DD' — początek okresu. */
+  from: string
+  /** ISO — ostatni nocny odczyt z XL. */
+  synced_at: string | null
+}
+
+export type RwPwResponse = RwPwResponseBase &
+  (
+    | { view: 'pairs'; data: RwPwPair[] }
+    | { view: 'items'; data: RwPwItemRow[] }
+    | { view: 'operators'; data: RwPwOperatorRow[] }
+  )
 
 /**
  * Tańsze porównywalne źródło niż obowiązujące (lista produktów, przetarg) — tylko informacja:

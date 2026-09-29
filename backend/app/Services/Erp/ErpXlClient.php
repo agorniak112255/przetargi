@@ -21,6 +21,17 @@ final class ErpXlClient implements ErpXlGateway
     /** FS, PA, WZ. */
     private const SALE_TYPES = [2033, 2034, 2001];
 
+    /** RW — rozchód wewnętrzny, PW — przychód wewnętrzny (numery z XL: RW-15H/30/26/07 = 1616, PW-15H/38/23/03 = 1617). */
+    private const RW_TYPE = 1616;
+
+    private const PW_TYPE = 1617;
+
+    /**
+     * TrN_Stan dokumentu zatwierdzonego: 30.09.2026 wszystkie RW/PW oglądane w XL jako „Zatwierdzone” miały 5. Stan 6
+     * (najpewniej anulowane) i 2 (w toku) się nie liczą — do potwierdzenia w XL.
+     */
+    private const CONFIRMED_STATE = 5;
+
     public function configured(): bool
     {
         return (bool) config('erpxl.enabled')
@@ -195,6 +206,56 @@ final class ErpXlClient implements ErpXlGateway
         $out = [];
         foreach ($rows as $r) {
             $out[(int) $r->gid] = (int) $r->last_date;
+        }
+
+        return $out;
+    }
+
+    public function internalMoves(int $fromClarionDate): array
+    {
+        $rw = self::RW_TYPE;
+        $pw = self::PW_TYPE;
+        $state = self::CONFIRMED_STATE;
+        // tylko towary z choć jednym PW w okresie — reszta RW (zwykłe wydania do zużycia) nie ma z czym tworzyć pary
+        $sql = <<<SQL
+            SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, n.TrN_TrNSeria AS series,
+                   n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month,
+                   n.TrN_Data2 AS doc_date, m.MAG_Kod AS warehouse, ow.Ope_Ident AS operator, oz.Ope_Ident AS approver,
+                   e.TrE_TwrNumer AS gid, SUM(e.TrE_Ilosc) AS quantity, SUM(e.TrE_KsiegowaNetto) AS book_value
+            FROM CDN.TraElem e
+            JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
+            LEFT JOIN CDN.Magazyny m
+                ON m.MAG_GIDNumer = CASE WHEN n.TrN_GIDTyp = $pw THEN n.TrN_MagDNumer ELSE n.TrN_MagZNumer END
+               AND m.MAG_GIDTyp = CASE WHEN n.TrN_GIDTyp = $pw THEN n.TrN_MagDTyp ELSE n.TrN_MagZTyp END
+            LEFT JOIN CDN.OpeKarty ow ON ow.Ope_GIDNumer = n.TrN_OpeNumerW AND ow.Ope_GIDTyp = n.TrN_OpeTypW
+            LEFT JOIN CDN.OpeKarty oz ON oz.Ope_GIDNumer = n.TrN_OpeNumerZ AND oz.Ope_GIDTyp = n.TrN_OpeTypZ
+            WHERE n.TrN_GIDTyp IN ($rw, $pw) AND n.TrN_Stan = $state AND n.TrN_Data2 >= ?
+              AND e.TrE_TwrNumer IN (
+                  SELECT e2.TrE_TwrNumer FROM CDN.TraElem e2
+                  JOIN CDN.TraNag n2 ON n2.TrN_GIDTyp = e2.TrE_GIDTyp AND n2.TrN_GIDNumer = e2.TrE_GIDNumer
+                  WHERE n2.TrN_GIDTyp = $pw AND n2.TrN_Stan = $state AND n2.TrN_Data2 >= ?
+              )
+            GROUP BY n.TrN_GIDTyp, n.TrN_GIDNumer, n.TrN_TrNSeria, n.TrN_TrNNumer, n.TrN_TrNRok, n.TrN_TrNMiesiac,
+                     n.TrN_Data2, m.MAG_Kod, ow.Ope_Ident, oz.Ope_Ident, e.TrE_TwrNumer
+            SQL;
+        $rows = $this->db()->select($sql, [$fromClarionDate, $fromClarionDate]);
+
+        $out = [];
+        foreach ($rows as $r) {
+            $isPw = (int) $r->doc_type === $pw;
+            $out[] = [
+                'type' => $isPw ? 'pw' : 'rw',
+                'document_id' => (int) $r->document_id,
+                // jak w XL: PW-15H/38/23/03 (seria/numer/rok dwucyfrowo/miesiąc)
+                'number' => sprintf('%s-%s/%d/%02d/%02d', $isPw ? 'PW' : 'RW', trim((string) $r->series), (int) $r->doc_number, (int) $r->doc_year % 100, (int) $r->doc_month),
+                'date' => (int) $r->doc_date,
+                'warehouse' => $r->warehouse !== null && trim((string) $r->warehouse) !== '' ? trim((string) $r->warehouse) : null,
+                'operator' => $r->operator !== null && trim((string) $r->operator) !== '' ? trim((string) $r->operator) : null,
+                'approver' => $r->approver !== null && trim((string) $r->approver) !== '' ? trim((string) $r->approver) : null,
+                'gid' => (int) $r->gid,
+                'quantity' => (float) $r->quantity,
+                'value' => (float) $r->book_value,
+            ];
         }
 
         return $out;

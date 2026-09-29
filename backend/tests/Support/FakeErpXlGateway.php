@@ -24,6 +24,11 @@ final class FakeErpXlGateway implements ErpXlGateway
     /** @var array<int, int> */
     public array $sales = [];
 
+    /** @var list<array<string, mixed>> RW/PW w postaci ErpXlGateway::internalMoves */
+    public array $moveRows = [];
+
+    public ?int $movesFrom = null;
+
     public bool $isConfigured = true;
 
     public function configured(): bool
@@ -74,6 +79,30 @@ final class FakeErpXlGateway implements ErpXlGateway
     public function lastSales(array $gids): array
     {
         return array_intersect_key($this->sales, array_flip($gids));
+    }
+
+    public function internalMoves(int $fromClarionDate): array
+    {
+        $this->movesFrom = $fromClarionDate;
+
+        return array_values(array_filter($this->moveRows, static fn (array $r): bool => $r['date'] >= $fromClarionDate));
+    }
+
+    /** @return array<string, mixed> */
+    public static function move(string $type, int $documentId, int $date, int $gid, float $quantity, float $value, ?string $operator = 'NOMA', ?string $warehouse = '01H', ?string $approver = null): array
+    {
+        return [
+            'type' => $type,
+            'document_id' => $documentId,
+            'number' => strtoupper($type).'-'.($warehouse ?? '01H').'/'.$documentId.'/26/09',
+            'date' => $date,
+            'warehouse' => $warehouse,
+            'operator' => $operator,
+            'approver' => $approver ?? $operator,
+            'gid' => $gid,
+            'quantity' => $quantity,
+            'value' => $value,
+        ];
     }
 
     /** @return array{gid: int, code: string, name: string, name1: string, ean: string, unit: string, archived: bool} */
