@@ -456,7 +456,7 @@ export function Inventory() {
               <SortTh label="Wartość" k="value" sort={sort} dir={dir} onSort={clickSort} align="right" />
               <SortTh label="Ostatnia sprzedaż" k="last_sale" sort={sort} dir={dir} onSort={clickSort} />
               <SortTh label="Najstarsza partia" k="oldest_lot" sort={sort} dir={dir} onSort={clickSort} />
-              <th className="whitespace-nowrap p-2 font-semibold text-slate-700">Ostatni zakup</th>
+              <th className="whitespace-nowrap p-2 font-semibold text-slate-700" title="Średnia cena zakupu partii na stanie; pod nią ostatnia PZ">Cena zakupu</th>
             </tr>
           </thead>
           <tbody>
@@ -692,19 +692,41 @@ function InventoryTableRow({
         )}
       </td>
       <td className="p-2">
+        {row.unit_cost != null && (
+          <div
+            className="whitespace-nowrap tabular-nums font-medium text-slate-900"
+            title="Średnia cena zakupu towaru na stanie: wartość partii ÷ ilość (z XL)"
+          >
+            {erpUnitPrice(row.unit_cost)} zł
+            {row.unit && <span className="font-normal text-slate-500">/{row.unit}</span>}
+            <span className="ml-1 text-[10px] font-normal text-slate-500">z partii</span>
+          </div>
+        )}
         {lp && (lp.unit_price_pln != null || lp.date || lp.supplier) ? (
           <>
-            <div className="whitespace-nowrap tabular-nums text-slate-800">
-              {lp.unit_price_pln != null ? (
-                <>
-                  {erpUnitPrice(lp.unit_price_pln)} zł
-                  {row.unit && <span className="text-slate-500">/{row.unit}</span>}
-                </>
-              ) : (
-                <span className="text-slate-400">cena nieznana</span>
-              )}
-              {foreign && <span className="ml-1 text-[11px] text-slate-500">({foreign})</span>}
-            </div>
+            {lp.unit_price_pln != null && pzMismatch(row.unit_cost, lp.unit_price_pln) ? (
+              <div
+                className="mt-0.5 whitespace-nowrap rounded bg-amber-100 px-1 text-[11px] tabular-nums text-amber-900"
+                title="Cena z ostatniej PZ mocno odbiega od ceny partii na stanie — PZ mogła być przyjęta w złej ilości i poprawiona później (np. RW + PW). Wiarygodna jest cena z partii."
+              >
+                PZ {erpUnitPrice(lp.unit_price_pln)} zł — niezgodna z partiami
+              </div>
+            ) : (
+              <div
+                className={`whitespace-nowrap tabular-nums ${row.unit_cost != null ? 'text-[11px] text-slate-500' : 'text-slate-800'}`}
+              >
+                {lp.unit_price_pln != null ? (
+                  <>
+                    {row.unit_cost != null && 'ost. PZ '}
+                    {erpUnitPrice(lp.unit_price_pln)} zł
+                    {row.unit && <span className="text-slate-500">/{row.unit}</span>}
+                  </>
+                ) : (
+                  <span className="text-slate-400">cena nieznana</span>
+                )}
+                {foreign && <span className="ml-1 text-[11px] text-slate-500">({foreign})</span>}
+              </div>
+            )}
             <div className="text-[11px] text-slate-500">{lp.date ? formatDate(lp.date) : 'data nieznana'}</div>
             {lp.supplier && (
               <div className="max-w-[10rem] truncate text-[11px] text-slate-500" title={lp.supplier}>
@@ -713,11 +735,18 @@ function InventoryTableRow({
             )}
           </>
         ) : (
-          <span className="text-slate-400">—</span>
+          row.unit_cost == null && <span className="text-slate-400">—</span>
         )}
       </td>
     </tr>
   )
+}
+
+/** Cena z PZ różni się od ceny partii o więcej niż połowę (w którąkolwiek stronę) — PZ do sprawdzenia. */
+function pzMismatch(unitCost: number | null, pzPrice: number): boolean {
+  if (unitCost == null || unitCost <= 0 || pzPrice <= 0) return false
+  const ratio = pzPrice / unitCost
+  return ratio > 1.5 || ratio < 1 / 1.5
 }
 
 function DateWithAge({ iso }: { iso: string }) {

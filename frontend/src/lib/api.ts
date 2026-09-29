@@ -668,6 +668,8 @@ export type InventoryRow = {
   stock_value: number | null
   /** Skąd wartość: partie na stanie albo — do pierwszego odczytu partii — ostatnia PZ. */
   value_source: 'lots' | 'last_purchase' | null
+  /** Średnia cena zakupu towaru na stanie = wartość partii ÷ ilość (PLN za jednostkę); null = brak wartości partii. */
+  unit_cost: number | null
   /** Od największego stanu. */
   warehouses: InventoryWarehouse[]
   /** 'YYYY-MM-DD'; null = nigdy (FS, paragon, WZ). */

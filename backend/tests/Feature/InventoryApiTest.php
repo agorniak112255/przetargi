@@ -62,6 +62,9 @@ final class InventoryApiTest extends TestCase
         $this->assertNull($res->json('data.3.stock_value'));
         $this->assertNull($res->json('data.3.value_source'));
         $this->assertEquals(30, $res->json('data.2.stock_value'));
+        // cena za jednostkę z partii (30 zł ÷ 3 szt.), nie z błędnej PZ (11 600,60)
+        $this->assertEquals(10, $res->json('data.2.unit_cost'));
+        $this->assertNull($res->json('data.0.unit_cost'));
         $this->assertSame('lots', $res->json('data.2.value_source'));
         $this->assertSame('last_purchase', $res->json('data.0.value_source'));
         $this->assertSame(['items' => 4, 'value' => 570, 'value_unknown' => 1, 'without_card' => 4, 'never_sold' => 2], $res->json('summary'));

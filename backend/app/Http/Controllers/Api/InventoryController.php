@@ -230,6 +230,11 @@ class InventoryController extends Controller
                 $item->getAttribute('purchase_value') !== null => 'last_purchase',
                 default => null,
             },
+            // średnia cena zakupu towaru na stanie = wartość partii ÷ ilość; ostatnia PZ bywa błędna (SNAU51000-04-S:
+            // PZ 1 szt. za 11 600,60 zł, partie po korekcie RW/PW po 290,02 zł)
+            'unit_cost' => $item->stock_value !== null && (float) $item->stock_total > 0
+                ? round((float) $item->stock_value / (float) $item->stock_total, 4)
+                : null,
             'warehouses' => array_values(array_map(static fn (array $w): array => [
                 'code' => (string) ($w['code'] ?? ''),
                 'name' => (string) ($w['name'] ?? ''),
