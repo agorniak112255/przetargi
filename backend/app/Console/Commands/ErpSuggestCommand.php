@@ -11,7 +11,7 @@ class ErpSuggestCommand extends Command
 {
     protected $signature = 'erp:suggest
                             {--limit=2000 : Najwięcej towarów w przebiegu (najpierw nieprzeszukane, potem największy stan)}
-                            {--recheck-days=30 : Przeszukane wcześniej wracają po tylu dniach}';
+                            {--recheck-days=30 : Przeszukane wcześniej wracają po tylu dniach (0 = przeszukaj ponownie wszystkie)}';
 
     protected $description = 'Propozycje kart z wyszukiwarki (bez modelu) dla towarów ERP XL bez kodu — tylko do decyzji na ekranie';
 
@@ -19,7 +19,7 @@ class ErpSuggestCommand extends Command
     {
         $stats = $suggester->run(
             max(1, (int) $this->option('limit')),
-            max(1, (int) $this->option('recheck-days')),
+            max(0, (int) $this->option('recheck-days')),
             function (int $done): void {
                 $this->output->write("\rPrzeszukane: ".$done);
             },

@@ -77,12 +77,43 @@ final class ErpSearchSuggesterTest extends TestCase
         $this->assertSame('no_code', $sock->refresh()->match_outcome);
     }
 
+    public function test_cards_with_most_shared_words_win_abbreviations_match_and_colours_do_not_count(): void
+    {
+        // symulacja na 300 towarach z produkcji 29.09.2026
+        $this->card('B21', 'Anro', 'Znak Uwaga Roboty drogowe 250x350mm');
+        $building = $this->card('B22', 'Anro', 'Znak Uwaga Roboty budowlane 250x350mm');
+        $carpentry = $this->card('INS-STOL', 'Anro', 'Instrukcja BHP dla warsztatów stolarskich 250x350');
+        $halifax = $this->card('CXS-HAL', 'Canis', 'Kurtka HALIFAX ostrzegawcza');
+        $roads = $this->item('SZNROB', 'ZNAK UWAGA ROBOTY BUDOWLANE', stock: 3);
+        $instruction = $this->item('SINSTOL', 'INS. DLA WARSZT.STOLARSKICH', stock: 3);
+        $jacket = $this->item('AKURHAL', 'KURTKA HALIFAX POMARAŃCZ.', stock: 3);
+
+        $this->suggest();
+
+        // „Roboty drogowe” ma jedno wspólne słowo, „Roboty budowlane” dwa — zostaje tylko ta druga
+        $this->assertSame([$building->id], ErpItemLink::query()->where('erp_item_id', $roads->id)->pluck('product_id')->all());
+        $this->assertSame([$carpentry->id], ErpItemLink::query()->where('erp_item_id', $instruction->id)->pluck('product_id')->all());
+        // kolor nie liczy się do słów charakterystycznych
+        $this->assertSame([$halifax->id], ErpItemLink::query()->where('erp_item_id', $jacket->id)->pluck('product_id')->all());
+    }
+
+    public function test_name1_notes_do_not_block_suggestions(): void
+    {
+        $citrin = $this->card('RS-CITRIN', 'RS', 'RĘKAWICE RS ARBEITSSCHUTZ CITRIN');
+        $item = $this->item('ARKCITRIN', 'RĘKAWICE NITRYL.CITRIN', stock: 3);
+        $item->update(['name1' => '1 KARTON = 144 PARY ZIELONE']);
+
+        $this->suggest();
+
+        $this->assertSame([$citrin->id], ErpItemLink::query()->where('erp_item_id', $item->id)->pluck('product_id')->all());
+    }
+
     public function test_only_active_unlinked_items_and_rechecks_after_the_period(): void
     {
         $this->card('RR-TACT', 'Reis', 'Rękawice ochronne TACTYL nitrylowe');
-        $this->item('A-OLD', 'RĘKAWICE TACTYL STARE', stock: 0, sold: '-30 months');
+        $this->item('A-OLD', 'RĘKAWICE TACTYL', stock: 0, sold: '-30 months');
         $this->item('A-LINKED', 'RĘKAWICE TACTYL', stock: 5, outcome: 'auto');
-        $fresh = $this->item('A-NEW', 'RĘKAWICE TACTYL NOWE', stock: 0, sold: '-2 months');
+        $fresh = $this->item('A-NEW', 'RĘKAWICE TACTYL', stock: 0, sold: '-2 months');
 
         $this->assertSame(1, $this->suggest()['checked']);
         $this->assertSame(0, $this->suggest()['checked']);
