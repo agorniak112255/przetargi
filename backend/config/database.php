@@ -80,6 +80,29 @@ return [
             'engine' => null,
         ],
 
+        // Comarch ERP XL (MS SQL) — tylko odczyt: stany i zakupy towarów (App\Services\Erp\ErpXlClient). Login z samym
+        // SELECT na wybranych tabelach CDN; ApplicationIntent=ReadOnly i krótki LoginTimeout, żeby niedostępny serwer
+        // nie wieszał harmonogramu.
+        'erpxl' => [
+            'driver' => 'sqlsrv',
+            'host' => env('ERPXL_DB_HOST', ''),
+            'port' => env('ERPXL_DB_PORT', '1433'),
+            'database' => env('ERPXL_DB_DATABASE', 'CDNXL_SUPON'),
+            'username' => env('ERPXL_DB_USERNAME', ''),
+            'password' => env('ERPXL_DB_PASSWORD', ''),
+            'charset' => 'utf8',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'readonly' => true,
+            'login_timeout' => 10,
+            'encrypt' => env('ERPXL_DB_ENCRYPT', 'yes'),
+            'trust_server_certificate' => env('ERPXL_DB_TRUST_SERVER_CERTIFICATE', 'true'),
+            // limit jednego zapytania (s); stała istnieje tylko z rozszerzeniem pdo_sqlsrv
+            'options' => defined('PDO::SQLSRV_ATTR_QUERY_TIMEOUT')
+                ? [constant('PDO::SQLSRV_ATTR_QUERY_TIMEOUT') => 300]
+                : [],
+        ],
+
         'mariadb' => [
             'driver' => 'mariadb',
             'url' => env('DB_URL'),

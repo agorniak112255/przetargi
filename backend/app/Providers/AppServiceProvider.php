@@ -10,6 +10,8 @@ use App\Services\B2b\BackgroundB2bSyncLauncher;
 use App\Services\B2b\InlineB2bSyncLauncher;
 use App\Services\Enrichment\EnrichmentAttemptLog;
 use App\Services\Enrichment\EnrichmentLiveProgress;
+use App\Services\Erp\ErpXlClient;
+use App\Services\Erp\ErpXlGateway;
 use App\Services\MailSettingsService;
 use App\Services\Presta\PrestaCatalogGateway;
 use App\Services\Presta\PrestaExportGateway;
@@ -34,6 +36,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->scoped(ProductVariantFacts::class);
         $this->app->bind(PrestaCatalogGateway::class, PrestaShopCatalogClient::class);
         $this->app->bind(PrestaExportGateway::class, PrestaShopExportClient::class);
+        $this->app->bind(ErpXlGateway::class, ErpXlClient::class);
         // b2b:sync-due: w testach przebieg w tym samym procesie (bez podprocesów), poza testami — proces w tle na konto
         $this->app->bind(B2bSyncLauncher::class, function ($app): B2bSyncLauncher {
             if ($app->runningUnitTests()) {

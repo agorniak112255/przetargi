@@ -1,0 +1,153 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Models\ErpItem;
+use App\Models\ErpItemPurchase;
+use App\Models\Product;
+use App\Services\Erp\ErpItemSync;
+use App\Services\Erp\ErpXlGateway;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
+use RuntimeException;
+use Tests\Support\FakeErpXlGateway;
+use Tests\TestCase;
+
+final class ErpItemSyncTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private FakeErpXlGateway $xl;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->xl = new FakeErpXlGateway;
+        $this->app->instance(ErpXlGateway::class, $this->xl);
+    }
+
+    public function test_copies_item_with_trade_stock_breakdown_suppliers_purchases_and_last_sale(): void
+    {
+        $this->xl->items = [FakeErpXlGateway::item(15785, 'SOK9301145', 'GOGLE UVEX 9301.145 spawal.', 'bez zmian')];
+        $this->xl->stockRows = [
+            ['gid' => 15785, 'warehouse_code' => '01H', 'warehouse_name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 8.0],
+            ['gid' => 15785, 'warehouse_code' => '15H', 'warehouse_name' => 'Magazyn HANDEL Kraków', 'quantity' => 4.0],
+            ['gid' => 15785, 'warehouse_code' => '15MITKR', 'warehouse_name' => 'Magazyn Mittal - Kraków', 'quantity' => 20.0],
+        ];
+        $this->xl->supplierRows = [
+            ['gid' => 15785, 'supplier_id' => 7, 'supplier' => 'UVEX', 'price' => 41.5, 'currency' => 'PLN', 'updated' => 82455],
+        ];
+        $this->xl->purchaseRows = [
+            FakeErpXlGateway::purchase(15785, 2234598, 82455, 'UVEX', 10, 452.0),
+            // zakup w EUR: wartość księgowa w PLN, cena z dokumentu w walucie dosłownie
+            FakeErpXlGateway::purchase(15785, 2200001, 82000, 'UVEX', 4, 172.0, 'EUR', 10.0),
+        ];
+        $this->xl->sales = [15785 => 82450];
+
+        $stats = app(ErpItemSync::class)->run();
+
+        $this->assertSame(['items' => 1, 'with_trade_stock' => 1, 'purchases' => 2, 'removed' => 0], $stats);
+        $item = ErpItem::query()->where('xl_gid', 15785)->firstOrFail();
+        $this->assertSame('SOK9301145', $item->code);
+        $this->assertSame('GOGLE UVEX 9301.145 spawal.', $item->name);
+        $this->assertSame('bez zmian', $item->name1);
+        // HANDEL = 01H + 15H; magazyn kontraktowy tylko w sumie wszystkich i w rozbiciu
+        $this->assertSame('12.0000', $item->stock_trade);
+        $this->assertSame('32.0000', $item->stock_total);
+        $this->assertSame(['15MITKR', '01H', '15H'], array_column($item->stock_by_warehouse, 'code'));
+        $this->assertSame('2026-09-29', $item->suppliers[0]['updated_at']);
+        $this->assertSame('2026-09-29', $item->last_purchase_at->toDateString());
+        $this->assertSame('2026-09-24', $item->last_sale_at->toDateString());
+
+        $purchases = $item->purchases()->get();
+        $this->assertCount(2, $purchases);
+        $this->assertSame(2234598, (int) $purchases[0]->document_id);
+        $this->assertSame('45.2000', $purchases[0]->unit_price_pln);
+        $this->assertSame('EUR', $purchases[1]->currency);
+        $this->assertSame('43.0000', $purchases[1]->unit_price_pln);
+        $this->assertSame('10.0000', $purchases[1]->document_price);
+    }
+
+    public function test_pages_through_items_and_keeps_only_last_purchases_per_item(): void
+    {
+        config(['erpxl.batch' => 2, 'erpxl.purchases_per_item' => 3]);
+        foreach ([10, 20, 30, 40, 50] as $gid) {
+            $this->xl->items[] = FakeErpXlGateway::item($gid, 'T'.$gid, 'Towar '.$gid);
+        }
+        foreach ([5, 4, 3, 2, 1] as $n) {
+            $this->xl->purchaseRows[] = FakeErpXlGateway::purchase(30, 1000 + $n, 82000 + $n, 'DOST', 1, 10.0);
+        }
+
+        $stats = app(ErpItemSync::class)->run();
+
+        $this->assertSame(5, $stats['items']);
+        $this->assertSame(5, ErpItem::query()->count());
+        $this->assertSame([1005, 1004, 1003], ErpItemPurchase::query()->orderByDesc('document_id')->pluck('document_id')->map(fn ($v) => (int) $v)->all());
+    }
+
+    public function test_second_run_replaces_purchases_and_marks_items_missing_from_xl(): void
+    {
+        $this->xl->items = [FakeErpXlGateway::item(1, 'A1', 'Towar A'), FakeErpXlGateway::item(2, 'B2', 'Towar B')];
+        $this->xl->purchaseRows = [FakeErpXlGateway::purchase(1, 500, 82000, 'DOST', 1, 10.0)];
+        app(ErpItemSync::class)->run();
+
+        $this->travel(1)->hours();
+        $this->xl->items = [FakeErpXlGateway::item(1, 'A1', 'Towar A nowa nazwa')];
+        $this->xl->purchaseRows = [
+            FakeErpXlGateway::purchase(1, 600, 82100, 'DOST', 2, 30.0),
+            FakeErpXlGateway::purchase(1, 500, 82000, 'DOST', 1, 10.0),
+        ];
+        $stats = app(ErpItemSync::class)->run();
+
+        $this->assertSame(1, $stats['removed']);
+        $this->assertNotNull(ErpItem::query()->where('xl_gid', 2)->value('removed_at'));
+        $a = ErpItem::query()->where('xl_gid', 1)->firstOrFail();
+        $this->assertNull($a->removed_at);
+        $this->assertSame('Towar A nowa nazwa', $a->name);
+        $this->assertSame(2, ErpItemPurchase::query()->where('erp_item_id', $a->id)->count());
+    }
+
+    public function test_trial_run_with_limit_does_not_mark_removed(): void
+    {
+        $this->xl->items = [FakeErpXlGateway::item(1, 'A1', 'Towar A'), FakeErpXlGateway::item(2, 'B2', 'Towar B')];
+        app(ErpItemSync::class)->run();
+        $this->travel(1)->hours();
+
+        $stats = app(ErpItemSync::class)->run(1);
+
+        $this->assertSame(1, $stats['items']);
+        $this->assertSame(0, $stats['removed']);
+        $this->assertSame(0, ErpItem::query()->whereNotNull('removed_at')->count());
+    }
+
+    public function test_xl_data_does_not_touch_card_prices_or_stock(): void
+    {
+        $product = Product::query()->create([
+            'sku' => '9301.145', 'name' => 'Gogle 9301.145', 'manufacturer' => 'UVEX',
+            'catalog_price_net' => 80, 'purchase_price' => 50, 'stock' => 3,
+        ]);
+        $this->xl->items = [FakeErpXlGateway::item(1, 'SOK9301145', 'GOGLE UVEX 9301.145')];
+        $this->xl->stockRows = [['gid' => 1, 'warehouse_code' => '01H', 'warehouse_name' => 'Magazyn HANDEL', 'quantity' => 99.0]];
+        $this->xl->purchaseRows = [FakeErpXlGateway::purchase(1, 1, 82000, 'UVEX', 1, 12.0)];
+
+        app(ErpItemSync::class)->run();
+
+        $product->refresh();
+        $this->assertSame('50.00', $product->purchase_price);
+        $this->assertSame('80.00', $product->catalog_price_net);
+        $this->assertSame(3, (int) $product->stock);
+    }
+
+    public function test_refuses_to_run_when_not_configured_and_command_skips_quietly(): void
+    {
+        $this->xl->isConfigured = false;
+
+        $this->assertSame(0, Artisan::call('erp:sync'));
+        $this->assertSame(0, ErpItem::query()->count());
+
+        $this->expectException(RuntimeException::class);
+        app(ErpItemSync::class)->run();
+    }
+}

@@ -37,6 +37,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('storage:prune')->hourly();
         // propozycje łączenia kart dystrybutora z kartami producenta — po nocnych przebiegach B2B, przed pracą
         $schedule->command('products:match-candidates')->dailyAt('06:10')->withoutOverlapping();
+        // Comarch ERP XL: kopia towarów ze stanami i zakupami, potem powiązania z kartami — tylko przy ERPXL_ENABLED
+        $schedule->command('erp:sync --match')->dailyAt('05:20')->withoutOverlapping(180)
+            ->when(static fn (): bool => (bool) config('erpxl.enabled'));
         // zdjęcia, których źródło chwilowo odmówiło przy przebiegu opisu (zapora ansell.com) — do 8 prób, około doby
         $schedule->command('products:retry-images')->everyThreeHours(15)->withoutOverlapping(120)->runInBackground();
         // cenniki B2B: konta z harmonogramem (od 02:00) i „Sprawdź teraz”; każde konto rusza we własnym procesie w tle
