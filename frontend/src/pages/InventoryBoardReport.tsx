@@ -250,7 +250,13 @@ const PRINT_CSS = `
     box-shadow: none !important;
   }
   body.board-print-modal .board-modal-scroll { overflow: visible !important; }
+  /* Lista w skali: tabela ma układ ekranowy, nazwy mieszczą się w linii — towary ok. 15–20 pozycji na A4;
+     dokumenty mają więcej tekstu w wierszu (numery, osoby, opisy), więc drukują się mniejsze. */
+  body.board-print-modal .board-modal-panel { zoom: 0.8; }
+  body.board-print-modal .board-modal-panel[data-kind="moves"] { zoom: 0.68; }
   body.board-print-modal .board-modal thead th { position: static !important; }
+  /* „Razem …” raz, na końcu listy — nie na każdej stronie. */
+  body.board-print-modal .board-modal tfoot { display: table-row-group; }
   body.board-print-modal .board-modal-noprint { display: none !important; }
   body.board-print-modal .board-modal, body.board-print-modal .board-modal * {
     color: #000 !important;
@@ -1002,15 +1008,19 @@ function SortTh({
         type="button"
         onClick={() => onSort(column)}
         title={`Sortuj: ${info.label}`}
-        className={`inline-flex items-center gap-1.5 rounded font-semibold underline-offset-4 hover:underline ${FOCUS} ${
+        className={`inline-flex items-center gap-1.5 rounded font-semibold underline-offset-4 hover:underline print:hidden ${FOCUS} ${
           active ? 'text-blue-800' : 'text-slate-900'
         }`}
       >
         {info.label}
-        <span aria-hidden="true" className={active ? '' : 'text-slate-400 print:hidden'}>
+        <span aria-hidden="true" className={active ? '' : 'text-slate-400'}>
           {active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}
         </span>
       </button>
+      <span className="hidden print:inline">
+        {info.label}
+        {active ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+      </span>
     </th>
   )
 }
@@ -1249,6 +1259,7 @@ function BoardDetailsModal({
         aria-labelledby="board-details-title"
         tabIndex={-1}
         onKeyDown={trapFocus}
+        data-kind={kind}
         className="board-modal-panel flex max-h-full w-full max-w-7xl flex-col overflow-hidden rounded-2xl bg-white text-lg text-slate-900 shadow-lg outline-none"
       >
         <div className="border-b-2 border-slate-200 px-4 py-2.5">
@@ -1540,7 +1551,7 @@ function MovesTable({
           {showWho && <SortTh column="operator" info={MOVE_SORTS.operator} sort={sort} onSort={onSort} />}
           <SortTh column="value" info={MOVE_SORTS.value} sort={sort} onSort={onSort} className="text-right" />
           <SortTh column="lot_age" info={MOVE_SORTS.lot_age} sort={sort} onSort={onSort} />
-          <SortTh column="note" info={MOVE_SORTS.note} sort={sort} onSort={onSort} className="min-w-56 print:min-w-0" />
+          <SortTh column="note" info={MOVE_SORTS.note} sort={sort} onSort={onSort} className="min-w-56" />
         </tr>
       </thead>
       <tbody className="bg-white">
