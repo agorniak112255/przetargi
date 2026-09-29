@@ -30,7 +30,6 @@ export function ErpStockInline({ erp, title, className = '' }: { erp: ErpCardSto
   const hidden = warehouses.length - shown.length
   const purchases = erp.items.reduce((n, i) => n + i.purchases.length, 0)
   const more = hidden > 0 || erp.items.length > 1 || purchases > 1 || erp.stock_trade == null
-  const last = erp.last_purchase
 
   return (
     <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] ${className}`}>
@@ -62,12 +61,6 @@ export function ErpStockInline({ erp, title, className = '' }: { erp: ErpCardSto
         </span>
       ))}
       {hidden > 0 && <span className="text-slate-400">+{hidden}</span>}
-      {last && (
-        <span className="text-slate-600" title={`PZ nr ${last.document_id}, towar XL ${last.xl_code}`}>
-          · zakup {erpUnitPrice(last.unit_price_pln)} zł{last.unit ? `/${last.unit}` : ''}
-          {last.date ? ` (${formatDate(last.date)}${last.supplier ? `, ${last.supplier}` : ''})` : ''}
-        </span>
-      )}
       {more && (
         <button
           type="button"
@@ -86,6 +79,43 @@ export function ErpStockInline({ erp, title, className = '' }: { erp: ErpCardSto
         </button>
       )}
       {open && <ErpStockDetailsModal erp={erp} title={title} onClose={() => setOpen(false)} />}
+    </div>
+  )
+}
+
+/** Starsza cena zakupu dostaje znacznik — ceny sprzed roku rzadko są aktualne. */
+const OLD_PURCHASE_DAYS = 365
+
+/**
+ * Ostatni zakup z ERP XL (najnowsza PZ powiązanych towarów) jako wyróżniony kafelek przy zdjęciach karty.
+ * Cena za jednostkę podstawową w PLN z wartości PZ; waluta dokumentu obok, gdy zakup był w obcej walucie.
+ */
+export function ErpLastPurchaseTile({ erp, className = '' }: { erp: ErpCardStock | null | undefined; className?: string }) {
+  const last = erp?.last_purchase
+  if (!erp || !last || last.unit_price_pln == null) return null
+  const foreign = erpForeignPrice(last)
+  const days = last.date ? Math.floor((Date.now() - new Date(last.date).getTime()) / 86_400_000) : null
+  const old = days != null && days > OLD_PURCHASE_DAYS
+
+  return (
+    <div
+      className={`rounded-lg border-2 border-orange-300 bg-orange-50 px-3 py-2 text-xs text-slate-700 shadow-sm ${className}`}
+      title={`Ostatnia PZ w ERP XL (dokument ${last.document_id}), towar XL ${last.xl_code}. Cena za jednostkę podstawową w PLN z wartości dokumentu.`}
+    >
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-orange-800">Ostatni zakup · ERP XL</div>
+      <div className="mt-0.5 text-lg font-bold leading-tight text-orange-950 tabular-nums">
+        {erpUnitPrice(last.unit_price_pln)} zł
+        {last.unit && <span className="text-xs font-semibold text-orange-800">/{last.unit}</span>}
+      </div>
+      {foreign && <div className="text-[11px] text-slate-600">({foreign})</div>}
+      <div className="mt-0.5 text-[11px]">
+        {last.date ? formatDate(last.date) : 'data nieznana'}
+        {last.supplier ? ` · ${last.supplier}` : ''}
+      </div>
+      <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
+        <span className="font-mono">{last.xl_code}</span>
+        {old && <span className="rounded bg-amber-100 px-1 font-semibold text-amber-900">ponad rok temu</span>}
+      </div>
     </div>
   )
 }

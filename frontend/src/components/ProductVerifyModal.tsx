@@ -11,7 +11,7 @@ import { productDisplayName } from '../lib/productLabel'
 import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 import { CardConflictsModal } from './CardConflictsModal'
 import { ClientOfferModal } from './ClientOfferModal'
-import { ErpStockInline } from './ErpStockInline'
+import { ErpLastPurchaseTile, ErpStockInline } from './ErpStockInline'
 import { SupplierSpecialPanel } from './SupplierSpecialPanel'
 import { DescriptionLayoutView, descriptionSearchText } from './DescriptionLayoutView'
 import { NormPictograms } from './NormPictograms'
@@ -403,9 +403,9 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
                 Brak zdjęcia
               </div>
             )}
-            {images.length > 1 && (
-              <div className="flex flex-wrap gap-1.5">
-                {images.map((img, i) => (
+            {(images.length > 1 || product?.erp_xl?.last_purchase) && (
+              <div className="flex flex-wrap items-start gap-1.5">
+                {images.length > 1 && images.map((img, i) => (
                   <button
                     key={img.id}
                     type="button"
@@ -417,6 +417,7 @@ export function ProductVerifyModal({ productId, query = '', onClose, initialFind
                     <img src={img.url} alt="" className="h-full w-full object-cover" />
                   </button>
                 ))}
+                <ErpLastPurchaseTile erp={product?.erp_xl} className="ml-auto" />
               </div>
             )}
             {product && (
