@@ -229,6 +229,21 @@ export type InquiryOmittedItem = {
   size: string | null
 }
 
+/**
+ * Analiza zapytania idzie w tle: `queued` czeka na proces analizy, `running` trwa,
+ * `failed` — przerwana (komunikat w `analysis_error`). Stare rekordy bez pola = `done`.
+ */
+export type InquiryAnalysisStatus = 'queued' | 'running' | 'done' | 'failed'
+
+/** Etap przebiegu analizy; `done`/`total` dotyczą bieżącego etapu (dla queued, extract, reply total = 0). */
+export type InquiryAnalysisStage = 'queued' | 'extract' | 'understand' | 'catalog' | 'rank' | 'rewrite' | 'reply'
+
+export type InquiryAnalysisProgress = {
+  stage: InquiryAnalysisStage
+  done: number
+  total: number
+}
+
 export type InquiryPayload = {
   id: number
   client_id: number | null
@@ -273,6 +288,21 @@ export type InquiryPayload = {
   duplicate_of?: InquiryDuplicateRef | null
   /** Inne zapytania z tego samego maila, maks. 5. */
   duplicates?: InquiryDuplicateRef[]
+  /**
+   * Stan analizy w tle. Dopóki nie `done`: items, cards, global_cards, omitted_items puste,
+   * reply_* = null, attention_count = 0; źródło maila i autor są wypełnione od razu.
+   */
+  analysis_status?: InquiryAnalysisStatus
+  /** Postęp bieżącego etapu; null = brak danych o postępie. */
+  analysis_progress?: InquiryAnalysisProgress | null
+  /** Komunikat dla handlowca, tylko przy `failed`. */
+  analysis_error?: string | null
+  /** Start przebiegu w procesie analizy (ISO 8601); null = jeszcze nie ruszył. */
+  analysis_started_at?: string | null
+  /** Ile pozycji znalazło czytanie maila (znane od etapu `understand`); null = jeszcze nie wiadomo. */
+  analysis_line_items?: number | null
+  /** Autor może uruchomić analizę ponownie (tylko przy `failed`). */
+  can_retry_analysis?: boolean
 }
 
 export type InquiryListItem = {
@@ -296,6 +326,8 @@ export type InquiryListItem = {
   duplicate_of_id?: number | null
   /** Ile innych osób ma zapytanie z tego samego maila; 0 = nikt. */
   duplicates_count?: number
+  /** Stan analizy w tle; brak pola = `done`. */
+  analysis_status?: InquiryAnalysisStatus
 }
 
 export type InquiryListMeta = {

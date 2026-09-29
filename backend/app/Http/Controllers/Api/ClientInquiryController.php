@@ -11,6 +11,7 @@ use App\Http\Requests\PickClientInquiryProductRequest;
 use App\Http\Requests\QueueClientInquiryReplyRequest;
 use App\Http\Requests\StoreClientInquiryRequest;
 use App\Http\Requests\UpdateClientInquiryRequest;
+use App\Jobs\AnalyzeClientInquiryJob;
 use App\Models\ClientInquiry;
 use App\Models\OfferComposeRequest;
 use App\Models\User;
@@ -117,6 +118,8 @@ class ClientInquiryController extends Controller
                 'replied_at',
                 'send_requested_at',
                 'created_at',
+                'analysis_status',
+                'analysis_started_at',
             ])
             // has_reply bez wczytywania całej treści listu
             ->selectRaw("CASE WHEN reply_body IS NOT NULL AND reply_body <> '' THEN 1 ELSE 0 END as has_reply")
@@ -187,6 +190,8 @@ class ClientInquiryController extends Controller
             'replied_at' => $row->replied_at?->toIso8601String(),
             'send_requested_at' => $row->send_requested_at?->toIso8601String(),
             'attention_count' => $this->inquiries->attentionCount($row),
+            // analiza w tle: queued / running / done / failed
+            'analysis_status' => $row->effectiveAnalysisStatus(),
             'contact' => is_array($row->contact) ? $row->contact : null,
             'user' => $row->user !== null
                 ? ['id' => $row->user->id, 'name' => $row->user->name]
@@ -318,7 +323,9 @@ class ClientInquiryController extends Controller
         }
 
         try {
-            $inquiry = $this->inquiries->analyze(
+            // Zapytanie powstaje od razu, analiza idzie w tle (przy 50 pozycjach kilka minut — serwer ucina tak
+            // długie żądania). Strona zapytania pokazuje postęp i sama się odświeża.
+            $inquiry = $this->inquiries->createPending(
                 $request->user(),
                 (string) $data['body'],
                 (string) $data['tone'],
@@ -334,11 +341,12 @@ class ClientInquiryController extends Controller
                     'duplicate_of_id' => $other === null ? null : $other['inquiry']->id,
                 ],
             );
-        } catch (RuntimeException $e) {
-            return response()->json(['message' => $e->getMessage()], 422);
         } catch (Throwable $e) {
-            return response()->json(['message' => 'Błąd analizy zapytania: '.$e->getMessage()], 422);
+            return response()->json(['message' => 'Nie udało się założyć zapytania: '.$e->getMessage()], 422);
         }
+        AnalyzeClientInquiryJob::dispatch((int) $inquiry->id, (string) $inquiry->analysis_run_id);
+        // Przy kolejce „sync” (testy, lokalnie bez workera) analiza już się policzyła.
+        $inquiry->refresh()->load('client');
 
         return response()->json($this->inquiries->present($inquiry), 201);
     }
@@ -388,7 +396,7 @@ class ClientInquiryController extends Controller
             $this->assertOwner($request, $inquiry);
         }
         // List przeliczamy tylko autorowi — podgląd cudzego zapytania niczego w nim nie zapisuje.
-        if ((int) $inquiry->user_id === (int) $request->user()->id) {
+        if ((int) $inquiry->user_id === (int) $request->user()->id && $inquiry->isAnalyzed()) {
             $this->inquiries->refreshStoredReply($inquiry);
         }
 
@@ -398,6 +406,7 @@ class ClientInquiryController extends Controller
     public function compose(ComposeClientInquiryRequest $request, ClientInquiry $inquiry): JsonResponse
     {
         $this->assertOwner($request, $inquiry);
+        $this->assertAnalyzed($inquiry);
 
         if (function_exists('set_time_limit')) {
             @set_time_limit(180);
@@ -436,6 +445,7 @@ class ClientInquiryController extends Controller
     public function pickProduct(PickClientInquiryProductRequest $request, ClientInquiry $inquiry): JsonResponse
     {
         $this->assertOwner($request, $inquiry);
+        $this->assertAnalyzed($inquiry);
 
         if (function_exists('set_time_limit')) {
             @set_time_limit(180);
@@ -465,6 +475,7 @@ class ClientInquiryController extends Controller
     public function update(UpdateClientInquiryRequest $request, ClientInquiry $inquiry): JsonResponse
     {
         $this->assertOwner($request, $inquiry);
+        $this->assertAnalyzed($inquiry);
 
         $data = $request->validated();
         $changes = [];
@@ -660,6 +671,7 @@ class ClientInquiryController extends Controller
     public function queueReply(QueueClientInquiryReplyRequest $request, ClientInquiry $inquiry): JsonResponse
     {
         $this->assertOwner($request, $inquiry);
+        $this->assertAnalyzed($inquiry);
 
         $queued = (bool) $request->validated()['queued'];
 
@@ -677,6 +689,38 @@ class ClientInquiryController extends Controller
         $inquiry->forceFill(['send_requested_at' => $queued ? now() : null])->save();
 
         return response()->json($this->inquiries->present($inquiry->load('client')));
+    }
+
+    /**
+     * Ponowna analiza po błędzie albo po przerwanym przebiegu (tylko autor). Zadanie idzie do kolejki raz,
+     * nawet przy podwójnym kliknięciu — decyduje warunkowy zapis nowego przebiegu.
+     */
+    public function retryAnalysis(Request $request, ClientInquiry $inquiry): JsonResponse
+    {
+        $this->assertOwner($request, $inquiry);
+        $runId = $this->inquiries->restartAnalysis($inquiry);
+        if ($runId === null) {
+            return response()->json([
+                'message' => ($inquiry->fresh()?->isAnalyzed() ?? false)
+                    ? 'Analiza tego zapytania jest już gotowa.'
+                    : 'Analiza tego zapytania jeszcze trwa.',
+            ], 409);
+        }
+        AnalyzeClientInquiryJob::dispatch((int) $inquiry->id, $runId);
+
+        return response()->json($this->inquiries->present($inquiry->refresh()->load('client')));
+    }
+
+    /** Zmiany zapytania dopiero po analizie — inaczej zapis handlowca i wynik analizy nadpisałyby się nawzajem. */
+    private function assertAnalyzed(ClientInquiry $inquiry): void
+    {
+        $status = $inquiry->effectiveAnalysisStatus();
+        if ($status === ClientInquiry::ANALYSIS_FAILED) {
+            abort(409, 'Analiza zapytania nie powiodła się — uruchom ją ponownie.');
+        }
+        if ($status !== ClientInquiry::ANALYSIS_DONE) {
+            abort(409, 'Analiza zapytania jeszcze trwa — poczekaj na wynik.');
+        }
     }
 
     private function assertOwner(Request $request, ClientInquiry $inquiry): void

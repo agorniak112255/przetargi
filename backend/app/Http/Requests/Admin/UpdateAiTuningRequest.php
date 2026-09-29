@@ -41,6 +41,7 @@ class UpdateAiTuningRequest extends FormRequest
             'match_substitute_score' => $score,
             'match_min_score' => $score,
             'match_allow_catalog_rows' => ['sometimes', 'boolean'],
+            'inquiry_max_items' => ['sometimes', 'integer', 'min:1', 'max:'.AiSettingsService::INQUIRY_MAX_ITEMS_MAX],
         ];
     }
 

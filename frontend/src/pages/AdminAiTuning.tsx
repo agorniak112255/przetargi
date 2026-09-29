@@ -17,15 +17,23 @@ type Payload = {
     score_min: number
     score_max: number
   }
+  /** Ile pozycji obejmuje analiza jednego zapytania klienta; reszta wierszy idzie do „poza pozycjami”. */
+  inquiry_max_items?: number
+  inquiry_max_items_default?: number
+  inquiry_max_items_max?: number
 }
 
-type Meta = Pick<Payload, 'default' | 'min' | 'max'> & { match: Payload['match_defaults'] }
+type Meta = Pick<Payload, 'default' | 'min' | 'max'> & {
+  match: Payload['match_defaults']
+  inquiryItems: { default: number; max: number }
+}
 
 const META_FALLBACK: Meta = {
   default: 40,
   min: 1,
   max: 80,
   match: { apply: 40, substitute: 55, min: 65, score_min: 1, score_max: 99 },
+  inquiryItems: { default: 50, max: 60 },
 }
 
 export function AdminAiTuning() {
@@ -34,6 +42,7 @@ export function AdminAiTuning() {
   const [substituteScore, setSubstituteScore] = useState('55')
   const [minScore, setMinScore] = useState('65')
   const [allowCatalog, setAllowCatalog] = useState(false)
+  const [inquiryMaxItems, setInquiryMaxItems] = useState('50')
   const [meta, setMeta] = useState<Meta>(META_FALLBACK)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -45,11 +54,16 @@ export function AdminAiTuning() {
     setSubstituteScore(String(data.match_substitute_score))
     setMinScore(String(data.match_min_score))
     setAllowCatalog(data.match_allow_catalog_rows)
+    setInquiryMaxItems(String(data.inquiry_max_items ?? META_FALLBACK.inquiryItems.default))
     setMeta({
       default: data.default,
       min: data.min,
       max: data.max,
       match: data.match_defaults ?? META_FALLBACK.match,
+      inquiryItems: {
+        default: data.inquiry_max_items_default ?? META_FALLBACK.inquiryItems.default,
+        max: data.inquiry_max_items_max ?? META_FALLBACK.inquiryItems.max,
+      },
     })
   }
 
@@ -76,6 +90,7 @@ export function AdminAiTuning() {
           match_substitute_score: Number(substituteScore),
           match_min_score: Number(minScore),
           match_allow_catalog_rows: allowCatalog,
+          inquiry_max_items: Number(inquiryMaxItems),
         }),
       })
       fill(data)
@@ -219,6 +234,26 @@ export function AdminAiTuning() {
               </span>
             </span>
           </label>
+        </div>
+
+        <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-xs font-semibold text-slate-900">Zapytania klientów</p>
+          <label className="max-w-xs text-xs font-medium text-slate-700">
+            Najwięcej pozycji w zapytaniu
+            <input
+              type="number"
+              min={1}
+              max={meta.inquiryItems.max}
+              required
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              value={inquiryMaxItems}
+              onChange={(e) => setInquiryMaxItems(e.target.value)}
+            />
+          </label>
+          <p className="text-[11px] text-slate-500">
+            Domyślnie {meta.inquiryItems.default}. Dłuższe zapytania: reszta wierszy trafia do „wiersze poza
+            pozycjami”. Więcej pozycji = dłuższa analiza (ok. 5 s na pozycję).
+          </p>
         </div>
 
         <div>

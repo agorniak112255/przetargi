@@ -652,6 +652,8 @@ final class ClientInquiryServiceTest extends TestCase
      */
     public function test_total_row_and_its_size_split_are_not_both_positions(): void
     {
+        // Granica limitu pozycji: te przypadki dotyczą dawnego stałego limitu 8 — od 29.09.2026 to ustawienie.
+        app(AiSettingsService::class)->update(['inquiry_max_items' => 8]);
         $model = $this->meskoModelItems();
         // #71: model skończył na ósmej pozycji — wierszy 6 i 7 nie podał wcale
         $fromAi = array_values(array_intersect_key($model, array_flip(['diag', 'total', 's8', 's9', 's10', 'white', 'meda', 'drill'])));
@@ -728,6 +730,8 @@ final class ClientInquiryServiceTest extends TestCase
     /** Wiersze ponad limit pozycji nie znikają po cichu — wracają jako pominięte. */
     public function test_rows_over_the_line_item_limit_are_reported_as_omitted(): void
     {
+        // Granica limitu pozycji: te przypadki dotyczą dawnego stałego limitu 8 — od 29.09.2026 to ustawienie.
+        app(AiSettingsService::class)->update(['inquiry_max_items' => 8]);
         $lines = [];
         $fromAi = [];
         foreach (range(1, 10) as $n) {
@@ -759,6 +763,8 @@ final class ClientInquiryServiceTest extends TestCase
     /** Wiersze za limitem nie zmieniają decyzji o numeracji pierwszych ośmiu (jak przed zniesieniem limitu parsera). */
     public function test_rows_after_the_limit_do_not_turn_list_numbers_into_quantities(): void
     {
+        // Granica limitu pozycji: te przypadki dotyczą dawnego stałego limitu 8 — od 29.09.2026 to ustawienie.
+        app(AiSettingsService::class)->update(['inquiry_max_items' => 8]);
         $lines = [];
         foreach (range(1, 8) as $n) {
             $lines[] = $n.'. Rękawice robocze model R'.$n;

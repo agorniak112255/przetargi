@@ -22,6 +22,15 @@ final class AiSettingsService
 
     public const CATALOG_SEARCH_LIMIT_MAX = 80;
 
+    /** Ile pozycji zapytania klienta analizujemy; reszta wierszy idzie do „wiersze poza pozycjami”. */
+    public const INQUIRY_MAX_ITEMS_DEFAULT = 50;
+
+    /**
+     * Sufit ustawienia: czytanie maila oddaje wszystkie pozycje w jednej odpowiedzi modelu (cytat, fraza, ilość,
+     * rozmiar — ok. 150 tokenów na pozycję), więc przy większej liczbie odpowiedź robi się za długa dla modelu lokalnego.
+     */
+    public const INQUIRY_MAX_ITEMS_MAX = 60;
+
     /**
      * Progi dopasowania SIWZ — te same liczby, co stałe w ProductMatchService, ale
      * do przestrojenia z panelu. Luźniejszy próg = więcej pozycji wypełnionych
@@ -212,6 +221,9 @@ final class AiSettingsService
                         ? ($row->catalog_search_limit ?? null)
                         : null
                 ),
+                'inquiry_max_items' => $this->normalizeInquiryMaxItems(
+                    Schema::hasColumn('ai_settings', 'inquiry_max_items') ? ($row->inquiry_max_items ?? null) : null
+                ),
                 'product_search_card_detail' => $this->normalizeProductSearchCardDetail(
                     Schema::hasColumn('ai_settings', 'product_search_card_detail')
                         ? ($row->product_search_card_detail ?? null)
@@ -299,6 +311,7 @@ final class AiSettingsService
             'enrichment_batch_limit' => $this->normalizeEnrichmentBatchLimit(config('ai.enrichment_batch_limit')),
             'match_concurrency' => $this->normalizeMatchConcurrency(config('ai.match_concurrency')),
             'catalog_search_limit' => $this->normalizeCatalogSearchLimit(config('ai.catalog_search_limit')),
+            'inquiry_max_items' => $this->normalizeInquiryMaxItems(null),
             'product_search_card_detail' => $this->normalizeProductSearchCardDetail(
                 config('ai.product_search_card_detail')
             ),
@@ -489,6 +502,11 @@ final class AiSettingsService
         if (array_key_exists('catalog_search_limit', $data)
             && Schema::hasColumn('ai_settings', 'catalog_search_limit')) {
             $row->catalog_search_limit = $this->normalizeCatalogSearchLimit($data['catalog_search_limit']);
+        }
+
+        if (array_key_exists('inquiry_max_items', $data)
+            && Schema::hasColumn('ai_settings', 'inquiry_max_items')) {
+            $row->inquiry_max_items = $this->normalizeInquiryMaxItems($data['inquiry_max_items']);
         }
 
         foreach ([
@@ -890,6 +908,14 @@ final class AiSettingsService
         return $this->normalizeCatalogSearchLimit($cfg['catalog_search_limit'] ?? null);
     }
 
+    /** Najwięcej pozycji w jednym zapytaniu klienta (ClientInquiryService). */
+    public function inquiryMaxItems(): int
+    {
+        $cfg = $this->resolve();
+
+        return $this->normalizeInquiryMaxItems($cfg['inquiry_max_items'] ?? null);
+    }
+
     /** Od tego wyniku zapisujemy trafiony produkt w pozycji oferty. */
     public function matchApplyScore(): int
     {
@@ -1023,6 +1049,13 @@ final class AiSettingsService
         $n = is_numeric($value) ? (int) $value : self::CATALOG_SEARCH_LIMIT_DEFAULT;
 
         return max(1, min(self::CATALOG_SEARCH_LIMIT_MAX, $n));
+    }
+
+    private function normalizeInquiryMaxItems(mixed $value): int
+    {
+        $n = is_numeric($value) ? (int) $value : self::INQUIRY_MAX_ITEMS_DEFAULT;
+
+        return max(1, min(self::INQUIRY_MAX_ITEMS_MAX, $n));
     }
 
     private function normalizeProductSearchCardDetail(mixed $value): string

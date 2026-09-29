@@ -46,11 +46,20 @@ final class ClientInquiryService
      */
     private const FILE_MARKER = '/^=== Plik klienta: .+ ===$/mu';
 
-    private const MAX_PRODUCT_QUERIES = 10;
+    /** Najmniej fraz w planie szukania — tyle było przy stałym limicie 8 pozycji. */
+    private const MIN_PRODUCT_QUERIES = 10;
 
     private const MAX_MATCHES_PER_QUERY = 3;
 
-    private const MAX_LINE_ITEMS = 8;
+    /** Limit pozycji zapytań sprzed ustawienia (analysis.max_items) — dla starych rekordów. */
+    private const LEGACY_MAX_LINE_ITEMS = 8;
+
+    /** Budżet odpowiedzi modelu przy czytaniu maila: stała część i dopłata na pozycję (cytat, fraza, ilość). */
+    private const EXTRACT_TOKENS_BASE = 1500;
+
+    private const EXTRACT_TOKENS_PER_ITEM = 160;
+
+    private const EXTRACT_TOKENS_MIN = 3500;
 
     /** Uwaga o sprzeczności w wierszu klienta — jedno zdanie, nie akapit. */
     private const CONFLICT_MAX = 300;
@@ -58,7 +67,8 @@ final class ClientInquiryService
     /** Ile wyrobów dobranych ręcznie trzymamy przy jednej pozycji. */
     private const MAX_MANUAL_CANDIDATES = 3;
 
-    private const MAX_CARDS = 28;
+    /** Najmniej kart pytań — tyle było przy stałym limicie 8 pozycji; rośnie z limitem (cardCap()). */
+    private const MIN_CARDS = 28;
 
     /** Od tego wyniku najlepszy kandydat jest „pewny” (jeśli drugi nie depcze mu po piętach). */
     private const CONFIDENT_SCORE = 80;
@@ -140,6 +150,16 @@ final class ClientInquiryService
      */
     private array $pendingSearchEvents = [];
 
+    /** Limit pozycji tej analizy (maxLineItems()); null = jeszcze nie odczytany z ustawień. */
+    private ?int $maxItems = null;
+
+    /**
+     * Postęp wyszukiwania dla analizy w tle (etap, gotowe, wszystkie); null = bez zgłaszania (rematch, testy).
+     *
+     * @var (callable(string, int, int): void)|null
+     */
+    private $searchProgress = null;
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly ProductInquirySearch $search,
@@ -147,6 +167,39 @@ final class ClientInquiryService
         private readonly AiSettingsService $aiSettings,
         private readonly PpeAssortment $assortment = new PpeAssortment,
     ) {}
+
+    /**
+     * Najwięcej pozycji zapytania — ustawienie „Strojenie AI” (domyślnie 50), odczytane raz na instancję usługi.
+     * Od niego zależą też heurystyki parsera (numeracja listy, rozbicie rozmiarów): liczą się w granicach limitu.
+     */
+    private function maxLineItems(): int
+    {
+        return $this->maxItems ??= $this->aiSettings->inquiryMaxItems();
+    }
+
+    /**
+     * Najwięcej fraz w planie szukania: klucz każdej pozycji i drugie tyle na frazy modelu (zapas pozycji,
+     * po który sięga druga runda) — przy stałym limicie 8 pozycji było to 10 fraz.
+     */
+    private function queryCap(int $itemCount): int
+    {
+        return max(self::MIN_PRODUCT_QUERIES, 2 * $itemCount + 2);
+    }
+
+    /** Karty pytań: do trzech na pozycję (towar, pytanie modelu, zamienniki) i karty wspólne listu. */
+    private function cardCap(): int
+    {
+        return max(self::MIN_CARDS, 3 * $this->maxLineItems() + 8);
+    }
+
+    /**
+     * Budżet odpowiedzi przy czytaniu maila. Model oddaje wszystkie pozycje w jednym JSON-ie — ucięta odpowiedź
+     * to zgubione pozycje, więc budżet rośnie z limitem (8 pozycji = dawne 3500, 50 = 9500).
+     */
+    private function extractMaxTokens(): int
+    {
+        return max(self::EXTRACT_TOKENS_MIN, self::EXTRACT_TOKENS_BASE + self::EXTRACT_TOKENS_PER_ITEM * $this->maxLineItems());
+    }
 
     /**
      * Treść, którą dostają model i parser pozycji. Mail idzie bez cytatu, nagłówka przekazania i stopki — inaczej
@@ -181,9 +234,14 @@ final class ClientInquiryService
     }
 
     /**
-     * @param  array{message_id?: string|null, channel?: string|null, from?: string|null, sent_at?: string|null, file_name?: string|null}  $source
+     * Zapytanie powstaje od razu, a analiza (czytanie maila, szukanie w katalogu, szkic listu) idzie w tle —
+     * AnalyzeClientInquiryJob woła runQueuedAnalysis(). Przy 50 pozycjach analiza trwa kilka minut, a serwer
+     * ucina tak długie żądania. Tu tylko to, co nie pyta modelu: odciski treści (duplikaty widać od razu),
+     * nadawca i kontakt ze stopki, warunki z ostatniego zapytania.
+     *
+     * @param  array{message_id?: string|null, channel?: string|null, from?: string|null, sent_at?: string|null, file_name?: string|null, duplicate_of_id?: int|null}  $source
      */
-    public function analyze(
+    public function createPending(
         User $user,
         string $body,
         string $tone,
@@ -191,19 +249,149 @@ final class ClientInquiryService
         ?string $subject,
         array $source = [],
     ): ClientInquiry {
+        $channel = $this->nullable($source['channel'] ?? null) ?? 'web';
+        $fromFile = $channel === self::CHANNEL_FILE;
+        $fingerprints = $this->fingerprints(self::analysisText($body, $channel));
+        // Nadawca z nagłówka From i kontakt z odciętej stopki — obie rzeczy
+        // pochodzą wprost z maila, nic tu nie jest domyślane.
+        $sender = InquirySignature::splitFrom($this->nullable($source['from'] ?? null));
+        // Plik nie ma stopki maila — „stopką” byłoby wszystko po nagłówku firmowym pisma.
+        $mailPart = $fromFile ? self::splitAtFileMarker($body)[0] : $body;
+        $contact = $mailPart === '' ? null : InquirySignature::extract($mailPart, $sender['email']);
+        // Przed zapisem nowego wiersza: potem to on byłby „ostatnim zapytaniem” i warunki przepadłyby.
+        $preferences = $this->lastPreferences($user);
+
+        return ClientInquiry::query()->create([
+            'user_id' => $user->id,
+            'client_id' => $clientId,
+            'tone' => $tone,
+            'source_channel' => $channel,
+            // temat z ekstrakcji dopisuje analiza, gdy handlowiec żadnego nie podał
+            'source_subject' => $this->nullable($subject),
+            'source_message_id' => $this->normalizeMessageId($source['message_id'] ?? null),
+            'source_fingerprint' => $fingerprints['full'],
+            'source_fingerprint_tail' => $fingerprints['tail'],
+            'duplicate_of_id' => isset($source['duplicate_of_id']) ? (int) $source['duplicate_of_id'] : null,
+            'source_from_name' => $sender['name'],
+            'source_from_email' => $sender['email'],
+            'source_sent_at' => $this->parseSentAt($source['sent_at'] ?? null),
+            'contact' => $contact,
+            'source_body' => $body,
+            'offer_terms' => $preferences['terms'] === [] ? null : $preferences['terms'],
+            // nazwa pliku klienta, z którego wczytano treść (source_channel: file) — widać ją od razu
+            'analysis' => $fromFile ? ['source_file_name' => $this->nullable($source['file_name'] ?? null)] : null,
+            'analysis_status' => ClientInquiry::ANALYSIS_QUEUED,
+            'analysis_run_id' => (string) Str::ulid(),
+            'analysis_progress' => ['stage' => 'queued', 'done' => 0, 'total' => 0],
+        ]);
+    }
+
+    /**
+     * Przebieg analizy w tle. Każdy zapis (start, postęp, wynik, błąd) jest warunkowy na `analysis_run_id`:
+     * zadanie dostarczone drugi raz, spóźnione po ponowieniu albo dla skasowanego zapytania niczego nie nadpisze.
+     * Wynik idzie jednym zapisem na końcu (analiza, odpowiedzi, szkic listu i status razem) — do tej chwili
+     * zapytanie jest zablokowane do zmian, więc handlowiec nie dostanie pustego listu ani nie straci poprawek.
+     * Nie rzuca: błąd zostaje przy zapytaniu jako „failed” z komunikatem dla handlowca.
+     */
+    public function runQueuedAnalysis(int $inquiryId, string $runId): void
+    {
+        $claimed = ClientInquiry::query()
+            ->whereKey($inquiryId)
+            ->where('analysis_run_id', $runId)
+            ->where('analysis_status', ClientInquiry::ANALYSIS_QUEUED)
+            ->update([
+                'analysis_status' => ClientInquiry::ANALYSIS_RUNNING,
+                'analysis_started_at' => now(),
+                'analysis_progress' => json_encode(['stage' => 'extract', 'done' => 0, 'total' => 0]),
+                'analysis_error' => null,
+            ]);
+        if ($claimed !== 1) {
+            return;
+        }
+        $inquiry = ClientInquiry::query()->with('user')->find($inquiryId);
+        if (! $inquiry instanceof ClientInquiry || ! $inquiry->user instanceof User) {
+            return;
+        }
+
+        try {
+            $this->runAnalysis($inquiry, $runId);
+        } catch (Throwable $e) {
+            report($e);
+            $this->markAnalysisFailed($inquiryId, $runId, $e instanceof RuntimeException
+                ? $e->getMessage()
+                : 'Błąd analizy zapytania: '.$e->getMessage());
+        }
+    }
+
+    /**
+     * Błąd przebiegu przy zapytaniu — tylko gdy to wciąż ten przebieg i jeszcze się nie skończył.
+     * Woła go też AnalyzeClientInquiryJob::failed() (limit czasu, worker zabity w trakcie).
+     */
+    public function markAnalysisFailed(int $inquiryId, string $runId, string $message): void
+    {
+        ClientInquiry::query()
+            ->whereKey($inquiryId)
+            ->where('analysis_run_id', $runId)
+            ->whereIn('analysis_status', [ClientInquiry::ANALYSIS_QUEUED, ClientInquiry::ANALYSIS_RUNNING])
+            ->update([
+                'analysis_status' => ClientInquiry::ANALYSIS_FAILED,
+                'analysis_error' => mb_substr(trim($message) !== '' ? trim($message) : 'Analiza zapytania nie powiodła się.', 0, 500),
+                'analysis_finished_at' => now(),
+            ]);
+    }
+
+    /**
+     * Ponowienie analizy po błędzie albo po przerwanym przebiegu. Zwraca nowy identyfikator przebiegu, gdy ten
+     * zapis go ustawił — podwójne kliknięcie ustawi go raz, więc zadanie idzie do kolejki raz. null = nie wolno.
+     */
+    public function restartAnalysis(ClientInquiry $inquiry): ?string
+    {
+        $runId = (string) Str::ulid();
+        $changed = ClientInquiry::query()
+            ->whereKey($inquiry->id)
+            ->where(function ($q): void {
+                $q->where('analysis_status', ClientInquiry::ANALYSIS_FAILED)
+                    ->orWhere(function ($stale): void {
+                        $stale->where('analysis_status', ClientInquiry::ANALYSIS_RUNNING)
+                            ->where('analysis_started_at', '<', now()->subMinutes(ClientInquiry::ANALYSIS_STALE_MINUTES));
+                    });
+            })
+            ->update([
+                'analysis_status' => ClientInquiry::ANALYSIS_QUEUED,
+                'analysis_run_id' => $runId,
+                'analysis_progress' => json_encode(['stage' => 'queued', 'done' => 0, 'total' => 0]),
+                'analysis_error' => null,
+                'analysis_started_at' => null,
+                'analysis_finished_at' => null,
+            ]);
+
+        return $changed === 1 ? $runId : null;
+    }
+
+    /** Czytanie maila, szukanie w katalogu i szkic listu — w pamięci; zapis tylko w saveAnalysisResult(). */
+    private function runAnalysis(ClientInquiry $inquiry, string $runId): void
+    {
         $started = hrtime(true);
-        $fromFile = ($source['channel'] ?? null) === self::CHANNEL_FILE;
-        $analysisBody = self::analysisText($body, $source['channel'] ?? null);
-        $fingerprints = $this->fingerprints($analysisBody);
+        /** @var User $user */
+        $user = $inquiry->user;
+        $body = (string) $inquiry->source_body;
+        $subject = $this->nullable($inquiry->source_subject);
+        $channel = $this->nullable($inquiry->source_channel);
+        $fromFile = $channel === self::CHANNEL_FILE;
+        // Limit z ustawień w chwili analizy — zapisany przy zapytaniu, bo panel może go potem zmienić.
+        $this->maxItems = $this->aiSettings->inquiryMaxItems();
+        $progress = $this->progressWriter((int) $inquiry->id, $runId);
+
+        $analysisBody = self::analysisText($body, $channel);
         // Klient bywa pisze model w temacie („11-571”), a w treści tylko ilość i rozmiar.
         // Najpierw temat nadany przez klienta (z nagłówka przekazania), potem temat maila.
-        // Z pliku: nagłówki przekazania i stopkę czytamy tylko z maila wklejonego nad treścią pliku.
+        // Z pliku: nagłówki przekazania czytamy tylko z maila wklejonego nad treścią pliku.
         $mailPart = $fromFile ? self::splitAtFileMarker($body)[0] : $body;
         $forwardedSubject = $mailPart === '' ? null : InquiryMailText::forwardedSubject($mailPart);
         $subjectHint = InquiryQueryText::subjectProductHint($forwardedSubject)
             ?? InquiryQueryText::subjectProductHint($subject);
         $extractStarted = hrtime(true);
-        $extractSubject = $forwardedSubject ?? $this->nullable($subject);
+        $extractSubject = $forwardedSubject ?? $subject;
         $extracted = $this->extract($analysisBody, $extractSubject);
         $extractMs = self::msSince($extractStarted);
         $resolved = $this->resolveLineItemsWithOmitted($analysisBody, $extracted['line_items'], $subjectHint, $extractSubject);
@@ -225,45 +413,34 @@ final class ClientInquiryService
                 ? [$subjectHint]
                 : array_map(InquiryLinks::withoutUrls(...), $extracted['product_queries'])
         );
+        $progress(ProductAiSearchService::PROGRESS_STAGE_UNDERSTAND, 0, 0, count($lineItems), true);
         $this->searchRounds = [];
         $this->pendingSearchEvents = [];
+        $this->searchProgress = static fn (string $stage, int $done, int $total) => $progress($stage, $done, $total, count($lineItems));
         $searchStarted = hrtime(true);
-        $matches = $this->matchInRounds($lineItems, $queries);
+        try {
+            $matches = $this->matchInRounds($lineItems, $queries);
+        } finally {
+            $this->searchProgress = null;
+        }
         $searchMs = self::msSince($searchStarted);
+        $progress('reply', 0, 0, count($lineItems), true);
         $substitutes = $this->loadSubstitutes($matches);
         $cards = $this->buildCards($extracted['cards'], $matches, $lineItems, $substitutes);
-        $preferences = $this->lastPreferences($user);
+        $margin = $user->defaultMarginPercent();
 
-        // Nadawca z nagłówka From i kontakt z odciętej stopki — obie rzeczy
-        // pochodzą wprost z maila, nic tu nie jest domyślane.
-        $sender = InquirySignature::splitFrom($this->nullable($source['from'] ?? null));
-        // Plik nie ma stopki maila — „stopką” byłoby wszystko po nagłówku firmowym pisma.
-        $contact = $mailPart === '' ? null : InquirySignature::extract($mailPart, $sender['email']);
-
-        $inquiry = ClientInquiry::query()->create([
-            'user_id' => $user->id,
-            'client_id' => $clientId,
-            'tone' => $tone,
-            'source_channel' => $this->nullable($source['channel'] ?? null) ?? 'web',
-            'source_subject' => $this->nullable($subject) ?? $extracted['subject'],
-            'source_message_id' => $this->normalizeMessageId($source['message_id'] ?? null),
-            'source_fingerprint' => $fingerprints['full'],
-            'source_fingerprint_tail' => $fingerprints['tail'],
-            'duplicate_of_id' => isset($source['duplicate_of_id']) ? (int) $source['duplicate_of_id'] : null,
-            'source_from_name' => $sender['name'],
-            'source_from_email' => $sender['email'],
-            'source_sent_at' => $this->parseSentAt($source['sent_at'] ?? null),
-            'contact' => $contact,
-            'source_body' => $body,
-            'offer_terms' => $preferences['terms'] === [] ? null : $preferences['terms'],
+        $inquiry->forceFill([
+            'source_subject' => $subject ?? $extracted['subject'],
             'analysis' => [
                 'subject' => $extracted['subject'],
                 // Ślad audytowy: co dokładnie poszło do modelu, gdy mail był cięty.
                 'analyzed_body' => $analysisBody === $body ? null : $analysisBody,
                 // nazwa pliku klienta, z którego wczytano treść (source_channel: file)
-                'source_file_name' => $fromFile ? $this->nullable($source['file_name'] ?? null) : null,
+                'source_file_name' => $fromFile ? $this->nullable($inquiry->analysis['source_file_name'] ?? null) : null,
                 // wyrób z tematu maila, dopisany do szukania pozycji bez nazwy (query_source: subject)
                 'subject_hint' => $subjectHint,
+                // limit pozycji, z którym liczyła ta analiza (ustawienie w Strojeniu AI)
+                'max_items' => $this->maxLineItems(),
                 'questions' => $extracted['questions'],
                 'product_queries' => $queries,
                 'line_items' => $lineItems,
@@ -274,20 +451,52 @@ final class ClientInquiryService
                 'link_candidates' => $this->linkCandidates($linked['products']),
                 'substitutes' => $substitutes,
                 'cards' => $cards,
-                'margin_used' => $preferences['margin'],
+                'margin_used' => $margin,
             ],
         ]);
-        $this->flushSearchEvents((int) $inquiry->id, (int) $user->id);
+        // Pracownik ma od razu zobaczyć gotowy list: domyślne decyzje + szkic (jak saveReply(), bez zapisu).
+        $answers = $this->defaultAnswers($inquiry, 'catalog_margin', $margin);
+        $analysis = $inquiry->analysis;
+        $analysis['margin_used'] = $this->marginPercent($answers);
+        $inquiry->forceFill(['analysis' => $analysis, 'answers' => $answers, 'extra_note' => null]);
+        $draft = $this->writeReply($inquiry, $answers, null);
 
-        // Pracownik ma od razu zobaczyć gotowy list: domyślne decyzje + szkic.
-        $answers = $this->defaultAnswers($inquiry, $preferences['price_mode'], $preferences['margin']);
-        $saved = $this->saveReply($inquiry, $answers, null);
+        $saved = DB::transaction(function () use ($inquiry, $runId, $answers, $draft): bool {
+            $row = ClientInquiry::query()->lockForUpdate()->find($inquiry->id);
+            if (! $row instanceof ClientInquiry
+                || $row->analysis_run_id !== $runId
+                || $row->analysis_status !== ClientInquiry::ANALYSIS_RUNNING) {
+                return false;
+            }
+            $row->forceFill([
+                'source_subject' => $inquiry->source_subject,
+                'analysis' => $inquiry->analysis,
+                'answers' => $answers,
+                'extra_note' => null,
+                'reply_subject' => $draft['subject'],
+                'reply_body' => $draft['body'],
+                'reply_html' => $draft['html'],
+                'analysis_status' => ClientInquiry::ANALYSIS_DONE,
+                'analysis_progress' => null,
+                'analysis_error' => null,
+                'analysis_finished_at' => now(),
+            ])->save();
+
+            return true;
+        });
+        if (! $saved) {
+            // przebieg zastąpiony albo zapytanie skasowane — statystyka wyszukiwań przepada razem z nim
+            $this->pendingSearchEvents = [];
+
+            return;
+        }
+        $this->flushSearchEvents((int) $inquiry->id, (int) $user->id);
 
         // Gdzie idzie czas analizy (#71 MESKO, 24.09.2026: 160 s, a z dat w bazie dało się
         // odtworzyć tylko dwa odcinki). `other` = parser pozycji, linki, zamienniki i zapis listu.
         $totalMs = self::msSince($started);
         Log::info('client-inquiry.timings', [
-            'inquiry_id' => $saved->id,
+            'inquiry_id' => $inquiry->id,
             'line_items' => count($lineItems),
             'timings_ms' => [
                 'extract' => $extractMs,
@@ -297,8 +506,32 @@ final class ClientInquiryService
             ],
             'search_rounds' => $this->searchRounds,
         ]);
+    }
 
-        return $saved;
+    /**
+     * Zapis postępu przebiegu: najwyżej co 2 s (wyszukiwanie zgłasza każdą ocenioną kartę), zawsze przy zmianie
+     * etapu. Warunkowy na przebieg i status — nie wskrzesza skasowanego zapytania, nie psuje nowszego przebiegu.
+     *
+     * @return callable(string, int, int, int, bool=): void
+     */
+    private function progressWriter(int $inquiryId, string $runId): callable
+    {
+        $last = ['stage' => null, 'at' => 0.0];
+
+        return static function (string $stage, int $done, int $total, int $items, bool $force = false) use ($inquiryId, $runId, &$last): void {
+            $now = microtime(true);
+            if (! $force && $stage === $last['stage'] && $now - $last['at'] < 2.0 && $done < $total) {
+                return;
+            }
+            $last = ['stage' => $stage, 'at' => $now];
+            ClientInquiry::query()
+                ->whereKey($inquiryId)
+                ->where('analysis_run_id', $runId)
+                ->where('analysis_status', ClientInquiry::ANALYSIS_RUNNING)
+                ->update(['analysis_progress' => json_encode(
+                    ['stage' => $stage, 'done' => $done, 'total' => $total, 'items' => $items],
+                )]);
+        };
     }
 
     /**
@@ -422,7 +655,7 @@ final class ClientInquiryService
 
     /**
      * Ponowne szukanie w katalogu dla zapisanego zapytania — tymi samymi frazami
-     * (`analysis.product_queries`) i tą samą drogą co analyze(). Na to, że wynik
+     * (`analysis.product_queries`) i tą samą drogą co runAnalysis(). Na to, że wynik
      * z chwili analizy bywa zły: model nie odpowiadał albo wyszukiwarka miała błąd
      * (24.09.2026, zapytania #64, #65, #67 z „brak w katalogu” dla wyrobów z katalogu).
      *
@@ -517,6 +750,9 @@ final class ClientInquiryService
     /** Powód, dla którego zapytania nie wolno już przeliczać; null = można. */
     private function rematchBlocker(ClientInquiry $inquiry): ?string
     {
+        if (! $inquiry->isAnalyzed()) {
+            return 'analiza zapytania jeszcze trwa albo się nie powiodła';
+        }
         if ($inquiry->replied_at !== null) {
             return 'odpowiedź już wysłana';
         }
@@ -537,7 +773,7 @@ final class ClientInquiryService
     }
 
     /**
-     * Linki z maila przy zapisanych pozycjach, liczone tak jak w analyze(): karty spod adresu
+     * Linki z maila przy zapisanych pozycjach, liczone tak jak w runAnalysis(): karty spod adresu
      * (`link_candidates`), fraza pozycji bez adresu i z nazwą karty, `product_queries` bez adresów.
      * Zapytania sprzed rozpoznawania linków (#69) szukały frazą z adresem strony, a jego słowa
      * pasowały do całej rodziny (ROLEX 1 po 99%, klient wskazał ROLEX 5).
@@ -555,7 +791,7 @@ final class ClientInquiryService
             is_array($analysis['line_items'] ?? null) ? $analysis['line_items'] : [],
             'is_array',
         ));
-        // analyze() zapisuje przycięty mail tylko wtedy, gdy różni się od całego
+        // runAnalysis() zapisuje przycięty mail tylko wtedy, gdy różni się od całego
         $body = is_string($analysis['analyzed_body'] ?? null) ? $analysis['analyzed_body'] : (string) $inquiry->source_body;
         $linked = app(InquiryProductLinks::class)->attach($items, $body);
 
@@ -569,7 +805,7 @@ final class ClientInquiryService
         }
 
         // W zapisie stoją stare klucze wyszukiwania pozycji — zastępują je nowe z uniqueQueries() —
-        // i frazy modelu, które w analyze() idą bez adresów. Klucz równy frazie pozycji z modelu
+        // i frazy modelu, które w runAnalysis() idą bez adresów. Klucz równy frazie pozycji z modelu
         // bywa też frazą modelu (model podaje te same), a jego grupa jest zapasem pozycji
         // (groupsForItem), więc zostaje.
         $itemKeys = [];
@@ -1222,6 +1458,7 @@ final class ClientInquiryService
             'source_sent_at' => $inquiry->source_sent_at?->toIso8601String(),
             // plik klienta, z którego wczytano treść; null = mail
             'source_file_name' => $this->nullable($analysis['source_file_name'] ?? null),
+            ...$this->analysisStateView($inquiry),
             'contact' => is_array($inquiry->contact) ? $inquiry->contact : null,
             'user' => $author instanceof User
                 ? ['id' => $author->id, 'name' => $author->name]
@@ -1245,7 +1482,7 @@ final class ClientInquiryService
             'items' => $items,
             // wiersze maila poza pozycjami — nie ma ich w liście, handlowiec dopisuje je sam
             'omitted_items' => $omitted,
-            'omitted_limit' => self::MAX_LINE_ITEMS,
+            'omitted_limit' => (int) ($analysis['max_items'] ?? self::LEGACY_MAX_LINE_ITEMS),
             'global_cards' => $this->globalCards($analysis),
             'cards' => $this->storedCards($analysis),
             'answers' => $answers,
@@ -1255,6 +1492,36 @@ final class ClientInquiryService
             'reply_body' => $inquiry->reply_body,
             'reply_html' => $this->replyHtmlFor($inquiry),
             'created_at' => $inquiry->created_at?->toIso8601String(),
+        ];
+    }
+
+    /**
+     * Stan analizy w tle do widoku (kontrakt API: analysis_status, analysis_progress, analysis_error …). Przebieg
+     * „running” bez końca po ClientInquiry::ANALYSIS_STALE_MINUTES pokazujemy jako przerwany — do ponowienia.
+     *
+     * @return array<string, mixed>
+     */
+    public function analysisStateView(ClientInquiry $inquiry): array
+    {
+        $status = $inquiry->effectiveAnalysisStatus();
+        $progress = is_array($inquiry->analysis_progress) ? $inquiry->analysis_progress : null;
+        $error = $this->nullable($inquiry->analysis_error);
+        if ($status === ClientInquiry::ANALYSIS_FAILED && $inquiry->analysis_status === ClientInquiry::ANALYSIS_RUNNING) {
+            $error = 'Analiza została przerwana — serwer nie dokończył jej w '.ClientInquiry::ANALYSIS_STALE_MINUTES.' minut. Uruchom ją ponownie.';
+        }
+        $pending = $status !== ClientInquiry::ANALYSIS_DONE;
+
+        return [
+            'analysis_status' => $status,
+            'analysis_progress' => $pending && $progress !== null ? [
+                'stage' => (string) ($progress['stage'] ?? 'queued'),
+                'done' => (int) ($progress['done'] ?? 0),
+                'total' => (int) ($progress['total'] ?? 0),
+            ] : null,
+            'analysis_error' => $status === ClientInquiry::ANALYSIS_FAILED ? ($error ?? 'Analiza zapytania nie powiodła się.') : null,
+            'analysis_started_at' => $pending ? $inquiry->analysis_started_at?->toIso8601String() : null,
+            'analysis_line_items' => $pending && isset($progress['items']) ? (int) $progress['items'] : null,
+            'can_retry_analysis' => $status === ClientInquiry::ANALYSIS_FAILED,
         ];
     }
 
@@ -1605,7 +1872,7 @@ final class ClientInquiryService
     }
 
     /**
-     * Jedna funkcja domyślnego wyboru: dla analyze() (zapis answers) i compose() (brak odpowiedzi).
+     * Jedna funkcja domyślnego wyboru: dla runAnalysis() (zapis answers) i compose() (brak odpowiedzi).
      *
      * @param  array<string, mixed>  $item
      * @param  list<array<string, mixed>>  $candidates  posortowani malejąco po score
@@ -2460,7 +2727,7 @@ final class ClientInquiryService
                         .'line_items: KAŻDA osobna pozycja (osobny wiersz, ilość albo rozmiar = osobna pozycja). '
                         .'Prośby o dokumenty (deklaracja zgodności, instrukcja, karta produktu, certyfikat, atest) '
                         .'i o warunki (termin realizacji, dostawa, płatność, ważność oferty) to NIE pozycje — wpisz je do questions. '
-                        .'Nie łącz „rękawice 9” i „rękawice 10” w jedną. Max 8. '
+                        .'Nie łącz „rękawice 9” i „rękawice 10” w jedną. Max '.$this->maxLineItems().'. '
                         .'Każda pozycja: id (item_1…), quote (DOKŁADNY cytat wiersza z maila), '
                         .'qty (SAMA liczba jako string, np. „30”; brak → null), unit (jednostka DOKŁADNIE jak w mailu: „szt.”, „par”, „op.”; brak → null), '
                         .'query (fraza do katalogu BEZ rozmiaru, Z warunkiem: substancja, norma, typ), size (lub null), '
@@ -2481,7 +2748,7 @@ final class ClientInquiryService
                     'role' => 'user',
                     'content' => $content,
                 ],
-            ], 0.1, 3500, null, AiTask::ClientInquiry);
+            ], 0.1, $this->extractMaxTokens(), null, AiTask::ClientInquiry);
         } catch (Throwable $e) {
             throw new RuntimeException('Nie udało się przeanalizować zapytania: '.$e->getMessage(), 0, $e);
         }
@@ -2525,7 +2792,7 @@ final class ClientInquiryService
      *
      * W pierwszej rundzie zostaje wszystko, czego nie da się przypisać pozycji jako zapasu: fraza,
      * której pozycja nie ma swojego klucza w planie (stare rekordy, przycięcie do
-     * MAX_PRODUCT_QUERIES), jest jej jedynym szukaniem. Po awarii modelu drugiej rundy nie ma —
+     * queryCap()), jest jej jedynym szukaniem. Po awarii modelu drugiej rundy nie ma —
      * kazałaby czekać drugi raz na model, który przed chwilą nie odpowiedział, a pozycja i tak
      * pokazuje „model nie odpowiedział”.
      *
@@ -2644,12 +2911,13 @@ final class ClientInquiryService
      */
     private function matchProducts(array $queries): array
     {
-        $sliced = array_values(array_slice($queries, 0, self::MAX_PRODUCT_QUERIES));
+        // Plan fraz jest już przycięty (uniqueQueries); rematch szuka zapisanym planem, choćby limit potem zmalał.
+        $sliced = array_values($queries);
         $started = hrtime(true);
         try {
             // z zapasem: wiersze nieocenione odsiewamy dopiero przy pokazywaniu,
             // więc przycięcie do trójki przed odsiewem zabrałoby dobre trafienia
-            $rawGroups = $this->search->findMany($sliced, self::MAX_MATCHES_PER_QUERY * 3);
+            $rawGroups = $this->search->findMany($sliced, self::MAX_MATCHES_PER_QUERY * 3, $this->searchProgress);
         } catch (Throwable $e) {
             Log::warning('Zapytanie klienta: wyszukiwanie w katalogu padło', ['error' => $e->getMessage()]);
             $rawGroups = [];
@@ -2823,7 +3091,7 @@ final class ClientInquiryService
     private function appendCommerce(array $cards, array $used, bool $hasCatalog, bool $includeSubstitutes): array
     {
         if (! $hasCatalog) {
-            return array_slice($cards, 0, self::MAX_CARDS);
+            return array_slice($cards, 0, $this->cardCap());
         }
         foreach ($this->commerceCards() as $card) {
             if (! $includeSubstitutes && ($card['id'] ?? '') === 'substitutes') {
@@ -2835,12 +3103,12 @@ final class ClientInquiryService
             $card['kind'] = 'global';
             $cards[] = $card;
             $used[] = $card['id'];
-            if (count($cards) >= self::MAX_CARDS) {
+            if (count($cards) >= $this->cardCap()) {
                 break;
             }
         }
 
-        return array_slice($cards, 0, self::MAX_CARDS);
+        return array_slice($cards, 0, $this->cardCap());
     }
 
     /**
@@ -2876,7 +3144,7 @@ final class ClientInquiryService
         // przegłosowywały poprawną odpowiedź modelu samą liczbą. Liczymy jak dawniej
         // w granicach limitu: dłuższy mail nie może przez to zabrać pozycji modelowi.
         $credible = count(array_filter(
-            array_slice($parsed, 0, self::MAX_LINE_ITEMS),
+            array_slice($parsed, 0, $this->maxLineItems()),
             fn (array $item): bool => $this->isCredibleRow($item),
         ));
         $merged = [];
@@ -2886,13 +3154,13 @@ final class ClientInquiryService
         } elseif ($fromAi !== []) {
             $items = $this->withProductRowQuotes($this->quantitiesCheckedAgainstQuote($fromAi), $parsed, $body);
             ['items' => $items, 'merged_ids' => $merged, 'unplaced' => $unplaced]
-                = $this->withoutDoubledSizeBreakdowns($items, $parsed, count($fromAi) >= self::MAX_LINE_ITEMS);
+                = $this->withoutDoubledSizeBreakdowns($items, $parsed, count($fromAi) >= $this->maxLineItems());
         } else {
             $items = $parsed;
         }
 
         $omitted = [];
-        foreach ([...array_slice($items, self::MAX_LINE_ITEMS), ...$unplaced] as $item) {
+        foreach ([...array_slice($items, $this->maxLineItems()), ...$unplaced] as $item) {
             $qtyUnit = $this->qtyUnit($item);
             $omitted[] = [
                 'quote' => (string) ($this->nullable($item['quote'] ?? null) ?? $item['query'] ?? ''),
@@ -2904,7 +3172,7 @@ final class ClientInquiryService
 
         return [
             'items' => $this->withSearchQueries(
-                array_slice($items, 0, self::MAX_LINE_ITEMS),
+                array_slice($items, 0, $this->maxLineItems()),
                 $subjectHint,
                 trim(($subject ?? '')."\n".$body),
             ),
@@ -3025,7 +3293,7 @@ final class ClientInquiryService
         foreach ($splits as [$total, $sized]) {
             $expandedCount += count($sized) - 1;
         }
-        if ($expandedCount > self::MAX_LINE_ITEMS) {
+        if ($expandedCount > $this->maxLineItems()) {
             $folds = [...$folds, ...$splits];
             $splits = [];
         }
@@ -3597,7 +3865,7 @@ final class ClientInquiryService
             if ($line === '') {
                 continue;
             }
-            if ($numbersAtLimit === null && count($items) >= self::MAX_LINE_ITEMS) {
+            if ($numbersAtLimit === null && count($items) >= $this->maxLineItems()) {
                 $numbersAtLimit = count($leadingNumbers);
             }
             // Telefon, numer konta i data z przodu wiersza to liczby, ale nie ilości:
@@ -3804,7 +4072,7 @@ final class ClientInquiryService
         // o numeracji decyduje lista w granicach limitu pozycji (parseLineItemsFromBody())
         $unitGiven = array_map(
             static fn (array $item): bool => ($item['qty_unit_given'] ?? false) === true,
-            array_slice($items, 0, self::MAX_LINE_ITEMS),
+            array_slice($items, 0, $this->maxLineItems()),
         );
         // liczy się, ile wierszy było ponumerowanych — pominięte pytanie też było
         if (count($numbers) < 2 || ! $this->looksLikeEnumeration($numbers, $unitGiven)) {
@@ -4213,7 +4481,7 @@ final class ClientInquiryService
             $out[] = trim($query);
         }
 
-        return array_slice($out, 0, self::MAX_PRODUCT_QUERIES);
+        return array_slice($out, 0, $this->queryCap(count($lineItems)));
     }
 
     /**

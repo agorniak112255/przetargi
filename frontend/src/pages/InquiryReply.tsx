@@ -10,6 +10,7 @@ import { api, type OrderQuantity } from '../lib/api'
 import { copyHtmlBySelection } from '../lib/clipboard'
 import { toneHint, toneOptions } from '../lib/inquiryTone'
 import type {
+  InquiryAnalysisStage,
   InquiryAnswer,
   InquiryCandidate,
   InquiryCard,
@@ -43,6 +44,29 @@ const PLN = new Intl.NumberFormat('pl-PL', { style: 'currency', currency: 'PLN' 
 /** Ile razy i co ile pytamy serwer, czy dodatek podjął już list (łącznie ok. 40 s). */
 const WATCH_TRIES = 20
 const WATCH_EVERY_MS = 2000
+
+/** Co ile pytamy serwer o postęp analizy w tle. */
+const ANALYSIS_POLL_MS = 3000
+/** Po takim czasie w kolejce podpowiadamy, że proces analizy może nie działać. */
+const ANALYSIS_QUEUE_HINT_MS = 3 * 60 * 1000
+
+/** Etapy analizy po stronie serwera — nazwy dla handlowca. */
+const analysisStageLabel: Record<InquiryAnalysisStage, string> = {
+  queued: 'Czekam w kolejce',
+  extract: 'Czytam treść zapytania',
+  understand: 'Rozumiem pozycje',
+  catalog: 'Szukam w katalogu',
+  rank: 'Model ocenia karty',
+  rewrite: 'Poprawiam frazy',
+  reply: 'Piszę list',
+}
+
+/** Czas trwania analizy: „45 s”, „3 min 05 s”. */
+function elapsedLabel(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return `${sec} s`
+  return `${Math.floor(sec / 60)} min ${String(sec % 60).padStart(2, '0')} s`
+}
 
 /** Data wysłania maila źródłowego; nieczytelną wartość pokazujemy bez zmian. */
 function mailDate(value: string): string {
@@ -1217,6 +1241,103 @@ function ReplyPreviewModal({
   )
 }
 
+/**
+ * Stan analizy w tle, dopóki pozycji jeszcze nie ma. `now` tyka co sekundę w rodzicu —
+ * stąd czas trwania i podpowiedź o długiej kolejce.
+ */
+function AnalysisStatusPanel({
+  inquiry,
+  now,
+  retryBusy,
+  onRetry,
+}: {
+  inquiry: InquiryPayload
+  now: number
+  retryBusy: boolean
+  onRetry: () => void
+}) {
+  const status = inquiry.analysis_status ?? 'done'
+
+  if (status === 'failed') {
+    return (
+      <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+        <p className="font-medium">Analiza zapytania nie powiodła się.</p>
+        {inquiry.analysis_error && <p className="mt-1 text-xs">{inquiry.analysis_error}</p>}
+        {!inquiry.can_retry_analysis && (
+          <p className="mt-1 text-[11px]">Analizę ponownie może uruchomić autor zapytania.</p>
+        )}
+        {inquiry.can_retry_analysis && (
+          <button
+            type="button"
+            disabled={retryBusy}
+            onClick={onRetry}
+            className="mt-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {retryBusy ? 'Uruchamiam…' : 'Uruchom analizę ponownie'}
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  if (status === 'queued') {
+    const createdMs = inquiry.created_at ? Date.parse(inquiry.created_at) : NaN
+    const waitingLong = Number.isFinite(createdMs) && now - createdMs > ANALYSIS_QUEUE_HINT_MS
+    return (
+      <div className="rounded border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-800">
+        <p className="inline-flex items-center gap-2 font-medium">
+          <span
+            className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+            aria-hidden
+          />
+          Zapytanie czeka na analizę…
+        </p>
+        {waitingLong && (
+          <p className="mt-1 text-xs">
+            Proces analizy jest zajęty innym zapytaniem albo nie działa — jeśli to trwa długo, daj znać
+            administratorowi.
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  // running
+  const progress = inquiry.analysis_progress ?? null
+  const startedMs = inquiry.analysis_started_at ? Date.parse(inquiry.analysis_started_at) : NaN
+  const pct =
+    progress && progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : null
+  return (
+    <div className="rounded border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-800">
+      <p className="inline-flex items-center gap-2 font-medium">
+        <span
+          className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
+          aria-hidden
+        />
+        Analizuję zapytanie…
+        {progress && <span className="font-normal">{analysisStageLabel[progress.stage] ?? progress.stage}</span>}
+      </p>
+      {progress && pct !== null && (
+        <div className="mt-2 max-w-md">
+          <div className="h-1.5 overflow-hidden rounded-full bg-violet-100">
+            <div className="h-full rounded-full bg-violet-600" style={{ width: `${pct}%` }} />
+          </div>
+          <p className="mt-0.5 text-[11px]">
+            {progress.done} z {progress.total}
+          </p>
+        </div>
+      )}
+      <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
+        {inquiry.analysis_line_items != null && <span>Znalezione pozycje: {inquiry.analysis_line_items}</span>}
+        {Number.isFinite(startedMs) && <span>Trwa {elapsedLabel(now - startedMs)}</span>}
+      </div>
+      <p className="mt-1 text-[11px]">
+        Możesz zamknąć tę stronę — analiza trwa na serwerze. Przy 50 pozycjach to kilka minut.
+      </p>
+    </div>
+  )
+}
+
 export function InquiryReply() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -1246,6 +1367,9 @@ export function InquiryReply() {
   const [searchFor, setSearchFor] = useState<SearchFor | null>(null)
   const [contactOpen, setContactOpen] = useState(false)
   const [replyOpen, setReplyOpen] = useState(false)
+  const [retryBusy, setRetryBusy] = useState(false)
+  // Zegar ekranu analizy (czas trwania, podpowiedź o długiej kolejce) — tyka tylko w trakcie analizy.
+  const [now, setNow] = useState(() => Date.now())
   const composeSec = useBusySeconds(composeBusy)
 
   // Treść zapisana na serwerze (PATCH) — do wykrywania niezapisanych edycji.
@@ -1292,6 +1416,69 @@ export function InquiryReply() {
       .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
+
+  // Analiza w tle: pozycji i listu jeszcze nie ma, więc pytamy serwer co ANALYSIS_POLL_MS.
+  const analysisStatus = inquiry?.analysis_status ?? 'done'
+  const analysisPending = analysisStatus === 'queued' || analysisStatus === 'running'
+  const pollId = inquiry && String(inquiry.id) === id && analysisPending ? inquiry.id : null
+
+  useEffect(() => {
+    if (pollId === null) return
+    // Stara odpowiedź nie ma prawa nadpisać ekranu: po odmontowaniu, zmianie zapytania albo końcu
+    // analizy (sprzątanie efektu) `cancelled`; po przejściu na inne zapytanie także inquiryRef.
+    let cancelled = false
+    let inFlight = false
+    const stale = () => cancelled || inquiryRef.current !== pollId
+    const timer = window.setInterval(() => {
+      // wolny serwer — nie mnożymy żądań, następne pytanie dopiero po odpowiedzi
+      if (inFlight) return
+      inFlight = true
+      api<InquiryPayload>(`/inquiries/${pollId}`)
+        .then((row) => {
+          if (stale()) return
+          if ((row.analysis_status ?? 'done') === 'done') {
+            // ta sama ścieżka co pierwsze wczytanie — szkice pól z gotowego zapytania
+            applyComposed(row)
+            setChecked({})
+          } else {
+            setInquiry(row)
+          }
+        })
+        // chwilowy błąd sieci nie przerywa czekania — następna próba za ANALYSIS_POLL_MS
+        .catch(() => undefined)
+        .finally(() => {
+          inFlight = false
+        })
+    }, ANALYSIS_POLL_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollId])
+
+  useEffect(() => {
+    if (!analysisPending) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [analysisPending])
+
+  async function retryAnalysis() {
+    if (!inquiry || retryBusy) return
+    setRetryBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const res = await api<InquiryPayload>(`/inquiries/${inquiry.id}/retry-analysis`, { method: 'POST' })
+      setNow(Date.now())
+      applyComposed(res)
+      setChecked({})
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się uruchomić analizy ponownie.')
+    } finally {
+      setRetryBusy(false)
+    }
+  }
 
   /** Zapisuje poprawki tematu i treści; zwraca zapytanie po zapisie albo null, gdy nie było czego zapisać. */
   async function saveEdits(): Promise<InquiryPayload | null> {
@@ -1626,18 +1813,79 @@ export function InquiryReply() {
   if (loading) return <p className="text-sm text-slate-500">Ładowanie…</p>
   if (!inquiry) return <p className="text-sm text-red-600">{err || 'Brak zapytania.'}</p>
 
-  const total = inquiry.items.length
-  const busy = composeBusy
-  // Cudze zapytanie (uprawnienie „otwieranie cudzych”) jest tylko do podglądu —
-  // serwer i tak odrzuci każdą zmianę spoza konta autora.
-  const readOnly = inquiry.user?.id !== user?.id
-  const locked = busy || readOnly
   // Inne zapytania z tego samego maila; pole dochodzi po stronie API, więc czytamy ostrożnie.
   const duplicates = Array.isArray(inquiry.duplicates) ? inquiry.duplicates : []
   // Nadawca dokładnie tak, jak przyszedł w mailu — bez sklejania brakujących kawałków.
   const sender = [inquiry.source_from_name, inquiry.source_from_email]
     .filter(Boolean)
     .join(inquiry.source_from_name && inquiry.source_from_email ? ' · ' : '')
+  const header = (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 className="text-lg font-semibold">Odpowiedź na zapytanie</h1>
+        <p className="text-xs text-slate-500">
+          {inquiry.client?.name ? `${inquiry.client.name} · ` : ''}
+          {inquiry.source_subject || `Zapytanie #${inquiry.id}`}
+        </p>
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
+          {sender && <span>Od: {sender}</span>}
+          {inquiry.source_sent_at && <span>Mail z {mailDate(inquiry.source_sent_at)}</span>}
+          {inquiry.user?.name && <span>Prowadzi: {inquiry.user.name}</span>}
+          <InquiryContactChip contact={inquiry.contact} onOpen={() => setContactOpen(true)} />
+        </div>
+      </div>
+      {/* Jedyne wyjście do listy — kafelek, żeby nie ginął w nagłówku (pasek przycisków go nie powtarza). */}
+      <Link
+        to="/inquiries"
+        className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 shadow-sm ring-1 ring-slate-200 hover:bg-blue-50"
+      >
+        ← Wróć do zapytań
+      </Link>
+    </div>
+  )
+
+  // Analiza w tle jeszcze trwa albo padła: pozycji i listu nie ma — stan analizy i treść zapytania.
+  if (analysisStatus !== 'done') {
+    return (
+      <div className="app-inquiry-reply space-y-4">
+        {header}
+
+        {inquiry.duplicate_of && <DuplicateOfBar origin={inquiry.duplicate_of} />}
+        {duplicates.length > 0 && <DuplicatesBar list={duplicates} />}
+
+        <AnalysisStatusPanel
+          inquiry={inquiry}
+          now={now}
+          retryBusy={retryBusy}
+          onRetry={() => void retryAnalysis()}
+        />
+        {msg && <p className="rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
+        {err && <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+
+        <div className="rounded-xl bg-white p-4 text-xs shadow-sm">
+          <h2 className="font-semibold text-slate-800">Zapytanie klienta</h2>
+          {inquiry.source_file_name && (
+            <p className="mt-2 text-[11px] text-slate-500">Tekst wczytany z pliku: {inquiry.source_file_name}</p>
+          )}
+          {inquiry.source_subject && <p className="mt-2 font-medium text-slate-700">{inquiry.source_subject}</p>}
+          <pre className="mt-2 whitespace-pre-wrap font-sans text-slate-600">{inquiry.source_body}</pre>
+        </div>
+
+        <InquiryContactModal
+          contact={contactOpen ? inquiry.contact : null}
+          subtitle={inquiry.source_subject || `Zapytanie #${inquiry.id}`}
+          onClose={() => setContactOpen(false)}
+        />
+      </div>
+    )
+  }
+
+  const total = inquiry.items.length
+  const busy = composeBusy
+  // Cudze zapytanie (uprawnienie „otwieranie cudzych”) jest tylko do podglądu —
+  // serwer i tak odrzuci każdą zmianę spoza konta autora.
+  const readOnly = inquiry.user?.id !== user?.id
+  const locked = busy || readOnly
   // Wiersze maila poza pozycjami; pole dochodzi po stronie API, więc czytamy ostrożnie.
   const omitted = Array.isArray(inquiry.omitted_items) ? inquiry.omitted_items : []
   // attention_count liczy też pominięte wiersze — „X z {total} pozycji” dotyczy samych pozycji
@@ -1664,28 +1912,7 @@ export function InquiryReply() {
 
   return (
     <div className="app-inquiry-reply space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold">Odpowiedź na zapytanie</h1>
-          <p className="text-xs text-slate-500">
-            {inquiry.client?.name ? `${inquiry.client.name} · ` : ''}
-            {inquiry.source_subject || `Zapytanie #${inquiry.id}`}
-          </p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
-            {sender && <span>Od: {sender}</span>}
-            {inquiry.source_sent_at && <span>Mail z {mailDate(inquiry.source_sent_at)}</span>}
-            {inquiry.user?.name && <span>Prowadzi: {inquiry.user.name}</span>}
-            <InquiryContactChip contact={inquiry.contact} onOpen={() => setContactOpen(true)} />
-          </div>
-        </div>
-        {/* Jedyne wyjście do listy — kafelek, żeby nie ginął w nagłówku (pasek przycisków go nie powtarza). */}
-        <Link
-          to="/inquiries"
-          className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 shadow-sm ring-1 ring-slate-200 hover:bg-blue-50"
-        >
-          ← Wróć do zapytań
-        </Link>
-      </div>
+      {header}
 
       {inquiry.duplicate_of && <DuplicateOfBar origin={inquiry.duplicate_of} />}
       {duplicates.length > 0 && <DuplicatesBar list={duplicates} />}

@@ -139,6 +139,22 @@ function StatusChip({ row }: { row: InquiryListItem }) {
       </span>
     )
   }
+  // Analiza w tle: do jej końca pozycji nie ma, więc attention_count = 0 — nie udajemy „Szkicu”.
+  const analysis = row.analysis_status ?? 'done'
+  if (analysis === 'queued' || analysis === 'running') {
+    return (
+      <span className="inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-violet-800">
+        Analizuję…
+      </span>
+    )
+  }
+  if (analysis === 'failed') {
+    return (
+      <span className="inline-block rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-red-800">
+        Błąd analizy
+      </span>
+    )
+  }
   if (row.attention_count > 0) {
     return (
       <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-amber-800">

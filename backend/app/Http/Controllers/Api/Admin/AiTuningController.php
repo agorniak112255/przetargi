@@ -30,6 +30,9 @@ class AiTuningController extends Controller
                 $payload[$field] = (int) $request->validated($field);
             }
         }
+        if ($request->has('inquiry_max_items')) {
+            $payload['inquiry_max_items'] = (int) $request->validated('inquiry_max_items');
+        }
         if ($request->has('match_allow_catalog_rows')) {
             $payload['match_allow_catalog_rows'] = $request->boolean('match_allow_catalog_rows');
         }
@@ -52,6 +55,9 @@ class AiTuningController extends Controller
             'match_substitute_score' => $this->settings->matchSubstituteScore(),
             'match_min_score' => $this->settings->matchMinScore(),
             'match_allow_catalog_rows' => $this->settings->matchAllowsCatalogRows(),
+            'inquiry_max_items' => $this->settings->inquiryMaxItems(),
+            'inquiry_max_items_default' => AiSettingsService::INQUIRY_MAX_ITEMS_DEFAULT,
+            'inquiry_max_items_max' => AiSettingsService::INQUIRY_MAX_ITEMS_MAX,
             'match_defaults' => [
                 'apply' => AiSettingsService::MATCH_APPLY_SCORE_DEFAULT,
                 'substitute' => AiSettingsService::MATCH_SUBSTITUTE_SCORE_DEFAULT,

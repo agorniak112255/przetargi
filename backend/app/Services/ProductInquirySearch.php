@@ -29,15 +29,17 @@ class ProductInquirySearch
 
     /**
      * @param  list<string>  $queries
+     * @param  (callable(string, int, int): void)|null  $onProgress  etap, gotowe, wszystkie — postęp analizy zapytania w tle
      * @return list<array{query: string, products: list<array<string, mixed>>, model_state: string|null, requested_brand_absent: string|null, timings_ms: array<string, int>}>
      */
-    public function findMany(array $queries, int $limit): array
+    public function findMany(array $queries, int $limit, ?callable $onProgress = null): array
     {
         $results = $this->search->findMany(
             $queries,
             $limit,
             AiTask::ProductSearch,
             self::MAX_PARALLEL,
+            $onProgress,
         );
         $out = [];
         foreach ($results as $i => $result) {

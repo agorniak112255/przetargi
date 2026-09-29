@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\ClientInquiry;
 use App\Models\User;
+use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductInquirySearch;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -63,6 +65,8 @@ final class ClientInquiryLineItemLimitTest extends TestCase
 
     public function test_inquiry_71_quotes_432_pairs_and_keeps_every_row(): void
     {
+        // Granica limitu pozycji: te przypadki dotyczą dawnego stałego limitu 8 — od 29.09.2026 to ustawienie.
+        app(AiSettingsService::class)->update(['inquiry_max_items' => 8]);
         $rnitz = 'rękawice ochronne tkaninowe powlekane nitrylem żółtym zakończone ściągaczem';
         // odpowiedź modelu z #71: suma, trzy rozmiary, wiersze 3–5 i koniec na ósmej pozycji
         $this->mockModel([
@@ -109,6 +113,8 @@ final class ClientInquiryLineItemLimitTest extends TestCase
 
     public function test_rows_over_the_limit_are_shown_and_need_attention(): void
     {
+        // Granica limitu pozycji: te przypadki dotyczą dawnego stałego limitu 8 — od 29.09.2026 to ustawienie.
+        app(AiSettingsService::class)->update(['inquiry_max_items' => 8]);
         $lines = [];
         $fromAi = [];
         foreach (range(1, 10) as $n) {
@@ -135,5 +141,52 @@ final class ClientInquiryLineItemLimitTest extends TestCase
         $list = $this->getJson('/api/inquiries')->assertOk();
         $row = collect($list->json('data'))->firstWhere('id', $id);
         $this->assertSame((int) $res->json('attention_count'), (int) $row['attention_count']);
+    }
+
+    /**
+     * Domyślny limit 50 (29.09.2026): zestawienie z 20 wierszami wchodzi w całości, model dostaje w poleceniu
+     * właściwy limit i budżet odpowiedzi na wszystkie pozycje, a zapytanie pamięta limit, z którym liczyło.
+     */
+    public function test_default_limit_takes_twenty_rows_and_tells_the_model_the_limit(): void
+    {
+        $lines = [];
+        $fromAi = [];
+        foreach (range(1, 20) as $n) {
+            $lines[] = $n.'. Rękawice robocze model R'.$n.' - '.($n * 10).' par';
+            $fromAi[] = ['id' => 'item_'.$n, 'quote' => 'Rękawice robocze model R'.$n.' - '.($n * 10).' par', 'qty' => (string) ($n * 10), 'unit' => 'par', 'query' => 'rękawice robocze R'.$n, 'size' => null];
+        }
+        $prompt = null;
+        $maxTokens = null;
+        $this->mock(OpenAiCompatibleClient::class, function ($mock) use ($fromAi, &$prompt, &$maxTokens): void {
+            $mock->shouldReceive('chatJson')->once()->andReturnUsing(
+                function (array $messages, $temperature, $tokens) use ($fromAi, &$prompt, &$maxTokens): array {
+                    $prompt = (string) $messages[0]['content'];
+                    $maxTokens = $tokens;
+
+                    return ['subject' => 'Zestawienie', 'questions' => [], 'product_queries' => [], 'line_items' => $fromAi, 'cards' => []];
+                },
+            );
+        });
+        $searched = [];
+        $this->mock(ProductInquirySearch::class, function ($mock) use (&$searched): void {
+            $mock->shouldReceive('findMany')->andReturnUsing(static function (array $queries) use (&$searched): array {
+                $searched = [...$searched, ...$queries];
+
+                return array_map(static fn (string $q): array => ['query' => $q, 'products' => []], $queries);
+            });
+        });
+
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $res = $this->postJson('/api/inquiries', ['body' => implode("\n", $lines), 'tone' => 'handlowy'])->assertCreated();
+
+        $this->assertCount(20, $res->json('items'));
+        $res->assertJsonPath('omitted_items', [])
+            ->assertJsonPath('omitted_limit', 50)
+            ->assertJsonPath('analysis_status', 'done');
+        $this->assertStringContainsString('Max 50.', (string) $prompt);
+        $this->assertGreaterThanOrEqual(9500, (int) $maxTokens);
+        // każda pozycja ma swoje szukanie — dawny sufit 10 fraz odciąłby pozycje 11–20
+        $this->assertCount(20, array_unique($searched));
+        $this->assertSame(50, ClientInquiry::query()->findOrFail($res->json('id'))->analysis['max_items']);
     }
 }

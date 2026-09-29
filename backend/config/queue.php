@@ -26,6 +26,16 @@ return [
     ),
 
     /*
+    | Połączenie kolejki analiz zapytań klientów (AnalyzeClientInquiryJob) — jak wyżej: własna tabela
+    | tylko przy kolejce w bazie. Worker: `queue:work database_inquiries --queue=inquiries`. Lokalnie bez
+    | workera ustaw QUEUE_INQUIRIES_CONNECTION=sync — analiza policzy się wtedy w żądaniu, jak dawniej.
+    */
+    'inquiries_connection' => env(
+        'QUEUE_INQUIRIES_CONNECTION',
+        env('QUEUE_CONNECTION', 'database') === 'database' ? 'database_inquiries' : null
+    ),
+
+    /*
     |--------------------------------------------------------------------------
     | Queue Connections
     |--------------------------------------------------------------------------
@@ -66,6 +76,17 @@ return [
             'table' => 'jobs_embeddings',
             'queue' => 'embeddings',
             'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 480),
+            'after_commit' => false,
+        ],
+
+        // Analizy zapytań: zadanie trwa do 20 min (50 pozycji na wspólnym modelu), więc retry_after musi być
+        // dłuższy niż timeout zadania (1200 s) — inaczej drugi worker wziąłby ten sam przebieg jeszcze raz.
+        'database_inquiries' => [
+            'driver' => 'database',
+            'connection' => env('DB_QUEUE_CONNECTION'),
+            'table' => 'jobs_inquiries',
+            'queue' => 'inquiries',
+            'retry_after' => 1500,
             'after_commit' => false,
         ],
 

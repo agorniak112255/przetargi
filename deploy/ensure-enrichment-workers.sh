@@ -8,6 +8,9 @@
 # na tabeli `jobs` zakleszczał się z kasowaniem wykonanych wierszy — 22.09.2026 dało to 620 zadań
 # w failed_jobs z MaxAttemptsExceededException. Tempo wektorów ogranicza API osadzeń, nie liczba workerów.
 # Więcej wektorów naraz: EMBEDDING_WORKERS=6 bash deploy/ensure-enrichment-workers.sh
+#   - inquiries (domyślnie 1) — analiza zapytań klientów w tle, własna tabela jobs_inquiries.
+#     Jedna analiza to do kilku minut pracy wspólnego modelu (50 pozycji); drugi worker liczyłby
+#     dwa zapytania naraz kosztem wyszukiwarki i przetargów. Więcej: INQUIRY_WORKERS=2 …
 # Limit „Ile zapytań AI naraz” w panelu zajmuje sloty enrich, bez restartu.
 # SearXNG rotuje zapytania po publicznych IP hosta (install-on-server.sh → source_ips),
 # więc workery dostają liczbę adresów i szukają tyle razy szybciej — każdy adres
@@ -25,6 +28,7 @@ BACKEND="$APP_ROOT/backend"
 ENRICH_UNIT="przetargi-enrichment@"
 PREFETCH_UNIT="przetargi-prefetch@"
 EMBEDDING_UNIT="przetargi-embeddings@"
+INQUIRY_UNIT="przetargi-inquiries@"
 LOG_FILE="/var/log/przetargi-enrichment.log"
 SLOTS_MAX=32
 
@@ -49,8 +53,9 @@ fi
 WORKERS="${WORKERS:-16}"
 PREFETCH_WORKERS="${PREFETCH_WORKERS:-$(( SEARCH_LANES > 5 ? SEARCH_LANES : 5 ))}"
 EMBEDDING_WORKERS="${EMBEDDING_WORKERS:-3}"
+INQUIRY_WORKERS="${INQUIRY_WORKERS:-1}"
 echo "==> workery: LLM ${WORKERS} (kolejka enrich) + wyszukiwanie ${PREFETCH_WORKERS} (kolejka prefetch)"
-echo "    wektory ${EMBEDDING_WORKERS} (kolejka embeddings)"
+echo "    wektory ${EMBEDDING_WORKERS} (kolejka embeddings), zapytania klientów ${INQUIRY_WORKERS} (kolejka inquiries)"
 echo "    adresy IP wyszukiwarki: ${SEARCH_LANES} (odstęp na adres bez zmian, razem ${SEARCH_LANES}× szybciej)"
 
 if (( WORKERS < 1 || WORKERS > SLOTS_MAX )); then
@@ -65,12 +70,17 @@ if (( EMBEDDING_WORKERS < 1 || EMBEDDING_WORKERS > 8 )); then
   echo "ERR: EMBEDDING_WORKERS=$EMBEDDING_WORKERS poza zakresem 1-8" >&2
   exit 1
 fi
+if (( INQUIRY_WORKERS < 1 || INQUIRY_WORKERS > 4 )); then
+  echo "ERR: INQUIRY_WORKERS=$INQUIRY_WORKERS poza zakresem 1-4" >&2
+  exit 1
+fi
 
 if ! command -v systemctl >/dev/null 2>&1; then
   echo "UWAGA: brak systemd — workery trzeba uruchomić ręcznie:"
   echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=enrich --tries=3 --timeout=420 --max-time=3600 &"
   echo "  cd $BACKEND && $PHP_BIN artisan queue:work --queue=prefetch,default --tries=3 --timeout=180 --max-time=3600 &"
   echo "  cd $BACKEND && $PHP_BIN artisan queue:work database_embeddings --queue=embeddings --sleep=3 --tries=3 --timeout=420 --max-time=3600 &"
+  echo "  cd $BACKEND && $PHP_BIN artisan queue:work database_inquiries --queue=inquiries --sleep=2 --tries=1 --timeout=1260 --max-time=3600 &"
   exit 0
 fi
 
@@ -88,6 +98,8 @@ write_unit() {
   local count="$6"
   local sleep_seconds="${7:-1}"
   local connection="${8:-}"
+  # systemd czeka tyle na łagodne zatrzymanie (bieżące zadanie) przed SIGKILL — domyślnie 90 s
+  local stop_timeout="${9:-90}"
   cat > "$unit_file" <<EOF
 [Unit]
 Description=$description %i
@@ -106,6 +118,7 @@ Environment=ENRICHMENT_PREFETCH_CONCURRENCY=$PREFETCH_WORKERS
 ExecStart=$PHP_BIN artisan queue:work ${connection:+$connection }--queue=$queues --sleep=$sleep_seconds --tries=3 --timeout=$timeout --max-time=3600
 Restart=always
 RestartSec=5
+TimeoutStopSec=$stop_timeout
 StandardOutput=append:$LOG_FILE
 StandardError=append:$LOG_FILE
 
@@ -143,6 +156,18 @@ write_unit "/etc/systemd/system/${EMBEDDING_UNIT}.service" \
   3 \
   database_embeddings
 
+# Analiza zapytania: zadanie do 1200 s (AnalyzeClientInquiryJob::$timeout), retry_after 1500 s
+# (config/queue.php). Zatrzymanie usługi czeka na koniec analizy, zamiast ubijać ją w połowie.
+write_unit "/etc/systemd/system/${INQUIRY_UNIT}.service" \
+  "Przetargi client inquiry analysis worker" \
+  "inquiries" \
+  1260 \
+  inquiries \
+  "$INQUIRY_WORKERS" \
+  2 \
+  database_inquiries \
+  1320
+
 touch "$LOG_FILE"
 chown "$OWNER:$GROUP" "$LOG_FILE" || true
 
@@ -150,6 +175,7 @@ systemctl daemon-reload
 systemctl reset-failed "${ENRICH_UNIT}"*.service 2>/dev/null || true
 systemctl reset-failed "${PREFETCH_UNIT}"*.service 2>/dev/null || true
 systemctl reset-failed "${EMBEDDING_UNIT}"*.service 2>/dev/null || true
+systemctl reset-failed "${INQUIRY_UNIT}"*.service 2>/dev/null || true
 
 enable_pool() {
   local prefix="$1"
@@ -191,15 +217,17 @@ echo "==> workery: uruchamiam pule"
 enable_pool "$ENRICH_UNIT" "$WORKERS"
 enable_pool "$PREFETCH_UNIT" "$PREFETCH_WORKERS"
 enable_pool "$EMBEDDING_UNIT" "$EMBEDDING_WORKERS"
+enable_pool "$INQUIRY_UNIT" "$INQUIRY_WORKERS"
 stop_surplus "$ENRICH_UNIT" "$WORKERS"
 stop_surplus "$PREFETCH_UNIT" "$PREFETCH_WORKERS"
 stop_surplus "$EMBEDDING_UNIT" "$EMBEDDING_WORKERS"
+stop_surplus "$INQUIRY_UNIT" "$INQUIRY_WORKERS"
 
 echo "==> workery: sygnał restartu dla zadań w toku"
 cd "$BACKEND"
 "$PHP_BIN" artisan queue:restart || true
 
-systemctl --no-pager --plain list-units "${ENRICH_UNIT}*" "${PREFETCH_UNIT}*" "${EMBEDDING_UNIT}*" || true
-echo "==> workery: OK (LLM $WORKERS + prefetch $PREFETCH_WORKERS + wektory $EMBEDDING_WORKERS, IP wyszukiwarki $SEARCH_LANES, log: $LOG_FILE)"
+systemctl --no-pager --plain list-units "${ENRICH_UNIT}*" "${PREFETCH_UNIT}*" "${EMBEDDING_UNIT}*" "${INQUIRY_UNIT}*" || true
+echo "==> workery: OK (LLM $WORKERS + prefetch $PREFETCH_WORKERS + wektory $EMBEDDING_WORKERS + zapytania $INQUIRY_WORKERS, IP wyszukiwarki $SEARCH_LANES, log: $LOG_FILE)"
 echo "    Panel AI zmienia tylko sloty modelu (do $WORKERS). Więcej LLM: WORKERS=N $0"
 echo "    Więcej wyszukiwań (ostrożnie, 429): PREFETCH_WORKERS=N $0"
