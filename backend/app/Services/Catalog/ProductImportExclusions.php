@@ -30,12 +30,26 @@ final class ProductImportExclusions
      * Zapis blokad pozycji kart $productIds — PRZED usunięciem kart (kaskada kasuje powiązania i identyfikatory).
      * Jedno usunięcie karty = jeden deletion_id. Pozycja zablokowana wcześniej (także przywrócona) dostaje nowy zapis.
      *
+     * $onlySourceKey — usuwanie z listy kart konta dostawcy: blokowane tylko pozycje tego źródła („b2b:{id}”).
+     * $cardKept — karta zostaje, odpięto od niej tylko to źródło (ProductSourceDetacher): zapis karty dostaje
+     * detached_source, a przywrócona pozycja zwykle wraca na tę samą kartę (po kodzie), nie jako nowa.
+     *
      * @param  list<int>  $productIds
      * @return int liczba zablokowanych pozycji
      */
-    public function record(array $productIds, User $actor): int
+    public function record(array $productIds, User $actor, ?string $onlySourceKey = null, bool $cardKept = false): int
     {
         $positions = $this->positionsOf($productIds);
+        if ($onlySourceKey !== null) {
+            foreach ($positions as $productId => $cardPositions) {
+                $kept = array_values(array_filter($cardPositions, static fn (array $p): bool => $p['source_key'] === $onlySourceKey));
+                if ($kept === []) {
+                    unset($positions[$productId]);
+                } else {
+                    $positions[$productId] = $kept;
+                }
+            }
+        }
         if ($positions === []) {
             return 0;
         }
@@ -57,6 +71,10 @@ final class ProductImportExclusions
                 'catalog_price_net' => $card->catalog_price_net,
                 'currency' => $card->currency,
             ];
+            if ($onlySourceKey !== null && $cardKept) {
+                // karta zostaje — odpięto od niej tylko to źródło
+                $snapshot['detached_source'] = $onlySourceKey;
+            }
             foreach ($cardPositions as $position) {
                 $row = ProductImportExclusion::query()->firstOrNew(['match_key' => $position['match_key']]);
                 $row->forceFill([

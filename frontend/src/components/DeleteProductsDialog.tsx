@@ -8,6 +8,11 @@ type Props = {
   productIds: number[]
   /** Przy jednej karcie: SKU i nazwa do treści pytania. */
   card?: { sku: string; name: string } | null
+  /**
+   * Lista filtrowana po koncie dostawcy (Cenniki → karty konta B2B): karta połączona z innym źródłem traci tylko
+   * pozycje tego konta, karta tylko z tego konta jest usuwana w całości.
+   */
+  b2bAccount?: { id: number; label: string } | null
   /** Anulowanie (przed usunięciem). */
   onClose: () => void
   /**
@@ -21,8 +26,9 @@ type Props = {
  * Potwierdzenie usunięcia kart z katalogu z opcją „Pomijaj przy kolejnych importach”. Okno samo wysyła
  * żądanie; po usunięciu z pomijaniem pokazuje wynik (liczbę pominiętych pozycji), zanim wróci do strony.
  */
-export function DeleteProductsDialog({ productIds, card, onClose, onDeleted }: Props) {
-  const [skipImport, setSkipImport] = useState(false)
+export function DeleteProductsDialog({ productIds, card, b2bAccount, onClose, onDeleted }: Props) {
+  // z listy dostawcy bez pomijania pozycje wracają przy najbliższej synchronizacji — domyślnie zaznaczone
+  const [skipImport, setSkipImport] = useState(Boolean(b2bAccount))
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [done, setDone] = useState<DeleteProductsResult | null>(null)
@@ -50,11 +56,12 @@ export function DeleteProductsDialog({ productIds, card, onClose, onDeleted }: P
     setBusy(true)
     setErr('')
     try {
+      const scope = b2bAccount ? { b2b_account: b2bAccount.id } : {}
       const res = await api<DeleteProductsResult>(
         single ? `/products/${productIds[0]}` : '/products/delete',
         single
-          ? { method: 'DELETE', body: JSON.stringify({ skip_import: skipImport }) }
-          : { method: 'POST', body: JSON.stringify({ product_ids: productIds, skip_import: skipImport }) },
+          ? { method: 'DELETE', body: JSON.stringify({ skip_import: skipImport, ...scope }) }
+          : { method: 'POST', body: JSON.stringify({ product_ids: productIds, skip_import: skipImport, ...scope }) },
       )
       if (skipImport) {
         setDone(res)
@@ -69,7 +76,13 @@ export function DeleteProductsDialog({ productIds, card, onClose, onDeleted }: P
   }
 
   const n = productIds.length
-  const title = single ? 'Usunąć kartę z katalogu?' : `Usunąć ${n} ${plural(n, 'kartę', 'karty', 'kart')} z katalogu?`
+  const title = b2bAccount
+    ? single
+      ? `Usunąć kartę z cennika ${b2bAccount.label}?`
+      : `Usunąć ${n} ${plural(n, 'kartę', 'karty', 'kart')} z cennika ${b2bAccount.label}?`
+    : single
+      ? 'Usunąć kartę z katalogu?'
+      : `Usunąć ${n} ${plural(n, 'kartę', 'karty', 'kart')} z katalogu?`
   const note = done ? skipImportNote(done, true) : null
 
   return (
@@ -86,7 +99,7 @@ export function DeleteProductsDialog({ productIds, card, onClose, onDeleted }: P
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <p id="delete-products-title" className="text-sm font-semibold text-slate-900">
-            {done ? 'Usunięto' : title}
+            {done ? (done.deleted === 0 && (done.detached ?? 0) > 0 ? 'Odpięto' : 'Usunięto') : title}
           </p>
           <button
             type="button"
@@ -127,6 +140,13 @@ export function DeleteProductsDialog({ productIds, card, onClose, onDeleted }: P
                   Zaznaczone: {n} {plural(n, 'karta', 'karty', 'kart')}.
                 </p>
               )}
+              {b2bAccount && (
+                <p className="rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
+                  Karta połączona z innym źródłem (np. cennikiem producenta) zostaje — odpinane są tylko pozycje{' '}
+                  {b2bAccount.label}: powiązanie, cena i tabelka sklepu tego dostawcy. Karta tylko z {b2bAccount.label}{' '}
+                  jest usuwana w całości.
+                </p>
+              )}
               <p className="font-medium text-red-700">Tej operacji nie można cofnąć.</p>
               <label className="flex cursor-pointer items-start gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-2">
                 <input
@@ -137,13 +157,25 @@ export function DeleteProductsDialog({ productIds, card, onClose, onDeleted }: P
                   onChange={(e) => setSkipImport(e.target.checked)}
                 />
                 <span>
-                  <span className="text-slate-800">Pomijaj przy kolejnych importach (cennik z pliku, B2B)</span>
+                  <span className="text-slate-800">
+                    {b2bAccount
+                      ? `Pomijaj przy kolejnych synchronizacjach ${b2bAccount.label}`
+                      : 'Pomijaj przy kolejnych importach (cennik z pliku, B2B)'}
+                  </span>
                   <span className="mt-0.5 block text-xs text-slate-500">
-                    Ponowny import nie założy {single ? 'tej karty' : 'tych kart'} od nowa. Przywrócić można w Cenniki →
-                    Usunięte z pominięciem.
+                    {b2bAccount
+                      ? `Blokowane są tylko pozycje ${b2bAccount.label} — inne źródła karty działają dalej.`
+                      : `Ponowny import nie założy ${single ? 'tej karty' : 'tych kart'} od nowa.`}{' '}
+                    Przywrócić można w Cenniki → Usunięte z pominięciem.
                   </span>
                 </span>
               </label>
+              {b2bAccount && !skipImport && (
+                <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  Bez pomijania pozycje {b2bAccount.label} wrócą przy najbliższej synchronizacji — na tę samą kartę albo
+                  jako nowa karta.
+                </p>
+              )}
               {err && <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
             </>
           )}

@@ -491,10 +491,15 @@ class ProductController extends Controller
             return response()->json(['message' => 'Brak autoryzacji.'], 401);
         }
 
-        $skipImport = (bool) ($request->validate(['skip_import' => ['sometimes', 'boolean']])['skip_import'] ?? false);
+        $data = $request->validate([
+            'skip_import' => ['sometimes', 'boolean'],
+            'b2b_account' => ['sometimes', 'nullable', 'integer', 'exists:b2b_accounts,id'],
+        ]);
+        $skipImport = (bool) ($data['skip_import'] ?? false);
+        $accountId = isset($data['b2b_account']) ? (int) $data['b2b_account'] : null;
 
         try {
-            $result = $this->deletion->deleteMany([(int) $product->id], $user, $skipImport);
+            $result = $this->deletion->deleteMany([(int) $product->id], $user, $skipImport, $accountId);
         } catch (Throwable $e) {
             return response()->json([
                 'message' => 'Nie udało się usunąć produktu: '.$e->getMessage(),
@@ -503,7 +508,9 @@ class ProductController extends Controller
 
         return response()->json([
             // liczbę pomijanych pozycji (positions_excluded) okno usuwania pokazuje osobno
-            'message' => sprintf('Usunięto produkt %s.', (string) $product->sku),
+            'message' => $accountId !== null
+                ? $this->accountScopedDeletionMessage($result, $accountId)
+                : sprintf('Usunięto produkt %s.', (string) $product->sku),
             ...$result,
         ]);
     }
@@ -521,9 +528,10 @@ class ProductController extends Controller
         );
 
         $skipImport = $request->boolean('skip_import');
+        $accountId = $request->validated('b2b_account') !== null ? (int) $request->validated('b2b_account') : null;
 
         try {
-            $result = $this->deletion->deleteMany($ids, $user, $skipImport);
+            $result = $this->deletion->deleteMany($ids, $user, $skipImport, $accountId);
         } catch (Throwable $e) {
             return response()->json([
                 'message' => 'Nie udało się usunąć produktów: '.$e->getMessage(),
@@ -531,11 +539,54 @@ class ProductController extends Controller
         }
 
         return response()->json([
-            'message' => $result['deleted'] === 1
-                ? 'Usunięto 1 produkt.'
-                : sprintf('Usunięto %d produktów.', $result['deleted']),
+            'message' => match (true) {
+                $accountId !== null => $this->accountScopedDeletionMessage($result, $accountId),
+                $result['deleted'] === 1 => 'Usunięto 1 produkt.',
+                default => sprintf('Usunięto %d produktów.', $result['deleted']),
+            },
             ...$result,
         ]);
+    }
+
+    /**
+     * Wynik usuwania z listy kart konta dostawcy: ile kart odpięto (zostają z innymi źródłami), ile usunięto
+     * (tylko z tego konta) i ile pominięto (bez pozycji konta).
+     *
+     * @param  array{deleted: int, detached: int, refused: list<array{id: int, sku: string, reason: string}>, skipped: int}  $result
+     */
+    private function accountScopedDeletionMessage(array $result, int $accountId): string
+    {
+        $label = app(SourcePriceComparison::class)->accountLabel(B2bAccount::query()->find($accountId));
+        // „od 1 karty / od 5 kart” i „usunięto 1 kartę / 2 karty / 5 kart”
+        $fromCards = static fn (int $n): string => $n.' '.($n === 1 ? 'karty' : 'kart');
+        $cards = static function (int $n): string {
+            $few = $n % 10 >= 2 && $n % 10 <= 4 && ($n % 100 < 12 || $n % 100 > 14);
+
+            return $n.' '.($n === 1 ? 'kartę' : ($few ? 'karty' : 'kart'));
+        };
+        $parts = [];
+        if ($result['detached'] > 0) {
+            $parts[] = sprintf(
+                'Odpięto %s od %s — %s z pozostałymi źródłami.',
+                $label,
+                $fromCards($result['detached']),
+                $result['detached'] === 1 ? 'karta zostaje' : 'karty zostają',
+            );
+        }
+        if ($result['deleted'] > 0) {
+            $parts[] = sprintf('Usunięto %s tylko z %s.', $cards($result['deleted']), $label);
+        }
+        if ($result['skipped'] > 0) {
+            $parts[] = sprintf('Pominięto %s bez pozycji %s.', $cards($result['skipped']), $label);
+        }
+        if ($result['refused'] !== []) {
+            $parts[] = 'Nie odpięto: '.implode('; ', array_map(
+                static fn (array $row): string => $row['sku'].' — '.$row['reason'],
+                $result['refused'],
+            ));
+        }
+
+        return $parts === [] ? 'Nic nie zmieniono.' : implode(' ', $parts);
     }
 
     public function priceHistory(Product $product): JsonResponse

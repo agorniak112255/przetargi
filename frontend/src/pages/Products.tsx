@@ -1630,6 +1630,9 @@ export function Products() {
           <DeleteProductsDialog
             productIds={deleteTarget.ids}
             card={deleteTarget.card}
+            b2bAccount={
+              Number(b2bAccount) > 0 ? { id: Number(b2bAccount), label: b2bAccountLabel || `konto #${b2bAccount}` } : null
+            }
             onClose={() => setDeleteTarget(null)}
             onDeleted={(res, skipImport) => void onProductsDeleted(res, skipImport)}
           />

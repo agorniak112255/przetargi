@@ -23,6 +23,8 @@ class DestroyProductsRequest extends FormRequest
             'product_ids.*' => ['integer', 'distinct', 'exists:products,id'],
             // „Usuń i pomijaj przy imporcie” — pozycje źródeł kart dostają blokadę (ProductImportExclusions)
             'skip_import' => ['sometimes', 'boolean'],
+            // lista kart konta dostawcy — karta z innym źródłem traci tylko pozycje tego konta (ProductSourceDetacher)
+            'b2b_account' => ['sometimes', 'nullable', 'integer', 'exists:b2b_accounts,id'],
         ];
     }
 }

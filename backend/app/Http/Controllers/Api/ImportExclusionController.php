@@ -90,6 +90,8 @@ class ImportExclusionController extends Controller
                     'catalog_price_net' => $snapshot['catalog_price_net'] ?? null,
                     'currency' => $snapshot['currency'] ?? null,
                 ],
+                // odpięcie jednego konta od karty, która została (usuwanie z listy kart konta dostawcy)
+                'detached_source' => isset($snapshot['detached_source']) ? (string) $snapshot['detached_source'] : null,
                 'deleted_at' => $groupRows->max('created_at')?->toIso8601String(),
                 'deleted_by' => $userName($first->deleted_by),
                 'active_count' => $groupRows->whereNull('restored_at')->count(),

@@ -35,6 +35,8 @@ type ExclusionGroup = {
   }
   deleted_at: string
   deleted_by: string | null
+  /** Odpięto jedno źródło („b2b:{id}”) od karty, która została (usuwanie z listy kart konta dostawcy). */
+  detached_source: string | null
   active_count: number
   positions: ExclusionPosition[]
 }
@@ -54,6 +56,9 @@ const SEARCH_DELAY_MS = 350
 
 const RESTORE_NOTE =
   'Przy najbliższym imporcie cennika lub synchronizacji B2B wróci jako nowa karta (bez dawnych zdjęć i historii).'
+
+const DETACHED_RESTORE_NOTE =
+  'Przy najbliższej synchronizacji B2B pozycja wróci — na tę samą kartę (ten sam kod) albo jako nowa karta.'
 
 function priceLine(p: ExclusionGroup['product']): string | null {
   const cur = currencyLabel(p.currency)
@@ -125,9 +130,9 @@ export function PriceListsExcluded() {
     void load()
   }, [load])
 
-  async function restore(ids: number[], key: string, question: string) {
+  async function restore(ids: number[], key: string, question: string, detached = false) {
     if (ids.length === 0 || restoring !== null) return
-    if (!window.confirm(`${question}\n\n${RESTORE_NOTE}`)) return
+    if (!window.confirm(`${question}\n\n${detached ? DETACHED_RESTORE_NOTE : RESTORE_NOTE}`)) return
     setRestoring(key)
     setErr('')
     setMsg('')
@@ -236,7 +241,7 @@ export function PriceListsExcluded() {
                         {g.product.manufacturer && <span className="text-slate-500">{g.product.manufacturer}</span>}
                       </div>
                       <div className="mt-0.5 text-slate-500">
-                        Usunięto {formatDateTime(g.deleted_at)}
+                        {g.detached_source ? 'Odpięto od karty (karta zostaje)' : 'Usunięto'} {formatDateTime(g.deleted_at)}
                         {g.deleted_by ? ` przez ${g.deleted_by}` : ''}
                         {prices ? ` · ${prices}` : ''}
                         {' · '}
@@ -255,6 +260,7 @@ export function PriceListsExcluded() {
                               activeIds,
                               groupKey,
                               `Przywrócić ${activeIds.length === 1 ? 'pozycję' : `wszystkie pozycje (${activeIds.length})`} karty ${g.product.sku}?`,
+                              g.detached_source !== null,
                             )
                           }
                           className="whitespace-nowrap rounded border border-blue-300 px-2 py-1 text-[11px] text-blue-700 hover:bg-blue-50 disabled:opacity-50"
@@ -309,6 +315,7 @@ export function PriceListsExcluded() {
                                   [pos.id],
                                   posKey,
                                   `Przywrócić pozycję ${pos.position_key} (${pos.source_label}) karty ${g.product.sku}?`,
+                                  g.detached_source !== null,
                                 )
                               }
                               className="whitespace-nowrap rounded border border-slate-300 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-50 disabled:opacity-50"
