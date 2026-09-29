@@ -80,7 +80,9 @@ final class ErpXlClient implements ErpXlGateway
             ->whereIn('z.TwZ_TwrNumer', $gids)
             ->groupBy('z.TwZ_TwrNumer', 'm.MAG_Kod', 'm.MAG_Nazwa')
             ->havingRaw('SUM(z.TwZ_Ilosc) <> 0')
-            ->selectRaw('z.TwZ_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, m.MAG_Nazwa AS warehouse_name, SUM(z.TwZ_Ilosc) AS quantity')
+            // wartość księgowa netto partii i przyjęcie najstarszej partii z dodatnią ilością — te same wiersze co stan
+            ->selectRaw('z.TwZ_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, m.MAG_Nazwa AS warehouse_name, SUM(z.TwZ_Ilosc) AS quantity,'
+                .' SUM(z.TwZ_KsiegowaNetto) AS book_value, MIN(CASE WHEN z.TwZ_Ilosc > 0 AND z.TwZ_DataP > 0 THEN z.TwZ_DataP END) AS oldest_lot')
             ->get();
 
         $out = [];
@@ -90,6 +92,8 @@ final class ErpXlClient implements ErpXlGateway
                 'warehouse_code' => trim((string) $r->warehouse_code),
                 'warehouse_name' => trim((string) $r->warehouse_name),
                 'quantity' => (float) $r->quantity,
+                'value' => $r->book_value !== null ? (float) $r->book_value : null,
+                'oldest_lot' => $r->oldest_lot !== null ? (int) $r->oldest_lot : null,
             ];
         }
 

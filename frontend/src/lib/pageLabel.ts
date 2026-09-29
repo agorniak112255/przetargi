@@ -5,6 +5,7 @@ const staticLabels: Record<string, string> = {
   '/tenders': 'Przetargi',
   '/products': 'Produkty',
   '/products/compare': 'Porównanie produktów',
+  '/zapasy': 'Zapasy',
   '/price-lists': 'Cenniki',
   '/price-lists/b2b': 'Cenniki B2B',
   '/reports': 'Raporty',

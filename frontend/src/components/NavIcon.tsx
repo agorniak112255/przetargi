@@ -4,6 +4,7 @@ export type NavIconName =
   | 'dashboard'
   | 'tenders'
   | 'products'
+  | 'inventory'
   | 'price-lists'
   | 'substitutes'
   | 'reports'
@@ -36,6 +37,13 @@ const shapes: Record<NavIconName, ReactNode> = {
     <>
       <path d="M21 8l-9-5-9 5 9 5 9-5z" />
       <path d="M3 8v8l9 5 9-5V8M12 13v8" />
+    </>
+  ),
+  // Magazyn: dach i regał z półkami (Produkty mają już pudełko).
+  inventory: (
+    <>
+      <path d="M3 21V9l9-5 9 5v12" />
+      <path d="M7 21v-8h10v8M7 17h10" />
     </>
   ),
   'price-lists': (

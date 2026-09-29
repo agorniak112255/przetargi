@@ -27,7 +27,7 @@ export function isTradeWarehouse(name: string): boolean {
 }
 
 /** Cena PZ w walucie obcej obok ceny w PLN. */
-export function erpForeignPrice(p: ErpPurchase): string | null {
+export function erpForeignPrice(p: Pick<ErpPurchase, 'currency' | 'document_price'>): string | null {
   return p.currency && p.currency.toUpperCase() !== 'PLN' && p.document_price != null
     ? `${erpUnitPrice(p.document_price)} ${p.currency}`
     : null

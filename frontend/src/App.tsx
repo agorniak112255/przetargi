@@ -23,6 +23,7 @@ import { CardMatches } from './pages/CardMatches'
 import { Clients } from './pages/Clients'
 import { Inquiries } from './pages/Inquiries'
 import { InquiryReply } from './pages/InquiryReply'
+import { Inventory } from './pages/Inventory'
 import { Dashboard } from './pages/Dashboard'
 import { Help } from './pages/Help'
 import { Login } from './pages/Login'
@@ -139,6 +140,14 @@ export default function App() {
             <Route path="products" element={<Products />} />
             <Route path="products/compare" element={<ProductCompare />} />
             <Route path="products/:id" element={<ProductDetail />} />
+            <Route
+              path="zapasy"
+              element={
+                <PermissionGuard permission="inventory.view">
+                  <Inventory />
+                </PermissionGuard>
+              }
+            />
             <Route
               path="card-matches"
               element={

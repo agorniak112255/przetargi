@@ -27,6 +27,7 @@ use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\ExchangeRateController;
 use App\Http\Controllers\Api\ImportExclusionController;
+use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\OfferComposeController;
 use App\Http\Controllers\Api\PrestaExportController;
@@ -135,6 +136,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
 
     Route::get('/exchange-rates', ExchangeRateController::class)->middleware('permission:products.view');
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');
+    // Zapasy: towary ERP XL ze stanem bez sprzedaży od N miesięcy (tylko odczyt kopii XL)
+    Route::get('/inventory', [InventoryController::class, 'index'])->middleware('permission:inventory.view');
     Route::get('/products/manufacturers', [ProductController::class, 'manufacturers'])->middleware('permission:products.view');
     Route::get('/products/categories', [ProductController::class, 'categoryOptions'])->middleware('permission:products.view');
     Route::patch('/products/{product}/category', [ProductController::class, 'updateCategory'])->middleware('permission:products.view');

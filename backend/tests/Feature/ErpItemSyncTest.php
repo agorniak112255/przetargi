@@ -190,6 +190,39 @@ final class ErpItemSyncTest extends TestCase
         $this->assertSame($a->stock_synced_at->toIso8601String(), app(ErpCardStock::class)->forProduct($card->id)['synced_at']);
     }
 
+    public function test_stock_value_and_oldest_lot_come_from_all_warehouses_and_refresh(): void
+    {
+        $this->xl->items = [FakeErpXlGateway::item(1, 'A1', 'Towar A'), FakeErpXlGateway::item(2, 'B2', 'Towar B')];
+        $this->xl->stockRows = [
+            // wartość księgowa partii; najstarsza partia: 2025-10-02 w magazynie spoza HANDEL
+            ['gid' => 1, 'warehouse_code' => '01H', 'warehouse_name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 3800.0, 'value' => 1584.8, 'oldest_lot' => 1147942279],
+            ['gid' => 1, 'warehouse_code' => '01BSH', 'warehouse_name' => 'Magazyn BSH Rzeszów', 'quantity' => 600.0, 'value' => 245.7, 'oldest_lot' => 1128261658],
+            // XL nie podał wartości jednego magazynu — suma byłaby zaniżona, więc wartości brak
+            ['gid' => 2, 'warehouse_code' => '01H', 'warehouse_name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 5.0, 'value' => 50.0, 'oldest_lot' => null],
+            ['gid' => 2, 'warehouse_code' => '02X', 'warehouse_name' => 'Magazyn X', 'quantity' => 1.0],
+        ];
+        app(ErpItemSync::class)->run();
+
+        $a = ErpItem::query()->where('xl_gid', 1)->firstOrFail();
+        $this->assertSame('1830.50', $a->stock_value);
+        $this->assertSame('2025-10-02', $a->oldest_lot_at?->toDateString());
+        $this->assertEquals(245.7, $a->stock_by_warehouse[1]['value']);
+        $b = ErpItem::query()->where('xl_gid', 2)->firstOrFail();
+        $this->assertNull($b->stock_value);
+        $this->assertNull($b->oldest_lot_at);
+
+        // odświeżenie samych stanów: sprzedana stara partia BSH, zostaje HANDEL
+        $this->xl->stockRows = [
+            ['gid' => 1, 'warehouse_code' => '01H', 'warehouse_name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 3800.0, 'value' => 1584.8, 'oldest_lot' => 1147942279],
+        ];
+        $this->assertSame(0, Artisan::call('erp:stock'));
+        $a->refresh();
+        $this->assertSame('1584.80', $a->stock_value);
+        $this->assertSame('2026-05-18', $a->oldest_lot_at?->toDateString());
+        // brak stanu = wartość 0, nie „nieznana”
+        $this->assertSame('0.00', ErpItem::query()->where('xl_gid', 2)->value('stock_value'));
+    }
+
     public function test_refuses_to_run_when_not_configured_and_command_skips_quietly(): void
     {
         $this->xl->isConfigured = false;

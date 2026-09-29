@@ -642,6 +642,65 @@ export type ErpAdminSummary = {
   groups: { group: string; total: number; linked: number }[]
 }
 
+/** Magazyn towaru na stronie Zapasy; value = wartość księgowa netto partii w PLN (null = brak z XL). */
+export type InventoryWarehouse = {
+  code: string
+  name: string
+  quantity: number
+  value: number | null
+}
+
+/** Towar z ERP XL ze stanem, bez sprzedaży od progu (GET /api/inventory). */
+export type InventoryRow = {
+  id: number
+  xl_gid: number
+  code: string
+  name: string
+  name1: string | null
+  unit: string | null
+  /** Towar archiwalny w XL, a nadal ma stan. */
+  archived: boolean
+  /** Wszystkie magazyny — to jest „stan” na stronie Zapasy. */
+  stock_total: number
+  /** Magazyny HANDEL (informacyjnie). */
+  stock_trade: number
+  /** Wartość księgowa netto partii w PLN (z XL); null = jeszcze nie pobrana. */
+  stock_value: number | null
+  /** Od największego stanu. */
+  warehouses: InventoryWarehouse[]
+  /** 'YYYY-MM-DD'; null = nigdy (FS, paragon, WZ). */
+  last_sale_at: string | null
+  /** Data przyjęcia najstarszej partii leżącej na stanie ('YYYY-MM-DD'). */
+  oldest_lot_at: string | null
+  last_purchase: {
+    date: string | null
+    supplier: string | null
+    unit_price_pln: number | null
+    document_price: number | null
+    currency: string | null
+  } | null
+  card: {
+    id: number
+    sku: string
+    name: string
+    manufacturer: string | null
+    thumb_url: string | null
+    link_status: 'auto' | 'confirmed'
+  } | null
+  /** Ile kart powiązanych (pewnie / potwierdzone). */
+  cards_count: number
+}
+
+export type InventoryResponse = {
+  data: InventoryRow[]
+  meta: { current_page: number; last_page: number; per_page: number; total: number }
+  summary: { items: number; value: number; value_unknown: number; without_card: number; never_sold: number }
+  /** 'YYYY-MM-DD' — próg: brak sprzedaży przed tą datą. */
+  cutoff: string
+  /** ISO — odczyt z XL (raz na dobę o 2:00). */
+  synced_at: string | null
+}
+
 /**
  * Tańsze porównywalne źródło niż obowiązujące (lista produktów, przetarg) — tylko informacja:
  * cena karty i oferty dalej z ceny obowiązującej (pierwszeństwo producenta).

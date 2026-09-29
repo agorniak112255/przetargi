@@ -25,10 +25,11 @@ interface ErpXlGateway
     public function items(int $afterGid, int $limit): array;
 
     /**
-     * Stan na magazynach (suma zasobów/partii na magazyn, bez zer).
+     * Stan na magazynach (suma zasobów/partii na magazyn, bez zer) z wartością księgową netto partii w PLN i znacznikiem
+     * czasu XL przyjęcia najstarszej partii (XlTimestamp).
      *
      * @param  list<int>  $gids
-     * @return list<array{gid: int, warehouse_code: string, warehouse_name: string, quantity: float}>
+     * @return list<array{gid: int, warehouse_code: string, warehouse_name: string, quantity: float, value?: float|null, oldest_lot?: int|null}>
      */
     public function stock(array $gids): array;
 
