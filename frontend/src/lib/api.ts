@@ -712,18 +712,35 @@ export type InventoryResponse = {
 /** Próg raportu dla zarządu: towar spełniający warunek od co najmniej `months` miesięcy. */
 export type InventoryBoardBucket = { months: number; items: number; value: number }
 
-/** Raport zapasów dla zarządu (GET /api/inventory/board, uprawnienie inventory.report.view). Kwoty w zł. */
+/**
+ * Które magazyny liczy raport dla zarządu (parametr `warehouses` we wszystkich /api/inventory/board*):
+ * trade — handlowe (domyślnie), service — usługowe (towar trzymany dla klientów), all — wszystkie.
+ */
+export type InventoryBoardWarehouses = 'trade' | 'service' | 'all'
+
+/** Raport zapasów dla zarządu (GET /api/inventory/board?warehouses=…, uprawnienie inventory.report.view). Kwoty w zł. */
 export type InventoryBoardReport = {
+  /** Echo parametru — których magazynów dotyczą ilości i kwoty w odpowiedzi. */
+  warehouses: InventoryBoardWarehouses
+  /** Cały towar osobno w magazynach handlowych i usługowych (niezależnie od `warehouses`). */
+  split: { trade: { items: number; value: number }; service: { items: number; value: number } }
   /** ISO — kiedy odczytano dane z XL. */
   as_of: string | null
-  /** Cały towar w magazynach (wszystkie magazyny). */
+  /** Cały towar w wybranych magazynach. */
   stock: { items: number; value: number }
-  /** months 6, 12, 24 — nie sprzedaje się od tylu miesięcy. */
+  /** months 6, 12, 24 — nie sprzedaje się od tylu miesięcy (sprzedaż liczona ze wszystkich magazynów). */
   no_sale: InventoryBoardBucket[]
   /** Nigdy nie sprzedany (i leży dłużej niż pół roku). */
   never_sold: { items: number; value: number }
-  /** months 12, 36, 60 — najstarszy towar leży co najmniej tyle. */
-  lot_age: InventoryBoardBucket[]
+  /**
+   * months 36, 60 — towar bez sprzedaży ponad rok, którego najstarsza sztuka leży ponad 3 / 5 lat
+   * (kwoty są częścią no_sale 12; okna: bucket stale_36 / stale_60).
+   */
+  stale_lot: InventoryBoardBucket[]
+  /** Wszystkie towary z sztukami starszymi niż rok (także te, które się sprzedają) — tylko do zdania drobnym drukiem. */
+  lot_12_total: { items: number; value: number }
+  /** Bez sprzedaży ponad rok według rodzaju, od największej unsold_value. */
+  groups: InventoryBoardGroup[]
   /** 5 najdroższych pozycji, które nie sprzedają się ponad rok. */
   top_unsold: {
     code: string
@@ -746,11 +763,111 @@ export type InventoryBoardReport = {
     unexplained: number
     /** Wartość (zł) par bez wyjaśnienia. */
     unexplained_value: number
-    /** Do 5 osób z największą liczbą przypadków bez wyjaśnienia (zapis jak w XL, bywa „Nazwisko Imię”). */
-    people: { name: string; count: number }[]
+    /**
+     * Do 5 osób z największą liczbą przypadków bez wyjaśnienia (name — zapis jak w XL, bywa „Nazwisko Imię”;
+     * operator — akronim operatora XL do zapytania /inventory/board/moves; count — bez wyjaśnienia;
+     * total — wszystkich par tej osoby, także zamian rozmiaru).
+     */
+    people: { operator: string; name: string; count: number; total: number }[]
   }
   /** Ile pozycji bez wartości (nie ma ich w kwotach). */
   value_unknown: number
+}
+
+/** Rodzaj towaru w raporcie dla zarządu (parametr `group` w /api/inventory/board/items). */
+export type InventoryBoardGroupKey = 'A' | 'B' | 'S' | 'T' | 'H' | 'other'
+
+/** Wiersz „według rodzaju”: towar bez sprzedaży ponad rok na tle całego towaru tego rodzaju. Kwoty w zł. */
+export type InventoryBoardGroup = {
+  group: InventoryBoardGroupKey
+  /** Nazwa do pokazania, np. „Odzież” (litery grupy nigdy nie pokazujemy). */
+  label: string
+  unsold_items: number
+  unsold_value: number
+  stock_value: number
+}
+
+/** Koszyk listy towarów pod kafelkiem raportu dla zarządu (GET /api/inventory/board/items?bucket=…). */
+export type InventoryBoardItemsBucket =
+  | 'stock'
+  | 'no_sale_6'
+  | 'no_sale_12'
+  | 'no_sale_24'
+  | 'never_sold'
+  | 'stale_36'
+  | 'stale_60'
+
+/** Wiersz listy towarów raportu dla zarządu. Kwoty w zł. */
+export type InventoryBoardItemRow = {
+  code: string
+  name: string
+  /** Nazwa z katalogu, gdy towar ma kartę. */
+  card_name: string | null
+  quantity: number
+  unit: string | null
+  /** Ilość × cena zakupu w wybranych magazynach; null = XL nie podaje ceny zakupu. */
+  value: number | null
+  /** Wartość ÷ ilość (zł za jednostkę). */
+  unit_cost: number | null
+  /** 'YYYY-MM-DD'; null = nigdy (sprzedaż ze wszystkich magazynów). */
+  last_sale_at: string | null
+  /** 'YYYY-MM-DD' — od kiedy leży najstarsza dostawa, która jeszcze jest w wybranych magazynach. */
+  oldest_lot_at: string | null
+  last_supplier: string | null
+  /**
+   * Nazwa rodzaju („Odzież”…) do drugiej linii w oknie. Poza zamrożonym kontraktem — strona pokazuje ją,
+   * gdy backend ją poda; bez niej rodzaj się nie wyświetla.
+   */
+  group_label?: string | null
+}
+
+/** GET /api/inventory/board/items — posortowane od największej wartości. */
+export type InventoryBoardItemsResponse = {
+  bucket: string
+  /** Np. „Towar, który nie sprzedaje się od pół roku”. */
+  title: string
+  data: InventoryBoardItemRow[]
+  meta: { current_page: number; last_page: number; per_page: number; total: number }
+  totals: { items: number; value: number }
+}
+
+/** Para RW → PW (towar wydany i przyjęty z powrotem jako nowy) na liście raportu dla zarządu. */
+export type InventoryBoardMoveRow = {
+  rw_number: string
+  /** 'YYYY-MM-DD'. */
+  rw_date: string
+  pw_number: string
+  pw_date: string
+  item_code: string
+  item_name: string
+  card_name: string | null
+  quantity: number
+  unit: string | null
+  /** zł. */
+  value: number
+  /** Jak długo leżała wydana partia (mies.); null = nie wiadomo. */
+  lot_age_months: number | null
+  lot_received_at: string | null
+  /** Cecha (rozmiar/kolor) na wydaniu i na przyjęciu. */
+  rw_features: string | null
+  pw_features: string | null
+  same_feature: boolean
+  rw_note: string | null
+  pw_note: string | null
+  operator_name: string | null
+  approver_name: string | null
+}
+
+/** GET /api/inventory/board/moves — posortowane od najnowszego. */
+export type InventoryBoardMovesResponse = {
+  scope: 'all' | 'unexplained'
+  operator: string | null
+  operator_name: string | null
+  /** Np. „Wydane i przyjęte z powrotem bez wyjaśnienia — Domin Ewelina”. */
+  title: string
+  data: InventoryBoardMoveRow[]
+  meta: { current_page: number; last_page: number; per_page: number; total: number }
+  totals: { pairs: number; value: number }
 }
 
 /** Dokument RW albo PW z pary (GET /api/inventory/rw-pw). */

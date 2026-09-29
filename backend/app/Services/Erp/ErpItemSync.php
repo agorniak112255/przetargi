@@ -6,6 +6,7 @@ namespace App\Services\Erp;
 
 use App\Models\ErpItem;
 use App\Models\ErpItemPurchase;
+use App\Models\ErpWarehouse;
 use App\Support\ClarionDate;
 use App\Support\XlTimestamp;
 use Carbon\CarbonImmutable;
@@ -82,13 +83,14 @@ final class ErpItemSync
         $purchases = $this->group($this->gateway->purchases($gids, $perItem));
         $lastSales = $this->gateway->lastSales($gids);
         $tradePrefix = mb_strtolower((string) config('erpxl.trade_warehouse_prefix', 'Magazyn HANDEL'));
+        $serviceCodes = $this->serviceCodes();
 
         $withTrade = 0;
         $savedPurchases = 0;
-        DB::transaction(function () use ($items, $stock, $suppliers, $purchases, $lastSales, $tradePrefix, $now, &$withTrade, &$savedPurchases): void {
+        DB::transaction(function () use ($items, $stock, $suppliers, $purchases, $lastSales, $tradePrefix, $serviceCodes, $now, &$withTrade, &$savedPurchases): void {
             foreach ($items as $item) {
                 $gid = $item['gid'];
-                $stockFields = $this->stockFields($stock[$gid] ?? [], $tradePrefix);
+                $stockFields = $this->stockFields($stock[$gid] ?? [], $tradePrefix, $serviceCodes);
                 if ($stockFields['stock_trade'] > 0) {
                     $withTrade++;
                 }
@@ -170,17 +172,18 @@ final class ErpItemSync
         $now = CarbonImmutable::now();
         $batch = max(1, (int) config('erpxl.batch', 500));
         $tradePrefix = mb_strtolower((string) config('erpxl.trade_warehouse_prefix', 'Magazyn HANDEL'));
+        $serviceCodes = $this->serviceCodes();
         $stats = ['items' => 0, 'changed' => 0];
 
         ErpItem::query()
             ->whereNull('removed_at')
             ->select(['id', 'xl_gid', 'stock_trade', 'stock_total', 'stock_value', 'oldest_lot_at', 'stock_by_warehouse'])
-            ->chunkById($batch, function ($items) use ($tradePrefix, $now, &$stats, $progress): void {
+            ->chunkById($batch, function ($items) use ($tradePrefix, $serviceCodes, $now, &$stats, $progress): void {
                 $stock = $this->group($this->gateway->stock($items->pluck('xl_gid')->map(fn ($g) => (int) $g)->all()));
-                DB::transaction(function () use ($items, $stock, $tradePrefix, $now, &$stats): void {
+                DB::transaction(function () use ($items, $stock, $tradePrefix, $serviceCodes, $now, &$stats): void {
                     $unchanged = [];
                     foreach ($items as $item) {
-                        $fields = $this->stockFields($stock[(int) $item->xl_gid] ?? [], $tradePrefix);
+                        $fields = $this->stockFields($stock[(int) $item->xl_gid] ?? [], $tradePrefix, $serviceCodes);
                         $same = abs((float) $item->stock_trade - $fields['stock_trade']) < 0.00005
                             && abs((float) $item->stock_total - $fields['stock_total']) < 0.00005
                             && ($item->stock_value === null) === ($fields['stock_value'] === null)
@@ -197,6 +200,10 @@ final class ErpItemSync
                             'stock_total' => $fields['stock_total'],
                             'stock_value' => $fields['stock_value'],
                             'oldest_lot_at' => $fields['oldest_lot_at'],
+                            'stock_service' => $fields['stock_service'],
+                            'stock_service_value' => $fields['stock_service_value'],
+                            'oldest_lot_trade_at' => $fields['oldest_lot_trade_at'],
+                            'oldest_lot_service_at' => $fields['oldest_lot_service_at'],
                             'stock_by_warehouse' => json_encode($fields['stock_by_warehouse']),
                             'stock_synced_at' => $now,
                         ]);
@@ -220,10 +227,14 @@ final class ErpItemSync
      * rozbicie od największego stanu. Wartość = suma wartości księgowej partii wszystkich magazynów; null, gdy XL nie
      * podał wartości choć jednego magazynu (suma bez niego zaniżałaby zapas). Bez stanu wartość 0.
      *
+     * Przy każdym magazynie także dzień przyjęcia jego najstarszej partii; część usługowa (słownik erp_warehouses) —
+     * WarehouseSplit.
+     *
      * @param  list<array{gid: int, warehouse_code: string, warehouse_name: string, quantity: float, value?: float|null, oldest_lot?: int|null}>  $rows
-     * @return array{stock_trade: float, stock_total: float, stock_value: float|null, oldest_lot_at: string|null, stock_by_warehouse: list<array{code: string, name: string, quantity: float, value: float|null}>}
+     * @param  list<string>  $serviceCodes
+     * @return array{stock_trade: float, stock_total: float, stock_value: float|null, oldest_lot_at: string|null, stock_service: float, stock_service_value: float|null, oldest_lot_trade_at: string|null, oldest_lot_service_at: string|null, stock_by_warehouse: list<array{code: string, name: string, quantity: float, value: float|null, oldest_lot: string|null}>}
      */
-    private function stockFields(array $rows, string $tradePrefix): array
+    private function stockFields(array $rows, string $tradePrefix, array $serviceCodes = []): array
     {
         $warehouses = [];
         $trade = 0.0;
@@ -233,7 +244,11 @@ final class ErpItemSync
         $oldest = null;
         foreach ($rows as $row) {
             $rowValue = isset($row['value']) ? round((float) $row['value'], 2) : null;
-            $warehouses[] = ['code' => $row['warehouse_code'], 'name' => $row['warehouse_name'], 'quantity' => $row['quantity'], 'value' => $rowValue];
+            $rowLot = XlTimestamp::toDate($row['oldest_lot'] ?? null);
+            $warehouses[] = [
+                'code' => $row['warehouse_code'], 'name' => $row['warehouse_name'], 'quantity' => $row['quantity'], 'value' => $rowValue,
+                'oldest_lot' => $rowLot?->toDateString(),
+            ];
             $total += $row['quantity'];
             if ($tradePrefix !== '' && str_starts_with(mb_strtolower($row['warehouse_name']), $tradePrefix)) {
                 $trade += $row['quantity'];
@@ -243,9 +258,8 @@ final class ErpItemSync
             } else {
                 $value += $rowValue;
             }
-            $lot = XlTimestamp::toDate($row['oldest_lot'] ?? null);
-            if ($lot !== null && ($oldest === null || $lot->lessThan($oldest))) {
-                $oldest = $lot;
+            if ($rowLot !== null && ($oldest === null || $rowLot->lessThan($oldest))) {
+                $oldest = $rowLot;
             }
         }
         usort($warehouses, static fn (array $a, array $b): int => $b['quantity'] <=> $a['quantity'] ?: strcmp($a['code'], $b['code']));
@@ -255,8 +269,15 @@ final class ErpItemSync
             'stock_total' => $total,
             'stock_value' => $valueKnown ? round($value, 2) : null,
             'oldest_lot_at' => $oldest?->toDateString(),
+            ...WarehouseSplit::compute($warehouses, $serviceCodes, $oldest?->toDateString()),
             'stock_by_warehouse' => $warehouses,
         ];
+    }
+
+    /** @return list<string> kody magazynów usługowych — raz na przebieg */
+    private function serviceCodes(): array
+    {
+        return ErpWarehouse::serviceCodes();
     }
 
     /**

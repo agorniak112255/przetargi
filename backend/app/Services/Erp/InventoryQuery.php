@@ -7,6 +7,7 @@ namespace App\Services\Erp;
 use App\Models\ErpItem;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
+use InvalidArgumentException;
 
 /**
  * Wspólne reguły Zapasów — lista „Zalegające” i raport dla zarządu liczą tak samo.
@@ -14,9 +15,14 @@ use Illuminate\Database\Eloquent\Builder;
  * Wartość = ilość × cena zakupu (decyzja użytkownika 30.09.2026): najpierw wartość partii leżących na stanie
  * (TwZ_KsiegowaNetto), a bez niej stan × cena z ostatniej PZ. Sama ostatnia PZ bywa błędna — SNAU51000-04-S: PZ 1 szt.
  * za 11 600,60 zł, poprawione RW 1 szt. + PW 40 szt. po 290,02 zł; partie mają 290,02.
+ *
+ * Zakres magazynów (raport dla zarządu): 'all' — wszystkie, 'service' — usługowe ze słownika erp_warehouses,
+ * 'trade' — handlowe (całość − usługowe). Ostatnia sprzedaż jest wspólna dla towaru.
  */
 final class InventoryQuery
 {
+    public const SCOPES = ['trade', 'service', 'all'];
+
     /**
      * Cena jednostki podstawowej w PLN z ostatniej PZ towaru (ta sama kolejność co ErpItem::purchases). Wartość w SQL,
      * żeby sortowanie i suma szły po całej liście, nie po stronie.
@@ -26,10 +32,41 @@ final class InventoryQuery
 
     public const VALUE_SQL = '(coalesce(erp_items.stock_value, (erp_items.stock_total * '.self::LAST_PRICE_SQL.')))';
 
-    /** @return Builder<ErpItem> towar z XL (bez usuniętych) ze stanem na którymkolwiek magazynie */
-    public static function inStock(): Builder
+    public static function quantitySql(string $scope = 'all'): string
     {
-        return ErpItem::query()->whereNull('removed_at')->where('stock_total', '>', 0);
+        return match (self::scope($scope)) {
+            'trade' => '(erp_items.stock_total - erp_items.stock_service)',
+            'service' => 'erp_items.stock_service',
+            default => 'erp_items.stock_total',
+        };
+    }
+
+    public static function valueSql(string $scope = 'all'): string
+    {
+        return match (self::scope($scope)) {
+            'trade' => '(coalesce(erp_items.stock_value - erp_items.stock_service_value, ('.self::quantitySql('trade').' * '.self::LAST_PRICE_SQL.')))',
+            'service' => '(coalesce(erp_items.stock_service_value, (erp_items.stock_service * '.self::LAST_PRICE_SQL.')))',
+            default => self::VALUE_SQL,
+        };
+    }
+
+    /**
+     * Dzień przyjęcia najstarszej partii w wybranych magazynach. Gdy data zakresu jest nieznana (stare rozbicie bez dat
+     * albo przed pierwszym przeliczeniem), data całego towaru — najwyżej starsza, nigdy nie zrobi świeżej dostawy starą.
+     */
+    public static function oldestLotSql(string $scope = 'all'): string
+    {
+        return match (self::scope($scope)) {
+            'trade' => '(coalesce(erp_items.oldest_lot_trade_at, erp_items.oldest_lot_at))',
+            'service' => '(coalesce(erp_items.oldest_lot_service_at, erp_items.oldest_lot_at))',
+            default => 'erp_items.oldest_lot_at',
+        };
+    }
+
+    /** @return Builder<ErpItem> towar z XL (bez usuniętych) ze stanem w wybranych magazynach */
+    public static function inStock(string $scope = 'all'): Builder
+    {
+        return ErpItem::query()->whereNull('removed_at')->whereRaw(self::quantitySql($scope).' > 0');
     }
 
     /**
@@ -39,29 +76,32 @@ final class InventoryQuery
      * @param  Builder<ErpItem>  $query
      * @return Builder<ErpItem>
      */
-    public static function unsoldSince(Builder $query, CarbonImmutable $cutoff, bool $neverSold = true): Builder
+    public static function unsoldSince(Builder $query, CarbonImmutable $cutoff, bool $neverSold = true, string $scope = 'all'): Builder
     {
         $date = $cutoff->toDateString();
+        $lot = self::oldestLotSql($scope);
 
-        return $query->where(function (Builder $q) use ($date, $neverSold): void {
+        return $query->where(function (Builder $q) use ($date, $neverSold, $lot): void {
             $q->where('last_sale_at', '<', $date);
             if ($neverSold) {
                 $q->orWhere(fn (Builder $n) => $n->whereNull('last_sale_at')
-                    ->where(fn (Builder $l) => $l->whereNull('oldest_lot_at')->orWhere('oldest_lot_at', '<=', $date)));
+                    ->where(fn (Builder $l) => $l->whereRaw($lot.' is null')->orWhereRaw($lot.' <= ?', [$date])));
             }
         });
     }
 
     /**
-     * Najstarsza partia na stanie przyjęta najpóźniej w dniu progu. Uwaga: PW z pary RW → PW zakłada nową partię
-     * i „odmładza” tę datę.
+     * Najstarsza partia w wybranych magazynach przyjęta najpóźniej w dniu progu. Uwaga: PW z pary RW → PW zakłada nową
+     * partię i „odmładza” tę datę.
      *
      * @param  Builder<ErpItem>  $query
      * @return Builder<ErpItem>
      */
-    public static function lotOlderThan(Builder $query, CarbonImmutable $cutoff): Builder
+    public static function lotOlderThan(Builder $query, CarbonImmutable $cutoff, string $scope = 'all'): Builder
     {
-        return $query->whereNotNull('oldest_lot_at')->where('oldest_lot_at', '<=', $cutoff->toDateString());
+        $lot = self::oldestLotSql($scope);
+
+        return $query->whereRaw($lot.' is not null')->whereRaw($lot.' <= ?', [$cutoff->toDateString()]);
     }
 
     /**
@@ -70,11 +110,12 @@ final class InventoryQuery
      * @param  Builder<ErpItem>  $query
      * @return array{items: int, value: float, value_unknown: int}
      */
-    public static function totals(Builder $query): array
+    public static function totals(Builder $query, string $scope = 'all'): array
     {
+        $value = self::valueSql($scope);
         $row = (clone $query)->toBase()
-            ->selectRaw('count(*) as items, coalesce(sum('.self::VALUE_SQL.'), 0) as value,'
-                .' sum(case when '.self::VALUE_SQL.' is null then 1 else 0 end) as value_unknown')
+            ->selectRaw('count(*) as items, coalesce(sum('.$value.'), 0) as value,'
+                .' sum(case when '.$value.' is null then 1 else 0 end) as value_unknown')
             ->first();
 
         return [
@@ -82,5 +123,14 @@ final class InventoryQuery
             'value' => round((float) ($row->value ?? 0), 2),
             'value_unknown' => (int) ($row->value_unknown ?? 0),
         ];
+    }
+
+    private static function scope(string $scope): string
+    {
+        if (! in_array($scope, self::SCOPES, true)) {
+            throw new InvalidArgumentException('Nieznany zakres magazynów: '.$scope);
+        }
+
+        return $scope;
     }
 }
