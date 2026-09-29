@@ -46,6 +46,8 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
   const [template, setTemplate] = useState<OfferTemplateId>(storedTemplate)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const priceRef = useRef<HTMLInputElement>(null)
+  // Pliki PDF odznaczone przez handlowca (adresy) — trzymane z kartą; inna karta zaczyna od wszystkich.
+  const [skippedDocs, setSkippedDocs] = useState<{ productId: number; urls: string[] } | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -68,7 +70,15 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
     priceRef.current?.select()
   }, [open, productId])
 
-  const data = useMemo(() => (product ? buildOfferData(product, window.location.href) : null), [product])
+  const cardData = useMemo(() => (product ? buildOfferData(product, window.location.href) : null), [product])
+  const skipped = useMemo(
+    () => (product && skippedDocs?.productId === product.id ? skippedDocs.urls : []),
+    [product, skippedDocs],
+  )
+  const data = useMemo(
+    () => (cardData ? { ...cardData, documents: cardData.documents.filter((d) => !skipped.includes(d.url)) } : null),
+    [cardData, skipped],
+  )
   const marginPercent = user?.default_margin_percent ?? DEFAULT_MARGIN_PERCENT
   const purchase = purchaseForOffer(product)
   const proposal = suggestedOfferPrice(purchase, offerMarkupFactor(marginPercent))
@@ -84,7 +94,14 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
     [data, template, offerPrice, date],
   )
 
-  if (!open || !product || !data) return null
+  if (!open || !product || !data || !cardData) return null
+
+  function toggleDoc(url: string, include: boolean) {
+    if (!product) return
+    const next = include ? skipped.filter((u) => u !== url) : [...skipped, url]
+    setSkippedDocs({ productId: product.id, urls: next })
+    setMsg(null)
+  }
 
   function pickTemplate(id: OfferTemplateId) {
     setTemplate(id)
@@ -225,6 +242,32 @@ export function ClientOfferModal({ open, onClose, product }: Props) {
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div>
+              <p className="mb-1.5 text-xs font-semibold text-slate-700">Pliki PDF w ofercie</p>
+              {cardData.documents.length > 0 ? (
+                <div className="flex flex-col gap-1 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  {cardData.documents.map((d) => (
+                    <label key={d.url} className="flex cursor-pointer items-start gap-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={!skipped.includes(d.url)}
+                        onChange={(e) => toggleDoc(d.url, e.target.checked)}
+                        className="mt-0.5 accent-violet-700"
+                      />
+                      <span className="min-w-0">
+                        <span className="font-medium text-slate-900">{d.kind}</span>
+                        <span className="block truncate text-[11px] text-slate-500" title={d.title}>
+                          {d.title}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-500">Karta nie ma plików PDF.</p>
+              )}
             </div>
 
             <div className="flex flex-col gap-1.5">
