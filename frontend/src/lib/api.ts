@@ -823,15 +823,24 @@ export type InventoryBoardItemRow = {
   group_label?: string | null
 }
 
-/** GET /api/inventory/board/items — posortowane od największej wartości. */
+/** GET /api/inventory/board/items — domyślnie od największej wartości; `search`, `sort`, `dir` zawężają i sortują całą listę. */
 export type InventoryBoardItemsResponse = {
   bucket: string
   /** Np. „Towar, który nie sprzedaje się od pół roku”. */
   title: string
   data: InventoryBoardItemRow[]
   meta: { current_page: number; last_page: number; per_page: number; total: number }
+  /** Cały koszyk (jak kafelek). */
   totals: { items: number; value: number }
+  /** Po polu wyszukiwania (`search`); bez niego równe `totals`. */
+  found: { items: number; value: number }
 }
+
+/** Kolumny okna towarów, po których można sortować (`sort`, `dir`). */
+export type InventoryBoardItemsSort = 'name' | 'quantity' | 'value' | 'last_sale' | 'oldest_lot'
+
+/** Kolumny okna dokumentów, po których można sortować (`sort`, `dir`). */
+export type InventoryBoardMovesSort = 'date' | 'name' | 'operator' | 'value' | 'lot_age' | 'note'
 
 /** Para RW → PW (towar wydany i przyjęty z powrotem jako nowy) na liście raportu dla zarządu. */
 export type InventoryBoardMoveRow = {
@@ -860,7 +869,7 @@ export type InventoryBoardMoveRow = {
   approver_name: string | null
 }
 
-/** GET /api/inventory/board/moves — posortowane od najnowszego. */
+/** GET /api/inventory/board/moves — domyślnie od najnowszego; `search`, `sort`, `dir` zawężają i sortują całą listę. */
 export type InventoryBoardMovesResponse = {
   scope: 'all' | 'unexplained'
   operator: string | null
@@ -871,7 +880,10 @@ export type InventoryBoardMovesResponse = {
   title: string
   data: InventoryBoardMoveRow[]
   meta: { current_page: number; last_page: number; per_page: number; total: number }
+  /** Cała lista. */
   totals: { pairs: number; value: number }
+  /** Po polu wyszukiwania (`search`); bez niego równe `totals`. */
+  found: { pairs: number; value: number }
 }
 
 /** Dokument RW albo PW z pary (GET /api/inventory/rw-pw). */

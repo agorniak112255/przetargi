@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ErpItem;
+use App\Models\ErpItemLink;
 use App\Models\ErpRwPwPair;
 use App\Models\ErpWarehouse;
 use App\Services\Erp\ErpItemCards;
@@ -59,6 +60,25 @@ class InventoryBoardController extends Controller
     private const MOVES_MIN_LOT_AGE_MONTHS = 3;
 
     private const PEOPLE_LIMIT = 5;
+
+    /** Sortowanie okien kliknięciem w nagłówek kolumny; bez parametru — od największej wartości / od najnowszego. */
+    private const ITEM_SORTS = ['name', 'quantity', 'value', 'last_sale', 'oldest_lot'];
+
+    private const MOVE_SORTS = ['date', 'name', 'operator', 'value', 'lot_age', 'note'];
+
+    /** Pole wyszukiwania: każde słowo musi pasować do którejś kolumny; najwyżej tyle słów. */
+    private const SEARCH_WORDS = 6;
+
+    /**
+     * Daty w oknach są pisane słownie („sierpień 2025”, „24 września 2026”), więc nazwa miesiąca (początek, bez
+     * ogonków, od 3 liter) też szuka po dacie.
+     */
+    private const MONTH_NAMES = [
+        '01' => ['styczen', 'stycznia'], '02' => ['luty', 'lutego'], '03' => ['marzec', 'marca'],
+        '04' => ['kwiecien', 'kwietnia'], '05' => ['maj', 'maja'], '06' => ['czerwiec', 'czerwca'],
+        '07' => ['lipiec', 'lipca'], '08' => ['sierpien', 'sierpnia'], '09' => ['wrzesien', 'wrzesnia'],
+        '10' => ['pazdziernik', 'pazdziernika'], '11' => ['listopad', 'listopada'], '12' => ['grudzien', 'grudnia'],
+    ];
 
     public function __construct(private readonly ErpItemCards $cards) {}
 
@@ -116,7 +136,10 @@ class InventoryBoardController extends Controller
         ]);
     }
 
-    /** Okno z listą towarów koszyka: od największej wartości, 10/20/50/100 na stronę. */
+    /**
+     * Okno z listą towarów koszyka: 10/20/50/100 na stronę, od największej wartości albo wg klikniętej kolumny, zawężane
+     * polem wyszukiwania. `totals` — cały koszyk (jak kafelek), `found` — po wyszukiwaniu.
+     */
     public function items(Request $request): JsonResponse
     {
         $v = $request->validate([
@@ -124,13 +147,23 @@ class InventoryBoardController extends Controller
             'group' => ['nullable', 'string', Rule::in([...array_keys(self::GROUPS), 'other'])],
             'per_page' => ['nullable', 'integer', Rule::in(self::PER_PAGE)],
             'page' => ['nullable', 'integer', 'min:1'],
+            'search' => ['nullable', 'string', 'max:150'],
+            'sort' => ['nullable', 'string', Rule::in(self::ITEM_SORTS)],
+            'dir' => ['nullable', 'string', Rule::in(['asc', 'desc'])],
         ]);
         $scope = $this->scope($request);
         $key = (string) $v['bucket'];
         $group = isset($v['group']) && $v['group'] !== '' ? (string) $v['group'] : null;
         $query = $this->bucketQuery($key, $scope, $group);
         $totals = InventoryQuery::totals($query, $scope);
-        $page = $this->ordered($query, $scope)->paginate((int) ($v['per_page'] ?? 10));
+        $words = $this->words($v['search'] ?? null);
+        if ($words !== []) {
+            $this->searchItems($query, $words, $scope);
+        }
+        $found = $words === [] ? $totals : InventoryQuery::totals($query, $scope);
+        $sort = isset($v['sort']) ? (string) $v['sort'] : null;
+        $page = $this->ordered($query, $scope, $sort, ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc')
+            ->paginate((int) ($v['per_page'] ?? 10));
 
         $title = self::BUCKETS[$key][2];
         if ($group !== null) {
@@ -145,10 +178,14 @@ class InventoryBoardController extends Controller
             'data' => $this->itemRows(null, $scope, $page->getCollection()),
             'meta' => $this->meta($page->currentPage(), $page->lastPage(), $page->perPage(), $page->total()),
             'totals' => ['items' => $totals['items'], 'value' => $totals['value']],
+            'found' => ['items' => $found['items'], 'value' => $found['value']],
         ]);
     }
 
-    /** Okno z dokumentami „odmładzania”: wszystkie albo bez wyjaśnienia, opcjonalnie jednej osoby; od najnowszego. */
+    /**
+     * Okno z dokumentami „odmładzania”: wszystkie albo bez wyjaśnienia, opcjonalnie jednej osoby; od najnowszego albo
+     * wg klikniętej kolumny, zawężane polem wyszukiwania. `totals` — cała lista, `found` — po wyszukiwaniu.
+     */
     public function moves(Request $request): JsonResponse
     {
         $v = $request->validate([
@@ -156,6 +193,9 @@ class InventoryBoardController extends Controller
             'operator' => ['nullable', 'string', 'max:20'],
             'per_page' => ['nullable', 'integer', Rule::in(self::PER_PAGE)],
             'page' => ['nullable', 'integer', 'min:1'],
+            'search' => ['nullable', 'string', 'max:150'],
+            'sort' => ['nullable', 'string', Rule::in(self::MOVE_SORTS)],
+            'dir' => ['nullable', 'string', Rule::in(['asc', 'desc'])],
         ]);
         $warehouses = $this->scope($request);
         $kind = (string) ($v['scope'] ?? 'unexplained');
@@ -168,8 +208,16 @@ class InventoryBoardController extends Controller
         }
         $totalPairs = (clone $query)->count();
         $totalValue = round((float) (clone $query)->sum('rw_value'), 2);
+        $words = $this->words($v['search'] ?? null);
+        if ($words !== []) {
+            $this->searchMoves($query, $words);
+        }
+        $foundPairs = $words === [] ? $totalPairs : (clone $query)->count();
+        $foundValue = $words === [] ? $totalValue : round((float) (clone $query)->sum('rw_value'), 2);
 
-        $page = $query->orderByDesc('rw_date')->orderByDesc('id')->paginate((int) ($v['per_page'] ?? 10));
+        $sort = isset($v['sort']) ? (string) $v['sort'] : null;
+        $page = $this->orderedMoves($query, $sort, ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc')
+            ->paginate((int) ($v['per_page'] ?? 10));
         $items = ErpItem::query()->whereIn('id', $page->getCollection()->pluck('erp_item_id')->filter()->unique()->all())
             ->with(ErpItemCards::eagerLinks())
             ->get(['id', 'code', 'name', 'unit']);
@@ -215,6 +263,7 @@ class InventoryBoardController extends Controller
             })->values()->all(),
             'meta' => $this->meta($page->currentPage(), $page->lastPage(), $page->perPage(), $page->total()),
             'totals' => ['pairs' => $totalPairs, 'value' => $totalValue],
+            'found' => ['pairs' => $foundPairs, 'value' => $foundValue],
         ]);
     }
 
@@ -260,21 +309,197 @@ class InventoryBoardController extends Controller
     }
 
     /**
+     * Kolejność okna towarów. Bez kolumny — od największej wartości. Towar bez wartości i bez daty dostawy zawsze na
+     * końcu; „ani razu nie sprzedany” przy ostatniej sprzedaży rosnąco na początku (sprzedaż najdawniej), malejąco na końcu.
+     *
      * @param  Builder<ErpItem>  $query
-     * @return Builder<ErpItem> od największej wartości; bez wartości na końcu
+     * @param  'asc'|'desc'  $dir
+     * @return Builder<ErpItem>
      */
-    private function ordered(Builder $query, string $scope): Builder
+    private function ordered(Builder $query, string $scope, ?string $sort = null, string $dir = 'desc'): Builder
     {
         $value = InventoryQuery::valueSql($scope);
-
-        return $query->select('erp_items.*')
+        $quantity = InventoryQuery::quantitySql($scope);
+        $lot = InventoryQuery::oldestLotSql($scope);
+        $query->select('erp_items.*')
             ->selectRaw($value.' as purchase_value')
-            ->selectRaw(InventoryQuery::quantitySql($scope).' as scope_quantity')
-            ->selectRaw(InventoryQuery::oldestLotSql($scope).' as scope_oldest_lot')
-            ->orderByRaw($value.' is null')
-            ->orderByRaw($value.' desc')
-            ->orderBy('code')
+            ->selectRaw($quantity.' as scope_quantity')
+            ->selectRaw($lot.' as scope_oldest_lot')
             ->with(ErpItemCards::eagerLinks());
+
+        match ($sort) {
+            'name' => $query->orderByRaw('coalesce('.self::cardNameSql('erp_items.id').', erp_items.name) '.$dir),
+            'quantity' => $query->orderByRaw($quantity.' '.$dir),
+            'last_sale' => $query->orderBy('last_sale_at', $dir),
+            'oldest_lot' => $query->orderByRaw($lot.' is null')->orderByRaw($lot.' '.$dir),
+            'value' => $query->orderByRaw($value.' is null')->orderByRaw($value.' '.$dir),
+            default => $query->orderByRaw($value.' is null')->orderByRaw($value.' desc'),
+        };
+
+        return $query->orderBy('code')->orderBy('erp_items.id');
+    }
+
+    /**
+     * Kolejność okna dokumentów. Bez kolumny — od najnowszego; dokumenty bez opisu na końcu przy sortowaniu po opisie.
+     *
+     * @param  Builder<ErpRwPwPair>  $query
+     * @param  'asc'|'desc'  $dir
+     * @return Builder<ErpRwPwPair>
+     */
+    private function orderedMoves(Builder $query, ?string $sort, string $dir): Builder
+    {
+        $item = 'erp_rw_pw_pairs.erp_item_id';
+        match ($sort) {
+            'name' => $query->orderByRaw('coalesce('.self::cardNameSql($item).', (select i.name from erp_items i where i.id = '.$item.'), \'\') '.$dir),
+            'operator' => $query->orderByRaw('coalesce(rw_operator_name, rw_operator, \'\') '.$dir),
+            'value' => $query->orderBy('rw_value', $dir),
+            'lot_age' => $query->orderBy('rw_lot_age_months', $dir),
+            'note' => $query->orderByRaw('rw_note is null')->orderBy('rw_note', $dir),
+            default => null,
+        };
+        $dateDir = $sort === 'date' ? $dir : 'desc';
+
+        return $query->orderBy('rw_date', $dateDir)->orderBy('id', $dateDir);
+    }
+
+    /**
+     * Nazwa karty katalogu przy towarze XL — ta sama co w wierszu (ErpItemCards: pewne i potwierdzone powiązanie,
+     * potwierdzone przed automatycznym, potem najstarsze).
+     */
+    private static function cardNameSql(string $itemId): string
+    {
+        $linked = implode(', ', array_map(static fn (string $s): string => "'".$s."'", ErpItemCards::LINKED));
+
+        return '(select p.name from erp_item_links l join products p on p.id = l.product_id'
+            .' where l.erp_item_id = '.$itemId.' and l.status in ('.$linked.')'
+            ." order by case when l.status = '".ErpItemLink::STATUS_CONFIRMED."' then 0 else 1 end, l.id limit 1)";
+    }
+
+    /** @return list<string> słowa z pola wyszukiwania (bez powtórzeń, najwyżej SEARCH_WORDS) */
+    private function words(mixed $search): array
+    {
+        $words = preg_split('/\s+/u', trim((string) $search), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        return array_slice(array_values(array_unique($words)), 0, self::SEARCH_WORDS);
+    }
+
+    /**
+     * Każde słowo musi pasować do którejś kolumny okna: kod, nazwa XL, karta (nazwa, SKU), dostawca, rodzaj, daty
+     * (rok, nazwa miesiąca), ilość albo wartość w pełnych złotych.
+     *
+     * @param  Builder<ErpItem>  $query
+     * @param  list<string>  $words
+     */
+    private function searchItems(Builder $query, array $words, string $scope): void
+    {
+        $quantity = InventoryQuery::quantitySql($scope);
+        $value = InventoryQuery::valueSql($scope);
+        $lot = InventoryQuery::oldestLotSql($scope);
+        foreach ($words as $word) {
+            $like = '%'.addcslashes($word, '%_\\').'%';
+            $query->where(function (Builder $q) use ($word, $like, $quantity, $value, $lot): void {
+                $q->where('code', 'like', $like)
+                    ->orWhere('name', 'like', $like)
+                    ->orWhere('name1', 'like', $like)
+                    ->orWhere('last_supplier', 'like', $like)
+                    ->orWhereHas('links', fn (Builder $l) => ErpItemCards::linked($l)
+                        ->whereHas('product', fn (Builder $p) => $p->where('name', 'like', $like)->orWhere('sku', 'like', $like)));
+                foreach ($this->groupsFor($word) as $group) {
+                    if ($group === 'other') {
+                        $q->orWhere(function (Builder $o): void {
+                            foreach (array_keys(self::GROUPS) as $letter) {
+                                $o->where('code', 'not like', $letter.'%');
+                            }
+                        });
+                    } else {
+                        $q->orWhere('code', 'like', $group.'%');
+                    }
+                }
+                foreach ($this->datePatterns($word) as $pattern) {
+                    $q->orWhere('last_sale_at', 'like', $pattern)->orWhereRaw($lot.' like ?', [$pattern]);
+                }
+                if (ctype_digit($word)) {
+                    $q->orWhereRaw($quantity.' = ?', [(int) $word])->orWhereRaw('round('.$value.') = ?', [(int) $word]);
+                }
+            });
+        }
+    }
+
+    /**
+     * Każde słowo musi pasować do którejś kolumny okna: numery dokumentów, towar (kod, nazwa XL, karta), osoby, opisy,
+     * rozmiar/kolor, data (rok, nazwa miesiąca), ilość, miesiące leżenia albo wartość w pełnych złotych.
+     *
+     * @param  Builder<ErpRwPwPair>  $query
+     * @param  list<string>  $words
+     */
+    private function searchMoves(Builder $query, array $words): void
+    {
+        foreach ($words as $word) {
+            $like = '%'.addcslashes($word, '%_\\').'%';
+            $query->where(function (Builder $q) use ($word, $like): void {
+                foreach (['rw_number', 'pw_number', 'rw_note', 'pw_note', 'rw_operator_name', 'rw_operator', 'rw_approver_name', 'rw_approver', 'rw_features', 'pw_features'] as $column) {
+                    $q->orWhere($column, 'like', $like);
+                }
+                $q->orWhereHas('item', fn (Builder $i) => $i->where('code', 'like', $like)
+                    ->orWhere('name', 'like', $like)
+                    ->orWhereHas('links', fn (Builder $l) => ErpItemCards::linked($l)
+                        ->whereHas('product', fn (Builder $p) => $p->where('name', 'like', $like)->orWhere('sku', 'like', $like))));
+                foreach ($this->datePatterns($word) as $pattern) {
+                    $q->orWhere('rw_date', 'like', $pattern);
+                }
+                if (ctype_digit($word)) {
+                    $q->orWhere('rw_quantity', (int) $word)
+                        ->orWhere('rw_lot_age_months', (int) $word)
+                        ->orWhereRaw('round(rw_value) = ?', [(int) $word]);
+                }
+            });
+        }
+    }
+
+    /** @return list<string> rodzaje (litera kodu albo 'other'), których nazwa zaczyna się od słowa (od 3 liter) */
+    private function groupsFor(string $word): array
+    {
+        $word = self::plain($word);
+        if (mb_strlen($word) < 3) {
+            return [];
+        }
+        $out = [];
+        foreach ([...self::GROUPS, 'other' => 'Pozostałe'] as $group => $label) {
+            if (str_starts_with(self::plain($label), $word)) {
+                $out[] = (string) $group;
+            }
+        }
+
+        return $out;
+    }
+
+    /** @return list<string> wzorce LIKE po dacie 'YYYY-MM-DD': rok/cyfry dosłownie, nazwa miesiąca → '-MM-' */
+    private function datePatterns(string $word): array
+    {
+        if (preg_match('/^\d{2,4}(-\d{1,2})?$/', $word) === 1) {
+            return ['%'.$word.'%'];
+        }
+        $word = self::plain($word);
+        if (mb_strlen($word) < 3) {
+            return [];
+        }
+        $out = [];
+        foreach (self::MONTH_NAMES as $month => $names) {
+            foreach ($names as $name) {
+                if (str_starts_with($name, $word)) {
+                    $out[] = '%-'.$month.'-%';
+                    break;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /** Małe litery bez polskich znaków — do porównania z nazwami miesięcy i rodzajów. */
+    private static function plain(string $text): string
+    {
+        return strtr(mb_strtolower($text), ['ą' => 'a', 'ć' => 'c', 'ę' => 'e', 'ł' => 'l', 'ń' => 'n', 'ó' => 'o', 'ś' => 's', 'ź' => 'z', 'ż' => 'z']);
     }
 
     /**

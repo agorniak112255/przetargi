@@ -8,8 +8,10 @@ import {
   type InventoryBoardItemRow,
   type InventoryBoardItemsBucket,
   type InventoryBoardItemsResponse,
+  type InventoryBoardItemsSort,
   type InventoryBoardMoveRow,
   type InventoryBoardMovesResponse,
+  type InventoryBoardMovesSort,
   type InventoryBoardReport as BoardReport,
   type InventoryBoardWarehouses as Warehouses,
 } from '../lib/api'
@@ -943,11 +945,55 @@ function InlineShowList({ onClick }: { onClick: () => void }) {
 
 const PER_PAGE_OPTIONS = [10, 20, 50, 100] as const
 
+/** Odpowiedź z wyszukiwaniem, dla którego przyszła — napisy „Znaleziono…” nie mieszają starej listy z nowym słowem. */
 type Loaded =
-  | { kind: 'items'; res: InventoryBoardItemsResponse }
-  | { kind: 'moves'; res: InventoryBoardMovesResponse }
+  | { kind: 'items'; res: InventoryBoardItemsResponse; query: string }
+  | { kind: 'moves'; res: InventoryBoardMovesResponse; query: string }
 
-function detailsPath(request: DetailsRequest, warehouses: Warehouses, perPage: number, page: number): string {
+type SortKey = InventoryBoardItemsSort | InventoryBoardMovesSort
+type SortDir = 'asc' | 'desc'
+type Sort = { key: SortKey; dir: SortDir }
+/** Kolumna do sortowania: napis nagłówka, kierunek po pierwszym kliknięciu i słowa do napisu „Kolejność: …”. */
+type SortInfo = { label: string; first: SortDir; asc: string; desc: string }
+
+const ITEM_SORTS: Record<InventoryBoardItemsSort, SortInfo> = {
+  name: { label: 'Towar', first: 'asc', asc: 'od A do Z', desc: 'od Z do A' },
+  quantity: { label: 'Ile leży', first: 'desc', asc: 'od najmniejszej ilości', desc: 'od największej ilości' },
+  value: { label: 'Wartość', first: 'desc', asc: 'od najmniejszej kwoty', desc: 'od największej kwoty' },
+  last_sale: { label: 'Ostatnia sprzedaż', first: 'asc', asc: 'najdawniej sprzedane najpierw', desc: 'ostatnio sprzedane najpierw' },
+  oldest_lot: { label: 'Najstarsza dostawa', first: 'asc', asc: 'najstarsze dostawy najpierw', desc: 'najnowsze dostawy najpierw' },
+}
+
+const MOVE_SORTS: Record<InventoryBoardMovesSort, SortInfo> = {
+  date: { label: 'Data', first: 'desc', asc: 'najstarsze najpierw', desc: 'najnowsze najpierw' },
+  name: { label: 'Towar', first: 'asc', asc: 'od A do Z', desc: 'od Z do A' },
+  operator: { label: 'Kto wystawił', first: 'asc', asc: 'od A do Z', desc: 'od Z do A' },
+  value: { label: 'Ile i za ile', first: 'desc', asc: 'od najmniejszej kwoty', desc: 'od największej kwoty' },
+  lot_age: { label: 'Ile leżał', first: 'desc', asc: 'najkrócej leżące najpierw', desc: 'najdłużej leżące najpierw' },
+  note: { label: 'Opis', first: 'asc', asc: 'od A do Z, bez opisu na końcu', desc: 'od Z do A, bez opisu na końcu' },
+}
+
+/** Kolejność bez klikania w nagłówek — taka sama jak na serwerze bez parametru `sort`. */
+const DEFAULT_SORT: Record<DetailsRequest['kind'], Sort> = { items: { key: 'value', dir: 'desc' }, moves: { key: 'date', dir: 'desc' } }
+
+function sortInfo(kind: DetailsRequest['kind'], key: SortKey): SortInfo {
+  return kind === 'items' ? ITEM_SORTS[key as InventoryBoardItemsSort] : MOVE_SORTS[key as InventoryBoardMovesSort]
+}
+
+/** „z 1 towaru”, „z 113 towarów” / „z 1 wiersza”, „z 21 wierszy” — po „z” zawsze dopełniacz. */
+function outOf(kind: DetailsRequest['kind'], n: number): string {
+  if (kind === 'items') return n === 1 ? '1 towaru' : `${groupInt(n)} towarów`
+  return n === 1 ? '1 wiersza' : `${groupInt(n)} wierszy`
+}
+
+function detailsPath(
+  request: DetailsRequest,
+  warehouses: Warehouses,
+  perPage: number,
+  page: number,
+  query: string,
+  sort: Sort | null,
+): string {
   const qs = new URLSearchParams()
   if (request.kind === 'items') {
     qs.set('bucket', request.bucket)
@@ -959,7 +1005,50 @@ function detailsPath(request: DetailsRequest, warehouses: Warehouses, perPage: n
   qs.set('warehouses', warehouses)
   qs.set('per_page', String(perPage))
   qs.set('page', String(page))
+  if (query !== '') qs.set('search', query)
+  if (sort) {
+    qs.set('sort', sort.key)
+    qs.set('dir', sort.dir)
+  }
   return `/inventory/board/${request.kind}?${qs.toString()}`
+}
+
+/** Nagłówek kolumny jako przycisk: klik sortuje całą listę, drugi klik odwraca kolejność. */
+function SortTh({
+  column,
+  info,
+  sort,
+  onSort,
+  className = '',
+}: {
+  column: SortKey
+  info: SortInfo
+  sort: Sort
+  onSort: (key: SortKey) => void
+  className?: string
+}) {
+  const active = sort.key === column
+  return (
+    <th
+      scope="col"
+      className={`${TH} ${className}`}
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        title={`Sortuj: ${info.label}`}
+        className={`inline-flex items-center gap-1.5 rounded font-semibold underline-offset-4 hover:underline ${FOCUS} ${
+          active ? 'text-blue-800' : 'text-slate-900'
+        }`}
+      >
+        {info.label}
+        <span aria-hidden="true" className={active ? '' : 'text-slate-400 print:hidden'}>
+          {active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}
+        </span>
+      </button>
+    </th>
+  )
 }
 
 /** Na górze okna dokumentów bez opisu — tekst uzgodniony z właścicielem, bez zmian. */
@@ -972,7 +1061,7 @@ const UNEXPLAINED_NOTE =
 const TH = 'sticky top-0 z-10 border-b-2 border-slate-300 bg-slate-100 px-3 py-1.5 text-left font-semibold whitespace-nowrap text-slate-900 print:whitespace-normal'
 const TD = 'px-3 py-1 align-top'
 // Okno listy: mniejsze przyciski i odstępy niż na stronie raportu, żeby przy dużych literach mieściło się ok. 7 wierszy.
-const MODAL_BUTTON = `rounded-lg border border-slate-300 bg-white px-4 py-1.5 text-lg font-medium text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-50 ${FOCUS}`
+const MODAL_BUTTON = `rounded-lg border border-slate-300 bg-white px-4 py-1 text-lg font-medium text-slate-800 shadow-sm hover:bg-slate-50 disabled:opacity-50 ${FOCUS}`
 
 /**
  * Okno z listą pod kwotą raportu: stronicowana tabela towarów albo dokumentów. Portal do <body>, bo przodek
@@ -996,14 +1085,50 @@ function BoardDetailsModal({
   const [perPage, setPerPage] = useState<number>(10)
   const [showNote, setShowNote] = useState(false)
   const [page, setPage] = useState(1)
+  // Pole wyszukiwania: to, co wpisano, i to, co poszło do serwera (po krótkiej przerwie w pisaniu).
+  const [searchText, setSearchText] = useState('')
+  const [query, setQuery] = useState('')
+  // null = kolejność domyślna (bez parametru `sort`).
+  const [sort, setSort] = useState<Sort | null>(null)
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const seq = useRef(0)
   const panelRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const path = detailsPath(request, warehouses, perPage, page)
+  const path = detailsPath(request, warehouses, perPage, page, query, sort)
   const kind = request.kind
+  const activeSort = sort ?? DEFAULT_SORT[kind]
+
+  // Lista zawęża się w trakcie pisania — zapytanie po 300 ms bez nowego znaku, od pierwszej strony.
+  useEffect(() => {
+    const next = searchText.trim().replace(/\s+/g, ' ')
+    if (next === query) return
+    const timer = window.setTimeout(() => {
+      setQuery(next)
+      setPage(1)
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [searchText, query])
+
+  function chooseSort(key: SortKey) {
+    const current = sort ?? DEFAULT_SORT[kind]
+    setSort(
+      current.key === key
+        ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: sortInfo(kind, key).first },
+    )
+    setPage(1)
+  }
+
+  /** Esc w wypełnionym polu czyści wyszukiwanie zamiast zamykać okno. */
+  function onSearchKey(e: ReactKeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Escape' && searchText !== '') {
+      e.preventDefault()
+      e.nativeEvent.stopPropagation()
+      setSearchText('')
+    }
+  }
 
   const load = useCallback(async () => {
     const my = ++seq.current
@@ -1012,15 +1137,15 @@ function BoardDetailsModal({
     try {
       const next: Loaded =
         kind === 'items'
-          ? { kind, res: await api<InventoryBoardItemsResponse>(path) }
-          : { kind, res: await api<InventoryBoardMovesResponse>(path) }
+          ? { kind, res: await api<InventoryBoardItemsResponse>(path), query }
+          : { kind, res: await api<InventoryBoardMovesResponse>(path), query }
       if (my === seq.current) setLoaded(next)
     } catch {
       if (my === seq.current) setFailed(true)
     } finally {
       if (my === seq.current) setLoading(false)
     }
-  }, [kind, path])
+  }, [kind, path, query])
 
   useEffect(() => {
     void load()
@@ -1137,6 +1262,14 @@ function BoardDetailsModal({
       summary = `${times(loaded.res.totals.pairs)} · razem ${fmtBig(loaded.res.totals.value)}`
     }
   }
+  // Po wpisaniu w pole wyszukiwania: ile pasuje z całej listy.
+  if (loaded && loaded.query !== '') {
+    const found = loaded.kind === 'items' ? loaded.res.found.items : loaded.res.found.pairs
+    const all = loaded.kind === 'items' ? loaded.res.totals.items : loaded.res.totals.pairs
+    summary = `Znaleziono ${groupInt(found)} z ${outOf(kind, all)} dla „${loaded.query}” · razem ${fmtBig(loaded.res.found.value)}`
+  }
+  const sortLabel = sortInfo(kind, activeSort.key)
+  const orderText = `Kolejność: „${sortLabel.label}” — ${sortLabel[activeSort.dir]}.`
 
   const modal = (
     <div
@@ -1155,15 +1288,57 @@ function BoardDetailsModal({
         className="board-modal-panel flex max-h-full w-full max-w-7xl flex-col overflow-hidden rounded-2xl bg-white text-lg text-slate-900 shadow-lg outline-none"
       >
         <div className="border-b-2 border-slate-200 px-4 py-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-            <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4">
-              <h2 id="board-details-title" className="text-xl font-semibold break-words text-slate-900">
-                {title}
-              </h2>
-              {summary && <p className="text-lg text-slate-800">{summary}</p>}
-              {request.kind === 'items' && <p className="text-base text-slate-700">Najpierw największe kwoty</p>}
+          <div className="flex flex-wrap items-baseline gap-x-4">
+            <h2 id="board-details-title" className="text-xl font-semibold break-words text-slate-900">
+              {title}
+            </h2>
+            {summary && <p className="text-lg text-slate-800">{summary}</p>}
+          </div>
+          {/* Druga linia: wyszukiwanie po wszystkich kolumnach, kolejność i przyciski okna. */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            <div className="board-modal-noprint relative">
+              <input
+                type="text"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                onKeyDown={onSearchKey}
+                enterKeyHint="search"
+                maxLength={150}
+                placeholder="Szukaj w liście…"
+                aria-label="Szukaj w tej liście — po każdej kolumnie"
+                title="Wpisz nazwę, kod, dostawcę, osobę, numer dokumentu, rok albo miesiąc — lista zawęża się od razu"
+                className={`w-60 rounded-lg border-2 border-slate-300 bg-white py-1 pr-9 pl-3 text-lg text-slate-900 placeholder:text-slate-500 ${FOCUS}`}
+              />
+              {searchText !== '' && (
+                <button
+                  type="button"
+                  onClick={() => setSearchText('')}
+                  aria-label="Wyczyść wyszukiwanie"
+                  title="Wyczyść"
+                  className={`absolute inset-y-1 right-1 rounded px-2 text-xl leading-none text-slate-600 hover:text-slate-900 ${FOCUS}`}
+                >
+                  ×
+                </button>
+              )}
             </div>
-            <div className="board-modal-noprint flex shrink-0 flex-wrap gap-2">
+            {/* Na ekranie kolejność pokazuje niebieski nagłówek ze strzałką; na wydruku — zdanie. */}
+            <span className="hidden text-base text-slate-700 print:inline">{orderText}</span>
+            {loaded?.kind === 'moves' && (
+              <span className="text-base font-medium text-slate-800">
+                Tylko towar, który przed wydaniem leżał {monthsLabel(loaded.res.min_lot_age_months)} lub dłużej.
+              </span>
+            )}
+            {unexplained && (
+              <button
+                type="button"
+                aria-expanded={showNote}
+                onClick={() => setShowNote((v) => !v)}
+                className={`board-modal-noprint rounded text-base font-semibold text-blue-700 underline underline-offset-4 ${FOCUS}`}
+              >
+                {showNote ? 'Ukryj objaśnienie' : 'Co pokazuje ta lista?'}
+              </button>
+            )}
+            <div className="board-modal-noprint ml-auto flex shrink-0 flex-wrap gap-2">
               <button type="button" onClick={printList} disabled={!loaded || failed} className={MODAL_BUTTON}>
                 Drukuj
               </button>
@@ -1172,27 +1347,6 @@ function BoardDetailsModal({
               </button>
             </div>
           </div>
-          {request.kind === 'moves' && (
-            <p className="mt-1 text-base text-slate-800">
-              <span className="mr-3 text-slate-700">Najpierw najnowsze.</span>
-              {loaded?.kind === 'moves' && (
-                <span className="mr-3 font-medium">
-                  Tylko towar, który przed wydaniem leżał w magazynie co najmniej{' '}
-                  {monthsLabel(loaded.res.min_lot_age_months)}.
-                </span>
-              )}
-              {unexplained && (
-                <button
-                  type="button"
-                  aria-expanded={showNote}
-                  onClick={() => setShowNote((v) => !v)}
-                  className={`board-modal-noprint rounded font-semibold text-blue-700 underline underline-offset-4 ${FOCUS}`}
-                >
-                  {showNote ? 'Ukryj objaśnienie' : 'Co pokazuje ta lista?'}
-                </button>
-              )}
-            </p>
-          )}
           {/* Długie objaśnienie zwinięte, żeby lista miała miejsce; na wydruku zawsze w całości. */}
           {unexplained && (
             <p className={`mt-1 text-base text-slate-800 ${showNote ? '' : 'hidden print:block'}`}>{UNEXPLAINED_NOTE}</p>
@@ -1220,13 +1374,28 @@ function BoardDetailsModal({
               Wczytywanie listy…
             </p>
           ) : rowCount === 0 ? (
-            <p className="px-5 py-6 text-xl text-slate-800">Brak pozycji.</p>
+            <p className={`px-5 py-6 text-xl text-slate-800 ${loading ? 'opacity-60' : ''}`}>
+              {loaded.query !== '' ? `Nic nie znaleziono dla „${loaded.query}”.` : 'Brak pozycji.'}
+            </p>
           ) : (
             <div className={loading ? 'opacity-60' : undefined}>
               {loaded.kind === 'items' ? (
-                <ItemsTable rows={loaded.res.data} firstNr={firstNr} totalValue={loaded.res.totals.value} asOf={asOf} />
+                <ItemsTable
+                  rows={loaded.res.data}
+                  firstNr={firstNr}
+                  totalValue={loaded.res.totals.value}
+                  asOf={asOf}
+                  sort={activeSort}
+                  onSort={chooseSort}
+                />
               ) : (
-                <MovesTable rows={loaded.res.data} firstNr={firstNr} showWho={request.kind === 'moves' && !request.person} />
+                <MovesTable
+                  rows={loaded.res.data}
+                  firstNr={firstNr}
+                  showWho={request.kind === 'moves' && !request.person}
+                  sort={activeSort}
+                  onSort={chooseSort}
+                />
               )}
             </div>
           )}
@@ -1299,11 +1468,15 @@ function ItemsTable({
   firstNr,
   totalValue,
   asOf,
+  sort,
+  onSort,
 }: {
   rows: InventoryBoardItemRow[]
   firstNr: number
   totalValue: number
   asOf: string | null
+  sort: Sort
+  onSort: (key: SortKey) => void
 }) {
   const pageSum = rows.reduce((sum, r) => sum + (r.value ?? 0), 0)
   const n = rows.length
@@ -1315,21 +1488,11 @@ function ItemsTable({
           <th scope="col" className={`${TH} w-14`}>
             Nr
           </th>
-          <th scope="col" className={`${TH} w-full`}>
-            Towar
-          </th>
-          <th scope="col" className={`${TH} text-right`}>
-            Ile leży
-          </th>
-          <th scope="col" className={`${TH} text-right`}>
-            Wartość
-          </th>
-          <th scope="col" className={TH}>
-            Ostatnia sprzedaż
-          </th>
-          <th scope="col" className={TH}>
-            Najstarsza dostawa
-          </th>
+          <SortTh column="name" info={ITEM_SORTS.name} sort={sort} onSort={onSort} className="w-full" />
+          <SortTh column="quantity" info={ITEM_SORTS.quantity} sort={sort} onSort={onSort} className="text-right" />
+          <SortTh column="value" info={ITEM_SORTS.value} sort={sort} onSort={onSort} className="text-right" />
+          <SortTh column="last_sale" info={ITEM_SORTS.last_sale} sort={sort} onSort={onSort} />
+          <SortTh column="oldest_lot" info={ITEM_SORTS.oldest_lot} sort={sort} onSort={onSort} />
         </tr>
       </thead>
       <tbody className="bg-white">
@@ -1388,7 +1551,19 @@ function ItemsTable({
   )
 }
 
-function MovesTable({ rows, firstNr, showWho }: { rows: InventoryBoardMoveRow[]; firstNr: number; showWho: boolean }) {
+function MovesTable({
+  rows,
+  firstNr,
+  showWho,
+  sort,
+  onSort,
+}: {
+  rows: InventoryBoardMoveRow[]
+  firstNr: number
+  showWho: boolean
+  sort: Sort
+  onSort: (key: SortKey) => void
+}) {
   return (
     <table className="w-full border-collapse text-lg/snug">
       <thead>
@@ -1396,26 +1571,12 @@ function MovesTable({ rows, firstNr, showWho }: { rows: InventoryBoardMoveRow[];
           <th scope="col" className={`${TH} w-14`}>
             Nr
           </th>
-          <th scope="col" className={TH}>
-            Data
-          </th>
-          <th scope="col" className={`${TH} w-full`}>
-            Towar
-          </th>
-          {showWho && (
-            <th scope="col" className={TH}>
-              Kto wystawił
-            </th>
-          )}
-          <th scope="col" className={`${TH} text-right`}>
-            Ile i za ile
-          </th>
-          <th scope="col" className={TH}>
-            Ile leżał
-          </th>
-          <th scope="col" className={`${TH} min-w-56 print:min-w-0`}>
-            Opis
-          </th>
+          <SortTh column="date" info={MOVE_SORTS.date} sort={sort} onSort={onSort} />
+          <SortTh column="name" info={MOVE_SORTS.name} sort={sort} onSort={onSort} className="w-full" />
+          {showWho && <SortTh column="operator" info={MOVE_SORTS.operator} sort={sort} onSort={onSort} />}
+          <SortTh column="value" info={MOVE_SORTS.value} sort={sort} onSort={onSort} className="text-right" />
+          <SortTh column="lot_age" info={MOVE_SORTS.lot_age} sort={sort} onSort={onSort} />
+          <SortTh column="note" info={MOVE_SORTS.note} sort={sort} onSort={onSort} className="min-w-56 print:min-w-0" />
         </tr>
       </thead>
       <tbody className="bg-white">

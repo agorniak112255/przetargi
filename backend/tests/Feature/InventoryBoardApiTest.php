@@ -185,6 +185,83 @@ final class InventoryBoardApiTest extends TestCase
         $this->assertSame(5, $this->getJson('/api/inventory/board/moves?scope=all')->json('meta.total'));
     }
 
+    public function test_items_window_search_by_every_column_and_sort_by_column(): void
+    {
+        $kaptur = $this->item('AKAPE1000', 'KAPTUR METALURGICZNY', 10, 7589, lastSale: '2021-12-30', oldestLot: '2021-06-01');
+        $card = Product::query()->create(['sku' => 'E1000', 'name' => 'Kaptur hutniczy E1000', 'manufacturer' => 'X', 'catalog_price_net' => 1, 'purchase_price' => 1, 'stock' => 0]);
+        ErpItemLink::query()->create(['erp_item_id' => $kaptur->id, 'product_id' => $card->id, 'status' => ErpItemLink::STATUS_CONFIRMED, 'method' => ErpItemLink::METHOD_MANUAL]);
+        $this->item('SFILTR', 'FILTR BLS', 624, 6638, lastSale: '2025-08-01', oldestLot: '2023-10-01')->update(['last_supplier' => 'Canis Safety']);
+        $this->item('BNEVER', 'NIGDY', 2, 200, lastSale: null, oldestLot: '2025-09-01');
+        $this->item('BBUT', 'BUT ROBOCZY', 5, 500, lastSale: '2026-03-10', oldestLot: '2025-12-01');
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $codes = fn (string $qs): array => array_column($this->getJson('/api/inventory/board/items?bucket=stock&per_page=50&'.$qs)->assertOk()->json('data'), 'code');
+
+        // bez parametrów — od największej wartości
+        $this->assertSame(['AKAPE1000', 'SFILTR', 'BBUT', 'BNEVER'], $codes(''));
+        // nazwa jak w wierszu: karta katalogu przed nazwą z XL
+        $this->assertSame(['BBUT', 'SFILTR', 'AKAPE1000', 'BNEVER'], $codes('sort=name&dir=asc'));
+        // „ani razu” = sprzedaż najdawniej
+        $this->assertSame(['BNEVER', 'AKAPE1000', 'SFILTR', 'BBUT'], $codes('sort=last_sale&dir=asc'));
+        $this->assertSame(['SFILTR', 'AKAPE1000', 'BBUT', 'BNEVER'], $codes('sort=quantity&dir=desc'));
+        $this->assertSame(['AKAPE1000', 'SFILTR', 'BNEVER', 'BBUT'], $codes('sort=oldest_lot&dir=asc'));
+        $this->assertSame(['BNEVER', 'BBUT', 'SFILTR', 'AKAPE1000'], $codes('sort=value&dir=asc'));
+
+        $this->assertSame(['AKAPE1000'], $codes('search=hutniczy'));
+        $this->assertSame(['SFILTR'], $codes('search=canis'));
+        $this->assertSame(['BBUT', 'BNEVER'], $codes('search=obuw'));
+        // nazwa miesiąca z ogonkami i bez — data ostatniej sprzedaży 2025-08-01
+        $this->assertSame(['SFILTR'], $codes('search='.urlencode('sierpień')));
+        $this->assertSame(['SFILTR'], $codes('search=sierpien'));
+        // każde słowo musi pasować: nazwa i rok najstarszej dostawy
+        $this->assertSame(['SFILTR'], $codes('search='.urlencode('filtr 2023')));
+        $this->assertSame([], $codes('search='.urlencode('filtr 2021')));
+        // ilość i wartość w pełnych złotych
+        $this->assertSame(['SFILTR'], $codes('search=624'));
+        $this->assertSame(['AKAPE1000'], $codes('search=7589'));
+
+        $r = $this->getJson('/api/inventory/board/items?bucket=stock&search=obuw')->assertOk();
+        $this->assertEquals(['items' => 4, 'value' => 14927], $r->json('totals'));
+        $this->assertEquals(['items' => 2, 'value' => 700], $r->json('found'));
+        $this->assertSame(2, $r->json('meta.total'));
+
+        $this->getJson('/api/inventory/board/items?bucket=stock&sort=code')->assertUnprocessable();
+        $this->getJson('/api/inventory/board/items?bucket=stock&sort=name&dir=up')->assertUnprocessable();
+    }
+
+    public function test_moves_window_search_by_every_column_and_sort_by_column(): void
+    {
+        $bluza = $this->item('ABLUZA', 'BLUZA', 5, 500, lastSale: '2026-01-15', oldestLot: '2025-11-01');
+        $this->pair($bluza, '2026-09-01', 'DOEW', 'Domin Ewelina', 100, lotAge: 51);
+        $this->pair($bluza, '2026-08-01', 'DOEW', 'Domin Ewelina', 50);
+        $this->pair($bluza, '2026-07-01', 'CZAL', 'Alina Czyżyk-Tomaszewska', 30);
+        $this->pair($bluza, '2026-05-01', 'NOMA', 'Nowaczek Martyna', 10, note: 'ZAMIANA ROZMIARÓW');
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $values = fn (string $qs): array => array_map('intval', array_column(
+            $this->getJson('/api/inventory/board/moves?scope=all&'.$qs)->assertOk()->json('data'), 'value'));
+
+        $this->assertSame([100, 50, 30, 10], $values(''));
+        $this->assertSame([10, 30, 50, 100], $values('sort=date&dir=asc'));
+        $this->assertSame([10, 30, 50, 100], $values('sort=value&dir=asc'));
+        $this->assertSame([30, 100, 50, 10], $values('sort=operator&dir=asc'));
+        // z opisem na początku, bez opisu dalej od najnowszego
+        $this->assertSame([10, 100, 50, 30], $values('sort=note&dir=asc'));
+        $this->assertSame([100, 50, 30, 10], $values('sort=lot_age&dir=desc'));
+
+        $this->assertSame([100, 50], $values('search=domin'));
+        $this->assertSame([100, 50], $values('search='.urlencode('bluza domin')));
+        $this->assertSame([10], $values('search=zamiana'));
+        $this->assertSame([30], $values('search=lipca'));
+        // miesiące leżenia partii
+        $this->assertSame([100], $values('search=51'));
+
+        $r = $this->getJson('/api/inventory/board/moves?scope=all&search=domin')->assertOk();
+        $this->assertEquals(['pairs' => 4, 'value' => 190], $r->json('totals'));
+        $this->assertEquals(['pairs' => 2, 'value' => 150], $r->json('found'));
+        $this->getJson('/api/inventory/board/moves?sort=quantity')->assertUnprocessable();
+    }
+
     public function test_warehouse_split_command_recomputes_from_stored_breakdown(): void
     {
         $item = $this->item('TGAS', 'GAŚNICA', 100, 1000, lastSale: '2025-01-01', oldestLot: '2020-01-01', warehouses: [
