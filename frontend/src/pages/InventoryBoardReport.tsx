@@ -609,8 +609,9 @@ function BoardView({
         </div>
         {report.lot_12_total && (
           <p className="mt-3 text-base text-slate-700">
-            Łącznie {goods(report.lot_12_total.items)} ma w magazynie sztuki starsze niż rok (zapas za{' '}
-            {fmtBig(report.lot_12_total.value)}), ale większość z nich nadal się sprzedaje.
+            Dla porównania: {goods(report.lot_12_total.items)} ma w magazynie część sztuk przyjętych ponad rok temu.
+            Cały zapas tych towarów jest wart {fmtBig(report.lot_12_total.value)}. Większość z nich normalnie się
+            sprzedaje, tylko starsze sztuki jeszcze nie zeszły — dlatego nie liczymy ich w kwotach powyżej.
           </p>
         )}
       </section>
