@@ -88,6 +88,79 @@ final class ErpRwPwSyncTest extends TestCase
         ], $pairs);
     }
 
+    public function test_lot_age_from_lots_taken_by_rw(): void
+    {
+        $this->xl->moveRows = [
+            // RW-15H/69/26/09 bluzy: partia z PZ z 30.08.2021, RW i PW 29.09.2026
+            FakeErpXlGateway::move('rw', 69, $this->d('2026-09-29'), 9, 3, 159.0, 'NOMA', '15H'),
+            FakeErpXlGateway::move('pw', 61, $this->d('2026-09-29'), 9, 3, 159.0, 'NOMA', '15H'),
+            // RW bez danych o partiach
+            FakeErpXlGateway::move('rw', 70, $this->d('2026-09-10'), 10, 1, 10.0),
+            FakeErpXlGateway::move('pw', 71, $this->d('2026-09-10'), 10, 1, 10.0),
+        ];
+        $this->xl->lotRows = [
+            // 1 szt. z partii z 30.08.2021 (60 pełnych mies. do 29.09.2026), 2 szt. z partii z PW z 1.05.2026 (4 mies.)
+            FakeErpXlGateway::lot(69, 9, $this->ts('2021-08-30 10:27'), 1, 'PZ-15H/350/21/08'),
+            FakeErpXlGateway::lot(69, 9, $this->ts('2026-05-01 12:00'), 2, 'PW-15H/20/26/05', 1617),
+            // partia innego towaru z tego samego RW nie miesza się
+            FakeErpXlGateway::lot(69, 99, $this->ts('2010-01-01 00:00'), 5),
+        ];
+
+        app(ErpRwPwSync::class)->run();
+
+        $pair = ErpRwPwPair::query()->where('rw_document_id', 69)->sole();
+        $this->assertSame('2021-08-30', $pair->rw_lot_at?->toDateString());
+        $this->assertSame(60, $pair->rw_lot_age_months);
+        $this->assertSame(2, $pair->rw_lots);
+        $this->assertSame('PZ-15H/350/21/08', $pair->rw_lot_source);
+        // najstarsza partia weszła przez PZ, nie przez PW
+        $this->assertFalse($pair->rw_lot_from_pw);
+        // średnia ważona ilością: (60,97 × 1 + 4,93 × 2) / 3 ≈ 23,6
+        $this->assertEqualsWithDelta(23.6, (float) $pair->rw_lot_avg_age_months, 0.2);
+
+        // brak danych o partiach PW to nie dowód zmiany rozmiaru
+        $this->assertNull($pair->rw_features);
+        $this->assertTrue($pair->same_feature);
+
+        $bare = ErpRwPwPair::query()->where('rw_document_id', 70)->sole();
+        $this->assertNull($bare->rw_lot_age_months);
+        $this->assertSame(0, $bare->rw_lots);
+    }
+
+    public function test_size_change_is_recorded_from_lot_features(): void
+    {
+        $this->xl->moveRows = [
+            // rozmiar 43 → 44 (zmiana cechy) oraz L×2 + XL×1 → te same cechy
+            FakeErpXlGateway::move('rw', 1, $this->d('2026-09-28'), 5, 2, 228.0),
+            FakeErpXlGateway::move('pw', 2, $this->d('2026-09-28'), 5, 2, 228.0),
+            FakeErpXlGateway::move('rw', 3, $this->d('2026-09-20'), 6, 3, 90.0),
+            FakeErpXlGateway::move('pw', 4, $this->d('2026-09-20'), 6, 3, 90.0),
+        ];
+        $at = $this->ts('2026-01-10 08:00');
+        $this->xl->lotRows = [
+            FakeErpXlGateway::lot(1, 5, $at, 2, feature: '43'),
+            FakeErpXlGateway::lot(2, 5, $at, 2, 'PW-01H/2/26/09', 1617, '44', 'pw'),
+            FakeErpXlGateway::lot(3, 6, $at, 2, feature: 'L'),
+            FakeErpXlGateway::lot(3, 6, $at, 1, feature: 'XL'),
+            FakeErpXlGateway::lot(4, 6, $at, 1, 'PW-01H/4/26/09', 1617, 'XL', 'pw'),
+            FakeErpXlGateway::lot(4, 6, $at, 2, 'PW-01H/4/26/09', 1617, 'L', 'pw'),
+        ];
+
+        app(ErpRwPwSync::class)->run();
+
+        $size = ErpRwPwPair::query()->where('rw_document_id', 1)->sole();
+        $this->assertSame(['43', '44', false], [$size->rw_features, $size->pw_features, $size->same_feature]);
+        $mixed = ErpRwPwPair::query()->where('rw_document_id', 3)->sole();
+        $this->assertSame(['L×2, XL×1', 'L×2, XL×1', true], [$mixed->rw_features, $mixed->pw_features, $mixed->same_feature]);
+        // cecha PW nie wpływa na wiek partii zdjętej przez RW
+        $this->assertSame(8, $size->rw_lot_age_months);
+
+        // RW z nazwaną cechą, a XL nie podał partii PW — bez rozstrzygnięcia, więc nie „zmiana rozmiaru”
+        $this->xl->lotRows = [FakeErpXlGateway::lot(1, 5, $at, 2, feature: '43')];
+        app(ErpRwPwSync::class)->run();
+        $this->assertTrue(ErpRwPwPair::query()->where('rw_document_id', 1)->sole()->same_feature);
+    }
+
     public function test_rerun_replaces_pairs_and_command_skips_when_xl_is_off(): void
     {
         $this->xl->moveRows = [
@@ -111,5 +184,11 @@ final class ErpRwPwSyncTest extends TestCase
     private function d(string $date): int
     {
         return ClarionDate::fromDate(CarbonImmutable::parse($date));
+    }
+
+    /** Znacznik XL: sekundy od 1.01.1990. */
+    private function ts(string $at): int
+    {
+        return (int) CarbonImmutable::create(1990, 1, 1)->diffInSeconds(CarbonImmutable::parse($at));
     }
 }

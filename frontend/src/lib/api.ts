@@ -722,6 +722,23 @@ export type RwPwDoc = {
   operator: string | null
   /** Akronim operatora XL, który zatwierdził dokument (często ten sam). */
   approver: string | null
+  /** Cecha partii (zwykle rozmiar): '38' albo 'L×2, XL×1'; null = bez cechy albo brak danych. */
+  features: string | null
+}
+
+/** Partia zdjęta przez RW: przyjęcie najstarszej i ile leżała do dnia RW. */
+export type RwPwLot = {
+  /** 'YYYY-MM-DD' — przyjęcie najstarszej partii. */
+  received_at: string
+  /** Pełne miesiące od przyjęcia najstarszej partii do dnia RW. */
+  age_months: number | null
+  /** Średni wiek partii ważony ilością (przy kilku partiach). */
+  avg_age_months: number | null
+  lots: number
+  /** Dokument, którym weszła najstarsza partia, np. 'PZ-15H/350/21/08'. */
+  source: string | null
+  /** Najstarsza partia weszła przez PW — była już wcześniej „odnawiana”. */
+  from_pw: boolean
 }
 
 /** Towar XL w parze RW → PW. */
@@ -738,11 +755,13 @@ export type RwPwItemRef = {
 export type RwPwPair = {
   id: number
   item: RwPwItemRef
-  rw: RwPwDoc
+  rw: RwPwDoc & { lot: RwPwLot | null }
   pw: RwPwDoc
   gap_days: number
   same_value: boolean
   same_warehouse: boolean
+  /** Ta sama cecha (rozmiar) partii RW i PW; false = zmiana rozmiaru, np. 38 → 39. */
+  same_feature: boolean
 }
 
 export type RwPwItemRow = {
@@ -752,6 +771,10 @@ export type RwPwItemRow = {
   value: number
   same_value: number
   operators: string[]
+  /** Najstarsza partia zdjęta przez RW tego towaru (pełne miesiące). */
+  max_age_months: number | null
+  /** Ile par bez zmiany cechy (rozmiaru). */
+  same_feature: number
   first_date: string
   last_date: string
 }
@@ -765,12 +788,16 @@ export type RwPwOperatorRow = {
   same_value: number
   last_date: string
   pw_by_other: number
+  /** Średni wiek partii zdjętych przez RW tej osoby (pełne miesiące). */
+  avg_age_months: number | null
+  /** Ile par bez zmiany cechy (rozmiaru). */
+  same_feature: number
 }
 
 type RwPwResponseBase = {
   meta: { current_page: number; last_page: number; per_page: number; total: number } | null
   /** Po tych samych filtrach co lista. */
-  summary: { pairs: number; items: number; value: number; same_value: number; operators: number }
+  summary: { pairs: number; items: number; value: number; same_value: number; operators: number; same_feature: number }
   /** Akronimy do listy wyboru (w okresie, bez filtra operatora). */
   operators: string[]
   /** 'YYYY-MM-DD' — początek okresu. */

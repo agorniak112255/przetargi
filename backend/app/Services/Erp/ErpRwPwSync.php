@@ -7,6 +7,7 @@ namespace App\Services\Erp;
 use App\Models\ErpItem;
 use App\Models\ErpRwPwPair;
 use App\Support\ClarionDate;
+use App\Support\XlTimestamp;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -24,6 +25,9 @@ final class ErpRwPwSync
 
     private const QUANTITY_EPSILON = 0.0001;
 
+    /** Partia przyjęta dokumentem PW (CDN.Dostawy.Dst_TrnTyp) — była już wcześniej „odnawiana”. */
+    private const PW_TYPE = 1617;
+
     public function __construct(private readonly ErpXlGateway $gateway) {}
 
     /**
@@ -36,6 +40,10 @@ final class ErpRwPwSync
         }
         $from = CarbonImmutable::today()->subMonthsNoOverflow($months);
         $moves = $this->gateway->internalMoves(ClarionDate::fromDate($from));
+        $lots = [];
+        foreach ($this->gateway->internalMoveLots(ClarionDate::fromDate($from)) as $lot) {
+            $lots[$lot['type'].'-'.$lot['document_id'].'-'.$lot['gid']][] = $lot;
+        }
 
         $byItem = [];
         foreach ($moves as $move) {
@@ -64,6 +72,8 @@ final class ErpRwPwSync
                 'xl_gid' => $gid,
                 'erp_item_id' => $itemIds[$gid] ?? null,
                 ...$this->docFields('rw', $rw, $rwDate),
+                ...$this->lotFields($rwLots = $lots['rw-'.$rw['document_id'].'-'.$gid] ?? [], $rwDate),
+                ...$this->featureFields($rwLots, $lots['pw-'.$pw['document_id'].'-'.$gid] ?? []),
                 ...$this->docFields('pw', $pw, $pwDate),
                 'gap_days' => (int) $rwDate->diffInDays($pwDate),
                 'same_value' => abs(round($rw['value'], 2) - round($pw['value'], 2)) < 0.005,
@@ -125,6 +135,103 @@ final class ErpRwPwSync
         }
 
         return $out;
+    }
+
+    /**
+     * Wiek partii zdjętych przez RW w dniu RW: najstarsza (pełne miesiące, jej dokument przyjęcia, czy weszła przez PW)
+     * i średnia ważona ilością. Bez partii (XL nie podał) — puste pola.
+     *
+     * @param  list<array<string, mixed>>  $lots
+     * @return array<string, mixed>
+     */
+    private function lotFields(array $lots, CarbonImmutable $rwDate): array
+    {
+        $oldest = null;
+        $weighted = 0.0;
+        $quantity = 0.0;
+        $count = 0;
+        foreach ($lots as $lot) {
+            $at = XlTimestamp::toDate($lot['received_at']);
+            if ($at === null) {
+                continue;
+            }
+            $count++;
+            $months = max(0.0, (float) $at->diffInMonths($rwDate));
+            $weighted += $months * (float) $lot['quantity'];
+            $quantity += (float) $lot['quantity'];
+            if ($oldest === null || $at->lessThan($oldest['at'])) {
+                $oldest = ['at' => $at, 'lot' => $lot];
+            }
+        }
+        if ($oldest === null) {
+            return ['rw_lot_at' => null, 'rw_lot_age_months' => null, 'rw_lot_avg_age_months' => null, 'rw_lots' => 0, 'rw_lot_source' => null, 'rw_lot_from_pw' => false];
+        }
+
+        return [
+            'rw_lot_at' => $oldest['at']->toDateString(),
+            'rw_lot_age_months' => max(0, (int) floor($oldest['at']->diffInMonths($rwDate))),
+            'rw_lot_avg_age_months' => $quantity > 0 ? round($weighted / $quantity, 1) : null,
+            'rw_lots' => $count,
+            'rw_lot_source' => $oldest['lot']['source_number'] !== null ? mb_substr((string) $oldest['lot']['source_number'], 0, 40) : null,
+            'rw_lot_from_pw' => (int) $oldest['lot']['source_type'] === self::PW_TYPE,
+        ];
+    }
+
+    /**
+     * Cechy partii (zwykle rozmiar) po stronie RW i PW. Inna cecha = zmiana rozmiaru (38 → 39), nie odmłodzenie partii.
+     *
+     * @param  list<array<string, mixed>>  $rwLots
+     * @param  list<array<string, mixed>>  $pwLots
+     * @return array{rw_features: string|null, pw_features: string|null, same_feature: bool}
+     */
+    private function featureFields(array $rwLots, array $pwLots): array
+    {
+        $rw = $this->features($rwLots);
+        $pw = $this->features($pwLots);
+        $rwLabel = $this->featureLabel($rw);
+        $pwLabel = $this->featureLabel($pw);
+
+        return [
+            'rw_features' => $rwLabel,
+            'pw_features' => $pwLabel,
+            // zmianę stwierdzamy tylko przy danych o partiach po obu stronach i choć jednej nazwanej cesze —
+            // brak danych to nie dowód zmiany rozmiaru
+            'same_feature' => $rw === [] || $pw === [] || ($rwLabel === null && $pwLabel === null) || $rw === $pw,
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $lots
+     * @return array<string, float> cecha → ilość (bez cechy = '')
+     */
+    private function features(array $lots): array
+    {
+        $out = [];
+        foreach ($lots as $lot) {
+            $feature = (string) ($lot['feature'] ?? '');
+            $out[$feature] = round(($out[$feature] ?? 0.0) + (float) $lot['quantity'], 4);
+        }
+        ksort($out, SORT_NATURAL);
+
+        return $out;
+    }
+
+    /** @param  array<string, float>  $features „38” albo „L×2, XL×1”; bez cech — null */
+    private function featureLabel(array $features): ?string
+    {
+        $named = array_filter($features, static fn (float $q, string $f): bool => $f !== '', ARRAY_FILTER_USE_BOTH);
+        if ($named === []) {
+            return null;
+        }
+        if (count($features) === 1) {
+            return mb_substr((string) array_key_first($features), 0, 120);
+        }
+        $parts = [];
+        foreach ($features as $feature => $quantity) {
+            $parts[] = ($feature === '' ? 'bez cechy' : $feature).'×'.rtrim(rtrim(number_format($quantity, 4, ',', ''), '0'), ',');
+        }
+
+        return mb_substr(implode(', ', $parts), 0, 120);
     }
 
     /**

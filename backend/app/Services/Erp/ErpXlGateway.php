@@ -65,4 +65,13 @@ interface ErpXlGateway
      * @return list<array{type: 'rw'|'pw', document_id: int, number: string, date: int, warehouse: string|null, operator: string|null, approver: string|null, gid: int, quantity: float, value: float}>
      */
     public function internalMoves(int $fromClarionDate): array;
+
+    /**
+     * Partie w zatwierdzonych RW i PW od daty — dla tych samych towarów co internalMoves. Z CDN.TraSElem: ilość i cecha
+     * (zwykle rozmiar: „38”, „XL”); z CDN.Dostawy: znacznik przyjęcia partii (XlTimestamp) i dokument, którym weszła
+     * (PZ, PW…). Dla RW to partia zdjęta z magazynu, dla PW — nowa partia.
+     *
+     * @return list<array{type: 'rw'|'pw', document_id: int, gid: int, received_at: int, quantity: float, feature: string, source_type: int, source_number: string|null}>
+     */
+    public function internalMoveLots(int $fromClarionDate): array;
 }

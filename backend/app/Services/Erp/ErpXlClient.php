@@ -32,6 +32,9 @@ final class ErpXlClient implements ErpXlGateway
      */
     private const CONFIRMED_STATE = 5;
 
+    /** Skróty dokumentów, którymi partia weszła na magazyn (CDN.Dostawy.Dst_TrnTyp). */
+    private const DOCUMENT_PREFIXES = [1489 => 'PZ', 1617 => 'PW', 1521 => 'FZ', 1616 => 'RW'];
+
     public function configured(): bool
     {
         return (bool) config('erpxl.enabled')
@@ -246,8 +249,7 @@ final class ErpXlClient implements ErpXlGateway
             $out[] = [
                 'type' => $isPw ? 'pw' : 'rw',
                 'document_id' => (int) $r->document_id,
-                // jak w XL: PW-15H/38/23/03 (seria/numer/rok dwucyfrowo/miesiąc)
-                'number' => sprintf('%s-%s/%d/%02d/%02d', $isPw ? 'PW' : 'RW', trim((string) $r->series), (int) $r->doc_number, (int) $r->doc_year % 100, (int) $r->doc_month),
+                'number' => $this->documentNumber($isPw ? 'PW' : 'RW', $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
                 'date' => (int) $r->doc_date,
                 'warehouse' => $r->warehouse !== null && trim((string) $r->warehouse) !== '' ? trim((string) $r->warehouse) : null,
                 'operator' => $r->operator !== null && trim((string) $r->operator) !== '' ? trim((string) $r->operator) : null,
@@ -259,6 +261,57 @@ final class ErpXlClient implements ErpXlGateway
         }
 
         return $out;
+    }
+
+    public function internalMoveLots(int $fromClarionDate): array
+    {
+        $rw = self::RW_TYPE;
+        $pw = self::PW_TYPE;
+        $state = self::CONFIRMED_STATE;
+        // TraSElem: pozycja RW/PW → partia (TrS_DstNumer), ilość i cecha; Dostawy: przyjęcie partii i jej dokument
+        $sql = <<<SQL
+            SELECT s.TrS_GIDTyp AS doc_type, s.TrS_GIDNumer AS document_id, d.Dst_TwrNumer AS gid,
+                   d.Dst_DstTStamp AS received_at, s.TrS_Cecha AS feature,
+                   SUM(s.TrS_Ilosc) AS quantity, d.Dst_TrnTyp AS source_type, src.TrN_TrNSeria AS series,
+                   src.TrN_TrNNumer AS doc_number, src.TrN_TrNRok AS doc_year, src.TrN_TrNMiesiac AS doc_month
+            FROM CDN.TraSElem s
+            JOIN CDN.TraNag n ON n.TrN_GIDTyp = s.TrS_GIDTyp AND n.TrN_GIDNumer = s.TrS_GIDNumer
+            JOIN CDN.Dostawy d ON d.Dst_GIDTyp = s.TrS_DstTyp AND d.Dst_GIDNumer = s.TrS_DstNumer
+            LEFT JOIN CDN.TraNag src ON src.TrN_GIDTyp = d.Dst_TrnTyp AND src.TrN_GIDNumer = d.Dst_TrnNumer
+            WHERE s.TrS_GIDTyp IN ($rw, $pw) AND n.TrN_Stan = $state AND n.TrN_Data2 >= ?
+              AND d.Dst_TwrNumer IN (
+                  SELECT e2.TrE_TwrNumer FROM CDN.TraElem e2
+                  JOIN CDN.TraNag n2 ON n2.TrN_GIDTyp = e2.TrE_GIDTyp AND n2.TrN_GIDNumer = e2.TrE_GIDNumer
+                  WHERE n2.TrN_GIDTyp = $pw AND n2.TrN_Stan = $state AND n2.TrN_Data2 >= ?
+              )
+            GROUP BY s.TrS_GIDTyp, s.TrS_GIDNumer, d.Dst_TwrNumer, d.Dst_GIDNumer, d.Dst_DstTStamp, s.TrS_Cecha, d.Dst_TrnTyp,
+                     src.TrN_TrNSeria, src.TrN_TrNNumer, src.TrN_TrNRok, src.TrN_TrNMiesiac
+            SQL;
+        $rows = $this->db()->select($sql, [$fromClarionDate, $fromClarionDate]);
+
+        $out = [];
+        foreach ($rows as $r) {
+            $type = (int) $r->source_type;
+            $out[] = [
+                'type' => (int) $r->doc_type === $pw ? 'pw' : 'rw',
+                'document_id' => (int) $r->document_id,
+                'gid' => (int) $r->gid,
+                'received_at' => (int) $r->received_at,
+                'quantity' => (float) $r->quantity,
+                'feature' => trim((string) $r->feature),
+                'source_type' => $type,
+                'source_number' => $r->doc_number === null ? null
+                    : $this->documentNumber(self::DOCUMENT_PREFIXES[$type] ?? 'dok. '.$type, $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
+            ];
+        }
+
+        return $out;
+    }
+
+    /** Numer jak w XL: PW-15H/38/23/03 (seria/numer/rok dwucyfrowo/miesiąc). */
+    private function documentNumber(string $prefix, mixed $series, mixed $number, mixed $year, mixed $month): string
+    {
+        return sprintf('%s-%s/%d/%02d/%02d', $prefix, trim((string) $series), (int) $number, (int) $year % 100, (int) $month);
     }
 
     private function db(): ConnectionInterface

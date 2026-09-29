@@ -48,7 +48,7 @@ final class InventoryRwPwApiTest extends TestCase
 
         $this->assertSame('pairs', $res->json('view'));
         $this->assertSame('2025-09-30', $res->json('from'));
-        $this->assertSame(['pairs' => 3, 'items' => 2, 'value' => 2590.37, 'same_value' => 2, 'operators' => 2], $res->json('summary'));
+        $this->assertSame(['pairs' => 3, 'items' => 2, 'value' => 2590.37, 'same_value' => 2, 'operators' => 2, 'same_feature' => 3], $res->json('summary'));
         // domyślnie od najnowszego RW
         $this->assertSame(['2026-09-21', '2026-08-21', '2026-08-20'], array_column(array_column($res->json('data'), 'rw'), 'date'));
         $this->assertSame('RW-01H/1/26/09', $res->json('data.0.rw.number'));
@@ -96,9 +96,48 @@ final class InventoryRwPwApiTest extends TestCase
         $people = $this->getJson('/api/inventory/rw-pw?view=operators')->assertOk();
         $this->assertNull($people->json('meta'));
         $this->assertSame([
-            ['operator' => 'TAIZ', 'pairs' => 2, 'items' => 1, 'value' => 1980, 'same_value' => 2, 'last_date' => '2026-09-21', 'pw_by_other' => 1],
-            ['operator' => 'CZAL', 'pairs' => 1, 'items' => 1, 'value' => 610.37, 'same_value' => 0, 'last_date' => '2026-08-21', 'pw_by_other' => 0],
+            ['operator' => 'TAIZ', 'pairs' => 2, 'items' => 1, 'value' => 1980, 'same_value' => 2, 'last_date' => '2026-09-21', 'pw_by_other' => 1, 'avg_age_months' => null, 'same_feature' => 2],
+            ['operator' => 'CZAL', 'pairs' => 1, 'items' => 1, 'value' => 610.37, 'same_value' => 0, 'last_date' => '2026-08-21', 'pw_by_other' => 0, 'avg_age_months' => null, 'same_feature' => 1],
         ], $people->json('data'));
+    }
+
+    public function test_lot_age_is_shown_filtered_and_sorted(): void
+    {
+        $bluza = $this->item(9, 'ABLRZSPRL814D', 'BLUZA POLAR DAMSKA');
+        $this->pair($bluza, '2026-09-29', 0, 53, 53, 'NOMA', lot: ['2021-08-30', 61, 61.0, 1, 'PZ-15H/350/21/08', false]);
+        $boots = $this->item(10, 'BTR1152', 'TRZEWIKI 1152');
+        $this->pair($boots, '2026-09-28', 0, 114, 114, 'TUBEZ', lot: ['2026-05-02', 4, 3.5, 2, 'PW-15H/20/26/05', true]);
+        $this->pair($boots, '2026-09-27', 0, 114, 114, 'TUBEZ');
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $res = $this->getJson('/api/inventory/rw-pw?sort=age&dir=desc')->assertOk();
+        // najstarsza partia pierwsza, para bez danych o partii na końcu
+        $this->assertSame([61, 4, null], array_map(fn ($p) => $p['rw']['lot']['age_months'] ?? null, $res->json('data')));
+        $this->assertEquals(['received_at' => '2021-08-30', 'age_months' => 61, 'avg_age_months' => 61.0, 'lots' => 1, 'source' => 'PZ-15H/350/21/08', 'from_pw' => false], $res->json('data.0.rw.lot'));
+        $this->assertTrue($res->json('data.1.rw.lot.from_pw'));
+        $this->assertSame([4, 61, null], array_map(fn ($p) => $p['rw']['lot']['age_months'] ?? null, $this->getJson('/api/inventory/rw-pw?sort=age&dir=asc')->json('data')));
+        $this->assertSame(['2026-09-29'], $this->dates('min_age=24'));
+        $this->assertSame(['2026-09-29', '2026-09-28'], $this->dates('min_age=3'));
+        $this->getJson('/api/inventory/rw-pw?min_age=5')->assertUnprocessable();
+
+        $this->assertSame([61, 4], array_column($this->getJson('/api/inventory/rw-pw?view=items&sort=age')->json('data'), 'max_age_months'));
+        $people = collect($this->getJson('/api/inventory/rw-pw?view=operators')->json('data'))->keyBy('operator');
+        $this->assertEquals(61, $people['NOMA']['avg_age_months']);
+        $this->assertEquals(4, $people['TUBEZ']['avg_age_months']);
+    }
+
+    public function test_size_change_pairs_are_marked_and_can_be_hidden(): void
+    {
+        $boots = $this->item(10, 'BTR1152', 'TRZEWIKI 1152');
+        $this->pair($boots, '2026-09-28', 0, 114, 114, 'TUBEZ', features: ['43', '44']);
+        $this->pair($boots, '2026-09-27', 0, 114, 114, 'TUBEZ', features: ['43', '43']);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $res = $this->getJson('/api/inventory/rw-pw')->assertOk();
+        $this->assertSame(1, $res->json('summary.same_feature'));
+        $this->assertSame(['43', '44', false], [$res->json('data.0.rw.features'), $res->json('data.0.pw.features'), $res->json('data.0.same_feature')]);
+        $this->assertSame(['2026-09-27'], $this->dates('same_feature=1'));
+        $this->assertSame(1, $this->getJson('/api/inventory/rw-pw?view=items')->json('data.0.same_feature'));
     }
 
     public function test_inventory_row_counts_pairs_like_default_filters(): void
@@ -127,7 +166,9 @@ final class InventoryRwPwApiTest extends TestCase
         return ErpItem::query()->create(['xl_gid' => $gid, 'code' => $code, 'name' => $name, 'unit' => 'szt', 'archived' => false, 'stock_trade' => 1, 'stock_total' => 1]);
     }
 
-    private function pair(ErpItem $item, string $rwDate, int $gap, float $rwValue, float $pwValue, string $operator, ?string $approver = null, ?string $pwOperator = null): void
+    /** @param  array{0: string, 1: int, 2: float, 3: int, 4: string, 5: bool}|null  $lot  data, wiek, średni wiek, partie, źródło, z PW */
+    /** @param  array{0: string|null, 1: string|null}|null  $features  cecha RW i PW */
+    private function pair(ErpItem $item, string $rwDate, int $gap, float $rwValue, float $pwValue, string $operator, ?string $approver = null, ?string $pwOperator = null, ?array $lot = null, ?array $features = null): void
     {
         $rw = $this->doc++;
         $pw = $this->doc++;
@@ -139,6 +180,9 @@ final class InventoryRwPwApiTest extends TestCase
             'pw_document_id' => $pw, 'pw_number' => sprintf('PW-01H/%d/%s', $pw, substr($pwDate, 2, 2).'/'.substr($pwDate, 5, 2)), 'pw_date' => $pwDate,
             'pw_warehouse' => '01H', 'pw_quantity' => 5, 'pw_value' => $pwValue, 'pw_operator' => $pwOperator ?? $operator, 'pw_approver' => $pwOperator ?? $operator,
             'gap_days' => $gap, 'same_value' => abs($rwValue - $pwValue) < 0.005, 'same_warehouse' => true, 'synced_at' => now(),
+            'rw_lot_at' => $lot[0] ?? null, 'rw_lot_age_months' => $lot[1] ?? null, 'rw_lot_avg_age_months' => $lot[2] ?? null,
+            'rw_lots' => $lot[3] ?? 0, 'rw_lot_source' => $lot[4] ?? null, 'rw_lot_from_pw' => $lot[5] ?? false,
+            'rw_features' => $features[0] ?? null, 'pw_features' => $features[1] ?? null, 'same_feature' => ($features[0] ?? null) === ($features[1] ?? null),
         ]);
     }
 }

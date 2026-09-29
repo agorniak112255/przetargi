@@ -7,6 +7,7 @@ import {
   type RwPwDoc,
   type RwPwItemRef,
   type RwPwItemRow,
+  type RwPwLot,
   type RwPwOperatorRow,
   type RwPwPair,
   type RwPwResponse,
@@ -23,8 +24,8 @@ import { formatDate, formatDateTime, formatPrice } from '../lib/priceChange'
  */
 
 type View = 'pairs' | 'items' | 'operators'
-type PairSort = 'date' | 'value' | 'gap' | 'code'
-type ItemSort = 'pairs' | 'value' | 'last_date' | 'code'
+type PairSort = 'date' | 'value' | 'gap' | 'age' | 'code'
+type ItemSort = 'pairs' | 'value' | 'last_date' | 'age' | 'code'
 type SortKey = PairSort | ItemSort
 type SortDir = 'asc' | 'desc'
 
@@ -47,8 +48,19 @@ const GAP_OPTIONS: { value: (typeof GAPS)[number]; label: string }[] = [
   { value: '30', label: 'do 30 dni' },
 ]
 
-const PAIR_SORTS: readonly PairSort[] = ['date', 'value', 'gap', 'code']
-const ITEM_SORTS: readonly ItemSort[] = ['pairs', 'value', 'last_date', 'code']
+const PAIR_SORTS: readonly PairSort[] = ['date', 'value', 'gap', 'age', 'code']
+const ITEM_SORTS: readonly ItemSort[] = ['pairs', 'value', 'last_date', 'age', 'code']
+
+/** „Partia leżała co najmniej N mies.” — wiek najstarszej partii zdjętej przez RW. */
+const MIN_AGES = ['0', '3', '6', '12', '24'] as const
+const DEFAULT_MIN_AGE = '0'
+const MIN_AGE_OPTIONS: { value: (typeof MIN_AGES)[number]; label: string }[] = [
+  { value: '0', label: 'wszystkie' },
+  { value: '3', label: '3+' },
+  { value: '6', label: '6+' },
+  { value: '12', label: '12+' },
+  { value: '24', label: '24+' },
+]
 /** Domyślne sortowanie widoku — takie samo jak domyślne w API (kierunek desc). */
 const DEFAULT_SORT: Record<'pairs' | 'items', SortKey> = { pairs: 'date', items: 'value' }
 /** Kierunek po kliknięciu nowej kolumny: daty najnowsze, kwoty i liczby największe, odstęp najkrótszy, kod alfabetycznie. */
@@ -56,6 +68,7 @@ const DEFAULT_DIR: Record<SortKey, SortDir> = {
   date: 'desc',
   value: 'desc',
   gap: 'asc',
+  age: 'desc',
   code: 'asc',
   pairs: 'desc',
   last_date: 'desc',
@@ -110,6 +123,8 @@ export function InventoryRwPw() {
   const months = pick(params.get('months'), MONTHS, DEFAULT_MONTHS)
   const gap = pick(params.get('gap'), GAPS, DEFAULT_GAP)
   const sameValue = params.get('same_value') === '1'
+  const sameFeature = params.get('same_feature') === '1'
+  const minAge = pick(params.get('min_age'), MIN_AGES, DEFAULT_MIN_AGE)
   const operator = (params.get('operator') ?? '').trim()
   const search = params.get('search') ?? ''
   const sort: SortKey | null =
@@ -128,6 +143,8 @@ export function InventoryRwPw() {
     qs.set('months', months)
     qs.set('gap', gap)
     qs.set('same_value', sameValue ? '1' : '0')
+    if (sameFeature) qs.set('same_feature', '1')
+    if (minAge !== DEFAULT_MIN_AGE) qs.set('min_age', minAge)
     if (operator) qs.set('operator', operator)
     if (search.trim()) qs.set('search', search.trim())
     // Widok „Po osobie” bez sortowania i stronicowania (zawsze od największej wartości).
@@ -138,7 +155,7 @@ export function InventoryRwPw() {
       qs.set('per_page', perPage)
     }
     return qs.toString()
-  }, [view, months, gap, sameValue, operator, search, sort, dir, page, perPage])
+  }, [view, months, gap, sameValue, sameFeature, minAge, operator, search, sort, dir, page, perPage])
 
   const [result, setResult] = useState<RwPwResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -252,7 +269,9 @@ export function InventoryRwPw() {
     })
   }
 
-  const hasFilters = Boolean(months !== DEFAULT_MONTHS || gap !== DEFAULT_GAP || sameValue || operator || search)
+  const hasFilters = Boolean(
+    months !== DEFAULT_MONTHS || gap !== DEFAULT_GAP || sameValue || sameFeature || minAge !== DEFAULT_MIN_AGE || operator || search,
+  )
   // Odpowiedź dla innego widoku (tuż po przełączeniu) nie trafia do tabeli — ma inny kształt wierszy.
   const current = result && result.view === view ? result : null
   const meta = current?.meta ?? null
@@ -326,7 +345,8 @@ export function InventoryRwPw() {
           </p>
           <p className="mt-0.5 max-w-3xl text-xs text-slate-600">
             Pary dokumentów XL: RW i PW tego samego towaru w tej samej ilości w krótkim odstępie — powstaje nowa partia
-            z nową datą bez ruchu towaru. Część to uczciwe korekty (np. przecena), więc lista jest do wyjaśnienia.
+            z nową datą bez ruchu towaru. Większość par zmienia cechę partii (rozmiar, np. 38 → 39) — to przeklasyfikowanie,
+            nie odmłodzenie. Do wyjaśnienia są przede wszystkim pary bez zmiany cechy i ze starą partią.
           </p>
         </div>
         <p className="text-[11px] text-slate-500">
@@ -338,7 +358,7 @@ export function InventoryRwPw() {
         </p>
       </div>
 
-      <div className="mb-4 grid gap-2 sm:grid-cols-3 xl:grid-cols-5">
+      <div className="mb-4 grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
         <SummaryTile number={summary ? fmtInt(summary.pairs) : '…'} label="Pary RW → PW" hint="po wybranych filtrach" />
         <SummaryTile number={summary ? fmtInt(summary.items) : '…'} label="Towary" hint="różne towary XL w parach" />
         <SummaryTile
@@ -354,6 +374,18 @@ export function InventoryRwPw() {
           hint={sameValue ? 'filtr włączony — kliknij, żeby zdjąć' : 'RW i PW o identycznej wartości — najpierw do wyjaśnienia'}
           active={sameValue}
           onClick={() => setFilters({ same_value: sameValue ? null : '1' })}
+        />
+        <SummaryTile
+          number={summary ? fmtInt(summary.same_feature) : '…'}
+          numberClass="text-amber-800"
+          label="Bez zmiany cechy"
+          hint={
+            sameFeature
+              ? 'filtr włączony — kliknij, żeby zdjąć'
+              : 'ta sama cecha (rozmiar) RW i PW — kandydaci na odmłodzenie partii'
+          }
+          active={sameFeature}
+          onClick={() => setFilters({ same_feature: sameFeature ? null : '1' })}
         />
         <SummaryTile
           number={summary ? fmtInt(summary.operators) : '…'}
@@ -390,6 +422,25 @@ export function InventoryRwPw() {
           />
           Tylko ta sama wartość
         </label>
+        <label
+          className="flex items-center gap-1.5 pb-1 text-xs text-slate-700"
+          title="Ukrywa pary, w których zmieniła się cecha partii (zwykle rozmiar, np. 38 → 39) — to przeklasyfikowanie, nie odmłodzenie."
+        >
+          <input
+            type="checkbox"
+            checked={sameFeature}
+            onChange={(e) => setFilters({ same_feature: e.target.checked ? '1' : null })}
+          />
+          Bez zmiany cechy (rozmiaru)
+        </label>
+        <Segments
+          id="rwpw-min-age"
+          label="Partia na RW leżała"
+          options={MIN_AGE_OPTIONS}
+          value={minAge}
+          onChange={(a) => setFilters({ min_age: a === DEFAULT_MIN_AGE ? null : a })}
+        />
+        <span className="pb-1 text-xs text-slate-500">mies.</span>
         <label
           className="flex flex-col gap-0.5 text-[11px] text-slate-500"
           title="Pary, w których ta osoba wystawiła albo zatwierdziła RW lub PW"
@@ -463,6 +514,12 @@ export function InventoryRwPw() {
                 <th className="w-8 px-1 py-2 text-right font-normal text-slate-500">Lp.</th>
                 <th className="whitespace-nowrap p-2 font-semibold text-slate-700">Karta</th>
                 <SortTh label="Towar (kod XL)" k="code" sort={sort} dir={dir} onSort={clickSort} />
+                <th
+                  className="whitespace-nowrap p-2 font-semibold text-slate-700"
+                  title="Operator XL: kto wystawił i kto zatwierdził RW i PW. Kliknięcie pokazuje pary tej osoby."
+                >
+                  Kto
+                </th>
                 <th className="whitespace-nowrap p-2" aria-sort={ariaSort(sort, dir, ['date', 'value'])}>
                   <span className="inline-flex items-center gap-2">
                     <span className="font-semibold text-slate-700">RW</span>
@@ -472,6 +529,7 @@ export function InventoryRwPw() {
                   </span>
                 </th>
                 <th className="whitespace-nowrap p-2 font-semibold text-slate-700">PW</th>
+                <SortTh label="Partia na RW" k="age" sort={sort} dir={dir} onSort={clickSort} />
                 <SortTh label="Odstęp" k="gap" sort={sort} dir={dir} onSort={clickSort} />
                 <th className="whitespace-nowrap p-2 font-semibold text-slate-700">Uwagi</th>
               </tr>
@@ -485,9 +543,10 @@ export function InventoryRwPw() {
                     index={(from ?? 1) + i}
                     striped={i % 2 === 1}
                     onOpenCard={setPreviewId}
+                    onOperator={showOperatorPairs}
                   />
                 ))}
-              {emptyRow(7)}
+              {emptyRow(9)}
             </tbody>
           </table>
         )}
@@ -503,6 +562,8 @@ export function InventoryRwPw() {
                 <th className="whitespace-nowrap p-2 text-right font-semibold text-slate-700">Ilość łącznie</th>
                 <SortTh label="Wartość" k="value" sort={sort} dir={dir} onSort={clickSort} align="right" />
                 <th className="whitespace-nowrap p-2 text-right font-semibold text-slate-700">Ta sama wartość</th>
+                <th className="whitespace-nowrap p-2 text-right font-semibold text-slate-700">Bez zmiany cechy</th>
+                <SortTh label="Najstarsza partia" k="age" sort={sort} dir={dir} onSort={clickSort} align="right" />
                 <th className="whitespace-nowrap p-2 font-semibold text-slate-700">Osoby</th>
                 <SortTh label="Pierwsza / ostatnia" k="last_date" sort={sort} dir={dir} onSort={clickSort} />
               </tr>
@@ -520,7 +581,7 @@ export function InventoryRwPw() {
                     onOperator={showOperatorPairs}
                   />
                 ))}
-              {emptyRow(9)}
+              {emptyRow(11)}
             </tbody>
           </table>
         )}
@@ -545,6 +606,13 @@ export function InventoryRwPw() {
                 >
                   PW wystawił ktoś inny
                 </th>
+                <th className="whitespace-nowrap p-2 text-right font-semibold text-slate-700">Bez zmiany cechy</th>
+                <th
+                  className="whitespace-nowrap p-2 text-right font-semibold text-slate-700"
+                  title="Średni wiek najstarszej partii zdjętej przez RW tej osoby"
+                >
+                  Śr. wiek partii
+                </th>
                 <th className="whitespace-nowrap p-2 font-semibold text-slate-700">Ostatnia para</th>
               </tr>
             </thead>
@@ -559,7 +627,7 @@ export function InventoryRwPw() {
                     onOpen={showOperatorPairs}
                   />
                 ))}
-              {emptyRow(8)}
+              {emptyRow(10)}
             </tbody>
           </table>
         )}
@@ -707,31 +775,57 @@ function ItemCell({ item }: { item: RwPwItemRef }) {
   )
 }
 
-/** „wyst. X / zatw. Y”; gdy ta sama osoba — jeden akronim. */
-function DocPeople({ doc }: { doc: RwPwDoc }) {
-  const { operator, approver } = doc
-  if (!operator && !approver) return <span className="text-slate-400">osoba nieznana</span>
-  if (operator && (!approver || approver === operator)) {
+/**
+ * Kto zrobił parę: akronimy wystawiającego i zatwierdzającego RW i PW. Gdy wszystko zrobiła jedna osoba — jeden akronim.
+ */
+function WhoCell({ pair, onOperator }: { pair: RwPwPair; onOperator: (acronym: string) => void }) {
+  const people = [pair.rw.operator, pair.rw.approver, pair.pw.operator, pair.pw.approver]
+  const known = people.filter((p): p is string => !!p)
+  const person = (acronym: string | null, role: string) =>
+    acronym ? (
+      <button
+        type="button"
+        onClick={() => onOperator(acronym)}
+        className="font-mono font-semibold text-slate-900 hover:underline"
+        title={`${role}. Kliknij, aby zobaczyć pary tej osoby.`}
+      >
+        {acronym}
+      </button>
+    ) : (
+      <span className="text-slate-400">?</span>
+    )
+  if (known.length === 0) {
     return (
-      <span className="font-mono text-slate-700" title={approver ? 'Wystawił i zatwierdził' : 'Wystawił'}>
-        {operator}
-      </span>
+      <td className="whitespace-nowrap p-2">
+        <span className="text-slate-400">osoba nieznana</span>
+      </td>
     )
   }
+  if (known.length === 4 && new Set(known).size === 1) {
+    return (
+      <td className="whitespace-nowrap p-2 text-sm">
+        {person(known[0], 'Wystawił i zatwierdził RW oraz PW')}
+        <div className="text-[11px] text-slate-500">RW i PW</div>
+      </td>
+    )
+  }
+  const line = (label: string, doc: RwPwDoc) => (
+    <div className="whitespace-nowrap">
+      <span className="mr-1 text-[11px] text-slate-500">{label}</span>
+      {person(doc.operator, `${label} wystawił`)}
+      {doc.approver && doc.approver !== doc.operator && (
+        <>
+          <span className="mx-1 text-[11px] text-slate-500">zatw.</span>
+          {person(doc.approver, `${label} zatwierdził`)}
+        </>
+      )}
+    </div>
+  )
   return (
-    <>
-      {operator && (
-        <>
-          wyst. <span className="font-mono text-slate-700">{operator}</span>
-        </>
-      )}
-      {operator && approver ? ' / ' : ''}
-      {approver && (
-        <>
-          zatw. <span className="font-mono text-slate-700">{approver}</span>
-        </>
-      )}
-    </>
+    <td className="p-2">
+      {line('RW', pair.rw)}
+      {line('PW', pair.pw)}
+    </td>
   )
 }
 
@@ -752,9 +846,50 @@ function DocCell({ doc, unit }: { doc: RwPwDoc; unit: string | null }) {
         {erpQty(doc.quantity)}
         {erpUnitLabel(unit)} · <span className="font-semibold text-slate-900">{fmtMoney(doc.value)}</span>
       </div>
-      <div className="text-[11px] text-slate-500">
-        <DocPeople doc={doc} />
+      {doc.features && (
+        <div className="text-[11px] text-slate-500" title="Cecha partii w XL (zwykle rozmiar)">
+          cecha: <span className="font-mono text-slate-700">{doc.features}</span>
+        </div>
+      )}
+    </td>
+  )
+}
+
+/** Ile leżała partia zdjęta przez RW: wiek najstarszej (wyróżniony od roku), data przyjęcia i dokument. */
+function LotCell({ lot }: { lot: RwPwLot | null }) {
+  if (!lot || lot.age_months == null) {
+    return (
+      <td className="whitespace-nowrap p-2">
+        <span className="text-slate-400" title="XL nie podał partii tej pozycji RW">
+          —
+        </span>
+      </td>
+    )
+  }
+  const old = lot.age_months >= 12
+  return (
+    <td className="whitespace-nowrap p-2">
+      <div
+        className={`text-sm font-semibold tabular-nums ${old ? 'text-amber-800' : 'text-slate-900'}`}
+        title="Pełne miesiące od przyjęcia najstarszej partii zdjętej przez RW do dnia RW"
+      >
+        {lot.age_months} mies.
       </div>
+      <div className="tabular-nums text-slate-600">przyjęta {formatDate(lot.received_at)}</div>
+      {lot.source && <div className="font-mono text-[11px] text-slate-500">{lot.source}</div>}
+      {lot.lots > 1 && lot.avg_age_months != null && (
+        <div className="text-[11px] text-slate-500" title="Średni wiek partii ważony ilością">
+          {lot.lots} {plural(lot.lots, 'partia', 'partie', 'partii')} · śr. {lot.avg_age_months.toLocaleString('pl-PL')} mies.
+        </div>
+      )}
+      {lot.from_pw && (
+        <span
+          className="mt-0.5 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800"
+          title="Najstarsza partia sama weszła dokumentem PW — była już wcześniej wydana RW i przyjęta z powrotem"
+        >
+          partia już z PW
+        </span>
+      )}
     </td>
   )
 }
@@ -777,11 +912,13 @@ function PairRow({
   index,
   striped,
   onOpenCard,
+  onOperator,
 }: {
   pair: RwPwPair
   index: number
   striped: boolean
   onOpenCard: (productId: number) => void
+  onOperator: (acronym: string) => void
 }) {
   const diff = pair.pw.value - pair.rw.value
   return (
@@ -791,8 +928,10 @@ function PairRow({
         <CardCell item={pair.item} onOpenCard={onOpenCard} />
       </td>
       <ItemCell item={pair.item} />
+      <WhoCell pair={pair} onOperator={onOperator} />
       <DocCell doc={pair.rw} unit={pair.item.unit} />
       <DocCell doc={pair.pw} unit={pair.item.unit} />
+      <LotCell lot={pair.rw.lot} />
       <td className="whitespace-nowrap p-2 tabular-nums text-slate-700">{gapLabel(pair.gap_days)}</td>
       <td className="p-2">
         <div className="flex flex-col items-start gap-1">
@@ -806,6 +945,15 @@ function PairRow({
           ) : (
             <Tag tone="neutral" title="Wartość PW − wartość RW; może to być np. przecena albo korekta ceny.">
               inna wartość: <span className="tabular-nums">{fmtSignedMoney(diff)}</span>
+            </Tag>
+          )}
+          {!pair.same_feature && (
+            <Tag
+              tone="neutral"
+              title="Zmieniła się cecha partii (zwykle rozmiar) — przeklasyfikowanie towaru, nie odmłodzenie partii."
+            >
+              zmiana cechy: <span className="font-mono">{pair.rw.features ?? '—'}</span> →{' '}
+              <span className="font-mono">{pair.pw.features ?? '—'}</span>
             </Tag>
           )}
           {!pair.same_warehouse && (
@@ -881,6 +1029,22 @@ function ItemRow({
           <span className="text-slate-400">0</span>
         )}
       </td>
+      <td className="whitespace-nowrap p-2 text-right tabular-nums">
+        {row.same_feature > 0 ? (
+          <span className="font-semibold text-amber-800">{fmtInt(row.same_feature)}</span>
+        ) : (
+          <span className="text-slate-400">0</span>
+        )}
+      </td>
+      <td className="whitespace-nowrap p-2 text-right tabular-nums">
+        {row.max_age_months != null ? (
+          <span className={row.max_age_months >= 12 ? 'font-semibold text-amber-800' : 'text-slate-700'}>
+            {row.max_age_months} mies.
+          </span>
+        ) : (
+          <span className="text-slate-400">—</span>
+        )}
+      </td>
       <td className="p-2">
         {row.operators.length > 0 ? (
           <div className="flex max-w-[12rem] flex-wrap gap-1">
@@ -949,6 +1113,16 @@ function OperatorRow({
         )}
       </td>
       <td className="whitespace-nowrap p-2 text-right tabular-nums text-slate-700">{fmtInt(row.pw_by_other)}</td>
+      <td className="whitespace-nowrap p-2 text-right tabular-nums">
+        {row.same_feature > 0 ? (
+          <span className="font-semibold text-amber-800">{fmtInt(row.same_feature)}</span>
+        ) : (
+          <span className="text-slate-400">0</span>
+        )}
+      </td>
+      <td className="whitespace-nowrap p-2 text-right tabular-nums text-slate-700">
+        {row.avg_age_months != null ? `${row.avg_age_months.toLocaleString('pl-PL')} mies.` : '—'}
+      </td>
       <td className="whitespace-nowrap p-2 tabular-nums text-slate-700">{formatDate(row.last_date)}</td>
     </tr>
   )

@@ -29,6 +29,9 @@ final class FakeErpXlGateway implements ErpXlGateway
 
     public ?int $movesFrom = null;
 
+    /** @var list<array<string, mixed>> partie zdjęte przez RW w postaci ErpXlGateway::internalMoveLots */
+    public array $lotRows = [];
+
     public bool $isConfigured = true;
 
     public function configured(): bool
@@ -86,6 +89,17 @@ final class FakeErpXlGateway implements ErpXlGateway
         $this->movesFrom = $fromClarionDate;
 
         return array_values(array_filter($this->moveRows, static fn (array $r): bool => $r['date'] >= $fromClarionDate));
+    }
+
+    public function internalMoveLots(int $fromClarionDate): array
+    {
+        return $this->lotRows;
+    }
+
+    /** @return array<string, mixed> — $receivedAt: znacznik XL (sekundy od 1.01.1990) */
+    public static function lot(int $documentId, int $gid, int $receivedAt, float $quantity, string $source = 'PZ-01H/1/21/08', int $sourceType = 1489, string $feature = '', string $type = 'rw'): array
+    {
+        return ['type' => $type, 'document_id' => $documentId, 'gid' => $gid, 'received_at' => $receivedAt, 'quantity' => $quantity, 'feature' => $feature, 'source_type' => $sourceType, 'source_number' => $source];
     }
 
     /** @return array<string, mixed> */

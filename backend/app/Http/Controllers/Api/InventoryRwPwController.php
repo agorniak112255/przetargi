@@ -26,9 +26,12 @@ class InventoryRwPwController extends Controller
 
     private const GAPS = [0, 3, 7, 30];
 
-    private const PAIR_SORTS = ['date' => 'rw_date', 'value' => 'rw_value', 'gap' => 'gap_days', 'code' => 'code'];
+    /** „Partia leżała co najmniej N miesięcy” — wiek najstarszej partii zdjętej przez RW. */
+    private const MIN_AGES = [0, 3, 6, 12, 24];
 
-    private const ITEM_SORTS = ['pairs' => 'pairs', 'value' => 'value', 'last_date' => 'last_date', 'code' => 'code'];
+    private const PAIR_SORTS = ['date' => 'rw_date', 'value' => 'rw_value', 'gap' => 'gap_days', 'age' => 'rw_lot_age_months', 'code' => 'code'];
+
+    private const ITEM_SORTS = ['pairs' => 'pairs', 'value' => 'value', 'last_date' => 'last_date', 'age' => 'max_age_months', 'code' => 'code'];
 
     public function __construct(private readonly ErpItemCards $cards) {}
 
@@ -38,6 +41,8 @@ class InventoryRwPwController extends Controller
             'months' => ['nullable', 'integer', Rule::in(self::MONTHS)],
             'gap' => ['nullable', 'integer', Rule::in(self::GAPS)],
             'same_value' => ['nullable', 'boolean'],
+            'min_age' => ['nullable', 'integer', Rule::in(self::MIN_AGES)],
+            'same_feature' => ['nullable', 'boolean'],
             'operator' => ['nullable', 'string', 'max:20'],
             'search' => ['nullable', 'string', 'max:150'],
             'view' => ['nullable', 'string', Rule::in(['pairs', 'items', 'operators'])],
@@ -58,6 +63,14 @@ class InventoryRwPwController extends Controller
         if (! empty($v['same_value'])) {
             $query->where('same_value', true);
         }
+        // bez zmiany cechy (rozmiaru) — zmiana 38 → 39 to przeklasyfikowanie, nie odmłodzenie partii
+        if (! empty($v['same_feature'])) {
+            $query->where('same_feature', true);
+        }
+        $minAge = (int) ($v['min_age'] ?? 0);
+        if ($minAge > 0) {
+            $query->where('rw_lot_age_months', '>=', $minAge);
+        }
         $operator = trim((string) ($v['operator'] ?? ''));
         if ($operator !== '') {
             $query->where(fn (Builder $q) => $q->where('rw_operator', $operator)->orWhere('rw_approver', $operator)
@@ -72,7 +85,8 @@ class InventoryRwPwController extends Controller
 
         $summary = (clone $query)->toBase()
             ->selectRaw('count(*) as pairs, count(distinct xl_gid) as items, coalesce(sum(rw_value), 0) as value,'
-                .' sum(case when same_value then 1 else 0 end) as same_value, count(distinct rw_operator) as operators')
+                .' sum(case when same_value then 1 else 0 end) as same_value, count(distinct rw_operator) as operators,'
+                .' sum(case when same_feature then 1 else 0 end) as same_feature')
             ->first();
         $operators = $this->operatorOptions($period());
         $syncedAt = ErpRwPwPair::query()->max('synced_at');
@@ -93,6 +107,7 @@ class InventoryRwPwController extends Controller
                 'value' => round((float) ($summary->value ?? 0), 2),
                 'same_value' => (int) ($summary->same_value ?? 0),
                 'operators' => (int) ($summary->operators ?? 0),
+                'same_feature' => (int) ($summary->same_feature ?? 0),
             ],
             'operators' => $operators,
             'from' => $from->toDateString(),
@@ -107,7 +122,10 @@ class InventoryRwPwController extends Controller
     private function pairs(Builder $query, string $sort, string $dir, int $perPage): array
     {
         $column = self::PAIR_SORTS[$sort] ?? 'rw_date';
-        if ($column === 'code') {
+        if ($column === 'rw_lot_age_months') {
+            // pary bez danych o partii na końcu w obu kierunkach
+            $query->orderByRaw('rw_lot_age_months is null')->orderBy('rw_lot_age_months', $dir);
+        } elseif ($column === 'code') {
             $query->orderBy(ErpItem::query()->select('code')->whereColumn('erp_items.id', 'erp_rw_pw_pairs.erp_item_id'), $dir);
         } else {
             $query->orderBy($column, $dir);
@@ -118,11 +136,19 @@ class InventoryRwPwController extends Controller
         $data = $page->getCollection()->map(fn (ErpRwPwPair $p): array => [
             'id' => $p->id,
             'item' => $this->ref($p->erp_item_id, $p->xl_gid, $refs),
-            'rw' => $this->doc($p, 'rw'),
+            'rw' => $this->doc($p, 'rw') + ['lot' => $p->rw_lot_at === null ? null : [
+                'received_at' => $p->rw_lot_at->toDateString(),
+                'age_months' => $p->rw_lot_age_months,
+                'avg_age_months' => $p->rw_lot_avg_age_months !== null ? (float) $p->rw_lot_avg_age_months : null,
+                'lots' => $p->rw_lots,
+                'source' => $p->rw_lot_source,
+                'from_pw' => $p->rw_lot_from_pw,
+            ]],
             'pw' => $this->doc($p, 'pw'),
             'gap_days' => $p->gap_days,
             'same_value' => $p->same_value,
             'same_warehouse' => $p->same_warehouse,
+            'same_feature' => $p->same_feature,
         ])->values()->all();
 
         return [$data, $this->meta($page->currentPage(), $page->lastPage(), $page->perPage(), $page->total())];
@@ -137,7 +163,8 @@ class InventoryRwPwController extends Controller
         $grouped = (clone $query)->toBase()
             ->groupBy('xl_gid', 'erp_item_id')
             ->selectRaw('xl_gid, erp_item_id, count(*) as pairs, sum(rw_quantity) as quantity, sum(rw_value) as value,'
-                .' sum(case when same_value then 1 else 0 end) as same_value, min(rw_date) as first_date, max(rw_date) as last_date');
+                .' sum(case when same_value then 1 else 0 end) as same_value, min(rw_date) as first_date, max(rw_date) as last_date,'
+                .' max(rw_lot_age_months) as max_age_months, sum(case when same_feature then 1 else 0 end) as same_feature');
         $column = self::ITEM_SORTS[$sort] ?? 'value';
         if ($column === 'code') {
             $grouped->orderBy(ErpItem::query()->select('code')->whereColumn('erp_items.id', 'erp_rw_pw_pairs.erp_item_id')->toBase(), $dir);
@@ -168,6 +195,8 @@ class InventoryRwPwController extends Controller
                 'value' => round((float) $row->value, 2),
                 'same_value' => (int) $row->same_value,
                 'operators' => $names,
+                'max_age_months' => $row->max_age_months !== null ? (int) $row->max_age_months : null,
+                'same_feature' => (int) $row->same_feature,
                 'first_date' => Carbon::parse((string) $row->first_date)->toDateString(),
                 'last_date' => Carbon::parse((string) $row->last_date)->toDateString(),
             ];
@@ -187,7 +216,8 @@ class InventoryRwPwController extends Controller
         return (clone $query)->toBase()
             ->groupBy('rw_operator')
             ->selectRaw('rw_operator, count(*) as pairs, count(distinct xl_gid) as items, sum(rw_value) as value,'
-                .' sum(case when same_value then 1 else 0 end) as same_value, max(rw_date) as last_date,'
+                .' sum(case when same_value then 1 else 0 end) as same_value, max(rw_date) as last_date, avg(rw_lot_age_months) as avg_age_months,'
+                .' sum(case when same_feature then 1 else 0 end) as same_feature,'
                 .' sum(case when pw_operator is null or rw_operator is null or pw_operator <> rw_operator then 1 else 0 end) as pw_by_other')
             ->orderByDesc('value')
             ->get()
@@ -199,6 +229,9 @@ class InventoryRwPwController extends Controller
                 'same_value' => (int) $row->same_value,
                 'last_date' => Carbon::parse((string) $row->last_date)->toDateString(),
                 'pw_by_other' => (int) $row->pw_by_other,
+                // średni wiek partii zdjętych przez RW tej osoby (pełne miesiące)
+                'avg_age_months' => $row->avg_age_months !== null ? round((float) $row->avg_age_months, 1) : null,
+                'same_feature' => (int) $row->same_feature,
             ])
             ->values()
             ->all();
@@ -278,6 +311,8 @@ class InventoryRwPwController extends Controller
             'value' => (float) $p->{$prefix.'_value'},
             'operator' => $p->{$prefix.'_operator'},
             'approver' => $p->{$prefix.'_approver'},
+            // cecha partii (zwykle rozmiar): „38” albo „L×2, XL×1”
+            'features' => $p->{$prefix.'_features'},
         ];
     }
 
