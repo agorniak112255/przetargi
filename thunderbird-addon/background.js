@@ -479,12 +479,16 @@ async function openOffer(offer) {
     return
   }
 
+  // Zdjęcia wstawiamy do maila, zanim otworzymy okno — inaczej Thunderbird (i poczta klienta) blokuje je jako
+  // treść z internetu i handlowiec widzi puste ramki.
+  const body = html !== '' ? await embedOfferImages(html) : ''
+
   const tab = await browser.compose.beginNew()
   const details = await composeDetailsWhenReady(tab.id)
   const before = String(details.isPlainText ? details.plainTextBody : details.body || '')
   const patch = details.isPlainText
     ? { plainTextBody: (text || html.replace(/<[^>]+>/g, ' ')) + '\n\n' + (details.plainTextBody || '') }
-    : { body: insertIntoHtmlBody(details.body, (html || textToHtml(text)) + '<br>') }
+    : { body: insertIntoHtmlBody(details.body, (body || textToHtml(text)) + '<br>') }
   if (offer.subject) patch.subject = String(offer.subject)
 
   await browser.compose.setComposeDetails(tab.id, patch)
@@ -496,6 +500,99 @@ async function openOffer(offer) {
     await notify('Nie udało się wstawić oferty', 'W aplikacji kliknij „Kopiuj do wklejenia w e-mail” i wklej ją ręcznie.')
   }
   await raiseComposeWindow(tab)
+}
+
+/**
+ * Najdłuższy bok zdjęcia w mailu. Oferta pokazuje je najwyżej na 420 px, więc 840 px wystarcza też na ekranach
+ * o podwójnej gęstości, a mail z sześcioma zdjęciami zostaje poniżej 1 MB.
+ */
+const OFFER_IMAGE_MAX_PX = 840
+
+/** Jedno zdjęcie z naszego serwera ładuje się w ułamku sekundy; dłużej = coś nie tak, zostaje link. */
+const OFFER_IMAGE_TIMEOUT_MS = 15000
+
+/**
+ * Zdjęcia oferty w treści maila zamiast linków. Linki do zdjęć Thunderbird blokuje w oknie pisania, a poczta
+ * klienta zwykle pokazuje je dopiero po kliknięciu „pokaż obrazy” — oferta wyglądała na zepsutą. Obrazek
+ * osadzony w treści (data:) Thunderbird przy wysyłce dołącza do maila, więc klient widzi go od razu.
+ *
+ * Tylko zdjęcia z naszego serwera (uprawnienie dodatku i miejsce, skąd aplikacja je podaje); zdjęcie spod innego
+ * adresu albo takie, którego nie da się pobrać, zostaje linkiem jak dotąd. Zamiana na JPEG przy okazji ratuje
+ * WebP, którego Outlook nie wyświetla.
+ */
+async function embedOfferImages(html) {
+  const settings = await getSettings()
+  const allowed = new Set()
+  for (const base of [settings.baseUrl, UPDATE_BASE]) {
+    try {
+      allowed.add(new URL(base).origin)
+    } catch (e) {
+      // pusty albo błędny adres w ustawieniach — pomijamy
+    }
+  }
+
+  const pattern = /(<img\b[^>]*?\ssrc=")([^"]+)(")/gi
+  const sources = new Map()
+  for (const match of html.matchAll(pattern)) sources.set(match[2], null)
+
+  for (const escaped of sources.keys()) {
+    const url = unescapeHtmlAttribute(escaped)
+    let origin
+    try {
+      origin = new URL(url).origin
+    } catch (e) {
+      continue
+    }
+    if (!allowed.has(origin)) continue
+    try {
+      sources.set(escaped, await imageAsDataUrl(url))
+    } catch (e) {
+      console.warn('Supon: zdjęcie oferty zostaje linkiem (' + url + '):', e.message)
+    }
+  }
+
+  return html.replace(pattern, (whole, head, src, tail) => {
+    const data = sources.get(src)
+
+    return data ? head + data + tail : whole
+  })
+}
+
+function unescapeHtmlAttribute(value) {
+  return String(value)
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+
+/** Zdjęcie jako JPEG w data: — zmniejszone do OFFER_IMAGE_MAX_PX, przezroczystość na białym tle oferty. */
+async function imageAsDataUrl(url) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), OFFER_IMAGE_TIMEOUT_MS)
+  let blob
+  try {
+    const res = await fetch(url, { signal: controller.signal })
+    if (!res.ok) throw new Error('serwer odpowiedział ' + res.status)
+    blob = await res.blob()
+  } finally {
+    clearTimeout(timer)
+  }
+  if (!String(blob.type || '').startsWith('image/')) throw new Error('to nie jest obraz (' + blob.type + ')')
+
+  const bitmap = await createImageBitmap(blob)
+  const scale = Math.min(1, OFFER_IMAGE_MAX_PX / Math.max(bitmap.width, bitmap.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+  const context = canvas.getContext('2d')
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, canvas.width, canvas.height)
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+  if (typeof bitmap.close === 'function') bitmap.close()
+
+  return canvas.toDataURL('image/jpeg', 0.86)
 }
 
 async function handleQueued(row) {

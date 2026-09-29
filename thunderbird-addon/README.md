@@ -77,6 +77,14 @@ z karty nie jest związana z żadnym mailem klienta.
   na jednym koncie otworzy ją tylko pierwszy.
 - Prośba niepodjęta w 15 minut przepada (oferta nie otworzy się godzinę później
   przy innej pracy).
+- Od 1.26.0 zdjęcia są **osadzone w mailu**, nie podlinkowane: dodatek pobiera
+  je z naszego serwera, zmniejsza do 840 px (dłuższy bok) i wstawia jako JPEG
+  w `data:`. Linki do zdjęć Thunderbird blokował w oknie pisania (puste ramki),
+  a poczta klienta zwykle pokazuje je dopiero po „pokaż obrazy”; JPEG ratuje też
+  WebP, którego Outlook nie wyświetla. Zdjęcie spod innego adresu albo takie,
+  którego nie da się pobrać, zostaje linkiem.
+- Czerwone kropkowane linie wokół tabel w oknie pisania to obrysy edytora
+  Thunderbirda — w wysłanym mailu ich nie ma.
 
 ## Szablony listu
 
