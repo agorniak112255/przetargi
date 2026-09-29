@@ -186,9 +186,9 @@ function warehousesFromParam(value: string | null): Warehouses {
 }
 
 const WAREHOUSE_OPTIONS: { value: Warehouses; label: string }[] = [
-  { value: 'trade', label: 'Magazyny handlowe' },
-  { value: 'service', label: 'Magazyny usługowe' },
-  { value: 'all', label: 'Wszystkie magazyny' },
+  { value: 'trade', label: 'Handlowe' },
+  { value: 'service', label: 'Usługowe' },
+  { value: 'all', label: 'Wszystkie' },
 ]
 
 const WAREHOUSE_LABEL: Record<Warehouses, string> = {
@@ -204,18 +204,11 @@ const WAREHOUSE_SUFFIX: Record<Warehouses, string> = {
   all: '(wszystkie magazyny)',
 }
 
-/** Początek zdania „Najważniejsze”. */
-const WAREHOUSE_WHERE: Record<Warehouses, string> = {
-  trade: 'Na magazynach handlowych',
-  service: 'Na magazynach usługowych',
-  all: 'Na wszystkich magazynach',
-}
-
-/** Podpis kafelka „cały towar”. */
+/** Podpis kafelka „cały towar” (magazyny widać w przełączniku obok tytułu, na wydruku pod tytułem). */
 const WAREHOUSE_STOCK_LABEL: Record<Warehouses, string> = {
-  trade: 'cały towar w magazynach handlowych',
-  service: 'cały towar w magazynach usługowych',
-  all: 'cały towar we wszystkich magazynach',
+  trade: 'cały towar (handlowe)',
+  service: 'cały towar (usługowe)',
+  all: 'cały towar (wszystkie)',
 }
 
 // Druk strony: bez menu (print:hidden w Layout) i przycisków, czarno na białym, jedna kartka A4.
@@ -228,7 +221,7 @@ const PRINT_CSS = `
   html, body { overflow: visible !important; height: auto !important; }
   html, body, .app-shell, .app-main { background: #fff !important; }
   .app-main { padding: 0 !important; overflow: visible !important; }
-  .board-report { zoom: 0.66; max-width: none !important; margin: 0 !important; }
+  .board-report { zoom: 0.62; max-width: none !important; margin: 0 !important; }
   .board-report, .board-report * {
     color: #000 !important;
     background: #fff !important;
@@ -238,6 +231,8 @@ const PRINT_CSS = `
     -webkit-print-color-adjust: exact;
   }
   .board-block { break-inside: avoid; page-break-inside: avoid; }
+  /* Pasek na pulpicie: wypełnienie szare (ogólna reguła wyżej robi każde tło białe). */
+  .board-report .board-bar-fill { background: #999 !important; }
   .board-modal { display: none !important; }
   body.board-print-modal > * { display: none !important; }
   body.board-print-modal > .board-modal {
@@ -300,7 +295,7 @@ const BIG_BUTTON = `rounded-lg border border-slate-300 bg-white px-6 py-3 text-x
 /** Widoczny napis przy każdej klikalnej liczbie. */
 function ShowList() {
   return (
-    <span className="block text-lg font-semibold text-blue-700 underline underline-offset-4 print:hidden">
+    <span className="text-lg font-semibold text-blue-700 underline underline-offset-4 print:hidden">
       Pokaż listę ›
     </span>
   )
@@ -353,24 +348,30 @@ export function InventoryBoardReport() {
   const asOf = report?.as_of ? longDate(report.as_of) : null
 
   return (
-    <div className="board-report mx-auto max-w-6xl pb-10 text-lg text-slate-900">
+    <div className="board-report mx-auto max-w-7xl pb-10 text-lg text-slate-900">
       <style>{PRINT_CSS}</style>
 
-      <header className="board-block mb-6 flex flex-wrap items-start justify-between gap-4">
+      <header className="board-block mb-3 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-4xl font-semibold text-slate-900">Zapasy — raport dla zarządu</h1>
-          {report && (
-            <p className="mt-3 text-2xl text-slate-800">{asOf ? `Stan na ${asOf}` : 'Brak daty odczytu danych'}</p>
-          )}
+          <h1 className="text-3xl font-semibold text-slate-900">Zapasy — raport dla zarządu</h1>
+          <p className="mt-1 text-xl text-slate-800">
+            {report ? (asOf ? `Stan na ${asOf}` : 'Brak daty odczytu danych') : ''}
+            <span className="text-lg text-slate-700">{report ? ' · ' : ''}dane z programu magazynowego z nocy</span>
+          </p>
           <p className="mt-1 hidden text-2xl font-semibold text-slate-900 print:block">{WAREHOUSE_LABEL[shown]}</p>
-          <p className="mt-1 text-lg text-slate-700">Dane z programu magazynowego, dane z nocy</p>
         </div>
-        <button type="button" onClick={() => window.print()} className={`${BIG_BUTTON} print:hidden`}>
-          Drukuj / zapisz PDF
-        </button>
+        <div className="flex flex-wrap items-center gap-3 print:hidden">
+          <span className="text-lg text-slate-700">Magazyny:</span>
+          <WarehouseSwitch value={warehouses} onChange={chooseWarehouses} />
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className={`rounded-lg border border-slate-300 bg-white px-4 py-2 text-xl font-medium text-slate-800 shadow-sm hover:bg-slate-50 ${FOCUS}`}
+          >
+            Drukuj / PDF
+          </button>
+        </div>
       </header>
-
-      <WarehouseSwitch value={warehouses} onChange={chooseWarehouses} />
 
       {failed ? (
         <div className="py-6">
@@ -413,12 +414,11 @@ export function InventoryBoardReport() {
 
 function WarehouseSwitch({ value, onChange }: { value: Warehouses; onChange: (value: Warehouses) => void }) {
   return (
-    <div className="board-block mb-8 print:hidden">
-      <div
-        className="inline-flex flex-wrap overflow-hidden rounded-xl border-2 border-slate-300"
-        role="group"
-        aria-label="Które magazyny"
-      >
+    <div
+      className="inline-flex flex-wrap overflow-hidden rounded-xl border-2 border-slate-300"
+      role="group"
+      aria-label="Które magazyny"
+    >
         {WAREHOUSE_OPTIONS.map((o, i) => {
           const active = o.value === value
           return (
@@ -427,7 +427,7 @@ function WarehouseSwitch({ value, onChange }: { value: Warehouses; onChange: (va
               type="button"
               aria-pressed={active}
               onClick={() => onChange(o.value)}
-              className={`px-6 py-3 text-xl ${i > 0 ? 'border-l-2 border-slate-300' : ''} ${FOCUS} ${
+              className={`px-5 py-2 text-xl ${i > 0 ? 'border-l-2 border-slate-300' : ''} ${FOCUS} ${
                 active ? 'bg-blue-600 font-semibold text-white' : 'bg-white text-slate-800 hover:bg-slate-50'
               }`}
             >
@@ -436,12 +436,14 @@ function WarehouseSwitch({ value, onChange }: { value: Warehouses; onChange: (va
             </button>
           )
         })}
-      </div>
-      <p className="mt-2 text-lg text-slate-700">Handlowe — towar na sprzedaż. Usługowe — towar trzymany dla klientów.</p>
     </div>
   )
 }
 
+/**
+ * Pulpit (wybór właściciela 29.09.2026, wariant B): na górze 4 główne kwoty, pod nimi paski „jak długo bez sprzedaży”
+ * i dokumenty RW/PW z osobami, na dole najdroższe towary i rodzaje. Każda kwota to kafelek-przycisk otwierający listę.
+ */
 function BoardView({
   report,
   warehouses,
@@ -459,11 +461,20 @@ function BoardView({
   const stale60 = bucket(report.stale_lot, 60)
   const groups = report.groups ?? []
   const moves = report.internal_moves
-  const movesFrom = longDate(moves.from)
   const empty = report.stock.items === 0
   const share = (value: number) => pct(value, stockValue)
   const openItems = (b: InventoryBoardItemsBucket, label: string, group: InventoryBoardGroupKey | null = null) =>
     onOpen({ kind: 'items', bucket: b, group, label })
+  const openMoves = (scope: 'all' | 'unexplained') =>
+    onOpen({
+      kind: 'moves',
+      scope,
+      person: null,
+      label:
+        scope === 'all'
+          ? 'Towar wydany i od razu przyjęty z powrotem'
+          : 'Towar wydany i od razu przyjęty z powrotem bez żadnego opisu',
+    })
 
   if (empty) {
     return (
@@ -476,357 +487,299 @@ function BoardView({
   const topSum = report.top_unsold.reduce((sum, item) => sum + item.value, 0)
   const topCount = report.top_unsold.length
   const restCount = noSale12 ? noSale12.items - topCount : 0
+  // Paski czasu bez sprzedaży w skali największego (pół roku) — dłuższy okres jest jego częścią.
+  const scale = noSale6?.value ?? 0
+  const ageScale = noSale12?.value ?? 0
 
   return (
     <>
-      <p className="mb-6 text-lg text-slate-700 print:hidden">
-        Kwotę z napisem „Pokaż listę ›” można kliknąć — otworzy się lista towarów, z których się składa.
+      <p className="mb-4 text-lg text-slate-700 print:hidden">
+        Kafelek z napisem „Pokaż listę ›” można kliknąć — otworzy się lista towarów albo dokumentów.
       </p>
 
-      <section className="board-block mb-8 rounded-2xl border-2 border-slate-300 bg-white px-6 py-5 shadow-sm">
-        <h2 className="text-2xl font-semibold text-slate-900">Najważniejsze</h2>
-        <p className="mt-2 text-xl leading-relaxed text-slate-900">
-          {WAREHOUSE_WHERE[warehouses]} leży towar za <strong className="tabular-nums">{fmtBig(stockValue)}</strong>.
-          {noSale6 && (
-            <>
-              {' '}
-              Za <strong className="tabular-nums">{fmtBig(noSale6.value)}</strong>
-              {share(noSale6.value) ? ` (to ${share(noSale6.value)} wartości magazynu)` : ''} jest towar, który od
-              pół roku nie sprzedał się ani razu
-              {noSale12 ? (
-                <>
-                  , z czego <strong className="tabular-nums">{fmtBig(noSale12.value)}</strong> nie sprzedaje się ponad
-                  rok
-                </>
-              ) : null}
-              .
-            </>
-          )}{' '}
-          {moves.unexplained > 0 ? (
-            <>
-              W ostatnich 12 miesiącach <strong className="tabular-nums">{times(moves.unexplained)}</strong> towar
-              leżący co najmniej {monthsLabel(moves.min_lot_age_months)} wydano i przyjęto z powrotem bez żadnego opisu,
-              na <strong className="tabular-nums">{fmtBig(moves.unexplained_value)}</strong>.
-            </>
-          ) : (
-            <>
-              W ostatnich 12 miesiącach ani razu nie wydano i nie przyjęto z powrotem bez opisu towaru leżącego co
-              najmniej {monthsLabel(moves.min_lot_age_months)}.
-            </>
-          )}
-        </p>
-      </section>
-
-      <section className="mb-8">
-        <ClickTile
-          className={`rounded-2xl border-2 px-6 py-5 shadow-sm ${TONE.neutral.box}`}
+      <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4 print:grid-cols-4">
+        <KpiTile
+          tone="neutral"
+          value={fmtBig(stockValue)}
+          label={WAREHOUSE_STOCK_LABEL[warehouses]}
+          detail={
+            report.split && warehouses === 'all'
+              ? `${goods(report.stock.items)} · handlowe ${fmtBig(report.split.trade.value)}, usługowe ${fmtBig(report.split.service.value)}`
+              : goods(report.stock.items)
+          }
           onOpen={() => openItems('stock', 'Cały towar')}
-        >
-          <span className={`block text-4xl font-semibold tabular-nums ${TONE.neutral.number}`}>
-            {fmtBig(stockValue)}
-          </span>
-          <span className="mt-2 block text-xl font-medium text-slate-900">{WAREHOUSE_STOCK_LABEL[warehouses]}</span>
-          <span className="mt-1 block text-lg text-slate-700">{goods(report.stock.items)}</span>
-          {report.split && (
-            <span className="mt-1 block text-lg text-slate-700">
-              {warehouses === 'all' ? 'w tym handlowe' : 'handlowe'}: {fmtBig(report.split.trade.value)} · usługowe:{' '}
-              {fmtBig(report.split.service.value)}
-            </span>
-          )}
-        </ClickTile>
-      </section>
-
-      <section className="board-block mb-8">
-        <h2 className="mb-1 text-2xl font-semibold text-slate-900">Towar bez żadnej sprzedaży</h2>
-        <p className="mb-3 text-lg text-slate-700">
-          Wiersz „w tym” jest częścią kwoty z wiersza, pod którym jest wcięty, więc kwot się nie dodaje.
-        </p>
-        <ol className="space-y-3">
-          {noSale6 && (
-            <StepRow
-              level={0}
-              tone="amber"
-              label="ponad pół roku bez sprzedaży"
-              items={noSale6.items}
-              value={noSale6.value}
-              share={share(noSale6.value)}
-              onOpen={() => openItems('no_sale_6', 'Nie sprzedaje się od pół roku')}
-            />
-          )}
-          {noSale12 && (
-            <StepRow
-              level={1}
-              tone="red"
-              label="w tym ponad rok bez sprzedaży"
-              items={noSale12.items}
-              value={noSale12.value}
-              share={share(noSale12.value)}
-              onOpen={() => openItems('no_sale_12', 'Nie sprzedaje się ponad rok')}
-            />
-          )}
-          {noSale24 && (
-            <StepRow
-              level={2}
-              tone="red"
-              label="w tym ponad 2 lata bez sprzedaży"
-              items={noSale24.items}
-              value={noSale24.value}
-              share={share(noSale24.value)}
-              onOpen={() => openItems('no_sale_24', 'Nie sprzedaje się ponad 2 lata')}
-            />
-          )}
-          <StepRow
-            level={1}
-            tone="red"
-            label="w tym ani razu nie sprzedany"
-            items={report.never_sold.items}
-            value={report.never_sold.value}
-            share={share(report.never_sold.value)}
-            onOpen={() => openItems('never_sold', 'Ani razu nie sprzedany')}
+        />
+        {noSale6 && (
+          <KpiTile
+            tone="amber"
+            value={fmtBig(noSale6.value)}
+            label="ponad pół roku bez sprzedaży"
+            detail={`${goods(noSale6.items)}${share(noSale6.value) ? ` · ${share(noSale6.value)} magazynu` : ''}`}
+            onOpen={() => openItems('no_sale_6', 'Nie sprzedaje się od pół roku')}
           />
-        </ol>
-        <p className="mt-3 text-lg text-slate-700">
-          „Ani razu nie sprzedany” = towar, który leży w magazynie ponad pół roku i nie sprzedał się ani razu.
-        </p>
-      </section>
-
-      <section className="board-block mb-8">
-        <h2 className="mb-1 text-2xl font-semibold text-slate-900">
-          Towar bez sprzedaży ponad rok — jak długo już leży
-        </h2>
-        <p className="mb-3 text-lg text-slate-700">Tylko towar, który od ponad roku nie sprzedał się ani razu.</p>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <AgeTile
-            bucket={stale36}
-            label="najstarsza sztuka leży ponad 3 lata"
-            share={stale36 ? share(stale36.value) : null}
-            onOpen={() => openItems('stale_36', 'Bez sprzedaży ponad rok, leży ponad 3 lata')}
-          />
-          <AgeTile
-            bucket={stale60}
-            label="najstarsza sztuka leży ponad 5 lat"
-            share={stale60 ? share(stale60.value) : null}
-            onOpen={() => openItems('stale_60', 'Bez sprzedaży ponad rok, leży ponad 5 lat')}
-          />
-        </div>
-        {report.lot_12_total && (
-          <p className="mt-3 text-base text-slate-700">
-            Dla porównania: {goods(report.lot_12_total.items)} ma w magazynie część sztuk przyjętych ponad rok temu.
-            Cały zapas tych towarów jest wart {fmtBig(report.lot_12_total.value)}. Większość z nich normalnie się
-            sprzedaje, tylko starsze sztuki jeszcze nie zeszły — dlatego nie liczymy ich w kwotach powyżej.
-          </p>
         )}
-      </section>
+        {noSale12 && (
+          <KpiTile
+            tone="red"
+            value={fmtBig(noSale12.value)}
+            label="ponad rok bez sprzedaży"
+            detail={`${goods(noSale12.items)}${share(noSale12.value) ? ` · ${share(noSale12.value)} magazynu` : ''}`}
+            onOpen={() => openItems('no_sale_12', 'Nie sprzedaje się ponad rok')}
+          />
+        )}
+        {moves.unexplained > 0 ? (
+          <KpiTile
+            tone="red"
+            value={fmtBig(moves.unexplained_value)}
+            label="wydane i przyjęte bez opisu"
+            detail={`${times(moves.unexplained)} w ostatnim roku`}
+            onOpen={() => openMoves('unexplained')}
+          />
+        ) : (
+          <div className="board-block rounded-2xl border-2 border-slate-300 bg-white px-5 py-4 shadow-sm">
+            <span className="block text-4xl font-semibold text-slate-900">0</span>
+            <span className="mt-1 block text-xl font-medium text-slate-900">wydane i przyjęte bez opisu</span>
+            <span className="mt-1 block text-lg text-slate-700">ani razu w ostatnim roku</span>
+          </div>
+        )}
+      </div>
 
-      {groups.length > 0 && (
-        <section className="board-block mb-8">
-          <h2 className="mb-3 text-2xl font-semibold text-slate-900">
-            Gdzie leży towar bez sprzedaży ponad rok — według rodzaju
-          </h2>
-          <div className="overflow-x-auto rounded-2xl border border-slate-300 bg-white shadow-sm">
-            <table className="w-full text-left text-lg">
-              <thead>
-                <tr className="border-b-2 border-slate-300 bg-slate-100">
-                  <th scope="col" className="px-4 py-3 font-semibold text-slate-900">
-                    Rodzaj
-                  </th>
-                  <th scope="col" className="px-4 py-3 text-right font-semibold text-slate-900">
-                    Bez sprzedaży ponad rok
-                  </th>
-                  <th scope="col" className="px-4 py-3 text-right font-semibold text-slate-900">
-                    Cały towar tego rodzaju
-                  </th>
-                  <th scope="col" className="px-4 py-3 text-right font-semibold text-slate-900">
-                    Jaka to część
-                  </th>
-                  <th scope="col" className="px-4 py-3 print:hidden">
-                    <span className="sr-only">Lista</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {groups.map((g) => (
-                  <tr key={g.group} className="border-b border-slate-200 last:border-b-0">
-                    <td className="px-4 py-3 text-xl font-medium text-slate-900">{g.label}</td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <span className="block text-xl font-semibold tabular-nums">{fmtBig(g.unsold_value)}</span>
-                      <span className="block text-base text-slate-700">{goods(g.unsold_items)}</span>
-                    </td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap tabular-nums">{fmtBig(g.stock_value)}</td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap tabular-nums">
-                      {pct(g.unsold_value, g.stock_value) ?? '—'}
-                    </td>
-                    <td className="px-4 py-2 text-right print:hidden">
-                      {g.unsold_items > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => openItems('no_sale_12', `Bez sprzedaży ponad rok — ${g.label}`, g.group)}
-                          className={`rounded-lg px-3 py-2 text-lg font-semibold whitespace-nowrap text-blue-700 underline underline-offset-4 hover:bg-slate-50 ${FOCUS}`}
-                        >
-                          Pokaż listę ›
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <div className="mb-4 grid gap-4 lg:grid-cols-5 print:grid-cols-5">
+        <section className={`${PANEL} lg:col-span-3 print:col-span-3`}>
+          <h2 className="text-2xl font-semibold text-slate-900">Jak długo towar nie sprzedaje się</h2>
+          <p className="mb-2 text-base text-slate-700">
+            Niższe paski są częścią pierwszego („w tym”), więc kwot się nie dodaje. % = część wartości magazynu.
+            <span className="print:hidden"> Kliknij pasek, aby zobaczyć listę.</span>
+          </p>
+          <div className="space-y-1">
+            {noSale6 && (
+              <BarRow
+                tone="amber"
+                label="ponad pół roku"
+                bucket={noSale6}
+                scale={scale}
+                share={share(noSale6.value)}
+                onOpen={() => openItems('no_sale_6', 'Nie sprzedaje się od pół roku')}
+              />
+            )}
+            {noSale12 && (
+              <BarRow
+                tone="red"
+                label="w tym ponad rok"
+                bucket={noSale12}
+                scale={scale}
+                share={share(noSale12.value)}
+                onOpen={() => openItems('no_sale_12', 'Nie sprzedaje się ponad rok')}
+              />
+            )}
+            {noSale24 && (
+              <BarRow
+                tone="red"
+                label="w tym ponad 2 lata"
+                bucket={noSale24}
+                scale={scale}
+                share={share(noSale24.value)}
+                onOpen={() => openItems('no_sale_24', 'Nie sprzedaje się ponad 2 lata')}
+              />
+            )}
+            <BarRow
+              tone="red"
+              label="w tym ani razu nie sprzedany"
+              bucket={report.never_sold}
+              scale={scale}
+              share={share(report.never_sold.value)}
+              onOpen={() => openItems('never_sold', 'Ani razu nie sprzedany')}
+            />
+          </div>
+          <h3 className="mt-3 text-xl font-semibold text-slate-900">
+            Bez sprzedaży ponad rok, a najstarsza sztuka leży:
+          </h3>
+          <div className="mt-1 space-y-1">
+            {stale36 && (
+              <BarRow
+                tone="slate"
+                label="ponad 3 lata"
+                bucket={stale36}
+                scale={ageScale}
+                share={share(stale36.value)}
+                onOpen={() => openItems('stale_36', 'Bez sprzedaży ponad rok, leży ponad 3 lata')}
+              />
+            )}
+            {stale60 && (
+              <BarRow
+                tone="slate"
+                label="ponad 5 lat"
+                bucket={stale60}
+                scale={ageScale}
+                share={share(stale60.value)}
+                onOpen={() => openItems('stale_60', 'Bez sprzedaży ponad rok, leży ponad 5 lat')}
+              />
+            )}
           </div>
         </section>
-      )}
 
-      <section className="board-block mb-8">
-        <h2 className="mb-3 text-2xl font-semibold text-slate-900">
-          Najdroższe towary, które nie sprzedają się ponad rok
-        </h2>
-        {topCount === 0 ? (
-          <p className="text-xl text-slate-800">Nie ma takiego towaru.</p>
-        ) : (
-          <>
-            <ol className="divide-y divide-slate-200 rounded-2xl border border-slate-300 bg-white shadow-sm">
-              {report.top_unsold.map((item, i) => (
-                <li key={`${item.code}-${i}`} className="flex items-start gap-4 px-6 py-3">
-                  <span className="w-8 shrink-0 text-2xl font-semibold text-slate-700 tabular-nums">{i + 1}.</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xl font-medium break-words text-slate-900">{item.card_name ?? item.name}</div>
-                    <div className="text-lg text-slate-700">
-                      {fmtQuantity(item.quantity, item.unit)} ·{' '}
-                      {item.last_sale_at ? `ostatnia sprzedaż ${monthYear(item.last_sale_at)}` : 'nigdy nie sprzedany'}
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-2xl font-semibold text-slate-900 tabular-nums">
-                    {fmtBig(item.value)}
-                  </span>
-                </li>
-              ))}
-            </ol>
-            {noSale12 && (
-              <p className="mt-3 text-xl text-slate-900">
-                {topCount === 1 ? 'Najdroższy towar to' : `${topCount} ${plural(topCount, 'najdroższy towar', 'najdroższe towary', 'najdroższych towarów')} to`}{' '}
-                <strong className="tabular-nums">{fmtBig(topSum)}</strong> z{' '}
-                <strong className="tabular-nums">{fmtBig(noSale12.value)}</strong>.
-                {restCount > 0 && (
-                  <>
-                    {' '}
-                    Reszta rozkłada się na {groupInt(restCount)}{' '}
-                    {plural(restCount, 'drobniejszy towar', 'drobniejsze towary', 'drobniejszych towarów')}.
-                  </>
-                )}
-              </p>
-            )}
-            <button
-              type="button"
-              onClick={() => openItems('no_sale_12', 'Nie sprzedaje się ponad rok')}
-              className={`mt-4 ${BIG_BUTTON} print:hidden`}
-            >
-              Więcej — pokaż listę ›
-            </button>
-          </>
-        )}
-      </section>
-
-      <section className="board-block mb-8 rounded-2xl border border-slate-300 bg-white px-6 py-5 shadow-sm">
-        <h2 className="mb-3 text-2xl font-semibold text-slate-900">
-          Zalegający towar wydany i od razu przyjęty z powrotem
-        </h2>
-        <p className="mb-3 text-lg text-slate-700">
-          Tylko towar, który przed wydaniem leżał w magazynie co najmniej {monthsLabel(moves.min_lot_age_months)}. Po
-          wydaniu i ponownym przyjęciu taki towar wygląda w systemie jak nowa dostawa.
-        </p>
-        <p className="text-xl text-slate-900">
-          W ostatnich 12 miesiącach
-          {movesFrom ? <span className="text-slate-700"> (od {movesFrom})</span> : null}:{' '}
-          {moves.total > 0 ? (
-            <>
-              <strong className="tabular-nums">{times(moves.total)}</strong> (część z nich to zamiana rozmiaru albo
-              koloru).
-            </>
+        <section className={`${PANEL} lg:col-span-2 print:col-span-2`}>
+          <h2 className="text-2xl font-semibold text-slate-900">Wydane i od razu przyjęte z powrotem</h2>
+          <p className="mb-1 text-base text-slate-700">
+            Ostatnie 12 miesięcy; towar, który leżał co najmniej {monthsLabel(moves.min_lot_age_months)}. Po takim
+            zapisie wygląda jak nowa dostawa.
+          </p>
+          {moves.total === 0 ? (
+            <p className="text-xl text-slate-900">Ani razu.</p>
           ) : (
-            <strong>ani razu.</strong>
-          )}
-        </p>
-        {moves.total > 0 && (
-          <InlineShowList
-            onClick={() =>
-              onOpen({ kind: 'moves', scope: 'all', person: null, label: 'Towar wydany i od razu przyjęty z powrotem' })
-            }
-          />
-        )}
-        {moves.total > 0 && (
-          <p className="mt-4 text-xl text-slate-900">
-            Bez żadnego opisu:{' '}
-            {moves.unexplained > 0 ? (
-              <>
-                <strong className="tabular-nums">{times(moves.unexplained)}</strong>, wartość{' '}
-                <strong className="tabular-nums">{fmtBig(moves.unexplained_value)}</strong>.
-              </>
-            ) : (
-              <strong>ani razu.</strong>
-            )}
-          </p>
-        )}
-        {moves.unexplained > 0 && (
-          <InlineShowList
-            onClick={() =>
-              onOpen({
-                kind: 'moves',
-                scope: 'unexplained',
-                person: null,
-                label: 'Towar wydany i od razu przyjęty z powrotem bez żadnego opisu',
-              })
-            }
-          />
-        )}
-        {moves.total > 0 && (
-          <p className="mt-2 text-lg text-slate-700">
-            „Bez opisu” = ten sam rozmiar i kolor, a na dokumencie nie ma opisu, dlaczego towar wydano i przyjęto z
-            powrotem.
-          </p>
-        )}
-        {moves.unexplained > 0 && moves.people.length > 0 && (
-          <div className="mt-5">
-            <p className="text-lg font-medium text-slate-800">Kto wystawił najwięcej takich dokumentów bez opisu:</p>
-            <ul className="mt-2 divide-y divide-slate-200">
-              {moves.people.map((p, i) => (
-                <li key={`${p.operator}-${i}`} className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 py-2">
-                  <span className="text-xl text-slate-900">
-                    {p.name} — <strong className="tabular-nums">{groupInt(p.count)}</strong> bez opisu (z{' '}
-                    <span className="tabular-nums">{groupInt(p.total)}</span> wszystkich)
+            <div className="space-y-2">
+              <ListButton onClick={() => openMoves('all')}>
+                <span className="flex-1 text-lg text-slate-900">wszystkie</span>
+                <span className="text-2xl font-semibold text-slate-900 tabular-nums">{times(moves.total)}</span>
+              </ListButton>
+              {moves.unexplained > 0 ? (
+                <ListButton onClick={() => openMoves('unexplained')}>
+                  <span className="flex-1 text-lg text-slate-900">bez żadnego opisu</span>
+                  <span className="text-2xl font-semibold text-red-800 tabular-nums">
+                    {times(moves.unexplained)} · {fmtBig(moves.unexplained_value)}
                   </span>
-                  {p.operator ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onOpen({
-                          kind: 'moves',
-                          scope: 'unexplained',
-                          person: { operator: p.operator, name: p.name, count: p.count, total: p.total },
-                          label: `Dokumenty wystawione przez: ${p.name}`,
-                        })
-                      }
-                      className={`rounded-lg border border-slate-300 bg-white px-4 py-2 text-lg font-semibold text-blue-700 shadow-sm hover:bg-slate-50 print:hidden ${FOCUS}`}
-                    >
-                      Pokaż dokumenty ({groupInt(p.count)})
-                    </button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </section>
+                </ListButton>
+              ) : (
+                <p className="flex flex-wrap items-baseline justify-between gap-x-4 px-3 py-2">
+                  <span className="text-lg text-slate-900">bez żadnego opisu</span>
+                  <span className="text-2xl font-semibold text-slate-900">ani razu</span>
+                </p>
+              )}
+            </div>
+          )}
+          {moves.unexplained > 0 && moves.people.length > 0 && (
+            <>
+              <h3 className="mt-2 text-xl font-semibold text-slate-900">Kto wystawił bez opisu</h3>
+              <p className="px-3 text-base text-slate-700">Przy osobie: ile bez opisu z wszystkich jej takich dokumentów.</p>
+              <ul className="mt-1 divide-y divide-slate-200">
+                {moves.people.map((p, i) => (
+                  <li key={`${p.operator}-${i}`}>
+                    {p.operator ? (
+                      <ListButton
+                        onClick={() =>
+                          onOpen({
+                            kind: 'moves',
+                            scope: 'unexplained',
+                            person: { operator: p.operator, name: p.name, count: p.count, total: p.total },
+                            label: `Dokumenty wystawione przez: ${p.name}`,
+                          })
+                        }
+                      >
+                        <PersonLine name={p.name} count={p.count} total={p.total} />
+                      </ListButton>
+                    ) : (
+                      <div className="flex items-baseline justify-between gap-3 px-3 py-2">
+                        <PersonLine name={p.name} count={p.count} total={p.total} />
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+      </div>
 
-      <footer className="board-block border-t border-slate-300 pt-4 text-base text-slate-700">
+      <div className="mb-4 grid gap-4 lg:grid-cols-5 print:grid-cols-5">
+        <section className={`${PANEL} lg:col-span-3 print:col-span-3`}>
+          <h2 className="text-2xl font-semibold text-slate-900">Najdroższe towary bez sprzedaży ponad rok</h2>
+          {topCount === 0 ? (
+            <p className="mt-2 text-xl text-slate-800">Nie ma takiego towaru.</p>
+          ) : (
+            <>
+              <ol className="mt-2 divide-y divide-slate-200">
+                {report.top_unsold.map((item, i) => (
+                  <li key={`${item.code}-${i}`} className="flex items-start gap-3 py-2">
+                    <span className="w-7 shrink-0 text-xl font-semibold text-slate-700 tabular-nums">{i + 1}.</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-lg font-medium break-words text-slate-900">{item.card_name ?? item.name}</div>
+                      <div className="text-base text-slate-700">
+                        {fmtQuantity(item.quantity, item.unit)} ·{' '}
+                        {item.last_sale_at ? `ostatnia sprzedaż ${monthYear(item.last_sale_at)}` : 'nigdy nie sprzedany'}
+                      </div>
+                    </div>
+                    <span className="shrink-0 text-xl font-semibold text-slate-900 tabular-nums">{fmtBig(item.value)}</span>
+                  </li>
+                ))}
+              </ol>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+                {noSale12 && (
+                  <p className="text-base text-slate-800">
+                    Te {groupInt(topCount)} to <strong className="tabular-nums">{fmtBig(topSum)}</strong> z{' '}
+                    <strong className="tabular-nums">{fmtBig(noSale12.value)}</strong>
+                    {restCount > 0 ? `; reszta to ${goods(restCount)}.` : '.'}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => openItems('no_sale_12', 'Nie sprzedaje się ponad rok')}
+                  className={`rounded-lg border border-slate-300 bg-white px-4 py-2 text-lg font-semibold text-blue-700 shadow-sm hover:bg-slate-50 print:hidden ${FOCUS}`}
+                >
+                  Więcej — pokaż listę ›
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+
+        {groups.length > 0 && (
+          <section className={`${PANEL} lg:col-span-2 print:col-span-2`}>
+            <h2 className="text-2xl font-semibold text-slate-900">Bez sprzedaży ponad rok — według rodzaju</h2>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {groups.map((g) => {
+                const body = (
+                  <>
+                    <span className="flex flex-wrap items-baseline justify-between gap-x-2">
+                      <span className="text-lg font-semibold text-slate-900">{g.label}</span>
+                      <span className="text-xl font-semibold text-slate-900 tabular-nums">{fmtBig(g.unsold_value)}</span>
+                    </span>
+                    <span className="block text-base text-slate-700">
+                      {goods(g.unsold_items)}
+                      {pct(g.unsold_value, g.stock_value) ? ` · ${pct(g.unsold_value, g.stock_value)} rodzaju` : ''}
+                    </span>
+                  </>
+                )
+                const box = 'flex flex-col rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-left'
+                return g.unsold_items > 0 ? (
+                  <button
+                    key={g.group}
+                    type="button"
+                    onClick={() => openItems('no_sale_12', `Bez sprzedaży ponad rok — ${g.label}`, g.group)}
+                    className={`${box} transition-shadow hover:shadow-md ${FOCUS}`}
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div key={g.group} className={box}>
+                    {body}
+                  </div>
+                )
+              })}
+            </div>
+            <p className="mt-2 text-base text-slate-700">„% rodzaju” = jaka część całego towaru tego rodzaju.</p>
+          </section>
+        )}
+      </div>
+
+      <footer className="board-block border-t border-slate-300 pt-3 text-base text-slate-700">
         <p>
           Wartość = cena zakupu towaru, który leży w magazynie, według programu magazynowego. Ilości i kwoty dotyczą
           wybranych magazynów ({WAREHOUSE_LABEL[warehouses].toLowerCase()}); sprzedaż liczymy ze wszystkich magazynów
-          razem.
+          razem. Handlowe — towar na sprzedaż, usługowe — towar trzymany dla klientów. „Bez opisu” = ten sam rozmiar i
+          kolor, a na dokumencie wydania nie ma opisu, dlaczego towar wydano i przyjęto z powrotem; liczba „z …” przy
+          osobie to wszystkie jej takie dokumenty.
         </p>
         <p className="mt-1">
-          „Nie sprzedaje się od pół roku” = od 6 miesięcy ani jednej sprzedaży tego towaru; ta kwota obejmuje też
-          towar, który nie sprzedaje się ponad rok. „Najstarsza sztuka leży ponad 3 lata” = najstarsza dostawa tego
-          towaru, która jeszcze jest w magazynie, przyszła ponad 3 lata temu; kwota obejmuje cały zapas takich
-          towarów.
+          „Ani razu nie sprzedany” = leży w magazynie ponad pół roku i nie sprzedał się ani razu. „Najstarsza sztuka
+          leży ponad 3 lata” = najstarsza dostawa tego towaru, która jeszcze jest w magazynie, przyszła ponad 3 lata temu.
+          {report.lot_12_total && (
+            <>
+              {' '}
+              Dla porównania: {goods(report.lot_12_total.items)} ma część sztuk przyjętych ponad rok temu (zapas za{' '}
+              {fmtBig(report.lot_12_total.value)}), ale większość z nich normalnie się sprzedaje — tego nie liczymy w
+              kwotach powyżej.
+            </>
+          )}
         </p>
         {report.value_unknown > 0 && (
           <p className="mt-1">
@@ -838,108 +791,119 @@ function BoardView({
   )
 }
 
-/** Kafelek w całości jest przyciskiem (fokus z klawiatury, Enter/Spacja) z widocznym „Pokaż listę ›”. */
-function ClickTile({ className, onOpen, children }: { className: string; onOpen: () => void; children: ReactNode }) {
+/** Biały panel z grupą kafelków/pasków na pulpicie. */
+const PANEL = 'board-block rounded-2xl border-2 border-slate-300 bg-white px-5 py-4 shadow-sm'
+
+/** Górny rząd pulpitu: duża kwota z „Pokaż listę ›”, podpis, szczegół; cały kafelek jest przyciskiem. */
+function KpiTile({
+  tone,
+  value,
+  label,
+  detail,
+  onOpen,
+}: {
+  tone: Tone
+  value: string
+  label: string
+  detail: string
+  onOpen: () => void
+}) {
+  const t = TONE[tone]
   return (
     <button
       type="button"
       onClick={onOpen}
-      className={`board-block block w-full text-left transition-shadow hover:shadow-md ${FOCUS} ${className}`}
+      className={`board-block flex w-full flex-col rounded-2xl border-2 px-5 py-3 text-left shadow-sm transition-shadow hover:shadow-md ${FOCUS} ${t.box}`}
     >
-      {children}
-      <span className="mt-3 block">
+      <span className={`block text-4xl font-semibold tabular-nums ${t.number}`}>{value}</span>
+      <span className="mt-1 block text-xl leading-snug font-medium text-slate-900">{label}</span>
+      <span className="mt-auto flex flex-wrap items-baseline justify-between gap-x-3 pt-1">
+        <span className="text-lg text-slate-700">{detail}</span>
         <ShowList />
       </span>
     </button>
   )
 }
 
-/** Wiersz „schodka”: poziom 1 i 2 wcięte pod wierszem, którego są częścią („w tym”). */
-function StepRow({
-  level,
+const BAR_FILL: Record<'amber' | 'red' | 'slate', { fill: string; number: string }> = {
+  amber: { fill: 'bg-amber-400', number: 'text-amber-900' },
+  red: { fill: 'bg-red-400', number: 'text-red-800' },
+  slate: { fill: 'bg-slate-400', number: 'text-slate-900' },
+}
+
+/** Pasek „jak długo”: podpis, kwota, pasek w skali pierwszego i „Pokaż listę ›”; cały jest przyciskiem. */
+function BarRow({
   tone,
   label,
-  items,
-  value,
-  share,
-  onOpen,
-}: {
-  level: 0 | 1 | 2
-  tone: Tone
-  label: string
-  items: number
-  value: number
-  share: string | null
-  onOpen: () => void
-}) {
-  const t = TONE[tone]
-  const indent = level === 0 ? '' : level === 1 ? 'ml-6 sm:ml-12' : 'ml-12 sm:ml-24'
-  return (
-    <li className={indent}>
-      <button
-        type="button"
-        onClick={onOpen}
-        className={`flex w-full flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-2xl border-2 px-5 py-4 text-left shadow-sm transition-shadow hover:shadow-md ${FOCUS} ${t.box}`}
-      >
-        <span className="block min-w-0">
-          <span className="block text-xl font-medium text-slate-900">
-            {level > 0 ? <span aria-hidden="true">↳ </span> : null}
-            {label}
-          </span>
-          <span className="block text-lg text-slate-700">
-            {goods(items)}
-            {share ? ` · to ${share} wartości magazynu` : ''}
-          </span>
-        </span>
-        <span className="block text-right">
-          <span className={`block text-3xl font-semibold tabular-nums ${t.number}`}>{fmtBig(value)}</span>
-          <ShowList />
-        </span>
-      </button>
-    </li>
-  )
-}
-
-function AgeTile({
   bucket: b,
-  label,
+  scale,
   share,
   onOpen,
 }: {
-  bucket: InventoryBoardBucket | null
+  tone: 'amber' | 'red' | 'slate'
   label: string
+  bucket: { items: number; value: number }
+  scale: number
   share: string | null
   onOpen: () => void
 }) {
-  const body = (
-    <>
-      <span className="block text-3xl font-semibold text-slate-800 tabular-nums">{b ? fmtBig(b.value) : '—'}</span>
-      <span className="mt-2 block text-xl text-slate-900">{label}</span>
-      <span className="mt-1 block text-lg text-slate-700">
-        {b ? goods(b.items) : 'brak danych'}
-        {b && share ? ` · to ${share} wartości magazynu` : ''}
-      </span>
-    </>
-  )
-  const box = 'rounded-2xl border border-slate-300 bg-white px-6 py-4 shadow-sm'
-  if (!b) return <div className={`board-block ${box}`}>{body}</div>
+  const t = BAR_FILL[tone]
+  const width = scale > 0 && b.value > 0 ? Math.max(2, Math.min(100, (b.value / scale) * 100)) : 0
   return (
-    <ClickTile className={box} onOpen={onOpen}>
-      {body}
-    </ClickTile>
+    <button
+      type="button"
+      onClick={onOpen}
+      title="Pokaż listę"
+      className={`grid w-full grid-cols-[minmax(0,15rem)_minmax(4rem,1fr)_auto] items-center gap-x-4 rounded-xl px-3 py-1.5 text-left hover:bg-slate-50 ${FOCUS}`}
+    >
+      <span className="min-w-0">
+        <span className="block text-lg leading-snug font-medium text-slate-900">{label}</span>
+        <span className="block text-base leading-snug text-slate-700">
+          {goods(b.items)}
+          {share ? ` · ${share}` : ''}
+        </span>
+      </span>
+      <span className="block h-5 overflow-hidden rounded-full bg-slate-100 print:border">
+        <span className={`board-bar-fill block h-full rounded-full ${t.fill}`} style={{ width: `${width}%` }} />
+      </span>
+      <span className="text-right whitespace-nowrap">
+        <span className={`text-2xl font-semibold tabular-nums ${t.number}`}>{fmtBig(b.value)}</span>
+        <span className="ml-2 text-xl font-semibold text-blue-700 print:hidden" aria-hidden="true">
+          ›
+        </span>
+      </span>
+    </button>
   )
 }
 
-/** „Pokaż listę ›” pod zdaniem z liczbą (sekcja dokumentów). */
-function InlineShowList({ onClick }: { onClick: () => void }) {
+/** Wiersz z liczbą w panelu dokumentów — cały jest przyciskiem otwierającym listę. */
+function ListButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`mt-1 rounded-lg px-1 py-1 text-left hover:bg-slate-50 print:hidden ${FOCUS}`}
+      title="Pokaż dokumenty"
+      className={`flex w-full items-baseline justify-between gap-x-4 rounded-xl px-3 py-1.5 text-left hover:bg-slate-50 ${FOCUS}`}
     >
-      <ShowList />
+      {children}
+      <span className="shrink-0 text-xl font-semibold text-blue-700 print:hidden" aria-hidden="true">
+        ›
+      </span>
     </button>
+  )
+}
+
+function PersonLine({ name, count, total }: { name: string; count: number; total: number }) {
+  return (
+    <>
+      <span className="min-w-0 flex-1 truncate text-lg text-slate-900" title={name}>
+        {name}
+      </span>
+      <span className="shrink-0 text-lg whitespace-nowrap text-slate-800">
+        <strong className="text-xl tabular-nums">{groupInt(count)}</strong>{' '}
+        <span className="text-slate-700">z {groupInt(total)}</span>
+      </span>
+    </>
   )
 }
 
