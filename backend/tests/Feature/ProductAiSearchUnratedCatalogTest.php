@@ -256,6 +256,46 @@ final class ProductAiSearchUnratedCatalogTest extends TestCase
         $this->assertNotSame(ProductAiSearchService::MATCH_SOURCE_CATALOG, $json['products'][0]['ai_match_source'] ?? null);
     }
 
+    /**
+     * 29.09.2026, zapytanie #83 „mapa 332”: model ocenił TEMP-TEC 332 (producent MAPA) na 99, ale bramka nazwanego
+     * modelu szukała igły „mapa332” w nazwie i SKU karty — nie było jej tam, więc zostawała lista zapasowa innych
+     * rękawic MAPA („ten sam rodzaj w katalogu”) i w liście „Sprawdzimy i wrócimy”.
+     */
+    public function test_brand_and_model_number_query_keeps_model_verdict_for_card_named_by_line(): void
+    {
+        $base = [
+            'category' => 'Rękawice ochronne',
+            'ppe_family' => PpeAssortment::FAMILY_GLOVES,
+            'manufacturer' => 'MAPA',
+            'catalog_price_net' => 20,
+            'purchase_price' => 14,
+            'stock' => 5,
+            'enrichment_status' => Product::ENRICHMENT_DONE,
+            'enriched_at' => now(),
+        ];
+        $temp = Product::query()->create($base + [
+            'sku' => '34332028',
+            'name' => 'TEMP-TEC 332',
+            'description' => 'Rękawica ochronna TEMP-TEC 332 z polichloroprenu, ochrona termiczna i chemiczna.',
+        ]);
+        foreach ([['34328028', 'TITAN 328'], ['34117108', 'VITAL 117']] as [$sku, $name]) {
+            Product::query()->create($base + ['sku' => $sku, 'name' => $name, 'description' => 'Rękawica ochronna '.$name.'.']);
+        }
+        $llm = Mockery::mock(OpenAiCompatibleClient::class);
+        $verdict = ['matches' => [['id' => $temp->id, 'score' => 99, 'reason' => 'MAPA TEMP-TEC 332 — model z zapytania.']]];
+        $llm->shouldReceive('chatJson')->andReturn($verdict);
+        $llm->shouldReceive('chatJsonMany')->andReturnUsing(
+            static fn (array $messages): array => array_fill(0, count($messages), $verdict),
+        );
+        $this->app->instance(OpenAiCompatibleClient::class, $llm);
+
+        $json = $this->postJson('/api/products/ai-search', ['query' => 'mapa 332', 'limit' => 10])->assertOk()->json();
+
+        $this->assertSame('34332028', $json['products'][0]['sku'] ?? null);
+        $this->assertGreaterThanOrEqual(80, (int) $json['products'][0]['ai_match_percent']);
+        $this->assertNotSame(ProductAiSearchService::MATCH_SOURCE_CATALOG, $json['products'][0]['ai_match_source'] ?? null);
+    }
+
     /** Lista zapasowa („ten sam rodzaj w katalogu”) nie dokłada kart innej marki niż nazwana w zapytaniu. */
     public function test_catalog_fallback_skips_cards_of_other_brand_than_requested(): void
     {

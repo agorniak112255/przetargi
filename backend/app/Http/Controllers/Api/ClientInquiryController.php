@@ -15,11 +15,12 @@ use App\Models\ClientInquiry;
 use App\Models\OfferComposeRequest;
 use App\Models\User;
 use App\Services\ClientInquiryService;
-use App\Support\InquiryMailText;
+use App\Services\InquiryFileText;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Validation\ValidationException;
 use RuntimeException;
 use Throwable;
 
@@ -57,7 +58,7 @@ class ClientInquiryController extends Controller
         $validated = $request->validate([
             'q' => ['nullable', 'string', 'max:200'],
             'status' => ['nullable', 'string', 'in:all,waiting,replied'],
-            'channel' => ['nullable', 'string', 'in:all,web,thunderbird'],
+            'channel' => ['nullable', 'string', 'in:all,web,thunderbird,file'],
             'scope' => ['nullable', 'string', 'in:mine,all'],
             'user_id' => ['nullable', 'integer', 'exists:users,id'],
             'from' => ['nullable', 'date_format:Y-m-d'],
@@ -68,7 +69,7 @@ class ClientInquiryController extends Controller
             'q.string' => 'Szukana fraza musi być tekstem.',
             'q.max' => 'Szukana fraza może mieć najwyżej 200 znaków.',
             'status.in' => 'Nieznany status. Dozwolone: all, waiting, replied.',
-            'channel.in' => 'Nieznane źródło. Dozwolone: all, web, thunderbird.',
+            'channel.in' => 'Nieznane źródło. Dozwolone: all, web, thunderbird, file.',
             'scope.in' => 'Nieznany zakres. Dozwolone: mine, all.',
             'user_id.integer' => 'Identyfikator użytkownika musi być liczbą.',
             'user_id.exists' => 'Nie ma takiego użytkownika.',
@@ -298,7 +299,7 @@ class ClientInquiryController extends Controller
         // sprawdzamy, czy ktoś już tym nie siedzi. Odcisk treści liczymy z tej
         // samej, oczyszczonej wersji maila, którą dostaje model.
         $fingerprints = $this->inquiries->fingerprints(
-            InquiryMailText::forAnalysis((string) $data['body'])
+            ClientInquiryService::analysisText((string) $data['body'], $data['source_channel'] ?? null)
         );
         $force = (bool) ($data['force'] ?? false);
         $other = $this->inquiries->findOthersInquiry(
@@ -328,6 +329,7 @@ class ClientInquiryController extends Controller
                     'channel' => isset($data['source_channel']) ? (string) $data['source_channel'] : null,
                     'from' => isset($data['source_from']) ? (string) $data['source_from'] : null,
                     'sent_at' => isset($data['source_sent_at']) ? (string) $data['source_sent_at'] : null,
+                    'file_name' => isset($data['source_file_name']) ? (string) $data['source_file_name'] : null,
                     // świadoma kopia cudzego zapytania — wiążemy oba, żeby było widać parę
                     'duplicate_of_id' => $other === null ? null : $other['inquiry']->id,
                 ],
@@ -339,6 +341,40 @@ class ClientInquiryController extends Controller
         }
 
         return response()->json($this->inquiries->present($inquiry), 201);
+    }
+
+    /**
+     * Tekst zapytania z pliku klienta (Excel, PDF, Word). Zapytanie jeszcze nie powstaje: tekst wraca do pola treści,
+     * handlowiec go przegląda i dopiero wtedy wysyła jak wklejony mail (`source_channel: file`). Pliku nie zapisujemy.
+     */
+    public function fileText(Request $request, InquiryFileText $files): JsonResponse
+    {
+        $request->validate([
+            'file' => ['required', 'file', 'max:20480'],
+        ], [
+            'file.required' => 'Wybierz plik.',
+            'file.max' => 'Plik jest za duży (limit 20 MB).',
+        ]);
+        $file = $request->file('file');
+        $ext = mb_strtolower((string) $file->getClientOriginalExtension());
+        if (! in_array($ext, InquiryFileText::EXTENSIONS, true)) {
+            throw ValidationException::withMessages(['file' => ['Dozwolone pliki: '.InquiryFileText::FORMATS_LABEL.'.']]);
+        }
+
+        try {
+            $text = $files->extract((string) $file->getRealPath(), $ext);
+        } catch (Throwable $e) {
+            // uszkodzony plik albo skan: komunikat czytnika mówi handlowcowi, co zrobić
+            throw ValidationException::withMessages(['file' => [
+                $e instanceof RuntimeException ? $e->getMessage() : 'Nie udało się odczytać pliku: '.$e->getMessage(),
+            ]]);
+        }
+
+        return response()->json([
+            'text' => $text,
+            'chars' => mb_strlen($text),
+            'file_name' => $file->getClientOriginalName(),
+        ]);
     }
 
     /**

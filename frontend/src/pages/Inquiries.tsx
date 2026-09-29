@@ -48,12 +48,22 @@ const channelOptions: { id: InquiryChannelFilter; label: string }[] = [
   { id: 'all', label: 'Wszystkie kanały' },
   { id: 'thunderbird', label: 'Z Thunderbirda' },
   { id: 'web', label: 'Wklejone w przeglądarce' },
+  { id: 'file', label: 'Z pliku klienta' },
 ]
 
 const channelLabel: Record<string, string> = {
   thunderbird: 'Thunderbird',
   web: 'wklejone',
+  file: 'z pliku',
 }
+
+/** Tyle znaków przyjmuje zapytanie (walidacja `body` w API). */
+const BODY_LIMIT = 20000
+
+/** Pliki, z których API wyciąga tekst zapytania (InquiryFileText::EXTENSIONS). */
+const FILE_ACCEPT = '.xlsx,.xls,.csv,.pdf,.docx,.doc'
+
+type FileTextResponse = { text: string; chars: number; file_name: string }
 
 /** Data i godzina — na liście liczy się gęstość, więc krótki zapis. */
 function dateTime(value: string | null): string {
@@ -160,6 +170,12 @@ export function Inquiries() {
   // użytkownik nie zdecyduje „Załóż mimo to”.
   const [dup, setDup] = useState<InquiryDuplicateConflict | null>(null)
   const prepareSec = useBusySeconds(busy)
+  // Plik klienta, z którego wczytano treść. Zapytanie idzie wtedy jako „z pliku”: serwer nie tnie
+  // go jak maila (stopka, cytat), bo w piśmie „stopką” byłoby wszystko pod nagłówkiem firmowym.
+  const [fileName, setFileName] = useState<string | null>(null)
+  const [fileBusy, setFileBusy] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const fileInput = useRef<HTMLInputElement>(null)
 
   // Lista
   const [list, setList] = useState<InquiryListResponse | null>(null)
@@ -289,7 +305,34 @@ export function Inquiries() {
     }
   }, [canViewAll])
 
-  const canSubmit = !busy && body.trim().length >= 20
+  const tooLong = body.length > BODY_LIMIT
+  const canSubmit = !busy && !fileBusy && body.trim().length >= 20 && !tooLong
+
+  /** Tekst z pliku trafia do pola treści (dopisany pod tym, co już jest) — handlowiec go przegląda przed wysłaniem. */
+  async function loadFile(file: File) {
+    setFileBusy(true)
+    setErr('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await api<FileTextResponse>('/inquiries/file-text', { method: 'POST', body: form })
+      // Nagłówek oddziela wklejony wyżej mail (serwer tnie go jak mail) od treści pliku (idzie w całości) —
+      // ten sam wzorzec co ClientInquiryService::FILE_MARKER.
+      const block = `=== Plik klienta: ${res.file_name} ===\n${res.text}`
+      setBody((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${block}` : block))
+      setFileName((prev) => (prev ? `${prev}, ${res.file_name}` : res.file_name).slice(0, 255))
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się wczytać pliku.')
+    } finally {
+      setFileBusy(false)
+      if (fileInput.current) fileInput.current.value = ''
+    }
+  }
+
+  function clearBody() {
+    setBody('')
+    setFileName(null)
+  }
 
   /** Kasuje wyłącznie autor zapytania; serwer sprawdza to drugi raz. */
   async function removeRow(row: InquiryListItem) {
@@ -324,6 +367,7 @@ export function Inquiries() {
           subject: subject.trim() || null,
           client_id: clientId ? Number(clientId) : null,
           tone,
+          ...(fileName ? { source_channel: 'file', source_file_name: fileName } : {}),
           ...(force ? { force: true } : {}),
         }),
       })
@@ -358,8 +402,8 @@ export function Inquiries() {
     <div>
       <h1 className="mb-1 text-xl font-semibold">Zapytania</h1>
       <p className="mb-4 text-sm text-slate-500">
-        Wklej mail klienta. Dostaniesz gotowy list i listę pozycji, które warto sprawdzić przed
-        wysłaniem.
+        Wklej mail klienta albo wczytaj jego plik (Excel, PDF, Word). Dostaniesz gotowy list i listę
+        pozycji, które warto sprawdzić przed wysłaniem.
       </p>
 
       {err && <p className="mb-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
@@ -415,18 +459,81 @@ export function Inquiries() {
 
       <form onSubmit={(e) => void onPrepare(e)} className="mb-6 rounded-xl bg-white p-4 shadow-sm">
         <label className="block text-xs">
-          Treść maila *
+          Treść zapytania *
           <textarea
             required
             minLength={20}
-            className="mt-1 min-h-[220px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+            className={`mt-1 min-h-[220px] w-full rounded border px-2 py-1.5 text-sm ${
+              dragOver ? 'border-blue-500 bg-blue-50' : 'border-slate-300'
+            }`}
             value={body}
-            disabled={busy}
-            onChange={(e) => setBody(e.target.value)}
+            disabled={busy || fileBusy}
+            onChange={(e) => {
+              setBody(e.target.value)
+              if (!e.target.value.trim()) setFileName(null)
+            }}
             onKeyDown={onBodyKey}
-            placeholder="Wklej całą treść zapytania od klienta…"
+            onDragOver={(e) => {
+              if (!e.dataTransfer.types.includes('Files')) return
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              const file = e.dataTransfer.files[0]
+              setDragOver(false)
+              if (!file) return
+              e.preventDefault()
+              void loadFile(file)
+            }}
+            placeholder="Wklej całą treść zapytania od klienta albo upuść tu plik (Excel, PDF, Word)…"
           />
         </label>
+
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <input
+            ref={fileInput}
+            type="file"
+            accept={FILE_ACCEPT}
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) void loadFile(file)
+            }}
+          />
+          <button
+            type="button"
+            disabled={busy || fileBusy}
+            onClick={() => fileInput.current?.click()}
+            className="rounded border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {fileBusy ? 'Wczytuję plik…' : 'Wczytaj z pliku'}
+          </button>
+          <span className="text-[11px] text-slate-500">
+            Excel (xlsx, xls, csv), PDF albo Word (docx, doc) — tekst trafi do pola powyżej, przejrzyj go przed
+            wysłaniem. Skan bez warstwy tekstowej nie zostanie odczytany.
+          </span>
+          {fileName && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-[11px] text-sky-800">
+              Z pliku: {fileName}
+              <button
+                type="button"
+                disabled={busy || fileBusy}
+                onClick={clearBody}
+                className="text-sky-700 hover:text-sky-900"
+                title="Wyczyść treść"
+              >
+                ✕
+              </button>
+            </span>
+          )}
+        </div>
+        {tooLong && (
+          <p className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">
+            Treść ma {body.length.toLocaleString('pl-PL')} znaków, a zapytanie mieści{' '}
+            {BODY_LIMIT.toLocaleString('pl-PL')}. Usuń fragmenty, które nie dotyczą zamawianych wyrobów.
+          </p>
+        )}
 
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <button

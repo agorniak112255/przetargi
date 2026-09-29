@@ -254,6 +254,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         // dodatek do Thunderbirda: które maile mają już zapytanie i kto je prowadzi
         Route::post('/inquiries/lookup', [ClientInquiryController::class, 'lookup']);
         Route::get('/inquiries/message-ids', [ClientInquiryController::class, 'messageIds']);
+        // tekst zapytania z pliku klienta (Excel, PDF, Word) — do pola treści, bez zakładania zapytania
+        Route::post('/inquiries/file-text', [ClientInquiryController::class, 'fileText']);
         Route::get('/inquiries/{inquiry}', [ClientInquiryController::class, 'show']);
         Route::patch('/inquiries/{inquiry}', [ClientInquiryController::class, 'update']);
         Route::post('/inquiries/{inquiry}/compose', [ClientInquiryController::class, 'compose']);

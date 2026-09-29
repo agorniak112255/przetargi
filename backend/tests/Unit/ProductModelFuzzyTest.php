@@ -67,6 +67,19 @@ final class ProductModelFuzzyTest extends TestCase
         )));
     }
 
+    /** 29.09.2026, zapytanie #83: „mapa 332” — marka w polu producenta, numer modelu w nazwie za linią („TEMP-TEC 332”). */
+    #[Test]
+    public function brand_in_manufacturer_and_number_in_name_match_named_model(): void
+    {
+        $req = 'rękawice mapa 332';
+
+        $this->assertTrue($this->fuzzy->matches($req, $this->product('34332028', 'TEMP-TEC 332', 'MAPA')));
+        // Inny numer tej samej marki — inny model.
+        $this->assertFalse($this->fuzzy->matches($req, $this->product('34328028', 'TITAN 328', 'MAPA')));
+        // Numer z zapytania jest tylko początkiem dłuższego numeru na karcie.
+        $this->assertFalse($this->fuzzy->matches($req, $this->product('34999028', 'TEMP-TEC 3320', 'MAPA')));
+    }
+
     #[Test]
     public function tepm_ice_matches_temp_ice_and_not_other_gloves(): void
     {

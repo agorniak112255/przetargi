@@ -37,6 +37,15 @@ use Throwable;
 
 final class ClientInquiryService
 {
+    /** Kanał zapytania, którego treść handlowiec wczytał z pliku klienta (Excel, PDF, Word). */
+    public const CHANNEL_FILE = 'file';
+
+    /**
+     * Nagłówek, który formularz stawia nad tekstem wczytanym z pliku („=== Plik klienta: zapytanie.xlsx ===”).
+     * Oddziela wklejony nad nim mail (cięty jak mail) od treści pliku (idzie w całości).
+     */
+    private const FILE_MARKER = '/^=== Plik klienta: .+ ===$/mu';
+
     private const MAX_PRODUCT_QUERIES = 10;
 
     private const MAX_MATCHES_PER_QUERY = 3;
@@ -140,7 +149,39 @@ final class ClientInquiryService
     ) {}
 
     /**
-     * @param  array{message_id?: string|null, channel?: string|null, from?: string|null, sent_at?: string|null}  $source
+     * Treść, którą dostają model i parser pozycji. Mail idzie bez cytatu, nagłówka przekazania i stopki — inaczej
+     * adres albo telefon z podpisu stają się pozycjami zamówienia. Tekst z pliku (pismo, tabela) idzie w całości:
+     * cięcie stopki kończyło go na pierwszym wierszu z telefonem, czyli zwykle na nagłówku firmowym nad tabelą.
+     */
+    public static function analysisText(string $body, ?string $channel): string
+    {
+        if ($channel !== self::CHANNEL_FILE) {
+            return InquiryMailText::forAnalysis($body);
+        }
+        [$mail, $file] = self::splitAtFileMarker($body);
+
+        return $mail === '' ? $file : InquiryMailText::forAnalysis($mail)."\n\n".$file;
+    }
+
+    /**
+     * Treść zapytania z pliku: [mail wklejony nad pierwszym nagłówkiem pliku, reszta od nagłówka]. Bez nagłówka
+     * (handlowiec go usunął) całość traktujemy jak plik — lepiej nie ciąć maila niż uciąć pismo.
+     *
+     * @return array{0: string, 1: string}
+     */
+    private static function splitAtFileMarker(string $body): array
+    {
+        $body = trim(str_replace(["\r\n", "\r"], "\n", $body));
+        if (preg_match(self::FILE_MARKER, $body, $m, PREG_OFFSET_CAPTURE) !== 1) {
+            return ['', $body];
+        }
+        $at = (int) $m[0][1];
+
+        return [trim(substr($body, 0, $at)), trim(substr($body, $at))];
+    }
+
+    /**
+     * @param  array{message_id?: string|null, channel?: string|null, from?: string|null, sent_at?: string|null, file_name?: string|null}  $source
      */
     public function analyze(
         User $user,
@@ -151,14 +192,14 @@ final class ClientInquiryService
         array $source = [],
     ): ClientInquiry {
         $started = hrtime(true);
-        // Do bazy trafia cały mail; model i parser pozycji dostają wersję bez
-        // cytatu, nagłówka przekazania i stopki — inaczej adres albo telefon
-        // z podpisu stają się pozycjami zamówienia.
-        $analysisBody = InquiryMailText::forAnalysis($body);
+        $fromFile = ($source['channel'] ?? null) === self::CHANNEL_FILE;
+        $analysisBody = self::analysisText($body, $source['channel'] ?? null);
         $fingerprints = $this->fingerprints($analysisBody);
         // Klient bywa pisze model w temacie („11-571”), a w treści tylko ilość i rozmiar.
         // Najpierw temat nadany przez klienta (z nagłówka przekazania), potem temat maila.
-        $forwardedSubject = InquiryMailText::forwardedSubject($body);
+        // Z pliku: nagłówki przekazania i stopkę czytamy tylko z maila wklejonego nad treścią pliku.
+        $mailPart = $fromFile ? self::splitAtFileMarker($body)[0] : $body;
+        $forwardedSubject = $mailPart === '' ? null : InquiryMailText::forwardedSubject($mailPart);
         $subjectHint = InquiryQueryText::subjectProductHint($forwardedSubject)
             ?? InquiryQueryText::subjectProductHint($subject);
         $extractStarted = hrtime(true);
@@ -196,7 +237,8 @@ final class ClientInquiryService
         // Nadawca z nagłówka From i kontakt z odciętej stopki — obie rzeczy
         // pochodzą wprost z maila, nic tu nie jest domyślane.
         $sender = InquirySignature::splitFrom($this->nullable($source['from'] ?? null));
-        $contact = InquirySignature::extract($body, $sender['email']);
+        // Plik nie ma stopki maila — „stopką” byłoby wszystko po nagłówku firmowym pisma.
+        $contact = $mailPart === '' ? null : InquirySignature::extract($mailPart, $sender['email']);
 
         $inquiry = ClientInquiry::query()->create([
             'user_id' => $user->id,
@@ -218,6 +260,8 @@ final class ClientInquiryService
                 'subject' => $extracted['subject'],
                 // Ślad audytowy: co dokładnie poszło do modelu, gdy mail był cięty.
                 'analyzed_body' => $analysisBody === $body ? null : $analysisBody,
+                // nazwa pliku klienta, z którego wczytano treść (source_channel: file)
+                'source_file_name' => $fromFile ? $this->nullable($source['file_name'] ?? null) : null,
                 // wyrób z tematu maila, dopisany do szukania pozycji bez nazwy (query_source: subject)
                 'subject_hint' => $subjectHint,
                 'questions' => $extracted['questions'],
@@ -1176,6 +1220,8 @@ final class ClientInquiryService
             'source_from_name' => $inquiry->source_from_name,
             'source_from_email' => $inquiry->source_from_email,
             'source_sent_at' => $inquiry->source_sent_at?->toIso8601String(),
+            // plik klienta, z którego wczytano treść; null = mail
+            'source_file_name' => $this->nullable($analysis['source_file_name'] ?? null),
             'contact' => is_array($inquiry->contact) ? $inquiry->contact : null,
             'user' => $author instanceof User
                 ? ['id' => $author->id, 'name' => $author->name]
@@ -3457,14 +3503,18 @@ final class ClientInquiryService
             );
             $item['query_source'] = 'mail';
 
-            if ($subjectHint !== null
-                && $previousName === null
-                && ! InquiryQueryText::namesProduct((string) ($item['quote'] ?? ''))) {
-                // model mógł już wziąć kod z tematu — wtedy nie dublujemy
-                if (! $this->containsCompact($own, $subjectHint)) {
-                    $own = trim($subjectHint.' '.$own);
+            if ($subjectHint !== null && ! InquiryQueryText::namesProduct((string) ($item['quote'] ?? ''))) {
+                if ($previousName === null) {
+                    // model mógł już wziąć kod z tematu — wtedy nie dublujemy
+                    if (! $this->containsCompact($own, $subjectHint)) {
+                        $own = trim($subjectHint.' '.$own);
+                    }
+                    $item['query_source'] = 'subject';
+                } elseif ($this->containsCompact($own, $subjectHint)) {
+                    // Kolejny wiersz bez nazwy („rozmiar 10-2 pary”), któremu wyrób z tematu wpisał już model —
+                    // to ten sam wniosek, a bez flagi handlowiec widział go tylko przy pierwszej pozycji (#83).
+                    $item['query_source'] = 'subject';
                 }
-                $item['query_source'] = 'subject';
             }
 
             if (InquiryQueryText::hasProductWord($own)) {

@@ -26,8 +26,10 @@ class StoreClientInquiryRequest extends FormRequest
             'client_id' => ['nullable', 'integer', 'exists:clients,id'],
             // szablon listu do klienta — lista w ClientInquiry::TONES
             'tone' => ['required', Rule::in(ClientInquiry::TONES)],
-            // Pochodzenie zapytania — wypełnia je dodatek do Thunderbirda.
-            'source_channel' => ['nullable', 'in:web,thunderbird'],
+            // Pochodzenie zapytania — wypełnia je dodatek do Thunderbirda; „file” = tekst wczytany z pliku.
+            'source_channel' => ['nullable', 'in:web,thunderbird,file'],
+            // nazwa pliku, z którego pochodzi treść (tylko do śladu pochodzenia)
+            'source_file_name' => ['nullable', 'string', 'max:255'],
             'source_message_id' => ['nullable', 'string', 'max:255'],
             // świadome założenie własnego zapytania mimo ostrzeżenia o duplikacie
             'force' => ['nullable', 'boolean'],

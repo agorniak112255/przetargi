@@ -1971,6 +1971,9 @@ export function InquiryReply() {
 
           <details className="rounded-xl bg-white p-4 text-xs shadow-sm">
             <summary className="cursor-pointer font-semibold text-slate-800">Zapytanie klienta</summary>
+            {inquiry.source_file_name && (
+              <p className="mt-2 text-[11px] text-slate-500">Tekst wczytany z pliku: {inquiry.source_file_name}</p>
+            )}
             {inquiry.source_subject && (
               <p className="mt-2 font-medium text-slate-700">{inquiry.source_subject}</p>
             )}

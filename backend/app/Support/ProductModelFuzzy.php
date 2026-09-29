@@ -1273,6 +1273,7 @@ final class ProductModelFuzzy
         $spacedName = $lineCodes === [] ? '' : $this->spaced((string) $product->name);
         foreach ($needles as $needle) {
             if ($this->brandAndSkuMatch($needle, $product)
+                || $this->brandAndNameNumberMatch($needle, $product)
                 || (isset($lineCodes[$needle]) && $this->lineAndCodeApart($lineCodes[$needle][0], $lineCodes[$needle][1], $spacedName))) {
                 $best = 0;
                 $bestLen = max($bestLen, mb_strlen($needle));
@@ -1330,6 +1331,26 @@ final class ProductModelFuzzy
 
         // Linia zamiast marki: „HYCRON 27-600” to karta dystrybutora SKU „27-600”, nazwa „… (dawniej HYCRON)”.
         return mb_strlen($brand) >= 4 && str_contains($this->compact((string) $product->name), $brand);
+    }
+
+    /**
+     * „MAPA 332” daje igłę „mapa332”, a karta producenta MAPA nazywa się „TEMP-TEC 332” (SKU „34332028”): marka stoi
+     * w polu producenta, numer modelu w nazwie za linią, której klient nie napisał. Model ocenił tę kartę na 99%, ale
+     * bramka nazwanego modelu ją odrzucała i zostawała lista zapasowa innych rękawic MAPA (zapytanie #83, 29.09.2026).
+     * Liczy się tylko cały numer (min. 3 cyfry) jako osobne oznaczenie w nazwie i marka z pola producenta —
+     * „TITAN 328” ani „3320” pod „mapa 332” nie przechodzą.
+     */
+    private function brandAndNameNumberMatch(string $needle, Product $product): bool
+    {
+        if (preg_match('/^([a-z]{3,})(\d{3,})$/', $needle, $m) !== 1) {
+            return false;
+        }
+        $manufacturer = $this->compact((string) $product->manufacturer);
+        if ($manufacturer === '' || ($m[1] !== $manufacturer && ! str_contains($manufacturer, $m[1]))) {
+            return false;
+        }
+
+        return preg_match('/(?<![a-z0-9])'.$m[2].'(?![0-9])/', $this->spaced((string) $product->name)) === 1;
     }
 
     /**

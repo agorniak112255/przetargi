@@ -1,0 +1,220 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Tests\Feature;
+
+use App\Models\ClientInquiry;
+use App\Models\User;
+use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\ProductInquirySearch;
+use Database\Seeders\RolesAndPermissionsSeeder;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Laravel\Sanctum\Sanctum;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use Tests\TestCase;
+
+/** Zapytanie z pliku klienta (Excel, PDF, Word) i wyrób z tematu maila przy wierszach bez nazwy. */
+final class ClientInquiryFileTest extends TestCase
+{
+    use RefreshDatabase;
+
+    private const LETTER = "=== Plik klienta: zapytanie 12-2026.pdf ===\nZakład Usług Komunalnych Sp. z o.o.\nul. Polna 5, 35-001 Rzeszów\n"
+        ."tel. 17 111 22 33, e-mail: zaopatrzenie@zuk.pl\n\nZAPYTANIE OFERTOWE nr 12/2026\n\n"
+        ."Lp. | Nazwa | Ilość | j.m.\n1 | Rękawice MAPA 332 rozm. 9 | 4 | para\n\nZ poważaniem\nJan Kowalski";
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->seed(RolesAndPermissionsSeeder::class);
+    }
+
+    public function test_file_text_returns_spreadsheet_text_without_creating_inquiry(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $book = new Spreadsheet;
+        $book->getActiveSheet()->fromArray([['Nazwa', 'Ilość'], ['Rękawice MAPA 332 rozm. 9', '4 pary']]);
+        $path = tempnam(sys_get_temp_dir(), 'inq');
+        (new Xlsx($book))->save($path);
+
+        $this->post('/api/inquiries/file-text', [
+            'file' => new UploadedFile($path, 'zapytanie klienta.xlsx', null, null, true),
+        ], ['Accept' => 'application/json'])
+            ->assertOk()
+            ->assertJsonPath('text', "Nazwa | Ilość\nRękawice MAPA 332 rozm. 9 | 4 pary")
+            ->assertJsonPath('chars', 48)
+            ->assertJsonPath('file_name', 'zapytanie klienta.xlsx');
+
+        $this->assertSame(0, ClientInquiry::query()->count());
+        @unlink($path);
+    }
+
+    public function test_file_text_refuses_other_formats_with_a_reason(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+
+        $this->post('/api/inquiries/file-text', [
+            'file' => UploadedFile::fake()->createWithContent('zapytanie.txt', 'Rękawice MAPA 332 rozm. 9 — 4 pary'),
+        ], ['Accept' => 'application/json'])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.file.0', 'Dozwolone pliki: Excel (xlsx, xls, csv), PDF albo Word (docx, doc).');
+    }
+
+    public function test_file_text_needs_the_inquiries_permission(): void
+    {
+        Sanctum::actingAs(User::factory()->create());
+
+        $this->post('/api/inquiries/file-text', [
+            'file' => UploadedFile::fake()->createWithContent('zapytanie.csv', "Nazwa;Ilość\nRękawice;4"),
+        ], ['Accept' => 'application/json'])->assertForbidden();
+    }
+
+    /**
+     * Pismo z nagłówkiem firmowym: cięcie stopki jak w mailu kończyło tekst na wierszu z telefonem, czyli przed
+     * tabelą. Z pliku model dostaje całą treść, kontakt nie jest zgadywany ze „stopki”, a nazwa pliku zostaje.
+     */
+    public function test_inquiry_from_file_goes_to_model_whole_and_keeps_file_name(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $seenByModel = null;
+        $this->mock(OpenAiCompatibleClient::class, function ($mock) use (&$seenByModel): void {
+            $mock->shouldReceive('chatJson')->once()->andReturnUsing(function (array $messages) use (&$seenByModel): array {
+                $seenByModel = (string) $messages[1]['content'];
+
+                return [
+                    'subject' => 'Zapytanie ofertowe 12/2026',
+                    'questions' => [],
+                    'product_queries' => ['Rękawice MAPA 332'],
+                    'line_items' => [[
+                        'id' => 'item_1',
+                        'quote' => '1 | Rękawice MAPA 332 rozm. 9 | 4 | para',
+                        'qty' => '4',
+                        'unit' => 'para',
+                        'query' => 'Rękawice MAPA 332',
+                        'size' => '9',
+                    ]],
+                    'cards' => [],
+                ];
+            });
+        });
+        $this->emptySearch();
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => self::LETTER,
+            'tone' => 'handlowy',
+            'source_channel' => 'file',
+            'source_file_name' => 'zapytanie 12-2026.pdf',
+        ])->assertCreated()
+            ->assertJsonPath('source_channel', 'file')
+            ->assertJsonPath('source_file_name', 'zapytanie 12-2026.pdf')
+            ->assertJsonPath('contact', null);
+
+        $this->assertStringContainsString('1 | Rękawice MAPA 332 rozm. 9 | 4 | para', (string) $seenByModel);
+        $this->assertSame('1 | Rękawice MAPA 332 rozm. 9 | 4 | para', $res->json('items.0.quote'));
+        $inquiry = ClientInquiry::query()->findOrFail($res->json('id'));
+        $this->assertSame(self::LETTER, $inquiry->source_body);
+        $this->assertNull($inquiry->analysis['analyzed_body']);
+    }
+
+    /**
+     * Mail wklejony nad plikiem zostaje mailem: jego stopka i cytat nie idą do modelu, a kontakt bierzemy z niej.
+     * Pismo pod nagłówkiem pliku idzie w całości — z nagłówkiem firmowym i tabelą.
+     */
+    public function test_mail_pasted_above_file_is_still_trimmed_like_a_mail(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $seenByModel = null;
+        $this->mock(OpenAiCompatibleClient::class, function ($mock) use (&$seenByModel): void {
+            $mock->shouldReceive('chatJson')->once()->andReturnUsing(function (array $messages) use (&$seenByModel): array {
+                $seenByModel = (string) $messages[1]['content'];
+
+                return ['subject' => 'Oferta', 'questions' => [], 'product_queries' => [], 'line_items' => [], 'cards' => []];
+            });
+        });
+        $this->emptySearch();
+        Sanctum::actingAs($user);
+        $mail = "Dzień dobry, w załączniku zapytanie.\n\nPozdrawiam\nPiotr Nowak\ntel. 600 100 200\n\n"
+            ."W dniu 28.09.2026 o 14:55, Supon pisze:\n> stara oferta na kalosze";
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => $mail."\n\n".self::LETTER,
+            'tone' => 'handlowy',
+            'source_channel' => 'file',
+            'source_file_name' => 'zapytanie 12-2026.pdf',
+        ])->assertCreated();
+
+        $this->assertStringContainsString('Dzień dobry, w załączniku zapytanie.', (string) $seenByModel);
+        $this->assertStringNotContainsString('600 100 200', (string) $seenByModel);
+        $this->assertStringNotContainsString('stara oferta na kalosze', (string) $seenByModel);
+        $this->assertStringContainsString('tel. 17 111 22 33', (string) $seenByModel);
+        $this->assertStringContainsString('1 | Rękawice MAPA 332 rozm. 9 | 4 | para', (string) $seenByModel);
+        $this->assertStringContainsString('600 100 200', (string) json_encode($res->json('contact'), JSON_UNESCAPED_UNICODE));
+        $this->assertStringNotContainsString('111 22 33', (string) json_encode($res->json('contact'), JSON_UNESCAPED_UNICODE));
+    }
+
+    public function test_file_name_is_not_recorded_for_pasted_mail(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Oferta', 'questions' => [], 'product_queries' => [], 'line_items' => [], 'cards' => [],
+            ]);
+        });
+        $this->emptySearch();
+        Sanctum::actingAs($user);
+
+        $this->postJson('/api/inquiries', [
+            'body' => 'Dzień dobry, proszę o ofertę na rękawice MAPA 332.',
+            'tone' => 'handlowy',
+            'source_file_name' => 'zapytanie.pdf',
+        ])->assertCreated()
+            ->assertJsonPath('source_channel', 'web')
+            ->assertJsonPath('source_file_name', null);
+    }
+
+    /**
+     * Zapytanie #83 (29.09.2026): temat „mapa 332”, w treści tylko „rozmiar 9-4 pary” i „rozmiar 10-2 pary”.
+     * Model wpisał wyrób z tematu do obu wierszy, a flagę „wyrób wzięty z tematu maila” dostawał tylko pierwszy.
+     */
+    public function test_every_row_without_product_name_filled_from_subject_is_flagged(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Cena - mapa 332',
+                'questions' => ['Jaka cena?'],
+                'product_queries' => ['mapa 332'],
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => 'rozmiar 9-4 pary', 'qty' => '4', 'unit' => 'pary', 'query' => 'mapa 332', 'size' => '9'],
+                    ['id' => 'item_2', 'quote' => 'rozmiar 10-2 pary', 'qty' => '2', 'unit' => 'pary', 'query' => 'mapa 332', 'size' => '10'],
+                ],
+                'cards' => [],
+            ]);
+        });
+        $this->emptySearch();
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', [
+            'subject' => 'mapa 332',
+            'body' => "Jaka cena?\n\nmamy na stanie:\nrozmiar 9-4 pary\nrozmiar 10-2 pary",
+            'tone' => 'handlowy',
+        ])->assertCreated();
+
+        $this->assertContains('product_from_subject', $res->json('items.0.flags'));
+        $this->assertContains('product_from_subject', $res->json('items.1.flags'));
+        $inquiry = ClientInquiry::query()->findOrFail($res->json('id'));
+        $this->assertSame(['subject', 'subject'], array_column($inquiry->analysis['line_items'], 'query_source'));
+    }
+
+    private function emptySearch(): void
+    {
+        $this->mock(ProductInquirySearch::class, function ($mock): void {
+            $mock->shouldReceive('findMany')->andReturnUsing(
+                static fn (array $queries): array => array_map(static fn (string $q): array => ['query' => $q, 'products' => []], $queries),
+            );
+        });
+    }
+}

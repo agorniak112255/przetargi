@@ -178,8 +178,8 @@ export type InquiryUserRef = {
   name: string
 }
 
-/** Skąd przyszło zapytanie: wklejone w przeglądarce albo podjęte przez dodatek do Thunderbirda. */
-export type InquiryChannel = 'web' | 'thunderbird'
+/** Skąd przyszło zapytanie: wklejone w przeglądarce, podjęte przez dodatek do Thunderbirda albo wczytane z pliku klienta. */
+export type InquiryChannel = 'web' | 'thunderbird' | 'file'
 
 /**
  * Po czym poznaliśmy, że to ten sam mail:
@@ -239,6 +239,8 @@ export type InquiryPayload = {
   /** Message-ID maila źródłowego — bez niego nie ma na co odpowiedzieć w Thunderbirdzie. */
   source_message_id: string | null
   source_channel: InquiryChannel | null
+  /** Plik klienta (Excel, PDF, Word), z którego wczytano treść; null = mail. */
+  source_file_name?: string | null
   source_from_name: string | null
   source_from_email: string | null
   /** Data wysłania maila źródłowego (ISO 8601) — inna niż data założenia zapytania. */
