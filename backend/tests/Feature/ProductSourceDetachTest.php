@@ -113,6 +113,8 @@ final class ProductSourceDetachTest extends TestCase
         $this->getJson('/api/import-exclusions')
             ->assertOk()
             ->assertJsonPath('data.0.detached_source', 'b2b:'.$this->p4s->id);
+        $this->getJson('/api/import-exclusions?kind=detached')->assertOk()->assertJsonPath('meta.total', 1);
+        $this->getJson('/api/import-exclusions?kind=deleted')->assertOk()->assertJsonPath('meta.total', 0);
     }
 
     public function test_card_only_from_distributor_is_deleted_and_card_without_it_is_skipped(): void

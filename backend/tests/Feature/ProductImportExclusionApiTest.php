@@ -236,6 +236,73 @@ final class ProductImportExclusionApiTest extends TestCase
         $this->assertTrue(app(ProductImportExclusions::class)->forPriceList($this->priceList('ANRO'))->isEmpty());
     }
 
+    public function test_list_filters_sorts_and_lists_filter_options(): void
+    {
+        Sanctum::actingAs($this->admin);
+        $other = User::factory()->withRole('admin')->create(['name' => 'Zenon Kasujący']);
+        $alpha = $this->card('ALPHA-1', 'Rękawice Alpha');
+        $beta = $this->card('BETA-1', 'Buty Beta');
+        $beta->forceFill(['manufacturer' => 'UVEX'])->save();
+        $list = $this->priceList('CEDERROTH');
+        B2bProductLink::query()->create(['b2b_account_id' => $this->account->id, 'remote_id' => 'R-A', 'product_id' => $alpha->id]);
+        $this->fileIdentifier($alpha, $list, 'ROW-A');
+        B2bProductLink::query()->create(['b2b_account_id' => $this->account->id, 'remote_id' => 'R-B', 'product_id' => $beta->id]);
+        $this->travelTo(now()->setDate(2026, 9, 20)->setTime(10, 0));
+        app(ProductDeletionService::class)->deleteMany([$alpha->id], $this->admin, true);
+        $this->travelTo(now()->setDate(2026, 9, 25)->setTime(10, 0));
+        app(ProductDeletionService::class)->deleteMany([$beta->id], $other, true);
+        $this->travelBack();
+        $betaRow = ProductImportExclusion::query()->where('position_key', 'R-B')->sole();
+        app(ProductImportExclusions::class)->registerHits([(int) $betaRow->id]);
+
+        // domyślnie: najnowsze usunięcie pierwsze
+        $this->getJson('/api/import-exclusions')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 2)
+            ->assertJsonPath('meta.sort', 'deleted_at')
+            ->assertJsonPath('meta.dir', 'desc')
+            ->assertJsonPath('data.0.product.sku', 'BETA-1');
+        $this->getJson('/api/import-exclusions?sort=sku&dir=asc')->assertJsonPath('data.0.product.sku', 'ALPHA-1');
+        $this->getJson('/api/import-exclusions?sort=hits')->assertJsonPath('meta.dir', 'desc')->assertJsonPath('data.0.product.sku', 'BETA-1');
+        $this->getJson('/api/import-exclusions?sort=positions')->assertJsonPath('data.0.product.sku', 'ALPHA-1');
+
+        // źródło zawęża grupy i pozycje w grupie; reszta pozycji karty liczona jako ukryta
+        $this->getJson('/api/import-exclusions?source=file:cederroth')
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('data.0.product.sku', 'ALPHA-1')
+            ->assertJsonCount(1, 'data.0.positions')
+            ->assertJsonPath('data.0.positions.0.position_key', 'ROW-A')
+            ->assertJsonPath('data.0.positions.0.scope_key', 'file:cederroth')
+            ->assertJsonPath('data.0.hidden_count', 1)
+            ->assertJsonPath('data.0.active_count', 2);
+        $this->getJson('/api/import-exclusions?source=b2b:'.$this->account->id)
+            ->assertJsonPath('meta.total', 2)
+            ->assertJsonPath('data.0.hidden_count', 0);
+
+        $this->getJson('/api/import-exclusions?hits=hit')->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.product.sku', 'BETA-1');
+        $this->getJson('/api/import-exclusions?hits=never')->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.product.sku', 'ALPHA-1');
+        $this->getJson('/api/import-exclusions?manufacturer=UVEX')->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.product.sku', 'BETA-1');
+        $this->getJson('/api/import-exclusions?deleted_by='.$other->id)->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.product.sku', 'BETA-1');
+        $this->getJson('/api/import-exclusions?from=2026-09-21')->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.product.sku', 'BETA-1');
+        $this->getJson('/api/import-exclusions?to=2026-09-20')->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.product.sku', 'ALPHA-1');
+        $this->getJson('/api/import-exclusions?kind=deleted')->assertJsonPath('meta.total', 2);
+        $this->getJson('/api/import-exclusions?kind=detached')->assertJsonPath('meta.total', 0);
+        $this->getJson('/api/import-exclusions?per_page=50')->assertJsonPath('meta.per_page', 50);
+
+        // wybór w filtrach z całej tabeli, niezależnie od bieżących filtrów
+        $response = $this->getJson('/api/import-exclusions?q=nie-ma-takiego')->assertJsonPath('meta.total', 0);
+        $sources = collect($response->json('facets.sources'))->keyBy('key');
+        $this->assertSame('B2B P4S', $sources['b2b:'.$this->account->id]['label']);
+        $this->assertSame(2, $sources['b2b:'.$this->account->id]['active']);
+        $this->assertSame('Cennik z pliku CEDERROTH', $sources['file:cederroth']['label']);
+        $this->assertSame([['name' => 'CEDERROTH', 'cards' => 1], ['name' => 'UVEX', 'cards' => 1]], $response->json('facets.manufacturers'));
+        $this->assertEqualsCanonicalizing([$this->admin->id, $other->id], array_column($response->json('facets.users'), 'id'));
+
+        $this->getJson('/api/import-exclusions?sort=hacked')->assertUnprocessable();
+        $this->getJson('/api/import-exclusions?source=cokolwiek')->assertUnprocessable();
+        $this->getJson('/api/import-exclusions?per_page=1000')->assertUnprocessable();
+    }
+
     public function test_exclusions_need_delete_permission(): void
     {
         Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
