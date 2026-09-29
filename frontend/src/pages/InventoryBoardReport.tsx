@@ -78,6 +78,11 @@ function times(n: number): string {
   return `${groupInt(n)} ${plural(n, 'raz', 'razy', 'razy')}`
 }
 
+/** „3 miesiące”, „1 miesiąc”, „6 miesięcy”. */
+function monthsLabel(n: number): string {
+  return `${n} ${plural(n, 'miesiąc', 'miesiące', 'miesięcy')}`
+}
+
 /** „10%” (zaokrąglone), „mniej niż 1%”; null, gdy całości nie ma (nie dzielimy przez zero). */
 function pct(part: number, whole: number): string | null {
   if (!(whole > 0)) return null
@@ -498,11 +503,14 @@ function BoardView({
           {moves.unexplained > 0 ? (
             <>
               W ostatnich 12 miesiącach <strong className="tabular-nums">{times(moves.unexplained)}</strong> towar
-              wydano i przyjęto z powrotem bez żadnego opisu, na{' '}
-              <strong className="tabular-nums">{fmtBig(moves.unexplained_value)}</strong>.
+              leżący co najmniej {monthsLabel(moves.min_lot_age_months)} wydano i przyjęto z powrotem bez żadnego opisu,
+              na <strong className="tabular-nums">{fmtBig(moves.unexplained_value)}</strong>.
             </>
           ) : (
-            <>W ostatnich 12 miesiącach ani razu nie wydano i nie przyjęto z powrotem towaru bez żadnego opisu.</>
+            <>
+              W ostatnich 12 miesiącach ani razu nie wydano i nie przyjęto z powrotem bez opisu towaru leżącego co
+              najmniej {monthsLabel(moves.min_lot_age_months)}.
+            </>
           )}
         </p>
       </section>
@@ -715,13 +723,20 @@ function BoardView({
       </section>
 
       <section className="board-block mb-8 rounded-2xl border border-slate-300 bg-white px-6 py-5 shadow-sm">
-        <h2 className="mb-3 text-2xl font-semibold text-slate-900">Towar wydany i od razu przyjęty z powrotem</h2>
+        <h2 className="mb-3 text-2xl font-semibold text-slate-900">
+          Zalegający towar wydany i od razu przyjęty z powrotem
+        </h2>
+        <p className="mb-3 text-lg text-slate-700">
+          Tylko towar, który przed wydaniem leżał w magazynie co najmniej {monthsLabel(moves.min_lot_age_months)}. Po
+          wydaniu i ponownym przyjęciu taki towar wygląda w systemie jak nowa dostawa.
+        </p>
         <p className="text-xl text-slate-900">
           W ostatnich 12 miesiącach
           {movesFrom ? <span className="text-slate-700"> (od {movesFrom})</span> : null}:{' '}
           {moves.total > 0 ? (
             <>
-              <strong className="tabular-nums">{times(moves.total)}</strong> (najczęściej zamiana rozmiaru).
+              <strong className="tabular-nums">{times(moves.total)}</strong> (część z nich to zamiana rozmiaru albo
+              koloru).
             </>
           ) : (
             <strong>ani razu.</strong>
@@ -1151,6 +1166,12 @@ function BoardDetailsModal({
               </button>
             </div>
           </div>
+          {loaded?.kind === 'moves' && (
+            <p className="mt-3 text-lg font-medium text-slate-800">
+              Tylko towar, który przed wydaniem leżał w magazynie co najmniej{' '}
+              {monthsLabel(loaded.res.min_lot_age_months)}.
+            </p>
+          )}
           {request.kind === 'moves' && request.scope === 'unexplained' && (
             <p className="mt-3 text-lg text-slate-800">{UNEXPLAINED_NOTE}</p>
           )}

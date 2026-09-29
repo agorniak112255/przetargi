@@ -51,6 +51,13 @@ class InventoryBoardController extends Controller
 
     private const MOVES_GAP_DAYS = 3;
 
+    /**
+     * Tylko towar, który przed wydaniem RW leżał co najmniej tyle miesięcy (decyzja właściciela 30.09.2026): szukamy
+     * „rozmydlania” zalegających zapasów nową dostawą z PW; świeży towar nie ma czego ukrywać. Para bez znanego wieku
+     * partii się nie liczy.
+     */
+    private const MOVES_MIN_LOT_AGE_MONTHS = 3;
+
     private const PEOPLE_LIMIT = 5;
 
     public function __construct(private readonly ErpItemCards $cards) {}
@@ -179,6 +186,7 @@ class InventoryBoardController extends Controller
             'warehouses' => $warehouses,
             'operator' => $operator !== '' ? $operator : null,
             'operator_name' => $operatorName,
+            'min_lot_age_months' => self::MOVES_MIN_LOT_AGE_MONTHS,
             'title' => $title.' ('.self::SCOPE_LABELS[$warehouses].')',
             'data' => $page->getCollection()->map(function (ErpRwPwPair $p) use ($items, $cards): array {
                 $item = $p->erp_item_id !== null ? $items->get($p->erp_item_id) : null;
@@ -307,12 +315,13 @@ class InventoryBoardController extends Controller
         })->values()->all();
     }
 
-    /** @return Builder<ErpRwPwPair> pary z 12 mies., PW do 3 dni po RW, w wybranych magazynach (magazyn RW) */
+    /** @return Builder<ErpRwPwPair> pary z 12 mies., PW do 3 dni po RW, partia leżała 3+ mies., w wybranych magazynach (magazyn RW) */
     private function pairs(string $scope): Builder
     {
         $query = ErpRwPwPair::query()
             ->where('rw_date', '>=', $this->ago(self::MOVES_MONTHS)->toDateString())
-            ->where('gap_days', '<=', self::MOVES_GAP_DAYS);
+            ->where('gap_days', '<=', self::MOVES_GAP_DAYS)
+            ->where('rw_lot_age_months', '>=', self::MOVES_MIN_LOT_AGE_MONTHS);
         $service = ErpWarehouse::serviceCodes();
         if ($scope === 'service') {
             $query->whereIn('rw_warehouse', $service);
@@ -348,6 +357,7 @@ class InventoryBoardController extends Controller
 
         return [
             'from' => $this->ago(self::MOVES_MONTHS)->toDateString(),
+            'min_lot_age_months' => self::MOVES_MIN_LOT_AGE_MONTHS,
             'total' => $this->pairs($scope)->count(),
             'unexplained' => $this->unexplained($scope)->count(),
             'unexplained_value' => round((float) $this->unexplained($scope)->sum('rw_value'), 2),

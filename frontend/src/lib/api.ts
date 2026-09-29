@@ -763,6 +763,8 @@ export type InventoryBoardReport = {
     unexplained: number
     /** Wartość (zł) par bez wyjaśnienia. */
     unexplained_value: number
+    /** Liczone tylko dla towaru, który przed wydaniem leżał co najmniej tyle miesięcy (3). */
+    min_lot_age_months: number
     /**
      * Do 5 osób z największą liczbą przypadków bez wyjaśnienia (name — zapis jak w XL, bywa „Nazwisko Imię”;
      * operator — akronim operatora XL do zapytania /inventory/board/moves; count — bez wyjaśnienia;
@@ -863,6 +865,8 @@ export type InventoryBoardMovesResponse = {
   scope: 'all' | 'unexplained'
   operator: string | null
   operator_name: string | null
+  /** Tylko towar, który przed wydaniem leżał co najmniej tyle miesięcy (3). */
+  min_lot_age_months: number
   /** Np. „Wydane i przyjęte z powrotem bez wyjaśnienia — Domin Ewelina”. */
   title: string
   data: InventoryBoardMoveRow[]

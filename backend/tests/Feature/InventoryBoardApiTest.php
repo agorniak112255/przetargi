@@ -158,13 +158,16 @@ final class InventoryBoardApiTest extends TestCase
         $this->pair($bluza, '2026-05-01', 'NOMA', 'Nowaczek Martyna', 10, note: 'ZAMIANA ROZMIARÓW');
         $this->pair($bluza, '2026-04-01', 'NOMA', 'Nowaczek Martyna', 10, gap: 10);
         $this->pair($bluza, '2025-09-01', 'NOMA', 'Nowaczek Martyna', 10);
+        // świeży towar (partia < 3 mies.) i para bez znanego wieku partii — poza raportem
+        $this->pair($bluza, '2026-09-15', 'DOEW', 'Domin Ewelina', 777, lotAge: 2);
+        $this->pair($bluza, '2026-09-16', 'DOEW', 'Domin Ewelina', 888, unknownLot: true);
         // magazyn usługowy — poza zakresem handlowym
         $this->pair($bluza, '2026-09-10', 'DOEW', 'Domin Ewelina', 999, warehouse: '01M');
 
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $r = $this->getJson('/api/inventory/board')->assertOk();
         $this->assertEquals([
-            'from' => '2025-09-30', 'total' => 5, 'unexplained' => 3, 'unexplained_value' => 180,
+            'from' => '2025-09-30', 'min_lot_age_months' => 3, 'total' => 5, 'unexplained' => 3, 'unexplained_value' => 180,
             'people' => [
                 ['operator' => 'DOEW', 'name' => 'Domin Ewelina', 'count' => 2, 'total' => 3],
                 ['operator' => 'CZAL', 'name' => 'Alina Czyżyk-Tomaszewska', 'count' => 1, 'total' => 1],
@@ -175,6 +178,7 @@ final class InventoryBoardApiTest extends TestCase
         $m = $this->getJson('/api/inventory/board/moves?operator=DOEW')->assertOk();
         $this->assertSame('Dokumenty wystawione przez: Domin Ewelina (magazyny handlowe)', $m->json('title'));
         $this->assertEquals(['pairs' => 2, 'value' => 150], $m->json('totals'));
+        $this->assertSame(3, $m->json('min_lot_age_months'));
         $this->assertSame(['2026-09-01', '2026-08-01'], array_column($m->json('data'), 'rw_date'));
         $this->assertSame(51, $m->json('data.0.lot_age_months'));
         $this->assertSame('BLUZA', $m->json('data.0.item_name'));
@@ -217,7 +221,7 @@ final class InventoryBoardApiTest extends TestCase
         ]);
     }
 
-    private function pair(ErpItem $item, string $rwDate, string $operator, string $name, float $value, bool $sameFeature = true, ?string $note = null, int $gap = 0, ?int $lotAge = null, string $warehouse = '01H'): void
+    private function pair(ErpItem $item, string $rwDate, string $operator, string $name, float $value, bool $sameFeature = true, ?string $note = null, int $gap = 0, ?int $lotAge = 12, string $warehouse = '01H', bool $unknownLot = false): void
     {
         $rw = $this->doc++;
         $pw = $this->doc++;
@@ -225,7 +229,7 @@ final class InventoryBoardApiTest extends TestCase
             'xl_gid' => $item->xl_gid, 'erp_item_id' => $item->id,
             'rw_document_id' => $rw, 'rw_number' => 'RW-01H/'.$rw.'/26/09', 'rw_date' => $rwDate, 'rw_warehouse' => $warehouse,
             'rw_quantity' => 1, 'rw_value' => $value, 'rw_operator' => $operator, 'rw_approver' => $operator,
-            'rw_operator_name' => $name, 'rw_note' => $note, 'rw_lot_age_months' => $lotAge,
+            'rw_operator_name' => $name, 'rw_note' => $note, 'rw_lot_age_months' => $unknownLot ? null : $lotAge,
             'pw_document_id' => $pw, 'pw_number' => 'PW-01H/'.$pw.'/26/09', 'pw_date' => now()->parse($rwDate)->addDays($gap)->toDateString(),
             'pw_warehouse' => $warehouse, 'pw_quantity' => 1, 'pw_value' => $value, 'pw_operator' => $operator, 'pw_approver' => $operator,
             'gap_days' => $gap, 'same_value' => true, 'same_warehouse' => true, 'same_feature' => $sameFeature, 'synced_at' => now(),
