@@ -89,6 +89,8 @@ function methodLabel(method: ErpAdminLink['method']): string {
       return 'z kodu XL'
     case 'card_name':
       return 'z nazwy karty'
+    case 'search':
+      return 'z wyszukiwarki'
     case 'manual':
       return 'wybrane ręcznie'
   }
@@ -136,6 +138,16 @@ function OutcomeBadge({ item }: { item: ErpAdminItem }) {
         <span className={`${BADGE_BASE} bg-amber-100 text-amber-800`} title="Kod XL znaleziony w nazwie karty">
           do decyzji
           <span className="block font-normal">z nazwy karty</span>
+        </span>
+      )
+    case 'search_suggested':
+      return (
+        <span
+          className={`${BADGE_BASE} bg-amber-100 text-amber-800`}
+          title="Towar bez kodu — karty z wyszukiwarki ze wspólną nazwą modelu i tym samym rodzajem wyrobu"
+        >
+          do decyzji
+          <span className="block font-normal">z wyszukiwarki</span>
         </span>
       )
     case 'no_match':
@@ -193,7 +205,11 @@ const TILES: Tile[] = [
     key: 'review',
     label: 'Do decyzji',
     hint: 'propozycje kart do potwierdzenia',
-    count: (s) => (s.by_outcome.suggested ?? 0) + (s.by_outcome.ambiguous ?? 0) + (s.by_outcome.name_suggested ?? 0),
+    count: (s) =>
+      (s.by_outcome.suggested ?? 0) +
+      (s.by_outcome.ambiguous ?? 0) +
+      (s.by_outcome.name_suggested ?? 0) +
+      (s.by_outcome.search_suggested ?? 0),
     preset: { status: 'review', in_stock: '', sold_months: '' },
     tone: 'warn',
   },

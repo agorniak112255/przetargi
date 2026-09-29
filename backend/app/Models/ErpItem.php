@@ -31,6 +31,7 @@ class ErpItem extends Model
         'match_outcome',
         'match_value',
         'last_supplier',
+        'search_checked_at',
     ];
 
     protected function casts(): array
@@ -46,6 +47,7 @@ class ErpItem extends Model
             'last_sale_at' => 'date',
             'synced_at' => 'datetime',
             'removed_at' => 'datetime',
+            'search_checked_at' => 'datetime',
         ];
     }
 

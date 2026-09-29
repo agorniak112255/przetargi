@@ -53,7 +53,7 @@ final class ErpItemMatcher
     private const MEASURE = '/^\d+([.,]\d+)?(ML|L|M|MM|CM|KG|G|SZT|PAR|MB|V|W|A|DB|PKT|X\d+.*)$/i';
 
     /** Słowa rodzaju, koloru i opisu — wspólne dla różnych wyrobów, nie są dowodem tożsamości. */
-    private const GENERIC_WORDS = [
+    public const GENERIC_WORDS = [
         'REKAWICE', 'BUTY', 'POLBUTY', 'TRZEWIKI', 'SANDALY', 'OKULARY', 'GOGLE', 'KURTKA', 'SPODNIE', 'KOMBINEZON',
         'BLUZA', 'OCHR', 'OCHRONNE', 'OCHRONNY', 'OCHRONNA', 'ROB', 'ROBOCZE', 'MESKIE', 'DAMSKIE', 'CZARNE', 'CZARNY',
         'BIALE', 'BIALY', 'ZOLTE', 'ZOLTY', 'SZARE', 'SZARY', 'NIEBIESKIE', 'NIEBIESKI', 'ZIELONE', 'ZIELONY',
@@ -68,6 +68,8 @@ final class ErpItemMatcher
         'SZYBKA', 'LINA', 'LINKA', 'UBRANIE', 'BEZBARWNE', 'BEZBARWNY', 'BEZB', 'DIN', 'OCIEPLACZ', 'FARTUCH', 'PCV',
         'POLO', 'APTECZKA', 'TARCZA', 'KALOSZE', 'PLASZCZ', 'SKARPETY', 'PASEK', 'KOSZULA', 'SHIRT', 'ZAREKAWEK',
         'NAKOLANNIKI', 'SZELKI', 'AMORTYZATOR', 'ZATRZASNIK', 'URZADZENIE', 'CUT', 'SCIAGACZEM', 'VIS', 'ODBLASKOWA',
+        // propozycje z wyszukiwarki 29.09.2026: słowa opisu łączyły różne wyroby
+        'PARY', 'PARA', 'PLYNIE', 'LATEKS', 'LATEKSOWE', 'WINYLOWE', 'FLANELOWA', 'FROTTE', 'SKARPETA', 'SKARPETY',
     ];
 
     /** @var array<string, list<int>>|null kod → karty z products.sku i product_variants.sku */
@@ -95,7 +97,7 @@ final class ErpItemMatcher
     {
         $startedAt = CarbonImmutable::now();
         $stats = ['items' => 0, 'auto' => 0, 'suggested' => 0, 'ambiguous' => 0, 'family_conflict' => 0,
-            'no_code' => 0, 'no_match' => 0, 'name_suggested' => 0, 'rejected' => 0, 'confirmed_kept' => 0, 'removed_links' => 0];
+            'no_code' => 0, 'no_match' => 0, 'name_suggested' => 0, 'search_suggested' => 0, 'rejected' => 0, 'confirmed_kept' => 0, 'removed_links' => 0];
         $this->skuIndex = null;
         $this->cardNameIndex = null;
         $this->wordBrand = [];
@@ -114,9 +116,19 @@ final class ErpItemMatcher
             });
 
         // auto/suggested, których reguły już nie wskazały (także towary zarchiwizowane i usunięte z XL)
+        // propozycje z wyszukiwarki (erp:suggest) żyją własnym rytmem — znikają dopiero, gdy towar połączył się po kodzie
         $stats['removed_links'] = ErpItemLink::query()
             ->whereIn('status', [ErpItemLink::STATUS_AUTO, ErpItemLink::STATUS_SUGGESTED])
+            ->where('method', '!=', ErpItemLink::METHOD_SEARCH)
             ->where(fn ($q) => $q->whereNull('last_seen_at')->orWhere('last_seen_at', '<', $startedAt))
+            ->delete();
+        $stats['removed_links'] += ErpItemLink::query()
+            ->where('method', ErpItemLink::METHOD_SEARCH)
+            ->where('status', ErpItemLink::STATUS_SUGGESTED)
+            ->whereIn('erp_item_id', ErpItem::query()->select('id')
+                ->where(fn ($q) => $q->whereNull('match_outcome')->orWhere('match_outcome', '!=', 'search_suggested')
+                    // towar zarchiwizowany albo usunięty z XL — łączenie go nie ogląda, propozycje tracą sens
+                    ->orWhere('archived', true)->orWhereNotNull('removed_at')))
             ->delete();
         $this->skuIndex = null;
         $this->cardNameIndex = null;
@@ -141,6 +153,12 @@ final class ErpItemMatcher
         foreach ($decided->where('status', ErpItemLink::STATUS_REJECTED) as $link) {
             $rejected[$link->erp_item_id][(int) $link->product_id] = true;
         }
+        $searchOpen = ErpItemLink::query()
+            ->whereIn('erp_item_id', $itemIds)
+            ->where('method', ErpItemLink::METHOD_SEARCH)
+            ->where('status', ErpItemLink::STATUS_SUGGESTED)
+            ->pluck('erp_item_id')
+            ->flip();
         $purchaseSuppliers = [];
         foreach (DB::table('erp_item_purchases')->whereIn('erp_item_id', $itemIds)->whereNotNull('supplier')
             ->distinct()->get(['erp_item_id', 'supplier']) as $row) {
@@ -194,6 +212,10 @@ final class ErpItemMatcher
             if (in_array($decision['outcome'], ['no_match', 'family_conflict'], true)) {
                 $decision = $this->decideByCardName($item, $candidates[$item->id], $byName, $products, $suppliers, $rejected[$item->id] ?? [])
                     ?? $decision;
+            }
+            // po kodzie nic, ale są propozycje z wyszukiwarki z wcześniejszego erp:suggest — zostają do decyzji
+            if (in_array($decision['outcome'], ['no_code', 'no_match', 'family_conflict'], true) && $searchOpen->has($item->id)) {
+                $decision['outcome'] = 'search_suggested';
             }
             $stats[$decision['outcome']]++;
             foreach ($decision['links'] as $link) {
@@ -548,6 +570,24 @@ final class ErpItemMatcher
         ];
     }
 
+    /**
+     * Klucze marek producentów (CanonicalBrand) wymienionych w tekście — znane marki katalogu i słownika.
+     *
+     * @return list<string>
+     */
+    public function brandKeysIn(string $text): array
+    {
+        $keys = [];
+        foreach ($this->brandTokens($text) as $word) {
+            $brand = $this->wordBrand($word);
+            if ($brand !== '') {
+                $keys[$brand] = true;
+            }
+        }
+
+        return array_keys($keys);
+    }
+
     /** Klucz marki producenta, gdy słowo jest znaną marką katalogu (słownik marek); '' gdy nie. */
     private function wordBrand(string $word): string
     {
@@ -588,7 +628,7 @@ final class ErpItemMatcher
     }
 
     /** @return list<string> słowa z samych liter (≥ 3), wielkimi literami bez polskich znaków */
-    private function words(string $text): array
+    public function words(string $text): array
     {
         preg_match_all('/[A-Z]{3,}/', strtoupper(Str::ascii($text)), $m);
 

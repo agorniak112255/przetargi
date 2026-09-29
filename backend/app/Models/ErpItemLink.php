@@ -37,6 +37,9 @@ class ErpItemLink extends Model
     /** Kod z XL znaleziony jako słowo w nazwie karty tego samego rodzaju — tylko propozycja. */
     public const METHOD_CARD_NAME = 'card_name';
 
+    /** Towar bez kodu: karta z puli wyszukiwarki po rzadkim słowie nazwy (ErpSearchSuggester) — tylko propozycja. */
+    public const METHOD_SEARCH = 'search';
+
     public const METHOD_MANUAL = 'manual';
 
     protected $fillable = [

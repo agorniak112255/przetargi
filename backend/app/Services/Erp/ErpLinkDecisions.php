@@ -104,8 +104,8 @@ final class ErpLinkDecisions
             isset($statuses[ErpItemLink::STATUS_CONFIRMED]) => ErpItemLink::STATUS_CONFIRMED,
             isset($statuses[ErpItemLink::STATUS_AUTO]) => ErpItemLink::STATUS_AUTO,
             // zostało kilka propozycji: dalej „kilka kart” albo „z nazwy karty”
-            $suggested > 1 => in_array($item->match_outcome, ['ambiguous', 'name_suggested'], true) ? $item->match_outcome : 'ambiguous',
-            $suggested === 1 => $item->match_outcome === 'name_suggested' ? 'name_suggested' : 'suggested',
+            $suggested > 1 => in_array($item->match_outcome, ['ambiguous', 'name_suggested', 'search_suggested'], true) ? $item->match_outcome : 'ambiguous',
+            $suggested === 1 => in_array($item->match_outcome, ['name_suggested', 'search_suggested'], true) ? $item->match_outcome : 'suggested',
             isset($statuses[ErpItemLink::STATUS_REJECTED]) => 'rejected',
             default => $item->match_outcome,
         };

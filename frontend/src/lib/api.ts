@@ -542,7 +542,7 @@ export type ErpLinkedItem = {
   archived: boolean
   /** auto = kod + dowód (dostawca, marka, nazwa); confirmed = potwierdzone ręcznie. */
   status: 'auto' | 'confirmed'
-  method: 'name' | 'name1' | 'xl_code' | 'manual'
+  method: 'name' | 'name1' | 'xl_code' | 'card_name' | 'search' | 'manual'
   matched_value: string | null
   stock_trade: number
   stock_total: number
@@ -574,6 +574,7 @@ export type ErpOutcome =
   | 'suggested'
   | 'ambiguous'
   | 'name_suggested'
+  | 'search_suggested'
   | 'no_match'
   | 'family_conflict'
   | 'no_code'
@@ -584,8 +585,8 @@ export type ErpOutcome =
 export type ErpAdminLink = {
   id: number
   status: 'auto' | 'suggested' | 'confirmed' | 'rejected'
-  /** card_name = kod XL znaleziony w NAZWIE karty. */
-  method: 'name' | 'name1' | 'xl_code' | 'card_name' | 'manual'
+  /** card_name = kod XL znaleziony w NAZWIE karty; search = towar bez kodu, karta z wyszukiwarki po nazwie modelu. */
+  method: 'name' | 'name1' | 'xl_code' | 'card_name' | 'search' | 'manual'
   /** Kod dosłownie z XL. */
   matched_value: string | null
   evidence: {
@@ -597,6 +598,10 @@ export type ErpAdminLink = {
     weak_code?: boolean
     candidates?: number
     tier?: string
+    /** search: ten sam rodzaj wyrobu po obu stronach */
+    same_family?: boolean
+    /** search: pozycja w wynikach wyszukiwarki */
+    rank?: number
   } | null
   decided_at: string | null
   /** Imię / nazwa użytkownika. */

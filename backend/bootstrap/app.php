@@ -40,6 +40,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // Comarch ERP XL: kopia towarów ze stanami i zakupami, potem powiązania z kartami — tylko przy ERPXL_ENABLED
         $schedule->command('erp:sync --match')->dailyAt('05:20')->withoutOverlapping(180)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));
+        // propozycje z wyszukiwarki (bez modelu) dla towarów XL bez kodu — w nocy, bo każdy towar to zapytanie wektorowe
+        $schedule->command('erp:suggest --limit=2000')->dailyAt('03:30')->withoutOverlapping(240)
+            ->when(static fn (): bool => (bool) config('erpxl.enabled'));
         // zdjęcia, których źródło chwilowo odmówiło przy przebiegu opisu (zapora ansell.com) — do 8 prób, około doby
         $schedule->command('products:retry-images')->everyThreeHours(15)->withoutOverlapping(120)->runInBackground();
         // cenniki B2B: konta z harmonogramem (od 02:00) i „Sprawdź teraz”; każde konto rusza we własnym procesie w tle

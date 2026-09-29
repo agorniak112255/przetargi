@@ -28,7 +28,7 @@ class ErpItemController extends Controller
         'linked' => ['auto', 'confirmed'],
         'auto' => ['auto'],
         'confirmed' => ['confirmed'],
-        'review' => ['suggested', 'ambiguous', 'name_suggested'],
+        'review' => ['suggested', 'ambiguous', 'name_suggested', 'search_suggested'],
         'no_card' => ['no_match', 'family_conflict'],
         'no_code' => ['no_code'],
         'rejected' => ['rejected'],
@@ -45,7 +45,7 @@ class ErpItemController extends Controller
         'name' => 'name',
     ];
 
-    private const OUTCOMES = ['auto', 'confirmed', 'suggested', 'ambiguous', 'name_suggested', 'no_match', 'family_conflict', 'no_code', 'rejected'];
+    private const OUTCOMES = ['auto', 'confirmed', 'suggested', 'ambiguous', 'name_suggested', 'search_suggested', 'no_match', 'family_conflict', 'no_code', 'rejected'];
 
     private const LINK_ORDER = [
         ErpItemLink::STATUS_CONFIRMED => 0,
