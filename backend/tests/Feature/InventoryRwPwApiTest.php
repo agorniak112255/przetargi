@@ -21,6 +21,12 @@ final class InventoryRwPwApiTest extends TestCase
 
     private int $doc = 1;
 
+    /** Imiona i nazwiska jak w XL (zapis niejednolity — bez przestawiania). */
+    private const NAMES = [
+        'TAIZ' => 'Tarsała Izabela', 'CZAL' => 'Alina Czyżyk-Tomaszewska', 'NOMA' => 'Nowaczek Martyna',
+        'SOAG' => 'Sobczak Agnieszka', 'TUBEZ' => 'Tuszyńska Beata',
+    ];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -96,8 +102,8 @@ final class InventoryRwPwApiTest extends TestCase
         $people = $this->getJson('/api/inventory/rw-pw?view=operators')->assertOk();
         $this->assertNull($people->json('meta'));
         $this->assertSame([
-            ['operator' => 'TAIZ', 'pairs' => 2, 'items' => 1, 'value' => 1980, 'same_value' => 2, 'last_date' => '2026-09-21', 'pw_by_other' => 1, 'avg_age_months' => null, 'same_feature' => 2],
-            ['operator' => 'CZAL', 'pairs' => 1, 'items' => 1, 'value' => 610.37, 'same_value' => 0, 'last_date' => '2026-08-21', 'pw_by_other' => 0, 'avg_age_months' => null, 'same_feature' => 1],
+            ['operator' => 'TAIZ', 'operator_name' => 'Tarsała Izabela', 'pairs' => 2, 'items' => 1, 'value' => 1980, 'same_value' => 2, 'last_date' => '2026-09-21', 'pw_by_other' => 1, 'avg_age_months' => null, 'same_feature' => 2],
+            ['operator' => 'CZAL', 'operator_name' => 'Alina Czyżyk-Tomaszewska', 'pairs' => 1, 'items' => 1, 'value' => 610.37, 'same_value' => 0, 'last_date' => '2026-08-21', 'pw_by_other' => 0, 'avg_age_months' => null, 'same_feature' => 1],
         ], $people->json('data'));
     }
 
@@ -119,6 +125,9 @@ final class InventoryRwPwApiTest extends TestCase
         $this->assertSame(['2026-09-29'], $this->dates('min_age=24'));
         $this->assertSame(['2026-09-29', '2026-09-28'], $this->dates('min_age=3'));
         $this->getJson('/api/inventory/rw-pw?min_age=5')->assertUnprocessable();
+        // progi w latach: 5 lat = 60 mies.
+        $this->assertSame(['2026-09-29'], $this->dates('min_age=60'));
+        $this->assertSame([], $this->dates('min_age=60&search=BTR'));
 
         $this->assertSame([61, 4], array_column($this->getJson('/api/inventory/rw-pw?view=items&sort=age')->json('data'), 'max_age_months'));
         $people = collect($this->getJson('/api/inventory/rw-pw?view=operators')->json('data'))->keyBy('operator');
@@ -138,6 +147,26 @@ final class InventoryRwPwApiTest extends TestCase
         $this->assertSame(['43', '44', false], [$res->json('data.0.rw.features'), $res->json('data.0.pw.features'), $res->json('data.0.same_feature')]);
         $this->assertSame(['2026-09-27'], $this->dates('same_feature=1'));
         $this->assertSame(1, $this->getJson('/api/inventory/rw-pw?view=items')->json('data.0.same_feature'));
+    }
+
+    public function test_names_and_notes_are_shown_filtered_and_searchable(): void
+    {
+        $boots = $this->item(10, 'BTR1152', 'TRZEWIKI 1152');
+        $this->pair($boots, '2026-09-28', 0, 114, 114, 'CZAL', notes: ['ZAMIANA ROZMIARÓW', 'RW-15H/67/26/09']);
+        $this->pair($boots, '2026-09-27', 0, 114, 114, 'NOMA');
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $res = $this->getJson('/api/inventory/rw-pw')->assertOk();
+        $this->assertSame('Alina Czyżyk-Tomaszewska', $res->json('data.0.rw.operator_name'));
+        $this->assertSame('ZAMIANA ROZMIARÓW', $res->json('data.0.rw.note'));
+        $this->assertSame('RW-15H/67/26/09', $res->json('data.0.pw.note'));
+        $this->assertNull($res->json('data.1.rw.note'));
+        $this->assertSame(['CZAL' => 'Alina Czyżyk-Tomaszewska', 'NOMA' => 'Nowaczek Martyna'], $res->json('operator_names'));
+
+        $this->assertSame(['2026-09-28'], $this->dates('note=with'));
+        $this->assertSame(['2026-09-27'], $this->dates('note=without'));
+        $this->assertSame(['2026-09-28'], $this->dates('search=ZAMIANA'));
+        $this->getJson('/api/inventory/rw-pw?note=maybe')->assertUnprocessable();
     }
 
     public function test_inventory_row_counts_pairs_like_default_filters(): void
@@ -167,8 +196,11 @@ final class InventoryRwPwApiTest extends TestCase
     }
 
     /** @param  array{0: string, 1: int, 2: float, 3: int, 4: string, 5: bool}|null  $lot  data, wiek, średni wiek, partie, źródło, z PW */
-    /** @param  array{0: string|null, 1: string|null}|null  $features  cecha RW i PW */
-    private function pair(ErpItem $item, string $rwDate, int $gap, float $rwValue, float $pwValue, string $operator, ?string $approver = null, ?string $pwOperator = null, ?array $lot = null, ?array $features = null): void
+    /**
+     * @param  array{0: string|null, 1: string|null}|null  $features  cecha RW i PW
+     * @param  array{0: string|null, 1: string|null}|null  $notes  uwagi RW i PW
+     */
+    private function pair(ErpItem $item, string $rwDate, int $gap, float $rwValue, float $pwValue, string $operator, ?string $approver = null, ?string $pwOperator = null, ?array $lot = null, ?array $features = null, ?array $notes = null): void
     {
         $rw = $this->doc++;
         $pw = $this->doc++;
@@ -182,6 +214,9 @@ final class InventoryRwPwApiTest extends TestCase
             'gap_days' => $gap, 'same_value' => abs($rwValue - $pwValue) < 0.005, 'same_warehouse' => true, 'synced_at' => now(),
             'rw_lot_at' => $lot[0] ?? null, 'rw_lot_age_months' => $lot[1] ?? null, 'rw_lot_avg_age_months' => $lot[2] ?? null,
             'rw_lots' => $lot[3] ?? 0, 'rw_lot_source' => $lot[4] ?? null, 'rw_lot_from_pw' => $lot[5] ?? false,
+            'rw_note' => $notes[0] ?? null, 'pw_note' => $notes[1] ?? null,
+            'rw_operator_name' => self::NAMES[$operator] ?? null, 'rw_approver_name' => self::NAMES[$approver ?? $operator] ?? null,
+            'pw_operator_name' => self::NAMES[$pwOperator ?? $operator] ?? null, 'pw_approver_name' => self::NAMES[$pwOperator ?? $operator] ?? null,
             'rw_features' => $features[0] ?? null, 'pw_features' => $features[1] ?? null, 'same_feature' => ($features[0] ?? null) === ($features[1] ?? null),
         ]);
     }

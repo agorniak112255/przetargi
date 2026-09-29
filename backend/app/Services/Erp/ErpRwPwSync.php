@@ -177,6 +177,11 @@ final class ErpRwPwSync
         ];
     }
 
+    private function cut(mixed $value, int $length): ?string
+    {
+        return $value === null || $value === '' ? null : mb_substr((string) $value, 0, $length);
+    }
+
     /**
      * Cechy partii (zwykle rozmiar) po stronie RW i PW. Inna cecha = zmiana rozmiaru (38 → 39), nie odmłodzenie partii.
      *
@@ -249,6 +254,12 @@ final class ErpRwPwSync
             $prefix.'_value' => round((float) $doc['value'], 2),
             $prefix.'_operator' => $doc['operator'] !== null ? mb_substr((string) $doc['operator'], 0, 20) : null,
             $prefix.'_approver' => $doc['approver'] !== null ? mb_substr((string) $doc['approver'], 0, 20) : null,
+            $prefix.'_operator_name' => $this->cut($doc['operator_name'] ?? null, 100),
+            $prefix.'_approver_name' => $this->cut($doc['approver_name'] ?? null, 100),
+            $prefix.'_note' => $this->cut($doc['note'] ?? null, 255),
+            // dokument obcy tylko, gdy nie powtarza własnego numeru (w RW XL wpisuje tam numer RW)
+            $prefix.'_foreign_number' => ($doc['foreign_number'] ?? null) !== null && $doc['foreign_number'] !== $doc['number']
+                ? $this->cut($doc['foreign_number'], 40) : null,
         ];
     }
 }

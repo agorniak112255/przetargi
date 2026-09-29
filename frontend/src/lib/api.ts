@@ -701,8 +701,10 @@ export type InventoryResponse = {
   data: InventoryRow[]
   meta: { current_page: number; last_page: number; per_page: number; total: number }
   summary: { items: number; value: number; value_unknown: number; without_card: number; never_sold: number }
-  /** 'YYYY-MM-DD' — próg: brak sprzedaży przed tą datą. */
-  cutoff: string
+  /** 'YYYY-MM-DD' — próg: brak sprzedaży przed tą datą; null = bez warunku sprzedaży. */
+  cutoff: string | null
+  /** 'YYYY-MM-DD' — najstarsza partia przyjęta najpóźniej tego dnia; null = bez warunku wieku partii. */
+  lot_cutoff: string | null
   /** ISO — odczyt z XL (raz na dobę o 2:00). */
   synced_at: string | null
 }
@@ -724,6 +726,13 @@ export type RwPwDoc = {
   approver: string | null
   /** Cecha partii (zwykle rozmiar): '38' albo 'L×2, XL×1'; null = bez cechy albo brak danych. */
   features: string | null
+  /** Imię i nazwisko z XL dosłownie (bywa „Nazwisko Imię”): kto wystawił / kto zatwierdził. */
+  operator_name: string | null
+  approver_name: string | null
+  /** Uwagi dokumentu w XL, np. „ZAMIANA ROZMIARÓW”; w PW często numer RW. */
+  note: string | null
+  /** Dokument obcy — tylko gdy inny niż własny numer. */
+  foreign_number: string | null
 }
 
 /** Partia zdjęta przez RW: przyjęcie najstarszej i ile leżała do dnia RW. */
@@ -782,6 +791,8 @@ export type RwPwItemRow = {
 /** operator = kto wystawił RW; pw_by_other = ile PW wystawił ktoś inny. */
 export type RwPwOperatorRow = {
   operator: string
+  /** Imię i nazwisko z XL; null, gdy nieznane. */
+  operator_name: string | null
   pairs: number
   items: number
   value: number
@@ -800,6 +811,8 @@ type RwPwResponseBase = {
   summary: { pairs: number; items: number; value: number; same_value: number; operators: number; same_feature: number }
   /** Akronimy do listy wyboru (w okresie, bez filtra operatora). */
   operators: string[]
+  /** Akronim → imię i nazwisko z XL. */
+  operator_names: Record<string, string>
   /** 'YYYY-MM-DD' — początek okresu. */
   from: string
   /** ISO — ostatni nocny odczyt z XL. */

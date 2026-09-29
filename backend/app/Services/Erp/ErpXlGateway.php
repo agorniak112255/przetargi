@@ -60,9 +60,10 @@ interface ErpXlGateway
     /**
      * Zatwierdzone RW (rozchód wewnętrzny) i PW (przychód wewnętrzny) od daty — suma pozycji na dokument i towar, tylko
      * towary, które w tym okresie miały choć jedno PW. Magazyn: RW — źródłowy (MagZ), PW — docelowy (MagD).
-     * Operator: akronim z CDN.OpeKarty — kto wystawił (W) i kto zatwierdził (Z).
+     * Operator: akronim i imię z nazwiskiem z CDN.OpeKarty — kto wystawił (W) i kto zatwierdził (Z). Uwagi dokumentu
+     * z CDN.TrNOpisy (np. „ZAMIANA ROZMIARÓW”, w PW często numer RW) i dokument obcy.
      *
-     * @return list<array{type: 'rw'|'pw', document_id: int, number: string, date: int, warehouse: string|null, operator: string|null, approver: string|null, gid: int, quantity: float, value: float}>
+     * @return list<array{type: 'rw'|'pw', document_id: int, number: string, date: int, warehouse: string|null, operator: string|null, approver: string|null, operator_name: string|null, approver_name: string|null, note: string|null, foreign_number: string|null, gid: int, quantity: float, value: float}>
      */
     public function internalMoves(int $fromClarionDate): array;
 

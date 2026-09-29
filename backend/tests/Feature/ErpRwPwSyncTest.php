@@ -57,6 +57,7 @@ final class ErpRwPwSyncTest extends TestCase
         $this->assertSame('RW-01H/51/26/09', $pair->rw_number);
         $this->assertSame('2026-09-21', $pair->rw_date->toDateString());
         $this->assertSame(['TAIZ', 'TAIZ', 'TAIZ', 'NOMA'], [$pair->rw_operator, $pair->rw_approver, $pair->pw_operator, $pair->pw_approver]);
+        $this->assertSame(['Osoba TAIZ', 'Osoba NOMA'], [$pair->rw_operator_name, $pair->pw_approver_name]);
         $this->assertSame(0, $pair->gap_days);
         $this->assertTrue($pair->same_value);
         $this->assertTrue($pair->same_warehouse);
@@ -159,6 +160,24 @@ final class ErpRwPwSyncTest extends TestCase
         $this->xl->lotRows = [FakeErpXlGateway::lot(1, 5, $at, 2, feature: '43')];
         app(ErpRwPwSync::class)->run();
         $this->assertTrue(ErpRwPwPair::query()->where('rw_document_id', 1)->sole()->same_feature);
+    }
+
+    public function test_notes_are_stored_and_foreign_number_only_when_different(): void
+    {
+        $rw = FakeErpXlGateway::move('rw', 67, $this->d('2026-09-28'), 5, 1, 114.0, 'TUBEZ', '15H');
+        $rw['note'] = 'ZAMIANA ROZMIARÓW';
+        // XL wpisuje w dokument obcy RW jego własny numer — to nie informacja
+        $rw['foreign_number'] = $rw['number'];
+        $pw = FakeErpXlGateway::move('pw', 59, $this->d('2026-09-28'), 5, 1, 114.0, 'TUBEZ', '15H');
+        $pw['note'] = 'RW-15H/67/26/09';
+        $pw['foreign_number'] = 'ZW/12/2026';
+        $this->xl->moveRows = [$rw, $pw];
+
+        app(ErpRwPwSync::class)->run();
+
+        $pair = ErpRwPwPair::query()->sole();
+        $this->assertSame(['ZAMIANA ROZMIARÓW', 'RW-15H/67/26/09'], [$pair->rw_note, $pair->pw_note]);
+        $this->assertSame([null, 'ZW/12/2026'], [$pair->rw_foreign_number, $pair->pw_foreign_number]);
     }
 
     public function test_rerun_replaces_pairs_and_command_skips_when_xl_is_off(): void

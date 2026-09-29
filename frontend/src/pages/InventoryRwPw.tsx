@@ -52,7 +52,7 @@ const PAIR_SORTS: readonly PairSort[] = ['date', 'value', 'gap', 'age', 'code']
 const ITEM_SORTS: readonly ItemSort[] = ['pairs', 'value', 'last_date', 'age', 'code']
 
 /** „Partia leżała co najmniej N mies.” — wiek najstarszej partii zdjętej przez RW. */
-const MIN_AGES = ['0', '3', '6', '12', '24'] as const
+const MIN_AGES = ['0', '3', '6', '12', '24', '36', '48', '60'] as const
 const DEFAULT_MIN_AGE = '0'
 const MIN_AGE_OPTIONS: { value: (typeof MIN_AGES)[number]; label: string }[] = [
   { value: '0', label: 'wszystkie' },
@@ -60,6 +60,9 @@ const MIN_AGE_OPTIONS: { value: (typeof MIN_AGES)[number]; label: string }[] = [
   { value: '6', label: '6+' },
   { value: '12', label: '12+' },
   { value: '24', label: '24+' },
+  { value: '36', label: '3 lata+' },
+  { value: '48', label: '4 lata+' },
+  { value: '60', label: '5 lat+' },
 ]
 /** Domyślne sortowanie widoku — takie samo jak domyślne w API (kierunek desc). */
 const DEFAULT_SORT: Record<'pairs' | 'items', SortKey> = { pairs: 'date', items: 'value' }
@@ -125,6 +128,7 @@ export function InventoryRwPw() {
   const sameValue = params.get('same_value') === '1'
   const sameFeature = params.get('same_feature') === '1'
   const minAge = pick(params.get('min_age'), MIN_AGES, DEFAULT_MIN_AGE)
+  const note = pick<'' | 'with' | 'without'>(params.get('note'), ['', 'with', 'without'], '')
   const operator = (params.get('operator') ?? '').trim()
   const search = params.get('search') ?? ''
   const sort: SortKey | null =
@@ -145,6 +149,7 @@ export function InventoryRwPw() {
     qs.set('same_value', sameValue ? '1' : '0')
     if (sameFeature) qs.set('same_feature', '1')
     if (minAge !== DEFAULT_MIN_AGE) qs.set('min_age', minAge)
+    if (note) qs.set('note', note)
     if (operator) qs.set('operator', operator)
     if (search.trim()) qs.set('search', search.trim())
     // Widok „Po osobie” bez sortowania i stronicowania (zawsze od największej wartości).
@@ -155,7 +160,7 @@ export function InventoryRwPw() {
       qs.set('per_page', perPage)
     }
     return qs.toString()
-  }, [view, months, gap, sameValue, sameFeature, minAge, operator, search, sort, dir, page, perPage])
+  }, [view, months, gap, sameValue, sameFeature, minAge, note, operator, search, sort, dir, page, perPage])
 
   const [result, setResult] = useState<RwPwResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -270,7 +275,14 @@ export function InventoryRwPw() {
   }
 
   const hasFilters = Boolean(
-    months !== DEFAULT_MONTHS || gap !== DEFAULT_GAP || sameValue || sameFeature || minAge !== DEFAULT_MIN_AGE || operator || search,
+    months !== DEFAULT_MONTHS ||
+      gap !== DEFAULT_GAP ||
+      sameValue ||
+      sameFeature ||
+      minAge !== DEFAULT_MIN_AGE ||
+      note ||
+      operator ||
+      search,
   )
   // Odpowiedź dla innego widoku (tuż po przełączeniu) nie trafia do tabeli — ma inny kształt wierszy.
   const current = result && result.view === view ? result : null
@@ -281,6 +293,7 @@ export function InventoryRwPw() {
   const to = from != null ? from + rowCount - 1 : null
   const pages = meta ? pageNumbers(meta.current_page, Math.max(1, meta.last_page)) : []
   // Akronim z adresu, którego nie ma w liście z odczytu (np. stary link) — i tak widoczny w wyborze.
+  const operatorNames = useMemo(() => result?.operator_names ?? {}, [result?.operator_names])
   const operatorOptions = useMemo(() => {
     const list = result?.operators ?? []
     return operator && !list.includes(operator) ? [operator, ...list] : list
@@ -435,28 +448,42 @@ export function InventoryRwPw() {
         </label>
         <Segments
           id="rwpw-min-age"
-          label="Partia na RW leżała"
+          label="Partia na RW leżała (mies. / lat)"
           options={MIN_AGE_OPTIONS}
           value={minAge}
           onChange={(a) => setFilters({ min_age: a === DEFAULT_MIN_AGE ? null : a })}
         />
-        <span className="pb-1 text-xs text-slate-500">mies.</span>
         <label
           className="flex flex-col gap-0.5 text-[11px] text-slate-500"
           title="Pary, w których ta osoba wystawiła albo zatwierdziła RW lub PW"
         >
           Osoba
           <select
-            className="rounded border border-slate-300 bg-white px-1.5 py-1 font-mono text-xs text-slate-800"
+            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-800"
             value={operator}
             onChange={(e) => setFilters({ operator: e.target.value })}
           >
             <option value="">wszystkie</option>
             {operatorOptions.map((o) => (
               <option key={o} value={o}>
-                {o}
+                {operatorNames[o] ? `${operatorNames[o]} (${o})` : o}
               </option>
             ))}
+          </select>
+        </label>
+        <label
+          className="flex flex-col gap-0.5 text-[11px] text-slate-500"
+          title="Uwagi wpisane na dokumencie RW w XL, np. „ZAMIANA ROZMIARÓW” — para bez żadnego wyjaśnienia to lepszy kandydat do sprawdzenia"
+        >
+          Uwagi RW
+          <select
+            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-800"
+            value={note}
+            onChange={(e) => setFilters({ note: e.target.value })}
+          >
+            <option value="">wszystkie</option>
+            <option value="with">z uwagami</option>
+            <option value="without">bez uwag</option>
           </select>
         </label>
         <label className="flex min-w-[14rem] flex-1 flex-col gap-0.5 text-[11px] text-slate-500">
@@ -464,7 +491,7 @@ export function InventoryRwPw() {
           <input
             type="search"
             className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-800"
-            placeholder="kod XL, nazwa towaru, numer dokumentu"
+            placeholder="kod XL, nazwa towaru, numer dokumentu, uwagi"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
           />
@@ -579,6 +606,7 @@ export function InventoryRwPw() {
                     onOpenCard={setPreviewId}
                     onShowPairs={showItemPairs}
                     onOperator={showOperatorPairs}
+                    names={operatorNames}
                   />
                 ))}
               {emptyRow(11)}
@@ -781,15 +809,26 @@ function ItemCell({ item }: { item: RwPwItemRef }) {
 function WhoCell({ pair, onOperator }: { pair: RwPwPair; onOperator: (acronym: string) => void }) {
   const people = [pair.rw.operator, pair.rw.approver, pair.pw.operator, pair.pw.approver]
   const known = people.filter((p): p is string => !!p)
+  // akronim → imię i nazwisko z dokumentów tej pary
+  const names: Record<string, string> = {}
+  for (const [ident, name] of [
+    [pair.rw.operator, pair.rw.operator_name],
+    [pair.rw.approver, pair.rw.approver_name],
+    [pair.pw.operator, pair.pw.operator_name],
+    [pair.pw.approver, pair.pw.approver_name],
+  ] as const) {
+    if (ident && name) names[ident] = name
+  }
   const person = (acronym: string | null, role: string) =>
     acronym ? (
       <button
         type="button"
         onClick={() => onOperator(acronym)}
-        className="font-mono font-semibold text-slate-900 hover:underline"
+        className="text-left font-semibold text-slate-900 hover:underline"
         title={`${role}. Kliknij, aby zobaczyć pary tej osoby.`}
       >
-        {acronym}
+        {names[acronym] ?? acronym}
+        {names[acronym] && <span className="ml-1 font-mono text-[10px] font-normal text-slate-500">{acronym}</span>}
       </button>
     ) : (
       <span className="text-slate-400">?</span>
@@ -849,6 +888,19 @@ function DocCell({ doc, unit }: { doc: RwPwDoc; unit: string | null }) {
       {doc.features && (
         <div className="text-[11px] text-slate-500" title="Cecha partii w XL (zwykle rozmiar)">
           cecha: <span className="font-mono text-slate-700">{doc.features}</span>
+        </div>
+      )}
+      {doc.note && (
+        <div
+          className="mt-0.5 max-w-[16rem] whitespace-normal rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-700"
+          title="Uwagi dokumentu w XL"
+        >
+          uwagi: {doc.note}
+        </div>
+      )}
+      {doc.foreign_number && (
+        <div className="text-[11px] text-slate-500" title="Dokument obcy wpisany w XL">
+          dok. obcy: <span className="font-mono">{doc.foreign_number}</span>
         </div>
       )}
     </td>
@@ -970,15 +1022,23 @@ function PairRow({
   )
 }
 
-function OperatorChip({ acronym, onClick }: { acronym: string; onClick: (acronym: string) => void }) {
+function OperatorChip({
+  acronym,
+  name,
+  onClick,
+}: {
+  acronym: string
+  name?: string
+  onClick: (acronym: string) => void
+}) {
   return (
     <button
       type="button"
       onClick={() => onClick(acronym)}
       className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] text-slate-700 hover:border-slate-300 hover:bg-slate-100"
-      title={`Pokaż pary, w których ${acronym} wystawił albo zatwierdził RW lub PW`}
+      title={`Pokaż pary, w których ${name ? `${name} (${acronym})` : acronym} wystawił(a) albo zatwierdził(a) RW lub PW`}
     >
-      {acronym}
+      {name ?? acronym}
     </button>
   )
 }
@@ -990,6 +1050,7 @@ function ItemRow({
   onOpenCard,
   onShowPairs,
   onOperator,
+  names,
 }: {
   row: RwPwItemRow
   index: number
@@ -997,6 +1058,7 @@ function ItemRow({
   onOpenCard: (productId: number) => void
   onShowPairs: (code: string) => void
   onOperator: (acronym: string) => void
+  names: Record<string, string>
 }) {
   return (
     <tr className={`border-b align-top hover:bg-sky-50 ${striped ? 'bg-slate-100/60' : ''}`}>
@@ -1049,7 +1111,7 @@ function ItemRow({
         {row.operators.length > 0 ? (
           <div className="flex max-w-[12rem] flex-wrap gap-1">
             {row.operators.map((o) => (
-              <OperatorChip key={o} acronym={o} onClick={onOperator} />
+              <OperatorChip key={o} acronym={o} name={names[o]} onClick={onOperator} />
             ))}
           </div>
         ) : (
@@ -1094,10 +1156,11 @@ function OperatorRow({
             e.stopPropagation()
             onOpen(row.operator)
           }}
-          className="font-mono text-sm font-semibold text-blue-700 hover:underline"
+          className="text-left text-sm font-semibold text-blue-700 hover:underline"
           title="Pokaż pary tej osoby"
         >
-          {row.operator}
+          {row.operator_name ?? row.operator}
+          {row.operator_name && <span className="ml-1 font-mono text-[11px] font-normal text-slate-500">{row.operator}</span>}
         </button>
       </td>
       <td className="whitespace-nowrap p-2 text-right tabular-nums text-slate-800">{fmtInt(row.pairs)}</td>

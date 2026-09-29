@@ -27,7 +27,7 @@ class InventoryRwPwController extends Controller
     private const GAPS = [0, 3, 7, 30];
 
     /** „Partia leżała co najmniej N miesięcy” — wiek najstarszej partii zdjętej przez RW. */
-    private const MIN_AGES = [0, 3, 6, 12, 24];
+    private const MIN_AGES = [0, 3, 6, 12, 24, 36, 48, 60];
 
     private const PAIR_SORTS = ['date' => 'rw_date', 'value' => 'rw_value', 'gap' => 'gap_days', 'age' => 'rw_lot_age_months', 'code' => 'code'];
 
@@ -44,6 +44,8 @@ class InventoryRwPwController extends Controller
             'min_age' => ['nullable', 'integer', Rule::in(self::MIN_AGES)],
             'same_feature' => ['nullable', 'boolean'],
             'operator' => ['nullable', 'string', 'max:20'],
+            // uwagi na RW: z uwagami (np. „ZAMIANA ROZMIARÓW”) albo bez żadnego wyjaśnienia
+            'note' => ['nullable', 'string', Rule::in(['', 'with', 'without'])],
             'search' => ['nullable', 'string', 'max:150'],
             'view' => ['nullable', 'string', Rule::in(['pairs', 'items', 'operators'])],
             'sort' => ['nullable', 'string'],
@@ -67,6 +69,12 @@ class InventoryRwPwController extends Controller
         if (! empty($v['same_feature'])) {
             $query->where('same_feature', true);
         }
+        $note = (string) ($v['note'] ?? '');
+        if ($note === 'with') {
+            $query->whereNotNull('rw_note');
+        } elseif ($note === 'without') {
+            $query->whereNull('rw_note');
+        }
         $minAge = (int) ($v['min_age'] ?? 0);
         if ($minAge > 0) {
             $query->where('rw_lot_age_months', '>=', $minAge);
@@ -80,6 +88,7 @@ class InventoryRwPwController extends Controller
         if ($search !== '') {
             $like = '%'.addcslashes($search, '%_\\').'%';
             $query->where(fn (Builder $q) => $q->where('rw_number', 'like', $like)->orWhere('pw_number', 'like', $like)
+                ->orWhere('rw_note', 'like', $like)->orWhere('pw_note', 'like', $like)
                 ->orWhereHas('item', fn (Builder $i) => $i->where('code', 'like', $like)->orWhere('name', 'like', $like)));
         }
 
@@ -88,12 +97,12 @@ class InventoryRwPwController extends Controller
                 .' sum(case when same_value then 1 else 0 end) as same_value, count(distinct rw_operator) as operators,'
                 .' sum(case when same_feature then 1 else 0 end) as same_feature')
             ->first();
-        $operators = $this->operatorOptions($period());
+        [$operators, $operatorNames] = $this->operatorDirectory($period());
         $syncedAt = ErpRwPwPair::query()->max('synced_at');
 
         [$data, $meta] = match ($view) {
             'items' => $this->items($query, (string) ($v['sort'] ?? 'value'), $dir, (int) ($v['per_page'] ?? 50)),
-            'operators' => [$this->operators($query), null],
+            'operators' => [$this->operators($query, $operatorNames), null],
             default => $this->pairs($query, (string) ($v['sort'] ?? 'date'), $dir, (int) ($v['per_page'] ?? 50)),
         };
 
@@ -110,6 +119,8 @@ class InventoryRwPwController extends Controller
                 'same_feature' => (int) ($summary->same_feature ?? 0),
             ],
             'operators' => $operators,
+            // akronim → imię i nazwisko dosłownie z XL
+            'operator_names' => (object) $operatorNames,
             'from' => $from->toDateString(),
             'synced_at' => $syncedAt !== null ? Carbon::parse((string) $syncedAt)->toIso8601String() : null,
         ]);
@@ -209,9 +220,10 @@ class InventoryRwPwController extends Controller
      * Po osobie, która wystawiła RW; pw_by_other — ile PW wystawił ktoś inny.
      *
      * @param  Builder<ErpRwPwPair>  $query
+     * @param  array<string, string>  $names
      * @return list<array<string, mixed>>
      */
-    private function operators(Builder $query): array
+    private function operators(Builder $query, array $names): array
     {
         return (clone $query)->toBase()
             ->groupBy('rw_operator')
@@ -223,6 +235,7 @@ class InventoryRwPwController extends Controller
             ->get()
             ->map(fn ($row): array => [
                 'operator' => $row->rw_operator ?? '(brak)',
+                'operator_name' => $row->rw_operator !== null ? ($names[$row->rw_operator] ?? null) : null,
                 'pairs' => (int) $row->pairs,
                 'items' => (int) $row->items,
                 'value' => round((float) $row->value, 2),
@@ -238,25 +251,29 @@ class InventoryRwPwController extends Controller
     }
 
     /**
-     * Akronimy do listy wyboru: wszyscy, którzy w okresie wystawili albo zatwierdzili RW lub PW z pary.
+     * Osoby do listy wyboru: wszyscy, którzy w okresie wystawili albo zatwierdzili RW lub PW z pary — akronimy i ich
+     * imiona z nazwiskami z XL.
      *
      * @param  Builder<ErpRwPwPair>  $period
-     * @return list<string>
+     * @return array{0: list<string>, 1: array<string, string>}
      */
-    private function operatorOptions(Builder $period): array
+    private function operatorDirectory(Builder $period): array
     {
         $names = [];
-        foreach ($period->get(['rw_operator', 'rw_approver', 'pw_operator', 'pw_approver']) as $p) {
-            foreach ([$p->rw_operator, $p->rw_approver, $p->pw_operator, $p->pw_approver] as $who) {
-                if ($who !== null && $who !== '') {
-                    $names[$who] = true;
+        $columns = ['rw_operator', 'rw_approver', 'pw_operator', 'pw_approver'];
+        foreach ($period->get([...$columns, ...array_map(static fn (string $c): string => $c.'_name', $columns)]) as $p) {
+            foreach ($columns as $column) {
+                $who = $p->{$column};
+                if ($who === null || $who === '') {
+                    continue;
                 }
+                $name = $p->{$column.'_name'};
+                $names[$who] = ($names[$who] ?? null) ?: ($name !== null && $name !== '' ? $name : null);
             }
         }
-        $names = array_keys($names);
-        sort($names);
+        ksort($names);
 
-        return $names;
+        return [array_keys($names), array_filter($names, static fn (?string $n): bool => $n !== null)];
     }
 
     /**
@@ -313,6 +330,11 @@ class InventoryRwPwController extends Controller
             'approver' => $p->{$prefix.'_approver'},
             // cecha partii (zwykle rozmiar): „38” albo „L×2, XL×1”
             'features' => $p->{$prefix.'_features'},
+            'operator_name' => $p->{$prefix.'_operator_name'},
+            'approver_name' => $p->{$prefix.'_approver_name'},
+            // uwagi dokumentu w XL; dokument obcy tylko, gdy inny niż własny numer
+            'note' => $p->{$prefix.'_note'},
+            'foreign_number' => $p->{$prefix.'_foreign_number'},
         ];
     }
 

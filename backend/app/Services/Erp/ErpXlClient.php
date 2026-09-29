@@ -224,6 +224,10 @@ final class ErpXlClient implements ErpXlGateway
             SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, n.TrN_TrNSeria AS series,
                    n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month,
                    n.TrN_Data2 AS doc_date, m.MAG_Kod AS warehouse, ow.Ope_Ident AS operator, oz.Ope_Ident AS approver,
+                   ow.Ope_Nazwisko AS operator_name, oz.Ope_Nazwisko AS approver_name, n.TrN_DokumentObcy AS foreign_number,
+                   (SELECT TOP 1 o.TnO_Opis FROM CDN.TrNOpisy o
+                     WHERE o.TnO_TrnTyp = n.TrN_GIDTyp AND o.TnO_TrnNumer = n.TrN_GIDNumer AND o.TnO_TrnLp = 0
+                     ORDER BY o.TnO_Typ) AS note,
                    e.TrE_TwrNumer AS gid, SUM(e.TrE_Ilosc) AS quantity, SUM(e.TrE_KsiegowaNetto) AS book_value
             FROM CDN.TraElem e
             JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
@@ -239,7 +243,8 @@ final class ErpXlClient implements ErpXlGateway
                   WHERE n2.TrN_GIDTyp = $pw AND n2.TrN_Stan = $state AND n2.TrN_Data2 >= ?
               )
             GROUP BY n.TrN_GIDTyp, n.TrN_GIDNumer, n.TrN_TrNSeria, n.TrN_TrNNumer, n.TrN_TrNRok, n.TrN_TrNMiesiac,
-                     n.TrN_Data2, m.MAG_Kod, ow.Ope_Ident, oz.Ope_Ident, e.TrE_TwrNumer
+                     n.TrN_Data2, m.MAG_Kod, ow.Ope_Ident, oz.Ope_Ident, ow.Ope_Nazwisko, oz.Ope_Nazwisko,
+                     n.TrN_DokumentObcy, e.TrE_TwrNumer
             SQL;
         $rows = $this->db()->select($sql, [$fromClarionDate, $fromClarionDate]);
 
@@ -254,6 +259,11 @@ final class ErpXlClient implements ErpXlGateway
                 'warehouse' => $r->warehouse !== null && trim((string) $r->warehouse) !== '' ? trim((string) $r->warehouse) : null,
                 'operator' => $r->operator !== null && trim((string) $r->operator) !== '' ? trim((string) $r->operator) : null,
                 'approver' => $r->approver !== null && trim((string) $r->approver) !== '' ? trim((string) $r->approver) : null,
+                // imię i nazwisko dosłownie z XL (bywa „Nazwisko Imię” i „Imię Nazwisko”)
+                'operator_name' => $this->text($r->operator_name),
+                'approver_name' => $this->text($r->approver_name),
+                'note' => $this->text($r->note),
+                'foreign_number' => $this->text($r->foreign_number),
                 'gid' => (int) $r->gid,
                 'quantity' => (float) $r->quantity,
                 'value' => (float) $r->book_value,
@@ -306,6 +316,14 @@ final class ErpXlClient implements ErpXlGateway
         }
 
         return $out;
+    }
+
+    /** Tekst z XL bez zbędnych spacji; pusty = null. */
+    private function text(mixed $value): ?string
+    {
+        $value = $value === null ? '' : trim((string) $value);
+
+        return $value === '' ? null : $value;
     }
 
     /** Numer jak w XL: PW-15H/38/23/03 (seria/numer/rok dwucyfrowo/miesiąc). */

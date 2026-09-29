@@ -16,8 +16,13 @@ type SortKey = 'value' | 'stock' | 'last_sale' | 'oldest_lot' | 'code' | 'name'
 type SortDir = 'asc' | 'desc'
 type CardFilter = '' | 'with' | 'without'
 
-const MONTHS = ['1', '2', '3', '6', '9', '12', '18', '24'] as const
+/** '0' = bez warunku (wszystkie). */
+const MONTHS = ['0', '1', '2', '3', '6', '9', '12', '18', '24'] as const
 const DEFAULT_MONTHS = '6'
+/** Wiek partii sięga dalej niż brak sprzedaży: także 3, 4 i 5 lat. */
+const LOT_MONTHS = [...MONTHS, '36', '48', '60'] as const
+const DEFAULT_LOT_MONTHS = '0'
+const YEAR_LABELS: Record<string, string> = { '36': '3 lata', '48': '4 lata', '60': '5 lat' }
 const SORT_KEYS: readonly SortKey[] = ['value', 'stock', 'last_sale', 'oldest_lot', 'code', 'name']
 /** Kierunek po kliknięciu nowej kolumny: kwoty i stany od największych, daty od najstarszych, teksty alfabetycznie. */
 const DEFAULT_DIR: Record<SortKey, SortDir> = {
@@ -114,6 +119,7 @@ export function Inventory() {
 
   const months = pick(params.get('months'), MONTHS, DEFAULT_MONTHS)
   const neverSold = params.get('never_sold') !== '0'
+  const lotMonths = pick(params.get('lot_months'), LOT_MONTHS, DEFAULT_LOT_MONTHS)
   const card = pick<CardFilter>(params.get('card'), ['', 'with', 'without'], '')
   const group = pick<string>(params.get('group'), GROUPS, '')
   const supplier = params.get('supplier') ?? ''
@@ -127,6 +133,7 @@ export function Inventory() {
     const qs = new URLSearchParams()
     qs.set('months', months)
     qs.set('never_sold', neverSold ? '1' : '0')
+    if (lotMonths !== DEFAULT_LOT_MONTHS) qs.set('lot_months', lotMonths)
     if (card) qs.set('card', card)
     if (group) qs.set('group', group)
     if (supplier.trim()) qs.set('supplier', supplier.trim())
@@ -136,7 +143,7 @@ export function Inventory() {
     qs.set('page', String(page))
     qs.set('per_page', perPage)
     return qs.toString()
-  }, [months, neverSold, card, group, supplier, search, sort, dir, page, perPage])
+  }, [months, neverSold, lotMonths, card, group, supplier, search, sort, dir, page, perPage])
 
   const [result, setResult] = useState<InventoryResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -240,7 +247,7 @@ export function Inventory() {
   }
 
   const hasFilters = Boolean(
-    months !== DEFAULT_MONTHS || !neverSold || card || group || supplier || search,
+    months !== DEFAULT_MONTHS || !neverSold || lotMonths !== DEFAULT_LOT_MONTHS || card || group || supplier || search,
   )
   const rows = result?.data ?? []
   const meta = result?.meta
@@ -275,6 +282,7 @@ export function Inventory() {
                 {from != null && to != null ? ` · wyświetlono ${from}–${to}` : ''}
                 {` · ${perPage}/stronę`}
                 {result?.cutoff ? ` · bez sprzedaży od ${formatDate(result.cutoff)}` : ''}
+                {result?.lot_cutoff ? ` · partia leży od ${formatDate(result.lot_cutoff)} lub dłużej` : ''}
                 {loading ? ' · ładowanie…' : ''}
               </>
             ) : loading ? (
@@ -334,39 +342,34 @@ export function Inventory() {
       </div>
 
       <div className="mb-4 flex flex-wrap items-end gap-x-3 gap-y-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm">
-        <div className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          <span id="inventory-months-label">Bez sprzedaży od</span>
-          <div className="inline-flex overflow-hidden rounded border border-slate-300" role="group" aria-labelledby="inventory-months-label">
-            {MONTHS.map((m, i) => {
-              const active = m === months
-              return (
-                <button
-                  key={m}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => setFilters({ months: m === DEFAULT_MONTHS ? null : m })}
-                  className={`px-2 py-1 text-xs tabular-nums ${i > 0 ? 'border-l border-slate-300' : ''} ${
-                    active ? 'bg-blue-600 font-semibold text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  {m}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-        <span className="pb-1 text-xs text-slate-500">mies.</span>
+        <MonthSegments
+          id="inventory-months"
+          label="Bez sprzedaży od"
+          options={MONTHS}
+          value={months}
+          title="Ostatnia sprzedaż (faktura, paragon, WZ) starsza niż wybrany próg; „wszystkie” = bez warunku sprzedaży"
+          onChange={(m) => setFilters({ months: m === DEFAULT_MONTHS ? null : m })}
+        />
         <label
-          className="flex items-center gap-1.5 pb-1 text-xs text-slate-700"
+          className={`flex items-center gap-1.5 pb-1 text-xs ${months === '0' ? 'text-slate-400' : 'text-slate-700'}`}
           title="Towary bez żadnej sprzedaży w historii XL — tylko gdy najstarsza partia na stanie jest starsza niż próg albo jej data jest nieznana (świeżo przyjęty towar nie trafi na listę)."
         >
           <input
             type="checkbox"
             checked={neverSold}
+            disabled={months === '0'}
             onChange={(e) => setFilters({ never_sold: e.target.checked ? null : '0' })}
           />
           Także nigdy niesprzedane
         </label>
+        <MonthSegments
+          id="inventory-lot-months"
+          label="Partia leży od (mies. / lat)"
+          options={LOT_MONTHS}
+          value={lotMonths}
+          title="Najstarsza partia na stanie przyjęta co najmniej tyle miesięcy temu. Uwaga: RW + PW zakłada nową partię i „odmładza” tę datę (znacznik RW/PW)."
+          onChange={(m) => setFilters({ lot_months: m === DEFAULT_LOT_MONTHS ? null : m })}
+        />
         <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
           Karta
           <select
@@ -478,7 +481,7 @@ export function Inventory() {
                     'Nie udało się wczytać zapasów.'
                   ) : (
                     <>
-                      Brak towarów bez sprzedaży od {months} mies.
+                      Brak towarów przy wybranych filtrach.
                       {hasFilters && (
                         <button type="button" className="ml-1 text-blue-600 hover:underline" onClick={clearFilters}>
                           Wyczyść filtry
@@ -739,6 +742,50 @@ function InventoryTableRow({
         )}
       </td>
     </tr>
+  )
+}
+
+/** Segmenty miesięcy: „wszystkie” (bez warunku) i progi 1–24 mies. — ten sam wygląd dla sprzedaży i wieku partii. */
+function MonthSegments<T extends string>({
+  id,
+  label,
+  options,
+  value,
+  title,
+  onChange,
+}: {
+  id: string
+  label: string
+  options: readonly T[]
+  value: T
+  title: string
+  onChange: (value: T) => void
+}) {
+  return (
+    <div className="flex items-end gap-1.5">
+      <div className="flex flex-col gap-0.5 text-[11px] text-slate-500" title={title}>
+        <span id={`${id}-label`}>{label}</span>
+        <div className="inline-flex overflow-hidden rounded border border-slate-300" role="group" aria-labelledby={`${id}-label`}>
+          {options.map((m, i) => {
+            const active = m === value
+            return (
+              <button
+                key={m}
+                type="button"
+                aria-pressed={active}
+                onClick={() => onChange(m)}
+                className={`px-2 py-1 text-xs tabular-nums ${i > 0 ? 'border-l border-slate-300' : ''} ${
+                  active ? 'bg-blue-600 font-semibold text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                {m === '0' ? 'wszystkie' : (YEAR_LABELS[m] ?? m)}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      {!options.some((o) => YEAR_LABELS[o]) && <span className="pb-1 text-xs text-slate-500">mies.</span>}
+    </div>
   )
 }
 

@@ -27,6 +27,9 @@ class InventoryController extends Controller
 {
     public const MONTHS = [1, 2, 3, 6, 9, 12, 18, 24];
 
+    /** Wiek partii sięga dalej niż brak sprzedaży: także 3, 4 i 5 lat (decyzja użytkownika 30.09.2026). */
+    public const LOT_MONTHS = [...self::MONTHS, 36, 48, 60];
+
     private const DEFAULT_MONTHS = 6;
 
     /** Grupy asortymentu XL po pierwszej literze kodu towaru (jak ekran Powiązania z ERP XL). */
@@ -62,7 +65,10 @@ class InventoryController extends Controller
     public function index(Request $request): JsonResponse
     {
         $v = $request->validate([
-            'months' => ['nullable', 'integer', Rule::in(self::MONTHS)],
+            // 0 = bez warunku sprzedaży (np. sam filtr wieku partii)
+            'months' => ['nullable', 'integer', Rule::in([0, ...self::MONTHS])],
+            // najstarsza partia na stanie leży co najmniej N miesięcy (0/brak = bez warunku)
+            'lot_months' => ['nullable', 'integer', Rule::in([0, ...self::LOT_MONTHS])],
             'never_sold' => ['nullable', 'boolean'],
             'card' => ['nullable', 'string', Rule::in(['', 'with', 'without'])],
             'group' => ['nullable', 'string', Rule::in(['', ...self::GROUPS, 'other'])],
@@ -74,9 +80,12 @@ class InventoryController extends Controller
             'per_page' => ['nullable', 'integer', 'min:1', 'max:200'],
         ]);
 
-        $cutoff = CarbonImmutable::today()->subMonthsNoOverflow((int) ($v['months'] ?? self::DEFAULT_MONTHS));
+        $months = (int) ($v['months'] ?? self::DEFAULT_MONTHS);
+        $cutoff = $months > 0 ? CarbonImmutable::today()->subMonthsNoOverflow($months) : null;
+        $lotMonths = (int) ($v['lot_months'] ?? 0);
+        $lotCutoff = $lotMonths > 0 ? CarbonImmutable::today()->subMonthsNoOverflow($lotMonths) : null;
         $neverSold = ! array_key_exists('never_sold', $v) || $v['never_sold'] === null || (bool) $v['never_sold'];
-        $query = $this->filtered($v, $cutoff, $neverSold);
+        $query = $this->filtered($v, $cutoff, $neverSold, $lotCutoff);
 
         $summary = (clone $query)->toBase()
             ->selectRaw('count(*) as items, coalesce(sum('.self::VALUE_SQL.'), 0) as value,'
@@ -118,7 +127,8 @@ class InventoryController extends Controller
                 'without_card' => $withoutCard,
                 'never_sold' => (int) ($summary->never_sold ?? 0),
             ],
-            'cutoff' => $cutoff->toDateString(),
+            'cutoff' => $cutoff?->toDateString(),
+            'lot_cutoff' => $lotCutoff?->toDateString(),
             'synced_at' => $syncedAt !== null ? Carbon::parse((string) $syncedAt)->toIso8601String() : null,
         ]);
     }
@@ -131,19 +141,26 @@ class InventoryController extends Controller
      * @param  array<string, mixed>  $v
      * @return Builder<ErpItem>
      */
-    private function filtered(array $v, CarbonImmutable $cutoff, bool $neverSold): Builder
+    private function filtered(array $v, ?CarbonImmutable $cutoff, bool $neverSold, ?CarbonImmutable $lotCutoff = null): Builder
     {
-        $date = $cutoff->toDateString();
         $query = ErpItem::query()
             ->whereNull('removed_at')
-            ->where('stock_total', '>', 0)
-            ->where(function (Builder $q) use ($date, $neverSold): void {
+            ->where('stock_total', '>', 0);
+        if ($cutoff !== null) {
+            $date = $cutoff->toDateString();
+            $query->where(function (Builder $q) use ($date, $neverSold): void {
                 $q->where('last_sale_at', '<', $date);
                 if ($neverSold) {
                     $q->orWhere(fn (Builder $n) => $n->whereNull('last_sale_at')
                         ->where(fn (Builder $l) => $l->whereNull('oldest_lot_at')->orWhere('oldest_lot_at', '<=', $date)));
                 }
             });
+        }
+        // partia leży dłużej niż próg: najstarsza partia na stanie przyjęta najpóźniej w dniu progu. Uwaga: PW z pary
+        // RW → PW zakłada nową partię i „odmładza” tę datę (znacznik RW/PW przy wierszu).
+        if ($lotCutoff !== null) {
+            $query->whereNotNull('oldest_lot_at')->where('oldest_lot_at', '<=', $lotCutoff->toDateString());
+        }
 
         $card = (string) ($v['card'] ?? '');
         if ($card === 'with') {

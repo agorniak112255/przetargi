@@ -20,6 +20,8 @@ class ErpRwPwPair extends Model
         'pw_document_id', 'pw_number', 'pw_date', 'pw_warehouse', 'pw_quantity', 'pw_value', 'pw_operator', 'pw_approver',
         'pw_features',
         'same_feature',
+        'rw_operator_name', 'rw_approver_name', 'rw_note', 'rw_foreign_number',
+        'pw_operator_name', 'pw_approver_name', 'pw_note', 'pw_foreign_number',
         'gap_days',
         'same_value',
         'same_warehouse',

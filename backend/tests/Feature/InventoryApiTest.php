@@ -76,6 +76,34 @@ final class InventoryApiTest extends TestCase
         $this->getJson('/api/inventory?months=5')->assertUnprocessable();
     }
 
+    public function test_lot_age_filter_alone_and_with_sales_filter(): void
+    {
+        // najstarsza partia: 2 lata, rok, pół roku; sprzedaż: dawno, niedawno, dawno
+        $this->item('OLDLOT', stock: 5, price: 10, lastSale: '2025-01-01', oldestLot: '2024-09-01');
+        $this->item('SOLDNOW', stock: 5, price: 10, lastSale: '2026-09-01', oldestLot: '2025-08-01');
+        $this->item('FRESH', stock: 5, price: 10, lastSale: '2025-01-01', oldestLot: '2026-04-01');
+        $this->item('NOLOT', stock: 5, price: 10, lastSale: '2025-01-01', oldestLot: null);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        // bez warunku sprzedaży: wszystkie ze stanem
+        $this->assertSame(['FRESH', 'NOLOT', 'OLDLOT', 'SOLDNOW'], $this->codes('months=0&sort=code&dir=asc'));
+        // sam wiek partii (12+ mies.): także towar sprzedawany niedawno, bez towaru bez daty partii
+        $res = $this->getJson('/api/inventory?months=0&lot_months=12&sort=code&dir=asc')->assertOk();
+        $this->assertSame(['OLDLOT', 'SOLDNOW'], array_column($res->json('data'), 'code'));
+        $this->assertSame([null, '2025-09-30'], [$res->json('cutoff'), $res->json('lot_cutoff')]);
+        // oba warunki naraz
+        $this->assertSame(['OLDLOT'], $this->codes('months=6&lot_months=12&sort=code&dir=asc'));
+        $this->assertSame(['OLDLOT'], $this->codes('months=6&lot_months=24'));
+        $this->getJson('/api/inventory?lot_months=5')->assertUnprocessable();
+
+        // wiek partii do 5 lat (brak sprzedaży dalej najwyżej 24 mies.)
+        $this->item('VERYOLD', stock: 5, price: 10, lastSale: '2025-01-01', oldestLot: '2021-01-01');
+        $this->assertSame(['VERYOLD'], $this->codes('months=0&lot_months=60'));
+        $this->assertSame(['VERYOLD'], $this->codes('months=0&lot_months=36'));
+        $this->assertSame(['OLDLOT', 'VERYOLD'], $this->codes('months=0&lot_months=24&sort=code&dir=asc'));
+        $this->getJson('/api/inventory?months=36')->assertUnprocessable();
+    }
+
     public function test_cutoff_does_not_overflow_at_month_end(): void
     {
         $this->travelTo(now()->setDate(2026, 3, 31));
