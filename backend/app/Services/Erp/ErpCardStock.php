@@ -54,7 +54,7 @@ final class ErpCardStock
                 $warehouses[$code] ??= ['code' => $code, 'name' => (string) ($w['name'] ?? ''), 'quantity' => 0.0];
                 $warehouses[$code]['quantity'] += (float) ($w['quantity'] ?? 0);
             }
-            // czas odczytu stanu: odświeżanie w ciągu dnia (erp:stock) albo nocna kopia
+            // czas odczytu stanu: nocna kopia (erp:sync) albo ręczne erp:stock
             $readAt = $item->stock_synced_at ?? $item->synced_at;
             if ($readAt !== null && ($syncedAt === null || $readAt->lessThan($syncedAt))) {
                 $syncedAt = CarbonImmutable::parse($readAt);
