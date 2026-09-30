@@ -16,7 +16,7 @@ import {
   StageTwo,
 } from '../components/CampaignsUi'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
-import { api, can, type InventoryResponse, type InventoryRow } from '../lib/api'
+import { can } from '../lib/api'
 import {
   errorText,
   fmtDate,
@@ -27,7 +27,6 @@ import {
   parseMoney,
 } from '../lib/campaignFormat'
 import {
-  addCampaignItems,
   campaignAudience,
   campaignPreview,
   campaignRecipients,
@@ -569,7 +568,7 @@ function ItemsStep({
   onNext: () => void
 }) {
   const { user } = useAuth()
-  const [picker, setPicker] = useState<'inventory' | 'product' | null>(null)
+  const navigate = useNavigate()
   const [cardFor, setCardFor] = useState<CampaignItem | null>(null)
   const items = campaign.items
   const full = items.length >= MAX_ITEMS
@@ -592,10 +591,11 @@ function ItemsStep({
           <b className="text-sm text-slate-900">Produkty w kampanii</b>
           {editable && (
             <div className="flex flex-wrap gap-2">
-              <button type="button" className={BTN} disabled={full} onClick={() => setPicker('inventory')}>
+              {/* pełne listy z filtrami i zdjęciami; pasek „Dodaj do K-…” wraca tu po dodaniu */}
+              <button type="button" className={BTN} disabled={full} onClick={() => navigate(`/zapasy?kampania=${campaign.id}`)}>
                 + z Zapasów
               </button>
-              <button type="button" className={BTN} disabled={full} onClick={() => setPicker('product')}>
+              <button type="button" className={BTN} disabled={full} onClick={() => navigate(`/products?kampania=${campaign.id}`)}>
                 + z Produktów
               </button>
             </div>
@@ -673,28 +673,6 @@ function ItemsStep({
         </button>
       </aside>
 
-      {picker === 'inventory' && (
-        <InventoryPicker
-          campaign={campaign}
-          onClose={() => setPicker(null)}
-          onAdd={async (ids) => {
-            const res = await mutate(() => addCampaignItems(campaign.id, { erp_item_ids: ids }), 'Nie udało się dodać towaru.')
-            if (res) setPicker(null)
-          }}
-        />
-      )}
-      {picker === 'product' && (
-        <ProductPicker
-          title="Dodaj kartę z Produktów"
-          confirmLabel="Dodaj do kampanii"
-          note="Karta bez towaru w XL (np. nowość) też może być w kampanii — wtedy bez stanu z magazynu."
-          onClose={() => setPicker(null)}
-          onPick={async (productId) => {
-            const res = await mutate(() => addCampaignItems(campaign.id, { product_ids: [productId] }), 'Nie udało się dodać karty.')
-            if (res) setPicker(null)
-          }}
-        />
-      )}
       {cardFor && (
         <ProductPicker
           title={`Karta dla: ${cardFor.name}`}
@@ -970,197 +948,6 @@ function MoneyInput({
       />
       <span className="text-slate-500">zł</span>
     </span>
-  )
-}
-
-/** Okno „+ z Zapasów”: wyszukiwarka po GET /inventory (wszystkie towary ze stanem), zaznaczanie, dodanie paczką. */
-function InventoryPicker({
-  campaign,
-  onClose,
-  onAdd,
-}: {
-  campaign: Campaign
-  onClose: () => void
-  onAdd: (erpItemIds: number[]) => Promise<void>
-}) {
-  const [searchInput, setSearchInput] = useState('')
-  const [search, setSearch] = useState('')
-  const [months, setMonths] = useState('0')
-  const [page, setPage] = useState(1)
-  const [res, setRes] = useState<InventoryResponse | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [err, setErr] = useState('')
-  const [selected, setSelected] = useState<Map<number, InventoryRow>>(new Map())
-  const [adding, setAdding] = useState(false)
-  const seq = useRef(0)
-
-  const inCampaign = new Set(campaign.items.map((i) => i.erp_item_id).filter((v): v is number => v != null))
-  const room = Math.max(0, MAX_ITEMS - campaign.items.length)
-
-  useEffect(() => {
-    const t = window.setTimeout(() => {
-      setSearch(searchInput.trim())
-      setPage(1)
-    }, 300)
-    return () => window.clearTimeout(t)
-  }, [searchInput])
-
-  useEffect(() => {
-    const my = ++seq.current
-    const qs = new URLSearchParams({ months, never_sold: '1', page: String(page), per_page: '20', sort: 'value', dir: 'desc' })
-    if (search) qs.set('search', search)
-    setLoading(true)
-    api<InventoryResponse>(`/inventory?${qs.toString()}`)
-      .then((r) => {
-        if (my !== seq.current) return
-        setRes(r)
-        setErr('')
-      })
-      .catch((ex: unknown) => {
-        if (my === seq.current) setErr(errorText(ex, 'Nie udało się wczytać zapasów.'))
-      })
-      .finally(() => {
-        if (my === seq.current) setLoading(false)
-      })
-  }, [search, months, page])
-
-  function toggle(row: InventoryRow) {
-    setSelected((prev) => {
-      const next = new Map(prev)
-      if (next.has(row.id)) next.delete(row.id)
-      else if (next.size < room) next.set(row.id, row)
-      return next
-    })
-  }
-
-  async function add() {
-    if (selected.size === 0) return
-    setAdding(true)
-    try {
-      await onAdd([...selected.keys()])
-    } finally {
-      setAdding(false)
-    }
-  }
-
-  const meta: PageMeta | null = res ? res.meta : null
-
-  return (
-    <Modal
-      title="Dodaj towar z Zapasów"
-      wide
-      busy={adding}
-      onClose={onClose}
-      footer={
-        <>
-          <span className="mr-auto text-xs text-slate-600">
-            Zaznaczone: {selected.size} · wolnych miejsc w kampanii: {room}
-          </span>
-          <button type="button" className={BTN} onClick={onClose} disabled={adding}>
-            Anuluj
-          </button>
-          <button type="button" className={BTN_PRIMARY} disabled={adding || selected.size === 0} onClick={() => void add()}>
-            {adding ? 'Dodaję…' : `Dodaj zaznaczone (${selected.size})`}
-          </button>
-        </>
-      }
-    >
-      <div className="mb-2 flex flex-wrap items-end gap-3 text-xs">
-        <label className="flex min-w-[16rem] flex-1 flex-col gap-0.5 text-[11px] text-slate-500">
-          Szukaj
-          <input
-            autoFocus
-            type="search"
-            className={INPUT}
-            placeholder="kod XL, nazwa albo SKU karty"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-          />
-        </label>
-        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
-          Bez sprzedaży od
-          <select
-            className={INPUT}
-            value={months}
-            onChange={(e) => {
-              setMonths(e.target.value)
-              setPage(1)
-            }}
-          >
-            <option value="0">wszystkie ze stanem</option>
-            <option value="3">3 mies.</option>
-            <option value="6">6 mies.</option>
-            <option value="12">12 mies.</option>
-            <option value="24">24 mies.</option>
-          </select>
-        </label>
-        <span className="pb-1 text-slate-500">
-          {meta ? `Łącznie ${fmtInt(meta.total)}` : ''}
-          {loading ? ' · ładowanie…' : ''}
-        </span>
-      </div>
-      {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
-      {room === 0 && (
-        <p className="mb-2 rounded bg-amber-50 px-3 py-2 text-xs text-amber-900">Kampania ma już {MAX_ITEMS} pozycji — usuń którąś, żeby dodać inną.</p>
-      )}
-      <table className="w-full text-left text-xs">
-        <thead>
-          <tr className="border-b bg-slate-50">
-            <th className="w-8 p-2" />
-            <th className="p-2">Towar</th>
-            <th className="p-2 text-right">Stan handlowy</th>
-            <th className="p-2 text-right">Wartość</th>
-            <th className="p-2">Ostatnia sprzedaż</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(res?.data ?? []).map((row) => {
-            const already = inCampaign.has(row.id)
-            const checked = selected.has(row.id)
-            return (
-              <tr
-                key={row.id}
-                className={`border-b align-top ${already ? 'opacity-50' : 'cursor-pointer hover:bg-sky-50'} ${checked ? 'bg-sky-50' : ''}`}
-                onClick={() => {
-                  if (!already) toggle(row)
-                }}
-              >
-                <td className="p-2">
-                  <input
-                    type="checkbox"
-                    aria-label={`Zaznacz ${row.code}`}
-                    checked={already || checked}
-                    disabled={already || (!checked && selected.size >= room)}
-                    onChange={() => toggle(row)}
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                </td>
-                <td className="min-w-[16rem] p-2">
-                  <span className="font-mono text-slate-900">{row.code}</span>
-                  {already && <span className="ml-1.5 text-[11px] text-slate-500">już w kampanii</span>}
-                  <div className="line-clamp-2 text-slate-800">{row.name}</div>
-                  <div className="text-[11px] text-slate-500">{row.card ? `karta ${row.card.sku}` : 'bez karty'}</div>
-                </td>
-                <td className="whitespace-nowrap p-2 text-right tabular-nums">{fmtQty(row.stock_trade, row.unit)}</td>
-                <td className="whitespace-nowrap p-2 text-right tabular-nums">{row.stock_value != null ? formatPln(row.stock_value) : '—'}</td>
-                <td className="whitespace-nowrap p-2 tabular-nums text-slate-600">{row.last_sale_at ? fmtDate(row.last_sale_at) : 'nigdy'}</td>
-              </tr>
-            )
-          })}
-          {res && res.data.length === 0 && (
-            <tr>
-              <td colSpan={5} className="p-6 text-center text-slate-500">
-                Brak towarów przy tym wyszukiwaniu.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-      <p className="mt-2 text-[11px] text-slate-500">
-        Wartość i stan jak na stronie Zapasy. W kampanii liczy się stan magazynów handlowych.
-      </p>
-      <Pager meta={meta} disabled={loading} onPage={setPage} />
-    </Modal>
   )
 }
 

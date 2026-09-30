@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { AddToCampaignMenu, CAMPAIGN_MAX_ITEMS } from '../components/AddToCampaignMenu'
+import { CampaignPickBanner } from '../components/CampaignPickBanner'
+import { useCampaignTarget } from '../lib/campaignTarget'
 import { InventoryTabs } from '../components/InventoryTabs'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { api, can, type InventoryResponse, type InventoryRow, type InventoryWarehouse } from '../lib/api'
@@ -123,6 +125,8 @@ export function Inventory() {
   const canCampaign = can(user, 'campaigns.use')
   const canRwPw = can(user, 'inventory.view')
   const [params, setParams] = useSearchParams()
+  // lista otwarta z kreatora kampanii (?kampania=ID) — „Dodaj do K-…” i powrót do kampanii
+  const campaignPick = useCampaignTarget()
 
   const months = pick(params.get('months'), MONTHS, DEFAULT_MONTHS)
   const neverSold = params.get('never_sold') !== '0'
@@ -252,8 +256,10 @@ export function Inventory() {
   function clearFilters() {
     setParams((prev) => {
       const next = new URLSearchParams()
-      const pp = prev.get('per_page')
-      if (pp) next.set('per_page', pp)
+      for (const keep of ['per_page', 'kampania']) {
+        const v = prev.get(keep)
+        if (v) next.set(keep, v)
+      }
       return next
     })
   }
@@ -313,6 +319,7 @@ export function Inventory() {
   return (
     <div>
       <InventoryTabs />
+      <CampaignPickBanner {...campaignPick} what="towar" />
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Zapasy</h1>
@@ -588,6 +595,7 @@ export function Inventory() {
             </button>
             <AddToCampaignMenu
               erpItemIds={[...selected.keys()]}
+              target={campaignPick.target}
               placement="up"
               buttonClassName="rounded bg-sky-500 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-sky-400 disabled:opacity-50"
             />

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { AddToCampaignMenu } from '../components/AddToCampaignMenu'
+import { CampaignPickBanner } from '../components/CampaignPickBanner'
+import { useCampaignTarget } from '../lib/campaignTarget'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
 import { CheaperSourceNote } from '../components/CheaperSourceNote'
 import { DeleteProductsDialog } from '../components/DeleteProductsDialog'
@@ -295,6 +297,8 @@ export function Products() {
   const canMergeCards = can(user, 'card_matches.decide')
   const canCampaign = can(user, 'campaigns.use')
   const canSelect = canEnrich || canDelete || canMergeCards || canCampaign
+  // lista otwarta z kreatora kampanii (?kampania=ID) — „Dodaj do K-…” i powrót do kampanii
+  const campaignPick = useCampaignTarget()
   const hasActions = canEnrich || canExportPresta || canDelete
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
@@ -830,6 +834,7 @@ export function Products() {
           void api<Page>(`/products?${buildParams()}`).then(setResult).catch(() => {})
         }}
       />
+      {canCampaign && <CampaignPickBanner {...campaignPick} what="karty" />}
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Produkty</h1>
@@ -1020,6 +1025,7 @@ export function Products() {
               productIds={selectedIds}
               placement="down"
               showCount
+              target={campaignPick.target}
               buttonClassName="rounded border border-sky-300 px-3 py-2 text-xs text-sky-800 hover:bg-sky-50 disabled:opacity-50"
             />
           )}

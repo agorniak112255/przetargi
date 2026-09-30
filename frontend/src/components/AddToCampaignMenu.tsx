@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { addCampaignItems, createCampaign, listCampaigns, type Campaign, type CampaignListRow } from '../lib/campaigns'
 import { plural } from '../lib/plural'
 import { formatDate } from '../lib/priceChange'
+import type { CampaignTarget } from '../lib/campaignTarget'
 
 /** Najwięcej pozycji w jednej kampanii (backend: config campaigns.max_items — tam decyzja ostateczna). */
 export const CAMPAIGN_MAX_ITEMS = 12
@@ -24,9 +25,12 @@ export function AddToCampaignMenu({
   placement = 'down',
   buttonClassName,
   showCount = false,
+  target = null,
 }: {
   erpItemIds?: number[]
   productIds?: number[]
+  /** Lista otwarta z kreatora (?kampania=ID): jeden przycisk „Dodaj do K-…” zamiast menu, potem powrót do kampanii. */
+  target?: CampaignTarget | null
   /** Menu nad przyciskiem (pasek na dole ekranu) albo pod nim (pasek narzędzi). */
   placement?: 'up' | 'down'
   buttonClassName: string
@@ -101,6 +105,34 @@ export function AddToCampaignMenu({
   const body = {
     ...(erpItemIds.length > 0 ? { erp_item_ids: erpItemIds } : {}),
     ...(productIds.length > 0 ? { product_ids: productIds } : {}),
+  }
+
+  if (target) {
+    const room = CAMPAIGN_MAX_ITEMS - target.itemsCount
+    return (
+      <div className="relative">
+        <button
+          type="button"
+          disabled={count === 0 || busy || room <= 0}
+          onClick={() => void run(() => addCampaignItems(target.id, body))}
+          className={buttonClassName}
+          title={
+            room <= 0
+              ? `Kampania ${target.code} ma już ${CAMPAIGN_MAX_ITEMS} pozycji`
+              : count > room
+                ? `Zmieści się jeszcze ${positions(room)} — nadmiar serwer odrzuci`
+                : `Dodaje zaznaczone do kampanii ${target.code} i wraca do kreatora`
+          }
+        >
+          {busy ? 'Dodaję…' : `Dodaj do ${target.code}${count > 0 ? ` (${count})` : ''}`}
+        </button>
+        {err && (
+          <p className="absolute right-0 top-full z-40 mt-1 w-72 rounded-lg bg-red-50 px-2.5 py-2 text-xs text-red-700 shadow">
+            {err}
+          </p>
+        )}
+      </div>
+    )
   }
 
   return (
