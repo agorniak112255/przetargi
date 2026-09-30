@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\ActivityLog;
 use App\Models\ClientInquiry;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -164,6 +165,23 @@ final class ClientInquiryLookupApiTest extends TestCase
         $this->assertCount(5, $rows);
         $this->assertContains($mine->id, $ids);
         $this->assertContains($withReply->id, $ids);
+    }
+
+    public function test_lookup_is_not_written_to_activity_log(): void
+    {
+        // Odczyt, nie akcja: dodatek pyta o paczki Message-ID przy każdym
+        // oznaczaniu maili, a lista zdradzałaby, z kim handlowiec koresponduje.
+        $admin = User::factory()->withRole('admin')->create();
+        $this->inquiry($admin, self::MAIL);
+
+        Sanctum::actingAs($admin);
+        $this->postJson('/api/inquiries/lookup', ['message_ids' => [self::MAIL, 'obcy@kontrahent.example']])
+            ->assertOk();
+        $this->assertSame(0, ActivityLog::query()->count());
+
+        // Przebieg kontrolny: zmiana w tym samym teście dalej trafia do dziennika.
+        $this->postJson('/api/clients', ['name' => 'Klient kontrolny', 'nip' => null])->assertCreated();
+        $this->assertSame(['client.created'], ActivityLog::query()->pluck('action')->all());
     }
 
     public function test_message_ids_feed_lists_mails_touched_since_a_moment(): void

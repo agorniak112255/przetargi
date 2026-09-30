@@ -74,6 +74,12 @@ final class LogApiActivity
             return false;
         }
 
+        // Dodatek Thunderbirda pyta tu paczkami Message-ID, które maile mają zapytanie — to odczyt
+        // (POST tylko dla długiej listy), a lista zdradzałaby, z kim handlowiec koresponduje.
+        if ($path === 'inquiries/lookup') {
+            return false;
+        }
+
         // Wylogowanie starych sesji zapisuje kontroler — z liczbą usuniętych sesji, której tu nie widać.
         if ($path === 'admin/sessions/stale') {
             return false;
