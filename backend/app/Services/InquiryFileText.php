@@ -74,12 +74,9 @@ final class InquiryFileText
         foreach ($sheets as $sheet) {
             $lines = [];
             foreach ($this->cells->toRows($sheet) as $row) {
-                $cells = array_values(array_filter(
-                    array_map(static fn (string $cell): string => trim(preg_replace('/\s+/u', ' ', $cell) ?? $cell), $row),
-                    static fn (string $cell): bool => $cell !== '',
-                ));
-                if ($cells !== []) {
-                    $lines[] = implode(self::CELL_SEPARATOR, $cells);
+                $line = $this->rowLine(array_map(static fn (string $cell): string => trim(preg_replace('/\s+/u', ' ', $cell) ?? $cell), $row));
+                if ($line !== null) {
+                    $lines[] = $line;
                 }
             }
             if ($lines === []) {
@@ -92,6 +89,23 @@ final class InquiryFileText
         }
 
         return implode("\n\n", $parts);
+    }
+
+    /**
+     * Wiersz tabeli jako linia. Puste komórki zostają na swoich miejscach („1 | Rękawice |  | 4”): po ich wyrzuceniu
+     * ilość z kolumny „Ilość” stawała pod nagłówkiem pustej kolumny „Cena” i parser zapytania nie mógł ufać kolumnom.
+     * Wiersz z jedną wypełnioną komórką (tytuł, grupa „ODZIEŻ OCHRONNA”) to zwykły tekst; pusty wiersz — null.
+     *
+     * @param  list<string>  $cells
+     */
+    private function rowLine(array $cells): ?string
+    {
+        $filled = array_values(array_filter($cells, static fn (string $cell): bool => $cell !== ''));
+        if ($filled === []) {
+            return null;
+        }
+
+        return count($filled) === 1 ? $filled[0] : implode(self::CELL_SEPARATOR, $cells);
     }
 
     private function docx(string $path): string
@@ -146,13 +160,13 @@ final class InquiryFileText
                         }
                         $cellLines = [];
                         $this->docxBlocks($cell, $cellLines);
-                        $text = trim(implode(' ', array_filter(array_map('trim', $cellLines), static fn (string $l): bool => $l !== '')));
-                        if ($text !== '') {
-                            $cells[] = $text;
-                        }
+                        // złamanie wiersza w komórce (<w:br/>) nie może rozbić wiersza tabeli na kilka linii
+                        $text = implode(' ', array_filter(array_map('trim', $cellLines), static fn (string $l): bool => $l !== ''));
+                        $cells[] = trim(preg_replace('/\s+/u', ' ', $text) ?? $text);
                     }
-                    if ($cells !== []) {
-                        $lines[] = implode(self::CELL_SEPARATOR, $cells);
+                    $line = $this->rowLine($cells);
+                    if ($line !== null) {
+                        $lines[] = $line;
                     }
                 }
                 $lines[] = '';

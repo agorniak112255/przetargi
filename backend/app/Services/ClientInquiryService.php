@@ -102,6 +102,16 @@ final class ClientInquiryService
     /** Data na początku wiersza („24.07.2026 płatności…”) — nie numer pozycji ani ilość. */
     private const LEADING_DATE = '/^\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{2,4}(?!\d)/u';
 
+    /**
+     * Adres z kodem pocztowym („35-232 Rzeszów, ul. Miłocińska 17”, „35-232 Rzeszów”): kod NN-NNN, nazwa miejscowości
+     * wielkimi literami, potem przecinek, koniec wiersza albo „ul.”. ROW_NUMBER brał „35” za ilość (zapytanie #86).
+     * Kody wyrobów w tym samym zapisie („11-800 Rękawice nitrylowe 10 par”) nie pasują: po nazwie idzie mała litera.
+     */
+    private const POSTAL_ADDRESS_LINE = '/^\d{2}-\d{3}\s+(\p{Lu}[\p{L}\-]*(?:\s+\p{Lu}[\p{L}\-]*)*)\s*(?:,|$|(?:ul|al|os|pl)\.)/u';
+
+    /** Komórka z samym numerem („1”, „12.”) — Lp. albo numer kolumny, nigdy nazwa wyrobu. */
+    private const BARE_NUMBER_CELL = '/^\d{1,5}\.?$/u';
+
     /** „ESD” we frazie ekstraktora, także „ESD-owe” — do wycięcia, gdy klient go nie napisał. */
     private const ESD_MENTION = '/(?<![\p{L}\d])esd(?:-(?:ow\p{L}*|safe))?(?![\p{L}\d])/iu';
 
@@ -3252,6 +3262,7 @@ final class ClientInquiryService
             $items = $this->withAiConflicts($parsed, $fromAi);
         } elseif ($fromAi !== []) {
             $items = $this->withProductRowQuotes($this->quantitiesCheckedAgainstQuote($fromAi), $parsed, $body);
+            $items = $this->withTableQuantities($items, $parsed);
             ['items' => $items, 'merged_ids' => $merged, 'unplaced' => $unplaced]
                 = $this->withoutDoubledSizeBreakdowns($items, $parsed, count($fromAi) >= $this->maxLineItems());
         } else {
@@ -3270,11 +3281,11 @@ final class ClientInquiryService
         }
 
         return [
-            'items' => $this->withSearchQueries(
+            'items' => $this->withoutTableInternals($this->withSearchQueries(
                 array_slice($items, 0, $this->maxLineItems()),
                 $subjectHint,
                 trim(($subject ?? '')."\n".$body),
-            ),
+            )),
             'omitted' => $omitted,
             'merged_ids' => $merged,
         ];
@@ -3307,14 +3318,7 @@ final class ClientInquiryService
      */
     private function withoutDoubledSizeBreakdowns(array $items, array $parsed, bool $modelHitLimit): array
     {
-        $rows = [];
-        foreach ($parsed as $r => $row) {
-            $quote = (string) ($row['quote'] ?? '');
-            $rows[$r] = [
-                'full' => $this->comparableQuote($quote),
-                'text' => $this->comparableQuote($this->rowTextWithoutNumber($quote)),
-            ];
-        }
+        $rows = $this->comparableRows($parsed);
 
         $rowOf = [];
         $groups = [];
@@ -3473,6 +3477,112 @@ final class ClientInquiryService
         return count($inside) === 1 ? $inside[0] : null;
     }
 
+    /**
+     * Wiersze parsera do porównania z cytatem modelu (parsedRowOf): cały wiersz i jego treść bez numeru pozycji.
+     *
+     * @param  list<array<string, mixed>>  $parsed
+     * @return array<int, array{full: string, text: string}>
+     */
+    private function comparableRows(array $parsed): array
+    {
+        $rows = [];
+        foreach ($parsed as $r => $row) {
+            $quote = (string) ($row['quote'] ?? '');
+            $rows[$r] = [
+                'full' => $this->comparableQuote($quote),
+                'text' => $this->comparableQuote($this->rowTextWithoutNumber($quote)),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Ilość pozycji modelu sprawdzona wierszem tabeli z pliku, który cytuje. Model czyta tabelę jak tekst i bywa, że
+     * bierze Lp. za ilość („1 | Kombinezon… | szt. | 275” → 1); `quoteHasNumber` to przepuszczało, bo „1” stoi
+     * w cytacie. Przy tabeli z nagłówkiem ilością jest komórka kolumny ilości — także gdy jej nie da się odczytać
+     * (wtedy pusta ilość z flagą, nigdy liczba modelu spoza tej kolumny). Bez nagłówka wiemy tylko, która liczba
+     * to Lp.: ilość równa Lp. jest odrzucana. Pozycje z rozmiarem zostają — tabela podaje ilość całego wiersza.
+     * Trafiona pozycja dostaje za cytat cały wiersz tabeli.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @param  list<array<string, mixed>>  $parsed
+     * @return list<array<string, mixed>>
+     */
+    private function withTableQuantities(array $items, array $parsed): array
+    {
+        $tableRows = array_filter($parsed, static fn (array $row): bool => ($row['qty_source'] ?? null) === 'table');
+        if ($tableRows === []) {
+            return $items;
+        }
+        $rows = $this->comparableRows($parsed);
+
+        foreach ($items as $i => $item) {
+            if ($this->nullable($item['size'] ?? null) !== null) {
+                continue;
+            }
+            $quote = (string) ($item['quote'] ?? '');
+            $r = $this->parsedRowOf($quote, $rows);
+            if ($r === null || ! isset($tableRows[$r])) {
+                // cytat skrócony albo sama nazwa: jednoznaczne trafienie po początku nazwy wyrobu z tabeli
+                $r = null;
+                $comparable = $this->comparableQuote($quote);
+                foreach ($tableRows as $t => $row) {
+                    $prefix = $this->comparableQuote(mb_substr((string) ($row['table_name'] ?? ''), 0, 40));
+                    if (mb_strlen($prefix) >= 12 && str_contains($comparable, $prefix)) {
+                        if ($r !== null) {
+                            $r = null;
+
+                            break;
+                        }
+                        $r = $t;
+                    }
+                }
+            }
+            if ($r === null) {
+                continue;
+            }
+            $row = $tableRows[$r];
+            // cytatem pozycji jest cały wiersz tabeli, jak stoi w pliku — urywek modelu („RUP 502-U … MBS: 20 k”)
+            // szedłby do katalogu jako fraza
+            $item['quote'] = (string) $row['quote'];
+            $modelQty = $this->nullable($item['qty'] ?? null);
+            $rowQty = $this->nullable($row['qty'] ?? null);
+
+            if (($row['table_header'] ?? false) === true || $rowQty !== null) {
+                if ($rowQty === $modelQty && $rowQty !== null) {
+                    $item['unit'] = $this->nullable($row['unit'] ?? null) ?? $item['unit'] ?? null;
+                } else {
+                    $item['qty'] = $rowQty;
+                    $item['unit'] = $rowQty === null ? null : $this->nullable($row['unit'] ?? null);
+                    $item['qty_source'] = $rowQty === null ? 'model_unverified' : 'table';
+                }
+            } elseif ($modelQty !== null && isset($row['table_lp']) && $modelQty === (string) $row['table_lp']) {
+                $item['qty'] = null;
+                $item['unit'] = null;
+                $item['qty_source'] = 'model_unverified';
+            }
+            $items[$i] = $item;
+        }
+
+        return $items;
+    }
+
+    /**
+     * Pola parsera tabel potrzebne tylko w trakcie rozbioru — nie idą do zapisanej analizy.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @return list<array<string, mixed>>
+     */
+    private function withoutTableInternals(array $items): array
+    {
+        return array_map(static function (array $item): array {
+            unset($item['table_lp'], $item['table_name'], $item['table_header']);
+
+            return $item;
+        }, $items);
+    }
+
     /** Czy tekst zawiera fragment w granicach słów („kask” nie trafia w „kaskiem”). */
     private function containsWords(string $haystack, string $needle): bool
     {
@@ -3480,9 +3590,13 @@ final class ClientInquiryService
             && preg_match('/(?<![\p{L}\d])'.preg_quote($needle, '/').'(?![\p{L}\d])/u', $haystack) === 1;
     }
 
-    /** Treść wiersza bez numeru pozycji z przodu („2. Rękawice…” → „Rękawice…”). */
+    /** Treść wiersza bez numeru pozycji z przodu („2. Rękawice…” → „Rękawice…”, „1 | Kombinezon | 275” → „Kombinezon | 275”). */
     private function rowTextWithoutNumber(string $line): string
     {
+        $cells = $this->tableCells($line);
+        if ($cells !== null && preg_match(self::BARE_NUMBER_CELL, $cells[0]) === 1) {
+            return implode(' | ', array_slice($cells, 1));
+        }
         $marked = $this->positionMarker($line);
         if ($marked !== null) {
             return $marked['rest'];
@@ -3960,8 +4074,24 @@ final class ClientInquiryService
         // ile numerów stało do pozycji z końca limitu — o numeracji decydują, jak dawniej,
         // tylko one: druga lista dalej w mailu nie może oddać numerów wierszy jako ilości
         $numbersAtLimit = null;
-        foreach ($this->bodyLines($body) as $line) {
+        $lines = $this->bodyLines($body);
+        // Tabela z pliku klienta (InquiryFileText: wiersz = linia, komórki po „ | ”): nagłówek mówi, która kolumna
+        // to ilość, a która Lp. — bez tego „1 | Kombinezon… | szt. | 275” dawało ilość 1 (zapytanie #86).
+        $tableSections = $this->fileSectionsWithTables($lines);
+        $section = 0;
+        $table = null;
+        foreach ($lines as $line) {
             if ($line === '') {
+                // docx kończy tabelę pustą linią — nagłówek nie przechodzi na dalszy tekst
+                $table = null;
+
+                continue;
+            }
+            $fileMarker = preg_match(self::FILE_MARKER, $line) === 1;
+            if ($fileMarker || str_starts_with($line, 'Arkusz: ')) {
+                $section += $fileMarker ? 1 : 0;
+                $table = null;
+
                 continue;
             }
             if ($numbersAtLimit === null && count($items) >= $this->maxLineItems()) {
@@ -3969,7 +4099,29 @@ final class ClientInquiryService
             }
             // Telefon, numer konta i data z przodu wiersza to liczby, ale nie ilości:
             // „600 903 483 <tel:…>” ze stopki wchodziło do oferty jako 600 sztuk.
-            if (InquiryMailText::isContactLine($line) || preg_match(self::LEADING_DATE, $line) === 1) {
+            if (InquiryMailText::isContactLine($line) || preg_match(self::LEADING_DATE, $line) === 1
+                || $this->isPostalAddressLine($line)) {
+                continue;
+            }
+            $cells = $this->tableCells($line);
+            if ($cells !== null) {
+                $header = $this->tableHeader($cells);
+                if ($header !== null) {
+                    $table = $header;
+
+                    continue;
+                }
+                $row = $this->tableRowItem($cells, $table, $line, $index);
+                if ($row !== null) {
+                    $items[] = $row;
+                    $index++;
+                }
+
+                continue;
+            }
+            // W pliku z tabelą zamówienia pozycje stoją w tabeli; numerowane akapity obok („1. Obuwie musi posiadać
+            // oznaczenie CE…”) to wymagania i warunki — jako pozycje przegłosowałyby model samą liczbą wierszy.
+            if (isset($tableSections[$section])) {
                 continue;
             }
             $marked = $this->positionMarker($line);
@@ -4064,6 +4216,302 @@ final class ClientInquiryService
             $items,
             $numbersAtLimit === null ? $leadingNumbers : array_slice($leadingNumbers, 0, $numbersAtLimit),
         );
+    }
+
+    /**
+     * Części pliku klienta (numer liczony od nagłówka „=== Plik klienta: … ===”, 0 = mail nad nimi), w których
+     * stoi tabela z rozpoznanym nagłówkiem.
+     *
+     * @param  list<string>  $lines
+     * @return array<int, true>
+     */
+    private function fileSectionsWithTables(array $lines): array
+    {
+        $out = [];
+        $section = 0;
+        foreach ($lines as $line) {
+            if (preg_match(self::FILE_MARKER, $line) === 1) {
+                $section++;
+
+                continue;
+            }
+            $cells = $section > 0 ? $this->tableCells($line) : null;
+            if ($cells !== null && $this->tableHeader($cells) !== null) {
+                $out[$section] = true;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Komórki wiersza tabeli z pliku („1 | Rękawice |  | 4” → [1, Rękawice, '', 4]) albo null dla zwykłego tekstu.
+     * Separator to „|” ze spacją obok — sam znak w środku słowa czy adresu nie dzieli komórek.
+     *
+     * @return list<string>|null
+     */
+    private function tableCells(string $line): ?array
+    {
+        if (preg_match('/\s\||\|\s/u', $line) !== 1) {
+            return null;
+        }
+        $cells = array_map('trim', preg_split('/\|/u', trim($line)) ?: []);
+
+        return count($cells) >= 2 ? $cells : null;
+    }
+
+    /**
+     * Nagłówek tabeli zamówienia: krótkie komórki bez gołych liczb, wśród nich nazwa wyrobu i ilość. Kolumny ceny,
+     * wartości i zawartości opakowania nie są ilością. Dwie kolumny ilości (zamówienie podstawowe i opcja, 2026 i 2027)
+     * bez jednej „Razem” — ilość nieznana, bo nie wiadomo, którą klient chce wycenić.
+     *
+     * @param  list<string>  $cells
+     * @return array{count: int, name: int, qty: int|null, unit: int|null, size: int|null, lp: int|null, codes: list<int>, qty_unit: string|null}|null
+     */
+    private function tableHeader(array $cells): ?array
+    {
+        $filled = array_filter($cells, static fn (string $cell): bool => $cell !== '');
+        if (count($filled) < 2) {
+            return null;
+        }
+        foreach ($filled as $cell) {
+            if (mb_strlen($cell) > 60 || preg_match(self::BARE_NUMBER_CELL, $cell) === 1) {
+                return null;
+            }
+        }
+
+        $name = null;
+        $described = null;
+        $unit = null;
+        $size = null;
+        $lp = null;
+        $qty = [];
+        $codes = [];
+        foreach ($cells as $i => $cell) {
+            $c = mb_strtolower($cell);
+            if ($c === '') {
+                continue;
+            }
+            if (preg_match('/^(?:l\.?\s*p\.?|lp\.?|nr\.?|poz\.?|pozycja)$/u', $c) === 1) {
+                $lp ??= $i;
+
+                continue;
+            }
+            $price = preg_match('/(?:cen[aeyęo]|warto[śs][ćc]|kwot|netto|brutto|z[łl](?![\p{L}])|pln|vat|stawk)/u', $c) === 1;
+            if (preg_match('/(?:nazwa|przedmiot|asortyment|towar|wyr[óo]b|produkt|wyszczeg[óo]lnieni|artyku[łl])/u', $c) === 1) {
+                if (! $price) {
+                    $name ??= $i;
+                }
+
+                continue;
+            }
+            if ($price) {
+                continue;
+            }
+            if (preg_match('/(?:kod|indeks|index|symbol|katalog|model|producent|marka)/u', $c) === 1) {
+                $codes[] = $i;
+            } elseif (preg_match('/^rozm/u', $c) === 1) {
+                $size ??= $i;
+            } elseif (preg_match('/(?:j\.\s*m|^jm\.?$|jednostk|miar[ay]?(?![\p{L}]))/u', $c) === 1) {
+                $unit ??= $i;
+            } elseif (preg_match('/(?:ilo[śs][ćc]|razem|liczba|[łl][ąa]cznie|og[óo][łl]em)/u', $c) === 1) {
+                if (preg_match('/(?:opak|karton|zbiorcz|w\s+op\.?(?![\p{L}]))/u', $c) !== 1) {
+                    $qty[] = $i;
+                }
+            } elseif (preg_match('/opis/u', $c) === 1) {
+                $described ??= $i;
+            }
+        }
+        $name ??= $described;
+        if ($name === null || $qty === []) {
+            return null;
+        }
+
+        $qtyColumn = null;
+        if (count($qty) === 1) {
+            $qtyColumn = $qty[0];
+        } else {
+            $totals = array_values(array_filter(
+                $qty,
+                static fn (int $i): bool => preg_match('/(?:razem|[łl][ąa]cznie|og[óo][łl]em|suma)/iu', $cells[$i]) === 1,
+            ));
+            $qtyColumn = count($totals) === 1 ? $totals[0] : null;
+        }
+        // „Ilość (szt.)” — jednostka zapisana przez klienta w nagłówku
+        $qtyUnit = $qtyColumn !== null && preg_match('/\(\s*('.self::UNIT_PATTERN.')\s*\)/iu', $cells[$qtyColumn], $m) === 1
+            ? trim($m[1])
+            : null;
+
+        return [
+            'count' => count($cells),
+            'name' => $name,
+            'qty' => $qtyColumn,
+            'unit' => $unit,
+            'size' => $size,
+            'lp' => $lp,
+            'codes' => $codes,
+            'qty_unit' => $qtyUnit,
+        ];
+    }
+
+    /**
+     * Pozycja z wiersza tabeli. Przy nagłówku o tej samej liczbie komórek ilość bierzemy wyłącznie z kolumny ilości,
+     * jednostkę z kolumny „j.m.” albo z nagłówka „Ilość (szt.)”, frazę z nazwy wyrobu (i kodu, jeśli tabela ma taką
+     * kolumnę), rozmiar z kolumny rozmiaru albo z nazwy — nigdy z parametrów, gdzie stoi zakres dostępnych rozmiarów.
+     * Bez nagłówka (albo z inną liczbą komórek) kolumn nie znamy: pierwsza goła liczba to Lp., ilość tylko z komórki
+     * „10 par”, a przy nagłówku żadna. Wiersz numerów kolumn („1 | 2 | 3”) i „Razem” nie są pozycjami.
+     *
+     * `table_lp`, `table_name`, `table_header` służą tylko do sprawdzenia ilości modelu (withTableQuantities).
+     *
+     * @param  list<string>  $cells
+     * @param  array{count: int, name: int, qty: int|null, unit: int|null, size: int|null, lp: int|null, codes: list<int>, qty_unit: string|null}|null  $table
+     * @return array<string, mixed>|null
+     */
+    private function tableRowItem(array $cells, ?array $table, string $line, int $index): ?array
+    {
+        if ($this->isTotalRow($cells)) {
+            return null;
+        }
+        $lp = preg_match(self::BARE_NUMBER_CELL, $cells[0]) === 1 ? (int) $cells[0] : null;
+
+        if ($table !== null && count($cells) === $table['count']) {
+            $name = $cells[$table['name']];
+            if (! $this->isTableNameCell($name)) {
+                return null;
+            }
+            if ($table['lp'] !== null && preg_match(self::BARE_NUMBER_CELL, $cells[$table['lp']]) === 1) {
+                $lp = (int) $cells[$table['lp']];
+            }
+            $qty = $table['qty'] !== null ? $this->tableQty($cells[$table['qty']]) : null;
+            $unitCell = $table['unit'] !== null ? $cells[$table['unit']] : '';
+            $unit = $unitCell !== '' && mb_strlen($unitCell) <= 20 ? $unitCell : ($table['qty_unit'] ?? $qty['unit'] ?? null);
+            $codes = implode(' ', array_filter(
+                array_map(static fn (int $i): string => $cells[$i], $table['codes']),
+                static fn (string $cell): bool => $cell !== '',
+            ));
+            $sizeCell = $table['size'] !== null ? $cells[$table['size']] : '';
+            $itemName = $this->tableItemName($name);
+
+            return [
+                'id' => 'item_'.$index,
+                'quote' => $line,
+                'qty' => $qty['qty'] ?? null,
+                'unit' => $qty === null ? null : $unit,
+                'qty_source' => 'table',
+                'query' => $this->queryFromLine(trim($itemName.' '.$codes)),
+                'size' => $sizeCell !== '' ? $sizeCell : $this->sizeFromLine($name),
+                'table_lp' => $lp,
+                'table_name' => $itemName,
+                'table_header' => true,
+            ];
+        }
+
+        $name = null;
+        foreach ($cells as $i => $cell) {
+            if (($i > 0 || $lp === null) && $this->isTableNameCell($cell)) {
+                $name = $cell;
+
+                break;
+            }
+        }
+        if ($name === null) {
+            return null;
+        }
+        $qty = null;
+        if ($table === null) {
+            $found = [];
+            foreach ($cells as $cell) {
+                if (preg_match('/^(\d{1,5}(?:[.,]\d{1,3})?)\s*('.self::UNIT_PATTERN.')\.?$/iu', $cell, $m) === 1) {
+                    $found[] = ['qty' => $this->formatQty(ltrim($m[1], '0') ?: '0'), 'unit' => trim($m[2])];
+                }
+            }
+            $qty = count($found) === 1 ? $found[0] : null;
+        }
+        if ($lp === null && $qty === null) {
+            return null;
+        }
+        $itemName = $this->tableItemName($name);
+
+        return [
+            'id' => 'item_'.$index,
+            'quote' => $line,
+            'qty' => $qty['qty'] ?? null,
+            'unit' => $qty['unit'] ?? null,
+            'qty_source' => 'table',
+            'query' => $this->queryFromLine($itemName),
+            'size' => $this->sizeFromLine($name),
+            'table_lp' => $lp,
+            'table_name' => $itemName,
+            'table_header' => $table !== null,
+        ];
+    }
+
+    /** Komórka, która może być nazwą wyrobu: nie pusta, nie sama liczba i nazywa wyrób. */
+    private function isTableNameCell(string $cell): bool
+    {
+        return $cell !== ''
+            && preg_match('/^[\d\s.,\/-]+$/u', $cell) !== 1
+            && InquiryQueryText::namesProduct($cell);
+    }
+
+    /**
+     * Wiersz podsumowania tabeli („Razem | 637”, „Suma”, „Ogółem”).
+     *
+     * @param  list<string>  $cells
+     */
+    private function isTotalRow(array $cells): bool
+    {
+        foreach ($cells as $cell) {
+            if ($cell !== '') {
+                return preg_match('/^(?:razem|suma|og[óo][łl]em|[łl][ąa]cznie)(?![\p{L}])/iu', $cell) === 1;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Ilość z komórki kolumny ilości: sama liczba („275”, „1 000”, „2,5”), może z jednostką („10 par”). Cokolwiek
+     * innego („wg potrzeb”, „2 x 10”) — null: lepiej pusta ilość niż liczba, której klient nie podał.
+     *
+     * @return array{qty: string, unit: string|null}|null
+     */
+    private function tableQty(string $cell): ?array
+    {
+        $pattern = '/^(\d{1,3}(?:[ \x{00A0}]\d{3})+|\d{1,6})(?:[.,](\d{1,3}))?\s*('.self::UNIT_PATTERN.')?\.?$/iu';
+        if (preg_match($pattern, trim($cell), $m) !== 1) {
+            return null;
+        }
+        $digits = ltrim(preg_replace('/\D/u', '', $m[1]) ?? $m[1], '0');
+        $number = ($digits === '' ? '0' : $digits).(($m[2] ?? '') !== '' ? '.'.$m[2] : '');
+
+        return ['qty' => $this->formatQty($number), 'unit' => $this->nullable($m[3] ?? null)];
+    }
+
+    /**
+     * Nazwa wyrobu z komórki tabeli do szukania w katalogu: bez wewnętrznego numeru zamawiającego („(nr pozycji
+     * magazynowej u Zamawiającego M056649)”) i bez parametrów po „nazwa: parametry” („TM 9-N … PROTEKT: Wysokość…”).
+     * Normy z rokiem („EN 388:2016”) nie są cięte — dwukropek bez spacji za nim.
+     */
+    private function tableItemName(string $cell): string
+    {
+        $name = preg_replace('/\([^)]*(?:zamawiaj|magazyn)[^)]*\)/iu', ' ', $cell) ?? $cell;
+        if (preg_match('/:\s/u', $name, $m, PREG_OFFSET_CAPTURE) === 1 && $m[0][1] >= 3) {
+            $name = substr($name, 0, $m[0][1]);
+        }
+
+        return trim(preg_replace('/\s+/u', ' ', $name) ?? $name);
+    }
+
+    /**
+     * Adres z kodem pocztowym w stopce albo w piśmie. Miejscowość nie może być nazwą wyrobu („92-605 Rękawice”
+     * to kod wyrobu), a wiersz z ilością i jednostką czy rozmiarem zostaje pozycją.
+     */
+    private function isPostalAddressLine(string $line): bool
+    {
+        return preg_match(self::POSTAL_ADDRESS_LINE, $line, $m) === 1
+            && preg_match('/(?:r[ęe]kawic|but|obuw|trzewik|p[óo][łl]but|kalosz|kask|he[łl]m|okular|gogl|przy[łl]bic|maska|masecz|p[óo][łl]mask|filtr|ochronnik|nauszni|stoper|kombinezon|kurtk|spodni|ogrodniczk|fartuch|kamizel|ubrani|odzie[żz]|czapk|szelk|pas(?![\p{L}])|link|amortyzator|zatrza[śs]nik|sanda[łl]|klap|skarpet|koszul|bluz|polar|p[łl]aszcz|wk[łl]adk)/iu', $m[1]) !== 1
+            && ! $this->looksLikeGoodsRow($line);
     }
 
     /**
@@ -4184,7 +4632,8 @@ final class ClientInquiryService
 
         $out = [];
         foreach ($items as $item) {
-            if (($item['qty_unit_given'] ?? false) !== true) {
+            // ilość z kolumny tabeli nie ma nic wspólnego z numeracją listy w mailu
+            if (($item['qty_source'] ?? null) !== 'table' && ($item['qty_unit_given'] ?? false) !== true) {
                 // „1. 20 szt. Rękawice” — numer pozycji z przodu, ilość dalej w wierszu
                 $rest = (string) ($item['qty_rest'] ?? '');
                 $inside = $this->qtyInsideRow($rest);
@@ -4477,6 +4926,10 @@ final class ClientInquiryService
         if ($item !== null) {
             // Stare rekordy (bez $item) liczą klucz grupy po staremu — frazą, jak ją zapisała analiza.
             $query = $this->withoutInventedAntistaticDemands($query, $clientText."\n".$quote);
+            $fromTable = $this->tableRowSearchQuery($query, $quote, $item);
+            if ($fromTable !== null) {
+                return $fromTable;
+            }
         }
         $fromQuote = $this->queryFromLine($quote);
         if ($fromQuote === '') {
@@ -4492,6 +4945,60 @@ final class ClientInquiryService
         }
 
         return $query;
+    }
+
+    /**
+     * Fraza do katalogu dla pozycji z wiersza tabeli. Zasada „dłuższy cytat wygrywa” dawała tu cały wiersz — nazwę,
+     * parametry, normy, jednostkę i ilość po „ | ”, ucięte na 140 znakach (zapytanie #86: „| Kombinezon rybacki…
+     * | Kombinezon stanowi połączenie…”). Fraza modelu zostaje, gdy każde jej słowo stoi w wierszu klienta i nie
+     * gubi kodu z nazwy wyrobu („kombinezon rybacki z podnoskiem PVC” — PVC z parametrów). Inaczej nazwa wyrobu
+     * z tabeli. null — to nie wiersz tabeli albo nie ma w nim nazwy wyrobu.
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private function tableRowSearchQuery(string $query, string $quote, array $item): ?string
+    {
+        $cells = $this->tableCells($quote);
+        if ($cells === null) {
+            return null;
+        }
+        $name = null;
+        foreach ($cells as $i => $cell) {
+            if (($i > 0 || preg_match(self::BARE_NUMBER_CELL, $cells[0]) !== 1) && $this->isTableNameCell($cell)) {
+                $name = $this->tableItemName($cell);
+
+                break;
+            }
+        }
+        if ($name === null || $name === '') {
+            return null;
+        }
+        if ($query !== '' && $this->groundedInRow($query, $quote, $name)) {
+            return $query;
+        }
+        $clean = $this->queryFromLine($this->quoteWithoutQtyAndSize($name, $item));
+
+        return $clean !== '' ? $clean : $this->queryFromLine($name);
+    }
+
+    /** Każde słowo frazy stoi w wierszu klienta, a kody z nazwy wyrobu („502-U”, „9-N”) są we frazie. */
+    private function groundedInRow(string $query, string $quote, string $name): bool
+    {
+        $row = mb_strtolower($quote);
+        preg_match_all('/[\p{L}\d][\p{L}\d\-]*/u', mb_strtolower($query), $words);
+        foreach ($words[0] as $word) {
+            if ((mb_strlen($word) >= 3 || preg_match('/\d/u', $word) === 1) && ! str_contains($row, $word)) {
+                return false;
+            }
+        }
+        preg_match_all('/[\p{L}\d]+(?:-[\p{L}\d]+)*/u', $name, $tokens);
+        foreach ($tokens[0] as $token) {
+            if (preg_match('/\d/u', $token) === 1 && ! $this->containsCompact($query, $token)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

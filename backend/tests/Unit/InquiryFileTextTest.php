@@ -96,6 +96,54 @@ final class InquiryFileTextTest extends TestCase
         $this->assertStringContainsString('Termin dostawy: 14 dni.', $text);
     }
 
+    /**
+     * Puste komórki zostają na swoich miejscach — po ich wyrzuceniu ilość stawała pod nagłówkiem pustej kolumny ceny.
+     * Wiersz z jedną wypełnioną komórką (tytuł, grupa) to zwykły tekst.
+     */
+    public function test_spreadsheet_keeps_empty_cells_in_place_and_single_cell_rows_plain(): void
+    {
+        $book = new Spreadsheet;
+        $book->getActiveSheet()->fromArray([
+            ['FORMULARZ OFERTOWY', null, null, null, null],
+            ['Lp.', 'Nazwa', 'Cena jedn.', 'Ilość', 'j.m.'],
+            ['ODZIEŻ OCHRONNA', null, null, null, null],
+            [1, 'Kurtka ocieplana', null, 12, 'szt.'],
+        ]);
+        $path = $this->temp('xlsx');
+        (new Xlsx($book))->save($path);
+
+        $text = app(InquiryFileText::class)->extract($path, 'xlsx');
+
+        $this->assertSame(
+            "FORMULARZ OFERTOWY\nLp. | Nazwa | Cena jedn. | Ilość | j.m.\nODZIEŻ OCHRONNA\n1 | Kurtka ocieplana |  | 12 | szt.",
+            $text,
+        );
+    }
+
+    /** Złamanie wiersza w komórce Worda (<w:br/>) nie rozbija wiersza tabeli na kilka linii. */
+    public function test_line_break_inside_word_cell_keeps_the_row_on_one_line(): void
+    {
+        $word = new PhpWord;
+        $table = $word->addSection()->addTable();
+        $table->addRow();
+        foreach (['Lp.', 'Nazwa', 'Ilość'] as $cell) {
+            $table->addCell(2000)->addText($cell);
+        }
+        $table->addRow();
+        $table->addCell(2000)->addText('1');
+        $run = $table->addCell(2000)->addTextRun();
+        $run->addText('Kalosze PCV S5');
+        $run->addTextBreak();
+        $run->addText('20 par w rozmiarach 40-47');
+        $table->addCell(2000)->addText('20');
+        $path = $this->temp('docx');
+        WordIO::createWriter($word, 'Word2007')->save($path);
+
+        $text = app(InquiryFileText::class)->extract($path, 'docx');
+
+        $this->assertStringContainsString("Lp. | Nazwa | Ilość\n1 | Kalosze PCV S5 20 par w rozmiarach 40-47 | 20", $text);
+    }
+
     public function test_pdf_table_row_stays_on_one_line(): void
     {
         $path = $this->temp('pdf');

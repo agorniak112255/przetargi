@@ -280,6 +280,50 @@ final class ClientInquiryFileTest extends TestCase
         $this->assertStringContainsString('OSTATNI WIERSZ OPISU', (string) $seenByModel);
     }
 
+    /**
+     * Zapytanie #86 (30.09.2026) od wysłania z dodatku do zapisanej analizy: model bierze Lp. za ilość i cytuje całe
+     * wiersze tabel. Zapisane pozycje mają ilość z kolumny, frazę z nazwy wyrobu i żadnej pozycji z adresu w stopce.
+     */
+    public function test_tender_tables_from_attachments_keep_column_quantities_end_to_end(): void
+    {
+        $suit = '1 | Kombinezon rybacki z podnoskiem (nr pozycji magazynowej u Zamawiającego M056649) | Materiał: PVC. '
+            .'Podeszwa antypoślizgowa SRC. Rozmiar: od 40 do 47. | PN-EN ISO 20345 S5 SRC oraz EN 343 | szt. | 275';
+        $rup = '1 | RUP 502-U - Ewakuacyjne urządzenie podnosząco-opuszczające PROTEKT: DOR (kg) 140 MBS: 20 kN | 4';
+        $body = "Dzień dobry, w załączeniu zapytania.\n\nJan Nowak\n35-232 Rzeszów, ul. Miłocińska 17\n\n"
+            ."=== Plik klienta: opz(65).docx ===\nOPIS PRZEDMIOTU ZAMÓWIENIA\n"
+            ."l.p. | Przedmiot zamówienia | Parametry użytkowe | Wymagania spełnienia norm | Jednostka miary | Razem\n"
+            .$suit."\n\nWymagania do asortymentu:\n1. Obuwie musi posiadać oznaczenie CE.\n\n"
+            ."=== Plik klienta: opz_10.08(4).docx ===\nLp. | Asortyment - opis parametrów | Ilość (szt.)\n".$rup;
+        $user = User::factory()->withRole('handlowiec')->create();
+        $this->mock(OpenAiCompatibleClient::class, function ($mock) use ($suit, $rup): void {
+            $mock->shouldReceive('chatJson')->once()->andReturn([
+                'subject' => 'Zapytania, przetarg',
+                'questions' => [],
+                'product_queries' => ['kombinezon rybacki z podnoskiem PVC', 'RUP 502-U urządzenie ewakuacyjne PROTEKT'],
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => $suit, 'qty' => '1', 'unit' => null, 'query' => 'kombinezon rybacki z podnoskiem PVC', 'size' => null],
+                    ['id' => 'item_2', 'quote' => $rup, 'qty' => '1', 'unit' => null, 'query' => 'RUP 502-U urządzenie ewakuacyjne PROTEKT', 'size' => null],
+                ],
+                'cards' => [],
+            ]);
+        });
+        $this->emptySearch();
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => $body,
+            'tone' => 'formal',
+            'source_channel' => 'thunderbird',
+            'source_file_name' => 'opz(65).docx, opz_10.08(4).docx',
+        ])->assertCreated();
+
+        $items = ClientInquiry::query()->findOrFail($res->json('id'))->analysis['line_items'];
+        $this->assertSame(
+            [['275', 'szt.', 'kombinezon rybacki z podnoskiem PVC'], ['4', 'szt.', 'RUP 502-U urządzenie ewakuacyjne PROTEKT']],
+            array_map(static fn (array $item): array => [$item['qty'], $item['unit'], $item['search_query']], $items),
+        );
+    }
+
     public function test_body_over_the_limit_is_refused_with_a_reason(): void
     {
         Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
