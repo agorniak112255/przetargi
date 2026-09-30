@@ -86,6 +86,9 @@ final class HoneywellConnectorTest extends TestCase
 
     private bool $foreignRedirect = false;
 
+    /** Numer rodziny, dla której lista pozycji odpowiada „Results not found” (rodzina poza kontem). */
+    private string $pdpNotFoundFor = '';
+
     /** @var array<string, mixed>|null odpowiedź listy pozycji zamiast właściwej */
     private ?array $pdpAnswer = null;
 
@@ -613,6 +616,22 @@ final class HoneywellConnectorTest extends TestCase
         $this->assertStringEndsWith('/synth-superlite-t9999?pdpPageTab=pills-sku-tab', $list->header('Referer')[0] ?? '');
     }
 
+    public function test_results_not_found_is_a_family_outside_the_account_not_an_error(): void
+    {
+        // przebieg 30.09.2026 20:16: rodziny bez pozycji konta odpowiadają {"success":false,"message":"Results not found"}
+        $this->addGloveFamily();
+        $this->addGlassesFamily();
+        $this->fakeSite();
+        $this->pdpNotFoundFor = '3000001';
+
+        $products = $this->products();
+
+        $this->assertSame(['SY100-1', 'SY100-2'], array_map(static fn (B2bRemoteProduct $p): string => $p->sku, $products));
+        $summary = implode("\n", $this->lastConnector->runSummary());
+        $this->assertStringContainsString('2 poza kontem', $summary); // rękawice + domyślna rodzina detektorów atrapy
+        $this->assertStringNotContainsString('błędem odczytu', $summary);
+    }
+
     public function test_unreadable_position_list_says_what_the_shop_answered(): void
     {
         $this->addGloveFamily();
@@ -982,6 +1001,10 @@ final class HoneywellConnectorTest extends TestCase
                 $id = $request->data()['dynamicProductId'] ?? '';
                 if ($this->pdpAnswer !== null) {
                     return Http::response($this->pdpAnswer);
+                }
+                // rodzina bez pozycji konta (także pusta rodzina atrapy) — tak odpowiada zalogowane konto
+                if ($this->loggedIn && ! $this->alwaysGuest && ($id === $this->pdpNotFoundFor || ($this->skus[$id] ?? []) === [])) {
+                    return Http::response(['success' => false, 'message' => 'Results not found']);
                 }
                 if ($id === $this->pdpFailFor) {
                     return Http::response('Internal Server Error', 500);

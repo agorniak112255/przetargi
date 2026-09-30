@@ -115,6 +115,14 @@ final class HoneywellB2bClient
 
     private const RELOGIN_WINDOW_SECONDS = 15 * 60;
 
+    /** Rodziny z rzędu z „Results not found”, po których sprawdzamy ważność sesji. */
+    private const SESSION_CHECK_EVERY = 50;
+
+    /** Komunikat listy pozycji dla rodziny bez pozycji konta (success=false). */
+    private const NO_RESULTS = 'results not found';
+
+    private int $emptyInARow = 0;
+
     /** Kod wyjątku strony produktu konta bez tabeli pozycji (stan trwały, nie utrata sesji). */
     public const NO_TABLE = 7401;
 
@@ -292,6 +300,18 @@ final class HoneywellB2bClient
 
                 throw new B2bFatalException(self::SESSION_LOST.' (lista pozycji rodziny bez danych konta po ponownym logowaniu)');
             }
+        }
+
+        // „Results not found” to odpowiedź konta dla rodziny spoza konta, ale mogłaby też ukryć wygasłą sesję —
+        // w długiej serii takich odpowiedzi co SESSION_CHECK_EVERY sprawdzamy sesję (nieważna = logowanie i powtórka)
+        if ($skus === []) {
+            if (++$this->emptyInARow % self::SESSION_CHECK_EVERY === 0 && ! $this->sessionValid()) {
+                $this->relogin();
+                $skus = $this->readAccountSkus($path, $productId) ?? throw new B2bFatalException(self::SESSION_LOST.' (lista pozycji rodziny bez danych konta po ponownym logowaniu)');
+            }
+        }
+        if ($skus !== []) {
+            $this->emptyInARow = 0;
         }
 
         return $skus;
@@ -493,6 +513,11 @@ final class HoneywellB2bClient
                     'dynamicProductId' => $productId,
                 ]));
             $json = self::jsonOf($response);
+            // rodzina bez pozycji konta: {"success":false,"message":"Results not found"} (przebieg 30.09.2026)
+            if (is_array($json) && ($json['success'] ?? null) === false
+                && mb_strtolower(trim((string) ($json['message'] ?? ''))) === self::NO_RESULTS) {
+                return $page === 1 ? [] : array_values($skus);
+            }
             if ($json === null || ($json['success'] ?? null) !== true) {
                 throw new RuntimeException('lista pozycji rodziny '.$path.': nieczytelna odpowiedź ('.self::describe($response, $json).')');
             }
