@@ -86,6 +86,9 @@ final class HoneywellConnectorTest extends TestCase
 
     private bool $foreignRedirect = false;
 
+    /** @var array<string, mixed>|null odpowiedź listy pozycji zamiast właściwej */
+    private ?array $pdpAnswer = null;
+
     /** Powrót z logowania adresami „http://…” i „https://…:443” (tak odsyła Honeywell). */
     private bool $plainCallback = false;
 
@@ -594,6 +597,35 @@ final class HoneywellConnectorTest extends TestCase
         $this->assertTrue(Http::recorded(fn (Request $r): bool => ! str_starts_with($r->url(), 'https://') || str_contains($r->url(), ':443'))->isEmpty());
     }
 
+    public function test_login_reads_the_account_like_the_page_and_sends_site_cookies_with_the_position_list(): void
+    {
+        $this->addGloveFamily();
+        $this->fakeSite();
+
+        $this->products();
+
+        foreach (['/pif/api/soldto/favorite/v1/user', '/pif/api/account/v1/status'] as $path) {
+            $this->assertTrue(Http::recorded(fn (Request $r): bool => str_contains($r->url(), $path))->isNotEmpty(), $path);
+        }
+        $list = Http::recorded(fn (Request $r): bool => str_ends_with($r->url(), '.pdpsearchsearvlet'))->first()[0];
+        $this->assertStringContainsString('dtm=pl', $list->header('Cookie')[0] ?? '');
+        $this->assertStringContainsString('b2bunit=synth-unit', $list->header('Cookie')[0] ?? '');
+        $this->assertStringEndsWith('/synth-superlite-t9999?pdpPageTab=pills-sku-tab', $list->header('Referer')[0] ?? '');
+    }
+
+    public function test_unreadable_position_list_says_what_the_shop_answered(): void
+    {
+        $this->addGloveFamily();
+        $this->addGlassesFamily();
+        $this->fakeSite();
+        $this->pdpAnswer = ['success' => false, 'message' => 'Sold-to not selected'];
+
+        $this->products();
+
+        $summary = implode("\n", $this->lastConnector->runSummary());
+        $this->assertStringContainsString('nieczytelna odpowiedź (HTTP 200, application/json, JSON success=false, komunikat: Sold-to not selected)', $summary);
+    }
+
     public function test_login_never_submits_ordinary_shop_forms_with_hidden_fields(): void
     {
         $this->fakeSite();
@@ -910,6 +942,10 @@ final class HoneywellConnectorTest extends TestCase
             if ($host === $base && $path === '/gb/en') {
                 return Http::response('<html>home</html>');
             }
+            if ($host === $base && in_array($path, ['/pif/api/soldto/favorite/v1/user', '/pif/api/session/refresh', '/pif/api/account/v1/countries/country', '/pif/api/account/v1/status'], true)) {
+                // serwer ustawia przy odczytach konta ciasteczko konta sold-to
+                return Http::response(['honId' => 'synth'], 200, $path === '/pif/api/account/v1/status' ? ['Set-Cookie' => 'b2bunit=synth-unit; Path=/; Secure'] : []);
+            }
             if ($host === $base && $path === '/pif/api/session/details') {
                 return Http::response($this->loggedIn ? ['session_valid' => true, 'email' => strtoupper(self::EMAIL)] : ['session_valid' => false]);
             }
@@ -944,6 +980,9 @@ final class HoneywellConnectorTest extends TestCase
             // --- pozycje rodziny ---
             if ($host === $base && str_ends_with($path, '.pdpsearchsearvlet')) {
                 $id = $request->data()['dynamicProductId'] ?? '';
+                if ($this->pdpAnswer !== null) {
+                    return Http::response($this->pdpAnswer);
+                }
                 if ($id === $this->pdpFailFor) {
                     return Http::response('Internal Server Error', 500);
                 }

@@ -6,6 +6,7 @@ namespace App\Services\B2b;
 
 use Closure;
 use GuzzleHttp\Cookie\CookieJar;
+use GuzzleHttp\Cookie\SetCookie;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
@@ -52,6 +53,25 @@ final class HoneywellB2bClient
     private const SESSION_DETAILS = self::BASE.'/pif/api/session/details?appId=81';
 
     private const SHOP_HOME = self::BASE.'/shop/honeywell/en/';
+
+    /**
+     * Odczyty, które strona konta wysyła po zalogowaniu (kolejność jak w przeglądarce 30.09.2026) — serwer ustawia przy
+     * nich m.in. ciasteczko b2bunit (konto sold-to), bez którego lista pozycji rodziny nie zwraca danych konta.
+     */
+    private const ACCOUNT_BOOTSTRAP = [
+        self::BASE.'/pif/api/soldto/favorite/v1/user?appId=81',
+        self::BASE.'/pif/api/session/refresh?appId=81',
+        self::BASE.'/pif/api/account/v1/countries/country?appId=81',
+        self::BASE.'/pif/api/account/v1/status?appId=81',
+    ];
+
+    /**
+     * Ciasteczka ustawień, które skrypt strony zapisuje w przeglądarce (kraj katalogu Polska, strona /gb/en) — wartości
+     * z przeglądarki zalogowanego konta 30.09.2026.
+     *
+     * @var array<string, string>
+     */
+    private const SITE_COOKIES = ['dtm' => 'pl', 'dtmt' => 'Poland', 'usr_country' => 'gb', 'usr_lang' => 'en'];
 
     /** Hosty zdjęć i plików rodzin (adresy z pól assets/resources wyszukiwarki). */
     private const FILE_HOSTS = ['honeywell.scene7.com', 's7d1.scene7.com', 'preview1.assetsadobe.com', 'prod-edam.honeywell.com'];
@@ -186,6 +206,22 @@ final class HoneywellB2bClient
             }
             if (mb_strtolower(trim((string) ($session['email'] ?? ''))) !== mb_strtolower($email)) {
                 throw new RuntimeException('sesja należy do innego konta niż '.$email);
+            }
+
+            // to, co strona konta robi po zalogowaniu: ciasteczka ustawień i odczyty konta (b2bunit, sold-to)
+            foreach (self::SITE_COOKIES as $name => $value) {
+                $this->jar->setCookie(new SetCookie(['Name' => $name, 'Value' => $value, 'Domain' => self::HOST, 'Path' => '/', 'Secure' => true]));
+            }
+            foreach (self::ACCOUNT_BOOTSTRAP as $bootstrap) {
+                try {
+                    $this->send(fn (PendingRequest $http): Response => $this->browser($http)
+                        ->withHeaders(['X-Requested-With' => 'XMLHttpRequest', 'Referer' => self::BASE.'/gb/en'])
+                        ->get($bootstrap));
+                } catch (B2bFatalException $e) {
+                    throw $e;
+                } catch (RuntimeException) {
+                    // odczyt pomocniczy — jego błąd nie przerywa logowania; brak danych konta pokaże lista pozycji
+                }
             }
 
             // wejście do sklepu przenosi logowanie do SAP Commerce (ciasteczka sklepu)
@@ -442,16 +478,23 @@ final class HoneywellB2bClient
                 'sort' => [['title' => 'asc']],
                 'page' => ['current' => $page, 'size' => self::SKU_PAGE_SIZE],
             ]]];
-            $json = self::jsonOf($this->send(fn (PendingRequest $http): Response => $this->browser($http)
-                ->withHeaders(['X-Requested-With' => 'XMLHttpRequest'])
+            // nagłówki jak z przeglądarki na stronie rodziny (Referer, Origin, XHR)
+            $response = $this->send(fn (PendingRequest $http): Response => $this->browser($http)
+                ->withHeaders([
+                    'X-Requested-With' => 'XMLHttpRequest',
+                    'Referer' => self::productPageUrl($path).'?pdpPageTab=pills-sku-tab',
+                    'Origin' => self::BASE,
+                    'Accept' => 'application/json, text/javascript, */*; q=0.01',
+                ])
                 ->asForm()
                 ->post(self::productPageUrl($path).'.pdpsearchsearvlet', [
                     'payload' => json_encode($payload, JSON_THROW_ON_ERROR),
                     'tenantPath' => '/content/sps',
                     'dynamicProductId' => $productId,
-                ])));
+                ]));
+            $json = self::jsonOf($response);
             if ($json === null || ($json['success'] ?? null) !== true) {
-                throw new RuntimeException('lista pozycji rodziny '.$path.': nieczytelna odpowiedź');
+                throw new RuntimeException('lista pozycji rodziny '.$path.': nieczytelna odpowiedź ('.self::describe($response, $json).')');
             }
             $result = $json['search_results'] ?? null;
             if (is_array($result) && array_is_list($result)) {
@@ -793,6 +836,27 @@ final class HoneywellB2bClient
         }
 
         return 'https://'.$host.($parts['path'] ?? '/').(isset($parts['query']) ? '?'.$parts['query'] : '');
+    }
+
+    /**
+     * Krótki opis nieoczekiwanej odpowiedzi do dziennika: kod HTTP, typ treści i komunikat JSON (message/error) albo
+     * początek treści bez znaczników — żeby następny przebieg pokazał, co sklep odpowiedział.
+     *
+     * @param  array<string, mixed>|null  $json
+     */
+    private static function describe(Response $response, ?array $json): string
+    {
+        $type = strtolower(trim(explode(';', (string) $response->header('Content-Type'))[0]));
+        if ($json !== null) {
+            $message = $json['message'] ?? $json['error'] ?? $json['errorMessage'] ?? null;
+            $detail = 'JSON'.(array_key_exists('success', $json) ? ' success='.var_export($json['success'], true) : '')
+                .(is_scalar($message) && trim((string) $message) !== '' ? ', komunikat: '.trim((string) $message) : ', klucze: '.implode(',', array_slice(array_keys($json), 0, 6)));
+        } else {
+            $text = trim((string) preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags((string) preg_replace('#<(script|style)\b.*?</\1>#is', ' ', $response->body())), ENT_QUOTES | ENT_HTML5)));
+            $detail = $text !== '' ? 'treść: „'.mb_substr($text, 0, 150).'”' : 'pusta treść';
+        }
+
+        return 'HTTP '.$response->status().($type !== '' ? ', '.$type : '').', '.mb_substr($detail, 0, 250);
     }
 
     /** Host, protokół i port adresu do komunikatu (bez ścieżki i zapytania — mogą nieść kod logowania). */
