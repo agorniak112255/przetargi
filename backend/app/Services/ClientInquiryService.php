@@ -41,9 +41,13 @@ final class ClientInquiryService
     /** Kanał zapytania, którego treść handlowiec wczytał z pliku klienta (Excel, PDF, Word). */
     public const CHANNEL_FILE = 'file';
 
+    /** Kanał zapytania założonego z otwartego maila przez dodatek do Thunderbirda. */
+    private const CHANNEL_THUNDERBIRD = 'thunderbird';
+
     /**
      * Nagłówek, który formularz stawia nad tekstem wczytanym z pliku („=== Plik klienta: zapytanie.xlsx ===”).
-     * Oddziela wklejony nad nim mail (cięty jak mail) od treści pliku (idzie w całości).
+     * Oddziela wklejony nad nim mail (cięty jak mail) od treści pliku (idzie w całości). Ten sam nagłówek stawia
+     * dodatek do Thunderbirda nad tekstem załącznika maila (od 1.29.0).
      */
     private const FILE_MARKER = '/^=== Plik klienta: .+ ===$/mu';
 
@@ -242,12 +246,25 @@ final class ClientInquiryService
      */
     public static function analysisText(string $body, ?string $channel): string
     {
-        if ($channel !== self::CHANNEL_FILE) {
+        if (! self::hasFilePart($body, $channel)) {
             return InquiryMailText::forAnalysis($body);
         }
         [$mail, $file] = self::splitAtFileMarker($body);
 
         return $mail === '' ? $file : InquiryMailText::forAnalysis($mail)."\n\n".$file;
+    }
+
+    /**
+     * Czy treść ma część z pliku klienta. Formularz w przeglądarce ustawia wtedy kanał „file”. Dodatek do
+     * Thunderbirda zostaje przy swoim kanale (zapytanie dalej jest odpowiedzią na ten mail), a tekst załączników
+     * dokleja pod nagłówkiem pliku — bez tego rozpoznania cięcie stopki maila ucinałoby pismo z załącznika
+     * na pierwszym wierszu z telefonem.
+     */
+    private static function hasFilePart(string $body, ?string $channel): bool
+    {
+        return $channel === self::CHANNEL_FILE
+            || ($channel === self::CHANNEL_THUNDERBIRD
+                && preg_match(self::FILE_MARKER, str_replace(["\r\n", "\r"], "\n", $body)) === 1);
     }
 
     /**
@@ -284,7 +301,7 @@ final class ClientInquiryService
         array $source = [],
     ): ClientInquiry {
         $channel = $this->nullable($source['channel'] ?? null) ?? 'web';
-        $fromFile = $channel === self::CHANNEL_FILE;
+        $fromFile = self::hasFilePart($body, $channel);
         $fingerprints = $this->fingerprints(self::analysisText($body, $channel));
         // Nadawca z nagłówka From i kontakt z odciętej stopki — obie rzeczy
         // pochodzą wprost z maila, nic tu nie jest domyślane.
@@ -415,7 +432,7 @@ final class ClientInquiryService
         $body = (string) $inquiry->source_body;
         $subject = $this->nullable($inquiry->source_subject);
         $channel = $this->nullable($inquiry->source_channel);
-        $fromFile = $channel === self::CHANNEL_FILE;
+        $fromFile = self::hasFilePart($body, $channel);
         // Limit z ustawień w chwili analizy — zapisany przy zapytaniu, bo panel może go potem zmienić.
         $this->maxItems = $this->aiSettings->inquiryMaxItems();
         $progress = $this->progressWriter((int) $inquiry->id, $runId);

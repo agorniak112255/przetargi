@@ -5,6 +5,24 @@ const DEFAULT_BASE_URL = 'https://przetargi.supon.rzeszow.pl'
 /** Limit `max:20000` w StoreClientInquiryRequest, z zapasem. */
 const MAX_BODY = 19000
 
+/** Sam limit `max:20000` — treść maila razem z tekstem załączników. */
+const MAX_INQUIRY_BODY = 20000
+
+/** Pliki, z których aplikacja wyciąga tekst zapytania (InquiryFileText::EXTENSIONS). */
+const ATTACHMENT_EXTENSIONS = ['pdf', 'xlsx', 'xls', 'csv', 'docx', 'doc']
+
+/** Limit `max:20480` (kB) przy POST /api/inquiries/file-text. */
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+/**
+ * Nagłówek nad tekstem pliku — ten sam co w formularzu aplikacji
+ * (ClientInquiryService::FILE_MARKER). Po nim aplikacja poznaje, że dalej jest
+ * pismo z załącznika: idzie do analizy w całości, bez cięcia stopki maila.
+ */
+function fileMarker(name) {
+  return '=== Plik klienta: ' + String(name).replace(/[\r\n]+/g, ' ').trim() + ' ==='
+}
+
 /** Limit `max:400` dla `source_from` w StoreClientInquiryRequest. */
 const MAX_FROM = 400
 
@@ -51,6 +69,8 @@ class ApiError extends Error {
 /**
  * `onResponse` dostaje surową odpowiedź przed odczytem treści — także przy 204 i przy błędzie — dla wywołań, które
  * czytają nagłówki (X-Poll-After przy kolejce wysyłki).
+ *
+ * `body` jako FormData (plik) idzie bez zamiany na JSON — nagłówek z granicą części ustawia wtedy fetch.
  */
 async function api(path, { method = 'GET', body = null, token = null, baseUrl = null, onResponse = null } = {}) {
   const settings = await getSettings()
@@ -58,14 +78,15 @@ async function api(path, { method = 'GET', body = null, token = null, baseUrl = 
   const headers = { Accept: 'application/json' }
   const auth = token !== null ? token : settings.token
   if (auth) headers.Authorization = 'Bearer ' + auth
-  if (body !== null) headers['Content-Type'] = 'application/json'
+  const form = body instanceof FormData
+  if (body !== null && !form) headers['Content-Type'] = 'application/json'
 
   let res
   try {
     res = await fetch(url, {
       method,
       headers,
-      body: body === null ? undefined : JSON.stringify(body),
+      body: body === null ? undefined : form ? body : JSON.stringify(body),
     })
   } catch (e) {
     throw new ApiError(0, 'Brak połączenia z ' + url)

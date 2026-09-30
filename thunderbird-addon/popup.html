@@ -57,6 +57,13 @@
     </label>
     <p id="toneHint" class="muted"></p>
 
+    <!-- Załączniki PDF/Excel/Word: aplikacja odczytuje tekst, dodatek dokleja go do treści. -->
+    <div id="attachments" class="attachments" hidden>
+      <p class="muted">Załączniki — zaznaczone dopisuję do treści poniżej:</p>
+      <div id="attachmentList"></div>
+      <p id="attachmentsSkipped" class="muted" hidden></p>
+    </div>
+
     <p class="muted">Treść maila — możesz poprawić przed wysłaniem.</p>
     <textarea id="body" rows="6" spellcheck="false"></textarea>
     <p id="counter" class="muted"></p>

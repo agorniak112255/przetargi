@@ -142,6 +142,30 @@ textarea {
   width: auto;
 }
 
+.attachments {
+  margin-bottom: 10px;
+}
+
+.attachments .check {
+  align-items: flex-start;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.attachments .check span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.attachments .note {
+  display: block;
+  color: var(--muted);
+}
+
+.attachments .note.error {
+  color: var(--error);
+}
+
 textarea {
   resize: vertical;
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;

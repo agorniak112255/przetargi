@@ -155,6 +155,98 @@ final class ClientInquiryFileTest extends TestCase
         $this->assertStringNotContainsString('111 22 33', (string) json_encode($res->json('contact'), JSON_UNESCAPED_UNICODE));
     }
 
+    /**
+     * Dodatek do Thunderbirda 1.29.0 dokleja tekst załącznika pod nagłówkiem pliku, a kanał zostaje „thunderbird”
+     * (odpowiedź idzie na ten sam mail). Mail nad nagłówkiem jest cięty jak mail, pismo z załącznika idzie w całości.
+     */
+    public function test_thunderbird_mail_with_attachment_text_keeps_the_attachment_whole(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $seenByModel = null;
+        $this->mock(OpenAiCompatibleClient::class, function ($mock) use (&$seenByModel): void {
+            $mock->shouldReceive('chatJson')->once()->andReturnUsing(function (array $messages) use (&$seenByModel): array {
+                $seenByModel = (string) $messages[1]['content'];
+
+                return ['subject' => 'Oferta', 'questions' => [], 'product_queries' => [], 'line_items' => [], 'cards' => []];
+            });
+        });
+        $this->emptySearch();
+        Sanctum::actingAs($user);
+        $mail = "Dzień dobry, w załączniku zapytanie.\n\nPozdrawiam\nPiotr Nowak\ntel. 600 100 200\n\n"
+            ."W dniu 28.09.2026 o 14:55, Supon pisze:\n> stara oferta na kalosze";
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => $mail."\n\n".self::LETTER,
+            'tone' => 'handlowy',
+            'source_channel' => 'thunderbird',
+            'source_message_id' => '<zapytanie-12@zuk.pl>',
+            'source_file_name' => 'zapytanie 12-2026.pdf',
+        ])->assertCreated()
+            ->assertJsonPath('source_channel', 'thunderbird')
+            ->assertJsonPath('source_file_name', 'zapytanie 12-2026.pdf');
+
+        $this->assertStringNotContainsString('600 100 200', (string) $seenByModel);
+        $this->assertStringNotContainsString('stara oferta na kalosze', (string) $seenByModel);
+        $this->assertStringContainsString('tel. 17 111 22 33', (string) $seenByModel);
+        $this->assertStringContainsString('1 | Rękawice MAPA 332 rozm. 9 | 4 | para', (string) $seenByModel);
+        $this->assertStringContainsString('600 100 200', (string) json_encode($res->json('contact'), JSON_UNESCAPED_UNICODE));
+        $this->assertStringNotContainsString('111 22 33', (string) json_encode($res->json('contact'), JSON_UNESCAPED_UNICODE));
+        $this->assertSame('zapytanie-12@zuk.pl', ClientInquiry::query()->findOrFail($res->json('id'))->source_message_id);
+    }
+
+    /** Końce wierszy CRLF nie ukrywają nagłówka pliku — inaczej pismo z załącznika wpadłoby w cięcie stopki. */
+    public function test_thunderbird_attachment_marker_is_found_with_crlf_line_endings(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $seenByModel = null;
+        $this->mock(OpenAiCompatibleClient::class, function ($mock) use (&$seenByModel): void {
+            $mock->shouldReceive('chatJson')->once()->andReturnUsing(function (array $messages) use (&$seenByModel): array {
+                $seenByModel = (string) $messages[1]['content'];
+
+                return ['subject' => 'Oferta', 'questions' => [], 'product_queries' => [], 'line_items' => [], 'cards' => []];
+            });
+        });
+        $this->emptySearch();
+        Sanctum::actingAs($user);
+
+        $this->postJson('/api/inquiries', [
+            'body' => str_replace("\n", "\r\n", "Dzień dobry, w załączniku zapytanie.\n\n".self::LETTER),
+            'tone' => 'handlowy',
+            'source_channel' => 'thunderbird',
+            'source_file_name' => 'zapytanie 12-2026.pdf',
+        ])->assertCreated()
+            ->assertJsonPath('source_file_name', 'zapytanie 12-2026.pdf');
+
+        $this->assertStringContainsString('1 | Rękawice MAPA 332 rozm. 9 | 4 | para', (string) $seenByModel);
+    }
+
+    /** Mail z Thunderbirda bez nagłówka pliku zostaje zwykłym mailem — stopka cięta, nazwa pliku niezapisana. */
+    public function test_thunderbird_mail_without_attachment_text_is_trimmed_like_before(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $seenByModel = null;
+        $this->mock(OpenAiCompatibleClient::class, function ($mock) use (&$seenByModel): void {
+            $mock->shouldReceive('chatJson')->once()->andReturnUsing(function (array $messages) use (&$seenByModel): array {
+                $seenByModel = (string) $messages[1]['content'];
+
+                return ['subject' => 'Oferta', 'questions' => [], 'product_queries' => [], 'line_items' => [], 'cards' => []];
+            });
+        });
+        $this->emptySearch();
+        Sanctum::actingAs($user);
+
+        $this->postJson('/api/inquiries', [
+            'body' => "Proszę o ofertę na rękawice MAPA 332, 4 pary.\n\nPozdrawiam\nPiotr Nowak\ntel. 600 100 200",
+            'tone' => 'handlowy',
+            'source_channel' => 'thunderbird',
+            'source_file_name' => 'zapytanie.pdf',
+        ])->assertCreated()
+            ->assertJsonPath('source_file_name', null);
+
+        $this->assertStringContainsString('rękawice MAPA 332', (string) $seenByModel);
+        $this->assertStringNotContainsString('600 100 200', (string) $seenByModel);
+    }
+
     public function test_file_name_is_not_recorded_for_pasted_mail(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

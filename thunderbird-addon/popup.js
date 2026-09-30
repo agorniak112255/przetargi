@@ -17,6 +17,15 @@ let forced = false
 /** Po „Anuluj” nie pokazujemy ponownie ostrzeżenia znalezionego na serwerze. */
 let skipServerDuplicate = false
 
+/**
+ * Załączniki maila, z których aplikacja umie wyciągnąć tekst. `state`: idle
+ * (czeka albo odznaczony), loading, loaded (tekst jest w polu treści), error.
+ */
+let attachments = []
+
+/** Załączniki pominięte — zdjęcia, archiwa, za duże pliki. */
+let skippedAttachments = []
+
 function show(section) {
   for (const name of ['setup', 'known', 'fresh', 'working', 'duplicate']) {
     el(name).hidden = name !== section
@@ -131,8 +140,199 @@ async function readBody() {
   return messageText(full)
 }
 
+/* ------------------------------ załączniki ------------------------------- */
+
+function extensionOf(name) {
+  const match = /\.([a-z0-9]+)$/i.exec(String(name || ''))
+
+  return match ? match[1].toLowerCase() : ''
+}
+
+function formatSize(bytes) {
+  if (!(bytes > 0)) return ''
+  if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + ' kB'
+
+  return (bytes / 1024 / 1024).toFixed(1).replace('.', ',') + ' MB'
+}
+
+/** Załączniki otwartego maila podzielone na te do odczytu i pominięte. */
+async function loadAttachments() {
+  attachments = []
+  skippedAttachments = []
+  let parts = []
+  try {
+    parts = await browser.messages.listAttachments(message.id)
+  } catch (e) {
+    console.warn('Nie udało się odczytać listy załączników:', e.message)
+  }
+  const seen = {}
+  for (const part of parts || []) {
+    const name = String(part.name || '').trim()
+    if (name === '') continue
+    if (!ATTACHMENT_EXTENSIONS.includes(extensionOf(name))) {
+      skippedAttachments.push(name)
+    } else if (part.size > MAX_ATTACHMENT_BYTES) {
+      skippedAttachments.push(name + ' (ponad 20 MB)')
+    } else {
+      // Dwa pliki o tej samej nazwie muszą mieć różne nagłówki — po nagłówku
+      // znajdujemy fragment do usunięcia, a drugi taki sam nie zostałby dopisany.
+      seen[name] = (seen[name] || 0) + 1
+      attachments.push({
+        partName: part.partName,
+        name,
+        size: part.size,
+        marker: fileMarker(seen[name] === 1 ? name : name + ' (' + seen[name] + ')'),
+        checked: true,
+        state: 'idle',
+        chars: 0,
+        note: '',
+      })
+    }
+  }
+}
+
+function attachmentNote(item) {
+  if (item.state === 'loading') return 'odczytuję…'
+  if (item.state === 'loaded') return 'dopisany do treści — ' + item.chars + ' znaków'
+  if (item.state === 'error') return item.note
+
+  return item.checked ? 'czeka na odczyt' : 'pominięty'
+}
+
+function renderAttachments() {
+  const list = el('attachmentList')
+  list.textContent = ''
+  for (const item of attachments) {
+    const row = document.createElement('label')
+    row.className = 'check'
+    const box = document.createElement('input')
+    box.type = 'checkbox'
+    box.checked = item.checked
+    box.disabled = item.state === 'loading'
+    box.addEventListener('change', () => toggleAttachment(item, box.checked))
+    const text = document.createElement('span')
+    const size = formatSize(item.size)
+    text.textContent = item.name + (size === '' ? '' : ' · ' + size)
+    const note = document.createElement('span')
+    note.className = 'note' + (item.state === 'error' ? ' error' : '')
+    note.textContent = attachmentNote(item)
+    text.appendChild(note)
+    row.append(box, text)
+    list.appendChild(row)
+  }
+
+  const shown = skippedAttachments.slice(0, 4).join(', ')
+  const more = skippedAttachments.length > 4 ? ' i ' + (skippedAttachments.length - 4) + ' innych' : ''
+  el('attachmentsSkipped').hidden = skippedAttachments.length === 0
+  el('attachmentsSkipped').textContent = skippedAttachments.length === 0
+    ? ''
+    : 'Nie odczytam (tylko PDF, Excel, Word): ' + shown + more + '.'
+  el('attachments').hidden = attachments.length === 0 && skippedAttachments.length === 0
+}
+
+/**
+ * Tekst pliku w polu treści: od wiersza z jego nagłówkiem do nagłówka
+ * następnego pliku albo do końca. null, gdy nagłówka nie ma (handlowiec go usunął).
+ */
+function findFileBlock(text, marker) {
+  const lines = String(text).split('\n')
+  const from = lines.findIndex((line) => line.trim() === marker)
+  if (from < 0) return null
+  let to = lines.length
+  for (let i = from + 1; i < lines.length; i++) {
+    if (/^=== Plik klienta: .+ ===$/.test(lines[i].trim())) {
+      to = i
+      break
+    }
+  }
+
+  return { before: lines.slice(0, from).join('\n'), after: lines.slice(to).join('\n') }
+}
+
+function appendFileBlock(marker, text) {
+  const current = el('body').value
+  if (findFileBlock(current, marker) !== null) return
+  const block = marker + '\n' + String(text).trim()
+  el('body').value = current.trim() === '' ? block : current.trimEnd() + '\n\n' + block
+}
+
+function removeFileBlock(marker) {
+  const found = findFileBlock(el('body').value, marker)
+  if (found === null) return
+  el('body').value = [found.before.trimEnd(), found.after.trimStart()].filter((part) => part !== '').join('\n\n')
+}
+
+/** Plik idzie do aplikacji tylko po tekst — zapytanie jeszcze nie powstaje, plik nie jest zapisywany. */
+async function includeAttachment(item) {
+  if (item.state === 'loading') return
+  item.state = 'loading'
+  item.note = ''
+  renderAttachments()
+  try {
+    const file = await browser.messages.getAttachmentFile(message.id, item.partName)
+    const form = new FormData()
+    form.append('file', file, item.name)
+    const res = await api('/api/inquiries/file-text', { method: 'POST', body: form })
+    // odznaczony w trakcie odczytu — nie dopisujemy
+    if (!item.checked) {
+      item.state = 'idle'
+
+      return
+    }
+    const text = String((res && res.text) || '')
+    appendFileBlock(item.marker, text)
+    item.state = 'loaded'
+    item.chars = text.length
+  } catch (e) {
+    item.state = 'error'
+    item.checked = false
+    item.note = e.message || String(e)
+  } finally {
+    renderAttachments()
+    updateCounter()
+  }
+}
+
+function toggleAttachment(item, on) {
+  item.checked = on
+  if (on) {
+    includeAttachment(item)
+
+    return
+  }
+  removeFileBlock(item.marker)
+  if (item.state === 'loaded') item.state = 'idle'
+  renderAttachments()
+  updateCounter()
+}
+
+/** Zaznaczone załączniki po kolei — w kolejności z maila, bez zasypywania serwera. */
+async function offerAttachments() {
+  await loadAttachments()
+  renderAttachments()
+  for (const item of attachments) {
+    if (item.checked && item.state === 'idle') await includeAttachment(item)
+  }
+}
+
+function attachmentsPending() {
+  return attachments.some((item) => item.checked && (item.state === 'idle' || item.state === 'loading'))
+}
+
+/** Nazwy plików, których tekst jest w wysyłanej treści — aplikacja pokaże je przy zapytaniu. */
+function includedFileNames(body) {
+  const names = attachments
+    .filter((item) => item.state === 'loaded' && item.checked && findFileBlock(body, item.marker) !== null)
+    .map((item) => item.name)
+    .join(', ')
+
+  return names === '' ? null : names.slice(0, 255)
+}
+
+/* ------------------------------------------------------------------------- */
+
 /** Założenie zapytania prowadzi tło — zamknięcie okienka go nie przerywa. */
-function sendToBackground(body, tone, force) {
+function sendToBackground(body, tone, force, fileNames = null) {
   busy(true)
   browser.runtime.sendMessage({
     type: 'createInquiry',
@@ -147,6 +347,7 @@ function sendToBackground(body, tone, force) {
     body,
     tone,
     force,
+    fileNames,
   })
 
   show('working')
@@ -297,11 +498,16 @@ async function init() {
     }
   }
 
-  if (text.length < 20) {
+  openFresh(text, settings.tone)
+  await offerAttachments()
+  if (el('body').value.trim().length < 20) {
     status('Treść maila jest za krótka do analizy — uzupełnij ją poniżej.', 'warn')
   }
+}
 
-  el('tone').value = settings.tone
+/** Ekran wysyłki: treść maila do poprawienia, pod nią tekst zaznaczonych załączników. */
+function openFresh(text, tone) {
+  el('tone').value = tone
   updateToneHint()
   el('body').value = text
   updateCounter()
@@ -316,33 +522,50 @@ function updateToneHint() {
 
 function updateCounter() {
   const length = el('body').value.trim().length
-  el('counter').textContent = length + ' znaków' + (length < 20 ? ' — za mało, potrzeba co najmniej 20' : '')
+  let note = ''
+  if (length < 20) note = ' — za mało, potrzeba co najmniej 20'
+  if (length > MAX_INQUIRY_BODY) note = ' — za dużo, aplikacja przyjmie najwyżej ' + MAX_INQUIRY_BODY
+  el('counter').textContent = length + ' znaków' + note
 }
 
 async function send() {
+  if (attachmentsPending()) {
+    status('Czekam na odczyt załącznika — wyślij, gdy tekst pojawi się w treści.', 'warn')
+
+    return
+  }
   const body = el('body').value.trim()
   if (body.length < 20) {
     status('Treść jest za krótka — potrzeba co najmniej 20 znaków.', 'warn')
 
     return
   }
+  // Nie ucinamy po cichu: obcięty koniec to zgubione pozycje z tabeli klienta.
+  if (body.length > MAX_INQUIRY_BODY) {
+    status(
+      'Treść ma ' + body.length + ' znaków, a aplikacja przyjmie najwyżej ' + MAX_INQUIRY_BODY
+        + '. Odznacz zbędny załącznik albo usuń niepotrzebne wiersze.',
+      'error',
+    )
 
-  sendToBackground(body, el('tone').value, forced)
+    return
+  }
+
+  sendToBackground(body, el('tone').value, forced, includedFileNames(body))
 }
 
 /** „Załóż mimo to” — własne zapytanie obok cudzego; aplikacja je powiąże. */
 async function forceCreate() {
   const settings = await getSettings()
-  if (sourceText.trim().length < 20) {
-    // Bez treści nie ma czego analizować — wracamy do zwykłego ekranu,
-    // ale zapamiętujemy, że to świadome założenie kopii.
+  await loadAttachments()
+  // Bez treści nie ma czego analizować, a załączniki trzeba pokazać przed
+  // wysłaniem — wracamy do zwykłego ekranu, ale zapamiętujemy, że to świadome
+  // założenie kopii.
+  if (sourceText.trim().length < 20 || attachments.length > 0) {
     forced = true
-    el('tone').value = settings.tone
-    updateToneHint()
-    el('body').value = sourceText
-    updateCounter()
-    show('fresh')
-    status('Treść maila jest za krótka — uzupełnij ją i wyślij.', 'warn')
+    openFresh(sourceText, settings.tone)
+    status(attachments.length > 0 ? 'Sprawdź treść razem z załącznikami i wyślij.' : 'Treść maila jest za krótka — uzupełnij ją i wyślij.', 'warn')
+    await offerAttachments()
 
     return
   }

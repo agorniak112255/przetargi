@@ -26,7 +26,7 @@ async function notify(title, message) {
  * `force` puszczamy dopiero wtedy, gdy handlowiec zobaczył cudze zapytanie
  * i mimo to chce założyć własne (oba zostaną powiązane po stronie aplikacji).
  */
-async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentAt, body, tone, force = false, messageId = null }) {
+async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentAt, body, tone, force = false, messageId = null, fileNames = null }) {
   // Przy „Załóż mimo to” zachowujemy dane duplikatu — gdyby próba się nie udała,
   // ostrzeżenie musi wrócić na ekran, a nie przepaść razem z błędem.
   const previous = force ? await pendingFor(headerMessageId) : null
@@ -44,6 +44,8 @@ async function createInquiry({ headerMessageId, subject, sourceFrom, sourceSentA
       source_from: senderHeader(sourceFrom),
       source_sent_at: toIsoDate(sourceSentAt),
     }
+    // Załączniki, których tekst okienko dopisało pod nagłówkiem pliku — aplikacja pokaże ich nazwy przy zapytaniu.
+    if (fileNames) payload.source_file_name = String(fileNames).slice(0, 255)
     if (force) payload.force = true
 
     const inquiry = await api('/api/inquiries', { method: 'POST', body: payload })

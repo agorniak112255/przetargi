@@ -7,6 +7,7 @@ odpowiedź jako odpowiedź na ten sam mail.
 
 1. Otwierasz mail od klienta i klikasz ikonę dodatku nad wiadomością.
 2. Dodatek pokazuje całą treść maila — możesz ją poprawić przed wysłaniem.
+   Tekst z załączników PDF, Excel i Word dopisuje pod spodem (od 1.29.0, niżej).
 3. Klikasz **Wyślij do Przetargów**. Zapytanie powstaje w kilka sekund, samo
    otwiera się w przeglądarce i pojawia się powiadomienie. Pozycje i list aplikacja
    liczy dalej w tle (od 1.27.0 powiadomienie mówi „założone”, nie „gotowe”) — przy
@@ -16,6 +17,26 @@ odpowiedź jako odpowiedź na ten sam mail.
 5. Wracasz do Thunderbirda, klikasz ikonę dodatku i **Wstaw odpowiedź do maila**.
    Otwiera się zwykłe okno odpowiedzi — z adresatem, cytatem i podpisem — z gotową treścią na górze.
 6. Wysyłasz. Dodatek sam oznacza zapytanie w aplikacji jako obsłużone.
+
+## Załączniki z zapytaniem (od 1.29.0)
+
+Gdy klient przysyła listę produktów w pliku, okienko nad mailem pokazuje
+załączniki PDF, Excel (xlsx, xls, csv) i Word (docx, doc) — domyślnie
+zaznaczone. Każdy zaznaczony plik idzie do aplikacji (`POST /api/inquiries/file-text`,
+ten sam odczyt co „Wczytaj z pliku” w przeglądarce; pliku aplikacja nie zapisuje),
+a odczytany tekst trafia do pola treści pod nagłówkiem
+`=== Plik klienta: nazwa.pdf ===`. Odznaczenie usuwa ten fragment z pola.
+
+- Zapytanie dalej jest zapytaniem z Thunderbirda (`source_channel: thunderbird`,
+  Message-ID maila), więc odpowiedź wstawia się jak dotąd. Nazwy dołączonych plików
+  idą w `source_file_name` — aplikacja pokazuje je przy zapytaniu.
+- Po nagłówku pliku aplikacja poznaje, gdzie kończy się mail: mail nad nim jest
+  cięty jak mail (cytat, stopka), a pismo z załącznika idzie do analizy w całości.
+- Zdjęcia, archiwa i pliki ponad 20 MB są wymienione jako pominięte. Skan PDF bez
+  warstwy tekstowej wraca z komunikatem aplikacji i zostaje odznaczony.
+- Całość (mail + załączniki) może mieć najwyżej 20 000 znaków. Dodatek niczego nie
+  ucina — przy przekroczeniu wysyłka czeka, aż odznaczysz zbędny plik albo usuniesz wiersze.
+- „Wyślij do Przetargów” czeka, aż wszystkie zaznaczone pliki zostaną odczytane.
 
 ## Na który mail idzie odpowiedź
 
@@ -417,7 +438,7 @@ aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa
 ## Wymagania po stronie aplikacji
 
 - konto z uprawnieniem `inquiries.use`,
-- API: `POST /api/login`, `POST /api/logout`, `POST /api/inquiries`, `GET /api/inquiries/{id}`,
+- API: `POST /api/login`, `POST /api/logout`, `POST /api/inquiries`, `POST /api/inquiries/file-text`, `GET /api/inquiries/{id}`,
   `POST /api/inquiries/{id}/replied`, `GET /api/inquiries/queued`,
   `POST /api/inquiries/{id}/queue-reply`, `POST /api/offers/compose/{id}/claim`.
 - `GET /api/inquiries/queued` odpowiada tablicą próśb i nagłówkiem `X-Poll-After`
@@ -460,8 +481,8 @@ zgadza się z tym, co faktycznie jest zainstalowane.
 
 ## Ograniczenia
 
-- Załączniki (PDF, Excel, Word) nie są wysyłane — do analizy idzie sam tekst maila.
-  Plik klienta wczytuje się w aplikacji: Zapytania → **Wczytaj z pliku**.
+- Z załączników odczytywany jest tylko tekst PDF, Excel i Word — nie zdjęcia ani
+  skany. Treść maila przekazanego jako załącznik (.eml) też nie jest odczytywana.
 - Maile zaszyfrowane (OpenPGP, S/MIME) nie są odczytywane.
 - Jeśli zamkniesz okno odpowiedzi i wyślesz ją później ręcznie, zapytanie trzeba
   oznaczyć w aplikacji przyciskiem „Oznacz, że wysłano”.
