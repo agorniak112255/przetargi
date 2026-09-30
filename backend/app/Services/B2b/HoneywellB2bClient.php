@@ -65,6 +65,22 @@ final class HoneywellB2bClient
         self::BASE.'/pif/api/account/v1/status?appId=81',
     ];
 
+    /** Dane kontaktowe konta z listą kont sold-to (numer, erpId, waluta) i językiem. */
+    private const CONTACT_DETAILS = self::BASE.'/pif/api/account/v1/get-contact-details?appId=81';
+
+    /**
+     * Kontekst konta dla list pozycji: strona po zalogowaniu woła /bin/encryptedCookie z kontem sold-to, a serwer
+     * ustawia zaszyfrowane ciasteczko userCookie. Bez niego lista pozycji rodziny odpowiada „Results not found” dla
+     * każdej rodziny (przebieg 30.09.2026 20:25: 1750/1750; potwierdzone w przeglądarce: bez userCookie — brak,
+     * po /bin/encryptedCookie — 6 pozycji CoreShield).
+     */
+    private const ENCRYPTED_COOKIE = self::BASE.'/bin/encryptedCookie';
+
+    private const ACCOUNT_COOKIE = 'userCookie';
+
+    /** Waluta cen, którą przyjmuje łącznik (konto 0000034372: customerUnitCurrency EUR). */
+    public const CURRENCY = 'EUR';
+
     /**
      * Ciasteczka ustawień, które skrypt strony zapisuje w przeglądarce (kraj katalogu Polska, strona /gb/en) — wartości
      * z przeglądarki zalogowanego konta 30.09.2026.
@@ -232,6 +248,8 @@ final class HoneywellB2bClient
                 }
             }
 
+            $this->accountContext();
+
             // wejście do sklepu przenosi logowanie do SAP Commerce (ciasteczka sklepu)
             [$url, $html] = $this->browse('GET', self::SHOP_HOME);
             $this->followAutoForms($url, $html);
@@ -349,6 +367,53 @@ final class HoneywellB2bClient
     public static function looksSignedOut(string $html): bool
     {
         return preg_match('/name="accountId"\s+value="\d+"/', $html) !== 1;
+    }
+
+    /**
+     * Kontekst konta jak createCookie() strony: domyślne konto sold-to z danych kontaktowych (numer 10 cyfr, erpId,
+     * waluta) i język → /bin/encryptedCookie → ciasteczko userCookie. Brak konta, inna waluta niż EUR albo brak
+     * ciasteczka po wywołaniu = logowanie nieudane (przebieg bez kontekstu konta nie znalazłby żadnej pozycji).
+     */
+    private function accountContext(): void
+    {
+        $details = self::jsonOf($this->send(fn (PendingRequest $http): Response => $this->browser($http)
+            ->withHeaders(['Content-Type' => 'application/json', 'propagate-errors' => 'true', 'X-Requested-With' => 'XMLHttpRequest'])
+            ->get(self::CONTACT_DETAILS)));
+        $accounts = is_array($details['soldToAccounts'] ?? null) ? array_values(array_filter($details['soldToAccounts'], 'is_array')) : [];
+        $account = null;
+        foreach ($accounts as $candidate) {
+            if (in_array($candidate['isDefault'] ?? null, [true, 'true'], true)) {
+                $account = $candidate;
+                break;
+            }
+        }
+        $account ??= $accounts[0] ?? null;
+        $soldTo = trim((string) ($account['soldToNumber'] ?? ''));
+        $erpId = trim((string) ($account['erpId'] ?? ''));
+        if ($account === null || preg_match('/^\d{1,10}$/', $soldTo) !== 1 || $erpId === '') {
+            throw new RuntimeException('dane konta Honeywell bez konta sold-to (numer i system ERP) — nie da się ustawić kontekstu konta');
+        }
+        $currency = mb_strtoupper(trim((string) ($account['customerUnitCurrency'] ?? '')));
+        if ($currency !== self::CURRENCY) {
+            throw new RuntimeException('konto sold-to '.$soldTo.' ma walutę „'.$currency.'”, a łącznik przyjmuje ceny w '.self::CURRENCY);
+        }
+        $language = is_array($details['language'] ?? null) ? trim((string) ($details['language']['isoCode'] ?? '')) : '';
+
+        $this->send(fn (PendingRequest $http): Response => $this->browser($http)
+            ->withHeaders(['X-Requested-With' => 'XMLHttpRequest', 'Referer' => self::BASE.'/gb/en'])
+            ->get(self::ENCRYPTED_COOKIE, [
+                'soldTo' => str_pad($soldTo, 10, '0', STR_PAD_LEFT),
+                'currency' => $currency,
+                'language' => $language !== '' ? $language : 'en',
+                'totalItems' => '0',
+                'totalPrice' => '0',
+                'cartId' => '',
+                'erpId' => $erpId,
+                'tenantPath' => '/content/sps',
+            ]));
+        if ($this->jar->getCookieByName(self::ACCOUNT_COOKIE) === null) {
+            throw new RuntimeException('Honeywell nie ustawił kontekstu konta (brak ciasteczka '.self::ACCOUNT_COOKIE.' po /bin/encryptedCookie)');
+        }
     }
 
     /** Sesja konta /pif ważna (odczyt /pif/api/session/details); błąd odczytu = nieważna. */

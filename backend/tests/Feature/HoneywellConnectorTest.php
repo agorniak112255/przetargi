@@ -86,6 +86,11 @@ final class HoneywellConnectorTest extends TestCase
 
     private bool $foreignRedirect = false;
 
+    private string $accountCurrency = 'EUR';
+
+    /** /bin/encryptedCookie nie ustawia userCookie. */
+    private bool $noAccountCookie = false;
+
     /** Numer rodziny, dla której lista pozycji odpowiada „Results not found” (rodzina poza kontem). */
     private string $pdpNotFoundFor = '';
 
@@ -616,6 +621,47 @@ final class HoneywellConnectorTest extends TestCase
         $this->assertStringEndsWith('/synth-superlite-t9999?pdpPageTab=pills-sku-tab', $list->header('Referer')[0] ?? '');
     }
 
+    public function test_login_sets_the_account_context_with_the_default_sold_to_like_the_page(): void
+    {
+        // przebieg 30.09.2026 20:25: bez userCookie każda rodzina „Results not found” (1750/1750)
+        $this->addGloveFamily();
+        $this->fakeSite();
+
+        $products = $this->products();
+
+        $this->assertSame(['T9999/7S'], array_map(static fn (B2bRemoteProduct $p): string => $p->sku, $products));
+        $call = Http::recorded(fn (Request $r): bool => str_contains($r->url(), '/bin/encryptedCookie'))->first()[0];
+        parse_str((string) parse_url($call->url(), PHP_URL_QUERY), $query);
+        $this->assertSame(
+            ['soldTo' => '0000099999', 'currency' => 'EUR', 'language' => 'en', 'totalItems' => '0', 'totalPrice' => '0', 'cartId' => '', 'erpId' => 'PRD010', 'tenantPath' => '/content/sps'],
+            $query,
+        );
+        $list = Http::recorded(fn (Request $r): bool => str_ends_with($r->url(), '.pdpsearchsearvlet'))->first()[0];
+        $this->assertStringContainsString('userCookie=synth-encrypted', $list->header('Cookie')[0] ?? '');
+    }
+
+    public function test_login_without_the_account_context_fails_clearly_instead_of_finding_nothing(): void
+    {
+        $this->fakeSite();
+        $this->noAccountCookie = true;
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('nie ustawił kontekstu konta');
+
+        $this->client()->login();
+    }
+
+    public function test_account_in_another_currency_stops_the_login(): void
+    {
+        $this->fakeSite();
+        $this->accountCurrency = 'PLN';
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('walutę „PLN”');
+
+        $this->client()->login();
+    }
+
     public function test_results_not_found_is_a_family_outside_the_account_not_an_error(): void
     {
         // przebieg 30.09.2026 20:16: rodziny bez pozycji konta odpowiadają {"success":false,"message":"Results not found"}
@@ -965,6 +1011,18 @@ final class HoneywellConnectorTest extends TestCase
                 // serwer ustawia przy odczytach konta ciasteczko konta sold-to
                 return Http::response(['honId' => 'synth'], 200, $path === '/pif/api/account/v1/status' ? ['Set-Cookie' => 'b2bunit=synth-unit; Path=/; Secure'] : []);
             }
+            if ($host === $base && $path === '/pif/api/account/v1/get-contact-details') {
+                return Http::response([
+                    'language' => ['isoCode' => 'en'],
+                    'soldToAccounts' => [
+                        ['soldToNumber' => '0000099998', 'erpId' => 'PRD099', 'customerUnitCurrency' => 'USD', 'isDefault' => 'false'],
+                        ['soldToNumber' => '0000099999', 'erpId' => 'PRD010', 'customerUnitCurrency' => $this->accountCurrency, 'isDefault' => 'true', 'soldToDetails' => [['salesOrg' => 'FR50']]],
+                    ],
+                ]);
+            }
+            if ($host === $base && $path === '/bin/encryptedCookie') {
+                return Http::response('success', 200, $this->noAccountCookie ? [] : ['Set-Cookie' => 'userCookie=synth-encrypted; Path=/; Secure']);
+            }
             if ($host === $base && $path === '/pif/api/session/details') {
                 return Http::response($this->loggedIn ? ['session_valid' => true, 'email' => strtoupper(self::EMAIL)] : ['session_valid' => false]);
             }
@@ -1002,8 +1060,10 @@ final class HoneywellConnectorTest extends TestCase
                 if ($this->pdpAnswer !== null) {
                     return Http::response($this->pdpAnswer);
                 }
-                // rodzina bez pozycji konta (także pusta rodzina atrapy) — tak odpowiada zalogowane konto
-                if ($this->loggedIn && ! $this->alwaysGuest && ($id === $this->pdpNotFoundFor || ($this->skus[$id] ?? []) === [])) {
+                // rodzina bez pozycji konta (także pusta rodzina atrapy) albo brak kontekstu konta (userCookie) — tak
+                // odpowiada zalogowane konto
+                $withAccount = str_contains($request->header('Cookie')[0] ?? '', 'userCookie=');
+                if ($this->loggedIn && ! $this->alwaysGuest && (! $withAccount || $id === $this->pdpNotFoundFor || ($this->skus[$id] ?? []) === [])) {
                     return Http::response(['success' => false, 'message' => 'Results not found']);
                 }
                 if ($id === $this->pdpFailFor) {
