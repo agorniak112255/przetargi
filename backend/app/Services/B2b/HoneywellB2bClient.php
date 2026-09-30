@@ -533,9 +533,11 @@ final class HoneywellB2bClient
     private function browse(string $method, string $url, #[\SensitiveParameter] array $form = []): array
     {
         for ($hop = 0; $hop <= self::MAX_REDIRECTS; $hop++) {
-            if (! self::isHoneywellUrl($url)) {
-                throw new RuntimeException(self::FOREIGN_REDIRECT.': '.parse_url($url, PHP_URL_HOST));
+            $secure = self::secureHoneywellUrl($url);
+            if ($secure === null) {
+                throw new RuntimeException(self::FOREIGN_REDIRECT.': '.self::urlOrigin($url));
             }
+            $url = $secure;
             $response = $this->send(
                 fn (PendingRequest $http): Response => $method === 'POST'
                     ? $this->browser($http)->withOptions(['allow_redirects' => false])->asForm()->post($url, $form)
@@ -770,12 +772,38 @@ final class HoneywellB2bClient
 
     private static function isHoneywellUrl(string $url): bool
     {
+        return self::secureHoneywellUrl($url) !== null;
+    }
+
+    /**
+     * Adres na hoście Honeywell (sklep, logowanie) w postaci https bez portu; null = inny host albo dane logowania
+     * w adresie. Honeywell odsyła część przekierowań jako „http://” albo z portem (pierwszy przebieg 30.09.2026:
+     * „przekierowanie poza Honeywell: automation.honeywell.com”) — takie adresy idą dalej po https, nigdy po http.
+     */
+    private static function secureHoneywellUrl(string $url): ?string
+    {
         $parts = parse_url($url);
-        if (! is_array($parts) || strtolower($parts['scheme'] ?? '') !== 'https' || isset($parts['user']) || isset($parts['pass']) || isset($parts['port'])) {
-            return false;
+        if (! is_array($parts) || ! in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true)
+            || isset($parts['user']) || isset($parts['pass']) || ! in_array($parts['port'] ?? 443, [80, 443], true)) {
+            return null;
+        }
+        $host = strtolower($parts['host'] ?? '');
+        if (! in_array($host, [self::HOST, self::AUTH_HOST], true)) {
+            return null;
         }
 
-        return in_array(strtolower($parts['host'] ?? ''), [self::HOST, self::AUTH_HOST], true);
+        return 'https://'.$host.($parts['path'] ?? '/').(isset($parts['query']) ? '?'.$parts['query'] : '');
+    }
+
+    /** Host, protokół i port adresu do komunikatu (bez ścieżki i zapytania — mogą nieść kod logowania). */
+    private static function urlOrigin(string $url): string
+    {
+        $parts = parse_url($url);
+        if (! is_array($parts)) {
+            return 'nieczytelny adres';
+        }
+
+        return strtolower($parts['scheme'] ?? '?').'://'.($parts['host'] ?? '?').(isset($parts['port']) ? ':'.$parts['port'] : '');
     }
 
     /**
@@ -815,7 +843,7 @@ final class HoneywellB2bClient
                         // przekierowanie tylko na hosty Honeywell (sklep, logowanie, zdjęcia i pliki)
                         'on_redirect' => static function (RequestInterface $request, ResponseInterface $response, UriInterface $uri): void {
                             if (! self::isHoneywellUrl((string) $uri) && ! self::isFileUrl((string) $uri)) {
-                                throw new RuntimeException(self::FOREIGN_REDIRECT.': '.$uri->getHost());
+                                throw new RuntimeException(self::FOREIGN_REDIRECT.': '.self::urlOrigin((string) $uri));
                             }
                         },
                     ],
@@ -828,8 +856,8 @@ final class HoneywellB2bClient
                     throw new RuntimeException(self::TOO_LARGE.(int) (self::FILE_MAX_BYTES / 1_000_000).' MB pominięty', 0, $e);
                 }
                 // przekierowanie poza hosty Honeywell (on_redirect) — bez ponawiania
-                if (str_contains($e->getMessage(), self::FOREIGN_REDIRECT)) {
-                    throw new RuntimeException(self::FOREIGN_REDIRECT.' — zapytanie przerwane', 0, $e);
+                if (preg_match('/'.preg_quote(self::FOREIGN_REDIRECT, '/').': \S+/u', $e->getMessage(), $m) === 1) {
+                    throw new RuntimeException($m[0].' — zapytanie przerwane', 0, $e);
                 }
                 $error = 'brak połączenia ('.$e->getMessage().')';
             }

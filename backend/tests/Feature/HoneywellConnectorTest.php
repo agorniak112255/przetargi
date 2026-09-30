@@ -86,6 +86,9 @@ final class HoneywellConnectorTest extends TestCase
 
     private bool $foreignRedirect = false;
 
+    /** Powrót z logowania adresami „http://…” i „https://…:443” (tak odsyła Honeywell). */
+    private bool $plainCallback = false;
+
     /** Numer rodziny, której lista pozycji odpowiada błędem serwera. */
     private string $pdpFailFor = '';
 
@@ -577,6 +580,20 @@ final class HoneywellConnectorTest extends TestCase
         $this->lastConnector->description($products[0]);
     }
 
+    public function test_login_follows_honeywell_redirects_written_as_http_or_with_a_port_over_https_only(): void
+    {
+        // pierwszy przebieg 30.09.2026: „przekierowanie poza Honeywell: automation.honeywell.com”
+        $this->fakeSite();
+        $this->plainCallback = true;
+        $client = $this->client();
+
+        $client->login();
+
+        $this->assertTrue($client->isLoggedIn());
+        $this->assertTrue(Http::recorded(fn (Request $r): bool => str_contains($r->url(), '/pif/cwa/oauth/callback/'))->isNotEmpty());
+        $this->assertTrue(Http::recorded(fn (Request $r): bool => ! str_starts_with($r->url(), 'https://') || str_contains($r->url(), ':443'))->isEmpty());
+    }
+
     public function test_login_never_submits_ordinary_shop_forms_with_hidden_fields(): void
     {
         $this->fakeSite();
@@ -885,10 +902,10 @@ final class HoneywellConnectorTest extends TestCase
                 $this->loggedIn = true;
                 $this->logins++;
 
-                return Http::response('', 302, ['Location' => $base.'/pif/cwa/oauth/callback/j_security_check?code=synth']);
+                return Http::response('', 302, ['Location' => ($this->plainCallback ? 'http://automation.honeywell.com' : $base).'/pif/cwa/oauth/callback/j_security_check?code=synth']);
             }
             if ($host === $base && $path === '/pif/cwa/oauth/callback/j_security_check') {
-                return Http::response('', 302, ['Location' => $base.'/gb/en']);
+                return Http::response('', 302, ['Location' => ($this->plainCallback ? 'https://automation.honeywell.com:443' : $base).'/gb/en']);
             }
             if ($host === $base && $path === '/gb/en') {
                 return Http::response('<html>home</html>');
