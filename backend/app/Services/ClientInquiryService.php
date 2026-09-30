@@ -56,6 +56,9 @@ final class ClientInquiryService
 
     private const MAX_MATCHES_PER_QUERY = 3;
 
+    /** Ile podobnych kart z katalogu pokazać przy pozycji, której model nic nie zatwierdził (similarCandidates). */
+    private const MAX_SIMILAR_CANDIDATES = 6;
+
     /** Limit pozycji zapytań sprzed ustawienia (analysis.max_items) — dla starych rekordów. */
     private const LEGACY_MAX_LINE_ITEMS = 8;
 
@@ -1665,7 +1668,10 @@ final class ClientInquiryService
             $qtyUnit = $this->qtyUnit($item);
 
             $flags = [];
-            if ($confidence === 'none' && $candidates !== []) {
+            if (($candidates[0]['similar'] ?? false) === true) {
+                // model nic nie zatwierdził — przy pozycji tylko podobne karty z katalogu do wyboru ręcznego
+                $flags[] = 'similar_only';
+            } elseif ($confidence === 'none' && $candidates !== []) {
                 $flags[] = 'low_score';
             }
             if ($candidates === [] && $this->searchFailedForItem($matches, $item)) {
@@ -2051,6 +2057,10 @@ final class ClientInquiryService
         if ($best === null) {
             return 'none';
         }
+        // Podobna karta z katalogu nie jest trafieniem — model jej nie zatwierdził (wiersz reguły ma 92, ale to nie ocena).
+        if (($best['similar'] ?? false) === true) {
+            return 'none';
+        }
         // Karta z linku nie ma oceny modelu — o pewności decyduje adres, nie wynik.
         if (($best['source'] ?? null) === 'link') {
             return $this->linkedSingle($candidates) ? 'high' : 'medium';
@@ -2267,6 +2277,9 @@ final class ClientInquiryService
         $products = $this->rated($this->productsForItem($matches, $item));
         usort($products, static fn (array $a, array $b): int => ((int) ($b['score'] ?? 0)) <=> ((int) ($a['score'] ?? 0)));
         $products = array_values(array_slice($products, 0, self::MAX_MATCHES_PER_QUERY));
+        if ($products === [] && ! $this->searchFailedForItem($matches, $item)) {
+            $products = $this->similarCandidates($matches, $item);
+        }
 
         // Kod z maila na czoło — przy równych wynikach wariantów to on jest domyślny.
         // Ale wiersz oceniony poniżej progu zostaje na swoim miejscu: zgodny bywa sam
@@ -2301,6 +2314,62 @@ final class ClientInquiryService
         }
 
         return $products;
+    }
+
+    /**
+     * Podobne karty z katalogu, gdy model żadnej nie zatwierdził: wiersze listy zapasowej (ten sam rodzaj w katalogu,
+     * reguła klasy) — dotąd ukryte przez rated(), więc handlowiec widział „brak w katalogu”, choć katalog miał np.
+     * statywy PROTEKT TM 6 / TM 15 pod „TM 9-N” (zapytanie #88, 30.09.2026). Oznaczone `similar`: nigdy nie są
+     * wybierane domyślnie (confidenceFor → none), do listu wchodzą tylko po wyborze handlowca.
+     *
+     * @param  list<array<string, mixed>>  $matches
+     * @param  array<string, mixed>  $item
+     * @return list<array<string, mixed>>
+     */
+    private function similarCandidates(array $matches, array $item): array
+    {
+        $stems = $this->productWordStems((string) ($item['search_query'] ?? $item['query'] ?? ''), true);
+        // Lista zapasowa bywa przypadkowa („Zestaw serwisowy 3M” za 27 880 zł pod „Wycieraczką gumową”) — podobna
+        // karta musi mieć w nazwie ten sam wyraz wyrobu co pozycja („statyw”, „urządzenie ewakuacyjne”).
+        $rows = array_values(array_filter(
+            $this->productsForItem($matches, $item),
+            fn (array $row): bool => in_array((string) ($row['source'] ?? ''), ['catalog', 'rule'], true)
+                && array_intersect($stems, $this->productWordStems((string) ($row['name'] ?? ''))) !== [],
+        ));
+        usort($rows, static fn (array $a, array $b): int => ((int) ($b['score'] ?? 0)) <=> ((int) ($a['score'] ?? 0)));
+
+        return array_map(
+            static fn (array $row): array => $row + ['similar' => true],
+            array_slice($rows, 0, self::MAX_SIMILAR_CANDIDATES),
+        );
+    }
+
+    /**
+     * Rdzenie wyrazów wyrobu (5 pierwszych liter bez polskich znaków) do porównania nazwy podobnej karty z pozycją.
+     * Bez wyrazów ogólnych („bezpieczeństwa”, „ochronny”, „zestaw”); po stronie pozycji także bez zapisanych
+     * wersalikami (marka, model: PROTEKT, RUP) — łączyłyby amortyzator ze statywem tej samej marki. Nazwy kart bywają
+     * całe wersalikami („KALOSZE BEZPIECZNE PCV”), więc tam wersaliki zostają.
+     *
+     * @return list<string>
+     */
+    private function productWordStems(string $text, bool $skipUppercase = false): array
+    {
+        $generic = ['bezpi', 'ochro', 'roboc', 'zesta', 'kompl', 'jedno', 'wielo', 'uniwe', 'stand', 'profe', 'damsk', 'meski', 'dzial'];
+        preg_match_all('/\p{L}{5,}/u', $text, $words);
+        // pozycja cała wersalikami („KALOSZE PCV S5”) — wersaliki to wtedy zwykłe słowa, nie marka
+        $skipUppercase = $skipUppercase && preg_match('/\p{Ll}/u', $text) === 1;
+        $out = [];
+        foreach ($words[0] as $word) {
+            if ($skipUppercase && mb_strtoupper($word) === $word) {
+                continue;
+            }
+            $stem = mb_substr(mb_strtolower(Str::ascii($word)), 0, 5);
+            if (! in_array($stem, $generic, true)) {
+                $out[$stem] = $stem;
+            }
+        }
+
+        return array_values($out);
     }
 
     /**
@@ -2654,6 +2723,8 @@ final class ClientInquiryService
             'score' => (int) ($product['score'] ?? 0),
             'reason' => $this->nullable($product['reason'] ?? null),
             'source' => $this->nullable($product['source'] ?? null),
+            // podobna karta z katalogu, której model nie zatwierdził (similarCandidates)
+            'similar' => ($product['similar'] ?? false) === true,
             // uzupełnia present() hurtem (withOrderQuantities); null = brak warunku
             'order_quantity' => null,
             // uzupełnia present() hurtem (withImages): miniatura i pełne zdjęcie; null = karta bez zdjęcia

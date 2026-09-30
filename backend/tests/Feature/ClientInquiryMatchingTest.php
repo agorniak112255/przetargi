@@ -239,6 +239,57 @@ final class ClientInquiryMatchingTest extends TestCase
         $this->assertStringNotContainsString('PF-SK-01', (string) $res->json('reply_body'));
     }
 
+    /**
+     * Zapytanie #88 (30.09.2026): „TM 9-N … PROTEKT” — modelu nie ma, model nic nie zatwierdził, a katalog ma statywy
+     * PROTEKT. Dotąd pozycja pokazywała „brak w katalogu”. Teraz podobne karty z tym samym wyrazem wyrobu są do wyboru
+     * ręcznego (nigdy domyślnie, nigdy w liście bez wyboru); amortyzator tej samej marki nie jest „podobny”.
+     */
+    public function test_similar_catalog_cards_are_offered_for_manual_choice_when_model_confirms_nothing(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $tripod = $this->product('AT017', 'TM 15 - Lekki aluminiowy statyw bezpieczeństwa', ['manufacturer' => 'PROTEKT']);
+        $absorber = $this->product('AW170/LB101', 'AW170/LB101 - Amortyzator bezpieczeństwa z linką', ['manufacturer' => 'PROTEKT']);
+        $row = static fn ($p, int $score, string $source): array => [
+            'id' => $p->id,
+            'sku' => $p->sku,
+            'name' => $p->name,
+            'manufacturer' => 'PROTEKT',
+            'catalog_price_net' => '100.00',
+            'currency' => 'PLN',
+            'stock' => 5,
+            'ai_match_percent' => $score,
+            'ai_match_reason' => 'Nieocenione przez model — ten sam rodzaj w katalogu',
+            'ai_match_source' => $source,
+        ];
+        $this->mockExtractor();
+        $this->mock(ProductInquirySearch::class, function ($mock) use ($row, $tripod, $absorber): void {
+            $mock->shouldReceive('findMany')->andReturnUsing(static fn (array $queries): array => array_map(
+                static fn (string $q): array => ['query' => $q, 'products' => [$row($absorber, 49, 'catalog'), $row($tripod, 48, 'catalog')], 'model_state' => 'empty'],
+                $queries,
+            ));
+        });
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/inquiries', [
+            'body' => "Dzień dobry\n\n4 szt. TM 9-N aluminiowy statyw bezpieczeństwa PROTEKT",
+            'tone' => 'formal',
+        ])->assertCreated();
+
+        $res->assertJsonPath('items.0.confidence', 'none')
+            ->assertJsonPath('items.0.chosen', 'check')
+            ->assertJsonPath('items.0.candidates.0.sku', 'AT017')
+            ->assertJsonPath('items.0.candidates.0.similar', true)
+            ->assertJsonCount(1, 'items.0.candidates');
+        $this->assertContains('similar_only', (array) $res->json('items.0.flags'));
+        $this->assertStringNotContainsString('AT017', (string) $res->json('reply_body'));
+
+        $picked = $this->postJson('/api/inquiries/'.$res->json('id').'/compose', [
+            'answers' => ['product:item_1' => ['option_id' => 'p:'.$tripod->id]],
+        ])->assertOk();
+        $picked->assertJsonPath('items.0.chosen', 'p:'.$tripod->id);
+        $this->assertStringContainsString('TM 15', (string) $picked->json('reply_body'));
+    }
+
     public function test_product_rated_by_the_model_stays_even_with_a_very_different_name(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();

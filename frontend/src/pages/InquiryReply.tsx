@@ -131,6 +131,9 @@ const confidenceBadge: Record<InquiryConfidence, { label: string; cls: string }>
 // Model nie ocenił kart — o katalogu nic nie wiemy, więc nie wolno pisać „brak w katalogu”.
 const modelFailedBadge = { label: 'model nie odpowiedział', cls: 'bg-slate-200 text-slate-800' }
 
+// Model nic nie zatwierdził, ale katalog ma ten sam rodzaj wyrobu — „brak w katalogu” byłby nieprawdą.
+const similarOnlyBadge = { label: 'brak tego wyrobu — są podobne', cls: 'bg-orange-600 text-white' }
+
 const flagLabel: Record<InquiryFlag, string> = {
   low_score: 'niski wynik dopasowania',
   ambiguous: 'kilku podobnych kandydatów',
@@ -146,6 +149,7 @@ const flagLabel: Record<InquiryFlag, string> = {
   size_mismatch: 'karta w innym rozmiarze',
   withdrawn: 'wyrób wycofany przez producenta',
   size_breakdown_mismatch: 'rozmiary nie sumują się do ilości',
+  similar_only: 'tylko podobne z katalogu — nie ten wyrób',
 }
 
 /** Barwa adnotacji: czerwień = sprzeczność albo niepotwierdzony warunek, bursztyn = do sprawdzenia, fiolet = pytanie AI. */
@@ -164,6 +168,7 @@ const flagTone: Record<InquiryFlag, { cls: string; dot: string }> = {
   size_mismatch: { cls: 'border-red-300 bg-red-50 text-red-800', dot: 'bg-red-600' },
   withdrawn: { cls: 'border-red-300 bg-red-50 text-red-800', dot: 'bg-red-600' },
   size_breakdown_mismatch: { cls: 'border-amber-300 bg-amber-50 text-amber-800', dot: 'bg-amber-500' },
+  similar_only: { cls: 'border-orange-300 bg-orange-50 text-orange-800', dot: 'bg-orange-500' },
 }
 
 /** Pasmo wyniku alternatywy; 80 = próg pewnego dopasowania (CONFIDENT_SCORE w ClientInquiryService). */
@@ -616,7 +621,8 @@ function ItemRow({
   onManualPriceBlur: () => void
 }) {
   const failed = item.flags.includes('model_failed')
-  const badge = failed ? modelFailedBadge : confidenceBadge[item.confidence]
+  const similarOnly = item.flags.includes('similar_only')
+  const badge = failed ? modelFailedBadge : similarOnly ? similarOnlyBadge : confidenceBadge[item.confidence]
   const chosenId = item.chosen.startsWith('p:') ? Number(item.chosen.slice(2)) : null
   const chosen = chosenId != null ? item.candidates.find((c) => c.id === chosenId) ?? null : null
   const computedPrice = chosen ? priceByMode(chosen, priceMode) : null
@@ -839,12 +845,27 @@ function ItemRow({
           </p>
         )}
 
+        {similarOnly && (
+          <p className="rounded-lg border-2 border-orange-400 bg-orange-50 px-2.5 py-1.5 text-xs leading-relaxed text-orange-900">
+            <span className="font-semibold">Tego wyrobu nie ma w katalogu — model żadnej karty nie zatwierdził.</span> Poniżej
+            podobne z katalogu (ten sam rodzaj), bez oceny dopasowania. Do listu wejdzie tylko ta, którą wybierzesz — sprawdź
+            „Opis”, czy spełnia wymagania klienta.
+          </p>
+        )}
+
         {/* Jedna siatka na całą listę: kolumna znaczków i „Opis” ma wspólną szerokość, więc wiersze wyboru są równe. */}
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1.5 gap-y-1">
           {item.candidates.map((c) => {
             const on = item.chosen === `p:${c.id}`
-            const label = c.source === 'manual' ? 'ręcznie' : c.source === 'link' ? 'z linku' : `${c.score}%`
-            const tone = c.source === 'manual' || c.source === 'link' ? 'bg-slate-200 text-slate-800' : scoreTone(c.score)
+            // Podobna karta nie ma oceny modelu — wynik reguły (92) albo listy (49) czytałby się jak dopasowanie.
+            const label =
+              c.source === 'manual' ? 'ręcznie' : c.source === 'link' ? 'z linku' : c.similar ? 'podobny' : `${c.score}%`
+            const tone =
+              c.source === 'manual' || c.source === 'link'
+                ? 'bg-slate-200 text-slate-800'
+                : c.similar
+                  ? 'bg-orange-100 text-orange-800'
+                  : scoreTone(c.score)
             return (
               <Fragment key={c.id}>
                 <button

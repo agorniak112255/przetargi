@@ -45,6 +45,8 @@ export type InquiryCandidate = {
   reason: string | null
   /** Skąd wiersz: ocena modelu/wektor, wiersz katalogowy albo `manual` — ręczny wybór handlowca. */
   source: string | null
+  /** Podobna karta z katalogu, której model nie zatwierdził — do wyboru ręcznego, nigdy domyślnie. */
+  similar?: boolean
   /** null = pozycja bez warunków do sprawdzenia w karcie */
   requirements_ok: boolean | null
   /** Warunek zamawiania obowiązującego źródła ceny (np. po 10 szt.); null = brak ograniczenia. */
@@ -92,6 +94,7 @@ export type InquiryFlag =
   | 'size_mismatch'
   | 'withdrawn'
   | 'size_breakdown_mismatch'
+  | 'similar_only'
 
 /**
  * Rozmiary i ilości z cytatu pozycji-sumy („432 pary Rozmiar: 8-108par,9-108par,10-216par”) — słowa klienta,
