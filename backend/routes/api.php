@@ -364,6 +364,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::get('/roles', [AdminRoleController::class, 'index'])->middleware('permission:admin.roles.manage');
         Route::post('/roles', [AdminRoleController::class, 'store'])->middleware('permission:admin.roles.manage');
         Route::put('/roles/{role}', [AdminRoleController::class, 'update'])->middleware('permission:admin.roles.manage');
+        Route::patch('/roles/{role}', [AdminRoleController::class, 'rename'])->middleware('permission:admin.roles.manage');
         Route::delete('/roles/{role}', [AdminRoleController::class, 'destroy'])->middleware('permission:admin.roles.manage');
 
         Route::get('/activity-logs', [AdminActivityLogController::class, 'index'])

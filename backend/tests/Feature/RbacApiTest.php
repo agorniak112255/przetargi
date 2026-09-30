@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\Client;
 use App\Models\Product;
 use App\Models\ProductSubstitute;
+use App\Models\Role;
 use App\Models\Tender;
 use App\Models\User;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -183,6 +184,55 @@ final class RbacApiTest extends TestCase
             'role' => 'handel-krakow',
         ])->assertCreated()
             ->assertJsonPath('role', 'handel-krakow');
+    }
+
+    public function test_admin_can_rename_role_without_changing_code_or_permissions(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $member = User::factory()->withRole('handlowiec')->create();
+        $before = Role::findByName('handlowiec', 'web')->permissions->pluck('name')->sort()->values()->all();
+
+        $this->patchJson('/api/admin/roles/handlowiec', ['display_name' => '  Doradca handlowy  '])
+            ->assertOk()
+            ->assertJsonPath('name', 'handlowiec')
+            ->assertJsonPath('label', 'Doradca handlowy')
+            ->assertJsonPath('is_system', true);
+
+        $role = Role::findByName('handlowiec', 'web');
+        $this->assertSame('Doradca handlowy', $role->display_name);
+        $this->assertSame($before, $role->permissions->pluck('name')->sort()->values()->all());
+        $this->assertTrue($member->fresh()->hasRole('handlowiec'));
+
+        // Ponowne uruchomienie seedera nie przywraca nazwy z katalogu.
+        $this->seed(RolesAndPermissionsSeeder::class);
+        $this->assertSame('Doradca handlowy', Role::findByName('handlowiec', 'web')->display_name);
+    }
+
+    public function test_rename_role_rejects_empty_and_duplicate_names(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $adminLabel = Role::findByName('admin', 'web')->display_name;
+
+        $this->patchJson('/api/admin/roles/handlowiec', ['display_name' => '   '])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('display_name');
+
+        $this->patchJson('/api/admin/roles/handlowiec', ['display_name' => $adminLabel])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('display_name');
+
+        // Ta sama nazwa co obecna tej roli — to nie duplikat.
+        $ownLabel = Role::findByName('handlowiec', 'web')->display_name;
+        $this->patchJson('/api/admin/roles/handlowiec', ['display_name' => $ownLabel])->assertOk();
+
+        $this->patchJson('/api/admin/roles/nie-ma-takiej', ['display_name' => 'Cokolwiek'])->assertNotFound();
+    }
+
+    public function test_handlowiec_cannot_rename_role(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+
+        $this->patchJson('/api/admin/roles/handlowiec', ['display_name' => 'Szef'])->assertForbidden();
     }
 
     public function test_handlowiec_cannot_access_admin(): void

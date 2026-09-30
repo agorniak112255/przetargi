@@ -25,8 +25,11 @@ class RolesAndPermissionsSeeder extends Seeder
 
         foreach (PermissionCatalog::rolePermissions() as $roleName => $permissions) {
             $role = Role::findOrCreate($roleName, 'web');
-            $role->display_name = $labels[$roleName] ?? $roleName;
-            $role->save();
+            // Nazwa zmieniona w panelu „Role” zostaje; katalog tylko uzupełnia pustą.
+            if (! is_string($role->display_name) || $role->display_name === '') {
+                $role->display_name = $labels[$roleName] ?? $roleName;
+                $role->save();
+            }
             $role->syncPermissions($permissions);
         }
 

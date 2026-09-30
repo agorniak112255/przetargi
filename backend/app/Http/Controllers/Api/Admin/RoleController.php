@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\RenameRoleRequest;
 use App\Http\Requests\Admin\StoreRoleRequest;
 use App\Http\Requests\Admin\UpdateRolePermissionsRequest;
 use App\Models\Role;
@@ -87,6 +88,29 @@ class RoleController extends Controller
         $roleModel->syncPermissions($request->validated('permissions'));
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
+        return $this->present($roleModel);
+    }
+
+    public function rename(RenameRoleRequest $request, string $role): JsonResponse
+    {
+        $roleModel = Role::query()
+            ->where('guard_name', 'web')
+            ->where('name', $role)
+            ->first();
+
+        if ($roleModel === null) {
+            return response()->json(['message' => 'Nieznana rola.'], 404);
+        }
+
+        $roleModel->display_name = $request->validated('display_name');
+        $roleModel->save();
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
+
+        return $this->present($roleModel);
+    }
+
+    private function present(Role $roleModel): JsonResponse
+    {
         $fallbackLabels = PermissionCatalog::roleLabels();
 
         return response()->json([

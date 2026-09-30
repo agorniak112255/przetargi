@@ -34,6 +34,8 @@ export function AdminRoles() {
   const [newCode, setNewCode] = useState('')
   const [newLabel, setNewLabel] = useState('')
   const [copyFrom, setCopyFrom] = useState('handlowiec')
+  // null = nie edytujemy nazwy; tekst = pole zmiany nazwy wybranej roli jest otwarte
+  const [renaming, setRenaming] = useState<string | null>(null)
 
   async function load() {
     const data = await api<RolesResponse>('/admin/roles')
@@ -51,6 +53,7 @@ export function AdminRoles() {
   function selectRole(role: RoleRow) {
     setSelected(role.name)
     setChecked(new Set(role.permissions))
+    setRenaming(null)
   }
 
   useEffect(() => {
@@ -105,6 +108,28 @@ export function AdminRoles() {
       setMsg(`Utworzono rolę „${created.label ?? created.name}”.`)
       await load()
       selectRole(created)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onRenameRole(e: FormEvent) {
+    e.preventDefault()
+    if (!selected || renaming === null) return
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    try {
+      const updated = await api<RoleRow>(`/admin/roles/${selected}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ display_name: renaming.trim() }),
+      })
+      // Tylko nazwa — niezapisane zaznaczenia uprawnień zostają na ekranie.
+      setRoles((prev) => prev.map((r) => (r.name === updated.name ? { ...r, label: updated.label } : r)))
+      setRenaming(null)
+      setMsg(`Zmieniono nazwę roli na „${updated.label ?? updated.name}”.`)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd')
     } finally {
@@ -222,6 +247,46 @@ export function AdminRoles() {
                 <> · użytkowników: {selectedRole.users_count}</>
               )}
             </span>
+            {renaming !== null ? (
+              <form onSubmit={(e) => void onRenameRole(e)} className="flex flex-wrap items-center gap-2">
+                <input
+                  className="w-64 rounded border px-2 py-1 text-sm text-slate-900"
+                  value={renaming}
+                  onChange={(e) => setRenaming(e.target.value)}
+                  maxLength={255}
+                  required
+                  autoFocus
+                  aria-label="Nowa nazwa roli"
+                />
+                <span className="text-xs text-slate-500">
+                  kod <code>{selected}</code> bez zmian
+                </span>
+                <button
+                  type="submit"
+                  disabled={busy || renaming.trim() === ''}
+                  className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  Zapisz nazwę
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setRenaming(null)}
+                  className="rounded bg-slate-200 px-2 py-1 text-xs text-slate-800"
+                >
+                  Anuluj
+                </button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setRenaming(selectedRole.label ?? selectedRole.name)}
+                className="rounded bg-slate-200 px-2 py-1 text-xs text-slate-800 hover:bg-slate-300"
+              >
+                Zmień nazwę
+              </button>
+            )}
             {!selectedRole.is_system && (
               <button
                 type="button"
