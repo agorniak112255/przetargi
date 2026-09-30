@@ -20,6 +20,7 @@ use App\Services\Campaigns\AudienceResolver;
 use App\Services\Campaigns\CampaignBlocks;
 use App\Services\Campaigns\CampaignItemPresenter;
 use App\Services\Campaigns\CampaignRenderer;
+use App\Services\Campaigns\CampaignReplySync;
 use App\Services\Campaigns\CampaignResult;
 use App\Services\Campaigns\CampaignSalesResult;
 use App\Services\Campaigns\CampaignSender;
@@ -595,6 +596,37 @@ class CampaignController extends Controller
         $cancelled = $this->sender->cancel($campaign);
 
         return response()->json($this->present($cancelled->fresh() ?? $cancelled, $request->user()));
+    }
+
+    /**
+     * „Sprawdź skrzynkę teraz”: odczyt odpowiedzi ze skrzynki autora kampanii od razu (zwykle co 10 minut w tle).
+     * Tylko wysłana kampania i włączony odczyt w „Moja poczta” autora.
+     */
+    public function checkReplies(Request $request, Campaign $campaign, CampaignReplySync $replies): JsonResponse
+    {
+        $this->authorizeView($request, $campaign);
+        if ($campaign->sending_started_at === null) {
+            abort(422, 'Odpowiedzi sprawdzamy dopiero po wysyłce kampanii.');
+        }
+        $account = UserMailAccount::query()->where('user_id', $campaign->user_id)->first();
+        if ($account === null || ! $account->imap_enabled) {
+            abort(422, 'Liczenie odpowiedzi jest wyłączone w „Moja poczta” autora kampanii.');
+        }
+
+        $result = $replies->checkNow($account);
+        $message = match (true) {
+            $result['busy'] => 'Skrzynka jest właśnie sprawdzana — odśwież za chwilę.',
+            $result['error'] !== null => 'Nie udało się sprawdzić skrzynki: '.$result['error'],
+            $result['replies'] === 0 => 'Sprawdzono — brak nowych odpowiedzi.',
+            default => 'Sprawdzono — nowe odpowiedzi: '.$result['replies'].'.',
+        };
+
+        return response()->json([
+            'ok' => ! $result['busy'] && $result['error'] === null,
+            'new' => $result['replies'],
+            'message' => $message,
+            'replies' => $this->replySummary($campaign),
+        ]);
     }
 
     public function recipients(Request $request, Campaign $campaign): JsonResponse

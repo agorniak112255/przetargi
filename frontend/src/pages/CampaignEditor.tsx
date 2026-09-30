@@ -32,6 +32,7 @@ import {
   CAMPAIGN_LAYOUT_LABEL,
   LAYOUTS_WITH_DESCRIPTION,
   applyTemplate,
+  checkCampaignReplies,
   campaignAudience,
   campaignPreview,
   previewDraft,
@@ -2322,7 +2323,16 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
 
       {campaign.clicks && <ClickedPanel campaign={campaign} clicks={campaign.clicks} tick={tick} />}
 
-      {campaign.replies && <RepliesPanel campaign={campaign} replies={campaign.replies} />}
+      {campaign.replies && (
+        <RepliesPanel
+          campaign={campaign}
+          replies={campaign.replies}
+          onChecked={async () => {
+            await onReload()
+            setTick((n) => n + 1)
+          }}
+        />
+      )}
 
       <div className="overflow-x-auto rounded-xl bg-white p-4 shadow-sm">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -2612,19 +2622,65 @@ function ItemClicksCell({ clicks, itemId }: { clicks: CampaignClicks | null; ite
  * „Odpowiedzi klientów”: maile w skrzynce autora z kodem kampanii w temacie („Zapytaj o ofertę”) albo odpowiedzi na mail
  * kampanii. Z nagłówków (IMAP co 10 min) — treści nie czytamy, więc tu tylko kto, kiedy i o który towar pyta.
  */
-function RepliesPanel({ campaign, replies }: { campaign: Campaign; replies: CampaignReplies }) {
+function RepliesPanel({
+  campaign,
+  replies,
+  onChecked,
+}: {
+  campaign: Campaign
+  replies: CampaignReplies
+  onChecked: () => Promise<void>
+}) {
+  const [checking, setChecking] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
   const sent = campaign.totals?.sent ?? 0
   const others = replies.list.filter((r) => r.recipient_email === null).length
+
+  async function checkNow() {
+    setChecking(true)
+    setResult(null)
+    try {
+      const res = await checkCampaignReplies(campaign.id)
+      setResult({ ok: res.ok, text: res.message })
+      await onChecked()
+    } catch (ex) {
+      setResult({ ok: false, text: errorText(ex, 'Nie udało się sprawdzić skrzynki.') })
+    } finally {
+      setChecking(false)
+    }
+  }
+
   return (
     <div className="rounded-xl bg-white shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-2.5">
         <b className="text-sm text-slate-900">Odpowiedzi klientów</b>
-        <span className="text-[11px] text-slate-500">
-          {fmtInt(replies.total)} {plural(replies.total, 'odpowiedź', 'odpowiedzi', 'odpowiedzi')} · odpowiedziało{' '}
-          {fmtInt(replies.recipients)} z {fmtInt(sent)} {plural(sent, 'odbiorcy', 'odbiorców', 'odbiorców')}
-          {replies.checked_at ? ` · skrzynka sprawdzona ${fmtDateTime(replies.checked_at)}` : ''}
+        <span className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+          <span>
+            {fmtInt(replies.total)} {plural(replies.total, 'odpowiedź', 'odpowiedzi', 'odpowiedzi')} · odpowiedziało{' '}
+            {fmtInt(replies.recipients)} z {fmtInt(sent)} {plural(sent, 'odbiorcy', 'odbiorców', 'odbiorców')}
+            {replies.checked_at ? ` · skrzynka sprawdzona ${fmtDateTime(replies.checked_at)}` : ''}
+          </span>
+          {replies.enabled && (
+            <button
+              type="button"
+              className={BTN_SM}
+              disabled={checking}
+              title="Zwykle sprawdzamy co 10 minut — ten przycisk czyta nowe maile od razu"
+              onClick={() => void checkNow()}
+            >
+              {checking ? 'Sprawdzam…' : 'Sprawdź skrzynkę teraz'}
+            </button>
+          )}
         </span>
       </div>
+      {result && (
+        <p
+          className={`mx-4 mt-3 rounded px-3 py-2 text-xs ${result.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-900'}`}
+          role="status"
+        >
+          {result.text}
+        </p>
+      )}
       {!replies.enabled ? (
         <p className="px-4 py-3 text-xs text-slate-600">
           Liczenie odpowiedzi jest wyłączone w skrzynce autora kampanii (Moje konto → Moja poczta).

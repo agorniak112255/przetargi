@@ -11,6 +11,7 @@ use App\Models\CampaignReply;
 use App\Models\UserMailAccount;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -31,6 +32,9 @@ class CampaignReplySync
     private const FIRST_RUN_LIMIT = 3000;
 
     private const FETCH_CHUNK = 100;
+
+    /** Blokada odczytu jednej skrzynki — dłużej niż najdłuższy przebieg (pierwszy odczyt folderów). */
+    private const LOCK_SECONDS = 300;
 
     /** Najwyżej tyle folderów na skrzynkę (INBOX zawsze pierwszy). */
     private const MAX_FOLDERS = 100;
@@ -54,17 +58,49 @@ class CampaignReplySync
             ->distinct()->pluck('user_id')->all();
         foreach (UserMailAccount::query()->whereIn('user_id', $userIds)->where('imap_enabled', true)->get() as $account) {
             $stats['accounts']++;
-            try {
-                [$messages, $replies] = $this->syncAccount($account, $since);
-                $stats['messages'] += $messages;
-                $stats['replies'] += $replies;
-            } catch (Throwable $e) {
-                $stats['errors']++;
-                $account->forceFill(['imap_error' => $this->errorText($e, $account), 'imap_checked_at' => now()])->save();
-            }
+            $result = $this->syncLocked($account, $since);
+            $stats['messages'] += $result['messages'];
+            $stats['replies'] += $result['replies'];
+            $stats['errors'] += $result['error'] !== null ? 1 : 0;
         }
 
         return $stats;
+    }
+
+    /**
+     * „Sprawdź skrzynkę teraz” w kampanii: odczyt jednej skrzynki od razu, bez czekania na przebieg co 10 minut.
+     * busy = ta skrzynka jest właśnie czytana (przebieg harmonogramu albo drugie kliknięcie).
+     *
+     * @return array{busy: bool, messages: int, replies: int, error: string|null}
+     */
+    public function checkNow(UserMailAccount $account): array
+    {
+        return $this->syncLocked($account, CarbonImmutable::now()->subDays(self::WINDOW_DAYS));
+    }
+
+    /**
+     * Odczyt skrzynki pod blokadą na konto — harmonogram i przycisk nie czytają jej naraz (ta sama pozycja odczytu).
+     *
+     * @return array{busy: bool, messages: int, replies: int, error: string|null}
+     */
+    private function syncLocked(UserMailAccount $account, CarbonImmutable $since): array
+    {
+        $lock = Cache::lock('campaign-replies:account:'.$account->id, self::LOCK_SECONDS);
+        if (! $lock->get()) {
+            return ['busy' => true, 'messages' => 0, 'replies' => 0, 'error' => null];
+        }
+        try {
+            [$messages, $replies] = $this->syncAccount($account, $since);
+
+            return ['busy' => false, 'messages' => $messages, 'replies' => $replies, 'error' => null];
+        } catch (Throwable $e) {
+            $error = $this->errorText($e, $account);
+            $account->forceFill(['imap_error' => $error, 'imap_checked_at' => now()])->save();
+
+            return ['busy' => false, 'messages' => 0, 'replies' => 0, 'error' => $error];
+        } finally {
+            $lock->release();
+        }
     }
 
     /**

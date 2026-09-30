@@ -399,6 +399,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/campaigns/{campaign}/unschedule', [CampaignController::class, 'unschedule']);
         Route::post('/campaigns/{campaign}/cancel', [CampaignController::class, 'cancel']);
         Route::get('/campaigns/{campaign}/recipients', [CampaignController::class, 'recipients']);
+        Route::post('/campaigns/{campaign}/replies/check', [CampaignController::class, 'checkReplies'])->middleware('throttle:6,1');
         Route::post('/campaigns/{campaign}/template', [CampaignController::class, 'applyTemplate']);
         Route::post('/campaigns/{campaign}/preview-draft', [CampaignController::class, 'previewDraft']);
 

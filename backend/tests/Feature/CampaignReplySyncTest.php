@@ -14,6 +14,7 @@ use App\Services\Campaigns\ImapHeaderReader;
 use App\Services\Campaigns\SmtpHostGuard;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Laravel\Sanctum\Sanctum;
 use Tests\Support\CampaignFixtures;
 use Tests\Support\FakeImapHeaderReader;
@@ -229,6 +230,49 @@ final class CampaignReplySyncTest extends TestCase
         $this->assertNull($account->fresh()->imap_error);
         // test nie przesuwa pozycji odczytu
         $this->assertNull($account->fresh()->imap_folders);
+    }
+
+    public function test_check_now_button_reads_author_mailbox_at_once(): void
+    {
+        [$campaign, , $author] = $this->sentCampaign();
+        $this->imap->messages = [4 => $this->mail('klient@alfa.pl', "Zapytanie {$campaign->code} B20417")];
+
+        // obcy handlowiec nie sprawdza cudzej kampanii
+        Sanctum::actingAs($this->sender(['from_address' => 'ewa@supon.example.pl']));
+        $this->postJson("/api/campaigns/{$campaign->id}/replies/check")->assertNotFound();
+
+        Sanctum::actingAs($author);
+        $this->postJson("/api/campaigns/{$campaign->id}/replies/check")->assertOk()
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('new', 1)
+            ->assertJsonPath('message', 'Sprawdzono — nowe odpowiedzi: 1.')
+            ->assertJsonPath('replies.total', 1);
+        $this->postJson("/api/campaigns/{$campaign->id}/replies/check")->assertOk()
+            ->assertJsonPath('new', 0)
+            ->assertJsonPath('message', 'Sprawdzono — brak nowych odpowiedzi.');
+
+        // skrzynka właśnie czytana (harmonogram) — bez drugiego odczytu naraz
+        $lock = Cache::lock('campaign-replies:account:'.UserMailAccount::query()->where('user_id', $author->id)->value('id'), 60);
+        $lock->get();
+        $this->imap->calls = [];
+        $this->postJson("/api/campaigns/{$campaign->id}/replies/check")->assertOk()
+            ->assertJsonPath('ok', false)
+            ->assertJsonPath('message', 'Skrzynka jest właśnie sprawdzana — odśwież za chwilę.');
+        $this->assertSame([], $this->imap->calls);
+        $this->assertSame(0, app(CampaignReplySync::class)->run()['messages']);
+        $lock->release();
+
+        // błąd logowania — komunikat bez hasła
+        $this->imap->loginError = 'Odmowa tajne-haslo-123';
+        $this->postJson("/api/campaigns/{$campaign->id}/replies/check")->assertOk()
+            ->assertJsonPath('ok', false)
+            ->assertJsonPath('message', 'Nie udało się sprawdzić skrzynki: Odmowa ***');
+
+        // projekt i wyłączony odczyt
+        $draft = $this->campaign($author);
+        $this->postJson("/api/campaigns/{$draft->id}/replies/check")->assertUnprocessable();
+        UserMailAccount::query()->where('user_id', $author->id)->update(['imap_enabled' => false]);
+        $this->postJson("/api/campaigns/{$campaign->id}/replies/check")->assertUnprocessable();
     }
 
     public function test_command_and_api_show_replies(): void

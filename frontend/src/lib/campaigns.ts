@@ -545,6 +545,13 @@ export function cancelCampaign(id: number) {
   return api<Campaign>(`/campaigns/${id}/cancel`, { method: 'POST' })
 }
 
+/** „Sprawdź skrzynkę teraz” — odczyt odpowiedzi ze skrzynki autora od razu (zwykle co 10 minut). */
+export function checkCampaignReplies(id: number) {
+  return api<{ ok: boolean; new: number; message: string; replies: CampaignReplies }>(`/campaigns/${id}/replies/check`, {
+    method: 'POST',
+  })
+}
+
 export function campaignRecipients(
   id: number,
   params: { status?: CampaignRecipientStatus | ''; clicked?: boolean; page?: number; per_page?: number } = {},
