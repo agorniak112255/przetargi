@@ -491,7 +491,8 @@ class CampaignSender
     }
 
     /**
-     * Warunki wysyłki wspólne dla startu i planowania: pozycje (bez osieroconych), temat, skrzynka autora.
+     * Warunki wysyłki wspólne dla startu i planowania: pozycje (bez osieroconych), temat, skrzynka autora, kompletne
+     * bloki treści (CampaignBlocks::validate strict).
      *
      * @return array{0: Collection<int, CampaignItem>, 1: User}
      */
@@ -510,6 +511,12 @@ class CampaignSender
         $author = $locked->user;
         if ($author === null || $author->mailAccount === null) {
             throw $this->invalid('Nie ustawiono skrzynki w „Moje konto → Moja poczta”.');
+        }
+        // projekt zapisuje niekompletne bloki (przycisk bez adresu, grafika bez obrazka) — wysłać już nie można
+        try {
+            CampaignBlocks::validate($locked->effectiveBlocks(), true);
+        } catch (ValidationException $e) {
+            throw $this->invalid(implode(' ', array_merge(...array_values($e->errors()))));
         }
 
         return [$items, $author];

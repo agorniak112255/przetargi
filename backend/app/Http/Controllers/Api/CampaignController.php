@@ -10,12 +10,14 @@ use App\Models\CampaignClick;
 use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
 use App\Models\CampaignReply;
+use App\Models\CampaignTemplate;
 use App\Models\EmailSuppression;
 use App\Models\ErpItemLink;
 use App\Models\MailingList;
 use App\Models\User;
 use App\Models\UserMailAccount;
 use App\Services\Campaigns\AudienceResolver;
+use App\Services\Campaigns\CampaignBlocks;
 use App\Services\Campaigns\CampaignItemPresenter;
 use App\Services\Campaigns\CampaignRenderer;
 use App\Services\Campaigns\CampaignResult;
@@ -147,6 +149,7 @@ class CampaignController extends Controller
                 'name' => $name !== '' ? $name : 'Kampania '.now()->format('d.m.Y'),
                 'subject' => '',
                 'layout' => 'grid3',
+                'blocks' => CampaignBlocks::standard(),
                 'status' => Campaign::STATUS_DRAFT,
             ]);
             $this->appendItems($campaign, $v['erp_item_ids'] ?? [], $v['product_ids'] ?? []);
@@ -187,13 +190,22 @@ class CampaignController extends Controller
             // wybór klientów z okna „Pokaż / wybierz”; null = cała kategoria
             'audience.xl.customer_ids' => ['sometimes', 'nullable', 'array', 'max:20000'],
             'audience.xl.customer_ids.*' => ['integer'],
+            'blocks' => ['sometimes', 'array'],
+            'brand_color' => ['sometimes', 'nullable', 'string', Rule::in(CampaignBlocks::BRAND_COLORS)],
         ], $this->newlineMessages());
 
         $data = [];
-        foreach (['name', 'preheader', 'heading', 'intro', 'layout', 'valid_until'] as $key) {
+        // bloki zastępują heading/intro/layout — stary front bez bloków zmienia je jak dotąd
+        $fields = $request->has('blocks')
+            ? ['name', 'preheader', 'valid_until', 'brand_color']
+            : ['name', 'preheader', 'heading', 'intro', 'layout', 'valid_until', 'brand_color'];
+        foreach ($fields as $key) {
             if (array_key_exists($key, $v)) {
                 $data[$key] = is_string($v[$key]) ? trim($v[$key]) : $v[$key];
             }
+        }
+        if ($request->has('blocks')) {
+            $data['blocks'] = CampaignBlocks::validate($request->input('blocks'), false);
         }
         if (array_key_exists('subject', $v)) {
             // kolumna NOT NULL z domyślnym '' — brak tematu = pusty (start wysyłki go wymaga)
@@ -241,6 +253,9 @@ class CampaignController extends Controller
                 'heading' => $campaign->heading,
                 'intro' => $campaign->intro,
                 'layout' => $campaign->layout,
+                'blocks' => $campaign->effectiveBlocks(),
+                'brand_color' => $campaign->brand_color,
+                'template_id' => $campaign->template_id,
                 // termin ważności cen z przeszłości nie ma sensu w nowej kampanii
                 'valid_until' => $validUntil !== null && ! $validUntil->lt(today()) ? $validUntil->toDateString() : null,
                 'status' => Campaign::STATUS_DRAFT,
@@ -433,6 +448,61 @@ class CampaignController extends Controller
             'from' => $account === null ? null : ['name' => $account->from_name, 'address' => $account->from_address],
             'html' => $rendered['html'],
         ]);
+    }
+
+    /**
+     * Podgląd z niezapisanymi blokami i kolorem (edytor treści) i prawdziwymi pozycjami — nic nie zapisuje. Bloki
+     * sprawdzane jak przy zapisie projektu (bez wymogu kompletności).
+     */
+    public function previewDraft(Request $request, Campaign $campaign): JsonResponse
+    {
+        $this->authorizeView($request, $campaign);
+        $v = $request->validate([
+            'blocks' => ['present', 'array'],
+            'brand_color' => ['sometimes', 'nullable', 'string', Rule::in(CampaignBlocks::BRAND_COLORS)],
+        ]);
+        $blocks = CampaignBlocks::validate($request->input('blocks'), false);
+        $campaign->loadMissing('user.mailAccount');
+        $author = $campaign->user;
+        $rendered = $this->renderer->renderBlocks($campaign, $blocks, $v['brand_color'] ?? null, null, $author);
+        $account = $author?->mailAccount;
+
+        return response()->json([
+            'subject' => $rendered['subject'],
+            'preheader' => $campaign->preheader,
+            'from' => $account === null ? null : ['name' => $account->from_name, 'address' => $account->from_address],
+            'html' => $rendered['html'],
+        ]);
+    }
+
+    /**
+     * Zastosowanie szablonu w projekcie: kopia bloków i koloru (template_id = null → „Standard SUPON” i kolor
+     * domyślny). Szablon musi być widoczny dla pytającego (własny albo wspólny), inaczej 404.
+     */
+    public function applyTemplate(Request $request, Campaign $campaign): JsonResponse
+    {
+        $this->authorizeView($request, $campaign);
+        $this->ensureDraft($campaign);
+        $v = $request->validate([
+            'template_id' => ['present', 'nullable', 'integer'],
+        ]);
+        /** @var User $user */
+        $user = $request->user();
+        $template = null;
+        if ($v['template_id'] !== null) {
+            $template = CampaignTemplate::query()
+                ->whereKey((int) $v['template_id'])
+                ->where(fn (Builder $q) => $q->where('user_id', $user->id)->orWhere('is_shared', true))
+                ->first() ?? abort(404);
+        }
+
+        $this->lockedDraft($campaign, static fn (Campaign $locked) => $locked->update([
+            'blocks' => is_array($template?->blocks) ? $template->blocks : CampaignBlocks::standard(),
+            'brand_color' => $template?->brand_color,
+            'template_id' => $template?->id,
+        ]));
+
+        return response()->json($this->present($campaign->fresh(), $user));
     }
 
     /** Mail testowy — domyślnie na adres nadawcy skrzynki pytającego, a bez skrzynki na e-mail jego konta. */
@@ -826,7 +896,7 @@ class CampaignController extends Controller
     /** @return array<string, mixed> pełna kampania (kontrakt „Campaign”) */
     private function present(Campaign $campaign, User $viewer): array
     {
-        $campaign->loadMissing(['user.mailAccount', 'items']);
+        $campaign->loadMissing(['user.mailAccount', 'items', 'template:id,name']);
         $author = $campaign->user;
         $items = $campaign->items;
 
@@ -836,9 +906,14 @@ class CampaignController extends Controller
             'name' => $campaign->name,
             'subject' => $campaign->subject,
             'preheader' => $campaign->preheader,
+            // heading, intro i layout dla zgodności ze starym frontem — treść maila opisują blocks
             'heading' => $campaign->heading,
             'intro' => $campaign->intro,
             'layout' => $campaign->layout,
+            'template_id' => $campaign->template_id !== null ? (int) $campaign->template_id : null,
+            'template_name' => $campaign->template?->name,
+            'blocks' => $campaign->effectiveBlocks(),
+            'brand_color' => $campaign->brand_color,
             'valid_until' => $campaign->valid_until?->toDateString(),
             'status' => $campaign->status,
             'audience' => $campaign->audienceSettings(),

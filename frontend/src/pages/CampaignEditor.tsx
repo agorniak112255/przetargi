@@ -15,6 +15,7 @@ import {
   Pager,
   StageTwo,
 } from '../components/CampaignsUi'
+import { CampaignBlockEditor, LiveMailPreview } from '../components/CampaignBlockEditor'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { XlCustomersModal } from '../components/XlCustomersModal'
 import { can } from '../lib/api'
@@ -28,8 +29,14 @@ import {
   parseMoney,
 } from '../lib/campaignFormat'
 import {
+  CAMPAIGN_LAYOUT_LABEL,
+  applyTemplate,
   campaignAudience,
   campaignPreview,
+  previewDraft,
+  createTemplate,
+  listTemplates,
+  standardCampaignBlocks,
   campaignRecipients,
   cancelCampaign,
   deleteCampaign,
@@ -47,9 +54,9 @@ import {
   type AudiencePreview,
   type Campaign,
   type CampaignAudience,
+  type CampaignBlock,
   type CampaignItem,
   type CampaignItemPatch,
-  type CampaignLayout,
   type CampaignPatch,
   type CampaignPreview,
   type CampaignRecipientRow,
@@ -58,11 +65,13 @@ import {
   type CampaignClicks,
   type CampaignReplies,
   type CampaignSales,
+  type CampaignTemplate,
   type CampaignXlMode,
   type MailingList,
   type PageMeta,
 } from '../lib/campaigns'
 import { plural } from '../lib/plural'
+import { useSerialAutosave } from '../lib/useSerialAutosave'
 
 /**
  * Kampania /kampanie/:id. Projekt (draft): kreator w 5 krokach — produkty, odbiorcy, treść, podgląd i test, wysyłka;
@@ -76,12 +85,6 @@ const CONTENT_SAVE_MS = 600
 const REFRESH_SENDING_MS = 10_000
 
 type Step = 1 | 2 | 3 | 4 | 5
-
-const LAYOUTS: { value: CampaignLayout; label: string; cols: number }[] = [
-  { value: 'grid3', label: 'Siatka po 3', cols: 3 },
-  { value: 'grid2', label: 'Siatka po 2', cols: 2 },
-  { value: 'list', label: 'Lista z opisem', cols: 1 },
-]
 
 const XL_MODES: { value: CampaignXlMode | null; label: string; hint: string }[] = [
   { value: null, label: 'Bez klientów z ERP XL', hint: 'tylko wybrane grupy' },
@@ -101,20 +104,19 @@ const RECIPIENT_STATUS_LABEL: Record<string, string> = {
 type Content = {
   subject: string
   preheader: string
-  heading: string
-  intro: string
   valid_until: string
-  layout: CampaignLayout
+  /** Elementy maila — do serwera zawsze cała tablica. */
+  blocks: CampaignBlock[]
+  brand_color: string | null
 }
 
 function contentOf(c: Campaign): Content {
   return {
     subject: c.subject ?? '',
     preheader: c.preheader ?? '',
-    heading: c.heading ?? '',
-    intro: c.intro ?? '',
     valid_until: c.valid_until ? c.valid_until.slice(0, 10) : '',
-    layout: c.layout,
+    blocks: c.blocks ?? standardCampaignBlocks(),
+    brand_color: c.brand_color ?? null,
   }
 }
 
@@ -122,10 +124,9 @@ function contentPatch(patch: Partial<Content>): CampaignPatch {
   const out: CampaignPatch = {}
   if (patch.subject !== undefined) out.subject = patch.subject
   if (patch.preheader !== undefined) out.preheader = patch.preheader.trim() === '' ? null : patch.preheader
-  if (patch.heading !== undefined) out.heading = patch.heading.trim() === '' ? null : patch.heading
-  if (patch.intro !== undefined) out.intro = patch.intro.trim() === '' ? null : patch.intro
   if (patch.valid_until !== undefined) out.valid_until = patch.valid_until === '' ? null : patch.valid_until
-  if (patch.layout !== undefined) out.layout = patch.layout
+  if (patch.blocks !== undefined) out.blocks = patch.blocks
+  if (patch.brand_color !== undefined) out.brand_color = patch.brand_color
   return out
 }
 
@@ -428,35 +429,35 @@ function DraftWizard({
   const audienceSeq = useRef(0)
 
   // Treść: szkic w polach, zapis po CONTENT_SAVE_MS bez pisania, przy wyjściu z pola i przed podglądem/wysyłką.
+  // Zapisy idą po kolei (nowy PATCH dopiero po odpowiedzi na poprzedni), wyjście ze strony zapisuje od razu.
   const [content, setContent] = useState<Content>(() => contentOf(campaign))
-  const pending = useRef<Partial<Content>>({})
-  const timer = useRef<number | null>(null)
   const campaignId = campaign.id
-
-  const flush = useCallback(async () => {
-    if (timer.current !== null) {
-      window.clearTimeout(timer.current)
-      timer.current = null
-    }
-    const patch = pending.current
-    if (Object.keys(patch).length === 0) return
-    pending.current = {}
-    await mutate(() => updateCampaign(campaignId, contentPatch(patch)), 'Nie udało się zapisać treści.')
-  }, [mutate, campaignId])
-
-  // Wyjście ze strony w trakcie pisania — niezapisana treść idzie od razu.
-  const flushRef = useRef(flush)
-  useEffect(() => {
-    flushRef.current = flush
-  }, [flush])
-  useEffect(() => () => void flushRef.current(), [])
+  const saveContent = useCallback(
+    (patch: Partial<Content>) => mutate(() => updateCampaign(campaignId, contentPatch(patch)), 'Nie udało się zapisać treści.'),
+    [mutate, campaignId],
+  )
+  const autosave = useSerialAutosave<Content>(saveContent, CONTENT_SAVE_MS)
+  const flush = autosave.flush
 
   function editContent(patch: Partial<Content>, immediate = false) {
     setContent((c) => ({ ...c, ...patch }))
-    pending.current = { ...pending.current, ...patch }
-    if (timer.current !== null) window.clearTimeout(timer.current)
-    if (immediate) void flush()
-    else timer.current = window.setTimeout(() => void flush(), CONTENT_SAVE_MS)
+    autosave.edit(patch, immediate)
+  }
+
+  /**
+   * Szablon zastępuje elementy maila: najpierw zapis czekających zmian, potem (w tej samej kolejce) POST;
+   * elementy w polach — z odpowiedzi serwera, żaden spóźniony PATCH starych elementów ich nie nadpisze.
+   */
+  async function applyTemplateToContent(templateId: number | null): Promise<boolean> {
+    await flush()
+    autosave.discard(['blocks', 'brand_color'])
+    const c = await autosave.enqueue(() =>
+      mutate(() => applyTemplate(campaignId, templateId), 'Nie udało się zastosować szablonu.'),
+    )
+    if (!c) return false
+    autosave.discard(['blocks', 'brand_color'])
+    setContent((prev) => ({ ...prev, blocks: c.blocks, brand_color: c.brand_color }))
+    return true
   }
 
   const loadAudience = useCallback(async () => {
@@ -487,7 +488,8 @@ function DraftWizard({
 
   const items = campaign.items
   const hasAudienceChoice = campaign.audience.list_ids.length > 0 || campaign.audience.xl.mode !== null
-  const layoutLabel = LAYOUTS.find((l) => l.value === content.layout)?.label ?? content.layout
+  const productsBlock = content.blocks.find((b) => b.type === 'products')
+  const layoutLabel = productsBlock?.type === 'products' ? CAMPAIGN_LAYOUT_LABEL[productsBlock.layout] : ''
 
   const steps: { n: Step; title: string; hint: string; done: boolean }[] = [
     { n: 1, title: 'Produkty', hint: `${items.length} ${plural(items.length, 'pozycja', 'pozycje', 'pozycji')}`, done: items.length > 0 },
@@ -497,7 +499,12 @@ function DraftWizard({
       hint: !hasAudienceChoice ? 'nie wybrano' : audience ? `${fmtInt(audience.final)} ${plural(audience.final, 'odbiorca', 'odbiorcy', 'odbiorców')}` : 'wybrano',
       done: (audience?.final ?? 0) > 0,
     },
-    { n: 3, title: 'Treść', hint: content.subject.trim() ? `układ: ${layoutLabel.toLowerCase()}` : 'brak tematu', done: content.subject.trim() !== '' },
+    {
+      n: 3,
+      title: 'Treść',
+      hint: !content.subject.trim() ? 'brak tematu' : campaign.template_name ? `szablon: ${campaign.template_name}` : `układ: ${layoutLabel.toLowerCase()}`,
+      done: content.subject.trim() !== '',
+    },
     { n: 4, title: 'Podgląd i test', hint: testSentAt ? 'test wysłany' : '–', done: testSentAt !== null },
     { n: 5, title: 'Wyślij', hint: '–', done: false },
   ]
@@ -543,7 +550,15 @@ function DraftWizard({
         />
       )}
       {step === 3 && (
-        <ContentStep content={content} editable={editable} onEdit={editContent} onBlur={() => void flush()} onNext={() => void goTo(4)} />
+        <ContentStep
+          campaign={campaign}
+          content={content}
+          editable={editable}
+          onEdit={editContent}
+          onBlur={() => void flush()}
+          onApplyTemplate={applyTemplateToContent}
+          onNext={() => void goTo(4)}
+        />
       )}
       {step === 4 && (
         <PreviewStep
@@ -1330,138 +1345,288 @@ function AudienceSummary({ a, loading }: { a: AudiencePreview; loading: boolean 
 /* ---------- Krok 3: treść ---------- */
 
 function ContentStep({
+  campaign,
   content,
   editable,
   onEdit,
   onBlur,
+  onApplyTemplate,
   onNext,
 }: {
+  campaign: Campaign
   content: Content
   editable: boolean
   onEdit: (patch: Partial<Content>, immediate?: boolean) => void
   onBlur: () => void
+  onApplyTemplate: (templateId: number | null) => Promise<boolean>
   onNext: () => void
 }) {
   const field = `${INPUT} mt-1 block w-full text-sm`
+  const [templates, setTemplates] = useState<CampaignTemplate[] | null>(null)
+  const [templatesErr, setTemplatesErr] = useState('')
+  const [choice, setChoice] = useState(() => (campaign.template_id != null ? String(campaign.template_id) : ''))
+  const [confirmApply, setConfirmApply] = useState(false)
+  const [applying, setApplying] = useState(false)
+  // w trakcie wgrywania obrazka lista elementów nie może się podmienić (wynik trafiłby w element szablonu)
+  const [uploading, setUploading] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [saveAsOpen, setSaveAsOpen] = useState(false)
+  const [saveAsName, setSaveAsName] = useState('')
+  const [saveAsBusy, setSaveAsBusy] = useState(false)
+  const [saveAsErr, setSaveAsErr] = useState('')
+
+  const loadTemplates = useCallback(async () => {
+    try {
+      setTemplates((await listTemplates()).data)
+      setTemplatesErr('')
+    } catch (ex) {
+      setTemplatesErr(errorText(ex, 'Nie udało się wczytać szablonów.'))
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadTemplates()
+  }, [loadTemplates])
+
+  const shared = (templates ?? []).filter((t) => t.is_shared)
+  const own = (templates ?? []).filter((t) => !t.is_shared)
+  const choiceName = choice === '' ? 'Standard SUPON' : (templates?.find((t) => String(t.id) === choice)?.name ?? 'szablon')
+
+  async function apply() {
+    setApplying(true)
+    setMsg(null)
+    const ok = await onApplyTemplate(choice === '' ? null : Number(choice))
+    setApplying(false)
+    setConfirmApply(false)
+    setMsg(
+      ok
+        ? { ok: true, text: `Zastosowano: ${choiceName}. Elementy możesz dalej zmieniać — kampania ma własną kopię.` }
+        : { ok: false, text: 'Nie udało się zastosować szablonu — komunikat jest u góry strony.' },
+    )
+  }
+
+  async function saveAsTemplate() {
+    const name = saveAsName.trim()
+    if (!name || saveAsBusy) return
+    setSaveAsBusy(true)
+    setSaveAsErr('')
+    try {
+      await createTemplate({ name, blocks: content.blocks, brand_color: content.brand_color })
+      setSaveAsOpen(false)
+      setMsg({ ok: true, text: `Zapisano szablon „${name}” — jest w zakładce Moje szablony.` })
+      void loadTemplates()
+    } catch (ex) {
+      setSaveAsErr(errorText(ex, 'Nie udało się zapisać szablonu.'))
+    } finally {
+      setSaveAsBusy(false)
+    }
+  }
+
   return (
-    <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
-      <div className="space-y-3 rounded-xl bg-white p-4 text-xs shadow-sm">
-        <label className="block font-medium text-slate-700">
-          Temat wiadomości
-          <input
-            className={field}
-            maxLength={200}
-            disabled={!editable}
-            value={content.subject}
-            onChange={(e) => onEdit({ subject: e.target.value.replace(/[\r\n]+/g, ' ') })}
-            onBlur={onBlur}
-            placeholder="np. Wyprzedaż BHP: półbuty S3 od 89 zł – do wyczerpania"
-          />
-        </label>
-        <label className="block font-medium text-slate-700">
-          Zajawka w skrzynce <span className="font-normal text-slate-500">— krótki tekst widoczny obok tematu</span>
-          <input
-            className={field}
-            maxLength={200}
-            disabled={!editable}
-            value={content.preheader}
-            onChange={(e) => onEdit({ preheader: e.target.value.replace(/[\r\n]+/g, ' ') })}
-            onBlur={onBlur}
-            placeholder="np. Ceny ważne do 31.10 lub do wyczerpania stanu."
-          />
-        </label>
-        <label className="block font-medium text-slate-700">
-          Nagłówek w mailu
-          <input
-            className={field}
-            maxLength={200}
-            disabled={!editable}
-            value={content.heading}
-            onChange={(e) => onEdit({ heading: e.target.value })}
-            onBlur={onBlur}
-            placeholder="np. Końcówki serii w cenach wyprzedażowych"
-          />
-        </label>
-        <label className="block font-medium text-slate-700">
-          Tekst
-          <textarea
-            className={`${field} min-h-28 resize-y`}
-            disabled={!editable}
-            value={content.intro}
-            onChange={(e) => onEdit({ intro: e.target.value })}
-            onBlur={onBlur}
-            placeholder={'Dzień dobry,\nmamy na magazynie końcówki serii…'}
-          />
-        </label>
-        <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,432px)]">
+      <div className="space-y-4">
+        <div className="space-y-3 rounded-xl bg-white p-4 text-xs shadow-sm">
           <label className="block font-medium text-slate-700">
-            Ważne do
+            Temat wiadomości
             <input
-              type="date"
               className={field}
+              maxLength={200}
               disabled={!editable}
-              value={content.valid_until}
-              onChange={(e) => onEdit({ valid_until: e.target.value }, true)}
+              value={content.subject}
+              onChange={(e) => onEdit({ subject: e.target.value.replace(/[\r\n]+/g, ' ') })}
+              onBlur={onBlur}
+              placeholder="np. Wyprzedaż BHP: półbuty S3 od 89 zł – do wyczerpania"
             />
           </label>
-          <div className="font-medium text-slate-700">
-            Przycisk przy produkcie
-            <p className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-normal text-slate-700">
-              Zapytaj o ofertę <span className="text-xs text-slate-500">(mail do Ciebie z kodem kampanii i towaru)</span>
-            </p>
-            <p className="mt-1 flex items-center gap-1.5 text-[11px] font-normal text-slate-400">
-              „Zobacz w sklepie” <StageTwo />
-            </p>
+          <label className="block font-medium text-slate-700">
+            Zajawka w skrzynce <span className="font-normal text-slate-500">— krótki tekst widoczny obok tematu</span>
+            <input
+              className={field}
+              maxLength={200}
+              disabled={!editable}
+              value={content.preheader}
+              onChange={(e) => onEdit({ preheader: e.target.value.replace(/[\r\n]+/g, ' ') })}
+              onBlur={onBlur}
+              placeholder="np. Ceny ważne do 31.10 lub do wyczerpania stanu."
+            />
+          </label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block font-medium text-slate-700">
+              Ważne do
+              <input
+                type="date"
+                className={field}
+                disabled={!editable}
+                value={content.valid_until}
+                onChange={(e) => onEdit({ valid_until: e.target.value }, true)}
+              />
+            </label>
+            <div className="font-medium text-slate-700">
+              Przycisk przy produkcie
+              <p className="mt-1 rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-sm font-normal text-slate-700">
+                Zapytaj o ofertę <span className="text-xs text-slate-500">(mail do Ciebie z kodem kampanii i towaru)</span>
+              </p>
+              <p className="mt-1 flex items-center gap-1.5 text-[11px] font-normal text-slate-400">
+                „Zobacz w sklepie” <StageTwo />
+              </p>
+            </div>
           </div>
         </div>
-        <div>
-          <div className="mb-1.5 font-medium text-slate-700">Układ</div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            {LAYOUTS.map((l) => {
-              const on = content.layout === l.value
-              return (
-                <button
-                  key={l.value}
-                  type="button"
-                  aria-pressed={on}
-                  disabled={!editable}
-                  onClick={() => onEdit({ layout: l.value }, true)}
-                  className={`grid gap-1.5 rounded-lg border bg-white p-2 text-left ${
-                    on ? 'border-blue-600 ring-1 ring-blue-600' : 'border-slate-300 hover:border-slate-400'
-                  }`}
-                >
-                  <span className="grid gap-1 rounded bg-slate-100 p-1.5" aria-hidden>
-                    <i className="block h-1.5 w-3/5 rounded-sm bg-slate-300" />
-                    <i className="block h-1.5 rounded-sm bg-slate-300" />
-                    <span className="grid gap-1" style={{ gridTemplateColumns: `repeat(${l.cols}, minmax(0, 1fr))` }}>
-                      {Array.from({ length: l.cols === 1 ? 2 : l.cols }, (_, i) => (
-                        <i key={i} className="block h-4 rounded-sm bg-slate-300" />
-                      ))}
-                    </span>
-                  </span>
-                  <span className="text-xs font-medium text-slate-800">{l.label}</span>
-                </button>
-              )
-            })}
+
+        <div className="space-y-3 rounded-xl bg-white p-4 text-xs shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <b className="text-sm text-slate-900">Wygląd maila</b>
+            <button
+              type="button"
+              className={BTN_SM}
+              onClick={() => {
+                setSaveAsName('')
+                setSaveAsErr('')
+                setSaveAsOpen(true)
+              }}
+            >
+              Zapisz jako mój szablon
+            </button>
           </div>
-          <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500">
-            Szablon firmowy z logo i stopką. Własne szablony handlowca <StageTwo />
-          </p>
+          {editable && (
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-1.5 font-medium text-slate-700">
+                Szablon
+                <select className={INPUT} value={choice} disabled={applying} onChange={(e) => setChoice(e.target.value)}>
+                  <option value="">Standard SUPON</option>
+                  {shared.length > 0 && (
+                    <optgroup label="Wspólne">
+                      {shared.map((t) => (
+                        <option key={t.id} value={String(t.id)}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {own.length > 0 && (
+                    <optgroup label="Moje">
+                      {own.map((t) => (
+                        <option key={t.id} value={String(t.id)}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </label>
+              <button type="button" className={BTN} disabled={applying || uploading || templates === null} onClick={() => setConfirmApply(true)}>
+                Zastosuj
+              </button>
+              <span className="text-slate-500">
+                {campaign.template_name ? `ostatnio zastosowany: ${campaign.template_name} · ` : ''}
+                <Link to="/kampanie?tab=szablony" className="text-blue-600 hover:underline">
+                  Moje szablony
+                </Link>
+              </span>
+            </div>
+          )}
+          {templatesErr && <p className="text-red-700">{templatesErr}</p>}
+          {msg && (
+            <p className={`rounded px-3 py-2 ${msg.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-700'}`} role="status">
+              {msg.text}
+            </p>
+          )}
+          <CampaignBlockEditor
+            blocks={content.blocks}
+            brandColor={content.brand_color}
+            disabled={!editable || applying}
+            onChange={(blocks, brand_color) => onEdit({ blocks, brand_color })}
+            onUploadingChange={setUploading}
+          />
         </div>
       </div>
-      <aside className="rounded-xl bg-white p-4 shadow-sm">
-        <h2 className="app-card-title mb-2 text-sm font-semibold text-slate-900">Stałe elementy</h2>
-        <ul className="space-y-1.5 text-xs text-slate-600">
-          <Check ok>Nazwa i hasło firmy w nagłówku, stopka firmy</Check>
-          <Check ok>Twój podpis z „Moja poczta”</Check>
-          <Check ok>„Ceny netto ważne do … lub do wyczerpania zapasów”</Check>
-          <Check ok>Stan pozycji z dniem odczytu z XL</Check>
-          <Check ok>Link „Wypisz mnie” w stopce i w nagłówku maila</Check>
-        </ul>
-        <button type="button" className={`${BTN_PRIMARY} mt-3 w-full`} onClick={onNext}>
-          Dalej: podgląd →
-        </button>
-      </aside>
+
+      <div className="space-y-3">
+        <LiveMailPreview
+          blocks={content.blocks}
+          brandColor={content.brand_color}
+          load={(body) => previewDraft(campaign.id, body)}
+          note="z pozycjami kampanii"
+        />
+        <div className="rounded-xl bg-white p-4 shadow-sm">
+          <h2 className="app-card-title mb-2 text-sm font-semibold text-slate-900">Zawsze w mailu</h2>
+          <ul className="space-y-1.5 text-xs text-slate-600">
+            <Check ok>Twój podpis z „Moja poczta” pod elementami maila</Check>
+            <Check ok>„Ceny netto ważne do … lub do wyczerpania zapasów” nad produktami</Check>
+            <Check ok>Stan pozycji z dniem odczytu z XL</Check>
+            <Check ok>Link „Wypisz mnie” w stopce i w nagłówku maila</Check>
+          </ul>
+          <button type="button" className={`${BTN_PRIMARY} mt-3 w-full`} onClick={onNext}>
+            Dalej: podgląd →
+          </button>
+        </div>
+      </div>
+
+      {confirmApply && (
+        <ConfirmDialog
+          title="Zastosować szablon?"
+          confirmLabel="Zastosuj"
+          busy={applying}
+          onClose={() => setConfirmApply(false)}
+          onConfirm={() => void apply()}
+          message={
+            <>
+              <p>
+                Zastąpić treść maila elementami szablonu <b>{choiceName}</b>?
+              </p>
+              <p className="text-xs text-slate-600">
+                Obecne elementy (nagłówek, teksty, grafiki, przyciski, stopka) i kolor zostaną zastąpione. Temat, zajawka,
+                termin ważności i produkty zostają bez zmian.
+              </p>
+            </>
+          }
+        />
+      )}
+      {saveAsOpen && (
+        <Modal
+          title="Zapisz jako mój szablon"
+          busy={saveAsBusy}
+          onClose={() => setSaveAsOpen(false)}
+          footer={
+            <>
+              <button type="button" className={BTN} disabled={saveAsBusy} onClick={() => setSaveAsOpen(false)}>
+                Anuluj
+              </button>
+              <button
+                type="button"
+                className={BTN_PRIMARY}
+                disabled={saveAsBusy || !saveAsName.trim()}
+                onClick={() => void saveAsTemplate()}
+              >
+                {saveAsBusy ? 'Zapisuję…' : 'Zapisz szablon'}
+              </button>
+            </>
+          }
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              void saveAsTemplate()
+            }}
+          >
+            <label className="block text-xs font-medium text-slate-700">
+              Nazwa szablonu
+              <input
+                autoFocus
+                maxLength={150}
+                className={`${INPUT} mt-1 block w-full text-sm`}
+                value={saveAsName}
+                onChange={(e) => setSaveAsName(e.target.value)}
+                placeholder="np. Wyprzedaż obuwia – z banerem"
+              />
+            </label>
+            <p className="mt-2 text-xs text-slate-600">
+              Szablon dostanie obecne elementy maila i kolor. Produkty, temat i odbiorcy kampanii nie wchodzą do szablonu.
+            </p>
+            {saveAsErr && <p className="mt-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{saveAsErr}</p>}
+          </form>
+        </Modal>
+      )}
     </div>
   )
 }

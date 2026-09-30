@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Services\Campaigns\CampaignBlocks;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -40,6 +41,9 @@ class Campaign extends Model
         'heading',
         'intro',
         'layout',
+        'template_id',
+        'blocks',
+        'brand_color',
         'valid_until',
         'status',
         'audience',
@@ -60,6 +64,7 @@ class Campaign extends Model
             'sending_started_at' => 'datetime',
             'sent_at' => 'datetime',
             'totals' => 'array',
+            'blocks' => 'array',
         ];
     }
 
@@ -76,6 +81,17 @@ class Campaign extends Model
     public function isDraft(): bool
     {
         return $this->status === self::STATUS_DRAFT;
+    }
+
+    /**
+     * Bloki treści maila (App\Services\Campaigns\CampaignBlocks). Kampania sprzed szablonów (blocks = null) ma bloki
+     * wyliczone z heading, intro i layout — wygląda jak dotąd.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function effectiveBlocks(): array
+    {
+        return is_array($this->blocks) ? array_values($this->blocks) : CampaignBlocks::legacy($this);
     }
 
     /**
@@ -109,6 +125,12 @@ class Campaign extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /** @return BelongsTo<CampaignTemplate, $this> szablon, z którego skopiowano bloki (null po usunięciu szablonu) */
+    public function template(): BelongsTo
+    {
+        return $this->belongsTo(CampaignTemplate::class, 'template_id');
     }
 
     /** @return HasMany<CampaignItem, $this> */

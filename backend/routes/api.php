@@ -22,8 +22,10 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\B2bAccountController;
 use App\Http\Controllers\Api\B2bDiscountRuleController;
 use App\Http\Controllers\Api\B2bManufacturerRuleController;
+use App\Http\Controllers\Api\CampaignAssetController;
 use App\Http\Controllers\Api\CampaignClickController;
 use App\Http\Controllers\Api\CampaignController;
+use App\Http\Controllers\Api\CampaignTemplateController;
 use App\Http\Controllers\Api\CardMatchController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
@@ -77,6 +79,11 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::get('/product-images/{image}/thumb', [ProductImageThumbController::class, 'show'])
     ->whereNumber('image')
     ->name('product-images.thumb');
+// Obrazki w mailach kampanii (logo, grafika) — publiczne, bo klient otwiera je bez logowania. Bez limitu zapytań
+// (jak miniatury produktów): pośrednicy Gmaila/Outlooka pobierają obrazki wielu odbiorców z jednego adresu IP.
+Route::get('/campaign-assets/{uuid}', [CampaignAssetController::class, 'show'])
+    ->where('uuid', '[0-9a-f-]{36}')
+    ->name('campaign-assets.show');
 
 // Wypis z mailingu kampanii — publiczny link z maila. GET tylko pokazuje przycisk (skanery linków w poczcie klikają
 // w GET), wypisuje dopiero POST: przycisk na stronie albo nagłówek List-Unsubscribe-Post (RFC 8058).
@@ -392,6 +399,15 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/campaigns/{campaign}/unschedule', [CampaignController::class, 'unschedule']);
         Route::post('/campaigns/{campaign}/cancel', [CampaignController::class, 'cancel']);
         Route::get('/campaigns/{campaign}/recipients', [CampaignController::class, 'recipients']);
+        Route::post('/campaigns/{campaign}/template', [CampaignController::class, 'applyTemplate']);
+        Route::post('/campaigns/{campaign}/preview-draft', [CampaignController::class, 'previewDraft']);
+
+        Route::get('/campaign-templates', [CampaignTemplateController::class, 'index']);
+        Route::post('/campaign-templates', [CampaignTemplateController::class, 'store']);
+        Route::post('/campaign-templates/preview', [CampaignTemplateController::class, 'preview']);
+        Route::patch('/campaign-templates/{template}', [CampaignTemplateController::class, 'update']);
+        Route::delete('/campaign-templates/{template}', [CampaignTemplateController::class, 'destroy']);
+        Route::post('/campaign-assets', [CampaignAssetController::class, 'store'])->middleware('throttle:30,1');
 
         Route::get('/mailing-lists', [MailingListController::class, 'index']);
         Route::post('/mailing-lists', [MailingListController::class, 'store']);

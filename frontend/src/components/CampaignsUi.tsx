@@ -14,6 +14,7 @@ export function CampaignsTabs({ active }: { active: CampaignsTab }) {
   const tabs: { key: CampaignsTab; label: string }[] = [
     { key: 'mine', label: 'Moje kampanie' },
     ...(can(user, 'campaigns.manage') ? [{ key: 'all' as const, label: 'Wszystkie' }] : []),
+    { key: 'templates', label: 'Moje szablony' },
     { key: 'groups', label: 'Grupy odbiorców' },
     { key: 'suppressed', label: 'Wypisani' },
   ]

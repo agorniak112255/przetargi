@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\Campaign;
 use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
+use App\Models\CampaignTemplate;
 use App\Models\ErpItem;
 use App\Models\ErpItemLink;
 use App\Models\MailingList;
@@ -14,6 +15,7 @@ use App\Models\Product;
 use App\Models\User;
 use App\Models\UserMailAccount;
 use App\Services\Campaigns\AudienceResolver;
+use App\Services\Campaigns\CampaignBlocks;
 use App\Services\Campaigns\CampaignItemPresenter;
 use App\Services\Campaigns\CampaignRenderer;
 use App\Services\Campaigns\CampaignSender;
@@ -69,6 +71,13 @@ final class CampaignApiTest extends TestCase
                 CampaignApiTest::$calls[] = ['render', [$campaign->id, $recipient?->id, $sender?->id]];
 
                 return ['subject' => 'Temat: '.$campaign->subject, 'html' => '<p>html</p>', 'text' => 'text'];
+            }
+
+            public function renderBlocks(Campaign $campaign, array $blocks, ?string $brandColor, ?CampaignRecipient $recipient = null, ?User $sender = null, ?string $notice = null): array
+            {
+                CampaignApiTest::$calls[] = ['renderBlocks', [$campaign->id, $blocks, $brandColor, $sender?->id]];
+
+                return ['subject' => 'Temat: '.$campaign->subject, 'html' => '<p>projekt</p>', 'text' => 'text'];
             }
         });
         $this->app->instance(AudienceResolver::class, new class extends AudienceResolver
@@ -496,6 +505,148 @@ final class CampaignApiTest extends TestCase
         $this->deleteJson("/api/campaigns/{$campaign->id}")->assertOk();
         $this->assertSame(0, Campaign::query()->count());
         $this->assertSame(0, CampaignItem::query()->count());
+    }
+
+    public function test_new_campaign_has_standard_blocks_and_old_one_legacy_blocks(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        Sanctum::actingAs($user);
+
+        $res = $this->postJson('/api/campaigns', [])->assertCreated()
+            ->assertJsonPath('blocks', CampaignBlocks::standard())
+            ->assertJsonPath('brand_color', null)
+            ->assertJsonPath('template_id', null)
+            ->assertJsonPath('template_name', null);
+        $keys = array_keys($res->json());
+        foreach (['heading', 'intro', 'layout', 'template_id', 'template_name', 'blocks', 'brand_color'] as $key) {
+            $this->assertContains($key, $keys);
+        }
+
+        // kampania sprzed szablonów: bloki z heading, intro i layout (nic nie zapisane)
+        $old = $this->campaign($user, ['heading' => 'Końcówki', 'intro' => 'Wstęp', 'layout' => 'list']);
+        $this->getJson("/api/campaigns/{$old->id}")->assertOk()->assertJsonPath('blocks', [
+            ['type' => 'header', 'logo' => null],
+            ['type' => 'heading', 'text' => 'Końcówki'],
+            ['type' => 'text', 'text' => 'Wstęp'],
+            ['type' => 'products', 'layout' => 'list'],
+            ['type' => 'footer', 'text' => ''],
+        ]);
+        $this->assertNull($old->fresh()->blocks);
+        // stary front bez bloków zmienia pola jak dotąd
+        $this->patchJson("/api/campaigns/{$old->id}", ['heading' => 'Nowy'])->assertOk()->assertJsonPath('blocks.1.text', 'Nowy');
+    }
+
+    public function test_patch_blocks_lenient_color_and_ignores_old_fields(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $campaign = $this->campaign($user, ['heading' => 'Stary', 'layout' => 'grid3']);
+        $blocks = [
+            ['type' => 'heading', 'text' => 'Nowości'],
+            ['type' => 'products', 'layout' => 'grid2'],
+            // adres w trakcie pisania (autozapis) — sprawdza go dopiero wysyłka
+            ['type' => 'button', 'label' => 'Katalog', 'url' => 'htt'],
+        ];
+
+        Sanctum::actingAs($user);
+        $this->patchJson("/api/campaigns/{$campaign->id}", ['blocks' => [['type' => 'text', 'text' => 'x']]])
+            ->assertUnprocessable()->assertJsonValidationErrors('blocks');
+        $this->patchJson("/api/campaigns/{$campaign->id}", ['blocks' => [['type' => 'products'], ['type' => 'image', 'url' => 'https://x.pl/'.str_repeat('a', 500)]]])
+            ->assertUnprocessable()->assertJsonValidationErrors('blocks.1.url');
+        $this->patchJson("/api/campaigns/{$campaign->id}", ['brand_color' => 'red'])->assertUnprocessable()->assertJsonValidationErrors('brand_color');
+        $this->patchJson("/api/campaigns/{$campaign->id}", ['blocks' => null])->assertUnprocessable()->assertJsonValidationErrors('blocks');
+
+        $this->patchJson("/api/campaigns/{$campaign->id}", ['blocks' => $blocks, 'brand_color' => '#5b3fa0', 'heading' => 'Ignorowany', 'layout' => 'list', 'subject' => 'Temat'])
+            ->assertOk()
+            ->assertJsonPath('blocks', $blocks)
+            ->assertJsonPath('brand_color', '#5b3fa0')
+            ->assertJsonPath('subject', 'Temat')
+            ->assertJsonPath('heading', 'Stary')
+            ->assertJsonPath('layout', 'grid3');
+        $this->patchJson("/api/campaigns/{$campaign->id}", ['brand_color' => null])->assertOk()->assertJsonPath('brand_color', null)->assertJsonPath('blocks', $blocks);
+    }
+
+    public function test_apply_template_own_shared_foreign_and_standard(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $other = User::factory()->withRole('handlowiec')->create();
+        $own = CampaignTemplate::query()->create(['user_id' => $user->id, 'name' => 'Mój', 'brand_color' => '#c25e00', 'blocks' => [['type' => 'products', 'layout' => 'list'], ['type' => 'footer', 'text' => 'Moja stopka']]]);
+        $shared = CampaignTemplate::query()->create(['user_id' => $other->id, 'name' => 'Wspólny', 'is_shared' => true, 'blocks' => [['type' => 'heading', 'text' => 'Wspólny'], ['type' => 'products', 'layout' => 'grid2']]]);
+        $foreign = CampaignTemplate::query()->create(['user_id' => $other->id, 'name' => 'Cudzy', 'blocks' => CampaignBlocks::standard()]);
+        $campaign = $this->campaign($user);
+
+        Sanctum::actingAs($user);
+        $this->postJson("/api/campaigns/{$campaign->id}/template", [])->assertUnprocessable()->assertJsonValidationErrors('template_id');
+        $this->postJson("/api/campaigns/{$campaign->id}/template", ['template_id' => $foreign->id])->assertNotFound();
+        $this->postJson("/api/campaigns/{$campaign->id}/template", ['template_id' => 99999])->assertNotFound();
+        $this->assertNull($campaign->fresh()->blocks);
+
+        $this->postJson("/api/campaigns/{$campaign->id}/template", ['template_id' => $own->id])->assertOk()
+            ->assertJsonPath('template_id', $own->id)
+            ->assertJsonPath('template_name', 'Mój')
+            ->assertJsonPath('brand_color', '#c25e00')
+            ->assertJsonPath('blocks', $own->blocks);
+        $this->postJson("/api/campaigns/{$campaign->id}/template", ['template_id' => $shared->id])->assertOk()
+            ->assertJsonPath('template_name', 'Wspólny')
+            ->assertJsonPath('brand_color', null)
+            ->assertJsonPath('blocks', $shared->blocks);
+        // zmiana szablonu nie zmienia kampanii — ma kopię
+        $shared->update(['blocks' => CampaignBlocks::standard()]);
+        $this->assertSame([['type' => 'heading', 'text' => 'Wspólny'], ['type' => 'products', 'layout' => 'grid2']], $campaign->fresh()->blocks);
+
+        $this->postJson("/api/campaigns/{$campaign->id}/template", ['template_id' => null])->assertOk()
+            ->assertJsonPath('template_id', null)
+            ->assertJsonPath('brand_color', null)
+            ->assertJsonPath('blocks', CampaignBlocks::standard());
+
+        // cudza kampania — 404, wysłana — 422 jak każda zmiana
+        Sanctum::actingAs($other);
+        $this->postJson("/api/campaigns/{$campaign->id}/template", ['template_id' => null])->assertNotFound();
+        Sanctum::actingAs($user);
+        $campaign->update(['status' => Campaign::STATUS_SENT]);
+        $this->postJson("/api/campaigns/{$campaign->id}/template", ['template_id' => $own->id])->assertUnprocessable()
+            ->assertJsonPath('message', 'Kampania została już wysłana — zduplikuj ją, żeby zmienić');
+        $this->assertSame(CampaignBlocks::standard(), $campaign->fresh()->blocks);
+    }
+
+    public function test_duplicate_copies_blocks_color_and_template(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $template = CampaignTemplate::query()->create(['user_id' => $user->id, 'name' => 'Mój', 'blocks' => CampaignBlocks::standard()]);
+        $blocks = [['type' => 'products', 'layout' => 'grid2'], ['type' => 'footer', 'text' => 'Stopka']];
+        $campaign = $this->campaign($user, ['blocks' => $blocks, 'brand_color' => '#2f3a40', 'template_id' => $template->id]);
+        $old = $this->campaign($user, ['heading' => 'Stary nagłówek', 'layout' => 'list']);
+
+        Sanctum::actingAs($user);
+        $this->postJson("/api/campaigns/{$campaign->id}/duplicate")->assertCreated()
+            ->assertJsonPath('blocks', $blocks)
+            ->assertJsonPath('brand_color', '#2f3a40')
+            ->assertJsonPath('template_id', $template->id)
+            ->assertJsonPath('template_name', 'Mój');
+        // kopia starej kampanii dostaje bloki wyliczone z jej pól
+        $id = $this->postJson("/api/campaigns/{$old->id}/duplicate")->assertCreated()->assertJsonPath('blocks.1.text', 'Stary nagłówek')->json('id');
+        $this->assertSame('list', Campaign::query()->findOrFail($id)->blocks[3]['layout']);
+    }
+
+    public function test_preview_draft_renders_unsaved_blocks_without_saving(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $campaign = $this->campaign($user, ['subject' => 'Rękawice', 'preheader' => 'Zajawka']);
+        $blocks = [['type' => 'products', 'layout' => 'list'], ['type' => 'button', 'label' => '', 'url' => '']];
+
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $this->postJson("/api/campaigns/{$campaign->id}/preview-draft", ['blocks' => $blocks])->assertNotFound();
+
+        Sanctum::actingAs($user);
+        $this->postJson("/api/campaigns/{$campaign->id}/preview-draft", ['blocks' => [['type' => 'button', 'label' => 'x', 'url' => 'https://x.pl']]])
+            ->assertUnprocessable()->assertJsonValidationErrors('blocks');
+        $this->postJson("/api/campaigns/{$campaign->id}/preview-draft", ['blocks' => $blocks, 'brand_color' => '#1f5fa8'])->assertOk()
+            ->assertExactJson(['subject' => 'Temat: Rękawice', 'preheader' => 'Zajawka', 'from' => null, 'html' => '<p>projekt</p>']);
+        $this->assertSame(['renderBlocks', [$campaign->id, $blocks, '#1f5fa8', $user->id]], self::$calls[0]);
+
+        $fresh = $campaign->fresh();
+        $this->assertNull($fresh->blocks);
+        $this->assertNull($fresh->brand_color);
+        $this->assertEquals($campaign->updated_at, $fresh->updated_at);
     }
 
     /** @param array<string, mixed> $attrs */

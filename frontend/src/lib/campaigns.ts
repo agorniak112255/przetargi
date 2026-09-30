@@ -1,10 +1,87 @@
 import { api } from './api'
+import { publicDir } from './publicDir'
 
 /** Kampanie reklamowe — typy i wywołania API (kontrakt pierwszego wydania, 01.10.2026). */
 
 export type CampaignStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'cancelled'
 export type CampaignLayout = 'grid3' | 'grid2' | 'list'
 export type CampaignXlMode = 'items' | 'group' | 'mine'
+
+export const CAMPAIGN_LAYOUT_LABEL: Record<CampaignLayout, string> = {
+  grid3: 'Siatka po 3',
+  grid2: 'Siatka po 2',
+  list: 'Lista z opisem',
+}
+
+/**
+ * Element maila (kolejność w tablicy = kolejność w mailu). Pola zawsze obecne, puste = '' / null.
+ * Produkty dokładnie raz, logo (header) i stopka najwyżej raz — pilnuje tego też serwer.
+ */
+export type CampaignBlock =
+  | { type: 'header'; logo: string | null }
+  | { type: 'heading'; text: string }
+  | { type: 'text'; text: string }
+  | { type: 'image'; asset: string | null; alt: string; url: string }
+  | { type: 'products'; layout: CampaignLayout }
+  | { type: 'button'; label: string; url: string }
+  | { type: 'footer'; text: string }
+
+export type CampaignBlockType = CampaignBlock['type']
+
+export const CAMPAIGN_BLOCK_LABEL: Record<CampaignBlockType, string> = {
+  header: 'Logo',
+  heading: 'Nagłówek',
+  text: 'Tekst',
+  image: 'Grafika',
+  products: 'Produkty',
+  button: 'Przycisk',
+  footer: 'Stopka',
+}
+
+/** Jak CampaignBlocks (serwer): najwyżej 20 elementów. */
+export const MAX_CAMPAIGN_BLOCKS = 20
+
+/** Kolory maila (przycisk, akcenty) — jak BRAND_COLORS serwera; null = pierwszy (zieleń SUPON). */
+export const BRAND_COLORS = ['#0b7d6a', '#1f5fa8', '#b3261e', '#c25e00', '#5b3fa0', '#2f3a40'] as const
+export const DEFAULT_BRAND_COLOR = BRAND_COLORS[0]
+export const BRAND_COLOR_LABEL: Record<string, string> = {
+  '#0b7d6a': 'Zieleń SUPON',
+  '#1f5fa8': 'Niebieski',
+  '#b3261e': 'Czerwony',
+  '#c25e00': 'Pomarańczowy',
+  '#5b3fa0': 'Fioletowy',
+  '#2f3a40': 'Grafitowy',
+}
+
+/** „Standard SUPON” — jak CampaignBlocks::standard(). */
+export function standardCampaignBlocks(): CampaignBlock[] {
+  return [
+    { type: 'header', logo: null },
+    { type: 'heading', text: '' },
+    { type: 'text', text: '' },
+    { type: 'products', layout: 'grid3' },
+    { type: 'footer', text: '' },
+  ]
+}
+
+/** Szablon maila: własny albo wspólny (wspólne prowadzi administrator). */
+export type CampaignTemplate = {
+  id: number
+  name: string
+  is_shared: boolean
+  owner: { id: number; name: string } | null
+  can_edit: boolean
+  brand_color: string | null
+  blocks: CampaignBlock[]
+  updated_at: string
+}
+
+export type CampaignAsset = { uuid: string; url: string; width: number; height: number }
+
+/** Adres wgranego obrazka do podglądu w edytorze (względem API, jak inne żądania). */
+export function campaignAssetUrl(uuid: string): string {
+  return `${publicDir()}/api/campaign-assets/${encodeURIComponent(uuid)}`
+}
 export type ContactBasis = 'customer' | 'consent'
 
 export const CAMPAIGN_STATUS_LABEL: Record<CampaignStatus, string> = {
@@ -161,6 +238,13 @@ export type Campaign = {
   intro: string | null
   layout: CampaignLayout
   valid_until: string | null
+  /** Ostatnio zastosowany szablon (null = Standard SUPON albo szablon usunięty). */
+  template_id: number | null
+  template_name: string | null
+  /** Elementy maila (stara kampania bez bloków — przeliczone z nagłówka, tekstu i układu). */
+  blocks: CampaignBlock[]
+  /** null = domyślny kolor (zieleń SUPON). */
+  brand_color: string | null
   status: CampaignStatus
   audience: CampaignAudience
   author: { id: number; name: string }
@@ -219,7 +303,10 @@ export type CampaignClicks = {
 }
 
 export type CampaignPatch = Partial<
-  Pick<Campaign, 'name' | 'subject' | 'preheader' | 'heading' | 'intro' | 'layout' | 'valid_until' | 'audience'>
+  Pick<
+    Campaign,
+    'name' | 'subject' | 'preheader' | 'heading' | 'intro' | 'layout' | 'valid_until' | 'audience' | 'blocks' | 'brand_color'
+  >
 >
 
 export type CampaignItemPatch = Partial<{
@@ -427,6 +514,52 @@ export function campaignRecipients(
   if (params.page) q.set('page', String(params.page))
   const qs = q.toString()
   return api<{ data: CampaignRecipientRow[]; meta: PageMeta }>(`/campaigns/${id}/recipients${qs ? `?${qs}` : ''}`)
+}
+
+/** Zastąpienie treści maila szablonem (tylko projekt); null = Standard SUPON. */
+export function applyTemplate(id: number, templateId: number | null) {
+  return api<Campaign>(`/campaigns/${id}/template`, { method: 'POST', ...json({ template_id: templateId }) })
+}
+
+/** Podgląd z niezapisanymi elementami i prawdziwymi pozycjami kampanii — nic nie zapisuje. */
+export function previewDraft(id: number, body: { blocks: CampaignBlock[]; brand_color: string | null }) {
+  return api<CampaignPreview>(`/campaigns/${id}/preview-draft`, { method: 'POST', ...json(body) })
+}
+
+export function listTemplates() {
+  return api<{ data: CampaignTemplate[] }>('/campaign-templates')
+}
+
+export function createTemplate(body: {
+  name: string
+  blocks: CampaignBlock[]
+  brand_color?: string | null
+  is_shared?: boolean
+}) {
+  return api<CampaignTemplate>('/campaign-templates', { method: 'POST', ...json(body) })
+}
+
+export function updateTemplate(
+  id: number,
+  body: Partial<{ name: string; blocks: CampaignBlock[]; brand_color: string | null; is_shared: boolean }>,
+) {
+  return api<CampaignTemplate>(`/campaign-templates/${id}`, { method: 'PATCH', ...json(body) })
+}
+
+export function deleteTemplate(id: number) {
+  return api<{ message?: string }>(`/campaign-templates/${id}`, { method: 'DELETE' })
+}
+
+/** Podgląd szablonu z przykładowymi produktami. */
+export function previewTemplate(body: { blocks: CampaignBlock[]; brand_color: string | null }) {
+  return api<{ subject: string; html: string; text: string }>('/campaign-templates/preview', { method: 'POST', ...json(body) })
+}
+
+/** Obrazek do maila (logo, grafika): serwer zmniejsza do 1200 px i zapisuje jako JPG albo PNG. */
+export function uploadCampaignAsset(file: File) {
+  const form = new FormData()
+  form.append('file', file)
+  return api<CampaignAsset>('/campaign-assets', { method: 'POST', body: form })
 }
 
 export function listMailingLists() {

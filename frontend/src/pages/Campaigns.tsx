@@ -24,11 +24,12 @@ import {
   type PageMeta,
 } from '../lib/campaigns'
 import { plural } from '../lib/plural'
+import { CampaignTemplates } from './CampaignTemplates'
 import { EmailSuppressions } from './EmailSuppressions'
 import { MailingLists } from './MailingLists'
 
 /**
- * Kampanie: lista kampanii (Moje / Wszystkie), a w zakładkach grupy odbiorców i lista wypisanych.
+ * Kampanie: lista kampanii (Moje / Wszystkie), a w zakładkach szablony maili, grupy odbiorców i lista wypisanych.
  * Zakładka w adresie (?tab=), żeby link i „wstecz” wracały tam, gdzie był handlowiec.
  */
 
@@ -43,7 +44,9 @@ export function Campaigns() {
 
   return (
     <div>
-      {tab === 'groups' ? (
+      {tab === 'templates' ? (
+        <CampaignTemplates />
+      ) : tab === 'groups' ? (
         <MailingLists />
       ) : tab === 'suppressed' ? (
         <EmailSuppressions />

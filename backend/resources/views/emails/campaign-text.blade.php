@@ -1,20 +1,42 @@
-{{-- Wersja tekstowa maila kampanii (text/plain — bez encji HTML, więc bez escapowania). --}}
+{{-- Wersja tekstowa maila kampanii (text/plain — bez encji HTML, więc bez escapowania). Bloki jak w wersji HTML. --}}
 @if (($notice ?? null) !== null)
 *** {!! $notice !!} ***
 
 @endif
+@foreach ($blocks as $b)
+@switch($b['type'])
+@case('header')
 {!! $company !!} — {!! $tagline !!}
+
+@break
+@case('content')
+@foreach ($b['parts'] as $part)
+{!! $part['text'] !!}
+
+@endforeach
+@break
+@case('image')
+@if ($b['alt'] !== '')
+[{!! $b['alt'] !!}]@if ($b['link'] !== null) {!! $b['link'] !!}@endif
+
+
+@elseif ($b['link'] !== null)
+{!! $b['link'] !!}
+
+@endif
+@break
+@case('button')
+{!! $b['label'] !!}: {!! $b['url'] !!}
+
+@break
+@case('footer')
+{!! $b['text'] !!}
+
+@break
+@case('products')
 {!! $validUntil !!}
 
-@if ($heading !== null && trim($heading) !== '')
-{!! $heading !!}
-
-@endif
-@if ($intro !== null && trim($intro) !== '')
-{!! $intro !!}
-
-@endif
-@foreach ($products as $p)
+@foreach ($b['products'] as $p)
 * {!! $p['name'] !!}
 @if ($p['code'] !== '')
   Kod {!! $p['code'] !!}
@@ -36,6 +58,9 @@
   Zapytaj o ofertę: {!! $p['ask_url'] !!}
 @endif
 
+@endforeach
+@break
+@endswitch
 @endforeach
 --
 @if ($signature !== null)

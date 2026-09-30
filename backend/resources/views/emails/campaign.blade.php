@@ -1,11 +1,9 @@
-{{-- Mail kampanii: tabele i style inline (klienci poczty nie czytają <style>), szer. 640. Wszystkie treści escapowane. --}}
+{{-- Mail kampanii: tabele i style inline (klienci poczty nie czytają <style>), szer. 640. Wszystkie treści escapowane.
+     Bloki w kolejności z CampaignRenderer::viewBlocks; podpis i stopka z wypisem zawsze na końcu. --}}
 @php
-    $brand = '#0b7d6a';
     $text = '#1b2328';
     $muted = '#5d6970';
     $line = '#e2e7ea';
-    $imgMax = ['grid3' => 170, 'grid2' => 262, 'list' => 120][$layout];
-    $cellWidth = (int) floor(100 / $columns);
 @endphp
 <!DOCTYPE html>
 <html lang="pl">
@@ -30,37 +28,77 @@
         </table>
 @endif
         <table role="presentation" width="640" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;background:#ffffff;border-radius:6px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:{{ $text }};">
-          {{-- nagłówek: firma + ważność cen --}}
+@foreach ($blocks as $b)
+@switch($b['type'])
+@case('header')
+          {{-- nagłówek: logo albo nazwa firmy --}}
           <tr>
-            <td style="padding:16px 24px;border-bottom:3px solid {{ $brand }};">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+            <td style="padding:16px 24px;border-bottom:3px solid {{ $brand }};font-family:Arial,Helvetica,sans-serif;">
+@if ($b['logo_url'] !== null)
+              <img src="{{ $b['logo_url'] }}" width="{{ $b['logo_width'] }}" height="{{ $b['logo_height'] }}" alt="{{ $company }}" style="display:block;width:{{ $b['logo_width'] }}px;height:{{ $b['logo_height'] }}px;border:0;">
+@else
+              <div style="font-weight:700;font-size:18px;color:{{ $brand }};letter-spacing:0.02em;">{{ $company }}</div>
+              <div style="font-size:11px;color:{{ $muted }};">{{ $tagline }}</div>
+@endif
+            </td>
+          </tr>
+@break
+@case('content')
+          <tr>
+            <td style="padding:20px 24px 8px;font-family:Arial,Helvetica,sans-serif;">
+@foreach ($b['parts'] as $part)
+@if ($part['type'] === 'heading')
+              <h1 style="margin:0 0 8px;font-size:21px;line-height:1.25;font-weight:700;color:{{ $text }};">{{ $part['text'] }}</h1>
+@else
+              <p style="margin:0 0 10px;color:{{ $text }};">{!! nl2br(e($part['text']), false) !!}</p>
+@endif
+@endforeach
+            </td>
+          </tr>
+@break
+@case('image')
+          <tr>
+            <td align="center" style="padding:8px 24px;">
+@if ($b['link'] !== null)<a href="{{ $b['link'] }}" style="text-decoration:none;">@endif
+              <img src="{{ $b['url'] }}" width="{{ $b['width'] }}" height="{{ $b['height'] }}" alt="{{ $b['alt'] }}" style="display:block;max-width:100%;height:auto;border:0;margin:0 auto;">
+@if ($b['link'] !== null)</a>@endif
+            </td>
+          </tr>
+@break
+@case('button')
+          <tr>
+            <td align="center" style="padding:8px 24px 16px;">
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
                 <tr>
-                  <td valign="middle" style="font-family:Arial,Helvetica,sans-serif;">
-                    <div style="font-weight:700;font-size:18px;color:{{ $brand }};letter-spacing:0.02em;">{{ $company }}</div>
-                    <div style="font-size:11px;color:{{ $muted }};">{{ $tagline }}</div>
+                  <td align="center" bgcolor="{{ $brand }}" style="background:{{ $brand }};border-radius:4px;">
+                    <a href="{{ $b['url'] }}" style="display:inline-block;padding:11px 24px;color:#ffffff;text-decoration:none;font-size:14px;font-weight:700;font-family:Arial,Helvetica,sans-serif;border-radius:4px;">{{ $b['label'] }}</a>
                   </td>
-                  <td valign="middle" align="right" style="font-family:Arial,Helvetica,sans-serif;font-size:12px;color:{{ $muted }};text-align:right;">{{ $validUntil }}</td>
                 </tr>
               </table>
             </td>
           </tr>
-@if (($heading !== null && trim($heading) !== '') || ($intro !== null && trim($intro) !== ''))
+@break
+@case('footer')
           <tr>
-            <td style="padding:20px 24px 8px;font-family:Arial,Helvetica,sans-serif;">
-@if ($heading !== null && trim($heading) !== '')
-              <h1 style="margin:0 0 8px;font-size:21px;line-height:1.25;font-weight:700;color:{{ $text }};">{{ $heading }}</h1>
-@endif
-@if ($intro !== null && trim($intro) !== '')
-              <p style="margin:0 0 10px;color:{{ $text }};">{!! nl2br(e($intro), false) !!}</p>
-@endif
-            </td>
+            <td style="padding:6px 24px 14px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:{{ $muted }};">{!! nl2br(e($b['text']), false) !!}</td>
           </tr>
-@endif
+@break
+@case('products')
+@php
+    $layout = $b['layout'];
+    $columns = $b['columns'];
+    $imgMax = ['grid3' => 170, 'grid2' => 262, 'list' => 120][$layout];
+    $cellWidth = (int) floor(100 / $columns);
+@endphp
+          {{-- ważność cen zawsze nad pozycjami --}}
+          <tr>
+            <td style="padding:12px 24px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:{{ $muted }};">{{ $validUntil }}</td>
+          </tr>
           {{-- pozycje --}}
           <tr>
             <td style="padding:8px 18px 16px;">
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-@foreach ($rows as $row)
+@foreach ($b['rows'] as $row)
                 <tr>
 @foreach ($row as $p)
                   <td width="{{ $cellWidth }}%" valign="top" style="padding:6px;">
@@ -112,7 +150,7 @@
 @endif
                           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;">
                             <tr>
-                              <td align="center" style="background:{{ $brand }};border-radius:4px;">
+                              <td align="center" bgcolor="{{ $brand }}" style="background:{{ $brand }};border-radius:4px;">
                                 <a href="{{ $p['ask_url'] }}" style="display:block;padding:7px;color:#ffffff;text-decoration:none;font-size:12.5px;font-weight:700;font-family:Arial,Helvetica,sans-serif;">Zapytaj o ofertę</a>
                               </td>
                             </tr>
@@ -133,6 +171,9 @@
               </table>
             </td>
           </tr>
+@break
+@endswitch
+@endforeach
           {{-- podpis nadawcy --}}
           <tr>
             <td style="padding:6px 24px 18px;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:{{ $text }};">

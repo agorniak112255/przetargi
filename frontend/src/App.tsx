@@ -20,6 +20,7 @@ import { AdminErpItems } from './pages/AdminErpItems'
 import { AdminSmtp } from './pages/AdminSmtp'
 import { AdminUsers } from './pages/AdminUsers'
 import { CampaignEditor } from './pages/CampaignEditor'
+import { CampaignTemplateEditor } from './pages/CampaignTemplateEditor'
 import { Campaigns } from './pages/Campaigns'
 import { CardMatches } from './pages/CardMatches'
 import { Clients } from './pages/Clients'
@@ -195,6 +196,14 @@ export default function App() {
               element={
                 <PermissionGuard permission="campaigns.use">
                   <MailingListDetail />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="kampanie/szablony/:id"
+              element={
+                <PermissionGuard permission="campaigns.use">
+                  <CampaignTemplateEditor />
                 </PermissionGuard>
               }
             />

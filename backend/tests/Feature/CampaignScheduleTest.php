@@ -87,6 +87,18 @@ final class CampaignScheduleTest extends TestCase
         $this->assertSame('draft', $campaign->fresh()->status);
     }
 
+    public function test_schedule_refuses_incomplete_blocks(): void
+    {
+        $author = $this->sender();
+        $campaign = $this->readyCampaign($author);
+        $campaign->update(['blocks' => [['type' => 'image', 'asset' => null, 'alt' => '', 'url' => ''], ['type' => 'products', 'layout' => 'grid3']]]);
+        Sanctum::actingAs($author);
+
+        $this->postJson("/api/campaigns/{$campaign->id}/schedule", ['scheduled_at' => '2026-10-02T08:00:00+02:00'])
+            ->assertUnprocessable()->assertJsonPath('message', 'Grafika (element nr 1): wgraj obrazek albo usuń ten element.');
+        $this->assertSame('draft', $campaign->fresh()->status);
+    }
+
     public function test_dispatch_starts_due_campaign_and_sends_first_batch(): void
     {
         $author = $this->sender();

@@ -103,6 +103,28 @@ final class CampaignSendingTest extends TestCase
         $this->assertSame(0, CampaignRecipient::query()->count());
     }
 
+    public function test_start_refuses_incomplete_blocks_saved_in_draft(): void
+    {
+        $author = $this->sender();
+        $list = $this->mailingList($author, ['a@klient.pl']);
+        $campaign = $this->campaign($author, [$this->erpItem('A1')], [
+            'audience' => ['list_ids' => [$list->id]],
+            'blocks' => [['type' => 'products', 'layout' => 'grid3'], ['type' => 'button', 'label' => 'Katalog', 'url' => '']],
+        ]);
+
+        $this->assertStartFails($campaign, $author, 'Przycisk (element nr 2): podaj adres https://… albo mailto:…');
+        $this->assertSame(Campaign::STATUS_DRAFT, $campaign->fresh()->status);
+        $this->assertSame(0, CampaignRecipient::query()->count());
+        // projekt zapisuje adres w trakcie pisania — wysyłka go odrzuca
+        foreach (['htt', 'javascript:alert(1)'] as $url) {
+            $campaign->update(['blocks' => [['type' => 'products', 'layout' => 'grid3'], ['type' => 'button', 'label' => 'Katalog', 'url' => $url]]]);
+            $this->assertStartFails($campaign->fresh(), $author, 'Przycisk (element nr 2): podaj adres https://… albo mailto:…');
+        }
+
+        $campaign->update(['blocks' => [['type' => 'products', 'layout' => 'grid3'], ['type' => 'button', 'label' => 'Katalog', 'url' => 'https://supon.pl']]]);
+        $this->assertSame(Campaign::STATUS_SENDING, app(CampaignSender::class)->start($campaign->fresh(), $author)->status);
+    }
+
     public function test_dispatch_sends_with_unsubscribe_headers_finishes_and_second_run_sends_nothing(): void
     {
         [$campaign] = $this->started(['a@klient.pl', 'b@klient.pl']);

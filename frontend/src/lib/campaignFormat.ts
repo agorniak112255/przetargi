@@ -2,11 +2,12 @@ import { ApiError } from './api'
 
 /** Pomocnicze funkcje stron Kampanie (bez komponentów — osobny plik, żeby odświeżanie Vite działało po komponentach). */
 
-export type CampaignsTab = 'mine' | 'all' | 'groups' | 'suppressed'
+export type CampaignsTab = 'mine' | 'all' | 'templates' | 'groups' | 'suppressed'
 
 const TAB_PARAM: Record<CampaignsTab, string | null> = {
   mine: null,
   all: 'wszystkie',
+  templates: 'szablony',
   groups: 'grupy',
   suppressed: 'wypisani',
 }
