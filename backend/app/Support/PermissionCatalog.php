@@ -68,6 +68,7 @@ final class PermissionCatalog
         'presta.export',
         'campaigns.use',
         'campaigns.manage',
+        'campaigns.delete',
     ];
 
     public const ROLES = [
@@ -229,6 +230,7 @@ final class PermissionCatalog
             ['inquiries.view_all', 'Zapytania — podgląd wszystkich', 'Widzi na liście zapytania wszystkich pracowników, nie tylko własne, i może filtrować po użytkowniku. Bez tego widzi wyłącznie swoje.', 'Zapytania'],
             ['campaigns.use', 'Kampanie — własne kampanie', 'Może przygotować i wysłać ze swojej skrzynki kampanię z towarem (także zalegającym z zakładki Zapasy) do własnych i wspólnych grup odbiorców oraz do klientów z ERP XL. Widzi listę Zapasów z kosztem i wartością towaru.', 'Kampanie'],
             ['campaigns.manage', 'Kampanie — wszystkie, wspólne grupy i szablony', 'Widzi kampanie wszystkich pracowników, prowadzi wspólne grupy odbiorców, wspólne szablony maili i listę adresów wypisanych z mailingu.', 'Kampanie'],
+            ['campaigns.delete', 'Kampanie — usuwanie wysłanych', 'Może usunąć wysłaną albo anulowaną kampanię razem z jej odbiorcami, kliknięciami i odpowiedziami (wypisy z mailingu zostają). Cudze kampanie — tylko z uprawnieniem „Kampanie — wszystkie”. Własny projekt usuwa każdy bez tego uprawnienia.', 'Kampanie'],
             ['inquiries.view_others', 'Zapytania — otwieranie cudzych', 'Może otworzyć zapytanie innego pracownika i zobaczyć mail klienta, dobrane pozycje i przygotowany list. Tylko podgląd — zmieniać i wysyłać może wyłącznie autor.', 'Zapytania'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],
             ['admin.access', 'Panel Administracja', 'Widzi pozycję menu Administracja.', 'Administracja'],

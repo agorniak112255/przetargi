@@ -61,6 +61,9 @@ class CampaignController extends Controller
 
     private const SCHEDULED = 'Kampania jest zaplanowana — cofnij planowanie, żeby ją zmienić';
 
+    /** Statusy, w których kampanię po wysyłce można usunąć (campaigns.delete). */
+    private const DELETABLE_SENT = [Campaign::STATUS_SENT, Campaign::STATUS_CANCELLED];
+
     /** Najdalej tyle dni naprzód można zaplanować wysyłkę. */
     private const SCHEDULE_MAX_DAYS = 60;
 
@@ -226,11 +229,29 @@ class CampaignController extends Controller
         return response()->json($this->present($campaign->fresh(), $request->user()));
     }
 
+    /**
+     * Projekt usuwa autor (albo campaigns.manage). Wysłaną lub anulowaną — tylko z campaigns.delete, razem z odbiorcami,
+     * kliknięciami i odpowiedziami (klucze kaskadowe); wypisy z mailingu zostają (email_suppressions.campaign_id → null).
+     * W wysyłce i zaplanowanej — najpierw anulowanie albo zdjęcie z planu.
+     */
     public function destroy(Request $request, Campaign $campaign): JsonResponse
     {
         $this->authorizeView($request, $campaign);
-        $this->ensureDraft($campaign);
-        $this->lockedDraft($campaign, static fn (Campaign $locked) => $locked->delete());
+        if ($campaign->isDraft()) {
+            $this->lockedDraft($campaign, static fn (Campaign $locked) => $locked->delete());
+
+            return response()->json(['message' => 'Usunięto kampanię.']);
+        }
+        $this->ensureDeletableSent($campaign);
+        if (! $request->user()->can('campaigns.delete')) {
+            abort(403, 'Usuwanie wysłanych kampanii wymaga uprawnienia „Kampanie — usuwanie wysłanych”.');
+        }
+        DB::transaction(function () use ($campaign): void {
+            $locked = Campaign::query()->whereKey($campaign->id)->lockForUpdate()->firstOrFail();
+            // status mógł się zmienić między sprawdzeniem a blokadą (np. start zaplanowanej)
+            $this->ensureDeletableSent($locked);
+            $locked->delete();
+        });
 
         return response()->json(['message' => 'Usunięto kampanię.']);
     }
@@ -876,6 +897,16 @@ class CampaignController extends Controller
         }
     }
 
+    private function ensureDeletableSent(Campaign $campaign): void
+    {
+        if ($campaign->isDraft() || in_array($campaign->status, self::DELETABLE_SENT, true)) {
+            return;
+        }
+        abort(422, $campaign->status === Campaign::STATUS_SCHEDULED
+            ? 'Kampania jest zaplanowana — najpierw zdejmij ją z planu.'
+            : 'Kampania jest w trakcie wysyłki — najpierw anuluj wysyłkę.');
+    }
+
     private function ensureDraft(Campaign $campaign): void
     {
         if (! $campaign->isDraft()) {
@@ -975,6 +1006,8 @@ class CampaignController extends Controller
             'audience' => $campaign->audienceSettings(),
             'author' => ['id' => (int) $campaign->user_id, 'name' => (string) $author?->name],
             'can_edit' => $campaign->isDraft(),
+            // projekt usuwa autor; wysłaną albo anulowaną — tylko z uprawnieniem campaigns.delete
+            'can_delete' => $campaign->isDraft() || (in_array($campaign->status, self::DELETABLE_SENT, true) && $viewer->can('campaigns.delete')),
             'created_at' => $campaign->created_at?->toIso8601String(),
             'updated_at' => $campaign->updated_at?->toIso8601String(),
             'scheduled_at' => $campaign->scheduled_at?->toIso8601String(),

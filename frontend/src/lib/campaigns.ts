@@ -290,6 +290,8 @@ export type Campaign = {
   audience: CampaignAudience
   author: { id: number; name: string }
   can_edit: boolean
+  /** Projekt: autor; wysłana albo anulowana: uprawnienie „Kampanie — usuwanie wysłanych”. */
+  can_delete?: boolean
   created_at: string
   updated_at: string
   /** Zaplanowana godzina startu (UTC, ISO). */

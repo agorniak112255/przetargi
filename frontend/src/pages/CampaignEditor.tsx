@@ -245,7 +245,7 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
       setCampaign(await cancelCampaign(campaign.id))
       setDialog(null)
     } catch (ex) {
-      setDialogErr(errorText(ex, dialog === 'delete' ? 'Nie udało się usunąć projektu.' : 'Nie udało się anulować wysyłki.'))
+      setDialogErr(errorText(ex, dialog === 'delete' ? 'Nie udało się usunąć kampanii.' : 'Nie udało się anulować wysyłki.'))
     } finally {
       setDialogBusy(false)
     }
@@ -307,7 +307,7 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
           <button type="button" className={BTN} disabled={duplicating} onClick={() => void duplicate()}>
             Duplikuj
           </button>
-          {editable && (
+          {(editable || campaign.can_delete) && (
             <button
               type="button"
               className={`${BTN} text-red-700`}
@@ -316,7 +316,7 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
                 setDialog('delete')
               }}
             >
-              Usuń projekt
+              {editable ? 'Usuń projekt' : 'Usuń kampanię'}
             </button>
           )}
           {canCancel && (
@@ -366,18 +366,30 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
 
       {dialog === 'delete' && (
         <ConfirmDialog
-          title="Usunąć projekt kampanii?"
+          title={editable ? 'Usunąć projekt kampanii?' : 'Usunąć wysłaną kampanię?'}
           danger
-          confirmLabel="Usuń projekt"
+          confirmLabel={editable ? 'Usuń projekt' : 'Usuń kampanię'}
           busy={dialogBusy}
           error={dialogErr}
           onClose={() => setDialog(null)}
           onConfirm={() => void confirmDialog()}
           message={
-            <p>
-              <b>{campaign.name}</b> — {campaign.items.length} {plural(campaign.items.length, 'pozycja', 'pozycje', 'pozycji')}.
-              Projekt zniknie z listy kampanii.
-            </p>
+            editable ? (
+              <p>
+                <b>{campaign.name}</b> — {campaign.items.length} {plural(campaign.items.length, 'pozycja', 'pozycje', 'pozycji')}.
+                Projekt zniknie z listy kampanii.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                <p>
+                  <b>{campaign.code} {campaign.name}</b> zniknie z listy razem z odbiorcami, kliknięciami, odpowiedziami
+                  klientów i wynikami sprzedaży. Tego nie da się cofnąć.
+                </p>
+                <p className="text-slate-600">
+                  Maile, które wyszły, zostają u klientów. Wypisy z mailingu zostają — te adresy dalej nie dostaną kampanii.
+                </p>
+              </div>
+            )
           }
         />
       )}

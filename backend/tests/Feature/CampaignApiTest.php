@@ -8,6 +8,7 @@ use App\Models\Campaign;
 use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
 use App\Models\CampaignTemplate;
+use App\Models\EmailSuppression;
 use App\Models\ErpItem;
 use App\Models\ErpItemLink;
 use App\Models\MailingList;
@@ -432,6 +433,49 @@ final class CampaignApiTest extends TestCase
         $this->assertEquals(['stock_at_send' => 110, 'stock_after_7d' => null, 'stock_after_30d' => 90, 'drop_percent' => 55], $rows[$noCost->id]['result']);
         $this->assertEquals(['stock_at_send' => 200, 'stock_after_7d' => 130, 'stock_after_30d' => null, 'drop_percent' => 40], $rows[$partial->id]['result']);
         $this->assertEquals(['stock_at_send' => 10, 'stock_after_7d' => 30, 'stock_after_30d' => null, 'drop_percent' => 0], $rows[$growth->id]['result']);
+    }
+
+    public function test_deleting_sent_campaign_needs_permission_and_keeps_unsubscribes(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $sent = $this->campaign($user, ['status' => Campaign::STATUS_SENT, 'sending_started_at' => now(), 'sent_at' => now()]);
+        $this->addItem($sent, 1);
+        $recipient = CampaignRecipient::query()->create([
+            'campaign_id' => $sent->id, 'email' => 'klient@alfa.pl', 'source' => 'list', 'token' => Str::random(40), 'status' => 'sent',
+        ]);
+        DB::table('campaign_replies')->insert([
+            'campaign_id' => $sent->id, 'campaign_recipient_id' => $recipient->id, 'user_id' => $user->id, 'from_email' => 'klient@alfa.pl',
+            'subject' => 'Zapytanie', 'matched_by' => 'code', 'message_id' => 'm1', 'received_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $suppression = EmailSuppression::query()->create(['email' => 'wypisany@alfa.pl', 'reason' => EmailSuppression::REASON_UNSUBSCRIBE, 'campaign_id' => $sent->id]);
+        Sanctum::actingAs($user);
+
+        // bez uprawnienia: nie widać przycisku i serwer odmawia
+        $this->getJson("/api/campaigns/{$sent->id}")->assertOk()->assertJsonPath('can_delete', false);
+        $this->deleteJson("/api/campaigns/{$sent->id}")->assertForbidden();
+        $this->assertNotNull($sent->fresh());
+
+        $user->givePermissionTo('campaigns.delete');
+        // zaplanowanej i w wysyłce nie usuwamy nawet z uprawnieniem
+        $scheduled = $this->campaign($user, ['status' => Campaign::STATUS_SCHEDULED, 'scheduled_at' => now()->addDay()]);
+        $this->deleteJson("/api/campaigns/{$scheduled->id}")->assertUnprocessable()
+            ->assertJsonPath('message', 'Kampania jest zaplanowana — najpierw zdejmij ją z planu.');
+        $this->getJson("/api/campaigns/{$scheduled->id}")->assertJsonPath('can_delete', false);
+        // cudza wysłana — bez „wszystkie kampanie” nie do znalezienia
+        $foreign = $this->campaign(User::factory()->withRole('handlowiec')->create(), ['status' => Campaign::STATUS_SENT, 'sent_at' => now()]);
+        $this->deleteJson("/api/campaigns/{$foreign->id}")->assertNotFound();
+
+        $this->getJson("/api/campaigns/{$sent->id}")->assertJsonPath('can_delete', true);
+        $this->deleteJson("/api/campaigns/{$sent->id}")->assertOk();
+        $this->assertNull($sent->fresh());
+        $this->assertSame(0, CampaignRecipient::query()->where('campaign_id', $sent->id)->count());
+        $this->assertSame(0, CampaignItem::query()->where('campaign_id', $sent->id)->count());
+        $this->assertSame(0, DB::table('campaign_replies')->where('campaign_id', $sent->id)->count());
+        // wypis z mailingu zostaje, bez powiązania z kampanią
+        $this->assertNull($suppression->fresh()->campaign_id);
+
+        $cancelled = $this->campaign($user, ['status' => Campaign::STATUS_CANCELLED, 'sending_started_at' => now()]);
+        $this->deleteJson("/api/campaigns/{$cancelled->id}")->assertOk();
     }
 
     public function test_changes_are_refused_when_sending_started_meanwhile(): void
