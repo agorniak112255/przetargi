@@ -153,7 +153,9 @@ class CampaignReplySync
                 $uids = $fresh
                     ? array_slice($reader->searchSince($searchSince), -self::FIRST_RUN_LIMIT)
                     : $reader->searchAfterUid((int) $before['u']);
-                $lastUid = $fresh ? 0 : (int) $before['u'];
+                // pierwszy odczyt: wszystko poniżej UIDNEXT jest przeczytane albo starsze niż kampanie — następny odczyt
+                // weźmie tylko nowe maile (bez tego folder bez świeżych maili byłby czytany w całości)
+                $lastUid = $fresh ? max(0, $box['uidnext'] - 1) : (int) $before['u'];
                 foreach (array_chunk($uids, self::FETCH_CHUNK) as $chunk) {
                     foreach ($reader->fetchHeaders($chunk) as $message) {
                         $messages++;

@@ -111,25 +111,30 @@ class ImapHeaderReader
     }
 
     /**
-     * Skrzynka tylko do odczytu (EXAMINE). UIDVALIDITY zmienia się, gdy serwer przenumeruje wiadomości.
+     * Skrzynka tylko do odczytu (EXAMINE). UIDVALIDITY zmienia się, gdy serwer przenumeruje wiadomości; UIDNEXT = UID,
+     * który dostanie następna wiadomość (0, gdy serwer go nie podał).
      *
-     * @return array{uidvalidity: int, exists: int}
+     * @return array{uidvalidity: int, exists: int, uidnext: int}
      */
     public function examine(string $mailbox = 'INBOX'): array
     {
         $items = $this->command('EXAMINE '.$this->quote($mailbox), 'Nie można otworzyć skrzynki '.$mailbox.'.');
         $uidValidity = 0;
         $exists = 0;
+        $uidNext = 0;
         foreach ($items as $item) {
             if (preg_match('/\[UIDVALIDITY (\d+)\]/i', $item['line'], $m) === 1) {
                 $uidValidity = (int) $m[1];
+            }
+            if (preg_match('/\[UIDNEXT (\d+)\]/i', $item['line'], $m) === 1) {
+                $uidNext = (int) $m[1];
             }
             if (preg_match('/^\* (\d+) EXISTS/i', $item['line'], $m) === 1) {
                 $exists = (int) $m[1];
             }
         }
 
-        return ['uidvalidity' => $uidValidity, 'exists' => $exists];
+        return ['uidvalidity' => $uidValidity, 'exists' => $exists, 'uidnext' => $uidNext];
     }
 
     /** @return list<int> UID wiadomości od dnia (data wg serwera) */

@@ -41,7 +41,7 @@ final class ImapHeaderReaderTest extends TestCase
         $reader = $this->reader([
             "* OK [CAPABILITY IMAP4rev1 SASL-IR AUTH=PLAIN] Dovecot ready.\r\n",
             "a1 OK Logged in\r\n",
-            "* FLAGS (\\Answered \\Seen)\r\n* 3 EXISTS\r\n* OK [UIDVALIDITY 1700000000] UIDs valid\r\na2 OK [READ-ONLY] Examine completed\r\n",
+            "* FLAGS (\\Answered \\Seen)\r\n* 3 EXISTS\r\n* OK [UIDVALIDITY 1700000000] UIDs valid\r\n* OK [UIDNEXT 13] Predicted next UID\r\na2 OK [READ-ONLY] Examine completed\r\n",
             "* SEARCH 12 5 9\r\na3 OK Search completed\r\n",
             '* 1 FETCH (UID 5 BODY[HEADER.FIELDS (FROM SUBJECT)] {'.strlen($h1)."}\r\n".$h1.")\r\n",
             '* 2 FETCH (BODY[HEADER.FIELDS (FROM SUBJECT)] {'.strlen($h2)."}\r\n".$h2." UID 9)\r\n",
@@ -51,7 +51,7 @@ final class ImapHeaderReaderTest extends TestCase
 
         $reader->open('imap.example.pl', 993, true);
         $reader->login('jan@supon.pl', 'tajne"haslo');
-        $this->assertSame(['uidvalidity' => 1700000000, 'exists' => 3], $reader->examine('INBOX'));
+        $this->assertSame(['uidvalidity' => 1700000000, 'exists' => 3, 'uidnext' => 13], $reader->examine('INBOX'));
         $this->assertSame([5, 9, 12], $reader->searchSince(new DateTimeImmutable('2026-09-28')));
         $messages = $reader->fetchHeaders([5, 9]);
         $sent = $this->sent();

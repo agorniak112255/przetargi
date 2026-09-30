@@ -76,7 +76,7 @@ final class CampaignReplySyncTest extends TestCase
             15 => $this->mail('jan@supon.example.pl', "Zapytanie {$code} B20417"),
             16 => $this->mail('klient@alfa.pl', 'Zapytanie K-9999 B20417'),
             17 => $this->mail('klient@alfa.pl', 'Faktura za wrzesień'),
-            18 => [...$this->mail('stary@delta.pl', "Zapytanie {$code}"), 'date' => now()->subDays(5)->toRfc2822String()],
+            18 => [...$this->mail('stary@delta.pl', "Zapytanie {$code}"), 'date' => now()->subDays(2)->subHours(12)->toRfc2822String()],
             // własna odpowiedź handlowca w wątku klienta z kopią do siebie
             19 => $this->mail('Jan <jan@supon.example.pl>', 'Re: Promocja', ['references' => '<abc123@supon.example.pl> <x@alfa.pl>']),
         ];
@@ -142,6 +142,8 @@ final class CampaignReplySyncTest extends TestCase
             // folderu nie da się otworzyć — pomijamy go, reszta czytana dalej
             'INBOX.Zepsuty' => ['messages' => []],
             'INBOX.Oferty' => ['messages' => [7 => $this->mail('osmy@iota.pl', "Zapytanie {$code} B20417")]],
+            // archiwum bez maili z okresu kampanii — pozycja od razu na końcu, bez czytania całego folderu później
+            'INBOX.Stare' => ['messages' => [500 => [...$this->mail('dawny@lambda.pl', 'Oferta 2025'), 'date' => now()->subDays(40)->toRfc2822String()]]],
         ];
         $this->imap->failing = ['INBOX.Zepsuty'];
 
@@ -151,9 +153,9 @@ final class CampaignReplySyncTest extends TestCase
         $this->assertSame(3, $stats['replies']);
         $this->assertSame(['klient@alfa.pl', 'drugi@beta.pl', 'osmy@iota.pl'], CampaignReply::query()->orderBy('id')->pluck('from_email')->all());
         $examined = array_column(array_filter($this->imap->calls, static fn (array $c): bool => $c[0] === 'examine'), 1);
-        $this->assertSame(['INBOX', 'INBOX.Klienci', 'INBOX.Zepsuty', 'INBOX.Oferty'], array_values($examined));
+        $this->assertSame(['INBOX', 'INBOX.Klienci', 'INBOX.Zepsuty', 'INBOX.Oferty', 'INBOX.Stare'], array_values($examined));
         $account = UserMailAccount::query()->where('user_id', $author->id)->firstOrFail();
-        $this->assertSame(['INBOX' => ['v' => 7, 'u' => 1], 'INBOX.Klienci' => ['v' => 7, 'u' => 41], 'INBOX.Oferty' => ['v' => 7, 'u' => 7]], $account->imap_folders);
+        $this->assertSame(['INBOX' => ['v' => 7, 'u' => 1], 'INBOX.Klienci' => ['v' => 7, 'u' => 41], 'INBOX.Oferty' => ['v' => 7, 'u' => 7], 'INBOX.Stare' => ['v' => 7, 'u' => 500]], $account->imap_folders);
         $this->assertNull($account->imap_error);
 
         // mail przeniesiony z INBOX do folderu dostaje tam nowy UID — czytany, ale nie liczony drugi raz;
@@ -166,13 +168,14 @@ final class CampaignReplySyncTest extends TestCase
         $this->assertSame(0, $stats['replies']);
         $this->assertSame(1, $stats['messages']);
         $this->assertContains(['searchAfterUid', 7], $this->imap->calls);
-        $this->assertSame(['INBOX' => ['v' => 7, 'u' => 1], 'INBOX.Oferty' => ['v' => 7, 'u' => 8]], $account->fresh()->imap_folders);
+        $this->assertContains(['searchAfterUid', 500], $this->imap->calls);
+        $this->assertSame(['INBOX' => ['v' => 7, 'u' => 1], 'INBOX.Oferty' => ['v' => 7, 'u' => 8], 'INBOX.Stare' => ['v' => 7, 'u' => 500]], $account->fresh()->imap_folders);
         $this->assertSame(3, CampaignReply::query()->count());
 
         // folder chwilowo niedostępny zachowuje pozycję odczytu
         $this->imap->failing = ['INBOX.Zepsuty', 'INBOX.Oferty'];
         app(CampaignReplySync::class)->run();
-        $this->assertSame(['INBOX' => ['v' => 7, 'u' => 1], 'INBOX.Oferty' => ['v' => 7, 'u' => 8]], $account->fresh()->imap_folders);
+        $this->assertSame(['INBOX' => ['v' => 7, 'u' => 1], 'INBOX.Oferty' => ['v' => 7, 'u' => 8], 'INBOX.Stare' => ['v' => 7, 'u' => 500]], $account->fresh()->imap_folders);
     }
 
     public function test_mail_without_message_id_counts_once_across_folders(): void

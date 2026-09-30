@@ -61,14 +61,20 @@ final class FakeImapHeaderReader extends ImapHeaderReader
             throw new ImapCommandException('Nie można otworzyć skrzynki '.$mailbox.'.');
         }
         $this->current = $mailbox;
+        $uids = array_keys($this->box());
 
-        return ['uidvalidity' => $this->uidValidity, 'exists' => count($this->box())];
+        return ['uidvalidity' => $this->uidValidity, 'exists' => count($uids), 'uidnext' => ($uids === [] ? 0 : max($uids)) + 1];
     }
 
+    /** Jak serwer: wiadomości z datą od dnia $since (bez daty — liczą się). */
     public function searchSince(DateTimeInterface $since): array
     {
         $this->calls[] = ['searchSince', $since->format('Y-m-d')];
-        $uids = array_keys($this->box());
+        $day = $since->format('Y-m-d');
+        $uids = array_keys(array_filter(
+            $this->box(),
+            static fn (array $h): bool => ! isset($h['date']) || date('Y-m-d', (int) strtotime($h['date'])) >= $day,
+        ));
         sort($uids);
 
         return $uids;
