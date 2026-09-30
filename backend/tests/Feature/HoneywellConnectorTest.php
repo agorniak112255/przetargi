@@ -88,6 +88,15 @@ final class HoneywellConnectorTest extends TestCase
 
     private string $accountCurrency = 'EUR';
 
+    /** Sesja sklepu ma wybraną jednostkę sprzedaży (okno „Honeywell Business Entity” już przeszło). */
+    private bool $entityChosen = false;
+
+    /** Okno wyboru jednostki bez opcji FR50. */
+    private bool $entityWithoutFr50 = false;
+
+    /** @var list<string> zapytania wyboru jednostki (updatePreferredSalesOrg) */
+    private array $entityQueries = [];
+
     /** /bin/encryptedCookie nie ustawia userCookie. */
     private bool $noAccountCookie = false;
 
@@ -640,6 +649,36 @@ final class HoneywellConnectorTest extends TestCase
         $this->assertStringContainsString('userCookie=synth-encrypted', $list->header('Cookie')[0] ?? '');
     }
 
+    public function test_business_entity_prompt_is_answered_with_fr50_once_per_session_like_proceed(): void
+    {
+        // przebieg 30.09.2026 21:11: każda strona sklepu „bez tabeli pozycji” — okno wyboru jednostki sprzedaży
+        $this->addGloveFamily();
+        $this->addGlassesFamily();
+        $this->fakeSite();
+
+        $products = $this->products();
+
+        $this->assertSame(['T9999/7S', 'SY100-1', 'SY100-2'], array_map(static fn (B2bRemoteProduct $p): string => $p->sku, $products));
+        $this->assertCount(1, $this->entityQueries);
+        $this->assertSame(
+            'b2bUnitCode=0000099999~PRD010&salesOrgCodeSel=FR50~PRD010_10&salesOrgCode=FR50~PRD010_10&salesOrgId=FR50&eerpSource=PRD010&serSalesOrgCodeSel=&serSalesOrgCode=&salesOrgId=FR50',
+            rawurldecode($this->entityQueries[0]),
+        );
+    }
+
+    public function test_business_entity_prompt_without_fr50_is_not_answered_with_another_entity(): void
+    {
+        $this->addGloveFamily();
+        $this->fakeSite();
+        $this->entityWithoutFr50 = true;
+
+        $products = $this->products();
+
+        $this->assertSame([], $this->entityQueries);
+        $this->assertSame(['skipped', 'skipped'], array_map(static fn (B2bRemoteProduct $p): string => $p->raw['status'], $products));
+        $this->assertStringContainsString('bez jednostki FR50', implode("\n", $this->lastConnector->runSummary()));
+    }
+
     public function test_login_without_the_account_context_fails_clearly_instead_of_finding_nothing(): void
     {
         $this->fakeSite();
@@ -998,6 +1037,8 @@ final class HoneywellConnectorTest extends TestCase
                 }
                 $this->loggedIn = true;
                 $this->logins++;
+                // nowa sesja sklepu — jednostka sprzedaży niewybrana
+                $this->entityChosen = false;
 
                 return Http::response('', 302, ['Location' => ($this->plainCallback ? 'http://automation.honeywell.com' : $base).'/pif/cwa/oauth/callback/j_security_check?code=synth']);
             }
@@ -1087,6 +1128,15 @@ final class HoneywellConnectorTest extends TestCase
             }
 
             // --- sklep ---
+            if ($host === $base && $path === '/shop/honeywell/en/updatePreferredSalesOrg') {
+                $this->entityQueries[] = (string) parse_url($url, PHP_URL_QUERY);
+                parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+                if (($query['salesOrgCodeSel'] ?? '') === 'FR50~PRD010_10' && ($query['salesOrgCode'] ?? '') === 'FR50~PRD010_10') {
+                    $this->entityChosen = true;
+                }
+
+                return Http::response('<html>home</html>');
+            }
             if ($host === $base && str_starts_with($path, '/shop/honeywell/en/p/')) {
                 $rest = rawurldecode(substr($path, strlen('/shop/honeywell/en/p/')));
                 if (str_ends_with($rest, '/pricecall')) {
@@ -1108,6 +1158,10 @@ final class HoneywellConnectorTest extends TestCase
                     }
 
                     return Http::response(['sku' => $out]);
+                }
+                if (! $this->entityChosen) {
+                    // okno „Honeywell Business Entity” zamiast tabeli, dopóki sesja sklepu nie ma wybranej jednostki
+                    return Http::response($this->entityPromptHtml());
                 }
                 if ($rest === $this->tableMissingFor) {
                     return Http::response('<html><input type="hidden" class="js-accountId" name="accountId" value="0000099999" /><p>Configure this product</p></html>');
@@ -1154,6 +1208,24 @@ final class HoneywellConnectorTest extends TestCase
         }
 
         return null;
+    }
+
+    /** Okno wyboru jednostki sprzedaży jak w sklepie 30.09.2026 (strona konta z numerem konta, bez tabeli pozycji). */
+    private function entityPromptHtml(): string
+    {
+        $fr50 = $this->entityWithoutFr50 ? '' : '<option value="FR50~PRD010_10" data-value="FR50~PRD010_EUR_10">FR50 - Honeywell Safety Products France - EUR</option>';
+
+        return '<html><body><input type="hidden" class="js-accountId" name="accountId" value="0000099999" />'
+            .'<input type="hidden" id="sessionB2BUnitSet" value="false" />'
+            .'<form method="GET" name="salesOrgSelection" action="/shop/honeywell/en/updatePreferredSalesOrg">'
+            .'<input type="hidden" name="b2bUnitCode" value="0000099999~PRD010"/>'
+            .'<select name="salesOrgCodeSel" class=" form-control salesOrgCode" id="salesOrgCodehardware"><option value="" data-value="">Please Select</option>'
+            .'<option value="FOI1~PRD010_10" data-value="FOI1~PRD010_EUR_10">FOI1 - Honeywell Safety Products Plancher Bas - EUR</option>'.$fr50.'</select>'
+            .'<input type="hidden" name="salesOrgCode" id="salesOrgCode"/><input type="hidden" name="salesOrgId" id="salesOrgIdTest" value="FR50" />'
+            .'<input type="hidden" name="eerpSource" id="erpSourceTest" value="PRD010" />'
+            .'<select name="serSalesOrgCodeSel" class=" form-control serSalesOrgCode" id="salesOrgCodeservice"><option value="">Please Select</option></select>'
+            .'<input type="hidden" name="serSalesOrgCode" id="serSalesOrgCode"/><input type="hidden" name="salesOrgId" id="salesOrgIdTest" value="FR50" />'
+            .'<input type="button" name="salesOrgSelectionButton" id="salesOrgSelectionButton" value="Proceed"></form></body></html>';
     }
 
     private function passwordPage(string $error): string

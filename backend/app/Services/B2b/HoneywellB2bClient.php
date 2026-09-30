@@ -78,6 +78,12 @@ final class HoneywellB2bClient
 
     private const ACCOUNT_COOKIE = 'userCookie';
 
+    /**
+     * Jednostka sprzedaży Honeywell wybierana w oknie sklepu (decyzja użytkownika 30.09.2026: FR50 – Honeywell Safety
+     * Products France; w FR50 są wszystkie rozmiary CoreShield, w FOI1 tylko część).
+     */
+    public const PREFERRED_SALES_ORG = 'FR50';
+
     /** Waluta cen, którą przyjmuje łącznik (konto 0000034372: customerUnitCurrency EUR). */
     public const CURRENCY = 'EUR';
 
@@ -139,6 +145,9 @@ final class HoneywellB2bClient
 
     private int $emptyInARow = 0;
 
+    /** Jednostka sprzedaży wybrana w tej sesji sklepu (okno „Honeywell Business Entity”). */
+    private bool $salesOrgSelected = false;
+
     /** Kod wyjątku strony produktu konta bez tabeli pozycji (stan trwały, nie utrata sesji). */
     public const NO_TABLE = 7401;
 
@@ -173,6 +182,8 @@ final class HoneywellB2bClient
         // nowa sesja — stare ciasteczka mogły należeć do wygasłej
         $this->jar = new CookieJar;
         $this->loggedIn = false;
+        // nowa sesja sklepu nie pamięta wybranej jednostki sprzedaży
+        $this->salesOrgSelected = false;
 
         $email = trim($this->email);
         if ($email === '' || trim($this->password) === '') {
@@ -348,6 +359,23 @@ final class HoneywellB2bClient
         if (self::hasShopTable($html)) {
             return $html;
         }
+        // okno „Honeywell Business Entity” zamiast tabeli — wybór jednostki trzyma tylko sesja sklepu (przebieg
+        // 30.09.2026 21:11: każda strona „bez tabeli pozycji”); raz na sesję wybieramy FR50 i czytamy stronę jeszcze raz
+        $prompt = self::salesOrgPrompt($html);
+        if ($prompt !== null) {
+            if ($this->salesOrgSelected) {
+                throw new RuntimeException('sklep ponownie prosi o wybór jednostki sprzedaży mimo wybranej '.self::PREFERRED_SALES_ORG);
+            }
+            $this->send(fn (PendingRequest $http): Response => $this->browser($http)->get($prompt));
+            $this->salesOrgSelected = true;
+            $html = $read();
+            if (self::hasShopTable($html)) {
+                return $html;
+            }
+            if (self::salesOrgPrompt($html) !== null) {
+                throw new RuntimeException('sklep ponownie prosi o wybór jednostki sprzedaży po wybraniu '.self::PREFERRED_SALES_ORG);
+            }
+        }
         if (! self::looksSignedOut($html)) {
             throw new RuntimeException('strona produktu '.$shopCode.' w sklepie bez tabeli pozycji', self::NO_TABLE);
         }
@@ -428,6 +456,58 @@ final class HoneywellB2bClient
         }
 
         return ($session['session_valid'] ?? null) === true;
+    }
+
+    /**
+     * Okno wyboru jednostki sprzedaży na stronie sklepu (formularz GET salesOrgSelection → updatePreferredSalesOrg):
+     * adres wysłania z polami formularza jak przeglądarka po „Proceed” — pola ukryte dosłownie, wybór jednostki
+     * (salesOrgCodeSel i salesOrgCode) = opcja PREFERRED_SALES_ORG, pozostałe listy puste. null = strona bez okna.
+     * Brak opcji FR50 = RuntimeException (nie wybieramy innej jednostki za użytkownika).
+     */
+    public static function salesOrgPrompt(string $html): ?string
+    {
+        if (preg_match('#<form\b[^>]*\bname\s*=\s*["\']salesOrgSelection["\'][^>]*>(.*?)</form>#is', $html, $form) !== 1) {
+            return null;
+        }
+        $action = preg_match('#<form\b[^>]*\baction\s*=\s*["\']([^"\']+)["\']#i', $form[0], $m) === 1 ? html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5) : '';
+        $url = self::secureHoneywellUrl(self::resolve(self::SHOP_HOME, $action));
+        if ($url === null || ! str_contains($url, '/updatePreferredSalesOrg')) {
+            throw new RuntimeException('okno wyboru jednostki sprzedaży z nieoczekiwanym adresem');
+        }
+        $choice = null;
+        if (preg_match('#<select\b[^>]*\bname\s*=\s*["\']salesOrgCodeSel["\'][^>]*>(.*?)</select>#is', $form[1], $select) === 1) {
+            // opcja ma value="FR50~PRD010_10" i data-value="FR50~PRD010_EUR_10" — liczy się value (parser atrybutów,
+            // nie wyrażenie: \bvalue trafiało też w data-value)
+            preg_match_all('#<option\b((?:[^>"\']|"[^"]*"|\'[^\']*\')*)>#i', $select[1], $options);
+            foreach ($options[1] as $option) {
+                $value = self::attributes($option)['value'] ?? '';
+                if (str_starts_with($value, self::PREFERRED_SALES_ORG.'~')) {
+                    $choice = $value;
+                    break;
+                }
+            }
+        }
+        if ($choice === null) {
+            throw new RuntimeException('okno wyboru jednostki sprzedaży bez jednostki '.self::PREFERRED_SALES_ORG.' — wybierz ją w sklepie albo zmień ustalenie');
+        }
+
+        // pola w kolejności formularza (nazwy się powtarzają — jak przeglądarka, bez scalania)
+        $pairs = [];
+        preg_match_all('#<(input|select)\b((?:[^>"\']|"[^"]*"|\'[^\']*\')*)>#i', $form[1], $fields, PREG_SET_ORDER);
+        foreach ($fields as $field) {
+            $attrs = self::attributes($field[2]);
+            $name = $attrs['name'] ?? '';
+            if ($name === '' || in_array(strtolower($attrs['type'] ?? ''), ['button', 'submit'], true)) {
+                continue;
+            }
+            $value = strtolower($field[1]) === 'select' ? '' : ($attrs['value'] ?? '');
+            if (in_array($name, ['salesOrgCodeSel', 'salesOrgCode'], true)) {
+                $value = $choice;
+            }
+            $pairs[] = rawurlencode($name).'='.rawurlencode($value);
+        }
+
+        return $url.(str_contains($url, '?') ? '&' : '?').implode('&', $pairs);
     }
 
     /** Strona produktu sklepu z tabelą pozycji (formularz koszyka i tabela custom-table). */
