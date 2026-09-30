@@ -10,6 +10,7 @@ use App\Models\ProductSubstitute;
 use App\Models\Role;
 use App\Models\Tender;
 use App\Models\User;
+use App\Support\PermissionCatalog;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -166,6 +167,7 @@ final class RbacApiTest extends TestCase
 
         $this->putJson('/api/admin/roles/handlowiec', [
             'permissions' => ['dashboard.view', 'products.view'],
+            'known' => PermissionCatalog::ALL,
         ])->assertOk()
             ->assertJsonPath('permissions', ['dashboard.view', 'products.view']);
 
@@ -184,6 +186,43 @@ final class RbacApiTest extends TestCase
             'role' => 'handel-krakow',
         ])->assertCreated()
             ->assertJsonPath('role', 'handel-krakow');
+    }
+
+    public function test_saving_role_from_stale_page_keeps_permissions_it_did_not_know(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $role = Role::findByName('handlowiec', 'web');
+        $this->assertTrue($role->hasPermissionTo('campaigns.use'));
+
+        // Strona wczytana przed dodaniem campaigns.*: nie zna ich i nie ma ich w zaznaczeniu.
+        $stale = array_values(array_diff(PermissionCatalog::ALL, ['campaigns.use', 'campaigns.manage']));
+        $checked = array_values(array_diff($role->permissions->pluck('name')->all(), ['campaigns.use', 'dashboard.view']));
+
+        $this->putJson('/api/admin/roles/handlowiec', ['permissions' => $checked, 'known' => $stale])
+            ->assertOk();
+
+        $role = Role::findByName('handlowiec', 'web')->load('permissions');
+        $this->assertTrue($role->hasPermissionTo('campaigns.use'), 'Nieznane stronie uprawnienie zostaje.');
+        $this->assertFalse($role->hasPermissionTo('campaigns.manage'), 'Nieznane stronie nie jest też nadawane.');
+        $this->assertFalse($role->hasPermissionTo('dashboard.view'), 'Znane i odznaczone jest odbierane.');
+
+        // Przebieg kontrolny: strona znająca campaigns.use odbiera je, gdy nie jest zaznaczone.
+        $this->putJson('/api/admin/roles/handlowiec', ['permissions' => $checked, 'known' => PermissionCatalog::ALL])
+            ->assertOk();
+        $this->assertFalse(Role::findByName('handlowiec', 'web')->load('permissions')->hasPermissionTo('campaigns.use'));
+    }
+
+    public function test_saving_role_without_known_list_is_rejected_and_changes_nothing(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $before = Role::findByName('handlowiec', 'web')->permissions()->pluck('name')->sort()->values()->all();
+
+        $this->putJson('/api/admin/roles/handlowiec', ['permissions' => ['dashboard.view']])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.known.0', 'Strona jest nieaktualna — odśwież ją i zaznacz uprawnienia jeszcze raz.');
+
+        $after = Role::findByName('handlowiec', 'web')->permissions()->pluck('name')->sort()->values()->all();
+        $this->assertSame($before, $after);
     }
 
     public function test_admin_can_rename_role_without_changing_code_or_permissions(): void

@@ -87,7 +87,11 @@ class RoleController extends Controller
             return response()->json(['message' => 'Nieznana rola.'], 404);
         }
 
-        $roleModel->syncPermissions($request->validated('permissions'));
+        // Uprawnienia spoza listy znanej stronie zostają bez zmian (np. dodane wdrożeniem,
+        // gdy panel był już otwarty) — inaczej zapis starej strony odbierałby je po cichu.
+        $known = $request->validated('known');
+        $kept = array_diff($roleModel->permissions->pluck('name')->all(), $known);
+        $roleModel->syncPermissions(array_values(array_unique([...$kept, ...$request->validated('permissions')])));
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
         return $this->present($roleModel);

@@ -78,7 +78,9 @@ export function AdminRoles() {
     try {
       await api(`/admin/roles/${selected}`, {
         method: 'PUT',
-        body: JSON.stringify({ permissions: [...checked] }),
+        // known = uprawnienia pokazane na tej stronie; serwer nie ruszy innych (np. dodanych
+        // wdrożeniem, gdy strona była już otwarta).
+        body: JSON.stringify({ permissions: [...checked], known: definitions.map((d) => d.key) }),
       })
       setMsg('Zapisano uprawnienia roli.')
       await load()
