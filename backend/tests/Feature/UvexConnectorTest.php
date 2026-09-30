@@ -576,7 +576,7 @@ final class UvexConnectorTest extends TestCase
         $cleaner = Product::query()->where('sku', '9970.005')->sole();
         $this->assertStringStartsWith('Stacja czyszcząca do okularów i gogli.', (string) $cleaner->description);
         $this->assertSame(str_replace('/public/get-preview/', '/get-preview/', self::IMG_9970), $cleaner->images()->firstOrFail()->source_url);
-        $this->assertSame('HexArmor', Product::query()->where('sku', 'HA2023(L)')->value('manufacturer'));
+        $this->assertSame('HexArmor', Product::query()->where('sku', 'HA2023')->value('manufacturer'));
         $this->assertSame('HECKEL', Product::query()->where('sku', 'HECKEL6273/3')->value('manufacturer'));
 
         $log = array_column((array) B2bSyncRun::query()->latest('id')->firstOrFail()->log, 'text');
@@ -703,7 +703,7 @@ final class UvexConnectorTest extends TestCase
         );
         $this->assertSame(
             [['HA2023(L)', 'source_code', 'HA2023(L)', '9', 'Kod', 'HexArmor'], ['HA2023(M)', 'source_code', 'HA2023(M)', '8', 'Kod', 'HexArmor']],
-            self::storedIdentifiers((int) Product::query()->where('sku', 'HA2023(L)')->value('id')),
+            self::storedIdentifiers((int) Product::query()->where('sku', 'HA2023')->value('id')),
         );
         $this->assertSame(
             [['9970.005', 'manufacturer_code', '9970.005', null, 'Kod', 'UVEX']],
@@ -1402,7 +1402,7 @@ final class UvexConnectorTest extends TestCase
         $heckel = $this->baseFields(Product::query()->where('sku', 'HECKEL6273/3')->sole());
         $this->assertSame(['255.31', 'Buty Heckel', '62733', '15.00'], [$heckel['base_price_net'], $heckel['base_price_category'], $heckel['base_price_code'], $heckel['standard_discount_percent']]);
         // HexArmor po modelu w nazwie wiersza
-        $this->assertSame('60201', $this->baseFields(Product::query()->where('sku', 'HA2023(L)')->sole())['base_price_code']);
+        $this->assertSame('60201', $this->baseFields(Product::query()->where('sku', 'HA2023')->sole())['base_price_code']);
         // arkusz „Odzież” pominięty, choć łapanka pasowałaby do wszystkiego
         $this->assertSame(
             ['base_price_net' => null, 'base_price_category' => null, 'base_price_code' => null, 'base_price_source' => null, 'standard_discount_percent' => null],

@@ -132,13 +132,13 @@ final class UvexSizeGroups
     }
 
     /**
-     * Kod modelu każdej grupy (decyzja użytkownika 30.09.2026: kod karty butów i rękawic bez rozmiaru — „6931/2”, nie
-     * „6931/2/35”; „NB60SZ”, nie „NB60SZ/9”). Kod modelu = wspólny rdzeń kodów, gdy rozmiar każdej pozycji grupy stoi
-     * na końcu jej kodu po „/” albo „-”. Null (karta zostaje przy kodzie pierwszej pozycji, jak dotąd): pozycja
-     * pojedyncza, rozmiar z nazwy („1723808 … rozm. XS”, „HA2023(M)”), różne rdzenie, rdzeń będący kodem pozycji listy
-     * albo rdzeniem innej grupy — dwie karty nie mogą dostać tego samego kodu (products.sku jest unikalne).
+     * Kod modelu każdej grupy (decyzja użytkownika 30.09.2026: kod karty z rozmiarami bez rozmiaru — „6931/2”, nie
+     * „6931/2/35”; „NB60SZ”, nie „NB60SZ/9”; „60023”, nie „6002306”; „HA2023”, nie „HA2023(L)”) — modelCode() kodów
+     * pozycji grupy. Null (karta zostaje przy kodzie pierwszej pozycji, jak dotąd): pozycja pojedyncza, kody bez
+     * wspólnego kodu modelu, kod modelu będący kodem pozycji listy albo kodem modelu innej grupy — dwie karty nie mogą
+     * dostać tego samego kodu (products.sku jest unikalne).
      *
-     * @param  list<list<array{row: array{code: string}, size: array{stem: string|null}|null}>>  $groups  wynik group()
+     * @param  list<list<array{row: array{code: string}}>>  $groups  wynik group()
      * @return list<string|null> kod modelu grupy o tym samym indeksie
      */
     public function modelCodes(array $groups): array
@@ -149,8 +149,7 @@ final class UvexSizeGroups
             foreach ($group as $member) {
                 $codes[mb_strtolower(trim($member['row']['code']))] = true;
             }
-            $memberStems = array_unique(array_map(static fn (array $m): string => trim((string) ($m['size']['stem'] ?? '')), $group));
-            $stems[$index] = count($group) > 1 && count($memberStems) === 1 && $memberStems[0] !== '' ? $memberStems[0] : null;
+            $stems[$index] = count($group) > 1 ? $this->modelCode(array_map(static fn (array $m): string => (string) $m['row']['code'], $group)) : null;
         }
         $uses = array_count_values(array_map('mb_strtolower', array_filter($stems, static fn (?string $s): bool => $s !== null)));
 
@@ -158,6 +157,39 @@ final class UvexSizeGroups
             static fn (?string $stem): ?string => $stem !== null && $uses[mb_strtolower($stem)] === 1 && ! isset($codes[mb_strtolower($stem)]) ? $stem : null,
             array_values($stems),
         );
+    }
+
+    /**
+     * Wspólny kod modelu kodów rozmiarów jednego wyrobu albo null. Trzy zapisy UVEX (lista konta 30.09.2026), każdy
+     * wymaga, żeby WSZYSTKIE kody miały ten sam zapis i ten sam rdzeń:
+     * - rozmiar na końcu po „/” albo „-” (sizeOf): „6931/2/35” → „6931/2”, „NB60SZ/9” → „NB60SZ”;
+     * - rozmiar w nawiasie na końcu (HexArmor): „HA2023(L)”, „HA3013IMP (L)” → „HA2023”, „HA3013IMP”;
+     * - dwie ostatnie cyfry (gwiazdka po nich pomijana): „6002306” → „60023”, „6003006*” → „60030”,
+     *   „89880.09” → „89880” (kropka na końcu rdzenia odpada).
+     * Kod jest kodem rozmiaru tylko wtedy, gdy wołający wie, że to rozmiary (grupa rozmiarów łącznika, pozycje karty
+     * z rozmiarem w nazwie) — sam kod „2600.010” / „2600.011” (kolory) też ma dwie ostatnie cyfry.
+     *
+     * @param  list<string>  $codes
+     */
+    public function modelCode(array $codes): ?string
+    {
+        $codes = array_values(array_unique(array_map('trim', $codes)));
+        if (count($codes) < 2) {
+            return null;
+        }
+        $rules = [
+            fn (string $code): string => trim((string) ($this->sizeOf('', $code)['stem'] ?? '')),
+            static fn (string $code): string => preg_match('~^(.*?\S)\s*\(\s*'.self::SIZE.'\s*\)$~iu', $code, $m) === 1 ? $m[1] : '',
+            static fn (string $code): string => preg_match('~^(.{3,})\d{2}\*?$~', $code, $m) === 1 ? rtrim($m[1], '.-/ ') : '',
+        ];
+        foreach ($rules as $rule) {
+            $stems = array_unique(array_map($rule, $codes));
+            if (count($stems) === 1 && strlen($stems[0]) >= 3) {
+                return $stems[0];
+            }
+        }
+
+        return null;
     }
 
     /** Porządek rozmiarów: liczbowe rosnąco, potem literowe XXS…6XL, reszta alfabetycznie. */

@@ -16,16 +16,18 @@ use Illuminate\Support\Facades\DB;
 use JsonException;
 
 /**
- * Decyzja użytkownika 30.09.2026: kod karty UVEX z rozmiarami (buty, rękawice, wkładki, HECKEL) bez rozmiaru —
- * „6931/2”, nie „6931/2/35”; „NB60SZ”, nie „NB60SZ/9”. Łącznik (UvexB2bConnector, UvexSizeGroups::modelCodes) robi tak
+ * Decyzja użytkownika 30.09.2026: kod karty UVEX z rozmiarami bez rozmiaru — „6931/2”, nie „6931/2/35”; „NB60SZ”,
+ * nie „NB60SZ/9”; „60023”, nie „6002306”; „HA2023”, nie „HA2023(L)”. Łącznik (UvexB2bConnector, UvexSizeGroups::modelCodes) robi tak
  * od 30.09.2026 na nowych kartach i przy „Scal rozmiary”, ale synchronizacja nie zmienia kodu zastanej karty — a karty
  * scalone 28–29.09.2026 dostały kod pierwszego rozmiaru. To polecenie poprawia zastane karty konta.
  *
  * Dowód = kody pozycji tego konta na karcie (b2b_product_links, remote_sku), nie nazwa:
- * - co najmniej dwie pozycje, rozmiar każdej na końcu kodu po „/” albo „-” (UvexSizeGroups::sizeOf, ta sama reguła co
- *   łącznik) i jeden wspólny rdzeń — to nowy kod; pozycje różnych rdzeni (dwa modele na karcie) — kod zostaje z uwagą;
- * - obecny kod karty to „rdzeń/rozmiar” (także rozmiar, którego sklep już nie podaje) — inny kod karty (nadany ręcznie)
- *   zostaje;
+ * - co najmniej dwie pozycje, każda z rozmiarem w nazwie u dostawcy albo na końcu kodu (UvexSizeGroups::sizeOf, ta
+ *   sama reguła co łącznik) — inaczej to nie karta rozmiarów (kolory „2600.010” / „2600.011”) i kod zostaje bez uwagi;
+ * - nowy kod = wspólny kod modelu kodów pozycji (UvexSizeGroups::modelCode: „/rozmiar”, „(rozmiar)”, dwie ostatnie
+ *   cyfry); kody bez wspólnego kodu modelu (dwa modele na karcie, „6659/07 FOAM”) — kod zostaje z uwagą;
+ * - obecny kod karty to kod rozmiaru tego modelu (także rozmiaru, którego sklep już nie podaje) — inny kod karty
+ *   (nadany ręcznie) zostaje;
  * - karta z powiązaniem innego konta B2B albo z dopasowaniem PrestaShop — pomijana (kod służy tam też innym źródłom);
  * - nowy kod zajęty przez inną kartę albo wspólny dla dwóch kart konta — kod zostaje z uwagą.
  * Nazwa karty, kody pozycji (powiązania, identyfikatory, tabela rozmiarów) zostają dosłownie.
@@ -169,9 +171,9 @@ final class RepairUvexModelCodesCommand extends Command
             /** @var Collection<int, B2bProductLink> $cardLinks */
             $cardLinks = $links->get($id, collect());
             $own = $cardLinks->filter(static fn (B2bProductLink $l): bool => (int) $l->b2b_account_id === $accountId);
-            $codes = $own->map(static fn (B2bProductLink $l): string => trim((string) ($l->remote_sku ?: $l->remote_id)))
-                ->filter()->unique()->sort()->values()->all();
-            $plan = $this->plan($product, $codes, $groups);
+            $positions = $own->mapWithKeys(static fn (B2bProductLink $l): array => [trim((string) ($l->remote_sku ?: $l->remote_id)) => trim((string) $l->remote_name)])
+                ->filter(static fn (string $name, int|string $code): bool => $code !== '')->sortKeys()->all();
+            $plan = $this->plan($product, $positions, $groups);
             if ($plan['sku'] !== null) {
                 $foreign = $cardLinks->filter(static fn (B2bProductLink $l): bool => (int) $l->b2b_account_id !== $accountId)
                     ->pluck('b2b_account_id')->map(static fn (mixed $a): int => (int) $a)->unique()->sort()->values()->all();
@@ -217,38 +219,33 @@ final class RepairUvexModelCodesCommand extends Command
     }
 
     /**
-     * @param  list<string>  $codes  kody pozycji tego konta na karcie
+     * @param  array<string, string>  $positions  kod pozycji tego konta na karcie => nazwa pozycji u dostawcy
      * @return array{product: Product, sku: ?string, notes: list<string>}
      */
-    private function plan(Product $product, array $codes, UvexSizeGroups $groups): array
+    private function plan(Product $product, array $positions, UvexSizeGroups $groups): array
     {
         $unchanged = ['product' => $product, 'sku' => null, 'notes' => []];
+        $codes = array_map('strval', array_keys($positions));
         if (count($codes) < 2) {
             return $unchanged;
         }
-        $stems = [];
-        foreach ($codes as $code) {
-            $stems[$code] = trim((string) ($groups->sizeOf('', $code)['stem'] ?? ''));
+        // każda pozycja ma rozmiar (z nazwy u dostawcy albo z końca kodu — reguła łącznika); bez tego to nie karta
+        // rozmiarów (kolory 2600.010 / 2600.011, scalone duplikaty) i kodu nie ruszamy
+        foreach ($positions as $code => $name) {
+            if ($groups->sizeOf($name, (string) $code) === null) {
+                return $unchanged;
+            }
         }
-        $withStem = array_filter($stems, static fn (string $stem): bool => $stem !== '');
-        if ($withStem === []) {
-            // rozmiar w nazwie, nie w kodzie („1723808 … rozm. XS”) — to nie ta naprawa
-            return $unchanged;
+        $stem = $groups->modelCode($codes);
+        if ($stem === null) {
+            return [...$unchanged, 'notes' => ['kody pozycji bez wspólnego kodu modelu ('.implode(', ', array_slice($codes, 0, 4)).(count($codes) > 4 ? ', …' : '').') — kod zostaje']];
         }
-        $distinct = array_values(array_unique($withStem));
-        if (count($withStem) !== count($stems) || count($distinct) !== 1) {
-            $odd = array_keys(array_filter($stems, static fn (string $stem): bool => $stem === ''));
-
-            return [...$unchanged, 'notes' => [$odd !== []
-                ? 'kod pozycji '.implode(', ', $odd).' bez rozmiaru na końcu — kod zostaje'
-                : 'pozycje różnych modeli ('.implode(', ', $distinct).') — kod zostaje']];
-        }
-        $stem = $distinct[0];
         $sku = trim((string) $product->sku);
         if ($sku === $stem) {
             return $unchanged;
         }
-        if (trim((string) ($groups->sizeOf('', $sku)['stem'] ?? '')) !== $stem) {
+        // kod karty = kod któregoś rozmiaru tego modelu (także rozmiaru, którego sklep już nie podaje)
+        if ($groups->modelCode([...$codes, $sku]) !== $stem) {
             return [...$unchanged, 'notes' => ["kod karty nie jest kodem rozmiaru {$stem} — kod zostaje"]];
         }
 

@@ -128,8 +128,9 @@ final class UvexSizeGroupsTest extends TestCase
     }
 
     /**
-     * Decyzja użytkownika 30.09.2026: kod karty butów i rękawic bez rozmiaru. Kod modelu tylko wtedy, gdy rozmiar każdej
-     * pozycji stoi na końcu kodu, a rdzeń nie jest kodem pozycji ani rdzeniem innej grupy — inaczej kod pierwszej pozycji.
+     * Decyzja użytkownika 30.09.2026: kod karty z rozmiarami bez rozmiaru — „/rozmiar”, „(rozmiar)” albo dwie ostatnie
+     * cyfry kodu. Kod modelu tylko wtedy, gdy wszystkie kody grupy mają ten sam zapis i rdzeń, a rdzeń nie jest kodem
+     * pozycji ani kodem modelu innej grupy — inaczej kod pierwszej pozycji.
      */
     public function test_model_code_is_the_common_stem_only_when_every_size_ends_the_code_and_the_stem_is_unique(): void
     {
@@ -141,6 +142,8 @@ final class UvexSizeGroupsTest extends TestCase
             $this->row('NB60SZ/10', 'Rękawice Rubiflex S długie NB60SZ/10', 11130),
             $this->row('1723808', 'Koszulka polo uvex fire & arc 17238 rozm. XS', 20000, 'szt.'),
             $this->row('1723809', 'Koszulka polo uvex fire & arc 17238 rozm. S', 20000, 'szt.'),
+            $this->row('HA2023(L)', 'Rękawice HexArmor Rig Lizard Arctic 2023 rozmiar 9 (L)', 9000),
+            $this->row('HA2023(M)', 'Rękawice HexArmor Rig Lizard Arctic 2023 rozmiar 8 (M)', 9000),
             $this->row('9970.005', 'Pojemnik mini 9970.005', 5000, 'szt.'),
             // rdzeń jest kodem innej pozycji listy
             $this->row('7777/2', 'Wkładki uvex testowe', 3000),
@@ -159,11 +162,29 @@ final class UvexSizeGroupsTest extends TestCase
 
         $this->assertSame('6931/2', $byFirstCode['6931/2/35']);
         $this->assertSame('NB60SZ', $byFirstCode['NB60SZ/9']);
-        $this->assertNull($byFirstCode['1723808']);
+        $this->assertSame('17238', $byFirstCode['1723808']);
+        $this->assertSame('HA2023', $byFirstCode['HA2023(L)']);
         $this->assertNull($byFirstCode['9970.005']);
         $this->assertNull($byFirstCode['7777/2/40']);
         $this->assertNull($byFirstCode['6823/2/40']);
         $this->assertNull($byFirstCode['6823/2/42']);
+    }
+
+    public function test_model_code_needs_one_notation_and_one_stem_for_all_codes(): void
+    {
+        $groups = new UvexSizeGroups;
+
+        $this->assertSame('60023', $groups->modelCode(['6002306', '6002307', '6002310']));
+        $this->assertSame('60030', $groups->modelCode(['6003006*', '6003007*']));
+        $this->assertSame('60027', $groups->modelCode(['6002706', '6002708*']));
+        $this->assertSame('89880', $groups->modelCode(['89880.09', '89880.10']));
+        $this->assertSame('HA3013IMP', $groups->modelCode(['HA3013IMP (L)', 'HA3013IMP (XS)']));
+        $this->assertSame('6605', $groups->modelCode(['6605/06', '6605/7']));
+        $this->assertNull($groups->modelCode(['9579/7/41', '9579/8/35']));
+        $this->assertNull($groups->modelCode(['6659/07 FOAM', '6659/09 FOAM']));
+        $this->assertNull($groups->modelCode(['6002806', '6002806/']));
+        $this->assertNull($groups->modelCode(['NB60SZ/9', '6002306']));
+        $this->assertNull($groups->modelCode(['6931/2/35']));
     }
 
     public function test_sizes_sort_numbers_then_letters(): void
