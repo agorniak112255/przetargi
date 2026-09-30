@@ -1,4 +1,8 @@
 {{-- Wersja tekstowa maila kampanii (text/plain — bez encji HTML, więc bez escapowania). --}}
+@if (($notice ?? null) !== null)
+*** {!! $notice !!} ***
+
+@endif
 {!! $company !!} — {!! $tagline !!}
 {!! $validUntil !!}
 

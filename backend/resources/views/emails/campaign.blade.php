@@ -22,6 +22,13 @@
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#eef1f3;">
     <tr>
       <td align="center" style="padding:18px 12px;">
+@if (($notice ?? null) !== null)
+        <table role="presentation" width="640" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;margin-bottom:10px;">
+          <tr>
+            <td style="background:#fff4d6;border:1px solid #e8c56a;border-radius:6px;padding:10px 14px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.4;color:#5c4400;">{{ $notice }}</td>
+          </tr>
+        </table>
+@endif
         <table role="presentation" width="640" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;background:#ffffff;border-radius:6px;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:{{ $text }};">
           {{-- nagłówek: firma + ważność cen --}}
           <tr>

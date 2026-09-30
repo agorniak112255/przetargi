@@ -35,6 +35,9 @@ class CampaignSender
     /** Po błędzie połączenia/logowania skrzynka nadawcy odpoczywa tyle minut (campaigns:dispatch ją pomija). */
     public const PAUSE_MINUTES = 15;
 
+    /** Na górze kopii dla nadawcy — jej linki nie są mierzone (nadawca bywa też odbiorcą i myli obie wiadomości). */
+    public const COPY_NOTICE = 'To kopia dla nadawcy — kliknięcia w tej wiadomości nie są liczone. Klienci dostali wersję z mierzonymi linkami (bez „[Kopia]” w temacie).';
+
     public function __construct(
         private readonly UserMailerFactory $mailers,
         private readonly CampaignRenderer $renderer,
@@ -59,7 +62,7 @@ class CampaignSender
         if ($account === null) {
             throw $this->invalid('Nie ustawiono skrzynki w „Moje konto → Moja poczta”.');
         }
-        $mail = $this->renderer->render($campaign, null, $campaign->user);
+        $mail = $this->renderer->render($campaign, null, $campaign->user, 'Wiadomość testowa — tak zobaczy ją klient. Kliknięcia w tej wiadomości nie są liczone.');
         try {
             $this->deliver($account, $to, null, '[TEST] '.$mail['subject'], $mail['html'], $mail['text']);
         } catch (Throwable $e) {
@@ -118,7 +121,7 @@ class CampaignSender
         $account = $this->accountOf($campaign);
         if ($account !== null && $account->copy_to_self) {
             try {
-                $mail = $this->renderer->render($campaign, null, $campaign->user);
+                $mail = $this->renderer->render($campaign, null, $campaign->user, self::COPY_NOTICE);
                 $this->deliver($account, (string) $account->from_address, (string) $account->from_name, '[Kopia] '.$mail['subject'], $mail['html'], $mail['text']);
             } catch (Throwable $e) {
                 Log::warning('Kampania: kopia do nadawcy nie wyszła', ['campaign' => $campaign->id, 'error' => $this->errorText($e, $account)]);
@@ -279,12 +282,17 @@ class CampaignSender
                 $this->pauseSender($recipient, $account, (int) $campaign->user_id, $this->errorText($e, $account));
             } else {
                 $attempts = (int) $recipient->attempts + 1;
+                // trwałe odrzucenie adresu (5xx) — ponowienie nic nie da; nieistniejąca skrzynka trafia na listę wypisanych
+                $permanent = $this->isPermanentRecipientError($e);
                 $this->finish(
                     $recipient,
-                    $attempts >= (int) config('campaigns.max_attempts', 3) ? CampaignRecipient::STATUS_FAILED : CampaignRecipient::STATUS_PENDING,
+                    $permanent || $attempts >= (int) config('campaigns.max_attempts', 3) ? CampaignRecipient::STATUS_FAILED : CampaignRecipient::STATUS_PENDING,
                     $this->errorText($e, $account),
                     ['attempts' => $attempts],
                 );
+                if ($permanent && $this->isUnknownMailbox($e)) {
+                    $this->suppressBounce($recipient, $this->errorText($e, $account));
+                }
             }
 
             return;
@@ -407,6 +415,36 @@ class CampaignSender
         $account?->forceFill(['last_error' => $error])->save();
         Cache::put(self::pauseKey($userId), $error, Carbon::now()->addMinutes(self::PAUSE_MINUTES));
         Log::warning('Kampania: skrzynka nadawcy wstrzymana', ['user' => $userId, 'error' => $error]);
+    }
+
+    /**
+     * Błędny adres na stałe: zły format albo 5xx z kodem 5.1.x (nieznana skrzynka, zła domena) / „user unknown” —
+     * nie ponawiamy. Inne 5xx (np. 5.7.1 spam, blokada) zwykle dotyczą całej skrzynki nadawcy — zostają ponowienia
+     * i przerwa po serii odrzuceń (campaigns:dispatch).
+     */
+    protected function isPermanentRecipientError(Throwable $e): bool
+    {
+        return $e instanceof RfcComplianceException || $this->isUnknownMailbox($e);
+    }
+
+    /** Skrzynka albo domena nie istnieje (5.1.x, „user unknown”) — nie ma sensu wysyłać do niej kolejnych kampanii. */
+    protected function isUnknownMailbox(Throwable $e): bool
+    {
+        return $e instanceof UnexpectedResponseException && $e->getCode() >= 500 && $e->getCode() < 600
+            && preg_match('/\b5\.1\.\d{1,2}\b|user unknown|no such user|does not exist/i', $e->getMessage()) === 1;
+    }
+
+    private function suppressBounce(CampaignRecipient $recipient, string $error): void
+    {
+        try {
+            EmailSuppression::query()->firstOrCreate(
+                ['email' => mb_strtolower((string) $recipient->email)],
+                ['reason' => EmailSuppression::REASON_BOUNCE, 'campaign_id' => $recipient->campaign_id, 'note' => mb_substr('adres nie istnieje: '.$error, 0, 255)],
+            );
+        } catch (Throwable $e) {
+            // wyścig z równoległym wpisem — adres i tak jest na liście
+            report($e);
+        }
     }
 
     private function pauseSender(CampaignRecipient $recipient, ?UserMailAccount $account, int $userId, string $error): void

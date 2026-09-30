@@ -64,7 +64,7 @@ final class CampaignApiTest extends TestCase
             // bez zależności rodzica — atrapa ich nie używa
             public function __construct() {}
 
-            public function render(Campaign $campaign, ?CampaignRecipient $recipient = null, ?User $sender = null): array
+            public function render(Campaign $campaign, ?CampaignRecipient $recipient = null, ?User $sender = null, ?string $notice = null): array
             {
                 CampaignApiTest::$calls[] = ['render', [$campaign->id, $recipient?->id, $sender?->id]];
 

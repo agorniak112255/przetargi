@@ -2116,6 +2116,9 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
                 </td>
                 <td className="max-w-[24rem] p-2 text-[11px]">
                   {r.error && <span className="break-words text-red-700">{r.error}</span>}
+                  {r.error && r.status === 'pending' && (
+                    <span className="block text-slate-500">spróbujemy ponownie w kolejnej partii</span>
+                  )}
                   {r.unsubscribed_at && <span className="block text-slate-600">wypisał się {fmtDate(r.unsubscribed_at)}</span>}
                 </td>
               </tr>

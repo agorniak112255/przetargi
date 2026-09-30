@@ -71,6 +71,11 @@ final class CampaignSendingTest extends TestCase
         // kopia do nadawcy po starcie
         $this->assertSame(['jan@supon.example.pl'], $this->mailers->recipients());
         $this->assertStringStartsWith('[Kopia] ', $this->mailers->emails()[0]->getSubject());
+        // kopia mówi wprost, że jej kliknięcia się nie liczą, i nie ma linków mierzonych
+        $copyHtml = (string) $this->mailers->emails()[0]->getHtmlBody();
+        $this->assertStringContainsString('To kopia dla nadawcy — kliknięcia w tej wiadomości nie są liczone', $copyHtml);
+        $this->assertStringNotContainsString('/api/k/', $copyHtml);
+        $this->assertStringContainsString('To kopia dla nadawcy', (string) $this->mailers->emails()[0]->getTextBody());
 
         // drugi start tej samej kampanii → 422, bez nowych odbiorców
         $this->assertStartFails($campaign, $author, 'już wysłana');
@@ -215,30 +220,47 @@ final class CampaignSendingTest extends TestCase
         $this->assertStringContainsString('hasła', (string) UserMailAccount::query()->where('user_id', $author->id)->value('last_error'));
     }
 
-    public function test_rejected_address_counts_attempts_and_fails_after_max(): void
+    public function test_unknown_mailbox_fails_at_once_and_is_suppressed_for_next_campaigns(): void
     {
         [$campaign, $author] = $this->started(['zly@klient.pl', 'dobry@klient.pl']);
-        $this->mailers->transport->failFor['zly@klient.pl'] = new UnexpectedResponseException('Expected response code "250/251/252" but got code "550", with message "550 5.1.1 User unknown".', 550);
+        $this->mailers->transport->failFor['zly@klient.pl'] = new UnexpectedResponseException('Expected response code "250/251/252" but got code "550", with message "550 5.1.1 <zly@klient.pl>: Recipient address rejected: User unknown in virtual mailbox table".', 550);
 
         $this->artisan('campaigns:dispatch')->assertSuccessful();
 
+        // nieistniejąca skrzynka: od razu błąd, bez ponowień, i adres na liście wypisanych (powód „bounce”)
         $bad = CampaignRecipient::query()->where('email', 'zly@klient.pl')->firstOrFail();
-        $this->assertSame('pending', $bad->status);
+        $this->assertSame('failed', $bad->status);
         $this->assertSame(1, $bad->attempts);
         $this->assertStringContainsString('User unknown', (string) $bad->error);
         $this->assertFalse(CampaignSender::isPaused($author->id));
         $this->assertSame(['dobry@klient.pl'], $this->mailers->recipients());
+        $suppression = EmailSuppression::query()->where('email', 'zly@klient.pl')->sole();
+        $this->assertSame(EmailSuppression::REASON_BOUNCE, $suppression->reason);
+        $this->assertSame($campaign->id, $suppression->campaign_id);
+
+        $campaign->refresh();
+        $this->assertSame(Campaign::STATUS_SENT, $campaign->status);
+        $this->assertSame(['recipients' => 2, 'sent' => 1, 'failed' => 1, 'skipped' => 0], $campaign->totals);
+    }
+
+    public function test_other_rejection_is_retried_and_fails_after_max_without_suppression(): void
+    {
+        [$campaign] = $this->started(['blok@klient.pl', 'dobry@klient.pl']);
+        // 5.7.1 (polityka serwera odbiorcy) nie mówi, że adres nie istnieje — ponawiamy do limitu prób
+        $this->mailers->transport->failFor['blok@klient.pl'] = new UnexpectedResponseException('Expected response code "250/251/252" but got code "550", with message "550 5.7.1 Message rejected by policy".', 550);
+
+        $this->artisan('campaigns:dispatch')->assertSuccessful();
+        $bad = CampaignRecipient::query()->where('email', 'blok@klient.pl')->firstOrFail();
+        $this->assertSame(['pending', 1], [$bad->status, $bad->attempts]);
 
         for ($run = 2; $run <= 3; $run++) {
             $this->travel(1)->minutes();
             $this->artisan('campaigns:dispatch')->assertSuccessful();
         }
         $bad->refresh();
-        $this->assertSame('failed', $bad->status);
-        $this->assertSame(3, $bad->attempts);
-        $campaign->refresh();
-        $this->assertSame(Campaign::STATUS_SENT, $campaign->status);
-        $this->assertSame(['recipients' => 2, 'sent' => 1, 'failed' => 1, 'skipped' => 0], $campaign->totals);
+        $this->assertSame(['failed', 3], [$bad->status, $bad->attempts]);
+        $this->assertSame(0, EmailSuppression::query()->count());
+        $this->assertSame(Campaign::STATUS_SENT, $campaign->fresh()->status);
     }
 
     public function test_cancel_during_sending_and_unsubscribed_recipient_is_skipped(): void

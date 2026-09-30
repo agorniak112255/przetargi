@@ -22,9 +22,10 @@ class CampaignRenderer
     public function __construct(private readonly CampaignItemPresenter $presenter) {}
 
     /**
+     * @param  string|null  $notice  informacja na górze maila (kopia dla nadawcy, test) — klient jej nie dostaje
      * @return array{subject: string, html: string, text: string}
      */
-    public function render(Campaign $campaign, ?CampaignRecipient $recipient = null, ?User $sender = null): array
+    public function render(Campaign $campaign, ?CampaignRecipient $recipient = null, ?User $sender = null, ?string $notice = null): array
     {
         $author = $campaign->user;
         $sender ??= $author;
@@ -99,6 +100,7 @@ class CampaignRenderer
             'fromAddress' => $fromAddress,
             'signature' => $account?->signature !== null && trim((string) $account->signature) !== '' ? (string) $account->signature : null,
             'unsubscribeUrl' => $recipient !== null && $publicUrl !== '' ? $publicUrl.'/api/wypis/'.$recipient->token : '#',
+            'notice' => $notice,
         ];
 
         return [
