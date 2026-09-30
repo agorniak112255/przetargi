@@ -44,6 +44,8 @@ final class ProductExcerpt
             }
             $bullet = preg_match('/^(?:[•\-–—*·▪►]|\d{1,2}[.)])\s*/u', $line) === 1;
             $clean = trim((string) preg_replace('/^(?:[•\-–—*·▪►]|\d{1,2}[.)])\s*/u', '', $line));
+            // linia od znaku przestankowego to ciąg poprzedniej („…M/L” ⏎ „. Wkładka…” z karty) — bez tego znaku
+            $clean = trim((string) preg_replace('/^[.,;:]+\s*/u', '', $clean));
             if ($clean === '' || self::isHeading($clean) || ($nameKey !== '' && self::key($clean) === $nameKey)) {
                 continue;
             }
@@ -140,8 +142,11 @@ final class ProductExcerpt
         return mb_strtolower(trim((string) preg_replace('/[^\p{L}\p{N}]+/u', ' ', $text)));
     }
 
+    /** Wielka litera na początku i kropki rozdzielone spacją scalone w jedną (także na styku sklejonych linii). */
     private static function upperFirst(string $text): string
     {
+        $text = (string) preg_replace('/\.(?:\s+\.)+(?!\.)/u', '.', $text);
+
         return mb_strtoupper(mb_substr($text, 0, 1)).mb_substr($text, 1);
     }
 }

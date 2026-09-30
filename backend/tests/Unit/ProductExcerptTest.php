@@ -78,6 +78,11 @@ final class ProductExcerptTest extends TestCase
             'Dohełmowa wkładka termiczna Surefit™ o wysokiej widoczności w kolorze pomarańczowym - M/L.',
             ProductExcerpt::fromDescription('Dohełmowa wkładka termiczna Surefit™ o wysokiej widoczności w kolorze pomarańczowym - M/L. .'),
         );
+        // prawdziwa karta AHV002 (produkcja 30.09): kropka na początku następnej linii
+        $this->assertSame(
+            'Dohełmowa wkładka termiczna Surefit™ o wysokiej widoczności w kolorze pomarańczowym - M/L. Wkładka termiczna SureFit™ jest w pełni dopuszczona do noszenia ze wszystkimi hełmami.',
+            ProductExcerpt::fromDescription("Dohełmowa wkładka termiczna Surefit™ o wysokiej widoczności w kolorze pomarańczowym - M/L\n. Wkładka termiczna SureFit™ jest w pełni dopuszczona do noszenia ze wszystkimi hełmami."),
+        );
         $this->assertSame(
             'Lekka kurtka przeciwdeszczowa z kapturem i taśmami odblaskowymi... do pracy na zewnątrz.',
             ProductExcerpt::fromDescription('Lekka kurtka przeciwdeszczowa z kapturem i taśmami odblaskowymi... do pracy na zewnątrz.'),
