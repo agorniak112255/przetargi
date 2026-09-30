@@ -2,11 +2,11 @@
 
 const DEFAULT_BASE_URL = 'https://przetargi.supon.rzeszow.pl'
 
-/** Limit `max:20000` w StoreClientInquiryRequest, z zapasem. */
-const MAX_BODY = 19000
+/** Treść samego maila — limit StoreClientInquiryRequest::MAX_BODY_CHARS z zapasem. */
+const MAX_BODY = 59000
 
-/** Sam limit `max:20000` — treść maila razem z tekstem załączników. */
-const MAX_INQUIRY_BODY = 20000
+/** Sam limit StoreClientInquiryRequest::MAX_BODY_CHARS — treść maila razem z tekstem załączników. */
+const MAX_INQUIRY_BODY = 60000
 
 /** Pliki, z których aplikacja wyciąga tekst zapytania (InquiryFileText::EXTENSIONS). */
 const ATTACHMENT_EXTENSIONS = ['pdf', 'xlsx', 'xls', 'csv', 'docx', 'doc']

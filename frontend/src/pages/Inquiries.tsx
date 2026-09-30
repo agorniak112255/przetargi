@@ -57,8 +57,8 @@ const channelLabel: Record<string, string> = {
   file: 'z pliku',
 }
 
-/** Tyle znaków przyjmuje zapytanie (walidacja `body` w API). */
-const BODY_LIMIT = 20000
+/** Tyle znaków przyjmuje zapytanie (StoreClientInquiryRequest::MAX_BODY_CHARS). */
+const BODY_LIMIT = 60000
 
 /** Pliki, z których API wyciąga tekst zapytania (InquiryFileText::EXTENSIONS). */
 const FILE_ACCEPT = '.xlsx,.xls,.csv,.pdf,.docx,.doc'

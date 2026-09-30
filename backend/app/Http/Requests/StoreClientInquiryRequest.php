@@ -10,6 +10,14 @@ use Illuminate\Validation\Rule;
 
 class StoreClientInquiryRequest extends FormRequest
 {
+    /**
+     * Najdłuższa treść zapytania. Do 30.09.2026 było 20 000 — za mało na pismo przetargowe z załącznika
+     * (opis odzieży ochronnej z formularzem ofertowym: 32 tys. znaków). 60 000 znaków to przy ostrożnym
+     * liczeniu klienta modelu (1,8 znaku na token) ok. 33 tys. tokenów — z zapasem na odpowiedź przy
+     * 50 pozycjach mieści się w oknie 65 536 tokenów bez przycinania treści.
+     */
+    public const MAX_BODY_CHARS = 60000;
+
     public function authorize(): bool
     {
         return $this->user()?->can('inquiries.use') ?? false;
@@ -21,7 +29,7 @@ class StoreClientInquiryRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'body' => ['required', 'string', 'min:20', 'max:20000'],
+            'body' => ['required', 'string', 'min:20', 'max:'.self::MAX_BODY_CHARS],
             'subject' => ['nullable', 'string', 'max:200'],
             'client_id' => ['nullable', 'integer', 'exists:clients,id'],
             // szablon listu do klienta — lista w ClientInquiry::TONES
@@ -48,6 +56,7 @@ class StoreClientInquiryRequest extends FormRequest
     {
         return [
             'body.min' => 'Wklej treść zapytania (co najmniej 20 znaków).',
+            'body.max' => 'Treść zapytania może mieć najwyżej 60 000 znaków — usuń fragmenty, które nie dotyczą zamawianych wyrobów.',
             'tone.in' => 'Nieznany szablon listu.',
             'source_from.max' => 'Nagłówek nadawcy może mieć najwyżej 400 znaków.',
             'source_sent_at.date' => 'Data wysłania maila jest nieczytelna.',

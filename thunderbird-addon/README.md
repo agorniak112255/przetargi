@@ -34,7 +34,8 @@ a odczytany tekst trafia do pola treści pod nagłówkiem
   cięty jak mail (cytat, stopka), a pismo z załącznika idzie do analizy w całości.
 - Zdjęcia, archiwa i pliki ponad 20 MB są wymienione jako pominięte. Skan PDF bez
   warstwy tekstowej wraca z komunikatem aplikacji i zostaje odznaczony.
-- Całość (mail + załączniki) może mieć najwyżej 20 000 znaków. Dodatek niczego nie
+- Całość (mail + załączniki) może mieć najwyżej 60 000 znaków (od 1.30.0; wcześniej
+  20 000 — za mało na opis przedmiotu zamówienia z formularzem). Dodatek niczego nie
   ucina — przy przekroczeniu wysyłka czeka, aż odznaczysz zbędny plik albo usuniesz wiersze.
 - „Wyślij do Przetargów” czeka, aż wszystkie zaznaczone pliki zostaną odczytane.
 

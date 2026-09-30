@@ -271,6 +271,45 @@ final class OpenAiTokenLimitTest extends TestCase
         Http::assertSent(fn (Request $request): bool => $request->url() === 'http://127.0.0.1:8000/v1/models');
     }
 
+    /**
+     * Limit treści zapytania (StoreClientInquiryRequest::MAX_BODY_CHARS = 60 000) jest dobrany do okna
+     * lokalnego modelu 65 536 tokenów: najdłuższe zapytanie z budżetem odpowiedzi dla 50 pozycji
+     * (EXTRACT_TOKENS: 1500 + 160 × 50 = 9500) idzie do modelu bez przycinania.
+     */
+    public function test_longest_inquiry_is_not_trimmed_for_local_model_with_65k_window(): void
+    {
+        AiSetting::query()->delete();
+        AiSetting::query()->create([
+            'enabled' => true,
+            'provider' => 'openai_compatible',
+            'base_url' => 'http://127.0.0.1:8000/v1',
+            'api_key' => 'local-key',
+            'model' => 'qwen38-27b-fast',
+            'timeout_seconds' => 30,
+            'temperature' => 0.1,
+        ]);
+        Http::fake([
+            '127.0.0.1:8000/v1/models' => Http::response([
+                'object' => 'list',
+                'data' => [['id' => 'qwen38-27b-fast', 'object' => 'model', 'owned_by' => 'vllm', 'max_model_len' => 65536]],
+            ], 200),
+            '127.0.0.1:8000/v1/chat/completions' => Http::response([
+                'choices' => [['message' => ['content' => '{"ok":true}'], 'finish_reason' => 'stop']],
+            ], 200),
+        ]);
+        $system = str_repeat('Instrukcja wyodrębniania pozycji zapytania. ', 50);
+        $body = mb_substr(str_repeat('1/ FARTUCH BIAŁY LABORATORYJNY, bawełna 100%, gramatura 210 g. ', 1000), 0, 60000);
+
+        app(OpenAiCompatibleClient::class)->chatJson([
+            ['role' => 'system', 'content' => $system],
+            ['role' => 'user', 'content' => $body],
+        ], 0.1, 9500);
+
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'http://127.0.0.1:8000/v1/chat/completions'
+            && ($request->data()['messages'][1]['content'] ?? '') === $body
+            && (int) ($request->data()['max_tokens'] ?? 0) === 9500);
+    }
+
     public function test_cloud_endpoint_keeps_long_prompt_and_requested_tokens(): void
     {
         $long = str_repeat('Karta katalogowa. ', 900);

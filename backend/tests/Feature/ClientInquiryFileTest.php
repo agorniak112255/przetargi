@@ -247,6 +247,50 @@ final class ClientInquiryFileTest extends TestCase
         $this->assertStringNotContainsString('600 100 200', (string) $seenByModel);
     }
 
+    /**
+     * 30.09.2026: opis odzieży ochronnej z formularzem ofertowym (32 tys. znaków) nie mieścił się w dawnym limicie
+     * 20 000. Takie pismo przechodzi w całości — do modelu trafia także jego ostatni wiersz.
+     */
+    public function test_long_tender_description_is_accepted_and_reaches_model_whole(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $seenByModel = null;
+        $this->mock(OpenAiCompatibleClient::class, function ($mock) use (&$seenByModel): void {
+            $mock->shouldReceive('chatJson')->once()->andReturnUsing(function (array $messages) use (&$seenByModel): array {
+                $seenByModel = (string) $messages[1]['content'];
+
+                return ['subject' => 'Oferta', 'questions' => [], 'product_queries' => [], 'line_items' => [], 'cards' => []];
+            });
+        });
+        $this->emptySearch();
+        Sanctum::actingAs($user);
+        $rows = '';
+        for ($i = 1; mb_strlen($rows) < 32000; $i++) {
+            $rows .= $i."/ FARTUCH BIAŁY LABORATORYJNY: fartuch płócienny biały, materiał 100% bawełna, gramatura 210 g.\n";
+        }
+        $body = "=== Plik klienta: Odzież ochronna - opis - 2026.docx ===\n".$rows.'OSTATNI WIERSZ OPISU';
+
+        $this->postJson('/api/inquiries', [
+            'body' => $body,
+            'tone' => 'formal',
+            'source_channel' => 'thunderbird',
+            'source_file_name' => 'Odzież ochronna - opis - 2026.docx',
+        ])->assertCreated();
+
+        $this->assertStringContainsString('OSTATNI WIERSZ OPISU', (string) $seenByModel);
+    }
+
+    public function test_body_over_the_limit_is_refused_with_a_reason(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+
+        $this->postJson('/api/inquiries', [
+            'body' => str_repeat('a', 60001),
+            'tone' => 'handlowy',
+        ])->assertStatus(422)
+            ->assertJsonPath('errors.body.0', 'Treść zapytania może mieć najwyżej 60 000 znaków — usuń fragmenty, które nie dotyczą zamawianych wyrobów.');
+    }
+
     public function test_file_name_is_not_recorded_for_pasted_mail(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();
