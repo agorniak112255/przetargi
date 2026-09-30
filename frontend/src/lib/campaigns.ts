@@ -49,6 +49,8 @@ export type CampaignListRow = {
   failed: number
   /** Odbiorcy, którzy kliknęli link w mailu (bez skanerów poczty). */
   clicked?: number
+  /** Odpowiedzi klientów odczytane ze skrzynki autora (IMAP). */
+  replies?: number
   created_at: string
   /** Zaplanowana godzina startu (UTC, ISO). */
   scheduled_at?: string | null
@@ -178,6 +180,33 @@ export type Campaign = {
   sales?: CampaignSales | null
   /** Kliknięcia w linki maila (ludzie; skanery poczty tylko w `bots`); null = projekt. */
   clicks?: CampaignClicks | null
+  /** Odpowiedzi klientów ze skrzynki autora (IMAP, tylko nagłówki); null = projekt. */
+  replies?: CampaignReplies | null
+}
+
+export type CampaignReplies = {
+  total: number
+  /** Ilu odbiorców kampanii odpowiedziało (odpowiedzi z nieznanych adresów liczą się tylko w `total`). */
+  recipients: number
+  /** Odczyt odpowiedzi włączony w „Moja poczta” autora. */
+  enabled: boolean
+  checked_at: string | null
+  error: string | null
+  /** Najnowsze 100. */
+  list: CampaignReplyRow[]
+}
+
+export type CampaignReplyRow = {
+  id: number
+  from_email: string
+  from_name: string | null
+  subject: string
+  /** Kod towaru z tematu „Zapytanie K-… KOD” — tylko gdy to jeden z kodów pozycji kampanii. */
+  item_code: string | null
+  /** code = temat z przycisku „Zapytaj o ofertę”, thread = odpowiedź na mail kampanii. */
+  matched_by: 'code' | 'thread'
+  received_at: string | null
+  recipient_email: string | null
 }
 
 export type CampaignClicks = {
@@ -238,6 +267,7 @@ export type CampaignRecipientRow = {
   unsubscribed_at: string | null
   first_clicked_at?: string | null
   clicks?: number
+  replied_at?: string | null
 }
 
 export type MailingList = {
@@ -288,6 +318,13 @@ export type UserMailAccount = {
   signature: string | null
   verified_at: string | null
   last_error: string | null
+  /** Liczenie odpowiedzi: odczyt nagłówków skrzynki (IMAP, tylko do odczytu). */
+  imap_enabled: boolean
+  /** null = ten sam serwer co SMTP. */
+  imap_host: string | null
+  imap_port: number
+  imap_checked_at: string | null
+  imap_error: string | null
 }
 
 export type UserMailAccountInput = {
@@ -303,6 +340,8 @@ export type UserMailAccountInput = {
   rate_per_hour: number
   copy_to_self: boolean
   signature: string | null
+  imap_enabled?: boolean
+  imap_host?: string | null
 }
 
 const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) })
@@ -447,7 +486,7 @@ export function saveMailAccount(body: UserMailAccountInput) {
 }
 
 export function testMailAccount() {
-  return api<{ ok: boolean; message: string }>('/me/mail-account/test', { method: 'POST' })
+  return api<{ ok: boolean; message: string; imap?: { ok: boolean; message: string } | null }>('/me/mail-account/test', { method: 'POST' })
 }
 
 export type XlCustomerSort = 'documents' | 'last_sale' | 'acronym' | 'name' | 'city'

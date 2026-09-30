@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\UserMailAccount;
+use App\Services\Campaigns\CampaignReplySync;
 use App\Services\Campaigns\CampaignSender;
 use App\Services\Campaigns\SmtpHostGuard;
 use Illuminate\Contracts\Encryption\DecryptException;
@@ -16,7 +17,7 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 /**
- * „Moje konto → Moja poczta”: skrzynka SMTP, z której wychodzą kampanie użytkownika. Hasło nigdy nie wraca w odpowiedzi
+ * „Moje konto → Moja poczta”: skrzynka SMTP, z której wychodzą kampanie użytkownika, i odczyt odpowiedzi (IMAP). Hasło nigdy nie wraca w odpowiedzi
  * (has_password); puste hasło przy zapisie = bez zmiany. Zmiana połączenia kasuje potwierdzenie testem.
  */
 class UserMailAccountController extends Controller
@@ -26,7 +27,13 @@ class UserMailAccountController extends Controller
     /** Pola, których zmiana wymaga ponownego testu skrzynki. */
     private const CONNECTION_FIELDS = ['from_address', 'host', 'port', 'scheme', 'username', 'password', 'verify_peer'];
 
-    public function __construct(private readonly CampaignSender $sender) {}
+    /** Odczyt odpowiedzi: tylko IMAP z SSL od początku połączenia. */
+    private const IMAP_PORTS = [993];
+
+    public function __construct(
+        private readonly CampaignSender $sender,
+        private readonly CampaignReplySync $replies,
+    ) {}
 
     public function show(Request $request): JsonResponse
     {
@@ -51,7 +58,13 @@ class UserMailAccountController extends Controller
             'rate_per_hour' => ['required', 'integer', 'min:1', 'max:2000'],
             'copy_to_self' => ['sometimes', 'boolean'],
             'signature' => ['nullable', 'string', 'max:2000'],
+            // odczyt odpowiedzi klientów (IMAP, tylko nagłówki); host pusty = ten sam co SMTP
+            'imap_enabled' => ['sometimes', 'boolean'],
+            'imap_host' => ['nullable', 'string', 'max:255', 'regex:/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/'],
+            'imap_port' => ['sometimes', 'integer', Rule::in(self::IMAP_PORTS)],
         ], [
+            'imap_host.regex' => 'Podaj sam adres serwera IMAP, np. imap.firma.pl.',
+            'imap_port.in' => 'Odczyt odpowiedzi działa przez IMAP z SSL (port 993).',
             'from_name.not_regex' => 'Nazwa nadawcy musi być jedną linią.',
             'host.regex' => 'Podaj sam adres serwera, np. smtp.firma.pl.',
             'port.in' => 'Dozwolone porty: '.implode(', ', (array) config('campaigns.smtp_ports')).'.',
@@ -60,6 +73,10 @@ class UserMailAccountController extends Controller
         $hostProblem = $hosts->problem($v['host']);
         if ($hostProblem !== null) {
             throw ValidationException::withMessages(['host' => [$hostProblem]]);
+        }
+        $imapHost = isset($v['imap_host']) && trim((string) $v['imap_host']) !== '' ? mb_strtolower(trim((string) $v['imap_host'])) : null;
+        if ($imapHost !== null && ($imapProblem = $hosts->problem($imapHost)) !== null) {
+            throw ValidationException::withMessages(['imap_host' => [$imapProblem]]);
         }
 
         $password = (string) ($v['password'] ?? '');
@@ -91,6 +108,9 @@ class UserMailAccountController extends Controller
             'rate_per_hour' => (int) $v['rate_per_hour'],
             'copy_to_self' => (bool) ($v['copy_to_self'] ?? $account?->copy_to_self ?? true),
             'signature' => isset($v['signature']) && trim($v['signature']) !== '' ? rtrim($v['signature']) : null,
+            'imap_enabled' => (bool) ($v['imap_enabled'] ?? $account?->imap_enabled ?? true),
+            'imap_host' => array_key_exists('imap_host', $v) ? $imapHost : $account?->imap_host,
+            'imap_port' => (int) ($v['imap_port'] ?? $account?->imap_port ?? 993),
         ];
         if ($password !== '') {
             $data['password'] = $password;
@@ -103,13 +123,19 @@ class UserMailAccountController extends Controller
             $account->verified_at = null;
             $account->last_error = null;
         }
+        // inna skrzynka IMAP = inna numeracja wiadomości — odczyt odpowiedzi zaczyna się od nowa
+        if ($account->exists && $account->isDirty(['imap_host', 'imap_port', 'username', 'host'])) {
+            $account->imap_uidvalidity = null;
+            $account->imap_last_uid = null;
+            $account->imap_error = null;
+        }
         $account->user_id = $user->id;
         $account->save();
 
         return response()->json($this->present($account->fresh()));
     }
 
-    /** Krótki mail na adres nadawcy — potwierdza, że logowanie i wysyłka działają. */
+    /** Krótki mail na adres nadawcy (wysyłka) i logowanie IMAP (odczyt odpowiedzi, gdy włączony). */
     public function test(Request $request): JsonResponse
     {
         $account = $this->account($request->user());
@@ -117,8 +143,9 @@ class UserMailAccountController extends Controller
             abort(422, 'Najpierw zapisz ustawienia skrzynki.');
         }
         $result = $this->sender->testAccount($account);
+        $imap = $account->imap_enabled ? $this->replies->test($account->fresh() ?? $account) : null;
 
-        return response()->json(['ok' => (bool) $result['ok'], 'message' => (string) $result['message']]);
+        return response()->json(['ok' => (bool) $result['ok'], 'message' => (string) $result['message'], 'imap' => $imap]);
     }
 
     private function account(User $user): ?UserMailAccount
@@ -144,6 +171,11 @@ class UserMailAccountController extends Controller
             'signature' => $a?->signature,
             'verified_at' => $a?->verified_at?->toIso8601String(),
             'last_error' => $a?->last_error,
+            'imap_enabled' => $a !== null ? (bool) $a->imap_enabled : true,
+            'imap_host' => $a?->imap_host,
+            'imap_port' => $a !== null ? (int) $a->imap_port : 993,
+            'imap_checked_at' => $a?->imap_checked_at?->toIso8601String(),
+            'imap_error' => $a?->imap_error,
         ];
     }
 }

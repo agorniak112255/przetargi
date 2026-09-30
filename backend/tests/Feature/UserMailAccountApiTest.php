@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use App\Models\UserMailAccount;
+use App\Services\Campaigns\CampaignReplySync;
 use App\Services\Campaigns\CampaignSender;
 use App\Services\Campaigns\SmtpHostGuard;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -22,6 +23,9 @@ final class UserMailAccountApiTest extends TestCase
 
     private RecordingCampaignSender $sender;
 
+    /** @var list<int> konta, dla których „Sprawdź połączenie” testował odczyt IMAP */
+    public array $imapTests = [];
+
     /** @var array<string, list<string>> nazwa serwera → adresy IP (DNS w testach bez sieci) */
     private array $dns = ['smtp.supon.pl' => ['212.77.98.9'], 'smtp2.supon.pl' => ['212.77.98.10']];
 
@@ -32,7 +36,22 @@ final class UserMailAccountApiTest extends TestCase
         $this->sender = new RecordingCampaignSender;
         $this->sender->accountResult = ['ok' => false, 'message' => 'Serwer odrzucił logowanie.'];
         $this->app->instance(CampaignSender::class, $this->sender);
-        $this->app->instance(SmtpHostGuard::class, new SmtpHostGuard(fn (string $host): array => $this->dns[$host] ?? []));
+        $this->app->instance(SmtpHostGuard::class, $guard = new SmtpHostGuard(fn (string $host): array => $this->dns[$host] ?? []));
+        $test = $this;
+        $this->app->instance(CampaignReplySync::class, new class($guard, $test) extends CampaignReplySync
+        {
+            public function __construct(SmtpHostGuard $hosts, private readonly UserMailAccountApiTest $test)
+            {
+                parent::__construct($hosts);
+            }
+
+            public function test(UserMailAccount $account): array
+            {
+                $this->test->imapTests[] = (int) $account->id;
+
+                return ['ok' => true, 'message' => 'Odczyt odpowiedzi działa (skrzynka odbiorcza: 3 wiadomości).'];
+            }
+        });
     }
 
     public function test_show_empty_then_save_and_password_never_returned(): void
@@ -103,8 +122,18 @@ final class UserMailAccountApiTest extends TestCase
         $this->assertSame([], $this->sender->calls);
 
         $this->putJson('/api/me/mail-account', $this->input())->assertOk();
-        $this->postJson('/api/me/mail-account/test')->assertOk()->assertExactJson(['ok' => false, 'message' => 'Serwer odrzucił logowanie.']);
-        $this->assertSame([['testAccount', [(int) UserMailAccount::query()->where('user_id', $user->id)->value('id')]]], $this->sender->calls);
+        $accountId = (int) UserMailAccount::query()->where('user_id', $user->id)->value('id');
+        $this->postJson('/api/me/mail-account/test')->assertOk()->assertExactJson([
+            'ok' => false, 'message' => 'Serwer odrzucił logowanie.',
+            'imap' => ['ok' => true, 'message' => 'Odczyt odpowiedzi działa (skrzynka odbiorcza: 3 wiadomości).'],
+        ]);
+        $this->assertSame([['testAccount', [$accountId]]], $this->sender->calls);
+        $this->assertSame([$accountId], $this->imapTests);
+
+        // odczyt odpowiedzi wyłączony — test tylko wysyłki
+        $this->putJson('/api/me/mail-account', [...$this->input(), 'password' => '', 'imap_enabled' => false])->assertOk();
+        $this->postJson('/api/me/mail-account/test')->assertOk()->assertJsonPath('imap', null);
+        $this->assertSame([$accountId], $this->imapTests);
 
         // inny użytkownik nie widzi cudzej skrzynki
         Sanctum::actingAs($other);
@@ -149,6 +178,45 @@ final class UserMailAccountApiTest extends TestCase
         $this->dns['smtp.supon.pl'] = ['127.0.0.1'];
         $this->putJson('/api/me/mail-account', [...$this->input(), 'password' => '', 'signature' => 'x'])
             ->assertUnprocessable()->assertJsonValidationErrors('host');
+    }
+
+    public function test_imap_settings_and_reset_of_read_position(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        Sanctum::actingAs($user);
+
+        // domyślnie odczyt włączony, serwer IMAP = serwer SMTP, port 993
+        $this->putJson('/api/me/mail-account', $this->input())->assertOk()
+            ->assertJsonPath('imap_enabled', true)
+            ->assertJsonPath('imap_host', null)
+            ->assertJsonPath('imap_port', 993)
+            ->assertJsonPath('imap_checked_at', null)
+            ->assertJsonPath('imap_error', null);
+
+        $this->putJson('/api/me/mail-account', [...$this->input(), 'imap_port' => 143])->assertUnprocessable()->assertJsonValidationErrors('imap_port');
+        $this->putJson('/api/me/mail-account', [...$this->input(), 'imap_host' => 'imap.supon.pl/x'])->assertUnprocessable()->assertJsonValidationErrors('imap_host');
+        $this->dns['imap.lan.supon.pl'] = ['192.168.1.10'];
+        $this->putJson('/api/me/mail-account', [...$this->input(), 'imap_host' => 'imap.lan.supon.pl'])
+            ->assertUnprocessable()->assertJsonPath('errors.imap_host.0', SmtpHostGuard::NOT_PUBLIC);
+
+        // odczytana pozycja zostaje przy zmianie podpisu, zeruje się przy innym serwerze IMAP
+        $account = UserMailAccount::query()->where('user_id', $user->id)->firstOrFail();
+        $account->forceFill(['imap_uidvalidity' => 7, 'imap_last_uid' => 120, 'imap_error' => 'stary błąd'])->save();
+        $this->putJson('/api/me/mail-account', [...$this->input(), 'password' => '', 'signature' => 'Pozdrawiam'])->assertOk()
+            ->assertJsonPath('imap_error', 'stary błąd');
+        $this->assertSame(120, (int) $account->fresh()->imap_last_uid);
+
+        $this->dns['imap.supon.pl'] = ['212.77.98.11'];
+        $this->putJson('/api/me/mail-account', [...$this->input(), 'password' => '', 'imap_host' => ' IMAP.supon.pl '])->assertOk()
+            ->assertJsonPath('imap_host', 'imap.supon.pl')
+            ->assertJsonPath('imap_error', null);
+        $fresh = $account->fresh();
+        $this->assertNull($fresh->imap_uidvalidity);
+        $this->assertNull($fresh->imap_last_uid);
+
+        // pole pominięte w zapisie — ustawienie zostaje; wyłączenie odczytu
+        $this->putJson('/api/me/mail-account', [...$this->input(), 'password' => ''])->assertOk()->assertJsonPath('imap_host', 'imap.supon.pl');
+        $this->putJson('/api/me/mail-account', [...$this->input(), 'password' => '', 'imap_enabled' => false])->assertOk()->assertJsonPath('imap_enabled', false);
     }
 
     public function test_new_password_replaces_unreadable_one(): void

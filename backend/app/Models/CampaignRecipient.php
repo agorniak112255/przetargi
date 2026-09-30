@@ -41,6 +41,7 @@ class CampaignRecipient extends Model
         'unsubscribed_at',
         'first_clicked_at',
         'clicks',
+        'replied_at',
     ];
 
     protected function casts(): array
@@ -51,6 +52,7 @@ class CampaignRecipient extends Model
             'unsubscribed_at' => 'datetime',
             'first_clicked_at' => 'datetime',
             'clicks' => 'integer',
+            'replied_at' => 'datetime',
         ];
     }
 

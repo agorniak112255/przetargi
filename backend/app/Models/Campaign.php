@@ -122,4 +122,10 @@ class Campaign extends Model
     {
         return $this->hasMany(CampaignRecipient::class);
     }
+
+    /** @return HasMany<CampaignReply, $this> */
+    public function replies(): HasMany
+    {
+        return $this->hasMany(CampaignReply::class);
+    }
 }

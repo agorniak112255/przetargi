@@ -56,6 +56,7 @@ import {
   type CampaignRecipientStatus,
   type CampaignTotals,
   type CampaignClicks,
+  type CampaignReplies,
   type CampaignSales,
   type CampaignXlMode,
   type MailingList,
@@ -2059,6 +2060,8 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
 
       {campaign.clicks && <ClickedPanel campaign={campaign} clicks={campaign.clicks} tick={tick} />}
 
+      {campaign.replies && <RepliesPanel campaign={campaign} replies={campaign.replies} />}
+
       <div className="overflow-x-auto rounded-xl bg-white p-4 shadow-sm">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
           <b className="text-sm text-slate-900">Odbiorcy</b>
@@ -2094,6 +2097,7 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
               <th className="p-2">Status</th>
               <th className="p-2">Wysłano</th>
               <th className="p-2 text-right">Kliknięcia</th>
+              <th className="p-2">Odpowiedź</th>
               <th className="p-2">Uwagi</th>
             </tr>
           </thead>
@@ -2114,6 +2118,13 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
                 <td className="whitespace-nowrap p-2 text-right tabular-nums">
                   {r.clicks ? <b className="font-semibold text-blue-700">{fmtInt(r.clicks)}</b> : <span className="text-slate-400">—</span>}
                 </td>
+                <td className="whitespace-nowrap p-2 tabular-nums">
+                  {r.replied_at ? (
+                    <span className="font-medium text-emerald-700">{fmtDateTime(r.replied_at)}</span>
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  )}
+                </td>
                 <td className="max-w-[24rem] p-2 text-[11px]">
                   {r.error && <span className="break-words text-red-700">{r.error}</span>}
                   {r.error && r.status === 'pending' && (
@@ -2125,7 +2136,7 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
             ))}
             {rows !== null && rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-slate-500">
+                <td colSpan={7} className="p-6 text-center text-slate-500">
                   Brak odbiorców w tym widoku.
                 </td>
               </tr>
@@ -2336,6 +2347,85 @@ function ItemClicksCell({ clicks, itemId }: { clicks: CampaignClicks | null; ite
 }
 
 /**
+ * „Odpowiedzi klientów”: maile w skrzynce autora z kodem kampanii w temacie („Zapytaj o ofertę”) albo odpowiedzi na mail
+ * kampanii. Z nagłówków (IMAP co 10 min) — treści nie czytamy, więc tu tylko kto, kiedy i o który towar pyta.
+ */
+function RepliesPanel({ campaign, replies }: { campaign: Campaign; replies: CampaignReplies }) {
+  const sent = campaign.totals?.sent ?? 0
+  const others = replies.list.filter((r) => r.recipient_email === null).length
+  return (
+    <div className="rounded-xl bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-2.5">
+        <b className="text-sm text-slate-900">Odpowiedzi klientów</b>
+        <span className="text-[11px] text-slate-500">
+          {fmtInt(replies.total)} {plural(replies.total, 'odpowiedź', 'odpowiedzi', 'odpowiedzi')} · odpowiedziało{' '}
+          {fmtInt(replies.recipients)} z {fmtInt(sent)} {plural(sent, 'odbiorcy', 'odbiorców', 'odbiorców')}
+          {replies.checked_at ? ` · skrzynka sprawdzona ${fmtDateTime(replies.checked_at)}` : ''}
+        </span>
+      </div>
+      {!replies.enabled ? (
+        <p className="px-4 py-3 text-xs text-slate-600">
+          Liczenie odpowiedzi jest wyłączone w skrzynce autora kampanii (Moje konto → Moja poczta).
+        </p>
+      ) : (
+        replies.error && (
+          <p className="mx-4 mt-3 break-words rounded bg-red-50 px-3 py-2 text-xs text-red-700">
+            Ostatni odczyt skrzynki nie udał się: {replies.error}
+          </p>
+        )
+      )}
+      {replies.list.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b bg-slate-50">
+                <th className="p-2">Od</th>
+                <th className="p-2">Otrzymano</th>
+                <th className="p-2">Towar</th>
+                <th className="p-2">Temat</th>
+              </tr>
+            </thead>
+            <tbody>
+              {replies.list.map((r) => (
+                <tr key={r.id} className="border-b align-top">
+                  <td className="p-2">
+                    <span className="font-mono text-slate-900">{r.from_email}</span>
+                    {r.from_name && <span className="block text-[11px] text-slate-500">{r.from_name}</span>}
+                    {r.recipient_email === null ? (
+                      <span className="block text-[10px] text-amber-800">spoza listy odbiorców (np. przekazany mail)</span>
+                    ) : (
+                      r.recipient_email.toLowerCase() !== r.from_email && (
+                        <span className="block text-[10px] text-slate-500">odbiorca kampanii: {r.recipient_email}</span>
+                      )
+                    )}
+                  </td>
+                  <td className="whitespace-nowrap p-2 tabular-nums text-slate-600">{fmtDateTime(r.received_at)}</td>
+                  <td className="whitespace-nowrap p-2 font-mono text-slate-700">{r.item_code ?? '—'}</td>
+                  <td className="max-w-[28rem] p-2">
+                    <span className="break-words text-slate-800">{r.subject || '(bez tematu)'}</span>
+                    <span className="block text-[10px] text-slate-500">
+                      {r.matched_by === 'code' ? 'kod kampanii w temacie' : 'odpowiedź na mail kampanii'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        replies.enabled && <p className="px-4 py-3 text-xs text-slate-500">Na razie brak odpowiedzi.</p>
+      )}
+      <p className="px-4 py-3 text-[11px] text-slate-500">
+        Liczymy maile w skrzynce odbiorczej autora z kodem {campaign.code} w temacie (przycisk „Zapytaj o ofertę”) i
+        odpowiedzi na mail kampanii. Autoodpowiedzi („jestem na urlopie”) i zwrotki serwera pomijamy. Treści maili nie
+        czytamy — odpowiadasz klientowi jak zwykle ze swojej poczty.
+        {others > 0 ? ' Odpowiedź spoza listy odbiorców to zwykle ktoś, komu klient przekazał mail.' : ''}
+      </p>
+    </div>
+  )
+}
+
+/**
  * „Kliknęli — do kogo zadzwonić”: odbiorcy, którzy kliknęli produkt albo „Zapytaj o ofertę”, od najczęściej klikających.
  * Kliknięcia skanerów poczty (zaraz po doręczeniu, automaty) nie liczą się.
  */
@@ -2398,7 +2488,8 @@ function ClickedPanel({ campaign, clicks, tick }: { campaign: Campaign; clicks: 
       )}
       <p className="px-4 py-3 text-[11px] text-slate-500">
         Liczymy wejścia na stronę produktu (zdjęcie, nazwa, „Zobacz produkt”). „Zapytaj o ofertę” otwiera od razu program
-        pocztowy klienta, więc tego kliknięcia nie widać — odpowiedź trafi do Twojej skrzynki z kodem kampanii w temacie.
+        pocztowy klienta, więc tego kliknięcia nie widać — mail z kodem kampanii w temacie liczymy niżej w „Odpowiedziach
+        klientów”.
         Otwarć maila nie liczymy (programy pocztowe je zawyżają); kliknięcia w ciągu minuty od doręczenia i od automatów to
         skanery poczty.
       </p>

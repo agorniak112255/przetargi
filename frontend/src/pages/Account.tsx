@@ -228,6 +228,8 @@ type MailForm = {
   rate_per_hour: number
   copy_to_self: boolean
   signature: string
+  imap_enabled: boolean
+  imap_host: string
 }
 
 function mailFormFrom(a: UserMailAccount, user: User | null): MailForm {
@@ -244,6 +246,8 @@ function mailFormFrom(a: UserMailAccount, user: User | null): MailForm {
     rate_per_hour: a.rate_per_hour,
     copy_to_self: a.copy_to_self,
     signature: a.signature ?? '',
+    imap_enabled: a.imap_enabled,
+    imap_host: a.imap_host ?? '',
   }
 }
 
@@ -280,7 +284,11 @@ function MailAccountForm() {
   const [busy, setBusy] = useState<'save' | 'test' | false>(false)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
-  const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null)
+  const [test, setTest] = useState<{
+    ok: boolean
+    message: string
+    imap?: { ok: boolean; message: string } | null
+  } | null>(null)
 
   function apply(a: UserMailAccount) {
     const f = mailFormFrom(a, user)
@@ -295,7 +303,7 @@ function MailAccountForm() {
       const a = await getMailAccount()
       apply(a)
       const rare = PORT_CHOICES.find((c) => c.port === a.port)?.rare ?? false
-      setAdvanced(rare || !a.verify_peer)
+      setAdvanced(rare || !a.verify_peer || !!a.imap_host)
     } catch (ex) {
       setLoadErr(ex instanceof Error ? ex.message : 'Błąd')
     }
@@ -355,6 +363,8 @@ function MailAccountForm() {
       rate_per_hour: form.rate_per_hour,
       copy_to_self: form.copy_to_self,
       signature: form.signature.trim() === '' ? null : form.signature,
+      imap_enabled: form.imap_enabled,
+      imap_host: form.imap_host.trim() === '' ? null : form.imap_host.trim(),
     }
     if (form.password !== '') body.password = form.password
     try {
@@ -529,6 +539,21 @@ function MailAccountForm() {
               onChange={(e) => set('signature', e.target.value)}
             />
           </MailField>
+          <label className="flex items-start gap-2 text-sm text-slate-700">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={form.imap_enabled}
+              onChange={(e) => set('imap_enabled', e.target.checked)}
+            />
+            <span>
+              Licz odpowiedzi klientów na moje kampanie
+              <span className="block text-[11px] text-slate-500">
+                Co 10 minut program czyta z tej skrzynki tylko nadawcę, temat i datę nowych maili (bez treści). Nic w
+                skrzynce nie zmienia i nie oznacza maili jako przeczytane.
+              </span>
+            </span>
+          </label>
           <details
             className="rounded border border-slate-200 px-3 py-2 text-sm"
             open={advanced}
@@ -548,6 +573,20 @@ function MailAccountForm() {
                 Wyłącz tylko wtedy, gdy test pokazuje błąd certyfikatu, a serwer poczty jest Twojej firmy. Tu są też
                 rzadkie porty 25 i 2525 — w polu „Port i szyfrowanie”, tylko gdy tak podaje dostawca poczty.
               </p>
+              <MailField
+                id="mail-imap-host"
+                label="Serwer IMAP (odczyt odpowiedzi)"
+                hint="puste = ten sam co serwer SMTP; zawsze port 993 z SSL, login i hasło jak wyżej"
+              >
+                <input
+                  id="mail-imap-host"
+                  className={`${inputClass} max-w-xs`}
+                  value={form.imap_host}
+                  maxLength={255}
+                  placeholder={form.host.trim() || 'np. imap.firma.pl'}
+                  onChange={(e) => set('imap_host', e.target.value)}
+                />
+              </MailField>
             </div>
           </details>
           <div className="flex flex-wrap items-center gap-2">
@@ -566,7 +605,7 @@ function MailAccountForm() {
               title={
                 !account.configured && !dirty
                   ? 'Najpierw uzupełnij i zapisz skrzynkę'
-                  : 'Zapisuje zmiany, łączy się z serwerem i wysyła wiadomość testową na adres nadawcy'
+                  : 'Zapisuje zmiany, łączy się z serwerem, wysyła wiadomość testową na adres nadawcy i sprawdza odczyt odpowiedzi'
               }
             >
               {busy === 'test' ? 'Sprawdzam…' : 'Sprawdź połączenie i wyślij test do siebie'}
@@ -578,6 +617,14 @@ function MailAccountForm() {
             >
               {test.ok ? '✓ ' : ''}
               {test.message}
+            </p>
+          )}
+          {test?.imap && (
+            <p
+              className={`rounded px-3 py-2 text-xs ${test.imap.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}
+            >
+              {test.imap.ok ? '✓ ' : ''}
+              {test.imap.message}
             </p>
           )}
         </form>
@@ -600,7 +647,24 @@ function MailAccountForm() {
             <dd className="text-right tabular-nums">{account.rate_per_hour} na godz.</dd>
             <dt className="text-slate-500">Kopia do mnie</dt>
             <dd className="text-right">{account.copy_to_self ? 'tak' : 'nie'}</dd>
+            <dt className="text-slate-500">Odpowiedzi</dt>
+            <dd className="text-right">
+              {!account.configured || !account.imap_enabled ? (
+                <span className="text-slate-500">nie liczone</span>
+              ) : account.imap_error ? (
+                <span className="text-red-700">błąd odczytu</span>
+              ) : account.imap_checked_at ? (
+                <span className="text-emerald-700">liczone (odczyt {shortDateTime(account.imap_checked_at)})</span>
+              ) : (
+                <span className="text-slate-600">po pierwszej kampanii</span>
+              )}
+            </dd>
           </dl>
+          {account.configured && account.imap_enabled && account.imap_error && (
+            <p className="mt-2 break-words rounded bg-red-50 px-2 py-1.5 text-red-700">
+              Odczyt odpowiedzi: {account.imap_error}
+            </p>
+          )}
           {account.configured && account.last_error && (
             <p className="mt-2 break-words rounded bg-red-50 px-2 py-1.5 text-red-700">
               Ostatni błąd: {account.last_error}

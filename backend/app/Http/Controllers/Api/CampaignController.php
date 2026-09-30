@@ -9,6 +9,7 @@ use App\Models\Campaign;
 use App\Models\CampaignClick;
 use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
+use App\Models\CampaignReply;
 use App\Models\EmailSuppression;
 use App\Models\ErpItemLink;
 use App\Models\MailingList;
@@ -97,6 +98,7 @@ class CampaignController extends Controller
                 'recipients as recipients_total',
                 'recipients as sent_count' => fn (Builder $q) => $q->where('status', CampaignRecipient::STATUS_SENT),
                 'recipients as clicked_count' => fn (Builder $q) => $q->where('clicks', '>', 0),
+                'replies',
                 'recipients as failed_count' => fn (Builder $q) => $q->where('status', CampaignRecipient::STATUS_FAILED),
             ])
             ->selectSub(
@@ -554,6 +556,7 @@ class CampaignController extends Controller
                 'unsubscribed_at' => $r->unsubscribed_at?->toIso8601String(),
                 'first_clicked_at' => $r->first_clicked_at?->toIso8601String(),
                 'clicks' => (int) $r->clicks,
+                'replied_at' => $r->replied_at?->toIso8601String(),
             ])->values()->all(),
             'meta' => [
                 'current_page' => $page->currentPage(),
@@ -807,6 +810,8 @@ class CampaignController extends Controller
             'failed' => (int) $c->getAttribute('failed_count'),
             // odbiorcy, którzy kliknęli link w mailu (bez skanerów poczty)
             'clicked' => (int) $c->getAttribute('clicked_count'),
+            // odpowiedzi klientów odczytane ze skrzynki handlowca (IMAP)
+            'replies' => (int) $c->getAttribute('replies_count'),
             'created_at' => $c->created_at?->toIso8601String(),
             'scheduled_at' => $c->scheduled_at?->toIso8601String(),
             'sending_started_at' => $c->sending_started_at?->toIso8601String(),
@@ -851,6 +856,7 @@ class CampaignController extends Controller
             'warnings' => $this->warnings($campaign, $viewer),
             'sales' => $campaign->sending_started_at === null ? null : $this->sales->forCampaign($campaign),
             'clicks' => $campaign->sending_started_at === null ? null : $this->clickSummary($campaign),
+            'replies' => $campaign->sending_started_at === null ? null : $this->replySummary($campaign),
         ];
     }
 
@@ -889,6 +895,35 @@ class CampaignController extends Controller
             'total' => $total,
             'bots' => $bots,
             'items' => array_values($items),
+        ];
+    }
+
+    /**
+     * Odpowiedzi klientów (ze skrzynki autora, IMAP): liczba, ilu odbiorców odpowiedziało, ostatnie 100 i stan odczytu.
+     *
+     * @return array<string, mixed>
+     */
+    private function replySummary(Campaign $campaign): array
+    {
+        $account = UserMailAccount::query()->where('user_id', $campaign->user_id)->first(['imap_enabled', 'imap_checked_at', 'imap_error']);
+
+        return [
+            'total' => $campaign->replies()->count(),
+            'recipients' => $campaign->replies()->whereNotNull('campaign_recipient_id')->distinct()->count('campaign_recipient_id'),
+            'enabled' => $account !== null && (bool) $account->imap_enabled,
+            'checked_at' => $account?->imap_checked_at?->toIso8601String(),
+            'error' => $account?->imap_error,
+            'list' => $campaign->replies()->with('recipient:id,email')->orderByDesc('received_at')->limit(100)->get()
+                ->map(static fn (CampaignReply $r): array => [
+                    'id' => (int) $r->id,
+                    'from_email' => $r->from_email,
+                    'from_name' => $r->from_name,
+                    'subject' => $r->subject,
+                    'item_code' => $r->item_code,
+                    'matched_by' => $r->matched_by,
+                    'received_at' => $r->received_at?->toIso8601String(),
+                    'recipient_email' => $r->recipient?->email,
+                ])->values()->all(),
         ];
     }
 

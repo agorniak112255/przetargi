@@ -63,6 +63,8 @@ return Application::configure(basePath: dirname(__DIR__))
         // Kampanie: kolejna partia maili w limicie godzinowym skrzynki każdego nadawcy; blokada, żeby dwa przebiegi
         // nie wysłały tego samego adresu
         $schedule->command('campaigns:dispatch')->everyMinute()->withoutOverlapping(10)->runInBackground();
+        // odpowiedzi klientów na kampanie: nagłówki skrzynek handlowców (IMAP, tylko odczyt), przyrostowo
+        $schedule->command('campaigns:replies')->everyTenMinutes()->withoutOverlapping(30)->runInBackground();
         // wynik kampanii: stan pozycji po 7 i 30 dniach od wysyłki — po nocnym odczycie XL
         $schedule->command('campaigns:stock-followup')->dailyAt('04:40')->withoutOverlapping(30);
         // sygnał, że cron serwera (schedule:run) działa — okno „Sprawdź teraz” ostrzega, gdy go brak
