@@ -30,6 +30,7 @@ import {
 } from '../lib/campaignFormat'
 import {
   CAMPAIGN_LAYOUT_LABEL,
+  LAYOUTS_WITH_DESCRIPTION,
   applyTemplate,
   campaignAudience,
   campaignPreview,
@@ -606,6 +607,10 @@ function ItemsStep({
   const [cardFor, setCardFor] = useState<CampaignItem | null>(null)
   const items = campaign.items
   const full = items.length >= MAX_ITEMS
+  // czy obecny układ produktów pokazuje krótki opis (podpowiedź przy polu „Opis w mailu”)
+  const productsBlock = campaign.blocks.find((b) => b.type === 'products')
+  const layout = productsBlock?.type === 'products' ? productsBlock.layout : null
+  const layoutShowsDescription = layout !== null && LAYOUTS_WITH_DESCRIPTION.includes(layout)
 
   const patchItem = (item: CampaignItem, patch: CampaignItemPatch) =>
     mutate(() => updateCampaignItem(campaign.id, item.id, patch), 'Nie udało się zapisać pozycji.')
@@ -655,6 +660,7 @@ function ItemsStep({
                   editable={editable}
                   margin={margin}
                   onPatch={(p) => patchItem(item, p)}
+                  layoutShowsDescription={layoutShowsDescription}
                   onRemove={() => void mutate(() => removeCampaignItem(campaign.id, item.id), 'Nie udało się usunąć pozycji.')}
                   onPickCard={() => setCardFor(item)}
                   onInvalid={onError}
@@ -751,6 +757,7 @@ function ItemRow({
   editable,
   margin,
   onPatch,
+  layoutShowsDescription,
   onRemove,
   onPickCard,
   onInvalid,
@@ -759,6 +766,7 @@ function ItemRow({
   editable: boolean
   margin: number | undefined
   onPatch: (patch: CampaignItemPatch) => Promise<Campaign | null>
+  layoutShowsDescription: boolean
   onRemove: () => void
   onPickCard: () => void
   onInvalid: (message: string) => void
@@ -790,6 +798,7 @@ function ItemRow({
               ))}
             </div>
             <CardLine item={item} editable={editable} onPatch={onPatch} onPickCard={onPickCard} />
+            <DescriptionField item={item} editable={editable} onPatch={onPatch} layoutShowsDescription={layoutShowsDescription} />
           </div>
         </div>
       </td>
@@ -844,6 +853,94 @@ function ItemRow({
         </td>
       )}
     </tr>
+  )
+}
+
+/**
+ * Krótki opis w mailu (układy „z opisem”): pusty = wycinek opisu karty (pierwsze zdania, nic dopisanego).
+ * Zapis po wyjściu z pola; pusty tekst przywraca opis z karty.
+ */
+function DescriptionField({
+  item,
+  editable,
+  onPatch,
+  layoutShowsDescription,
+}: {
+  item: CampaignItem
+  editable: boolean
+  onPatch: (patch: CampaignItemPatch) => Promise<Campaign | null>
+  layoutShowsDescription: boolean
+}) {
+  const [value, setValue] = useState(item.description ?? '')
+  const [open, setOpen] = useState(item.description !== null)
+  useEffect(() => {
+    setValue(item.description ?? '')
+  }, [item.description])
+
+  function commit() {
+    const next = value.trim() === '' ? null : value.trim()
+    if (next !== item.description) void onPatch({ description: next })
+  }
+
+  const inMail = item.description ?? item.card_excerpt
+  return (
+    <div className="mt-1.5 max-w-[34rem] text-[11px]">
+      <div className="flex flex-wrap items-baseline gap-x-1.5 text-slate-600">
+        <span className="font-medium text-slate-700">Opis w mailu:</span>
+        {!layoutShowsDescription && <span className="text-slate-400">(obecny układ go nie pokazuje)</span>}
+        {!open && (
+          <>
+            <span className={inMail ? 'text-slate-700' : 'text-slate-400'}>
+              {inMail ?? (item.card ? 'brak — karta nie ma opisu' : 'brak — pozycja nie ma karty')}
+              {item.description === null && item.card_excerpt !== null && <span className="text-slate-400"> (z karty)</span>}
+            </span>
+            {editable && (
+              <button
+                type="button"
+                className="text-blue-600 hover:underline"
+                onClick={() => {
+                  setValue(item.description ?? item.card_excerpt ?? '')
+                  setOpen(true)
+                }}
+              >
+                {inMail ? 'popraw' : 'wpisz'}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+      {open && (
+        <>
+          <textarea
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-xs"
+            rows={2}
+            maxLength={300}
+            disabled={!editable}
+            value={value}
+            placeholder={item.card_excerpt ?? '1–2 zdania o produkcie'}
+            aria-label={`Opis w mailu: ${item.name}`}
+            onChange={(e) => setValue(e.target.value)}
+            onBlur={commit}
+          />
+          <div className="flex flex-wrap gap-x-2 text-slate-500">
+            <span>{value.length}/300 · zapis po wyjściu z pola</span>
+            {editable && item.card_excerpt !== null && (
+              <button
+                type="button"
+                className="text-blue-600 hover:underline"
+                onClick={() => {
+                  setValue('')
+                  setOpen(false)
+                  if (item.description !== null) void onPatch({ description: null })
+                }}
+              >
+                wróć do opisu z karty
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 

@@ -253,6 +253,12 @@ final class CampaignApiTest extends TestCase
         $this->assertSame(['89.00', '120.50', 'ostatnie sztuki', $card->id], [$c->promo_price_net, $c->price_before_net, $c->note, $c->product_id]);
         $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", ['product_id' => null])->assertOk();
         $this->assertNull($c->refresh()->product_id);
+        // krótki opis w mailu: przycięty, pusty = wraca wycinek karty
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", ['description' => '  Lekkie trzewiki S3  '])->assertOk();
+        $this->assertSame('Lekkie trzewiki S3', $c->refresh()->description);
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", ['description' => str_repeat('x', 301)])->assertUnprocessable();
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", ['description' => '   '])->assertOk();
+        $this->assertNull($c->refresh()->description);
 
         $res = $this->deleteJson("/api/campaigns/{$campaign->id}/items/{$a->id}")->assertOk();
         $this->assertSame([[$c->id, 1], [$b->id, 2]], array_map(fn (array $i): array => [$i['id'], $i['position']], $res->json('items')));

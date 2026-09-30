@@ -5,7 +5,9 @@ import {
   BRAND_COLORS,
   BRAND_COLOR_LABEL,
   CAMPAIGN_BLOCK_LABEL,
+  CAMPAIGN_LAYOUT_HINT,
   CAMPAIGN_LAYOUT_LABEL,
+  LAYOUTS_WITH_DESCRIPTION,
   DEFAULT_BRAND_COLOR,
   MAX_CAMPAIGN_BLOCKS,
   campaignAssetUrl,
@@ -22,7 +24,7 @@ import {
  */
 
 const ADD_ORDER: CampaignBlockType[] = ['header', 'heading', 'text', 'image', 'button', 'footer']
-const LAYOUTS: CampaignLayout[] = ['grid3', 'grid2', 'list']
+const LAYOUTS = Object.keys(CAMPAIGN_LAYOUT_LABEL) as CampaignLayout[]
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 const IMAGE_ACCEPT = 'image/jpeg,image/png,image/gif,image/webp'
 
@@ -276,7 +278,9 @@ export function CampaignBlockEditor({
               </select>
             </label>
             <p className="text-[11px] text-slate-500">
-              Pozycje kampanii ze zdjęciem, ceną i przyciskiem „Zapytaj o ofertę”. Nad nimi zawsze „Ceny netto ważne do …”.
+              {CAMPAIGN_LAYOUT_HINT[block.layout]} Nad pozycjami zawsze „Ceny netto ważne do …”.
+              {LAYOUTS_WITH_DESCRIPTION.includes(block.layout) &&
+                ' Opis bierzemy z karty produktu; zmienisz go przy pozycji w kroku „Produkty”.'}
             </p>
           </>
         )

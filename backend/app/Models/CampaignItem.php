@@ -21,6 +21,7 @@ class CampaignItem extends Model
         'promo_price_net',
         'price_before_net',
         'note',
+        'description',
         'snap_name',
         'snap_code',
         'snap_unit',
@@ -28,6 +29,8 @@ class CampaignItem extends Model
         'snap_stock',
         'snap_stock_at',
         'snap_image_url',
+        'snap_description',
+        'snap_norms',
         'stock_after_7d',
         'stock_after_30d',
     ];

@@ -44,6 +44,9 @@
 @if ($p['note'] !== null)
   {!! $p['note'] !!}
 @endif
+@if (in_array($b['layout'], ['list', 'grid2_desc', 'list_desc', 'hero', 'big'], true) && ($p['description'] ?? null) !== null)
+  {!! $p['description'] !!}
+@endif
 @if ($p['price'] !== null)
   {!! $p['price'] !!} netto / {!! $p['unit'] !!}@if ($p['price_before'] !== null) (wcześniej {!! $p['price_before'] !!})@endif
 

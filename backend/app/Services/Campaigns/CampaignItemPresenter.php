@@ -102,6 +102,9 @@ class CampaignItemPresenter
         ]);
         $others = $this->otherCampaigns($items);
         $margin = $author->defaultMarginPercent();
+        // opis i normy kart — krótki opis do maila to WYCINEK opisu karty (ProductExcerpt), nie tekst dopisany
+        $cardIds = array_column(array_filter($cardOf), 'id');
+        $cardTexts = $cardIds === [] ? new Collection : Product::query()->whereIn('id', $cardIds)->get(['id', 'name', 'description', 'norms'])->keyBy('id');
 
         $out = [];
         foreach ($items as $i => $item) {
@@ -133,6 +136,12 @@ class CampaignItemPresenter
                 'promo_price_net' => $promo,
                 'price_before_net' => $item->price_before_net !== null ? (float) $item->price_before_net : null,
                 'note' => $item->note,
+                // opis wpisany przy pozycji; null = w mailu idzie card_excerpt
+                'description' => $item->description,
+                'card_excerpt' => $card !== null && $cardTexts->has($card['id'])
+                    ? ProductExcerpt::fromDescription($cardTexts->get($card['id'])->description, (string) $cardTexts->get($card['id'])->name)
+                    : null,
+                'card_norms' => $card !== null && $cardTexts->has($card['id']) ? ProductExcerpt::norms($cardTexts->get($card['id'])->norms) : [],
                 'card' => $card === null ? null : [...$card, 'thumb_url' => $imageId !== null ? $this->thumbUrl($imageId) : null],
                 'card_suggestion' => $suggestion === null ? null : [
                     'product_id' => (int) $suggestion->id,
@@ -154,6 +163,8 @@ class CampaignItemPresenter
                     'stock' => $item->snap_stock !== null ? (float) $item->snap_stock : null,
                     'stock_at' => $item->snap_stock_at?->toDateString(),
                     'image_url' => $item->snap_image_url,
+                    'description' => $item->snap_description,
+                    'norms' => ProductExcerpt::norms($item->snap_norms),
                 ],
                 'stock_after_7d' => $item->stock_after_7d !== null ? (float) $item->stock_after_7d : null,
                 'stock_after_30d' => $item->stock_after_30d !== null ? (float) $item->stock_after_30d : null,

@@ -87,8 +87,18 @@
 @php
     $layout = $b['layout'];
     $columns = $b['columns'];
-    $imgMax = ['grid3' => 170, 'grid2' => 262, 'list' => 120][$layout];
     $cellWidth = (int) floor(100 / $columns);
+    $base = ['img' => 170, 'left' => false, 'desc' => false, 'norms' => false, 'sale' => false, 'compact' => false, 'big' => false];
+    // opcje karty produktu dla układu (klucze = Campaign::LAYOUTS); hero: tu opcje siatki pod produktem wyróżnionym
+    $o = [...$base, ...([
+        'grid2' => ['img' => 262],
+        'list' => ['img' => 120, 'left' => true, 'desc' => true],
+        'grid2_desc' => ['img' => 262, 'desc' => true],
+        'list_desc' => ['img' => 120, 'left' => true, 'desc' => true, 'norms' => true],
+        'sale' => ['img' => 262, 'sale' => true],
+        'grid4' => ['img' => 120, 'compact' => true],
+        'big' => ['img' => 544, 'desc' => true, 'norms' => true, 'big' => true],
+    ][$layout] ?? [])];
 @endphp
           {{-- ważność cen zawsze nad pozycjami --}}
           <tr>
@@ -97,70 +107,69 @@
           {{-- pozycje --}}
           <tr>
             <td style="padding:8px 18px 16px;">
+@if ($layout === 'pricelist')
+              {{-- cennik: tabela bez zdjęć --}}
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid {{ $line }};border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;">
+                <tr>
+                  <td style="padding:8px 10px;background:#f6f8f9;font-size:11px;font-weight:700;color:{{ $muted }};">Produkt</td>
+                  <td align="right" style="padding:8px 10px;background:#f6f8f9;font-size:11px;font-weight:700;color:{{ $muted }};white-space:nowrap;">Cena netto</td>
+                  <td align="right" style="padding:8px 10px;background:#f6f8f9;font-size:11px;font-weight:700;color:{{ $muted }};white-space:nowrap;">Na stanie</td>
+                  <td style="padding:8px 10px;background:#f6f8f9;"></td>
+                </tr>
+@foreach ($b['products'] as $p)
+                <tr>
+                  <td valign="top" style="padding:8px 10px;border-top:1px solid {{ $line }};font-size:13px;color:{{ $text }};">
+@if ($p['product_url'] !== null)
+                    <a href="{{ $p['product_url'] }}" style="font-weight:700;color:{{ $text }};text-decoration:none;">{{ $p['name'] }}</a>
+@else
+                    <b>{{ $p['name'] }}</b>
+@endif
+@if ($p['code'] !== '')
+                    <div style="font-size:11px;color:{{ $muted }};">Kod {{ $p['code'] }}</div>
+@endif
+@if ($p['note'] !== null)
+                    <div style="font-size:12px;color:{{ $text }};">{{ $p['note'] }}</div>
+@endif
+                  </td>
+                  <td valign="top" align="right" style="padding:8px 10px;border-top:1px solid {{ $line }};white-space:nowrap;">
+@if ($p['price'] !== null)
+@if ($p['price_before'] !== null)
+                    <span style="font-size:11px;color:{{ $muted }};text-decoration:line-through;">{{ $p['price_before'] }}</span><br>
+@endif
+                    <span style="font-size:14px;font-weight:700;color:{{ $brand }};">{{ $p['price'] }}</span><br>
+                    <span style="font-size:11px;color:{{ $muted }};">/ {{ $p['unit'] }}</span>
+@else
+                    <span style="font-size:12px;color:{{ $muted }};">—</span>
+@endif
+                  </td>
+                  <td valign="top" align="right" style="padding:8px 10px;border-top:1px solid {{ $line }};font-size:12px;color:{{ $muted }};white-space:nowrap;">{{ $p['stock_qty'] ?? '—' }}</td>
+                  <td valign="top" align="right" style="padding:8px 10px;border-top:1px solid {{ $line }};">
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                      <tr>
+                        <td bgcolor="{{ $brand }}" style="background:{{ $brand }};border-radius:4px;">
+                          <a href="{{ $p['ask_url'] }}" style="display:block;padding:5px 10px;color:#ffffff;text-decoration:none;font-size:12px;font-weight:700;font-family:Arial,Helvetica,sans-serif;white-space:nowrap;">Zapytaj</a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+@endforeach
+              </table>
+@else
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+@if ($b['hero'] !== null)
+                {{-- produkt wyróżniony na całą szerokość --}}
+                <tr>
+                  <td colspan="{{ $columns }}" valign="top" style="padding:6px;">
+@include('emails.campaign-product', ['p' => $b['hero'], 'o' => [...$base, 'img' => 240, 'left' => true, 'desc' => true, 'norms' => true, 'big' => true]])
+                  </td>
+                </tr>
+@endif
 @foreach ($b['rows'] as $row)
                 <tr>
 @foreach ($row as $p)
                   <td width="{{ $cellWidth }}%" valign="top" style="padding:6px;">
-                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid {{ $line }};border-radius:6px;">
-                      <tr>
-@if ($layout === 'list')
-                        <td width="{{ $imgMax }}" valign="top" style="padding:10px 0 10px 10px;width:{{ $imgMax }}px;">
-@if ($p['image_url'] !== null)
-@if ($p['product_url'] !== null)<a href="{{ $p['product_url'] }}" style="text-decoration:none;">@endif
-                          <img src="{{ $p['image_url'] }}" width="{{ $imgMax }}" alt="{{ $p['name'] }}" style="display:block;width:{{ $imgMax }}px;max-width:100%;height:auto;border:0;border-radius:4px;">
-@if ($p['product_url'] !== null)</a>@endif
-@else
-                          <div style="width:{{ $imgMax }}px;height:{{ $imgMax }}px;background:#f3f5f6;border-radius:4px;"></div>
-@endif
-                        </td>
-@endif
-                        <td valign="top" style="padding:10px;font-family:Arial,Helvetica,sans-serif;">
-@if ($layout !== 'list')
-@if ($p['image_url'] !== null)
-@if ($p['product_url'] !== null)<a href="{{ $p['product_url'] }}" style="text-decoration:none;">@endif
-                          <img src="{{ $p['image_url'] }}" width="{{ $imgMax }}" alt="{{ $p['name'] }}" style="display:block;width:100%;max-width:{{ $imgMax }}px;height:auto;border:0;border-radius:4px;margin:0 auto 8px;">
-@if ($p['product_url'] !== null)</a>@endif
-@else
-                          <div style="height:{{ $imgMax }}px;background:#f3f5f6;border-radius:4px;margin-bottom:8px;"></div>
-@endif
-@endif
-@if ($p['product_url'] !== null)
-                          <a href="{{ $p['product_url'] }}" style="display:block;font-size:13px;line-height:1.3;font-weight:700;color:{{ $text }};text-decoration:none;">{{ $p['name'] }}</a>
-@else
-                          <div style="font-size:13px;line-height:1.3;font-weight:700;color:{{ $text }};">{{ $p['name'] }}</div>
-@endif
-@if ($p['code'] !== '')
-                          <div style="font-size:11px;color:{{ $muted }};margin-top:4px;">Kod {{ $p['code'] }}</div>
-@endif
-@if ($p['note'] !== null)
-                          <div style="font-size:12px;color:{{ $text }};margin-top:4px;">{{ $p['note'] }}</div>
-@endif
-@if ($p['price'] !== null)
-                          <div style="margin-top:6px;">
-@if ($p['price_before'] !== null)
-                            <span style="font-size:12px;color:{{ $muted }};text-decoration:line-through;">{{ $p['price_before'] }}</span><br>
-@endif
-                            <span style="font-size:17px;font-weight:700;color:{{ $brand }};">{{ $p['price'] }}</span>
-                            <span style="font-size:11px;color:{{ $muted }};">netto / {{ $p['unit'] }}</span>
-                          </div>
-@endif
-@if ($p['stock'] !== null)
-                          <div style="font-size:11.5px;color:{{ $muted }};margin-top:4px;">{{ $p['stock'] }}</div>
-@endif
-                          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top:8px;">
-                            <tr>
-                              <td align="center" bgcolor="{{ $brand }}" style="background:{{ $brand }};border-radius:4px;">
-                                <a href="{{ $p['ask_url'] }}" style="display:block;padding:7px;color:#ffffff;text-decoration:none;font-size:12.5px;font-weight:700;font-family:Arial,Helvetica,sans-serif;">Zapytaj o ofertę</a>
-                              </td>
-                            </tr>
-                          </table>
-@if ($p['product_url'] !== null)
-                          <div style="text-align:center;margin-top:6px;"><a href="{{ $p['product_url'] }}" style="font-size:12px;color:{{ $brand }};font-family:Arial,Helvetica,sans-serif;">Zobacz produkt</a></div>
-@endif
-                        </td>
-                      </tr>
-                    </table>
+@include('emails.campaign-product', ['p' => $p, 'o' => $o])
                   </td>
 @endforeach
 @for ($i = count($row); $i < $columns; $i++)
@@ -169,6 +178,7 @@
                 </tr>
 @endforeach
               </table>
+@endif
             </td>
           </tr>
 @break

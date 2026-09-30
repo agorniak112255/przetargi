@@ -100,6 +100,9 @@ class CampaignSender
                     'snap_stock' => $row['stock'],
                     'snap_stock_at' => $row['stock_synced_at'] !== null ? Carbon::parse($row['stock_synced_at'])->toDateString() : null,
                     'snap_image_url' => $row['image_url'] !== null && strlen($row['image_url']) <= 500 ? $row['image_url'] : null,
+                    // krótki opis i normy jak w mailu (opis przy pozycji albo wycinek karty)
+                    'snap_description' => ($row['description'] ?? $row['card_excerpt']) !== null ? mb_substr((string) ($row['description'] ?? $row['card_excerpt']), 0, 300) : null,
+                    'snap_norms' => $row['card_norms'] !== [] ? mb_substr(implode(', ', $row['card_norms']), 0, 300) : null,
                 ])->save();
             }
 

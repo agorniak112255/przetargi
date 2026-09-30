@@ -152,6 +152,89 @@ final class CampaignRendererTest extends TestCase
         $this->assertSame(2, substr_count($html, '<td width="33%" style="padding:6px;"></td>'));
     }
 
+    public function test_product_layouts_with_card_excerpt_norms_sale_and_price_list(): void
+    {
+        $author = $this->sender();
+        $gloves = $this->erpItem('R100', 40);
+        $card = $this->card('NITRO', 'Rękawice NitroFlex');
+        $card->update([
+            'description' => "Z karty technicznej (nitro.pdf):\nRękawice powlekane nitrylem do prac w oleju i smarach. Dobry chwyt na mokro.\nSzczegóły: EN 388",
+            'norms' => 'EN 388:2016 4121X, EN ISO 21420',
+        ]);
+        ErpItemLink::query()->create(['erp_item_id' => $gloves->id, 'product_id' => $card->id, 'status' => ErpItemLink::STATUS_CONFIRMED, 'method' => 'name']);
+        $boots = $this->erpItem('B200', 12);
+        $third = $this->erpItem('C300', 5);
+        $campaign = $this->campaign($author, [$gloves, $boots, $third], ['layout' => 'grid3']);
+        CampaignItem::query()->where('erp_item_id', $gloves->id)->update(['price_before_net' => 149]);
+        // opis wpisany przy pozycji bez karty — escapowany
+        CampaignItem::query()->where('erp_item_id', $boots->id)->update(['description' => 'Trzewiki <script>x</script> na zimę']);
+        $excerpt = 'Rękawice powlekane nitrylem do prac w oleju i smarach. Dobry chwyt na mokro.';
+        $html = fn (string $layout): string => app(CampaignRenderer::class)->render(tap($campaign->fresh())->update(['layout' => $layout])->fresh())['html'];
+
+        // siatka bez opisu
+        $grid = $html('grid3');
+        $this->assertStringNotContainsString($excerpt, $grid);
+
+        $desc = $html('grid2_desc');
+        $this->assertStringContainsString($excerpt, $desc);
+        $this->assertStringNotContainsString('Z karty technicznej', $desc);
+        $this->assertStringContainsString('Trzewiki &lt;script&gt;x&lt;/script&gt; na zimę', $desc);
+        $this->assertStringNotContainsString('<script>x', $desc);
+        $this->assertStringNotContainsString('EN 388:2016 4121X', $desc);
+
+        $listDesc = $html('list_desc');
+        $this->assertStringContainsString($excerpt, $listDesc);
+        $this->assertStringContainsString('>EN 388:2016 4121X</span>', $listDesc);
+        $this->assertStringContainsString('>EN ISO 21420</span>', $listDesc);
+
+        // wyprzedaż: −% z ceny przed (149 → 89) i „Zostało”
+        $sale = $html('sale');
+        $this->assertStringContainsString('−40%', $sale);
+        $this->assertStringContainsString('Zostało: 40 szt', $sale);
+
+        $grid4 = $html('grid4');
+        $this->assertSame(3, substr_count($grid4, 'width="25%" valign="top"'));
+        $this->assertStringNotContainsString('Kod R100', $grid4);
+
+        // cennik: tabela bez zdjęć, stan w kolumnie, przycisk „Zapytaj”
+        $list = $html('pricelist');
+        $this->assertStringContainsString('Cena netto', $list);
+        $this->assertStringNotContainsString('<img', $list);
+        $this->assertStringContainsString('>12 szt</td>', $list);
+        $this->assertSame(3, substr_count($list, '>Zapytaj</a>'));
+
+        // wyróżniony: pierwszy produkt na całą szerokość z opisem, reszta w siatce po 3
+        $hero = $html('hero');
+        $this->assertStringContainsString('colspan="3"', $hero);
+        $this->assertStringContainsString($excerpt, $hero);
+        $this->assertSame(2, substr_count($hero, 'width="33%" valign="top"'));
+
+        $big = $html('big');
+        $this->assertStringContainsString('width="544"', $big);
+        $this->assertStringContainsString($excerpt, $big);
+
+        // wersja tekstowa z opisem w układach z opisem
+        $text = app(CampaignRenderer::class)->render($campaign->fresh()->fill(['layout' => 'grid2_desc']))['text'];
+        $this->assertStringContainsString($excerpt, $text);
+    }
+
+    public function test_sent_campaign_keeps_description_and_norms_from_snapshot(): void
+    {
+        $author = $this->sender();
+        $item = $this->erpItem('R100', 40);
+        $campaign = $this->campaign($author, [$item], ['status' => 'sent', 'sent_at' => now(), 'layout' => 'list_desc']);
+        CampaignItem::query()->update([
+            'snap_name' => 'Rękawice', 'snap_code' => 'R100', 'snap_price' => 9, 'snap_description' => 'Opis z dnia wysyłki.', 'snap_norms' => 'EN 388, EN 407',
+            'description' => 'Opis zmieniony po wysyłce',
+        ]);
+
+        $html = app(CampaignRenderer::class)->render($campaign->fresh())['html'];
+
+        $this->assertStringContainsString('Opis z dnia wysyłki.', $html);
+        $this->assertStringNotContainsString('Opis zmieniony po wysyłce', $html);
+        $this->assertStringContainsString('>EN 407</span>', $html);
+    }
+
     public function test_blocks_in_order_escaped_with_images_button_color_and_fixed_parts(): void
     {
         $author = $this->sender();

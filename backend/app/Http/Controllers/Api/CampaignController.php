@@ -300,14 +300,18 @@ class CampaignController extends Controller
             'promo_price_net' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:9999999999.99'],
             'price_before_net' => ['sometimes', 'nullable', 'numeric', 'min:0', 'max:9999999999.99'],
             'note' => ['sometimes', 'nullable', 'string', 'max:300'],
+            // krótki opis w mailu (układy „z opisem”); pusty = wycinek opisu karty
+            'description' => ['sometimes', 'nullable', 'string', 'max:300'],
             'product_id' => ['sometimes', 'nullable', 'integer', Rule::exists('products', 'id')],
             'position' => ['sometimes', 'integer', 'min:1', 'max:1000'],
         ]);
 
         $this->lockedDraft($campaign, function (Campaign $campaign) use ($item, $v): void {
-            $data = array_intersect_key($v, array_flip(['promo_price_net', 'price_before_net', 'note', 'product_id']));
-            if (array_key_exists('note', $data) && is_string($data['note'])) {
-                $data['note'] = trim($data['note']) !== '' ? trim($data['note']) : null;
+            $data = array_intersect_key($v, array_flip(['promo_price_net', 'price_before_net', 'note', 'description', 'product_id']));
+            foreach (['note', 'description'] as $field) {
+                if (array_key_exists($field, $data) && is_string($data[$field])) {
+                    $data[$field] = trim($data[$field]) !== '' ? trim($data[$field]) : null;
+                }
             }
             if ($data !== []) {
                 $item->update($data);

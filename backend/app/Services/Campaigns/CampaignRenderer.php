@@ -23,7 +23,14 @@ use Illuminate\Support\Carbon;
  */
 class CampaignRenderer
 {
-    private const COLUMNS = ['grid3' => 3, 'grid2' => 2, 'list' => 1];
+    /**
+     * Układy bloku produktów → liczba kolumn. hero: pierwszy produkt duży, reszta po 3; pricelist: tabela bez zdjęć.
+     * Klucze = Campaign::LAYOUTS.
+     */
+    private const COLUMNS = [
+        'grid3' => 3, 'grid2' => 2, 'list' => 1, 'grid2_desc' => 2, 'list_desc' => 1,
+        'hero' => 3, 'sale' => 2, 'grid4' => 4, 'pricelist' => 1, 'big' => 1,
+    ];
 
     /** Szerokość treści maila (640) bez marginesów bocznych. */
     private const CONTENT_WIDTH = 592;
@@ -82,18 +89,26 @@ class CampaignRenderer
             $stockAt = $snap !== null ? $snap['stock_at'] : $row['stock_synced_at'];
             $unit = ($snap !== null ? ($snapUnits[$row['id']] ?? null) : null) ?? $row['unit'] ?? 'szt';
 
+            // cena „przed” tylko wpisana ręcznie i wyższa od ceny kampanii
+            $hasBefore = $price !== null && $before !== null && (float) $before > (float) $price;
+            // opis: po starcie wysyłki z migawki; w projekcie wpisany przy pozycji albo wycinek opisu karty
+            $description = $snap !== null ? $snap['description'] : ($row['description'] ?? $row['card_excerpt']);
             $products[] = [
                 'name' => (string) $name,
                 'code' => $itemCode,
                 'unit' => $unit,
                 'price' => $price !== null ? $this->money((float) $price) : null,
-                // cena „przed” tylko wpisana ręcznie i wyższa od ceny kampanii
-                'price_before' => $price !== null && $before !== null && (float) $before > (float) $price ? $this->money((float) $before) : null,
+                'price_before' => $hasBefore ? $this->money((float) $before) : null,
+                'discount' => $hasBefore ? (int) round(((float) $before - (float) $price) / (float) $before * 100) : null,
                 'stock' => $stock !== null && (float) $stock > 0
                     ? 'Na stanie: '.$this->quantity((float) $stock).' '.$unit.($stockAt !== null ? ' ('.Carbon::parse($stockAt)->format('d.m').')' : '')
                     : null,
+                'stock_left' => $stock !== null && (float) $stock > 0 ? 'Zostało: '.$this->quantity((float) $stock).' '.$unit : null,
+                'stock_qty' => $stock !== null && (float) $stock > 0 ? $this->quantity((float) $stock).' '.$unit : null,
                 'image_url' => $snap !== null ? $snap['image_url'] : $row['image_url'],
                 'note' => $row['note'] !== null && trim((string) $row['note']) !== '' ? (string) $row['note'] : null,
+                'description' => is_string($description) && trim($description) !== '' ? trim($description) : null,
+                'norms' => $snap !== null ? $snap['norms'] : $row['card_norms'],
                 'ask_url' => $this->askUrl($fromAddress, $code, $itemCode),
                 'product_url' => $track !== null ? $track.'/p/'.$row['id'] : null,
             ];
@@ -125,16 +140,22 @@ class CampaignRenderer
         $account = $sender?->mailAccount;
         $fromAddress = $account !== null ? (string) $account->from_address : '';
         $products = [];
+        // przykłady pokazują wszystkie pola układów: opis, normy, cenę przed (−%) i stan
         foreach ([1, 2, 3] as $i) {
             $products[] = [
                 'name' => 'Przykładowy produkt '.$i,
                 'code' => 'PRZYKLAD'.$i,
                 'unit' => 'szt',
                 'price' => $this->money(99),
-                'price_before' => null,
-                'stock' => null,
+                'price_before' => $i === 1 ? $this->money(129) : null,
+                'discount' => $i === 1 ? 23 : null,
+                'stock' => 'Na stanie: '.(40 * $i).' szt',
+                'stock_left' => 'Zostało: '.(40 * $i).' szt',
+                'stock_qty' => (40 * $i).' szt',
                 'image_url' => null,
                 'note' => null,
+                'description' => 'Tu pojawi się krótki opis z karty produktu — pierwsze zdania opisu, np. materiał i najważniejsze cechy.',
+                'norms' => $i === 1 ? ['EN ISO 20345', 'S3 SRC'] : [],
                 'ask_url' => $this->askUrl($fromAddress, self::SAMPLE_CODE, 'PRZYKLAD'.$i),
                 'product_url' => null,
             ];
@@ -242,7 +263,13 @@ class CampaignRenderer
             } elseif ($type === 'products') {
                 $layout = is_string($block['layout'] ?? null) && isset(self::COLUMNS[$block['layout']]) ? $block['layout'] : 'grid3';
                 $columns = self::COLUMNS[$layout];
-                $out[] = ['type' => 'products', 'layout' => $layout, 'columns' => $columns, 'rows' => array_chunk($products, $columns), 'products' => $products];
+                // hero: pierwszy produkt osobno (duży), reszta w siatce
+                $hero = $layout === 'hero' && $products !== [] ? $products[0] : null;
+                $rest = $hero !== null ? array_slice($products, 1) : $products;
+                $out[] = [
+                    'type' => 'products', 'layout' => $layout, 'columns' => $columns, 'hero' => $hero,
+                    'rows' => array_chunk($rest, $columns), 'products' => $products,
+                ];
             } elseif ($type === 'button') {
                 $label = is_string($block['label'] ?? null) ? $this->line($block['label']) : '';
                 $url = is_string($block['url'] ?? null) ? trim($block['url']) : '';

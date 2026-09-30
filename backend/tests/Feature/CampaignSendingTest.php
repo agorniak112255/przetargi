@@ -66,6 +66,9 @@ final class CampaignSendingTest extends TestCase
         $this->assertEquals(89, $snap->snap_price);
         $this->assertEquals(420, $snap->snap_stock);
         $this->assertSame('2026-09-29', $snap->snap_stock_at->toDateString());
+        // bez karty i bez opisu przy pozycji — w migawce nie ma opisu ani norm (nic nie dopisujemy)
+        $this->assertNull($snap->snap_description);
+        $this->assertNull($snap->snap_norms);
         $this->assertSame(['a@klient.pl', 'b@klient.pl'], CampaignRecipient::query()->orderBy('id')->pluck('email')->all());
         $this->assertSame(['pending'], CampaignRecipient::query()->distinct()->pluck('status')->all());
         // kopia do nadawcy po starcie

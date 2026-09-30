@@ -26,7 +26,8 @@ class Campaign extends Model
 
     public const STATUS_CANCELLED = 'cancelled';
 
-    public const LAYOUTS = ['grid3', 'grid2', 'list'];
+    /** Układy bloku produktów (CampaignRenderer::COLUMNS, emails/campaign.blade.php). */
+    public const LAYOUTS = ['grid3', 'grid2', 'list', 'grid2_desc', 'list_desc', 'hero', 'sale', 'grid4', 'pricelist', 'big'];
 
     public const XL_MODES = ['items', 'group', 'mine'];
 

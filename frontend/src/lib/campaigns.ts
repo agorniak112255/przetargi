@@ -4,14 +4,48 @@ import { publicDir } from './publicDir'
 /** Kampanie reklamowe — typy i wywołania API (kontrakt pierwszego wydania, 01.10.2026). */
 
 export type CampaignStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'cancelled'
-export type CampaignLayout = 'grid3' | 'grid2' | 'list'
+export type CampaignLayout =
+  | 'grid3'
+  | 'grid2'
+  | 'list'
+  | 'grid2_desc'
+  | 'list_desc'
+  | 'hero'
+  | 'sale'
+  | 'grid4'
+  | 'pricelist'
+  | 'big'
 export type CampaignXlMode = 'items' | 'group' | 'mine'
 
 export const CAMPAIGN_LAYOUT_LABEL: Record<CampaignLayout, string> = {
   grid3: 'Siatka po 3',
   grid2: 'Siatka po 2',
   list: 'Lista z opisem',
+  grid2_desc: 'Siatka po 2 z opisem',
+  list_desc: 'Lista z opisem i normami',
+  hero: 'Wyróżniony + siatka',
+  sale: 'Wyprzedaż zapasów',
+  grid4: 'Kafelki po 4',
+  pricelist: 'Cennik (tabela)',
+  big: 'Duże zdjęcia',
 }
+
+/** Co pokazuje układ — podpowiedź pod wyborem układu. */
+export const CAMPAIGN_LAYOUT_HINT: Record<CampaignLayout, string> = {
+  grid3: 'Zdjęcie, nazwa, cena i przycisk — trzy produkty w rzędzie.',
+  grid2: 'Większe zdjęcia, dwa produkty w rzędzie.',
+  list: 'Zdjęcie z lewej, obok nazwa, krótki opis i cena.',
+  grid2_desc: 'Dwa w rzędzie z krótkim opisem pod nazwą.',
+  list_desc: 'Zdjęcie z lewej, krótki opis i normy z karty (np. EN 388).',
+  hero: 'Pierwszy produkt duży z opisem i normami, pozostałe po trzy.',
+  sale: 'Plakietka −% (gdy wpiszesz cenę przed) i „Zostało: … szt”.',
+  grid4: 'Małe kafelki: zdjęcie, nazwa, cena — dużo pozycji naraz.',
+  pricelist: 'Tabela bez zdjęć: nazwa, kod, cena, stan i „Zapytaj”.',
+  big: 'Jeden produkt w wierszu, zdjęcie na całą szerokość, opis i normy.',
+}
+
+/** Układy, w których mail pokazuje krótki opis produktu. */
+export const LAYOUTS_WITH_DESCRIPTION: CampaignLayout[] = ['list', 'grid2_desc', 'list_desc', 'hero', 'big']
 
 /**
  * Element maila (kolejność w tablicy = kolejność w mailu). Pola zawsze obecne, puste = '' / null.
@@ -210,6 +244,11 @@ export type CampaignItem = {
   promo_price_net: number | null
   price_before_net: number | null
   note: string | null
+  /** Krótki opis wpisany przy pozycji; null = w mailu idzie card_excerpt. */
+  description: string | null
+  /** Wycinek opisu karty (pierwsze zdania) — nigdy tekst dopisany; null = karta bez sensownego opisu. */
+  card_excerpt: string | null
+  card_norms: string[]
   card: CampaignItemCard | null
   card_suggestion: { product_id: number; sku: string; name: string; thumb_url: string | null } | null
   image_url: string | null
@@ -221,6 +260,8 @@ export type CampaignItem = {
     stock: number | null
     stock_at: string | null
     image_url: string | null
+    description: string | null
+    norms: string[]
   } | null
   stock_after_7d: number | null
   stock_after_30d: number | null
@@ -313,6 +354,7 @@ export type CampaignItemPatch = Partial<{
   promo_price_net: number | null
   price_before_net: number | null
   note: string | null
+  description: string | null
   /** null = główna karta towaru XL. */
   product_id: number | null
   position: number
