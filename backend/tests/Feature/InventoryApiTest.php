@@ -28,10 +28,15 @@ final class InventoryApiTest extends TestCase
         $this->travelTo(now()->setDate(2026, 9, 30)->setTime(10, 0));
     }
 
-    public function test_only_admin_sees_inventory(): void
+    public function test_inventory_needs_inventory_or_campaigns_permission(): void
     {
-        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        // konto bez roli: ani Zapasy, ani kampanie
+        Sanctum::actingAs(User::factory()->create());
         $this->getJson('/api/inventory')->assertForbidden();
+
+        // handlowiec robi kampanie z zalegającego towaru (decyzja właściciela 30.09.2026)
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $this->getJson('/api/inventory')->assertOk();
 
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $this->getJson('/api/inventory')->assertOk()->assertJsonPath('cutoff', '2026-03-30');

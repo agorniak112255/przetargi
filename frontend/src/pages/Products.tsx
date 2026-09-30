@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
+import { AddToCampaignMenu } from '../components/AddToCampaignMenu'
 import { CatalogHealthPanel } from '../components/CatalogHealthPanel'
 import { CheaperSourceNote } from '../components/CheaperSourceNote'
 import { DeleteProductsDialog } from '../components/DeleteProductsDialog'
@@ -292,7 +293,8 @@ export function Products() {
   const canExportPresta = can(user, 'presta.export')
   const canDelete = can(user, 'products.delete')
   const canMergeCards = can(user, 'card_matches.decide')
-  const canSelect = canEnrich || canDelete || canMergeCards
+  const canCampaign = can(user, 'campaigns.use')
+  const canSelect = canEnrich || canDelete || canMergeCards || canCampaign
   const hasActions = canEnrich || canExportPresta || canDelete
   const [q, setQ] = useState('')
   const [debouncedQ, setDebouncedQ] = useState('')
@@ -1012,6 +1014,14 @@ export function Products() {
             >
               Połącz zaznaczone{selectedIds.length > 0 ? ` (${selectedIds.length})` : ''}
             </button>
+          )}
+          {canCampaign && (
+            <AddToCampaignMenu
+              productIds={selectedIds}
+              placement="down"
+              showCount
+              buttonClassName="rounded border border-sky-300 px-3 py-2 text-xs text-sky-800 hover:bg-sky-50 disabled:opacity-50"
+            />
           )}
           {canDelete && (
             <button

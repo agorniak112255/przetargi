@@ -65,6 +65,8 @@ final class PermissionCatalog
         'admin.dictionaries.manage',
         'admin.description_templates.manage',
         'presta.export',
+        'campaigns.use',
+        'campaigns.manage',
     ];
 
     public const ROLES = [
@@ -100,6 +102,7 @@ final class PermissionCatalog
             // ten sam mail trafia do kilku handlowców — bez wglądu w cudze
             // zapytania dwie osoby robiłyby tę samą ofertę
             'inquiries.view_all',
+            'campaigns.use',
         ];
 
         $przetargi = array_values(array_unique([
@@ -137,6 +140,7 @@ final class PermissionCatalog
             'inquiries.use',
             'inquiries.view_all',
             'inquiries.view_others',
+            'campaigns.use',
         ];
 
         $dyrektor = [
@@ -159,6 +163,7 @@ final class PermissionCatalog
             'inquiries.use',
             'inquiries.view_all',
             'inquiries.view_others',
+            'campaigns.use',
         ];
 
         return [
@@ -218,6 +223,8 @@ final class PermissionCatalog
             // Własna grupa, a nie „Klienci”: uprawnienia do zapytań były tam nie do znalezienia.
             ['inquiries.use', 'Zapytania — praca z mailem', 'Może wklejać zapytanie klienta (albo wysłać je z dodatku do Thunderbirda) i przygotować odpowiedź z katalogu.', 'Zapytania'],
             ['inquiries.view_all', 'Zapytania — podgląd wszystkich', 'Widzi na liście zapytania wszystkich pracowników, nie tylko własne, i może filtrować po użytkowniku. Bez tego widzi wyłącznie swoje.', 'Zapytania'],
+            ['campaigns.use', 'Kampanie — własne kampanie', 'Może przygotować i wysłać ze swojej skrzynki kampanię z towarem (także zalegającym z zakładki Zapasy) do własnych i wspólnych grup odbiorców oraz do klientów z ERP XL. Widzi listę Zapasów z kosztem i wartością towaru.', 'Kampanie'],
+            ['campaigns.manage', 'Kampanie — wszystkie i wspólne grupy', 'Widzi kampanie wszystkich pracowników, prowadzi wspólne grupy odbiorców i listę adresów wypisanych z mailingu.', 'Kampanie'],
             ['inquiries.view_others', 'Zapytania — otwieranie cudzych', 'Może otworzyć zapytanie innego pracownika i zobaczyć mail klienta, dobrane pozycje i przygotowany list. Tylko podgląd — zmieniać i wysyłać może wyłącznie autor.', 'Zapytania'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],
             ['admin.access', 'Panel Administracja', 'Widzi pozycję menu Administracja.', 'Administracja'],

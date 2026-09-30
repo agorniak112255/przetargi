@@ -8,6 +8,7 @@ use App\Support\OfferPricing;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
@@ -81,6 +82,12 @@ class User extends Authenticatable
             'ui_preferences' => $this->normalizedUiPreferences(),
             'default_margin_percent' => $this->defaultMarginPercent(),
         ];
+    }
+
+    /** Skrzynka SMTP, z której wychodzą kampanie użytkownika. */
+    public function mailAccount(): HasOne
+    {
+        return $this->hasOne(UserMailAccount::class);
     }
 
     /**

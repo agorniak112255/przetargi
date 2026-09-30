@@ -11,7 +11,8 @@ use Throwable;
 
 /**
  * Comarch ERP XL przez połączenie „erpxl” (MS SQL, login z samym SELECT). Tabele CDN: TwrKarty, TwrZasoby, Magazyny,
- * TraNag, TraElem, TwrDost, KntKarty (tylko numer i akronim).
+ * TraNag, TraElem, TwrDost, KntKarty i KntAdresy (tylko kolumny, do których login ma prawo), OpeKarty (Ope_Ident,
+ * Ope_Nazwisko).
  */
 final class ErpXlClient implements ErpXlGateway
 {
@@ -31,6 +32,18 @@ final class ErpXlClient implements ErpXlGateway
      * (najpewniej anulowane) i 2 (w toku) się nie liczą — do potwierdzenia w XL.
      */
     private const CONFIRMED_STATE = 5;
+
+    /** Kontrahent (Knt_GIDTyp, TrN_KntTyp, KnA_KntTyp). */
+    private const CUSTOMER_TYPE = 32;
+
+    /** Aktywny adres kontrahenta; 896 to archiwalne kopie adresów z dokumentów (sprawdzone 30.09.2026). */
+    private const ADDRESS_TYPE = 864;
+
+    /** Sprzedaż do klienta w kampaniach: FS i PA. WZ pomijamy — dubluje FS. */
+    private const CUSTOMER_SALE_TYPES = [2033, 2034];
+
+    /** Stany FS/PA, które się liczą (30.09.2026: FS ma 0–6, 5 = ~97%; 6 = anulowane, 0–2 = bufor/w toku). */
+    private const CUSTOMER_SALE_STATES = [3, 4, 5];
 
     /** Skróty dokumentów, którymi partia weszła na magazyn (CDN.Dostawy.Dst_TrnTyp). */
     private const DOCUMENT_PREFIXES = [1489 => 'PZ', 1617 => 'PW', 1521 => 'FZ', 1616 => 'RW'];
@@ -316,6 +329,124 @@ final class ErpXlClient implements ErpXlGateway
         }
 
         return $out;
+    }
+
+    public function customers(int $afterGid, int $limit): array
+    {
+        $rows = $this->db()->table('CDN.KntKarty')
+            ->select(['Knt_GIDNumer', 'Knt_Akronim', 'Knt_Nazwa1', 'Knt_Nazwa2', 'Knt_Nazwa3', 'Knt_Nip', 'Knt_NipE', 'Knt_Miasto', 'Knt_EMail', 'Knt_Archiwalny'])
+            ->where('Knt_GIDTyp', self::CUSTOMER_TYPE)
+            ->where('Knt_GIDNumer', '>', $afterGid)
+            ->orderBy('Knt_GIDNumer')
+            ->limit($limit)
+            ->get();
+
+        $out = [];
+        foreach ($rows as $r) {
+            // nazwa w XL rozpisana na trzy wiersze — łączymy dosłownie spacją
+            $name = implode(' ', array_filter(
+                [$this->text($r->Knt_Nazwa1), $this->text($r->Knt_Nazwa2), $this->text($r->Knt_Nazwa3)],
+                static fn (?string $part): bool => $part !== null,
+            ));
+            $out[] = [
+                'gid' => (int) $r->Knt_GIDNumer,
+                'acronym' => trim((string) $r->Knt_Akronim),
+                'name' => $name,
+                // NIP jak na karcie; gdy pusty — postać elektroniczna (same cyfry)
+                'nip' => $this->text($r->Knt_Nip) ?? $this->text($r->Knt_NipE),
+                'city' => $this->text($r->Knt_Miasto),
+                'email' => $this->text($r->Knt_EMail),
+                'archived' => (int) $r->Knt_Archiwalny !== 0,
+            ];
+        }
+
+        return $out;
+    }
+
+    public function customerAddressEmails(): iterable
+    {
+        $rows = $this->db()->table('CDN.KntAdresy')
+            ->select(['KnA_KntNumer', 'KnA_EMail'])
+            ->where('KnA_GIDTyp', self::ADDRESS_TYPE)
+            ->where('KnA_KntTyp', self::CUSTOMER_TYPE)
+            ->whereNotNull('KnA_EMail')
+            ->where('KnA_EMail', '<>', '')
+            ->orderBy('KnA_KntNumer')
+            ->orderBy('KnA_GIDNumer')
+            ->cursor();
+
+        foreach ($rows as $r) {
+            $email = $this->text($r->KnA_EMail);
+            if ($email !== null) {
+                yield ['gid' => (int) $r->KnA_KntNumer, 'email' => $email];
+            }
+        }
+    }
+
+    public function customerSales(int $fromClarionDate): iterable
+    {
+        [$where, $bindings] = $this->customerSaleFilter($fromClarionDate);
+        [$fs, $pa] = self::CUSTOMER_SALE_TYPES;
+        // numery dokumentów liczone osobno dla FS i PA — GIDNumer jest unikalny w obrębie typu
+        $sql = <<<SQL
+            SELECT n.TrN_KntNumer AS customer_gid, e.TrE_TwrNumer AS item_gid, MAX(n.TrN_Data2) AS last_date,
+                   COUNT(DISTINCT CASE WHEN n.TrN_GIDTyp = $fs THEN n.TrN_GIDNumer END)
+                   + COUNT(DISTINCT CASE WHEN n.TrN_GIDTyp = $pa THEN n.TrN_GIDNumer END) AS documents,
+                   SUM(e.TrE_Ilosc) AS quantity
+            FROM CDN.TraElem e
+            JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
+            WHERE $where AND e.TrE_Ilosc > 0
+            GROUP BY n.TrN_KntNumer, e.TrE_TwrNumer
+            SQL;
+
+        foreach ($this->db()->cursor($sql, $bindings) as $r) {
+            yield [
+                'customer_gid' => (int) $r->customer_gid,
+                'item_gid' => (int) $r->item_gid,
+                'last_date' => (int) $r->last_date,
+                'documents' => (int) $r->documents,
+                'quantity' => (float) $r->quantity,
+            ];
+        }
+    }
+
+    public function customerOperators(int $fromClarionDate): iterable
+    {
+        [$where, $bindings] = $this->customerSaleFilter($fromClarionDate);
+        // tylko dokumenty z choć jedną pozycją z dodatnią ilością — te same, które liczy customerSales
+        $sql = <<<SQL
+            SELECT n.TrN_KntNumer AS customer_gid, o.Ope_Ident AS operator, o.Ope_Nazwisko AS operator_name,
+                   COUNT(*) AS documents
+            FROM CDN.TraNag n
+            LEFT JOIN CDN.OpeKarty o ON o.Ope_GIDNumer = n.TrN_OpeNumerW AND o.Ope_GIDTyp = n.TrN_OpeTypW
+            WHERE $where
+              AND EXISTS (SELECT 1 FROM CDN.TraElem e
+                          WHERE e.TrE_GIDTyp = n.TrN_GIDTyp AND e.TrE_GIDNumer = n.TrN_GIDNumer AND e.TrE_Ilosc > 0)
+            GROUP BY n.TrN_KntNumer, o.Ope_Ident, o.Ope_Nazwisko
+            SQL;
+
+        foreach ($this->db()->cursor($sql, $bindings) as $r) {
+            yield [
+                'customer_gid' => (int) $r->customer_gid,
+                'operator' => mb_strtoupper(trim((string) $r->operator)),
+                'operator_name' => $this->text($r->operator_name),
+                'documents' => (int) $r->documents,
+            ];
+        }
+    }
+
+    /**
+     * Warunek sprzedaży do kontrahenta: FS/PA zatwierdzone (TrN_Stan 3–5; 6 = anulowane, 0–2 = bufor/w toku) od daty.
+     *
+     * @return array{0: string, 1: list<int>}
+     */
+    private function customerSaleFilter(int $fromClarionDate): array
+    {
+        $types = implode(',', self::CUSTOMER_SALE_TYPES);
+        $states = implode(',', self::CUSTOMER_SALE_STATES);
+        $customer = self::CUSTOMER_TYPE;
+
+        return ["n.TrN_KntTyp = $customer AND n.TrN_GIDTyp IN ($types) AND n.TrN_Stan IN ($states) AND n.TrN_Data2 >= ?", [$fromClarionDate]];
     }
 
     /** Tekst z XL bez zbędnych spacji; pusty = null. */

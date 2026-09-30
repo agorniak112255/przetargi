@@ -45,6 +45,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // Zapasy → RW → PW: pary RW i PW tego samego towaru z 12 miesięcy — jedno zapytanie XL, też tylko w nocy
         $schedule->command('erp:rw-pw')->dailyAt('02:50')->withoutOverlapping(60)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));
+        // Kampanie: kontrahenci XL z e-mailami i tym, co kupowali (FS/PA z 24 mies.) — też tylko w nocy
+        $schedule->command('erp:customers')->dailyAt('03:10')->withoutOverlapping(60)
+            ->when(static fn (): bool => (bool) config('erpxl.enabled'));
         // propozycje z wyszukiwarki (bez modelu) dla towarów XL bez kodu — w nocy, bo każdy towar to zapytanie wektorowe
         $schedule->command('erp:suggest --limit=2000')->dailyAt('03:30')->withoutOverlapping(240)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));
@@ -54,6 +57,11 @@ return Application::configure(basePath: dirname(__DIR__))
         // (pełny przebieg trwa > 1 h), a samo b2b:sync-due kończy się w kilka sekund — stąd krótka blokada; co minutę,
         // żeby „Sprawdź teraz” ruszało bez czekania do 5 min (decyzja użytkownika 15.09.2026)
         $schedule->command('b2b:sync-due')->everyMinute()->withoutOverlapping(10)->runInBackground();
+        // Kampanie: kolejna partia maili w limicie godzinowym skrzynki każdego nadawcy; blokada, żeby dwa przebiegi
+        // nie wysłały tego samego adresu
+        $schedule->command('campaigns:dispatch')->everyMinute()->withoutOverlapping(10)->runInBackground();
+        // wynik kampanii: stan pozycji po 7 i 30 dniach od wysyłki — po nocnym odczycie XL
+        $schedule->command('campaigns:stock-followup')->dailyAt('04:40')->withoutOverlapping(30);
         // sygnał, że cron serwera (schedule:run) działa — okno „Sprawdź teraz” ostrzega, gdy go brak
         $schedule->call(static function (): void {
             Cache::forever(B2bSyncRun::SCHEDULER_HEARTBEAT_KEY, now()->toIso8601String());

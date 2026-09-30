@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\Admin\CatalogSearchSiteController as AdminCatalogSe
 use App\Http\Controllers\Api\Admin\CatalogSlangController as AdminCatalogSlangController;
 use App\Http\Controllers\Api\Admin\EnrichmentDescriptionTemplateController as AdminEnrichmentDescriptionTemplateController;
 use App\Http\Controllers\Api\Admin\ErpItemController;
+use App\Http\Controllers\Api\Admin\ErpOperatorController;
 use App\Http\Controllers\Api\Admin\MailSettingsController as AdminMailSettingsController;
 use App\Http\Controllers\Api\Admin\PrestaCategoryController as AdminPrestaCategoryController;
 use App\Http\Controllers\Api\Admin\PrestaShopSettingsController as AdminPrestaShopSettingsController;
@@ -21,15 +22,18 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\B2bAccountController;
 use App\Http\Controllers\Api\B2bDiscountRuleController;
 use App\Http\Controllers\Api\B2bManufacturerRuleController;
+use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CardMatchController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\EmailSuppressionController;
 use App\Http\Controllers\Api\ExchangeRateController;
 use App\Http\Controllers\Api\ImportExclusionController;
 use App\Http\Controllers\Api\InventoryBoardController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\InventoryRwPwController;
+use App\Http\Controllers\Api\MailingListController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\OfferComposeController;
 use App\Http\Controllers\Api\PrestaExportController;
@@ -63,13 +67,21 @@ use App\Http\Controllers\Api\TenderImportController;
 use App\Http\Controllers\Api\TenderInvitationController;
 use App\Http\Controllers\Api\TenderItemController;
 use App\Http\Controllers\Api\TenderMatchController;
+use App\Http\Controllers\Api\UnsubscribeController;
 use App\Http\Controllers\Api\UserDirectoryController;
+use App\Http\Controllers\Api\UserMailAccountController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/login', [AuthController::class, 'login']);
 Route::get('/product-images/{image}/thumb', [ProductImageThumbController::class, 'show'])
     ->whereNumber('image')
     ->name('product-images.thumb');
+
+// Wypis z mailingu kampanii — publiczny link z maila. GET tylko pokazuje przycisk (skanery linków w poczcie klikają
+// w GET), wypisuje dopiero POST: przycisk na stronie albo nagłówek List-Unsubscribe-Post (RFC 8058).
+// Wypis jednym kliknięciem z Gmaila/Yahoo przychodzi ze wspólnych adresów dostawcy poczty — POST z wyższym limitem.
+Route::get('/wypis/{token}', [UnsubscribeController::class, 'show'])->where('token', '[A-Za-z0-9]{40}')->middleware('throttle:30,1')->name('campaigns.unsubscribe');
+Route::post('/wypis/{token}', [UnsubscribeController::class, 'confirm'])->where('token', '[A-Za-z0-9]{40}')->middleware('throttle:300,1');
 
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);
@@ -139,7 +151,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/exchange-rates', ExchangeRateController::class)->middleware('permission:products.view');
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');
     // Zapasy: towary ERP XL ze stanem bez sprzedaży od N miesięcy (tylko odczyt kopii XL)
-    Route::get('/inventory', [InventoryController::class, 'index'])->middleware('permission:inventory.view');
+    // handlowiec widzi listę zalegających towarów, żeby robić z nich kampanie (decyzja właściciela 30.09.2026)
+    Route::get('/inventory', [InventoryController::class, 'index'])->middleware('permission:inventory.view|campaigns.use');
     Route::get('/inventory/rw-pw', [InventoryRwPwController::class, 'index'])->middleware('permission:inventory.view');
     Route::get('/inventory/board', [InventoryBoardController::class, 'show'])->middleware('permission:inventory.report.view');
     Route::get('/inventory/board/items', [InventoryBoardController::class, 'items'])->middleware('permission:inventory.report.view');
@@ -354,7 +367,42 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::post('/ai-settings/test', [AiSettingsController::class, 'test'])->middleware('permission:ai_settings.manage');
     Route::post('/ai-settings/test-vector', [AiSettingsController::class, 'testVector'])->middleware('permission:ai_settings.manage');
 
+    Route::middleware('permission:campaigns.use')->group(function (): void {
+        Route::get('/campaigns', [CampaignController::class, 'index']);
+        Route::post('/campaigns', [CampaignController::class, 'store']);
+        Route::get('/campaigns/{campaign}', [CampaignController::class, 'show']);
+        Route::patch('/campaigns/{campaign}', [CampaignController::class, 'update']);
+        Route::delete('/campaigns/{campaign}', [CampaignController::class, 'destroy']);
+        Route::post('/campaigns/{campaign}/duplicate', [CampaignController::class, 'duplicate']);
+        Route::post('/campaigns/{campaign}/items', [CampaignController::class, 'addItems']);
+        Route::patch('/campaigns/{campaign}/items/{item}', [CampaignController::class, 'updateItem']);
+        Route::delete('/campaigns/{campaign}/items/{item}', [CampaignController::class, 'removeItem']);
+        Route::get('/campaigns/{campaign}/audience', [CampaignController::class, 'audience']);
+        Route::get('/campaigns/{campaign}/preview', [CampaignController::class, 'preview']);
+        Route::post('/campaigns/{campaign}/test', [CampaignController::class, 'test'])->middleware('throttle:10,1');
+        Route::post('/campaigns/{campaign}/send', [CampaignController::class, 'send']);
+        Route::post('/campaigns/{campaign}/cancel', [CampaignController::class, 'cancel']);
+        Route::get('/campaigns/{campaign}/recipients', [CampaignController::class, 'recipients']);
+
+        Route::get('/mailing-lists', [MailingListController::class, 'index']);
+        Route::post('/mailing-lists', [MailingListController::class, 'store']);
+        Route::patch('/mailing-lists/{list}', [MailingListController::class, 'update']);
+        Route::delete('/mailing-lists/{list}', [MailingListController::class, 'destroy']);
+        Route::get('/mailing-lists/{list}/contacts', [MailingListController::class, 'contacts']);
+        Route::post('/mailing-lists/{list}/import', [MailingListController::class, 'import']);
+        Route::delete('/mailing-lists/{list}/contacts/{contact}', [MailingListController::class, 'removeContact']);
+
+        Route::get('/email-suppressions', [EmailSuppressionController::class, 'index']);
+        Route::post('/email-suppressions', [EmailSuppressionController::class, 'store']);
+        Route::delete('/email-suppressions/{suppression}', [EmailSuppressionController::class, 'destroy']);
+
+        Route::get('/me/mail-account', [UserMailAccountController::class, 'show']);
+        Route::put('/me/mail-account', [UserMailAccountController::class, 'update']);
+        Route::post('/me/mail-account/test', [UserMailAccountController::class, 'test'])->middleware('throttle:10,1');
+    });
+
     Route::middleware('permission:admin.access')->prefix('admin')->group(function (): void {
+        Route::get('/erp-operators', [ErpOperatorController::class, 'index'])->middleware('permission:admin.users.manage');
         Route::get('/users', [AdminUserController::class, 'index'])->middleware('permission:admin.users.manage');
         Route::post('/users', [AdminUserController::class, 'store'])->middleware('permission:admin.users.manage');
         Route::patch('/users/{user}', [AdminUserController::class, 'update'])->middleware('permission:admin.users.manage');

@@ -1,8 +1,21 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, type User } from '../lib/api'
 import { TEMPLATES } from '../lib/appearance'
+import { listErpOperators, type ErpOperator } from '../lib/campaigns'
 
 type RoleOption = { name: string; label?: string }
+
+/** Użytkownik na liście admina — dodatkowo operator ERP XL (ustawia go tylko administrator). */
+type AdminUser = User & { erp_operator_ident?: string | null }
+
+function customersLabel(n: number): string {
+  return `${n} ${n === 1 ? 'klient' : 'klientów'}`
+}
+
+function operatorOptionLabel(o: ErpOperator, editedUserId: number): string {
+  const assigned = o.user && o.user.id !== editedUserId ? ` · przypisany: ${o.user.name}` : ''
+  return `${o.ident}${o.name ? ` — ${o.name}` : ''} · ${customersLabel(o.customers)}${assigned}`
+}
 
 /** Wartość pola „Wygląd”: "szablon|tryb" (puste = brak). */
 const NO_APPEARANCE = '|'
@@ -22,7 +35,7 @@ const appearanceOptions: { value: string; label: string }[] = [
   { value: NO_APPEARANCE, label: 'Nie ustawiaj (użytkownik wybierze sam)' },
 ]
 
-function appearanceValue(u: User): string {
+function appearanceValue(u: AdminUser): string {
   const template = u.ui_preferences?.template ?? null
   if (!template) return NO_APPEARANCE
   const known = TEMPLATES.find((t) => t.id === template)
@@ -41,7 +54,8 @@ function appearancePayload(value: string): { ui_template: string | null; ui_mode
 }
 
 export function AdminUsers() {
-  const [users, setUsers] = useState<User[]>([])
+  const [users, setUsers] = useState<AdminUser[]>([])
+  const [operators, setOperators] = useState<ErpOperator[]>([])
   const [roleOptions, setRoleOptions] = useState<RoleOption[]>([])
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
@@ -58,14 +72,19 @@ export function AdminUsers() {
   const [editEmail, setEditEmail] = useState('')
   const [editPassword, setEditPassword] = useState('')
   const [editAppearance, setEditAppearance] = useState(NO_APPEARANCE)
+  const [editOperator, setEditOperator] = useState('')
 
   async function load() {
     const [usersData, rolesData] = await Promise.all([
-      api<User[]>('/admin/users'),
+      api<AdminUser[]>('/admin/users'),
       api<{ roles: RoleOption[] }>('/admin/roles'),
     ])
     setUsers(usersData)
     setRoleOptions(rolesData.roles)
+    // lista operatorów XL tylko pomaga wybrać — jej błąd nie blokuje listy użytkowników
+    void listErpOperators()
+      .then((res) => setOperators(res.data))
+      .catch(() => setOperators([]))
     if (rolesData.roles.length && !rolesData.roles.some((r) => r.name === role)) {
       setRole(rolesData.roles[0].name)
     }
@@ -129,6 +148,7 @@ export function AdminUsers() {
         name: editName.trim(),
         email: editEmail.trim(),
         ...appearancePayload(editAppearance),
+        erp_operator_ident: editOperator || null,
       }
       if (editPassword) body.password = editPassword
       await api(`/admin/users/${userId}`, {
@@ -148,7 +168,7 @@ export function AdminUsers() {
   }
 
   /** Hasło w bazie jest hashowane — wysyłka zawsze ustawia nowe (podane w edycji albo wygenerowane). */
-  async function onSendCredentials(u: User, password?: string) {
+  async function onSendCredentials(u: AdminUser, password?: string) {
     const question = password
       ? `Ustawić hasło wpisane w polu i wysłać dane logowania na ${u.email}?`
       : `Wysłać dane logowania na ${u.email}? Zostanie ustawione nowe, losowe hasło — dotychczasowe przestanie działać.`
@@ -257,6 +277,7 @@ export function AdminUsers() {
             <th className="p-2">E-mail</th>
             <th className="p-2">Rola</th>
             <th className="p-2">Wygląd</th>
+            <th className="p-2">Operator ERP XL</th>
             <th className="p-2">Akcje</th>
           </tr>
         </thead>
@@ -330,6 +351,41 @@ export function AdminUsers() {
               </td>
               <td className="p-2">
                 {editId === u.id ? (
+                  <div className="max-w-[18rem]">
+                    <select
+                      className="w-full rounded border px-2 py-1 text-xs"
+                      value={editOperator}
+                      onChange={(e) => setEditOperator(e.target.value)}
+                    >
+                      <option value="">— brak —</option>
+                      {editOperator && !operators.some((o) => o.ident === editOperator) && (
+                        <option value={editOperator}>{editOperator} · brak klientów w XL</option>
+                      )}
+                      {operators.map((o) => (
+                        <option key={o.ident} value={o.ident}>
+                          {operatorOptionLabel(o, u.id)}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-[11px] leading-snug text-slate-500">
+                      Klienci, którym ten operator wystawiał faktury w XL, będą w kampaniach „moimi klientami” tego
+                      użytkownika.
+                    </p>
+                  </div>
+                ) : u.erp_operator_ident ? (
+                  <span>
+                    {u.erp_operator_ident}
+                    {(() => {
+                      const o = operators.find((x) => x.ident === u.erp_operator_ident)
+                      return o?.name ? <span className="text-slate-500"> — {o.name}</span> : null
+                    })()}
+                  </span>
+                ) : (
+                  <span className="text-slate-500">nie przypisany</span>
+                )}
+              </td>
+              <td className="p-2">
+                {editId === u.id ? (
                   <div className="flex flex-wrap items-center gap-1">
                     <input
                       type="password"
@@ -378,6 +434,7 @@ export function AdminUsers() {
                         setEditEmail(u.email)
                         setEditPassword('')
                         setEditAppearance(appearanceValue(u))
+                        setEditOperator(u.erp_operator_ident ?? '')
                       }}
                       className="rounded bg-slate-200 px-2 py-1 text-xs"
                     >

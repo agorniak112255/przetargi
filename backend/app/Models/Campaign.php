@@ -1,0 +1,114 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+/**
+ * Kampania reklamowa: towar (zwykle zalegający w XL) wysyłany mailem do klientów ze skrzynki autora.
+ * Projekt → Wysyłka → Wysłana (albo Anulowana). Po starcie wysyłki kampanii nie edytuje się — duplikuje.
+ */
+class Campaign extends Model
+{
+    public const STATUS_DRAFT = 'draft';
+
+    public const STATUS_SENDING = 'sending';
+
+    public const STATUS_SENT = 'sent';
+
+    public const STATUS_CANCELLED = 'cancelled';
+
+    public const LAYOUTS = ['grid3', 'grid2', 'list'];
+
+    public const XL_MODES = ['items', 'group', 'mine'];
+
+    public const XL_MONTHS = [12, 24];
+
+    protected $fillable = [
+        'user_id',
+        'code',
+        'name',
+        'subject',
+        'preheader',
+        'heading',
+        'intro',
+        'layout',
+        'valid_until',
+        'status',
+        'audience',
+        'sending_started_at',
+        'sent_at',
+        'totals',
+        'duplicated_from_id',
+    ];
+
+    protected function casts(): array
+    {
+        return [
+            'valid_until' => 'date',
+            'audience' => 'array',
+            'sending_started_at' => 'datetime',
+            'sent_at' => 'datetime',
+            'totals' => 'array',
+        ];
+    }
+
+    protected static function booted(): void
+    {
+        // kod w temacie „Zapytaj o ofertę” wiąże odpowiedź klienta z kampanią
+        static::created(static function (Campaign $campaign): void {
+            if ($campaign->code === null) {
+                $campaign->forceFill(['code' => 'K-'.str_pad((string) $campaign->id, 4, '0', STR_PAD_LEFT)])->saveQuietly();
+            }
+        });
+    }
+
+    public function isDraft(): bool
+    {
+        return $this->status === self::STATUS_DRAFT;
+    }
+
+    /**
+     * Odbiorcy z domyślnymi wartościami — kształt z kontraktu API.
+     *
+     * @return array{list_ids: list<int>, xl: array{mode: string|null, months: int, only_mine: bool}}
+     */
+    public function audienceSettings(): array
+    {
+        $a = is_array($this->audience) ? $this->audience : [];
+        $xl = is_array($a['xl'] ?? null) ? $a['xl'] : [];
+        $mode = $xl['mode'] ?? null;
+        $months = (int) ($xl['months'] ?? 24);
+
+        return [
+            'list_ids' => array_values(array_map('intval', is_array($a['list_ids'] ?? null) ? $a['list_ids'] : [])),
+            'xl' => [
+                'mode' => in_array($mode, self::XL_MODES, true) ? $mode : null,
+                'months' => in_array($months, self::XL_MONTHS, true) ? $months : 24,
+                'only_mine' => (bool) ($xl['only_mine'] ?? false),
+            ],
+        ];
+    }
+
+    /** @return BelongsTo<User, $this> */
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    /** @return HasMany<CampaignItem, $this> */
+    public function items(): HasMany
+    {
+        return $this->hasMany(CampaignItem::class)->orderBy('position')->orderBy('id');
+    }
+
+    /** @return HasMany<CampaignRecipient, $this> */
+    public function recipients(): HasMany
+    {
+        return $this->hasMany(CampaignRecipient::class);
+    }
+}

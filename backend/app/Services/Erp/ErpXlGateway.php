@@ -6,7 +6,7 @@ namespace App\Services\Erp;
 
 /**
  * Odczyt z Comarch ERP XL — zwykłe tablice, żeby synchronizację dało się sprawdzić bez MS SQL (atrapa w testach).
- * Liczby i daty dosłownie z XL (data Clarion jako int); przeliczenia robi ErpItemSync.
+ * Liczby i daty dosłownie z XL (data Clarion jako int); przeliczenia robią ErpItemSync, ErpRwPwSync i ErpCustomerSync.
  */
 interface ErpXlGateway
 {
@@ -75,4 +75,36 @@ interface ErpXlGateway
      * @return list<array{type: 'rw'|'pw', document_id: int, gid: int, received_at: int, quantity: float, feature: string, source_type: int, source_number: string|null}>
      */
     public function internalMoveLots(int $fromClarionDate): array;
+
+    /**
+     * Kontrahenci (Knt_GIDTyp = 32) o numerze większym niż $afterGid, rosnąco. E-mail dosłownie z karty (Knt_EMail —
+     * bywa listą rozdzieloną ; , albo spacją); rozbija go ErpCustomerSync.
+     *
+     * @return list<array{gid: int, acronym: string, name: string, nip: ?string, city: ?string, email: ?string, archived: bool}>
+     */
+    public function customers(int $afterGid, int $limit): array;
+
+    /**
+     * E-maile z aktywnych adresów kontrahentów (KnA_GIDTyp = 864; 896 to archiwalne kopie z dokumentów), niepuste,
+     * dosłownie z XL.
+     *
+     * @return iterable<array{gid: int, email: string}> gid = numer kontrahenta
+     */
+    public function customerAddressEmails(): iterable;
+
+    /**
+     * Sprzedaż (FS, PA — bez WZ, bo dubluje FS) od daty: na kontrahenta i towar data ostatniego dokumentu (Clarion),
+     * liczba dokumentów i ilość. Strumień (setki tysięcy wierszy).
+     *
+     * @return iterable<array{customer_gid: int, item_gid: int, last_date: int, documents: int, quantity: float}>
+     */
+    public function customerSales(int $fromClarionDate): iterable;
+
+    /**
+     * Liczba FS/PA od daty na kontrahenta i operatora, który je wystawił (Ope_Ident po trim i wielkich literach; pusty,
+     * gdy XL nie zna operatora). Strumień.
+     *
+     * @return iterable<array{customer_gid: int, operator: string, operator_name: ?string, documents: int}>
+     */
+    public function customerOperators(int $fromClarionDate): iterable;
 }

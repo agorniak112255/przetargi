@@ -1,8 +1,15 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useAppearance } from '../appearanceContext'
 import { useAuth } from '../auth'
-import { api, type User } from '../lib/api'
+import { api, can, type User } from '../lib/api'
 import { TEMPLATES, type AppearanceMode, type AppearanceTemplate, type Scheme } from '../lib/appearance'
+import {
+  getMailAccount,
+  saveMailAccount,
+  testMailAccount,
+  type UserMailAccount,
+  type UserMailAccountInput,
+} from '../lib/campaigns'
 
 const schemeLabel: Record<Scheme, string> = {
   dark: 'Noc',
@@ -201,6 +208,418 @@ function MarginForm() {
   )
 }
 
+/** Port i szyfrowanie. 25 i 2525 tylko po otwarciu „zaawansowanych” (dozwolone porty: backend campaigns.smtp_ports). */
+const PORT_CHOICES: { key: string; port: number; scheme: 'smtp' | 'smtps'; label: string; rare?: boolean }[] = [
+  { key: '587', port: 587, scheme: 'smtp', label: '587 · STARTTLS' },
+  { key: '465', port: 465, scheme: 'smtps', label: '465 · SSL' },
+  { key: '25', port: 25, scheme: 'smtp', label: '25 · STARTTLS', rare: true },
+  { key: '2525', port: 2525, scheme: 'smtp', label: '2525 · STARTTLS', rare: true },
+]
+const RATE_CHOICES = [30, 60, 100, 150, 200, 300]
+
+type MailForm = {
+  from_name: string
+  from_address: string
+  host: string
+  portKey: string
+  username: string
+  password: string
+  verify_peer: boolean
+  rate_per_hour: number
+  copy_to_self: boolean
+  signature: string
+}
+
+function mailFormFrom(a: UserMailAccount, user: User | null): MailForm {
+  const portKey = PORT_CHOICES.some((c) => c.port === a.port) ? String(a.port) : '587'
+  return {
+    // Nowa skrzynka: nadawca podpowiedziany z konta w aplikacji — do poprawienia przed zapisem.
+    from_name: a.from_name ?? (a.configured ? '' : (user?.name ?? '')),
+    from_address: a.from_address ?? (a.configured ? '' : (user?.email ?? '')),
+    host: a.host ?? '',
+    portKey,
+    username: a.username ?? '',
+    password: '',
+    verify_peer: a.verify_peer,
+    rate_per_hour: a.rate_per_hour,
+    copy_to_self: a.copy_to_self,
+    signature: a.signature ?? '',
+  }
+}
+
+/** „30.09, 14:20” — jak w makiecie stanu skrzynki. */
+function shortDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+const inputClass = 'rounded border px-2 py-1.5 text-sm'
+
+function MailField({ id, label, hint, children }: { id: string; label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label htmlFor={id} className="text-xs text-slate-500">
+        {label}
+      </label>
+      {children}
+      {hint && <span className="text-[11px] text-slate-400">{hint}</span>}
+    </div>
+  )
+}
+
+/**
+ * Moja poczta: skrzynka SMTP użytkownika, z której wychodzą jego kampanie. Hasło nigdy nie wraca z serwera
+ * (has_password); puste pole przy zapisie = bez zmiany. Test wysyła wiadomość na adres nadawcy.
+ */
+function MailAccountForm() {
+  const { user } = useAuth()
+  const [account, setAccount] = useState<UserMailAccount | null>(null)
+  const [saved, setSaved] = useState<MailForm | null>(null)
+  const [form, setForm] = useState<MailForm | null>(null)
+  const [advanced, setAdvanced] = useState(false)
+  const [loadErr, setLoadErr] = useState('')
+  const [busy, setBusy] = useState<'save' | 'test' | false>(false)
+  const [err, setErr] = useState('')
+  const [msg, setMsg] = useState('')
+  const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null)
+
+  function apply(a: UserMailAccount) {
+    const f = mailFormFrom(a, user)
+    setAccount(a)
+    setSaved(f)
+    setForm(f)
+  }
+
+  async function load() {
+    setLoadErr('')
+    try {
+      const a = await getMailAccount()
+      apply(a)
+      const rare = PORT_CHOICES.find((c) => c.port === a.port)?.rare ?? false
+      setAdvanced(rare || !a.verify_peer)
+    } catch (ex) {
+      setLoadErr(ex instanceof Error ? ex.message : 'Błąd')
+    }
+  }
+
+  useEffect(() => {
+    void load()
+    // Raz przy wejściu na stronę; user z kontekstu służy tylko do podpowiedzi nadawcy.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (loadErr) {
+    return (
+      <section id="moja-poczta" className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+        <h2 className="mb-3 text-sm font-semibold">Moja poczta</h2>
+        <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">
+          Nie udało się wczytać ustawień skrzynki: {loadErr}{' '}
+          <button type="button" className="font-medium underline" onClick={() => void load()}>
+            Spróbuj ponownie
+          </button>
+        </p>
+      </section>
+    )
+  }
+  if (!account || !form || !saved) {
+    return (
+      <section id="moja-poczta" className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+        <h2 className="mb-3 text-sm font-semibold">Moja poczta</h2>
+        <p className="text-xs text-slate-500">Ładowanie…</p>
+      </section>
+    )
+  }
+
+  const dirty = form.password !== '' || JSON.stringify(form) !== JSON.stringify(saved)
+  const choice = PORT_CHOICES.find((c) => c.key === form.portKey) ?? PORT_CHOICES[0]
+  const portChoices = PORT_CHOICES.filter((c) => !c.rare || advanced || c.key === form.portKey)
+  const rateChoices = RATE_CHOICES.includes(form.rate_per_hour)
+    ? RATE_CHOICES
+    : [...RATE_CHOICES, form.rate_per_hour].sort((a, b) => a - b)
+
+  function set<K extends keyof MailForm>(key: K, value: MailForm[K]) {
+    setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
+    setMsg('')
+  }
+
+  /** Zapis; true = zapisane. Pole hasła wysyłane tylko, gdy coś wpisano. */
+  async function save(): Promise<boolean> {
+    if (!form) return false
+    const body: UserMailAccountInput = {
+      from_name: form.from_name.trim(),
+      from_address: form.from_address.trim(),
+      host: form.host.trim(),
+      port: choice.port,
+      scheme: choice.scheme,
+      username: form.username.trim(),
+      verify_peer: form.verify_peer,
+      rate_per_hour: form.rate_per_hour,
+      copy_to_self: form.copy_to_self,
+      signature: form.signature.trim() === '' ? null : form.signature,
+    }
+    if (form.password !== '') body.password = form.password
+    try {
+      apply(await saveMailAccount(body))
+      return true
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Błąd zapisu')
+      return false
+    }
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    setBusy('save')
+    setErr('')
+    setMsg('')
+    setTest(null)
+    if (await save()) setMsg('Zapisano. Sprawdź połączenie przyciskiem obok.')
+    setBusy(false)
+  }
+
+  async function onTest(formEl: HTMLFormElement | null) {
+    setErr('')
+    setMsg('')
+    setTest(null)
+    // Test idzie na zapisanych ustawieniach — zmiany w polach najpierw zapisujemy.
+    if (dirty) {
+      if (formEl && !formEl.reportValidity()) return
+      setBusy('test')
+      if (!(await save())) {
+        setBusy(false)
+        return
+      }
+    } else {
+      setBusy('test')
+    }
+    try {
+      setTest(await testMailAccount())
+    } catch (ex) {
+      setTest({ ok: false, message: ex instanceof Error ? ex.message : 'Błąd sprawdzania' })
+    }
+    // Stan skrzynki (verified_at / last_error) po teście — bez ruszania pól formularza.
+    try {
+      setAccount(await getMailAccount())
+    } catch {
+      /* stan odświeży się przy następnym wejściu */
+    }
+    setBusy(false)
+  }
+
+  return (
+    <section id="moja-poczta" className="mb-4 rounded-xl bg-white p-4 shadow-sm">
+      <h2 className="mb-1 text-sm font-semibold">Moja poczta</h2>
+      <p className="mb-3 text-xs text-slate-500">
+        Kampanie wychodzą z tej skrzynki. Hasło jest zapisane zaszyfrowane. Dane serwera poczty (SMTP) znajdziesz w
+        ustawieniach programu pocztowego albo u administratora poczty.
+      </p>
+      <div className="grid gap-4 lg:grid-cols-[1fr_15rem]">
+        <form onSubmit={(e) => void onSubmit(e)} className="space-y-3" autoComplete="off">
+          {err && <p className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+          {msg && <p className="rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-700">{msg}</p>}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <MailField id="mail-from-name" label="Nazwa nadawcy" hint="tak klient zobaczy nadawcę, np. „Jan Kowalski – SUPON”">
+              <input
+                id="mail-from-name"
+                className={inputClass}
+                value={form.from_name}
+                maxLength={150}
+                onChange={(e) => set('from_name', e.target.value)}
+                required
+              />
+            </MailField>
+            <MailField id="mail-from-address" label="Adres nadawcy" hint="na ten adres wrócą odpowiedzi klientów">
+              <input
+                id="mail-from-address"
+                type="email"
+                className={inputClass}
+                value={form.from_address}
+                maxLength={255}
+                onChange={(e) => set('from_address', e.target.value)}
+                required
+              />
+            </MailField>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MailField id="mail-host" label="Serwer SMTP">
+              <input
+                id="mail-host"
+                className={inputClass}
+                value={form.host}
+                maxLength={255}
+                placeholder="np. mail.firma.pl"
+                onChange={(e) => set('host', e.target.value)}
+                required
+              />
+            </MailField>
+            <MailField id="mail-port" label="Port i szyfrowanie">
+              <select
+                id="mail-port"
+                className={inputClass}
+                value={form.portKey}
+                onChange={(e) => set('portKey', e.target.value)}
+              >
+                {portChoices.map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </MailField>
+            <MailField id="mail-username" label="Login">
+              <input
+                id="mail-username"
+                name="smtp-username"
+                autoComplete="off"
+                className={inputClass}
+                value={form.username}
+                maxLength={255}
+                placeholder="zwykle pełny adres e-mail"
+                onChange={(e) => set('username', e.target.value)}
+                required
+              />
+            </MailField>
+            <MailField id="mail-password" label="Hasło">
+              <input
+                id="mail-password"
+                name="smtp-password"
+                type="password"
+                autoComplete="new-password"
+                className={inputClass}
+                value={form.password}
+                placeholder={account.has_password ? 'zapisane — zostaw puste, żeby nie zmieniać' : ''}
+                onChange={(e) => set('password', e.target.value)}
+                required={!account.has_password}
+              />
+            </MailField>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <MailField id="mail-rate" label="Limit wysyłki" hint="zgodnie z limitem hostingu poczty">
+              <select
+                id="mail-rate"
+                className={inputClass}
+                value={form.rate_per_hour}
+                onChange={(e) => set('rate_per_hour', Number(e.target.value))}
+              >
+                {rateChoices.map((n) => (
+                  <option key={n} value={n}>
+                    {n} maili na godzinę
+                  </option>
+                ))}
+              </select>
+            </MailField>
+            <label className="flex items-center gap-2 self-center text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={form.copy_to_self}
+                onChange={(e) => set('copy_to_self', e.target.checked)}
+              />
+              Wyślij jedną kopię kampanii do mnie
+            </label>
+          </div>
+          <MailField
+            id="mail-signature"
+            label="Podpis"
+            hint="zwykły tekst, pod każdą kampanią — np. imię i nazwisko, stanowisko, telefon"
+          >
+            <textarea
+              id="mail-signature"
+              rows={4}
+              className={inputClass}
+              value={form.signature}
+              onChange={(e) => set('signature', e.target.value)}
+            />
+          </MailField>
+          <details
+            className="rounded border border-slate-200 px-3 py-2 text-sm"
+            open={advanced}
+            onToggle={(e) => setAdvanced(e.currentTarget.open)}
+          >
+            <summary className="cursor-pointer text-xs font-medium text-slate-600">Ustawienia zaawansowane</summary>
+            <div className="mt-2 space-y-2">
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={form.verify_peer}
+                  onChange={(e) => set('verify_peer', e.target.checked)}
+                />
+                Sprawdzaj certyfikat serwera poczty (zalecane)
+              </label>
+              <p className="text-[11px] text-slate-500">
+                Wyłącz tylko wtedy, gdy test pokazuje błąd certyfikatu, a serwer poczty jest Twojej firmy. Tu są też
+                rzadkie porty 25 i 2525 — w polu „Port i szyfrowanie”, tylko gdy tak podaje dostawca poczty.
+              </p>
+            </div>
+          </details>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="submit"
+              disabled={busy !== false}
+              className="rounded bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {busy === 'save' ? 'Zapisuję…' : 'Zapisz'}
+            </button>
+            <button
+              type="button"
+              disabled={busy !== false || (!account.configured && !dirty)}
+              onClick={(e) => void onTest(e.currentTarget.form)}
+              className="rounded border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+              title={
+                !account.configured && !dirty
+                  ? 'Najpierw uzupełnij i zapisz skrzynkę'
+                  : 'Zapisuje zmiany, łączy się z serwerem i wysyła wiadomość testową na adres nadawcy'
+              }
+            >
+              {busy === 'test' ? 'Sprawdzam…' : 'Sprawdź połączenie i wyślij test do siebie'}
+            </button>
+          </div>
+          {test && (
+            <p
+              className={`rounded px-3 py-2 text-xs ${test.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}
+            >
+              {test.ok ? '✓ ' : ''}
+              {test.message}
+            </p>
+          )}
+        </form>
+        <aside className="h-fit rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+          <h3 className="mb-2 font-semibold text-slate-700">Stan skrzynki</h3>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
+            <dt className="text-slate-500">Połączenie</dt>
+            <dd className="text-right font-medium">
+              {!account.configured ? (
+                <span className="text-slate-500">nie ustawiona</span>
+              ) : account.last_error ? (
+                <span className="text-red-700">błąd</span>
+              ) : account.verified_at ? (
+                <span className="text-emerald-700">działa (sprawdzono {shortDateTime(account.verified_at)})</span>
+              ) : (
+                <span className="text-amber-800">nie sprawdzono</span>
+              )}
+            </dd>
+            <dt className="text-slate-500">Limit</dt>
+            <dd className="text-right tabular-nums">{account.rate_per_hour} na godz.</dd>
+            <dt className="text-slate-500">Kopia do mnie</dt>
+            <dd className="text-right">{account.copy_to_self ? 'tak' : 'nie'}</dd>
+          </dl>
+          {account.configured && account.last_error && (
+            <p className="mt-2 break-words rounded bg-red-50 px-2 py-1.5 text-red-700">
+              Ostatni błąd: {account.last_error}
+              {account.verified_at && (
+                <span className="mt-1 block text-slate-600">
+                  Ostatnio działała: {shortDateTime(account.verified_at)}
+                </span>
+              )}
+            </p>
+          )}
+          <p className="mt-3 text-slate-500">
+            Bez ustawionej skrzynki kampanię można przygotować, ale nie da się jej wysłać.
+          </p>
+        </aside>
+      </div>
+    </section>
+  )
+}
+
 export function Account() {
   const { user } = useAuth()
   const { choice, resolved, setChoice, saveState, saveError } = useAppearance()
@@ -226,6 +645,8 @@ export function Account() {
       </section>
 
       <MarginForm />
+
+      {can(user, 'campaigns.use') && <MailAccountForm />}
 
       <PasswordForm />
 

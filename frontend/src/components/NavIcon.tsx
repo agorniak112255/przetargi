@@ -10,6 +10,7 @@ export type NavIconName =
   | 'reports'
   | 'clients'
   | 'inquiries'
+  | 'campaigns'
   | 'ai-settings'
   | 'admin'
   | 'help'
@@ -64,6 +65,13 @@ const shapes: Record<NavIconName, ReactNode> = {
     <>
       <rect x="3" y="5" width="18" height="14" rx="2" />
       <path d="M3 7l9 6 9-6" />
+    </>
+  ),
+  // Koperta z odlatującą strzałką — wysyłka kampanii (Zapytania mają samą kopertę).
+  campaigns: (
+    <>
+      <path d="M13 19H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5" />
+      <path d="M3 7l9 6 9-6M16 18h6M19 15l3 3-3 3" />
     </>
   ),
   'ai-settings': (

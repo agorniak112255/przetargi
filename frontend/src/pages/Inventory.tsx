@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
+import { useAuth } from '../auth'
+import { AddToCampaignMenu, CAMPAIGN_MAX_ITEMS } from '../components/AddToCampaignMenu'
 import { InventoryTabs } from '../components/InventoryTabs'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
-import { api, type InventoryResponse, type InventoryRow, type InventoryWarehouse } from '../lib/api'
+import { api, can, type InventoryResponse, type InventoryRow, type InventoryWarehouse } from '../lib/api'
+import { applyCheckboxRange } from '../lib/checkboxRange'
 import { erpForeignPrice, erpQty, erpUnitLabel, erpUnitPrice, isTradeWarehouse } from '../lib/erpStock'
 import { formatDate, formatDateTime, formatPrice } from '../lib/priceChange'
 
@@ -10,6 +13,7 @@ import { formatDate, formatDateTime, formatPrice } from '../lib/priceChange'
  * Zapasy: towary z ERP XL, które mają stan (wszystkie magazyny) i nie sprzedały się od N miesięcy —
  * ile ich jest i ile pieniędzy w nich leży. Dane tylko z XL (GET /api/inventory); strona nic nie liczy
  * poza wiekiem dat („X mies. temu”). Stan filtrów, sortowania i strony w adresie — link odtwarza widok.
+ * Z uprawnieniem campaigns.use wiersze można zaznaczać (także na kilku stronach) i dodać do kampanii.
  */
 
 type SortKey = 'value' | 'stock' | 'last_sale' | 'oldest_lot' | 'code' | 'name'
@@ -115,6 +119,9 @@ function pageNumbers(current: number, last: number): Array<number | '…'> {
 }
 
 export function Inventory() {
+  const { user } = useAuth()
+  const canCampaign = can(user, 'campaigns.use')
+  const canRwPw = can(user, 'inventory.view')
   const [params, setParams] = useSearchParams()
 
   const months = pick(params.get('months'), MONTHS, DEFAULT_MONTHS)
@@ -150,6 +157,10 @@ export function Inventory() {
   const [err, setErr] = useState('')
   const [previewId, setPreviewId] = useState<number | null>(null)
   const seq = useRef(0)
+  /** Zaznaczone do kampanii: id → wiersz, żeby zaznaczenie i suma wartości przetrwały zmianę strony i filtrów. */
+  const [selected, setSelected] = useState<Map<number, InventoryRow>>(() => new Map())
+  /** Kotwica Shift+klik — indeks wiersza na bieżącej stronie; po wczytaniu innej strony kasowana. */
+  const selectAnchor = useRef<number | null>(null)
 
   // Pola tekstowe: wpis od razu w polu, do adresu (i zapytania) po 300 ms bez pisania — jak Powiązania z ERP XL.
   const [searchInput, setSearchInput] = useState(search)
@@ -208,6 +219,7 @@ export function Inventory() {
       const res = await api<InventoryResponse>(`/inventory?${apiQuery}`)
       // Szybkie klikanie filtrów — spóźniona odpowiedź nie nadpisuje nowszej.
       if (my !== seq.current) return
+      selectAnchor.current = null
       setResult(res)
     } catch (ex) {
       if (my === seq.current) setErr(ex instanceof Error ? ex.message : 'Błąd wczytywania zapasów')
@@ -255,7 +267,36 @@ export function Inventory() {
   const from = meta && rows.length > 0 ? (meta.current_page - 1) * meta.per_page + 1 : null
   const to = from != null ? from + rows.length - 1 : null
   const pages = meta ? pageNumbers(meta.current_page, Math.max(1, meta.last_page)) : []
-  const colCount = 9
+  const colCount = 9 + (canCampaign ? 1 : 0)
+  const allVisibleSelected = rows.length > 0 && rows.every((r) => selected.has(r.id))
+  const selectedRows = [...selected.values()]
+  const selectedValue = selectedRows.reduce((sum, r) => sum + (r.stock_value ?? 0), 0)
+  const selectedWithoutValue = selectedRows.filter((r) => r.stock_value == null).length
+
+  /** Klik w wierszu (Shift = zakres od ostatnio klikniętego) — ta sama reguła co na liście Produkty. */
+  function toggleRow(index: number, shiftKey: boolean) {
+    const ids = rows.map((r) => r.id)
+    const current: Record<number, boolean> = {}
+    for (const id of selected.keys()) current[id] = true
+    const applied = applyCheckboxRange(ids, current, selectAnchor.current, index, shiftKey)
+    selectAnchor.current = applied.anchorIndex
+    const next = new Map<number, InventoryRow>()
+    for (const [id, row] of selected) if (applied.selected[id]) next.set(id, row)
+    for (const row of rows) if (applied.selected[row.id]) next.set(row.id, row)
+    setSelected(next)
+  }
+
+  function toggleAllVisible() {
+    const next = new Map(selected)
+    if (allVisibleSelected) {
+      for (const r of rows) next.delete(r.id)
+      selectAnchor.current = null
+    } else {
+      for (const r of rows) next.set(r.id, r)
+      selectAnchor.current = rows.length - 1
+    }
+    setSelected(next)
+  }
 
   const controls = meta && (
     <ListControls
@@ -295,6 +336,7 @@ export function Inventory() {
             Towary z Comarch ERP XL, które mają stan (wszystkie magazyny) i nie sprzedały się od wybranej liczby
             miesięcy. Wartość = ilość × cena zakupu partii leżących na magazynie (z XL); dopóki XL nie poda partii —
             stan × cena z ostatniej PZ.
+            {canCampaign && ` Zaznacz pozycje i dodaj je do kampanii (najwyżej ${CAMPAIGN_MAX_ITEMS}, Shift+klik: zakres).`}
           </p>
         </div>
         <p className="text-[11px] text-slate-500">
@@ -445,6 +487,18 @@ export function Inventory() {
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b bg-slate-50">
+              {canCampaign && (
+                <th className="w-8 p-2">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleSelected}
+                    disabled={rows.length === 0}
+                    onChange={toggleAllVisible}
+                    title="Zaznacz / odznacz widoczne. Na wierszu: Shift+klik zaznacza zakres."
+                    aria-label="Zaznacz wszystkie widoczne"
+                  />
+                </th>
+              )}
               <th className="w-8 px-1 py-2 text-right font-normal text-slate-500">Lp.</th>
               <th className="whitespace-nowrap p-2 font-semibold text-slate-700">Zdjęcie</th>
               <th className="whitespace-nowrap p-2" aria-sort={ariaSort(sort, dir, ['code', 'name'])}>
@@ -470,6 +524,12 @@ export function Inventory() {
                 index={(from ?? 1) + i}
                 striped={i % 2 === 1}
                 onOpenCard={setPreviewId}
+                canRwPw={canRwPw}
+                selection={
+                  canCampaign
+                    ? { checked: selected.has(row.id), onToggle: (shiftKey) => toggleRow(i, shiftKey) }
+                    : undefined
+                }
               />
             ))}
             {rows.length === 0 && (
@@ -498,6 +558,42 @@ export function Inventory() {
 
         <ProductVerifyModal productId={previewId} query={search.trim()} onClose={() => setPreviewId(null)} />
       </div>
+
+      {canCampaign && selected.size > 0 && (
+        <div className="app-bulk-bar sticky bottom-3 z-30 mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-slate-800 px-4 py-2.5 text-sm text-white shadow-xl">
+          <span>
+            <b className="tabular-nums">{fmtInt(selected.size)}</b>{' '}
+            {plural(selected.size, 'zaznaczona', 'zaznaczone', 'zaznaczonych')} · razem ok.{' '}
+            <b className="tabular-nums">{fmtInt(Math.round(selectedValue))} zł</b> zapasu
+            {selectedWithoutValue > 0 && (
+              <span className="text-slate-300"> ({fmtInt(selectedWithoutValue)} bez wartości z XL)</span>
+            )}
+            {selected.size > CAMPAIGN_MAX_ITEMS && (
+              <span className="mt-0.5 block text-xs text-amber-300">
+                Kampania mieści najwyżej {CAMPAIGN_MAX_ITEMS} pozycji — odznacz{' '}
+                {fmtInt(selected.size - CAMPAIGN_MAX_ITEMS)}.
+              </span>
+            )}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSelected(new Map())
+                selectAnchor.current = null
+              }}
+              className="rounded border border-slate-500 px-3 py-1.5 text-xs text-white hover:bg-slate-700"
+            >
+              Wyczyść
+            </button>
+            <AddToCampaignMenu
+              erpItemIds={[...selected.keys()]}
+              placement="up"
+              buttonClassName="rounded bg-sky-500 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-sky-400 disabled:opacity-50"
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -553,18 +649,47 @@ function InventoryTableRow({
   index,
   striped,
   onOpenCard,
+  canRwPw,
+  selection,
 }: {
   row: InventoryRow
   index: number
   striped: boolean
   onOpenCard: (productId: number) => void
+  /** Link do zakładki RW → PW tylko z uprawnieniem inventory.view (handlowiec widzi sam znacznik). */
+  canRwPw: boolean
+  /** Kolumna zaznaczania do kampanii; brak = bez kolumny. */
+  selection?: { checked: boolean; onToggle: (shiftKey: boolean) => void }
 }) {
   const unit = erpUnitLabel(row.unit)
   const card = row.card
   const lp = row.last_purchase
   const foreign = lp ? erpForeignPrice(lp) : null
   return (
-    <tr className={`border-b align-top hover:bg-sky-50 ${striped ? 'bg-slate-100/60' : ''}`}>
+    <tr
+      className={`border-b align-top hover:bg-sky-50 ${
+        selection?.checked ? 'bg-blue-50/40' : striped ? 'bg-slate-100/60' : ''
+      }`}
+    >
+      {selection && (
+        <td className="select-none p-2">
+          <input
+            type="checkbox"
+            checked={selection.checked}
+            title="Shift+klik zaznacza wszystkie od ostatnio klikniętej"
+            onMouseDown={(e) => {
+              if (!e.shiftKey) return
+              e.preventDefault()
+              selection.onToggle(true)
+            }}
+            onChange={(e) => {
+              if ((e.nativeEvent as MouseEvent).shiftKey) return
+              selection.onToggle(false)
+            }}
+            aria-label={`Zaznacz ${row.code}`}
+          />
+        </td>
+      )}
       <td className="w-8 px-1 py-2 text-right tabular-nums text-slate-400" title={`Towar XL ${row.xl_gid}`}>
         {index}
       </td>
@@ -683,16 +808,24 @@ function InventoryTableRow({
             —
           </span>
         )}
-        {row.rw_pw_pairs > 0 && (
+        {row.rw_pw_pairs > 0 &&
           // Nowa partia z PW „odmładza” datę najstarszej partii — stąd znacznik w tej kolumnie.
-          <Link
-            to={`/zapasy/rw-pw?search=${encodeURIComponent(row.code)}`}
-            className="mt-1 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-amber-800 hover:underline"
-            title="W ostatnich 12 mies. towar był wydany RW i przyjęty z powrotem PW — najstarsza partia może być młodsza niż towar naprawdę leży."
-          >
-            RW/PW ×{row.rw_pw_pairs}
-          </Link>
-        )}
+          (canRwPw ? (
+            <Link
+              to={`/zapasy/rw-pw?search=${encodeURIComponent(row.code)}`}
+              className="mt-1 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-amber-800 hover:underline"
+              title={RW_PW_HINT}
+            >
+              RW/PW ×{row.rw_pw_pairs}
+            </Link>
+          ) : (
+            <span
+              className="mt-1 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-amber-800"
+              title={RW_PW_HINT}
+            >
+              RW/PW ×{row.rw_pw_pairs}
+            </span>
+          ))}
       </td>
       <td className="p-2">
         {row.unit_cost != null && (
@@ -744,6 +877,9 @@ function InventoryTableRow({
     </tr>
   )
 }
+
+const RW_PW_HINT =
+  'W ostatnich 12 mies. towar był wydany RW i przyjęty z powrotem PW — najstarsza partia może być młodsza niż towar naprawdę leży.'
 
 /** Segmenty miesięcy: „wszystkie” (bez warunku) i progi 1–24 mies. — ten sam wygląd dla sprzedaży i wieku partii. */
 function MonthSegments<T extends string>({

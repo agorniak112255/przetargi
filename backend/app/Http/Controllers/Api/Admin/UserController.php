@@ -9,6 +9,7 @@ use App\Http\Requests\Admin\SendUserCredentialsRequest;
 use App\Http\Requests\Admin\StoreUserRequest;
 use App\Http\Requests\Admin\UpdateUserRequest;
 use App\Mail\AccountCredentialsMail;
+use App\Models\Campaign;
 use App\Models\Role;
 use App\Models\User;
 use App\Support\PermissionCatalog;
@@ -26,7 +27,7 @@ class UserController extends Controller
         $users = User::query()
             ->orderBy('name')
             ->get()
-            ->map(static fn (User $user): array => $user->toAuthArray())
+            ->map(fn (User $user): array => $this->present($user))
             ->values();
 
         return response()->json($users);
@@ -45,7 +46,7 @@ class UserController extends Controller
         $user->syncPrimaryRole($data['role']);
         $this->applyAppearance($user, $data);
 
-        return response()->json($user->toAuthArray(), 201);
+        return response()->json($this->present($user), 201);
     }
 
     public function update(UpdateUserRequest $request, User $user): JsonResponse
@@ -61,6 +62,10 @@ class UserController extends Controller
         if (! empty($data['password'])) {
             $user->password = Hash::make($data['password']);
         }
+        if (array_key_exists('erp_operator_ident', $data)) {
+            $ident = mb_strtoupper(trim((string) $data['erp_operator_ident']));
+            $user->forceFill(['erp_operator_ident' => $ident === '' ? null : $ident]);
+        }
         $user->save();
 
         if (isset($data['role'])) {
@@ -68,13 +73,17 @@ class UserController extends Controller
         }
         $this->applyAppearance($user, $data);
 
-        return response()->json($user->fresh()->toAuthArray());
+        return response()->json($this->present($user->fresh()));
     }
 
     public function destroy(Request $request, User $user): JsonResponse
     {
         if ($request->user()?->id === $user->id) {
             return response()->json(['message' => 'Nie możesz usunąć własnego konta.'], 422);
+        }
+        // kampanie zostają w historii (wynik, wypisy) — klucz obcy campaigns.user_id blokuje usunięcie autora
+        if (Campaign::query()->where('user_id', $user->id)->exists()) {
+            return response()->json(['message' => 'Użytkownik ma kampanie — nie można go usunąć.'], 422);
         }
 
         $user->delete();
@@ -117,6 +126,16 @@ class UserController extends Controller
             'password_generated' => $generated,
             'message' => 'Dane dostępu wysłane na '.$user->email.'.',
         ]);
+    }
+
+    /**
+     * Dane użytkownika w panelu admina: jak /me plus operator ERP XL (tylko tutaj — ustawia go administrator).
+     *
+     * @return array<string, mixed>
+     */
+    private function present(User $user): array
+    {
+        return [...$user->toAuthArray(), 'erp_operator_ident' => $user->getAttribute('erp_operator_ident')];
     }
 
     private function roleLabel(User $user): string

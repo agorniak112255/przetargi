@@ -19,6 +19,8 @@ import { AdminDictionaries } from './pages/AdminDictionaries'
 import { AdminErpItems } from './pages/AdminErpItems'
 import { AdminSmtp } from './pages/AdminSmtp'
 import { AdminUsers } from './pages/AdminUsers'
+import { CampaignEditor } from './pages/CampaignEditor'
+import { Campaigns } from './pages/Campaigns'
 import { CardMatches } from './pages/CardMatches'
 import { Clients } from './pages/Clients'
 import { Inquiries } from './pages/Inquiries'
@@ -29,6 +31,7 @@ import { InventoryBoardReport } from './pages/InventoryBoardReport'
 import { Dashboard } from './pages/Dashboard'
 import { Help } from './pages/Help'
 import { Login } from './pages/Login'
+import { MailingListDetail } from './pages/MailingListDetail'
 import { ProductCompare } from './pages/ProductCompare'
 import { ProductDetail } from './pages/ProductDetail'
 import { AiSettingsPage } from './pages/AiSettings'
@@ -40,7 +43,7 @@ import { Reports } from './pages/Reports'
 import { Substitutes } from './pages/Substitutes'
 import { TenderDetail } from './pages/TenderDetail'
 import { Tenders } from './pages/Tenders'
-import { can } from './lib/api'
+import { can, canAny } from './lib/api'
 import { useEffect, useState, type ReactNode } from 'react'
 
 const RETRY_MS = 15_000
@@ -105,11 +108,17 @@ function Guard({ children }: { children: ReactNode }) {
   return children
 }
 
-function PermissionGuard({ permission, children }: { permission: string; children: ReactNode }) {
+/** permission — jedno wymagane uprawnienie; anyOf — wystarczy którekolwiek z listy (jak menu w Layout). */
+function PermissionGuard({
+  permission,
+  anyOf,
+  children,
+}: { permission: string; anyOf?: undefined; children: ReactNode } | { permission?: undefined; anyOf: string[]; children: ReactNode }) {
   const { user, loading } = useAuth()
   if (loading) return <p className="p-8 text-sm text-slate-500">Ładowanie…</p>
   if (!user) return <Navigate to="/login" replace />
-  if (!can(user, permission)) return <Navigate to="/" replace />
+  const allowed = permission !== undefined ? can(user, permission) : canAny(user, anyOf)
+  if (!allowed) return <Navigate to="/" replace />
   return children
 }
 
@@ -152,7 +161,7 @@ export default function App() {
             <Route
               path="zapasy"
               element={
-                <PermissionGuard permission="inventory.view">
+                <PermissionGuard anyOf={['inventory.view', 'campaigns.use']}>
                   <Inventory />
                 </PermissionGuard>
               }
@@ -170,6 +179,30 @@ export default function App() {
               element={
                 <PermissionGuard permission="inventory.report.view">
                   <InventoryBoardReport />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="kampanie"
+              element={
+                <PermissionGuard permission="campaigns.use">
+                  <Campaigns />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="kampanie/grupy/:id"
+              element={
+                <PermissionGuard permission="campaigns.use">
+                  <MailingListDetail />
+                </PermissionGuard>
+              }
+            />
+            <Route
+              path="kampanie/:id"
+              element={
+                <PermissionGuard permission="campaigns.use">
+                  <CampaignEditor />
                 </PermissionGuard>
               }
             />

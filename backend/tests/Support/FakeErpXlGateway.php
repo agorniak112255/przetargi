@@ -32,6 +32,20 @@ final class FakeErpXlGateway implements ErpXlGateway
     /** @var list<array<string, mixed>> partie zdjęte przez RW w postaci ErpXlGateway::internalMoveLots */
     public array $lotRows = [];
 
+    /** @var list<array{gid: int, acronym: string, name: string, nip: ?string, city: ?string, email: ?string, archived: bool}> */
+    public array $customers = [];
+
+    /** @var list<array{gid: int, email: string}> */
+    public array $addressEmails = [];
+
+    /** @var list<array{customer_gid: int, item_gid: int, last_date: int, documents: int, quantity: float}> */
+    public array $customerSaleRows = [];
+
+    /** @var list<array{customer_gid: int, operator: string, operator_name: ?string, documents: int}> */
+    public array $customerOperatorRows = [];
+
+    public ?int $customerSalesFrom = null;
+
     public bool $isConfigured = true;
 
     public function configured(): bool
@@ -94,6 +108,52 @@ final class FakeErpXlGateway implements ErpXlGateway
     public function internalMoveLots(int $fromClarionDate): array
     {
         return $this->lotRows;
+    }
+
+    public function customers(int $afterGid, int $limit): array
+    {
+        $rows = array_values(array_filter($this->customers, static fn (array $c): bool => $c['gid'] > $afterGid));
+        usort($rows, static fn (array $a, array $b): int => $a['gid'] <=> $b['gid']);
+
+        return array_slice($rows, 0, $limit);
+    }
+
+    public function customerAddressEmails(): iterable
+    {
+        yield from $this->addressEmails;
+    }
+
+    public function customerSales(int $fromClarionDate): iterable
+    {
+        $this->customerSalesFrom = $fromClarionDate;
+        foreach ($this->customerSaleRows as $row) {
+            if ($row['last_date'] >= $fromClarionDate) {
+                yield $row;
+            }
+        }
+    }
+
+    public function customerOperators(int $fromClarionDate): iterable
+    {
+        yield from $this->customerOperatorRows;
+    }
+
+    /** @return array{gid: int, acronym: string, name: string, nip: ?string, city: ?string, email: ?string, archived: bool} */
+    public static function customer(int $gid, string $acronym, ?string $email = null, bool $archived = false, string $name = ''): array
+    {
+        return ['gid' => $gid, 'acronym' => $acronym, 'name' => $name !== '' ? $name : 'Firma '.$acronym, 'nip' => null, 'city' => 'Rzeszów', 'email' => $email, 'archived' => $archived];
+    }
+
+    /** @return array{customer_gid: int, item_gid: int, last_date: int, documents: int, quantity: float} */
+    public static function customerSale(int $customerGid, int $itemGid, int $lastDate, int $documents = 1, float $quantity = 1.0): array
+    {
+        return ['customer_gid' => $customerGid, 'item_gid' => $itemGid, 'last_date' => $lastDate, 'documents' => $documents, 'quantity' => $quantity];
+    }
+
+    /** @return array{customer_gid: int, operator: string, operator_name: ?string, documents: int} */
+    public static function customerOperator(int $customerGid, string $operator, int $documents, ?string $name = null): array
+    {
+        return ['customer_gid' => $customerGid, 'operator' => $operator, 'operator_name' => $name ?? ($operator !== '' ? 'Osoba '.$operator : null), 'documents' => $documents];
     }
 
     /** @return array<string, mixed> — $receivedAt: znacznik XL (sekundy od 1.01.1990) */
