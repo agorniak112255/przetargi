@@ -6,6 +6,7 @@ namespace App\Support;
 
 use App\Models\PriceList;
 use App\Services\B2b\B2bConnectorRegistry;
+use App\Services\Pricing\SupplierSpecialMask;
 use DateTimeInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
@@ -31,17 +32,20 @@ final class ProductPriceChangeResolver
 
     /**
      * Ostatnia zmiana ceny dla każdego produktu — kilka zapytań niezależnie od liczby produktów.
+     * Zmiana ukryta przed widzem bez uprawnienia do cen specjalnych (historia konta B2B z oceną, decyzja D1) nie
+     * liczy się: zostaje ostatnia zmiana wśród widocznych albo null.
      *
      * @param  list<int>  $productIds
      * @return array<int, array<string, mixed>|null> product_id => zmiana albo null
      */
-    public function latestChanges(array $productIds): array
+    public function latestChanges(array $productIds, SupplierSpecialMask $mask): array
     {
         $productIds = array_values(array_unique(array_map('intval', $productIds)));
         $result = array_fill_keys($productIds, null);
         if ($productIds === []) {
             return $result;
         }
+        $mask->preload($productIds);
 
         /** @var array<int, array{row: object, previous: object}> $latest */
         $latest = [];
@@ -63,7 +67,7 @@ final class ProductPriceChangeResolver
                 }
                 $group = $this->sourceGroup($row);
                 $previous = $this->comparable($lastBySource[$group] ?? null, $row);
-                if ($previous !== null && $this->differs($previous, $row)) {
+                if ($previous !== null && $this->differs($previous, $row) && ! $this->hidden($row, $mask)) {
                     $latest[$productId] = ['row' => $row, 'previous' => $previous];
                 }
                 $lastBySource[$group] = $row;
@@ -79,11 +83,12 @@ final class ProductPriceChangeResolver
     }
 
     /**
-     * Historia cen produktu od najnowszej, z poprzednią wartością i zmianą procentową.
+     * Historia cen produktu od najnowszej, z poprzednią wartością i zmianą procentową. Wiersz konta B2B z oceną
+     * ceny specjalnej widz bez uprawnienia dostaje bez cen (prices_hidden) — dawne wiersze mogły być ceną specjalną.
      *
      * @return list<array<string, mixed>>
      */
-    public function history(int $productId, int $limit = 100): array
+    public function history(int $productId, int $limit, SupplierSpecialMask $mask): array
     {
         // Wszystkie wiersze karty: poprzedni wiersz tego samego źródła może leżeć dowolnie daleko
         // (inne źródła między nimi), więc nie wystarczy jeden wiersz ponad limit.
@@ -116,13 +121,15 @@ final class ProductPriceChangeResolver
             $catalogOld = $previous !== null ? $this->price($previous->catalog_price_net) : null;
             $purchaseNew = $this->price($row->purchase_price);
             $catalogNew = $this->price($row->catalog_price_net);
+            // poprzedni wiersz jest z tej samej grupy źródła, więc ukrywa się razem z bieżącym
+            $hidden = $this->hidden($row, $mask);
 
             $out[] = [
                 'id' => (int) $row->id,
                 'product_id' => (int) $row->product_id,
                 'price_list_id' => $row->price_list_id !== null ? (int) $row->price_list_id : null,
-                'catalog_price_net' => $row->catalog_price_net !== null ? number_format((float) $row->catalog_price_net, 2, '.', '') : null,
-                'purchase_price' => $row->purchase_price !== null ? number_format((float) $row->purchase_price, 2, '.', '') : null,
+                'catalog_price_net' => ! $hidden && $row->catalog_price_net !== null ? number_format((float) $row->catalog_price_net, 2, '.', '') : null,
+                'purchase_price' => ! $hidden && $row->purchase_price !== null ? number_format((float) $row->purchase_price, 2, '.', '') : null,
                 'currency' => $this->currency($row->currency),
                 'source' => $row->source,
                 'source_label' => $this->sourceLabel($row->source, $row->price_list_id !== null, $list),
@@ -134,12 +141,13 @@ final class ProductPriceChangeResolver
                     'version' => $list->version,
                     'created_at' => $this->iso($list->created_at),
                 ] : null,
-                'purchase_old' => $purchaseOld,
-                'catalog_old' => $catalogOld,
-                'purchase_pct' => $previous !== null ? $this->pct($purchaseOld, $purchaseNew) : null,
-                'catalog_pct' => $previous !== null ? $this->pct($catalogOld, $catalogNew) : null,
+                'purchase_old' => $hidden ? null : $purchaseOld,
+                'catalog_old' => $hidden ? null : $catalogOld,
+                'purchase_pct' => ! $hidden && $previous !== null ? $this->pct($purchaseOld, $purchaseNew) : null,
+                'catalog_pct' => ! $hidden && $previous !== null ? $this->pct($catalogOld, $catalogNew) : null,
                 // pierwszy wiersz tego źródła = dodanie ceny; bez poprzedniej wartości także przy zmianie waluty
                 'first_in_source' => $first,
+                'prices_hidden' => $hidden,
             ];
         }
 
@@ -255,6 +263,25 @@ final class ProductPriceChangeResolver
         }
 
         return $row->b2b_account_id !== null ? 'account:'.(int) $row->b2b_account_id : $source;
+    }
+
+    /**
+     * Wiersz historii ukryty przed widzem bez uprawnienia do cen specjalnych: cena konta B2B, którego slot na karcie
+     * ma ocenę (cennik bazowy i rabat standardowy). Konto z przebiegu; wiersz „b2b…” bez przebiegu (sprzed dziennika
+     * przebiegów, scalanie rozmiarów, dawne „b2b_api”) nie wskazuje konta — wtedy dowolny slot z oceną na karcie.
+     * Pliki i inne źródła to nie ceny konta.
+     */
+    private function hidden(object $row, SupplierSpecialMask $mask): bool
+    {
+        if (! $mask->hides()) {
+            return false;
+        }
+        if ($row->b2b_account_id !== null) {
+            return $mask->hidesHistory((int) $row->product_id, (int) $row->b2b_account_id);
+        }
+
+        return str_starts_with(trim((string) $row->source), 'b2b')
+            && $mask->hidesHistory((int) $row->product_id, null);
     }
 
     /**

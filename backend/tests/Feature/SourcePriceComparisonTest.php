@@ -14,6 +14,7 @@ use App\Models\ProductVariant;
 use App\Models\User;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Pricing\SourcePriceComparison;
+use App\Services\Pricing\SupplierSpecialMask;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -84,7 +85,7 @@ final class SourcePriceComparisonTest extends TestCase
         // same złote: kurs nieużyty, NBP nie pytany
         $this->assertSame(['as_of' => null, 'source' => 'nbp'], $result['rates']);
 
-        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]))[$card->id]);
+        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]);
         $this->assertConsistent($card);
         Http::assertNothingSent();
     }
@@ -113,7 +114,7 @@ final class SourcePriceComparisonTest extends TestCase
             'label' => 'B2B Ardon',
             'purchase_price_pln' => 9.0,
             'diff_pct' => -10.0,
-        ], $this->comparison->cheaperSources(collect([$card->fresh()]))[$card->id]);
+        ], $this->comparison->cheaperSources(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]);
         $this->assertConsistent($card);
     }
 
@@ -134,7 +135,7 @@ final class SourcePriceComparisonTest extends TestCase
         $this->assertSame(10.0, $rows[ProductSourcePrice::b2bKey($bolle->id)]['purchase_price_pln']);
         $this->assertSame(0.0, $rows[ProductSourcePrice::b2bKey($bolle->id)]['diff_to_effective_pct']);
         $this->assertSame(-20.0, $rows[ProductSourcePrice::b2bKey($procera->id)]['diff_to_effective_pct']);
-        $this->assertSame(-20.0, $this->comparison->cheaperSources(collect([$card->fresh()]))[$card->id]['diff_pct']);
+        $this->assertSame(-20.0, $this->comparison->cheaperSources(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]['diff_pct']);
         $this->assertConsistent($card);
     }
 
@@ -180,7 +181,7 @@ final class SourcePriceComparisonTest extends TestCase
         $this->assertSame(2, $rows[ProductSourcePrice::SOURCE_FILE]['price_rank']);
         // różnica liczona także poza porównaniem, gdy jest cena zakupu w PLN (np. stara cena −33,3%)
         $this->assertSame(-33.3, $rows[ProductSourcePrice::b2bKey($stale->id)]['diff_to_effective_pct']);
-        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]))[$card->id]);
+        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]);
         $this->assertConsistent($card);
     }
 
@@ -204,7 +205,7 @@ final class SourcePriceComparisonTest extends TestCase
         $key = ProductSourcePrice::b2bKey($ardon->id);
         $this->assertSame($explain['reasons'][$key], $rows[$key]['not_comparable_reason']);
         $this->assertSame('cena producenta ATG Glovesolutions wyłączona w tym cenniku', $rows[$key]['not_comparable_reason']);
-        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]))[$card->id]);
+        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]);
         $this->assertConsistent($card);
     }
 
@@ -227,7 +228,7 @@ final class SourcePriceComparisonTest extends TestCase
             $this->assertSame('ceny w wersjach karty', $row['not_comparable_reason']);
             $this->assertNull($row['price_rank']);
         }
-        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]))[$card->id]);
+        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]);
     }
 
     public function test_tie_puts_effective_first_and_small_saving_is_not_shown(): void
@@ -246,12 +247,12 @@ final class SourcePriceComparisonTest extends TestCase
         $rows = $this->forCard($card)['rows'];
         $this->assertTrue($rows[ProductSourcePrice::b2bKey($atg->id)]['is_cheapest']);
         $this->assertSame(2, $rows[ProductSourcePrice::b2bKey($ardon->id)]['price_rank']);
-        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]))[$card->id]);
+        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]);
 
         // −0,5% to szum — „taniej u …” dopiero od −1%
         $this->b2bSlot($card, $tegro, 9.95, 'PLN', '2026-09-22 11:00');
         $this->assertSame(-0.5, $this->forCard($card)['rows'][ProductSourcePrice::b2bKey($tegro->id)]['diff_to_effective_pct']);
-        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]))[$card->id]);
+        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]);
         $this->assertConsistent($card);
     }
 
@@ -270,7 +271,7 @@ final class SourcePriceComparisonTest extends TestCase
 
         $rows = $this->forCard($card)['rows'];
         $this->assertTrue($rows[ProductSourcePrice::b2bKey($atg->id)]['is_cheapest']);
-        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]))[$card->id]);
+        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]);
         $this->assertConsistent($card);
     }
 
@@ -288,7 +289,7 @@ final class SourcePriceComparisonTest extends TestCase
         $rows = $this->forCard($card)['rows'];
         $this->assertTrue($rows[ProductSourcePrice::b2bKey($tegro->id)]['is_cheapest']);
         $this->assertNull($rows[ProductSourcePrice::b2bKey($tegro->id)]['diff_to_effective_pct']);
-        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]))[$card->id]);
+        $this->assertNull($this->comparison->cheaperSources(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]);
     }
 
     public function test_cheaper_sources_query_count_does_not_grow_with_cards(): void
@@ -314,7 +315,7 @@ final class SourcePriceComparisonTest extends TestCase
         $count = function ($cards): int {
             DB::flushQueryLog();
             DB::enableQueryLog();
-            $result = $this->comparison->cheaperSources($cards);
+            $result = $this->comparison->cheaperSources($cards, SupplierSpecialMask::revealing());
             DB::disableQueryLog();
             foreach ($result as $cheaper) {
                 $this->assertSame('B2B Ardon', $cheaper['label']);
@@ -346,13 +347,13 @@ final class SourcePriceComparisonTest extends TestCase
             'size_price_currency' => null,
             'source_key' => ProductSourcePrice::b2bKey($uvex->id),
             'source_label' => 'B2B UVEX',
-        ], $this->comparison->orderQuantities(collect([$card->fresh()]))[$card->id]);
+        ], $this->comparison->orderQuantities(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id]);
         // karta wyrobu liczy to samo ze zwycięzcy explain()
         $winner = $this->prices->explain($card->fresh())['winner'];
         $this->assertNotNull($winner);
         $this->assertSame(
-            $this->comparison->orderQuantities(collect([$card->fresh()]))[$card->id],
-            $this->comparison->orderQuantityOf($winner),
+            $this->comparison->orderQuantities(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id],
+            $this->comparison->orderQuantityOf($winner, SupplierSpecialMask::revealing()),
         );
     }
 
@@ -376,7 +377,7 @@ final class SourcePriceComparisonTest extends TestCase
         $this->order($file, $ardon, 12.0, 12.0, 'szt');
         $this->fileSlot($file, $list, 10.00);
 
-        $this->assertSame([], $this->comparison->orderQuantities(collect([$own->fresh(), $file->fresh()])));
+        $this->assertSame([], $this->comparison->orderQuantities(collect([$own->fresh(), $file->fresh()]), SupplierSpecialMask::revealing()));
     }
 
     public function test_order_quantity_without_restriction_varies_and_variants(): void
@@ -401,7 +402,7 @@ final class SourcePriceComparisonTest extends TestCase
             'product_id' => $withVariants->id, 'source' => 'b2b:'.$uvex->id, 'remote_id' => 'W1', 'label' => 'wersja', 'purchase_price' => 1.00, 'currency' => 'PLN',
         ]);
 
-        $result = $this->comparison->orderQuantities(collect([$plain->fresh(), $varies->fresh(), $withVariants->fresh()]));
+        $result = $this->comparison->orderQuantities(collect([$plain->fresh(), $varies->fresh(), $withVariants->fresh()]), SupplierSpecialMask::revealing());
 
         $this->assertSame([$varies->id], array_keys($result));
         $this->assertTrue($result[$varies->id]['varies']);
@@ -423,7 +424,7 @@ final class SourcePriceComparisonTest extends TestCase
             'price_carton_qty' => 120,
         ]);
 
-        $terms = $this->comparison->orderQuantities(collect([$card->fresh()]))[$card->id];
+        $terms = $this->comparison->orderQuantities(collect([$card->fresh()]), SupplierSpecialMask::revealing())[$card->id];
 
         // bez ograniczenia zamówienia min i step puste — widok pokazuje sam warunek ceny
         $this->assertNull($terms['min']);
@@ -447,7 +448,7 @@ final class SourcePriceComparisonTest extends TestCase
             ->where('product_id', $card->id)
             ->get();
 
-        return $this->comparison->forCard($card, $slots, $this->prices->explain($card));
+        return $this->comparison->forCard($card, $slots, $this->prices->explain($card), SupplierSpecialMask::revealing());
     }
 
     /**
@@ -465,7 +466,7 @@ final class SourcePriceComparisonTest extends TestCase
                 $expected = [$key, $row['purchase_price_pln'], $row['diff_to_effective_pct']];
             }
         }
-        $cheaper = $this->comparison->cheaperSources(collect([$card]))[$card->id];
+        $cheaper = $this->comparison->cheaperSources(collect([$card]), SupplierSpecialMask::revealing())[$card->id];
         $this->assertSame(
             $expected,
             $cheaper === null ? null : [$cheaper['source_key'], $cheaper['purchase_price_pln'], $cheaper['diff_pct']],

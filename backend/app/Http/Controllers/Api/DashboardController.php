@@ -8,15 +8,24 @@ use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\ProductSubstitute;
 use App\Models\Tender;
+use App\Services\Pricing\SupplierSpecialMask;
+use App\Services\Tenders\TenderPriceView;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class DashboardController extends Controller
 {
+    public function __construct(
+        private readonly TenderPriceView $priceView,
+    ) {}
+
     public function __invoke(Request $request): JsonResponse
     {
         $user = $request->user();
         $seeAll = $user->can('tenders.view_all');
+        // bez prices.supplier_special.view marża bliźniacza (od ceny standardowej kart z ceną specjalną B2B)
+        $mask = SupplierSpecialMask::forUser($user);
+        $marginColumn = $mask->hides() ? 'margin_percent_standard' : 'margin_percent';
 
         $scoped = static function ($query) use ($user, $seeAll) {
             return $seeAll ? $query : $query->accessibleBy($user);
@@ -31,8 +40,8 @@ class DashboardController extends Controller
             ->sum('offer_value_net');
 
         $avgMargin = (float) $scoped(Tender::query())
-            ->whereNotNull('margin_percent')
-            ->avg('margin_percent');
+            ->whereNotNull($marginColumn)
+            ->avg($marginColumn);
 
         $approvalStatuses = [];
         if ($user->can('tenders.transition.akceptacja_dyrektor')) {
@@ -69,7 +78,9 @@ class DashboardController extends Controller
                 ->with(['client:id,name', 'owner:id,name'])
                 ->latest('last_activity_at')
                 ->limit(5)
-                ->get(),
+                ->get()
+                ->map(fn (Tender $tender): array => $this->priceView->summary($tender, $mask))
+                ->values(),
         ]);
     }
 }

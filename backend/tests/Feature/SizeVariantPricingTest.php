@@ -16,6 +16,7 @@ use App\Services\Presta\PrestaExportGateway;
 use App\Services\Presta\PrestaProductExportService;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Pricing\SourcePriceComparison;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Support\ProductIdentifierCode;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -72,6 +73,7 @@ final class SizeVariantPricingTest extends TestCase
             $card,
             ProductSourcePrice::query()->with(['account', 'priceList'])->where('product_id', $card->id)->get(),
             $this->prices->explain($card),
+            SupplierSpecialMask::revealing(),
         )['rows'];
         $this->assertTrue($rows[ProductSourcePrice::b2bKey($mascot->id)]['comparable']);
         $this->assertNull($rows[ProductSourcePrice::b2bKey($mascot->id)]['not_comparable_reason']);
@@ -90,7 +92,7 @@ final class SizeVariantPricingTest extends TestCase
         $card->refresh();
         $this->assertSame('0.00', $card->purchase_price);
         $this->assertSame(['winner' => null, 'reasons' => []], $this->prices->explain($card));
-        $this->assertSame([], $this->comparison->orderQuantities(collect([$card])));
+        $this->assertSame([], $this->comparison->orderQuantities(collect([$card]), SupplierSpecialMask::revealing()));
         $this->assertSame(
             PrestaProductExportService::VARIANTS_BLOCKED_MESSAGE,
             app(PrestaProductExportService::class)->blockedReason($card),
@@ -109,7 +111,7 @@ final class SizeVariantPricingTest extends TestCase
         $this->sizeRow($plain, $mascot, 'P-44', '44', 9.00);
         $this->slot($plain, $mascot, 9.00, 11.00, null);
 
-        $result = $this->comparison->orderQuantities(collect([$card->fresh(), $plain->fresh()]));
+        $result = $this->comparison->orderQuantities(collect([$card->fresh(), $plain->fresh()]), SupplierSpecialMask::revealing());
 
         $this->assertSame([$card->id], array_keys($result));
         $this->assertSame([
@@ -127,7 +129,7 @@ final class SizeVariantPricingTest extends TestCase
         // karta wyrobu liczy to samo ze zwycięzcy explain()
         $winner = $this->prices->explain($card->fresh())['winner'];
         $this->assertNotNull($winner);
-        $this->assertSame($result[$card->id], $this->comparison->orderQuantityOf($winner));
+        $this->assertSame($result[$card->id], $this->comparison->orderQuantityOf($winner, SupplierSpecialMask::revealing()));
     }
 
     public function test_size_price_max_of_a_losing_slot_is_not_the_card_condition(): void
@@ -140,7 +142,7 @@ final class SizeVariantPricingTest extends TestCase
         $this->slot($card, $ardon, 12.50, 15.00, 14.00, '2026-09-27 10:00');
 
         $this->assertSame(ProductSourcePrice::b2bKey($mascot->id), $this->prices->explain($card->fresh())['winner']?->source_key);
-        $this->assertSame([], $this->comparison->orderQuantities(collect([$card->fresh()])));
+        $this->assertSame([], $this->comparison->orderQuantities(collect([$card->fresh()]), SupplierSpecialMask::revealing()));
         $this->assertNull(app(PrestaProductExportService::class)->blockedReason($card->fresh()));
     }
 

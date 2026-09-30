@@ -16,6 +16,7 @@ use App\Services\Ai\AiServedProviderTally;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ClientInquiryService;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductAiSearchService;
 use App\Services\ProductInquirySearch;
 use App\Services\ProductMatchService;
@@ -169,7 +170,7 @@ final class SearchUsageStatsRecordingTest extends TestCase
             ]);
         }
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
 
         $event = SearchEvent::query()->sole();
         $this->assertSame(SearchEvent::TASK_TENDER_MATCH, $event->task);

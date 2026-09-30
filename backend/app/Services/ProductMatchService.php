@@ -11,6 +11,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\Search\AiProductSearch;
 use App\Services\Search\SearchEventRecorder;
 use App\Services\Vector\ProductVectorSearch;
@@ -191,6 +192,19 @@ final class ProductMatchService
      */
     private ?array $searchEventContext = null;
 
+    /**
+     * Widok cen osoby, która zleciła dopasowanie — ustawiany tylko w matchTender/matchItem i czyszczony w finally.
+     * Cena oferty dopasowanej karty liczy się od ceny, którą ta osoba widzi (bez prices.supplier_special.view —
+     * od ceny standardowej karty z ceną specjalną B2B). Ranking i remisy po cenie zostają na cenach prawdziwych.
+     */
+    private ?SupplierSpecialMask $offerMask = null;
+
+    /**
+     * Maska ceny standardowej do marży bliźniaczej — jedna na przebieg matchTender/matchItem (karty czytane raz,
+     * nie na każdą pozycję), czyszczona w finally: pamięta ceny, więc nie może przeżyć przebiegu w workerze.
+     */
+    private ?SupplierSpecialMask $standardMask = null;
+
     public function __construct(
         private readonly TenderPricingService $pricing,
         private readonly AiProductSearch $aiSearch,
@@ -223,6 +237,7 @@ final class ProductMatchService
      */
     public function matchTender(
         Tender $tender,
+        SupplierSpecialMask $mask,
         bool $onlyEmpty = true,
         ?array $itemIds = null,
         int $progressOffset = 0,
@@ -230,10 +245,15 @@ final class ProductMatchService
         ?string $runId = null,
     ): array {
         $this->searchEventContext = $this->newSearchEventContext((int) $tender->id, [], $runId);
+        $this->offerMask = $mask;
+        // maska ukrywająca zleceniodawcy jest zarazem maską ceny standardowej — karty czytane raz
+        $this->standardMask = $mask->hides() ? $mask : SupplierSpecialMask::hiding();
         try {
             return $this->runMatchTender($tender, $onlyEmpty, $itemIds, $progressOffset, $progressTotal);
         } finally {
             $this->searchEventContext = null;
+            $this->offerMask = null;
+            $this->standardMask = null;
         }
     }
 
@@ -314,6 +334,11 @@ final class ProductMatchService
 
         $products = $this->productsForItems($items);
         $this->noteSearchEventItems($items);
+        // karty obecne na pozycjach hurtem; karty wybrane w tym przebiegu maska doczyta raz na kartę
+        $this->standardMask?->preload($items->flatMap(static fn (TenderItem $item): array => array_values(array_filter([
+            $item->main_product_id,
+            $item->companion_product_id,
+        ])))->all());
 
         $this->prefetchAiCandidates(
             $items
@@ -1380,14 +1405,19 @@ final class ProductMatchService
      *
      * @return array<string, mixed>
      */
-    public function matchItem(TenderItem $item, bool $force = false): array
+    public function matchItem(TenderItem $item, SupplierSpecialMask $mask, bool $force = false): array
     {
         $this->searchEventContext = $this->newSearchEventContext((int) $item->tender_id);
         $this->noteSearchEventItems(collect([$item]));
+        $this->offerMask = $mask;
+        // maska ukrywająca zleceniodawcy jest zarazem maską ceny standardowej — karty czytane raz
+        $this->standardMask = $mask->hides() ? $mask : SupplierSpecialMask::hiding();
         try {
             return $this->runMatchItem($item, $force);
         } finally {
             $this->searchEventContext = null;
+            $this->offerMask = null;
+            $this->standardMask = null;
         }
     }
 
@@ -2978,19 +3008,21 @@ final class ProductMatchService
         $item->match_source = $source;
         $item->status = 'matched';
         $item->loadMissing('tender');
+        // bez maski z matchTender/matchItem ukrywamy — brak tożsamości nie może odsłonić ceny specjalnej
+        $mask = $this->offerMask ?? SupplierSpecialMask::hiding();
         // wariant z własną ceną (rozmiar, kolor) — oferta z ceny wariantu; wariant bez ceny = cena karty
-        $variantPurchase = $variant !== null ? $this->pricing->variantPurchasePln($variant, $product) : null;
+        $variantPurchase = $variant !== null ? $this->pricing->variantPurchasePln($variant, $product, $mask) : null;
         if ($item->tender !== null) {
             $item->offer_price = $variantPurchase !== null
-                ? $this->pricing->offerFromVariant($item->tender, $variant, $product)
-                : $this->pricing->offerFromProduct($item->tender, $product);
+                ? $this->pricing->offerFromVariant($item->tender, $variant, $product, $mask)
+                : $this->pricing->offerFromProduct($item->tender, $product, $mask);
         } elseif ($item->offer_price === null) {
-            $item->offer_price = OfferPricing::fromPurchase($variantPurchase ?? $product->purchase_price);
+            $item->offer_price = OfferPricing::fromPurchase($variantPurchase ?? $mask->maskProduct($product)->purchase_price);
         }
         $item->save();
         $item->load('mainProduct');
         $item->setRelation('mainVariant', $variant);
-        $this->pricing->recalculateItemMargin($item);
+        $this->pricing->recalculateItemMargin($item, $this->standardMask);
 
         return true;
     }
@@ -3198,7 +3230,7 @@ final class ProductMatchService
                     ]))),
         ];
         $item->save();
-        $this->pricing->recalculateItemMargin($item);
+        $this->pricing->recalculateItemMargin($item, $this->standardMask);
     }
 
     /**
@@ -3346,7 +3378,7 @@ final class ProductMatchService
             ],
         ], $hint);
         $item->save();
-        $this->pricing->recalculateItemMargin($item);
+        $this->pricing->recalculateItemMargin($item, $this->standardMask);
     }
 
     /**

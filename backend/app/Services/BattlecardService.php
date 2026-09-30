@@ -11,6 +11,7 @@ use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Pricing\SourcePriceComparison;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\Search\AiProductSearch;
 use App\Services\Search\SearchEventRecorder;
 use App\Support\BhpAttributeNormalizer;
@@ -82,17 +83,44 @@ final class BattlecardService
      * o zamienniki). Dopasowanie całej oferty przekazuje false: druga runda
      * wyszukiwania AI na każdą pozycję trwała dłużej niż samo dopasowanie, bez
      * paska postępu, i przeglądarka zrywała żądanie.
+     *
+     * $mask — widok cen widza: bez uprawnienia prices.supplier_special.view ceny zakupu, katalogowe, sugerowane
+     * ceny ofert, „tańszy o X%” i kolejność od najtańszego liczone od ceny standardowej kart z ceną specjalną B2B.
+     * Zapisywana lista zamienników (battlecard_substitutes) nie ma cen — ceny liczone są przy każdym odczycie.
+     * Wybór i kolejność zapisywanej listy nie zależą od tego, kto ją buduje: zawsze z prawdziwych cen.
      */
-    public function forItem(TenderItem $item, bool $refresh = false, ?bool $allowAi = null): array
+    public function forItem(TenderItem $item, SupplierSpecialMask $mask, bool $refresh = false, ?bool $allowAi = null): array
     {
         $item->loadMissing(['mainProduct', 'tender']);
         if (! $refresh && is_array($item->battlecard_substitutes)) {
-            return $this->cardFromStored($item);
+            return $this->cardFromStored($item, $mask);
         }
 
+        $card = $this->rebuild($item, $allowAi ?? $refresh);
+
+        // widz bez uprawnienia dostaje tę samą listę w swoich cenach (i swojej kolejności) — jak przy odczycie
+        return $mask->hides() ? $this->cardFromStored($item, $mask) : $card;
+    }
+
+    /**
+     * Buduje i zapisuje listę zamienników pozycji, gdy wynik nie trafia do widza (dopasowanie całej oferty, zapis
+     * pozycji) — bez drugiego przebiegu w cenach widza. Wybór 8 najtańszych i kolejność z prawdziwych cen,
+     * niezależnie od tego, kto zlecił budowę. Zwraca kartę w cenach prawdziwych — tylko do użytku wewnętrznego.
+     *
+     * @return array{
+     *     requirement: array{line_no: int, text: string},
+     *     ours: ?array<string, mixed>,
+     *     substitutes: list<array<string, mixed>>,
+     *     competitors: list<array<string, mixed>>,
+     *     highlights: list<string>
+     * }
+     */
+    public function rebuild(TenderItem $item, bool $allowAi = true): array
+    {
+        $item->loadMissing(['mainProduct', 'tender']);
         $this->eventItem = $item;
         try {
-            $card = $this->buildCard($item, $allowAi ?? $refresh);
+            $card = $this->buildCard($item, $allowAi, SupplierSpecialMask::revealing());
         } finally {
             $this->eventItem = null;
         }
@@ -110,7 +138,7 @@ final class BattlecardService
      *     highlights: list<string>
      * }
      */
-    private function buildCard(TenderItem $item, bool $allowAi): array
+    private function buildCard(TenderItem $item, bool $allowAi, SupplierSpecialMask $mask): array
     {
         $ours = $item->mainProduct;
         $markupPercent = $item->tender?->targetMarkupPercent();
@@ -119,17 +147,18 @@ final class BattlecardService
             $excludeIds[] = (int) $ours->id;
         }
 
-        $substitutes = $this->buildSubstitutes($ours, $excludeIds, $item->requirement, $markupPercent);
+        $substitutes = $this->buildSubstitutes($ours, $excludeIds, $item->requirement, $markupPercent, $mask);
         $substitutes = $this->fillFromCatalog(
             $item->requirement,
             $substitutes,
             $excludeIds,
             $markupPercent,
+            $mask,
             $allowAi,
         );
         $substitutes = $this->sortSubstitutesCheapestFirst($substitutes);
 
-        return $this->assembleCard($item, array_slice($substitutes, 0, self::SUBSTITUTE_LIMIT), $markupPercent);
+        return $this->assembleCard($item, array_slice($substitutes, 0, self::SUBSTITUTE_LIMIT), $markupPercent, $mask);
     }
 
     /**
@@ -141,7 +170,7 @@ final class BattlecardService
      *     highlights: list<string>
      * }
      */
-    private function cardFromStored(TenderItem $item): array
+    private function cardFromStored(TenderItem $item, SupplierSpecialMask $mask): array
     {
         $markupPercent = $item->tender?->targetMarkupPercent();
         $oursId = $item->mainProduct?->id;
@@ -160,6 +189,7 @@ final class BattlecardService
         $products = $ids === []
             ? collect()
             : Product::query()->whereIn('id', array_values(array_unique($ids)))->get()->keyBy('id');
+        $mask->preload($oursId !== null ? [...$ids, (int) $oursId] : $ids);
 
         $substitutes = [];
         foreach ($rows as $row) {
@@ -179,6 +209,7 @@ final class BattlecardService
             }
             $snap = $this->productSnapshot(
                 $product,
+                $mask,
                 (int) ($row['match_percent'] ?? 0),
                 null,
                 [],
@@ -194,8 +225,11 @@ final class BattlecardService
             $snap['match_basis'] = $row['match_basis'] ?? ($source === 'relation' ? self::BASIS_RELATION : self::BASIS_WORDS);
             $substitutes[] = $this->withVerification($snap, $verification);
         }
+        // Kolejność zawsze od najtańszego w cenach widza: zapisana powstała z cen z chwili budowania, a widz bez
+        // uprawnienia widzi ceny standardowe — kolejność z cen specjalnych zdradzałaby, która karta je ma.
+        $substitutes = $this->sortSubstitutesCheapestFirst($substitutes);
 
-        return $this->assembleCard($item, $substitutes, $markupPercent);
+        return $this->assembleCard($item, $substitutes, $markupPercent, $mask);
     }
 
     /**
@@ -208,7 +242,7 @@ final class BattlecardService
      *     highlights: list<string>
      * }
      */
-    private function assembleCard(TenderItem $item, array $substitutes, ?float $markupPercent): array
+    private function assembleCard(TenderItem $item, array $substitutes, ?float $markupPercent, SupplierSpecialMask $mask): array
     {
         $ours = $item->mainProduct;
         $card = [
@@ -218,6 +252,7 @@ final class BattlecardService
             ],
             'ours' => $ours === null ? null : $this->productSnapshot(
                 $ours,
+                $mask,
                 (int) ($item->ai_match_percent ?? 0),
                 $item->offer_price !== null ? (float) $item->offer_price : null,
                 is_array($item->ai_match_reasons) ? $item->ai_match_reasons : [],
@@ -229,7 +264,7 @@ final class BattlecardService
             'competitors' => [],
             'highlights' => [],
         ];
-        $card = $this->withOrderQuantities($card);
+        $card = $this->withOrderQuantities($card, $mask);
         $card['highlights'] = $this->buildHighlights($card);
 
         return $card;
@@ -242,7 +277,7 @@ final class BattlecardService
      * @param  array<string, mixed>  $card
      * @return array<string, mixed>
      */
-    private function withOrderQuantities(array $card): array
+    private function withOrderQuantities(array $card, SupplierSpecialMask $mask): array
     {
         $snaps = array_values(array_filter([$card['ours'], ...$card['substitutes']], 'is_array'));
         $ids = array_values(array_unique(array_filter(array_map(
@@ -251,7 +286,7 @@ final class BattlecardService
         ))));
         $quantities = $ids === []
             ? []
-            : $this->comparison->orderQuantities(Product::query()->whereIn('id', $ids)->get(['id', 'manufacturer']));
+            : $this->comparison->orderQuantities(Product::query()->whereIn('id', $ids)->get(['id', 'manufacturer']), $mask);
         if ($card['ours'] !== null) {
             $card['ours']['order_quantity'] = $quantities[(int) $card['ours']['product_id']] ?? null;
         }
@@ -291,7 +326,7 @@ final class BattlecardService
      * @param  list<int>  $excludeIds
      * @return list<array<string, mixed>>
      */
-    private function buildSubstitutes(?Product $ours, array &$excludeIds, string $requirement, ?float $markupPercent): array
+    private function buildSubstitutes(?Product $ours, array &$excludeIds, string $requirement, ?float $markupPercent, SupplierSpecialMask $mask): array
     {
         if ($ours === null) {
             return [];
@@ -316,6 +351,7 @@ final class BattlecardService
             $excludeIds[] = (int) $p->id;
             $snap = $this->productSnapshot(
                 $p,
+                $mask,
                 (int) ($row->match_percent ?? 0),
                 null,
                 [],
@@ -346,6 +382,7 @@ final class BattlecardService
         array $existing,
         array $excludeIds,
         ?float $markupPercent,
+        SupplierSpecialMask $mask,
         bool $allowAi = false,
     ): array {
         $need = self::SUBSTITUTE_LIMIT - count($existing);
@@ -367,7 +404,7 @@ final class BattlecardService
             if (! $this->catalogVerificationAllows($verification)) {
                 continue;
             }
-            $snap = $this->productSnapshot($row['product'], $row['score'], null, [], null, 'substitute', $markupPercent);
+            $snap = $this->productSnapshot($row['product'], $mask, $row['score'], null, [], null, 'substitute', $markupPercent);
             $snap['source'] = 'catalog';
             $snap['substitute_type'] = 'katalog';
             $snap['match_basis'] = $row['basis'];
@@ -500,6 +537,7 @@ final class BattlecardService
      */
     private function productSnapshot(
         Product $product,
+        SupplierSpecialMask $mask,
         int $matchPercent,
         ?float $offerPrice,
         array $reasons,
@@ -507,6 +545,8 @@ final class BattlecardService
         string $role,
         ?float $markupPercent = null,
     ): array {
+        // karta w widoku cen widza (klon chroniony przed zapisem albo ta sama instancja)
+        $product = $mask->maskProduct($product);
         $payload = is_array($product->enrichment_payload) ? $product->enrichment_payload : [];
         $attrs = $this->bhpAttributes->forProduct($product);
         $norms = $product->norms;
@@ -571,13 +611,14 @@ final class BattlecardService
     }
 
     /**
-     * Najtańszy zamiennik (po upuście) tańszy o co najmniej $minSavePercent względem propozycji.
+     * Najtańszy zamiennik (po upuście) tańszy o co najmniej $minSavePercent względem propozycji — w cenach, które
+     * widzi osoba zlecająca zamianę ($mask).
      *
      * @return array{product_id: int, sku: string, purchase_price: float, save_percent: float, match_percent: int}|null
      */
-    public function bestCheaperSubstitute(TenderItem $item, float $minSavePercent = 3.0): ?array
+    public function bestCheaperSubstitute(TenderItem $item, SupplierSpecialMask $mask, float $minSavePercent = 3.0): ?array
     {
-        $card = $this->forItem($item);
+        $card = $this->forItem($item, $mask);
         $ours = $card['ours'];
         if ($ours === null) {
             return null;

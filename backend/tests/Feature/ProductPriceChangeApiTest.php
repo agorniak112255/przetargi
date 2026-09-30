@@ -8,6 +8,7 @@ use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductPriceHistory;
 use App\Models\User;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Support\ProductPriceChangeResolver;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -189,7 +190,7 @@ final class ProductPriceChangeApiTest extends TestCase
         $this->history($product, 50, 50, 'b2b:anro', '2026-09-03 08:00:00');
         $this->history($product, 12, 12, 'price_list_import', '2026-09-04 08:00:00');
 
-        $rows = app(ProductPriceChangeResolver::class)->history((int) $product->id, 2);
+        $rows = app(ProductPriceChangeResolver::class)->history((int) $product->id, 2, SupplierSpecialMask::revealing());
 
         $this->assertCount(2, $rows);
         $this->assertSame('2026-09-04T08:00:00.000000Z', $rows[0]['created_at']);

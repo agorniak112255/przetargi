@@ -16,6 +16,7 @@ use App\Services\B2b\B2bDescriptionSource;
 use App\Services\PriceListDeletionService;
 use App\Services\PriceListDiscountService;
 use App\Services\Pricing\ProductEffectivePrice;
+use App\Services\Pricing\SupplierSpecialMask;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -161,12 +162,16 @@ class PriceListController extends Controller
         return response()->json($payload);
     }
 
-    public function show(PriceList $priceList): JsonResponse
+    public function show(Request $request, PriceList $priceList): JsonResponse
     {
         $owner = $this->b2bLists->owners([$priceList])[$priceList->id] ?? null;
+        $details = $priceList->load('importer:id,name')->toArray();
+        if ($owner !== null && $this->hidesAccountPrices($owner->id, SupplierSpecialMask::forUser($request->user()))) {
+            $details = $this->withoutPrices($details);
+        }
 
         return response()->json([
-            ...$priceList->load('importer:id,name')->toArray(),
+            ...$details,
             'b2b_account' => $owner !== null ? $this->b2bLists->ownerPayload($owner) : null,
             // historia aktualizacji tego producenta — wpis jest jeden, przebiegów wiele
             'imports' => $priceList->imports()->with('importer:id,name')->get()->map(
@@ -186,6 +191,42 @@ class PriceListController extends Controller
                 ]
             )->values()->all(),
         ]);
+    }
+
+    /**
+     * Szczegóły ostatniego przebiegu konta B2B (zmiany cen, zaktualizowane karty) to ceny konta — jak historia cen
+     * karty (decyzja D1) widz bez uprawnienia do cen specjalnych nie dostaje ich, gdy konto ma sloty z oceną ceny
+     * specjalnej (cennik bazowy i rabat standardowy). Wpis wspólny z importami pliku traci wtedy ceny i z pliku —
+     * szczegóły mówią o jednym, ostatnim przebiegu, a nie wiadomo, czym przyszedł.
+     */
+    private function hidesAccountPrices(int $accountId, SupplierSpecialMask $mask): bool
+    {
+        return $mask->hides() && ProductSourcePrice::query()
+            ->where(static fn ($q) => $q->where('b2b_account_id', $accountId)->orWhere('source_key', ProductSourcePrice::b2bKey($accountId)))
+            ->whereNotNull('base_price_net')
+            ->whereNotNull('standard_discount_percent')
+            ->exists();
+    }
+
+    /**
+     * @param  array<string, mixed>  $details
+     * @return array<string, mixed>
+     */
+    private function withoutPrices(array $details): array
+    {
+        $priceKeys = ['catalog_old', 'catalog_new', 'catalog_pct', 'purchase_old', 'purchase_new', 'purchase_pct', 'discount_old', 'discount_new'];
+        foreach (['price_changes', 'updated_products'] as $section) {
+            if (! is_array($details[$section] ?? null)) {
+                continue;
+            }
+            foreach ($details[$section] as $i => $entry) {
+                if (is_array($entry)) {
+                    $details[$section][$i] = array_replace($entry, array_fill_keys(array_intersect($priceKeys, array_keys($entry)), null));
+                }
+            }
+        }
+
+        return $details;
     }
 
     /**

@@ -36,7 +36,8 @@ export function erpForeignPrice(p: Pick<ErpPurchase, 'currency' | 'document_pric
 export function erpPurchaseText(p: ErpPurchase): string {
   const foreign = erpForeignPrice(p)
   return [
-    `${erpUnitPrice(p.unit_price_pln)} zł${p.unit ? `/${p.unit}` : ''}`,
+    // brak ceny albo ukryta (ceny specjalne B2B — powód w bloku ERP karty); zamiast „— zł”
+    p.unit_price_pln == null ? 'bez ceny' : `${erpUnitPrice(p.unit_price_pln)} zł${p.unit ? `/${p.unit}` : ''}`,
     foreign ? `(${foreign})` : '',
     p.date ? `· ${formatDate(p.date)}` : '',
     p.supplier ? `· ${p.supplier}` : '',

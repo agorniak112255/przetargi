@@ -187,9 +187,11 @@ export function ErpStockDetailsModal({ erp, title, onClose }: { erp: ErpCardStoc
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <p className="text-[11px] text-slate-500">Ostatni zakup</p>
               <p className="text-lg font-semibold tabular-nums">
-                {erp.last_purchase
+                {erp.last_purchase && erp.last_purchase.unit_price_pln != null
                   ? `${erpUnitPrice(erp.last_purchase.unit_price_pln)} zł${erp.last_purchase.unit ? `/${erp.last_purchase.unit}` : ''}`
-                  : '—'}
+                  : erp.last_purchase && erp.prices_hidden
+                    ? 'cena ukryta'
+                    : '—'}
               </p>
               {erp.last_purchase?.date && (
                 <p className="text-[11px] text-slate-500">
@@ -276,8 +278,8 @@ export function ErpStockDetailsModal({ erp, title, onClose }: { erp: ErpCardStoc
                       {erpUnitLabel(p.unit)}
                     </td>
                     <td className="whitespace-nowrap p-2 text-right tabular-nums">
-                      {erpUnitPrice(p.unit_price_pln)} zł{p.unit ? `/${p.unit}` : ''}
-                      {erpForeignPrice(p) && <div className="text-[11px] text-slate-500">{erpForeignPrice(p)}</div>}
+                      {p.unit_price_pln == null ? '—' : `${erpUnitPrice(p.unit_price_pln)} zł${p.unit ? `/${p.unit}` : ''}`}
+                      {erpForeignPrice(p) &&<div className="text-[11px] text-slate-500">{erpForeignPrice(p)}</div>}
                     </td>
                     <td className="p-2 font-mono text-slate-500">{p.document_id}</td>
                     {erp.items.length > 1 && <td className="p-2 font-mono">{p.xl_code}</td>}
@@ -285,6 +287,11 @@ export function ErpStockDetailsModal({ erp, title, onClose }: { erp: ErpCardStoc
                 ))}
               </tbody>
             </table>
+          )}
+          {erp.prices_hidden && (
+            <p className="mt-1 text-[11px] text-slate-500">
+              Ceny zakupu z PZ ukryte — karta ma konto B2B z ceną specjalną, a Twoja rola nie ma podglądu cen specjalnych.
+            </p>
           )}
 
           <h4 className="mb-1 mt-4 text-xs font-semibold text-slate-700">Towary XL powiązane z kartą</h4>

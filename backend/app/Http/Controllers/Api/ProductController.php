@@ -28,6 +28,7 @@ use App\Services\Erp\ErpCodeSearch;
 use App\Services\NbpExchangeRateService;
 use App\Services\Pricing\ProductEffectivePrice;
 use App\Services\Pricing\SourcePriceComparison;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductDeletionService;
 use App\Services\ProductKitService;
 use App\Support\BhpAttributeNormalizer;
@@ -59,6 +60,13 @@ class ProductController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        // widok cen specjalnych B2B: bez uprawnienia karta z ceną specjalną pokazuje cenę standardową
+        $mask = SupplierSpecialMask::forUser($request->user());
+        // lista „tylko ceny specjalne” zdradzałaby, które karty je mają (decyzja D5); gorsze niż standard — dozwolone
+        if ($mask->hides() && (string) $request->string('supplier_special') === SupplierSpecialPrice::SPECIAL) {
+            abort(403, 'Brak uprawnienia do cen specjalnych B2B.');
+        }
+
         $query = Product::query()
             ->select([
                 'id',
@@ -184,6 +192,8 @@ class ProductController extends Controller
             );
         }
 
+        // Sortowanie idzie po cenach zapisanych: karta z ceną specjalną stoi tam, gdzie jej cena konta, choć widz bez
+        // uprawnienia widzi cenę standardową — kolejność zdradza najwyżej pozycję, nie kwotę (świadomy kompromis).
         if ($sortCol === 'catalog_price_net') {
             $query->orderByRaw($this->fx->priceOrderSql('catalog_price_net', 'currency').' '.$dir);
         } elseif ($sortCol === 'description') {
@@ -239,7 +249,9 @@ class ProductController extends Controller
 
         // Ostatnia zmiana ceny tylko dla zwróconej strony — kilka zapytań na całą stronę.
         $pageIds = $page->getCollection()->map(static fn (array $row): int => (int) $row['id'])->all();
-        $changes = $this->priceChanges->latestChanges($pageIds);
+        // karty i sloty z oceną dla całej strony naraz (maska odsłaniająca nic nie czyta)
+        $mask->preload($pageIds);
+        $changes = $this->priceChanges->latestChanges($pageIds, $mask);
         // Wersje z cenami (karta ma cenę 0): liczba aktywnych i „od” — jedno zapytanie na stronę.
         $variantSummaries = $this->variants->listSummaries($pageIds);
         // opis z cennika B2B (status AI „Z B2B”, bez zbiorczego nadpisywania) — dwa zapytania na stronę
@@ -257,10 +269,10 @@ class ProductController extends Controller
             ->pluck('c', 'product_id')
             ->all();
         // „taniej u …” przy cenie — informacja, cena karty bez zmian; stała liczba zapytań na stronę
-        $cheaper = $this->comparison->cheaperSources(collect(array_values($models)));
+        $cheaper = $this->comparison->cheaperSources(collect(array_values($models)), $mask);
         // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — stała liczba zapytań na stronę
-        $orderQuantities = $this->comparison->orderQuantities(collect(array_values($models)));
-        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $origins, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities, $erpCodes): array {
+        $orderQuantities = $this->comparison->orderQuantities(collect(array_values($models)), $mask);
+        $page->getCollection()->transform(function (array $row) use ($changes, $variantSummaries, $fromB2b, $origins, $evaluable, $models, $slotCounts, $cheaper, $orderQuantities, $erpCodes, $mask): array {
             $id = (int) $row['id'];
             $row['cheaper_source'] = $cheaper[$id] ?? null;
             $row['order_quantity'] = $orderQuantities[$id] ?? null;
@@ -282,7 +294,8 @@ class ProductController extends Controller
             // kody ERP XL, po których wyszukiwarka znalazła kartę (pusta lista, gdy trafiła po SKU albo nazwie)
             $row['erp_codes'] = $erpCodes[(int) $row['id']] ?? [];
 
-            return $row;
+            // na końcu: ocena wyżej szuka slotu w prawdziwej cenie karty; maska podmienia ceny i ocenę na standardowe
+            return $mask->productRow($row);
         });
 
         return response()->json($page);
@@ -364,8 +377,10 @@ class ProductController extends Controller
         return response()->json(['data' => $list]);
     }
 
-    public function show(Product $product): JsonResponse
+    public function show(Request $request, Product $product): JsonResponse
     {
+        // widok cen specjalnych B2B: bez uprawnienia karta z ceną specjalną pokazuje cenę standardową
+        $mask = SupplierSpecialMask::forUser($request->user());
         $product->load([
             'substitutes.substituteProduct:id,sku,name,manufacturer,catalog_price_net',
             'substitutes.approver:id,name',
@@ -400,27 +415,27 @@ class ProductController extends Controller
             ->where('product_id', $product->id)
             ->orderByDesc('id')
             ->first();
-        $lastChange = $this->priceChanges->latestChanges([(int) $product->id])[(int) $product->id] ?? null;
+        $lastChange = $this->priceChanges->latestChanges([(int) $product->id], $mask)[(int) $product->id] ?? null;
         // zmiana katalogowej z ostatniej zmiany ceny (w obrębie jednego źródła), nie z dwóch ostatnich wierszy
         // historii — te bywają z różnych źródeł i walut
         $payload['price_change_percent'] = isset($lastChange['catalog_pct']) ? round((float) $lastChange['catalog_pct'], 1) : null;
         $payload['price_history_latest_at'] = $latest?->created_at;
         $payload['last_price_change'] = $lastChange;
-        $payload['variants'] = $this->variants->forProduct((int) $product->id);
+        $payload['variants'] = $this->variants->forProduct((int) $product->id, $mask);
         $slots = ProductSourcePrice::query()
             ->with(['account:id,connector,sites', 'priceList:id,manufacturer,version,suggested_prices'])
             ->where('product_id', $product->id)
             ->get();
         $explain = $this->effectivePrice->explain($product);
         // porównanie od najtańszej (pola Row przy każdym źródle) — kolejność elementów zostaje jak dotąd
-        $comparison = $this->comparison->forCard($product, $slots, $explain);
-        $payload['source_prices'] = $this->sourcePricesPayload($slots, $explain, $comparison['rows']);
+        $comparison = $this->comparison->forCard($product, $slots, $explain, $mask);
+        $payload['source_prices'] = $this->sourcePricesPayload($slots, $explain, $comparison['rows'], $mask);
         $payload['source_prices_rates'] = $comparison['rates'];
         // warunek zamawiania slotu obowiązującego (ten, od którego kupujemy); slot z $slots ma wczytane konto
         $winnerSlot = $explain['winner'] === null
             ? null
             : $slots->first(static fn (ProductSourcePrice $s): bool => $s->source_key === $explain['winner']->source_key);
-        $payload['order_quantity'] = $winnerSlot === null ? null : $this->comparison->orderQuantityOf($winnerSlot);
+        $payload['order_quantity'] = $winnerSlot === null ? null : $this->comparison->orderQuantityOf($winnerSlot, $mask);
         // ta sama reguła co na liście: ocena tylko dla slotu obowiązującego, którego cena jest ceną karty
         $payload['supplier_special'] = $this->cardSupplierSpecial(
             $this->slotsAtCardPrice($product->purchase_price, $product->currency, $slots),
@@ -432,11 +447,20 @@ class ProductController extends Controller
         $payload['description_from_b2b'] = app(B2bDescriptionSource::class)->has($product);
         $payload['description_supplement'] = $this->descriptionOrigins([(int) $product->id])[(int) $product->id] ?? null;
         $payload = $this->fx->appendPricePln($payload);
+        // ceny karty i ocena ceny specjalnej w widoku standardowym; zamienniki mają cenę katalogową swojej karty
+        $payload = $mask->productRow($payload);
+        // karty zamienne hurtem (dwa zapytania), nie karta po karcie w productRow
+        $mask->preload($product->substitutes->pluck('substitute_product_id')->filter()->all());
+        foreach ($payload['substitutes'] ?? [] as $i => $row) {
+            if (is_array($row['substitute_product'] ?? null)) {
+                $payload['substitutes'][$i]['substitute_product'] = $mask->productRow($row['substitute_product']);
+            }
+        }
         $payload['presta_export'] = $this->prestaExportPayload($product);
         $payload['accessories'] = $this->kit->present($product);
         $payload['description_layout'] = $this->descriptionTemplates->resolvedForProduct($product);
         // stan i ostatnie zakupy z Comarch ERP XL (towary powiązane z kartą); null = brak powiązania
-        $payload['erp_xl'] = app(ErpCardStock::class)->forProduct((int) $product->id);
+        $payload['erp_xl'] = $this->erpXlPayload(app(ErpCardStock::class)->forProduct((int) $product->id), (int) $product->id, $mask);
         $payload['special_prices'] = $product->specialPrices->map(static fn ($row): array => [
             'id' => $row->id,
             'client_id' => $row->client_id,
@@ -555,18 +579,77 @@ class ProductController extends Controller
         return $parts === [] ? 'Nic nie zmieniono.' : implode(' ', $parts);
     }
 
-    public function priceHistory(Product $product): JsonResponse
+    public function priceHistory(Request $request, Product $product): JsonResponse
     {
-        return response()->json(['data' => $this->priceChanges->history((int) $product->id, 100)]);
+        return response()->json(['data' => $this->priceChanges->history((int) $product->id, 100, SupplierSpecialMask::forUser($request->user()))]);
     }
 
-    public function variantPriceHistory(Product $product, ProductVariant $variant): JsonResponse
+    public function variantPriceHistory(Request $request, Product $product, ProductVariant $variant): JsonResponse
     {
         if ((int) $variant->product_id !== (int) $product->id) {
             abort(404);
         }
 
-        return response()->json(['data' => $this->variants->history((int) $variant->id, 100)]);
+        return response()->json(['data' => $this->variants->history($variant, 100, SupplierSpecialMask::forUser($request->user()))]);
+    }
+
+    /**
+     * Blok „Stan w ERP XL” — ceny zakupu z faktur XL i wartości księgowe partii (magazyny towaru: wartość / ilość
+     * = cena zakupu) ukryte na karcie ze slotem konta z oceną ceny specjalnej (decyzja D3): zakup po cenie
+     * specjalnej zdradzałby ją wprost. Stany, ilości i daty zostają.
+     *
+     * @param  array<string, mixed>|null  $erp  ErpCardStock::forProduct
+     * @return array<string, mixed>|null
+     */
+    private function erpXlPayload(?array $erp, int $productId, SupplierSpecialMask $mask): ?array
+    {
+        if ($erp === null) {
+            return null;
+        }
+        $hidden = $mask->hidesHistory($productId, null);
+        if ($hidden) {
+            $erp = self::withoutErpValues($erp);
+            foreach ($erp['items'] ?? [] as $i => $item) {
+                $erp['items'][$i] = self::withoutErpValues($item);
+                foreach (['purchases', 'warehouses'] as $list) {
+                    foreach (is_array($item[$list] ?? null) ? $item[$list] : [] as $j => $row) {
+                        $erp['items'][$i][$list][$j] = is_array($row) ? self::withoutErpValues($row) : $row;
+                    }
+                }
+            }
+            if (is_array($erp['last_purchase'] ?? null)) {
+                $erp['last_purchase'] = self::withoutErpValues($erp['last_purchase']);
+            }
+            foreach (is_array($erp['warehouses'] ?? null) ? $erp['warehouses'] : [] as $j => $row) {
+                $erp['warehouses'][$j] = is_array($row) ? self::withoutErpValues($row) : $row;
+            }
+        }
+        $erp['prices_hidden'] = $hidden;
+
+        return $erp;
+    }
+
+    /**
+     * Pola kwot z kosztu zakupu w wierszu bloku ERP (cena PZ, cena dokumentu, wartość partii i każda „…_value”)
+     * → null; ilości i daty zostają. Po nazwie klucza, żeby nowa kolumna wartości w XL nie przeszła bokiem;
+     * matched_value to kod, po którym powiązano towar, a nie kwota.
+     *
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
+     */
+    private static function withoutErpValues(array $row): array
+    {
+        foreach (array_keys($row) as $key) {
+            $key = (string) $key;
+            if ($key === 'matched_value') {
+                continue;
+            }
+            if (in_array($key, ['unit_price_pln', 'document_price', 'value'], true) || str_ends_with($key, '_value')) {
+                $row[$key] = null;
+            }
+        }
+
+        return $row;
     }
 
     /**
@@ -578,9 +661,10 @@ class ProductController extends Controller
      * @param  Collection<int, ProductSourcePrice>  $slots  sloty karty z account i priceList
      * @param  array{winner: ProductSourcePrice|null, reasons: array<string, string>}  $explain
      * @param  array<string, array<string, mixed>>  $comparisonRows  SourcePriceComparison::forCard()['rows'] po source_key
+     * @param  SupplierSpecialMask  $mask  slot z ceną specjalną w cenie standardowej, z oceną tej ceny (status „standard”)
      * @return list<array<string, mixed>>
      */
-    private function sourcePricesPayload(Collection $slots, array $explain, array $comparisonRows): array
+    private function sourcePricesPayload(Collection $slots, array $explain, array $comparisonRows, SupplierSpecialMask $mask): array
     {
         if ($slots->isEmpty()) {
             return [];
@@ -597,6 +681,8 @@ class ProductController extends Controller
 
         return $slots
             ->sort(static fn (ProductSourcePrice $a, ProductSourcePrice $b): int => $rank($a) <=> $rank($b))
+            // kolejność i powody z prawdziwych slotów, ceny i ocena z widoku widza (ta sama instancja bez maski)
+            ->map(static fn (ProductSourcePrice $slot): ProductSourcePrice => $mask->maskSlot($slot))
             ->map(fn (ProductSourcePrice $slot): array => [
                 'source_key' => $slot->source_key,
                 'source_label' => $this->sourcePriceLabel($slot),

@@ -11,6 +11,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductMatchService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -62,7 +63,7 @@ final class TenderMatchUserDecisionTest extends TestCase
         $battlecard = $this->item($tender, 2, $chosen, 30, 'battlecard');
         $weakModel = $this->item($tender, 3, $chosen, 40, 'ai');
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
 
         $this->assertSame((int) $chosen->id, (int) $manual->fresh()->main_product_id, 'wybór ręczny zostaje');
         $this->assertSame('manual', $manual->fresh()->match_source);

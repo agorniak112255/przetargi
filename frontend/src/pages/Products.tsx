@@ -24,6 +24,7 @@ import {
   api,
   B2B_DESCRIPTION_OVERWRITE_CONFIRM,
   can,
+  PERM_SUPPLIER_SPECIAL_VIEW,
   descriptionSupplementLabel,
   descriptionSupplementPending,
   parseActiveEnrichment,
@@ -310,6 +311,8 @@ export function Products() {
   const [hasAccessories, setHasAccessories] = useState(false)
   /** Tylko karty powiązane z towarem ERP XL (pewne albo potwierdzone powiązanie). */
   const [erpLinkedOnly, setErpLinkedOnly] = useState(() => searchParams.get('erp_linked') === '1')
+  /** Bez uprawnienia backend odrzuca filtr cen specjalnych (403) — parametr ze starego linku nie idzie do API. */
+  const canSupplierSpecial = can(user, PERM_SUPPLIER_SPECIAL_VIEW)
   /** Tylko karty z ceną specjalną B2B (cena konta niższa niż cennik bazowy − rabat standardowy). */
   const [supplierSpecialOnly, setSupplierSpecialOnly] = useState(() => searchParams.get('supplier_special') === 'special')
   const [manufacturers, setManufacturers] = useState<string[]>([])
@@ -435,7 +438,7 @@ export function Products() {
     if (statusFilter) params.set('enrichment_status', statusFilter)
     if (hasAccessories) params.set('has_accessories', '1')
     if (erpLinkedOnly) params.set('erp_linked', '1')
-    if (supplierSpecialOnly) params.set('supplier_special', 'special')
+    if (supplierSpecialOnly && canSupplierSpecial) params.set('supplier_special', 'special')
     return params
   }
 
@@ -467,7 +470,7 @@ export function Products() {
       })
       .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildParams uses current sort/dir/page/q/manufacturer/status
-  }, [debouncedQ, manufacturer, b2bAccount, statusFilter, hasAccessories, erpLinkedOnly, supplierSpecialOnly, page, perPage, sort, dir, aiMode])
+  }, [debouncedQ, manufacturer, b2bAccount, statusFilter, hasAccessories, erpLinkedOnly, supplierSpecialOnly, canSupplierSpecial, page, perPage, sort, dir, aiMode])
 
   async function runAiSearch(web = false, raw = aiQuery) {
     const query = raw.trim()
@@ -895,21 +898,23 @@ export function Products() {
             />
             Z wariantami
           </label>
-          <label
-            className="flex items-center gap-2 rounded border border-emerald-300 bg-white px-3 py-2 text-sm text-emerald-800"
-            title="Karty, których cena konta B2B jest niższa niż cennik bazowy dostawcy minus rabat standardowy (Cenniki B2B → Rabaty)"
-          >
-            <input
-              type="checkbox"
-              checked={supplierSpecialOnly}
-              disabled={aiMode}
-              onChange={(e) => {
-                setSupplierSpecialOnly(e.target.checked)
-                setPage(1)
-              }}
-            />
-            Tylko ceny specjalne B2B
-          </label>
+          {canSupplierSpecial && (
+            <label
+              className="flex items-center gap-2 rounded border border-emerald-300 bg-white px-3 py-2 text-sm text-emerald-800"
+              title="Karty, których cena konta B2B jest niższa niż cennik bazowy dostawcy minus rabat standardowy (Cenniki B2B → Rabaty)"
+            >
+              <input
+                type="checkbox"
+                checked={supplierSpecialOnly}
+                disabled={aiMode}
+                onChange={(e) => {
+                  setSupplierSpecialOnly(e.target.checked)
+                  setPage(1)
+                }}
+              />
+              Tylko ceny specjalne B2B
+            </label>
+          )}
           <label
             className="flex items-center gap-2 rounded border border-sky-300 bg-white px-3 py-2 text-sm text-sky-800"
             title="Karty powiązane z towarem w ERP XL (powiązanie pewne albo potwierdzone na ekranie ERP XL) — te, które pokazują stan XL"

@@ -52,10 +52,15 @@ final class SourcePriceComparison
      *
      * @param  Collection<int, ProductSourcePrice>  $slots  sloty karty z priceList (manufacturer, suggested_prices)
      * @param  array{winner: ProductSourcePrice|null, reasons: array<string, string>}  $explain  ProductEffectivePrice::explain
+     * @param  SupplierSpecialMask  $mask  widok ceny specjalnej B2B — ranking i różnice liczone na cenach, które widz widzi
      * @return array{rows: array<string, array{purchase_price_pln: float|null, comparable: bool, not_comparable_reason: string|null, price_rank: int|null, is_cheapest: bool, diff_to_effective_pct: float|null}>, rates: array{as_of: string|null, source: string}}
      */
-    public function forCard(Product $product, Collection $slots, array $explain): array
+    public function forCard(Product $product, Collection $slots, array $explain, SupplierSpecialMask $mask): array
     {
+        // zwycięzca (explain) zostaje prawdziwy — maska zmienia tylko ceny, od których liczymy porównanie
+        $mask->preload([$product]);
+        $product = $mask->maskProduct($product);
+        $slots = $slots->map(static fn (ProductSourcePrice $slot): ProductSourcePrice => $mask->maskSlot($slot));
         $accountIds = $this->accountIds($slots);
         $links = $slots->isEmpty() ? [] : ($this->linksByProduct([(int) $product->id])[(int) $product->id] ?? []);
         // tylko wersje Sign Project — rozmiary w różnych cenach (kind „size”) mają cenę w slocie konta
@@ -81,9 +86,10 @@ final class SourcePriceComparison
      * (sloty, konta, powiązania, reguły „Producenci”, wersje), bez explain() per karta.
      *
      * @param  Collection<int, Product>  $products  karty z id, manufacturer, purchase_price, currency
+     * @param  SupplierSpecialMask  $mask  widok ceny specjalnej B2B — „taniej u …” względem ceny, którą widz widzi
      * @return array<int, array{source_key: string, label: string, purchase_price_pln: float, diff_pct: float}|null>
      */
-    public function cheaperSources(Collection $products): array
+    public function cheaperSources(Collection $products, SupplierSpecialMask $mask): array
     {
         $out = [];
         $candidates = [];
@@ -109,13 +115,22 @@ final class SourcePriceComparison
             }
 
             [$slotsByProduct, $accounts, $links, $disabled, $withVariants] = $this->batch($multi);
+            $mask->preload($multi);
 
             foreach ($slotsByProduct as $productId => $slots) {
                 $product = $candidates[(int) $productId];
                 $productLinks = $links[(int) $productId] ?? [];
                 $hasVariants = isset($withVariants[(int) $productId]);
+                // zwycięzca na prawdziwych cenach (jak explain()), porównanie na cenach widocznych dla widza
                 $effectiveKey = $hasVariants ? null : $this->winnerKey($product, $slots, $accounts, $productLinks, $disabled);
-                $rows = $this->rows($product, $slots, $effectiveKey, $hasVariants, $productLinks, $disabled);
+                $rows = $this->rows(
+                    $mask->maskProduct($product),
+                    $slots->map(static fn (ProductSourcePrice $slot): ProductSourcePrice => $mask->maskSlot($slot)),
+                    $effectiveKey,
+                    $hasVariants,
+                    $productLinks,
+                    $disabled,
+                );
                 $out[(int) $productId] = $this->cheaperFromRows(
                     $rows,
                     $effectiveKey,
@@ -139,9 +154,10 @@ final class SourcePriceComparison
      * wersjami nie ma obowiązującego slotu. Stała liczba zapytań na 1000 kart; slotów bez warunku nie czytamy.
      *
      * @param  Collection<int, Product>  $products  karty z id i manufacturer
+     * @param  SupplierSpecialMask  $mask  widok ceny specjalnej B2B — size_price_max slotu specjalnego przeskalowany
      * @return array<int, array{min: float|null, step: float|null, unit: string|null, varies: bool, price_note: string|null, price_carton_qty: float|null, size_price_max: string|null, size_price_currency: string|null, source_key: string, source_label: string}>
      */
-    public function orderQuantities(Collection $products): array
+    public function orderQuantities(Collection $products, SupplierSpecialMask $mask): array
     {
         $byId = [];
         foreach ($products as $product) {
@@ -165,6 +181,8 @@ final class SourcePriceComparison
             }
 
             [$slotsByProduct, $accounts, $links, $disabled, $withVariants] = $this->batch($restricted);
+            // slot specjalny bez waluty bierze walutę karty — hurtem zamiast karta po karcie
+            $mask->preload($restricted);
             foreach ($slotsByProduct as $productId => $slots) {
                 if (isset($withVariants[(int) $productId])) {
                     continue;
@@ -174,7 +192,7 @@ final class SourcePriceComparison
                 if ($slot === null) {
                     continue;
                 }
-                $condition = $this->orderQuantityOf($slot, $accounts);
+                $condition = $this->orderQuantityOf($slot, $mask, $accounts);
                 if ($condition !== null) {
                     $out[(int) $productId] = $condition;
                 }
@@ -190,11 +208,13 @@ final class SourcePriceComparison
      * cena karty to najniższa z rozmiarów w różnych cenach). null, gdy slot nie ogranicza zamówienia, nie ma warunku
      * zależnego od rozmiaru, warunku ceny ani rozmiarów w różnych cenach. Karta wyrobu podaje tu zwycięzcę explain().
      *
+     * @param  SupplierSpecialMask  $mask  widok ceny specjalnej B2B — najwyższa cena rozmiaru slotu specjalnego przeskalowana
      * @param  Collection<int, B2bAccount>|null  $accounts  konta po id (lista); null = relacja account slotu
      * @return array{min: float|null, step: float|null, unit: string|null, varies: bool, price_note: string|null, price_carton_qty: float|null, size_price_max: string|null, size_price_currency: string|null, source_key: string, source_label: string}|null
      */
-    public function orderQuantityOf(ProductSourcePrice $slot, ?Collection $accounts = null): ?array
+    public function orderQuantityOf(ProductSourcePrice $slot, SupplierSpecialMask $mask, ?Collection $accounts = null): ?array
     {
+        $slot = $mask->maskSlot($slot);
         $varies = (bool) $slot->order_varies;
         $restricts = B2bOrderQuantity::restricting($slot->order_min_qty, $slot->order_step_qty);
         $sizePriceMax = $slot->size_price_max;
@@ -234,7 +254,9 @@ final class SourcePriceComparison
             ->orderBy('id')
             ->get([
                 'id', 'product_id', 'source_key', 'b2b_account_id', 'price_list_id', 'catalog_price_net',
-                'purchase_price', 'currency', 'pack_qty', 'order_min_qty', 'order_step_qty', 'order_unit', 'order_varies', 'price_note', 'price_carton_qty', 'size_price_max', 'checked_at',
+                'purchase_price', 'discount_percent', 'currency', 'pack_qty', 'order_min_qty', 'order_step_qty', 'order_unit', 'order_varies', 'price_note', 'price_carton_qty', 'size_price_max', 'checked_at',
+                // ocena ceny specjalnej (SupplierSpecialMask::maskSlot) bez dodatkowego zapytania
+                'base_price_net', 'base_price_category', 'standard_discount_percent',
             ])
             ->groupBy('product_id');
         $accountIds = $this->accountIds($slotsByProduct->flatten(1));

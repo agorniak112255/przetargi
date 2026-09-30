@@ -6,8 +6,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Tender;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\TenderCoverageService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class TenderCoverageController extends Controller
 {
@@ -15,8 +17,8 @@ class TenderCoverageController extends Controller
         private readonly TenderCoverageService $coverage,
     ) {}
 
-    public function __invoke(Tender $tender): JsonResponse
+    public function __invoke(Request $request, Tender $tender): JsonResponse
     {
-        return response()->json($this->coverage->summarize($tender));
+        return response()->json($this->coverage->summarize($tender, SupplierSpecialMask::forUser($request->user())));
     }
 }

@@ -11,6 +11,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductMatchService;
 use App\Services\TenderOfferExportService;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -65,7 +66,7 @@ final class TenderCustomOfferTest extends TestCase
             ->assertJsonPath('without_price', 0)
             ->assertJsonPath('with_product', 1);
 
-        $rows = $this->app->make(TenderOfferExportService::class)->rows($tender->fresh());
+        $rows = $this->app->make(TenderOfferExportService::class)->rows($tender->fresh(), SupplierSpecialMask::revealing());
         $this->assertSame('Gaśnica GP-4x ABC', $rows[0]['product_name']);
         $this->assertSame('https://sklep.example/produkt/gasnica-4kg', $rows[0]['custom_url']);
     }

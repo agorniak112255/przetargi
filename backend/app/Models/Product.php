@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use LogicException;
 
 class Product extends Model
 {
@@ -58,6 +59,12 @@ class Product extends Model
         self::CATEGORY_SOURCE_PRESTA_REWRITE,
     ];
 
+    /**
+     * Klon z ceną w widoku standardowym (App\Services\Pricing\SupplierSpecialMask) — nie wolno go zapisać ani
+     * skasować: zapis wpisałby cenę standardową w miejsce prawdziwej ceny konta.
+     */
+    public bool $priceMasked = false;
+
     protected $fillable = [
         'sku',
         'name',
@@ -99,6 +106,18 @@ class Product extends Model
      */
     protected static function booted(): void
     {
+        // strażnik przed innymi hakami — maskowana kopia nie może nawet przeliczać indeksu
+        static::saving(static function (self $model): void {
+            if ($model->priceMasked) {
+                throw new LogicException('Maskowana kopia ceny nie może być zapisana');
+            }
+        });
+        static::deleting(static function (self $model): void {
+            if ($model->priceMasked) {
+                throw new LogicException('Maskowana kopia ceny nie może być zapisana');
+            }
+        });
+
         static::saving(function (self $product): void {
             if ($product->exists && ! $product->isDirty(ProductSearchBlob::SOURCE_COLUMNS)) {
                 return;

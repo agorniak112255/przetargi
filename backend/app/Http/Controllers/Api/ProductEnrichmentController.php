@@ -13,6 +13,7 @@ use App\Models\ProductEnrichmentBatch;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Enrichment\EnrichmentSlots;
 use App\Services\Enrichment\ProductEnrichmentService;
+use App\Services\Pricing\SupplierSpecialMask;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use RuntimeException;
@@ -66,7 +67,15 @@ class ProductEnrichmentController extends Controller
             'substitutes.approver:id,name',
         ]);
 
-        $payload = $product->toArray();
+        // widok cen specjalnych B2B: bez uprawnienia karta i zamienniki z ceną specjalną w cenie standardowej
+        $mask = SupplierSpecialMask::forUser($request->user());
+        $mask->preload([(int) $product->id, ...$product->substitutes->pluck('substitute_product_id')->filter()->all()]);
+        $payload = $mask->productRow($product->toArray());
+        foreach ($payload['substitutes'] ?? [] as $i => $row) {
+            if (is_array($row['substitute_product'] ?? null)) {
+                $payload['substitutes'][$i]['substitute_product'] = $mask->productRow($row['substitute_product']);
+            }
+        }
         $payload['images'] = $product->images->map(static fn ($img): array => [
             'id' => $img->id,
             'url' => $img->url(),

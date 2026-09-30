@@ -76,6 +76,12 @@ export type User = {
   default_margin_percent?: number
 }
 
+/**
+ * Ceny specjalne kont B2B (cena konta niższa niż cennik bazowy po rabacie standardowym). Bez uprawnienia backend
+ * wszędzie podaje cenę standardową, a historię cen takich kont bez kwot (prices_hidden).
+ */
+export const PERM_SUPPLIER_SPECIAL_VIEW = 'prices.supplier_special.view'
+
 export function can(user: User | null | undefined, permission: string): boolean {
   return Boolean(user?.permissions?.includes(permission))
 }
@@ -170,6 +176,8 @@ export type ProductPriceHistoryRow = {
   catalog_pct: number | null
   /** Pierwszy wpis tego źródła na karcie (dodanie ceny, nie zmiana). */
   first_in_source: boolean
+  /** Ceny konta B2B z oceną ceny specjalnej ukryte (brak uprawnienia) — kwoty są null; starsze API bez pola. */
+  prices_hidden?: boolean
 }
 
 /** Ostatnia zmiana ceny wersji (ceny jako tekst z dwoma miejscami po przecinku). */
@@ -251,6 +259,8 @@ export type ProductVariantPriceHistoryRow = {
   /** null dla pierwszego wpisu wersji (dodanie ceny, nie zmiana). */
   purchase_old: string | null
   purchase_pct: number | null
+  /** Ceny konta B2B z oceną ceny specjalnej ukryte (brak uprawnienia) — kwoty są null; starsze API bez pola. */
+  prices_hidden?: boolean
 }
 
 export type Product = {
@@ -564,6 +574,8 @@ export type ErpCardStock = {
   suggested: number
   synced_at: string | null
   stale: boolean
+  /** Ceny zakupu z PZ ukryte — karta ma konto B2B z oceną ceny specjalnej, a brak uprawnienia; starsze API bez pola. */
+  prices_hidden?: boolean
 }
 
 /**

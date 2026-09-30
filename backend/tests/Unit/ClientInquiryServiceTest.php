@@ -9,6 +9,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ClientInquiryService;
 use App\Services\NbpExchangeRateService;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductInquirySearch;
 use App\Support\InquiryMailText;
 use App\Support\PpeAssortment;
@@ -1569,6 +1570,6 @@ poz. 13 Buty robocze');
         $this->assertSame('product:item_1', $view[0]['answer_key']);
         $this->assertSame('p:1', $view[0]['chosen']);
         $this->assertSame([], $view[0]['cards']);
-        $this->assertSame('sizes', $svc->present($inquiry)['global_cards'][0]['id']);
+        $this->assertSame('sizes', $svc->present($inquiry, SupplierSpecialMask::revealing())['global_cards'][0]['id']);
     }
 }

@@ -13,6 +13,7 @@ use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\BattlecardService;
+use App\Services\Pricing\SupplierSpecialMask;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -391,7 +392,7 @@ final class TenderItemBattlecardTest extends TestCase
             'status' => 'ok',
         ]);
 
-        $card = app(BattlecardService::class)->forItem($item, true, false);
+        $card = app(BattlecardService::class)->forItem($item, SupplierSpecialMask::revealing(), true, false);
 
         $this->assertSame('RNITZ-M', $card['ours']['sku'] ?? null);
         $this->assertIsArray($item->fresh()->battlecard_substitutes, 'odświeżenie ma zapisać zamienniki');

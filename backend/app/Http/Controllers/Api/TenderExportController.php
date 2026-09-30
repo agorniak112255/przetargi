@@ -6,10 +6,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Tender;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\TenderDocxOfferFiller;
 use App\Services\TenderOfferExportService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
@@ -24,9 +26,11 @@ class TenderExportController extends Controller
         private readonly TenderOfferExportService $offerExport,
     ) {}
 
-    public function excel(Tender $tender): StreamedResponse
+    public function excel(Request $request, Tender $tender): StreamedResponse
     {
-        $rows = $this->offerExport->rows($tender);
+        // zakup, marże i porównanie zamienników w cenach osoby, która eksportuje
+        $mask = SupplierSpecialMask::forUser($request->user());
+        $rows = $this->offerExport->rows($tender, $mask);
         $tender->loadMissing(['client', 'owner']);
 
         $sheet = new Spreadsheet;
@@ -37,7 +41,7 @@ class TenderExportController extends Controller
             ['Klient', $tender->client?->name],
             ['Tytuł', $tender->title],
             ['Status', $tender->status],
-            ['Marża %', $tender->margin_percent],
+            ['Marża %', $this->offerExport->tenderMargin($tender, $mask)],
             ['Wartość netto', $tender->offer_value_net],
             [],
             [
@@ -112,14 +116,16 @@ class TenderExportController extends Controller
         ]);
     }
 
-    public function pdf(Tender $tender): Response
+    public function pdf(Request $request, Tender $tender): Response
     {
-        $rows = $this->offerExport->rows($tender);
+        $mask = SupplierSpecialMask::forUser($request->user());
+        $rows = $this->offerExport->rows($tender, $mask);
         $tender->loadMissing(['client', 'owner']);
 
         $pdf = Pdf::loadView('exports.offer', [
             'tender' => $tender,
             'rows' => $rows,
+            'tenderMargin' => $this->offerExport->tenderMargin($tender, $mask),
         ])->setPaper('a4', 'landscape');
 
         $filename = str_replace('/', '-', $tender->number).'_oferta.pdf';

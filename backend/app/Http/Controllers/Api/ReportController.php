@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Tender;
+use App\Services\Pricing\SupplierSpecialMask;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -16,10 +17,11 @@ class ReportController extends Controller
     public function summary(Request $request): JsonResponse
     {
         $scopeOwn = ! $request->user()->can('tenders.view_all');
+        $margin = $this->marginColumn($request);
 
         $byStatus = Tender::query()
             ->when($scopeOwn, fn ($q) => $q->where('owner_id', $request->user()->id))
-            ->select('status', DB::raw('COUNT(*) as count'), DB::raw('COALESCE(SUM(offer_value_net),0) as offer_value_net'), DB::raw('AVG(margin_percent) as avg_margin'))
+            ->select('status', DB::raw('COUNT(*) as count'), DB::raw('COALESCE(SUM(offer_value_net),0) as offer_value_net'), DB::raw('AVG('.$margin.') as avg_margin'))
             ->groupBy('status')
             ->orderBy('status')
             ->get()
@@ -38,7 +40,7 @@ class ReportController extends Controller
                 'users.name as owner_name',
                 DB::raw('COUNT(*) as count'),
                 DB::raw('COALESCE(SUM(tenders.offer_value_net),0) as offer_value_net'),
-                DB::raw('AVG(tenders.margin_percent) as avg_margin')
+                DB::raw('AVG(tenders.'.$margin.') as avg_margin')
             )
             ->groupBy('tenders.owner_id', 'users.name')
             ->orderByDesc('offer_value_net')
@@ -60,6 +62,7 @@ class ReportController extends Controller
     public function csv(Request $request): StreamedResponse
     {
         $scopeOwn = ! $request->user()->can('tenders.view_all');
+        $margin = $this->marginColumn($request);
 
         $rows = Tender::query()
             ->when($scopeOwn, fn ($q) => $q->where('owner_id', $request->user()->id))
@@ -67,7 +70,7 @@ class ReportController extends Controller
             ->orderByDesc('last_activity_at')
             ->get();
 
-        return response()->streamDownload(static function () use ($rows): void {
+        return response()->streamDownload(static function () use ($rows, $margin): void {
             $out = fopen('php://output', 'w');
             if ($out === false) {
                 return;
@@ -81,7 +84,7 @@ class ReportController extends Controller
                     $t->owner?->name,
                     $t->status,
                     $t->offer_value_net,
-                    $t->margin_percent,
+                    $t->getAttribute($margin),
                     $t->deadline?->format('Y-m-d'),
                     $t->ai_percent,
                 ], ';');
@@ -90,5 +93,14 @@ class ReportController extends Controller
         }, 'raport-przetargi.csv', [
             'Content-Type' => 'text/csv; charset=UTF-8',
         ]);
+    }
+
+    /**
+     * Kolumna marży przetargu w widoku użytkownika: bez prices.supplier_special.view marża bliźniacza (od ceny
+     * standardowej kart z ceną specjalną B2B — decyzja właściciela 30.09.2026). Stała nazwa, nie wejście użytkownika.
+     */
+    private function marginColumn(Request $request): string
+    {
+        return SupplierSpecialMask::forUser($request->user())->hides() ? 'margin_percent_standard' : 'margin_percent';
     }
 }

@@ -11,6 +11,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductMatchService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -54,7 +55,7 @@ final class TenderMatchUndescribedProductTest extends TestCase
         $this->stubRank([[(int) $bare->id, 95], [(int) $described->id, 85]]);
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame((int) $described->id, (int) $item->main_product_id, 'karta bez opisu nie wygrywa oceną z samej nazwy');
@@ -66,7 +67,7 @@ final class TenderMatchUndescribedProductTest extends TestCase
         $this->stubRank([[(int) $bare->id, 95]]);
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertNull($item->main_product_id);
@@ -81,7 +82,7 @@ final class TenderMatchUndescribedProductTest extends TestCase
         $this->stubRank([]);
         [$tender, $item] = $this->tenderWith('Rękawice robocze RNITZ-M ze ściągaczem');
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertNull($item->main_product_id, 'kod z SIWZ wskazał kartę bez opisu — bez propozycji i bez zamiennika');
@@ -104,7 +105,7 @@ final class TenderMatchUndescribedProductTest extends TestCase
         ]);
         $manual->forceFill(['main_product_id' => $bare->id, 'ai_match_percent' => 95, 'match_source' => 'manual'])->save();
 
-        app(ProductMatchService::class)->matchTender($tender, false);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), false);
         $auto->refresh();
         $manual->refresh();
 

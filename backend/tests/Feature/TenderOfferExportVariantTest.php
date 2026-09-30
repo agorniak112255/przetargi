@@ -10,6 +10,7 @@ use App\Models\ProductVariant;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\TenderOfferExportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
@@ -53,7 +54,7 @@ final class TenderOfferExportVariantTest extends TestCase
             'main_product_id' => $plain->id, 'offer_price' => 12, 'battlecard_substitutes' => [],
         ]);
 
-        $rows = app(TenderOfferExportService::class)->rows($tender);
+        $rows = app(TenderOfferExportService::class)->rows($tender, SupplierSpecialMask::revealing());
 
         $this->assertSame('KASK-1-YL', $rows[0]['sku']);
         $this->assertStringEndsWith(' — żółty', (string) $rows[0]['product_name']);
@@ -87,7 +88,7 @@ final class TenderOfferExportVariantTest extends TestCase
         // scalanie kart przepina pozycję zapisem bez zdarzeń modelu
         TenderItem::query()->whereKey($item->id)->toBase()->update(['main_product_id' => $other->id]);
 
-        $rows = app(TenderOfferExportService::class)->rows($tender->fresh());
+        $rows = app(TenderOfferExportService::class)->rows($tender->fresh(), SupplierSpecialMask::revealing());
 
         $this->assertSame('KASK-2', $rows[0]['sku']);
         $this->assertEquals(30.0, $rows[0]['purchase_price']);

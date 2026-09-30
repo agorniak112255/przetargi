@@ -10,6 +10,7 @@ use App\Http\Requests\StoreProductSubstituteRequest;
 use App\Http\Requests\UpdateProductSubstituteRequest;
 use App\Models\Product;
 use App\Models\ProductSubstitute;
+use App\Services\Pricing\SupplierSpecialMask;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -52,22 +53,27 @@ class ProductSubstituteController extends Controller
             });
         }
 
-        return response()->json(
-            $query->orderBy('main_product_id')->orderByDesc('match_percent')->get()
-        );
+        $rows = $query->orderBy('main_product_id')->orderByDesc('match_percent')->get();
+        $mask = SupplierSpecialMask::forUser($request->user());
+        // tylko karty zamienne mają ceny (catalog_price_net) — hurtem, lista jest bez stronicowania
+        $mask->preload($rows->pluck('substitute_product_id')->filter()->all());
+
+        return response()->json($rows->map(fn (ProductSubstitute $row): ?ProductSubstitute => $this->masked($row, $mask)));
     }
 
-    public function byMain(Product $product): JsonResponse
+    public function byMain(Request $request, Product $product): JsonResponse
     {
         $substitutes = ProductSubstitute::query()
             ->with(['substituteProduct', 'approver:id,name'])
             ->where('main_product_id', $product->id)
             ->orderByDesc('match_percent')
             ->get();
+        $mask = SupplierSpecialMask::forUser($request->user());
+        $mask->preload([(int) $product->id, ...$substitutes->pluck('substitute_product_id')->filter()->all()]);
 
         return response()->json([
-            'main_product' => $product,
-            'substitutes' => $substitutes,
+            'main_product' => $mask->maskProduct($product),
+            'substitutes' => $substitutes->map(fn (ProductSubstitute $row): ?ProductSubstitute => $this->masked($row, $mask)),
         ]);
     }
 
@@ -84,11 +90,11 @@ class ProductSubstituteController extends Controller
         ]);
 
         return response()->json(
-            $substitute->fresh([
+            $this->masked($substitute->fresh([
                 'mainProduct:id,sku,name,manufacturer',
                 'substituteProduct:id,sku,name,manufacturer,catalog_price_net',
                 'approver:id,name',
-            ]),
+            ]), SupplierSpecialMask::forUser($request->user())),
             201
         );
     }
@@ -110,11 +116,11 @@ class ProductSubstituteController extends Controller
         ]);
 
         return response()->json(
-            $productSubstitute->fresh([
+            $this->masked($productSubstitute->fresh([
                 'mainProduct:id,sku,name,manufacturer',
                 'substituteProduct:id,sku,name,manufacturer,catalog_price_net',
                 'approver:id,name',
-            ])
+            ]), SupplierSpecialMask::forUser($request->user()))
         );
     }
 
@@ -143,12 +149,34 @@ class ProductSubstituteController extends Controller
         ]);
 
         return response()->json(
-            $productSubstitute->fresh([
+            $this->masked($productSubstitute->fresh([
                 'mainProduct:id,sku,name,manufacturer',
                 'substituteProduct:id,sku,name,manufacturer,catalog_price_net',
                 'approver:id,name',
-            ])
+            ]), SupplierSpecialMask::forUser($request->user()))
         );
+    }
+
+    /**
+     * Zamiennik z kartami w widoku cen widza: bez uprawnienia cena specjalna B2B karty zamiennej w cenie
+     * standardowej. Relacje podmienione tylko w odpowiedzi (klon karty nie da się zapisać).
+     */
+    private function masked(?ProductSubstitute $row, SupplierSpecialMask $mask): ?ProductSubstitute
+    {
+        if ($row === null || ! $mask->hides()) {
+            return $row;
+        }
+        foreach (['substituteProduct', 'mainProduct'] as $relation) {
+            $related = $row->relationLoaded($relation) ? $row->getRelation($relation) : null;
+            // karta wczytana bez kolumn cen (mainProduct: id, sku, nazwa, producent) nie ma czego ukrywać — bez zapytań maski
+            $priced = $related instanceof Product
+                && array_intersect_key($related->getAttributes(), array_flip(['catalog_price_net', 'purchase_price', 'discount_percent'])) !== [];
+            if ($priced) {
+                $row->setRelation($relation, $mask->maskProduct($related));
+            }
+        }
+
+        return $row;
     }
 
     /**

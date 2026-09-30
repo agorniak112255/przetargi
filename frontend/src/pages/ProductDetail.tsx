@@ -1010,7 +1010,11 @@ export function ProductDetail() {
           </span>
         ) : (
           <span className="text-slate-400">
-            {priceHistory.length > 0 ? 'Cena bez zmian od dodania.' : 'Brak historii cen.'}
+            {priceHistory.some((h) => h.prices_hidden)
+              ? 'Zmiany cen konta B2B ukryte (ceny specjalne).'
+              : priceHistory.length > 0
+                ? 'Cena bez zmian od dodania.'
+                : 'Brak historii cen.'}
           </span>
         )}
       </p>
@@ -1138,12 +1142,20 @@ export function ProductDetail() {
                         {h.source_label}
                         {h.first_in_source && <span className="ml-1 text-slate-400">(dodanie ceny)</span>}
                       </td>
-                      <td className="whitespace-nowrap p-2">
-                        <PriceStep oldValue={h.purchase_old} newValue={h.purchase_price} pct={h.purchase_pct} currency={rowCurrency} />
-                      </td>
-                      <td className="whitespace-nowrap p-2">
-                        <PriceStep oldValue={h.catalog_old} newValue={h.catalog_price_net} pct={h.catalog_pct} currency={rowCurrency} />
-                      </td>
+                      {h.prices_hidden ? (
+                        <td colSpan={2} className="p-2 text-slate-400" title="Cena konta B2B z oceną ceny specjalnej — bez uprawnienia do cen specjalnych">
+                          ceny ukryte
+                        </td>
+                      ) : (
+                        <>
+                          <td className="whitespace-nowrap p-2">
+                            <PriceStep oldValue={h.purchase_old} newValue={h.purchase_price} pct={h.purchase_pct} currency={rowCurrency} />
+                          </td>
+                          <td className="whitespace-nowrap p-2">
+                            <PriceStep oldValue={h.catalog_old} newValue={h.catalog_price_net} pct={h.catalog_pct} currency={rowCurrency} />
+                          </td>
+                        </>
+                      )}
                     </tr>
                   )
                 })}

@@ -11,6 +11,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductMatchService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -57,7 +58,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->stubModel(static fn (): array => []); // każde wywołanie modelu padło (kontrakt klienta: pusta tablica)
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        $result = app(ProductMatchService::class)->matchTender($tender, true);
+        $result = app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertNull($item->main_product_id, 'bez odpowiedzi modelu opis nie może dostać karty po słowach');
@@ -103,7 +104,7 @@ final class TenderMatchModelStateTest extends TestCase
         });
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        $result = app(ProductMatchService::class)->matchTender($tender, true);
+        $result = app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertNull($item->main_product_id, 'karta z drugiej oceny trafiła do pozycji, której ocena padła');
@@ -122,7 +123,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->stubModel(static fn (): array => []);
         [, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        app(ProductMatchService::class)->matchItem($item, true);
+        app(ProductMatchService::class)->matchItem($item, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertNull($item->main_product_id, 'bez odpowiedzi modelu pojedyncza pozycja nie może dostać karty po słowach');
@@ -166,7 +167,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
         [, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        app(ProductMatchService::class)->matchItem($item, true);
+        app(ProductMatchService::class)->matchItem($item, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertNull($item->main_product_id, 'karta z drugiej oceny trafiła do pozycji, której ocena padła');
@@ -183,7 +184,7 @@ final class TenderMatchModelStateTest extends TestCase
             : []);
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        $result = app(ProductMatchService::class)->matchTender($tender, true);
+        $result = app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame((int) $glove->id, (int) $item->main_product_id);
@@ -208,7 +209,7 @@ final class TenderMatchModelStateTest extends TestCase
             : []);
         [$tender, $item] = $this->tenderWith(self::UVEX_LINE);
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame((int) $glove->id, (int) $item->main_product_id, 'karta zostaje jako propozycja');
@@ -228,7 +229,7 @@ final class TenderMatchModelStateTest extends TestCase
             : []);
         [$tender, $item] = $this->tenderWith(self::UVEX_LINE);
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame((int) $glove->id, (int) $item->main_product_id);
@@ -245,7 +246,7 @@ final class TenderMatchModelStateTest extends TestCase
             : []);
         [$tender, $item] = $this->tenderWith('Rękawice robocze nitrylowe ze ściągaczem, mat. dzianina bawełniana, do prac montażowych');
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame((int) $glove->id, (int) $item->main_product_id);
@@ -306,7 +307,7 @@ final class TenderMatchModelStateTest extends TestCase
             'ai_match_reasons' => [['code' => 'heuristic_only', 'label' => 'po słowach', 'points' => 70]],
         ])->save();
 
-        app(ProductMatchService::class)->matchTender($tender, false);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), false);
         $item->refresh();
 
         $this->assertSame((int) $old->id, (int) $item->main_product_id, 'propozycja nie wypiera zapisanej karty');
@@ -332,7 +333,7 @@ final class TenderMatchModelStateTest extends TestCase
             'ai_match_percent' => 100,
         ])->save();
 
-        app(ProductMatchService::class)->matchTender($tender, false);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), false);
         $item->refresh();
 
         $this->assertSame((int) $old->id, (int) $item->main_product_id);
@@ -351,7 +352,7 @@ final class TenderMatchModelStateTest extends TestCase
             : []);
         [$tender, $item] = $this->tenderWith(self::UVEX_LINE);
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame((int) $glove->id, (int) $item->main_product_id);
@@ -365,7 +366,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->stubModel(static fn (): array => []);
         [$tender, $item] = $this->tenderWith('Rękawice robocze RNITZ-M ze ściągaczem');
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame((int) $glove->id, (int) $item->main_product_id);
@@ -391,7 +392,7 @@ final class TenderMatchModelStateTest extends TestCase
             'offer_price' => 5,
         ])->save();
 
-        $result = app(ProductMatchService::class)->matchTender($tender, false);
+        $result = app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), false);
         $item->refresh();
 
         $this->assertSame((int) $glove->id, (int) $item->main_product_id, 'oferta nie znika, gdy model nie odpowiedział');
@@ -413,7 +414,7 @@ final class TenderMatchModelStateTest extends TestCase
             : []);
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        $result = app(ProductMatchService::class)->matchTender($tender, true);
+        $result = app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame($gloveId, (int) $item->main_product_id);
@@ -440,14 +441,14 @@ final class TenderMatchModelStateTest extends TestCase
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $whole = $item->refresh()->ai_match_reasons;
 
         $this->assertSame($gloveId, (int) $item->main_product_id);
         $this->assertSame('ai', $whole[0]['code'] ?? null, 'pierwszy wiersz uzasadnienia to ocena modelu');
         $this->assertStringContainsString('brak potwierdzenia dzianiny', (string) ($whole[0]['label'] ?? ''));
 
-        app(ProductMatchService::class)->matchItem($item, true);
+        app(ProductMatchService::class)->matchItem($item, SupplierSpecialMask::revealing(), true);
         $single = $item->refresh()->ai_match_reasons;
         $this->assertSame($whole[0]['label'], $single[0]['label'] ?? null, 'cały przetarg i pojedyncza pozycja zapisują to samo uzasadnienie');
     }
@@ -467,7 +468,7 @@ final class TenderMatchModelStateTest extends TestCase
             'offer_price' => 5,
         ])->save();
 
-        app(ProductMatchService::class)->matchTender($tender, false);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), false);
         $item->refresh();
 
         $this->assertSame((int) $glove->id, (int) $item->main_product_id);
@@ -497,7 +498,7 @@ final class TenderMatchModelStateTest extends TestCase
             'offer_price' => 5,
         ])->save();
 
-        app(ProductMatchService::class)->matchTender($tender, false);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), false);
         $item->refresh();
 
         $this->assertSame((int) $modelCard->id, (int) $item->main_product_id, 'wybór po słowach nie wypiera karty modelu');
@@ -523,7 +524,7 @@ final class TenderMatchModelStateTest extends TestCase
             'offer_price' => 5,
         ])->save();
 
-        app(ProductMatchService::class)->matchTender($tender, false);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), false);
         $item->refresh();
 
         $this->assertSame((int) $better->id, (int) $item->main_product_id, 'fixture: słowa karty wskazują lepszą kartę');
@@ -543,7 +544,7 @@ final class TenderMatchModelStateTest extends TestCase
             : []);
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         // Od 21.09.2026 (decyzja właściciela) karta poniżej progu jest propozycją do sprawdzenia, a nie pustą
@@ -570,7 +571,7 @@ final class TenderMatchModelStateTest extends TestCase
             : []);
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertNull($item->main_product_id, 'odrzucenie przez model nie zamienia się w 70% po słowach');
@@ -589,7 +590,7 @@ final class TenderMatchModelStateTest extends TestCase
             'offer_price' => 5,
         ])->save();
 
-        app(ProductMatchService::class)->matchTender($tender, false);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), false);
         $item->refresh();
 
         $this->assertSame('not_reconfirmed', $item->ai_match_reasons[0]['code'] ?? null);
@@ -612,7 +613,7 @@ final class TenderMatchModelStateTest extends TestCase
             : []);
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame($gloveId, (int) $item->main_product_id);
@@ -630,7 +631,7 @@ final class TenderMatchModelStateTest extends TestCase
             'offer_price' => 5,
         ])->save();
 
-        app(ProductMatchService::class)->matchTender($tender, false);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), false);
         $item->refresh();
 
         $this->assertSame((int) $other->id, (int) $item->main_product_id, 'propozycja nie wypiera karty z wcześniejszego dopasowania');
@@ -658,7 +659,7 @@ final class TenderMatchModelStateTest extends TestCase
             'offer_price' => 5,
         ])->save();
 
-        app(ProductMatchService::class)->matchTender($tender, false);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), false);
         $item->refresh();
 
         $this->assertSame($gloveId, (int) $item->main_product_id);
@@ -686,7 +687,7 @@ final class TenderMatchModelStateTest extends TestCase
             'offer_price' => 5,
         ])->save();
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame((int) $manual->id, (int) $item->main_product_id);
@@ -707,7 +708,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
         [$tender, $item] = $this->tenderWith(self::DESCRIPTIVE);
 
-        app(ProductMatchService::class)->matchItem($item, true);
+        app(ProductMatchService::class)->matchItem($item, SupplierSpecialMask::revealing(), true);
         $item->refresh();
 
         $this->assertSame($gloveId, (int) $item->main_product_id, 'pojedyncza pozycja — ta sama zasada co cały przetarg');
@@ -737,7 +738,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->app->instance(OpenAiCompatibleClient::class, $llm);
         [$tender] = $this->tenderWith(self::DESCRIPTIVE);
 
-        app(ProductMatchService::class)->matchTender($tender, true);
+        app(ProductMatchService::class)->matchTender($tender, SupplierSpecialMask::revealing(), true);
 
         $this->assertNotSame([], $prompts, 'pozycja opisowa idzie do rankingu modelu');
         $prompt = $prompts[0];

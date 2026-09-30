@@ -142,6 +142,12 @@ fi
 echo "==> migrate"
 "$PHP_BIN" artisan migrate --force
 
+# Marża przetargów od ceny standardowej (dla użytkowników bez podglądu cen specjalnych B2B): migracja kopiuje ją
+# tam, gdzie karta nie ma ceny specjalnej; resztę liczy to polecenie. Liczy tylko braki — kolejne wdrożenia nic
+# nie zmieniają.
+echo "==> marże przetargów od ceny standardowej"
+"$PHP_BIN" artisan tenders:backfill-standard-margins --apply || true
+
 # Uprawnienia dopisane w kodzie trzeba dosypać do bazy, inaczej nowej opcji nie
 # ma nikt — także admin. Seedera rol tu NIE wołamy: robi syncPermissions, czyli
 # skasowałby ręczne zmiany z panelu „Role”. To polecenie tylko dodaje nowe.

@@ -7,7 +7,7 @@ import { B2bSizeMergeModal } from '../components/B2bSizeMergeModal'
 import { B2bSupplementProgressModal } from '../components/B2bSupplementProgressModal'
 import { B2bSyncProgressModal } from '../components/B2bSyncProgressModal'
 import { PriceListsTabs } from '../components/PriceListsTabs'
-import { api, can } from '../lib/api'
+import { api, can, PERM_SUPPLIER_SPECIAL_VIEW } from '../lib/api'
 
 type SyncFrequency = 'off' | 'daily' | 'weekly'
 
@@ -778,7 +778,7 @@ export function PriceListsB2b() {
                           Scal rozmiary
                         </button>
                       )}
-                      {usesStandardDiscounts(row.connector) && (
+                      {usesStandardDiscounts(row.connector) && can(user, PERM_SUPPLIER_SPECIAL_VIEW) && (
                         <Link
                           className={specialActionBtn}
                           to={`/products?b2b_account=${row.id}&b2b_label=${encodeURIComponent(row.connector_label ?? row.username)}&supplier_special=special`}

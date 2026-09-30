@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Services\Presta\PrestaCatalogApplyService;
 use App\Services\Presta\PrestaCatalogGateway;
 use App\Services\Presta\PrestaProductSearchService;
+use App\Services\Pricing\SupplierSpecialMask;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use RuntimeException;
@@ -85,7 +86,8 @@ class PrestaShopSearchController extends Controller
         }
 
         $fresh = $result['product'];
-        $payload = $fresh->toArray();
+        // karta wraca do okna karty — bez uprawnienia cena specjalna B2B w cenie standardowej
+        $payload = SupplierSpecialMask::forUser($request->user())->productRow($fresh->toArray());
         $payload['images'] = $fresh->images->map(static fn ($img): array => [
             'id' => $img->id,
             'url' => $img->url(),

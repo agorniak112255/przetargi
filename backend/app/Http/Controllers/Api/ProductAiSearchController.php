@@ -11,6 +11,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\NbpExchangeRateService;
 use App\Services\Pricing\SourcePriceComparison;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductAiSearchService;
 use App\Services\Search\AiProductSearch;
 use App\Services\Search\SearchEventRecorder;
@@ -85,11 +86,16 @@ class ProductAiSearchController extends Controller
             static fn (array $row): int => (int) ($row['id'] ?? 0),
             $result['products'],
         ))));
+        // Widok cen specjalnych B2B dopiero po telemetrii (zdarzenie zapisuje prawdziwe ceny): bez uprawnienia karta
+        // z ceną specjalną pokazuje cenę standardową. Kolejność wyników (ranking liczony także od ceny) zostaje —
+        // zdradza najwyżej pozycję, nie kwotę.
+        $mask = SupplierSpecialMask::forUser($request->user());
+        $mask->preload($ids);
         $quantities = $ids === []
             ? []
-            : $this->comparison->orderQuantities(Product::query()->whereIn('id', $ids)->get(['id', 'manufacturer']));
+            : $this->comparison->orderQuantities(Product::query()->whereIn('id', $ids)->get(['id', 'manufacturer']), $mask);
         $result['products'] = array_map(
-            static fn (array $row): array => $row + ['order_quantity' => $quantities[(int) ($row['id'] ?? 0)] ?? null],
+            static fn (array $row): array => $mask->productRow($row) + ['order_quantity' => $quantities[(int) ($row['id'] ?? 0)] ?? null],
             $result['products'],
         );
 

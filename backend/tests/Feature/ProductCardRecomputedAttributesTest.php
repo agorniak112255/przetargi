@@ -51,7 +51,7 @@ final class ProductCardRecomputedAttributesTest extends TestCase
     {
         $product = $this->armenO1();
 
-        $shown = app(ProductController::class)->show($product)->getData(true);
+        $shown = app(ProductController::class)->show(request(), $product)->getData(true);
 
         $attributes = $shown['enrichment_payload']['attributes'];
         $this->assertSame('O1', $attributes['klasa_ochrony']);
@@ -81,7 +81,7 @@ final class ProductCardRecomputedAttributesTest extends TestCase
             'stock' => 1,
         ]);
 
-        $shown = app(ProductController::class)->show($product->refresh())->getData(true);
+        $shown = app(ProductController::class)->show(request(), $product->refresh())->getData(true);
 
         $this->assertArrayHasKey('enrichment_payload', $shown);
         $this->assertNull($shown['enrichment_payload']);
@@ -114,7 +114,7 @@ final class ProductCardRecomputedAttributesTest extends TestCase
             ],
         ]);
 
-        $shown = app(ProductController::class)->show($product)->getData(true)['enrichment_payload'];
+        $shown = app(ProductController::class)->show(request(), $product)->getData(true)['enrichment_payload'];
         $this->assertSame(['EN 388:2016 4X43C'], $shown['norms']);
         $this->assertSame(['EN 388:2016 4X43C'], $shown['attributes']['normy_en']);
         $this->assertSame('60942', $shown['attributes']['kod_producenta']);
@@ -144,7 +144,7 @@ final class ProductCardRecomputedAttributesTest extends TestCase
             'enrichment_payload' => ['attributes' => ['kategoria_bhp' => 'obuwie', 'normy_en' => [], 'klasa_ochrony' => null]],
         ]);
 
-        $shown = app(ProductController::class)->show($product)->getData(true)['enrichment_payload'];
+        $shown = app(ProductController::class)->show(request(), $product)->getData(true)['enrichment_payload'];
 
         $this->assertSame('S1', $shown['attributes']['klasa_ochrony']);
         $this->assertSame(['EN ISO 20345:2022'], $shown['norms'], 'odczyt normy z tabelki jak w normalize — klasa stoi osobno');

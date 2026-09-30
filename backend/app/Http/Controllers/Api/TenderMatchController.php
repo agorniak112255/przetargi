@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\BattlecardService;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductMatchService;
 use App\Services\TenderWorkflowService;
 use Illuminate\Http\JsonResponse;
@@ -49,8 +50,11 @@ class TenderMatchController extends Controller
         // wynik mimo to — frontend czeka na koniec po /match/progress i wtedy odświeża listę.
         ignore_user_abort(true);
 
+        // oferty dopasowanych kart w cenach osoby, która zleca dopasowanie
+        $mask = SupplierSpecialMask::forUser($request->user());
         $result = $this->matcher->matchTender(
             $tender,
+            $mask,
             $request->boolean('only_empty', true),
             $itemIds,
             (int) $request->input('progress_offset', 0),
@@ -69,7 +73,7 @@ class TenderMatchController extends Controller
             foreach ($items as $item) {
                 // zamienniki z katalogu, bez drugiej rundy wyszukiwania AI na każdą pozycję —
                 // po „15/15” okno stało kolejne minuty, aż przeglądarka zerwała żądanie
-                $this->battlecards->forItem($item, true, false);
+                $this->battlecards->rebuild($item, false);
             }
         }
 
@@ -114,9 +118,10 @@ class TenderMatchController extends Controller
         }
 
         $force = $request->boolean('force', false);
-        $result = $this->matcher->matchItem($item, $force);
+        $mask = SupplierSpecialMask::forUser($request->user());
+        $result = $this->matcher->matchItem($item, $mask, $force);
         $refresh = empty($result['skipped_existing']);
-        $result['battlecard'] = $this->battlecards->forItem($item->fresh(['mainProduct', 'tender']), $refresh);
+        $result['battlecard'] = $this->battlecards->forItem($item->fresh(['mainProduct', 'tender']), $mask, $refresh);
 
         return response()->json($result);
     }

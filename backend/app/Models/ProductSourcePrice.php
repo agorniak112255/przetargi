@@ -6,6 +6,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use LogicException;
 
 /**
  * Cena karty z jednego źródła: cennik z pliku (source_key „file”) albo konto B2B („b2b:{id}”).
@@ -16,6 +17,12 @@ class ProductSourcePrice extends Model
     public const SOURCE_FILE = 'file';
 
     private const B2B_PREFIX = 'b2b:';
+
+    /**
+     * Klon z ceną w widoku standardowym (App\Services\Pricing\SupplierSpecialMask) — nie wolno go zapisać ani
+     * skasować: zapis wpisałby cenę standardową w miejsce prawdziwej ceny konta.
+     */
+    public bool $priceMasked = false;
 
     protected $fillable = [
         'product_id',
@@ -50,6 +57,20 @@ class ProductSourcePrice extends Model
         'checked_at',
         'migrated',
     ];
+
+    protected static function booted(): void
+    {
+        static::saving(static function (self $model): void {
+            if ($model->priceMasked) {
+                throw new LogicException('Maskowana kopia ceny nie może być zapisana');
+            }
+        });
+        static::deleting(static function (self $model): void {
+            if ($model->priceMasked) {
+                throw new LogicException('Maskowana kopia ceny nie może być zapisana');
+            }
+        });
+    }
 
     protected function casts(): array
     {

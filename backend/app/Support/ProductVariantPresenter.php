@@ -7,6 +7,7 @@ namespace App\Support;
 use App\Models\B2bAccount;
 use App\Models\ProductVariant;
 use App\Services\Pricing\SourcePriceComparison;
+use App\Services\Pricing\SupplierSpecialMask;
 use DateTimeInterface;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -69,9 +70,12 @@ final class ProductVariantPresenter
      * Pole `variants` karty; null, gdy karta nie ma wersji ani rozmiarów. Karta z wersjami i rozmiarami
      * pokazuje same wersje (kind „version”) — to one decydują o cenie 0 karty.
      *
+     * Widz bez uprawnienia do cen specjalnych dostaje rozmiary slotu specjalnego przeskalowane do ceny standardowej
+     * (decyzja D2), „od–do” z tych cen i bez ostatniej zmiany ceny rozmiarów konta z oceną (D1).
+     *
      * @return array<string, mixed>|null
      */
-    public function forProduct(int $productId): ?array
+    public function forProduct(int $productId, SupplierSpecialMask $mask): ?array
     {
         $variants = ProductVariant::query()
             ->where('product_id', $productId)
@@ -81,6 +85,8 @@ final class ProductVariantPresenter
         if ($variants->isEmpty()) {
             return null;
         }
+        // maska odsłaniająca zwraca te same instancje — bez zapytań
+        $variants = $variants->map(static fn (ProductVariant $v): ProductVariant => $mask->maskVariant($v));
         $isVersion = static fn (ProductVariant $v): bool => $v->kind !== ProductVariant::KIND_SIZE;
         $kind = $variants->contains($isVersion) ? ProductVariant::KIND_VERSION : ProductVariant::KIND_SIZE;
         if ($kind === ProductVariant::KIND_VERSION) {
@@ -145,7 +151,7 @@ final class ProductVariantPresenter
                 'price_checked_at' => $this->iso($v->price_checked_at),
                 'last_seen_at' => $this->iso($v->last_seen_at),
                 'removed_at' => $this->iso($v->removed_at),
-                'last_price_change' => $changes[(int) $v->id] ?? null,
+                'last_price_change' => $this->hidesHistory($mask, $v, null) ? null : ($changes[(int) $v->id] ?? null),
             ])->values()->all(),
         ];
     }
@@ -180,40 +186,75 @@ final class ProductVariantPresenter
     }
 
     /**
-     * Historia cen jednej wersji od najnowszej, z poprzednią ceną i zmianą procentową.
+     * Historia cen jednej wersji od najnowszej, z poprzednią ceną i zmianą procentową. Wiersz ceny konta B2B z oceną
+     * ceny specjalnej widz bez uprawnienia dostaje bez cen (prices_hidden, decyzja D1).
      *
      * @return list<array<string, mixed>>
      */
-    public function history(int $variantId, int $limit = 100): array
+    public function history(ProductVariant|int $variant, int $limit, SupplierSpecialMask $mask): array
     {
+        $variantId = $variant instanceof ProductVariant ? (int) $variant->id : $variant;
+        // karta i konto rozmiaru potrzebne tylko do ukrywania — maska odsłaniająca nie czyta wersji
+        if (! $variant instanceof ProductVariant && $mask->hides()) {
+            $variant = ProductVariant::query()->find($variantId, ['id', 'product_id', 'b2b_account_id', 'source']);
+        }
         // Jeden wiersz więcej, żeby najstarszy pokazany miał poprzednią wartość.
-        $rows = DB::table('product_variant_price_history')
-            ->select(['id', 'b2b_sync_run_id', 'purchase_price', 'list_price_net', 'currency', 'source', 'created_at'])
-            ->where('product_variant_id', $variantId)
-            ->orderByDesc('created_at')
-            ->orderByDesc('id')
+        $rows = DB::table('product_variant_price_history as h')
+            ->leftJoin('b2b_sync_runs as r', 'r.id', '=', 'h.b2b_sync_run_id')
+            ->select(['h.id', 'h.b2b_sync_run_id', 'h.purchase_price', 'h.list_price_net', 'h.currency', 'h.source', 'h.created_at', 'r.b2b_account_id'])
+            ->where('h.product_variant_id', $variantId)
+            ->orderByDesc('h.created_at')
+            ->orderByDesc('h.id')
             ->limit($limit + 1)
             ->get()
             ->values();
 
+        $hidden = fn (?object $row): bool => $row !== null
+            && $variant instanceof ProductVariant
+            && $this->hidesHistory($mask, $variant, $row->b2b_account_id !== null ? (int) $row->b2b_account_id : null);
+
         $out = [];
         foreach ($rows->take($limit) as $i => $row) {
             $previous = $rows->get($i + 1);
+            $rowHidden = $hidden($row);
+            // poprzednia cena z przebiegu innego konta też może być ceną specjalną
+            $previousHidden = $rowHidden || $hidden($previous);
             $out[] = [
                 'id' => (int) $row->id,
-                'purchase_price' => $this->money($row->purchase_price),
-                'list_price_net' => $this->money($row->list_price_net),
+                'purchase_price' => $rowHidden ? null : $this->money($row->purchase_price),
+                'list_price_net' => $rowHidden ? null : $this->money($row->list_price_net),
                 'currency' => $row->currency,
                 'source' => $row->source,
                 'source_label' => $this->priceChanges->sourceLabel($row->source, false, null),
                 'b2b_sync_run_id' => $row->b2b_sync_run_id !== null ? (int) $row->b2b_sync_run_id : null,
                 'created_at' => $this->iso($row->created_at),
-                'purchase_old' => $previous !== null ? $this->money($previous->purchase_price) : null,
-                'purchase_pct' => $previous !== null ? $this->pct($previous->purchase_price, $row->purchase_price) : null,
+                'purchase_old' => $previous !== null && ! $previousHidden ? $this->money($previous->purchase_price) : null,
+                'purchase_pct' => $previous !== null && ! $previousHidden ? $this->pct($previous->purchase_price, $row->purchase_price) : null,
+                'prices_hidden' => $rowHidden,
             ];
         }
 
         return $out;
+    }
+
+    /**
+     * Ceny rozmiaru (wersji) ukryte przed widzem bez uprawnienia: konto wiersza (przebieg), inaczej konto rozmiaru,
+     * inaczej konto ze źródła „b2b:{id}”; źródło „b2b:{łącznik}” bez konta — dowolny slot z oceną na karcie.
+     */
+    private function hidesHistory(SupplierSpecialMask $mask, ProductVariant $variant, ?int $runAccountId): bool
+    {
+        if (! $mask->hides()) {
+            return false;
+        }
+        $source = trim((string) $variant->source);
+        $accountId = $runAccountId
+            ?? ($variant->b2b_account_id !== null ? (int) $variant->b2b_account_id : null)
+            ?? (preg_match('/^b2b:(\d+)$/', $source, $m) === 1 ? (int) $m[1] : null);
+        if ($accountId !== null) {
+            return $mask->hidesHistory((int) $variant->product_id, $accountId);
+        }
+
+        return str_starts_with($source, 'b2b') && $mask->hidesHistory((int) $variant->product_id, null);
     }
 
     /**

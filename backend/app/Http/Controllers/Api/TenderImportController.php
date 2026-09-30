@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\Tender;
 use App\Models\TenderItem;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\TenderPricingService;
 use App\Services\TenderWorkflowService;
 use Illuminate\Http\JsonResponse;
@@ -57,8 +58,11 @@ class TenderImportController extends Controller
         $dataRows = array_slice($rows, 1);
         $created = 0;
         $errors = [];
+        // oferta z karty w cenach osoby, która importuje
+        $mask = SupplierSpecialMask::forUser($request->user());
 
-        DB::transaction(function () use ($request, $tender, $dataRows, $map, &$created, &$errors): void {
+        DB::transaction(function () use ($request, $tender, $dataRows, $map, $mask, &$created, &$errors): void {
+            $saved = [];
             if ($request->boolean('replace', true)) {
                 $tender->items()->delete();
             }
@@ -102,12 +106,17 @@ class TenderImportController extends Controller
                 if ($offerRaw !== null && $offerRaw !== '') {
                     $item->offer_price = (float) str_replace(',', '.', (string) $offerRaw);
                 } elseif ($product !== null) {
-                    $item->offer_price = $this->pricing->offerFromProduct($tender, $product);
+                    $item->offer_price = $this->pricing->offerFromProduct($tender, $product, $mask);
                 }
 
                 $item->save();
-                $this->pricing->recalculateItemMargin($item);
+                $saved[] = $item;
                 $created++;
+            }
+            // marże po pętli, jedną maską ceny standardowej z kartami wczytanymi hurtem — nie zapytania na pozycję
+            $standard = $this->pricing->standardMask($saved);
+            foreach ($saved as $item) {
+                $this->pricing->recalculateItemMargin($item, $standard);
             }
         });
 

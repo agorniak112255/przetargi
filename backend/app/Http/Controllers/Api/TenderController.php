@@ -10,10 +10,12 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\NbpExchangeRateService;
 use App\Services\Pricing\SourcePriceComparison;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductMatchService;
 use App\Services\TenderActivityLogger;
 use App\Services\TenderCoverageService;
 use App\Services\TenderPricingService;
+use App\Services\Tenders\TenderPriceView;
 use App\Services\TenderWorkflowService;
 use App\Support\OfferPricing;
 use Illuminate\Http\JsonResponse;
@@ -31,6 +33,7 @@ class TenderController extends Controller
         private readonly TenderPricingService $pricing,
         private readonly NbpExchangeRateService $fx,
         private readonly SourcePriceComparison $comparison,
+        private readonly TenderPriceView $priceView,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -72,7 +75,11 @@ class TenderController extends Controller
             $query->where('owner_id', (int) $request->integer('owner_id'));
         }
 
-        return response()->json($query->orderByDesc('last_activity_at')->get());
+        $mask = SupplierSpecialMask::forUser($user);
+
+        return response()->json($query->orderByDesc('last_activity_at')->get()
+            ->map(fn (Tender $tender): array => $this->priceView->summary($tender, $mask))
+            ->values());
     }
 
     public function store(Request $request): JsonResponse
@@ -158,11 +165,14 @@ class TenderController extends Controller
         $tender->last_activity_at = now();
         $tender->save();
 
+        $mask = SupplierSpecialMask::forUser($request->user());
         if ($reprice) {
+            // pozycje bez ceny oferty dostają ją z widoku cen osoby zmieniającej marżę
             $this->pricing->applyTargetMarginChange(
                 $tender,
                 $oldTarget,
                 (float) $tender->target_margin_percent,
+                $mask,
             );
         }
 
@@ -177,9 +187,10 @@ class TenderController extends Controller
             ],
         ]);
 
-        return response()->json(
-            $tender->fresh()->load(['client:id,name', 'owner:id,name'])->loadCount('items')
-        );
+        return response()->json($this->priceView->summary(
+            $tender->fresh()->load(['client:id,name', 'owner:id,name'])->loadCount('items'),
+            $mask,
+        ));
     }
 
     public function destroy(Tender $tender): JsonResponse
@@ -262,9 +273,10 @@ class TenderController extends Controller
         // „taniej u …” przy cenie zakupu wybranej karty — informacja; cena oferty bez zmian (decyzja 2 planu łączenia
         // kart). Hurtem dla wszystkich kart przetargu, nie zapytania na pozycję.
         $mainProducts = $tender->items->pluck('mainProduct')->filter()->unique('id')->values();
-        $cheaper = $this->comparison->cheaperSources($mainProducts);
+        $mask = SupplierSpecialMask::forUser($request->user());
+        $cheaper = $this->comparison->cheaperSources($mainProducts, $mask);
         // warunek zamawiania obowiązującego źródła (UVEX „po 10 szt.”) — też hurtem
-        $orderQuantities = $this->comparison->orderQuantities($mainProducts);
+        $orderQuantities = $this->comparison->orderQuantities($mainProducts, $mask);
         foreach ($tender->items as $item) {
             if ($item->mainProduct !== null) {
                 $item->mainProduct->setAttribute('cheaper_source', $cheaper[(int) $item->mainProduct->id] ?? null);
@@ -289,11 +301,11 @@ class TenderController extends Controller
             ->groupBy('main_product_id');
 
         return response()->json([
-            'tender' => $tender,
-            'substitutes_by_main' => $substitutes,
+            'tender' => $this->priceView->tender($tender, $mask),
+            'substitutes_by_main' => $this->priceView->substitutesByMain($substitutes, $mask),
             'can_edit' => $this->workflow->canEditOffer($tender),
             'next_statuses' => $this->workflow->nextStatusesFor($tender, $request->user()),
-            'coverage' => $this->coverage->summarize($tender),
+            'coverage' => $this->coverage->summarize($tender, $mask),
         ]);
     }
 
@@ -330,12 +342,13 @@ class TenderController extends Controller
         foreach ($tender->items as $item) {
             $this->pricing->appendVariantPricesPln($item);
         }
+        $mask = SupplierSpecialMask::forUser($request->user());
 
         return response()->json([
-            'tender' => $tender,
+            'tender' => $this->priceView->tender($tender, $mask),
             'can_edit' => $this->workflow->canEditOffer($tender),
             'next_statuses' => $this->workflow->nextStatusesFor($tender, $request->user()),
-            'coverage' => $this->coverage->summarize($tender),
+            'coverage' => $this->coverage->summarize($tender, $mask),
         ]);
     }
 }

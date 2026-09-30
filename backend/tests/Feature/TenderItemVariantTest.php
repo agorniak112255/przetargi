@@ -12,6 +12,7 @@ use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\TenderPricingService;
 use App\Support\OfferPricing;
 use App\Support\PpeAssortment;
@@ -185,7 +186,7 @@ final class TenderItemVariantTest extends TestCase
             'main_variant_sku' => 'KASK-1-YL', 'main_variant_source' => 'manual',
         ]);
 
-        app(TenderPricingService::class)->applyTargetMarginChange($tender, 20, 50);
+        app(TenderPricingService::class)->applyTargetMarginChange($tender, 20, 50, SupplierSpecialMask::revealing());
 
         $this->assertEquals(OfferPricing::fromPurchase(60, 50), (float) $item->fresh()->offer_price);
     }

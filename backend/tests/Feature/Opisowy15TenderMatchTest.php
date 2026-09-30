@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Pricing\SupplierSpecialMask;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\Support\FakeSearchLlm;
 use Tests\Support\Opisowy15Fixture;
@@ -41,7 +42,7 @@ final class Opisowy15TenderMatchTest extends TestCase
         $items = $this->makeOpisowy15Items($tender);
         $this->app->instance(OpenAiCompatibleClient::class, FakeSearchLlm::empty());
 
-        $result = $this->matcher->matchTender($tender, true);
+        $result = $this->matcher->matchTender($tender, SupplierSpecialMask::revealing(), true);
 
         $this->assertSame(15, $result['processed']);
         $this->assertSame(15, $result['matched'] + $result['no_match'], 'każda pozycja kończy się trafieniem albo „brak”');

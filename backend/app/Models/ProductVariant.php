@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use LogicException;
 
 /**
  * Wersja karty u dostawcy z ceną konta. Etykieta i atrybuty dosłownie ze źródła.
@@ -20,6 +21,12 @@ class ProductVariant extends Model
     public const KIND_VERSION = 'version';
 
     public const KIND_SIZE = 'size';
+
+    /**
+     * Klon z ceną w widoku standardowym (App\Services\Pricing\SupplierSpecialMask) — nie wolno go zapisać ani
+     * skasować: zapis wpisałby cenę standardową w miejsce prawdziwej ceny konta.
+     */
+    public bool $priceMasked = false;
 
     protected $fillable = [
         'product_id',
@@ -42,6 +49,20 @@ class ProductVariant extends Model
         'last_seen_at',
         'removed_at',
     ];
+
+    protected static function booted(): void
+    {
+        static::saving(static function (self $model): void {
+            if ($model->priceMasked) {
+                throw new LogicException('Maskowana kopia ceny nie może być zapisana');
+            }
+        });
+        static::deleting(static function (self $model): void {
+            if ($model->priceMasked) {
+                throw new LogicException('Maskowana kopia ceny nie może być zapisana');
+            }
+        });
+    }
 
     protected function casts(): array
     {

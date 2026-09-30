@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Tender;
 use App\Models\TenderDocument;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\TenderDocumentImportService;
 use App\Services\TenderWorkflowService;
 use Illuminate\Http\JsonResponse;
@@ -189,6 +190,8 @@ class TenderDocumentController extends Controller
             $request->boolean('replace_items', false),
             $request->boolean('replace_conditions', false),
             isset($data['document_id']) ? (int) $data['document_id'] : null,
+            // oferta z karty w cenach osoby, która zatwierdza import
+            SupplierSpecialMask::forUser($request->user()),
             'document',
         );
 

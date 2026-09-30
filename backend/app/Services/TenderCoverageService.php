@@ -8,6 +8,8 @@ use App\Models\ProductSubstitute;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Services\Ai\AiSettingsService;
+use App\Services\Pricing\SupplierSpecialMask;
+use App\Services\Tenders\TenderPriceView;
 
 final class TenderCoverageService
 {
@@ -18,9 +20,12 @@ final class TenderCoverageService
 
     public function __construct(
         private readonly AiSettingsService $aiSettings,
+        private readonly TenderPriceView $priceView,
     ) {}
 
     /**
+     * @param  SupplierSpecialMask  $mask  widok cen widza — „niska marża” z marży, którą widz widzi (bliźniaczej bez
+     *                                     uprawnienia prices.supplier_special.view)
      * @return array{
      *     total: int,
      *     with_product: int,
@@ -39,7 +44,7 @@ final class TenderCoverageService
      *     }
      * }
      */
-    public function summarize(Tender $tender): array
+    public function summarize(Tender $tender, SupplierSpecialMask $mask): array
     {
         $tender->loadMissing('items');
 
@@ -62,10 +67,8 @@ final class TenderCoverageService
             ) {
                 $weakMatch[] = $item->id;
             }
-            if (
-                $item->margin_percent !== null
-                && (float) $item->margin_percent < self::MIN_MARGIN_PERCENT
-            ) {
+            $margin = $this->priceView->itemMargin($item, $mask);
+            if ($margin !== null && $margin < self::MIN_MARGIN_PERCENT) {
                 $lowMargin[] = $item->id;
             }
         }

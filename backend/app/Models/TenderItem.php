@@ -32,8 +32,13 @@ class TenderItem extends Model
         'status',
     ];
 
+    /**
+     * margin_percent_standard — marża od ceny standardowej kart z ceną specjalną B2B; użytkownik bez
+     * prices.supplier_special.view dostaje ją pod nazwą margin_percent (App\Services\Tenders\TenderPriceView).
+     */
     protected $hidden = [
         'battlecard_substitutes',
+        'margin_percent_standard',
     ];
 
     protected function casts(): array
@@ -42,6 +47,7 @@ class TenderItem extends Model
             'offer_price' => 'decimal:2',
             'companion_offer_price' => 'decimal:2',
             'margin_percent' => 'decimal:2',
+            'margin_percent_standard' => 'decimal:2',
             'ai_match_reasons' => 'array',
             'battlecard_substitutes' => 'array',
         ];

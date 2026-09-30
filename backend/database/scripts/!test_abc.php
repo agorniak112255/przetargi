@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductMatchService;
 use Illuminate\Contracts\Console\Kernel;
 
@@ -41,7 +42,8 @@ TenderItem::query()->create([
     'status' => 'brak',
 ]);
 
-$result = app(ProductMatchService::class)->matchTender($tender->fresh(), true);
+// skrypt CLI — prawdziwe ceny (maska odsłaniająca)
+$result = app(ProductMatchService::class)->matchTender($tender->fresh(), SupplierSpecialMask::revealing(), true);
 $tender->refresh()->load('items.mainProduct');
 
 echo json_encode([

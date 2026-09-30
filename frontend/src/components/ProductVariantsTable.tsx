@@ -434,7 +434,7 @@ function VariantHistory({
       </thead>
       <tbody className="text-slate-700">
         {state.rows.map((h, i) => {
-          const first = i === state.rows.length - 1 && h.purchase_old === null
+          const first = i === state.rows.length - 1 && h.purchase_old === null && !h.prices_hidden
           return (
             <tr key={h.id}>
               <td className="whitespace-nowrap py-0.5 pr-4 tabular-nums">{formatDateTime(h.created_at)}</td>
@@ -443,12 +443,18 @@ function VariantHistory({
                 {first && <span className="ml-1 text-slate-400">(dodanie ceny)</span>}
               </td>
               <td className="whitespace-nowrap py-0.5">
-                <PriceStep
-                  oldValue={h.purchase_old}
-                  newValue={h.purchase_price}
-                  pct={h.purchase_pct}
-                  currency={h.currency ?? currency}
-                />
+                {h.prices_hidden ? (
+                  <span className="text-slate-400" title="Cena konta B2B z oceną ceny specjalnej — bez uprawnienia do cen specjalnych">
+                    cena ukryta
+                  </span>
+                ) : (
+                  <PriceStep
+                    oldValue={h.purchase_old}
+                    newValue={h.purchase_price}
+                    pct={h.purchase_pct}
+                    currency={h.currency ?? currency}
+                  />
+                )}
               </td>
             </tr>
           )

@@ -15,6 +15,7 @@ use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\Pricing\SourcePriceComparison;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\Search\SearchEventRecorder;
 use App\Support\InquiryLinks;
 use App\Support\InquiryMailText;
@@ -160,6 +161,12 @@ final class ClientInquiryService
      */
     private $searchProgress = null;
 
+    /**
+     * Widok ceny specjalnej B2B dla bieżącej operacji (autor analizy, handlowiec przy pozycji, widz zapytania) —
+     * ustawia go withPriceMask(). Poza takim zakresem mask() ukrywa: zapomniane wejście nie może odsłonić ceny.
+     */
+    private ?SupplierSpecialMask $priceMask = null;
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly ProductInquirySearch $search,
@@ -167,6 +174,33 @@ final class ClientInquiryService
         private readonly AiSettingsService $aiSettings,
         private readonly PpeAssortment $assortment = new PpeAssortment,
     ) {}
+
+    /**
+     * Wykonuje $fn z podanym widokiem ceny specjalnej B2B (prices.supplier_special.view): wiersze kandydatów,
+     * ceny oferty i list liczą się od ceny, którą ten użytkownik widzi. Usługa żyje długo (worker kolejki), więc
+     * poprzedni widok wraca po wyjściu — także po wyjątku i przy zagnieżdżeniu.
+     *
+     * @template T
+     *
+     * @param  callable(): T  $fn
+     * @return T
+     */
+    public function withPriceMask(SupplierSpecialMask $mask, callable $fn): mixed
+    {
+        $previous = $this->priceMask;
+        $this->priceMask = $mask;
+        try {
+            return $fn();
+        } finally {
+            $this->priceMask = $previous;
+        }
+    }
+
+    /** Widok ceny bieżącej operacji; bez ustawionego — ukrywający (bezpieczny domyślny). */
+    private function mask(): SupplierSpecialMask
+    {
+        return $this->priceMask ?? SupplierSpecialMask::hiding();
+    }
 
     /**
      * Najwięcej pozycji zapytania — ustawienie „Strojenie AI” (domyślnie 50), odczytane raz na instancję usługi.
@@ -314,7 +348,11 @@ final class ClientInquiryService
         }
 
         try {
-            $this->runAnalysis($inquiry, $runId);
+            // autor zapytania przygotowuje ofertę — od jego widoku ceny specjalnej liczą się kandydaci i list
+            $this->withPriceMask(
+                SupplierSpecialMask::forUser($inquiry->user),
+                fn () => $this->runAnalysis($inquiry, $runId),
+            );
         } catch (Throwable $e) {
             report($e);
             $this->markAnalysisFailed($inquiryId, $runId, $e instanceof RuntimeException
@@ -591,14 +629,31 @@ final class ClientInquiryService
      *
      * @param  array<string, mixed>|false  $terms
      *
+     * `actor` — widok ceny specjalnej B2B handlowca, który wybiera wyrób (autor zapytania): od niego cena wiersza
+     * i list.
+     *
      * @throws RuntimeException gdy pozycji albo wyrobu nie ma
      */
     public function pickProduct(
         ClientInquiry $inquiry,
         string $itemId,
         int $productId,
+        SupplierSpecialMask $actor,
         string|false|null $extraNote = false,
         array|false $terms = false,
+    ): ClientInquiry {
+        return $this->withPriceMask($actor, fn (): ClientInquiry => $this->pickProductMasked($inquiry, $itemId, $productId, $extraNote, $terms));
+    }
+
+    /**
+     * @param  array<string, mixed>|false  $terms
+     */
+    private function pickProductMasked(
+        ClientInquiry $inquiry,
+        string $itemId,
+        int $productId,
+        string|false|null $extraNote,
+        array|false $terms,
     ): ClientInquiry {
         $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
         $item = null;
@@ -676,6 +731,19 @@ final class ClientInquiryService
      * }
      */
     public function rematch(ClientInquiry $inquiry, bool $apply): array
+    {
+        // Ofertę przygotowuje autor zapytania — także z polecenia CLI, gdzie nikt nie jest zalogowany. Autor
+        // bez konta (usunięty) = widok ukrywający.
+        return $this->withPriceMask(
+            SupplierSpecialMask::forUser($inquiry->loadMissing('user')->user),
+            fn (): array => $this->rematchMasked($inquiry, $apply),
+        );
+    }
+
+    /**
+     * @return array{inquiry_id: int, skipped: string|null, warnings: list<string>, items: list<array<string, mixed>>}
+     */
+    private function rematchMasked(ClientInquiry $inquiry, bool $apply): array
     {
         $report = ['inquiry_id' => (int) $inquiry->id, 'skipped' => null, 'warnings' => [], 'items' => []];
         $blocker = $this->rematchBlocker($inquiry);
@@ -1430,9 +1498,21 @@ final class ClientInquiryService
     /**
      * Pełny payload API zapytania (kontrakt GET /inquiries/{id}).
      *
+     * `viewer` — widok ceny specjalnej B2B tego, kto patrzy (autor albo kierownik z inquiries.view_others): ceny
+     * kandydatów i zamienników liczą się od ceny, którą on widzi, także gdy autor zapisał cenę specjalną. Zapisany
+     * list (reply_body, reply_html) idzie, jaki jest — to treść autora dla klienta.
+     *
      * @return array<string, mixed>
      */
-    public function present(ClientInquiry $inquiry): array
+    public function present(ClientInquiry $inquiry, SupplierSpecialMask $viewer): array
+    {
+        return $this->withPriceMask($viewer, fn (): array => $this->presentMasked($inquiry, $viewer));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function presentMasked(ClientInquiry $inquiry, SupplierSpecialMask $viewer): array
     {
         $analysis = is_array($inquiry->analysis) ? $inquiry->analysis : [];
         $answers = is_array($inquiry->answers) ? $inquiry->answers : [];
@@ -1440,7 +1520,7 @@ final class ClientInquiryService
         // Jedno zapytanie do bazy i tylko wtedy, gdy autor nie był wcześniej wczytany.
         $author = $inquiry->loadMissing('user')->user;
         // warunek zamawiania (UVEX „po 10 szt.”) i zdjęcie karty tylko w odpowiedzi — itemsView() zostaje widokiem zapisanej analizy
-        $items = $this->withImages($this->withOrderQuantities($this->itemsView($inquiry)));
+        $items = $this->withImages($this->withOrderQuantities($this->itemsView($this->maskedCopy($inquiry, $viewer)), $viewer));
         $omitted = $this->omittedItemsOf($analysis);
 
         return [
@@ -1797,9 +1877,10 @@ final class ClientInquiryService
      * zmienia, a analysis to migawka z chwili analizy.
      *
      * @param  list<array<string, mixed>>  $items
+     * @param  SupplierSpecialMask  $viewer  widok ceny specjalnej — najwyższa cena rozmiaru slotu specjalnego przeskalowana
      * @return list<array<string, mixed>>
      */
-    private function withOrderQuantities(array $items): array
+    private function withOrderQuantities(array $items, SupplierSpecialMask $viewer): array
     {
         $ids = [];
         foreach ($items as $item) {
@@ -1813,6 +1894,7 @@ final class ClientInquiryService
         }
         $quantities = app(SourcePriceComparison::class)->orderQuantities(
             Product::query()->whereIn('id', array_keys($ids))->get(['id', 'manufacturer']),
+            $viewer,
         );
         foreach ($items as $i => $item) {
             foreach (['candidates', 'substitutes'] as $list) {
@@ -4852,6 +4934,9 @@ final class ClientInquiryService
      */
     private function writeReply(ClientInquiry $inquiry, array $answers, ?string $extraNote): array
     {
+        // Ceny w liście od widoku tego, kto list składa: zapisana analiza bywa z ceną specjalną (autor
+        // z uprawnieniem, zapytania sprzed ukrywania), a list bez uprawnienia liczy się od ceny standardowej.
+        $inquiry = $this->maskedCopy($inquiry, $this->mask());
         $priceMode = $this->priceModeOf($answers);
         $margin = $this->marginPercent($answers);
         $intro = $this->offerIntro((string) $inquiry->tone);
@@ -5834,15 +5919,8 @@ final class ClientInquiryService
             return null;
         }
 
-        $price = $row['catalog_price_net'] ?? null;
-        $currency = trim((string) ($row['currency'] ?? 'PLN')) ?: 'PLN';
-        $catalogPln = isset($row['price_pln']) && is_numeric($row['price_pln'])
-            ? $this->fx->toPlnOrNull($row['price_pln'], 'PLN')
-            : $this->fx->toPlnOrNull($price, $currency);
-        $purchasePln = isset($row['purchase_price_pln']) && is_numeric($row['purchase_price_pln'])
-            ? $this->fx->toPlnOrNull($row['purchase_price_pln'], 'PLN')
-            : $this->fx->toPlnOrNull($row['purchase_price'] ?? null, $currency);
-        $offerPln = OfferPricing::fromPurchase($purchasePln);
+        // Cena specjalna konta B2B bez uprawnienia: katalog i oferta od ceny standardowej (widok bieżącej operacji).
+        $prices = $this->pricesPln($this->mask()->productRow($row));
 
         return [
             'id' => $id,
@@ -5852,14 +5930,145 @@ final class ClientInquiryService
             'name' => $name,
             'manufacturer' => trim((string) ($row['manufacturer'] ?? '')),
             'norms' => trim((string) ($row['norms'] ?? '')),
-            'catalog_price_net' => $catalogPln !== null ? number_format($catalogPln, 2, '.', '') : null,
+            'catalog_price_net' => $prices['catalog_price_net'],
             'currency' => 'PLN',
-            'catalog_pln' => $catalogPln,
-            'offer_pln' => $offerPln,
+            'catalog_pln' => $prices['catalog_pln'],
+            'offer_pln' => $prices['offer_pln'],
             'stock' => isset($row['stock']) ? (int) $row['stock'] : null,
             'score' => (int) ($row['ai_match_percent'] ?? $row['score'] ?? 0),
             'reason' => $this->nullable(is_string($row['ai_match_reason'] ?? null) ? $row['ai_match_reason'] : ($row['reason'] ?? null)),
         ];
+    }
+
+    /**
+     * Ceny wiersza kandydata w PLN (NBP): katalogowa i oferta (zakup + marża domyślna). offerPln() przelicza ją
+     * potem na marżę zapytania, dzieląc przez marżę domyślną.
+     *
+     * @param  array<string, mixed>  $row  wiersz karty (catalog_price_net, purchase_price, currency, opcjonalnie price_pln, purchase_price_pln)
+     * @return array{catalog_price_net: string|null, catalog_pln: float|null, offer_pln: float|null}
+     */
+    private function pricesPln(array $row): array
+    {
+        $currency = trim((string) ($row['currency'] ?? 'PLN')) ?: 'PLN';
+        $catalogPln = isset($row['price_pln']) && is_numeric($row['price_pln'])
+            ? $this->fx->toPlnOrNull($row['price_pln'], 'PLN')
+            : $this->fx->toPlnOrNull($row['catalog_price_net'] ?? null, $currency);
+        $purchasePln = isset($row['purchase_price_pln']) && is_numeric($row['purchase_price_pln'])
+            ? $this->fx->toPlnOrNull($row['purchase_price_pln'], 'PLN')
+            : $this->fx->toPlnOrNull($row['purchase_price'] ?? null, $currency);
+
+        return [
+            'catalog_price_net' => $catalogPln !== null ? number_format($catalogPln, 2, '.', '') : null,
+            'catalog_pln' => $catalogPln,
+            'offer_pln' => OfferPricing::fromPurchase($purchasePln),
+        ];
+    }
+
+    /**
+     * Zapytanie z analizą w widoku ceny $mask — kopia w pamięci, tylko do widoku i listu (nigdy do zapisu).
+     * Zapisane wiersze kandydatów to widok autora z chwili analizy: autor z uprawnieniem zapisał cenę specjalną,
+     * a zapytania sprzed ukrywania (30.09.2026) mają ją u każdego. Bez maski albo bez zmiany cen — ta sama instancja.
+     */
+    private function maskedCopy(ClientInquiry $inquiry, SupplierSpecialMask $mask): ClientInquiry
+    {
+        if (! $mask->hides() || ! is_array($inquiry->analysis)) {
+            return $inquiry;
+        }
+        $analysis = $inquiry->analysis;
+        $masked = $this->remaskAnalysis($analysis, $mask);
+        if ($masked === $analysis) {
+            return $inquiry;
+        }
+        $copy = clone $inquiry;
+        $copy->forceFill(['analysis' => $masked]);
+
+        return $copy;
+    }
+
+    /**
+     * Wiersze kandydatów (kształt safeProduct(): „id” i offer_pln/catalog_pln) w całej analizie — wyniki szukania,
+     * zamienniki, karty z linków i dobrane ręcznie — dla kart ze slotem B2B z oceną dostają ceny z bieżącego stanu
+     * karty w widoku maskowanym (cena specjalna → standardowa). Inne karty zostają, jakie były w chwili analizy.
+     *
+     * @param  array<string, mixed>  $analysis
+     * @return array<string, mixed>
+     */
+    private function remaskAnalysis(array $analysis, SupplierSpecialMask $mask): array
+    {
+        $ids = [];
+        $this->collectPricedIds($analysis, $ids);
+        if ($ids === []) {
+            return $analysis;
+        }
+        $mask->preload(array_keys($ids));
+        // Karty ze slotem B2B z oceną (jak historia cen, decyzja D1): zapisana cena mogła być specjalna, choć dziś
+        // karta ma inną — bierzemy bieżącą cenę karty w widoku maskowanym. Pozostałe karty bez zmian.
+        $evaluable = array_values(array_filter(array_keys($ids), static fn (int $id): bool => $mask->hidesHistory($id, null)));
+        if ($evaluable === []) {
+            return $analysis;
+        }
+        $prices = [];
+        foreach (Product::query()->whereIn('id', $evaluable)->get(['id', 'catalog_price_net', 'purchase_price', 'discount_percent', 'currency']) as $card) {
+            $prices[(int) $card->id] = $this->pricesPln($mask->productRow([
+                'id' => (int) $card->id,
+                'catalog_price_net' => $card->catalog_price_net,
+                'purchase_price' => $card->purchase_price,
+                'discount_percent' => $card->discount_percent,
+                'currency' => $card->currency ?? 'PLN',
+            ]));
+        }
+
+        return $this->applyPrices($analysis, $prices);
+    }
+
+    /**
+     * @param  array<mixed>  $node
+     * @param  array<int, true>  $ids
+     */
+    private function collectPricedIds(array $node, array &$ids): void
+    {
+        if (self::isPricedRow($node)) {
+            $ids[(int) $node['id']] = true;
+        }
+        foreach ($node as $value) {
+            if (is_array($value)) {
+                $this->collectPricedIds($value, $ids);
+            }
+        }
+    }
+
+    /**
+     * @param  array<mixed>  $node
+     * @param  array<int, array{catalog_price_net: string|null, catalog_pln: float|null, offer_pln: float|null}>  $prices
+     * @return array<mixed>
+     */
+    private function applyPrices(array $node, array $prices): array
+    {
+        if (self::isPricedRow($node) && isset($prices[(int) $node['id']])) {
+            foreach ($prices[(int) $node['id']] as $key => $value) {
+                if (array_key_exists($key, $node)) {
+                    $node[$key] = $value;
+                }
+            }
+        }
+        foreach ($node as $key => $value) {
+            if (is_array($value)) {
+                $node[$key] = $this->applyPrices($value, $prices);
+            }
+        }
+
+        return $node;
+    }
+
+    /**
+     * Wiersz kandydata z ceną (safeProduct()); pozycje i karty pytań mają id tekstowe.
+     *
+     * @param  array<mixed>  $row
+     */
+    private static function isPricedRow(array $row): bool
+    {
+        return isset($row['id']) && is_numeric($row['id']) && (int) $row['id'] > 0
+            && (array_key_exists('offer_pln', $row) || array_key_exists('catalog_pln', $row));
     }
 
     /**

@@ -67,8 +67,9 @@ type PriceChange = {
   catalog_old: number | null
   catalog_new: number | null
   catalog_pct: number | null
-  purchase_old: number
-  purchase_new: number
+  /** null = ceny konta B2B ukryte (brak uprawnienia do cen specjalnych). */
+  purchase_old: number | null
+  purchase_new: number | null
   discount_old: number | null
   discount_new: number | null
   direction: 'up' | 'down' | 'flat'
@@ -84,14 +85,20 @@ type PriceListB2bAccount = {
 type UpdatedProduct = {
   sku: string
   name: string
-  catalog_old: number
-  catalog_new: number
-  purchase_old: number
-  purchase_new: number
-  discount_old: number
-  discount_new: number
+  /** Ceny null = ceny konta B2B ukryte (brak uprawnienia do cen specjalnych). */
+  catalog_old: number | null
+  catalog_new: number | null
+  purchase_old: number | null
+  purchase_new: number | null
+  discount_old: number | null
+  discount_new: number | null
   price_changed?: boolean
   fields?: string[]
+}
+
+/** „stara → nowa”; brak którejś wartości (także ceny ukryte przed rolą bez cen specjalnych) = „—”. */
+function priceStep(oldValue: number | null, newValue: number | null, suffix = ''): string {
+  return oldValue != null && newValue != null ? `${oldValue}${suffix} → ${newValue}${suffix}` : '—'
 }
 
 type SkippedDetail = {
@@ -1098,9 +1105,7 @@ export function PriceLists() {
                 >
                   {c.catalog_pct != null ? `${c.catalog_pct > 0 ? '+' : ''}${c.catalog_pct}%` : '—'}
                 </td>
-                <td className="p-2">
-                  {c.purchase_old} → {c.purchase_new}
-                </td>
+                <td className="p-2">{priceStep(c.purchase_old, c.purchase_new)}</td>
                 <td className="p-2">
                   {c.discount_old != null && c.discount_new != null
                     ? `${c.discount_old}% → ${c.discount_new}%`
@@ -1146,15 +1151,9 @@ export function PriceLists() {
               <tr key={u.sku} className="border-b">
                 <td className="p-2 font-medium">{u.sku}</td>
                 <td className="p-2">{u.name}</td>
-                <td className="p-2">
-                  {u.catalog_old} → {u.catalog_new}
-                </td>
-                <td className="p-2">
-                  {u.purchase_old} → {u.purchase_new}
-                </td>
-                <td className="p-2">
-                  {u.discount_old}% → {u.discount_new}%
-                </td>
+                <td className="p-2">{priceStep(u.catalog_old, u.catalog_new)}</td>
+                <td className="p-2">{priceStep(u.purchase_old, u.purchase_new)}</td>
+                <td className="p-2">{priceStep(u.discount_old, u.discount_new, '%')}</td>
                 <td className="p-2 text-slate-600">
                   {(u.fields ?? []).join(', ') || '—'}
                   {u.price_changed ? ' · zmiana ceny' : ''}

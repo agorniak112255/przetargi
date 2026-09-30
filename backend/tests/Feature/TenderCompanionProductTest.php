@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\Tender;
 use App\Models\TenderItem;
 use App\Models\User;
+use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\TenderOfferExportService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -153,7 +154,7 @@ final class TenderCompanionProductTest extends TestCase
             'status' => 'matched',
         ]);
 
-        $rows = $this->app->make(TenderOfferExportService::class)->rows($tender->fresh());
+        $rows = $this->app->make(TenderOfferExportService::class)->rows($tender->fresh(), SupplierSpecialMask::revealing());
         $this->assertSame($jacket->sku.' + '.$pants->sku, $rows[0]['sku']);
         $this->assertEquals(30.0, $rows[0]['purchase_price']);
         $this->assertEquals(37.5, $rows[0]['offer_price']);

@@ -26,6 +26,14 @@ class Tender extends Model
         'last_activity_at',
     ];
 
+    /**
+     * margin_percent_standard — marża od ceny standardowej kart z ceną specjalną B2B; użytkownik bez
+     * prices.supplier_special.view dostaje ją pod nazwą margin_percent (App\Services\Tenders\TenderPriceView).
+     */
+    protected $hidden = [
+        'margin_percent_standard',
+    ];
+
     protected function casts(): array
     {
         return [
@@ -33,6 +41,7 @@ class Tender extends Model
             'last_activity_at' => 'datetime',
             'offer_value_net' => 'decimal:2',
             'margin_percent' => 'decimal:2',
+            'margin_percent_standard' => 'decimal:2',
             'target_margin_percent' => 'decimal:2',
         ];
     }

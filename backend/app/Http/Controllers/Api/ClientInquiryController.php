@@ -17,6 +17,7 @@ use App\Models\OfferComposeRequest;
 use App\Models\User;
 use App\Services\ClientInquiryService;
 use App\Services\InquiryFileText;
+use App\Services\Pricing\SupplierSpecialMask;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -297,7 +298,7 @@ class ClientInquiryController extends Controller
             isset($data['source_message_id']) ? (string) $data['source_message_id'] : null,
         );
         if ($existing instanceof ClientInquiry) {
-            return response()->json($this->inquiries->present($existing->load('client')));
+            return response()->json($this->inquiries->present($existing->load('client'), $this->viewer($request)));
         }
 
         // Ten sam mail u kilku handlowców: zanim ruszy kosztowna analiza,
@@ -348,7 +349,7 @@ class ClientInquiryController extends Controller
         // Przy kolejce „sync” (testy, lokalnie bez workera) analiza już się policzyła.
         $inquiry->refresh()->load('client');
 
-        return response()->json($this->inquiries->present($inquiry), 201);
+        return response()->json($this->inquiries->present($inquiry, $this->viewer($request)), 201);
     }
 
     /**
@@ -397,10 +398,13 @@ class ClientInquiryController extends Controller
         }
         // List przeliczamy tylko autorowi — podgląd cudzego zapytania niczego w nim nie zapisuje.
         if ((int) $inquiry->user_id === (int) $request->user()->id && $inquiry->isAnalyzed()) {
-            $this->inquiries->refreshStoredReply($inquiry);
+            $this->inquiries->withPriceMask(
+                $this->viewer($request),
+                fn (): ClientInquiry => $this->inquiries->refreshStoredReply($inquiry),
+            );
         }
 
-        return response()->json($this->inquiries->present($inquiry->load('client')));
+        return response()->json($this->inquiries->present($inquiry->load('client'), $this->viewer($request)));
     }
 
     public function compose(ComposeClientInquiryRequest $request, ClientInquiry $inquiry): JsonResponse
@@ -419,7 +423,8 @@ class ClientInquiryController extends Controller
         $answers = is_array($data['answers'] ?? null) ? $data['answers'] : [];
 
         try {
-            $inquiry = $this->inquiries->compose(
+            // list liczy się od ceny, którą autor widzi (prices.supplier_special.view)
+            $inquiry = $this->inquiries->withPriceMask($this->viewer($request), fn (): ClientInquiry => $this->inquiries->compose(
                 $inquiry,
                 $answers,
                 // brak klucza w żądaniu = nie ruszaj zapisanego dopisku
@@ -428,14 +433,14 @@ class ClientInquiryController extends Controller
                 isset($data['tone']) ? (string) $data['tone'] : null,
                 // warunki oferty; brak klucza = zostaw zapisane
                 array_key_exists('terms', $data) && is_array($data['terms']) ? $data['terms'] : false,
-            );
+            ));
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         } catch (Throwable $e) {
             return response()->json(['message' => 'Błąd pisania odpowiedzi: '.$e->getMessage()], 422);
         }
 
-        return response()->json($this->inquiries->present($inquiry));
+        return response()->json($this->inquiries->present($inquiry, $this->viewer($request)));
     }
 
     /**
@@ -458,6 +463,7 @@ class ClientInquiryController extends Controller
                 $inquiry,
                 (string) $data['item_id'],
                 (int) $data['product_id'],
+                $this->viewer($request),
                 // brak klucza = nie ruszaj zapisanego dopisku / warunków
                 array_key_exists('extra_note', $data) ? $data['extra_note'] : false,
                 array_key_exists('terms', $data) && is_array($data['terms']) ? $data['terms'] : false,
@@ -468,7 +474,7 @@ class ClientInquiryController extends Controller
             return response()->json(['message' => 'Błąd pisania odpowiedzi: '.$e->getMessage()], 422);
         }
 
-        return response()->json($this->inquiries->present($inquiry));
+        return response()->json($this->inquiries->present($inquiry, $this->viewer($request)));
     }
 
     /** Ręczne poprawki tematu/treści listu przez pracownika. */
@@ -493,7 +499,7 @@ class ClientInquiryController extends Controller
             $inquiry->forceFill($changes)->save();
         }
 
-        return response()->json($this->inquiries->present($inquiry->load('client')));
+        return response()->json($this->inquiries->present($inquiry->load('client'), $this->viewer($request)));
     }
 
     /** Oznaczenie „wysłano” (idempotentne): true ustawia raz, false kasuje. */
@@ -508,7 +514,7 @@ class ClientInquiryController extends Controller
             $inquiry->forceFill(['replied_at' => null])->save();
         }
 
-        return response()->json($this->inquiries->present($inquiry->load('client')));
+        return response()->json($this->inquiries->present($inquiry->load('client'), $this->viewer($request)));
     }
 
     /**
@@ -534,6 +540,7 @@ class ClientInquiryController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
+        $viewer = SupplierSpecialMask::forUser($user);
         $rows = ClientInquiry::query()
             ->where('user_id', $user->id)
             ->whereNotNull('send_requested_at')
@@ -548,7 +555,8 @@ class ClientInquiryController extends Controller
                 'source_message_id' => $row->source_message_id,
                 'reply_subject' => $row->reply_subject,
                 'reply_body' => $row->reply_body,
-                'reply_html' => $this->inquiries->replyHtmlFor($row),
+                // tabela odtwarzana z odpowiedzi (stare listy bez reply_html) liczy ceny jak autor je widzi
+                'reply_html' => $this->inquiries->withPriceMask($viewer, fn (): ?string => $this->inquiries->replyHtmlFor($row)),
                 'requested_at' => $row->send_requested_at?->toIso8601String(),
             ]);
 
@@ -688,7 +696,7 @@ class ClientInquiryController extends Controller
 
         $inquiry->forceFill(['send_requested_at' => $queued ? now() : null])->save();
 
-        return response()->json($this->inquiries->present($inquiry->load('client')));
+        return response()->json($this->inquiries->present($inquiry->load('client'), $this->viewer($request)));
     }
 
     /**
@@ -708,7 +716,7 @@ class ClientInquiryController extends Controller
         }
         AnalyzeClientInquiryJob::dispatch((int) $inquiry->id, $runId);
 
-        return response()->json($this->inquiries->present($inquiry->refresh()->load('client')));
+        return response()->json($this->inquiries->present($inquiry->refresh()->load('client'), $this->viewer($request)));
     }
 
     /** Zmiany zapytania dopiero po analizie — inaczej zapis handlowca i wynik analizy nadpisałyby się nawzajem. */
@@ -721,6 +729,12 @@ class ClientInquiryController extends Controller
         if ($status !== ClientInquiry::ANALYSIS_DONE) {
             abort(409, 'Analiza zapytania jeszcze trwa — poczekaj na wynik.');
         }
+    }
+
+    /** Widok ceny specjalnej B2B zalogowanego (prices.supplier_special.view) — ceny kandydatów, oferty i listu. */
+    private function viewer(Request $request): SupplierSpecialMask
+    {
+        return SupplierSpecialMask::forUser($request->user());
     }
 
     private function assertOwner(Request $request, ClientInquiry $inquiry): void

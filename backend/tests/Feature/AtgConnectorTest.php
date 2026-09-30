@@ -212,7 +212,7 @@ final class AtgConnectorTest extends TestCase
 
         // panel: karta pokazuje to, czym liczy się dopasowanie — poziom producenta, bez sprzecznego wariantu
         $shown = app(ProductController::class)
-            ->show($product->refresh())
+            ->show(request(), $product->refresh())
             ->getData(true);
         $this->assertSame('4331B', $shown['enrichment_payload']['attributes']['poziomy_en388'] ?? null);
         $this->assertNotContains('EN 388:2016 + A1:2018 4121A', $shown['enrichment_payload']['norms'] ?? []);

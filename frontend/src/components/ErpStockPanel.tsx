@@ -119,6 +119,11 @@ export function ErpStockPanel({ erp }: { erp: ErpCardStock | null | undefined })
           </tbody>
         </table>
       </div>
+      {erp.prices_hidden && (
+        <p className="mt-2 text-[11px] text-slate-500">
+          Ceny zakupu z PZ ukryte — karta ma konto B2B z ceną specjalną, a Twoja rola nie ma podglądu cen specjalnych.
+        </p>
+      )}
       {suggested > 0 && (
         <p className="mt-2 text-[11px] text-slate-500">
           Kod karty pasuje jeszcze do {suggested} towar{suggested === 1 ? 'u' : 'ów'} XL z niepewnym powiązaniem — nie są

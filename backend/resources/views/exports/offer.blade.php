@@ -85,7 +85,7 @@
         <strong>Wartość netto:</strong>
         {{ $tender->offer_value_net !== null ? number_format((float) $tender->offer_value_net, 2, ',', ' ').' zł' : '—' }}
         &nbsp;·&nbsp;
-        <strong>Marża:</strong> {{ $tender->margin_percent ?? '—' }}%
+        <strong>Marża:</strong> {{ $tenderMargin !== null ? number_format((float) $tenderMargin, 2, '.', '') : '—' }}%
     </div>
     <p style="margin-top:18px;color:#666;font-size:9px;">
         Wygenerowano z Przetargi Supon · {{ now()->format('Y-m-d H:i') }} · ceny zakupu = cennik po upuście

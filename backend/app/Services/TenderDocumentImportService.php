@@ -10,6 +10,7 @@ use App\Models\TenderCondition;
 use App\Models\TenderDocument;
 use App\Models\TenderItem;
 use App\Models\User;
+use App\Services\Pricing\SupplierSpecialMask;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -273,6 +274,7 @@ final class TenderDocumentImportService
         bool $replaceItems,
         bool $replaceConditions,
         ?int $documentId,
+        SupplierSpecialMask $mask,
         string $source = 'document',
     ): array {
         $itemsCreated = 0;
@@ -285,6 +287,7 @@ final class TenderDocumentImportService
             $replaceItems,
             $replaceConditions,
             $documentId,
+            $mask,
             $source,
             &$itemsCreated,
             &$conditionsCreated,
@@ -297,6 +300,7 @@ final class TenderDocumentImportService
             }
 
             if ($items !== []) {
+                $saved = [];
                 $lineNo = (int) ($tender->items()->max('line_no') ?? 0);
                 foreach ($items as $row) {
                     $norm = $this->normalizePreviewItem($row);
@@ -320,11 +324,16 @@ final class TenderDocumentImportService
                         'status' => $product ? 'matched' : 'brak',
                     ]);
                     if ($item->offer_price === null && $product !== null) {
-                        $item->offer_price = $this->pricing->offerFromProduct($tender, $product);
+                        $item->offer_price = $this->pricing->offerFromProduct($tender, $product, $mask);
                     }
                     $item->save();
-                    $this->pricing->recalculateItemMargin($item);
+                    $saved[] = $item;
                     $itemsCreated++;
+                }
+                // marże po pętli, jedną maską ceny standardowej z kartami wczytanymi hurtem
+                $standard = $this->pricing->standardMask($saved);
+                foreach ($saved as $item) {
+                    $this->pricing->recalculateItemMargin($item, $standard);
                 }
             }
 
