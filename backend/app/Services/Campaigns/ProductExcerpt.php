@@ -34,7 +34,8 @@ final class ProductExcerpt
         $features = [];
         $seen = 0;
         foreach (preg_split('/\R/u', $text) ?: [] as $raw) {
-            $line = trim((string) preg_replace('/\s+/u', ' ', $raw));
+            // białe znaki w jedną spację; kropki rozdzielone spacją („M/L. .” z karty) w jedną — sama interpunkcja
+            $line = trim((string) preg_replace(['/\s+/u', '/\.(?:\s+\.)+(?!\.)/u'], [' ', '.'], $raw));
             if ($line === '') {
                 continue;
             }

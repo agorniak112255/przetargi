@@ -72,6 +72,18 @@ final class ProductExcerptTest extends TestCase
         $this->assertNull(ProductExcerpt::fromDescription("Cechy szczególne:\nWłaściwości\nprodukt"));
     }
 
+    public function test_doubled_dots_from_source_are_merged_but_ellipsis_stays(): void
+    {
+        $this->assertSame(
+            'Dohełmowa wkładka termiczna Surefit™ o wysokiej widoczności w kolorze pomarańczowym - M/L.',
+            ProductExcerpt::fromDescription('Dohełmowa wkładka termiczna Surefit™ o wysokiej widoczności w kolorze pomarańczowym - M/L. .'),
+        );
+        $this->assertSame(
+            'Lekka kurtka przeciwdeszczowa z kapturem i taśmami odblaskowymi... do pracy na zewnątrz.',
+            ProductExcerpt::fromDescription('Lekka kurtka przeciwdeszczowa z kapturem i taśmami odblaskowymi... do pracy na zewnątrz.'),
+        );
+    }
+
     public function test_norms_list(): void
     {
         $this->assertSame(['DIN 51130', 'DIN 51097'], ProductExcerpt::norms('DIN 51130, DIN 51097'));
