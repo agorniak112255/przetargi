@@ -391,7 +391,7 @@ export function Inventory() {
             miesięcy. Wartość = ilość × cena zakupu partii leżących na magazynie (z XL); dopóki XL nie poda partii —
             stan × cena z ostatniej PZ.
             {location &&
-              ` Oddział ${locationName}: stan, wartość i najstarsza partia tylko z magazynów oddziału (kody ${location}…); ostatnia sprzedaż — z dowolnego magazynu.`}
+              ` Oddział ${locationName}: stan, wartość, najstarsza partia i ostatnia sprzedaż tylko z magazynów oddziału (faktury, paragony i WZ wystawione z tych magazynów).`}
             {canCampaign && ` Zaznacz pozycje i dodaj je do kampanii (najwyżej ${CAMPAIGN_MAX_ITEMS}, Shift+klik: zakres).`}
           </p>
         </div>
@@ -843,10 +843,19 @@ function InventoryTableRow({
         ) : (
           <span
             className="rounded bg-amber-100 px-1.5 py-0.5 font-medium text-amber-800"
-            title="Brak sprzedaży (faktura, paragon, WZ) w całej historii XL"
+            title={
+              location
+                ? `Brak sprzedaży (faktura, paragon, WZ) z magazynów oddziału ${location.name} w całej historii XL`
+                : 'Brak sprzedaży (faktura, paragon, WZ) w całej historii XL'
+            }
           >
-            nigdy
+            {location ? 'nigdy w oddziale' : 'nigdy'}
           </span>
+        )}
+        {location && row.last_sale_any_at && row.last_sale_any_at !== row.last_sale_at && (
+          <div className="mt-0.5 text-[11px] text-slate-500" title="Ostatnia sprzedaż z dowolnego magazynu (wszystkie oddziały)">
+            gdziekolwiek: {formatDate(row.last_sale_any_at)}
+          </div>
         )}
       </td>
       <td className="whitespace-nowrap p-2">

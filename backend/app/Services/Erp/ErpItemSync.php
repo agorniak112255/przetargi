@@ -81,7 +81,8 @@ final class ErpItemSync
         $stock = $this->group($this->gateway->stock($gids));
         $suppliers = $this->group($this->gateway->suppliers($gids));
         $purchases = $this->group($this->gateway->purchases($gids, $perItem));
-        $lastSales = $this->gateway->lastSales($gids);
+        // ostatnia sprzedaż na magazyn dokumentu; towaru = najpóźniejsza z nich (także z dokumentu bez magazynu)
+        $lastSales = $this->group($this->gateway->lastSales($gids));
         $tradePrefix = mb_strtolower((string) config('erpxl.trade_warehouse_prefix', 'Magazyn HANDEL'));
         $serviceCodes = $this->serviceCodes();
 
@@ -126,11 +127,15 @@ final class ErpItemSync
                     'suppliers' => $supplierRows,
                     'last_purchase_at' => $lastPurchase?->toDateString(),
                     'last_supplier' => $lastSupplier,
-                    'last_sale_at' => ClarionDate::toDate($lastSales[$gid] ?? null)?->toDateString(),
+                    'last_sale_at' => $this->latestSale($lastSales[$gid] ?? []),
                     'synced_at' => $now,
                     'removed_at' => null,
                 ]);
                 WarehouseLocations::replace((int) $model->id, $stockFields['stock_by_warehouse']);
+                WarehouseLocations::replaceSales((int) $model->id, array_map(static fn (array $r): array => [
+                    'warehouse_code' => $r['warehouse_code'],
+                    'last_sale_at' => ClarionDate::toDate($r['date'])?->toDateString(),
+                ], $lastSales[$gid] ?? []));
 
                 ErpItemPurchase::query()->where('erp_item_id', $model->id)->delete();
                 foreach ($itemPurchases as $p) {
@@ -274,6 +279,20 @@ final class ErpItemSync
             ...WarehouseSplit::compute($warehouses, $serviceCodes, $oldest?->toDateString()),
             'stock_by_warehouse' => $warehouses,
         ];
+    }
+
+    /** @param  list<array{date: int}>  $rows */
+    private function latestSale(array $rows): ?string
+    {
+        $latest = null;
+        foreach ($rows as $r) {
+            $date = ClarionDate::toDate($r['date'])?->toDateString();
+            if ($date !== null && ($latest === null || $date > $latest)) {
+                $latest = $date;
+            }
+        }
+
+        return $latest;
     }
 
     /** @return list<string> kody magazynów usługowych — raz na przebieg */

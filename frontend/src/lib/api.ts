@@ -694,8 +694,10 @@ export type InventoryRow = {
   unit_cost: number | null
   /** Od największego stanu. */
   warehouses: InventoryWarehouse[]
-  /** 'YYYY-MM-DD'; null = nigdy (FS, paragon, WZ). */
+  /** 'YYYY-MM-DD'; null = nigdy (FS, paragon, WZ). Z filtrem oddziału — dokumenty z magazynów oddziału. */
   last_sale_at: string | null
+  /** Ostatnia sprzedaż z dowolnego magazynu (bez filtra oddziału = last_sale_at). */
+  last_sale_any_at: string | null
   /** Data przyjęcia najstarszej partii leżącej na stanie ('YYYY-MM-DD'). */
   oldest_lot_at: string | null
   last_purchase: {
@@ -760,7 +762,7 @@ export type InventoryBoardReport = {
   as_of: string | null
   /** Cały towar w wybranych magazynach. */
   stock: { items: number; value: number }
-  /** months 6, 12, 24 — nie sprzedaje się od tylu miesięcy (sprzedaż liczona ze wszystkich magazynów). */
+  /** months 6, 12, 24 — nie sprzedaje się od tylu miesięcy (sprzedaż ze wszystkich magazynów, z oddziałem — z jego magazynów). */
   no_sale: InventoryBoardBucket[]
   /** Nigdy nie sprzedany (i leży dłużej niż pół roku). */
   never_sold: { items: number; value: number }
@@ -843,7 +845,7 @@ export type InventoryBoardItemRow = {
   value: number | null
   /** Wartość ÷ ilość (zł za jednostkę). */
   unit_cost: number | null
-  /** 'YYYY-MM-DD'; null = nigdy (sprzedaż ze wszystkich magazynów). */
+  /** 'YYYY-MM-DD'; null = nigdy (sprzedaż ze wszystkich magazynów, z oddziałem — z jego magazynów). */
   last_sale_at: string | null
   /** 'YYYY-MM-DD' — od kiedy leży najstarsza dostawa, która jeszcze jest w wybranych magazynach. */
   oldest_lot_at: string | null

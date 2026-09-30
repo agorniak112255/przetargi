@@ -50,10 +50,11 @@ interface ErpXlGateway
     public function suppliers(array $gids): array;
 
     /**
-     * Data (Clarion) ostatniej sprzedaży (FS, PA, WZ) na towar.
+     * Data (Clarion) ostatniej sprzedaży (FS, PA, WZ) na towar i magazyn dokumentu (nagłówek, TrN_MagZNumer; null —
+     * dokument bez magazynu, np. FS wystawiona do WZ). Ostatnia sprzedaż towaru = najpóźniejsza data z jego wierszy.
      *
      * @param  list<int>  $gids
-     * @return array<int, int> gid => data
+     * @return list<array{gid: int, warehouse_code: string|null, date: int}>
      */
     public function lastSales(array $gids): array;
 

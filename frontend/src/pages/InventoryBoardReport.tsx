@@ -833,8 +833,10 @@ function BoardView({
         <p>
           Wartość = cena zakupu towaru, który leży w magazynie, według programu magazynowego. Ilości i kwoty dotyczą
           wybranych magazynów ({WAREHOUSE_LABEL[warehouses].toLowerCase()}
-          {place ? `, oddział ${place.name} — magazyny o kodach zaczynających się od ${place.key}` : ''}); sprzedaż
-          liczymy ze wszystkich magazynów razem. Handlowe — towar na sprzedaż, usługowe — towar trzymany dla klientów. „Bez opisu” = ten sam rozmiar i
+          {place ? `, oddział ${place.name}` : ''});{' '}
+          {place
+            ? `sprzedaż liczymy z faktur, paragonów i WZ wystawionych z magazynów oddziału ${place.name}.`
+            : 'sprzedaż liczymy ze wszystkich magazynów razem.'} Handlowe — towar na sprzedaż, usługowe — towar trzymany dla klientów. „Bez opisu” = ten sam rozmiar i
           kolor, a na dokumencie wydania nie ma opisu, dlaczego towar wydano i przyjęto z powrotem; liczba „z …” przy
           osobie to wszystkie jej takie dokumenty.
         </p>

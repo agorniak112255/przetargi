@@ -213,15 +213,19 @@ final class ErpXlClient implements ErpXlGateway
             ->join('CDN.TraNag as n', function ($join): void {
                 $join->on('n.TrN_GIDTyp', '=', 'e.TrE_GIDTyp')->on('n.TrN_GIDNumer', '=', 'e.TrE_GIDNumer');
             })
+            ->leftJoin('CDN.Magazyny as m', function ($join): void {
+                $join->on('m.MAG_GIDNumer', '=', 'n.TrN_MagZNumer')->on('m.MAG_GIDTyp', '=', 'n.TrN_MagZTyp');
+            })
             ->whereIn('e.TrE_GIDTyp', self::SALE_TYPES)
             ->whereIn('e.TrE_TwrNumer', $gids)
-            ->groupBy('e.TrE_TwrNumer')
-            ->selectRaw('e.TrE_TwrNumer AS gid, MAX(n.TrN_Data2) AS last_date')
+            ->groupBy('e.TrE_TwrNumer', 'm.MAG_Kod')
+            ->selectRaw('e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, MAX(n.TrN_Data2) AS last_date')
             ->get();
 
         $out = [];
         foreach ($rows as $r) {
-            $out[(int) $r->gid] = (int) $r->last_date;
+            $code = $r->warehouse_code !== null ? trim((string) $r->warehouse_code) : '';
+            $out[] = ['gid' => (int) $r->gid, 'warehouse_code' => $code !== '' ? $code : null, 'date' => (int) $r->last_date];
         }
 
         return $out;

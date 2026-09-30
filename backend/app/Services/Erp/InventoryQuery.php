@@ -21,7 +21,8 @@ use InvalidArgumentException;
  *
  * Oddział (WarehouseLocations, np. '01' Rzeszów) zawęża zakres do magazynów oddziału: ilość, wartość i wiek partii
  * z wierszy erp_item_warehouse_stocks; słownik usługowych czytany na bieżąco. Wartość oddziału = suma wartości partii jego
- * magazynów, a gdy któryś magazyn jej nie ma — ilość × cena ostatniej PZ (jak dla całego towaru).
+ * magazynów, a gdy któryś magazyn jej nie ma — ilość × cena ostatniej PZ (jak dla całego towaru). Ostatnia sprzedaż
+ * w oddziale — z dokumentów jego magazynów (erp_item_warehouse_sales), bez względu na handlowe / usługowe.
  */
 final class InventoryQuery
 {
@@ -96,6 +97,23 @@ final class InventoryQuery
     }
 
     /**
+     * Dzień ostatniej sprzedaży (FS, paragon, WZ). W oddziale — z dokumentów jego magazynów; towar bez żadnego wiersza
+     * sprzedaży na magazyn (przed pierwszą nocną kopią) — ostatnia sprzedaż z dowolnego magazynu.
+     */
+    public static function lastSaleSql(?string $location = null): string
+    {
+        if ($location === null) {
+            return 'erp_items.last_sale_at';
+        }
+        $sales = WarehouseLocations::SALES_TABLE;
+
+        return '(case when exists (select 1 from '.$sales.' x where x.erp_item_id = erp_items.id)'
+            .' then (select max(x.last_sale_at) from '.$sales.' x where x.erp_item_id = erp_items.id'
+            ." and x.location = '".WarehouseLocations::assertValid($location)."')"
+            .' else erp_items.last_sale_at end)';
+    }
+
+    /**
      * Ostatnia sprzedaż (FS, paragon, WZ) starsza niż próg. Nigdy niesprzedany liczy się tylko wtedy, gdy jego najstarsza
      * partia leży dłużej niż próg (albo jej data jest nieznana) — inaczej świeża dostawa wyglądałaby jak zaleganie.
      *
@@ -106,11 +124,12 @@ final class InventoryQuery
     {
         $date = $cutoff->toDateString();
         $lot = self::oldestLotSql($scope, $location);
+        $sale = self::lastSaleSql($location);
 
-        return $query->where(function (Builder $q) use ($date, $neverSold, $lot): void {
-            $q->where('last_sale_at', '<', $date);
+        return $query->where(function (Builder $q) use ($date, $neverSold, $lot, $sale): void {
+            $q->whereRaw($sale.' < ?', [$date]);
             if ($neverSold) {
-                $q->orWhere(fn (Builder $n) => $n->whereNull('last_sale_at')
+                $q->orWhere(fn (Builder $n) => $n->whereRaw($sale.' is null')
                     ->where(fn (Builder $l) => $l->whereRaw($lot.' is null')->orWhereRaw($lot.' <= ?', [$date])));
             }
         });

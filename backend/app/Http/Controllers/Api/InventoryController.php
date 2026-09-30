@@ -24,8 +24,8 @@ use Illuminate\Validation\Rule;
  * karty katalogu — to większość towarów). Dane z nocnej kopii XL (2:00); niczego nie zapisuje.
  *
  * Filtr oddziału (location, np. '01' Rzeszów — WarehouseLocations): towar ze stanem w magazynach oddziału; ilość, wartość
- * i najstarsza partia wiersza, sumy i sortowanie liczone tylko z tych magazynów. Ostatnia sprzedaż — dalej z dowolnego
- * magazynu.
+ * i najstarsza partia wiersza, sumy i sortowanie liczone tylko z tych magazynów; ostatnia sprzedaż — z dokumentów
+ * magazynów oddziału (w wierszu także ostatnia sprzedaż z dowolnego magazynu).
  */
 class InventoryController extends Controller
 {
@@ -77,23 +77,25 @@ class InventoryController extends Controller
         $query = $this->filtered($v, $cutoff, $neverSold, $lotCutoff, $location);
 
         $totals = InventoryQuery::totals($query, 'all', $location);
-        $neverSoldCount = (clone $query)->whereNull('last_sale_at')->count();
+        $neverSoldCount = (clone $query)->whereRaw(InventoryQuery::lastSaleSql($location).' is null')->count();
         $withoutCard = (clone $query)->whereDoesntHave('links', fn (Builder $q) => ErpItemCards::linked($q))->count();
 
         $dir = ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
         $value = InventoryQuery::valueSql('all', $location);
         $quantity = InventoryQuery::quantitySql('all', $location);
         $lot = InventoryQuery::oldestLotSql('all', $location);
+        $sale = InventoryQuery::lastSaleSql($location);
         $query->select('erp_items.*')
             ->selectRaw($value.' as purchase_value')
             ->selectRaw($quantity.' as scope_quantity')
-            ->selectRaw($lot.' as scope_oldest_lot');
+            ->selectRaw($lot.' as scope_oldest_lot')
+            ->selectRaw($sale.' as scope_last_sale');
         match ($v['sort'] ?? 'value') {
             // towary bez ceny zakupu na końcu w obu kierunkach
             'value' => $query->orderByRaw($value.' is null')->orderByRaw($value.' '.$dir),
             'stock' => $query->orderByRaw($quantity.' '.$dir),
             'oldest_lot' => $query->orderByRaw($lot.' '.$dir),
-            'last_sale' => $query->orderBy('last_sale_at', $dir),
+            'last_sale' => $query->orderByRaw($sale.' '.$dir),
             'code' => $query->orderBy('code', $dir),
             'name' => $query->orderBy('name', $dir),
         };
@@ -258,7 +260,9 @@ class InventoryController extends Controller
                 'value' => isset($w['value']) ? (float) $w['value'] : null,
                 'location' => WarehouseLocations::of((string) ($w['code'] ?? '')),
             ], $warehouses)),
-            'last_sale_at' => $item->last_sale_at?->toDateString(),
+            // w oddziale — z dokumentów jego magazynów; last_sale_any_at — z dowolnego magazynu
+            'last_sale_at' => $item->getAttribute('scope_last_sale') !== null ? substr((string) $item->getAttribute('scope_last_sale'), 0, 10) : null,
+            'last_sale_any_at' => $item->last_sale_at?->toDateString(),
             // najstarsza partia w wybranych magazynach
             'oldest_lot_at' => $item->getAttribute('scope_oldest_lot') !== null ? substr((string) $item->getAttribute('scope_oldest_lot'), 0, 10) : null,
             'last_purchase' => $purchase === null ? null : [

@@ -108,7 +108,7 @@ final class InventoryBoardApiTest extends TestCase
         ]);
         // tylko w magazynie usługowym
         $this->item('SUSL', 'NARZĘDZIE', 5, 50, lastSale: '2024-01-01', oldestLot: '2022-01-01', warehouses: [
-            ['code' => '13G', 'name' => 'Magazyn gaśnic - Stalowa Wola', 'quantity' => 5, 'value' => 50, 'oldest_lot' => '2022-01-01'],
+            ['code' => '01E', 'name' => 'Magazyn Elektryczny', 'quantity' => 5, 'value' => 50, 'oldest_lot' => '2022-01-01'],
         ]);
 
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
@@ -196,6 +196,48 @@ final class InventoryBoardApiTest extends TestCase
         $this->assertEquals(['items' => 0, 'value' => 0], $this->getJson('/api/inventory/board?location=99')->assertOk()->json('stock'));
         $this->getJson('/api/inventory/board?location=Rz')->assertUnprocessable();
         $this->getJson('/api/inventory/board/items?bucket=stock&location=01%27')->assertUnprocessable();
+    }
+
+    public function test_last_sale_per_location_krakow_services_and_stalowa_wola_trade(): void
+    {
+        // sprzedaje się w Tarnowie, w Rzeszowie leży od marca 2025
+        $kurtka = $this->item('AKURTKA', 'KURTKA', 15, 1500, lastSale: '2026-09-20', oldestLot: '2024-01-01', warehouses: [
+            ['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 10, 'value' => 1000, 'oldest_lot' => '2024-01-01'],
+            ['code' => '11H', 'name' => 'Magazyn HANDEL - Tarnów', 'quantity' => 5, 'value' => 500, 'oldest_lot' => '2024-01-01'],
+        ]);
+        WarehouseLocations::replaceSales((int) $kurtka->id, [
+            ['warehouse_code' => '11H', 'last_sale_at' => '2026-09-20'],
+            ['warehouse_code' => '01H', 'last_sale_at' => '2025-03-01'],
+        ]);
+        // sprzedany tylko na fakturze bez magazynu — w oddziale to „ani razu”
+        $faktura = $this->item('BFAKTURA', 'BUT', 3, 30, lastSale: '2026-09-01', oldestLot: '2020-01-01');
+        WarehouseLocations::replaceSales((int) $faktura->id, [['warehouse_code' => null, 'last_sale_at' => '2026-09-01']]);
+        // przed pierwszą nocną kopią sprzedaży na magazyn — sprzedaż z dowolnego magazynu
+        $this->item('CSTARY', 'CZAPKA', 2, 20, lastSale: '2026-09-25', oldestLot: '2020-01-01');
+        // 14U (Kraków – usługi) to Kraków; 13G (Stalowa Wola) — handlowy
+        $this->item('K14', 'KRAKÓW USŁUGI', 4, 40, lastSale: '2024-01-01', oldestLot: '2025-01-01', warehouses: [
+            ['code' => '14U', 'name' => 'Magazyn Kraków -Usługi', 'quantity' => 4, 'value' => 40, 'oldest_lot' => '2025-01-01'],
+        ]);
+        $this->item('SW13', 'GAŚNICA GP-6X', 6, 60, lastSale: '2026-09-29', oldestLot: '2026-01-01', warehouses: [
+            ['code' => '13G', 'name' => 'Magazyn gaśnic - Stalowa Wola', 'quantity' => 6, 'value' => 60, 'oldest_lot' => '2026-01-01'],
+        ]);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        // bez oddziału — sprzedaż z dowolnego magazynu: nic nie leży pół roku bez sprzedaży poza K14 (usługowy, poza handlem)
+        $this->assertEquals(['months' => 6, 'items' => 0, 'value' => 0], $this->getJson('/api/inventory/board')->json('no_sale.0'));
+
+        $rze = $this->getJson('/api/inventory/board?location=01')->assertOk();
+        $this->assertEquals(['months' => 6, 'items' => 2, 'value' => 1030], $rze->json('no_sale.0'));
+        $this->assertEquals(['items' => 1, 'value' => 30], $rze->json('never_sold'));
+        $rows = collect($this->getJson('/api/inventory/board/items?bucket=no_sale_6&location=01')->json('data'))->keyBy('code');
+        $this->assertSame(['2025-03-01', null], [$rows['AKURTKA']['last_sale_at'], $rows['BFAKTURA']['last_sale_at']]);
+        $this->assertSame(['AKURTKA'], array_column($this->getJson('/api/inventory/board/items?bucket=stock&location=01&search=marzec')->json('data'), 'code'));
+        $this->assertEquals(0, $this->getJson('/api/inventory/board?location=11')->json('no_sale.0.items'));
+
+        $this->assertSame(['01', '11', '15', '13'], array_column($rze->json('locations'), 'key'));
+        $this->assertEquals(['items' => 1, 'value' => 40], $this->getJson('/api/inventory/board?location=15&warehouses=service')->json('stock'));
+        $this->assertEquals(['items' => 1, 'value' => 60], $this->getJson('/api/inventory/board?location=13')->json('stock'));
+        $this->assertEquals(0, $this->getJson('/api/inventory/board?location=14&warehouses=all')->json('stock.items'));
     }
 
     public function test_items_window_pages_groups_and_totals(): void

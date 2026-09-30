@@ -21,8 +21,11 @@ final class FakeErpXlGateway implements ErpXlGateway
     /** @var list<array<string, mixed>> */
     public array $supplierRows = [];
 
-    /** @var array<int, int> */
+    /** @var array<int, int> gid => data sprzedaży z dokumentu bez magazynu */
     public array $sales = [];
+
+    /** @var list<array{gid: int, warehouse_code: string|null, date: int}> sprzedaż z magazynem dokumentu */
+    public array $saleRows = [];
 
     /** @var list<array<string, mixed>> RW/PW w postaci ErpXlGateway::internalMoves */
     public array $moveRows = [];
@@ -101,7 +104,12 @@ final class FakeErpXlGateway implements ErpXlGateway
 
     public function lastSales(array $gids): array
     {
-        return array_intersect_key($this->sales, array_flip($gids));
+        $rows = [];
+        foreach (array_intersect_key($this->sales, array_flip($gids)) as $gid => $date) {
+            $rows[] = ['gid' => (int) $gid, 'warehouse_code' => null, 'date' => $date];
+        }
+
+        return [...$rows, ...array_values(array_filter($this->saleRows, static fn (array $r): bool => in_array($r['gid'], $gids, true)))];
     }
 
     public function internalMoves(int $fromClarionDate): array

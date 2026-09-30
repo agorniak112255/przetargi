@@ -208,6 +208,35 @@ final class InventoryApiTest extends TestCase
         $this->getJson('/api/inventory?location=Rz')->assertUnprocessable();
     }
 
+    public function test_location_filter_uses_last_sale_from_that_locations_documents(): void
+    {
+        $item = $this->placed('KURTKA', lastSale: '2026-09-20', price: 10, warehouses: [
+            ['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 4, 'value' => 40, 'oldest_lot' => '2024-01-01'],
+            ['code' => '11H', 'name' => 'Magazyn HANDEL - Tarnów', 'quantity' => 1, 'value' => 10, 'oldest_lot' => '2024-01-01'],
+        ]);
+        WarehouseLocations::replaceSales((int) $item->id, [
+            ['warehouse_code' => '11H', 'last_sale_at' => '2026-09-20'],
+            ['warehouse_code' => '01MTU', 'last_sale_at' => '2025-02-01'],
+        ]);
+        $never = $this->placed('NIGDY01', lastSale: '2026-08-01', price: 10, warehouses: [
+            ['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 1, 'value' => 10, 'oldest_lot' => '2024-01-01'],
+        ]);
+        WarehouseLocations::replaceSales((int) $never->id, [['warehouse_code' => '20H', 'last_sale_at' => '2026-08-01']]);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        // bez oddziału oba sprzedają się niedawno
+        $this->assertSame([], $this->codes(''));
+
+        $res = $this->getJson('/api/inventory?location=01&sort=last_sale&dir=asc')->assertOk();
+        // rosnąco: najpierw „nigdy” w oddziale (null), potem sprzedaż z 01MTU
+        $this->assertSame(['NIGDY01', 'KURTKA'], array_column($res->json('data'), 'code'));
+        $this->assertSame([null, '2026-08-01'], [$res->json('data.0.last_sale_at'), $res->json('data.0.last_sale_any_at')]);
+        $this->assertSame(['2025-02-01', '2026-09-20'], [$res->json('data.1.last_sale_at'), $res->json('data.1.last_sale_any_at')]);
+        $this->assertSame(1, $res->json('summary.never_sold'));
+        $this->assertSame(['KURTKA'], $this->codes('location=01&never_sold=0'));
+        $this->assertSame([], $this->codes('location=11'));
+    }
+
     /** @return list<string> */
     private function codes(string $params): array
     {

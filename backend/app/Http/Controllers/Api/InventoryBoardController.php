@@ -27,7 +27,8 @@ use Illuminate\Validation\Rule;
  * (InventoryQuery). Niczego nie zapisuje.
  *
  * Oddział (parametr location, np. '01' Rzeszów — WarehouseLocations) zawęża każdą liczbę, okno i dokumenty RW → PW do
- * magazynów oddziału (razem z wyborem handlowe / usługowe / wszystkie). Ostatnia sprzedaż — dalej z dowolnego magazynu.
+ * magazynów oddziału (razem z wyborem handlowe / usługowe / wszystkie), także ostatnią sprzedaż (dokumenty z magazynów
+ * oddziału).
  */
 class InventoryBoardController extends Controller
 {
@@ -319,7 +320,7 @@ class InventoryBoardController extends Controller
         match ($kind) {
             'no_sale' => InventoryQuery::unsoldSince($query, $this->ago($months), true, $scope, $location),
             'stale' => InventoryQuery::lotOlderThan(InventoryQuery::unsoldSince($query, $this->ago(12), true, $scope, $location), $this->ago($months), $scope, $location),
-            'never' => $query->whereNull('last_sale_at')
+            'never' => $query->whereRaw(InventoryQuery::lastSaleSql($location).' is null')
                 ->where(fn (Builder $l) => $l->whereRaw($lot.' is null')->orWhereRaw($lot.' <= ?', [$this->ago($months)->toDateString()])),
             default => $query,
         };
@@ -347,16 +348,18 @@ class InventoryBoardController extends Controller
         $value = InventoryQuery::valueSql($scope, $location);
         $quantity = InventoryQuery::quantitySql($scope, $location);
         $lot = InventoryQuery::oldestLotSql($scope, $location);
+        $sale = InventoryQuery::lastSaleSql($location);
         $query->select('erp_items.*')
             ->selectRaw($value.' as purchase_value')
             ->selectRaw($quantity.' as scope_quantity')
             ->selectRaw($lot.' as scope_oldest_lot')
+            ->selectRaw($sale.' as scope_last_sale')
             ->with(ErpItemCards::eagerLinks());
 
         match ($sort) {
             'name' => $query->orderByRaw('coalesce('.self::cardNameSql('erp_items.id').', erp_items.name) '.$dir),
             'quantity' => $query->orderByRaw($quantity.' '.$dir),
-            'last_sale' => $query->orderBy('last_sale_at', $dir),
+            'last_sale' => $query->orderByRaw($sale.' '.$dir),
             'oldest_lot' => $query->orderByRaw($lot.' is null')->orderByRaw($lot.' '.$dir),
             'value' => $query->orderByRaw($value.' is null')->orderByRaw($value.' '.$dir),
             default => $query->orderByRaw($value.' is null')->orderByRaw($value.' desc'),
@@ -421,9 +424,10 @@ class InventoryBoardController extends Controller
         $quantity = InventoryQuery::quantitySql($scope, $location);
         $value = InventoryQuery::valueSql($scope, $location);
         $lot = InventoryQuery::oldestLotSql($scope, $location);
+        $sale = InventoryQuery::lastSaleSql($location);
         foreach ($words as $word) {
             $like = '%'.addcslashes($word, '%_\\').'%';
-            $query->where(function (Builder $q) use ($word, $like, $quantity, $value, $lot): void {
+            $query->where(function (Builder $q) use ($word, $like, $quantity, $value, $lot, $sale): void {
                 $q->where('code', 'like', $like)
                     ->orWhere('name', 'like', $like)
                     ->orWhere('name1', 'like', $like)
@@ -442,7 +446,7 @@ class InventoryBoardController extends Controller
                     }
                 }
                 foreach ($this->datePatterns($word) as $pattern) {
-                    $q->orWhere('last_sale_at', 'like', $pattern)->orWhereRaw($lot.' like ?', [$pattern]);
+                    $q->orWhereRaw($sale.' like ?', [$pattern])->orWhereRaw($lot.' like ?', [$pattern]);
                 }
                 if (ctype_digit($word)) {
                     $q->orWhereRaw($quantity.' = ?', [(int) $word])->orWhereRaw('round('.$value.') = ?', [(int) $word]);
@@ -559,7 +563,8 @@ class InventoryBoardController extends Controller
                 'unit' => $item->unit,
                 'value' => $value !== null ? round((float) $value, 2) : null,
                 'unit_cost' => $value !== null && $quantity > 0 ? round((float) $value / $quantity, 2) : null,
-                'last_sale_at' => $item->last_sale_at?->toDateString(),
+                // w oddziale — ostatnia sprzedaż z jego magazynów
+                'last_sale_at' => $item->getAttribute('scope_last_sale') !== null ? substr((string) $item->getAttribute('scope_last_sale'), 0, 10) : null,
                 'oldest_lot_at' => $item->getAttribute('scope_oldest_lot') !== null ? substr((string) $item->getAttribute('scope_oldest_lot'), 0, 10) : null,
                 'last_supplier' => $item->last_supplier,
             ];

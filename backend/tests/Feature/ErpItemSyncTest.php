@@ -259,6 +259,36 @@ final class ErpItemSyncTest extends TestCase
         $this->assertSame(['13H' => '13'], DB::table(WarehouseLocations::TABLE)->where('erp_item_id', $a->id)->pluck('location', 'warehouse_code')->all());
         $this->assertSame('Magazyny 99', WarehouseLocations::name('99'));
         $this->assertNull(WarehouseLocations::of('MAG'));
+        // 14U (Kraków – usługi) należy do Krakowa
+        $this->assertSame('15', WarehouseLocations::of('14U'));
+    }
+
+    public function test_last_sale_per_warehouse_and_overall_latest(): void
+    {
+        $this->xl->items = [FakeErpXlGateway::item(1, 'A1', 'Towar A'), FakeErpXlGateway::item(2, 'B2', 'Towar B')];
+        // FS bez magazynu najpóźniej — ona jest ostatnią sprzedażą towaru, ale żadnego oddziału
+        $this->xl->sales = [1 => 82450];
+        $this->xl->saleRows = [
+            ['gid' => 1, 'warehouse_code' => '01H', 'date' => 82300],
+            ['gid' => 1, 'warehouse_code' => '14U', 'date' => 82400],
+        ];
+        app(ErpItemSync::class)->run();
+
+        $a = ErpItem::query()->where('xl_gid', 1)->firstOrFail();
+        $this->assertSame('2026-09-24', $a->last_sale_at?->toDateString());
+        $rows = DB::table(WarehouseLocations::SALES_TABLE)->where('erp_item_id', $a->id)->orderBy('warehouse_code')->get();
+        $this->assertSame(['', '01H', '14U'], $rows->pluck('warehouse_code')->all());
+        $this->assertSame([null, '01', '15'], $rows->pluck('location')->all());
+        $this->assertSame(['2026-09-24', '2026-04-27', '2026-08-05'], $rows->pluck('last_sale_at')->map(fn ($d) => substr((string) $d, 0, 10))->all());
+        $b = ErpItem::query()->where('xl_gid', 2)->firstOrFail();
+        $this->assertNull($b->last_sale_at);
+        $this->assertSame(0, DB::table(WarehouseLocations::SALES_TABLE)->where('erp_item_id', $b->id)->count());
+
+        // następna noc zastępuje wiersze
+        $this->xl->sales = [];
+        $this->xl->saleRows = [['gid' => 1, 'warehouse_code' => '20H', 'date' => 82460]];
+        app(ErpItemSync::class)->run();
+        $this->assertSame(['20H' => '20'], DB::table(WarehouseLocations::SALES_TABLE)->where('erp_item_id', $a->id)->pluck('location', 'warehouse_code')->all());
     }
 
     public function test_refuses_to_run_when_not_configured_and_command_skips_quietly(): void
