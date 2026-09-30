@@ -53,6 +53,7 @@ import {
   type CampaignRecipientRow,
   type CampaignRecipientStatus,
   type CampaignTotals,
+  type CampaignSales,
   type CampaignXlMode,
   type MailingList,
   type PageMeta,
@@ -1968,8 +1969,8 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
                         <span className="text-slate-400">{campaign.status === 'cancelled' ? '—' : 'liczymy 7 dni po wysyłce'}</span>
                       )}
                     </td>
-                    <td className="p-2 text-right">
-                      <StageTwo />
+                    <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                      <ItemSalesCell sales={campaign.sales ?? null} erpItemId={i.erp_item_id} unit={i.unit} />
                     </td>
                   </tr>
                 )
@@ -1979,9 +1980,11 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
         </div>
         <p className="px-4 py-3 text-[11px] text-slate-500">
           Spadek stanu nie dowodzi, że towar sprzedała kampania (mógł zejść też inną drogą, a dostawa podnosi stan). Kto z
-          odbiorców kupił — w etapie 2, po nocnym odczycie faktur z ERP XL.
+          odbiorców kupił — niżej, z faktur i paragonów ERP XL.
         </p>
       </div>
+
+      {campaign.sales && <CampaignSalesPanel sales={campaign.sales} />}
 
       <div className="overflow-x-auto rounded-xl bg-white p-4 shadow-sm">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -2077,6 +2080,109 @@ function SentKpi({ label, value, tone, small }: { label: string; value: string; 
         {value}
       </b>
       <span className="app-kpi-label text-xs text-slate-500">{label}</span>
+    </div>
+  )
+}
+
+/** Kolumna „Kupili odbiorcy kampanii” przy pozycji: ilość i wartość netto z faktur/paragonów odbiorców. */
+function ItemSalesCell({ sales, erpItemId, unit }: { sales: CampaignSales | null; erpItemId: number | null; unit: string | null }) {
+  if (!sales) return <span className="text-slate-400">—</span>
+  const row = sales.items.find((r) => r.erp_item_id === erpItemId)
+  if (!row) return <span className="text-slate-400" title="Pozycja bez towaru XL — sprzedaży nie da się śledzić">—</span>
+  if (row.quantity_recipients <= 0) return <span className="text-slate-500">nikt (na razie)</span>
+  return (
+    <span>
+      <b className="font-semibold text-emerald-700">{fmtQty(row.quantity_recipients, row.unit ?? unit)}</b>
+      <span className="block text-[10px] text-slate-500">{formatPln(row.value_recipients)} netto</span>
+    </span>
+  )
+}
+
+/**
+ * „Kupili odbiorcy kampanii”: kto z odbiorców kupił pozycje kampanii w okresie od wysyłki (faktury i paragony XL,
+ * odczyt nocny), a dla porównania ile kupili pozostali klienci. Zakup po mailu nie dowodzi, że kupili dzięki kampanii.
+ */
+function CampaignSalesPanel({ sales }: { sales: CampaignSales }) {
+  const untracked = Math.max(0, sales.recipients_sent - sales.recipients_in_xl)
+  return (
+    <div className="rounded-xl bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-2.5">
+        <b className="text-sm text-slate-900">Kupili odbiorcy kampanii</b>
+        <span className="text-[11px] text-slate-500">
+          faktury i paragony z ERP XL od {fmtDate(sales.from)} do {fmtDate(sales.to)} ({sales.days} dni)
+          {sales.complete ? ' · okres zamknięty' : ' · okres trwa'}
+          {sales.synced_at ? ` · odczyt z XL ${fmtDateTime(sales.synced_at)}` : ' · pierwszy odczyt z XL w nocy'}
+        </span>
+      </div>
+      <div className="grid gap-2 p-4 sm:grid-cols-3">
+        <div className="rounded-lg bg-emerald-50 px-3 py-2">
+          <b className="block text-lg font-semibold tabular-nums text-emerald-800">{formatPln(sales.recipients.net_value)}</b>
+          <span className="text-xs text-emerald-900">
+            netto — kupiło {fmtInt(sales.recipients.customers)}{' '}
+            {plural(sales.recipients.customers, 'firma', 'firmy', 'firm')} z odbiorców
+          </span>
+        </div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2">
+          <b className="block text-lg font-semibold tabular-nums text-slate-800">{formatPln(sales.others.net_value)}</b>
+          <span className="text-xs text-slate-600">
+            netto — pozostali klienci ({fmtInt(sales.others.customers)}), dla porównania
+          </span>
+        </div>
+        <div className="rounded-lg bg-slate-50 px-3 py-2">
+          <b className="block text-lg font-semibold tabular-nums text-slate-800">
+            {fmtInt(sales.recipients_in_xl)} z {fmtInt(sales.recipients_sent)}
+          </b>
+          <span className="text-xs text-slate-600">
+            odbiorców da się śledzić w XL
+            {untracked > 0 ? ` — ${fmtInt(untracked)} ${plural(untracked, 'adresu', 'adresów', 'adresów')} nie ma na kartach kontrahentów` : ''}
+          </span>
+        </div>
+      </div>
+      {sales.buyers.length > 0 ? (
+        <div className="overflow-x-auto border-t border-slate-200">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b bg-slate-50">
+                <th className="p-2">Data</th>
+                <th className="p-2">Klient</th>
+                <th className="p-2">Mail poszedł na</th>
+                <th className="p-2">Towar</th>
+                <th className="p-2 text-right">Ilość</th>
+                <th className="p-2 text-right">Netto</th>
+                <th className="p-2">Dokument</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sales.buyers.map((b, idx) => (
+                <tr key={`${b.document_number}-${b.code}-${idx}`} className="border-b">
+                  <td className="whitespace-nowrap p-2 tabular-nums">{fmtDate(b.sold_at)}</td>
+                  <td className="p-2">
+                    <span className="font-mono text-[11px] text-slate-800">{b.acronym}</span>
+                    {b.name && <span className="block text-slate-600">{b.name}</span>}
+                  </td>
+                  <td className="p-2 font-mono text-[11px] text-slate-600">{b.email}</td>
+                  <td className="p-2">
+                    <span className="text-slate-900">{b.item_name}</span>{' '}
+                    <span className="font-mono text-[11px] text-slate-500">{b.code}</span>
+                  </td>
+                  <td className="whitespace-nowrap p-2 text-right tabular-nums">{fmtQty(b.quantity, b.unit)}</td>
+                  <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPln(b.net_value)}</td>
+                  <td className="whitespace-nowrap p-2 font-mono text-[11px] text-slate-600">{b.document_number}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {sales.buyers_truncated && <p className="px-4 py-2 text-[11px] text-slate-500">Pokazano pierwsze 200 pozycji.</p>}
+        </div>
+      ) : (
+        <p className="border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
+          Nikt z odbiorców nie kupił jeszcze pozycji kampanii{sales.complete ? ' w tym okresie' : ''}.
+        </p>
+      )}
+      <p className="px-4 py-3 text-[11px] text-slate-500">
+        Zakup po wysyłce nie dowodzi, że klient kupił dzięki kampanii — porównaj z pozostałymi klientami. Liczymy klientów
+        z ERP XL, do których mail wyszedł; adres z grupy liczy się, gdy jest na karcie kontrahenta w XL.
+      </p>
     </div>
   )
 }

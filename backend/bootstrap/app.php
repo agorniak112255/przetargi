@@ -48,6 +48,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // Kampanie: kontrahenci XL z e-mailami i tym, co kupowali (FS/PA z 24 mies.) — też tylko w nocy
         $schedule->command('erp:customers')->dailyAt('03:10')->withoutOverlapping(60)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));
+        // wynik kampanii „kupili odbiorcy”: faktury i paragony z towarami kampanii z ostatnich ~37 dni — po erp:customers
+        $schedule->command('erp:campaign-sales')->dailyAt('03:25')->withoutOverlapping(30)
+            ->when(static fn (): bool => (bool) config('erpxl.enabled'));
         // propozycje z wyszukiwarki (bez modelu) dla towarów XL bez kodu — w nocy, bo każdy towar to zapytanie wektorowe
         $schedule->command('erp:suggest --limit=2000')->dailyAt('03:30')->withoutOverlapping(240)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));

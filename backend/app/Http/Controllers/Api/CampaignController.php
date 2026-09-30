@@ -17,6 +17,7 @@ use App\Services\Campaigns\AudienceResolver;
 use App\Services\Campaigns\CampaignItemPresenter;
 use App\Services\Campaigns\CampaignRenderer;
 use App\Services\Campaigns\CampaignResult;
+use App\Services\Campaigns\CampaignSalesResult;
 use App\Services\Campaigns\CampaignSender;
 use App\Services\Erp\ErpItemCards;
 use App\Services\Erp\InventoryQuery;
@@ -64,6 +65,7 @@ class CampaignController extends Controller
         private readonly CampaignRenderer $renderer,
         private readonly CampaignSender $sender,
         private readonly AudienceResolver $audience,
+        private readonly CampaignSalesResult $sales,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -104,10 +106,12 @@ class CampaignController extends Controller
 
         $page = $query->orderByDesc('campaigns.created_at')->orderByDesc('campaigns.id')
             ->paginate((int) ($v['per_page'] ?? 25));
-        $results = CampaignResult::forCampaigns($page->getCollection()->map(fn (Campaign $c): int => (int) $c->id)->values()->all());
+        $ids = $page->getCollection()->map(fn (Campaign $c): int => (int) $c->id)->values()->all();
+        $results = CampaignResult::forCampaigns($ids);
+        $sales = $this->sales->summaries($ids);
 
         return response()->json([
-            'data' => $page->getCollection()->map(fn (Campaign $c): array => $this->listRow($c, $results[(int) $c->id] ?? null))->values()->all(),
+            'data' => $page->getCollection()->map(fn (Campaign $c): array => $this->listRow($c, $results[(int) $c->id] ?? null, $sales[(int) $c->id] ?? null))->values()->all(),
             'meta' => [
                 'current_page' => $page->currentPage(),
                 'last_page' => $page->lastPage(),
@@ -732,9 +736,10 @@ class CampaignController extends Controller
 
     /**
      * @param  array<string, float|null>|null  $result  CampaignResult::forCampaigns
+     * @param  array{customers: int, net_value: float, complete: bool}|null  $sales  CampaignSalesResult::summaries
      * @return array<string, mixed>
      */
-    private function listRow(Campaign $c, ?array $result): array
+    private function listRow(Campaign $c, ?array $result, ?array $sales = null): array
     {
         $stockValue = $c->getAttribute('stock_value');
 
@@ -754,6 +759,8 @@ class CampaignController extends Controller
             'sent_at' => $c->sent_at?->toIso8601String(),
             'stock_value' => $stockValue !== null ? round((float) $stockValue, 2) : null,
             'result' => $result,
+            // kupili odbiorcy: ilu klientów z odbiorców kupiło pozycje kampanii i za ile netto (30 dni od wysyłki)
+            'sales' => $sales,
         ];
     }
 
@@ -785,6 +792,7 @@ class CampaignController extends Controller
             'totals' => $campaign->totals,
             'items' => $author !== null ? $this->presenter->presentMany($items, $author) : [],
             'warnings' => $this->warnings($campaign, $viewer),
+            'sales' => $campaign->isDraft() ? null : $this->sales->forCampaign($campaign),
         ];
     }
 

@@ -435,6 +435,38 @@ final class ErpXlClient implements ErpXlGateway
         }
     }
 
+    public function itemSaleLines(array $itemGids, int $fromClarionDate): iterable
+    {
+        [$where, $bindings] = $this->customerSaleFilter($fromClarionDate);
+        $prefixes = [2033 => 'FS', 2034 => 'PA'];
+        // paczkami — lista towarów kampanii jest krótka, ale limit parametrów MS SQL to 2100
+        foreach (array_chunk(array_values(array_unique($itemGids)), 500) as $chunk) {
+            $in = implode(',', array_map('intval', $chunk));
+            $sql = <<<SQL
+                SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, e.TrE_GIDLp AS line, n.TrN_TrNSeria AS series,
+                       n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month, n.TrN_Data2 AS doc_date,
+                       n.TrN_KntNumer AS customer_gid, e.TrE_TwrNumer AS item_gid, e.TrE_Ilosc AS quantity, e.TrE_KsiegowaNetto AS net_value
+                FROM CDN.TraElem e
+                JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
+                WHERE $where AND e.TrE_Ilosc > 0 AND e.TrE_TwrNumer IN ($in)
+                SQL;
+            foreach ($this->db()->cursor($sql, $bindings) as $r) {
+                $type = (int) $r->doc_type;
+                yield [
+                    'document_type' => $type,
+                    'document_id' => (int) $r->document_id,
+                    'line' => (int) $r->line,
+                    'document_number' => $this->documentNumber($prefixes[$type] ?? 'dok. '.$type, $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
+                    'date' => (int) $r->doc_date,
+                    'customer_gid' => (int) $r->customer_gid,
+                    'item_gid' => (int) $r->item_gid,
+                    'quantity' => (float) $r->quantity,
+                    'net_value' => (float) $r->net_value,
+                ];
+            }
+        }
+    }
+
     /**
      * Warunek sprzedaży do kontrahenta: FS/PA zatwierdzone (TrN_Stan 3–5; 6 = anulowane, 0–2 = bufor/w toku) od daty.
      *

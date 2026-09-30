@@ -107,4 +107,13 @@ interface ErpXlGateway
      * @return iterable<array{customer_gid: int, operator: string, operator_name: ?string, documents: int}>
      */
     public function customerOperators(int $fromClarionDate): iterable;
+
+    /**
+     * Pozycje FS i PA (zatwierdzone, do kontrahenta) z towarami z listy od daty — wynik kampanii „kupili odbiorcy”.
+     * net_value = TrE_KsiegowaNetto (PLN netto; na paragonie bez VAT). Strumień.
+     *
+     * @param  list<int>  $itemGids
+     * @return iterable<array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float}>
+     */
+    public function itemSaleLines(array $itemGids, int $fromClarionDate): iterable;
 }

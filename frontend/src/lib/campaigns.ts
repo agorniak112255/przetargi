@@ -52,6 +52,52 @@ export type CampaignListRow = {
   /** Suma wartości zapasu pozycji (koszt zakupu), null = brak danych. */
   stock_value: number | null
   result: CampaignResult | null
+  /** Kupili odbiorcy (faktury i paragony XL, 30 dni od wysyłki); null = projekt. */
+  sales?: { customers: number; net_value: number; complete: boolean } | null
+}
+
+export type CampaignSalesItem = {
+  erp_item_id: number
+  code: string
+  name: string
+  unit: string | null
+  quantity_recipients: number
+  quantity_others: number
+  value_recipients: number
+  value_others: number
+}
+
+export type CampaignSalesBuyer = {
+  customer_id: number
+  acronym: string
+  name: string | null
+  /** Adres, na który poszedł mail. */
+  email: string
+  sold_at: string | null
+  code: string
+  item_name: string
+  unit: string | null
+  quantity: number
+  net_value: number
+  document_number: string
+}
+
+/** „Kupili odbiorcy kampanii”: sprzedaż pozycji kampanii z XL od wysyłki przez `days` dni. */
+export type CampaignSales = {
+  from: string
+  to: string
+  days: number
+  /** Okres się skończył — wynik już się nie zmieni (poza korektami w XL). */
+  complete: boolean
+  synced_at: string | null
+  recipients_sent: number
+  /** Ilu odbiorców da się śledzić: klient XL albo adres z karty kontrahenta XL. */
+  recipients_in_xl: number
+  recipients: { customers: number; net_value: number }
+  others: { customers: number; net_value: number }
+  items: CampaignSalesItem[]
+  buyers: CampaignSalesBuyer[]
+  buyers_truncated: boolean
 }
 
 export type CampaignItemWarnings = {
@@ -119,6 +165,8 @@ export type Campaign = {
   totals: CampaignTotals | null
   items: CampaignItem[]
   warnings: string[]
+  /** null = projekt (jeszcze nie wysyłany). */
+  sales?: CampaignSales | null
 }
 
 export type CampaignPatch = Partial<

@@ -10,7 +10,6 @@ import {
   DropBar,
   ErrorBar,
   Pager,
-  StageTwo,
 } from '../components/CampaignsUi'
 import { campaignsTabFromParam, errorText, fmtDateTime, fmtInt } from '../lib/campaignFormat'
 import { can } from '../lib/api'
@@ -131,6 +130,9 @@ function CampaignList({ scope }: { scope: 'mine' | 'all' }) {
   const mailsFailed = rows.reduce((s, r) => s + (r.failed ?? 0), 0)
   const drops = rows.map((r) => r.result?.drop_percent).filter((v): v is number => v != null)
   const avgDrop = drops.length > 0 ? drops.reduce((s, v) => s + v, 0) / drops.length : null
+  const salesRows = rows.filter((r) => r.sales != null)
+  const salesValue = salesRows.reduce((s, r) => s + (r.sales?.net_value ?? 0), 0)
+  const salesCustomers = salesRows.reduce((s, r) => s + (r.sales?.customers ?? 0), 0)
   const pageNote = meta && meta.last_page > 1 ? 'na tej stronie listy' : 'na liście'
 
   return (
@@ -174,12 +176,14 @@ function CampaignList({ scope }: { scope: 'mine' | 'all' }) {
               : 'Zeszło ze stanu — liczymy 7 i 30 dni po wysyłce'
           }
         />
-        <div className="app-kpi rounded-xl bg-white px-3 py-2 opacity-60 shadow-sm">
-          <b className="app-kpi-value block text-xl font-semibold text-slate-400">—</b>
-          <span className="app-kpi-label flex items-center gap-1.5 text-xs text-slate-500">
-            Odpowiedzi „Zapytaj o ofertę” <StageTwo />
-          </span>
-        </div>
+        <Kpi
+          value={salesRows.length > 0 ? formatPln(salesValue) : '—'}
+          label={
+            salesRows.length > 0
+              ? `Kupili odbiorcy: ${fmtInt(salesCustomers)} ${plural(salesCustomers, 'firma', 'firmy', 'firm')} (netto, 30 dni po wysyłce)`
+              : 'Kupili odbiorcy — z faktur XL po wysyłce'
+          }
+        />
       </div>
 
       <div className="overflow-x-auto rounded-xl bg-white p-4 shadow-sm">
@@ -218,6 +222,7 @@ function CampaignList({ scope }: { scope: 'mine' | 'all' }) {
               <th className="p-2 text-right">Odbiorcy</th>
               <th className="p-2 text-right">Błędy</th>
               <th className="p-2">Zeszło z magazynu</th>
+              <th className="p-2 text-right">Kupili odbiorcy</th>
               <th className="p-2" />
             </tr>
           </thead>
@@ -316,6 +321,24 @@ function CampaignRow({
           </span>
         ) : row.status === 'sent' || row.status === 'sending' ? (
           <span className="text-slate-500">liczymy 7 dni po wysyłce</span>
+        ) : (
+          <span className="text-slate-400">—</span>
+        )}
+      </td>
+      <td className="whitespace-nowrap p-2 text-right tabular-nums">
+        {row.sales ? (
+          <span title={row.sales.complete ? 'Okres 30 dni zamknięty' : 'Okres 30 dni od wysyłki trwa'}>
+            {row.sales.customers > 0 ? (
+              <>
+                <b className="font-semibold text-emerald-700">{formatPln(row.sales.net_value)}</b>
+                <span className="block text-[10px] text-slate-500">
+                  {fmtInt(row.sales.customers)} {plural(row.sales.customers, 'firma', 'firmy', 'firm')}
+                </span>
+              </>
+            ) : (
+              <span className="text-slate-500">nikt{row.sales.complete ? '' : ' (na razie)'}</span>
+            )}
+          </span>
         ) : (
           <span className="text-slate-400">—</span>
         )}

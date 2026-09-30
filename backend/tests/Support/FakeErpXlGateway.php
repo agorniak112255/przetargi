@@ -46,6 +46,12 @@ final class FakeErpXlGateway implements ErpXlGateway
 
     public ?int $customerSalesFrom = null;
 
+    /** @var list<array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float}> */
+    public array $saleLineRows = [];
+
+    /** @var list<array{items: list<int>, from: int}> wywołania itemSaleLines */
+    public array $saleLineCalls = [];
+
     public bool $isConfigured = true;
 
     public function configured(): bool
@@ -136,6 +142,25 @@ final class FakeErpXlGateway implements ErpXlGateway
     public function customerOperators(int $fromClarionDate): iterable
     {
         yield from $this->customerOperatorRows;
+    }
+
+    public function itemSaleLines(array $itemGids, int $fromClarionDate): iterable
+    {
+        $this->saleLineCalls[] = ['items' => array_values($itemGids), 'from' => $fromClarionDate];
+        foreach ($this->saleLineRows as $row) {
+            if ($row['date'] >= $fromClarionDate && in_array($row['item_gid'], $itemGids, true)) {
+                yield $row;
+            }
+        }
+    }
+
+    /** @return array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float} */
+    public static function saleLine(int $documentId, int $date, int $customerGid, int $itemGid, float $quantity, float $netValue, int $line = 1, int $type = 2033): array
+    {
+        return [
+            'document_type' => $type, 'document_id' => $documentId, 'line' => $line, 'document_number' => 'FS-01H/'.$documentId.'/26/09',
+            'date' => $date, 'customer_gid' => $customerGid, 'item_gid' => $itemGid, 'quantity' => $quantity, 'net_value' => $netValue,
+        ];
     }
 
     /** @return array{gid: int, acronym: string, name: string, nip: ?string, city: ?string, email: ?string, archived: bool} */
