@@ -257,8 +257,10 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
         $products = $skipped;
         $grouped = 0;
         $multiPrice = 0;
-        foreach ($this->groups->group($rows) as $group) {
-            $products[] = $this->productFor($group);
+        $groups = $this->groups->group($rows);
+        $modelCodes = $this->groups->modelCodes($groups);
+        foreach ($groups as $index => $group) {
+            $products[] = $this->productFor($group, $modelCodes[$index]);
             if (count($group) > 1) {
                 $grouped++;
                 $multiPrice += count(array_unique(array_map(static fn (array $m): int => (int) $m['row']['price_cents'], $group))) > 1 ? 1 : 0;
@@ -432,7 +434,8 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
                 code: $row['code'],
                 source: $this->basePrices->sourceOf($row),
                 standardDiscountPercent: $this->discounts?->resolve(
-                    catalogNo: $product->sku,
+                    // kod pozycji dosłownie, jak przed kodem modelu na karcie (reguły rabatu pisane pod kody panelu)
+                    catalogNo: (string) ($product->raw['code'] ?? $product->sku),
                     category: $row['sheet'],
                     name: $product->name,
                 )?->discountPercent,
@@ -1086,8 +1089,9 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
 
     /**
      * @param  list<array{row: array<string, mixed>, size: array{size: string, expr: string|null, stem: string|null}|null}>  $group
+     * @param  string|null  $modelCode  kod karty bez rozmiaru (UvexSizeGroups::modelCodes); null — kod pierwszej pozycji
      */
-    private function productFor(array $group): B2bRemoteProduct
+    private function productFor(array $group, ?string $modelCode): B2bRemoteProduct
     {
         $first = $group[0]['row'];
         // Cena karty = najtańszy rozmiar (decyzja użytkownika 28.09.2026); remis — pierwszy w kolejności kodów, jak
@@ -1138,9 +1142,10 @@ final class UvexB2bConnector implements B2bConnector, B2bDocumentSource, B2bFore
             $availability = self::groupAvailability($bySize);
         }
 
+        // remoteId zostaje kodem pierwszej pozycji (powiązanie karty), kod karty — bez rozmiaru, gdy jest kod modelu
         return new B2bRemoteProduct(
             remoteId: $first['code'],
-            sku: $first['code'],
+            sku: $modelCode ?? $first['code'],
             name: $name,
             sourceUrl: $first['detail_url'] !== '' ? $first['detail_url'] : null,
             raw: [

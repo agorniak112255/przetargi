@@ -131,6 +131,35 @@ final class UvexSizeGroups
         return $out !== '' ? $out : $name;
     }
 
+    /**
+     * Kod modelu każdej grupy (decyzja użytkownika 30.09.2026: kod karty butów i rękawic bez rozmiaru — „6931/2”, nie
+     * „6931/2/35”; „NB60SZ”, nie „NB60SZ/9”). Kod modelu = wspólny rdzeń kodów, gdy rozmiar każdej pozycji grupy stoi
+     * na końcu jej kodu po „/” albo „-”. Null (karta zostaje przy kodzie pierwszej pozycji, jak dotąd): pozycja
+     * pojedyncza, rozmiar z nazwy („1723808 … rozm. XS”, „HA2023(M)”), różne rdzenie, rdzeń będący kodem pozycji listy
+     * albo rdzeniem innej grupy — dwie karty nie mogą dostać tego samego kodu (products.sku jest unikalne).
+     *
+     * @param  list<list<array{row: array{code: string}, size: array{stem: string|null}|null}>>  $groups  wynik group()
+     * @return list<string|null> kod modelu grupy o tym samym indeksie
+     */
+    public function modelCodes(array $groups): array
+    {
+        $codes = [];
+        $stems = [];
+        foreach ($groups as $index => $group) {
+            foreach ($group as $member) {
+                $codes[mb_strtolower(trim($member['row']['code']))] = true;
+            }
+            $memberStems = array_unique(array_map(static fn (array $m): string => trim((string) ($m['size']['stem'] ?? '')), $group));
+            $stems[$index] = count($group) > 1 && count($memberStems) === 1 && $memberStems[0] !== '' ? $memberStems[0] : null;
+        }
+        $uses = array_count_values(array_map('mb_strtolower', array_filter($stems, static fn (?string $s): bool => $s !== null)));
+
+        return array_map(
+            static fn (?string $stem): ?string => $stem !== null && $uses[mb_strtolower($stem)] === 1 && ! isset($codes[mb_strtolower($stem)]) ? $stem : null,
+            array_values($stems),
+        );
+    }
+
     /** Porządek rozmiarów: liczbowe rosnąco, potem literowe XXS…6XL, reszta alfabetycznie. */
     public static function compareSizes(string $a, string $b): int
     {

@@ -127,6 +127,45 @@ final class UvexSizeGroupsTest extends TestCase
         ));
     }
 
+    /**
+     * Decyzja użytkownika 30.09.2026: kod karty butów i rękawic bez rozmiaru. Kod modelu tylko wtedy, gdy rozmiar każdej
+     * pozycji stoi na końcu kodu, a rdzeń nie jest kodem pozycji ani rdzeniem innej grupy — inaczej kod pierwszej pozycji.
+     */
+    public function test_model_code_is_the_common_stem_only_when_every_size_ends_the_code_and_the_stem_is_unique(): void
+    {
+        $groups = new UvexSizeGroups;
+        $grouped = $groups->group([
+            $this->row('6931/2/35', 'Półbut uvex 2 trend 6931/2/35', 30600),
+            $this->row('6931/2/36', 'Półbut uvex 2 trend 6931/2/36', 30600),
+            $this->row('NB60SZ/9', 'Rękawice Rubiflex S długie NB60SZ/9', 11130),
+            $this->row('NB60SZ/10', 'Rękawice Rubiflex S długie NB60SZ/10', 11130),
+            $this->row('1723808', 'Koszulka polo uvex fire & arc 17238 rozm. XS', 20000, 'szt.'),
+            $this->row('1723809', 'Koszulka polo uvex fire & arc 17238 rozm. S', 20000, 'szt.'),
+            $this->row('9970.005', 'Pojemnik mini 9970.005', 5000, 'szt.'),
+            // rdzeń jest kodem innej pozycji listy
+            $this->row('7777/2', 'Wkładki uvex testowe', 3000),
+            $this->row('7777/2/40', 'Trzewik uvex testowy 7777/2/40', 30000),
+            $this->row('7777/2/41', 'Trzewik uvex testowy 7777/2/41', 30000),
+            // ten sam rdzeń w dwóch grupach (inne nazwy) — żadna nie dostaje kodu modelu
+            $this->row('6823/2/40', 'Trzewik uvex A', 30000),
+            $this->row('6823/2/41', 'Trzewik uvex A', 30000),
+            $this->row('6823/2/42', 'Trzewik uvex B', 30000),
+            $this->row('6823/2/43', 'Trzewik uvex B', 30000),
+        ]);
+        $byFirstCode = array_combine(
+            array_map(static fn (array $group): string => $group[0]['row']['code'], $grouped),
+            $groups->modelCodes($grouped),
+        );
+
+        $this->assertSame('6931/2', $byFirstCode['6931/2/35']);
+        $this->assertSame('NB60SZ', $byFirstCode['NB60SZ/9']);
+        $this->assertNull($byFirstCode['1723808']);
+        $this->assertNull($byFirstCode['9970.005']);
+        $this->assertNull($byFirstCode['7777/2/40']);
+        $this->assertNull($byFirstCode['6823/2/40']);
+        $this->assertNull($byFirstCode['6823/2/42']);
+    }
+
     public function test_sizes_sort_numbers_then_letters(): void
     {
         $sizes = ['XL', '10', 'S', '7', '3XL', 'M', '042', '8.5'];
