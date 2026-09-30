@@ -484,9 +484,23 @@ final class EjendalsB2bConnector implements B2bConnector, B2bDocumentSource, B2b
             return null;
         }
 
-        // hasło pod nazwą i opis producenta, dosłownie
+        $characteristics = self::values($model['characteristics'] ?? null, 'value');
+        $functions = self::values($model['functions'] ?? null, 'value');
+        $features = self::values(array_map(
+            static fn (array $feature): mixed => $feature['cvl'] ?? null,
+            self::listOf($model['features'] ?? null),
+        ), 'value');
+
+        // hasło pod nazwą, opis producenta i jego listy, dosłownie — jak w polskiej karcie produktu PDF: „Właściwości”
+        // = characteristics, „Cechy” = functions (sprawdzone na 879 30.09.2026) i piktogramy features, których lista
+        // funkcji nie ma (obuwie: „Aluminowy podnosek”, „Wkładka antyprzebiciowa … (PTC)”)
         $paragraphs = array_values(array_filter(
-            [self::plain($model['valueProposition'] ?? ''), self::plain($model['description'] ?? '')],
+            [
+                self::plain($model['valueProposition'] ?? ''),
+                self::plain($model['description'] ?? ''),
+                self::bulletList('Właściwości', $characteristics),
+                self::bulletList('Cechy', array_values(array_unique([...$functions, ...$features]))),
+            ],
             static fn (string $text): bool => $text !== '',
         ));
 
@@ -497,12 +511,9 @@ final class EjendalsB2bConnector implements B2bConnector, B2bDocumentSource, B2b
             'code' => $code,
             'description' => mb_substr(implode("\n\n", $paragraphs), 0, 10000),
             'lists' => array_values(array_filter([
-                ['title' => 'Characteristics', 'items' => self::values($model['characteristics'] ?? null, 'value')],
-                ['title' => 'Functions', 'items' => self::values($model['functions'] ?? null, 'value')],
-                ['title' => 'Features', 'items' => self::values(array_map(
-                    static fn (array $feature): mixed => $feature['cvl'] ?? null,
-                    self::listOf($model['features'] ?? null),
-                ), 'value')],
+                ['title' => 'Characteristics', 'items' => $characteristics],
+                ['title' => 'Functions', 'items' => $functions],
+                ['title' => 'Features', 'items' => $features],
             ], static fn (array $list): bool => $list['items'] !== [])),
             'norms' => $norms,
             'marks' => $marks,
@@ -513,6 +524,17 @@ final class EjendalsB2bConnector implements B2bConnector, B2bDocumentSource, B2b
             'documents' => self::documentLinks(self::listOf($model['documents'] ?? null)),
             'images' => self::imageLinks(self::listOf($model['images'] ?? null)),
         ];
+    }
+
+    /**
+     * „Cechy:” i pod nim „- Do ekranów dotykowych” w osobnych liniach (nagłówek i punkty jak w opisach JSP, Protekt);
+     * pusta lista — ''.
+     *
+     * @param  list<string>  $items
+     */
+    private static function bulletList(string $title, array $items): string
+    {
+        return $items === [] ? '' : $title.":\n".implode("\n", array_map(static fn (string $item): string => '- '.$item, $items));
     }
 
     /**

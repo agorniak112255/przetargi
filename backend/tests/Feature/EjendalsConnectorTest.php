@@ -140,7 +140,14 @@ final class EjendalsConnectorTest extends TestCase
 
         $this->assertNotNull($page);
         $this->assertSame('TEGERA Testowa 9999', $page['name']);
-        $this->assertSame("Cienka rękawica, poziom D\n\nErgonomiczna rękawica z CRF®. Powłoka z pianki nitrylowej.", $page['description']);
+        // jak polska karta produktu PDF: opis, „Właściwości” (characteristics) i „Cechy” (functions + piktogramy
+        // features, bez powtórzeń)
+        $this->assertSame(
+            "Cienka rękawica, poziom D\n\nErgonomiczna rękawica z CRF®. Powłoka z pianki nitrylowej.\n\n"
+            ."Właściwości:\n- Wysoki poziom ochrony\n\n"
+            ."Cechy:\n- Odporność na ciepło kontaktowe do 100°C\n- Ochrona przed przecięciem",
+            $page['description'],
+        );
         $this->assertSame(
             [['label' => 'EN ISO 21420:2020', 'value' => ''], ['label' => 'EN 388:2016+A1:2018', 'value' => '4X43D'], ['label' => 'EN 407:2020', 'value' => 'X1XXXX']],
             $page['norms'],
@@ -526,7 +533,10 @@ final class EjendalsConnectorTest extends TestCase
                 'description' => 'Ergonomiczna rękawica z CRF®. Powłoka z pianki nitrylowej.',
                 'characteristics' => [['key' => '07', 'value' => 'Wysoki poziom ochrony', 'language' => 'pl']],
                 'functions' => [['key' => '71', 'value' => 'Odporność na ciepło kontaktowe do 100°C', 'language' => 'pl']],
-                'features' => [['type' => 1, 'cvl' => ['key' => 'CutProtection', 'value' => 'Ochrona przed przecięciem', 'language' => 'pl']]],
+                'features' => [
+                    ['type' => 1, 'cvl' => ['key' => 'ContactHeat', 'value' => 'Odporność na ciepło kontaktowe do 100°C', 'language' => 'pl']],
+                    ['type' => 1, 'cvl' => ['key' => 'CutProtection', 'value' => 'Ochrona przed przecięciem', 'language' => 'pl']],
+                ],
                 'compliances' => [
                     self::compliance('CE', [], 1, 'Cat. II'),
                     self::compliance('EN ISO 21420:2020', [], 0),
