@@ -130,6 +130,7 @@ final class ErpItemSync
                     'synced_at' => $now,
                     'removed_at' => null,
                 ]);
+                WarehouseLocations::replace((int) $model->id, $stockFields['stock_by_warehouse']);
 
                 ErpItemPurchase::query()->where('erp_item_id', $model->id)->delete();
                 foreach ($itemPurchases as $p) {
@@ -207,6 +208,7 @@ final class ErpItemSync
                             'stock_by_warehouse' => json_encode($fields['stock_by_warehouse']),
                             'stock_synced_at' => $now,
                         ]);
+                        WarehouseLocations::replace((int) $item->id, $fields['stock_by_warehouse']);
                         $stats['changed']++;
                     }
                     if ($unchanged !== []) {

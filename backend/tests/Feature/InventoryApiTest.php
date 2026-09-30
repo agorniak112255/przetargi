@@ -9,6 +9,7 @@ use App\Models\ErpItemLink;
 use App\Models\ErpItemPurchase;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\Erp\WarehouseLocations;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -157,6 +158,56 @@ final class InventoryApiTest extends TestCase
         $this->assertSame(['BEZKARTY'], $this->codes('group=B'));
     }
 
+    public function test_location_filter_counts_only_that_locations_warehouses(): void
+    {
+        // Rzeszów 10 szt. z wartością partii, Kraków 30 szt. bez wartości z XL (PZ 5 zł); starsza partia w Krakowie
+        $mix = $this->placed('MIX', lastSale: '2025-12-01', price: 5, warehouses: [
+            ['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 10, 'value' => 100, 'oldest_lot' => '2025-01-01'],
+            ['code' => '15H', 'name' => 'Magazyn HANDEL Kraków', 'quantity' => 30, 'value' => null, 'oldest_lot' => '2024-01-01'],
+        ]);
+        $this->placed('KRK', lastSale: '2025-01-01', price: 50, warehouses: [
+            ['code' => '15MITSK', 'name' => 'Magazyn Mittal Skład', 'quantity' => 3, 'value' => 30, 'oldest_lot' => '2023-01-01'],
+        ]);
+        // Rzeszów wyprzedany (zero w rozbiciu) — nie ma go w filtrze Rzeszowa
+        $this->placed('ZERO01', lastSale: '2025-01-01', price: 1, warehouses: [
+            ['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 0, 'value' => 0, 'oldest_lot' => null],
+            ['code' => '20H', 'name' => 'Magazyn HANDEL - Sanok', 'quantity' => 2, 'value' => 20, 'oldest_lot' => '2025-01-01'],
+        ]);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $krakow = $this->getJson('/api/inventory?location=15')->assertOk();
+        $this->assertSame(['MIX', 'KRK'], array_column($krakow->json('data'), 'code'));
+        $row = $krakow->json('data.0');
+        // wartość oddziału: magazyn bez wartości partii → ilość oddziału × ostatnia PZ (nie 40 szt. ani partie Rzeszowa)
+        $this->assertEquals([30, 40, 150], [$row['quantity'], $row['stock_total'], $row['stock_value']]);
+        $this->assertSame('last_purchase', $row['value_source']);
+        $this->assertNull($row['unit_cost']);
+        $this->assertSame('2024-01-01', $row['oldest_lot_at']);
+        $this->assertSame(['01', '15'], array_column($row['warehouses'], 'location'));
+        $this->assertSame(['lots', 10.0], [$krakow->json('data.1.value_source'), (float) $krakow->json('data.1.unit_cost')]);
+        $this->assertSame(['items' => 2, 'value' => 180, 'value_unknown' => 0, 'without_card' => 2, 'never_sold' => 0], $krakow->json('summary'));
+        $this->assertSame(['15', 'Kraków'], [$krakow->json('location'), $krakow->json('location_name')]);
+        $this->assertSame([['key' => '01', 'name' => 'Rzeszów'], ['key' => '15', 'name' => 'Kraków'], ['key' => '20', 'name' => 'Sanok']], $krakow->json('locations'));
+
+        $rzeszow = $this->getJson('/api/inventory?location=01')->assertOk()->json('data');
+        $this->assertSame(['MIX'], array_column($rzeszow, 'code'));
+        $this->assertEquals([10, 100, 10], [$rzeszow[0]['quantity'], $rzeszow[0]['stock_value'], $rzeszow[0]['unit_cost']]);
+        $this->assertSame(['lots', '2025-01-01'], [$rzeszow[0]['value_source'], $rzeszow[0]['oldest_lot_at']]);
+
+        // sortowanie po stanie oddziału i wiek partii oddziału
+        $this->assertSame(['KRK', 'MIX'], $this->codes('location=15&sort=stock&dir=asc'));
+        $this->assertSame([], $this->codes('location=01&months=0&lot_months=24'));
+        $this->assertSame(['KRK', 'MIX'], $this->codes('location=15&months=0&lot_months=24&sort=code&dir=asc'));
+        $this->assertSame([], $this->codes('location=11'));
+
+        // bez oddziału po staremu: wszystkie magazyny, wartość partii nieznana (15H) → 40 × PZ
+        $all = collect($this->getJson('/api/inventory')->json('data'))->keyBy('code');
+        $this->assertEquals([40, 200, '2024-01-01'], [$all['MIX']['quantity'], $all['MIX']['stock_value'], $all['MIX']['oldest_lot_at']]);
+        $this->assertSame($mix->id, $all['MIX']['id']);
+
+        $this->getJson('/api/inventory?location=Rz')->assertUnprocessable();
+    }
+
     /** @return list<string> */
     private function codes(string $params): array
     {
@@ -182,6 +233,33 @@ final class InventoryApiTest extends TestCase
                 'document_price' => $price, 'currency' => 'PLN',
             ]);
         }
+        $this->gid++;
+
+        return $item;
+    }
+
+    /**
+     * Towar z rozbiciem na magazyny (także w tabeli stanów na magazyn, jak po odczycie z XL).
+     *
+     * @param  list<array{code: string, name: string, quantity: float|int, value: float|int|null, oldest_lot: string|null}>  $warehouses
+     */
+    private function placed(string $code, ?string $lastSale, float $price, array $warehouses): ErpItem
+    {
+        $total = array_sum(array_column($warehouses, 'quantity'));
+        $values = array_column($warehouses, 'value');
+        $lots = array_filter(array_map(static fn (array $w): ?string => $w['quantity'] > 0 ? $w['oldest_lot'] : null, $warehouses));
+        $item = ErpItem::query()->create([
+            'xl_gid' => $this->gid, 'code' => $code, 'name' => 'Towar '.$code, 'unit' => 'szt', 'archived' => false,
+            'stock_trade' => $total, 'stock_total' => $total, 'stock_value' => in_array(null, $values, true) ? null : array_sum($values),
+            'oldest_lot_at' => $lots === [] ? null : min($lots), 'stock_by_warehouse' => $warehouses,
+            'last_sale_at' => $lastSale, 'synced_at' => now(),
+        ]);
+        WarehouseLocations::replace((int) $item->id, $warehouses);
+        ErpItemPurchase::query()->create([
+            'erp_item_id' => $item->id, 'document_type' => 1489, 'document_id' => $this->gid, 'document_line' => 1, 'purchased_at' => '2025-08-20',
+            'supplier' => 'UVEX', 'quantity' => 1, 'document_unit' => 'szt', 'net_value_pln' => $price, 'unit_price_pln' => $price,
+            'document_price' => $price, 'currency' => 'PLN',
+        ]);
         $this->gid++;
 
         return $item;

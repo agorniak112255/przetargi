@@ -211,6 +211,23 @@ const WAREHOUSE_STOCK_LABEL: Record<Warehouses, string> = {
   all: 'cały towar (wszystkie)',
 }
 
+/** Oddział (magazyny łączone po cyfrach na początku kodu: 01H, 01MTU… = Rzeszów); null = wszystkie oddziały. */
+type Place = { key: string; name: string } | null
+
+/** Oddział w adresie: ?oddzial=01; bez parametru — wszystkie. */
+function placeFromParam(value: string | null): string {
+  return value && /^\d{1,10}$/.test(value) ? value : ''
+}
+
+/** Dopisek do tytułu okna: „(magazyny handlowe)”, z oddziałem „(Rzeszów, magazyny handlowe)”. */
+function scopeSuffix(warehouses: Warehouses, place: Place): string {
+  return place ? `(${place.name}, ${WAREHOUSE_LABEL[warehouses].toLowerCase()})` : WAREHOUSE_SUFFIX[warehouses]
+}
+
+function stockLabel(warehouses: Warehouses, place: Place): string {
+  return place ? `${WAREHOUSE_STOCK_LABEL[warehouses].replace('(', `(${place.name}, `)}` : WAREHOUSE_STOCK_LABEL[warehouses]
+}
+
 // Druk strony: bez menu (print:hidden w Layout) i przycisków, czarno na białym, jedna kartka A4.
 // Okno z listą (portal w <body>) w zwykłym druku znika; „Drukuj” w oknie ustawia na <body> klasę
 // board-print-modal i wtedy drukuje się samo okno (nagłówek + tabela), bez strony pod spodem.
@@ -310,6 +327,7 @@ function ShowList() {
 export function InventoryBoardReport() {
   const [params, setParams] = useSearchParams()
   const warehouses = warehousesFromParam(params.get('magazyny'))
+  const location = placeFromParam(params.get('oddzial'))
   const [report, setReport] = useState<BoardReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
@@ -321,14 +339,14 @@ export function InventoryBoardReport() {
     setLoading(true)
     setFailed(false)
     try {
-      const res = await api<BoardReport>(`/inventory/board?warehouses=${warehouses}`)
+      const res = await api<BoardReport>(`/inventory/board?warehouses=${warehouses}${location ? `&location=${location}` : ''}`)
       if (my === seq.current) setReport(res)
     } catch {
       if (my === seq.current) setFailed(true)
     } finally {
       if (my === seq.current) setLoading(false)
     }
-  }, [warehouses])
+  }, [warehouses, location])
 
   useEffect(() => {
     void load()
@@ -347,10 +365,31 @@ export function InventoryBoardReport() {
     )
   }
 
+  const chooseLocation = (value: string) => {
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (value) next.set('oddzial', value)
+        else next.delete('oddzial')
+        return next
+      },
+      { replace: true },
+    )
+  }
+
   const closeDetails = useCallback(() => setDetails(null), [])
 
   // Których magazynów dotyczą pokazane liczby: echo z serwera (w trakcie przełączania to jeszcze poprzednie).
   const shown: Warehouses = report?.warehouses ?? warehouses
+  const shownKey = report ? (report.location ?? '') : location
+  const shownPlace: Place = shownKey
+    ? { key: shownKey, name: report?.location_name ?? report?.locations?.find((l) => l.key === shownKey)?.name ?? `Magazyny ${shownKey}` }
+    : null
+  // Opcje oddziałów z raportu; wybrany z adresu zostaje na liście także przed pierwszą odpowiedzią.
+  const locationOptions = [...(report?.locations ?? [])]
+  if (location && !locationOptions.some((l) => l.key === location)) {
+    locationOptions.push({ key: location, name: shownPlace?.key === location ? shownPlace.name : `Magazyny ${location}` })
+  }
   const asOf = report?.as_of ? longDate(report.as_of) : null
 
   return (
@@ -364,11 +403,29 @@ export function InventoryBoardReport() {
             {report ? (asOf ? `Stan na ${asOf}` : 'Brak daty odczytu danych') : ''}
             <span className="text-lg text-slate-700">{report ? ' · ' : ''}dane z programu magazynowego z nocy</span>
           </p>
-          <p className="mt-1 hidden text-2xl font-semibold text-slate-900 print:block">{WAREHOUSE_LABEL[shown]}</p>
+          <p className="mt-1 hidden text-2xl font-semibold text-slate-900 print:block">
+            {shownPlace ? `Oddział ${shownPlace.name} — ${WAREHOUSE_LABEL[shown].toLowerCase()}` : WAREHOUSE_LABEL[shown]}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-3 print:hidden">
           <span className="text-lg text-slate-700">Magazyny:</span>
           <WarehouseSwitch value={warehouses} onChange={chooseWarehouses} />
+          <label className="flex items-center gap-2 text-lg text-slate-700">
+            Oddział:
+            <select
+              value={location}
+              onChange={(e) => chooseLocation(e.target.value)}
+              className={`rounded-xl border-2 border-slate-300 bg-white px-3 py-2 text-xl text-slate-800 ${FOCUS}`}
+              title="Magazyny łączone po cyfrach na początku kodu: 01H, 01MTU… = Rzeszów"
+            >
+              <option value="">Wszystkie</option>
+              {locationOptions.map((l) => (
+                <option key={l.key} value={l.key}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             type="button"
             onClick={() => window.print()}
@@ -400,7 +457,7 @@ export function InventoryBoardReport() {
             </p>
           )}
           <div className={loading ? 'opacity-50' : undefined} aria-busy={loading}>
-            <BoardView report={report} warehouses={shown} onOpen={setDetails} />
+            <BoardView report={report} warehouses={shown} place={shownPlace} onOpen={setDetails} />
           </div>
         </>
       )}
@@ -409,6 +466,7 @@ export function InventoryBoardReport() {
         <BoardDetailsModal
           request={details}
           warehouses={shown}
+          place={shownPlace}
           stockValue={report.stock.value}
           asOf={report.as_of}
           onClose={closeDetails}
@@ -453,10 +511,12 @@ function WarehouseSwitch({ value, onChange }: { value: Warehouses; onChange: (va
 function BoardView({
   report,
   warehouses,
+  place,
   onOpen,
 }: {
   report: BoardReport
   warehouses: Warehouses
+  place: Place
   onOpen: (request: DetailsRequest) => void
 }) {
   const stockValue = report.stock.value
@@ -485,7 +545,9 @@ function BoardView({
   if (empty) {
     return (
       <p className="text-2xl text-slate-800">
-        Brak danych o towarze w tych magazynach. Program magazynowy nie przekazał jeszcze stanu magazynów.
+        {place
+          ? `Brak towaru w tych magazynach oddziału ${place.name}.`
+          : 'Brak danych o towarze w tych magazynach. Program magazynowy nie przekazał jeszcze stanu magazynów.'}
       </p>
     )
   }
@@ -507,7 +569,7 @@ function BoardView({
         <KpiTile
           tone="neutral"
           value={fmtBig(stockValue)}
-          label={WAREHOUSE_STOCK_LABEL[warehouses]}
+          label={stockLabel(warehouses, place)}
           detail={
             report.split && warehouses === 'all'
               ? `${goods(report.stock.items)} · handlowe ${fmtBig(report.split.trade.value)}, usługowe ${fmtBig(report.split.service.value)}`
@@ -770,8 +832,9 @@ function BoardView({
       <footer className="board-block border-t border-slate-300 pt-3 text-base text-slate-700">
         <p>
           Wartość = cena zakupu towaru, który leży w magazynie, według programu magazynowego. Ilości i kwoty dotyczą
-          wybranych magazynów ({WAREHOUSE_LABEL[warehouses].toLowerCase()}); sprzedaż liczymy ze wszystkich magazynów
-          razem. Handlowe — towar na sprzedaż, usługowe — towar trzymany dla klientów. „Bez opisu” = ten sam rozmiar i
+          wybranych magazynów ({WAREHOUSE_LABEL[warehouses].toLowerCase()}
+          {place ? `, oddział ${place.name} — magazyny o kodach zaczynających się od ${place.key}` : ''}); sprzedaż
+          liczymy ze wszystkich magazynów razem. Handlowe — towar na sprzedaż, usługowe — towar trzymany dla klientów. „Bez opisu” = ten sam rozmiar i
           kolor, a na dokumencie wydania nie ma opisu, dlaczego towar wydano i przyjęto z powrotem; liczba „z …” przy
           osobie to wszystkie jej takie dokumenty.
         </p>
@@ -959,6 +1022,7 @@ function outOf(kind: DetailsRequest['kind'], n: number): string {
 function detailsPath(
   request: DetailsRequest,
   warehouses: Warehouses,
+  place: Place,
   perPage: number,
   page: number,
   query: string,
@@ -973,6 +1037,7 @@ function detailsPath(
     if (request.person) qs.set('operator', request.person.operator)
   }
   qs.set('warehouses', warehouses)
+  if (place) qs.set('location', place.key)
   qs.set('per_page', String(perPage))
   qs.set('page', String(page))
   if (query !== '') qs.set('search', query)
@@ -1046,12 +1111,14 @@ const MODAL_BUTTON = `rounded-lg border border-slate-300 bg-white px-4 py-1 text
 function BoardDetailsModal({
   request,
   warehouses,
+  place,
   stockValue,
   asOf,
   onClose,
 }: {
   request: DetailsRequest
   warehouses: Warehouses
+  place: Place
   stockValue: number
   asOf: string | null
   onClose: () => void
@@ -1070,7 +1137,7 @@ function BoardDetailsModal({
   const seq = useRef(0)
   const panelRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const path = detailsPath(request, warehouses, perPage, page, query, sort)
+  const path = detailsPath(request, warehouses, place, perPage, page, query, sort)
   const kind = request.kind
   const activeSort = sort ?? DEFAULT_SORT[kind]
 
@@ -1209,7 +1276,7 @@ function BoardDetailsModal({
   const lastPage = Math.max(1, meta?.last_page ?? 1)
   const rowCount = loaded?.res.data.length ?? 0
   const firstNr = meta ? (meta.current_page - 1) * meta.per_page + 1 : 1
-  const suffix = WAREHOUSE_SUFFIX[warehouses]
+  const suffix = scopeSuffix(warehouses, place)
   const unexplained = request.kind === 'moves' && request.scope === 'unexplained'
 
   let title: string

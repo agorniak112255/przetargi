@@ -10,6 +10,7 @@ use App\Models\ErpItemPurchase;
 use App\Models\ErpRwPwPair;
 use App\Services\Erp\ErpItemCards;
 use App\Services\Erp\InventoryQuery;
+use App\Services\Erp\WarehouseLocations;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -21,6 +22,10 @@ use Illuminate\Validation\Rule;
  * Zakładka „Zapasy”: towary ERP XL ze stanem (wszystkie magazyny), które nie sprzedały się od N miesięcy albo leżą od N
  * miesięcy. Reguły wartości i zalegania w InventoryQuery (wspólne z raportem dla zarządu). Wiersz = towar XL (także bez
  * karty katalogu — to większość towarów). Dane z nocnej kopii XL (2:00); niczego nie zapisuje.
+ *
+ * Filtr oddziału (location, np. '01' Rzeszów — WarehouseLocations): towar ze stanem w magazynach oddziału; ilość, wartość
+ * i najstarsza partia wiersza, sumy i sortowanie liczone tylko z tych magazynów. Ostatnia sprzedaż — dalej z dowolnego
+ * magazynu.
  */
 class InventoryController extends Controller
 {
@@ -34,16 +39,7 @@ class InventoryController extends Controller
     /** Grupy asortymentu XL po pierwszej literze kodu towaru (jak ekran Powiązania z ERP XL). */
     private const GROUPS = ['A', 'B', 'S', 'T', 'H'];
 
-    private const VALUE_SQL = InventoryQuery::VALUE_SQL;
-
-    private const SORTS = [
-        'value' => 'value',
-        'stock' => 'stock_total',
-        'last_sale' => 'last_sale_at',
-        'oldest_lot' => 'oldest_lot_at',
-        'code' => 'code',
-        'name' => 'name',
-    ];
+    private const SORTS = ['value', 'stock', 'last_sale', 'oldest_lot', 'code', 'name'];
 
     /** Znacznik „RW/PW ×N” przy towarze: pary z 12 miesięcy, PW do 3 dni po RW — jak domyślne filtry podzakładki. */
     private const RW_PW_MONTHS = 12;
@@ -64,7 +60,9 @@ class InventoryController extends Controller
             'group' => ['nullable', 'string', Rule::in(['', ...self::GROUPS, 'other'])],
             'supplier' => ['nullable', 'string', 'max:100'],
             'search' => ['nullable', 'string', 'max:150'],
-            'sort' => ['nullable', 'string', Rule::in(array_keys(self::SORTS))],
+            // oddział: cyfry z początku kodu magazynu (01 = Rzeszów)
+            'location' => ['nullable', 'string', 'regex:/^\d{1,10}$/'],
+            'sort' => ['nullable', 'string', Rule::in(self::SORTS)],
             'dir' => ['nullable', 'string', Rule::in(['asc', 'desc'])],
             'page' => ['nullable', 'integer', 'min:1'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:200'],
@@ -75,21 +73,30 @@ class InventoryController extends Controller
         $lotMonths = (int) ($v['lot_months'] ?? 0);
         $lotCutoff = $lotMonths > 0 ? CarbonImmutable::today()->subMonthsNoOverflow($lotMonths) : null;
         $neverSold = ! array_key_exists('never_sold', $v) || $v['never_sold'] === null || (bool) $v['never_sold'];
-        $query = $this->filtered($v, $cutoff, $neverSold, $lotCutoff);
+        $location = isset($v['location']) && $v['location'] !== '' ? (string) $v['location'] : null;
+        $query = $this->filtered($v, $cutoff, $neverSold, $lotCutoff, $location);
 
-        $totals = InventoryQuery::totals($query);
+        $totals = InventoryQuery::totals($query, 'all', $location);
         $neverSoldCount = (clone $query)->whereNull('last_sale_at')->count();
         $withoutCard = (clone $query)->whereDoesntHave('links', fn (Builder $q) => ErpItemCards::linked($q))->count();
 
         $dir = ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
-        $sort = self::SORTS[$v['sort'] ?? 'value'];
-        $query->select('erp_items.*')->selectRaw(self::VALUE_SQL.' as purchase_value');
-        if ($sort === 'value') {
+        $value = InventoryQuery::valueSql('all', $location);
+        $quantity = InventoryQuery::quantitySql('all', $location);
+        $lot = InventoryQuery::oldestLotSql('all', $location);
+        $query->select('erp_items.*')
+            ->selectRaw($value.' as purchase_value')
+            ->selectRaw($quantity.' as scope_quantity')
+            ->selectRaw($lot.' as scope_oldest_lot');
+        match ($v['sort'] ?? 'value') {
             // towary bez ceny zakupu na końcu w obu kierunkach
-            $query->orderByRaw(self::VALUE_SQL.' is null')->orderByRaw(self::VALUE_SQL.' '.$dir);
-        } else {
-            $query->orderBy($sort, $dir);
-        }
+            'value' => $query->orderByRaw($value.' is null')->orderByRaw($value.' '.$dir),
+            'stock' => $query->orderByRaw($quantity.' '.$dir),
+            'oldest_lot' => $query->orderByRaw($lot.' '.$dir),
+            'last_sale' => $query->orderBy('last_sale_at', $dir),
+            'code' => $query->orderBy('code', $dir),
+            'name' => $query->orderBy('name', $dir),
+        };
         $page = $query
             ->orderBy('id')
             ->with([...ErpItemCards::eagerLinks(), 'purchases'])
@@ -100,7 +107,7 @@ class InventoryController extends Controller
         $syncedAt = ErpItem::query()->whereNull('removed_at')->max('synced_at');
 
         return response()->json([
-            'data' => $page->getCollection()->map(fn (ErpItem $item): array => $this->present($item, $cards[(int) $item->id], $rwPw[(int) $item->id] ?? 0))->values()->all(),
+            'data' => $page->getCollection()->map(fn (ErpItem $item): array => $this->present($item, $cards[(int) $item->id], $rwPw[(int) $item->id] ?? 0, $location))->values()->all(),
             'meta' => [
                 'current_page' => $page->currentPage(),
                 'last_page' => $page->lastPage(),
@@ -116,6 +123,9 @@ class InventoryController extends Controller
             ],
             'cutoff' => $cutoff?->toDateString(),
             'lot_cutoff' => $lotCutoff?->toDateString(),
+            'location' => $location,
+            'location_name' => $location !== null ? WarehouseLocations::name($location) : null,
+            'locations' => WarehouseLocations::available(),
             'synced_at' => $syncedAt !== null ? Carbon::parse((string) $syncedAt)->toIso8601String() : null,
         ]);
     }
@@ -124,14 +134,14 @@ class InventoryController extends Controller
      * @param  array<string, mixed>  $v
      * @return Builder<ErpItem>
      */
-    private function filtered(array $v, ?CarbonImmutable $cutoff, bool $neverSold, ?CarbonImmutable $lotCutoff = null): Builder
+    private function filtered(array $v, ?CarbonImmutable $cutoff, bool $neverSold, ?CarbonImmutable $lotCutoff = null, ?string $location = null): Builder
     {
-        $query = InventoryQuery::inStock();
+        $query = InventoryQuery::inStock('all', $location);
         if ($cutoff !== null) {
-            InventoryQuery::unsoldSince($query, $cutoff, $neverSold);
+            InventoryQuery::unsoldSince($query, $cutoff, $neverSold, 'all', $location);
         }
         if ($lotCutoff !== null) {
-            InventoryQuery::lotOlderThan($query, $lotCutoff);
+            InventoryQuery::lotOlderThan($query, $lotCutoff, 'all', $location);
         }
 
         $card = (string) ($v['card'] ?? '');
@@ -197,10 +207,27 @@ class InventoryController extends Controller
      * @param  array{card: array<string, mixed>|null, cards_count: int}  $card
      * @return array<string, mixed>
      */
-    private function present(ErpItem $item, array $card, int $rwPwPairs): array
+    private function present(ErpItem $item, array $card, int $rwPwPairs, ?string $location = null): array
     {
         /** @var ErpItemPurchase|null $purchase */
         $purchase = $item->purchases->first();
+        $warehouses = $item->stock_by_warehouse ?? [];
+        $quantity = (float) $item->getAttribute('scope_quantity');
+        // wartość partii zakresu (wszystkie magazyny albo magazyny oddziału); null = któryś magazyn bez wartości z XL
+        $lotsValue = $item->stock_value !== null ? (float) $item->stock_value : null;
+        if ($location !== null) {
+            $lotsValue = 0.0;
+            foreach ($warehouses as $w) {
+                if (WarehouseLocations::of((string) ($w['code'] ?? '')) !== $location) {
+                    continue;
+                }
+                if (! isset($w['value'])) {
+                    $lotsValue = null;
+                    break;
+                }
+                $lotsValue += (float) $w['value'];
+            }
+        }
 
         return [
             'id' => $item->id,
@@ -212,26 +239,28 @@ class InventoryController extends Controller
             'archived' => (bool) $item->archived,
             'stock_total' => (float) $item->stock_total,
             'stock_trade' => (float) $item->stock_trade,
+            // ilość w wybranych magazynach: oddział z filtra, bez niego wszystkie (= stock_total)
+            'quantity' => round($quantity, 4),
             // ilość × cena zakupu: partie na stanie, a bez nich stan × ostatnia PZ; null = ani partii, ani PZ z ceną
             'stock_value' => $item->getAttribute('purchase_value') !== null ? round((float) $item->getAttribute('purchase_value'), 2) : null,
             'value_source' => match (true) {
-                $item->stock_value !== null => 'lots',
+                $lotsValue !== null => 'lots',
                 $item->getAttribute('purchase_value') !== null => 'last_purchase',
                 default => null,
             },
             // średnia cena zakupu towaru na stanie = wartość partii ÷ ilość; ostatnia PZ bywa błędna (SNAU51000-04-S:
             // PZ 1 szt. za 11 600,60 zł, partie po korekcie RW/PW po 290,02 zł)
-            'unit_cost' => $item->stock_value !== null && (float) $item->stock_total > 0
-                ? round((float) $item->stock_value / (float) $item->stock_total, 4)
-                : null,
+            'unit_cost' => $lotsValue !== null && $quantity > 0 ? round($lotsValue / $quantity, 4) : null,
             'warehouses' => array_values(array_map(static fn (array $w): array => [
                 'code' => (string) ($w['code'] ?? ''),
                 'name' => (string) ($w['name'] ?? ''),
                 'quantity' => (float) ($w['quantity'] ?? 0),
                 'value' => isset($w['value']) ? (float) $w['value'] : null,
-            ], $item->stock_by_warehouse ?? [])),
+                'location' => WarehouseLocations::of((string) ($w['code'] ?? '')),
+            ], $warehouses)),
             'last_sale_at' => $item->last_sale_at?->toDateString(),
-            'oldest_lot_at' => $item->oldest_lot_at?->toDateString(),
+            // najstarsza partia w wybranych magazynach
+            'oldest_lot_at' => $item->getAttribute('scope_oldest_lot') !== null ? substr((string) $item->getAttribute('scope_oldest_lot'), 0, 10) : null,
             'last_purchase' => $purchase === null ? null : [
                 'date' => $purchase->purchased_at?->toDateString(),
                 'supplier' => $purchase->supplier,

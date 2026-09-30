@@ -135,6 +135,8 @@ export function Inventory() {
   const group = pick<string>(params.get('group'), GROUPS, '')
   const supplier = params.get('supplier') ?? ''
   const search = params.get('search') ?? ''
+  // oddział: cyfry z początku kodu magazynu (01 = Rzeszów); '' = wszystkie
+  const location = /^\d{1,10}$/.test(params.get('location') ?? '') ? (params.get('location') as string) : ''
   const sort = pick<SortKey>(params.get('sort'), SORT_KEYS, 'value')
   const dir = pick<SortDir>(params.get('dir'), ['asc', 'desc'], DEFAULT_DIR[sort])
   const page = Math.max(1, Math.floor(Number(params.get('page'))) || 1)
@@ -147,6 +149,7 @@ export function Inventory() {
     if (lotMonths !== DEFAULT_LOT_MONTHS) qs.set('lot_months', lotMonths)
     if (card) qs.set('card', card)
     if (group) qs.set('group', group)
+    if (location) qs.set('location', location)
     if (supplier.trim()) qs.set('supplier', supplier.trim())
     if (search.trim()) qs.set('search', search.trim())
     qs.set('sort', sort)
@@ -154,7 +157,7 @@ export function Inventory() {
     qs.set('page', String(page))
     qs.set('per_page', perPage)
     return qs.toString()
-  }, [months, neverSold, lotMonths, card, group, supplier, search, sort, dir, page, perPage])
+  }, [months, neverSold, lotMonths, card, group, location, supplier, search, sort, dir, page, perPage])
 
   const [result, setResult] = useState<InventoryResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -265,7 +268,7 @@ export function Inventory() {
   }
 
   const hasFilters = Boolean(
-    months !== DEFAULT_MONTHS || !neverSold || lotMonths !== DEFAULT_LOT_MONTHS || card || group || supplier || search,
+    months !== DEFAULT_MONTHS || !neverSold || lotMonths !== DEFAULT_LOT_MONTHS || card || group || location || supplier || search,
   )
   const rows = result?.data ?? []
   const meta = result?.meta
@@ -274,6 +277,10 @@ export function Inventory() {
   const to = from != null ? from + rows.length - 1 : null
   const pages = meta ? pageNumbers(meta.current_page, Math.max(1, meta.last_page)) : []
   const colCount = 9 + (canCampaign ? 1 : 0)
+  // Oddziały z odpowiedzi; wybrany z adresu zostaje na liście także przed pierwszą odpowiedzią.
+  const locations = result?.locations ?? []
+  const locationName = locations.find((l) => l.key === location)?.name ?? result?.location_name ?? (location ? `Magazyny ${location}` : '')
+  const locationOptions = location && !locations.some((l) => l.key === location) ? [...locations, { key: location, name: locationName }] : locations
   const allVisibleSelected = rows.length > 0 && rows.every((r) => selected.has(r.id))
   const selectedRows = [...selected.values()]
   const selectedValue = selectedRows.reduce((sum, r) => sum + (r.stock_value ?? 0), 0)
@@ -370,6 +377,7 @@ export function Inventory() {
                 {` · ${perPage}/stronę`}
                 {result?.cutoff ? ` · bez sprzedaży od ${formatDate(result.cutoff)}` : ''}
                 {result?.lot_cutoff ? ` · partia leży od ${formatDate(result.lot_cutoff)} lub dłużej` : ''}
+                {location ? ` · oddział ${locationName}` : ''}
                 {loading ? ' · ładowanie…' : ''}
               </>
             ) : loading ? (
@@ -382,6 +390,8 @@ export function Inventory() {
             Towary z Comarch ERP XL, które mają stan (wszystkie magazyny) i nie sprzedały się od wybranej liczby
             miesięcy. Wartość = ilość × cena zakupu partii leżących na magazynie (z XL); dopóki XL nie poda partii —
             stan × cena z ostatniej PZ.
+            {location &&
+              ` Oddział ${locationName}: stan, wartość i najstarsza partia tylko z magazynów oddziału (kody ${location}…); ostatnia sprzedaż — z dowolnego magazynu.`}
             {canCampaign && ` Zaznacz pozycje i dodaj je do kampanii (najwyżej ${CAMPAIGN_MAX_ITEMS}, Shift+klik: zakres).`}
           </p>
         </div>
@@ -458,6 +468,22 @@ export function Inventory() {
           title="Najstarsza partia na stanie przyjęta co najmniej tyle miesięcy temu. Uwaga: RW + PW zakłada nową partię i „odmładza” tę datę (znacznik RW/PW)."
           onChange={(m) => setFilters({ lot_months: m === DEFAULT_LOT_MONTHS ? null : m })}
         />
+        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          Oddział
+          <select
+            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-800"
+            value={location}
+            onChange={(e) => setFilters({ location: e.target.value || null })}
+            title="Magazyny oddziału — łączone po cyfrach na początku kodu (01H, 01MTU… = Rzeszów). Stan, wartość i wiek partii tylko z tych magazynów."
+          >
+            <option value="">wszystkie</option>
+            {locationOptions.map((l) => (
+              <option key={l.key} value={l.key}>
+                {l.name} ({l.key})
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
           Karta
           <select
@@ -571,6 +597,7 @@ export function Inventory() {
                 striped={i % 2 === 1}
                 onOpenCard={setPreviewId}
                 canRwPw={canRwPw}
+                location={location ? { key: location, name: locationName } : null}
                 selection={
                   canCampaign
                     ? { checked: selected.has(row.id), onToggle: (shiftKey) => toggleRow(i, shiftKey) }
@@ -661,6 +688,7 @@ function InventoryTableRow({
   striped,
   onOpenCard,
   canRwPw,
+  location,
   selection,
 }: {
   row: InventoryRow
@@ -669,6 +697,8 @@ function InventoryTableRow({
   onOpenCard: (productId: number) => void
   /** Link do zakładki RW → PW tylko z uprawnieniem inventory.view (handlowiec widzi sam znacznik). */
   canRwPw: boolean
+  /** Filtr oddziału: stan i magazyny pod nim tylko z oddziału; null = wszystkie magazyny. */
+  location: { key: string; name: string } | null
   /** Kolumna zaznaczania do kampanii; brak = bez kolumny. */
   selection?: { checked: boolean; onToggle: (shiftKey: boolean) => void }
 }) {
@@ -771,12 +801,20 @@ function InventoryTableRow({
       <td className="whitespace-nowrap p-2 text-right">
         <span
           className="font-semibold tabular-nums text-slate-800"
-          title={`Wszystkie magazyny: ${erpQty(row.stock_total)}${unit} · HANDEL: ${erpQty(row.stock_trade)}${unit}`}
+          title={`${location ? `Oddział ${location.name}: ${erpQty(row.quantity)}${unit} · ` : ''}Wszystkie magazyny: ${erpQty(row.stock_total)}${unit} · HANDEL: ${erpQty(row.stock_trade)}${unit}`}
         >
-          {erpQty(row.stock_total)}
+          {erpQty(row.quantity)}
         </span>
         <span className="text-slate-500">{unit}</span>
-        <WarehouseChips warehouses={row.warehouses} unit={unit} />
+        <WarehouseChips
+          warehouses={location ? row.warehouses.filter((w) => w.location === location.key) : row.warehouses}
+          unit={unit}
+        />
+        {location && row.stock_total !== row.quantity && (
+          <div className="mt-0.5 text-[11px] text-slate-500" title="Stan we wszystkich magazynach (wszystkie oddziały)">
+            razem {erpQty(row.stock_total)}
+          </div>
+        )}
       </td>
       <td className="whitespace-nowrap p-2 text-right tabular-nums">
         {row.stock_value != null ? (
@@ -785,7 +823,7 @@ function InventoryTableRow({
             title={
               row.value_source === 'lots'
                 ? 'Ilość × cena zakupu każdej partii leżącej na magazynie (wartość partii z XL)'
-                : `${erpQty(row.stock_total)}${unit} × ${erpUnitPrice(row.last_purchase?.unit_price_pln ?? null)} zł z ostatniej PZ — XL nie podał jeszcze wartości partii (odczyt nocny o 2:00). PZ poprawiona później przez RW/PW daje tu złą kwotę.`
+                : `${erpQty(row.quantity)}${unit} × ${erpUnitPrice(row.last_purchase?.unit_price_pln ?? null)} zł z ostatniej PZ — XL nie podał jeszcze wartości partii (odczyt nocny o 2:00). PZ poprawiona później przez RW/PW daje tu złą kwotę.`
             }
           >
             <span className="font-semibold text-slate-900">{fmtMoney(row.stock_value)}</span>

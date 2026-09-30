@@ -11,8 +11,10 @@ use App\Models\Product;
 use App\Services\Erp\ErpCardStock;
 use App\Services\Erp\ErpItemSync;
 use App\Services\Erp\ErpXlGateway;
+use App\Services\Erp\WarehouseLocations;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use RuntimeException;
 use Tests\Support\FakeErpXlGateway;
 use Tests\TestCase;
@@ -221,6 +223,42 @@ final class ErpItemSyncTest extends TestCase
         $this->assertSame('2026-05-18', $a->oldest_lot_at?->toDateString());
         // brak stanu = wartość 0, nie „nieznana”
         $this->assertSame('0.00', ErpItem::query()->where('xl_gid', 2)->value('stock_value'));
+    }
+
+    public function test_stock_per_warehouse_rows_follow_breakdown_with_location_from_code(): void
+    {
+        $this->xl->items = [FakeErpXlGateway::item(1, 'A1', 'Towar A'), FakeErpXlGateway::item(2, 'B2', 'Towar B')];
+        $this->xl->stockRows = [
+            ['gid' => 1, 'warehouse_code' => '01H', 'warehouse_name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 8.0, 'value' => 80.0, 'oldest_lot' => 1147942279],
+            ['gid' => 1, 'warehouse_code' => '01MTU', 'warehouse_name' => 'Magazyn MTU', 'quantity' => 2.0, 'oldest_lot' => null],
+            ['gid' => 1, 'warehouse_code' => '15H', 'warehouse_name' => 'Magazyn HANDEL Kraków', 'quantity' => 1.0, 'value' => 10.0, 'oldest_lot' => 1128261658],
+            ['gid' => 2, 'warehouse_code' => '20H', 'warehouse_name' => 'Magazyn HANDEL - Sanok', 'quantity' => 3.0, 'value' => 30.0, 'oldest_lot' => null],
+        ];
+        app(ErpItemSync::class)->run();
+
+        $a = ErpItem::query()->where('xl_gid', 1)->firstOrFail();
+        $rows = DB::table(WarehouseLocations::TABLE)->where('erp_item_id', $a->id)->orderBy('warehouse_code')->get();
+        $this->assertSame(['01H', '01MTU', '15H'], $rows->pluck('warehouse_code')->all());
+        $this->assertSame(['01', '01', '15'], $rows->pluck('location')->all());
+        $this->assertEquals([8, 2, 1], $rows->pluck('quantity')->map(fn ($q) => (float) $q)->all());
+        $this->assertEquals([80.0, null, 10.0], $rows->pluck('value')->map(fn ($v) => $v === null ? null : (float) $v)->all());
+        $this->assertSame(['2026-05-18', null, '2025-10-02'], $rows->pluck('oldest_lot_at')->map(fn ($d) => $d === null ? null : substr((string) $d, 0, 10))->all());
+
+        // odświeżenie stanów: towar przeniesiony do Tarnowa, B wyprzedany
+        $this->xl->stockRows = [
+            ['gid' => 1, 'warehouse_code' => '11H', 'warehouse_name' => 'Magazyn HANDEL - Tarnów', 'quantity' => 11.0, 'value' => 110.0, 'oldest_lot' => 1147942279],
+        ];
+        $this->assertSame(0, Artisan::call('erp:stock'));
+        $this->assertSame(['11H' => '11'], DB::table(WarehouseLocations::TABLE)->where('erp_item_id', $a->id)->pluck('location', 'warehouse_code')->all());
+        $b = ErpItem::query()->where('xl_gid', 2)->firstOrFail();
+        $this->assertSame(0, DB::table(WarehouseLocations::TABLE)->where('erp_item_id', $b->id)->count());
+
+        // nocna kopia też zastępuje, nie dopisuje
+        $this->xl->stockRows = [['gid' => 1, 'warehouse_code' => '13H', 'warehouse_name' => 'Magazyn HANDEL Stalowa Wola', 'quantity' => 1.0]];
+        app(ErpItemSync::class)->run();
+        $this->assertSame(['13H' => '13'], DB::table(WarehouseLocations::TABLE)->where('erp_item_id', $a->id)->pluck('location', 'warehouse_code')->all());
+        $this->assertSame('Magazyny 99', WarehouseLocations::name('99'));
+        $this->assertNull(WarehouseLocations::of('MAG'));
     }
 
     public function test_refuses_to_run_when_not_configured_and_command_skips_quietly(): void

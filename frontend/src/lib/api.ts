@@ -660,7 +660,12 @@ export type InventoryWarehouse = {
   name: string
   quantity: number
   value: number | null
+  /** Oddział: cyfry z początku kodu (01H, 01MTU → '01'); null = kod bez cyfr. */
+  location: string | null
 }
+
+/** Oddział magazynów do filtra Zapasów i raportu dla zarządu (key = cyfry z początku kodu magazynu, np. '01'). */
+export type InventoryLocation = { key: string; name: string }
 
 /** Towar z ERP XL ze stanem, bez sprzedaży od progu (GET /api/inventory). */
 export type InventoryRow = {
@@ -676,7 +681,12 @@ export type InventoryRow = {
   stock_total: number
   /** Magazyny HANDEL (informacyjnie). */
   stock_trade: number
-  /** Ilość × cena zakupu w PLN: partie leżące na stanie (XL), a bez nich stan × cena ostatniej PZ; null = brak obu. */
+  /** Ilość w oddziale z filtra `location`; bez filtra = stock_total. */
+  quantity: number
+  /**
+   * Ilość × cena zakupu w PLN: partie leżące na stanie (XL), a bez nich stan × cena ostatniej PZ; null = brak obu.
+   * Z filtrem oddziału — tylko jego magazyny (tak samo value_source, unit_cost i oldest_lot_at).
+   */
   stock_value: number | null
   /** Skąd wartość: partie na stanie albo — do pierwszego odczytu partii — ostatnia PZ. */
   value_source: 'lots' | 'last_purchase' | null
@@ -717,6 +727,11 @@ export type InventoryResponse = {
   cutoff: string | null
   /** 'YYYY-MM-DD' — najstarsza partia przyjęta najpóźniej tego dnia; null = bez warunku wieku partii. */
   lot_cutoff: string | null
+  /** Echo filtra oddziału; null = wszystkie. */
+  location: string | null
+  location_name: string | null
+  /** Oddziały, w których jest jakikolwiek towar — opcje filtra. */
+  locations: InventoryLocation[]
   /** ISO — odczyt z XL (raz na dobę o 2:00). */
   synced_at: string | null
 }
@@ -734,7 +749,12 @@ export type InventoryBoardWarehouses = 'trade' | 'service' | 'all'
 export type InventoryBoardReport = {
   /** Echo parametru — których magazynów dotyczą ilości i kwoty w odpowiedzi. */
   warehouses: InventoryBoardWarehouses
-  /** Cały towar osobno w magazynach handlowych i usługowych (niezależnie od `warehouses`). */
+  /** Echo oddziału (parametr `location` we wszystkich /api/inventory/board*); null = wszystkie oddziały. */
+  location: string | null
+  location_name: string | null
+  /** Oddziały, w których jest jakikolwiek towar — opcje przełącznika. */
+  locations: InventoryLocation[]
+  /** Cały towar osobno w magazynach handlowych i usługowych (niezależnie od `warehouses`, w wybranym oddziale). */
   split: { trade: { items: number; value: number }; service: { items: number; value: number } }
   /** ISO — kiedy odczytano dane z XL. */
   as_of: string | null

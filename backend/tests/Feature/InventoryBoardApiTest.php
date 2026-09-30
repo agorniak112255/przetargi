@@ -6,14 +6,17 @@ namespace Tests\Feature;
 
 use App\Models\ErpItem;
 use App\Models\ErpItemLink;
+use App\Models\ErpItemPurchase;
 use App\Models\ErpRwPwPair;
 use App\Models\ErpWarehouse;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\Erp\WarehouseLocations;
 use App\Services\Erp\WarehouseSplit;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
@@ -123,6 +126,76 @@ final class InventoryBoardApiTest extends TestCase
         $row = $this->getJson('/api/inventory/board/items?bucket=stock&warehouses=trade')->assertOk()->json('data.0');
         $this->assertSame(['TGAS', 60, 600, 10, '2024-06-01'], [$row['code'], (int) $row['quantity'], (int) $row['value'], (int) $row['unit_cost'], $row['oldest_lot_at']]);
         $this->assertStringContainsString('(magazyny usługowe)', $this->getJson('/api/inventory/board/items?bucket=stock&warehouses=service')->json('title'));
+    }
+
+    public function test_location_narrows_tiles_windows_and_documents_to_its_warehouses(): void
+    {
+        // Rzeszów (01H) stara partia, Tarnów (11H) świeża dostawa tego samego towaru
+        $kurtka = $this->item('AKURTKA', 'KURTKA', 15, 1500, lastSale: '2025-01-01', oldestLot: '2020-01-01', warehouses: [
+            ['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 10, 'value' => 1000, 'oldest_lot' => '2020-01-01'],
+            ['code' => '11H', 'name' => 'Magazyn HANDEL - Tarnów', 'quantity' => 5, 'value' => 500, 'oldest_lot' => '2026-08-01'],
+        ]);
+        // 01MTU to też Rzeszów
+        $this->item('BBUT', 'BUT', 4, 400, lastSale: '2025-06-01', oldestLot: '2024-01-01', warehouses: [
+            ['code' => '01MTU', 'name' => 'Magazyn MTU', 'quantity' => 4, 'value' => 400, 'oldest_lot' => '2024-01-01'],
+        ]);
+        // usługowy magazyn Rzeszowa
+        $this->item('SGAS', 'GAŚNICA', 3, 300, lastSale: '2024-01-01', oldestLot: '2021-01-01', warehouses: [
+            ['code' => '01M', 'name' => 'Magazyn materiałów - Rzeszów', 'quantity' => 3, 'value' => 300, 'oldest_lot' => '2021-01-01'],
+        ]);
+        // Tarnów bez wartości partii — ilość × ostatnia PZ; nigdy nie sprzedany
+        $tar = $this->item('TTAR', 'TARNOWSKI', 2, 0, lastSale: null, oldestLot: '2022-01-01', warehouses: [
+            ['code' => '11H', 'name' => 'Magazyn HANDEL - Tarnów', 'quantity' => 2, 'value' => null, 'oldest_lot' => '2022-01-01'],
+        ]);
+        ErpItemPurchase::query()->create([
+            'erp_item_id' => $tar->id, 'document_type' => 1489, 'document_id' => 1, 'document_line' => 1, 'purchased_at' => '2022-01-01',
+            'supplier' => 'X', 'quantity' => 2, 'document_unit' => 'szt', 'net_value_pln' => 50, 'unit_price_pln' => 25, 'document_price' => 25, 'currency' => 'PLN',
+        ]);
+        $this->item('H15', 'KRAKOWSKI', 1, 10, lastSale: '2026-09-01', oldestLot: '2026-01-01', warehouses: [
+            ['code' => '15H', 'name' => 'Magazyn HANDEL Kraków', 'quantity' => 1, 'value' => 10, 'oldest_lot' => '2026-01-01'],
+        ]);
+        $this->pair($kurtka, '2026-06-01', 'NOMA', 'Nowak Maria', 70, warehouse: '01H');
+        $this->pair($kurtka, '2026-06-02', 'CZAL', 'Czajka Alicja', 30, warehouse: '11H');
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $rze = $this->getJson('/api/inventory/board?location=01')->assertOk();
+        $this->assertSame(['01', 'Rzeszów'], [$rze->json('location'), $rze->json('location_name')]);
+        $this->assertSame(['01', '11', '15'], array_column($rze->json('locations'), 'key'));
+        $this->assertEquals(['items' => 2, 'value' => 1400], $rze->json('stock'));
+        $this->assertEquals(['trade' => ['items' => 2, 'value' => 1400], 'service' => ['items' => 1, 'value' => 300]], $rze->json('split'));
+        // w Rzeszowie kurtka leży od 2020 — ponad 3 lata
+        $this->assertEquals(['months' => 36, 'items' => 1, 'value' => 1000], $rze->json('stale_lot.0'));
+        $this->assertSame(['total' => 1, 'unexplained' => 1, 'unexplained_value' => 70.0], [
+            'total' => $rze->json('internal_moves.total'), 'unexplained' => $rze->json('internal_moves.unexplained'), 'unexplained_value' => (float) $rze->json('internal_moves.unexplained_value'),
+        ]);
+        $this->assertEquals(['items' => 3, 'value' => 1700], $this->getJson('/api/inventory/board?location=01&warehouses=all')->json('stock'));
+
+        $tarnow = $this->getJson('/api/inventory/board?location=11')->assertOk();
+        $this->assertEquals(['items' => 2, 'value' => 550], $tarnow->json('stock'));
+        // kurtka w Tarnowie to świeża dostawa; stary jest tylko nigdy niesprzedany TTAR
+        $this->assertEquals(['months' => 36, 'items' => 1, 'value' => 50], $tarnow->json('stale_lot.0'));
+        $this->assertEquals(['items' => 1, 'value' => 50], $tarnow->json('never_sold'));
+        $this->assertEquals(0, $this->getJson('/api/inventory/board?location=11&warehouses=service')->json('stock.items'));
+
+        $window = $this->getJson('/api/inventory/board/items?bucket=stock&location=11')->assertOk();
+        $this->assertStringContainsString('(Tarnów, magazyny handlowe)', $window->json('title'));
+        $this->assertSame(['AKURTKA', 'TTAR'], array_column($window->json('data'), 'code'));
+        $this->assertSame([5, 500, 100, '2026-08-01'], [
+            (int) $window->json('data.0.quantity'), (int) $window->json('data.0.value'), (int) $window->json('data.0.unit_cost'), $window->json('data.0.oldest_lot_at'),
+        ]);
+        $this->assertEquals(50, $window->json('data.1.value'));
+        $this->assertEquals(['items' => 2, 'value' => 550], $window->json('totals'));
+        $this->assertSame(['TTAR'], array_column($this->getJson('/api/inventory/board/items?bucket=stock&location=11&search=tarnowski')->json('data'), 'code'));
+
+        $moves = $this->getJson('/api/inventory/board/moves?scope=all&location=11')->assertOk();
+        $this->assertEquals(['pairs' => 1, 'value' => 30], $moves->json('totals'));
+        $this->assertSame('Czajka Alicja', $moves->json('data.0.operator_name'));
+        $this->assertStringContainsString('(Tarnów, magazyny handlowe)', $moves->json('title'));
+
+        // oddział bez towaru — puste liczby; nie cyfry — błąd
+        $this->assertEquals(['items' => 0, 'value' => 0], $this->getJson('/api/inventory/board?location=99')->assertOk()->json('stock'));
+        $this->getJson('/api/inventory/board?location=Rz')->assertUnprocessable();
+        $this->getJson('/api/inventory/board/items?bucket=stock&location=01%27')->assertUnprocessable();
     }
 
     public function test_items_window_pages_groups_and_totals(): void
@@ -271,7 +344,11 @@ final class InventoryBoardApiTest extends TestCase
         $this->assertSame('0.0000', $item->fresh()->stock_service);
 
         ErpWarehouse::query()->create(['code' => '05X', 'name' => 'Nowy', 'is_service' => true]);
+        DB::table(WarehouseLocations::TABLE)->delete();
         $this->assertSame(0, Artisan::call('erp:warehouse-split'));
+        // stan na magazyn (oddziały) odbudowany z zapisanego rozbicia
+        $this->assertSame(['01H' => '01', '05X' => '05'], DB::table(WarehouseLocations::TABLE)
+            ->where('erp_item_id', $item->id)->orderBy('warehouse_code')->pluck('location', 'warehouse_code')->all());
 
         $item->refresh();
         $this->assertSame(['40.0000', '400.00', '2024-06-01', '2020-01-01'], [
@@ -290,12 +367,15 @@ final class InventoryBoardApiTest extends TestCase
         $warehouses ??= $stock > 0 ? [['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => $stock, 'value' => $value]] : [];
         $split = WarehouseSplit::compute($warehouses, ErpWarehouse::serviceCodes(), $oldestLot);
 
-        return ErpItem::query()->create([
+        $item = ErpItem::query()->create([
             'xl_gid' => $this->gid++, 'code' => $code, 'name' => $name, 'unit' => 'szt', 'archived' => false,
             'stock_trade' => $stock, 'stock_total' => $stock, 'stock_value' => $value, 'oldest_lot_at' => $oldestLot,
             'stock_by_warehouse' => $warehouses, ...$split,
             'last_sale_at' => $lastSale, 'synced_at' => now(),
         ]);
+        WarehouseLocations::replace((int) $item->id, $warehouses);
+
+        return $item;
     }
 
     private function pair(ErpItem $item, string $rwDate, string $operator, string $name, float $value, bool $sameFeature = true, ?string $note = null, int $gap = 0, ?int $lotAge = 12, string $warehouse = '01H', bool $unknownLot = false): void

@@ -6,6 +6,7 @@ namespace App\Console\Commands;
 
 use App\Models\ErpItem;
 use App\Models\ErpWarehouse;
+use App\Services\Erp\WarehouseLocations;
 use App\Services\Erp\WarehouseSplit;
 use Illuminate\Console\Command;
 
@@ -13,7 +14,7 @@ class ErpWarehouseSplitCommand extends Command
 {
     protected $signature = 'erp:warehouse-split';
 
-    protected $description = 'Przelicza część towaru w magazynach usługowych z zapisanego rozbicia stanów (po zmianie słownika magazynów; bez odczytu z ERP XL)';
+    protected $description = 'Przelicza część towaru w magazynach usługowych i stan na magazyn (oddziały) z zapisanego rozbicia stanów (po zmianie słownika magazynów; bez odczytu z ERP XL)';
 
     public function handle(): int
     {
@@ -25,6 +26,8 @@ class ErpWarehouseSplitCommand extends Command
             ->chunkById(500, function ($items) use ($serviceCodes, &$changed, &$seen): void {
                 foreach ($items as $item) {
                     $seen++;
+                    // kopia rozbicia na wiersze (filtr oddziału) — zawsze od nowa, bez porównywania
+                    WarehouseLocations::replace((int) $item->id, $item->stock_by_warehouse ?? []);
                     $split = WarehouseSplit::compute($item->stock_by_warehouse ?? [], $serviceCodes, $item->oldest_lot_at?->toDateString());
                     $same = abs((float) $item->stock_service - $split['stock_service']) < 0.00005
                         && ($item->stock_service_value === null) === ($split['stock_service_value'] === null)

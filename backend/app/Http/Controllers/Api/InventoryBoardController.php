@@ -11,6 +11,7 @@ use App\Models\ErpRwPwPair;
 use App\Models\ErpWarehouse;
 use App\Services\Erp\ErpItemCards;
 use App\Services\Erp\InventoryQuery;
+use App\Services\Erp\WarehouseLocations;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -24,6 +25,9 @@ use Illuminate\Validation\Rule;
  * (items, moves). Magazyny handlowe / usługowe / wszystkie (słownik erp_warehouses). Wiek towaru tylko dla towaru bez
  * sprzedaży ponad rok (recenzja: kwoty wieku całego zapasu wprowadzały w błąd). Reguły jak lista „Zalegające”
  * (InventoryQuery). Niczego nie zapisuje.
+ *
+ * Oddział (parametr location, np. '01' Rzeszów — WarehouseLocations) zawęża każdą liczbę, okno i dokumenty RW → PW do
+ * magazynów oddziału (razem z wyborem handlowe / usługowe / wszystkie). Ostatnia sprzedaż — dalej z dowolnego magazynu.
  */
 class InventoryBoardController extends Controller
 {
@@ -85,12 +89,13 @@ class InventoryBoardController extends Controller
     public function show(Request $request): JsonResponse
     {
         $scope = $this->scope($request);
-        $totals = fn (string $bucket, ?string $group = null): array => InventoryQuery::totals($this->bucketQuery($bucket, $scope, $group), $scope);
+        $location = $this->location($request);
+        $totals = fn (string $bucket, ?string $group = null): array => InventoryQuery::totals($this->bucketQuery($bucket, $scope, $group, $location), $scope, $location);
         $stock = $totals('stock');
         $never = $totals('never_sold');
-        $trade = InventoryQuery::totals(InventoryQuery::inStock('trade'), 'trade');
-        $service = InventoryQuery::totals(InventoryQuery::inStock('service'), 'service');
-        $lot12 = InventoryQuery::totals(InventoryQuery::lotOlderThan(InventoryQuery::inStock($scope), $this->ago(12), $scope), $scope);
+        $trade = InventoryQuery::totals(InventoryQuery::inStock('trade', $location), 'trade', $location);
+        $service = InventoryQuery::totals(InventoryQuery::inStock('service', $location), 'service', $location);
+        $lot12 = InventoryQuery::totals(InventoryQuery::lotOlderThan(InventoryQuery::inStock($scope, $location), $this->ago(12), $scope, $location), $scope, $location);
         $syncedAt = ErpItem::query()->whereNull('removed_at')->max('synced_at');
 
         $groups = [];
@@ -109,6 +114,9 @@ class InventoryBoardController extends Controller
         return response()->json([
             'as_of' => $syncedAt !== null ? Carbon::parse((string) $syncedAt)->toIso8601String() : null,
             'warehouses' => $scope,
+            'location' => $location,
+            'location_name' => $location !== null ? WarehouseLocations::name($location) : null,
+            'locations' => WarehouseLocations::available(),
             'split' => [
                 'trade' => ['items' => $trade['items'], 'value' => $trade['value']],
                 'service' => ['items' => $service['items'], 'value' => $service['value']],
@@ -129,9 +137,9 @@ class InventoryBoardController extends Controller
             'groups' => $groups,
             'top_unsold' => array_map(
                 static fn (array $r): array => array_intersect_key($r, array_flip(['code', 'name', 'quantity', 'unit', 'value', 'last_sale_at', 'card_name'])),
-                $this->itemRows($this->bucketQuery('no_sale_12', $scope)->limit(self::TOP_UNSOLD_LIMIT), $scope, valuedOnly: true),
+                $this->itemRows($this->bucketQuery('no_sale_12', $scope, null, $location)->limit(self::TOP_UNSOLD_LIMIT), $scope, valuedOnly: true, location: $location),
             ),
-            'internal_moves' => $this->movesSummary($scope),
+            'internal_moves' => $this->movesSummary($scope, $location),
             'value_unknown' => $stock['value_unknown'],
         ]);
     }
@@ -152,17 +160,18 @@ class InventoryBoardController extends Controller
             'dir' => ['nullable', 'string', Rule::in(['asc', 'desc'])],
         ]);
         $scope = $this->scope($request);
+        $location = $this->location($request);
         $key = (string) $v['bucket'];
         $group = isset($v['group']) && $v['group'] !== '' ? (string) $v['group'] : null;
-        $query = $this->bucketQuery($key, $scope, $group);
-        $totals = InventoryQuery::totals($query, $scope);
+        $query = $this->bucketQuery($key, $scope, $group, $location);
+        $totals = InventoryQuery::totals($query, $scope, $location);
         $words = $this->words($v['search'] ?? null);
         if ($words !== []) {
-            $this->searchItems($query, $words, $scope);
+            $this->searchItems($query, $words, $scope, $location);
         }
-        $found = $words === [] ? $totals : InventoryQuery::totals($query, $scope);
+        $found = $words === [] ? $totals : InventoryQuery::totals($query, $scope, $location);
         $sort = isset($v['sort']) ? (string) $v['sort'] : null;
-        $page = $this->ordered($query, $scope, $sort, ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc')
+        $page = $this->ordered($query, $scope, $sort, ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc', $location)
             ->paginate((int) ($v['per_page'] ?? 10));
 
         $title = self::BUCKETS[$key][2];
@@ -174,8 +183,9 @@ class InventoryBoardController extends Controller
             'bucket' => $key,
             'group' => $group,
             'warehouses' => $scope,
-            'title' => $title.' ('.self::SCOPE_LABELS[$scope].')',
-            'data' => $this->itemRows(null, $scope, $page->getCollection()),
+            'location' => $location,
+            'title' => $title.' ('.$this->scopeLabel($scope, $location).')',
+            'data' => $this->itemRows(null, $scope, $page->getCollection(), location: $location),
             'meta' => $this->meta($page->currentPage(), $page->lastPage(), $page->perPage(), $page->total()),
             'totals' => ['items' => $totals['items'], 'value' => $totals['value']],
             'found' => ['items' => $found['items'], 'value' => $found['value']],
@@ -198,9 +208,10 @@ class InventoryBoardController extends Controller
             'dir' => ['nullable', 'string', Rule::in(['asc', 'desc'])],
         ]);
         $warehouses = $this->scope($request);
+        $location = $this->location($request);
         $kind = (string) ($v['scope'] ?? 'unexplained');
         $operator = trim((string) ($v['operator'] ?? ''));
-        $query = $kind === 'all' ? $this->pairs($warehouses) : $this->unexplained($warehouses);
+        $query = $kind === 'all' ? $this->pairs($warehouses, $location) : $this->unexplained($warehouses, $location);
         $operatorName = null;
         if ($operator !== '') {
             $query->where('rw_operator', $operator);
@@ -232,10 +243,11 @@ class InventoryBoardController extends Controller
         return response()->json([
             'scope' => $kind,
             'warehouses' => $warehouses,
+            'location' => $location,
             'operator' => $operator !== '' ? $operator : null,
             'operator_name' => $operatorName,
             'min_lot_age_months' => self::MOVES_MIN_LOT_AGE_MONTHS,
-            'title' => $title.' ('.self::SCOPE_LABELS[$warehouses].')',
+            'title' => $title.' ('.$this->scopeLabel($warehouses, $location).')',
             'data' => $page->getCollection()->map(function (ErpRwPwPair $p) use ($items, $cards): array {
                 $item = $p->erp_item_id !== null ? $items->get($p->erp_item_id) : null;
 
@@ -274,6 +286,20 @@ class InventoryBoardController extends Controller
         return (string) ($v['warehouses'] ?? 'trade');
     }
 
+    /** Oddział: cyfry z początku kodu magazynu (01 = Rzeszów); brak = wszystkie oddziały. */
+    private function location(Request $request): ?string
+    {
+        $v = $request->validate(['location' => ['nullable', 'string', 'regex:/^\d{1,10}$/']]);
+
+        return isset($v['location']) && $v['location'] !== '' ? (string) $v['location'] : null;
+    }
+
+    /** Dopisek tytułu okna: „magazyny handlowe”, z oddziałem „Rzeszów, magazyny handlowe”. */
+    private function scopeLabel(string $scope, ?string $location): string
+    {
+        return ($location !== null ? WarehouseLocations::name($location).', ' : '').self::SCOPE_LABELS[$scope];
+    }
+
     private function ago(int $months): CarbonImmutable
     {
         return CarbonImmutable::today()->subMonthsNoOverflow($months);
@@ -285,14 +311,14 @@ class InventoryBoardController extends Controller
      *
      * @return Builder<ErpItem>
      */
-    private function bucketQuery(string $key, string $scope, ?string $group = null): Builder
+    private function bucketQuery(string $key, string $scope, ?string $group = null, ?string $location = null): Builder
     {
         [$kind, $months] = self::BUCKETS[$key];
-        $query = InventoryQuery::inStock($scope);
-        $lot = InventoryQuery::oldestLotSql($scope);
+        $query = InventoryQuery::inStock($scope, $location);
+        $lot = InventoryQuery::oldestLotSql($scope, $location);
         match ($kind) {
-            'no_sale' => InventoryQuery::unsoldSince($query, $this->ago($months), true, $scope),
-            'stale' => InventoryQuery::lotOlderThan(InventoryQuery::unsoldSince($query, $this->ago(12), true, $scope), $this->ago($months), $scope),
+            'no_sale' => InventoryQuery::unsoldSince($query, $this->ago($months), true, $scope, $location),
+            'stale' => InventoryQuery::lotOlderThan(InventoryQuery::unsoldSince($query, $this->ago(12), true, $scope, $location), $this->ago($months), $scope, $location),
             'never' => $query->whereNull('last_sale_at')
                 ->where(fn (Builder $l) => $l->whereRaw($lot.' is null')->orWhereRaw($lot.' <= ?', [$this->ago($months)->toDateString()])),
             default => $query,
@@ -316,11 +342,11 @@ class InventoryBoardController extends Controller
      * @param  'asc'|'desc'  $dir
      * @return Builder<ErpItem>
      */
-    private function ordered(Builder $query, string $scope, ?string $sort = null, string $dir = 'desc'): Builder
+    private function ordered(Builder $query, string $scope, ?string $sort = null, string $dir = 'desc', ?string $location = null): Builder
     {
-        $value = InventoryQuery::valueSql($scope);
-        $quantity = InventoryQuery::quantitySql($scope);
-        $lot = InventoryQuery::oldestLotSql($scope);
+        $value = InventoryQuery::valueSql($scope, $location);
+        $quantity = InventoryQuery::quantitySql($scope, $location);
+        $lot = InventoryQuery::oldestLotSql($scope, $location);
         $query->select('erp_items.*')
             ->selectRaw($value.' as purchase_value')
             ->selectRaw($quantity.' as scope_quantity')
@@ -390,11 +416,11 @@ class InventoryBoardController extends Controller
      * @param  Builder<ErpItem>  $query
      * @param  list<string>  $words
      */
-    private function searchItems(Builder $query, array $words, string $scope): void
+    private function searchItems(Builder $query, array $words, string $scope, ?string $location = null): void
     {
-        $quantity = InventoryQuery::quantitySql($scope);
-        $value = InventoryQuery::valueSql($scope);
-        $lot = InventoryQuery::oldestLotSql($scope);
+        $quantity = InventoryQuery::quantitySql($scope, $location);
+        $value = InventoryQuery::valueSql($scope, $location);
+        $lot = InventoryQuery::oldestLotSql($scope, $location);
         foreach ($words as $word) {
             $like = '%'.addcslashes($word, '%_\\').'%';
             $query->where(function (Builder $q) use ($word, $like, $quantity, $value, $lot): void {
@@ -507,12 +533,12 @@ class InventoryBoardController extends Controller
      * @param  iterable<ErpItem>|null  $items
      * @return list<array<string, mixed>>
      */
-    private function itemRows(?Builder $query, string $scope, ?iterable $items = null, bool $valuedOnly = false): array
+    private function itemRows(?Builder $query, string $scope, ?iterable $items = null, bool $valuedOnly = false, ?string $location = null): array
     {
         if ($query !== null) {
-            $query = $this->ordered($query, $scope);
+            $query = $this->ordered($query, $scope, location: $location);
             if ($valuedOnly) {
-                $query->whereRaw(InventoryQuery::valueSql($scope).' is not null');
+                $query->whereRaw(InventoryQuery::valueSql($scope, $location).' is not null');
             }
             $items = $query->get();
         }
@@ -540,8 +566,8 @@ class InventoryBoardController extends Controller
         })->values()->all();
     }
 
-    /** @return Builder<ErpRwPwPair> pary z 12 mies., PW do 3 dni po RW, partia leżała 3+ mies., w wybranych magazynach (magazyn RW) */
-    private function pairs(string $scope): Builder
+    /** @return Builder<ErpRwPwPair> pary z 12 mies., PW do 3 dni po RW, partia leżała 3+ mies., w wybranych magazynach i oddziale (magazyn RW) */
+    private function pairs(string $scope, ?string $location = null): Builder
     {
         $query = ErpRwPwPair::query()
             ->where('rw_date', '>=', $this->ago(self::MOVES_MONTHS)->toDateString())
@@ -553,20 +579,28 @@ class InventoryBoardController extends Controller
         } elseif ($scope === 'trade') {
             $query->where(fn (Builder $q) => $q->whereNull('rw_warehouse')->orWhereNotIn('rw_warehouse', $service));
         }
+        if ($location !== null) {
+            // magazyny RW tego oddziału — z kodów, które występują w parach (kilkanaście), ta sama reguła co stan
+            $codes = ErpRwPwPair::query()->whereNotNull('rw_warehouse')->distinct()->pluck('rw_warehouse')
+                ->map(static fn ($c): string => (string) $c)
+                ->filter(static fn (string $c): bool => WarehouseLocations::of($c) === $location)
+                ->values()->all();
+            $query->whereIn('rw_warehouse', $codes);
+        }
 
         return $query;
     }
 
     /** @return Builder<ErpRwPwPair> bez wyjaśnienia: ta sama cecha (rozmiar, kolor) i puste uwagi RW */
-    private function unexplained(string $scope): Builder
+    private function unexplained(string $scope, ?string $location = null): Builder
     {
-        return $this->pairs($scope)->where('same_feature', true)->whereNull('rw_note');
+        return $this->pairs($scope, $location)->where('same_feature', true)->whereNull('rw_note');
     }
 
     /** @return array<string, mixed> */
-    private function movesSummary(string $scope): array
+    private function movesSummary(string $scope, ?string $location = null): array
     {
-        $people = $this->unexplained($scope)->toBase()
+        $people = $this->unexplained($scope, $location)->toBase()
             ->selectRaw('rw_operator, max(rw_operator_name) as name, count(*) as c')
             ->groupBy('rw_operator')
             ->orderByDesc('c')
@@ -574,7 +608,7 @@ class InventoryBoardController extends Controller
             ->limit(self::PEOPLE_LIMIT)
             ->get();
         // kontekst: ile wszystkich takich wydań i przyjęć ta osoba wystawiła (większość to zamiany rozmiaru)
-        $all = $people->isEmpty() ? collect() : $this->pairs($scope)->toBase()
+        $all = $people->isEmpty() ? collect() : $this->pairs($scope, $location)->toBase()
             ->whereIn('rw_operator', $people->pluck('rw_operator')->filter()->all())
             ->selectRaw('rw_operator, count(*) as c')
             ->groupBy('rw_operator')
@@ -583,9 +617,9 @@ class InventoryBoardController extends Controller
         return [
             'from' => $this->ago(self::MOVES_MONTHS)->toDateString(),
             'min_lot_age_months' => self::MOVES_MIN_LOT_AGE_MONTHS,
-            'total' => $this->pairs($scope)->count(),
-            'unexplained' => $this->unexplained($scope)->count(),
-            'unexplained_value' => round((float) $this->unexplained($scope)->sum('rw_value'), 2),
+            'total' => $this->pairs($scope, $location)->count(),
+            'unexplained' => $this->unexplained($scope, $location)->count(),
+            'unexplained_value' => round((float) $this->unexplained($scope, $location)->sum('rw_value'), 2),
             'people' => $people->map(static fn ($row): array => [
                 'operator' => (string) ($row->rw_operator ?? ''),
                 'name' => (string) ($row->name ?? $row->rw_operator ?? 'osoba nieznana'),
