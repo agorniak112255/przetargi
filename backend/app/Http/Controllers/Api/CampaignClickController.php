@@ -11,7 +11,6 @@ use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
 use App\Models\Product;
 use App\Services\Campaigns\CampaignItemPresenter;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
@@ -19,13 +18,18 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
- * Publiczne linki z maila kampanii (bez logowania): zapis kliknięcia i przejście dalej — „Zapytaj o ofertę” (mail do
- * handlowca) albo strona produktu. Cel wynika z pozycji kampanii w bazie, nigdy z adresu (bez otwartego
+ * Publiczne linki z maila kampanii (bez logowania): zapis kliknięcia i strona produktu. Link „o” (zapytanie) był
+ * w mailach do 30.09.2026 przekierowaniem do mailto — przeglądarka otwierała wtedy kartę i pytała o zgodę na program
+ * pocztowy; teraz też pokazuje stronę produktu, a mail ma zwykły mailto. Cel wynika z pozycji kampanii w bazie, nigdy z adresu (bez otwartego
  * przekierowania). Zły token albo pozycja z innej kampanii = ta sama ogólna strona 404.
  */
 class CampaignClickController extends Controller
 {
-    /** Kliknięcie szybciej niż tyle sekund po wysłaniu = skaner poczty (Outlook, antywirus), nie człowiek. */
+    /**
+     * Kliknięcie szybciej niż tyle sekund po wysłaniu bez nagłówka języka przeglądarki = skaner poczty (Outlook,
+     * antywirus). Przeglądarka człowieka wysyła Accept-Language — szybki klient (albo nadawca, który jest też
+     * odbiorcą: 30.09.2026 kliknięcie po 10 s z Firefoksa) liczy się normalnie.
+     */
     private const BOT_SECONDS = 60;
 
     private const BOT_AGENT = '/bot|crawl|spider|scan|preview|safelinks|barracuda|mimecast|proofpoint|urldefense|symantec|trendmicro|headless|python|curl|wget|go-http|java\/|libwww|okhttp|existence discovery/i';
@@ -35,7 +39,8 @@ class CampaignClickController extends Controller
 
     public function __construct(private readonly CampaignItemPresenter $presenter) {}
 
-    public function offer(Request $request, string $token, int $item): RedirectResponse|Response
+    /** Link „Zapytaj o ofertę” ze starszych maili — zapis kliknięcia i strona produktu z przyciskiem mailto. */
+    public function offer(Request $request, string $token, int $item): Response
     {
         [$recipient, $campaignItem] = $this->resolve($token, $item);
         if ($recipient === null || $campaignItem === null) {
@@ -43,13 +48,7 @@ class CampaignClickController extends Controller
         }
         $this->record($request, $recipient, $campaignItem, CampaignClick::KIND_OFFER);
 
-        $mailto = $this->mailto($recipient->campaign, $campaignItem);
-        if ($mailto === null) {
-            // skrzynka autora usunięta — zostaje strona produktu z danymi kontaktowymi firmy
-            return $this->productPage($recipient, $campaignItem);
-        }
-
-        return redirect()->away($mailto)->header('Referrer-Policy', 'no-referrer');
+        return $this->productPage($recipient, $campaignItem);
     }
 
     public function product(Request $request, string $token, int $item): Response
@@ -82,7 +81,8 @@ class CampaignClickController extends Controller
         $agent = mb_substr((string) $request->userAgent(), 0, 255);
         $bot = $request->isMethod('HEAD')
             || ($agent !== '' && preg_match(self::BOT_AGENT, $agent) === 1)
-            || ($recipient->sent_at !== null && $recipient->sent_at->diffInSeconds($now, true) < self::BOT_SECONDS);
+            || ($recipient->sent_at !== null && $recipient->sent_at->diffInSeconds($now, true) < self::BOT_SECONDS
+                && trim((string) $request->header('Accept-Language')) === '');
 
         CampaignClick::query()->create([
             'campaign_id' => $recipient->campaign_id,
@@ -148,9 +148,8 @@ class CampaignClickController extends Controller
                 'note' => $item->note,
                 'description' => $description !== '' ? Str::limit($description, self::DESCRIPTION_CHARS) : null,
                 'validUntil' => $campaign->valid_until?->format('d.m.Y'),
-                'askUrl' => $this->mailto($campaign, $item) !== null && $publicUrl !== ''
-                    ? $publicUrl.'/api/k/'.$recipient->token.'/o/'.$item->id
-                    : null,
+                // kliknięcie wprost na stronie (bez przekierowania) otwiera program pocztowy bez dodatkowego pytania
+                'askUrl' => $this->mailto($campaign, $item),
                 'fromName' => $account !== null ? (string) $account->from_name : (string) ($author?->name ?? ''),
                 'fromAddress' => $account !== null ? (string) $account->from_address : null,
                 'signature' => $account?->signature,

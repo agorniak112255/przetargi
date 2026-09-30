@@ -2397,8 +2397,10 @@ function ClickedPanel({ campaign, clicks, tick }: { campaign: Campaign; clicks: 
         rows !== null && <p className="px-4 py-3 text-xs text-slate-500">Nikt jeszcze nie kliknął linku w mailu.</p>
       )}
       <p className="px-4 py-3 text-[11px] text-slate-500">
-        Liczymy kliknięcia w zdjęcie lub nazwę produktu (strona produktu) i w „Zapytaj o ofertę”. Otwarć maila nie liczymy —
-        programy pocztowe je zawyżają. Kliknięcia w ciągu minuty od doręczenia i od automatów to skanery poczty.
+        Liczymy wejścia na stronę produktu (zdjęcie, nazwa, „Zobacz produkt”). „Zapytaj o ofertę” otwiera od razu program
+        pocztowy klienta, więc tego kliknięcia nie widać — odpowiedź trafi do Twojej skrzynki z kodem kampanii w temacie.
+        Otwarć maila nie liczymy (programy pocztowe je zawyżają); kliknięcia w ciągu minuty od doręczenia i od automatów to
+        skanery poczty.
       </p>
     </div>
   )

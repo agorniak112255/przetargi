@@ -12,8 +12,9 @@ use Illuminate\Support\Carbon;
 
 /**
  * Treść maila kampanii (Blade emails/campaign + campaign-text) — ten sam HTML w podglądzie, teście i wysyłce.
- * Bez odbiorcy link wypisu to „#”, „Zapytaj o ofertę” to zwykły mailto, a zdjęcie i nazwa bez linku do strony produktu;
- * u odbiorcy oba linki idą przez aplikację (zapis kliknięcia, CampaignClickController). Nie final — testy podmieniają zależności.
+ * Bez odbiorcy link wypisu to „#”, a zdjęcie i nazwa bez linku do strony produktu; u odbiorcy strona produktu idzie
+ * przez aplikację (zapis kliknięcia, CampaignClickController). „Zapytaj o ofertę” to zawsze zwykły mailto — przez
+ * przekierowanie przeglądarka otwierałaby kartę i pytała o zgodę na program pocztowy (sprawdzone 30.09.2026). Nie final — testy podmieniają zależności.
  */
 class CampaignRenderer
 {
@@ -67,11 +68,9 @@ class CampaignRenderer
                     : null,
                 'image_url' => $snap !== null ? $snap['image_url'] : $row['image_url'],
                 'note' => $row['note'] !== null && trim((string) $row['note']) !== '' ? (string) $row['note'] : null,
-                'ask_url' => match (true) {
-                    $fromAddress === '' => '#',
-                    $track !== null => $track.'/o/'.$row['id'],
-                    default => 'mailto:'.$fromAddress.'?subject='.rawurlencode(trim('Zapytanie '.$code.' '.$itemCode)),
-                },
+                'ask_url' => $fromAddress !== ''
+                    ? 'mailto:'.$fromAddress.'?subject='.rawurlencode(trim('Zapytanie '.$code.' '.$itemCode))
+                    : '#',
                 'product_url' => $track !== null ? $track.'/p/'.$row['id'] : null,
             ];
         }
