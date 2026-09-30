@@ -17,6 +17,7 @@ import {
 } from '../components/CampaignsUi'
 import { CampaignBlockEditor, LiveMailPreview } from '../components/CampaignBlockEditor'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
+import { CampaignSuggestionsModal } from '../components/CampaignSuggestionsModal'
 import { XlCustomersModal } from '../components/XlCustomersModal'
 import { can } from '../lib/api'
 import {
@@ -31,6 +32,7 @@ import {
 import {
   CAMPAIGN_LAYOUT_LABEL,
   LAYOUTS_WITH_DESCRIPTION,
+  addCampaignItems,
   applyTemplate,
   checkCampaignReplies,
   campaignAudience,
@@ -606,6 +608,7 @@ function ItemsStep({
   const { user } = useAuth()
   const navigate = useNavigate()
   const [cardFor, setCardFor] = useState<CampaignItem | null>(null)
+  const [suggestOpen, setSuggestOpen] = useState(false)
   const items = campaign.items
   const full = items.length >= MAX_ITEMS
   // czy obecny układ produktów pokazuje krótki opis (podpowiedź przy polu „Opis w mailu”)
@@ -626,6 +629,15 @@ function ItemsStep({
 
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+      {suggestOpen && (
+        <CampaignSuggestionsModal
+          campaignId={campaign.id}
+          onClose={() => setSuggestOpen(false)}
+          onAdd={async (erpItemIds) =>
+            (await mutate(() => addCampaignItems(campaign.id, { erp_item_ids: erpItemIds }), 'Nie udało się dodać pozycji.')) !== null
+          }
+        />
+      )}
       <div className="rounded-xl bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-2.5">
           <b className="text-sm text-slate-900">Produkty w kampanii</b>
@@ -637,6 +649,15 @@ function ItemsStep({
               </button>
               <button type="button" className={BTN} disabled={full} onClick={() => navigate(`/products?kampania=${campaign.id}`)}>
                 + z Produktów
+              </button>
+              <button
+                type="button"
+                className={BTN}
+                disabled={full}
+                title="Ranking zalegającego towaru: wartość, czas zalegania, ilu klientów kupowało, gotowość karty"
+                onClick={() => setSuggestOpen(true)}
+              >
+                Zaproponuj pozycje
               </button>
             </div>
           )}

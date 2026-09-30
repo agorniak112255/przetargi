@@ -504,6 +504,30 @@ export function duplicateCampaign(id: number) {
   return api<Campaign>(`/campaigns/${id}/duplicate`, { method: 'POST' })
 }
 
+/** Pozycja rankingu „Zaproponuj pozycje” — zalegający towar z punktami i powodami. */
+export type CampaignSuggestion = {
+  erp_item_id: number
+  code: string
+  name: string
+  unit: string
+  stock: number
+  stock_value: number | null
+  last_sale_at: string | null
+  oldest_lot_at: string | null
+  /** Klienci z e-mailem, którzy kupowali towar w 24 mies. */
+  buyers: number
+  card: { id: number; sku: string; name: string; thumb_url: string | null } | null
+  has_description: boolean
+  score: number
+  reasons: string[]
+}
+
+export function campaignSuggestions(id: number, mine: boolean) {
+  return api<{ data: CampaignSuggestion[]; free: number; mine_available: boolean; min_months: number }>(
+    `/campaigns/${id}/suggestions${mine ? '?mine=1' : ''}`,
+  )
+}
+
 export function addCampaignItems(id: number, body: { erp_item_ids?: number[]; product_ids?: number[] }) {
   return api<Campaign>(`/campaigns/${id}/items`, { method: 'POST', ...json(body) })
 }

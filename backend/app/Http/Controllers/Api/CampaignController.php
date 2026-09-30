@@ -24,6 +24,7 @@ use App\Services\Campaigns\CampaignReplySync;
 use App\Services\Campaigns\CampaignResult;
 use App\Services\Campaigns\CampaignSalesResult;
 use App\Services\Campaigns\CampaignSender;
+use App\Services\Campaigns\CampaignSuggestions;
 use App\Services\Erp\ErpItemCards;
 use App\Services\Erp\InventoryQuery;
 use Illuminate\Database\Eloquent\Builder;
@@ -596,6 +597,25 @@ class CampaignController extends Controller
         $cancelled = $this->sender->cancel($campaign);
 
         return response()->json($this->present($cancelled->fresh() ?? $cancelled, $request->user()));
+    }
+
+    /**
+     * „Zaproponuj pozycje”: ranking zalegającego towaru do projektu kampanii (CampaignSuggestions) z powodami.
+     * mine = tylko towar, który kupowali klienci autora (opiekun w XL).
+     */
+    public function suggestions(Request $request, Campaign $campaign, CampaignSuggestions $suggestions): JsonResponse
+    {
+        $this->authorizeView($request, $campaign);
+        $this->ensureDraft($campaign);
+        $v = $request->validate(['mine' => ['nullable', 'boolean']]);
+        $result = $suggestions->suggest($campaign, (bool) ($v['mine'] ?? false), 30);
+
+        return response()->json([
+            'data' => $result['rows'],
+            'free' => max(0, (int) config('campaigns.max_items') - $campaign->items()->count()),
+            'mine_available' => $result['mine_available'],
+            'min_months' => CampaignSuggestions::MIN_MONTHS,
+        ]);
     }
 
     /**

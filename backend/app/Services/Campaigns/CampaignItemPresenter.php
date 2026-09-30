@@ -240,7 +240,8 @@ class CampaignItemPresenter
                 }
             })
             ->where(static function ($q) use ($since): void {
-                $q->whereIn('c.status', [Campaign::STATUS_DRAFT, Campaign::STATUS_SENDING])
+                // zaplanowana też wyjdzie do klientów — ostrzegamy jak przy projekcie
+                $q->whereIn('c.status', [Campaign::STATUS_DRAFT, Campaign::STATUS_SCHEDULED, Campaign::STATUS_SENDING])
                     ->orWhere(static fn ($s) => $s->where('c.status', Campaign::STATUS_SENT)->where('c.sent_at', '>=', $since));
             })
             ->orderBy('c.id')
