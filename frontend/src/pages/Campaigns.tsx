@@ -294,7 +294,7 @@ function CampaignRow({
   const when = row.sent_at ?? row.sending_started_at
   const result = row.result
   return (
-    <tr className="border-b align-top">
+    <tr className="border-b align-top even:bg-slate-100">
       <td className="min-w-[14rem] p-2">
         <Link to={`/kampanie/${row.id}`} className="font-medium text-slate-900 hover:text-blue-700 hover:underline">
           {row.name}

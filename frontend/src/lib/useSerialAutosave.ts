@@ -59,7 +59,10 @@ export function useSerialAutosave<P extends object>(save: (patch: Partial<P>) =>
     pending.current = next
   }, [])
 
+  /** Czy są zmiany czekające na zapis (odliczanie albo zebrane w trakcie trwającego zapisu). */
+  const hasPending = useCallback(() => timer.current !== null || Object.keys(pending.current).length > 0, [])
+
   useEffect(() => () => void flush(), [flush])
 
-  return { edit, flush, enqueue, discard }
+  return { edit, flush, enqueue, discard, hasPending }
 }

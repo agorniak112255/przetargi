@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CampaignBlockEditor, LiveMailPreview } from '../components/CampaignBlockEditor'
-import { BTN, CampaignsTabs, Chip, ErrorBar } from '../components/CampaignsUi'
+import { BTN, BTN_PRIMARY, CampaignsTabs, Chip, ErrorBar } from '../components/CampaignsUi'
 import { can } from '../lib/api'
 import { errorText } from '../lib/campaignFormat'
 import {
@@ -17,7 +17,8 @@ import { useSerialAutosave } from '../lib/useSerialAutosave'
 
 /**
  * Szablon maila /kampanie/szablony/:id: nazwa, (administrator) wspólny, elementy maila i kolor, podgląd z
- * przykładowymi produktami. Zapisuje się sam (jak treść kampanii). Cudzy wspólny szablon — tylko do odczytu.
+ * przykładowymi produktami. Zapisuje się sam (jak treść kampanii), a „Zapisz” zapisuje od razu i pokazuje stan.
+ * Cudzy wspólny szablon — tylko do odczytu.
  */
 
 const SAVE_MS = 600
@@ -41,6 +42,9 @@ function TemplateEditorPage({ templateId }: { templateId: number }) {
   const [saving, setSaving] = useState(0)
   const [savedAt, setSavedAt] = useState<Date | null>(null)
   const [copying, setCopying] = useState(false)
+  // zmiany jeszcze niezapisane na serwerze (także nazwa wpisywana w polu — zapis po wyjściu z pola albo „Zapisz”)
+  const [dirty, setDirty] = useState(false)
+  const pendingCheck = useRef<() => boolean>(() => false)
 
   // Brak osobnego GET jednego szablonu — bierzemy go z listy (widoczne tylko własne i wspólne).
   useEffect(() => {
@@ -76,6 +80,7 @@ function TemplateEditorPage({ templateId }: { templateId: number }) {
         // Odpowiedź odświeża uprawnienia i datę; szkic w polach zostaje (mógł się zmienić w trakcie zapisu).
         setTpl(await updateTemplate(templateId, body))
         setSavedAt(new Date())
+        if (!pendingCheck.current()) setDirty(false)
       } catch (ex) {
         setErr(errorText(ex, 'Nie udało się zapisać szablonu.'))
       } finally {
@@ -85,10 +90,23 @@ function TemplateEditorPage({ templateId }: { templateId: number }) {
     [templateId],
   )
   const autosave = useSerialAutosave<Draft>(save, SAVE_MS)
+  useEffect(() => {
+    pendingCheck.current = autosave.hasPending
+  }, [autosave.hasPending])
 
   function edit(patch: Partial<Draft>, immediate = false) {
     setDraft((d) => (d ? { ...d, ...patch } : d))
+    setDirty(true)
     autosave.edit(patch, immediate)
+  }
+
+  /** „Zapisz”: nazwa z pola (jeśli zmieniona) i wszystko, co czeka — od razu, bez odliczania. */
+  async function saveNow() {
+    if (!draft || !tpl) return
+    setErr('')
+    const name = draft.name.trim()
+    if (name !== '' && name !== tpl.name) autosave.edit({ name })
+    await autosave.flush()
   }
 
   async function toggleShared(value: boolean) {
@@ -133,7 +151,10 @@ function TemplateEditorPage({ templateId }: { templateId: number }) {
               maxLength={150}
               className="app-page-title mt-1 block w-full max-w-xl rounded border border-transparent bg-transparent px-1 text-xl font-semibold hover:border-slate-300 focus:border-slate-400"
               value={draft.name}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              onChange={(e) => {
+                setDraft({ ...draft, name: e.target.value })
+                setDirty(true)
+              }}
               onBlur={() => {
                 const name = draft.name.trim()
                 if (!tpl || !name) {
@@ -155,16 +176,6 @@ function TemplateEditorPage({ templateId }: { templateId: number }) {
               <span>
                 {tpl.owner == null ? 'autor usunięty' : tpl.owner.id === user?.id ? 'Mój szablon' : `Autor: ${tpl.owner.name}`}
               </span>
-              {canEdit && (
-                <span className="text-slate-500">
-                  ·{' '}
-                  {saving > 0
-                    ? 'zapisuję…'
-                    : savedAt
-                      ? `zapisano ${savedAt.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`
-                      : 'zapisuje się sam'}
-                </span>
-              )}
               {manage && canEdit && (
                 <label className="ml-2 inline-flex items-center gap-1.5">
                   <input type="checkbox" checked={tpl.is_shared} onChange={(e) => void toggleShared(e.target.checked)} />
@@ -175,9 +186,33 @@ function TemplateEditorPage({ templateId }: { templateId: number }) {
           )}
         </div>
         {tpl && (
-          <button type="button" className={BTN} disabled={copying} onClick={() => void copy()}>
-            {copying ? 'Kopiuję…' : 'Zrób kopię'}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {canEdit && (
+              <>
+                <span className={`text-xs ${dirty && saving === 0 ? 'text-amber-800' : 'text-slate-500'}`} role="status">
+                  {saving > 0
+                    ? 'Zapisuję…'
+                    : dirty
+                      ? 'Niezapisane zmiany'
+                      : savedAt
+                        ? `Zapisano ✓ ${savedAt.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`
+                        : 'Wszystko zapisane'}
+                </span>
+                <button
+                  type="button"
+                  className={BTN_PRIMARY}
+                  disabled={saving > 0}
+                  title="Zmiany zapisują się też same po chwili"
+                  onClick={() => void saveNow()}
+                >
+                  Zapisz szablon
+                </button>
+              </>
+            )}
+            <button type="button" className={BTN} disabled={copying} onClick={() => void copy()}>
+              {copying ? 'Kopiuję…' : 'Zrób kopię'}
+            </button>
+          </div>
         )}
       </div>
 
