@@ -132,7 +132,7 @@ final class CampaignApiTest extends TestCase
         $this->getJson("/api/campaigns/{$campaign->id}")->assertOk()
             ->assertJsonPath('author.id', $a->id)
             ->assertJsonPath('can_edit', true)
-            ->assertJsonPath('audience', ['list_ids' => [], 'xl' => ['mode' => null, 'months' => 24, 'only_mine' => false]]);
+            ->assertJsonPath('audience', ['list_ids' => [], 'xl' => ['mode' => null, 'months' => 24, 'only_mine' => false, 'customer_ids' => null]]);
         $this->assertSame([], $this->getJson('/api/campaigns')->json('data'));
         $this->assertEqualsCanonicalizing([$campaign->id, $other->id], array_column($this->getJson('/api/campaigns?scope=all')->json('data'), 'id'));
         $this->getJson("/api/campaigns/{$campaign->id}/audience")->assertOk()->assertExactJson(['final' => 7, 'campaign' => $campaign->id]);
@@ -209,10 +209,10 @@ final class CampaignApiTest extends TestCase
             ->assertJsonPath('subject', 'Wyprzedaż rękawic')
             ->assertJsonPath('layout', 'list')
             ->assertJsonPath('valid_until', '2026-10-31')
-            ->assertJsonPath('audience', ['list_ids' => [$mine->id, $shared->id], 'xl' => ['mode' => 'items', 'months' => 12, 'only_mine' => false]]);
+            ->assertJsonPath('audience', ['list_ids' => [$mine->id, $shared->id], 'xl' => ['mode' => 'items', 'months' => 12, 'only_mine' => false, 'customer_ids' => null]]);
         // częściowa zmiana odbiorców zostawia resztę
         $this->patchJson("/api/campaigns/{$campaign->id}", ['audience' => ['xl' => ['only_mine' => true]]])->assertOk()
-            ->assertJsonPath('audience', ['list_ids' => [$mine->id, $shared->id], 'xl' => ['mode' => 'items', 'months' => 12, 'only_mine' => true]]);
+            ->assertJsonPath('audience', ['list_ids' => [$mine->id, $shared->id], 'xl' => ['mode' => 'items', 'months' => 12, 'only_mine' => true, 'customer_ids' => null]]);
 
         $campaign->update(['status' => Campaign::STATUS_SENDING]);
         $this->patchJson("/api/campaigns/{$campaign->id}", ['name' => 'X'])->assertUnprocessable()
@@ -276,7 +276,7 @@ final class CampaignApiTest extends TestCase
             ->assertJsonPath('totals', null)
             ->assertJsonPath('sent_at', null)
             // lista prywatna autora niewidoczna dla nowego autora — zostaje tylko wspólna
-            ->assertJsonPath('audience', ['list_ids' => [$shared->id], 'xl' => ['mode' => 'group', 'months' => 12, 'only_mine' => true]]);
+            ->assertJsonPath('audience', ['list_ids' => [$shared->id], 'xl' => ['mode' => 'group', 'months' => 12, 'only_mine' => true, 'customer_ids' => null]]);
         $copy = Campaign::query()->findOrFail($res->json('id'));
         $this->assertSame($campaign->id, $copy->duplicated_from_id);
         $this->assertNotSame($campaign->code, $copy->code);

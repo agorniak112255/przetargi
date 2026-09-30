@@ -108,6 +108,10 @@ class AudienceResolver
         $xlCustomers = 0;
         $xlEmails = 0;
         $query = $this->xlQuery($campaign, $settings['xl'], $author, $warnings);
+        if ($query !== null && $settings['xl']['customer_ids'] !== null) {
+            // wybór z okna „Pokaż / wybierz” — tylko zaznaczeni, i tylko ci, którzy nadal są w kategorii
+            $query->whereIntegerInRaw('id', $settings['xl']['customer_ids']);
+        }
         if ($query !== null) {
             foreach ($query->orderByDesc('sale_documents_24m')->orderBy('id')->get(['id', 'acronym', 'name', 'emails']) as $customer) {
                 $emails = is_array($customer->emails) ? $customer->emails : [];
@@ -222,6 +226,18 @@ class AudienceResolver
             ->orderBy('mlc.mailing_list_id')
             ->orderBy('mlc.id')
             ->get(['c.id', 'c.email', 'c.name', 'c.company']);
+    }
+
+    /**
+     * Cała kategoria klientów XL (bez zawężenia do zaznaczonych) — lista w oknie „Pokaż / wybierz”.
+     *
+     * @param  array{mode: string|null, months: int, only_mine: bool}  $xl
+     * @param  list<string>  $warnings
+     * @return Builder<ErpCustomer>|null
+     */
+    public function xlCategoryQuery(Campaign $campaign, array $xl, array &$warnings): ?Builder
+    {
+        return $this->xlQuery($campaign, $xl, $campaign->user, $warnings);
     }
 
     /**

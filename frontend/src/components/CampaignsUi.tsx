@@ -171,7 +171,8 @@ export function Modal({
   title: string
   onClose: () => void
   busy?: boolean
-  wide?: boolean
+  /** true = szerokie okno; 'full' = prawie cały ekran (duże listy do wyboru). */
+  wide?: boolean | 'full'
   children: ReactNode
   footer?: ReactNode
 }) {
@@ -194,7 +195,9 @@ export function Modal({
       }}
     >
       <div
-        className={`flex max-h-[90vh] w-full flex-col overflow-hidden rounded-xl bg-white shadow-lg ${wide ? 'max-w-4xl' : 'max-w-lg'}`}
+        className={`flex max-h-[90vh] w-full flex-col overflow-hidden rounded-xl bg-white shadow-lg ${
+          wide === 'full' ? 'h-[90vh] max-w-7xl' : wide ? 'max-w-4xl' : 'max-w-lg'
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">

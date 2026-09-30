@@ -16,6 +16,7 @@ import {
   StageTwo,
 } from '../components/CampaignsUi'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
+import { XlCustomersModal } from '../components/XlCustomersModal'
 import { can } from '../lib/api'
 import {
   errorText,
@@ -1028,6 +1029,7 @@ function AudienceStep({
   // Wybór pokazywany od razu (kolejne kliknięcia budują się na nim), zapis PATCH w tle.
   const [draft, setDraft] = useState<CampaignAudience>(campaign.audience)
   const [lastServer, setLastServer] = useState(campaign.audience)
+  const [xlPicker, setXlPicker] = useState<CampaignXlMode | null>(null)
   if (campaign.audience !== lastServer) {
     setLastServer(campaign.audience)
     setDraft(campaign.audience)
@@ -1091,7 +1093,17 @@ function AudienceStep({
                     {fmtInt(l.basis_counts.customer)}, zgoda {fmtInt(l.basis_counts.consent)}
                   </small>
                 </span>
-                <Chip tone={l.contacts_count > 0 ? 'green' : 'red'}>{fmtInt(l.contacts_count)}</Chip>
+                <span className="flex items-center gap-2">
+                  <Chip tone={l.contacts_count > 0 ? 'green' : 'red'}>{fmtInt(l.contacts_count)}</Chip>
+                  <Link
+                    to={`/kampanie/grupy/${l.id}`}
+                    className={BTN_SM}
+                    title="Otwiera adresy tej grupy (wybór odbiorców kampanii zapisuje się sam)"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Pokaż
+                  </Link>
+                </span>
               </label>
             )
           })}
@@ -1121,12 +1133,37 @@ function AudienceStep({
                     className="mt-0.5"
                     disabled={!editable}
                     checked={xl.mode === m.value}
-                    onChange={() => save({ ...draft, xl: { ...xl, mode: m.value, only_mine: m.value === 'mine' || m.value === null ? false : xl.only_mine } })}
+                    onChange={() =>
+                      save({
+                        ...draft,
+                        xl: { ...xl, mode: m.value, only_mine: m.value === 'mine' || m.value === null ? false : xl.only_mine, customer_ids: null },
+                      })
+                    }
                   />
-                  <span>
+                  <span className="min-w-0 flex-1">
                     <b className="font-medium text-slate-900">{m.label}</b>
                     <small className="block text-[11px] text-slate-500">{m.hint}</small>
+                    {m.value !== null && xl.mode === m.value && (xl.customer_ids ?? null) !== null && (
+                      <small className="mt-0.5 block text-[11px] font-medium text-blue-700">
+                        wybrano ręcznie: {fmtInt(xl.customer_ids?.length ?? 0)}{' '}
+                        {plural(xl.customer_ids?.length ?? 0, 'klient', 'klientów', 'klientów')}
+                      </small>
+                    )}
                   </span>
+                  {m.value !== null && (
+                    <button
+                      type="button"
+                      className={`${BTN_SM} shrink-0 self-center`}
+                      title="Otwiera listę klientów tej kategorii z adresami e-mail — możesz ich przejrzeć, wyszukać i zaznaczyć"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        setXlPicker(m.value)
+                      }}
+                    >
+                      {editable ? 'Pokaż / wybierz' : 'Pokaż'}
+                    </button>
+                  )}
                 </label>
               ))}
             </fieldset>
@@ -1142,7 +1179,7 @@ function AudienceStep({
                       type="button"
                       aria-pressed={xl.months === m}
                       disabled={!editable || xl.mode === null}
-                      onClick={() => save({ ...draft, xl: { ...xl, months: m } })}
+                      onClick={() => save({ ...draft, xl: { ...xl, months: m, customer_ids: null } })}
                       className={`px-2.5 py-1 tabular-nums ${i > 0 ? 'border-l border-slate-300' : ''} ${
                         xl.months === m ? 'bg-blue-600 font-semibold text-white' : 'bg-white text-slate-700 hover:bg-slate-50'
                       }`}
@@ -1157,7 +1194,7 @@ function AudienceStep({
                   type="checkbox"
                   disabled={!editable || xl.mode === null || xl.mode === 'mine'}
                   checked={xl.mode === 'mine' || xl.only_mine}
-                  onChange={(e) => save({ ...draft, xl: { ...xl, only_mine: e.target.checked } })}
+                  onChange={(e) => save({ ...draft, xl: { ...xl, only_mine: e.target.checked, customer_ids: null } })}
                 />
                 tylko moi klienci
               </label>
@@ -1171,6 +1208,26 @@ function AudienceStep({
           </div>
         </div>
       </div>
+
+      {xlPicker !== null && (
+        <XlCustomersModal
+          campaignId={campaign.id}
+          editable={editable}
+          initial={{
+            mode: xlPicker,
+            months: xl.months,
+            only_mine: xlPicker === xl.mode ? xl.only_mine : false,
+          }}
+          onClose={() => setXlPicker(null)}
+          onSave={async (choice) => {
+            const next = { ...draft, xl: choice }
+            setDraft(next)
+            const res = await mutate(() => updateCampaign(campaign.id, { audience: next }), 'Nie udało się zapisać wyboru klientów.')
+            if (!res) setDraft(campaign.audience)
+            return Boolean(res)
+          }}
+        />
+      )}
 
       <aside className="rounded-xl bg-white p-4 shadow-sm">
         <h2 className="app-card-title mb-2 text-sm font-semibold text-slate-900">Kto dostanie maila</h2>

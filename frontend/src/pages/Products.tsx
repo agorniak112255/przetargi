@@ -837,7 +837,22 @@ export function Products() {
           void api<Page>(`/products?${buildParams()}`).then(setResult).catch(() => {})
         }}
       />
-      {canCampaign && <CampaignPickBanner {...campaignPick} what="karty" />}
+      {canCampaign && campaignPick.campaignId !== null && (
+        // przypięty u góry: widać, do której kampanii dobierasz karty, i przycisk dodania przy przewijaniu listy
+        <div className="sticky top-0 z-30 -mx-1 mb-4 px-1">
+          <CampaignPickBanner
+            {...campaignPick}
+            what="karty"
+            action={
+              <AddToCampaignMenu
+                productIds={selectedIds}
+                target={campaignPick.target}
+                buttonClassName="rounded bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 disabled:opacity-50"
+              />
+            }
+          />
+        </div>
+      )}
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Produkty</h1>

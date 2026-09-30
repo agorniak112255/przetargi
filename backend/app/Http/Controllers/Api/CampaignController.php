@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Campaign;
 use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
+use App\Models\EmailSuppression;
 use App\Models\ErpItemLink;
 use App\Models\MailingList;
 use App\Models\User;
@@ -38,6 +39,15 @@ class CampaignController extends Controller
     private const NOT_DRAFT = 'Kampania została już wysłana — zduplikuj ją, żeby zmienić';
 
     private const NO_NEWLINE = '/[\r\n]/';
+
+    /** Sortowanie w oknie „Pokaż / wybierz” klientów XL: klucz z adresu → kolumna erp_customers. */
+    private const XL_CUSTOMER_SORTS = [
+        'documents' => 'sale_documents_24m',
+        'last_sale' => 'last_sale_at',
+        'acronym' => 'acronym',
+        'name' => 'name',
+        'city' => 'city',
+    ];
 
     private const STATUSES = [Campaign::STATUS_DRAFT, Campaign::STATUS_SENDING, Campaign::STATUS_SENT, Campaign::STATUS_CANCELLED];
 
@@ -160,6 +170,9 @@ class CampaignController extends Controller
             'audience.xl.mode' => ['sometimes', 'nullable', 'string', Rule::in(Campaign::XL_MODES)],
             'audience.xl.months' => ['sometimes', 'integer', Rule::in(Campaign::XL_MONTHS)],
             'audience.xl.only_mine' => ['sometimes', 'boolean'],
+            // wybór klientów z okna „Pokaż / wybierz”; null = cała kategoria
+            'audience.xl.customer_ids' => ['sometimes', 'nullable', 'array', 'max:20000'],
+            'audience.xl.customer_ids.*' => ['integer'],
         ], $this->newlineMessages());
 
         $data = [];
@@ -297,6 +310,99 @@ class CampaignController extends Controller
         $this->authorizeView($request, $campaign);
 
         return response()->json($this->audience->preview($campaign));
+    }
+
+    /**
+     * Okno „Pokaż / wybierz”: klienci XL z danej kategorii (kupowali te towary / z tej grupy / moi) z adresami,
+     * szukanie, sortowanie i stronicowanie; `ids` = cała kategoria (do „zaznacz wszystkie”), `selected_ids` = zapisany
+     * wybór, gdy dotyczy tej samej kategorii (null = cała kategoria albo inna kategoria).
+     */
+    public function xlCustomers(Request $request, Campaign $campaign): JsonResponse
+    {
+        $this->authorizeView($request, $campaign);
+        $v = $request->validate([
+            'mode' => ['required', 'string', Rule::in(Campaign::XL_MODES)],
+            'months' => ['nullable', 'integer', Rule::in(Campaign::XL_MONTHS)],
+            'only_mine' => ['nullable', 'boolean'],
+            'search' => ['nullable', 'string', 'max:100'],
+            'sort' => ['nullable', 'string', Rule::in(array_keys(self::XL_CUSTOMER_SORTS))],
+            'dir' => ['nullable', 'string', Rule::in(['asc', 'desc'])],
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:10', 'max:200'],
+        ]);
+        $xl = [
+            'mode' => (string) $v['mode'],
+            'months' => (int) ($v['months'] ?? 24),
+            'only_mine' => $v['mode'] !== 'mine' && (bool) ($v['only_mine'] ?? false),
+        ];
+        $warnings = [];
+        $query = $this->audience->xlCategoryQuery($campaign, $xl, $warnings);
+        $saved = $campaign->audienceSettings()['xl'];
+        $sameCategory = [$saved['mode'], $saved['months'], $saved['only_mine']] === [$xl['mode'], $xl['months'], $xl['only_mine']];
+        $empty = ['data' => [], 'meta' => ['current_page' => 1, 'last_page' => 1, 'per_page' => 50, 'total' => 0], 'ids' => [], 'selected_ids' => null, 'warnings' => $warnings];
+        if ($query === null) {
+            return response()->json($empty);
+        }
+
+        $ids = (clone $query)->orderBy('id')->pluck('id')->map(static fn ($id): int => (int) $id)->all();
+        $search = trim((string) ($v['search'] ?? ''));
+        if ($search !== '') {
+            $like = '%'.addcslashes(mb_strtolower($search), '%_\\').'%';
+            $query->where(static fn (Builder $q) => $q
+                ->whereRaw('lower(acronym) like ?', [$like])
+                ->orWhereRaw('lower(name) like ?', [$like])
+                ->orWhereRaw('lower(city) like ?', [$like])
+                ->orWhere('nip', 'like', $like)
+                ->orWhereRaw('lower(emails) like ?', [$like]));
+        }
+        if ($xl['mode'] === 'items') {
+            // ile pozycji kampanii ten klient kupował w oknie czasu
+            $itemIds = $campaign->items()->whereNotNull('erp_item_id')->pluck('erp_item_id')->all();
+            $cutoff = now()->startOfDay()->subMonthsNoOverflow($xl['months'])->toDateString();
+            $query->withCount(['items as matched_items' => static fn (Builder $q) => $q
+                ->whereIn('erp_item_id', $itemIds)->where('last_sale_at', '>=', $cutoff)]);
+        }
+        $sort = self::XL_CUSTOMER_SORTS[$v['sort'] ?? 'documents'];
+        $dir = ($v['dir'] ?? ($sort === 'acronym' || $sort === 'name' || $sort === 'city' ? 'asc' : 'desc')) === 'asc' ? 'asc' : 'desc';
+        $page = $query->orderBy($sort, $dir)->orderBy('id')->paginate((int) ($v['per_page'] ?? 50));
+
+        $emails = $page->getCollection()->flatMap(static fn ($c): array => is_array($c->emails) ? $c->emails : [])->unique()->values()->all();
+        $suppressed = $emails === [] ? [] : array_flip(EmailSuppression::query()->whereIn('email', $emails)->pluck('email')->all());
+        $prefixes = array_map(static fn ($p): string => mb_strtolower((string) $p), (array) config('campaigns.excluded_local_prefixes', []));
+
+        return response()->json([
+            'data' => $page->getCollection()->map(static fn ($c): array => [
+                'id' => (int) $c->id,
+                'acronym' => (string) $c->acronym,
+                'name' => $c->name,
+                'city' => $c->city,
+                'nip' => $c->nip,
+                'emails' => array_map(static function (string $email) use ($suppressed, $prefixes): array {
+                    $local = (string) strstr($email, '@', true);
+                    $generic = false;
+                    foreach ($prefixes as $prefix) {
+                        $generic = $generic || ($prefix !== '' && str_starts_with($local, $prefix));
+                    }
+
+                    return ['email' => $email, 'skipped' => isset($suppressed[$email]) ? 'suppressed' : ($generic ? 'generic' : null)];
+                }, is_array($c->emails) ? $c->emails : []),
+                'last_sale_at' => $c->last_sale_at?->toDateString(),
+                'documents_24m' => (int) $c->sale_documents_24m,
+                'main_operator' => $c->main_operator,
+                'matched_items' => $c->getAttribute('matched_items') !== null ? (int) $c->getAttribute('matched_items') : null,
+            ])->values()->all(),
+            'meta' => [
+                'current_page' => $page->currentPage(),
+                'last_page' => $page->lastPage(),
+                'per_page' => $page->perPage(),
+                'total' => $page->total(),
+            ],
+            'ids' => $ids,
+            'selected_ids' => $sameCategory && $saved['customer_ids'] !== null
+                ? array_values(array_intersect($saved['customer_ids'], $ids))
+                : null,
+            'warnings' => $warnings,
+        ]);
     }
 
     public function preview(Request $request, Campaign $campaign): JsonResponse
@@ -533,6 +639,7 @@ class CampaignController extends Controller
             $current['list_ids'] = $ids;
         }
         $xl = is_array($input['xl'] ?? null) ? $input['xl'] : [];
+        $category = [$current['xl']['mode'], $current['xl']['months'], $current['xl']['only_mine']];
         if (array_key_exists('mode', $xl)) {
             $current['xl']['mode'] = $xl['mode'];
         }
@@ -541,6 +648,17 @@ class CampaignController extends Controller
         }
         if (array_key_exists('only_mine', $xl)) {
             $current['xl']['only_mine'] = (bool) $xl['only_mine'];
+        }
+        if (array_key_exists('customer_ids', $xl)) {
+            $current['xl']['customer_ids'] = is_array($xl['customer_ids'])
+                ? array_values(array_unique(array_map('intval', $xl['customer_ids'])))
+                : null;
+        } elseif ($category !== [$current['xl']['mode'], $current['xl']['months'], $current['xl']['only_mine']]) {
+            // zaznaczenie dotyczyło innej kategorii — po zmianie wraca „cała kategoria”
+            $current['xl']['customer_ids'] = null;
+        }
+        if ($current['xl']['mode'] === null) {
+            $current['xl']['customer_ids'] = null;
         }
 
         return $current;

@@ -18,7 +18,13 @@ export type PageMeta = { current_page: number; last_page: number; per_page: numb
 
 export type CampaignAudience = {
   list_ids: number[]
-  xl: { mode: CampaignXlMode | null; months: 12 | 24; only_mine: boolean }
+  xl: {
+    mode: CampaignXlMode | null
+    months: 12 | 24
+    only_mine: boolean
+    /** null = cała kategoria; lista = tylko klienci zaznaczeni w oknie „Pokaż / wybierz”. */
+    customer_ids?: number[] | null
+  }
 }
 
 export type CampaignResult = {
@@ -358,6 +364,55 @@ export function saveMailAccount(body: UserMailAccountInput) {
 
 export function testMailAccount() {
   return api<{ ok: boolean; message: string }>('/me/mail-account/test', { method: 'POST' })
+}
+
+export type XlCustomerSort = 'documents' | 'last_sale' | 'acronym' | 'name' | 'city'
+
+export type XlCustomerRow = {
+  id: number
+  acronym: string
+  name: string | null
+  city: string | null
+  nip: string | null
+  /** skipped: suppressed = wypisany z mailingu, generic = faktury@/księgowość@ — ten adres nie dostanie maila. */
+  emails: { email: string; skipped: 'suppressed' | 'generic' | null }[]
+  last_sale_at: string | null
+  documents_24m: number
+  main_operator: string | null
+  /** Tylko „kupowali te towary”: ile pozycji kampanii ten klient kupował. */
+  matched_items: number | null
+}
+
+export type XlCustomersResponse = {
+  data: XlCustomerRow[]
+  meta: PageMeta
+  /** Wszyscy klienci kategorii (do „zaznacz wszystkich”). */
+  ids: number[]
+  /** Zapisany wybór tej samej kategorii; null = cała kategoria (albo zapisano inną kategorię). */
+  selected_ids: number[] | null
+  warnings: string[]
+}
+
+export function campaignXlCustomers(
+  id: number,
+  params: {
+    mode: CampaignXlMode
+    months: 12 | 24
+    only_mine: boolean
+    search?: string
+    sort?: XlCustomerSort
+    dir?: 'asc' | 'desc'
+    page?: number
+    per_page?: number
+  },
+) {
+  const q = new URLSearchParams({ mode: params.mode, months: String(params.months), only_mine: params.only_mine ? '1' : '0' })
+  if (params.search) q.set('search', params.search)
+  if (params.sort) q.set('sort', params.sort)
+  if (params.dir) q.set('dir', params.dir)
+  if (params.page) q.set('page', String(params.page))
+  if (params.per_page) q.set('per_page', String(params.per_page))
+  return api<XlCustomersResponse>(`/campaigns/${id}/xl-customers?${q.toString()}`)
 }
 
 export type ErpOperator = { ident: string; name: string | null; customers: number; user: { id: number; name: string } | null }

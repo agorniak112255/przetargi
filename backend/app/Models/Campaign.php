@@ -75,7 +75,10 @@ class Campaign extends Model
     /**
      * Odbiorcy z domyślnymi wartościami — kształt z kontraktu API.
      *
-     * @return array{list_ids: list<int>, xl: array{mode: string|null, months: int, only_mine: bool}}
+     * customer_ids: null = cała kategoria klientów XL; lista = tylko ci zaznaczeni w oknie „Pokaż / wybierz”
+     * (przy wysyłce przecięta z kategorią, więc klient, który z niej wypadł, nie dostanie maila).
+     *
+     * @return array{list_ids: list<int>, xl: array{mode: string|null, months: int, only_mine: bool, customer_ids: list<int>|null}}
      */
     public function audienceSettings(): array
     {
@@ -83,6 +86,7 @@ class Campaign extends Model
         $xl = is_array($a['xl'] ?? null) ? $a['xl'] : [];
         $mode = $xl['mode'] ?? null;
         $months = (int) ($xl['months'] ?? 24);
+        $customerIds = $xl['customer_ids'] ?? null;
 
         return [
             'list_ids' => array_values(array_map('intval', is_array($a['list_ids'] ?? null) ? $a['list_ids'] : [])),
@@ -90,6 +94,7 @@ class Campaign extends Model
                 'mode' => in_array($mode, self::XL_MODES, true) ? $mode : null,
                 'months' => in_array($months, self::XL_MONTHS, true) ? $months : 24,
                 'only_mine' => (bool) ($xl['only_mine'] ?? false),
+                'customer_ids' => is_array($customerIds) ? array_values(array_unique(array_map('intval', $customerIds))) : null,
             ],
         ];
     }

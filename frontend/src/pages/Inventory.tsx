@@ -319,7 +319,46 @@ export function Inventory() {
   return (
     <div>
       <InventoryTabs />
-      <CampaignPickBanner {...campaignPick} what="towar" />
+      {/* przypięte u góry: do której kampanii dobierasz towar i co zaznaczono — widoczne przy przewijaniu */}
+      <div className="sticky top-0 z-30 -mx-1 space-y-2 px-1 pb-2 empty:hidden">
+        <CampaignPickBanner {...campaignPick} what="towar" />
+        {canCampaign && selected.size > 0 && (
+          <div className="app-bulk-bar flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-slate-800 px-4 py-2.5 text-sm text-white shadow-xl">
+            <span>
+              <b className="tabular-nums">{fmtInt(selected.size)}</b>{' '}
+              {plural(selected.size, 'zaznaczona', 'zaznaczone', 'zaznaczonych')} · razem ok.{' '}
+              <b className="tabular-nums">{fmtInt(Math.round(selectedValue))} zł</b> zapasu
+              {selectedWithoutValue > 0 && (
+                <span className="text-slate-300"> ({fmtInt(selectedWithoutValue)} bez wartości z XL)</span>
+              )}
+              {selected.size > CAMPAIGN_MAX_ITEMS && (
+                <span className="mt-0.5 block text-xs text-amber-300">
+                  Kampania mieści najwyżej {CAMPAIGN_MAX_ITEMS} pozycji — odznacz{' '}
+                  {fmtInt(selected.size - CAMPAIGN_MAX_ITEMS)}.
+                </span>
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSelected(new Map())
+                  selectAnchor.current = null
+                }}
+                className="rounded border border-slate-500 px-3 py-1.5 text-xs text-white hover:bg-slate-700"
+              >
+                Wyczyść
+              </button>
+              <AddToCampaignMenu
+                erpItemIds={[...selected.keys()]}
+                target={campaignPick.target}
+                placement="down"
+                buttonClassName="rounded bg-sky-500 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-sky-400 disabled:opacity-50"
+              />
+            </div>
+          </div>
+        )}
+      </div>
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Zapasy</h1>
@@ -566,42 +605,6 @@ export function Inventory() {
         <ProductVerifyModal productId={previewId} query={search.trim()} onClose={() => setPreviewId(null)} />
       </div>
 
-      {canCampaign && selected.size > 0 && (
-        <div className="app-bulk-bar sticky bottom-3 z-30 mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl bg-slate-800 px-4 py-2.5 text-sm text-white shadow-xl">
-          <span>
-            <b className="tabular-nums">{fmtInt(selected.size)}</b>{' '}
-            {plural(selected.size, 'zaznaczona', 'zaznaczone', 'zaznaczonych')} · razem ok.{' '}
-            <b className="tabular-nums">{fmtInt(Math.round(selectedValue))} zł</b> zapasu
-            {selectedWithoutValue > 0 && (
-              <span className="text-slate-300"> ({fmtInt(selectedWithoutValue)} bez wartości z XL)</span>
-            )}
-            {selected.size > CAMPAIGN_MAX_ITEMS && (
-              <span className="mt-0.5 block text-xs text-amber-300">
-                Kampania mieści najwyżej {CAMPAIGN_MAX_ITEMS} pozycji — odznacz{' '}
-                {fmtInt(selected.size - CAMPAIGN_MAX_ITEMS)}.
-              </span>
-            )}
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setSelected(new Map())
-                selectAnchor.current = null
-              }}
-              className="rounded border border-slate-500 px-3 py-1.5 text-xs text-white hover:bg-slate-700"
-            >
-              Wyczyść
-            </button>
-            <AddToCampaignMenu
-              erpItemIds={[...selected.keys()]}
-              target={campaignPick.target}
-              placement="up"
-              buttonClassName="rounded bg-sky-500 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-sky-400 disabled:opacity-50"
-            />
-          </div>
-        </div>
-      )}
     </div>
   )
 }
