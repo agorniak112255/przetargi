@@ -318,7 +318,10 @@ function CampaignRow({
           '—'
         )}
       </td>
-      <td className="p-2 text-right tabular-nums">{row.status === 'draft' ? '—' : fmtInt(row.recipients_total)}</td>
+      <td className="p-2 text-right tabular-nums">
+        {row.status === 'draft' || row.status === 'scheduled' ? '—' : fmtInt(row.recipients_total)}
+        {(row.clicked ?? 0) > 0 && <span className="block text-[10px] text-blue-700">kliknęło {fmtInt(row.clicked)}</span>}
+      </td>
       <td className={`p-2 text-right tabular-nums ${row.failed > 0 ? 'font-medium text-red-700' : ''}`}>
         {row.status === 'draft' ? '—' : fmtInt(row.failed)}
       </td>

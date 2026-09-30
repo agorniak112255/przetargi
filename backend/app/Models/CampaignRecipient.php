@@ -39,6 +39,8 @@ class CampaignRecipient extends Model
         'sent_at',
         'message_id',
         'unsubscribed_at',
+        'first_clicked_at',
+        'clicks',
     ];
 
     protected function casts(): array
@@ -47,6 +49,8 @@ class CampaignRecipient extends Model
             'attempts' => 'integer',
             'sent_at' => 'datetime',
             'unsubscribed_at' => 'datetime',
+            'first_clicked_at' => 'datetime',
+            'clicks' => 'integer',
         ];
     }
 

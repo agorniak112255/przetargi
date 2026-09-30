@@ -55,6 +55,7 @@ import {
   type CampaignRecipientRow,
   type CampaignRecipientStatus,
   type CampaignTotals,
+  type CampaignClicks,
   type CampaignSales,
   type CampaignXlMode,
   type MailingList,
@@ -2005,6 +2006,7 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
                 <th className="p-2 text-right">Po 30 dniach</th>
                 <th className="p-2">Zeszło</th>
                 <th className="p-2 text-right">Kupili odbiorcy kampanii</th>
+                <th className="p-2 text-right">Kliknięcia</th>
               </tr>
             </thead>
             <tbody>
@@ -2038,6 +2040,9 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
                     <td className="whitespace-nowrap p-2 text-right tabular-nums">
                       <ItemSalesCell sales={campaign.sales ?? null} erpItemId={i.erp_item_id} unit={i.unit} />
                     </td>
+                    <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                      <ItemClicksCell clicks={campaign.clicks ?? null} itemId={i.id} />
+                    </td>
                   </tr>
                 )
               })}
@@ -2051,6 +2056,8 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
       </div>
 
       {campaign.sales && <CampaignSalesPanel sales={campaign.sales} />}
+
+      {campaign.clicks && <ClickedPanel campaign={campaign} clicks={campaign.clicks} tick={tick} />}
 
       <div className="overflow-x-auto rounded-xl bg-white p-4 shadow-sm">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -2086,6 +2093,7 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
               <th className="p-2">Źródło</th>
               <th className="p-2">Status</th>
               <th className="p-2">Wysłano</th>
+              <th className="p-2 text-right">Kliknięcia</th>
               <th className="p-2">Uwagi</th>
             </tr>
           </thead>
@@ -2103,6 +2111,9 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
                   </Chip>
                 </td>
                 <td className="whitespace-nowrap p-2 tabular-nums text-slate-600">{r.sent_at ? fmtDateTime(r.sent_at) : '—'}</td>
+                <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                  {r.clicks ? <b className="font-semibold text-blue-700">{fmtInt(r.clicks)}</b> : <span className="text-slate-400">—</span>}
+                </td>
                 <td className="max-w-[24rem] p-2 text-[11px]">
                   {r.error && <span className="break-words text-red-700">{r.error}</span>}
                   {r.unsubscribed_at && <span className="block text-slate-600">wypisał się {fmtDate(r.unsubscribed_at)}</span>}
@@ -2111,7 +2122,7 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
             ))}
             {rows !== null && rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-6 text-center text-slate-500">
+                <td colSpan={6} className="p-6 text-center text-slate-500">
                   Brak odbiorców w tym widoku.
                 </td>
               </tr>
@@ -2303,6 +2314,89 @@ function ScheduledBanner({
           {busy ? 'Cofam…' : 'Cofnij planowanie'}
         </button>
       )}
+    </div>
+  )
+}
+
+/** Kliknięcia ludzi przy pozycji: strona produktu i „Zapytaj o ofertę”. */
+function ItemClicksCell({ clicks, itemId }: { clicks: CampaignClicks | null; itemId: number }) {
+  const row = clicks?.items.find((r) => r.campaign_item_id === itemId)
+  if (!row || row.offer + row.product === 0) return <span className="text-slate-400">—</span>
+  return (
+    <span title="Kliknięcia odbiorców (bez skanerów poczty)">
+      <b className="font-semibold text-blue-700">{fmtInt(row.product + row.offer)}</b>
+      <span className="block text-[10px] text-slate-500">
+        produkt {fmtInt(row.product)} · zapytanie {fmtInt(row.offer)}
+      </span>
+    </span>
+  )
+}
+
+/**
+ * „Kliknęli — do kogo zadzwonić”: odbiorcy, którzy kliknęli produkt albo „Zapytaj o ofertę”, od najczęściej klikających.
+ * Kliknięcia skanerów poczty (zaraz po doręczeniu, automaty) nie liczą się.
+ */
+function ClickedPanel({ campaign, clicks, tick }: { campaign: Campaign; clicks: CampaignClicks; tick: number }) {
+  const [rows, setRows] = useState<CampaignRecipientRow[] | null>(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    campaignRecipients(campaign.id, { clicked: true, per_page: 100 })
+      .then((res) => {
+        if (alive) setRows(res.data)
+      })
+      .catch((ex: unknown) => {
+        if (alive) setErr(errorText(ex, 'Nie udało się wczytać klikających.'))
+      })
+    return () => {
+      alive = false
+    }
+  }, [campaign.id, tick])
+
+  const sent = campaign.totals?.sent ?? 0
+  return (
+    <div className="rounded-xl bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-2.5">
+        <b className="text-sm text-slate-900">Kliknęli — do kogo zadzwonić</b>
+        <span className="text-[11px] text-slate-500">
+          kliknęło {fmtInt(clicks.recipients)} z {fmtInt(sent)} {plural(sent, 'odbiorcy', 'odbiorców', 'odbiorców')} ·{' '}
+          {fmtInt(clicks.total)} {plural(clicks.total, 'kliknięcie', 'kliknięcia', 'kliknięć')}
+          {clicks.bots > 0 ? ` · pominięte kliknięcia skanerów poczty: ${fmtInt(clicks.bots)}` : ''}
+        </span>
+      </div>
+      {err && <p className="px-4 py-2 text-xs text-red-700">{err}</p>}
+      {rows !== null && rows.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b bg-slate-50">
+                <th className="p-2">Adres</th>
+                <th className="p-2 text-right">Kliknięcia</th>
+                <th className="p-2">Pierwsze kliknięcie</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-b">
+                  <td className="p-2">
+                    <span className="font-mono text-slate-900">{r.email}</span>
+                    {r.name && <span className="block text-[11px] text-slate-500">{r.name}</span>}
+                  </td>
+                  <td className="p-2 text-right tabular-nums font-semibold text-blue-700">{fmtInt(r.clicks ?? 0)}</td>
+                  <td className="whitespace-nowrap p-2 tabular-nums text-slate-600">{fmtDateTime(r.first_clicked_at ?? null)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        rows !== null && <p className="px-4 py-3 text-xs text-slate-500">Nikt jeszcze nie kliknął linku w mailu.</p>
+      )}
+      <p className="px-4 py-3 text-[11px] text-slate-500">
+        Liczymy kliknięcia w zdjęcie lub nazwę produktu (strona produktu) i w „Zapytaj o ofertę”. Otwarć maila nie liczymy —
+        programy pocztowe je zawyżają. Kliknięcia w ciągu minuty od doręczenia i od automatów to skanery poczty.
+      </p>
     </div>
   )
 }

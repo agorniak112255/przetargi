@@ -22,6 +22,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\B2bAccountController;
 use App\Http\Controllers\Api\B2bDiscountRuleController;
 use App\Http\Controllers\Api\B2bManufacturerRuleController;
+use App\Http\Controllers\Api\CampaignClickController;
 use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CardMatchController;
 use App\Http\Controllers\Api\ClientController;
@@ -82,6 +83,11 @@ Route::get('/product-images/{image}/thumb', [ProductImageThumbController::class,
 // Wypis jednym kliknięciem z Gmaila/Yahoo przychodzi ze wspólnych adresów dostawcy poczty — POST z wyższym limitem.
 Route::get('/wypis/{token}', [UnsubscribeController::class, 'show'])->where('token', '[A-Za-z0-9]{40}')->middleware('throttle:30,1')->name('campaigns.unsubscribe');
 Route::post('/wypis/{token}', [UnsubscribeController::class, 'confirm'])->where('token', '[A-Za-z0-9]{40}')->middleware('throttle:300,1');
+// Linki z maila kampanii: zapis kliknięcia i przejście do „Zapytaj o ofertę” (mail) albo strony produktu
+Route::middleware('throttle:300,1')->group(function (): void {
+    Route::get('/k/{token}/o/{item}', [CampaignClickController::class, 'offer'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
+    Route::get('/k/{token}/p/{item}', [CampaignClickController::class, 'product'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
+});
 
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);

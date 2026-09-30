@@ -62,7 +62,9 @@
 @if ($layout === 'list')
                         <td width="{{ $imgMax }}" valign="top" style="padding:10px 0 10px 10px;width:{{ $imgMax }}px;">
 @if ($p['image_url'] !== null)
+@if ($p['product_url'] !== null)<a href="{{ $p['product_url'] }}" style="text-decoration:none;">@endif
                           <img src="{{ $p['image_url'] }}" width="{{ $imgMax }}" alt="{{ $p['name'] }}" style="display:block;width:{{ $imgMax }}px;max-width:100%;height:auto;border:0;border-radius:4px;">
+@if ($p['product_url'] !== null)</a>@endif
 @else
                           <div style="width:{{ $imgMax }}px;height:{{ $imgMax }}px;background:#f3f5f6;border-radius:4px;"></div>
 @endif
@@ -71,12 +73,18 @@
                         <td valign="top" style="padding:10px;font-family:Arial,Helvetica,sans-serif;">
 @if ($layout !== 'list')
 @if ($p['image_url'] !== null)
+@if ($p['product_url'] !== null)<a href="{{ $p['product_url'] }}" style="text-decoration:none;">@endif
                           <img src="{{ $p['image_url'] }}" width="{{ $imgMax }}" alt="{{ $p['name'] }}" style="display:block;width:100%;max-width:{{ $imgMax }}px;height:auto;border:0;border-radius:4px;margin:0 auto 8px;">
+@if ($p['product_url'] !== null)</a>@endif
 @else
                           <div style="height:{{ $imgMax }}px;background:#f3f5f6;border-radius:4px;margin-bottom:8px;"></div>
 @endif
 @endif
+@if ($p['product_url'] !== null)
+                          <a href="{{ $p['product_url'] }}" style="display:block;font-size:13px;line-height:1.3;font-weight:700;color:{{ $text }};text-decoration:none;">{{ $p['name'] }}</a>
+@else
                           <div style="font-size:13px;line-height:1.3;font-weight:700;color:{{ $text }};">{{ $p['name'] }}</div>
+@endif
 @if ($p['code'] !== '')
                           <div style="font-size:11px;color:{{ $muted }};margin-top:4px;">Kod {{ $p['code'] }}</div>
 @endif
@@ -102,6 +110,9 @@
                               </td>
                             </tr>
                           </table>
+@if ($p['product_url'] !== null)
+                          <div style="text-align:center;margin-top:6px;"><a href="{{ $p['product_url'] }}" style="font-size:12px;color:{{ $brand }};font-family:Arial,Helvetica,sans-serif;">Zobacz produkt</a></div>
+@endif
                         </td>
                       </tr>
                     </table>

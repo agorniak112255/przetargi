@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Campaign;
+use App\Models\CampaignClick;
 use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
 use App\Models\EmailSuppression;
@@ -95,6 +96,7 @@ class CampaignController extends Controller
                 'items',
                 'recipients as recipients_total',
                 'recipients as sent_count' => fn (Builder $q) => $q->where('status', CampaignRecipient::STATUS_SENT),
+                'recipients as clicked_count' => fn (Builder $q) => $q->where('clicks', '>', 0),
                 'recipients as failed_count' => fn (Builder $q) => $q->where('status', CampaignRecipient::STATUS_FAILED),
             ])
             ->selectSub(
@@ -524,14 +526,20 @@ class CampaignController extends Controller
         $this->authorizeView($request, $campaign);
         $v = $request->validate([
             'status' => ['nullable', 'string', Rule::in(['', ...self::RECIPIENT_STATUSES])],
+            // tylko ci, którzy kliknęli — od ostatniego kliknięcia („do kogo zadzwonić”)
+            'clicked' => ['nullable', 'boolean'],
             'page' => ['nullable', 'integer', 'min:1'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:200'],
         ]);
 
-        $query = $campaign->recipients()->orderBy('id');
+        $query = $campaign->recipients();
         if (($v['status'] ?? '') !== '') {
             $query->where('status', $v['status']);
         }
+        if ((bool) ($v['clicked'] ?? false)) {
+            $query->where('clicks', '>', 0)->orderByDesc('clicks')->orderBy('first_clicked_at');
+        }
+        $query->orderBy('id');
         $page = $query->paginate((int) ($v['per_page'] ?? 50));
 
         return response()->json([
@@ -544,6 +552,8 @@ class CampaignController extends Controller
                 'error' => $r->error,
                 'sent_at' => $r->sent_at?->toIso8601String(),
                 'unsubscribed_at' => $r->unsubscribed_at?->toIso8601String(),
+                'first_clicked_at' => $r->first_clicked_at?->toIso8601String(),
+                'clicks' => (int) $r->clicks,
             ])->values()->all(),
             'meta' => [
                 'current_page' => $page->currentPage(),
@@ -795,6 +805,8 @@ class CampaignController extends Controller
             'recipients_total' => (int) $c->getAttribute('recipients_total'),
             'sent' => (int) $c->getAttribute('sent_count'),
             'failed' => (int) $c->getAttribute('failed_count'),
+            // odbiorcy, którzy kliknęli link w mailu (bez skanerów poczty)
+            'clicked' => (int) $c->getAttribute('clicked_count'),
             'created_at' => $c->created_at?->toIso8601String(),
             'scheduled_at' => $c->scheduled_at?->toIso8601String(),
             'sending_started_at' => $c->sending_started_at?->toIso8601String(),
@@ -838,6 +850,45 @@ class CampaignController extends Controller
             'items' => $author !== null ? $this->presenter->presentMany($items, $author) : [],
             'warnings' => $this->warnings($campaign, $viewer),
             'sales' => $campaign->sending_started_at === null ? null : $this->sales->forCampaign($campaign),
+            'clicks' => $campaign->sending_started_at === null ? null : $this->clickSummary($campaign),
+        ];
+    }
+
+    /**
+     * Kliknięcia w linki maila: odbiorcy, którzy kliknęli, i kliknięcia ludzi per pozycja (offer = „Zapytaj o ofertę”,
+     * product = strona produktu). Skanery poczty tylko w liczniku bots.
+     *
+     * @return array{recipients: int, total: int, bots: int, items: list<array{campaign_item_id: int, offer: int, product: int}>}
+     */
+    private function clickSummary(Campaign $campaign): array
+    {
+        $rows = CampaignClick::query()->where('campaign_id', $campaign->id)
+            ->groupBy('campaign_item_id', 'kind', 'suspected_bot')
+            ->selectRaw('campaign_item_id, kind, suspected_bot, count(*) as c')
+            ->get();
+        $items = [];
+        $total = $bots = 0;
+        foreach ($rows as $row) {
+            $count = (int) $row->getAttribute('c');
+            if ((bool) $row->suspected_bot) {
+                $bots += $count;
+
+                continue;
+            }
+            $total += $count;
+            if ($row->campaign_item_id === null) {
+                continue;
+            }
+            $id = (int) $row->campaign_item_id;
+            $items[$id] ??= ['campaign_item_id' => $id, 'offer' => 0, 'product' => 0];
+            $items[$id][$row->kind === CampaignClick::KIND_OFFER ? 'offer' : 'product'] += $count;
+        }
+
+        return [
+            'recipients' => CampaignRecipient::query()->where('campaign_id', $campaign->id)->where('clicks', '>', 0)->count(),
+            'total' => $total,
+            'bots' => $bots,
+            'items' => array_values($items),
         ];
     }
 

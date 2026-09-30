@@ -25,6 +25,9 @@
 @if ($p['stock'] !== null)
   {!! $p['stock'] !!}
 @endif
+@if ($p['product_url'] !== null)
+  Zobacz produkt: {!! $p['product_url'] !!}
+@endif
 @if ($p['ask_url'] !== '#')
   Zapytaj o ofertę: {!! $p['ask_url'] !!}
 @endif

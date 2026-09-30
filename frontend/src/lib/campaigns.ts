@@ -47,6 +47,8 @@ export type CampaignListRow = {
   recipients_total: number
   sent: number
   failed: number
+  /** Odbiorcy, którzy kliknęli link w mailu (bez skanerów poczty). */
+  clicked?: number
   created_at: string
   /** Zaplanowana godzina startu (UTC, ISO). */
   scheduled_at?: string | null
@@ -174,6 +176,17 @@ export type Campaign = {
   warnings: string[]
   /** null = projekt (jeszcze nie wysyłany). */
   sales?: CampaignSales | null
+  /** Kliknięcia w linki maila (ludzie; skanery poczty tylko w `bots`); null = projekt. */
+  clicks?: CampaignClicks | null
+}
+
+export type CampaignClicks = {
+  /** Ilu odbiorców kliknęło. */
+  recipients: number
+  total: number
+  bots: number
+  /** offer = „Zapytaj o ofertę”, product = strona produktu. */
+  items: { campaign_item_id: number; offer: number; product: number }[]
 }
 
 export type CampaignPatch = Partial<
@@ -223,6 +236,8 @@ export type CampaignRecipientRow = {
   error: string | null
   sent_at: string | null
   unsubscribed_at: string | null
+  first_clicked_at?: string | null
+  clicks?: number
 }
 
 export type MailingList = {
@@ -362,9 +377,14 @@ export function cancelCampaign(id: number) {
   return api<Campaign>(`/campaigns/${id}/cancel`, { method: 'POST' })
 }
 
-export function campaignRecipients(id: number, params: { status?: CampaignRecipientStatus | ''; page?: number } = {}) {
+export function campaignRecipients(
+  id: number,
+  params: { status?: CampaignRecipientStatus | ''; clicked?: boolean; page?: number; per_page?: number } = {},
+) {
   const q = new URLSearchParams()
   if (params.status) q.set('status', params.status)
+  if (params.clicked) q.set('clicked', '1')
+  if (params.per_page) q.set('per_page', String(params.per_page))
   if (params.page) q.set('page', String(params.page))
   const qs = q.toString()
   return api<{ data: CampaignRecipientRow[]; meta: PageMeta }>(`/campaigns/${id}/recipients${qs ? `?${qs}` : ''}`)

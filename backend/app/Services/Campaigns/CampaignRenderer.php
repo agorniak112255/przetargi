@@ -12,7 +12,8 @@ use Illuminate\Support\Carbon;
 
 /**
  * Treść maila kampanii (Blade emails/campaign + campaign-text) — ten sam HTML w podglądzie, teście i wysyłce.
- * Bez odbiorcy link wypisu to „#”. Nie final — testy podmieniają zależności.
+ * Bez odbiorcy link wypisu to „#”, „Zapytaj o ofertę” to zwykły mailto, a zdjęcie i nazwa bez linku do strony produktu;
+ * u odbiorcy oba linki idą przez aplikację (zapis kliknięcia, CampaignClickController). Nie final — testy podmieniają zależności.
  */
 class CampaignRenderer
 {
@@ -36,6 +37,8 @@ class CampaignRenderer
 
         $items = $campaign->items()->get();
         $snapUnits = $items->pluck('snap_unit', 'id')->all();
+        $publicUrl = rtrim((string) config('campaigns.public_url'), '/');
+        $track = $recipient !== null && $publicUrl !== '' ? $publicUrl.'/api/k/'.$recipient->token : null;
         $products = [];
         foreach ($this->presenter->presentMany($items, $author) as $row) {
             $snap = $useSnapshot ? $row['snapshot'] : null;
@@ -63,15 +66,17 @@ class CampaignRenderer
                     : null,
                 'image_url' => $snap !== null ? $snap['image_url'] : $row['image_url'],
                 'note' => $row['note'] !== null && trim((string) $row['note']) !== '' ? (string) $row['note'] : null,
-                'ask_url' => $fromAddress !== ''
-                    ? 'mailto:'.$fromAddress.'?subject='.rawurlencode(trim('Zapytanie '.$code.' '.$itemCode))
-                    : '#',
+                'ask_url' => match (true) {
+                    $fromAddress === '' => '#',
+                    $track !== null => $track.'/o/'.$row['id'],
+                    default => 'mailto:'.$fromAddress.'?subject='.rawurlencode(trim('Zapytanie '.$code.' '.$itemCode)),
+                },
+                'product_url' => $track !== null ? $track.'/p/'.$row['id'] : null,
             ];
         }
 
         $columns = self::COLUMNS[$campaign->layout] ?? 3;
         $rows = array_chunk($products, $columns);
-        $publicUrl = rtrim((string) config('campaigns.public_url'), '/');
         $company = (string) config('campaigns.company_name');
         $validUntil = $campaign->valid_until !== null
             ? 'Ceny netto ważne do '.$campaign->valid_until->format('d.m.Y').' lub do wyczerpania zapasów'
