@@ -62,6 +62,11 @@ export function MailingListDetail() {
   const [basisNote, setBasisNote] = useState('')
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
+  // jeden odbiorca — osobne pola zamiast wklejania
+  const [oneEmail, setOneEmail] = useState('')
+  const [oneName, setOneName] = useState('')
+  const [oneCompany, setOneCompany] = useState('')
+  const [formMsg, setFormMsg] = useState('')
 
   const [toRemove, setToRemove] = useState<MailingListContact | null>(null)
   const [removing, setRemoving] = useState(false)
@@ -136,25 +141,55 @@ export function MailingListDetail() {
     }
   }
 
-  async function runImport(e: FormEvent) {
-    e.preventDefault()
-    if (!text.trim()) return
+  /** Wspólny zapis: pojedynczy odbiorca i wklejona paczka idą tym samym importem (podstawa wysyłki dla wszystkich). */
+  async function importText(payload: string): Promise<boolean> {
+    if (basis === 'consent' && !basisNote.trim()) {
+      setFormMsg('Przy podstawie „Zgoda” wpisz, skąd jest zgoda (np. formularz www 2025).')
+      return false
+    }
     setImporting(true)
     setErr('')
+    setFormMsg('')
     setImportResult(null)
     try {
       const res = await importMailingListContacts(listId, {
-        text,
+        text: payload,
         basis,
         basis_note: basisNote.trim() || undefined,
       })
       setImportResult(res)
-      setText('')
       await Promise.all([loadContacts(), loadList()])
+      return true
     } catch (ex) {
-      setErr(errorText(ex, 'Import się nie udał.'))
+      setErr(errorText(ex, 'Nie udało się dodać adresów.'))
+      return false
     } finally {
       setImporting(false)
+    }
+  }
+
+  async function runImport(e: FormEvent) {
+    e.preventDefault()
+    if (!text.trim()) {
+      setFormMsg('Wklej albo wpisz co najmniej jeden adres e-mail (jeden w wierszu).')
+      return
+    }
+    if (await importText(text)) setText('')
+  }
+
+  async function addOne(e: FormEvent) {
+    e.preventDefault()
+    const email = oneEmail.trim()
+    if (!email) {
+      setFormMsg('Wpisz adres e-mail odbiorcy.')
+      return
+    }
+    // separatory importu (; , tabulator) w nazwie rozbiłyby wiersz na kolumny
+    const clean = (v: string) => v.replace(/[;,\t]+/g, ' ').trim()
+    if (await importText([email, clean(oneName), clean(oneCompany)].join(';'))) {
+      setOneEmail('')
+      setOneName('')
+      setOneCompany('')
     }
   }
 
@@ -307,22 +342,9 @@ export function MailingListDetail() {
               {list ? 'To wspólna grupa — adresy dodaje administrator.' : 'Ładowanie…'}
             </p>
           ) : (
-            <form onSubmit={runImport} className="space-y-3">
-              <label className="block text-slate-600">
-                Wklej adresy albo CSV: <span className="font-mono">e-mail;imię i nazwisko;firma</span>
-                <textarea
-                  className={`${INPUT} mt-1 block h-40 w-full font-mono`}
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder={'jan.kowalski@firma.pl;Jan Kowalski;Firma Sp. z o.o.\nzakupy@budex.pl'}
-                />
-                <span className="mt-0.5 block text-[11px] text-slate-500">
-                  Jeden adres w wierszu. Separator: średnik, przecinek albo tabulator (kolumny z Excela).
-                  {lines > 0 && ` Wierszy: ${fmtInt(lines)}.`}
-                </span>
-              </label>
+            <div className="space-y-4">
               <fieldset>
-                <legend className="mb-1 text-slate-600">Podstawa wysyłki dla całej paczki</legend>
+                <legend className="mb-1 text-slate-600">Podstawa wysyłki</legend>
                 <label className="flex items-start gap-2 py-0.5">
                   <input type="radio" name="basis" checked={basis === 'customer'} onChange={() => setBasis('customer')} />
                   <span>
@@ -335,22 +357,65 @@ export function MailingListDetail() {
                     <b className="text-slate-800">Zgoda</b> na informacje handlowe
                   </span>
                 </label>
+                <label className="mt-1 block text-slate-600">
+                  {basis === 'consent' ? 'Skąd zgoda (wymagane)' : 'Uwaga (opcjonalnie)'}
+                  <input
+                    className={`${INPUT} mt-1 block w-full`}
+                    maxLength={255}
+                    value={basisNote}
+                    onChange={(e) => setBasisNote(e.target.value)}
+                    placeholder={basis === 'consent' ? 'np. formularz www 2025, targi Kielce 2026 z podpisem' : 'np. klienci z Podkarpacia'}
+                  />
+                </label>
               </fieldset>
-              <label className="block text-slate-600">
-                {basis === 'consent' ? 'Skąd zgoda (wymagane)' : 'Uwaga (opcjonalnie)'}
-                <input
-                  className={`${INPUT} mt-1 block w-full`}
-                  maxLength={255}
-                  required={basis === 'consent'}
-                  value={basisNote}
-                  onChange={(e) => setBasisNote(e.target.value)}
-                  placeholder={basis === 'consent' ? 'np. formularz www 2025, targi Kielce 2026 z podpisem' : 'np. klienci z Podkarpacia'}
-                />
-              </label>
-              <button type="submit" className={`${BTN_PRIMARY} w-full`} disabled={importing || !text.trim()}>
-                {importing ? 'Dodaję…' : 'Dodaj do grupy'}
-              </button>
-            </form>
+
+              <form onSubmit={addOne} className="space-y-2 rounded border border-slate-200 p-3">
+                <p className="font-semibold text-slate-900">Jeden odbiorca</p>
+                <label className="block text-slate-600">
+                  Adres e-mail
+                  <input
+                    type="email"
+                    className={`${INPUT} mt-1 block w-full`}
+                    value={oneEmail}
+                    onChange={(e) => setOneEmail(e.target.value)}
+                    autoComplete="off"
+                  />
+                </label>
+                <label className="block text-slate-600">
+                  Imię i nazwisko (opcjonalnie)
+                  <input className={`${INPUT} mt-1 block w-full`} maxLength={200} value={oneName} onChange={(e) => setOneName(e.target.value)} />
+                </label>
+                <label className="block text-slate-600">
+                  Firma (opcjonalnie)
+                  <input className={`${INPUT} mt-1 block w-full`} maxLength={250} value={oneCompany} onChange={(e) => setOneCompany(e.target.value)} />
+                </label>
+                <button type="submit" className={`${BTN_PRIMARY} w-full`} disabled={importing}>
+                  {importing ? 'Dodaję…' : 'Dodaj odbiorcę'}
+                </button>
+              </form>
+
+              <form onSubmit={runImport} className="space-y-2 rounded border border-slate-200 p-3">
+                <p className="font-semibold text-slate-900">Wiele adresów naraz</p>
+                <label className="block text-slate-600">
+                  Wklej adresy — jeden w wierszu; można z kolumnami z Excela
+                  <textarea
+                    className={`${INPUT} mt-1 block h-32 w-full font-mono`}
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                  />
+                  <span className="mt-0.5 block text-[11px] text-slate-500">
+                    Przykład wiersza: <span className="font-mono">jan.kowalski@firma.pl;Jan Kowalski;Firma Sp. z o.o.</span> —
+                    albo sam adres. Separator: średnik, przecinek albo tabulator.
+                    {lines > 0 && ` Wierszy: ${fmtInt(lines)}.`}
+                  </span>
+                </label>
+                <button type="submit" className={`${BTN_PRIMARY} w-full`} disabled={importing}>
+                  {importing ? 'Dodaję…' : lines > 0 ? `Dodaj ${fmtInt(lines)} ${plural(lines, 'adres', 'adresy', 'adresów')}` : 'Dodaj adresy'}
+                </button>
+              </form>
+
+              {formMsg && <p className="rounded bg-amber-50 px-2 py-1.5 text-amber-900">{formMsg}</p>}
+            </div>
           )}
 
           {importResult && (
