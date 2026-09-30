@@ -34,8 +34,8 @@ export function AdminRoles() {
   const [newCode, setNewCode] = useState('')
   const [newLabel, setNewLabel] = useState('')
   const [copyFrom, setCopyFrom] = useState('handlowiec')
-  // null = nie edytujemy nazwy; tekst = pole zmiany nazwy wybranej roli jest otwarte
-  const [renaming, setRenaming] = useState<string | null>(null)
+  // null = nie edytujemy; obiekt = otwarte pola zmiany nazwy i kodu wybranej roli
+  const [renaming, setRenaming] = useState<{ label: string; code: string } | null>(null)
 
   async function load() {
     const data = await api<RolesResponse>('/admin/roles')
@@ -118,18 +118,31 @@ export function AdminRoles() {
   async function onRenameRole(e: FormEvent) {
     e.preventDefault()
     if (!selected || renaming === null) return
+    const oldCode = selected
+    const code = renaming.code.trim()
     setBusy(true)
     setErr('')
     setMsg('')
     try {
-      const updated = await api<RoleRow>(`/admin/roles/${selected}`, {
+      const updated = await api<RoleRow>(`/admin/roles/${oldCode}`, {
         method: 'PATCH',
-        body: JSON.stringify({ display_name: renaming.trim() }),
+        body: JSON.stringify({
+          display_name: renaming.label.trim(),
+          ...(code !== oldCode ? { name: code } : {}),
+        }),
       })
-      // Tylko nazwa — niezapisane zaznaczenia uprawnień zostają na ekranie.
-      setRoles((prev) => prev.map((r) => (r.name === updated.name ? { ...r, label: updated.label } : r)))
+      // Tylko nazwa i kod — niezapisane zaznaczenia uprawnień zostają na ekranie.
+      setRoles((prev) =>
+        prev.map((r) => (r.name === oldCode ? { ...r, name: updated.name, label: updated.label } : r)),
+      )
+      setSelected(updated.name)
+      setCopyFrom((prev) => (prev === oldCode ? updated.name : prev))
       setRenaming(null)
-      setMsg(`Zmieniono nazwę roli na „${updated.label ?? updated.name}”.`)
+      setMsg(
+        updated.name !== oldCode
+          ? `Zmieniono rolę: „${updated.label ?? updated.name}”, kod ${updated.name}.`
+          : `Zmieniono nazwę roli na „${updated.label ?? updated.name}”.`,
+      )
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd')
     } finally {
@@ -188,6 +201,7 @@ export function AdminRoles() {
           placeholder="kod-roli (np. handel-krakow)"
           value={newCode}
           onChange={(e) => setNewCode(e.target.value.toLowerCase())}
+          maxLength={32}
           required
           pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
         />
@@ -241,7 +255,8 @@ export function AdminRoles() {
         <>
           <div className="mb-3 flex flex-wrap items-center gap-3 text-sm text-slate-600">
             <span>
-              Uprawnienia roli <strong>{selectedRole.label ?? selected}</strong> ({checked.size}/
+              Uprawnienia roli <strong>{selectedRole.label ?? selected}</strong>{' '}
+              <code className="text-xs text-slate-500">{selected}</code> ({checked.size}/
               {definitions.length})
               {typeof selectedRole.users_count === 'number' && (
                 <> · użytkowników: {selectedRole.users_count}</>
@@ -251,22 +266,40 @@ export function AdminRoles() {
               <form onSubmit={(e) => void onRenameRole(e)} className="flex flex-wrap items-center gap-2">
                 <input
                   className="w-64 rounded border px-2 py-1 text-sm text-slate-900"
-                  value={renaming}
-                  onChange={(e) => setRenaming(e.target.value)}
+                  value={renaming.label}
+                  onChange={(e) => setRenaming({ ...renaming, label: e.target.value })}
                   maxLength={255}
                   required
                   autoFocus
                   aria-label="Nowa nazwa roli"
                 />
-                <span className="text-xs text-slate-500">
-                  kod <code>{selected}</code> bez zmian
-                </span>
+                {selectedRole.is_system ? (
+                  <span
+                    className="text-xs text-slate-500"
+                    title="Program odwołuje się do kodu ról systemowych, dlatego nie można go zmienić."
+                  >
+                    kod <code>{selected}</code> — rola systemowa, bez zmian
+                  </span>
+                ) : (
+                  <label className="flex items-center gap-1 text-xs text-slate-500">
+                    kod
+                    <input
+                      className="w-44 rounded border px-2 py-1 font-mono text-sm text-slate-900"
+                      value={renaming.code}
+                      onChange={(e) => setRenaming({ ...renaming, code: e.target.value.toLowerCase() })}
+                      maxLength={32}
+                      required
+                      pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+                      aria-label="Nowy kod roli"
+                    />
+                  </label>
+                )}
                 <button
                   type="submit"
-                  disabled={busy || renaming.trim() === ''}
+                  disabled={busy || renaming.label.trim() === '' || renaming.code.trim() === ''}
                   className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
                 >
-                  Zapisz nazwę
+                  Zapisz
                 </button>
                 <button
                   type="button"
@@ -281,10 +314,12 @@ export function AdminRoles() {
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => setRenaming(selectedRole.label ?? selectedRole.name)}
+                onClick={() =>
+                  setRenaming({ label: selectedRole.label ?? selectedRole.name, code: selectedRole.name })
+                }
                 className="rounded bg-slate-200 px-2 py-1 text-xs text-slate-800 hover:bg-slate-300"
               >
-                Zmień nazwę
+                {selectedRole.is_system ? 'Zmień nazwę' : 'Zmień nazwę / kod'}
               </button>
             )}
             {!selectedRole.is_system && (

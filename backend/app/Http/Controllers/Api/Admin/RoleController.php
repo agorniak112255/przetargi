@@ -9,8 +9,10 @@ use App\Http\Requests\Admin\RenameRoleRequest;
 use App\Http\Requests\Admin\StoreRoleRequest;
 use App\Http\Requests\Admin\UpdateRolePermissionsRequest;
 use App\Models\Role;
+use App\Models\User;
 use App\Support\PermissionCatalog;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 use Spatie\Permission\PermissionRegistrar;
 
 class RoleController extends Controller
@@ -102,8 +104,23 @@ class RoleController extends Controller
             return response()->json(['message' => 'Nieznana rola.'], 404);
         }
 
-        $roleModel->display_name = $request->validated('display_name');
-        $roleModel->save();
+        $data = $request->validated();
+
+        DB::transaction(function () use ($roleModel, $data): void {
+            if (isset($data['display_name'])) {
+                $roleModel->display_name = $data['display_name'];
+            }
+
+            $oldCode = $roleModel->name;
+            if (isset($data['name']) && $data['name'] !== $oldCode) {
+                $roleModel->name = $data['name'];
+                // Przypisania (model_has_roles) idą po id roli; users.role trzyma kod — przepisujemy.
+                User::query()->where('role', $oldCode)->update(['role' => $data['name']]);
+            }
+
+            $roleModel->save();
+        });
+
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
         return $this->present($roleModel);

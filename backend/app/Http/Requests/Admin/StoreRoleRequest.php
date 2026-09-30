@@ -23,7 +23,7 @@ class StoreRoleRequest extends FormRequest
             'name' => [
                 'required',
                 'string',
-                'max:64',
+                'max:32', // długość kolumny users.role
                 'regex:/^[a-z0-9]+(?:-[a-z0-9]+)*$/',
                 Rule::unique('roles', 'name')->where(fn ($q) => $q->where('guard_name', 'web')),
             ],

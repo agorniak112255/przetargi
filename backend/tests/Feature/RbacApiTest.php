@@ -228,6 +228,70 @@ final class RbacApiTest extends TestCase
         $this->patchJson('/api/admin/roles/nie-ma-takiej', ['display_name' => 'Cokolwiek'])->assertNotFound();
     }
 
+    public function test_admin_can_change_code_of_custom_role_and_users_follow(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $this->postJson('/api/admin/roles', [
+            'name' => 'handel-krakow',
+            'display_name' => 'Handel Kraków',
+            'copy_from' => 'handlowiec',
+        ])->assertCreated();
+        $permissions = Role::findByName('handel-krakow', 'web')->permissions->pluck('name')->sort()->values()->all();
+
+        $member = User::factory()->create();
+        $member->syncPrimaryRole('handel-krakow');
+
+        $this->patchJson('/api/admin/roles/handel-krakow', [
+            'name' => 'handel-krk',
+            'display_name' => 'Handel KRK',
+        ])->assertOk()
+            ->assertJsonPath('name', 'handel-krk')
+            ->assertJsonPath('label', 'Handel KRK')
+            ->assertJsonPath('users_count', 1);
+
+        $this->assertNull(Role::query()->where('name', 'handel-krakow')->first());
+        $role = Role::findByName('handel-krk', 'web');
+        $this->assertSame($permissions, $role->permissions->pluck('name')->sort()->values()->all());
+
+        $member = $member->fresh();
+        $this->assertSame('handel-krk', $member->role);
+        $this->assertTrue($member->hasRole('handel-krk'));
+        $this->assertSame('handel-krk', $member->toAuthArray()['role']);
+        $this->assertSame($permissions, collect($member->toAuthArray()['permissions'])->sort()->values()->all());
+
+        $this->getJson('/api/admin/users')->assertOk()->assertJsonFragment(['role' => 'handel-krk']);
+    }
+
+    public function test_change_code_rejects_system_role_duplicates_and_bad_format(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->postJson('/api/admin/roles', ['name' => 'handel-krakow', 'display_name' => 'Handel Kraków'])
+            ->assertCreated();
+
+        // Rola systemowa: kod zablokowany, ten sam kod (bez zmiany) przechodzi.
+        $this->patchJson('/api/admin/roles/handlowiec', ['name' => 'sprzedaz'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('name');
+        $this->patchJson('/api/admin/roles/handlowiec', ['name' => 'handlowiec', 'display_name' => 'Sprzedawca'])
+            ->assertOk();
+        $this->assertNotNull(Role::query()->where('name', 'handlowiec')->first());
+
+        $this->patchJson('/api/admin/roles/handel-krakow', ['name' => 'kierownik'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('name');
+        $this->patchJson('/api/admin/roles/handel-krakow', ['name' => 'Handel Krakow'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('name');
+        $this->patchJson('/api/admin/roles/handel-krakow', ['name' => str_repeat('a', 33)])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('name');
+        $this->patchJson('/api/admin/roles/handel-krakow', [])
+            ->assertUnprocessable();
+
+        $this->assertNotNull(Role::query()->where('name', 'handel-krakow')->first());
+    }
+
     public function test_handlowiec_cannot_rename_role(): void
     {
         Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
