@@ -33,7 +33,7 @@ import { MailingLists } from './MailingLists'
  */
 
 const REFRESH_SENDING_MS = 15_000
-const STATUSES: CampaignStatus[] = ['draft', 'sending', 'sent', 'cancelled']
+const STATUSES: CampaignStatus[] = ['draft', 'scheduled', 'sending', 'sent', 'cancelled']
 
 export function Campaigns() {
   const [params] = useSearchParams()
@@ -307,7 +307,17 @@ function CampaignRow({
       <td className="whitespace-nowrap p-2">
         <CampaignStatusChip status={row.status} sent={row.sent} total={row.recipients_total} />
       </td>
-      <td className="whitespace-nowrap p-2 tabular-nums text-slate-700">{when ? fmtDateTime(when) : '—'}</td>
+      <td className="whitespace-nowrap p-2 tabular-nums text-slate-700">
+        {row.status === 'scheduled' && row.scheduled_at ? (
+          <span className="text-blue-700" title="Wyśle się sama o tej godzinie">
+            zaplanowana na {fmtDateTime(row.scheduled_at)}
+          </span>
+        ) : when ? (
+          fmtDateTime(when)
+        ) : (
+          '—'
+        )}
+      </td>
       <td className="p-2 text-right tabular-nums">{row.status === 'draft' ? '—' : fmtInt(row.recipients_total)}</td>
       <td className={`p-2 text-right tabular-nums ${row.failed > 0 ? 'font-medium text-red-700' : ''}`}>
         {row.status === 'draft' ? '—' : fmtInt(row.failed)}

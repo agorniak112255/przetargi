@@ -10,7 +10,9 @@ use App\Models\CampaignRecipient;
 use App\Models\EmailSuppression;
 use App\Models\User;
 use App\Models\UserMailAccount;
+use App\Notifications\CampaignScheduleFailedNotification;
 use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Mail\Message;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -24,8 +26,8 @@ use Symfony\Component\Mime\Exception\RfcComplianceException;
 use Throwable;
 
 /**
- * Wysyłka kampanii ze skrzynki autora: test, start (snapshoty + odbiorcy), pojedynczy odbiorca (dla campaigns:dispatch),
- * anulowanie i test samej skrzynki. Błędy walidacji startu: \Illuminate\Validation\ValidationException (422).
+ * Wysyłka kampanii ze skrzynki autora: test, start (snapshoty + odbiorcy), planowanie i start o czasie, pojedynczy
+ * odbiorca (dla campaigns:dispatch), anulowanie i test samej skrzynki. Błędy walidacji startu: \Illuminate\Validation\ValidationException (422).
  * Nie final — testy podmieniają zależności.
  */
 class CampaignSender
@@ -71,34 +73,17 @@ class CampaignSender
      */
     public function start(Campaign $campaign, User $actor): Campaign
     {
-        if ((int) $actor->id !== (int) $campaign->user_id) {
-            // nadawcą jest skrzynka autora — nikt inny nie wysyła w jego imieniu
-            throw $this->invalid('Wysłać kampanię może tylko jej autor.');
-        }
-        if (rtrim((string) config('campaigns.public_url'), '/') === '') {
-            throw $this->invalid('Brak publicznego adresu aplikacji (CAMPAIGNS_PUBLIC_URL) — link wypisu i zdjęcia nie zadziałają.');
-        }
+        $this->assertAuthor($campaign, $actor, 'Wysłać kampanię może tylko jej autor.');
+        $this->assertPublicUrl();
 
         $campaign = DB::transaction(function () use ($campaign): Campaign {
             /** @var Campaign $locked */
             $locked = Campaign::query()->whereKey($campaign->id)->lockForUpdate()->firstOrFail();
-            if (! $locked->isDraft()) {
+            // zaplanowaną startuje campaigns:dispatch o jej godzinie
+            if (! in_array($locked->status, [Campaign::STATUS_DRAFT, Campaign::STATUS_SCHEDULED], true)) {
                 throw $this->invalid('Kampania została już wysłana — zduplikuj ją, żeby zmienić.');
             }
-            $items = $locked->items()->get();
-            if ($items->isEmpty()) {
-                throw $this->invalid('Dodaj do kampanii co najmniej jedną pozycję.');
-            }
-            if ($items->contains(static fn (CampaignItem $i): bool => $i->erp_item_id === null && $i->product_id === null)) {
-                throw $this->invalid('Usuń pozycje bez towaru i bez karty — ich dane zostały usunięte.');
-            }
-            if (trim((string) $locked->subject) === '') {
-                throw $this->invalid('Wpisz temat maila.');
-            }
-            $author = $locked->user;
-            if ($author?->mailAccount === null) {
-                throw $this->invalid('Nie ustawiono skrzynki w „Moje konto → Moja poczta”.');
-            }
+            [$items, $author] = $this->assertReady($locked);
 
             // co dostał klient: zapis pozycji w chwili startu (późniejsze zmiany kart i stanów nie zmieniają historii)
             foreach ($this->presenter->presentMany($items, $author) as $i => $row) {
@@ -121,6 +106,7 @@ class CampaignSender
             }
             $locked->forceFill([
                 'status' => Campaign::STATUS_SENDING,
+                'schedule_error' => null,
                 'sending_started_at' => Carbon::now(),
                 'totals' => ['recipients' => $count, 'sent' => 0, 'failed' => 0, 'skipped' => 0],
             ])->save();
@@ -140,6 +126,88 @@ class CampaignSender
         }
 
         return $campaign->fresh() ?? $campaign;
+    }
+
+    /**
+     * Planowanie: te same warunki co start (pozycje, temat, skrzynka, publiczny adres) i co najmniej jeden odbiorca
+     * teraz. Odbiorców, snapshoty i stany wylicza dopiero start o tej godzinie (świeże wypisy i odczyt XL).
+     */
+    public function schedule(Campaign $campaign, User $actor, Carbon $at): Campaign
+    {
+        $this->assertAuthor($campaign, $actor, 'Zaplanować kampanię może tylko jej autor — wyjdzie z jego skrzynki.');
+        $this->assertPublicUrl();
+
+        $campaign = DB::transaction(function () use ($campaign, $at): Campaign {
+            /** @var Campaign $locked */
+            $locked = Campaign::query()->whereKey($campaign->id)->lockForUpdate()->firstOrFail();
+            if (! $locked->isDraft()) {
+                throw $this->invalid('Zaplanować można tylko projekt kampanii.');
+            }
+            $this->assertReady($locked);
+            if ((int) $this->audience->preview($locked)['final'] === 0) {
+                throw $this->invalid('Kampania nie ma odbiorców — wybierz grupę albo klientów z ERP XL.');
+            }
+            $locked->forceFill(['status' => Campaign::STATUS_SCHEDULED, 'scheduled_at' => $at, 'schedule_error' => null])->save();
+
+            return $locked;
+        });
+
+        return $campaign->fresh() ?? $campaign;
+    }
+
+    /** Cofnięcie planowania: zaplanowana → projekt (do zmian albo innej godziny). */
+    public function unschedule(Campaign $campaign): Campaign
+    {
+        $campaign = DB::transaction(function () use ($campaign): Campaign {
+            /** @var Campaign $locked */
+            $locked = Campaign::query()->whereKey($campaign->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== Campaign::STATUS_SCHEDULED) {
+                throw $this->invalid('Kampania nie jest zaplanowana — mogła już wystartować.');
+            }
+            $locked->forceFill(['status' => Campaign::STATUS_DRAFT, 'scheduled_at' => null])->save();
+
+            return $locked;
+        });
+
+        return $campaign->fresh() ?? $campaign;
+    }
+
+    /**
+     * Start zaplanowanych kampanii, których godzina minęła (campaigns:dispatch co minutę). Gdy start się nie uda
+     * (np. usunięta skrzynka, zero odbiorców), kampania wraca do projektu z powodem, a autor dostaje powiadomienie.
+     *
+     * @return array{started: int, failed: int}
+     */
+    public function startDue(): array
+    {
+        $stats = ['started' => 0, 'failed' => 0];
+        $due = Campaign::query()->where('status', Campaign::STATUS_SCHEDULED)->where('scheduled_at', '<=', Carbon::now())
+            ->orderBy('scheduled_at')->orderBy('id')->get();
+        foreach ($due as $campaign) {
+            $author = $campaign->user;
+            try {
+                if ($author === null) {
+                    throw $this->invalid('Autor kampanii nie istnieje.');
+                }
+                $this->start($campaign, $author);
+                $stats['started']++;
+            } catch (Throwable $e) {
+                if (! $e instanceof ValidationException) {
+                    report($e);
+                }
+                $reason = $e instanceof ValidationException
+                    ? implode(' ', array_merge(...array_values($e->errors())))
+                    : 'Nieoczekiwany błąd: '.mb_substr($e->getMessage(), 0, 300);
+                $reverted = Campaign::query()->whereKey($campaign->id)->where('status', Campaign::STATUS_SCHEDULED)
+                    ->update(['status' => Campaign::STATUS_DRAFT, 'schedule_error' => mb_substr($reason, 0, 1000), 'updated_at' => Carbon::now()]);
+                if ($reverted === 1) {
+                    $stats['failed']++;
+                    $author?->notify(new CampaignScheduleFailedNotification($campaign, $reason));
+                }
+            }
+        }
+
+        return $stats;
     }
 
     /** Anulowanie: sending → cancelled, odbiorcy pending → skipped. */
@@ -367,6 +435,46 @@ class CampaignSender
                 $campaign->forceFill(['totals' => self::totals($campaign)])->save();
             }
         });
+    }
+
+    private function assertAuthor(Campaign $campaign, User $actor, string $message): void
+    {
+        if ((int) $actor->id !== (int) $campaign->user_id) {
+            // nadawcą jest skrzynka autora — nikt inny nie wysyła w jego imieniu
+            throw $this->invalid($message);
+        }
+    }
+
+    private function assertPublicUrl(): void
+    {
+        if (rtrim((string) config('campaigns.public_url'), '/') === '') {
+            throw $this->invalid('Brak publicznego adresu aplikacji (CAMPAIGNS_PUBLIC_URL) — link wypisu i zdjęcia nie zadziałają.');
+        }
+    }
+
+    /**
+     * Warunki wysyłki wspólne dla startu i planowania: pozycje (bez osieroconych), temat, skrzynka autora.
+     *
+     * @return array{0: Collection<int, CampaignItem>, 1: User}
+     */
+    private function assertReady(Campaign $locked): array
+    {
+        $items = $locked->items()->get();
+        if ($items->isEmpty()) {
+            throw $this->invalid('Dodaj do kampanii co najmniej jedną pozycję.');
+        }
+        if ($items->contains(static fn (CampaignItem $i): bool => $i->erp_item_id === null && $i->product_id === null)) {
+            throw $this->invalid('Usuń pozycje bez towaru i bez karty — ich dane zostały usunięte.');
+        }
+        if (trim((string) $locked->subject) === '') {
+            throw $this->invalid('Wpisz temat maila.');
+        }
+        $author = $locked->user;
+        if ($author === null || $author->mailAccount === null) {
+            throw $this->invalid('Nie ustawiono skrzynki w „Moje konto → Moja poczta”.');
+        }
+
+        return [$items, $author];
     }
 
     private function accountOf(Campaign $campaign): ?UserMailAccount

@@ -38,7 +38,9 @@ import {
   getCampaign,
   listMailingLists,
   removeCampaignItem,
+  scheduleCampaign,
   sendCampaign,
+  unscheduleCampaign,
   sendCampaignTest,
   updateCampaign,
   updateCampaignItem,
@@ -253,8 +255,9 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
     )
   }
 
-  const isDraft = campaign.status === 'draft'
-  const editable = isDraft && campaign.can_edit
+  // zaplanowana pokazuje kreator tylko do odczytu, z paskiem „cofnij planowanie”
+  const isDraft = campaign.status === 'draft' || campaign.status === 'scheduled'
+  const editable = campaign.status === 'draft' && campaign.can_edit
   const isAuthor = user?.id === campaign.author.id
   const canCancel = campaign.status === 'sending' && (isAuthor || can(user, 'campaigns.manage'))
 
@@ -325,6 +328,18 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
       </div>
 
       <ErrorBar message={err} onClose={() => setErr('')} />
+
+      {campaign.status === 'scheduled' && (
+        <ScheduledBanner
+          campaign={campaign}
+          canUnschedule={isAuthor || can(user, 'campaigns.manage')}
+          onChanged={(c) => {
+            setErr('')
+            setCampaign(c)
+          }}
+          onError={setErr}
+        />
+      )}
 
       {isDraft ? (
         <DraftWizard
@@ -1612,6 +1627,9 @@ function SendStep({
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [scheduleAt, setScheduleAt] = useState(defaultScheduleValue)
+  const [scheduling, setScheduling] = useState(false)
+  const scheduled = campaign.status === 'scheduled'
 
   const items = campaign.items
   const final = audience?.final ?? 0
@@ -1622,6 +1640,24 @@ function SendStep({
   if (!audience || final === 0) blockers.push('brak odbiorców')
   if (audience?.without_mailbox) blockers.push('brak skrzynki nadawcy')
   if (!isAuthor) blockers.push('wysłać może tylko autor kampanii (z własnej skrzynki)')
+
+  async function schedule() {
+    const at = new Date(scheduleAt)
+    if (Number.isNaN(at.getTime())) {
+      setErr('Wybierz dzień i godzinę wysyłki.')
+      return
+    }
+    setScheduling(true)
+    setErr('')
+    try {
+      await flush()
+      onSent(await scheduleCampaign(campaign.id, at.toISOString()))
+    } catch (ex) {
+      setErr(errorText(ex, 'Nie udało się zaplanować wysyłki.'))
+    } finally {
+      setScheduling(false)
+    }
+  }
 
   async function send() {
     setBusy(true)
@@ -1717,6 +1753,12 @@ function SendStep({
 
         {err && <p className="mt-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
 
+        {scheduled ? (
+          <p className="mt-4 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+            Kampania jest zaplanowana na {fmtDateTime(campaign.scheduled_at ?? null)} — wyśle się sama. Żeby coś zmienić albo
+            wysłać od razu, cofnij planowanie na pasku u góry.
+          </p>
+        ) : (
         <div className="mt-4 flex flex-wrap items-center gap-2.5">
           <button
             type="button"
@@ -1730,12 +1772,36 @@ function SendStep({
           >
             Wyślij teraz do {fmtInt(final)} {plural(final, 'odbiorcy', 'odbiorców', 'odbiorców')}
           </button>
-          <button type="button" className={BTN} disabled>
-            Zaplanuj na…
+          <span className="text-[11px] text-slate-500">albo</span>
+          <label className="inline-flex items-center gap-1.5 text-xs text-slate-700">
+            zaplanuj na
+            <input
+              type="datetime-local"
+              className={INPUT}
+              value={scheduleAt}
+              min={toLocalInputValue(new Date(Date.now() + 5 * 60_000))}
+              onChange={(e) => setScheduleAt(e.target.value)}
+              aria-label="Dzień i godzina wysyłki"
+            />
+          </label>
+          <button
+            type="button"
+            className={BTN}
+            disabled={blockers.length > 0 || scheduling || !scheduleAt}
+            title={
+              blockers.length > 0
+                ? `Nie można zaplanować: ${blockers.join(', ')}`
+                : 'Kampania wystartuje sama o tej godzinie; odbiorców i stany policzymy w chwili startu'
+            }
+            onClick={() => void schedule()}
+          >
+            {scheduling ? 'Planuję…' : 'Zaplanuj'}
           </button>
-          <StageTwo />
         </div>
-        {blockers.length > 0 && <p className="mt-2 text-[11px] text-amber-800">Nie można jeszcze wysłać: {blockers.join(', ')}.</p>}
+        )}
+        {!scheduled && blockers.length > 0 && (
+          <p className="mt-2 text-[11px] text-amber-800">Nie można jeszcze wysłać: {blockers.join(', ')}.</p>
+        )}
         <p className="mt-3 text-[11px] text-slate-500">
           Wysyłka idzie przez Twoją skrzynkę, partiami w tle (limit maili na godzinę z „Moja poczta”), więc możesz zamknąć
           przeglądarkę. Ostrzeżenia oznaczone „!” nie blokują wysyłki.
@@ -1744,8 +1810,8 @@ function SendStep({
       <aside className="rounded-xl bg-white p-4 text-xs text-slate-600 shadow-sm">
         <h2 className="app-card-title mb-2 text-sm font-semibold text-slate-900">Status</h2>
         <p>
-          Projekt → <b className="text-slate-800">Wysyłka</b> (sama się ustawi) → Wysłana. Po wysyłce kampanii nie można
-          edytować — można ją zduplikować.
+          Projekt → Zaplanowana (jeśli wybierzesz godzinę) → <b className="text-slate-800">Wysyłka</b> (sama się ustawi) →
+          Wysłana. Zaplanowaną można cofnąć do projektu. Po wysyłce kampanii nie można edytować — można ją zduplikować.
         </p>
       </aside>
 
@@ -2183,6 +2249,60 @@ function CampaignSalesPanel({ sales }: { sales: CampaignSales }) {
         Zakup po wysyłce nie dowodzi, że klient kupił dzięki kampanii — porównaj z pozostałymi klientami. Liczymy klientów
         z ERP XL, do których mail wyszedł; adres z grupy liczy się, gdy jest na karcie kontrahenta w XL.
       </p>
+    </div>
+  )
+}
+
+/** Wartość pola datetime-local w czasie lokalnym przeglądarki (RRRR-MM-DDTHH:MM). */
+function toLocalInputValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** Domyślnie jutro o 8:00 — maile rano czyta się najczęściej. */
+function defaultScheduleValue(): string {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  d.setHours(8, 0, 0, 0)
+  return toLocalInputValue(d)
+}
+
+/** Pasek zaplanowanej kampanii: kiedy wystartuje i cofnięcie planowania (wraca do projektu). */
+function ScheduledBanner({
+  campaign,
+  canUnschedule,
+  onChanged,
+  onError,
+}: {
+  campaign: Campaign
+  canUnschedule: boolean
+  onChanged: (c: Campaign) => void
+  onError: (message: string) => void
+}) {
+  const [busy, setBusy] = useState(false)
+
+  async function unschedule() {
+    setBusy(true)
+    try {
+      onChanged(await unscheduleCampaign(campaign.id))
+    } catch (ex) {
+      onError(errorText(ex, 'Nie udało się cofnąć planowania.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-950">
+      <span>
+        Zaplanowana na <b>{fmtDateTime(campaign.scheduled_at ?? null)}</b> — wyśle się sama z Twojej skrzynki. Odbiorców i
+        stany magazynu policzymy w chwili startu. Zmienić treść można po cofnięciu planowania.
+      </span>
+      {canUnschedule && (
+        <button type="button" className={BTN} disabled={busy} onClick={() => void unschedule()}>
+          {busy ? 'Cofam…' : 'Cofnij planowanie'}
+        </button>
+      )}
     </div>
   )
 }

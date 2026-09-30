@@ -24,6 +24,7 @@ use App\Services\Erp\InventoryQuery;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -50,7 +51,12 @@ class CampaignController extends Controller
         'city' => 'city',
     ];
 
-    private const STATUSES = [Campaign::STATUS_DRAFT, Campaign::STATUS_SENDING, Campaign::STATUS_SENT, Campaign::STATUS_CANCELLED];
+    private const STATUSES = [Campaign::STATUS_DRAFT, Campaign::STATUS_SCHEDULED, Campaign::STATUS_SENDING, Campaign::STATUS_SENT, Campaign::STATUS_CANCELLED];
+
+    private const SCHEDULED = 'Kampania jest zaplanowana — cofnij planowanie, żeby ją zmienić';
+
+    /** Najdalej tyle dni naprzód można zaplanować wysyłkę. */
+    private const SCHEDULE_MAX_DAYS = 60;
 
     private const RECIPIENT_STATUSES = [
         CampaignRecipient::STATUS_PENDING,
@@ -466,6 +472,41 @@ class CampaignController extends Controller
         return response()->json($this->present($started->fresh() ?? $started, $user));
     }
 
+    /** Zaplanowanie wysyłki na godzinę (ISO 8601 z przesunięciem strefy; zapis w UTC). Tylko autor. */
+    public function schedule(Request $request, Campaign $campaign): JsonResponse
+    {
+        $this->authorizeView($request, $campaign);
+        /** @var User $user */
+        $user = $request->user();
+        if ((int) $campaign->user_id !== (int) $user->id) {
+            abort(403, 'Zaplanować kampanię może tylko jej autor — wyjdzie z jego skrzynki.');
+        }
+        $v = $request->validate([
+            'scheduled_at' => ['required', 'date', 'after:+1 minute', 'before:+'.self::SCHEDULE_MAX_DAYS.' days'],
+        ], [
+            'scheduled_at.after' => 'Wybierz godzinę w przyszłości.',
+            'scheduled_at.before' => 'Wysyłkę można zaplanować najdalej '.self::SCHEDULE_MAX_DAYS.' dni naprzód.',
+        ]);
+        $this->ensureDraft($campaign);
+
+        $scheduled = $this->sender->schedule($campaign, $user, Carbon::parse((string) $v['scheduled_at'])->utc());
+
+        return response()->json($this->present($scheduled, $user));
+    }
+
+    /** Cofnięcie planowania — kampania wraca do projektu. Autor albo campaigns.manage. */
+    public function unschedule(Request $request, Campaign $campaign): JsonResponse
+    {
+        $this->authorizeView($request, $campaign);
+        if ($campaign->status !== Campaign::STATUS_SCHEDULED) {
+            abort(422, 'Kampania nie jest zaplanowana — mogła już wystartować.');
+        }
+
+        $draft = $this->sender->unschedule($campaign);
+
+        return response()->json($this->present($draft, $request->user()));
+    }
+
     public function cancel(Request $request, Campaign $campaign): JsonResponse
     {
         $this->authorizeView($request, $campaign);
@@ -699,7 +740,7 @@ class CampaignController extends Controller
     private function ensureDraft(Campaign $campaign): void
     {
         if (! $campaign->isDraft()) {
-            abort(422, self::NOT_DRAFT);
+            abort(422, $campaign->status === Campaign::STATUS_SCHEDULED ? self::SCHEDULED : self::NOT_DRAFT);
         }
     }
 
@@ -755,6 +796,7 @@ class CampaignController extends Controller
             'sent' => (int) $c->getAttribute('sent_count'),
             'failed' => (int) $c->getAttribute('failed_count'),
             'created_at' => $c->created_at?->toIso8601String(),
+            'scheduled_at' => $c->scheduled_at?->toIso8601String(),
             'sending_started_at' => $c->sending_started_at?->toIso8601String(),
             'sent_at' => $c->sent_at?->toIso8601String(),
             'stock_value' => $stockValue !== null ? round((float) $stockValue, 2) : null,
@@ -787,12 +829,15 @@ class CampaignController extends Controller
             'can_edit' => $campaign->isDraft(),
             'created_at' => $campaign->created_at?->toIso8601String(),
             'updated_at' => $campaign->updated_at?->toIso8601String(),
+            'scheduled_at' => $campaign->scheduled_at?->toIso8601String(),
+            // zaplanowana nie wystartowała o swojej godzinie (powód; kampania wróciła do projektu)
+            'schedule_error' => $campaign->schedule_error,
             'sending_started_at' => $campaign->sending_started_at?->toIso8601String(),
             'sent_at' => $campaign->sent_at?->toIso8601String(),
             'totals' => $campaign->totals,
             'items' => $author !== null ? $this->presenter->presentMany($items, $author) : [],
             'warnings' => $this->warnings($campaign, $viewer),
-            'sales' => $campaign->isDraft() ? null : $this->sales->forCampaign($campaign),
+            'sales' => $campaign->sending_started_at === null ? null : $this->sales->forCampaign($campaign),
         ];
     }
 
@@ -803,6 +848,9 @@ class CampaignController extends Controller
             return [];
         }
         $out = [];
+        if (trim((string) $campaign->schedule_error) !== '') {
+            $out[] = 'Zaplanowana wysyłka nie wystartowała: '.$campaign->schedule_error;
+        }
         if ($campaign->user?->mailAccount === null) {
             $out[] = (int) $campaign->user_id === (int) $viewer->id
                 ? 'Nie ustawiono skrzynki w „Moja poczta” — bez niej kampanii nie da się wysłać.'

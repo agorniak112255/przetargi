@@ -45,6 +45,9 @@ class CampaignsDispatchCommand extends Command
             $cancelled->forceFill(['totals' => CampaignSender::totals($cancelled)])->save();
         }
 
+        // zaplanowane, których godzina minęła — start przed partią, żeby pierwsze maile wyszły w tej samej minucie
+        $scheduled = $sender->startDue();
+
         $sent = 0;
         $campaigns = Campaign::query()->where('status', Campaign::STATUS_SENDING)
             ->orderBy('sending_started_at')->orderBy('id')->get();
@@ -57,6 +60,9 @@ class CampaignsDispatchCommand extends Command
             $finished += $this->finishIfDone($campaign) ? 1 : 0;
         }
 
+        if ($scheduled['started'] > 0 || $scheduled['failed'] > 0) {
+            $this->info(sprintf('Zaplanowane: wystartowało %d, nie wystartowało %d (wróciły do projektu).', $scheduled['started'], $scheduled['failed']));
+        }
         if ($sent > 0 || $finished > 0 || $stale > 0) {
             $this->info(sprintf('Wysłano: %d, zakończone kampanie: %d, przerwane rezerwacje: %d.', $sent, $finished, $stale));
         }

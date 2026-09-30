@@ -382,6 +382,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::get('/campaigns/{campaign}/preview', [CampaignController::class, 'preview']);
         Route::post('/campaigns/{campaign}/test', [CampaignController::class, 'test'])->middleware('throttle:10,1');
         Route::post('/campaigns/{campaign}/send', [CampaignController::class, 'send']);
+        Route::post('/campaigns/{campaign}/schedule', [CampaignController::class, 'schedule']);
+        Route::post('/campaigns/{campaign}/unschedule', [CampaignController::class, 'unschedule']);
         Route::post('/campaigns/{campaign}/cancel', [CampaignController::class, 'cancel']);
         Route::get('/campaigns/{campaign}/recipients', [CampaignController::class, 'recipients']);
 

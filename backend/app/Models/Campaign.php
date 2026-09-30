@@ -10,11 +10,14 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * Kampania reklamowa: towar (zwykle zalegający w XL) wysyłany mailem do klientów ze skrzynki autora.
- * Projekt → Wysyłka → Wysłana (albo Anulowana). Po starcie wysyłki kampanii nie edytuje się — duplikuje.
+ * Projekt → (Zaplanowana) → Wysyłka → Wysłana (albo Anulowana). Po starcie wysyłki kampanii nie edytuje się — duplikuje.
  */
 class Campaign extends Model
 {
     public const STATUS_DRAFT = 'draft';
+
+    /** Zaplanowana: nie do edycji, campaigns:dispatch wystartuje ją o scheduled_at. */
+    public const STATUS_SCHEDULED = 'scheduled';
 
     public const STATUS_SENDING = 'sending';
 
@@ -40,6 +43,8 @@ class Campaign extends Model
         'valid_until',
         'status',
         'audience',
+        'scheduled_at',
+        'schedule_error',
         'sending_started_at',
         'sent_at',
         'totals',
@@ -51,6 +56,7 @@ class Campaign extends Model
         return [
             'valid_until' => 'date',
             'audience' => 'array',
+            'scheduled_at' => 'datetime',
             'sending_started_at' => 'datetime',
             'sent_at' => 'datetime',
             'totals' => 'array',

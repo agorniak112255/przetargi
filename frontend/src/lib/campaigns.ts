@@ -2,13 +2,14 @@ import { api } from './api'
 
 /** Kampanie reklamowe — typy i wywołania API (kontrakt pierwszego wydania, 01.10.2026). */
 
-export type CampaignStatus = 'draft' | 'sending' | 'sent' | 'cancelled'
+export type CampaignStatus = 'draft' | 'scheduled' | 'sending' | 'sent' | 'cancelled'
 export type CampaignLayout = 'grid3' | 'grid2' | 'list'
 export type CampaignXlMode = 'items' | 'group' | 'mine'
 export type ContactBasis = 'customer' | 'consent'
 
 export const CAMPAIGN_STATUS_LABEL: Record<CampaignStatus, string> = {
   draft: 'Projekt',
+  scheduled: 'Zaplanowana',
   sending: 'Wysyłka',
   sent: 'Wysłana',
   cancelled: 'Anulowana',
@@ -47,6 +48,8 @@ export type CampaignListRow = {
   sent: number
   failed: number
   created_at: string
+  /** Zaplanowana godzina startu (UTC, ISO). */
+  scheduled_at?: string | null
   sending_started_at: string | null
   sent_at: string | null
   /** Suma wartości zapasu pozycji (koszt zakupu), null = brak danych. */
@@ -160,6 +163,10 @@ export type Campaign = {
   can_edit: boolean
   created_at: string
   updated_at: string
+  /** Zaplanowana godzina startu (UTC, ISO). */
+  scheduled_at?: string | null
+  /** Zaplanowana wysyłka nie wystartowała — powód (kampania wróciła do projektu). */
+  schedule_error?: string | null
   sending_started_at: string | null
   sent_at: string | null
   totals: CampaignTotals | null
@@ -340,6 +347,15 @@ export function sendCampaignTest(id: number, email?: string) {
 
 export function sendCampaign(id: number) {
   return api<Campaign>(`/campaigns/${id}/send`, { method: 'POST' })
+}
+
+/** Zaplanowanie wysyłki; `at` = ISO z przesunięciem strefy (np. new Date(...).toISOString()). */
+export function scheduleCampaign(id: number, at: string) {
+  return api<Campaign>(`/campaigns/${id}/schedule`, { method: 'POST', ...json({ scheduled_at: at }) })
+}
+
+export function unscheduleCampaign(id: number) {
+  return api<Campaign>(`/campaigns/${id}/unschedule`, { method: 'POST' })
 }
 
 export function cancelCampaign(id: number) {

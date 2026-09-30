@@ -13,6 +13,8 @@ type AppNotification = {
     tender_number?: string
     tender_title?: string
     inviter_name?: string
+    /** Zaplanowana kampania nie wystartowała — link do kampanii. */
+    campaign_id?: number
   }
   read_at: string | null
   created_at: string | null
@@ -91,6 +93,7 @@ export function NotificationBell() {
             {rows.length === 0 && <p className="px-2 py-3 text-[11px] text-slate-400">Brak powiadomień</p>}
             {rows.map((n) => {
               const tenderId = n.data.tender_id
+              const link = tenderId ? `/tenders/${tenderId}` : n.data.campaign_id ? `/kampanie/${n.data.campaign_id}` : null
               const body = (
                 <div
                   className={`app-popover-item rounded-lg px-2 py-2 text-[11px] ${
@@ -105,8 +108,8 @@ export function NotificationBell() {
               )
               return (
                 <div key={n.id} onClick={() => void markRead(n.id)}>
-                  {tenderId ? (
-                    <Link to={`/tenders/${tenderId}`} onClick={() => setOpen(false)}>
+                  {link ? (
+                    <Link to={link} onClick={() => setOpen(false)}>
                       {body}
                     </Link>
                   ) : (

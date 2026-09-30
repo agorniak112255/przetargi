@@ -88,6 +88,7 @@ export function StageTwo() {
 }
 
 const STATUS_TONE: Record<CampaignStatus, ChipTone> = {
+  scheduled: 'blue',
   draft: 'slate',
   sending: 'amber',
   sent: 'green',
