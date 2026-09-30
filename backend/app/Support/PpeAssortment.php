@@ -285,6 +285,12 @@ final class PpeAssortment
                 $bestAt = $at;
             }
         }
+        // Wodery i spodniobuty to odzież także wtedy, gdy wcześniej stoją „buty” albo „kalosze”: „Buty gumowe rybackie
+        // (wodery)” w OPZ i „Kalosze ochronne ARDON CHEST WADERS” na karcie (zapytanie #87, 30.09.2026). Jako obuwie
+        // wymaganie szukało tylko wśród butów, a bramka rodziny wyrzucała Wodery Max i spodniobuty.
+        if ($best === self::FAMILY_FOOTWEAR && preg_match('/\b(spodniobut|woder|wader)\w*/u', $t) === 1) {
+            return self::FAMILY_APPAREL;
+        }
 
         return $best ?? $this->familyFromNorms($t);
     }

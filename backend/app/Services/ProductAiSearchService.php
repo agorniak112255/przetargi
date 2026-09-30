@@ -3499,6 +3499,22 @@ final class ProductAiSearchService
      * @param  array<string, mixed>  $raw
      * @return array{needed: string, search_phrases: list<string>, constraints: list<string>}
      */
+    /**
+     * Zrozumienie modelu zamienia rodzaj ubioru nazwany w wymaganiu: „kombinezon rybacki z podnoskiem PVC EN ISO 20345
+     * S5 SRC EN 343” → „buty ochronne” (zapytanie #87, 30.09.2026) — normy obuwia w wierszu przestawiły model z kombinezonu
+     * na buty. Rzeczownik z wymagania jest słowem klienta, więc przy sprzeczności rodzin rękawice / obuwie / odzież
+     * wygrywa on. Nierozpoznana rodzina po którejkolwiek stronie to brak wiedzy, nie sprzeczność.
+     */
+    private function neededChangesWearFamily(string $query, string $needed): bool
+    {
+        $wear = [PpeAssortment::FAMILY_GLOVES, PpeAssortment::FAMILY_FOOTWEAR, PpeAssortment::FAMILY_APPAREL];
+        $fromQuery = $this->assortment->family($this->correctQueryNouns($query));
+        $fromNeeded = $this->assortment->family($needed);
+
+        return $fromQuery !== null && $fromNeeded !== null && $fromQuery !== $fromNeeded
+            && in_array($fromQuery, $wear, true) && in_array($fromNeeded, $wear, true);
+    }
+
     private function parseIntent(array $raw, string $query): array
     {
         $needed = trim((string) ($raw['needed'] ?? $raw['needed_product'] ?? ''));
@@ -3516,6 +3532,10 @@ final class ProductAiSearchService
 
         if ($needed === '') {
             $needed = $query;
+        }
+        if ($this->neededChangesWearFamily($query, $needed)) {
+            // Linia „Szukany produkt” idzie do oceny kart: z „buty ochronne” model odrzucał wszystkie kombinezony.
+            $needed = $this->correctQueryNouns($query);
         }
         if ($phrases === []) {
             $phrases = $this->fallbackPhrases($query);
@@ -4301,7 +4321,12 @@ final class ProductAiSearchService
                 $this->keepCompatible($requirement, $priority),
                 $intent
             );
-            if ($namedPriority->isNotEmpty()) {
+            // Skrót tylko wtedy, gdy nazwany model jest w katalogu (kod albo karta pasująca do modelu). Bez tego
+            // „TM 9-N aluminiowy statyw bezpieczeństwa PROTEKT” (zapytanie #87) — modelu nie ma — dostawał pierwsze
+            // 24 karty marki (amortyzatory) i wyszukiwanie kończyło się, nie szukając statywu.
+            $modelInCatalog = $codeHits->isNotEmpty()
+                || $namedPriority->contains(fn (Product $p): bool => $this->modelFuzzy->matches($modelQuery, $p));
+            if ($namedPriority->isNotEmpty() && $modelInCatalog) {
                 // Filtr „kombinezon” zapełnia limit zrzutem asortymentu i wypycha
                 // markę+numer z nazwy (Tychem 4000, SKU magazynowy, producent DuPont).
                 return $this->withModelCodeHits($requirement, $forcedHits, $namedPriority, $limit);
