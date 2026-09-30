@@ -127,6 +127,37 @@ final class ErpXlClient implements ErpXlGateway
         return $out;
     }
 
+    public function stockLots(array $gids): array
+    {
+        if ($gids === []) {
+            return [];
+        }
+        // te same wiersze zasobów co stock(), tylko z dodatnią ilością i osobno na chwilę przyjęcia partii
+        $rows = $this->db()->table('CDN.TwrZasoby as z')
+            ->join('CDN.Magazyny as m', function ($join): void {
+                $join->on('m.MAG_GIDNumer', '=', 'z.TwZ_MagNumer')->on('m.MAG_GIDTyp', '=', 'z.TwZ_MagTyp');
+            })
+            ->whereIn('z.TwZ_TwrNumer', $gids)
+            ->where('z.TwZ_Ilosc', '>', 0)
+            ->groupBy('z.TwZ_TwrNumer', 'm.MAG_Kod', 'z.TwZ_DataP')
+            ->selectRaw('z.TwZ_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, z.TwZ_DataP AS received_at, SUM(z.TwZ_Ilosc) AS quantity,'
+                .' SUM(z.TwZ_KsiegowaNetto) AS book_value')
+            ->get();
+
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = [
+                'gid' => (int) $r->gid,
+                'warehouse_code' => trim((string) $r->warehouse_code),
+                'received_at' => $r->received_at !== null ? (int) $r->received_at : null,
+                'quantity' => (float) $r->quantity,
+                'value' => $r->book_value !== null ? (float) $r->book_value : null,
+            ];
+        }
+
+        return $out;
+    }
+
     public function purchases(array $gids, int $perItem): array
     {
         if ($gids === []) {

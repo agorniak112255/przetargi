@@ -9,6 +9,8 @@ import {
   type InventoryBoardItemsBucket,
   type InventoryBoardItemsResponse,
   type InventoryBoardItemsSort,
+  type InventoryBoardLotAgeBucket,
+  type InventoryBoardLotAgeKey,
   type InventoryBoardMoveRow,
   type InventoryBoardMovesResponse,
   type InventoryBoardMovesSort,
@@ -748,6 +750,8 @@ function BoardView({
         </section>
       </div>
 
+      <LotAgePanel lotAge={report.lot_age} onOpen={openItems} />
+
       <div className="mb-4 grid gap-4 lg:grid-cols-5 print:grid-cols-5">
         <section className={`${PANEL} lg:col-span-3 print:col-span-3`}>
           <h2 className="text-2xl font-semibold text-slate-900">Najdroższe towary bez sprzedaży ponad rok</h2>
@@ -864,6 +868,80 @@ function BoardView({
 
 /** Biały panel z grupą kafelków/pasków na pulpicie. */
 const PANEL = 'board-block rounded-2xl border-2 border-slate-300 bg-white px-5 py-4 shadow-sm'
+
+/** Podpis przedziału „jak długo leży” i kolor paska: do roku szary, 1–3 lata żółty, dłużej czerwony. */
+const LOT_AGE_ROWS: Record<InventoryBoardLotAgeKey, { label: string; title: string; tone: 'amber' | 'red' | 'slate' }> = {
+  lot_age_0_6: { label: 'do pół roku', title: 'Dostawy, które leżą do pół roku', tone: 'slate' },
+  lot_age_6_12: { label: 'od pół roku do roku', title: 'Dostawy, które leżą od pół roku do roku', tone: 'slate' },
+  lot_age_12_24: { label: 'od roku do 2 lat', title: 'Dostawy, które leżą od roku do 2 lat', tone: 'amber' },
+  lot_age_24_36: { label: 'od 2 do 3 lat', title: 'Dostawy, które leżą od 2 do 3 lat', tone: 'amber' },
+  lot_age_36_48: { label: 'od 3 do 4 lat', title: 'Dostawy, które leżą od 3 do 4 lat', tone: 'red' },
+  lot_age_48_60: { label: 'od 4 do 5 lat', title: 'Dostawy, które leżą od 4 do 5 lat', tone: 'red' },
+  lot_age_60: { label: 'ponad 5 lat', title: 'Dostawy, które leżą ponad 5 lat', tone: 'red' },
+  lot_age_unknown: { label: 'bez daty przyjęcia', title: 'Dostawy bez daty przyjęcia', tone: 'slate' },
+}
+
+/**
+ * „Jak długo leżą dostawy” (decyzja właściciela 01.10.2026): każda dostawa w przedziale swojego wieku, kwota = wartość
+ * samych dostaw z okresu — przedziały się sumują (inaczej niż paski „bez sprzedaży”, które są „w tym”). Dwie kolumny:
+ * do 3 lat i od 3 lat; przedział bez daty tylko wtedy, gdy coś w nim jest.
+ */
+function LotAgePanel({
+  lotAge,
+  onOpen,
+}: {
+  lotAge: BoardReport['lot_age']
+  onOpen: (bucket: InventoryBoardItemsBucket, label: string) => void
+}) {
+  if (!lotAge) {
+    return (
+      <section className={`${PANEL} mb-4`}>
+        <h2 className="text-2xl font-semibold text-slate-900">Jak długo leżą dostawy w magazynie</h2>
+        <p className="mt-1 text-lg text-slate-800">
+          Liczby pojawią się po najbliższym odczycie z programu magazynowego.
+        </p>
+      </section>
+    )
+  }
+  const rows = lotAge.buckets.filter((b) => b.key !== 'lot_age_unknown' || b.items > 0)
+  const scale = Math.max(0, ...rows.map((b) => b.value))
+  const bar = (b: InventoryBoardLotAgeBucket) => {
+    const row = LOT_AGE_ROWS[b.key]
+    return (
+      <BarRow
+        key={b.key}
+        tone={row.tone}
+        label={row.label}
+        bucket={b}
+        scale={scale}
+        share={pct(b.value, lotAge.value)}
+        onOpen={() => onOpen(b.key, row.title)}
+      />
+    )
+  }
+  const younger = rows.filter((b) => b.to_months !== null && b.to_months <= 36)
+  const older = rows.filter((b) => !(b.to_months !== null && b.to_months <= 36))
+  return (
+    <section className={`${PANEL} mb-4`}>
+      <h2 className="text-2xl font-semibold text-slate-900">Jak długo leżą dostawy w magazynie</h2>
+      <p className="mb-2 text-base text-slate-700">
+        Każda dostawa, która jeszcze leży, liczy się w przedziale swojego wieku — kwoty się sumują, razem{' '}
+        {fmtBig(lotAge.value)}. % = część tej sumy. Towar z dostawami z kilku okresów jest w każdym z nich.
+        <span className="print:hidden"> Kliknij pasek, aby zobaczyć listę.</span>
+      </p>
+      <div className="grid gap-x-6 gap-y-1 lg:grid-cols-2 print:grid-cols-2">
+        <div className="space-y-1">{younger.map(bar)}</div>
+        <div className="space-y-1">{older.map(bar)}</div>
+      </div>
+      {lotAge.value_unknown_items > 0 && (
+        <p className="mt-2 text-base text-slate-700">
+          {goods(lotAge.value_unknown_items)} ma dostawę bez ceny zakupu — w przedziale takiej dostawy ten towar nie jest
+          wliczony do kwoty.
+        </p>
+      )}
+    </section>
+  )
+}
 
 /** Górny rząd pulpitu: duża kwota z „Pokaż listę ›”, podpis, szczegół; cały kafelek jest przyciskiem. */
 function KpiTile({
@@ -1367,6 +1445,11 @@ function BoardDetailsModal({
             </div>
             {/* Na ekranie kolejność pokazuje niebieski nagłówek ze strzałką; na wydruku — zdanie. */}
             <span className="hidden text-base text-slate-700 print:inline">{orderText}</span>
+            {request.kind === 'items' && request.bucket.startsWith('lot_age_') && (
+              <span className="text-base font-medium text-slate-800">
+                Ilość, wartość i najstarsza dostawa — tylko z dostaw z tego okresu.
+              </span>
+            )}
             {loaded?.kind === 'moves' && (
               <span className="text-base font-medium text-slate-800">
                 Tylko towar, który przed wydaniem leżał {monthsLabel(loaded.res.min_lot_age_months)} lub dłużej.

@@ -15,7 +15,7 @@ use RuntimeException;
 
 /**
  * Kopia towarów ERP XL: paczkami po numerze towaru (Twr_GIDNumer) — w pamięci jest tylko jedna paczka (CLI na serwerze
- * ma 128 MB). Na towar: stany z rozbiciem na magazyny, dostawcy z karty towaru, ostatnie pozycje PZ, data ostatniej
+ * ma 128 MB). Na towar: stany z rozbiciem na magazyny i partiami (StockLots), dostawcy z karty towaru, ostatnie pozycje PZ, data ostatniej
  * sprzedaży. Pełny przebieg oznacza removed_at towarom, których XL już nie zwrócił.
  */
 final class ErpItemSync
@@ -79,6 +79,7 @@ final class ErpItemSync
     {
         $gids = array_column($items, 'gid');
         $stock = $this->group($this->gateway->stock($gids));
+        $lots = $this->group($this->gateway->stockLots($gids));
         $suppliers = $this->group($this->gateway->suppliers($gids));
         $purchases = $this->group($this->gateway->purchases($gids, $perItem));
         // ostatnia sprzedaż na magazyn dokumentu; towaru = najpóźniejsza z nich (także z dokumentu bez magazynu)
@@ -88,7 +89,7 @@ final class ErpItemSync
 
         $withTrade = 0;
         $savedPurchases = 0;
-        DB::transaction(function () use ($items, $stock, $suppliers, $purchases, $lastSales, $tradePrefix, $serviceCodes, $now, &$withTrade, &$savedPurchases): void {
+        DB::transaction(function () use ($items, $stock, $lots, $suppliers, $purchases, $lastSales, $tradePrefix, $serviceCodes, $now, &$withTrade, &$savedPurchases): void {
             foreach ($items as $item) {
                 $gid = $item['gid'];
                 $stockFields = $this->stockFields($stock[$gid] ?? [], $tradePrefix, $serviceCodes);
@@ -132,6 +133,7 @@ final class ErpItemSync
                     'removed_at' => null,
                 ]);
                 WarehouseLocations::replace((int) $model->id, $stockFields['stock_by_warehouse']);
+                StockLots::replace((int) $model->id, $lots[$gid] ?? []);
                 WarehouseLocations::replaceSales((int) $model->id, array_map(static fn (array $r): array => [
                     'warehouse_code' => $r['warehouse_code'],
                     'last_sale_at' => ClarionDate::toDate($r['date'])?->toDateString(),
@@ -165,7 +167,8 @@ final class ErpItemSync
 
     /**
      * Same stany towarów już skopiowanych (bez nazw, dostawców i zakupów) — odświeżanie w ciągu dnia. Zapis tylko
-     * zmienionych wierszy; stock_synced_at dostają wszystkie przeczytane towary (karta pokazuje czas odczytu stanu).
+     * zmienionych wierszy (partie zawsze); stock_synced_at dostają wszystkie przeczytane towary (karta pokazuje czas
+     * odczytu stanu).
      *
      * @param  (callable(int): void)|null  $progress
      * @return array{items: int, changed: int}
@@ -185,10 +188,14 @@ final class ErpItemSync
             ->whereNull('removed_at')
             ->select(['id', 'xl_gid', 'stock_trade', 'stock_total', 'stock_value', 'oldest_lot_at', 'stock_by_warehouse'])
             ->chunkById($batch, function ($items) use ($tradePrefix, $serviceCodes, $now, &$stats, $progress): void {
-                $stock = $this->group($this->gateway->stock($items->pluck('xl_gid')->map(fn ($g) => (int) $g)->all()));
-                DB::transaction(function () use ($items, $stock, $tradePrefix, $serviceCodes, $now, &$stats): void {
+                $gids = $items->pluck('xl_gid')->map(fn ($g) => (int) $g)->all();
+                $stock = $this->group($this->gateway->stock($gids));
+                $lots = $this->group($this->gateway->stockLots($gids));
+                DB::transaction(function () use ($items, $stock, $lots, $tradePrefix, $serviceCodes, $now, &$stats): void {
                     $unchanged = [];
                     foreach ($items as $item) {
+                        // partie zawsze: przy tej samej sumie mogły się zmienić daty dostaw
+                        StockLots::replace((int) $item->id, $lots[(int) $item->xl_gid] ?? []);
                         $fields = $this->stockFields($stock[(int) $item->xl_gid] ?? [], $tradePrefix, $serviceCodes);
                         $same = abs((float) $item->stock_trade - $fields['stock_trade']) < 0.00005
                             && abs((float) $item->stock_total - $fields['stock_total']) < 0.00005

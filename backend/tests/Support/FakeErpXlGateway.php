@@ -15,6 +15,9 @@ final class FakeErpXlGateway implements ErpXlGateway
     /** @var list<array{gid: int, warehouse_code: string, warehouse_name: string, quantity: float}> */
     public array $stockRows = [];
 
+    /** @var list<array{gid: int, warehouse_code: string, received_at: int|null, quantity: float, value: float|null}> */
+    public array $stockLotRows = [];
+
     /** @var list<array<string, mixed>> najnowsze pierwsze */
     public array $purchaseRows = [];
 
@@ -78,6 +81,11 @@ final class FakeErpXlGateway implements ErpXlGateway
     public function stock(array $gids): array
     {
         return array_values(array_filter($this->stockRows, static fn (array $r): bool => in_array($r['gid'], $gids, true)));
+    }
+
+    public function stockLots(array $gids): array
+    {
+        return array_values(array_filter($this->stockLotRows, static fn (array $r): bool => in_array($r['gid'], $gids, true)));
     }
 
     public function purchases(array $gids, int $perItem): array

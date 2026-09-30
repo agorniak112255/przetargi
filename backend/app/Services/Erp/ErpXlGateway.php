@@ -34,6 +34,15 @@ interface ErpXlGateway
     public function stock(array $gids): array;
 
     /**
+     * Partie na stanie (TwZ_Ilosc > 0) z datą przyjęcia (XlTimestamp; null = XL nie podał) — do rozbicia wieku zapasu.
+     * Wiersz = suma partii towaru przyjętych w tej samej chwili na ten sam magazyn; wartość = księgowa netto w PLN.
+     *
+     * @param  list<int>  $gids
+     * @return list<array{gid: int, warehouse_code: string, received_at: int|null, quantity: float, value: float|null}>
+     */
+    public function stockLots(array $gids): array;
+
+    /**
      * Ostatnie pozycje PZ na towar (najnowsze pierwsze), dodatnia ilość.
      *
      * @param  list<int>  $gids

@@ -11,12 +11,14 @@ use App\Models\ErpRwPwPair;
 use App\Models\ErpWarehouse;
 use App\Services\Erp\ErpItemCards;
 use App\Services\Erp\InventoryQuery;
+use App\Services\Erp\StockLots;
 use App\Services\Erp\WarehouseLocations;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 /**
@@ -41,6 +43,22 @@ class InventoryBoardController extends Controller
         'never_sold' => ['never', 6, 'Towar, który nie sprzedał się ani razu'],
         'stale_36' => ['stale', 36, 'Towar bez sprzedaży ponad rok, który leży w magazynie ponad 3 lata'],
         'stale_60' => ['stale', 60, 'Towar bez sprzedaży ponad rok, który leży w magazynie ponad 5 lat'],
+    ];
+
+    /**
+     * „Jak długo leży” (decyzja właściciela 01.10.2026): każda dostawa (partia) w przedziale swojego wieku — ilość
+     * i wartość samych dostaw z okresu, więc przedziały sumują się do zapasu. [od miesięcy, do miesięcy, tytuł okna];
+     * od null = partie bez daty przyjęcia.
+     */
+    private const LOT_AGES = [
+        'lot_age_0_6' => [0, 6, 'Dostawy, które leżą w magazynie do pół roku'],
+        'lot_age_6_12' => [6, 12, 'Dostawy, które leżą w magazynie od pół roku do roku'],
+        'lot_age_12_24' => [12, 24, 'Dostawy, które leżą w magazynie od roku do 2 lat'],
+        'lot_age_24_36' => [24, 36, 'Dostawy, które leżą w magazynie od 2 do 3 lat'],
+        'lot_age_36_48' => [36, 48, 'Dostawy, które leżą w magazynie od 3 do 4 lat'],
+        'lot_age_48_60' => [48, 60, 'Dostawy, które leżą w magazynie od 4 do 5 lat'],
+        'lot_age_60' => [60, null, 'Dostawy, które leżą w magazynie ponad 5 lat'],
+        'lot_age_unknown' => [null, null, 'Dostawy bez daty przyjęcia w programie magazynowym'],
     ];
 
     /** Rodzaje asortymentu po pierwszej literze kodu XL (jak ekran Powiązania z ERP XL). */
@@ -141,6 +159,7 @@ class InventoryBoardController extends Controller
                 $this->itemRows($this->bucketQuery('no_sale_12', $scope, null, $location)->limit(self::TOP_UNSOLD_LIMIT), $scope, valuedOnly: true, location: $location),
             ),
             'internal_moves' => $this->movesSummary($scope, $location),
+            'lot_age' => $this->lotAgeSummary($scope, $location),
             'value_unknown' => $stock['value_unknown'],
         ]);
     }
@@ -152,7 +171,7 @@ class InventoryBoardController extends Controller
     public function items(Request $request): JsonResponse
     {
         $v = $request->validate([
-            'bucket' => ['required', 'string', Rule::in(array_keys(self::BUCKETS))],
+            'bucket' => ['required', 'string', Rule::in([...array_keys(self::BUCKETS), ...array_keys(self::LOT_AGES)])],
             'group' => ['nullable', 'string', Rule::in([...array_keys(self::GROUPS), 'other'])],
             'per_page' => ['nullable', 'integer', Rule::in(self::PER_PAGE)],
             'page' => ['nullable', 'integer', 'min:1'],
@@ -164,18 +183,19 @@ class InventoryBoardController extends Controller
         $location = $this->location($request);
         $key = (string) $v['bucket'];
         $group = isset($v['group']) && $v['group'] !== '' ? (string) $v['group'] : null;
+        $measures = $this->measures($scope, $location, $key);
         $query = $this->bucketQuery($key, $scope, $group, $location);
-        $totals = InventoryQuery::totals($query, $scope, $location);
+        $totals = InventoryQuery::totals($query, $scope, $location, $measures['value']);
         $words = $this->words($v['search'] ?? null);
         if ($words !== []) {
-            $this->searchItems($query, $words, $scope, $location);
+            $this->searchItems($query, $words, $measures);
         }
-        $found = $words === [] ? $totals : InventoryQuery::totals($query, $scope, $location);
+        $found = $words === [] ? $totals : InventoryQuery::totals($query, $scope, $location, $measures['value']);
         $sort = isset($v['sort']) ? (string) $v['sort'] : null;
-        $page = $this->ordered($query, $scope, $sort, ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc', $location)
+        $page = $this->ordered($query, $measures, $sort, ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc')
             ->paginate((int) ($v['per_page'] ?? 10));
 
-        $title = self::BUCKETS[$key][2];
+        $title = (self::BUCKETS[$key] ?? self::LOT_AGES[$key])[2];
         if ($group !== null) {
             $title .= ' — '.mb_strtolower(self::GROUPS[$group] ?? 'Pozostałe');
         }
@@ -308,12 +328,18 @@ class InventoryBoardController extends Controller
 
     /**
      * Towar koszyka w wybranych magazynach. Nigdy niesprzedany liczy się dopiero, gdy leży dłużej niż pół roku — świeża
-     * dostawa nowego towaru to nie zaleganie.
+     * dostawa nowego towaru to nie zaleganie. Przedział „jak długo leży” — towar z dostawami z tego okresu.
      *
      * @return Builder<ErpItem>
      */
     private function bucketQuery(string $key, string $scope, ?string $group = null, ?string $location = null): Builder
     {
+        if (isset(self::LOT_AGES[$key])) {
+            $query = InventoryQuery::withLots($this->lotRange($key), $scope, $location);
+            $this->whereGroup($query, $group);
+
+            return $query;
+        }
         [$kind, $months] = self::BUCKETS[$key];
         $query = InventoryQuery::inStock($scope, $location);
         $lot = InventoryQuery::oldestLotSql($scope, $location);
@@ -324,6 +350,14 @@ class InventoryBoardController extends Controller
                 ->where(fn (Builder $l) => $l->whereRaw($lot.' is null')->orWhereRaw($lot.' <= ?', [$this->ago($months)->toDateString()])),
             default => $query,
         };
+        $this->whereGroup($query, $group);
+
+        return $query;
+    }
+
+    /** @param  Builder<ErpItem>  $query */
+    private function whereGroup(Builder $query, ?string $group): void
+    {
         if ($group === 'other') {
             foreach (array_keys(self::GROUPS) as $letter) {
                 $query->where('code', 'not like', $letter.'%');
@@ -331,8 +365,81 @@ class InventoryBoardController extends Controller
         } elseif ($group !== null) {
             $query->where('code', 'like', $group.'%');
         }
+    }
 
-        return $query;
+    /**
+     * Okres przedziału „jak długo leży”: przyjęte po `after` i najpóźniej `until`; null = partie bez daty.
+     *
+     * @return array{after: ?string, until: ?string}|null
+     */
+    private function lotRange(string $key): ?array
+    {
+        [$from, $to] = self::LOT_AGES[$key];
+        if ($from === null) {
+            return null;
+        }
+
+        return [
+            'after' => $to !== null ? $this->ago($to)->toDateString() : null,
+            'until' => $from > 0 ? $this->ago($from)->toDateString() : null,
+        ];
+    }
+
+    /**
+     * SQL kolumn okna towarów: ilość, wartość, najstarsza dostawa i ostatnia sprzedaż w wybranych magazynach; w przedziale
+     * „jak długo leży” ilość, wartość i najstarsza dostawa — tylko z dostaw tego okresu.
+     *
+     * @return array{quantity: string, value: string, lot: string, sale: string}
+     */
+    private function measures(string $scope, ?string $location, ?string $key = null): array
+    {
+        if ($key !== null && isset(self::LOT_AGES[$key])) {
+            $range = $this->lotRange($key);
+
+            return [
+                'quantity' => InventoryQuery::lotQuantitySql($range, $scope, $location),
+                'value' => InventoryQuery::lotValueSql($range, $scope, $location),
+                'lot' => InventoryQuery::lotOldestSql($range, $scope, $location),
+                'sale' => InventoryQuery::lastSaleSql($location),
+            ];
+        }
+
+        return [
+            'quantity' => InventoryQuery::quantitySql($scope, $location),
+            'value' => InventoryQuery::valueSql($scope, $location),
+            'lot' => InventoryQuery::oldestLotSql($scope, $location),
+            'sale' => InventoryQuery::lastSaleSql($location),
+        ];
+    }
+
+    /**
+     * Przedziały „jak długo leży”: wartość samych dostaw z okresu i liczba towarów z takimi dostawami (towar z dostawami
+     * z kilku okresów liczy się w każdym z nich). null = partii jeszcze nie odczytano z XL (przed pierwszym odczytem
+     * stanów po wdrożeniu).
+     *
+     * @return array{buckets: list<array{key: string, from_months: int|null, to_months: int|null, items: int, value: float}>, items: int, value: float, value_unknown_items: int}|null
+     */
+    private function lotAgeSummary(string $scope, ?string $location): ?array
+    {
+        if (! DB::table(StockLots::TABLE)->exists()) {
+            return null;
+        }
+        $buckets = [];
+        foreach (self::LOT_AGES as $key => [$from, $to]) {
+            $range = $this->lotRange($key);
+            $totals = InventoryQuery::totals(InventoryQuery::withLots($range, $scope, $location), $scope, $location, InventoryQuery::lotValueSql($range, $scope, $location));
+            $buckets[] = ['key' => $key, 'from_months' => $from, 'to_months' => $to, 'items' => $totals['items'], 'value' => $totals['value'], 'value_unknown' => $totals['value_unknown']];
+        }
+        $any = ['after' => null, 'until' => null];
+        $all = InventoryQuery::totals(InventoryQuery::withLots($any, $scope, $location), $scope, $location, InventoryQuery::lotValueSql($any, $scope, $location));
+
+        return [
+            'buckets' => array_map(static fn (array $b): array => array_diff_key($b, ['value_unknown' => true]), $buckets),
+            'items' => $all['items'],
+            // suma przedziałów: towar bez ceny jednej dostawy traci tylko przedział tej dostawy
+            'value' => round(array_sum(array_column($buckets, 'value')), 2),
+            'value_unknown_items' => $all['value_unknown'],
+        ];
     }
 
     /**
@@ -340,15 +447,13 @@ class InventoryBoardController extends Controller
      * końcu; „ani razu nie sprzedany” przy ostatniej sprzedaży rosnąco na początku (sprzedaż najdawniej), malejąco na końcu.
      *
      * @param  Builder<ErpItem>  $query
+     * @param  array{quantity: string, value: string, lot: string, sale: string}  $measures
      * @param  'asc'|'desc'  $dir
      * @return Builder<ErpItem>
      */
-    private function ordered(Builder $query, string $scope, ?string $sort = null, string $dir = 'desc', ?string $location = null): Builder
+    private function ordered(Builder $query, array $measures, ?string $sort = null, string $dir = 'desc'): Builder
     {
-        $value = InventoryQuery::valueSql($scope, $location);
-        $quantity = InventoryQuery::quantitySql($scope, $location);
-        $lot = InventoryQuery::oldestLotSql($scope, $location);
-        $sale = InventoryQuery::lastSaleSql($location);
+        ['value' => $value, 'quantity' => $quantity, 'lot' => $lot, 'sale' => $sale] = $measures;
         $query->select('erp_items.*')
             ->selectRaw($value.' as purchase_value')
             ->selectRaw($quantity.' as scope_quantity')
@@ -418,13 +523,11 @@ class InventoryBoardController extends Controller
      *
      * @param  Builder<ErpItem>  $query
      * @param  list<string>  $words
+     * @param  array{quantity: string, value: string, lot: string, sale: string}  $measures
      */
-    private function searchItems(Builder $query, array $words, string $scope, ?string $location = null): void
+    private function searchItems(Builder $query, array $words, array $measures): void
     {
-        $quantity = InventoryQuery::quantitySql($scope, $location);
-        $value = InventoryQuery::valueSql($scope, $location);
-        $lot = InventoryQuery::oldestLotSql($scope, $location);
-        $sale = InventoryQuery::lastSaleSql($location);
+        ['value' => $value, 'quantity' => $quantity, 'lot' => $lot, 'sale' => $sale] = $measures;
         foreach ($words as $word) {
             $like = '%'.addcslashes($word, '%_\\').'%';
             $query->where(function (Builder $q) use ($word, $like, $quantity, $value, $lot, $sale): void {
@@ -540,7 +643,7 @@ class InventoryBoardController extends Controller
     private function itemRows(?Builder $query, string $scope, ?iterable $items = null, bool $valuedOnly = false, ?string $location = null): array
     {
         if ($query !== null) {
-            $query = $this->ordered($query, $scope, location: $location);
+            $query = $this->ordered($query, $this->measures($scope, $location));
             if ($valuedOnly) {
                 $query->whereRaw(InventoryQuery::valueSql($scope, $location).' is not null');
             }

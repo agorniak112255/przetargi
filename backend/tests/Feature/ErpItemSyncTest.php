@@ -11,6 +11,7 @@ use App\Models\Product;
 use App\Services\Erp\ErpCardStock;
 use App\Services\Erp\ErpItemSync;
 use App\Services\Erp\ErpXlGateway;
+use App\Services\Erp\StockLots;
 use App\Services\Erp\WarehouseLocations;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -223,6 +224,36 @@ final class ErpItemSyncTest extends TestCase
         $this->assertSame('2026-05-18', $a->oldest_lot_at?->toDateString());
         // brak stanu = wartość 0, nie „nieznana”
         $this->assertSame('0.00', ErpItem::query()->where('xl_gid', 2)->value('stock_value'));
+    }
+
+    public function test_stock_lots_saved_per_warehouse_and_day_and_replaced_by_stock_refresh(): void
+    {
+        $this->xl->items = [FakeErpXlGateway::item(1, 'A1', 'Towar A'), FakeErpXlGateway::item(2, 'B2', 'Towar B')];
+        $this->xl->stockLotRows = [
+            // dwie partie tego samego dnia (inna godzina) na 01H — jeden wiersz
+            ['gid' => 1, 'warehouse_code' => '01H', 'received_at' => 1147942279, 'quantity' => 3.0, 'value' => 30.0],
+            ['gid' => 1, 'warehouse_code' => '01H', 'received_at' => 1147942279 + 3600, 'quantity' => 2.0, 'value' => 20.0],
+            ['gid' => 1, 'warehouse_code' => '15H', 'received_at' => 1128261658, 'quantity' => 1.0, 'value' => null],
+            // XL bez daty przyjęcia
+            ['gid' => 1, 'warehouse_code' => '01H', 'received_at' => 0, 'quantity' => 4.0, 'value' => 8.0],
+            ['gid' => 2, 'warehouse_code' => '20H', 'received_at' => 1128261658, 'quantity' => 7.0, 'value' => 70.0],
+        ];
+        app(ErpItemSync::class)->run();
+
+        $a = ErpItem::query()->where('xl_gid', 1)->firstOrFail();
+        $rows = DB::table(StockLots::TABLE)->where('erp_item_id', $a->id)->orderBy('warehouse_code')->orderBy('received_at')->get();
+        $this->assertSame(['01H', '01H', '15H'], $rows->pluck('warehouse_code')->all());
+        $this->assertSame(['01', '01', '15'], $rows->pluck('location')->all());
+        $this->assertSame([null, '2026-05-18', '2025-10-02'], $rows->pluck('received_at')->map(fn ($d) => $d === null ? null : substr((string) $d, 0, 10))->all());
+        $this->assertEquals([4, 5, 1], $rows->pluck('quantity')->map(fn ($q) => (float) $q)->all());
+        $this->assertEquals([8.0, 50.0, null], $rows->pluck('value')->map(fn ($v) => $v === null ? null : (float) $v)->all());
+
+        // odświeżenie stanów zastępuje partie, także towaru bez zmiany sum; wyprzedany B traci partie
+        $this->xl->stockLotRows = [['gid' => 1, 'warehouse_code' => '11H', 'received_at' => 1147942279, 'quantity' => 5.0, 'value' => 50.0]];
+        $this->assertSame(0, Artisan::call('erp:stock'));
+        $this->assertSame(['11H'], DB::table(StockLots::TABLE)->where('erp_item_id', $a->id)->pluck('warehouse_code')->all());
+        $b = ErpItem::query()->where('xl_gid', 2)->firstOrFail();
+        $this->assertSame(0, DB::table(StockLots::TABLE)->where('erp_item_id', $b->id)->count());
     }
 
     public function test_stock_per_warehouse_rows_follow_breakdown_with_location_from_code(): void

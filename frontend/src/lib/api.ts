@@ -808,7 +808,43 @@ export type InventoryBoardReport = {
   }
   /** Ile pozycji bez wartości (nie ma ich w kwotach). */
   value_unknown: number
+  /**
+   * Jak długo leżą dostawy (partie) w wybranych magazynach: każda dostawa w przedziale swojego wieku, kwoty = wartość
+   * samych dostaw z okresu (przedziały sumują się do `value`). null = partii jeszcze nie odczytano z programu
+   * magazynowego (do pierwszego odczytu po wdrożeniu).
+   */
+  lot_age: {
+    buckets: InventoryBoardLotAgeBucket[]
+    /** Towarów z jakąkolwiek dostawą na stanie. */
+    items: number
+    value: number
+    /** Towary, których choć jednej dostawy nie da się wycenić (ta dostawa nie jest w kwotach). */
+    value_unknown_items: number
+  } | null
 }
+
+/**
+ * Przedział „jak długo leży”: dostawy przyjęte od `to_months` do `from_months` miesięcy temu (to_months null = dawniej;
+ * from_months null = bez daty przyjęcia). items — towary z dostawami z tego okresu (towar z dostawami z kilku okresów
+ * liczy się w każdym). Okno: bucket = key.
+ */
+export type InventoryBoardLotAgeBucket = {
+  key: InventoryBoardLotAgeKey
+  from_months: number | null
+  to_months: number | null
+  items: number
+  value: number
+}
+
+export type InventoryBoardLotAgeKey =
+  | 'lot_age_0_6'
+  | 'lot_age_6_12'
+  | 'lot_age_12_24'
+  | 'lot_age_24_36'
+  | 'lot_age_36_48'
+  | 'lot_age_48_60'
+  | 'lot_age_60'
+  | 'lot_age_unknown'
 
 /** Rodzaj towaru w raporcie dla zarządu (parametr `group` w /api/inventory/board/items). */
 export type InventoryBoardGroupKey = 'A' | 'B' | 'S' | 'T' | 'H' | 'other'
@@ -832,6 +868,7 @@ export type InventoryBoardItemsBucket =
   | 'never_sold'
   | 'stale_36'
   | 'stale_60'
+  | InventoryBoardLotAgeKey
 
 /** Wiersz listy towarów raportu dla zarządu. Kwoty w zł. */
 export type InventoryBoardItemRow = {
@@ -841,7 +878,10 @@ export type InventoryBoardItemRow = {
   card_name: string | null
   quantity: number
   unit: string | null
-  /** Ilość × cena zakupu w wybranych magazynach; null = XL nie podaje ceny zakupu. */
+  /**
+   * Ilość × cena zakupu w wybranych magazynach; null = XL nie podaje ceny zakupu. W oknie przedziału „jak długo leży”
+   * (bucket lot_age_*) quantity, value i oldest_lot_at dotyczą tylko dostaw z tego okresu.
+   */
   value: number | null
   /** Wartość ÷ ilość (zł za jednostkę). */
   unit_cost: number | null

@@ -23,6 +23,9 @@ use InvalidArgumentException;
  * z wierszy erp_item_warehouse_stocks; słownik usługowych czytany na bieżąco. Wartość oddziału = suma wartości partii jego
  * magazynów, a gdy któryś magazyn jej nie ma — ilość × cena ostatniej PZ (jak dla całego towaru). Ostatnia sprzedaż
  * w oddziale — z dokumentów jego magazynów (erp_item_warehouse_sales), bez względu na handlowe / usługowe.
+ *
+ * Wiek zapasu (raport dla zarządu, „jak długo leżą dostawy”): z partii StockLots — ilość i wartość samych dostaw
+ * przyjętych w okresie (lot*Sql), ten sam zakres magazynów i oddział.
  */
 final class InventoryQuery
 {
@@ -150,14 +153,15 @@ final class InventoryQuery
     }
 
     /**
-     * Liczba pozycji, wartość i ile bez wartości — jedno zapytanie.
+     * Liczba pozycji, wartość i ile bez wartości — jedno zapytanie. `$valueSql` zastępuje wartość towaru (np. wartość
+     * samych partii z okresu — lotValueSql).
      *
      * @param  Builder<ErpItem>  $query
      * @return array{items: int, value: float, value_unknown: int}
      */
-    public static function totals(Builder $query, string $scope = 'all', ?string $location = null): array
+    public static function totals(Builder $query, string $scope = 'all', ?string $location = null, ?string $valueSql = null): array
     {
-        $value = self::valueSql($scope, $location);
+        $value = $valueSql ?? self::valueSql($scope, $location);
         $row = (clone $query)->toBase()
             ->selectRaw('count(*) as items, coalesce(sum('.$value.'), 0) as value,'
                 .' sum(case when '.$value.' is null then 1 else 0 end) as value_unknown')
@@ -168,6 +172,92 @@ final class InventoryQuery
             'value' => round((float) ($row->value ?? 0), 2),
             'value_unknown' => (int) ($row->value_unknown ?? 0),
         ];
+    }
+
+    /**
+     * Ilość partii towaru z okresu w wybranych magazynach (StockLots).
+     *
+     * @param  array{after: ?string, until: ?string}|null  $range  zob. lotRows
+     */
+    public static function lotQuantitySql(?array $range, string $scope = 'all', ?string $location = null): string
+    {
+        return '(select coalesce(sum(l.quantity), 0) '.self::lotRows($range, $scope, $location).')';
+    }
+
+    /**
+     * Wartość partii towaru z okresu: wartość księgowa partii, a bez niej ilość × cena ostatniej PZ (jak wartość
+     * towaru); null, gdy którejś partii nie da się wycenić.
+     *
+     * @param  array{after: ?string, until: ?string}|null  $range
+     */
+    public static function lotValueSql(?array $range, string $scope = 'all', ?string $location = null): string
+    {
+        $lot = 'coalesce(l.value, l.quantity * '.self::LAST_PRICE_SQL.')';
+
+        return '(select case when count(*) = count('.$lot.') then sum('.$lot.') end '.self::lotRows($range, $scope, $location).')';
+    }
+
+    /**
+     * Najwcześniejsze przyjęcie wśród partii towaru z okresu.
+     *
+     * @param  array{after: ?string, until: ?string}|null  $range
+     */
+    public static function lotOldestSql(?array $range, string $scope = 'all', ?string $location = null): string
+    {
+        return '(select min(l.received_at) '.self::lotRows($range, $scope, $location).')';
+    }
+
+    /**
+     * Towar (bez usuniętych z XL), który ma w wybranych magazynach partie przyjęte w okresie.
+     *
+     * @param  array{after: ?string, until: ?string}|null  $range
+     * @return Builder<ErpItem>
+     */
+    public static function withLots(?array $range, string $scope = 'all', ?string $location = null): Builder
+    {
+        return ErpItem::query()->whereNull('removed_at')->whereRaw('exists (select 1 '.self::lotRows($range, $scope, $location).')');
+    }
+
+    /**
+     * FROM i WHERE partii towaru (alias l, tabela StockLots) w wybranych magazynach i oddziale, przyjętych w okresie:
+     * `after` < dzień przyjęcia <= `until` (granica jak lotOlderThan: partia z dnia progu jest już starsza), brak granicy
+     * = bez ograniczenia (bez obu — wszystkie partie, także bez daty); `$range` null = tylko partie bez daty przyjęcia.
+     * Daty sprawdzone (RRRR-MM-DD), oddział = cyfry — dlatego wolno je wkleić do SQL.
+     *
+     * @param  array{after: ?string, until: ?string}|null  $range
+     */
+    private static function lotRows(?array $range, string $scope, ?string $location): string
+    {
+        $sql = 'from '.StockLots::TABLE.' l where l.erp_item_id = erp_items.id';
+        if ($location !== null) {
+            $sql .= " and l.location = '".WarehouseLocations::assertValid($location)."'";
+        }
+        $service = 'select w.code from erp_warehouses w where w.is_service = 1';
+        $sql .= match (self::scope($scope)) {
+            'trade' => ' and l.warehouse_code not in ('.$service.')',
+            'service' => ' and l.warehouse_code in ('.$service.')',
+            default => '',
+        };
+        if ($range === null) {
+            return $sql.' and l.received_at is null';
+        }
+        if ($range['after'] !== null) {
+            $sql .= " and l.received_at > '".self::date($range['after'])."'";
+        }
+        if ($range['until'] !== null) {
+            $sql .= " and l.received_at <= '".self::date($range['until'])."'";
+        }
+
+        return $sql;
+    }
+
+    private static function date(string $date): string
+    {
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) !== 1) {
+            throw new InvalidArgumentException('Nieprawidłowa data: '.$date);
+        }
+
+        return $date;
     }
 
     /**

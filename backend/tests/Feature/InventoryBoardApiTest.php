@@ -11,6 +11,7 @@ use App\Models\ErpRwPwPair;
 use App\Models\ErpWarehouse;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\Erp\StockLots;
 use App\Services\Erp\WarehouseLocations;
 use App\Services\Erp\WarehouseSplit;
 use Database\Seeders\RolesAndPermissionsSeeder;
@@ -377,6 +378,70 @@ final class InventoryBoardApiTest extends TestCase
         $this->getJson('/api/inventory/board/moves?sort=quantity')->assertUnprocessable();
     }
 
+    public function test_lot_age_buckets_count_only_deliveries_of_each_period(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $x = $this->item('AX', 'BLUZA X', 7, 160, lastSale: '2026-09-01', oldestLot: '2021-09-30');
+        // przed pierwszym odczytem partii z XL
+        $this->assertNull($this->getJson('/api/inventory/board')->assertOk()->json('lot_age'));
+
+        // granice: dostawa z dnia progu jest już w starszym przedziale (dziś 30.09.2026)
+        $this->lots($x, [['01H', '2026-09-01', 1, 10], ['01H', '2026-03-30', 2, 20], ['01H', '2025-09-30', 3, 30], ['01H', '2021-09-30', 1, 100]]);
+        // bez wartości partii: ilość × cena ostatniej PZ
+        $y = $this->item('SY', 'FILTR Y', 5, 20, lastSale: null, oldestLot: '2023-01-01');
+        $this->lots($y, [['01H', '2023-01-01', 5, null]]);
+        ErpItemPurchase::query()->create([
+            'erp_item_id' => $y->id, 'document_type' => 1489, 'document_id' => 9, 'document_line' => 1, 'purchased_at' => '2023-01-01',
+            'supplier' => 'X', 'quantity' => 5, 'document_unit' => 'szt', 'net_value_pln' => 20, 'unit_price_pln' => 4, 'document_price' => 4, 'currency' => 'PLN',
+        ]);
+        // usługowy 01M
+        $z = $this->item('TZ', 'GAŚNICA Z', 1, 1000, lastSale: null, oldestLot: '2022-01-01', warehouses: [
+            ['code' => '01M', 'name' => 'Magazyn materiałów - Rzeszów', 'quantity' => 1, 'value' => 1000, 'oldest_lot' => '2022-01-01'],
+        ]);
+        $this->lots($z, [['01M', '2022-01-01', 1, 1000]]);
+        $w = $this->item('HW', 'BEZ DATY', 1, 5, lastSale: null, oldestLot: null);
+        $this->lots($w, [['01H', null, 1, 5]]);
+        $v = $this->item('BV', 'KRAKÓW', 1, 7, lastSale: null, oldestLot: '2024-01-01', warehouses: [
+            ['code' => '15H', 'name' => 'Magazyn HANDEL Kraków', 'quantity' => 1, 'value' => 7, 'oldest_lot' => '2024-01-01'],
+        ]);
+        $this->lots($v, [['15H', '2024-01-01', 1, 7]]);
+        $removed = $this->item('AR', 'USUNIĘTY', 1, 999, lastSale: null, oldestLot: '2020-01-01');
+        $this->lots($removed, [['01H', '2020-01-01', 1, 999]]);
+        $removed->update(['removed_at' => now()]);
+
+        $lotAge = fn (string $query = ''): array => $this->getJson('/api/inventory/board'.$query)->assertOk()->json('lot_age');
+        $byKey = fn (array $a): array => collect($a['buckets'])->mapWithKeys(fn (array $b) => [$b['key'] => [$b['items'], $b['value']]])->all();
+
+        $trade = $lotAge();
+        $this->assertEquals([
+            'lot_age_0_6' => [1, 10], 'lot_age_6_12' => [1, 20], 'lot_age_12_24' => [1, 30], 'lot_age_24_36' => [1, 7],
+            'lot_age_36_48' => [1, 20], 'lot_age_48_60' => [0, 0], 'lot_age_60' => [1, 100], 'lot_age_unknown' => [1, 5],
+        ], $byKey($trade));
+        $this->assertEquals(['items' => 4, 'value' => 192, 'value_unknown_items' => 0], array_intersect_key($trade, array_flip(['items', 'value', 'value_unknown_items'])));
+        $this->assertSame([60, null], [$trade['buckets'][6]['from_months'], $trade['buckets'][6]['to_months']]);
+
+        $rzeszow = $lotAge('?location=01');
+        $this->assertEquals([0, 0], $byKey($rzeszow)['lot_age_24_36']);
+        $this->assertEquals(185, $rzeszow['value']);
+        $service = $lotAge('?warehouses=service');
+        $this->assertEquals(['items' => 1, 'value' => 1000], array_intersect_key($service, array_flip(['items', 'value'])));
+        $this->assertEquals([1, 1000], $byKey($service)['lot_age_48_60']);
+
+        // okno: ilość, wartość i najstarsza dostawa — tylko z dostaw tego okresu
+        $r = $this->getJson('/api/inventory/board/items?bucket=lot_age_12_24')->assertOk();
+        $this->assertSame('Dostawy, które leżą w magazynie od roku do 2 lat (magazyny handlowe)', $r->json('title'));
+        $this->assertEquals(['items' => 1, 'value' => 30], $r->json('totals'));
+        $this->assertSame(['AX', 3, 30, '2025-09-30'], [$r->json('data.0.code'), (int) $r->json('data.0.quantity'), (int) $r->json('data.0.value'), $r->json('data.0.oldest_lot_at')]);
+        $pz = $this->getJson('/api/inventory/board/items?bucket=lot_age_36_48')->assertOk();
+        $this->assertEquals([20, 4], [$pz->json('data.0.value'), $pz->json('data.0.unit_cost')]);
+        $this->assertSame(['HW'], array_column($this->getJson('/api/inventory/board/items?bucket=lot_age_unknown')->json('data'), 'code'));
+        $this->assertSame(0, $this->getJson('/api/inventory/board/items?bucket=lot_age_24_36&location=01')->json('meta.total'));
+        // wyszukiwanie i sortowanie działają na wartości z okresu
+        $this->assertSame(1, $this->getJson('/api/inventory/board/items?bucket=lot_age_60&search=100')->json('found.items'));
+        $this->assertSame(0, $this->getJson('/api/inventory/board/items?bucket=lot_age_60&search=160')->json('found.items'));
+        $this->getJson('/api/inventory/board/items?bucket=lot_age_60&sort=quantity&dir=asc')->assertOk();
+    }
+
     public function test_warehouse_split_command_recomputes_from_stored_breakdown(): void
     {
         $item = $this->item('TGAS', 'GAŚNICA', 100, 1000, lastSale: '2025-01-01', oldestLot: '2020-01-01', warehouses: [
@@ -418,6 +483,17 @@ final class InventoryBoardApiTest extends TestCase
         WarehouseLocations::replace((int) $item->id, $warehouses);
 
         return $item;
+    }
+
+    /** @param  list<array{0: string, 1: ?string, 2: float|int, 3: float|int|null}>  $lots  [magazyn, dzień przyjęcia, ilość, wartość] */
+    private function lots(ErpItem $item, array $lots): void
+    {
+        foreach ($lots as [$code, $day, $quantity, $value]) {
+            DB::table(StockLots::TABLE)->insert([
+                'erp_item_id' => $item->id, 'warehouse_code' => $code, 'location' => WarehouseLocations::of($code),
+                'received_at' => $day, 'quantity' => $quantity, 'value' => $value,
+            ]);
+        }
     }
 
     private function pair(ErpItem $item, string $rwDate, string $operator, string $name, float $value, bool $sameFeature = true, ?string $note = null, int $gap = 0, ?int $lotAge = 12, string $warehouse = '01H', bool $unknownLot = false): void
