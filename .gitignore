@@ -51,3 +51,6 @@ thunderbird-addon/dist/
 
 # webserwis Comarch ERP XL (IIS) - pliki z haslami, poza repozytorium
 Webserwis/
+
+# ewidencja godzin pracy - prywatny plik wlasciciela
+Godziny_pracy_SUPON_AI.xlsx
