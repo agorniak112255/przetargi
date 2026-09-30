@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { appHref } from '../lib/api'
 
 const modules = [
@@ -1968,57 +1968,34 @@ function TbFilePicker() {
   )
 }
 
-type AddonDownload =
-  | { state: 'idle' }
-  | { state: 'busy' }
-  | { state: 'done'; kb: number }
-  | { state: 'error'; message: string }
+type AddonDownload = { state: 'idle' } | { state: 'started' } | { state: 'error'; message: string }
 
 /**
- * Sam link `download` nie daje żadnego znaku: 48 KB zapisuje się w ułamku
- * sekundy, a Chrome i Edge pokazują tylko ikonkę w rogu — ludzie uznawali,
- * że przycisk nie działa. Plik pobieramy więc sami i mówimy, że dotarł.
- * Gdy fetch zawiedzie, zostaje zwykły link (prawy przycisk → Zapisz link jako).
+ * Plik pobiera sama przeglądarka ze zwykłego linku, prosto z kliknięcia. Od 23.09 do 30.09.2026 strona
+ * ściągała go fetch-em i „klikała” link do bloba po odpowiedzi serwera — dla Chrome i Edge to pobranie
+ * nie pochodziło już z kliknięcia człowieka, a plik .xpi bez gestu użytkownika potrafią po cichu wstrzymać
+ * (Safe Browsing / SmartScreen, zależnie od komputera). Po kliknięciu tylko mówimy, gdzie szukać pliku,
+ * a w tle sprawdzamy, czy plik w ogóle jest na serwerze.
  */
-const ADDON_DOWNLOAD_TIMEOUT_MS = 20_000
-
 function useAddonDownload() {
   const [status, setStatus] = useState<AddonDownload>({ state: 'idle' })
 
-  async function download(event: MouseEvent<HTMLAnchorElement>) {
-    event.preventDefault()
-    setStatus({ state: 'busy' })
-    // Antywirus albo filtr sieci potrafi przytrzymać plik .xpi bez odpowiedzi —
-    // bez limitu przycisk wisiałby na „Pobieram…” w nieskończoność.
-    const controller = new AbortController()
-    const timer = window.setTimeout(() => controller.abort(), ADDON_DOWNLOAD_TIMEOUT_MS)
-    try {
-      const res = await fetch(appHref(ADDON_FILE), { cache: 'no-store', signal: controller.signal })
-      if (!res.ok) throw new Error(`serwer odpowiedział kodem ${res.status}`)
-      // Brak pliku na serwerze kończy się stroną aplikacji (index.html) z kodem 200.
-      if ((res.headers.get('Content-Type') ?? '').includes('text/html')) {
-        throw new Error('na serwerze brakuje pliku dodatku')
-      }
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'supon-przetargi.xpi'
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
-      setStatus({ state: 'done', kb: Math.max(1, Math.round(blob.size / 1024)) })
-    } catch (ex) {
-      const message = controller.signal.aborted
-        ? `plik nie dotarł w ${ADDON_DOWNLOAD_TIMEOUT_MS / 1000} s — najpewniej zatrzymał go antywirus lub filtr sieci na tym komputerze`
-        : ex instanceof Error
-          ? ex.message
-          : 'nieznany błąd'
-      setStatus({ state: 'error', message })
-    } finally {
-      window.clearTimeout(timer)
-    }
+  function download() {
+    setStatus({ state: 'started' })
+    // Bez preventDefault: pobieranie robi link. Brak pliku na serwerze kończy się stroną aplikacji
+    // (index.html) z kodem 200 — wtedy mówimy wprost, że pliku nie ma.
+    fetch(appHref(ADDON_FILE), { method: 'HEAD', cache: 'no-store' })
+      .then((res) => {
+        if (!res.ok) throw new Error(`serwer odpowiedział kodem ${res.status}`)
+        if ((res.headers.get('Content-Type') ?? '').includes('text/html')) {
+          throw new Error('na serwerze brakuje pliku dodatku')
+        }
+      })
+      .catch((ex: unknown) => {
+        // sieć padła przy samym sprawdzeniu — pobieranie przez link mogło się udać, nie straszymy
+        if (ex instanceof TypeError) return
+        setStatus({ state: 'error', message: ex instanceof Error ? ex.message : 'nieznany błąd' })
+      })
   }
 
   return { status, download }
@@ -2041,12 +2018,9 @@ function DownloadsHelp() {
             href={appHref(ADDON_FILE)}
             download
             onClick={download}
-            aria-disabled={status.state === 'busy'}
-            className={`rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 ${
-              status.state === 'busy' ? 'pointer-events-none opacity-60' : ''
-            }`}
+            className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
           >
-            {status.state === 'busy' ? 'Pobieram…' : 'Pobierz dodatek (plik XPI)'}
+            Pobierz dodatek (plik XPI)
           </a>
           <span className="text-xs text-slate-500">
             supon-przetargi.xpi
@@ -2054,17 +2028,17 @@ function DownloadsHelp() {
             {release?.minThunderbird ? ` · Thunderbird ${release.minThunderbird} lub nowszy` : ''}
           </span>
         </div>
-        {status.state === 'done' ? (
+        {status.state === 'started' ? (
           <p role="status" className="mt-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
-            <strong>Pobrano plik supon-przetargi.xpi ({status.kb} KB).</strong> Przeglądarka zapisuje go w folderze
-            Pobrane — listę pobranych otworzysz skrótem <strong>Ctrl+J</strong>. Jeśli pliku tam nie ma albo jest
-            oznaczony jako zablokowany, zatrzymał go antywirus lub zasady komputera.
+            <strong>Przeglądarka pobiera plik supon-przetargi.xpi</strong> do folderu Pobrane — listę pobranych
+            otworzysz skrótem <strong>Ctrl+J</strong>. Jeśli przy pliku jest ostrzeżenie, kliknij je i wybierz{' '}
+            <strong>Zachowaj</strong> (w Edge pod „…”).
           </p>
         ) : null}
         {status.state === 'error' ? (
           <p role="alert" className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-            Nie udało się pobrać pliku ({status.message}). Spróbuj w innej przeglądarce (np. Edge) albo prawym
-            przyciskiem na przycisku → „Zapisz link jako…”.
+            Pliku dodatku nie da się teraz pobrać ({status.message}). Zmiana przeglądarki nie pomoże — daj znać
+            administratorowi aplikacji.
           </p>
         ) : null}
         <p className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
