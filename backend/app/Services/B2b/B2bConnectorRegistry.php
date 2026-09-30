@@ -38,6 +38,7 @@ class B2bConnectorRegistry
         P4sB2bConnector::class,
         MaviboB2bConnector::class,
         EjendalsB2bConnector::class,
+        HoneywellB2bConnector::class,
     ];
 
     /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */
