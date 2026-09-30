@@ -12,12 +12,15 @@ use App\Models\UserMailAccount;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
  * Odpowiedzi klientów na kampanie ze skrzynki handlowca (IMAP, tylko nagłówki, EXAMINE — nic nie zmienia): mail
  * z kodem kampanii w temacie („Zapytanie K-0006 SPASAHV002” z przycisku „Zapytaj o ofertę”) albo odpowiedź w wątku
- * wysłanego maila (In-Reply-To / References = Message-ID). Odczyt przyrostowy po UID; tylko INBOX.
+ * wysłanego maila (In-Reply-To / References = Message-ID). Wszystkie foldery poza Wysłanymi, Koszem, Spamem i Szkicami
+ * (odpowiedź przeniesiona regułą albo ręcznie też się liczy), odczyt przyrostowy po UID osobno w każdym folderze.
+ * Mail przeniesiony do folderu dostaje tam nowy UID — trafi do odczytu, a powtórkę odsieje Message-ID.
  */
 class CampaignReplySync
 {
@@ -28,6 +31,15 @@ class CampaignReplySync
     private const FIRST_RUN_LIMIT = 3000;
 
     private const FETCH_CHUNK = 100;
+
+    /** Najwyżej tyle folderów na skrzynkę (INBOX zawsze pierwszy). */
+    private const MAX_FOLDERS = 100;
+
+    /** Oznaczenia folderów bez odpowiedzi klientów (RFC 6154) i folderów, których nie da się otworzyć. */
+    private const SKIPPED_FLAGS = ['\sent', '\trash', '\junk', '\drafts', '\noselect', '\nonexistent'];
+
+    /** To samo po nazwie (serwery bez SPECIAL-USE, np. Dovecot z Pleska: INBOX.Sent, INBOX.Trash, „Wysłane”). */
+    private const SKIPPED_NAMES = '/^(sent|sent items|sent messages|sent mail|wysłane|elementy wysłane|trash|deleted|deleted items|deleted messages|kosz|elementy usunięte|junk|junk e-?mail|spam|drafts|szkice|kopie robocze|robocze|outbox|skrzynka nadawcza|templates|szablony)$/iu';
 
     public function __construct(private readonly SmtpHostGuard $hosts) {}
 
@@ -56,7 +68,7 @@ class CampaignReplySync
     }
 
     /**
-     * Test ustawień IMAP (przycisk w „Moja poczta”): logowanie i otwarcie INBOX.
+     * Test ustawień IMAP (przycisk w „Moja poczta”): logowanie, lista folderów i otwarcie INBOX.
      *
      * @return array{ok: bool, message: string}
      */
@@ -65,11 +77,12 @@ class CampaignReplySync
         $reader = $this->reader();
         try {
             $this->connect($reader, $account);
+            $folders = $this->folders($reader);
             $box = $reader->examine('INBOX');
             // stan w „Moja poczta” od razu po teście, nie dopiero po kolejnym odczycie
             $account->forceFill(['imap_error' => null])->save();
 
-            return ['ok' => true, 'message' => 'Odczyt odpowiedzi działa (skrzynka odbiorcza: '.$box['exists'].' wiadomości).'];
+            return ['ok' => true, 'message' => 'Odczyt odpowiedzi działa (folderów do sprawdzania: '.count($folders).', skrzynka odbiorcza: '.$box['exists'].' wiadomości).'];
         } catch (Throwable $e) {
             $error = $this->errorText($e, $account);
             $account->forceFill(['imap_error' => $error])->save();
@@ -114,26 +127,45 @@ class CampaignReplySync
         $reader = $this->reader();
         try {
             $this->connect($reader, $account);
-            $box = $reader->examine('INBOX');
-            $fresh = $account->imap_uidvalidity === null || (int) $account->imap_uidvalidity !== $box['uidvalidity'] || $account->imap_last_uid === null;
-            $uids = $fresh
-                ? array_slice($reader->searchSince($campaigns->min('sending_started_at')->copy()->subDay()), -self::FIRST_RUN_LIMIT)
-                : $reader->searchAfterUid((int) $account->imap_last_uid);
-
+            $searchSince = $campaigns->min('sending_started_at')->copy()->subDay();
             $ownAddress = mb_strtolower((string) $account->from_address);
+            $previous = is_array($account->imap_folders) ? $account->imap_folders : [];
+            $state = [];
             $messages = $replies = 0;
-            $lastUid = $fresh ? 0 : (int) $account->imap_last_uid;
-            foreach (array_chunk($uids, self::FETCH_CHUNK) as $chunk) {
-                foreach ($reader->fetchHeaders($chunk) as $message) {
-                    $messages++;
-                    $lastUid = max($lastUid, $message['uid']);
-                    $replies += $this->record($account, $message, $box['uidvalidity'], $map, $ownAddress) ? 1 : 0;
+            foreach ($this->folders($reader) as $folder) {
+                try {
+                    $box = $reader->examine($folder);
+                } catch (ImapCommandException $e) {
+                    // folderu nie da się otworzyć (np. usunięty w międzyczasie) — pozostałe czytamy dalej
+                    if ($folder === 'INBOX') {
+                        throw $e;
+                    }
+                    Log::info('campaigns:replies — pominięty folder', ['user_id' => $account->user_id, 'folder' => $folder]);
+                    // pozycja zostaje — przy kolejnym odczycie folder nie jest czytany od nowa
+                    if (isset($previous[$folder])) {
+                        $state[$folder] = $previous[$folder];
+                    }
+
+                    continue;
                 }
-                $lastUid = max($lastUid, ...$chunk);
+                $before = $previous[$folder] ?? null;
+                $fresh = ! is_array($before) || (int) ($before['v'] ?? 0) !== $box['uidvalidity'] || ! isset($before['u']);
+                $uids = $fresh
+                    ? array_slice($reader->searchSince($searchSince), -self::FIRST_RUN_LIMIT)
+                    : $reader->searchAfterUid((int) $before['u']);
+                $lastUid = $fresh ? 0 : (int) $before['u'];
+                foreach (array_chunk($uids, self::FETCH_CHUNK) as $chunk) {
+                    foreach ($reader->fetchHeaders($chunk) as $message) {
+                        $messages++;
+                        $replies += $this->record($account, $message, $map, $ownAddress) ? 1 : 0;
+                    }
+                    $lastUid = max($lastUid, ...$chunk);
+                }
+                $state[$folder] = ['v' => $box['uidvalidity'], 'u' => $lastUid];
             }
+            // foldery usunięte ze skrzynki wypadają ze stanu
             $account->forceFill([
-                'imap_uidvalidity' => $box['uidvalidity'],
-                'imap_last_uid' => $lastUid,
+                'imap_folders' => $state,
                 'imap_checked_at' => now(),
                 'imap_error' => null,
             ])->save();
@@ -148,7 +180,7 @@ class CampaignReplySync
      * @param  array{uid: int, headers: array<string, string>}  $message
      * @param  array{byCode: array<string, Campaign>, byId: array<int, Campaign>, byMessageId: array<string, CampaignRecipient>, recipientsByEmail: array<int, array<string, CampaignRecipient>>, itemCodes: array<int, list<string>>}  $map
      */
-    private function record(UserMailAccount $account, array $message, int $uidValidity, array $map, string $ownAddress): bool
+    private function record(UserMailAccount $account, array $message, array $map, string $ownAddress): bool
     {
         $h = $message['headers'];
         $subject = trim((string) ($h['subject'] ?? ''));
@@ -205,7 +237,8 @@ class CampaignReplySync
             return false;
         }
         $messageId = trim((string) ($h['message-id'] ?? ''));
-        $messageId = $messageId !== '' ? mb_substr($this->normalizeId($messageId), 0, 255) : 'uid-'.$uidValidity.'-'.$message['uid'];
+        // bez Message-ID: klucz z nadawcy, daty i tematu — ten sam mail w dwóch folderach liczy się raz
+        $messageId = $messageId !== '' ? mb_substr($this->normalizeId($messageId), 0, 255) : 'hash-'.sha1($fromEmail.'|'.($h['date'] ?? '').'|'.$subject);
 
         $inserted = DB::table('campaign_replies')->insertOrIgnore([
             'campaign_id' => $campaign->id,
@@ -228,6 +261,35 @@ class CampaignReplySync
         }
 
         return $inserted > 0;
+    }
+
+    /**
+     * Foldery do odczytu: INBOX pierwszy, bez Wysłanych, Kosza, Spamu, Szkiców i folderów, których nie da się otworzyć.
+     *
+     * @return list<string>
+     */
+    private function folders(ImapHeaderReader $reader): array
+    {
+        $out = ['INBOX'];
+        foreach ($reader->listMailboxes() as $box) {
+            if (strtoupper($box['name']) === 'INBOX' || array_intersect($box['flags'], self::SKIPPED_FLAGS) !== []) {
+                continue;
+            }
+            // każdy człon nazwy — podfolder Kosza czy Wysłanych (INBOX.Trash.Stare) też odpada
+            $segments = $box['delimiter'] !== '' ? explode($box['delimiter'], $box['name']) : [$box['name']];
+            foreach ($segments as $segment) {
+                $decoded = @mb_convert_encoding($segment, 'UTF-8', 'UTF7-IMAP');
+                if (preg_match(self::SKIPPED_NAMES, trim(is_string($decoded) && $decoded !== '' ? $decoded : $segment)) === 1) {
+                    continue 2;
+                }
+            }
+            $out[] = $box['name'];
+            if (count($out) >= self::MAX_FOLDERS) {
+                break;
+            }
+        }
+
+        return $out;
     }
 
     private function connect(ImapHeaderReader $reader, UserMailAccount $account): void

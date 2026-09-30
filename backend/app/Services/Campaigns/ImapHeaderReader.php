@@ -78,6 +78,39 @@ class ImapHeaderReader
     }
 
     /**
+     * Foldery skrzynki (LIST) z oznaczeniami serwera (\Sent, \Trash, \Noselect…). Nazwa jak na serwerze
+     * (zmodyfikowane UTF-7) — taką podaje się do EXAMINE.
+     *
+     * @return list<array{name: string, delimiter: string, flags: list<string>}>
+     */
+    public function listMailboxes(): array
+    {
+        $out = [];
+        foreach ($this->command('LIST "" "*"', 'Nie udało się odczytać listy folderów.') as $item) {
+            if (preg_match('/^\* LIST \(([^)]*)\) (NIL|"(?:[^"\\\\]|\\\\.)*") ?(.*)$/i', $item['line'], $m) !== 1) {
+                continue;
+            }
+            if ($item['literal'] !== null) {
+                $name = $item['literal'];
+            } elseif (str_starts_with($m[3], '"')) {
+                $name = $this->unquote($m[3]);
+            } else {
+                $name = $m[3];
+            }
+            if ($name === '') {
+                continue;
+            }
+            $out[] = [
+                'name' => $name,
+                'delimiter' => strtoupper($m[2]) === 'NIL' ? '' : $this->unquote($m[2]),
+                'flags' => array_values(array_filter(preg_split('/\s+/', strtolower(trim($m[1]))) ?: [])),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
      * Skrzynka tylko do odczytu (EXAMINE). UIDVALIDITY zmienia się, gdy serwer przenumeruje wiadomości.
      *
      * @return array{uidvalidity: int, exists: int}
@@ -217,7 +250,7 @@ class ImapHeaderReader
             $line = $this->readLine();
             if (str_starts_with($line, $tag.' ')) {
                 if (preg_match('/^'.preg_quote($tag, '/').' OK\b/i', $line) !== 1) {
-                    throw new RuntimeException($error);
+                    throw new ImapCommandException($error);
                 }
 
                 return $items;
@@ -273,6 +306,12 @@ class ImapHeaderReader
         }
 
         return $data;
+    }
+
+    /** "a\"b" → a"b — w cytowanym napisie IMAP escapowane są tylko \" i \\ */
+    private function unquote(string $quoted): string
+    {
+        return (string) preg_replace('/\\\\(.)/s', '$1', substr($quoted, 1, -1));
     }
 
     private function quote(string $value): string

@@ -2416,9 +2416,9 @@ function RepliesPanel({ campaign, replies }: { campaign: Campaign; replies: Camp
         replies.enabled && <p className="px-4 py-3 text-xs text-slate-500">Na razie brak odpowiedzi.</p>
       )}
       <p className="px-4 py-3 text-[11px] text-slate-500">
-        Liczymy maile w skrzynce odbiorczej autora z kodem {campaign.code} w temacie (przycisk „Zapytaj o ofertę”) i
-        odpowiedzi na mail kampanii. Autoodpowiedzi („jestem na urlopie”) i zwrotki serwera pomijamy. Treści maili nie
-        czytamy — odpowiadasz klientowi jak zwykle ze swojej poczty.
+        Liczymy maile w skrzynce autora (wszystkie foldery poza Wysłanymi, Koszem, Spamem i Szkicami) z kodem{' '}
+        {campaign.code} w temacie (przycisk „Zapytaj o ofertę”) i odpowiedzi na mail kampanii. Autoodpowiedzi („jestem na
+        urlopie”) i zwrotki serwera pomijamy. Treści maili nie czytamy — odpowiadasz klientowi jak zwykle ze swojej poczty.
         {others > 0 ? ' Odpowiedź spoza listy odbiorców to zwykle ktoś, komu klient przekazał mail.' : ''}
       </p>
     </div>

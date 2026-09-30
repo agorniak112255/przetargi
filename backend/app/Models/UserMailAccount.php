@@ -27,8 +27,7 @@ class UserMailAccount extends Model
         'imap_enabled',
         'imap_host',
         'imap_port',
-        'imap_uidvalidity',
-        'imap_last_uid',
+        'imap_folders',
         'imap_checked_at',
         'imap_error',
         'signature',
@@ -48,8 +47,8 @@ class UserMailAccount extends Model
             'copy_to_self' => 'boolean',
             'imap_enabled' => 'boolean',
             'imap_port' => 'integer',
-            'imap_uidvalidity' => 'integer',
-            'imap_last_uid' => 'integer',
+            // pozycja odczytu każdego folderu: nazwa → {v: UIDVALIDITY, u: ostatni UID}
+            'imap_folders' => 'array',
             'imap_checked_at' => 'datetime',
             'verified_at' => 'datetime',
         ];

@@ -549,8 +549,9 @@ function MailAccountForm() {
             <span>
               Licz odpowiedzi klientów na moje kampanie
               <span className="block text-[11px] text-slate-500">
-                Co 10 minut program czyta z tej skrzynki tylko nadawcę, temat i datę nowych maili (bez treści). Nic w
-                skrzynce nie zmienia i nie oznacza maili jako przeczytane.
+                Co 10 minut program czyta z tej skrzynki tylko nadawcę, temat i datę nowych maili (bez treści) — we
+                wszystkich folderach poza Wysłanymi, Koszem, Spamem i Szkicami. Nic w skrzynce nie zmienia i nie
+                oznacza maili jako przeczytane.
               </span>
             </span>
           </label>

@@ -201,18 +201,17 @@ final class UserMailAccountApiTest extends TestCase
 
         // odczytana pozycja zostaje przy zmianie podpisu, zeruje się przy innym serwerze IMAP
         $account = UserMailAccount::query()->where('user_id', $user->id)->firstOrFail();
-        $account->forceFill(['imap_uidvalidity' => 7, 'imap_last_uid' => 120, 'imap_error' => 'stary błąd'])->save();
+        $account->forceFill(['imap_folders' => ['INBOX' => ['v' => 7, 'u' => 120]], 'imap_error' => 'stary błąd'])->save();
         $this->putJson('/api/me/mail-account', [...$this->input(), 'password' => '', 'signature' => 'Pozdrawiam'])->assertOk()
             ->assertJsonPath('imap_error', 'stary błąd');
-        $this->assertSame(120, (int) $account->fresh()->imap_last_uid);
+        $this->assertSame(['INBOX' => ['v' => 7, 'u' => 120]], $account->fresh()->imap_folders);
 
         $this->dns['imap.supon.pl'] = ['212.77.98.11'];
         $this->putJson('/api/me/mail-account', [...$this->input(), 'password' => '', 'imap_host' => ' IMAP.supon.pl '])->assertOk()
             ->assertJsonPath('imap_host', 'imap.supon.pl')
             ->assertJsonPath('imap_error', null);
         $fresh = $account->fresh();
-        $this->assertNull($fresh->imap_uidvalidity);
-        $this->assertNull($fresh->imap_last_uid);
+        $this->assertNull($fresh->imap_folders);
 
         // pole pominięte w zapisie — ustawienie zostaje; wyłączenie odczytu
         $this->putJson('/api/me/mail-account', [...$this->input(), 'password' => ''])->assertOk()->assertJsonPath('imap_host', 'imap.supon.pl');

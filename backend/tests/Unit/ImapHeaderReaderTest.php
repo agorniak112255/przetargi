@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use App\Services\Campaigns\ImapCommandException;
 use App\Services\Campaigns\ImapHeaderReader;
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
@@ -91,6 +92,34 @@ final class ImapHeaderReaderTest extends TestCase
         $this->assertSame([], $reader->searchAfterUid(40));
         $this->assertStringContainsString("a1 LOGIN \"jan\" \"ha\\\"s\\\\lo\"\r\n", $this->sent());
         $this->assertStringContainsString("a3 UID SEARCH UID 41:*\r\n", $this->sent());
+    }
+
+    public function test_lists_mailboxes_quoted_atom_literal_and_refused_examine(): void
+    {
+        $reader = $this->reader([
+            "* OK ready\r\n",
+            "* LIST (\\HasChildren) \".\" INBOX\r\n",
+            "* LIST (\\HasNoChildren \\Sent) \".\" \"INBOX.Sent\"\r\n",
+            "* LIST (\\HasNoChildren) \".\" \"INBOX.Wys&AUI-ane\"\r\n",
+            "* LIST (\\HasNoChildren) \"/\" {15}\r\nKlienci \"VIP\" 1\r\n",
+            "* LIST (\\Noselect) NIL \"Publiczne\"\r\n",
+            "a1 OK List completed\r\n",
+            "a2 NO [NONEXISTENT] Mailbox doesn't exist\r\n",
+        ]);
+        $reader->open('imap.example.pl', 993, true);
+
+        $this->assertSame([
+            ['name' => 'INBOX', 'delimiter' => '.', 'flags' => ['\\haschildren']],
+            ['name' => 'INBOX.Sent', 'delimiter' => '.', 'flags' => ['\\hasnochildren', '\\sent']],
+            ['name' => 'INBOX.Wys&AUI-ane', 'delimiter' => '.', 'flags' => ['\\hasnochildren']],
+            ['name' => 'Klienci "VIP" 1', 'delimiter' => '/', 'flags' => ['\\hasnochildren']],
+            ['name' => 'Publiczne', 'delimiter' => '', 'flags' => ['\\noselect']],
+        ], $reader->listMailboxes());
+        $this->assertStringContainsString("a1 LIST \"\" \"*\"\r\n", $this->sent());
+
+        // odmowa serwera to osobny wyjątek — folder pomijany, połączenie działa dalej
+        $this->expectException(ImapCommandException::class);
+        $reader->examine('Klienci "VIP" 1');
     }
 
     public function test_rejected_login_and_dropped_connection_throw(): void

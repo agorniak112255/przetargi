@@ -125,8 +125,7 @@ class UserMailAccountController extends Controller
         }
         // inna skrzynka IMAP = inna numeracja wiadomości — odczyt odpowiedzi zaczyna się od nowa
         if ($account->exists && $account->isDirty(['imap_host', 'imap_port', 'username', 'host'])) {
-            $account->imap_uidvalidity = null;
-            $account->imap_last_uid = null;
+            $account->imap_folders = null;
             $account->imap_error = null;
         }
         $account->user_id = $user->id;
