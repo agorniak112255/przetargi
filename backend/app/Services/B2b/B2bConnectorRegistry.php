@@ -44,6 +44,7 @@ class B2bConnectorRegistry
         SafetyJoggerB2bConnector::class,
         HultaforsB2bConnector::class,
         DemarB2bConnector::class,
+        PortwestB2bConnector::class,
         MactronicB2bConnector::class,
     ];
 

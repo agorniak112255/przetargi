@@ -133,10 +133,36 @@ final class ShopCardNormFacts
                 continue;
             }
             $label = trim($m[0]);
-            $rest = Utf8Trim::trim(mb_substr($item, mb_strlen($m[0])), " \t:;,–—-");
+            $rest = self::unwrapped(Utf8Trim::trim(mb_substr($item, mb_strlen($m[0])), " \t:;,–—-"));
             $out[] = ['label' => $label, 'value' => $rest === '' ? null : $rest];
         }
 
         return $out;
+    }
+
+    /**
+     * Wartość w całości w jednej parze nawiasów („EN 388: 2016 + A1: 2018 (4X43D)” u Portwest) — bez nich: poziom EN 388
+     * w nawiasie nie byłby kodem (ManufacturerNormFacts zwiera tylko sam kod), a dopasowanie szuka „4X43D”. Nawiasy
+     * wewnątrz i wartość z nawiasem tylko na części („Type 6 (EN 13034)”) zostają dosłownie.
+     */
+    private static function unwrapped(string $value): string
+    {
+        if (! str_starts_with($value, '(') || ! str_ends_with($value, ')')) {
+            return $value;
+        }
+        $depth = 0;
+        $last = strlen($value) - 1;
+        for ($i = 0; $i <= $last; $i++) {
+            $depth += match ($value[$i]) {
+                '(' => 1,
+                ')' => -1,
+                default => 0,
+            };
+            if ($depth === 0 && $i < $last) {
+                return $value;
+            }
+        }
+
+        return $depth === 0 ? trim(substr($value, 1, -1)) : $value;
     }
 }

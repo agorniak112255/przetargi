@@ -51,6 +51,21 @@ final class NormsFromShopCardsTest extends TestCase
             [['label' => 'EN 207', 'value' => 'full protection'], ['label' => 'EN 60825', 'value' => null]],
             $facts('Protection Class / Norm', 'EN 207 full protection, EN 60825', ['Protection Class / Norm']),
         );
+        $this->assertSame(
+            [['label' => 'EN 388: 2016 + A1: 2018', 'value' => '4X43D']],
+            $facts('Norma', 'EN 388: 2016 + A1: 2018  (4X43D)', ['Norma']),
+            'poziom w nawiasie obejmującym całą wartość (Portwest) — bez nawiasu',
+        );
+        $this->assertSame(
+            [['label' => 'EN 342', 'value' => '0.345 (M².K/W), 2, X']],
+            $facts('Norma', 'EN 342  (0.345 (M².K/W), 2, X)', ['Norma']),
+            'nawias wewnętrzny zostaje',
+        );
+        $this->assertSame(
+            [['label' => 'EN 13034', 'value' => '(Type 6) PB']],
+            $facts('Norma', 'EN 13034 (Type 6) PB', ['Norma']),
+            'nawias tylko na części wartości zostaje dosłownie',
+        );
         $this->assertSame([], $facts('Materiał', 'EN 355', ['Norma']), 'wiersz o innej nazwie to nie lista norm');
         $this->assertSame([], $facts('Norma', 'brak', ['Norma']), 'wartość bez oznaczenia normy');
     }
