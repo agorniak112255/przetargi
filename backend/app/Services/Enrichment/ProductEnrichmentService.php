@@ -12,6 +12,7 @@ use App\Jobs\PrefetchProductSourcesJob;
 use App\Jobs\ReindexProductEmbeddingJob;
 use App\Models\CatalogHostPriority;
 use App\Models\CatalogSearchSite;
+use App\Models\ManufacturerSite;
 use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\ProductDocument;
@@ -872,7 +873,7 @@ final class ProductEnrichmentService
 
             // Marka „tylko producent” z jego kartą w puli — od tego miejsca sklepy nie wchodzą ani do rozmiarów,
             // ani do filtra stron, ani do opisu, ani do zdjęć (te biorą się z kart źródłowych opisu).
-            ['pages' => $pageSnippets, 'cut' => $manufacturerOnly] = $this->manufacturerOnlyPages($product, $pageSnippets);
+            ['pages' => $pageSnippets, 'cut' => $manufacturerOnly, 'listed' => $listedOnly] = $this->manufacturerOnlyPages($product, $pageSnippets);
 
             // opcje zakupu (radio/select) — zanim LLM wytnie je z tekstu karty
             $optionSizes = $this->collectOptionSizes(
@@ -935,7 +936,8 @@ final class ProductEnrichmentService
                     $descResults,
                     $pageSnippets,
                     $extracted,
-                    $description
+                    $description,
+                    $listedOnly
                 );
                 $description = ProductDescriptionText::plain($supplement['description']);
                 $extracted = $this->enrichStructuredFieldsFromPages(
@@ -2651,6 +2653,7 @@ final class ProductEnrichmentService
         array $pageSnippets,
         array $extracted,
         string $description,
+        bool $listedOnly = false,
     ): array {
         $used = [];
         foreach ($pageSnippets as $page) {
@@ -2660,10 +2663,22 @@ final class ProductEnrichmentService
             }
         }
 
+        $candidates = $this->dropBlockedSourceHosts($searchResults, $product);
+        // pula opisu zawężona do stron z listy „Strony wyszukiwarka” — uzupełnienie też tylko z nich
+        $listed = $listedOnly
+            ? app(CatalogSearchHostService::class)->listedHosts(array_map(
+                static fn (array $row): string => (string) ($row['url'] ?? ''),
+                $candidates
+            ))
+            : [];
         $extraResults = [];
-        foreach ($this->dropBlockedSourceHosts($searchResults, $product) as $row) {
+        foreach ($candidates as $row) {
             $u = mb_strtolower((string) ($row['url'] ?? ''));
             if ($u === '' || isset($used[$u])) {
+                continue;
+            }
+            if ($listedOnly && ! isset($listed[ManufacturerSite::normalizeHost((string) parse_url($u, PHP_URL_HOST))])
+                && ! $product->isTrustedShopUrl((string) ($row['url'] ?? ''))) {
                 continue;
             }
             // uzupełnienie opisu wyłącznie ze sklepów — nie z karty producenta
@@ -2970,20 +2985,23 @@ final class ProductEnrichmentService
      * (trustedManufacturerCardInPool). Automat na plastry CEDERROTH 51011006 (28.09.2026): link do cederroth.com,
      * a opis i „Źródła” brały się jeszcze z dwóch sklepów z indeksu. Gdy strona nic nie oddała, sklepy zostają.
      *
+     * $sourceHierarchy (zwykłe pobieranie opisu, m.in. cenniki z pliku — decyzja właściciela 01.10.2026): reguła dla
+     * każdej marki (`enrichment.manufacturer_first_every_brand`), a bez karty producenta strony z listy „Strony
+     * wyszukiwarka” przed resztą (listedSitePagesFirst). Uzupełnianie opisów B2B woła bez niej — tam przy Bolle
+     * właściciel chciał 28.09 wszystkie sklepy.
+     *
      * @param  list<array<string, mixed>>  $pages
-     * @return array{pages: list<array<string, mixed>>, cut: bool}
+     * @return array{pages: list<array<string, mixed>>, cut: bool, listed: bool}
      */
-    private function manufacturerOnlyPages(Product $product, array $pages): array
+    private function manufacturerOnlyPages(Product $product, array $pages, bool $sourceHierarchy = true): array
     {
         if ($pages === []) {
-            return ['pages' => $pages, 'cut' => false];
+            return ['pages' => $pages, 'cut' => false, 'listed' => false];
         }
         $byLink = $this->trustedManufacturerCardInPool($product, $pages);
-        if (! $byLink && ! $this->identity->usesManufacturerSourcesOnly($product)) {
-            return ['pages' => $pages, 'cut' => false];
-        }
         $hasCard = $byLink;
-        if (! $hasCard) {
+        $everyBrand = $sourceHierarchy && (bool) config('enrichment.manufacturer_first_every_brand', false);
+        if (! $hasCard && ($everyBrand || $this->identity->usesManufacturerSourcesOnly($product))) {
             foreach ($pages as $page) {
                 $url = (string) ($page['url'] ?? '');
                 if ($url !== '' && mb_strlen(trim((string) ($page['text'] ?? ''))) >= self::MFR_CARD_MIN_CHARS
@@ -2994,7 +3012,12 @@ final class ProductEnrichmentService
             }
         }
         if (! $hasCard) {
-            return ['pages' => $pages, 'cut' => false];
+            if (! $sourceHierarchy) {
+                return ['pages' => $pages, 'cut' => false, 'listed' => false];
+            }
+            $listed = $this->listedSitePagesFirst($product, $pages);
+
+            return ['pages' => $listed['pages'], 'cut' => false, 'listed' => $listed['cut']];
         }
         $kept = [];
         $dropped = [];
@@ -3014,6 +3037,67 @@ final class ProductEnrichmentService
                 'page',
                 ($byLink ? 'zapisany link na stronę producenta' : 'tylko strony producenta')
                     .' — pominięte strony sklepów: '.count($dropped),
+                urls: array_values(array_filter($dropped))
+            );
+        }
+
+        return ['pages' => $kept, 'cut' => true, 'listed' => false];
+    }
+
+    /**
+     * Bez karty producenta w puli: gdy któraś strona z treścią leży na liście „Strony wyszukiwarka”, opis powstaje
+     * tylko ze stron z tej listy (decyzja właściciela 01.10.2026 — „producent, potem strony z listy, reszta internetu
+     * dopiero gdy z listy nic nie ma”). Zostają też katalog PDF i adres wskazany przez człowieka.
+     *
+     * @param  list<array<string, mixed>>  $pages
+     * @return array{pages: list<array<string, mixed>>, cut: bool} cut = pula zawężona do stron z listy
+     */
+    private function listedSitePagesFirst(Product $product, array $pages): array
+    {
+        $hostOf = static fn (string $url): string => (string) preg_replace(
+            '/^www\./',
+            '',
+            mb_strtolower((string) (parse_url($url, PHP_URL_HOST) ?? ''))
+        );
+        $hosts = [];
+        foreach ($pages as $page) {
+            $host = $hostOf((string) ($page['url'] ?? ''));
+            if ($host !== '') {
+                $hosts[$host] = $host;
+            }
+        }
+        $listed = app(CatalogSearchHostService::class)->listedHosts(array_values($hosts));
+        if ($listed === []) {
+            return ['pages' => $pages, 'cut' => false];
+        }
+        $hasListedCard = false;
+        foreach ($pages as $page) {
+            if (isset($listed[$hostOf((string) ($page['url'] ?? ''))])
+                && mb_strlen(trim((string) ($page['text'] ?? ''))) >= self::MFR_CARD_MIN_CHARS) {
+                $hasListedCard = true;
+                break;
+            }
+        }
+        if (! $hasListedCard) {
+            return ['pages' => $pages, 'cut' => false];
+        }
+        $kept = [];
+        $dropped = [];
+        foreach ($pages as $page) {
+            $url = (string) ($page['url'] ?? '');
+            if ($url !== '' && (isset($listed[$hostOf($url)])
+                || $this->catalogPdf()->isConfiguredCatalogUrl($url)
+                || $product->isTrustedShopUrl($url))) {
+                $kept[] = $page;
+
+                continue;
+            }
+            $dropped[] = $url;
+        }
+        if ($dropped !== []) {
+            $this->attemptLog()->add(
+                'page',
+                'strony z listy „Strony wyszukiwarka” — pominięte strony spoza listy: '.count($dropped),
                 urls: array_values(array_filter($dropped))
             );
         }
@@ -5575,7 +5659,7 @@ SYS,
             $this->orderPagesForDescription($onAccount, $product, $mfrDomains),
             $this->orderPagesForDescription($rest, $product, $mfrDomains)
         );
-        $pages = $this->manufacturerOnlyPages($product, $pages)['pages'];
+        $pages = $this->manufacturerOnlyPages($product, $pages, false)['pages'];
         $pages = array_slice($pages, 0, self::SUPPLEMENT_WEB_PAGES);
         $this->attemptLog()->add('page', 'uzupełnienie opisu B2B: '.count($pages).' stron', urls: array_column($pages, 'url'));
 

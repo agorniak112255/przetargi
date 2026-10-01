@@ -136,6 +136,73 @@ final class CatalogSearchHostService
     }
 
     /**
+     * Które z podanych domen są na liście „Strony wyszukiwarka” — te same źródła co list() (config, strony
+     * producentów, dodane ręcznie, indeks) bez wykluczonych. Bez statystyk list(): wołane przy każdym pobraniu opisu.
+     *
+     * @param  list<string>  $hosts
+     * @return array<string, true> domena bez www → na liście
+     */
+    public function listedHosts(array $hosts): array
+    {
+        $wanted = [];
+        foreach ($hosts as $host) {
+            $host = $this->normalizeHost($host);
+            if ($host !== '') {
+                $wanted[$host] = true;
+            }
+        }
+        if ($wanted === []) {
+            return [];
+        }
+        $blocked = array_fill_keys(
+            array_map(fn (string $host): string => $this->normalizeHost($host), CatalogSearchSiteExclusion::allHosts()),
+            true
+        );
+        $known = array_fill_keys(
+            [...$this->configRetailerHosts(), ...$this->configManufacturerHosts(), ...$this->preferredHosts()],
+            true
+        );
+        foreach (array_keys(ManufacturerSite::brandsByHost()) as $host) {
+            $known[$this->normalizeHost((string) $host)] = true;
+        }
+        foreach (CatalogSearchSite::allHosts() as $host) {
+            $known[$this->normalizeHost($host)] = true;
+        }
+
+        $out = [];
+        $inIndex = [];
+        foreach (array_keys($wanted) as $host) {
+            if (isset($blocked[$host])) {
+                continue;
+            }
+            if (isset($known[$host])) {
+                $out[$host] = true;
+
+                continue;
+            }
+            $inIndex[] = $host;
+            $inIndex[] = 'www.'.$host;
+        }
+        if ($inIndex !== []) {
+            $rows = [];
+            if ($this->hasTable('catalog_pages')) {
+                $rows = CatalogPage::query()->whereIn('host', $inIndex)->distinct()->pluck('host')->all();
+            }
+            if ($this->hasTable('catalog_hosts')) {
+                $rows = [...$rows, ...CatalogHost::query()->whereIn('host', $inIndex)->pluck('host')->all()];
+            }
+            foreach ($rows as $host) {
+                $host = $this->normalizeHost((string) $host);
+                if (isset($wanted[$host]) && ! isset($blocked[$host])) {
+                    $out[$host] = true;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * Produkt z katalogu + ta sama logika co wzbogacanie (CatalogIndexSearch).
      *
      * @return array{

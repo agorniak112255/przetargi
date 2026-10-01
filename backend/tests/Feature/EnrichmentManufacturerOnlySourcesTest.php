@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Models\CatalogPage;
+use App\Models\CatalogSearchSite;
+use App\Models\CatalogSearchSiteExclusion;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
@@ -88,7 +91,7 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
 
     public function test_brand_outside_the_list_still_describes_from_manufacturer_and_shops(): void
     {
-        config(['enrichment.manufacturer_only_sources' => []]);
+        config(['enrichment.manufacturer_only_sources' => [], 'enrichment.manufacturer_first_every_brand' => false]);
         $prompts = new \ArrayObject;
         $product = $this->enrich($prompts);
 
@@ -113,7 +116,7 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
      */
     public function test_pinned_manufacturer_link_keeps_shops_out_for_any_brand(): void
     {
-        config(['enrichment.manufacturer_only_sources' => []]);
+        config(['enrichment.manufacturer_only_sources' => [], 'enrichment.manufacturer_first_every_brand' => false]);
         $prompts = new \ArrayObject;
         $product = $this->enrich($prompts, [], self::MFR);
 
@@ -129,7 +132,7 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
 
     public function test_pinned_shop_link_does_not_cut_other_sources(): void
     {
-        config(['enrichment.manufacturer_only_sources' => []]);
+        config(['enrichment.manufacturer_only_sources' => [], 'enrichment.manufacturer_first_every_brand' => false]);
         $prompts = new \ArrayObject;
         $this->enrich($prompts, [], self::SHOP);
 
@@ -140,7 +143,7 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
 
     public function test_pinned_manufacturer_link_without_content_leaves_shops_as_sources(): void
     {
-        config(['enrichment.manufacturer_only_sources' => []]);
+        config(['enrichment.manufacturer_only_sources' => [], 'enrichment.manufacturer_first_every_brand' => false]);
         $prompts = new \ArrayObject;
         // adres na domenie producenta, który nie odpowiada (fake: 404)
         $this->enrich($prompts, [], 'https://bemoregreen.eu/pl/plaszcz/906-usuniety.html');
@@ -157,6 +160,107 @@ final class EnrichmentManufacturerOnlySourcesTest extends TestCase
         $this->assertTrue($identity->usesManufacturerSourcesOnly(new Product(['manufacturer' => 'MAPA Professional', 'sku' => '34650008', 'name' => 'Butoflex 650'])));
         $this->assertFalse($identity->usesManufacturerSourcesOnly(new Product(['manufacturer' => 'DUPONT PROSHIELD', 'sku' => 'PS10', 'name' => 'Kombinezon'])));
         $this->assertFalse($identity->usesManufacturerSourcesOnly(new Product(['manufacturer' => 'Ansell', 'sku' => '11-800', 'name' => 'HyFlex'])));
+    }
+
+    /**
+     * Decyzja właściciela 01.10.2026 (cennik Canis: 446 z 930 opisów ze sklepów): przy zwykłym pobieraniu opisu karta
+     * producenta wypycha sklepy dla każdej marki. Uzupełnianie opisów B2B zostaje przy liście marek (Bolle: wszystkie sklepy).
+     */
+    public function test_manufacturer_card_pushes_out_shops_for_every_brand_except_b2b_supplement(): void
+    {
+        $product = new Product(['sku' => '1150-001-100-00', 'name' => 'Bluza kucharska', 'manufacturer' => 'Canis']);
+        $text = str_repeat('Bluza kucharska Canis 1150-001-100-00, dwurzędowa, biała. ', 12);
+        $rows = [
+            ['url' => 'https://behapownia.pl/bluza-kucharska-canis', 'text' => $text],
+            ['url' => 'https://cxs.net.pl/bluza-kucharska-1150', 'text' => $text],
+        ];
+        $service = app(ProductEnrichmentService::class);
+        $method = new \ReflectionMethod($service, 'manufacturerOnlyPages');
+
+        $regular = $method->invoke($service, $product, $rows);
+        $this->assertSame(['https://cxs.net.pl/bluza-kucharska-1150'], array_column($regular['pages'], 'url'));
+        $this->assertTrue($regular['cut']);
+
+        $b2b = $method->invoke($service, $product, $rows, false);
+        $this->assertSame(array_column($rows, 'url'), array_column($b2b['pages'], 'url'), 'Canis spoza listy marek — przy B2B sklepy zostają');
+    }
+
+    /**
+     * Bez karty producenta w puli: strony z listy „Strony wyszukiwarka” przed resztą internetu; reszta tylko wtedy,
+     * gdy z listy nie ma strony z treścią.
+     */
+    public function test_without_manufacturer_card_listed_sites_push_out_other_pages(): void
+    {
+        config([
+            'enrichment.retailer_domains' => ['behapownia.pl'],
+            'enrichment.preferred_domains' => [],
+        ]);
+        CatalogSearchSite::query()->create(['host' => 'sklep-reczny.pl', 'source' => 'manual']);
+        CatalogPage::query()->create([
+            'host' => 'www.z-indeksu.pl',
+            'url_hash' => hash('sha256', 'https://www.z-indeksu.pl/a'),
+            'url' => 'https://www.z-indeksu.pl/a',
+            'haystack' => 'a',
+        ]);
+        $product = new Product(['sku' => 'X-1', 'name' => 'Rękawice robocze', 'manufacturer' => 'Marka bez strony']);
+        $long = str_repeat('Rękawice robocze X-1 z powlekaniem nitrylowym. ', 20);
+        $pages = static fn (array $urls, string $text = ''): array => array_map(
+            static fn (string $url): array => ['url' => $url, 'text' => $text !== '' ? $text : $long],
+            $urls
+        );
+        $service = app(ProductEnrichmentService::class);
+        $pick = static fn (array $rows): array => array_column(
+            (new \ReflectionMethod($service, 'manufacturerOnlyPages'))->invoke($service, $product, $rows)['pages'],
+            'url'
+        );
+
+        $this->assertSame(
+            ['https://behapownia.pl/x-1', 'https://sklep-reczny.pl/x-1', 'https://z-indeksu.pl/x-1'],
+            $pick($pages(['https://behapownia.pl/x-1', 'https://obcy-sklep.pl/x-1', 'https://sklep-reczny.pl/x-1', 'https://z-indeksu.pl/x-1'])),
+            'config, dodana ręcznie i z indeksu zostają; strona spoza listy odpada'
+        );
+        $this->assertSame(
+            ['https://obcy-sklep.pl/x-1', 'https://inny-sklep.pl/x-1'],
+            $pick($pages(['https://obcy-sklep.pl/x-1', 'https://inny-sklep.pl/x-1'])),
+            'z listy nic nie ma — reszta internetu zostaje'
+        );
+        $this->assertSame(
+            ['https://behapownia.pl/x-1', 'https://obcy-sklep.pl/x-1'],
+            $pick([...$pages(['https://behapownia.pl/x-1'], 'krótko'), ...$pages(['https://obcy-sklep.pl/x-1'])]),
+            'strona z listy bez treści nie wypycha reszty'
+        );
+
+        CatalogSearchSiteExclusion::query()->create(['host' => 'behapownia.pl']);
+        $this->assertSame(
+            ['https://behapownia.pl/x-1', 'https://obcy-sklep.pl/x-1'],
+            $pick($pages(['https://behapownia.pl/x-1', 'https://obcy-sklep.pl/x-1'])),
+            'domena wykluczona z listy nie jest na liście'
+        );
+
+        $b2b = (new \ReflectionMethod($service, 'manufacturerOnlyPages'))
+            ->invoke($service, $product, $pages(['https://sklep-reczny.pl/x-1', 'https://obcy-sklep.pl/x-1']), false);
+        $this->assertCount(2, $b2b['pages'], 'uzupełnianie opisów B2B bez zawężania do listy');
+    }
+
+    /** Cienki opis ze stron z listy: uzupełnienie nie dokłada stron spoza listy. */
+    public function test_supplement_after_listed_pool_takes_only_listed_sites(): void
+    {
+        config(['enrichment.retailer_domains' => ['behapownia.pl'], 'enrichment.preferred_domains' => []]);
+        Http::fake(['*' => Http::response('', 404)]);
+        $product = new Product(['sku' => 'X-1', 'name' => 'Rękawice robocze', 'manufacturer' => 'Marka bez strony']);
+        $results = [
+            ['url' => 'https://obcy-sklep.pl/x-1', 'title' => 'Rękawice X-1', 'snippet' => ''],
+            ['url' => 'https://behapownia.pl/x-1', 'title' => 'Rękawice X-1', 'snippet' => ''],
+        ];
+        $service = app(ProductEnrichmentService::class);
+        $supplement = new \ReflectionMethod($service, 'supplementDescriptionFromOtherSites');
+
+        $supplement->invoke($service, $product, $results, [], [], '', true);
+        Http::assertSent(static fn ($request): bool => str_contains((string) $request->url(), 'behapownia.pl'));
+        Http::assertNotSent(static fn ($request): bool => str_contains((string) $request->url(), 'obcy-sklep.pl'));
+
+        $supplement->invoke($service, $product, $results, [], [], '', false);
+        Http::assertSent(static fn ($request): bool => str_contains((string) $request->url(), 'obcy-sklep.pl'));
     }
 
     public function test_outlet_is_not_a_source_unless_a_human_pinned_it(): void

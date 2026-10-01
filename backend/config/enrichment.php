@@ -209,8 +209,17 @@ return [
     | jest w puli. Zgłoszenie testera z ręcznych testów cenników (AJ GROUP / PROS, jak wcześniej MAPA): karty
     | sklepów mieszały rozmiarówkę ze swoją ogólną tabelą i dokładały dane innego wyrobu. Bez karty producenta
     | w puli sklepy zostają źródłem jak dotąd. Klucze jak w manufacturer_domains.
+    | Ta lista obowiązuje też przy uzupełnianiu krótkich opisów B2B (tam bez manufacturer_first_every_brand).
     */
     'manufacturer_only_sources' => ['pros', 'aj-group', 'ajgroup', 'mapa'],
+
+    /*
+    | Zwykłe pobieranie opisu karty (cenniki z pliku, „Pobierz” w panelu) — decyzja właściciela 01.10.2026 po cenniku
+    | Canis (446 z 930 opisów ze sklepów): każda marka jak w manufacturer_only_sources (karta producenta w puli = opis
+    | tylko z jego stron), a bez niej najpierw strony z listy „Strony wyszukiwarka”, reszta internetu dopiero gdy
+    | z listy nie ma strony z treścią.
+    */
+    'manufacturer_first_every_brand' => true,
 
     /*
     | Hosty do zapytań site: (katalog + sklepy, które ten asortyment indeksują).

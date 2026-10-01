@@ -133,7 +133,7 @@ final class ManufacturerPageNormFactsTest extends TestCase
     public function test_page_norms_come_only_from_the_card_chosen_as_description_source(): void
     {
         // MAPA jest na liście „tylko producent” (sklep nie wchodzi do puli) — mechanizm sprawdzamy dla marki spoza listy
-        config(['enrichment.manufacturer_only_sources' => []]);
+        config(['enrichment.manufacturer_only_sources' => [], 'enrichment.manufacturer_first_every_brand' => false]);
         $product = $this->enrichWithModelFollowingTheShop(null, null, [self::SHOP]);
 
         $this->assertNull($product->manufacturer_norms, 'opis powstał ze sklepu — ramki norm strony producenta z puli nie bierzemy');
