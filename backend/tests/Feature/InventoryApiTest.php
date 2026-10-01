@@ -9,9 +9,11 @@ use App\Models\ErpItemLink;
 use App\Models\ErpItemPurchase;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\Erp\StockLots;
 use App\Services\Erp\WarehouseLocations;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
@@ -108,6 +110,32 @@ final class InventoryApiTest extends TestCase
         $this->assertSame(['VERYOLD'], $this->codes('months=0&lot_months=36'));
         $this->assertSame(['OLDLOT', 'VERYOLD'], $this->codes('months=0&lot_months=24&sort=code&dir=asc'));
         $this->getJson('/api/inventory?months=36')->assertUnprocessable();
+    }
+
+    public function test_lot_age_filter_counts_only_lots_older_than_the_threshold(): void
+    {
+        // jak SPŁAR322 (01.10.2026): jedna stara partia, reszta świeża — lista z filtrem 5 lat pokazywała cały stan
+        $mask = $this->item('MASKA', stock: 1000, price: 6, lastSale: '2026-09-11', oldestLot: '2020-11-19', book: 5600);
+        foreach ([['2020-11-19', 40, 200], ['2023-05-01', 60, 330], ['2026-08-01', 900, 5070]] as [$day, $qty, $value]) {
+            DB::table(StockLots::TABLE)->insert(['erp_item_id' => $mask->id, 'warehouse_code' => '01H', 'location' => '01', 'received_at' => $day, 'quantity' => $qty, 'value' => $value]);
+        }
+        // towar bez zapisanych partii (przed pierwszym odczytem partii) — cały stan jak dotąd
+        $this->item('NOLOTS', stock: 5, price: 10, lastSale: '2025-01-01', oldestLot: '2020-01-01', book: 50);
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $res = $this->getJson('/api/inventory?months=0&lot_months=60&sort=code&dir=asc')->assertOk();
+        $this->assertSame(['MASKA', 'NOLOTS'], array_column($res->json('data'), 'code'));
+        $this->assertEquals([40, 200, 1000, 5, 'lots'], [$res->json('data.0.quantity'), $res->json('data.0.stock_value'), $res->json('data.0.stock_in_scope'), $res->json('data.0.unit_cost'), $res->json('data.0.value_source')]);
+        $this->assertEquals([5, 50, 5], [$res->json('data.1.quantity'), $res->json('data.1.stock_value'), $res->json('data.1.stock_in_scope')]);
+        $this->assertEquals(250, $res->json('summary.value'));
+        // 3 lata: także partia z 2023 r.; sortowanie po wartości z partii sprzed progu
+        $res = $this->getJson('/api/inventory?months=0&lot_months=36&sort=value&dir=desc')->assertOk();
+        $this->assertEquals([100, 530], [$res->json('data.0.quantity'), $res->json('data.0.stock_value')]);
+        // bez filtra wieku partii — cały stan
+        $this->assertEquals([1000, 5600], array_values(array_intersect_key(
+            collect($this->getJson('/api/inventory?months=0')->json('data'))->firstWhere('code', 'MASKA'),
+            array_flip(['quantity', 'stock_value']),
+        )));
     }
 
     public function test_cutoff_does_not_overflow_at_month_end(): void

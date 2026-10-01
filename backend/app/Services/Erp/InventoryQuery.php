@@ -198,6 +198,26 @@ final class InventoryQuery
     }
 
     /**
+     * Lista Zalegające z filtrem „partia leży od” (decyzja właściciela 01.10.2026: SPŁAR322 — najstarsza partia z 2020 r.,
+     * a lista pokazywała cały stan 33 404 szt. za 185 tys. zł): ilość tylko z partii przyjętych najpóźniej w dniu progu.
+     * Towar bez żadnej zapisanej partii (przed pierwszym odczytem partii) — cały stan zakresu, jak dotąd.
+     */
+    public static function lotsUntilQuantitySql(CarbonImmutable $until, string $scope = 'all', ?string $location = null): string
+    {
+        return '(case when '.self::HAS_LOTS_SQL.' then '.self::lotQuantitySql(['after' => null, 'until' => $until->toDateString()], $scope, $location)
+            .' else '.self::quantitySql($scope, $location).' end)';
+    }
+
+    /** Wartość do lotsUntilQuantitySql: partie przyjęte najpóźniej w dniu progu; bez zapisanych partii — wartość zakresu. */
+    public static function lotsUntilValueSql(CarbonImmutable $until, string $scope = 'all', ?string $location = null): string
+    {
+        return '(case when '.self::HAS_LOTS_SQL.' then '.self::lotValueSql(['after' => null, 'until' => $until->toDateString()], $scope, $location)
+            .' else '.self::valueSql($scope, $location).' end)';
+    }
+
+    private const HAS_LOTS_SQL = 'exists (select 1 from '.StockLots::TABLE.' x where x.erp_item_id = erp_items.id)';
+
+    /**
      * Najwcześniejsze przyjęcie wśród partii towaru z okresu.
      *
      * @param  array{after: ?string, until: ?string}|null  $range

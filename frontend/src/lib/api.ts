@@ -681,8 +681,13 @@ export type InventoryRow = {
   stock_total: number
   /** Magazyny HANDEL (informacyjnie). */
   stock_trade: number
-  /** Ilość w oddziale z filtra `location`; bez filtra = stock_total. */
+  /**
+   * Ilość w oddziale z filtra `location`; bez filtra = stock_total. Z filtrem wieku partii (`lot_months`) — tylko sztuki
+   * z partii sprzed progu (tak samo stock_value i unit_cost).
+   */
   quantity: number
+  /** Cały stan w wybranych magazynach (oddział albo wszystkie) — przy filtrze wieku partii większy niż quantity. */
+  stock_in_scope: number
   /**
    * Ilość × cena zakupu w PLN: partie leżące na stanie (XL), a bez nich stan × cena ostatniej PZ; null = brak obu.
    * Z filtrem oddziału — tylko jego magazyny (tak samo value_source, unit_cost i oldest_lot_at).

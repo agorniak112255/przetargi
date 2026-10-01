@@ -417,7 +417,9 @@ export function Inventory() {
           hint={
             summary && summary.value_unknown > 0
               ? `netto, ilość × cena zakupu · ${fmtInt(summary.value_unknown)} bez ceny zakupu`
-              : 'netto, ilość × cena zakupu partii na stanie'
+              : result?.lot_cutoff
+                ? `tylko sztuki z dostaw przyjętych do ${formatDate(result.lot_cutoff)}`
+                : 'netto, ilość × cena zakupu partii na stanie'
           }
           hintTitle={
             summary && summary.value_unknown > 0
@@ -598,6 +600,7 @@ export function Inventory() {
                 onOpenCard={setPreviewId}
                 canRwPw={canRwPw}
                 location={location ? { key: location, name: locationName } : null}
+                lotCutoff={result?.lot_cutoff ?? null}
                 selection={
                   canCampaign
                     ? { checked: selected.has(row.id), onToggle: (shiftKey) => toggleRow(i, shiftKey) }
@@ -689,6 +692,7 @@ function InventoryTableRow({
   onOpenCard,
   canRwPw,
   location,
+  lotCutoff,
   selection,
 }: {
   row: InventoryRow
@@ -699,6 +703,8 @@ function InventoryTableRow({
   canRwPw: boolean
   /** Filtr oddziału: stan i magazyny pod nim tylko z oddziału; null = wszystkie magazyny. */
   location: { key: string; name: string } | null
+  /** Filtr „partia leży od”: ilość i wartość tylko z partii przyjętych najpóźniej tego dnia ('YYYY-MM-DD'). */
+  lotCutoff: string | null
   /** Kolumna zaznaczania do kampanii; brak = bez kolumny. */
   selection?: { checked: boolean; onToggle: (shiftKey: boolean) => void }
 }) {
@@ -810,7 +816,15 @@ function InventoryTableRow({
           warehouses={location ? row.warehouses.filter((w) => w.location === location.key) : row.warehouses}
           unit={unit}
         />
-        {location && row.stock_total !== row.quantity && (
+        {lotCutoff && row.stock_in_scope !== row.quantity && (
+          <div
+            className="mt-0.5 text-[11px] text-amber-800"
+            title={`Ilość i wartość tylko z dostaw przyjętych do ${formatDate(lotCutoff)}; nowsze dostawy nie są liczone`}
+          >
+            z {erpQty(row.stock_in_scope)} na stanie
+          </div>
+        )}
+        {location && row.stock_total !== row.quantity && !lotCutoff && (
           <div className="mt-0.5 text-[11px] text-slate-500" title="Stan we wszystkich magazynach (wszystkie oddziały)">
             razem {erpQty(row.stock_total)}
           </div>

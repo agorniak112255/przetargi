@@ -26,6 +26,9 @@ use Illuminate\Validation\Rule;
  * Filtr oddziału (location, np. '01' Rzeszów — WarehouseLocations): towar ze stanem w magazynach oddziału; ilość, wartość
  * i najstarsza partia wiersza, sumy i sortowanie liczone tylko z tych magazynów; ostatnia sprzedaż — z dokumentów
  * magazynów oddziału (w wierszu także ostatnia sprzedaż z dowolnego magazynu).
+ *
+ * Filtr „partia leży od” (lot_months): ilość, wartość, suma i sortowanie tylko z partii przyjętych najpóźniej w dniu progu
+ * (InventoryQuery::lotsUntil*; decyzja właściciela 01.10.2026) — stock_in_scope w wierszu to cały stan zakresu.
  */
 class InventoryController extends Controller
 {
@@ -76,18 +79,20 @@ class InventoryController extends Controller
         $location = isset($v['location']) && $v['location'] !== '' ? (string) $v['location'] : null;
         $query = $this->filtered($v, $cutoff, $neverSold, $lotCutoff, $location);
 
-        $totals = InventoryQuery::totals($query, 'all', $location);
+        // ilość i wartość wiersza: przy filtrze wieku partii — tylko partie sprzed progu
+        $value = $lotCutoff !== null ? InventoryQuery::lotsUntilValueSql($lotCutoff, 'all', $location) : InventoryQuery::valueSql('all', $location);
+        $quantity = $lotCutoff !== null ? InventoryQuery::lotsUntilQuantitySql($lotCutoff, 'all', $location) : InventoryQuery::quantitySql('all', $location);
+        $totals = InventoryQuery::totals($query, 'all', $location, $value);
         $neverSoldCount = (clone $query)->whereRaw(InventoryQuery::lastSaleSql($location).' is null')->count();
         $withoutCard = (clone $query)->whereDoesntHave('links', fn (Builder $q) => ErpItemCards::linked($q))->count();
 
         $dir = ($v['dir'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
-        $value = InventoryQuery::valueSql('all', $location);
-        $quantity = InventoryQuery::quantitySql('all', $location);
         $lot = InventoryQuery::oldestLotSql('all', $location);
         $sale = InventoryQuery::lastSaleSql($location);
         $query->select('erp_items.*')
             ->selectRaw($value.' as purchase_value')
             ->selectRaw($quantity.' as scope_quantity')
+            ->selectRaw(InventoryQuery::quantitySql('all', $location).' as scope_stock')
             ->selectRaw($lot.' as scope_oldest_lot')
             ->selectRaw($sale.' as scope_last_sale');
         match ($v['sort'] ?? 'value') {
@@ -109,7 +114,7 @@ class InventoryController extends Controller
         $syncedAt = ErpItem::query()->whereNull('removed_at')->max('synced_at');
 
         return response()->json([
-            'data' => $page->getCollection()->map(fn (ErpItem $item): array => $this->present($item, $cards[(int) $item->id], $rwPw[(int) $item->id] ?? 0, $location))->values()->all(),
+            'data' => $page->getCollection()->map(fn (ErpItem $item): array => $this->present($item, $cards[(int) $item->id], $rwPw[(int) $item->id] ?? 0, $location, $lotCutoff !== null))->values()->all(),
             'meta' => [
                 'current_page' => $page->currentPage(),
                 'last_page' => $page->lastPage(),
@@ -209,7 +214,7 @@ class InventoryController extends Controller
      * @param  array{card: array<string, mixed>|null, cards_count: int}  $card
      * @return array<string, mixed>
      */
-    private function present(ErpItem $item, array $card, int $rwPwPairs, ?string $location = null): array
+    private function present(ErpItem $item, array $card, int $rwPwPairs, ?string $location = null, bool $oldLotsOnly = false): array
     {
         /** @var ErpItemPurchase|null $purchase */
         $purchase = $item->purchases->first();
@@ -230,6 +235,10 @@ class InventoryController extends Controller
                 $lotsValue += (float) $w['value'];
             }
         }
+        if ($oldLotsOnly) {
+            // tylko partie sprzed progu: wartość i średnia cena z tych partii
+            $lotsValue = $item->getAttribute('purchase_value') !== null ? (float) $item->getAttribute('purchase_value') : null;
+        }
 
         return [
             'id' => $item->id,
@@ -243,6 +252,8 @@ class InventoryController extends Controller
             'stock_trade' => (float) $item->stock_trade,
             // ilość w wybranych magazynach: oddział z filtra, bez niego wszystkie (= stock_total)
             'quantity' => round($quantity, 4),
+            // cały stan w wybranych magazynach (przy filtrze wieku partii quantity to tylko partie sprzed progu)
+            'stock_in_scope' => round((float) $item->getAttribute('scope_stock'), 4),
             // ilość × cena zakupu: partie na stanie, a bez nich stan × ostatnia PZ; null = ani partii, ani PZ z ceną
             'stock_value' => $item->getAttribute('purchase_value') !== null ? round((float) $item->getAttribute('purchase_value'), 2) : null,
             'value_source' => match (true) {
