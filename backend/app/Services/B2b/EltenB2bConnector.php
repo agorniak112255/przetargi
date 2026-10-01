@@ -38,13 +38,18 @@ use RuntimeException;
  * Opis: polska lista cech producenta z elten.com („Nasza opinia” na /pl/products/…-{numer}/, numer = numer artykułu
  * bez zer wiodących i „-0”), dosłownie, z pierwszego artykułu karty, który ma polską stronę. Sekcja „Details” bywa
  * cudza (na stronie LARROX niemiecki tekst o ADAM ESD S1) — nie bierzemy jej. Strona innego numeru (tytuł) = bez opisu.
- * Pliki: polski PDF wyrobu z tej strony (karta katalogowa). Arkusz danych technicznych i certyfikaty leżą w ścieżce,
- * której robots.txt elten.com zabrania (EltenB2bClient) — nie pobieramy ich.
+ * Pliki z przycisków tej strony: polski arkusz danych technicznych („ADT”: oznaczenia normy rozpisane, zastosowanie,
+ * materiały, podnosek, antyprzebicie, podeszwa) i polski PDF wyrobu jako karty katalogowe — arkusz pierwszy — oraz
+ * certyfikat CE (decyzja właściciela 01.10.2026: pobieramy mimo zakazu w robots.txt, EltenB2bClient).
+ *
+ * Lista cech to 300–900 znaków, a treść wyrobu jest w arkuszu — dlatego B2bDescribesFromDatasheet (jak Tegro i Polstar,
+ * decyzja użytkownika 21.09.2026): opis karty pisze model wyłącznie z listy cech i arkusza, bez internetu. Karta bez
+ * polskiej strony nie ma ani listy, ani arkusza — zostaje bez opisu.
  *
  * Producent karty = „ELTEN” dla wszystkich marek (JORI i LOWA WORK produkuje ELTEN GmbH; marka zostaje w tabelce
  * i na początku nazwy nowej karty), żeby normy z tabelki, opis i zdjęcia producenta obowiązywały wszystkie karty.
  */
-final class EltenB2bConnector implements B2bConnector, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bSizePriceSource
+final class EltenB2bConnector implements B2bConnector, B2bDescribesFromDatasheet, B2bDocumentSource, B2bGroupsSizes, B2bImageGallery, B2bListProgressAware, B2bManufacturerSite, B2bRunSummaryAware, B2bShopFieldNormSource, B2bShopFieldSource, B2bSizePriceSource
 {
     public const BRAND = 'ELTEN';
 
@@ -329,8 +334,8 @@ final class EltenB2bConnector implements B2bConnector, B2bDocumentSource, B2bGro
     }
 
     /**
-     * Polski PDF wyrobu z elten.com — tylko gdy artykuł, z którego pochodzi, jest wśród pozycji podanego produktu
-     * (dawna karta jednego koloru nie dostaje pliku innego koloru).
+     * Arkusz danych technicznych, PDF wyrobu i certyfikat CE z elten.com — tylko gdy artykuł, z którego pochodzą, jest
+     * wśród pozycji podanego produktu (dawna karta jednego koloru nie dostaje plików innego koloru).
      *
      * @return list<B2bRemoteDocument>
      */
@@ -339,7 +344,7 @@ final class EltenB2bConnector implements B2bConnector, B2bDocumentSource, B2bGro
         $out = [];
         foreach ($product->raw['documents'] ?? [] as $document) {
             if (isset(self::productArticles($product)[$document['article']])) {
-                $out[] = new B2bRemoteDocument($document['title'], $document['url'], ProductDocument::KIND_DATASHEET);
+                $out[] = new B2bRemoteDocument($document['title'], $document['url'], $document['kind']);
             }
         }
 
@@ -522,10 +527,14 @@ final class EltenB2bConnector implements B2bConnector, B2bDocumentSource, B2bGro
     }
 
     /**
-     * Polska strona wyrobu elten.com: lista „Nasza opinia” (wiersze dosłownie) i polski PDF wyrobu. Strona innego
-     * numeru (tytuł „… - {numer} - ELTEN GmbH”) = null.
+     * Polska strona wyrobu elten.com: lista „Nasza opinia” (wiersze dosłownie) i pliki z przycisków strony w kolejności
+     * zapisu na karcie — arkusz danych technicznych („TD-button”), PDF wyrobu („PDF-button”), certyfikat CE
+     * („CE-button”). Arkusz i PDF muszą mieć numer wyrobu w nazwie pliku („TD PL 5304 …”, „PL 5304 …” — strona bywa
+     * składana z cudzych części, jak sekcja „Details”); certyfikat obejmuje typ wyrobu i numer w nazwie ma tylko czasem
+     * („Typ 412_3_22_KE….pdf”, „5304 530408 C29 … .pdf”), więc bez tego warunku. Strona
+     * innego numeru (tytuł „… - {numer} - ELTEN GmbH”) = null.
      *
-     * @return array{opinion: list<string>, pdf: string|null}|null
+     * @return array{opinion: list<string>, files: list<array{url: string, kind: string}>}|null
      */
     public static function parsePolishPage(string $html, string $number): ?array
     {
@@ -543,13 +552,21 @@ final class EltenB2bConnector implements B2bConnector, B2bDocumentSource, B2bGro
                 }
             }
         }
-        $pdf = null;
-        if (preg_match('#id="PDF-button"\s+href="([^"]+)"#', $html, $link) === 1) {
+        $files = [];
+        foreach (['TD' => true, 'PDF' => true, 'CE' => false] as $button => $numbered) {
+            if (preg_match('#id\s*="'.$button.'-button"\s+href="([^"]+)"#', $html, $link) !== 1) {
+                continue;
+            }
             $url = EltenB2bClient::absoluteUrl($link[1], EltenB2bClient::SITE);
-            $pdf = EltenB2bClient::isSiteFileUrl($url) ? $url : null;
+            $file = basename(rawurldecode((string) parse_url($url, PHP_URL_PATH)));
+            if (! EltenB2bClient::isSiteFileUrl($url)
+                || ($numbered && preg_match('/(?<!\d)'.preg_quote($number, '/').'(?!\d)/', $file) !== 1)) {
+                continue;
+            }
+            $files[] = ['url' => $url, 'kind' => $button === 'CE' ? ProductDocument::KIND_CERTIFICATE : ProductDocument::KIND_DATASHEET];
         }
 
-        return ['opinion' => $opinion, 'pdf' => $pdf];
+        return ['opinion' => $opinion, 'files' => $files];
     }
 
     /**
@@ -939,10 +956,10 @@ final class EltenB2bConnector implements B2bConnector, B2bDocumentSource, B2bGro
     }
 
     /**
-     * Opis i PDF z polskiej strony elten.com pierwszego artykułu karty (według numeru), który ją ma.
+     * Opis i pliki z polskiej strony elten.com pierwszego artykułu karty (według numeru), który ją ma.
      *
      * @param  non-empty-list<array<string, mixed>>  $cluster
-     * @return array{0: string, 1: list<array{title: string, url: string, article: string}>}
+     * @return array{0: string, 1: list<array{title: string, url: string, kind: string, article: string}>}
      */
     private function polishContent(array $cluster): array
     {
@@ -980,14 +997,12 @@ final class EltenB2bConnector implements B2bConnector, B2bDocumentSource, B2bGro
 
                 continue;
             }
-            $documents = [];
-            if ($page['pdf'] !== null) {
-                $documents[] = [
-                    'title' => basename(rawurldecode((string) parse_url($page['pdf'], PHP_URL_PATH))),
-                    'url' => $page['pdf'],
-                    'article' => $article['number'],
-                ];
-            }
+            $documents = array_map(static fn (array $file): array => [
+                'title' => basename(rawurldecode((string) parse_url($file['url'], PHP_URL_PATH))),
+                'url' => $file['url'],
+                'kind' => $file['kind'],
+                'article' => $article['number'],
+            ], $page['files']);
 
             return [implode("\n", $page['opinion']), $documents];
         }

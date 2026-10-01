@@ -27,9 +27,11 @@ use RuntimeException;
  * etykiety cech karty po innym języku dałyby inną tabelkę i inny podział kart.
  *
  * elten.com (WordPress, bez logowania) ma polskie strony wyrobów (/pl/products/{nazwa}-{numer}/, mapa witryny
- * /portfolio-sitemap*.xml) i polski PDF wyrobu. robots.txt witryny zabrania pobierania /data/media/documents/ (arkusze
- * danych technicznych, certyfikaty) — tych plików nie pobieramy (decyzja do właściciela 01.10.2026); PDF wyrobu leży
- * w dozwolonej ścieżce /data/media/products/pdf/.
+ * /portfolio-sitemap*.xml), a przy nich polski PDF wyrobu (/data/media/products/pdf/PL/), polski arkusz danych
+ * technicznych (/data/media/documents/TDB/PL/) i certyfikat CE (/data/media/documents/CE/). robots.txt witryny zabrania
+ * automatom katalogu /data/media/documents/ — arkusze i certyfikaty pobieramy z decyzji właściciela (01.10.2026: dealer
+ * ELTEN, pliki potrzebne do kart): tylko pliki podane na stronie wyrobu, tylko te trzy ścieżki, po kolei z przerwą,
+ * a synchronizacja pobiera plik raz (potem tylko nowe adresy).
  *
  * Zapytania idą po kolei, z przerwą przed każdym.
  */
@@ -53,8 +55,8 @@ final class EltenB2bClient
         self::SITE.'/portfolio-sitemap6.xml',
     ];
 
-    /** Jedyna ścieżka plików elten.com, której robots.txt nie zabrania (PDF wyrobu). */
-    public const SITE_FILE_PREFIX = '/data/media/products/pdf/';
+    /** Ścieżki plików elten.com, które łącznik pobiera: PDF wyrobu, arkusz danych technicznych, certyfikat CE. */
+    public const SITE_FILE_PREFIXES = ['/data/media/products/pdf/', '/data/media/documents/TDB/', '/data/media/documents/CE/'];
 
     private const LOGIN_PAGE = self::BASE.'/shop-login';
 
@@ -209,14 +211,14 @@ final class EltenB2bClient
     }
 
     /**
-     * PDF wyrobu z elten.com — tylko z dozwolonej ścieżki (SITE_FILE_PREFIX).
+     * Plik wyrobu z elten.com — tylko z jednej ze ścieżek SITE_FILE_PREFIXES.
      *
      * @return array{bytes: string, mime: string}
      */
     public function siteFileBytes(string $url): array
     {
         if (! self::isSiteFileUrl($url)) {
-            throw new RuntimeException('plik spoza dozwolonej ścieżki '.self::SITE_HOST.self::SITE_FILE_PREFIX.': '.$url);
+            throw new RuntimeException('plik spoza ścieżek plików wyrobu '.self::SITE_HOST.' ('.implode(', ', self::SITE_FILE_PREFIXES).'): '.$url);
         }
         $file = $this->fetchFile($url, false);
         if ($file === null) {
@@ -254,14 +256,20 @@ final class EltenB2bClient
         return in_array(self::hostOf($url), [self::SITE_HOST, 'www.'.self::SITE_HOST], true);
     }
 
-    /** PDF wyrobu na elten.com w dozwolonej ścieżce (bez „..”). */
+    /** Plik wyrobu na elten.com w jednej ze ścieżek SITE_FILE_PREFIXES (bez „..”). */
     public static function isSiteFileUrl(string $url): bool
     {
-        $path = (string) parse_url($url, PHP_URL_PATH);
+        $path = rawurldecode((string) parse_url($url, PHP_URL_PATH));
+        if (! self::isSiteUrl($url) || str_contains($path, '..')) {
+            return false;
+        }
+        foreach (self::SITE_FILE_PREFIXES as $prefix) {
+            if (str_starts_with($path, $prefix)) {
+                return true;
+            }
+        }
 
-        return self::isSiteUrl($url)
-            && str_starts_with(rawurldecode($path), self::SITE_FILE_PREFIX)
-            && ! str_contains(rawurldecode($path), '..');
+        return false;
     }
 
     /**

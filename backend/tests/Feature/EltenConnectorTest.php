@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use App\Jobs\DescribeB2bProductFromDatasheetJob;
 use App\Models\B2bAccount;
 use App\Models\B2bProductLink;
 use App\Models\Product;
@@ -15,6 +16,7 @@ use App\Models\ProductSourcePrice;
 use App\Models\ProductVariant;
 use App\Services\B2b\B2bAccountSyncRunner;
 use App\Services\B2b\B2bConnectorRegistry;
+use App\Services\B2b\B2bDescribesFromDatasheet;
 use App\Services\B2b\B2bDocumentSource;
 use App\Services\B2b\B2bFatalException;
 use App\Services\B2b\B2bGroupsSizes;
@@ -27,6 +29,7 @@ use App\Services\B2b\B2bShopFieldSource;
 use App\Services\B2b\B2bSizePriceSource;
 use App\Services\B2b\EltenB2bClient;
 use App\Services\B2b\EltenB2bConnector;
+use Barryvdh\DomPDF\Facade\Pdf;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
@@ -189,21 +192,34 @@ final class EltenConnectorTest extends TestCase
         }
     }
 
-    public function test_polish_page_gives_only_the_opinion_list_and_the_allowed_pdf(): void
+    public function test_polish_page_gives_the_opinion_list_and_the_product_files_in_order(): void
     {
         $html = self::polishPage('ZEPHYR Work GTX® black Mid ESD S3S WR - 5304', ['Hydrofobizowana skóra welurowa', 'Podnosek z tworzywa sztucznego'], 'https://elten.com/data/media/products/pdf/PL/PL 5304 ZEPHYR Work GTX® black Mid ESD S3S WR.pdf');
 
         $page = EltenB2bConnector::parsePolishPage($html, '5304');
 
         $this->assertSame(['Hydrofobizowana skóra welurowa', 'Podnosek z tworzywa sztucznego'], $page['opinion'] ?? null);
-        $this->assertSame('https://elten.com/data/media/products/pdf/PL/PL%205304%20ZEPHYR%20Work%20GTX%C2%AE%20black%20Mid%20ESD%20S3S%20WR.pdf', $page['pdf'] ?? null);
+        // arkusz danych technicznych pierwszy (opis z karty katalogowej bierze pierwszą), potem PDF wyrobu i certyfikat
+        $this->assertSame(
+            [
+                ['https://elten.com/data/media/documents/TDB/PL/LOWA%20WORK/TD%20PL%205304%20ZEPHYR.pdf', ProductDocument::KIND_DATASHEET],
+                ['https://elten.com/data/media/products/pdf/PL/PL%205304%20ZEPHYR%20Work%20GTX%C2%AE%20black%20Mid%20ESD%20S3S%20WR.pdf', ProductDocument::KIND_DATASHEET],
+                ['https://elten.com/data/media/documents/CE/LOWA%20WORK/EN%20ISO%2020345/Typ%20412_3_22.pdf', ProductDocument::KIND_CERTIFICATE],
+            ],
+            array_map(static fn (array $f): array => [$f['url'], $f['kind']], $page['files'] ?? []),
+        );
         // strona innego numeru
         $this->assertNull(EltenB2bConnector::parsePolishPage($html, '5305'));
+        // arkusz i PDF z cudzym numerem w nazwie pliku (strona złożona z części innego wyrobu) — bez nich, certyfikat zostaje
+        $foreign = EltenB2bConnector::parsePolishPage(
+            self::polishPage('X - 5304', ['Opis'], 'https://elten.com/data/media/products/pdf/PL/PL 53041 X.pdf', 'TD PL 15304 X.pdf'),
+            '5304',
+        );
+        $this->assertSame([ProductDocument::KIND_CERTIFICATE], array_column($foreign['files'] ?? [], 'kind'));
         // zakładka bez listy — lista następnej zakładki („Orto / wkładek”) nie jest opisem
         $empty = EltenB2bConnector::parsePolishPage(self::polishPage('X - 1', [], null), '1');
         $this->assertSame([], $empty['opinion'] ?? null);
-        $this->assertArrayHasKey('pdf', (array) $empty);
-        $this->assertNull($empty['pdf']);
+        $this->assertSame([], $empty['files'] ?? null);
     }
 
     public function test_colours_and_size_extensions_become_one_card_and_different_features_stay_apart(): void
@@ -272,9 +288,13 @@ final class EltenConnectorTest extends TestCase
             ],
             array_map(static fn ($f): string => $f->section.' | '.$f->name.' | '.$f->value, $connector->shopFields($zephyr)),
         );
-        // tylko PDF wyrobu z dozwolonej ścieżki — arkusz techniczny (ADT) i certyfikat nie
+        // arkusz danych technicznych, PDF wyrobu i certyfikat CE z polskiej strony
         $this->assertSame(
-            [['PL 5304 ZEPHYR Work GTX® black Mid ESD S3S WR.pdf', ProductDocument::KIND_DATASHEET]],
+            [
+                ['TD PL 5304 ZEPHYR.pdf', ProductDocument::KIND_DATASHEET],
+                ['PL 5304 ZEPHYR Work GTX® black Mid ESD S3S WR.pdf', ProductDocument::KIND_DATASHEET],
+                ['Typ 412_3_22.pdf', ProductDocument::KIND_CERTIFICATE],
+            ],
             array_map(static fn (B2bRemoteDocument $d): array => [$d->title, $d->kind], $connector->documents($zephyr)),
         );
         // jedno zdjęcie na kolor
@@ -313,8 +333,8 @@ final class EltenConnectorTest extends TestCase
         $this->assertStringContainsString('Polskie strony elten.com pominięte: 1, np. 0005311-0 (strona innego numeru)', $summary);
         $this->assertStringContainsString('Karty bez polskiej strony elten.com (bez opisu i PDF): 4', $summary);
         $this->assertSame(5, $connector->totalProducts());
-        // pliki z zakazanej w robots.txt ścieżki nie były pobierane
-        $this->assertTrue(Http::recorded(static fn (Request $r): bool => str_contains($r->url(), '/data/media/documents/'))->isEmpty());
+        // lista kart nie pobiera plików — bajty dopiero przy zapisie, tylko nowe adresy (B2bCatalogSync)
+        $this->assertTrue(Http::recorded(static fn (Request $r): bool => str_contains($r->url(), '/data/media/'))->isEmpty());
     }
 
     public function test_elten_site_failures_stop_asking_the_site_but_not_the_prices(): void
@@ -463,7 +483,7 @@ final class EltenConnectorTest extends TestCase
         $client->detailPage('10001');
     }
 
-    public function test_files_and_images_need_the_allowed_path_and_the_session(): void
+    public function test_files_and_images_need_the_product_file_paths_and_the_session(): void
     {
         $this->addZephyrColours();
         $this->fakeSite();
@@ -471,20 +491,22 @@ final class EltenConnectorTest extends TestCase
         $card = iterator_to_array($connector->products(), false)[0];
 
         $image = $connector->image($card);
-        $file = $connector->documentBytes($connector->documents($card)[0]);
+        $sheet = $connector->documentBytes($connector->documents($card)[0]);
+        $certificate = $connector->documentBytes($connector->documents($card)[2]);
 
         $this->assertSame('image/jpeg', $image?->mime);
-        $this->assertSame('application/pdf', $file['mime']);
-        $this->assertStringStartsWith('%PDF-', $file['bytes']);
+        $this->assertSame('application/pdf', $sheet['mime']);
+        $this->assertStringStartsWith('%PDF-', $sheet['bytes']);
+        $this->assertStringContainsString('/data/media/documents/CE/', $certificate['bytes']);
 
-        // arkusz techniczny leży w ścieżce zakazanej w robots.txt elten.com
+        // inne pliki witryny (np. ogólne warunki zakupu) nie są plikami wyrobu
         try {
-            $connector->documentBytes(new B2bRemoteDocument('TD', 'https://elten.com/data/media/documents/TDB/PL/LOWA%20WORK/TD%20PL%205304.pdf'));
-            $this->fail('plik spoza dozwolonej ścieżki nie powinien być pobrany');
+            $connector->documentBytes(new B2bRemoteDocument('AGB', 'https://elten.com/data/media/documents/Allgemeine_Einkaufsbedingungen_ELTEN_GmbH_EN.pdf'));
+            $this->fail('plik spoza ścieżek plików wyrobu nie powinien być pobrany');
         } catch (RuntimeException $e) {
-            $this->assertStringContainsString('spoza dozwolonej ścieżki', $e->getMessage());
+            $this->assertStringContainsString('spoza ścieżek plików wyrobu', $e->getMessage());
         }
-        $this->assertTrue(Http::recorded(static fn (Request $r): bool => str_contains($r->url(), '/data/media/documents/'))->isEmpty());
+        $this->assertTrue(Http::recorded(static fn (Request $r): bool => str_contains($r->url(), 'Allgemeine'))->isEmpty());
 
         // zdjęcie sklepu bez sesji = 401 → nowa sesja, potem obraz
         $this->sessions = [];
@@ -523,8 +545,14 @@ final class EltenConnectorTest extends TestCase
         $this->assertSame('elten', $card->manufacturer_norms['source']['connector'] ?? null);
         $this->assertContains('EN ISO 20345:2022', array_column($card->manufacturer_norms['rows'] ?? [], 'label'));
         $this->assertSame(
-            ['PL 5304 ZEPHYR Work GTX® black Mid ESD S3S WR.pdf'],
+            ['TD PL 5304 ZEPHYR.pdf', 'PL 5304 ZEPHYR Work GTX® black Mid ESD S3S WR.pdf', 'Typ 412_3_22.pdf'],
             ProductDocument::query()->where('product_id', $card->id)->orderBy('sort_order')->pluck('title')->all(),
+        );
+        // opis z listy cech i arkusza danych technicznych pisze model (B2bDescribesFromDatasheet), bez internetu
+        Queue::assertPushed(DescribeB2bProductFromDatasheetJob::class, static fn (DescribeB2bProductFromDatasheetJob $job): bool => $job->productId === (int) $card->id);
+        $this->assertSame(
+            ProductDocument::query()->where('product_id', $card->id)->where('title', 'TD PL 5304 ZEPHYR.pdf')->value('id'),
+            DescribeB2bProductFromDatasheetJob::datasheet((int) $card->id, (int) $this->account()->id)?->id,
         );
         $this->assertSame(2, ProductImage::query()->where('product_id', $card->id)->count());
         $rows = collect(ProductShopCard::query()->where('product_id', $card->id)->sole()->fields)->flatMap(static fn (array $section): array => array_map(
@@ -567,7 +595,7 @@ final class EltenConnectorTest extends TestCase
         $connector = $registry->make($account, 0);
 
         $this->assertInstanceOf(EltenB2bConnector::class, $connector);
-        foreach ([B2bManufacturerSite::class, B2bShopFieldSource::class, B2bShopFieldNormSource::class, B2bDocumentSource::class, B2bImageGallery::class, B2bGroupsSizes::class, B2bSizePriceSource::class] as $interface) {
+        foreach ([B2bManufacturerSite::class, B2bShopFieldSource::class, B2bShopFieldNormSource::class, B2bDocumentSource::class, B2bImageGallery::class, B2bGroupsSizes::class, B2bSizePriceSource::class, B2bDescribesFromDatasheet::class] as $interface) {
             $this->assertInstanceOf($interface, $connector);
         }
     }
@@ -782,6 +810,9 @@ final class EltenConnectorTest extends TestCase
 
             return Http::response(self::polishPage($page['title'], $page['opinion'], $page['pdf']), 200, ['Content-Type' => 'text/html; charset=UTF-8']);
         }
+        if (str_starts_with($path, '/data/media/documents/TDB/')) {
+            return Http::response(self::datasheetPdf(), 200, ['Content-Type' => 'application/pdf']);
+        }
         if (str_starts_with($path, '/data/media/')) {
             return Http::response('%PDF-1.4 test '.$path, 200, ['Content-Type' => 'application/pdf']);
         }
@@ -874,17 +905,18 @@ final class EltenConnectorTest extends TestCase
 
     /**
      * Polska strona wyrobu elten.com: zakładki „Nasza opinia” (lista), „Details” (cudzy tekst po niemiecku), „Orto /
-     * wkładek” (lista wkładek), przyciski PDF / ADT / CE.
+     * wkładek” (lista wkładek), przyciski PDF / ADT / CE (ścieżki ze spacjami i „®” jak na witrynie).
      *
      * @param  list<string>  $opinion
      */
-    private static function polishPage(string $title, array $opinion, ?string $pdf): string
+    private static function polishPage(string $title, array $opinion, ?string $pdf, string $sheet = 'TD PL 5304 ZEPHYR.pdf'): string
     {
         $items = $opinion === [] ? '<p>brak</p>' : '<ul>'."\n".implode("\n", array_map(static fn (string $line): string => '<li>'.htmlspecialchars($line).'</li>', $opinion))."\n</ul>";
         $buttons = $pdf !== null
-            ? '<a id="PDF-button" href="'.$pdf.'" title="PDF" target="_blank">PDF</a> <span>|</span> '
-                .'<a id ="TD-button" href="https://elten.com/data/media/documents/TDB/PL/LOWA WORK/TD PL 5304.pdf" title="Arkusz Danych Technicznych">ADT</a> '
-                .'<a id ="CE-button" href="https://elten.com/data/media/documents/CE/LOWA WORK/x.pdf" title="Deklaracja zgodności UE">Deklaracja zgodności UE</a>'
+            ? '<a id="print-button" href="javascript:window.print()" title="Druk">Druk</a> <span id="seperator-1">|</span> '
+                .'<a id="PDF-button" href="'.$pdf.'" title="PDF" target="_blank">PDF</a> <span id="seperator-2">|</span> '
+                .'<a id ="TD-button" href="https://elten.com/data/media/documents/TDB/PL/LOWA WORK/'.$sheet.'" title="Arkusz Danych Technicznych">ADT</a> <span id="seperator-3">|</span> '
+                .'<a id ="CE-button" href="https://elten.com/data/media/documents/CE/LOWA WORK/EN ISO 20345/Typ 412_3_22.pdf" title="Deklaracja zgodności UE">Deklaracja zgodności UE</a>'
             : '';
 
         return '<!DOCTYPE html><html lang="pl-PL"><head><title>'.htmlspecialchars($title).' - ELTEN GmbH</title></head><body>'
@@ -896,6 +928,16 @@ final class EltenConnectorTest extends TestCase
             ."<div class='tab' role='tab' tabindex='0' data-fake-id='#tab-id-3' aria-controls='tab-id-3-content'  itemprop=\"headline\" >Orto / wkładek</div>"
             ."<div id='tab-id-3-content' class='tab_content' aria-hidden=\"true\"><div class='tab_inner_content invers-color'  itemprop=\"text\" ><h5>Wkładki</h5><ul><li>SensiCare</li></ul></div></div>"
             .'</body></html>';
+    }
+
+    /** Arkusz danych technicznych z tekstem (do opisu z karty katalogowej potrzebny jest tekst PDF-u). */
+    private static function datasheetPdf(): string
+    {
+        return Pdf::loadHTML('<html><head><meta charset="utf-8"><style>body{font-family:"DejaVu Sans";font-size:11px}</style></head><body>'
+            .'<h1>ARKUSZ DANYCH TECHNICZNYCH</h1><p>ZEPHYR Work GTX® black Mid ESD S3S WR No. 5304 Roz. 39 - 48</p>'
+            .'<p>OZNACZENIE WG NORMY: EN ISO 20345 S3S — wymaganie podstawowe w klasie S3S.</p>'
+            .'<p>PODNOSEK OSŁANIAJĄCY PALCE: ochrona przed uderzeniami o sile min. 200 dżuli i przed naciskiem min. 15 kN.</p>'
+            .'</body></html>')->output();
     }
 
     private static function jpeg(string $seed): string
