@@ -61,8 +61,9 @@ class ErpInventoryHistoryCommand extends Command
             $this->warn('Nieznane typy dokumentów (pominięte): '.json_encode($r['unknown_types']));
         }
         $this->line('Odtworzone (wszystkie oddziały, magazyny handlowe, początek miesiąca):');
-        $this->table(['dzień', 'cały towar', 'ponad pół roku bez sprzedaży', 'ponad rok bez sprzedaży'], array_map(
-            static fn (array $p): array => [$p['date'], number_format($p['stock'], 0, ',', ' '), number_format($p['no_sale_6'], 0, ',', ' '), number_format($p['no_sale_12'], 0, ',', ' ')],
+        $zl = static fn (float $v): string => number_format($v, 0, ',', ' ');
+        $this->table(['dzień', 'cały towar', 'bez sprzedaży pół roku', 'bez sprzedaży rok', 'leży ponad pół roku', 'leży ponad rok'], array_map(
+            static fn (array $p): array => [$p['date'], $zl($p['stock']), $zl($p['no_sale_6']), $zl($p['no_sale_12']), $zl($p['lot_age_6']), $zl($p['lot_age_12'])],
             $r['preview'] ?? [],
         ));
         $this->line('Kontrola: dzień '.$r['first_live'].' odtworzony z dokumentów wobec zapisu nocnego (wszystkie oddziały):');

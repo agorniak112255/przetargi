@@ -165,6 +165,29 @@ final class InventorySnapshotTest extends TestCase
         $this->getJson('/api/inventory/board/history')->assertForbidden();
     }
 
+    public function test_history_lot_age_thresholds_from_interval_and_cumulative_snapshots(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        // pierwszy zapis nocny (wersja 1): przedziały sumujące się — próg = suma od progu wzwyż, bez liczby towarów
+        $interval = fn (string $key, ?int $from, ?int $to, float $value): array => ['key' => $key, 'from_months' => $from, 'to_months' => $to, 'items' => 1, 'value' => $value];
+        DB::table(InventorySnapshots::TABLE)->insert(['taken_on' => '2026-10-01', 'location' => '', 'scope' => 'trade', 'source' => 'live', 'totals' => json_encode([
+            'version' => 1, 'buckets' => ['stock' => ['items' => 3, 'value' => 1000]],
+            'lot_age' => ['buckets' => [$interval('lot_age_0_6', 0, 6, 500), $interval('lot_age_6_12', 6, 12, 200), $interval('lot_age_12_24', 12, 24, 100),
+                $interval('lot_age_60', 60, null, 50), $interval('lot_age_unknown', null, null, 7)], 'items' => 3, 'value' => 857, 'value_unknown_items' => 0],
+        ])]);
+        // wersja 2: progi wprost
+        DB::table(InventorySnapshots::TABLE)->insert(['taken_on' => '2026-10-02', 'location' => '', 'scope' => 'trade', 'source' => 'live', 'totals' => json_encode([
+            'version' => 2, 'buckets' => ['stock' => ['items' => 3, 'value' => 990]],
+            'lot_age' => ['buckets' => [['key' => 'lot_age_6', 'from_months' => 6, 'to_months' => null, 'items' => 2, 'value' => 340],
+                ['key' => 'lot_age_12', 'from_months' => 12, 'to_months' => null, 'items' => 1, 'value' => 140]], 'items' => 3, 'value' => 990, 'value_unknown_items' => 0],
+        ])]);
+
+        $r = $this->getJson('/api/inventory/board/history?from=2026-10-01&to=2026-10-02')->assertOk();
+        $this->assertEquals([['items' => null, 'value' => 350], ['items' => 2, 'value' => 340]], array_column($r->json('points'), 'lot_age_6'));
+        $this->assertEquals([['items' => null, 'value' => 150], ['items' => 1, 'value' => 140]], array_column($r->json('points'), 'lot_age_12'));
+        $this->assertEquals(['items' => 1, 'value' => 140], $r->json('compare.locations.0.end.lot_age_12'));
+    }
+
     public function test_long_range_shows_one_point_per_week(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());

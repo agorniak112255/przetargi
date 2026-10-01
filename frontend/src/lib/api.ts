@@ -848,6 +848,9 @@ export type InventoryBoardLotAgeKey =
 /** Pozycje i wartość koszyka w zapisie dnia; null = koszyka nie było w zapisie. */
 export type InventoryHistoryTotal = { items: number; value: number } | null
 
+/** „Leży ponad…” w zapisie dnia; items null w pierwszym zapisie nocnym (przedziały, liczby towarów nie da się złożyć). */
+export type InventoryHistoryLotAge = { items: number | null; value: number } | null
+
 /** Liczby kafelków raportu dla zarządu zapisane jednego dnia (historia zapasów). */
 export type InventoryHistoryBuckets = {
   stock: InventoryHistoryTotal
@@ -857,6 +860,9 @@ export type InventoryHistoryBuckets = {
   never_sold: InventoryHistoryTotal
   stale_36: InventoryHistoryTotal
   stale_60: InventoryHistoryTotal
+  /** Leży w magazynie ponad pół roku / rok: sztuki z dostaw przyjętych co najmniej tyle temu. */
+  lot_age_6: InventoryHistoryLotAge
+  lot_age_12: InventoryHistoryLotAge
 }
 
 /**

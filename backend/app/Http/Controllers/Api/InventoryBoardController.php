@@ -346,18 +346,25 @@ class InventoryBoardController extends Controller
     }
 
     /**
-     * Koszyki z zapisu dnia: pozycje i wartość (bez „jak długo leży”).
+     * Koszyki z zapisu dnia: pozycje i wartość; lot_age_6/12 — „leży ponad pół roku / rok” (items null w pierwszym
+     * zapisie nocnym).
      *
-     * @return array<string, array{items: int, value: float}>
+     * @return array<string, array{items: int|null, value: float}|null>
      */
     private function historyBuckets(string $json): array
     {
         $totals = json_decode($json, true);
-        $buckets = is_array($totals) && is_array($totals['buckets'] ?? null) ? $totals['buckets'] : [];
+        $totals = is_array($totals) ? $totals : [];
+        $buckets = is_array($totals['buckets'] ?? null) ? $totals['buckets'] : [];
         $out = [];
         foreach (self::HISTORY_BUCKETS as $key) {
             $b = $buckets[$key] ?? null;
             $out[$key] = is_array($b) ? ['items' => (int) ($b['items'] ?? 0), 'value' => round((float) ($b['value'] ?? 0), 2)] : null;
+        }
+        // „leży ponad…” — sztuki z dostaw starszych niż próg (pierwszy zapis nocny: bez liczby towarów)
+        $ages = InventorySnapshots::lotAgeThresholds($totals);
+        foreach ([6, 12] as $m) {
+            $out['lot_age_'.$m] = $ages[$m] ?? null;
         }
 
         return $out;

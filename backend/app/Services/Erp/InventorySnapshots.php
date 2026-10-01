@@ -30,6 +30,44 @@ final class InventorySnapshots
     /** Wersja reguł koszyków zapisana przy każdym wierszu — zmiana reguł = nowa wersja (historia nieporównywalna wprost). */
     public const RULES_VERSION = 2; // 2: „jak długo leży” narastająco (lot_age_6…60) zamiast przedziałów lot_age_0_6…
 
+    /**
+     * „Jak długo leży” z zapisu dnia, narastająco (miesiące → pozycje, wartość). Wersja 2 zapisuje progi wprost; wersja 1
+     * (pierwszy zapis nocny 1.10.2026) — przedziały sumujące się: wartość progu = suma przedziałów od progu wzwyż, liczby
+     * towarów nie da się z nich złożyć (null). Pusta tablica, gdy zapis nie ma partii.
+     *
+     * @param  array<string, mixed>  $totals
+     * @return array<int, array{items: int|null, value: float}>
+     */
+    public static function lotAgeThresholds(array $totals): array
+    {
+        $buckets = is_array($totals['lot_age']['buckets'] ?? null) ? $totals['lot_age']['buckets'] : [];
+        $intervals = false;
+        foreach ($buckets as $b) {
+            $intervals = $intervals || (is_array($b) && ($b['to_months'] ?? null) !== null);
+        }
+        $out = [];
+        foreach ([6, 12, 24, 36, 48, 60] as $m) {
+            if ($intervals) {
+                $value = 0.0;
+                foreach ($buckets as $b) {
+                    if (is_array($b) && ($b['from_months'] ?? null) !== null && (int) $b['from_months'] >= $m) {
+                        $value += (float) ($b['value'] ?? 0);
+                    }
+                }
+                $out[$m] = ['items' => null, 'value' => round($value, 2)];
+
+                continue;
+            }
+            foreach ($buckets as $b) {
+                if (is_array($b) && ($b['key'] ?? null) === 'lot_age_'.$m) {
+                    $out[$m] = ['items' => (int) ($b['items'] ?? 0), 'value' => round((float) ($b['value'] ?? 0), 2)];
+                }
+            }
+        }
+
+        return $out;
+    }
+
     /** Dzień ostatniego pełnego odczytu stanów (czas polski) albo null, gdy nic jeszcze nie odczytano. */
     public function readingDate(): ?CarbonImmutable
     {

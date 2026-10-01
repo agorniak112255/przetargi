@@ -537,6 +537,7 @@ final class ErpXlClient implements ErpXlGateway
         }
         $in = implode(',', array_map('intval', $gids));
         $since = max(0, $sinceTimestamp);
+        $this->yieldToXl();
         $lots = $this->db()->select(<<<SQL
             SELECT z.TwZ_TwrNumer AS gid, z.TwZ_DstNumer AS dst, m.MAG_Kod AS warehouse_code, MIN(d.Dst_DstTStamp) AS received_at,
                    SUM(z.TwZ_Ilosc) AS quantity, SUM(z.TwZ_KsiegowaNetto) AS book_value
@@ -589,6 +590,7 @@ final class ErpXlClient implements ErpXlGateway
         $in = implode(',', array_map('intval', $gids));
         $types = implode(',', self::SALE_TYPES);
         $from = (int) $fromClarionDate;
+        $this->yieldToXl();
         $base = <<<SQL
             FROM CDN.TraElem e
             JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
@@ -615,6 +617,16 @@ final class ErpXlClient implements ErpXlGateway
                 return ['gid' => (int) $r->gid, 'warehouse_code' => $code !== '' ? $code : null, 'since' => (int) $r->since];
             }, $standing),
         ];
+    }
+
+    /**
+     * Długie odczyty historii w dzień (01.10.2026: zapytanie wybrane przez SQL Server jako ofiara zakleszczenia z pracą
+     * w XL): bez blokad współdzielonych (odczyt niezatwierdzonych — dla historii zapasu bez znaczenia) i przy konflikcie
+     * zawsze ustępuje użytkownikom XL. Ustawienie sesji połączenia — tylko w procesie, który czyta historię.
+     */
+    private function yieldToXl(): void
+    {
+        $this->db()->statement('SET DEADLOCK_PRIORITY LOW; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED');
     }
 
     private function db(): ConnectionInterface

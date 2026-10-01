@@ -904,13 +904,18 @@ const HISTORY_RANGES: { key: string; label: string; days: number | null }[] = [
   { key: 'all', label: 'od początku', days: null },
 ]
 
-type HistoryMetric = 'stock' | 'no_sale_6' | 'no_sale_12'
+type HistoryMetric = 'stock' | 'no_sale_6' | 'no_sale_12' | 'lot_age_6' | 'lot_age_12'
 
-/** Trzy wykresy historii: cały towar (bez oceny kierunku) i dwa progi bez sprzedaży (spadek = dobrze). */
+/**
+ * Wykresy historii: cały towar (bez oceny kierunku), dwa progi bez sprzedaży i dwa progi „leży” — sztuki z dostaw
+ * starszych niż pół roku / rok (spadek = dobrze).
+ */
 const HISTORY_METRICS: { key: HistoryMetric; label: string; stroke: string; lowerIsBetter: boolean }[] = [
   { key: 'stock', label: 'Cały towar', stroke: '#334155', lowerIsBetter: false },
   { key: 'no_sale_6', label: 'Ponad pół roku bez sprzedaży', stroke: '#b45309', lowerIsBetter: true },
   { key: 'no_sale_12', label: 'Ponad rok bez sprzedaży', stroke: '#b91c1c', lowerIsBetter: true },
+  { key: 'lot_age_6', label: 'Leży w magazynie ponad pół roku', stroke: '#b45309', lowerIsBetter: true },
+  { key: 'lot_age_12', label: 'Leży w magazynie ponad rok', stroke: '#b91c1c', lowerIsBetter: true },
 ]
 
 /** Kolor zmiany: przy zalegającym towarze spadek zielony, wzrost czerwony; cały towar — bez oceny. */
@@ -1092,7 +1097,7 @@ function HistoryChart({
 }) {
   const values = points
     .map((p) => ({ date: p.date, value: p[metric.key]?.value ?? null, items: p[metric.key]?.items ?? null }))
-    .filter((p): p is { date: string; value: number; items: number } => p.value !== null)
+    .filter((p): p is { date: string; value: number; items: number | null } => p.value !== null)
   if (values.length < 2) {
     return (
       <div className="rounded-xl border border-slate-200 px-3 py-2">
@@ -1140,7 +1145,7 @@ function HistoryChart({
           </span>
         </span>
         <span className="block text-base text-slate-700">
-          {goods(lastPoint.items)} · od {shortDate(firstPoint.date, true)}: {fmtBig(firstPoint.value)}
+          {lastPoint.items !== null ? `${goods(lastPoint.items)} · ` : ''}od {shortDate(firstPoint.date, true)}: {fmtBig(firstPoint.value)}
         </span>
       </figcaption>
       <svg
@@ -1155,7 +1160,7 @@ function HistoryChart({
         <path d={d} fill="none" stroke={metric.stroke} strokeWidth={2.5} vectorEffect="non-scaling-stroke" />
         {values.map((v) => (
           <circle key={v.date} cx={x(v.date)} cy={y(v.value)} r={values.length > 60 ? 0 : 2.5} fill={metric.stroke}>
-            <title>{`${longDate(v.date)}: ${fmtBig(v.value)} (${goods(v.items)})`}</title>
+            <title>{`${longDate(v.date)}: ${fmtBig(v.value)}${v.items !== null ? ` (${goods(v.items)})` : ''}`}</title>
           </circle>
         ))}
       </svg>
@@ -1210,6 +1215,8 @@ function HistoryCompare({ compare, place }: { compare: NonNullable<InventoryHist
               {head('Cały towar')}
               {head('Ponad pół roku bez sprzedaży')}
               {head('Ponad rok bez sprzedaży')}
+              {head('Leży ponad pół roku')}
+              {head('Leży ponad rok')}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-200">
@@ -1221,6 +1228,8 @@ function HistoryCompare({ compare, place }: { compare: NonNullable<InventoryHist
                 {cell(l.start?.stock, l.end?.stock, false)}
                 {cell(l.start?.no_sale_6, l.end?.no_sale_6, true)}
                 {cell(l.start?.no_sale_12, l.end?.no_sale_12, true)}
+                {cell(l.start?.lot_age_6, l.end?.lot_age_6, true)}
+                {cell(l.start?.lot_age_12, l.end?.lot_age_12, true)}
               </tr>
             ))}
           </tbody>

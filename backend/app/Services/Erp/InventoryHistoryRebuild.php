@@ -7,6 +7,7 @@ namespace App\Services\Erp;
 use App\Models\ErpWarehouse;
 use App\Support\ClarionDate;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -37,6 +38,9 @@ final class InventoryHistoryRebuild
 
     private const BUCKETS = ['stock', 'no_sale_6', 'no_sale_12', 'no_sale_24', 'never_sold', 'stale_36', 'stale_60'];
 
+    /** „Jak długo leży” narastająco (InventoryBoardTotals::LOT_AGES): sztuki z dostaw przyjętych co najmniej tyle miesięcy temu. */
+    private const LOT_AGE_MONTHS = [6, 12, 24, 36, 48, 60];
+
     /** Tolerancja kontroli szwu (względna). */
     private const SEAM_STOCK = 0.01;
 
@@ -52,7 +56,7 @@ final class InventoryHistoryRebuild
     /**
      * @param  callable(string): void|null  $say
      * @param  callable(float): void|null  $sleep
-     * @return array{status: string, first_live: ?string, days: list<string>, skipped: int, items: int, sql_seconds: float, pause_seconds: float, negative_lots: int, unknown_types: array<int, int>, seam: list<array<string, mixed>>, seam_ok: bool, rows: int, preview?: list<array{date: string, stock: float, no_sale_6: float, no_sale_12: float}>}
+     * @return array{status: string, first_live: ?string, days: list<string>, skipped: int, items: int, sql_seconds: float, pause_seconds: float, negative_lots: int, unknown_types: array<int, int>, seam: list<array<string, mixed>>, seam_ok: bool, rows: int, preview?: list<array{date: string, stock: float, no_sale_6: float, no_sale_12: float, lot_age_6: float, lot_age_12: float}>}
      */
     public function run(int $days, bool $write = true, bool $force = false, ?callable $say = null, float $workSeconds = 5.0, float $pauseSeconds = 5.0, ?callable $sleep = null): array
     {
@@ -99,7 +103,7 @@ final class InventoryHistoryRebuild
         $labelDays = array_map(self::dayNumber(...), $labels);
         $cut = [];
         foreach ($labels as $li => $label) {
-            foreach ([6, 12, 24, 36, 60] as $m) {
+            foreach ([6, 12, 24, 36, 48, 60] as $m) {
                 $cut[$li][$m] = self::dayNumber(CarbonImmutable::parse($label)->subMonthsNoOverflow($m)->toDateString());
             }
         }
@@ -115,8 +119,21 @@ final class InventoryHistoryRebuild
         $result['items'] = count($gids);
         foreach (array_chunk($gids, self::CHUNK) as $n => $chunk) {
             $t0 = microtime(true);
-            $history = $this->xl->lotHistory($chunk, $since);
-            $sales = $this->xl->saleHistory($chunk, $fromClarion);
+            // zakleszczenie z pracą w XL (nasze zapytanie ustępuje): odpoczynek i ponowienie paczki, najwyżej 3 razy
+            for ($try = 1; ; $try++) {
+                try {
+                    $history = $this->xl->lotHistory($chunk, $since);
+                    $sales = $this->xl->saleHistory($chunk, $fromClarion);
+                    break;
+                } catch (QueryException $e) {
+                    if ($try >= 3 || ! str_contains($e->getMessage(), 'deadlock')) {
+                        throw $e;
+                    }
+                    $say(sprintf('Konflikt z pracą w XL — odpoczynek %.0f s i ponowienie paczki.', max(5.0, $pauseSeconds)));
+                    $sleep(max(5.0, $pauseSeconds));
+                    $result['pause_seconds'] += max(5.0, $pauseSeconds);
+                }
+            }
             $spent = microtime(true) - $t0;
             $result['sql_seconds'] += $spent;
             $work += $spent;
@@ -139,7 +156,8 @@ final class InventoryHistoryRebuild
             if ($li === 0 || str_ends_with($label, '-01')) {
                 $a = $acc[$li]['|trade'] ?? [];
                 $result['preview'][] = ['date' => $label, 'stock' => round($a['stock'][1] ?? 0.0, 2),
-                    'no_sale_6' => round($a['no_sale_6'][1] ?? 0.0, 2), 'no_sale_12' => round($a['no_sale_12'][1] ?? 0.0, 2)];
+                    'no_sale_6' => round($a['no_sale_6'][1] ?? 0.0, 2), 'no_sale_12' => round($a['no_sale_12'][1] ?? 0.0, 2),
+                    'lot_age_6' => round($a['lot_age_6'][1] ?? 0.0, 2), 'lot_age_12' => round($a['lot_age_12'][1] ?? 0.0, 2)];
             }
         }
         $result['preview'] = array_reverse($result['preview'] ?? []);
@@ -290,6 +308,14 @@ final class InventoryHistoryRebuild
                     if ($lot['rec'] !== null && (! isset($w['rec']) || $lot['rec'] < $w['rec'])) {
                         $w['rec'] = $lot['rec'];
                     }
+                    // jak długo leży: sztuki z dostaw przyjętych najpóźniej próg temu
+                    if ($lot['rec'] !== null) {
+                        foreach (self::LOT_AGE_MONTHS as $m) {
+                            if ($lot['rec'] <= $cut[$li][$m]) {
+                                $w['age'][$m] = ($w['age'][$m] ?? 0.0) + $lot['v'];
+                            }
+                        }
+                    }
                     unset($w);
                 }
             }
@@ -314,6 +340,9 @@ final class InventoryHistoryRebuild
                         $c['v'] = ($c['v'] ?? 0.0) + $w['v'];
                         if (isset($w['rec']) && (! isset($c['rec']) || $w['rec'] < $c['rec'])) {
                             $c['rec'] = $w['rec'];
+                        }
+                        foreach ($w['age'] ?? [] as $m => $v) {
+                            $c['age'][$m] = ($c['age'][$m] ?? 0.0) + $v;
                         }
                         unset($c);
                     }
@@ -357,6 +386,10 @@ final class InventoryHistoryRebuild
                         $acc[$li][$key][$bucket][1] = ($acc[$li][$key][$bucket][1] ?? 0.0) + $c['v'];
                     }
                 }
+                foreach ($c['age'] ?? [] as $m => $v) {
+                    $acc[$li][$key]['lot_age_'.$m][0] = ($acc[$li][$key]['lot_age_'.$m][0] ?? 0) + 1;
+                    $acc[$li][$key]['lot_age_'.$m][1] = ($acc[$li][$key]['lot_age_'.$m][1] ?? 0.0) + $v;
+                }
             }
         }
     }
@@ -373,10 +406,15 @@ final class InventoryHistoryRebuild
         $ok = true;
         $live = DB::table(InventorySnapshots::TABLE)->where('taken_on', $day)->where('source', 'live')->get(['location', 'scope', 'totals']);
         foreach ($live as $r) {
-            $buckets = json_decode((string) $r->totals, true)['buckets'] ?? [];
+            $totals = json_decode((string) $r->totals, true);
+            $buckets = $totals['buckets'] ?? [];
+            $ages = InventorySnapshots::lotAgeThresholds(is_array($totals) ? $totals : []);
             $key = $r->location.'|'.$r->scope;
-            foreach (['stock', 'no_sale_6', 'no_sale_12'] as $b) {
-                $liveValue = (float) ($buckets[$b]['value'] ?? 0);
+            foreach (['stock', 'no_sale_6', 'no_sale_12', 'lot_age_6', 'lot_age_12'] as $b) {
+                if (str_starts_with($b, 'lot_age_') && ! isset($ages[(int) substr($b, 8)])) {
+                    continue;
+                }
+                $liveValue = str_starts_with($b, 'lot_age_') ? $ages[(int) substr($b, 8)]['value'] : (float) ($buckets[$b]['value'] ?? 0);
                 $rebuiltValue = (float) ($rebuilt[$key][$b][1] ?? 0.0);
                 $diff = abs($rebuiltValue - $liveValue) / max(1.0, abs($liveValue));
                 $limit = $b === 'stock' ? self::SEAM_STOCK : self::SEAM_UNSOLD;
@@ -419,9 +457,15 @@ final class InventoryHistoryRebuild
                             $a = $acc[$li][$location.'|'.$scope][$b] ?? [0, 0.0];
                             $buckets[$b] = ['items' => $a[0], 'value' => round($a[1], 2), 'value_unknown' => 0];
                         }
+                        // jak długo leży — w postaci InventoryBoardTotals::lotAgeSummary (bez dostaw bez daty)
+                        $lotAge = ['buckets' => [], 'items' => $buckets['stock']['items'], 'value' => $buckets['stock']['value'], 'value_unknown_items' => 0];
+                        foreach (self::LOT_AGE_MONTHS as $m) {
+                            $a = $acc[$li][$location.'|'.$scope]['lot_age_'.$m] ?? [0, 0.0];
+                            $lotAge['buckets'][] = ['key' => 'lot_age_'.$m, 'from_months' => $m, 'to_months' => null, 'items' => $a[0], 'value' => round($a[1], 2)];
+                        }
                         $rows[] = [
                             'taken_on' => $day, 'location' => $location, 'scope' => $scope, 'source' => 'xl_history',
-                            'totals' => json_encode(['version' => InventorySnapshots::RULES_VERSION, 'buckets' => $buckets, 'lot_age' => null,
+                            'totals' => json_encode(['version' => InventorySnapshots::RULES_VERSION, 'buckets' => $buckets, 'lot_age' => $lotAge,
                                 'service_codes' => $serviceCodes], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE),
                             'read_at' => $now, 'created_at' => $now, 'updated_at' => $now,
                         ];

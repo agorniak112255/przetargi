@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Support;
 
 use App\Services\Erp\ErpXlGateway;
+use Illuminate\Database\QueryException;
 
 /** Atrapa Comarch ERP XL: wiersze w postaci, jaką zwraca ErpXlClient. */
 final class FakeErpXlGateway implements ErpXlGateway
@@ -174,9 +175,17 @@ final class FakeErpXlGateway implements ErpXlGateway
 
     public int $historyCalls = 0;
 
+    /** Tyle pierwszych wywołań lotHistory kończy się zakleszczeniem (SQL Server wybiera nasze zapytanie jako ofiarę). */
+    public int $historyDeadlocks = 0;
+
     public function lotHistory(array $gids, int $sinceTimestamp): array
     {
         $this->historyCalls++;
+        if ($this->historyDeadlocks > 0) {
+            $this->historyDeadlocks--;
+
+            throw new QueryException('erpxl', 'SELECT 1', [], new \PDOException('Transaction was deadlocked on lock resources with another process'));
+        }
 
         return [
             'lots' => array_values(array_filter($this->historyLots, static fn (array $r): bool => in_array($r['gid'], $gids, true))),

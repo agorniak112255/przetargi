@@ -13,6 +13,7 @@ use App\Services\Erp\WarehouseLocations;
 use App\Services\Erp\WarehouseSplit;
 use App\Support\ClarionDate;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -62,6 +63,14 @@ final class InventoryHistoryRebuildTest extends TestCase
         // ostatnia sprzedaż przed 1.10 — czerwiec 2025: ponad rok bez sprzedaży; partia z 2024 r. — nie 3 lata
         $this->assertEquals(['items' => 1, 'value' => 100, 'value_unknown' => 0], $this->bucket('2026-10-01', '', 'all', 'no_sale_12'));
         $this->assertEquals(['items' => 0, 'value' => 0, 'value_unknown' => 0], $this->bucket('2026-10-01', '', 'all', 'stale_36'));
+        // leży ponad pół roku / rok: tylko partia 10 z 2024 r. (7 szt, 70 zł); partia 11 z 30.09 — świeża
+        $lotAge = json_decode((string) DB::table(InventorySnapshots::TABLE)->where('taken_on', '2026-10-01')->where('location', '')->where('scope', 'all')->value('totals'), true)['lot_age'];
+        $this->assertEquals(['key' => 'lot_age_6', 'from_months' => 6, 'to_months' => null, 'items' => 1, 'value' => 70], $lotAge['buckets'][0]);
+        $this->assertEquals([1, 70], [$lotAge['buckets'][1]['items'], $lotAge['buckets'][1]['value']]);
+        // 33 miesiące: ponad 2 lata tak, ponad 3 lata nie
+        $this->assertEquals([1, 70], [$lotAge['buckets'][2]['items'], $lotAge['buckets'][2]['value']]);
+        $this->assertEquals([0, 0], [$lotAge['buckets'][3]['items'], $lotAge['buckets'][3]['value']]);
+        $this->assertSame(['lot_age_6', 'lot_age_12', 'lot_age_24', 'lot_age_36', 'lot_age_48', 'lot_age_60'], array_column($lotAge['buckets'], 'key'));
         // początek 30.09: także PZ z 30.09 cofnięta → tylko partia 10
         $this->assertEquals(['items' => 1, 'value' => 70, 'value_unknown' => 0], $this->bucket('2026-09-30', '', 'all', 'stock'));
         $this->assertEquals(['items' => 1, 'value' => 70, 'value_unknown' => 0], $this->bucket('2026-09-29', '', 'trade', 'stock'));
@@ -130,7 +139,26 @@ final class InventoryHistoryRebuildTest extends TestCase
         $this->assertSame(0, $this->bucket('2026-10-01', '01', 'trade', 'never_sold')['items']);
         $this->assertSame(1, $this->bucket('2026-09-30', '01', 'trade', 'never_sold')['items']);
         $this->assertSame(1, $this->bucket('2026-09-29', '', 'all', 'no_sale_12')['items']);
-        $this->assertSame([['date' => '2026-10-02', 'stock' => 40.0, 'no_sale_6' => 0.0, 'no_sale_12' => 0.0]], array_slice($r['preview'], -1));
+        $this->assertSame([['date' => '2026-10-02', 'stock' => 40.0, 'no_sale_6' => 0.0, 'no_sale_12' => 0.0, 'lot_age_6' => 40.0, 'lot_age_12' => 40.0]], array_slice($r['preview'], -1));
+    }
+
+    public function test_deadlock_with_xl_work_pauses_and_retries_the_chunk(): void
+    {
+        $this->liveItemAndSnapshot();
+        $this->xl->historyDeadlocks = 2;
+        $sleeps = [];
+        $r = app(InventoryHistoryRebuild::class)->run(3, pauseSeconds: 5.0, sleep: function (float $s) use (&$sleeps): void {
+            $sleeps[] = $s;
+        });
+
+        $this->assertSame('saved', $r['status']);
+        $this->assertSame([5.0, 5.0], $sleeps);
+        $this->assertEquals(['items' => 1, 'value' => 100, 'value_unknown' => 0], $this->bucket('2026-10-01', '', 'all', 'stock'));
+
+        // trzeci konflikt z rzędu — przerwanie bez zapisu
+        $this->xl->historyDeadlocks = 3;
+        $this->expectException(QueryException::class);
+        app(InventoryHistoryRebuild::class)->run(3, force: true, pauseSeconds: 0.0, sleep: static function (float $s): void {});
     }
 
     public function test_without_live_snapshot_nothing_is_rebuilt(): void
