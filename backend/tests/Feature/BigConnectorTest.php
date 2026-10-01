@@ -238,6 +238,8 @@ final class BigConnectorTest extends TestCase
         $this->assertNotContains('Zolltarif = 42032910000', $fields);
         $this->assertSame(['1102_PL_Arkusz_danych_technicznych', '1102_DE_EU_Konformitätserklärung'], array_map(static fn ($d) => $d->title, $this->connectorDocuments($gloves)));
         $this->assertSame(['https://www.big-arbeitsschutz-static.de/webshop/1102_s.jpg', 'https://www.big-arbeitsschutz-static.de/webshop/1102_Handr%C3%BCcken_s.jpg', 'https://www.big-arbeitsschutz-static.de/webshop/1102_brak_s.jpg'], $gloves->raw['images']);
+        // PDF wydany jako application/octet-stream — typ z treści (zapis plików przyjmuje tylko znane typy)
+        $this->assertSame('application/pdf', $connector->documentBytes($this->connectorDocuments($gloves)[0])['mime']);
         // zdjęcie z cennika, którego serwer nie ma (404) — pominięte bez błędu
         $this->assertNull($connector->imageAt('https://www.big-arbeitsschutz-static.de/webshop/1102_brak_s.jpg'));
         $this->assertSame('image/jpeg', $connector->imageAt('https://www.big-arbeitsschutz-static.de/webshop/1102_s.jpg')?->mime);
@@ -808,7 +810,8 @@ final class BigConnectorTest extends TestCase
                 return Http::response($page, 200);
             }
             if (str_starts_with($path, '/artikeldokumente/')) {
-                return Http::response('%PDF-1.4 big '.$path, 200, ['Content-Type' => 'application/pdf']);
+                // sklep wydaje PDF-y jako application/octet-stream (sprawdzone na żywo 01.10.2026)
+                return Http::response('%PDF-1.4 big '.$path, 200, ['Content-Type' => 'application/octet-stream']);
             }
 
             return Http::response('nie ma', 404);

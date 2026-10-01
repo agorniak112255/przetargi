@@ -227,8 +227,24 @@ final class BigB2bClient
         if ($bytes === '' || $mime === 'text/html' || self::looksLikeHtml($bytes)) {
             throw new RuntimeException('witryna nie wydała pliku '.$url.' (pusta treść albo strona HTML)');
         }
+        // /artikeldokumente/ wydaje PDF-y jako application/octet-stream (sprawdzone 01.10.2026), a zapis plików przyjmuje
+        // tylko znane typy — typ z treści pliku
+        if ($mime === '' || $mime === 'application/octet-stream') {
+            $mime = self::sniffMime($bytes) ?? 'application/octet-stream';
+        }
 
-        return ['bytes' => $bytes, 'mime' => $mime !== '' ? $mime : 'application/octet-stream'];
+        return ['bytes' => $bytes, 'mime' => $mime];
+    }
+
+    private static function sniffMime(string $bytes): ?string
+    {
+        return match (true) {
+            str_starts_with($bytes, '%PDF-') => 'application/pdf',
+            str_starts_with($bytes, "\xFF\xD8\xFF") => 'image/jpeg',
+            str_starts_with($bytes, "\x89PNG\r\n\x1A\n") => 'image/png',
+            str_starts_with($bytes, 'RIFF') && substr($bytes, 8, 4) === 'WEBP' => 'image/webp',
+            default => null,
+        };
     }
 
     public static function hasLoggedInMarker(string $html): bool
