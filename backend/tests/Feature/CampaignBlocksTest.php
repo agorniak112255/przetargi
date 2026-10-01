@@ -168,6 +168,23 @@ final class CampaignBlocksTest extends TestCase
         $this->assertSame(CampaignBlocks::standard(), $campaign->effectiveBlocks());
     }
 
+    public function test_removed_layouts_are_replaced_without_touching_stored_data(): void
+    {
+        // usunięte 01.10.2026: wyróżniony + siatka, kafelki po 4 → po 3; wyprzedaż → po 2; duże zdjęcia → lista z normami
+        foreach (['hero' => 'grid3', 'grid4' => 'grid3', 'sale' => 'grid2', 'big' => 'list_desc'] as $removed => $kept) {
+            $this->assertSame([['type' => 'products', 'layout' => $kept]], CampaignBlocks::validate([['type' => 'products', 'layout' => $removed]], true), $removed);
+
+            $campaign = new Campaign(['layout' => $removed]);
+            $this->assertSame(['type' => 'products', 'layout' => $kept], $campaign->effectiveBlocks()[3], $removed);
+
+            $campaign->blocks = [['type' => 'text', 'text' => 'x'], ['type' => 'products', 'layout' => $removed]];
+            $this->assertSame([['type' => 'text', 'text' => 'x'], ['type' => 'products', 'layout' => $kept]], $campaign->effectiveBlocks(), $removed);
+            // zapis w bazie bez zmian — odczyt tylko podmienia układ
+            $this->assertSame($removed, $campaign->blocks[1]['layout']);
+        }
+        $this->assertNotContains('hero', Campaign::LAYOUTS);
+    }
+
     private function assertInvalid(mixed $blocks, string $key, ?string $message = null, string $case = '', bool $strict = false): void
     {
         try {

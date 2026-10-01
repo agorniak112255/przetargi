@@ -79,6 +79,9 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::get('/product-images/{image}/thumb', [ProductImageThumbController::class, 'show'])
     ->whereNumber('image')
     ->name('product-images.thumb');
+Route::get('/product-images/{image}/square', [ProductImageThumbController::class, 'square'])
+    ->whereNumber('image')
+    ->name('product-images.square');
 // Obrazki w mailach kampanii (logo, grafika) — publiczne, bo klient otwiera je bez logowania. Bez limitu zapytań
 // (jak miniatury produktów): pośrednicy Gmaila/Outlooka pobierają obrazki wielu odbiorców z jednego adresu IP.
 Route::get('/campaign-assets/{uuid}', [CampaignAssetController::class, 'show'])

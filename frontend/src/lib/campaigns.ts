@@ -10,11 +10,7 @@ export type CampaignLayout =
   | 'list'
   | 'grid2_desc'
   | 'list_desc'
-  | 'hero'
-  | 'sale'
-  | 'grid4'
   | 'pricelist'
-  | 'big'
 export type CampaignXlMode = 'items' | 'group' | 'mine'
 
 export const CAMPAIGN_LAYOUT_LABEL: Record<CampaignLayout, string> = {
@@ -23,29 +19,21 @@ export const CAMPAIGN_LAYOUT_LABEL: Record<CampaignLayout, string> = {
   list: 'Lista z opisem',
   grid2_desc: 'Siatka po 2 z opisem',
   list_desc: 'Lista z opisem i normami',
-  hero: 'Wyróżniony + siatka',
-  sale: 'Wyprzedaż zapasów',
-  grid4: 'Kafelki po 4',
   pricelist: 'Cennik (tabela)',
-  big: 'Duże zdjęcia',
 }
 
 /** Co pokazuje układ — podpowiedź pod wyborem układu. */
 export const CAMPAIGN_LAYOUT_HINT: Record<CampaignLayout, string> = {
-  grid3: 'Zdjęcie, nazwa, cena i przycisk — trzy produkty w rzędzie.',
-  grid2: 'Większe zdjęcia, dwa produkty w rzędzie.',
+  grid3: 'Zdjęcie, nazwa, cena i przycisk — trzy produkty w rzędzie, karty równej wysokości.',
+  grid2: 'Większe zdjęcia, dwa produkty w rzędzie, karty równej wysokości.',
   list: 'Zdjęcie z lewej, obok nazwa, krótki opis i cena.',
   grid2_desc: 'Dwa w rzędzie z krótkim opisem pod nazwą.',
   list_desc: 'Zdjęcie z lewej, krótki opis i normy z karty (np. EN 388).',
-  hero: 'Pierwszy produkt duży z opisem i normami, pozostałe po trzy.',
-  sale: 'Plakietka −% (gdy wpiszesz cenę przed) i „Zostało: … szt”.',
-  grid4: 'Małe kafelki: zdjęcie, nazwa, cena — dużo pozycji naraz.',
   pricelist: 'Tabela bez zdjęć: nazwa, kod, cena, stan i „Zapytaj”.',
-  big: 'Jeden produkt w wierszu, zdjęcie na całą szerokość, opis i normy.',
 }
 
 /** Układy, w których mail pokazuje krótki opis produktu. */
-export const LAYOUTS_WITH_DESCRIPTION: CampaignLayout[] = ['list', 'grid2_desc', 'list_desc', 'hero', 'big']
+export const LAYOUTS_WITH_DESCRIPTION: CampaignLayout[] = ['list', 'grid2_desc', 'list_desc']
 
 /**
  * Element maila (kolejność w tablicy = kolejność w mailu). Pola zawsze obecne, puste = '' / null.

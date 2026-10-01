@@ -174,12 +174,15 @@ class CampaignItemPresenter
         return $out;
     }
 
-    /** Absolutny adres miniatury do maila (publiczny adres aplikacji); null, gdy public_url nieustawiony. */
+    /**
+     * Absolutny adres zdjęcia do maila (publiczny adres aplikacji): kwadrat na białym tle, żeby karty w siatce miały
+     * równą wysokość; null, gdy public_url nieustawiony.
+     */
     public function publicImageUrl(int $imageId): ?string
     {
         $base = rtrim((string) config('campaigns.public_url'), '/');
 
-        return $base === '' ? null : $base.'/api/product-images/'.$imageId.'/thumb';
+        return $base === '' ? null : $base.'/api/product-images/'.$imageId.'/square';
     }
 
     private function thumbUrl(int $imageId): string

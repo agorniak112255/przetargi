@@ -7,6 +7,7 @@ namespace Tests\Feature;
 use App\Models\Product;
 use App\Models\ProductImage;
 use App\Models\User;
+use App\Services\ProductImageThumbService;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
@@ -40,6 +41,24 @@ final class ProductImageThumbTest extends TestCase
         $this->assertGreaterThan(0.55, $this->nonWhiteRatio($out));
         imagedestroy($out);
         Storage::disk('local')->assertExists('product-thumbs/'.$image->id.'-'.$image->checksum.'.jpg');
+    }
+
+    public function test_square_for_campaign_mail_is_public_and_cached_separately(): void
+    {
+        $this->requireGd();
+        $image = $this->storePaddedImage();
+
+        $res = $this->get('/api/product-images/'.$image->id.'/square');
+        $res->assertOk();
+        $this->assertSame('image/jpeg', $res->headers->get('Content-Type'));
+        $out = imagecreatefromstring($res->getContent());
+        $this->assertNotFalse($out);
+        $this->assertSame(ProductImageThumbService::SQUARE_SIDE, imagesx($out));
+        $this->assertSame(ProductImageThumbService::SQUARE_SIDE, imagesy($out));
+        imagedestroy($out);
+        Storage::disk('local')->assertExists('product-thumbs/'.$image->id.'-'.$image->checksum.'-sq'.ProductImageThumbService::SQUARE_SIDE.'.jpg');
+        // zwykła miniatura nie powstaje przy okazji
+        Storage::disk('local')->assertMissing('product-thumbs/'.$image->id.'-'.$image->checksum.'.jpg');
     }
 
     public function test_product_list_exposes_thumb_url(): void

@@ -18,7 +18,17 @@ class ProductImageThumbController extends Controller
 
     public function show(ProductImage $image): Response|RedirectResponse
     {
-        $jpeg = $this->thumbs->jpeg($image);
+        return $this->respond($image, $this->thumbs->jpeg($image));
+    }
+
+    /** Kwadrat na białym tle do maili kampanii — publiczny jak miniatura (klient otwiera mail bez logowania). */
+    public function square(ProductImage $image): Response|RedirectResponse
+    {
+        return $this->respond($image, $this->thumbs->squareJpeg($image));
+    }
+
+    private function respond(ProductImage $image, ?string $jpeg): Response|RedirectResponse
+    {
         if ($jpeg === null) {
             return redirect()->away($image->url());
         }

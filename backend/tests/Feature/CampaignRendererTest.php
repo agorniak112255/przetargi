@@ -61,7 +61,8 @@ final class CampaignRendererTest extends TestCase
         $this->assertEquals(10, $rows[0]['unit_cost']);
         $this->assertEquals(12.5, $rows[0]['suggested_price']);
         $imageId = ProductImage::query()->where('product_id', $main->id)->value('id');
-        $this->assertSame('https://przetargi.example.pl/api/product-images/'.$imageId.'/thumb', $rows[0]['image_url']);
+        // do maila kwadrat na białym tle — równe pola zdjęć w siatce
+        $this->assertSame('https://przetargi.example.pl/api/product-images/'.$imageId.'/square', $rows[0]['image_url']);
         $this->assertTrue($rows[0]['warnings']['below_cost']);
         $this->assertFalse($rows[0]['warnings']['no_stock']);
         $this->assertSame([['id' => $other->id, 'code' => $other->code, 'name' => 'Obuwie jesień', 'author' => 'Jan Handlowiec']], $rows[0]['warnings']['other_campaigns']);
@@ -138,21 +139,45 @@ final class CampaignRendererTest extends TestCase
         $campaign = $this->campaign($author, $items, ['layout' => 'grid2']);
 
         $html = app(CampaignRenderer::class)->render($campaign)['html'];
+        // siatka: każdy rząd kart = wiersz zdjęć, wiersz treści i wiersz przycisków
+        $this->assertSame(4, substr_count($html, 'width="50%" align="center" valign="middle"'));
         $this->assertSame(4, substr_count($html, 'width="50%" valign="top"'));
+        $this->assertSame(4, substr_count($html, 'width="50%" valign="bottom"'));
+        $this->assertSame(4, substr_count($html, '>Zapytaj o ofertę</a>'));
         $this->assertStringNotContainsString('line-through', $html);
 
         $campaign->update(['layout' => 'list']);
         $html = app(CampaignRenderer::class)->render($campaign->fresh())['html'];
         $this->assertSame(4, substr_count($html, 'width="100%" valign="top"'));
+        $this->assertStringNotContainsString('valign="bottom"', $html);
 
         $campaign->update(['layout' => 'grid3']);
         $html = app(CampaignRenderer::class)->render($campaign->fresh())['html'];
-        // 4 pozycje w 3 kolumnach: druga linia dopełniona pustymi komórkami
-        $this->assertSame(4, substr_count($html, 'width="33%" valign="top"'));
-        $this->assertSame(2, substr_count($html, '<td width="33%" style="padding:6px;"></td>'));
+        // 4 pozycje w 3 kolumnach: druga linia dopełniona pustymi komórkami w każdym z trzech wierszy
+        $this->assertSame(4, substr_count($html, 'width="33%" align="center" valign="middle"'));
+        $this->assertSame(4, substr_count($html, 'width="33%" valign="bottom"'));
+        $this->assertSame(6, substr_count($html, '<td width="33%"></td>'));
     }
 
-    public function test_product_layouts_with_card_excerpt_norms_sale_and_price_list(): void
+    public function test_grid_cards_get_equal_image_box_and_buttons_in_one_row(): void
+    {
+        $author = $this->sender();
+        $tall = $this->erpItem('A1');
+        $card = $this->card('ULTRANE-525', 'ULTRANE 525');
+        ErpItemLink::query()->create(['erp_item_id' => $tall->id, 'product_id' => $card->id, 'status' => ErpItemLink::STATUS_CONFIRMED, 'method' => 'name']);
+        $campaign = $this->campaign($author, [$tall, $this->erpItem('A2')], ['layout' => 'grid3']);
+        $html = app(CampaignRenderer::class)->render($campaign)['html'];
+        $imageId = ProductImage::query()->where('product_id', $card->id)->value('id');
+
+        // zdjęcie: kwadrat, w atrybucie tylko szerokość (bez height — klient bez CSS nie rozciągnie starych miniatur)
+        $this->assertStringContainsString('<img src="https://przetargi.example.pl/api/product-images/'.$imageId.'/square" width="160" alt="ULTRANE 525" style="display:block;margin:0 auto;width:auto;height:auto;max-width:100%;max-height:160px;', $html);
+        // pozycja bez zdjęcia: szare pole tej samej wielkości
+        $this->assertStringContainsString('<div style="width:160px;max-width:100%;height:160px;', $html);
+        // treść i przyciski w osobnych wierszach tabeli — przyciski obu kart w jednej linii
+        $this->assertSame(1, preg_match_all('/<tr>\s*<td width="33%" valign="bottom"/', $html));
+    }
+
+    public function test_product_layouts_with_card_excerpt_norms_and_price_list(): void
     {
         $author = $this->sender();
         $gloves = $this->erpItem('R100', 40);
@@ -187,31 +212,12 @@ final class CampaignRendererTest extends TestCase
         $this->assertStringContainsString('>EN 388:2016 4121X</span>', $listDesc);
         $this->assertStringContainsString('>EN ISO 21420</span>', $listDesc);
 
-        // wyprzedaż: −% z ceny przed (149 → 89) i „Zostało”
-        $sale = $html('sale');
-        $this->assertStringContainsString('−40%', $sale);
-        $this->assertStringContainsString('Zostało: 40 szt', $sale);
-
-        $grid4 = $html('grid4');
-        $this->assertSame(3, substr_count($grid4, 'width="25%" valign="top"'));
-        $this->assertStringNotContainsString('Kod R100', $grid4);
-
         // cennik: tabela bez zdjęć, stan w kolumnie, przycisk „Zapytaj”
         $list = $html('pricelist');
         $this->assertStringContainsString('Cena netto', $list);
         $this->assertStringNotContainsString('<img', $list);
         $this->assertStringContainsString('>12 szt</td>', $list);
         $this->assertSame(3, substr_count($list, '>Zapytaj</a>'));
-
-        // wyróżniony: pierwszy produkt na całą szerokość z opisem, reszta w siatce po 3
-        $hero = $html('hero');
-        $this->assertStringContainsString('colspan="3"', $hero);
-        $this->assertStringContainsString($excerpt, $hero);
-        $this->assertSame(2, substr_count($hero, 'width="33%" valign="top"'));
-
-        $big = $html('big');
-        $this->assertStringContainsString('width="544"', $big);
-        $this->assertStringContainsString($excerpt, $big);
 
         // wersja tekstowa z opisem w układach z opisem
         $text = app(CampaignRenderer::class)->render($campaign->fresh()->fill(['layout' => 'grid2_desc']))['text'];

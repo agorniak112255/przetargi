@@ -41,6 +41,29 @@ final class ProductImageWhiteTrimTest extends TestCase
         imagedestroy($out);
     }
 
+    public function test_square_centres_trimmed_product_on_white_canvas(): void
+    {
+        $this->requireGd();
+        // wysoki produkt (rękawica) na szerokim białym tle
+        $src = $this->pngBytes(function ($im, int $black): void {
+            imagefilledrectangle($im, 90, 20, 110, 180, $black);
+        });
+
+        $jpeg = (new ProductImageWhiteTrim)->toSquareJpeg($src, 120);
+        $this->assertNotNull($jpeg);
+        $out = imagecreatefromstring((string) $jpeg);
+        $this->assertNotFalse($out);
+        $this->assertSame(120, imagesx($out));
+        $this->assertSame(120, imagesy($out));
+        // dłuższy bok wypełnia pole (bez marginesów źródła), boki białe, środek ciemny
+        $this->assertLessThan(100, imagecolorat($out, 60, 12) & 0xFF);
+        $this->assertLessThan(100, imagecolorat($out, 60, 108) & 0xFF);
+        $this->assertGreaterThan(240, imagecolorat($out, 8, 60) & 0xFF);
+        $this->assertGreaterThan(240, imagecolorat($out, 111, 60) & 0xFF);
+        $this->assertLessThan(100, imagecolorat($out, 60, 60) & 0xFF);
+        imagedestroy($out);
+    }
+
     private function requireGd(): void
     {
         if (! function_exists('imagecreatetruecolor') || ! function_exists('imagecreatefromstring')) {

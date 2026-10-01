@@ -151,7 +151,7 @@ class CampaignTemplateController extends Controller
             'owner' => $template->owner !== null ? ['id' => (int) $template->owner->id, 'name' => (string) $template->owner->name] : null,
             'can_edit' => $this->canEdit($user, $template),
             'brand_color' => $template->brand_color,
-            'blocks' => is_array($template->blocks) ? array_values($template->blocks) : CampaignBlocks::standard(),
+            'blocks' => is_array($template->blocks) ? CampaignBlocks::upgrade($template->blocks) : CampaignBlocks::standard(),
             'updated_at' => $template->updated_at?->toIso8601String(),
         ];
     }

@@ -84,30 +84,14 @@
           </tr>
 @break
 @case('products')
-@php
-    $layout = $b['layout'];
-    $columns = $b['columns'];
-    $cellWidth = (int) floor(100 / $columns);
-    $base = ['img' => 170, 'left' => false, 'desc' => false, 'norms' => false, 'sale' => false, 'compact' => false, 'big' => false];
-    // opcje karty produktu dla układu (klucze = Campaign::LAYOUTS); hero: tu opcje siatki pod produktem wyróżnionym
-    $o = [...$base, ...([
-        'grid2' => ['img' => 262],
-        'list' => ['img' => 120, 'left' => true, 'desc' => true],
-        'grid2_desc' => ['img' => 262, 'desc' => true],
-        'list_desc' => ['img' => 120, 'left' => true, 'desc' => true, 'norms' => true],
-        'sale' => ['img' => 262, 'sale' => true],
-        'grid4' => ['img' => 120, 'compact' => true],
-        'big' => ['img' => 544, 'desc' => true, 'norms' => true, 'big' => true],
-    ][$layout] ?? [])];
-@endphp
           {{-- ważność cen zawsze nad pozycjami --}}
           <tr>
             <td style="padding:12px 24px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:{{ $muted }};">{{ $validUntil }}</td>
           </tr>
           {{-- pozycje --}}
           <tr>
-            <td style="padding:8px 18px 16px;">
-@if ($layout === 'pricelist')
+            <td style="padding:8px 24px 16px;">
+@if ($b['layout'] === 'pricelist')
               {{-- cennik: tabela bez zdjęć --}}
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid {{ $line }};border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;">
                 <tr>
@@ -155,26 +139,16 @@
                 </tr>
 @endforeach
               </table>
+@elseif ($b['columns'] > 1)
+@include('emails.campaign-grid')
 @else
+              {{-- lista: jedna karta w wierszu, zdjęcie z lewej --}}
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
-@if ($b['hero'] !== null)
-                {{-- produkt wyróżniony na całą szerokość --}}
+@foreach ($b['products'] as $p)
                 <tr>
-                  <td colspan="{{ $columns }}" valign="top" style="padding:6px;">
-@include('emails.campaign-product', ['p' => $b['hero'], 'o' => [...$base, 'img' => 240, 'left' => true, 'desc' => true, 'norms' => true, 'big' => true]])
+                  <td width="100%" valign="top" style="padding:6px 0;">
+@include('emails.campaign-product')
                   </td>
-                </tr>
-@endif
-@foreach ($b['rows'] as $row)
-                <tr>
-@foreach ($row as $p)
-                  <td width="{{ $cellWidth }}%" valign="top" style="padding:6px;">
-@include('emails.campaign-product', ['p' => $p, 'o' => $o])
-                  </td>
-@endforeach
-@for ($i = count($row); $i < $columns; $i++)
-                  <td width="{{ $cellWidth }}%" style="padding:6px;"></td>
-@endfor
                 </tr>
 @endforeach
               </table>

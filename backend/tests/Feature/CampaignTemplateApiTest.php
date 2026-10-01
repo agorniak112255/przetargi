@@ -128,6 +128,21 @@ final class CampaignTemplateApiTest extends TestCase
         $this->assertSame([['type' => 'products', 'layout' => 'grid2'], ['type' => 'footer', 'text' => 'Stopka']], $campaign->blocks);
     }
 
+    public function test_template_with_removed_layout_is_shown_and_applied_with_replacement(): void
+    {
+        $user = $this->sender();
+        $template = $this->template($user, 'Stary', blocks: [['type' => 'products', 'layout' => 'sale']]);
+        $campaign = $this->campaign($user, []);
+
+        Sanctum::actingAs($user);
+        $row = collect($this->getJson('/api/campaign-templates')->assertOk()->json('data'))->firstWhere('id', $template->id);
+        $this->assertSame([['type' => 'products', 'layout' => 'grid2']], $row['blocks']);
+        $this->assertSame('sale', $template->fresh()->blocks[0]['layout']);
+
+        $this->postJson("/api/campaigns/{$campaign->id}/template", ['template_id' => $template->id])->assertOk();
+        $this->assertSame([['type' => 'products', 'layout' => 'grid2']], $campaign->fresh()->blocks);
+    }
+
     public function test_preview_renders_sample_products_without_saving(): void
     {
         $user = $this->sender();

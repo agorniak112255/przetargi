@@ -26,8 +26,11 @@ class Campaign extends Model
 
     public const STATUS_CANCELLED = 'cancelled';
 
-    /** Układy bloku produktów (CampaignRenderer::COLUMNS, emails/campaign.blade.php). */
-    public const LAYOUTS = ['grid3', 'grid2', 'list', 'grid2_desc', 'list_desc', 'hero', 'sale', 'grid4', 'pricelist', 'big'];
+    /**
+     * Układy bloku produktów (CampaignRenderer::COLUMNS, emails/campaign.blade.php). Usunięte układy z zapisanych
+     * kampanii i szablonów zamienia CampaignBlocks::REPLACED_LAYOUTS.
+     */
+    public const LAYOUTS = ['grid3', 'grid2', 'list', 'grid2_desc', 'list_desc', 'pricelist'];
 
     public const XL_MODES = ['items', 'group', 'mine'];
 
@@ -92,7 +95,7 @@ class Campaign extends Model
      */
     public function effectiveBlocks(): array
     {
-        return is_array($this->blocks) ? array_values($this->blocks) : CampaignBlocks::legacy($this);
+        return is_array($this->blocks) ? CampaignBlocks::upgrade($this->blocks) : CampaignBlocks::legacy($this);
     }
 
     /**

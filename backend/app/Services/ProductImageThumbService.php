@@ -11,13 +11,33 @@ use Illuminate\Support\Facades\Storage;
 
 final class ProductImageThumbService
 {
+    /** Bok kwadratu do maili kampanii — dwa razy większy od największego pola w mailu (ostre na ekranach HiDPI). */
+    public const SQUARE_SIDE = 440;
+
     public function __construct(
         private readonly ProductImageWhiteTrim $trim,
     ) {}
 
     public function jpeg(ProductImage $image): ?string
     {
-        $key = $this->cacheKey($image);
+        return $this->cached($image, $this->cacheKey($image, ''), fn (string $original): ?string => $this->trim->toJpeg($original));
+    }
+
+    /** Kwadrat na białym tle (ProductImageWhiteTrim::toSquareJpeg) — zdjęcia produktów w mailach kampanii. */
+    public function squareJpeg(ProductImage $image): ?string
+    {
+        return $this->cached(
+            $image,
+            $this->cacheKey($image, '-sq'.self::SQUARE_SIDE),
+            fn (string $original): ?string => $this->trim->toSquareJpeg($original, self::SQUARE_SIDE),
+        );
+    }
+
+    /**
+     * @param  callable(string): ?string  $convert
+     */
+    private function cached(ProductImage $image, string $key, callable $convert): ?string
+    {
         if (Storage::disk('local')->exists($key)) {
             $cached = Storage::disk('local')->get($key);
 
@@ -29,7 +49,7 @@ final class ProductImageThumbService
             return null;
         }
 
-        $jpeg = $this->trim->toJpeg($original);
+        $jpeg = $convert($original);
         if ($jpeg === null) {
             return null;
         }
@@ -39,11 +59,11 @@ final class ProductImageThumbService
         return $jpeg;
     }
 
-    private function cacheKey(ProductImage $image): string
+    private function cacheKey(ProductImage $image, string $variant): string
     {
         $sum = (string) ($image->checksum ?: hash('sha256', $image->path.'|'.(string) $image->source_url));
 
-        return 'product-thumbs/'.$image->id.'-'.$sum.'.jpg';
+        return 'product-thumbs/'.$image->id.'-'.$sum.$variant.'.jpg';
     }
 
     private function originalBytes(ProductImage $image): ?string

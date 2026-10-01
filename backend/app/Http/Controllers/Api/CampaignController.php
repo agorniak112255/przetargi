@@ -524,7 +524,7 @@ class CampaignController extends Controller
         }
 
         $this->lockedDraft($campaign, static fn (Campaign $locked) => $locked->update([
-            'blocks' => is_array($template?->blocks) ? $template->blocks : CampaignBlocks::standard(),
+            'blocks' => is_array($template?->blocks) ? CampaignBlocks::upgrade($template->blocks) : CampaignBlocks::standard(),
             'brand_color' => $template?->brand_color,
             'template_id' => $template?->id,
         ]));

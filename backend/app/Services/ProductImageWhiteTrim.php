@@ -36,6 +36,51 @@ final class ProductImageWhiteTrim
     }
 
     /**
+     * Kwadrat $side×$side na białym tle: produkt bez białych marginesów, wyśrodkowany i dopasowany dłuższym bokiem.
+     * W mailu kampanii każde zdjęcie zajmuje to samo pole, więc karty w rzędzie mają równą wysokość.
+     */
+    public function toSquareJpeg(string $bytes, int $side): ?string
+    {
+        if (! function_exists('imagecreatefromstring') || $bytes === '' || $side < 1) {
+            return null;
+        }
+
+        $src = @imagecreatefromstring($bytes);
+        if (! $src instanceof GdImage) {
+            return null;
+        }
+
+        try {
+            $box = $this->contentBox($src) ?? ['x' => 0, 'y' => 0, 'w' => imagesx($src), 'h' => imagesy($src)];
+            $scale = $side / max($box['w'], $box['h']);
+            $dstW = max(1, min($side, (int) round($box['w'] * $scale)));
+            $dstH = max(1, min($side, (int) round($box['h'] * $scale)));
+            $dst = imagecreatetruecolor($side, $side);
+            if ($dst === false) {
+                return null;
+            }
+            $white = imagecolorallocate($dst, 255, 255, 255);
+            imagefill($dst, 0, 0, $white);
+            imagecopyresampled(
+                $dst,
+                $src,
+                intdiv($side - $dstW, 2),
+                intdiv($side - $dstH, 2),
+                $box['x'],
+                $box['y'],
+                $dstW,
+                $dstH,
+                $box['w'],
+                $box['h'],
+            );
+
+            return $this->encodeJpeg($dst);
+        } finally {
+            imagedestroy($src);
+        }
+    }
+
+    /**
      * @return array{x: int, y: int, w: int, h: int}|null
      */
     private function contentBox(GdImage $src): ?array

@@ -22,6 +22,12 @@ final class CampaignBlocks
 
     public const DEFAULT_COLOR = '#0b7d6a';
 
+    /**
+     * Układy usunięte 01.10.2026 → najbliższy zachowany. Zapisane kampanie i szablony zostają w bazie bez zmian;
+     * zamiana przy odczycie (upgrade, legacy), zapisie (validate) i w rendererze.
+     */
+    public const REPLACED_LAYOUTS = ['hero' => 'grid3', 'grid4' => 'grid3', 'sale' => 'grid2', 'big' => 'list_desc'];
+
     /** Pola bloku: nazwa → [rodzaj, limit znaków]; rodzaj: text | line (bez CR/LF) | uuid | url | layout. */
     private const FIELDS = [
         'header' => ['logo' => ['uuid', 0]],
@@ -81,6 +87,7 @@ final class CampaignBlocks
                 $value = $block[$field] ?? null;
                 if ($kind === 'layout') {
                     $value ??= 'grid3';
+                    $value = is_string($value) ? self::layout($value) : $value;
                     if (! is_string($value) || ! in_array($value, Campaign::LAYOUTS, true)) {
                         $errors[$key][] = $prefix.': wybierz układ produktów.';
                     }
@@ -176,7 +183,7 @@ final class CampaignBlocks
      */
     public static function legacy(Campaign $campaign): array
     {
-        $layout = (string) $campaign->layout;
+        $layout = self::layout((string) $campaign->layout);
 
         return [
             ['type' => 'header', 'logo' => null],
@@ -185,6 +192,28 @@ final class CampaignBlocks
             ['type' => 'products', 'layout' => in_array($layout, Campaign::LAYOUTS, true) ? $layout : 'grid3'],
             ['type' => 'footer', 'text' => ''],
         ];
+    }
+
+    /**
+     * Zapisane bloki z usuniętymi układami zamienionymi na zachowane (REPLACED_LAYOUTS); reszta bez zmian.
+     *
+     * @param  array<array-key, mixed>  $blocks
+     * @return list<mixed>
+     */
+    public static function upgrade(array $blocks): array
+    {
+        return array_map(
+            static fn (mixed $block): mixed => is_array($block) && ($block['type'] ?? null) === 'products' && is_string($block['layout'] ?? null)
+                ? [...$block, 'layout' => self::layout($block['layout'])]
+                : $block,
+            array_values($blocks),
+        );
+    }
+
+    /** Układ z usuniętym zamienionym na zachowany; nieznany zostaje (validate go odrzuci, renderer da grid3). */
+    public static function layout(string $layout): string
+    {
+        return self::REPLACED_LAYOUTS[$layout] ?? $layout;
     }
 
     /** https://host… (przycisk także mailto:adres) bez spacji i znaków sterujących — nic, co przeglądarka wykona. */
