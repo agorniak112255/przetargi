@@ -134,8 +134,9 @@ final class InventoryHistoryRebuild
         $clarionShift = ClarionDate::fromDate(CarbonImmutable::create(1990, 1, 1));
         $service = array_flip(ErpWarehouse::serviceCodes());
 
-        $acc = [];
-        $wacc = [];
+        // sumy w zwartych tablicach (2 lata w zagnieżdżonych tablicach PHP przekraczały 128 MB)
+        $acc = new InventoryHistoryTotals(count($labels), [...self::BUCKETS, ...array_map(static fn (int $m): string => 'lot_age_'.$m, self::LOT_AGE_MONTHS)]);
+        $wacc = new InventoryHistoryTotals(count($labels), ['warehouse'], maxKeys: 128);
         $work = 0.0;
         $gids = DB::table('erp_items')->whereNull('removed_at')->orderBy('xl_gid')->pluck('xl_gid')->map(static fn ($g): int => (int) $g)->all();
         $result['items'] = count($gids);
@@ -176,14 +177,13 @@ final class InventoryHistoryRebuild
         // podgląd: wszystkie oddziały, magazyny handlowe, pierwszy dzień każdego miesiąca i szew
         foreach ($labels as $li => $label) {
             if ($li === 0 || str_ends_with($label, '-01')) {
-                $a = $acc[$li]['|trade'] ?? [];
-                $result['preview'][] = ['date' => $label, 'stock' => round($a['stock'][1] ?? 0.0, 2),
-                    'no_sale_6' => round($a['no_sale_6'][1] ?? 0.0, 2), 'no_sale_12' => round($a['no_sale_12'][1] ?? 0.0, 2),
-                    'lot_age_6' => round($a['lot_age_6'][1] ?? 0.0, 2), 'lot_age_12' => round($a['lot_age_12'][1] ?? 0.0, 2)];
+                $v = static fn (string $b): float => round($acc->get($li, '|trade', $b)[1], 2);
+                $result['preview'][] = ['date' => $label, 'stock' => $v('stock'), 'no_sale_6' => $v('no_sale_6'),
+                    'no_sale_12' => $v('no_sale_12'), 'lot_age_6' => $v('lot_age_6'), 'lot_age_12' => $v('lot_age_12')];
             }
         }
         $result['preview'] = array_reverse($result['preview'] ?? []);
-        [$result['seam'], $result['seam_ok']] = $this->seam($seamDay->toDateString(), $acc[0] ?? []);
+        [$result['seam'], $result['seam_ok']] = $this->seam($seamDay->toDateString(), $acc);
         if (! $result['seam_ok'] && ! $ignoreSeam) {
             $result['status'] = 'seam_failed';
 
@@ -214,10 +214,8 @@ final class InventoryHistoryRebuild
      * @param  list<int>  $labelDays
      * @param  array<int, array<int, int>>  $cut
      * @param  array<string, int>  $service
-     * @param  array<int, array<string, array<string, array{0: int, 1: float}>>>  $acc
-     * @param  array<int, array<string, array{0: int, 1: float, 2: float}>>  $wacc
      */
-    private function accumulate(array $history, array $sales, array $labelDays, array $cut, array $service, int $clarionShift, array &$acc, array &$wacc): void
+    private function accumulate(array $history, array $sales, array $labelDays, array $cut, array $service, int $clarionShift, InventoryHistoryTotals $acc, InventoryHistoryTotals $wacc): void
     {
         // partie towaru: stan dziś, przyjęcie, ruchy na dzień (ze znakiem)
         $items = [];
@@ -271,10 +269,8 @@ final class InventoryHistoryRebuild
      * @param  list<int>  $labelDays
      * @param  array<int, array<int, int>>  $cut
      * @param  array<string, int>  $service
-     * @param  array<int, array<string, array<string, array{0: int, 1: float}>>>  $acc
-     * @param  array<int, array<string, array{0: int, 1: float, 2: float}>>  $wacc
      */
-    private function accumulateItem(array $item, array $labelDays, array $cut, array $service, array &$acc, array &$wacc): void
+    private function accumulateItem(array $item, array $labelDays, array $cut, array $service, InventoryHistoryTotals $acc, InventoryHistoryTotals $wacc): void
     {
         $lots = [];
         foreach ($item['lots'] ?? [] as $lot) {
@@ -339,9 +335,7 @@ final class InventoryHistoryRebuild
             foreach ($wh as $code => $w) {
                 $code = (string) $code;
                 $kind = isset($service[$code]) ? 'service' : 'trade';
-                $wacc[$li][$code][0] = ($wacc[$li][$code][0] ?? 0) + 1;
-                $wacc[$li][$code][1] = ($wacc[$li][$code][1] ?? 0.0) + $w['q'];
-                $wacc[$li][$code][2] = ($wacc[$li][$code][2] ?? 0.0) + $w['v'];
+                $wacc->add($li, $code, 'warehouse', $w['q'], $w['v']);
                 $loc = WarehouseLocations::of($code);
                 foreach (array_filter(['', $loc], static fn ($l): bool => $l !== null) as $l) {
                     foreach (['all', $kind] as $scope) {
@@ -388,13 +382,11 @@ final class InventoryHistoryRebuild
                 $flags['stale_60'] = $flags['no_sale_12'] && $oldest !== null && $oldest <= $cut[$li][60];
                 foreach ($flags as $bucket => $in) {
                     if ($in) {
-                        $acc[$li][$key][$bucket][0] = ($acc[$li][$key][$bucket][0] ?? 0) + 1;
-                        $acc[$li][$key][$bucket][1] = ($acc[$li][$key][$bucket][1] ?? 0.0) + $c['v'];
+                        $acc->add($li, $key, $bucket, $c['v']);
                     }
                 }
                 foreach ($c['age'] ?? [] as $m => $v) {
-                    $acc[$li][$key]['lot_age_'.$m][0] = ($acc[$li][$key]['lot_age_'.$m][0] ?? 0) + 1;
-                    $acc[$li][$key]['lot_age_'.$m][1] = ($acc[$li][$key]['lot_age_'.$m][1] ?? 0.0) + $v;
+                    $acc->add($li, $key, 'lot_age_'.$m, $v);
                 }
             }
         }
@@ -403,10 +395,10 @@ final class InventoryHistoryRebuild
     /**
      * Odtworzony pierwszy dzień zapisu nocnego wobec tego zapisu.
      *
-     * @param  array<string, array<string, array{0: int, 1: float}>>  $rebuilt
+     * @param  InventoryHistoryTotals  $rebuilt  sumy; etykieta 0 = dzień szwu
      * @return array{0: list<array<string, mixed>>, 1: bool}
      */
-    private function seam(string $day, array $rebuilt): array
+    private function seam(string $day, InventoryHistoryTotals $rebuilt): array
     {
         $rows = [];
         $ok = true;
@@ -421,7 +413,7 @@ final class InventoryHistoryRebuild
                     continue;
                 }
                 $liveValue = str_starts_with($b, 'lot_age_') ? $ages[(int) substr($b, 8)]['value'] : (float) ($buckets[$b]['value'] ?? 0);
-                $rebuiltValue = (float) ($rebuilt[$key][$b][1] ?? 0.0);
+                $rebuiltValue = $rebuilt->get(0, $key, $b)[1];
                 $diff = abs($rebuiltValue - $liveValue) / max(1.0, abs($liveValue));
                 $limit = $b === 'stock' ? self::SEAM_STOCK : self::SEAM_UNSOLD;
                 $bad = (string) $r->location === '' && $diff > $limit;
@@ -440,11 +432,9 @@ final class InventoryHistoryRebuild
     /**
      * @param  list<string>  $targets
      * @param  list<string>  $labels
-     * @param  array<int, array<string, array<string, array{0: int, 1: float}>>>  $acc
-     * @param  array<int, array<string, array{0: int, 1: float, 2: float}>>  $wacc
      * @param  list<string>  $serviceCodes
      */
-    private function store(array $targets, array $labels, array $acc, array $wacc, array $serviceCodes): int
+    private function store(array $targets, array $labels, InventoryHistoryTotals $acc, InventoryHistoryTotals $wacc, array $serviceCodes): int
     {
         $index = array_flip($labels);
         $locations = app(InventorySnapshots::class)->locations();
@@ -460,13 +450,13 @@ final class InventoryHistoryRebuild
                     foreach (InventoryQuery::SCOPES as $scope) {
                         $buckets = [];
                         foreach (self::BUCKETS as $b) {
-                            $a = $acc[$li][$location.'|'.$scope][$b] ?? [0, 0.0];
+                            $a = $acc->get($li, $location.'|'.$scope, $b);
                             $buckets[$b] = ['items' => $a[0], 'value' => round($a[1], 2), 'value_unknown' => 0];
                         }
                         // jak długo leży — w postaci InventoryBoardTotals::lotAgeSummary (bez dostaw bez daty)
                         $lotAge = ['buckets' => [], 'items' => $buckets['stock']['items'], 'value' => $buckets['stock']['value'], 'value_unknown_items' => 0];
                         foreach (self::LOT_AGE_MONTHS as $m) {
-                            $a = $acc[$li][$location.'|'.$scope]['lot_age_'.$m] ?? [0, 0.0];
+                            $a = $acc->get($li, $location.'|'.$scope, 'lot_age_'.$m);
                             $lotAge['buckets'][] = ['key' => 'lot_age_'.$m, 'from_months' => $m, 'to_months' => null, 'items' => $a[0], 'value' => round($a[1], 2)];
                         }
                         $rows[] = [
@@ -477,7 +467,11 @@ final class InventoryHistoryRebuild
                         ];
                     }
                 }
-                foreach ($wacc[$li] ?? [] as $code => [$items, $quantity, $value]) {
+                foreach ($wacc->keys() as $code) {
+                    [$items, $quantity, $value] = $wacc->get($li, $code, 'warehouse');
+                    if ($items === 0) {
+                        continue;
+                    }
                     $warehouses[] = [
                         'taken_on' => $day, 'warehouse_code' => (string) $code, 'location' => WarehouseLocations::of((string) $code),
                         'is_service' => isset($service[(string) $code]), 'source' => 'xl_history', 'items' => $items,
