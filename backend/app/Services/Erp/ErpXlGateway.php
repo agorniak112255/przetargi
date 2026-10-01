@@ -126,4 +126,25 @@ interface ErpXlGateway
      * @return iterable<array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float}>
      */
     public function itemSaleLines(array $itemGids, int $fromClarionDate): iterable;
+
+    /**
+     * Historia zapasów wstecz: partie towarów na dziś (TwrZasoby, partia × magazyn) i ich ruchy od chwili
+     * `$sinceTimestamp` (TraSElem, XlTimestamp) zsumowane na dzień ruchu (day = sekundy XL / 86400, dni od 1.01.1990)
+     * i typ dokumentu — ilość i koszt księgowy bez znaku dokumentu (korekty mają ilość ze znakiem). received_at =
+     * przyjęcie partii (Dostawy.Dst_DstTStamp = TwZ_DataP, sprawdzone 01.10.2026).
+     *
+     * @param  list<int>  $gids
+     * @return array{lots: list<array{gid: int, dst: int, warehouse_code: string, received_at: int|null, quantity: float, value: float}>, moves: list<array{gid: int, dst: int, warehouse_code: string, received_at: int|null, type: int, day: int, quantity: float, cost: float}>}
+     */
+    public function lotHistory(array $gids, int $sinceTimestamp): array;
+
+    /**
+     * Sprzedaż jak lastSales (FS, PA, WZ, magazyn nagłówka, data dokumentu Clarion): ostatnia przed `$fromClarionDate`
+     * na towar × magazyn i każdy dzień sprzedaży od tej daty. Magazyn null = dokument bez magazynu. standing — dokumenty
+     * w buforze (data przestawiana co dzień na dziś): od kiedy wiszą (since = XlTimestamp ostatniej zmiany nagłówka).
+     *
+     * @param  list<int>  $gids
+     * @return array{before: list<array{gid: int, warehouse_code: string|null, date: int}>, days: list<array{gid: int, warehouse_code: string|null, date: int}>, standing: list<array{gid: int, warehouse_code: string|null, since: int}>}
+     */
+    public function saleHistory(array $gids, int $fromClarionDate): array;
 }

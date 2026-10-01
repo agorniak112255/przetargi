@@ -160,6 +160,53 @@ final class FakeErpXlGateway implements ErpXlGateway
         yield from $this->customerOperatorRows;
     }
 
+    /** @var list<array{gid: int, dst: int, warehouse_code: string, received_at: int|null, quantity: float, value: float}> */
+    public array $historyLots = [];
+
+    /** @var list<array{gid: int, dst: int, warehouse_code: string, received_at: int|null, type: int, day: int, quantity: float, cost: float}> */
+    public array $historyMoves = [];
+
+    /** @var list<array{gid: int, warehouse_code: string|null, date: int}> wszystkie dni sprzedaży (Clarion) */
+    public array $historySales = [];
+
+    /** @var list<array{gid: int, warehouse_code: string|null, since: int}> dokumenty sprzedaży w buforze */
+    public array $historyStanding = [];
+
+    public int $historyCalls = 0;
+
+    public function lotHistory(array $gids, int $sinceTimestamp): array
+    {
+        $this->historyCalls++;
+
+        return [
+            'lots' => array_values(array_filter($this->historyLots, static fn (array $r): bool => in_array($r['gid'], $gids, true))),
+            'moves' => array_values(array_filter($this->historyMoves, static fn (array $r): bool => in_array($r['gid'], $gids, true) && $sinceTimestamp <= $r['day'] * 86400)),
+        ];
+    }
+
+    public function saleHistory(array $gids, int $fromClarionDate): array
+    {
+        $before = [];
+        $days = [];
+        foreach ($this->historySales as $r) {
+            if (! in_array($r['gid'], $gids, true)) {
+                continue;
+            }
+            if ($r['date'] >= $fromClarionDate) {
+                $days[] = $r;
+            } else {
+                $k = $r['gid'].'|'.$r['warehouse_code'];
+                if (! isset($before[$k]) || $before[$k]['date'] < $r['date']) {
+                    $before[$k] = $r;
+                }
+            }
+        }
+
+        $standing = array_values(array_filter($this->historyStanding, static fn (array $r): bool => in_array($r['gid'], $gids, true)));
+
+        return ['before' => array_values($before), 'days' => $days, 'standing' => $standing];
+    }
+
     public function itemSaleLines(array $itemGids, int $fromClarionDate): iterable
     {
         $this->saleLineCalls[] = ['items' => array_values($itemGids), 'from' => $fromClarionDate];

@@ -103,7 +103,7 @@ final class InventorySnapshots
      *
      * @return list<string>
      */
-    private function locations(): array
+    public function locations(): array
     {
         $keys = [
             '',

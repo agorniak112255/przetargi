@@ -530,6 +530,93 @@ final class ErpXlClient implements ErpXlGateway
         return sprintf('%s-%s/%d/%02d/%02d', $prefix, trim((string) $series), (int) $number, (int) $year % 100, (int) $month);
     }
 
+    public function lotHistory(array $gids, int $sinceTimestamp): array
+    {
+        if ($gids === []) {
+            return ['lots' => [], 'moves' => []];
+        }
+        $in = implode(',', array_map('intval', $gids));
+        $since = max(0, $sinceTimestamp);
+        $lots = $this->db()->select(<<<SQL
+            SELECT z.TwZ_TwrNumer AS gid, z.TwZ_DstNumer AS dst, m.MAG_Kod AS warehouse_code, MIN(d.Dst_DstTStamp) AS received_at,
+                   SUM(z.TwZ_Ilosc) AS quantity, SUM(z.TwZ_KsiegowaNetto) AS book_value
+            FROM CDN.TwrZasoby z
+            JOIN CDN.Magazyny m ON m.MAG_GIDNumer = z.TwZ_MagNumer AND m.MAG_GIDTyp = z.TwZ_MagTyp
+            LEFT JOIN CDN.Dostawy d ON d.Dst_GIDNumer = z.TwZ_DstNumer AND d.Dst_GIDTyp = z.TwZ_DstTyp
+            WHERE z.TwZ_TwrNumer IN ($in)
+            GROUP BY z.TwZ_TwrNumer, z.TwZ_DstNumer, m.MAG_Kod
+            SQL);
+        // Chwila ruchu (sprawdzone 01.10.2026 na stanie z nocy i 1000 towarach): TrS_TrnTStamp, z dwoma wyjątkami —
+        // dokument w buforze (TrN_Stan < 3): XL co dzień przestawia jego datę na dziś, a towar zdjął przy wystawieniu →
+        // ostatnia zmiana nagłówka (TrN_LastMod), gdy wcześniejsza; sztuczna godzina 00:00/23:59 i zmiana do 2 dni później
+        // (MM, FS zatwierdzone dziś „na wczoraj”) → TrN_LastMod. Szerzej LastMod nie: zbiorcze RW (01K, 00:00 końca
+        // miesiąca) mają LastMod z założenia nagłówka — partie wstecz schodziły poniżej zera (581 zamiast 143 na 12 tys.).
+        $moves = $this->db()->select(<<<SQL
+            SELECT d.Dst_TwrNumer AS gid, s.TrS_DstNumer AS dst, m.MAG_Kod AS warehouse_code, MIN(d.Dst_DstTStamp) AS received_at,
+                   s.TrS_GIDTyp AS type, t.at / 86400 AS day, SUM(s.TrS_Ilosc) AS quantity, SUM(s.TrS_KosztKsiegowy) AS cost
+            FROM CDN.TraSElem s
+            JOIN CDN.Dostawy d ON d.Dst_GIDNumer = s.TrS_DstNumer AND d.Dst_GIDTyp = s.TrS_DstTyp
+            JOIN CDN.Magazyny m ON m.MAG_GIDNumer = s.TrS_MagNumer AND m.MAG_GIDTyp = s.TrS_MagTyp
+            LEFT JOIN CDN.TraNag n ON n.TrN_GIDTyp = s.TrS_GIDTyp AND n.TrN_GIDNumer = s.TrS_GIDNumer
+            CROSS APPLY (SELECT CASE
+                WHEN n.TrN_Stan < 3 AND ISNULL(n.TrN_LastMod, 0) > 0 AND n.TrN_LastMod < s.TrS_TrnTStamp THEN n.TrN_LastMod
+                WHEN (s.TrS_TrnTStamp % 86400 = 0 OR s.TrS_TrnTStamp % 86400 >= 86340)
+                     AND n.TrN_LastMod > s.TrS_TrnTStamp AND n.TrN_LastMod - s.TrS_TrnTStamp <= 172800 THEN n.TrN_LastMod
+                ELSE s.TrS_TrnTStamp END AS at) t
+            WHERE d.Dst_TwrNumer IN ($in) AND (s.TrS_TrnTStamp >= $since OR n.TrN_LastMod >= $since)
+            GROUP BY d.Dst_TwrNumer, s.TrS_DstNumer, m.MAG_Kod, s.TrS_GIDTyp, t.at / 86400
+            SQL);
+        $stamp = static fn ($v): ?int => $v !== null && (int) $v > 0 ? (int) $v : null;
+
+        return [
+            'lots' => array_map(static fn ($r): array => [
+                'gid' => (int) $r->gid, 'dst' => (int) $r->dst, 'warehouse_code' => trim((string) $r->warehouse_code),
+                'received_at' => $stamp($r->received_at), 'quantity' => (float) $r->quantity, 'value' => (float) ($r->book_value ?? 0),
+            ], $lots),
+            'moves' => array_map(static fn ($r): array => [
+                'gid' => (int) $r->gid, 'dst' => (int) $r->dst, 'warehouse_code' => trim((string) $r->warehouse_code),
+                'received_at' => $stamp($r->received_at), 'type' => (int) $r->type, 'day' => (int) $r->day,
+                'quantity' => (float) $r->quantity, 'cost' => (float) ($r->cost ?? 0),
+            ], $moves),
+        ];
+    }
+
+    public function saleHistory(array $gids, int $fromClarionDate): array
+    {
+        if ($gids === []) {
+            return ['before' => [], 'days' => []];
+        }
+        $in = implode(',', array_map('intval', $gids));
+        $types = implode(',', self::SALE_TYPES);
+        $from = (int) $fromClarionDate;
+        $base = <<<SQL
+            FROM CDN.TraElem e
+            JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
+            LEFT JOIN CDN.Magazyny m ON m.MAG_GIDNumer = n.TrN_MagZNumer AND m.MAG_GIDTyp = n.TrN_MagZTyp
+            WHERE e.TrE_GIDTyp IN ($types) AND e.TrE_TwrNumer IN ($in)
+            SQL;
+        $before = $this->db()->select("SELECT e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, MAX(n.TrN_Data2) AS date $base AND n.TrN_Data2 < $from GROUP BY e.TrE_TwrNumer, m.MAG_Kod");
+        $days = $this->db()->select("SELECT DISTINCT e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, n.TrN_Data2 AS date $base AND n.TrN_Data2 >= $from");
+        // dokument w buforze ma datę przestawianą co dzień na dziś — nocny odczyt widzi go jako sprzedaż każdego dnia od
+        // wystawienia (ostatnia zmiana nagłówka, XlTimestamp)
+        $standing = $this->db()->select("SELECT e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, MIN(n.TrN_LastMod) AS since $base AND n.TrN_Stan < 3 AND n.TrN_LastMod > 0 GROUP BY e.TrE_TwrNumer, m.MAG_Kod");
+        $map = static function ($r): array {
+            $code = $r->warehouse_code !== null ? trim((string) $r->warehouse_code) : '';
+
+            return ['gid' => (int) $r->gid, 'warehouse_code' => $code !== '' ? $code : null, 'date' => (int) $r->date];
+        };
+
+        return [
+            'before' => array_map($map, $before),
+            'days' => array_map($map, $days),
+            'standing' => array_map(static function ($r): array {
+                $code = $r->warehouse_code !== null ? trim((string) $r->warehouse_code) : '';
+
+                return ['gid' => (int) $r->gid, 'warehouse_code' => $code !== '' ? $code : null, 'since' => (int) $r->since];
+            }, $standing),
+        ];
+    }
+
     private function db(): ConnectionInterface
     {
         if (! $this->configured()) {
