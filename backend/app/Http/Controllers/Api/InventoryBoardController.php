@@ -346,7 +346,7 @@ class InventoryBoardController extends Controller
     }
 
     /**
-     * Koszyki z zapisu dnia: pozycje i wartość; lot_age_6/12 — „leży ponad pół roku / rok” (items null w pierwszym
+     * Koszyki z zapisu dnia: pozycje i wartość; lot_age_6/12/24 — „leży ponad pół roku / rok / 2 lata” (items null w pierwszym
      * zapisie nocnym).
      *
      * @return array<string, array{items: int|null, value: float}|null>
@@ -363,7 +363,7 @@ class InventoryBoardController extends Controller
         }
         // „leży ponad…” — sztuki z dostaw starszych niż próg (pierwszy zapis nocny: bez liczby towarów)
         $ages = InventorySnapshots::lotAgeThresholds($totals);
-        foreach ([6, 12] as $m) {
+        foreach ([6, 12, 24] as $m) {
             $out['lot_age_'.$m] = $ages[$m] ?? null;
         }
 

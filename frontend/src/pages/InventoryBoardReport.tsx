@@ -885,10 +885,13 @@ function todayIso(): string {
   return new Date().toLocaleDateString('sv-SE')
 }
 
-function addDaysIso(iso: string, days: number): string {
-  const d = new Date(`${iso}T12:00:00`)
-  d.setDate(d.getDate() + days)
-  return d.toLocaleDateString('sv-SE')
+/** Ten sam dzień n miesięcy wcześniej/później; koniec miesiąca bez przeskoku (31.03 − 1 mies. = 28/29.02). */
+function addMonthsIso(iso: string, months: number): string {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number)
+  const target = new Date(y, m - 1 + months, 1, 12)
+  const last = new Date(target.getFullYear(), target.getMonth() + 1, 0, 12).getDate()
+  target.setDate(Math.min(d, last))
+  return target.toLocaleDateString('sv-SE')
 }
 
 /** „1.10” — oś wykresu; z rokiem „1.10.2026”. */
@@ -913,20 +916,21 @@ function fmtChange(value: number): string {
   return value > 0 ? `+${fmtHist(value)}` : fmtHist(value)
 }
 
-/** Okresy pod przyciskami; days null = od pierwszego zapisu. */
-const HISTORY_RANGES: { key: string; label: string; days: number | null }[] = [
-  { key: '7', label: '7 dni', days: 7 },
-  { key: '30', label: '30 dni', days: 30 },
-  { key: '90', label: '3 miesiące', days: 91 },
-  { key: '365', label: 'rok', days: 365 },
-  { key: 'all', label: 'od początku', days: null },
+/** Okresy pod przyciskami (miesiące wstecz od dziś); dowolny okres — pola dat obok. */
+const HISTORY_RANGES: { key: string; label: string; months: number }[] = [
+  { key: '1', label: '1 mies.', months: 1 },
+  { key: '3', label: '3 mies.', months: 3 },
+  { key: '6', label: '6 mies.', months: 6 },
+  { key: '12', label: '12 mies.', months: 12 },
+  { key: '18', label: '18 mies.', months: 18 },
+  { key: '24', label: '2 lata', months: 24 },
 ]
 
-type HistoryMetric = 'stock' | 'no_sale_6' | 'no_sale_12' | 'lot_age_6' | 'lot_age_12'
+type HistoryMetric = 'stock' | 'no_sale_6' | 'no_sale_12' | 'lot_age_6' | 'lot_age_12' | 'lot_age_24'
 
 /**
- * Wykresy historii: cały towar (bez oceny kierunku), dwa progi bez sprzedaży i dwa progi „leży” — sztuki z dostaw
- * starszych niż pół roku / rok (spadek = dobrze).
+ * Wykresy historii: cały towar (bez oceny kierunku), dwa progi bez sprzedaży i trzy progi „leży” — sztuki z dostaw
+ * starszych niż pół roku / rok / 2 lata (spadek = dobrze).
  */
 const HISTORY_METRICS: { key: HistoryMetric; label: string; stroke: string; lowerIsBetter: boolean }[] = [
   { key: 'stock', label: 'Cały towar', stroke: '#334155', lowerIsBetter: false },
@@ -934,6 +938,7 @@ const HISTORY_METRICS: { key: HistoryMetric; label: string; stroke: string; lowe
   { key: 'no_sale_12', label: 'Ponad rok bez sprzedaży', stroke: '#b91c1c', lowerIsBetter: true },
   { key: 'lot_age_6', label: 'Leży w magazynie ponad pół roku', stroke: '#b45309', lowerIsBetter: true },
   { key: 'lot_age_12', label: 'Leży w magazynie ponad rok', stroke: '#b91c1c', lowerIsBetter: true },
+  { key: 'lot_age_24', label: 'Leży w magazynie ponad 2 lata', stroke: '#7f1d1d', lowerIsBetter: true },
 ]
 
 /** Kolor zmiany: przy zalegającym towarze spadek zielony, wzrost czerwony; cały towar — bez oceny. */
@@ -950,8 +955,8 @@ function changeClass(value: number, lowerIsBetter: boolean): string {
  */
 function HistoryPanel({ warehouses, place }: { warehouses: Warehouses; place: Place }) {
   const [range, setRange] = useState<{ preset: string | null; from: string; to: string }>(() => ({
-    preset: '30',
-    from: addDaysIso(todayIso(), -30),
+    preset: '1',
+    from: addMonthsIso(todayIso(), -1),
     to: todayIso(),
   }))
   const [history, setHistory] = useState<InventoryHistory | null>(null)
@@ -982,10 +987,9 @@ function HistoryPanel({ warehouses, place }: { warehouses: Warehouses; place: Pl
     void load()
   }, [load])
 
-  const choosePreset = (key: string, days: number | null) => {
+  const choosePreset = (key: string, months: number) => {
     const to = todayIso()
-    const from = days !== null ? addDaysIso(to, -days) : (history?.first_date ?? to)
-    setRange({ preset: key, from, to })
+    setRange({ preset: key, from: addMonthsIso(to, -months), to })
   }
   const chooseDate = (side: 'from' | 'to', value: string) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return
@@ -1015,7 +1019,7 @@ function HistoryPanel({ warehouses, place }: { warehouses: Warehouses; place: Pl
                   key={r.key}
                   type="button"
                   aria-pressed={active}
-                  onClick={() => choosePreset(r.key, r.days)}
+                  onClick={() => choosePreset(r.key, r.months)}
                   className={`px-3 py-1.5 text-lg ${i > 0 ? 'border-l-2 border-slate-300' : ''} ${FOCUS} ${
                     active ? 'bg-blue-600 font-semibold text-white' : 'bg-white text-slate-800 hover:bg-slate-50'
                   }`}

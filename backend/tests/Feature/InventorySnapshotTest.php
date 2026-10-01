@@ -185,6 +185,8 @@ final class InventorySnapshotTest extends TestCase
         $r = $this->getJson('/api/inventory/board/history?from=2026-10-01&to=2026-10-02')->assertOk();
         $this->assertEquals([['items' => null, 'value' => 350], ['items' => 2, 'value' => 340]], array_column($r->json('points'), 'lot_age_6'));
         $this->assertEquals([['items' => null, 'value' => 150], ['items' => 1, 'value' => 140]], array_column($r->json('points'), 'lot_age_12'));
+        // 2 lata: z przedziałów od 24 mies. wzwyż (tu tylko „ponad 5 lat”); wersja 2 bez tego progu — brak punktu
+        $this->assertEquals([['items' => null, 'value' => 50], null], array_column($r->json('points'), 'lot_age_24'));
         $this->assertEquals(['items' => 1, 'value' => 140], $r->json('compare.locations.0.end.lot_age_12'));
     }
 

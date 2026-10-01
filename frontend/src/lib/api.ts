@@ -867,9 +867,10 @@ export type InventoryHistoryBuckets = {
   never_sold: InventoryHistoryTotal
   stale_36: InventoryHistoryTotal
   stale_60: InventoryHistoryTotal
-  /** Leży w magazynie ponad pół roku / rok: sztuki z dostaw przyjętych co najmniej tyle temu. */
+  /** Leży w magazynie ponad pół roku / rok / 2 lata: sztuki z dostaw przyjętych co najmniej tyle temu. */
   lot_age_6: InventoryHistoryLotAge
   lot_age_12: InventoryHistoryLotAge
+  lot_age_24: InventoryHistoryLotAge
 }
 
 /**
