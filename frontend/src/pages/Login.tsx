@@ -4,8 +4,8 @@ import { useAuth } from '../auth'
 
 export function Login() {
   const { user, login, loading } = useAuth()
-  const [email, setEmail] = useState('arek@supon.local')
-  const [password, setPassword] = useState('password')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -33,6 +33,10 @@ export function Login() {
         <label className="mb-3 block text-sm">
           E-mail
           <input
+            type="email"
+            name="email"
+            autoComplete="username"
+            required
             className="mt-1 w-full rounded border border-slate-300 px-3 py-2"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -42,6 +46,9 @@ export function Login() {
           Hasło
           <input
             type="password"
+            name="password"
+            autoComplete="current-password"
+            required
             className="mt-1 w-full rounded border border-slate-300 px-3 py-2"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
