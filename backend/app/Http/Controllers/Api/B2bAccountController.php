@@ -212,7 +212,8 @@ class B2bAccountController extends Controller
     public function verifyLoginCode(Request $request, B2bAccount $b2bAccount): JsonResponse
     {
         $data = $request->validate([
-            'code' => ['required', 'string', 'regex:/^\s*\d{4,10}\s*$/'],
+            // 3M wysyła same cyfry, MSA cyfry z literami — format sprawdza łącznik (finishCodeLogin)
+            'code' => ['required', 'string', 'regex:/^\s*[0-9A-Za-z]{4,10}\s*$/'],
         ]);
 
         if ($this->syncIsRunning($b2bAccount)) {

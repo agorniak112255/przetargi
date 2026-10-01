@@ -211,7 +211,7 @@ final class B2bCodeLoginApiTest extends TestCase
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $this->postJson("/api/b2b-accounts/{$this->account->id}/login-code")->assertOk();
 
-        foreach (['', 'abc123', '12a456', '123', '12345678901', '12 34'] as $code) {
+        foreach (['', '123', 'ab1', '12345678901', 'AB12CD34EF5', '12 34', '12-456', 'ab_123', 'kód12'] as $code) {
             $this->postJson("/api/b2b-accounts/{$this->account->id}/login-code/verify", ['code' => $code])
                 ->assertUnprocessable()
                 ->assertJsonValidationErrors(['code']);
@@ -220,6 +220,22 @@ final class B2bCodeLoginApiTest extends TestCase
             ->assertJsonValidationErrors(['code']);
 
         $this->assertSame(0, $this->connector->finishCalls);
+    }
+
+    public function test_verify_passes_code_with_letters_to_connector_unchanged(): void
+    {
+        // MSA wysyła kod z literami; wielkość liter zostaje jak w e-mailu
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $this->postJson("/api/b2b-accounts/{$this->account->id}/login-code")->assertOk();
+
+        // walidacja przepuszcza kod; atrapa łącznika zna tylko 123456, więc odpowiada „zły kod” (nie błąd pola code)
+        $this->postJson("/api/b2b-accounts/{$this->account->id}/login-code/verify", ['code' => ' aB3dE9 '])
+            ->assertUnprocessable()
+            ->assertJsonMissingValidationErrors(['code'])
+            ->assertJsonPath('message', 'Kod jest nieprawidłowy albo wygasł.');
+
+        $this->assertSame(1, $this->connector->finishCalls);
+        $this->assertSame('aB3dE9', $this->connector->lastCode);
     }
 
     public function test_view_reports_session_time_and_whether_connector_needs_code(): void

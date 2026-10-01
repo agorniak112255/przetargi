@@ -266,8 +266,9 @@ final class MsaB2bClient
             return $this->session();
         }
         $code = trim($code);
-        if ($code === '' || ! ctype_digit($code)) {
-            throw new RuntimeException('Kod weryfikacyjny to same cyfry z e-maila od MSA.');
+        // kod MSA ma cyfry i litery (wielkość liter bez zmian — przepisany dosłownie z e-maila)
+        if (! ctype_alnum($code)) {
+            throw new RuntimeException('Kod weryfikacyjny to litery i cyfry z e-maila od MSA (bez spacji i innych znaków).');
         }
         $token = $state['token'] ?? null;
         if (! is_string($token) || $token === '' || ! is_array($state['cookies'] ?? null)) {

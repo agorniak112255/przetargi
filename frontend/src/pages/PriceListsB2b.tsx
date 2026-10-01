@@ -1028,12 +1028,14 @@ function B2bCodeLoginModal({
                 Kod z e-maila
                 <input
                   autoFocus
-                  inputMode="numeric"
                   autoComplete="one-time-code"
+                  autoCapitalize="off"
+                  spellCheck={false}
                   maxLength={10}
                   className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 font-mono text-sm tracking-widest"
                   value={code}
-                  onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                  // 3M wysyła same cyfry, MSA cyfry z literami (wielkość liter zostaje jak w e-mailu)
+                  onChange={(e) => setCode(e.target.value.replace(/[^0-9A-Za-z]/g, ''))}
                 />
               </label>
               <div className="flex items-center justify-between gap-2">

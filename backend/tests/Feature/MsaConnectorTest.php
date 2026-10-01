@@ -47,7 +47,8 @@ final class MsaConnectorTest extends TestCase
 
     private const PASSWORD = 'dobre-haslo';
 
-    private const CODE = '123456';
+    /** Kod z e-maila MSA ma litery i cyfry. */
+    private const CODE = 'aB3dE9';
 
     private const DEVICE = 'msaDeviceTest';
 
@@ -144,6 +145,23 @@ final class MsaConnectorTest extends TestCase
         } catch (RuntimeException $e) {
             $this->assertStringContainsString('Kod nieprawidłowy', $e->getMessage());
         }
+    }
+
+    public function test_code_with_characters_other_than_letters_and_digits_is_rejected_without_a_request(): void
+    {
+        $this->fakeSite();
+        $started = $this->client([])->startCodeLogin();
+        $before = count(Http::recorded());
+
+        foreach (['', 'aB3-E9', 'aB3 E9', 'kód123'] as $code) {
+            try {
+                $this->client([])->finishCodeLogin($started['state'], $code);
+                $this->fail('kod „'.$code.'” powinien być odrzucony');
+            } catch (RuntimeException $e) {
+                $this->assertStringContainsString('litery i cyfry', $e->getMessage());
+            }
+        }
+        $this->assertCount($before, Http::recorded());
     }
 
     public function test_live_session_needs_no_password(): void
