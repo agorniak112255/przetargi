@@ -1147,8 +1147,8 @@ function axisLabel(value: number, step: number, top: number): string {
     return `${(value / 1_000_000).toFixed(d).replace('.', ',')}${NBSP}mln`
   }
   if (Math.abs(top) >= 10_000) {
-    const d = Math.min(1, decimals(1000))
-    return `${groupInt(Math.trunc(value / 1000))}${d > 0 ? `,${Math.abs(Math.round((value / 1000) * 10) % 10)}` : ''}${NBSP}tys.`
+    const [int, frac] = (value / 1000).toFixed(Math.min(1, decimals(1000))).split('.')
+    return `${groupInt(Number(int))}${frac ? `,${frac}` : ''}${NBSP}tys.`
   }
   return `${groupInt(value)}${NBSP}zł`
 }
