@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Services\Erp\ErpXlGateway;
 use App\Services\Erp\InventoryHistoryRebuild;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class ErpInventoryHistoryCommand extends Command
@@ -16,6 +17,7 @@ class ErpInventoryHistoryCommand extends Command
                             {--dry-run : Tylko policz i pokaż kontrolę, bez zapisu}
                             {--force : Odtwórz od nowa także dni już zapisane (historia, zapis nocny starszymi regułami)}
                             {--ignore-check : Zapisz mimo niezgodnej kontroli z zapisem nocnym}
+                            {--outdated : Tylko dni zapisane starszymi regułami liczenia (noc po erp:sync); gdy ich nie ma — bez zapytań do XL}
                             {--work=5 : Sekundy pracy zapytań XL przed odpoczynkiem}
                             {--pause=5 : Sekundy odpoczynku serwera SQL}';
 
@@ -29,13 +31,17 @@ class ErpInventoryHistoryCommand extends Command
             return self::SUCCESS;
         }
         $days = max(1, min(800, (int) $this->option('days')));
-        $this->info(sprintf('Historia zapasów: %d dni wstecz, %s s pracy XL / %s s odpoczynku.', $days, $this->option('work'), $this->option('pause')));
+        $outdated = (bool) $this->option('outdated');
+        if (! $outdated) {
+            $this->info(sprintf('Historia zapasów: %d dni wstecz, %s s pracy XL / %s s odpoczynku.', $days, $this->option('work'), $this->option('pause')));
+        }
         try {
             $r = $rebuild->run(
                 $days,
                 write: ! $this->option('dry-run'),
                 force: (bool) $this->option('force'),
                 ignoreSeam: (bool) $this->option('ignore-check'),
+                outdatedOnly: $outdated,
                 say: fn (string $m) => $this->line($m),
                 workSeconds: max(0.5, (float) $this->option('work')),
                 pauseSeconds: max(0.0, (float) $this->option('pause')),
@@ -47,6 +53,10 @@ class ErpInventoryHistoryCommand extends Command
             return self::FAILURE;
         }
 
+        if ($outdated && in_array($r['status'], ['no_live', 'nothing'], true)) {
+            // noc: nic przestarzałego (albo jeszcze brak zapisu nocnego w aktualnych regułach) — bez komunikatu
+            return self::SUCCESS;
+        }
         if ($r['status'] === 'no_live') {
             $this->warn('Brak zapisu nocnego według aktualnych reguł (erp:inventory-snapshot) — nie ma z czym sprawdzić odtworzenia. Uruchom po najbliższym nocnym odczycie.');
 
@@ -79,7 +89,7 @@ class ErpInventoryHistoryCommand extends Command
             'saved' => $this->done(sprintf('Zapisano %d dni (%d wierszy), od %s do %s; pominięte (już były): %d.',
                 count($r['days']), $r['rows'], $r['days'][0] ?? '-', end($r['days']) ?: '-', $r['skipped'])),
             'dry_run' => $this->done('Próba bez zapisu — kontrola zgodna; uruchom bez --dry-run, żeby zapisać.'),
-            default => $this->failed('Kontrola niezgodna (✗) — nic nie zapisano. Sprawdź różnice; --ignore-check zapisze mimo to.'),
+            default => $this->seamFailed($r),
         };
     }
 
@@ -88,6 +98,21 @@ class ErpInventoryHistoryCommand extends Command
         $this->info($message);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Niezgodna kontrola: nic nie zapisano; ostrzeżenie także w logu — nocny przebieg (--outdated) spróbuje następnej nocy.
+     *
+     * @param  array<string, mixed>  $r
+     */
+    private function seamFailed(array $r): int
+    {
+        Log::warning('Historia zapasów: kontrola niezgodna z zapisem nocnym, nic nie zapisano.', [
+            'first_live' => $r['first_live'],
+            'bad' => array_values(array_filter($r['seam'], static fn (array $s): bool => $s['bad'])),
+        ]);
+
+        return $this->failed('Kontrola niezgodna (✗) — nic nie zapisano. Sprawdź różnice; --ignore-check zapisze mimo to.');
     }
 
     private function failed(string $message): int

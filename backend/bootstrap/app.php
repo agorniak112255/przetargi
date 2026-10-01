@@ -42,6 +42,11 @@ return Application::configure(basePath: dirname(__DIR__))
         // (decyzja użytkownika 29.09.2026; erp:stock zostaje do ręcznego uruchomienia).
         $schedule->command('erp:sync --match')->dailyAt('02:00')->withoutOverlapping(180)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));
+        // historia zapasów: dni zapisane starszymi regułami liczenia przeliczane od nowa z ruchów partii XL (zwykle nic —
+        // bez zapytań do XL); osobny proces (CLI 128 MB, po erp:sync), XL z przerwami 5 s / 5 s, kontrola przed zapisem;
+        // 03:45 UTC = 5:45 w Polsce — po nocnych odczytach XL, przed pracą w XL
+        $schedule->command('erp:inventory-history --outdated')->dailyAt('03:45')->withoutOverlapping(90)
+            ->when(static fn (): bool => (bool) config('erpxl.enabled'));
         // Zapasy → RW → PW: pary RW i PW tego samego towaru z 12 miesięcy — jedno zapytanie XL, też tylko w nocy
         $schedule->command('erp:rw-pw')->dailyAt('02:50')->withoutOverlapping(60)
             ->when(static fn (): bool => (bool) config('erpxl.enabled'));

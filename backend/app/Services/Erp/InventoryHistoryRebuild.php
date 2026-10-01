@@ -59,7 +59,7 @@ final class InventoryHistoryRebuild
      * @param  callable(float): void|null  $sleep
      * @return array{status: string, first_live: ?string, days: list<string>, skipped: int, items: int, sql_seconds: float, pause_seconds: float, negative_lots: int, unknown_types: array<int, int>, seam: list<array<string, mixed>>, seam_ok: bool, rows: int, preview?: list<array{date: string, stock: float, no_sale_6: float, no_sale_12: float, lot_age_6: float, lot_age_12: float}>}
      */
-    public function run(int $days, bool $write = true, bool $force = false, ?callable $say = null, float $workSeconds = 5.0, float $pauseSeconds = 5.0, ?callable $sleep = null, bool $ignoreSeam = false): array
+    public function run(int $days, bool $write = true, bool $force = false, ?callable $say = null, float $workSeconds = 5.0, float $pauseSeconds = 5.0, ?callable $sleep = null, bool $ignoreSeam = false, bool $outdatedOnly = false): array
     {
         $say ??= static function (string $m): void {};
         $sleep ??= static function (float $s): void {
@@ -82,14 +82,28 @@ final class InventoryHistoryRebuild
         $seamDay = CarbonImmutable::parse($current[0]);
         $result['first_live'] = $seamDay->toDateString();
 
-        // dni do odtworzenia: przed szwem; zapisane (historia albo nocny starszymi regułami) — pomijane, odtwarzane z force
-        $existing = DB::table(InventorySnapshots::TABLE)
+        // tylko przestarzałe (noc po erp:sync): okno od najstarszego zapisanego dnia, żeby żaden dzień nie został w starych regułach
+        if ($outdatedOnly) {
+            $oldest = DB::table(InventorySnapshots::TABLE)->where('taken_on', '<', $seamDay->toDateString())->min('taken_on');
+            if ($oldest !== null) {
+                $days = max($days, (int) CarbonImmutable::parse(substr((string) $oldest, 0, 10))->diffInDays($seamDay));
+            }
+        }
+
+        // dni do odtworzenia: przed szwem; zapisane (historia albo nocny starszymi regułami) — pomijane, odtwarzane z force;
+        // w trybie outdatedOnly — tylko zapisane wersją reguł starszą niż aktualna
+        $existing = [];
+        foreach (DB::table(InventorySnapshots::TABLE)
             ->where('taken_on', '>=', $seamDay->subDays($days)->toDateString())->where('taken_on', '<', $seamDay->toDateString())
-            ->distinct()->pluck('taken_on')->mapWithKeys(static fn ($d): array => [substr((string) $d, 0, 10) => true])->all();
+            ->selectRaw("taken_on, json_extract(totals, '$.version') as v")->get() as $r) {
+            $day = substr((string) $r->taken_on, 0, 10);
+            $existing[$day] = min($existing[$day] ?? PHP_INT_MAX, (int) $r->v);
+        }
         $targets = [];
         for ($i = $days; $i >= 1; $i--) {
             $d = $seamDay->subDays($i)->toDateString();
-            if (isset($existing[$d]) && ! $force) {
+            $outdated = isset($existing[$d]) && $existing[$d] < InventorySnapshots::RULES_VERSION;
+            if ($outdatedOnly ? ! $outdated : (isset($existing[$d]) && ! $force)) {
                 $result['skipped']++;
 
                 continue;

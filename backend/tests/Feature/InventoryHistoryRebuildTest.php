@@ -147,6 +147,32 @@ final class InventoryHistoryRebuildTest extends TestCase
         $this->assertSame('no_live', app(InventoryHistoryRebuild::class)->run(3, force: true)['status']);
     }
 
+    public function test_nightly_outdated_mode_rebuilds_only_days_from_older_rules(): void
+    {
+        $this->liveItemAndSnapshot();
+        $row = fn (string $day, string $source, int $version, float $value): array => ['taken_on' => $day, 'location' => '', 'scope' => 'all',
+            'source' => $source, 'totals' => json_encode(['version' => $version, 'buckets' => ['stock' => ['items' => 1, 'value' => $value]]])];
+        DB::table(InventorySnapshots::TABLE)->insert([
+            $row('2026-10-01', 'live', 1, 999),        // nocny starszymi regułami
+            $row('2026-09-30', 'xl_history', 2, 888),  // historia starszymi regułami
+            $row('2026-09-29', 'xl_history', InventorySnapshots::RULES_VERSION, 555), // już w aktualnych
+            $row('2026-09-20', 'xl_history', 2, 777),  // dalej niż okno --days — też przeliczany
+        ]);
+
+        $this->assertSame(0, Artisan::call('erp:inventory-history', ['--outdated' => true, '--days' => 3, '--pause' => 0]));
+        $this->assertSame(100, (int) $this->bucket('2026-10-01', '', 'all', 'stock')['value']);
+        $this->assertSame(70, (int) $this->bucket('2026-09-30', '', 'all', 'stock')['value']);
+        $this->assertSame(70, (int) $this->bucket('2026-09-20', '', 'all', 'stock')['value']);
+        $this->assertSame(555, (int) $this->bucket('2026-09-29', '', 'all', 'stock')['value']);
+        $this->assertSame(0, DB::table(InventorySnapshots::TABLE)->where('taken_on', '2026-09-25')->count(), 'brakujących dni noc nie dopisuje');
+
+        // kolejna noc: nic przestarzałego — bez zapytań do XL i bez komunikatu
+        $calls = $this->xl->historyCalls;
+        $this->assertSame(0, Artisan::call('erp:inventory-history', ['--outdated' => true]));
+        $this->assertSame('', trim(Artisan::output()));
+        $this->assertSame($calls, $this->xl->historyCalls);
+    }
+
     public function test_buffered_sale_date_uses_last_change_with_the_right_clarion_shift(): void
     {
         // dzień ostatniej zmiany dokumentu w buforze: TrN_LastMod / 86400 (dni od 1.01.1990) + przesunięcie = data Clarion
