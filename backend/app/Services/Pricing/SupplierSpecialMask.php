@@ -239,6 +239,7 @@ final class SupplierSpecialMask
         $raw = $slot->getAttributes();
         $values = $masked->fields($raw['catalog_price_net'] ?? null, $raw['purchase_price'] ?? null, $raw['discount_percent'] ?? null);
         $values['size_price_max'] = $masked->scale($raw['size_price_max'] ?? null);
+        $values['carton_price_net'] = $masked->scale($raw['carton_price_net'] ?? null);
 
         return $this->cloneWith($slot, $this->onlyPresent($raw, $values));
     }
@@ -252,7 +253,10 @@ final class SupplierSpecialMask
         }
         $raw = $variant->getAttributes();
 
-        return $this->cloneWith($variant, $this->onlyPresent($raw, ['purchase_price' => $masked->scale($raw['purchase_price'] ?? null)]));
+        return $this->cloneWith($variant, $this->onlyPresent($raw, [
+            'purchase_price' => $masked->scale($raw['purchase_price'] ?? null),
+            'carton_price_net' => $masked->scale($raw['carton_price_net'] ?? null),
+        ]));
     }
 
     /**

@@ -113,7 +113,7 @@ final class SupplierSpecialMaskTest extends TestCase
     {
         // cenę karty (200) ustala inne źródło — karta bez maski, slot UVEX dalej w widoku standardowym
         $product = $this->card('OTHER', 200);
-        $slot = $this->uvexSlot($product, 173.19, ['size_price_max' => '190.00']);
+        $slot = $this->uvexSlot($product, 173.19, ['size_price_max' => '190.00', 'carton_price_net' => '150.00']);
         $mask = SupplierSpecialMask::hiding();
 
         $this->assertNull($mask->card($product->id));
@@ -124,6 +124,8 @@ final class SupplierSpecialMaskTest extends TestCase
         $this->assertSame('211.37', $maskedSlot->catalog_price_net);
         $this->assertSame('0.00', $maskedSlot->discount_percent);
         $this->assertSame('231.89', $maskedSlot->size_price_max);
+        // druga cena konta (przy pełnym kartonie) w tej samej proporcji co cena konta
+        $this->assertSame('183.07', $maskedSlot->carton_price_net);
         $this->assertSame(SupplierSpecialPrice::STANDARD, SupplierSpecialPrice::forSlot($maskedSlot)['status'] ?? null);
         // oryginał nietknięty
         $this->assertSame('173.19', $slot->purchase_price);

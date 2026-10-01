@@ -51,6 +51,7 @@ class B2bConnectorRegistry
         AtlasB2bConnector::class,
         BrubeckB2bConnector::class,
         MsaB2bConnector::class,
+        BigB2bConnector::class,
     ];
 
     /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */

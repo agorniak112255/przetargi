@@ -39,6 +39,8 @@ class ProductVariant extends Model
         'attributes',
         'purchase_price',
         'list_price_net',
+        // niższa cena tego rozmiaru przy pełnym kartonie (BIG, 01.10.2026) — ilość kartonu w slocie konta (carton_qty)
+        'carton_price_net',
         'currency',
         'vat_rate',
         'unit',
@@ -70,6 +72,7 @@ class ProductVariant extends Model
             'attributes' => 'array',
             'purchase_price' => 'decimal:2',
             'list_price_net' => 'decimal:2',
+            'carton_price_net' => 'decimal:2',
             'vat_rate' => 'decimal:2',
             'sort_order' => 'integer',
             'price_checked_at' => 'datetime',

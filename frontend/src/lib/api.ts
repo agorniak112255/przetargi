@@ -202,6 +202,8 @@ export type ProductVariant = {
   attributes: Record<string, string>
   purchase_price: string | null
   list_price_net: string | null
+  /** Niższa cena tego rozmiaru przy pełnym kartonie (BIG); null = sklep jej nie podaje. Karton — carton_qty slotu. */
+  carton_price_net?: string | null
   currency: string | null
   vat_rate: number | null
   unit: string | null
@@ -492,6 +494,12 @@ export type ProductSourcePrice = {
   /** Warunek ceny tego źródła (np. cena tylko za pełny karton) i ilość w kartonie. */
   price_note?: string | null
   price_carton_qty?: number | null
+  /**
+   * Druga cena konta: niższa cena przy pełnym kartonie carton_qty (BIG: „ab 96 Paar 0,92 €”). purchase_price zostaje
+   * ceną od minimum zamówienia; null = źródło jej nie podaje.
+   */
+  carton_price_net?: string | null
+  carton_qty?: number | null
   checked_at: string | null
   migrated: boolean
   is_effective: boolean

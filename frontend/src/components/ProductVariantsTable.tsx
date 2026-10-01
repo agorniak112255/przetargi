@@ -94,7 +94,9 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
     () => new Set(variants.items.map((v) => v.source ?? '').filter((s) => s !== '')).size > 1,
     [variants.items],
   )
-  const columnCount = (sizes ? 8 : Math.max(1, dims.length) + 6) + (multiSource ? 1 : 0)
+  // druga cena konta (BIG): niższa cena rozmiaru przy pełnym kartonie — kolumna tylko, gdy któryś rozmiar ją ma
+  const cartonPrices = sizes && variants.items.some((v) => v.carton_price_net != null)
+  const columnCount = (sizes ? 8 : Math.max(1, dims.length) + 6) + (multiSource ? 1 : 0) + (cartonPrices ? 1 : 0)
   const filtersActive = search.trim() !== '' || Object.values(filters).some((f) => f !== '')
 
   async function toggleRow(v: ProductVariant) {
@@ -229,6 +231,14 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
               </th>
               {sizes ? (
                 <>
+                  {cartonPrices && (
+                    <th
+                      className="p-2 text-right"
+                      title="Niższa cena przy zakupie pełnych kartonów (ilość w kartonie — w „Cenach ze źródeł”). Cena konta obok obowiązuje od minimum zamówienia."
+                    >
+                      Pełny karton
+                    </th>
+                  )}
                   <th className="p-2 text-right">Cena katalogowa</th>
                   <th className="p-2">Dostępność</th>
                 </>
@@ -319,6 +329,15 @@ export function ProductVariantsTable({ productId, variants }: { productId: numbe
                     </td>
                     {sizes ? (
                       <>
+                        {cartonPrices && (
+                          <td className="whitespace-nowrap p-2 text-right tabular-nums">
+                            {v.carton_price_net != null ? (
+                              `${formatPrice(v.carton_price_net)} ${currencyLabel(v.currency)}`
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
+                          </td>
+                        )}
                         <td className="whitespace-nowrap p-2 text-right tabular-nums">
                           {v.list_price_net !== null ? (
                             `${formatPrice(v.list_price_net)} ${currencyLabel(v.currency)}`

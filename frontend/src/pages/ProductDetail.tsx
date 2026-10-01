@@ -15,7 +15,7 @@ import { ProductVariantsTable } from '../components/ProductVariantsTable'
 import { ShopFieldsTables } from '../components/ShopFieldsTables'
 import { SupplierSpecialBadge } from '../components/SupplierSpecialBadge'
 import { SupplierSpecialPanel } from '../components/SupplierSpecialPanel'
-import { sizePriceMax, sizePriceTitle } from '../lib/orderQuantity'
+import { cartonPriceLabel, sizePriceMax, sizePriceTitle } from '../lib/orderQuantity'
 import { sortSourcePrices } from '../lib/sourcePrices'
 import { SUPPLIER_SPECIAL_INFERENCE_NOTE, supplierSpecialSummary } from '../lib/supplierSpecial'
 import {
@@ -901,6 +901,15 @@ export function ProductDetail() {
                         <td className="whitespace-nowrap p-2 text-right tabular-nums">{formatPrice(s.catalog_price_net)}</td>
                         <td className="whitespace-nowrap p-2 text-right tabular-nums">
                           {formatPrice(s.purchase_price)}
+                          {/* druga cena konta (BIG): niższa przy pełnym kartonie — cena zakupu wyżej to cena od minimum */}
+                          {s.carton_price_net != null && (
+                            <div
+                              className="mt-0.5 text-[11px] text-slate-600"
+                              title="Niższa cena tego dostawcy przy zakupie pełnych kartonów. Cena zakupu powyżej obowiązuje od minimum zamówienia i to od niej liczą się oferty."
+                            >
+                              {cartonPriceLabel(s.carton_qty, s.order_unit)}: <b>{formatPrice(s.carton_price_net)}</b>
+                            </div>
+                          )}
                           {/* warunek ceny tego źródła (Delta Plus: cena przy pełnym kartonie) — przy samej cenie */}
                           <div className="flex justify-end empty:hidden">
                             <SlotOrderQuantity slot={s} show="price" className="mt-1" />

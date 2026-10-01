@@ -696,6 +696,10 @@ final class B2bSizePriceMerger
             'catalog_price_net' => round((float) ($cheapest->list_price_net ?? $net), 2),
             'size_price_max' => $max !== null && $max - $net >= 0.005 ? $max : null,
             'currency' => strtoupper((string) $cheapest->currency),
+            // cena przy pełnym kartonie idzie za ceną karty — z tego samego, najtańszego rozmiaru; bez niej także bez
+            // ilości w kartonie (ilość zostaje, bo karton jest jeden na wyrób — BIG: jedno VE na artykuł)
+            'carton_price_net' => $cheapest->carton_price_net !== null ? round((float) $cheapest->carton_price_net, 2) : null,
+            ...($cheapest->carton_price_net === null ? ['carton_qty' => null] : []),
             // rabat slotu opisywał cenę zostającej karty — przy innej cenie nie wiadomo, czy dotyczy najtańszego rozmiaru
             ...($changed ? ['discount_percent' => null] : []),
             'checked_at' => $slot->checked_at,

@@ -142,6 +142,8 @@ final class ProductVariantPresenter
                 'attributes' => is_array($v->attributes) && $v->attributes !== [] ? $v->attributes : (object) [],
                 'purchase_price' => $this->money($v->purchase_price),
                 'list_price_net' => $this->money($v->list_price_net),
+                // niższa cena rozmiaru przy pełnym kartonie (BIG); ilość kartonu w slocie konta
+                'carton_price_net' => $this->money($v->carton_price_net),
                 'currency' => $v->currency,
                 'vat_rate' => $v->vat_rate !== null ? (float) $v->vat_rate : null,
                 'unit' => $v->unit,

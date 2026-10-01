@@ -708,6 +708,9 @@ class ProductController extends Controller
                 // warunek ceny dosłownie ze slotu (Delta Plus: cena za pełny karton); null = źródło go nie podaje
                 'price_note' => $slot->price_note,
                 'price_carton_qty' => $slot->price_carton_qty,
+                // druga cena konta: niższa przy pełnym kartonie (BIG); null = źródło jej nie podaje
+                'carton_price_net' => $slot->carton_price_net,
+                'carton_qty' => $slot->carton_qty,
                 'checked_at' => $slot->checked_at?->toISOString(),
                 'migrated' => (bool) $slot->migrated,
                 'is_effective' => $effectiveKey !== null && $slot->source_key === $effectiveKey,

@@ -50,6 +50,14 @@ export function orderableQty(qty: number | null | undefined, oq: Condition | nul
   return Math.abs(need - qty) < 1e-9 ? null : Number(need.toFixed(4))
 }
 
+/**
+ * Etykieta drugiej ceny konta (BIG): „pełny karton (96 Paar)”; bez ilości w kartonie — „pełny karton”. Cena zakupu
+ * obok to cena od minimum zamówienia — ta obowiązuje dopiero przy pełnych kartonach.
+ */
+export function cartonPriceLabel(qty: number | null | undefined, unit: string | null | undefined): string {
+  return qty != null && qty > 0 ? `pełny karton (${formatOrderQty(qty)}${unitSuffix(unit)})` : 'pełny karton'
+}
+
 type PriceCondition = Pick<OrderQuantity, 'price_note' | 'price_carton_qty' | 'unit'>
 
 /** Czy cena obowiązującego źródła ma warunek (np. Delta Plus: cena tylko za pełny karton). */

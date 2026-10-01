@@ -1158,6 +1158,7 @@ final class B2bCatalogSync
             $availabilityChanged = $remote->availability !== null && $slot?->availability !== $remote->availability;
             $orderChanged = $slot !== null && self::orderChanged($slot, $price->order);
             $conditionChanged = $slot !== null && self::priceConditionChanged($slot, $price->condition);
+            $cartonChanged = $slot !== null && self::cartonPriceChanged($slot, $price->carton);
             // najwyższa cena rozmiaru (null = jedna cena albo grupa bez cen rozmiarów)
             $sizeMaxChanged = $slot !== null && ! self::sameAmount($slot->size_price_max, $sizePriceMax);
             $slotChanged = $slot === null
@@ -1166,6 +1167,7 @@ final class B2bCatalogSync
                 || $availabilityChanged
                 || $orderChanged
                 || $conditionChanged
+                || $cartonChanged
                 || $sizeMaxChanged;
             $existing->fill($payload);
             $dirty = $existing->isDirty();
@@ -1175,6 +1177,7 @@ final class B2bCatalogSync
                 ...($availabilityChanged ? ['dostępność'] : []),
                 ...($orderChanged ? ['warunek zamawiania'] : []),
                 ...($conditionChanged ? ['warunek ceny'] : []),
+                ...($cartonChanged ? ['cena przy pełnym kartonie'] : []),
                 ...($firstAccountPrice ? ['cena z nowego konta'] : []),
                 ...($sizesChanged || $sizeMaxChanged ? ['rozmiary'] : []),
             ];
@@ -1250,6 +1253,8 @@ final class B2bCatalogSync
                     ...($price?->order !== null ? $price->order->slotValues() : []),
                     // null = łącznik nie czyta warunku ceny — zapisany zostaje
                     ...($price?->condition !== null ? $price->condition->slotValues() : []),
+                    // null = łącznik nie czyta ceny przy pełnym kartonie — zapisana zostaje
+                    ...($price?->carton !== null ? $price->carton->slotValues() : []),
                 ])['slot'];
 
                 // pierwszy wiersz konta na karcie to punkt odniesienia dla jego kolejnych zmian
@@ -1791,6 +1796,23 @@ final class B2bCatalogSync
     }
 
     /**
+     * Cena przy pełnym kartonie (BIG) zmieniła się względem zapisanej: inna cena albo karton, pojawiła się albo zniknęła.
+     * null ze źródła = łącznik jej nie czyta, brak zmiany.
+     */
+    private static function cartonPriceChanged(ProductSourcePrice $slot, ?B2bCartonPrice $carton): bool
+    {
+        if ($carton === null) {
+            return false;
+        }
+        $fresh = $carton->slotValues();
+        $sameQty = $slot->carton_qty === null || $fresh['carton_qty'] === null
+            ? $slot->carton_qty === $fresh['carton_qty']
+            : abs($slot->carton_qty - $fresh['carton_qty']) < 0.00005;
+
+        return ! self::sameAmount($slot->carton_price_net, $fresh['carton_price_net']) || ! $sameQty;
+    }
+
+    /**
      * Warunek ceny zmienił się względem zapisanego: inny przypis albo karton, albo przypis zniknął. Pierwszy zapis
      * (slot bez przypisu) nie jest zmianą — tak po wdrożeniu przypis Delta Plus nie ogłasza się na każdej z 999 kart.
      * null ze źródła = łącznik warunku nie czyta, brak zmiany.
@@ -2112,8 +2134,8 @@ final class B2bCatalogSync
     }
 
     /**
-     * Cena karty z ceny pozycji: net, cena katalogowa, rabat i waluta z pozycji, warunek zamawiania i warunek ceny
-     * z price() łącznika (te opisują cały wyrób). Bez ceny pozycji — cena łącznika bez zmian.
+     * Cena karty z ceny pozycji: net, cena katalogowa, rabat, waluta i cena przy pełnym kartonie z pozycji, warunek
+     * zamawiania i warunek ceny z price() łącznika (te opisują cały wyrób). Bez ceny pozycji — cena łącznika bez zmian.
      */
     private static function withPositionPrice(?B2bRemotePrice $connectorPrice, ?B2bRemotePrice $position): ?B2bRemotePrice
     {
@@ -2128,6 +2150,9 @@ final class B2bCatalogSync
             currency: $position->currency,
             order: $connectorPrice->order,
             condition: $connectorPrice->condition,
+            // cena przy pełnym kartonie należy do tej samej pozycji co cena karty (BIG: rozmiary mają różne kartonowe);
+            // kartonowa z price() mogłaby być innej pozycji — null = zapisana zostaje
+            carton: $position->carton,
         );
     }
 
@@ -2193,6 +2218,8 @@ final class B2bCatalogSync
                 'list_price_net' => $price->base !== null ? round($price->base, 2) : null,
                 'currency' => mb_substr(strtoupper(trim($price->currency)), 0, 3),
                 'sort_order' => max(0, $member['order']),
+                // null = łącznik nie czyta ceny przy pełnym kartonie — zapisana zostaje
+                ...($price->carton !== null ? ['carton_price_net' => $price->carton->slotValues()['carton_price_net']] : []),
                 'attributes' => null,
                 'removed_at' => null,
             ]);

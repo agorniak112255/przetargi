@@ -54,6 +54,9 @@ class ProductSourcePrice extends Model
         // warunek ceny konta (Delta Plus: cena za pełny karton) — przypis dosłownie i ilość w kartonie
         'price_note',
         'price_carton_qty',
+        // druga cena konta: niższa cena przy pełnym kartonie carton_qty (BIG, 01.10.2026); purchase_price zostaje ceną od minimum
+        'carton_price_net',
+        'carton_qty',
         'checked_at',
         'migrated',
     ];
@@ -86,6 +89,8 @@ class ProductSourcePrice extends Model
             'order_step_qty' => 'float',
             'order_varies' => 'boolean',
             'price_carton_qty' => 'float',
+            'carton_price_net' => 'decimal:2',
+            'carton_qty' => 'float',
             'checked_at' => 'datetime',
             'migrated' => 'boolean',
         ];
