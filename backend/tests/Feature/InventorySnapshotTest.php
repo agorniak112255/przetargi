@@ -202,8 +202,10 @@ final class InventorySnapshotTest extends TestCase
         $this->assertTrue($r->json('weekly'));
         $dates = array_column($r->json('points'), 'date');
         $this->assertLessThan(70, count($dates));
-        // ostatni zapisany dzień zostaje ostatnim punktem
+        // ostatni zapisany dzień zostaje ostatnim punktem, pierwszy dzień okresu — pierwszym (1.01.2025 to środa,
+        // potem ostatni dzień każdego tygodnia: niedziela 5.01)
         $this->assertSame($day->addDays(419)->toDateString(), end($dates));
+        $this->assertSame(['2025-01-01', '2025-01-05', '2025-01-12'], array_slice($dates, 0, 3));
     }
 
     private function storeDay(string $day, string $location, string $scope, float $stock, float $unsold): void

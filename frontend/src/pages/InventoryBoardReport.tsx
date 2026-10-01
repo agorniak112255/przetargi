@@ -1241,7 +1241,9 @@ function HistoryChartSvg({ values, stroke, label, height }: { values: ChartPoint
   const y = (v: number) => T + (1 - (v - lo) / Math.max(1e-9, hi - lo)) * (H - T - B)
   // przerwa w linii, gdy brakuje zapisu (odstęp ponad 1,5× zwykłego kroku)
   const gaps = values.slice(1).map((v, i) => dayTime(v.date) - dayTime(values[i].date))
-  const usual = Math.min(...gaps)
+  // zwykły odstęp = mediana (dzień albo tydzień); najmniejszy odstęp przy punktach tygodniowych z ostatnim dniem okresu
+  // (np. 4 dni) robił z każdego tygodnia „brak zapisu” i linia znikała
+  const usual = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)]
   let d = ''
   values.forEach((v, i) => {
     const jump = i === 0 || dayTime(v.date) - dayTime(values[i - 1].date) > usual * 1.5

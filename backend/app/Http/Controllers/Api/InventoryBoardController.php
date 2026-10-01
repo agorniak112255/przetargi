@@ -319,11 +319,16 @@ class InventoryBoardController extends Controller
         $points = $rows->map(fn ($r): array => ['date' => substr((string) $r->taken_on, 0, 10), 'source' => (string) $r->source, ...$this->historyBuckets((string) $r->totals)])->all();
         $weekly = count($points) > self::HISTORY_MAX_POINTS;
         if ($weekly) {
+            // ostatni zapisany dzień każdego tygodnia, a na początku pierwszy dzień okresu (zmiana „od …” liczona od niego)
             $byWeek = [];
             foreach ($points as $p) {
                 $byWeek[CarbonImmutable::parse($p['date'])->format('o-W')] = $p;
             }
+            $firstPoint = $points[0];
             $points = array_values($byWeek);
+            if ($points[0]['date'] !== $firstPoint['date']) {
+                array_unshift($points, $firstPoint);
+            }
         }
 
         $days = DB::table($table)->whereBetween('taken_on', [$from, $to]);
