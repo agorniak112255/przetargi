@@ -128,6 +128,12 @@ final class InventoryApiTest extends TestCase
         $this->assertEquals([40, 200, 1000, 5, 'lots'], [$res->json('data.0.quantity'), $res->json('data.0.stock_value'), $res->json('data.0.stock_in_scope'), $res->json('data.0.unit_cost'), $res->json('data.0.value_source')]);
         $this->assertEquals([5, 50, 5], [$res->json('data.1.quantity'), $res->json('data.1.stock_value'), $res->json('data.1.stock_in_scope')]);
         $this->assertEquals(250, $res->json('summary.value'));
+        // etykiety magazynów: też tylko stare sztuki; towar bez zapisanych partii — cały stan
+        $chips = fn (string $code, $r): array => array_map(static fn (array $w): array => [$w['code'], $w['quantity']], collect($r->json('data'))->firstWhere('code', $code)['warehouses']);
+        $this->assertEquals([['01H', 40]], $chips('MASKA', $res));
+        $this->assertEquals([['01H', 5]], $chips('NOLOTS', $res));
+        $this->assertEquals([['01H', 100]], $chips('MASKA', $this->getJson('/api/inventory?months=0&lot_months=36')->assertOk()));
+        $this->assertEquals([['01H', 1000]], $chips('MASKA', $this->getJson('/api/inventory?months=0')->assertOk()));
         // 3 lata: także partia z 2023 r.; sortowanie po wartości z partii sprzed progu
         $res = $this->getJson('/api/inventory?months=0&lot_months=36&sort=value&dir=desc')->assertOk();
         $this->assertEquals([100, 530], [$res->json('data.0.quantity'), $res->json('data.0.stock_value')]);

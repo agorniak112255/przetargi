@@ -10,12 +10,14 @@ use App\Models\ErpItemPurchase;
 use App\Models\ErpRwPwPair;
 use App\Services\Erp\ErpItemCards;
 use App\Services\Erp\InventoryQuery;
+use App\Services\Erp\StockLots;
 use App\Services\Erp\WarehouseLocations;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 /**
@@ -28,7 +30,8 @@ use Illuminate\Validation\Rule;
  * magazynów oddziału (w wierszu także ostatnia sprzedaż z dowolnego magazynu).
  *
  * Filtr „partia leży od” (lot_months): ilość, wartość, suma i sortowanie tylko z partii przyjętych najpóźniej w dniu progu
- * (InventoryQuery::lotsUntil*; decyzja właściciela 01.10.2026) — stock_in_scope w wierszu to cały stan zakresu.
+ * (InventoryQuery::lotsUntil*; decyzja właściciela 01.10.2026) — stock_in_scope w wierszu to cały stan zakresu; magazyny
+ * wiersza też tylko ze sztukami z tych partii (towar bez zapisanych partii — cały stan, jak lotsUntil*).
  */
 class InventoryController extends Controller
 {
@@ -116,10 +119,11 @@ class InventoryController extends Controller
 
         $cards = $this->cards->forItems($page->getCollection());
         $rwPw = $this->rwPwCounts($page->getCollection()->pluck('id')->all());
+        $oldLots = $lotCutoff !== null ? $this->oldLotsByWarehouse($page->getCollection()->pluck('id')->all(), $lotCutoff) : null;
         $syncedAt = ErpItem::query()->whereNull('removed_at')->max('synced_at');
 
         return response()->json([
-            'data' => $page->getCollection()->map(fn (ErpItem $item): array => $this->present($item, $cards[(int) $item->id], $rwPw[(int) $item->id] ?? 0, $location, $lotCutoff !== null))->values()->all(),
+            'data' => $page->getCollection()->map(fn (ErpItem $item): array => $this->present($item, $cards[(int) $item->id], $rwPw[(int) $item->id] ?? 0, $location, $lotCutoff !== null, $oldLots))->values()->all(),
             'meta' => [
                 'current_page' => $page->currentPage(),
                 'last_page' => $page->lastPage(),
@@ -193,6 +197,40 @@ class InventoryController extends Controller
     }
 
     /**
+     * Sztuki z partii przyjętych najpóźniej w dniu progu na magazyn — towary ze strony, jedno zapytanie. Klucz towaru
+     * jest też dla towaru z partiami, ale bez starych (pusta lista); brak klucza = towar bez zapisanych partii.
+     *
+     * @param  list<int>  $itemIds
+     * @return array<int, array<string, array{quantity: float, value: float|null}>>
+     */
+    private function oldLotsByWarehouse(array $itemIds, CarbonImmutable $cutoff): array
+    {
+        if ($itemIds === []) {
+            return [];
+        }
+        $out = array_fill_keys(
+            DB::table(StockLots::TABLE)->whereIn('erp_item_id', $itemIds)->distinct()->pluck('erp_item_id')->map(static fn ($id): int => (int) $id)->all(),
+            [],
+        );
+        $rows = DB::table(StockLots::TABLE)
+            ->whereIn('erp_item_id', $itemIds)
+            ->whereNotNull('received_at')
+            ->where('received_at', '<=', $cutoff->toDateString())
+            ->groupBy('erp_item_id', 'warehouse_code')
+            ->selectRaw('erp_item_id, warehouse_code, sum(quantity) as quantity, sum(value) as value, count(*) as lots, count(value) as valued')
+            ->get();
+        foreach ($rows as $r) {
+            $out[(int) $r->erp_item_id][(string) $r->warehouse_code] = [
+                'quantity' => (float) $r->quantity,
+                // partia bez wartości z XL — wartości magazynu nie znamy (jak w rozbiciu stanu)
+                'value' => (int) $r->lots === (int) $r->valued ? round((float) $r->value, 2) : null,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
      * Liczba par RW → PW towarów ze strony — jedno zapytanie.
      *
      * @param  list<int>  $itemIds
@@ -219,11 +257,26 @@ class InventoryController extends Controller
      * @param  array{card: array<string, mixed>|null, cards_count: int}  $card
      * @return array<string, mixed>
      */
-    private function present(ErpItem $item, array $card, int $rwPwPairs, ?string $location = null, bool $oldLotsOnly = false): array
+    /**
+     * @param  array<int, array<string, array{quantity: float, value: float|null}>>|null  $oldLots  magazyny ze starymi partiami (oldLotsByWarehouse)
+     */
+    private function present(ErpItem $item, array $card, int $rwPwPairs, ?string $location = null, bool $oldLotsOnly = false, ?array $oldLots = null): array
     {
         /** @var ErpItemPurchase|null $purchase */
         $purchase = $item->purchases->first();
         $warehouses = $item->stock_by_warehouse ?? [];
+        // filtr wieku partii: magazyny tylko ze sztukami z partii sprzed progu (od największej ilości)
+        $chips = $warehouses;
+        if ($oldLots !== null && array_key_exists((int) $item->id, $oldLots)) {
+            $names = array_column($warehouses, 'name', 'code');
+            $chips = [];
+            foreach ($oldLots[(int) $item->id] as $code => $lot) {
+                if ($lot['quantity'] > 0) {
+                    $chips[] = ['code' => (string) $code, 'name' => (string) ($names[$code] ?? $code), 'quantity' => $lot['quantity'], 'value' => $lot['value']];
+                }
+            }
+            usort($chips, static fn (array $a, array $b): int => $b['quantity'] <=> $a['quantity']);
+        }
         $quantity = (float) $item->getAttribute('scope_quantity');
         // wartość partii zakresu (wszystkie magazyny albo magazyny oddziału); null = któryś magazyn bez wartości z XL
         $lotsValue = $item->stock_value !== null ? (float) $item->stock_value : null;
@@ -275,7 +328,7 @@ class InventoryController extends Controller
                 'quantity' => (float) ($w['quantity'] ?? 0),
                 'value' => isset($w['value']) ? (float) $w['value'] : null,
                 'location' => WarehouseLocations::of((string) ($w['code'] ?? '')),
-            ], $warehouses)),
+            ], $chips)),
             // w oddziale — z dokumentów jego magazynów; last_sale_any_at — z dowolnego magazynu
             'last_sale_at' => $item->getAttribute('scope_last_sale') !== null ? substr((string) $item->getAttribute('scope_last_sale'), 0, 10) : null,
             'last_sale_any_at' => $item->last_sale_at?->toDateString(),
