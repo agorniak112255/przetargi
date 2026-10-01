@@ -42,7 +42,8 @@ class CampaignsStockFollowupCommand extends Command
         $rows = DB::table('campaign_items as ci')
             ->join('campaigns as c', 'c.id', '=', 'ci.campaign_id')
             ->join('erp_items', 'erp_items.id', '=', 'ci.erp_item_id')
-            ->where('c.status', Campaign::STATUS_SENT)
+            // w wysyłce też: po dopisaniu odbiorców kampania wraca do sending, a sent_at zostaje z pierwszego zakończenia
+            ->whereIn('c.status', [Campaign::STATUS_SENT, Campaign::STATUS_SENDING])
             ->whereNotNull('c.sent_at')
             ->where('c.sent_at', '<=', $sentBefore)
             ->where('c.sent_at', '>=', $sentAfter)

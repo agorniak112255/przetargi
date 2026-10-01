@@ -48,6 +48,8 @@ class AudienceResolver
             'excluded_generic' => $r['excluded_generic'],
             'suppressed' => $r['suppressed'],
             'capped' => $r['capped'],
+            // adresy, które już są odbiorcami tej kampanii (dopisywanie do wysłanej) — nie dostaną maila drugi raz
+            'already' => $r['already'],
             'final' => count($r['final']),
             'without_mailbox' => $campaign->user?->mailAccount === null,
             'sample' => array_map(static fn (array $f): array => [
@@ -63,7 +65,7 @@ class AudienceResolver
      * Pełna lista odbiorców (final) i pominiętych z powodem (bez duplikatów) — okno potwierdzenia przed wysyłką.
      *
      * @return array{list_rows: int, xl_customers: int, xl_emails: int, duplicates: int, invalid: int,
-     *     excluded_generic: int, suppressed: int, capped: int, warnings: list<string>,
+     *     excluded_generic: int, suppressed: int, capped: int, already: int, warnings: list<string>,
      *     final: list<array{email: string, name: string|null, source: string, origin: string, contact_id: int|null, erp_customer_id: int|null}>,
      *     waiting: list<array{email: string, name: string|null, source: string, origin: string, contact_id: int|null, erp_customer_id: int|null}>,
      *     skipped: list<array{email: string, name: string|null, source: string, origin: string, reason: string}>}
@@ -122,7 +124,7 @@ class AudienceResolver
 
     /**
      * @return array{list_rows: int, xl_customers: int, xl_emails: int, duplicates: int, invalid: int,
-     *     excluded_generic: int, suppressed: int, capped: int, warnings: list<string>,
+     *     excluded_generic: int, suppressed: int, capped: int, already: int, warnings: list<string>,
      *     final: list<array{email: string, name: string|null, source: string, origin: string, contact_id: int|null, erp_customer_id: int|null}>,
      *     waiting: list<array{email: string, name: string|null, source: string, origin: string, contact_id: int|null, erp_customer_id: int|null}>,
      *     skipped: list<array{email: string, name: string|null, source: string, origin: string, reason: string}>}
@@ -205,6 +207,17 @@ class AudienceResolver
             $valid[$email] = [...$c, 'email' => $email];
         }
 
+        // już odbiorcy tej kampanii (dopisywanie po starcie wysyłki) — wypadają bez wpisu w pominiętych
+        $alreadySet = $campaign->exists ? $this->existing(array_keys($valid), static fn (array $chunk) => CampaignRecipient::query()
+            ->where('campaign_id', $campaign->id)->whereIn('email', $chunk)->pluck('email')) : [];
+        $already = 0;
+        foreach (array_keys($alreadySet) as $email) {
+            if (isset($valid[$email])) {
+                unset($valid[$email]);
+                $already++;
+            }
+        }
+
         // wypisani (wszystkie kampanie wszystkich nadawców) → limit częstotliwości
         $suppressedSet = $this->existing(array_keys($valid), static fn (array $chunk) => EmailSuppression::query()
             ->whereIn('email', $chunk)->pluck('email'));
@@ -255,6 +268,7 @@ class AudienceResolver
             'excluded_generic' => $generic,
             'suppressed' => $suppressed,
             'capped' => $capped,
+            'already' => $already,
             'warnings' => $warnings,
             'final' => $final,
             'waiting' => $waiting,

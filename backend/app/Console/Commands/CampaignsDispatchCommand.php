@@ -40,8 +40,8 @@ class CampaignsDispatchCommand extends Command
             'error' => 'przerwane — nie wiadomo, czy wysłano',
             'updated_at' => Carbon::now(),
         ]);
-        // kampanie w wysyłce przeliczy finishIfDone; anulowanej liczniki poprawiamy tutaj
-        foreach (Campaign::query()->whereIn('id', $staleCampaigns)->where('status', Campaign::STATUS_CANCELLED)->get() as $cancelled) {
+        // kampanie w wysyłce przeliczy finishIfDone; anulowanej (także anulowane dopisanie → „wysłana”) liczniki poprawiamy tutaj
+        foreach (Campaign::query()->whereIn('id', $staleCampaigns)->whereIn('status', [Campaign::STATUS_CANCELLED, Campaign::STATUS_SENT])->get() as $cancelled) {
             $cancelled->forceFill(['totals' => CampaignSender::totals($cancelled)])->save();
         }
 
@@ -163,7 +163,10 @@ class CampaignsDispatchCommand extends Command
         return $sent;
     }
 
-    /** Brak odbiorców pending i sending → kampania wysłana (sent_at, totals). */
+    /**
+     * Brak odbiorców pending i sending → kampania wysłana (sent_at, totals). Po dopisaniu odbiorców sent_at zostaje
+     * z pierwszego zakończenia — od niego liczy się stan po 7 i 30 dniach.
+     */
     private function finishIfDone(Campaign $campaign): bool
     {
         return DB::transaction(function () use ($campaign): bool {
@@ -181,7 +184,7 @@ class CampaignsDispatchCommand extends Command
             }
             $locked->forceFill([
                 'status' => Campaign::STATUS_SENT,
-                'sent_at' => Carbon::now(),
+                'sent_at' => $locked->sent_at ?? Carbon::now(),
                 'totals' => CampaignSender::totals($locked),
             ])->save();
 

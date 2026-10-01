@@ -11,6 +11,7 @@ use App\Models\EmailSuppression;
 use App\Models\User;
 use App\Models\UserMailAccount;
 use App\Notifications\CampaignScheduleFailedNotification;
+use App\Services\Erp\ErpCampaignSalesSync;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder as QueryBuilder;
@@ -163,6 +164,66 @@ class CampaignSender
         return $campaign->fresh() ?? $campaign;
     }
 
+    /**
+     * Czy do kampanii można dopisać odbiorców: wysłana albo w trakcie wysyłki, oferta jeszcze ważna (valid_until)
+     * i nie minęło okno wyniku sprzedaży (ErpCampaignSalesSync::WINDOW_DAYS od startu — później zakupów nowych
+     * odbiorców nikt by nie policzył). Uprawnienia (tylko autor) sprawdza wywołujący.
+     */
+    public static function canAddRecipients(Campaign $campaign): bool
+    {
+        return in_array($campaign->status, [Campaign::STATUS_SENT, Campaign::STATUS_SENDING], true)
+            && ($campaign->valid_until === null || ! $campaign->valid_until->lt(Carbon::today()))
+            && $campaign->sending_started_at !== null
+            && $campaign->sending_started_at->copy()->startOfDay()->addDays(ErpCampaignSalesSync::WINDOW_DAYS)->gte(Carbon::today());
+    }
+
+    /**
+     * Dopisanie odbiorców do wysłanej (albo wysyłanej) kampanii: ci z bieżącego wyboru odbiorców, którzy nie są jeszcze
+     * jej odbiorcami (AudienceResolver pomija obecnych), z sumą kontrolną z okna potwierdzenia. Kampania wraca do
+     * wysyłki; pierwsze daty (sending_started_at, sent_at) i zapis pozycji z pierwszego startu zostają — od nich liczą
+     * się wyniki. Zwraca kampanię i liczbę dopisanych.
+     *
+     * @return array{0: Campaign, 1: int}
+     */
+    public function addRecipients(Campaign $campaign, User $actor, string $expectedChecksum): array
+    {
+        $this->assertAuthor($campaign, $actor, 'Dopisać odbiorców może tylko autor kampanii — maile wyjdą z jego skrzynki.');
+        $this->assertPublicUrl();
+
+        [$campaign, $added] = DB::transaction(function () use ($campaign, $expectedChecksum): array {
+            /** @var Campaign $locked */
+            $locked = Campaign::query()->whereKey($campaign->id)->lockForUpdate()->firstOrFail();
+            if (! in_array($locked->status, [Campaign::STATUS_SENT, Campaign::STATUS_SENDING], true)) {
+                throw $this->invalid('Odbiorców można dopisać tylko do kampanii wysłanej albo w trakcie wysyłki.');
+            }
+            if (! self::canAddRecipients($locked)) {
+                throw $this->invalid(self::addClosedMessage());
+            }
+            if ($this->accountOf($locked) === null) {
+                throw $this->invalid('Nie ustawiono skrzynki w „Moje konto → Moja poczta”.');
+            }
+            $before = CampaignRecipient::query()->where('campaign_id', $locked->id)->count();
+            $added = $this->audience->materialize($locked, $expectedChecksum) - $before;
+            if ($added <= 0) {
+                throw $this->invalid('Brak nowych odbiorców — wszyscy wybrani już są odbiorcami tej kampanii albo zostali pominięci.');
+            }
+            $locked->forceFill([
+                'status' => Campaign::STATUS_SENDING,
+                'totals' => self::totals($locked),
+            ])->save();
+
+            return [$locked, $added];
+        });
+
+        return [$campaign->fresh() ?? $campaign, $added];
+    }
+
+    public static function addClosedMessage(): string
+    {
+        return 'Do tej kampanii nie można już dopisać odbiorców (minęła ważność oferty albo '.ErpCampaignSalesSync::WINDOW_DAYS
+            .' dni od wysyłki) — zduplikuj kampanię.';
+    }
+
     /** Cofnięcie planowania: zaplanowana → projekt (do zmian albo innej godziny). */
     public function unschedule(Campaign $campaign): Campaign
     {
@@ -218,7 +279,10 @@ class CampaignSender
         return $stats;
     }
 
-    /** Anulowanie: sending → cancelled, odbiorcy pending → skipped. */
+    /**
+     * Anulowanie: sending → cancelled, odbiorcy pending → skipped. Kampania już raz zakończona (sent_at), do której
+     * dopisano odbiorców, wraca do „wysłana” — anuluje się tylko dopisanie.
+     */
     public function cancel(Campaign $campaign): Campaign
     {
         $campaign = DB::transaction(function () use ($campaign): Campaign {
@@ -231,7 +295,10 @@ class CampaignSender
                 ->where('campaign_id', $locked->id)
                 ->where('status', CampaignRecipient::STATUS_PENDING)
                 ->update(['status' => CampaignRecipient::STATUS_SKIPPED, 'error' => 'kampania anulowana', 'updated_at' => Carbon::now()]);
-            $locked->forceFill(['status' => Campaign::STATUS_CANCELLED, 'totals' => self::totals($locked)])->save();
+            $locked->forceFill([
+                'status' => $locked->sent_at !== null ? Campaign::STATUS_SENT : Campaign::STATUS_CANCELLED,
+                'totals' => self::totals($locked),
+            ])->save();
 
             return $locked;
         });
@@ -500,7 +567,9 @@ class CampaignSender
     {
         DB::transaction(function () use ($recipient, $status, $error, $extra): void {
             $campaign = Campaign::query()->whereKey($recipient->campaign_id)->lockForUpdate()->first();
-            $cancelled = $campaign?->status === Campaign::STATUS_CANCELLED;
+            // wysyłka zatrzymana: anulowana albo anulowane dopisanie (kampania wróciła do „wysłana”) — nikt już nie
+            // ponowi próby, a liczniki trzeba poprawić tutaj
+            $cancelled = in_array($campaign?->status, [Campaign::STATUS_CANCELLED, Campaign::STATUS_SENT], true);
             if ($cancelled && $status === CampaignRecipient::STATUS_PENDING) {
                 [$status, $error] = [CampaignRecipient::STATUS_SKIPPED, 'kampania anulowana'];
             }

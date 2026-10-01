@@ -127,6 +127,37 @@ final class CampaignSalesTest extends TestCase
         $this->assertEquals(['customers' => 2, 'net_value' => 2373.0, 'complete' => false], $row['sales']);
     }
 
+    public function test_recipient_added_later_counts_only_purchases_from_his_mail_day(): void
+    {
+        $author = $this->sender();
+        $boots = $this->erpItem('B20417', 100, ['xl_gid' => 501]);
+        $alfa = $this->customer('ALFA', ['zakupy@alfa.pl'], [], ['xl_gid' => 9001]);
+        $beta = $this->customer('BETA', ['jan@beta.pl'], [], ['xl_gid' => 9002]);
+        $campaign = $this->campaign($author, [$boots], ['status' => 'sent', 'sending_started_at' => '2026-09-01 09:00', 'sent_at' => '2026-09-01 11:00']);
+        CampaignRecipient::query()->create([
+            'campaign_id' => $campaign->id, 'email' => 'zakupy@alfa.pl', 'erp_customer_id' => $alfa->id, 'source' => 'xl',
+            'token' => str_repeat('a', 40), 'status' => 'sent', 'sent_at' => '2026-09-01 10:00',
+        ]);
+        // BETA dopisana 15.09 — zakup z 10.09 był przed jej mailem
+        CampaignRecipient::query()->create([
+            'campaign_id' => $campaign->id, 'email' => 'jan@beta.pl', 'erp_customer_id' => $beta->id, 'source' => 'xl',
+            'token' => str_repeat('b', 40), 'status' => 'sent', 'sent_at' => '2026-09-15 08:00',
+        ]);
+        $this->xl->saleLineRows = [
+            FakeErpXlGateway::saleLine(10, $this->d('2026-09-10'), 9002, 501, 2, 200),
+            FakeErpXlGateway::saleLine(11, $this->d('2026-09-15'), 9002, 501, 3, 300),
+            FakeErpXlGateway::saleLine(12, $this->d('2026-09-05'), 9001, 501, 1, 100),
+        ];
+        app(ErpCampaignSalesSync::class)->run();
+
+        Sanctum::actingAs($author);
+        $sales = $this->getJson("/api/campaigns/{$campaign->id}")->assertOk()->json('sales');
+        $this->assertEquals(['customers' => 2, 'net_value' => 400.0], $sales['recipients']);
+        $this->assertEquals(['customers' => 1, 'net_value' => 200.0], $sales['others']);
+        $this->assertSame(['2026-09-05', '2026-09-15'], array_column($sales['buyers'], 'sold_at'));
+        $this->assertEquals(['customers' => 2, 'net_value' => 400.0, 'complete' => false], $this->getJson('/api/campaigns')->json('data.0.sales'));
+    }
+
     public function test_draft_has_no_sales_and_command_skips_without_xl(): void
     {
         $author = $this->sender();

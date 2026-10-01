@@ -226,7 +226,7 @@ final class CampaignAudienceSelectionTest extends TestCase
 
         $res = $this->getJson("/api/campaigns/{$campaign->id}/audience/recipients")->assertOk();
         $this->assertSame([
-            'total' => 2, 'from_lists' => 3, 'from_xl' => 3, 'duplicates' => 1,
+            'total' => 2, 'from_lists' => 3, 'from_xl' => 3, 'duplicates' => 1, 'already' => 0,
             'skipped' => ['invalid' => 1, 'generic' => 1, 'suppressed' => 1, 'capped' => 0],
         ], $res->json('summary'));
         $this->assertSame(sha1("jan@alfa.pl\nkontakt@beta.pl"), $res->json('checksum'));

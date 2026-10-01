@@ -35,6 +35,7 @@ import {
   CAMPAIGN_LAYOUT_LABEL,
   LAYOUTS_WITH_DESCRIPTION,
   addCampaignItems,
+  addCampaignRecipients,
   applyTemplate,
   checkCampaignReplies,
   campaignAudience,
@@ -269,6 +270,8 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
   const editable = campaign.status === 'draft' && campaign.can_edit
   const isAuthor = user?.id === campaign.author.id
   const canCancel = campaign.status === 'sending' && (isAuthor || can(user, 'campaigns.manage'))
+  // sam podgląd (campaigns.view): bez duplikowania, sprawdzania skrzynki i dopisywania
+  const canManage = campaign.can_manage ?? true
 
   return (
     <div>
@@ -306,9 +309,11 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button type="button" className={BTN} disabled={duplicating} onClick={() => void duplicate()}>
-            Duplikuj
-          </button>
+          {canManage && can(user, 'campaigns.use') && (
+            <button type="button" className={BTN} disabled={duplicating} onClick={() => void duplicate()}>
+              Duplikuj
+            </button>
+          )}
           {(editable || campaign.can_delete) && (
             <button
               type="button"
@@ -363,7 +368,16 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
           }}
         />
       ) : (
-        <SentView campaign={campaign} onReload={load} />
+        <SentView
+          campaign={campaign}
+          canManage={canManage}
+          mutate={mutate}
+          onReload={load}
+          onChanged={(c) => {
+            setErr('')
+            setCampaign(c)
+          }}
+        />
       )}
 
       {dialog === 'delete' && (
@@ -405,12 +419,25 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
           onClose={() => setDialog(null)}
           onConfirm={() => void confirmDialog()}
           message={
-            <>
-              <p>
-                Maile, które już wyszły, zostają u klientów. Pozostali odbiorcy <b>nie dostaną</b> tej kampanii.
-              </p>
-              <p className="text-xs text-slate-600">Anulowanej kampanii nie da się wznowić — można ją zduplikować.</p>
-            </>
+            campaign.sent_at ? (
+              // kampania już raz zakończona, trwa wysyłka do dopisanych — anuluje się tylko dopisanie
+              <>
+                <p>
+                  Maile, które już wyszły, zostają u klientów. Dopisani odbiorcy, którzy jeszcze czekają, <b>nie dostaną</b>{' '}
+                  tej kampanii.
+                </p>
+                <p className="text-xs text-slate-600">
+                  Kampania wróci do stanu „Wysłana”. Zatrzymanych adresów nie da się dopisać do niej drugi raz.
+                </p>
+              </>
+            ) : (
+              <>
+                <p>
+                  Maile, które już wyszły, zostają u klientów. Pozostali odbiorcy <b>nie dostaną</b> tej kampanii.
+                </p>
+                <p className="text-xs text-slate-600">Anulowanej kampanii nie da się wznowić — można ją zduplikować.</p>
+              </>
+            )
           }
         />
       )}
@@ -1180,6 +1207,7 @@ function AudienceStep({
   audienceLoading,
   audienceErr,
   onNext,
+  nextLabel = 'Dalej: treść →',
 }: {
   campaign: Campaign
   editable: boolean
@@ -1188,6 +1216,8 @@ function AudienceStep({
   audienceLoading: boolean
   audienceErr: string
   onNext: () => void
+  /** „Dopisz odbiorców” w wysłanej kampanii ma inny następny krok niż kreator. */
+  nextLabel?: string
 }) {
   const { user } = useAuth()
   const [lists, setLists] = useState<MailingList[] | null>(null)
@@ -1460,7 +1490,7 @@ function AudienceStep({
           Maile wychodzą z Twojej skrzynki („Moja poczta”), więc odpowiedzi klientów wrócą prosto do Ciebie.
         </p>
         <button type="button" className={`${BTN_PRIMARY} mt-3 w-full`} onClick={onNext}>
-          Dalej: treść →
+          {nextLabel}
         </button>
       </aside>
     </div>
@@ -1491,6 +1521,12 @@ function AudienceSummary({ a, loading }: { a: AudiencePreview; loading: boolean 
         <dd className="text-right tabular-nums">{minus(a.suppressed)}</dd>
         <dt className="text-slate-600">Dostali niedawno inną kampanię</dt>
         <dd className="text-right tabular-nums">{minus(a.capped)}</dd>
+        {(a.already ?? 0) > 0 && (
+          <>
+            <dt className="text-slate-600">Już dostali tę kampanię</dt>
+            <dd className="text-right tabular-nums">{minus(a.already ?? 0)}</dd>
+          </>
+        )}
         <dt className="border-t border-slate-200 pt-1.5 font-semibold text-slate-900">Wyślemy do</dt>
         <dd className="border-t border-slate-200 pt-1.5 text-right text-base font-semibold tabular-nums text-emerald-700">
           {fmtInt(a.final)}
@@ -2175,7 +2211,24 @@ const RECIPIENT_FILTERS: { value: CampaignRecipientStatus | ''; label: string }[
   { value: 'skipped', label: 'pominięci' },
 ]
 
-function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => Promise<void> }) {
+function SentView({
+  campaign,
+  canManage,
+  mutate,
+  onReload,
+  onChanged,
+}: {
+  campaign: Campaign
+  /** Autor albo „Kampanie — wszystkie”; sam podgląd = tylko odczyt i test do siebie. */
+  canManage: boolean
+  mutate: Mutate
+  onReload: () => Promise<void>
+  onChanged: (c: Campaign) => void
+}) {
+  const [adding, setAdding] = useState(false)
+  const [addedMsg, setAddedMsg] = useState('')
+  const [testBusy, setTestBusy] = useState(false)
+  const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [counts, setCounts] = useState<CampaignTotals | null>(null)
   const [filter, setFilter] = useState<CampaignRecipientStatus | ''>('')
   const [page, setPage] = useState(1)
@@ -2260,6 +2313,24 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
     }
   }
 
+  async function sendTestToMe() {
+    setTestBusy(true)
+    setTestMsg(null)
+    try {
+      const res = await sendCampaignTest(campaign.id)
+      setTestMsg({ ok: true, text: res.message })
+    } catch (ex) {
+      setTestMsg({ ok: false, text: errorText(ex, 'Nie udało się wysłać maila testowego.') })
+    } finally {
+      setTestBusy(false)
+    }
+  }
+
+  // dopisani po starcie wysyłki (minuta zapasu na zapis odbiorców przy starcie)
+  const startedMs = campaign.sending_started_at ? new Date(campaign.sending_started_at).getTime() : null
+  const addedLater = (r: CampaignRecipientRow) =>
+    startedMs !== null && r.created_at != null && new Date(r.created_at).getTime() - startedMs > 60_000
+
   const c = counts
   const done = c ? c.sent + c.failed + c.skipped : 0
   const waiting = c ? Math.max(0, c.recipients - done) : null
@@ -2286,11 +2357,40 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
           tone={sending && waiting ? 'attention' : undefined}
         />
         <SentKpi
-          label={campaign.sent_at ? 'Zakończona' : 'Rozpoczęta'}
-          value={fmtDateTime(campaign.sent_at ?? campaign.sending_started_at)}
+          label={campaign.status === 'sending' || !campaign.sent_at ? 'Rozpoczęta' : 'Zakończona'}
+          value={fmtDateTime(campaign.status === 'sending' ? campaign.sending_started_at : (campaign.sent_at ?? campaign.sending_started_at))}
           small
         />
       </div>
+
+      {campaign.can_add_recipients && !adding && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white px-4 py-2.5 text-xs shadow-sm">
+          <span className="text-slate-600">
+            Chcesz wysłać tę kampanię jeszcze komuś? Dopisani dostaną ten sam mail, a wyniki zostaną w tej kampanii.
+          </span>
+          <button type="button" className={BTN} onClick={() => setAdding(true)}>
+            + Dopisz odbiorców
+          </button>
+        </div>
+      )}
+      {adding && (
+        <AddRecipientsPanel
+          campaign={campaign}
+          mutate={mutate}
+          onClose={() => setAdding(false)}
+          onAdded={(c, added) => {
+            setAdding(false)
+            setAddedMsg(`Dopisano ${fmtInt(added)} ${plural(added, 'odbiorcę', 'odbiorców', 'odbiorców')} — maile wychodzą w tle, według limitu skrzynki.`)
+            onChanged(c)
+            setTick((n) => n + 1)
+          }}
+        />
+      )}
+      {addedMsg && (
+        <p className="rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-800" role="status">
+          {addedMsg}
+        </p>
+      )}
 
       {sending && (
         <div className="rounded-xl bg-white p-4 text-xs shadow-sm">
@@ -2384,6 +2484,7 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
         <RepliesPanel
           campaign={campaign}
           replies={campaign.replies}
+          canCheck={canManage}
           onChecked={async () => {
             await onReload()
             setTick((n) => n + 1)
@@ -2443,7 +2544,10 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
                     {RECIPIENT_STATUS_LABEL[r.status] ?? r.status}
                   </Chip>
                 </td>
-                <td className="whitespace-nowrap p-2 tabular-nums text-slate-600">{r.sent_at ? fmtDateTime(r.sent_at) : '—'}</td>
+                <td className="whitespace-nowrap p-2 tabular-nums text-slate-600">
+                  {r.sent_at ? fmtDateTime(r.sent_at) : '—'}
+                  {addedLater(r) && r.created_at && <div className="text-[10px] text-blue-700">dopisany {fmtDate(r.created_at)}</div>}
+                </td>
                 <td className="whitespace-nowrap p-2 text-right tabular-nums">
                   {r.clicks ? <b className="font-semibold text-blue-700">{fmtInt(r.clicks)}</b> : <span className="text-slate-400">—</span>}
                 </td>
@@ -2476,15 +2580,111 @@ function SentView({ campaign, onReload }: { campaign: Campaign; onReload: () => 
       </div>
 
       <div className="rounded-xl bg-white p-4 shadow-sm">
-        <button type="button" className={BTN} onClick={() => void togglePreview()}>
-          {previewOpen ? 'Ukryj treść maila' : 'Pokaż treść maila'}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className={BTN} onClick={() => void togglePreview()}>
+            {previewOpen ? 'Ukryj treść maila' : 'Pokaż treść maila'}
+          </button>
+          <button
+            type="button"
+            className={BTN}
+            disabled={testBusy}
+            title="Wysyła ten mail na Twój adres (oznaczony [TEST], kliknięcia się nie liczą)"
+            onClick={() => void sendTestToMe()}
+          >
+            {testBusy ? 'Wysyłam…' : 'Wyślij test do mnie'}
+          </button>
+          {testMsg && (
+            <span className={`text-xs ${testMsg.ok ? 'text-emerald-700' : 'text-red-700'}`} role="status">
+              {testMsg.text}
+            </span>
+          )}
+        </div>
         {previewOpen && (
           <div className="mt-3">
             {previewErr ? <ErrorBar message={previewErr} /> : preview ? <MailPreview preview={preview} /> : <p className="text-xs text-slate-500">Ładowanie…</p>}
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * „Dopisz odbiorców” do wysłanej (albo wysyłanej) kampanii: ten sam wybór grup i klientów XL co w kreatorze (zapis od
+ * razu), potem okno z listą tylko nowych adresów — obecni odbiorcy odpadają jako „już dostali tę kampanię”.
+ */
+function AddRecipientsPanel({
+  campaign,
+  mutate,
+  onClose,
+  onAdded,
+}: {
+  campaign: Campaign
+  mutate: Mutate
+  onClose: () => void
+  onAdded: (c: Campaign, added: number) => void
+}) {
+  const [audience, setAudience] = useState<AudiencePreview | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState('')
+  const [confirm, setConfirm] = useState(false)
+  const seq = useRef(0)
+  const audienceKey = JSON.stringify(campaign.audience)
+
+  useEffect(() => {
+    const my = ++seq.current
+    setLoading(true)
+    campaignAudience(campaign.id)
+      .then((a) => {
+        if (my !== seq.current) return
+        setAudience(a)
+        setErr('')
+      })
+      .catch((ex: unknown) => {
+        if (my === seq.current) setErr(errorText(ex, 'Nie udało się policzyć odbiorców.'))
+      })
+      .finally(() => {
+        if (my === seq.current) setLoading(false)
+      })
+  }, [campaign.id, audienceKey])
+
+  const noop = useCallback(async () => {}, [])
+
+  return (
+    <div className="space-y-3 rounded-xl border border-blue-200 bg-sky-50/40 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <span className="text-slate-700">
+          <b className="text-sm text-slate-900">Dopisz odbiorców</b> — zaznacz grupy albo klientów z ERP XL. Kto już dostał
+          tę kampanię, nie dostanie jej drugi raz.
+        </span>
+        <button type="button" className={BTN_SM} onClick={onClose}>
+          Zamknij
+        </button>
+      </div>
+      <AudienceStep
+        campaign={campaign}
+        editable
+        mutate={mutate}
+        audience={audience}
+        audienceLoading={loading}
+        audienceErr={err}
+        nextLabel="Dalej: sprawdź nowych odbiorców →"
+        onNext={() => setConfirm(true)}
+      />
+      {confirm && (
+        <CampaignRecipientsConfirm
+          campaignId={campaign.id}
+          campaignName={campaign.name}
+          mode="add"
+          flush={noop}
+          onClose={() => setConfirm(false)}
+          onConfirm={async (checksum) => {
+            const res = await addCampaignRecipients(campaign.id, checksum)
+            setConfirm(false)
+            onAdded(res.campaign, res.added)
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -2682,10 +2882,13 @@ function ItemClicksCell({ clicks, itemId }: { clicks: CampaignClicks | null; ite
 function RepliesPanel({
   campaign,
   replies,
+  canCheck,
   onChecked,
 }: {
   campaign: Campaign
   replies: CampaignReplies
+  /** „Sprawdź skrzynkę teraz” — autor albo „Kampanie — wszystkie” (nie sam podgląd). */
+  canCheck: boolean
   onChecked: () => Promise<void>
 }) {
   const [checking, setChecking] = useState(false)
@@ -2717,7 +2920,7 @@ function RepliesPanel({
             {fmtInt(replies.recipients)} z {fmtInt(sent)} {plural(sent, 'odbiorcy', 'odbiorców', 'odbiorców')}
             {replies.checked_at ? ` · skrzynka sprawdzona ${fmtDateTime(replies.checked_at)}` : ''}
           </span>
-          {replies.enabled && (
+          {replies.enabled && canCheck && (
             <button
               type="button"
               className={BTN_SM}

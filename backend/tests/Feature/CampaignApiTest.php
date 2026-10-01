@@ -540,7 +540,7 @@ final class CampaignApiTest extends TestCase
         $this->getJson("/api/campaigns/{$campaign->id}/recipients")->assertOk()->assertJsonPath('meta.total', 2);
         $res = $this->getJson("/api/campaigns/{$campaign->id}/recipients?status=sent")->assertOk();
         $this->assertSame(['a@x.pl'], array_column($res->json('data'), 'email'));
-        $this->assertSame(['id', 'email', 'name', 'source', 'status', 'error', 'sent_at', 'unsubscribed_at', 'first_clicked_at', 'clicks', 'replied_at'], array_keys($res->json('data.0')));
+        $this->assertSame(['id', 'email', 'name', 'source', 'status', 'error', 'sent_at', 'unsubscribed_at', 'first_clicked_at', 'clicks', 'replied_at', 'created_at'], array_keys($res->json('data.0')));
         $this->getJson("/api/campaigns/{$campaign->id}/recipients?status=zly")->assertUnprocessable();
 
         Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());

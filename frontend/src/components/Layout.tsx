@@ -20,7 +20,7 @@ const links: NavLinkItem[] = [
   { to: '/products', label: 'Produkty', icon: 'products', permission: 'products.view' },
   { to: '/zapasy', label: 'Zapasy', icon: 'inventory', anyOf: ['inventory.view', 'campaigns.use'] },
   { to: '/raport-zapasow', label: 'Raport dla zarządu', icon: 'reports', permission: 'inventory.report.view' },
-  { to: '/kampanie', label: 'Kampanie', icon: 'campaigns', permission: 'campaigns.use' },
+  { to: '/kampanie', label: 'Kampanie', icon: 'campaigns', anyOf: ['campaigns.use', 'campaigns.view'] },
   { to: '/card-matches', label: 'Łączenie kart', icon: 'substitutes', permission: 'card_matches.view' },
   { to: '/price-lists', label: 'Cenniki', icon: 'price-lists', permission: 'price_lists.view' },
   { to: '/substitutes', label: 'Zamienniki', icon: 'substitutes', permission: 'products.view' },

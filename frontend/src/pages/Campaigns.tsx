@@ -40,7 +40,9 @@ export function Campaigns() {
   const [params] = useSearchParams()
   const { user } = useAuth()
   let tab = campaignsTabFromParam(params.get('tab'))
-  if (tab === 'all' && !can(user, 'campaigns.manage')) tab = 'mine'
+  // sam podgląd (campaigns.view bez campaigns.use): tylko lista wszystkich kampanii po wysyłce
+  if (!can(user, 'campaigns.use')) tab = 'all'
+  if (tab === 'all' && !can(user, 'campaigns.manage') && !can(user, 'campaigns.view')) tab = 'mine'
 
   return (
     <div>
@@ -59,6 +61,10 @@ export function Campaigns() {
 
 function CampaignList({ scope }: { scope: 'mine' | 'all' }) {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const canUse = can(user, 'campaigns.use')
+  // duplikuje autor albo „Kampanie — wszystkie” (kopia cudzej z samym podglądem = 404)
+  const canDuplicate = (r: CampaignListRow) => canUse && (r.author.id === user?.id || can(user, 'campaigns.manage'))
   const [status, setStatus] = useState<CampaignStatus | ''>('')
   const [page, setPage] = useState(1)
   const [rows, setRows] = useState<CampaignListRow[]>([])
@@ -148,14 +154,16 @@ function CampaignList({ scope }: { scope: 'mine' | 'all' }) {
             towaru zeszło z magazynu po wysyłce.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button type="button" className={BTN} disabled={busy} onClick={() => void newEmpty()}>
-            + Pusta kampania
-          </button>
-          <Link to="/zapasy" className={BTN_PRIMARY}>
-            + Nowa kampania z Zapasów
-          </Link>
-        </div>
+        {canUse && (
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={BTN} disabled={busy} onClick={() => void newEmpty()}>
+              + Pusta kampania
+            </button>
+            <Link to="/zapasy" className={BTN_PRIMARY}>
+              + Nowa kampania z Zapasów
+            </Link>
+          </div>
+        )}
       </div>
 
       <CampaignsTabs active={scope} />
@@ -231,7 +239,13 @@ function CampaignList({ scope }: { scope: 'mine' | 'all' }) {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <CampaignRow key={r.id} row={r} showAuthor={scope === 'all'} busy={busy} onDuplicate={duplicate} />
+              <CampaignRow
+                key={r.id}
+                row={r}
+                showAuthor={scope === 'all'}
+                busy={busy}
+                onDuplicate={canDuplicate(r) ? duplicate : undefined}
+              />
             ))}
             {rows.length === 0 && (
               <tr>
@@ -240,6 +254,8 @@ function CampaignList({ scope }: { scope: 'mine' | 'all' }) {
                     'Ładowanie…'
                   ) : status ? (
                     'Brak kampanii o tym statusie.'
+                  ) : !canUse ? (
+                    'Nie ma jeszcze wysłanych kampanii.'
                   ) : (
                     <>
                       Nie ma jeszcze kampanii. Zaznacz towar w{' '}
@@ -289,7 +305,8 @@ function CampaignRow({
   row: CampaignListRow
   showAuthor: boolean
   busy: boolean
-  onDuplicate: (id: number) => void
+  /** Brak = bez przycisku „Duplikuj” (sam podgląd albo cudza kampania bez „Kampanie — wszystkie”). */
+  onDuplicate?: (id: number) => void
 }) {
   const when = row.sent_at ?? row.sending_started_at
   const result = row.result
@@ -365,9 +382,11 @@ function CampaignRow({
           <Link to={`/kampanie/${row.id}`} className={BTN_SM}>
             {row.status === 'draft' ? 'Edytuj' : 'Otwórz'}
           </Link>
-          <button type="button" className={BTN_SM} disabled={busy} onClick={() => onDuplicate(row.id)}>
-            Duplikuj
-          </button>
+          {onDuplicate && (
+            <button type="button" className={BTN_SM} disabled={busy} onClick={() => onDuplicate(row.id)}>
+              Duplikuj
+            </button>
+          )}
         </span>
       </td>
     </tr>

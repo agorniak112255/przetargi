@@ -69,6 +69,7 @@ final class PermissionCatalog
         'campaigns.use',
         'campaigns.manage',
         'campaigns.delete',
+        'campaigns.view',
     ];
 
     public const ROLES = [
@@ -231,6 +232,7 @@ final class PermissionCatalog
             ['campaigns.use', 'Kampanie — własne kampanie', 'Może przygotować i wysłać ze swojej skrzynki kampanię z towarem (także zalegającym z zakładki Zapasy) do własnych i wspólnych grup odbiorców oraz do klientów z ERP XL. Widzi listę Zapasów z kosztem i wartością towaru.', 'Kampanie'],
             ['campaigns.manage', 'Kampanie — wszystkie, wspólne grupy i szablony', 'Widzi kampanie wszystkich pracowników, prowadzi wspólne grupy odbiorców, wspólne szablony maili i listę adresów wypisanych z mailingu.', 'Kampanie'],
             ['campaigns.delete', 'Kampanie — usuwanie wysłanych', 'Może usunąć wysłaną albo anulowaną kampanię razem z jej odbiorcami, kliknięciami i odpowiedziami (wypisy z mailingu zostają). Cudze kampanie — tylko z uprawnieniem „Kampanie — wszystkie”. Własny projekt usuwa każdy bez tego uprawnienia.', 'Kampanie'],
+            ['campaigns.view', 'Kampanie — podgląd wysłanych', 'Widzi kampanie wszystkich pracowników po rozpoczęciu wysyłki (w trakcie, wysłane i anulowane): treść maila, pozycje, odbiorców, kliknięcia, odpowiedzi i sprzedaż. Nie zmienia, nie wysyła, nie duplikuje i nie usuwa kampanii. Może wysłać mail testowy tylko na własny adres. Projekty innych osób są niewidoczne.', 'Kampanie'],
             ['inquiries.view_others', 'Zapytania — otwieranie cudzych', 'Może otworzyć zapytanie innego pracownika i zobaczyć mail klienta, dobrane pozycje i przygotowany list. Tylko podgląd — zmieniać i wysyłać może wyłącznie autor.', 'Zapytania'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],
             ['admin.access', 'Panel Administracja', 'Widzi pozycję menu Administracja.', 'Administracja'],

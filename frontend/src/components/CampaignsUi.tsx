@@ -8,15 +8,23 @@ import { CAMPAIGN_STATUS_LABEL, type CampaignStatus, type PageMeta } from '../li
 
 /** Wspólne drobne elementy stron Kampanie: zakładki, okno potwierdzenia, pasek błędu, stronicowanie, znaczniki. */
 
-/** Zakładki jak w Cennikach/Zapasach, ze znacznikami app-tab dla motywu. „Wszystkie” tylko z campaigns.manage. */
+/**
+ * Zakładki jak w Cennikach/Zapasach, ze znacznikami app-tab dla motywu. „Wszystkie” z campaigns.manage albo
+ * campaigns.view; sam podgląd (bez campaigns.use) widzi tylko „Wszystkie”.
+ */
 export function CampaignsTabs({ active }: { active: CampaignsTab }) {
   const { user } = useAuth()
+  const use = can(user, 'campaigns.use')
   const tabs: { key: CampaignsTab; label: string }[] = [
-    { key: 'mine', label: 'Moje kampanie' },
-    ...(can(user, 'campaigns.manage') ? [{ key: 'all' as const, label: 'Wszystkie' }] : []),
-    { key: 'templates', label: 'Moje szablony' },
-    { key: 'groups', label: 'Grupy odbiorców' },
-    { key: 'suppressed', label: 'Wypisani' },
+    ...(use ? [{ key: 'mine' as const, label: 'Moje kampanie' }] : []),
+    ...(can(user, 'campaigns.manage') || can(user, 'campaigns.view') ? [{ key: 'all' as const, label: 'Wszystkie' }] : []),
+    ...(use
+      ? [
+          { key: 'templates' as const, label: 'Moje szablony' },
+          { key: 'groups' as const, label: 'Grupy odbiorców' },
+          { key: 'suppressed' as const, label: 'Wypisani' },
+        ]
+      : []),
   ]
   return (
     <nav className="app-tabs mb-4 flex flex-wrap gap-1 border-b border-slate-200">

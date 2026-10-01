@@ -32,7 +32,7 @@ final class CampaignSalesResult
             return null;
         }
         $emailCustomers = $this->emailToCustomers();
-        $recipients = $this->recipientCustomers([(int) $campaign->id], $emailCustomers)[(int) $campaign->id] ?? ['customers' => [], 'emails' => [], 'sent' => 0];
+        $recipients = $this->recipientCustomers([(int) $campaign->id], $emailCustomers)[(int) $campaign->id] ?? ['customers' => [], 'since' => [], 'emails' => [], 'sent' => 0];
         $items = CampaignItem::query()->where('campaign_id', $campaign->id)->whereNotNull('erp_item_id')
             ->with('erpItem:id,code,name,unit')->orderBy('position')->get();
         $itemIds = $items->pluck('erp_item_id')->map(static fn ($id): int => (int) $id)->unique()->values()->all();
@@ -62,7 +62,9 @@ final class CampaignSalesResult
         $valueRecipients = $valueOthers = 0.0;
         foreach ($lines as $line) {
             $customerId = $line->erp_customer_id !== null ? (int) $line->erp_customer_id : null;
-            $isRecipient = $customerId !== null && isset($recipients['customers'][$customerId]);
+            // odbiorca dopisany później: jego zakupy sprzed maila liczą się jak pozostałych klientów
+            $isRecipient = $customerId !== null && isset($recipients['customers'][$customerId])
+                && $line->sold_at !== null && $line->sold_at->toDateString() >= $recipients['since'][$customerId];
             $key = $isRecipient ? 'recipients' : 'others';
             $row = &$perItem[(int) $line->erp_item_id];
             $row['quantity_'.$key] += (float) $line->quantity;
@@ -142,15 +144,25 @@ final class CampaignSalesResult
 
                 continue;
             }
-            $row = ErpSaleLine::query()
+            // per klient od dnia jego maila (odbiorca dopisany później) — jak w forCampaign
+            $since = $recipients[(int) $campaign->id]['since'];
+            $buyers = [];
+            $value = 0.0;
+            foreach (ErpSaleLine::query()
                 ->whereIn('erp_item_id', $itemIds)
                 ->whereIntegerInRaw('erp_customer_id', $customerIds)
                 ->whereBetween('sold_at', [$from->toDateString(), $to->toDateString()])
-                ->selectRaw('count(distinct erp_customer_id) as customers, coalesce(sum(net_value), 0) as net_value')
-                ->first();
+                ->get(['erp_customer_id', 'sold_at', 'net_value']) as $line) {
+                $customerId = (int) $line->erp_customer_id;
+                if ($line->sold_at === null || $line->sold_at->toDateString() < $since[$customerId]) {
+                    continue;
+                }
+                $buyers[$customerId] = true;
+                $value += (float) $line->net_value;
+            }
             $out[(int) $campaign->id] = [
-                'customers' => (int) ($row->customers ?? 0),
-                'net_value' => round((float) ($row->net_value ?? 0), 2),
+                'customers' => count($buyers),
+                'net_value' => round($value, 2),
                 'complete' => $to->lt(CarbonImmutable::today()),
             ];
         }
@@ -171,24 +183,27 @@ final class CampaignSalesResult
 
     /**
      * Klienci XL, do których mail wyszedł: odbiorca z XL wprost, odbiorca z grupy — gdy jego adres jest na karcie
-     * kontrahenta XL. customers: id klienta → adres, na który poszedł mail; emails: dopasowane adresy odbiorców.
+     * kontrahenta XL. customers: id klienta → adres, na który poszedł mail; since: id klienta → dzień pierwszego maila
+     * (Y-m-d; odbiorca dopisany później ma późniejszy); emails: dopasowane adresy odbiorców.
      *
      * @param  list<int>  $campaignIds
      * @param  array<string, list<int>>  $emailCustomers
-     * @return array<int, array{customers: array<int, string>, emails: array<string, true>, sent: int}>
+     * @return array<int, array{customers: array<int, string>, since: array<int, string>, emails: array<string, true>, sent: int}>
      */
     private function recipientCustomers(array $campaignIds, array $emailCustomers): array
     {
         $out = [];
         foreach (CampaignRecipient::query()->whereIn('campaign_id', $campaignIds)->where('status', CampaignRecipient::STATUS_SENT)
-            ->orderBy('id')->get(['campaign_id', 'email', 'erp_customer_id']) as $r) {
+            ->orderBy('id')->get(['campaign_id', 'email', 'erp_customer_id', 'sent_at']) as $r) {
             $c = (int) $r->campaign_id;
-            $out[$c] ??= ['customers' => [], 'emails' => [], 'sent' => 0];
+            $out[$c] ??= ['customers' => [], 'since' => [], 'emails' => [], 'sent' => 0];
             $out[$c]['sent']++;
             $email = mb_strtolower((string) $r->email);
+            $day = $r->sent_at?->toDateString() ?? '0000-00-00';
             $ids = $r->erp_customer_id !== null ? [(int) $r->erp_customer_id] : ($emailCustomers[$email] ?? []);
             foreach ($ids as $id) {
                 $out[$c]['customers'][$id] ??= $email;
+                $out[$c]['since'][$id] = min($out[$c]['since'][$id] ?? $day, $day);
                 $out[$c]['emails'][$email] = true;
             }
         }

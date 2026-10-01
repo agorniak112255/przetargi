@@ -21,7 +21,8 @@ const REASON_LABEL: Record<AudienceSkipReason, string> = {
 const SKIP_ORDER: AudienceSkipReason[] = ['suppressed', 'capped', 'generic', 'invalid']
 
 /**
- * Okno przed „Wyślij teraz” i „Zaplanuj”: dokładna lista adresów, do których pójdzie mail, i pominiętych z powodem.
+ * Okno przed „Wyślij teraz”, „Zaplanuj” i „Dopisz odbiorców” (wysłana kampania — tylko nowi, obecni odbiorcy
+ * odpadają w liczniku „już dostali”): dokładna lista adresów, do których pójdzie mail, i pominiętych z powodem.
  * Przy wysyłce odcisk pokazanej listy (checksum) idzie do serwera — gdy lista zmieniła się w międzyczasie, serwer
  * odmawia (422), a okno wczytuje ją od nowa.
  */
@@ -36,7 +37,7 @@ export function CampaignRecipientsConfirm({
 }: {
   campaignId: number
   campaignName: string
-  mode: 'send' | 'schedule'
+  mode: 'send' | 'schedule' | 'add'
   /** Tylko mode 'schedule': wybrany dzień i godzina startu. */
   scheduleAt?: Date
   /** Zapis treści w toku — przed pobraniem listy. */
@@ -114,22 +115,30 @@ export function CampaignRecipientsConfirm({
         setPage(1)
         setReloadKey((k) => k + 1)
       } else {
-        setErr(errorText(ex, mode === 'send' ? 'Nie udało się rozpocząć wysyłki.' : 'Nie udało się zaplanować wysyłki.'))
+        setErr(
+          errorText(
+            ex,
+            mode === 'send' ? 'Nie udało się rozpocząć wysyłki.' : mode === 'add' ? 'Nie udało się dopisać odbiorców.' : 'Nie udało się zaplanować wysyłki.',
+          ),
+        )
       }
     } finally {
       setBusy(false)
     }
   }
 
+  const already = summary?.already ?? 0
   const title =
     mode === 'send'
       ? 'Wysłać kampanię teraz?'
-      : `Zaplanować wysyłkę na ${scheduleAt ? fmtDateTime(scheduleAt.toISOString()) : '—'}?`
+      : mode === 'add'
+        ? 'Dopisać nowych odbiorców?'
+        : `Zaplanować wysyłkę na ${scheduleAt ? fmtDateTime(scheduleAt.toISOString()) : '—'}?`
   const confirmLabel =
-    mode === 'send'
+    mode === 'send' || mode === 'add'
       ? busy
         ? 'Wysyłam…'
-        : `Wyślij do ${fmtInt(total)} ${plural(total, 'odbiorcy', 'odbiorców', 'odbiorców')}`
+        : `Wyślij do ${fmtInt(total)} ${mode === 'add' ? plural(total, 'nowego odbiorcy', 'nowych odbiorców', 'nowych odbiorców') : plural(total, 'odbiorcy', 'odbiorców', 'odbiorców')}`
       : busy
         ? 'Planuję…'
         : 'Zaplanuj'
@@ -176,7 +185,7 @@ export function CampaignRecipientsConfirm({
       <div className="space-y-3 text-xs">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
           <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Wyślemy do</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{mode === 'add' ? 'Dopiszemy' : 'Wyślemy do'}</p>
             <p className={`text-3xl font-semibold leading-tight tabular-nums ${total > 0 ? 'text-emerald-700' : 'text-red-700'}`}>
               {summary ? fmtInt(total) : '…'}
             </p>
@@ -185,13 +194,19 @@ export function CampaignRecipientsConfirm({
           <div className="min-w-0 flex-1 space-y-1 text-slate-700">
             <p>
               <b className="text-slate-900">{campaignName}</b>{' '}
-              {mode === 'send' ? 'pójdzie z Twojej skrzynki.' : 'wystartuje sama z Twojej skrzynki o wybranej godzinie.'}
+              {mode === 'schedule' ? 'wystartuje sama z Twojej skrzynki o wybranej godzinie.' : 'pójdzie z Twojej skrzynki.'}
             </p>
             {summary && (
               <p className="tabular-nums text-slate-600">
                 z grup <b className="text-slate-800">{fmtInt(summary.from_lists)}</b> · z ERP XL{' '}
                 <b className="text-slate-800">{fmtInt(summary.from_xl)}</b> · powtórzone{' '}
                 <b className="text-slate-800">{summary.duplicates > 0 ? `−${fmtInt(summary.duplicates)}` : '0'}</b>
+                {already > 0 && (
+                  <>
+                    {' '}
+                    · już dostali tę kampanię <b className="text-slate-800">−{fmtInt(already)}</b>
+                  </>
+                )}
                 {skippedTotal > 0 && (
                   <>
                     {' '}
@@ -274,7 +289,9 @@ export function CampaignRecipientsConfirm({
                       ? 'Nikt nie pasuje do szukanej frazy.'
                       : shownView === 'skipped'
                         ? 'Nikogo nie pominięto.'
-                        : 'Nikt nie dostanie maila — sprawdź krok Odbiorcy.'}
+                        : mode === 'add'
+                          ? 'Brak nowych odbiorców — wybrani już dostali tę kampanię albo zostali pominięci.'
+                          : 'Nikt nie dostanie maila — sprawdź krok Odbiorcy.'}
                   </td>
                 </tr>
               )}
@@ -293,6 +310,11 @@ export function CampaignRecipientsConfirm({
           <p className="text-slate-600">
             Tego nie da się cofnąć — można tylko zatrzymać wysyłkę do tych, którzy jeszcze nie dostali maila. Stan pozycji
             zapiszemy teraz, żeby policzyć, ile zeszło po 7 i 30 dniach.
+          </p>
+        ) : mode === 'add' ? (
+          <p className="text-slate-600">
+            Nowi odbiorcy dostaną ten sam mail co pierwsi — z ceną i stanem zapisanymi przy pierwszej wysyłce. Wyniki zostają
+            w tej kampanii: zakupy dopisanych liczymy od dnia ich maila, a spadek stanu dalej od pierwszej wysyłki.
           </p>
         ) : (
           <p className="rounded border border-sky-200 bg-sky-50 px-2 py-1.5 text-sky-900">

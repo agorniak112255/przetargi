@@ -186,7 +186,7 @@ export default function App() {
             <Route
               path="kampanie"
               element={
-                <PermissionGuard permission="campaigns.use">
+                <PermissionGuard anyOf={['campaigns.use', 'campaigns.view']}>
                   <Campaigns />
                 </PermissionGuard>
               }
@@ -210,7 +210,7 @@ export default function App() {
             <Route
               path="kampanie/:id"
               element={
-                <PermissionGuard permission="campaigns.use">
+                <PermissionGuard anyOf={['campaigns.use', 'campaigns.view']}>
                   <CampaignEditor />
                 </PermissionGuard>
               }

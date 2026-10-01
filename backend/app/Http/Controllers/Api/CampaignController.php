@@ -62,6 +62,9 @@ class CampaignController extends Controller
 
     private const SCHEDULED = 'Kampania jest zaplanowana — cofnij planowanie, żeby ją zmienić';
 
+    /** Kampanie po starcie wysyłki — widoczne z uprawnieniem campaigns.view (projekty i zaplanowane nie). */
+    private const STARTED = [Campaign::STATUS_SENDING, Campaign::STATUS_SENT, Campaign::STATUS_CANCELLED];
+
     /** Statusy, w których kampanię po wysyłce można usunąć (campaigns.delete). */
     private const DELETABLE_SENT = [Campaign::STATUS_SENT, Campaign::STATUS_CANCELLED];
 
@@ -98,7 +101,8 @@ class CampaignController extends Controller
         /** @var User $user */
         $user = $request->user();
         $scope = $v['scope'] ?? 'mine';
-        if ($scope === 'all' && ! $user->can('campaigns.manage')) {
+        $manager = $user->can('campaigns.manage');
+        if ($scope === 'all' && ! $manager && ! $user->can('campaigns.view')) {
             abort(403, 'Brak uprawnienia do oglądania kampanii innych użytkowników.');
         }
 
@@ -120,6 +124,9 @@ class CampaignController extends Controller
             );
         if ($scope === 'mine') {
             $query->where('campaigns.user_id', $user->id);
+        } elseif (! $manager) {
+            // podgląd (campaigns.view): cudze tylko po starcie wysyłki, własne wszystkie
+            $query->where(static fn (Builder $q) => $q->where('campaigns.user_id', $user->id)->orWhereIn('campaigns.status', self::STARTED));
         }
         if (($v['status'] ?? '') !== '') {
             $query->where('campaigns.status', $v['status']);
@@ -129,10 +136,15 @@ class CampaignController extends Controller
             ->paginate((int) ($v['per_page'] ?? 25));
         $ids = $page->getCollection()->map(fn (Campaign $c): int => (int) $c->id)->values()->all();
         $results = CampaignResult::forCampaigns($ids);
+        $showValue = $user->can('campaigns.use');
         $sales = $this->sales->summaries($ids);
 
         return response()->json([
-            'data' => $page->getCollection()->map(fn (Campaign $c): array => $this->listRow($c, $results[(int) $c->id] ?? null, $sales[(int) $c->id] ?? null))->values()->all(),
+            'data' => $page->getCollection()->map(fn (Campaign $c): array => [
+                ...$this->listRow($c, $results[(int) $c->id] ?? null, $sales[(int) $c->id] ?? null),
+                // wartość zapasu (koszt zakupu) — tylko z campaigns.use, jak lista Zapasów
+                ...($showValue ? [] : ['stock_value' => null]),
+            ])->values()->all(),
             'meta' => [
                 'current_page' => $page->currentPage(),
                 'last_page' => $page->lastPage(),
@@ -178,8 +190,14 @@ class CampaignController extends Controller
 
     public function update(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
-        $this->ensureDraft($campaign);
+        $this->authorizeManage($request, $campaign);
+        // wysłana (albo wysyłana) kampania: autor zmienia tylko wybór odbiorców — pod „Dopisz odbiorców”
+        $extending = ! $campaign->isDraft() && $request->keys() === ['audience'];
+        if ($extending) {
+            $this->ensureExtendable($request, $campaign);
+        } else {
+            $this->ensureDraft($campaign);
+        }
 
         $v = $request->validate([
             'name' => ['sometimes', 'required', 'string', 'max:200'],
@@ -234,14 +252,23 @@ class CampaignController extends Controller
             $data['subject'] = trim((string) ($v['subject'] ?? ''));
         }
 
-        $this->lockedDraft($campaign, function (Campaign $locked) use ($data, $v): void {
+        $change = function (Campaign $locked) use ($data, $v): void {
             if (array_key_exists('audience', $v)) {
                 $data['audience'] = $this->mergedAudience($locked, $v['audience']);
             }
             if ($data !== []) {
                 $locked->update($data);
             }
-        });
+        };
+        if ($extending) {
+            DB::transaction(function () use ($request, $campaign, $change): void {
+                $locked = Campaign::query()->lockForUpdate()->findOrFail($campaign->id);
+                $this->ensureExtendable($request, $locked);
+                $change($locked);
+            });
+        } else {
+            $this->lockedDraft($campaign, $change);
+        }
 
         return response()->json($this->present($campaign->fresh(), $request->user()));
     }
@@ -253,7 +280,7 @@ class CampaignController extends Controller
      */
     public function destroy(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         if ($campaign->isDraft()) {
             $this->lockedDraft($campaign, static fn (Campaign $locked) => $locked->delete());
 
@@ -276,7 +303,7 @@ class CampaignController extends Controller
     /** Kopia treści i pozycji (bez snapshotów, wyników, dat i odbiorców); autorem kopii jest duplikujący. */
     public function duplicate(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         /** @var User $user */
         $user = $request->user();
 
@@ -323,7 +350,7 @@ class CampaignController extends Controller
 
     public function addItems(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         $this->ensureDraft($campaign);
         $v = $request->validate($this->itemIdRules());
 
@@ -334,7 +361,7 @@ class CampaignController extends Controller
 
     public function updateItem(Request $request, Campaign $campaign, CampaignItem $item): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         $this->ensureItemOf($campaign, $item);
         $this->ensureDraft($campaign);
 
@@ -368,7 +395,7 @@ class CampaignController extends Controller
 
     public function removeItem(Request $request, Campaign $campaign, CampaignItem $item): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         $this->ensureItemOf($campaign, $item);
         $this->ensureDraft($campaign);
 
@@ -382,7 +409,7 @@ class CampaignController extends Controller
 
     public function audience(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
 
         return response()->json($this->audience->preview($campaign));
     }
@@ -394,7 +421,7 @@ class CampaignController extends Controller
      */
     public function xlCustomers(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         $v = $request->validate([
             'mode' => ['required', 'string', Rule::in(Campaign::XL_MODES)],
             'months' => ['nullable', 'integer', Rule::in(Campaign::XL_MONTHS)],
@@ -487,7 +514,7 @@ class CampaignController extends Controller
      */
     public function listContacts(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         $v = $request->validate([
             'list_id' => ['required', 'integer'],
             'search' => ['nullable', 'string', 'max:150'],
@@ -588,7 +615,7 @@ class CampaignController extends Controller
      */
     public function audienceRecipients(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         $v = $request->validate([
             'view' => ['nullable', 'string', Rule::in(['send', 'skipped'])],
             'search' => ['nullable', 'string', 'max:150'],
@@ -615,6 +642,8 @@ class CampaignController extends Controller
                 'from_lists' => $r['list_rows'],
                 'from_xl' => $r['xl_emails'],
                 'duplicates' => $r['duplicates'],
+                // już odbiorcy tej kampanii (dopisywanie do wysłanej)
+                'already' => $r['already'],
                 'skipped' => [
                     'invalid' => $r['invalid'],
                     'generic' => $r['excluded_generic'],
@@ -662,7 +691,7 @@ class CampaignController extends Controller
      */
     public function previewDraft(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         $v = $request->validate([
             'blocks' => ['present', 'array'],
             'brand_color' => ['sometimes', 'nullable', 'string', Rule::in(CampaignBlocks::BRAND_COLORS)],
@@ -687,7 +716,7 @@ class CampaignController extends Controller
      */
     public function applyTemplate(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         $this->ensureDraft($campaign);
         $v = $request->validate([
             'template_id' => ['present', 'nullable', 'integer'],
@@ -711,7 +740,10 @@ class CampaignController extends Controller
         return response()->json($this->present($campaign->fresh(), $user));
     }
 
-    /** Mail testowy — domyślnie na adres nadawcy skrzynki pytającego, a bez skrzynki na e-mail jego konta. */
+    /**
+     * Mail testowy — domyślnie na adres nadawcy skrzynki pytającego, a bez skrzynki na e-mail jego konta. Z samym
+     * podglądem (campaigns.view) tylko na ten własny adres — inny adres = 403.
+     */
     public function test(Request $request, Campaign $campaign): JsonResponse
     {
         $this->authorizeView($request, $campaign);
@@ -720,10 +752,17 @@ class CampaignController extends Controller
         ]);
         /** @var User $user */
         $user = $request->user();
+        $from = UserMailAccount::query()->where('user_id', $user->id)->value('from_address');
+        $own = trim((string) ($from ?: $user->email));
         $to = trim((string) ($v['email'] ?? ''));
+        if ($to !== '' && ! $this->canManage($user, $campaign) && mb_strtolower($to) !== mb_strtolower($own)) {
+            abort(403, 'Z podglądem kampanii test można wysłać tylko na własny adres.');
+        }
         if ($to === '') {
-            $from = UserMailAccount::query()->where('user_id', $user->id)->value('from_address');
-            $to = (string) ($from ?: $user->email);
+            $to = $own;
+        }
+        if ($to === '') {
+            throw ValidationException::withMessages(['email' => ['Twoje konto nie ma adresu e-mail.']]);
         }
 
         try {
@@ -739,7 +778,7 @@ class CampaignController extends Controller
 
     public function send(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         /** @var User $user */
         $user = $request->user();
         if ((int) $campaign->user_id !== (int) $user->id) {
@@ -757,7 +796,7 @@ class CampaignController extends Controller
     /** Zaplanowanie wysyłki na godzinę (ISO 8601 z przesunięciem strefy; zapis w UTC). Tylko autor. */
     public function schedule(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         /** @var User $user */
         $user = $request->user();
         if ((int) $campaign->user_id !== (int) $user->id) {
@@ -779,7 +818,7 @@ class CampaignController extends Controller
     /** Cofnięcie planowania — kampania wraca do projektu. Autor albo campaigns.manage. */
     public function unschedule(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         if ($campaign->status !== Campaign::STATUS_SCHEDULED) {
             abort(422, 'Kampania nie jest zaplanowana — mogła już wystartować.');
         }
@@ -789,9 +828,29 @@ class CampaignController extends Controller
         return response()->json($this->present($draft, $request->user()));
     }
 
+    /**
+     * „Dopisz odbiorców” do wysłanej albo wysyłanej kampanii: nowi z bieżącego wyboru (bez obecnych odbiorców) wg listy
+     * z okna potwierdzenia (suma kontrolna wymagana). Tylko autor — maile wychodzą z jego skrzynki.
+     */
+    public function addRecipients(Request $request, Campaign $campaign): JsonResponse
+    {
+        $this->authorizeManage($request, $campaign);
+        $v = $request->validate(['recipients_checksum' => ['required', 'string', 'size:40']]);
+        $this->ensureExtendable($request, $campaign);
+        /** @var User $user */
+        $user = $request->user();
+
+        [$extended, $added] = $this->sender->addRecipients($campaign, $user, (string) $v['recipients_checksum']);
+
+        return response()->json([
+            'added' => $added,
+            'campaign' => $this->present($extended, $user),
+        ]);
+    }
+
     public function cancel(Request $request, Campaign $campaign): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         if ($campaign->status !== Campaign::STATUS_SENDING) {
             abort(422, 'Anulować można tylko kampanię w trakcie wysyłki.');
         }
@@ -807,7 +866,7 @@ class CampaignController extends Controller
      */
     public function suggestions(Request $request, Campaign $campaign, CampaignSuggestions $suggestions): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         $this->ensureDraft($campaign);
         $v = $request->validate(['mine' => ['nullable', 'boolean']]);
         $result = $suggestions->suggest($campaign, (bool) ($v['mine'] ?? false), 30);
@@ -826,7 +885,7 @@ class CampaignController extends Controller
      */
     public function checkReplies(Request $request, Campaign $campaign, CampaignReplySync $replies): JsonResponse
     {
-        $this->authorizeView($request, $campaign);
+        $this->authorizeManage($request, $campaign);
         if ($campaign->sending_started_at === null) {
             abort(422, 'Odpowiedzi sprawdzamy dopiero po wysyłce kampanii.');
         }
@@ -885,6 +944,8 @@ class CampaignController extends Controller
                 'first_clicked_at' => $r->first_clicked_at?->toIso8601String(),
                 'clicks' => (int) $r->clicks,
                 'replied_at' => $r->replied_at?->toIso8601String(),
+                // kiedy trafił do kampanii — później niż start wysyłki = dopisany
+                'created_at' => $r->created_at?->toIso8601String(),
             ])->values()->all(),
             'meta' => [
                 'current_page' => $page->currentPage(),
@@ -1078,13 +1139,29 @@ class CampaignController extends Controller
         return array_values(array_filter($ids, static fn (int $id): bool => in_array($id, $visible, true)));
     }
 
+    /** Odczyt: autor, campaigns.manage albo campaigns.view (kampania po starcie wysyłki); inaczej 404. */
     private function authorizeView(Request $request, Campaign $campaign): void
     {
         /** @var User $user */
         $user = $request->user();
-        if ((int) $campaign->user_id !== (int) $user->id && ! $user->can('campaigns.manage')) {
+        if (! $this->canManage($user, $campaign) && ! ($user->can('campaigns.view') && in_array($campaign->status, self::STARTED, true))) {
             abort(404);
         }
+    }
+
+    /** Zmiany i czynności na kampanii: autor albo campaigns.manage; inaczej 404 (podgląd nie wystarcza). */
+    private function authorizeManage(Request $request, Campaign $campaign): void
+    {
+        /** @var User $user */
+        $user = $request->user();
+        if (! $this->canManage($user, $campaign)) {
+            abort(404);
+        }
+    }
+
+    private function canManage(User $user, Campaign $campaign): bool
+    {
+        return (int) $campaign->user_id === (int) $user->id || $user->can('campaigns.manage');
     }
 
     private function ensureDeletableSent(Campaign $campaign): void
@@ -1095,6 +1172,21 @@ class CampaignController extends Controller
         abort(422, $campaign->status === Campaign::STATUS_SCHEDULED
             ? 'Kampania jest zaplanowana — najpierw zdejmij ją z planu.'
             : 'Kampania jest w trakcie wysyłki — najpierw anuluj wysyłkę.');
+    }
+
+    /** Dopisywanie odbiorców: autor kampanii z campaigns.use, kampania wysłana albo w wysyłce, oferta ważna. */
+    private function ensureExtendable(Request $request, Campaign $campaign): void
+    {
+        /** @var User $user */
+        $user = $request->user();
+        if ((int) $campaign->user_id !== (int) $user->id || ! $user->can('campaigns.use')) {
+            abort(403, 'Dopisać odbiorców może tylko autor kampanii — maile wyjdą z jego skrzynki.');
+        }
+        if (! CampaignSender::canAddRecipients($campaign)) {
+            abort(422, in_array($campaign->status, [Campaign::STATUS_SENT, Campaign::STATUS_SENDING], true)
+                ? CampaignSender::addClosedMessage()
+                : ($campaign->status === Campaign::STATUS_SCHEDULED ? self::SCHEDULED : 'Odbiorców można dopisać tylko do kampanii wysłanej albo w trakcie wysyłki.'));
+        }
     }
 
     private function ensureDraft(Campaign $campaign): void
@@ -1175,6 +1267,7 @@ class CampaignController extends Controller
     {
         $campaign->loadMissing(['user.mailAccount', 'items', 'template:id,name']);
         $author = $campaign->user;
+        $canManage = $this->canManage($viewer, $campaign);
         $items = $campaign->items;
 
         return [
@@ -1195,9 +1288,14 @@ class CampaignController extends Controller
             'status' => $campaign->status,
             'audience' => $campaign->audienceSettings(),
             'author' => ['id' => (int) $campaign->user_id, 'name' => (string) $author?->name],
-            'can_edit' => $campaign->isDraft(),
+            'can_edit' => $campaign->isDraft() && $canManage,
+            // autor albo campaigns.manage; sam podgląd (campaigns.view) — tylko odczyt i test na własny adres
+            'can_manage' => $canManage,
             // projekt usuwa autor; wysłaną albo anulowaną — tylko z uprawnieniem campaigns.delete
-            'can_delete' => $campaign->isDraft() || (in_array($campaign->status, self::DELETABLE_SENT, true) && $viewer->can('campaigns.delete')),
+            'can_delete' => $canManage && ($campaign->isDraft() || (in_array($campaign->status, self::DELETABLE_SENT, true) && $viewer->can('campaigns.delete'))),
+            // dopisywanie odbiorców do wysłanej (albo wysyłanej) kampanii — tylko autor, bo maile idą z jego skrzynki
+            'can_add_recipients' => (int) $campaign->user_id === (int) $viewer->id && $viewer->can('campaigns.use')
+                && CampaignSender::canAddRecipients($campaign),
             'created_at' => $campaign->created_at?->toIso8601String(),
             'updated_at' => $campaign->updated_at?->toIso8601String(),
             'scheduled_at' => $campaign->scheduled_at?->toIso8601String(),
@@ -1206,12 +1304,34 @@ class CampaignController extends Controller
             'sending_started_at' => $campaign->sending_started_at?->toIso8601String(),
             'sent_at' => $campaign->sent_at?->toIso8601String(),
             'totals' => $campaign->totals,
-            'items' => $author !== null ? $this->presenter->presentMany($items, $author) : [],
+            'items' => $author !== null ? $this->withoutCost($this->presenter->presentMany($items, $author), $viewer) : [],
             'warnings' => $this->warnings($campaign, $viewer),
             'sales' => $campaign->sending_started_at === null ? null : $this->sales->forCampaign($campaign),
             'clicks' => $campaign->sending_started_at === null ? null : $this->clickSummary($campaign),
             'replies' => $campaign->sending_started_at === null ? null : $this->replySummary($campaign),
         ];
+    }
+
+    /**
+     * Koszt zakupu (średnia cena partii, sugerowana cena z marży, „poniżej kosztu”) widzi tylko ktoś z campaigns.use —
+     * sam podgląd (campaigns.view) dostaje null / false.
+     *
+     * @param  list<array<string, mixed>>  $items
+     * @return list<array<string, mixed>>
+     */
+    private function withoutCost(array $items, User $viewer): array
+    {
+        if ($viewer->can('campaigns.use')) {
+            return $items;
+        }
+
+        return array_map(static function (array $item): array {
+            $item['unit_cost'] = null;
+            $item['suggested_price'] = null;
+            $item['warnings']['below_cost'] = false;
+
+            return $item;
+        }, $items);
     }
 
     /**

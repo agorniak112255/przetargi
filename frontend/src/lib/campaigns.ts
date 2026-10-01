@@ -283,8 +283,12 @@ export type Campaign = {
   audience: CampaignAudience
   author: { id: number; name: string }
   can_edit: boolean
+  /** Autor albo „Kampanie — wszystkie”; sam podgląd (campaigns.view) = false: tylko odczyt i test do siebie. */
+  can_manage?: boolean
   /** Projekt: autor; wysłana albo anulowana: uprawnienie „Kampanie — usuwanie wysłanych”. */
   can_delete?: boolean
+  /** „Dopisz odbiorców”: autor, kampania wysłana albo w wysyłce, oferta ważna, ≤ 30 dni od startu. */
+  can_add_recipients?: boolean
   created_at: string
   updated_at: string
   /** Zaplanowana godzina startu (UTC, ISO). */
@@ -364,6 +368,8 @@ export type AudiencePreview = {
   excluded_generic: number
   suppressed: number
   capped: number
+  /** Już odbiorcy tej kampanii (dopisywanie do wysłanej) — nie dostaną maila drugi raz. */
+  already?: number
   final: number
   without_mailbox: boolean
   sample: { email: string; name: string | null; source: 'list' | 'xl' }[]
@@ -392,6 +398,8 @@ export type CampaignRecipientRow = {
   first_clicked_at?: string | null
   clicks?: number
   replied_at?: string | null
+  /** Kiedy trafił do kampanii — później niż start wysyłki = dopisany. */
+  created_at?: string | null
 }
 
 export type MailingList = {
@@ -558,6 +566,14 @@ export function sendCampaign(id: number, recipientsChecksum?: string) {
   })
 }
 
+/** Dopisanie odbiorców do wysłanej albo wysyłanej kampanii — tylko nowi z listy pokazanej w oknie (checksum). */
+export function addCampaignRecipients(id: number, recipientsChecksum: string) {
+  return api<{ added: number; campaign: Campaign }>(`/campaigns/${id}/recipients/add`, {
+    method: 'POST',
+    ...json({ recipients_checksum: recipientsChecksum }),
+  })
+}
+
 export type AudienceSkipReason = 'invalid' | 'generic' | 'suppressed' | 'capped'
 
 /** Adres z listy przed wysyłką; origin = nazwa grupy (source list) albo akronim klienta XL (source xl). */
@@ -578,6 +594,8 @@ export type AudienceRecipients = {
     from_lists: number
     from_xl: number
     duplicates: number
+    /** Już odbiorcy tej kampanii (dopisywanie do wysłanej). */
+    already?: number
     skipped: Record<AudienceSkipReason, number>
   }
   /** Odcisk listy „do wysyłki” — idzie z „Wyślij”, serwer sprawdza, że lista się nie zmieniła. */

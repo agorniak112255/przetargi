@@ -384,10 +384,17 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::post('/ai-settings/test', [AiSettingsController::class, 'test'])->middleware('permission:ai_settings.manage');
     Route::post('/ai-settings/test-vector', [AiSettingsController::class, 'testVector'])->middleware('permission:ai_settings.manage');
 
-    Route::middleware('permission:campaigns.use')->group(function (): void {
+    // podgląd (campaigns.view): cudze kampanie po starcie wysyłki, test tylko na własny adres — sprawdza kontroler
+    Route::middleware('permission:campaigns.use|campaigns.view')->group(function (): void {
         Route::get('/campaigns', [CampaignController::class, 'index']);
-        Route::post('/campaigns', [CampaignController::class, 'store']);
         Route::get('/campaigns/{campaign}', [CampaignController::class, 'show']);
+        Route::get('/campaigns/{campaign}/preview', [CampaignController::class, 'preview']);
+        Route::post('/campaigns/{campaign}/test', [CampaignController::class, 'test'])->middleware('throttle:10,1');
+        Route::get('/campaigns/{campaign}/recipients', [CampaignController::class, 'recipients']);
+    });
+
+    Route::middleware('permission:campaigns.use')->group(function (): void {
+        Route::post('/campaigns', [CampaignController::class, 'store']);
         Route::patch('/campaigns/{campaign}', [CampaignController::class, 'update']);
         Route::delete('/campaigns/{campaign}', [CampaignController::class, 'destroy']);
         Route::post('/campaigns/{campaign}/duplicate', [CampaignController::class, 'duplicate']);
@@ -398,13 +405,11 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::get('/campaigns/{campaign}/audience/recipients', [CampaignController::class, 'audienceRecipients']);
         Route::get('/campaigns/{campaign}/xl-customers', [CampaignController::class, 'xlCustomers']);
         Route::get('/campaigns/{campaign}/list-contacts', [CampaignController::class, 'listContacts']);
-        Route::get('/campaigns/{campaign}/preview', [CampaignController::class, 'preview']);
-        Route::post('/campaigns/{campaign}/test', [CampaignController::class, 'test'])->middleware('throttle:10,1');
         Route::post('/campaigns/{campaign}/send', [CampaignController::class, 'send']);
         Route::post('/campaigns/{campaign}/schedule', [CampaignController::class, 'schedule']);
         Route::post('/campaigns/{campaign}/unschedule', [CampaignController::class, 'unschedule']);
         Route::post('/campaigns/{campaign}/cancel', [CampaignController::class, 'cancel']);
-        Route::get('/campaigns/{campaign}/recipients', [CampaignController::class, 'recipients']);
+        Route::post('/campaigns/{campaign}/recipients/add', [CampaignController::class, 'addRecipients']);
         Route::get('/campaigns/{campaign}/suggestions', [CampaignController::class, 'suggestions']);
         Route::post('/campaigns/{campaign}/replies/check', [CampaignController::class, 'checkReplies'])->middleware('throttle:6,1');
         Route::post('/campaigns/{campaign}/template', [CampaignController::class, 'applyTemplate']);
