@@ -898,9 +898,19 @@ function shortDate(iso: string, withYear = false): string {
 }
 
 /** Zmiana kwoty ze znakiem: „+120 tys. zł”, „−3 400 zł”, „bez zmian”. */
+/**
+ * Kwota w historii zapasów: od miliona z 2 miejscami po przecinku („3,98 mln zł”) — przy wahaniach o kilka procent
+ * „4 mln zł” na każdym punkcie nic nie mówi; poniżej miliona jak fmtBig.
+ */
+function fmtHist(value: number): string {
+  if (Math.abs(value) < 1_000_000) return fmtBig(value)
+  const millions = (Math.abs(value) / 1_000_000).toFixed(2).replace('.', ',')
+  return `${value < 0 ? '−' : ''}${millions}${NBSP}mln${NBSP}zł`
+}
+
 function fmtChange(value: number): string {
   if (Math.round(value) === 0) return 'bez zmian'
-  return value > 0 ? `+${fmtBig(value)}` : fmtBig(value)
+  return value > 0 ? `+${fmtHist(value)}` : fmtHist(value)
 }
 
 /** Okresy pod przyciskami; days null = od pierwszego zapisu. */
@@ -1254,7 +1264,7 @@ function HistoryChartSvg({ values, stroke, label, height }: { values: ChartPoint
         height={H}
         className="block"
         role="img"
-        aria-label={`${label}: ${fmtBig(first.value)} dnia ${longDate(first.date)}, ${fmtBig(last.value)} dnia ${longDate(last.date)}`}
+        aria-label={`${label}: ${fmtHist(first.value)} dnia ${longDate(first.date)}, ${fmtHist(last.value)} dnia ${longDate(last.date)}`}
       >
         {bands.map((b) => (
           <g key={`${b.from}-${b.label}`}>
@@ -1315,7 +1325,7 @@ function HistoryChartSvg({ values, stroke, label, height }: { values: ChartPoint
           className="pointer-events-none absolute top-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm whitespace-nowrap text-slate-900 shadow-sm print:hidden"
           style={hx > width / 2 ? { right: width - hx + 10 } : { left: hx + 10 }}
         >
-          <span className="font-semibold tabular-nums">{fmtBig(hovered.value)}</span>
+          <span className="font-semibold tabular-nums">{fmtHist(hovered.value)}</span>
           <span className="text-slate-700"> · {longDate(hovered.date)}</span>
           {hovered.items !== null && <span className="block text-slate-700">{goods(hovered.items)}</span>}
         </div>
@@ -1367,13 +1377,13 @@ function HistoryChart({
           <span className="text-sm font-semibold whitespace-nowrap text-blue-700 print:hidden">Powiększ ›</span>
         </span>
         <span className="flex flex-wrap items-baseline justify-between gap-x-3">
-          <span className="text-2xl font-semibold text-slate-900 tabular-nums">{fmtBig(last.value)}</span>
+          <span className="text-2xl font-semibold text-slate-900 tabular-nums">{fmtHist(last.value)}</span>
           <span className={`text-lg font-semibold tabular-nums ${changeClass(change, metric.lowerIsBetter)}`}>
             {fmtChange(change)}
           </span>
         </span>
         <span className="block text-base text-slate-700">
-          {last.items !== null ? `${goods(last.items)} · ` : ''}od {shortDate(first.date, true)}: {fmtBig(first.value)}
+          {last.items !== null ? `${goods(last.items)} · ` : ''}od {shortDate(first.date, true)}: {fmtHist(first.value)}
         </span>
       </figcaption>
       <div className="mt-2">
@@ -1480,15 +1490,15 @@ function HistoryChartModal({
         ) : (
           <>
             <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              {stat('Na początku okresu', fmtBig(first.value), longDate(first.date) ?? '')}
+              {stat('Na początku okresu', fmtHist(first.value), longDate(first.date) ?? '')}
               {stat(
                 'Na końcu okresu',
-                fmtBig(last.value),
+                fmtHist(last.value),
                 `${longDate(last.date) ?? ''} · zmiana ${fmtChange(change)}`,
                 changeClass(change, metric.lowerIsBetter),
               )}
-              {stat('Najniżej', fmtBig(min.value), longDate(min.date) ?? '')}
-              {stat('Najwyżej', fmtBig(max.value), longDate(max.date) ?? '')}
+              {stat('Najniżej', fmtHist(min.value), longDate(min.date) ?? '')}
+              {stat('Najwyżej', fmtHist(max.value), longDate(max.date) ?? '')}
             </div>
             <div className="mt-3">
               <HistoryChartSvg key={metric.key} values={values} stroke={metric.stroke} label={metric.label} height={440} />
@@ -1510,7 +1520,7 @@ function HistoryCompare({ compare, place }: { compare: NonNullable<InventoryHist
     const change = endValue - (start?.value ?? 0)
     return (
       <>
-        <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{end ? fmtBig(endValue) : '—'}</td>
+        <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{end ? fmtHist(endValue) : '—'}</td>
         <td className={`px-2 py-1.5 text-right font-semibold tabular-nums whitespace-nowrap ${changeClass(change, lowerIsBetter)}`}>
           {same || !start || !end ? '' : fmtChange(change)}
         </td>
@@ -1602,11 +1612,11 @@ function HistoryCompare({ compare, place }: { compare: NonNullable<InventoryHist
                         {w.code}
                       </th>
                       <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
-                        {w.start ? fmtBig(w.start.value) : '—'}
+                        {w.start ? fmtHist(w.start.value) : '—'}
                       </td>
                       {!same && (
                         <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
-                          {w.end ? fmtBig(w.end.value) : '—'}
+                          {w.end ? fmtHist(w.end.value) : '—'}
                         </td>
                       )}
                       {!same && (
