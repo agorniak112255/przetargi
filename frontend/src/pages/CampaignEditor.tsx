@@ -17,6 +17,7 @@ import {
 } from '../components/CampaignsUi'
 import { CampaignBlockEditor, LiveMailPreview } from '../components/CampaignBlockEditor'
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
+import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { CampaignSuggestionsModal } from '../components/CampaignSuggestionsModal'
 import { XlCustomersModal } from '../components/XlCustomersModal'
 import { ListContactsModal, type ListChoice } from '../components/ListContactsModal'
@@ -2894,8 +2895,16 @@ function RepliesPanel({
 }) {
   const [checking, setChecking] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const [previewId, setPreviewId] = useState<number | null>(null)
   const sent = campaign.totals?.sent ?? 0
   const others = replies.list.filter((r) => r.recipient_email === null).length
+  // item_code to kod z migawki wysłanego maila (snap_code) — po nim szukamy karty pozycji
+  const cardByCode = new Map<string, number>()
+  for (const item of campaign.items) {
+    const code = (item.snapshot?.code ?? item.code).trim().toUpperCase()
+    if (code !== '' && item.card && !cardByCode.has(code)) cardByCode.set(code, item.card.id)
+  }
+  const cardFor = (code: string | null) => (code ? cardByCode.get(code.trim().toUpperCase()) : undefined)
 
   async function checkNow() {
     setChecking(true)
@@ -2979,7 +2988,20 @@ function RepliesPanel({
                     )}
                   </td>
                   <td className="whitespace-nowrap p-2 tabular-nums text-slate-600">{fmtDateTime(r.received_at)}</td>
-                  <td className="whitespace-nowrap p-2 font-mono text-slate-700">{r.item_code ?? '—'}</td>
+                  <td className="whitespace-nowrap p-2 font-mono text-slate-700">
+                    {cardFor(r.item_code) !== undefined ? (
+                      <button
+                        type="button"
+                        className="font-mono text-blue-600 hover:underline focus-visible:underline"
+                        title={`${r.item_code} — kliknij, aby zobaczyć kartę produktu`}
+                        onClick={() => setPreviewId(cardFor(r.item_code) ?? null)}
+                      >
+                        {r.item_code}
+                      </button>
+                    ) : (
+                      (r.item_code ?? '—')
+                    )}
+                  </td>
                   <td className="max-w-[28rem] p-2">
                     <span className="break-words text-slate-800">{r.subject || '(bez tematu)'}</span>
                     <span className="block text-[10px] text-slate-500">
@@ -3000,6 +3022,7 @@ function RepliesPanel({
         urlopie”) i zwrotki serwera pomijamy. Treści maili nie czytamy — odpowiadasz klientowi jak zwykle ze swojej poczty.
         {others > 0 ? ' Odpowiedź spoza listy odbiorców to zwykle ktoś, komu klient przekazał mail.' : ''}
       </p>
+      <ProductVerifyModal productId={previewId} onClose={() => setPreviewId(null)} />
     </div>
   )
 }
