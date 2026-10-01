@@ -142,6 +142,35 @@
   text-align: center;
 }
 
+/* Zwinięty pasek (same ikony, base.css): szerokość, logo bez napisów, ikony na środku */
+:root[data-template="nocna-zmiana"] .app-sidebar.app-sidebar--collapsed {
+  width: 64px;
+}
+
+:root[data-template="nocna-zmiana"] .app-sidebar--collapsed .app-brand {
+  grid-template-columns: 32px;
+  column-gap: 0;
+  justify-content: center;
+  padding-inline: 0;
+}
+
+:root[data-template="nocna-zmiana"] .app-sidebar--collapsed :is(.app-nav-link, .app-sidebar-btn) {
+  justify-content: center;
+  gap: 0;
+  padding-inline: 0;
+}
+
+:root[data-template="nocna-zmiana"] .app-sidebar--collapsed .app-sidebar-btn .app-badge {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  min-width: 16px;
+  margin-left: 0;
+  padding: 0 4px;
+  font-size: 9.5px;
+  line-height: 14px;
+}
+
 /* Lista powiadomień */
 :root[data-template="nocna-zmiana"] .app-popover {
   border-color: var(--t-border);

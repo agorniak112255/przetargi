@@ -17,6 +17,8 @@ export type NavIconName =
   | 'account'
   | 'notifications'
   | 'logout'
+  | 'collapse'
+  | 'expand'
 
 // Kształty z makiety „Nocna zmiana” (symbole i-grid, i-file …); account i logout dorysowane.
 const shapes: Record<NavIconName, ReactNode> = {
@@ -110,6 +112,9 @@ const shapes: Record<NavIconName, ReactNode> = {
       <path d="M10 12h11M17 8l4 4-4 4" />
     </>
   ),
+  // Zwijanie / rozwijanie paska bocznego: podwójna strzałka w lewo / w prawo.
+  collapse: <path d="M11 17l-5-5 5-5M18 17l-5-5 5-5" />,
+  expand: <path d="M13 17l5-5-5-5M6 17l5-5-5-5" />,
 }
 
 /** Ikona menu. Widoczna tylko w szablonach, które ją pokazują (base.css domyślnie ukrywa .app-nav-icon). */

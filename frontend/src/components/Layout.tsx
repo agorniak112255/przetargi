@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { can, canAny } from '../lib/api'
@@ -31,9 +32,33 @@ const links: NavLinkItem[] = [
   { to: '/help', label: 'Pomoc', icon: 'help' },
 ]
 
+/** Zwinięty pasek boczny (same ikony) — zapamiętany w tej przeglądarce, np. na laptopie. */
+const COLLAPSED_KEY = 'supon_sidebar_collapsed'
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
 export function Layout() {
   const { user, logout } = useAuth()
   usePresence(Boolean(user))
+  const [collapsed, setCollapsed] = useState(readCollapsed)
+
+  function toggleCollapsed() {
+    const next = !collapsed
+    setCollapsed(next)
+    try {
+      if (next) localStorage.setItem(COLLAPSED_KEY, '1')
+      else localStorage.removeItem(COLLAPSED_KEY)
+    } catch {
+      /* bez zapisu — zwinięcie działa do odświeżenia strony */
+    }
+  }
+
   const visible = links.filter((l) => {
     if (l.permission) return can(user, l.permission)
     if (l.anyOf) return canAny(user, l.anyOf)
@@ -42,9 +67,13 @@ export function Layout() {
 
   return (
     <div className="app-shell flex min-h-screen">
-      <aside className="app-sidebar w-60 shrink-0 bg-slate-800 text-slate-100 print:hidden">
-        <div className="app-brand border-b border-slate-700 p-4 text-xl font-bold">
-          Przetargi Supon
+      <aside
+        className={`app-sidebar shrink-0 bg-slate-800 text-slate-100 print:hidden ${
+          collapsed ? 'app-sidebar--collapsed w-16' : 'w-60'
+        }`}
+      >
+        <div className="app-brand border-b border-slate-700 p-4 text-xl font-bold" title={collapsed ? 'Przetargi Supon' : undefined}>
+          <span className="app-brand-name">Przetargi Supon</span>
           <small className="app-brand-sub mt-1 block text-xs font-normal text-slate-400">
             {user?.name} · {user?.role}
           </small>
@@ -55,6 +84,7 @@ export function Layout() {
               key={l.to}
               to={l.to}
               end={l.to === '/'}
+              title={collapsed ? l.label : undefined}
               className={({ isActive }) =>
                 `app-nav-link block border-b border-slate-700 px-4 py-3 text-sm ${
                   isActive
@@ -71,6 +101,7 @@ export function Layout() {
         <div className="app-sidebar-footer">
           <NavLink
             to="/account"
+            title={collapsed ? 'Moje konto' : undefined}
             className={({ isActive }) =>
               `app-sidebar-btn mx-4 mt-4 block rounded bg-slate-700 px-3 py-2 text-xs hover:bg-slate-600${
                 isActive ? ' app-sidebar-btn--active ring-1 ring-sky-400' : ''
@@ -80,14 +111,25 @@ export function Layout() {
             <NavIcon name="account" className="app-nav-icon" />
             <span className="app-nav-label">Moje konto</span>
           </NavLink>
-          <NotificationBell />
+          <NotificationBell collapsed={collapsed} />
           <button
             type="button"
             onClick={() => void logout()}
+            title={collapsed ? 'Wyloguj' : undefined}
             className="app-sidebar-btn mx-4 mb-4 rounded bg-slate-700 px-3 py-2 text-xs hover:bg-slate-600"
           >
             <NavIcon name="logout" className="app-nav-icon" />
             <span className="app-nav-label">Wyloguj</span>
+          </button>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-expanded={!collapsed}
+            title={collapsed ? 'Rozwiń menu' : 'Zwiń menu do samych ikon'}
+            className="app-sidebar-btn app-sidebar-toggle mx-4 mb-4 rounded px-3 py-2 text-xs text-slate-400 hover:bg-slate-700 hover:text-white"
+          >
+            <NavIcon name={collapsed ? 'expand' : 'collapse'} className="app-nav-icon" />
+            <span className="app-nav-label">{collapsed ? 'Rozwiń menu' : 'Zwiń menu'}</span>
           </button>
         </div>
       </aside>

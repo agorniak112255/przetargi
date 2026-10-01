@@ -10,3 +10,49 @@
 .app-flow {
   display: none;
 }
+
+/*
+ * Zwinięty pasek boczny (Layout: .app-sidebar--collapsed) — same ikony, w każdym szablonie.
+ * Napisy zostają dla czytników ekranu (jak sr-only), nazwę po najechaniu daje title.
+ * Szablony z własnymi odstępami w pasku poprawiają je u siebie (nocna-zmiana/shell.css).
+ */
+.app-sidebar--collapsed .app-nav-icon {
+  display: block;
+  flex-shrink: 0;
+}
+
+.app-sidebar--collapsed .app-nav-label,
+.app-sidebar--collapsed .app-brand-name,
+.app-sidebar--collapsed .app-brand-sub {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.app-sidebar--collapsed .app-brand {
+  text-align: center;
+}
+
+.app-sidebar--collapsed .app-brand::before {
+  content: "S";
+  content: "S" / "";
+}
+
+.app-sidebar--collapsed .app-nav-link,
+.app-sidebar--collapsed .app-sidebar-btn {
+  display: flex;
+  justify-content: center;
+  padding-inline: 0;
+}
+
+/* Licznik powiadomień w rogu ikony zamiast na końcu napisu */
+.app-sidebar--collapsed .app-sidebar-btn .app-badge {
+  top: -6px;
+  right: -6px;
+}
