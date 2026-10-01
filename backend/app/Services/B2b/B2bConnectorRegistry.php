@@ -41,6 +41,7 @@ class B2bConnectorRegistry
         HoneywellB2bConnector::class,
         FagumB2bConnector::class,
         VmFootwearB2bConnector::class,
+        SafetyJoggerB2bConnector::class,
         DemarB2bConnector::class,
     ];
 
