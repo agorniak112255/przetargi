@@ -809,14 +809,14 @@ export type InventoryBoardReport = {
   /** Ile pozycji bez wartości (nie ma ich w kwotach). */
   value_unknown: number
   /**
-   * Jak długo leżą dostawy (partie) w wybranych magazynach: każda dostawa w przedziale swojego wieku, kwoty = wartość
-   * samych dostaw z okresu (przedziały sumują się do `value`). null = partii jeszcze nie odczytano z programu
-   * magazynowego (do pierwszego odczytu po wdrożeniu).
+   * Jak długo leży towar w wybranych magazynach: progi narastające — sztuki z dostaw (partii) leżących co najmniej próg.
+   * null = partii jeszcze nie odczytano z programu magazynowego (do pierwszego odczytu po wdrożeniu).
    */
   lot_age: {
     buckets: InventoryBoardLotAgeBucket[]
     /** Towarów z jakąkolwiek dostawą na stanie. */
     items: number
+    /** Wartość wszystkich dostaw na stanie (także świeżych) — podstawa udziału %. */
     value: number
     /** Towary, których choć jednej dostawy nie da się wycenić (ta dostawa nie jest w kwotach). */
     value_unknown_items: number
@@ -824,9 +824,9 @@ export type InventoryBoardReport = {
 }
 
 /**
- * Przedział „jak długo leży”: dostawy przyjęte od `to_months` do `from_months` miesięcy temu (to_months null = dawniej;
- * from_months null = bez daty przyjęcia). items — towary z dostawami z tego okresu (towar z dostawami z kilku okresów
- * liczy się w każdym). Okno: bucket = key.
+ * Próg „jak długo leży” (narastająco): sztuki z dostaw przyjętych co najmniej `from_months` miesięcy temu (ponad rok jest
+ * częścią ponad pół roku); świeże dostawy się nie liczą. from_months null = dostawy bez daty przyjęcia; to_months zawsze
+ * null. items — towary z takimi dostawami. Okno: bucket = key.
  */
 export type InventoryBoardLotAgeBucket = {
   key: InventoryBoardLotAgeKey
@@ -837,12 +837,11 @@ export type InventoryBoardLotAgeBucket = {
 }
 
 export type InventoryBoardLotAgeKey =
-  | 'lot_age_0_6'
-  | 'lot_age_6_12'
-  | 'lot_age_12_24'
-  | 'lot_age_24_36'
-  | 'lot_age_36_48'
-  | 'lot_age_48_60'
+  | 'lot_age_6'
+  | 'lot_age_12'
+  | 'lot_age_24'
+  | 'lot_age_36'
+  | 'lot_age_48'
   | 'lot_age_60'
   | 'lot_age_unknown'
 
@@ -922,7 +921,7 @@ export type InventoryBoardItemRow = {
   unit: string | null
   /**
    * Ilość × cena zakupu w wybranych magazynach; null = XL nie podaje ceny zakupu. W oknie przedziału „jak długo leży”
-   * (bucket lot_age_*) quantity, value i oldest_lot_at dotyczą tylko dostaw z tego okresu.
+   * (bucket lot_age_*) quantity, value i oldest_lot_at dotyczą tylko sztuk leżących co najmniej próg.
    */
   value: number | null
   /** Wartość ÷ ilość (zł za jednostkę). */

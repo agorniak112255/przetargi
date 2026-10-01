@@ -378,7 +378,7 @@ final class InventoryBoardApiTest extends TestCase
         $this->getJson('/api/inventory/board/moves?sort=quantity')->assertUnprocessable();
     }
 
-    public function test_lot_age_buckets_count_only_deliveries_of_each_period(): void
+    public function test_lot_age_buckets_count_only_stock_lying_at_least_the_threshold(): void
     {
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
         $x = $this->item('AX', 'BLUZA X', 7, 160, lastSale: '2026-09-01', oldestLot: '2021-09-30');
@@ -412,30 +412,34 @@ final class InventoryBoardApiTest extends TestCase
         $lotAge = fn (string $query = ''): array => $this->getJson('/api/inventory/board'.$query)->assertOk()->json('lot_age');
         $byKey = fn (array $a): array => collect($a['buckets'])->mapWithKeys(fn (array $b) => [$b['key'] => [$b['items'], $b['value']]])->all();
 
+        // narastająco: tylko sztuki z dostaw leżących co najmniej próg; świeża dostawa AX z 1.09 nie liczy się nigdzie
         $trade = $lotAge();
         $this->assertEquals([
-            'lot_age_0_6' => [1, 10], 'lot_age_6_12' => [1, 20], 'lot_age_12_24' => [1, 30], 'lot_age_24_36' => [1, 7],
-            'lot_age_36_48' => [1, 20], 'lot_age_48_60' => [0, 0], 'lot_age_60' => [1, 100], 'lot_age_unknown' => [1, 5],
+            'lot_age_6' => [3, 177], 'lot_age_12' => [3, 157], 'lot_age_24' => [3, 127], 'lot_age_36' => [2, 120],
+            'lot_age_48' => [1, 100], 'lot_age_60' => [1, 100], 'lot_age_unknown' => [1, 5],
         ], $byKey($trade));
+        // value — wszystkie dostawy na stanie (podstawa %), także świeże
         $this->assertEquals(['items' => 4, 'value' => 192, 'value_unknown_items' => 0], array_intersect_key($trade, array_flip(['items', 'value', 'value_unknown_items'])));
-        $this->assertSame([60, null], [$trade['buckets'][6]['from_months'], $trade['buckets'][6]['to_months']]);
+        $this->assertSame([60, null], [$trade['buckets'][5]['from_months'], $trade['buckets'][5]['to_months']]);
 
         $rzeszow = $lotAge('?location=01');
-        $this->assertEquals([0, 0], $byKey($rzeszow)['lot_age_24_36']);
+        $this->assertEquals([2, 120], $byKey($rzeszow)['lot_age_24']);
         $this->assertEquals(185, $rzeszow['value']);
         $service = $lotAge('?warehouses=service');
         $this->assertEquals(['items' => 1, 'value' => 1000], array_intersect_key($service, array_flip(['items', 'value'])));
-        $this->assertEquals([1, 1000], $byKey($service)['lot_age_48_60']);
+        $this->assertEquals([[1, 1000], [0, 0]], [$byKey($service)['lot_age_48'], $byKey($service)['lot_age_60']]);
 
-        // okno: ilość, wartość i najstarsza dostawa — tylko z dostaw tego okresu
-        $r = $this->getJson('/api/inventory/board/items?bucket=lot_age_12_24')->assertOk();
-        $this->assertSame('Dostawy, które leżą w magazynie od roku do 2 lat (magazyny handlowe)', $r->json('title'));
-        $this->assertEquals(['items' => 1, 'value' => 30], $r->json('totals'));
-        $this->assertSame(['AX', 3, 30, '2025-09-30'], [$r->json('data.0.code'), (int) $r->json('data.0.quantity'), (int) $r->json('data.0.value'), $r->json('data.0.oldest_lot_at')]);
-        $pz = $this->getJson('/api/inventory/board/items?bucket=lot_age_36_48')->assertOk();
-        $this->assertEquals([20, 4], [$pz->json('data.0.value'), $pz->json('data.0.unit_cost')]);
+        // okno: ilość, wartość i najstarsza dostawa — tylko sztuki leżące co najmniej próg
+        $r = $this->getJson('/api/inventory/board/items?bucket=lot_age_12')->assertOk();
+        $this->assertSame('Towar, który leży w magazynie ponad rok (magazyny handlowe)', $r->json('title'));
+        $this->assertEquals(['items' => 3, 'value' => 157], $r->json('totals'));
+        $this->assertSame(['AX', 4, 130, '2021-09-30'], [$r->json('data.0.code'), (int) $r->json('data.0.quantity'), (int) $r->json('data.0.value'), $r->json('data.0.oldest_lot_at')]);
+        $pz = $this->getJson('/api/inventory/board/items?bucket=lot_age_36')->assertOk();
+        $this->assertEquals(['SY', 20, 4], [$pz->json('data.1.code'), $pz->json('data.1.value'), $pz->json('data.1.unit_cost')]);
         $this->assertSame(['HW'], array_column($this->getJson('/api/inventory/board/items?bucket=lot_age_unknown')->json('data'), 'code'));
-        $this->assertSame(0, $this->getJson('/api/inventory/board/items?bucket=lot_age_24_36&location=01')->json('meta.total'));
+        $this->assertSame(['BV'], array_column($this->getJson('/api/inventory/board/items?bucket=lot_age_24&location=15')->json('data'), 'code'));
+        // dawny przedział „do pół roku” już nie istnieje
+        $this->getJson('/api/inventory/board/items?bucket=lot_age_0_6')->assertUnprocessable();
         // wyszukiwanie i sortowanie działają na wartości z okresu
         $this->assertSame(1, $this->getJson('/api/inventory/board/items?bucket=lot_age_60&search=100')->json('found.items'));
         $this->assertSame(0, $this->getJson('/api/inventory/board/items?bucket=lot_age_60&search=160')->json('found.items'));

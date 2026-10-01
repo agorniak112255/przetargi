@@ -28,19 +28,20 @@ final class InventoryBoardTotals
     ];
 
     /**
-     * „Jak długo leży” (decyzja właściciela 01.10.2026): każda dostawa (partia) w przedziale swojego wieku — ilość
-     * i wartość samych dostaw z okresu, więc przedziały sumują się do zapasu. [od miesięcy, do miesięcy, tytuł okna];
-     * od null = partie bez daty przyjęcia.
+     * „Jak długo leży” (decyzja właściciela 01.10.2026, druga wersja): tylko sztuki, które naprawdę leżą co najmniej
+     * tyle — ilość i wartość dostaw (partii) przyjętych najpóźniej próg temu; świeże dostawy się nie liczą. Przedziały
+     * narastające jak „bez sprzedaży” (ponad rok jest częścią ponad pół roku), więc się nie sumują. Przykład właściciela:
+     * ARĘK92600 — 4925 opk, z dostaw sprzed pół roku 538 opk → „ponad pół roku” = 538, nie 4387 świeżych.
+     * [od miesięcy, do miesięcy, tytuł okna]; od null = partie bez daty przyjęcia.
      */
     public const LOT_AGES = [
-        'lot_age_0_6' => [0, 6, 'Dostawy, które leżą w magazynie do pół roku'],
-        'lot_age_6_12' => [6, 12, 'Dostawy, które leżą w magazynie od pół roku do roku'],
-        'lot_age_12_24' => [12, 24, 'Dostawy, które leżą w magazynie od roku do 2 lat'],
-        'lot_age_24_36' => [24, 36, 'Dostawy, które leżą w magazynie od 2 do 3 lat'],
-        'lot_age_36_48' => [36, 48, 'Dostawy, które leżą w magazynie od 3 do 4 lat'],
-        'lot_age_48_60' => [48, 60, 'Dostawy, które leżą w magazynie od 4 do 5 lat'],
-        'lot_age_60' => [60, null, 'Dostawy, które leżą w magazynie ponad 5 lat'],
-        'lot_age_unknown' => [null, null, 'Dostawy bez daty przyjęcia w programie magazynowym'],
+        'lot_age_6' => [6, null, 'Towar, który leży w magazynie ponad pół roku'],
+        'lot_age_12' => [12, null, 'Towar, który leży w magazynie ponad rok'],
+        'lot_age_24' => [24, null, 'Towar, który leży w magazynie ponad 2 lata'],
+        'lot_age_36' => [36, null, 'Towar, który leży w magazynie ponad 3 lata'],
+        'lot_age_48' => [48, null, 'Towar, który leży w magazynie ponad 4 lata'],
+        'lot_age_60' => [60, null, 'Towar, który leży w magazynie ponad 5 lat'],
+        'lot_age_unknown' => [null, null, 'Towar z dostaw bez daty przyjęcia w programie magazynowym'],
     ];
 
     public function __construct(private readonly CarbonImmutable $today) {}
@@ -114,9 +115,9 @@ final class InventoryBoardTotals
     }
 
     /**
-     * Przedziały „jak długo leży”: wartość samych dostaw z okresu i liczba towarów z takimi dostawami (towar z dostawami
-     * z kilku okresów liczy się w każdym z nich). null = partii jeszcze nie odczytano z XL (przed pierwszym odczytem
-     * stanów po wdrożeniu).
+     * Przedziały „jak długo leży”: wartość sztuk z dostaw leżących co najmniej próg i liczba towarów z takimi dostawami.
+     * `value` — wartość wszystkich dostaw na stanie (podstawa udziału %). null = partii jeszcze nie odczytano z XL (przed
+     * pierwszym odczytem stanów po wdrożeniu).
      *
      * @return array{buckets: list<array{key: string, from_months: int|null, to_months: int|null, items: int, value: float}>, items: int, value: float, value_unknown_items: int}|null
      */
@@ -137,8 +138,7 @@ final class InventoryBoardTotals
         return [
             'buckets' => array_map(static fn (array $b): array => array_diff_key($b, ['value_unknown' => true]), $buckets),
             'items' => $all['items'],
-            // suma przedziałów: towar bez ceny jednej dostawy traci tylko przedział tej dostawy
-            'value' => round(array_sum(array_column($buckets, 'value')), 2),
+            'value' => $all['value'],
             'value_unknown_items' => $all['value_unknown'],
         ];
     }

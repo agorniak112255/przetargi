@@ -1280,22 +1280,22 @@ function HistoryCompare({ compare, place }: { compare: NonNullable<InventoryHist
   )
 }
 
-/** Podpis przedziału „jak długo leży” i kolor paska: do roku szary, 1–3 lata żółty, dłużej czerwony. */
+/** Podpis progu „jak długo leży” i kolor paska: pół roku żółty, dłużej czerwony; bez daty szary. */
 const LOT_AGE_ROWS: Record<InventoryBoardLotAgeKey, { label: string; title: string; tone: 'amber' | 'red' | 'slate' }> = {
-  lot_age_0_6: { label: 'do pół roku', title: 'Dostawy, które leżą do pół roku', tone: 'slate' },
-  lot_age_6_12: { label: 'od pół roku do roku', title: 'Dostawy, które leżą od pół roku do roku', tone: 'slate' },
-  lot_age_12_24: { label: 'od roku do 2 lat', title: 'Dostawy, które leżą od roku do 2 lat', tone: 'amber' },
-  lot_age_24_36: { label: 'od 2 do 3 lat', title: 'Dostawy, które leżą od 2 do 3 lat', tone: 'amber' },
-  lot_age_36_48: { label: 'od 3 do 4 lat', title: 'Dostawy, które leżą od 3 do 4 lat', tone: 'red' },
-  lot_age_48_60: { label: 'od 4 do 5 lat', title: 'Dostawy, które leżą od 4 do 5 lat', tone: 'red' },
-  lot_age_60: { label: 'ponad 5 lat', title: 'Dostawy, które leżą ponad 5 lat', tone: 'red' },
+  lot_age_6: { label: 'ponad pół roku', title: 'Leży w magazynie ponad pół roku', tone: 'amber' },
+  lot_age_12: { label: 'w tym ponad rok', title: 'Leży w magazynie ponad rok', tone: 'red' },
+  lot_age_24: { label: 'w tym ponad 2 lata', title: 'Leży w magazynie ponad 2 lata', tone: 'red' },
+  lot_age_36: { label: 'w tym ponad 3 lata', title: 'Leży w magazynie ponad 3 lata', tone: 'red' },
+  lot_age_48: { label: 'w tym ponad 4 lata', title: 'Leży w magazynie ponad 4 lata', tone: 'red' },
+  lot_age_60: { label: 'w tym ponad 5 lat', title: 'Leży w magazynie ponad 5 lat', tone: 'red' },
   lot_age_unknown: { label: 'bez daty przyjęcia', title: 'Dostawy bez daty przyjęcia', tone: 'slate' },
 }
 
 /**
- * „Jak długo leżą dostawy” (decyzja właściciela 01.10.2026): każda dostawa w przedziale swojego wieku, kwota = wartość
- * samych dostaw z okresu — przedziały się sumują (inaczej niż paski „bez sprzedaży”, które są „w tym”). Dwie kolumny:
- * do 3 lat i od 3 lat; przedział bez daty tylko wtedy, gdy coś w nim jest.
+ * „Jak długo leży towar” (decyzja właściciela 01.10.2026, druga wersja): tylko sztuki, które naprawdę leżą co najmniej
+ * tyle — z dostaw sprzed pół roku, roku… Świeże dostawy się nie liczą. Paski narastające jak „bez sprzedaży” (niższe są
+ * częścią pierwszego); % = część wartości całego towaru w magazynie. Dwie kolumny: do 2 lat i od 3 lat; bez daty tylko
+ * wtedy, gdy coś w nim jest.
  */
 function LotAgePanel({
   lotAge,
@@ -1307,7 +1307,7 @@ function LotAgePanel({
   if (!lotAge) {
     return (
       <section className={`${PANEL} mb-4`}>
-        <h2 className="text-2xl font-semibold text-slate-900">Jak długo leżą dostawy w magazynie</h2>
+        <h2 className="text-2xl font-semibold text-slate-900">Jak długo leży towar w magazynie</h2>
         <p className="mt-1 text-lg text-slate-800">
           Liczby pojawią się po najbliższym odczycie z programu magazynowego.
         </p>
@@ -1315,7 +1315,8 @@ function LotAgePanel({
     )
   }
   const rows = lotAge.buckets.filter((b) => b.key !== 'lot_age_unknown' || b.items > 0)
-  const scale = Math.max(0, ...rows.map((b) => b.value))
+  // skala: pierwszy próg (pół roku) — dłuższe są jego częścią
+  const scale = lotAge.buckets.find((b) => b.key === 'lot_age_6')?.value ?? 0
   const bar = (b: InventoryBoardLotAgeBucket) => {
     const row = LOT_AGE_ROWS[b.key]
     return (
@@ -1324,20 +1325,21 @@ function LotAgePanel({
         tone={row.tone}
         label={row.label}
         bucket={b}
-        scale={scale}
+        scale={b.key === 'lot_age_unknown' ? Math.max(scale, b.value) : scale}
         share={pct(b.value, lotAge.value)}
         onOpen={() => onOpen(b.key, row.title)}
       />
     )
   }
-  const younger = rows.filter((b) => b.to_months !== null && b.to_months <= 36)
-  const older = rows.filter((b) => !(b.to_months !== null && b.to_months <= 36))
+  const younger = rows.filter((b) => b.from_months !== null && b.from_months <= 24)
+  const older = rows.filter((b) => !(b.from_months !== null && b.from_months <= 24))
   return (
     <section className={`${PANEL} mb-4`}>
-      <h2 className="text-2xl font-semibold text-slate-900">Jak długo leżą dostawy w magazynie</h2>
+      <h2 className="text-2xl font-semibold text-slate-900">Jak długo leży towar w magazynie</h2>
       <p className="mb-2 text-base text-slate-700">
-        Każda dostawa, która jeszcze leży, liczy się w przedziale swojego wieku — kwoty się sumują, razem{' '}
-        {fmtBig(lotAge.value)}. % = część tej sumy. Towar z dostawami z kilku okresów jest w każdym z nich.
+        Liczą się tylko sztuki, które naprawdę leżą co najmniej tyle (z dostaw sprzed pół roku, roku…) — świeże dostawy
+        nie. Niższe paski są częścią pierwszego („w tym”). % = część wartości całego towaru w magazynie (
+        {fmtBig(lotAge.value)}).
         <span className="print:hidden"> Kliknij pasek, aby zobaczyć listę.</span>
       </p>
       <div className="grid gap-x-6 gap-y-1 lg:grid-cols-2 print:grid-cols-2">
@@ -1346,8 +1348,7 @@ function LotAgePanel({
       </div>
       {lotAge.value_unknown_items > 0 && (
         <p className="mt-2 text-base text-slate-700">
-          {goods(lotAge.value_unknown_items)} ma dostawę bez ceny zakupu — w przedziale takiej dostawy ten towar nie jest
-          wliczony do kwoty.
+          {goods(lotAge.value_unknown_items)} ma dostawę bez ceny zakupu — takiej dostawy nie ma w kwotach.
         </p>
       )}
     </section>
@@ -1858,7 +1859,7 @@ function BoardDetailsModal({
             <span className="hidden text-base text-slate-700 print:inline">{orderText}</span>
             {request.kind === 'items' && request.bucket.startsWith('lot_age_') && (
               <span className="text-base font-medium text-slate-800">
-                Ilość, wartość i najstarsza dostawa — tylko z dostaw z tego okresu.
+                Ilość i wartość — tylko sztuki, które leżą co najmniej tyle; najstarsza dostawa — najstarsza z nich.
               </span>
             )}
             {loaded?.kind === 'moves' && (

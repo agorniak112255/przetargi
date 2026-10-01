@@ -28,7 +28,7 @@ final class InventorySnapshots
     public const TIMEZONE = 'Europe/Warsaw';
 
     /** Wersja reguł koszyków zapisana przy każdym wierszu — zmiana reguł = nowa wersja (historia nieporównywalna wprost). */
-    public const RULES_VERSION = 1;
+    public const RULES_VERSION = 2; // 2: „jak długo leży” narastająco (lot_age_6…60) zamiast przedziałów lot_age_0_6…
 
     /** Dzień ostatniego pełnego odczytu stanów (czas polski) albo null, gdy nic jeszcze nie odczytano. */
     public function readingDate(): ?CarbonImmutable
