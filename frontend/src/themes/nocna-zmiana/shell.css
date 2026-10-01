@@ -13,19 +13,23 @@
   box-shadow: var(--t-sidebar-shadow);
 }
 
-/* Logo: kwadrat w akcencie (::before) obok nazwy, podpis pod nazwą */
+/* Logo: kwadrat w akcencie (::before) obok nazwy, podpis pod nazwą, strzałki zwijania
+   w trzeciej kolumnie. Cały nagłówek jest przyciskiem zwijania paska (Layout). */
 :root[data-template="nocna-zmiana"] .app-brand {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-columns: 32px minmax(0, 1fr) 18px;
   column-gap: 10px;
   align-items: center;
+  width: 100%;
   padding: 14px 16px;
   border-bottom-color: var(--t-border);
+  background-color: transparent;
   color: var(--t-text);
   font-size: 15px;
   font-weight: 600;
   line-height: 1.25;
   letter-spacing: -0.01em;
+  text-align: left;
 }
 
 :root[data-template="nocna-zmiana"] .app-brand::before {
@@ -41,6 +45,27 @@
   color: var(--t-on-accent);
   font-weight: 700;
   letter-spacing: 0;
+}
+
+:root[data-template="nocna-zmiana"] .app-brand-toggle {
+  position: static;
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  transform: none;
+  color: var(--t-dim);
+}
+
+:root[data-template="nocna-zmiana"] .app-brand:hover {
+  background-color: var(--t-surface-2);
+}
+
+:root[data-template="nocna-zmiana"] .app-brand:hover .app-brand-toggle {
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-brand:focus-visible {
+  outline: 2px solid var(--t-accent);
+  outline-offset: -2px;
 }
 
 :root[data-template="nocna-zmiana"] .app-brand-sub {
@@ -145,13 +170,23 @@
 /* Zwinięty pasek (same ikony, base.css): szerokość, logo bez napisów, ikony na środku */
 :root[data-template="nocna-zmiana"] .app-sidebar.app-sidebar--collapsed {
   width: 64px;
+  /* nad treścią, żeby etykieta ikony (data-tip, base.css) nie chowała się pod sticky nagłówkami */
+  z-index: 30;
 }
 
 :root[data-template="nocna-zmiana"] .app-sidebar--collapsed .app-brand {
   grid-template-columns: 32px;
   column-gap: 0;
+  row-gap: 6px;
   justify-content: center;
   padding-inline: 0;
+}
+
+:root[data-template="nocna-zmiana"] .app-sidebar--collapsed .app-brand-toggle {
+  grid-column: 1;
+  grid-row: 3;
+  justify-self: center;
+  margin: 0;
 }
 
 :root[data-template="nocna-zmiana"] .app-sidebar--collapsed :is(.app-nav-link, .app-sidebar-btn) {

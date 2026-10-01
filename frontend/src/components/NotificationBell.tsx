@@ -69,7 +69,7 @@ export function NotificationBell({ collapsed = false }: { collapsed?: boolean })
           setOpen((v) => !v)
           void load()
         }}
-        title={collapsed ? (unread > 0 ? `Powiadomienia: ${unread}` : 'Powiadomienia') : undefined}
+        data-tip={collapsed ? (unread > 0 ? `Powiadomienia: ${unread}` : 'Powiadomienia') : undefined}
         className="app-sidebar-btn relative w-full rounded bg-slate-700 px-3 py-2 text-left text-xs hover:bg-slate-600"
       >
         <NavIcon name="notifications" className="app-nav-icon" />

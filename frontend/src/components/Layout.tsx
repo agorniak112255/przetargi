@@ -72,19 +72,28 @@ export function Layout() {
           collapsed ? 'app-sidebar--collapsed w-16' : 'w-60'
         }`}
       >
-        <div className="app-brand border-b border-slate-700 p-4 text-xl font-bold" title={collapsed ? 'Przetargi Supon' : undefined}>
+        {/* Kliknięcie w logo lub strzałki obok zwija / rozwija pasek — jak przycisk na dole paska */}
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          aria-expanded={!collapsed}
+          title={collapsed ? undefined : 'Zwiń menu do samych ikon'}
+          data-tip={collapsed ? 'Rozwiń menu' : undefined}
+          className="app-brand relative w-full cursor-pointer border-b border-slate-700 p-4 pr-10 text-left text-xl font-bold hover:bg-slate-700"
+        >
           <span className="app-brand-name">Przetargi Supon</span>
           <small className="app-brand-sub mt-1 block text-xs font-normal text-slate-400">
             {user?.name} · {user?.role}
           </small>
-        </div>
+          <NavIcon name={collapsed ? 'expand' : 'collapse'} className="app-brand-toggle" />
+        </button>
         <nav className="app-nav">
           {visible.map((l) => (
             <NavLink
               key={l.to}
               to={l.to}
               end={l.to === '/'}
-              title={collapsed ? l.label : undefined}
+              data-tip={collapsed ? l.label : undefined}
               className={({ isActive }) =>
                 `app-nav-link block border-b border-slate-700 px-4 py-3 text-sm ${
                   isActive
@@ -101,7 +110,7 @@ export function Layout() {
         <div className="app-sidebar-footer">
           <NavLink
             to="/account"
-            title={collapsed ? 'Moje konto' : undefined}
+            data-tip={collapsed ? 'Moje konto' : undefined}
             className={({ isActive }) =>
               `app-sidebar-btn mx-4 mt-4 block rounded bg-slate-700 px-3 py-2 text-xs hover:bg-slate-600${
                 isActive ? ' app-sidebar-btn--active ring-1 ring-sky-400' : ''
@@ -115,7 +124,7 @@ export function Layout() {
           <button
             type="button"
             onClick={() => void logout()}
-            title={collapsed ? 'Wyloguj' : undefined}
+            data-tip={collapsed ? 'Wyloguj' : undefined}
             className="app-sidebar-btn mx-4 mb-4 rounded bg-slate-700 px-3 py-2 text-xs hover:bg-slate-600"
           >
             <NavIcon name="logout" className="app-nav-icon" />
@@ -125,7 +134,8 @@ export function Layout() {
             type="button"
             onClick={toggleCollapsed}
             aria-expanded={!collapsed}
-            title={collapsed ? 'Rozwiń menu' : 'Zwiń menu do samych ikon'}
+            title={collapsed ? undefined : 'Zwiń menu do samych ikon'}
+            data-tip={collapsed ? 'Rozwiń menu' : undefined}
             className="app-sidebar-btn app-sidebar-toggle mx-4 mb-4 rounded px-3 py-2 text-xs text-slate-400 hover:bg-slate-700 hover:text-white"
           >
             <NavIcon name={collapsed ? 'expand' : 'collapse'} className="app-nav-icon" />
