@@ -179,6 +179,19 @@ final class InventoryApiTest extends TestCase
         $this->assertSame(2, $row['cards_count']);
         $this->assertEquals(0.4165, $row['last_purchase']['unit_price_pln']);
         $this->assertSame('2025-08-20', $row['last_purchase']['date']);
+        $this->assertEquals(2000, $row['last_purchase']['quantity']);
+
+        // kolumna „Ostatni zakup”: sortowanie po dacie ostatniej PZ, towar bez PZ na końcu w obu kierunkach
+        $bezKarty = ErpItem::query()->where('code', 'BEZKARTY')->firstOrFail();
+        ErpItemPurchase::query()->create([
+            'erp_item_id' => $bezKarty->id, 'document_type' => 1489, 'document_id' => 100, 'document_line' => 1, 'purchased_at' => '2026-01-10',
+            'supplier' => 'X', 'quantity' => 5, 'document_unit' => 'szt', 'net_value_pln' => 5, 'unit_price_pln' => 1, 'document_price' => 1, 'currency' => 'PLN',
+        ]);
+        $this->item('BEZPZ', stock: 1, price: null, lastSale: '2025-01-01');
+        $this->assertSame(['SZAT2112103', 'BEZKARTY', 'BEZPZ'], $this->codes('sort=last_purchase&dir=asc'));
+        $this->assertSame(['BEZKARTY', 'SZAT2112103', 'BEZPZ'], $this->codes('sort=last_purchase&dir=desc'));
+        $bezKarty->purchases()->where('document_id', 100)->delete();
+        ErpItem::query()->where('code', 'BEZPZ')->delete();
 
         $this->assertSame(['BEZKARTY'], $this->codes('card=without'));
         $this->assertSame(['SZAT2112103'], $this->codes('search=2112.103-K'));

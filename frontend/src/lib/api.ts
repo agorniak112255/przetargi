@@ -708,6 +708,8 @@ export type InventoryRow = {
   last_purchase: {
     date: string | null
     supplier: string | null
+    /** Ilość z ostatniej PZ w jednostce towaru (`unit`). */
+    quantity: number | null
     unit_price_pln: number | null
     document_price: number | null
     currency: string | null

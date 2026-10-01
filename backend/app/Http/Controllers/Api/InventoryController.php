@@ -42,7 +42,10 @@ class InventoryController extends Controller
     /** Grupy asortymentu XL po pierwszej literze kodu towaru (jak ekran Powiązania z ERP XL). */
     private const GROUPS = ['A', 'B', 'S', 'T', 'H'];
 
-    private const SORTS = ['value', 'stock', 'last_sale', 'oldest_lot', 'code', 'name'];
+    private const SORTS = ['value', 'stock', 'last_sale', 'oldest_lot', 'last_purchase', 'code', 'name'];
+
+    /** Dzień ostatniego zakupu (PZ) towaru — sortowanie kolumny „Ostatni zakup”. */
+    private const LAST_PURCHASE_SQL = '(select max(p.purchased_at) from erp_item_purchases p where p.erp_item_id = erp_items.id)';
 
     /** Znacznik „RW/PW ×N” przy towarze: pary z 12 miesięcy, PW do 3 dni po RW — jak domyślne filtry podzakładki. */
     private const RW_PW_MONTHS = 12;
@@ -101,6 +104,8 @@ class InventoryController extends Controller
             'stock' => $query->orderByRaw($quantity.' '.$dir),
             'oldest_lot' => $query->orderByRaw($lot.' '.$dir),
             'last_sale' => $query->orderByRaw($sale.' '.$dir),
+            // towary bez żadnej PZ na końcu w obu kierunkach
+            'last_purchase' => $query->orderByRaw(self::LAST_PURCHASE_SQL.' is null')->orderByRaw(self::LAST_PURCHASE_SQL.' '.$dir),
             'code' => $query->orderBy('code', $dir),
             'name' => $query->orderBy('name', $dir),
         };
@@ -279,6 +284,8 @@ class InventoryController extends Controller
             'last_purchase' => $purchase === null ? null : [
                 'date' => $purchase->purchased_at?->toDateString(),
                 'supplier' => $purchase->supplier,
+                // ilość z PZ w jednostce podstawowej towaru (od niej liczona jest unit_price_pln)
+                'quantity' => $purchase->quantity !== null ? (float) $purchase->quantity : null,
                 'unit_price_pln' => $purchase->unit_price_pln !== null ? (float) $purchase->unit_price_pln : null,
                 'document_price' => $purchase->document_price !== null ? (float) $purchase->document_price : null,
                 'currency' => $purchase->currency,

@@ -18,7 +18,7 @@ import { formatDate, formatDateTime, formatPrice } from '../lib/priceChange'
  * Z uprawnieniem campaigns.use wiersze można zaznaczać (także na kilku stronach) i dodać do kampanii.
  */
 
-type SortKey = 'value' | 'stock' | 'last_sale' | 'oldest_lot' | 'code' | 'name'
+type SortKey = 'value' | 'stock' | 'last_sale' | 'oldest_lot' | 'last_purchase' | 'code' | 'name'
 type SortDir = 'asc' | 'desc'
 type CardFilter = '' | 'with' | 'without'
 
@@ -29,13 +29,14 @@ const DEFAULT_MONTHS = '6'
 const LOT_MONTHS = [...MONTHS, '36', '48', '60'] as const
 const DEFAULT_LOT_MONTHS = '0'
 const YEAR_LABELS: Record<string, string> = { '36': '3 lata', '48': '4 lata', '60': '5 lat' }
-const SORT_KEYS: readonly SortKey[] = ['value', 'stock', 'last_sale', 'oldest_lot', 'code', 'name']
+const SORT_KEYS: readonly SortKey[] = ['value', 'stock', 'last_sale', 'oldest_lot', 'last_purchase', 'code', 'name']
 /** Kierunek po kliknięciu nowej kolumny: kwoty i stany od największych, daty od najstarszych, teksty alfabetycznie. */
 const DEFAULT_DIR: Record<SortKey, SortDir> = {
   value: 'desc',
   stock: 'desc',
   last_sale: 'asc',
   oldest_lot: 'asc',
+  last_purchase: 'asc',
   code: 'asc',
   name: 'asc',
 }
@@ -276,7 +277,7 @@ export function Inventory() {
   const from = meta && rows.length > 0 ? (meta.current_page - 1) * meta.per_page + 1 : null
   const to = from != null ? from + rows.length - 1 : null
   const pages = meta ? pageNumbers(meta.current_page, Math.max(1, meta.last_page)) : []
-  const colCount = 9 + (canCampaign ? 1 : 0)
+  const colCount = 10 + (canCampaign ? 1 : 0)
   // Oddziały z odpowiedzi; wybrany z adresu zostaje na liście także przed pierwszą odpowiedzią.
   const locations = result?.locations ?? []
   const locationName = locations.find((l) => l.key === location)?.name ?? result?.location_name ?? (location ? `Magazyny ${location}` : '')
@@ -587,6 +588,7 @@ export function Inventory() {
               <SortTh label="Wartość" k="value" sort={sort} dir={dir} onSort={clickSort} align="right" />
               <SortTh label="Ostatnia sprzedaż" k="last_sale" sort={sort} dir={dir} onSort={clickSort} />
               <SortTh label="Najstarsza partia" k="oldest_lot" sort={sort} dir={dir} onSort={clickSort} />
+              <SortTh label="Ostatni zakup" k="last_purchase" sort={sort} dir={dir} onSort={clickSort} />
               <th className="whitespace-nowrap p-2 font-semibold text-slate-700" title="Średnia cena zakupu partii na stanie; pod nią ostatnia PZ">Cena zakupu</th>
             </tr>
           </thead>
@@ -899,6 +901,28 @@ function InventoryTableRow({
             </span>
           ))}
       </td>
+      <td className="whitespace-nowrap p-2">
+        {lp?.date ? (
+          <>
+            <DateWithAge iso={lp.date} />
+            {lp.quantity != null && (
+              <div className="text-[11px] tabular-nums text-slate-500" title="Ilość z ostatniej PZ">
+                {erpQty(lp.quantity)}
+                {unit}
+              </div>
+            )}
+            {lp.supplier && (
+              <div className="max-w-[10rem] truncate text-[11px] text-slate-500" title={lp.supplier}>
+                {lp.supplier}
+              </div>
+            )}
+          </>
+        ) : (
+          <span className="text-slate-400" title="Brak PZ tego towaru w programie magazynowym">
+            —
+          </span>
+        )}
+      </td>
       <td className="p-2">
         {row.unit_cost != null && (
           <div
@@ -933,12 +957,6 @@ function InventoryTableRow({
                   <span className="text-slate-400">cena nieznana</span>
                 )}
                 {foreign && <span className="ml-1 text-[11px] text-slate-500">({foreign})</span>}
-              </div>
-            )}
-            <div className="text-[11px] text-slate-500">{lp.date ? formatDate(lp.date) : 'data nieznana'}</div>
-            {lp.supplier && (
-              <div className="max-w-[10rem] truncate text-[11px] text-slate-500" title={lp.supplier}>
-                {lp.supplier}
               </div>
             )}
           </>
