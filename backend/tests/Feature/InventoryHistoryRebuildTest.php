@@ -145,6 +145,11 @@ final class InventoryHistoryRebuildTest extends TestCase
         // sam zapis nocny starszymi regułami — nie ma z czym sprawdzić odtworzenia
         DB::table(InventorySnapshots::TABLE)->where('taken_on', '2026-10-02')->update(['totals' => json_encode(['version' => 2, 'buckets' => []])]);
         $this->assertSame('no_live', app(InventoryHistoryRebuild::class)->run(3, force: true)['status']);
+        // ręcznie z --ignore-check: szew na pierwszym zapisie nocnym mimo starszych reguł, zapis mimo różnic
+        $r = app(InventoryHistoryRebuild::class)->run(3, force: true, pauseSeconds: 0.0, ignoreSeam: true);
+        $this->assertSame(['saved', '2026-10-02'], [$r['status'], $r['first_live']]);
+        $this->assertSame(['2026-09-29', '2026-09-30', '2026-10-01'], $r['days']);
+        $this->assertSame(21, DB::table(InventorySnapshots::TABLE)->where('taken_on', '2026-10-02')->where('source', 'live')->count());
     }
 
     public function test_nightly_outdated_mode_rebuilds_only_days_from_older_rules(): void

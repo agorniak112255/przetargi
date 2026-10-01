@@ -76,6 +76,11 @@ final class InventoryHistoryRebuild
         sort($current);
         $result = ['status' => 'no_live', 'first_live' => null, 'days' => [], 'skipped' => 0, 'items' => 0, 'sql_seconds' => 0.0,
             'pause_seconds' => 0.0, 'negative_lots' => 0, 'unknown_types' => [], 'seam' => [], 'seam_ok' => false, 'rows' => 0];
+        if ($current === [] && $ignoreSeam && $liveVersions !== []) {
+            // ręcznie z --ignore-check, zanim noc zapisze dzień w aktualnych regułach: szew na pierwszym zapisie nocnym
+            // (kontrola tylko pokazana, różnice od zmiany reguł są spodziewane)
+            $current = [min(array_keys($liveVersions))];
+        }
         if ($current === []) {
             return $result;
         }
