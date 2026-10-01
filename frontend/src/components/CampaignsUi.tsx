@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
@@ -230,10 +230,15 @@ export function Modal({
   )
 }
 
+/**
+ * Okno potwierdzenia. Z confirmWord przycisk działa dopiero po wpisaniu tego słowa (wielkość liter bez znaczenia) —
+ * dla operacji, których nie da się cofnąć.
+ */
 export function ConfirmDialog({
   title,
   message,
   confirmLabel,
+  confirmWord,
   danger,
   busy,
   error,
@@ -243,12 +248,15 @@ export function ConfirmDialog({
   title: string
   message: ReactNode
   confirmLabel: string
+  confirmWord?: string
   danger?: boolean
   busy?: boolean
   error?: string
   onConfirm: () => void
   onClose: () => void
 }) {
+  const [typed, setTyped] = useState('')
+  const ready = confirmWord === undefined || typed.trim().toLocaleLowerCase('pl') === confirmWord.toLocaleLowerCase('pl')
   return (
     <Modal
       title={title}
@@ -267,7 +275,7 @@ export function ConfirmDialog({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={busy}
+            disabled={busy || !ready}
             className={`rounded px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 ${
               danger ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'
             }`}
@@ -278,6 +286,24 @@ export function ConfirmDialog({
       }
     >
       <div className="space-y-2 text-slate-800">{message}</div>
+      {confirmWord !== undefined && (
+        <label className="mt-3 block text-xs text-slate-700">
+          Aby potwierdzić, wpisz <b>{confirmWord}</b>
+          <input
+            type="text"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && ready && !busy) onConfirm()
+            }}
+            disabled={busy}
+            autoFocus
+            autoComplete="off"
+            spellCheck={false}
+            className="mt-1 block w-40 rounded border border-slate-300 bg-white px-2 py-1 text-sm text-slate-800"
+          />
+        </label>
+      )}
       {error && <p className="mt-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
     </Modal>
   )

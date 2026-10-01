@@ -385,6 +385,7 @@ function CampaignEditorPage({ campaignId }: { campaignId: number }) {
           title={editable ? 'Usunąć projekt kampanii?' : 'Usunąć wysłaną kampanię?'}
           danger
           confirmLabel={editable ? 'Usuń projekt' : 'Usuń kampanię'}
+          confirmWord="Tak"
           busy={dialogBusy}
           error={dialogErr}
           onClose={() => setDialog(null)}
