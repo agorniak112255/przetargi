@@ -107,6 +107,8 @@ class CampaignsDispatchCommand extends Command
                 $next = CampaignRecipient::query()
                     ->where('campaign_id', $campaign->id)
                     ->where('status', CampaignRecipient::STATUS_PENDING)
+                    // adres czekający w innej kampanii nie zajmuje partii — dostanie maila, gdy tamta go nie dostarczy
+                    ->whereNotExists(CampaignSender::waitsForOtherCampaign(...))
                     ->when($tried !== [], static fn ($q) => $q->whereNotIn('id', $tried))
                     ->orderBy('attempts')->orderBy('id')
                     ->first();
@@ -124,7 +126,10 @@ class CampaignsDispatchCommand extends Command
                 }
 
                 try {
-                    $sender->sendOne($next);
+                    if (! $sender->sendOne($next)) {
+                        // w międzyczasie inna kampania zajęła adres — wrócił do kolejki bez próby
+                        continue;
+                    }
                 } catch (Throwable $e) {
                     // nieoczekiwany błąd (np. baza) — ten nadawca czeka do następnej minuty; rezerwacja po 15 min → failed
                     report($e);

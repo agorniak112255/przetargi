@@ -125,6 +125,31 @@ final class AudienceResolverTest extends TestCase
 
         $this->assertSame(2, $p['capped']);
         $this->assertSame(['blad@a.pl', 'anulowany@a.pl', 'anulowany2@a.pl', 'nowy@a.pl'], array_column($p['sample'], 'email'));
+
+        // przy starcie adresy czekające w tamtej kampanii są zapisane jako odbiorcy warunkowi (suma kontrolna bez nich)
+        $checksum = AudienceResolver::checksum(['blad@a.pl', 'anulowany@a.pl', 'anulowany2@a.pl', 'nowy@a.pl']);
+        $this->assertSame(6, app(AudienceResolver::class)->materialize($campaign, $checksum));
+        $this->assertSame(
+            ['czeka@a.pl', 'w-trakcie@a.pl'],
+            CampaignRecipient::query()->where('campaign_id', $campaign->id)->whereIn('email', ['czeka@a.pl', 'w-trakcie@a.pl'])->where('status', 'pending')->orderBy('email')->pluck('email')->all(),
+        );
+    }
+
+    public function test_without_frequency_cap_addresses_waiting_elsewhere_are_ordinary_recipients(): void
+    {
+        config(['campaigns.frequency_cap_days' => 0]);
+        $item = $this->erpItem('B20417');
+        $sending = $this->campaign($this->sender(), [$item], ['status' => 'sending', 'sending_started_at' => now()]);
+        CampaignRecipient::query()->create([
+            'campaign_id' => $sending->id, 'email' => 'czeka@a.pl', 'source' => 'list', 'token' => str_repeat('z', 40), 'status' => 'pending',
+        ]);
+        $author = $this->sender();
+        $campaign = $this->campaign($author, [$item], ['audience' => ['list_ids' => [$this->mailingList($author, ['czeka@a.pl'])->id]]]);
+
+        $p = app(AudienceResolver::class)->preview($campaign);
+
+        $this->assertSame(0, $p['capped']);
+        $this->assertSame(['czeka@a.pl'], array_column($p['sample'], 'email'));
     }
 
     public function test_group_and_mine_modes_and_only_mine_without_operator(): void

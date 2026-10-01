@@ -13,6 +13,7 @@ use App\Models\UserMailAccount;
 use App\Notifications\CampaignScheduleFailedNotification;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Mail\Message;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -238,23 +239,26 @@ class CampaignSender
         return $campaign->fresh() ?? $campaign;
     }
 
-    /** Wysyła do jednego zarezerwowanego odbiorcy (status sending) i zapisuje wynik. */
-    public function sendOne(CampaignRecipient $recipient): void
+    /**
+     * Wysyła do jednego zarezerwowanego odbiorcy (status sending) i zapisuje wynik. false = odbiorca wrócił do kolejki
+     * bez próby, bo jego adres czeka w innej kampanii (waitsForOtherCampaign) — nie liczy się do budżetu ani odrzuceń.
+     */
+    public function sendOne(CampaignRecipient $recipient): bool
     {
         $recipient->refresh();
         if ($recipient->status !== CampaignRecipient::STATUS_SENDING) {
-            return;
+            return true;
         }
         $campaign = Campaign::query()->find($recipient->campaign_id);
         if ($campaign === null || $campaign->status !== Campaign::STATUS_SENDING) {
             $this->finish($recipient, CampaignRecipient::STATUS_SKIPPED, 'kampania anulowana');
 
-            return;
+            return true;
         }
         if (EmailSuppression::query()->where('email', mb_strtolower($recipient->email))->exists()) {
             $this->finish($recipient, CampaignRecipient::STATUS_SKIPPED, 'adres wypisany z mailingu');
 
-            return;
+            return true;
         }
         // dwie kampanie w wysyłce naraz (np. dwóch handlowców tego samego dnia): druga nie wysyła do adresu,
         // który w oknie limitu dostał już inną kampanię
@@ -267,14 +271,20 @@ class CampaignSender
             ->exists()) {
             $this->finish($recipient, CampaignRecipient::STATUS_SKIPPED, 'limit częstotliwości');
 
-            return;
+            return true;
+        }
+        // ten sam adres czeka w kampanii, która zapisała go wcześniej — ta wyśle dopiero, gdy tamta go nie dostarczy
+        if (CampaignRecipient::query()->whereKey($recipient->id)->whereExists(self::waitsForOtherCampaign(...))->exists()) {
+            $this->finish($recipient, CampaignRecipient::STATUS_PENDING, $recipient->error);
+
+            return false;
         }
         // konto czytane świeżo — handlowiec mógł poprawić hasło w trakcie wysyłki
         $account = UserMailAccount::query()->where('user_id', $campaign->user_id)->first();
         if ($account === null) {
             $this->pauseSender($recipient, null, (int) $campaign->user_id, 'Brak skrzynki nadawcy (Moja poczta).');
 
-            return;
+            return true;
         }
 
         try {
@@ -299,13 +309,35 @@ class CampaignSender
                 }
             }
 
-            return;
+            return true;
         }
 
         $this->finish($recipient, CampaignRecipient::STATUS_SENT, null, [
             'sent_at' => Carbon::now(),
             'message_id' => $sent !== null ? mb_substr($sent, 0, 255) : null,
         ]);
+
+        return true;
+    }
+
+    /**
+     * Warunek whereExists dla zapytania o campaign_recipients: ten sam adres w innej kampanii jest właśnie wysyłany
+     * (sending) albo czeka (pending) w kampanii w trakcie wysyłki, która zapisała go wcześniej (niższe id). Taki
+     * odbiorca czeka: gdy tamta kampania dostarczy, pominie go limit częstotliwości; gdy nie (błąd, anulowanie) —
+     * wyśle mu ta. Kolejność po id wyklucza wzajemne czekanie dwóch kampanii.
+     */
+    public static function waitsForOtherCampaign(QueryBuilder $query): void
+    {
+        $query->selectRaw('1')
+            ->from('campaign_recipients as other')
+            ->whereColumn('other.email', 'campaign_recipients.email')
+            ->whereColumn('other.campaign_id', '!=', 'campaign_recipients.campaign_id')
+            ->where(static fn (QueryBuilder $q) => $q
+                ->where('other.status', CampaignRecipient::STATUS_SENDING)
+                ->orWhere(static fn (QueryBuilder $p) => $p
+                    ->where('other.status', CampaignRecipient::STATUS_PENDING)
+                    ->whereColumn('other.id', '<', 'campaign_recipients.id')
+                    ->whereIn('other.campaign_id', Campaign::query()->select('id')->where('status', Campaign::STATUS_SENDING))));
     }
 
     /**

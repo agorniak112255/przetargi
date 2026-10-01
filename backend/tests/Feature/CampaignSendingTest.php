@@ -434,6 +434,65 @@ final class CampaignSendingTest extends TestCase
         $this->assertSame('limit częstotliwości', $skipped->error);
     }
 
+    public function test_address_waiting_in_another_campaign_is_skipped_when_that_campaign_delivers(): void
+    {
+        // drugi handlowiec startuje, gdy a@ czeka jeszcze w kampanii pierwszego
+        [$first] = $this->started(['a@klient.pl']);
+        [$second] = $this->started(['a@klient.pl', 'b@klient.pl']);
+        $waiting = CampaignRecipient::query()->where('campaign_id', $second->id)->where('email', 'a@klient.pl')->firstOrFail();
+        $this->assertSame('pending', $waiting->status);
+        $this->assertSame(2, $second->totals['recipients']);
+
+        $this->artisan('campaigns:dispatch')->assertSuccessful();
+
+        // a@ dostał tylko pierwszą kampanię
+        $this->assertSame(['a@klient.pl', 'b@klient.pl'], $this->mailers->recipients());
+        $this->assertSame('sent', CampaignRecipient::query()->where('campaign_id', $first->id)->value('status'));
+        $this->assertSame('skipped', $waiting->fresh()->status);
+        $this->assertSame('limit częstotliwości', $waiting->fresh()->error);
+        $this->assertSame(Campaign::STATUS_SENT, $second->fresh()->status);
+    }
+
+    public function test_address_waiting_in_cancelled_or_failed_campaign_gets_the_next_one(): void
+    {
+        [$first] = $this->started(['a@klient.pl', 'c@klient.pl']);
+        [$second] = $this->started(['a@klient.pl', 'c@klient.pl', 'b@klient.pl']);
+        // pierwsza kampania stoi (przerwa skrzynki nadawcy) — druga wysyła tylko b@, a@ i c@ czekają
+        app(CampaignSender::class)->pause($first->user_id, null, 'test');
+
+        $this->artisan('campaigns:dispatch')->assertSuccessful();
+
+        $this->assertSame(['b@klient.pl'], $this->mailers->recipients());
+        $this->assertSame(Campaign::STATUS_SENDING, $second->fresh()->status);
+        $this->assertSame(['a@klient.pl' => 'pending', 'c@klient.pl' => 'pending'], CampaignRecipient::query()
+            ->where('campaign_id', $second->id)->whereIn('email', ['a@klient.pl', 'c@klient.pl'])->orderBy('email')->pluck('status', 'email')->all());
+
+        // a@ nie doszedł w pierwszej (błąd), c@ — pierwsza anulowana: druga wysyła obu
+        CampaignRecipient::query()->where('campaign_id', $first->id)->where('email', 'a@klient.pl')->update(['status' => 'failed', 'error' => 'odrzucony']);
+        app(CampaignSender::class)->cancel($first);
+        $this->travel(1)->minutes();
+        $this->artisan('campaigns:dispatch')->assertSuccessful();
+
+        $this->assertSame(['b@klient.pl', 'a@klient.pl', 'c@klient.pl'], $this->mailers->recipients());
+        $this->assertSame(Campaign::STATUS_SENT, $second->fresh()->status);
+        $this->assertSame(['recipients' => 3, 'sent' => 3, 'failed' => 0, 'skipped' => 0], $second->fresh()->totals);
+    }
+
+    public function test_send_one_returns_waiting_recipient_to_queue_without_attempt(): void
+    {
+        $this->started(['a@klient.pl']);
+        [$second, $author] = $this->started(['a@klient.pl']);
+        $waiting = CampaignRecipient::query()->where('campaign_id', $second->id)->firstOrFail();
+        $waiting->forceFill(['status' => 'sending'])->save();
+
+        $this->assertFalse(app(CampaignSender::class)->sendOne($waiting));
+
+        $this->assertSame('pending', $waiting->fresh()->status);
+        $this->assertSame(0, $waiting->fresh()->attempts);
+        $this->assertSame([], $this->mailers->recipients());
+        $this->assertFalse(CampaignSender::isPaused($author->id));
+    }
+
     public function test_recipient_finished_after_cancel_updates_totals_of_cancelled_campaign(): void
     {
         [$campaign] = $this->started(['a@klient.pl', 'b@klient.pl', 'c@klient.pl']);

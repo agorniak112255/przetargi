@@ -65,6 +65,7 @@ class AudienceResolver
      * @return array{list_rows: int, xl_customers: int, xl_emails: int, duplicates: int, invalid: int,
      *     excluded_generic: int, suppressed: int, capped: int, warnings: list<string>,
      *     final: list<array{email: string, name: string|null, source: string, origin: string, contact_id: int|null, erp_customer_id: int|null}>,
+     *     waiting: list<array{email: string, name: string|null, source: string, origin: string, contact_id: int|null, erp_customer_id: int|null}>,
      *     skipped: list<array{email: string, name: string|null, source: string, origin: string, reason: string}>}
      */
     public function recipientList(Campaign $campaign): array
@@ -87,17 +88,20 @@ class AudienceResolver
     /**
      * Tworzy campaign_recipients (pending) przez insertOrIgnore; zwraca liczbę odbiorców kampanii. Z $expectedChecksum
      * (lista z okna potwierdzenia) — gdy odbiorcy są teraz inni, wyjątek przed zapisem (start w transakcji się wycofa).
+     * Odbiorcy warunkowi (waiting — adres czeka w innej wysyłanej kampanii) też są zapisywani; suma kontrolna ich nie
+     * obejmuje, bo w oknie potwierdzenia są wśród pominiętych.
      */
     public function materialize(Campaign $campaign, ?string $expectedChecksum = null): int
     {
-        $final = $this->resolve($campaign)['final'];
+        $r = $this->resolve($campaign);
+        $final = $r['final'];
         if ($expectedChecksum !== null && ! hash_equals(self::checksum(array_column($final, 'email')), strtolower($expectedChecksum))) {
             throw ValidationException::withMessages([
                 'recipients_checksum' => ['Lista odbiorców zmieniła się od podglądu — sprawdź ją jeszcze raz.'],
             ]);
         }
         $now = Carbon::now();
-        foreach (array_chunk($final, self::CHUNK) as $chunk) {
+        foreach (array_chunk([...$final, ...$r['waiting']], self::CHUNK) as $chunk) {
             DB::table('campaign_recipients')->insertOrIgnore(array_map(static fn (array $f): array => [
                 'campaign_id' => $campaign->id,
                 'contact_id' => $f['contact_id'],
@@ -120,6 +124,7 @@ class AudienceResolver
      * @return array{list_rows: int, xl_customers: int, xl_emails: int, duplicates: int, invalid: int,
      *     excluded_generic: int, suppressed: int, capped: int, warnings: list<string>,
      *     final: list<array{email: string, name: string|null, source: string, origin: string, contact_id: int|null, erp_customer_id: int|null}>,
+     *     waiting: list<array{email: string, name: string|null, source: string, origin: string, contact_id: int|null, erp_customer_id: int|null}>,
      *     skipped: list<array{email: string, name: string|null, source: string, origin: string, reason: string}>}
      */
     private function resolve(Campaign $campaign): array
@@ -203,20 +208,25 @@ class AudienceResolver
         // wypisani (wszystkie kampanie wszystkich nadawców) → limit częstotliwości
         $suppressedSet = $this->existing(array_keys($valid), static fn (array $chunk) => EmailSuppression::query()
             ->whereIn('email', $chunk)->pluck('email'));
-        $since = Carbon::now()->subDays((int) config('campaigns.frequency_cap_days', 14));
+        $capDays = (int) config('campaigns.frequency_cap_days', 14);
+        $since = Carbon::now()->subDays($capDays);
         $cappedSet = $this->existing(array_keys($valid), static fn (array $chunk) => CampaignRecipient::query()
             ->whereIn('email', $chunk)
             ->where('campaign_id', '!=', $campaign->id)
-            ->where(static fn (Builder $q) => $q
-                ->where(static fn (Builder $s) => $s->where('status', CampaignRecipient::STATUS_SENT)->where('sent_at', '>=', $since))
-                // jeszcze nie wysłany, ale czeka w innej kampanii w trakcie wysyłki (np. drugi handlowiec tego samego dnia)
-                ->orWhere(static fn (Builder $s) => $s
-                    ->whereIn('status', [CampaignRecipient::STATUS_PENDING, CampaignRecipient::STATUS_SENDING])
-                    ->whereIn('campaign_id', Campaign::query()->select('id')->where('status', Campaign::STATUS_SENDING))))
+            ->where('status', CampaignRecipient::STATUS_SENT)->where('sent_at', '>=', $since)
             ->distinct()
             ->pluck('email'));
+        // jeszcze nie wysłany, ale czeka w innej kampanii w trakcie wysyłki (np. drugi handlowiec tego samego dnia)
+        $waitingSet = $capDays > 0 ? $this->existing(array_keys($valid), static fn (array $chunk) => CampaignRecipient::query()
+            ->whereIn('email', $chunk)
+            ->where('campaign_id', '!=', $campaign->id)
+            ->whereIn('status', [CampaignRecipient::STATUS_PENDING, CampaignRecipient::STATUS_SENDING])
+            ->whereIn('campaign_id', Campaign::query()->select('id')->where('status', Campaign::STATUS_SENDING))
+            ->distinct()
+            ->pluck('email')) : [];
 
         $final = [];
+        $waiting = [];
         $suppressed = $capped = 0;
         foreach ($valid as $email => $c) {
             if (isset($suppressedSet[$email])) {
@@ -225,6 +235,12 @@ class AudienceResolver
             } elseif (isset($cappedSet[$email])) {
                 $capped++;
                 $skipped[] = $this->skippedRow($c, (string) $email, 'capped');
+            } elseif (isset($waitingSet[$email])) {
+                // w podglądzie pominięty (zwykle dostanie tamtą kampanię), ale zapisany jako odbiorca warunkowy:
+                // gdy tamta go nie dostarczy (błąd, anulowanie), wyśle mu ta — CampaignSender::waitsForOtherCampaign
+                $capped++;
+                $skipped[] = $this->skippedRow($c, (string) $email, 'capped');
+                $waiting[] = $c;
             } else {
                 $final[] = $c;
             }
@@ -241,6 +257,7 @@ class AudienceResolver
             'capped' => $capped,
             'warnings' => $warnings,
             'final' => $final,
+            'waiting' => $waiting,
             'skipped' => $skipped,
         ];
     }
