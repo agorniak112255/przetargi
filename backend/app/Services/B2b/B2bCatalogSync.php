@@ -30,7 +30,6 @@ use App\Services\Enrichment\ProductDocumentDownloader;
 use App\Services\Enrichment\ProductImageDownloader;
 use App\Services\PriceListImportService;
 use App\Services\Pricing\ProductEffectivePrice;
-use App\Support\BrandKey;
 use App\Support\ManufacturerNormFacts;
 use App\Support\ProductSearchBlob;
 use Carbon\CarbonImmutable;
@@ -3317,7 +3316,7 @@ final class B2bCatalogSync
         // się u nas ręcznie, więc nie ma czego bronić hashem.
         $fromManufacturer = $connector instanceof B2bManufacturerSite
             && $existing !== null
-            && $this->sameBrand($connector::ownBrand(), (string) $existing->manufacturer);
+            && B2bManufacturerSiteBrands::matching($connector::class, (string) $existing->manufacturer) !== null;
         if ($this->mayWriteDescription($existing, $link, $fromManufacturer)) {
             $read = true;
             try {
@@ -3406,12 +3405,6 @@ final class B2bCatalogSync
             && $link->description_hash !== null
             && hash_equals($link->source_description_hash, sha1($source))
             && hash_equals($link->description_hash, sha1((string) $existing->description));
-    }
-
-    /** Ta sama marka po odsianiu wielkosci liter, znakow i dopisków („Bolle Safety” = „BOLLE”). */
-    private function sameBrand(string $a, string $b): bool
-    {
-        return BrandKey::same($a, $b);
     }
 
     /**
@@ -3709,11 +3702,13 @@ final class B2bCatalogSync
     ): bool {
         // Normy z tabelki karty, którą storeShopFields właśnie zapisał — bez drugiego zapytania do sklepu producenta.
         if ($connector instanceof B2bShopFieldNormSource && $connector instanceof B2bManufacturerSite) {
+            // marka witryny, do której należy karta (witryna kilku marek: Hultafors Group); karta cudzej marki —
+            // marka główna, a ShopCardNormFacts i tak niczego wtedy nie zapisuje
             return app(ShopCardNormFacts::class)->store(
                 $product,
                 $account,
                 $connector::key(),
-                $connector::ownBrand(),
+                B2bManufacturerSiteBrands::matching($connector::class, (string) $product->manufacturer) ?? $connector::ownBrand(),
                 $connector::normShopFieldNames(),
             ) === ShopCardNormFacts::SAVED;
         }
@@ -3744,7 +3739,7 @@ final class B2bCatalogSync
                 $facts,
             ),
             $connector::key(),
-            $connector::ownBrand(),
+            B2bManufacturerSiteBrands::matching($connector::class, (string) $product->manufacturer) ?? $connector::ownBrand(),
             (string) ($remote->sourceUrl ?? ''),
             provenance: $provenance,
         );
@@ -3981,7 +3976,7 @@ final class B2bCatalogSync
     private function manufacturerAccountId(B2bConnector $connector, Product $product, B2bAccount $account): ?int
     {
         $fromManufacturer = $connector instanceof B2bManufacturerSite
-            && $this->sameBrand($connector::ownBrand(), (string) $product->manufacturer);
+            && B2bManufacturerSiteBrands::matching($connector::class, (string) $product->manufacturer) !== null;
 
         return $fromManufacturer ? (int) $account->id : null;
     }

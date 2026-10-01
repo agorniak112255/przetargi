@@ -42,6 +42,7 @@ class B2bConnectorRegistry
         FagumB2bConnector::class,
         VmFootwearB2bConnector::class,
         SafetyJoggerB2bConnector::class,
+        HultaforsB2bConnector::class,
         DemarB2bConnector::class,
         MactronicB2bConnector::class,
     ];
@@ -128,9 +129,11 @@ class B2bConnectorRegistry
     }
 
     /**
-     * Łącznik producenta z normami w tabelce karty: [marka, nazwy wierszy z normami]; null dla pozostałych.
+     * Łącznik producenta z normami w tabelce karty: [marka, nazwy wierszy z normami]; null dla pozostałych. Witryna
+     * kilku marek (B2bManufacturerBrands) podaje dodatkowo wszystkie swoje marki — karta każdej z nich ma normy z tej
+     * witryny (B2bManufacturerSiteBrands).
      *
-     * @return array{brand: string, names: list<string>}|null
+     * @return array{brand: string, names: list<string>, brands?: list<string>}|null
      */
     public function shopFieldNormSource(string $key): ?array
     {
@@ -138,8 +141,12 @@ class B2bConnectorRegistry
         if ($class === null || ! is_a($class, B2bShopFieldNormSource::class, true) || ! is_a($class, B2bManufacturerSite::class, true)) {
             return null;
         }
+        $source = ['brand' => $class::ownBrand(), 'names' => $class::normShopFieldNames()];
+        if (is_a($class, B2bManufacturerBrands::class, true)) {
+            $source['brands'] = B2bManufacturerSiteBrands::all($class);
+        }
 
-        return ['brand' => $class::ownBrand(), 'names' => $class::normShopFieldNames()];
+        return $source;
     }
 
     /** Czy łącznik to witryna producenta własnej marki (B2bManufacturerSite), a nie dystrybutor wielu marek. */
@@ -185,7 +192,8 @@ class B2bConnectorRegistry
     /**
      * Marki, których cennikiem producenta jest to konto: marka witryny producenta (B2bManufacturerSite::ownBrand)
      * i nazwa dostawcy — Anro podaje siebie jako producenta wszystkich swoich kart (decyzja użytkownika 23.09.2026:
-     * to jego wyroby). [] = nieznany łącznik.
+     * to jego wyroby) — oraz pozostałe marki witryny kilku marek (B2bManufacturerBrands, Hultafors Group). [] = nieznany
+     * łącznik.
      *
      * @return list<string>
      */
@@ -195,10 +203,7 @@ class B2bConnectorRegistry
         if ($class === null) {
             return [];
         }
-        $brands = [$class::label()];
-        if (is_a($class, B2bManufacturerSite::class, true)) {
-            $brands[] = $class::ownBrand();
-        }
+        $brands = array_merge([$class::label()], B2bManufacturerSiteBrands::all($class));
 
         return array_values(array_unique($brands));
     }

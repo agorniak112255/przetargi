@@ -9,6 +9,7 @@ use App\Models\B2bProductLink;
 use App\Models\Product;
 use App\Services\B2b\B2bConnectorRegistry;
 use App\Services\B2b\ShopCardNormFacts;
+use App\Support\BrandKey;
 use App\Support\ManufacturerNormFacts;
 use Illuminate\Console\Command;
 use JsonException;
@@ -61,7 +62,15 @@ final class NormsFromShopCardsCommand extends Command
                 ->pluck('product_id')->map(static fn ($id): int => (int) $id)->unique()->values()->all();
             foreach (array_chunk($ids, 500) as $chunk) {
                 foreach (Product::query()->whereIn('id', $chunk)->get() as $product) {
-                    $result = $facts->resolve($product, $account, $key, $source['brand'], $source['names']);
+                    // witryna kilku marek (Hultafors Group): marka witryny zgodna z producentem karty
+                    $brand = $source['brand'];
+                    foreach ($source['brands'] ?? [] as $candidate) {
+                        if (BrandKey::same($candidate, (string) $product->manufacturer)) {
+                            $brand = $candidate;
+                            break;
+                        }
+                    }
+                    $result = $facts->resolve($product, $account, $key, $brand, $source['names']);
                     $row[$result['status']]++;
                     if ($result['status'] !== ShopCardNormFacts::SAVED) {
                         continue;
