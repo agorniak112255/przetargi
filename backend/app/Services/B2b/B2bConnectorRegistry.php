@@ -46,6 +46,7 @@ class B2bConnectorRegistry
         DemarB2bConnector::class,
         PortwestB2bConnector::class,
         MactronicB2bConnector::class,
+        EltenB2bConnector::class,
     ];
 
     /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */
