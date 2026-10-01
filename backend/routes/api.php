@@ -395,7 +395,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::patch('/campaigns/{campaign}/items/{item}', [CampaignController::class, 'updateItem']);
         Route::delete('/campaigns/{campaign}/items/{item}', [CampaignController::class, 'removeItem']);
         Route::get('/campaigns/{campaign}/audience', [CampaignController::class, 'audience']);
+        Route::get('/campaigns/{campaign}/audience/recipients', [CampaignController::class, 'audienceRecipients']);
         Route::get('/campaigns/{campaign}/xl-customers', [CampaignController::class, 'xlCustomers']);
+        Route::get('/campaigns/{campaign}/list-contacts', [CampaignController::class, 'listContacts']);
         Route::get('/campaigns/{campaign}/preview', [CampaignController::class, 'preview']);
         Route::post('/campaigns/{campaign}/test', [CampaignController::class, 'test'])->middleware('throttle:10,1');
         Route::post('/campaigns/{campaign}/send', [CampaignController::class, 'send']);

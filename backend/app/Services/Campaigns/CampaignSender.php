@@ -73,13 +73,14 @@ class CampaignSender
     /**
      * Start wysyłki: blokada kampanii, ponowne sprawdzenie statusu draft, walidacja (pozycje, temat, skrzynka autora,
      * public_url, odbiorcy > 0), snapshoty pozycji, odbiorcy, status sending. Kopia do nadawcy po commit.
+     * $expectedChecksum — suma listy odbiorców z okna potwierdzenia; inna lista teraz = 422 i nic się nie zapisuje.
      */
-    public function start(Campaign $campaign, User $actor): Campaign
+    public function start(Campaign $campaign, User $actor, ?string $expectedChecksum = null): Campaign
     {
         $this->assertAuthor($campaign, $actor, 'Wysłać kampanię może tylko jej autor.');
         $this->assertPublicUrl();
 
-        $campaign = DB::transaction(function () use ($campaign): Campaign {
+        $campaign = DB::transaction(function () use ($campaign, $expectedChecksum): Campaign {
             /** @var Campaign $locked */
             $locked = Campaign::query()->whereKey($campaign->id)->lockForUpdate()->firstOrFail();
             // zaplanowaną startuje campaigns:dispatch o jej godzinie
@@ -106,7 +107,7 @@ class CampaignSender
                 ])->save();
             }
 
-            $count = $this->audience->materialize($locked);
+            $count = $this->audience->materialize($locked, $expectedChecksum);
             if ($count === 0) {
                 throw $this->invalid('Kampania nie ma odbiorców — wybierz grupę albo klientów z ERP XL.');
             }

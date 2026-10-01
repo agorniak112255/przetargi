@@ -118,6 +118,11 @@ export type PageMeta = { current_page: number; last_page: number; per_page: numb
 
 export type CampaignAudience = {
   list_ids: number[]
+  /**
+   * Odznaczone adresy w wybranej grupie (okno „Pokaż / wybierz”). Brak wpisu = cała grupa; adresy dopisane do grupy
+   * później dochodzą. Kontakt odznaczony w jednej grupie, a obecny w innej wybranej bez odznaczenia, dostaje maila.
+   */
+  list_exclusions: { list_id: number; contact_ids: number[] }[]
   xl: {
     mode: CampaignXlMode | null
     months: 12 | 24
@@ -542,8 +547,57 @@ export function sendCampaignTest(id: number, email?: string) {
   return api<{ message: string }>(`/campaigns/${id}/test`, { method: 'POST', ...json(email ? { email } : {}) })
 }
 
-export function sendCampaign(id: number) {
-  return api<Campaign>(`/campaigns/${id}/send`, { method: 'POST' })
+/**
+ * Start wysyłki. `recipientsChecksum` z listy pokazanej przed wysyłką — gdy lista na serwerze jest już inna,
+ * serwer odpowiada 422 (errors.recipients_checksum) i nic nie wysyła.
+ */
+export function sendCampaign(id: number, recipientsChecksum?: string) {
+  return api<Campaign>(`/campaigns/${id}/send`, {
+    method: 'POST',
+    ...(recipientsChecksum ? json({ recipients_checksum: recipientsChecksum }) : {}),
+  })
+}
+
+export type AudienceSkipReason = 'invalid' | 'generic' | 'suppressed' | 'capped'
+
+/** Adres z listy przed wysyłką; origin = nazwa grupy (source list) albo akronim klienta XL (source xl). */
+export type AudienceRecipientRow = {
+  email: string
+  name: string | null
+  source: 'list' | 'xl'
+  origin: string
+  /** null = wyślemy; inaczej powód pominięcia. */
+  reason: AudienceSkipReason | null
+}
+
+/** Dokładna lista odbiorców przed „Wyślij teraz” / „Zaplanuj”; meta dotyczy wybranego widoku po szukaniu. */
+export type AudienceRecipients = {
+  summary: {
+    /** Wyślemy do. */
+    total: number
+    from_lists: number
+    from_xl: number
+    duplicates: number
+    skipped: Record<AudienceSkipReason, number>
+  }
+  /** Odcisk listy „do wysyłki” — idzie z „Wyślij”, serwer sprawdza, że lista się nie zmieniła. */
+  checksum: string
+  warnings: string[]
+  data: AudienceRecipientRow[]
+  meta: PageMeta
+}
+
+export function campaignAudienceRecipients(
+  id: number,
+  params: { view?: 'send' | 'skipped'; search?: string; page?: number; per_page?: number } = {},
+) {
+  const q = new URLSearchParams()
+  if (params.view) q.set('view', params.view)
+  if (params.search) q.set('search', params.search)
+  if (params.page) q.set('page', String(params.page))
+  if (params.per_page) q.set('per_page', String(params.per_page))
+  const qs = q.toString()
+  return api<AudienceRecipients>(`/campaigns/${id}/audience/recipients${qs ? `?${qs}` : ''}`)
 }
 
 /** Zaplanowanie wysyłki; `at` = ISO z przesunięciem strefy (np. new Date(...).toISOString()). */
@@ -732,6 +786,42 @@ export function campaignXlCustomers(
   if (params.page) q.set('page', String(params.page))
   if (params.per_page) q.set('per_page', String(params.per_page))
   return api<XlCustomersResponse>(`/campaigns/${id}/xl-customers?${q.toString()}`)
+}
+
+/** Adres grupy w oknie „Pokaż / wybierz” kampanii. */
+export type ListContactRow = {
+  id: number
+  email: string
+  name: string | null
+  company: string | null
+  basis: 'customer' | 'consent'
+  basis_note: string | null
+  added_at: string | null
+  /** suppressed = wypisany z mailingu — nie dostanie maila. */
+  skipped: 'suppressed' | null
+  /** Inne wybrane grupy kampanii, w których ten adres jest (i nie jest odznaczony). */
+  also_in: string[]
+}
+
+export type ListContactsResponse = {
+  list: { id: number; name: string }
+  data: ListContactRow[]
+  meta: PageMeta
+  /** Wszystkie adresy grupy (do „zaznacz wszystkich”). */
+  ids: number[]
+  /** Zapisane odznaczenia tej grupy w kampanii. */
+  excluded_ids: number[]
+}
+
+export function campaignListContacts(
+  id: number,
+  params: { list_id: number; search?: string; page?: number; per_page?: number },
+) {
+  const q = new URLSearchParams({ list_id: String(params.list_id) })
+  if (params.search) q.set('search', params.search)
+  if (params.page) q.set('page', String(params.page))
+  if (params.per_page) q.set('per_page', String(params.per_page))
+  return api<ListContactsResponse>(`/campaigns/${id}/list-contacts?${q.toString()}`)
 }
 
 export type ErpOperator = { ident: string; name: string | null; customers: number; user: { id: number; name: string } | null }

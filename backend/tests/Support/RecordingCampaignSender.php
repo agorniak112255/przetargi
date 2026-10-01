@@ -29,7 +29,7 @@ final class RecordingCampaignSender extends CampaignSender
         $this->calls[] = ['sendTest', [$campaign->id, $to]];
     }
 
-    public function start(Campaign $campaign, User $actor): Campaign
+    public function start(Campaign $campaign, User $actor, ?string $expectedChecksum = null): Campaign
     {
         $this->calls[] = ['start', [$campaign->id, $actor->id]];
         $campaign->update(['status' => Campaign::STATUS_SENDING, 'sending_started_at' => now()]);

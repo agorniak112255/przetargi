@@ -13,9 +13,11 @@ use App\Models\MailingList;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Odbiorcy kampanii: grupy (tylko własne i wspólne grupy autora) ∪ klienci z ERP XL wg audience.xl, po normalizacji,
@@ -57,11 +59,45 @@ class AudienceResolver
         ];
     }
 
-    /** Tworzy campaign_recipients (pending) przez insertOrIgnore; zwraca liczbę odbiorców kampanii. */
-    public function materialize(Campaign $campaign): int
+    /**
+     * Pełna lista odbiorców (final) i pominiętych z powodem (bez duplikatów) — okno potwierdzenia przed wysyłką.
+     *
+     * @return array{list_rows: int, xl_customers: int, xl_emails: int, duplicates: int, invalid: int,
+     *     excluded_generic: int, suppressed: int, capped: int, warnings: list<string>,
+     *     final: list<array{email: string, name: string|null, source: string, origin: string, contact_id: int|null, erp_customer_id: int|null}>,
+     *     skipped: list<array{email: string, name: string|null, source: string, origin: string, reason: string}>}
+     */
+    public function recipientList(Campaign $campaign): array
     {
+        return $this->resolve($campaign);
+    }
+
+    /**
+     * Suma kontrolna listy adresów (kolejność bez znaczenia) — ta sama w oknie potwierdzenia i przy starcie.
+     *
+     * @param  list<string>  $emails
+     */
+    public static function checksum(array $emails): string
+    {
+        sort($emails, SORT_STRING);
+
+        return sha1(implode("\n", $emails));
+    }
+
+    /**
+     * Tworzy campaign_recipients (pending) przez insertOrIgnore; zwraca liczbę odbiorców kampanii. Z $expectedChecksum
+     * (lista z okna potwierdzenia) — gdy odbiorcy są teraz inni, wyjątek przed zapisem (start w transakcji się wycofa).
+     */
+    public function materialize(Campaign $campaign, ?string $expectedChecksum = null): int
+    {
+        $final = $this->resolve($campaign)['final'];
+        if ($expectedChecksum !== null && ! hash_equals(self::checksum(array_column($final, 'email')), strtolower($expectedChecksum))) {
+            throw ValidationException::withMessages([
+                'recipients_checksum' => ['Lista odbiorców zmieniła się od podglądu — sprawdź ją jeszcze raz.'],
+            ]);
+        }
         $now = Carbon::now();
-        foreach (array_chunk($this->resolve($campaign)['final'], self::CHUNK) as $chunk) {
+        foreach (array_chunk($final, self::CHUNK) as $chunk) {
             DB::table('campaign_recipients')->insertOrIgnore(array_map(static fn (array $f): array => [
                 'campaign_id' => $campaign->id,
                 'contact_id' => $f['contact_id'],
@@ -83,7 +119,8 @@ class AudienceResolver
     /**
      * @return array{list_rows: int, xl_customers: int, xl_emails: int, duplicates: int, invalid: int,
      *     excluded_generic: int, suppressed: int, capped: int, warnings: list<string>,
-     *     final: list<array{email: string, name: string|null, source: string, contact_id: int|null, erp_customer_id: int|null}>}
+     *     final: list<array{email: string, name: string|null, source: string, origin: string, contact_id: int|null, erp_customer_id: int|null}>,
+     *     skipped: list<array{email: string, name: string|null, source: string, origin: string, reason: string}>}
      */
     private function resolve(Campaign $campaign): array
     {
@@ -94,12 +131,13 @@ class AudienceResolver
         // kolejność = pierwszeństwo przy tym samym adresie: grupy przed XL, w XL klient z większą liczbą dokumentów
         $candidates = [];
         $listRows = 0;
-        foreach ($this->listContacts($settings['list_ids'], $author) as $row) {
+        foreach ($this->listContacts($settings['list_ids'], $settings['list_exclusions'], $author) as $row) {
             $listRows++;
             $candidates[] = [
                 'email' => (string) $row->email,
                 'name' => $this->name($row->name ?? null, $row->company ?? null),
                 'source' => CampaignRecipient::SOURCE_LIST,
+                'origin' => (string) $row->list_name,
                 'contact_id' => (int) $row->id,
                 'erp_customer_id' => null,
             ];
@@ -125,6 +163,7 @@ class AudienceResolver
                         'email' => (string) $email,
                         'name' => $this->name($customer->name, $customer->acronym),
                         'source' => CampaignRecipient::SOURCE_XL,
+                        'origin' => (string) $customer->acronym,
                         'contact_id' => null,
                         'erp_customer_id' => (int) $customer->id,
                     ];
@@ -135,6 +174,7 @@ class AudienceResolver
         // normalizacja → duplikaty → niepoprawne → adresy ogólne (tylko XL)
         $seen = [];
         $valid = [];
+        $skipped = [];
         $duplicates = $invalid = $generic = 0;
         $prefixes = array_map(static fn ($p): string => mb_strtolower((string) $p), (array) config('campaigns.excluded_local_prefixes', []));
         foreach ($candidates as $c) {
@@ -147,11 +187,13 @@ class AudienceResolver
             $seen[$email] = true;
             if ($email === '' || strlen($email) > 255 || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
                 $invalid++;
+                $skipped[] = $this->skippedRow($c, $email, 'invalid');
 
                 continue;
             }
             if ($c['source'] === CampaignRecipient::SOURCE_XL && $this->isGeneric($email, $prefixes)) {
                 $generic++;
+                $skipped[] = $this->skippedRow($c, $email, 'generic');
 
                 continue;
             }
@@ -179,8 +221,10 @@ class AudienceResolver
         foreach ($valid as $email => $c) {
             if (isset($suppressedSet[$email])) {
                 $suppressed++;
+                $skipped[] = $this->skippedRow($c, (string) $email, 'suppressed');
             } elseif (isset($cappedSet[$email])) {
                 $capped++;
+                $skipped[] = $this->skippedRow($c, (string) $email, 'capped');
             } else {
                 $final[] = $c;
             }
@@ -197,16 +241,28 @@ class AudienceResolver
             'capped' => $capped,
             'warnings' => $warnings,
             'final' => $final,
+            'skipped' => $skipped,
         ];
     }
 
     /**
+     * @param  array{name: string|null, source: string, origin: string}  $c
+     * @return array{email: string, name: string|null, source: string, origin: string, reason: string}
+     */
+    private function skippedRow(array $c, string $email, string $reason): array
+    {
+        return ['email' => $email, 'name' => $c['name'], 'source' => $c['source'], 'origin' => $c['origin'], 'reason' => $reason];
+    }
+
+    /**
      * Kontakty z grup autora i grup wspólnych — cudze prywatne grupy pomijane, nawet gdy ich id jest w audience.
+     * Odznaczeni w grupie (list_exclusions) odpadają tylko z tej grupy — z innej wybranej grupy kontakt i tak wchodzi.
      *
      * @param  list<int>  $listIds
-     * @return iterable<object{id: int, email: string, name: ?string, company: ?string}>
+     * @param  list<array{list_id: int, contact_ids: list<int>}>  $exclusions
+     * @return iterable<object{id: int, email: string, name: ?string, company: ?string, mailing_list_id: int, list_name: string}>
      */
-    private function listContacts(array $listIds, ?User $author): iterable
+    private function listContacts(array $listIds, array $exclusions, ?User $author): iterable
     {
         if ($listIds === [] || $author === null) {
             return [];
@@ -220,12 +276,30 @@ class AudienceResolver
             return [];
         }
 
+        $excluded = [];
+        foreach ($exclusions as $entry) {
+            $excluded[$entry['list_id']] = $entry['contact_ids'];
+        }
+        $allowed = array_map('intval', $allowed);
+
         return DB::table('mailing_list_contact as mlc')
             ->join('contacts as c', 'c.id', '=', 'mlc.contact_id')
-            ->whereIn('mlc.mailing_list_id', $allowed)
+            ->join('mailing_lists as ml', 'ml.id', '=', 'mlc.mailing_list_id')
+            ->where(static function (QueryBuilder $q) use ($allowed, $excluded): void {
+                $whole = array_values(array_filter($allowed, static fn (int $id): bool => ($excluded[$id] ?? []) === []));
+                if ($whole !== []) {
+                    $q->orWhereIn('mlc.mailing_list_id', $whole);
+                }
+                foreach ($allowed as $listId) {
+                    if (($excluded[$listId] ?? []) !== []) {
+                        $q->orWhere(static fn (QueryBuilder $w) => $w->where('mlc.mailing_list_id', $listId)
+                            ->whereIntegerNotInRaw('mlc.contact_id', $excluded[$listId]));
+                    }
+                }
+            })
             ->orderBy('mlc.mailing_list_id')
             ->orderBy('mlc.id')
-            ->get(['c.id', 'c.email', 'c.name', 'c.company']);
+            ->get(['c.id', 'c.email', 'c.name', 'c.company', 'mlc.mailing_list_id', 'ml.name as list_name']);
     }
 
     /**

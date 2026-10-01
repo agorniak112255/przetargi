@@ -11,6 +11,7 @@ use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
 use App\Models\CampaignReply;
 use App\Models\CampaignTemplate;
+use App\Models\Contact;
 use App\Models\EmailSuppression;
 use App\Models\ErpItemLink;
 use App\Models\MailingList;
@@ -66,6 +67,9 @@ class CampaignController extends Controller
 
     /** Najdalej tyle dni naprzód można zaplanować wysyłkę. */
     private const SCHEDULE_MAX_DAYS = 60;
+
+    /** Najwięcej odznaczonych adresów we wszystkich grupach kampanii razem. */
+    private const MAX_LIST_EXCLUSIONS = 20000;
 
     private const RECIPIENT_STATUSES = [
         CampaignRecipient::STATUS_PENDING,
@@ -188,6 +192,12 @@ class CampaignController extends Controller
             'audience' => ['sometimes', 'array'],
             'audience.list_ids' => ['sometimes', 'array', 'max:100'],
             'audience.list_ids.*' => ['integer', 'distinct'],
+            // adresy odznaczone w oknie „Pokaż / wybierz” grupy; klucz zastępuje całość
+            'audience.list_exclusions' => ['sometimes', 'array', 'max:100'],
+            'audience.list_exclusions.*' => ['array'],
+            'audience.list_exclusions.*.list_id' => ['required', 'integer'],
+            'audience.list_exclusions.*.contact_ids' => ['present', 'array', 'max:'.self::MAX_LIST_EXCLUSIONS],
+            'audience.list_exclusions.*.contact_ids.*' => ['integer'],
             'audience.xl' => ['sometimes', 'array'],
             'audience.xl.mode' => ['sometimes', 'nullable', 'string', Rule::in(Campaign::XL_MODES)],
             'audience.xl.months' => ['sometimes', 'integer', Rule::in(Campaign::XL_MONTHS)],
@@ -198,6 +208,13 @@ class CampaignController extends Controller
             'blocks' => ['sometimes', 'array'],
             'brand_color' => ['sometimes', 'nullable', 'string', Rule::in(CampaignBlocks::BRAND_COLORS)],
         ], $this->newlineMessages());
+        $excluded = 0;
+        foreach ((array) ($v['audience']['list_exclusions'] ?? []) as $entry) {
+            $excluded += count((array) ($entry['contact_ids'] ?? []));
+        }
+        if ($excluded > self::MAX_LIST_EXCLUSIONS) {
+            throw ValidationException::withMessages(['audience.list_exclusions' => ['Za dużo odznaczonych adresów.']]);
+        }
 
         $data = [];
         // bloki zastępują heading/intro/layout — stary front bez bloków zmienia je jak dotąd
@@ -266,6 +283,8 @@ class CampaignController extends Controller
         $copy = DB::transaction(function () use ($campaign, $user): Campaign {
             $settings = $campaign->audienceSettings();
             $settings['list_ids'] = $this->visibleListIds($user, $settings['list_ids']);
+            // odznaczenia tylko w grupach, które zostały w kopii
+            $settings['list_exclusions'] = Campaign::normalizeListExclusions($settings['list_exclusions'], $settings['list_ids']);
             $validUntil = $campaign->valid_until;
 
             $copy = Campaign::query()->create([
@@ -461,6 +480,166 @@ class CampaignController extends Controller
         ]);
     }
 
+    /**
+     * Okno „Pokaż / wybierz” grupy odbiorców: kontakty grupy (podstawa wysyłki, wypisani) i nazwy innych wybranych grup,
+     * w których kontakt też jest bez odznaczenia (wtedy dostanie maila mimo odznaczenia tutaj). `ids` = cała grupa
+     * (do „zaznacz wszystkich”), `excluded_ids` = zapisane odznaczenia tej grupy. Grupa autora kampanii albo wspólna.
+     */
+    public function listContacts(Request $request, Campaign $campaign): JsonResponse
+    {
+        $this->authorizeView($request, $campaign);
+        $v = $request->validate([
+            'list_id' => ['required', 'integer'],
+            'search' => ['nullable', 'string', 'max:150'],
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:10', 'max:200'],
+        ]);
+        $author = $campaign->user;
+        if ($author === null) {
+            abort(404);
+        }
+        $list = MailingList::query()->whereKey((int) $v['list_id'])
+            ->where(static fn (Builder $q) => $q->where('user_id', $author->id)->orWhere('is_shared', true))
+            ->first();
+        if ($list === null) {
+            abort(404);
+        }
+
+        $settings = $campaign->audienceSettings();
+        /** @var array<int, array<int, int>> $excludedBy grupa → odznaczone kontakty (klucze) */
+        $excludedBy = [];
+        foreach ($settings['list_exclusions'] as $entry) {
+            $excludedBy[$entry['list_id']] = array_flip($entry['contact_ids']);
+        }
+        $ids = DB::table('mailing_list_contact')->where('mailing_list_id', $list->id)->orderBy('contact_id')
+            ->pluck('contact_id')->map(static fn ($id): int => (int) $id)->all();
+        $own = $excludedBy[$list->id] ?? [];
+        $excludedIds = array_values(array_filter($ids, static fn (int $id): bool => isset($own[$id])));
+
+        $query = $list->contacts()->orderBy('contacts.email')->orderBy('contacts.id');
+        $search = trim((string) ($v['search'] ?? ''));
+        if ($search !== '') {
+            $like = '%'.addcslashes(mb_strtolower($search), '%_\\').'%';
+            $query->where(static fn (Builder $q) => $q
+                ->whereRaw('lower(contacts.email) like ?', [$like])
+                ->orWhereRaw('lower(contacts.name) like ?', [$like])
+                ->orWhereRaw('lower(contacts.company) like ?', [$like]));
+        }
+        $page = $query->paginate((int) ($v['per_page'] ?? 50));
+        $contacts = $page->getCollection();
+
+        $emails = $contacts->map(static fn (Contact $c): string => mb_strtolower((string) $c->email))->unique()->values()->all();
+        $suppressed = $emails === [] ? [] : array_flip(EmailSuppression::query()->whereIn('email', $emails)->pluck('email')
+            ->map(static fn ($e): string => mb_strtolower((string) $e))->all());
+
+        // inne wybrane grupy (tylko widoczne dla autora — jak przy wysyłce), w których kontakt jest bez odznaczenia
+        $others = array_values(array_filter($this->visibleListIds($author, $settings['list_ids']), static fn (int $id): bool => $id !== (int) $list->id));
+        $alsoIn = [];
+        $pageIds = $contacts->map(static fn (Contact $c): int => (int) $c->id)->all();
+        if ($others !== [] && $pageIds !== []) {
+            $names = MailingList::query()->whereIn('id', $others)->pluck('name', 'id')->all();
+            $member = [];
+            foreach (DB::table('mailing_list_contact')->whereIn('mailing_list_id', $others)->whereIn('contact_id', $pageIds)
+                ->get(['mailing_list_id', 'contact_id']) as $row) {
+                $listId = (int) $row->mailing_list_id;
+                $contactId = (int) $row->contact_id;
+                if (! isset($excludedBy[$listId][$contactId])) {
+                    $member[$contactId][$listId] = true;
+                }
+            }
+            foreach ($member as $contactId => $lists) {
+                // kolejność grup jak w wyborze kampanii
+                foreach ($others as $listId) {
+                    if (isset($lists[$listId], $names[$listId])) {
+                        $alsoIn[$contactId][] = (string) $names[$listId];
+                    }
+                }
+            }
+        }
+
+        return response()->json([
+            'list' => ['id' => (int) $list->id, 'name' => (string) $list->name],
+            'data' => $contacts->map(static fn (Contact $c): array => [
+                'id' => (int) $c->id,
+                'email' => (string) $c->email,
+                'name' => $c->name,
+                'company' => $c->company,
+                'basis' => $c->pivot->basis,
+                'basis_note' => $c->pivot->basis_note,
+                'added_at' => $c->pivot->created_at !== null ? Carbon::parse($c->pivot->created_at)->toIso8601String() : null,
+                'skipped' => isset($suppressed[mb_strtolower((string) $c->email)]) ? 'suppressed' : null,
+                'also_in' => $alsoIn[(int) $c->id] ?? [],
+            ])->values()->all(),
+            'meta' => [
+                'current_page' => $page->currentPage(),
+                'last_page' => $page->lastPage(),
+                'per_page' => $page->perPage(),
+                'total' => $page->total(),
+            ],
+            'ids' => $ids,
+            'excluded_ids' => $excludedIds,
+        ]);
+    }
+
+    /**
+     * Lista odbiorców przed wysyłką: dokładnie ci, do których pójdzie mail (view=send), albo pominięci z powodem
+     * (view=skipped). `checksum` z adresów do wysyłki — start z tą sumą odmówi, gdy lista zmieni się w międzyczasie.
+     * from_lists / from_xl to adresy przed odrzuceniem duplikatów i pominiętych (jak total_raw w podglądzie).
+     */
+    public function audienceRecipients(Request $request, Campaign $campaign): JsonResponse
+    {
+        $this->authorizeView($request, $campaign);
+        $v = $request->validate([
+            'view' => ['nullable', 'string', Rule::in(['send', 'skipped'])],
+            'search' => ['nullable', 'string', 'max:150'],
+            'page' => ['nullable', 'integer', 'min:1'],
+            'per_page' => ['nullable', 'integer', 'min:10', 'max:200'],
+        ]);
+        $r = $this->audience->recipientList($campaign);
+        $skipped = ($v['view'] ?? 'send') === 'skipped';
+        $rows = $skipped ? $r['skipped'] : $r['final'];
+
+        $search = mb_strtolower(trim((string) ($v['search'] ?? '')));
+        if ($search !== '') {
+            $rows = array_values(array_filter($rows, static fn (array $row): bool => str_contains($row['email'], $search)
+                || str_contains(mb_strtolower((string) $row['name']), $search)
+                || str_contains(mb_strtolower($row['origin']), $search)));
+        }
+        $perPage = (int) ($v['per_page'] ?? 50);
+        $total = count($rows);
+        $current = (int) ($v['page'] ?? 1);
+
+        return response()->json([
+            'summary' => [
+                'total' => count($r['final']),
+                'from_lists' => $r['list_rows'],
+                'from_xl' => $r['xl_emails'],
+                'duplicates' => $r['duplicates'],
+                'skipped' => [
+                    'invalid' => $r['invalid'],
+                    'generic' => $r['excluded_generic'],
+                    'suppressed' => $r['suppressed'],
+                    'capped' => $r['capped'],
+                ],
+            ],
+            'checksum' => AudienceResolver::checksum(array_column($r['final'], 'email')),
+            'warnings' => $r['warnings'],
+            'data' => array_map(static fn (array $row): array => [
+                'email' => $row['email'],
+                'name' => $row['name'],
+                'source' => $row['source'],
+                'origin' => $row['origin'],
+                'reason' => $skipped ? $row['reason'] : null,
+            ], array_slice($rows, ($current - 1) * $perPage, $perPage)),
+            'meta' => [
+                'current_page' => $current,
+                'last_page' => max(1, (int) ceil($total / $perPage)),
+                'per_page' => $perPage,
+                'total' => $total,
+            ],
+        ]);
+    }
+
     public function preview(Request $request, Campaign $campaign): JsonResponse
     {
         $this->authorizeView($request, $campaign);
@@ -566,9 +745,11 @@ class CampaignController extends Controller
         if ((int) $campaign->user_id !== (int) $user->id) {
             abort(403, 'Wysłać kampanię może tylko jej autor — wychodzi z jego skrzynki.');
         }
+        // suma kontrolna listy z okna potwierdzenia — inna lista w chwili startu = 422, nic nie wychodzi
+        $v = $request->validate(['recipients_checksum' => ['nullable', 'string', 'size:40']]);
         $this->ensureDraft($campaign);
 
-        $started = $this->sender->start($campaign, $user);
+        $started = $this->sender->start($campaign, $user, $v['recipients_checksum'] ?? null);
 
         return response()->json($this->present($started->fresh() ?? $started, $user));
     }
@@ -824,10 +1005,13 @@ class CampaignController extends Controller
     }
 
     /**
-     * Odbiorcy po zmianie: brakujące klucze z dotychczasowych ustawień. Grupy tylko autora albo wspólne.
+     * Odbiorcy po zmianie: brakujące klucze z dotychczasowych ustawień. Grupy tylko autora albo wspólne — istniejąca
+     * cudza prywatna grupa to błąd, nieistniejąca (np. usunięta w międzyczasie) po cichu wypada. list_exclusions
+     * zastępuje całość; wpisy grup spoza list_ids znikają.
      *
      * @param  array<string, mixed>  $input
-     * @return array{list_ids: list<int>, xl: array{mode: string|null, months: int, only_mine: bool}}
+     * @return array{list_ids: list<int>, list_exclusions: list<array{list_id: int, contact_ids: list<int>}>,
+     *     xl: array{mode: string|null, months: int, only_mine: bool, customer_ids: list<int>|null}}
      */
     private function mergedAudience(Campaign $campaign, array $input): array
     {
@@ -835,6 +1019,8 @@ class CampaignController extends Controller
         if (array_key_exists('list_ids', $input)) {
             $ids = array_values(array_unique(array_map('intval', (array) $input['list_ids'])));
             $author = $campaign->user()->firstOrFail();
+            $existing = $ids === [] ? [] : MailingList::query()->whereIn('id', $ids)->pluck('id')->map(static fn ($id): int => (int) $id)->all();
+            $ids = array_values(array_filter($ids, static fn (int $id): bool => in_array($id, $existing, true)));
             $visible = $this->visibleListIds($author, $ids);
             if (count($visible) !== count($ids)) {
                 throw ValidationException::withMessages([
@@ -843,6 +1029,10 @@ class CampaignController extends Controller
             }
             $current['list_ids'] = $ids;
         }
+        $current['list_exclusions'] = Campaign::normalizeListExclusions(
+            array_key_exists('list_exclusions', $input) ? $input['list_exclusions'] : $current['list_exclusions'],
+            $current['list_ids'],
+        );
         $xl = is_array($input['xl'] ?? null) ? $input['xl'] : [];
         $category = [$current['xl']['mode'], $current['xl']['months'], $current['xl']['only_mine']];
         if (array_key_exists('mode', $xl)) {

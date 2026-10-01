@@ -19,6 +19,8 @@ import { CampaignBlockEditor, LiveMailPreview } from '../components/CampaignBloc
 import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { CampaignSuggestionsModal } from '../components/CampaignSuggestionsModal'
 import { XlCustomersModal } from '../components/XlCustomersModal'
+import { ListContactsModal, type ListChoice } from '../components/ListContactsModal'
+import { CampaignRecipientsConfirm } from '../components/CampaignRecipientsConfirm'
 import { can } from '../lib/api'
 import {
   errorText,
@@ -1194,6 +1196,7 @@ function AudienceStep({
   const [draft, setDraft] = useState<CampaignAudience>(campaign.audience)
   const [lastServer, setLastServer] = useState(campaign.audience)
   const [xlPicker, setXlPicker] = useState<CampaignXlMode | null>(null)
+  const [listPicker, setListPicker] = useState<MailingList | null>(null)
   if (campaign.audience !== lastServer) {
     setLastServer(campaign.audience)
     setDraft(campaign.audience)
@@ -1212,9 +1215,30 @@ function AudienceStep({
     })
   }
 
+  // starsza odpowiedź bez pola = brak odznaczeń
+  const exclusions = draft.list_exclusions ?? []
+  const excludedIn = (listId: number) => exclusions.find((e) => e.list_id === listId)?.contact_ids ?? []
+
+  /** Odznaczenie grupy usuwa też jej odznaczone adresy (ponowne zaznaczenie = cała grupa). */
   function toggleList(id: number, on: boolean) {
     const ids = on ? [...new Set([...draft.list_ids, id])] : draft.list_ids.filter((x) => x !== id)
-    save({ ...draft, list_ids: ids })
+    save({ ...draft, list_ids: ids, list_exclusions: on ? exclusions : exclusions.filter((e) => e.list_id !== id) })
+  }
+
+  /** Zapis z okna „Pokaż / wybierz” grupy: zaznacza grupę z odznaczeniami albo — nic nie wybrano — odznacza ją. */
+  async function saveListChoice(id: number, choice: ListChoice): Promise<boolean> {
+    const others = exclusions.filter((e) => e.list_id !== id)
+    const next: CampaignAudience = choice.include
+      ? {
+          ...draft,
+          list_ids: [...new Set([...draft.list_ids, id])],
+          list_exclusions: choice.excluded.length > 0 ? [...others, { list_id: id, contact_ids: choice.excluded }] : others,
+        }
+      : { ...draft, list_ids: draft.list_ids.filter((x) => x !== id), list_exclusions: others }
+    setDraft(next)
+    const res = await mutate(() => updateCampaign(campaign.id, { audience: next }), 'Nie udało się zapisać wyboru adresów.')
+    if (!res) setDraft(campaign.audience)
+    return Boolean(res)
   }
 
   const xl = draft.xl
@@ -1243,6 +1267,7 @@ function AudienceStep({
           )}
           {(lists ?? []).map((l) => {
             const checked = draft.list_ids.includes(l.id)
+            const excluded = checked ? excludedIn(l.id).length : 0
             const who = l.is_shared ? `wspólna grupa (${l.owner.name})` : l.owner.id === user?.id ? 'moja grupa' : `grupa: ${l.owner.name}`
             return (
               <label
@@ -1256,17 +1281,27 @@ function AudienceStep({
                     {who} · {fmtInt(l.contacts_count)} {plural(l.contacts_count, 'adres', 'adresy', 'adresów')} · podstawa: stały klient{' '}
                     {fmtInt(l.basis_counts.customer)}, zgoda {fmtInt(l.basis_counts.consent)}
                   </small>
+                  {excluded > 0 && (
+                    <small className="mt-0.5 block text-[11px] font-medium text-blue-700">
+                      wybrano: {fmtInt(Math.max(0, l.contacts_count - excluded))} z {fmtInt(l.contacts_count)}{' '}
+                      {plural(l.contacts_count, 'adresu', 'adresów', 'adresów')}
+                    </small>
+                  )}
                 </span>
                 <span className="flex items-center gap-2">
                   <Chip tone={l.contacts_count > 0 ? 'green' : 'red'}>{fmtInt(l.contacts_count)}</Chip>
-                  <Link
-                    to={`/kampanie/grupy/${l.id}`}
+                  <button
+                    type="button"
                     className={BTN_SM}
-                    title="Otwiera adresy tej grupy (wybór odbiorców kampanii zapisuje się sam)"
-                    onClick={(e) => e.stopPropagation()}
+                    title="Otwiera adresy tej grupy — możesz je przejrzeć, wyszukać i odznaczyć część"
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setListPicker(l)
+                    }}
                   >
-                    Pokaż
-                  </Link>
+                    {editable ? 'Pokaż / wybierz' : 'Pokaż'}
+                  </button>
                 </span>
               </label>
             )
@@ -1372,6 +1407,18 @@ function AudienceStep({
           </div>
         </div>
       </div>
+
+      {listPicker !== null && (
+        <ListContactsModal
+          campaignId={campaign.id}
+          listId={listPicker.id}
+          listName={listPicker.name}
+          initialExcluded={draft.list_ids.includes(listPicker.id) ? excludedIn(listPicker.id) : []}
+          editable={editable}
+          onClose={() => setListPicker(null)}
+          onSave={(choice) => saveListChoice(listPicker.id, choice)}
+        />
+      )}
 
       {xlPicker !== null && (
         <XlCustomersModal
@@ -1922,11 +1969,10 @@ function SendStep({
   onSent: (c: Campaign) => void
   onGoTo: (s: Step) => void
 }) {
-  const [confirm, setConfirm] = useState(false)
-  const [busy, setBusy] = useState(false)
+  // okno z listą odbiorców przed wysyłką; at = godzina startu przy planowaniu
+  const [confirm, setConfirm] = useState<{ mode: 'send' } | { mode: 'schedule'; at: Date } | null>(null)
   const [err, setErr] = useState('')
   const [scheduleAt, setScheduleAt] = useState(defaultScheduleValue)
-  const [scheduling, setScheduling] = useState(false)
   const scheduled = campaign.status === 'scheduled'
 
   const items = campaign.items
@@ -1939,37 +1985,26 @@ function SendStep({
   if (audience?.without_mailbox) blockers.push('brak skrzynki nadawcy')
   if (!isAuthor) blockers.push('wysłać może tylko autor kampanii (z własnej skrzynki)')
 
-  async function schedule() {
+  function openSchedule() {
     const at = new Date(scheduleAt)
     if (Number.isNaN(at.getTime())) {
       setErr('Wybierz dzień i godzinę wysyłki.')
       return
     }
-    setScheduling(true)
     setErr('')
-    try {
-      await flush()
-      onSent(await scheduleCampaign(campaign.id, at.toISOString()))
-    } catch (ex) {
-      setErr(errorText(ex, 'Nie udało się zaplanować wysyłki.'))
-    } finally {
-      setScheduling(false)
-    }
+    setConfirm({ mode: 'schedule', at })
   }
 
-  async function send() {
-    setBusy(true)
-    setErr('')
-    try {
-      await flush()
-      const c = await sendCampaign(campaign.id)
-      setConfirm(false)
-      onSent(c)
-    } catch (ex) {
-      setErr(errorText(ex, 'Nie udało się rozpocząć wysyłki.'))
-    } finally {
-      setBusy(false)
-    }
+  /** Po potwierdzeniu w oknie z listą odbiorców; błąd (też 422 „lista się zmieniła”) pokazuje okno. */
+  async function confirmed(checksum: string) {
+    if (!confirm) return
+    await flush()
+    const c =
+      confirm.mode === 'send'
+        ? await sendCampaign(campaign.id, checksum)
+        : await scheduleCampaign(campaign.id, confirm.at.toISOString())
+    setConfirm(null)
+    onSent(c)
   }
 
   const stepLink = (s: Step, label: string) => (
@@ -2061,11 +2096,11 @@ function SendStep({
           <button
             type="button"
             className={BTN_PRIMARY}
-            disabled={blockers.length > 0 || busy}
-            title={blockers.length > 0 ? `Nie można wysłać: ${blockers.join(', ')}` : undefined}
+            disabled={blockers.length > 0 || confirm !== null}
+            title={blockers.length > 0 ? `Nie można wysłać: ${blockers.join(', ')}` : 'Przed wysyłką pokażemy listę adresów, do których pójdzie mail'}
             onClick={() => {
               setErr('')
-              setConfirm(true)
+              setConfirm({ mode: 'send' })
             }}
           >
             Wyślij teraz do {fmtInt(final)} {plural(final, 'odbiorcy', 'odbiorców', 'odbiorców')}
@@ -2085,15 +2120,15 @@ function SendStep({
           <button
             type="button"
             className={BTN}
-            disabled={blockers.length > 0 || scheduling || !scheduleAt}
+            disabled={blockers.length > 0 || confirm !== null || !scheduleAt}
             title={
               blockers.length > 0
                 ? `Nie można zaplanować: ${blockers.join(', ')}`
                 : 'Kampania wystartuje sama o tej godzinie; odbiorców i stany policzymy w chwili startu'
             }
-            onClick={() => void schedule()}
+            onClick={openSchedule}
           >
-            {scheduling ? 'Planuję…' : 'Zaplanuj'}
+            Zaplanuj
           </button>
         </div>
         )}
@@ -2114,25 +2149,14 @@ function SendStep({
       </aside>
 
       {confirm && (
-        <ConfirmDialog
-          title="Wysłać kampanię teraz?"
-          confirmLabel={`Wyślij do ${fmtInt(final)} ${plural(final, 'odbiorcy', 'odbiorców', 'odbiorców')}`}
-          busy={busy}
-          error={err}
-          onClose={() => setConfirm(false)}
-          onConfirm={() => void send()}
-          message={
-            <>
-              <p>
-                <b>{campaign.name}</b> pójdzie do <b>{fmtInt(final)}</b> {plural(final, 'odbiorcy', 'odbiorców', 'odbiorców')} z
-                Twojej skrzynki.
-              </p>
-              <p className="text-xs text-slate-600">
-                Tego nie da się cofnąć — można tylko zatrzymać wysyłkę do tych, którzy jeszcze nie dostali maila. Stan
-                pozycji zapiszemy teraz, żeby policzyć, ile zeszło po 7 i 30 dniach.
-              </p>
-            </>
-          }
+        <CampaignRecipientsConfirm
+          campaignId={campaign.id}
+          campaignName={campaign.name}
+          mode={confirm.mode}
+          scheduleAt={confirm.mode === 'schedule' ? confirm.at : undefined}
+          flush={flush}
+          onConfirm={confirmed}
+          onClose={() => setConfirm(null)}
         />
       )}
     </div>

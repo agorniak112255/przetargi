@@ -104,7 +104,11 @@ class Campaign extends Model
      * customer_ids: null = cała kategoria klientów XL; lista = tylko ci zaznaczeni w oknie „Pokaż / wybierz”
      * (przy wysyłce przecięta z kategorią, więc klient, który z niej wypadł, nie dostanie maila).
      *
-     * @return array{list_ids: list<int>, xl: array{mode: string|null, months: int, only_mine: bool, customer_ids: list<int>|null}}
+     * list_exclusions: odznaczone adresy (contacts.id) w danej grupie; brak wpisu = cała grupa (także adresy dopisane
+     * później). Kontakt odznaczony w jednej grupie, a obecny w innej wybranej bez odznaczenia, i tak dostaje maila.
+     *
+     * @return array{list_ids: list<int>, list_exclusions: list<array{list_id: int, contact_ids: list<int>}>,
+     *     xl: array{mode: string|null, months: int, only_mine: bool, customer_ids: list<int>|null}}
      */
     public function audienceSettings(): array
     {
@@ -113,9 +117,11 @@ class Campaign extends Model
         $mode = $xl['mode'] ?? null;
         $months = (int) ($xl['months'] ?? 24);
         $customerIds = $xl['customer_ids'] ?? null;
+        $listIds = array_values(array_map('intval', is_array($a['list_ids'] ?? null) ? $a['list_ids'] : []));
 
         return [
-            'list_ids' => array_values(array_map('intval', is_array($a['list_ids'] ?? null) ? $a['list_ids'] : [])),
+            'list_ids' => $listIds,
+            'list_exclusions' => self::normalizeListExclusions($a['list_exclusions'] ?? null, $listIds),
             'xl' => [
                 'mode' => in_array($mode, self::XL_MODES, true) ? $mode : null,
                 'months' => in_array($months, self::XL_MONTHS, true) ? $months : 24,
@@ -123,6 +129,48 @@ class Campaign extends Model
                 'customer_ids' => is_array($customerIds) ? array_values(array_unique(array_map('intval', $customerIds))) : null,
             ],
         ];
+    }
+
+    /**
+     * Odznaczenia grup: tylko grupy z list_ids, jeden wpis na grupę (powtórzone wpisy łączone), id unikalne i rosnąco,
+     * bez pustych wpisów.
+     *
+     * @param  list<int>  $listIds
+     * @return list<array{list_id: int, contact_ids: list<int>}>
+     */
+    public static function normalizeListExclusions(mixed $raw, array $listIds): array
+    {
+        if (! is_array($raw) || $listIds === []) {
+            return [];
+        }
+        $allowed = array_flip($listIds);
+        $byList = [];
+        foreach ($raw as $entry) {
+            if (! is_array($entry) || ! is_numeric($entry['list_id'] ?? null) || ! is_array($entry['contact_ids'] ?? null)) {
+                continue;
+            }
+            $listId = (int) $entry['list_id'];
+            if (! isset($allowed[$listId])) {
+                continue;
+            }
+            foreach ($entry['contact_ids'] as $id) {
+                if (is_numeric($id)) {
+                    $byList[$listId][(int) $id] = true;
+                }
+            }
+        }
+        $out = [];
+        // kolejność grup jak w list_ids
+        foreach ($listIds as $listId) {
+            if (! isset($byList[$listId]) || isset($out[$listId])) {
+                continue;
+            }
+            $ids = array_keys($byList[$listId]);
+            sort($ids);
+            $out[$listId] = ['list_id' => $listId, 'contact_ids' => $ids];
+        }
+
+        return array_values($out);
     }
 
     /** @return BelongsTo<User, $this> */
