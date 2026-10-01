@@ -215,13 +215,39 @@ final class CampaignRendererTest extends TestCase
         // cennik: tabela bez zdjęć, stan w kolumnie, przycisk „Zapytaj”
         $list = $html('pricelist');
         $this->assertStringContainsString('Cena netto', $list);
-        $this->assertStringNotContainsString('<img', $list);
+        // jedyny obrazek to baner nagłówka — pozycje bez zdjęć
+        $this->assertSame(1, substr_count($list, '<img'));
+        $this->assertStringContainsString('<img src="https://przetargi.example.pl/campaign/supon-header.png"', $list);
         $this->assertStringContainsString('>12 szt</td>', $list);
         $this->assertSame(3, substr_count($list, '>Zapytaj</a>'));
 
         // wersja tekstowa z opisem w układach z opisem
         $text = app(CampaignRenderer::class)->render($campaign->fresh()->fill(['layout' => 'grid2_desc']))['text'];
         $this->assertStringContainsString($excerpt, $text);
+    }
+
+    public function test_header_without_own_logo_shows_default_supon_banner(): void
+    {
+        $campaign = $this->campaign($this->sender(), [$this->erpItem('B20417')], [
+            'blocks' => [['type' => 'header', 'logo' => null], ['type' => 'heading', 'text' => 'Nowości'], ['type' => 'products', 'layout' => 'grid3']],
+        ]);
+
+        $html = app(CampaignRenderer::class)->render($campaign)['html'];
+        // baner na całą szerokość, z tekstem alternatywnym (gdy klient poczty blokuje obrazki)
+        $this->assertStringContainsString('<img src="https://przetargi.example.pl/campaign/supon-header.png" width="640" height="130" alt="SUPON — Odzież robocza i sprzęt BHP"', $html);
+        $this->assertLessThan(strpos($html, 'Nowości'), strpos($html, 'supon-header.png'));
+        $this->assertFileExists(public_path('campaign/supon-header.png'));
+
+        // bez publicznego adresu obrazek by nie doszedł — nazwa i hasło firmy tekstem
+        config(['campaigns.public_url' => '']);
+        $html = app(CampaignRenderer::class)->render($campaign->fresh())['html'];
+        $this->assertStringNotContainsString('supon-header.png', $html);
+        $this->assertStringContainsString('Odzież robocza i sprzęt BHP', $html);
+
+        // podgląd szablonu też zaczyna się banerem
+        config(['campaigns.public_url' => 'https://przetargi.example.pl']);
+        $sample = app(CampaignRenderer::class)->renderSample([['type' => 'header', 'logo' => null], ['type' => 'products', 'layout' => 'list']], null)['html'];
+        $this->assertStringContainsString('/campaign/supon-header.png', $sample);
     }
 
     public function test_sent_campaign_keeps_description_and_norms_from_snapshot(): void
@@ -355,9 +381,9 @@ final class CampaignRendererTest extends TestCase
 
         $html = app(CampaignRenderer::class)->render($campaign)['html'];
 
-        // nagłówek firmowy, nagłówek i wstęp w jednej komórce, ceny nad produktami, układ z kampanii, kolor domyślny
-        $this->assertStringContainsString('<div style="font-weight:700;font-size:18px;color:#0b7d6a;letter-spacing:0.02em;">SUPON</div>', $html);
-        $this->assertStringContainsString('Odzież robocza i sprzęt BHP', $html);
+        // domyślny baner SUPON, nagłówek i wstęp w jednej komórce, ceny nad produktami, układ z kampanii, kolor domyślny
+        $this->assertStringContainsString('<img src="https://przetargi.example.pl/campaign/supon-header.png" width="640" height="130" alt="SUPON — Odzież robocza i sprzęt BHP"', $html);
+        $this->assertStringContainsString('bgcolor="#0b7d6a"', $html);
         $this->assertMatchesRegularExpression('#<td style="padding:20px 24px 8px;[^"]*">\s*<h1[^>]*>Końcówki serii</h1>\s*<p[^>]*>Dzień dobry</p>\s*</td>#', $html);
         $this->assertLessThan(strpos($html, 'Towar A1'), strpos($html, 'Ceny netto ważne do wyczerpania zapasów'));
         $this->assertGreaterThan(strpos($html, 'Dzień dobry'), strpos($html, 'Ceny netto ważne do wyczerpania zapasów'));

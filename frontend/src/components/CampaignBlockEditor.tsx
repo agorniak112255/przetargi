@@ -16,6 +16,7 @@ import {
   type CampaignBlockType,
   type CampaignLayout,
 } from '../lib/campaigns'
+import { publicDir } from '../lib/publicDir'
 
 /**
  * Elementy maila kampanii i szablonu: karty elementów z polami, kolejność ↑ ↓, usuwanie, dodawanie i kolor.
@@ -162,7 +163,7 @@ export function CampaignBlockEditor({
 
   const field = `${INPUT} mt-1 block w-full text-sm`
 
-  function imageField(index: number, uuid: string | null, onRemove: () => void, emptyNote: string) {
+  function imageField(index: number, uuid: string | null, onRemove: () => void, emptyNote: string, fallbackSrc?: string) {
     const busy = uploading === index
     return (
       <div className="flex flex-wrap items-center gap-3">
@@ -172,6 +173,8 @@ export function CampaignBlockEditor({
             alt=""
             className="h-16 max-w-[220px] rounded border border-slate-200 bg-slate-50 object-contain"
           />
+        ) : fallbackSrc ? (
+          <img src={fallbackSrc} alt={emptyNote} title={emptyNote} className="h-16 max-w-[320px] rounded border border-slate-200 object-contain" />
         ) : (
           <span className="rounded border border-dashed border-slate-300 px-3 py-4 text-[11px] text-slate-500">{emptyNote}</span>
         )}
@@ -197,8 +200,19 @@ export function CampaignBlockEditor({
       case 'header':
         return (
           <>
-            {imageField(index, block.logo, () => update(index, { ...block, logo: null }), 'bez logo — nazwa i hasło firmy')}
-            <p className="text-[11px] text-slate-500">JPG, PNG, GIF albo WEBP do 5 MB. W mailu logo ma najwyżej 60 px wysokości.</p>
+            {imageField(
+              index,
+              block.logo,
+              () => update(index, { ...block, logo: null }),
+              'domyślny baner SUPON',
+              `${publicDir()}/campaign/supon-header.png`,
+            )}
+            <p className="text-[11px] text-slate-500">
+              {block.logo
+                ? 'Własne logo zamiast banera SUPON. Usuń obrazek, żeby wrócić do banera.'
+                : 'Bez własnego logo mail zaczyna się banerem SUPON na całą szerokość.'}{' '}
+              JPG, PNG, GIF albo WEBP do 5 MB; własne logo ma w mailu najwyżej 60 px wysokości.
+            </p>
           </>
         )
       case 'heading':

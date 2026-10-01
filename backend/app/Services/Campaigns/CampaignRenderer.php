@@ -42,6 +42,14 @@ class CampaignRenderer
 
     private const LOGO_MAX_WIDTH = 300;
 
+    /**
+     * Domyślny nagłówek bez własnego logo: baner SUPON (frontend/public/campaign → backend/public/campaign przy buildzie),
+     * plik 1280×260, w mailu na całą szerokość 640×130.
+     */
+    private const DEFAULT_BANNER_PATH = '/campaign/supon-header.png';
+
+    private const DEFAULT_BANNER_HEIGHT = 130;
+
     /** Kod kampanii w temacie „Zapytaj o ofertę” w podglądzie szablonu (bez kampanii). */
     private const SAMPLE_CODE = 'K-0000';
 
@@ -225,8 +233,13 @@ class CampaignRenderer
             if ($type === 'header') {
                 $logo = is_string($block['logo'] ?? null) ? $assets->get($block['logo']) : null;
                 $scale = $logo !== null ? min(1, self::LOGO_MAX_HEIGHT / max(1, $logo->height), self::LOGO_MAX_WIDTH / max(1, $logo->width)) : 1;
+                $publicUrl = rtrim((string) config('campaigns.public_url'), '/');
                 $out[] = [
                     'type' => 'header',
+                    // bez własnego logo: baner SUPON; bez publicznego adresu (obrazek nie dojdzie) — nazwa i hasło tekstem
+                    'banner_url' => $logo === null && $publicUrl !== '' ? $publicUrl.self::DEFAULT_BANNER_PATH : null,
+                    'banner_width' => 640,
+                    'banner_height' => self::DEFAULT_BANNER_HEIGHT,
                     'logo_url' => $logo !== null ? CampaignAssetStore::url($logo->uuid) : null,
                     'logo_width' => $logo !== null ? max(1, (int) round($logo->width * $scale)) : null,
                     'logo_height' => $logo !== null ? max(1, (int) round($logo->height * $scale)) : null,

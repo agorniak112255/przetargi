@@ -31,7 +31,15 @@
 @foreach ($blocks as $b)
 @switch($b['type'])
 @case('header')
-          {{-- nagłówek: logo albo nazwa firmy --}}
+@if ($b['banner_url'] !== null)
+          {{-- nagłówek bez własnego logo: baner SUPON na całą szerokość --}}
+          <tr>
+            <td style="padding:0;font-size:0;line-height:0;">
+              <img src="{{ $b['banner_url'] }}" width="{{ $b['banner_width'] }}" height="{{ $b['banner_height'] }}" alt="{{ $company }} — {{ $tagline }}" style="display:block;width:100%;max-width:{{ $b['banner_width'] }}px;height:auto;border:0;border-radius:6px 6px 0 0;">
+            </td>
+          </tr>
+@else
+          {{-- nagłówek: własne logo albo nazwa firmy --}}
           <tr>
             <td style="padding:16px 24px;border-bottom:3px solid {{ $brand }};font-family:Arial,Helvetica,sans-serif;">
 @if ($b['logo_url'] !== null)
@@ -42,6 +50,7 @@
 @endif
             </td>
           </tr>
+@endif
 @break
 @case('content')
           <tr>
