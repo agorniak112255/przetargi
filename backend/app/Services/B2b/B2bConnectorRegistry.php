@@ -41,6 +41,7 @@ class B2bConnectorRegistry
         HoneywellB2bConnector::class,
         FagumB2bConnector::class,
         VmFootwearB2bConnector::class,
+        DemarB2bConnector::class,
     ];
 
     /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */
