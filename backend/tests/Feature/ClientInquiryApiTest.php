@@ -36,6 +36,8 @@ final class ClientInquiryApiTest extends TestCase
 
     public function test_handlowiec_analyzes_inquiry_and_strips_purchase_price(): void
     {
+        // stała data: list zawiera datę zapytania, a 1 października („01.10.2026”) też ma w sobie „1.10” — cenę zakupu
+        $this->travelTo(now()->setDate(2026, 9, 15)->setTime(10, 0));
         $user = User::factory()->withRole('handlowiec')->create();
         $client = Client::query()->create(['name' => 'Firma Test', 'owner_id' => $user->id]);
         $product = Product::query()->create([
