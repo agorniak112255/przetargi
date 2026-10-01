@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -937,6 +945,8 @@ function HistoryPanel({ warehouses, place }: { warehouses: Warehouses; place: Pl
     to: todayIso(),
   }))
   const [history, setHistory] = useState<InventoryHistory | null>(null)
+  const [zoom, setZoom] = useState<HistoryMetric | null>(null)
+  const closeZoom = useCallback(() => setZoom(null), [])
   const [failed, setFailed] = useState(false)
   const [loading, setLoading] = useState(true)
   const seq = useRef(0)
@@ -1059,7 +1069,7 @@ function HistoryPanel({ warehouses, place }: { warehouses: Warehouses; place: Pl
         <>
           <div className={`mt-3 grid gap-4 lg:grid-cols-3 print:grid-cols-3 ${loading ? 'opacity-50' : ''}`}>
             {HISTORY_METRICS.map((m) => (
-              <HistoryChart key={m.key} metric={m} points={points} />
+              <HistoryChart key={m.key} metric={m} points={points} onOpen={() => setZoom(m.key)} />
             ))}
           </div>
           {history.weekly && (
@@ -1078,6 +1088,16 @@ function HistoryPanel({ warehouses, place }: { warehouses: Warehouses; place: Pl
           {compare && <HistoryCompare compare={compare} place={place} />}
         </>
       )}
+      {zoom && history && (
+        <HistoryChartModal
+          metricKey={zoom}
+          points={points}
+          place={place}
+          warehouses={warehouses}
+          onChange={setZoom}
+          onClose={closeZoom}
+        />
+      )}
       <p className="mt-2 text-base text-slate-700">
         Zalegający towar maleje, gdy się sprzedaje, ale też gdy zostanie przeniesiony do innego oddziału, spisany albo
         wydany i przyjęty z powrotem jako nowa dostawa. Rośnie sam z siebie, gdy kolejny towar przekroczy pół roku albo rok
@@ -1087,17 +1107,234 @@ function HistoryPanel({ warehouses, place }: { warehouses: Warehouses; place: Pl
   )
 }
 
-/** Mały wykres liniowy jednej kwoty: kwota na koniec okresu, zmiana od początku, skala od najmniejszej do największej. */
+const DAY_MS = 86_400_000
+
+const ROMAN_QUARTER = ['I', 'II', 'III', 'IV']
+
+const MONTH_SHORT = ['sty', 'lut', 'mar', 'kwi', 'maj', 'cze', 'lip', 'sie', 'wrz', 'paź', 'lis', 'gru']
+
+/** Czas dnia 'YYYY-MM-DD' (południe — bez przesunięć strefy). */
+function dayTime(iso: string): number {
+  return new Date(`${iso}T12:00:00`).getTime()
+}
+
+/**
+ * Oś kwot: 4–5 „okrągłych” podziałek obejmujących wartości (krok 1, 2, 2,5 albo 5 × 10^n). Płaska linia — ±1% wokół
+ * wartości, żeby nie udawać wahań.
+ */
+function niceTicks(min: number, max: number): number[] {
+  let lo = min
+  let hi = max
+  if (hi - lo < Math.max(1, Math.abs(hi) * 0.01)) {
+    const pad = Math.max(1, Math.abs(hi) * 0.01)
+    lo -= pad
+    hi += pad
+  }
+  const raw = (hi - lo) / 4
+  const power = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * power).find((s) => s >= raw) ?? 10 * power
+  const ticks: number[] = []
+  for (let t = Math.floor(lo / step) * step; t <= hi + step * 0.001; t += step) ticks.push(t)
+  if (ticks[ticks.length - 1] < hi) ticks.push(ticks[ticks.length - 1] + step)
+  return ticks
+}
+
+/** Podpis osi kwot w jednej jednostce dla całej osi: „2,25 mln”, „950 tys.”, „7 500 zł”. */
+function axisLabel(value: number, step: number, top: number): string {
+  const decimals = (unit: number) => Math.min(2, Math.max(0, Math.ceil(-Math.log10(step / unit) - 1e-9)))
+  if (Math.abs(top) >= 1_000_000) {
+    const d = decimals(1_000_000)
+    return `${(value / 1_000_000).toFixed(d).replace('.', ',')}${NBSP}mln`
+  }
+  if (Math.abs(top) >= 10_000) {
+    const d = Math.min(1, decimals(1000))
+    return `${groupInt(Math.trunc(value / 1000))}${d > 0 ? `,${Math.abs(Math.round((value / 1000) * 10) % 10)}` : ''}${NBSP}tys.`
+  }
+  return `${groupInt(value)}${NBSP}zł`
+}
+
+type Band = { from: number; to: number; label: string; shade: boolean }
+
+/**
+ * Podział osi czasu: ponad 5 miesięcy — kwartały („IV kw. 2025”), od 6 tygodni — miesiące („paź”), krócej — kilka dni
+ * („3.09”). Pasy przycięte do okresu wykresu; co drugi lekko zacieniony.
+ */
+function timeBands(t0: number, t1: number): { bands: Band[]; days: number[] } {
+  const span = (t1 - t0) / DAY_MS
+  if (span < 42) {
+    const count = Math.min(5, Math.max(2, Math.round(span / 7) + 1))
+    const days = Array.from({ length: count }, (_, i) => t0 + ((t1 - t0) * i) / (count - 1))
+    return { bands: [], days }
+  }
+  const quarters = span > 150
+  const start = new Date(t0)
+  let cursor = new Date(start.getFullYear(), quarters ? Math.floor(start.getMonth() / 3) * 3 : start.getMonth(), 1, 12)
+  const bands: Band[] = []
+  while (cursor.getTime() <= t1) {
+    const next = new Date(cursor.getFullYear(), cursor.getMonth() + (quarters ? 3 : 1), 1, 12)
+    const m = cursor.getMonth()
+    bands.push({
+      from: Math.max(t0, cursor.getTime()),
+      to: Math.min(t1, next.getTime()),
+      label: quarters ? `${ROMAN_QUARTER[Math.floor(m / 3)]} kw. ${cursor.getFullYear()}` : MONTH_SHORT[m],
+      shade: (quarters ? Math.floor(m / 3) : m) % 2 === 1,
+    })
+    cursor = next
+  }
+  return { bands, days: [] }
+}
+
+type ChartPoint = { date: string; value: number; items: number | null }
+
+/** Punkty jednej kwoty (bez dni, w których zapis jej nie ma). */
+function chartValues(points: InventoryHistory['points'], key: HistoryMetric): ChartPoint[] {
+  return points
+    .map((p) => ({ date: p.date, value: p[key]?.value ?? null, items: p[key]?.items ?? null }))
+    .filter((p): p is ChartPoint => p.value !== null)
+}
+
+/**
+ * Rysunek wykresu: oś kwot z siatką, pasy kwartałów (miesięcy, dni) na osi czasu, przerwy w linii przy brakujących
+ * dniach i podgląd dnia pod kursorem (kwota, data, liczba towarów). Rysowany w rzeczywistej szerokości — napisy się
+ * nie rozciągają.
+ */
+function HistoryChartSvg({ values, stroke, label, height }: { values: ChartPoint[]; stroke: string; label: string; height: number }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(360)
+  const [hover, setHover] = useState<number | null>(null)
+  useEffect(() => {
+    const el = box.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(([entry]) => setWidth(Math.max(220, Math.round(entry.contentRect.width))))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const H = height
+  const L = 64
+  const R = 12
+  const T = 10
+  const B = 26
+  const first = values[0]
+  const last = values[values.length - 1]
+  const t0 = dayTime(first.date)
+  const t1 = dayTime(last.date)
+  const ticks = niceTicks(Math.min(...values.map((v) => v.value)), Math.max(...values.map((v) => v.value)))
+  const lo = ticks[0]
+  const hi = ticks[ticks.length - 1]
+  const step = ticks.length > 1 ? ticks[1] - ticks[0] : 1
+  const x = (t: number) => L + ((t - t0) / Math.max(1, t1 - t0)) * (width - L - R)
+  const y = (v: number) => T + (1 - (v - lo) / Math.max(1e-9, hi - lo)) * (H - T - B)
+  // przerwa w linii, gdy brakuje zapisu (odstęp ponad 1,5× zwykłego kroku)
+  const gaps = values.slice(1).map((v, i) => dayTime(v.date) - dayTime(values[i].date))
+  const usual = Math.min(...gaps)
+  let d = ''
+  values.forEach((v, i) => {
+    const jump = i === 0 || dayTime(v.date) - dayTime(values[i - 1].date) > usual * 1.5
+    d += `${jump ? 'M' : 'L'}${x(dayTime(v.date)).toFixed(1)},${y(v.value).toFixed(1)} `
+  })
+  const { bands, days } = timeBands(t0, t1)
+  const hovered = hover !== null ? values[hover] : null
+  const hx = hovered ? x(dayTime(hovered.date)) : 0
+
+  const onMove = (e: ReactMouseEvent<SVGRectElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const t = t0 + ((e.clientX - rect.left) / Math.max(1, rect.width)) * (t1 - t0)
+    let best = 0
+    values.forEach((v, i) => {
+      if (Math.abs(dayTime(v.date) - t) < Math.abs(dayTime(values[best].date) - t)) best = i
+    })
+    setHover(best)
+  }
+
+  return (
+    <div ref={box} className="relative">
+      <svg
+        width={width}
+        height={H}
+        className="block"
+        role="img"
+        aria-label={`${label}: ${fmtBig(first.value)} dnia ${longDate(first.date)}, ${fmtBig(last.value)} dnia ${longDate(last.date)}`}
+      >
+        {bands.map((b) => (
+          <g key={`${b.from}-${b.label}`}>
+            {b.shade && <rect x={x(b.from)} y={T} width={Math.max(0, x(b.to) - x(b.from))} height={H - T - B} fill="#f1f5f9" />}
+            {b.from > t0 && <line x1={x(b.from)} x2={x(b.from)} y1={T} y2={H - B} stroke="#cbd5e1" strokeDasharray="3 3" />}
+            {x(b.to) - x(b.from) >= 44 && (
+              <text x={(x(b.from) + x(b.to)) / 2} y={H - 8} textAnchor="middle" fontSize="12" fill="#475569">
+                {b.label}
+              </text>
+            )}
+          </g>
+        ))}
+        {days.map((t, i) => (
+          <g key={t}>
+            <line x1={x(t)} x2={x(t)} y1={T} y2={H - B} stroke="#e2e8f0" />
+            <text
+              x={x(t)}
+              y={H - 8}
+              textAnchor={i === 0 ? 'start' : i === days.length - 1 ? 'end' : 'middle'}
+              fontSize="12"
+              fill="#475569"
+            >
+              {shortDate(new Date(t).toLocaleDateString('sv-SE'))}
+            </text>
+          </g>
+        ))}
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={L} x2={width - R} y1={y(t)} y2={y(t)} stroke="#e2e8f0" />
+            <text x={L - 6} y={y(t) + 4} textAnchor="end" fontSize="12" fill="#475569">
+              {axisLabel(t, step, hi)}
+            </text>
+          </g>
+        ))}
+        <line x1={L} x2={L} y1={T} y2={H - B} stroke="#94a3b8" />
+        <line x1={L} x2={width - R} y1={H - B} y2={H - B} stroke="#94a3b8" />
+        <path d={d} fill="none" stroke={stroke} strokeWidth={2} strokeLinejoin="round" />
+        {values.length <= 60 &&
+          values.map((v) => <circle key={v.date} cx={x(dayTime(v.date))} cy={y(v.value)} r={2.5} fill={stroke} />)}
+        {hovered && (
+          <g pointerEvents="none">
+            <line x1={hx} x2={hx} y1={T} y2={H - B} stroke="#334155" strokeDasharray="2 2" />
+            <circle cx={hx} cy={y(hovered.value)} r={4.5} fill={stroke} stroke="#fff" strokeWidth={1.5} />
+          </g>
+        )}
+        <rect
+          x={L}
+          y={T}
+          width={Math.max(0, width - L - R)}
+          height={H - T - B}
+          fill="transparent"
+          onMouseMove={onMove}
+          onMouseLeave={() => setHover(null)}
+        />
+      </svg>
+      {hovered && (
+        <div
+          className="pointer-events-none absolute top-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-sm whitespace-nowrap text-slate-900 shadow-sm print:hidden"
+          style={hx > width / 2 ? { right: width - hx + 10 } : { left: hx + 10 }}
+        >
+          <span className="font-semibold tabular-nums">{fmtBig(hovered.value)}</span>
+          <span className="text-slate-700"> · {longDate(hovered.date)}</span>
+          {hovered.items !== null && <span className="block text-slate-700">{goods(hovered.items)}</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Mały wykres na panelu: kwota na koniec okresu, zmiana, rysunek; kliknięcie otwiera duże okno. */
 function HistoryChart({
   metric,
   points,
+  onOpen,
 }: {
   metric: (typeof HISTORY_METRICS)[number]
   points: InventoryHistory['points']
+  onOpen: () => void
 }) {
-  const values = points
-    .map((p) => ({ date: p.date, value: p[metric.key]?.value ?? null, items: p[metric.key]?.items ?? null }))
-    .filter((p): p is { date: string; value: number; items: number | null } => p.value !== null)
+  const values = chartValues(points, metric.key)
   if (values.length < 2) {
     return (
       <div className="rounded-xl border border-slate-200 px-3 py-2">
@@ -1106,72 +1343,162 @@ function HistoryChart({
       </div>
     )
   }
-  const firstPoint = values[0]
-  const lastPoint = values[values.length - 1]
-  const change = lastPoint.value - firstPoint.value
-  const W = 320
-  const H = 120
-  const PAD = 6
-  const time = (iso: string) => new Date(`${iso}T12:00:00`).getTime()
-  const t0 = time(firstPoint.date)
-  const t1 = time(lastPoint.date)
-  let lo = Math.min(...values.map((v) => v.value))
-  let hi = Math.max(...values.map((v) => v.value))
-  if (hi - lo < Math.max(1, hi * 0.01)) {
-    // płaska linia: skala ±1% wokół wartości, żeby nie udawać dużych wahań
-    const pad = Math.max(1, hi * 0.01)
-    lo -= pad
-    hi += pad
-  }
-  const x = (iso: string) => PAD + ((time(iso) - t0) / Math.max(1, t1 - t0)) * (W - 2 * PAD)
-  const y = (v: number) => PAD + (1 - (v - lo) / (hi - lo)) * (H - 2 * PAD)
-  // przerwa w linii, gdy brakuje zapisu (odstęp ponad 1,5× zwykłego kroku)
-  const gaps = values.slice(1).map((v, i) => time(v.date) - time(values[i].date))
-  const step = Math.min(...gaps)
-  let d = ''
-  values.forEach((v, i) => {
-    const jump = i === 0 || time(v.date) - time(values[i - 1].date) > step * 1.5
-    d += `${jump ? 'M' : 'L'}${x(v.date).toFixed(1)},${y(v.value).toFixed(1)} `
-  })
+  const first = values[0]
+  const last = values[values.length - 1]
+  const change = last.value - first.value
 
   return (
-    <figure className="board-block rounded-xl border border-slate-200 px-3 py-2">
+    <figure
+      role="button"
+      tabIndex={0}
+      title="Kliknij, aby powiększyć"
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+      className={`board-block cursor-pointer rounded-xl border border-slate-200 px-3 py-2 transition-shadow hover:shadow-md ${FOCUS}`}
+    >
       <figcaption>
-        <span className="block text-lg font-semibold text-slate-900">{metric.label}</span>
+        <span className="flex items-baseline justify-between gap-x-3">
+          <span className="text-lg font-semibold text-slate-900">{metric.label}</span>
+          <span className="text-sm font-semibold whitespace-nowrap text-blue-700 print:hidden">Powiększ ›</span>
+        </span>
         <span className="flex flex-wrap items-baseline justify-between gap-x-3">
-          <span className="text-2xl font-semibold text-slate-900 tabular-nums">{fmtBig(lastPoint.value)}</span>
+          <span className="text-2xl font-semibold text-slate-900 tabular-nums">{fmtBig(last.value)}</span>
           <span className={`text-lg font-semibold tabular-nums ${changeClass(change, metric.lowerIsBetter)}`}>
             {fmtChange(change)}
           </span>
         </span>
         <span className="block text-base text-slate-700">
-          {lastPoint.items !== null ? `${goods(lastPoint.items)} · ` : ''}od {shortDate(firstPoint.date, true)}: {fmtBig(firstPoint.value)}
+          {last.items !== null ? `${goods(last.items)} · ` : ''}od {shortDate(first.date, true)}: {fmtBig(first.value)}
         </span>
       </figcaption>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        className="mt-1 h-32 w-full"
-        role="img"
-        aria-label={`${metric.label}: ${fmtBig(firstPoint.value)} dnia ${longDate(firstPoint.date)}, ${fmtBig(lastPoint.value)} dnia ${longDate(lastPoint.date)}`}
-        preserveAspectRatio="none"
-      >
-        <line x1={PAD} x2={W - PAD} y1={y(hi)} y2={y(hi)} stroke="#e2e8f0" />
-        <line x1={PAD} x2={W - PAD} y1={y(lo)} y2={y(lo)} stroke="#e2e8f0" />
-        <path d={d} fill="none" stroke={metric.stroke} strokeWidth={2.5} vectorEffect="non-scaling-stroke" />
-        {values.map((v) => (
-          <circle key={v.date} cx={x(v.date)} cy={y(v.value)} r={values.length > 60 ? 0 : 2.5} fill={metric.stroke}>
-            <title>{`${longDate(v.date)}: ${fmtBig(v.value)}${v.items !== null ? ` (${goods(v.items)})` : ''}`}</title>
-          </circle>
-        ))}
-      </svg>
-      <div className="flex justify-between text-sm text-slate-700 tabular-nums">
-        <span>{shortDate(firstPoint.date)}</span>
-        <span>
-          skala {fmtBig(lo)} – {fmtBig(hi)}
-        </span>
-        <span>{shortDate(lastPoint.date)}</span>
+      <div className="mt-2">
+        <HistoryChartSvg values={values} stroke={metric.stroke} label={metric.label} height={190} />
       </div>
     </figure>
+  )
+}
+
+/**
+ * Duże okno wykresu: ten sam rysunek wyżej, kwoty na początek i koniec okresu, najniżej i najwyżej (z dniem), przełączanie
+ * między wykresami. Esc albo kliknięcie tła zamyka.
+ */
+function HistoryChartModal({
+  metricKey,
+  points,
+  place,
+  warehouses,
+  onChange,
+  onClose,
+}: {
+  metricKey: HistoryMetric
+  points: InventoryHistory['points']
+  place: Place
+  warehouses: Warehouses
+  onChange: (key: HistoryMetric) => void
+  onClose: () => void
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    closeRef.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+  const metric = HISTORY_METRICS.find((m) => m.key === metricKey) ?? HISTORY_METRICS[0]
+  const values = chartValues(points, metric.key)
+  const first = values[0]
+  const last = values[values.length - 1]
+  const min = values.reduce((a, b) => (b.value < a.value ? b : a), first)
+  const max = values.reduce((a, b) => (b.value > a.value ? b : a), first)
+  const change = first && last ? last.value - first.value : 0
+  const stat = (label: string, value: string, sub: string, cls = 'text-slate-900') => (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+      <span className="block text-base text-slate-700">{label}</span>
+      <span className={`block text-2xl font-semibold tabular-nums ${cls}`}>{value}</span>
+      <span className="block text-sm text-slate-700">{sub}</span>
+    </div>
+  )
+
+  return createPortal(
+    <div
+      className="board-modal fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="history-chart-title"
+        className="board-modal-panel flex max-h-full w-full max-w-7xl flex-col overflow-auto rounded-2xl bg-white p-4 text-lg text-slate-900 shadow-lg"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 id="history-chart-title" className="text-2xl font-semibold text-slate-900">
+              {metric.label}
+            </h2>
+            <p className="text-base text-slate-700">
+              {place ? `Oddział ${place.name}` : 'Wszystkie oddziały'} · {WAREHOUSE_LABEL[warehouses].toLowerCase()}
+              {first && last ? ` · ${longDate(first.date)} – ${longDate(last.date)}` : ''}
+            </p>
+          </div>
+          <button ref={closeRef} type="button" onClick={onClose} className={BIG_BUTTON}>
+            Zamknij
+          </button>
+        </div>
+        <div
+          className="mt-3 inline-flex flex-wrap self-start overflow-hidden rounded-xl border-2 border-slate-300"
+          role="group"
+          aria-label="Wykres"
+        >
+          {HISTORY_METRICS.map((m, i) => {
+            const active = m.key === metric.key
+            return (
+              <button
+                key={m.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => onChange(m.key)}
+                className={`px-3 py-1.5 text-base ${i > 0 ? 'border-l-2 border-slate-300' : ''} ${FOCUS} ${
+                  active ? 'bg-blue-600 font-semibold text-white' : 'bg-white text-slate-800 hover:bg-slate-50'
+                }`}
+              >
+                {m.label}
+              </button>
+            )
+          })}
+        </div>
+        {values.length < 2 ? (
+          <p className="mt-4 text-xl text-slate-800">Za mało zapisów w tym okresie.</p>
+        ) : (
+          <>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {stat('Na początku okresu', fmtBig(first.value), longDate(first.date) ?? '')}
+              {stat(
+                'Na końcu okresu',
+                fmtBig(last.value),
+                `${longDate(last.date) ?? ''} · zmiana ${fmtChange(change)}`,
+                changeClass(change, metric.lowerIsBetter),
+              )}
+              {stat('Najniżej', fmtBig(min.value), longDate(min.date) ?? '')}
+              {stat('Najwyżej', fmtBig(max.value), longDate(max.date) ?? '')}
+            </div>
+            <div className="mt-3">
+              <HistoryChartSvg key={metric.key} values={values} stroke={metric.stroke} label={metric.label} height={440} />
+            </div>
+            <p className="mt-1 text-base text-slate-700">Najedź na linię, aby zobaczyć kwotę i dzień.</p>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
   )
 }
 
