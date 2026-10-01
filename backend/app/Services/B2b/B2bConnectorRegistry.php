@@ -48,6 +48,8 @@ class B2bConnectorRegistry
         MactronicB2bConnector::class,
         EltenB2bConnector::class,
         SirB2bConnector::class,
+        AtlasB2bConnector::class,
+        BrubeckB2bConnector::class,
     ];
 
     /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */
