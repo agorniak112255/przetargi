@@ -10,8 +10,9 @@ use App\Models\ErpItemLink;
 use App\Models\ErpRwPwPair;
 use App\Models\ErpWarehouse;
 use App\Services\Erp\ErpItemCards;
+use App\Services\Erp\InventoryBoardTotals;
 use App\Services\Erp\InventoryQuery;
-use App\Services\Erp\StockLots;
+use App\Services\Erp\InventorySnapshots;
 use App\Services\Erp\WarehouseLocations;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
@@ -34,32 +35,10 @@ use Illuminate\Validation\Rule;
  */
 class InventoryBoardController extends Controller
 {
-    /** [rodzaj, miesiące, tytuł okna] — kafelki i okna liczą z tych samych definicji. */
-    private const BUCKETS = [
-        'stock' => ['stock', 0, 'Cały towar w magazynach'],
-        'no_sale_6' => ['no_sale', 6, 'Towar, który nie sprzedaje się od pół roku'],
-        'no_sale_12' => ['no_sale', 12, 'Towar, który nie sprzedaje się ponad rok'],
-        'no_sale_24' => ['no_sale', 24, 'Towar, który nie sprzedaje się ponad 2 lata'],
-        'never_sold' => ['never', 6, 'Towar, który nie sprzedał się ani razu'],
-        'stale_36' => ['stale', 36, 'Towar bez sprzedaży ponad rok, który leży w magazynie ponad 3 lata'],
-        'stale_60' => ['stale', 60, 'Towar bez sprzedaży ponad rok, który leży w magazynie ponad 5 lat'],
-    ];
+    /** Koszyki kafelków i przedziały „jak długo leży” — definicje w InventoryBoardTotals (wspólne z zapisem historii). */
+    private const BUCKETS = InventoryBoardTotals::BUCKETS;
 
-    /**
-     * „Jak długo leży” (decyzja właściciela 01.10.2026): każda dostawa (partia) w przedziale swojego wieku — ilość
-     * i wartość samych dostaw z okresu, więc przedziały sumują się do zapasu. [od miesięcy, do miesięcy, tytuł okna];
-     * od null = partie bez daty przyjęcia.
-     */
-    private const LOT_AGES = [
-        'lot_age_0_6' => [0, 6, 'Dostawy, które leżą w magazynie do pół roku'],
-        'lot_age_6_12' => [6, 12, 'Dostawy, które leżą w magazynie od pół roku do roku'],
-        'lot_age_12_24' => [12, 24, 'Dostawy, które leżą w magazynie od roku do 2 lat'],
-        'lot_age_24_36' => [24, 36, 'Dostawy, które leżą w magazynie od 2 do 3 lat'],
-        'lot_age_36_48' => [36, 48, 'Dostawy, które leżą w magazynie od 3 do 4 lat'],
-        'lot_age_48_60' => [48, 60, 'Dostawy, które leżą w magazynie od 4 do 5 lat'],
-        'lot_age_60' => [60, null, 'Dostawy, które leżą w magazynie ponad 5 lat'],
-        'lot_age_unknown' => [null, null, 'Dostawy bez daty przyjęcia w programie magazynowym'],
-    ];
+    private const LOT_AGES = InventoryBoardTotals::LOT_AGES;
 
     /** Rodzaje asortymentu po pierwszej literze kodu XL (jak ekran Powiązania z ERP XL). */
     private const GROUPS = ['A' => 'Odzież', 'B' => 'Obuwie', 'S' => 'Sprzęt ochronny', 'T' => 'Techniczne', 'H' => 'Higiena'];
@@ -83,6 +62,14 @@ class InventoryBoardController extends Controller
     private const MOVES_MIN_LOT_AGE_MONTHS = 3;
 
     private const PEOPLE_LIMIT = 5;
+
+    /** Historia zapasów: domyślny okres i najwięcej punktów dziennych (dłużej — punkt na tydzień). */
+    private const HISTORY_DEFAULT_DAYS = 30;
+
+    private const HISTORY_MAX_POINTS = 400;
+
+    /** Koszyki pokazywane w historii. */
+    private const HISTORY_BUCKETS = ['stock', 'no_sale_6', 'no_sale_12', 'no_sale_24', 'never_sold', 'stale_36', 'stale_60'];
 
     /** Sortowanie okien kliknięciem w nagłówek kolumny; bez parametru — od największej wartości / od najnowszego. */
     private const ITEM_SORTS = ['name', 'quantity', 'value', 'last_sale', 'oldest_lot'];
@@ -159,7 +146,7 @@ class InventoryBoardController extends Controller
                 $this->itemRows($this->bucketQuery('no_sale_12', $scope, null, $location)->limit(self::TOP_UNSOLD_LIMIT), $scope, valuedOnly: true, location: $location),
             ),
             'internal_moves' => $this->movesSummary($scope, $location),
-            'lot_age' => $this->lotAgeSummary($scope, $location),
+            'lot_age' => InventoryBoardTotals::today()->lotAgeSummary($scope, $location),
             'value_unknown' => $stock['value_unknown'],
         ]);
     }
@@ -300,6 +287,149 @@ class InventoryBoardController extends Controller
         ]);
     }
 
+    /**
+     * Historia zapasów (zapis co noc — InventorySnapshots): punkty wykresu dla wybranych magazynów i oddziału w okresie
+     * oraz porównanie początku i końca okresu na wszystkich oddziałach i magazynach XL. Porównanie bierze dla wszystkich
+     * te same dwa dni: pierwszy i ostatni zapisany dzień okresu. Domyślnie ostatnie 30 dni. Ponad MAX_POINTS dni —
+     * jeden punkt na tydzień (ostatni zapisany dzień tygodnia).
+     */
+    public function history(Request $request): JsonResponse
+    {
+        $v = $request->validate([
+            'from' => ['nullable', 'date_format:Y-m-d'],
+            'to' => ['nullable', 'date_format:Y-m-d'],
+        ]);
+        $scope = $this->scope($request);
+        $location = $this->location($request);
+        $table = InventorySnapshots::TABLE;
+        $first = DB::table($table)->min('taken_on');
+        $last = DB::table($table)->max('taken_on');
+        $to = isset($v['to']) ? (string) $v['to'] : ($last !== null ? substr((string) $last, 0, 10) : CarbonImmutable::today()->toDateString());
+        $from = isset($v['from']) ? (string) $v['from'] : CarbonImmutable::parse($to)->subDays(self::HISTORY_DEFAULT_DAYS)->toDateString();
+        if ($from > $to) {
+            [$from, $to] = [$to, $from];
+        }
+
+        $rows = DB::table($table)
+            ->where('location', $location ?? '')
+            ->where('scope', $scope)
+            ->whereBetween('taken_on', [$from, $to])
+            ->orderBy('taken_on')
+            ->get(['taken_on', 'source', 'totals']);
+        $points = $rows->map(fn ($r): array => ['date' => substr((string) $r->taken_on, 0, 10), 'source' => (string) $r->source, ...$this->historyBuckets((string) $r->totals)])->all();
+        $weekly = count($points) > self::HISTORY_MAX_POINTS;
+        if ($weekly) {
+            $byWeek = [];
+            foreach ($points as $p) {
+                $byWeek[CarbonImmutable::parse($p['date'])->format('o-W')] = $p;
+            }
+            $points = array_values($byWeek);
+        }
+
+        $days = DB::table($table)->whereBetween('taken_on', [$from, $to]);
+        $startDay = (clone $days)->min('taken_on');
+        $endDay = (clone $days)->max('taken_on');
+
+        return response()->json([
+            'warehouses' => $scope,
+            'location' => $location,
+            'from' => $from,
+            'to' => $to,
+            'first_date' => $first !== null ? substr((string) $first, 0, 10) : null,
+            'last_date' => $last !== null ? substr((string) $last, 0, 10) : null,
+            'weekly' => $weekly,
+            'points' => $points,
+            'compare' => $startDay !== null && $endDay !== null
+                ? $this->historyCompare(substr((string) $startDay, 0, 10), substr((string) $endDay, 0, 10), $scope, $location)
+                : null,
+        ]);
+    }
+
+    /**
+     * Koszyki z zapisu dnia: pozycje i wartość (bez „jak długo leży”).
+     *
+     * @return array<string, array{items: int, value: float}>
+     */
+    private function historyBuckets(string $json): array
+    {
+        $totals = json_decode($json, true);
+        $buckets = is_array($totals) && is_array($totals['buckets'] ?? null) ? $totals['buckets'] : [];
+        $out = [];
+        foreach (self::HISTORY_BUCKETS as $key) {
+            $b = $buckets[$key] ?? null;
+            $out[$key] = is_array($b) ? ['items' => (int) ($b['items'] ?? 0), 'value' => round((float) ($b['value'] ?? 0), 2)] : null;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Początek i koniec okresu: każdy oddział (i wszystkie razem) w wybranych magazynach, a w wybranym oddziale (albo
+     * wszystkich) każdy magazyn XL — wartość z warstwy na magazyn; podział handlowe/usługowe wg dnia zapisu.
+     *
+     * @return array<string, mixed>
+     */
+    private function historyCompare(string $start, string $end, string $scope, ?string $location): array
+    {
+        $rows = DB::table(InventorySnapshots::TABLE)
+            ->whereIn('taken_on', [$start, $end])
+            ->where('scope', $scope)
+            ->get(['taken_on', 'location', 'totals']);
+        $byLocation = [];
+        foreach ($rows as $r) {
+            $side = substr((string) $r->taken_on, 0, 10) === $end ? 'end' : 'start';
+            if ($start === $end) {
+                $byLocation[(string) $r->location]['start'] = $this->historyBuckets((string) $r->totals);
+            }
+            $byLocation[(string) $r->location][$side] = $this->historyBuckets((string) $r->totals);
+        }
+        $order = ['', ...array_map('strval', array_keys(WarehouseLocations::NAMES))];
+        // klucze '10', '11'… PHP zamienia na liczby
+        uksort($byLocation, static function ($a, $b) use ($order): int {
+            [$a, $b] = [(string) $a, (string) $b];
+            $ia = array_search($a, $order, true);
+            $ib = array_search($b, $order, true);
+
+            return [$ia === false ? PHP_INT_MAX : $ia, $a] <=> [$ib === false ? PHP_INT_MAX : $ib, $b];
+        });
+
+        $warehouses = DB::table(InventorySnapshots::WAREHOUSE_TABLE)->whereIn('taken_on', [$start, $end]);
+        if ($location !== null) {
+            $warehouses->where('location', $location);
+        }
+        if ($scope !== 'all') {
+            $warehouses->where('is_service', $scope === 'service');
+        }
+        $byCode = [];
+        foreach ($warehouses->orderBy('warehouse_code')->get(['taken_on', 'warehouse_code', 'location', 'value', 'items']) as $w) {
+            $code = (string) $w->warehouse_code;
+            $byCode[$code] ??= ['code' => $code, 'location' => $w->location, 'start' => null, 'end' => null];
+            $point = ['items' => (int) $w->items, 'value' => round((float) $w->value, 2)];
+            if (substr((string) $w->taken_on, 0, 10) === $start) {
+                $byCode[$code]['start'] = $point;
+            }
+            if (substr((string) $w->taken_on, 0, 10) === $end) {
+                $byCode[$code]['end'] = $point;
+            }
+        }
+
+        return [
+            'start_date' => $start,
+            'end_date' => $end,
+            'locations' => array_values(array_map(
+                static fn (string $key, array $sides): array => [
+                    'key' => $key,
+                    'name' => $key === '' ? 'Wszystkie oddziały' : WarehouseLocations::name($key),
+                    'start' => $sides['start'] ?? null,
+                    'end' => $sides['end'] ?? null,
+                ],
+                array_map('strval', array_keys($byLocation)),
+                $byLocation,
+            )),
+            'warehouses' => array_values($byCode),
+        ];
+    }
+
     private function scope(Request $request): string
     {
         $v = $request->validate(['warehouses' => ['nullable', 'string', Rule::in(InventoryQuery::SCOPES)]]);
@@ -323,33 +453,17 @@ class InventoryBoardController extends Controller
 
     private function ago(int $months): CarbonImmutable
     {
-        return CarbonImmutable::today()->subMonthsNoOverflow($months);
+        return InventoryBoardTotals::today()->ago($months);
     }
 
     /**
-     * Towar koszyka w wybranych magazynach. Nigdy niesprzedany liczy się dopiero, gdy leży dłużej niż pół roku — świeża
-     * dostawa nowego towaru to nie zaleganie. Przedział „jak długo leży” — towar z dostawami z tego okresu.
+     * Towar koszyka w wybranych magazynach (InventoryBoardTotals::bucketQuery), zawężony do rodzaju.
      *
      * @return Builder<ErpItem>
      */
     private function bucketQuery(string $key, string $scope, ?string $group = null, ?string $location = null): Builder
     {
-        if (isset(self::LOT_AGES[$key])) {
-            $query = InventoryQuery::withLots($this->lotRange($key), $scope, $location);
-            $this->whereGroup($query, $group);
-
-            return $query;
-        }
-        [$kind, $months] = self::BUCKETS[$key];
-        $query = InventoryQuery::inStock($scope, $location);
-        $lot = InventoryQuery::oldestLotSql($scope, $location);
-        match ($kind) {
-            'no_sale' => InventoryQuery::unsoldSince($query, $this->ago($months), true, $scope, $location),
-            'stale' => InventoryQuery::lotOlderThan(InventoryQuery::unsoldSince($query, $this->ago(12), true, $scope, $location), $this->ago($months), $scope, $location),
-            'never' => $query->whereRaw(InventoryQuery::lastSaleSql($location).' is null')
-                ->where(fn (Builder $l) => $l->whereRaw($lot.' is null')->orWhereRaw($lot.' <= ?', [$this->ago($months)->toDateString()])),
-            default => $query,
-        };
+        $query = InventoryBoardTotals::today()->bucketQuery($key, $scope, $location);
         $this->whereGroup($query, $group);
 
         return $query;
@@ -368,21 +482,13 @@ class InventoryBoardController extends Controller
     }
 
     /**
-     * Okres przedziału „jak długo leży”: przyjęte po `after` i najpóźniej `until`; null = partie bez daty.
+     * Okres przedziału „jak długo leży” (InventoryBoardTotals::lotRange).
      *
      * @return array{after: ?string, until: ?string}|null
      */
     private function lotRange(string $key): ?array
     {
-        [$from, $to] = self::LOT_AGES[$key];
-        if ($from === null) {
-            return null;
-        }
-
-        return [
-            'after' => $to !== null ? $this->ago($to)->toDateString() : null,
-            'until' => $from > 0 ? $this->ago($from)->toDateString() : null,
-        ];
+        return InventoryBoardTotals::today()->lotRange($key);
     }
 
     /**
@@ -409,36 +515,6 @@ class InventoryBoardController extends Controller
             'value' => InventoryQuery::valueSql($scope, $location),
             'lot' => InventoryQuery::oldestLotSql($scope, $location),
             'sale' => InventoryQuery::lastSaleSql($location),
-        ];
-    }
-
-    /**
-     * Przedziały „jak długo leży”: wartość samych dostaw z okresu i liczba towarów z takimi dostawami (towar z dostawami
-     * z kilku okresów liczy się w każdym z nich). null = partii jeszcze nie odczytano z XL (przed pierwszym odczytem
-     * stanów po wdrożeniu).
-     *
-     * @return array{buckets: list<array{key: string, from_months: int|null, to_months: int|null, items: int, value: float}>, items: int, value: float, value_unknown_items: int}|null
-     */
-    private function lotAgeSummary(string $scope, ?string $location): ?array
-    {
-        if (! DB::table(StockLots::TABLE)->exists()) {
-            return null;
-        }
-        $buckets = [];
-        foreach (self::LOT_AGES as $key => [$from, $to]) {
-            $range = $this->lotRange($key);
-            $totals = InventoryQuery::totals(InventoryQuery::withLots($range, $scope, $location), $scope, $location, InventoryQuery::lotValueSql($range, $scope, $location));
-            $buckets[] = ['key' => $key, 'from_months' => $from, 'to_months' => $to, 'items' => $totals['items'], 'value' => $totals['value'], 'value_unknown' => $totals['value_unknown']];
-        }
-        $any = ['after' => null, 'until' => null];
-        $all = InventoryQuery::totals(InventoryQuery::withLots($any, $scope, $location), $scope, $location, InventoryQuery::lotValueSql($any, $scope, $location));
-
-        return [
-            'buckets' => array_map(static fn (array $b): array => array_diff_key($b, ['value_unknown' => true]), $buckets),
-            'items' => $all['items'],
-            // suma przedziałów: towar bez ceny jednej dostawy traci tylko przedział tej dostawy
-            'value' => round(array_sum(array_column($buckets, 'value')), 2),
-            'value_unknown_items' => $all['value_unknown'],
         ];
     }
 

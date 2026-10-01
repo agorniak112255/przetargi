@@ -16,6 +16,7 @@ import {
   type InventoryBoardMovesSort,
   type InventoryBoardReport as BoardReport,
   type InventoryBoardWarehouses as Warehouses,
+  type InventoryHistory,
 } from '../lib/api'
 
 /**
@@ -614,6 +615,8 @@ function BoardView({
         )}
       </div>
 
+      <HistoryPanel warehouses={warehouses} place={place} />
+
       <div className="mb-4 grid gap-4 lg:grid-cols-5 print:grid-cols-5">
         <section className={`${PANEL} lg:col-span-3 print:col-span-3`}>
           <h2 className="text-2xl font-semibold text-slate-900">Jak długo towar nie sprzedaje się</h2>
@@ -868,6 +871,414 @@ function BoardView({
 
 /** Biały panel z grupą kafelków/pasków na pulpicie. */
 const PANEL = 'board-block rounded-2xl border-2 border-slate-300 bg-white px-5 py-4 shadow-sm'
+
+/** Dzisiejsza data 'YYYY-MM-DD' w czasie lokalnym. */
+function todayIso(): string {
+  return new Date().toLocaleDateString('sv-SE')
+}
+
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(`${iso}T12:00:00`)
+  d.setDate(d.getDate() + days)
+  return d.toLocaleDateString('sv-SE')
+}
+
+/** „1.10” — oś wykresu; z rokiem „1.10.2026”. */
+function shortDate(iso: string, withYear = false): string {
+  const [y, m, d] = iso.slice(0, 10).split('-')
+  return `${Number(d)}.${m}${withYear ? `.${y}` : ''}`
+}
+
+/** Zmiana kwoty ze znakiem: „+120 tys. zł”, „−3 400 zł”, „bez zmian”. */
+function fmtChange(value: number): string {
+  if (Math.round(value) === 0) return 'bez zmian'
+  return value > 0 ? `+${fmtBig(value)}` : fmtBig(value)
+}
+
+/** Okresy pod przyciskami; days null = od pierwszego zapisu. */
+const HISTORY_RANGES: { key: string; label: string; days: number | null }[] = [
+  { key: '7', label: '7 dni', days: 7 },
+  { key: '30', label: '30 dni', days: 30 },
+  { key: '90', label: '3 miesiące', days: 91 },
+  { key: '365', label: 'rok', days: 365 },
+  { key: 'all', label: 'od początku', days: null },
+]
+
+type HistoryMetric = 'stock' | 'no_sale_6' | 'no_sale_12'
+
+/** Trzy wykresy historii: cały towar (bez oceny kierunku) i dwa progi bez sprzedaży (spadek = dobrze). */
+const HISTORY_METRICS: { key: HistoryMetric; label: string; stroke: string; lowerIsBetter: boolean }[] = [
+  { key: 'stock', label: 'Cały towar', stroke: '#334155', lowerIsBetter: false },
+  { key: 'no_sale_6', label: 'Ponad pół roku bez sprzedaży', stroke: '#b45309', lowerIsBetter: true },
+  { key: 'no_sale_12', label: 'Ponad rok bez sprzedaży', stroke: '#b91c1c', lowerIsBetter: true },
+]
+
+/** Kolor zmiany: przy zalegającym towarze spadek zielony, wzrost czerwony; cały towar — bez oceny. */
+function changeClass(value: number, lowerIsBetter: boolean): string {
+  if (!lowerIsBetter || Math.round(value) === 0) return 'text-slate-900'
+  return value < 0 ? 'text-green-800' : 'text-red-800'
+}
+
+/**
+ * „Jak zmieniają się zapasy” (decyzja właściciela 01.10.2026): stan zapisywany co noc po odczycie z programu
+ * magazynowego (GET /api/inventory/board/history). Okres z przycisków albo dat; trzy małe wykresy, każdy we własnej
+ * skali (inaczej spadek zalegającego towaru ginie przy wartości całego magazynu), tabela oddziałów i magazynów —
+ * początek i koniec okresu.
+ */
+function HistoryPanel({ warehouses, place }: { warehouses: Warehouses; place: Place }) {
+  const [range, setRange] = useState<{ preset: string | null; from: string; to: string }>(() => ({
+    preset: '30',
+    from: addDaysIso(todayIso(), -30),
+    to: todayIso(),
+  }))
+  const [history, setHistory] = useState<InventoryHistory | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const seq = useRef(0)
+  const location = place?.key ?? ''
+
+  const load = useCallback(async () => {
+    const my = ++seq.current
+    setLoading(true)
+    setFailed(false)
+    try {
+      const res = await api<InventoryHistory>(
+        `/inventory/board/history?warehouses=${warehouses}${location ? `&location=${location}` : ''}&from=${range.from}&to=${range.to}`,
+      )
+      if (my === seq.current) setHistory(res)
+    } catch {
+      if (my === seq.current) setFailed(true)
+    } finally {
+      if (my === seq.current) setLoading(false)
+    }
+  }, [warehouses, location, range.from, range.to])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const choosePreset = (key: string, days: number | null) => {
+    const to = todayIso()
+    const from = days !== null ? addDaysIso(to, -days) : (history?.first_date ?? to)
+    setRange({ preset: key, from, to })
+  }
+  const chooseDate = (side: 'from' | 'to', value: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return
+    setRange((r) => ({ ...r, preset: null, [side]: value }))
+  }
+
+  const points = history?.points ?? []
+  const compare = history?.compare ?? null
+  const first = history?.first_date ?? null
+
+  return (
+    <section className={`${PANEL} mb-4`} aria-busy={loading}>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-semibold text-slate-900">Jak zmieniają się zapasy</h2>
+          <p className="text-base text-slate-700">
+            Stan zapisywany co noc po odczycie z programu magazynowego
+            {first ? `, od ${longDate(first)}` : ''}. Wybrane magazyny i oddział jak u góry strony.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 print:hidden">
+          <div className="inline-flex flex-wrap overflow-hidden rounded-xl border-2 border-slate-300" role="group" aria-label="Okres">
+            {HISTORY_RANGES.map((r, i) => {
+              const active = range.preset === r.key
+              return (
+                <button
+                  key={r.key}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => choosePreset(r.key, r.days)}
+                  className={`px-3 py-1.5 text-lg ${i > 0 ? 'border-l-2 border-slate-300' : ''} ${FOCUS} ${
+                    active ? 'bg-blue-600 font-semibold text-white' : 'bg-white text-slate-800 hover:bg-slate-50'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              )
+            })}
+          </div>
+          <label className="flex items-center gap-1 text-lg text-slate-700">
+            od
+            <input
+              type="date"
+              value={range.from}
+              max={range.to}
+              onChange={(e) => chooseDate('from', e.target.value)}
+              className={`rounded-lg border-2 border-slate-300 bg-white px-2 py-1 text-lg text-slate-800 ${FOCUS}`}
+            />
+          </label>
+          <label className="flex items-center gap-1 text-lg text-slate-700">
+            do
+            <input
+              type="date"
+              value={range.to}
+              min={range.from}
+              onChange={(e) => chooseDate('to', e.target.value)}
+              className={`rounded-lg border-2 border-slate-300 bg-white px-2 py-1 text-lg text-slate-800 ${FOCUS}`}
+            />
+          </label>
+        </div>
+      </div>
+      <p className="mt-1 hidden text-lg text-slate-800 print:block">
+        Okres: {longDate(range.from)} – {longDate(range.to)}
+      </p>
+
+      {failed ? (
+        <div className="mt-3 flex flex-wrap items-center gap-4">
+          <p className="text-xl font-semibold text-red-800" role="alert">
+            Nie udało się wczytać historii zapasów.
+          </p>
+          <button type="button" onClick={() => void load()} className={BIG_BUTTON}>
+            Spróbuj ponownie
+          </button>
+        </div>
+      ) : !history ? (
+        <p className="mt-3 text-xl text-slate-800" role="status">
+          Wczytywanie historii…
+        </p>
+      ) : points.length < 2 ? (
+        <>
+          <p className="mt-3 text-xl text-slate-800">
+            {first
+              ? points.length === 1
+                ? `W tym okresie jest tylko jeden zapis (${longDate(points[0].date)}). Wybierz dłuższy okres albo poczekaj na kolejny dzień — wykres pokazuje zmianę między co najmniej dwoma dniami.`
+                : `W tym okresie nie ma zapisów. Stan zapisujemy codziennie od ${longDate(first)}.`
+              : 'Pierwszy zapis stanu będzie po najbliższym nocnym odczycie z programu magazynowego. Wykres pojawi się po drugim dniu.'}
+          </p>
+          {compare && <HistoryCompare compare={compare} place={place} />}
+        </>
+      ) : (
+        <>
+          <div className={`mt-3 grid gap-4 lg:grid-cols-3 print:grid-cols-3 ${loading ? 'opacity-50' : ''}`}>
+            {HISTORY_METRICS.map((m) => (
+              <HistoryChart key={m.key} metric={m} points={points} />
+            ))}
+          </div>
+          {history.weekly && (
+            <p className="mt-1 text-base text-slate-700">Długi okres — na wykresie jeden punkt na tydzień.</p>
+          )}
+          {compare && <HistoryCompare compare={compare} place={place} />}
+        </>
+      )}
+      <p className="mt-2 text-base text-slate-700">
+        Zalegający towar maleje, gdy się sprzedaje, ale też gdy zostanie przeniesiony do innego oddziału, spisany albo
+        wydany i przyjęty z powrotem jako nowa dostawa. Rośnie sam z siebie, gdy kolejny towar przekroczy pół roku albo rok
+        bez sprzedaży.
+      </p>
+    </section>
+  )
+}
+
+/** Mały wykres liniowy jednej kwoty: kwota na koniec okresu, zmiana od początku, skala od najmniejszej do największej. */
+function HistoryChart({
+  metric,
+  points,
+}: {
+  metric: (typeof HISTORY_METRICS)[number]
+  points: InventoryHistory['points']
+}) {
+  const values = points
+    .map((p) => ({ date: p.date, value: p[metric.key]?.value ?? null, items: p[metric.key]?.items ?? null }))
+    .filter((p): p is { date: string; value: number; items: number } => p.value !== null)
+  if (values.length < 2) {
+    return (
+      <div className="rounded-xl border border-slate-200 px-3 py-2">
+        <h3 className="text-lg font-semibold text-slate-900">{metric.label}</h3>
+        <p className="text-base text-slate-700">Za mało zapisów w tym okresie.</p>
+      </div>
+    )
+  }
+  const firstPoint = values[0]
+  const lastPoint = values[values.length - 1]
+  const change = lastPoint.value - firstPoint.value
+  const W = 320
+  const H = 120
+  const PAD = 6
+  const time = (iso: string) => new Date(`${iso}T12:00:00`).getTime()
+  const t0 = time(firstPoint.date)
+  const t1 = time(lastPoint.date)
+  let lo = Math.min(...values.map((v) => v.value))
+  let hi = Math.max(...values.map((v) => v.value))
+  if (hi - lo < Math.max(1, hi * 0.01)) {
+    // płaska linia: skala ±1% wokół wartości, żeby nie udawać dużych wahań
+    const pad = Math.max(1, hi * 0.01)
+    lo -= pad
+    hi += pad
+  }
+  const x = (iso: string) => PAD + ((time(iso) - t0) / Math.max(1, t1 - t0)) * (W - 2 * PAD)
+  const y = (v: number) => PAD + (1 - (v - lo) / (hi - lo)) * (H - 2 * PAD)
+  // przerwa w linii, gdy brakuje zapisu (odstęp ponad 1,5× zwykłego kroku)
+  const gaps = values.slice(1).map((v, i) => time(v.date) - time(values[i].date))
+  const step = Math.min(...gaps)
+  let d = ''
+  values.forEach((v, i) => {
+    const jump = i === 0 || time(v.date) - time(values[i - 1].date) > step * 1.5
+    d += `${jump ? 'M' : 'L'}${x(v.date).toFixed(1)},${y(v.value).toFixed(1)} `
+  })
+
+  return (
+    <figure className="board-block rounded-xl border border-slate-200 px-3 py-2">
+      <figcaption>
+        <span className="block text-lg font-semibold text-slate-900">{metric.label}</span>
+        <span className="flex flex-wrap items-baseline justify-between gap-x-3">
+          <span className="text-2xl font-semibold text-slate-900 tabular-nums">{fmtBig(lastPoint.value)}</span>
+          <span className={`text-lg font-semibold tabular-nums ${changeClass(change, metric.lowerIsBetter)}`}>
+            {fmtChange(change)}
+          </span>
+        </span>
+        <span className="block text-base text-slate-700">
+          {goods(lastPoint.items)} · od {shortDate(firstPoint.date, true)}: {fmtBig(firstPoint.value)}
+        </span>
+      </figcaption>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="mt-1 h-32 w-full"
+        role="img"
+        aria-label={`${metric.label}: ${fmtBig(firstPoint.value)} dnia ${longDate(firstPoint.date)}, ${fmtBig(lastPoint.value)} dnia ${longDate(lastPoint.date)}`}
+        preserveAspectRatio="none"
+      >
+        <line x1={PAD} x2={W - PAD} y1={y(hi)} y2={y(hi)} stroke="#e2e8f0" />
+        <line x1={PAD} x2={W - PAD} y1={y(lo)} y2={y(lo)} stroke="#e2e8f0" />
+        <path d={d} fill="none" stroke={metric.stroke} strokeWidth={2.5} vectorEffect="non-scaling-stroke" />
+        {values.map((v) => (
+          <circle key={v.date} cx={x(v.date)} cy={y(v.value)} r={values.length > 60 ? 0 : 2.5} fill={metric.stroke}>
+            <title>{`${longDate(v.date)}: ${fmtBig(v.value)} (${goods(v.items)})`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className="flex justify-between text-sm text-slate-700 tabular-nums">
+        <span>{shortDate(firstPoint.date)}</span>
+        <span>
+          skala {fmtBig(lo)} – {fmtBig(hi)}
+        </span>
+        <span>{shortDate(lastPoint.date)}</span>
+      </div>
+    </figure>
+  )
+}
+
+/** Tabela początek → koniec okresu: oddziały w wybranych magazynach i (rozwijane) każdy magazyn osobno. */
+function HistoryCompare({ compare, place }: { compare: NonNullable<InventoryHistory['compare']>; place: Place }) {
+  const same = compare.start_date === compare.end_date
+  const cell = (start: { value: number } | null | undefined, end: { value: number } | null | undefined, lowerIsBetter: boolean) => {
+    const endValue = end?.value ?? 0
+    const change = endValue - (start?.value ?? 0)
+    return (
+      <>
+        <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">{end ? fmtBig(endValue) : '—'}</td>
+        <td className={`px-2 py-1.5 text-right font-semibold tabular-nums whitespace-nowrap ${changeClass(change, lowerIsBetter)}`}>
+          {same || !start || !end ? '' : fmtChange(change)}
+        </td>
+      </>
+    )
+  }
+  const head = (label: string) => (
+    <>
+      <th scope="col" className="px-2 py-1 text-right font-semibold">
+        {label}
+      </th>
+      <th scope="col" className="px-2 py-1 text-right font-normal text-slate-700">
+        zmiana
+      </th>
+    </>
+  )
+  return (
+    <div className="mt-3">
+      <h3 className="text-xl font-semibold text-slate-900">
+        Oddziały {same ? `— ${longDate(compare.end_date)}` : `— ${longDate(compare.end_date)}, zmiana od ${longDate(compare.start_date)}`}
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="mt-1 w-full text-lg text-slate-900">
+          <thead className="border-b-2 border-slate-300 text-base">
+            <tr>
+              <th scope="col" className="px-2 py-1 text-left font-semibold">
+                Oddział
+              </th>
+              {head('Cały towar')}
+              {head('Ponad pół roku bez sprzedaży')}
+              {head('Ponad rok bez sprzedaży')}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200">
+            {compare.locations.map((l) => (
+              <tr key={l.key || 'all'} className={l.key === (place?.key ?? '') ? 'bg-blue-50 font-semibold' : undefined}>
+                <th scope="row" className="px-2 py-1.5 text-left font-medium">
+                  {l.name}
+                </th>
+                {cell(l.start?.stock, l.end?.stock, false)}
+                {cell(l.start?.no_sale_6, l.end?.no_sale_6, true)}
+                {cell(l.start?.no_sale_12, l.end?.no_sale_12, true)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-1 text-base text-slate-700">
+        Kwoty oddziałów można dodawać; „Wszystkie oddziały” liczy sprzedaż ze wszystkich magazynów razem, więc ich zalegający
+        towar bywa mniejszy niż suma oddziałów.
+      </p>
+      {compare.warehouses.length > 0 && (
+        <details className="mt-2">
+          <summary className={`cursor-pointer rounded-lg px-1 text-lg font-semibold text-blue-700 ${FOCUS}`}>
+            Każdy magazyn osobno{place ? ` (${place.name})` : ''} — cały towar
+          </summary>
+          <div className="overflow-x-auto">
+            <table className="mt-1 w-full text-lg text-slate-900">
+              <thead className="border-b-2 border-slate-300 text-base">
+                <tr>
+                  <th scope="col" className="px-2 py-1 text-left font-semibold">
+                    Magazyn
+                  </th>
+                  <th scope="col" className="px-2 py-1 text-right font-semibold">
+                    {same ? 'Wartość' : `${shortDate(compare.start_date, true)}`}
+                  </th>
+                  {!same && (
+                    <th scope="col" className="px-2 py-1 text-right font-semibold">
+                      {shortDate(compare.end_date, true)}
+                    </th>
+                  )}
+                  {!same && (
+                    <th scope="col" className="px-2 py-1 text-right font-normal text-slate-700">
+                      zmiana
+                    </th>
+                  )}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200">
+                {compare.warehouses.map((w) => {
+                  const change = (w.end?.value ?? 0) - (w.start?.value ?? 0)
+                  return (
+                    <tr key={w.code}>
+                      <th scope="row" className="px-2 py-1.5 text-left font-medium">
+                        {w.code}
+                      </th>
+                      <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
+                        {w.start ? fmtBig(w.start.value) : '—'}
+                      </td>
+                      {!same && (
+                        <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
+                          {w.end ? fmtBig(w.end.value) : '—'}
+                        </td>
+                      )}
+                      {!same && (
+                        <td className="px-2 py-1.5 text-right font-semibold tabular-nums whitespace-nowrap">
+                          {fmtChange(change)}
+                        </td>
+                      )}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+    </div>
+  )
+}
 
 /** Podpis przedziału „jak długo leży” i kolor paska: do roku szary, 1–3 lata żółty, dłużej czerwony. */
 const LOT_AGE_ROWS: Record<InventoryBoardLotAgeKey, { label: string; title: string; tone: 'amber' | 'red' | 'slate' }> = {

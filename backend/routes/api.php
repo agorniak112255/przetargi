@@ -170,6 +170,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/inventory/board', [InventoryBoardController::class, 'show'])->middleware('permission:inventory.report.view');
     Route::get('/inventory/board/items', [InventoryBoardController::class, 'items'])->middleware('permission:inventory.report.view');
     Route::get('/inventory/board/moves', [InventoryBoardController::class, 'moves'])->middleware('permission:inventory.report.view');
+    Route::get('/inventory/board/history', [InventoryBoardController::class, 'history'])->middleware('permission:inventory.report.view');
     Route::get('/products/manufacturers', [ProductController::class, 'manufacturers'])->middleware('permission:products.view');
     Route::get('/products/categories', [ProductController::class, 'categoryOptions'])->middleware('permission:products.view');
     Route::patch('/products/{product}/category', [ProductController::class, 'updateCategory'])->middleware('permission:products.view');

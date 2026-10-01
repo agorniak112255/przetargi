@@ -846,6 +846,48 @@ export type InventoryBoardLotAgeKey =
   | 'lot_age_60'
   | 'lot_age_unknown'
 
+/** Pozycje i wartość koszyka w zapisie dnia; null = koszyka nie było w zapisie. */
+export type InventoryHistoryTotal = { items: number; value: number } | null
+
+/** Liczby kafelków raportu dla zarządu zapisane jednego dnia (historia zapasów). */
+export type InventoryHistoryBuckets = {
+  stock: InventoryHistoryTotal
+  no_sale_6: InventoryHistoryTotal
+  no_sale_12: InventoryHistoryTotal
+  no_sale_24: InventoryHistoryTotal
+  never_sold: InventoryHistoryTotal
+  stale_36: InventoryHistoryTotal
+  stale_60: InventoryHistoryTotal
+}
+
+/**
+ * Historia zapasów (GET /api/inventory/board/history?warehouses=…&location=…&from=…&to=…): zapis co noc po odczycie
+ * z programu magazynowego. Daty 'YYYY-MM-DD'.
+ */
+export type InventoryHistory = {
+  warehouses: InventoryBoardWarehouses
+  location: string | null
+  /** Okres zastosowany (domyślnie 30 dni do ostatniego zapisu). */
+  from: string
+  to: string
+  /** Pierwszy i ostatni zapisany dzień w ogóle; null = jeszcze nic nie zapisano. */
+  first_date: string | null
+  last_date: string | null
+  /** true — długi okres: jeden punkt na tydzień (ostatni zapisany dzień tygodnia). */
+  weekly: boolean
+  /** source: 'live' — nocny zapis, 'xl_history' — dzień odtworzony z historii stanów programu magazynowego. */
+  points: ({ date: string; source: string } & InventoryHistoryBuckets)[]
+  /** Pierwszy i ostatni zapisany dzień okresu — te same dwa dni dla wszystkich oddziałów i magazynów. */
+  compare: {
+    start_date: string
+    end_date: string
+    /** Wszystkie oddziały (key '') i każdy oddział, w wybranych magazynach. */
+    locations: { key: string; name: string; start: InventoryHistoryBuckets | null; end: InventoryHistoryBuckets | null }[]
+    /** Magazyny XL wybranego oddziału (albo wszystkich) — sama wartość i liczba pozycji. */
+    warehouses: { code: string; location: string | null; start: InventoryHistoryTotal; end: InventoryHistoryTotal }[]
+  } | null
+}
+
 /** Rodzaj towaru w raporcie dla zarządu (parametr `group` w /api/inventory/board/items). */
 export type InventoryBoardGroupKey = 'A' | 'B' | 'S' | 'T' | 'H' | 'other'
 

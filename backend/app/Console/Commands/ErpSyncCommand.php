@@ -42,6 +42,11 @@ class ErpSyncCommand extends Command
             $stats['items'], $stats['with_trade_stock'], $stats['purchases'], $stats['removed'],
         ));
 
+        // historia zapasów: obraz dnia zaraz po pełnym odczycie stanów; błąd zapisu nie psuje synchronizacji
+        if ($limit === null) {
+            $this->call('erp:inventory-snapshot');
+        }
+
         if ($this->option('match')) {
             return $this->call('erp:match');
         }
