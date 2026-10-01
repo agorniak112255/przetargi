@@ -43,6 +43,7 @@ class B2bConnectorRegistry
         VmFootwearB2bConnector::class,
         SafetyJoggerB2bConnector::class,
         DemarB2bConnector::class,
+        MactronicB2bConnector::class,
     ];
 
     /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */
