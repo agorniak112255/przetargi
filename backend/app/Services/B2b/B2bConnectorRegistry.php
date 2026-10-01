@@ -40,6 +40,7 @@ class B2bConnectorRegistry
         EjendalsB2bConnector::class,
         HoneywellB2bConnector::class,
         FagumB2bConnector::class,
+        VmFootwearB2bConnector::class,
     ];
 
     /** Reguły rabatu konta liczą cenę zakupu z ceny katalogowej (witryna publiczna, protekt.pl). */
