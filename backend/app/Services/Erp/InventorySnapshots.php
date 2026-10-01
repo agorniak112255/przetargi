@@ -124,16 +124,19 @@ final class InventorySnapshots
      */
     private function warehouseRows(string $day, array $service, Carbon $now): array
     {
-        $value = 'coalesce(s.value, s.quantity * '.InventoryQuery::LAST_PRICE_SQL.')';
-
-        return DB::table(WarehouseLocations::TABLE.' as s')
+        // wartość wiersza w podzapytaniu, grupowanie dopiero na zewnątrz — MySQL z ONLY_FULL_GROUP_BY nie przyjmuje
+        // skorelowanego podzapytania po erp_items.id wewnątrz sum() przy grupowaniu po magazynie
+        $rows = DB::table(WarehouseLocations::TABLE.' as s')
             ->join('erp_items', 'erp_items.id', '=', 's.erp_item_id')
             ->whereNull('erp_items.removed_at')
             ->where('s.quantity', '>', 0)
-            ->groupBy('s.warehouse_code')
-            ->orderBy('s.warehouse_code')
-            ->selectRaw('s.warehouse_code, count(*) as items, sum(s.quantity) as quantity, coalesce(sum('.$value.'), 0) as value,'
-                .' sum(case when '.$value.' is null then 1 else 0 end) as value_unknown')
+            ->selectRaw('s.warehouse_code, s.quantity, coalesce(s.value, s.quantity * '.InventoryQuery::LAST_PRICE_SQL.') as row_value');
+
+        return DB::query()->fromSub($rows, 'x')
+            ->groupBy('x.warehouse_code')
+            ->orderBy('x.warehouse_code')
+            ->selectRaw('x.warehouse_code, count(*) as items, sum(x.quantity) as quantity, coalesce(sum(x.row_value), 0) as value,'
+                .' sum(case when x.row_value is null then 1 else 0 end) as value_unknown')
             ->get()
             ->map(static fn ($r): array => [
                 'taken_on' => $day,
