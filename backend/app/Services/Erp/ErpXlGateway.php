@@ -139,12 +139,12 @@ interface ErpXlGateway
     public function lotHistory(array $gids, int $sinceTimestamp): array;
 
     /**
-     * Sprzedaż jak lastSales (FS, PA, WZ, magazyn nagłówka, data dokumentu Clarion): ostatnia przed `$fromClarionDate`
-     * na towar × magazyn i każdy dzień sprzedaży od tej daty. Magazyn null = dokument bez magazynu. standing — dokumenty
-     * w buforze (data przestawiana co dzień na dziś): od kiedy wiszą (since = XlTimestamp ostatniej zmiany nagłówka).
+     * Sprzedaż jak lastSales (FS, PA, WZ, magazyn nagłówka, data Clarion — dokument w buforze: dzień ostatniej zmiany):
+     * ostatnia przed `$fromClarionDate` na towar × magazyn i każdy dzień sprzedaży od tej daty. Magazyn null = dokument
+     * bez magazynu.
      *
      * @param  list<int>  $gids
-     * @return array{before: list<array{gid: int, warehouse_code: string|null, date: int}>, days: list<array{gid: int, warehouse_code: string|null, date: int}>, standing: list<array{gid: int, warehouse_code: string|null, since: int}>}
+     * @return array{before: list<array{gid: int, warehouse_code: string|null, date: int}>, days: list<array{gid: int, warehouse_code: string|null, date: int}>}
      */
     public function saleHistory(array $gids, int $fromClarionDate): array;
 }

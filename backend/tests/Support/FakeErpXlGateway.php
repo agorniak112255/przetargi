@@ -170,9 +170,6 @@ final class FakeErpXlGateway implements ErpXlGateway
     /** @var list<array{gid: int, warehouse_code: string|null, date: int}> wszystkie dni sprzedaży (Clarion) */
     public array $historySales = [];
 
-    /** @var list<array{gid: int, warehouse_code: string|null, since: int}> dokumenty sprzedaży w buforze */
-    public array $historyStanding = [];
-
     public int $historyCalls = 0;
 
     /** Tyle pierwszych wywołań lotHistory kończy się zakleszczeniem (SQL Server wybiera nasze zapytanie jako ofiarę). */
@@ -211,9 +208,7 @@ final class FakeErpXlGateway implements ErpXlGateway
             }
         }
 
-        $standing = array_values(array_filter($this->historyStanding, static fn (array $r): bool => in_array($r['gid'], $gids, true)));
-
-        return ['before' => array_values($before), 'days' => $days, 'standing' => $standing];
+        return ['before' => array_values($before), 'days' => $days];
     }
 
     public function itemSaleLines(array $itemGids, int $fromClarionDate): iterable

@@ -28,7 +28,9 @@ final class InventorySnapshots
     public const TIMEZONE = 'Europe/Warsaw';
 
     /** Wersja reguł koszyków zapisana przy każdym wierszu — zmiana reguł = nowa wersja (historia nieporównywalna wprost). */
-    public const RULES_VERSION = 2; // 2: „jak długo leży” narastająco (lot_age_6…60) zamiast przedziałów lot_age_0_6…
+    // 2: „jak długo leży” narastająco (lot_age_6…60) zamiast przedziałów lot_age_0_6…; 3: dokument sprzedaży w buforze
+    // liczy się z dnia ostatniej zmiany, nie z daty przestawianej przez XL na dziś (ErpXlClient::SALE_DATE_SQL)
+    public const RULES_VERSION = 3;
 
     /**
      * „Jak długo leży” z zapisu dnia, narastająco (miesiące → pozycje, wartość). Wersja 2 zapisuje progi wprost; wersja 1

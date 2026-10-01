@@ -14,7 +14,8 @@ class ErpInventoryHistoryCommand extends Command
     protected $signature = 'erp:inventory-history
                             {--days=365 : Ile dni wstecz od pierwszego zapisu nocnego}
                             {--dry-run : Tylko policz i pokaż kontrolę, bez zapisu}
-                            {--force : Odtwórz też dni już odtworzone i zapisz mimo niezgodnej kontroli}
+                            {--force : Odtwórz od nowa także dni już zapisane (historia, zapis nocny starszymi regułami)}
+                            {--ignore-check : Zapisz mimo niezgodnej kontroli z zapisem nocnym}
                             {--work=5 : Sekundy pracy zapytań XL przed odpoczynkiem}
                             {--pause=5 : Sekundy odpoczynku serwera SQL}';
 
@@ -34,6 +35,7 @@ class ErpInventoryHistoryCommand extends Command
                 $days,
                 write: ! $this->option('dry-run'),
                 force: (bool) $this->option('force'),
+                ignoreSeam: (bool) $this->option('ignore-check'),
                 say: fn (string $m) => $this->line($m),
                 workSeconds: max(0.5, (float) $this->option('work')),
                 pauseSeconds: max(0.0, (float) $this->option('pause')),
@@ -46,7 +48,7 @@ class ErpInventoryHistoryCommand extends Command
         }
 
         if ($r['status'] === 'no_live') {
-            $this->warn('Brak zapisu nocnego (erp:inventory-snapshot) — nie ma z czym sprawdzić odtworzenia.');
+            $this->warn('Brak zapisu nocnego według aktualnych reguł (erp:inventory-snapshot) — nie ma z czym sprawdzić odtworzenia. Uruchom po najbliższym nocnym odczycie.');
 
             return self::FAILURE;
         }
@@ -77,7 +79,7 @@ class ErpInventoryHistoryCommand extends Command
             'saved' => $this->done(sprintf('Zapisano %d dni (%d wierszy), od %s do %s; pominięte (już były): %d.',
                 count($r['days']), $r['rows'], $r['days'][0] ?? '-', end($r['days']) ?: '-', $r['skipped'])),
             'dry_run' => $this->done('Próba bez zapisu — kontrola zgodna; uruchom bez --dry-run, żeby zapisać.'),
-            default => $this->failed('Kontrola niezgodna (✗) — nic nie zapisano. Sprawdź różnice; --force zapisze mimo to.'),
+            default => $this->failed('Kontrola niezgodna (✗) — nic nie zapisano. Sprawdź różnice; --ignore-check zapisze mimo to.'),
         };
     }
 

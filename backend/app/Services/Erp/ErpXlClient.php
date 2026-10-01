@@ -45,6 +45,14 @@ final class ErpXlClient implements ErpXlGateway
     /** Stany FS/PA, które się liczą (30.09.2026: FS ma 0–6, 5 = ~97%; 6 = anulowane, 0–2 = bufor/w toku). */
     private const CUSTOMER_SALE_STATES = [3, 4, 5];
 
+    /**
+     * Data sprzedaży dokumentu (Clarion) do „ostatniej sprzedaży” (decyzja właściciela 01.10.2026, wariant B): dokument
+     * w buforze (TrN_Stan < 3) ma TrN_Data2 przestawiane przez XL co noc na dziś — wtedy dzień ostatniej zmiany nagłówka
+     * (TrN_LastMod, XlTimestamp → dni od 1.01.1990 + 69035 = Clarion). Zbiorcza WZ dopisywana co kilka dni zostaje
+     * bieżącą sprzedażą, rezerwacja nieruszana od stycznia 2025 przestaje udawać sprzedaż z dzisiaj (01WZR, SZP21PPS).
+     */
+    private const SALE_DATE_SQL = 'CASE WHEN n.TrN_Stan < 3 AND n.TrN_LastMod > 0 THEN n.TrN_LastMod / 86400 + 69035 ELSE n.TrN_Data2 END';
+
     /** Skróty dokumentów, którymi partia weszła na magazyn (CDN.Dostawy.Dst_TrnTyp). */
     private const DOCUMENT_PREFIXES = [1489 => 'PZ', 1617 => 'PW', 1521 => 'FZ', 1616 => 'RW'];
 
@@ -250,7 +258,7 @@ final class ErpXlClient implements ErpXlGateway
             ->whereIn('e.TrE_GIDTyp', self::SALE_TYPES)
             ->whereIn('e.TrE_TwrNumer', $gids)
             ->groupBy('e.TrE_TwrNumer', 'm.MAG_Kod')
-            ->selectRaw('e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, MAX(n.TrN_Data2) AS last_date')
+            ->selectRaw('e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, MAX('.self::SALE_DATE_SQL.') AS last_date')
             ->get();
 
         $out = [];
@@ -597,26 +605,17 @@ final class ErpXlClient implements ErpXlGateway
             LEFT JOIN CDN.Magazyny m ON m.MAG_GIDNumer = n.TrN_MagZNumer AND m.MAG_GIDTyp = n.TrN_MagZTyp
             WHERE e.TrE_GIDTyp IN ($types) AND e.TrE_TwrNumer IN ($in)
             SQL;
-        $before = $this->db()->select("SELECT e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, MAX(n.TrN_Data2) AS date $base AND n.TrN_Data2 < $from GROUP BY e.TrE_TwrNumer, m.MAG_Kod");
-        $days = $this->db()->select("SELECT DISTINCT e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, n.TrN_Data2 AS date $base AND n.TrN_Data2 >= $from");
-        // dokument w buforze ma datę przestawianą co dzień na dziś — nocny odczyt widzi go jako sprzedaż każdego dnia od
-        // wystawienia (ostatnia zmiana nagłówka, XlTimestamp)
-        $standing = $this->db()->select("SELECT e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, MIN(n.TrN_LastMod) AS since $base AND n.TrN_Stan < 3 AND n.TrN_LastMod > 0 GROUP BY e.TrE_TwrNumer, m.MAG_Kod");
+        // data sprzedaży jak lastSales (bufor — dzień ostatniej zmiany)
+        $date = self::SALE_DATE_SQL;
+        $before = $this->db()->select("SELECT e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, MAX($date) AS date $base AND $date < $from GROUP BY e.TrE_TwrNumer, m.MAG_Kod");
+        $days = $this->db()->select("SELECT DISTINCT e.TrE_TwrNumer AS gid, m.MAG_Kod AS warehouse_code, $date AS date $base AND $date >= $from");
         $map = static function ($r): array {
             $code = $r->warehouse_code !== null ? trim((string) $r->warehouse_code) : '';
 
             return ['gid' => (int) $r->gid, 'warehouse_code' => $code !== '' ? $code : null, 'date' => (int) $r->date];
         };
 
-        return [
-            'before' => array_map($map, $before),
-            'days' => array_map($map, $days),
-            'standing' => array_map(static function ($r): array {
-                $code = $r->warehouse_code !== null ? trim((string) $r->warehouse_code) : '';
-
-                return ['gid' => (int) $r->gid, 'warehouse_code' => $code !== '' ? $code : null, 'since' => (int) $r->since];
-            }, $standing),
-        ];
+        return ['before' => array_map($map, $before), 'days' => array_map($map, $days)];
     }
 
     /**

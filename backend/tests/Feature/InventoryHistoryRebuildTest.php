@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\ErpItem;
 use App\Models\ErpWarehouse;
+use App\Services\Erp\ErpXlClient;
 use App\Services\Erp\ErpXlGateway;
 use App\Services\Erp\InventoryHistoryRebuild;
 use App\Services\Erp\InventorySnapshots;
@@ -107,7 +108,12 @@ final class InventoryHistoryRebuildTest extends TestCase
 
         $this->assertSame(1, Artisan::call('erp:inventory-history', ['--days' => 3, '--pause' => 0]));
         $this->assertStringContainsString('Kontrola niezgodna', Artisan::output());
+        // --force przelicza dni od nowa, ale kontroli nie omija
+        $this->assertSame(1, Artisan::call('erp:inventory-history', ['--days' => 3, '--pause' => 0, '--force' => true]));
         $this->assertSame(0, DB::table(InventorySnapshots::TABLE)->where('source', 'xl_history')->count());
+        $this->assertSame(0, Artisan::call('erp:inventory-history', ['--days' => 1, '--pause' => 0, '--ignore-check' => true]));
+        $this->assertSame(21, DB::table(InventorySnapshots::TABLE)->where('source', 'xl_history')->count());
+        DB::table(InventorySnapshots::TABLE)->where('source', 'xl_history')->delete();
 
         DB::table(InventorySnapshots::TABLE)->where('id', $row->id)->update(['totals' => $row->totals]);
         $this->assertSame(0, Artisan::call('erp:inventory-history', ['--days' => 3, '--pause' => 0, '--dry-run' => true]));
@@ -115,31 +121,40 @@ final class InventoryHistoryRebuildTest extends TestCase
         $this->assertSame(0, DB::table(InventorySnapshots::TABLE)->where('source', 'xl_history')->count());
     }
 
-    public function test_buffered_sale_counts_as_sold_from_the_day_after_it_was_issued(): void
+    public function test_live_day_from_older_rules_is_replaced_only_with_force_and_seam_uses_current_rules(): void
     {
-        // WZ w buforze od 30.09 10:00 — XL przestawia jej datę na dziś, nocny odczyt widzi „sprzedane dziś”
-        $warehouses = [['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 4, 'value' => 40, 'oldest_lot' => '2024-01-01']];
-        $item = ErpItem::query()->create([
-            'xl_gid' => 2, 'code' => 'BB', 'name' => 'BUTY', 'unit' => 'para', 'archived' => false,
-            'stock_trade' => 4, 'stock_total' => 4, 'stock_value' => 40, 'oldest_lot_at' => '2024-01-01',
-            'stock_by_warehouse' => $warehouses, ...WarehouseSplit::compute($warehouses, ErpWarehouse::serviceCodes(), '2024-01-01'),
-            'last_sale_at' => '2026-10-02', 'synced_at' => now(), 'stock_synced_at' => now(),
-        ]);
-        WarehouseLocations::replace((int) $item->id, $warehouses);
-        WarehouseLocations::replaceSales((int) $item->id, [['warehouse_code' => '01H', 'last_sale_at' => '2026-10-02']]);
-        $this->assertSame('saved', app(InventorySnapshots::class)->take()['status']);
-        $this->xl->historyLots = [['gid' => 2, 'dst' => 20, 'warehouse_code' => '01H', 'received_at' => $this->ts('2024-01-01'), 'quantity' => 4.0, 'value' => 40.0]];
-        $this->xl->historySales = [['gid' => 2, 'warehouse_code' => '01H', 'date' => ClarionDate::fromDate(CarbonImmutable::parse('2026-10-02'))]];
-        $this->xl->historyStanding = [['gid' => 2, 'warehouse_code' => '01H', 'since' => $this->ts('2026-09-30')]];
+        // 1.10.2026: zapis nocny jeszcze starymi regułami (bufor jako sprzedaż z dzisiaj) — wersja 1
+        $this->liveItemAndSnapshot();
+        DB::table(InventorySnapshots::TABLE)->insert(['taken_on' => '2026-10-01', 'location' => '', 'scope' => 'all', 'source' => 'live',
+            'totals' => json_encode(['version' => 1, 'buckets' => ['stock' => ['items' => 1, 'value' => 999]]])]);
 
         $r = app(InventoryHistoryRebuild::class)->run(3, pauseSeconds: 0.0);
+        $this->assertSame('2026-10-02', $r['first_live']);
+        $this->assertSame(['2026-09-29', '2026-09-30'], $r['days']);
+        $this->assertSame(999, (int) $this->bucket('2026-10-01', '', 'all', 'stock')['value']);
 
-        $this->assertSame('saved', $r['status'], json_encode($r['seam']));
-        // 1.10: bufor wisiał od dnia wcześniej — sprzedane; 30.09 i 29.09: nigdy nie sprzedany, partia z 2024 r.
-        $this->assertSame(0, $this->bucket('2026-10-01', '01', 'trade', 'never_sold')['items']);
-        $this->assertSame(1, $this->bucket('2026-09-30', '01', 'trade', 'never_sold')['items']);
-        $this->assertSame(1, $this->bucket('2026-09-29', '', 'all', 'no_sale_12')['items']);
-        $this->assertSame([['date' => '2026-10-02', 'stock' => 40.0, 'no_sale_6' => 0.0, 'no_sale_12' => 0.0, 'lot_age_6' => 40.0, 'lot_age_12' => 40.0]], array_slice($r['preview'], -1));
+        // --force: dzień starszymi regułami odtworzony od nowa (cały dzień, wszystkie oddziały); nocny 2.10 nietknięty
+        $r = app(InventoryHistoryRebuild::class)->run(3, force: true, pauseSeconds: 0.0);
+        $this->assertSame('saved', $r['status']);
+        $this->assertSame(['2026-09-29', '2026-09-30', '2026-10-01'], $r['days']);
+        $this->assertSame(['xl_history'], DB::table(InventorySnapshots::TABLE)->where('taken_on', '2026-10-01')->distinct()->pluck('source')->all());
+        $this->assertSame(21, DB::table(InventorySnapshots::TABLE)->where('taken_on', '2026-10-01')->count());
+        $this->assertEquals(['items' => 1, 'value' => 100, 'value_unknown' => 0], $this->bucket('2026-10-01', '', 'all', 'stock'));
+        $this->assertSame(21, DB::table(InventorySnapshots::TABLE)->where('taken_on', '2026-10-02')->where('source', 'live')->count());
+
+        // sam zapis nocny starszymi regułami — nie ma z czym sprawdzić odtworzenia
+        DB::table(InventorySnapshots::TABLE)->where('taken_on', '2026-10-02')->update(['totals' => json_encode(['version' => 2, 'buckets' => []])]);
+        $this->assertSame('no_live', app(InventoryHistoryRebuild::class)->run(3, force: true)['status']);
+    }
+
+    public function test_buffered_sale_date_uses_last_change_with_the_right_clarion_shift(): void
+    {
+        // dzień ostatniej zmiany dokumentu w buforze: TrN_LastMod / 86400 (dni od 1.01.1990) + przesunięcie = data Clarion
+        $sql = (new \ReflectionClassConstant(ErpXlClient::class, 'SALE_DATE_SQL'))->getValue();
+        $shift = ClarionDate::fromDate(CarbonImmutable::create(1990, 1, 1));
+        $this->assertStringContainsString('TrN_LastMod / 86400 + '.$shift.' ', $sql);
+        $this->assertStringContainsString('n.TrN_Stan < 3', $sql);
+        $this->assertSame('2026-09-30', ClarionDate::toDate(InventoryHistoryRebuild::dayNumber('2026-09-30') + $shift)?->toDateString());
     }
 
     public function test_deadlock_with_xl_work_pauses_and_retries_the_chunk(): void

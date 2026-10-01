@@ -19,9 +19,10 @@ use Illuminate\Support\Facades\DB;
  * „bez sprzedaży” z ostatniej sprzedaży (FS/PA/WZ, magazyn nagłówka — jak nocny odczyt) przed dniem X, najstarsza partia
  * ze stanem w dniu X. Wartość = koszt księgowy partii. Podział usługowe/handlowe — dzisiejszy słownik.
  *
- * Zapis (source 'xl_history') tylko po kontroli szwu: odtworzony pierwszy dzień zapisu nocnego (live) musi się zgadzać
- * z tym zapisem (cały towar ±1%, bez sprzedaży pół roku/rok ±3% na wszystkich oddziałach). Dni z zapisem nocnym nie są
- * nigdy ruszane; dni już odtworzone — tylko z force.
+ * Zapis (source 'xl_history') tylko po kontroli szwu: odtworzony pierwszy dzień zapisu nocnego (live) według aktualnych
+ * reguł (InventorySnapshots::RULES_VERSION) musi się zgadzać z tym zapisem (cały towar ±1%, bez sprzedaży i „leży”
+ * ±3% na wszystkich oddziałach). Zapisy nocne aktualnymi regułami nie są nigdy ruszane; dni wcześniejsze (odtworzone
+ * albo zapis nocny starszymi regułami) — tylko z force.
  *
  * Obciążenie XL (decyzja właściciela): po każdych `workSeconds` pracy zapytań — `pauseSeconds` odpoczynku.
  */
@@ -58,30 +59,37 @@ final class InventoryHistoryRebuild
      * @param  callable(float): void|null  $sleep
      * @return array{status: string, first_live: ?string, days: list<string>, skipped: int, items: int, sql_seconds: float, pause_seconds: float, negative_lots: int, unknown_types: array<int, int>, seam: list<array<string, mixed>>, seam_ok: bool, rows: int, preview?: list<array{date: string, stock: float, no_sale_6: float, no_sale_12: float, lot_age_6: float, lot_age_12: float}>}
      */
-    public function run(int $days, bool $write = true, bool $force = false, ?callable $say = null, float $workSeconds = 5.0, float $pauseSeconds = 5.0, ?callable $sleep = null): array
+    public function run(int $days, bool $write = true, bool $force = false, ?callable $say = null, float $workSeconds = 5.0, float $pauseSeconds = 5.0, ?callable $sleep = null, bool $ignoreSeam = false): array
     {
         $say ??= static function (string $m): void {};
         $sleep ??= static function (float $s): void {
             usleep((int) round($s * 1_000_000));
         };
-        $firstLive = DB::table(InventorySnapshots::TABLE)->where('source', 'live')->min('taken_on');
+        // szew: pierwszy zapis nocny według aktualnych reguł (wersja w totals); zapisy nocne starszymi regułami
+        // (1.10.2026: bufor jako sprzedaż z dzisiaj) można z force odtworzyć od nowa — jak dni historii
+        $liveVersions = [];
+        foreach (DB::table(InventorySnapshots::TABLE)->where('source', 'live')->selectRaw("taken_on, json_extract(totals, '$.version') as v")->get() as $r) {
+            $day = substr((string) $r->taken_on, 0, 10);
+            $liveVersions[$day] = max($liveVersions[$day] ?? 0, (int) $r->v);
+        }
+        $current = array_keys(array_filter($liveVersions, static fn (int $v): bool => $v >= InventorySnapshots::RULES_VERSION));
+        sort($current);
         $result = ['status' => 'no_live', 'first_live' => null, 'days' => [], 'skipped' => 0, 'items' => 0, 'sql_seconds' => 0.0,
             'pause_seconds' => 0.0, 'negative_lots' => 0, 'unknown_types' => [], 'seam' => [], 'seam_ok' => false, 'rows' => 0];
-        if ($firstLive === null) {
+        if ($current === []) {
             return $result;
         }
-        $seamDay = CarbonImmutable::parse(substr((string) $firstLive, 0, 10));
+        $seamDay = CarbonImmutable::parse($current[0]);
         $result['first_live'] = $seamDay->toDateString();
 
-        // dni do odtworzenia: przed pierwszym zapisem nocnym; istniejące — pomijane (odtworzone tylko z force)
+        // dni do odtworzenia: przed szwem; zapisane (historia albo nocny starszymi regułami) — pomijane, odtwarzane z force
         $existing = DB::table(InventorySnapshots::TABLE)
             ->where('taken_on', '>=', $seamDay->subDays($days)->toDateString())->where('taken_on', '<', $seamDay->toDateString())
-            ->groupBy('taken_on')->selectRaw('taken_on, max(case when source = \'live\' then 1 else 0 end) as live')->get()
-            ->mapWithKeys(static fn ($r): array => [substr((string) $r->taken_on, 0, 10) => (bool) $r->live])->all();
+            ->distinct()->pluck('taken_on')->mapWithKeys(static fn ($d): array => [substr((string) $d, 0, 10) => true])->all();
         $targets = [];
         for ($i = $days; $i >= 1; $i--) {
             $d = $seamDay->subDays($i)->toDateString();
-            if (isset($existing[$d]) && ($existing[$d] || ! $force)) {
+            if (isset($existing[$d]) && ! $force) {
                 $result['skipped']++;
 
                 continue;
@@ -162,7 +170,7 @@ final class InventoryHistoryRebuild
         }
         $result['preview'] = array_reverse($result['preview'] ?? []);
         [$result['seam'], $result['seam_ok']] = $this->seam($seamDay->toDateString(), $acc[0] ?? []);
-        if (! $result['seam_ok'] && ! $force) {
+        if (! $result['seam_ok'] && ! $ignoreSeam) {
             $result['status'] = 'seam_failed';
 
             return $result;
@@ -172,7 +180,7 @@ final class InventoryHistoryRebuild
 
             return $result;
         }
-        $result['rows'] = $this->store($targets, $labels, $acc, $wacc, array_keys($service), $force);
+        $result['rows'] = $this->store($targets, $labels, $acc, $wacc, array_keys($service));
         $result['status'] = 'saved';
 
         return $result;
@@ -188,7 +196,7 @@ final class InventoryHistoryRebuild
      * Koszyki i magazyny jednej paczki towarów dla każdej etykiety (indeks 0 = szew, dalej wstecz).
      *
      * @param  array{lots: list<array<string, mixed>>, moves: list<array<string, mixed>>}  $history
-     * @param  array{before: list<array<string, mixed>>, days: list<array<string, mixed>>, standing?: list<array<string, mixed>>}  $sales
+     * @param  array{before: list<array<string, mixed>>, days: list<array<string, mixed>>}  $sales
      * @param  list<int>  $labelDays
      * @param  array<int, array<int, int>>  $cut
      * @param  array<string, int>  $service
@@ -226,18 +234,6 @@ final class InventoryHistoryRebuild
             unset($lot);
         }
         // sprzedaż: dni na oddział ('' = wszystkie magazyny, także dokument bez magazynu)
-        // dokument w buforze: sprzedaż każdego dnia od wystawienia (jak widzi go nocny odczyt — data przestawiana na dziś)
-        foreach ($sales['standing'] ?? [] as $s) {
-            if (! isset($items[$s['gid']])) {
-                continue;
-            }
-            $since = intdiv((int) $s['since'], 86400);
-            $loc = $s['warehouse_code'] !== null ? WarehouseLocations::of($s['warehouse_code']) : null;
-            foreach (array_filter(['', $loc], static fn ($l): bool => $l !== null) as $l) {
-                $prev = $items[$s['gid']]['standing'][$l] ?? null;
-                $items[$s['gid']]['standing'][$l] = $prev === null ? $since : min($prev, $since);
-            }
-        }
         foreach ([...$sales['before'], ...$sales['days']] as $s) {
             if (! isset($items[$s['gid']])) {
                 continue;
@@ -257,7 +253,7 @@ final class InventoryHistoryRebuild
     }
 
     /**
-     * @param  array{lots?: array<string, array<string, mixed>>, sales?: array<string, list<int>>, standing?: array<string, int>}  $item
+     * @param  array{lots?: array<string, array<string, mixed>>, sales?: array<string, list<int>>}  $item
      * @param  list<int>  $labelDays
      * @param  array<int, array<int, int>>  $cut
      * @param  array<string, int>  $service
@@ -365,10 +361,6 @@ final class InventoryHistoryRebuild
                     $salePos[$loc] = $p;
                     $sale = $list[$p] ?? null;
                 }
-                // dokument w buforze wystawiony przed tym dniem — nocny odczyt widział go jako sprzedaż z tego dnia
-                if (isset($item['standing'][$loc]) && $item['standing'][$loc] < $label) {
-                    $sale = $label;
-                }
                 $oldest = $c['rec'] ?? null;
                 $noSale = static fn (int $m): bool => $sale !== null ? $sale < $cut[$li][$m] : ($oldest === null || $oldest <= $cut[$li][$m]);
                 $flags = [
@@ -438,7 +430,7 @@ final class InventoryHistoryRebuild
      * @param  array<int, array<string, array{0: int, 1: float, 2: float}>>  $wacc
      * @param  list<string>  $serviceCodes
      */
-    private function store(array $targets, array $labels, array $acc, array $wacc, array $serviceCodes, bool $force): int
+    private function store(array $targets, array $labels, array $acc, array $wacc, array $serviceCodes): int
     {
         $index = array_flip($labels);
         $locations = app(InventorySnapshots::class)->locations();
@@ -480,11 +472,10 @@ final class InventoryHistoryRebuild
                     ];
                 }
             }
-            DB::transaction(function () use ($batch, $rows, $warehouses, $force): void {
-                if ($force) {
-                    DB::table(InventorySnapshots::TABLE)->whereIn('taken_on', $batch)->where('source', 'xl_history')->delete();
-                    DB::table(InventorySnapshots::WAREHOUSE_TABLE)->whereIn('taken_on', $batch)->where('source', 'xl_history')->delete();
-                }
+            DB::transaction(function () use ($batch, $rows, $warehouses): void {
+                // dni przed szwem: historia albo zapis nocny starszymi regułami — zastępowane w całości
+                DB::table(InventorySnapshots::TABLE)->whereIn('taken_on', $batch)->delete();
+                DB::table(InventorySnapshots::WAREHOUSE_TABLE)->whereIn('taken_on', $batch)->delete();
                 foreach (array_chunk($rows, 500) as $chunk) {
                     DB::table(InventorySnapshots::TABLE)->insert($chunk);
                 }
