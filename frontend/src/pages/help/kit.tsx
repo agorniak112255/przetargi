@@ -1,4 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Component, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { createRoot } from 'react-dom/client'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { AuthBridge, useAuth } from '../../auth'
 import { NavIcon, type NavIconName } from '../../components/NavIcon'
 
 /** Wspólne klocki samouczka (Pomoc): pokaz slajdów i atrapy ekranów aplikacji. */
@@ -79,11 +82,30 @@ export function AppFrame({ nav, children }: { nav: string; children: ReactNode }
 
 const MARK_CLASSES = ['rounded', 'ring-2', 'ring-blue-500', 'ring-offset-2']
 
+/** Element do obramowania: selektor CSS albo „text=Napis” (przycisk, odnośnik, nagłówek kolumny o dokładnie tym napisie). */
+function findMark(host: HTMLElement, mark: string): HTMLElement | null {
+  if (!mark.startsWith('text=')) return host.querySelector<HTMLElement>(mark)
+  const want = mark.slice(5).trim()
+  const candidates = host.querySelectorAll<HTMLElement>('button, a, th, label, summary, select, [role="tab"]')
+  return [...candidates].find((el) => (el.textContent ?? '').replace(/\s+/g, ' ').trim() === want) ?? null
+}
+
 /**
- * Prawdziwy ekran aplikacji (komponent strony z przykładowymi danymi) pomniejszony do szerokości slajdu.
- * width — szerokość, w jakiej ekran się układa (jak na laptopie); mark — selektor CSS elementu do obramowania.
+ * Prawdziwy ekran aplikacji pomniejszony do szerokości slajdu.
+ * width — szerokość, w jakiej ekran się układa (jak na laptopie); maxHeight — wysokość widoczna na slajdzie;
+ * mark — element do obramowania (patrz findMark), szukany także po dociągnięciu danych.
  */
-export function LiveScreen({ children, width = 1180, mark }: { children: ReactNode; width?: number; mark?: string }) {
+export function LiveScreen({
+  children,
+  width = 1180,
+  maxHeight,
+  mark,
+}: {
+  children: ReactNode
+  width?: number
+  maxHeight?: number
+  mark?: string
+}) {
   const box = useRef<HTMLDivElement>(null)
   const [zoom, setZoom] = useState(0.6)
   useLayoutEffect(() => {
@@ -96,15 +118,134 @@ export function LiveScreen({ children, width = 1180, mark }: { children: ReactNo
     return () => ro.disconnect()
   }, [width])
   useEffect(() => {
-    if (!mark || !box.current) return
-    const target = box.current.querySelector<HTMLElement>(mark)
-    if (!target) return
-    target.classList.add(...MARK_CLASSES)
-    return () => target.classList.remove(...MARK_CLASSES)
-  }, [mark, children])
+    const host = box.current
+    if (!mark || !host) return
+    let marked: HTMLElement | null = null
+    const apply = () => {
+      const target = findMark(host, mark)
+      if (target === marked) return
+      marked?.classList.remove(...MARK_CLASSES)
+      target?.classList.add(...MARK_CLASSES)
+      marked = target
+    }
+    apply()
+    const mo = new MutationObserver(apply)
+    mo.observe(host, { childList: true, subtree: true })
+    return () => {
+      mo.disconnect()
+      marked?.classList.remove(...MARK_CLASSES)
+    }
+  }, [mark])
   return (
-    <div ref={box} className="overflow-hidden">
+    <div ref={box} className="overflow-hidden" style={maxHeight ? { maxHeight } : undefined}>
       <div style={{ width, zoom }}>{children}</div>
+    </div>
+  )
+}
+
+class LiveBoundary extends Component<{ onError: () => void; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  componentDidCatch() {
+    this.props.onError()
+  }
+  render() {
+    return this.state.failed ? null : this.props.children
+  }
+}
+
+/**
+ * Prawdziwa strona aplikacji z AKTUALNYMI danymi zalogowanej osoby — osobne drzewo React z własnym adresem w pamięci
+ * (strona może zmieniać swój adres, nie ruszając adresu Pomocy), to samo logowanie. Mysz i klawiatura są wyłączone
+ * (LiveFrame: pointer-events-none + inert), więc żaden przycisk strony nie zadziała; strony przy wejściu tylko czytają
+ * dane. Bez uprawnienia albo po błędzie strony — fallback (rysunek poglądowy).
+ */
+export function LivePage({
+  nav,
+  path,
+  route,
+  page,
+  fallback,
+  allowed,
+  mark,
+  width = 1100,
+  maxHeight = 620,
+}: {
+  /** Pozycja menu atrapy (jak w AppFrame). */
+  nav: string
+  /** Adres strony, np. „/zapasy/rw-pw?widok=osoba”. */
+  path: string
+  /** Wzorzec trasy, gdy adres ma parametry (domyślnie ścieżka z path). */
+  route?: string
+  page: ReactNode
+  fallback: ReactNode
+  allowed: boolean
+  mark?: string
+  width?: number
+  maxHeight?: number
+}) {
+  const auth = useAuth()
+  const host = useRef<HTMLDivElement>(null)
+  // błąd zapamiętany dla adresu — ten sam LivePage na kolejnym slajdzie (inny adres) próbuje od nowa
+  const [failedPath, setFailedPath] = useState<string | null>(null)
+  const show = allowed && failedPath !== path
+  useEffect(() => {
+    const el = host.current
+    if (!show || !el) return
+    // Każde uruchomienie dostaje własny kontener: poprzedni korzeń zdejmujemy z opóźnieniem (niżej), więc w tym samym
+    // elemencie nie wolno od razu założyć nowego (zmiana slajdu na inny podgląd, podwójny efekt w trybie StrictMode).
+    const container = document.createElement('div')
+    el.appendChild(container)
+    const root = createRoot(container)
+    root.render(
+      <AuthBridge value={auth}>
+        <MemoryRouter initialEntries={[path]}>
+          <LiveBoundary onError={() => setFailedPath(path)}>
+            <Routes>
+              <Route path={route ?? path.split('?')[0]} element={page} />
+            </Routes>
+          </LiveBoundary>
+        </MemoryRouter>
+      </AuthBridge>,
+    )
+    // odmontowanie poza bieżącym renderem głównego drzewa (React nie pozwala zdjąć korzenia w trakcie renderu)
+    return () => {
+      setTimeout(() => {
+        root.unmount()
+        container.remove()
+      })
+    }
+    // page i auth celowo poza zależnościami: nowy obiekt przy każdym renderze Pomocy nie ma przeładowywać strony
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [show, path, route])
+  if (!show) return <>{fallback}</>
+  return (
+    <LiveFrame live label={nav}>
+      <LiveScreen width={width} maxHeight={maxHeight} mark={mark}>
+        <div ref={host} />
+      </LiveScreen>
+    </LiveFrame>
+  )
+}
+
+/**
+ * Ramka podglądu prawdziwego ekranu: bez rysowanego menu (prawdziwe menu aplikacji jest obok), na całą szerokość
+ * slajdu, kliknięcia wyłączone. live = dane z serwera; inaczej przykładowe.
+ */
+export function LiveFrame({ live, label, children }: { live: boolean; label: string; children: ReactNode }) {
+  return (
+    <div inert className="pointer-events-none overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-3 shadow-sm">
+      <p
+        className={`mb-2 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+          live ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
+        }`}
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${live ? 'bg-emerald-600' : 'bg-slate-400'}`} />
+        {label} · {live ? 'Twoje aktualne dane — podgląd, kliknięcia wyłączone' : 'przykładowe dane'}
+      </p>
+      {children}
     </div>
   )
 }

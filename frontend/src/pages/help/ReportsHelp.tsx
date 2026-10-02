@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react'
-import { AppFrame, Card, Mark, Slideshow, Th } from './kit'
+import { AppFrame, Card, LivePage, Mark, Slideshow, Th } from './kit'
+import { useAuth } from '../../auth'
+import { Reports } from '../Reports'
+import { can, canAny } from '../../lib/api'
 
 /** Samouczek „Raporty” — pięć zakładek (pages/Reports.tsx i pages/reports/*.tsx). */
 
@@ -96,6 +99,7 @@ function Kpis({ items }: { items: [string, string, string, string | null][] }) {
 }
 
 export function ReportsHelp() {
+  const { user } = useAuth()
   return (
     <Slideshow
       title="Raporty"
@@ -123,56 +127,64 @@ export function ReportsHelp() {
           click: 'W tabeli „Producenci” wpisz nazwę w „Szukaj producenta” albo kliknij nagłówek kolumny, żeby posortować (na przykład „Normy producenta”). „Pokaż wszystkich” rozwija listę ponad 25 największych.',
           tone: 'blue',
           screen: (
-            <AppFrame nav="Raporty">
-              <ReportHead active="Baza wiedzy" />
-              <Kpis
-                items={[
-                  ['Z opisem', '97%', '214 krótszych niż 120 znaków', 'bg-emerald-600'],
-                  ['Ze zdjęciem', '96%', '730 bez zdjęcia', 'bg-emerald-600'],
-                  ['Normy u producenta', '22%', 'normy w opisie: 61%', 'bg-red-600'],
-                  ['Z dokumentami', '48%', 'karty katalogowe, certyfikaty', 'bg-amber-500'],
-                ]}
-              />
-              <Card className="p-3">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="text-xs font-semibold">Producenci</h2>
-                  <Mark>
-                    <span className="inline-block w-40 rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-400">Szukaj producenta</span>
-                  </Mark>
-                </div>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Producent</Th>
-                      <Th>Kart</Th>
-                      <Th>Opis</Th>
-                      <Th>Zdjęcie</Th>
-                      <Th>
-                        <Mark>
-                          <span>Normy producenta ↓</span>
-                        </Mark>
-                      </Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2 font-medium">UVEX</td>
-                      <td className="p-2">1 864</td>
-                      <td className="p-2">99%</td>
-                      <td className="p-2">98%</td>
-                      <td className="p-2">71%</td>
-                    </tr>
-                    <tr>
-                      <td className="p-2 font-medium">Portwest</td>
-                      <td className="p-2">1 120</td>
-                      <td className="p-2">91%</td>
-                      <td className="p-2">97%</td>
-                      <td className="p-2 text-red-700">4%</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </Card>
-            </AppFrame>
+            <LivePage
+              nav="Raporty"
+              path="/reports?raport=catalog"
+              page={<Reports />}
+              allowed={can(user, 'reports.view') && can(user, 'products.view')}
+              fallback={
+              <AppFrame nav="Raporty">
+                <ReportHead active="Baza wiedzy" />
+                <Kpis
+                  items={[
+                    ['Z opisem', '97%', '214 krótszych niż 120 znaków', 'bg-emerald-600'],
+                    ['Ze zdjęciem', '96%', '730 bez zdjęcia', 'bg-emerald-600'],
+                    ['Normy u producenta', '22%', 'normy w opisie: 61%', 'bg-red-600'],
+                    ['Z dokumentami', '48%', 'karty katalogowe, certyfikaty', 'bg-amber-500'],
+                  ]}
+                />
+                <Card className="p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-xs font-semibold">Producenci</h2>
+                    <Mark>
+                      <span className="inline-block w-40 rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-400">Szukaj producenta</span>
+                    </Mark>
+                  </div>
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <Th>Producent</Th>
+                        <Th>Kart</Th>
+                        <Th>Opis</Th>
+                        <Th>Zdjęcie</Th>
+                        <Th>
+                          <Mark>
+                            <span>Normy producenta ↓</span>
+                          </Mark>
+                        </Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b">
+                        <td className="p-2 font-medium">UVEX</td>
+                        <td className="p-2">1 864</td>
+                        <td className="p-2">99%</td>
+                        <td className="p-2">98%</td>
+                        <td className="p-2">71%</td>
+                      </tr>
+                      <tr>
+                        <td className="p-2 font-medium">Portwest</td>
+                        <td className="p-2">1 120</td>
+                        <td className="p-2">91%</td>
+                        <td className="p-2">97%</td>
+                        <td className="p-2 text-red-700">4%</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </Card>
+              </AppFrame>
+              }
+            />
           ),
         },
         {
@@ -181,64 +193,72 @@ export function ReportsHelp() {
           click: 'Przeczytaj stan w kolumnie „Ostatni przebieg”. Nagłówek kolumny sortuje, „Pokaż wszystkie konta” rozwija listę.',
           tone: 'amber',
           screen: (
-            <AppFrame nav="Raporty">
-              <ReportHead active="Źródła danych" />
-              <Kpis
-                items={[
-                  ['Konta B2B', '23', '21 z synchronizacją według harmonogramu', null],
-                  ['Ceny aktualne', '19', 'ostatni udany przebieg w terminie', null],
-                  ['Ceny przeterminowane', '2', 'udany przebieg za dawno', null],
-                  ['Ostatni przebieg z błędem', '1', 'błąd albo przerwany', null],
-                ]}
-              />
-              <Card className="p-3">
-                <h2 className="mb-2 text-xs font-semibold">Konta B2B dostawców</h2>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Dostawca</Th>
-                      <Th>Ostatni przebieg</Th>
-                      <Th>Ostatni udany</Th>
-                      <Th>Kart</Th>
-                      <Th>Nieudane / 30 dni</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b align-top">
-                      <td className="p-2">
-                        <b className="font-medium">Procera</b>
-                        <span className="block text-[10px] text-slate-500">synchronizacja codziennie</span>
-                      </td>
-                      <td className="p-2">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[10px] text-red-800">
-                          <i className="h-1.5 w-1.5 rounded-full bg-red-600" />
-                          Błąd
-                        </span>
-                        <span className="ml-1 text-[10px] text-red-700">3× z rzędu</span>
-                      </td>
-                      <td className="p-2 font-semibold text-amber-800">4 dni temu</td>
-                      <td className="p-2">640</td>
-                      <td className="p-2 text-red-700">3 / 30</td>
-                    </tr>
-                    <tr className="align-top">
-                      <td className="p-2">
-                        <b className="font-medium">UVEX</b>
-                        <span className="block text-[10px] text-slate-500">synchronizacja co tydzień</span>
-                      </td>
-                      <td className="p-2">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-800">
-                          <i className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
-                          Udany
-                        </span>
-                      </td>
-                      <td className="p-2">2 dni temu</td>
-                      <td className="p-2">1 864</td>
-                      <td className="p-2 text-slate-400">0 / 4</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </Card>
-            </AppFrame>
+            <LivePage
+              nav="Raporty"
+              path="/reports?raport=sources"
+              page={<Reports />}
+              allowed={can(user, 'reports.view') && canAny(user, ['price_lists.view', 'b2b_accounts.view'])}
+              fallback={
+              <AppFrame nav="Raporty">
+                <ReportHead active="Źródła danych" />
+                <Kpis
+                  items={[
+                    ['Konta B2B', '23', '21 z synchronizacją według harmonogramu', null],
+                    ['Ceny aktualne', '19', 'ostatni udany przebieg w terminie', null],
+                    ['Ceny przeterminowane', '2', 'udany przebieg za dawno', null],
+                    ['Ostatni przebieg z błędem', '1', 'błąd albo przerwany', null],
+                  ]}
+                />
+                <Card className="p-3">
+                  <h2 className="mb-2 text-xs font-semibold">Konta B2B dostawców</h2>
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <Th>Dostawca</Th>
+                        <Th>Ostatni przebieg</Th>
+                        <Th>Ostatni udany</Th>
+                        <Th>Kart</Th>
+                        <Th>Nieudane / 30 dni</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b align-top">
+                        <td className="p-2">
+                          <b className="font-medium">Procera</b>
+                          <span className="block text-[10px] text-slate-500">synchronizacja codziennie</span>
+                        </td>
+                        <td className="p-2">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[10px] text-red-800">
+                            <i className="h-1.5 w-1.5 rounded-full bg-red-600" />
+                            Błąd
+                          </span>
+                          <span className="ml-1 text-[10px] text-red-700">3× z rzędu</span>
+                        </td>
+                        <td className="p-2 font-semibold text-amber-800">4 dni temu</td>
+                        <td className="p-2">640</td>
+                        <td className="p-2 text-red-700">3 / 30</td>
+                      </tr>
+                      <tr className="align-top">
+                        <td className="p-2">
+                          <b className="font-medium">UVEX</b>
+                          <span className="block text-[10px] text-slate-500">synchronizacja co tydzień</span>
+                        </td>
+                        <td className="p-2">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-800">
+                            <i className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
+                            Udany
+                          </span>
+                        </td>
+                        <td className="p-2">2 dni temu</td>
+                        <td className="p-2">1 864</td>
+                        <td className="p-2 text-slate-400">0 / 4</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </Card>
+              </AppFrame>
+              }
+            />
           ),
         },
         {
@@ -247,46 +267,54 @@ export function ReportsHelp() {
           click: 'Okres u góry: „7 dni”, „30 dni” albo „90 dni”. Najedź na słupek wykresu, żeby zobaczyć liczby; nazwa wyrobu na liście otwiera jego kartę.',
           tone: 'blue',
           screen: (
-            <AppFrame nav="Raporty">
-              <ReportHead active="Ruchy cen" toolbar={<Period options={['7 dni', '30 dni', '90 dni']} value="30 dni" mark />} />
-              <Kpis
-                items={[
-                  ['Zmiany cen', '1 284', '612 kart · 14 źródeł', null],
-                  ['Podwyżki ≥ 1%', '318', 'wszystkich podwyżek: 702', null],
-                  ['Obniżki ≥ 1%', '96', 'wszystkich obniżek: 411', null],
-                  ['Typowa zmiana zakupu', '+3,2%', 'mediana', null],
-                ]}
-              />
-              <Card className="p-3">
-                <h2 className="mb-2 text-xs font-semibold">Podwyżki i obniżki — tydzień po tygodniu</h2>
-                <svg viewBox="0 0 260 80" className="block w-full max-w-md" role="img" aria-label="Przykładowy wykres podwyżek i obniżek">
-                  <line x1="0" x2="260" y1="44" y2="44" className="stroke-slate-300" strokeWidth="1" />
-                  {(
-                    [
-                      [20, 14, 6],
-                      [80, 26, 10],
-                      [140, 38, 5],
-                      [200, 20, 16],
-                    ] as const
-                  ).map(([x, up, down]) => (
-                    <g key={x}>
-                      <rect x={x} y={44 - up} width="26" height={up} rx="2" className="fill-amber-500" />
-                      <rect x={x} y="45" width="26" height={down} rx="2" className="fill-sky-600" />
-                    </g>
-                  ))}
-                </svg>
-                <div className="mt-1 flex gap-3 text-[10px] text-slate-500">
-                  <span className="inline-flex items-center gap-1">
-                    <i className="h-2 w-2 rounded-sm bg-amber-500" />
-                    Podwyżki
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <i className="h-2 w-2 rounded-sm bg-sky-600" />
-                    Obniżki
-                  </span>
-                </div>
-              </Card>
-            </AppFrame>
+            <LivePage
+              nav="Raporty"
+              path="/reports?raport=prices"
+              page={<Reports />}
+              allowed={can(user, 'reports.view') && can(user, 'products.view')}
+              fallback={
+              <AppFrame nav="Raporty">
+                <ReportHead active="Ruchy cen" toolbar={<Period options={['7 dni', '30 dni', '90 dni']} value="30 dni" mark />} />
+                <Kpis
+                  items={[
+                    ['Zmiany cen', '1 284', '612 kart · 14 źródeł', null],
+                    ['Podwyżki ≥ 1%', '318', 'wszystkich podwyżek: 702', null],
+                    ['Obniżki ≥ 1%', '96', 'wszystkich obniżek: 411', null],
+                    ['Typowa zmiana zakupu', '+3,2%', 'mediana', null],
+                  ]}
+                />
+                <Card className="p-3">
+                  <h2 className="mb-2 text-xs font-semibold">Podwyżki i obniżki — tydzień po tygodniu</h2>
+                  <svg viewBox="0 0 260 80" className="block w-full max-w-md" role="img" aria-label="Przykładowy wykres podwyżek i obniżek">
+                    <line x1="0" x2="260" y1="44" y2="44" className="stroke-slate-300" strokeWidth="1" />
+                    {(
+                      [
+                        [20, 14, 6],
+                        [80, 26, 10],
+                        [140, 38, 5],
+                        [200, 20, 16],
+                      ] as const
+                    ).map(([x, up, down]) => (
+                      <g key={x}>
+                        <rect x={x} y={44 - up} width="26" height={up} rx="2" className="fill-amber-500" />
+                        <rect x={x} y="45" width="26" height={down} rx="2" className="fill-sky-600" />
+                      </g>
+                    ))}
+                  </svg>
+                  <div className="mt-1 flex gap-3 text-[10px] text-slate-500">
+                    <span className="inline-flex items-center gap-1">
+                      <i className="h-2 w-2 rounded-sm bg-amber-500" />
+                      Podwyżki
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <i className="h-2 w-2 rounded-sm bg-sky-600" />
+                      Obniżki
+                    </span>
+                  </div>
+                </Card>
+              </AppFrame>
+              }
+            />
           ),
         },
         {
@@ -295,21 +323,29 @@ export function ReportsHelp() {
           click: 'Okres u góry: „30 dni”, „90 dni” albo „180 dni”.',
           tone: 'blue',
           screen: (
-            <AppFrame nav="Raporty">
-              <ReportHead active="Sprzedaż i oferty" toolbar={<Period options={['30 dni', '90 dni', '180 dni']} value="90 dni" mark />} />
-              <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                Zapytania klientów
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-normal text-slate-600">cały zespół</span>
-              </h2>
-              <Kpis
-                items={[
-                  ['Zapytania', '342', '+ 18 kopii u innych osób', null],
-                  ['Odpowiedziane', '88%', '301 z 342', 'bg-emerald-600'],
-                  ['W ciągu dnia roboczego', '74%', 'odpowiedzi od daty maila klienta', 'bg-amber-500'],
-                  ['Czekają na odpowiedź', '41', '9 dłużej niż dzień roboczy', null],
-                ]}
-              />
-            </AppFrame>
+            <LivePage
+              nav="Raporty"
+              path="/reports?raport=sales"
+              page={<Reports />}
+              allowed={can(user, 'reports.view')}
+              fallback={
+              <AppFrame nav="Raporty">
+                <ReportHead active="Sprzedaż i oferty" toolbar={<Period options={['30 dni', '90 dni', '180 dni']} value="90 dni" mark />} />
+                <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+                  Zapytania klientów
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-normal text-slate-600">cały zespół</span>
+                </h2>
+                <Kpis
+                  items={[
+                    ['Zapytania', '342', '+ 18 kopii u innych osób', null],
+                    ['Odpowiedziane', '88%', '301 z 342', 'bg-emerald-600'],
+                    ['W ciągu dnia roboczego', '74%', 'odpowiedzi od daty maila klienta', 'bg-amber-500'],
+                    ['Czekają na odpowiedź', '41', '9 dłużej niż dzień roboczy', null],
+                  ]}
+                />
+              </AppFrame>
+              }
+            />
           ),
         },
         {
@@ -355,51 +391,59 @@ export function ReportsHelp() {
           click: 'Nic — przeczytaj kafelki i tabele. „Pokaż wszystkich operatorów” rozwija listę; nazwa towaru z kartą w katalogu otwiera tę kartę.',
           tone: 'slate',
           screen: (
-            <AppFrame nav="Raporty">
-              <ReportHead active="Klienci ERP" />
-              <Kpis
-                items={[
-                  ['Aktywni do 6 miesięcy', '612', 'ostatni zakup w półroczu', null],
-                  ['Uśpieni 6–12 miesięcy', '148', 'warto przypomnieć się', null],
-                  ['Odchodzący 12–24 miesięcy', '203', 'ostatni zakup ponad rok temu', null],
-                  ['Zasięg mailowy', '64%', '487 aktywnych z adresem e-mail', 'bg-emerald-600'],
-                ]}
-              />
-              <Card className="p-3">
-                <h2 className="mb-2 text-xs font-semibold">Klienci według operatora ERP XL</h2>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Operator</Th>
-                      <Th>Aktywni / uśpieni / odchodzący</Th>
-                      <Th>Uśpieni</Th>
-                      <Th>Z e-mailem</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(
-                      [
-                        ['Artur', 60, 25, 15, '38', '142'],
-                        ['Nowak', 45, 30, 25, '51', '96'],
-                      ] as const
-                    ).map(([name, a, d, l, dormant, mail]) => (
-                      <tr key={name} className="border-b last:border-0">
-                        <td className="p-2 font-medium">{name}</td>
-                        <td className="p-2">
-                          <span className="flex h-2 w-32 gap-0.5 overflow-hidden rounded-full bg-slate-100">
-                            <span className="h-full bg-emerald-600" style={{ width: `${a}%` }} />
-                            <span className="h-full bg-amber-500" style={{ width: `${d}%` }} />
-                            <span className="h-full bg-red-600" style={{ width: `${l}%` }} />
-                          </span>
-                        </td>
-                        <td className="p-2">{dormant}</td>
-                        <td className="p-2">{mail}</td>
+            <LivePage
+              nav="Raporty"
+              path="/reports?raport=customers"
+              page={<Reports />}
+              allowed={can(user, 'reports.view') && can(user, 'campaigns.use')}
+              fallback={
+              <AppFrame nav="Raporty">
+                <ReportHead active="Klienci ERP" />
+                <Kpis
+                  items={[
+                    ['Aktywni do 6 miesięcy', '612', 'ostatni zakup w półroczu', null],
+                    ['Uśpieni 6–12 miesięcy', '148', 'warto przypomnieć się', null],
+                    ['Odchodzący 12–24 miesięcy', '203', 'ostatni zakup ponad rok temu', null],
+                    ['Zasięg mailowy', '64%', '487 aktywnych z adresem e-mail', 'bg-emerald-600'],
+                  ]}
+                />
+                <Card className="p-3">
+                  <h2 className="mb-2 text-xs font-semibold">Klienci według operatora ERP XL</h2>
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <Th>Operator</Th>
+                        <Th>Aktywni / uśpieni / odchodzący</Th>
+                        <Th>Uśpieni</Th>
+                        <Th>Z e-mailem</Th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </Card>
-            </AppFrame>
+                    </thead>
+                    <tbody>
+                      {(
+                        [
+                          ['Artur', 60, 25, 15, '38', '142'],
+                          ['Nowak', 45, 30, 25, '51', '96'],
+                        ] as const
+                      ).map(([name, a, d, l, dormant, mail]) => (
+                        <tr key={name} className="border-b last:border-0">
+                          <td className="p-2 font-medium">{name}</td>
+                          <td className="p-2">
+                            <span className="flex h-2 w-32 gap-0.5 overflow-hidden rounded-full bg-slate-100">
+                              <span className="h-full bg-emerald-600" style={{ width: `${a}%` }} />
+                              <span className="h-full bg-amber-500" style={{ width: `${d}%` }} />
+                              <span className="h-full bg-red-600" style={{ width: `${l}%` }} />
+                            </span>
+                          </td>
+                          <td className="p-2">{dormant}</td>
+                          <td className="p-2">{mail}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Card>
+              </AppFrame>
+              }
+            />
           ),
         },
       ]}

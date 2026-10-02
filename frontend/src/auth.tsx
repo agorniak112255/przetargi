@@ -78,6 +78,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 }
 
+/** Przekazuje istniejące logowanie do osobnego drzewa React (podgląd prawdziwej strony w Pomocy) bez ponownego /me. */
+export function AuthBridge({ value, children }: { value: AuthCtx; children: ReactNode }) {
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>
+}
+
 export function useAuth() {
   const ctx = useContext(Ctx)
   if (!ctx) throw new Error('useAuth outside provider')

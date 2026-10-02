@@ -1,5 +1,9 @@
 import type { ReactNode } from 'react'
-import { AppFrame, Card, Mark, Slideshow, Th } from './kit'
+import { AppFrame, Card, LivePage, Mark, Slideshow, Th } from './kit'
+import { useAuth } from '../../auth'
+import { Inventory } from '../Inventory'
+import { InventoryRwPw } from '../InventoryRwPw'
+import { can, canAny } from '../../lib/api'
 
 /**
  * Samouczek modułu Zapasy: zakładka „Zalegające” (pages/Inventory.tsx) i „RW → PW” (pages/InventoryRwPw.tsx).
@@ -158,6 +162,7 @@ function DocMock({ number, date, qty, value, feature, note }: {
 }
 
 export function InventoryHelp() {
+  const { user } = useAuth()
   return (
     <Slideshow
       title="Zapasy"
@@ -168,25 +173,33 @@ export function InventoryHelp() {
           click: 'Menu „Zapasy” — otwiera się zakładka „Zalegające”.',
           tone: 'slate',
           screen: (
-            <AppFrame nav="Zapasy">
-              <InventoryTabsMock active="Zalegające" />
-              <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-                <div>
-                  <h1 className="text-xl font-semibold">Zapasy</h1>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Łącznie <span className="font-medium text-slate-700">1 284</span> · wyświetlono 1–50 · 50/stronę · bez
-                    sprzedaży od 02.04.2026 · magazyny handlowe
-                  </p>
+            <LivePage
+              nav="Zapasy"
+              path="/zapasy"
+              page={<Inventory />}
+              allowed={canAny(user, ['inventory.view', 'campaigns.use'])}
+              fallback={
+              <AppFrame nav="Zapasy">
+                <InventoryTabsMock active="Zalegające" />
+                <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <h1 className="text-xl font-semibold">Zapasy</h1>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Łącznie <span className="font-medium text-slate-700">1 284</span> · wyświetlono 1–50 · 50/stronę · bez
+                      sprzedaży od 02.04.2026 · magazyny handlowe
+                    </p>
+                  </div>
+                  <p className="text-[11px] text-slate-500">Odczyt z XL: 02.10.2026 02:14 (raz na dobę o 2:00)</p>
                 </div>
-                <p className="text-[11px] text-slate-500">Odczyt z XL: 02.10.2026 02:14 (raz na dobę o 2:00)</p>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                <Tile number="1 284" label="Pozycje" hint="towary ze stanem bez sprzedaży od progu" />
-                <Tile number="412 380,55 zł" label="Wartość zapasu" hint="netto, ilość × cena zakupu partii na stanie" amber />
-                <Tile number="317" label="W tym bez karty" hint="towar XL bez karty w katalogu" />
-                <Tile number="96" label="Nigdy niesprzedane" hint="brak sprzedaży w całej historii XL" />
-              </div>
-            </AppFrame>
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  <Tile number="1 284" label="Pozycje" hint="towary ze stanem bez sprzedaży od progu" />
+                  <Tile number="412 380,55 zł" label="Wartość zapasu" hint="netto, ilość × cena zakupu partii na stanie" amber />
+                  <Tile number="317" label="W tym bez karty" hint="towar XL bez karty w katalogu" />
+                  <Tile number="96" label="Nigdy niesprzedane" hint="brak sprzedaży w całej historii XL" />
+                </div>
+              </AppFrame>
+              }
+            />
           ),
         },
         {
@@ -516,69 +529,77 @@ export function InventoryHelp() {
           click: 'Sprawdź wiersz; kliknięcie osoby w kolumnie „Kto” pokazuje wszystkie pary tej osoby.',
           tone: 'amber',
           screen: (
-            <AppFrame nav="Zapasy">
-              <InventoryTabsMock active="RW → PW" />
-              <RwPwHeader />
-              <Card>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Towar (kod XL)</Th>
-                      <Th>Kto</Th>
-                      <Th>RW</Th>
-                      <Th>PW</Th>
-                      <Th>Partia na RW</Th>
-                      <Th>Uwagi</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b align-top">
-                      <ItemName code="BPÓŁ41207" name="Półbuty ochronne S3" />
-                      <td className="whitespace-nowrap p-2">
-                        <div className="font-semibold text-slate-900">Nowak</div>
-                        <div className="text-[11px] text-slate-500">RW i PW</div>
-                      </td>
-                      <DocMock number="RW-112/26" date="12.09.2026" qty="18 para" value="2131,20 zł" feature="41" />
-                      <DocMock number="PW-87/26" date="12.09.2026" qty="18 para" value="2131,20 zł" feature="41" />
-                      <td className="whitespace-nowrap p-2">
-                        <div className="text-sm font-semibold tabular-nums text-amber-800">21 mies.</div>
-                        <div className="tabular-nums text-slate-600">przyjęta 18.11.2024</div>
-                      </td>
-                      <td className="p-2">
-                        <span className="whitespace-nowrap rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
-                          ta sama wartość
-                        </span>
-                      </td>
-                    </tr>
-                    <tr className="border-b bg-slate-100/60 align-top">
-                      <ItemName code="BPÓŁ41207" name="Półbuty ochronne S3" />
-                      <td className="whitespace-nowrap p-2">
-                        <div className="font-semibold text-slate-900">Artur</div>
-                        <div className="text-[11px] text-slate-500">RW i PW</div>
-                      </td>
-                      <DocMock
-                        number="RW-98/26"
-                        date="03.06.2026"
-                        qty="4 para"
-                        value="473,60 zł"
-                        feature="38"
-                        note="ZAMIANA ROZMIARÓW"
-                      />
-                      <DocMock number="PW-71/26" date="03.06.2026" qty="4 para" value="473,60 zł" feature="39" />
-                      <td className="whitespace-nowrap p-2">
-                        <div className="text-sm font-semibold tabular-nums text-amber-800">18 mies.</div>
-                        <div className="tabular-nums text-slate-600">przyjęta 18.11.2024</div>
-                      </td>
-                      <td className="p-2">
-                        <span className="whitespace-nowrap rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
-                          zmiana cechy: <span className="font-mono">38</span> → <span className="font-mono">39</span>
-                        </span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </Card>
-            </AppFrame>
+            <LivePage
+              nav="Zapasy"
+              path="/zapasy/rw-pw"
+              page={<InventoryRwPw />}
+              allowed={can(user, 'inventory.view')}
+              fallback={
+              <AppFrame nav="Zapasy">
+                <InventoryTabsMock active="RW → PW" />
+                <RwPwHeader />
+                <Card>
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <Th>Towar (kod XL)</Th>
+                        <Th>Kto</Th>
+                        <Th>RW</Th>
+                        <Th>PW</Th>
+                        <Th>Partia na RW</Th>
+                        <Th>Uwagi</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b align-top">
+                        <ItemName code="BPÓŁ41207" name="Półbuty ochronne S3" />
+                        <td className="whitespace-nowrap p-2">
+                          <div className="font-semibold text-slate-900">Nowak</div>
+                          <div className="text-[11px] text-slate-500">RW i PW</div>
+                        </td>
+                        <DocMock number="RW-112/26" date="12.09.2026" qty="18 para" value="2131,20 zł" feature="41" />
+                        <DocMock number="PW-87/26" date="12.09.2026" qty="18 para" value="2131,20 zł" feature="41" />
+                        <td className="whitespace-nowrap p-2">
+                          <div className="text-sm font-semibold tabular-nums text-amber-800">21 mies.</div>
+                          <div className="tabular-nums text-slate-600">przyjęta 18.11.2024</div>
+                        </td>
+                        <td className="p-2">
+                          <span className="whitespace-nowrap rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
+                            ta sama wartość
+                          </span>
+                        </td>
+                      </tr>
+                      <tr className="border-b bg-slate-100/60 align-top">
+                        <ItemName code="BPÓŁ41207" name="Półbuty ochronne S3" />
+                        <td className="whitespace-nowrap p-2">
+                          <div className="font-semibold text-slate-900">Artur</div>
+                          <div className="text-[11px] text-slate-500">RW i PW</div>
+                        </td>
+                        <DocMock
+                          number="RW-98/26"
+                          date="03.06.2026"
+                          qty="4 para"
+                          value="473,60 zł"
+                          feature="38"
+                          note="ZAMIANA ROZMIARÓW"
+                        />
+                        <DocMock number="PW-71/26" date="03.06.2026" qty="4 para" value="473,60 zł" feature="39" />
+                        <td className="whitespace-nowrap p-2">
+                          <div className="text-sm font-semibold tabular-nums text-amber-800">18 mies.</div>
+                          <div className="tabular-nums text-slate-600">przyjęta 18.11.2024</div>
+                        </td>
+                        <td className="p-2">
+                          <span className="whitespace-nowrap rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">
+                            zmiana cechy: <span className="font-mono">38</span> → <span className="font-mono">39</span>
+                          </span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </Card>
+              </AppFrame>
+              }
+            />
           ),
         },
         {

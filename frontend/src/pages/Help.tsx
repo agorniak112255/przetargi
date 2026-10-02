@@ -1,12 +1,19 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { appHref } from '../lib/api'
+import { appHref, can, canAny } from '../lib/api'
 import { BoardReportHelp } from './help/BoardReportHelp'
 import { CampaignsHelp } from './help/CampaignsHelp'
 import { CardMatchesHelp } from './help/CardMatchesHelp'
 import { DashboardHelp } from './help/DashboardHelp'
 import { InventoryHelp } from './help/InventoryHelp'
-import { AppFrame, Btn, Card, Field, Mark, Slideshow, Th } from './help/kit'
+import { AppFrame, Btn, Card, Field, LivePage, Mark, Slideshow, Th } from './help/kit'
 import { ReportsHelp } from './help/ReportsHelp'
+import { SubstitutesHelp } from './help/SubstitutesHelp'
+import { useAuth } from '../auth'
+import { Clients } from './Clients'
+import { Inquiries } from './Inquiries'
+import { PriceLists } from './PriceLists'
+import { Products } from './Products'
+import { Tenders } from './Tenders'
 
 const modules = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -386,6 +393,7 @@ function TenderListTable({ warn }: { warn?: boolean }) {
 }
 
 function TendersHelp() {
+  const { user } = useAuth()
   return (
     <Slideshow
       title="Przetargi"
@@ -396,20 +404,29 @@ function TendersHelp() {
           click: 'Niebieski przycisk „+ Nowy przetarg” po prawej.',
           tone: 'blue',
           screen: (
-            <AppFrame nav="Przetargi">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <h1 className="text-xl font-semibold">Przetargi</h1>
-                <div className="flex flex-wrap items-center gap-2">
-                  <select className="rounded border border-slate-300 px-2 py-1.5 text-xs">
-                    <option>Wszystkie przetargi</option>
-                  </select>
-                  <Mark>
-                    <Btn label="+ Nowy przetarg" />
-                  </Mark>
+            <LivePage
+              nav="Przetargi"
+              path="/tenders"
+              page={<Tenders />}
+              allowed={canAny(user, ['tenders.view_own', 'tenders.view_all'])}
+              mark="text=+ Nowy przetarg"
+              fallback={
+              <AppFrame nav="Przetargi">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <h1 className="text-xl font-semibold">Przetargi</h1>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select className="rounded border border-slate-300 px-2 py-1.5 text-xs">
+                      <option>Wszystkie przetargi</option>
+                    </select>
+                    <Mark>
+                      <Btn label="+ Nowy przetarg" />
+                    </Mark>
+                  </div>
                 </div>
-              </div>
-              <TenderListTable />
-            </AppFrame>
+                <TenderListTable />
+              </AppFrame>
+              }
+            />
           ),
         },
         {
@@ -879,6 +896,7 @@ function TendersHelp() {
 }
 
 function ProductsHelp() {
+  const { user } = useAuth()
   return (
     <Slideshow
       title="Produkty"
@@ -889,52 +907,60 @@ function ProductsHelp() {
           click: 'Menu „Produkty”, potem pole „Szukaj w katalogu” albo przycisk Szukaj.',
           tone: 'slate',
           screen: (
-            <AppFrame nav="Produkty">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <h1 className="text-xl font-semibold">Produkty</h1>
-                <div className="flex flex-wrap gap-2">
-                  <select className="rounded border border-slate-300 px-3 py-2 text-sm">
-                    <option>Wszyscy producenci</option>
-                  </select>
-                  <Mark>
-                    <div className="flex overflow-hidden rounded-lg border-2 border-slate-400 bg-white">
-                      <input
-                        readOnly
-                        className="w-52 border-0 px-3 py-2 text-sm outline-none"
-                        placeholder="Kod, kod XL, nazwa lub producent…"
-                      />
-                      <span className="bg-slate-800 px-3 py-2 text-sm text-white">Szukaj</span>
-                    </div>
-                  </Mark>
+            <LivePage
+              nav="Produkty"
+              path="/products"
+              page={<Products />}
+              allowed={can(user, 'products.view')}
+              fallback={
+              <AppFrame nav="Produkty">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <h1 className="text-xl font-semibold">Produkty</h1>
+                  <div className="flex flex-wrap gap-2">
+                    <select className="rounded border border-slate-300 px-3 py-2 text-sm">
+                      <option>Wszyscy producenci</option>
+                    </select>
+                    <Mark>
+                      <div className="flex overflow-hidden rounded-lg border-2 border-slate-400 bg-white">
+                        <input
+                          readOnly
+                          className="w-52 border-0 px-3 py-2 text-sm outline-none"
+                          placeholder="Kod, kod XL, nazwa lub producent…"
+                        />
+                        <span className="bg-slate-800 px-3 py-2 text-sm text-white">Szukaj</span>
+                      </div>
+                    </Mark>
+                  </div>
                 </div>
-              </div>
-              <Card>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>SKU</Th>
-                      <Th>Nazwa</Th>
-                      <Th>Producent</Th>
-                      <Th>Cena</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2 font-mono">ARĘKGLOMJ713</td>
-                      <td className="p-2">Lebon POWERCUT</td>
-                      <td className="p-2">Lebon</td>
-                      <td className="p-2">12,40 zł</td>
-                    </tr>
-                    <tr className="border-b">
-                      <td className="p-2 font-mono">UVX-UNIDUR</td>
-                      <td className="p-2">uvex Unidur</td>
-                      <td className="p-2">uvex</td>
-                      <td className="p-2">18,90 zł</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </Card>
-            </AppFrame>
+                <Card>
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <Th>SKU</Th>
+                        <Th>Nazwa</Th>
+                        <Th>Producent</Th>
+                        <Th>Cena</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b">
+                        <td className="p-2 font-mono">ARĘKGLOMJ713</td>
+                        <td className="p-2">Lebon POWERCUT</td>
+                        <td className="p-2">Lebon</td>
+                        <td className="p-2">12,40 zł</td>
+                      </tr>
+                      <tr className="border-b">
+                        <td className="p-2 font-mono">UVX-UNIDUR</td>
+                        <td className="p-2">uvex Unidur</td>
+                        <td className="p-2">uvex</td>
+                        <td className="p-2">18,90 zł</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </Card>
+              </AppFrame>
+              }
+            />
           ),
         },
         {
@@ -1059,6 +1085,7 @@ function ProductsHelp() {
 }
 
 function PriceListsHelp() {
+  const { user } = useAuth()
   return (
     <Slideshow
       title="Cenniki"
@@ -1069,20 +1096,28 @@ function PriceListsHelp() {
           click: 'Menu „Cenniki” — karta „Import cennika → baza produktów”.',
           tone: 'slate',
           screen: (
-            <AppFrame nav="Cenniki">
-              <h1 className="mb-2 text-xl font-semibold">Cenniki producentów</h1>
-              <p className="mb-4 text-xs text-slate-500">
-                Importujemy: <strong>nazwa</strong>, <strong>symbol/kod</strong>, <strong>cena</strong>…
-              </p>
-              <Card className="text-sm">
-                <h2 className="mb-3 font-semibold">Import cennika → baza produktów</h2>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <Field label="Producent" placeholder="z nazwy / treści pliku" />
-                  <Field label="Wersja cennika" placeholder="z nazwy pliku" />
-                  <Field label="Kategoria domyślna" placeholder="opcjonalnie" />
-                </div>
-              </Card>
-            </AppFrame>
+            <LivePage
+              nav="Cenniki"
+              path="/price-lists"
+              page={<PriceLists />}
+              allowed={can(user, 'price_lists.view')}
+              fallback={
+              <AppFrame nav="Cenniki">
+                <h1 className="mb-2 text-xl font-semibold">Cenniki producentów</h1>
+                <p className="mb-4 text-xs text-slate-500">
+                  Importujemy: <strong>nazwa</strong>, <strong>symbol/kod</strong>, <strong>cena</strong>…
+                </p>
+                <Card className="text-sm">
+                  <h2 className="mb-3 font-semibold">Import cennika → baza produktów</h2>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <Field label="Producent" placeholder="z nazwy / treści pliku" />
+                    <Field label="Wersja cennika" placeholder="z nazwy pliku" />
+                    <Field label="Kategoria domyślna" placeholder="opcjonalnie" />
+                  </div>
+                </Card>
+              </AppFrame>
+              }
+            />
           ),
         },
         {
@@ -1280,210 +1315,8 @@ function PriceListsHelp() {
   )
 }
 
-function SubstitutesHelp() {
-  return (
-    <Slideshow
-      title="Zamienniki"
-      slides={[
-        {
-          action: 'Przegląd par zamienników',
-          does: 'Każda karta to produkt główny, a pod nim zamienniki (tańszy / równoważny / premium) ze statusem akceptacji.',
-          click: 'Menu „Zamienniki”.',
-          tone: 'slate',
-          screen: (
-            <AppFrame nav="Zamienniki">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <h1 className="text-xl font-semibold">Zamienniki</h1>
-                  <p className="mt-1 text-xs text-slate-500">Relacja produkt główny → zamienniki · 12 pozycji</p>
-                </div>
-                <Btn label="+ Dodaj zamiennik" />
-              </div>
-              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                <div className="border-b bg-slate-50 px-4 py-3 text-sm font-semibold">
-                  <span className="mr-1 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-white">
-                    PRODUKT GŁÓWNY
-                  </span>
-                  Lebon POWERCUT · ARĘKGLOMJ713
-                </div>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50/80">
-                      <Th>Zamiennik</Th>
-                      <Th>Typ</Th>
-                      <Th>AI</Th>
-                      <Th>Status</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2">POWERFIT (ARĘKGLOMJ714)</td>
-                      <td className="p-2">tańszy</td>
-                      <td className="p-2">86%</td>
-                      <td className="p-2">
-                        <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-800">
-                          zatwierdzony
-                        </span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Dodanie nowej pary',
-          does: 'Otwiera formularz: wybierasz główny produkt, zamiennik, typ i zgodność.',
-          click: '„+ Dodaj zamiennik”.',
-          tone: 'blue',
-          screen: (
-            <AppFrame nav="Zamienniki">
-              <div className="mb-4 flex items-center justify-between">
-                <h1 className="text-xl font-semibold">Zamienniki</h1>
-                <Mark>
-                  <Btn label="+ Dodaj zamiennik" />
-                </Mark>
-              </div>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Zapis relacji',
-          does: 'Tworzy parę w bazie. Zostaje ze statusem „oczekuje”, dopóki kierownik nie potwierdzi.',
-          click: 'Wybierz produkty, typ, % i „Dodaj”.',
-          tone: 'blue',
-          screen: (
-            <AppFrame nav="Zamienniki">
-              <h1 className="mb-4 text-xl font-semibold">Zamienniki</h1>
-              <Card className="text-sm">
-                <h2 className="mb-3 font-semibold">Nowy zamiennik</h2>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Produkt główny *" value="ARĘKGLOMJ713 · POWERCUT" />
-                  <Field label="Zamiennik *" value="ARĘKGLOMJ714 · POWERFIT" mark />
-                  <Field label="Typ *" value="tańszy" />
-                  <Field label="Zgodność AI (%) *" value="86" />
-                </div>
-                <div className="mt-3">
-                  <Mark>
-                    <Btn label="Dodaj" />
-                  </Mark>
-                </div>
-              </Card>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Oczekiwanie na akceptację',
-          does: 'Para istnieje, ale oferta nie użyje jej automatycznie, dopóki status to „oczekuje”.',
-          click: 'Filtr statusu albo po prostu znajdź żółty wiersz.',
-          tone: 'amber',
-          screen: (
-            <AppFrame nav="Zamienniki">
-              <h1 className="mb-4 text-xl font-semibold">Zamienniki</h1>
-              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                <div className="border-b bg-slate-50 px-4 py-3 text-sm font-semibold">
-                  <span className="mr-1 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-white">
-                    PRODUKT GŁÓWNY
-                  </span>
-                  Lebon POWERCUT · ARĘKGLOMJ713
-                </div>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50/80">
-                      <Th>Zamiennik</Th>
-                      <Th>Typ</Th>
-                      <Th>Status</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b bg-amber-50">
-                      <td className="p-2">POWERFIT (ARĘKGLOMJ714)</td>
-                      <td className="p-2">tańszy</td>
-                      <td className="p-2">
-                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800">
-                          oczekuje
-                        </span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Akceptacja zamiennika',
-          does: 'Kierownik zatwierdza parę. Dopiero wtedy „Zastosuj tańsze zamienniki” w przetargu może ją użyć.',
-          click: 'Zielone „OK” albo czerwone odrzucenie w kolumnie Akcje.',
-          tone: 'green',
-          screen: (
-            <AppFrame nav="Zamienniki">
-              <h1 className="mb-4 text-xl font-semibold">Zamienniki</h1>
-              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Zamiennik</Th>
-                      <Th>Status</Th>
-                      <Th>Akcje</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2">POWERFIT (ARĘKGLOMJ714)</td>
-                      <td className="p-2">
-                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px]">oczekuje</span>
-                      </td>
-                      <td className="p-2">
-                        <div className="flex gap-1">
-                          <Mark>
-                            <span className="rounded bg-green-600 px-2 py-1 text-[10px] text-white">OK</span>
-                          </Mark>
-                          <span className="rounded border border-red-200 px-2 py-1 text-[10px] text-red-700">
-                            Odrzuć
-                          </span>
-                        </div>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Podmiana w ofercie',
-          does: 'W przetargu pojawia się propozycja tańszych zatwierdzonych zamienników (co najmniej 3% taniej po upuście); po potwierdzeniu produkt w pozycji zostaje podmieniony.',
-          click: 'Sekcja „Pozycje” w menu bocznym sprawy → „Zastosuj tańsze zamienniki” na pasku nad pozycjami, potem „Tak, zastosuj”.',
-          tone: 'green',
-          screen: (
-            <AppFrame nav="Przetargi">
-              <TenderHead />
-              <TenderTabs active="Pozycje">
-                <TenderItemsToolbar highlight="cheaper" />
-                <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-3 text-xs">
-                  <p className="font-semibold text-amber-950">Zastosować tańsze zamienniki na 3 pozycjach?</p>
-                  <p className="mt-2 font-mono text-[11px]">Pozycja 1: ARĘKGLOMJ713 → ARĘKGLOMJ714 (taniej o 8% · cena zakupu 11,40 zł)</p>
-                  <div className="mt-3 flex gap-2">
-                    <span className="rounded border border-slate-300 bg-white px-3 py-1.5 text-[11px]">Anuluj</span>
-                    <Mark>
-                      <span className="rounded bg-amber-600 px-3 py-1.5 text-[11px] font-semibold text-white">
-                        Tak, zastosuj
-                      </span>
-                    </Mark>
-                  </div>
-                </div>
-              </TenderTabs>
-            </AppFrame>
-          ),
-        },
-      ]}
-    />
-  )
-}
-
 function ClientsHelp() {
+  const { user } = useAuth()
   return (
     <Slideshow
       title="Klienci"
@@ -1494,41 +1327,49 @@ function ClientsHelp() {
           click: 'Menu „Klienci”.',
           tone: 'slate',
           screen: (
-            <AppFrame nav="Klienci">
-              <div className="mb-4 flex items-center justify-between">
-                <h1 className="text-xl font-semibold">Klienci</h1>
-                <Btn label="+ Nowy klient" />
-              </div>
-              <Card>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Nazwa</Th>
-                      <Th>NIP</Th>
-                      <Th>Miasto</Th>
-                      <Th>Przetargi</Th>
-                      <Th>Opiekun</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2">Mittal</td>
-                      <td className="p-2">5170001111</td>
-                      <td className="p-2">Dąbrowa</td>
-                      <td className="p-2">4</td>
-                      <td className="p-2">Artur</td>
-                    </tr>
-                    <tr className="border-b">
-                      <td className="p-2">Sanitex</td>
-                      <td className="p-2">—</td>
-                      <td className="p-2">Rzeszów</td>
-                      <td className="p-2">2</td>
-                      <td className="p-2">Artur</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </Card>
-            </AppFrame>
+            <LivePage
+              nav="Klienci"
+              path="/clients"
+              page={<Clients />}
+              allowed={can(user, 'clients.view')}
+              fallback={
+              <AppFrame nav="Klienci">
+                <div className="mb-4 flex items-center justify-between">
+                  <h1 className="text-xl font-semibold">Klienci</h1>
+                  <Btn label="+ Nowy klient" />
+                </div>
+                <Card>
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <Th>Nazwa</Th>
+                        <Th>NIP</Th>
+                        <Th>Miasto</Th>
+                        <Th>Przetargi</Th>
+                        <Th>Opiekun</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b">
+                        <td className="p-2">Mittal</td>
+                        <td className="p-2">5170001111</td>
+                        <td className="p-2">Dąbrowa</td>
+                        <td className="p-2">4</td>
+                        <td className="p-2">Artur</td>
+                      </tr>
+                      <tr className="border-b">
+                        <td className="p-2">Sanitex</td>
+                        <td className="p-2">—</td>
+                        <td className="p-2">Rzeszów</td>
+                        <td className="p-2">2</td>
+                        <td className="p-2">Artur</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </Card>
+              </AppFrame>
+              }
+            />
           ),
         },
         {
@@ -1617,6 +1458,7 @@ function ClientsHelp() {
 }
 
 function InquiriesHelp() {
+  const { user } = useAuth()
   return (
     <Slideshow
       title="Zapytania"
@@ -1627,62 +1469,70 @@ function InquiriesHelp() {
           click: 'Menu „Zapytania”, wklej całą treść w pole „Treść maila”, potem „Przygotuj odpowiedź” (albo Ctrl+Enter). Temat, klient i szablon listu są pod „Więcej”.',
           tone: 'blue',
           screen: (
-            <AppFrame nav="Zapytania">
-              <h1 className="mb-1 text-xl font-semibold">Zapytania</h1>
-              <p className="mb-4 text-sm text-slate-500">
-                Wklej mail klienta. Dostaniesz gotowy list i listę pozycji, które warto sprawdzić przed wysłaniem.
-              </p>
-              <Card>
-                <label className="block text-xs">
-                  Treść maila *
-                  <Mark>
-                    <div className="mt-1 min-h-[110px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
-                      Proszę o ofertę: 30szt rękawice chemoodporne rozmiar 10, 4szt kalosze chemoodporne rozmiar 43…
-                    </div>
-                  </Mark>
-                </label>
-                <div className="mt-3 flex items-center gap-3">
-                  <Btn label="Przygotuj odpowiedź" />
-                  <span className="text-[11px] text-slate-400">Ctrl+Enter wysyła</span>
-                  <span className="text-xs text-blue-600">Więcej</span>
-                </div>
-              </Card>
-              <Card className="mt-3">
-                <p className="mb-2 text-sm font-semibold">Ostatnie</p>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Temat</Th>
-                      <Th>Klient</Th>
-                      <Th>Status</Th>
-                      <Th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2">Oferta — Rękawice i kalosze</td>
-                      <td className="p-2">Firma Test</td>
-                      <td className="p-2">
-                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                          Do sprawdzenia (1)
-                        </span>
-                      </td>
-                      <td className="p-2 text-blue-600">Otwórz</td>
-                    </tr>
-                    <tr className="border-b">
-                      <td className="p-2">Oferta — Okulary</td>
-                      <td className="p-2">—</td>
-                      <td className="p-2">
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
-                          Wysłano
-                        </span>
-                      </td>
-                      <td className="p-2 text-blue-600">Otwórz</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </Card>
-            </AppFrame>
+            <LivePage
+              nav="Zapytania"
+              path="/inquiries"
+              page={<Inquiries />}
+              allowed={can(user, 'inquiries.use')}
+              fallback={
+              <AppFrame nav="Zapytania">
+                <h1 className="mb-1 text-xl font-semibold">Zapytania</h1>
+                <p className="mb-4 text-sm text-slate-500">
+                  Wklej mail klienta. Dostaniesz gotowy list i listę pozycji, które warto sprawdzić przed wysłaniem.
+                </p>
+                <Card>
+                  <label className="block text-xs">
+                    Treść maila *
+                    <Mark>
+                      <div className="mt-1 min-h-[110px] w-full rounded border border-slate-300 px-2 py-1.5 text-sm">
+                        Proszę o ofertę: 30szt rękawice chemoodporne rozmiar 10, 4szt kalosze chemoodporne rozmiar 43…
+                      </div>
+                    </Mark>
+                  </label>
+                  <div className="mt-3 flex items-center gap-3">
+                    <Btn label="Przygotuj odpowiedź" />
+                    <span className="text-[11px] text-slate-400">Ctrl+Enter wysyła</span>
+                    <span className="text-xs text-blue-600">Więcej</span>
+                  </div>
+                </Card>
+                <Card className="mt-3">
+                  <p className="mb-2 text-sm font-semibold">Ostatnie</p>
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <Th>Temat</Th>
+                        <Th>Klient</Th>
+                        <Th>Status</Th>
+                        <Th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b">
+                        <td className="p-2">Oferta — Rękawice i kalosze</td>
+                        <td className="p-2">Firma Test</td>
+                        <td className="p-2">
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                            Do sprawdzenia (1)
+                          </span>
+                        </td>
+                        <td className="p-2 text-blue-600">Otwórz</td>
+                      </tr>
+                      <tr className="border-b">
+                        <td className="p-2">Oferta — Okulary</td>
+                        <td className="p-2">—</td>
+                        <td className="p-2">
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                            Wysłano
+                          </span>
+                        </td>
+                        <td className="p-2 text-blue-600">Otwórz</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </Card>
+              </AppFrame>
+              }
+            />
           ),
         },
         {

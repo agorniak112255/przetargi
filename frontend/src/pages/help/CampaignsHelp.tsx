@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react'
-import { AppFrame, Btn, Card, Field, Mark, Slideshow, Th } from './kit'
+import { AppFrame, Btn, Card, Field, LivePage, Mark, Slideshow, Th } from './kit'
+import { useAuth } from '../../auth'
+import { Campaigns } from '../Campaigns'
+import { canAny } from '../../lib/api'
 
 /** Zakładki modułu — jak CampaignsTabs w components/CampaignsUi.tsx. */
 const CAMPAIGN_TABS = ['Moje kampanie', 'Wszystkie', 'Moje szablony', 'Grupy odbiorców', 'Wypisani'] as const
@@ -103,6 +106,7 @@ function SortHead({ label, dir, right }: { label: string; dir?: '▲' | '▼'; r
 }
 
 export function CampaignsHelp() {
+  const { user } = useAuth()
   return (
     <Slideshow
       title="Kampanie"
@@ -113,74 +117,82 @@ export function CampaignsHelp() {
           click: 'Menu „Kampanie”. Nowa kampania: „+ Pusta kampania” albo „+ Nowa kampania z Zapasów”. Istniejącą otwierasz przyciskiem „Edytuj” (projekt) albo „Otwórz” (wysłana).',
           tone: 'blue',
           screen: (
-            <AppFrame nav="Kampanie">
-              <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
-                <div>
-                  <h1 className="text-xl font-semibold">Kampanie</h1>
-                  <p className="text-[11px] text-slate-600">
-                    Twoje kampanie. Wynik to przede wszystkim to, ile towaru zeszło z magazynu po wysyłce.
-                  </p>
+            <LivePage
+              nav="Kampanie"
+              path="/kampanie"
+              page={<Campaigns />}
+              allowed={canAny(user, ['campaigns.use', 'campaigns.view'])}
+              fallback={
+              <AppFrame nav="Kampanie">
+                <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                  <div>
+                    <h1 className="text-xl font-semibold">Kampanie</h1>
+                    <p className="text-[11px] text-slate-600">
+                      Twoje kampanie. Wynik to przede wszystkim to, ile towaru zeszło z magazynu po wysyłce.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Btn label="+ Pusta kampania" color="border" />
+                    <Mark>
+                      <Btn label="+ Nowa kampania z Zapasów" />
+                    </Mark>
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <Btn label="+ Pusta kampania" color="border" />
-                  <Mark>
-                    <Btn label="+ Nowa kampania z Zapasów" />
-                  </Mark>
-                </div>
-              </div>
-              <CampaignTabs active="Moje kampanie" />
-              <Card>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Kampania</Th>
-                      <Th>Status</Th>
-                      <Th>Wysyłka</Th>
-                      <Th>Odbiorcy</Th>
-                      <Th>Zeszło z magazynu</Th>
-                      <Th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2">
-                        <span className="font-medium">Wyprzedaż obuwia S3</span>
-                        <span className="block text-[10px] text-slate-500">K-0012 · 2 pozycje</span>
-                      </td>
-                      <td className="p-2">
-                        <Chip tone="slate">Projekt</Chip>
-                      </td>
-                      <td className="p-2 text-slate-400">—</td>
-                      <td className="p-2 text-slate-400">—</td>
-                      <td className="p-2 text-slate-400">—</td>
-                      <td className="p-2 text-right">
-                        <span className="rounded border border-slate-300 px-2 py-0.5 text-[11px]">Edytuj</span>
-                      </td>
-                    </tr>
-                    <tr className="border-b">
-                      <td className="p-2">
-                        <span className="font-medium">Rękawice powlekane — jesień</span>
-                        <span className="block text-[10px] text-slate-500">K-0009 · 3 pozycje</span>
-                      </td>
-                      <td className="p-2">
-                        <Chip tone="green">Wysłana</Chip>
-                      </td>
-                      <td className="whitespace-nowrap p-2 tabular-nums">18.09.2026 14:05</td>
-                      <td className="p-2 tabular-nums">
-                        284
-                        <span className="block text-[10px] text-emerald-700">odpowiedzi 2</span>
-                      </td>
-                      <td className="p-2">
-                        <Drop percent={38} days={30} />
-                      </td>
-                      <td className="p-2 text-right">
-                        <span className="rounded border border-slate-300 px-2 py-0.5 text-[11px]">Otwórz</span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </Card>
-            </AppFrame>
+                <CampaignTabs active="Moje kampanie" />
+                <Card>
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <Th>Kampania</Th>
+                        <Th>Status</Th>
+                        <Th>Wysyłka</Th>
+                        <Th>Odbiorcy</Th>
+                        <Th>Zeszło z magazynu</Th>
+                        <Th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b">
+                        <td className="p-2">
+                          <span className="font-medium">Wyprzedaż obuwia S3</span>
+                          <span className="block text-[10px] text-slate-500">K-0012 · 2 pozycje</span>
+                        </td>
+                        <td className="p-2">
+                          <Chip tone="slate">Projekt</Chip>
+                        </td>
+                        <td className="p-2 text-slate-400">—</td>
+                        <td className="p-2 text-slate-400">—</td>
+                        <td className="p-2 text-slate-400">—</td>
+                        <td className="p-2 text-right">
+                          <span className="rounded border border-slate-300 px-2 py-0.5 text-[11px]">Edytuj</span>
+                        </td>
+                      </tr>
+                      <tr className="border-b">
+                        <td className="p-2">
+                          <span className="font-medium">Rękawice powlekane — jesień</span>
+                          <span className="block text-[10px] text-slate-500">K-0009 · 3 pozycje</span>
+                        </td>
+                        <td className="p-2">
+                          <Chip tone="green">Wysłana</Chip>
+                        </td>
+                        <td className="whitespace-nowrap p-2 tabular-nums">18.09.2026 14:05</td>
+                        <td className="p-2 tabular-nums">
+                          284
+                          <span className="block text-[10px] text-emerald-700">odpowiedzi 2</span>
+                        </td>
+                        <td className="p-2">
+                          <Drop percent={38} days={30} />
+                        </td>
+                        <td className="p-2 text-right">
+                          <span className="rounded border border-slate-300 px-2 py-0.5 text-[11px]">Otwórz</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </Card>
+              </AppFrame>
+              }
+            />
           ),
         },
         {

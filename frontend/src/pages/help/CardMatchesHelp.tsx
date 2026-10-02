@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react'
-import { AppFrame, Mark, Slideshow } from './kit'
+import { AppFrame, LivePage, Mark, Slideshow } from './kit'
+import { useAuth } from '../../auth'
+import { CardMatches } from '../CardMatches'
+import { can } from '../../lib/api'
 
 /** Samouczek „Łączenie kart” — pary karta dystrybutora → karta producenta (pages/CardMatches.tsx). */
 
@@ -155,6 +158,7 @@ function ConfirmBox({ children }: { children: ReactNode }) {
 const btn = 'inline-block rounded px-2.5 py-1 text-[11px]'
 
 export function CardMatchesHelp() {
+  const { user } = useAuth()
   return (
     <Slideshow
       title="Łączenie kart"
@@ -180,29 +184,37 @@ export function CardMatchesHelp() {
           click: 'Niebieski kod karty otwiera kartę w nowej karcie przeglądarki — porównaj nazwy, zdjęcia i ceny, zanim zdecydujesz.',
           tone: 'amber',
           screen: (
-            <AppFrame nav="Łączenie kart">
-              <Tabs active="Do decyzji" />
-              <div className="rounded-xl bg-white p-3 shadow-sm">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <th className="p-2 font-semibold text-slate-700">Karta dystrybutora</th>
-                      <th className="p-2 font-semibold text-slate-700">Dlaczego to ten sam wyrób</th>
-                      <th className="p-2 font-semibold text-slate-700">Karta producenta — zostaje</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="align-top">
-                      <td className="p-2">{DISTRIBUTOR(true)}</td>
-                      <td className="p-2">
-                        <Why />
-                      </td>
-                      <td className="p-2">{PRODUCER}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </AppFrame>
+            <LivePage
+              nav="Łączenie kart"
+              path="/card-matches"
+              page={<CardMatches />}
+              allowed={can(user, 'card_matches.view')}
+              fallback={
+              <AppFrame nav="Łączenie kart">
+                <Tabs active="Do decyzji" />
+                <div className="rounded-xl bg-white p-3 shadow-sm">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <th className="p-2 font-semibold text-slate-700">Karta dystrybutora</th>
+                        <th className="p-2 font-semibold text-slate-700">Dlaczego to ten sam wyrób</th>
+                        <th className="p-2 font-semibold text-slate-700">Karta producenta — zostaje</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="align-top">
+                        <td className="p-2">{DISTRIBUTOR(true)}</td>
+                        <td className="p-2">
+                          <Why />
+                        </td>
+                        <td className="p-2">{PRODUCER}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </AppFrame>
+              }
+            />
           ),
         },
         {

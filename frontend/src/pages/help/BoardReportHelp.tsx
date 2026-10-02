@@ -1,4 +1,7 @@
-import { AppFrame, Mark, Slideshow, Th } from './kit'
+import { AppFrame, LivePage, Mark, Slideshow, Th } from './kit'
+import { useAuth } from '../../auth'
+import { InventoryBoardReport } from '../InventoryBoardReport'
+import { can } from '../../lib/api'
 
 /** Samouczek modułu „Raport dla zarządu” (strona InventoryBoardReport, adres /raport-zapasow). */
 
@@ -124,6 +127,7 @@ function RangeButtons({ active }: { active: string }) {
 }
 
 export function BoardReportHelp() {
+  const { user } = useAuth()
   return (
     <Slideshow
       title="Raport dla zarządu"
@@ -134,16 +138,24 @@ export function BoardReportHelp() {
           click: 'Menu „Raport dla zarządu”.',
           tone: 'slate',
           screen: (
-            <AppFrame nav={NAV}>
-              <ReportHeader />
-              <p className="mb-2 text-[11px] text-slate-700">
-                Kafelek z napisem „Pokaż listę ›” można kliknąć — otworzy się lista towarów albo dokumentów.
-              </p>
-              <div className="grid grid-cols-2 gap-2">
-                <Tile tone="neutral" value="3,9 mln zł" label="cały towar (Rzeszów, handlowe)" detail="5 812 towarów" />
-                <Tile tone="red" value="431 tys. zł" label="ponad rok bez sprzedaży" detail="684 towary · 11% magazynu" />
-              </div>
-            </AppFrame>
+            <LivePage
+              nav="Raport dla zarządu"
+              path="/raport-zapasow"
+              page={<InventoryBoardReport />}
+              allowed={can(user, 'inventory.report.view')}
+              fallback={
+              <AppFrame nav={NAV}>
+                <ReportHeader />
+                <p className="mb-2 text-[11px] text-slate-700">
+                  Kafelek z napisem „Pokaż listę ›” można kliknąć — otworzy się lista towarów albo dokumentów.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Tile tone="neutral" value="3,9 mln zł" label="cały towar (Rzeszów, handlowe)" detail="5 812 towarów" />
+                  <Tile tone="red" value="431 tys. zł" label="ponad rok bez sprzedaży" detail="684 towary · 11% magazynu" />
+                </div>
+              </AppFrame>
+              }
+            />
           ),
         },
         {

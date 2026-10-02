@@ -1,9 +1,14 @@
+import { useEffect, useState } from 'react'
+import { useAuth } from '../../auth'
+import { api, can, canAny } from '../../lib/api'
 import { DashboardView, type Dash } from '../Dashboard'
-import { AppFrame, LiveScreen, Mark, Slideshow, Th } from './kit'
+import { Tenders } from '../Tenders'
+import { AppFrame, LiveFrame, LivePage, LiveScreen, Mark, Slideshow, Th } from './kit'
 
 /**
- * Samouczek „Dashboard” — prawdziwy widok strony (DashboardView z pages/Dashboard.tsx) z przykładowymi danymi,
- * więc zrzut wygląda jak w aplikacji, także w szablonie „Nocna zmiana”. Karty pojedynczo = dane z jedną sekcją.
+ * Samouczek „Dashboard” — prawdziwy widok strony (DashboardView z pages/Dashboard.tsx) z AKTUALNYMI danymi
+ * z GET /dashboard; sekcje bez dostępu (null) i brak połączenia — przykładowe dane. Wygląda jak w aplikacji,
+ * także w szablonie „Nocna zmiana”. Karty pojedynczo = dane z jedną sekcją.
  */
 
 const day = (offset: number) => new Date(Date.now() + offset * 864e5).toISOString().slice(0, 10)
@@ -84,21 +89,39 @@ function sample(): Dash {
 }
 
 /** Dashboard z wybranymi sekcjami (reszta null — jak u osoby bez uprawnień do tych modułów). */
-function Screen({ only, mark }: { only?: Array<keyof Dash>; mark?: string }) {
-  const all = sample()
-  const data = only
-    ? (Object.fromEntries(Object.keys(all).map((k) => [k, only.includes(k as keyof Dash) ? all[k as keyof Dash] : null])) as Dash)
-    : all
+function Screen({ live, only, mark }: { live: Dash | null; only?: Array<keyof Dash>; mark?: string }) {
+  const example = sample()
+  const keys = (only ?? (Object.keys(example) as Array<keyof Dash>))
+  // sekcja z serwera, gdy jest; inaczej przykład (brak dostępu albo dane jeszcze się wczytują)
+  const fromLive = keys.every((k) => live?.[k] != null)
+  const pick = (k: keyof Dash) => (keys.includes(k) ? (live?.[k] ?? example[k]) : null)
+  const data = Object.fromEntries((Object.keys(example) as Array<keyof Dash>).map((k) => [k, pick(k)])) as Dash
   return (
-    <AppFrame nav="Dashboard">
-      <LiveScreen mark={mark}>
+    <LiveFrame live={fromLive} label="Dashboard">
+      <LiveScreen width={1100} mark={mark}>
         <DashboardView data={data} stockLink="/zapasy" />
       </LiveScreen>
-    </AppFrame>
+    </LiveFrame>
   )
 }
 
 export function DashboardHelp() {
+  const { user } = useAuth()
+  const [live, setLive] = useState<Dash | null>(null)
+  const allowed = can(user, 'dashboard.view')
+  useEffect(() => {
+    if (!allowed) return
+    let off = false
+    api<Dash>('/dashboard').then(
+      (d) => {
+        if (!off) setLive(d)
+      },
+      () => {},
+    )
+    return () => {
+      off = true
+    }
+  }, [allowed])
   return (
     <Slideshow
       title="Dashboard"
@@ -108,14 +131,14 @@ export function DashboardHelp() {
           does: 'Dashboard to pierwszy ekran: po jednej karcie na moduł — Przetargi, Produkty, Zapasy, Cenniki i Kampanie. Każda osoba widzi tylko karty modułów, do których ma uprawnienie; gdy jednej karty z pary brakuje, druga zajmuje całą szerokość.',
           click: 'Nic — przeczytaj karty. Odnośnik w prawym górnym rogu karty prowadzi do modułu.',
           tone: 'slate',
-          screen: <Screen />,
+          screen: <Screen live={live} />,
         },
         {
           action: 'Karta Przetargi i ostrzeżenie o terminach',
           does: 'Na górze: ile przetargów jest w toku, wartość ofert netto i średnia marża. Pod spodem pasek etapów (ile przetargów i za ile na każdym etapie) oraz najbliższe terminy — czerwone do 3 dni, pomarańczowe do 7 dni. Dolna linia ostrzega, ile terminów wypada w ciągu 7 dni, i podaje najbliższy.',
           click: '„Pokaż wszystkie” w czerwonej linii ostrzeżenia. Wiersz z terminem otwiera od razu ten przetarg.',
           tone: 'blue',
-          screen: <Screen only={['tenders']} mark={'a[href*="deadline_soon"]'} />,
+          screen: <Screen live={live} only={['tenders']} mark={'a[href*="deadline_soon"]'} />,
         },
         {
           action: 'Lista przetargów z pilnym terminem',
@@ -123,47 +146,55 @@ export function DashboardHelp() {
           click: 'Niebieski numer przetargu, żeby go otworzyć. Ten sam filtr wybierzesz ręcznie z listy rozwijanej na stronie Przetargi.',
           tone: 'green',
           screen: (
-            <AppFrame nav="Przetargi">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h1 className="text-xl font-semibold">Przetargi</h1>
-                <Mark>
-                  <span className="inline-block rounded border border-slate-300 bg-white px-2 py-1.5 text-xs">Termin za mniej niż 7 dni ▾</span>
-                </Mark>
-              </div>
-              <div className="rounded-xl bg-white p-3 shadow-sm">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Numer</Th>
-                      <Th>Zamawiający</Th>
-                      <Th>Termin składania</Th>
-                      <Th>Wartość oferty netto</Th>
-                      <Th>Status</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2 font-medium text-blue-600">PRZ/2026/0012</td>
-                      <td className="p-2">Mittal</td>
-                      <td className="p-2">
-                        2026-10-05<span className="ml-1 font-semibold text-red-600">!</span>
-                      </td>
-                      <td className="p-2">48 210,40 zł</td>
-                      <td className="p-2">Wycena</td>
-                    </tr>
-                    <tr>
-                      <td className="p-2 font-medium text-blue-600">PRZ/2026/0011</td>
-                      <td className="p-2">Sanitex</td>
-                      <td className="p-2">
-                        2026-10-08<span className="ml-1 font-semibold text-red-600">!</span>
-                      </td>
-                      <td className="p-2">—</td>
-                      <td className="p-2">Szkic</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </AppFrame>
+            <LivePage
+              nav="Przetargi"
+              path="/tenders?filter=deadline_soon"
+              page={<Tenders />}
+              allowed={canAny(user, ['tenders.view_own', 'tenders.view_all'])}
+              fallback={
+              <AppFrame nav="Przetargi">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <h1 className="text-xl font-semibold">Przetargi</h1>
+                  <Mark>
+                    <span className="inline-block rounded border border-slate-300 bg-white px-2 py-1.5 text-xs">Termin za mniej niż 7 dni ▾</span>
+                  </Mark>
+                </div>
+                <div className="rounded-xl bg-white p-3 shadow-sm">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50">
+                        <Th>Numer</Th>
+                        <Th>Zamawiający</Th>
+                        <Th>Termin składania</Th>
+                        <Th>Wartość oferty netto</Th>
+                        <Th>Status</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b">
+                        <td className="p-2 font-medium text-blue-600">PRZ/2026/0012</td>
+                        <td className="p-2">Mittal</td>
+                        <td className="p-2">
+                          2026-10-05<span className="ml-1 font-semibold text-red-600">!</span>
+                        </td>
+                        <td className="p-2">48 210,40 zł</td>
+                        <td className="p-2">Wycena</td>
+                      </tr>
+                      <tr>
+                        <td className="p-2 font-medium text-blue-600">PRZ/2026/0011</td>
+                        <td className="p-2">Sanitex</td>
+                        <td className="p-2">
+                          2026-10-08<span className="ml-1 font-semibold text-red-600">!</span>
+                        </td>
+                        <td className="p-2">—</td>
+                        <td className="p-2">Szkic</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </AppFrame>
+              }
+            />
           ),
         },
         {
@@ -171,21 +202,21 @@ export function DashboardHelp() {
           does: 'Ile kart jest w katalogu, ile ma opis, a ilu brakuje opisu albo zdjęcia i ile czeka na ręczny opis. Karta bez opisu nie trafia do propozycji przetargowych — dlatego dolna linia ostrzega o kartach bez opisu. Na dole liczba zamienników czekających na akceptację.',
           click: '„Katalog →” otwiera listę produktów, „Zamienniki do akceptacji” — stronę Zamienniki.',
           tone: 'slate',
-          screen: <Screen only={['products']} mark={'a[href$="/products"]'} />,
+          screen: <Screen live={live} only={['products']} mark={'a[href$="/products"]'} />,
         },
         {
           action: 'Karty Zapasy i Cenniki',
           does: 'Zapasy: wartość magazynu, liczba towarów i ile nigdy się nie sprzedało; wykres pokazuje wartość towaru bez sprzedaży od pół roku, roku, 2 lat i nigdy, obok towary z największą zamrożoną gotówką. Stan pochodzi z nocnego odczytu systemu ERP XL. Cenniki: ile kont B2B (sklepów dostawców) przeszło ostatnie sprawdzenie bez błędów, ile cen zmieniło się w 7 dni i ostatnie cenniki z pliku; konto z błędem świeci na czerwono.',
           click: '„Zapasy →” otwiera Zapasy (bez dostępu do Zapasów — Raport dla zarządu). „Konta B2B →” otwiera konta dostawców (bez dostępu do kont — „Cenniki →”).',
           tone: 'slate',
-          screen: <Screen only={['stock', 'prices']} />,
+          screen: <Screen live={live} only={['stock', 'prices']} />,
         },
         {
           action: 'Karta Kampanie',
           does: 'Najbliższa zaplanowana wysyłka, liczba szkiców do wysłania oraz wysłane maile i odpowiedzi klientów z 30 dni. Tabela „Ostatnie kampanie” pokazuje dla każdej kampanii: kiedy wysłana, ile maili poszło, ile było kliknięć i odpowiedzi oraz o ile zszedł zapas promowanego towaru.',
           click: 'Nazwa kampanii (w ramce wysyłki albo w tabeli) otwiera tę kampanię; „Kampanie →” — cały moduł.',
           tone: 'slate',
-          screen: <Screen only={['campaigns']} mark={'a[href$="/kampanie"]'} />,
+          screen: <Screen live={live} only={['campaigns']} mark={'a[href$="/kampanie"]'} />,
         },
       ]}
     />
