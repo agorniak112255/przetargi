@@ -205,8 +205,16 @@ const TENDER_MENU = [
 
 type TenderSection = (typeof TENDER_MENU)[number]['tabs'][number]
 
+/** Zdanie pod nagłówkiem sekcji (jak SECTION_INTRO w TenderDetail; Dokumenty i Warunki mają opis we własnej sekcji). */
+const TENDER_SECTION_INTRO: Partial<Record<TenderSection, string>> = {
+  Podsumowanie: 'Najważniejsze liczby oferty i lista rzeczy, które trzeba jeszcze uzupełnić.',
+  Pozycje: 'Produkty, o które prosi zamawiający. Do każdej pozycji dobieramy nasz produkt i cenę.',
+  'Historia i statusy': 'Kto i kiedy co zmienił oraz na jakim etapie jest przetarg.',
+}
+
 /** Pełny widok przetargu: menu boczne z sekcjami i treść wybranej sekcji obok. */
 function TenderTabs({ active, mark, children }: { active: TenderSection; mark?: boolean; children?: ReactNode }) {
+  const intro = TENDER_SECTION_INTRO[active]
   return (
     <div className="flex flex-col gap-3 md:flex-row md:items-start">
       <nav className="flex flex-wrap gap-1 rounded-xl bg-white p-2 shadow-sm md:w-36 md:shrink-0 md:flex-col md:flex-nowrap">
@@ -230,7 +238,15 @@ function TenderTabs({ active, mark, children }: { active: TenderSection; mark?: 
           </div>
         ))}
       </nav>
-      <div className="min-w-0 flex-1 space-y-3">{children}</div>
+      <div className="min-w-0 flex-1 space-y-3">
+        {intro && (
+          <div>
+            <h2 className="text-sm font-semibold">{active}</h2>
+            <p className="text-xs text-slate-500">{intro}</p>
+          </div>
+        )}
+        {children}
+      </div>
     </div>
   )
 }
@@ -248,8 +264,8 @@ function TenderHead({ menu }: { menu?: 'export' }) {
       <h1 className="mt-2 text-xl font-semibold">PRZ/2026/0004 · Pakiet rękawic Q2</h1>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-slate-500">
-          Mittal · opiekun Artur · <strong>Wycena</strong> · AI 85% · narzut 18% · marża zreal. 17,6% · edycja
-          włączona
+          Zamawiający: Mittal · opiekun przetargu: Artur · <strong>Wycena</strong> · średnia ocena dopasowania 85% ·
+          narzut 18% · marża 15,3% · edycja włączona
         </p>
         <div className="flex flex-wrap gap-1">
           {menu === 'export' ? <Mark>{exportBtn}</Mark> : exportBtn}
@@ -259,13 +275,16 @@ function TenderHead({ menu }: { menu?: 'export' }) {
         </div>
       </div>
       {menu === 'export' && (
-        <div className="mb-3 ml-auto w-60 rounded-lg border border-slate-200 bg-white p-1 text-xs shadow-lg">
+        <div className="mb-3 ml-auto w-64 rounded-lg border border-slate-200 bg-white p-1 text-xs shadow-lg">
           {[
-            ['Excel', 'Tabela oferty'],
-            ['PDF', 'Oferta do wydruku'],
-            ['Formularz ofertowy (DOCX)', 'Wypełnia wgrany formularz cenami z oferty'],
-          ].map(([label, hint]) => (
-            <div key={label} className={`rounded px-2 py-1.5 ${label === 'Excel' ? 'bg-slate-100' : ''}`}>
+            ['Oferta w pliku Excel', 'Tabela z cenami do dalszej pracy'],
+            ['Oferta w pliku PDF', 'Do wydruku albo wysłania'],
+            [
+              'Formularz ofertowy z cenami (Word)',
+              'Wypełnia cenami z oferty formularz ofertowy dodany w sekcji Dokumenty',
+            ],
+          ].map(([label, hint], idx) => (
+            <div key={label} className={`rounded px-2 py-1.5 ${idx === 0 ? 'bg-slate-100' : ''}`}>
               <span className="font-semibold">{label}</span>
               <span className="block text-[11px] text-slate-500">{hint}</span>
             </div>
@@ -276,15 +295,33 @@ function TenderHead({ menu }: { menu?: 'export' }) {
   )
 }
 
-const WIZARD_STEPS: Array<{ label: string; todo: string; now: string; done: string }> = [
-  { label: 'Dokumenty', todo: 'wgraj SIWZ i formularz', now: 'wgraj SIWZ i formularz', done: 'Pliki: 1' },
-  { label: 'Pozycje i produkty', todo: 'brak pozycji', now: '10 / 12 z produktem', done: '12 / 12 z produktem' },
+const WIZARD_STEPS: Array<{ label: string; todo: string; now: string; done: string; description?: string }> = [
+  {
+    label: 'Dokumenty',
+    todo: 'dodaj dokumentację i formularz ofertowy',
+    now: 'dodaj dokumentację i formularz ofertowy',
+    done: 'Pliki: 1',
+  },
+  {
+    label: 'Pozycje i produkty',
+    todo: 'brak pozycji',
+    now: '10 z 12 pozycji ma produkt',
+    done: '12 z 12 pozycji ma produkt',
+    description: 'Sprawdź listę pozycji i dopasuj do nich produkty z katalogu.',
+  },
   { label: 'Warunki', todo: 'brak warunków', now: 'Warunki: 2', done: 'Warunki: 2' },
-  { label: 'Termin i start', todo: 'bez terminu', now: 'termin 12.09.2026', done: 'termin 12.09.2026' },
+  {
+    label: 'Termin i narzut',
+    todo: 'bez terminu',
+    now: 'termin 12.09.2026',
+    done: 'termin 12.09.2026',
+    description: 'Ustaw termin składania i narzut, zaproś osoby do pomocy i rozpocznij wycenę.',
+  },
 ]
 
-/** Kreator zakładania przetargu: nagłówek i kafelki 4 kroków; step = bieżący krok (0–3). */
+/** Kreator zakładania przetargu: nagłówek, kafelki 4 kroków i opis kroku; step = bieżący krok (0–3). */
 function TenderWizardHead({ step, mark }: { step: number; mark?: boolean }) {
+  const description = WIZARD_STEPS[step].description
   return (
     <>
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
@@ -292,7 +329,7 @@ function TenderWizardHead({ step, mark }: { step: number; mark?: boolean }) {
           <p className="text-xs text-blue-600">← Lista przetargów</p>
           <h1 className="mt-2 text-xl font-semibold">PRZ/2026/0004 · Pakiet rękawic Q2</h1>
           <p className="text-xs text-slate-500">
-            Mittal · opiekun Artur · <strong>Zakładanie przetargu</strong> · Szkic
+            Zamawiający: Mittal · opiekun przetargu: Artur · <strong>Zakładanie przetargu</strong> · Szkic
           </p>
         </div>
         <span className="px-2 py-1.5 text-[11px] text-blue-700 underline">Zamknij kreator i pokaż pełny widok</span>
@@ -326,6 +363,7 @@ function TenderWizardHead({ step, mark }: { step: number; mark?: boolean }) {
           return <div key={s.label}>{current && mark ? <Mark>{tile}</Mark> : tile}</div>
         })}
       </div>
+      {description && <p className="mb-3 text-xs text-slate-500">{description}</p>}
     </>
   )
 }
@@ -366,35 +404,41 @@ function TenderDocumentsDrop({ mark, picked }: { mark?: boolean; picked?: string
   )
   return (
     <Card>
-      <h2 className="mb-1 text-sm font-semibold">Dodaj dokumenty przetargu</h2>
+      <h2 className="mb-1 text-sm font-semibold">Dokumenty od zamawiającego</h2>
+      <p className="text-xs text-slate-500">
+        Pliki od zamawiającego: specyfikacja warunków zamówienia (SWZ, dawniej SIWZ) z listą produktów i warunkami oraz
+        formularz ofertowy do wypełnienia cenami.
+      </p>
       <p className="mb-3 text-xs text-slate-500">
-        Z SIWZ (PDF, Excel, Word) odczytamy pozycje i warunki. Formularz ofertowy (Word) zapiszemy, żeby wypełnić go
-        cenami w Eksport › Formularz ofertowy.
+        Ze specyfikacji odczytamy pozycje i warunki. Formularz ofertowy (plik Word) zapiszemy, żeby wypełnić go cenami w
+        menu Eksport › Formularz ofertowy z cenami (Word).
       </p>
       <div className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center">
         <span className="text-lg leading-none text-blue-600">⇪</span>
-        <strong className="text-sm">Przeciągnij tu plik SIWZ albo formularz ofertowy</strong>
-        <span className="text-xs text-slate-500">PDF, Excel (xlsx, xls, csv), Word (doc, docx)</span>
+        <strong className="text-sm">Przeciągnij tu dokumentację przetargu albo formularz ofertowy</strong>
+        <span className="text-xs text-slate-500">PDF, Excel albo Word</span>
         <span className="mt-1">{mark ? <Mark>{pick}</Mark> : pick}</span>
       </div>
       <p className="mt-3 rounded-lg border border-slate-200 px-3 py-2 text-xs">
         <span className="font-semibold">▸ Ustawienia odczytu</span>{' '}
-        <span className="text-slate-500">· pozycje i warunki, AI z podglądem, dopisuje do istniejących</span>
+        <span className="text-slate-500">· pozycje i warunki, odczyt z podglądem, dopisuje do istniejących</span>
       </p>
       {picked && (
         <p className="mt-3 inline-flex items-center gap-2 text-xs text-sky-700">
           <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-sky-600 border-t-transparent" />
-          Wybrano: {picked} — trwa analiza AI…
+          Wybrano: {picked} — trwa odczyt z podglądem…
         </p>
       )}
     </Card>
   )
 }
 
-/** Pasek nad tabelą w sekcji Pozycje: dopasowanie AI, tańsze zamienniki, zapis. */
+/** Pasek nad pozycjami w sekcji Pozycje: dopasowanie produktów, tańsze zamienniki, zapis. */
 function TenderItemsToolbar({ highlight }: { highlight?: 'match' | 'cheaper' }) {
   const match = (
-    <span className="rounded bg-violet-600 px-3 py-1.5 text-[11px] font-semibold text-white">Dopasuj AI (puste)</span>
+    <span className="rounded bg-violet-600 px-3 py-1.5 text-[11px] font-semibold text-white">
+      Dopasuj produkty do pustych pozycji
+    </span>
   )
   const cheaper = (
     <span className="rounded bg-amber-500 px-3 py-1.5 text-[11px] font-semibold text-white">
@@ -405,7 +449,7 @@ function TenderItemsToolbar({ highlight }: { highlight?: 'match' | 'cheaper' }) 
     <div className="flex flex-wrap items-center justify-end gap-1.5">
       {highlight === 'match' ? <Mark>{match}</Mark> : match}
       <span className="rounded bg-violet-800 px-3 py-1.5 text-[11px] font-semibold text-white">
-        Dopasuj AI (wszystkie)
+        Dopasuj od nowa: wszystkie pozycje
       </span>
       {highlight === 'cheaper' ? <Mark>{cheaper}</Mark> : cheaper}
       <span className="rounded bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white">Zapisz całość</span>
@@ -415,17 +459,14 @@ function TenderItemsToolbar({ highlight }: { highlight?: 'match' | 'cheaper' }) 
 
 /** Sekcja Podsumowanie pełnego widoku: kafelki i lista braków z przyciskami. */
 function TenderSummary({ markMissing }: { markMissing?: boolean }) {
-  const show = (
-    <span className="rounded border border-slate-300 bg-white px-2 py-1 font-semibold text-slate-700">Pokaż</span>
-  )
   return (
     <div className="space-y-3 text-xs">
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {[
           ['Termin składania', '12.09.2026', 'za 5 dni'],
           ['Pozycje z produktem', '10 / 12', ''],
-          ['Wartość oferty netto', '9 661,34 zł', 'AI 85%'],
-          ['Marża zrealizowana', '17,6%', 'narzut 18%'],
+          ['Wartość oferty netto', '9 661,34 zł', 'Średnia ocena dopasowania: 85%'],
+          ['Marża', '15,3%', 'Narzut, %: 18'],
         ].map(([label, value, note]) => (
           <div key={label} className="rounded-xl bg-white p-3 shadow-sm">
             <div className="text-slate-500">{label}</div>
@@ -441,15 +482,26 @@ function TenderSummary({ markMissing }: { markMissing?: boolean }) {
       <Card>
         <h2 className="mb-2 text-sm font-semibold">Czego jeszcze brakuje w ofercie</h2>
         <ul className="divide-y divide-slate-100">
-          {['Pozycje bez produktu: 2', 'Pozycje bez ceny: 1'].map((label, idx) => (
-            <li key={label} className="flex flex-wrap items-center gap-2 py-2">
-              <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-50 text-[10px] font-bold text-amber-800">
-                !
+          {[
+            ['Pozycje bez produktu: 2', 'Pokaż'],
+            ['Pozycje bez ceny: 1', 'Pokaż'],
+            ['Warunki do sprawdzenia: 1', 'Warunki'],
+          ].map(([label, action], idx) => {
+            const btn = (
+              <span className="rounded border border-slate-300 bg-white px-2 py-1 font-semibold text-slate-700">
+                {action}
               </span>
-              <span className="flex-1 text-amber-800">{label}</span>
-              {idx === 0 && markMissing ? <Mark>{show}</Mark> : show}
-            </li>
-          ))}
+            )
+            return (
+              <li key={label} className="flex flex-wrap items-center gap-2 py-2">
+                <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-50 text-[10px] font-bold text-amber-800">
+                  !
+                </span>
+                <span className="flex-1 text-amber-800">{label}</span>
+                {idx === 0 && markMissing ? <Mark>{btn}</Mark> : btn}
+              </li>
+            )
+          })}
         </ul>
       </Card>
     </div>
@@ -463,13 +515,13 @@ function TenderListTable({ warn }: { warn?: boolean }) {
         <thead>
           <tr className="border-b bg-slate-50">
             <Th>Numer</Th>
-            <Th>Klient</Th>
-            <Th>Termin</Th>
-            <Th>Wartość</Th>
-            <Th>Poz.</Th>
+            <Th>Zamawiający</Th>
+            <Th>Termin składania</Th>
+            <Th>Wartość oferty netto</Th>
+            <Th>Pozycje</Th>
             <Th>Status</Th>
-            <Th>AI %</Th>
-            <Th>Opiekun</Th>
+            <Th>Dopasowanie</Th>
+            <Th>Opiekun przetargu</Th>
           </tr>
         </thead>
         <tbody>
@@ -482,7 +534,7 @@ function TenderListTable({ warn }: { warn?: boolean }) {
             </td>
             <td className="p-2">9 661,34 zł</td>
             <td className="p-2">12</td>
-            <td className="p-2">wycena</td>
+            <td className="p-2">Wycena</td>
             <td className="p-2">85%</td>
             <td className="p-2">Artur</td>
           </tr>
@@ -492,7 +544,7 @@ function TenderListTable({ warn }: { warn?: boolean }) {
             <td className="p-2">2026-10-02</td>
             <td className="p-2">—</td>
             <td className="p-2">4</td>
-            <td className="p-2">szkic</td>
+            <td className="p-2">Szkic</td>
             <td className="p-2">0%</td>
             <td className="p-2">Artur</td>
           </tr>
@@ -564,7 +616,7 @@ function DashboardHelp() {
               <div className="mb-4 flex items-center justify-between">
                 <h1 className="text-xl font-semibold">Przetargi</h1>
                 <select className="rounded border border-slate-300 px-2 py-1.5 text-xs">
-                  <option>Deadline &lt; 7 dni</option>
+                  <option>Termin za mniej niż 7 dni</option>
                 </select>
               </div>
               <TenderListTable warn />
@@ -619,8 +671,8 @@ function TendersHelp() {
         },
         {
           action: 'Utworzenie sprawy',
-          does: 'Zapisuje nowy przetarg z tytułem, klientem i terminem, potem od razu otwiera kreator zakładania w 4 krokach.',
-          click: 'Wypełnij pola i „Utwórz”.',
+          does: 'Zapisuje nowy przetarg z tytułem, zamawiającym, terminem składania i narzutem, potem od razu otwiera kreator zakładania w 4 krokach.',
+          click: 'Wypełnij pola i „Utwórz przetarg”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Przetargi">
@@ -630,14 +682,15 @@ function TendersHelp() {
               </div>
               <Card className="mb-4 text-sm">
                 <h2 className="mb-3 font-semibold">Nowy przetarg</h2>
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <Field label="Tytuł" value="Pakiet rękawic Q2" mark />
-                  <Field label="Klient" value="Mittal" />
-                  <Field label="Termin" value="12.09.2026" />
+                  <Field label="Zamawiający" value="Mittal" />
+                  <Field label="Termin składania" value="12.09.2026" />
+                  <Field label="Narzut na cenę zakupu, %" value="18" />
                 </div>
                 <div className="mt-3">
                   <Mark>
-                    <Btn label="Utwórz" />
+                    <Btn label="Utwórz przetarg" />
                   </Mark>
                 </div>
               </Card>
@@ -647,7 +700,7 @@ function TendersHelp() {
         },
         {
           action: 'Kreator: krok 1 — Dokumenty',
-          does: 'Nowy przetarg otwiera się w kreatorze zakładania: Dokumenty, Pozycje i produkty, Warunki, Termin i start. Kafelki u góry pokazują, co już zrobione — możesz klikać między krokami. „Zamknij kreator i pokaż pełny widok” od razu przechodzi do pełnego widoku.',
+          does: 'Nowy przetarg otwiera się w kreatorze zakładania: Dokumenty, Pozycje i produkty, Warunki, Termin i narzut. Kafelki u góry pokazują, co już zrobione — możesz klikać między krokami. „Zamknij kreator i pokaż pełny widok” od razu przechodzi do pełnego widoku.',
           click: 'Nic — kreator sam zaczyna od kroku „Dokumenty”.',
           tone: 'slate',
           screen: (
@@ -659,9 +712,9 @@ function TendersHelp() {
           ),
         },
         {
-          action: 'Wgranie SIWZ',
-          does: 'Wrzucasz plik specyfikacji albo formularz ofertowy (Word). Z SIWZ AI odczyta pozycje i warunki, formularz zostanie zapisany do eksportu DOCX.',
-          click: '„Wybierz plik z komputera” albo przeciągnij PDF/XLSX/DOCX na pole.',
+          action: 'Dodanie dokumentacji przetargu',
+          does: 'Dodajesz specyfikację warunków zamówienia (SWZ, dawniej SIWZ) albo formularz ofertowy (plik Word). Ze specyfikacji zostaną odczytane pozycje i warunki, a formularz zapisany, żeby później wypełnić go cenami.',
+          click: '„Wybierz plik z komputera” albo przeciągnij plik PDF, Excel albo Word na pole.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Przetargi">
@@ -671,21 +724,21 @@ function TendersHelp() {
           ),
         },
         {
-          action: 'Analiza SIWZ przez AI',
-          does: 'Analiza rusza od razu po wybraniu pliku. Co i jak czytać (pozycje, warunki, tryb) jest schowane w „Ustawienia odczytu” — zwykle nic tam nie zmieniasz.',
+          action: 'Odczyt dokumentacji',
+          does: 'Odczyt rusza od razu po wybraniu pliku. Co i jak odczytać (pozycje, warunki, tryb odczytu) jest schowane w „Ustawienia odczytu” — zwykle nic tam nie zmieniasz.',
           click: 'Czekaj — nie odświeżaj strony.',
           tone: 'violet',
           screen: (
             <AppFrame nav="Przetargi">
               <TenderWizardHead step={0} />
-              <TenderDocumentsDrop picked="SIWZ_Mittal.pdf" />
+              <TenderDocumentsDrop picked="Specyfikacja_Mittal.pdf" />
             </AppFrame>
           ),
         },
         {
           action: 'Zatwierdzenie podglądu',
           does: 'Podgląd „Co zostanie zaimportowane” to dopiero propozycja. Pozycje i warunki trafią do przetargu po kliknięciu zielonego przycisku — wtedy kreator sam przejdzie do kroku 2.',
-          click: 'Sprawdź listę i kliknij „Dodaj do przetargu: … poz., … war.”.',
+          click: 'Sprawdź listę i kliknij „Dodaj do przetargu: … pozycji, … warunków”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Przetargi">
@@ -702,13 +755,13 @@ function TendersHelp() {
                     <span className="rounded border border-slate-300 bg-white px-2 py-1">Anuluj</span>
                     <Mark>
                       <span className="rounded bg-emerald-600 px-3 py-2 font-semibold text-white">
-                        Dodaj do przetargu: 12 poz., 2 war.
+                        Dodaj do przetargu: 12 pozycji, 5 warunków
                       </span>
                     </Mark>
                   </div>
                 </div>
                 <p className="text-slate-600">
-                  Zaznaczono: <strong>12</strong> pozycji, <strong>2</strong> warunków
+                  Zaznaczono: <strong>12</strong> pozycji, <strong>5</strong> warunków
                 </p>
               </div>
             </AppFrame>
@@ -716,7 +769,7 @@ function TendersHelp() {
         },
         {
           action: 'Kreator: krok 2 — lista pustych pozycji',
-          does: 'Widać wymagania z SIWZ. Kolumna „Produkt główny” jest pusta — oferty jeszcze nie ma.',
+          does: 'Widać wymagania zamawiającego. Kolumna „Produkt” jest pusta — oferty jeszcze nie ma.',
           click: 'Nic nie zapisuj, dopóki nie dopasujesz produktów.',
           tone: 'slate',
           screen: (
@@ -726,11 +779,11 @@ function TendersHelp() {
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b bg-slate-50">
-                      <Th>Lp</Th>
-                      <Th>SIWZ</Th>
-                      <Th>Produkt główny</Th>
+                      <Th>Pozycja</Th>
+                      <Th>Wymaganie zamawiającego</Th>
+                      <Th>Produkt</Th>
                       <Th>Ilość</Th>
-                      <Th>Cena oferty</Th>
+                      <Th>Cena w ofercie</Th>
                     </tr>
                   </thead>
                   <tbody>
@@ -755,16 +808,16 @@ function TendersHelp() {
           ),
         },
         {
-          action: 'Dopasowanie pustych do katalogu',
-          does: 'AI szuka w bazie produktów SKU do każdej pustej pozycji i zapisuje je od razu. Ręcznych własnych ofert nie rusza.',
-          click: 'Fioletowy „Dopasuj AI (puste)” na pasku nad tabelą pozycji.',
+          action: 'Dopasowanie produktów do pustych pozycji',
+          does: 'Do każdej pustej pozycji wyszukiwany jest produkt z katalogu i od razu zapisywany. Produktów wpisanych ręcznie to nie rusza.',
+          click: 'Fioletowy „Dopasuj produkty do pustych pozycji” na pasku nad pozycjami.',
           tone: 'violet',
           screen: (
             <AppFrame nav="Przetargi">
               <TenderWizardHead step={1} />
               <TenderItemsToolbar highlight="match" />
               <div className="mt-3 rounded-xl border border-violet-200 bg-white p-4 text-sm shadow-xl">
-                <p className="font-semibold text-slate-900">Trwa dopasowanie AI…</p>
+                <p className="font-semibold text-slate-900">Trwa dopasowywanie produktów…</p>
                 <p className="mt-1 text-xs text-slate-600">Nie odświeżaj strony.</p>
                 <p className="mt-3 font-mono text-2xl font-semibold text-violet-800">7 / 12</p>
                 <p className="text-xs text-slate-500">sprawdzonych pozycji</p>
@@ -778,24 +831,24 @@ function TendersHelp() {
         },
         {
           action: 'Wynik dopasowania',
-          does: 'Wiersze dostają SKU z katalogu. Fioletowa ramka = AI właśnie zmieniło ten wiersz. Sprawdź procent dopasowania.',
-          click: 'Nic — przeglądasz. Słabe % poprawiasz przyciskiem „Szukaj” w następnych krokach.',
+          does: 'Pozycje dostają produkty z katalogu. Fioletowe tło i znacznik „Zmienione przy ostatnim dopasowaniu” pokazują, co się właśnie zmieniło. Sprawdź ocenę dopasowania — to szacunek, nie zastępuje sprawdzenia karty produktu.',
+          click: 'Nic — przeglądasz. Słabą ocenę poprawiasz ręcznie w następnych krokach.',
           tone: 'violet',
           screen: (
             <AppFrame nav="Przetargi">
               <TenderWizardHead step={1} />
               <div className="mb-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs text-violet-950">
-                <strong>Ostatnie dopasowanie AI</strong>
-                <p className="mt-1">Przerobiono 12 · zmieniono 10 · bez produktu 2</p>
+                <strong>Ostatnie dopasowanie produktów</strong>
+                <p className="mt-1">Sprawdzono pozycji: 12 · zmieniono: 10 · bez pasującego produktu: 2</p>
               </div>
               <Card>
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b bg-slate-50">
-                      <Th>Lp</Th>
-                      <Th>SIWZ</Th>
-                      <Th>Produkt główny</Th>
-                      <Th>AI</Th>
+                      <Th>Pozycja</Th>
+                      <Th>Wymaganie zamawiającego</Th>
+                      <Th>Produkt</Th>
+                      <Th>Ocena dopasowania</Th>
                     </tr>
                   </thead>
                   <tbody>
@@ -818,25 +871,25 @@ function TendersHelp() {
           ),
         },
         {
-          action: 'Kontrola pokrycia oferty',
-          does: 'Pasek pokazuje, czy oferta jest kompletna. Przyciski filtrują tylko problematyczne wiersze.',
-          click: 'Np. „Bez ceny” albo „Słabe AI”, żeby zobaczyć tylko te pozycje.',
+          action: 'Stan oferty',
+          does: 'Pasek pokazuje, czy oferta jest kompletna. Przyciski filtrują tylko pozycje, które trzeba poprawić.',
+          click: 'Np. „Bez ceny” albo „Słabe dopasowanie”, żeby zobaczyć tylko te pozycje.',
           tone: 'amber',
           screen: (
             <AppFrame nav="Przetargi">
               <TenderWizardHead step={1} />
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs">
-                <div className="mb-2 flex justify-between">
-                  <strong>Pokrycie oferty: wymaga uzupełnienia</strong>
-                  <span className="text-slate-600">10/12 z produktem</span>
+                <div className="mb-2 flex flex-wrap justify-between gap-2">
+                  <strong>Stan oferty: trzeba uzupełnić</strong>
+                  <span className="text-slate-600">10 z 12 pozycji ma produkt</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  <span className="rounded bg-white px-2 py-1 text-slate-700">Bez produktu (2)</span>
+                  <span className="rounded bg-white px-2 py-1 text-slate-700">Bez produktu: 2</span>
                   <Mark>
-                    <span className="rounded bg-slate-800 px-2 py-1 text-white">Bez ceny (1)</span>
+                    <span className="rounded bg-slate-800 px-2 py-1 text-white">Bez ceny: 1</span>
                   </Mark>
-                  <span className="rounded bg-white px-2 py-1 text-slate-700">Słabe AI (1)</span>
-                  <span className="rounded bg-white/60 px-2 py-1 text-slate-400">Niska marża (0)</span>
+                  <span className="rounded bg-white px-2 py-1 text-slate-700">Słabe dopasowanie: 1</span>
+                  <span className="rounded bg-white/60 px-2 py-1 text-slate-400">Niska marża: 0</span>
                 </div>
               </div>
             </AppFrame>
@@ -844,28 +897,25 @@ function TendersHelp() {
         },
         {
           action: 'Ręczna zmiana produktu',
-          does: 'Niebieski „Szukaj” w wierszu szuka po nazwie/SKU jak na liście produktów — bez AI. Wybierasz inny SKU, gdy AI trafiło słabo albo klient chce konkretną markę.',
-          click: 'Przycisk „Szukaj” przy pozycji, potem „Wybierz”.',
+          does: '„Szukaj po nazwie lub kodzie” szuka w katalogu jak na liście produktów. „Szukaj w katalogu po opisie” podsuwa produkty pasujące do opisu pozycji, a „Szukaj w internecie” szuka poza katalogiem. Przydaje się, gdy dopasowanie jest słabe albo zamawiający chce konkretną markę.',
+          click: '„Szukaj po nazwie lub kodzie” przy pozycji, wpisz, czego szukasz, potem „Wybierz”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Przetargi">
               <TenderWizardHead step={1} />
               <Card>
-                <div className="mb-3 flex flex-wrap gap-1.5">
+                <div className="mb-3 flex flex-wrap gap-1.5 text-xs">
                   <Mark>
-                    <span className="rounded bg-sky-600 px-2 py-1 text-white">Szukaj</span>
+                    <span className="rounded bg-sky-600 px-2 py-1 text-white">Szukaj po nazwie lub kodzie</span>
                   </Mark>
-                  <span className="rounded bg-violet-600 px-2 py-1 text-white">AI</span>
+                  <span className="rounded bg-violet-600 px-2 py-1 text-white">Szukaj w katalogu po opisie</span>
+                  <span className="rounded border border-slate-300 px-2 py-1 text-slate-700">Szukaj w internecie</span>
                 </div>
-                <input
-                  readOnly
-                  className="mb-3 w-full rounded border border-slate-300 px-2 py-1.5 text-xs"
-                  value="Adapter P3E do hełmu 3M"
-                />
-                <table className="w-full text-left text-xs">
+                <Field label="Czego szukasz" value="Rękawice do pracy w wysokiej temperaturze" />
+                <table className="mt-3 w-full text-left text-xs">
                   <thead>
                     <tr className="border-b bg-slate-50">
-                      <Th>SKU</Th>
+                      <Th>Kod produktu</Th>
                       <Th>Nazwa</Th>
                       <Th>Cena</Th>
                       <Th></Th>
@@ -890,51 +940,88 @@ function TendersHelp() {
         },
         {
           action: 'Kreator: krok 3 — Warunki',
-          does: 'Warunki udziału z SIWZ (terminy, certyfikaty, wymagania). Sprawdzasz, czy AI niczego nie pominęło, i w razie potrzeby dopisujesz warunek ręcznie.',
-          click: 'Niebieski „Dalej: Warunki ›” pod pozycjami; brakujący warunek wpisz w pole i „Dodaj”.',
+          does: 'Wymagania zamawiającego poza samymi produktami: terminy dostaw, wymagane dokumenty i certyfikaty, pogrupowane po kategoriach. Przy każdym zaznaczasz, czy go spełniamy — warunki niespełnione i niesprawdzone trafiają na Podsumowanie do „Czego jeszcze brakuje w ofercie”.',
+          click: '„Dalej: Warunki ›”, potem przy każdym warunku „Spełniamy”, „Do sprawdzenia” albo „Nie spełniamy”. Brakujący warunek dopiszesz: kategoria, „Nowy warunek”, „Dodaj warunek”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Przetargi">
               <TenderWizardHead step={2} />
-              <Card className="space-y-3">
-                <p className="text-xs text-slate-500">
-                  Warunki udziału / IT z dokumentów SIWZ (terminy, certyfikaty, wymagania systemowe).
-                </p>
-                <div className="flex gap-2">
-                  <span className="flex-1 rounded border border-slate-300 px-2 py-1.5 text-xs text-slate-400">
-                    Nowy warunek…
-                  </span>
-                  <Btn label="Dodaj" />
+              <Card className="space-y-3 text-xs">
+                <div>
+                  <h2 className="text-sm font-semibold">Warunki</h2>
+                  <p className="text-slate-500">
+                    Wymagania zamawiającego poza samymi produktami: terminy dostaw, wymagane dokumenty i certyfikaty.
+                  </p>
                 </div>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Kategoria</Th>
-                      <Th>Treść</Th>
-                      <Th>Źródło</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2 text-slate-500">Dostawa</td>
-                      <td className="p-2">Dostawa w ciągu 14 dni od zamówienia</td>
-                      <td className="p-2 text-slate-400">document</td>
-                    </tr>
-                    <tr className="border-b">
-                      <td className="p-2 text-slate-500">Dokumenty</td>
-                      <td className="p-2">Karty techniczne do każdej pozycji</td>
-                      <td className="p-2 text-slate-400">document</td>
-                    </tr>
-                  </tbody>
-                </table>
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="rounded bg-emerald-50 px-2 py-1 text-emerald-700">Spełniamy: 1</span>
+                  <span className="rounded bg-amber-50 px-2 py-1 text-amber-800">Do sprawdzenia: 1</span>
+                  <span className="rounded bg-red-50 px-2 py-1 text-red-700">Nie spełniamy: 0</span>
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <Field label="Kategoria" value="Dostawa" />
+                  <div className="min-w-[180px] flex-1">
+                    <Field label="Nowy warunek" placeholder="Na przykład: dostawa w ciągu 5 dni roboczych od zamówienia" />
+                  </div>
+                  <Btn label="Dodaj warunek" />
+                </div>
+                {[
+                  {
+                    group: 'Dostawa',
+                    text: 'Dostawa w ciągu 14 dni od zamówienia',
+                    note: 'z dokumentacji przetargu · zaznaczył(a) Artur, 02.10.2026',
+                    status: 'Spełniamy',
+                  },
+                  {
+                    group: 'Certyfikaty i normy',
+                    text: 'Deklaracja zgodności do każdej pozycji',
+                    note: 'z dokumentacji przetargu',
+                    status: 'Do sprawdzenia',
+                  },
+                ].map((c) => (
+                  <div key={c.group}>
+                    <h3 className="mb-1 font-semibold text-slate-700">
+                      {c.group} <span className="font-normal text-slate-500">· 1</span>
+                    </h3>
+                    <div className="flex flex-wrap items-start gap-3 rounded-lg border border-slate-200 p-2">
+                      <div className="min-w-[180px] flex-1">
+                        <p>{c.text}</p>
+                        <p className="mt-0.5 text-[11px] text-slate-500">{c.note}</p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1">
+                        {['Spełniamy', 'Do sprawdzenia', 'Nie spełniamy'].map((label) => {
+                          const on = label === c.status
+                          const btn = (
+                            <span
+                              className={`rounded border px-2 py-1 ${
+                                on
+                                  ? label === 'Spełniamy'
+                                    ? 'border-emerald-600 bg-emerald-600 text-white'
+                                    : 'border-amber-500 bg-amber-500 text-white'
+                                  : 'border-slate-300 bg-white text-slate-600'
+                              }`}
+                            >
+                              {label}
+                            </span>
+                          )
+                          return c.status === 'Do sprawdzenia' && label === 'Spełniamy' ? (
+                            <Mark key={label}>{btn}</Mark>
+                          ) : (
+                            <span key={label}>{btn}</span>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </Card>
               <TenderWizardFooter step={2} />
             </AppFrame>
           ),
         },
         {
-          action: 'Kreator: krok 4 — Termin i start',
-          does: 'Wpisujesz termin składania i marżę; z uprawnieniem do zaproszeń zapraszasz tu też współpracowników. Lista po prawej pokazuje braki — nie blokują startu. „Rozpocznij wycenę” zmienia status ze Szkicu na Wycenę i otwiera pełny widok.',
+          action: 'Kreator: krok 4 — Termin i narzut',
+          does: 'Wpisujesz termin składania i narzut na cenę zakupu; z uprawnieniem do zaproszeń zapraszasz tu też osoby do pomocy. Lista po prawej pokazuje braki — nie blokują startu. „Rozpocznij wycenę” zmienia status ze Szkicu na Wycenę i otwiera pełny widok.',
           click: '„Zapisz termin”, potem niebieski „Rozpocznij wycenę ›”. Gdy przetarg jest już w Wycenie albo nie możesz zmienić statusu, przycisk nazywa się „Zakończ kreator ›”.',
           tone: 'green',
           screen: (
@@ -942,14 +1029,14 @@ function TendersHelp() {
               <TenderWizardHead step={3} />
               <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
                 <Card className="space-y-3 text-xs">
-                  <h2 className="text-sm font-semibold">Termin i marża</h2>
+                  <h2 className="text-sm font-semibold">Termin i narzut</h2>
                   <div className="flex flex-wrap items-end gap-2">
                     <Field label="Termin składania ofert" value="12.09.2026" />
                     <span className="rounded bg-slate-700 px-3 py-1.5 text-white">Zapisz termin</span>
                   </div>
                   <div className="flex flex-wrap items-end gap-2">
-                    <Field label="Marża oferty (narzut %)" value="18" />
-                    <span className="rounded bg-violet-700 px-3 py-1.5 text-white">Zapisz marżę</span>
+                    <Field label="Narzut na cenę zakupu, %" value="18" />
+                    <span className="rounded bg-violet-700 px-3 py-1.5 text-white">Zapisz narzut</span>
                   </div>
                 </Card>
                 <Card className="space-y-1.5 text-xs">
@@ -958,9 +1045,12 @@ function TendersHelp() {
                     [
                       [true, 'Dokumenty: 1'],
                       [true, '12 z 12 pozycji ma produkt'],
-                      [true, 'Warunki: 2'],
+                      [true, 'Warunki: sprawdzone 2 z 2'],
                       [true, 'Termin składania: 12.09.2026'],
-                      [false, 'Brak formularza Word — eksport DOCX nie zadziała'],
+                      [
+                        false,
+                        'Brak formularza ofertowego (plik Word) — nie da się pobrać formularza ofertowego z cenami',
+                      ],
                     ] as Array<[boolean, string]>
                   ).map(([ok, label]) => (
                     <p key={label} className="flex items-start gap-2">
@@ -974,6 +1064,7 @@ function TendersHelp() {
                       <span className={ok ? 'text-slate-700' : 'text-amber-800'}>{label}</span>
                     </p>
                   ))}
+                  <p className="text-slate-500">Braki nie blokują startu — uzupełnisz je w pełnym widoku przetargu.</p>
                 </Card>
               </div>
               <TenderWizardFooter step={3} mark />
@@ -982,7 +1073,7 @@ function TendersHelp() {
         },
         {
           action: 'Pełny widok z menu bocznym',
-          does: 'Po kreatorze sprawa otwiera się na Podsumowaniu: termin, pokrycie, wartość, marża i lista braków. „Pokaż” przenosi prosto do problematycznych pozycji. Sekcje wybierasz z menu po lewej.',
+          does: 'Po kreatorze sprawa otwiera się na Podsumowaniu: termin, pozycje z produktem, wartość, marża i lista braków. „Pokaż” przenosi prosto do pozycji do poprawienia, „Warunki” do warunków do sprawdzenia. Pod nagłówkiem każdej sekcji jest jedno zdanie, co w niej jest.',
           click: 'Menu boczne: Dokumenty, Warunki, Pozycje, Zamienniki, Oferta, Komentarze, Zaproszenia, Historia i statusy.',
           tone: 'slate',
           screen: (
@@ -997,7 +1088,7 @@ function TendersHelp() {
         {
           action: 'Przekazanie do akceptacji',
           does: 'Zmiana statusu puszcza sprawę dalej: Szkic → Wycena → Akceptacja kierownika → Akceptacja dyrektora. Bez tego oferta zostaje u Ciebie. Status zmieniasz w „Historia i statusy” — tam jest też historia zmian.',
-          click: 'Menu boczne „Historia i statusy”, potem przycisk następnego statusu (zależnie od roli).',
+          click: 'Menu boczne „Historia i statusy”, potem „Zmień na: …” z nazwą następnego statusu (zależnie od roli).',
           tone: 'blue',
           screen: (
             <AppFrame nav="Przetargi">
@@ -1009,13 +1100,13 @@ function TendersHelp() {
                     Teraz: <strong>Wycena</strong>
                   </p>
                   <Field
-                    label="Notatka (wymagana przy odrzuceniu / cofnięciu z akceptacji)"
+                    label="Notatka (wymagana przy odrzuceniu albo cofnięciu z akceptacji)"
                     placeholder="Uzasadnienie decyzji…"
                   />
                   <div className="mt-3">
                     <Mark>
                       <span className="inline-block rounded bg-blue-600 px-3 py-2 text-white">
-                        → Akceptacja kierownika
+                        Zmień na: Akceptacja kierownika
                       </span>
                     </Mark>
                   </div>
@@ -1026,15 +1117,15 @@ function TendersHelp() {
         },
         {
           action: 'Pobranie oferty',
-          does: 'Ściąga plik z cenami: Excel do pracy, PDF do wysyłki, Formularz ofertowy (DOCX), gdy w Dokumentach wgrano formularz klienta.',
-          click: '„Eksport ▾” w prawym górnym rogu sprawy, potem Excel, PDF albo Formularz ofertowy (DOCX). Usunięcie przetargu jest obok, w menu „⋯”.',
+          does: 'Ściąga plik z cenami: ofertę w pliku Excel do dalszej pracy, w pliku PDF do wydruku albo wysłania, a „Formularz ofertowy z cenami (Word)” wypełnia formularz zamawiającego dodany w Dokumentach.',
+          click: '„Eksport ▾” w prawym górnym rogu sprawy, potem wybierz plik. Usunięcie przetargu jest obok: menu „⋯” → „Usuń przetarg”.',
           tone: 'green',
           screen: (
             <AppFrame nav="Przetargi">
               <TenderHead menu="export" />
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs">
-                <strong>Pokrycie oferty: gotowa do akceptacji</strong>
-                <span className="ml-2 text-slate-600">12/12 z produktem</span>
+                <strong>Stan oferty: gotowa do akceptacji</strong>
+                <span className="ml-2 text-slate-600">12 z 12 pozycji ma produkt</span>
               </div>
             </AppFrame>
           ),
@@ -1173,7 +1264,7 @@ function ProductsHelp() {
         {
           action: 'Karta produktu',
           does: 'Pokazuje SKU, cenę katalogową, opis, zdjęcia i zamienniki — to źródło kodu do oferty.',
-          click: 'Wiersz na liście albo numer SKU w przetargu.',
+          click: 'Wiersz na liście albo kod produktu w pozycji przetargu.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Produkty">
@@ -1189,9 +1280,9 @@ function ProductsHelp() {
           ),
         },
         {
-          action: 'Użycie SKU w ofercie',
-          does: 'Ten kod wklejasz w pozycji przetargu albo wybierasz przyciskiem „Szukaj” — cena weźmie się z cennika.',
-          click: 'Skopiuj SKU, wróć do menu Przetargi i w sprawie otwórz sekcję „Pozycje” z menu bocznego.',
+          action: 'Użycie produktu w ofercie',
+          does: 'Kod produktu wpisujesz w pozycji przetargu przez „Szukaj po nazwie lub kodzie” — cena w ofercie weźmie się z cennika.',
+          click: 'Skopiuj kod produktu, wróć do menu Przetargi i w sprawie otwórz sekcję „Pozycje” z menu bocznego.',
           tone: 'green',
           screen: (
             <AppFrame nav="Przetargi">
@@ -1201,9 +1292,9 @@ function ProductsHelp() {
                   <table className="w-full text-left text-xs">
                     <thead>
                       <tr className="border-b bg-slate-50">
-                        <Th>SIWZ</Th>
-                        <Th>Produkt główny</Th>
-                        <Th>Cena oferty</Th>
+                        <Th>Wymaganie zamawiającego</Th>
+                        <Th>Produkt</Th>
+                        <Th>Cena w ofercie</Th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1620,8 +1711,8 @@ function SubstitutesHelp() {
         },
         {
           action: 'Podmiana w ofercie',
-          does: 'W przetargu system proponuje tańsze zatwierdzone zamienniki (≥3% po upuście) i po potwierdzeniu podmienia SKU.',
-          click: 'Sekcja „Pozycje” w menu bocznym sprawy → „Zastosuj tańsze zamienniki” na pasku nad tabelą, potem „Tak, zastosuj”.',
+          does: 'W przetargu pojawia się propozycja tańszych zatwierdzonych zamienników (co najmniej 3% taniej po upuście); po potwierdzeniu produkt w pozycji zostaje podmieniony.',
+          click: 'Sekcja „Pozycje” w menu bocznym sprawy → „Zastosuj tańsze zamienniki” na pasku nad pozycjami, potem „Tak, zastosuj”.',
           tone: 'green',
           screen: (
             <AppFrame nav="Przetargi">
@@ -1630,7 +1721,7 @@ function SubstitutesHelp() {
                 <TenderItemsToolbar highlight="cheaper" />
                 <div className="rounded-lg border-2 border-amber-400 bg-amber-50 p-3 text-xs">
                   <p className="font-semibold text-amber-950">Zastosować tańsze zamienniki na 3 pozycjach?</p>
-                  <p className="mt-2 font-mono text-[11px]">Poz. 1: ARĘKGLOMJ713 → ARĘKGLOMJ714 (−8%)</p>
+                  <p className="mt-2 font-mono text-[11px]">Pozycja 1: ARĘKGLOMJ713 → ARĘKGLOMJ714 (taniej o 8% · cena zakupu 11,40 zł)</p>
                   <div className="mt-3 flex gap-2">
                     <span className="rounded border border-slate-300 bg-white px-3 py-1.5 text-[11px]">Anuluj</span>
                     <Mark>
@@ -1856,9 +1947,9 @@ function ClientsHelp() {
           ),
         },
         {
-          action: 'Wybór klienta w przetargu',
-          does: 'Nowy przetarg wymaga klienta z tej listy — bez niego nie utworzysz sprawy.',
-          click: 'W formularzu „Nowy przetarg” lista „Klient”.',
+          action: 'Wybór zamawiającego w przetargu',
+          does: 'W przetargu klient nazywa się zamawiającym. Nowy przetarg wymaga zamawiającego z tej listy — bez niego nie utworzysz sprawy.',
+          click: 'W formularzu „Nowy przetarg” lista „Zamawiający”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Przetargi">
@@ -1867,11 +1958,11 @@ function ClientsHelp() {
                 <h2 className="mb-3 font-semibold">Nowy przetarg</h2>
                 <div className="grid gap-3 sm:grid-cols-3">
                   <Field label="Tytuł" placeholder="np. Pakiet rękawic Q2" />
-                  <Field label="Klient" value="Zakład Szkła Sp. z o.o." mark />
-                  <Field label="Termin" placeholder="dd.mm.rrrr" />
+                  <Field label="Zamawiający" value="Zakład Szkła Sp. z o.o." mark />
+                  <Field label="Termin składania" placeholder="dd.mm.rrrr" />
                 </div>
                 <div className="mt-3">
-                  <Btn label="Utwórz" />
+                  <Btn label="Utwórz przetarg" />
                 </div>
               </Card>
             </AppFrame>
