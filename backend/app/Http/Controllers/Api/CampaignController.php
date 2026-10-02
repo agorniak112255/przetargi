@@ -339,6 +339,10 @@ class CampaignController extends Controller
                     'promo_price_net' => $item->promo_price_net,
                     'price_before_net' => $item->price_before_net,
                     'note' => $item->note,
+                    'description' => $item->description,
+                    'link_url' => $item->link_url,
+                    'link_label' => $item->link_label,
+                    'link_color' => $item->link_color,
                 ]);
             }
 
@@ -373,14 +377,28 @@ class CampaignController extends Controller
             'description' => ['sometimes', 'nullable', 'string', 'max:300'],
             'product_id' => ['sometimes', 'nullable', 'integer', Rule::exists('products', 'id')],
             'position' => ['sometimes', 'integer', 'min:1', 'max:1000'],
+            // drugi przycisk przy produkcie (np. do sklepu): link, nazwa i kolor razem; pusty link usuwa przycisk
+            'link_url' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'link_label' => ['required_with:link_url', 'nullable', 'string', 'max:40', 'not_regex:'.self::NO_NEWLINE],
+            'link_color' => ['required_with:link_url', 'nullable', 'string', Rule::in(CampaignBlocks::BRAND_COLORS)],
+        ], [
+            'link_label.required_with' => 'Wpisz nazwę przycisku.',
+            'link_label.max' => 'Nazwa przycisku może mieć najwyżej 40 znaków.',
+            'link_label.not_regex' => 'Nazwa przycisku musi być jedną linią.',
+            'link_color.required_with' => 'Wybierz kolor przycisku.',
+            'link_color.in' => 'Wybierz kolor przycisku z listy.',
         ]);
+        $link = $this->itemLink($v);
 
-        $this->lockedDraft($campaign, function (Campaign $campaign) use ($item, $v): void {
+        $this->lockedDraft($campaign, function (Campaign $campaign) use ($item, $v, $link): void {
             $data = array_intersect_key($v, array_flip(['promo_price_net', 'price_before_net', 'note', 'description', 'product_id']));
             foreach (['note', 'description'] as $field) {
                 if (array_key_exists($field, $data) && is_string($data[$field])) {
                     $data[$field] = trim($data[$field]) !== '' ? trim($data[$field]) : null;
                 }
+            }
+            if ($link !== null) {
+                $data = [...$data, ...$link];
             }
             if ($data !== []) {
                 $item->update($data);
@@ -1211,6 +1229,33 @@ class CampaignController extends Controller
         });
     }
 
+    /**
+     * Pola drugiego przycisku pozycji z żądania: null = żądanie ich nie zmienia; pusty link = przycisk usunięty
+     * (wszystkie trzy null). Link tylko https:// jak przycisk w blokach maila (CampaignBlocks::validUrl).
+     *
+     * @param  array<string, mixed>  $v
+     * @return array{link_url: string|null, link_label: string|null, link_color: string|null}|null
+     */
+    private function itemLink(array $v): ?array
+    {
+        if (! array_key_exists('link_url', $v)) {
+            return null;
+        }
+        $url = trim((string) ($v['link_url'] ?? ''));
+        if ($url === '') {
+            return ['link_url' => null, 'link_label' => null, 'link_color' => null];
+        }
+        if (! CampaignBlocks::validUrl($url, false)) {
+            throw ValidationException::withMessages(['link_url' => 'Link musi zaczynać się od https:// i nie może zawierać spacji.']);
+        }
+        $label = trim((string) ($v['link_label'] ?? ''));
+        if ($label === '') {
+            throw ValidationException::withMessages(['link_label' => 'Wpisz nazwę przycisku.']);
+        }
+
+        return ['link_url' => $url, 'link_label' => $label, 'link_color' => (string) $v['link_color']];
+    }
+
     private function ensureItemOf(Campaign $campaign, CampaignItem $item): void
     {
         if ((int) $item->campaign_id !== (int) $campaign->id) {
@@ -1338,7 +1383,7 @@ class CampaignController extends Controller
      * Kliknięcia w linki maila: odbiorcy, którzy kliknęli, i kliknięcia ludzi per pozycja (offer = „Zapytaj o ofertę”,
      * product = strona produktu). Skanery poczty tylko w liczniku bots.
      *
-     * @return array{recipients: int, total: int, bots: int, items: list<array{campaign_item_id: int, offer: int, product: int}>}
+     * @return array{recipients: int, total: int, bots: int, items: list<array{campaign_item_id: int, offer: int, product: int, link: int}>}
      */
     private function clickSummary(Campaign $campaign): array
     {
@@ -1360,8 +1405,12 @@ class CampaignController extends Controller
                 continue;
             }
             $id = (int) $row->campaign_item_id;
-            $items[$id] ??= ['campaign_item_id' => $id, 'offer' => 0, 'product' => 0];
-            $items[$id][$row->kind === CampaignClick::KIND_OFFER ? 'offer' : 'product'] += $count;
+            $items[$id] ??= ['campaign_item_id' => $id, 'offer' => 0, 'product' => 0, 'link' => 0];
+            $items[$id][match ($row->kind) {
+                CampaignClick::KIND_OFFER => 'offer',
+                CampaignClick::KIND_LINK => 'link',
+                default => 'product',
+            }] += $count;
         }
 
         return [

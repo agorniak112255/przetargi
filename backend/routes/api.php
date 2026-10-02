@@ -97,6 +97,7 @@ Route::post('/wypis/{token}', [UnsubscribeController::class, 'confirm'])->where(
 Route::middleware('throttle:300,1')->group(function (): void {
     Route::get('/k/{token}/o/{item}', [CampaignClickController::class, 'offer'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
     Route::get('/k/{token}/p/{item}', [CampaignClickController::class, 'product'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
+    Route::get('/k/{token}/l/{item}', [CampaignClickController::class, 'link'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
 });
 
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {

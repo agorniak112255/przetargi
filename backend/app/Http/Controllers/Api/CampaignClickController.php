@@ -10,7 +10,9 @@ use App\Models\CampaignClick;
 use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
 use App\Models\Product;
+use App\Services\Campaigns\CampaignBlocks;
 use App\Services\Campaigns\CampaignItemPresenter;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Carbon;
@@ -18,9 +20,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 /**
- * Publiczne linki z maila kampanii (bez logowania): zapis kliknięcia i strona produktu. Link „o” (zapytanie) był
- * w mailach do 30.09.2026 przekierowaniem do mailto — przeglądarka otwierała wtedy kartę i pytała o zgodę na program
- * pocztowy; teraz też pokazuje stronę produktu, a mail ma zwykły mailto. Cel wynika z pozycji kampanii w bazie, nigdy z adresu (bez otwartego
+ * Publiczne linki z maila kampanii (bez logowania): zapis kliknięcia i strona produktu albo własny link pozycji (drugi
+ * przycisk, np. do sklepu). Link „o” (zapytanie) był w mailach do 30.09.2026 przekierowaniem do mailto — przeglądarka
+ * otwierała wtedy kartę i pytała o zgodę na program pocztowy; teraz też pokazuje stronę produktu, a mail ma zwykły mailto. Cel wynika z pozycji kampanii w bazie, nigdy z adresu (bez otwartego
  * przekierowania). Zły token albo pozycja z innej kampanii = ta sama ogólna strona 404.
  */
 class CampaignClickController extends Controller
@@ -60,6 +62,25 @@ class CampaignClickController extends Controller
         $this->record($request, $recipient, $campaignItem, CampaignClick::KIND_PRODUCT);
 
         return $this->productPage($recipient, $campaignItem);
+    }
+
+    /**
+     * Drugi przycisk pozycji (link handlowca, np. do sklepu): zapis kliknięcia i przekierowanie pod adres zapisany przy
+     * pozycji — nigdy z adresu żądania. Pozycja bez linku (usunięty) albo z niepoprawnym — strona produktu.
+     */
+    public function link(Request $request, string $token, int $item): Response|RedirectResponse
+    {
+        [$recipient, $campaignItem] = $this->resolve($token, $item);
+        if ($recipient === null || $campaignItem === null) {
+            return $this->notFound();
+        }
+        $url = (string) ($campaignItem->link_url ?? '');
+        if ($url === '' || ! CampaignBlocks::validUrl($url, false)) {
+            return $this->productPage($recipient, $campaignItem);
+        }
+        $this->record($request, $recipient, $campaignItem, CampaignClick::KIND_LINK);
+
+        return redirect()->away($url)->header('Referrer-Policy', 'no-referrer');
     }
 
     /** @return array{0: CampaignRecipient|null, 1: CampaignItem|null} */
@@ -150,6 +171,10 @@ class CampaignClickController extends Controller
                 'validUntil' => $campaign->valid_until?->format('d.m.Y'),
                 // kliknięcie wprost na stronie (bez przekierowania) otwiera program pocztowy bez dodatkowego pytania
                 'askUrl' => $this->mailto($campaign, $item),
+                // drugi przycisk pozycji też przez aplikację (zapis kliknięcia)
+                'link' => ($row['link'] ?? null) !== null && $publicUrl !== '' && CampaignBlocks::validUrl($row['link']['url'], false)
+                    ? [...$row['link'], 'url' => $publicUrl.'/api/k/'.$recipient->token.'/l/'.$item->id]
+                    : null,
                 'fromName' => $account !== null ? (string) $account->from_name : (string) ($author?->name ?? ''),
                 'fromAddress' => $account !== null ? (string) $account->from_address : null,
                 'signature' => $account?->signature,

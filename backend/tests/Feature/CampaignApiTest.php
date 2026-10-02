@@ -262,6 +262,23 @@ final class CampaignApiTest extends TestCase
         $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", ['description' => str_repeat('x', 301)])->assertUnprocessable();
         $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", ['description' => '   '])->assertOk();
         $this->assertNull($c->refresh()->description);
+        // drugi przycisk: link https, nazwa i kolor z palety razem; pusty link usuwa wszystkie trzy
+        $link = ['link_url' => ' https://sklep.supon.pl/p/1 ', 'link_label' => ' Kup w sklepie ', 'link_color' => '#1f5fa8'];
+        $saved = fn (): array => array_values($c->refresh()->only(['link_url', 'link_label', 'link_color']));
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", $link)->assertOk();
+        $this->assertSame(['https://sklep.supon.pl/p/1', 'Kup w sklepie', '#1f5fa8'], $saved());
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", [...$link, 'link_url' => 'http://sklep.supon.pl'])->assertUnprocessable()->assertJsonValidationErrors('link_url');
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", [...$link, 'link_url' => 'javascript:alert(1)'])->assertUnprocessable()->assertJsonValidationErrors('link_url');
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", [...$link, 'link_label' => ''])->assertUnprocessable()->assertJsonValidationErrors('link_label');
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", [...$link, 'link_label' => str_repeat('x', 41)])->assertUnprocessable()->assertJsonValidationErrors('link_label');
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", [...$link, 'link_label' => "a\nb"])->assertUnprocessable()->assertJsonValidationErrors('link_label');
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", [...$link, 'link_color' => '#ffffff'])->assertUnprocessable()->assertJsonValidationErrors('link_color');
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", ['link_url' => 'https://inny.pl'])->assertUnprocessable()->assertJsonValidationErrors(['link_label', 'link_color']);
+        // inne pola pozycji nie ruszają linku; odrzucone zmiany niczego nie zapisały
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", ['note' => 'x'])->assertOk();
+        $this->assertSame(['https://sklep.supon.pl/p/1', 'Kup w sklepie', '#1f5fa8'], $saved());
+        $this->patchJson("/api/campaigns/{$campaign->id}/items/{$c->id}", ['link_url' => null, 'link_label' => null, 'link_color' => null])->assertOk();
+        $this->assertSame([null, null, null], $saved());
 
         $res = $this->deleteJson("/api/campaigns/{$campaign->id}/items/{$a->id}")->assertOk();
         $this->assertSame([[$c->id, 1], [$b->id, 2]], array_map(fn (array $i): array => [$i['id'], $i['position']], $res->json('items')));
@@ -278,7 +295,10 @@ final class CampaignApiTest extends TestCase
             'sent_at' => now(), 'totals' => ['recipients' => 5, 'sent' => 5, 'failed' => 0, 'skipped' => 0],
             'audience' => ['list_ids' => [$authorList->id, $shared->id], 'xl' => ['mode' => 'group', 'months' => 12, 'only_mine' => true]],
         ]);
-        $item = $this->addItem($campaign, 1, ['promo_price_net' => 10, 'note' => 'N', 'snap_name' => 'Stara', 'snap_stock' => 5, 'stock_after_7d' => 2]);
+        $item = $this->addItem($campaign, 1, [
+            'promo_price_net' => 10, 'note' => 'N', 'snap_name' => 'Stara', 'snap_stock' => 5, 'stock_after_7d' => 2,
+            'description' => 'Opis', 'link_url' => 'https://sklep.pl/p/1', 'link_label' => 'Kup', 'link_color' => '#1f5fa8',
+        ]);
         $this->recipient($campaign, 'a@x.pl', CampaignRecipient::STATUS_SENT);
 
         Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
@@ -301,6 +321,8 @@ final class CampaignApiTest extends TestCase
         $this->assertSame(0, $copy->recipients()->count());
         $copied = $copy->items()->firstOrFail();
         $this->assertSame([$item->erp_item_id, '10.00', 'N', null, null, null], [$copied->erp_item_id, $copied->promo_price_net, $copied->note, $copied->snap_name, $copied->snap_stock, $copied->stock_after_7d]);
+        // opis i drugi przycisk to treść pozycji — kopia je zachowuje
+        $this->assertSame(['Opis', 'https://sklep.pl/p/1', 'Kup', '#1f5fa8'], [$copied->description, $copied->link_url, $copied->link_label, $copied->link_color]);
     }
 
     public function test_send_only_author_and_cancel(): void

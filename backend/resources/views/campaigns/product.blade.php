@@ -50,6 +50,9 @@
 @if ($askUrl !== null)
           <a href="{{ $askUrl }}" style="display:inline-block;margin-top:16px;background:#0b7d6a;color:#ffffff;text-decoration:none;border-radius:4px;padding:10px 18px;font-size:15px;font-weight:700;">Zapytaj o ofertę</a>
 @endif
+@if (($link ?? null) !== null)
+          <a href="{{ $link['url'] }}" style="display:inline-block;margin-top:16px;background:{{ $link['color'] }};color:#ffffff;text-decoration:none;border-radius:4px;padding:10px 18px;font-size:15px;font-weight:700;">{{ $link['label'] }}</a>
+@endif
         </div>
       </div>
 @if ($description !== null)

@@ -138,6 +138,12 @@ class CampaignItemPresenter
                 'note' => $item->note,
                 // opis wpisany przy pozycji; null = w mailu idzie card_excerpt
                 'description' => $item->description,
+                // drugi przycisk w mailu (np. do sklepu); null = tylko „Zapytaj o ofertę”
+                'link' => $item->link_url !== null && $item->link_label !== null ? [
+                    'url' => (string) $item->link_url,
+                    'label' => (string) $item->link_label,
+                    'color' => in_array($item->link_color, CampaignBlocks::BRAND_COLORS, true) ? (string) $item->link_color : CampaignBlocks::DEFAULT_COLOR,
+                ] : null,
                 'card_excerpt' => $card !== null && $cardTexts->has($card['id'])
                     ? ProductExcerpt::fromDescription($cardTexts->get($card['id'])->description, (string) $cardTexts->get($card['id'])->name)
                     : null,

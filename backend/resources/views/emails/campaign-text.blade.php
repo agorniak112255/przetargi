@@ -60,6 +60,9 @@
 @if ($p['ask_url'] !== '#')
   Zapytaj o ofertę: {!! $p['ask_url'] !!}
 @endif
+@if (($p['link'] ?? null) !== null)
+  {!! $p['link']['label'] !!}: {!! $p['link']['url'] !!}
+@endif
 
 @endforeach
 @break

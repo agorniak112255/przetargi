@@ -226,6 +226,35 @@ final class CampaignRendererTest extends TestCase
         $this->assertStringContainsString($excerpt, $text);
     }
 
+    public function test_item_link_is_second_button_in_every_layout_escaped_and_skipped_when_invalid(): void
+    {
+        $author = $this->sender();
+        $campaign = $this->campaign($author, [$this->erpItem('A1'), $this->erpItem('A2')], ['layout' => 'grid3']);
+        CampaignItem::query()->orderBy('position')->first()
+            ->update(['link_url' => 'https://sklep.example.pl/p?a=1&b=2', 'link_label' => 'Kup <b>teraz</b>', 'link_color' => '#c25e00']);
+        $render = fn (string $layout): array => app(CampaignRenderer::class)->render(tap($campaign->fresh())->update(['layout' => $layout])->fresh());
+        $button = 'href="https://sklep.example.pl/p?a=1&amp;b=2"';
+        $presented = app(CampaignItemPresenter::class)->presentMany($campaign->fresh()->items()->get(), $author);
+        $this->assertSame(['url' => 'https://sklep.example.pl/p?a=1&b=2', 'label' => 'Kup <b>teraz</b>', 'color' => '#c25e00'], $presented[0]['link']);
+        $this->assertNull($presented[1]['link']);
+
+        foreach (['grid3', 'grid2', 'list', 'grid2_desc', 'list_desc', 'pricelist'] as $layout) {
+            $html = $render($layout)['html'];
+            // tylko pozycja z linkiem ma drugi przycisk, w wybranym kolorze, nazwa escapowana
+            $this->assertSame(1, substr_count($html, $button), $layout);
+            $this->assertStringContainsString('Kup &lt;b&gt;teraz&lt;/b&gt;</a>', $html, $layout);
+            $this->assertStringNotContainsString('<b>teraz</b>', $html, $layout);
+            $this->assertStringContainsString('bgcolor="#c25e00"', $html, $layout);
+        }
+        $this->assertStringContainsString('Kup <b>teraz</b>: https://sklep.example.pl/p?a=1&b=2', $render('list')['text']);
+
+        // zapisany adres, który nie jest https:// (np. sprzed walidacji) — przycisk pominięty, mail się renderuje
+        CampaignItem::query()->update(['link_url' => 'http://sklep.example.pl']);
+        $html = $render('grid3')['html'];
+        $this->assertStringNotContainsString('sklep.example.pl', $html);
+        $this->assertStringNotContainsString('Kup &lt;b&gt;', $html);
+    }
+
     public function test_header_without_own_logo_shows_default_supon_banner(): void
     {
         $campaign = $this->campaign($this->sender(), [$this->erpItem('B20417')], [

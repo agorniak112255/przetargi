@@ -15,7 +15,9 @@ use Illuminate\Support\Carbon;
  * Treść maila kampanii (Blade emails/campaign + campaign-text) — ten sam HTML w podglądzie, teście i wysyłce.
  * Bez odbiorcy link wypisu to „#”, a zdjęcie i nazwa bez linku do strony produktu; u odbiorcy strona produktu idzie
  * przez aplikację (zapis kliknięcia, CampaignClickController). „Zapytaj o ofertę” to zawsze zwykły mailto — przez
- * przekierowanie przeglądarka otwierałaby kartę i pytała o zgodę na program pocztowy (sprawdzone 30.09.2026). Nie final — testy podmieniają zależności.
+ * przekierowanie przeglądarka otwierałaby kartę i pytała o zgodę na program pocztowy (sprawdzone 30.09.2026). Drugi
+ * przycisk pozycji (własny link handlowca, np. do sklepu) u odbiorcy też idzie przez aplikację. Nie final — testy
+ * podmieniają zależności.
  *
  * Układ maila to bloki (CampaignBlocks) w zapisanej kolejności; puste i niekompletne bloki są pomijane (renderer nigdy
  * nie rzuca). Zawsze, niezależnie od bloków: „Ceny netto ważne…” nad produktami, podpis nadawcy po blokach i linia
@@ -120,6 +122,7 @@ class CampaignRenderer
                 'norms' => $snap !== null ? $snap['norms'] : $row['card_norms'],
                 'ask_url' => $this->askUrl($fromAddress, $code, $itemCode),
                 'product_url' => $track !== null ? $track.'/p/'.$row['id'] : null,
+                'link' => $this->link($row['link'], $track !== null ? $track.'/l/'.$row['id'] : null),
             ];
         }
 
@@ -165,6 +168,7 @@ class CampaignRenderer
                 'norms' => $i === 1 ? ['EN ISO 20345', 'S3 SRC'] : [],
                 'ask_url' => $this->askUrl($fromAddress, self::SAMPLE_CODE, 'PRZYKLAD'.$i),
                 'product_url' => null,
+                'link' => null,
             ];
         }
 
@@ -299,6 +303,22 @@ class CampaignRenderer
         }
 
         return $out;
+    }
+
+    /**
+     * Drugi przycisk pozycji. U odbiorcy przez aplikację (zapis kliknięcia, CampaignClickController::link), w podglądzie
+     * i teście wprost; zapisany adres niepoprawny dla maila (tylko https://) — przycisk pominięty.
+     *
+     * @param  array{url: string, label: string, color: string}|null  $link
+     * @return array{url: string, label: string, color: string}|null
+     */
+    private function link(?array $link, ?string $tracked): ?array
+    {
+        if ($link === null || ! CampaignBlocks::validUrl($link['url'], false) || $this->line($link['label']) === '') {
+            return null;
+        }
+
+        return ['url' => $tracked ?? $link['url'], 'label' => $this->line($link['label']), 'color' => $link['color']];
     }
 
     private function askUrl(string $fromAddress, string $code, string $itemCode): string

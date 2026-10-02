@@ -7,12 +7,15 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-/** Kliknięcie w link kampanii: „Zapytaj o ofertę” (offer) albo strona produktu (product). */
+/** Kliknięcie w link kampanii: „Zapytaj o ofertę” (offer), strona produktu (product) albo własny link pozycji (link). */
 class CampaignClick extends Model
 {
     public const KIND_OFFER = 'offer';
 
     public const KIND_PRODUCT = 'product';
+
+    /** Drugi przycisk przy produkcie — link wpisany przez handlowca (CampaignItem::link_url). */
+    public const KIND_LINK = 'link';
 
     protected $fillable = [
         'campaign_id',

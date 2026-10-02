@@ -123,6 +123,40 @@ final class CampaignClickTest extends TestCase
         $this->assertSame(CampaignClick::KIND_PRODUCT, CampaignClick::query()->sole()->kind);
     }
 
+    public function test_item_link_goes_through_app_redirects_to_saved_url_and_counts(): void
+    {
+        [$campaign, $recipient, $author] = $this->sentCampaign();
+        $item = $campaign->items()->first();
+        $item->forceFill(['link_url' => 'https://sklep.supon.example.pl/p/123?utm=k', 'link_label' => 'Kup w sklepie', 'link_color' => '#c25e00'])->save();
+        $tracked = "https://przetargi.example.pl/api/k/{$recipient->token}/l/{$item->id}";
+
+        // mail odbiorcy: przycisk przez aplikację; podgląd i test — wprost pod zapisany adres
+        $mail = app(CampaignRenderer::class)->render($campaign->fresh(), $recipient);
+        $this->assertStringContainsString('href="'.$tracked.'"', $mail['html']);
+        $this->assertStringContainsString('Kup w sklepie: '.$tracked, $mail['text']);
+        $preview = app(CampaignRenderer::class)->render($campaign->fresh())['html'];
+        $this->assertStringContainsString('href="https://sklep.supon.example.pl/p/123?utm=k"', $preview);
+
+        // przekierowanie pod adres z pozycji (nie z żądania), kliknięcie „link” liczone jak inne
+        $this->get("/api/k/{$recipient->token}/l/{$item->id}", ['User-Agent' => self::BROWSER])
+            ->assertRedirect('https://sklep.supon.example.pl/p/123?utm=k');
+        $this->assertSame(CampaignClick::KIND_LINK, CampaignClick::query()->sole()->kind);
+        $this->assertSame(1, $recipient->fresh()->clicks);
+
+        // strona produktu też ma drugi przycisk przez aplikację
+        $this->get("/api/k/{$recipient->token}/p/{$item->id}", ['User-Agent' => self::BROWSER])->assertOk()
+            ->assertSee('href="'.$tracked.'"', false)->assertSee('Kup w sklepie');
+
+        Sanctum::actingAs($author);
+        $this->getJson("/api/campaigns/{$campaign->id}")->assertOk()
+            ->assertJsonPath('clicks.items', [['campaign_item_id' => $item->id, 'offer' => 0, 'product' => 1, 'link' => 1]]);
+
+        // link usunięty z pozycji (albo niepoprawny) — zamiast przekierowania strona produktu, bez kliknięcia „link”
+        $item->forceFill(['link_url' => 'javascript:alert(1)'])->save();
+        $this->get("/api/k/{$recipient->token}/l/{$item->id}", ['User-Agent' => self::BROWSER])->assertOk()->assertSee('PÓŁBUTY');
+        $this->assertSame(1, CampaignClick::query()->where('kind', CampaignClick::KIND_LINK)->count());
+    }
+
     public function test_wrong_token_or_item_of_other_campaign_is_generic_not_found(): void
     {
         [$campaign, $recipient, $author] = $this->sentCampaign();
@@ -147,7 +181,7 @@ final class CampaignClickTest extends TestCase
 
         Sanctum::actingAs($author);
         $this->getJson("/api/campaigns/{$campaign->id}")->assertOk()
-            ->assertJsonPath('clicks', ['recipients' => 1, 'total' => 2, 'bots' => 1, 'items' => [['campaign_item_id' => $itemId, 'offer' => 1, 'product' => 1]]]);
+            ->assertJsonPath('clicks', ['recipients' => 1, 'total' => 2, 'bots' => 1, 'items' => [['campaign_item_id' => $itemId, 'offer' => 1, 'product' => 1, 'link' => 0]]]);
         $this->getJson("/api/campaigns/{$campaign->id}/recipients?clicked=1")->assertOk()
             ->assertJsonCount(1, 'data')->assertJsonPath('data.0.email', 'klient@alfa.pl')->assertJsonPath('data.0.clicks', 2);
         $this->getJson('/api/campaigns')->assertOk()->assertJsonPath('data.0.clicked', 1);

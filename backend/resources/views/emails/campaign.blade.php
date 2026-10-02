@@ -144,6 +144,16 @@
                         </td>
                       </tr>
                     </table>
+@if (($p['link'] ?? null) !== null)
+                    {{-- nazwa do 40 znaków — łamie się (max-width), żeby nie rozpychać kolumny cennika --}}
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:4px;">
+                      <tr>
+                        <td align="center" bgcolor="{{ $p['link']['color'] }}" style="background:{{ $p['link']['color'] }};border-radius:4px;">
+                          <a href="{{ $p['link']['url'] }}" style="display:block;max-width:120px;padding:5px 10px;color:#ffffff;text-decoration:none;font-size:12px;font-weight:700;font-family:Arial,Helvetica,sans-serif;">{{ $p['link']['label'] }}</a>
+                        </td>
+                      </tr>
+                    </table>
+@endif
                   </td>
                 </tr>
 @endforeach

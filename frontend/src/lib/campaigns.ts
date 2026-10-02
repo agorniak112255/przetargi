@@ -218,6 +218,12 @@ export type CampaignItemWarnings = {
   other_campaigns: { id: number; code: string; name: string; author: string }[]
 }
 
+/** Kolor z BRAND_COLORS, link tylko https://. */
+export type CampaignItemLink = { url: string; label: string; color: string }
+
+/** Jak walidacja serwera: nazwa przycisku najwyżej tyle znaków. */
+export const ITEM_LINK_LABEL_MAX = 40
+
 export type CampaignItemCard = { id: number; sku: string; name: string; thumb_url: string | null }
 
 export type CampaignItem = {
@@ -239,6 +245,8 @@ export type CampaignItem = {
   note: string | null
   /** Krótki opis wpisany przy pozycji; null = w mailu idzie card_excerpt. */
   description: string | null
+  /** Drugi przycisk w mailu obok „Zapytaj o ofertę” (np. do sklepu); null = brak. */
+  link: CampaignItemLink | null
   /** Wycinek opisu karty (pierwsze zdania) — nigdy tekst dopisany; null = karta bez sensownego opisu. */
   card_excerpt: string | null
   card_norms: string[]
@@ -338,8 +346,8 @@ export type CampaignClicks = {
   recipients: number
   total: number
   bots: number
-  /** offer = „Zapytaj o ofertę”, product = strona produktu. */
-  items: { campaign_item_id: number; offer: number; product: number }[]
+  /** offer = „Zapytaj o ofertę”, product = strona produktu, link = drugi przycisk pozycji. */
+  items: { campaign_item_id: number; offer: number; product: number; link: number }[]
 }
 
 export type CampaignPatch = Partial<
@@ -354,6 +362,10 @@ export type CampaignItemPatch = Partial<{
   price_before_net: number | null
   note: string | null
   description: string | null
+  /** Drugi przycisk: wszystkie trzy razem; pusty link_url usuwa przycisk. */
+  link_url: string | null
+  link_label: string | null
+  link_color: string | null
   /** null = główna karta towaru XL. */
   product_id: number | null
   position: number
