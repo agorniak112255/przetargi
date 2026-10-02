@@ -34,10 +34,10 @@ import { sortRows, useTableSort } from '../../lib/tableSort'
  */
 
 const ENRICHMENT_LABEL: Record<keyof CatalogReportData['totals']['enrichment'], string> = {
-  done: 'Opis uzupełniony przez AI',
-  none: 'Bez wzbogacania AI',
+  done: 'Opis uzupełniony automatycznie',
+  none: 'Bez automatycznego uzupełniania',
   manual: 'Do ręcznego opisu',
-  failed: 'Błąd wzbogacania',
+  failed: 'Błąd uzupełniania opisu',
   queued: 'W kolejce',
   running: 'W trakcie',
 }
@@ -98,7 +98,7 @@ function insightsOf(d: CatalogReportData): Insight[] {
       tone: coverageTone(d.sold.with_manufacturer_norms, d.sold.products),
       text: (
         <>
-          Wśród {cards(d.sold.products)} sprzedawanych w ostatnich {d.sold.window_months} mies. opis ma{' '}
+          Wśród {cards(d.sold.products)} sprzedawanych w ostatnich {d.sold.window_months} miesiącach opis ma{' '}
           {sharePct(d.sold.with_description, d.sold.products)}, a normy producenta{' '}
           {sharePct(d.sold.with_manufacturer_norms, d.sold.products)}.
         </>
@@ -125,7 +125,7 @@ function insightsOf(d: CatalogReportData): Insight[] {
       tone: e.failed > 0 ? 'bad' : 'warn',
       text: (
         <>
-          {groupInt(e.failed)} {plural(e.failed, 'karta ma', 'karty mają', 'kart ma')} błąd wzbogacania, a {groupInt(e.manual)} czeka na
+          {groupInt(e.failed)} {plural(e.failed, 'karta ma', 'karty mają', 'kart ma')} błąd uzupełniania opisu, a {groupInt(e.manual)} czeka na
           ręczny opis.
         </>
       ),
@@ -177,11 +177,11 @@ function CatalogBody({ d }: { d: CatalogReportData }) {
             sub: 'karty katalogowe, certyfikaty, instrukcje',
           },
           {
-            label: 'Indeks wektorowy',
+            label: 'Gotowe do wyszukiwania',
             value: sharePct(t.vector_indexed, t.products) ?? '—',
             meter: shareValue(t.vector_indexed, t.products),
             tone: coverageTone(t.vector_indexed, t.products),
-            sub: 'zindeksowane co najmniej raz',
+            sub: 'karta przygotowana dla wyszukiwarki',
           },
         ]}
       />
@@ -189,16 +189,16 @@ function CatalogBody({ d }: { d: CatalogReportData }) {
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
         <ReportCard
           className="lg:col-span-2"
-          title="Dodane i wzbogacone karty — tydzień po tygodniu"
-          hint="Data dodania karty i data jej ostatniego wzbogacenia przez AI (karta wzbogacona ponownie liczy się raz, w ostatnim tygodniu)."
+          title="Dodane karty i uzupełnione opisy — tydzień po tygodniu"
+          hint="Data dodania karty i data ostatniego automatycznego uzupełnienia opisu (karta uzupełniona ponownie liczy się raz, w ostatnim tygodniu)."
         >
           <ColumnChart
-            label="Dodane i wzbogacone karty"
+            label="Dodane karty i uzupełnione opisy"
             mode="grouped"
             height={220}
             series={[
               { key: 'added', label: 'Dodane karty', fill: 'fill-slate-400', swatch: 'bg-slate-400' },
-              { key: 'enriched', label: 'Opis uzupełniony przez AI', fill: 'fill-blue-600', swatch: 'bg-blue-600' },
+              { key: 'enriched', label: 'Opis uzupełniony automatycznie', fill: 'fill-blue-600', swatch: 'bg-blue-600' },
             ]}
             columns={trimLeadingEmpty(d.weekly, (w) => w.added + w.enriched === 0).map((w) => ({
               key: w.week_start,
@@ -208,9 +208,9 @@ function CatalogBody({ d }: { d: CatalogReportData }) {
             }))}
           />
         </ReportCard>
-        <ReportCard title="Skąd opisy" hint="Stan wzbogacania kart przez AI. „Bez wzbogacania” to zwykle opis z cennika lub B2B.">
+        <ReportCard title="Skąd opisy" hint="Stan automatycznego uzupełniania opisów. „Bez automatycznego uzupełniania” to zwykle opis z cennika albo ze sklepu dostawcy (B2B).">
           <BarList rows={enrichmentRows} total={t.products} />
-          <h3 className="mt-5 mb-2 text-xs font-semibold text-slate-700">Dokumenty wg rodzaju</h3>
+          <h3 className="mt-5 mb-2 text-xs font-semibold text-slate-700">Dokumenty według rodzaju</h3>
           {d.documents_by_kind.length === 0 ? (
             <SectionNote>Żadna karta nie ma jeszcze dokumentów.</SectionNote>
           ) : (
@@ -228,7 +228,7 @@ function CatalogBody({ d }: { d: CatalogReportData }) {
           title="Cały katalog a karty, które sprzedajemy"
           hint={
             d.sold
-              ? `Karty powiązane z towarem z ERP XL sprzedanym w ostatnich ${d.sold.window_months} mies. (${cards(d.sold.products)}).`
+              ? `Karty powiązane z towarem z ERP XL sprzedanym w ostatnich ${d.sold.window_months} miesiącach (${cards(d.sold.products)}).`
               : 'Brak kart powiązanych z towarami ERP XL — porównanie pojawi się po powiązaniu.'
           }
         >
@@ -320,7 +320,7 @@ function ManufacturersTable({ rows }: { rows: CatalogReportData['manufacturers']
   return (
     <ReportCard
       title="Producenci"
-      hint="Udział kart producenta z danym elementem. Kliknij nagłówek, żeby posortować — np. po normach, by znaleźć największe luki."
+      hint="Udział kart producenta z danym elementem. Kliknij nagłówek, żeby posortować — na przykład po normach, by znaleźć największe luki."
       aside={
         <input
           type="search"
@@ -343,7 +343,7 @@ function ManufacturersTable({ rows }: { rows: CatalogReportData['manufacturers']
               <SortTh label="Normy producenta" k="mnorms" sort={sort} onSort={toggle} align="right" />
               <SortTh label="Normy w opisie" k="tnorms" sort={sort} onSort={toggle} align="right" />
               <SortTh label="Dokumenty" k="docs" sort={sort} onSort={toggle} align="right" />
-              <SortTh label="Błędy AI" k="failed" sort={sort} onSort={toggle} align="right" />
+              <SortTh label="Błędy uzupełniania" k="failed" sort={sort} onSort={toggle} align="right" />
             </tr>
           </thead>
           <tbody>

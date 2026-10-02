@@ -1763,7 +1763,7 @@ function ReportsHelp() {
           screen: (
             <AppFrame nav="Raporty">
               <h1 className="text-xl font-semibold">Raporty</h1>
-              <p className="mb-3 text-xs text-slate-500">Jak kompletne są karty produktów, z których AI dobiera wyroby do przetargów i zapytań.</p>
+              <p className="mb-3 text-xs text-slate-500">Jak kompletne są karty produktów, z których system dobiera wyroby do przetargów i zapytań.</p>
               <Mark>
                 <Tabs active="Baza wiedzy" />
               </Mark>
@@ -1804,7 +1804,7 @@ function ReportsHelp() {
         },
         {
           action: 'Wykresy i tabele',
-          does: 'Najedź kursorem na słupek, żeby zobaczyć dokładne liczby. W tabelach kliknij nagłówek kolumny, żeby posortować — np. producentów po normach, by znaleźć największe luki. W „Ruchach cen” i „Sprzedaży” wybierzesz okres (7/30/90 albo 30/90/180 dni).',
+          does: 'Najedź kursorem na słupek, żeby zobaczyć dokładne liczby. W tabelach kliknij nagłówek kolumny, żeby posortować — na przykład producentów po normach, by znaleźć największe luki. W „Ruchach cen” i „Sprzedaży” wybierzesz okres: 7, 30 lub 90 dni albo 30, 90 lub 180 dni.',
           click: 'Kursor na wykres albo klik w nagłówek tabeli.',
           tone: 'violet',
           screen: (

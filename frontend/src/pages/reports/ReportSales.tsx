@@ -156,7 +156,7 @@ function InquiriesSection({ q }: { q: NonNullable<SalesReportData['inquiries']> 
             sub: `${groupInt(t.waiting_over_1bd)} dłużej niż dzień roboczy`,
           },
           {
-            label: 'Analiza AI nieudana',
+            label: 'Nieudana analiza zapytania',
             value: groupInt(t.analysis_failed),
             tone: t.analysis_failed > 0 ? 'warn' : 'good',
             sub: `w kolejce Thunderbirda: ${groupInt(t.in_thunderbird)}`,
@@ -199,7 +199,7 @@ function InquiriesSection({ q }: { q: NonNullable<SalesReportData['inquiries']> 
       {q.people && q.people.length > 0 && (
         <ReportCard
           className="mb-4"
-          title="Obsługa wg osoby"
+          title="Obsługa według osoby"
           hint="Zapytania osoby, która je wkleiła lub przyjęła z Thunderbirda. Mail przejęty przez kilka osób liczy się każdej z nich."
         >
           <div className="overflow-x-auto">
@@ -310,7 +310,7 @@ function TendersSection({ t }: { t: NonNullable<SalesReportData['tenders']> }) {
                 </ul>
               )}
             </ReportCard>
-            <ReportCard title="Wg opiekuna" hint="Wszystkie przetargi (bez względu na okres): wartość ofert netto i marża średnia ważona wartością.">
+            <ReportCard title="Według opiekuna" hint="Wszystkie przetargi (bez względu na okres): wartość ofert netto i marża średnia ważona wartością.">
               <table className="app-table w-full text-left text-xs">
                 <thead>
                   <tr className="border-b bg-slate-50 text-slate-500">

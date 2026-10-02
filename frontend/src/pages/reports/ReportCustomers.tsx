@@ -35,7 +35,7 @@ function insightsOf(d: CustomersReportData): Insight[] {
       text: (
         <>
           {groupInt(lapsed)} {plural(lapsed, 'klient przestał', 'klientów przestało', 'klientów przestało')} kupować: {groupInt(t.dormant_6_12)} od 6–12
-          mies. i {groupInt(t.lapsing_12_24)} od 12–24 mies.
+          miesięcy i {groupInt(t.lapsing_12_24)} od 12–24 miesięcy.
         </>
       ),
     })
@@ -46,7 +46,7 @@ function insightsOf(d: CustomersReportData): Insight[] {
       tone: shareValue(t.reachable_active_12m, active12) >= 60 ? 'good' : 'warn',
       text: (
         <>
-          Do kampanii można napisać do {sharePct(t.reachable_active_12m, active12)} klientów aktywnych w 12 mies. ({groupInt(t.reachable_active_12m)} z{' '}
+          Do kampanii można napisać do {sharePct(t.reachable_active_12m, active12)} klientów aktywnych w ostatnich 12 miesiącach ({groupInt(t.reachable_active_12m)} z{' '}
           {groupInt(active12)}) — reszta nie ma w XL użytecznego adresu e-mail albo wypisała się z kampanii.
         </>
       ),
@@ -72,10 +72,10 @@ function CustomersBody({ d }: { d: CustomersReportData }) {
       <Insights items={insightsOf(d)} />
       <KpiRow
         items={[
-          { label: 'Kupujący w 24 mies.', value: groupInt(t.buying_24m), sub: `z ${groupInt(t.customers)} kontrahentów w XL` },
-          { label: 'Aktywni ≤ 6 mies.', value: groupInt(t.active_6m), tone: 'good', sub: 'ostatni zakup w półroczu' },
-          { label: 'Uśpieni 6–12 mies.', value: groupInt(t.dormant_6_12), tone: t.dormant_6_12 > 0 ? 'warn' : 'neutral', sub: 'warto przypomnieć się' },
-          { label: 'Odchodzący 12–24 mies.', value: groupInt(t.lapsing_12_24), tone: t.lapsing_12_24 > 0 ? 'bad' : 'neutral', sub: 'ostatni zakup ponad rok temu' },
+          { label: 'Kupujący w 24 miesiącach', value: groupInt(t.buying_24m), sub: `z ${groupInt(t.customers)} kontrahentów w ERP XL` },
+          { label: 'Aktywni do 6 miesięcy', value: groupInt(t.active_6m), tone: 'good', sub: 'ostatni zakup w półroczu' },
+          { label: 'Uśpieni 6–12 miesięcy', value: groupInt(t.dormant_6_12), tone: t.dormant_6_12 > 0 ? 'warn' : 'neutral', sub: 'warto przypomnieć się' },
+          { label: 'Odchodzący 12–24 miesięcy', value: groupInt(t.lapsing_12_24), tone: t.lapsing_12_24 > 0 ? 'bad' : 'neutral', sub: 'ostatni zakup ponad rok temu' },
           {
             label: 'Zasięg mailowy',
             value: sharePct(t.reachable_active_12m, active12) ?? '—',
@@ -87,20 +87,20 @@ function CustomersBody({ d }: { d: CustomersReportData }) {
       />
 
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
-        <ReportCard className="lg:col-span-2" title="Kiedy klienci kupili ostatnio" hint="Liczba klientów wg miesięcy od ostatniej faktury lub paragonu.">
+        <ReportCard className="lg:col-span-2" title="Kiedy klienci kupili ostatnio" hint="Liczba klientów według liczby miesięcy od ostatniej faktury lub paragonu.">
           <ColumnChart
-            label="Klienci wg ostatniego zakupu"
+            label="Klienci według ostatniego zakupu"
             height={210}
             series={[{ key: 'customers', label: 'Klienci', fill: 'fill-blue-600', swatch: 'bg-blue-600' }]}
             columns={d.recency.map((r) => ({
               key: r.label,
-              label: r.label,
-              title: `Ostatni zakup: ${r.label} temu`,
+              label: `${r.from_months}–${r.to_months}`,
+              title: `Ostatni zakup ${r.from_months}–${r.to_months} miesięcy temu`,
               values: { customers: r.customers },
             }))}
           />
         </ReportCard>
-        <ReportCard title="Miasta" hint="Klienci aktywni w ostatnich 12 mies.">
+        <ReportCard title="Miasta" hint="Klienci aktywni w ostatnich 12 miesiącach.">
           {d.cities.length === 0 ? (
             <SectionNote>Brak aktywnych klientów.</SectionNote>
           ) : (
@@ -111,7 +111,7 @@ function CustomersBody({ d }: { d: CustomersReportData }) {
 
       <ReportCard
         className="mb-4"
-        title="Klienci wg operatora XL"
+        title="Klienci według operatora ERP XL"
         hint="Operator = osoba, która wystawiała klientowi najwięcej dokumentów (nie przypisany opiekun). Pomaga zobaczyć, czyi klienci odchodzą."
       >
         {d.operators.length === 0 ? (
@@ -123,7 +123,7 @@ function CustomersBody({ d }: { d: CustomersReportData }) {
                 <tr className="border-b bg-slate-50 text-slate-500">
                   <th className="p-2 font-medium">Operator</th>
                   <th className="p-2 font-medium">Aktywni / uśpieni / odchodzący</th>
-                  <th className="p-2 text-right font-medium">Aktywni ≤ 6 mies.</th>
+                  <th className="p-2 text-right font-medium">Aktywni do 6 miesięcy</th>
                   <th className="p-2 text-right font-medium">Uśpieni</th>
                   <th className="p-2 text-right font-medium">Odchodzący</th>
                   <th className="p-2 text-right font-medium">Z e-mailem</th>
@@ -161,13 +161,13 @@ function CustomersBody({ d }: { d: CustomersReportData }) {
             )}
             <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
               <span className="inline-flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-sm bg-teal-600" aria-hidden /> aktywni ≤ 6 mies.
+                <span className="h-2 w-2 rounded-sm bg-teal-600" aria-hidden /> aktywni do 6 miesięcy
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-sm bg-amber-500" aria-hidden /> uśpieni 6–12 mies.
+                <span className="h-2 w-2 rounded-sm bg-amber-500" aria-hidden /> uśpieni 6–12 miesięcy
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-sm bg-rose-700" aria-hidden /> odchodzący 12–24 mies.
+                <span className="h-2 w-2 rounded-sm bg-rose-700" aria-hidden /> odchodzący 12–24 miesięcy
               </span>
             </p>
           </div>
@@ -175,7 +175,7 @@ function CustomersBody({ d }: { d: CustomersReportData }) {
       </ReportCard>
 
       <div className="mb-4 grid gap-4 lg:grid-cols-2">
-        <ReportCard title="Najczęściej kupujący" hint="Wg liczby faktur i paragonów w 24 mies.">
+        <ReportCard title="Najczęściej kupujący" hint="Według liczby faktur i paragonów w ostatnich 24 miesiącach.">
           <div className="overflow-x-auto">
             <table className="app-table w-full min-w-[30rem] text-left text-xs">
               <thead>
@@ -207,7 +207,7 @@ function CustomersBody({ d }: { d: CustomersReportData }) {
             </table>
           </div>
         </ReportCard>
-        <ReportCard title="Towary kupowane przez najwięcej klientów" hint="Liczba różnych klientów w 24 mies. — wskazówka, co warto mieć zawsze w ofercie.">
+        <ReportCard title="Towary kupowane przez najwięcej klientów" hint="Liczba różnych klientów w ostatnich 24 miesiącach — wskazówka, co warto mieć zawsze w ofercie.">
           <div className="overflow-x-auto">
             <table className="app-table w-full min-w-[30rem] text-left text-xs">
               <thead>

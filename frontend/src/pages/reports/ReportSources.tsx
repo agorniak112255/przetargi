@@ -98,7 +98,7 @@ function insightsOf(d: SourcesReportData): Insight[] {
         text: (
           <>
             {groupInt(d.b2b.totals.stale)} {plural(d.b2b.totals.stale, 'konto ma', 'konta mają', 'kont ma')} ceny starsze, niż wynika z
-            harmonogramu (tygodniowe ponad {d.thresholds.weekly_days} dni, codzienne ponad {d.thresholds.daily_hours} godz.).
+            harmonogramu (tygodniowe ponad {d.thresholds.weekly_days} dni, codzienne ponad {d.thresholds.daily_hours} godzin).
           </>
         ),
       })
@@ -143,7 +143,7 @@ function SourcesBody({ d }: { d: SourcesReportData }) {
       {b && (
         <KpiRow
           items={[
-            { label: 'Konta B2B', value: groupInt(b.totals.accounts), sub: `${groupInt(b.totals.scheduled)} z synchronizacją wg harmonogramu` },
+            { label: 'Konta B2B', value: groupInt(b.totals.accounts), sub: `${groupInt(b.totals.scheduled)} z synchronizacją według harmonogramu` },
             {
               label: 'Ceny aktualne',
               value: groupInt(b.totals.fresh),
@@ -334,7 +334,7 @@ function FilesTable({ files, oldDays }: { files: NonNullable<SourcesReportData['
               <SortTh label="Ostatni import" k="imported" sort={sort} onSort={toggle} />
               <SortTh label="Pozycji" k="rows" sort={sort} onSort={toggle} align="right" />
               <SortTh label="Zmian cen" k="changed" sort={sort} onSort={toggle} align="right" />
-              <SortTh label="Importów / 12 mies." k="imports" sort={sort} onSort={toggle} align="right" />
+              <SortTh label="Importów w ostatnim roku" k="imports" sort={sort} onSort={toggle} align="right" />
             </tr>
           </thead>
           <tbody>

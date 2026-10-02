@@ -391,15 +391,18 @@ export function weekRange(weekStart: string): string {
   return `${dayMonth(weekStart)}–${dayMonth(end.toISOString().slice(0, 10))}`
 }
 
-/** Wiek w godzinach jako „5 godz.”, „3 dni”, „2 tyg.”. */
+/** Wiek w godzinach jako „5 godzin”, „3 dni”, „2 tygodnie”. */
 export function ageFromHours(hours: number | null | undefined): string {
   if (hours == null) return '—'
   if (hours < 1) return 'przed chwilą'
-  if (hours < 48) return `${Math.round(hours)}${NBSP}godz.`
+  if (hours < 48) {
+    const h = Math.round(hours)
+    return `${h}${NBSP}${plural(h, 'godzina', 'godziny', 'godzin')}`
+  }
   const days = Math.round(hours / 24)
   if (days < 21) return `${days}${NBSP}${plural(days, 'dzień', 'dni', 'dni')}`
   const weeks = Math.round(days / 7)
-  return `${weeks}${NBSP}tyg.`
+  return `${weeks}${NBSP}${plural(weeks, 'tydzień', 'tygodnie', 'tygodni')}`
 }
 
 /** „12 kart”, „1 karta”, „3 karty”. */

@@ -17,7 +17,7 @@ const REPORTS: { key: ReportKey; label: string; lead: string; anyOf: string[] | 
   {
     key: 'catalog',
     label: 'Baza wiedzy',
-    lead: 'Jak kompletne są karty produktów, z których AI dobiera wyroby do przetargów i zapytań.',
+    lead: 'Jak kompletne są karty produktów, z których system dobiera wyroby do przetargów i zapytań.',
     anyOf: ['products.view'],
   },
   {
