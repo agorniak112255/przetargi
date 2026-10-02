@@ -1089,16 +1089,6 @@ function HistoryPanel({ warehouses, place }: { warehouses: Warehouses; place: Pl
           {history.weekly && (
             <p className="mt-1 text-base text-slate-700">Długi okres — na wykresie jeden punkt na tydzień.</p>
           )}
-          {points.some((p) => p.source === 'xl_history') && (
-            <p className="mt-1 text-base text-slate-700">
-              {(() => {
-                const firstLive = points.find((p) => p.source === 'live')?.date
-                return firstLive
-                  ? `Dni przed ${longDate(firstLive)} odtworzone z dokumentów programu magazynowego (ruchy dostaw) — zgodność z zapisem z nocy około 0,5%; od ${longDate(firstLive)} — zapis z nocy.`
-                  : 'Dni w tym okresie odtworzone z dokumentów programu magazynowego (ruchy dostaw) — zgodność z zapisem z nocy około 0,5%.'
-              })()}
-            </p>
-          )}
           {compare && <HistoryCompare compare={compare} place={place} />}
         </>
       )}
