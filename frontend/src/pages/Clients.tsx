@@ -45,6 +45,61 @@ type Client = {
 type SortKey = 'name' | 'nip' | 'city' | 'manager' | 'sales' | 'last_sale' | 'tenders'
 type SourceFilter = 'all' | 'xl' | 'manual'
 
+/** Filtr opiekuna: klient bez opiekuna w XL i w panelu. */
+const NO_MANAGER = '__none'
+
+/** Opiekun z XL, a gdy go brak — opiekun w panelu (jak kolumna „Opiekun”). */
+function managerName(c: Client): string | null {
+  return c.account_manager ?? c.owner?.name ?? null
+}
+
+/**
+ * Klucz miejscowości do filtra: XL zapisuje tę samą miejscowość różnie („DĄBROWA GÓRNICZA”, „Dąbrowa Górnicza”,
+ * „Dabrowa Gornicza”) — wielkie litery bez polskich znaków, jak CustomersReport::cityKey.
+ */
+function cityKey(city: string | null): string | null {
+  const trimmed = (city ?? '').trim().replace(/\s+/g, ' ')
+  if (!trimmed) return null
+  return trimmed
+    .toLocaleUpperCase('pl')
+    .replace(/Ł/g, 'L')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+}
+
+type Option = { value: string; label: string; count: number }
+
+/** Opcje miejscowości: na klucz pisownia najczęstsza (remis — z małymi literami, potem z polskimi znakami). */
+function cityOptions(rows: Client[]): Option[] {
+  const groups = new Map<string, Map<string, number>>()
+  for (const c of rows) {
+    const key = cityKey(c.city)
+    if (!key) continue
+    const spelling = (c.city ?? '').trim().replace(/\s+/g, ' ')
+    const spellings = groups.get(key) ?? new Map<string, number>()
+    spellings.set(spelling, (spellings.get(spelling) ?? 0) + 1)
+    groups.set(key, spellings)
+  }
+  const score = (s: string) => (s !== s.toLocaleUpperCase('pl') ? 2 : 0) + (cityKey(s) !== s.toLocaleUpperCase('pl') ? 1 : 0)
+  return [...groups.entries()]
+    .map(([value, spellings]) => {
+      const sorted = [...spellings.entries()].sort((a, b) => b[1] - a[1] || score(b[0]) - score(a[0]))
+      return { value, label: sorted[0][0], count: sorted.reduce((sum, [, n]) => sum + n, 0) }
+    })
+    .sort((a, b) => a.label.localeCompare(b.label, 'pl', { sensitivity: 'base' }))
+}
+
+function managerOptions(rows: Client[]): Option[] {
+  const counts = new Map<string, number>()
+  for (const c of rows) {
+    const name = managerName(c)
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([value, count]) => ({ value, label: value, count }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'pl', { sensitivity: 'base' }))
+}
+
 function salesValue(c: Client): number | null {
   return c.sales_net == null ? null : Number(c.sales_net)
 }
@@ -190,6 +245,8 @@ export function Clients() {
   const [busy, setBusy] = useState(false)
   const [q, setQ] = useState('')
   const [source, setSource] = useState<SourceFilter>('all')
+  const [cityFilter, setCityFilter] = useState('')
+  const [managerFilter, setManagerFilter] = useState('')
   const [expanded, setExpanded] = useState<number | null>(null)
   const [sort, toggleSort] = useTableSort<SortKey>(['sales', 'last_sale', 'tenders'], { key: 'sales', dir: 'desc' })
 
@@ -236,10 +293,17 @@ export function Clients() {
 
   const xlCount = rows.filter((c) => c.xl_gid != null).length
   const salesYear = rows.find((c) => c.sales_year != null)?.sales_year ?? null
+  const cities = useMemo(() => cityOptions(rows), [rows])
+  const managers = useMemo(() => managerOptions(rows), [rows])
+  const withoutManager = rows.filter((c) => managerName(c) == null).length
   const visible = useMemo(() => {
     const query = q.trim()
     const filtered = rows.filter(
-      (c) => (source === 'all' || (source === 'xl') === (c.xl_gid != null)) && matches(c, query),
+      (c) =>
+        (source === 'all' || (source === 'xl') === (c.xl_gid != null)) &&
+        (!cityFilter || cityKey(c.city) === cityFilter) &&
+        (!managerFilter || (managerFilter === NO_MANAGER ? managerName(c) == null : managerName(c) === managerFilter)) &&
+        matches(c, query),
     )
     return sortRows(filtered, sort, (c, key) => {
       switch (key) {
@@ -250,7 +314,7 @@ export function Clients() {
         case 'city':
           return c.city
         case 'manager':
-          return c.account_manager ?? c.owner?.name
+          return managerName(c)
         case 'sales':
           return salesValue(c)
         case 'last_sale':
@@ -259,7 +323,7 @@ export function Clients() {
           return c.tenders_count
       }
     })
-  }, [rows, q, source, sort])
+  }, [rows, q, source, cityFilter, managerFilter, sort])
 
   return (
     <div>
@@ -347,6 +411,47 @@ export function Clients() {
             <option value="xl">Z ERP XL</option>
             <option value="manual">Dopisani ręcznie</option>
           </select>
+          <select
+            value={cityFilter}
+            onChange={(e) => setCityFilter(e.target.value)}
+            className="max-w-[14rem] rounded border border-slate-300 px-2 py-1.5"
+            aria-label="Miejscowość"
+          >
+            <option value="">Wszystkie miejscowości</option>
+            {cities.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label} ({o.count})
+              </option>
+            ))}
+          </select>
+          <select
+            value={managerFilter}
+            onChange={(e) => setManagerFilter(e.target.value)}
+            className="max-w-[14rem] rounded border border-slate-300 px-2 py-1.5"
+            aria-label="Opiekun"
+          >
+            <option value="">Wszyscy opiekunowie</option>
+            {withoutManager > 0 && <option value={NO_MANAGER}>Bez opiekuna ({withoutManager})</option>}
+            {managers.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label} ({o.count})
+              </option>
+            ))}
+          </select>
+          {(cityFilter || managerFilter || source !== 'all' || q) && (
+            <button
+              type="button"
+              onClick={() => {
+                setQ('')
+                setSource('all')
+                setCityFilter('')
+                setManagerFilter('')
+              }}
+              className="text-blue-700 hover:underline"
+            >
+              Wyczyść filtry
+            </button>
+          )}
           <span className="text-slate-500">
             {visible.length === rows.length ? `${rows.length} pozycji` : `${visible.length} z ${rows.length}`}
           </span>
