@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { api, can, type Tender } from '../lib/api'
 import { tenderStatusLabel } from '../lib/tenderStatus'
+import { setTenderWizardActive } from '../lib/tenderWizard'
 
 type Client = { id: number; name: string }
 
@@ -64,6 +65,7 @@ export function Tenders() {
       setOpen(false)
       setTitle('')
       setMargin('18')
+      setTenderWizardActive(t.id, true)
       navigate(`/tenders/${t.id}`)
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : 'Błąd tworzenia')

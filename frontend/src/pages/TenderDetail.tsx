@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CheaperSourceNote } from '../components/CheaperSourceNote'
@@ -26,6 +26,7 @@ import type { TenderConflicts } from '../components/RequirementCheckList'
 import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 import { TENDER_STATUS_LABEL } from '../lib/tenderStatus'
 import { StatusFlow } from '../components/StatusFlow'
+import { isTenderWizardActive, setTenderWizardActive } from '../lib/tenderWizard'
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
@@ -331,17 +332,132 @@ type Detail = {
   coverage?: Coverage
 }
 
-const tabs = [
-  'pozycje',
-  'warunki',
-  'dokumenty',
-  'zamienniki',
-  'oferta',
-  'komentarze',
-  'zaproszenia',
-  'historia',
-  'workflow',
-] as const
+type TenderTab =
+  | 'podsumowanie'
+  | 'dokumenty'
+  | 'warunki'
+  | 'pozycje'
+  | 'zamienniki'
+  | 'oferta'
+  | 'komentarze'
+  | 'zaproszenia'
+  | 'historia'
+
+/** Menu boczne pełnego widoku przetargu (po kreatorze). Zmiana statusu jest w sekcji Historia i statusy. */
+const TAB_GROUPS: Array<{ label: string; tabs: Array<{ key: TenderTab; label: string }> }> = [
+  { label: 'Przegląd', tabs: [{ key: 'podsumowanie', label: 'Podsumowanie' }] },
+  {
+    label: 'Przygotowanie',
+    tabs: [
+      { key: 'dokumenty', label: 'Dokumenty' },
+      { key: 'warunki', label: 'Warunki' },
+    ],
+  },
+  {
+    label: 'Wycena',
+    tabs: [
+      { key: 'pozycje', label: 'Pozycje' },
+      { key: 'zamienniki', label: 'Zamienniki' },
+      { key: 'oferta', label: 'Oferta' },
+    ],
+  },
+  {
+    label: 'Zespół',
+    tabs: [
+      { key: 'komentarze', label: 'Komentarze' },
+      { key: 'zaproszenia', label: 'Zaproszenia' },
+      { key: 'historia', label: 'Historia i statusy' },
+    ],
+  },
+]
+
+/** Dni do terminu liczone w kalendarzu lokalnym (0 = dziś, ujemne = po terminie); null bez daty. */
+function daysUntil(day: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
+  if (!m) return null
+  const target = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  return Math.round((target.getTime() - today.getTime()) / 86400000)
+}
+
+/** „2026-10-14” → „14.10.2026”. */
+function formatDay(day: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : day
+}
+
+/** Rozwijane menu akcji w nagłówku (Eksport, ⋯). Zamyka się po wyborze, kliknięciu obok i Esc. */
+function ActionMenu({
+  label,
+  ariaLabel,
+  disabled,
+  items,
+}: {
+  label: ReactNode
+  ariaLabel?: string
+  disabled?: boolean
+  items: Array<{ label: string; hint?: string; danger?: boolean; onSelect: () => void }>
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  return (
+    <div ref={ref} className="app-menu relative">
+      <button
+        type="button"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => setOpen((v) => !v)}
+        className="app-menu-button rounded border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+      >
+        {label}
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="app-menu-list absolute right-0 z-30 mt-1 w-64 rounded-lg border border-slate-200 bg-white p-1 shadow-lg"
+        >
+          {items.map((it) => (
+            <button
+              key={it.label}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false)
+                it.onSelect()
+              }}
+              className={`block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-slate-100 ${
+                it.danger ? 'text-red-700' : 'text-slate-700'
+              }`}
+            >
+              <span className="font-semibold">{it.label}</span>
+              {it.hint && <span className="block text-[11px] text-slate-500">{it.hint}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 type CoverageFilter = keyof Coverage['item_ids'] | null
 
@@ -566,12 +682,24 @@ function activityHasRealChange(a: ActivityRow): boolean {
   )
 }
 
+/**
+ * Klucz = id: przejście z przetargu A do B bez opuszczania strony (np. z powiadomienia) montuje widok od nowa —
+ * bez kroku kreatora, filtrów i podglądu importu z poprzedniego przetargu.
+ */
 export function TenderDetail() {
+  const { id } = useParams()
+  return <TenderDetailView key={id} />
+}
+
+function TenderDetailView() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { user } = useAuth()
   const [data, setData] = useState<Detail | null>(null)
-  const [tab, setTab] = useState<(typeof tabs)[number]>('pozycje')
+  const [tab, setTab] = useState<TenderTab>('podsumowanie')
+  const [dragOver, setDragOver] = useState(false)
+  const [wizardActive, setWizardActiveState] = useState(() => (id ? isTenderWizardActive(id) : false))
+  const [wizardStep, setWizardStep] = useState(0)
   const [products, setProducts] = useState<Product[]>([])
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
@@ -624,6 +752,35 @@ export function TenderDetail() {
   const [inviteUserId, setInviteUserId] = useState('')
   const [inviteNote, setInviteNote] = useState('')
   const [inviteQ, setInviteQ] = useState('')
+
+  // can_edit z API zależy wyłącznie od statusu (Szkic, Wycena) — edycję oferty daje dopiero uprawnienie roli.
+  const canEditOffer = Boolean(data?.can_edit) && can(user, 'tenders.edit_offer')
+  // Kreator: włączony przy zakładaniu (lib/tenderWizard). Szkic i Wycena, bo import SIWZ sam zmienia Szkic na Wycenę.
+  const wizardMode = wizardActive && canEditOffer
+  const wizardEnteredRef = useRef(false)
+
+  function setWizardActive(active: boolean) {
+    setWizardActiveState(active)
+    if (id) setTenderWizardActive(id, active)
+  }
+
+  // Krok startowy liczony przy każdym wejściu w kreator, nie po każdym load() (zapis terminu, import, dopasowanie AI).
+  useEffect(() => {
+    // przetarg poszedł dalej (akceptacja, archiwum…) — po cofnięciu do Wyceny kreator nie wraca sam
+    if (data && wizardActive && !['draft', 'wycena'].includes(data.tender.status) && id) {
+      setWizardActiveState(false)
+      setTenderWizardActive(id, false)
+    }
+    if (!wizardMode || !data) {
+      wizardEnteredRef.current = false
+      return
+    }
+    if (wizardEnteredRef.current) return
+    wizardEnteredRef.current = true
+    const items = data.tender.items
+    const withoutProduct = data.coverage?.without_product ?? items.filter((i) => !i.main_product).length
+    setWizardStep(items.length === 0 ? 0 : withoutProduct > 0 ? 1 : 3)
+  }, [wizardMode, wizardActive, data, id])
 
   const load = useCallback(async () => {
     const d = await api<Detail>(`/tenders/${id}`)
@@ -709,8 +866,8 @@ export function TenderDetail() {
   }, [matchBusy])
 
   useEffect(() => {
-    if (tab === 'zaproszenia') void loadDirectory(inviteQ)
-  }, [tab, inviteQ, loadDirectory])
+    if (tab === 'zaproszenia' || (wizardMode && wizardStep === 3)) void loadDirectory(inviteQ)
+  }, [tab, wizardMode, wizardStep, inviteQ, loadDirectory])
 
   const registerItemDraft = useCallback((itemId: number, draft: ItemDraft) => {
     itemDraftsRef.current.set(itemId, draft)
@@ -888,8 +1045,9 @@ export function TenderDetail() {
         `Gotowe: ${file.name} — ${res.items_count} pozycji, ${res.conditions_count} warunków. Sprawdź numer/nazwę/cenę i zaciągnij.`,
       )
       setMsg('Podgląd gotowy — nic nie trafiło jeszcze do pozycji. Zatwierdź poniżej.')
-      // nie przeładowuj listy w trakcie podglądu (archiwum tylko w trybie pełnym)
-      if (docMode === 'full') await load()
+      // nie przeładowuj listy w trakcie podglądu — chyba że plik trafił do archiwum: tryb pełny albo Word
+      // (backend zapisuje Word jako formularz ofertowy także w trybie AI)
+      if (docMode === 'full' || /\.docx?$/i.test(file.name)) await load()
       requestAnimationFrame(() => {
         document.getElementById('doc-preview')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       })
@@ -1108,17 +1266,17 @@ export function TenderDetail() {
     }
   }
 
-  async function transition(status: string) {
+  async function transition(status: string): Promise<boolean> {
     setErr('')
     setMsg('')
     const needsNote = status === 'odrzucony' || status === 'wycena'
     if (needsNote && data?.tender.status.startsWith('akceptacja') && transitionNote.trim().length < 5) {
       setErr('Wymagana notatka (min. 5 znaków) przy odrzuceniu lub cofnięciu z akceptacji.')
-      return
+      return false
     }
     if (status === 'odrzucony' && transitionNote.trim().length < 5) {
       setErr('Wymagana notatka (min. 5 znaków) przy odrzuceniu.')
-      return
+      return false
     }
     setBusy(true)
     try {
@@ -1130,8 +1288,10 @@ export function TenderDetail() {
       await load()
       await loadMeta()
       setMsg(`Status: ${TENDER_STATUS_LABEL[status] ?? status}`)
+      return true
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd statusu')
+      return false
     } finally {
       setBusy(false)
     }
@@ -1427,8 +1587,9 @@ export function TenderDetail() {
     }
   }
 
+  const itemsVisible = wizardMode ? wizardStep === 1 : tab === 'pozycje'
   useEffect(() => {
-    if (tab !== 'pozycje' || focusItemId == null) {
+    if (!itemsVisible || focusItemId == null) {
       return
     }
     const timer = window.setTimeout(() => {
@@ -1438,7 +1599,7 @@ export function TenderDetail() {
       })
     }, 80)
     return () => window.clearTimeout(timer)
-  }, [tab, focusItemId, focusTick, showAiChanges, coverageFilter, itemQuery])
+  }, [itemsVisible, focusItemId, focusTick, showAiChanges, coverageFilter, itemQuery])
 
   async function exportOffer(kind: 'excel' | 'pdf' | 'docx') {
     setErr('')
@@ -1480,6 +1641,7 @@ export function TenderDetail() {
   function openMatchChange(change: MatchChange) {
     const item = tender.items.find((i) => i.id === change.id)
     setTab('pozycje')
+    if (wizardMode) setWizardStep(1)
     setCoverageFilter(null)
     setItemQuery('')
     setShowAiChanges(true)
@@ -1512,118 +1674,46 @@ export function TenderDetail() {
     return fromList ? productDisplayName(fromList, 64) : null
   }
 
-  return (
-    <div>
-      <Link to="/tenders" className="app-back text-xs text-blue-600 hover:underline">
-        ← Lista przetargów
-      </Link>
-      <h1 className="app-title mt-2 text-xl font-semibold">
-        {tender.number} · {tender.title}
-      </h1>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="app-meta text-xs text-slate-500">
-          {tender.client?.name} · opiekun {tender.owner?.name ?? '—'} ·{' '}
-          <strong>{TENDER_STATUS_LABEL[tender.status] ?? tender.status}</strong> · AI {tender.ai_percent}% · narzut{' '}
-          {tender.target_margin_percent ?? 18}% · marża zreal. {tender.margin_percent ?? '—'}% ·{' '}
-          {can_edit ? 'edycja włączona' : 'tylko podgląd'}
-        </p>
-        <div className="app-actions flex flex-wrap gap-1">
-          {can_edit && (
-            <>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() =>
-                  void runMatch(true, listNarrowed ? filteredItems.map((i) => i.id) : undefined)
-                }
-                title={
-                  listNarrowed
-                    ? `Tylko puste spośród ${filteredItems.length} pozycji z filtra`
-                    : 'Tylko pozycje bez produktu — zapisanych nie rusza'
-                }
-                className="rounded bg-violet-600 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
-              >
-                Dopasuj AI (puste)
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  if (listNarrowed && filteredItems.length === 0) {
-                    setErr('Brak pozycji w filtrze.')
-                    return
-                  }
-                  const confirmMsg = listNarrowed
-                    ? `Ponownie przeszukać ${filteredItems.length} pozycji z filtra? Ręczne własne oferty zostaną zachowane; linki z AI Internet wrócą do wyszukiwania w katalogu.`
-                    : 'Ponownie przeszukać wszystkie pozycje (także te z produktem z katalogu)? Ręczne własne oferty zostaną zachowane; linki z AI Internet wrócą do wyszukiwania w katalogu.'
-                  if (!window.confirm(confirmMsg)) {
-                    return
-                  }
-                  void runMatch(false, listNarrowed ? filteredItems.map((i) => i.id) : undefined)
-                }}
-                title={
-                  listNarrowed
-                    ? `Ponowne dopasowanie ${filteredItems.length} pozycji z filtra`
-                    : 'Ponowne dopasowanie całej oferty — nadpisze produkty z katalogu'
-                }
-                className="rounded bg-violet-800 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
-              >
-                Dopasuj AI ({listNarrowed ? `filtr ${filteredItems.length}` : 'wszystkie'})
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void previewCheaperSubstitutes()}
-                title="Podgląd i zastosowanie najtańszych zamienników (≥3% taniej po upuście)"
-                className="rounded bg-amber-500 px-2 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
-              >
-                Zastosuj tańsze zamienniki
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void exportOffer('excel')}
-            title="Pobierz ofertę do pliku Excel"
-            className="rounded bg-emerald-600 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
-          >
-            Eksport Excel
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void exportOffer('pdf')}
-            className="rounded bg-emerald-800 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
-          >
-            PDF
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void exportOffer('docx')}
-            title="Wypełnia wgrany formularz ofertowy DOCX cenami z oferty"
-            className="rounded bg-sky-700 px-2 py-1.5 text-[11px] text-white disabled:opacity-50"
-          >
-            DOCX
-          </button>
-          {canDeleteTender && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void deleteTender()}
-              title="Usuń cały przetarg"
-              className="rounded bg-red-600 px-2 py-1.5 text-[11px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
-            >
-              Usuń przetarg
-            </button>
-          )}
-        </div>
-      </div>
-      <StatusFlow status={tender.status} />
+  const canImport = can(user, 'tenders.import')
+  const documents = tender.documents ?? []
+  const conditions = tender.conditions ?? []
+  // Formularz ofertowy = zapisany plik Word; bez niego eksport DOCX kończy się błędem (TenderDocxOfferFiller).
+  const hasOfferForm = documents.some((d) => d.has_file && /\.docx?$/i.test(d.original_name))
+  const withProduct = coverage?.with_product ?? tender.items.filter((i) => i.main_product).length
+  const attentionCount = coverage
+    ? new Set([
+        ...coverage.item_ids.without_product,
+        ...coverage.item_ids.without_price,
+        ...coverage.item_ids.weak_match,
+        ...coverage.item_ids.low_margin,
+      ]).size
+    : 0
+  const savedDeadline = tender.deadline ? tender.deadline.slice(0, 10) : ''
+  const deadlineDirty = deadlineEdit !== savedDeadline
+  const deadlineDays = daysUntil(savedDeadline)
+  const canStartPricing = next_statuses.includes('wycena')
+  const isDraft = tender.status === 'draft'
 
-      {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
-      {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+  async function finishWizard() {
+    // Szkic → Wycena tylko, gdy przetarg jest jeszcze szkicem (import i dopasowanie AI robią to same)
+    if (isDraft && canStartPricing && !(await transition('wycena'))) return
+    setTab('podsumowanie')
+    setWizardActive(false)
+  }
+  const docModeLabel = docMode === 'simple' ? 'sam tekst' : docMode === 'ai' ? 'AI z podglądem' : 'AI + plik w archiwum'
+  const docTargetsLabel =
+    [docTargets.items ? 'pozycje' : null, docTargets.conditions ? 'warunki' : null].filter(Boolean).join(' i ') ||
+    'nic nie zaznaczono'
+
+  function goToItems(filter: CoverageFilter) {
+    setCoverageFilter(filter)
+    setShowAiChanges(false)
+    setItemQuery('')
+    setTab('pozycje')
+  }
+
+  const matchOverlay = (
+    <>
       {matchBusy && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/55 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-4 text-sm shadow-xl">
@@ -1680,6 +1770,11 @@ export function TenderDetail() {
           </div>
         </div>
       )}
+    </>
+  )
+
+  const matchReportPanel = (
+    <>
       {matchReport && !matchBusy && (
         <div className="mb-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs text-violet-950">
           <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1733,6 +1828,7 @@ export function TenderDetail() {
                       return next
                     })
                     setTab('pozycje')
+                    if (wizardMode) setWizardStep(1)
                   }}
                   className={`rounded px-2 py-1 ${
                     showAiChanges ? 'bg-violet-800 text-white' : 'bg-white text-violet-900'
@@ -1781,7 +1877,11 @@ export function TenderDetail() {
           )}
         </div>
       )}
+    </>
+  )
 
+  const coverageBlock = (
+    <>
       {coverage && (
         <div
           data-ready={coverage.ready ? 'true' : 'false'}
@@ -1846,94 +1946,59 @@ export function TenderDetail() {
           </div>
         </div>
       )}
+    </>
+  )
 
-      <div className="mb-3 flex flex-wrap items-end gap-2 rounded-xl bg-white p-3 text-xs shadow-sm">
-        <label>
-          Termin składania
-          <input
-            type="date"
-            className="mt-1 block rounded border border-slate-300 px-2 py-1"
-            value={deadlineEdit}
-            onChange={(e) => setDeadlineEdit(e.target.value)}
-          />
-        </label>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void saveDeadline()}
-          className="rounded bg-slate-700 px-3 py-1.5 text-white disabled:opacity-50"
-        >
-          Zapisz termin
-        </button>
-        <label>
-          Marża oferty %
-          <input
-            type="number"
-            min={0}
-            max={500}
-            step={0.1}
-            disabled={!can_edit || busy}
-            className="mt-1 block w-24 rounded border border-slate-300 px-2 py-1 disabled:bg-slate-50"
-            value={marginEdit}
-            onChange={(e) => setMarginEdit(e.target.value)}
-            title="Cena katalogowa = zakup × (1 + marża%). Linki zewnętrzne skalowane współczynnikiem zmiany."
-          />
-        </label>
-        {can_edit && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void saveTargetMargin()}
-            className="rounded bg-violet-700 px-3 py-1.5 text-white disabled:opacity-50"
-            title="Przelicza ceny z katalogu i skaluje linki zewnętrzne"
-          >
-            Zapisz marżę
-          </button>
-        )}
-        {tender.deadline &&
-          new Date(tender.deadline) <= new Date(Date.now() + 7 * 86400000) &&
-          new Date(tender.deadline) >= new Date(new Date().toDateString()) && (
-            <span className="rounded bg-red-100 px-2 py-1 font-medium text-red-700">
-              Deadline w ciągu 7 dni
-            </span>
-          )}
-      </div>
-
-      <div className="app-tabs mb-3 flex flex-wrap gap-1 border-b border-slate-200 pb-2">
-        {tabs.map((t) => {
-          const badge =
-            t === 'historia'
-              ? activities.length
-              : t === 'komentarze'
-                ? comments.length
-                : t === 'zaproszenia'
-                  ? invitations.length
-                  : null
-          return (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setTab(t)}
-              className={`app-tab rounded-t px-3 py-2 text-xs capitalize ${
-                tab === t ? 'app-tab--active bg-sky-100 font-semibold text-blue-700' : 'bg-slate-100 text-slate-600'
-              }`}
-            >
-              {t}
-              {badge != null && badge > 0 ? <span className="app-tab-count">{` (${badge})`}</span> : null}
-            </button>
-          )
-        })}
-      </div>
-
-      {tab === 'pozycje' && (
-        <div className="space-y-3">
-          {can_edit && (
-            <div className="app-actions app-actions--end flex flex-wrap items-center justify-end gap-2">
+  const itemsSection = (
+    <div className="space-y-3">
+      {coverageBlock}
+      {can_edit && (
+        <div className="app-actions app-actions--end flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void runMatch(true, listNarrowed ? filteredItems.map((i) => i.id) : undefined)
+                }
+                title={
+                  listNarrowed
+                    ? `Tylko puste spośród ${filteredItems.length} pozycji z filtra`
+                    : 'Tylko pozycje bez produktu — zapisanych nie rusza'
+                }
+                className="rounded bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+              >
+                Dopasuj AI (puste)
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  if (listNarrowed && filteredItems.length === 0) {
+                    setErr('Brak pozycji w filtrze.')
+                    return
+                  }
+                  const confirmMsg = listNarrowed
+                    ? `Ponownie przeszukać ${filteredItems.length} pozycji z filtra? Ręczne własne oferty zostaną zachowane; linki z AI Internet wrócą do wyszukiwania w katalogu.`
+                    : 'Ponownie przeszukać wszystkie pozycje (także te z produktem z katalogu)? Ręczne własne oferty zostaną zachowane; linki z AI Internet wrócą do wyszukiwania w katalogu.'
+                  if (!window.confirm(confirmMsg)) {
+                    return
+                  }
+                  void runMatch(false, listNarrowed ? filteredItems.map((i) => i.id) : undefined)
+                }}
+                title={
+                  listNarrowed
+                    ? `Ponowne dopasowanie ${filteredItems.length} pozycji z filtra`
+                    : 'Ponowne dopasowanie całej oferty — nadpisze produkty z katalogu'
+                }
+                className="rounded bg-violet-800 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-900 disabled:opacity-50"
+              >
+                Dopasuj AI ({listNarrowed ? `filtr ${filteredItems.length}` : 'wszystkie'})
+              </button>
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => void previewCheaperSubstitutes()}
-                title="Na pozycjach z tańszym zamiennikiem (≥3% po upuście) — podgląd, potem zbiorcza zamiana"
+                title="Podgląd i zastosowanie najtańszych zamienników (≥3% taniej po upuście)"
                 className="rounded bg-amber-500 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
               >
                 Zastosuj tańsze zamienniki
@@ -1946,8 +2011,8 @@ export function TenderDetail() {
               >
                 Zapisz całość
               </button>
-            </div>
-          )}
+        </div>
+      )}
           {cheaperPreview && (
             <div
               ref={cheaperPreviewRef}
@@ -2051,16 +2116,8 @@ export function TenderDetail() {
                 )}
             </div>
           </div>
-          {can_edit && (
-            <div className="app-actions app-actions--end flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void previewCheaperSubstitutes()}
-                className="rounded bg-amber-500 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
-              >
-                Zastosuj tańsze zamienniki
-              </button>
+      {can_edit && (
+        <div className="app-actions app-actions--end flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 disabled={busy}
@@ -2069,12 +2126,12 @@ export function TenderDetail() {
               >
                 Zapisz całość
               </button>
-            </div>
-          )}
         </div>
       )}
+    </div>
+  )
 
-      {tab === 'warunki' && (
+  const conditionsSection = (
         <div className="space-y-3 rounded-xl bg-white p-4 shadow-sm">
           <p className="text-xs text-slate-500">
             Warunki udziału / IT z dokumentów SIWZ (terminy, certyfikaty, wymagania systemowe).
@@ -2129,22 +2186,91 @@ export function TenderDetail() {
               {(tender.conditions ?? []).length === 0 && (
                 <tr>
                   <td colSpan={4} className="p-3 text-slate-400">
-                    Brak warunków — zaimportuj z zakładki Dokumenty.
+                    Brak warunków — powstają z dokumentu SIWZ (Dokumenty) albo dodaj je ręcznie powyżej.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
-      )}
+  )
 
-      {tab === 'dokumenty' && (
-        <div className="space-y-4">
-          <div className="rounded-xl bg-white p-4 shadow-sm">
-            <h2 className="mb-2 text-sm font-semibold">Import dokumentu SIWZ</h2>
-            <p className="mb-3 text-xs text-slate-500">
-              PDF, Excel (xlsx/xls/csv), Word (doc/docx) → pozycje i/lub warunki. Word jest zapisywany jako szablon oferty (przycisk DOCX).
-            </p>
+  const documentsSection = (
+    <div className="space-y-4">
+      <div className="rounded-xl bg-white p-4 shadow-sm">
+        <h2 className="mb-1 text-sm font-semibold">Dodaj dokumenty przetargu</h2>
+        <p className="mb-3 text-xs text-slate-500">
+          Z SIWZ (PDF, Excel, Word) odczytamy pozycje i warunki. Formularz ofertowy (Word) zapiszemy, żeby wypełnić go
+          cenami w Eksport › Formularz ofertowy.
+        </p>
+        {!canImport ? (
+          <p className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Dodawanie dokumentów wymaga uprawnienia do importu. Poproś o wgranie SIWZ osobę z działu przetargów.
+          </p>
+        ) : !can_edit ? (
+          <p className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Dokumenty można dodawać tylko w statusie Szkic albo Wycena.
+          </p>
+        ) : (
+          <>
+            <label
+              onDragOver={(e) => {
+                e.preventDefault()
+                setDragOver(true)
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault()
+                setDragOver(false)
+                const f = e.dataTransfer.files?.[0]
+                if (f && !busy) void analyzeDocument(f)
+              }}
+              className={`app-dropzone flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 text-center ${
+                dragOver ? 'border-blue-600 bg-sky-50' : 'border-slate-300 bg-slate-50'
+              } ${busy ? 'pointer-events-none opacity-60' : ''}`}
+            >
+              <svg
+                width="28"
+                height="28"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="text-blue-600"
+                aria-hidden="true"
+              >
+                <path d="M12 16V4" />
+                <path d="M7 9l5-5 5 5" />
+                <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
+              </svg>
+              <strong className="text-sm">Przeciągnij tu plik SIWZ albo formularz ofertowy</strong>
+              <span className="text-xs text-slate-500">PDF, Excel (xlsx, xls, csv), Word (doc, docx)</span>
+              <span className="mt-1 inline-flex items-center rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white">
+                {busy && docStatus.startsWith('Wybrano') ? 'Przetwarzanie…' : 'Wybierz plik z komputera'}
+              </span>
+              <input
+                type="file"
+                className="sr-only"
+                accept=".pdf,.xlsx,.xls,.csv,.doc,.docx"
+                disabled={busy}
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) void analyzeDocument(f)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+            <details className="mt-3 rounded-lg border border-slate-200 px-3 py-2 text-xs">
+              <summary className="cursor-pointer font-semibold">
+                Ustawienia odczytu{' '}
+                <span className="font-normal text-slate-500">
+                  · {docTargetsLabel}, {docModeLabel},{' '}
+                  {replaceItems || replaceConditions ? 'zastępuje istniejące' : 'dopisuje do istniejących'}
+                </span>
+              </summary>
+              <div className="mt-3">
             <div className="mb-3 flex flex-wrap gap-4 text-xs">
               <label className="flex items-center gap-1">
                 <input
@@ -2200,28 +2326,11 @@ export function TenderDetail() {
                 Zastąp istniejące warunki
               </label>
             </div>
-            {!can_edit && (
-              <p className="mb-2 text-xs text-amber-700">Import tylko w statusie szkic/wycena.</p>
-            )}
-            <div className="flex flex-wrap items-center gap-3">
-              <label
-                className={`inline-flex cursor-pointer items-center rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 ${
-                  !can_edit || busy ? 'pointer-events-none opacity-50' : ''
-                }`}
-              >
-                {busy && docStatus.startsWith('Wybrano') ? 'Przetwarzanie…' : 'Przeglądaj…'}
-                <input
-                  type="file"
-                  className="sr-only"
-                  accept=".pdf,.xlsx,.xls,.csv,.doc,.docx"
-                  disabled={!can_edit || busy}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0]
-                    if (f) void analyzeDocument(f)
-                    e.target.value = ''
-                  }}
-                />
-              </label>
+              </div>
+            </details>
+          </>
+        )}
+        <div className="mt-3 flex flex-wrap items-center gap-3">
               {docStatus && (
                 <p
                   className={`text-xs ${
@@ -2242,8 +2351,8 @@ export function TenderDetail() {
                   )}
                 </p>
               )}
-            </div>
-          </div>
+        </div>
+      </div>
 
           {docPreview && (
             <div
@@ -2273,11 +2382,15 @@ export function TenderDetail() {
                   </button>
                   <button
                     type="button"
-                    disabled={busy || !can_edit}
+                    disabled={busy || !can_edit || !canImport}
                     onClick={() => void commitDocument()}
                     className="rounded bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
                   >
-                    Zaciągnij zaznaczone do przetargu
+                    {docMode === 'simple'
+                      ? 'Dodaj do przetargu'
+                      : `Dodaj do przetargu: ${docPreview.items.filter((i) => i.selected).length} poz., ${
+                          docPreview.conditions.filter((c) => c.selected).length
+                        } war.`}
                   </button>
                 </div>
               </div>
@@ -2435,6 +2548,7 @@ export function TenderDetail() {
             </div>
           )}
 
+          {documents.length > 0 && (
           <div className="rounded-xl bg-white p-4 shadow-sm">
             <h2 className="mb-2 text-sm font-semibold">Archiwum dokumentów</h2>
             <table className="w-full text-left text-xs">
@@ -2476,7 +2590,7 @@ export function TenderDetail() {
                         >
                           Pobierz
                         </button>
-                        {can_edit && (
+                        {can_edit && canImport && (
                           <>
                             <button
                               type="button"
@@ -2500,240 +2614,14 @@ export function TenderDetail() {
                     </td>
                   </tr>
                 ))}
-                {(tender.documents ?? []).length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="p-3 text-slate-400">
-                      Brak wgranych dokumentów.
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {tab === 'zamienniki' && (
-        <div className="space-y-3">
-          <p className="rounded-lg border-l-4 border-blue-500 bg-slate-100 p-3 text-xs text-slate-600">
-            Zamienniki przypięte do produktu głównego. Akceptacja: kierownik.
-          </p>
-          {tender.items
-            .filter((i) => i.main_product)
-            .map((item) => {
-              const subs = substitutes_by_main[String(item.main_product!.id)] ?? []
-              if (subs.length === 0) return null
-              return (
-                <div key={item.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                  <div className="border-b bg-slate-50 px-4 py-3 text-xs font-semibold">
-                    Poz. {item.line_no} · {productDisplayName(item.main_product!)} (
-                    {item.main_product!.sku})
-                  </div>
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b bg-slate-50/80">
-                        <th className="p-2">Zamiennik</th>
-                        <th className="p-2">Typ</th>
-                        <th className="p-2">AI</th>
-                        <th className="p-2">Status</th>
-                        <th className="p-2">Akcja</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {subs.map((s) => (
-                        <tr key={s.id} className="border-b">
-                          <td className="p-2">
-                            {s.substitute_product?.name} ({s.substitute_product?.sku})
-                          </td>
-                          <td className="p-2">{s.type}</td>
-                          <td className="p-2">{s.match_percent}%</td>
-                          <td className="p-2">{s.approval_status}</td>
-                          <td className="p-2">
-                            {canApproveSub && (
-                              <div className="flex gap-1">
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  className="rounded bg-green-600 px-2 py-1 text-[10px] text-white"
-                                  onClick={() => void approveSub(s.id, 'zatwierdzony')}
-                                >
-                                  OK
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  className="rounded bg-red-600 px-2 py-1 text-[10px] text-white"
-                                  onClick={() => void approveSub(s.id, 'odrzucony')}
-                                >
-                                  Nie
-                                </button>
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )
-            })}
-        </div>
-      )}
-
-      {tab === 'oferta' && (
-        <div className="rounded-xl bg-white p-4 shadow-sm">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b bg-slate-50">
-                <th className="p-2">Kod</th>
-                <th className="p-2">Oferta</th>
-                <th className="p-2">Marża</th>
-                <th className="p-2">Wartość linii</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tender.items.map((item) => {
-                const line =
-                  item.offer_price != null ? Number(item.offer_price) * item.quantity : null
-                return (
-                  <tr key={item.id} className="border-b">
-                    <td className="p-2">
-                      {isExternalOfferItem(item) ? (
-                        <span className="inline-flex flex-col gap-0.5">
-                          <span className="w-fit rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase text-white">
-                            Zewn.
-                          </span>
-                          <span>{item.custom_name}</span>
-                        </span>
-                      ) : (
-                        (item.main_product?.sku ?? item.custom_name ?? '—')
-                      )}
-                      <OrderQuantityBadge
-                        oq={item.main_product?.order_quantity}
-                        qty={item.quantity}
-                        block
-                        className="mt-0.5"
-                      />
-                    </td>
-                    <td className="p-2">{item.offer_price ?? '—'}</td>
-                    <td className="p-2">{item.margin_percent ?? '—'}%</td>
-                    <td className="p-2">
-                      {line != null ? `${line.toLocaleString('pl-PL')} zł` : '—'}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          <p className="mt-3 text-sm">
-            Suma:{' '}
-            <strong>
-              {tender.offer_value_net
-                ? `${Number(tender.offer_value_net).toLocaleString('pl-PL')} zł`
-                : '—'}
-            </strong>{' '}
-            · narzut {tender.target_margin_percent ?? 18}% · marża zreal. {tender.margin_percent ?? '—'}%
-          </p>
-        </div>
-      )}
-
-      {tab === 'komentarze' && (
-        <div className="space-y-3 rounded-xl bg-white p-4 shadow-sm text-xs">
-          <h2 className="text-sm font-semibold">Komentarze</h2>
-          {canComment ? (
-            <div className="flex flex-wrap items-end gap-2 border-b border-slate-100 pb-3">
-              <label className="flex-1 min-w-[200px]">
-                Treść
-                <textarea
-                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
-                  rows={2}
-                  value={commentBody}
-                  onChange={(e) => setCommentBody(e.target.value)}
-                />
-              </label>
-              <label>
-                Pozycja (opcjonalnie)
-                <select
-                  className="mt-1 block rounded border border-slate-300 px-2 py-1"
-                  value={commentItemId}
-                  onChange={(e) => setCommentItemId(e.target.value)}
-                >
-                  <option value="">Cały przetarg</option>
-                  {tender.items.map((it) => (
-                    <option key={it.id} value={it.id}>
-                      Lp {it.line_no}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void addComment()}
-                className="rounded bg-blue-600 px-3 py-2 text-white disabled:opacity-50"
-              >
-                Dodaj
-              </button>
-            </div>
-          ) : (
-            <p className="text-slate-400">Brak uprawnienia do komentowania.</p>
           )}
-          <ul className="space-y-2">
-            {comments.map((c) => (
-              <li key={c.id} className="rounded border border-slate-100 bg-slate-50 p-2">
-                <div className="mb-1 text-[11px] text-slate-500">
-                  {c.user?.name} · {new Date(c.created_at).toLocaleString('pl-PL')}
-                  {c.item ? ` · poz. ${c.item.line_no}` : ''}
-                </div>
-                <p className="whitespace-pre-wrap">{c.body}</p>
-              </li>
-            ))}
-            {comments.length === 0 && <li className="text-slate-400">Brak komentarzy.</li>}
-          </ul>
-        </div>
-      )}
+    </div>
+  )
 
-      {tab === 'historia' && (
-        <div className="rounded-xl bg-white p-4 shadow-sm text-xs">
-          <h2 className="mb-3 text-sm font-semibold">Historia zmian</h2>
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b bg-slate-50">
-                <th className="p-2">Kiedy</th>
-                <th className="p-2">Kto</th>
-                <th className="p-2">Akcja</th>
-                <th className="p-2">Szczegóły</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activities.map((a) => (
-                <tr key={a.id} className="border-b align-top">
-                  <td className="p-2 whitespace-nowrap">
-                    {new Date(a.created_at).toLocaleString('pl-PL')}
-                  </td>
-                  <td className="p-2">{a.user?.name ?? '—'}</td>
-                  <td className="p-2">
-                    {actionLabel[a.action] ?? a.action}
-                    {a.item ? ` (lp ${a.item.line_no})` : ''}
-                  </td>
-                  <td className="p-2 text-[11px] text-slate-600">
-                    {formatActivityMeta(a.meta)}
-                  </td>
-                </tr>
-              ))}
-              {activities.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="p-3 text-slate-400">
-                    Brak wpisów audytu. Zmień cenę/produkt i kliknij Zapisz przy pozycji.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {tab === 'zaproszenia' && (
+  const inviteSection = (
         <div className="space-y-3 rounded-xl bg-white p-4 shadow-sm text-xs">
           <h2 className="text-sm font-semibold">Zaproszeni do przetargu</h2>
           <p className="text-slate-500">
@@ -2850,9 +2738,9 @@ export function TenderDetail() {
             </tbody>
           </table>
         </div>
-      )}
+  )
 
-      {tab === 'workflow' && (
+  const statusSection = (
         <div className="space-y-4">
           <div className="rounded-xl bg-white p-4 shadow-sm">
             <h2 className="mb-2 text-sm font-semibold">Zmiana statusu</h2>
@@ -2922,7 +2810,793 @@ export function TenderDetail() {
             </table>
           </div>
         </div>
+  )
+
+  const actionsMenu = canDeleteTender ? (
+    <ActionMenu
+      label="⋯"
+      ariaLabel="Więcej akcji"
+      disabled={busy}
+      items={[{ label: 'Usuń przetarg', hint: 'Tej operacji nie można cofnąć', danger: true, onSelect: () => void deleteTender() }]}
+    />
+  ) : null
+
+  const wizardSteps = [
+    {
+      label: 'Dokumenty',
+      hint: documents.length > 0 ? `Pliki: ${documents.length}` : 'wgraj SIWZ i formularz',
+      done: documents.length > 0 || tender.items.length > 0,
+    },
+    {
+      label: 'Pozycje i produkty',
+      hint: tender.items.length > 0 ? `${withProduct} / ${tender.items.length} z produktem` : 'brak pozycji',
+      done: tender.items.length > 0 && withProduct === tender.items.length,
+    },
+    {
+      label: 'Warunki',
+      hint: conditions.length > 0 ? `Warunki: ${conditions.length}` : 'brak warunków',
+      done: conditions.length > 0,
+    },
+    {
+      label: 'Termin i start',
+      hint: savedDeadline ? `termin ${formatDay(savedDeadline)}` : 'bez terminu',
+      done: false,
+    },
+  ]
+
+  const startChecklist: Array<[boolean, string]> = [
+    [documents.length > 0, documents.length > 0 ? `Dokumenty: ${documents.length}` : 'Brak dokumentów'],
+    [
+      tender.items.length > 0 && withProduct === tender.items.length,
+      tender.items.length > 0 ? `${withProduct} z ${tender.items.length} pozycji ma produkt` : 'Brak pozycji',
+    ],
+    [conditions.length > 0, conditions.length > 0 ? `Warunki: ${conditions.length}` : 'Brak warunków'],
+    [Boolean(savedDeadline), savedDeadline ? `Termin składania: ${formatDay(savedDeadline)}` : 'Brak terminu składania'],
+    [hasOfferForm, hasOfferForm ? 'Formularz ofertowy (Word) wgrany' : 'Brak formularza Word — eksport DOCX nie zadziała'],
+  ]
+
+  const wizardView = (
+    <>
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <Link to="/tenders" className="app-back text-xs text-blue-600 hover:underline">
+            ← Lista przetargów
+          </Link>
+          <h1 className="app-title mt-2 text-xl font-semibold">
+            {tender.number} · {tender.title}
+          </h1>
+          <p className="app-meta text-xs text-slate-500">
+            {tender.client?.name} · opiekun {tender.owner?.name ?? '—'} · <strong>Zakładanie przetargu</strong> · {TENDER_STATUS_LABEL[tender.status] ?? tender.status}
+          </p>
+        </div>
+        <div className="app-actions flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setTab('podsumowanie')
+              setWizardActive(false)
+            }}
+            className="rounded px-2 py-1.5 text-[11px] text-blue-700 underline"
+          >
+            Zamknij kreator i pokaż pełny widok
+          </button>
+          {actionsMenu}
+        </div>
+      </div>
+      {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
+      {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      <nav aria-label="Kroki zakładania przetargu" className="app-wizard-steps mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {wizardSteps.map((s, i) => {
+          const current = i === wizardStep
+          return (
+            <button
+              key={s.label}
+              type="button"
+              onClick={() => setWizardStep(i)}
+              aria-current={current ? 'step' : undefined}
+              data-state={current ? 'now' : s.done ? 'done' : 'todo'}
+              className={`app-wizard-step flex items-start gap-2 rounded-xl border bg-white p-3 text-left text-xs ${
+                current ? 'border-blue-600 ring-1 ring-blue-600' : 'border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              <span
+                className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+                  current ? 'bg-blue-600 text-white' : s.done ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {s.done && !current ? '✓' : i + 1}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[10px] text-slate-500">Krok {i + 1} z 4</span>
+                <span className="block font-semibold">{s.label}</span>
+                <span className={`block ${s.done ? 'text-emerald-700' : 'text-slate-500'}`}>{s.hint}</span>
+              </span>
+            </button>
+          )
+        })}
+      </nav>
+      {matchOverlay}
+      {wizardStep === 1 && matchReportPanel}
+      {wizardStep === 0 && documentsSection}
+      {wizardStep === 1 &&
+        (tender.items.length > 0 ? (
+          itemsSection
+        ) : (
+          <p className="rounded-xl bg-white p-4 text-xs text-slate-500 shadow-sm">
+            Przetarg nie ma jeszcze pozycji. Pozycje powstają z dokumentu SIWZ w kroku 1
+            {canImport ? '.' : ' — dokument wgrywa osoba z uprawnieniem do importu (dział przetargów).'}
+          </p>
+        ))}
+      {wizardStep === 2 && conditionsSection}
+      {wizardStep === 3 && (
+        <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
+          <div className="space-y-3">
+            <div className="space-y-3 rounded-xl bg-white p-4 text-xs shadow-sm">
+              <h2 className="text-sm font-semibold">Termin i marża</h2>
+              <div className="flex flex-wrap items-end gap-2">
+                <label>
+                  Termin składania ofert
+                  <input
+                    type="date"
+                    className="mt-1 block rounded border border-slate-300 px-2 py-1"
+                    value={deadlineEdit}
+                    onChange={(e) => setDeadlineEdit(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={busy || !deadlineDirty}
+                  onClick={() => void saveDeadline()}
+                  className="rounded bg-slate-700 px-3 py-1.5 text-white disabled:opacity-50"
+                >
+                  Zapisz termin
+                </button>
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <label>
+                  Marża oferty (narzut %)
+                  <input
+                    type="number"
+                    min={0}
+                    max={500}
+                    step={0.1}
+                    disabled={busy}
+                    className="mt-1 block w-24 rounded border border-slate-300 px-2 py-1"
+                    value={marginEdit}
+                    onChange={(e) => setMarginEdit(e.target.value)}
+                    title="Cena katalogowa = zakup × (1 + marża%). Linki zewnętrzne skalowane współczynnikiem zmiany."
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void saveTargetMargin()}
+                  className="rounded bg-violet-700 px-3 py-1.5 text-white disabled:opacity-50"
+                  title="Przelicza ceny z katalogu i skaluje linki zewnętrzne"
+                >
+                  Zapisz marżę
+                </button>
+              </div>
+            </div>
+            {canInvite && inviteSection}
+          </div>
+          <div className="space-y-2 rounded-xl bg-white p-4 text-xs shadow-sm">
+            <h2 className="text-sm font-semibold">Przed rozpoczęciem wyceny</h2>
+            <ul className="space-y-1.5">
+              {startChecklist.map(([ok, label]) => (
+                <li key={label} className="flex items-start gap-2">
+                  <span
+                    className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                      ok ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'
+                    }`}
+                  >
+                    {ok ? '✓' : '!'}
+                  </span>
+                  <span className={ok ? 'text-slate-700' : 'text-amber-800'}>{label}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-slate-500">Braki nie blokują startu — uzupełnisz je w pełnym widoku przetargu.</p>
+          </div>
+        </div>
       )}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+        {wizardStep > 0 ? (
+          <button
+            type="button"
+            onClick={() => setWizardStep(wizardStep - 1)}
+            className="rounded border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            ‹ Wstecz
+          </button>
+        ) : (
+          <span />
+        )}
+        {wizardStep < 3 ? (
+          <button
+            type="button"
+            onClick={() => setWizardStep(wizardStep + 1)}
+            className="rounded bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+          >
+            Dalej: {wizardSteps[wizardStep + 1].label} ›
+          </button>
+        ) : (
+          <span className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-slate-500">
+              {deadlineDirty
+                ? 'Najpierw zapisz zmieniony termin.'
+                : !isDraft
+                  ? 'Przetarg jest już w Wycenie — otworzy się pełny widok.'
+                  : canStartPricing
+                    ? 'Status zmieni się ze Szkicu na Wycenę.'
+                    : 'Status zostaje Szkic — nie masz uprawnienia do zmiany na Wycenę.'}
+            </span>
+            <button
+              type="button"
+              disabled={busy || deadlineDirty}
+              onClick={() => void finishWizard()}
+              className="rounded bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            >
+              {isDraft && canStartPricing ? 'Rozpocznij wycenę ›' : 'Zakończ kreator ›'}
+            </button>
+          </span>
+        )}
+      </div>
+    </>
+  )
+
+  const missingRows: Array<{ label: string; action?: string; onClick?: () => void }> = []
+  if (tender.items.length === 0) {
+    missingRows.push({ label: 'Przetarg nie ma pozycji — dodaj dokument SIWZ', action: 'Dokumenty', onClick: () => setTab('dokumenty') })
+  }
+  if (coverage) {
+    const coverageRows: Array<[CoverageFilter & string, string]> = [
+      ['without_product', 'Pozycje bez produktu'],
+      ['without_price', 'Pozycje bez ceny'],
+      ['weak_match', 'Słabe dopasowanie AI'],
+      ['low_margin', 'Niska marża'],
+    ]
+    for (const [key, label] of coverageRows) {
+      if (coverage[key] > 0) {
+        missingRows.push({ label: `${label}: ${coverage[key]}`, action: 'Pokaż', onClick: () => goToItems(key) })
+      }
+    }
+    if (coverage.substitutes_pending > 0) {
+      missingRows.push({
+        label: `Zamienniki do decyzji: ${coverage.substitutes_pending}`,
+        action: 'Pokaż',
+        onClick: () => setTab('zamienniki'),
+      })
+    }
+  }
+  if (!savedDeadline) {
+    missingRows.push({ label: 'Brak terminu składania — wpisz go wyżej' })
+  }
+  if (!hasOfferForm) {
+    missingRows.push({
+      label: 'Brak formularza ofertowego (Word) — eksport DOCX nie zadziała',
+      action: 'Dokumenty',
+      onClick: () => setTab('dokumenty'),
+    })
+  }
+
+  const summarySection = (
+    <div className="space-y-3 text-xs">
+      {tender.status.startsWith('akceptacja') && next_statuses.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+          <span className="text-amber-800">
+            Przetarg czeka na decyzję: <strong>{TENDER_STATUS_LABEL[tender.status] ?? tender.status}</strong>
+          </span>
+          <button
+            type="button"
+            onClick={() => setTab('historia')}
+            className="rounded bg-blue-600 px-3 py-1.5 font-semibold text-white hover:bg-blue-700"
+          >
+            Przejdź do zmiany statusu
+          </button>
+        </div>
+      )}
+      {canEditOffer && (isDraft || tender.items.length === 0) && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white p-3 shadow-sm">
+          <span className="text-slate-600">
+            Kreator prowadzi krok po kroku: dokumenty, pozycje, warunki, termin.
+          </span>
+          <button
+            type="button"
+            onClick={() => setWizardActive(true)}
+            className="rounded border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Otwórz kreator
+          </button>
+        </div>
+      )}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-xl bg-white p-3 shadow-sm">
+          <div className="text-slate-500">Termin składania</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <strong className="text-base">{savedDeadline ? formatDay(savedDeadline) : '—'}</strong>
+            {deadlineDays != null && deadlineDays >= 0 && deadlineDays <= 7 && (
+              <span className="rounded bg-red-100 px-2 py-0.5 font-medium text-red-700">
+                {deadlineDays === 0 ? 'dziś' : `za ${deadlineDays} dni`}
+              </span>
+            )}
+            {deadlineDays != null && deadlineDays > 7 && <span className="text-slate-500">za {deadlineDays} dni</span>}
+            {deadlineDays != null && deadlineDays < 0 && <span className="text-slate-500">po terminie</span>}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            <input
+              type="date"
+              aria-label="Termin składania"
+              className="rounded border border-slate-300 px-2 py-1"
+              value={deadlineEdit}
+              onChange={(e) => setDeadlineEdit(e.target.value)}
+            />
+            <button
+              type="button"
+              disabled={busy || !deadlineDirty}
+              onClick={() => void saveDeadline()}
+              className="rounded bg-slate-700 px-2 py-1 text-white disabled:opacity-50"
+            >
+              Zapisz
+            </button>
+          </div>
+        </div>
+        <div className="rounded-xl bg-white p-3 shadow-sm">
+          <div className="text-slate-500">Pozycje z produktem</div>
+          <strong className="mt-1 block text-base">
+            {withProduct} / {tender.items.length}
+          </strong>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+            <div
+              className={`h-full rounded-full ${coverage?.ready ? 'bg-emerald-600' : 'bg-amber-500'}`}
+              style={{ width: `${tender.items.length ? Math.round((withProduct / tender.items.length) * 100) : 0}%` }}
+            />
+          </div>
+        </div>
+        <div className="rounded-xl bg-white p-3 shadow-sm">
+          <div className="text-slate-500">Wartość oferty netto</div>
+          <strong className="mt-1 block text-base">
+            {tender.offer_value_net ? `${Number(tender.offer_value_net).toLocaleString('pl-PL')} zł` : '—'}
+          </strong>
+          <div className="mt-1 text-slate-500">AI {tender.ai_percent}%</div>
+        </div>
+        <div className="rounded-xl bg-white p-3 shadow-sm">
+          <div className="text-slate-500">Marża zrealizowana</div>
+          <strong className="mt-1 block text-base">
+            {tender.margin_percent != null ? `${tender.margin_percent}%` : '—'}
+          </strong>
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            <label className="flex items-center gap-1 text-slate-500">
+              narzut %
+              <input
+                type="number"
+                min={0}
+                max={500}
+                step={0.1}
+                disabled={!can_edit || busy}
+                className="w-20 rounded border border-slate-300 px-2 py-1 disabled:bg-slate-50"
+                value={marginEdit}
+                onChange={(e) => setMarginEdit(e.target.value)}
+                title="Cena katalogowa = zakup × (1 + marża%). Linki zewnętrzne skalowane współczynnikiem zmiany."
+              />
+            </label>
+            {can_edit && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void saveTargetMargin()}
+                className="rounded bg-violet-700 px-2 py-1 text-white disabled:opacity-50"
+                title="Przelicza ceny z katalogu i skaluje linki zewnętrzne"
+              >
+                Zapisz
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="rounded-xl bg-white p-4 shadow-sm">
+        <h2 className="mb-2 text-sm font-semibold">Czego jeszcze brakuje w ofercie</h2>
+        {missingRows.length === 0 ? (
+          <p className="text-emerald-700">✓ Niczego nie brakuje.</p>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {missingRows.map((r) => (
+              <li key={r.label} className="flex flex-wrap items-center gap-2 py-2">
+                <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-50 text-[10px] font-bold text-amber-800">
+                  !
+                </span>
+                <span className="flex-1 text-amber-800">{r.label}</span>
+                {r.action && r.onClick && (
+                  <button
+                    type="button"
+                    onClick={r.onClick}
+                    className="rounded border border-slate-300 bg-white px-2 py-1 font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    {r.action}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="rounded-xl bg-white p-4 shadow-sm">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Dokumenty</h2>
+            <button type="button" onClick={() => setTab('dokumenty')} className="text-blue-700 underline">
+              {canImport && can_edit ? 'Dodaj dokument' : 'Pokaż'}
+            </button>
+          </div>
+          {documents.length === 0 ? (
+            <p className="text-slate-400">Brak wgranych dokumentów.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {documents.slice(0, 5).map((d) => (
+                <li key={d.id} className="flex flex-wrap items-center gap-2 py-1.5">
+                  <span className="min-w-0 flex-1 truncate">{d.original_name}</span>
+                  <span className="text-slate-500">{new Date(d.created_at).toLocaleDateString('pl-PL')}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="rounded-xl bg-white p-4 shadow-sm">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Ostatnia aktywność</h2>
+            <button type="button" onClick={() => setTab('historia')} className="text-blue-700 underline">
+              Cała historia
+            </button>
+          </div>
+          {activities.length === 0 ? (
+            <p className="text-slate-400">Brak wpisów.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {activities.slice(0, 5).map((a) => (
+                <li key={a.id} className="py-1.5">
+                  <span className="text-slate-500">
+                    {new Date(a.created_at).toLocaleString('pl-PL')} · {a.user?.name ?? '—'}
+                  </span>
+                  <br />
+                  {actionLabel[a.action] ?? a.action}
+                  {a.item ? ` (lp ${a.item.line_no})` : ''}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+
+  const tabBadge: Partial<Record<TenderTab, { count?: number; alert?: number }>> = {
+    dokumenty: { count: documents.length },
+    warunki: { count: conditions.length },
+    pozycje: { count: tender.items.length, alert: attentionCount },
+    zamienniki: { alert: coverage?.substitutes_pending ?? 0 },
+    komentarze: { count: comments.length },
+    zaproszenia: { count: invitations.length },
+    historia: { count: activities.length },
+  }
+
+  const pulpitView = (
+    <>
+      <Link to="/tenders" className="app-back text-xs text-blue-600 hover:underline">
+        ← Lista przetargów
+      </Link>
+      <h1 className="app-title mt-2 text-xl font-semibold">
+        {tender.number} · {tender.title}
+      </h1>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="app-meta text-xs text-slate-500">
+          {tender.client?.name} · opiekun {tender.owner?.name ?? '—'} ·{' '}
+          <strong>{TENDER_STATUS_LABEL[tender.status] ?? tender.status}</strong> · AI {tender.ai_percent}% · narzut{' '}
+          {tender.target_margin_percent ?? 18}% · marża zreal. {tender.margin_percent ?? '—'}% ·{' '}
+          {can_edit ? 'edycja włączona' : 'tylko podgląd'}
+        </p>
+        <div className="app-actions flex flex-wrap gap-1">
+          <ActionMenu
+            label="Eksport ▾"
+            disabled={busy}
+            items={[
+              { label: 'Excel', hint: 'Tabela oferty', onSelect: () => void exportOffer('excel') },
+              { label: 'PDF', hint: 'Oferta do wydruku', onSelect: () => void exportOffer('pdf') },
+              {
+                label: 'Formularz ofertowy (DOCX)',
+                hint: hasOfferForm ? 'Wypełnia wgrany formularz cenami z oferty' : 'Najpierw wgraj formularz Word w Dokumentach',
+                onSelect: () => void exportOffer('docx'),
+              },
+            ]}
+          />
+          {actionsMenu}
+        </div>
+      </div>
+      <StatusFlow status={tender.status} />
+
+      {msg && <p className="mb-2 rounded bg-green-50 px-3 py-2 text-xs text-green-800">{msg}</p>}
+      {err && <p className="mb-2 rounded bg-red-50 px-3 py-2 text-xs text-red-700">{err}</p>}
+      {matchOverlay}
+      {matchReportPanel}
+
+      <div className="flex flex-col gap-3 md:flex-row md:items-start">
+        <nav
+          aria-label="Sekcje przetargu"
+          className="app-tabs app-tabs--side flex flex-wrap gap-1 rounded-xl bg-white p-2 shadow-sm md:w-52 md:shrink-0 md:flex-col md:flex-nowrap"
+        >
+          {TAB_GROUPS.map((g) => (
+            <div key={g.label} className="contents md:block">
+              <p className="app-tabs-group hidden px-2 pb-1 pt-2 text-[10px] font-bold uppercase tracking-wide text-slate-400 md:block">
+                {g.label}
+              </p>
+              {g.tabs.map(({ key, label }) => {
+                const badge = tabBadge[key]
+                const active = tab === key
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setTab(key)}
+                    aria-current={active ? 'page' : undefined}
+                    className={`app-tab flex items-center gap-1 rounded px-2 py-1.5 text-left text-xs md:w-full ${
+                      active ? 'app-tab--active bg-sky-100 font-semibold text-blue-700' : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="flex-1">{label}</span>
+                    {badge?.count != null && badge.count > 0 && (
+                      <span className="app-tab-count text-[11px] text-slate-500">{badge.count}</span>
+                    )}
+                    {badge?.alert != null && badge.alert > 0 && (
+                      <span
+                        className="app-tab-alert rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-white"
+                        title="Do zrobienia"
+                      >
+                        {badge.alert}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </nav>
+
+        <div className="min-w-0 flex-1">
+          {tab === 'podsumowanie' && summarySection}
+          {tab === 'pozycje' && itemsSection}
+          {tab === 'warunki' && conditionsSection}
+          {tab === 'dokumenty' && documentsSection}
+          {tab === 'zamienniki' && (
+        <div className="space-y-3">
+          <p className="rounded-lg border-l-4 border-blue-500 bg-slate-100 p-3 text-xs text-slate-600">
+            Zamienniki przypięte do produktu głównego. Akceptacja: kierownik.
+          </p>
+          {tender.items
+            .filter((i) => i.main_product)
+            .map((item) => {
+              const subs = substitutes_by_main[String(item.main_product!.id)] ?? []
+              if (subs.length === 0) return null
+              return (
+                <div key={item.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                  <div className="border-b bg-slate-50 px-4 py-3 text-xs font-semibold">
+                    Poz. {item.line_no} · {productDisplayName(item.main_product!)} (
+                    {item.main_product!.sku})
+                  </div>
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b bg-slate-50/80">
+                        <th className="p-2">Zamiennik</th>
+                        <th className="p-2">Typ</th>
+                        <th className="p-2">AI</th>
+                        <th className="p-2">Status</th>
+                        <th className="p-2">Akcja</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {subs.map((s) => (
+                        <tr key={s.id} className="border-b">
+                          <td className="p-2">
+                            {s.substitute_product?.name} ({s.substitute_product?.sku})
+                          </td>
+                          <td className="p-2">{s.type}</td>
+                          <td className="p-2">{s.match_percent}%</td>
+                          <td className="p-2">{s.approval_status}</td>
+                          <td className="p-2">
+                            {canApproveSub && (
+                              <div className="flex gap-1">
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  className="rounded bg-green-600 px-2 py-1 text-[10px] text-white"
+                                  onClick={() => void approveSub(s.id, 'zatwierdzony')}
+                                >
+                                  Zatwierdź
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  className="rounded bg-red-600 px-2 py-1 text-[10px] text-white"
+                                  onClick={() => void approveSub(s.id, 'odrzucony')}
+                                >
+                                  Odrzuć
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            })}
+        </div>
+          )}
+          {tab === 'oferta' && (
+        <div className="rounded-xl bg-white p-4 shadow-sm">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b bg-slate-50">
+                <th className="p-2">Kod</th>
+                <th className="p-2">Oferta</th>
+                <th className="p-2">Marża</th>
+                <th className="p-2">Wartość linii</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tender.items.map((item) => {
+                const line =
+                  item.offer_price != null ? Number(item.offer_price) * item.quantity : null
+                return (
+                  <tr key={item.id} className="border-b">
+                    <td className="p-2">
+                      {isExternalOfferItem(item) ? (
+                        <span className="inline-flex flex-col gap-0.5">
+                          <span className="w-fit rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase text-white">
+                            Zewn.
+                          </span>
+                          <span>{item.custom_name}</span>
+                        </span>
+                      ) : (
+                        (item.main_product?.sku ?? item.custom_name ?? '—')
+                      )}
+                      <OrderQuantityBadge
+                        oq={item.main_product?.order_quantity}
+                        qty={item.quantity}
+                        block
+                        className="mt-0.5"
+                      />
+                    </td>
+                    <td className="p-2">
+                      {item.offer_price != null
+                        ? `${Number(item.offer_price).toLocaleString('pl-PL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} zł`
+                        : '—'}
+                    </td>
+                    <td className="p-2">{item.margin_percent != null ? `${item.margin_percent}%` : '—'}</td>
+                    <td className="p-2">
+                      {line != null ? `${line.toLocaleString('pl-PL')} zł` : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <p className="mt-3 text-sm">
+            Suma:{' '}
+            <strong>
+              {tender.offer_value_net
+                ? `${Number(tender.offer_value_net).toLocaleString('pl-PL')} zł`
+                : '—'}
+            </strong>{' '}
+            · narzut {tender.target_margin_percent ?? 18}% · marża zreal. {tender.margin_percent ?? '—'}%
+          </p>
+        </div>
+          )}
+          {tab === 'komentarze' && (
+        <div className="space-y-3 rounded-xl bg-white p-4 shadow-sm text-xs">
+          <h2 className="text-sm font-semibold">Komentarze</h2>
+          {canComment ? (
+            <div className="flex flex-wrap items-end gap-2 border-b border-slate-100 pb-3">
+              <label className="flex-1 min-w-[200px]">
+                Treść
+                <textarea
+                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
+                  rows={2}
+                  value={commentBody}
+                  onChange={(e) => setCommentBody(e.target.value)}
+                />
+              </label>
+              <label>
+                Pozycja (opcjonalnie)
+                <select
+                  className="mt-1 block rounded border border-slate-300 px-2 py-1"
+                  value={commentItemId}
+                  onChange={(e) => setCommentItemId(e.target.value)}
+                >
+                  <option value="">Cały przetarg</option>
+                  {tender.items.map((it) => (
+                    <option key={it.id} value={it.id}>
+                      Lp {it.line_no}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void addComment()}
+                className="rounded bg-blue-600 px-3 py-2 text-white disabled:opacity-50"
+              >
+                Dodaj
+              </button>
+            </div>
+          ) : (
+            <p className="text-slate-400">Brak uprawnienia do komentowania.</p>
+          )}
+          <ul className="space-y-2">
+            {comments.map((c) => (
+              <li key={c.id} className="rounded border border-slate-100 bg-slate-50 p-2">
+                <div className="mb-1 text-[11px] text-slate-500">
+                  {c.user?.name} · {new Date(c.created_at).toLocaleString('pl-PL')}
+                  {c.item ? ` · poz. ${c.item.line_no}` : ''}
+                </div>
+                <p className="whitespace-pre-wrap">{c.body}</p>
+              </li>
+            ))}
+            {comments.length === 0 && <li className="text-slate-400">Brak komentarzy.</li>}
+          </ul>
+        </div>
+          )}
+          {tab === 'zaproszenia' && inviteSection}
+          {tab === 'historia' && (
+            <div className="space-y-4">
+              {statusSection}
+        <div className="rounded-xl bg-white p-4 shadow-sm text-xs">
+          <h2 className="mb-3 text-sm font-semibold">Historia zmian</h2>
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b bg-slate-50">
+                <th className="p-2">Kiedy</th>
+                <th className="p-2">Kto</th>
+                <th className="p-2">Akcja</th>
+                <th className="p-2">Szczegóły</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activities.map((a) => (
+                <tr key={a.id} className="border-b align-top">
+                  <td className="p-2 whitespace-nowrap">
+                    {new Date(a.created_at).toLocaleString('pl-PL')}
+                  </td>
+                  <td className="p-2">{a.user?.name ?? '—'}</td>
+                  <td className="p-2">
+                    {actionLabel[a.action] ?? a.action}
+                    {a.item ? ` (lp ${a.item.line_no})` : ''}
+                  </td>
+                  <td className="p-2 text-[11px] text-slate-600">
+                    {formatActivityMeta(a.meta)}
+                  </td>
+                </tr>
+              ))}
+              {activities.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="p-3 text-slate-400">
+                    Brak wpisów audytu. Zmień cenę/produkt i kliknij Zapisz przy pozycji.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  )
+
+  return (
+    <div>
+      {wizardMode ? wizardView : pulpitView}
       <ProductVerifyModal
         productId={reportPreviewId}
         query={reportPreviewQuery}

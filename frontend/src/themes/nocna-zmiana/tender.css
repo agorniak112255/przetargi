@@ -121,6 +121,72 @@
   color: color-mix(in oklab, var(--t-muted) 70%, var(--t-dim));
 }
 
+/* Menu boczne pełnego widoku (app-tabs--side): reguły zakładek wyżej są poziome — nadpisane wyższą specyficznością */
+:root[data-template="nocna-zmiana"] .app-tabs.app-tabs--side {
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--t-border);
+  background: var(--t-surface);
+}
+
+:root[data-template="nocna-zmiana"] .app-tabs.app-tabs--side .app-tab {
+  margin-bottom: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border-bottom: 0;
+}
+
+:root[data-template="nocna-zmiana"] .app-tabs.app-tabs--side .app-tab:hover {
+  background: var(--t-surface-2);
+}
+
+:root[data-template="nocna-zmiana"] .app-tabs.app-tabs--side .app-tab.app-tab--active {
+  background: var(--t-surface-2);
+  box-shadow: inset 2px 0 0 var(--t-accent);
+}
+
+:root[data-template="nocna-zmiana"] .app-tabs-group {
+  color: color-mix(in oklab, var(--t-muted) 70%, var(--t-dim));
+}
+
+:root[data-template="nocna-zmiana"] .app-tab-alert {
+  background: var(--t-signal-amber, #b7791f);
+  color: var(--t-on-accent, #fff);
+}
+
+/* Menu akcji w nagłówku (Eksport, ⋯) */
+:root[data-template="nocna-zmiana"] .app-menu-button {
+  border-radius: 8px;
+  padding: 6px 11px;
+  font-size: 12px;
+  line-height: 16px;
+  border-color: var(--t-border-strong);
+  background: var(--t-surface);
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-menu-list {
+  border-color: var(--t-border);
+  background: var(--t-surface);
+}
+
+/* Kreator: kroki i pole na pliki */
+:root[data-template="nocna-zmiana"] .app-wizard-step {
+  border-color: var(--t-border);
+  background: var(--t-surface);
+  color: var(--t-text);
+}
+
+:root[data-template="nocna-zmiana"] .app-wizard-step[data-state="now"] {
+  border-color: var(--t-accent);
+  box-shadow: 0 0 0 1px var(--t-accent);
+}
+
+:root[data-template="nocna-zmiana"] .app-dropzone {
+  border-color: var(--t-border-strong);
+  background: var(--t-surface-2);
+}
+
 /* Pokrycie oferty */
 :root[data-template="nocna-zmiana"] .app-coverage {
   border: 1px solid var(--t-border);
