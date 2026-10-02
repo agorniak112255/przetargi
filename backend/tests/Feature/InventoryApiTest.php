@@ -7,10 +7,12 @@ namespace Tests\Feature;
 use App\Models\ErpItem;
 use App\Models\ErpItemLink;
 use App\Models\ErpItemPurchase;
+use App\Models\ErpWarehouse;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\Erp\StockLots;
 use App\Services\Erp\WarehouseLocations;
+use App\Services\Erp\WarehouseSplit;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -282,6 +284,59 @@ final class InventoryApiTest extends TestCase
         $this->assertSame(1, $res->json('summary.never_sold'));
         $this->assertSame(['KURTKA'], $this->codes('location=01&never_sold=0'));
         $this->assertSame([], $this->codes('location=11'));
+    }
+
+    public function test_warehouses_filter_counts_only_trade_or_service_warehouses(): void
+    {
+        ErpWarehouse::query()->create(['code' => '01MTU', 'name' => 'Magazyn usługowy Rzeszów', 'is_service' => true]);
+        $this->split($this->placed('MIX', lastSale: '2025-12-01', price: 5, warehouses: [
+            ['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 10, 'value' => 100, 'oldest_lot' => '2025-01-01'],
+            ['code' => '01MTU', 'name' => 'Magazyn usługowy Rzeszów', 'quantity' => 5, 'value' => 50, 'oldest_lot' => '2023-01-01'],
+        ]));
+        // usługowy bez wartości partii z XL — ilość × ostatnia PZ
+        $this->split($this->placed('SERV', lastSale: '2025-12-01', price: 7, warehouses: [
+            ['code' => '01MTU', 'name' => 'Magazyn usługowy Rzeszów', 'quantity' => 2, 'value' => null, 'oldest_lot' => '2024-01-01'],
+        ]));
+        $this->split($this->placed('TRADE', lastSale: '2025-12-01', price: 9, warehouses: [
+            ['code' => '01H', 'name' => 'Magazyn HANDEL - Rzeszów', 'quantity' => 3, 'value' => 30, 'oldest_lot' => '2025-06-01'],
+        ]));
+
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+        $trade = $this->getJson('/api/inventory?warehouses=trade')->assertOk();
+        $this->assertSame(['MIX', 'TRADE'], array_column($trade->json('data'), 'code'));
+        $row = $trade->json('data.0');
+        $this->assertEquals([10, 15, 100, 10], [$row['quantity'], $row['stock_total'], $row['stock_value'], $row['unit_cost']]);
+        $this->assertSame(['lots', '2025-01-01', ['01H']], [$row['value_source'], $row['oldest_lot_at'], array_column($row['warehouses'], 'code')]);
+        $this->assertSame(['items' => 2, 'value' => 130, 'value_unknown' => 0, 'without_card' => 2, 'never_sold' => 0], $trade->json('summary'));
+        $this->assertSame('trade', $trade->json('warehouses'));
+
+        $service = $this->getJson('/api/inventory?warehouses=service')->assertOk();
+        $this->assertSame(['MIX', 'SERV'], array_column($service->json('data'), 'code'));
+        $mix = $service->json('data.0');
+        $this->assertEquals([5, 50, 10], [$mix['quantity'], $mix['stock_value'], $mix['unit_cost']]);
+        $this->assertSame(['lots', '2023-01-01', ['01MTU']], [$mix['value_source'], $mix['oldest_lot_at'], array_column($mix['warehouses'], 'code')]);
+        $serv = $service->json('data.1');
+        $this->assertEquals([2, 14], [$serv['quantity'], $serv['stock_value']]);
+        $this->assertSame(['last_purchase', null], [$serv['value_source'], $serv['unit_cost']]);
+
+        // z oddziałem — te same magazyny w oddziale; wiek partii z magazynów zakresu
+        $this->assertSame(['MIX', 'SERV'], $this->codes('location=01&warehouses=service'));
+        $this->assertEquals(5, $this->getJson('/api/inventory?location=01&warehouses=service')->json('data.0.quantity'));
+        $this->assertSame([], $this->codes('months=0&lot_months=24&warehouses=trade'));
+        $this->assertSame(['MIX', 'SERV'], $this->codes('months=0&lot_months=24&warehouses=service'));
+
+        // bez parametru po staremu: wszystkie magazyny
+        $all = $this->getJson('/api/inventory')->assertOk();
+        $this->assertSame('all', $all->json('warehouses'));
+        $this->assertEquals(15, collect($all->json('data'))->firstWhere('code', 'MIX')['quantity']);
+
+        $this->getJson('/api/inventory?warehouses=magazyn')->assertUnprocessable();
+    }
+
+    /** Podział handlowe / usługowe jak po odczycie z XL (WarehouseSplit ze słownika erp_warehouses). */
+    private function split(ErpItem $item): void
+    {
+        $item->update(WarehouseSplit::compute($item->stock_by_warehouse ?? [], ErpWarehouse::serviceCodes(), $item->oldest_lot_at?->toDateString()));
     }
 
     /** @return list<string> */

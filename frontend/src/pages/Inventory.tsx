@@ -6,13 +6,20 @@ import { CampaignPickBanner } from '../components/CampaignPickBanner'
 import { useCampaignTarget } from '../lib/campaignTarget'
 import { InventoryTabs } from '../components/InventoryTabs'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
-import { api, can, type InventoryResponse, type InventoryRow, type InventoryWarehouse } from '../lib/api'
+import {
+  api,
+  can,
+  type InventoryBoardWarehouses,
+  type InventoryResponse,
+  type InventoryRow,
+  type InventoryWarehouse,
+} from '../lib/api'
 import { applyCheckboxRange } from '../lib/checkboxRange'
 import { erpForeignPrice, erpQty, erpUnitLabel, erpUnitPrice, isTradeWarehouse } from '../lib/erpStock'
 import { formatDate, formatDateTime, formatPrice } from '../lib/priceChange'
 
 /**
- * Zapasy: towary z ERP XL, które mają stan (wszystkie magazyny) i nie sprzedały się od N miesięcy —
+ * Zapasy: towary z ERP XL, które mają stan (wszystkie magazyny albo handlowe / usługowe) i nie sprzedały się od N miesięcy —
  * ile ich jest i ile pieniędzy w nich leży. Dane tylko z XL (GET /api/inventory); strona nic nie liczy
  * poza wiekiem dat („X mies. temu”). Stan filtrów, sortowania i strony w adresie — link odtwarza widok.
  * Z uprawnieniem campaigns.use wiersze można zaznaczać (także na kilku stronach) i dodać do kampanii.
@@ -45,6 +52,18 @@ const DEFAULT_PER_PAGE = '50'
 const SEARCH_DEBOUNCE_MS = 300
 /** Ile magazynów widać pod stanem; reszta jako „+n” (jak ErpStockInline). */
 const INLINE_WAREHOUSES = 3
+
+/** Magazyny jak w raporcie dla zarządu; tu domyślnie wszystkie (lista zawsze liczyła wszystkie magazyny). */
+const WAREHOUSE_OPTIONS: { value: InventoryBoardWarehouses; label: string }[] = [
+  { value: 'all', label: 'wszystkie' },
+  { value: 'trade', label: 'handlowe' },
+  { value: 'service', label: 'usługowe' },
+]
+const WAREHOUSE_LABEL: Record<InventoryBoardWarehouses, string> = {
+  all: 'wszystkie magazyny',
+  trade: 'magazyny handlowe',
+  service: 'magazyny usługowe',
+}
 
 const CARD_OPTIONS: { value: CardFilter; label: string }[] = [
   { value: '', label: 'Wszystkie' },
@@ -138,6 +157,7 @@ export function Inventory() {
   const search = params.get('search') ?? ''
   // oddział: cyfry z początku kodu magazynu (01 = Rzeszów); '' = wszystkie
   const location = /^\d{1,10}$/.test(params.get('location') ?? '') ? (params.get('location') as string) : ''
+  const warehouses = pick<InventoryBoardWarehouses>(params.get('warehouses'), ['all', 'trade', 'service'], 'all')
   const sort = pick<SortKey>(params.get('sort'), SORT_KEYS, 'value')
   const dir = pick<SortDir>(params.get('dir'), ['asc', 'desc'], DEFAULT_DIR[sort])
   const page = Math.max(1, Math.floor(Number(params.get('page'))) || 1)
@@ -151,6 +171,7 @@ export function Inventory() {
     if (card) qs.set('card', card)
     if (group) qs.set('group', group)
     if (location) qs.set('location', location)
+    if (warehouses !== 'all') qs.set('warehouses', warehouses)
     if (supplier.trim()) qs.set('supplier', supplier.trim())
     if (search.trim()) qs.set('search', search.trim())
     qs.set('sort', sort)
@@ -158,7 +179,7 @@ export function Inventory() {
     qs.set('page', String(page))
     qs.set('per_page', perPage)
     return qs.toString()
-  }, [months, neverSold, lotMonths, card, group, location, supplier, search, sort, dir, page, perPage])
+  }, [months, neverSold, lotMonths, card, group, location, warehouses, supplier, search, sort, dir, page, perPage])
 
   const [result, setResult] = useState<InventoryResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -269,7 +290,15 @@ export function Inventory() {
   }
 
   const hasFilters = Boolean(
-    months !== DEFAULT_MONTHS || !neverSold || lotMonths !== DEFAULT_LOT_MONTHS || card || group || location || supplier || search,
+    months !== DEFAULT_MONTHS ||
+      !neverSold ||
+      lotMonths !== DEFAULT_LOT_MONTHS ||
+      card ||
+      group ||
+      location ||
+      warehouses !== 'all' ||
+      supplier ||
+      search,
   )
   const rows = result?.data ?? []
   const meta = result?.meta
@@ -379,6 +408,7 @@ export function Inventory() {
                 {result?.cutoff ? ` · bez sprzedaży od ${formatDate(result.cutoff)}` : ''}
                 {result?.lot_cutoff ? ` · partia leży od ${formatDate(result.lot_cutoff)} lub dłużej` : ''}
                 {location ? ` · oddział ${locationName}` : ''}
+                {warehouses !== 'all' ? ` · ${WAREHOUSE_LABEL[warehouses]}` : ''}
                 {loading ? ' · ładowanie…' : ''}
               </>
             ) : loading ? (
@@ -388,8 +418,8 @@ export function Inventory() {
             )}
           </p>
           <p className="mt-0.5 max-w-3xl text-xs text-slate-600">
-            Towary z Comarch ERP XL, które mają stan (wszystkie magazyny) i nie sprzedały się od wybranej liczby
-            miesięcy. Wartość = ilość × cena zakupu partii leżących na magazynie (z XL); dopóki XL nie poda partii —
+            Towary z Comarch ERP XL, które mają stan ({WAREHOUSE_LABEL[warehouses]}) i nie sprzedały się od wybranej
+            liczby miesięcy. Wartość = ilość × cena zakupu partii leżących na magazynie (z XL); dopóki XL nie poda partii —
             stan × cena z ostatniej PZ.
             {location &&
               ` Oddział ${locationName}: stan, wartość, najstarsza partia i ostatnia sprzedaż tylko z magazynów oddziału (faktury, paragony i WZ wystawione z tych magazynów).`}
@@ -483,6 +513,21 @@ export function Inventory() {
             {locationOptions.map((l) => (
               <option key={l.key} value={l.key}>
                 {l.name} ({l.key})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-0.5 text-[11px] text-slate-500">
+          Magazyny
+          <select
+            className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-800"
+            value={warehouses}
+            onChange={(e) => setFilters({ warehouses: e.target.value === 'all' ? null : e.target.value })}
+            title="Jak w raporcie zapasów: handlowe — towar na sprzedaż, usługowe — towar trzymany dla klientów (słownik magazynów). Stan, wartość i wiek partii tylko z tych magazynów; ostatnia sprzedaż bez podziału na handlowe i usługowe."
+          >
+            {WAREHOUSE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
               </option>
             ))}
           </select>
@@ -602,6 +647,7 @@ export function Inventory() {
                 onOpenCard={setPreviewId}
                 canRwPw={canRwPw}
                 location={location ? { key: location, name: locationName } : null}
+                warehouses={warehouses}
                 lotCutoff={result?.lot_cutoff ?? null}
                 selection={
                   canCampaign
@@ -694,6 +740,7 @@ function InventoryTableRow({
   onOpenCard,
   canRwPw,
   location,
+  warehouses,
   lotCutoff,
   selection,
 }: {
@@ -705,6 +752,8 @@ function InventoryTableRow({
   canRwPw: boolean
   /** Filtr oddziału: stan i magazyny pod nim tylko z oddziału; null = wszystkie magazyny. */
   location: { key: string; name: string } | null
+  /** Filtr magazynów: stan i magazyny pod nim (przychodzą z API) tylko z handlowych / usługowych. */
+  warehouses: InventoryBoardWarehouses
   /** Filtr „partia leży od”: ilość i wartość tylko z partii przyjętych najpóźniej tego dnia ('YYYY-MM-DD'). */
   lotCutoff: string | null
   /** Kolumna zaznaczania do kampanii; brak = bez kolumny. */
@@ -809,7 +858,7 @@ function InventoryTableRow({
       <td className="whitespace-nowrap p-2 text-right">
         <span
           className="font-semibold tabular-nums text-slate-800"
-          title={`${location ? `Oddział ${location.name}: ${erpQty(row.quantity)}${unit} · ` : ''}Wszystkie magazyny: ${erpQty(row.stock_total)}${unit} · HANDEL: ${erpQty(row.stock_trade)}${unit}`}
+          title={`${location || warehouses !== 'all' ? `${location ? `Oddział ${location.name}, ` : ''}${WAREHOUSE_LABEL[warehouses]}: ${erpQty(row.quantity)}${unit} · ` : ''}Wszystkie magazyny: ${erpQty(row.stock_total)}${unit} · HANDEL: ${erpQty(row.stock_trade)}${unit}`}
         >
           {erpQty(row.quantity)}
         </span>
@@ -826,8 +875,8 @@ function InventoryTableRow({
             z {erpQty(row.stock_in_scope)} na stanie
           </div>
         )}
-        {location && row.stock_total !== row.quantity && !lotCutoff && (
-          <div className="mt-0.5 text-[11px] text-slate-500" title="Stan we wszystkich magazynach (wszystkie oddziały)">
+        {(location || warehouses !== 'all') && row.stock_total !== row.quantity && !lotCutoff && (
+          <div className="mt-0.5 text-[11px] text-slate-500" title="Stan we wszystkich magazynach (wszystkie oddziały, handlowe i usługowe)">
             razem {erpQty(row.stock_total)}
           </div>
         )}

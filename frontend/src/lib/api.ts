@@ -746,6 +746,8 @@ export type InventoryResponse = {
   lot_cutoff: string | null
   /** Echo filtra oddziału; null = wszystkie. */
   location: string | null
+  /** Echo filtra magazynów (parametr `warehouses`): all — wszystkie (domyślnie), trade — handlowe, service — usługowe. */
+  warehouses: InventoryBoardWarehouses
   location_name: string | null
   /** Oddziały, w których jest jakikolwiek towar — opcje filtra. */
   locations: InventoryLocation[]
