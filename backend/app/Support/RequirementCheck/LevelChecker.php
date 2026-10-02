@@ -248,12 +248,12 @@ final class LevelChecker implements ParameterChecker
 
         $row = $this->valueRow('cut_level', 'Poziom cięcia ISO 13997', 'cut_level', $requirement, $requiredText, $min, $findings);
         $notes = array_values(array_filter([
-            $inferred ? "SIWZ nie podaje poziomu przecięcia — przyjęto minimum {$min} (lekka odporność na przecięcie)." : null,
+            $inferred ? "Wymaganie nie podaje poziomu przecięcia — przyjęto co najmniej {$min} (lekka odporność na przecięcie)." : null,
             $row->note,
             $coupNote,
         ]));
         $required = $inferred
-            ? ['text' => "min. {$min} (przyjęte)", 'quote' => CheckRow::quote($requirement, $requiredText), 'value' => $min, 'inferred' => true]
+            ? ['text' => "co najmniej {$min} (przyjęte)", 'quote' => CheckRow::quote($requirement, $requiredText), 'value' => $min, 'inferred' => true]
             : $row->required;
 
         return new CheckRow($row->key, $row->label, $required, $row->card, $row->status, $notes === [] ? null : implode(' ', $notes), $row->positions, $row->gate);
@@ -354,7 +354,7 @@ final class LevelChecker implements ParameterChecker
                 ['text' => $vague, 'quote' => CheckRow::quote($requirement, $vague)] + $this->celsius(mb_substr($requirement, (int) mb_strpos($requirement, $vague), mb_strlen($vague) + 40)),
                 $findings,
                 Status::Unclear,
-                'Wymaganie podaje poziom EN 407 bez nazwy parametru (np. ciepło kontaktowe) — porównaj ręcznie.',
+                'Wymaganie podaje poziom EN 407 bez nazwy parametru (na przykład ciepło kontaktowe) — porównaj ręcznie.',
             );
         }
 

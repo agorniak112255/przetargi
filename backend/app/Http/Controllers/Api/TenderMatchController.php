@@ -27,7 +27,7 @@ class TenderMatchController extends Controller
     {
         if (! $this->workflow->canEditOffer($tender)) {
             throw ValidationException::withMessages([
-                'tender' => ['Dopasowanie zablokowane — status: '.$tender->status],
+                'tender' => ['Dopasowania nie można już uruchomić — przetarg ma status „'.TenderWorkflowService::statusLabel($tender->status).'”.'],
             ]);
         }
 
@@ -89,7 +89,7 @@ class TenderMatchController extends Controller
     {
         if (! $this->workflow->canEditOffer($tender)) {
             throw ValidationException::withMessages([
-                'tender' => ['Dopasowanie zablokowane — status: '.$tender->status],
+                'tender' => ['Dopasowania nie można już uruchomić — przetarg ma status „'.TenderWorkflowService::statusLabel($tender->status).'”.'],
             ]);
         }
 
@@ -110,7 +110,7 @@ class TenderMatchController extends Controller
     {
         if (! $this->workflow->canEditOffer($tender)) {
             throw ValidationException::withMessages([
-                'tender' => ['Dopasowanie zablokowane — status: '.$tender->status],
+                'tender' => ['Dopasowania nie można już uruchomić — przetarg ma status „'.TenderWorkflowService::statusLabel($tender->status).'”.'],
             ]);
         }
         if ((int) $item->tender_id !== (int) $tender->id) {

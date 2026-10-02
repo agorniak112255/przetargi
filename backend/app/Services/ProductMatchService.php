@@ -1025,7 +1025,7 @@ final class ProductMatchService
         }
         if ($normPts > 0) {
             $normPts = min(44, $normPts);
-            $reasons[] = ['code' => 'attr_norma', 'label' => 'Norma EN (atrybuty)', 'points' => $normPts];
+            $reasons[] = ['code' => 'attr_norma', 'label' => 'Norma EN w parametrach produktu', 'points' => $normPts];
             $points += $normPts;
         }
 
@@ -1045,7 +1045,7 @@ final class ProductMatchService
 
         $material = is_string($attrs['material'] ?? null) ? $this->normalize((string) $attrs['material']) : '';
         if ($material !== '' && mb_strlen($material) >= 3 && str_contains($req, $material)) {
-            $reasons[] = ['code' => 'attr_material', 'label' => 'Materiał kanoniczny ('.$attrs['material'].')', 'points' => 14];
+            $reasons[] = ['code' => 'attr_material', 'label' => 'Materiał ('.$attrs['material'].')', 'points' => 14];
             $points += 14;
         }
 
@@ -1053,7 +1053,7 @@ final class ProductMatchService
         $kodCompact = preg_replace('/\s+/', '', $kod) ?? $kod;
         if ($kodCompact !== '' && mb_strlen($kodCompact) >= 4 && str_contains($reqCompact, $kodCompact)
             && $kodCompact !== $this->normalize($product->sku)) {
-            $reasons[] = ['code' => 'attr_kod', 'label' => 'Kod producenta (atrybuty)', 'points' => 12];
+            $reasons[] = ['code' => 'attr_kod', 'label' => 'Kod producenta w parametrach produktu', 'points' => 12];
             $points += 12;
         }
 
@@ -2864,7 +2864,7 @@ final class ProductMatchService
                 'sku' => $p->sku,
                 'name' => $p->name,
                 'score' => $heuristic['score'],
-                'reason' => 'Dopasowanie heurystyczne (SKU / nazwa / materiał)',
+                'reason' => 'Dopasowanie po kodzie produktu, nazwie lub materiale',
                 'source' => 'heuristic',
             ];
         }
@@ -2966,7 +2966,7 @@ final class ProductMatchService
             $honest = min($honest, self::HEURISTIC_ONLY_CAP);
             array_unshift($reasons, [
                 'code' => 'heuristic_only',
-                'label' => 'Bez oceny modelu — wybór po słowach karty (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.',
+                'label' => 'Bez automatycznej oceny — produkt wybrany po słowach z karty produktu (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.',
                 'points' => $honest,
             ]);
         }
@@ -2979,7 +2979,7 @@ final class ProductMatchService
         } elseif ($source === 'vector') {
             array_unshift($reasons, [
                 'code' => 'vector',
-                'label' => 'Dopasowanie wektorowe + AI',
+                'label' => 'Dopasowanie automatyczne po opisie produktu',
                 'points' => $honest,
             ]);
         }
@@ -3084,13 +3084,14 @@ final class ProductMatchService
      */
     private function proposalLabel(int $score, ?string $aiReason): string
     {
-        $label = 'Propozycja do sprawdzenia — najlepsza karta tego rodzaju w katalogu, ale nie potwierdza wszystkich '
-            .'warunków wymagania (ocena modelu '.$score.'%, automatyczny zapis od '.$this->minMatchScore().'%).';
+        $label = 'Propozycja do sprawdzenia — najlepszy produkt tego rodzaju w katalogu, ale jego karta nie potwierdza '
+            .'wszystkich warunków wymagania zamawiającego (ocena dopasowania '.$score.'%, automatyczny zapis od '
+            .$this->minMatchScore().'%).';
         if (is_string($aiReason) && preg_match('/Brak dowodu kluczowego warunku:\s*([^\n]+?)\.?\s*$/u', $aiReason, $m) === 1) {
-            return $label.' Karta nie potwierdza: '.trim($m[1]).'.';
+            return $label.' Karta produktu nie potwierdza: '.trim($m[1]).'.';
         }
 
-        return $label.' Czego brakuje — w ocenie modelu poniżej.';
+        return $label.' Czego brakuje — w uzasadnieniu oceny poniżej.';
     }
 
     /** Karta innej marki niż nazwana w wymaganiu, wybrana po słowach karty — model jej nie oceniał. */
@@ -3099,10 +3100,10 @@ final class ProductMatchService
         $maker = trim((string) $product->manufacturer);
         $requested = $this->aiSearch->requestedProducerName($this->aiParsedIntent[$this->aiCandidatesCacheKey($requirement)] ?? []);
 
-        return 'Propozycja do sprawdzenia — karta innego producenta'.($maker !== '' ? ' ('.$maker.')' : '')
-            .' niż nazwany w zapytaniu'.($requested !== '' ? ' ('.$requested.')' : '')
-            .', wybrana po słowach karty, bez oceny modelu. Automat zapisuje inną markę tylko po ocenie modelu — '
-            .'zamianę marki zatwierdza handlowiec.';
+        return 'Propozycja do sprawdzenia — produkt innego producenta'.($maker !== '' ? ' ('.$maker.')' : '')
+            .' niż nazwany w wymaganiu zamawiającego'.($requested !== '' ? ' ('.$requested.')' : '')
+            .', wybrany po słowach z karty produktu, bez automatycznej oceny. Inna marka jest zapisywana '
+            .'automatycznie tylko po ocenie dopasowania — zamianę marki zatwierdza handlowiec.';
     }
 
     /**
@@ -3123,15 +3124,15 @@ final class ProductMatchService
     {
         $cardCodes = $this->modelFuzzy->otherVariantCodes($requirement, $product);
 
-        return 'Propozycja do sprawdzenia — inny wariant modelu niż w zapytaniu: w zapytaniu '
+        return 'Propozycja do sprawdzenia — inny wariant modelu niż w wymaganiu zamawiającego: w wymaganiu '
             .implode(', ', $this->modelFuzzy->missingVariantCodes($requirement, $product))
-            .($cardCodes !== [] ? ', na karcie '.implode(', ', $cardCodes) : '')
-            .'. Automat zapisuje tylko żądany wariant — zamianę (np. koloru) zatwierdza handlowiec.';
+            .($cardCodes !== [] ? ', na karcie produktu '.implode(', ', $cardCodes) : '')
+            .'. Automatycznie zapisywany jest tylko żądany wariant — zamianę (na przykład koloru) zatwierdza handlowiec.';
     }
 
     private function substituteReasonLabel(string $requirement): string
     {
-        $parts = ['Zamiennik — inna marka/model niż w SIWZ'];
+        $parts = ['Zamiennik — inna marka lub model niż w wymaganiu zamawiającego'];
         $mfg = $this->requestedManufacturerFromSiwz($requirement);
         if ($mfg !== null) {
             $parts[] = '(wymagano: '.$mfg.')';
@@ -3193,22 +3194,22 @@ final class ProductMatchService
             $this->lastNoMatchReason === self::NO_MATCH_MODEL_UNAVAILABLE
                 ? [
                     'code' => self::NO_MATCH_MODEL_UNAVAILABLE,
-                    'label' => 'Model nie odpowiedział — pozycja czeka na ponowne dopasowanie (opis bez kodu nie jest dobierany po samych słowach karty).',
+                    'label' => 'Nie udało się ocenić tej pozycji — uruchom dopasowanie ponownie (opis bez kodu produktu nie jest dobierany po samych słowach z karty produktu).',
                     'points' => 0,
                 ]
                 : ($this->lastOtherVariantOnly !== null
                 ? [
                     'code' => self::NO_MATCH_OTHER_VARIANT,
-                    'label' => 'W katalogu jest tylko inny wariant modelu (w zapytaniu '
-                        .implode(', ', $this->lastOtherVariantOnly['codes']).'; karty: '
+                    'label' => 'W katalogu jest tylko inny wariant modelu (w wymaganiu '
+                        .implode(', ', $this->lastOtherVariantOnly['codes']).'; kody produktów w katalogu: '
                         .implode(', ', array_slice($this->lastOtherVariantOnly['skus'], 0, 4))
-                        .') — automat nie zapisuje innego wariantu; wybierz kartę ręcznie, jeśli zamiana jest dopuszczalna.',
+                        .') — inny wariant nie jest zapisywany automatycznie; wybierz produkt ręcznie, jeśli zamiana jest dopuszczalna.',
                     'points' => 0,
                 ]
                 : ($this->lastUndescribedSku !== null
                     ? [
                         'code' => self::NO_MATCH_NO_DESCRIPTION,
-                        'label' => 'Karta '.$this->lastUndescribedSku.' nie ma opisu — karty bez opisu nie trafiają do propozycji. Pobierz opis karty i dopasuj ponownie.',
+                        'label' => 'Produkt '.$this->lastUndescribedSku.' nie ma opisu na karcie produktu — produkty bez opisu nie trafiają do propozycji. Pobierz opis i dopasuj ponownie.',
                         'points' => 0,
                     ]
                     : ($this->lastModelLowScore !== null
@@ -3216,11 +3217,11 @@ final class ProductMatchService
                         // karta jest w katalogu, ale model nie znalazł na niej dowodu kluczowego warunku —
                         // „brak produktu w katalogu” byłoby nieprawdą
                         'code' => 'model_low_score',
-                        'label' => 'Model ocenił najlepszą kartę ('.$this->lastModelLowScore['sku'].') na '
+                        'label' => 'Najlepszy produkt w katalogu ('.$this->lastModelLowScore['sku'].') dostał ocenę dopasowania '
                             .$this->lastModelLowScore['score'].'% — '
                             .(($this->lastModelLowScore['reason'] ?? null) !== null
-                                ? 'karty nie zapisano; sprawdź ręcznie. Ocena modelu: '.$this->lastModelLowScore['reason']
-                                : 'brak dowodu kluczowego warunku, karty nie zapisano; sprawdź ręcznie.'),
+                                ? 'nie zapisano go; sprawdź ręcznie. Uzasadnienie oceny: '.$this->lastModelLowScore['reason']
+                                : 'karta produktu nie potwierdza kluczowego warunku, nie zapisano go; sprawdź ręcznie.'),
                         'points' => 0,
                     ]
                     : [
@@ -3333,15 +3334,15 @@ final class ProductMatchService
         );
         $modelScore = $this->modelScoreBelowMin($rated, (int) $existing->id);
         if ($this->lastNoMatchReason === self::NO_MATCH_MODEL_UNAVAILABLE) {
-            $label = 'Model nie odpowiedział — zostawiono poprzednią kartę bez ponownej oceny (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.';
+            $label = 'Nie udało się ponownie ocenić tej pozycji — zostawiono poprzedni produkt bez nowej oceny (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.';
         } elseif ($modelScore !== null) {
             $score = min($score, $modelScore);
             $modelReason = $this->modelReasonBelowMin($rated, (int) $existing->id);
             $label = $modelReason !== null
-                ? 'Model ocenił poprzednią kartę na '.$modelScore.'% (poniżej progu) — zostawiono ją do sprawdzenia. Ocena modelu: '.$modelReason
-                : 'Model ocenił poprzednią kartę na '.$modelScore.'% (poniżej progu, zwykle brak dowodu kluczowego warunku) — zostawiono ją do sprawdzenia.';
+                ? 'Poprzedni produkt dostał ocenę dopasowania '.$modelScore.'% (poniżej progu) — zostawiono go do sprawdzenia. Uzasadnienie oceny: '.$modelReason
+                : 'Poprzedni produkt dostał ocenę dopasowania '.$modelScore.'% (poniżej progu, zwykle karta produktu nie potwierdza kluczowego warunku) — zostawiono go do sprawdzenia.';
         } else {
-            $label = 'Ten przebieg nie potwierdził poprzedniej karty — zostawiono ją (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.';
+            $label = 'Ostatnie dopasowanie nie potwierdziło poprzedniego produktu — zostawiono go (najwyżej '.self::HEURISTIC_ONLY_CAP.'%), sprawdź ręcznie.';
         }
         array_unshift($reasons, [
             'code' => self::NOT_RECONFIRMED,
@@ -3398,7 +3399,7 @@ final class ProductMatchService
         }
         $reasons[] = [
             'code' => 'external_link',
-            'label' => 'Podpowiedź / zamiennik (nie z katalogu): '.$hint['title'],
+            'label' => 'Podpowiedź z internetu (spoza katalogu): '.$hint['title'],
             'points' => 0,
             'url' => $hint['url'],
         ];
@@ -3444,7 +3445,7 @@ final class ProductMatchService
                 ?? '?';
             $reasons[] = [
                 'code' => 'asortyment_reject',
-                'label' => 'Konflikt asortymentu ('.$reqFamily.' vs '.$prodFamily.')',
+                'label' => 'Inny rodzaj produktu (w wymaganiu: '.$reqFamily.', w produkcie: '.$prodFamily.')',
                 'points' => 0,
             ];
 
@@ -3453,29 +3454,29 @@ final class ProductMatchService
 
         $skuHit = $this->skuMatchScore($req, $reqCodes, $product);
         if ($skuHit > 0) {
-            $reasons[] = ['code' => 'sku', 'label' => 'Dopasowanie SKU / kodu modelu', 'points' => $skuHit];
+            $reasons[] = ['code' => 'sku', 'label' => 'Zgodny kod produktu lub kod modelu', 'points' => $skuHit];
             $score += $skuHit;
         }
         $fuzzyHit = $this->modelFuzzy->score($requirement, $product);
         if ($fuzzyHit >= 80) {
-            $reasons[] = ['code' => 'fuzzy_model', 'label' => 'Model z SIWZ (literówka)', 'points' => $fuzzyHit];
+            $reasons[] = ['code' => 'fuzzy_model', 'label' => 'Model z wymagania zamawiającego (mimo literówki)', 'points' => $fuzzyHit];
             $score = max($score, $fuzzyHit);
         }
         $typePts = $this->typeNameScore($req, $product);
         if ($typePts > 0) {
-            $reasons[] = ['code' => 'type_name', 'label' => 'Zgodność typu / nazwy (np. kominiarka)', 'points' => $typePts];
+            $reasons[] = ['code' => 'type_name', 'label' => 'Ten sam rodzaj produktu lub nazwa (na przykład kominiarka)', 'points' => $typePts];
             $score += $typePts;
         }
 
         $mat = $this->materialRequirementScore($req, $hay, $materials);
         if ($mat > 0) {
-            $reasons[] = ['code' => 'material', 'label' => 'Materiał / wymaganie techniczne', 'points' => $mat];
+            $reasons[] = ['code' => 'material', 'label' => 'Materiał lub wymaganie techniczne', 'points' => $mat];
             $score += $mat;
         }
 
         $brand = $this->brandModelScore($reqTokens, $hay, $product);
         if ($brand > 0) {
-            $reasons[] = ['code' => 'brand', 'label' => 'Marka / model', 'points' => $brand];
+            $reasons[] = ['code' => 'brand', 'label' => 'Marka lub model', 'points' => $brand];
             $score += $brand;
         }
 
@@ -3490,7 +3491,7 @@ final class ProductMatchService
         $nameNorm = $this->normalize($product->name);
         if ($nameNorm !== '' && mb_strlen($nameNorm) >= 5
             && (str_contains($req, $nameNorm) || str_contains($nameNorm, $req))) {
-            $reasons[] = ['code' => 'name', 'label' => 'Zgodność nazwy z SIWZ', 'points' => 35];
+            $reasons[] = ['code' => 'name', 'label' => 'Nazwa zgodna z opisem zamawiającego', 'points' => 35];
             $score += 35;
         }
 

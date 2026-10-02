@@ -161,6 +161,6 @@ final class TenderOfferExportService
             return implode(' / ', $parts);
         }
 
-        return $item->hasCustomOffer() ? 'Poza katalogiem' : null;
+        return $item->hasCustomOffer() ? 'Spoza katalogu' : null;
     }
 }

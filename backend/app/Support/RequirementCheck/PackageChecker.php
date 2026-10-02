@@ -91,7 +91,7 @@ final class PackageChecker implements ParameterChecker
         return new CheckRow(
             'capacity',
             'Pojemność',
-            ['text' => ($min ? 'min. ' : '').self::format($want), 'quote' => CheckRow::quote($requirement, $requiredText), 'ml' => $want],
+            ['text' => ($min ? 'co najmniej ' : '').self::format($want), 'quote' => CheckRow::quote($requirement, $requiredText), 'ml' => $want],
             $findings,
             $status,
             $note,

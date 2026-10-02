@@ -73,8 +73,8 @@ final class ActivityActionResolver
             ['POST', '#^tenders/\d+/comments$#', 'tender.comment_added', 'Dodano komentarz'],
             ['DELETE', '#^tenders/\d+/comments/\d+$#', 'tender.comment_deleted', 'Usunięto komentarz'],
             ['POST', '#^tenders/\d+/import$#', 'tender.imported', 'Import pozycji przetargu'],
-            ['POST', '#^tenders/\d+/documents/analyze$#', 'tender.document_analyzed', 'Analiza dokumentu SIWZ'],
-            ['POST', '#^tenders/\d+/documents/commit$#', 'tender.document_committed', 'Zatwierdzenie dokumentu SIWZ'],
+            ['POST', '#^tenders/\d+/documents/analyze$#', 'tender.document_analyzed', 'Odczyt dokumentu od zamawiającego'],
+            ['POST', '#^tenders/\d+/documents/commit$#', 'tender.document_committed', 'Zapisanie pozycji i warunków z dokumentu od zamawiającego'],
             ['POST', '#^tenders/\d+/documents/\d+/reanalyze$#', 'tender.document_reanalyzed', 'Ponowna analiza dokumentu'],
             ['DELETE', '#^tenders/\d+/documents/\d+$#', 'tender.document_deleted', 'Usunięto dokument'],
             ['POST', '#^tenders/\d+/conditions$#', 'tender.condition_created', 'Dodano warunek przetargu'],
@@ -86,7 +86,7 @@ final class ActivityActionResolver
             ['POST', '#^tenders/\d+/items/bulk$#', 'tender.items_bulk_updated', 'Masowa aktualizacja pozycji'],
             ['POST', '#^tenders/\d+/items/apply-cheaper-substitutes$#', 'tender.cheaper_substitutes_applied', 'Zastosowano tańsze zamienniki'],
             ['GET', '#^tenders/\d+/export/(excel|pdf|docx)$#', 'tender.exported', 'Eksport oferty'],
-            ['GET', '#^tenders/\d+/documents/\d+/download$#', 'tender.document_downloaded', 'Pobrano dokument SIWZ'],
+            ['GET', '#^tenders/\d+/documents/\d+/download$#', 'tender.document_downloaded', 'Pobrano dokument od zamawiającego'],
             ['POST', '#^clients$#', 'client.created', 'Utworzono klienta'],
             ['PATCH', '#^clients/\d+$#', 'client.updated', 'Zaktualizowano klienta'],
             ['POST', '#^substitutes$#', 'substitute.created', 'Utworzono zamiennik'],
@@ -139,6 +139,12 @@ final class ActivityActionResolver
 
         foreach ($rules as [$ruleMethod, $pattern, $action, $label]) {
             if ($ruleMethod === $method && preg_match($pattern, $path) === 1) {
+                // DELETE propozycji automatu jej nie kasuje, tylko odrzuca (wiersz zostaje) — w dzienniku jako odrzucenie
+                if ($action === 'substitute.deleted'
+                    && ($params['productSubstitute'] ?? null) instanceof ProductSubstitute
+                    && $params['productSubstitute']->exists) {
+                    return ['substitute.rejected', 'Odrzucono propozycję zamiennika'];
+                }
                 if ($action === 'tender.exported' && isset($params['tender'])) {
                     $format = basename($path);
 

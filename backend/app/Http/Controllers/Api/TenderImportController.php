@@ -28,7 +28,7 @@ class TenderImportController extends Controller
     {
         if (! $this->workflow->canEditOffer($tender)) {
             throw ValidationException::withMessages([
-                'tender' => ['Import zablokowany — status: '.$tender->status],
+                'tender' => ['Dokumentów nie można już dodawać — przetarg ma status „'.TenderWorkflowService::statusLabel($tender->status).'”.'],
             ]);
         }
 
@@ -88,7 +88,7 @@ class TenderImportController extends Controller
                 if ($sku !== '') {
                     $product = Product::query()->where('sku', $sku)->first();
                     if ($product === null) {
-                        $errors[] = "Wiersz {$excelRow}: nie znaleziono SKU {$sku}";
+                        $errors[] = "Wiersz {$excelRow}: w katalogu nie ma produktu o kodzie {$sku}";
                     }
                 }
 

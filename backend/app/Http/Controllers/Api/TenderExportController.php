@@ -9,6 +9,7 @@ use App\Models\Tender;
 use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\TenderDocxOfferFiller;
 use App\Services\TenderOfferExportService;
+use App\Services\TenderWorkflowService;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -37,31 +38,31 @@ class TenderExportController extends Controller
         $sh = $sheet->getActiveSheet();
         $sh->setTitle('Oferta');
         $sh->fromArray([
-            ['Numer', $tender->number],
-            ['Klient', $tender->client?->name],
+            ['Numer przetargu', $tender->number],
+            ['Zamawiający', $tender->client?->name],
             ['Tytuł', $tender->title],
-            ['Status', $tender->status],
-            ['Marża %', $this->offerExport->tenderMargin($tender, $mask)],
+            ['Status', TenderWorkflowService::statusLabel($tender->status)],
+            ['Marża, %', $this->offerExport->tenderMargin($tender, $mask)],
             ['Wartość netto', $tender->offer_value_net],
             [],
             [
-                'Lp',
-                'Wymaganie SIWZ',
-                'SKU',
-                'Produkt (PL)',
-                'Nazwa cennik',
+                'Pozycja',
+                'Wymaganie zamawiającego',
+                'Kod produktu',
+                'Produkt',
+                'Nazwa w cenniku',
                 'Producent',
                 'Ilość',
-                'Zakup (po upuście)',
-                'Cena oferty',
-                'Marża %',
-                'Wartość',
-                'Match %',
-                'Źródło match',
-                'Uzasadnienie',
-                'Zamienniki SKU',
+                'Cena zakupu (po upuście)',
+                'Cena w ofercie',
+                'Marża, %',
+                'Wartość pozycji',
+                'Ocena dopasowania, %',
+                'Sposób dobrania produktu',
+                'Dlaczego ten produkt',
+                'Zamienniki (kody produktów)',
                 'Porównanie zamienników',
-                'Link',
+                'Link do produktu spoza katalogu',
             ],
         ], null, 'A1');
 
@@ -80,7 +81,7 @@ class TenderExportController extends Controller
                 $r['margin_percent'],
                 $r['line_value'],
                 $r['match_percent'],
-                $r['match_source'],
+                self::matchSourceLabel($r['match_source']),
                 $r['match_reasons'],
                 $r['substitute_skus'],
                 $r['highlights'],
@@ -92,7 +93,7 @@ class TenderExportController extends Controller
         $bc = $sheet->createSheet();
         $bc->setTitle('Zamienniki');
         $bc->fromArray([
-            ['Lp', 'SKU oferty', 'Match %', 'Zamienniki', 'Highlighty'],
+            ['Pozycja', 'Kod produktu w ofercie', 'Ocena dopasowania, %', 'Zamienniki (kody produktów)', 'Uwagi'],
         ], null, 'A1');
         $bcRow = 2;
         foreach ($rows as $r) {
@@ -114,6 +115,22 @@ class TenderExportController extends Controller
         }, $filename, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         ]);
+    }
+
+    /** Skąd produkt w pozycji — po ludzku; nieznana wartość zostaje bez zmian. */
+    private static function matchSourceLabel(?string $source): string
+    {
+        return match ($source) {
+            null, '' => '',
+            'ai', 'vector' => 'Dopasowanie automatyczne',
+            'ai_substitute' => 'Zamiennik innej marki dobrany automatycznie',
+            'heuristic' => 'Dobrany po słowach z karty produktu',
+            'manual' => 'Wybrany ręcznie',
+            'battlecard' => 'Tańszy zamiennik',
+            'custom' => 'Wpisany ręcznie (spoza katalogu)',
+            'external' => 'Znaleziony w internecie (spoza katalogu)',
+            default => $source,
+        };
     }
 
     public function pdf(Request $request, Tender $tender): Response

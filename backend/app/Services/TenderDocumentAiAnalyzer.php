@@ -11,6 +11,13 @@ use RuntimeException;
 
 final class TenderDocumentAiAnalyzer
 {
+    /** Opisy pól w schemacie dla modelu — model potrafi przepisać je jako dane (02.10.2026: „treść warunku”). */
+    private const CONDITION_CATEGORY_HINT = 'termin|dostawa|gwarancja|certyfikat|platnosc|it|inne';
+
+    private const CONDITION_CONTENT_HINT = 'treść warunku';
+
+    private const ITEM_PLACEHOLDERS = ['numer/kod artykułu lub null', 'nazwa produktu', 'pełny opis SIWZ (sku + nazwa)'];
+
     public function __construct(
         private readonly OpenAiCompatibleClient $llm,
         private readonly JsonResponseParser $jsonParser,
@@ -42,7 +49,7 @@ final class TenderDocumentAiAnalyzer
                 ]]
                 : [],
             'conditions' => $wantConditions
-                ? [['category' => 'termin|dostawa|gwarancja|certyfikat|it|inne', 'content' => 'treść warunku']]
+                ? [['category' => self::CONDITION_CATEGORY_HINT, 'content' => self::CONDITION_CONTENT_HINT]]
                 : [],
         ];
 
@@ -58,6 +65,8 @@ final class TenderDocumentAiAnalyzer
                     .($wantConditions ? "- warunki (conditions): category + content\n" : '')
                     ."Nie sklejaj całego wiersza w jedno pole — rozdziel numer, nazwę i cenę.\n"
                     ."Nie duplikuj. Pomijaj nagłówki, spisy treści, dane kontaktowe.\n"
+                    ."Wartości w schemacie opisują pola — nie przepisuj ich. Czego nie ma w dokumencie, tego nie wpisuj (pusta lista).\n"
+                    .($wantConditions ? "category: dokładnie jedno słowo z listy: termin, dostawa, gwarancja, certyfikat, platnosc, it, inne.\n" : '')
                     .'Schemat: '.json_encode($schema, JSON_UNESCAPED_UNICODE)."\n\n---\n".$excerpt,
             ],
         ];
@@ -65,7 +74,7 @@ final class TenderDocumentAiAnalyzer
         $raw = $this->llm->chat($messages, null, true, null, AiTask::TenderDocument);
         $parsed = $this->jsonParser->parse($raw['content'] ?? '');
         if (! is_array($parsed)) {
-            throw new RuntimeException('AI nie zwróciło poprawnego JSON z pozycjami/warunkami.');
+            throw new RuntimeException('Nie udało się odczytać pozycji i warunków z dokumentu. Spróbuj ponownie.');
         }
 
         return [
@@ -155,6 +164,10 @@ final class TenderDocumentAiAnalyzer
             $sku = trim((string) ($row['sku'] ?? $row['article'] ?? $row['kod'] ?? ''));
             $name = trim((string) ($row['name'] ?? $row['nazwa'] ?? ''));
             $req = trim((string) ($row['requirement'] ?? $row['opis'] ?? ''));
+            // przepisany opis pola ze schematu to nie dane z dokumentu
+            $sku = in_array($sku, self::ITEM_PLACEHOLDERS, true) ? '' : $sku;
+            $name = in_array($name, self::ITEM_PLACEHOLDERS, true) ? '' : $name;
+            $req = in_array($req, self::ITEM_PLACEHOLDERS, true) ? '' : $req;
             if ($req === '') {
                 $req = trim(implode(' · ', array_filter([$sku !== '' ? $sku : null, $name !== '' ? $name : null])));
             }
@@ -172,7 +185,9 @@ final class TenderDocumentAiAnalyzer
                 'requirement' => mb_substr($req !== '' ? $req : $name, 0, 5000),
                 'quantity' => max(1, is_numeric($qty) ? (int) $qty : 1),
                 'offer_price' => is_numeric($price) ? round((float) $price, 2) : null,
-                'currency' => isset($row['currency']) ? (string) $row['currency'] : null,
+                'currency' => isset($row['currency']) && ! str_contains((string) $row['currency'], '|')
+                    ? (string) $row['currency']
+                    : null,
             ];
         }
 
@@ -201,12 +216,16 @@ final class TenderDocumentAiAnalyzer
                 continue;
             }
             $content = trim((string) ($row['content'] ?? $row['treść'] ?? $row['text'] ?? ''));
-            if ($content === '') {
+            if ($content === '' || mb_strtolower($content) === self::CONDITION_CONTENT_HINT) {
                 continue;
             }
             $cat = isset($row['category']) ? trim((string) $row['category']) : null;
+            // kilka kategorii naraz (wklejona lista wariantów ze schematu) nic nie mówi o warunku
+            if ($cat !== null && preg_match('/[|,\/]/u', $cat) === 1) {
+                $cat = null;
+            }
             $out[] = [
-                'category' => $cat !== '' ? mb_substr($cat, 0, 64) : null,
+                'category' => $cat !== null && $cat !== '' ? mb_substr($cat, 0, 64) : null,
                 'content' => mb_substr($content, 0, 5000),
             ];
         }

@@ -108,9 +108,11 @@ export function SiwzItemTile({
   return (
     <section className="app-item-siwz flex min-h-full min-w-0 flex-col overflow-hidden rounded-lg border border-slate-700">
       <header className="bg-slate-800 px-3 py-2 text-white">
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-300">SIWZ</div>
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-300">Wymaganie zamawiającego</div>
         <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-          <span className="app-item-no text-lg font-bold leading-none">{lineNo}</span>
+          <span className="app-item-no text-lg font-bold leading-none" title={`Pozycja ${lineNo}`}>
+            {lineNo}
+          </span>
           <span className="inline-block h-2 w-2 rounded-full bg-amber-400" />
           {badges}
         </div>
@@ -120,7 +122,7 @@ export function SiwzItemTile({
         {description ? (
           <SiwzDescriptionBody text={description} />
         ) : (
-          <p className="text-slate-400">Brak opisu w SIWZ.</p>
+          <p className="text-slate-400">Zamawiający nie podał opisu tej pozycji.</p>
         )}
       </div>
     </section>

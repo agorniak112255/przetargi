@@ -49,21 +49,36 @@ export type SubstituteVerification = {
 
 const VERIFICATION_BADGE: Record<SubstituteVerification['status'], { label: string; cls: string }> = {
   // „zgodny” dotyczy tylko sprawdzonych parametrów — lista pod kafelkiem mówi których
-  ok: { label: 'zgodny (sprawdzone)', cls: 'bg-emerald-100 text-emerald-800' },
+  ok: { label: 'spełnia sprawdzone parametry', cls: 'bg-emerald-100 text-emerald-800' },
   check: { label: 'do sprawdzenia', cls: 'bg-amber-100 text-amber-800' },
-  missing: { label: 'brak danych', cls: 'bg-amber-100 text-amber-800' },
-  fail: { label: 'nie spełnia SIWZ', cls: 'bg-rose-100 text-rose-800' },
+  missing: { label: 'brak danych do porównania', cls: 'bg-amber-100 text-amber-800' },
+  fail: { label: 'nie spełnia wymagania', cls: 'bg-rose-100 text-rose-800' },
   none: { label: 'bez porównania', cls: 'bg-slate-100 text-slate-600' },
 }
 
 const ROW_MARK: Record<string, string> = { ok: '✓', fail: '✗', missing: 'brak', unclear: '?' }
+
+/** Czytelne nazwy wartości z bazy — same wartości bez zmian (product_substitutes.type / approval_status). */
+const SUBSTITUTE_TYPE_LABEL: Record<string, string> = {
+  preferowany: 'zamiennik preferowany',
+  tanszy: 'zamiennik tańszy',
+  premium: 'zamiennik wyższej klasy',
+  awaryjny: 'zamiennik awaryjny',
+  katalog: 'znaleziony w katalogu',
+}
+
+const APPROVAL_STATUS_LABEL: Record<string, string> = {
+  oczekuje: 'czeka na zatwierdzenie',
+  zatwierdzony: 'zatwierdzony',
+  odrzucony: 'odrzucony',
+}
 
 function VerificationBadge({ v }: { v: SubstituteVerification }) {
   const badge = VERIFICATION_BADGE[v.status]
   const title =
     v.rows.length > 0
       ? v.rows.map((r) => `${r.label}: ${ROW_MARK[r.status] ?? r.status}${r.note ? ` — ${r.note}` : ''}`).join('\n')
-      : 'SIWZ nie podaje norm, poziomów, klas ani pojemności, które system umie porównać — karta dobrana po podobieństwie opisu, sprawdź ręcznie.'
+      : 'Wymaganie zamawiającego nie podaje norm, poziomów, klas ani pojemności, które da się porównać automatycznie — produkt dobrany po podobieństwie opisu, sprawdź kartę produktu ręcznie.'
   return (
     <span className={`rounded px-1 py-0.5 text-[9px] font-semibold ${badge.cls}`} title={title}>
       {badge.label}
@@ -146,17 +161,25 @@ function Col({
         <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">{title}</span>
         <span className="flex shrink-0 items-center gap-1">
           {tone === 'sub' && cheaperBadge ? (
-            <span className="rounded bg-amber-500 px-1 py-0.5 text-[9px] font-bold text-white">
+            <span
+              className="rounded bg-amber-500 px-1 py-0.5 text-[9px] font-bold text-white"
+              title="Tyle procent taniej w zakupie niż propozycja (po upuście) — pokazujemy, gdy różnica to co najmniej 3%"
+            >
               {cheaperBadge}
             </span>
           ) : null}
           {tone === 'sub' && p.verification ? <VerificationBadge v={p.verification} /> : null}
           {(tone === 'main' ? p.match_percent > 0 : p.match_basis !== 'words') ? (
-            <span className="text-[10px] font-bold text-violet-700">{p.match_percent}%</span>
+            <span
+              className="text-[10px] font-bold text-violet-700"
+              title={`Ocena dopasowania: ${p.match_percent}%. Szacunek, jak bardzo produkt pasuje do opisu zamawiającego. Nie zastępuje sprawdzenia karty produktu.`}
+            >
+              {p.match_percent}%
+            </span>
           ) : null}
         </span>
       </div>
-      <p className="mt-0.5 break-all text-[11px] font-medium text-slate-900" title={p.sku}>
+      <p className="mt-0.5 break-all text-[11px] font-medium text-slate-900" title={`Kod produktu: ${p.sku}`}>
         {p.sku}
       </p>
       <p className="line-clamp-2 text-[10px] text-slate-600" title={p.name}>
@@ -168,23 +191,23 @@ function Col({
           className="text-[11px] font-semibold text-slate-800"
           title={
             p.purchase_price != null
-              ? `Cennik po upuście w zł${
+              ? `Cena zakupu po upuście${
                   p.source_currency && p.source_currency !== 'PLN'
-                    ? ` (z ${p.source_currency}, kurs NBP)`
-                    : ''
-                }${p.catalog_price_net != null ? ` (kat. ${fmtPrice(p.catalog_price_net)} zł)` : ''}`
+                    ? ` (przeliczona na złote po kursie NBP z ${p.source_currency})`
+                    : ' w zł'
+                }${p.catalog_price_net != null ? ` (cena katalogowa ${fmtPrice(p.catalog_price_net)} zł)` : ''}`
               : 'Cena katalogowa'
           }
         >
-          Zakup: {fmtPrice(purchase)} zł
+          Cena zakupu: {fmtPrice(purchase)} zł
         </p>
         <p
           className="text-[10px] text-emerald-800"
-          title={`Cena w ofercie (zapisana lub proponowana: zakup + ${markupPercent}%)`}
+          title={`Cena w ofercie — zapisana albo proponowana: cena zakupu plus narzut ${markupPercent}%`}
         >
-          Oferta: {fmtPrice(offerHint)} zł
+          Cena w ofercie: {fmtPrice(offerHint)} zł
           {p.offer_price == null && offerHint != null ? (
-            <span className="text-slate-500"> (prop. +{markupPercent}%)</span>
+            <span className="text-slate-500"> (proponowana, narzut {markupPercent}%)</span>
           ) : null}
         </p>
         <OrderQuantityBadge oq={p.order_quantity} block />
@@ -208,8 +231,8 @@ function Col({
       ) : null}
       {p.substitute_type ? (
         <p className="mt-0.5 text-[9px] text-sky-700">
-          {p.substitute_type}
-          {p.approval_status ? ` · ${p.approval_status}` : ''}
+          {SUBSTITUTE_TYPE_LABEL[p.substitute_type] ?? p.substitute_type}
+          {p.approval_status ? ` · ${APPROVAL_STATUS_LABEL[p.approval_status] ?? p.approval_status}` : ''}
         </p>
       ) : null}
       <div className="mt-1.5 flex flex-wrap items-center gap-1">
@@ -218,7 +241,7 @@ function Col({
           onClick={onPreview}
           className="rounded border border-violet-400 bg-white px-1.5 py-0.5 text-[9px] font-medium text-violet-800 hover:bg-violet-100"
         >
-          Opis
+          Opis produktu
         </button>
         {selected ? (
           <span className="flex flex-wrap items-center gap-1">
@@ -228,9 +251,9 @@ function Col({
                 type="button"
                 onClick={onApplyMargin}
                 className="rounded bg-emerald-700 px-1.5 py-0.5 text-[9px] font-semibold text-white hover:bg-emerald-800"
-                title={`Ustaw cenę oferty = zakup × (1 + ${markupPercent}% z przetargu)`}
+                title={`Ustaw cenę w ofercie: cena zakupu plus narzut ${markupPercent}% ustawiony w przetargu`}
               >
-                Przelicz +{markupPercent}%
+                Przelicz z narzutem {markupPercent}%
               </button>
             ) : null}
           </span>
@@ -380,7 +403,7 @@ export function ItemBattlecard({
         if (!cancelled) setCard(res.battlecard)
       })
       .catch((e: unknown) => {
-        if (!cancelled) setErr(e instanceof Error ? e.message : 'Błąd porównania zamienników')
+        if (!cancelled) setErr(e instanceof Error ? e.message : 'Nie udało się wczytać zamienników.')
       })
       .finally(() => {
         if (!cancelled) setLoading(false)

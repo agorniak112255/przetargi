@@ -75,7 +75,7 @@ final class TenderOtherVariantMatchTest extends TestCase
         $this->assertLessThan($this->minScore(), (int) $item->ai_match_percent, 'inny kolor nie jest zapisem');
         $this->assertSame(ProductMatchService::PROPOSAL, $item->ai_match_reasons[0]['code'] ?? null);
         $this->assertStringContainsString('inny wariant', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
-        $this->assertStringNotContainsString('ocena modelu', (string) ($item->ai_match_reasons[0]['label'] ?? ''), 'model tej karty nie oceniał');
+        $this->assertStringNotContainsString('ocena dopasowania', (string) ($item->ai_match_reasons[0]['label'] ?? ''), 'model tej karty nie oceniał');
     }
 
     public function test_other_variant_without_description_does_not_let_an_unrelated_card_in(): void

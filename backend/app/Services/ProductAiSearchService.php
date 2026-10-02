@@ -142,7 +142,7 @@ final class ProductAiSearchService
     public const PROGRESS_STAGE_REWRITE = 'rewrite';
 
     /** Powód wierszy zapasowych (`catalog`): ten sam rodzaj w katalogu, ale bez oceny modelu. */
-    public const UNRATED_CATALOG_REASON = 'Nieocenione przez model — ten sam rodzaj w katalogu';
+    public const UNRATED_CATALOG_REASON = 'Bez automatycznej oceny — ten sam rodzaj produktu w katalogu';
 
     /** Model odpowiedział i nic nie wskazał — w katalogu nie ma pasującej karty. */
     public const NOTE_MODEL_EMPTY = 'Model nie znalazł pasującego produktu w katalogu.';
@@ -5907,7 +5907,7 @@ final class ProductAiSearchService
                 // Kod przepisany przez klienta nie ma literówki — stary opis sugerował zgadywanie.
                 $row['ai_match_reason'] = $this->modelFuzzy->matchesDeclaredCode($query, $product)
                     ? 'Kod z zapytania klienta.'
-                    : 'Marka i model z SIWZ (literówka w nazwie modelu jest dopuszczalna).';
+                    : 'Marka i model z wymagania (literówka w nazwie modelu jest dopuszczalna).';
             } else {
                 // Ta sama rodzina modelu, ale inny wariant: pod „ARMEN 9007 1010 S1” wszystkie
                 // warianty (6660, 9360) dostawały płaskie 99% i najtańszy wchodził do oferty
@@ -5918,9 +5918,9 @@ final class ProductAiSearchService
                 // („w zapytaniu 1010, na karcie 6660”), zamiast szukać jej w nazwie.
                 $cardCodes = $this->modelFuzzy->otherVariantCodes($query, $product);
                 $row['ai_match_reason'] = $cardCodes !== []
-                    ? 'Ta sama rodzina modelu, ale inny wariant (np. kolor): w zapytaniu '.implode(', ', $missingCodes)
+                    ? 'Ta sama rodzina modelu, ale inny wariant (na przykład kolor): w zapytaniu '.implode(', ', $missingCodes)
                         .', na karcie '.implode(', ', $cardCodes).' — sprawdź, czy zamiana jest dopuszczalna.'
-                    : 'Ta sama rodzina modelu, ale karta nie ma oznaczenia z zapytania (np. koloru): '
+                    : 'Ta sama rodzina modelu, ale karta nie ma oznaczenia z zapytania (na przykład koloru): '
                         .implode(', ', $missingCodes).'.';
             }
             $out[] = $row;
@@ -5999,7 +5999,7 @@ final class ProductAiSearchService
             }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(80, 80 + intdiv($this->snrRetrieveScore($query, $product), 20)));
-            $row['ai_match_reason'] = 'Tłumienie SNR na karcie spełnia próg z SIWZ.';
+            $row['ai_match_reason'] = 'Tłumienie SNR na karcie produktu spełnia próg z wymagania.';
             $row['ai_match_source'] = self::MATCH_SOURCE_RULE;
             $out[] = $row;
         }
@@ -6037,7 +6037,7 @@ final class ProductAiSearchService
             }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = 92;
-            $row['ai_match_reason'] = 'Klasa ochrony obuwia na karcie spełnia wymaganie z SIWZ.';
+            $row['ai_match_reason'] = 'Klasa ochrony obuwia na karcie produktu spełnia wymaganie.';
             $row['ai_match_source'] = self::MATCH_SOURCE_RULE;
             $out[] = $row;
         }
@@ -6074,7 +6074,7 @@ final class ProductAiSearchService
             }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(80, 80 + intdiv($this->cutRetrieveScore($query, $product), 20)));
-            $row['ai_match_reason'] = 'Odporność na przecięcie na nazwie karty spełnia wymaganie z SIWZ.';
+            $row['ai_match_reason'] = 'Odporność na przecięcie w nazwie produktu spełnia wymaganie.';
             $row['ai_match_source'] = self::MATCH_SOURCE_RULE;
             $out[] = $row;
         }
@@ -6111,7 +6111,7 @@ final class ProductAiSearchService
             }
             $row = $this->productToRow($product);
             $row['ai_match_percent'] = min(99, max(80, 80 + intdiv($this->weldedBootsCoverallScore($product), 20)));
-            $row['ai_match_reason'] = 'Kombinezon z kaloszami na nazwie karty spełnia wymaganie z SIWZ.';
+            $row['ai_match_reason'] = 'Kombinezon z kaloszami w nazwie produktu spełnia wymaganie.';
             $row['ai_match_source'] = self::MATCH_SOURCE_RULE;
             $out[] = $row;
         }

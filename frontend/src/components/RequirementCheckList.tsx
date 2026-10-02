@@ -98,14 +98,14 @@ const SOURCE_LABEL: Record<CheckSource, string> = {
   description: 'opis',
   manufacturer: 'producent',
   manual: 'wpisane ręcznie',
-  variant: 'wariant karty',
+  variant: 'wariant karty produktu',
 }
 
 // „Brak na karcie” to niewiadoma, nie porażka — szary, nigdy czerwony.
 const STATUS: Record<CheckStatus, { icon: string; label: string; iconClass: string }> = {
   fail: { icon: '✗', label: 'nie spełnia', iconClass: 'text-rose-600' },
   unclear: { icon: '?', label: 'sprawdź', iconClass: 'text-amber-600' },
-  missing: { icon: '–', label: 'brak na karcie', iconClass: 'text-slate-400' },
+  missing: { icon: '–', label: 'brak w karcie produktu', iconClass: 'text-slate-400' },
   ok: { icon: '✓', label: 'spełnia', iconClass: 'text-emerald-600' },
 }
 
@@ -137,7 +137,7 @@ export function RequirementCheckList({ check, error, onFind, findHitCount }: Pro
   const [showOkFor, setShowOkFor] = useState<RequirementCheck | null>(null)
 
   if (error) {
-    return <p className="text-xs text-slate-500">Porównanie parametrów niedostępne</p>
+    return <p className="text-xs text-slate-500">Porównanie parametrów jest niedostępne.</p>
   }
   // Porównanie to same reguły i wraca w milisekundach — linia „Porównuję…” tylko by migała.
   if (!check) return null
@@ -181,7 +181,7 @@ export function RequirementCheckList({ check, error, onFind, findHitCount }: Pro
           onClick={() => setShowOkFor(showOk ? null : check)}
           className="w-full border-t border-slate-100 px-2.5 py-1 text-left text-[11px] font-medium text-emerald-700 hover:bg-emerald-50"
         >
-          {showOk ? '▾ zwiń spełnione' : `▸ spełnia (${counts.ok})`}
+          {showOk ? '▾ zwiń spełnione' : `▸ pokaż spełnione (${counts.ok})`}
         </button>
       )}
     </section>
@@ -215,7 +215,7 @@ function CheckItem({
         {compact && (
           <span className="ml-auto shrink-0 pl-1 text-right">
             {row.card.length === 0 ? (
-              <span className="italic text-slate-400">brak na karcie</span>
+              <span className="italic text-slate-400">brak w karcie produktu</span>
             ) : (
               <>
                 {/* „brak” obok samego kodu wyglądałby jak kod tego wydania — mówimy wprost, że to inne wydanie normy */}
@@ -233,7 +233,7 @@ function CheckItem({
       {!compact && (
         <div className="ml-[1.125rem] mt-0.5 space-y-0.5">
           {row.card.length === 0 ? (
-            <span className="italic text-slate-400">brak na karcie</span>
+            <span className="italic text-slate-400">brak w karcie produktu</span>
           ) : (
             <div className="flex flex-wrap gap-x-2.5 gap-y-0.5">
               {row.card.map((f, i) => (
@@ -248,7 +248,7 @@ function CheckItem({
                   {i > 0 && <span className="text-slate-300"> · </span>}
                   <span
                     className={POSITION_CLASS[p.status]}
-                    title={`${p.name}: wymagane ${p.required}, karta ${p.card ?? 'brak'}`}
+                    title={`${p.name}: wymagane ${p.required}, karta produktu ${p.card ?? 'brak'}`}
                   >
                     {p.name} {p.required}→{p.card ?? '—'}
                   </span>

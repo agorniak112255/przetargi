@@ -62,7 +62,7 @@ class TenderDocumentController extends Controller
         $ext = mb_strtolower($file->getClientOriginalExtension() ?: '');
         if (! in_array($ext, ['pdf', 'xlsx', 'xls', 'csv', 'doc', 'docx'], true)) {
             throw ValidationException::withMessages([
-                'file' => ['Dozwolone: PDF, Excel (xlsx/xls/csv), Word (doc/docx).'],
+                'file' => ['Dodaj plik PDF, Excel albo Word.'],
             ]);
         }
 
@@ -174,7 +174,7 @@ class TenderDocumentController extends Controller
 
         if ($items === [] && $conditions === []) {
             throw ValidationException::withMessages([
-                'items' => ['Brak pozycji/warunków do zapisania.'],
+                'items' => ['Nie zaznaczono żadnej pozycji ani warunku do zapisania.'],
             ]);
         }
 
@@ -213,7 +213,7 @@ class TenderDocumentController extends Controller
         $diskPath = (string) ($document->disk_path ?? '');
         if ($diskPath === '' || ! Storage::disk('local')->exists($diskPath)) {
             throw ValidationException::withMessages([
-                'document' => ['Brak pliku do pobrania.'],
+                'document' => ['Ten dokument nie ma zapisanego pliku do pobrania.'],
             ]);
         }
 
@@ -267,7 +267,7 @@ class TenderDocumentController extends Controller
     {
         if (! $this->workflow->canEditOffer($tender)) {
             throw ValidationException::withMessages([
-                'tender' => ['Import zablokowany — status: '.$tender->status],
+                'tender' => ['Dokumentów nie można już dodawać — przetarg ma status „'.TenderWorkflowService::statusLabel($tender->status).'”.'],
             ]);
         }
     }

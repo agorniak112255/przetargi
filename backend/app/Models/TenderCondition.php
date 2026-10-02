@@ -16,13 +16,25 @@ class TenderCondition extends Model
         'category',
         'content',
         'source',
+        'status',
+        'status_user_id',
+        'status_at',
     ];
+
+    /** Stany listy kontrolnej; null = warunek jeszcze nie sprawdzony. */
+    public const STATUSES = ['spelniamy', 'nie_spelniamy'];
 
     protected function casts(): array
     {
         return [
             'sort_order' => 'integer',
+            'status_at' => 'datetime',
         ];
+    }
+
+    public function statusUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'status_user_id');
     }
 
     public function tender(): BelongsTo

@@ -50,7 +50,7 @@ final class TenderDocxItemExtractor
                 $bestCount = $count;
                 $bestIsName = $isName;
                 $best = $pack;
-                $best['notes'] = 'Tabela DOCX. '.$pack['notes'];
+                $best['notes'] = 'Tabela z pliku Word. '.$pack['notes'];
             }
         }
 
@@ -73,7 +73,7 @@ final class TenderDocxItemExtractor
         $xml = $this->documentXml($path);
         $dom = new DOMDocument;
         if (@$dom->loadXML($xml) === false) {
-            throw new RuntimeException('Nieprawidłowy document.xml w DOCX.');
+            throw new RuntimeException('Nie udało się odczytać treści pliku Word — plik jest uszkodzony albo ma nieobsługiwany format.');
         }
         $xp = new DOMXPath($dom);
         $xp->registerNamespace('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main');
@@ -109,12 +109,12 @@ final class TenderDocxItemExtractor
     {
         $zip = new ZipArchive;
         if ($zip->open($path) !== true) {
-            throw new RuntimeException('Nie można otworzyć pliku DOCX.');
+            throw new RuntimeException('Nie udało się otworzyć pliku Word.');
         }
         $xml = $zip->getFromName('word/document.xml');
         $zip->close();
         if (! is_string($xml) || $xml === '') {
-            throw new RuntimeException('Brak word/document.xml w DOCX.');
+            throw new RuntimeException('Plik Word nie zawiera treści dokumentu — plik jest uszkodzony albo to nie jest dokument Word.');
         }
 
         return $xml;
@@ -327,7 +327,7 @@ final class TenderDocxItemExtractor
                 'currency' => null,
             ],
             'header_row' => 0,
-            'notes' => 'Tabela DOCX. Pozycje z tabeli opisów.',
+            'notes' => 'Tabela z pliku Word. Pozycje z tabeli opisów.',
         ];
     }
 

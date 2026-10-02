@@ -68,7 +68,7 @@ export function Tenders() {
       setTenderWizardActive(t.id, true)
       navigate(`/tenders/${t.id}`)
     } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Błąd tworzenia')
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się utworzyć przetargu.')
     } finally {
       setBusy(false)
     }
@@ -82,7 +82,7 @@ export function Tenders() {
       await api(`/tenders/${t.id}`, { method: 'DELETE' })
       await load()
     } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : 'Błąd usuwania')
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się usunąć przetargu.')
     } finally {
       setBusy(false)
     }
@@ -103,9 +103,9 @@ export function Tenders() {
             }}
           >
             <option value="">{seeAll ? 'Wszystkie przetargi' : 'Moje i zaproszenia'}</option>
-            <option value="mine">Tylko moje (opiekun)</option>
+            <option value="mine">Tylko te, których jestem opiekunem</option>
             <option value="invited">Tylko zaproszenia</option>
-            <option value="deadline_soon">Deadline &lt; 7 dni</option>
+            <option value="deadline_soon">Termin za mniej niż 7 dni</option>
           </select>
           <button
             type="button"
@@ -129,11 +129,11 @@ export function Tenders() {
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="np. Pakiet rękawic Q2"
+                placeholder="np. Pakiet rękawic na drugi kwartał"
               />
             </label>
             <label className="block text-xs">
-              Klient
+              Zamawiający
               <select
                 required
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
@@ -148,7 +148,7 @@ export function Tenders() {
               </select>
             </label>
             <label className="block text-xs">
-              Termin
+              Termin składania
               <input
                 type="date"
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
@@ -156,8 +156,11 @@ export function Tenders() {
                 onChange={(e) => setDeadline(e.target.value)}
               />
             </label>
-            <label className="block text-xs">
-              Marża %
+            <label
+              className="block text-xs"
+              title="Narzut doliczany do ceny zakupu. Przy 18% produkt kupiony za 100 zł ma w ofercie 118 zł (marża około 15%). Zmiana narzutu przelicza proporcjonalnie wszystkie ceny w ofercie, także poprawione ręcznie."
+            >
+              Narzut na cenę zakupu, %
               <input
                 required
                 type="number"
@@ -171,14 +174,16 @@ export function Tenders() {
             </label>
           </div>
           <p className="mt-1 text-[11px] text-slate-500">
-            Cena oferty = zakup × (1 + marża%). Domyślnie 18%.
+            Narzut doliczany do ceny zakupu. Przy 18% produkt kupiony za 100 zł ma w ofercie 118 zł (marża
+            około 15%). Domyślnie 18%. Zmiana narzutu przelicza proporcjonalnie wszystkie ceny w ofercie, także
+            poprawione ręcznie.
           </p>
           <button
             type="submit"
             disabled={busy}
             className="mt-3 rounded bg-blue-600 px-3 py-2 text-xs text-white disabled:opacity-50"
           >
-            Utwórz
+            Utwórz przetarg
           </button>
         </form>
       )}
@@ -190,13 +195,18 @@ export function Tenders() {
           <thead>
             <tr className="border-b bg-slate-50">
               <th className="p-2">Numer</th>
-              <th className="p-2">Klient</th>
-              <th className="p-2">Termin</th>
-              <th className="p-2">Wartość</th>
-              <th className="p-2">Poz.</th>
+              <th className="p-2">Zamawiający</th>
+              <th className="p-2">Termin składania</th>
+              <th className="p-2">Wartość oferty netto</th>
+              <th className="p-2">Pozycje</th>
               <th className="p-2">Status</th>
-              <th className="p-2">AI %</th>
-              <th className="p-2">Opiekun</th>
+              <th
+                className="p-2"
+                title="Szacunek, jak bardzo produkty pasują do opisu zamawiającego — średnia z pozycji ocenionych automatycznie; produkty wybrane ręcznie nie mają oceny. Nie zastępuje sprawdzenia karty produktu."
+              >
+                Dopasowanie
+              </th>
+              <th className="p-2">Opiekun przetargu</th>
               {canDeleteTender ? <th className="p-2"></th> : null}
             </tr>
           </thead>
@@ -215,7 +225,7 @@ export function Tenders() {
                     <span className="app-deadline" data-soon={soon ? 'true' : undefined}>
                       {t.deadline ?? '—'}
                       {soon && (
-                        <span className="app-deadline-flag ml-1 font-semibold text-red-600" title="Termin w ciągu 7 dni">
+                        <span className="app-deadline-flag ml-1 font-semibold text-red-600" title="Termin składania za mniej niż 7 dni">
                           !
                         </span>
                       )}

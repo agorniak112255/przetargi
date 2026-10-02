@@ -24,6 +24,25 @@ final class TenderWorkflowService
         'archiwum' => [],
     ];
 
+    /** Nazwy statusów dla człowieka — te same co TENDER_STATUS_LABEL we frontendzie (lib/tenderStatus.ts). */
+    private const STATUS_LABELS = [
+        'draft' => 'Szkic',
+        'wycena' => 'Wycena',
+        'akceptacja_km' => 'Akceptacja kierownika',
+        'akceptacja_dyrektor' => 'Akceptacja dyrektora',
+        'zatwierdzona' => 'Zatwierdzona',
+        'exported' => 'Wyeksportowana',
+        'odrzucony' => 'Odrzucony',
+        'archiwum' => 'Archiwum',
+    ];
+
+    public static function statusLabel(?string $status): string
+    {
+        $status = (string) $status;
+
+        return self::STATUS_LABELS[$status] ?? $status;
+    }
+
     public function canEditOffer(Tender $tender): bool
     {
         return in_array($tender->status, ['draft', 'wycena'], true);
@@ -49,13 +68,13 @@ final class TenderWorkflowService
 
         if (! in_array($toStatus, $allowed, true)) {
             throw ValidationException::withMessages([
-                'status' => ["Niedozwolone przejście: {$from} → {$toStatus}."],
+                'status' => ['Nie można zmienić statusu z „'.self::statusLabel($from).'” na „'.self::statusLabel($toStatus).'”.'],
             ]);
         }
 
         if (! $user->can(PermissionCatalog::transitionPermission($toStatus))) {
             throw ValidationException::withMessages([
-                'status' => ['Brak uprawnień do tej zmiany statusu.'],
+                'status' => ['Nie masz uprawnienia do tej zmiany statusu.'],
             ]);
         }
 
@@ -66,7 +85,7 @@ final class TenderWorkflowService
             );
         if ($noteRequired && ($note === null || mb_strlen(trim($note)) < 5)) {
             throw ValidationException::withMessages([
-                'note' => ['Wymagana notatka (min. 5 znaków) przy odrzuceniu lub cofnięciu z akceptacji.'],
+                'note' => ['Przy odrzuceniu albo cofnięciu z akceptacji wpisz notatkę (co najmniej 5 znaków).'],
             ]);
         }
 

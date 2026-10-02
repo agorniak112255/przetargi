@@ -67,7 +67,7 @@ final class ClientInquiryProductLinkTest extends TestCase
             'currency' => 'PLN',
             'stock' => 0,
             'ai_match_percent' => $percent,
-            'ai_match_reason' => 'Marka i model z SIWZ (literówka w nazwie modelu jest dopuszczalna).',
+            'ai_match_reason' => 'Marka i model z wymagania (literówka w nazwie modelu jest dopuszczalna).',
         ];
     }
 

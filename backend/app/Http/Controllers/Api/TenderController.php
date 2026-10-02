@@ -155,7 +155,7 @@ class TenderController extends Controller
         if (array_key_exists('target_margin_percent', $data)) {
             if (! $this->workflow->canEditOffer($tender)) {
                 throw ValidationException::withMessages([
-                    'tender' => ['Oferta zablokowana — status: '.$tender->status],
+                    'tender' => ['Narzutu nie można już zmieniać — przetarg ma status „'.TenderWorkflowService::statusLabel($tender->status).'”.'],
                 ]);
             }
             $tender->target_margin_percent = $data['target_margin_percent'];
@@ -215,7 +215,7 @@ class TenderController extends Controller
             'items.mainProduct.activeVariants:'.TenderItemController::VARIANT_COLUMNS,
             'items.mainVariant:'.TenderItemController::VARIANT_COLUMNS,
             'items.companionProduct.images',
-            'conditions',
+            'conditions.statusUser:id,name',
             'statusHistories.user:id,name,role',
         ]);
 

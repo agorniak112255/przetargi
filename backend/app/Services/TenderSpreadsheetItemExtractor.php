@@ -74,8 +74,8 @@ final class TenderSpreadsheetItemExtractor
             'column_map' => $lastMap,
             'header_row' => $headerRow,
             'notes' => $usedSheets > 1
-                ? 'Scalono '.$usedSheets.' arkusze (nazwa / opis / normy). '.implode(' | ', $sheetNotes)
-                : ($sheetNotes[0] ?? 'Mapowanie nagłówków.'),
+                ? 'Połączono '.$usedSheets.' arkusze (nazwa, opis, normy). '.implode(' | ', $sheetNotes)
+                : ($sheetNotes[0] ?? 'Kolumny rozpoznane po nagłówkach.'),
         ];
     }
 
@@ -140,7 +140,7 @@ final class TenderSpreadsheetItemExtractor
                 $best = [
                     'header_row' => $i,
                     'columns' => $cols,
-                    'notes' => 'Mapowanie nagłówków (heurystyka).',
+                    'notes' => 'Kolumny rozpoznane po nagłówkach.',
                 ];
             }
         }
@@ -398,7 +398,7 @@ final class TenderSpreadsheetItemExtractor
             return [
                 'header_row' => max(0, $header),
                 'columns' => $columns,
-                'notes' => 'Mapowanie nagłówków (AI).',
+                'notes' => 'Kolumny rozpoznane automatycznie.',
             ];
         } catch (\Throwable) {
             return null;

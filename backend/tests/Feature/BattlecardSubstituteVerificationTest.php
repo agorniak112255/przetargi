@@ -51,7 +51,7 @@ final class BattlecardSubstituteVerificationTest extends TestCase
         $this->assertSame('ok', $subs['44-304']['verification']['status']);
         $this->assertTrue($subs['44-304']['price_comparable']);
         $this->assertSame('words', $subs['44-304']['match_basis']);
-        $this->assertSame(['Zamiennik 44-304 (ATG) tańszy o ok. 33% (po upuście).'], $card['highlights']);
+        $this->assertSame(['Zamiennik 44-304 (ATG) tańszy o około 33% (po upuście).'], $card['highlights']);
     }
 
     /** MAPA KryTech 644 „4X43D” przy wymaganym „4341B”: Coup X przy spełnionej literze ISO — do sprawdzenia, nie ukryty. */

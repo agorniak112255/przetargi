@@ -776,7 +776,7 @@ final class BattlecardService
         $highlights = [];
         $ours = $card['ours'];
         if ($ours === null) {
-            $highlights[] = 'Brak propozycji głównej — uzupełnij match, aby porównać ofertę.';
+            $highlights[] = 'Pozycja nie ma jeszcze produktu — dobierz produkt, aby porównać ofertę z zamiennikami.';
 
             return $highlights;
         }
@@ -793,7 +793,7 @@ final class BattlecardService
             $diff = ((float) $ourPrice - (float) $subPrice) / (float) $ourPrice * 100;
             if ($diff >= 3) {
                 $highlights[] = sprintf(
-                    'Zamiennik %s (%s) tańszy o ok. %.0f%% (po upuście).',
+                    'Zamiennik %s (%s) tańszy o około %.0f%% (po upuście).',
                     $sub['sku'],
                     $sub['manufacturer'],
                     $diff,
@@ -805,14 +805,14 @@ final class BattlecardService
             ->first(fn (array $s): bool => ($s['approval_status'] ?? '') === 'zatwierdzony');
         if ($approvedSub !== null) {
             $highlights[] = sprintf(
-                'Dostępny zatwierdzony zamiennik: %s (%s%%).',
+                'Dostępny zatwierdzony zamiennik: %s (ocena dopasowania %s%%).',
                 $approvedSub['sku'],
                 $approvedSub['match_percent'],
             );
         }
 
         if (($ours['match_percent'] ?? 0) < ProductMatchService::MIN_MATCH_SCORE) {
-            $highlights[] = 'Słabe dopasowanie do SIWZ (< '.ProductMatchService::MIN_MATCH_SCORE.'%) — zweryfikuj ręcznie.';
+            $highlights[] = 'Słabe dopasowanie do wymagania zamawiającego (poniżej '.ProductMatchService::MIN_MATCH_SCORE.'%) — sprawdź ręcznie.';
         }
 
         return array_slice($highlights, 0, 4);

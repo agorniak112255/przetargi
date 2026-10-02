@@ -86,19 +86,19 @@ final class TenderCoverageService
 
         $blockers = [];
         if ($withoutProduct !== []) {
-            $blockers[] = 'Brak produktu: '.count($withoutProduct);
+            $blockers[] = 'Pozycje bez produktu: '.count($withoutProduct);
         }
         if ($withoutPrice !== []) {
-            $blockers[] = 'Brak ceny: '.count($withoutPrice);
+            $blockers[] = 'Pozycje bez ceny: '.count($withoutPrice);
         }
         if ($weakMatch !== []) {
-            $blockers[] = 'Słabe dopasowanie (<'.self::MIN_MATCH_SCORE.'%): '.count($weakMatch);
+            $blockers[] = 'Słabe dopasowanie (poniżej '.self::MIN_MATCH_SCORE.'%): '.count($weakMatch);
         }
         if ($lowMargin !== []) {
-            $blockers[] = 'Niska marża (<'.(int) self::MIN_MARGIN_PERCENT.'%): '.count($lowMargin);
+            $blockers[] = 'Niska marża (poniżej '.(int) self::MIN_MARGIN_PERCENT.'%): '.count($lowMargin);
         }
         if ($subsPending > 0) {
-            $blockers[] = 'Zamienniki oczekujące: '.$subsPending;
+            $blockers[] = 'Zamienniki do zatwierdzenia: '.$subsPending;
         }
 
         return [

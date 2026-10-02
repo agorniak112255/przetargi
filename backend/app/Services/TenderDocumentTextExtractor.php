@@ -23,12 +23,12 @@ final class TenderDocumentTextExtractor
             'xlsx', 'xls', 'csv' => $this->extractSpreadsheet($path),
             'docx' => $this->extractDocx($path),
             'doc' => $this->extractDoc($path),
-            default => throw new RuntimeException("Nieobsługiwany format: .{$ext}"),
+            default => throw new RuntimeException('Nieobsługiwany rodzaj pliku. Dodaj plik PDF, Excel albo Word.'),
         };
 
         $text = trim($this->normalize($text));
         if (mb_strlen($text) < 20) {
-            throw new RuntimeException('Plik nie zawiera wystarczającej ilości tekstu do analizy.');
+            throw new RuntimeException('W pliku jest za mało tekstu, żeby odczytać z niego pozycje i warunki.');
         }
 
         return $text;
@@ -73,7 +73,7 @@ final class TenderDocumentTextExtractor
             return $this->extractViaPhpWord($path);
         } catch (\Throwable $e) {
             throw new RuntimeException(
-                'Nie udało się odczytać pliku .doc. Zapisz jako .docx i spróbuj ponownie. '.$e->getMessage(),
+                'Nie udało się odczytać starszego pliku Word. Otwórz go w programie Word, zapisz jako „Dokument programu Word” i dodaj ponownie. '.$e->getMessage(),
                 0,
                 $e
             );
@@ -100,12 +100,12 @@ final class TenderDocumentTextExtractor
     {
         $zip = new ZipArchive;
         if ($zip->open($path) !== true) {
-            throw new RuntimeException('Nie można otworzyć pliku DOCX.');
+            throw new RuntimeException('Nie udało się otworzyć pliku Word.');
         }
         $xml = $zip->getFromName('word/document.xml');
         $zip->close();
         if (! is_string($xml) || $xml === '') {
-            throw new RuntimeException('Brak word/document.xml w DOCX.');
+            throw new RuntimeException('Plik Word nie zawiera treści dokumentu — plik jest uszkodzony albo to nie jest dokument Word.');
         }
         $xml = str_replace(['</w:p>', '</w:tr>', '<w:br/>', '<w:tab/>'], ["\n", "\n", "\n", "\t"], $xml);
         $text = strip_tags($xml);

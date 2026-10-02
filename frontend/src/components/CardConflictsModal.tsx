@@ -19,7 +19,7 @@ type Props = {
   loading?: boolean
   /** klik cytatu; gdy brak — cytaty nieklikalne */
   onFind?: (phrase: string) => void
-  /** gdy podane — przycisk „Otwórz weryfikację karty” */
+  /** gdy podane — przycisk „Otwórz sprawdzenie karty produktu” */
   onOpenVerify?: () => void
 }
 
@@ -69,7 +69,7 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
           productId: pid,
           data: prev?.productId === pid ? prev.data : null,
           loading: false,
-          error: e instanceof Error ? e.message : 'Nie udało się sprawdzić modelem',
+          error: e instanceof Error ? e.message : 'Nie udało się sprawdzić karty produktu — spróbuj ponownie.',
         }))
       })
   }
@@ -102,10 +102,10 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
         onClick={(e) => e.stopPropagation()}
       >
         <div className="border-b border-slate-100 px-4 py-3">
-          <p id="card-conflicts-title" className="text-sm font-semibold text-slate-900" title="Liczone regułami — bez wyniku AI">
+          <p id="card-conflicts-title" className="text-sm font-semibold text-slate-900" title="Liczone regułami — bez wniosków automatycznych z sekcji poniżej">
             {conflicts && count > 0
               ? `⚠ ${conflictsLabel(conflicts.requirement.length, conflicts.card_fields.length)}`
-              : 'Sprawdzenie karty'}
+              : 'Sprawdzenie karty produktu'}
           </p>
           {productName && (
             <p className="mt-0.5 truncate text-xs text-slate-500" title={productName}>
@@ -118,13 +118,13 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
           {!conflicts ? (
             <p className="text-slate-500">{loading ? 'Wczytuję porównanie z wymaganiem…' : 'Porównanie regułami niedostępne.'}</p>
           ) : count === 0 ? (
-            <p className="text-slate-600">Reguły nie znalazły niespełnionych wymagań ani sprzecznych pól karty.</p>
+            <p className="text-slate-600">Reguły nie znalazły niespełnionych wymagań ani sprzecznych pól karty produktu.</p>
           ) : (
             <>
               {conflicts.requirement.length > 0 && (
                 <section>
                   <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-rose-700">
-                    Karta nie spełnia wymagania ({conflicts.requirement.length})
+                    Karta produktu nie spełnia wymagania ({conflicts.requirement.length})
                   </h3>
                   <ul className="space-y-1.5">
                     {conflicts.requirement.map((key) => (
@@ -136,7 +136,7 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
               {conflicts.card_fields.length > 0 && (
                 <section>
                   <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
-                    Pola karty sobie przeczą ({conflicts.card_fields.length})
+                    Pola karty produktu sobie przeczą ({conflicts.card_fields.length})
                   </h3>
                   <ul className="space-y-1.5">
                     {conflicts.card_fields.map((c) => (
@@ -151,19 +151,19 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
           <section className="rounded-lg border border-violet-200 bg-violet-50/50 px-3 py-2">
             <div className="flex flex-wrap items-baseline justify-between gap-x-2">
               <h3 className="text-[11px] font-semibold uppercase tracking-wide text-violet-800">
-                Sprawdzenie karty przez AI
+                Szukanie sprzeczności w karcie produktu
               </h3>
-              <span className="text-[10px] italic text-violet-600">wniosek AI — sprawdź cytaty</span>
+              <span className="text-[10px] italic text-violet-600">wniosek automatyczny — sprawdź cytaty</span>
             </div>
             {/* Użytkownik mylił „AI nie znalazło” z „karta spełnia przetarg” — AI dostaje samą kartę, bez wymagania. */}
             <p className="mt-0.5 text-[11px] text-violet-700/80">
-              Sprawdza specyfikację, normy i opis karty pod kątem sprzeczności — np. różnych norm lub klas podanych w
-              różnych miejscach.
+              Sprawdza specyfikację, normy i opis karty produktu pod kątem sprzeczności — na przykład różnych norm lub
+              klas podanych w różnych miejscach. Nie porównuje karty produktu z wymaganiem.
             </p>
             {aiState?.loading ? (
               <p className="mt-1.5 flex items-center gap-1.5 text-violet-700">
                 <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-violet-600 border-t-transparent" />
-                AI sprawdza kartę…
+                Trwa sprawdzanie karty produktu…
               </p>
             ) : aiState?.data ? (
               <AiResult data={aiState.data} onFind={handleFind} onRefresh={() => runAi(true)} />
@@ -173,7 +173,7 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
                 onClick={() => runAi(false)}
                 className="mt-1.5 rounded bg-violet-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-violet-700"
               >
-                Sprawdź kartę AI
+                Sprawdź sprzeczności w karcie produktu
               </button>
             )}
             {aiState?.error && !aiState.loading && <p className="mt-1.5 text-rose-700">{aiState.error}</p>}
@@ -190,7 +190,7 @@ export function CardConflictsModal({ open, onClose, productId, productName, chec
               }}
               className="rounded border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-800 hover:bg-violet-100"
             >
-              Otwórz weryfikację karty
+              Otwórz sprawdzenie karty produktu
             </button>
           )}
           <button
@@ -228,9 +228,9 @@ function RequirementItem({
         </span>
       </div>
       <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
-        <span className="text-[11px] text-slate-500">karta:</span>
+        <span className="text-[11px] text-slate-500">karta produktu:</span>
         {row.card.length === 0 ? (
-          <span className="italic text-slate-400">brak na karcie</span>
+          <span className="italic text-slate-400">brak w karcie produktu</span>
         ) : (
           row.card.map((f, i) => <Finding key={`${f.source}:${i}`} finding={f} onFind={onFind} />)
         )}
@@ -242,7 +242,7 @@ function RequirementItem({
               {i > 0 && <span className="text-slate-300"> · </span>}
               <span
                 className={p.status === 'fail' ? 'font-semibold text-rose-700' : 'text-slate-500'}
-                title={`${p.name}: wymagane ${p.required}, karta ${p.card ?? 'brak'}`}
+                title={`${p.name}: wymagane ${p.required}, karta produktu ${p.card ?? 'brak'}`}
               >
                 {p.name} {p.required}→{p.card ?? '—'}
               </span>
@@ -275,7 +275,7 @@ function CardFieldItem({
         <div key={`${v.value}:${v.edition ?? ''}:${vi}`} className="flex flex-wrap items-baseline gap-x-1">
           <span className="font-semibold text-amber-900">{v.value}</span>
           {v.edition && (
-            <span className="text-[11px] text-slate-500" title="Rok wydania normy podany w polu karty">
+            <span className="text-[11px] text-slate-500" title="Rok wydania normy podany w polu karty produktu">
               ({conflict.label}:{v.edition})
             </span>
           )}
@@ -308,7 +308,7 @@ function CardFieldItem({
       <p className="mt-0.5 text-[11px] text-amber-700">
         {decided
           ? 'dopasowanie bierze wartość producenta — pozostałe zapisy (sklep, opis) mu przeczą'
-          : 'karta podaje różne wartości — sprawdź u producenta'}
+          : 'karta produktu podaje różne wartości — sprawdź u producenta'}
       </p>
     </li>
   )
@@ -327,8 +327,8 @@ function AiResult({
     <div className="mt-1.5 space-y-1.5">
       {data.conflicts.length === 0 ? (
         <p className="text-slate-600">
-          AI nie znalazło sprzeczności w samej karcie — nazwa, normy, specyfikacja i opis podają te same wartości. To nie
-          znaczy, że karta spełnia wymagania przetargu.
+          Nie znaleziono sprzeczności w samej karcie produktu — nazwa, normy, specyfikacja i opis podają te same
+          wartości. To nie znaczy, że produkt spełnia wymagania.
         </p>
       ) : (
         <ul className="space-y-1.5">
@@ -348,11 +348,11 @@ function AiResult({
         </ul>
       )}
       {data.rejected > 0 && (
-        <p className="text-[10px] text-slate-500">odrzucono {data.rejected} (cytaty nie zgadzały się z kartą)</p>
+        <p className="text-[10px] text-slate-500">pominięto wnioski: {data.rejected} (cytaty nie zgadzały się z kartą produktu)</p>
       )}
       <p className="text-[10px] text-slate-500">
         sprawdzono {formatDate(data.checked_at)}
-        {data.cached ? ' (z pamięci)' : ''} ·{' '}
+        {data.cached ? ' (wynik zapisany wcześniej)' : ''} ·{' '}
         <button type="button" onClick={onRefresh} className="font-medium text-violet-700 hover:underline">
           sprawdź ponownie
         </button>

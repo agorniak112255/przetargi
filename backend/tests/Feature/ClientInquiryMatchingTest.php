@@ -221,7 +221,7 @@ final class ClientInquiryMatchingTest extends TestCase
                 'currency' => 'PLN',
                 'stock' => 1,
                 'ai_match_percent' => 48,
-                'ai_match_reason' => 'Nieocenione przez model — ten sam rodzaj w katalogu',
+                'ai_match_reason' => 'Bez automatycznej oceny — ten sam rodzaj produktu w katalogu',
                 'ai_match_source' => 'catalog',
             ]],
         ]);
@@ -258,7 +258,7 @@ final class ClientInquiryMatchingTest extends TestCase
             'currency' => 'PLN',
             'stock' => 5,
             'ai_match_percent' => $score,
-            'ai_match_reason' => 'Nieocenione przez model — ten sam rodzaj w katalogu',
+            'ai_match_reason' => 'Bez automatycznej oceny — ten sam rodzaj produktu w katalogu',
             'ai_match_source' => $source,
         ];
         $this->mockExtractor();

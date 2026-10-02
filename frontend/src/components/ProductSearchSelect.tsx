@@ -84,7 +84,7 @@ export function ProductSearchSelect({
   useEffect(() => {
     if (!open) {
       // zapisany produkt: zawsze pokaż etykietę (nie zostawiaj pustego „Szukaj…”)
-      setQ(selected ? labelOf(selected) : value ? `ID ${value}` : '')
+      setQ(selected ? labelOf(selected) : value ? `Produkt o numerze ${value}` : '')
     }
   }, [selected, open, value])
 
@@ -146,7 +146,7 @@ export function ProductSearchSelect({
         type="text"
         disabled={disabled}
         className="w-full rounded border border-slate-300 px-1.5 py-1 text-xs"
-        placeholder="Szukaj SKU / nazwy…"
+        placeholder="Szukaj po kodzie albo nazwie…"
         value={q}
         onFocus={() => setOpen(true)}
         onChange={(e) => {
@@ -172,7 +172,9 @@ export function ProductSearchSelect({
               <span className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500" />
             )}
             <span className="min-w-0">
-              <span className="block truncate text-[11px] font-medium text-sky-900">{selected.sku}</span>
+              <span className="block truncate text-[11px] font-medium text-sky-900" title="Kod produktu">
+                {selected.sku}
+              </span>
               <span className="block truncate text-[10px] text-slate-600" title={selected.name}>
                 {productDisplayName(selected)}
               </span>
@@ -183,10 +185,10 @@ export function ProductSearchSelect({
               type="button"
               disabled={applyMarginDisabled}
               className="mt-1 rounded bg-emerald-700 px-1.5 py-0.5 text-[9px] font-semibold text-white hover:bg-emerald-800 disabled:opacity-40"
-              title={`Ustaw cenę oferty = zakup × (1 + ${applyMarginPercent ?? 18}% z przetargu)`}
+              title={`Ustaw cenę w ofercie: cena zakupu plus narzut ${applyMarginPercent ?? 18}%`}
               onClick={onApplyMargin}
             >
-              Przelicz +{applyMarginPercent ?? 18}%
+              Przelicz z narzutem {applyMarginPercent ?? 18}%
             </button>
           ) : null}
         </div>
@@ -204,11 +206,11 @@ export function ProductSearchSelect({
                 setOpen(false)
               }}
             >
-              — brak —
+              — bez produktu —
             </button>
           </li>
           {searching && (
-            <li className="px-2 py-1 text-[10px] text-slate-400">Szukam w bazie…</li>
+            <li className="px-2 py-1 text-[10px] text-slate-400">Szukam w katalogu…</li>
           )}
           {filtered.map((p) => (
             <li key={p.id}>
@@ -227,7 +229,7 @@ export function ProductSearchSelect({
                 <span className="text-slate-400"> · </span>
                 {productDisplayName(p, 48)}
                 {p.erp_codes && p.erp_codes.length > 0 && (
-                  <span className="ml-1 font-mono text-[10px] text-slate-500">(XL {p.erp_codes.join(', ')})</span>
+                  <span className="ml-1 font-mono text-[10px] text-slate-500">(kod w XL: {p.erp_codes.join(', ')})</span>
                 )}
               </button>
             </li>

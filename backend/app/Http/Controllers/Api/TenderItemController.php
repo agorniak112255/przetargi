@@ -45,7 +45,7 @@ class TenderItemController extends Controller
     {
         if (! $this->workflow->canEditOffer($tender)) {
             throw ValidationException::withMessages([
-                'tender' => ['Oferta zablokowana — status: '.$tender->status],
+                'tender' => ['Oferty nie można już zmieniać — przetarg ma status „'.TenderWorkflowService::statusLabel($tender->status).'”.'],
             ]);
         }
 
@@ -106,7 +106,7 @@ class TenderItemController extends Controller
                     [
                         'code' => 'battlecard_batch',
                         'label' => sprintf(
-                            'Zastosowano tańszy zamiennik %s (−%.0f%% po upuście)',
+                            'Zastosowano tańszy zamiennik %s (%.0f%% taniej po upuście)',
                             $pick['sku'],
                             $pick['save_percent'],
                         ),
@@ -161,7 +161,7 @@ class TenderItemController extends Controller
     {
         if (! $this->workflow->canEditOffer($tender)) {
             throw ValidationException::withMessages([
-                'tender' => ['Oferta zablokowana — status: '.$tender->status],
+                'tender' => ['Oferty nie można już zmieniać — przetarg ma status „'.TenderWorkflowService::statusLabel($tender->status).'”.'],
             ]);
         }
 
@@ -263,7 +263,7 @@ class TenderItemController extends Controller
 
         if (! $this->workflow->canEditOffer($tender)) {
             throw ValidationException::withMessages([
-                'tender' => ['Oferta zablokowana — status: '.$tender->status],
+                'tender' => ['Oferty nie można już zmieniać — przetarg ma status „'.TenderWorkflowService::statusLabel($tender->status).'”.'],
             ]);
         }
 

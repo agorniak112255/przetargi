@@ -119,9 +119,9 @@ final class LevelCheckerTest extends TestCase
 
         $ok = $this->rows($requirement, [new CardSource(CardSource::NORMS, 'EN ISO 21420:2020, EN 388:2016+A1:2019 (4544C)')])['cut_level'];
         $this->assertSame(Status::Ok, $ok->status);
-        $this->assertSame(['text' => 'min. B (przyjęte)', 'value' => 'B', 'inferred' => true], array_diff_key($ok->required, ['quote' => 1]));
+        $this->assertSame(['text' => 'co najmniej B (przyjęte)', 'value' => 'B', 'inferred' => true], array_diff_key($ok->required, ['quote' => 1]));
         $this->assertStringContainsString('odporne na przecięcie', $ok->required['quote']);
-        $this->assertSame('SIWZ nie podaje poziomu przecięcia — przyjęto minimum B (lekka odporność na przecięcie).', $ok->note);
+        $this->assertSame('Wymaganie nie podaje poziomu przecięcia — przyjęto co najmniej B (lekka odporność na przecięcie).', $ok->note);
 
         $this->assertSame(Status::Fail, $this->rows($requirement, [new CardSource(CardSource::NORMS, 'EN 388: 4X21A')])['cut_level']->status);
     }

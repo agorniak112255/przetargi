@@ -112,7 +112,7 @@ export function ProductAiMatchModal({
   async function runCatalogSearch(text = query) {
     const q = text.trim()
     if (q.length < 2) {
-      setError('Wpisz co najmniej 2 znaki zapytania.')
+      setError('Wpisz co najmniej 2 znaki.')
       return
     }
     setBusy('catalog')
@@ -134,16 +134,16 @@ export function ProductAiMatchModal({
         currency: p.currency ?? 'PLN',
         order_quantity: p.order_quantity ?? null,
         score: 100,
-        reason: 'Trafienie w nazwę / SKU',
+        reason: 'Trafienie w nazwę albo kod produktu',
         source: 'catalog',
       }))
       setAiEventId(null)
       setResults(mapped)
       if (mapped.length === 0) {
-        setError('Brak produktów w katalogu dla tego zapytania.')
+        setError('Nie znaleziono produktów w katalogu po tej nazwie lub kodzie.')
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Błąd wyszukiwania')
+      setError(e instanceof Error ? e.message : 'Nie udało się wyszukać — spróbuj ponownie.')
     } finally {
       setBusy(false)
     }
@@ -152,7 +152,7 @@ export function ProductAiMatchModal({
   async function runSearch(web: boolean, text = query) {
     const q = text.trim()
     if (q.length < AI_SEARCH_MIN_CHARS) {
-      setError('Wpisz co najmniej 3 znaki zapytania.')
+      setError('Wpisz co najmniej 3 znaki.')
       return
     }
     setBusy(web ? 'web' : 'ai')
@@ -184,16 +184,16 @@ export function ProductAiMatchModal({
           res.ai_note ??
             (web
               ? 'Nie znaleziono strony produktu w internecie.'
-              : 'AI nie znalazło pasującego produktu w katalogu.'),
+              : 'Nie znaleziono pasującego produktu w katalogu.'),
         )
       }
     } catch (e) {
       setError(
         isAiSearchTimeout(e)
-          ? 'Wyszukiwanie AI przekroczyło limit czasu (180 s).'
+          ? 'Wyszukiwanie trwało za długo (ponad 3 minuty) — spróbuj ponownie.'
           : e instanceof Error
             ? e.message
-            : 'Błąd wyszukiwania AI',
+            : 'Nie udało się wyszukać — spróbuj ponownie.',
       )
     } finally {
       setBusy(false)
@@ -233,7 +233,9 @@ export function ProductAiMatchModal({
           <div>
             <p className="text-sm font-semibold text-slate-900">Wyszukiwanie produktu</p>
             <p className="text-xs text-slate-500">
-              Szukaj — nazwa/SKU. Szukaj AI — model czyta opisy w katalogu (to samo co „Szukaj w katalogu” na Produktach). AI Internet — poza bazą.
+              „Szukaj po nazwie lub kodzie” — szybkie szukanie po nazwie i kodzie produktu. „Szukaj w katalogu po
+              opisie” — czyta opisy produktów w katalogu (to samo co „Szukaj w katalogu” na stronie Produkty). „Szukaj
+              w internecie” — strony produktów spoza katalogu.
             </p>
           </div>
           <button
@@ -248,7 +250,7 @@ export function ProductAiMatchModal({
 
         <div className="space-y-3 overflow-y-auto px-4 py-3">
           <label className="block">
-            <span className="mb-1 block text-xs font-medium text-slate-600">Zapytanie</span>
+            <span className="mb-1 block text-xs font-medium text-slate-600">Czego szukasz</span>
             <textarea
               className="min-h-[88px] w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
               value={query}
@@ -265,7 +267,7 @@ export function ProductAiMatchModal({
               onClick={() => void runCatalogSearch()}
               className="rounded bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
             >
-              {busy === 'catalog' ? 'Szukam…' : 'Szukaj'}
+              {busy === 'catalog' ? 'Szukam…' : 'Szukaj po nazwie lub kodzie'}
             </button>
             <button
               type="button"
@@ -273,7 +275,7 @@ export function ProductAiMatchModal({
               onClick={() => void runSearch(false)}
               className="rounded bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
             >
-              {busy === 'ai' ? 'Szukam…' : 'Szukaj AI'}
+              {busy === 'ai' ? 'Szukam…' : 'Szukaj w katalogu po opisie'}
             </button>
             <button
               type="button"
@@ -281,7 +283,7 @@ export function ProductAiMatchModal({
               onClick={() => void runSearch(true)}
               className="rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
             >
-              {busy === 'web' ? 'Szukam w sieci…' : 'AI Internet'}
+              {busy === 'web' ? 'Szukam w internecie…' : 'Szukaj w internecie'}
             </button>
           </div>
 
@@ -302,7 +304,7 @@ export function ProductAiMatchModal({
                     className="block text-left"
                   >
                     <span className="rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-white">
-                      Link zewnętrzny
+                      Spoza katalogu
                     </span>
                     <span className="mt-1 block text-xs font-medium text-orange-950 underline">
                       {hint.title}
@@ -330,7 +332,7 @@ export function ProductAiMatchModal({
                   {!onSelect
                     ? 'Znalezione produkty (tylko podgląd):'
                     : allowCompanion
-                      ? 'Wybierz produkt albo zaznacz dwa:'
+                      ? 'Wybierz produkt albo zaznacz dwa (komplet):'
                       : 'Wybierz produkt:'}
                 </p>
                 {allowCompanion && onSelectPair && (
@@ -350,7 +352,7 @@ export function ProductAiMatchModal({
                     }}
                     className="rounded bg-violet-800 px-2 py-1 text-[11px] font-medium text-white hover:bg-violet-900 disabled:opacity-50"
                   >
-                    Dodaj oba{selectedIds.length > 0 ? ` (${selectedIds.length}/2)` : ''}
+                    Dodaj oba jako komplet{selectedIds.length > 0 ? ` (${selectedIds.length}/2)` : ''}
                   </button>
                 )}
               </div>
@@ -391,10 +393,15 @@ export function ProductAiMatchModal({
                     </span>
                     {r.source === 'catalog' ? (
                       <span className="shrink-0 text-[10px] font-semibold uppercase text-sky-700">
-                        nazwa
+                        nazwa lub kod
                       </span>
                     ) : (
-                      <span className="shrink-0 text-xs text-violet-700">{r.score}%</span>
+                      <span
+                        className="shrink-0 text-xs text-violet-700"
+                        title={`Ocena dopasowania: ${r.score}%. Szacunek, jak bardzo produkt pasuje do opisu. Nie zastępuje sprawdzenia karty produktu.`}
+                      >
+                        {r.score}%
+                      </span>
                     )}
                   </div>
                   <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-700">
@@ -402,19 +409,22 @@ export function ProductAiMatchModal({
                       Producent: <b>{r.manufacturer || '—'}</b>
                     </span>
                     <span>
-                      Zakup:{' '}
+                      Cena zakupu:{' '}
                       <b>
                         {r.purchase_price != null && r.purchase_price !== ''
-                          ? `${r.purchase_price} ${r.currency ?? 'PLN'}`
+                          ? `${r.purchase_price} ${(r.currency ?? 'PLN').toUpperCase() === 'PLN' ? 'zł' : r.currency}`
                           : '—'}
                       </b>
                       {(r.currency ?? 'PLN').toUpperCase() !== 'PLN' && r.purchase_price_pln != null ? (
-                        <span className="text-slate-500"> ≈ {r.purchase_price_pln} zł</span>
+                        <span className="text-slate-500"> około {r.purchase_price_pln} zł</span>
                       ) : null}
                     </span>
                     {r.catalog_price_net != null && r.catalog_price_net !== '' && (
                       <span>
-                        Katalog: <b>{r.catalog_price_net} {r.currency ?? 'PLN'}</b>
+                        Cena katalogowa:{' '}
+                        <b>
+                          {r.catalog_price_net} {(r.currency ?? 'PLN').toUpperCase() === 'PLN' ? 'zł' : r.currency}
+                        </b>
                       </span>
                     )}
                     <OrderQuantityBadge oq={r.order_quantity} />
@@ -430,7 +440,7 @@ export function ProductAiMatchModal({
                       }}
                       className="rounded border border-violet-400 bg-white px-2 py-1 text-[11px] font-medium text-violet-800 hover:bg-violet-100 disabled:opacity-50"
                     >
-                      Opis
+                      Opis produktu
                     </button>
                     {onSelect && (
                       <button
@@ -455,7 +465,7 @@ export function ProductAiMatchModal({
                         }}
                         className="rounded border border-violet-400 bg-white px-2 py-1 text-[11px] font-medium text-violet-800 hover:bg-violet-100 disabled:opacity-50"
                       >
-                        Jako drugi
+                        Jako drugi produkt kompletu
                       </button>
                     )}
                   </div>

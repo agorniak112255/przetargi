@@ -74,7 +74,7 @@ final class PackageCheckerTest extends TestCase
         $this->assertSame(['capacity' => 'ok'], $this->statuses($requirement, [new CardSource(CardSource::NAME, 'Mydło w płynie 5 L')]));
         $this->assertSame(['capacity' => 'ok'], $this->statuses($requirement, [new CardSource(CardSource::NAME, 'Mydło w płynie 0,5 l')]));
         $this->assertSame(['capacity' => 'fail'], $this->statuses($requirement, [new CardSource(CardSource::NAME, 'Mydło w płynie 250 ml')]));
-        $this->assertSame('min. 500 ml', $this->rows($requirement, [])['capacity']->required['text']);
+        $this->assertSame('co najmniej 500 ml', $this->rows($requirement, [])['capacity']->required['text']);
     }
 
     #[Test]

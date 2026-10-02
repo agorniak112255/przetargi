@@ -17,26 +17,26 @@
 <body>
     <h1>Oferta SUPON — {{ $tender->number }}</h1>
     <div class="meta">
-        <div><strong>Klient:</strong> {{ $tender->client?->name }}</div>
+        <div><strong>Zamawiający:</strong> {{ $tender->client?->name }}</div>
         <div><strong>Tytuł:</strong> {{ $tender->title }}</div>
         <div><strong>Termin:</strong> {{ optional($tender->deadline)->format('Y-m-d') ?? '—' }}</div>
-        <div><strong>Opiekun:</strong> {{ $tender->owner?->name }}</div>
-        <div><strong>Status:</strong> {{ $tender->status }}</div>
+        <div><strong>Opiekun przetargu:</strong> {{ $tender->owner?->name }}</div>
+        <div><strong>Status:</strong> {{ \App\Services\TenderWorkflowService::statusLabel($tender->status) }}</div>
     </div>
 
     <table>
         <thead>
             <tr>
-                <th>Lp</th>
-                <th>Wymaganie</th>
-                <th>SKU</th>
+                <th>Pozycja</th>
+                <th>Wymaganie zamawiającego</th>
+                <th>Kod produktu</th>
                 <th>Produkt</th>
                 <th class="right">Ilość</th>
-                <th class="right">Zakup</th>
-                <th class="right">Oferta</th>
-                <th class="right">Wartość</th>
-                <th>Match</th>
-                <th>Zamienniki / uwagi</th>
+                <th class="right">Cena zakupu</th>
+                <th class="right">Cena w ofercie</th>
+                <th class="right">Wartość pozycji</th>
+                <th>Ocena dopasowania</th>
+                <th>Zamienniki i uwagi</th>
             </tr>
         </thead>
         <tbody>
@@ -88,7 +88,7 @@
         <strong>Marża:</strong> {{ $tenderMargin !== null ? number_format((float) $tenderMargin, 2, '.', '') : '—' }}%
     </div>
     <p style="margin-top:18px;color:#666;font-size:9px;">
-        Wygenerowano z Przetargi Supon · {{ now()->format('Y-m-d H:i') }} · ceny zakupu = cennik po upuście
+        Wygenerowano z Przetargi Supon · {{ now()->format('Y-m-d H:i') }} · ceny zakupu to ceny z cennika po upuście
     </p>
 </body>
 </html>

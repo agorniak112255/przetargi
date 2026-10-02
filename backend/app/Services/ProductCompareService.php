@@ -79,7 +79,7 @@ final class ProductCompareService
         ));
 
         $rows = [
-            $this->rowMany('sku', 'SKU', array_column($cards, 'sku'), null),
+            $this->rowMany('sku', 'Kod produktu', array_column($cards, 'sku'), null),
             $this->rowMany('manufacturer', 'Producent', array_column($cards, 'manufacturer'), null),
             $this->rowMany('name', 'Nazwa', array_column($cards, 'name'), null),
             $this->rowMany('price', 'Cena katalogowa', array_column($cards, 'catalog_price_net'), null),
@@ -103,7 +103,7 @@ final class ProductCompareService
         if ($requirement !== null) {
             $rows[] = $this->rowMany(
                 'match_siwz',
-                'Dopasowanie do SIWZ %',
+                'Ocena dopasowania do wymagania, %',
                 array_column($cards, 'siwz_score'),
                 null,
             );

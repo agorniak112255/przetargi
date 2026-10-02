@@ -36,14 +36,14 @@ final class TenderDocxOfferFiller
         $dom = new DOMDocument;
         $dom->preserveWhiteSpace = true;
         if (@$dom->loadXML($xml) === false) {
-            throw new RuntimeException('Nieprawidłowy szablon DOCX.');
+            throw new RuntimeException('Nie udało się odczytać formularza ofertowego — plik Word jest uszkodzony albo ma nieobsługiwany format.');
         }
         $xp = new DOMXPath($dom);
         $xp->registerNamespace('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main');
 
         $items = $tender->items()->with(['mainProduct', 'companionProduct'])->orderBy('line_no')->get();
         if ($items->isEmpty()) {
-            throw new RuntimeException('Brak pozycji w przetargu do wypełnienia oferty.');
+            throw new RuntimeException('Przetarg nie ma jeszcze pozycji — nie ma czym wypełnić formularza ofertowego.');
         }
 
         $filled = false;
@@ -62,7 +62,7 @@ final class TenderDocxOfferFiller
 
         if (! $filled) {
             throw new RuntimeException(
-                'W DOCX nie znaleziono tabeli ofertowej (nagłówki: L.p. / Przedmiot / Cena jednostkowa).'
+                'W formularzu ofertowym (plik Word) nie znaleziono tabeli do wpisania cen. Tabela powinna mieć kolumny z numerem pozycji, przedmiotem zamówienia i ceną jednostkową.'
             );
         }
 
@@ -74,13 +74,13 @@ final class TenderDocxOfferFiller
         }
         $outPath = $tmpDir.'/oferta_'.$tender->id.'_'.uniqid('', true).'.docx';
         if (! copy($template, $outPath)) {
-            throw new RuntimeException('Nie można skopiować szablonu DOCX.');
+            throw new RuntimeException('Nie udało się przygotować kopii formularza ofertowego. Spróbuj ponownie.');
         }
 
         $zip = new ZipArchive;
         if ($zip->open($outPath) !== true) {
             @unlink($outPath);
-            throw new RuntimeException('Nie można zapisać uzupełnionego DOCX.');
+            throw new RuntimeException('Nie udało się zapisać wypełnionego formularza ofertowego. Spróbuj ponownie.');
         }
         $zip->addFromString('word/document.xml', $dom->saveXML() ?: $xml);
         $zip->close();
@@ -99,11 +99,11 @@ final class TenderDocxOfferFiller
 
         if ($doc === null || ! is_string($doc->disk_path) || $doc->disk_path === '') {
             throw new RuntimeException(
-                'Brak zapisanego formularza DOCX. Wgraj formularz ofertowy w zakładce Dokumenty (tryb pełny lub Word).'
+                'Brak formularza ofertowego (plik Word). Dodaj go w sekcji Dokumenty.'
             );
         }
         if (! Storage::disk('local')->exists($doc->disk_path)) {
-            throw new RuntimeException('Plik formularza DOCX nie istnieje na dysku.');
+            throw new RuntimeException('Nie znaleziono pliku formularza ofertowego na serwerze. Dodaj go ponownie w sekcji Dokumenty.');
         }
 
         return Storage::disk('local')->path($doc->disk_path);

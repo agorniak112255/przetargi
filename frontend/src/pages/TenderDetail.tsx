@@ -30,16 +30,25 @@ import { isTenderWizardActive, setTenderWizardActive } from '../lib/tenderWizard
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
+/**
+ * Nazwa produktu z powodu dopasowania bez przedrostka backendu (ProductMatchService, TenderItemController).
+ * Stare wpisy w bazie mają wcześniejsze brzmienia przedrostków — obcinamy wszystkie.
+ */
+const EXTERNAL_HINT_PREFIX =
+  /^(?:Link zewnętrzny \(nie z katalogu SUPON\)|Własna propozycja \(nie z katalogu SUPON\)|Podpowiedź \/ zamiennik \(nie z katalogu\)|Podpowiedź z internetu \(spoza katalogu\)):\s*/u
+
+function externalHintTitle(label: string): string {
+  return label.replace(EXTERNAL_HINT_PREFIX, '')
+}
+
 function ExternalHintLink({ reason }: { reason: MatchReason }) {
   const href = reason.url
   if (!href) {
     return <span>{reason.label}</span>
   }
   const badge =
-    reason.code === 'custom_offer' ? 'Własna propozycja — nie z katalogu' : 'Link zewnętrzny — nie z katalogu'
-  const title = reason.label
-    .replace(/^Link zewnętrzny \(nie z katalogu SUPON\):\s*/u, '')
-    .replace(/^Własna propozycja \(nie z katalogu SUPON\):\s*/u, '')
+    reason.code === 'custom_offer' ? 'Wpisany ręcznie — spoza katalogu' : 'Znaleziony w internecie — spoza katalogu'
+  const title = externalHintTitle(reason.label)
   return (
     <a
       href={href}
@@ -85,7 +94,7 @@ function ExternalOfferBanner({
   return (
     <div className="max-w-[280px] rounded-md border-2 border-orange-500 bg-orange-100 px-2 py-1.5">
       <span className="inline-block rounded bg-orange-600 px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-white">
-        Link zewnętrzny — nie z katalogu
+        Produkt spoza katalogu
       </span>
       <p className="mt-1 text-[11px] font-semibold text-orange-950">{name}</p>
       {url ? (
@@ -124,7 +133,7 @@ function ExternalHints({
               onClick={() =>
                 onAddToOffer({
                   url: r.url!,
-                  title: r.label.replace(/^Link zewnętrzny \(nie z katalogu SUPON\):\s*/u, ''),
+                  title: externalHintTitle(r.label),
                 })
               }
               className="rounded bg-amber-700 px-2 py-0.5 text-[10px] font-medium text-white hover:bg-amber-800"
@@ -284,12 +293,19 @@ type History = {
   user?: { name: string }
 }
 
+type ConditionStatus = 'spelniamy' | 'nie_spelniamy'
+
 type Condition = {
   id: number
   category: string | null
   content: string
   sort_order: number
   source: string
+  tender_document_id?: number | null
+  /** null = jeszcze nie sprawdzony („do sprawdzenia”) */
+  status?: ConditionStatus | null
+  status_at?: string | null
+  status_user?: { id: number; name: string } | null
 }
 
 type DocMeta = {
@@ -370,6 +386,78 @@ const TAB_GROUPS: Array<{ label: string; tabs: Array<{ key: TenderTab; label: st
     ],
   },
 ]
+
+/** Jedno zdanie pod nagłówkiem sekcji pełnego widoku. Dokumenty, Warunki i Komentarze mają opis we własnej sekcji. */
+const SECTION_INTRO: Partial<Record<TenderTab, string>> = {
+  podsumowanie: 'Najważniejsze liczby oferty i lista rzeczy, które trzeba jeszcze uzupełnić.',
+  pozycje: 'Produkty, o które prosi zamawiający. Do każdej pozycji dobieramy nasz produkt i cenę.',
+  zamienniki:
+    'Inne produkty, które spełniają te same wymagania — często tańsze. Zatwierdza je osoba z uprawnieniem (zwykle kierownik).',
+  oferta: 'Zestawienie cen, które trafi do oferty.',
+  historia: 'Kto i kiedy co zmienił oraz na jakim etapie jest przetarg.',
+}
+
+const NARZUT_HINT =
+  'Narzut doliczany do ceny zakupu. Przy 18% produkt kupiony za 100 zł ma w ofercie 118 zł (marża około 15%). ' +
+  'Zmiana narzutu przelicza proporcjonalnie wszystkie ceny w ofercie, także poprawione ręcznie.'
+
+const MARGIN_HINT = 'Ile procent ceny w ofercie zostaje po odjęciu aktualnej ceny zakupu.'
+
+const MATCH_AVERAGE_HINT =
+  'Szacunek, jak bardzo produkty pasują do opisu zamawiającego — średnia z pozycji ocenionych automatycznie; ' +
+  'produkty wybrane ręcznie nie mają oceny. Nie zastępuje sprawdzenia karty produktu.'
+
+/** Tryby odczytu dokumentu (wartości `mode` jak w API). */
+const DOC_MODE_LABEL: Record<string, string> = {
+  simple: 'Tylko tekst',
+  ai: 'Odczyt z podglądem',
+  full: 'Odczyt z podglądem i zapis pliku',
+}
+
+/** Skąd jest warunek (`source` w tender_conditions). */
+const CONDITION_SOURCE_LABEL: Record<string, string> = {
+  manual: 'dodany ręcznie',
+  document: 'z dokumentacji przetargu',
+}
+
+/** Kategorie warunków (odczyt dokumentu: termin|dostawa|gwarancja|certyfikat|platnosc|it|inne). Kolejność = kolejność grup. */
+const CONDITION_CATEGORY_LABEL: Record<string, string> = {
+  termin: 'Terminy',
+  dostawa: 'Dostawa',
+  gwarancja: 'Gwarancja',
+  certyfikat: 'Certyfikaty i normy',
+  platnosc: 'Płatności',
+  it: 'Faktury i systemy elektroniczne',
+  inne: 'Inne',
+}
+
+function conditionCategoryLabel(category: string | null): string {
+  // „a|b|c” = przepisana lista wariantów ze schematu odczytu (wpisy sprzed 02.10.2026), nie kategoria
+  if (!category || category.includes('|')) return 'Bez kategorii'
+  const known = CONDITION_CATEGORY_LABEL[category.toLowerCase()]
+  return known ?? category.charAt(0).toUpperCase() + category.slice(1)
+}
+
+const CONDITION_STATUS_OPTIONS: Array<{ value: ConditionStatus | null; label: string; active: string }> = [
+  { value: 'spelniamy', label: 'Spełniamy', active: 'border-emerald-600 bg-emerald-600 text-white' },
+  { value: null, label: 'Do sprawdzenia', active: 'border-amber-500 bg-amber-500 text-white' },
+  { value: 'nie_spelniamy', label: 'Nie spełniamy', active: 'border-red-600 bg-red-600 text-white' },
+]
+
+/** Typ zamiennika (enum `type` w product_substitutes). */
+const SUBSTITUTE_TYPE_LABEL: Record<string, string> = {
+  preferowany: 'Preferowany',
+  tanszy: 'Tańszy',
+  premium: 'Droższy, wyższej klasy',
+  awaryjny: 'Awaryjny',
+}
+
+/** Decyzja o zamienniku (`approval_status`; wartości wysyłane do API bez zmian). */
+const SUBSTITUTE_STATUS_LABEL: Record<string, string> = {
+  oczekuje: 'Do zatwierdzenia',
+  zatwierdzony: 'Zatwierdzony',
+  odrzucony: 'Odrzucony',
+}
 
 /** Dni do terminu liczone w kalendarzu lokalnym (0 = dziś, ujemne = po terminie); null bez daty. */
 function daysUntil(day: string): number | null {
@@ -562,9 +650,10 @@ function newMatchRunId(): string {
 
 function formatMatchEta(seconds: number): string {
   if (seconds < 60) {
-    return `ok. ${seconds} s`
+    return `około ${seconds} ${seconds === 1 ? 'sekundy' : 'sekund'}`
   }
-  return `ok. ${Math.ceil(seconds / 60)} min`
+  const minutes = Math.ceil(seconds / 60)
+  return `około ${minutes} ${minutes === 1 ? 'minuty' : 'minut'}`
 }
 
 function loadMatchReport(tenderId: string): MatchReport | null {
@@ -612,9 +701,9 @@ const actionLabel: Record<string, string> = {
   updated: 'Zmieniono dane przetargu',
   status_changed: 'Zmiana statusu',
   item_updated: 'Zmiana pozycji',
-  item_bulk_updated: 'Zapis zbiorczy pozycji',
+  item_bulk_updated: 'Zapisano kilka pozycji naraz',
   comment_added: 'Dodano komentarz',
-  invitation_added: 'Zaproszono użytkownika',
+  invitation_added: 'Zaproszono osobę do przetargu',
   invitation_removed: 'Usunięto zaproszenie',
 }
 
@@ -643,12 +732,12 @@ function formatActivityMeta(meta: Record<string, unknown> | null | undefined): s
     ] as const) {
       if (!sameVal(before[key], after[key])) {
         const labels: Record<string, string> = {
-          offer_price: 'cena',
-          companion_offer_price: 'cena 2',
+          offer_price: 'cena w ofercie',
+          companion_offer_price: 'cena drugiego produktu kompletu',
           quantity: 'ilość',
           main_product_id: 'produkt',
-          companion_product_id: 'produkt 2',
-          ai_match_percent: 'AI %',
+          companion_product_id: 'drugi produkt kompletu',
+          ai_match_percent: 'ocena dopasowania, %',
         }
         parts.push(`${labels[key] ?? key}: ${String(before[key] ?? '—')} → ${String(after[key] ?? '—')}`)
       }
@@ -656,7 +745,7 @@ function formatActivityMeta(meta: Record<string, unknown> | null | undefined): s
     return parts.length > 0 ? parts.join('; ') : 'zapis bez zmiany wartości'
   }
   if (typeof meta.from === 'string' && typeof meta.to === 'string') {
-    return `${meta.from} → ${meta.to}${meta.note ? ` (${String(meta.note)})` : ''}`
+    return `${TENDER_STATUS_LABEL[meta.from] ?? meta.from} → ${TENDER_STATUS_LABEL[meta.to] ?? meta.to}${meta.note ? ` (${String(meta.note)})` : ''}`
   }
   if (typeof meta.user_name === 'string') {
     return `${meta.user_name}${meta.user_email ? ` <${String(meta.user_email)}>` : ''}`
@@ -716,6 +805,7 @@ function TenderDetailView() {
   const [replaceItems, setReplaceItems] = useState(false)
   const [replaceConditions, setReplaceConditions] = useState(false)
   const [newCondition, setNewCondition] = useState('')
+  const [newConditionCategory, setNewConditionCategory] = useState('inne')
   const [docStatus, setDocStatus] = useState('')
   const itemDraftsRef = useRef<Map<number, ItemDraft>>(new Map())
   const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>(null)
@@ -806,7 +896,7 @@ function TenderDetailView() {
       setComments(Array.isArray(com.data) ? com.data : [])
       setInvitations(Array.isArray(inv.data) ? inv.data : [])
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Nie udało się wczytać historii/komentarzy')
+      setErr(e instanceof Error ? e.message : 'Nie udało się wczytać historii, komentarzy i zaproszeń.')
     }
   }, [id])
 
@@ -915,7 +1005,7 @@ function TenderDetailView() {
       })
       await load()
       await loadMeta()
-      setMsg('Zapisano pozycję — wpis w zakładce Historia.')
+      setMsg('Zapisano pozycję — zmiana jest w sekcji „Historia i statusy”.')
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zapisu')
     } finally {
@@ -942,7 +1032,7 @@ function TenderDetailView() {
       })
       await load()
       await loadMeta()
-      setMsg(`Zapisano całość: ${res.updated} pozycji — zobacz zakładkę Historia.`)
+      setMsg(`Zapisano wszystkie zmiany: ${res.updated} pozycji — szczegóły w sekcji „Historia i statusy”.`)
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zapisu całości')
     } finally {
@@ -970,7 +1060,7 @@ function TenderDetailView() {
         body: JSON.stringify({ dry_run: true, min_save_percent: 3 }),
       })
       if ((res.candidates_count ?? 0) === 0) {
-        setMsg('Brak tańszych zamienników (≥3% po upuście) na pozycjach.')
+        setMsg('Nie ma tańszych zamienników — żaden nie jest co najmniej 3% taniej (po upuście).')
         setCheaperPreview(null)
         return
       }
@@ -1014,13 +1104,17 @@ function TenderDetailView() {
     setMsg('')
     setBusy(true)
     const modeLabel =
-      docMode === 'simple' ? 'odczyt tekstu' : docMode === 'ai' ? 'analiza AI' : 'analiza AI + archiwum'
+      docMode === 'simple'
+        ? 'odczyt samego tekstu'
+        : docMode === 'ai'
+          ? 'odczyt z podglądem'
+          : 'odczyt z podglądem i zapis pliku'
     setDocStatus(`Wybrano: ${file.name} — trwa ${modeLabel}…`)
     try {
       const targets: string[] = []
       if (docTargets.items) targets.push('items')
       if (docTargets.conditions) targets.push('conditions')
-      if (targets.length === 0) throw new Error('Zaznacz pozycje i/lub warunki.')
+      if (targets.length === 0) throw new Error('Zaznacz, co odczytać z pliku: pozycje, warunki albo jedno i drugie.')
       const fd = new FormData()
       fd.append('file', file)
       fd.append('mode', docMode)
@@ -1042,9 +1136,9 @@ function TenderDetailView() {
         conditions: (res.conditions ?? []).map((c) => ({ ...c, selected: c.selected !== false })),
       })
       setDocStatus(
-        `Gotowe: ${file.name} — ${res.items_count} pozycji, ${res.conditions_count} warunków. Sprawdź numer/nazwę/cenę i zaciągnij.`,
+        `Gotowe: ${file.name} — ${res.items_count} pozycji, ${res.conditions_count} warunków. Sprawdź numer, nazwę i cenę, potem kliknij „Dodaj do przetargu”.`,
       )
-      setMsg('Podgląd gotowy — nic nie trafiło jeszcze do pozycji. Zatwierdź poniżej.')
+      setMsg('Podgląd gotowy — nic nie zostało jeszcze dodane do przetargu. Sprawdź listę poniżej.')
       // nie przeładowuj listy w trakcie podglądu — chyba że plik trafił do archiwum: tryb pełny albo Word
       // (backend zapisuje Word jako formularz ofertowy także w trybie AI)
       if (docMode === 'full' || /\.docx?$/i.test(file.name)) await load()
@@ -1053,7 +1147,7 @@ function TenderDetailView() {
       })
     } catch (e) {
       setDocStatus(`Błąd przy pliku ${file.name}.`)
-      setErr(e instanceof Error ? e.message : 'Błąd analizy dokumentu')
+      setErr(e instanceof Error ? e.message : 'Nie udało się odczytać pliku')
     } finally {
       setBusy(false)
     }
@@ -1062,7 +1156,7 @@ function TenderDetailView() {
   async function openDocumentPreview(docId: number) {
     setErr('')
     setBusy(true)
-    setDocStatus('Ładowanie podglądu z archiwum…')
+    setDocStatus('Wczytuję podgląd zapisanego pliku…')
     try {
       const res = await api<{
         id: number
@@ -1081,7 +1175,7 @@ function TenderDetailView() {
         selected: c.selected !== false,
       }))
       if (items.length === 0 && conditions.length === 0) {
-        setDocStatus('Brak zapisanej analizy — użyj „Analizuj ponownie”.')
+        setDocStatus('Ten plik nie ma zapisanego odczytu — kliknij „Odczytaj ponownie”.')
         return
       }
       setDocPreview({
@@ -1091,7 +1185,7 @@ function TenderDetailView() {
         conditions,
       })
       setDocStatus(
-        `Podgląd z archiwum: ${items.length} pozycji, ${conditions.length} warunków — zatwierdź, aby zaciągnąć.`,
+        `Podgląd zapisanego pliku: ${items.length} pozycji, ${conditions.length} warunków — sprawdź i kliknij „Dodaj do przetargu”.`,
       )
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd podglądu')
@@ -1129,9 +1223,9 @@ function TenderDetailView() {
         await load()
         setDocPreview(null)
         setDocStatus(
-          `Zaciągnięto do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`,
+          `Dodano do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`,
         )
-        setMsg(`Zaciągnięto: ${res.items_created} pozycji, ${res.conditions_created} warunków.`)
+        setMsg(`Dodano do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`)
         return
       }
       const items = docPreview.items
@@ -1165,9 +1259,9 @@ function TenderDetailView() {
       await load()
       setDocPreview(null)
       setDocStatus(
-        `Zaciągnięto do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`,
+        `Dodano do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`,
       )
-      setMsg(`Zaciągnięto: ${res.items_created} pozycji, ${res.conditions_created} warunków.`)
+      setMsg(`Dodano do przetargu: ${res.items_created} pozycji, ${res.conditions_created} warunków.`)
       if (items.length) setTab('pozycje')
       else setTab('warunki')
     } catch (e) {
@@ -1200,9 +1294,9 @@ function TenderDetailView() {
         conditions: (res.conditions ?? []).map((c) => ({ ...c, selected: true })),
       })
       setTab('dokumenty')
-      setMsg('Ponowna analiza gotowa — zatwierdź zaznaczone.')
+      setMsg('Plik odczytany ponownie — sprawdź zaznaczone i dodaj do przetargu.')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Błąd ponownej analizy')
+      setErr(e instanceof Error ? e.message : 'Nie udało się ponownie odczytać pliku')
     } finally {
       setBusy(false)
     }
@@ -1242,13 +1336,29 @@ function TenderDetailView() {
     try {
       await api(`/tenders/${id}/conditions`, {
         method: 'POST',
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, category: newConditionCategory }),
       })
       setNewCondition('')
       await load()
       setMsg('Dodano warunek.')
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zapisu warunku')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function setConditionStatus(condId: number, status: ConditionStatus | null) {
+    setBusy(true)
+    setErr('')
+    try {
+      await api(`/tenders/${id}/conditions/${condId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      })
+      await load()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Nie udało się zapisać stanu warunku')
     } finally {
       setBusy(false)
     }
@@ -1271,11 +1381,11 @@ function TenderDetailView() {
     setMsg('')
     const needsNote = status === 'odrzucony' || status === 'wycena'
     if (needsNote && data?.tender.status.startsWith('akceptacja') && transitionNote.trim().length < 5) {
-      setErr('Wymagana notatka (min. 5 znaków) przy odrzuceniu lub cofnięciu z akceptacji.')
+      setErr('Przy odrzuceniu albo cofnięciu z akceptacji wpisz notatkę — co najmniej 5 znaków.')
       return false
     }
     if (status === 'odrzucony' && transitionNote.trim().length < 5) {
-      setErr('Wymagana notatka (min. 5 znaków) przy odrzuceniu.')
+      setErr('Przy odrzuceniu wpisz notatkę — co najmniej 5 znaków.')
       return false
     }
     setBusy(true)
@@ -1290,7 +1400,7 @@ function TenderDetailView() {
       setMsg(`Status: ${TENDER_STATUS_LABEL[status] ?? status}`)
       return true
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Błąd statusu')
+      setErr(e instanceof Error ? e.message : 'Nie udało się zmienić statusu')
       return false
     } finally {
       setBusy(false)
@@ -1318,7 +1428,7 @@ function TenderDetailView() {
   async function saveTargetMargin() {
     const next = Number(String(marginEdit).replace(',', '.'))
     if (!Number.isFinite(next) || next < 0 || next > 500) {
-      setErr('Marża musi być liczbą od 0 do 500.')
+      setErr('Narzut musi być liczbą od 0 do 500.')
       return
     }
     setBusy(true)
@@ -1330,9 +1440,9 @@ function TenderDetailView() {
       })
       await load()
       await loadMeta()
-      setMsg('Zapisano marżę — ceny pozycji przeliczone.')
+      setMsg('Zapisano narzut — ceny w ofercie przeliczone.')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Błąd zapisu marży')
+      setErr(e instanceof Error ? e.message : 'Nie udało się zapisać narzutu')
     } finally {
       setBusy(false)
     }
@@ -1379,8 +1489,8 @@ function TenderDetailView() {
       await loadMeta()
       setMsg(
         res.email_sent
-          ? 'Zaproszono użytkownika i wysłano e-mail.'
-          : 'Zaproszono użytkownika (e-mail nie wyszedł — sprawdź SMTP).',
+          ? 'Zaproszono osobę i wysłano jej e-mail.'
+          : 'Zaproszono osobę, ale e-mail nie został wysłany — poproś administratora o sprawdzenie ustawień poczty.',
       )
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zaproszenia')
@@ -1415,7 +1525,7 @@ function TenderDetailView() {
       await load()
       setMsg('Zaktualizowano zamiennik.')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Błąd akceptacji')
+      setErr(e instanceof Error ? e.message : 'Nie udało się zapisać decyzji o zamienniku')
     } finally {
       setBusy(false)
     }
@@ -1512,10 +1622,10 @@ function TenderDetailView() {
             // serwer liczy pozycję dalej (ignore_user_abort) i zapisze wynik — nie ma go tylko w raporcie
             finishedInBackground += 1
             errors.push(
-              `Pozycja przekroczyła ${Math.round(MATCH_ITEM_ABORT_MS / 60_000)} min — serwer liczy ją dalej w tle; odśwież stronę za kilka minut.`,
+              `Pozycja jest sprawdzana dłużej niż ${Math.round(MATCH_ITEM_ABORT_MS / 60_000)} minut — serwer kończy ją w tle; odśwież stronę za kilka minut.`,
             )
           } else {
-            errors.push(e instanceof Error ? e.message : 'Błąd dopasowania')
+            errors.push(e instanceof Error ? e.message : 'Nie udało się dopasować produktów')
           }
         } finally {
           window.clearTimeout(abortTimer)
@@ -1562,8 +1672,8 @@ function TenderDetailView() {
       setShowAiChanges(report.changed > 0)
       setMsg(
         report.changed > 0
-          ? `Zapisano od razu ${report.changed} z ${report.processed} pozycji (nie trzeba klikać Zapisz). Poniżej tylko te zmienione.`
-          : `Dopasowanie zakończone: brak zmian w ofercie (${report.processed} przerobionych, ${report.unchanged} bez zmiany, ${report.skipped_custom} własnych, ${report.no_match} bez produktu).`,
+          ? `Dopasowanie zmieniło ${report.changed} z ${report.processed} pozycji i od razu je zapisało (nie trzeba klikać „Zapisz”). Poniżej widać tylko zmienione pozycje.`
+          : `Dopasowanie zakończone, oferta bez zmian (sprawdzono ${report.processed} pozycji: ${report.unchanged} bez zmiany, ${report.skipped_custom} wpisanych ręcznie, ${report.no_match} bez pasującego produktu).`,
       )
       setTab('pozycje')
       // Awaria dostawcy modelu wygląda na liście jak spadek jakości: karty zostają, ale procenty lecą
@@ -1571,16 +1681,16 @@ function TenderDetailView() {
       const modelFailed = report.model_failed ?? 0
       const modelWarning =
         modelFailed > 0
-          ? `Model nie odpowiedział przy ${modelFailed} z ${report.processed} pozycji (limit zapytań albo błąd API). ` +
-            'Te pozycje nie mają świeżej oceny — zostały z poprzednią kartą (najwyżej 70%) albo czekają bez produktu. ' +
-            'Zmniejsz „Ile zapytań AI naraz” w Ustawieniach AI i uruchom dopasowanie ponownie.'
+          ? `Nie udało się ocenić ${modelFailed} z ${report.processed} pozycji — uruchom dopasowanie ponownie. ` +
+            'Te pozycje zostały z poprzednim produktem (ocena najwyżej 70%) albo czekają bez produktu. ' +
+            'Jeśli to się powtarza, administrator może zmniejszyć liczbę zapytań naraz w Ustawieniach AI.'
           : ''
-      const batchWarning = errors.length > 0 ? `Część pozycji nie przeszła (${errors.length}): ${errors[0]}` : ''
+      const batchWarning = errors.length > 0 ? `Nie udało się dopasować części pozycji (${errors.length}): ${errors[0]}` : ''
       if (modelWarning !== '' || batchWarning !== '') {
         setErr([modelWarning, batchWarning].filter((part) => part !== '').join(' '))
       }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Błąd dopasowania')
+      setErr(e instanceof Error ? e.message : 'Nie udało się dopasować produktów')
     } finally {
       setBusy(false)
       setMatchBusy(false)
@@ -1608,10 +1718,14 @@ function TenderDetailView() {
       const ext = kind === 'excel' ? 'xlsx' : kind
       await downloadFile(`/tenders/${id}/export/${kind}`, `oferta.${ext}`)
       setMsg(
-        kind === 'excel' ? 'Pobrano Excel.' : kind === 'pdf' ? 'Pobrano PDF.' : 'Pobrano uzupełniony formularz DOCX.',
+        kind === 'excel'
+          ? 'Pobrano ofertę w pliku Excel.'
+          : kind === 'pdf'
+            ? 'Pobrano ofertę w pliku PDF.'
+            : 'Pobrano formularz ofertowy z cenami (plik Word).',
       )
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Błąd eksportu')
+      setErr(e instanceof Error ? e.message : 'Nie udało się pobrać pliku oferty')
     } finally {
       setBusy(false)
     }
@@ -1700,7 +1814,8 @@ function TenderDetailView() {
     setTab('podsumowanie')
     setWizardActive(false)
   }
-  const docModeLabel = docMode === 'simple' ? 'sam tekst' : docMode === 'ai' ? 'AI z podglądem' : 'AI + plik w archiwum'
+  const docModeLabel =
+    docMode === 'simple' ? 'tylko tekst' : docMode === 'ai' ? 'odczyt z podglądem' : 'odczyt z podglądem i zapis pliku'
   const docTargetsLabel =
     [docTargets.items ? 'pozycje' : null, docTargets.conditions ? 'warunki' : null].filter(Boolean).join(' i ') ||
     'nic nie zaznaczono'
@@ -1717,11 +1832,11 @@ function TenderDetailView() {
       {matchBusy && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/55 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-4 text-sm shadow-xl">
-            <p className="font-semibold text-slate-900">Trwa dopasowanie AI…</p>
+            <p className="font-semibold text-slate-900">Trwa dopasowywanie produktów…</p>
             <p className="mt-1 text-xs text-slate-600">
-              Nie odświeżaj strony. Model dostaje naraz do{' '}
+              Nie odświeżaj strony. Sprawdzamy naraz do{' '}
               {matchParallelItems(coverage?.thresholds.match_concurrency)} pozycji — gdy jedna się skończy, od razu
-              rusza następna.
+              zaczyna się następna.
             </p>
             {(() => {
               const total = Math.max(matchProgress?.total ?? 0, 0)
@@ -1749,20 +1864,21 @@ function TenderDetailView() {
                     />
                   </div>
                   <p className="mt-2 text-xs text-slate-600">
-                    Gotowe: {done} / {total || '…'} · w toku: {inFlight.length}
+                    Gotowe: {done} z {total || '…'} · sprawdzane teraz: {inFlight.length}
                   </p>
                   {inFlightLines.length > 0 && (
                     <p className="mt-2 truncate text-xs text-slate-600">
-                      Teraz: poz. {inFlightLines.join(', ')}
+                      Teraz sprawdzane pozycje: {inFlightLines.join(', ')}
                     </p>
                   )}
                   {onlyTailLeft && (
                     <p className="mt-2 text-xs text-amber-800">
-                      Ostatnie pozycje czekają na model — to bywa 2–4 min.
+                      Ostatnie pozycje są jeszcze sprawdzane — to bywa 2–4 minuty.
                     </p>
                   )}
                   <p className="mt-2 font-mono text-sm text-violet-800">
-                    {matchElapsed} s{eta ? ` · zostało ${eta}` : ''}
+                    Upłynęło {Math.floor(matchElapsed / 60)}:{String(matchElapsed % 60).padStart(2, '0')}
+                    {eta ? ` · zostało ${eta}` : ''}
                   </p>
                 </>
               )
@@ -1779,42 +1895,42 @@ function TenderDetailView() {
         <div className="mb-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs text-violet-950">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <strong>Ostatnie dopasowanie AI</strong>
+              <strong>Ostatnie dopasowanie produktów</strong>
               <span className="ml-2 text-violet-800/70">
                 {new Date(matchReport.at).toLocaleString('pl-PL')}
               </span>
               <p className="mt-1">
-                Przerobiono {matchReport.processed} · zmieniono {matchReport.changed} · bez zmiany{' '}
-                {matchReport.unchanged} · zdjęto produkt {matchReport.cleared} · własne pominięte{' '}
-                {matchReport.skipped_custom} · bez produktu {matchReport.no_match}
+                Sprawdzono pozycji: {matchReport.processed} · zmieniono: {matchReport.changed} · bez zmiany:{' '}
+                {matchReport.unchanged} · usunięto produkt: {matchReport.cleared} · pominięto wpisane ręcznie:{' '}
+                {matchReport.skipped_custom} · bez pasującego produktu: {matchReport.no_match}
                 {(matchReport.model_failed ?? matchReport.model_unavailable ?? 0) > 0 && (
                   <>
                     {' '}
                     ·{' '}
                     <strong>
-                      model nie odpowiedział {matchReport.model_failed ?? matchReport.model_unavailable}
+                      nie udało się ocenić: {matchReport.model_failed ?? matchReport.model_unavailable}
                     </strong>{' '}
-                    (pozycja czeka albo została z poprzednią kartą, najwyżej 70% — uruchom dopasowanie
-                    ponownie)
+                    (te pozycje czekają albo zostały z poprzednim produktem, ocena najwyżej 70% — uruchom
+                    dopasowanie ponownie)
                   </>
                 )}
                 {(matchReport.left_as_is ?? 0) > 0 && (
                   <>
                     {' '}
-                    · pozostawiono {matchReport.left_as_is} (tryb „tylko puste”: produkt ≥ progu albo
-                    własna nazwa — nie wysłano do modelu)
+                    · pominięto: {matchReport.left_as_is} (dopasowanie tylko pustych pozycji — te mają już
+                    dobrze oceniony produkt albo produkt wpisany ręcznie)
                   </>
                 )}
               </p>
               {(matchReport.finished_in_background ?? 0) > 0 && (
                 <p className="mt-1 text-amber-800">
-                  {matchReport.finished_in_background} poz. przekroczyło limit czasu — serwer liczy je dalej w tle
-                  i zapisze wynik w ofercie, ale liczby wyżej ich nie obejmują.
+                  Pozycje sprawdzane dłużej niż limit czasu: {matchReport.finished_in_background} — serwer kończy je
+                  w tle i zapisze wynik w ofercie, ale liczby wyżej ich nie obejmują.
                 </p>
               )}
               <p className="mt-1 text-violet-800/80">
-                AI zapisuje produkt od razu. <strong>Zapisz</strong> / <strong>Zapisz całość</strong> jest
-                tylko do ręcznych poprawek (cena, ilość).
+                Dobrane produkty są zapisane od razu. Przyciski <strong>Zapisz</strong> i{' '}
+                <strong>Zapisz całość</strong> służą tylko do ręcznych poprawek (cena, ilość).
               </p>
             </div>
             <div className="flex flex-wrap gap-1">
@@ -1863,11 +1979,11 @@ function TenderDetailView() {
                     <button
                       type="button"
                       onClick={() => openMatchChange(c)}
-                      title="Pokaż pozycję i produkt zapisany przez AI"
+                      title="Pokaż pozycję i produkt zapisany przy dopasowaniu"
                       className="max-w-full text-left font-mono text-violet-900 underline decoration-violet-400 hover:text-violet-950"
                     >
-                      Poz. {c.line_no}: {c.from_sku ?? '—'} → {c.to_sku ?? 'brak'}
-                      {c.action === 'cleared' ? ' (zdjęto)' : ''}
+                      Pozycja {c.line_no}: {c.from_sku ?? '—'} → {c.to_sku ?? 'brak'}
+                      {c.action === 'cleared' ? ' (usunięto produkt)' : ''}
                       {name ? ` · ${name}` : ''}
                     </button>
                   </li>
@@ -1891,26 +2007,32 @@ function TenderDetailView() {
         >
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <strong>
-              Pokrycie oferty:{' '}
-              {coverage.ready ? 'gotowa do akceptacji' : 'wymaga uzupełnienia'}
+              Stan oferty:{' '}
+              {coverage.ready ? 'gotowa do akceptacji' : 'trzeba uzupełnić'}
             </strong>
             <span className="text-slate-600">
-              {coverage.with_product}/{coverage.total} z produktem
+              {coverage.with_product} z {coverage.total} pozycji ma produkt
             </span>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {(
               [
-                ['without_product', `Bez produktu (${coverage.without_product})`],
-                ['without_price', `Bez ceny (${coverage.without_price})`],
-                ['weak_match', `Słabe AI (${coverage.weak_match})`],
-                ['low_margin', `Niska marża (${coverage.low_margin})`],
+                ['without_product', `Bez produktu: ${coverage.without_product}`],
+                ['without_price', `Bez ceny: ${coverage.without_price}`],
+                ['weak_match', `Słabe dopasowanie: ${coverage.weak_match}`],
+                [
+                  'low_margin',
+                  coverage.thresholds?.min_margin_percent != null
+                    ? `Niska marża (poniżej ${coverage.thresholds.min_margin_percent}%): ${coverage.low_margin}`
+                    : `Niska marża: ${coverage.low_margin}`,
+                ],
               ] as const
             ).map(([key, label]) => (
               <button
                 key={key}
                 type="button"
                 disabled={coverage[key] === 0}
+                title={key === 'weak_match' ? 'Ocena poniżej progu albo brak oceny.' : undefined}
                 onClick={() => {
                   setCoverageFilter((f) => (f === key ? null : key))
                   setTab('pozycje')
@@ -1928,7 +2050,7 @@ function TenderDetailView() {
             ))}
             {coverage.substitutes_pending > 0 && (
               <span className="rounded bg-violet-100 px-2 py-1 text-violet-800">
-                Zamienniki oczekujące: {coverage.substitutes_pending}
+                Zamienniki do zatwierdzenia: {coverage.substitutes_pending}
               </span>
             )}
             {(coverageFilter || itemQuery.trim() !== '') && (
@@ -1962,24 +2084,24 @@ function TenderDetailView() {
                 }
                 title={
                   listNarrowed
-                    ? `Tylko puste spośród ${filteredItems.length} pozycji z filtra`
-                    : 'Tylko pozycje bez produktu — zapisanych nie rusza'
+                    ? `Tylko pozycje bez produktu albo ze słabym dopasowaniem spośród ${filteredItems.length} pozycji z filtra`
+                    : 'Tylko pozycje bez produktu albo ze słabym dopasowaniem — pozostałych nie zmienia'
                 }
                 className="rounded bg-violet-600 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
               >
-                Dopasuj AI (puste)
+                Dopasuj produkty do pustych pozycji
               </button>
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => {
                   if (listNarrowed && filteredItems.length === 0) {
-                    setErr('Brak pozycji w filtrze.')
+                    setErr('Filtr nie pokazuje żadnej pozycji.')
                     return
                   }
                   const confirmMsg = listNarrowed
-                    ? `Ponownie przeszukać ${filteredItems.length} pozycji z filtra? Ręczne własne oferty zostaną zachowane; linki z AI Internet wrócą do wyszukiwania w katalogu.`
-                    : 'Ponownie przeszukać wszystkie pozycje (także te z produktem z katalogu)? Ręczne własne oferty zostaną zachowane; linki z AI Internet wrócą do wyszukiwania w katalogu.'
+                    ? `Dopasować od nowa ${filteredItems.length} pozycji z filtra? Produkty wpisane ręcznie zostaną. Linki znalezione w internecie zostaną zastąpione produktami z katalogu.`
+                    : 'Dopasować od nowa wszystkie pozycje (także te, które mają już produkt z katalogu)? Produkty wpisane ręcznie zostaną. Linki znalezione w internecie zostaną zastąpione produktami z katalogu.'
                   if (!window.confirm(confirmMsg)) {
                     return
                   }
@@ -1987,18 +2109,20 @@ function TenderDetailView() {
                 }}
                 title={
                   listNarrowed
-                    ? `Ponowne dopasowanie ${filteredItems.length} pozycji z filtra`
-                    : 'Ponowne dopasowanie całej oferty — nadpisze produkty z katalogu'
+                    ? `Dopasuje od nowa ${filteredItems.length} pozycji widocznych w filtrze`
+                    : 'Dopasuje od nowa wszystkie pozycje — może zmienić już wybrane produkty z katalogu'
                 }
                 className="rounded bg-violet-800 px-4 py-2 text-xs font-semibold text-white hover:bg-violet-900 disabled:opacity-50"
               >
-                Dopasuj AI ({listNarrowed ? `filtr ${filteredItems.length}` : 'wszystkie'})
+                {listNarrowed
+                  ? `Dopasuj od nowa: ${filteredItems.length} pozycji z filtra`
+                  : 'Dopasuj od nowa: wszystkie pozycje'}
               </button>
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => void previewCheaperSubstitutes()}
-                title="Podgląd i zastosowanie najtańszych zamienników (≥3% taniej po upuście)"
+                title="Pokaże zamienniki co najmniej 3% taniej (po upuście) i zapyta, czy je zastosować"
                 className="rounded bg-amber-500 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-50"
               >
                 Zastosuj tańsze zamienniki
@@ -2027,7 +2151,7 @@ function TenderDetailView() {
               <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
                 {cheaperPreview.candidates.map((c) => (
                   <li key={c.item_id} className="font-mono text-[11px]">
-                    Poz. {c.line_no}: {c.from_sku ?? '—'} → {c.to_sku} (−{c.save_percent}% · zakup{' '}
+                    Pozycja {c.line_no}: {c.from_sku ?? '—'} → {c.to_sku} (taniej o {c.save_percent}% · cena zakupu{' '}
                     {Number(c.purchase_price).toLocaleString('pl-PL', {
                       minimumFractionDigits: 2,
                       maximumFractionDigits: 2,
@@ -2062,12 +2186,12 @@ function TenderDetailView() {
                 type="search"
                 value={itemQuery}
                 onChange={(e) => setItemQuery(e.target.value)}
-                placeholder="Szukaj w SIWZ / produkcie głównym…"
+                placeholder="Szukaj w wymaganiach zamawiającego i wybranych produktach…"
                 className="min-w-[240px] flex-1 rounded border border-slate-300 px-2 py-1.5 text-xs"
               />
               <span className="text-[11px] text-slate-500">
                 {listFiltered
-                  ? `${filteredItems.length} / ${tender.items.length} pozycji`
+                  ? `${filteredItems.length} z ${tender.items.length} pozycji`
                   : `${tender.items.length} pozycji`}
               </span>
             </div>
@@ -2112,7 +2236,7 @@ function TenderDetailView() {
                   />
                 ))}
                 {filteredItems.length === 0 && (
-                  <p className="p-3 text-slate-400">Brak pozycji dla wybranego filtra.</p>
+                  <p className="p-3 text-slate-400">Żadna pozycja nie pasuje do filtra.</p>
                 )}
             </div>
           </div>
@@ -2131,81 +2255,158 @@ function TenderDetailView() {
     </div>
   )
 
+  const conditionsChecked = conditions.filter((c) => c.status != null).length
+  const conditionsToCheck = conditions.length - conditionsChecked
+  const conditionsNotMet = conditions.filter((c) => c.status === 'nie_spelniamy').length
+  const conditionGroups = (() => {
+    const order = Object.keys(CONDITION_CATEGORY_LABEL)
+    const groups = new Map<string, Condition[]>()
+    for (const c of conditions) {
+      const label = conditionCategoryLabel(c.category)
+      groups.set(label, [...(groups.get(label) ?? []), c])
+    }
+    const rank = (label: string) => {
+      const i = order.findIndex((k) => CONDITION_CATEGORY_LABEL[k] === label)
+      return i < 0 ? order.length - 0.5 : i
+    }
+    return [...groups.entries()].sort((a, b) => rank(a[0]) - rank(b[0]))
+  })()
+
   const conditionsSection = (
-        <div className="space-y-3 rounded-xl bg-white p-4 shadow-sm">
-          <p className="text-xs text-slate-500">
-            Warunki udziału / IT z dokumentów SIWZ (terminy, certyfikaty, wymagania systemowe).
-          </p>
-          {can_edit && (
-            <div className="flex gap-2">
-              <input
-                className="flex-1 rounded border border-slate-300 px-2 py-1.5 text-xs"
-                placeholder="Nowy warunek…"
-                value={newCondition}
-                onChange={(e) => setNewCondition(e.target.value)}
-              />
-              <button
-                type="button"
-                disabled={busy || !newCondition.trim()}
-                onClick={() => void addCondition()}
-                className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
-              >
-                Dodaj
-              </button>
-            </div>
-          )}
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b bg-slate-50">
-                <th className="p-2">Kategoria</th>
-                <th className="p-2">Treść</th>
-                <th className="p-2">Źródło</th>
-                <th className="p-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(tender.conditions ?? []).map((c) => (
-                <tr key={c.id} className="border-b align-top">
-                  <td className="p-2 text-slate-500">{c.category ?? '—'}</td>
-                  <td className="p-2">{c.content}</td>
-                  <td className="p-2 text-slate-400">{c.source}</td>
-                  <td className="p-2">
-                    {can_edit && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        className="text-[10px] text-red-600"
-                        onClick={() => void deleteCondition(c.id)}
-                      >
-                        Usuń
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {(tender.conditions ?? []).length === 0 && (
-                <tr>
-                  <td colSpan={4} className="p-3 text-slate-400">
-                    Brak warunków — powstają z dokumentu SIWZ (Dokumenty) albo dodaj je ręcznie powyżej.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+    <div className="space-y-3 rounded-xl bg-white p-4 text-xs shadow-sm">
+      <div>
+        <h2 className="text-sm font-semibold">Warunki</h2>
+        <p className="text-slate-500">
+          Wymagania zamawiającego poza samymi produktami: terminy dostaw, wymagane dokumenty i certyfikaty. Jeśli
+          któregoś nie spełnimy, oferta może zostać odrzucona — zaznacz przy każdym, czy go spełniamy.
+        </p>
+      </div>
+      {conditions.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          <span className="rounded bg-emerald-50 px-2 py-1 text-emerald-700">
+            Spełniamy: {conditions.filter((c) => c.status === 'spelniamy').length}
+          </span>
+          <span className="rounded bg-amber-50 px-2 py-1 text-amber-800">Do sprawdzenia: {conditionsToCheck}</span>
+          <span className="rounded bg-red-50 px-2 py-1 text-red-700">Nie spełniamy: {conditionsNotMet}</span>
         </div>
+      )}
+      {can_edit && (
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="text-slate-600">
+            Kategoria
+            <select
+              className="mt-1 block rounded border border-slate-300 px-2 py-1.5"
+              value={newConditionCategory}
+              onChange={(e) => setNewConditionCategory(e.target.value)}
+            >
+              {Object.entries(CONDITION_CATEGORY_LABEL).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="min-w-[240px] flex-1 text-slate-600">
+            Nowy warunek
+            <input
+              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1.5"
+              placeholder="Na przykład: dostawa w ciągu 5 dni roboczych od zamówienia"
+              value={newCondition}
+              onChange={(e) => setNewCondition(e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={busy || !newCondition.trim()}
+            onClick={() => void addCondition()}
+            className="rounded bg-blue-600 px-3 py-1.5 text-white disabled:opacity-50"
+          >
+            Dodaj warunek
+          </button>
+        </div>
+      )}
+      {conditions.length === 0 ? (
+        <p className="rounded bg-slate-50 p-3 text-slate-500">
+          Nie ma jeszcze warunków. Zostaną odczytane z dokumentacji przetargu (sekcja Dokumenty) albo dodaj je ręcznie
+          powyżej.
+        </p>
+      ) : (
+        conditionGroups.map(([group, rows]) => (
+          <div key={group}>
+            <h3 className="mb-1 font-semibold text-slate-700">
+              {group} <span className="font-normal text-slate-500">· {rows.length}</span>
+            </h3>
+            <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+              {rows.map((c) => {
+                const doc = c.tender_document_id ? documents.find((d) => d.id === c.tender_document_id) : undefined
+                const source = doc ? `z pliku ${doc.original_name}` : (CONDITION_SOURCE_LABEL[c.source] ?? c.source)
+                return (
+                  <li key={c.id} className="flex flex-wrap items-start gap-3 p-2">
+                    <div className="min-w-[240px] flex-1">
+                      <p className="whitespace-pre-wrap">{c.content}</p>
+                      <p className="mt-0.5 text-[11px] text-slate-500">
+                        {source}
+                        {c.status && c.status_user
+                          ? ` · zaznaczył(a) ${c.status_user.name}${
+                              c.status_at ? `, ${new Date(c.status_at).toLocaleDateString('pl-PL')}` : ''
+                            }`
+                          : ''}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Czy spełniamy warunek">
+                      {CONDITION_STATUS_OPTIONS.map((o) => {
+                        const on = (c.status ?? null) === o.value
+                        return (
+                          <button
+                            key={o.label}
+                            type="button"
+                            aria-pressed={on}
+                            disabled={busy || !can_edit || on}
+                            onClick={() => void setConditionStatus(c.id, o.value)}
+                            className={`rounded border px-2 py-1 ${
+                              on ? o.active : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
+                            } ${!can_edit && !on ? 'opacity-50' : ''}`}
+                          >
+                            {o.label}
+                          </button>
+                        )
+                      })}
+                      {can_edit && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          className="ml-1 px-1 text-[11px] text-red-600"
+                          onClick={() => void deleteCondition(c.id)}
+                        >
+                          Usuń
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ))
+      )}
+    </div>
   )
 
   const documentsSection = (
     <div className="space-y-4">
       <div className="rounded-xl bg-white p-4 shadow-sm">
-        <h2 className="mb-1 text-sm font-semibold">Dodaj dokumenty przetargu</h2>
+        <h2 className="mb-1 text-sm font-semibold">Dokumenty od zamawiającego</h2>
+        <p className="text-xs text-slate-500">
+          Pliki od zamawiającego: specyfikacja warunków zamówienia (SWZ, dawniej SIWZ) z listą produktów i warunkami
+          oraz formularz ofertowy do wypełnienia cenami.
+        </p>
         <p className="mb-3 text-xs text-slate-500">
-          Z SIWZ (PDF, Excel, Word) odczytamy pozycje i warunki. Formularz ofertowy (Word) zapiszemy, żeby wypełnić go
-          cenami w Eksport › Formularz ofertowy.
+          Ze specyfikacji odczytamy pozycje i warunki. Formularz ofertowy (plik Word) zapiszemy, żeby wypełnić go cenami
+          w menu Eksport › Formularz ofertowy z cenami (Word).
         </p>
         {!canImport ? (
           <p className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            Dodawanie dokumentów wymaga uprawnienia do importu. Poproś o wgranie SIWZ osobę z działu przetargów.
+            Nie masz uprawnienia do dodawania dokumentów. Poproś osobę z działu przetargów o dodanie dokumentacji przetargu.
           </p>
         ) : !can_edit ? (
           <p className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -2245,10 +2446,10 @@ function TenderDetailView() {
                 <path d="M7 9l5-5 5 5" />
                 <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
               </svg>
-              <strong className="text-sm">Przeciągnij tu plik SIWZ albo formularz ofertowy</strong>
-              <span className="text-xs text-slate-500">PDF, Excel (xlsx, xls, csv), Word (doc, docx)</span>
+              <strong className="text-sm">Przeciągnij tu dokumentację przetargu albo formularz ofertowy</strong>
+              <span className="text-xs text-slate-500">PDF, Excel albo Word</span>
               <span className="mt-1 inline-flex items-center rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white">
-                {busy && docStatus.startsWith('Wybrano') ? 'Przetwarzanie…' : 'Wybierz plik z komputera'}
+                {busy && docStatus.startsWith('Wybrano') ? 'Odczytuję plik…' : 'Wybierz plik z komputera'}
               </span>
               <input
                 type="file"
@@ -2292,9 +2493,9 @@ function TenderDetailView() {
             <div className="mb-3 flex flex-wrap gap-3 text-xs">
               {(
                 [
-                  ['simple', 'Prosty (tekst)'],
-                  ['ai', 'AI (podgląd)'],
-                  ['full', 'Pełny (AI + archiwum)'],
+                  ['simple', DOC_MODE_LABEL.simple],
+                  ['ai', DOC_MODE_LABEL.ai],
+                  ['full', DOC_MODE_LABEL.full],
                 ] as const
               ).map(([v, label]) => (
                 <label key={v} className="flex items-center gap-1">
@@ -2362,7 +2563,7 @@ function TenderDetailView() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-semibold text-amber-950">
-                    Co zostanie zaimportowane
+                    Co zostanie dodane do przetargu
                   </h3>
                   <p className="text-[11px] text-amber-900/80">
                     To tylko podgląd — pozycje trafią do przetargu dopiero po kliknięciu poniżej.
@@ -2388,9 +2589,9 @@ function TenderDetailView() {
                   >
                     {docMode === 'simple'
                       ? 'Dodaj do przetargu'
-                      : `Dodaj do przetargu: ${docPreview.items.filter((i) => i.selected).length} poz., ${
+                      : `Dodaj do przetargu: ${docPreview.items.filter((i) => i.selected).length} pozycji, ${
                           docPreview.conditions.filter((c) => c.selected).length
-                        } war.`}
+                        } warunków`}
                   </button>
                 </div>
               </div>
@@ -2430,7 +2631,7 @@ function TenderDetailView() {
                     )
                   }
                 >
-                  Odznacz
+                  Odznacz wszystkie
                 </button>
               </p>
               {docMode === 'simple' ? (
@@ -2450,10 +2651,10 @@ function TenderDetailView() {
                   )}
                   <div>
                     <h4 className="mb-1 text-xs font-semibold">
-                      Pozycje SIWZ ({docPreview.items.length})
+                      Pozycje z dokumentacji przetargu ({docPreview.items.length})
                     </h4>
                     {docPreview.items.length === 0 ? (
-                      <p className="text-xs text-slate-400">Brak pozycji w wyniku analizy.</p>
+                      <p className="text-xs text-slate-400">W pliku nie znaleziono pozycji.</p>
                     ) : (
                       <div className="max-h-72 overflow-auto rounded border border-slate-200 bg-white">
                         <table className="w-full text-left text-xs">
@@ -2461,7 +2662,7 @@ function TenderDetailView() {
                             <tr className="border-b">
                               <th className="p-1.5 w-8"></th>
                               <th className="p-1.5">Numer</th>
-                              <th className="p-1.5">Nazwa / opis</th>
+                              <th className="p-1.5">Nazwa i opis</th>
                               <th className="p-1.5">Normy</th>
                               <th className="p-1.5 text-right">Cena</th>
                               <th className="p-1.5 text-right">Ilość</th>
@@ -2500,7 +2701,7 @@ function TenderDetailView() {
                                 </td>
                                 <td className="p-1.5 text-right whitespace-nowrap">
                                   {it.offer_price != null
-                                    ? `${Number(it.offer_price).toFixed(2)}${it.currency ? ` ${it.currency}` : ''}`
+                                    ? `${Number(it.offer_price).toFixed(2)} ${currencyLabel(it.currency)}`
                                     : '—'}
                                 </td>
                                 <td className="p-1.5 text-right">{it.quantity}</td>
@@ -2516,7 +2717,7 @@ function TenderDetailView() {
                       Warunki ({docPreview.conditions.length})
                     </h4>
                     {docPreview.conditions.length === 0 ? (
-                      <p className="text-xs text-slate-400">Brak warunków w wyniku analizy.</p>
+                      <p className="text-xs text-slate-400">W pliku nie znaleziono warunków.</p>
                     ) : (
                       <ul className="max-h-56 space-y-1 overflow-y-auto rounded border border-slate-200 bg-white p-2 text-xs">
                         {docPreview.conditions.map((c, idx) => (
@@ -2566,10 +2767,10 @@ function TenderDetailView() {
                     <td className="p-2">
                       {d.original_name}
                       {d.has_file ? (
-                        <span className="ml-1 text-[10px] text-emerald-600">plik</span>
+                        <span className="ml-1 text-[10px] text-emerald-600">plik zapisany</span>
                       ) : null}
                     </td>
-                    <td className="p-2">{d.mode}</td>
+                    <td className="p-2">{DOC_MODE_LABEL[d.mode] ?? d.mode}</td>
                     <td className="p-2">{new Date(d.created_at).toLocaleString('pl-PL')}</td>
                     <td className="p-2">
                       <div className="flex flex-wrap gap-1">
@@ -2584,7 +2785,7 @@ function TenderDetailView() {
                         <button
                           type="button"
                           disabled={busy || !d.has_file}
-                          title={d.has_file ? 'Pobierz plik na komputer' : 'Brak zapisanego pliku'}
+                          title={d.has_file ? 'Pobierz plik na komputer' : 'Ten plik nie został zapisany'}
                           className="rounded bg-sky-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
                           onClick={() => void downloadDoc(d)}
                         >
@@ -2598,7 +2799,7 @@ function TenderDetailView() {
                               className="rounded bg-blue-600 px-2 py-1 text-[10px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
                               onClick={() => void reanalyzeDoc(d.id)}
                             >
-                              Analizuj ponownie
+                              Odczytaj ponownie
                             </button>
                             <button
                               type="button"
@@ -2624,14 +2825,15 @@ function TenderDetailView() {
   const inviteSection = (
         <div className="space-y-3 rounded-xl bg-white p-4 shadow-sm text-xs">
           <h2 className="text-sm font-semibold">Zaproszeni do przetargu</h2>
-          <p className="text-slate-500">
-            Zaproszone osoby mają dostęp do tego przetargu jak opiekun (w ramach własnych uprawnień roli).
+          <p className="text-xs text-slate-500">
+            Osoby, które mają dostęp do przetargu i pomagają w wycenie. Widzą przetarg jak opiekun przetargu, w granicach
+            uprawnień swojej roli.
           </p>
 
           {canInvite && (
             <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[1fr_1fr_auto]">
               <label>
-                Szukaj użytkownika
+                Szukaj osoby
                 <input
                   className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
                   value={inviteQ}
@@ -2678,7 +2880,7 @@ function TenderDetailView() {
                   rows={2}
                   value={inviteNote}
                   onChange={(e) => setInviteNote(e.target.value)}
-                  placeholder="np. Proszę o wycenę sekcji rękawic"
+                  placeholder="Na przykład: proszę o wycenę rękawic"
                 />
               </label>
             </div>
@@ -2710,7 +2912,7 @@ function TenderDetailView() {
                     {inv.email_sent_at ? (
                       <span className="text-emerald-700">wysłany</span>
                     ) : (
-                      <span className="text-amber-700">brak</span>
+                      <span className="text-amber-700">nie wysłano</span>
                     )}
                   </td>
                   <td className="p-2 text-slate-600">{inv.note ?? '—'}</td>
@@ -2748,7 +2950,7 @@ function TenderDetailView() {
               Teraz: <strong>{TENDER_STATUS_LABEL[tender.status] ?? tender.status}</strong>
             </p>
             <label className="mb-3 block text-xs">
-              Notatka (wymagana przy odrzuceniu / cofnięciu z akceptacji)
+              Notatka (wymagana przy odrzuceniu albo cofnięciu z akceptacji)
               <textarea
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
                 rows={2}
@@ -2766,15 +2968,15 @@ function TenderDetailView() {
                   onClick={() => void transition(s)}
                   className="rounded bg-blue-600 px-3 py-2 text-xs text-white hover:bg-blue-700 disabled:opacity-50"
                 >
-                  → {TENDER_STATUS_LABEL[s] ?? s}
+                  Zmień na: {TENDER_STATUS_LABEL[s] ?? s}
                 </button>
               ))}
               {next_statuses.length === 0 && (
-                <span className="text-xs text-slate-400">Brak dostępnych przejść dla Twojej roli.</span>
+                <span className="text-xs text-slate-400">Twoja rola nie pozwala teraz zmienić statusu.</span>
               )}
             </div>
             <p className="mt-3 text-[11px] text-slate-400">
-              Zalogowany: {user?.name} ({user?.role}). Przejścia statusów zależą od uprawnień roli.
+              Zalogowano jako: {user?.name} ({user?.role}). Dostępne zmiany statusu zależą od uprawnień Twojej roli.
             </p>
           </div>
           <div className="rounded-xl bg-white p-4 shadow-sm">
@@ -2784,7 +2986,7 @@ function TenderDetailView() {
                 <tr className="border-b bg-slate-50">
                   <th className="p-2">Kiedy</th>
                   <th className="p-2">Kto</th>
-                  <th className="p-2">Z → Do</th>
+                  <th className="p-2">Zmiana statusu</th>
                   <th className="p-2">Notatka</th>
                 </tr>
               </thead>
@@ -2794,7 +2996,8 @@ function TenderDetailView() {
                     <td className="p-2">{new Date(h.created_at).toLocaleString('pl-PL')}</td>
                     <td className="p-2">{h.user?.name}</td>
                     <td className="p-2">
-                      {h.from_status ?? '—'} → {h.to_status}
+                      {h.from_status ? (TENDER_STATUS_LABEL[h.from_status] ?? h.from_status) : '—'} →{' '}
+                      {TENDER_STATUS_LABEL[h.to_status] ?? h.to_status}
                     </td>
                     <td className="p-2">{h.note ?? '—'}</td>
                   </tr>
@@ -2802,7 +3005,7 @@ function TenderDetailView() {
                 {(tender.status_histories ?? []).length === 0 && (
                   <tr>
                     <td colSpan={4} className="p-3 text-slate-400">
-                      Brak historii.
+                      Brak zmian statusu.
                     </td>
                   </tr>
                 )}
@@ -2824,12 +3027,13 @@ function TenderDetailView() {
   const wizardSteps = [
     {
       label: 'Dokumenty',
-      hint: documents.length > 0 ? `Pliki: ${documents.length}` : 'wgraj SIWZ i formularz',
+      hint: documents.length > 0 ? `Pliki: ${documents.length}` : 'dodaj dokumentację i formularz ofertowy',
       done: documents.length > 0 || tender.items.length > 0,
     },
     {
       label: 'Pozycje i produkty',
-      hint: tender.items.length > 0 ? `${withProduct} / ${tender.items.length} z produktem` : 'brak pozycji',
+      hint: tender.items.length > 0 ? `${withProduct} z ${tender.items.length} pozycji ma produkt` : 'brak pozycji',
+      description: 'Sprawdź listę pozycji i dopasuj do nich produkty z katalogu.',
       done: tender.items.length > 0 && withProduct === tender.items.length,
     },
     {
@@ -2838,8 +3042,9 @@ function TenderDetailView() {
       done: conditions.length > 0,
     },
     {
-      label: 'Termin i start',
+      label: 'Termin i narzut',
       hint: savedDeadline ? `termin ${formatDay(savedDeadline)}` : 'bez terminu',
+      description: 'Ustaw termin składania i narzut, zaproś osoby do pomocy i rozpocznij wycenę.',
       done: false,
     },
   ]
@@ -2850,9 +3055,21 @@ function TenderDetailView() {
       tender.items.length > 0 && withProduct === tender.items.length,
       tender.items.length > 0 ? `${withProduct} z ${tender.items.length} pozycji ma produkt` : 'Brak pozycji',
     ],
-    [conditions.length > 0, conditions.length > 0 ? `Warunki: ${conditions.length}` : 'Brak warunków'],
+    [
+      conditions.length > 0 && conditionsToCheck === 0 && conditionsNotMet === 0,
+      conditions.length === 0
+        ? 'Brak warunków'
+        : conditionsNotMet > 0
+          ? `Warunki: ${conditionsNotMet} z ${conditions.length} nie spełniamy`
+          : `Warunki: sprawdzone ${conditionsChecked} z ${conditions.length}`,
+    ],
     [Boolean(savedDeadline), savedDeadline ? `Termin składania: ${formatDay(savedDeadline)}` : 'Brak terminu składania'],
-    [hasOfferForm, hasOfferForm ? 'Formularz ofertowy (Word) wgrany' : 'Brak formularza Word — eksport DOCX nie zadziała'],
+    [
+      hasOfferForm,
+      hasOfferForm
+        ? 'Formularz ofertowy (plik Word) dodany'
+        : 'Brak formularza ofertowego (plik Word) — nie da się pobrać formularza ofertowego z cenami',
+    ],
   ]
 
   const wizardView = (
@@ -2866,7 +3083,8 @@ function TenderDetailView() {
             {tender.number} · {tender.title}
           </h1>
           <p className="app-meta text-xs text-slate-500">
-            {tender.client?.name} · opiekun {tender.owner?.name ?? '—'} · <strong>Zakładanie przetargu</strong> · {TENDER_STATUS_LABEL[tender.status] ?? tender.status}
+            Zamawiający: {tender.client?.name ?? '—'} · opiekun przetargu: {tender.owner?.name ?? '—'} ·{' '}
+            <strong>Zakładanie przetargu</strong> · {TENDER_STATUS_LABEL[tender.status] ?? tender.status}
           </p>
         </div>
         <div className="app-actions flex flex-wrap items-center gap-2">
@@ -2915,6 +3133,9 @@ function TenderDetailView() {
           )
         })}
       </nav>
+      {wizardSteps[wizardStep].description && (
+        <p className="mb-3 text-xs text-slate-500">{wizardSteps[wizardStep].description}</p>
+      )}
       {matchOverlay}
       {wizardStep === 1 && matchReportPanel}
       {wizardStep === 0 && documentsSection}
@@ -2923,8 +3144,10 @@ function TenderDetailView() {
           itemsSection
         ) : (
           <p className="rounded-xl bg-white p-4 text-xs text-slate-500 shadow-sm">
-            Przetarg nie ma jeszcze pozycji. Pozycje powstają z dokumentu SIWZ w kroku 1
-            {canImport ? '.' : ' — dokument wgrywa osoba z uprawnieniem do importu (dział przetargów).'}
+            Przetarg nie ma jeszcze pozycji. Pozycje zostaną odczytane z dokumentacji przetargu dodanej w kroku 1
+            {canImport
+              ? '.'
+              : ' — dokumenty dodaje osoba z uprawnieniem do dodawania dokumentów (dział przetargów).'}
           </p>
         ))}
       {wizardStep === 2 && conditionsSection}
@@ -2932,7 +3155,7 @@ function TenderDetailView() {
         <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
           <div className="space-y-3">
             <div className="space-y-3 rounded-xl bg-white p-4 text-xs shadow-sm">
-              <h2 className="text-sm font-semibold">Termin i marża</h2>
+              <h2 className="text-sm font-semibold">Termin i narzut</h2>
               <div className="flex flex-wrap items-end gap-2">
                 <label>
                   Termin składania ofert
@@ -2954,7 +3177,7 @@ function TenderDetailView() {
               </div>
               <div className="flex flex-wrap items-end gap-2">
                 <label>
-                  Marża oferty (narzut %)
+                  Narzut na cenę zakupu, %
                   <input
                     type="number"
                     min={0}
@@ -2964,7 +3187,7 @@ function TenderDetailView() {
                     className="mt-1 block w-24 rounded border border-slate-300 px-2 py-1"
                     value={marginEdit}
                     onChange={(e) => setMarginEdit(e.target.value)}
-                    title="Cena katalogowa = zakup × (1 + marża%). Linki zewnętrzne skalowane współczynnikiem zmiany."
+                    title={NARZUT_HINT}
                   />
                 </label>
                 <button
@@ -2972,9 +3195,9 @@ function TenderDetailView() {
                   disabled={busy}
                   onClick={() => void saveTargetMargin()}
                   className="rounded bg-violet-700 px-3 py-1.5 text-white disabled:opacity-50"
-                  title="Przelicza ceny z katalogu i skaluje linki zewnętrzne"
+                  title="Przelicza proporcjonalnie wszystkie ceny w ofercie"
                 >
-                  Zapisz marżę
+                  Zapisz narzut
                 </button>
               </div>
             </div>
@@ -3026,7 +3249,7 @@ function TenderDetailView() {
               {deadlineDirty
                 ? 'Najpierw zapisz zmieniony termin.'
                 : !isDraft
-                  ? 'Przetarg jest już w Wycenie — otworzy się pełny widok.'
+                  ? 'Przetarg ma już status Wycena — otworzy się pełny widok.'
                   : canStartPricing
                     ? 'Status zmieni się ze Szkicu na Wycenę.'
                     : 'Status zostaje Szkic — nie masz uprawnienia do zmiany na Wycenę.'}
@@ -3047,14 +3270,19 @@ function TenderDetailView() {
 
   const missingRows: Array<{ label: string; action?: string; onClick?: () => void }> = []
   if (tender.items.length === 0) {
-    missingRows.push({ label: 'Przetarg nie ma pozycji — dodaj dokument SIWZ', action: 'Dokumenty', onClick: () => setTab('dokumenty') })
+    missingRows.push({ label: 'Przetarg nie ma pozycji — dodaj dokumentację przetargu', action: 'Dokumenty', onClick: () => setTab('dokumenty') })
   }
   if (coverage) {
     const coverageRows: Array<[CoverageFilter & string, string]> = [
       ['without_product', 'Pozycje bez produktu'],
       ['without_price', 'Pozycje bez ceny'],
-      ['weak_match', 'Słabe dopasowanie AI'],
-      ['low_margin', 'Niska marża'],
+      ['weak_match', 'Słabe dopasowanie'],
+      [
+        'low_margin',
+        coverage.thresholds?.min_margin_percent != null
+          ? `Niska marża (poniżej ${coverage.thresholds.min_margin_percent}%)`
+          : 'Niska marża',
+      ],
     ]
     for (const [key, label] of coverageRows) {
       if (coverage[key] > 0) {
@@ -3063,18 +3291,24 @@ function TenderDetailView() {
     }
     if (coverage.substitutes_pending > 0) {
       missingRows.push({
-        label: `Zamienniki do decyzji: ${coverage.substitutes_pending}`,
+        label: `Zamienniki do zatwierdzenia: ${coverage.substitutes_pending}`,
         action: 'Pokaż',
         onClick: () => setTab('zamienniki'),
       })
     }
+  }
+  if (conditionsNotMet > 0) {
+    missingRows.push({ label: `Warunki, których nie spełniamy: ${conditionsNotMet}`, action: 'Warunki', onClick: () => setTab('warunki') })
+  }
+  if (conditionsToCheck > 0) {
+    missingRows.push({ label: `Warunki do sprawdzenia: ${conditionsToCheck}`, action: 'Warunki', onClick: () => setTab('warunki') })
   }
   if (!savedDeadline) {
     missingRows.push({ label: 'Brak terminu składania — wpisz go wyżej' })
   }
   if (!hasOfferForm) {
     missingRows.push({
-      label: 'Brak formularza ofertowego (Word) — eksport DOCX nie zadziała',
+      label: 'Brak formularza ofertowego (plik Word) — bez niego nie pobierzesz formularza ofertowego z cenami',
       action: 'Dokumenty',
       onClick: () => setTab('dokumenty'),
     })
@@ -3099,7 +3333,7 @@ function TenderDetailView() {
       {canEditOffer && (isDraft || tender.items.length === 0) && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white p-3 shadow-sm">
           <span className="text-slate-600">
-            Kreator prowadzi krok po kroku: dokumenty, pozycje, warunki, termin.
+            Kreator prowadzi krok po kroku: dokumenty, pozycje, warunki, termin i narzut.
           </span>
           <button
             type="button"
@@ -3117,7 +3351,7 @@ function TenderDetailView() {
             <strong className="text-base">{savedDeadline ? formatDay(savedDeadline) : '—'}</strong>
             {deadlineDays != null && deadlineDays >= 0 && deadlineDays <= 7 && (
               <span className="rounded bg-red-100 px-2 py-0.5 font-medium text-red-700">
-                {deadlineDays === 0 ? 'dziś' : `za ${deadlineDays} dni`}
+                {deadlineDays === 0 ? 'dziś' : deadlineDays === 1 ? 'jutro' : `za ${deadlineDays} dni`}
               </span>
             )}
             {deadlineDays != null && deadlineDays > 7 && <span className="text-slate-500">za {deadlineDays} dni</span>}
@@ -3144,7 +3378,7 @@ function TenderDetailView() {
         <div className="rounded-xl bg-white p-3 shadow-sm">
           <div className="text-slate-500">Pozycje z produktem</div>
           <strong className="mt-1 block text-base">
-            {withProduct} / {tender.items.length}
+            {withProduct} z {tender.items.length}
           </strong>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
             <div
@@ -3158,16 +3392,20 @@ function TenderDetailView() {
           <strong className="mt-1 block text-base">
             {tender.offer_value_net ? `${Number(tender.offer_value_net).toLocaleString('pl-PL')} zł` : '—'}
           </strong>
-          <div className="mt-1 text-slate-500">AI {tender.ai_percent}%</div>
+          <div className="mt-1 text-slate-500" title={MATCH_AVERAGE_HINT}>
+            Średnia ocena dopasowania: {tender.ai_percent}%
+          </div>
         </div>
         <div className="rounded-xl bg-white p-3 shadow-sm">
-          <div className="text-slate-500">Marża zrealizowana</div>
+          <div className="text-slate-500" title={MARGIN_HINT}>
+            Marża
+          </div>
           <strong className="mt-1 block text-base">
             {tender.margin_percent != null ? `${tender.margin_percent}%` : '—'}
           </strong>
           <div className="mt-2 flex flex-wrap items-center gap-1">
             <label className="flex items-center gap-1 text-slate-500">
-              narzut %
+              Narzut, %
               <input
                 type="number"
                 min={0}
@@ -3177,7 +3415,7 @@ function TenderDetailView() {
                 className="w-20 rounded border border-slate-300 px-2 py-1 disabled:bg-slate-50"
                 value={marginEdit}
                 onChange={(e) => setMarginEdit(e.target.value)}
-                title="Cena katalogowa = zakup × (1 + marża%). Linki zewnętrzne skalowane współczynnikiem zmiany."
+                title={NARZUT_HINT}
               />
             </label>
             {can_edit && (
@@ -3186,7 +3424,7 @@ function TenderDetailView() {
                 disabled={busy}
                 onClick={() => void saveTargetMargin()}
                 className="rounded bg-violet-700 px-2 py-1 text-white disabled:opacity-50"
-                title="Przelicza ceny z katalogu i skaluje linki zewnętrzne"
+                title="Przelicza proporcjonalnie wszystkie ceny w ofercie"
               >
                 Zapisz
               </button>
@@ -3229,7 +3467,7 @@ function TenderDetailView() {
             </button>
           </div>
           {documents.length === 0 ? (
-            <p className="text-slate-400">Brak wgranych dokumentów.</p>
+            <p className="text-slate-400">Nie dodano jeszcze dokumentów.</p>
           ) : (
             <ul className="divide-y divide-slate-100">
               {documents.slice(0, 5).map((d) => (
@@ -3249,7 +3487,7 @@ function TenderDetailView() {
             </button>
           </div>
           {activities.length === 0 ? (
-            <p className="text-slate-400">Brak wpisów.</p>
+            <p className="text-slate-400">Brak zmian.</p>
           ) : (
             <ul className="divide-y divide-slate-100">
               {activities.slice(0, 5).map((a) => (
@@ -3259,7 +3497,7 @@ function TenderDetailView() {
                   </span>
                   <br />
                   {actionLabel[a.action] ?? a.action}
-                  {a.item ? ` (lp ${a.item.line_no})` : ''}
+                  {a.item ? ` (pozycja ${a.item.line_no})` : ''}
                 </li>
               ))}
             </ul>
@@ -3271,7 +3509,7 @@ function TenderDetailView() {
 
   const tabBadge: Partial<Record<TenderTab, { count?: number; alert?: number }>> = {
     dokumenty: { count: documents.length },
-    warunki: { count: conditions.length },
+    warunki: { count: conditions.length, alert: conditionsToCheck + conditionsNotMet },
     pozycje: { count: tender.items.length, alert: attentionCount },
     zamienniki: { alert: coverage?.substitutes_pending ?? 0 },
     komentarze: { count: comments.length },
@@ -3289,9 +3527,10 @@ function TenderDetailView() {
       </h1>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="app-meta text-xs text-slate-500">
-          {tender.client?.name} · opiekun {tender.owner?.name ?? '—'} ·{' '}
-          <strong>{TENDER_STATUS_LABEL[tender.status] ?? tender.status}</strong> · AI {tender.ai_percent}% · narzut{' '}
-          {tender.target_margin_percent ?? 18}% · marża zreal. {tender.margin_percent ?? '—'}% ·{' '}
+          Zamawiający: {tender.client?.name ?? '—'} · opiekun przetargu: {tender.owner?.name ?? '—'} ·{' '}
+          <strong>{TENDER_STATUS_LABEL[tender.status] ?? tender.status}</strong> ·{' '}
+          <span title={MATCH_AVERAGE_HINT}>średnia ocena dopasowania {tender.ai_percent}%</span> · narzut{' '}
+          {tender.target_margin_percent ?? 18}% · <span title={MARGIN_HINT}>marża {tender.margin_percent ?? '—'}%</span> ·{' '}
           {can_edit ? 'edycja włączona' : 'tylko podgląd'}
         </p>
         <div className="app-actions flex flex-wrap gap-1">
@@ -3299,11 +3538,13 @@ function TenderDetailView() {
             label="Eksport ▾"
             disabled={busy}
             items={[
-              { label: 'Excel', hint: 'Tabela oferty', onSelect: () => void exportOffer('excel') },
-              { label: 'PDF', hint: 'Oferta do wydruku', onSelect: () => void exportOffer('pdf') },
+              { label: 'Oferta w pliku Excel', hint: 'Tabela z cenami do dalszej pracy', onSelect: () => void exportOffer('excel') },
+              { label: 'Oferta w pliku PDF', hint: 'Do wydruku albo wysłania', onSelect: () => void exportOffer('pdf') },
               {
-                label: 'Formularz ofertowy (DOCX)',
-                hint: hasOfferForm ? 'Wypełnia wgrany formularz cenami z oferty' : 'Najpierw wgraj formularz Word w Dokumentach',
+                label: 'Formularz ofertowy z cenami (Word)',
+                hint: hasOfferForm
+                  ? 'Wypełnia cenami z oferty formularz ofertowy dodany w sekcji Dokumenty'
+                  : 'Najpierw dodaj formularz ofertowy (plik Word) w sekcji Dokumenty',
                 onSelect: () => void exportOffer('docx'),
               },
             ]}
@@ -3361,15 +3602,20 @@ function TenderDetailView() {
         </nav>
 
         <div className="min-w-0 flex-1">
+          {SECTION_INTRO[tab] && (
+            <div className="mb-3">
+              <h2 className="text-sm font-semibold">
+                {TAB_GROUPS.flatMap((g) => g.tabs).find((t) => t.key === tab)?.label}
+              </h2>
+              <p className="text-xs text-slate-500">{SECTION_INTRO[tab]}</p>
+            </div>
+          )}
           {tab === 'podsumowanie' && summarySection}
           {tab === 'pozycje' && itemsSection}
           {tab === 'warunki' && conditionsSection}
           {tab === 'dokumenty' && documentsSection}
           {tab === 'zamienniki' && (
         <div className="space-y-3">
-          <p className="rounded-lg border-l-4 border-blue-500 bg-slate-100 p-3 text-xs text-slate-600">
-            Zamienniki przypięte do produktu głównego. Akceptacja: kierownik.
-          </p>
           {tender.items
             .filter((i) => i.main_product)
             .map((item) => {
@@ -3378,7 +3624,7 @@ function TenderDetailView() {
               return (
                 <div key={item.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                   <div className="border-b bg-slate-50 px-4 py-3 text-xs font-semibold">
-                    Poz. {item.line_no} · {productDisplayName(item.main_product!)} (
+                    Pozycja {item.line_no} · {productDisplayName(item.main_product!)} (
                     {item.main_product!.sku})
                   </div>
                   <table className="w-full text-left text-xs">
@@ -3386,9 +3632,9 @@ function TenderDetailView() {
                       <tr className="border-b bg-slate-50/80">
                         <th className="p-2">Zamiennik</th>
                         <th className="p-2">Typ</th>
-                        <th className="p-2">AI</th>
+                        <th className="p-2">Ocena dopasowania</th>
                         <th className="p-2">Status</th>
-                        <th className="p-2">Akcja</th>
+                        <th className="p-2">Decyzja</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3397,9 +3643,9 @@ function TenderDetailView() {
                           <td className="p-2">
                             {s.substitute_product?.name} ({s.substitute_product?.sku})
                           </td>
-                          <td className="p-2">{s.type}</td>
+                          <td className="p-2">{SUBSTITUTE_TYPE_LABEL[s.type] ?? s.type}</td>
                           <td className="p-2">{s.match_percent}%</td>
-                          <td className="p-2">{s.approval_status}</td>
+                          <td className="p-2">{SUBSTITUTE_STATUS_LABEL[s.approval_status] ?? s.approval_status}</td>
                           <td className="p-2">
                             {canApproveSub && (
                               <div className="flex gap-1">
@@ -3436,10 +3682,12 @@ function TenderDetailView() {
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b bg-slate-50">
-                <th className="p-2">Kod</th>
-                <th className="p-2">Oferta</th>
-                <th className="p-2">Marża</th>
-                <th className="p-2">Wartość linii</th>
+                <th className="p-2">Kod produktu</th>
+                <th className="p-2">Cena w ofercie</th>
+                <th className="p-2" title={MARGIN_HINT}>
+                  Marża
+                </th>
+                <th className="p-2">Wartość pozycji</th>
               </tr>
             </thead>
             <tbody>
@@ -3452,7 +3700,7 @@ function TenderDetailView() {
                       {isExternalOfferItem(item) ? (
                         <span className="inline-flex flex-col gap-0.5">
                           <span className="w-fit rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase text-white">
-                            Zewn.
+                            Spoza katalogu
                           </span>
                           <span>{item.custom_name}</span>
                         </span>
@@ -3481,23 +3729,26 @@ function TenderDetailView() {
             </tbody>
           </table>
           <p className="mt-3 text-sm">
-            Suma:{' '}
+            Wartość oferty netto:{' '}
             <strong>
               {tender.offer_value_net
                 ? `${Number(tender.offer_value_net).toLocaleString('pl-PL')} zł`
                 : '—'}
             </strong>{' '}
-            · narzut {tender.target_margin_percent ?? 18}% · marża zreal. {tender.margin_percent ?? '—'}%
+            · narzut {tender.target_margin_percent ?? 18}% · marża {tender.margin_percent ?? '—'}%
           </p>
         </div>
           )}
           {tab === 'komentarze' && (
         <div className="space-y-3 rounded-xl bg-white p-4 shadow-sm text-xs">
-          <h2 className="text-sm font-semibold">Komentarze</h2>
+          <div>
+            <h2 className="text-sm font-semibold">Komentarze</h2>
+            <p className="text-xs text-slate-500">Notatki zespołu o przetargu albo o konkretnej pozycji.</p>
+          </div>
           {canComment ? (
             <div className="flex flex-wrap items-end gap-2 border-b border-slate-100 pb-3">
               <label className="flex-1 min-w-[200px]">
-                Treść
+                Treść komentarza
                 <textarea
                   className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
                   rows={2}
@@ -3515,7 +3766,7 @@ function TenderDetailView() {
                   <option value="">Cały przetarg</option>
                   {tender.items.map((it) => (
                     <option key={it.id} value={it.id}>
-                      Lp {it.line_no}
+                      Pozycja {it.line_no}
                     </option>
                   ))}
                 </select>
@@ -3530,14 +3781,14 @@ function TenderDetailView() {
               </button>
             </div>
           ) : (
-            <p className="text-slate-400">Brak uprawnienia do komentowania.</p>
+            <p className="text-slate-400">Nie masz uprawnienia do dodawania komentarzy.</p>
           )}
           <ul className="space-y-2">
             {comments.map((c) => (
               <li key={c.id} className="rounded border border-slate-100 bg-slate-50 p-2">
                 <div className="mb-1 text-[11px] text-slate-500">
                   {c.user?.name} · {new Date(c.created_at).toLocaleString('pl-PL')}
-                  {c.item ? ` · poz. ${c.item.line_no}` : ''}
+                  {c.item ? ` · pozycja ${c.item.line_no}` : ''}
                 </div>
                 <p className="whitespace-pre-wrap">{c.body}</p>
               </li>
@@ -3557,7 +3808,7 @@ function TenderDetailView() {
               <tr className="border-b bg-slate-50">
                 <th className="p-2">Kiedy</th>
                 <th className="p-2">Kto</th>
-                <th className="p-2">Akcja</th>
+                <th className="p-2">Zmiana</th>
                 <th className="p-2">Szczegóły</th>
               </tr>
             </thead>
@@ -3570,7 +3821,7 @@ function TenderDetailView() {
                   <td className="p-2">{a.user?.name ?? '—'}</td>
                   <td className="p-2">
                     {actionLabel[a.action] ?? a.action}
-                    {a.item ? ` (lp ${a.item.line_no})` : ''}
+                    {a.item ? ` (pozycja ${a.item.line_no})` : ''}
                   </td>
                   <td className="p-2 text-[11px] text-slate-600">
                     {formatActivityMeta(a.meta)}
@@ -3580,7 +3831,7 @@ function TenderDetailView() {
               {activities.length === 0 && (
                 <tr>
                   <td colSpan={4} className="p-3 text-slate-400">
-                    Brak wpisów audytu. Zmień cenę/produkt i kliknij Zapisz przy pozycji.
+                    Brak zmian. Tu pojawią się zmiany cen, produktów i statusu.
                   </td>
                 </tr>
               )}
@@ -3615,7 +3866,7 @@ function variantOptionLabel(v: ProductActiveVariant): string {
   const sku = (v.sku ?? '').trim()
   if (sku !== '' && sku !== v.label.trim()) parts.push(sku)
   if (v.purchase_price != null && v.purchase_price !== '') {
-    parts.push(`zakup ${formatPrice(v.purchase_price)} ${currencyLabel(v.currency)}`)
+    parts.push(`cena zakupu ${formatPrice(v.purchase_price)} ${currencyLabel(v.currency)}`)
   }
   return parts.join(' · ')
 }
@@ -3669,7 +3920,7 @@ function ItemVariantPicker({
         <option value="">—</option>
         {selectedMissing && (
           <option value={selectedId} disabled>
-            {savedLabel || `#${selectedId}`} (nieaktywny)
+            {savedLabel || `#${selectedId}`} (niedostępny u dostawcy)
           </option>
         )}
         {variants.map((v) => (
@@ -3893,20 +4144,20 @@ function ItemRow({
             <>
               {isExternal && (
                 <span className="rounded bg-orange-600 px-1 py-px text-[9px] font-bold uppercase text-white">
-                  Zewn.
+                  Spoza katalogu
                 </span>
               )}
               {changedByAi && !isExternal && !isSubstitute && (
                 <span className="rounded bg-violet-700 px-1 py-px text-[9px] font-bold uppercase text-white">
-                  AI
+                  Zmienione przy ostatnim dopasowaniu
                 </span>
               )}
               {isSubstitute && !isExternal && (
                 <span
-                  title="Inna marka/model niż w SIWZ — zamiennik spełniający wymaganie"
+                  title="Inna marka lub model niż w wymaganiu, ale spełnia wymaganie."
                   className="rounded bg-teal-700 px-1 py-px text-[9px] font-bold uppercase text-white"
                 >
-                  Zam.
+                  Zamiennik
                 </span>
               )}
             </>
@@ -3916,7 +4167,7 @@ function ItemRow({
           <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-sky-900">Oferta</div>
         {canEdit ? (
           <div className="flex flex-col gap-1">
-            <div className="flex items-start gap-1">
+            <div className="flex flex-wrap items-start gap-1">
               <ProductSearchSelect
                 products={products}
                 value={productId}
@@ -3947,15 +4198,15 @@ function ItemRow({
                   (item.ai_match_percent != null
                     ? hasSavedProduct
                       ? isProposal
-                        ? `Propozycja do sprawdzenia — nie spełnia wszystkich warunków (AI: ${item.ai_match_percent}%), braki w Uzasadnieniu`
-                        : `Dopasowanie AI: ${item.ai_match_percent}%`
-                      : `Wynik AI: ${item.ai_match_percent}%`
+                        ? `Propozycja do sprawdzenia — nie spełnia wszystkich warunków (ocena dopasowania: ${item.ai_match_percent}%), braki w sekcji „Dlaczego ten produkt”`
+                        : `Ocena dopasowania: ${item.ai_match_percent}%`
+                      : `Ostatnia ocena dopasowania: ${item.ai_match_percent}%`
                     : undefined)
                 }
               />
               <button
                 type="button"
-                title="Szukaj w katalogu po nazwie / SKU (bez AI)"
+                title="Szukaj w katalogu po nazwie albo kodzie produktu"
                 disabled={busy}
                 onClick={() => {
                   setAiModalWeb(false)
@@ -3964,11 +4215,11 @@ function ItemRow({
                 }}
                 className="shrink-0 rounded bg-sky-600 px-2 py-1 text-[10px] text-white hover:bg-sky-700 disabled:opacity-50"
               >
-                Szukaj
+                Szukaj po nazwie lub kodzie
               </button>
               <button
                 type="button"
-                title="Otwórz wyszukiwanie AI (katalog → top 5)"
+                title="Znajdzie w katalogu 5 produktów najlepiej pasujących do opisu pozycji"
                 disabled={busy}
                 onClick={() => {
                   setAiModalWeb(false)
@@ -3977,7 +4228,7 @@ function ItemRow({
                 }}
                 className="shrink-0 rounded bg-violet-600 px-2 py-1 text-[10px] text-white hover:bg-violet-700 disabled:opacity-50"
               >
-                AI
+                Szukaj w katalogu po opisie
               </button>
               <button
                 type="button"
@@ -3990,13 +4241,13 @@ function ItemRow({
                 }}
                 className="shrink-0 rounded bg-red-600 px-2 py-1 text-[10px] text-white hover:bg-red-700 disabled:opacity-50"
               >
-                AI Internet
+                Szukaj w internecie
               </button>
             </div>
             {companionPicked && (
               <div className="flex max-w-[280px] items-start justify-between gap-2 rounded border border-slate-200 bg-slate-50 px-2 py-1">
                 <span className="min-w-0 text-[10px] text-slate-700">
-                  Drugi: <b>{companionPicked.sku}</b>
+                  Drugi produkt kompletu: <b>{companionPicked.sku}</b>
                   <span className="mt-0.5 block truncate text-slate-500" title={companionPicked.name}>
                     {companionPicked.name}
                   </span>
@@ -4021,7 +4272,7 @@ function ItemRow({
             )}
             {allowCompanion && !companionPicked && (
               <p className="max-w-[280px] text-[10px] text-slate-500">
-                Dwa produkty w jednym wierszu — w wyszukiwaniu zaznacz oba i „Dodaj oba”.
+                Pozycja wymaga kompletu dwóch produktów — w wyszukiwaniu zaznacz oba i kliknij „Dodaj oba”.
               </p>
             )}
             <ProductAiMatchModal
@@ -4054,8 +4305,8 @@ function ItemRow({
                 setCompanionPrice('')
                 setMatchHint(
                   fromCatalog
-                    ? `Katalog: ${p.sku}`
-                    : `AI: ${p.sku} (${p.score}%)`,
+                    ? `Wybrano z katalogu: ${p.sku}`
+                    : `Wybrano z wyszukiwania po opisie: ${p.sku} (ocena dopasowania ${p.score}%)`,
                 )
                 setPendingAiScore(fromCatalog ? null : p.score)
                 setCustomName('')
@@ -4077,7 +4328,7 @@ function ItemRow({
                         ai_match_reasons: [
                           {
                             code: 'catalog',
-                            label: 'Wybór z wyszukiwania po nazwie / SKU',
+                            label: 'Wybór z wyszukiwania po nazwie lub kodzie produktu',
                             points: 100,
                           },
                         ],
@@ -4088,7 +4339,7 @@ function ItemRow({
                         ai_match_reasons: [
                           {
                             code: 'ai',
-                            label: 'Wybór z wyszukiwania AI',
+                            label: 'Wybór z wyszukiwania w katalogu po opisie',
                             points: p.score,
                           },
                         ],
@@ -4144,8 +4395,8 @@ function ItemRow({
                 })
                 setMatchHint(
                   fromCatalog
-                    ? `Katalog: ${main.sku} + ${companion.sku}`
-                    : `AI: ${main.sku} + ${companion.sku}`,
+                    ? `Wybrano z katalogu komplet: ${main.sku} + ${companion.sku}`
+                    : `Wybrano z wyszukiwania po opisie komplet: ${main.sku} + ${companion.sku}`,
                 )
                 setPendingAiScore(fromCatalog ? null : Math.round((main.score + companion.score) / 2))
                 setCustomName('')
@@ -4167,7 +4418,7 @@ function ItemRow({
                         ai_match_reasons: [
                           {
                             code: 'catalog',
-                            label: 'Wybór kompletu z wyszukiwania po nazwie / SKU',
+                            label: 'Wybór kompletu z wyszukiwania po nazwie lub kodzie produktu',
                             points: 100,
                           },
                         ],
@@ -4178,7 +4429,7 @@ function ItemRow({
                         ai_match_reasons: [
                           {
                             code: 'ai',
-                            label: `Komplet: ${main.sku} + ${companion.sku}`,
+                            label: `Komplet z wyszukiwania w katalogu po opisie: ${main.sku} + ${companion.sku}`,
                             points: Math.round((main.score + companion.score) / 2),
                           },
                         ],
@@ -4255,7 +4506,7 @@ function ItemRow({
             <button
               type="button"
               className="shrink-0 self-stretch bg-slate-50 p-2"
-              title={selectedProduct || item.main_product ? 'Szczegóły produktu' : undefined}
+              title={selectedProduct || item.main_product ? 'Pokaż kartę produktu' : undefined}
               onClick={() => {
                 const id = selectedProduct?.id ?? item.main_product?.id
                 if (id) setPreviewId(id)
@@ -4279,7 +4530,7 @@ function ItemRow({
                   ? `${selectedProduct.sku} ${productDisplayName(selectedProduct)}`
                   : item.main_product
                     ? `${item.main_product.sku} ${productDisplayName(item.main_product)}`
-                    : customName || item.custom_name || 'Własna propozycja'}
+                    : customName || item.custom_name || 'Produkt spoza katalogu'}
               </p>
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 {hasSavedProduct && !isExternal && (
@@ -4291,7 +4542,7 @@ function ItemRow({
                   <button
                     type="button"
                     className="rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[9px] font-semibold text-rose-800 hover:bg-rose-100"
-                    title={`${conflicts.requirement.length} niespełnionych wymagań · ${conflicts.card_fields.length} sprzecznych pól karty — kliknij`}
+                    title={`${conflicts.requirement.length} niespełnionych wymagań · ${conflicts.card_fields.length} sprzecznych pól karty produktu — kliknij, żeby zobaczyć szczegóły`}
                     onClick={() => setConflictsOpen(true)}
                   >
                     ⚠ {conflictsLabel(conflicts.requirement.length, conflicts.card_fields.length)}
@@ -4302,10 +4553,10 @@ function ItemRow({
                     type="button"
                     disabled={busy}
                     className="rounded border border-emerald-600 bg-white px-1.5 py-0.5 text-[9px] font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-40"
-                    title={`Ustaw cenę oferty = zakup × (1 + ${targetMarginPercent}% z przetargu)`}
+                    title={`Ustaw cenę w ofercie: cena zakupu plus narzut przetargu ${targetMarginPercent}%`}
                     onClick={() => applyTenderMarginToOffer()}
                   >
-                    Przelicz +{targetMarginPercent}%
+                    Dolicz narzut {targetMarginPercent}%
                   </button>
                 )}
               </div>
@@ -4323,10 +4574,10 @@ function ItemRow({
                   )}
                 </label>
                 <div>
-                  <div className="text-[10px] text-slate-500">Cena netto (PLN)</div>
+                  <div className="text-[10px] text-slate-500">Cena netto w ofercie (zł)</div>
                   <button
                     type="button"
-                    title={hasChanges ? 'Kliknij — historia zmian ceny' : 'Cena netto'}
+                    title={hasChanges ? 'Kliknij, żeby zobaczyć historię zmian ceny' : 'Cena netto w ofercie'}
                     onClick={() => setShowPriceHistory((v) => !v)}
                     className={`mt-0.5 flex min-w-[5.5rem] items-center gap-1 rounded border px-1.5 py-1 text-left text-xs ${
                       hasChanges
@@ -4338,7 +4589,7 @@ function ItemRow({
                       <input
                         className="w-20 border-0 bg-transparent p-0 outline-none"
                         value={price}
-                        title={companionPicked ? 'Cena pierwszego produktu' : 'Cena netto'}
+                        title={companionPicked ? 'Cena pierwszego produktu kompletu' : 'Cena netto w ofercie'}
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => setPrice(e.target.value)}
                       />
@@ -4358,8 +4609,8 @@ function ItemRow({
                   }`}
                   title={
                     item.margin_percent != null && Number(item.margin_percent) < 0
-                      ? `Ujemna marża — cena oferty poniżej zakupu (po upuście). Narzut przetargu: +${targetMarginPercent}%.`
-                      : 'Marża zreal. = (oferta − zakup) / oferta'
+                      ? `Ujemna marża — cena w ofercie jest niższa niż cena zakupu (po upuście). Narzut przetargu: ${targetMarginPercent}%.`
+                      : MARGIN_HINT
                   }
                 >
                   <div className="text-[10px] font-normal text-slate-500">Marża</div>
@@ -4391,11 +4642,11 @@ function ItemRow({
               )}
               {companionPicked && (
                 <div className="mt-1 text-[10px] text-slate-500">
-                  Drugi: {canEdit ? (
+                  Drugi produkt kompletu: {canEdit ? (
                     <input
                       className="ml-1 w-16 rounded border border-slate-300 px-1 py-0.5 text-xs"
                       value={companionPrice}
-                      title="Cena drugiego produktu"
+                      title="Cena drugiego produktu kompletu"
                       onChange={(e) => setCompanionPrice(e.target.value)}
                     />
                   ) : (
@@ -4457,7 +4708,7 @@ function ItemRow({
                             ai_match_reasons: [
                               {
                                 code: 'ai',
-                                label: 'Wybór z wyszukiwania AI',
+                                label: 'Wybór z wyszukiwania w katalogu po opisie',
                                 points: pendingAiScore,
                               },
                             ],
@@ -4496,24 +4747,24 @@ function ItemRow({
           <>
             <details className="mt-2 rounded border border-amber-200 bg-amber-50/70 px-2 py-1">
               <summary className="cursor-pointer text-[10px] font-semibold text-amber-950">
-                Własna propozycja{customName ? `: ${customName}` : ''}
+                Wpisz produkt ręcznie{customName ? `: ${customName}` : ''}
               </summary>
               <div className="mt-1 space-y-1">
                 <input
                   className="w-full rounded border border-amber-200 px-1.5 py-1 text-[11px]"
-                  placeholder="Nazwa do oferty"
+                  placeholder="Nazwa produktu do oferty"
                   disabled={busy}
                   value={customName}
                   onChange={(e) => setCustomName(e.target.value)}
                 />
                 <input
                   className="w-full rounded border border-amber-200 px-1.5 py-1 text-[11px]"
-                  placeholder="Link (opcjonalnie)"
+                  placeholder="Link do produktu (opcjonalnie)"
                   disabled={busy}
                   value={customUrl}
                   onChange={(e) => setCustomUrl(e.target.value)}
                 />
-                <p className="text-[10px] text-amber-900">Cenę wpisz w polu Cena netto (PLN) i zapisz.</p>
+                <p className="text-[10px] text-amber-900">Cenę wpisz w polu „Cena netto w ofercie (zł)” i kliknij „Zapisz”.</p>
               </div>
             </details>
             {hasSavedProduct && !isExternal && (
@@ -4522,7 +4773,8 @@ function ItemRow({
                 className="mt-1 rounded border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] text-violet-900"
               >
                 <summary className="cursor-pointer font-semibold">
-                  Uzasadnienie{item.ai_match_percent != null ? ` ${item.ai_match_percent}%` : ''}
+                  Dlaczego ten produkt
+                  {item.ai_match_percent != null ? ` (ocena dopasowania ${item.ai_match_percent}%)` : ''}
                 </summary>
                 {(item.ai_match_reasons?.length ?? 0) > 0 ? (
                   <ul className="mt-1 list-disc pl-4">
@@ -4531,10 +4783,7 @@ function ItemRow({
                         {r.code === 'external_link' || r.code === 'custom_offer' ? (
                           <ExternalHintLink reason={r} />
                         ) : (
-                          <>
-                            {r.label}
-                            {r.points > 0 ? ` (+${r.points})` : ''}
-                          </>
+                          <span title={r.points > 0 ? `+${r.points} punktów do oceny` : undefined}>{r.label}</span>
                         )}
                       </li>
                     ))}

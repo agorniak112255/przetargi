@@ -216,8 +216,8 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertLessThan(app(ProductMatchService::class)->minMatchScore(), (int) $item->ai_match_percent);
         $this->assertSame(ProductMatchService::PROPOSAL, $item->ai_match_reasons[0]['code'] ?? null);
         $label = (string) ($item->ai_match_reasons[0]['label'] ?? '');
-        $this->assertStringContainsString('innego producenta (REJS) niż nazwany w zapytaniu (UVEX)', $label);
-        $this->assertStringContainsString('bez oceny modelu', $label);
+        $this->assertStringContainsString('innego producenta (REJS) niż nazwany w wymaganiu zamawiającego (UVEX)', $label);
+        $this->assertStringContainsString('bez automatycznej oceny', $label);
     }
 
     /** Marki z zapytania nie ma w katalogu — karta innej marki jest zamiennikiem jak dotąd (zapis z sufitem 70%). */
@@ -398,7 +398,7 @@ final class TenderMatchModelStateTest extends TestCase
         $this->assertSame((int) $glove->id, (int) $item->main_product_id, 'oferta nie znika, gdy model nie odpowiedział');
         $this->assertLessThanOrEqual(70, (int) $item->ai_match_percent, 'stary procent nie może udawać świeżej oceny');
         $this->assertSame('not_reconfirmed', $item->ai_match_reasons[0]['code'] ?? null);
-        $this->assertStringContainsString('Model nie odpowiedział', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+        $this->assertStringContainsString('Nie udało się ponownie ocenić tej pozycji', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
         $this->assertNotContains('Wynik sprzed poprawek', array_column($item->ai_match_reasons, 'label'));
         $this->assertSame(1, $result['model_unavailable']);
         $this->assertSame(1, $result['model_failed'], 'pozycja z zachowaną kartą też jest skutkiem awarii modelu');
@@ -594,7 +594,7 @@ final class TenderMatchModelStateTest extends TestCase
         $item->refresh();
 
         $this->assertSame('not_reconfirmed', $item->ai_match_reasons[0]['code'] ?? null);
-        $this->assertStringContainsString('Model ocenił poprzednią kartę na 30%', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+        $this->assertStringContainsString('Poprzedni produkt dostał ocenę dopasowania 30%', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
         $this->assertSame(30, (int) $item->ai_match_percent);
     }
 
@@ -664,7 +664,7 @@ final class TenderMatchModelStateTest extends TestCase
 
         $this->assertSame($gloveId, (int) $item->main_product_id);
         $this->assertSame(ProductMatchService::PROPOSAL, $item->ai_match_reasons[0]['code'] ?? null);
-        $this->assertStringContainsString('ocena modelu 50%', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+        $this->assertStringContainsString('ocena dopasowania 50%', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
         $this->assertSame(50, (int) $item->ai_match_percent, 'procent nie wyższy niż ocena modelu');
     }
 
@@ -712,7 +712,7 @@ final class TenderMatchModelStateTest extends TestCase
         $item->refresh();
 
         $this->assertSame($gloveId, (int) $item->main_product_id, 'pojedyncza pozycja — ta sama zasada co cały przetarg');
-        $this->assertStringContainsString('Karta nie potwierdza: kategoria III, EN 420.', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
+        $this->assertStringContainsString('Karta produktu nie potwierdza: kategoria III, EN 420.', (string) ($item->ai_match_reasons[0]['label'] ?? ''));
     }
 
     /**

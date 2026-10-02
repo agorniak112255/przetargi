@@ -48,7 +48,7 @@ final class TenderDocumentImportService
         $mode = in_array($mode, ['simple', 'ai', 'full'], true) ? $mode : 'simple';
         $targets = array_values(array_intersect($targets, ['items', 'conditions']));
         if ($targets === []) {
-            throw new RuntimeException('Wybierz cel: pozycje i/lub warunki.');
+            throw new RuntimeException('Zaznacz, co odczytać z pliku: pozycje, warunki albo jedno i drugie.');
         }
 
         $ext = mb_strtolower($file->getClientOriginalExtension() ?: pathinfo($file->getClientOriginalName(), PATHINFO_EXTENSION));
@@ -164,7 +164,7 @@ final class TenderDocumentImportService
             $document->extracted_text = $text;
         }
         if ($text === '') {
-            throw new RuntimeException('Brak tekstu dokumentu do ponownej analizy.');
+            throw new RuntimeException('Brak tekstu tego dokumentu — dodaj plik ponownie, żeby odczytać go jeszcze raz.');
         }
 
         // najpierw arkusz/tabela — gdy pozycje są stamtąd, model nie ma ich przepisywać

@@ -82,7 +82,7 @@ final class TenderSpreadsheetItemExtractorTest extends TestCase
 
         $this->assertNotNull($result);
         $this->assertCount(5, $result['items']);
-        $this->assertStringContainsString('Scalono 3 arkusze', $result['notes']);
+        $this->assertStringContainsString('Połączono 3 arkusze', $result['notes']);
 
         $byName = [];
         foreach ($result['items'] as $item) {

@@ -10,6 +10,7 @@ use App\Models\TenderCondition;
 use App\Services\TenderWorkflowService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class TenderConditionController extends Controller
@@ -55,12 +56,19 @@ class TenderConditionController extends Controller
             'content' => ['sometimes', 'string', 'max:5000'],
             'category' => ['nullable', 'string', 'max:64'],
             'sort_order' => ['sometimes', 'integer', 'min:0'],
+            // lista kontrolna: null = do sprawdzenia
+            'status' => ['sometimes', 'nullable', Rule::in(TenderCondition::STATUSES)],
         ]);
+        if (array_key_exists('status', $data)) {
+            // kto i kiedy zaznaczył — tylko przy zaznaczonym stanie, „do sprawdzenia” czyści oba pola
+            $data['status_user_id'] = $data['status'] === null ? null : $request->user()?->id;
+            $data['status_at'] = $data['status'] === null ? null : now();
+        }
         $condition->update($data);
         $tender->last_activity_at = now();
         $tender->save();
 
-        return response()->json($condition->fresh());
+        return response()->json($condition->fresh(['statusUser:id,name']));
     }
 
     public function destroy(Tender $tender, TenderCondition $condition): JsonResponse
@@ -78,7 +86,7 @@ class TenderConditionController extends Controller
     {
         if (! $this->workflow->canEditOffer($tender)) {
             throw ValidationException::withMessages([
-                'tender' => ['Edycja zablokowana — status: '.$tender->status],
+                'tender' => ['Warunków nie można już zmieniać — przetarg ma status „'.TenderWorkflowService::statusLabel($tender->status).'”.'],
             ]);
         }
     }

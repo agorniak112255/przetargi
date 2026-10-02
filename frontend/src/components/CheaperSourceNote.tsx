@@ -16,9 +16,9 @@ export function CheaperSourceNote({
   if (!cheaper) return null
   const price = `${formatPrice(cheaper.purchase_price_pln)} zł`
   const title =
-    `Taniej u ${cheaper.label}: zakup netto ${price} (${formatPct(cheaper.diff_pct)} względem ceny obowiązującej, ` +
-    'przeliczenie kursem NBP). Cena karty to nadal cena obowiązująca (pierwszeństwo cennika producenta) — ' +
-    'porównanie wszystkich źródeł na karcie wyrobu, w tabeli „Ceny ze źródeł”.'
+    `Taniej u ${cheaper.label}: cena zakupu netto ${price} (${formatPct(cheaper.diff_pct)} względem obowiązującej ` +
+    'ceny zakupu, przeliczone na złote po kursie NBP). Karta produktu nadal liczy z obowiązującej ceny ' +
+    '(pierwszeństwo ma cennik producenta) — wszystkie źródła porównasz na karcie produktu, w tabeli „Ceny ze źródeł”.'
   return (
     <span className={`block text-[11px] text-emerald-700 ${className}`} title={title}>
       taniej u {cheaper.label}: <b className="tabular-nums">{price}</b> ({formatPct(cheaper.diff_pct)})
