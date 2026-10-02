@@ -44,6 +44,7 @@ export const COLUMN_ROLES: Array<{
   { key: 'catalog_price', label: 'Cena katalogowa', required: true },
   { key: 'discount', label: 'Upust %' },
   { key: 'purchase', label: 'Cena zakupu' },
+  { key: 'surcharge', label: 'Dopłata %', hint: 'doliczana do ceny katalogowej' },
   { key: 'price_unit', label: 'Jednostka ceny', hint: 'PAI / PCE / CAR' },
   {
     key: 'pack_price',

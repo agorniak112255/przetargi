@@ -1193,7 +1193,7 @@ final class PriceListImportService
             $cols = is_array($sheetMap['columns'] ?? null) ? $sheetMap['columns'] : [];
             $map = [];
             $mappable = array_merge(
-                ['sku', 'sku_alt', 'name', 'name_extra', 'catalog_price', 'discount', 'purchase', 'price_unit', 'pack_price', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'],
+                ['sku', 'sku_alt', 'name', 'name_extra', 'catalog_price', 'discount', 'purchase', 'surcharge', 'price_unit', 'pack_price', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'],
                 // kolumny z parametrem wyrobu przechodzą tak samo jak reszta mapowania
                 SpreadsheetColumnMapper::attributeFields(),
             );
@@ -2338,6 +2338,22 @@ final class PriceListImportService
                 'status' => 'error',
                 'message' => "{$prefix}Wiersz {$excelRow}: niepoprawna cena",
             ];
+        }
+        // Cennik Ansell: cena faktury (P) = cena po upuście + dopłata % (kolumna M), a cena katalogowa (E) jest
+        // bez dopłaty. Katalogowa z dopłatą trzyma kartę spójną: katalog − upust = zakup (np. 3,68 + 25% = 4,60;
+        // − 8% = 4,24). Dopłatę wskazuje człowiek w oknie importu; pusta komórka = bez dopłaty.
+        if (isset($map['surcharge'])) {
+            $surcharge = $this->toFloat($row[$map['surcharge']] ?? null) ?? 0.0;
+            if ($surcharge > 0 && $surcharge < 1) {
+                $surcharge *= 100;
+            }
+            if ($surcharge < 0 || $surcharge > 100) {
+                return [
+                    'status' => 'error',
+                    'message' => "{$prefix}Wiersz {$excelRow}: niepoprawna dopłata % ({$surcharge}) — pominięto",
+                ];
+            }
+            $catalog = round($catalog * (1 + $surcharge / 100), 2);
         }
 
         $discount = isset($map['discount'])

@@ -238,6 +238,48 @@ final class PriceListManualColumnMappingTest extends TestCase
         }
     }
 
+    /**
+     * Cena faktury Ansell (P) zawiera dopłatę % (kolumna M), cena katalogowa (E) — nie. Przy 25% dopłaty zakup
+     * przebijał katalog (TouchNTuff 92600VP: katalog 3,68, zakup 4,24 za opakowanie). Katalogowa z dopłatą:
+     * 88,38 × 1,25 / 24 opakowania = 4,60, a upust wraca do 8% z pliku.
+     */
+    public function test_surcharge_column_raises_catalog_price(): void
+    {
+        $path = $this->makeAnsellSpreadsheet();
+        try {
+            $preview = app(PriceListImportService::class)->previewFromMapping(
+                $path,
+                $this->ansellMapping(['purchase', 'surcharge', 'price_unit', 'pack_price'], true),
+                50,
+            );
+            $byName = [];
+            foreach ($preview['products'] as $product) {
+                $byName[$product['name']] = $product;
+            }
+
+            $touch = $byName['TouchNTuff 92600VP VEND'] ?? [];
+            $this->assertEqualsWithDelta(4.60, $touch['catalog_price_net'] ?? null, 0.001);
+            $this->assertEqualsWithDelta(4.235, $touch['purchase_price'] ?? null, 0.001);
+            $this->assertEqualsWithDelta(7.93, $touch['discount_percent'] ?? null, 0.01);
+
+            // para: 18,09 + 10% = 19,90; zakup 18,30 → upust 8%
+            $ringers = $byName['RINGERS 065'] ?? $byName['RINGERS 065 SIZE 7,0'] ?? [];
+            $this->assertEqualsWithDelta(19.90, $ringers['catalog_price_net'] ?? null, 0.001);
+            $this->assertEqualsWithDelta(18.30, $ringers['purchase_price'] ?? null, 0.001);
+            $this->assertEqualsWithDelta(8.04, $ringers['discount_percent'] ?? null, 0.01);
+
+            foreach ($preview['products'] as $product) {
+                $this->assertLessThanOrEqual(
+                    $product['catalog_price_net'],
+                    $product['purchase_price'],
+                    $product['name'].': zakup z dopłatą nie przebija katalogu z dopłatą',
+                );
+            }
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function test_carton_rows_import_pack_price_into_file_slot(): void
     {
         $path = $this->makeAnsellSpreadsheet();
@@ -291,13 +333,13 @@ final class PriceListManualColumnMappingTest extends TestCase
      * @param  list<string>  $locked
      * @return array<string, mixed>
      */
-    private function ansellMapping(array $locked): array
+    private function ansellMapping(array $locked, bool $surcharge = false): array
     {
         return $this->mapping(
             [
                 'sku' => 0, 'name' => 1, 'catalog_price' => 2, 'discount' => 3, 'purchase' => 4,
                 'currency' => 5, 'price_unit' => 6, 'pack_price' => 7,
-            ],
+            ] + ($surcharge ? ['surcharge' => 8] : []),
             $locked,
             'Price List & SPO',
         );
@@ -306,12 +348,13 @@ final class PriceListManualColumnMappingTest extends TestCase
     private function makeAnsellSpreadsheet(): string
     {
         $rows = [
-            ['Product Reference', 'Description', 'Price List Price', 'PL Discount %', 'Final Invoice Price', 'Currency', 'Price UOM', 'Cena za opak.'],
-            ['065-07', 'RINGERS 065 SIZE 7,0', 18.09, 0.08, 18.30, 'EUR', 'PAI', null],
-            ['11200000', 'HyFlex 11200 SIZE 19', 8.41, 0.08, 8.83, 'EUR', 'PCE', null],
-            ['13823', 'KLNGD G60 PolyU Lvl 3 Gloves PalmGry', 53.86, 0.08, 52.03, 'EUR', 'CAR', 52.03],
-            ['13837', 'KLNGD G40 Gloves PU Black', 107.22, 0.08, 103.57, 'EUR', 'CAR', 20.714],
-            ['67308', 'KLNGD KGA10 Coverall Hood EWA M', 95.00, 0.08, 92.06, 'EUR', 'CAR', null],
+            ['Product Reference', 'Description', 'Price List Price', 'PL Discount %', 'Final Invoice Price', 'Currency', 'Price UOM', 'Cena za opak.', '%'],
+            ['065-07', 'RINGERS 065 SIZE 7,0', 18.09, 0.08, 18.30, 'EUR', 'PAI', null, 10],
+            ['11200000', 'HyFlex 11200 SIZE 19', 8.41, 0.08, 8.83, 'EUR', 'PCE', null, 5],
+            ['13823', 'KLNGD G60 PolyU Lvl 3 Gloves PalmGry', 53.86, 0.08, 52.03, 'EUR', 'CAR', 52.03, 5],
+            ['13837', 'KLNGD G40 Gloves PU Black', 107.22, 0.08, 103.57, 'EUR', 'CAR', 20.714, 5],
+            ['92600VP070', 'TouchNTuff 92600VP VEND', 88.38, 0.08, 101.64, 'EUR', 'CAR', 4.235, 25],
+            ['67308', 'KLNGD KGA10 Coverall Hood EWA M', 95.00, 0.08, 92.06, 'EUR', 'CAR', null, 5],
         ];
 
         $spreadsheet = new Spreadsheet;
