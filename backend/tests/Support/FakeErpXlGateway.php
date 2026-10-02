@@ -221,6 +221,79 @@ final class FakeErpXlGateway implements ErpXlGateway
         }
     }
 
+    /** @var list<array{customer_gid: int, net: float, documents: int, last_date: int}> */
+    public array $salesTotalRows = [];
+
+    /** @var array{0: int, 1: int}|null ostatni okres customerSalesTotals */
+    public ?array $salesTotalsPeriod = null;
+
+    /** @var list<array<string, mixed>> karty jak z customerCards (pomocnik card()) */
+    public array $cardRows = [];
+
+    /** @var list<string> */
+    public array $cardUnavailable = [];
+
+    /** @var list<array{customer_gid: int, name: ?string, position: ?string, email: ?string, phone: ?string, mobile: ?string}> */
+    public array $contactRows = [];
+
+    /** @var list<string> */
+    public array $contactUnavailable = [];
+
+    /** @var list<array{customer_gid: int, first_name: ?string, last_name: ?string, acronym: ?string, email: ?string}> */
+    public array $managerRows = [];
+
+    /** @var list<list<int>> listy kontrahentów, o które pytano customerCards */
+    public array $cardCalls = [];
+
+    public function customerSalesTotals(int $fromClarionDate, int $toClarionDate): array
+    {
+        $this->salesTotalsPeriod = [$fromClarionDate, $toClarionDate];
+
+        return $this->salesTotalRows;
+    }
+
+    public function customerCards(array $gids): array
+    {
+        $this->cardCalls[] = array_values($gids);
+        $rows = array_values(array_filter($this->cardRows, static fn (array $r): bool => in_array($r['gid'], $gids, true)));
+        foreach ($rows as &$row) {
+            foreach ($this->cardUnavailable as $field) {
+                $row[$field] = null;
+            }
+        }
+
+        return ['rows' => $rows, 'unavailable' => $this->cardUnavailable];
+    }
+
+    public function customerContacts(array $gids): array
+    {
+        $rows = array_values(array_filter($this->contactRows, static fn (array $r): bool => in_array($r['customer_gid'], $gids, true)));
+
+        return ['rows' => $rows, 'unavailable' => $this->contactUnavailable];
+    }
+
+    public function customerManagers(array $gids, int $onClarionDate): array
+    {
+        return array_values(array_filter($this->managerRows, static fn (array $r): bool => in_array($r['customer_gid'], $gids, true)));
+    }
+
+    /** @return array<string, mixed> karta kontrahenta z customerCards, nadpisania w $overrides */
+    public static function card(int $gid, string $acronym, array $overrides = []): array
+    {
+        return [
+            'gid' => $gid, 'acronym' => $acronym, 'name' => 'Firma '.$acronym, 'nip' => null, 'nip_prefix' => 'PL', 'regon' => null,
+            'street' => 'ul. Długa 1', 'address_line2' => null, 'postal_code' => '35-001', 'city' => 'Rzeszów', 'county' => null,
+            'commune' => null, 'voivodeship' => 'podkarpackie', 'country' => 'Polska', 'phone' => '17 850 00 00', 'phone2' => null,
+            'fax' => null, 'email' => null, 'website' => null, 'archived' => false, ...$overrides,
+        ];
+    }
+
+    /** @return array{customer_gid: int, net: float, documents: int, last_date: int} */
+    public static function salesTotal(int $customerGid, float $net, int $lastDate, int $documents = 1): array
+    {
+        return ['customer_gid' => $customerGid, 'net' => $net, 'documents' => $documents, 'last_date' => $lastDate];
+    }
+
     /** @return array{document_type: int, document_id: int, line: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float} */
     public static function saleLine(int $documentId, int $date, int $customerGid, int $itemGid, float $quantity, float $netValue, int $line = 1, int $type = 2033): array
     {

@@ -147,4 +147,39 @@ interface ErpXlGateway
      * @return array{before: list<array{gid: int, warehouse_code: string|null, date: int}>, days: list<array{gid: int, warehouse_code: string|null, date: int}>}
      */
     public function saleHistory(array $gids, int $fromClarionDate): array;
+
+    /**
+     * Zakupy kontrahentów w okresie [od, do] (daty Clarion, TrN_Data2): netto PLN (TrE_KsiegowaNetto) z FS, PA i FSE
+     * zatwierdzonych (TrN_Stan 3–5) pomniejszone o ich korekty; documents = liczba FS/PA/FSE bez korekt; last_date —
+     * ostatni z tych dokumentów (0, gdy kontrahent ma same korekty). Bez kontrahenta jednorazowego (numer 0).
+     *
+     * @return list<array{customer_gid: int, net: float, documents: int, last_date: int}>
+     */
+    public function customerSalesTotals(int $fromClarionDate, int $toClarionDate): array;
+
+    /**
+     * Pełna karta kontrahentów z listy (Knt_GIDTyp = 32), wartości dosłownie z XL (bez zbędnych spacji, pusty = null).
+     * Kolumny, do których login XL nie ma prawa odczytu (GRANT kolumnowy), wracają jako null i ich nazwy pól są w
+     * `unavailable` — żeby wywołujący nie nadpisał nimi zapisanych wcześniej danych.
+     *
+     * @param  list<int>  $gids
+     * @return array{rows: list<array{gid: int, acronym: string, name: string, nip: ?string, nip_prefix: ?string, regon: ?string, street: ?string, address_line2: ?string, postal_code: ?string, city: ?string, county: ?string, commune: ?string, voivodeship: ?string, country: ?string, phone: ?string, phone2: ?string, fax: ?string, email: ?string, website: ?string, archived: bool}>, unavailable: list<string>}
+     */
+    public function customerCards(array $gids): array;
+
+    /**
+     * Osoby kontaktowe kontrahentów z listy (KntOsoby), bez archiwalnych; kolumny bez prawa odczytu jak w customerCards.
+     *
+     * @param  list<int>  $gids
+     * @return array{rows: list<array{customer_gid: int, name: ?string, position: ?string, email: ?string, phone: ?string, mobile: ?string}>, unavailable: list<string>}
+     */
+    public function customerContacts(array $gids): array;
+
+    /**
+     * Opiekunowie z karty kontrahenta (KntOpiekun → PrcKarty) przypisani w dniu `$onClarionDate` (DataOd ≤ dzień ≤ DataDo).
+     *
+     * @param  list<int>  $gids
+     * @return list<array{customer_gid: int, first_name: ?string, last_name: ?string, acronym: ?string, email: ?string}>
+     */
+    public function customerManagers(array $gids, int $onClarionDate): array;
 }

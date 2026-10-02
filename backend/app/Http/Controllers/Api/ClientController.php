@@ -11,14 +11,17 @@ use Illuminate\Http\Request;
 
 class ClientController extends Controller
 {
-    public function index(): JsonResponse
+    /** Krótka lista (wybór klienta w przetargu); `details=1` — pełne dane z ERP XL dla zakładki Klienci. */
+    public function index(Request $request): JsonResponse
     {
+        $query = Client::query();
+        // select przed withCount — późniejszy select zastąpiłby kolumnę tenders_count
+        if (! $request->boolean('details')) {
+            $query->select(['id', 'name', 'nip', 'city', 'owner_id']);
+        }
+
         return response()->json(
-            Client::query()
-                ->with(['owner:id,name'])
-                ->withCount('tenders')
-                ->orderBy('name')
-                ->get()
+            $query->with(['owner:id,name'])->withCount('tenders')->orderBy('name')->get()
         );
     }
 

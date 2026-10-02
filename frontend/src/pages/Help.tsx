@@ -1323,7 +1323,7 @@ function ClientsHelp() {
       slides={[
         {
           action: 'Lista firm',
-          does: 'Książka klientów do wyboru w nowym przetargu. Widać NIP, miasto, liczbę spraw i opiekuna.',
+          does: 'Książka klientów do wyboru w nowym przetargu. Co noc dopisują się firmy z ERP XL, które w tym roku kupiły za co najmniej 3000 zł netto — z adresem, NIP-em, e-mailami, opiekunem i zakupami w roku. Kliknięcie wiersza pokazuje pełne dane i osoby kontaktowe.',
           click: 'Menu „Klienci”.',
           tone: 'slate',
           screen: (
@@ -1344,25 +1344,28 @@ function ClientsHelp() {
                       <tr className="border-b bg-slate-50">
                         <Th>Nazwa</Th>
                         <Th>NIP</Th>
-                        <Th>Miasto</Th>
-                        <Th>Przetargi</Th>
+                        <Th>Adres</Th>
                         <Th>Opiekun</Th>
+                        <Th>Zakupy netto 2026</Th>
+                        <Th>Przetargi</Th>
                       </tr>
                     </thead>
                     <tbody>
                       <tr className="border-b">
                         <td className="p-2">Mittal</td>
                         <td className="p-2">5170001111</td>
-                        <td className="p-2">Dąbrowa</td>
+                        <td className="p-2">Dąbrowa Górnicza</td>
+                        <td className="p-2">Anna Nowak</td>
+                        <td className="p-2">125 000,00 zł</td>
                         <td className="p-2">4</td>
-                        <td className="p-2">Artur</td>
                       </tr>
                       <tr className="border-b">
                         <td className="p-2">Sanitex</td>
                         <td className="p-2">—</td>
                         <td className="p-2">Rzeszów</td>
-                        <td className="p-2">2</td>
                         <td className="p-2">Artur</td>
+                        <td className="p-2">—</td>
+                        <td className="p-2">2</td>
                       </tr>
                     </tbody>
                   </table>

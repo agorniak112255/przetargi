@@ -46,6 +46,15 @@ final class ErpXlClient implements ErpXlGateway
     private const CUSTOMER_SALE_STATES = [3, 4, 5];
 
     /**
+     * Zakupy klienta w zakładce Klienci: FS, PA i FSE (2037, faktura eksportowa — Mittal w EUR, wartość księgowa w PLN).
+     * 2036 to nie sprzedaż: seria 01K, kontrahenci-dostawcy (Ansell, Ardon, Malfini) — sprawdzone na produkcji 02.10.2026.
+     */
+    private const CLIENT_SALE_TYPES = [2033, 2034, 2037];
+
+    /** Korekty FS (2041) i PA (2042) — wartości ze znakiem, pomniejszają zakupy. */
+    private const CLIENT_CORRECTION_TYPES = [2041, 2042];
+
+    /**
      * Data sprzedaży dokumentu (Clarion) do „ostatniej sprzedaży” (decyzja właściciela 01.10.2026, wariant B): dokument
      * w buforze (TrN_Stan < 3) ma TrN_Data2 przestawiane przez XL co noc na dziś — wtedy dzień ostatniej zmiany nagłówka
      * (TrN_LastMod, XlTimestamp → dni od 1.01.1990 + 69035 = Clarion). Zbiorcza WZ dopisywana co kilka dni zostaje
@@ -616,6 +625,153 @@ final class ErpXlClient implements ErpXlGateway
         };
 
         return ['before' => array_map($map, $before), 'days' => array_map($map, $days)];
+    }
+
+    public function customerSalesTotals(int $fromClarionDate, int $toClarionDate): array
+    {
+        $sales = implode(',', self::CLIENT_SALE_TYPES);
+        $types = implode(',', [...self::CLIENT_SALE_TYPES, ...self::CLIENT_CORRECTION_TYPES]);
+        $states = implode(',', self::CUSTOMER_SALE_STATES);
+        $customer = self::CUSTOMER_TYPE;
+        $this->yieldToXl();
+        // numery dokumentów liczone na typ — GIDNumer jest unikalny w obrębie typu
+        $rows = $this->db()->select(<<<SQL
+            SELECT n.TrN_KntNumer AS customer_gid, SUM(e.TrE_KsiegowaNetto) AS net,
+                   COUNT(DISTINCT CASE WHEN n.TrN_GIDTyp IN ($sales) THEN CAST(n.TrN_GIDTyp AS bigint) * 100000000 + n.TrN_GIDNumer END) AS documents,
+                   MAX(CASE WHEN n.TrN_GIDTyp IN ($sales) THEN n.TrN_Data2 ELSE 0 END) AS last_date
+            FROM CDN.TraElem e
+            JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
+            WHERE n.TrN_KntTyp = $customer AND n.TrN_KntNumer > 0 AND n.TrN_GIDTyp IN ($types)
+              AND n.TrN_Stan IN ($states) AND n.TrN_Data2 BETWEEN ? AND ?
+            GROUP BY n.TrN_KntNumer
+            SQL, [$fromClarionDate, $toClarionDate]);
+
+        return array_map(static fn ($r): array => [
+            'customer_gid' => (int) $r->customer_gid,
+            'net' => round((float) $r->net, 2),
+            'documents' => (int) $r->documents,
+            'last_date' => (int) $r->last_date,
+        ], $rows);
+    }
+
+    public function customerCards(array $gids): array
+    {
+        // pole => kolumna XL; nazwa, akronim i NIP są w podstawowym GRANT-cie (login-przetargi*.sql)
+        $columns = [
+            'nip_prefix' => 'Knt_NipPrefiks', 'regon' => 'Knt_Regon', 'street' => 'Knt_Ulica', 'address_line2' => 'Knt_Adres',
+            'postal_code' => 'Knt_KodP', 'city' => 'Knt_Miasto', 'county' => 'Knt_Powiat', 'commune' => 'Knt_Gmina',
+            'voivodeship' => 'Knt_Wojewodztwo', 'country' => 'Knt_Kraj', 'phone' => 'Knt_Telefon1', 'phone2' => 'Knt_Telefon2',
+            'fax' => 'Knt_Fax', 'email' => 'Knt_EMail', 'website' => 'Knt_URL',
+        ];
+        [$readable, $unavailable] = $this->readableColumns('CDN.KntKarty', $columns);
+        $base = ['Knt_GIDNumer', 'Knt_Akronim', 'Knt_Nazwa1', 'Knt_Nazwa2', 'Knt_Nazwa3', 'Knt_Nip', 'Knt_NipE', 'Knt_Archiwalny'];
+
+        $out = [];
+        foreach (array_chunk(array_values(array_unique(array_map('intval', $gids))), 500) as $chunk) {
+            $rows = $this->db()->table('CDN.KntKarty')
+                ->select([...$base, ...array_values($readable)])
+                ->where('Knt_GIDTyp', self::CUSTOMER_TYPE)
+                ->whereIn('Knt_GIDNumer', $chunk)
+                ->orderBy('Knt_GIDNumer')
+                ->get();
+            foreach ($rows as $r) {
+                $row = [
+                    'gid' => (int) $r->Knt_GIDNumer,
+                    'acronym' => trim((string) $r->Knt_Akronim),
+                    // nazwa w XL rozpisana na trzy wiersze — łączymy dosłownie spacją (jak customers())
+                    'name' => implode(' ', array_filter(
+                        [$this->text($r->Knt_Nazwa1), $this->text($r->Knt_Nazwa2), $this->text($r->Knt_Nazwa3)],
+                        static fn (?string $part): bool => $part !== null,
+                    )),
+                    'nip' => $this->text($r->Knt_Nip) ?? $this->text($r->Knt_NipE),
+                ];
+                foreach ($columns as $field => $column) {
+                    $row[$field] = isset($readable[$field]) ? $this->text($r->{$column}) : null;
+                }
+                $row['archived'] = (int) $r->Knt_Archiwalny !== 0;
+                $out[] = $row;
+            }
+        }
+
+        return ['rows' => $out, 'unavailable' => $unavailable];
+    }
+
+    public function customerContacts(array $gids): array
+    {
+        $columns = ['name' => 'KnS_Nazwa', 'position' => 'KnS_Stanowisko', 'email' => 'KnS_EMail', 'phone' => 'KnS_Telefon', 'mobile' => 'KnS_TelefonK'];
+        [$readable, $unavailable] = $this->readableColumns('CDN.KntOsoby', $columns);
+
+        $out = [];
+        foreach (array_chunk(array_values(array_unique(array_map('intval', $gids))), 500) as $chunk) {
+            $rows = $this->db()->table('CDN.KntOsoby')
+                ->select(['KnS_KntNumer', ...array_values($readable)])
+                ->where('KnS_KntTyp', self::CUSTOMER_TYPE)
+                ->whereIn('KnS_KntNumer', $chunk)
+                ->where('KnS_Archiwalny', 0)
+                ->orderBy('KnS_KntNumer')
+                ->orderBy('KnS_Nazwa')
+                ->get();
+            foreach ($rows as $r) {
+                $row = ['customer_gid' => (int) $r->KnS_KntNumer];
+                foreach ($columns as $field => $column) {
+                    $row[$field] = isset($readable[$field]) ? $this->text($r->{$column}) : null;
+                }
+                $out[] = $row;
+            }
+        }
+
+        return ['rows' => $out, 'unavailable' => $unavailable];
+    }
+
+    public function customerManagers(array $gids, int $onClarionDate): array
+    {
+        $out = [];
+        foreach (array_chunk(array_values(array_unique(array_map('intval', $gids))), 500) as $chunk) {
+            $rows = $this->db()->table('CDN.KntOpiekun as o')
+                ->leftJoin('CDN.PrcKarty as p', 'p.Prc_GIDNumer', '=', 'o.KtO_PrcNumer')
+                ->select(['o.KtO_KntNumer', 'p.Prc_Imie1', 'p.Prc_Nazwisko', 'p.Prc_Akronim', 'p.Prc_EMail'])
+                ->where('o.KtO_KntTyp', self::CUSTOMER_TYPE)
+                ->whereIn('o.KtO_KntNumer', $chunk)
+                ->where('o.KtO_DataOd', '<=', $onClarionDate)
+                ->where('o.KtO_DataDo', '>=', $onClarionDate)
+                ->orderBy('o.KtO_KntNumer')
+                ->orderByDesc('o.KtO_Glowny')
+                ->get();
+            foreach ($rows as $r) {
+                $out[] = [
+                    'customer_gid' => (int) $r->KtO_KntNumer,
+                    'first_name' => $this->text($r->Prc_Imie1),
+                    'last_name' => $this->text($r->Prc_Nazwisko),
+                    'acronym' => $this->text($r->Prc_Akronim),
+                    'email' => $this->text($r->Prc_EMail),
+                ];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Które z kolumn login XL może czytać — prawa nadawane są kolumnami (login-przetargi*.sql), a SELECT choć jednej
+     * niedozwolonej kolumny kończy całe zapytanie błędem.
+     *
+     * @param  array<string, string>  $columns  pole => kolumna XL
+     * @return array{0: array<string, string>, 1: list<string>} [czytelne pole => kolumna, pola bez prawa odczytu]
+     */
+    private function readableColumns(string $table, array $columns): array
+    {
+        $allowed = [];
+        foreach ($this->db()->select(
+            "SELECT c.name, HAS_PERMS_BY_NAME(?, 'OBJECT', 'SELECT', c.name, 'COLUMN') AS readable FROM sys.columns c WHERE c.object_id = OBJECT_ID(?)",
+            [$table, $table],
+        ) as $r) {
+            if ((int) $r->readable === 1) {
+                $allowed[(string) $r->name] = true;
+            }
+        }
+        $readable = array_filter($columns, static fn (string $column): bool => isset($allowed[$column]));
+
+        return [$readable, array_keys(array_diff_key($columns, $readable))];
     }
 
     /**

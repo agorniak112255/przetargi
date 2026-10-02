@@ -139,7 +139,7 @@ final class ErpCustomerSync
         $withEmail = 0;
         foreach ($customers as $c) {
             $gid = $c['gid'];
-            $emails = $this->normalizeEmails([$c['email'] ?? '', ...($addressEmails[$gid] ?? [])]);
+            $emails = self::normalizeEmails([$c['email'] ?? '', ...($addressEmails[$gid] ?? [])]);
             if ($emails !== []) {
                 $withEmail++;
             }
@@ -236,7 +236,7 @@ final class ErpCustomerSync
      * @param  list<string>  $fields
      * @return list<string>
      */
-    private function normalizeEmails(array $fields): array
+    public static function normalizeEmails(array $fields): array
     {
         $out = [];
         foreach ($fields as $field) {
