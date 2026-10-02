@@ -1741,94 +1741,109 @@ function SubstitutesHelp() {
 }
 
 function ReportsHelp() {
+  const tabs = ['Baza wiedzy', 'Źródła danych', 'Ruchy cen', 'Sprzedaż i oferty', 'Klienci ERP']
+  const Tabs = ({ active }: { active: string }) => (
+    <div className="mb-3 flex flex-wrap gap-1 border-b border-slate-200 text-xs">
+      {tabs.map((t) => (
+        <span key={t} className={`-mb-px border-b-2 px-2 py-1.5 ${t === active ? 'border-blue-600 font-semibold text-blue-700' : 'border-transparent text-slate-600'}`}>
+          {t}
+        </span>
+      ))}
+    </div>
+  )
   return (
     <Slideshow
       title="Raporty"
       slides={[
         {
-          action: 'Podgląd pipeline’u',
-          does: 'Zestawienie ile spraw jest w każdym statusie oraz jaka jest ich wartość i średnia marża. Tu nic nie edytujesz.',
-          click: 'Menu „Raporty”.',
+          action: 'Pięć raportów w zakładkach',
+          does: 'Baza wiedzy — kompletność kart produktów. Źródła danych — czy cenniki i konta B2B są aktualne. Ruchy cen — podwyżki i obniżki u dostawców. Sprzedaż i oferty — zapytania klientów, przetargi i kampanie. Klienci ERP — kto kupuje, kto przestał i do ilu można napisać. Widzisz tylko zakładki z danymi, do których masz uprawnienie.',
+          click: 'Menu „Raporty”, potem zakładka u góry.',
           tone: 'slate',
           screen: (
             <AppFrame nav="Raporty">
-              <div className="mb-4 flex items-center justify-between">
-                <h1 className="text-xl font-semibold">Raporty</h1>
-                <span className="rounded bg-emerald-600 px-3 py-2 text-xs text-white">Eksport CSV</span>
-              </div>
-              <Card>
-                <h2 className="mb-2 text-sm font-semibold">Pipeline wg statusu</h2>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Status</Th>
-                      <Th>Liczba</Th>
-                      <Th>Wartość</Th>
-                      <Th>Śr. marża</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2">wycena</td>
-                      <td className="p-2">7</td>
-                      <td className="p-2">184 200 zł</td>
-                      <td className="p-2">18%</td>
-                    </tr>
-                    <tr className="border-b">
-                      <td className="p-2">akceptacja</td>
-                      <td className="p-2">2</td>
-                      <td className="p-2">41 000 zł</td>
-                      <td className="p-2">16%</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </Card>
+              <h1 className="text-xl font-semibold">Raporty</h1>
+              <p className="mb-3 text-xs text-slate-500">Jak kompletne są karty produktów, z których AI dobiera wyroby do przetargów i zapytań.</p>
+              <Mark>
+                <Tabs active="Baza wiedzy" />
+              </Mark>
             </AppFrame>
           ),
         },
         {
-          action: 'Wynik po opiekunie',
-          does: 'Druga tabela pokazuje, kto prowadzi ile spraw i z jaką wartością — do podziału pracy.',
-          click: 'Przewiń do „Wg opiekuna”.',
+          action: 'Najważniejsze i kafelki',
+          does: 'Na górze każdego raportu ramka „Najważniejsze” — kilka zdań policzonych z danych (same fakty). Pod nią kafelki z liczbami; kolorowa kropka i pasek: zielony = dobrze, pomarańczowy = do uwagi, czerwony = problem.',
+          click: 'Przeczytaj ramkę „Najważniejsze”.',
           tone: 'blue',
           screen: (
             <AppFrame nav="Raporty">
-              <h1 className="mb-4 text-xl font-semibold">Raporty</h1>
+              <Tabs active="Baza wiedzy" />
+              <Mark>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800">
+                  <b className="mb-1 block text-[10px] tracking-wide text-slate-500 uppercase">Najważniejsze</b>
+                  Najsłabiej pokryte: normy potwierdzone u producenta — ma je 22% kart.
+                </div>
+              </Mark>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {[
+                  ['Z opisem', '97%', 'bg-teal-600'],
+                  ['Ze zdjęciem', '97%', 'bg-teal-600'],
+                  ['Normy u producenta', '22%', 'bg-rose-700'],
+                ].map(([label, value, fill]) => (
+                  <Card key={label} className="p-3">
+                    <span className="block text-[11px] text-slate-500">{label}</span>
+                    <b className="text-lg">{value}</b>
+                    <span className="mt-1 block h-1 rounded-full bg-slate-100">
+                      <span className={`block h-full rounded-full ${fill}`} style={{ width: value }} />
+                    </span>
+                  </Card>
+                ))}
+              </div>
+            </AppFrame>
+          ),
+        },
+        {
+          action: 'Wykresy i tabele',
+          does: 'Najedź kursorem na słupek, żeby zobaczyć dokładne liczby. W tabelach kliknij nagłówek kolumny, żeby posortować — np. producentów po normach, by znaleźć największe luki. W „Ruchach cen” i „Sprzedaży” wybierzesz okres (7/30/90 albo 30/90/180 dni).',
+          click: 'Kursor na wykres albo klik w nagłówek tabeli.',
+          tone: 'violet',
+          screen: (
+            <AppFrame nav="Raporty">
+              <Tabs active="Ruchy cen" />
               <Card>
-                <h2 className="mb-2 text-sm font-semibold">Wg opiekuna</h2>
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b bg-slate-50">
-                      <Th>Opiekun</Th>
-                      <Th>Liczba</Th>
-                      <Th>Wartość</Th>
-                      <Th>Śr. marża</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b">
-                      <td className="p-2">Artur</td>
-                      <td className="p-2">7</td>
-                      <td className="p-2">184 200 zł</td>
-                      <td className="p-2">18%</td>
-                    </tr>
-                  </tbody>
-                </table>
+                <h2 className="mb-2 text-sm font-semibold">Podwyżki i obniżki — tydzień po tygodniu</h2>
+                <div className="flex h-20 items-center gap-3 px-2">
+                  {[
+                    [10, 6],
+                    [18, 9],
+                    [30, 5],
+                    [24, 12],
+                  ].map(([up, down], i) => (
+                    <div key={i} className="flex w-5 flex-col items-center">
+                      <span className="w-full rounded-t bg-orange-600" style={{ height: up }} />
+                      <span className="mt-0.5 w-full rounded-b bg-sky-600" style={{ height: down }} />
+                    </div>
+                  ))}
+                  <Mark>
+                    <span className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] shadow-sm">Podwyżki 30 · Obniżki 5</span>
+                  </Mark>
+                </div>
               </Card>
             </AppFrame>
           ),
         },
         {
-          action: 'Ściągnięcie CSV',
-          does: 'Pobiera ten sam raport do Excela (raport-przetargi.csv).',
-          click: 'Zielony „Eksport CSV” w prawym górnym rogu.',
+          action: 'Eksport przetargów do CSV',
+          does: 'W zakładce „Sprzedaż i oferty”, w części „Przetargi”, zielony przycisk pobiera listę przetargów do Excela (raport-przetargi.csv) — te same przetargi, które widzisz w raporcie.',
+          click: 'Zielony „Eksport CSV” przy nagłówku „Przetargi”.',
           tone: 'green',
           screen: (
             <AppFrame nav="Raporty">
-              <div className="mb-4 flex items-center justify-between">
-                <h1 className="text-xl font-semibold">Raporty</h1>
+              <Tabs active="Sprzedaż i oferty" />
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-sm font-semibold">Przetargi</h2>
                 <Mark>
-                  <span className="rounded bg-emerald-600 px-3 py-2 text-xs text-white">Eksport CSV</span>
+                  <span className="rounded bg-emerald-600 px-3 py-1.5 text-xs text-white">Eksport CSV</span>
                 </Mark>
               </div>
               <p className="rounded bg-green-50 px-3 py-2 text-xs text-green-800">raport-przetargi.csv</p>

@@ -111,6 +111,11 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/dashboard', DashboardController::class)->middleware('permission:dashboard.view');
     Route::get('/reports/summary', [ReportController::class, 'summary'])->middleware('permission:reports.view');
     Route::get('/reports/csv', [ReportController::class, 'csv'])->middleware('permission:reports.view');
+    Route::get('/reports/catalog', [ReportController::class, 'catalog'])->middleware('permission:reports.view');
+    Route::get('/reports/prices', [ReportController::class, 'prices'])->middleware('permission:reports.view');
+    Route::get('/reports/sources', [ReportController::class, 'sources'])->middleware('permission:reports.view');
+    Route::get('/reports/sales', [ReportController::class, 'sales'])->middleware('permission:reports.view');
+    Route::get('/reports/customers', [ReportController::class, 'customers'])->middleware('permission:reports.view');
 
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);

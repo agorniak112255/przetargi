@@ -7,6 +7,11 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Tender;
 use App\Services\Pricing\SupplierSpecialMask;
+use App\Services\Reports\CatalogReport;
+use App\Services\Reports\CustomersReport;
+use App\Services\Reports\DataSourcesReport;
+use App\Services\Reports\PriceMovesReport;
+use App\Services\Reports\SalesReport;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -20,7 +25,7 @@ class ReportController extends Controller
         $margin = $this->marginColumn($request);
 
         $byStatus = Tender::query()
-            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $request->user()->id))
+            ->when($scopeOwn, fn ($q) => $q->accessibleBy($request->user()))
             ->select('status', DB::raw('COUNT(*) as count'), DB::raw('COALESCE(SUM(offer_value_net),0) as offer_value_net'), DB::raw('AVG('.$margin.') as avg_margin'))
             ->groupBy('status')
             ->orderBy('status')
@@ -33,7 +38,7 @@ class ReportController extends Controller
             ]);
 
         $byOwner = Tender::query()
-            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $request->user()->id))
+            ->when($scopeOwn, fn ($q) => $q->accessibleBy($request->user()))
             ->join('users', 'users.id', '=', 'tenders.owner_id')
             ->select(
                 'tenders.owner_id',
@@ -59,13 +64,14 @@ class ReportController extends Controller
         ]);
     }
 
+    /** Eksport przetargów — ten sam zakres co raport „Sprzedaż i oferty”: bez view_all własne i te z zaproszeniem. */
     public function csv(Request $request): StreamedResponse
     {
         $scopeOwn = ! $request->user()->can('tenders.view_all');
         $margin = $this->marginColumn($request);
 
         $rows = Tender::query()
-            ->when($scopeOwn, fn ($q) => $q->where('owner_id', $request->user()->id))
+            ->when($scopeOwn, fn ($q) => $q->accessibleBy($request->user()))
             ->with(['client:id,name', 'owner:id,name'])
             ->orderByDesc('last_activity_at')
             ->get();
@@ -93,6 +99,54 @@ class ReportController extends Controller
         }, 'raport-przetargi.csv', [
             'Content-Type' => 'text/csv; charset=UTF-8',
         ]);
+    }
+
+    /** Baza wiedzy: pokrycie kart opisem, zdjęciem, normami i dokumentami (całość i wg producenta). */
+    public function catalog(Request $request, CatalogReport $report): JsonResponse
+    {
+        $this->requireAny($request, ['products.view']);
+
+        return response()->json($report->build($request->user()));
+    }
+
+    /** Ruchy cen dostawców w okresie (7/30/90 dni) z maską cen specjalnych. */
+    public function prices(Request $request, PriceMovesReport $report): JsonResponse
+    {
+        $this->requireAny($request, ['products.view']);
+
+        return response()->json($report->build($request->user(), ['days' => $request->integer('days', 30)]));
+    }
+
+    /** Świeżość źródeł danych: konta B2B i cenniki z plików. */
+    public function sources(Request $request, DataSourcesReport $report): JsonResponse
+    {
+        $this->requireAny($request, ['price_lists.view', 'b2b_accounts.view']);
+
+        return response()->json($report->build($request->user()));
+    }
+
+    /** Sprzedaż i oferty: zapytania klientów, przetargi i kampanie — każda sekcja wg uprawnień użytkownika. */
+    public function sales(Request $request, SalesReport $report): JsonResponse
+    {
+        return response()->json($report->build($request->user(), ['days' => $request->integer('days', 90)]));
+    }
+
+    /** Klienci z Comarch ERP XL: aktywność, odpływ, zasięg mailowy (dane jak w kampaniach — campaigns.use). */
+    public function customers(Request $request, CustomersReport $report): JsonResponse
+    {
+        $this->requireAny($request, ['campaigns.use']);
+
+        return response()->json($report->build($request->user()));
+    }
+
+    /**
+     * Raport wymaga, poza reports.view z trasy, uprawnienia do danych, z których powstaje.
+     *
+     * @param  list<string>  $permissions
+     */
+    private function requireAny(Request $request, array $permissions): void
+    {
+        abort_unless($request->user()->canAny($permissions), 403, 'Brak uprawnienia do danych tego raportu.');
     }
 
     /**

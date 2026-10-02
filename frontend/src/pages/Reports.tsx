@@ -1,110 +1,94 @@
-import { useEffect, useState } from 'react'
-import { api, downloadFile } from '../lib/api'
+import { useSearchParams } from 'react-router-dom'
+import { useAuth } from '../auth'
+import { canAny, type User } from '../lib/api'
+import type { ReportKey } from '../lib/reports'
+import { ReportCatalog } from './reports/ReportCatalog'
+import { ReportCustomers } from './reports/ReportCustomers'
+import { ReportPrices } from './reports/ReportPrices'
+import { ReportSales } from './reports/ReportSales'
+import { ReportSources } from './reports/ReportSources'
 
-type RowStatus = {
-  status: string
-  count: number
-  offer_value_net: number
-  avg_margin: number | null
-}
+/**
+ * Raporty (reports.view): pięć zestawień z danych aplikacji, każde w swojej zakładce (`?raport=`). Zakładkę widać
+ * tylko z uprawnieniem do danych, z których raport powstaje — to samo sprawdza serwer (ReportController).
+ */
 
-type RowOwner = {
-  owner_id: number
-  owner_name: string
-  count: number
-  offer_value_net: number
-  avg_margin: number | null
+const REPORTS: { key: ReportKey; label: string; lead: string; anyOf: string[] | null }[] = [
+  {
+    key: 'catalog',
+    label: 'Baza wiedzy',
+    lead: 'Jak kompletne są karty produktów, z których AI dobiera wyroby do przetargów i zapytań.',
+    anyOf: ['products.view'],
+  },
+  {
+    key: 'sources',
+    label: 'Źródła danych',
+    lead: 'Czy cenniki i konta B2B dostawców są aktualne i czy synchronizacje przechodzą.',
+    anyOf: ['price_lists.view', 'b2b_accounts.view'],
+  },
+  {
+    key: 'prices',
+    label: 'Ruchy cen',
+    lead: 'Podwyżki i obniżki cen u dostawców — gdzie i o ile zmieniły się ceny zakupu.',
+    anyOf: ['products.view'],
+  },
+  {
+    key: 'sales',
+    label: 'Sprzedaż i oferty',
+    lead: 'Zapytania klientów, przetargi i kampanie: ile przyszło, ile obsłużono i jak szybko.',
+    anyOf: null,
+  },
+  {
+    key: 'customers',
+    label: 'Klienci ERP',
+    lead: 'Aktywność klientów z Comarch ERP XL: kto kupuje, kto przestał i do ilu można napisać.',
+    anyOf: ['campaigns.use'],
+  },
+]
+
+function visibleReports(user: User | null) {
+  return REPORTS.filter((r) => r.anyOf === null || canAny(user, r.anyOf))
 }
 
 export function Reports() {
-  const [byStatus, setByStatus] = useState<RowStatus[]>([])
-  const [byOwner, setByOwner] = useState<RowOwner[]>([])
-  const [err, setErr] = useState('')
-
-  useEffect(() => {
-    void api<{ by_status: RowStatus[]; by_owner: RowOwner[] }>('/reports/summary')
-      .then((r) => {
-        setByStatus(r.by_status)
-        setByOwner(r.by_owner)
-      })
-      .catch((e) => setErr(e instanceof Error ? e.message : 'Błąd raportu'))
-  }, [])
+  const { user } = useAuth()
+  const [params, setParams] = useSearchParams()
+  const tabs = visibleReports(user)
+  const active = tabs.find((t) => t.key === params.get('raport')) ?? tabs[0]
 
   return (
-    <div>
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Raporty</h1>
-        <button
-          type="button"
-          className="rounded bg-emerald-600 px-3 py-2 text-xs text-white"
-          onClick={() => void downloadFile('/reports/csv', 'raport-przetargi.csv')}
-        >
-          Eksport CSV
-        </button>
-      </div>
-      {err && <p className="mb-2 text-xs text-red-600">{err}</p>}
-
-      <div className="mb-4 rounded-xl bg-white p-4 shadow-sm">
-        <h2 className="mb-2 text-sm font-semibold">Pipeline wg statusu</h2>
-        <table className="w-full text-left text-xs">
-          <thead>
-            <tr className="border-b bg-slate-50">
-              <th className="p-2">Status</th>
-              <th className="p-2">Liczba</th>
-              <th className="p-2">Wartość</th>
-              <th className="p-2">Śr. marża</th>
-            </tr>
-          </thead>
-          <tbody>
-            {byStatus.map((r) => (
-              <tr key={r.status} className="border-b">
-                <td className="p-2">{r.status}</td>
-                <td className="p-2">{r.count}</td>
-                <td className="p-2">{r.offer_value_net.toLocaleString('pl-PL')} zł</td>
-                <td className="p-2">{r.avg_margin ?? '—'}%</td>
-              </tr>
-            ))}
-            {byStatus.length === 0 && (
-              <tr>
-                <td colSpan={4} className="p-3 text-slate-400">
-                  Brak danych.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+    <div className="app-reports">
+      <div className="app-page-head mb-3 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="app-page-title text-xl font-semibold">Raporty</h1>
+          <p className="mt-0.5 text-sm text-slate-500">{active.lead}</p>
+        </div>
       </div>
 
-      <div className="rounded-xl bg-white p-4 shadow-sm">
-        <h2 className="mb-2 text-sm font-semibold">Wg opiekuna</h2>
-        <table className="w-full text-left text-xs">
-          <thead>
-            <tr className="border-b bg-slate-50">
-              <th className="p-2">Opiekun</th>
-              <th className="p-2">Liczba</th>
-              <th className="p-2">Wartość</th>
-              <th className="p-2">Śr. marża</th>
-            </tr>
-          </thead>
-          <tbody>
-            {byOwner.map((r) => (
-              <tr key={r.owner_id} className="border-b">
-                <td className="p-2">{r.owner_name}</td>
-                <td className="p-2">{r.count}</td>
-                <td className="p-2">{r.offer_value_net.toLocaleString('pl-PL')} zł</td>
-                <td className="p-2">{r.avg_margin ?? '—'}%</td>
-              </tr>
-            ))}
-            {byOwner.length === 0 && (
-              <tr>
-                <td colSpan={4} className="p-3 text-slate-400">
-                  Brak danych.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      <nav className="app-tabs mb-4 flex flex-wrap gap-1 border-b border-slate-200" aria-label="Raporty">
+        {tabs.map((t) => {
+          const on = t.key === active.key
+          return (
+            <button
+              key={t.key}
+              type="button"
+              aria-current={on ? 'page' : undefined}
+              onClick={() => setParams(t.key === tabs[0].key ? {} : { raport: t.key }, { replace: true })}
+              className={`app-tab -mb-px border-b-2 px-3 py-2 text-sm ${
+                on ? 'app-tab--active border-blue-600 font-semibold text-blue-700' : 'border-transparent text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {t.label}
+            </button>
+          )
+        })}
+      </nav>
+
+      {active.key === 'catalog' && <ReportCatalog />}
+      {active.key === 'sources' && <ReportSources />}
+      {active.key === 'prices' && <ReportPrices />}
+      {active.key === 'sales' && <ReportSales />}
+      {active.key === 'customers' && <ReportCustomers />}
     </div>
   )
 }
