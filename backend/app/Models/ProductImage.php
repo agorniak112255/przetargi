@@ -94,6 +94,41 @@ class ProductImage extends Model
         return route('product-images.thumb', $this);
     }
 
+    /**
+     * Kwadrat na białym tle pod pełnym adresem aplikacji — do listu, który czyta klient bez logowania.
+     * Adres publiczny jak miniatura; dodatek Thunderbirda osadza obrazek z tego adresu w mailu.
+     */
+    public function squareUrl(): string
+    {
+        return route('product-images.square', $this);
+    }
+
+    /**
+     * Zdjęcie główne każdej karty (bez znacznika — pierwsze w kolejności karty), jednym zapytaniem.
+     *
+     * @param  list<int>  $productIds
+     * @return array<int, self> klucz = id karty; karta bez zdjęcia nie ma wpisu
+     */
+    public static function primaryFor(array $productIds): array
+    {
+        $productIds = array_values(array_unique(array_filter(array_map('intval', $productIds))));
+        if ($productIds === []) {
+            return [];
+        }
+
+        $out = [];
+        foreach (self::query()
+            ->whereIn('product_id', $productIds)
+            ->orderByDesc('is_primary')
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get(['id', 'product_id', 'path', 'source_url']) as $image) {
+            $out[(int) $image->product_id] ??= $image;
+        }
+
+        return $out;
+    }
+
     private function publicUrl(): string
     {
         $path = (string) $this->path;

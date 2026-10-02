@@ -63,6 +63,9 @@ final class InquiryReplyHtml
 
     private const TOTAL_SOFT = '#bbf7d0';
 
+    /** Bok zdjęcia wyrobu w bloku propozycji; obrazek z serwera ma 440 px, więc jest ostry i na gęstych ekranach. */
+    private const PHOTO_PX = 112;
+
     /**
      * @param  list<array{head: string, quote: string|null, answer: list<string>, answer_roles?: list<string>, facts?: array<string, mixed>}>  $rows
      * @param  list<string>  $outro
@@ -325,7 +328,8 @@ final class InquiryReplyHtml
      * Nasza propozycja: nazwa, kod i normy, opis, zamiennik, a pod kreską cena
      * i ilość. Rozmiaru tu nie ma — pochodzi z zapytania, a nie z naszej karty,
      * więc stoi w słowach klienta. Pozycja bez wyrobu dostaje przerywaną ramkę
-     * i zdanie z treści listu.
+     * i zdanie z treści listu. W szablonach ze zdjęciem nazwa i opis stoją
+     * po prawej od zdjęcia wyrobu.
      *
      * @param  array<string, mixed>  $row
      */
@@ -336,27 +340,33 @@ final class InquiryReplyHtml
         $notes = self::notes($row);
 
         $html = self::label('Nasza propozycja', $name === null ? self::MUTED : self::TOTAL_BG);
+        $details = '';
         if ($name !== null) {
-            $html .= '<div style="font-size:14px;font-weight:bold;color:'.self::TEXT.';line-height:1.3;margin-top:4px">'
+            $details .= '<div style="font-size:14px;font-weight:bold;color:'.self::TEXT.';line-height:1.3;margin-top:4px">'
                 .self::text($name).'</div>';
             $meta = array_values(array_filter([
                 ($code = trim((string) ($facts['code'] ?? ''))) === '' ? null : 'kod '.$code,
                 ($norms = trim((string) ($facts['norms'] ?? ''))) === '' ? null : $norms,
             ]));
             if ($meta !== []) {
-                $html .= '<div style="font-size:12px;color:'.self::MUTED.';margin-top:2px">'.self::text(implode(' · ', $meta)).'</div>';
+                $details .= '<div style="font-size:12px;color:'.self::MUTED.';margin-top:2px">'.self::text(implode(' · ', $meta)).'</div>';
             }
         }
 
         if ($sameAs !== null) {
-            $html .= '<div style="font-size:12px;color:'.self::MUTED.';margin-top:6px">'
+            $details .= '<div style="font-size:12px;color:'.self::MUTED.';margin-top:6px">'
                 .self::text('Opis jak w poz. '.$sameAs.'.').'</div>';
         } else {
             foreach ($notes['body'] as $text) {
-                $html .= '<div style="font-size:13px;color:'.($name === null ? self::MUTED : self::BODY).';margin-top:6px">'
+                $details .= '<div style="font-size:13px;color:'.($name === null ? self::MUTED : self::BODY).';margin-top:6px">'
                     .self::text($text).'</div>';
             }
         }
+        $photo = $name === null ? '' : self::photo($facts);
+        $html .= $photo === ''
+            ? $details
+            : '<table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%"><tr>'
+                .$photo.'<td style="vertical-align:top">'.$details.'</td></tr></table>';
         $html .= self::substituteHtml($notes['substitute']);
         if ($name !== null) {
             $html .= self::priceLine($row);
@@ -367,6 +377,29 @@ final class InquiryReplyHtml
             : 'background:'.self::OURS_BG.';border:1px solid '.self::OURS_BORDER;
 
         return self::block($html, $frame);
+    }
+
+    /**
+     * Zdjęcie naszego wyrobu (zdjęcie główne karty). Podpis „zdjęcie poglądowe”: zdjęcie karty
+     * bywa innym wariantem tej serii, a list nie może obiecywać wyglądu, którego nikt nie sprawdził.
+     * Tylko adres http(s) — inny nie otworzy się u klienta.
+     *
+     * @param  array<string, mixed>  $facts
+     */
+    private static function photo(array $facts): string
+    {
+        $url = trim((string) ($facts['image'] ?? ''));
+        if (preg_match('#^https?://#i', $url) !== 1) {
+            return '';
+        }
+        $side = (string) self::PHOTO_PX;
+
+        return '<td style="width:'.$side.'px;vertical-align:top;padding:6px 12px 0 0">'
+            .'<img src="'.htmlspecialchars($url, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'" width="'.$side.'" height="'.$side.'"'
+            .' alt="Zdjęcie wyrobu" style="display:block;width:'.$side.'px;height:'.$side.'px;'
+            .'border:1px solid '.self::BORDER.';border-radius:8px;background:#ffffff">'
+            .'<div style="font-size:10px;color:'.self::MUTED.';margin-top:3px;text-align:center">'
+            .self::text('zdjęcie poglądowe').'</div></td>';
     }
 
     /**

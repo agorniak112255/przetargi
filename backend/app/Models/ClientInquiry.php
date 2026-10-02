@@ -12,8 +12,11 @@ class ClientInquiry extends Model
     /** Pełna specyfikacja: nazwa z katalogu, SKU, producent, normy i cena. */
     public const TONE_HANDLOWY = 'handlowy';
 
-    /** Oficjalny: nazwa, akapit opisu z karty, normy i cena — bez SKU. */
+    /** Oficjalny: nazwa, akapit opisu z karty, zdjęcie, normy i cena — bez SKU. */
     public const TONE_FORMAL = 'formal';
+
+    /** Oficjalny krótki: nazwa, dwa–trzy zdania opisu z karty, zdjęcie, normy i cena — bez SKU. */
+    public const TONE_FORMAL_SHORT = 'formal_krotki';
 
     /** Bez SKU: jedno zdanie opisu bez marki i modelu, normy i cena. */
     public const TONE_NO_SKU = 'bez_sku';
@@ -33,7 +36,10 @@ class ClientInquiry extends Model
     public const ANALYSIS_STALE_MINUTES = 25;
 
     /** Szablony listu do klienta; wybór zapisuje się w kolumnie „tone”. */
-    public const TONES = [self::TONE_HANDLOWY, self::TONE_FORMAL, self::TONE_NO_SKU];
+    public const TONES = [self::TONE_HANDLOWY, self::TONE_FORMAL, self::TONE_FORMAL_SHORT, self::TONE_NO_SKU];
+
+    /** Szablony, w których przy naszym wyrobie stoi jego zdjęcie (tylko w liście HTML). */
+    public const PHOTO_TONES = [self::TONE_FORMAL, self::TONE_FORMAL_SHORT];
 
     /**
      * Warunki oferty wpisywane przez handlowca — klucz w `offer_terms` i etykieta

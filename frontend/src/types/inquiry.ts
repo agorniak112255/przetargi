@@ -3,7 +3,7 @@
 import type { OrderQuantity } from '../lib/api'
 
 /** Szablon listu do klienta; nazwy w src/lib/inquiryTone.ts. */
-export type InquiryTone = 'formal' | 'handlowy' | 'bez_sku'
+export type InquiryTone = 'formal' | 'formal_krotki' | 'handlowy' | 'bez_sku'
 
 export type InquiryAnswer = {
   option_id: string

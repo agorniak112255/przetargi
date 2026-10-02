@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\ClientInquiry;
 use App\Models\Product;
+use App\Models\ProductImage;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
 use App\Services\ProductInquirySearch;
@@ -15,13 +16,14 @@ use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
- * Trzy szablony listu do klienta.
+ * Szablony listu do klienta.
  *
  * Ten sam dobór produktów wygląda inaczej w zależności od szablonu, ale tekst
  * zawsze pochodzi z karty wyrobu albo z zapytania klienta:
  *
  *  - handlowy  — nazwa, SKU i producent (pełna specyfikacja),
- *  - oficjalny — nazwa i akapit opisu z karty, bez SKU,
+ *  - oficjalny — nazwa i akapit opisu z karty, bez SKU, ze zdjęciem,
+ *  - oficjalny krótki — nazwa i dwa–trzy zdania opisu z karty, bez SKU, ze zdjęciem,
  *  - bez SKU   — jedno zdanie opisu bez marki i modelu.
  */
 final class ClientInquiryToneApiTest extends TestCase
@@ -124,6 +126,59 @@ final class ClientInquiryToneApiTest extends TestCase
         $this->assertStringContainsString('Rękawice ochronne VITAL 175 marki MAPA przeznaczone są', $body);
         $this->assertStringContainsString('Normy: EN 388, EN 374', $body);
         $this->assertStringNotContainsString('SKU', $body);
+    }
+
+    public function test_formal_short_template_keeps_only_the_first_sentences(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $tail = 'Ostatnie zdanie opisu mówi o pakowaniu po dwanaście par w kartonie zbiorczym.';
+        $product = $this->product(['description' => self::DESCRIPTION.' '
+            .str_repeat('Rękawice zachowują elastyczność także po wielokrotnym praniu w niskiej temperaturze. ', 4)
+            .$tail]);
+        $this->mockAnalysis($product);
+        Sanctum::actingAs($user);
+
+        [$short, $body] = $this->createInquiry(ClientInquiry::TONE_FORMAL_SHORT);
+
+        $this->assertSame(ClientInquiry::TONE_FORMAL_SHORT, $short['tone']);
+        $this->assertStringStartsWith("Dzień dobry,\n\nw odpowiedzi na przesłane zapytanie przedstawiamy ofertę:", $body);
+        $this->assertStringContainsString('Produkt: VITAL 175', $body);
+        $this->assertStringContainsString('Rękawice ochronne VITAL 175 marki MAPA przeznaczone są', $body);
+        $this->assertStringContainsString('Normy: EN 388, EN 374', $body);
+        $this->assertStringNotContainsString($tail, $body);
+        $this->assertStringNotContainsString('SKU', $body);
+        $this->assertStringNotContainsString('VIT-175', (string) $short['reply_html']);
+
+        // ten sam opis w szablonie oficjalnym wchodzi w całości
+        $this->mockAnalysis($product);
+        [, $formal] = $this->createInquiry(ClientInquiry::TONE_FORMAL);
+        $this->assertStringContainsString($tail, $formal);
+    }
+
+    public function test_official_templates_show_the_product_photo_in_the_letter_table(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $product = $this->product();
+        ProductImage::query()->create(['product_id' => $product->id, 'path' => 'products/druga.jpg', 'sort_order' => 1, 'checksum' => 'b']);
+        $primary = ProductImage::query()->create(['product_id' => $product->id, 'path' => 'products/glowna.jpg', 'is_primary' => true, 'sort_order' => 0, 'checksum' => 'a']);
+        $url = route('product-images.square', ['image' => $primary->id]);
+        Sanctum::actingAs($user);
+
+        foreach ([ClientInquiry::TONE_FORMAL, ClientInquiry::TONE_FORMAL_SHORT] as $tone) {
+            $this->mockAnalysis($product);
+            [$payload, $body] = $this->createInquiry($tone);
+            $html = (string) $payload['reply_html'];
+            $this->assertStringContainsString('src="'.$url.'"', $html, $tone);
+            $this->assertSame(1, substr_count($html, '<img '), $tone);
+            // zdjęcie tylko w liście HTML — treść tekstowa zostaje bez adresów
+            $this->assertStringNotContainsString('product-images', $body, $tone);
+        }
+
+        foreach ([ClientInquiry::TONE_HANDLOWY, ClientInquiry::TONE_NO_SKU] as $tone) {
+            $this->mockAnalysis($product);
+            [$payload] = $this->createInquiry($tone);
+            $this->assertStringNotContainsString('<img', (string) $payload['reply_html'], $tone);
+        }
     }
 
     public function test_no_sku_template_hides_the_brand_the_model_and_the_code(): void

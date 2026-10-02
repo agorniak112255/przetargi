@@ -274,4 +274,37 @@ final class InquiryReplyHtmlTest extends TestCase
             $this->assertMatchesRegularExpression('/(?:^|;)\s*color:/', $parent->getAttribute('style'), (string) $node->textContent);
         }
     }
+
+    public function test_product_photo_stands_next_to_our_proposal_only(): void
+    {
+        $withPhoto = $this->row('10', '96 par', '178,56 zł', 178.56);
+        $withPhoto['facts']['image'] = 'https://przetargi.example/api/product-images/7/square?a=1&b=2';
+        $unmatched = $this->unmatched('Rękawiczki nitrylowe', '50 opak.');
+        // pozycja bez wyrobu nie dostaje zdjęcia, nawet gdyby adres się przypałętał
+        $unmatched['facts']['image'] = 'https://przetargi.example/api/product-images/8/square';
+        $foreign = $this->row('9', '288 par', '535,68 zł', 535.68, 'Inny opis.');
+        // adres spoza http(s) nie otworzy się u klienta — nie wstawiamy go
+        $foreign['facts']['image'] = 'javascript:alert(1)';
+
+        $html = InquiryReplyHtml::render('Dzień dobry,', [$withPhoto, $unmatched, $foreign], null, ['Pozdrawiam']);
+
+        $this->assertSame(1, substr_count($html, '<img '));
+        // adres w atrybucie zakodowany jak w HTML
+        $this->assertStringContainsString('src="https://przetargi.example/api/product-images/7/square?a=1&amp;b=2"', $html);
+        $this->assertStringContainsString('width="112" height="112"', $html);
+        $this->assertStringContainsString('zdjęcie poglądowe', $html);
+        $this->assertStringNotContainsString('product-images/8', $html);
+        $this->assertStringNotContainsString('javascript:', $html);
+        // nazwa i opis zostają obok zdjęcia
+        $this->assertStringContainsString('ULTRANE 549 VM', $html);
+        $this->assertStringContainsString('Lekkie rękawice do prac precyzyjnych.', $html);
+    }
+
+    public function test_letter_without_photo_has_no_image(): void
+    {
+        $html = InquiryReplyHtml::render('Dzień dobry,', [$this->row('10', '96 par', '178,56 zł', 178.56)], null, ['Pozdrawiam']);
+
+        $this->assertStringNotContainsString('<img', $html);
+        $this->assertStringNotContainsString('zdjęcie poglądowe', $html);
+    }
 }

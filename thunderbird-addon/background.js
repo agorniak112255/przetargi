@@ -186,8 +186,10 @@ async function insertReply({ inquiryId, messageId = null, inquiry: known = null 
 
     const settings = await getSettings()
     // Tabela „pozycja z zapytania — nasza propozycja”; brak = ręcznie poprawiony
-    // list, wtedy wysyłamy sam tekst, żeby nic się nie rozjechało.
-    const table = String(inquiry.reply_html || '').trim()
+    // list, wtedy wysyłamy sam tekst, żeby nic się nie rozjechało. Zdjęcia wyrobów
+    // (szablony oficjalne) osadzamy jak w ofercie — link Thunderbird blokuje w oknie pisania.
+    const rawTable = String(inquiry.reply_html || '').trim()
+    const table = rawTable !== '' ? await embedOfferImages(rawTable) : ''
 
     // Bez `details` w beginReply, żeby zachować cytat, adresata i podpis.
     const tab = await browser.compose.beginReply(target.id, 'replyToSender')

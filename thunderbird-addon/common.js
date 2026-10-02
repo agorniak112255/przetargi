@@ -34,7 +34,8 @@ const MAX_FROM = 400
 const TONES = {
   handlowy: 'Handlowy (pełna specyfikacja): nazwa z katalogu, SKU i producent, normy i cena.',
   bez_sku: 'Bez SKU (proste opisy): jedno zdanie opisu bez marki i modelu, normy i cena.',
-  formal: 'Oficjalny (długie opisy): nazwa, akapit opisu z karty wyrobu, normy i cena — bez SKU.',
+  formal: 'Oficjalny (długie opisy, zdjęcia): nazwa, akapit opisu z karty wyrobu, zdjęcie, normy i cena — bez SKU.',
+  formal_krotki: 'Oficjalny (krótkie opisy, zdjęcia): nazwa, dwa–trzy zdania opisu z karty, zdjęcie, normy i cena — bez SKU.',
 }
 
 const DEFAULT_TONE = 'handlowy'

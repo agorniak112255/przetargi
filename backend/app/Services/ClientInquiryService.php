@@ -1962,13 +1962,8 @@ final class ClientInquiryService
             return $items;
         }
         $images = [];
-        foreach (ProductImage::query()
-            ->whereIn('product_id', array_keys($ids))
-            ->orderByDesc('is_primary')
-            ->orderBy('sort_order')
-            ->orderBy('id')
-            ->get(['id', 'product_id', 'path', 'source_url']) as $image) {
-            $images[(int) $image->product_id] ??= [
+        foreach (ProductImage::primaryFor(array_keys($ids)) as $productId => $image) {
+            $images[$productId] = [
                 'thumb_url' => $image->thumbUrl(),
                 'image_url' => $image->url(),
             ];
@@ -5635,10 +5630,10 @@ final class ClientInquiryService
         return $out;
     }
 
-    /** Wstęp listu: oficjalny mówi pełnym zdaniem, dwa pozostałe krótko. */
+    /** Wstęp listu: oba oficjalne mówią pełnym zdaniem, pozostałe krótko. */
     private function offerIntro(string $tone): string
     {
-        if ($tone === ClientInquiry::TONE_FORMAL) {
+        if ($tone === ClientInquiry::TONE_FORMAL || $tone === ClientInquiry::TONE_FORMAL_SHORT) {
             return "Dzień dobry,\n\nw odpowiedzi na przesłane zapytanie przedstawiamy ofertę:";
         }
 
@@ -5649,7 +5644,7 @@ final class ClientInquiryService
      * Opisy kart wyrobów użytych w liście — jednym zapytaniem do bazy.
      *
      * W `analysis` opisu nie ma (kandydaci trzymają tylko nazwę, SKU, normy
-     * i ceny), a szablon oficjalny i „bez SKU” piszą pozycję właśnie z opisu.
+     * i ceny), a szablony oficjalne i „bez SKU” piszą pozycję właśnie z opisu.
      * Czytamy je dopiero przy pisaniu listu i tylko dla wybranych wyrobów.
      *
      * @param  list<int>  $ids
@@ -5762,8 +5757,18 @@ final class ClientInquiryService
             $cards = $this->cardTexts($ids);
         }
 
+        // Zdjęcie stoi tylko przy wyrobie z pozycji — zamiennik to dopisek pod nią, bez własnego zdjęcia.
+        $images = [];
+        if (in_array($tone, ClientInquiry::PHOTO_TONES, true)) {
+            $images = ProductImage::primaryFor(array_map(
+                static fn (array $row): int => is_array($row['product']) ? (int) ($row['product']['id'] ?? 0) : 0,
+                $picked,
+            ));
+        }
+
         $rows = [];
         foreach ($picked as $row) {
+            $image = is_array($row['product']) ? ($images[(int) ($row['product']['id'] ?? 0)] ?? null) : null;
             $rows[] = $this->offerRow(
                 $row['n'],
                 $row['item'],
@@ -5774,6 +5779,7 @@ final class ClientInquiryService
                 $tone,
                 $cards,
                 $row['manual_price'],
+                $image?->squareUrl(),
             );
         }
 
@@ -5844,6 +5850,7 @@ final class ClientInquiryService
         string $tone = ClientInquiry::TONE_HANDLOWY,
         array $cards = [],
         ?float $manualPln = null,
+        ?string $imageUrl = null,
     ): array {
         $size = trim((string) ($item['size'] ?? ''));
         // cytat idzie do klienta — bez ceny z cudzej oferty, reszta słowo w słowo
@@ -5879,6 +5886,8 @@ final class ClientInquiryService
         $fallback = $quote === '' ? null : mb_substr($quote, 0, 200);
 
         $facts = $this->offerFacts($n, $item, $product, $priceMode, $margin, $tone, $manualPln);
+        // Zdjęcie tylko w liście HTML — w treści tekstowej nie ma na nie miejsca.
+        $facts['image'] = $imageUrl;
         $answer = $this->productLines(
             'Produkt',
             $product,
@@ -6044,10 +6053,11 @@ final class ClientInquiryService
      *
      *  - handlowy: nazwa z katalogu, SKU i producent — pełna specyfikacja,
      *  - oficjalny: nazwa i akapit opisu z karty, bez SKU,
+     *  - oficjalny krótki: nazwa i dwa–trzy zdania opisu z karty, bez SKU,
      *  - bez SKU: jedno zdanie opisu bez marki i modelu, a gdy karta opisu
      *    nie ma — słowa klienta z zapytania ($fallback).
      *
-     * Normy i cena wyglądają tak samo we wszystkich trzech: to dane z karty
+     * Normy i cena wyglądają tak samo we wszystkich szablonach: to dane z karty
      * i z polityki cenowej, nie element stylu listu.
      *
      * @param  array<string, mixed>  $product
@@ -6127,9 +6137,12 @@ final class ClientInquiryService
             return $text === null ? [] : [$label.': '.$text];
         }
 
-        if ($tone === ClientInquiry::TONE_FORMAL) {
+        if ($tone === ClientInquiry::TONE_FORMAL || $tone === ClientInquiry::TONE_FORMAL_SHORT) {
             $lines = [$label.': '.$product['name']];
-            $paragraph = $description === '' ? null : OfferProductText::paragraph($description);
+            $limit = $tone === ClientInquiry::TONE_FORMAL_SHORT
+                ? OfferProductText::SHORT_PARAGRAPH_LIMIT
+                : OfferProductText::PARAGRAPH_LIMIT;
+            $paragraph = $description === '' ? null : OfferProductText::paragraph($description, $limit);
             if ($paragraph !== null) {
                 $lines[] = $paragraph;
             }

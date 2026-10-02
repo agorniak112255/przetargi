@@ -119,7 +119,12 @@ Ten sam dobór towarów wygląda w nim inaczej:
 | --- | --- |
 | **Handlowy (pełna specyfikacja)** | nazwa z katalogu, SKU i producent, normy, cena |
 | **Bez SKU (proste opisy)** | jedno zdanie opisu bez marki i modelu, normy, cena |
-| **Oficjalny (długie opisy)** | nazwa, akapit opisu z karty wyrobu, normy, cena — bez SKU |
+| **Oficjalny (długie opisy, zdjęcia)** | nazwa, akapit opisu z karty wyrobu, zdjęcie, normy, cena — bez SKU |
+| **Oficjalny (krótkie opisy, zdjęcia)** | nazwa, dwa–trzy zdania opisu z karty, zdjęcie, normy, cena — bez SKU |
+
+Zdjęcie w szablonach oficjalnych to zdjęcie główne karty wyrobu. Od 1.31.0 dodatek
+osadza je w odpowiedzi tak jak zdjęcia oferty (JPEG w `data:`, zob. wyżej);
+starsza wersja wstawi link, który Thunderbird w oknie pisania pokaże jako pustą ramkę.
 
 Skąd bierze się opis: z karty wyrobu w aplikacji (`products.description`), nie
 z modelu językowego przy pisaniu listu. Do szablonu oficjalnego wchodzi proza

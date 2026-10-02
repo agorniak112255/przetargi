@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Support;
 
 /**
- * Opis wyrobu do listu z ofertą — w trzech szablonach pozycja wygląda inaczej.
+ * Opis wyrobu do listu z ofertą — w każdym szablonie pozycja wygląda inaczej.
  *
  * Cały tekst pochodzi z karty wyrobu (`products.description`), więc nic tu nie
  * jest zmyślane: wybieramy z niego fragment i wycinamy to, czego w danym
@@ -28,6 +28,9 @@ final class OfferProductText
 
     /** Ile znaków opisu wchodzi do szablonu oficjalnego. */
     public const PARAGRAPH_LIMIT = 1200;
+
+    /** Ile znaków opisu wchodzi do szablonu oficjalnego krótkiego — dwa, trzy zdania obok zdjęcia. */
+    public const SHORT_PARAGRAPH_LIMIT = 350;
 
     /** Ile znaków wchodzi do szablonu bez SKU — tam ma być jedno zdanie. */
     public const LEAD_LIMIT = 300;

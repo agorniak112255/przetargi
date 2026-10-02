@@ -19,15 +19,21 @@ export const toneOptions: { id: InquiryTone; label: string; hint: string }[] = [
   },
   {
     id: 'formal',
-    label: 'Oficjalny (długie opisy)',
-    hint: 'Nazwa, akapit opisu z karty wyrobu, normy i cena — bez SKU.',
+    label: 'Oficjalny (długie opisy, zdjęcia)',
+    hint: 'Nazwa, akapit opisu z karty wyrobu, zdjęcie, normy i cena — bez SKU.',
+  },
+  {
+    id: 'formal_krotki',
+    label: 'Oficjalny (krótkie opisy, zdjęcia)',
+    hint: 'Nazwa, dwa–trzy zdania opisu z karty wyrobu, zdjęcie, normy i cena — bez SKU.',
   },
 ]
 
 export const toneLabel: Record<InquiryTone, string> = {
   handlowy: 'Handlowy (pełna specyfikacja)',
   bez_sku: 'Bez SKU (proste opisy)',
-  formal: 'Oficjalny (długie opisy)',
+  formal: 'Oficjalny (długie opisy, zdjęcia)',
+  formal_krotki: 'Oficjalny (krótkie opisy, zdjęcia)',
 }
 
 export function toneHint(tone: InquiryTone): string {
