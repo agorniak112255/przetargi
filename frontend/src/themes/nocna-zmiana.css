@@ -3,6 +3,7 @@
 @import "./nocna-zmiana/shell.css";
 @import "./nocna-zmiana/lists.css";
 @import "./nocna-zmiana/tender.css";
+@import "./nocna-zmiana/dashboard.css";
 
 /*
  * Szablon „Nocna zmiana” (<html data-template="nocna-zmiana">), schematy dark i light.

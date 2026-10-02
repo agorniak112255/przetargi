@@ -338,11 +338,15 @@ final class TenderSupplierSpecialMaskTest extends TestCase
         [$tender] = $this->tenderWith($owner, null);
         $tender->forceFill(['margin_percent' => 20, 'margin_percent_standard' => 5, 'offer_value_net' => 1000])->save();
 
+        $tender->forceFill(['deadline' => now()->addDays(3)->toDateString()])->save();
+
         Sanctum::actingAs($this->userWithRole('kierownik'));
-        $this->assertEqualsWithDelta(5.0, (float) $this->getJson('/api/dashboard')->assertOk()->json('avg_margin_percent'), 0.001);
-        $recent = $this->getJson('/api/dashboard')->json('recent_tenders.0');
-        $this->assertEqualsWithDelta(5.0, (float) $recent['margin_percent'], 0.001);
-        $this->assertArrayNotHasKey('margin_percent_standard', $recent);
+        $this->assertEqualsWithDelta(5.0, (float) $this->getJson('/api/dashboard')->assertOk()->json('tenders.avg_margin_percent'), 0.001);
+        // wiersz najbliższego terminu nie niesie żadnej marży ani ceny
+        $upcoming = $this->getJson('/api/dashboard')->json('tenders.upcoming.0');
+        $this->assertSame($tender->id, $upcoming['id']);
+        $this->assertArrayNotHasKey('margin_percent', $upcoming);
+        $this->assertArrayNotHasKey('margin_percent_standard', $upcoming);
         $summary = $this->getJson('/api/reports/summary')->assertOk();
         $this->assertEqualsWithDelta(5.0, (float) $summary->json('by_status.0.avg_margin'), 0.001);
         $this->assertEqualsWithDelta(5.0, (float) $summary->json('by_owner.0.avg_margin'), 0.001);
@@ -351,7 +355,7 @@ final class TenderSupplierSpecialMaskTest extends TestCase
         $this->assertStringNotContainsString(';20.00;', $csv);
 
         Sanctum::actingAs($this->userWithRole('dyrektor'));
-        $this->assertEqualsWithDelta(20.0, (float) $this->getJson('/api/dashboard')->assertOk()->json('avg_margin_percent'), 0.001);
+        $this->assertEqualsWithDelta(20.0, (float) $this->getJson('/api/dashboard')->assertOk()->json('tenders.avg_margin_percent'), 0.001);
         $this->assertEqualsWithDelta(20.0, (float) $this->getJson('/api/reports/summary')->json('by_status.0.avg_margin'), 0.001);
         $this->assertStringContainsString(';20.00;', $this->get('/api/reports/csv')->assertOk()->streamedContent());
     }

@@ -1,6 +1,6 @@
 /* Nocna zmiana — Dashboard i listy: pasek wskaźników, tabele, statusy, terminy, dopasowanie AI. */
 
-/* ---------- Pasek wskaźników (Dashboard) ---------- */
+/* ---------- Pasek wskaźników (Kampanie) ---------- */
 /* Kolumny wg szerokości obszaru głównego, nie okna: 6, potem 3 (2 × 3), potem 2 — bez układu 5 + 1. */
 :root[data-template="nocna-zmiana"] .app-kpis {
   gap: 0;

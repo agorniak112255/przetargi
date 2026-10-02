@@ -1,0 +1,21 @@
+/* Nocna zmiana — Dashboard (makieta „A + C”, 02.10.2026): akcent szablonu zamiast niebieskiego/zielonego
+   Tailwinda w paskach, słupkach i ikonach kart. Reszta to klasy Tailwinda przemapowane przez szablon. */
+
+:root[data-template="nocna-zmiana"] .app-dash-accent {
+  background-color: var(--t-accent);
+  color: var(--t-on-accent);
+}
+
+:root[data-template="nocna-zmiana"] .app-dash-accent-fill {
+  fill: var(--t-accent);
+}
+
+:root[data-template="nocna-zmiana"] .app-dash-icon {
+  background-color: color-mix(in oklab, var(--t-accent) 14%, var(--t-surface));
+  color: var(--t-accent);
+}
+
+/* Etykiety 11px: muted zamiast dim — dim na powierzchni ma ok. 3:1, za mało dla tak małego tekstu. */
+:root[data-template="nocna-zmiana"] .app-dash-label {
+  color: var(--t-muted);
+}
