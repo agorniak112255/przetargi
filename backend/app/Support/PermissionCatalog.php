@@ -45,6 +45,7 @@ final class PermissionCatalog
         'inquiries.use',
         'inquiries.view_all',
         'inquiries.view_others',
+        'inquiries.reanalyze',
         'ai_settings.manage',
         'admin.access',
         'admin.users.manage',
@@ -229,6 +230,7 @@ final class PermissionCatalog
             // Własna grupa, a nie „Klienci”: uprawnienia do zapytań były tam nie do znalezienia.
             ['inquiries.use', 'Zapytania — praca z mailem', 'Może wklejać zapytanie klienta (albo wysłać je z dodatku do Thunderbirda) i przygotować odpowiedź z katalogu.', 'Zapytania'],
             ['inquiries.view_all', 'Zapytania — podgląd wszystkich', 'Widzi na liście zapytania wszystkich pracowników, nie tylko własne, i może filtrować po użytkowniku. Bez tego widzi wyłącznie swoje.', 'Zapytania'],
+            ['inquiries.reanalyze', 'Zapytania — ponowna analiza (także cudzych)', 'Może uruchomić analizę zapytania od nowa — także gotowego i należącego do innego pracownika (cudze otwiera z uprawnieniem „Zapytania — otwieranie cudzych”). Nowa analiza zastępuje pozycje, wybrane wyroby i szkic listu autora; autor zapytania się nie zmienia. Nie działa, gdy odpowiedź już wysłano albo list czeka na wysłanie w Thunderbirdzie.', 'Zapytania'],
             ['campaigns.use', 'Kampanie — własne kampanie', 'Może przygotować i wysłać ze swojej skrzynki kampanię z towarem (także zalegającym z zakładki Zapasy) do własnych i wspólnych grup odbiorców oraz do klientów z ERP XL. Widzi listę Zapasów z kosztem i wartością towaru.', 'Kampanie'],
             ['campaigns.manage', 'Kampanie — wszystkie, wspólne grupy i szablony', 'Widzi kampanie wszystkich pracowników, prowadzi wspólne grupy odbiorców, wspólne szablony maili i listę adresów wypisanych z mailingu.', 'Kampanie'],
             ['campaigns.delete', 'Kampanie — usuwanie wysłanych', 'Może usunąć wysłaną albo anulowaną kampanię razem z jej odbiorcami, kliknięciami i odpowiedziami (wypisy z mailingu zostają). Cudze kampanie — tylko z uprawnieniem „Kampanie — wszystkie”. Własny projekt usuwa każdy bez tego uprawnienia.', 'Kampanie'],

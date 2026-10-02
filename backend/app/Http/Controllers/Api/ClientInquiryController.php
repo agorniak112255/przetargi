@@ -298,7 +298,7 @@ class ClientInquiryController extends Controller
             isset($data['source_message_id']) ? (string) $data['source_message_id'] : null,
         );
         if ($existing instanceof ClientInquiry) {
-            return response()->json($this->inquiries->present($existing->load('client'), $this->viewer($request)));
+            return response()->json($this->presentFor($request, $existing->load('client')));
         }
 
         // Ten sam mail u kilku handlowców: zanim ruszy kosztowna analiza,
@@ -353,7 +353,7 @@ class ClientInquiryController extends Controller
         // Przy kolejce „sync” (testy, lokalnie bez workera) analiza już się policzyła.
         $inquiry->refresh()->load('client');
 
-        return response()->json($this->inquiries->present($inquiry, $this->viewer($request)), 201);
+        return response()->json($this->presentFor($request, $inquiry), 201);
     }
 
     /**
@@ -408,7 +408,7 @@ class ClientInquiryController extends Controller
             );
         }
 
-        return response()->json($this->inquiries->present($inquiry->load('client'), $this->viewer($request)));
+        return response()->json($this->presentFor($request, $inquiry->load('client')));
     }
 
     public function compose(ComposeClientInquiryRequest $request, ClientInquiry $inquiry): JsonResponse
@@ -444,7 +444,7 @@ class ClientInquiryController extends Controller
             return response()->json(['message' => 'Błąd pisania odpowiedzi: '.$e->getMessage()], 422);
         }
 
-        return response()->json($this->inquiries->present($inquiry, $this->viewer($request)));
+        return response()->json($this->presentFor($request, $inquiry));
     }
 
     /**
@@ -478,7 +478,7 @@ class ClientInquiryController extends Controller
             return response()->json(['message' => 'Błąd pisania odpowiedzi: '.$e->getMessage()], 422);
         }
 
-        return response()->json($this->inquiries->present($inquiry, $this->viewer($request)));
+        return response()->json($this->presentFor($request, $inquiry));
     }
 
     /** Ręczne poprawki tematu/treści listu przez pracownika. */
@@ -503,7 +503,7 @@ class ClientInquiryController extends Controller
             $inquiry->forceFill($changes)->save();
         }
 
-        return response()->json($this->inquiries->present($inquiry->load('client'), $this->viewer($request)));
+        return response()->json($this->presentFor($request, $inquiry->load('client')));
     }
 
     /** Oznaczenie „wysłano” (idempotentne): true ustawia raz, false kasuje. */
@@ -518,7 +518,7 @@ class ClientInquiryController extends Controller
             $inquiry->forceFill(['replied_at' => null])->save();
         }
 
-        return response()->json($this->inquiries->present($inquiry->load('client'), $this->viewer($request)));
+        return response()->json($this->presentFor($request, $inquiry->load('client')));
     }
 
     /**
@@ -700,27 +700,40 @@ class ClientInquiryController extends Controller
 
         $inquiry->forceFill(['send_requested_at' => $queued ? now() : null])->save();
 
-        return response()->json($this->inquiries->present($inquiry->load('client'), $this->viewer($request)));
+        return response()->json($this->presentFor($request, $inquiry->load('client')));
     }
 
     /**
-     * Ponowna analiza po błędzie albo po przerwanym przebiegu (tylko autor). Zadanie idzie do kolejki raz,
-     * nawet przy podwójnym kliknięciu — decyduje warunkowy zapis nowego przebiegu.
+     * Ponowna analiza po błędzie albo po przerwanym przebiegu — autor. Z uprawnieniem `inquiries.reanalyze`
+     * także gotowa i cudza (cudze tylko z `inquiries.view_others`, jak podgląd); autor zapytania się nie zmienia.
+     * Zadanie idzie do kolejki raz, nawet przy podwójnym kliknięciu — decyduje warunkowy zapis nowego przebiegu.
      */
     public function retryAnalysis(Request $request, ClientInquiry $inquiry): JsonResponse
     {
-        $this->assertOwner($request, $inquiry);
-        $runId = $this->inquiries->restartAnalysis($inquiry);
+        $user = $request->user();
+        $owner = (int) $inquiry->user_id === (int) $user->id;
+        $mayReanalyze = $user->can('inquiries.reanalyze');
+        if (! $owner && ! ($mayReanalyze && $user->can('inquiries.view_others'))) {
+            abort(403, 'Brak dostępu do tego zapytania.');
+        }
+        if ($mayReanalyze && $inquiry->isAnalyzed() && ($blocker = $this->inquiries->reanalysisBlocker($inquiry)) !== null) {
+            return response()->json(['message' => $blocker], 409);
+        }
+        $runId = $this->inquiries->restartAnalysis($inquiry, $mayReanalyze);
         if ($runId === null) {
-            return response()->json([
-                'message' => ($inquiry->fresh()?->isAnalyzed() ?? false)
-                    ? 'Analiza tego zapytania jest już gotowa.'
-                    : 'Analiza tego zapytania jeszcze trwa.',
-            ], 409);
+            $fresh = $inquiry->fresh();
+            $message = match (true) {
+                $fresh === null => 'Zapytanie zostało usunięte.',
+                $fresh->isAnalyzed() && $mayReanalyze => $this->inquiries->reanalysisBlocker($fresh) ?? 'Nie udało się uruchomić analizy ponownie.',
+                $fresh->isAnalyzed() => 'Analiza tego zapytania jest już gotowa.',
+                default => 'Analiza tego zapytania jeszcze trwa.',
+            };
+
+            return response()->json(['message' => $message], 409);
         }
         AnalyzeClientInquiryJob::dispatch((int) $inquiry->id, $runId);
 
-        return response()->json($this->inquiries->present($inquiry->refresh()->load('client'), $this->viewer($request)));
+        return response()->json($this->presentFor($request, $inquiry->refresh()->load('client')));
     }
 
     /** Zmiany zapytania dopiero po analizie — inaczej zapis handlowca i wynik analizy nadpisałyby się nawzajem. */
@@ -733,6 +746,26 @@ class ClientInquiryController extends Controller
         if ($status !== ClientInquiry::ANALYSIS_DONE) {
             abort(409, 'Analiza zapytania jeszcze trwa — poczekaj na wynik.');
         }
+    }
+
+    /**
+     * Widok zapytania dla zalogowanego: present() plus to, co może on sam — ponowić nieudaną analizę (autor albo
+     * `inquiries.reanalyze`) i uruchomić od nowa gotową (`inquiries.reanalyze`; powód blokady, gdy nie wolno).
+     *
+     * @return array<string, mixed>
+     */
+    private function presentFor(Request $request, ClientInquiry $inquiry): array
+    {
+        $user = $request->user();
+        $view = $this->inquiries->present($inquiry, $this->viewer($request));
+        $owner = (int) $inquiry->user_id === (int) $user->id;
+        $mayReanalyze = $user->can('inquiries.reanalyze') && ($owner || $user->can('inquiries.view_others'));
+        $view['can_retry_analysis'] = ($view['can_retry_analysis'] ?? false) && ($owner || $mayReanalyze);
+        $done = $inquiry->isAnalyzed();
+        $view['can_reanalyze'] = $mayReanalyze && $done;
+        $view['reanalyze_blocked'] = $mayReanalyze && $done ? $this->inquiries->reanalysisBlocker($inquiry) : null;
+
+        return $view;
     }
 
     /** Widok ceny specjalnej B2B zalogowanego (prices.supplier_special.view) — ceny kandydatów, oferty i listu. */

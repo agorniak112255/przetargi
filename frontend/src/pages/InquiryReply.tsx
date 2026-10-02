@@ -1302,7 +1302,8 @@ function AnalysisStatusPanel({
   }
 
   if (status === 'queued') {
-    const createdMs = inquiry.created_at ? Date.parse(inquiry.created_at) : NaN
+    const queuedAt = inquiry.analysis_queued_at ?? inquiry.created_at
+    const createdMs = queuedAt ? Date.parse(queuedAt) : NaN
     const waitingLong = Number.isFinite(createdMs) && now - createdMs > ANALYSIS_QUEUE_HINT_MS
     return (
       <div className="rounded border border-violet-200 bg-violet-50 px-3 py-2 text-sm text-violet-800">
@@ -1813,6 +1814,20 @@ export function InquiryReply() {
   }
 
   /** Kasuje wyłącznie autor zapytania; serwer i tak sprawdza to drugi raz. */
+  /** Gotowa analiza od nowa (uprawnienie „ponowna analiza”) — nowy wynik zastępuje pozycje i list autora. */
+  async function reanalyze() {
+    if (!inquiry) return
+    const author = inquiry.user?.id !== user?.id ? inquiry.user?.name : null
+    const ok = window.confirm(
+      'Uruchomić analizę zapytania od nowa?\n\n' +
+        'Mail zostanie przeczytany jeszcze raz, a nowy wynik zastąpi pozycje, wybrane wyroby i szkic listu' +
+        (author ? ` — także poprawki autora (${author}). Zapytanie dalej należy do autora.` : '.') +
+        ' Tego nie da się cofnąć.',
+    )
+    if (!ok) return
+    await retryAnalysis()
+  }
+
   async function removeInquiry() {
     if (!inquiry) return
     const label = inquiry.source_subject || inquiry.reply_subject || `#${inquiry.id}`
@@ -2021,6 +2036,22 @@ export function InquiryReply() {
               Usuń zapytanie
             </button>
           )}
+          {inquiry.can_reanalyze &&
+            (inquiry.reanalyze_blocked ? (
+              <span className="text-[11px] text-slate-400">
+                Ponowna analiza niedostępna: {inquiry.reanalyze_blocked}
+              </span>
+            ) : (
+              <button
+                type="button"
+                disabled={busy || saving || retryBusy}
+                onClick={() => void reanalyze()}
+                title="Czyta mail od nowa i dobiera wyroby — zastępuje pozycje i szkic listu"
+                className="rounded border border-slate-300 px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+              >
+                {retryBusy ? 'Uruchamiam…' : 'Ponów analizę'}
+              </button>
+            ))}
           {saving && <span className="text-[11px] text-slate-400">Zapisuję…</span>}
           {busy && (
             <span className="text-xs text-violet-800">

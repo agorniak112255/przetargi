@@ -412,18 +412,30 @@ final class ClientInquiryService
     /**
      * Ponowienie analizy po błędzie albo po przerwanym przebiegu. Zwraca nowy identyfikator przebiegu, gdy ten
      * zapis go ustawił — podwójne kliknięcie ustawi go raz, więc zadanie idzie do kolejki raz. null = nie wolno.
+     *
+     * $includeDone (uprawnienie inquiries.reanalyze): także gotowa analiza — nowy wynik zastąpi pozycje, wybory
+     * i szkic listu. Nigdy po wysłaniu odpowiedzi ani gdy list czeka na Thunderbirda (reanalysisBlocker()):
+     * warunek siedzi też w zapisie, więc wysyłka zlecona w tej samej chwili wygrywa.
      */
-    public function restartAnalysis(ClientInquiry $inquiry): ?string
+    public function restartAnalysis(ClientInquiry $inquiry, bool $includeDone = false): ?string
     {
         $runId = (string) Str::ulid();
         $changed = ClientInquiry::query()
             ->whereKey($inquiry->id)
-            ->where(function ($q): void {
+            ->where(function ($q) use ($includeDone): void {
                 $q->where('analysis_status', ClientInquiry::ANALYSIS_FAILED)
                     ->orWhere(function ($stale): void {
                         $stale->where('analysis_status', ClientInquiry::ANALYSIS_RUNNING)
                             ->where('analysis_started_at', '<', now()->subMinutes(ClientInquiry::ANALYSIS_STALE_MINUTES));
                     });
+                if ($includeDone) {
+                    $q->orWhere(function ($done): void {
+                        // zapytania sprzed analizy w tle nie mają statusu — effectiveAnalysisStatus() liczy je jako gotowe
+                        $done->where(fn ($s) => $s->where('analysis_status', ClientInquiry::ANALYSIS_DONE)->orWhereNull('analysis_status'))
+                            ->whereNull('replied_at')
+                            ->whereNull('send_requested_at');
+                    });
+                }
             })
             ->update([
                 'analysis_status' => ClientInquiry::ANALYSIS_QUEUED,
@@ -435,6 +447,19 @@ final class ClientInquiryService
             ]);
 
         return $changed === 1 ? $runId : null;
+    }
+
+    /** Powód, dla którego gotowej analizy nie wolno już uruchomić od nowa; null = można. */
+    public function reanalysisBlocker(ClientInquiry $inquiry): ?string
+    {
+        if ($inquiry->replied_at !== null) {
+            return 'Odpowiedź na to zapytanie już wysłano.';
+        }
+        if ($inquiry->send_requested_at !== null) {
+            return 'List czeka na wysłanie w Thunderbirdzie.';
+        }
+
+        return null;
     }
 
     /** Czytanie maila, szukanie w katalogu i szkic listu — w pamięci; zapis tylko w saveAnalysisResult(). */
@@ -1631,6 +1656,9 @@ final class ClientInquiryService
             ] : null,
             'analysis_error' => $status === ClientInquiry::ANALYSIS_FAILED ? ($error ?? 'Analiza zapytania nie powiodła się.') : null,
             'analysis_started_at' => $pending ? $inquiry->analysis_started_at?->toIso8601String() : null,
+            // chwila wstawienia do kolejki: założenie albo ponowienie (restartAnalysis() zapisuje updated_at) —
+            // podpowiedź „długo czeka” liczona od założenia straszyła zaraz po ponowieniu starego zapytania
+            'analysis_queued_at' => $status === ClientInquiry::ANALYSIS_QUEUED ? $inquiry->updated_at?->toIso8601String() : null,
             'analysis_line_items' => $pending && isset($progress['items']) ? (int) $progress['items'] : null,
             'can_retry_analysis' => $status === ClientInquiry::ANALYSIS_FAILED,
         ];

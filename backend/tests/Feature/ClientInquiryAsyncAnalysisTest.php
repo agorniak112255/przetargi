@@ -131,6 +131,103 @@ final class ClientInquiryAsyncAnalysisTest extends TestCase
         $this->postJson("/api/inquiries/{$inquiry->id}/retry-analysis")->assertForbidden();
     }
 
+    /**
+     * inquiries.reanalyze (02.10.2026, zapytanie #91 bez pozycji po złym cięciu maila): admin uruchamia od nowa
+     * gotową analizę cudzego zapytania. Nowy wynik zastępuje pozycje i list, autor się nie zmienia.
+     */
+    public function test_admin_reanalyzes_done_inquiry_of_another_user(): void
+    {
+        $round = 0;
+        $this->mock(OpenAiCompatibleClient::class, function ($mock) use (&$round): void {
+            $mock->shouldReceive('chatJson')->andReturnUsing(function () use (&$round): array {
+                $round++;
+
+                return [
+                    'subject' => 'Rękawice',
+                    // drugi przebieg poznajemy po pytaniu klienta — pochodzi wyłącznie z odpowiedzi modelu
+                    'questions' => $round > 1 ? ['Jaki termin dostawy?'] : [],
+                    'product_queries' => [],
+                    'line_items' => [
+                        ['id' => 'item_1', 'quote' => 'Rękawice robocze R1 - 10 par', 'qty' => '10', 'unit' => 'par', 'query' => 'rękawice robocze R1', 'size' => null],
+                    ],
+                    'cards' => [],
+                ];
+            });
+        });
+        $this->emptySearch();
+        $author = User::factory()->withRole('handlowiec')->create();
+        Sanctum::actingAs($author);
+        $id = (int) $this->postJson('/api/inquiries', ['body' => self::BODY, 'tone' => 'handlowy'])
+            ->assertCreated()
+            ->assertJsonPath('analysis_status', 'done')
+            // autor bez uprawnienia nie liczy gotowej analizy od nowa
+            ->assertJsonPath('can_reanalyze', false)
+            ->assertJsonPath('questions', [])
+            ->json('id');
+        $this->postJson("/api/inquiries/{$id}/retry-analysis")->assertStatus(409);
+
+        $admin = User::factory()->withRole('admin')->create();
+        Sanctum::actingAs($admin);
+        $this->getJson("/api/inquiries/{$id}")
+            ->assertOk()
+            ->assertJsonPath('can_reanalyze', true)
+            ->assertJsonPath('reanalyze_blocked', null);
+        $this->postJson("/api/inquiries/{$id}/retry-analysis")
+            ->assertOk()
+            ->assertJsonPath('analysis_status', 'done')
+            ->assertJsonPath('questions', ['Jaki termin dostawy?'])
+            ->assertJsonPath('user.id', $author->id);
+        $this->assertSame($author->id, (int) ClientInquiry::query()->findOrFail($id)->user_id);
+        $this->assertSame(2, $round);
+    }
+
+    public function test_reanalysis_is_blocked_after_the_reply_was_sent_or_queued(): void
+    {
+        Queue::fake();
+        $inquiry = $this->pendingInquiry(User::factory()->withRole('handlowiec')->create(), ClientInquiry::ANALYSIS_DONE);
+        Sanctum::actingAs(User::factory()->withRole('admin')->create());
+
+        $inquiry->forceFill(['send_requested_at' => now()])->save();
+        $this->getJson("/api/inquiries/{$inquiry->id}")
+            ->assertOk()
+            ->assertJsonPath('reanalyze_blocked', 'List czeka na wysłanie w Thunderbirdzie.');
+        $this->postJson("/api/inquiries/{$inquiry->id}/retry-analysis")
+            ->assertStatus(409)
+            ->assertJsonPath('message', 'List czeka na wysłanie w Thunderbirdzie.');
+
+        $inquiry->forceFill(['send_requested_at' => null, 'replied_at' => now()])->save();
+        $this->postJson("/api/inquiries/{$inquiry->id}/retry-analysis")
+            ->assertStatus(409)
+            ->assertJsonPath('message', 'Odpowiedź na to zapytanie już wysłano.');
+
+        // zapytanie sprzed analizy w tle (bez statusu) liczy się jako gotowe
+        $legacy = $this->pendingInquiry(User::factory()->withRole('handlowiec')->create(), ClientInquiry::ANALYSIS_DONE);
+        $legacy->forceFill(['analysis_status' => null])->save();
+        // „długo czeka w kolejce” liczy się od ponowienia, nie od założenia zapytania
+        $this->travelTo(now()->addHour()->startOfSecond());
+        $this->postJson("/api/inquiries/{$legacy->id}/retry-analysis")
+            ->assertOk()
+            ->assertJsonPath('analysis_status', 'queued')
+            ->assertJsonPath('analysis_queued_at', now()->toIso8601String());
+        Queue::assertPushed(AnalyzeClientInquiryJob::class, 1);
+    }
+
+    /** Kierownik otwiera cudze zapytania, ale bez inquiries.reanalyze ich nie przelicza — ani gotowych, ani nieudanych. */
+    public function test_viewing_others_does_not_allow_reanalysis(): void
+    {
+        Queue::fake();
+        $author = User::factory()->withRole('handlowiec')->create();
+        $done = $this->pendingInquiry($author, ClientInquiry::ANALYSIS_DONE);
+        $failed = $this->pendingInquiry($author, ClientInquiry::ANALYSIS_FAILED);
+        Sanctum::actingAs(User::factory()->withRole('kierownik')->create());
+
+        $this->getJson("/api/inquiries/{$done->id}")->assertOk()->assertJsonPath('can_reanalyze', false);
+        $this->getJson("/api/inquiries/{$failed->id}")->assertOk()->assertJsonPath('can_retry_analysis', false);
+        $this->postJson("/api/inquiries/{$done->id}/retry-analysis")->assertForbidden();
+        $this->postJson("/api/inquiries/{$failed->id}/retry-analysis")->assertForbidden();
+        Queue::assertNothingPushed();
+    }
+
     /** Worker zabity w trakcie: „running” bez końca po 25 min to przebieg przerwany — do ponowienia. */
     public function test_running_analysis_without_end_after_25_minutes_is_shown_as_interrupted(): void
     {

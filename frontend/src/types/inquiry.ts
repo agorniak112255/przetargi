@@ -304,8 +304,14 @@ export type InquiryPayload = {
   analysis_started_at?: string | null
   /** Ile pozycji znalazło czytanie maila (znane od etapu `understand`); null = jeszcze nie wiadomo. */
   analysis_line_items?: number | null
-  /** Autor może uruchomić analizę ponownie (tylko przy `failed`). */
+  /** Chwila wstawienia do kolejki (założenie albo ponowienie), tylko przy `queued`. */
+  analysis_queued_at?: string | null
+  /** Zalogowany może uruchomić analizę ponownie przy `failed` (autor albo uprawnienie „ponowna analiza”). */
   can_retry_analysis?: boolean
+  /** Zalogowany może uruchomić od nowa gotową analizę — uprawnienie „ponowna analiza”, także cudzego zapytania. */
+  can_reanalyze?: boolean
+  /** Powód, dla którego gotowej analizy nie wolno już przeliczyć (wysłano, list czeka na Thunderbirda); null = można. */
+  reanalyze_blocked?: string | null
 }
 
 export type InquiryListItem = {
