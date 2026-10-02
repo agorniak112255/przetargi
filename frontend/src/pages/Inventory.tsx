@@ -53,11 +53,15 @@ const SEARCH_DEBOUNCE_MS = 300
 /** Ile magazynów widać pod stanem; reszta jako „+n” (jak ErpStockInline). */
 const INLINE_WAREHOUSES = 3
 
-/** Magazyny jak w raporcie dla zarządu; tu domyślnie wszystkie (lista zawsze liczyła wszystkie magazyny). */
+/**
+ * Magazyny jak w raporcie dla zarządu, domyślnie handlowe (decyzja właściciela 02.10.2026) — w adresie bez parametru;
+ * API bez parametru liczy wszystkie, więc strona wysyła wybór zawsze.
+ */
+const DEFAULT_WAREHOUSES: InventoryBoardWarehouses = 'trade'
 const WAREHOUSE_OPTIONS: { value: InventoryBoardWarehouses; label: string }[] = [
-  { value: 'all', label: 'wszystkie' },
   { value: 'trade', label: 'handlowe' },
   { value: 'service', label: 'usługowe' },
+  { value: 'all', label: 'wszystkie' },
 ]
 const WAREHOUSE_LABEL: Record<InventoryBoardWarehouses, string> = {
   all: 'wszystkie magazyny',
@@ -157,7 +161,7 @@ export function Inventory() {
   const search = params.get('search') ?? ''
   // oddział: cyfry z początku kodu magazynu (01 = Rzeszów); '' = wszystkie
   const location = /^\d{1,10}$/.test(params.get('location') ?? '') ? (params.get('location') as string) : ''
-  const warehouses = pick<InventoryBoardWarehouses>(params.get('warehouses'), ['all', 'trade', 'service'], 'all')
+  const warehouses = pick<InventoryBoardWarehouses>(params.get('warehouses'), ['all', 'trade', 'service'], DEFAULT_WAREHOUSES)
   const sort = pick<SortKey>(params.get('sort'), SORT_KEYS, 'value')
   const dir = pick<SortDir>(params.get('dir'), ['asc', 'desc'], DEFAULT_DIR[sort])
   const page = Math.max(1, Math.floor(Number(params.get('page'))) || 1)
@@ -171,7 +175,7 @@ export function Inventory() {
     if (card) qs.set('card', card)
     if (group) qs.set('group', group)
     if (location) qs.set('location', location)
-    if (warehouses !== 'all') qs.set('warehouses', warehouses)
+    qs.set('warehouses', warehouses)
     if (supplier.trim()) qs.set('supplier', supplier.trim())
     if (search.trim()) qs.set('search', search.trim())
     qs.set('sort', sort)
@@ -296,7 +300,7 @@ export function Inventory() {
       card ||
       group ||
       location ||
-      warehouses !== 'all' ||
+      warehouses !== DEFAULT_WAREHOUSES ||
       supplier ||
       search,
   )
@@ -408,7 +412,7 @@ export function Inventory() {
                 {result?.cutoff ? ` · bez sprzedaży od ${formatDate(result.cutoff)}` : ''}
                 {result?.lot_cutoff ? ` · partia leży od ${formatDate(result.lot_cutoff)} lub dłużej` : ''}
                 {location ? ` · oddział ${locationName}` : ''}
-                {warehouses !== 'all' ? ` · ${WAREHOUSE_LABEL[warehouses]}` : ''}
+                {` · ${WAREHOUSE_LABEL[warehouses]}`}
                 {loading ? ' · ładowanie…' : ''}
               </>
             ) : loading ? (
@@ -522,7 +526,7 @@ export function Inventory() {
           <select
             className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-800"
             value={warehouses}
-            onChange={(e) => setFilters({ warehouses: e.target.value === 'all' ? null : e.target.value })}
+            onChange={(e) => setFilters({ warehouses: e.target.value === DEFAULT_WAREHOUSES ? null : e.target.value })}
             title="Jak w raporcie zapasów: handlowe — towar na sprzedaż, usługowe — towar trzymany dla klientów (słownik magazynów). Stan, wartość i wiek partii tylko z tych magazynów; ostatnia sprzedaż bez podziału na handlowe i usługowe."
           >
             {WAREHOUSE_OPTIONS.map((o) => (
