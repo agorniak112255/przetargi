@@ -424,7 +424,34 @@ export type MailingListContact = {
   suppressed: boolean
 }
 
-export type ImportResult = { added: number; already: number; invalid: string[]; suppressed: number }
+export type ImportResult = {
+  added: number
+  already: number
+  invalid: string[]
+  suppressed: number
+  /** Tylko import z pliku: */
+  invalid_count?: number
+  duplicates?: number
+  empty?: number
+  no_consent?: number
+}
+
+/** Pole kontaktu, do którego użytkownik przypisuje kolumnę pliku. */
+export type ContactImportField = 'email' | 'first_name' | 'last_name' | 'name' | 'company' | 'consent'
+
+export type ContactFilePreview = {
+  file_name: string
+  sheets: string[]
+  sheet: number
+  /** Niepuste wiersze arkusza razem z nagłówkiem. */
+  total_rows: number
+  max_rows: number
+  has_header: boolean
+  column_count: number
+  /** Pierwsze wiersze (z nagłówkiem), każdy dopełniony do column_count. */
+  rows: string[][]
+  suggested: (ContactImportField | null)[]
+}
 
 export type EmailSuppression = {
   id: number
@@ -723,6 +750,38 @@ export function mailingListContacts(id: number, params: { search?: string; page?
 
 export function importMailingListContacts(id: number, body: { text: string; basis: ContactBasis; basis_note?: string }) {
   return api<ImportResult>(`/mailing-lists/${id}/import`, { method: 'POST', ...json(body) })
+}
+
+function contactFileForm(file: File, sheet: number) {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('sheet', String(sheet))
+  return form
+}
+
+export function previewMailingListFile(id: number, file: File, sheet = 0) {
+  return api<ContactFilePreview>(`/mailing-lists/${id}/import-file/preview`, { method: 'POST', body: contactFileForm(file, sheet) })
+}
+
+export function importMailingListFile(
+  id: number,
+  body: {
+    file: File
+    sheet: number
+    has_header: boolean
+    mapping: Partial<Record<ContactImportField, number>>
+    basis: ContactBasis
+    basis_note?: string
+  },
+) {
+  const form = contactFileForm(body.file, body.sheet)
+  form.append('has_header', body.has_header ? '1' : '0')
+  for (const [field, column] of Object.entries(body.mapping)) {
+    if (column !== undefined) form.append(`mapping[${field}]`, String(column))
+  }
+  form.append('basis', body.basis)
+  if (body.basis_note) form.append('basis_note', body.basis_note)
+  return api<ImportResult>(`/mailing-lists/${id}/import-file`, { method: 'POST', body: form })
 }
 
 export function removeMailingListContact(id: number, contactId: number) {

@@ -10,6 +10,7 @@ use App\Models\EmailSuppression;
 use App\Models\MailingList;
 use App\Models\MailingListContact;
 use App\Models\User;
+use App\Services\Campaigns\ContactFileImport;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
@@ -18,15 +19,20 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use RuntimeException;
 
 /**
  * Grupy odbiorców kampanii: własne użytkownika i wspólne (prowadzi campaigns.manage). Kontakt (adres) jest jeden dla
- * wszystkich grup; w grupie ma podstawę wysyłki (stały klient / zgoda). Import z wklejonego tekstu.
+ * wszystkich grup; w grupie ma podstawę wysyłki (stały klient / zgoda). Import z wklejonego tekstu albo z pliku
+ * (CSV, Excel) z kolumnami przypisanymi przez użytkownika.
  */
 class MailingListController extends Controller
 {
     /** Najwięcej niepustych linii w jednym imporcie. */
     public const IMPORT_MAX_LINES = 5000;
+
+    /** Największy plik do importu (KB). */
+    public const IMPORT_MAX_FILE_KB = 10240;
 
     /** Tyle błędnych linii wraca w odpowiedzi — reszta i tak do poprawy w źródle. */
     private const INVALID_SAMPLE = 50;
@@ -181,6 +187,84 @@ class MailingListController extends Controller
         ]);
     }
 
+    /** Podgląd pliku: arkusze, pierwsze wiersze, czy jest nagłówek i propozycja pola dla każdej kolumny. */
+    public function importFilePreview(Request $request, MailingList $list, ContactFileImport $files): JsonResponse
+    {
+        $this->authorizeEdit($request->user(), $list);
+        $request->validate($this->fileRules());
+        $file = $request->file('file');
+        $read = $this->readFile($request, $files);
+
+        return response()->json([
+            'file_name' => $file->getClientOriginalName(),
+            'sheets' => $read['sheets'],
+            'sheet' => $read['sheet'],
+            'total_rows' => count($read['rows']),
+            'max_rows' => self::IMPORT_MAX_LINES,
+            ...$files->preview($read['rows']),
+        ]);
+    }
+
+    /**
+     * Import pliku z przypisaniem kolumn wybranym przez użytkownika (mapping: pole → numer kolumny od 0). Zapis jak
+     * przy wklejaniu: istniejącym kontaktom uzupełniamy tylko puste pola, adres już w grupie zostaje bez zmian.
+     */
+    public function importFile(Request $request, MailingList $list, ContactFileImport $files): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+        $this->authorizeEdit($user, $list);
+        $v = $request->validate([
+            ...$this->fileRules(),
+            'has_header' => ['required', 'boolean'],
+            'mapping' => ['required', 'array:'.implode(',', ContactFileImport::FIELDS)],
+            'mapping.'.ContactFileImport::FIELD_EMAIL => ['required', 'integer', 'min:0'],
+            'mapping.*' => ['nullable', 'integer', 'min:0'],
+            'basis' => ['required', 'string', Rule::in(MailingListContact::BASES)],
+            'basis_note' => ['nullable', 'string', 'max:255'],
+        ], [
+            'mapping.'.ContactFileImport::FIELD_EMAIL.'.required' => 'Wskaż kolumnę z adresem e-mail.',
+        ]);
+
+        $mapping = array_map('intval', array_filter($v['mapping'], static fn ($i): bool => $i !== null));
+        if (count($mapping) !== count(array_unique($mapping))) {
+            throw ValidationException::withMessages(['mapping' => ['Jedna kolumna może mieć przypisane tylko jedno pole.']]);
+        }
+
+        $read = $this->readFile($request, $files);
+        $rows = $read['rows'];
+        if ((bool) $v['has_header']) {
+            array_shift($rows);
+        }
+        if (count($rows) > self::IMPORT_MAX_LINES) {
+            throw ValidationException::withMessages([
+                'file' => ['Najwyżej '.self::IMPORT_MAX_LINES.' wierszy w jednym imporcie (w pliku '.count($rows).') — podziel plik.'],
+            ]);
+        }
+        $width = 0;
+        foreach ($read['rows'] as $row) {
+            $width = max($width, count($row['cells']));
+        }
+        if (max($mapping) >= $width) {
+            throw ValidationException::withMessages(['mapping' => ['W pliku nie ma wskazanej kolumny — wczytaj plik ponownie.']]);
+        }
+
+        $parsed = $files->extract($rows, $mapping);
+        $result = DB::transaction(fn (): array => $this->storeRows($list, $parsed['rows'], $v['basis'], $v['basis_note'] ?? null, $user));
+        $list->touch();
+
+        return response()->json([
+            'added' => $result['added'],
+            'already' => $result['already'],
+            'duplicates' => $parsed['duplicates'],
+            'empty' => $parsed['empty'],
+            'no_consent' => $parsed['no_consent'],
+            'invalid' => array_slice($parsed['invalid'], 0, self::INVALID_SAMPLE),
+            'invalid_count' => count($parsed['invalid']),
+            'suppressed' => $result['suppressed'],
+        ]);
+    }
+
     public function removeContact(Request $request, MailingList $list, Contact $contact): JsonResponse
     {
         $this->authorizeEdit($request->user(), $list);
@@ -330,6 +414,35 @@ class MailingListController extends Controller
             // odczyt blokujący widzi wiersz zatwierdzony po starcie transakcji (zwykły SELECT w MySQL — nie)
             return Contact::query()->where('email', $email)->sharedLock()->firstOrFail();
         }
+    }
+
+    /** @return array<string, list<string>> */
+    private function fileRules(): array
+    {
+        return [
+            'file' => ['required', 'file', 'max:'.self::IMPORT_MAX_FILE_KB],
+            'sheet' => ['nullable', 'integer', 'min:0', 'max:200'],
+        ];
+    }
+
+    /**
+     * @return array{sheets: list<string>, sheet: int, rows: list<array{line: int, cells: list<string>}>}
+     */
+    private function readFile(Request $request, ContactFileImport $files): array
+    {
+        $file = $request->file('file');
+        $ext = (string) $file->getClientOriginalExtension();
+        try {
+            // nagłówek i puste wiersze w środku liczą się do wymiaru arkusza — stąd zapas ponad limit wierszy danych
+            $read = $files->read((string) $file->getRealPath(), $ext, (int) $request->input('sheet', 0), 2 * self::IMPORT_MAX_LINES);
+        } catch (RuntimeException $e) {
+            throw ValidationException::withMessages(['file' => [$e->getMessage()]]);
+        }
+        if ($read['rows'] === []) {
+            throw ValidationException::withMessages(['file' => ['Arkusz jest pusty.']]);
+        }
+
+        return $read;
     }
 
     /** @return Builder<MailingList> grupy własne i wspólne */

@@ -12,6 +12,7 @@ import {
   INPUT,
   Pager,
 } from '../components/CampaignsUi'
+import { MailingListFileImport } from '../components/MailingListFileImport'
 import { errorText, fmtDate, fmtInt } from '../lib/campaignFormat'
 import { can } from '../lib/api'
 import {
@@ -28,7 +29,7 @@ import {
 } from '../lib/campaigns'
 import { plural } from '../lib/plural'
 
-/** Szczegóły grupy odbiorców: kontakty (szukaj, stronicowanie, usuwanie) i import wklejonych adresów. */
+/** Szczegóły grupy odbiorców: kontakty (szukaj, stronicowanie, usuwanie), import wklejonych adresów i pliku. */
 
 const BASIS_LABEL: Record<ContactBasis, string> = {
   customer: 'stały klient',
@@ -67,6 +68,7 @@ export function MailingListDetail() {
   const [oneName, setOneName] = useState('')
   const [oneCompany, setOneCompany] = useState('')
   const [formMsg, setFormMsg] = useState('')
+  const [importFile, setImportFile] = useState<File | null>(null)
 
   const [toRemove, setToRemove] = useState<MailingListContact | null>(null)
   const [removing, setRemoving] = useState(false)
@@ -414,6 +416,31 @@ export function MailingListDetail() {
                 </button>
               </form>
 
+              <div className="space-y-2 rounded border border-slate-200 p-3">
+                <p className="font-semibold text-slate-900">Z pliku (Excel, CSV)</p>
+                <p className="text-slate-600">
+                  Np. eksport klientów ze sklepu albo programu. Po wczytaniu wskażesz, która kolumna to e-mail, imię,
+                  nazwisko, firma.
+                </p>
+                <label className={`${BTN} block w-full cursor-pointer text-center`}>
+                  Wybierz plik…
+                  <input
+                    type="file"
+                    className="sr-only"
+                    accept=".csv,.txt,.xlsx,.xls,.ods"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] ?? null
+                      e.target.value = ''
+                      if (f) {
+                        setFormMsg('')
+                        setImportResult(null)
+                        setImportFile(f)
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+
               {formMsg && <p className="rounded bg-amber-50 px-2 py-1.5 text-amber-900">{formMsg}</p>}
             </div>
           )}
@@ -424,13 +451,18 @@ export function MailingListDetail() {
               <ul className="mt-1 space-y-0.5">
                 <li>Dodane: {fmtInt(importResult.added)}</li>
                 <li>Już były w grupie: {fmtInt(importResult.already)}</li>
+                {(importResult.duplicates ?? 0) > 0 && <li>Powtórzone w pliku: {fmtInt(importResult.duplicates ?? 0)}</li>}
+                {(importResult.no_consent ?? 0) > 0 && (
+                  <li>Bez zgody w pliku — pominięte: {fmtInt(importResult.no_consent ?? 0)}</li>
+                )}
+                {(importResult.empty ?? 0) > 0 && <li>Bez adresu e-mail — pominięte: {fmtInt(importResult.empty ?? 0)}</li>}
                 {importResult.suppressed > 0 && (
                   <li className="text-amber-800">
                     Na liście wypisanych: {fmtInt(importResult.suppressed)} — są w grupie, ale nie dostaną kampanii
                   </li>
                 )}
                 <li className={importResult.invalid.length > 0 ? 'text-red-700' : ''}>
-                  Niepoprawne: {fmtInt(importResult.invalid.length)}
+                  Niepoprawne: {fmtInt(importResult.invalid_count ?? importResult.invalid.length)}
                 </li>
               </ul>
               {importResult.invalid.length > 0 && (
@@ -443,7 +475,7 @@ export function MailingListDetail() {
                       </li>
                     ))}
                   </ul>
-                  {importResult.invalid.length >= 50 && (
+                  {(importResult.invalid_count ?? importResult.invalid.length) >= 50 && (
                     <p className="text-[11px] text-slate-500">Pokazano pierwsze 50.</p>
                   )}
                 </details>
@@ -455,6 +487,21 @@ export function MailingListDetail() {
           )}
         </aside>
       </div>
+
+      {importFile && (
+        <MailingListFileImport
+          listId={listId}
+          file={importFile}
+          initialBasis={basis}
+          initialNote={basisNote}
+          onClose={() => setImportFile(null)}
+          onDone={(res) => {
+            setImportFile(null)
+            setImportResult(res)
+            void Promise.all([loadContacts(), loadList()])
+          }}
+        />
+      )}
 
       {toRemove && (
         <ConfirmDialog

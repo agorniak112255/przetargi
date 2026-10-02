@@ -428,6 +428,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::delete('/mailing-lists/{list}', [MailingListController::class, 'destroy']);
         Route::get('/mailing-lists/{list}/contacts', [MailingListController::class, 'contacts']);
         Route::post('/mailing-lists/{list}/import', [MailingListController::class, 'import']);
+        Route::post('/mailing-lists/{list}/import-file/preview', [MailingListController::class, 'importFilePreview'])->middleware('throttle:30,1');
+        Route::post('/mailing-lists/{list}/import-file', [MailingListController::class, 'importFile'])->middleware('throttle:30,1');
         Route::delete('/mailing-lists/{list}/contacts/{contact}', [MailingListController::class, 'removeContact']);
 
         Route::get('/email-suppressions', [EmailSuppressionController::class, 'index']);
