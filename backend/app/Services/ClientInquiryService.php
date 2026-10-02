@@ -1379,6 +1379,22 @@ final class ClientInquiryService
     }
 
     /**
+     * List w innym szablonie — tylko do obejrzenia (np. cudze zapytanie): z pozycji, decyzji, warunków i dopisku
+     * autora, w pamięci, bez zapisu. Ręcznych poprawek treści autora w nim nie ma — to list złożony od nowa.
+     *
+     * @return array{subject: string, body: string, html: string|null}
+     */
+    public function previewReply(ClientInquiry $inquiry, string $tone, SupplierSpecialMask $viewer): array
+    {
+        $copy = clone $inquiry;
+        $copy->setAttribute('tone', $tone);
+        $answers = is_array($copy->answers) ? $copy->answers : [];
+        $draft = $this->withPriceMask($viewer, fn (): array => $this->writeReply($copy, $answers, $this->nullable($copy->extra_note)));
+
+        return ['subject' => (string) $draft['subject'], 'body' => (string) $draft['body'], 'html' => $draft['html']];
+    }
+
+    /**
      * Tabela HTML do maila. Kolumna bywa pusta przy listach napisanych, zanim
      * tabela powstała — wtedy odtwarzamy ją z zapisanych odpowiedzi. Robimy to
      * tylko wtedy, gdy zapisany list to wciąż nasz tekst: po ręcznej poprawce

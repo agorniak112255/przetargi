@@ -8,7 +8,7 @@ import { ProductVerifyModal } from '../components/ProductVerifyModal'
 import { useAuth } from '../auth'
 import { api, type OrderQuantity } from '../lib/api'
 import { copyHtmlBySelection } from '../lib/clipboard'
-import { toneHint, toneOptions } from '../lib/inquiryTone'
+import { toneHint, toneLabel, toneOptions } from '../lib/inquiryTone'
 import type {
   InquiryAnalysisStage,
   InquiryAnswer,
@@ -27,6 +27,8 @@ import type {
 } from '../types/inquiry'
 
 type Draft = { subject: string; body: string }
+/** List cudzego zapytania w innym szablonie — tylko do obejrzenia, nic się nie zapisuje (GET reply-preview). */
+type TonePreview = { tone: InquiryTone; subject: string; body: string; html: string | null }
 /** Ręczne szukanie przy pozycji: „Szukaj” po nazwie/kodzie, „Szukaj AI” po opisie. */
 type SearchMode = 'catalog' | 'ai'
 /** Otwarte okno szukania: dla której pozycji i w którym trybie. */
@@ -1389,6 +1391,7 @@ export function InquiryReply() {
   const [searchFor, setSearchFor] = useState<SearchFor | null>(null)
   const [contactOpen, setContactOpen] = useState(false)
   const [replyOpen, setReplyOpen] = useState(false)
+  const [toneView, setToneView] = useState<TonePreview | null>(null)
   const [retryBusy, setRetryBusy] = useState(false)
   // Zegar ekranu analizy (czas trwania, podpowiedź o długiej kolejce) — tyka tylko w trakcie analizy.
   const [now, setNow] = useState(() => Date.now())
@@ -1419,6 +1422,8 @@ export function InquiryReply() {
     serverRef.current = draft
     composedRef.current = draft
     setInquiry(p)
+    // podgląd innego szablonu był do poprzedniej wersji listu
+    setToneView(null)
     setSubject(draft.subject)
     setBody(draft.body)
     resetDrafts(p)
@@ -1604,8 +1609,36 @@ export function InquiryReply() {
   }
 
   function onTone(tone: InquiryTone) {
-    if (!inquiry || tone === inquiry.tone) return
+    if (!inquiry) return
+    // cudze zapytanie: szablonu nie zmieniamy, tylko pokazujemy list w wybranym
+    if (inquiry.user?.id !== user?.id) {
+      void previewTone(tone)
+      return
+    }
+    if (tone === inquiry.tone) return
     void compose({}, tone)
+  }
+
+  /** List cudzego zapytania w innym szablonie — w oknie podglądu; autor i Thunderbird dalej mają list autora. */
+  async function previewTone(tone: InquiryTone) {
+    if (!inquiry || composeBusy) return
+    setErr('')
+    setMsg('')
+    if (tone === inquiry.tone) {
+      setToneView(null)
+      setReplyOpen(true)
+      return
+    }
+    setComposeBusy(true)
+    try {
+      const res = await api<TonePreview>(`/inquiries/${inquiry.id}/reply-preview?tone=${encodeURIComponent(tone)}`)
+      setToneView(res)
+      setReplyOpen(true)
+    } catch (ex) {
+      setErr(ex instanceof Error ? ex.message : 'Nie udało się pokazać listu w tym szablonie.')
+    } finally {
+      setComposeBusy(false)
+    }
   }
 
   function onPriceMode(mode: InquiryPriceMode) {
@@ -1671,7 +1704,7 @@ export function InquiryReply() {
     } catch {
       return
     }
-    if (await copyText(body)) setMsg('Skopiowano treść.')
+    if (await copyText(toneView?.body ?? body)) setMsg('Skopiowano treść.')
   }
 
   /**
@@ -1688,12 +1721,13 @@ export function InquiryReply() {
     } catch {
       return
     }
-    const html = (saved ?? inquiry).reply_html
+    // podgląd innego szablonu kopiuje to, co widać w oknie
+    const html = toneView ? toneView.html : (saved ?? inquiry).reply_html
     if (!html) {
       setErr('Po ręcznej poprawce treści list nie ma tabeli — skopiuj samą treść.')
       return
     }
-    if (await copyHtml(html, body)) setMsg('Skopiowano list z tabelą — wklej go w treść wiadomości (Ctrl+V).')
+    if (await copyHtml(html, toneView?.body ?? body)) setMsg('Skopiowano list z tabelą — wklej go w treść wiadomości (Ctrl+V).')
   }
 
   async function copyHtml(html: string, text: string): Promise<boolean> {
@@ -2133,15 +2167,32 @@ export function InquiryReply() {
             {toneOptions.map((opt) => (
               <Chip
                 key={opt.id}
-                active={inquiry.tone === opt.id}
-                disabled={locked}
+                active={(toneView?.tone ?? inquiry.tone) === opt.id}
+                // cudze zapytanie: klik pokazuje list w tym szablonie, niczego nie zmienia
+                disabled={busy}
                 onClick={() => onTone(opt.id)}
               >
                 {opt.label}
               </Chip>
             ))}
           </div>
-          <p className="mt-1 text-[11px] text-slate-500">{toneHint(inquiry.tone)}</p>
+          <p className="mt-1 text-[11px] text-slate-500">{toneHint(toneView?.tone ?? inquiry.tone)}</p>
+          {readOnly && (
+            <p className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+              {toneView ? (
+                <>
+                  Podgląd w szablonie „{toneLabel[toneView.tone]}” — nic się nie zapisuje.{' '}
+                  {inquiry.user?.name ?? 'Autor'} wysyła list w szablonie „{toneLabel[inquiry.tone]}”
+                  {!inquiry.reply_html && inquiry.reply_body ? '; ręcznych poprawek autora w podglądzie nie ma' : ''}.{' '}
+                  <button type="button" className="underline" onClick={() => setReplyOpen(true)}>
+                    Pokaż list
+                  </button>
+                </>
+              ) : (
+                'Kliknij szablon, żeby zobaczyć, jak wyglądałby list — szablon zmienia tylko autor.'
+              )}
+            </p>
+          )}
           <p className="mt-3 text-xs font-semibold text-slate-700">Ceny w liście</p>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {priceModeOptions.map((opt) => (
@@ -2269,16 +2320,18 @@ export function InquiryReply() {
             sentAt: inquiry.source_sent_at,
             body: inquiry.source_body,
           }}
-          subject={subject}
-          body={body}
-          html={inquiry.reply_html}
+          subject={toneView?.subject ?? subject}
+          body={toneView?.body ?? body}
+          html={toneView ? toneView.html : inquiry.reply_html}
           locked={locked}
           saving={saving}
           msg={msg}
           err={err}
           editHint={
             readOnly
-              ? 'Tylko podgląd — treść listu możesz skopiować, ale zmienić go może wyłącznie autor.'
+              ? toneView
+                ? `Podgląd w szablonie „${toneLabel[toneView.tone]}” — nic się nie zapisuje. Autor i Thunderbird dostają list w szablonie „${toneLabel[inquiry.tone]}”.`
+                : 'Tylko podgląd — treść listu możesz skopiować, ale zmienić go może wyłącznie autor.'
               : inquiry.source_message_id
                 ? 'Edycje zapisują się po opuszczeniu pola. Thunderbird otworzy odpowiedź na ten mail — wysyłasz ją sam, po sprawdzeniu.'
                 : 'Edycje zapisują się po opuszczeniu pola. System nie wysyła maila — wklej treść do swojej poczty.'

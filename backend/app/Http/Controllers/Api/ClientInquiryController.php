@@ -22,6 +22,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
 use Throwable;
@@ -409,6 +410,23 @@ class ClientInquiryController extends Controller
         }
 
         return response()->json($this->presentFor($request, $inquiry->load('client')));
+    }
+
+    /**
+     * List w innym szablonie bez zapisu — dla oglądającego cudze zapytanie (`inquiries.view_others`), który szablonu
+     * zmienić nie może: autor i Thunderbird dalej dostają zapisany list. Ceny od widoku oglądającego, jak w present().
+     */
+    public function replyPreview(Request $request, ClientInquiry $inquiry): JsonResponse
+    {
+        if (! $request->user()->can('inquiries.view_others')) {
+            $this->assertOwner($request, $inquiry);
+        }
+        $this->assertAnalyzed($inquiry);
+        $tone = (string) $request->validate([
+            'tone' => ['required', 'string', Rule::in(ClientInquiry::TONES)],
+        ])['tone'];
+
+        return response()->json(['tone' => $tone, ...$this->inquiries->previewReply($inquiry, $tone, $this->viewer($request))]);
     }
 
     public function compose(ComposeClientInquiryRequest $request, ClientInquiry $inquiry): JsonResponse

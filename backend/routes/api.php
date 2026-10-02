@@ -297,6 +297,7 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/inquiries/file-text', [ClientInquiryController::class, 'fileText']);
         Route::get('/inquiries/{inquiry}', [ClientInquiryController::class, 'show']);
         Route::patch('/inquiries/{inquiry}', [ClientInquiryController::class, 'update']);
+        Route::get('/inquiries/{inquiry}/reply-preview', [ClientInquiryController::class, 'replyPreview']);
         Route::post('/inquiries/{inquiry}/compose', [ClientInquiryController::class, 'compose']);
         // ponowna analiza w tle po błędzie albo przerwanym przebiegu
         Route::post('/inquiries/{inquiry}/retry-analysis', [ClientInquiryController::class, 'retryAnalysis']);

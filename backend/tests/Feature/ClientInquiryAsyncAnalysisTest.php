@@ -228,6 +228,47 @@ final class ClientInquiryAsyncAnalysisTest extends TestCase
         Queue::assertNothingPushed();
     }
 
+    /**
+     * Oglądający cudze zapytanie widzi list w innym szablonie, ale nic się nie zapisuje — autor i Thunderbird
+     * dalej dostają list w szablonie autora (02.10.2026).
+     */
+    public function test_viewer_previews_letter_in_another_template_without_saving(): void
+    {
+        $this->mock(OpenAiCompatibleClient::class, function ($mock): void {
+            $mock->shouldReceive('chatJson')->andReturn([
+                'subject' => 'Rękawice',
+                'questions' => [],
+                'product_queries' => [],
+                'line_items' => [
+                    ['id' => 'item_1', 'quote' => 'Rękawice robocze R1 - 10 par', 'qty' => '10', 'unit' => 'par', 'query' => 'rękawice robocze R1', 'size' => null],
+                ],
+                'cards' => [],
+            ]);
+        });
+        $this->emptySearch();
+        $author = User::factory()->withRole('handlowiec')->create();
+        Sanctum::actingAs($author);
+        $id = (int) $this->postJson('/api/inquiries', ['body' => self::BODY, 'tone' => 'handlowy'])->assertCreated()->json('id');
+        $before = ClientInquiry::query()->findOrFail($id);
+        $this->assertStringContainsString('przesyłamy ofertę do zapytania', (string) $before->reply_body);
+
+        Sanctum::actingAs(User::factory()->withRole('kierownik')->create());
+        $this->getJson("/api/inquiries/{$id}/reply-preview?tone=formal")
+            ->assertOk()
+            ->assertJsonPath('tone', 'formal')
+            ->assertJsonPath('body', fn (string $body): bool => str_contains($body, 'w odpowiedzi na przesłane zapytanie przedstawiamy ofertę'));
+        $this->getJson("/api/inquiries/{$id}/reply-preview?tone=nieznany")->assertStatus(422);
+
+        $after = ClientInquiry::query()->findOrFail($id);
+        $this->assertSame('handlowy', $after->tone);
+        $this->assertSame($before->reply_body, $after->reply_body);
+        $this->assertSame($before->reply_html, $after->reply_html);
+
+        // bez otwierania cudzych — ani podglądu
+        Sanctum::actingAs(User::factory()->withRole('handlowiec')->create());
+        $this->getJson("/api/inquiries/{$id}/reply-preview?tone=formal")->assertForbidden();
+    }
+
     /** Worker zabity w trakcie: „running” bez końca po 25 min to przebieg przerwany — do ponowienia. */
     public function test_running_analysis_without_end_after_25_minutes_is_shown_as_interrupted(): void
     {
