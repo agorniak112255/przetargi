@@ -1,10 +1,21 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { appHref } from '../lib/api'
+import { BoardReportHelp } from './help/BoardReportHelp'
+import { CampaignsHelp } from './help/CampaignsHelp'
+import { CardMatchesHelp } from './help/CardMatchesHelp'
+import { DashboardHelp } from './help/DashboardHelp'
+import { InventoryHelp } from './help/InventoryHelp'
+import { AppFrame, Btn, Card, Field, Mark, Slideshow, Th } from './help/kit'
+import { ReportsHelp } from './help/ReportsHelp'
 
 const modules = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'przetargi', label: 'Przetargi' },
   { id: 'produkty', label: 'Produkty' },
+  { id: 'zapasy', label: 'Zapasy' },
+  { id: 'raport-zarzad', label: 'Raport dla zarządu' },
+  { id: 'kampanie', label: 'Kampanie' },
+  { id: 'laczenie-kart', label: 'Łączenie kart' },
   { id: 'cenniki', label: 'Cenniki' },
   { id: 'zamienniki', label: 'Zamienniki' },
   { id: 'raporty', label: 'Raporty' },
@@ -14,186 +25,6 @@ const modules = [
 ] as const
 
 type ModuleId = (typeof modules)[number]['id']
-type Tone = 'blue' | 'violet' | 'green' | 'amber' | 'slate'
-
-type Slide = {
-  action: string
-  does: string
-  click: string
-  tone: Tone
-  screen: ReactNode
-}
-
-const toneBar: Record<Tone, string> = {
-  blue: 'bg-blue-600',
-  violet: 'bg-violet-600',
-  green: 'bg-emerald-600',
-  amber: 'bg-amber-500',
-  slate: 'bg-slate-500',
-}
-
-const toneLabel: Record<Tone, string> = {
-  blue: 'Ty klikasz',
-  violet: 'AI liczy',
-  green: 'gotowe',
-  amber: 'sprawdź',
-  slate: 'patrz',
-}
-
-const NAV = ['Dashboard', 'Przetargi', 'Produkty', 'Cenniki', 'Zamienniki', 'Raporty', 'Klienci', 'Zapytania']
-
-function Mark({ children }: { children: ReactNode }) {
-  return <span className="inline-flex rounded ring-2 ring-blue-500 ring-offset-2">{children}</span>
-}
-
-function AppFrame({ nav, children }: { nav: string; children: ReactNode }) {
-  return (
-    <div className="pointer-events-none overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm">
-      <div className="flex min-h-[300px]">
-        <aside className="hidden w-[9.5rem] shrink-0 bg-slate-800 text-[11px] text-slate-100 sm:block">
-          <div className="border-b border-slate-700 px-3 py-2.5 text-xs font-bold">
-            Przetargi Supon
-            <small className="mt-0.5 block text-[10px] font-normal text-slate-400">Artur · admin</small>
-          </div>
-          {NAV.map((l) => (
-            <div
-              key={l}
-              className={`border-l-2 px-3 py-1.5 ${
-                l === nav ? 'border-blue-400 bg-slate-700 font-semibold' : 'border-transparent text-slate-300'
-              }`}
-            >
-              {l}
-            </div>
-          ))}
-        </aside>
-        <div className="min-w-0 flex-1 overflow-x-auto p-4">{children}</div>
-      </div>
-    </div>
-  )
-}
-
-function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-xl bg-white p-4 shadow-sm ${className}`}>{children}</div>
-}
-
-function Btn({
-  label,
-  color = 'blue',
-}: {
-  label: string
-  color?: 'blue' | 'violet' | 'violetDark' | 'green' | 'greenDark' | 'amber' | 'slate' | 'sky' | 'indigo' | 'border'
-}) {
-  const cls = {
-    blue: 'bg-blue-600 text-white',
-    violet: 'bg-violet-600 text-white',
-    violetDark: 'bg-violet-800 text-white',
-    green: 'bg-emerald-600 text-white',
-    greenDark: 'bg-emerald-800 text-white',
-    amber: 'bg-amber-500 text-white',
-    slate: 'bg-slate-800 text-white',
-    sky: 'bg-sky-700 text-white',
-    indigo: 'bg-indigo-600 text-white',
-    border: 'border border-slate-300 bg-white text-slate-700',
-  } as const
-  return <span className={`inline-block rounded px-3 py-2 text-xs font-medium ${cls[color]}`}>{label}</span>
-}
-
-function Field({
-  label,
-  value,
-  placeholder,
-  mark,
-}: {
-  label: string
-  value?: string
-  placeholder?: string
-  mark?: boolean
-}) {
-  const box = (
-    <div
-      className={`mt-1 w-full rounded border px-2 py-1.5 text-xs ${
-        value ? 'border-slate-300 text-slate-800' : 'border-slate-300 text-slate-400'
-      }`}
-    >
-      {value || placeholder || '—'}
-    </div>
-  )
-  return (
-    <label className="block text-xs">
-      {label}
-      {mark ? <Mark>{box}</Mark> : box}
-    </label>
-  )
-}
-
-function Th({ children }: { children?: ReactNode }) {
-  return <th className="p-2 font-semibold text-slate-700">{children}</th>
-}
-
-function Slideshow({ title, slides }: { title: string; slides: Slide[] }) {
-  const [i, setI] = useState(0)
-  useEffect(() => {
-    setI(0)
-  }, [title])
-  const s = slides[i]
-  const pct = Math.round(((i + 1) / slides.length) * 100)
-
-  return (
-    <div className="space-y-3 rounded-xl bg-white p-5 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Krok {i + 1} z {slides.length}
-          </p>
-        </div>
-        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold text-white ${toneBar[s.tone]}`}>
-          {toneLabel[s.tone]}
-        </span>
-      </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
-        <div className={`h-full ${toneBar[s.tone]}`} style={{ width: `${pct}%` }} />
-      </div>
-      <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-        <p className="text-base font-semibold text-slate-900">{s.action}</p>
-        <p className="mt-1 text-sm leading-snug text-slate-700">{s.does}</p>
-        <p className="mt-2 text-xs text-slate-500">
-          <span className="font-semibold text-slate-700">Co kliknąć:</span> {s.click}
-        </p>
-      </div>
-      {s.screen}
-      <div className="flex items-center justify-between gap-2 pt-1">
-        <button
-          type="button"
-          disabled={i === 0}
-          onClick={() => setI((n) => n - 1)}
-          className="rounded border border-slate-300 px-3 py-1.5 text-xs disabled:opacity-40"
-        >
-          Wstecz
-        </button>
-        <div className="flex flex-wrap justify-center gap-1">
-          {slides.map((_, idx) => (
-            <button
-              key={idx}
-              type="button"
-              aria-label={`Krok ${idx + 1}`}
-              onClick={() => setI(idx)}
-              className={`h-2 rounded-full ${idx === i ? 'w-5 bg-blue-600' : 'w-2 bg-slate-300'}`}
-            />
-          ))}
-        </div>
-        <button
-          type="button"
-          disabled={i === slides.length - 1}
-          onClick={() => setI((n) => n + 1)}
-          className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
-        >
-          {i === slides.length - 1 ? 'Koniec' : 'Dalej'}
-        </button>
-      </div>
-    </div>
-  )
-}
 
 /** Sekcje menu bocznego pełnego widoku przetargu (jak TAB_GROUPS w TenderDetail). */
 const TENDER_MENU = [
@@ -551,94 +382,6 @@ function TenderListTable({ warn }: { warn?: boolean }) {
         </tbody>
       </table>
     </Card>
-  )
-}
-
-function DashboardHelp() {
-  return (
-    <Slideshow
-      title="Dashboard"
-      slides={[
-        {
-          action: 'Podgląd pulpitów',
-          does: 'Po zalogowaniu widzisz liczby: ile masz spraw, ile czeka na Twoją akceptację i które terminy się kończą.',
-          click: 'Nic — to pierwszy ekran. Przeczytaj kafelki.',
-          tone: 'slate',
-          screen: (
-            <AppFrame nav="Dashboard">
-              <h1 className="mb-4 text-xl font-semibold">Dashboard</h1>
-              <div className="mb-4 grid gap-3 sm:grid-cols-3">
-                {[
-                  ['3', 'Moje przetargi'],
-                  ['184 200 zł', 'Wartość ofert'],
-                  ['18%', 'Śr. marża'],
-                  ['2', 'Do mojej akceptacji'],
-                  ['1', 'Deadline < 7 dni'],
-                  ['1', 'Zamienniki do akcept.'],
-                ].map(([v, l]) => (
-                  <div key={l} className="rounded-xl bg-white p-4 text-center shadow-sm">
-                    <b className="block text-2xl text-blue-600">{v}</b>
-                    <span className="text-xs text-slate-500">{l}</span>
-                    {l !== 'Wartość ofert' && l !== 'Śr. marża' && (
-                      <span className="mt-1 block text-[11px] text-blue-600">Zobacz</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Wejście w pilny termin',
-          does: 'Kafelek „Deadline < 7 dni” otwiera listę tylko tych przetargów, którym kończy się czas.',
-          click: '„Zobacz” pod kafelkiem z czerwoną / dużą liczbą.',
-          tone: 'blue',
-          screen: (
-            <AppFrame nav="Dashboard">
-              <h1 className="mb-4 text-xl font-semibold">Dashboard</h1>
-              <div className="max-w-xs rounded-xl border-2 border-amber-400 bg-white p-4 text-center shadow-sm">
-                <b className="block text-2xl text-blue-600">1</b>
-                <span className="text-xs text-slate-500">Deadline &lt; 7 dni</span>
-                <Mark>
-                  <span className="mt-1 inline-block text-[11px] text-blue-600">Zobacz</span>
-                </Mark>
-              </div>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Otwarcie sprawy z listy',
-          does: 'Lista jest już przefiltrowana. Czerwony wykrzyknik przy dacie oznacza termin w ciągu 7 dni.',
-          click: 'Niebieski numer przetargu (np. PRZ/2026/0004).',
-          tone: 'blue',
-          screen: (
-            <AppFrame nav="Przetargi">
-              <div className="mb-4 flex items-center justify-between">
-                <h1 className="text-xl font-semibold">Przetargi</h1>
-                <select className="rounded border border-slate-300 px-2 py-1.5 text-xs">
-                  <option>Termin za mniej niż 7 dni</option>
-                </select>
-              </div>
-              <TenderListTable warn />
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Praca w projekcie',
-          does: 'Jesteś w sprawie. Podsumowanie pokazuje termin, pokrycie, wartość i czego brakuje. Z menu bocznego przechodzisz do dokumentów, pozycji i oferty.',
-          click: 'Menu po lewej stronie sprawy: Podsumowanie, Dokumenty, Pozycje, Oferta, Historia i statusy.',
-          tone: 'green',
-          screen: (
-            <AppFrame nav="Przetargi">
-              <TenderHead />
-              <TenderTabs active="Podsumowanie">
-                <TenderSummary />
-              </TenderTabs>
-            </AppFrame>
-          ),
-        },
-      ]}
-    />
   )
 }
 
@@ -1740,121 +1483,6 @@ function SubstitutesHelp() {
   )
 }
 
-function ReportsHelp() {
-  const tabs = ['Baza wiedzy', 'Źródła danych', 'Ruchy cen', 'Sprzedaż i oferty', 'Klienci ERP']
-  const Tabs = ({ active }: { active: string }) => (
-    <div className="mb-3 flex flex-wrap gap-1 border-b border-slate-200 text-xs">
-      {tabs.map((t) => (
-        <span key={t} className={`-mb-px border-b-2 px-2 py-1.5 ${t === active ? 'border-blue-600 font-semibold text-blue-700' : 'border-transparent text-slate-600'}`}>
-          {t}
-        </span>
-      ))}
-    </div>
-  )
-  return (
-    <Slideshow
-      title="Raporty"
-      slides={[
-        {
-          action: 'Pięć raportów w zakładkach',
-          does: 'Baza wiedzy — kompletność kart produktów. Źródła danych — czy cenniki i konta B2B są aktualne. Ruchy cen — podwyżki i obniżki u dostawców. Sprzedaż i oferty — zapytania klientów, przetargi i kampanie. Klienci ERP — kto kupuje, kto przestał i do ilu można napisać. Widzisz tylko zakładki z danymi, do których masz uprawnienie.',
-          click: 'Menu „Raporty”, potem zakładka u góry.',
-          tone: 'slate',
-          screen: (
-            <AppFrame nav="Raporty">
-              <h1 className="text-xl font-semibold">Raporty</h1>
-              <p className="mb-3 text-xs text-slate-500">Jak kompletne są karty produktów, z których system dobiera wyroby do przetargów i zapytań.</p>
-              <Mark>
-                <Tabs active="Baza wiedzy" />
-              </Mark>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Najważniejsze i kafelki',
-          does: 'Na górze każdego raportu ramka „Najważniejsze” — kilka zdań policzonych z danych (same fakty). Pod nią kafelki z liczbami; kolorowa kropka i pasek: zielony = dobrze, pomarańczowy = do uwagi, czerwony = problem.',
-          click: 'Przeczytaj ramkę „Najważniejsze”.',
-          tone: 'blue',
-          screen: (
-            <AppFrame nav="Raporty">
-              <Tabs active="Baza wiedzy" />
-              <Mark>
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-800">
-                  <b className="mb-1 block text-[10px] tracking-wide text-slate-500 uppercase">Najważniejsze</b>
-                  Najsłabiej pokryte: normy potwierdzone u producenta — ma je 22% kart.
-                </div>
-              </Mark>
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                {[
-                  ['Z opisem', '97%', 'bg-teal-600'],
-                  ['Ze zdjęciem', '97%', 'bg-teal-600'],
-                  ['Normy u producenta', '22%', 'bg-rose-700'],
-                ].map(([label, value, fill]) => (
-                  <Card key={label} className="p-3">
-                    <span className="block text-[11px] text-slate-500">{label}</span>
-                    <b className="text-lg">{value}</b>
-                    <span className="mt-1 block h-1 rounded-full bg-slate-100">
-                      <span className={`block h-full rounded-full ${fill}`} style={{ width: value }} />
-                    </span>
-                  </Card>
-                ))}
-              </div>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Wykresy i tabele',
-          does: 'Najedź kursorem na słupek, żeby zobaczyć dokładne liczby. W tabelach kliknij nagłówek kolumny, żeby posortować — na przykład producentów po normach, by znaleźć największe luki. W „Ruchach cen” i „Sprzedaży” wybierzesz okres: 7, 30 lub 90 dni albo 30, 90 lub 180 dni.',
-          click: 'Kursor na wykres albo klik w nagłówek tabeli.',
-          tone: 'violet',
-          screen: (
-            <AppFrame nav="Raporty">
-              <Tabs active="Ruchy cen" />
-              <Card>
-                <h2 className="mb-2 text-sm font-semibold">Podwyżki i obniżki — tydzień po tygodniu</h2>
-                <div className="flex h-20 items-center gap-3 px-2">
-                  {[
-                    [10, 6],
-                    [18, 9],
-                    [30, 5],
-                    [24, 12],
-                  ].map(([up, down], i) => (
-                    <div key={i} className="flex w-5 flex-col items-center">
-                      <span className="w-full rounded-t bg-orange-600" style={{ height: up }} />
-                      <span className="mt-0.5 w-full rounded-b bg-sky-600" style={{ height: down }} />
-                    </div>
-                  ))}
-                  <Mark>
-                    <span className="rounded border border-slate-200 bg-white px-2 py-1 text-[11px] shadow-sm">Podwyżki 30 · Obniżki 5</span>
-                  </Mark>
-                </div>
-              </Card>
-            </AppFrame>
-          ),
-        },
-        {
-          action: 'Eksport przetargów do CSV',
-          does: 'W zakładce „Sprzedaż i oferty”, w części „Przetargi”, zielony przycisk pobiera listę przetargów do Excela (raport-przetargi.csv) — te same przetargi, które widzisz w raporcie.',
-          click: 'Zielony „Eksport CSV” przy nagłówku „Przetargi”.',
-          tone: 'green',
-          screen: (
-            <AppFrame nav="Raporty">
-              <Tabs active="Sprzedaż i oferty" />
-              <div className="mb-2 flex items-center justify-between">
-                <h2 className="text-sm font-semibold">Przetargi</h2>
-                <Mark>
-                  <span className="rounded bg-emerald-600 px-3 py-1.5 text-xs text-white">Eksport CSV</span>
-                </Mark>
-              </div>
-              <p className="rounded bg-green-50 px-3 py-2 text-xs text-green-800">raport-przetargi.csv</p>
-            </AppFrame>
-          ),
-        },
-      ]}
-    />
-  )
-}
-
 function ClientsHelp() {
   return (
     <Slideshow
@@ -2608,6 +2236,10 @@ const panels: Record<ModuleId, () => ReactNode> = {
   dashboard: () => <DashboardHelp />,
   przetargi: () => <TendersHelp />,
   produkty: () => <ProductsHelp />,
+  zapasy: () => <InventoryHelp />,
+  'raport-zarzad': () => <BoardReportHelp />,
+  kampanie: () => <CampaignsHelp />,
+  'laczenie-kart': () => <CardMatchesHelp />,
   cenniki: () => <PriceListsHelp />,
   zamienniki: () => <SubstitutesHelp />,
   raporty: () => <ReportsHelp />,
