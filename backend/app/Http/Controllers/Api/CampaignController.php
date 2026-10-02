@@ -82,6 +82,9 @@ class CampaignController extends Controller
         CampaignRecipient::STATUS_SKIPPED,
     ];
 
+    /** Kolumny, po których można sortować listę odbiorców kampanii (nazwy kolumn campaign_recipients + „notes”). */
+    private const RECIPIENT_SORTS = ['email', 'source', 'status', 'sent_at', 'clicks', 'first_clicked_at', 'replied_at', 'notes'];
+
     public function __construct(
         private readonly CampaignItemPresenter $presenter,
         private readonly CampaignRenderer $renderer,
@@ -937,14 +940,33 @@ class CampaignController extends Controller
             'clicked' => ['nullable', 'boolean'],
             'page' => ['nullable', 'integer', 'min:1'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:200'],
+            // sortowanie po kolumnie tabeli; puste wartości zawsze na końcu
+            'sort' => ['nullable', 'string', Rule::in(self::RECIPIENT_SORTS)],
+            'dir' => ['nullable', 'string', Rule::in(['asc', 'desc'])],
         ]);
 
         $query = $campaign->recipients();
         if (($v['status'] ?? '') !== '') {
             $query->where('status', $v['status']);
         }
-        if ((bool) ($v['clicked'] ?? false)) {
-            $query->where('clicks', '>', 0)->orderByDesc('clicks')->orderBy('first_clicked_at');
+        $clicked = (bool) ($v['clicked'] ?? false);
+        if ($clicked) {
+            $query->where('clicks', '>', 0);
+        }
+        $sort = $v['sort'] ?? null;
+        $dir = ($v['dir'] ?? 'asc') === 'desc' ? 'desc' : 'asc';
+        if ($sort === 'status') {
+            // kolejność wysyłki, nie alfabet kodów
+            $query->orderByRaw("CASE status WHEN 'pending' THEN 0 WHEN 'sending' THEN 1 WHEN 'sent' THEN 2 WHEN 'failed' THEN 3 ELSE 4 END {$dir}");
+        } elseif ($sort === 'notes') {
+            // „Uwagi”: błąd wysyłki, potem wypisanie
+            $query->orderByRaw('error IS NULL')->orderBy('error', $dir)
+                ->orderByRaw('unsubscribed_at IS NULL')->orderBy('unsubscribed_at', $dir);
+        } elseif ($sort !== null) {
+            $query->orderByRaw("{$sort} IS NULL")->orderBy($sort, $dir);
+        }
+        if ($clicked) {
+            $query->orderByDesc('clicks')->orderBy('first_clicked_at');
         }
         $query->orderBy('id');
         $page = $query->paginate((int) ($v['per_page'] ?? 50));

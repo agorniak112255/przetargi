@@ -13,6 +13,7 @@ import {
   INPUT,
   Modal,
   Pager,
+  SortTh,
   StageTwo,
 } from '../components/CampaignsUi'
 import { CampaignBlockEditor, LiveMailPreview } from '../components/CampaignBlockEditor'
@@ -73,17 +74,20 @@ import {
   type CampaignPatch,
   type CampaignPreview,
   type CampaignRecipientRow,
+  type CampaignRecipientSort,
   type CampaignRecipientStatus,
   type CampaignTotals,
   type CampaignClicks,
   type CampaignReplies,
   type CampaignSales,
+  type CampaignSalesBuyer,
   type CampaignTemplate,
   type CampaignXlMode,
   type MailingList,
   type PageMeta,
 } from '../lib/campaigns'
 import { plural } from '../lib/plural'
+import { sortDate, sortRows, useTableSort } from '../lib/tableSort'
 import { useSerialAutosave } from '../lib/useSerialAutosave'
 
 /**
@@ -155,6 +159,38 @@ function itemDrop(item: CampaignItem): { percent: number; days: 7 | 30; rose: bo
   const days = item.stock_after_30d != null ? 30 : 7
   if (after > start) return { percent: 0, days, rose: true }
   return { percent: Math.min(100, ((start - after) / start) * 100), days, rose: false }
+}
+
+type ItemSortKey = 'name' | 'price' | 'stock' | 'after_7d' | 'after_30d' | 'drop' | 'bought' | 'clicks'
+const ITEM_SORT_DESC: ItemSortKey[] = ['price', 'stock', 'after_7d', 'after_30d', 'drop', 'bought', 'clicks']
+const RECIPIENT_SORT_DESC: CampaignRecipientSort[] = ['sent_at', 'clicks', 'replied_at', 'notes']
+
+/** Wartość komórki tabeli „Wynik” do sortowania — to samo, co widać w kolumnie (stan wzrósł = poniżej 0%). */
+function itemSortValue(i: CampaignItem, k: ItemSortKey, campaign: Campaign): string | number | null {
+  switch (k) {
+    case 'name':
+      return i.snapshot?.name ?? i.name
+    case 'price':
+      return i.snapshot?.price ?? i.promo_price_net
+    case 'stock':
+      return i.snapshot?.stock ?? null
+    case 'after_7d':
+      return i.stock_after_7d
+    case 'after_30d':
+      return i.stock_after_30d
+    case 'drop': {
+      const drop = itemDrop(i)
+      return drop ? (drop.rose ? -1 : drop.percent) : null
+    }
+    case 'bought': {
+      const row = campaign.sales?.items.find((r) => r.erp_item_id === i.erp_item_id)
+      return row ? row.value_recipients : null
+    }
+    case 'clicks': {
+      const row = campaign.clicks?.items.find((r) => r.campaign_item_id === i.id)
+      return row ? row.product + row.offer + (row.link ?? 0) : null
+    }
+  }
 }
 
 export function CampaignEditor() {
@@ -2449,6 +2485,8 @@ function SentView({
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewErr, setPreviewErr] = useState('')
   const [tick, setTick] = useState(0)
+  const [itemSort, toggleItemSort] = useTableSort<ItemSortKey>(ITEM_SORT_DESC)
+  const [recipientSort, toggleRecipientSortRaw] = useTableSort<CampaignRecipientSort>(RECIPIENT_SORT_DESC)
   const seq = useRef(0)
   const sending = campaign.status === 'sending'
   const totalsJson = campaign.totals ? JSON.stringify(campaign.totals) : ''
@@ -2477,7 +2515,7 @@ function SentView({
     const my = ++seq.current
     setLoading(true)
     try {
-      const res = await campaignRecipients(campaign.id, { status: filter, page })
+      const res = await campaignRecipients(campaign.id, { status: filter, page, sort: recipientSort?.key, dir: recipientSort?.dir })
       if (my !== seq.current) return
       setRows(res.data)
       setMeta(res.meta)
@@ -2487,7 +2525,13 @@ function SentView({
     } finally {
       if (my === seq.current) setLoading(false)
     }
-  }, [campaign.id, filter, page])
+  }, [campaign.id, filter, page, recipientSort])
+
+  // lista stronicowana na serwerze — nowe sortowanie od pierwszej strony
+  function toggleRecipientSort(k: CampaignRecipientSort) {
+    toggleRecipientSortRaw(k)
+    setPage(1)
+  }
 
   useEffect(() => {
     void loadCounts()
@@ -2629,18 +2673,18 @@ function SentView({
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b bg-slate-50">
-                <th className="p-2">Pozycja</th>
-                <th className="p-2 text-right">Cena w mailu</th>
-                <th className="p-2 text-right">Przy wysyłce</th>
-                <th className="p-2 text-right">Po 7 dniach</th>
-                <th className="p-2 text-right">Po 30 dniach</th>
-                <th className="p-2">Zeszło</th>
-                <th className="p-2 text-right">Kupili odbiorcy kampanii</th>
-                <th className="p-2 text-right">Kliknięcia</th>
+                <SortTh label="Pozycja" k="name" sort={itemSort} onSort={toggleItemSort} />
+                <SortTh label="Cena w mailu" k="price" sort={itemSort} onSort={toggleItemSort} align="right" />
+                <SortTh label="Przy wysyłce" k="stock" sort={itemSort} onSort={toggleItemSort} align="right" />
+                <SortTh label="Po 7 dniach" k="after_7d" sort={itemSort} onSort={toggleItemSort} align="right" />
+                <SortTh label="Po 30 dniach" k="after_30d" sort={itemSort} onSort={toggleItemSort} align="right" />
+                <SortTh label="Zeszło" k="drop" sort={itemSort} onSort={toggleItemSort} />
+                <SortTh label="Kupili odbiorcy kampanii" k="bought" sort={itemSort} onSort={toggleItemSort} align="right" />
+                <SortTh label="Kliknięcia" k="clicks" sort={itemSort} onSort={toggleItemSort} align="right" />
               </tr>
             </thead>
             <tbody>
-              {campaign.items.map((i) => {
+              {sortRows(campaign.items, itemSort, (i, k) => itemSortValue(i, k, campaign)).map((i) => {
                 const drop = itemDrop(i)
                 const snap = i.snapshot
                 return (
@@ -2731,13 +2775,13 @@ function SentView({
         <table className="w-full text-left text-xs">
           <thead>
             <tr className="border-b bg-slate-50">
-              <th className="p-2">Adres</th>
-              <th className="p-2">Źródło</th>
-              <th className="p-2">Status</th>
-              <th className="p-2">Wysłano</th>
-              <th className="p-2 text-right">Kliknięcia</th>
-              <th className="p-2">Odpowiedź</th>
-              <th className="p-2">Uwagi</th>
+              <SortTh label="Adres" k="email" sort={recipientSort} onSort={toggleRecipientSort} />
+              <SortTh label="Źródło" k="source" sort={recipientSort} onSort={toggleRecipientSort} />
+              <SortTh label="Status" k="status" sort={recipientSort} onSort={toggleRecipientSort} />
+              <SortTh label="Wysłano" k="sent_at" sort={recipientSort} onSort={toggleRecipientSort} />
+              <SortTh label="Kliknięcia" k="clicks" sort={recipientSort} onSort={toggleRecipientSort} align="right" />
+              <SortTh label="Odpowiedź" k="replied_at" sort={recipientSort} onSort={toggleRecipientSort} />
+              <SortTh label="Uwagi" k="notes" sort={recipientSort} onSort={toggleRecipientSort} />
             </tr>
           </thead>
           <tbody>
@@ -2927,11 +2971,14 @@ function ItemSalesCell({ sales, erpItemId, unit }: { sales: CampaignSales | null
   )
 }
 
+type BuyerSortKey = keyof Pick<CampaignSalesBuyer, 'sold_at' | 'acronym' | 'email' | 'item_name' | 'quantity' | 'net_value' | 'document_number'>
+
 /**
  * „Kupili odbiorcy kampanii”: kto z odbiorców kupił pozycje kampanii w okresie od wysyłki (faktury i paragony XL,
  * odczyt nocny), a dla porównania ile kupili pozostali klienci. Zakup po mailu nie dowodzi, że kupili dzięki kampanii.
  */
 function CampaignSalesPanel({ sales }: { sales: CampaignSales }) {
+  const [sort, toggleSort] = useTableSort<BuyerSortKey>(['sold_at', 'quantity', 'net_value'])
   const untracked = Math.max(0, sales.recipients_sent - sales.recipients_in_xl)
   return (
     <div className="rounded-xl bg-white shadow-sm">
@@ -2972,17 +3019,17 @@ function CampaignSalesPanel({ sales }: { sales: CampaignSales }) {
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b bg-slate-50">
-                <th className="p-2">Data</th>
-                <th className="p-2">Klient</th>
-                <th className="p-2">Mail poszedł na</th>
-                <th className="p-2">Towar</th>
-                <th className="p-2 text-right">Ilość</th>
-                <th className="p-2 text-right">Netto</th>
-                <th className="p-2">Dokument</th>
+                <SortTh label="Data" k="sold_at" sort={sort} onSort={toggleSort} />
+                <SortTh label="Klient" k="acronym" sort={sort} onSort={toggleSort} />
+                <SortTh label="Mail poszedł na" k="email" sort={sort} onSort={toggleSort} />
+                <SortTh label="Towar" k="item_name" sort={sort} onSort={toggleSort} />
+                <SortTh label="Ilość" k="quantity" sort={sort} onSort={toggleSort} align="right" />
+                <SortTh label="Netto" k="net_value" sort={sort} onSort={toggleSort} align="right" />
+                <SortTh label="Dokument" k="document_number" sort={sort} onSort={toggleSort} />
               </tr>
             </thead>
             <tbody>
-              {sales.buyers.map((b, idx) => (
+              {sortRows(sales.buyers, sort, (b, k) => (k === 'sold_at' ? sortDate(b.sold_at) : b[k])).map((b, idx) => (
                 <tr key={`${b.document_number}-${b.code}-${idx}`} className="border-b">
                   <td className="whitespace-nowrap p-2 tabular-nums">{fmtDate(b.sold_at)}</td>
                   <td className="p-2">
@@ -3105,6 +3152,7 @@ function RepliesPanel({
   const [checking, setChecking] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
   const [previewId, setPreviewId] = useState<number | null>(null)
+  const [sort, toggleSort] = useTableSort<'from_email' | 'received_at' | 'item_code' | 'subject'>(['received_at'])
   const sent = campaign.totals?.sent ?? 0
   const others = replies.list.filter((r) => r.recipient_email === null).length
   // item_code to kod z migawki wysłanego maila (snap_code) — po nim szukamy karty pozycji
@@ -3176,14 +3224,14 @@ function RepliesPanel({
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b bg-slate-50">
-                <th className="p-2">Od</th>
-                <th className="p-2">Otrzymano</th>
-                <th className="p-2">Towar</th>
-                <th className="p-2">Temat</th>
+                <SortTh label="Od" k="from_email" sort={sort} onSort={toggleSort} />
+                <SortTh label="Otrzymano" k="received_at" sort={sort} onSort={toggleSort} />
+                <SortTh label="Towar" k="item_code" sort={sort} onSort={toggleSort} />
+                <SortTh label="Temat" k="subject" sort={sort} onSort={toggleSort} />
               </tr>
             </thead>
             <tbody>
-              {replies.list.map((r) => (
+              {sortRows(replies.list, sort, (r, k) => (k === 'received_at' ? sortDate(r.received_at) : r[k])).map((r) => (
                 <tr key={r.id} className="border-b align-top">
                   <td className="p-2">
                     <span className="font-mono text-slate-900">{r.from_email}</span>
@@ -3243,12 +3291,17 @@ function RepliesPanel({
 function ClickedPanel({ campaign, clicks, tick }: { campaign: Campaign; clicks: CampaignClicks; tick: number }) {
   const [rows, setRows] = useState<CampaignRecipientRow[] | null>(null)
   const [err, setErr] = useState('')
+  // serwer zwraca najwyżej 100 klikających — sortuje on, żeby kolejność dotyczyła wszystkich
+  const [sort, toggleSort] = useTableSort<'email' | 'clicks' | 'first_clicked_at'>(['clicks'], { key: 'clicks', dir: 'desc' })
 
   useEffect(() => {
     let alive = true
-    campaignRecipients(campaign.id, { clicked: true, per_page: 100 })
+    campaignRecipients(campaign.id, { clicked: true, per_page: 100, sort: sort?.key, dir: sort?.dir })
       .then((res) => {
-        if (alive) setRows(res.data)
+        if (alive) {
+          setRows(res.data)
+          setErr('')
+        }
       })
       .catch((ex: unknown) => {
         if (alive) setErr(errorText(ex, 'Nie udało się wczytać klikających.'))
@@ -3256,7 +3309,7 @@ function ClickedPanel({ campaign, clicks, tick }: { campaign: Campaign; clicks: 
     return () => {
       alive = false
     }
-  }, [campaign.id, tick])
+  }, [campaign.id, tick, sort])
 
   const sent = campaign.totals?.sent ?? 0
   return (
@@ -3275,9 +3328,9 @@ function ClickedPanel({ campaign, clicks, tick }: { campaign: Campaign; clicks: 
           <table className="w-full text-left text-xs">
             <thead>
               <tr className="border-b bg-slate-50">
-                <th className="p-2">Adres</th>
-                <th className="p-2 text-right">Kliknięcia</th>
-                <th className="p-2">Pierwsze kliknięcie</th>
+                <SortTh label="Adres" k="email" sort={sort} onSort={toggleSort} />
+                <SortTh label="Kliknięcia" k="clicks" sort={sort} onSort={toggleSort} align="right" />
+                <SortTh label="Pierwsze kliknięcie" k="first_clicked_at" sort={sort} onSort={toggleSort} />
               </tr>
             </thead>
             <tbody>

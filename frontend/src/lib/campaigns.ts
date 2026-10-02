@@ -398,6 +398,9 @@ export type CampaignPreview = {
 
 export type CampaignRecipientStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped'
 
+/** Kolumny sortowania listy odbiorców (serwer; notes = błąd, potem wypisanie). */
+export type CampaignRecipientSort = 'email' | 'source' | 'status' | 'sent_at' | 'clicks' | 'first_clicked_at' | 'replied_at' | 'notes'
+
 export type CampaignRecipientRow = {
   id: number
   email: string
@@ -679,11 +682,20 @@ export function checkCampaignReplies(id: number) {
 
 export function campaignRecipients(
   id: number,
-  params: { status?: CampaignRecipientStatus | ''; clicked?: boolean; page?: number; per_page?: number } = {},
+  params: {
+    status?: CampaignRecipientStatus | ''
+    clicked?: boolean
+    page?: number
+    per_page?: number
+    sort?: CampaignRecipientSort
+    dir?: 'asc' | 'desc'
+  } = {},
 ) {
   const q = new URLSearchParams()
   if (params.status) q.set('status', params.status)
   if (params.clicked) q.set('clicked', '1')
+  if (params.sort) q.set('sort', params.sort)
+  if (params.dir) q.set('dir', params.dir)
   if (params.per_page) q.set('per_page', String(params.per_page))
   if (params.page) q.set('page', String(params.page))
   const qs = q.toString()

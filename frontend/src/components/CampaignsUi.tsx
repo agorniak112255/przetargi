@@ -5,6 +5,7 @@ import { useAuth } from '../auth'
 import { can } from '../lib/api'
 import { campaignsTabHref, type CampaignsTab } from '../lib/campaignFormat'
 import { CAMPAIGN_STATUS_LABEL, type CampaignStatus, type PageMeta } from '../lib/campaigns'
+import type { TableSort } from '../lib/tableSort'
 
 /** Wspólne drobne elementy stron Kampanie: zakładki, okno potwierdzenia, pasek błędu, stronicowanie, znaczniki. */
 
@@ -136,6 +137,41 @@ export function DropBar({ percent, suffix }: { percent: number; suffix?: string 
         {p.toLocaleString('pl-PL', { maximumFractionDigits: 0 })}%{suffix ?? ''}
       </span>
     </span>
+  )
+}
+
+/** Nagłówek kolumny z sortowaniem — jak w Zapasach / towarach XL (▲ ▼, ↕ dla nieaktywnej). */
+export function SortTh<K extends string>({
+  label,
+  k,
+  sort,
+  onSort,
+  align,
+}: {
+  label: string
+  k: K
+  sort: TableSort<K>
+  onSort: (k: K) => void
+  align?: 'right'
+}) {
+  const active = sort?.key === k
+  return (
+    <th
+      className={`p-2 ${align === 'right' ? 'text-right' : ''}`}
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(k)}
+        className={`inline-flex items-center gap-0.5 hover:text-slate-900 ${active ? 'text-slate-900' : ''}`}
+        title="Sortuj"
+      >
+        {label}
+        <span className={active ? 'text-slate-700' : 'text-slate-300'} aria-hidden>
+          {active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}
+        </span>
+      </button>
+    </th>
   )
 }
 

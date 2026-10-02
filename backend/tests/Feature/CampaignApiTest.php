@@ -569,6 +569,33 @@ final class CampaignApiTest extends TestCase
         $this->getJson("/api/campaigns/{$campaign->id}/recipients")->assertNotFound();
     }
 
+    public function test_recipients_list_sorted_by_column_with_empty_values_last(): void
+    {
+        $user = User::factory()->withRole('handlowiec')->create();
+        $campaign = $this->campaign($user, ['status' => Campaign::STATUS_SENDING]);
+        $this->recipient($campaign, 'b@x.pl', CampaignRecipient::STATUS_SENT)
+            ->forceFill(['sent_at' => '2026-10-02 12:00:00', 'clicks' => 2, 'first_clicked_at' => '2026-10-02 14:00:00'])->save();
+        $this->recipient($campaign, 'c@x.pl', CampaignRecipient::STATUS_PENDING);
+        $this->recipient($campaign, 'a@x.pl', CampaignRecipient::STATUS_FAILED)
+            ->forceFill(['sent_at' => '2026-10-02 11:00:00', 'error' => 'Odrzucony', 'clicks' => 5, 'first_clicked_at' => '2026-10-02 13:00:00'])->save();
+
+        Sanctum::actingAs($user);
+        $emails = fn (string $qs): array => array_column($this->getJson("/api/campaigns/{$campaign->id}/recipients?{$qs}")->assertOk()->json('data'), 'email');
+
+        $this->assertSame(['a@x.pl', 'b@x.pl', 'c@x.pl'], $emails('sort=email'));
+        $this->assertSame(['c@x.pl', 'b@x.pl', 'a@x.pl'], $emails('sort=email&dir=desc'));
+        // bez daty wysyłki na końcu w obu kierunkach
+        $this->assertSame(['a@x.pl', 'b@x.pl', 'c@x.pl'], $emails('sort=sent_at'));
+        $this->assertSame(['b@x.pl', 'a@x.pl', 'c@x.pl'], $emails('sort=sent_at&dir=desc'));
+        $this->assertSame(['c@x.pl', 'b@x.pl', 'a@x.pl'], $emails('sort=status'));
+        $this->assertSame(['a@x.pl', 'b@x.pl', 'c@x.pl'], $emails('sort=notes&dir=desc'));
+        // „Kliknęli”: tylko klikający, sortowanie po pierwszym kliknięciu zamiast liczby kliknięć
+        $this->assertSame(['a@x.pl', 'b@x.pl'], $emails('clicked=1'));
+        $this->assertSame(['b@x.pl', 'a@x.pl'], $emails('clicked=1&sort=first_clicked_at&dir=desc'));
+        $this->getJson("/api/campaigns/{$campaign->id}/recipients?sort=token")->assertUnprocessable();
+        $this->getJson("/api/campaigns/{$campaign->id}/recipients?sort=email&dir=up")->assertUnprocessable();
+    }
+
     public function test_destroy_draft(): void
     {
         $user = User::factory()->withRole('handlowiec')->create();
