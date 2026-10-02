@@ -54,9 +54,9 @@ final class InquirySignature
      *
      * @return array{person: string|null, company: string|null, emails: list<string>, phones: list<string>, address: string|null, website: string|null, raw: string}|null
      */
-    public static function extract(string $rawBody, ?string $fromEmail = null): ?array
+    public static function extract(string $rawBody, ?string $fromEmail = null, ?string $subject = null): ?array
     {
-        $footer = InquiryMailText::footerOf($rawBody);
+        $footer = InquiryMailText::footerOf($rawBody, $subject);
         if ($footer === '') {
             return null;
         }

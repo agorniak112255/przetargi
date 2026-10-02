@@ -36,7 +36,16 @@ final class InquiryMailText
         '/^begin forwarded message/iu',
     ];
 
-    private const HEADER_LINE = '/^(od|from|do|to|dw|cc|udw|bcc|wysłano|wyslano|sent|data|date|temat|subject|nadawca|adresat|odbiorca|reply-to)\s*:/iu';
+    /**
+     * Linia, którą Outlook stawia nad nagłówkiem „Od:/Wysłane:/Do:/Temat:” poprzedniej wiadomości — ta sama
+     * przy odpowiedzi i przy przekazaniu dalej.
+     */
+    private const OUTLOOK_RULE = '/^_{5,}\s*$/u';
+
+    /** Temat wiadomości przekazanej dalej: „PD:” (Outlook po polsku), „FW:”, „Fwd:”, „WG:”, „TR:”. */
+    private const FORWARD_SUBJECT = '/^\s*(?:pd|fw|fwd|wg|tr)\s*:/iu';
+
+    private const HEADER_LINE = '/^(od|from|do|to|dw|cc|udw|bcc|wysłano|wyslano|wysłane|wyslane|sent|data|date|temat|subject|nadawca|adresat|odbiorca|reply-to)\s*:/iu';
 
     /** Stopka wg RFC 3676. */
     private const SIGNATURE = '/^--\s*$/u';
@@ -82,9 +91,13 @@ final class InquiryMailText
         '/^\s*(?:\d{1,3}\s*[.)]|poz\.?\s*\d{1,3})\s*\p{L}{3,}/iu',
     ];
 
-    public static function forAnalysis(string $raw): string
+    /**
+     * @param  string|null  $subject  temat samego maila — „PD: …” znaczy, że pod pierwszym nagłówkiem Outlooka
+     *                                stoi przekazane zapytanie, a nie cytat odpowiedzi
+     */
+    public static function forAnalysis(string $raw, ?string $subject = null): string
     {
-        $text = self::split($raw)['body'];
+        $text = self::split($raw, $subject)['body'];
         $text = preg_replace('/[ \t]+$/mu', '', $text) ?? $text;
         $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
         $text = trim($text);
@@ -98,23 +111,15 @@ final class InquiryMailText
      * sam klient. Przy kilku przekazaniach bierzemy najgłębsze, bo tam stoi oryginał.
      * Brak nagłówka przekazania z tematem = null.
      */
-    public static function forwardedSubject(string $raw): ?string
+    public static function forwardedSubject(string $raw, ?string $subject = null): ?string
     {
         $lines = explode("\n", str_replace(["\r\n", "\r"], "\n", self::stripQuotedLines($raw)));
-        $subject = null;
-        foreach ($lines as $i => $line) {
-            if (! self::matchesAny(trim($line), self::FORWARD_MARKERS)) {
-                continue;
-            }
-            $end = self::skipHeaderBlock($lines, $i + 1);
-            for ($j = $i + 1; $j < $end; $j++) {
-                if (preg_match('/^(?:temat|subject)\s*:\s*(.+)$/iu', trim($lines[$j]), $m) === 1) {
-                    $subject = trim($m[1]);
-                }
-            }
+        $found = null;
+        foreach (self::forwardHeaders($lines, $subject) as [$start, $end]) {
+            $found = self::headerSubject($lines, $start + 1, $end) ?? $found;
         }
 
-        return $subject === '' ? null : $subject;
+        return $found;
     }
 
     /**
@@ -125,9 +130,9 @@ final class InquiryMailText
      * stopki nie wchodzą dane z cudzej, wcześniejszej wiadomości.
      * Pusty wynik = w mailu nie było nic do odcięcia.
      */
-    public static function footerOf(string $raw): string
+    public static function footerOf(string $raw, ?string $subject = null): string
     {
-        return trim(self::split($raw)['footer']);
+        return trim(self::split($raw, $subject)['footer']);
     }
 
     /**
@@ -143,12 +148,12 @@ final class InquiryMailText
      *
      * @return array{body: string, footer: string}
      */
-    private static function split(string $raw): array
+    private static function split(string $raw, ?string $subject): array
     {
         $text = str_replace(["\r\n", "\r"], "\n", $raw);
         $text = self::stripQuotedLines($text);
 
-        $segments = self::forwardSegments($text);
+        $segments = self::forwardSegments($text, $subject);
         $last = array_pop($segments);
 
         [$body, $footer] = self::cutWithFooter($last);
@@ -167,7 +172,7 @@ final class InquiryMailText
 
         // Nadgorliwe cięcie jest gorsze niż brak cięcia: gdy z długiego maila
         // zostały strzępy, wracamy do wersji bez wycinania podpisów.
-        $plain = trim(implode("\n\n", array_map('trim', self::forwardSegments($text))));
+        $plain = trim(implode("\n\n", array_map('trim', self::forwardSegments($text, $subject))));
         if (mb_strlen($full) < 60 && mb_strlen($plain) > 200) {
             return ['body' => $plain, 'footer' => ''];
         }
@@ -181,32 +186,98 @@ final class InquiryMailText
      *
      * @return list<string>
      */
-    private static function forwardSegments(string $text): array
+    private static function forwardSegments(string $text, ?string $subject): array
     {
         $lines = explode("\n", $text);
-        $segments = [];
-        $current = [];
+        $headers = self::forwardHeaders($lines, $subject);
 
-        for ($i = 0; $i < count($lines); $i++) {
-            if (! self::matchesAny(trim($lines[$i]), self::FORWARD_MARKERS)) {
-                $current[] = $lines[$i];
-
-                continue;
-            }
-
-            $segments[] = implode("\n", $current);
-            $current = [];
-            $i = self::skipHeaderBlock($lines, $i + 1) - 1;
-        }
-
-        $segments[] = implode("\n", $current);
-
-        if (count($segments) === 1) {
+        if ($headers === []) {
             // Brak przekazania — zostaje przypadek nagłówka na samej górze maila.
             return [self::dropLeadingHeaderBlock($lines)];
         }
 
+        $segments = [];
+        $from = 0;
+        foreach ($headers as [$start, $end]) {
+            $segments[] = implode("\n", array_slice($lines, $from, $start - $from));
+            $from = $end;
+        }
+        $segments[] = implode("\n", array_slice($lines, $from));
+
         return $segments;
+    }
+
+    /**
+     * Nagłówki przekazania po kolei: [pierwsza linia nagłówka, pierwsza linia pod nim].
+     *
+     * Outlook nie pisze „Treść przekazanej wiadomości”: przy odpowiedzi i przy przekazaniu stawia tę samą linię
+     * „____” z blokiem „Od:/Wysłane:/Do:/Temat:”. Przekazanie poznajemy po temacie — blok z „PD:/FW:” opisuje
+     * wiadomość przekazaną dalej, a najbliższy blok pod nim to przekazany oryginał (zapytanie #91: lista pozycji
+     * stała pod dwoma takimi blokami i odpadała jako cytat). Temat samego maila z „PD:” znaczy to samo dla
+     * pierwszego bloku. Blok bez przekazania to cytat odpowiedzi: tnie go separatorIndex(), a bloków Outlooka
+     * pod nim już nie czytamy — byłyby historią sprzed odpowiedzi.
+     *
+     * @param  list<string>  $lines
+     * @return list<array{0: int, 1: int}>
+     */
+    private static function forwardHeaders(array $lines, ?string $subject): array
+    {
+        $headers = [];
+        $forwardedNext = self::isForwardSubject($subject);
+        $replyQuoted = false;
+
+        for ($i = 0; $i < count($lines); $i++) {
+            $line = trim($lines[$i]);
+            if (self::matchesAny($line, self::FORWARD_MARKERS)) {
+                $end = self::skipHeaderBlock($lines, $i + 1);
+                $headers[] = [$i, $end];
+                $i = $end - 1;
+                // „Fwd:” w temacie maila dotyczyło tego przekazania — blok Outlooka niżej to już cytat
+                $forwardedNext = false;
+
+                continue;
+            }
+            if ($replyQuoted || preg_match(self::OUTLOOK_RULE, $line) !== 1) {
+                continue;
+            }
+            $end = self::skipHeaderBlock($lines, $i + 1);
+            if ($end === $i + 1) {
+                continue;
+            }
+            $headerSubject = self::headerSubject($lines, $i + 1, $end);
+            if (! $forwardedNext && ! self::isForwardSubject($headerSubject)) {
+                $replyQuoted = true;
+
+                continue;
+            }
+            $headers[] = [$i, $end];
+            $forwardedNext = self::isForwardSubject($headerSubject);
+            $i = $end - 1;
+        }
+
+        return $headers;
+    }
+
+    /**
+     * Temat z bloku nagłówków (linie od $from do $end) albo null.
+     *
+     * @param  list<string>  $lines
+     */
+    private static function headerSubject(array $lines, int $from, int $end): ?string
+    {
+        $subject = null;
+        for ($j = $from; $j < $end; $j++) {
+            if (preg_match('/^(?:temat|subject)\s*:\s*(.+)$/iu', trim($lines[$j]), $m) === 1) {
+                $subject = trim($m[1]);
+            }
+        }
+
+        return $subject === '' ? null : $subject;
+    }
+
+    private static function isForwardSubject(?string $subject): bool
+    {
+        return $subject !== null && preg_match(self::FORWARD_SUBJECT, $subject) === 1;
     }
 
     /**

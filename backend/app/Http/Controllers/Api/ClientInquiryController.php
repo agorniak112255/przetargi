@@ -305,7 +305,11 @@ class ClientInquiryController extends Controller
         // sprawdzamy, czy ktoś już tym nie siedzi. Odcisk treści liczymy z tej
         // samej, oczyszczonej wersji maila, którą dostaje model.
         $fingerprints = $this->inquiries->fingerprints(
-            ClientInquiryService::analysisText((string) $data['body'], $data['source_channel'] ?? null)
+            ClientInquiryService::analysisText(
+                (string) $data['body'],
+                $data['source_channel'] ?? null,
+                isset($data['subject']) && trim((string) $data['subject']) !== '' ? trim((string) $data['subject']) : null,
+            )
         );
         $force = (bool) ($data['force'] ?? false);
         $other = $this->inquiries->findOthersInquiry(

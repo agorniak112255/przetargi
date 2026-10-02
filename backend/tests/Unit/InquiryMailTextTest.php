@@ -346,4 +346,189 @@ final class InquiryMailTextTest extends TestCase
         $this->assertSame('11-571', InquiryMailText::forwardedSubject($mail));
         $this->assertNull(InquiryMailText::forwardedSubject("Temat: 11-571\nzwykły mail bez przekazania"));
     }
+
+    /**
+     * Układ maila z produkcji (zapytanie #91, 02.10.2026; dane osobowe zmienione): klientka przekazała
+     * Outlookiem („PD:”) własne zapytanie, a nad nim dopisała „Proszę o ofertę”. Outlook stawia nad każdą
+     * wcześniejszą wiadomością „____” i blok „Od:/Wysłane:/Do:/Temat:” — ten sam co przy odpowiedzi. Całe
+     * zapytanie odpadało jako cytat, model dostawał samo „Proszę o ofertę” i zapytanie miało zero pozycji.
+     */
+    public function test_outlook_forward_keeps_the_forwarded_inquiry(): void
+    {
+        $clean = InquiryMailText::forAnalysis(self::outlookForwardMail(), 'Zapytanie ofertowe 056709365');
+
+        $this->assertStringContainsString('Bolle STKS 420 STK42N10E', $clean);
+        $this->assertStringContainsString('Bolle Cobra COBPSI', $clean);
+        $this->assertStringContainsString('Tryon TRYONN10E', $clean);
+        $this->assertStringContainsString('Rush+ 2.0 XP RUSXMN10E', $clean);
+        $this->assertStringContainsString('Numeru katalogowego producenta MPN', $clean);
+        $this->assertStringContainsString('Proszę o ofertę.', $clean);
+        // nagłówki Outlooka (adresy, daty) nie wchodzą do analizy
+        $this->assertStringNotContainsString('Wysłane:', $clean);
+        $this->assertStringNotContainsString('handel@supon.rzeszow.pl', $clean);
+        $this->assertStringNotContainsString('Pozdrawiam/Regards', $clean);
+        $this->assertSame('Zapytanie ofertowe 056709365', InquiryMailText::forwardedSubject(self::outlookForwardMail()));
+    }
+
+    /** Temat samego maila z „PD:” — pod jedynym blokiem Outlooka jest przekazane zapytanie, nie cytat. */
+    public function test_outlook_forward_recognised_by_the_mail_subject(): void
+    {
+        $mail = implode("\n", [
+            'Przesyłam zapytanie od kolegi z działu utrzymania ruchu, proszę o szybką wycenę.',
+            '',
+            '________________________________',
+            'Od: Jan Kowalski <jan.kowalski@firma.pl>',
+            'Wysłane: środa, 30 września 2026 08:15',
+            'Do: Anna Nowak <anna.nowak@firma.pl>',
+            'Temat: Rękawice',
+            '',
+            'Potrzebujemy 40 par rękawic nitrylowych rozmiar 9.',
+        ]);
+
+        $this->assertStringContainsString('40 par rękawic nitrylowych', InquiryMailText::forAnalysis($mail, 'PD: Rękawice'));
+        // bez „PD:” w temacie to zwykła odpowiedź z cytatem — cytat dalej odpada
+        $this->assertStringNotContainsString('40 par rękawic nitrylowych', InquiryMailText::forAnalysis($mail, 'RE: Rękawice'));
+        $this->assertStringNotContainsString('40 par rękawic nitrylowych', InquiryMailText::forAnalysis($mail));
+    }
+
+    /**
+     * Odpowiedź Outlookiem z cytatem dawnego przekazania niżej: liczy się nowa treść, a przekazanie sprzed
+     * odpowiedzi to historia — jego pozycje nie mogą wrócić do analizy.
+     */
+    public function test_outlook_reply_does_not_pull_forward_from_quoted_history(): void
+    {
+        $mail = implode("\n", [
+            'Dzień dobry,',
+            'proszę jeszcze o 5 szt. kasków ochronnych w kolorze białym, z dostawą do magazynu.',
+            '',
+            '________________________________',
+            'Od: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Wysłane: wtorek, 29 września 2026 10:00',
+            'Do: Anna Nowak <anna.nowak@firma.pl>',
+            'Temat: RE: PD: Okulary',
+            '',
+            'W załączeniu oferta.',
+            '',
+            '________________________________',
+            'Od: Anna Nowak <anna.nowak@firma.pl>',
+            'Wysłane: poniedziałek, 28 września 2026 09:00',
+            'Do: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Temat: PD: Okulary',
+            '',
+            '________________________________',
+            'Od: Jan Kowalski <jan.kowalski@firma.pl>',
+            'Wysłane: poniedziałek, 28 września 2026 08:00',
+            'Do: Anna Nowak <anna.nowak@firma.pl>',
+            'Temat: Okulary',
+            '',
+            '20 szt. okularów ochronnych bezbarwnych.',
+        ]);
+
+        $clean = InquiryMailText::forAnalysis($mail, 'RE: Okulary');
+
+        $this->assertStringContainsString('5 szt. kasków ochronnych', $clean);
+        $this->assertStringNotContainsString('okularów ochronnych', $clean);
+        $this->assertStringNotContainsString('W załączeniu oferta', $clean);
+    }
+
+    /** „Fwd:” w temacie należy do nagłówka Thunderbirda — cytat odpowiedzi Outlooka w przekazanym mailu dalej odpada. */
+    public function test_forward_subject_is_consumed_by_explicit_forward_header(): void
+    {
+        $mail = implode("\n", [
+            'Do wyceny, proszę o pilną odpowiedź do klienta jeszcze dzisiaj.',
+            '',
+            '--- Treść przekazanej wiadomości ---',
+            'Temat: RE: Kaski',
+            'Nadawca: Jan Kowalski <jan.kowalski@firma.pl>',
+            '',
+            'Dzień dobry, proszę o wycenę 12 szt. kasków ochronnych z regulacją pokrętłem.',
+            '',
+            '________________________________',
+            'Od: Handel - Supon <handel@supon.rzeszow.pl>',
+            'Wysłane: wtorek, 29 września 2026 10:00',
+            'Do: Jan Kowalski <jan.kowalski@firma.pl>',
+            'Temat: Kaski',
+            '',
+            'Stara oferta: 7 szt. okularów ochronnych.',
+        ]);
+
+        $clean = InquiryMailText::forAnalysis($mail, 'Fwd: RE: Kaski');
+
+        $this->assertStringContainsString('12 szt. kasków ochronnych', $clean);
+        $this->assertStringNotContainsString('okularów ochronnych', $clean);
+    }
+
+    public static function outlookForwardMail(): string
+    {
+        return implode("\n", [
+            'Dzień dobry,',
+            'Proszę o ofertę.',
+            '',
+            'Anna ',
+            'Nowak',
+            'Buyer I - Integrated Supply',
+            'P:+48 (500) 100-200',
+            'A:ul Przykładowa 1, Rzeszow, Podkarpackie, 35-001',
+            'E:Anna.Nowak@firma.pl',
+            '________________________________',
+            'Od: Nowak, Anna <Anna.Nowak@firma.pl>',
+            'Wysłane: czwartek, 1 października 2026 13:16',
+            'Do: Izabela - Supon <izabela@supon.rzeszow.pl>',
+            'Temat: PD: Zapytanie ofertowe 056709365',
+            '',
+            '________________________________',
+            'Od: Nowak, Anna <Anna.Nowak@firma.pl>',
+            'Wysłane: czwartek, 1 października 2026 09:42',
+            'Do: Handel - Supon Rzeszów <handel@supon.rzeszow.pl>',
+            'Temat: Zapytanie ofertowe 056709365',
+            '',
+            'Dzień dobry,',
+            '',
+            'Proszę o przesłanie oferty cenowej na poniższe pozycje:',
+            '',
+            'ILOŚĆ',
+            '',
+            ' 1',
+            '',
+            ' Okulary z osłonami bocznymi Bolle STKS 420 STK42N10E - czarna oprawka',
+            '',
+            '20',
+            '',
+            ' 2',
+            '',
+            ' Okulary ochronne ASG Bolle Cobra COBPSI - bezbarwne, nieparujące',
+            '',
+            '20',
+            '',
+            ' 3',
+            '',
+            'Okulary nieparujące Bolle Tryon TRYONN10E - sportowy i lekki design',
+            '',
+            '20',
+            '',
+            ' 4',
+            '',
+            ' Gogle Bolle Rush+ 2.0 XP RUSXMN10E - bezbarwne z paskiem',
+            '',
+            '30',
+            '',
+            'Dostawa do zakładu w Kaliszu',
+            '',
+            'Proszę o udzielenie rabatu, ponieważ pozycje będą odsprzedawane i o zaznaczenie tego w ofercie.',
+            '',
+            'Proszę również o podanie:',
+            '',
+            '  1.  Numeru katalogowego producenta MPN (Manufacturer Part Number)',
+            '  2.  Terminu realizacji',
+            '  3.  Warunków oraz kosztów dostawy',
+            '  4.  Formy oraz warunków płatności (30, 60-cio dniowy, odroczony termin płatności jest warunkiem preferowanym).',
+            '  5.  Dodatkowych opłat oraz informacji niezbędnych do realizacji zamówienia.',
+            '',
+            'Będę wdzięczna za przesłanie wszystkich informacji w jak najkrótszym terminie.',
+            '',
+            'Dziękuję.',
+            '',
+            'Pozdrawiam/Regards',
+        ]);
+    }
 }

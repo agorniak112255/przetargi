@@ -256,15 +256,16 @@ final class ClientInquiryService
      * Treść, którą dostają model i parser pozycji. Mail idzie bez cytatu, nagłówka przekazania i stopki — inaczej
      * adres albo telefon z podpisu stają się pozycjami zamówienia. Tekst z pliku (pismo, tabela) idzie w całości:
      * cięcie stopki kończyło go na pierwszym wierszu z telefonem, czyli zwykle na nagłówku firmowym nad tabelą.
+     * Temat maila („PD: …”) mówi, czy pod nagłówkiem Outlooka jest przekazane zapytanie, czy cytat odpowiedzi.
      */
-    public static function analysisText(string $body, ?string $channel): string
+    public static function analysisText(string $body, ?string $channel, ?string $subject = null): string
     {
         if (! self::hasFilePart($body, $channel)) {
-            return InquiryMailText::forAnalysis($body);
+            return InquiryMailText::forAnalysis($body, $subject);
         }
         [$mail, $file] = self::splitAtFileMarker($body);
 
-        return $mail === '' ? $file : InquiryMailText::forAnalysis($mail)."\n\n".$file;
+        return $mail === '' ? $file : InquiryMailText::forAnalysis($mail, $subject)."\n\n".$file;
     }
 
     /**
@@ -315,13 +316,13 @@ final class ClientInquiryService
     ): ClientInquiry {
         $channel = $this->nullable($source['channel'] ?? null) ?? 'web';
         $fromFile = self::hasFilePart($body, $channel);
-        $fingerprints = $this->fingerprints(self::analysisText($body, $channel));
+        $fingerprints = $this->fingerprints(self::analysisText($body, $channel, $this->nullable($subject)));
         // Nadawca z nagłówka From i kontakt z odciętej stopki — obie rzeczy
         // pochodzą wprost z maila, nic tu nie jest domyślane.
         $sender = InquirySignature::splitFrom($this->nullable($source['from'] ?? null));
         // Plik nie ma stopki maila — „stopką” byłoby wszystko po nagłówku firmowym pisma.
         $mailPart = $fromFile ? self::splitAtFileMarker($body)[0] : $body;
-        $contact = $mailPart === '' ? null : InquirySignature::extract($mailPart, $sender['email']);
+        $contact = $mailPart === '' ? null : InquirySignature::extract($mailPart, $sender['email'], $this->nullable($subject));
         // Przed zapisem nowego wiersza: potem to on byłby „ostatnim zapytaniem” i warunki przepadłyby.
         $preferences = $this->lastPreferences($user);
 
@@ -450,12 +451,12 @@ final class ClientInquiryService
         $this->maxItems = $this->aiSettings->inquiryMaxItems();
         $progress = $this->progressWriter((int) $inquiry->id, $runId);
 
-        $analysisBody = self::analysisText($body, $channel);
+        $analysisBody = self::analysisText($body, $channel, $subject);
         // Klient bywa pisze model w temacie („11-571”), a w treści tylko ilość i rozmiar.
         // Najpierw temat nadany przez klienta (z nagłówka przekazania), potem temat maila.
         // Z pliku: nagłówki przekazania czytamy tylko z maila wklejonego nad treścią pliku.
         $mailPart = $fromFile ? self::splitAtFileMarker($body)[0] : $body;
-        $forwardedSubject = $mailPart === '' ? null : InquiryMailText::forwardedSubject($mailPart);
+        $forwardedSubject = $mailPart === '' ? null : InquiryMailText::forwardedSubject($mailPart, $subject);
         $subjectHint = InquiryQueryText::subjectProductHint($forwardedSubject)
             ?? InquiryQueryText::subjectProductHint($subject);
         $extractStarted = hrtime(true);
