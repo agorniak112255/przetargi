@@ -6,7 +6,7 @@ import { TENDER_STATUS_FLOW, tenderStatusLabel } from '../lib/tenderStatus'
 import { NavIcon, type NavIconName } from '../components/NavIcon'
 
 /** Odpowiedź GET /dashboard — sekcja null, gdy użytkownik nie ma dostępu do modułu (DashboardController). */
-type Dash = {
+export type Dash = {
   tenders: {
     active: number
     value_net: number
@@ -121,8 +121,12 @@ export function Dashboard() {
   if (error) return <p className="text-sm text-red-600">Nie udało się wczytać dashboardu. Odśwież stronę.</p>
   if (!data) return <p className="text-sm text-slate-500">Ładowanie…</p>
 
+  return <DashboardView data={data} stockLink={can(user, 'inventory.view') ? '/zapasy' : '/raport-zapasow'} />
+}
+
+/** Sam widok dashboardu (bez pobierania danych) — używa go też Pomoc z przykładowymi danymi. */
+export function DashboardView({ data, stockLink }: { data: Dash; stockLink: string }) {
   const today = new Date().toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-  const stockLink = can(user, 'inventory.view') ? '/zapasy' : '/raport-zapasow'
   const pricesLink = data.prices?.accounts ? '/price-lists/b2b' : '/price-lists'
   // para kart w wierszu: gdy jednej brakuje (brak uprawnienia), druga bierze całą szerokość
   const pair = (left: unknown, right: unknown, wide: string, narrow: string) =>

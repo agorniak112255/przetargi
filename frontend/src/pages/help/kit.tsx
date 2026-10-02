@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { NavIcon, type NavIconName } from '../../components/NavIcon'
 
 /** Wspólne klocki samouczka (Pomoc): pokaz slajdów i atrapy ekranów aplikacji. */
 
@@ -28,21 +29,21 @@ const toneLabel: Record<Tone, string> = {
   slate: 'patrz',
 }
 
-/** Menu boczne atrapy — kolejność jak w components/Layout.tsx (bez Ustawień AI i Administracji). */
-const NAV = [
-  'Dashboard',
-  'Przetargi',
-  'Produkty',
-  'Zapasy',
-  'Raport dla zarządu',
-  'Kampanie',
-  'Łączenie kart',
-  'Cenniki',
-  'Zamienniki',
-  'Raporty',
-  'Klienci',
-  'Zapytania',
-  'Pomoc',
+/** Menu boczne atrapy — kolejność i ikony jak w components/Layout.tsx (bez Ustawień AI i Administracji). */
+const NAV: Array<[string, NavIconName]> = [
+  ['Dashboard', 'dashboard'],
+  ['Przetargi', 'tenders'],
+  ['Produkty', 'products'],
+  ['Zapasy', 'inventory'],
+  ['Raport dla zarządu', 'reports'],
+  ['Kampanie', 'campaigns'],
+  ['Łączenie kart', 'substitutes'],
+  ['Cenniki', 'price-lists'],
+  ['Zamienniki', 'substitutes'],
+  ['Raporty', 'reports'],
+  ['Klienci', 'clients'],
+  ['Zapytania', 'inquiries'],
+  ['Pomoc', 'help'],
 ]
 
 export function Mark({ children }: { children: ReactNode }) {
@@ -58,19 +59,52 @@ export function AppFrame({ nav, children }: { nav: string; children: ReactNode }
             Przetargi Supon
             <small className="mt-0.5 block text-[10px] font-normal text-slate-400">Artur · admin</small>
           </div>
-          {NAV.map((l) => (
+          {NAV.map(([l, icon]) => (
             <div
               key={l}
-              className={`border-l-2 px-3 py-1.5 ${
-                l === nav ? 'border-blue-400 bg-slate-700 font-semibold' : 'border-transparent text-slate-300'
+              className={`flex items-center gap-1.5 border-l-2 px-3 py-1.5 ${
+                l === nav ? 'border-sky-400 bg-slate-700 font-semibold' : 'border-transparent text-slate-300'
               }`}
             >
+              <NavIcon name={icon} className="h-3 w-3 shrink-0" />
               {l}
             </div>
           ))}
         </aside>
         <div className="min-w-0 flex-1 overflow-x-auto p-4">{children}</div>
       </div>
+    </div>
+  )
+}
+
+const MARK_CLASSES = ['rounded', 'ring-2', 'ring-blue-500', 'ring-offset-2']
+
+/**
+ * Prawdziwy ekran aplikacji (komponent strony z przykładowymi danymi) pomniejszony do szerokości slajdu.
+ * width — szerokość, w jakiej ekran się układa (jak na laptopie); mark — selektor CSS elementu do obramowania.
+ */
+export function LiveScreen({ children, width = 1180, mark }: { children: ReactNode; width?: number; mark?: string }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [zoom, setZoom] = useState(0.6)
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    const fit = () => setZoom(Math.min(1, el.clientWidth / width))
+    fit()
+    const ro = new ResizeObserver(fit)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [width])
+  useEffect(() => {
+    if (!mark || !box.current) return
+    const target = box.current.querySelector<HTMLElement>(mark)
+    if (!target) return
+    target.classList.add(...MARK_CLASSES)
+    return () => target.classList.remove(...MARK_CLASSES)
+  }, [mark, children])
+  return (
+    <div ref={box} className="overflow-hidden">
+      <div style={{ width, zoom }}>{children}</div>
     </div>
   )
 }
