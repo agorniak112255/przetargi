@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\Models\Product;
+use App\Models\ProductSourcePrice;
 use App\Models\User;
 use App\Services\PriceListImportService;
 use App\Services\SpreadsheetColumnMapper;
@@ -194,6 +195,134 @@ final class PriceListManualColumnMappingTest extends TestCase
         } finally {
             @unlink($path);
         }
+    }
+
+    /**
+     * Cennik Ansell: „Price UOM” mówi, za co jest cena. PAI/PCE — zakup z „Final Invoice Price” (z dopłatą,
+     * bywa wyższy od ceny katalogowej), CAR — zakup z dopisanej kolumny „Cena za opak.”, a katalogowa za
+     * karton przeliczona na opakowanie. Karton bez ceny za opakowanie nie wchodzi.
+     */
+    public function test_carton_rows_take_pack_price_and_scale_catalog_price(): void
+    {
+        $path = $this->makeAnsellSpreadsheet();
+        try {
+            $preview = app(PriceListImportService::class)->previewFromMapping(
+                $path,
+                $this->ansellMapping(['purchase', 'price_unit', 'pack_price']),
+                50,
+            );
+            $bySku = [];
+            foreach ($preview['products'] as $product) {
+                $bySku[$product['sku']] = $product;
+            }
+
+            // para: cena faktury z dopłatą (18,30) wyższa od katalogowej (18,09) zostaje — upust 0
+            $this->assertEqualsWithDelta(18.30, $bySku['065-07']['purchase_price'] ?? null, 0.001);
+            $this->assertEqualsWithDelta(18.09, $bySku['065-07']['catalog_price_net'] ?? null, 0.001);
+            $this->assertEqualsWithDelta(0.0, $bySku['065-07']['discount_percent'] ?? null, 0.001);
+            $this->assertTrue($bySku['065-07']['_purchase_from_file'] ?? false);
+
+            // karton 5 opakowań: zakup = cena za opakowanie, katalogowa 107,22 / 5
+            $this->assertEqualsWithDelta(20.714, $bySku['13837']['purchase_price'] ?? null, 0.001);
+            $this->assertEqualsWithDelta(21.44, $bySku['13837']['catalog_price_net'] ?? null, 0.001);
+            // karton jednego opakowania: obie ceny bez zmian
+            $this->assertEqualsWithDelta(52.03, $bySku['13823']['purchase_price'] ?? null, 0.001);
+            $this->assertEqualsWithDelta(53.86, $bySku['13823']['catalog_price_net'] ?? null, 0.001);
+
+            $this->assertArrayNotHasKey('67308', $bySku, 'karton bez ceny za opakowanie nie wchodzi');
+            $this->assertCount(1, $preview['errors']);
+            $this->assertStringContainsString('67308', $preview['errors'][0]);
+            $this->assertStringContainsString('bez ceny za opakowanie', $preview['errors'][0]);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_carton_rows_import_pack_price_into_file_slot(): void
+    {
+        $path = $this->makeAnsellSpreadsheet();
+        try {
+            $result = app(PriceListImportService::class)->importWithMapping(
+                new UploadedFile($path, 'ansell.xlsx', null, null, true),
+                'Ansell',
+                '2026-10',
+                User::factory()->create(),
+                $this->ansellMapping(['purchase', 'price_unit', 'pack_price']),
+            );
+            $this->assertNotNull($result['price_list'], implode('; ', $result['errors'] ?? []));
+
+            $slot = static fn (string $sku): ?ProductSourcePrice => ProductSourcePrice::query()
+                ->where('source_key', ProductSourcePrice::SOURCE_FILE)
+                ->where('product_id', Product::query()->where('sku', $sku)->value('id'))
+                ->first();
+
+            $this->assertEqualsWithDelta(20.71, (float) $slot('13837')?->purchase_price, 0.001);
+            $this->assertEqualsWithDelta(21.44, (float) $slot('13837')?->catalog_price_net, 0.001);
+            $this->assertEqualsWithDelta(18.30, (float) $slot('065-07')?->purchase_price, 0.001);
+            $this->assertSame('EUR', $slot('065-07')?->currency);
+            $this->assertFalse(Product::query()->where('sku', '67308')->exists());
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_purchase_above_catalog_from_automatic_mapping_is_still_rejected(): void
+    {
+        // ARTRA: kolumnę zakupu zgadł automat i wskazał cenę brutto — bez potwierdzenia człowieka zakup
+        // wyższy od katalogowej dalej liczymy z upustu
+        $path = $this->makeAnsellSpreadsheet();
+        try {
+            $preview = app(PriceListImportService::class)->previewFromMapping(
+                $path,
+                $this->ansellMapping([]),
+                50,
+            );
+            $row = collect($preview['products'])->firstWhere('sku', '065-07');
+
+            $this->assertNotNull($row);
+            $this->assertEqualsWithDelta(16.64, $row['purchase_price'], 0.001);
+            $this->assertFalse($row['_purchase_from_file']);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    /**
+     * @param  list<string>  $locked
+     * @return array<string, mixed>
+     */
+    private function ansellMapping(array $locked): array
+    {
+        return $this->mapping(
+            [
+                'sku' => 0, 'name' => 1, 'catalog_price' => 2, 'discount' => 3, 'purchase' => 4,
+                'currency' => 5, 'price_unit' => 6, 'pack_price' => 7,
+            ],
+            $locked,
+            'Price List & SPO',
+        );
+    }
+
+    private function makeAnsellSpreadsheet(): string
+    {
+        $rows = [
+            ['Product Reference', 'Description', 'Price List Price', 'PL Discount %', 'Final Invoice Price', 'Currency', 'Price UOM', 'Cena za opak.'],
+            ['065-07', 'RINGERS 065 SIZE 7,0', 18.09, 0.08, 18.30, 'EUR', 'PAI', null],
+            ['11200000', 'HyFlex 11200 SIZE 19', 8.41, 0.08, 8.83, 'EUR', 'PCE', null],
+            ['13823', 'KLNGD G60 PolyU Lvl 3 Gloves PalmGry', 53.86, 0.08, 52.03, 'EUR', 'CAR', 52.03],
+            ['13837', 'KLNGD G40 Gloves PU Black', 107.22, 0.08, 103.57, 'EUR', 'CAR', 20.714],
+            ['67308', 'KLNGD KGA10 Coverall Hood EWA M', 95.00, 0.08, 92.06, 'EUR', 'CAR', null],
+        ];
+
+        $spreadsheet = new Spreadsheet;
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Price List & SPO');
+        $sheet->fromArray($rows, null, 'A1', true);
+        $path = tempnam(sys_get_temp_dir(), 'ansell').'.xlsx';
+        (new Xlsx($spreadsheet))->save($path);
+        $spreadsheet->disconnectWorksheets();
+
+        return $path;
     }
 
     /**

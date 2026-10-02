@@ -1469,6 +1469,10 @@ export function PriceLists() {
    * potwierdzeniu, żeby okno mapowania nie pokazywało czegoś innego niż to, co wejdzie do bazy.
    */
   function effectiveFor(row: MappingPreviewRow) {
+    // import zostawia cenę zakupu z kolumny pliku (AssortmentGroupService), także wyższą od katalogowej
+    if (row._purchase_from_file) {
+      return { discount: row.discount_percent, purchase: row.purchase_price }
+    }
     const groupDiscount = groupRows.find((g) => g.name === (row.category ?? ''))?.discount_percent
     const globalParsed = defaultDiscount.trim() === '' ? null : Number(defaultDiscount)
     const discount =

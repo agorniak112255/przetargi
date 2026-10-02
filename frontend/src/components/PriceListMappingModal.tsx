@@ -19,6 +19,8 @@ export type MappingPreviewRow = {
   catalog_price_net: number
   discount_percent: number
   purchase_price: number
+  /** cena zakupu odczytana z kolumny pliku — upust grupy ani globalny jej nie zmienia */
+  _purchase_from_file?: boolean
   currency?: string | null
   category?: string | null
   pack_qty?: number | null
@@ -42,6 +44,12 @@ export const COLUMN_ROLES: Array<{
   { key: 'catalog_price', label: 'Cena katalogowa', required: true },
   { key: 'discount', label: 'Upust %' },
   { key: 'purchase', label: 'Cena zakupu' },
+  { key: 'price_unit', label: 'Jednostka ceny', hint: 'PAI / PCE / CAR' },
+  {
+    key: 'pack_price',
+    label: 'Cena za opakowanie',
+    hint: 'zakup dla wierszy CAR (karton)',
+  },
   { key: 'category', label: 'Grupa asortymentowa' },
   { key: 'ean', label: 'EAN' },
   { key: 'pack_qty', label: 'Ilość w opakowaniu' },
@@ -226,6 +234,13 @@ export function PriceListMappingModal({
                               bez kolumny kodu karty dostaną kod wyliczony z nazwy
                             </span>
                           )}
+                          {role.key === 'price_unit' &&
+                            typeof value === 'number' &&
+                            typeof s.columns.pack_price !== 'number' && (
+                              <span className="block text-[11px] text-amber-700">
+                                bez ceny za opakowanie wiersze CAR wejdą z ceną kartonu
+                              </span>
+                            )}
                           {role.key === 'name_extra' &&
                             typeof value === 'number' &&
                             value === s.columns.name && (

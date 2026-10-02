@@ -1193,7 +1193,7 @@ final class PriceListImportService
             $cols = is_array($sheetMap['columns'] ?? null) ? $sheetMap['columns'] : [];
             $map = [];
             $mappable = array_merge(
-                ['sku', 'sku_alt', 'name', 'name_extra', 'catalog_price', 'discount', 'purchase', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'],
+                ['sku', 'sku_alt', 'name', 'name_extra', 'catalog_price', 'discount', 'purchase', 'price_unit', 'pack_price', 'ean', 'category', 'pack_qty', 'packaging', 'model_key', 'model_name', 'currency'],
                 // kolumny z parametrem wyrobu przechodzą tak samo jak reszta mapowania
                 SpreadsheetColumnMapper::attributeFields(),
             );
@@ -1290,6 +1290,7 @@ final class PriceListImportService
                     $sheetName,
                     $sheetDefaultCurrency,
                     $carry,
+                    $locked,
                 );
                 if ($parsed['status'] === 'skip') {
                     $skipped++;
@@ -2169,10 +2170,30 @@ final class PriceListImportService
         return false;
     }
 
+    /** Jednostki ceny oznaczające cenę całego kartonu (kolumna „Price UOM” cennika Ansell: CAR). */
+    private const CARTON_PRICE_UNITS = ['CAR', 'CTN', 'KARTON'];
+
+    /**
+     * Wiersz z ceną za karton — tylko gdy człowiek wskazał obie kolumny: jednostkę ceny i cenę za opakowanie.
+     *
+     * @param  array<int, mixed>  $row
+     * @param  array<string, int>  $map
+     */
+    private function isCartonPriceRow(array $row, array $map): bool
+    {
+        if (! isset($map['price_unit'], $map['pack_price'])) {
+            return false;
+        }
+        $unit = mb_strtoupper(trim((string) ($row[$map['price_unit']] ?? '')));
+
+        return in_array($unit, self::CARTON_PRICE_UNITS, true);
+    }
+
     /**
      * @param  array<int, mixed>  $row
      * @param  array<string, int>  $map
      * @param  array{name: ?string, category: ?string, group: ?string, name_group?: ?string, row_name?: ?string, row_key?: ?string}  $carry
+     * @param  array<string, true>  $locked  role kolumn wskazane przez człowieka w oknie importu
      * @return array{status: string, product?: array<string, mixed>, message?: string}
      */
     private function parseRow(
@@ -2184,6 +2205,7 @@ final class PriceListImportService
         ?string $sheetName = null,
         ?string $defaultCurrency = 'PLN',
         ?array &$carry = null,
+        array $locked = [],
     ): array {
         if ($carry === null) {
             $carry = ['name' => null, 'category' => null, 'group' => null, 'name_group' => null];
@@ -2332,10 +2354,34 @@ final class PriceListImportService
         $purchase = isset($map['purchase'])
             ? $this->toFloat($row[$map['purchase']] ?? null)
             : null;
+        // Cennik Ansell: kolumna jednostki ceny mówi, za co jest cena wiersza (PAI para, PCE sztuka, CAR karton).
+        // Wiersz kartonowy bierze zakup z kolumny ceny za jedno opakowanie, a katalogową za karton przelicza tą
+        // samą proporcją (cena za opakowanie = cena za karton / liczba opakowań w kartonie). Bez ceny za
+        // opakowanie wiersza nie zapisujemy — cena kartonu na karcie udawałaby cenę pary albo pudełka.
+        if ($this->isCartonPriceRow($row, $map)) {
+            $packPrice = $this->toFloat($row[$map['pack_price']] ?? null);
+            $label = $sku !== '' ? " ({$sku})" : '';
+            if ($packPrice === null || $packPrice <= 0) {
+                return [
+                    'status' => 'error',
+                    'message' => "{$prefix}Wiersz {$excelRow}{$label}: cena za karton (CAR) bez ceny za opakowanie — pominięto",
+                ];
+            }
+            if ($purchase === null || $purchase <= 0) {
+                return [
+                    'status' => 'error',
+                    'message' => "{$prefix}Wiersz {$excelRow}{$label}: cena za karton (CAR) bez ceny zakupu kartonu — nie da się przeliczyć ceny katalogowej, pominięto",
+                ];
+            }
+            $catalog = round($catalog * $packPrice / $purchase, 2);
+            $purchase = $packPrice;
+        }
         // Cena zakupu wyższa od katalogowej to nie jest cena zakupu — w cenniku ARTRY jako „zakup”
         // wskazana została kolumna ceny detalicznej brutto w złotych obok ceny katalogowej w euro.
         // Zamiast zapisać 429 tam, gdzie powinno stać 36, liczymy zakup z upustu jak przy braku kolumny.
-        if ($purchase !== null && $catalog > 0 && $purchase > $catalog) {
+        // Kolumnę wskazaną przez człowieka zostawiamy: w cenniku Ansell cena faktury z dopłatą (P) bywa
+        // wyższa od ceny katalogowej (E) i to jest prawdziwa cena zakupu (upust wychodzi wtedy 0).
+        if ($purchase !== null && $catalog > 0 && $purchase > $catalog && ! isset($locked['purchase'])) {
             $purchase = null;
         }
         if ($purchase !== null && $purchase > 0) {
