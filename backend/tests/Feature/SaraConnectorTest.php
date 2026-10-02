@@ -83,6 +83,17 @@ final class SaraConnectorTest extends TestCase
 
     private string $expirationDate = '2099-01-01T00:00:00+00:00';
 
+    /**
+     * Sortowania („default” = bez sortowania), przy których strona 2 powtarza pierwszą pozycję strony 1 zamiast własnej
+     * — jak sklep 02.10.2026 (pozycja na dwóch stronach, inna pominięta).
+     *
+     * @var list<string>
+     */
+    private array $unstableSorts = [];
+
+    /** @var list<string> sortowania zapytań o listę w kolejności („default” = bez) */
+    private array $sortsUsed = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -399,6 +410,40 @@ final class SaraConnectorTest extends TestCase
         $this->reportedTotal = 9;
         $this->expectExceptionMessage('niespójna także po ponownym pobraniu');
         iterator_to_array($stuck->products(), false);
+    }
+
+    public function test_unstable_order_repeating_and_skipping_items_is_completed_by_a_pass_with_another_sort(): void
+    {
+        $this->addJacket();
+        $this->unstableSorts = ['default'];
+        $this->fakeSite();
+        $connector = new SaraB2bConnector($this->client(), pageSize: 2);
+        $connector->login();
+        $messages = [];
+        $connector->onListProgress(function (string $message) use (&$messages): void {
+            $messages[] = $message;
+        });
+
+        $card = iterator_to_array($connector->products(), false)[0];
+
+        // pozycja z początku strony 2 (M) pominięta w pierwszym przejściu — wróciła w drugim
+        $this->assertSame(['TEST-01-100-22-00-S', 'TEST-01-100-22-00-M', 'TEST-01-100-22-00-XXLB', 'TEST-01-100-25-71-L'], array_column($card->members, 'remote_id'));
+        $this->assertStringContainsString('Lista Sara Workwear: 5 pozycji', implode("\n", $connector->runSummary()));
+        $this->assertContains('Kategoria Bluzy: po przejściu 1 jest 4 z 5 pozycji (kolejność sklepu zmienna) — kolejne przejście innym sortowaniem', $messages);
+        $this->assertSame(['default', 'default', 'default', '-created_at', '-created_at', '-created_at'], array_slice($this->sortsUsed, 0, 6));
+    }
+
+    public function test_category_never_complete_under_any_sort_fails_without_saving(): void
+    {
+        $this->addJacket();
+        $this->unstableSorts = ['default', '-created_at', 'created_at', 'name'];
+        $this->fakeSite();
+        $connector = new SaraB2bConnector($this->client(), pageSize: 2);
+        $connector->login();
+
+        $this->expectExceptionMessage('niespójna także po ponownym pobraniu: kategoria Bluzy: po 4 przejściach 4 z 5 pozycji');
+
+        iterator_to_array($connector->products(), false);
     }
 
     public function test_list_pages_through_every_category(): void
@@ -731,6 +776,11 @@ final class SaraConnectorTest extends TestCase
                 $page = (int) ($variables['page'] ?? 1);
                 $limit = (int) ($variables['limit'] ?? 40);
                 $slice = array_slice($items, ($page - 1) * $limit, $limit);
+                $sort = is_string($variables['sort'] ?? null) ? $variables['sort'] : 'default';
+                $this->sortsUsed[] = $sort;
+                if ($page === 2 && $slice !== [] && in_array($sort, $this->unstableSorts, true)) {
+                    $slice[0] = $items[0];
+                }
                 if (! $valid) {
                     // gość: ceny cennikowe, bez błędu poza polem customer
                     $slice = array_map(static function (array $item): array {

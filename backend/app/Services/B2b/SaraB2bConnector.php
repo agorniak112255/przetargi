@@ -47,6 +47,12 @@ final class SaraB2bConnector implements B2bConnector, B2bDocumentSource, B2bGrou
 
     private const INCONSISTENT = 7302;
 
+    /**
+     * Sortowania kolejnych przejść kategorii (sortOptions sklepu): domyślne, potem inne, aż zbiór pozycji będzie pełny.
+     * Sortowanie „id” sklep pomija (wraca domyślna kolejność), więc unikalnego klucza kolejności nie ma.
+     */
+    private const SORTS = [null, '-created_at', 'created_at', 'name'];
+
     /** Tyle kart bez ceny konta, zanim pojawi się pierwsza cena = sesja bez cen (albo zmiana sklepu). */
     private const MAX_FIRST_WITHOUT_PRICE = 20;
 
@@ -411,42 +417,23 @@ final class SaraB2bConnector implements B2bConnector, B2bDocumentSource, B2bGrou
         $categories = $this->client->categories();
         $this->progress('Kategorie Sara Workwear: '.count($categories));
         foreach ($categories as $category) {
+            // Kolejność listy nie jest stała między stronami (domyślne sortowanie ma remisy — 02.10.2026 pozycja
+            // 16544 wróciła na dwóch stronach „Bluz męskich”), więc strony mogą powtórzyć jedne pozycje i pominąć
+            // inne. Zbiór pozycji kategorii zbieramy do skutku: przejście domyślnym sortowaniem, a gdy zbiór jest
+            // mniejszy niż licznik sklepu — kolejne przejścia innym sortowaniem; powtórki liczą się raz.
             $inCategory = [];
-            $total = 0;
-            $pages = 1;
-            for ($page = 1; $page <= $pages; $page++) {
-                if (microtime(true) - $started > self::LIST_BUDGET_SECONDS) {
-                    throw new RuntimeException('Pobieranie listy '.SaraB2bClient::HOST.' trwa ponad '.(self::LIST_BUDGET_SECONDS / 60).' min — przerwane bez zapisu');
+            $total = null;
+            $passes = 0;
+            foreach (self::SORTS as $sort) {
+                $passes++;
+                $total = $this->scanCategory($category, $sort, $total, $started, $inCategory, $seen);
+                if (count($inCategory) >= $total) {
+                    break;
                 }
-                $json = $this->client->categoryPage($category['id'], $page, $this->pageSize);
-                $pageTotal = is_int($json['pagination']['itemsCount'] ?? null) ? $json['pagination']['itemsCount'] : -1;
-                if ($pageTotal < 0) {
-                    throw new RuntimeException('Kategoria '.$category['name'].' ('.$category['id'].') bez licznika pozycji — zmiana sklepu?');
-                }
-                if ($page === 1) {
-                    $total = $pageTotal;
-                    $pages = min(max(1, (int) ceil($total / $this->pageSize)), self::MAX_PAGES_PER_CATEGORY);
-                } elseif ($pageTotal !== $total) {
-                    throw new RuntimeException('liczba pozycji kategorii '.$category['name'].' zmieniła się z '.$total.' na '.$pageTotal.' (strona '.$page.')', self::INCONSISTENT);
-                }
-                foreach ($json['items'] as $item) {
-                    $id = trim((string) ($item['id'] ?? ''));
-                    if ($id === '') {
-                        throw new RuntimeException('Kategoria '.$category['name'].', strona '.$page.': pozycja bez id — zmiana sklepu?');
-                    }
-                    if (isset($inCategory[$id])) {
-                        throw new RuntimeException('pozycja '.$id.' dwa razy w kategorii '.$category['name'], self::INCONSISTENT);
-                    }
-                    $inCategory[$id] = true;
-                    if (isset($seen[$id])) {
-                        continue;
-                    }
-                    $seen[$id] = true;
-                    $this->addItem($item);
-                }
+                $this->progress('Kategoria '.$category['name'].': po przejściu '.$passes.' jest '.count($inCategory).' z '.$total.' pozycji (kolejność sklepu zmienna) — kolejne przejście innym sortowaniem');
             }
-            if ($total > 0 && count($inCategory) !== $total && $pages < self::MAX_PAGES_PER_CATEGORY) {
-                throw new RuntimeException('kategoria '.$category['name'].': pobrano '.count($inCategory).' z '.$total.' pozycji', self::INCONSISTENT);
+            if (count($inCategory) < $total) {
+                throw new RuntimeException('kategoria '.$category['name'].': po '.$passes.' przejściach '.count($inCategory).' z '.$total.' pozycji', self::INCONSISTENT);
             }
             $this->progress('Kategoria '.$category['name'].': '.$total.' pozycji (razem bez powtórzeń: '.count($seen).')');
         }
@@ -455,6 +442,52 @@ final class SaraB2bConnector implements B2bConnector, B2bDocumentSource, B2bGrou
         }
 
         return count($seen);
+    }
+
+    /**
+     * Jedno przejście wszystkich stron kategorii jednym sortowaniem; pozycje dopisane do zbioru kategorii ($inCategory)
+     * i — nowe w całej liście ($seen) — do grup kart. Zwraca licznik pozycji kategorii; licznik inny niż w poprzednich
+     * stronach albo przejściach = lista zmieniła się w trakcie (INCONSISTENT).
+     *
+     * @param  array{id: string, name: string}  $category
+     * @param  array<string, true>  $inCategory
+     * @param  array<string, true>  $seen
+     */
+    private function scanCategory(array $category, ?string $sort, ?int $total, float $started, array &$inCategory, array &$seen): int
+    {
+        $pages = 1;
+        for ($page = 1; $page <= $pages; $page++) {
+            if (microtime(true) - $started > self::LIST_BUDGET_SECONDS) {
+                throw new RuntimeException('Pobieranie listy '.SaraB2bClient::HOST.' trwa ponad '.(self::LIST_BUDGET_SECONDS / 60).' min — przerwane bez zapisu');
+            }
+            $json = $this->client->categoryPage($category['id'], $page, $this->pageSize, $sort);
+            $pageTotal = is_int($json['pagination']['itemsCount'] ?? null) ? $json['pagination']['itemsCount'] : -1;
+            if ($pageTotal < 0) {
+                throw new RuntimeException('Kategoria '.$category['name'].' ('.$category['id'].') bez licznika pozycji — zmiana sklepu?');
+            }
+            if ($total === null) {
+                $total = $pageTotal;
+            } elseif ($pageTotal !== $total) {
+                throw new RuntimeException('liczba pozycji kategorii '.$category['name'].' zmieniła się z '.$total.' na '.$pageTotal.' (strona '.$page.')', self::INCONSISTENT);
+            }
+            if ($page === 1) {
+                $pages = min(max(1, (int) ceil($total / $this->pageSize)), self::MAX_PAGES_PER_CATEGORY);
+            }
+            foreach ($json['items'] as $item) {
+                $id = trim((string) ($item['id'] ?? ''));
+                if ($id === '') {
+                    throw new RuntimeException('Kategoria '.$category['name'].', strona '.$page.': pozycja bez id — zmiana sklepu?');
+                }
+                $inCategory[$id] = true;
+                if (isset($seen[$id])) {
+                    continue;
+                }
+                $seen[$id] = true;
+                $this->addItem($item);
+            }
+        }
+
+        return (int) $total;
     }
 
     /**

@@ -155,15 +155,16 @@ final class SaraB2bClient
      * Strona wyrobów kategorii ({pagination, items}) z ceną konta. W tym samym żądaniu pole „customer” sprawdza sesję:
      * bez niej ceny byłyby cenami gościa (patrz opis klasy).
      *
+     * @param  string|null  $sort  sortowanie sklepu (sortOptions: „-created_at”, „name”…); null = domyślne („-sort_scenario”)
      * @return array{pagination: array<string, mixed>, items: list<array<string, mixed>>}
      */
-    public function categoryPage(string $categoryId, int $page, int $perPage): array
+    public function categoryPage(string $categoryId, int $page, int $perPage, ?string $sort = null): array
     {
-        $query = 'query($id: ID!, $page: Int, $limit: Int) { customer { user { email } } '
-            .'products(id: $id, type: from_category, page: $page, limit: $limit) { pagination { itemsCount lastPage currentPage } items { '
+        $query = 'query($id: ID!, $page: Int, $limit: Int, $sort: String) { customer { user { email } } '
+            .'products(id: $id, type: from_category, page: $page, limit: $limit, sort: $sort) { pagination { itemsCount lastPage currentPage } items { '
             .self::ITEM_FIELDS.' } } }';
-        $variables = ['id' => $categoryId, 'page' => $page, 'limit' => $perPage];
-        $label = 'kategoria '.$categoryId.', strona '.$page;
+        $variables = ['id' => $categoryId, 'page' => $page, 'limit' => $perPage, 'sort' => $sort];
+        $label = 'kategoria '.$categoryId.', strona '.$page.($sort !== null ? ', sortowanie '.$sort : '');
 
         if ($this->token === null || $this->tokenExpiring()) {
             $this->relogin();
