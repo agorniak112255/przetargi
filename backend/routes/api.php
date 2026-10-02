@@ -258,6 +258,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         ->middleware('permission:price_lists.import');
 
     Route::get('/substitutes', [ProductSubstituteController::class, 'index'])->middleware('permission:products.view');
+    // ekran zamienników: liczby do filtrów i lista pogrupowana po karcie głównej (przed /substitutes/{productSubstitute})
+    Route::get('/substitutes/summary', [ProductSubstituteController::class, 'summary'])->middleware('permission:products.view');
+    Route::get('/substitutes/board', [ProductSubstituteController::class, 'board'])->middleware('permission:products.view');
     Route::get('/products/{product}/substitutes', [ProductSubstituteController::class, 'byMain'])->middleware('permission:products.view');
     Route::post('/substitutes', [ProductSubstituteController::class, 'store'])->middleware('permission:substitutes.manage');
     Route::patch('/substitutes/{productSubstitute}', [ProductSubstituteController::class, 'update'])->middleware('permission:substitutes.manage');

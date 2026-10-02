@@ -297,6 +297,10 @@ class TenderController extends Controller
                 'approver:id,name',
             ])
             ->whereIn('main_product_id', $mainIds)
+            // jak zamienniki pozycji (BattlecardService): ręczne nieodrzucone albo zatwierdzone — bez propozycji
+            // automatu czekających na decyzję
+            ->where('approval_status', '!=', 'odrzucony')
+            ->where(static fn ($q) => $q->where('source', ProductSubstitute::SOURCE_MANUAL)->orWhere('approval_status', 'zatwierdzony'))
             ->get()
             ->groupBy('main_product_id');
 

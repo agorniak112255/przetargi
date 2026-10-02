@@ -78,6 +78,8 @@ final class TenderCoverageService
             ? 0
             : ProductSubstitute::query()
                 ->whereIn('main_product_id', $mainIds)
+                // propozycje automatu to kolejka ekranu zamienników, nie bloker oferty
+                ->where('source', ProductSubstitute::SOURCE_MANUAL)
                 ->where('approval_status', 'oczekuje')
                 ->count();
 

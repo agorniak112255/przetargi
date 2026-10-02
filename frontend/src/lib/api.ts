@@ -1,4 +1,5 @@
 import { publicDir } from './publicDir'
+import type { CheckSource } from '../components/RequirementCheckList'
 
 const API_URL = `${publicDir()}/api`
 
@@ -1371,6 +1372,129 @@ export type Substitute = {
   main_product?: Product
   substitute_product?: Product
   approver?: { id: number; name: string } | null
+  /** 'reczny' — wpisany przez człowieka, 'automat' — propozycja generatora (do decyzji). Brak = starsza odpowiedź API. */
+  source?: SubstituteSource
+  evidence?: SubstituteEvidence | null
+  generated_at?: string | null
+  decision_note?: string | null
+  /** Tylko w GET /products/{id}/substitutes: skrót karty zamiennika, porównanie cen i liczniki parametrów. */
+  card?: SubstituteCardLite
+  price?: SubstitutePrice
+  summary?: SubstituteParamSummary
+}
+
+export type SubstituteSource = 'reczny' | 'automat'
+
+/** Wartość parametru po jednej stronie pary; `source` jak CheckSource albo 'derived' (wniosek automatu, wtedy `inferred`). */
+export type SubstituteEvidenceValue = {
+  value: string | null
+  text: string | null
+  source: CheckSource | 'derived' | null
+  quote: string | null
+  inferred: boolean
+}
+
+export type SubstituteEvidenceParam = {
+  key: string
+  label: string
+  main: SubstituteEvidenceValue | null
+  sub: SubstituteEvidenceValue | null
+  /** equal — ta sama wartość; higher — zamiennik wyżej; meets — spełnia (≥), zapis inny */
+  relation: 'equal' | 'higher' | 'meets'
+  note: string | null
+}
+
+/** Dowody generatora zamienników (evidence v1) — każdy parametr ochronny karty głównej z cytatem źródła. */
+export type SubstituteEvidence = {
+  version: number
+  rules?: string
+  generated_at?: string
+  family?: string
+  family_label?: string
+  verdict?: 'preferowany' | 'premium'
+  params: SubstituteEvidenceParam[]
+  extra_in_sub?: string[]
+  not_checked?: string[]
+  fingerprints?: { main: string; sub: string }
+  /** zatwierdzona para, której automat już nie potwierdza */
+  stale?: { at: string; reason: string } | null
+}
+
+export type SubstituteCardLite = {
+  id: number
+  sku: string
+  name: string
+  manufacturer: string | null
+  family: string | null
+  family_label: string | null
+  thumb_url: string | null
+  /** po masce cen specjalnych i kursie NBP; null — brak ceny */
+  price_pln: number | null
+  /** waluta źródłowa karty */
+  currency: string | null
+  has_description: boolean
+}
+
+export type SubstitutePrice = {
+  main_pln: number | null
+  sub_pln: number | null
+  diff_percent: number | null
+  /** false — różne/nieznane jednostki sprzedaży albo brak ceny; powód w `note` */
+  comparable: boolean
+  note: string | null
+}
+
+export type SubstituteParamSummary = { params: number; equal: number; higher: number }
+
+export type SubstituteLite = {
+  id: number
+  type: string
+  approval_status: string
+  source: SubstituteSource
+  reason: string | null
+  decision_note: string | null
+  approver: { id: number; name: string } | null
+  generated_at: string | null
+  stale: boolean
+  product: SubstituteCardLite
+  price: SubstitutePrice
+  summary: SubstituteParamSummary
+}
+
+export type SubstituteBoardGroup = {
+  main: SubstituteCardLite
+  chips: string[]
+  substitutes: SubstituteLite[]
+}
+
+export type SubstituteBoardPage = {
+  data: SubstituteBoardGroup[]
+  current_page: number
+  last_page: number
+  per_page: number
+  total: number
+}
+
+export type SubstituteSummary = {
+  totals: {
+    mains: number
+    rows: number
+    pending: number
+    approved: number
+    rejected: number
+    auto: number
+    manual: number
+    stale: number
+  }
+  families: { key: string | null; label: string; mains: number }[]
+  manufacturers: { name: string; mains: number }[]
+}
+
+/** GET /products/{id}/substitutes */
+export type SubstitutesByMain = {
+  main_product: Product
+  main_card?: SubstituteCardLite
+  substitutes: Substitute[]
 }
 
 /** Stan propozycji połączenia kart (ekran „Łączenie kart”). */

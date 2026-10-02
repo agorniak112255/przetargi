@@ -745,30 +745,63 @@ final class ProductSizeMergeService
         if (! Schema::hasTable('product_substitutes') || $loserIds === []) {
             return;
         }
-        ProductSubstitute::query()
-            ->whereIn('main_product_id', $loserIds)
-            ->update(['main_product_id' => $winnerId]);
-        ProductSubstitute::query()
-            ->whereIn('substitute_product_id', $loserIds)
-            ->update(['substitute_product_id' => $winnerId]);
-        ProductSubstitute::query()
-            ->whereColumn('main_product_id', 'substitute_product_id')
-            ->delete();
-
-        $seen = [];
-        foreach (ProductSubstitute::query()
-            ->where('main_product_id', $winnerId)
-            ->orWhere('substitute_product_id', $winnerId)
+        $map = array_fill_keys($loserIds, $winnerId);
+        $ids = [$winnerId, ...$loserIds];
+        // Wszystkie pary, które mogą się zejść: każdy wiersz z parą po przeniesieniu na kartę, która zostaje, ma
+        // po jednej stronie kartę scalaną albo zostającą — więc jest w tym zbiorze.
+        $rows = ProductSubstitute::query()
+            ->where(static fn ($q) => $q->whereIn('main_product_id', $ids)->orWhereIn('substitute_product_id', $ids))
             ->orderBy('id')
-            ->get() as $row) {
-            $pair = $row->main_product_id.'-'.$row->substitute_product_id;
-            if (isset($seen[$pair])) {
-                $row->delete();
+            ->get(['id', 'main_product_id', 'substitute_product_id', 'approval_status', 'source']);
+
+        $delete = [];
+        $groups = [];
+        foreach ($rows as $row) {
+            $main = $map[(int) $row->main_product_id] ?? (int) $row->main_product_id;
+            $sub = $map[(int) $row->substitute_product_id] ?? (int) $row->substitute_product_id;
+            if ($main === $sub) {
+                $delete[] = (int) $row->id;
 
                 continue;
             }
-            $seen[$pair] = true;
+            $groups[$main.'-'.$sub][] = ['row' => $row, 'main' => $main, 'sub' => $sub];
         }
+
+        $moves = [];
+        foreach ($groups as $group) {
+            // Zostaje wiersz z decyzją człowieka (zatwierdzony > odrzucony > ręczny oczekujący > propozycja automatu),
+            // przy remisie najstarszy — odrzucenie nie może zniknąć pod świeżą propozycją automatu.
+            usort($group, fn (array $a, array $b): int => [$this->substituteDecisionRank($a['row']), (int) $a['row']->id]
+                <=> [$this->substituteDecisionRank($b['row']), (int) $b['row']->id]);
+            $keep = array_shift($group);
+            foreach ($group as $duplicate) {
+                $delete[] = (int) $duplicate['row']->id;
+            }
+            if ($keep['main'] !== (int) $keep['row']->main_product_id || $keep['sub'] !== (int) $keep['row']->substitute_product_id) {
+                $moves[] = $keep;
+            }
+        }
+
+        // najpierw kasowanie, potem przeniesienie — inaczej update wpadłby na unikalny indeks (main, sub)
+        foreach (array_chunk($delete, 500) as $chunk) {
+            ProductSubstitute::query()->whereIn('id', $chunk)->delete();
+        }
+        foreach ($moves as $move) {
+            ProductSubstitute::query()->whereKey((int) $move['row']->id)->update([
+                'main_product_id' => $move['main'],
+                'substitute_product_id' => $move['sub'],
+            ]);
+        }
+    }
+
+    private function substituteDecisionRank(ProductSubstitute $row): int
+    {
+        return match (true) {
+            $row->approval_status === 'zatwierdzony' => 0,
+            $row->approval_status === 'odrzucony' => 1,
+            $row->source !== ProductSubstitute::SOURCE_AUTO => 2,
+            default => 3,
+        };
     }
 
     /**

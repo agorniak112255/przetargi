@@ -86,7 +86,8 @@ type Props = {
   findHitCount: (phrase: string) => number
 }
 
-const SOURCE_LABEL: Record<CheckSource, string> = {
+/** Etykiety pól karty — także w macierzy zamienników (SubstituteMatrix). */
+export const SOURCE_LABEL: Record<CheckSource, string> = {
   name: 'nazwa',
   norms: 'normy',
   price_list: 'cennik dostawcy',

@@ -20,6 +20,8 @@ class ApproveProductSubstituteRequest extends FormRequest
     {
         return [
             'approval_status' => ['required', 'in:zatwierdzony,odrzucony,oczekuje'],
+            // uzasadnienie decyzji (zwłaszcza odrzucenia propozycji automatu) — decision_note
+            'note' => ['nullable', 'string', 'max:1000'],
         ];
     }
 }

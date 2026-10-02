@@ -332,9 +332,13 @@ final class BattlecardService
             return [];
         }
 
+        // Do przetargu tylko pary, za które ręczy człowiek: ręczne nieodrzucone albo zatwierdzone. Propozycje
+        // automatu czekające na decyzję i odrzucone pary nie trafiają do zamienników pozycji.
         $rows = ProductSubstitute::query()
             ->with('substituteProduct')
             ->where('main_product_id', $ours->id)
+            ->where('approval_status', '!=', 'odrzucony')
+            ->where(static fn ($q) => $q->where('source', ProductSubstitute::SOURCE_MANUAL)->orWhere('approval_status', 'zatwierdzony'))
             ->orderByDesc('match_percent')
             ->limit(self::SUBSTITUTE_LIMIT)
             ->get();
