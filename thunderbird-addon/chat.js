@@ -62,6 +62,9 @@ const CHAT_PREVIEW_CHARS = 300
 /** Ikona przycisku „Czat” w drugiej fazie migania (od 1.34.0): ten sam dymek na czerwono. */
 const CHAT_ALERT_ICON = 'icons/chat-alert.svg'
 
+/** Druga ikona migania (pomarańczowa) — naprzemiennie z czerwoną co CHAT_BLINK_MS. */
+const CHAT_ALERT_ORANGE_ICON = 'icons/chat-alert-orange.svg'
+
 /** Drugi kolor migającej plakietki z liczbą (pierwszy: CHAT_BADGE_COLOR). */
 const CHAT_BLINK_BADGE_COLOR = '#f59e0b'
 
@@ -69,7 +72,7 @@ const CHAT_BLINK_BADGE_COLOR = '#f59e0b'
 const CHAT_ACTION_LABEL = 'Czat'
 
 /** Co tyle milisekund przycisk „Czat” zmienia ikonę, dopóki są nieprzeczytane. */
-const CHAT_BLINK_MS = 700
+const CHAT_BLINK_MS = 2000
 
 /** Wymiary małego okna czatu (od 1.34.0) — jak okno komunikatora obok poczty. */
 const CHAT_WINDOW_WIDTH = 400
@@ -131,6 +134,8 @@ const chatState = {
   /** Zegar migania przycisku „Czat” i jego bieżąca faza (true = czerwona ikona). */
   blinkTimer: null,
   blinkOn: false,
+  // ikona ustawiona bez migania (żeby nie wołać setIcon przy każdej zmianie fokusu)
+  steadyIcon: null,
   /** Ustawienie „Migająca ikona czatu” (domyślnie włączone). */
   blinkSetting: true,
   /** Karty ze stroną aplikacji, które właśnie przenosimy do przeglądarki — jedno przeniesienie na kartę. */
@@ -276,6 +281,8 @@ function chatPaintActionBadge() {
   Promise.resolve()
     .then(() => browser.browserAction.setBadgeText({ text }))
     .then(() => browser.browserAction.setTitle({ title: text === '' ? 'Czat' : 'Czat — nieprzeczytane: ' + text }))
+    // napis stały, dopóki są nieprzeczytane — kolor zmienia miganie (chatBlinkStep)
+    .then(() => chatSetActionLabel(text === '' ? CHAT_ACTION_LABEL : chatUnreadLabel(chatState.unread)))
     .catch((e) => console.warn('Supon: nie udało się odświeżyć licznika na przycisku czatu:', e.message))
 }
 
@@ -315,11 +322,25 @@ function chatUnreadLabel(count) {
   return 'Nowe wiadomości (' + (n > 99 ? '99+' : n) + ')'
 }
 
+/**
+ * Miganie (od 1.34.3, prośba właściciela): napis „Nowa wiadomość” stoi na stałe, a co 2 s zmienia się tylko kolor —
+ * ikona i plakietka czerwone ⇄ pomarańczowe. Bez nieprzeczytanych: zwykła niebieska ikona i napis „Czat”.
+ */
 function chatBlinkStep() {
   chatState.blinkOn = !chatState.blinkOn
-  chatSetActionIcon(chatState.blinkOn ? CHAT_ALERT_ICON : CHAT_ICON)
+  chatSetActionIcon(chatState.blinkOn ? CHAT_ALERT_ORANGE_ICON : CHAT_ALERT_ICON)
   chatSetActionBadgeColor(chatState.blinkOn ? CHAT_BLINK_BADGE_COLOR : CHAT_BADGE_COLOR)
-  chatSetActionLabel(chatState.blinkOn ? chatUnreadLabel(chatState.unread) : CHAT_ACTION_LABEL)
+}
+
+/** Stan przycisku bez migania: z nieprzeczytanymi czerwona ikona, bez nich — zwykła niebieska. */
+function chatSteadyAction() {
+  const unread = chatState.enabled === true && chatState.unread > 0
+  const icon = unread ? CHAT_ALERT_ICON : CHAT_ICON
+  if (chatState.steadyIcon !== icon) {
+    chatState.steadyIcon = icon
+    chatSetActionIcon(icon)
+  }
+  chatSetActionBadgeColor(CHAT_BADGE_COLOR)
 }
 
 /**
@@ -330,8 +351,10 @@ function chatSyncBlink() {
   const blink = chatState.blinkSetting && chatState.enabled === true && chatState.unread > 0 && !chatState.windowFocused
   if (blink) {
     if (chatState.blinkTimer === null) {
-      chatState.blinkTimer = setInterval(chatBlinkStep, CHAT_BLINK_MS)
+      chatState.steadyIcon = null
+      chatState.blinkOn = true
       chatBlinkStep()
+      chatState.blinkTimer = setInterval(chatBlinkStep, CHAT_BLINK_MS)
     }
 
     return
@@ -340,12 +363,8 @@ function chatSyncBlink() {
     clearInterval(chatState.blinkTimer)
     chatState.blinkTimer = null
   }
-  if (chatState.blinkOn) {
-    chatState.blinkOn = false
-    chatSetActionIcon(CHAT_ICON)
-    chatSetActionBadgeColor(CHAT_BADGE_COLOR)
-    chatSetActionLabel(CHAT_ACTION_LABEL)
-  }
+  chatState.blinkOn = false
+  chatSteadyAction()
 }
 
 /**

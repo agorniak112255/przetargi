@@ -76,10 +76,13 @@ Ikona **Czat Supon** na lewym pasku zostaje — to druga droga do tego samego cz
 
 **Jak dodatek daje znać o nowej wiadomości:**
 
-1. **Migający przycisk.** Dopóki masz nieprzeczytane, przycisk „Czat” miga na
-   czerwono i pokazuje ich liczbę. Przestaje, gdy przeczytasz wiadomości albo
-   klikniesz w okno czatu. Miganie można wyłączyć w ustawieniach dodatku
-   (sekcja „Czat” → „Migająca ikona czatu”); liczba zostaje.
+1. **Migający przycisk.** Dopóki masz nieprzeczytane, przycisk „Czat” ma napis
+   „Nowa wiadomość” (przy kilku: „Nowe wiadomości (3)”) i czerwoną ikonę z liczbą,
+   a co 2 sekundy ikona i liczba zmieniają kolor na pomarańczowy i z powrotem (od 1.34.3;
+   napis nie znika). Miganie przestaje, gdy klikniesz w okno czatu; po przeczytaniu
+   wszystkiego wraca niebieska ikona i napis „Czat”. Kliknięcie przycisku przy jednej
+   nieprzeczytanej rozmowie otwiera od razu ją. Miganie można wyłączyć w ustawieniach
+   dodatku (sekcja „Czat” → „Migająca ikona czatu”); napis i liczba zostają.
 2. **Dymek w rogu ekranu** — jak dotąd; kliknięcie otwiera okno czatu od razu na tej
    rozmowie.
 3. **Mruganie Thunderbirda na pasku zadań Windows.** Gdy Thunderbird jest
