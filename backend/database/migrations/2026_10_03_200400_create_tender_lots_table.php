@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Schema;
  * Wynik przetargu per część zamówienia (przetarg bez części dostaje część nr 1 przy pierwszym zapisie).
  * `manual_fields` = pola wpisane przez człowieka — Biuletyn ich nie nadpisuje; powód przegranej i notatkę
  * wpisuje tylko człowiek. Kwoty zwycięzcy i min/max jak w ogłoszeniu, bez przeliczania walut.
+ * `created_by_bzp` = część założona automatycznie przy pierwszym powiązaniu przetargu z ogłoszeniem.
  */
 return new class extends Migration
 {
@@ -37,6 +38,9 @@ return new class extends Migration
             $table->json('manual_fields')->nullable();
             $table->foreignId('bzp_notice_id')->nullable()->constrained('procurement_notices')->nullOnDelete();
             $table->timestamp('bzp_applied_at')->nullable();
+            // część założona przez łączenie z Biuletynem (nie przez człowieka) — raport nie liczy jej jako naszej
+            // unieważnionej, gdy nie ma w niej naszej ceny ani ręcznego wyniku, a przetarg ma kilka części
+            $table->boolean('created_by_bzp')->default(false);
             $table->foreignId('decided_by')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamp('decided_at')->nullable();
             $table->timestamps();

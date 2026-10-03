@@ -10,6 +10,7 @@ use App\Models\Tender;
 use App\Models\TenderLot;
 use App\Models\TenderLotOffer;
 use App\Models\User;
+use App\Services\Bzp\BzpTenderLinker;
 use App\Services\TenderActivityLogger;
 use App\Support\CompanyName;
 use Illuminate\Support\Collection;
@@ -27,6 +28,12 @@ use Illuminate\Validation\ValidationException;
  *   osobno). Pominięte pole = bez zmian, null = wyczyść.
  * - Pole, którego wartość człowiek zmienił, trafia do manual_fields (nazwy jak TenderLot::BZP_FIELDS plus pola
  *   tylko ręczne) — Biuletyn go potem nie nadpisuje. Wysłanie tej samej wartości nie jest zmianą.
+ * - lot_no_confirmed: true = człowiek potwierdza, że numer części to numer części z ogłoszenia (wpis
+ *   TenderLot::LOT_NO_CONFIRMED w manual_fields); false albo zmiana numeru bez potwierdzenia — wpis znika.
+ * - Zmiana numeru części powiązanej z ogłoszeniem czyści jej dane z Biuletynu (dotyczyły poprzedniej części
+ *   ogłoszenia); wpisy człowieka zostają. Następne łączenie wpisze dane części o nowym numerze.
+ * - Odczyt pokazuje prośbę o numer części (bzp_conflict) przy samotnej ręcznej części nr 1 i ogłoszeniu
+ *   wieloczęściowym także bez „Sprawdź w Biuletynie”.
  * - Oferty innych firm z żądania zastępują listę części w całości (ta sama firma = ten sam wiersz).
  * - Powód przegranej tylko przy wyniku „przegrana”; zmiana wyniku na inny czyści zapisany powód.
  * - Brutto = netto × (1 + VAT/100), liczone jawnie w groszach (zaokrąglenie do grosza), nigdy zapisywane.
@@ -54,6 +61,9 @@ final class TenderResultService
         'loss_reason',
         'note',
     ];
+
+    /** Kolejność wpisów manual_fields: pola edytowalne, potem potwierdzenie numeru części. */
+    private const MANUAL_FIELDS_ORDER = [...self::EDITABLE_FIELDS, TenderLot::LOT_NO_CONFIRMED];
 
     public const MAX_LOTS = 200;
 
@@ -97,6 +107,8 @@ final class TenderResultService
             ])
             ->get();
 
+        // prośba o numer części widoczna także bez „Sprawdź w Biuletynie” (ten sam tekst; jeden komunikat na część)
+        $bzpConflicts += $this->unnumberedLotConflict($tender, $lots);
         $rows = $lots->isEmpty()
             ? [$this->virtualLotRow(1)]
             : $lots->map(fn (TenderLot $lot): array => $this->lotRow($lot, $bzpConflicts[(int) $lot->lot_no] ?? null))->all();
@@ -114,6 +126,41 @@ final class TenderResultService
             ],
             'lots' => array_values($rows),
         ];
+    }
+
+    /**
+     * Samotna część nr 1 założona ręcznie przy przetargu powiązanym z ogłoszeniem wieloczęściowym — Biuletyn nie
+     * wpisuje do niej danych, dopóki człowiek nie ustawi numeru części albo go nie potwierdzi. Reguła jak przy
+     * łączeniu (BzpTenderLinker::lotMatchesNotice); ogłoszenia wczytywane tylko w tym jednym przypadku, liczba
+     * części z ogłoszenia o zamówieniu i ostatniego ogłoszenia o wyniku powiązanych z przetargiem.
+     *
+     * @param  Collection<int, TenderLot>  $lots
+     * @return array<int, string> po numerze części
+     */
+    private function unnumberedLotConflict(Tender $tender, Collection $lots): array
+    {
+        if ($lots->count() !== 1) {
+            return [];
+        }
+        /** @var TenderLot $lot */
+        $lot = $lots->first();
+        $manual = is_array($lot->manual_fields) ? $lot->manual_fields : [];
+        $noticeIds = array_values(array_unique(array_map('intval', array_filter([$tender->contract_notice_id, $tender->result_notice_id]))));
+        if ((int) $lot->lot_no !== 1 || $lot->bzp_notice_id !== null || in_array(TenderLot::LOT_NO_CONFIRMED, $manual, true) || $noticeIds === []) {
+            return [];
+        }
+
+        $numbers = [];
+        foreach (ProcurementNotice::query()->whereKey($noticeIds)->get(['id', 'parsed']) as $notice) {
+            foreach (BzpTenderLinker::parsedLots($notice) as $part) {
+                $numbers[(int) $part['lot_no']] = true;
+            }
+        }
+        if ($numbers === [] || BzpTenderLinker::lotMatchesNotice($lot, $noticeIds, count($numbers), 1)) {
+            return [];
+        }
+
+        return [1 => BzpTenderLinker::unnumberedConflict(count($numbers))];
     }
 
     /**
@@ -200,15 +247,28 @@ final class TenderResultService
                     ]);
                 }
                 $lot->lot_no = (int) $in['lot_no'];
+                $renumbered = isset($previousNo[$i]);
 
-                [$fields, $offersChanged] = $this->applyLot($lot, $in, $user, "lots.$i");
-                if ($created || $fields !== [] || $offersChanged || isset($previousNo[$i])) {
+                // inny numer części powiązanej z ogłoszeniem: dane Biuletynu dotyczyły poprzedniej części ogłoszenia
+                $bzpCleared = [];
+                $bzpOffersCleared = false;
+                if ($renumbered && $lot->bzp_notice_id !== null) {
+                    [$bzpCleared, $bzpOffersCleared] = $this->clearBzpData($lot, is_array($lot->manual_fields) ? $lot->manual_fields : []);
+                }
+
+                [$fields, $offersChanged, $confirmation] = $this->applyLot($lot, $in, $user, "lots.$i", $renumbered);
+                $fields = array_values(array_unique([...$fields, ...$bzpCleared]));
+                $offersChanged = $offersChanged || $bzpOffersCleared;
+                if ($created || $fields !== [] || $offersChanged || $renumbered || $confirmation !== null) {
                     $entry = ['lot_no' => (int) $lot->lot_no, 'fields' => $fields, 'offers_changed' => $offersChanged];
                     if ($created) {
                         $entry['created'] = true;
                     }
-                    if (isset($previousNo[$i])) {
+                    if ($renumbered) {
                         $entry['previous_lot_no'] = $previousNo[$i];
+                    }
+                    if ($confirmation !== null) {
+                        $entry['lot_no_confirmed'] = $confirmation;
                     }
                     $log[] = $entry;
                 }
@@ -263,8 +323,10 @@ final class TenderResultService
      * Zmiana numeru ogłoszenia przetargu: dane wpisane w części przez Biuletyn dotyczyły poprzedniego ogłoszenia.
      * W każdej części czyści pola z TenderLot::BZP_FIELDS bez ręcznego wpisu, oferty innych firm z Biuletynu
      * i powiązanie z ogłoszeniem; część założoną przez Biuletyn bez żadnego wpisu ręcznego (pól i ofert) usuwa.
-     * Wpisy człowieka i części założone ręcznie zostają. Przelicza wynik przetargu i zapisuje zmianę w historii.
-     * Wywoływane po zapisie nowego numeru (TenderController::update).
+     * Wpisy człowieka i części założone ręcznie zostają; potwierdzenie numeru części (TenderLot::LOT_NO_CONFIRMED)
+     * znika — dotyczyło poprzedniego ogłoszenia. Przelicza wynik przetargu i zapisuje zmianę w historii.
+     * Wywoływane po zapisie numeru innego postępowania (TenderController::update) — nie przy samej zmianie wersji
+     * numeru („…/01”).
      */
     public function detachNotice(Tender $tender, ?User $user, ?string $numberBefore): void
     {
@@ -277,53 +339,27 @@ final class TenderResultService
                 /** @var TenderLot $lot */
                 $lotNo = (int) $lot->lot_no;
                 $manual = is_array($lot->manual_fields) ? $lot->manual_fields : [];
-                $bzpOffers = $lot->offers->filter(static fn (TenderLotOffer $offer): bool => $offer->source !== TenderLotOffer::SOURCE_MANUAL);
-                $manualOffers = $lot->offers->count() - $bzpOffers->count();
+                // potwierdzenie numeru części dotyczyło poprzedniego ogłoszenia — znika (nie jest też wpisem, który
+                // chroni część założoną przez Biuletyn przed usunięciem)
+                $withoutConfirmation = array_values(array_filter($manual, static fn (mixed $field): bool => $field !== TenderLot::LOT_NO_CONFIRMED));
+                $manualOffers = $lot->offers->filter(static fn (TenderLotOffer $offer): bool => $offer->source === TenderLotOffer::SOURCE_MANUAL)->count();
 
-                if ($lot->bzp_notice_id !== null && $manual === [] && $manualOffers === 0) {
+                if ($lot->bzp_notice_id !== null && $withoutConfirmation === [] && $manualOffers === 0) {
                     $lot->delete();
                     $log[] = ['lot_no' => $lotNo, 'deleted' => true, 'fields' => [], 'offers_changed' => false];
 
                     continue;
                 }
 
-                $cleared = [];
-                foreach (TenderLot::BZP_FIELDS as $field) {
-                    if (in_array($field, $manual, true)) {
-                        continue;
-                    }
-                    if ($field === 'winner') {
-                        if ($lot->winner_competitor_id !== null || $lot->winner_national_id_raw !== null) {
-                            $lot->winner_competitor_id = null;
-                            $lot->winner_national_id_raw = null;
-                            $cleared[] = $field;
-                        }
-                    } elseif ($field === 'currency') {
-                        // kolumna bez pustej wartości — waluta wraca do domyślnej
-                        if ((string) $lot->currency !== 'PLN') {
-                            $lot->currency = 'PLN';
-                            $cleared[] = $field;
-                        }
-                    } elseif ($lot->getAttribute($field) !== null) {
-                        $lot->setAttribute($field, null);
-                        $cleared[] = $field;
-                        if ($field === 'outcome') {
-                            // wynik bez ręcznego wpisu ustawił Biuletyn — razem z nim chwila rozstrzygnięcia
-                            $lot->decided_by = null;
-                            $lot->decided_at = null;
-                        }
-                    }
+                [$cleared, $offersCleared] = $this->clearBzpData($lot, $withoutConfirmation);
+                if (count($withoutConfirmation) !== count($manual)) {
+                    $lot->manual_fields = $withoutConfirmation !== [] ? $withoutConfirmation : null;
                 }
-                foreach ($bzpOffers as $offer) {
-                    $offer->delete();
-                }
-                $lot->bzp_notice_id = null;
-                $lot->bzp_applied_at = null;
                 if ($lot->isDirty()) {
                     $lot->save();
                 }
-                if ($cleared !== [] || $bzpOffers->isNotEmpty()) {
-                    $log[] = ['lot_no' => $lotNo, 'fields' => $cleared, 'offers_changed' => $bzpOffers->isNotEmpty()];
+                if ($cleared !== [] || $offersCleared) {
+                    $log[] = ['lot_no' => $lotNo, 'fields' => $cleared, 'offers_changed' => $offersCleared];
                 }
             }
 
@@ -343,6 +379,55 @@ final class TenderResultService
     }
 
     /**
+     * Czyści w części dane wpisane przez Biuletyn: pola z TenderLot::BZP_FIELDS bez ręcznego wpisu, oferty innych
+     * firm z Biuletynu i powiązanie z ogłoszeniem. Nie zapisuje części (zapisuje wołający); oferty usuwa od razu.
+     *
+     * @param  list<string>  $manual  pola wpisane przez człowieka (zostają)
+     * @return array{0: list<string>, 1: bool} wyczyszczone pola i czy usunięto oferty z Biuletynu
+     */
+    private function clearBzpData(TenderLot $lot, array $manual): array
+    {
+        $cleared = [];
+        foreach (TenderLot::BZP_FIELDS as $field) {
+            if (in_array($field, $manual, true)) {
+                continue;
+            }
+            if ($field === 'winner') {
+                if ($lot->winner_competitor_id !== null || $lot->winner_national_id_raw !== null) {
+                    $lot->winner_competitor_id = null;
+                    $lot->winner_national_id_raw = null;
+                    $cleared[] = $field;
+                }
+            } elseif ($field === 'currency') {
+                // kolumna bez pustej wartości — waluta wraca do domyślnej
+                if ((string) $lot->currency !== 'PLN') {
+                    $lot->currency = 'PLN';
+                    $cleared[] = $field;
+                }
+            } elseif ($lot->getAttribute($field) !== null) {
+                $lot->setAttribute($field, null);
+                $cleared[] = $field;
+                if ($field === 'outcome') {
+                    // wynik bez ręcznego wpisu ustawił Biuletyn — razem z nim chwila rozstrzygnięcia
+                    $lot->decided_by = null;
+                    $lot->decided_at = null;
+                }
+            }
+        }
+        $bzpOffers = $lot->offers->filter(static fn (TenderLotOffer $offer): bool => $offer->source !== TenderLotOffer::SOURCE_MANUAL);
+        foreach ($bzpOffers as $offer) {
+            $offer->delete();
+        }
+        if ($bzpOffers->isNotEmpty()) {
+            $lot->unsetRelation('offers');
+        }
+        $lot->bzp_notice_id = null;
+        $lot->bzp_applied_at = null;
+
+        return [$cleared, $bzpOffers->isNotEmpty()];
+    }
+
+    /**
      * Blokuje wiersz przetargu do końca bieżącej transakcji i wczytuje jego aktualne wartości — zapis wyniku przez
      * człowieka i łączenie z Biuletynem (BzpTenderLinker) nie nadpisują się nawzajem. SQLite blokady ignoruje.
      */
@@ -353,12 +438,17 @@ final class TenderResultService
     }
 
     /**
-     * Wpisuje do części pola z żądania; zwraca nazwy zmienionych pól i to, czy zmieniły się oferty innych firm.
+     * Wpisuje do części pola z żądania; zwraca nazwy zmienionych pól, to, czy zmieniły się oferty innych firm,
+     * i zmianę potwierdzenia numeru części (true/false; null = bez zmiany).
+     *
+     * Potwierdzenie numeru części (lot_no_confirmed): true → TenderLot::LOT_NO_CONFIRMED w manual_fields, false →
+     * usunięte; zmiana numeru części bez lot_no_confirmed: true też je usuwa (potwierdzony był poprzedni numer).
      *
      * @param  array<string, mixed>  $in
-     * @return array{0: list<string>, 1: bool}
+     * @param  bool  $renumbered  numer części zmieniony tym żądaniem
+     * @return array{0: list<string>, 1: bool, 2: ?bool}
      */
-    private function applyLot(TenderLot $lot, array $in, User $user, string $path): array
+    private function applyLot(TenderLot $lot, array $in, User $user, string $path, bool $renumbered = false): array
     {
         $changed = [];
 
@@ -431,12 +521,23 @@ final class TenderResultService
         }
 
         $changed = array_values(array_unique($changed));
-        if ($changed !== []) {
-            $manual = is_array($lot->manual_fields) ? $lot->manual_fields : [];
+        $manual = is_array($lot->manual_fields) ? $lot->manual_fields : [];
+        $wasConfirmed = in_array(TenderLot::LOT_NO_CONFIRMED, $manual, true);
+        // reguła „boolean” przepuszcza też 1/0 i „1”/„0”
+        $confirmInput = array_key_exists('lot_no_confirmed', $in) ? filter_var($in['lot_no_confirmed'], FILTER_VALIDATE_BOOLEAN) : null;
+        $confirmed = match (true) {
+            $confirmInput === true => true,
+            $confirmInput === false, $renumbered => false,
+            default => $wasConfirmed,
+        };
+        if ($changed !== [] || $confirmed !== $wasConfirmed) {
             $merged = array_values(array_unique([...$manual, ...$changed]));
-            // kolejność jak w EDITABLE_FIELDS — stabilna odpowiedź i porównania w testach
+            $merged = $confirmed
+                ? [...$merged, TenderLot::LOT_NO_CONFIRMED]
+                : array_values(array_filter($merged, static fn (mixed $field): bool => $field !== TenderLot::LOT_NO_CONFIRMED));
+            // kolejność jak w EDITABLE_FIELDS (potwierdzenie numeru na końcu) — stabilna odpowiedź i porównania w testach
             $lot->manual_fields = array_values(array_filter(
-                self::EDITABLE_FIELDS,
+                self::MANUAL_FIELDS_ORDER,
                 static fn (string $field): bool => in_array($field, $merged, true),
             )) ?: null;
         }
@@ -452,7 +553,7 @@ final class TenderResultService
             ? $this->syncOffers($lot, is_array($in['offers']) ? $in['offers'] : [], $user, $path)
             : false;
 
-        return [$changed, $offersChanged];
+        return [$changed, $offersChanged, $confirmed !== $wasConfirmed ? $confirmed : null];
     }
 
     /**
@@ -872,6 +973,7 @@ final class TenderResultService
             'lots.*' => ['array'],
             'lots.*.id' => ['nullable', 'integer'],
             'lots.*.lot_no' => ['required', 'integer', 'min:1', 'max:1000'],
+            'lots.*.lot_no_confirmed' => ['sometimes', 'boolean'],
             'lots.*.name' => ['sometimes', 'nullable', 'string', 'max:500'],
             'lots.*.cpv_main' => ['sometimes', 'nullable', 'string', 'regex:/^\d{8}(-\d)?$/'],
             'lots.*.estimated_value' => ['sometimes', ...$amount],
@@ -903,6 +1005,7 @@ final class TenderResultService
             'string' => 'Pole „:attribute” ma zły format.',
             'integer' => 'Pole „:attribute” musi być liczbą całkowitą.',
             'numeric' => 'Pole „:attribute” musi być liczbą.',
+            'boolean' => 'Pole „:attribute” musi mieć wartość tak albo nie.',
             'in' => 'Pole „:attribute” ma niedozwoloną wartość.',
             'exists' => 'Nie znaleziono firmy wybranej w polu „:attribute”.',
             'min.numeric' => 'Pole „:attribute” nie może być mniejsze niż :min.',
@@ -921,6 +1024,7 @@ final class TenderResultService
             'lots' => 'części zamówienia',
             'lots.*.id' => 'część zamówienia',
             'lots.*.lot_no' => 'numer części',
+            'lots.*.lot_no_confirmed' => 'potwierdzenie numeru części',
             'lots.*.name' => 'nazwa części',
             'lots.*.cpv_main' => 'kod CPV',
             'lots.*.estimated_value' => 'wartość części',

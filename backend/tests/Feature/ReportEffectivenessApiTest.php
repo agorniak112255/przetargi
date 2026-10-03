@@ -129,16 +129,64 @@ final class ReportEffectivenessApiTest extends TestCase
     {
         // ogłoszenie z wieloma częściami: Biuletyn założył i unieważnił części, w których nie startowaliśmy
         $tender = $this->tender($this->anna, '2026-09-15', 'exported', '2026/BZP 00449679/01');
-        $this->lot($tender, 1, 'cancelled', ['name' => 'Bez naszej oferty']);
-        $this->lot($tender, 2, 'cancelled', ['name' => 'Nasza cena', 'our_net' => '500.00']);
-        $this->lot($tender, 3, 'cancelled', ['name' => 'Wynik wpisany ręcznie', 'manual_fields' => ['outcome']]);
-        $this->lot($tender, 4, 'cancelled', ['name' => 'Tylko notatka', 'note' => 'Nie startowaliśmy', 'manual_fields' => ['note']]);
+        $this->lot($tender, 1, 'cancelled', ['name' => 'Bez naszej oferty', 'created_by_bzp' => true]);
+        $this->lot($tender, 2, 'cancelled', ['name' => 'Nasza cena', 'our_net' => '500.00', 'created_by_bzp' => true]);
+        $this->lot($tender, 3, 'cancelled', ['name' => 'Wynik wpisany ręcznie', 'manual_fields' => ['outcome'], 'created_by_bzp' => true]);
+        $this->lot($tender, 4, 'cancelled', ['name' => 'Tylko notatka', 'note' => 'Nie startowaliśmy', 'manual_fields' => ['note'], 'created_by_bzp' => true]);
         Sanctum::actingAs($this->anna);
 
         $json = $this->getJson('/api/reports/effectiveness')->assertOk()->json();
 
         $this->assertSame(2, $json['summary']['cancelled_lots']);
         $this->assertSame([2, 3], array_column($json['cancelled'], 'lot_no'));
+    }
+
+    public function test_only_lot_cancelled_by_bulletin_is_counted(): void
+    {
+        // przetarg jednoczęściowy: część założył Biuletyn i ją unieważnił, naszej ceny nikt nie wpisał — to nasza część
+        $tender = $this->tender($this->anna, '2026-09-15', 'exported', '2026/BZP 00439099/01');
+        $this->lot($tender, 1, 'cancelled', ['name' => 'Rękawice', 'created_by_bzp' => true]);
+        Sanctum::actingAs($this->anna);
+
+        $json = $this->getJson('/api/reports/effectiveness')->assertOk()->json();
+
+        $this->assertSame(1, $json['summary']['cancelled_lots']);
+        $this->assertSame([[$tender->id, 1]], array_map(static fn (array $r): array => [$r['tender_id'], $r['lot_no']], $json['cancelled']));
+    }
+
+    public function test_whole_tender_cancelled_with_bulletin_lots_is_counted_once(): void
+    {
+        // pięć części z Biuletynu, wszystkie unieważnione, bez naszej ceny — przetarg unieważniony liczy się raz
+        $tender = $this->tender($this->anna, '2026-09-15', 'exported', '2026/BZP 00449679/01');
+        foreach ([3, 1, 5, 2, 4] as $no) {
+            $this->lot($tender, $no, 'cancelled', ['name' => 'Część '.$no, 'created_by_bzp' => true]);
+        }
+        $this->assertSame('cancelled', $tender->refresh()->result_status);
+        Sanctum::actingAs($this->anna);
+
+        $json = $this->getJson('/api/reports/effectiveness')->assertOk()->json();
+
+        $this->assertSame(1, $json['summary']['cancelled_lots']);
+        $this->assertCount(1, $json['cancelled']);
+        $this->assertSame([$tender->id, 1, 'Część 1'], [$json['cancelled'][0]['tender_id'], $json['cancelled'][0]['lot_no'], $json['cancelled'][0]['lot_name']]);
+    }
+
+    public function test_manual_lot_cancelled_by_bulletin_is_counted_and_bulletin_lot_without_our_price_is_skipped(): void
+    {
+        // część 1 założona przez Biuletyn (nie startowaliśmy), część 2 założona ręcznie — obie unieważnione przez Biuletyn
+        $tender = $this->tender($this->anna, '2026-09-15', 'exported', '2026/BZP 00361360');
+        $this->lot($tender, 1, 'cancelled', ['name' => 'Obuwie', 'created_by_bzp' => true]);
+        $this->lot($tender, 2, 'cancelled', ['name' => 'Rękawice']);
+        // inny przetarg: część Biuletynu bez naszej ceny obok przegranej — pominięta
+        $other = $this->tender($this->anna, '2026-09-16', 'exported', '2026/BZP 00376786');
+        $this->lot($other, 1, 'cancelled', ['name' => 'Kaski', 'created_by_bzp' => true]);
+        $this->lot($other, 2, 'lost', ['name' => 'Kurtki', 'created_by_bzp' => true]);
+        Sanctum::actingAs($this->anna);
+
+        $json = $this->getJson('/api/reports/effectiveness')->assertOk()->json();
+
+        $this->assertSame(1, $json['summary']['cancelled_lots']);
+        $this->assertSame([[$tender->id, 2]], array_map(static fn (array $r): array => [$r['tender_id'], $r['lot_no']], $json['cancelled']));
     }
 
     public function test_year_period_and_lots_without_cpv(): void

@@ -51,7 +51,7 @@ export const LOSS_REASONS: LossReason[] = ['price', 'requirement', 'delivery', '
 /** Pola części słowami — znaczniki „z Biuletynu”, „wpisane ręcznie” i historia zmian. */
 export const LOT_FIELD_LABEL: Record<string, string> = {
   name: 'nazwa części',
-  cpv_main: 'kod CPV',
+  cpv_main: 'kod rodzaju zamówienia (CPV)',
   estimated_value: 'wartość części',
   our_net: 'nasza cena netto',
   our_vat_rate: 'stawka VAT',
@@ -64,6 +64,7 @@ export const LOT_FIELD_LABEL: Record<string, string> = {
   highest_price: 'najwyższa cena',
   loss_reason: 'powód przegranej',
   note: 'notatka',
+  lot_no: 'numer części potwierdzony',
 }
 
 export function resultStatusLabel(status: TenderResultStatus | null | undefined): string {

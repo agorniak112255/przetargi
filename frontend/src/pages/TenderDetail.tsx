@@ -10,6 +10,7 @@ import { ProductSearchSelect } from '../components/ProductSearchSelect'
 import { clampAiConcurrency, mapPool } from '../lib/aiConcurrency'
 import {
   api,
+  ApiError,
   can,
   downloadFile,
   type Product,
@@ -735,6 +736,7 @@ function formatResultMeta(meta: Record<string, unknown>): string {
       fields?: string[]
       offers_changed?: boolean
       previous_lot_no?: number
+      lot_no_confirmed?: boolean
     }
     const label = `część ${lot.lot_no ?? '?'}`
     if (lot.deleted) {
@@ -744,6 +746,8 @@ function formatResultMeta(meta: Record<string, unknown>): string {
     const changes = (Array.isArray(lot.fields) ? lot.fields : []).map((f) => LOT_FIELD_LABEL[f] ?? f)
     if (lot.offers_changed) changes.push('ceny innych firm')
     if (lot.previous_lot_no != null) changes.push(`numer części (było ${lot.previous_lot_no})`)
+    if (lot.lot_no_confirmed === true) changes.push('potwierdzono numer części zgodny z ogłoszeniem')
+    if (lot.lot_no_confirmed === false) changes.push('cofnięto potwierdzenie numeru części')
     parts.push(`${lot.created ? 'nowa ' : ''}${label}${changes.length > 0 ? `: ${changes.join(', ')}` : ''}`)
   }
   const before = (meta.result_status_before ?? null) as TenderResultStatus | null
@@ -879,11 +883,43 @@ function TenderDetailView() {
   useEffect(() => {
     if (!resultDirty) return
     const warn = (e: BeforeUnloadEvent) => {
+      // osoba już się zgodziła na utratę zmian (link niżej) — bez drugiego pytania
+      if (!resultDirtyRef.current) return
       e.preventDefault()
       e.returnValue = ''
     }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
+  }, [resultDirty])
+  /*
+   * Kliknięty link do innej strony aplikacji (menu, „← Przetargi”, dashboard, powiadomienie z innym przetargiem)
+   * z niezapisanym wynikiem — pytanie przed przejściem. Nasłuch na document w fazie przechwytywania: działa przed
+   * obsługą <Link> z react-router (BrowserRouter nie ma useBlocker). Link do tej samej strony przetargu
+   * (np. „?tab=komentarze”) pomijany — pyta osłona sekcji (efekt adresu niżej), żeby nie pytać dwa razy.
+   * Ograniczenia: navigate() wywołane z kodu i przycisk „Wstecz” przeglądarki na inną stronę nie są tu
+   * zatrzymywane (zamknięcie i odświeżenie karty łapie beforeunload wyżej).
+   */
+  useEffect(() => {
+    if (!resultDirty) return
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+      const anchor = e.target instanceof Element ? e.target.closest('a[href]') : null
+      if (!(anchor instanceof HTMLAnchorElement)) return
+      if ((anchor.target && anchor.target !== '_self') || anchor.hasAttribute('download')) return
+      const url = new URL(anchor.href, window.location.href)
+      if (url.origin !== window.location.origin || url.pathname === window.location.pathname) return
+      if (!resultDirtyRef.current) return
+      if (window.confirm('Wynik przetargu ma niezapisane zmiany. Opuścić stronę przetargu bez zapisu? Zmiany przepadną.')) {
+        // przejście do innego przetargu montuje widok od nowa, ale pytanie nie może wrócić przy tym samym przejściu
+        resultDirtyRef.current = false
+        setResultDirty(false)
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    document.addEventListener('click', onClick, true)
+    return () => document.removeEventListener('click', onClick, true)
   }, [resultDirty])
   // adres „?tab=…” (np. z powiadomienia) pokazuje pełny widok zamiast kreatora — bez wyłączania kreatora na stałe
   const [forcePulpit, setForcePulpit] = useState(() => urlTab !== null)
@@ -929,6 +965,8 @@ function TenderDetailView() {
   const [deadlineEdit, setDeadlineEdit] = useState('')
   const [deadlineTimeEdit, setDeadlineTimeEdit] = useState('')
   const [noticeEdit, setNoticeEdit] = useState('')
+  /** odmowa zmiany numeru ogłoszenia (komunikat serwera) — pod polem numeru */
+  const [noticeErr, setNoticeErr] = useState('')
   const [marginEdit, setMarginEdit] = useState('18')
   const [cheaperPreview, setCheaperPreview] = useState<{
     candidates: Array<{
@@ -975,6 +1013,30 @@ function TenderDetailView() {
     }
     setTabState(urlTab)
     setForcePulpit(true)
+  }, [urlTab, mayLeaveResult, setSearchParams])
+
+  // „Wstecz” przeglądarki (albo link) z „?tab=wynik” na adres przetargu bez „?tab=” — widok wraca do Podsumowania,
+  // żeby zgadzał się z adresem. Tylko przejście adresu z sekcji na brak sekcji, gdy widać sekcję z adresu: przejście
+  // do sekcji bez adresu (np. „Pozycje”) samo zdejmuje „?tab=” i nie może wracać do Podsumowania.
+  const prevUrlTabRef = useRef(urlTab)
+  useEffect(() => {
+    const prev = prevUrlTabRef.current
+    prevUrlTabRef.current = urlTab
+    if (prev === null || urlTab !== null) return
+    if (!(URL_TABS as string[]).includes(tabNowRef.current)) return
+    if (mayLeaveResult('podsumowanie')) {
+      setTabState('podsumowanie')
+      return
+    }
+    // zostajemy przy wyniku — adres wraca do „?tab=wynik”
+    setSearchParams(
+      (p) => {
+        const next = new URLSearchParams(p)
+        next.set('tab', 'wynik')
+        return next
+      },
+      { replace: true },
+    )
   }, [urlTab, mayLeaveResult, setSearchParams])
 
   // Sekcje z URL_TABS widać w adresie (da się go skopiować); po przejściu do innej sekcji „?tab=” znika.
@@ -1029,16 +1091,35 @@ function TenderDetailView() {
     return d
   }, [id])
 
+  /** zapisana godzina składania („10:00” albo '') — do odświeżenia pola godziny tylko, gdy nikt go nie zmieniał */
+  const savedDeadlineTimeRef = useRef('')
+  const savedDeadlineTimeNow = deadlineTimeLabel(data?.tender.deadline_time) ?? ''
+  useEffect(() => {
+    savedDeadlineTimeRef.current = savedDeadlineTimeNow
+  }, [savedDeadlineTimeNow])
+
   /**
-   * Po zapisie wyniku: tylko znacznik wyniku w nagłówku. Pełne load() nadpisałoby niezapisane pola Podsumowania
-   * (termin, godzina, numer ogłoszenia, narzut) wartościami z serwera.
+   * Po zapisie wyniku i sprawdzeniu w Biuletynie: znacznik wyniku w nagłówku i godzina składania (Biuletyn uzupełnia
+   * pustą godzinę). Pełne load() nadpisałoby niezapisane pola Podsumowania (termin, numer ogłoszenia, narzut)
+   * wartościami z serwera; pole godziny dostaje nową wartość tylko wtedy, gdy było równe poprzednio zapisanej.
    */
   const refreshResultStatus = useCallback(async () => {
     try {
       const d = await api<Detail>(`/tenders/${id}`)
-      setData((prev) => (prev ? { ...prev, tender: { ...prev.tender, result_status: d.tender.result_status } } : d))
+      const timeBefore = savedDeadlineTimeRef.current
+      const timeAfter = deadlineTimeLabel(d.tender.deadline_time) ?? ''
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              tender: { ...prev.tender, result_status: d.tender.result_status, deadline_time: d.tender.deadline_time },
+            }
+          : d,
+      )
+      savedDeadlineTimeRef.current = timeAfter
+      setDeadlineTimeEdit((current) => (current === timeBefore ? timeAfter : current))
     } catch {
-      // znacznik odświeży się przy następnym wczytaniu przetargu
+      // znacznik i godzina odświeżą się przy następnym wczytaniu przetargu
     }
   }, [id])
 
@@ -1569,13 +1650,15 @@ function TenderDetailView() {
     setBusy(true)
     setErr('')
     try {
+      // Godzina tylko wtedy, gdy ją zmieniono: pominięta zostaje na serwerze bez zmian, więc nie kasuje godziny
+      // uzupełnionej w międzyczasie z Biuletynu. Bez daty godziny nie wysyłamy — serwer czyści ją sam.
+      const body: { deadline: string | null; deadline_time?: string | null } = { deadline: deadlineEdit || null }
+      if (deadlineEdit && deadlineTimeEdit !== savedDeadlineTimeRef.current) {
+        body.deadline_time = deadlineTimeEdit || null
+      }
       await api(`/tenders/${id}`, {
         method: 'PATCH',
-        // bez daty nie ma godziny (serwer i tak ją czyści)
-        body: JSON.stringify({
-          deadline: deadlineEdit || null,
-          deadline_time: deadlineEdit ? deadlineTimeEdit || null : null,
-        }),
+        body: JSON.stringify(body),
       })
       await load()
       await loadMeta()
@@ -1590,6 +1673,7 @@ function TenderDetailView() {
   async function saveNotice() {
     setBusy(true)
     setErr('')
+    setNoticeErr('')
     try {
       await api(`/tenders/${id}`, {
         method: 'PATCH',
@@ -1599,7 +1683,10 @@ function TenderDetailView() {
       await loadMeta()
       setMsg('Zapisano numer ogłoszenia.')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Nie udało się zapisać numeru ogłoszenia')
+      // 403: numer innego postępowania usunąłby dane z Biuletynu, a osoba nie ma uprawnienia do edycji oferty —
+      // komunikat serwera pod polem numeru, wpisany numer zostaje w polu
+      if (e instanceof ApiError && e.status === 403) setNoticeErr(e.message)
+      else setErr(e instanceof Error ? e.message : 'Nie udało się zapisać numeru ogłoszenia')
     } finally {
       setBusy(false)
     }
@@ -3390,7 +3477,10 @@ function TenderDetailView() {
                     className="mt-1 block w-full rounded border border-slate-300 px-2 py-1"
                     value={noticeEdit}
                     placeholder="np. 2026/BZP 00431178/01 albo 606345-2026"
-                    onChange={(e) => setNoticeEdit(e.target.value)}
+                    onChange={(e) => {
+                      setNoticeEdit(e.target.value)
+                      setNoticeErr('')
+                    }}
                   />
                 </label>
                 <button
@@ -3402,6 +3492,7 @@ function TenderDetailView() {
                   Zapisz numer
                 </button>
               </div>
+              {noticeErr && <p className="rounded bg-red-50 px-2 py-1 text-red-700">{noticeErr}</p>}
               <p className="text-slate-500">
                 Numer z Biuletynu Zamówień Publicznych pozwala aplikacji samej pobrać wynik przetargu.
               </p>
@@ -3627,7 +3718,10 @@ function TenderDetailView() {
                   value={noticeEdit}
                   placeholder="2026/BZP 00431178/01"
                   title="Biuletyn Zamówień Publicznych (np. 2026/BZP 00431178/01) albo Dziennik Urzędowy Unii Europejskiej (TED, np. 606345-2026)"
-                  onChange={(e) => setNoticeEdit(e.target.value)}
+                  onChange={(e) => {
+                    setNoticeEdit(e.target.value)
+                    setNoticeErr('')
+                  }}
                 />
                 <button
                   type="button"
@@ -3638,6 +3732,7 @@ function TenderDetailView() {
                   Zapisz
                 </button>
               </div>
+              {noticeErr && <p className="mt-1 rounded bg-red-50 px-2 py-1 text-red-700">{noticeErr}</p>}
             </>
           ) : (
             <>

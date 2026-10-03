@@ -28,7 +28,8 @@ use WeakMap;
  * - Zadania częste (only_failures: co minutę, co 10 minut) zapisują tylko błędy.
  * - Błąd → SystemAlertService::failed (e-mail raz na incydent), udany przebieg → resolved. Błąd zadania częstego
  *   w ciągu system_health.reopen_within_minutes od zamknięcia incydentu otwiera poprzedni incydent (bez nowego
- *   e-maila) — zadanie, które co kilka przebiegów raz się nie uda, nie wysyła e-maila za każdym razem.
+ *   e-maila) — zadanie, które co kilka przebiegów raz się nie uda, nie wysyła e-maila za każdym razem. Zadanie może
+ *   mieć własne okno (reopen_within_minutes w jego wpisie, np. tenders:remind 26 h — błąd raz dziennie).
  * - Zadania nocne, które w ogóle nie ruszyły, wykrywa staleNightlyTasks() (wołane przez system:check).
  * - Zapis nigdy nie psuje samego zadania: każdy błąd bazy czy pamięci podręcznej ląduje tylko w logu.
  */
@@ -100,7 +101,11 @@ class ScheduledTaskRecorder
         return $matched;
     }
 
-    /** @return array<string, array{label: string, schedule: string, nightly: bool, only_failures: bool}> */
+    /**
+     * Zadania z config/system_health.php po kluczu (tekst polecenia albo nazwa zadania-funkcji).
+     *
+     * @return array<string, array{label: string, schedule: string, nightly: bool, only_failures: bool, reopen_within_minutes?: int}>
+     */
     public function tasks(): array
     {
         $tasks = config('system_health.tasks', []);
@@ -284,7 +289,7 @@ class ScheduledTaskRecorder
                 $this->subjectKey($key),
                 'Zadanie: '.$label,
                 $this->lastLines($tail, $event->exitCode),
-                reopenWithinMinutes: $this->onlyFailures($key) ? max(0, (int) config('system_health.reopen_within_minutes', 360)) : null,
+                reopenWithinMinutes: $this->reopenWithinMinutes($key),
             );
         } catch (Throwable $e) {
             Log::warning('Scheduled task run finish not recorded', ['task' => $key, 'error' => $e->getMessage()]);
@@ -362,6 +367,21 @@ class ScheduledTaskRecorder
         $last = implode("\n", array_slice($lines, -3));
 
         return $last !== '' ? $last : 'Zadanie zakończyło się błędem (kod wyjścia '.($exitCode ?? 'nieznany').').';
+    }
+
+    /**
+     * Okno ponownego otwarcia incydentu zadania: własne z config zadania (reopen_within_minutes), inaczej globalne
+     * system_health.reopen_within_minutes dla zadań częstych; zadania nocne bez okna. Wpis zadania czytany z tablicy
+     * tasks() — klucze zadań mają spacje i „=”, więc nie przez config('system_health.tasks.<klucz>…').
+     */
+    private function reopenWithinMinutes(string $key): ?int
+    {
+        $own = $this->tasks()[$key]['reopen_within_minutes'] ?? null;
+        if ($own !== null) {
+            return max(0, (int) $own);
+        }
+
+        return $this->onlyFailures($key) ? max(0, (int) config('system_health.reopen_within_minutes', 360)) : null;
     }
 
     private function onlyFailures(string $key): bool

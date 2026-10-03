@@ -9,6 +9,7 @@ use App\Models\TenderLot;
 use App\Models\User;
 use App\Services\Bzp\OurCompany;
 use App\Services\Tenders\TenderResultService;
+use App\Services\Tenders\TenderResultStatus;
 use App\Support\PolishTime;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -21,8 +22,9 @@ use Illuminate\Support\Facades\DB;
  *   do których użytkownik jest zaproszony.
  * - Okres po dacie terminu (dzień „na zegarze” w Polsce): ostatnie 90 dni z dzisiejszym albo bieżący rok do dziś.
  * - Liczy części: rozstrzygnięte = wygrane + przegrane; unieważnione i „nie złożyliśmy oferty” osobno.
- *   Część unieważniona przez Biuletyn (wynik nie wpisany ręcznie) bez naszej ceny nie jest liczona jako
- *   unieważniona — to zwykle część ogłoszenia założona automatycznie, w której nie składaliśmy oferty.
+ *   Część założona automatycznie przez Biuletyn, unieważniona, bez naszej ceny i bez ręcznego wyniku, w przetargu
+ *   z kilkoma częściami nie jest liczona jako unieważniona — to zwykle część, w której nie składaliśmy oferty.
+ *   Przetarg unieważniony w całości bez żadnej policzonej części liczy się raz (najniższa część).
  * - Przetargi bez wyniku: termin minął, wynik przetargu pusty, status inny niż szkic i odrzucony (jak
  *   przypomnienie „Wpisz wynik”).
  * - Różnica cen: nasza cena brutto (netto × VAT) do ceny zwycięzcy z ogłoszenia (przyjętej jako brutto), tylko w złotych
@@ -99,6 +101,13 @@ final class TenderEffectivenessReport
         $withoutCpv = 0;
         $gaps = [];
         $cancelled = [];
+        $lotsPerTender = [];
+        foreach ($lots as $lot) {
+            $lotsPerTender[(int) $lot->tender_id] = ($lotsPerTender[(int) $lot->tender_id] ?? 0) + 1;
+        }
+        // przetargi z unieważnioną częścią policzoną / najniższa pominięta unieważniona część (części po numerze)
+        $cancelledCounted = [];
+        $cancelledSkipped = [];
 
         foreach ($lots as $lot) {
             $tender = $tenders[$lot->tender_id] ?? null;
@@ -107,9 +116,12 @@ final class TenderEffectivenessReport
             }
             $outcome = $lot->outcome;
             if ($outcome === TenderLot::OUTCOME_CANCELLED) {
-                if (! self::ourCancelledLot($lot)) {
+                if (! self::ourCancelledLot($lot, $lotsPerTender[(int) $lot->tender_id] ?? 1)) {
+                    $cancelledSkipped[(int) $lot->tender_id] ??= $lot;
+
                     continue;
                 }
+                $cancelledCounted[(int) $lot->tender_id] = true;
                 $summary['cancelled_lots']++;
                 $cancelled[] = $this->lotRef($tender, $lot, $owners);
 
@@ -158,6 +170,16 @@ final class TenderEffectivenessReport
                 if ($gap !== null) {
                     $rivals[$winnerId]['gaps'][] = $gap;
                 }
+            }
+        }
+
+        // cały przetarg unieważniony, a żadna część nie przeszła reguły (np. wszystkie części założył Biuletyn, a naszej
+        // ceny nikt nie wpisał) — startowaliśmy w nim, więc liczy się raz: najniższa część
+        foreach ($cancelledSkipped as $tenderId => $lot) {
+            $tender = $tenders[$tenderId];
+            if (! isset($cancelledCounted[$tenderId]) && $tender->result_status === TenderResultStatus::CANCELLED) {
+                $summary['cancelled_lots']++;
+                $cancelled[] = $this->lotRef($tender, $lot, $owners);
             }
         }
 
@@ -428,7 +450,7 @@ final class TenderEffectivenessReport
                 ->orderBy('lot_no')
                 ->get(['id', 'tender_id', 'lot_no', 'name', 'cpv_main', 'our_net', 'our_vat_rate', 'outcome', 'winner_competitor_id',
                     'winner_national_id_raw', 'winner_price', 'currency', 'offers_count', 'lowest_price', 'highest_price',
-                    'loss_reason', 'note', 'bzp_notice_id', 'manual_fields']) as $lot) {
+                    'loss_reason', 'note', 'bzp_notice_id', 'manual_fields', 'created_by_bzp']) as $lot) {
                 $lots[] = $lot;
             }
         }
@@ -540,15 +562,17 @@ final class TenderEffectivenessReport
     }
 
     /**
-     * Unieważniona część, w której startowaliśmy: wynik wpisany ręcznie albo jest nasza cena. Część unieważniona
-     * przez Biuletyn bez naszej ceny to zwykle część ogłoszenia założona automatycznie, w której nie składaliśmy
-     * oferty — nie liczy się do unieważnionych.
+     * Unieważniona część liczona jako nasza. Pomijana tylko część założona automatycznie przez Biuletyn
+     * (created_by_bzp) bez naszej ceny i bez ręcznie wpisanego wyniku w przetargu z kilkoma częściami — to część
+     * ogłoszenia, w której zwykle nie składaliśmy oferty. Jedyna część przetargu i część założona ręcznie liczą się
+     * zawsze.
      */
-    private static function ourCancelledLot(object $lot): bool
+    private static function ourCancelledLot(object $lot, int $tenderLots): bool
     {
         $manual = is_string($lot->manual_fields) ? json_decode($lot->manual_fields, true) : $lot->manual_fields;
+        $manualOutcome = is_array($manual) && in_array('outcome', $manual, true);
 
-        return (is_array($manual) && in_array('outcome', $manual, true)) || $lot->our_net !== null;
+        return ! ((bool) $lot->created_by_bzp && $lot->our_net === null && ! $manualOutcome && $tenderLots > 1);
     }
 
     /** Różnica do zwycięzcy w procentach naszej ceny brutto (dodatnia = byliśmy drożsi); null bez obu cen. */

@@ -39,9 +39,11 @@ use Throwable;
  *   ogłoszenie ma jedną część, albo numer części jest inny niż 1, albo przetarg ma więcej niż jedną część.
  *   Samotna część nr 1 to domyślna część „cały przetarg” (zapis części wirtualnej przed znalezieniem ogłoszenia) —
  *   przy ogłoszeniu z wieloma częściami nie wiadomo, której części dotyczy, więc dane nie są wpisywane, a w
- *   bzp_conflict i bzp_message jest prośba o ustawienie numeru części zgodnie z ogłoszeniem.
+ *   bzp_conflict i bzp_message jest prośba o ustawienie numeru części zgodnie z ogłoszeniem. Człowiek może też
+ *   potwierdzić, że startowaliśmy w części 1 ogłoszenia (TenderLot::LOT_NO_CONFIRMED) — wtedy dane są wpisywane.
  * - Części zakładane są tylko przy pierwszym powiązaniu przetargu z ogłoszeniem (wcześniej bez ogłoszenia
  *   o zamówieniu i o wyniku) i tylko w przetargu bez żadnej części — część usunięta przez człowieka nie wraca.
+ *   Założone tak części mają created_by_bzp (raport skuteczności odróżnia je od części założonych ręcznie).
  *
  * Pusta godzina składania ofert jest uzupełniana z ogłoszenia o zamówieniu, gdy zgadza się dzień terminu (wpis
  * w historii przetargu). Wiersz przetargu jest blokowany na czas zapisu (równoległy zapis wyniku przez człowieka).
@@ -168,10 +170,9 @@ final class BzpTenderLinker
                         continue;
                     }
                     $lot = new TenderLot(['tender_id' => $tender->id, 'lot_no' => $lotNo, 'currency' => 'PLN']);
-                } elseif (! $this->matchesNotice($lot, $noticeIds, $partsCount, $existing->count())) {
-                    $unnumbered[$lotNo] = 'Ogłoszenie ma '.$partsCount.' części, a ta część została założona, '
-                        .'zanim przetarg powiązano z ogłoszeniem — nie wiadomo, której części ogłoszenia dotyczy, więc dane '
-                        .'z ogłoszenia nie zostały wpisane. Ustaw numer części zgodnie z ogłoszeniem, a wynik uzupełni się sam.';
+                    $lot->created_by_bzp = true;
+                } elseif (! self::lotMatchesNotice($lot, $noticeIds, $partsCount, $existing->count())) {
+                    $unnumbered[$lotNo] = self::unnumberedConflict($partsCount);
 
                     continue;
                 }
@@ -229,17 +230,33 @@ final class BzpTenderLinker
 
     /**
      * Czy część przetargu odpowiada części ogłoszenia o tym samym numerze: powiązana już z ogłoszeniem tego
-     * postępowania albo założona ręcznie z numerem, który na pewno pochodzi z ogłoszenia (patrz opis klasy).
+     * postępowania, z numerem potwierdzonym przez człowieka (TenderLot::LOT_NO_CONFIRMED w manual_fields) albo
+     * założona ręcznie z numerem, który na pewno pochodzi z ogłoszenia (patrz opis klasy). Ta sama reguła liczy
+     * prośbę o numer części w zwykłym odczycie wyniku (TenderResultService::payload).
      *
      * @param  list<int>  $noticeIds  ogłoszenia tego postępowania (o zamówieniu i o wyniku)
+     * @param  int  $partsCount  liczba różnych numerów części w ogłoszeniach
+     * @param  int  $tenderLots  liczba części przetargu
      */
-    private function matchesNotice(TenderLot $lot, array $noticeIds, int $partsCount, int $tenderLots): bool
+    public static function lotMatchesNotice(TenderLot $lot, array $noticeIds, int $partsCount, int $tenderLots): bool
     {
         if ($lot->bzp_notice_id !== null && in_array((int) $lot->bzp_notice_id, $noticeIds, true)) {
             return true;
         }
+        $manual = is_array($lot->manual_fields) ? $lot->manual_fields : [];
+        if (in_array(TenderLot::LOT_NO_CONFIRMED, $manual, true)) {
+            return true;
+        }
 
         return $partsCount === 1 || (int) $lot->lot_no !== 1 || $tenderLots > 1;
+    }
+
+    /** Prośba o numer części (bzp_conflict) dla części, której nie da się odnieść do części ogłoszenia. */
+    public static function unnumberedConflict(int $partsCount): string
+    {
+        return 'Ogłoszenie ma '.$partsCount.' części, a ta część została założona, '
+            .'zanim przetarg powiązano z ogłoszeniem — nie wiadomo, której części ogłoszenia dotyczy, więc dane '
+            .'z ogłoszenia nie zostały wpisane. Ustaw numer części zgodnie z ogłoszeniem, a wynik uzupełni się sam.';
     }
 
     private function contractNotice(string $bzpNumber, string $normalized): ?ProcurementNotice
@@ -284,11 +301,11 @@ final class BzpTenderLinker
     private function lotData(?ProcurementNotice $contract, Collection $results): array
     {
         $data = [];
-        foreach ($this->parsedLots($contract) as $lot) {
+        foreach (self::parsedLots($contract) as $lot) {
             $data[$lot['lot_no']] = ['info' => $lot, 'result' => null, 'notice_id' => (int) $contract?->id, 'result_notice_number' => null];
         }
         foreach ($results as $notice) {
-            foreach ($this->parsedLots($notice) as $lot) {
+            foreach (self::parsedLots($notice) as $lot) {
                 $no = $lot['lot_no'];
                 $hasResult = $lot['result'] !== null || $lot['offers_count'] !== null || $lot['winner_price'] !== null || $lot['contractors'] !== [];
                 if (! isset($data[$no])) {
@@ -307,9 +324,11 @@ final class BzpTenderLinker
     }
 
     /**
+     * Części odczytane z ogłoszenia (parsed.lots) — tylko wpisy z numerem części.
+     *
      * @return list<array<string, mixed>>
      */
-    private function parsedLots(?ProcurementNotice $notice): array
+    public static function parsedLots(?ProcurementNotice $notice): array
     {
         $parsed = $notice?->parsed;
 

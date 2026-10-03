@@ -14,6 +14,8 @@ declare(strict_types=1);
  * - schedule: częstotliwość słowami
  * - nightly: liczy się do kafelka „Zadania nocne”
  * - only_failures: zadanie częste — zapisywane są tylko błędy (bez wiersza na każdy udany przebieg)
+ * - reopen_within_minutes (opcjonalnie): okno ponownego otwarcia incydentu tego zadania (zamiast globalnego
+ *   reopen_within_minutes niżej, które dotyczy tylko zadań częstych)
  */
 return [
     'tasks' => [
@@ -33,7 +35,8 @@ return [
         'storage:prune' => ['label' => 'Czyszczenie plików tymczasowych', 'schedule' => 'co godzinę', 'nightly' => false, 'only_failures' => false],
         'jina-usage-snapshot' => ['label' => 'Saldo usługi wyszukiwania stron', 'schedule' => 'co godzinę', 'nightly' => false, 'only_failures' => false],
         'products:retry-images' => ['label' => 'Ponowne pobieranie zablokowanych zdjęć', 'schedule' => 'co 3 godziny', 'nightly' => false, 'only_failures' => false],
-        'tenders:remind' => ['label' => 'Przypomnienia o terminach i wynikach przetargów', 'schedule' => 'co 15 minut', 'nightly' => false, 'only_failures' => true],
+        // raz dziennie (po 7:00) wysyła najwięcej e-maili — stały błąd poczty u jednego odbiorcy psuje przebieg co dzień
+        'tenders:remind' => ['label' => 'Przypomnienia o terminach i wynikach przetargów', 'schedule' => 'co 15 minut', 'nightly' => false, 'only_failures' => true, 'reopen_within_minutes' => 1560],
         'campaigns:replies' => ['label' => 'Odpowiedzi klientów na kampanie', 'schedule' => 'co 10 minut', 'nightly' => false, 'only_failures' => true],
         'system:check' => ['label' => 'Sprawdzanie stanu systemu', 'schedule' => 'co 10 minut', 'nightly' => false, 'only_failures' => true],
         'b2b:sync-due' => ['label' => 'Uruchamianie pobierania z kont dostawców', 'schedule' => 'co minutę', 'nightly' => false, 'only_failures' => true],
@@ -56,10 +59,21 @@ return [
     'reopen_within_minutes' => 360,
 
     /**
-     * Błąd konta dostawcy starszy niż tyle godzin (np. przy pierwszym system:check po wdrożeniu) zakłada incydent
-     * widoczny na ekranie, ale bez e-maila — e-mail wyjdzie przy kolejnym, świeżym błędzie tego konta.
+     * Seria błędów konta dostawcy (nieudane przebiegi od ostatniego udanego) zaczęta wcześniej niż tyle godzin temu
+     * (np. zastana przy pierwszym system:check po wdrożeniu, konto psujące się od tygodni) zakłada incydent widoczny
+     * na ekranie, ale bez e-maila — e-mail wyjdzie przy nowej serii błędów, po udanym przebiegu.
      */
     'b2b_mail_max_age_hours' => 48,
+
+    /**
+     * Błąd konta dostawcy w ciągu tylu minut od zamknięcia jego incydentu otwiera ten incydent na nowo (bez nowego
+     * e-maila) — według częstotliwości pobierania konta: dzienne 26 h, tygodniowe 8 dni (konto, które co drugi
+     * przebieg działa, nie wysyła e-maila za każdym razem).
+     */
+    'b2b_reopen_within_minutes' => [
+        'daily' => 1560,
+        'weekly' => 11520,
+    ],
 
     /** Tyle ostatnich znaków komunikatu polecenia trafia do scheduled_task_runs.output_tail. */
     'output_tail_chars' => 2000,

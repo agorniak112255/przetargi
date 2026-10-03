@@ -17,8 +17,10 @@ use Throwable;
 /**
  * Sprawdzanie stanu systemu co 10 minut i alerty dla administratora (e-mail raz na incydent):
  * - konto dostawcy z harmonogramem, którego ostatni przebieg się nie udał → alert; udany przebieg, wyłączenie konta
- *   albo jego usunięcie → incydent zamknięty. Błąd starszy niż system_health.b2b_mail_max_age_hours (np. zastany
- *   przy pierwszym sprawdzeniu po wdrożeniu) zakłada incydent bez e-maila;
+ *   albo jego usunięcie → incydent zamknięty. Seria błędów (nieudane przebiegi od ostatniego udanego) zaczęta
+ *   wcześniej niż system_health.b2b_mail_max_age_hours temu (np. zastana przy pierwszym sprawdzeniu po wdrożeniu,
+ *   konto psujące się od tygodni) zakłada incydent bez e-maila. Błąd wkrótce po zamknięciu incydentu konta (okno
+ *   system_health.b2b_reopen_within_minutes wg częstotliwości pobierania) otwiera go na nowo bez nowego e-maila;
  * - brak sygnału harmonogramu (b2b-scheduler-heartbeat) dłużej niż system_health.scheduler_stale_minutes → alert;
  * - zadania nocne, które nie ruszyły o czasie (ScheduledTaskRecorder::staleNightlyTasks) → jeden wspólny alert,
  *   sprawdzane tylko przy działającym harmonogramie (martwy harmonogram ma własny alert, bez lawiny e-maili);
@@ -43,19 +45,24 @@ final class SystemCheckCommand extends Command
         $failingKeys = [];
         $accounts = $status->activeB2bAccounts();
         $mailMaxAge = CarbonImmutable::now()->subHours(max(1, (int) config('system_health.b2b_mail_max_age_hours', 48)));
+        $reopen = (array) config('system_health.b2b_reopen_within_minutes', []);
         foreach ($accounts as $account) {
             $key = 'b2b:'.$account->id;
             if ($account->last_sync_status === B2bSyncRun::STATUS_FAILED) {
                 $failingKeys[] = $key;
                 $failing++;
                 $failedAt = $account->last_sync_finished_at;
+                $seriesStart = $this->failureSeriesStart((int) $account->id) ?? $failedAt;
+                $window = $reopen[(string) $account->sync_frequency] ?? null;
                 $alerts->failed(
                     SystemAlertService::KIND_B2B,
                     $key,
                     'Konto '.$status->b2bLabel($account).' · pobieranie cen',
                     $account->last_sync_message !== null ? (string) $account->last_sync_message : 'Ostatnie pobieranie z konta dostawcy się nie udało.',
                     $failedAt,
-                    notify: $failedAt === null || CarbonImmutable::instance($failedAt)->gte($mailMaxAge),
+                    // e-mail tylko o świeżej serii błędów — konto psujące się od tygodni nie wysyła go co dzień
+                    notify: $seriesStart === null || CarbonImmutable::instance($seriesStart)->gte($mailMaxAge),
+                    reopenWithinMinutes: $window !== null ? max(0, (int) $window) : null,
                 );
             }
         }
@@ -101,6 +108,27 @@ final class SystemCheckCommand extends Command
         ));
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Początek bieżącej serii błędów konta: najwcześniejszy start nieudanego przebiegu po ostatnim udanym (przebiegi
+     * przerwane przez człowieka — cancelled — ani nie przerywają serii, ani jej nie zaczynają). Null = brak zapisanych
+     * nieudanych przebiegów (wołający bierze wtedy chwilę ostatniego przebiegu konta).
+     */
+    private function failureSeriesStart(int $accountId): ?CarbonImmutable
+    {
+        $lastOk = B2bSyncRun::query()
+            ->where('b2b_account_id', $accountId)
+            ->where('status', B2bSyncRun::STATUS_OK)
+            ->max('id');
+        $start = B2bSyncRun::query()
+            ->where('b2b_account_id', $accountId)
+            ->where('status', B2bSyncRun::STATUS_FAILED)
+            ->whereNotNull('started_at')
+            ->when($lastOk !== null, static fn ($query) => $query->where('id', '>', (int) $lastOk))
+            ->min('started_at');
+
+        return $start !== null ? CarbonImmutable::parse((string) $start) : null;
     }
 
     /** Liczba zadań nocnych, które nie ruszyły; null = sprawdzenie się nie udało (incydent zostaje, jak był). */

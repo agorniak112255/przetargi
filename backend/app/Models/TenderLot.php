@@ -13,6 +13,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  *
  * `manual_fields` — nazwy pól (z BZP_FIELDS i pól tylko ręcznych) wpisanych przez człowieka; Biuletyn ich nie
  * nadpisuje. Kwoty zwycięzcy i min/max są takie jak w ogłoszeniu, w walucie `currency`, bez przeliczania.
+ * `created_by_bzp` — część założona automatycznie przy pierwszym powiązaniu przetargu z ogłoszeniem.
  */
 class TenderLot extends Model
 {
@@ -58,6 +59,13 @@ class TenderLot extends Model
         'highest_price',
     ];
 
+    /**
+     * Wpis w manual_fields: człowiek potwierdził, że numer tej części jest numerem części z ogłoszenia (np. samotna
+     * część nr 1 przy ogłoszeniu z wieloma częściami — „startowaliśmy w części 1”). Zmiana numeru części bez
+     * ponownego potwierdzenia i zmiana numeru ogłoszenia kasują potwierdzenie.
+     */
+    public const LOT_NO_CONFIRMED = 'lot_no';
+
     protected $fillable = [
         'tender_id',
         'lot_no',
@@ -79,6 +87,7 @@ class TenderLot extends Model
         'manual_fields',
         'bzp_notice_id',
         'bzp_applied_at',
+        'created_by_bzp',
         'decided_by',
         'decided_at',
     ];
@@ -96,6 +105,7 @@ class TenderLot extends Model
             'highest_price' => 'decimal:2',
             'manual_fields' => 'array',
             'bzp_applied_at' => 'datetime',
+            'created_by_bzp' => 'boolean',
             'decided_at' => 'datetime',
         ];
     }

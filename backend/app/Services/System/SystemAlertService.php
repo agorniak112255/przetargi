@@ -81,6 +81,10 @@ class SystemAlertService
                 ->orderByDesc('id')
                 ->first();
             $alert?->forceFill(['resolved_at' => null])->save();
+            if ($alert !== null && $alert->emailed_at === null) {
+                // e-mail poddany przy zamknięciu (resolved) — incydent wrócił, więc znowu czeka na ponowienie
+                $this->dispatcher->resumeAbandonedMail(self::EVENT, ['system_alert:'.$alert->id]);
+            }
         }
         if ($alert === null) {
             $alert = SystemAlert::query()->create([
@@ -141,13 +145,28 @@ class SystemAlertService
         return $alerts->count();
     }
 
-    /** Zamyka otwarty incydent; zwraca, ile zamknięto (0 = nic nie było otwarte). */
+    /**
+     * Zamyka otwarty incydent; zwraca, ile zamknięto (0 = nic nie było otwarte). E-mail zamkniętego incydentu, który
+     * czekał na ponowienie po błędzie poczty, już nie wyjdzie (wpis wysyłki poddany). Wyciszenie tego nie robi —
+     * po cofnięciu wyciszenia e-mail ma móc wyjść.
+     */
     public function resolved(string $subjectKey): int
     {
-        return SystemAlert::query()->open()->where('subject_key', $subjectKey)->update([
+        $ids = SystemAlert::query()->open()->where('subject_key', $subjectKey)->pluck('id')->map(static fn (mixed $id): int => (int) $id)->all();
+        if ($ids === []) {
+            return 0;
+        }
+        $closed = SystemAlert::query()->open()->whereIn('id', $ids)->update([
             'resolved_at' => now(),
             'updated_at' => now(),
         ]);
+        try {
+            $this->dispatcher->abandonPendingMail(self::EVENT, array_map(static fn (int $id): string => 'system_alert:'.$id, $ids));
+        } catch (Throwable $e) {
+            Log::warning('Pending system alert mail not abandoned', ['alert_ids' => $ids, 'error' => $e->getMessage()]);
+        }
+
+        return $closed;
     }
 
     public function mute(SystemAlert $alert, ?User $by): SystemAlert

@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ProductSubstitute;
 use App\Models\Tender;
 use App\Models\TenderItem;
+use App\Models\TenderLotOffer;
 use App\Services\NbpExchangeRateService;
 use App\Services\Pricing\SourcePriceComparison;
 use App\Services\Pricing\SupplierSpecialMask;
@@ -168,6 +169,15 @@ class TenderController extends Controller
         ], self::deadlineMessages());
 
         $noticeNumber = array_key_exists('notice_number', $data) ? self::noticeNumber($data['notice_number']) : null;
+        $noticeChanged = array_key_exists('notice_number', $data) && $noticeNumber !== $tender->notice_number;
+        // inne postępowanie (nie sama wersja numeru „…/01”) — dane z Biuletynu dotyczyły poprzedniego ogłoszenia
+        $procedureChanged = $noticeChanged && ! self::sameProcedure($tender->notice_number, $noticeNumber);
+        if ($procedureChanged && ! $request->user()->can('tenders.edit_offer') && $this->hasBulletinData($tender)) {
+            // odpięcie kasuje dane wyniku z Biuletynu — a wynik może zmieniać tylko osoba z edycją oferty
+            return response()->json([
+                'message' => 'Zmiana numeru ogłoszenia usunie dane pobrane z Biuletynu Zamówień Publicznych. Może to zrobić osoba z uprawnieniem do edycji oferty.',
+            ], 403);
+        }
 
         $before = [
             'title' => $tender->title,
@@ -196,13 +206,16 @@ class TenderController extends Controller
             }
             $tender->deadline_time = $time;
         }
-        $noticeChanged = array_key_exists('notice_number', $data) && $noticeNumber !== $tender->notice_number;
         if ($noticeChanged) {
             $tender->notice_number = $noticeNumber;
-            // powiązania z ogłoszeniami Biuletynu dotyczyły poprzedniego numeru — łączy się je od nowa
-            $tender->contract_notice_id = null;
-            $tender->result_notice_id = null;
+            // nocne łączenie sprawdzi przetarg na nowo (np. inna wersja ogłoszenia o zamówieniu)
             $tender->bzp_checked_at = null;
+            if ($procedureChanged) {
+                // powiązania z ogłoszeniami Biuletynu dotyczyły poprzedniego postępowania — łączy się je od nowa.
+                // Ta sama wersja postępowania zachowuje powiązania: części usunięte przez człowieka nie wracają
+                $tender->contract_notice_id = null;
+                $tender->result_notice_id = null;
+            }
         }
         if (array_key_exists('owner_id', $data)) {
             $tender->owner_id = $data['owner_id'];
@@ -224,9 +237,9 @@ class TenderController extends Controller
         }
 
         $tender->last_activity_at = now();
-        DB::transaction(function () use ($tender, $noticeChanged, $request, $before): void {
+        DB::transaction(function () use ($tender, $procedureChanged, $request, $before): void {
             $tender->save();
-            if ($noticeChanged) {
+            if ($procedureChanged) {
                 // dane części wpisane z poprzedniego ogłoszenia (zwycięzca, ceny, wynik) nie dotyczą nowego numeru
                 $this->results->detachNotice($tender, $request->user(), $before['notice_number']);
             }
@@ -305,6 +318,33 @@ class TenderController extends Controller
         }
 
         return $parsed['normalized'];
+    }
+
+    /**
+     * To samo postępowanie: ten sam numer Biuletynu bez wersji („2026/BZP 00431178” i „…/01”) albo ten sam numer
+     * TED. Numer ogłoszenia o wyniku wpisany zamiast numeru ogłoszenia o zamówieniu to inny numer — inne postępowanie.
+     */
+    private static function sameProcedure(?string $before, ?string $after): bool
+    {
+        $a = NoticeNumber::parse($before);
+        $b = NoticeNumber::parse($after);
+        if ($a === null || $b === null || $a['source'] !== $b['source']) {
+            return false;
+        }
+        $key = static fn (array $n): string => $n['source'] === NoticeNumber::SOURCE_BZP ? (string) $n['bzp_number'] : $n['normalized'];
+
+        return $key($a) === $key($b);
+    }
+
+    /** Część powiązana z ogłoszeniem Biuletynu albo oferta innej firmy wpisana przez Biuletyn. */
+    private function hasBulletinData(Tender $tender): bool
+    {
+        return $tender->lots()
+            ->where(static function ($query): void {
+                $query->whereNotNull('bzp_notice_id')
+                    ->orWhereHas('offers', static fn ($offers) => $offers->where('source', '<>', TenderLotOffer::SOURCE_MANUAL));
+            })
+            ->exists();
     }
 
     public function destroy(Tender $tender): JsonResponse

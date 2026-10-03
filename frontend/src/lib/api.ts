@@ -226,6 +226,11 @@ export type TenderLotUpdate = {
   note?: string | null
   /** oferty innych firm — zastępowane w całości */
   offers?: (CompetitorInput & { price: string | number; currency?: string })[]
+  /**
+   * true = człowiek potwierdził numer części (np. „startowaliśmy w części 1 ogłoszenia wieloczęściowego”) —
+   * Biuletyn wpisze dane tej części; false = zdejmij potwierdzenie. Zmiana lot_no bez true zdejmuje je na serwerze.
+   */
+  lot_no_confirmed?: boolean
 }
 
 export function fetchTenderResult(tenderId: number): Promise<TenderResultResponse> {
@@ -351,7 +356,8 @@ export type SystemAlertRow = {
   id: number
   kind: string
   title: string
-  since: string
+  /** początek problemu; null, gdy serwer go nie zna */
+  since: string | null
   last_message: string | null
   emailed_at: string | null
   muted: boolean

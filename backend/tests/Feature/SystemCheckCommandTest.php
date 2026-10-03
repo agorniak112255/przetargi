@@ -19,6 +19,7 @@ use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Symfony\Component\Mailer\Exception\TransportException;
 use Tests\Support\FakeSystemAlertDispatcher;
@@ -215,6 +216,106 @@ class SystemCheckCommandTest extends TestCase
         $this->assertNotNull($alert->fresh()->emailed_at);
     }
 
+    public function test_failure_series_older_than_the_mail_limit_sends_no_mail_also_the_next_day(): void
+    {
+        config(['system_health.tasks' => []]);
+        $account = $this->account('portwest', 'daily', B2bSyncRun::STATUS_OK, now()->subDays(12), 'OK');
+        $this->syncRun($account, B2bSyncRun::STATUS_OK, now()->subDays(12));
+        // konto psuje się codziennie od 10 dni; przerwany ręcznie przebieg nie przerywa serii
+        for ($day = 10; $day >= 1; $day--) {
+            $this->syncRun($account, $day === 5 ? B2bSyncRun::STATUS_CANCELLED : B2bSyncRun::STATUS_FAILED, now()->subDays($day));
+        }
+        $this->syncRun($account, B2bSyncRun::STATUS_FAILED, now()->subHour());
+
+        $this->check();
+        $alert = SystemAlert::query()->open()->sole();
+        $this->assertNull($alert->emailed_at);
+        $this->assertSame([], $this->dispatcher->calls, 'Seria błędów sprzed 10 dni — incydent na ekranie, bez e-maila.');
+
+        // następny dzień, kolejny nieudany przebieg — wciąż ta sama stara seria
+        $this->travel(1)->days();
+        $this->syncRun($account, B2bSyncRun::STATUS_FAILED, now()->subMinutes(30));
+        $this->check();
+        $this->assertSame([], $this->dispatcher->calls);
+        $this->assertSame(2, $alert->fresh()->failures);
+    }
+
+    public function test_new_failure_series_after_a_successful_run_mails(): void
+    {
+        config(['system_health.tasks' => []]);
+        $account = $this->account('portwest', 'daily', B2bSyncRun::STATUS_OK, now()->subDays(12), 'OK');
+        $this->syncRun($account, B2bSyncRun::STATUS_FAILED, now()->subDays(10));
+        $this->syncRun($account, B2bSyncRun::STATUS_OK, now()->subDays(3));
+        $this->syncRun($account, B2bSyncRun::STATUS_FAILED, now()->subHour());
+
+        $this->check();
+
+        $this->assertCount(1, $this->dispatcher->calls);
+        $this->assertNotNull(SystemAlert::query()->open()->sole()->emailed_at);
+    }
+
+    public function test_daily_account_failing_every_other_day_sends_one_mail(): void
+    {
+        config(['system_health.tasks' => []]);
+        $account = $this->account('portwest', 'daily', B2bSyncRun::STATUS_OK, now()->subDays(2), 'OK');
+        $this->syncRun($account, B2bSyncRun::STATUS_OK, now()->subDays(2));
+        $this->syncRun($account, B2bSyncRun::STATUS_FAILED, now()->subHour());
+        $this->check();
+        $alert = SystemAlert::query()->open()->sole();
+        $this->assertCount(1, $this->dispatcher->calls);
+
+        // błąd – działa – błąd w ciągu doby: ten sam incydent otwarty na nowo, bez drugiego e-maila
+        $this->travel(2)->hours();
+        $this->syncRun($account, B2bSyncRun::STATUS_OK, now()->subMinutes(30));
+        $this->check();
+        $this->assertNotNull($alert->fresh()->resolved_at);
+        $this->travel(22)->hours();
+        $this->syncRun($account, B2bSyncRun::STATUS_FAILED, now()->subMinutes(30));
+        $this->check();
+        $this->assertSame(1, SystemAlert::query()->count());
+        $this->assertNull($alert->fresh()->resolved_at);
+        $this->assertCount(1, $this->dispatcher->calls);
+
+        // spokój dłużej niż 26 godzin od zamknięcia — nowy błąd to nowy incydent i nowy e-mail
+        $this->syncRun($account, B2bSyncRun::STATUS_OK, now()->subMinutes(10));
+        $this->check();
+        $this->travel(27)->hours();
+        $this->syncRun($account, B2bSyncRun::STATUS_FAILED, now()->subMinutes(10));
+        $this->check();
+        $this->assertSame(2, SystemAlert::query()->count());
+        $this->assertCount(2, $this->dispatcher->calls);
+    }
+
+    public function test_weekly_account_reopens_its_incident_within_eight_days(): void
+    {
+        config(['system_health.tasks' => []]);
+        $weekly = $this->account('portwest', 'weekly', B2bSyncRun::STATUS_OK, now()->subDays(8), 'OK');
+        $daily = $this->account('anro', 'daily', B2bSyncRun::STATUS_OK, now()->subDays(8), 'OK');
+        foreach ([$weekly, $daily] as $account) {
+            $this->syncRun($account, B2bSyncRun::STATUS_FAILED, now()->subHour());
+        }
+        $this->check();
+        $this->assertCount(2, $this->dispatcher->calls);
+
+        $this->travel(1)->hours();
+        foreach ([$weekly, $daily] as $account) {
+            $this->syncRun($account, B2bSyncRun::STATUS_OK, now()->subMinutes(10));
+        }
+        $this->check();
+        $this->assertSame(0, SystemAlert::query()->open()->count());
+
+        // tydzień później oba konta znowu z błędem: tygodniowe — ten sam incydent (okno 8 dni), dzienne — nowy e-mail
+        $this->travel(7)->days();
+        foreach ([$weekly, $daily] as $account) {
+            $this->syncRun($account, B2bSyncRun::STATUS_FAILED, now()->subMinutes(10));
+        }
+        $this->check();
+        $this->assertSame(1, SystemAlert::query()->where('subject_key', 'b2b:'.$weekly->id)->count());
+        $this->assertSame(2, SystemAlert::query()->where('subject_key', 'b2b:'.$daily->id)->count());
+        $this->assertSame(2, SystemAlert::query()->open()->count());
+        $this->assertCount(3, $this->dispatcher->calls);
+    }
+
     public function test_alert_goes_only_to_people_who_can_open_the_system_status_screen(): void
     {
         // uprawnienie do ekranu bez dostępu do Administracji: link dałby 403
@@ -255,6 +356,55 @@ class SystemCheckCommandTest extends TestCase
         Mail::assertSentCount(1);
     }
 
+    public function test_mail_of_a_resolved_incident_is_not_retried_until_the_incident_reopens(): void
+    {
+        $this->app->instance(NotificationDispatcher::class, new NotificationDispatcher(app(NotificationPreferences::class), app(MailSettingsService::class)));
+        Mail::fake();
+        $fake = Mail::getFacadeRoot();
+        Mail::shouldReceive('to')->once()->andThrow(new TransportException('Connection refused'));
+        $service = app(SystemAlertService::class);
+        $alert = $service->failed(SystemAlertService::KIND_TASK, 'task:demo:often', 'Zadanie: Zadanie częste próbne', 'Limit skrzynki');
+        Mail::swap($fake);
+        $this->assertSame(['system_alert:'.$alert->id], app(NotificationDispatcher::class)->pendingMailSubjects('system_alert'));
+
+        // zadanie znowu działa — e-mail zamkniętego incydentu nie czeka już na ponowienie
+        $this->assertSame(1, $service->resolved('task:demo:often'));
+        $this->assertSame(['failed'], DB::table('notification_dispatches')->where('subject_key', 'system_alert:'.$alert->id)->pluck('mail_status')->all());
+        $this->assertSame([], app(NotificationDispatcher::class)->pendingMailSubjects('system_alert'));
+        $this->travel(30)->minutes();
+        $this->assertSame(0, $service->retryPendingMail());
+        Mail::assertNothingSent();
+
+        // incydent otwarty na nowo (błąd tuż po zamknięciu) — niewysłany e-mail znowu czeka i wychodzi
+        $service->failed(SystemAlertService::KIND_TASK, 'task:demo:often', 'Zadanie: Zadanie częste próbne', 'Znowu limit', reopenWithinMinutes: 360);
+        $this->assertSame(1, SystemAlert::query()->count());
+        Mail::assertSentCount(1);
+        $this->assertNotNull($alert->fresh()->emailed_at);
+        $this->assertSame(1, $this->admin->notifications()->count(), 'Dzwonek raz.');
+    }
+
+    public function test_muted_incident_mail_waits_and_is_retried_after_unmute(): void
+    {
+        $this->app->instance(NotificationDispatcher::class, new NotificationDispatcher(app(NotificationPreferences::class), app(MailSettingsService::class)));
+        Mail::fake();
+        $fake = Mail::getFacadeRoot();
+        Mail::shouldReceive('to')->once()->andThrow(new TransportException('Connection refused'));
+        $service = app(SystemAlertService::class);
+        $alert = $service->failed(SystemAlertService::KIND_TASK, 'task:erp:clients', 'Zadanie: Klienci z ERP XL', 'Brak połączenia');
+        Mail::swap($fake);
+
+        $service->mute($alert, $this->admin);
+        $this->travel(30)->minutes();
+        $this->assertSame(0, $service->retryPendingMail());
+        Mail::assertNothingSent();
+        $this->assertSame(['system_alert:'.$alert->id], app(NotificationDispatcher::class)->pendingMailSubjects('system_alert'), 'Wyciszenie nie poddaje e-maila.');
+
+        $service->unmute($alert->fresh());
+        $this->assertSame(1, $service->retryPendingMail());
+        Mail::assertSentCount(1);
+        $this->assertNotNull($alert->fresh()->emailed_at);
+    }
+
     /** Harmonogram z zadaniem nocnym 2:00 UTC i drugim, wyłączonym warunkiem when(). */
     private function nightlySchedule(): void
     {
@@ -283,6 +433,33 @@ class SystemCheckCommandTest extends TestCase
         $account->forceFill(['last_sync_status' => $status, 'last_sync_finished_at' => $finishedAt, 'last_sync_message' => $message])->save();
 
         return $account;
+    }
+
+    /** Przebieg pobierania konta (start = $startedAt, koniec 10 minut później) i stan konta jak po nim. */
+    private function syncRun(B2bAccount $account, string $status, \DateTimeInterface $startedAt): void
+    {
+        $finishedAt = Carbon::instance($startedAt)->addMinutes(10);
+        B2bSyncRun::query()->create([
+            'b2b_account_id' => $account->id,
+            'status' => $status,
+            'trigger' => B2bSyncRun::TRIGGER_SCHEDULE,
+            'started_at' => $startedAt,
+            'finished_at' => $finishedAt,
+            'message' => $status === B2bSyncRun::STATUS_FAILED ? 'Logowanie nieudane' : null,
+        ]);
+        if ($status !== B2bSyncRun::STATUS_CANCELLED) {
+            $account->forceFill([
+                'last_sync_status' => $status,
+                'last_sync_finished_at' => $finishedAt,
+                'last_sync_message' => $status === B2bSyncRun::STATUS_FAILED ? 'Logowanie nieudane' : null,
+            ])->save();
+        }
+    }
+
+    private function check(): void
+    {
+        $this->heartbeat(now());
+        $this->artisan('system:check')->assertSuccessful();
     }
 
     private function heartbeat(\DateTimeInterface $at): void

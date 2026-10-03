@@ -127,6 +127,45 @@ class NotificationDispatcher
             ->all();
     }
 
+    /**
+     * E-maile rzeczy, których sprawa już się skończyła (np. zamknięty incydent alertu), czekające na ponowienie albo
+     * „w wysyłce” — poddane (failed), żeby nikt ich już nie ponawiał. Zwraca liczbę zmienionych wpisów.
+     *
+     * @param  list<string>  $subjectKeys
+     */
+    public function abandonPendingMail(string $event, array $subjectKeys): int
+    {
+        if ($subjectKeys === []) {
+            return 0;
+        }
+
+        return DB::table('notification_dispatches')
+            ->where('event', mb_substr($event, 0, 40))
+            ->whereIn('subject_key', array_map(static fn (string $key): string => mb_substr($key, 0, 80), $subjectKeys))
+            ->whereIn('mail_status', [self::MAIL_PENDING, self::MAIL_SENDING])
+            ->update(['mail_status' => self::MAIL_FAILED]);
+    }
+
+    /**
+     * Odwrotność abandonPendingMail dla sprawy, która wróciła (incydent otwarty na nowo): e-maile poddane przed
+     * wyczerpaniem limitu prób znowu czekają na ponowienie. Wpisy po ostatniej dozwolonej próbie zostają poddane.
+     *
+     * @param  list<string>  $subjectKeys
+     */
+    public function resumeAbandonedMail(string $event, array $subjectKeys): int
+    {
+        if ($subjectKeys === []) {
+            return 0;
+        }
+
+        return DB::table('notification_dispatches')
+            ->where('event', mb_substr($event, 0, 40))
+            ->whereIn('subject_key', array_map(static fn (string $key): string => mb_substr($key, 0, 80), $subjectKeys))
+            ->where('mail_status', self::MAIL_FAILED)
+            ->where('mail_attempts', '<', $this->maxAttempts())
+            ->update(['mail_status' => self::MAIL_PENDING]);
+    }
+
     private function bell(User $user, AppNotificationMessage $message): bool
     {
         try {

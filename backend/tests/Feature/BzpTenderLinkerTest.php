@@ -20,6 +20,8 @@ use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use RuntimeException;
+use Spatie\Permission\Models\Role;
+use Spatie\Permission\PermissionRegistrar;
 use Tests\TestCase;
 
 /**
@@ -211,6 +213,8 @@ final class BzpTenderLinkerTest extends TestCase
         $this->assertSame([1, 2, 3, 4, 5], $lots->pluck('lot_no')->all());
         $this->assertSame('101626.02', $lots[1]->estimated_value);
         $this->assertSame([null], $lots->pluck('outcome')->unique()->values()->all());
+        // części założone przez łączenie z ogłoszeniem są oznaczone (raport skuteczności)
+        $this->assertSame([true], $lots->pluck('created_by_bzp')->unique()->values()->all());
         $this->assertNull($tender->refresh()->result_status);
         $this->assertNotNull($tender->contract_notice_id);
         $this->assertNull($tender->result_notice_id);
@@ -298,6 +302,192 @@ final class BzpTenderLinkerTest extends TestCase
             ->assertJsonPath('lots.0.bzp_conflict', null);
     }
 
+    public function test_lone_lot_one_conflict_is_shown_on_read_and_confirmed_number_gets_part_one(): void
+    {
+        $tender = $this->tender('2026/BZP 00361360');
+        Sanctum::actingAs($this->owner);
+        $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [['lot_no' => 1, 'our_net' => '120000.00', 'our_vat_rate' => '23']]])->assertOk();
+        $this->postJson('/api/tenders/'.$tender->id.'/result/bzp-check')->assertOk();
+
+        // zwykły odczyt wyniku (bez „Sprawdź w Biuletynie”) pokazuje prośbę o numer części; dane nie są wpisane
+        $read = $this->getJson('/api/tenders/'.$tender->id.'/result')->assertOk()
+            ->assertJsonCount(1, 'lots')
+            ->assertJsonPath('lots.0.outcome', null)
+            ->assertJsonPath('lots.0.lowest_price', null)
+            ->assertJsonPath('lots.0.bzp_notice_number', null);
+        $this->assertSame(BzpTenderLinker::unnumberedConflict(2), $read->json('lots.0.bzp_conflict'));
+        $lotId = (int) $read->json('lots.0.id');
+
+        // „Tak, startowaliśmy w części 1 ogłoszenia” — potwierdzenie numeru, prośba znika
+        $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [['id' => $lotId, 'lot_no' => 1, 'lot_no_confirmed' => true]]])
+            ->assertOk()
+            ->assertJsonPath('lots.0.manual_fields', ['our_net', 'our_vat_rate', TenderLot::LOT_NO_CONFIRMED])
+            ->assertJsonPath('lots.0.bzp_conflict', null);
+        $confirmLog = TenderActivity::query()->where('tender_id', $tender->id)->where('action', 'result_updated')->latest('id')->firstOrFail();
+        $this->assertTrue($confirmLog->meta['lots'][0]['lot_no_confirmed']);
+
+        // sprawdzenie wpisuje dane części 1 ogłoszenia (unieważniona), część 2 nie jest zakładana
+        $checked = $this->postJson('/api/tenders/'.$tender->id.'/result/bzp-check')->assertOk()
+            ->assertJsonCount(1, 'lots')
+            ->assertJsonPath('lots.0.outcome', TenderLot::OUTCOME_CANCELLED)
+            ->assertJsonPath('lots.0.lowest_price', '1365178.85')
+            ->assertJsonPath('lots.0.our_net', '120000.00')
+            ->assertJsonPath('lots.0.bzp_conflict', null);
+        $this->assertStringNotContainsString('Ustaw numer części', (string) $checked->json('bzp_message'));
+
+        // edycja innego pola nie gubi potwierdzenia
+        $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [['id' => $lotId, 'lot_no' => 1, 'note' => 'Zamawiający unieważnił']]])
+            ->assertOk()
+            ->assertJsonPath('lots.0.manual_fields', ['our_net', 'our_vat_rate', 'note', TenderLot::LOT_NO_CONFIRMED]);
+
+        // zmiana numeru części kasuje potwierdzenie i dane Biuletynu poprzedniej części (wpisy człowieka zostają)
+        $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [['id' => $lotId, 'lot_no' => 2]]])
+            ->assertOk()
+            ->assertJsonPath('lots.0.manual_fields', ['our_net', 'our_vat_rate', 'note'])
+            ->assertJsonPath('lots.0.outcome', null)
+            ->assertJsonPath('lots.0.lowest_price', null)
+            ->assertJsonPath('lots.0.bzp_notice_number', null)
+            ->assertJsonPath('lots.0.our_net', '120000.00')
+            ->assertJsonPath('lots.0.bzp_conflict', null);
+        $this->assertNull($tender->refresh()->result_status);
+        // powrót do numeru 1 bez potwierdzenia — znowu prośba o numer części
+        $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [['id' => $lotId, 'lot_no' => 1]]])
+            ->assertOk()
+            ->assertJsonPath('lots.0.bzp_conflict', BzpTenderLinker::unnumberedConflict(2));
+
+        // po numerze 2 następne sprawdzenie wpisuje dane części 2
+        $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [['id' => $lotId, 'lot_no' => 2]]])->assertOk();
+        $this->postJson('/api/tenders/'.$tender->id.'/result/bzp-check')->assertOk()
+            ->assertJsonPath('lots.0.winner_price', '143320.83')
+            ->assertJsonPath('lots.0.outcome', null);
+    }
+
+    public function test_lot_number_confirmation_must_be_true_or_false(): void
+    {
+        $tender = $this->tender('2026/BZP 00361360');
+        Sanctum::actingAs($this->owner);
+
+        $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [['lot_no' => 1, 'lot_no_confirmed' => 'może']]])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('lots.0.lot_no_confirmed');
+        $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [['lot_no' => 1, 'lot_no_confirmed' => true]]])
+            ->assertOk()
+            ->assertJsonPath('lots.0.manual_fields', [TenderLot::LOT_NO_CONFIRMED]);
+        $lotId = (int) TenderLot::query()->where('tender_id', $tender->id)->value('id');
+        $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [['id' => $lotId, 'lot_no' => 1, 'lot_no_confirmed' => false]]])
+            ->assertOk()
+            ->assertJsonPath('lots.0.manual_fields', []);
+    }
+
+    public function test_changing_to_another_notice_drops_lot_number_confirmation(): void
+    {
+        $tender = $this->tender('2026/BZP 00361360');
+        Sanctum::actingAs($this->owner);
+        $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [['lot_no' => 1, 'our_net' => '120000.00', 'lot_no_confirmed' => true]]])->assertOk();
+        app(BzpTenderLinker::class)->link($tender->refresh());
+        $lot = TenderLot::query()->where('tender_id', $tender->id)->sole();
+        $this->assertNotNull($lot->bzp_notice_id);
+
+        $this->patchJson('/api/tenders/'.$tender->id, ['notice_number' => '2026/BZP 00376786'])->assertOk();
+
+        $lot->refresh();
+        $this->assertSame(['our_net'], $lot->manual_fields);
+        $this->assertNull($lot->bzp_notice_id);
+        $this->assertNull($lot->outcome);
+        $this->assertSame('120000.00', $lot->our_net);
+    }
+
+    public function test_manual_lots_one_and_two_then_deleting_two_leaves_lone_lot_one_in_conflict(): void
+    {
+        $tender = $this->tender('2026/BZP 00361360');
+        Sanctum::actingAs($this->owner);
+        $saved = $this->putJson('/api/tenders/'.$tender->id.'/result', ['lots' => [
+            ['lot_no' => 1, 'our_net' => '1000.00'],
+            ['lot_no' => 2, 'our_net' => '2000.00'],
+        ]])->assertOk();
+        $lot2 = collect($saved->json('lots'))->firstWhere('lot_no', 2);
+        $this->deleteJson('/api/tenders/'.$tender->id.'/result/lots/'.$lot2['id'])->assertOk();
+
+        $this->postJson('/api/tenders/'.$tender->id.'/result/bzp-check')->assertOk()
+            ->assertJsonCount(1, 'lots')
+            ->assertJsonPath('lots.0.outcome', null)
+            ->assertJsonPath('lots.0.bzp_conflict', BzpTenderLinker::unnumberedConflict(2));
+        $this->getJson('/api/tenders/'.$tender->id.'/result')->assertOk()
+            ->assertJsonPath('lots.0.bzp_conflict', BzpTenderLinker::unnumberedConflict(2));
+    }
+
+    public function test_adding_notice_version_keeps_lots_data_and_links(): void
+    {
+        $tender = $this->tender('2026/BZP 00361360');
+        app(BzpTenderLinker::class)->link($tender);
+        $linked = $tender->refresh();
+        $this->assertNotNull($linked->result_notice_id);
+        Sanctum::actingAs($this->owner);
+
+        // „/01” = to samo postępowanie: części, dane z Biuletynu i powiązania zostają, noc sprawdzi przetarg na nowo
+        $this->patchJson('/api/tenders/'.$tender->id, ['notice_number' => '2026/BZP 00361360/01'])
+            ->assertOk()
+            ->assertJsonPath('notice_number', '2026/BZP 00361360/01');
+
+        $fresh = $tender->refresh();
+        $this->assertSame((int) $linked->result_notice_id, (int) $fresh->result_notice_id);
+        $this->assertSame($linked->contract_notice_id, $fresh->contract_notice_id);
+        $this->assertNull($fresh->bzp_checked_at);
+        $lots = TenderLot::query()->where('tender_id', $tender->id)->orderBy('lot_no')->get();
+        $this->assertSame([1, 2], $lots->pluck('lot_no')->all());
+        $this->assertSame('143320.83', $lots[1]->winner_price);
+        $this->assertSame(0, TenderActivity::query()->where('tender_id', $tender->id)->where('meta->source', 'notice_number_changed')->count());
+    }
+
+    public function test_lots_deleted_by_a_person_do_not_return_after_notice_version_change(): void
+    {
+        $tender = $this->tender('2026/BZP 00361360');
+        app(BzpTenderLinker::class)->link($tender);
+        Sanctum::actingAs($this->owner);
+        foreach (TenderLot::query()->where('tender_id', $tender->id)->pluck('id') as $lotId) {
+            $this->deleteJson('/api/tenders/'.$tender->id.'/result/lots/'.$lotId)->assertOk();
+        }
+
+        $this->patchJson('/api/tenders/'.$tender->id, ['notice_number' => '2026/BZP 00361360/01'])->assertOk();
+        app(BzpTenderLinker::class)->link($tender->refresh());
+        app(BzpTenderLinker::class)->linkAll();
+
+        $this->assertSame(0, TenderLot::query()->where('tender_id', $tender->id)->count());
+    }
+
+    public function test_changing_to_another_procedure_needs_offer_editing_when_bulletin_data_exists(): void
+    {
+        $tender = $this->tender('2026/BZP 00361360');
+        app(BzpTenderLinker::class)->link($tender);
+        Role::findOrCreate('tylko-zakladanie', 'web')->syncPermissions(['tenders.view_own', 'tenders.create']);
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
+        $creator = User::factory()->create();
+        $creator->assignRole('tylko-zakladanie');
+        $tender->forceFill(['owner_id' => $creator->id])->save();
+        $this->assertFalse($creator->can('tenders.edit_offer'));
+        Sanctum::actingAs($creator);
+
+        $this->patchJson('/api/tenders/'.$tender->id, ['notice_number' => '2026/BZP 00376786'])
+            ->assertForbidden()
+            ->assertJsonPath('message', 'Zmiana numeru ogłoszenia usunie dane pobrane z Biuletynu Zamówień Publicznych. Może to zrobić osoba z uprawnieniem do edycji oferty.');
+        $fresh = $tender->refresh();
+        $this->assertSame('2026/BZP 00361360', $fresh->notice_number);
+        $this->assertNotNull($fresh->result_notice_id);
+        $this->assertSame(2, TenderLot::query()->where('tender_id', $tender->id)->whereNotNull('bzp_notice_id')->count());
+
+        // sama wersja numeru nie usuwa danych — bez uprawnienia do edycji oferty
+        $this->patchJson('/api/tenders/'.$tender->id, ['notice_number' => '2026/BZP 00361360/01'])->assertOk();
+        // przetarg bez danych z Biuletynu — zmiana numeru bez ograniczeń
+        $plain = $this->tender('2026/BZP 00999999/01');
+        $plain->forceFill(['owner_id' => $creator->id])->save();
+        $this->patchJson('/api/tenders/'.$plain->id, ['notice_number' => '2026/BZP 00376786'])->assertOk();
+        // osoba z edycją oferty zmienia postępowanie mimo danych z Biuletynu
+        Sanctum::actingAs($this->owner);
+        $tender->forceFill(['owner_id' => $this->owner->id])->save();
+        $this->patchJson('/api/tenders/'.$tender->id, ['notice_number' => '2026/BZP 00376786'])->assertOk();
+        $this->assertSame(0, TenderLot::query()->where('tender_id', $tender->id)->whereNotNull('bzp_notice_id')->count());
+    }
+
     public function test_manual_lot_one_is_filled_when_notice_has_one_part(): void
     {
         $tender = $this->tender('2026/BZP 00376786');
@@ -312,6 +502,7 @@ final class BzpTenderLinkerTest extends TestCase
         $this->assertSame('31740.15', $lot->winner_price);
         $this->assertSame('30000.00', $lot->our_net);
         $this->assertNotNull($lot->bzp_notice_id);
+        $this->assertFalse($lot->created_by_bzp, 'Część założona ręcznie zostaje ręczna.');
     }
 
     public function test_virtual_lot_saved_together_with_new_part_is_numbered_by_notice(): void

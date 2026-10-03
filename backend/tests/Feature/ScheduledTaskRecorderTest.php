@@ -186,6 +186,30 @@ class ScheduledTaskRecorderTest extends TestCase
         $this->assertCount(2, $this->dispatcher->calls);
     }
 
+    public function test_reminders_failing_once_a_day_keep_one_incident_and_one_mail(): void
+    {
+        // wpis zadania prosto z config/system_health.php (własne okno ponownego otwarcia, 26 h)
+        $tasks = (require config_path('system_health.php'))['tasks'];
+        $this->assertSame(1560, $tasks['tenders:remind']['reopen_within_minutes']);
+        config(['system_health.tasks' => ['tenders:remind' => $tasks['tenders:remind']], 'system_health.reopen_within_minutes' => 360]);
+        $schedule = new Schedule;
+        $event = $schedule->command('tenders:remind')->everyFifteenMinutes();
+        app(ScheduledTaskRecorder::class)->attach($schedule);
+
+        // codziennie o 7:00 błąd poczty u jednego odbiorcy, kolejne przebiegi co 15 minut bez błędu
+        $this->travelTo(Carbon::parse('2026-10-03 05:00:00', 'UTC'));
+        for ($day = 0; $day < 4; $day++) {
+            $this->runOnce($event, 1, 'Nie wysłano e-maila do 1 osoby.');
+            $this->travel(15)->minutes();
+            $this->runOnce($event, 0, 'ok');
+            $this->travel(1425)->minutes();
+        }
+
+        $alert = SystemAlert::query()->sole();
+        $this->assertSame(4, $alert->failures);
+        $this->assertCount(1, $this->dispatcher->calls, 'Jeden incydent, jeden e-mail.');
+    }
+
     public function test_background_run_is_finished_by_another_process_through_the_cache(): void
     {
         // proces schedule:run: before

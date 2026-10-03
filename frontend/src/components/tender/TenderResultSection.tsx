@@ -504,6 +504,22 @@ function CompanyPicker({
   )
 }
 
+/**
+ * Sprzeczność „samotna część nr 1 przy ogłoszeniu z kilkoma częściami” (ta sama reguła co na serwerze, w GET wyniku
+ * i po sprawdzeniu w Biuletynie): jedyna zapisana część, numer 1, bez powiązania z ogłoszeniem i bez potwierdzonego
+ * numeru. Inne sprzeczności (wpis ręczny różny od ogłoszenia) dotyczą części powiązanych z ogłoszeniem.
+ */
+function isUnnumberedLotConflict(lot: TenderLot, lotsCount: number): boolean {
+  return (
+    lot.bzp_conflict != null &&
+    lotsCount === 1 &&
+    lot.id != null &&
+    lot.lot_no === 1 &&
+    lot.bzp_notice_number == null &&
+    !lot.manual_fields.includes('lot_no')
+  )
+}
+
 function NoticeLink({ notice, label }: { notice: BzpNoticeRef; label: string }) {
   return (
     <span>
@@ -533,6 +549,7 @@ export function TenderResultSection({ tenderId, canEdit, onChanged, onDirtyChang
   const [msg, setMsg] = useState('')
   const [bzpMessage, setBzpMessage] = useState('')
   const selectedLotNo = useRef<string | null>(null)
+  const lotNoInputRef = useRef<HTMLInputElement | null>(null)
 
   const apply = useCallback((res: TenderResultResponse) => {
     const next = res.lots.map(toDraft)
@@ -684,6 +701,45 @@ export function TenderResultSection({ tenderId, canEdit, onChanged, onDirtyChang
     }
   }
 
+  /** „Zmień numer części” przy sprzeczności: wybór tej części i kursor w polu numeru */
+  function editLotNo(lot: TenderLot) {
+    const d = drafts.find((x) => x.key === `id:${lot.id}`)
+    if (d) select(d)
+    requestAnimationFrame(() => lotNoInputRef.current?.focus())
+  }
+
+  /**
+   * „Tak, startowaliśmy w części 1 ogłoszenia”: zapis potwierdzenia numeru części (serwer przestaje ją pomijać),
+   * a zaraz potem sprawdzenie w Biuletynie, które wpisuje dane części 1 z ogłoszenia.
+   */
+  async function confirmFirstLot(lot: TenderLot) {
+    if (lot.id == null) return
+    if (dirty && !window.confirm('Masz niezapisane zmiany — sprawdzenie w Biuletynie wczyta wynik od nowa. Kontynuować?')) {
+      return
+    }
+    setBusy(true)
+    setErr('')
+    setMsg('')
+    let confirmed = false
+    try {
+      apply(await saveTenderResult(tenderId, [{ id: lot.id, lot_no: 1, lot_no_confirmed: true }]))
+      confirmed = true
+      const res = await checkTenderBzp(tenderId)
+      apply(res)
+      setBzpMessage(res.bzp_message ?? 'Sprawdzono ogłoszenia w Biuletynie Zamówień Publicznych.')
+      setMsg('Zapisano: startowaliśmy w części 1 ogłoszenia.')
+    } catch (e) {
+      setErr(
+        confirmed
+          ? `Zapisano, że startowaliśmy w części 1. Sprawdzenie w Biuletynie się nie udało — kliknij „Sprawdź w Biuletynie Zamówień Publicznych”. Powód: ${errorText(e, 'błąd serwera.')}`
+          : errorText(e, 'Nie udało się zapisać numeru części.'),
+      )
+    } finally {
+      setBusy(false)
+      if (confirmed) onChanged?.()
+    }
+  }
+
   if (loadErr) {
     return <p className="rounded-xl bg-white p-4 text-xs text-red-700 shadow-sm">{loadErr}</p>
   }
@@ -772,6 +828,27 @@ export function TenderResultSection({ tenderId, canEdit, onChanged, onDirtyChang
             {conflicts.map((l) => (
               <li key={l.lot_no}>
                 Część {l.lot_no}: {l.bzp_conflict}
+                {editable && isUnnumberedLotConflict(l, data.lots.length) && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => editLotNo(l)}
+                      className="rounded border border-amber-300 bg-white px-3 py-1.5 font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                    >
+                      Zmień numer części
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void confirmFirstLot(l)}
+                      title="Zapisuje, że nasza oferta dotyczyła części 1 ogłoszenia, i od razu sprawdza Biuletyn — dane części 1 wpiszą się same"
+                      className="rounded bg-amber-700 px-3 py-1.5 font-semibold text-white hover:bg-amber-800 disabled:opacity-50"
+                    >
+                      Tak, startowaliśmy w części 1 ogłoszenia
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -906,6 +983,7 @@ export function TenderResultSection({ tenderId, canEdit, onChanged, onDirtyChang
             <label>
               Numer części
               <input
+                ref={lotNoInputRef}
                 className={inputClass}
                 inputMode="numeric"
                 value={selected.lot_no}

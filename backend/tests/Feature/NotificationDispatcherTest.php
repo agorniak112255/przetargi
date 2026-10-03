@@ -222,6 +222,29 @@ final class NotificationDispatcherTest extends TestCase
         $this->assertSame([], $dispatcher->pendingMailSubjects('tender_mention'));
     }
 
+    public function test_abandoned_mail_is_not_retried_and_resumes_only_below_the_attempt_limit(): void
+    {
+        config(['notifications.mail_retry.max_attempts' => 3]);
+        $user = User::factory()->withRole('admin')->create();
+        $rows = ['system_alert:1' => ['pending', 1], 'system_alert:2' => ['sending', 2], 'system_alert:3' => ['sent', 1], 'system_alert:4' => ['failed', 3]];
+        foreach ($rows as $subject => [$status, $attempts]) {
+            DB::table('notification_dispatches')->insert([
+                'user_id' => $user->id, 'event' => 'system_alert', 'subject_key' => $subject, 'period_key' => 'incident',
+                'mail_status' => $status, 'mail_attempts' => $attempts, 'mail_attempted_at' => now(), 'created_at' => now(),
+            ]);
+        }
+        $dispatcher = app(NotificationDispatcher::class);
+        $status = static fn (): array => DB::table('notification_dispatches')->orderBy('subject_key')->pluck('mail_status', 'subject_key')->all();
+
+        $this->assertSame(2, $dispatcher->abandonPendingMail('system_alert', array_keys($rows)));
+        $this->assertSame(['system_alert:1' => 'failed', 'system_alert:2' => 'failed', 'system_alert:3' => 'sent', 'system_alert:4' => 'failed'], $status());
+        $this->assertSame([], $dispatcher->pendingMailSubjects('system_alert'));
+
+        // sprawa wróciła: ponawiane tylko e-maile poddane przed ostatnią dozwoloną próbą
+        $this->assertSame(2, $dispatcher->resumeAbandonedMail('system_alert', array_keys($rows)));
+        $this->assertSame(['system_alert:1' => 'pending', 'system_alert:2' => 'pending', 'system_alert:3' => 'sent', 'system_alert:4' => 'failed'], $status());
+    }
+
     public function test_smtp_settings_from_the_panel_are_read_again_before_sending(): void
     {
         // proces kolejki wystartował ze starymi ustawieniami; administrator zmienił serwer w panelu

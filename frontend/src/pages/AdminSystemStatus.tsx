@@ -196,7 +196,10 @@ function AlertsCard({ alerts, onChanged }: { alerts: AlertRow[]; onChanged: (a: 
                     {a.title}
                     {(a.failures ?? 0) > 1 && <div className="text-xs font-normal text-slate-500">błędów: {nf(a.failures ?? 0)}</div>}
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap text-slate-700">{when(a.since)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap text-slate-700">
+                    {/* serwer nie zna początku problemu (np. incydent bez zapisanego pierwszego błędu) */}
+                    {a.since ? when(a.since) : <span className="text-slate-400">nie wiadomo</span>}
+                  </td>
                   <td className="max-w-md px-3 py-2 text-slate-600">
                     <span className="line-clamp-3 whitespace-pre-line">{a.last_message ?? '—'}</span>
                   </td>

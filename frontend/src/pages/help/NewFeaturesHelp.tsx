@@ -189,7 +189,7 @@ export function NewFeaturesHelp() {
         },
         {
           action: 'Wynik z Biuletynu Zamówień Publicznych',
-          does: 'Codziennie rano aplikacja pobiera ogłoszenia o zamówieniu i o wyniku z Biuletynu Zamówień Publicznych i łączy je z przetargami po numerze ogłoszenia. Z ogłoszenia o wyniku wypełnia zwycięzcę, jego cenę, liczbę ofert oraz najniższą i najwyższą cenę. Sama zaznacza tylko wygraną (gdy wygrała nasza firma) i unieważnienie. Gdy wygrała inna firma, „przegrana” i jej powód zaznaczasz Ty. Tego, co wpisałeś ręcznie, Biuletyn nie nadpisuje — przy różnicy pokazuje ostrzeżenie.',
+          does: 'Codziennie rano aplikacja pobiera ogłoszenia o zamówieniu i o wyniku z Biuletynu Zamówień Publicznych i łączy je z przetargami po numerze ogłoszenia. Z ogłoszenia o wyniku wypełnia zwycięzcę, jego cenę, liczbę ofert oraz najniższą i najwyższą cenę. Sama zaznacza tylko wygraną (gdy wygrała nasza firma) i unieważnienie. Gdy wygrała inna firma, „przegrana” i jej powód zaznaczasz Ty. Tego, co wpisałeś ręcznie, Biuletyn nie nadpisuje — przy różnicy pokazuje ostrzeżenie. Gdy ogłoszenie ma kilka części, a w przetargu jest tylko część 1 wpisana wcześniej, aplikacja nie zgaduje, której części dotyczyła oferta: wybierz „Zmień numer części” albo „Tak, startowaliśmy w części 1 ogłoszenia”. Zmiana numeru ogłoszenia na inne postępowanie usuwa dane pobrane z Biuletynu, dlatego może ją zrobić tylko osoba z uprawnieniem do edycji oferty.',
           click: '„Sprawdź w Biuletynie Zamówień Publicznych” w sekcji „Wynik przetargu” — od razu dopasowuje przetarg do ogłoszeń już pobranych przez aplikację. Nowe ogłoszenia aplikacja pobiera z Biuletynu raz dziennie, o 6:30, więc wynik opublikowany w ciągu dnia pojawi się dopiero następnego ranka.',
           tone: 'violet',
           screen: (
@@ -260,7 +260,7 @@ export function NewFeaturesHelp() {
         },
         {
           action: 'Wzmianka „@” w komentarzu',
-          does: 'W komentarzu przetargu wpisz „@” i zacznij pisać imię — pojawi się lista osób, które mają dostęp do tego przetargu. Wybrana osoba dostaje powiadomienie z linkiem prosto do komentarzy, a na dashboardzie widzi je w „Do zrobienia dziś”, dopóki go nie przeczyta.',
+          does: 'W komentarzu przetargu wpisz „@” i zacznij pisać imię — pojawi się lista osób, które mają dostęp do tego przetargu. Wybrana osoba dostaje powiadomienie z linkiem prosto do komentarzy, a na dashboardzie widzi tę wzmiankę w „Do zrobienia dziś”, dopóki jej nie przeczyta.',
           click: 'Przetarg → „Komentarze”, w polu komentarza „@”, wybór osoby z listy, potem dodanie komentarza.',
           tone: 'blue',
           screen: (
@@ -292,7 +292,7 @@ export function NewFeaturesHelp() {
         },
         {
           action: 'Stan systemu (dla administratora)',
-          does: 'Jeden ekran pokazuje, czy działają zadania nocne, pobieranie cen z kont dostawców, kolejka analiz zapytań i dopasowywanie produktów. Gdy zadanie nocne albo konto dostawcy przestanie działać, osoby z uprawnieniem „Stan systemu” dostają jeden e-mail na każdy problem; znany problem można wyciszyć. Godziny zadań są w czasie polskim. Niżej „Dane do uzupełnienia”: przetargi bez godziny składania albo numeru ogłoszenia, handlowcy bez operatora ERP XL, zamawiający bez powiązania z ERP XL i sprzedawane towary bez karty produktu — „Pokaż” rozwija listę.',
+          does: 'Jeden ekran pokazuje, czy działają zadania nocne, pobieranie cen z kont dostawców, kolejka analiz zapytań i dopasowywanie produktów. Gdy zadanie nocne albo konto dostawcy przestanie działać, osoby z uprawnieniem „Stan systemu” i dostępem do Administracji dostają jeden e-mail na każdy problem; znany problem można wyciszyć. Godziny zadań są w czasie polskim. Niżej „Dane do uzupełnienia”: przetargi bez godziny składania albo numeru ogłoszenia, handlowcy bez operatora ERP XL, zamawiający bez powiązania z ERP XL i sprzedawane towary bez karty produktu — „Pokaż” rozwija listę.',
           click: '„Administracja” → kafelek „Stan systemu”. „Wycisz e-mail” przy problemie, który jest znany; „Włącz e-mail” cofa wyciszenie.',
           tone: 'amber',
           screen: (
@@ -300,7 +300,7 @@ export function NewFeaturesHelp() {
               nav="Stan systemu"
               path="/admin/stan-systemu"
               page={<AdminSystemStatus />}
-              allowed={can(user, 'admin.system.view')}
+              allowed={can(user, 'admin.access') && can(user, 'admin.system.view')}
               fallback={<SystemStatusSketch />}
               mark="text=Wycisz e-mail"
             />
