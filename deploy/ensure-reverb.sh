@@ -28,10 +28,12 @@ if [[ ! -f "$BACKEND/artisan" ]]; then
   exit 1
 fi
 
-# Ostatnia niezakomentowana wartość z .env (cudzysłowy zdjęte).
+# Ostatnia niezakomentowana wartość z .env (cudzysłowy zdjęte); brak klucza = pusty napis. `|| true` jest konieczne:
+# grep bez trafienia kończy się kodem 1, a przy `set -euo pipefail` przypisanie HOST="$(env_value …)" przerywało
+# skrypt bez słowa (03.10.2026 — usługa nie powstała, bo .env nie ma REVERB_SERVER_PORT).
 env_value() {
   local key="$1"
-  grep -E "^${key}=" "$BACKEND/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '"'"'"' \r'
+  { grep -E "^${key}=" "$BACKEND/.env" 2>/dev/null || true; } | tail -n 1 | cut -d= -f2- | tr -d '"'"'"' \r'
 }
 
 # Adres i port z .env (te same, pod które aplikacja publikuje zdarzenia: REVERB_HOST/REVERB_PORT) — rozjazd
