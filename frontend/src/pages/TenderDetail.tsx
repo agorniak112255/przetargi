@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { CheaperSourceNote } from '../components/CheaperSourceNote'
 import { OrderQuantityBadge } from '../components/OrderQuantityBadge'
@@ -16,6 +16,8 @@ import {
   type ProductActiveVariant,
   type Substitute,
   type Tender,
+  type TenderInvitationCreateResponse,
+  type TenderResultStatus,
 } from '../lib/api'
 import { currencyLabel, formatPrice } from '../lib/priceChange'
 import { offerMarkupFactor, productDisplayName, productThumbUrl, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
@@ -28,6 +30,10 @@ import { TENDER_STATUS_LABEL } from '../lib/tenderStatus'
 import { ShareToChatButton } from '../components/ShareToChatButton'
 import { StatusFlow } from '../components/StatusFlow'
 import { isTenderWizardActive, setTenderWizardActive } from '../lib/tenderWizard'
+import { TenderResultSection } from '../components/tender/TenderResultSection'
+import { MentionTextarea } from '../components/tender/MentionTextarea'
+import { deadlineTimeLabel, formatDeadline } from '../lib/tenderDeadline'
+import { LOT_FIELD_LABEL, NO_RESULT_CLASS, RESULT_STATUS_CLASS, resultStatusLabel } from '../lib/tenderResult'
 
 type MatchReason = { code: string; label: string; points: number; url?: string }
 
@@ -211,6 +217,8 @@ type CommentRow = {
   user?: { name: string; role?: string } | null
   item?: { id: number; line_no: number } | null
   tender_item_id?: number | null
+  /** osoby wspomniane przez „@” (powiadomione) */
+  mentioned_users?: { id: number; name: string }[]
 }
 
 type InvitationRow = {
@@ -356,6 +364,7 @@ type TenderTab =
   | 'pozycje'
   | 'zamienniki'
   | 'oferta'
+  | 'wynik'
   | 'komentarze'
   | 'zaproszenia'
   | 'historia'
@@ -378,6 +387,7 @@ const TAB_GROUPS: Array<{ label: string; tabs: Array<{ key: TenderTab; label: st
       { key: 'oferta', label: 'Oferta' },
     ],
   },
+  { label: 'Po terminie', tabs: [{ key: 'wynik', label: 'Wynik przetargu' }] },
   {
     label: 'Zespół',
     tabs: [
@@ -387,6 +397,16 @@ const TAB_GROUPS: Array<{ label: string; tabs: Array<{ key: TenderTab; label: st
     ],
   },
 ]
+
+/**
+ * Sekcje, które można otworzyć adresem „?tab=…” (linki z powiadomień: „/tenders/12?tab=wynik”, „?tab=komentarze”).
+ * Taki adres pokazuje pełny widok przetargu także wtedy, gdy przetarg jest jeszcze w kreatorze.
+ */
+const URL_TABS: TenderTab[] = ['wynik', 'komentarze']
+
+function urlTabOf(value: string | null): TenderTab | null {
+  return value && (URL_TABS as string[]).includes(value) ? (value as TenderTab) : null
+}
 
 /** Jedno zdanie pod nagłówkiem sekcji pełnego widoku. Dokumenty, Warunki i Komentarze mają opis we własnej sekcji. */
 const SECTION_INTRO: Partial<Record<TenderTab, string>> = {
@@ -468,12 +488,6 @@ function daysUntil(day: string): number | null {
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   return Math.round((target.getTime() - today.getTime()) / 86400000)
-}
-
-/** „2026-10-14” → „14.10.2026”. */
-function formatDay(day: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
-  return m ? `${m[3]}.${m[2]}.${m[1]}` : day
 }
 
 /** Rozwijane menu akcji w nagłówku (Eksport, ⋯). Zamyka się po wyborze, kliknięciu obok i Esc. */
@@ -706,6 +720,38 @@ const actionLabel: Record<string, string> = {
   comment_added: 'Dodano komentarz',
   invitation_added: 'Zaproszono osobę do przetargu',
   invitation_removed: 'Usunięto zaproszenie',
+  result_updated: 'Zmieniono wynik przetargu',
+}
+
+/** Szczegóły wpisu „Zmieniono wynik przetargu” (meta z TenderResultService). */
+function formatResultMeta(meta: Record<string, unknown>): string {
+  const parts: string[] = []
+  for (const raw of Array.isArray(meta.lots) ? meta.lots : []) {
+    if (!raw || typeof raw !== 'object') continue
+    const lot = raw as {
+      lot_no?: number
+      created?: boolean
+      deleted?: boolean
+      fields?: string[]
+      offers_changed?: boolean
+      previous_lot_no?: number
+    }
+    const label = `część ${lot.lot_no ?? '?'}`
+    if (lot.deleted) {
+      parts.push(`usunięto ${label}`)
+      continue
+    }
+    const changes = (Array.isArray(lot.fields) ? lot.fields : []).map((f) => LOT_FIELD_LABEL[f] ?? f)
+    if (lot.offers_changed) changes.push('ceny innych firm')
+    if (lot.previous_lot_no != null) changes.push(`numer części (było ${lot.previous_lot_no})`)
+    parts.push(`${lot.created ? 'nowa ' : ''}${label}${changes.length > 0 ? `: ${changes.join(', ')}` : ''}`)
+  }
+  const before = (meta.result_status_before ?? null) as TenderResultStatus | null
+  const after = (meta.result_status_after ?? null) as TenderResultStatus | null
+  if (before !== after) {
+    parts.push(`wynik przetargu: ${resultStatusLabel(before)} → ${resultStatusLabel(after)}`)
+  }
+  return parts.length > 0 ? parts.join('; ') : '—'
 }
 
 function sameVal(a: unknown, b: unknown): boolean {
@@ -719,6 +765,7 @@ function sameVal(a: unknown, b: unknown): boolean {
 
 function formatActivityMeta(meta: Record<string, unknown> | null | undefined): string {
   if (!meta) return '—'
+  if (Array.isArray(meta.lots)) return formatResultMeta(meta)
   const before = meta.before as Record<string, unknown> | undefined
   const after = meta.after as Record<string, unknown> | undefined
   if (before && after) {
@@ -730,6 +777,9 @@ function formatActivityMeta(meta: Record<string, unknown> | null | undefined): s
       'main_product_id',
       'companion_product_id',
       'ai_match_percent',
+      'deadline',
+      'deadline_time',
+      'notice_number',
     ] as const) {
       if (!sameVal(before[key], after[key])) {
         const labels: Record<string, string> = {
@@ -739,6 +789,9 @@ function formatActivityMeta(meta: Record<string, unknown> | null | undefined): s
           main_product_id: 'produkt',
           companion_product_id: 'drugi produkt kompletu',
           ai_match_percent: 'ocena dopasowania, %',
+          deadline: 'termin składania',
+          deadline_time: 'godzina składania',
+          notice_number: 'numer ogłoszenia',
         }
         parts.push(`${labels[key] ?? key}: ${String(before[key] ?? '—')} → ${String(after[key] ?? '—')}`)
       }
@@ -752,6 +805,12 @@ function formatActivityMeta(meta: Record<string, unknown> | null | undefined): s
     return `${meta.user_name}${meta.user_email ? ` <${String(meta.user_email)}>` : ''}`
   }
   return '—'
+}
+
+/** Autor wpisu historii; wynik zapisany przez nocne pobieranie z Biuletynu nie ma osoby. */
+function activityAuthor(a: ActivityRow): string {
+  if (a.user?.name) return a.user.name
+  return a.meta?.source === 'bzp' ? 'Biuletyn Zamówień Publicznych' : '—'
 }
 
 function activityHasRealChange(a: ActivityRow): boolean {
@@ -785,8 +844,49 @@ function TenderDetailView() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const urlTab = urlTabOf(searchParams.get('tab'))
   const [data, setData] = useState<Detail | null>(null)
-  const [tab, setTab] = useState<TenderTab>('podsumowanie')
+  const [tab, setTabState] = useState<TenderTab>(() => urlTab ?? 'podsumowanie')
+  /** sekcja widoczna teraz (dla pytania o niezapisany wynik w obsłudze zdarzeń i adresu) */
+  const tabNowRef = useRef(tab)
+  useEffect(() => {
+    tabNowRef.current = tab
+  }, [tab])
+  // „Wynik przetargu” ma własny formularz: przejście do innej sekcji go odmontowuje i gubi niezapisane zmiany
+  const resultDirtyRef = useRef(false)
+  const [resultDirty, setResultDirty] = useState(false)
+  const onResultDirtyChange = useCallback((dirty: boolean) => {
+    resultDirtyRef.current = dirty
+    setResultDirty(dirty)
+  }, [])
+  /** false = zostajemy w sekcji „Wynik przetargu” (osoba nie chce stracić zmian) */
+  const mayLeaveResult = useCallback(
+    (next: TenderTab) =>
+      next === 'wynik' ||
+      tabNowRef.current !== 'wynik' ||
+      !resultDirtyRef.current ||
+      window.confirm('Wynik przetargu ma niezapisane zmiany. Przejść do innej sekcji bez zapisu? Zmiany przepadną.'),
+    [],
+  )
+  const setTab = useCallback(
+    (next: TenderTab) => {
+      if (mayLeaveResult(next)) setTabState(next)
+    },
+    [mayLeaveResult],
+  )
+  // zamknięcie albo odświeżenie karty przeglądarki z niezapisanym wynikiem — pytanie przeglądarki
+  useEffect(() => {
+    if (!resultDirty) return
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [resultDirty])
+  // adres „?tab=…” (np. z powiadomienia) pokazuje pełny widok zamiast kreatora — bez wyłączania kreatora na stałe
+  const [forcePulpit, setForcePulpit] = useState(() => urlTab !== null)
   const [dragOver, setDragOver] = useState(false)
   const [wizardActive, setWizardActiveState] = useState(() => (id ? isTenderWizardActive(id) : false))
   const [wizardStep, setWizardStep] = useState(0)
@@ -824,8 +924,11 @@ function TenderDetailView() {
   const [activities, setActivities] = useState<ActivityRow[]>([])
   const [comments, setComments] = useState<CommentRow[]>([])
   const [commentBody, setCommentBody] = useState('')
+  const [commentMentions, setCommentMentions] = useState<number[]>([])
   const [commentItemId, setCommentItemId] = useState('')
   const [deadlineEdit, setDeadlineEdit] = useState('')
+  const [deadlineTimeEdit, setDeadlineTimeEdit] = useState('')
+  const [noticeEdit, setNoticeEdit] = useState('')
   const [marginEdit, setMarginEdit] = useState('18')
   const [cheaperPreview, setCheaperPreview] = useState<{
     candidates: Array<{
@@ -847,13 +950,52 @@ function TenderDetailView() {
   // can_edit z API zależy wyłącznie od statusu (Szkic, Wycena) — edycję oferty daje dopiero uprawnienie roli.
   const canEditOffer = Boolean(data?.can_edit) && can(user, 'tenders.edit_offer')
   // Kreator: włączony przy zakładaniu (lib/tenderWizard). Szkic i Wycena, bo import SIWZ sam zmienia Szkic na Wycenę.
-  const wizardMode = wizardActive && canEditOffer
+  const wizardMode = wizardActive && canEditOffer && !forcePulpit
   const wizardEnteredRef = useRef(false)
 
   function setWizardActive(active: boolean) {
     setWizardActiveState(active)
     if (id) setTenderWizardActive(id, active)
   }
+
+  // Nowy adres „?tab=…” na tej samej stronie (np. kliknięte powiadomienie) przełącza sekcję.
+  useEffect(() => {
+    if (!urlTab) return
+    if (!mayLeaveResult(urlTab)) {
+      // zostajemy przy wyniku — adres wraca do „?tab=wynik”, żeby zgadzał się z tym, co widać
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.set('tab', 'wynik')
+          return next
+        },
+        { replace: true },
+      )
+      return
+    }
+    setTabState(urlTab)
+    setForcePulpit(true)
+  }, [urlTab, mayLeaveResult, setSearchParams])
+
+  // Sekcje z URL_TABS widać w adresie (da się go skopiować); po przejściu do innej sekcji „?tab=” znika.
+  // Tylko po zmianie sekcji (nie po zmianie adresu) — inaczej nowy adres z powiadomienia i stara sekcja
+  // nadpisywałyby się nawzajem.
+  const tabRef = useRef(tab)
+  useEffect(() => {
+    if (tabRef.current === tab) return
+    tabRef.current = tab
+    const wanted = (URL_TABS as string[]).includes(tab) ? tab : null
+    setSearchParams(
+      (prev) => {
+        if (prev.get('tab') === wanted) return prev
+        const next = new URLSearchParams(prev)
+        if (wanted) next.set('tab', wanted)
+        else next.delete('tab')
+        return next
+      },
+      { replace: true },
+    )
+  }, [tab, setSearchParams])
 
   // Krok startowy liczony przy każdym wejściu w kreator, nie po każdym load() (zapis terminu, import, dopasowanie AI).
   useEffect(() => {
@@ -877,12 +1019,27 @@ function TenderDetailView() {
     const d = await api<Detail>(`/tenders/${id}`)
     setData(d)
     setDeadlineEdit(d.tender.deadline ? d.tender.deadline.slice(0, 10) : '')
+    setDeadlineTimeEdit(deadlineTimeLabel(d.tender.deadline_time) ?? '')
+    setNoticeEdit(d.tender.notice_number ?? '')
     setMarginEdit(
       d.tender.target_margin_percent != null && d.tender.target_margin_percent !== ''
         ? String(d.tender.target_margin_percent)
         : '18',
     )
     return d
+  }, [id])
+
+  /**
+   * Po zapisie wyniku: tylko znacznik wyniku w nagłówku. Pełne load() nadpisałoby niezapisane pola Podsumowania
+   * (termin, godzina, numer ogłoszenia, narzut) wartościami z serwera.
+   */
+  const refreshResultStatus = useCallback(async () => {
+    try {
+      const d = await api<Detail>(`/tenders/${id}`)
+      setData((prev) => (prev ? { ...prev, tender: { ...prev.tender, result_status: d.tender.result_status } } : d))
+    } catch {
+      // znacznik odświeży się przy następnym wczytaniu przetargu
+    }
   }, [id])
 
   const loadMeta = useCallback(async () => {
@@ -1414,13 +1571,35 @@ function TenderDetailView() {
     try {
       await api(`/tenders/${id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ deadline: deadlineEdit || null }),
+        // bez daty nie ma godziny (serwer i tak ją czyści)
+        body: JSON.stringify({
+          deadline: deadlineEdit || null,
+          deadline_time: deadlineEdit ? deadlineTimeEdit || null : null,
+        }),
       })
       await load()
       await loadMeta()
       setMsg('Zapisano termin.')
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zapisu terminu')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveNotice() {
+    setBusy(true)
+    setErr('')
+    try {
+      await api(`/tenders/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ notice_number: noticeEdit.trim() || null }),
+      })
+      await load()
+      await loadMeta()
+      setMsg('Zapisano numer ogłoszenia.')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Nie udało się zapisać numeru ogłoszenia')
     } finally {
       setBusy(false)
     }
@@ -1459,9 +1638,11 @@ function TenderDetailView() {
         body: JSON.stringify({
           body: commentBody.trim(),
           tender_item_id: commentItemId ? Number(commentItemId) : null,
+          mentioned_user_ids: commentMentions,
         }),
       })
       setCommentBody('')
+      setCommentMentions([])
       setCommentItemId('')
       await loadMeta()
       setMsg('Dodano komentarz.')
@@ -1478,7 +1659,7 @@ function TenderDetailView() {
     setErr('')
     setMsg('')
     try {
-      const res = await api<{ email_sent: boolean }>(`/tenders/${id}/invitations`, {
+      const res = await api<TenderInvitationCreateResponse>(`/tenders/${id}/invitations`, {
         method: 'POST',
         body: JSON.stringify({
           user_id: Number(inviteUserId),
@@ -1488,10 +1669,13 @@ function TenderDetailView() {
       setInviteUserId('')
       setInviteNote('')
       await loadMeta()
+      const emailStatus = res.email_status ?? (res.email_sent ? 'sent' : 'failed')
       setMsg(
-        res.email_sent
+        emailStatus === 'sent'
           ? 'Zaproszono osobę i wysłano jej e-mail.'
-          : 'Zaproszono osobę, ale e-mail nie został wysłany — poproś administratora o sprawdzenie ustawień poczty.',
+          : emailStatus === 'opted_out'
+            ? 'Zaproszono osobę. E-maila nie wysłano, bo osoba wyłączyła powiadomienia e-mail o zaproszeniach — dostała powiadomienie w aplikacji.'
+            : 'Zaproszono osobę, ale e-mail nie został wysłany — poproś administratora o sprawdzenie ustawień poczty.',
       )
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Błąd zaproszenia')
@@ -1740,6 +1924,8 @@ function TenderDetailView() {
   const canInvite = Boolean(user?.permissions?.includes('tenders.invite'))
   const canDeleteItems = can(user, 'tenders.delete_items')
   const canDeleteTender = can(user, 'tenders.delete')
+  // termin, godzina i numer ogłoszenia: jak trasa PATCH /tenders/{id} (permission:tenders.create|tenders.edit_offer)
+  const canEditTenderFields = can(user, 'tenders.create') || can(user, 'tenders.edit_offer')
   const aiChangedIds = new Set((matchReport?.changes ?? []).map((c) => c.id))
   const filteredItems = tender.items.filter((it) => {
     if (coverageFilter && coverage && !coverage.item_ids[coverageFilter].includes(it.id)) {
@@ -1804,8 +1990,16 @@ function TenderDetailView() {
       ]).size
     : 0
   const savedDeadline = tender.deadline ? tender.deadline.slice(0, 10) : ''
-  const deadlineDirty = deadlineEdit !== savedDeadline
+  const savedDeadlineTime = deadlineTimeLabel(tender.deadline_time) ?? ''
+  const deadlineDirty =
+    deadlineEdit !== savedDeadline || (deadlineEdit ? deadlineTimeEdit : '') !== (deadlineEdit ? savedDeadlineTime : '')
   const deadlineDays = daysUntil(savedDeadline)
+  /** „5.10.2026, 10:00” — termin składania z godziną, jeśli jest */
+  const deadlineLabel = formatDeadline(savedDeadline, tender.deadline_time)
+  const noticeDirty = noticeEdit.trim() !== (tender.notice_number ?? '')
+  // wynik jest potrzebny, gdy dzień terminu minął (szkic i odrzucony przetarg nie mają wyniku)
+  const resultMissing =
+    !tender.result_status && deadlineDays != null && deadlineDays < 0 && !['draft', 'odrzucony'].includes(tender.status)
   const canStartPricing = next_statuses.includes('wycena')
   const isDraft = tender.status === 'draft'
 
@@ -3044,7 +3238,7 @@ function TenderDetailView() {
     },
     {
       label: 'Termin i narzut',
-      hint: savedDeadline ? `termin ${formatDay(savedDeadline)}` : 'bez terminu',
+      hint: savedDeadline ? `termin ${deadlineLabel}` : 'bez terminu',
       description: 'Ustaw termin składania i narzut, zaproś osoby do pomocy i rozpocznij wycenę.',
       done: false,
     },
@@ -3064,7 +3258,7 @@ function TenderDetailView() {
           ? `Warunki: ${conditionsNotMet} z ${conditions.length} nie spełniamy`
           : `Warunki: sprawdzone ${conditionsChecked} z ${conditions.length}`,
     ],
-    [Boolean(savedDeadline), savedDeadline ? `Termin składania: ${formatDay(savedDeadline)}` : 'Brak terminu składania'],
+    [Boolean(savedDeadline), savedDeadline ? `Termin składania: ${deadlineLabel}` : 'Brak terminu składania'],
     [
       hasOfferForm,
       hasOfferForm
@@ -3085,6 +3279,8 @@ function TenderDetailView() {
           </h1>
           <p className="app-meta text-xs text-slate-500">
             Zamawiający: {tender.client?.name ?? '—'} · opiekun przetargu: {tender.owner?.name ?? '—'} ·{' '}
+            {deadlineLabel ? `termin składania ${deadlineLabel} · ` : ''}
+            {tender.notice_number ? `ogłoszenie ${tender.notice_number} · ` : ''}
             <strong>Zakładanie przetargu</strong> · {TENDER_STATUS_LABEL[tender.status] ?? tender.status}
           </p>
         </div>
@@ -3168,6 +3364,16 @@ function TenderDetailView() {
                     onChange={(e) => setDeadlineEdit(e.target.value)}
                   />
                 </label>
+                <label title="Godzina w czasie polskim, do której trzeba złożyć ofertę">
+                  Godzina
+                  <input
+                    type="time"
+                    className="mt-1 block rounded border border-slate-300 px-2 py-1 disabled:bg-slate-50"
+                    value={deadlineTimeEdit}
+                    disabled={!deadlineEdit}
+                    onChange={(e) => setDeadlineTimeEdit(e.target.value)}
+                  />
+                </label>
                 <button
                   type="button"
                   disabled={busy || !deadlineDirty}
@@ -3177,6 +3383,28 @@ function TenderDetailView() {
                   Zapisz termin
                 </button>
               </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <label className="min-w-[240px]">
+                  Numer ogłoszenia
+                  <input
+                    className="mt-1 block w-full rounded border border-slate-300 px-2 py-1"
+                    value={noticeEdit}
+                    placeholder="np. 2026/BZP 00431178/01 albo 606345-2026"
+                    onChange={(e) => setNoticeEdit(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={busy || !noticeDirty}
+                  onClick={() => void saveNotice()}
+                  className="rounded bg-slate-700 px-3 py-1.5 text-white disabled:opacity-50"
+                >
+                  Zapisz numer
+                </button>
+              </div>
+              <p className="text-slate-500">
+                Numer z Biuletynu Zamówień Publicznych pozwala aplikacji samej pobrać wynik przetargu.
+              </p>
               <div className="flex flex-wrap items-end gap-2">
                 <label>
                   Narzut na cenę zakupu, %
@@ -3249,7 +3477,7 @@ function TenderDetailView() {
           <span className="flex flex-wrap items-center gap-2">
             <span className="text-[11px] text-slate-500">
               {deadlineDirty
-                ? 'Najpierw zapisz zmieniony termin.'
+                ? 'Najpierw zapisz zmieniony termin lub godzinę.'
                 : !isDraft
                   ? 'Przetarg ma już status Wycena — otworzy się pełny widok.'
                   : canStartPricing
@@ -3339,7 +3567,10 @@ function TenderDetailView() {
           </span>
           <button
             type="button"
-            onClick={() => setWizardActive(true)}
+            onClick={() => {
+              setForcePulpit(false)
+              setWizardActive(true)
+            }}
             className="rounded border border-slate-300 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50"
           >
             Otwórz kreator
@@ -3350,7 +3581,7 @@ function TenderDetailView() {
         <div className="rounded-xl bg-white p-3 shadow-sm">
           <div className="text-slate-500">Termin składania</div>
           <div className="mt-1 flex flex-wrap items-center gap-2">
-            <strong className="text-base">{savedDeadline ? formatDay(savedDeadline) : '—'}</strong>
+            <strong className="text-base">{deadlineLabel || '—'}</strong>
             {deadlineDays != null && deadlineDays >= 0 && deadlineDays <= 7 && (
               <span className="rounded bg-red-100 px-2 py-0.5 font-medium text-red-700">
                 {deadlineDays === 0 ? 'dziś' : deadlineDays === 1 ? 'jutro' : `za ${deadlineDays} dni`}
@@ -3359,23 +3590,61 @@ function TenderDetailView() {
             {deadlineDays != null && deadlineDays > 7 && <span className="text-slate-500">za {deadlineDays} dni</span>}
             {deadlineDays != null && deadlineDays < 0 && <span className="text-slate-500">po terminie</span>}
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-1">
-            <input
-              type="date"
-              aria-label="Termin składania"
-              className="rounded border border-slate-300 px-2 py-1"
-              value={deadlineEdit}
-              onChange={(e) => setDeadlineEdit(e.target.value)}
-            />
-            <button
-              type="button"
-              disabled={busy || !deadlineDirty}
-              onClick={() => void saveDeadline()}
-              className="rounded bg-slate-700 px-2 py-1 text-white disabled:opacity-50"
-            >
-              Zapisz
-            </button>
-          </div>
+          {/* zmiana terminu i numeru: te same uprawnienia co PATCH /tenders/{id} na serwerze */}
+          {canEditTenderFields ? (
+            <>
+              <div className="mt-2 flex flex-wrap items-center gap-1">
+                <input
+                  type="date"
+                  aria-label="Termin składania"
+                  className="rounded border border-slate-300 px-2 py-1"
+                  value={deadlineEdit}
+                  onChange={(e) => setDeadlineEdit(e.target.value)}
+                />
+                <input
+                  type="time"
+                  aria-label="Godzina składania (czas polski)"
+                  title="Godzina w czasie polskim, do której trzeba złożyć ofertę"
+                  className="rounded border border-slate-300 px-2 py-1 disabled:bg-slate-50"
+                  value={deadlineTimeEdit}
+                  disabled={!deadlineEdit}
+                  onChange={(e) => setDeadlineTimeEdit(e.target.value)}
+                />
+                <button
+                  type="button"
+                  disabled={busy || !deadlineDirty}
+                  onClick={() => void saveDeadline()}
+                  className="rounded bg-slate-700 px-2 py-1 text-white disabled:opacity-50"
+                >
+                  Zapisz
+                </button>
+              </div>
+              <div className="mt-2 text-slate-500">Numer ogłoszenia</div>
+              <div className="mt-1 flex flex-wrap items-center gap-1">
+                <input
+                  aria-label="Numer ogłoszenia"
+                  className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1"
+                  value={noticeEdit}
+                  placeholder="2026/BZP 00431178/01"
+                  title="Biuletyn Zamówień Publicznych (np. 2026/BZP 00431178/01) albo Dziennik Urzędowy Unii Europejskiej (TED, np. 606345-2026)"
+                  onChange={(e) => setNoticeEdit(e.target.value)}
+                />
+                <button
+                  type="button"
+                  disabled={busy || !noticeDirty}
+                  onClick={() => void saveNotice()}
+                  className="rounded bg-slate-700 px-2 py-1 text-white disabled:opacity-50"
+                >
+                  Zapisz
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="mt-2 text-slate-500">Numer ogłoszenia</div>
+              <div className="mt-1">{tender.notice_number || '—'}</div>
+            </>
+          )}
         </div>
         <div className="rounded-xl bg-white p-3 shadow-sm">
           <div className="text-slate-500">Pozycje z produktem</div>
@@ -3495,7 +3764,7 @@ function TenderDetailView() {
               {activities.slice(0, 5).map((a) => (
                 <li key={a.id} className="py-1.5">
                   <span className="text-slate-500">
-                    {new Date(a.created_at).toLocaleString('pl-PL')} · {a.user?.name ?? '—'}
+                    {new Date(a.created_at).toLocaleString('pl-PL')} · {activityAuthor(a)}
                   </span>
                   <br />
                   {actionLabel[a.action] ?? a.action}
@@ -3514,6 +3783,7 @@ function TenderDetailView() {
     warunki: { count: conditions.length, alert: conditionsToCheck + conditionsNotMet },
     pozycje: { count: tender.items.length, alert: attentionCount },
     zamienniki: { alert: coverage?.substitutes_pending ?? 0 },
+    wynik: { alert: resultMissing ? 1 : 0 },
     komentarze: { count: comments.length },
     zaproszenia: { count: invitations.length },
     historia: { count: activities.length },
@@ -3530,12 +3800,26 @@ function TenderDetailView() {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="app-meta text-xs text-slate-500">
           Zamawiający: {tender.client?.name ?? '—'} · opiekun przetargu: {tender.owner?.name ?? '—'} ·{' '}
+          {deadlineLabel ? `termin składania ${deadlineLabel} · ` : ''}
+          {tender.notice_number ? `ogłoszenie ${tender.notice_number} · ` : ''}
           <strong>{TENDER_STATUS_LABEL[tender.status] ?? tender.status}</strong> ·{' '}
           <span title={MATCH_AVERAGE_HINT}>średnia ocena dopasowania {tender.ai_percent}%</span> · narzut{' '}
           {tender.target_margin_percent ?? 18}% · <span title={MARGIN_HINT}>marża {tender.margin_percent ?? '—'}%</span> ·{' '}
           {can_edit ? 'edycja włączona' : 'tylko podgląd'}
         </p>
-        <div className="app-actions flex flex-wrap gap-1">
+        <div className="app-actions flex flex-wrap items-center gap-1">
+          {(tender.result_status || resultMissing) && (
+            <button
+              type="button"
+              onClick={() => setTab('wynik')}
+              title="Pokaż wynik przetargu"
+              className={`rounded border px-2 py-1 text-xs font-medium ${
+                tender.result_status ? RESULT_STATUS_CLASS[tender.result_status] : NO_RESULT_CLASS
+              }`}
+            >
+              {tender.result_status ? `Wynik: ${resultStatusLabel(tender.result_status)}` : 'Wynik: nie wpisano'}
+            </button>
+          )}
           <ActionMenu
             label="Eksport ▾"
             disabled={busy}
@@ -3750,15 +4034,21 @@ function TenderDetailView() {
           </div>
           {canComment ? (
             <div className="flex flex-wrap items-end gap-2 border-b border-slate-100 pb-3">
-              <label className="flex-1 min-w-[200px]">
-                Treść komentarza
-                <textarea
-                  className="mt-1 w-full rounded border border-slate-300 px-2 py-1"
-                  rows={2}
+              {/* div zamiast <label>: kliknięcie osoby na liście „@” nie może wracać do pola i otwierać listy znowu */}
+              <div className="flex-1 min-w-[200px]">
+                <span id="tender-comment-label">Treść komentarza</span>
+                <MentionTextarea
+                  tenderId={tender.id}
                   value={commentBody}
-                  onChange={(e) => setCommentBody(e.target.value)}
+                  onChange={setCommentBody}
+                  mentionedIds={commentMentions}
+                  onMentionedChange={setCommentMentions}
+                  disabled={busy}
+                  placeholder="Wpisz @, żeby powiadomić osobę z zespołu"
+                  rows={2}
+                  labelledBy="tender-comment-label"
                 />
-              </label>
+              </div>
               <label>
                 Pozycja (opcjonalnie)
                 <select
@@ -3794,11 +4084,28 @@ function TenderDetailView() {
                   {c.item ? ` · pozycja ${c.item.line_no}` : ''}
                 </div>
                 <p className="whitespace-pre-wrap">{c.body}</p>
+                {c.mentioned_users && c.mentioned_users.length > 0 && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Powiadomiono: {c.mentioned_users.map((u) => u.name).join(', ')}
+                  </p>
+                )}
               </li>
             ))}
             {comments.length === 0 && <li className="text-slate-400">Brak komentarzy.</li>}
           </ul>
         </div>
+          )}
+          {tab === 'wynik' && (
+            <TenderResultSection
+              tenderId={tender.id}
+              canEdit={can(user, 'tenders.edit_offer')}
+              offerValueNet={tender.offer_value_net}
+              onChanged={() => {
+                void refreshResultStatus()
+                void loadMeta()
+              }}
+              onDirtyChange={onResultDirtyChange}
+            />
           )}
           {tab === 'zaproszenia' && inviteSection}
           {tab === 'historia' && (
@@ -3821,7 +4128,7 @@ function TenderDetailView() {
                   <td className="p-2 whitespace-nowrap">
                     {new Date(a.created_at).toLocaleString('pl-PL')}
                   </td>
-                  <td className="p-2">{a.user?.name ?? '—'}</td>
+                  <td className="p-2">{activityAuthor(a)}</td>
                   <td className="p-2">
                     {actionLabel[a.action] ?? a.action}
                     {a.item ? ` (pozycja ${a.item.line_no})` : ''}

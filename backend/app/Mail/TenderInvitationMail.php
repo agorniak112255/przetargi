@@ -7,6 +7,7 @@ namespace App\Mail;
 use App\Models\Tender;
 use App\Models\TenderInvitation;
 use App\Models\User;
+use App\Support\PolishTime;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Address;
@@ -52,7 +53,8 @@ class TenderInvitationMail extends Mailable
                 'tenderNumber' => $this->tender->number,
                 'tenderTitle' => $this->tender->title,
                 'clientName' => $this->tender->client?->name,
-                'deadline' => $this->tender->deadline?->format('d.m.Y'),
+                // termin z godziną w czasie polskim: „5.10.2026, 10:00”; bez godziny sama data
+                'deadline' => PolishTime::formatDeadline($this->tender) ?: null,
                 'note' => $this->invitation->note,
                 'tenderUrl' => $this->tenderUrl,
             ],

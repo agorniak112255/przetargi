@@ -8,7 +8,10 @@ use App\Models\Campaign;
 use App\Models\CampaignItem;
 use App\Models\CampaignRecipient;
 use App\Models\CampaignReply;
+use App\Models\User;
 use App\Models\UserMailAccount;
+use App\Services\Notifications\AppNotificationMessage;
+use App\Services\Notifications\NotificationDispatcher;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Cache;
@@ -32,6 +35,9 @@ class CampaignReplySync
     private const FIRST_RUN_LIMIT = 3000;
 
     private const FETCH_CHUNK = 100;
+
+    /** Powiadomienie autora tylko o odpowiedziach z ostatnich tylu godzin. */
+    private const NOTIFY_FRESH_HOURS = 48;
 
     /** Blokada odczytu jednej skrzynki — dłużej niż najdłuższy przebieg (pierwszy odczyt folderów). */
     private const LOCK_SECONDS = 300;
@@ -297,8 +303,39 @@ class CampaignReplySync
                 ->where(fn ($q) => $q->whereNull('replied_at')->orWhere('replied_at', '>', $receivedAt))
                 ->update(['replied_at' => $receivedAt, 'updated_at' => now()]);
         }
+        if ($inserted > 0) {
+            $this->notifyAuthor($account, $campaign, $fromEmail, $fromName, $subject, $receivedAt, $messageId);
+        }
 
         return $inserted > 0;
+    }
+
+    /**
+     * Powiadomienie autora kampanii o nowej odpowiedzi — tylko świeżej (ostatnie 48 h): pierwszy odczyt skrzynki
+     * zapisuje odpowiedzi z całego okna kampanii i nie może zasypać dzwonka starą pocztą.
+     */
+    private function notifyAuthor(UserMailAccount $account, Campaign $campaign, string $fromEmail, string $fromName, string $subject, CarbonImmutable $receivedAt, string $messageId): void
+    {
+        if ($receivedAt->lt(CarbonImmutable::now()->subHours(self::NOTIFY_FRESH_HOURS))) {
+            return;
+        }
+        try {
+            $author = User::query()->find($account->user_id);
+            if (! $author instanceof User) {
+                return;
+            }
+            $who = $fromName !== '' ? $fromName.' <'.$fromEmail.'>' : $fromEmail;
+            app(NotificationDispatcher::class)->send($author, new AppNotificationMessage(
+                event: 'campaign_reply',
+                subjectKey: 'campaign:'.$campaign->id,
+                title: 'Klient odpowiedział na kampanię '.$campaign->code,
+                body: $who.($subject !== '' ? ' · temat: '.$subject : ''),
+                url: '/kampanie/'.$campaign->id,
+                data: ['campaign_id' => (int) $campaign->id, 'campaign_code' => (string) $campaign->code],
+            ), 'reply:'.substr(sha1($messageId), 0, 34));
+        } catch (Throwable $e) {
+            report($e);
+        }
     }
 
     /**

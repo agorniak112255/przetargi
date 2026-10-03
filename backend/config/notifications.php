@@ -50,8 +50,9 @@ return [
             'description' => 'Jeden e-mail na każdy problem, dopóki go nie wyciszysz na ekranie „Stan systemu”.',
             'default_bell' => true,
             'default_mail' => true,
-            // tylko osoby z tym uprawnieniem widzą i dostają to zdarzenie
-            'permission' => 'admin.system.view',
+            // tylko osoby ze wszystkimi tymi uprawnieniami widzą i dostają to zdarzenie — link prowadzi do
+            // /admin/stan-systemu, a cała Administracja wymaga admin.access
+            'permission' => ['admin.access', 'admin.system.view'],
         ],
     ],
 
@@ -73,8 +74,23 @@ return [
     'result_needed_every_days' => 3,
     'result_needed_max_days' => 60,
 
-    /** Po wdrożeniu przypomnienia dotyczą tylko terminów od tylu dni przed dniem wdrożenia (patrz strumień C). */
+    /**
+     * Po wdrożeniu przypomnienia dotyczą tylko terminów od tylu dni przed dniem pierwszego przebiegu tenders:remind
+     * (TenderReminderPlanner::startedOn: zapis w pamięci podręcznej + najstarsza wysyłka przypomnienia w bazie).
+     */
     'backfill_days' => 14,
+
+    /**
+     * Ponawianie samego e-maila po błędzie poczty (dzwonek idzie raz): tylko powiadomienia z okresem, gdy ten sam
+     * nadawca zgłasza je znowu (tenders:remind co 15 minut, alerty w system:check). Przerwa przed kolejną próbą
+     * rośnie dwukrotnie od first_delay_minutes (15, 30, 60, … min); po max_attempts próbach e-mail przepada.
+     * stuck_minutes: wysyłka „w toku” dłużej niż tyle minut = proces padł w trakcie, wolno spróbować znowu.
+     */
+    'mail_retry' => [
+        'max_attempts' => 7,
+        'first_delay_minutes' => 15,
+        'stuck_minutes' => 30,
+    ],
 
     /** Wpisy ochrony przed powtórką starsze niż tyle dni czyści system:prune. */
     'dispatches_retention_days' => 180,

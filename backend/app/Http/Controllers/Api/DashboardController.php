@@ -10,6 +10,7 @@ use App\Models\B2bSyncRun;
 use App\Models\Campaign;
 use App\Models\CampaignRecipient;
 use App\Models\CampaignReply;
+use App\Models\ClientInquiry;
 use App\Models\PriceListImport;
 use App\Models\Product;
 use App\Models\ProductSubstitute;
@@ -22,6 +23,7 @@ use App\Services\Erp\InventoryQuery;
 use App\Services\Erp\InventorySnapshots;
 use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\ProductCatalogHealthService;
+use App\Support\PolishTime;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -42,6 +44,23 @@ class DashboardController extends Controller
     private const TENDER_STAGES_HIDDEN = ['odrzucony', 'archiwum'];
 
     private const UPCOMING_LIMIT = 4;
+
+    /** „Do zrobienia dziś”: najwięcej tylu spraw jednego rodzaju. */
+    private const TODO_LIMIT = 10;
+
+    /** Termin składania: przetargi jeszcze niezłożone (jak przypomnienia tenders:remind). */
+    private const TODO_DEADLINE_STATUSES = ['draft', 'wycena', 'akceptacja_km', 'akceptacja_dyrektor', 'zatwierdzona'];
+
+    private const TODO_DEADLINE_DAYS = 7;
+
+    private const TODO_INQUIRY_DAYS = 14;
+
+    /** „Wpisz wynik”: bez szkiców i odrzuconych, najdłużej tyle dni po terminie (jak przypomnienia). */
+    private const TODO_RESULT_SKIP_STATUSES = ['draft', 'odrzucony'];
+
+    private const TODO_RESULT_DAYS = 60;
+
+    private const WON_DAYS = 90;
 
     private const IMPORTS_LIMIT = 3;
 
@@ -72,12 +91,255 @@ class DashboardController extends Controller
         $user = $request->user();
 
         return response()->json([
+            // trasa wymaga dashboard.view — „Do zrobienia dziś” jest więc zawsze; jego części zależą od modułów
+            'todo' => $user->can('dashboard.view') ? $this->todo($user) : null,
             'tenders' => $user->canAny(['tenders.view_own', 'tenders.view_all']) ? $this->tenders($user) : null,
             'products' => $user->can('products.view') ? $this->products() : null,
             'stock' => $user->canAny(['inventory.view', 'inventory.report.view']) ? $this->stock() : null,
             'prices' => $user->canAny(['price_lists.view', 'b2b_accounts.view']) ? $this->prices($user) : null,
             'campaigns' => $user->canAny(['campaigns.use', 'campaigns.view']) ? $this->campaigns($user) : null,
         ]);
+    }
+
+    /**
+     * „Do zrobienia dziś” — tylko sprawy zalogowanej osoby (przetargi, które prowadzi albo do których ją zaproszono,
+     * jej zapytania, jej wzmianki), nawet gdy widzi cudze. Każda lista ma limit; „dziś” w czasie polskim.
+     *
+     * @return array{items: list<array<string, mixed>>, won_90d: array{won_lots: int, decided_lots: int}|null}
+     */
+    private function todo(User $user): array
+    {
+        $canTenders = $user->canAny(['tenders.view_own', 'tenders.view_all']);
+        $items = [];
+        if ($canTenders) {
+            array_push($items, ...$this->todoDeadlines($user));
+        }
+        if ($user->can('inquiries.use')) {
+            $waiting = $this->todoInquiries($user);
+            if ($waiting !== null) {
+                $items[] = $waiting;
+            }
+        }
+        if ($canTenders) {
+            array_push($items, ...$this->todoResults($user));
+        }
+        array_push($items, ...$this->todoMentions($user));
+
+        return [
+            'items' => $items,
+            'won_90d' => $canTenders ? $this->won90d($user) : null,
+        ];
+    }
+
+    /** Przetargi użytkownika (opiekun albo zaproszony) — bez cudzych, nawet z tenders.view_all. */
+    private function mine(User $user): Builder
+    {
+        return Tender::query()->accessibleBy($user);
+    }
+
+    /**
+     * Termin składania dziś lub w ciągu 7 dni (przetarg jeszcze niezłożony) i braki oferty: pozycje bez produktu
+     * (bez karty i bez własnej nazwy) i bez ceny — jednym zapytaniem z GROUP BY tender_id (same agregaty).
+     * Dzisiejszy termin z godziną, która już minęła, to już nie sprawa na dziś: odpada w zapytaniu (godzina „na
+     * zegarze” w Polsce, żeby nie zajmował miejsca w limicie) i ostatecznie przez PolishTime::deadlineAt().
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function todoDeadlines(User $user): array
+    {
+        $now = PolishTime::now();
+        $today = $now->startOfDay();
+        $tenders = $this->mine($user)
+            ->with('client:id,name')
+            ->whereIn('status', self::TODO_DEADLINE_STATUSES)
+            ->whereNotNull('deadline')
+            ->whereDate('deadline', '>=', $today->toDateString())
+            ->whereDate('deadline', '<=', $today->addDays(self::TODO_DEADLINE_DAYS)->toDateString())
+            ->where(static function (Builder $q) use ($today, $now): void {
+                $q->whereDate('deadline', '>', $today->toDateString())
+                    ->orWhereNull('deadline_time')
+                    ->orWhere('deadline_time', '>', $now->format('H:i:s'));
+            })
+            ->orderBy('deadline')
+            ->orderByRaw('deadline_time is null')
+            ->orderBy('deadline_time')
+            ->orderBy('id')
+            ->limit(self::TODO_LIMIT)
+            ->get(['id', 'number', 'notice_number', 'title', 'client_id', 'deadline', 'deadline_time'])
+            ->reject(static function (Tender $t) use ($now): bool {
+                $at = PolishTime::deadlineAt($t);
+
+                return $at !== null && $at->lessThanOrEqualTo($now);
+            })
+            ->values();
+        if ($tenders->isEmpty()) {
+            return [];
+        }
+
+        $missing = DB::table('tender_items')
+            ->whereIn('tender_id', $tenders->pluck('id')->all())
+            ->groupBy('tender_id')
+            ->select('tender_id')
+            ->selectRaw("sum(case when main_product_id is null and trim(coalesce(custom_name, '')) = '' then 1 else 0 end) as without_product")
+            ->selectRaw('sum(case when offer_price is null then 1 else 0 end) as without_price')
+            ->get()
+            ->keyBy('tender_id');
+
+        return $tenders->map(static function (Tender $t) use ($missing): array {
+            $m = $missing[$t->id] ?? null;
+
+            return [
+                'kind' => 'tender_deadline',
+                'tender_id' => (int) $t->id,
+                'number' => (string) $t->number,
+                'notice_number' => $t->notice_number,
+                'title' => $t->title,
+                'client' => $t->client?->name,
+                'deadline' => $t->deadline !== null ? Carbon::parse($t->deadline)->toDateString() : null,
+                'deadline_time' => $t->deadline_time,
+                'missing' => [
+                    'without_product' => (int) ($m->without_product ?? 0),
+                    'without_price' => (int) ($m->without_price ?? 0),
+                ],
+                'url' => '/tenders/'.$t->id,
+            ];
+        })->values()->all();
+    }
+
+    /**
+     * Zapytania użytkownika bez odpowiedzi dłużej niż dobę (od chwili wysłania przez klienta, gdy ją znamy) —
+     * bez duplikatów cudzego wpisu i tylko z ostatnich 14 dni (starsze to już historia, nie sprawa na dziś).
+     *
+     * @return array<string, mixed>|null
+     */
+    private function todoInquiries(User $user): ?array
+    {
+        $now = now();
+        $waiting = static fn (): Builder => ClientInquiry::query()
+            ->where('user_id', $user->id)
+            ->whereNull('replied_at')
+            ->whereNull('duplicate_of_id')
+            ->where('created_at', '>=', $now->copy()->subDays(self::TODO_INQUIRY_DAYS))
+            ->whereRaw('coalesce(source_sent_at, created_at) <= ?', [$now->copy()->subDay()->format('Y-m-d H:i:s')]);
+
+        $count = $waiting()->count();
+        if ($count === 0) {
+            return null;
+        }
+        $oldest = $waiting()
+            ->with('client:id,name')
+            ->orderByRaw('coalesce(source_sent_at, created_at)')
+            ->orderBy('id')
+            ->first(['id', 'client_id', 'contact', 'source_from_name', 'source_from_email', 'source_sent_at', 'created_at']);
+
+        return [
+            'kind' => 'inquiries_waiting',
+            'count' => $count,
+            'oldest' => $oldest !== null ? [
+                'id' => (int) $oldest->id,
+                'client' => $oldest->client?->name
+                    ?? (is_array($oldest->contact) && is_string($oldest->contact['company'] ?? null) && $oldest->contact['company'] !== '' ? $oldest->contact['company'] : null)
+                    ?? $oldest->source_from_name
+                    ?? $oldest->source_from_email,
+                'since' => ($oldest->source_sent_at ?? $oldest->created_at)?->toIso8601String(),
+            ] : null,
+            'url' => '/inquiries?status=waiting',
+            // lista pod linkiem pokazuje wszystkie zapytania bez odpowiedzi — karta liczy tylko te, opis to mówi
+            'scope_label' => 'bez odpowiedzi ponad dobę, z ostatnich '.self::TODO_INQUIRY_DAYS.' dni',
+        ];
+    }
+
+    /**
+     * Po terminie składania, bez wyniku: od dnia po terminie przez 60 dni, bez szkiców i odrzuconych.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function todoResults(User $user): array
+    {
+        $today = PolishTime::today();
+
+        return $this->mine($user)
+            ->with('client:id,name')
+            ->whereNotIn('status', self::TODO_RESULT_SKIP_STATUSES)
+            ->whereNull('result_status')
+            ->whereNotNull('deadline')
+            ->whereDate('deadline', '<', $today->toDateString())
+            ->whereDate('deadline', '>=', $today->subDays(self::TODO_RESULT_DAYS)->toDateString())
+            ->orderBy('deadline')
+            ->orderBy('id')
+            ->limit(self::TODO_LIMIT)
+            ->get(['id', 'number', 'title', 'client_id', 'deadline'])
+            ->map(static fn (Tender $t): array => [
+                'kind' => 'tender_result_needed',
+                'tender_id' => (int) $t->id,
+                'number' => (string) $t->number,
+                'title' => $t->title,
+                'client' => $t->client?->name,
+                'deadline' => $t->deadline !== null ? Carbon::parse($t->deadline)->toDateString() : null,
+                'url' => '/tenders/'.$t->id.'?tab=wynik',
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Nieprzeczytane wzmianki z dzwonka (powiadomienie typu tender_mention). Filtr LIKE tylko zawęża nieprzeczytane
+     * powiadomienia tej osoby; o rodzaju rozstrzyga odczytane pole `type`.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function todoMentions(User $user): array
+    {
+        $out = [];
+        $rows = $user->unreadNotifications()
+            ->where('data', 'like', '%"tender_mention"%')
+            ->limit(self::TODO_LIMIT * 3)
+            ->get(['id', 'data', 'created_at']);
+        foreach ($rows as $n) {
+            $data = is_array($n->data) ? $n->data : [];
+            if (($data['type'] ?? null) !== 'tender_mention') {
+                continue;
+            }
+            $out[] = [
+                'kind' => 'mention',
+                'notification_id' => (string) $n->id,
+                'title' => (string) ($data['title'] ?? $data['message'] ?? 'Wspomniano o Tobie w komentarzu'),
+                'body' => isset($data['body']) && is_string($data['body']) ? $data['body'] : null,
+                'url' => isset($data['url']) && is_string($data['url']) ? $data['url'] : null,
+                'created_at' => $n->created_at?->toIso8601String(),
+            ];
+            if (count($out) >= self::TODO_LIMIT) {
+                break;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Części z rozstrzygnięciem (wygrana albo przegrana) w przetargach z terminem w ostatnich 90 dniach — zakres
+     * jak karta „Przetargi” (z tenders.view_all wszystkie). Same agregaty, bez GROUP BY.
+     *
+     * @return array{won_lots: int, decided_lots: int}
+     */
+    private function won90d(User $user): array
+    {
+        $today = PolishTime::today();
+        $tenderIds = ($user->can('tenders.view_all') ? Tender::query() : Tender::query()->accessibleBy($user))
+            ->whereNotNull('deadline')
+            ->whereDate('deadline', '>=', $today->subDays(self::WON_DAYS)->toDateString())
+            ->whereDate('deadline', '<=', $today->toDateString())
+            ->select('id');
+        $row = DB::table('tender_lots')
+            ->whereIn('tender_id', $tenderIds)
+            ->whereIn('outcome', ['won', 'lost'])
+            ->selectRaw("count(*) as decided, sum(case when outcome = 'won' then 1 else 0 end) as won")
+            ->first();
+
+        return [
+            'won_lots' => (int) ($row->won ?? 0),
+            'decided_lots' => (int) ($row->decided ?? 0),
+        ];
     }
 
     /** @return array<string, mixed> */
@@ -88,7 +350,9 @@ class DashboardController extends Controller
         $marginColumn = SupplierSpecialMask::forUser($user)->hides() ? 'margin_percent_standard' : 'margin_percent';
         $scoped = static fn (): Builder => $seeAll ? Tender::query() : Tender::query()->accessibleBy($user);
         $active = static fn (): Builder => $scoped()->whereNotIn('status', self::TENDER_CLOSED);
-        $today = now()->toDateString();
+        // „dziś” w czasie polskim (aplikacja liczy w UTC — między 0:00 a 2:00 byłby to jeszcze wczorajszy dzień)
+        $todayPl = PolishTime::today();
+        $today = $todayPl->toDateString();
 
         $stages = $scoped()
             ->whereNotIn('status', self::TENDER_STAGES_HIDDEN)
@@ -110,7 +374,7 @@ class DashboardController extends Controller
             'avg_margin_percent' => ($margin = $active()->whereNotNull($marginColumn)->avg($marginColumn)) !== null ? round((float) $margin, 1) : null,
             'deadline_soon' => $active()
                 ->whereNotNull('deadline')
-                ->whereDate('deadline', '<=', now()->addDays(7))
+                ->whereDate('deadline', '<=', $todayPl->addDays(7)->toDateString())
                 ->whereDate('deadline', '>=', $today)
                 ->count(),
             'stages' => $stages,
@@ -120,9 +384,11 @@ class DashboardController extends Controller
                 ->whereNotNull('deadline')
                 ->whereDate('deadline', '>=', $today)
                 ->orderBy('deadline')
+                ->orderByRaw('deadline_time is null')
+                ->orderBy('deadline_time')
                 ->orderBy('id')
                 ->limit(self::UPCOMING_LIMIT)
-                ->get(['id', 'number', 'title', 'client_id', 'status', 'deadline'])
+                ->get(['id', 'number', 'title', 'client_id', 'status', 'deadline', 'deadline_time'])
                 ->map(static fn (Tender $t): array => [
                     'id' => $t->id,
                     'number' => $t->number,
@@ -130,6 +396,7 @@ class DashboardController extends Controller
                     'client' => $t->client?->name,
                     'status' => $t->status,
                     'deadline' => $t->deadline !== null ? Carbon::parse($t->deadline)->toDateString() : null,
+                    'deadline_time' => $t->deadline_time,
                 ])
                 ->values()
                 ->all(),

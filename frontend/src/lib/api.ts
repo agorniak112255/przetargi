@@ -167,7 +167,7 @@ export type TenderLot = {
   highest_price: string | null
   loss_reason: LossReason | null
   note: string | null
-  /** nasza cena netto minus cena zwycięzcy (kwota jako tekst, procent od ceny zwycięzcy jako liczba) */
+  /** nasza cena brutto minus cena zwycięzcy z ogłoszenia (kwota jako tekst); procent liczony od naszej ceny brutto; null bez stawki VAT */
   price_gap: { amount: string; percent: number } | null
   /** pola wpisane przez człowieka — Biuletyn ich nie nadpisuje */
   manual_fields: string[]
@@ -261,6 +261,18 @@ export type MentionCandidate = {
 
 export function fetchMentionCandidates(tenderId: number): Promise<MentionCandidate[]> {
   return api<{ data: MentionCandidate[] }>(`/tenders/${tenderId}/mention-candidates`).then((r) => r.data)
+}
+
+/**
+ * Los e-maila o zaproszeniu do przetargu (POST /tenders/{t}/invitations): wysłany, błąd poczty albo osoba
+ * wyłączyła e-maile o zaproszeniach (powiadomienie w aplikacji dostała).
+ */
+export type InvitationEmailStatus = 'sent' | 'failed' | 'opted_out'
+
+export type TenderInvitationCreateResponse = {
+  email_sent: boolean
+  /** starsze odpowiedzi serwera go nie mają — wtedy liczy się email_sent */
+  email_status?: InvitationEmailStatus
 }
 
 /* ---------- Powiadomienia (Moje konto › Powiadomienia, dzwonek) ---------- */

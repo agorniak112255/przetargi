@@ -12,13 +12,14 @@ use App\Models\User;
 use App\Support\PermissionCatalog;
 use Database\Seeders\RolesAndPermissionsSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Testing\TestResponse;
 use Laravel\Sanctum\Sanctum;
 use Spatie\Permission\Models\Permission;
 use Tests\TestCase;
 
 /**
- * Krok 0 etapów 0–1 (03.10.2026): nowe trasy istnieją i pilnują uprawnień. Kontrolery są na razie zaślepkami
- * (501), więc „przepuszczony” = 501, a nie 401/403/404. Strumienie A–D zastępują zaślepki właściwymi testami.
+ * Etapy 0–1 (03.10.2026): nowe trasy istnieją i pilnują uprawnień. „Przepuszczony” = kontroler odpowiedział sam
+ * (2xx albo 422 przy pustym żądaniu), a nie 401/403/404/405 ani błąd serwera. Zachowanie tras sprawdzają testy strumieni.
  */
 final class NewFeaturesRoutesSmokeTest extends TestCase
 {
@@ -80,6 +81,19 @@ final class NewFeaturesRoutesSmokeTest extends TestCase
         ];
     }
 
+    /**
+     * Uprawnienia przepuściły żądanie do kontrolera: odpowiedź własna (2xx albo 422 przy pustym żądaniu),
+     * nie odmowa, nie brak trasy i nie błąd serwera.
+     */
+    private function assertPassed(TestResponse $response, string $method, string $uri): void
+    {
+        $status = $response->getStatusCode();
+        $this->assertTrue(
+            ($status >= 200 && $status < 300) || $status === 422,
+            "{$method} {$uri}: oczekiwano odpowiedzi kontrolera, jest {$status}: ".mb_substr((string) $response->getContent(), 0, 300),
+        );
+    }
+
     public function test_new_routes_require_login(): void
     {
         foreach ($this->routes() as [$method, $uri]) {
@@ -92,8 +106,8 @@ final class NewFeaturesRoutesSmokeTest extends TestCase
         Sanctum::actingAs(User::factory()->create());
 
         foreach ($this->routes() as [$method, $uri]) {
-            $expected = str_starts_with($uri, '/api/me/') ? 501 : 403;
-            $this->json($method, $uri)->assertStatus($expected);
+            $response = $this->json($method, $uri);
+            str_starts_with($uri, '/api/me/') ? $this->assertPassed($response, $method, $uri) : $response->assertStatus(403);
         }
     }
 
@@ -102,9 +116,7 @@ final class NewFeaturesRoutesSmokeTest extends TestCase
         Sanctum::actingAs(User::factory()->withRole('admin')->create());
 
         foreach ($this->routes() as [$method, $uri]) {
-            $this->json($method, $uri)
-                ->assertStatus(501)
-                ->assertJsonPath('message', 'Jeszcze niegotowe');
+            $this->assertPassed($this->json($method, $uri), $method, $uri);
         }
     }
 
@@ -119,13 +131,13 @@ final class NewFeaturesRoutesSmokeTest extends TestCase
 
         // opiekun przetargu widzi i edytuje
         Sanctum::actingAs($this->tender->owner()->firstOrFail());
-        $this->getJson("/api/tenders/{$t}/result")->assertStatus(501);
-        $this->putJson("/api/tenders/{$t}/result")->assertStatus(501);
-        $this->getJson("/api/tenders/{$t}/mention-candidates")->assertStatus(501);
+        $this->assertPassed($this->getJson("/api/tenders/{$t}/result"), 'GET', 'result');
+        $this->assertPassed($this->putJson("/api/tenders/{$t}/result"), 'PUT', 'result');
+        $this->assertPassed($this->getJson("/api/tenders/{$t}/mention-candidates"), 'GET', 'mention-candidates');
 
         // dyrektor widzi wszystkie przetargi, ale nie edytuje oferty
         Sanctum::actingAs(User::factory()->withRole('dyrektor')->create());
-        $this->getJson("/api/tenders/{$t}/result")->assertStatus(501);
+        $this->assertPassed($this->getJson("/api/tenders/{$t}/result"), 'GET', 'result');
         $this->putJson("/api/tenders/{$t}/result")->assertForbidden();
         $this->deleteJson("/api/tenders/{$t}/result/lots/{$this->lot->id}")->assertForbidden();
         $this->postJson("/api/tenders/{$t}/result/bzp-check")->assertForbidden();
@@ -156,7 +168,7 @@ final class NewFeaturesRoutesSmokeTest extends TestCase
 
         $reportsOnly->givePermissionTo('tenders.view_own');
         Sanctum::actingAs($reportsOnly->fresh());
-        $this->getJson('/api/reports/effectiveness')->assertStatus(501);
+        $this->assertPassed($this->getJson('/api/reports/effectiveness'), 'GET', 'effectiveness');
     }
 
     public function test_system_status_needs_its_own_permission(): void
@@ -168,7 +180,7 @@ final class NewFeaturesRoutesSmokeTest extends TestCase
 
         $adminAccessOnly->givePermissionTo('admin.system.view');
         Sanctum::actingAs($adminAccessOnly->fresh());
-        $this->getJson('/api/admin/system-status')->assertStatus(501);
+        $this->assertPassed($this->getJson('/api/admin/system-status'), 'GET', 'system-status');
         $this->getJson('/api/admin/system-status/gaps/nieznany_rodzaj')->assertNotFound();
         $this->postJson('/api/admin/system-alerts/999999/mute')->assertNotFound();
     }

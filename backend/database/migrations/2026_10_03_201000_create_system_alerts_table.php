@@ -19,8 +19,11 @@ return new class extends Migration
             $table->string('kind', 20);
             $table->string('subject_key', 120);
             $table->string('title', 255);
-            $table->timestamp('first_failed_at');
-            $table->timestamp('last_failed_at');
+            // SystemAlertService zawsze podaje obie chwile; jawna wartość domyślna (bez ON UPDATE), bo MariaDB z
+            // explicit_defaults_for_timestamp=0 dałaby pierwszej kolumnie TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            // a drugiej błąd 1067 przy CREATE TABLE
+            $table->timestamp('first_failed_at')->useCurrent();
+            $table->timestamp('last_failed_at')->useCurrent();
             $table->unsignedInteger('failures')->default(1);
             $table->text('last_message')->nullable();
             $table->timestamp('emailed_at')->nullable();

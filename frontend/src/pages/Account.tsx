@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useAppearance } from '../appearanceContext'
 import { useAuth } from '../auth'
+import { NotificationPreferencesForm } from '../components/account/NotificationPreferencesForm'
 import { api, can, type User } from '../lib/api'
 import { TEMPLATES, type AppearanceMode, type AppearanceTemplate, type Scheme } from '../lib/appearance'
 import {
@@ -714,6 +715,8 @@ export function Account() {
       {can(user, 'campaigns.use') && <MailAccountForm />}
 
       <PasswordForm />
+
+      <NotificationPreferencesForm />
 
       <section className="rounded-xl bg-white p-4 shadow-sm">
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">

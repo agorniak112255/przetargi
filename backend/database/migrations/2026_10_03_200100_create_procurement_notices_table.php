@@ -24,7 +24,10 @@ return new class extends Migration
             $table->string('ocds_id', 100)->nullable()->index();
             $table->string('preceding_bzp_number', 30)->nullable()->index();
             $table->string('object_id', 64)->nullable();
-            $table->timestamp('published_at');
+            // TIMESTAMP bez NULL i bez wartości domyślnej: MariaDB z explicit_defaults_for_timestamp=0 (produkcja) dałaby
+            // pierwszej kolumnie ON UPDATE CURRENT_TIMESTAMP (data zmieniałaby się przy każdym zapisie), a kolejnej
+            // błąd 1067. Data publikacji jest zawsze podawana (parser odrzuca ogłoszenie bez niej) — bez zmyślonej domyślnej.
+            $table->timestamp('published_at')->nullable();
             $table->timestamp('submitting_offers_at')->nullable();
             $table->text('order_object');
             $table->json('cpv_codes');
@@ -32,12 +35,14 @@ return new class extends Migration
             $table->string('organization_city', 200)->nullable();
             $table->string('organization_province', 10)->nullable();
             $table->string('organization_nip', 20)->nullable();
-            $table->string('procedure_result', 255)->nullable();
+            // wynik postępowania z API dla wszystkich części („zawarcie umowy;unieważnienie;…”) — bez obcinania
+            $table->text('procedure_result')->nullable();
             $table->json('contractors')->nullable();
             $table->json('parsed')->nullable();
             $table->smallInteger('parser_version')->default(0);
             $table->longText('html_body')->nullable();
-            $table->timestamp('fetched_at');
+            // chwila zapisu; BzpNoticeStore zawsze ją podaje — domyślna bez ON UPDATE
+            $table->timestamp('fetched_at')->useCurrent();
             $table->timestamps();
 
             $table->index(['notice_type', 'published_at']);

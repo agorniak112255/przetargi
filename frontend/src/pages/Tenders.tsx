@@ -4,6 +4,8 @@ import { useAuth } from '../auth'
 import { api, can, type Tender } from '../lib/api'
 import { tenderStatusLabel } from '../lib/tenderStatus'
 import { setTenderWizardActive } from '../lib/tenderWizard'
+import { formatDeadline } from '../lib/tenderDeadline'
+import { RESULT_STATUS_CLASS, resultStatusLabel } from '../lib/tenderResult'
 
 type Client = { id: number; name: string }
 
@@ -27,6 +29,8 @@ export function Tenders() {
   const [title, setTitle] = useState('')
   const [clientId, setClientId] = useState('')
   const [deadline, setDeadline] = useState('')
+  const [deadlineTime, setDeadlineTime] = useState('')
+  const [noticeNumber, setNoticeNumber] = useState('')
   const [margin, setMargin] = useState('18')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -59,11 +63,16 @@ export function Tenders() {
           title,
           client_id: Number(clientId),
           deadline: deadline || null,
+          // godzina tylko razem z datą
+          deadline_time: deadline ? deadlineTime || null : null,
+          notice_number: noticeNumber.trim() || null,
           target_margin_percent: Number(String(margin).replace(',', '.')) || 18,
         }),
       })
       setOpen(false)
       setTitle('')
+      setDeadlineTime('')
+      setNoticeNumber('')
       setMargin('18')
       setTenderWizardActive(t.id, true)
       navigate(`/tenders/${t.id}`)
@@ -106,6 +115,9 @@ export function Tenders() {
             <option value="mine">Tylko te, których jestem opiekunem</option>
             <option value="invited">Tylko zaproszenia</option>
             <option value="deadline_soon">Termin za mniej niż 7 dni</option>
+            <option value="no_result">Po terminie, bez wpisanego wyniku</option>
+            <option value="no_deadline_time">W toku, bez godziny składania</option>
+            <option value="no_notice">W toku, bez numeru ogłoszenia</option>
           </select>
           <button
             type="button"
@@ -121,7 +133,7 @@ export function Tenders() {
         <form onSubmit={onCreate} className="mb-4 rounded-xl bg-white p-4 shadow-sm text-sm">
           <h2 className="mb-3 font-semibold">Nowy przetarg</h2>
           {err && <p className="mb-2 text-xs text-red-600">{err}</p>}
-          <div className="grid gap-3 sm:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-3">
             <label className="block text-xs">
               Tytuł
               <input
@@ -154,6 +166,28 @@ export function Tenders() {
                 className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
                 value={deadline}
                 onChange={(e) => setDeadline(e.target.value)}
+              />
+            </label>
+            <label className="block text-xs" title="Godzina w czasie polskim, do której trzeba złożyć ofertę">
+              Godzina składania
+              <input
+                type="time"
+                disabled={!deadline}
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 disabled:bg-slate-50"
+                value={deadlineTime}
+                onChange={(e) => setDeadlineTime(e.target.value)}
+              />
+            </label>
+            <label
+              className="block text-xs"
+              title="Biuletyn Zamówień Publicznych (np. 2026/BZP 00431178/01) albo Dziennik Urzędowy Unii Europejskiej (TED, np. 606345-2026). Przy numerze z Biuletynu aplikacja sama znajdzie wynik przetargu."
+            >
+              Numer ogłoszenia (nieobowiązkowy)
+              <input
+                className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5"
+                value={noticeNumber}
+                onChange={(e) => setNoticeNumber(e.target.value)}
+                placeholder="np. 2026/BZP 00431178/01"
               />
             </label>
             <label
@@ -200,6 +234,7 @@ export function Tenders() {
               <th className="p-2">Wartość oferty netto</th>
               <th className="p-2">Pozycje</th>
               <th className="p-2">Status</th>
+              <th className="p-2">Wynik</th>
               <th
                 className="p-2"
                 title="Szacunek, jak bardzo produkty pasują do opisu zamawiającego — średnia z pozycji ocenionych automatycznie; produkty wybrane ręcznie nie mają oceny. Nie zastępuje sprawdzenia karty produktu."
@@ -223,7 +258,7 @@ export function Tenders() {
                   <td className="p-2">{t.client?.name}</td>
                   <td className="p-2">
                     <span className="app-deadline" data-soon={soon ? 'true' : undefined}>
-                      {t.deadline ?? '—'}
+                      {formatDeadline(t.deadline, t.deadline_time) || '—'}
                       {soon && (
                         <span className="app-deadline-flag ml-1 font-semibold text-red-600" title="Termin składania za mniej niż 7 dni">
                           !
@@ -241,6 +276,15 @@ export function Tenders() {
                     <span className="app-status" data-status={t.status}>
                       {tenderStatusLabel(t.status)}
                     </span>
+                  </td>
+                  <td className="p-2">
+                    {t.result_status ? (
+                      <span className={`whitespace-nowrap rounded border px-1.5 py-0.5 ${RESULT_STATUS_CLASS[t.result_status]}`}>
+                        {resultStatusLabel(t.result_status)}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
                   </td>
                   <td className="p-2">
                     <span className="app-ai" style={{ '--ai': `${t.ai_percent}%` } as CSSProperties}>

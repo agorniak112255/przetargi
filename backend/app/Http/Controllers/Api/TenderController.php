@@ -16,15 +16,27 @@ use App\Services\TenderActivityLogger;
 use App\Services\TenderCoverageService;
 use App\Services\TenderPricingService;
 use App\Services\Tenders\TenderPriceView;
+use App\Services\Tenders\TenderResultService;
 use App\Services\TenderWorkflowService;
+use App\Support\NoticeNumber;
 use App\Support\OfferPricing;
+use App\Support\PolishTime;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 
 class TenderController extends Controller
 {
+    /** „GG:MM” (też „G:MM” i „GG:MM:SS”) — godzina składania ofert w czasie polskim */
+    private const DEADLINE_TIME_RULE = 'regex:/^([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/';
+
+    /** Statusy przetargu w toku (przed złożeniem oferty) — filtry „bez godziny” i „bez numeru ogłoszenia”. */
+    private const IN_PROGRESS_STATUSES = ['draft', 'wycena', 'akceptacja_km', 'akceptacja_dyrektor', 'zatwierdzona'];
+
+    private const TIME_WITHOUT_DATE = 'Godzinę składania można wpisać tylko razem z datą terminu.';
+
     public function __construct(
         private readonly TenderWorkflowService $workflow,
         private readonly TenderCoverageService $coverage,
@@ -34,6 +46,7 @@ class TenderController extends Controller
         private readonly NbpExchangeRateService $fx,
         private readonly SourcePriceComparison $comparison,
         private readonly TenderPriceView $priceView,
+        private readonly TenderResultService $results,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -71,6 +84,19 @@ class TenderController extends Controller
                 ->whereDate('deadline', '>=', now()->toDateString())
                 ->whereNotIn('status', ['archiwum', 'exported', 'odrzucony']);
         }
+        if ($filter === 'no_result') {
+            // po terminie (dzień terminu minął w Polsce), bez wyniku; bez szkiców i odrzuconych (jak przypomnienie „wpisz wynik”)
+            $query->whereNull('result_status')
+                ->whereNotNull('deadline')
+                ->whereDate('deadline', '<', PolishTime::today()->toDateString())
+                ->whereNotIn('status', ['draft', 'odrzucony']);
+        }
+        if ($filter === 'no_deadline_time') {
+            $query->whereNull('deadline_time')->whereIn('status', self::IN_PROGRESS_STATUSES);
+        }
+        if ($filter === 'no_notice') {
+            $query->whereNull('notice_number')->whereIn('status', self::IN_PROGRESS_STATUSES);
+        }
         if ($request->filled('owner_id')) {
             $query->where('owner_id', (int) $request->integer('owner_id'));
         }
@@ -88,10 +114,18 @@ class TenderController extends Controller
             'title' => ['required', 'string', 'max:255'],
             'client_id' => ['required', 'exists:clients,id'],
             'deadline' => ['nullable', 'date'],
+            'deadline_time' => ['nullable', 'string', self::DEADLINE_TIME_RULE],
+            'notice_number' => ['nullable', 'string', 'max:60'],
             'owner_id' => ['nullable', 'integer', 'exists:users,id'],
             'number' => ['nullable', 'string', 'max:50', 'unique:tenders,number'],
             'target_margin_percent' => ['sometimes', 'numeric', 'min:0', 'max:500'],
-        ]);
+        ], self::deadlineMessages());
+
+        $deadlineTime = self::filledText($data['deadline_time'] ?? null);
+        if ($deadlineTime !== null && empty($data['deadline'])) {
+            throw ValidationException::withMessages(['deadline_time' => [self::TIME_WITHOUT_DATE]]);
+        }
+        $noticeNumber = self::noticeNumber($data['notice_number'] ?? null);
 
         $year = (int) now()->format('Y');
         $seq = Tender::query()->where('number', 'like', "PRZ/{$year}/%")->count() + 1;
@@ -103,6 +137,8 @@ class TenderController extends Controller
             'client_id' => $data['client_id'],
             'owner_id' => $data['owner_id'] ?? $request->user()->id,
             'deadline' => $data['deadline'] ?? null,
+            'deadline_time' => $deadlineTime,
+            'notice_number' => $noticeNumber,
             'status' => 'draft',
             'ai_percent' => 0,
             'target_margin_percent' => $data['target_margin_percent'] ?? OfferPricing::markupPercent(),
@@ -124,14 +160,20 @@ class TenderController extends Controller
         $data = $request->validate([
             'title' => ['sometimes', 'string', 'max:255'],
             'deadline' => ['sometimes', 'nullable', 'date'],
+            'deadline_time' => ['sometimes', 'nullable', 'string', self::DEADLINE_TIME_RULE],
+            'notice_number' => ['sometimes', 'nullable', 'string', 'max:60'],
             'owner_id' => ['sometimes', 'nullable', 'integer', 'exists:users,id'],
             'client_id' => ['sometimes', 'integer', 'exists:clients,id'],
             'target_margin_percent' => ['sometimes', 'numeric', 'min:0', 'max:500'],
-        ]);
+        ], self::deadlineMessages());
+
+        $noticeNumber = array_key_exists('notice_number', $data) ? self::noticeNumber($data['notice_number']) : null;
 
         $before = [
             'title' => $tender->title,
             'deadline' => $tender->deadline?->format('Y-m-d'),
+            'deadline_time' => $tender->deadline_time,
+            'notice_number' => $tender->notice_number,
             'owner_id' => $tender->owner_id,
             'client_id' => $tender->client_id,
             'target_margin_percent' => $tender->target_margin_percent,
@@ -142,6 +184,25 @@ class TenderController extends Controller
         }
         if (array_key_exists('deadline', $data)) {
             $tender->deadline = $data['deadline'];
+            // bez daty nie ma godziny — wyczyszczenie daty czyści godzinę
+            if (empty($data['deadline'])) {
+                $tender->deadline_time = null;
+            }
+        }
+        if (array_key_exists('deadline_time', $data)) {
+            $time = self::filledText($data['deadline_time']);
+            if ($time !== null && $tender->deadline === null) {
+                throw ValidationException::withMessages(['deadline_time' => [self::TIME_WITHOUT_DATE]]);
+            }
+            $tender->deadline_time = $time;
+        }
+        $noticeChanged = array_key_exists('notice_number', $data) && $noticeNumber !== $tender->notice_number;
+        if ($noticeChanged) {
+            $tender->notice_number = $noticeNumber;
+            // powiązania z ogłoszeniami Biuletynu dotyczyły poprzedniego numeru — łączy się je od nowa
+            $tender->contract_notice_id = null;
+            $tender->result_notice_id = null;
+            $tender->bzp_checked_at = null;
         }
         if (array_key_exists('owner_id', $data)) {
             $tender->owner_id = $data['owner_id'];
@@ -163,7 +224,13 @@ class TenderController extends Controller
         }
 
         $tender->last_activity_at = now();
-        $tender->save();
+        DB::transaction(function () use ($tender, $noticeChanged, $request, $before): void {
+            $tender->save();
+            if ($noticeChanged) {
+                // dane części wpisane z poprzedniego ogłoszenia (zwycięzca, ceny, wynik) nie dotyczą nowego numeru
+                $this->results->detachNotice($tender, $request->user(), $before['notice_number']);
+            }
+        });
 
         $mask = SupplierSpecialMask::forUser($request->user());
         if ($reprice) {
@@ -181,6 +248,8 @@ class TenderController extends Controller
             'after' => [
                 'title' => $tender->title,
                 'deadline' => $tender->deadline?->format('Y-m-d'),
+                'deadline_time' => $tender->deadline_time,
+                'notice_number' => $tender->notice_number,
                 'owner_id' => $tender->owner_id,
                 'client_id' => $tender->client_id,
                 'target_margin_percent' => $tender->target_margin_percent,
@@ -191,6 +260,51 @@ class TenderController extends Controller
             $tender->fresh()->load(['client:id,name', 'owner:id,name'])->loadCount('items'),
             $mask,
         ));
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function deadlineMessages(): array
+    {
+        return [
+            'deadline_time.regex' => 'Godzina składania ofert musi mieć postać GG:MM, np. 10:00.',
+            'deadline_time.string' => 'Godzina składania ofert musi mieć postać GG:MM, np. 10:00.',
+            'notice_number.max' => 'Numer ogłoszenia jest za długi.',
+            'notice_number.string' => 'Nieznany zapis numeru ogłoszenia.',
+        ];
+    }
+
+    private static function filledText(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+        $value = trim($value);
+
+        return $value === '' ? null : $value;
+    }
+
+    /**
+     * Numer ogłoszenia w zapisie znormalizowanym (Biuletyn albo TED); pusty = null; inny zapis → 422.
+     */
+    private static function noticeNumber(mixed $value): ?string
+    {
+        $text = self::filledText($value);
+        if ($text === null) {
+            return null;
+        }
+        $parsed = NoticeNumber::parse($text);
+        if ($parsed === null) {
+            throw ValidationException::withMessages([
+                'notice_number' => [
+                    'Nieznany zapis numeru ogłoszenia. Przykłady: 2026/BZP 00431178/01 (Biuletyn Zamówień Publicznych) '
+                    .'albo 606345-2026 (Dziennik Urzędowy Unii Europejskiej, TED).',
+                ],
+            ]);
+        }
+
+        return $parsed['normalized'];
     }
 
     public function destroy(Tender $tender): JsonResponse

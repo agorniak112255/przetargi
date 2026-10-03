@@ -43,6 +43,24 @@ return [
     /** Brak sygnału harmonogramu (b2b-scheduler-heartbeat) dłużej niż tyle minut = harmonogram nie działa. */
     'scheduler_stale_minutes' => 5,
 
+    /**
+     * Zadanie nocne bez przebiegu rozpoczętego od ostatniego planowego terminu, gdy od terminu minęło więcej niż tyle
+     * minut = „nie ruszyło o czasie” (alert z system:check). Zapas na zadania, które czekają na poprzednie.
+     */
+    'stale_grace_minutes' => 120,
+
+    /**
+     * Błąd zadania częstego (only_failures) w ciągu tylu minut od zamknięcia jego incydentu otwiera ten incydent
+     * na nowo — bez nowego e-maila (zadanie, które raz działa, raz nie, nie zasypuje skrzynki).
+     */
+    'reopen_within_minutes' => 360,
+
+    /**
+     * Błąd konta dostawcy starszy niż tyle godzin (np. przy pierwszym system:check po wdrożeniu) zakłada incydent
+     * widoczny na ekranie, ale bez e-maila — e-mail wyjdzie przy kolejnym, świeżym błędzie tego konta.
+     */
+    'b2b_mail_max_age_hours' => 48,
+
     /** Tyle ostatnich znaków komunikatu polecenia trafia do scheduled_task_runs.output_tail. */
     'output_tail_chars' => 2000,
 

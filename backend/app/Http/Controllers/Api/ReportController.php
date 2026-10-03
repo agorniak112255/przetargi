@@ -12,6 +12,7 @@ use App\Services\Reports\CustomersReport;
 use App\Services\Reports\DataSourcesReport;
 use App\Services\Reports\PriceMovesReport;
 use App\Services\Reports\SalesReport;
+use App\Services\Reports\TenderEffectivenessReport;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -81,7 +82,8 @@ class ReportController extends Controller
             if ($out === false) {
                 return;
             }
-            fputcsv($out, ['number', 'title', 'client', 'owner', 'status', 'offer_value_net', 'margin_percent', 'deadline', 'ai_percent'], ';');
+            // deadline_time, notice_number i result_status dopisane na końcu — wcześniejsze kolumny bez zmian
+            fputcsv($out, ['number', 'title', 'client', 'owner', 'status', 'offer_value_net', 'margin_percent', 'deadline', 'ai_percent', 'deadline_time', 'notice_number', 'result_status'], ';');
             foreach ($rows as $t) {
                 fputcsv($out, [
                     $t->number,
@@ -93,6 +95,9 @@ class ReportController extends Controller
                     $t->getAttribute($margin),
                     $t->deadline?->format('Y-m-d'),
                     $t->ai_percent,
+                    $t->deadline_time,
+                    $t->notice_number,
+                    $t->result_status,
                 ], ';');
             }
             fclose($out);
@@ -140,25 +145,39 @@ class ReportController extends Controller
     }
 
     /**
-     * Skuteczność przetargów (części wygrane / przegrane, powody, konkurenci) — okres po dacie terminu.
-     * ZAŚLEPKA kroku 0 — pełną logikę dopisuje strumień B (TenderEffectivenessReport).
+     * Skuteczność przetargów (części wygrane / przegrane, powody, konkurenci) — okres po dacie terminu
+     * (period=90d|year), zakres przetargów jak w raporcie „Sprzedaż i oferty”.
      */
-    public function effectiveness(Request $request): JsonResponse
+    public function effectiveness(Request $request, TenderEffectivenessReport $report): JsonResponse
     {
         $this->requireAny($request, ['tenders.view_own', 'tenders.view_all']);
 
-        return response()->json(['message' => 'Jeszcze niegotowe'], 501);
+        return response()->json($report->build($request->user(), ['period' => $request->query('period')]));
     }
 
     /**
-     * Skuteczność przetargów do Excela (CSV ze średnikiem i BOM, wiersz na część).
-     * ZAŚLEPKA kroku 0 — pełną logikę dopisuje strumień B.
+     * Skuteczność przetargów do Excela: CSV ze średnikiem i BOM (polskie znaki w Excelu), wiersz na część zamówienia.
      */
-    public function effectivenessCsv(Request $request): JsonResponse|StreamedResponse
+    public function effectivenessCsv(Request $request, TenderEffectivenessReport $report): StreamedResponse
     {
         $this->requireAny($request, ['tenders.view_own', 'tenders.view_all']);
+        $user = $request->user();
+        $params = ['period' => $request->query('period')];
 
-        return response()->json(['message' => 'Jeszcze niegotowe'], 501);
+        return response()->streamDownload(static function () use ($report, $user, $params): void {
+            $out = fopen('php://output', 'w');
+            if ($out === false) {
+                return;
+            }
+            fwrite($out, "\xEF\xBB\xBF");
+            fputcsv($out, $report->headers(), ';');
+            foreach ($report->rows($user, $params) as $row) {
+                fputcsv($out, $row, ';');
+            }
+            fclose($out);
+        }, 'skutecznosc-przetargow.csv', [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+        ]);
     }
 
     /**

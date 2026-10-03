@@ -45,7 +45,9 @@ class DashboardApiTest extends TestCase
     public function test_each_section_needs_its_module_permission(): void
     {
         Sanctum::actingAs($this->userWith(['dashboard.view']));
+        // „Do zrobienia dziś” jest zawsze (trasa wymaga dashboard.view); bez modułów przetargów — bez kafelka wygranych
         $this->getJson('/api/dashboard')->assertOk()->assertExactJson([
+            'todo' => ['items' => [], 'won_90d' => null],
             'tenders' => null, 'products' => null, 'stock' => null, 'prices' => null, 'campaigns' => null,
         ]);
 
@@ -92,7 +94,8 @@ class DashboardApiTest extends TestCase
         $this->assertEqualsWithDelta(0.0, $stages['draft']['value_net'], 0.001);
         $this->assertSame(['2026-10-03', '2026-10-05', '2026-10-20'], array_column($t['upcoming'], 'deadline'));
         $this->assertSame('Klient wycena', $t['upcoming'][1]['client']);
-        $this->assertSame(['id', 'number', 'title', 'client', 'status', 'deadline'], array_keys($t['upcoming'][0]), 'Wiersz terminu bez cen i marż.');
+        $this->assertSame(['id', 'number', 'title', 'client', 'status', 'deadline', 'deadline_time'], array_keys($t['upcoming'][0]), 'Wiersz terminu bez cen i marż.');
+        $this->assertNull($t['upcoming'][0]['deadline_time'], 'Bez godziny składania — null, nie zmyślona godzina.');
     }
 
     public function test_margin_without_any_priced_tender_is_unknown_not_zero(): void

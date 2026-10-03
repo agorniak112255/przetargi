@@ -7,6 +7,7 @@ import { ChatHelp } from './help/ChatHelp'
 import { DashboardHelp } from './help/DashboardHelp'
 import { InventoryHelp } from './help/InventoryHelp'
 import { AppFrame, Btn, Card, Field, LivePage, Mark, Slideshow, Th } from './help/kit'
+import { NewFeaturesHelp } from './help/NewFeaturesHelp'
 import { ReportsHelp } from './help/ReportsHelp'
 import { SubstitutesHelp } from './help/SubstitutesHelp'
 import { useAuth } from '../auth'
@@ -17,6 +18,7 @@ import { Products } from './Products'
 import { Tenders } from './Tenders'
 
 const modules = [
+  { id: 'nowosci', label: 'Nowości' },
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'przetargi', label: 'Przetargi' },
   { id: 'produkty', label: 'Produkty' },
@@ -2088,6 +2090,7 @@ function DownloadsHelp() {
 }
 
 const panels: Record<ModuleId, () => ReactNode> = {
+  nowosci: () => <NewFeaturesHelp />,
   dashboard: () => <DashboardHelp />,
   przetargi: () => <TendersHelp />,
   produkty: () => <ProductsHelp />,

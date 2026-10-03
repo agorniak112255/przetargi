@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from './api'
+import { api, type LossReason } from './api'
 import { errorText } from './campaignFormat'
 import { plural } from './plural'
 
 /**
- * Moduł „Raporty”: typy odpowiedzi GET /api/reports/{catalog|prices|sources|sales|customers} (ReportController
+ * Moduł „Raporty”: typy odpowiedzi GET /api/reports/{catalog|prices|sources|sales|customers|effectiveness} (ReportController
  * i klasy App\Services\Reports\*), formatowanie liczb i dat oraz ładowanie danych z ochroną przed spóźnioną odpowiedzią.
  * Sekcja null = brak uprawnienia do danych, z których powstaje (nie zera).
  */
 
-export type ReportKey = 'catalog' | 'prices' | 'sources' | 'sales' | 'customers'
+export type ReportKey = 'catalog' | 'prices' | 'sources' | 'sales' | 'customers' | 'effectiveness'
 
 export type CatalogCoverage = {
   with_description: number
@@ -231,6 +231,61 @@ export type CustomersReportData = {
     last_sale_at: string | null
   }[]
   top_items: { erp_item_id: number; code: string; name: string; customers: number; documents: number; product_id: number | null }[]
+}
+
+/** Okres raportu „Skuteczność przetargów” — po dacie terminu składania ofert. */
+export type EffectivenessPeriod = '90d' | 'year'
+
+/** Przetarg w listach raportu skuteczności (bez wyniku, unieważnione części). */
+export type EffectivenessTenderRef = {
+  tender_id: number
+  number: string
+  notice_number: string | null
+  title: string
+  owner_id: number | null
+  owner_name: string
+  /** Dzień terminu „RRRR-MM-DD” (czas polski). */
+  deadline: string
+  deadline_time: string | null
+  /** Ścieżka aplikacji do zakładki „Wynik przetargu”. */
+  url: string
+}
+
+/**
+ * GET /reports/effectiveness?period= (TenderEffectivenessReport). Liczy części zamówień: rozstrzygnięte = wygrane +
+ * przegrane; procenty jako liczby 0–100 z jednym miejscem po przecinku (null bez rozstrzygniętych).
+ * Różnice cen: nasza cena brutto do ceny zwycięzcy, dodatnia = byliśmy drożsi (zwycięzca tańszy).
+ */
+export type EffectivenessReportData = {
+  generated_at: string
+  period: EffectivenessPeriod
+  from: string
+  to: string
+  scope: 'all' | 'own'
+  summary: {
+    decided_lots: number
+    won_lots: number
+    lost_lots: number
+    win_rate: number | null
+    cancelled_lots: number
+    not_submitted_lots: number
+    no_result_tenders: number
+    top_loss_reason: { reason: LossReason; count: number } | null
+    avg_price_gap_percent: number | null
+    /** Przegrane części, w których znamy obie ceny (podstawa średniej różnicy). */
+    price_gap_lots: number
+    weakest_category: { key: string; label: string; win_rate: number | null; decided: number } | null
+  }
+  by_owner: { owner_id: number | null; owner_name: string; decided: number; won: number; win_rate: number | null }[]
+  /** reason null — przegrana bez wpisanego powodu. */
+  loss_reasons: { reason: LossReason | null; label: string; count: number }[]
+  competitors: { competitor_id: number; name: string; nip: string | null; won_against_us: number; avg_cheaper_percent: number | null }[]
+  categories: { key: string; label: string; decided: number; won: number; win_rate: number | null }[]
+  categories_note: string | null
+  cancelled: (EffectivenessTenderRef & { lot_no: number; lot_name: string | null })[]
+  /** Najwyżej 50 przetargów; pełna liczba w summary.no_result_tenders. */
+  no_result: (EffectivenessTenderRef & { status: string })[]
+  no_result_by_owner: { owner_id: number | null; owner_name: string; count: number }[]
 }
 
 /**

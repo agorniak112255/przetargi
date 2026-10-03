@@ -45,7 +45,9 @@ return [
             'port' => env('MAIL_PORT', 2525),
             'username' => env('MAIL_USERNAME'),
             'password' => env('MAIL_PASSWORD'),
-            'timeout' => null,
+            // Bez limitu niedziałający serwer poczty wstrzymuje przypomnienia i alerty na długo (domyślnie gniazdo
+            // PHP czeka 60 s na każdy e-mail) — 10 s wystarcza na zwykłe połączenie SMTP.
+            'timeout' => max(1, (int) env('MAIL_TIMEOUT', 10)),
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
             // Serwer firmowy często ma certyfikat niepasujący do hostname — wyłącz lokalnie/produkcyjnie świadomie.
             'verify_peer' => filter_var(env('MAIL_VERIFY_PEER', true), FILTER_VALIDATE_BOOL),

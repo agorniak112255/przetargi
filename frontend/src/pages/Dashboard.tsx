@@ -1,19 +1,54 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth'
-import { api, can } from '../lib/api'
+import { api, can, canAny } from '../lib/api'
 import { TENDER_STATUS_FLOW, tenderStatusLabel } from '../lib/tenderStatus'
 import { NavIcon, type NavIconName } from '../components/NavIcon'
 
+/** Jedna sprawa na liście „Do zrobienia dziś” (DashboardController::todo). Daty terminu to dzień „na zegarze” w Polsce. */
+export type DashTodo =
+  | {
+      kind: 'tender_deadline'
+      tender_id: number
+      number: string
+      notice_number: string | null
+      title: string | null
+      client: string | null
+      deadline: string
+      deadline_time: string | null
+      missing: { without_product: number; without_price: number }
+      url: string
+    }
+  | {
+      kind: 'inquiries_waiting'
+      count: number
+      oldest: { id: number; client: string | null; since: string | null } | null
+      url: string
+      /** jakie zapytania liczy serwer, np. „bez odpowiedzi ponad dobę, z ostatnich 14 dni” */
+      scope_label?: string | null
+    }
+  | { kind: 'tender_result_needed'; tender_id: number; number: string; title: string | null; client: string | null; deadline: string; url: string }
+  | { kind: 'mention'; notification_id: string; title: string; body: string | null; url: string | null; created_at: string | null }
+
 /** Odpowiedź GET /dashboard — sekcja null, gdy użytkownik nie ma dostępu do modułu (DashboardController). */
 export type Dash = {
+  /** „Do zrobienia dziś” — tylko sprawy zalogowanej osoby; won_90d null bez dostępu do przetargów. Brak w przykładzie Pomocy. */
+  todo?: { items: DashTodo[]; won_90d: { won_lots: number; decided_lots: number } | null } | null
   tenders: {
     active: number
     value_net: number
     avg_margin_percent: number | null
     deadline_soon: number
     stages: { status: string; count: number; value_net: number }[]
-    upcoming: { id: number; number: string; title: string | null; client: string | null; status: string; deadline: string }[]
+    upcoming: {
+      id: number
+      number: string
+      title: string | null
+      client: string | null
+      status: string
+      deadline: string
+      deadline_time?: string | null
+    }[]
   } | null
   products: {
     total: number
@@ -121,11 +156,31 @@ export function Dashboard() {
   if (error) return <p className="text-sm text-red-600">Nie udało się wczytać dashboardu. Odśwież stronę.</p>
   if (!data) return <p className="text-sm text-slate-500">Ładowanie…</p>
 
-  return <DashboardView data={data} stockLink={can(user, 'inventory.view') ? '/zapasy' : '/raport-zapasow'} />
+  return (
+    <DashboardView
+      data={data}
+      stockLink={can(user, 'inventory.view') ? '/zapasy' : '/raport-zapasow'}
+      todoAccess={{
+        tenders: canAny(user, ['tenders.view_own', 'tenders.view_all']),
+        inquiries: can(user, 'inquiries.use'),
+      }}
+    />
+  )
 }
 
+/** Z czego składa się „Do zrobienia dziś” danej osoby (te same uprawnienia co w DashboardController::todo). */
+type TodoAccess = { tenders: boolean; inquiries: boolean }
+
 /** Sam widok dashboardu (bez pobierania danych) — używa go też Pomoc z przykładowymi danymi. */
-export function DashboardView({ data, stockLink }: { data: Dash; stockLink: string }) {
+export function DashboardView({
+  data,
+  stockLink,
+  todoAccess = { tenders: true, inquiries: true },
+}: {
+  data: Dash
+  stockLink: string
+  todoAccess?: TodoAccess
+}) {
   const today = new Date().toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
   const pricesLink = data.prices?.accounts ? '/price-lists/b2b' : '/price-lists'
   // para kart w wierszu: gdy jednej brakuje (brak uprawnienia), druga bierze całą szerokość
@@ -141,9 +196,10 @@ export function DashboardView({ data, stockLink }: { data: Dash; stockLink: stri
         <h1 className="app-page-title text-xl font-semibold">Dashboard</h1>
         <span className="text-sm text-slate-500">{today}</span>
       </div>
-      {empty && <p className="text-sm text-slate-500">Nie masz dostępu do żadnego modułu pokazywanego na dashboardzie.</p>}
+      {empty && !data.todo && <p className="text-sm text-slate-500">Nie masz dostępu do żadnego modułu pokazywanego na dashboardzie.</p>}
       <div className="grid grid-cols-1 gap-3.5 @5xl:grid-cols-12">
-        {data.tenders && <TendersCard t={data.tenders} span={tendersSpan} />}
+        {data.todo && <TodoCard items={data.todo.items} access={todoAccess} />}
+        {data.tenders && <TendersCard t={data.tenders} span={tendersSpan} won={data.todo?.won_90d ?? null} />}
         {data.products && <ProductsCard p={data.products} span={productsSpan} />}
         {data.stock && <StockCard s={data.stock} span={stockSpan} to={stockLink} />}
         {data.prices && <PricesCard p={data.prices} span={pricesSpan} to={pricesLink} />}
@@ -200,7 +256,7 @@ function Attention({ tone, children }: { tone: 'alert' | 'warn' | 'info'; childr
   )
 }
 
-function Stat({ label, value, unit }: { label: string; value: string; unit?: string }) {
+function Stat({ label, value, unit, sub }: { label: string; value: string; unit?: string; sub?: string }) {
   return (
     <div className="min-w-0">
       <div className="app-dash-label text-[11px] font-medium tracking-wide text-slate-400 uppercase">{label}</div>
@@ -208,7 +264,220 @@ function Stat({ label, value, unit }: { label: string; value: string; unit?: str
         {value}
         {unit && <small className="ml-1 text-sm font-medium tracking-normal text-slate-500">{unit}</small>}
       </div>
+      {sub && <div className="text-[11.5px] text-slate-500">{sub}</div>}
     </div>
+  )
+}
+
+/** Dzień tygodnia w miejscowniku: „w poniedziałek”, „we wtorek”. */
+const WEEKDAY_IN = ['w niedzielę', 'w poniedziałek', 'we wtorek', 'w środę', 'w czwartek', 'w piątek', 'w sobotę']
+
+/** „dziś 5.10”, „jutro 6.10”, „w poniedziałek 5.10” — dzień terminu względem dzisiejszego dnia. */
+function dayPhrase(value: string): string {
+  const days = daysFromToday(value)
+  const date = localDay(value)
+  const dm = `${date.getDate()}.${date.getMonth() + 1}`
+  if (days === 0) return `dziś ${dm}`
+  if (days === 1) return `jutro ${dm}`
+  if (days > 1 && days < 7) return `${WEEKDAY_IN[date.getDay()]} ${dm}`
+  return `${dm}.${date.getFullYear()}`
+}
+
+/** Chwila (ISO) dla ludzi w strefie przeglądarki: „dziś 14:20” albo „1.10, 14:20”. */
+function momentLabel(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const hm = d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })
+  const today = new Date()
+  if (d.toDateString() === today.toDateString()) return `dziś ${hm}`
+  return `${d.getDate()}.${d.getMonth() + 1}, ${hm}`
+}
+
+const TODO_ICON_TONE = {
+  bad: 'bg-red-50 text-red-600',
+  warn: 'bg-amber-50 text-amber-600',
+  blue: 'bg-blue-50 text-blue-600',
+} as const
+
+function TodoIcon({ kind, tone }: { kind: DashTodo['kind']; tone: keyof typeof TODO_ICON_TONE }) {
+  const path =
+    kind === 'tender_deadline' ? (
+      <>
+        <circle cx="12" cy="12" r="8.5" />
+        <path d="M12 7.5V12l3 2" />
+      </>
+    ) : kind === 'inquiries_waiting' ? (
+      <path d="M4.5 6.5h15v9h-8l-4 3v-3h-3z" />
+    ) : kind === 'tender_result_needed' ? (
+      <path d="M6 20.5V4m0 .5h11l-2 4 2 4H6" />
+    ) : (
+      <>
+        <circle cx="12" cy="12" r="3.5" />
+        <path d="M15.5 12v1.5a2.5 2.5 0 0 0 5 0V12a8.5 8.5 0 1 0-3.4 6.8" />
+      </>
+    )
+  return (
+    <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-md ${TODO_ICON_TONE[tone]}`}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+        {path}
+      </svg>
+    </span>
+  )
+}
+
+/** Braki oferty słowami: „6 pozycji bez produktu, 3 bez ceny”. */
+function missingText(m: { without_product: number; without_price: number }): string {
+  const parts: string[] = []
+  if (m.without_product > 0) parts.push(`${nf(m.without_product)} ${plural(m.without_product, 'pozycja', 'pozycje', 'pozycji')} bez produktu`)
+  if (m.without_price > 0) parts.push(parts.length > 0 ? `${nf(m.without_price)} bez ceny` : `${nf(m.without_price)} ${plural(m.without_price, 'pozycja', 'pozycje', 'pozycji')} bez ceny`)
+  return parts.join(', ')
+}
+
+function TodoRow({ tone, kind, children, action, to, onOpen }: {
+  tone: keyof typeof TODO_ICON_TONE
+  kind: DashTodo['kind']
+  children: ReactNode
+  action: string
+  to: string | null
+  onOpen?: () => void
+}) {
+  return (
+    <li className="flex items-start gap-3 border-b border-slate-100 py-2.5 last:border-0">
+      <TodoIcon kind={kind} tone={tone} />
+      <span className="min-w-0 flex-1 text-[13px] leading-snug">{children}</span>
+      {to && (
+        <Link
+          to={to}
+          onClick={onOpen}
+          className="shrink-0 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium whitespace-nowrap text-slate-700 hover:bg-slate-50 hover:no-underline"
+        >
+          {action}
+        </Link>
+      )}
+    </li>
+  )
+}
+
+/** Pusta lista: wymienia tylko rodzaje spraw, które ta osoba w ogóle może dostać. */
+function emptyTodoText(access: TodoAccess): string {
+  const kinds: string[] = []
+  if (access.tenders) kinds.push('terminu składania w ciągu tygodnia')
+  if (access.inquiries) kinds.push('zapytania czekającego na odpowiedź')
+  if (access.tenders) kinds.push('wyniku przetargu do wpisania')
+  if (kinds.length === 0) return 'Nie masz dziś pilnych spraw.'
+  const list = kinds.length === 1 ? kinds[0] : `${kinds.slice(0, -1).join(', ')} ani ${kinds[kinds.length - 1]}`
+  return `Nie masz dziś pilnych spraw: żadnego ${list}.`
+}
+
+/** „Do zrobienia dziś” — sprawy zalogowanej osoby; każda prowadzi prosto do miejsca, gdzie się ją załatwia. */
+function TodoCard({ items, access }: { items: DashTodo[]; access: TodoAccess }) {
+  const [readMentions, setReadMentions] = useState<string[]>([])
+  const visible = items.filter((i) => i.kind !== 'mention' || !readMentions.includes(i.notification_id))
+  const markRead = (id: string) => {
+    setReadMentions((r) => [...r, id])
+    api(`/notifications/${id}/read`, { method: 'POST' }).catch(() => {})
+  }
+
+  return (
+    <section className="app-card app-dash-card @container flex min-w-0 flex-col rounded-xl bg-white p-4 shadow-sm @5xl:col-span-12">
+      <div className="mb-1 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+        <span className="app-dash-icon grid h-[26px] w-[26px] shrink-0 place-items-center rounded-md bg-blue-50 text-blue-600">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-[15px] w-[15px]" aria-hidden="true">
+            <path d="M5 12.5l4 4 10-10" />
+          </svg>
+        </span>
+        <h2 className="text-sm font-semibold">Do zrobienia dziś</h2>
+        {visible.length > 0 && (
+          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+            {visible.length} {plural(visible.length, 'sprawa', 'sprawy', 'spraw')}
+          </span>
+        )}
+        <span className="text-xs text-slate-500">Sprawa znika z listy, gdy zostanie zrobiona.</span>
+      </div>
+      {visible.length === 0 ? (
+        <p className="py-2 text-[13px] text-slate-500">{emptyTodoText(access)}</p>
+      ) : (
+        <ul>
+          {visible.map((item) => {
+            switch (item.kind) {
+              case 'tender_deadline': {
+                const days = daysFromToday(item.deadline)
+                const missing = missingText(item.missing)
+                return (
+                  <TodoRow key={`d${item.tender_id}`} kind={item.kind} tone={days <= 1 ? 'bad' : 'warn'} action="Otwórz przetarg" to={item.url}>
+                    <strong>
+                      Termin składania {dayPhrase(item.deadline)}
+                      {item.deadline_time ? `, ${item.deadline_time}` : ''}
+                    </strong>
+                    {item.client && <> · {item.client}</>} <span className="text-slate-500">{item.notice_number ?? item.number}</span>
+                    <br />
+                    <span className="text-slate-500">
+                      {missing !== '' ? `W ofercie brakuje: ${missing}.` : 'Wszystkie pozycje mają produkt i cenę.'}
+                      {!item.deadline_time && ' Godzina składania nie jest wpisana.'}
+                    </span>
+                  </TodoRow>
+                )
+              }
+              case 'inquiries_waiting':
+                return (
+                  <TodoRow key="inquiries" kind={item.kind} tone="warn" action="Pokaż zapytania" to={item.url}>
+                    <strong>
+                      {nf(item.count)} {plural(item.count, 'zapytanie czeka', 'zapytania czekają', 'zapytań czeka')} na odpowiedź
+                      {item.scope_label ? '' : ' ponad dobę'}
+                    </strong>
+                    {item.scope_label && (
+                      <>
+                        <br />
+                        <span className="text-slate-500">
+                          {item.scope_label.charAt(0).toLocaleUpperCase('pl-PL') + item.scope_label.slice(1)}
+                        </span>
+                      </>
+                    )}
+                    {item.oldest && (
+                      <>
+                        <br />
+                        <span className="text-slate-500">
+                          Najdłużej: {item.oldest.client ?? 'klient bez nazwy'}
+                          {item.oldest.since ? `, od ${momentLabel(item.oldest.since)}` : ''}
+                        </span>
+                      </>
+                    )}
+                  </TodoRow>
+                )
+              case 'tender_result_needed':
+                return (
+                  <TodoRow key={`r${item.tender_id}`} kind={item.kind} tone="blue" action="Wpisz wynik" to={item.url}>
+                    <strong>Wpisz wynik przetargu</strong>
+                    {item.client && <> · {item.client}</>} <span className="text-slate-500">{item.number}</span>
+                    <br />
+                    <span className="text-slate-500">Termin składania minął {localDay(item.deadline).toLocaleDateString('pl-PL')}.</span>
+                  </TodoRow>
+                )
+              case 'mention':
+                return (
+                  <TodoRow
+                    key={`m${item.notification_id}`}
+                    kind={item.kind}
+                    tone="blue"
+                    action="Odpowiedz"
+                    to={item.url}
+                    onOpen={() => markRead(item.notification_id)}
+                  >
+                    <strong>{item.title}</strong>
+                    {item.body && (
+                      <>
+                        <br />
+                        <span className="text-slate-500">{item.body}</span>
+                      </>
+                    )}
+                  </TodoRow>
+                )
+            }
+          })}
+        </ul>
+      )}
+    </section>
   )
 }
 
@@ -224,7 +493,15 @@ function Bar({ percent, fill }: { percent: number; fill: string }) {
   )
 }
 
-function TendersCard({ t, span }: { t: NonNullable<Dash['tenders']>; span: string }) {
+function TendersCard({
+  t,
+  span,
+  won,
+}: {
+  t: NonNullable<Dash['tenders']>
+  span: string
+  won: { won_lots: number; decided_lots: number } | null
+}) {
   const stages = TENDER_STATUS_FLOW.map((status) => t.stages.find((s) => s.status === status)).filter(
     (s): s is NonNullable<typeof s> => !!s && s.count > 0,
   )
@@ -255,10 +532,19 @@ function TendersCard({ t, span }: { t: NonNullable<Dash['tenders']>; span: strin
         )
       }
     >
-      <div className="grid grid-cols-1 gap-3.5 @md:grid-cols-3">
+      <div className={`grid grid-cols-1 gap-3.5 ${won ? '@md:grid-cols-2 @2xl:grid-cols-4' : '@md:grid-cols-3'}`}>
         <Stat label="W toku" value={nf(t.active)} />
         <Stat label="Wartość ofert netto" value={valueNum} unit={valueUnit} />
         <Stat label="Średnia marża" value={t.avg_margin_percent !== null ? t.avg_margin_percent.toLocaleString('pl-PL') : '—'} unit={t.avg_margin_percent !== null ? '%' : undefined} />
+        {won && (
+          // części zamówień z wynikiem (wygrana albo przegrana) w przetargach z terminem w ostatnich 90 dniach
+          <Stat
+            label="Wygrane, 90 dni"
+            value={won.decided_lots > 0 ? nf(Math.round((won.won_lots / won.decided_lots) * 100)) : '—'}
+            unit={won.decided_lots > 0 ? '%' : undefined}
+            sub={won.decided_lots > 0 ? `${nf(won.won_lots)} z ${nf(won.decided_lots)} z wynikiem` : 'brak wpisanych wyników'}
+          />
+        )}
       </div>
       <div className="mt-4 grid grid-cols-1 gap-5 @2xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
         <div>
@@ -295,7 +581,9 @@ function TendersCard({ t, span }: { t: NonNullable<Dash['tenders']>; span: strin
                 >
                   <span className={`font-semibold tabular-nums ${days <= 3 ? 'text-red-600' : ''}`}>{shortDate(u.deadline)}</span>
                   <span className="truncate" title={[u.client, u.number].filter(Boolean).join(' · ')}>
-                    {u.client ?? u.title ?? u.number} <span className="app-code font-mono text-[11px] text-slate-500">{u.number}</span>
+                    {u.client ?? u.title ?? u.number}
+                    {u.deadline_time && <span className="ml-1 text-slate-500 tabular-nums">{u.deadline_time}</span>}{' '}
+                    <span className="app-code font-mono text-[11px] text-slate-500">{u.number}</span>
                   </span>
                   <span
                     className={`rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ${

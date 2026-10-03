@@ -14,6 +14,8 @@ use App\Models\User;
 use App\Services\Ai\AiSettingsService;
 use App\Services\Ai\AiTask;
 use App\Services\Ai\OpenAiCompatibleClient;
+use App\Services\Notifications\AppNotificationMessage;
+use App\Services\Notifications\NotificationDispatcher;
 use App\Services\Pricing\SourcePriceComparison;
 use App\Services\Pricing\SupplierSpecialMask;
 use App\Services\Search\SearchEventRecorder;
@@ -462,6 +464,31 @@ final class ClientInquiryService
         return null;
     }
 
+    /**
+     * Powiadomienie autora: analiza zapisana (dzwonek / e-mail według jego preferencji). Raz na przebieg —
+     * ponowiona analiza to nowy przebieg i nowe powiadomienie. Błąd powiadomienia nie psuje gotowej analizy.
+     */
+    private function notifyAnalysisReady(ClientInquiry $inquiry, User $user, string $runId, int $lineItems): void
+    {
+        try {
+            $inquiry->loadMissing('client:id,name');
+            $who = $this->nullable($inquiry->client?->name)
+                ?? $this->nullable($inquiry->source_from_name)
+                ?? $this->nullable($inquiry->source_from_email);
+            $subject = $this->nullable($inquiry->source_subject);
+            app(NotificationDispatcher::class)->send($user, new AppNotificationMessage(
+                event: 'inquiry_analysis_ready',
+                subjectKey: 'inquiry:'.$inquiry->id,
+                title: 'Analiza zapytania jest gotowa',
+                body: implode(' · ', array_filter([$who, $subject, 'pozycji w zapytaniu: '.$lineItems])),
+                url: '/inquiries/'.$inquiry->id,
+                data: ['inquiry_id' => (int) $inquiry->id],
+            ), 'run:'.$runId);
+        } catch (Throwable $e) {
+            report($e);
+        }
+    }
+
     /** Czytanie maila, szukanie w katalogu i szkic listu — w pamięci; zapis tylko w saveAnalysisResult(). */
     private function runAnalysis(ClientInquiry $inquiry, string $runId): void
     {
@@ -600,6 +627,9 @@ final class ClientInquiryService
             ],
             'search_rounds' => $this->searchRounds,
         ]);
+
+        // po pomiarze czasów: wysyłka powiadomienia (z e-mailem przez SMTP) nie wlicza się do czasu analizy
+        $this->notifyAnalysisReady($inquiry, $user, $runId, count($lineItems));
     }
 
     /**

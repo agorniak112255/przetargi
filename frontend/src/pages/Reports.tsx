@@ -4,12 +4,13 @@ import { canAny, type User } from '../lib/api'
 import type { ReportKey } from '../lib/reports'
 import { ReportCatalog } from './reports/ReportCatalog'
 import { ReportCustomers } from './reports/ReportCustomers'
+import { ReportEffectiveness } from './reports/ReportEffectiveness'
 import { ReportPrices } from './reports/ReportPrices'
 import { ReportSales } from './reports/ReportSales'
 import { ReportSources } from './reports/ReportSources'
 
 /**
- * Raporty (reports.view): pięć zestawień z danych aplikacji, każde w swojej zakładce (`?raport=`). Zakładkę widać
+ * Raporty (reports.view): sześć zestawień z danych aplikacji, każde w swojej zakładce (`?raport=`). Zakładkę widać
  * tylko z uprawnieniem do danych, z których raport powstaje — to samo sprawdza serwer (ReportController).
  */
 
@@ -43,6 +44,12 @@ const REPORTS: { key: ReportKey; label: string; lead: string; anyOf: string[] | 
     label: 'Klienci ERP',
     lead: 'Aktywność klientów z Comarch ERP XL: kto kupuje, kto przestał i do ilu można napisać.',
     anyOf: ['campaigns.use'],
+  },
+  {
+    key: 'effectiveness',
+    label: 'Skuteczność przetargów',
+    lead: 'Ile części zamówień wygrywamy, dlaczego przegrywamy i z kim — według terminu składania ofert.',
+    anyOf: ['tenders.view_own', 'tenders.view_all'],
   },
 ]
 
@@ -89,6 +96,7 @@ export function Reports() {
       {active.key === 'prices' && <ReportPrices />}
       {active.key === 'sales' && <ReportSales />}
       {active.key === 'customers' && <ReportCustomers />}
+      {active.key === 'effectiveness' && <ReportEffectiveness />}
     </div>
   )
 }
