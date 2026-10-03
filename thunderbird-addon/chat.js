@@ -62,6 +62,9 @@ const CHAT_PREVIEW_CHARS = 300
 /** Ikona przycisku „Czat” w drugiej fazie migania (od 1.34.0): ten sam dymek na czerwono. */
 const CHAT_ALERT_ICON = 'icons/chat-alert.svg'
 
+/** Drugi kolor migającej plakietki z liczbą (pierwszy: CHAT_BADGE_COLOR). */
+const CHAT_BLINK_BADGE_COLOR = '#f59e0b'
+
 /** Co tyle milisekund przycisk „Czat” zmienia ikonę, dopóki są nieprzeczytane. */
 const CHAT_BLINK_MS = 700
 
@@ -277,12 +280,24 @@ function chatSetActionIcon(path) {
   if (!browser.browserAction) return
   Promise.resolve()
     .then(() => browser.browserAction.setIcon({ path }))
+    .catch((e) => console.warn('Supon: nie udało się zmienić ikony przycisku czatu:', e.message))
+}
+
+/**
+ * Kolor plakietki z liczbą: przy miganiu naprzemiennie czerwony i pomarańczowy. Plakietka jest widoczna zawsze
+ * (licznik działał, gdy sama podmiana ikony na pasku Thunderbirda nie była widać — 03.10.2026), więc miga i ona.
+ */
+function chatSetActionBadgeColor(color) {
+  if (!browser.browserAction) return
+  Promise.resolve()
+    .then(() => browser.browserAction.setBadgeBackgroundColor({ color }))
     .catch(() => {})
 }
 
 function chatBlinkStep() {
   chatState.blinkOn = !chatState.blinkOn
   chatSetActionIcon(chatState.blinkOn ? CHAT_ALERT_ICON : CHAT_ICON)
+  chatSetActionBadgeColor(chatState.blinkOn ? CHAT_BLINK_BADGE_COLOR : CHAT_BADGE_COLOR)
 }
 
 /**
@@ -306,6 +321,7 @@ function chatSyncBlink() {
   if (chatState.blinkOn) {
     chatState.blinkOn = false
     chatSetActionIcon(CHAT_ICON)
+    chatSetActionBadgeColor(CHAT_BADGE_COLOR)
   }
 }
 

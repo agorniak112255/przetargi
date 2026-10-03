@@ -53,8 +53,10 @@ fi
 APP_URL="$(env_value APP_URL)"
 WEBHOOK="$(env_value LIVEKIT_WEBHOOK_URL)"; WEBHOOK="${WEBHOOK:-${APP_URL%/}/api/chat/livekit/webhook}"
 
-# Publiczny adres, który LiveKit podaje przeglądarkom — serwer ma kilka IP, a STUN mógłby wykryć inny niż ten,
-# na który wskazuje DNS. Domyślnie adres z DNS nazwy z LIVEKIT_URL.
+# Publiczny adres, który LiveKit podaje przeglądarkom do obrazu i dźwięku — serwer ma kilka IP, a STUN mógłby wykryć
+# inny. Musi to być adres łącza, którym serwer WYSYŁA (trasa domyślna, `ip route get 1.1.1.1` → src): 03.10.2026
+# adres z DNS (91.246.70.120, ens40) dawał „could not establish pc connection”, bo odpowiedzi wychodziły innym
+# łączem (ens41) z cudzym adresem nadawcy. Na produkcji LIVEKIT_NODE_IP=91.189.223.29; bez niego — adres z DNS.
 NODE_IP="$(env_value LIVEKIT_NODE_IP)"
 if [[ -z "$NODE_IP" ]]; then
   HOST="${URL#*://}"; HOST="${HOST%%/*}"; HOST="${HOST%%:*}"
@@ -67,6 +69,12 @@ fi
 if [[ ! "$NODE_IP" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
   echo "ERR: LIVEKIT_NODE_IP=$NODE_IP to nie jest adres IPv4" >&2
   exit 1
+fi
+# Ostrzeżenie: adres obrazu i dźwięku na innym łączu niż trasa domyślna = odpowiedzi wracają inną drogą.
+ROUTE_SRC="$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n 1 || true)"
+if [[ -n "$ROUTE_SRC" && "$ROUTE_SRC" != "$NODE_IP" ]]; then
+  echo "UWAGA: LIVEKIT_NODE_IP=$NODE_IP, a serwer wysyła z $ROUTE_SRC (trasa domyślna) — rozmowy mogą się zrywać." >&2
+  echo "       Ustaw w .env LIVEKIT_NODE_IP=$ROUTE_SRC i uruchom ten skrypt ponownie." >&2
 fi
 if [[ ! "$WEBHOOK" =~ ^https?://[^[:space:]\"]+$ ]]; then
   echo "ERR: adres webhooka „$WEBHOOK” jest niepoprawny — ustaw APP_URL albo LIVEKIT_WEBHOOK_URL w .env" >&2
@@ -94,6 +102,10 @@ rtc:
   udp_port: 7882-7892
   use_external_ip: false
   node_ip: "$NODE_IP"
+  # tylko ten adres — serwer ma kilka łączy, a obraz i dźwięk muszą wracać tą samą drogą, którą przyszły
+  ips:
+    includes:
+      - "$NODE_IP/32"
 keys:
   "$KEY": "$SECRET"
 webhook:
