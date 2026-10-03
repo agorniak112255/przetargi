@@ -1497,6 +1497,7 @@ function ConversationRow({
   unread,
   avatar,
   onClick,
+  actions,
 }: {
   active: boolean
   title: ReactNode
@@ -1505,9 +1506,11 @@ function ConversationRow({
   unread: number
   avatar: ReactNode
   onClick: () => void
+  /** Szybkie przyciski (np. Zadzwoń/Wideo przy osobie) — nad prawą częścią kafelka po najechaniu albo fokusie. */
+  actions?: ReactNode
 }) {
   const hasUnread = unread > 0
-  return (
+  const row = (
     <button
       type="button"
       onClick={onClick}
@@ -1536,6 +1539,16 @@ function ConversationRow({
         </span>
       </span>
     </button>
+  )
+  if (!actions) return row
+  return (
+    <div className="group relative">
+      {row}
+      {/* na ekranie dotykowym (bez najeżdżania) przyciski widać zawsze */}
+      <span className="absolute right-2 top-1/2 flex -translate-y-1/2 gap-1 rounded-full bg-white/95 p-0.5 opacity-0 shadow-sm ring-1 ring-slate-200 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+        {actions}
+      </span>
+    </div>
   )
 }
 
@@ -1640,6 +1653,7 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
   const [conversations, setConversations] = useState<ChatConversation[] | null>(null)
   const [listErr, setListErr] = useState('')
   const [pageErr, setPageErr] = useState('')
+  const [callingPerson, setCallingPerson] = useState(false)
   const [search, setSearch] = useState('')
   const [newChannelOpen, setNewChannelOpen] = useState(false)
   const [callsEnabled, setCallsEnabled] = useState(false)
@@ -1871,8 +1885,67 @@ export function Chat({ compact = false }: { compact?: boolean } = {}) {
         unread={r.conv?.unread ?? 0}
         avatar={<Avatar name={r.name} userId={r.user?.id ?? null} online={r.online} />}
         onClick={() => openPerson(r)}
+        actions={
+          callsEnabled && r.user ? (
+            <>
+              <button
+                type="button"
+                disabled={callingPerson}
+                onClick={() => void callPerson(r, 'audio')}
+                title={`Zadzwoń do: ${r.name}`}
+                aria-label={`Zadzwoń do: ${r.name}`}
+                className="grid h-8 w-8 place-items-center rounded-full text-slate-600 hover:bg-green-50 hover:text-green-700 disabled:opacity-50"
+              >
+                <Icon name="phone" className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                disabled={callingPerson}
+                onClick={() => void callPerson(r, 'video')}
+                title={`Rozmowa wideo z: ${r.name}`}
+                aria-label={`Rozmowa wideo z: ${r.name}`}
+                className="grid h-8 w-8 place-items-center rounded-full text-slate-600 hover:bg-green-50 hover:text-green-700 disabled:opacity-50"
+              >
+                <Icon name="video" className="h-4 w-4" />
+              </button>
+            </>
+          ) : undefined
+        }
       />
     )
+  }
+
+  /**
+   * Zadzwoń prosto z listy (bez otwierania rozmowy i przewijania do nagłówka): rozmowa 1:1 — istniejąca albo nowa —
+   * i strona rozmowy w nowej karcie. Kartę otwieramy pustą w samym kliknięciu, adres wstawiamy po odpowiedzi serwera
+   * (inaczej przeglądarka mogłaby zablokować nowe okno), jak przy przyciskach w nagłówku rozmowy.
+   */
+  async function callPerson(r: PersonRow, kind: CallKind) {
+    if (callingPerson || !r.user) return
+    setCallingPerson(true)
+    setPageErr('')
+    const tab = window.open('', '_blank')
+    if (tab) {
+      try {
+        tab.document.title = 'Rozmowa'
+        tab.document.body.textContent = 'Łączę z rozmową…'
+      } catch {
+        /* pusta karta bez napisu — nic złego */
+      }
+    }
+    try {
+      const conversationId = r.conv?.id ?? (await openDirect(r.user.id)).data.id
+      const res = await startCall(conversationId, kind)
+      const url = new URL(callPageUrl(res.data.id), window.location.origin).href
+      if (tab && !tab.closed) tab.location.replace(url)
+      else if (!window.open(url, '_blank')) setPageErr('Przeglądarka zablokowała nowe okno rozmowy — zezwól na wyskakujące okna dla tej strony.')
+      void loadList()
+    } catch (ex) {
+      tab?.close()
+      setPageErr(errorText(ex, 'Nie udało się zadzwonić.'))
+    } finally {
+      setCallingPerson(false)
+    }
   }
 
   const panel = 'rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/70'
