@@ -1568,21 +1568,24 @@ function TenderDetailView() {
     const res: DocumentAnalysis & { added_count?: number; auto_add_note?: string | null } = result
     const added = res.added_count ?? 0
     const rest = (res.items ?? []).filter((i) => !i.added).map((i) => ({ ...i, selected: i.selected !== false }))
-    if (added > 0) await load()
-    const addedText = `Dodano automatycznie ${added} ${plural(added, 'towar BHP', 'towary BHP', 'towarów BHP')} z treści ogłoszenia — są w zakładce Pozycje.`
-    if (added > 0 && rest.length === 0) {
-      setDocPreview(null)
-      setDocStatus(addedText)
-      setMsg(addedText)
+    const addedText = `Dodano automatycznie ${added} ${plural(added, 'towar BHP', 'towary BHP', 'towarów BHP')} z treści ogłoszenia.`
+    if (added === 0) {
+      setDocPreview((p) => (p ? { ...p, items: rest, fromNotice: true, autoAdded: 0 } : p))
+      if (res.auto_add_note) setMsg(`${res.auto_add_note} Sprawdź listę poniżej.`)
       return
     }
-    setDocPreview((p) => (p ? { ...p, items: rest, fromNotice: true, autoAdded: added } : p))
-    if (added > 0) {
-      setDocStatus(`${addedText} Pozostałe towary z ogłoszenia są w podglądzie poniżej.`)
-      setMsg(`${addedText} Pozostałe towary z ogłoszenia (poza BHP albo bez ilości) możesz dodać z podglądu.`)
-    } else if (res.auto_add_note) {
-      setMsg(`${res.auto_add_note} Sprawdź listę poniżej.`)
-    }
+    setDocPreview(rest.length === 0 ? null : (p) => (p ? { ...p, items: rest, fromNotice: true, autoAdded: added } : p))
+    setDocStatus(
+      rest.length === 0
+        ? addedText
+        : `${addedText} Pozostałe towary z ogłoszenia (poza BHP albo bez ilości) są w podglądzie w kroku „Dokumenty”.`,
+    )
+    // dodane pozycje od razu dostają produkty z katalogu („Dopasuj AI” dla pozycji bez produktu) — jak po kliknięciu
+    const fresh = await load()
+    if (wizardMode) setWizardStep(1)
+    setTab('pozycje')
+    if (fresh.can_edit && can(user, 'tenders.edit_offer')) await runMatch(true, undefined, fresh)
+    else setMsg(`${addedText} Produkty dobierze osoba z uprawnieniem do wyceny („Dopasuj AI”).`)
   }
 
   async function openDocumentPreview(docId: number) {
@@ -1996,20 +1999,22 @@ function TenderDetailView() {
     }
   }
 
-  async function runMatch(onlyEmpty: boolean, itemIds?: number[]) {
+  /** fresh — dane świeżo wczytane przez load() (stan strony jeszcze ich nie ma, np. zaraz po dodaniu pozycji) */
+  async function runMatch(onlyEmpty: boolean, itemIds?: number[], fresh?: Detail | null) {
+    const source = fresh ?? data
     setErr('')
     setMsg('')
     setBusy(true)
     setMatchBusy(true)
     setShowAiChanges(false)
     const scopedItems = itemIds
-      ? (data?.tender.items ?? []).filter((i) => itemIds.includes(i.id))
-      : (data?.tender.items ?? [])
+      ? (source?.tender.items ?? []).filter((i) => itemIds.includes(i.id))
+      : (source?.tender.items ?? [])
     const targets = matchTargetIds(
-      data?.tender.items ?? [],
+      source?.tender.items ?? [],
       onlyEmpty,
       itemIds,
-      data?.coverage?.thresholds.min_match_score ?? 65,
+      source?.coverage?.thresholds.min_match_score ?? 65,
     )
     const estimated = targets.length
     const leftAsIs = Math.max(0, scopedItems.length - targets.length)
@@ -2046,7 +2051,7 @@ function TenderDetailView() {
       changes: [],
     }
     const scoreParts: number[] = []
-    const concurrency = matchParallelItems(data?.coverage?.thresholds.match_concurrency)
+    const concurrency = matchParallelItems(source?.coverage?.thresholds.match_concurrency)
     const runId = newMatchRunId()
     const errors: string[] = []
     let finishedInBackground = 0
