@@ -55,7 +55,8 @@ final class BzpFetchCommand extends Command
             return self::INVALID;
         }
 
-        $stats = ['received' => 0, 'saved' => 0, 'skipped' => 0, 'invalid' => 0];
+        // distinct = różne ogłoszenia w odpowiedziach (= new + updated + unchanged + invalid)
+        $stats = ['received' => 0, 'distinct' => 0, 'new' => 0, 'updated' => 0, 'unchanged' => 0, 'invalid' => 0];
         $failures = [];
         /** @var array<string, true> $seen numery ogłoszeń już obsłużone w tym przebiegu */
         $seen = [];
@@ -76,15 +77,20 @@ final class BzpFetchCommand extends Command
         }
 
         $this->info(sprintf(
-            'Biuletyn %s – %s: zapytań %d, ogłoszeń w odpowiedziach %d, zapisanych %d, bez zmian %d, nieczytelnych %d.',
+            'Biuletyn %s – %s: różnych ogłoszeń w odpowiedziach %d (to samo ogłoszenie wraca pod kilkoma kodami zamówień), '
+            .'nowych %d, zaktualizowanych %d, bez zmian %d, nieczytelnych %d. Razem w bazie: %d (ogłoszeń o zamówieniu %d, o wyniku %d).',
             $from->format('Y-m-d'),
             $to->format('Y-m-d'),
-            $client->requests(),
-            $stats['received'],
-            $stats['saved'],
-            $stats['skipped'],
+            $stats['distinct'],
+            $stats['new'],
+            $stats['updated'],
+            $stats['unchanged'],
             $stats['invalid'],
+            ProcurementNotice::query()->count(),
+            ProcurementNotice::query()->where('notice_type', ProcurementNotice::TYPE_CONTRACT)->count(),
+            ProcurementNotice::query()->where('notice_type', ProcurementNotice::TYPE_RESULT)->count(),
         ));
+        $this->line(sprintf('Zapytań do Biuletynu: %d, pozycji w odpowiedziach (z powtórzeniami): %d.', $client->requests(), $stats['received']));
 
         $linked = $this->link($linker);
 
@@ -106,30 +112,38 @@ final class BzpFetchCommand extends Command
     {
         $number = is_string($item['noticeNumber'] ?? null) ? trim($item['noticeNumber']) : '';
         if ($number !== '' && isset($seen[$number])) {
-            $stats['skipped']++;
-
+            // to samo ogłoszenie pod kolejnym kodem zamówienia — już policzone
             return;
         }
-        $seen[$number] = true;
+        if ($number !== '') {
+            $seen[$number] = true;
+        }
 
         try {
             $record = $parser->parse($item);
         } catch (InvalidArgumentException $e) {
+            $stats['distinct']++;
             $stats['invalid']++;
             $this->warn($e->getMessage());
 
             return;
         }
+        if ($record['notice_number'] !== $number && isset($seen[$record['notice_number']])) {
+            // ten sam numer w innym zapisie (spacje, wielkość liter)
+            return;
+        }
         $seen[$record['notice_number']] = true;
-        if ($store->storedVersion($record['notice_number']) === BzpNoticeParser::VERSION) {
-            $stats['skipped']++;
+        $stats['distinct']++;
+        $stored = $store->storedVersion($record['notice_number']);
+        if ($stored === BzpNoticeParser::VERSION) {
+            $stats['unchanged']++;
 
             return;
         }
 
         try {
             $store->upsert($record);
-            $stats['saved']++;
+            $stats[$stored === null ? 'new' : 'updated']++;
         } catch (Throwable $e) {
             $stats['invalid']++;
             $this->warn('Nie zapisano ogłoszenia '.$record['notice_number'].': '.$e->getMessage());

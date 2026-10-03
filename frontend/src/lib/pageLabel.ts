@@ -3,6 +3,7 @@ const staticLabels: Record<string, string> = {
   '/': 'Dashboard',
   '/login': 'Logowanie',
   '/tenders': 'Przetargi',
+  '/ogloszenia': 'Ogłoszenia',
   '/products': 'Produkty',
   '/products/compare': 'Porównanie produktów',
   '/zapasy': 'Zapasy',

@@ -36,6 +36,7 @@ const toneLabel: Record<Tone, string> = {
 const NAV: Array<[string, NavIconName]> = [
   ['Dashboard', 'dashboard'],
   ['Przetargi', 'tenders'],
+  ['Ogłoszenia', 'notices'],
   ['Produkty', 'products'],
   ['Zapasy', 'inventory'],
   ['Raport dla zarządu', 'reports'],

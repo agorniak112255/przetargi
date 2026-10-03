@@ -101,6 +101,20 @@ class Tender extends Model
         return Attribute::get(fn (): ?string => NoticeNumber::source($this->attributes['notice_number'] ?? null));
     }
 
+    /**
+     * Kolejny numer wewnętrzny „PRZ/RRRR/NNNN” (liczba przetargów z tego roku + 1; zajęty numer — następny wolny).
+     */
+    public static function nextNumber(): string
+    {
+        $year = (int) now()->format('Y');
+        $seq = static::query()->where('number', 'like', "PRZ/{$year}/%")->count() + 1;
+        do {
+            $number = sprintf('PRZ/%d/%04d', $year, $seq++);
+        } while (static::query()->where('number', $number)->exists());
+
+        return $number;
+    }
+
     public function targetMarkupPercent(): float
     {
         if ($this->target_margin_percent !== null) {

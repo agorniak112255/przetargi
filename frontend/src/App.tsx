@@ -37,6 +37,7 @@ import { Dashboard } from './pages/Dashboard'
 import { Help } from './pages/Help'
 import { Login } from './pages/Login'
 import { MailingListDetail } from './pages/MailingListDetail'
+import { Notices } from './pages/Notices'
 import { ProductCompare } from './pages/ProductCompare'
 import { ProductDetail } from './pages/ProductDetail'
 import { AiSettingsPage } from './pages/AiSettings'
@@ -193,6 +194,14 @@ export default function App() {
             <Route index element={<HomeIndex />} />
             <Route path="tenders" element={<Tenders />} />
             <Route path="tenders/:id" element={<TenderDetail />} />
+            <Route
+              path="ogloszenia"
+              element={
+                <PermissionGuard anyOf={['tenders.create', 'tenders.view_all']}>
+                  <Notices />
+                </PermissionGuard>
+              }
+            />
             <Route path="products" element={<Products />} />
             <Route path="products/compare" element={<ProductCompare />} />
             <Route path="products/:id" element={<ProductDetail />} />

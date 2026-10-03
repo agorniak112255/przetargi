@@ -770,6 +770,8 @@ function sameVal(a: unknown, b: unknown): boolean {
 function formatActivityMeta(meta: Record<string, unknown> | null | undefined): string {
   if (!meta) return '—'
   if (Array.isArray(meta.lots)) return formatResultMeta(meta)
+  // przetarg założony z ogłoszenia: „Założony z ogłoszenia … Zamawiający: …” (zmiana statusu ma notatkę razem z from/to)
+  if (typeof meta.note === 'string' && meta.from === undefined && meta.before === undefined) return meta.note
   const before = meta.before as Record<string, unknown> | undefined
   const after = meta.after as Record<string, unknown> | undefined
   if (before && after) {

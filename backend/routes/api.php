@@ -52,6 +52,7 @@ use App\Http\Controllers\Api\InventoryBoardController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\InventoryRwPwController;
 use App\Http\Controllers\Api\MailingListController;
+use App\Http\Controllers\Api\NoticeController;
 use App\Http\Controllers\Api\NotificationController;
 use App\Http\Controllers\Api\NotificationPreferenceController;
 use App\Http\Controllers\Api\OfferComposeController;
@@ -276,6 +277,14 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::delete('/tenders/{tender}/invitations/{invitation}', [TenderInvitationController::class, 'destroy'])
             ->middleware('permission:tenders.invite');
     });
+
+    // zakładka Ogłoszenia: ogłoszenia o zamówieniu z Biuletynu, wspólne „pominięte”, przetarg z ogłoszenia
+    Route::middleware('permission:tenders.create|tenders.view_all')->group(function (): void {
+        Route::get('/notices', [NoticeController::class, 'index']);
+        Route::post('/notices/{notice}/skip', [NoticeController::class, 'skip']);
+        Route::delete('/notices/{notice}/skip', [NoticeController::class, 'unskip']);
+    });
+    Route::post('/notices/{notice}/tender', [NoticeController::class, 'createTender'])->middleware('permission:tenders.create');
 
     Route::get('/exchange-rates', ExchangeRateController::class)->middleware('permission:products.view');
     Route::get('/products', [ProductController::class, 'index'])->middleware('permission:products.view');

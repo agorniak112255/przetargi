@@ -50,7 +50,8 @@ final class BzpFetchCommandTest extends TestCase
         $this->fakeApi();
 
         $this->artisan('bzp:fetch')
-            ->expectsOutputToContain('zapytań 6, ogłoszeń w odpowiedziach 6, zapisanych 5, bez zmian 1, nieczytelnych 0')
+            ->expectsOutputToContain('Biuletyn 2026-09-27 – 2026-10-03: różnych ogłoszeń w odpowiedziach 5 (to samo ogłoszenie wraca pod kilkoma kodami zamówień), nowych 5, zaktualizowanych 0, bez zmian 0, nieczytelnych 0. Razem w bazie: 5 (ogłoszeń o zamówieniu 2, o wyniku 3).')
+            ->expectsOutputToContain('Zapytań do Biuletynu: 6, pozycji w odpowiedziach (z powtórzeniami): 6.')
             ->expectsOutputToContain('Przetargi z numerem ogłoszenia Biuletynu: 1, z odnalezionym ogłoszeniem: 1, uzupełnione części: 1')
             ->assertSuccessful();
 
@@ -95,11 +96,29 @@ final class BzpFetchCommandTest extends TestCase
 
         $this->travel(1)->hours();
         $this->artisan('bzp:fetch')
-            ->expectsOutputToContain('zapisanych 0, bez zmian 6')
+            ->expectsOutputToContain('różnych ogłoszeń w odpowiedziach 5 (to samo ogłoszenie wraca pod kilkoma kodami zamówień), nowych 0, zaktualizowanych 0, bez zmian 5, nieczytelnych 0. Razem w bazie: 5')
             ->assertSuccessful();
 
         $this->assertSame(5, ProcurementNotice::query()->count());
         $this->assertSame($updatedAt, ProcurementNotice::query()->pluck('updated_at', 'notice_number')->map(static fn ($d): string => (string) $d)->all());
+    }
+
+    /**
+     * Ogłoszenie zapisane starszą wersją parsera jest odczytywane od nowa i liczone jako zaktualizowane, ogłoszenie
+     * usunięte z bazy — jako nowe; podsumowanie podaje stan bazy po przebiegu.
+     */
+    public function test_summary_counts_new_updated_and_unchanged_notices(): void
+    {
+        $this->fakeApi();
+        $this->artisan('bzp:fetch')->assertSuccessful();
+        ProcurementNotice::query()->where('notice_number', '2026/BZP 00449679/01')->update(['parser_version' => 0]);
+        ProcurementNotice::query()->where('notice_number', '2026/BZP 00453849/01')->delete();
+
+        $this->artisan('bzp:fetch')
+            ->expectsOutputToContain('różnych ogłoszeń w odpowiedziach 5 (to samo ogłoszenie wraca pod kilkoma kodami zamówień), nowych 1, zaktualizowanych 1, bez zmian 3, nieczytelnych 0. Razem w bazie: 5 (ogłoszeń o zamówieniu 2, o wyniku 3).')
+            ->assertSuccessful();
+
+        $this->assertSame(BzpNoticeParser::VERSION, ProcurementNotice::query()->where('notice_number', '2026/BZP 00449679/01')->value('parser_version'));
     }
 
     public function test_failed_request_does_not_stop_other_codes_and_ends_with_failure(): void
@@ -113,7 +132,7 @@ final class BzpFetchCommandTest extends TestCase
         });
 
         $this->artisan('bzp:fetch')
-            ->expectsOutputToContain('zapisanych 1')
+            ->expectsOutputToContain('nowych 1, zaktualizowanych 0')
             ->expectsOutputToContain('Nieudane zapytania: 2')
             ->assertFailed();
 
@@ -140,7 +159,7 @@ final class BzpFetchCommandTest extends TestCase
         });
 
         $this->artisan('bzp:fetch')
-            ->expectsOutputToContain('zapisanych 1')
+            ->expectsOutputToContain('nowych 1, zaktualizowanych 0')
             ->assertSuccessful();
 
         $this->assertSame(2, $calls['TenderResultNotice 18141000-9']);

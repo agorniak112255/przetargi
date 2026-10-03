@@ -2500,3 +2500,107 @@ export type ErpEmployee = {
 export function fetchErpEmployees(): Promise<ErpEmployee[]> {
   return api<{ data: ErpEmployee[] }>('/admin/erp-employees').then((r) => r.data)
 }
+
+/* ---------- Ogłoszenia o zamówieniu z Biuletynu Zamówień Publicznych (GET /notices) ---------- */
+
+/** new — bez decyzji i bez przetargu; created — jest przetarg z tym postępowaniem; skipped — pominięte przez zespół. */
+export type NoticeTab = 'new' | 'created' | 'skipped'
+
+/** Źródło ogłoszenia na liście; na razie tylko Biuletyn Zamówień Publicznych. */
+export type NoticeListSource = 'bzp'
+
+export type NoticeRow = {
+  id: number
+  source: NoticeListSource
+  /** „2026/BZP 00431178/01” */
+  notice_number: string
+  published_at: string | null
+  /** termin składania ofert (ISO, UTC); null — ogłoszenie go nie podaje */
+  submitting_offers_at: string | null
+  /** ten sam termin w czasie polskim, np. „13.10.2026, 10:00” */
+  deadline_local: string | null
+  order_object: string | null
+  organization: {
+    name: string | null
+    city: string | null
+    /** kod województwa „PL18” */
+    province_code: string | null
+    province_name: string | null
+    /** 10 cyfr albo null */
+    nip: string | null
+  }
+  /** etykiety rodzajów towaru (z kodów rodzaju zamówienia — CPV) */
+  categories: string[]
+  cpv_codes: string[]
+  /** wartość podana w ogłoszeniu; null — nie podano */
+  total_value: string | null
+  lots_count: number
+  /** strona postępowania na platformie zamawiającego (dokumenty) */
+  procedure_url: string | null
+  /** strona ogłoszenia w Biuletynie */
+  notice_url: string | null
+  /** przetarg założony z tym postępowaniem; can_open — użytkownik ma do niego dostęp */
+  tender: { id: number; number: string; can_open: boolean } | null
+  /** decyzja „pominięte” (wspólna dla zespołu); by null — konto usunięte */
+  skipped: { by: { id: number; name: string } | null; at: string | null } | null
+  /** termin składania minął */
+  past: boolean
+  /**
+   * klient, którego „Załóż przetarg” użyje jako zamawiającego (po NIP-ie albo po nazwie); null — zostanie dopisany
+   * nowy klient z danymi z ogłoszenia (albo brak uprawnienia do zakładania przetargów, albo przetarg już jest)
+   */
+  client_match?: { id: number; name: string; matched_by: 'nip' | 'name' } | null
+}
+
+export type NoticesResponse = {
+  data: NoticeRow[]
+  meta: { page: number; last_page: number; total: number }
+  counts: Record<NoticeTab, number>
+  categories: { key: string; label: string }[]
+  provinces: { code: string; name: string }[]
+  /** najpóźniejsze pobranie z Biuletynu; null — jeszcze nic nie pobrano */
+  fetched_at: string | null
+  source_note: string
+}
+
+/**
+ * category — klucz rodzaju z `categories`; province — kod „PLxx”; past — pokaż też po terminie (zakładka „Nowe”);
+ * source — źródło ogłoszeń (bez parametru serwer bierze Biuletyn Zamówień Publicznych — na razie jedyne źródło).
+ */
+export type NoticeListParams = {
+  tab: NoticeTab
+  source?: NoticeListSource
+  category?: string
+  province?: string
+  q?: string
+  past?: boolean
+  page?: number
+}
+
+export function fetchNotices(params: NoticeListParams, signal?: AbortSignal): Promise<NoticesResponse> {
+  const q = new URLSearchParams({ tab: params.tab })
+  if (params.source) q.set('source', params.source)
+  if (params.category) q.set('category', params.category)
+  if (params.province) q.set('province', params.province)
+  if (params.q) q.set('q', params.q)
+  if (params.past) q.set('past', '1')
+  if (params.page && params.page > 1) q.set('page', String(params.page))
+  return api<NoticesResponse>(`/notices?${q.toString()}`, { signal })
+}
+
+/** Pominięcie jest wspólne dla zespołu (ogłoszenie znika z „Nowe” u wszystkich). */
+export function skipNotice(noticeId: number): Promise<NoticeRow> {
+  return api<NoticeRow>(`/notices/${noticeId}/skip`, { method: 'POST' })
+}
+
+export function unskipNotice(noticeId: number): Promise<NoticeRow> {
+  return api<NoticeRow>(`/notices/${noticeId}/skip`, { method: 'DELETE' })
+}
+
+/**
+ * Zakłada przetarg (szkic) z ogłoszenia. Gdy przetarg z tym postępowaniem już jest — ApiError 409 z `tender_id`
+ * w ciele odpowiedzi (drugi nie powstaje).
+ */
+export function createTenderFromNotice(noticeId: number): Promise<{ tender_id: number }> {
+  return api<{ tender_id: number }>(`/notices/${noticeId}/tender`, { method: 'POST' })
+}

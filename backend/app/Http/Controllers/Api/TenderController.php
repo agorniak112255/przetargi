@@ -128,9 +128,7 @@ class TenderController extends Controller
         }
         $noticeNumber = self::noticeNumber($data['notice_number'] ?? null);
 
-        $year = (int) now()->format('Y');
-        $seq = Tender::query()->where('number', 'like', "PRZ/{$year}/%")->count() + 1;
-        $number = $data['number'] ?? sprintf('PRZ/%d/%04d', $year, $seq);
+        $number = $data['number'] ?? Tender::nextNumber();
 
         $tender = Tender::query()->create([
             'number' => $number,

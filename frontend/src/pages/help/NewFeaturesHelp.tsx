@@ -6,7 +6,7 @@ import { DashboardView, type Dash } from '../Dashboard'
 import { AppFrame, Btn, Card, Field, LiveFrame, LivePage, LiveScreen, Mark, Slideshow, Th } from './kit'
 
 /**
- * Samouczek „Nowości (październik 2026)”. Etapy 3–4: kalendarz terminów i subskrypcja w programie pocztowym,
+ * Samouczek „Nowości (październik 2026)”. Ogłoszenia z Biuletynu Zamówień Publicznych. Etapy 3–4: kalendarz terminów i subskrypcja w programie pocztowym,
  * wyszukiwanie Ctrl+K, karta klienta i notatki, powiązanie zapytania z klientem, wynik zapytania i podpowiedź z ERP XL,
  * ważność oferty, cele handlowców i przypisanie pracownika ERP XL; „Czego jeszcze nie ma”. Etapy 0–1: godzina składania
  * i numer ogłoszenia, wynik przetargu i pobieranie wyniku z Biuletynu, raport skuteczności, powiadomienia i wzmianki
@@ -125,12 +125,71 @@ function SystemStatusSketch() {
   )
 }
 
+/** Szkic listy ogłoszeń (przykładowe dane). */
+function NoticesSketch() {
+  return (
+    <AppFrame nav="Ogłoszenia">
+      <h3 className="mb-2 text-sm font-semibold">Ogłoszenia</h3>
+      <Card className="text-xs">
+        <div className="mb-2 flex flex-wrap gap-1">
+          <span className="rounded-full border border-slate-300 px-2 py-0.5">Wszystkie</span>
+          <span className="rounded-full bg-blue-600 px-2 py-0.5 text-white">Obuwie</span>
+          <span className="rounded-full border border-slate-300 px-2 py-0.5">Rękawice</span>
+        </div>
+        <div className="mb-2 flex gap-3 border-b border-slate-200 pb-1">
+          <span className="font-semibold text-blue-700">Nowe 7</span>
+          <span className="text-slate-500">Założone jako przetarg 12</span>
+          <span className="text-slate-500">Pominięte 31</span>
+        </div>
+        <table className="w-full text-left">
+          <thead>
+            <tr className="border-b">
+              <Th>Zamawiający i przedmiot</Th>
+              <Th>Termin składania</Th>
+              <Th>Czego dotyczy</Th>
+              <Th>Dokumenty</Th>
+              <Th />
+            </tr>
+          </thead>
+          <tbody>
+            <Row>
+              <Td>
+                <b>Zarząd Dróg Powiatowych w Dolinie</b>
+                <div>Dostawa odzieży roboczej i obuwia dla pracowników drogowych</div>
+                <div className="text-[11px] text-slate-500">Biuletyn Zamówień Publicznych · 2026/BZP 00462011/01 · 2 części</div>
+              </Td>
+              <Td>13.10.2026, 10:00</Td>
+              <Td>Obuwie, Odzież robocza i ochronna</Td>
+              <Td>
+                <span className="text-blue-700">strona postępowania ↗</span>
+              </Td>
+              <Td>
+                <Mark>
+                  <Btn label="Załóż przetarg" />
+                </Mark>{' '}
+                <Btn label="Pomiń" color="border" />
+              </Td>
+            </Row>
+          </tbody>
+        </table>
+      </Card>
+    </AppFrame>
+  )
+}
+
 /** Etapy 3–4: kalendarz terminów, wyszukiwanie, karta klienta, wynik zapytania, cele handlowców. */
 function Stage34Slideshow() {
   return (
     <Slideshow
-      title="Nowości: kalendarz, wyszukiwanie, karta klienta, wynik zapytania, cele handlowców"
+      title="Nowości: ogłoszenia, kalendarz, wyszukiwanie, karta klienta, wynik zapytania, cele handlowców"
       slides={[
+        {
+          action: 'Ogłoszenia przetargowe',
+          does: 'Nowa pozycja menu „Ogłoszenia” (zaraz pod „Przetargi”, dla osób, które mogą zakładać przetargi albo widzą wszystkie przetargi). Lista pokazuje ogłoszenia o zamówieniu z Biuletynu Zamówień Publicznych z kodami rodzaju zamówienia (CPV) na odzież, obuwie i środki ochrony: zamawiającego, przedmiot, termin składania ofert w czasie polskim, czego dotyczy, wartość (gdy ogłoszenie ją podaje) i odnośniki do strony postępowania i do ogłoszenia w Biuletynie. Aplikacja sprawdza Biuletyn codziennie o 6:30, więc ogłoszenie opublikowane w ciągu dnia pojawi się następnego ranka. Dziennik Urzędowy Unii Europejskiej (TED) nie jest pobierany, a zamówienia poniżej 130 000 zł nie mają wspólnego źródła, więc ich tu nie ma. Ogłoszenie nie zawiera listy pozycji — jest w dokumentach na stronie postępowania. Zakładki: „Nowe” (bez decyzji, domyślnie tylko z terminem składania w przyszłości albo bez podanego terminu), „Założone jako przetarg” (z odnośnikiem do przetargu, gdy masz do niego dostęp) i „Pominięte” (kto i kiedy pominął). „Pominięte” jest wspólne dla zespołu: ogłoszenie pominięte przez jedną osobę znika z „Nowe” u wszystkich; „Przywróć” je cofa. „Załóż przetarg” pokazuje najpierw, co zostanie wypełnione: tytuł z przedmiotu zamówienia, termin składania z godziną, numer ogłoszenia i zamawiający. Zamawiającego aplikacja dobiera tak: najpierw po NIP-ie (gdy w zakładce Klienci jest dokładnie jeden klient z tym NIP-em), potem po nazwie (gdy dokładnie jeden pasuje), a gdy żaden nie pasuje — dopisuje nowego klienta z nazwą, NIP-em i miastem z ogłoszenia. Przetarg powstaje jako szkic, Ty jesteś opiekunem i otwiera się kreator. Gdy ktoś już założył przetarg z tym postępowaniem, drugi nie powstaje.',
+          click: 'Menu „Ogłoszenia” → wybór rodzaju zamówienia, województwa albo wpisanie szukanego słowa → „Załóż przetarg” → sprawdzenie, co zostanie wypełnione → „Załóż przetarg” w oknie. Dokumenty pobierasz przez „strona postępowania ↗” i dodajesz w kreatorze. Ogłoszenie, które Was nie interesuje — „Pomiń”.',
+          tone: 'blue',
+          screen: <NoticesSketch />,
+        },
         {
           action: 'Kalendarz terminów',
           does: 'Lista przetargów ma przełącznik „Lista” / „Kalendarz”. Kalendarz pokazuje cały miesiąc (od poniedziałku do niedzieli) z terminami składania ofert — z godziną w czasie polskim, gdy jest wpisana — i z wpisem „Wpisz wynik:” przy przetargach po terminie bez wpisanego wyniku (najwyżej 60 dni po terminie). Kolory z legendy: niebieski — „wycena gotowa” (każda pozycja ma produkt i cenę), bursztynowy — „wycena w toku” (są braki, termin dalej niż za 3 dni), czerwony — „braki, termin blisko” (brakuje produktu albo ceny albo nie ma żadnej pozycji, a termin jest dziś lub w ciągu 3 dni), biały z przerywaną ramką — „do zrobienia: wpisz wynik”, szary — „zamknięte” (oferta wysłana, przetarg w archiwum, odrzucony albo z wpisanym wynikiem). Widać tylko przetargi, do których masz dostęp, i tylko te z wpisaną datą terminu składania. Lista obok przełącznika zawęża kalendarz: „Tylko te, których jestem opiekunem” albo „Tylko zaproszenia” (pozostałe filtry listy dotyczą tylko widoku „Lista”).',

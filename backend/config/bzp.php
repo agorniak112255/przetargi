@@ -93,6 +93,31 @@ return [
         'equipment' => ['label' => 'Sprzęt ochronny i akcesoria', 'prefixes' => ['18143', '35113']],
     ],
 
+    /**
+     * Województwo zamawiającego (pole organizationProvince API): „PL” + kod TERYT województwa.
+     */
+    'provinces' => [
+        'PL02' => 'dolnośląskie',
+        'PL04' => 'kujawsko-pomorskie',
+        'PL06' => 'lubelskie',
+        'PL08' => 'lubuskie',
+        'PL10' => 'łódzkie',
+        'PL12' => 'małopolskie',
+        'PL14' => 'mazowieckie',
+        'PL16' => 'opolskie',
+        'PL18' => 'podkarpackie',
+        'PL20' => 'podlaskie',
+        'PL22' => 'pomorskie',
+        'PL24' => 'śląskie',
+        'PL26' => 'świętokrzyskie',
+        'PL28' => 'warmińsko-mazurskie',
+        'PL30' => 'wielkopolskie',
+        'PL32' => 'zachodniopomorskie',
+    ],
+
+    /** Strona ogłoszenia w Biuletynie (dla ludzi) — {id} = objectId ogłoszenia z API. */
+    'notice_page_url' => 'https://ezamowienia.gov.pl/mo-client-board/bzp/notice-details/id/{id}',
+
     /** Ile dni wstecz (data publikacji) pobiera codzienny przebieg. */
     'days' => (int) env('BZP_DAYS', 7),
 

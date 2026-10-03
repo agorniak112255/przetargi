@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 export type NavIconName =
   | 'dashboard'
   | 'tenders'
+  | 'notices'
   | 'products'
   | 'inventory'
   | 'price-lists'
@@ -36,6 +37,13 @@ const shapes: Record<NavIconName, ReactNode> = {
     <>
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
       <path d="M14 3v5h5M9 13h6M9 17h4" />
+    </>
+  ),
+  // Megafon — ogłoszenia przetargowe z Biuletynu.
+  notices: (
+    <>
+      <path d="M3 10v4h3l8 4.5v-13L6 10z" />
+      <path d="M17.5 9.5a3.5 3.5 0 0 1 0 5M20 7a7 7 0 0 1 0 10M6 14l1.5 5.5h2.5L9 15" />
     </>
   ),
   products: (

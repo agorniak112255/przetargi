@@ -6,6 +6,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * Ogłoszenie z Biuletynu Zamówień Publicznych (o zamówieniu albo o wyniku). `notice_number` z wersją
@@ -70,5 +71,11 @@ class ProcurementNotice extends Model
     public function resultTenders(): HasMany
     {
         return $this->hasMany(Tender::class, 'result_notice_id');
+    }
+
+    /** Decyzja „pominięte” (zakładka Ogłoszenia) — wspólna dla zespołu. */
+    public function skip(): HasOne
+    {
+        return $this->hasOne(ProcurementNoticeSkip::class);
     }
 }
