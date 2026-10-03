@@ -8,13 +8,13 @@ import {
   fetchNotices,
   skipNotice,
   unskipNotice,
+  type NoticeClientCandidate,
   type NoticeListSource,
   type NoticeRow,
   type NoticesResponse,
   type NoticeTab,
 } from '../lib/api'
 import { errorText, fmtDate, fmtDateTime } from '../lib/campaignFormat'
-import { formatPln } from '../lib/campaigns'
 import { plural } from '../lib/plural'
 import { setTenderWizardActive } from '../lib/tenderWizard'
 
@@ -181,7 +181,7 @@ export function Notices() {
           <p className="text-xs text-slate-500">
             Ogłoszenia o zamówieniu z kodami rodzaju zamówienia (CPV) na odzież, obuwie i środki ochrony. Biuletyn
             Zamówień Publicznych jest sprawdzany codziennie o 6:30.
-            {list?.fetched_at ? ` Ostatnio dopisane lub zmienione ogłoszenie: ${fmtDateTime(list.fetched_at)}.` : ''}
+            {list?.fetched_at ? ` Ostatnie pobranie z Biuletynu: ${fmtDateTime(list.fetched_at)}.` : ''}
           </p>
         </div>
       </div>
@@ -466,11 +466,8 @@ function NoticeTableRow({
         )}
       </td>
       <td className="whitespace-nowrap p-2">
-        {row.total_value !== null && Number.isFinite(Number(row.total_value)) ? (
-          formatPln(Number(row.total_value))
-        ) : (
-          <span className="text-slate-400">nie podano</span>
-        )}
+        {/* serwer podaje gotowy tekst z ogłoszenia („1 365 178,85 PLN”) — bez przeliczania */}
+        {row.total_value ?? <span className="text-slate-400">nie podano</span>}
       </td>
       <td className="p-2">
         {row.procedure_url || row.notice_url ? (
@@ -539,9 +536,25 @@ function NoticeTableRow({
   )
 }
 
+const MATCHED_BY_TEXT: Record<'nip' | 'nip_name' | 'name', string> = {
+  nip: ' (ten sam NIP).',
+  nip_name: ' (ten sam NIP i ta sama nazwa).',
+  name: ' (ta sama nazwa).',
+}
+
+function candidatesFrom(body: Record<string, unknown>): NoticeClientCandidate[] {
+  const list = body.client_candidates
+  if (!Array.isArray(list)) return []
+  return list.filter(
+    (c): c is NoticeClientCandidate =>
+      typeof c === 'object' && c !== null && Number.isInteger((c as NoticeClientCandidate).id) && typeof (c as NoticeClientCandidate).name === 'string',
+  )
+}
+
 /**
- * Potwierdzenie „Załóż przetarg”: co zostanie wypełnione i jak aplikacja dobierze zamawiającego. Wynik doboru zna
- * dopiero serwer, więc okno opisuje regułę, a nie przesądza, czy klient już jest.
+ * Potwierdzenie „Załóż przetarg”: co zostanie wypełnione i jak aplikacja dobierze zamawiającego. Podpowiedź pochodzi
+ * z chwili wczytania listy; przy kilku pasujących klientach (z listy albo z odpowiedzi 422 serwera) zamawiającego
+ * wybiera człowiek — bez wyboru przycisk „Załóż przetarg” jest nieaktywny.
  */
 function CreateTenderDialog({
   row,
@@ -558,18 +571,25 @@ function CreateTenderDialog({
 }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [existingId, setExistingId] = useState<number | null>(null)
+  const [existing, setExisting] = useState<{ id: number; number: string; canOpen: boolean } | null>(null)
+  const [candidates, setCandidates] = useState<NoticeClientCandidate[]>(row.client_candidates ?? [])
+  // kandydaci przyszli dopiero z odpowiedzi serwera (ktoś dopisał klienta po wczytaniu listy)
+  const [candidatesFromServer, setCandidatesFromServer] = useState(false)
+  const [chosenId, setChosenId] = useState<number | null>(null)
   const confirmRef = useRef<HTMLButtonElement | null>(null)
+  const firstChoiceRef = useRef<HTMLInputElement | null>(null)
+  const closeRef = useRef<HTMLButtonElement | null>(null)
   // Escape i kliknięcie obok okna zamykają je, ale nie w trakcie zakładania (odpowiedź serwera i tak przyjdzie).
   const dismissRef = useRef<() => void>(onClose)
   useEffect(() => {
     dismissRef.current = busy ? () => {} : onClose
   }, [busy, onClose])
 
-  // Raz po otwarciu: fokus na przycisku potwierdzenia, po zamknięciu wraca tam, skąd okno otwarto.
+  // Raz po otwarciu: fokus na wyborze klienta (gdy trzeba wybrać) albo na przycisku potwierdzenia; po zamknięciu
+  // wraca tam, skąd okno otwarto.
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    confirmRef.current?.focus()
+    ;(firstChoiceRef.current ?? confirmRef.current)?.focus()
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape' && !e.defaultPrevented) {
         e.preventDefault()
@@ -583,17 +603,38 @@ function CreateTenderDialog({
     }
   }, [])
 
+  // Kandydaci z odpowiedzi serwera — fokus na pierwszym, żeby wybór był od razu pod klawiaturą.
+  useEffect(() => {
+    if (candidatesFromServer) firstChoiceRef.current?.focus()
+  }, [candidatesFromServer])
+
+  // Przetarg już jest, a nie masz do niego dostępu — przycisk potwierdzenia znika, fokus na „Zamknij”
+  // (przy dostępie fokus bierze „Przejdź do istniejącego przetargu”).
+  useEffect(() => {
+    if (existing !== null && !existing.canOpen) closeRef.current?.focus()
+  }, [existing])
+
+  const needsChoice = candidates.length > 0 && chosenId === null
+
   async function confirm() {
+    if (needsChoice) return
     setBusy(true)
     setErr('')
     try {
-      const res = await createTenderFromNotice(row.id)
+      const res = await createTenderFromNotice(row.id, chosenId ?? undefined)
       onCreated(res.tender_id)
     } catch (ex) {
-      const id = ex instanceof ApiError && ex.status === 409 ? Number(ex.body.tender_id) : NaN
-      if (Number.isInteger(id) && id > 0) {
-        setExistingId(id)
+      if (ex instanceof ApiError && ex.status === 409 && Number.isInteger(Number(ex.body.tender_id)) && Number(ex.body.tender_id) > 0) {
+        setExisting({
+          id: Number(ex.body.tender_id),
+          number: typeof ex.body.tender_number === 'string' ? ex.body.tender_number : '',
+          canOpen: ex.body.can_open === true,
+        })
         onConflict()
+      } else if (ex instanceof ApiError && ex.status === 422 && candidatesFrom(ex.body).length > 0) {
+        setCandidates(candidatesFrom(ex.body))
+        setChosenId(null)
+        setCandidatesFromServer(true)
       } else {
         setErr(errorText(ex, 'Nie udało się założyć przetargu.'))
       }
@@ -626,9 +667,12 @@ function CreateTenderDialog({
         </div>
 
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3 text-xs">
-          {existingId !== null ? (
+          {existing !== null ? (
             <p className="rounded bg-amber-50 px-3 py-2 text-amber-800" role="alert">
-              Przetarg z tym postępowaniem już istnieje — ktoś założył go w międzyczasie. Drugi nie został założony.
+              Przetarg z tym postępowaniem już istnieje
+              {existing.number ? <span className="app-code"> {existing.number}</span> : ''} — ktoś założył go w
+              międzyczasie. Drugi nie został założony.
+              {!existing.canOpen && ' Nie masz dostępu do tego przetargu — o zaproszenie poproś jego opiekuna.'}
             </p>
           ) : (
             <>
@@ -667,10 +711,50 @@ function CreateTenderDialog({
               </dl>
               <div className="rounded bg-slate-50 px-3 py-2 text-slate-700">
                 <p className="font-medium text-slate-900">Zamawiający w przetargu</p>
-                {row.client_match ? (
+                {candidates.length > 0 ? (
+                  <fieldset className="mt-1">
+                    <legend className="mb-1">
+                      {candidatesFromServer
+                        ? 'Od wczytania listy zmienili się klienci: do zamawiającego pasuje kilku. Wybierz, którego użyć:'
+                        : 'W zakładce Klienci do zamawiającego pasuje kilku klientów. Wybierz, którego użyć:'}
+                    </legend>
+                    <div className="space-y-1">
+                      {candidates.map((c, i) => (
+                        <label
+                          key={c.id}
+                          className={`flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 ${
+                            chosenId === c.id ? 'border-blue-600 bg-white' : 'border-slate-200 bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          <input
+                            ref={i === 0 ? firstChoiceRef : undefined}
+                            type="radio"
+                            name="notice-tender-client"
+                            className="mt-0.5"
+                            value={c.id}
+                            checked={chosenId === c.id}
+                            disabled={busy}
+                            onChange={() => setChosenId(c.id)}
+                          />
+                          <span>
+                            <span className="font-medium text-slate-900">{c.name}</span>
+                            <span className="block text-slate-500">
+                              {c.nip ? `NIP ${c.nip}` : 'bez NIP-u'}
+                              {c.city ? ` · ${c.city}` : ''}
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-slate-500">
+                      Aplikacja nie zgaduje i nie dopisuje nowego klienta, gdy pasuje kilku. Brakuje właściwego? Dopisz go
+                      w zakładce Klienci i otwórz to okno ponownie.
+                    </p>
+                  </fieldset>
+                ) : row.client_match ? (
                   <p className="mt-1">
                     Istniejący klient: <strong>{row.client_match.name}</strong>
-                    {row.client_match.matched_by === 'nip' ? ' (ten sam NIP).' : ' (ta sama nazwa).'}
+                    {MATCHED_BY_TEXT[row.client_match.matched_by] ?? '.'}
                   </p>
                 ) : (
                   <p className="mt-1">
@@ -679,9 +763,9 @@ function CreateTenderDialog({
                   </p>
                 )}
                 <p className="mt-1 text-slate-500">
-                  Reguła: najpierw dokładnie jeden klient z tym samym NIP-em, potem dokładnie jeden z tą samą nazwą.
-                  Stan sprawdzony przy wczytaniu listy — jeśli w międzyczasie ktoś dopisał klienta, aplikacja dobierze go
-                  przy zakładaniu tą samą regułą.
+                  Reguła: najpierw klient z tym samym NIP-em (gdy jest ich kilku — ten z tą samą nazwą), potem dokładnie
+                  jeden z tą samą nazwą. Gdy pasuje kilku, wybierasz Ty. Stan sprawdzony przy wczytaniu listy — przy
+                  zakładaniu aplikacja sprawdza go ponownie tą samą regułą.
                 </p>
               </div>
               <p className="text-slate-600">
@@ -696,29 +780,33 @@ function CreateTenderDialog({
           )}
         </div>
 
-        <div className="flex flex-wrap justify-end gap-2 border-t border-slate-200 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+          {existing === null && needsChoice && <span className="mr-auto text-xs text-slate-500">Najpierw wybierz klienta.</span>}
           <button
+            ref={closeRef}
             type="button"
             disabled={busy}
             onClick={onClose}
             className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            {existingId !== null ? 'Zamknij' : 'Anuluj'}
+            {existing !== null ? 'Zamknij' : 'Anuluj'}
           </button>
-          {existingId !== null ? (
-            <button
-              type="button"
-              autoFocus
-              onClick={() => onOpenExisting(existingId)}
-              className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
-            >
-              Przejdź do istniejącego przetargu
-            </button>
+          {existing !== null ? (
+            existing.canOpen && (
+              <button
+                type="button"
+                autoFocus
+                onClick={() => onOpenExisting(existing.id)}
+                className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+              >
+                Przejdź do istniejącego przetargu
+              </button>
+            )
           ) : (
             <button
               ref={confirmRef}
               type="button"
-              disabled={busy}
+              disabled={busy || needsChoice}
               onClick={() => void confirm()}
               className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >

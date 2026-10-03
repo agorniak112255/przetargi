@@ -2546,11 +2546,17 @@ export type NoticeRow = {
   /** termin składania minął */
   past: boolean
   /**
-   * klient, którego „Załóż przetarg” użyje jako zamawiającego (po NIP-ie albo po nazwie); null — zostanie dopisany
-   * nowy klient z danymi z ogłoszenia (albo brak uprawnienia do zakładania przetargów, albo przetarg już jest)
+   * klient, którego „Załóż przetarg” użyje jako zamawiającego (po NIP-ie; przy kilku klientach z tym NIP-em — po NIP-ie
+   * i nazwie; bez NIP-u — po nazwie); null z pustą listą `client_candidates` — zostanie dopisany nowy klient z danymi
+   * z ogłoszenia (albo brak uprawnienia do zakładania przetargów, albo przetarg już jest)
    */
-  client_match?: { id: number; name: string; matched_by: 'nip' | 'name' } | null
+  client_match?: { id: number; name: string; matched_by: 'nip' | 'nip_name' | 'name' } | null
+  /** kilku pasujących klientów (najwyżej 10) — zamawiającego wybiera człowiek; pusta lista — wybór niepotrzebny */
+  client_candidates?: NoticeClientCandidate[]
 }
+
+/** Klient z zakładki Klienci pasujący do zamawiającego z ogłoszenia; nip — 10 cyfr albo null. */
+export type NoticeClientCandidate = { id: number; name: string; nip: string | null; city: string | null }
 
 export type NoticesResponse = {
   data: NoticeRow[]
@@ -2597,10 +2603,25 @@ export function unskipNotice(noticeId: number): Promise<NoticeRow> {
   return api<NoticeRow>(`/notices/${noticeId}/skip`, { method: 'DELETE' })
 }
 
+/** Ciało odpowiedzi 409 „Załóż przetarg”: przetarg z tym postępowaniem już jest; can_open — masz do niego dostęp. */
+export type NoticeTenderConflict = { message: string; tender_id: number; tender_number: string; can_open: boolean }
+
+/** Ciało odpowiedzi 422 „Załóż przetarg” przy kilku pasujących klientach (wybierz client_id i spróbuj ponownie). */
+export type NoticeTenderClientChoice = {
+  message: string
+  errors?: Record<string, string[]>
+  client_candidates?: NoticeClientCandidate[]
+}
+
 /**
- * Zakłada przetarg (szkic) z ogłoszenia. Gdy przetarg z tym postępowaniem już jest — ApiError 409 z `tender_id`
- * w ciele odpowiedzi (drugi nie powstaje).
+ * Zakłada przetarg (szkic) z ogłoszenia; dane bierze z najnowszej wersji ogłoszenia postępowania. clientId — zamawiający
+ * wybrany przez człowieka (dowolny istniejący klient). Błędy (ApiError): 409 — przetarg z tym postępowaniem już jest
+ * (ciało NoticeTenderConflict, drugi nie powstaje); 422 z `client_candidates` — kilku pasujących klientów, trzeba
+ * wybrać (NoticeTenderClientChoice); 423 — ktoś inny zakłada w tej chwili przetarg z ogłoszenia.
  */
-export function createTenderFromNotice(noticeId: number): Promise<{ tender_id: number }> {
-  return api<{ tender_id: number }>(`/notices/${noticeId}/tender`, { method: 'POST' })
+export function createTenderFromNotice(noticeId: number, clientId?: number): Promise<{ tender_id: number }> {
+  return api<{ tender_id: number }>(`/notices/${noticeId}/tender`, {
+    method: 'POST',
+    body: JSON.stringify(clientId ? { client_id: clientId } : {}),
+  })
 }

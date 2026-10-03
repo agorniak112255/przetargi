@@ -128,10 +128,7 @@ class TenderController extends Controller
         }
         $noticeNumber = self::noticeNumber($data['notice_number'] ?? null);
 
-        $number = $data['number'] ?? Tender::nextNumber();
-
-        $tender = Tender::query()->create([
-            'number' => $number,
+        $attributes = [
             'title' => $data['title'],
             'client_id' => $data['client_id'],
             'owner_id' => $data['owner_id'] ?? $request->user()->id,
@@ -142,7 +139,11 @@ class TenderController extends Controller
             'ai_percent' => 0,
             'target_margin_percent' => $data['target_margin_percent'] ?? OfferPricing::markupPercent(),
             'last_activity_at' => now(),
-        ]);
+        ];
+        // numer wpisany ręcznie sprawdza walidacja; wyliczany — ponawiany przy równoczesnym zakładaniu
+        $tender = isset($data['number'])
+            ? Tender::query()->create(['number' => $data['number']] + $attributes)
+            : Tender::createWithNextNumber($attributes);
 
         $this->activities->log($tender, 'created', $request->user(), null, [
             'title' => $tender->title,

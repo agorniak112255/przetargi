@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Client;
 use App\Models\ProcurementNotice;
 use App\Models\ProcurementNoticeSkip;
+use App\Services\Bzp\NoticeClientAmbiguousException;
 use App\Services\Bzp\NoticeListQuery;
 use App\Services\Bzp\NoticeTenderCreator;
+use App\Services\TenderAccessService;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,12 +22,14 @@ use Illuminate\Validation\Rule;
  * Zakładka „Ogłoszenia”: lista ogłoszeń o zamówieniu z Biuletynu (NoticeListQuery), wspólna decyzja „pominięte”
  * i zakładanie przetargu z ogłoszenia (NoticeTenderCreator). Uprawnienia w trasach: lista i pomijanie —
  * tenders.create albo tenders.view_all; zakładanie przetargu — tenders.create.
+ * „Pominięte” dotyczy postępowania (bzp_number), nie wersji ogłoszenia — nowa wersja nie wraca do „Nowe”.
  */
 class NoticeController extends Controller
 {
     public function __construct(
         private readonly NoticeListQuery $list,
         private readonly NoticeTenderCreator $creator,
+        private readonly TenderAccessService $access,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -53,14 +59,15 @@ class NoticeController extends Controller
     {
         $this->ensureContractNotice($notice);
 
-        if (! ProcurementNoticeSkip::query()->where('procurement_notice_id', $notice->id)->exists()) {
+        if (! ProcurementNoticeSkip::query()->where('bzp_number', $notice->bzp_number)->exists()) {
             try {
                 ProcurementNoticeSkip::query()->create([
+                    'bzp_number' => $notice->bzp_number,
                     'procurement_notice_id' => $notice->id,
                     'user_id' => $request->user()->id,
                 ]);
             } catch (UniqueConstraintViolationException) {
-                // ktoś pominął to ogłoszenie w tej samej chwili — decyzja już jest
+                // ktoś pominął to postępowanie w tej samej chwili — decyzja już jest
             }
         }
 
@@ -71,20 +78,43 @@ class NoticeController extends Controller
     {
         $this->ensureContractNotice($notice);
 
-        ProcurementNoticeSkip::query()->where('procurement_notice_id', $notice->id)->delete();
+        ProcurementNoticeSkip::query()->where('bzp_number', $notice->bzp_number)->delete();
 
         return response()->json($this->list->row($notice, $request->user()));
     }
 
+    /**
+     * Body: client_id (opcjonalnie) — zamawiający wybrany przez człowieka, dowolny istniejący klient. Bez niego przy
+     * kilku pasujących klientach — 422 z listą client_candidates (nic nie powstaje).
+     */
     public function createTender(Request $request, ProcurementNotice $notice): JsonResponse
     {
         $this->ensureContractNotice($notice);
+        $data = $request->validate([
+            'client_id' => ['nullable', 'integer', 'exists:clients,id'],
+        ]);
+        $chosen = isset($data['client_id']) ? Client::query()->findOrFail((int) $data['client_id']) : null;
 
-        $result = $this->creator->create($notice, $request->user());
+        try {
+            $result = $this->creator->create($notice, $request->user(), $chosen);
+        } catch (NoticeClientAmbiguousException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'errors' => ['client_id' => [$e->getMessage()]],
+                'client_candidates' => $e->candidates,
+            ], 422);
+        } catch (LockTimeoutException) {
+            return response()->json([
+                'message' => 'Ktoś inny zakłada w tej chwili przetarg z ogłoszenia. Spróbuj ponownie za kilka sekund.',
+            ], 423);
+        }
         if (! $result['created']) {
             return response()->json([
                 'message' => 'Przetarg z tym postępowaniem już jest ('.$result['tender']->number.').',
                 'tender_id' => (int) $result['tender']->id,
+                'tender_number' => (string) $result['tender']->number,
+                // bez dostępu do przetargu front pokazuje sam numer zamiast przejścia
+                'can_open' => $this->access->canView($request->user(), $result['tender']),
             ], 409);
         }
 

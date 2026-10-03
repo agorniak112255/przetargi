@@ -91,6 +91,7 @@ final class NoticeListApiTest extends TestCase
             'skipped' => null,
             'past' => false,
             'client_match' => null,
+            'client_candidates' => [],
         ]], $response->json('data'));
         $this->assertSame(['page' => 1, 'last_page' => 1, 'total' => 1], $response->json('meta'));
         $this->assertSame(['new' => 1, 'created' => 0, 'skipped' => 0], $response->json('counts'));
@@ -142,14 +143,14 @@ final class NoticeListApiTest extends TestCase
         $past = $this->notice(['order_object' => 'po terminie', 'submitting_offers_at' => '2026-10-03 07:59:00']);
         $noDeadline = $this->notice(['order_object' => 'bez terminu', 'submitting_offers_at' => null]);
         $skipped = $this->notice(['order_object' => 'pominięte']);
-        ProcurementNoticeSkip::query()->create(['procurement_notice_id' => $skipped->id, 'user_id' => $user->id]);
+        ProcurementNoticeSkip::query()->create(['bzp_number' => $skipped->bzp_number, 'procurement_notice_id' => $skipped->id, 'user_id' => $user->id]);
         // przetarg z numerem bez wersji, przetarg powiązany tylko przez contract_notice_id, przetarg do pominiętego
         $byNumber = $this->notice(['order_object' => 'przetarg po numerze', 'bzp_number' => '2026/BZP 00500001', 'notice_number' => '2026/BZP 00500001/01']);
         $this->tender($client, ['notice_number' => '2026/BZP 00500001']);
         $byId = $this->notice(['order_object' => 'przetarg po powiązaniu']);
         $this->tender($client, ['contract_notice_id' => $byId->id]);
         $skippedWithTender = $this->notice(['order_object' => 'pominięte, potem przetarg', 'bzp_number' => '2026/BZP 00500002', 'notice_number' => '2026/BZP 00500002/01']);
-        ProcurementNoticeSkip::query()->create(['procurement_notice_id' => $skippedWithTender->id, 'user_id' => $user->id]);
+        ProcurementNoticeSkip::query()->create(['bzp_number' => $skippedWithTender->bzp_number, 'procurement_notice_id' => $skippedWithTender->id, 'user_id' => $user->id]);
         $this->tender($client, ['notice_number' => '2026/BZP 00500002/01']);
         // inny numer zaczynający się tak samo nie jest tym postępowaniem
         $this->tender($client, ['notice_number' => '2026/BZP 0050000']);
@@ -317,7 +318,7 @@ final class NoticeListApiTest extends TestCase
         $after = $list->list($user, ['tab' => 'created']);
         $this->assertSame(['new' => 0, 'created' => 1, 'skipped' => 0], $after['counts']);
         $this->assertSame($notice->id, $after['data'][0]['id']);
-        ProcurementNoticeSkip::query()->create(['procurement_notice_id' => $notice->id, 'user_id' => $user->id]);
+        ProcurementNoticeSkip::query()->create(['bzp_number' => $notice->bzp_number, 'procurement_notice_id' => $notice->id, 'user_id' => $user->id]);
         Tender::query()->delete();
         $this->assertSame(['id' => $client->id, 'name' => 'Nowy urząd', 'matched_by' => 'name'], $list->row($notice, $user)['client_match']);
     }

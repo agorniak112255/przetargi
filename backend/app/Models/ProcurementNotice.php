@@ -73,9 +73,9 @@ class ProcurementNotice extends Model
         return $this->hasMany(Tender::class, 'result_notice_id');
     }
 
-    /** Decyzja „pominięte” (zakładka Ogłoszenia) — wspólna dla zespołu. */
+    /** Decyzja „pominięte” postępowania (zakładka Ogłoszenia) — wspólna dla zespołu i dla wszystkich wersji ogłoszenia. */
     public function skip(): HasOne
     {
-        return $this->hasOne(ProcurementNoticeSkip::class);
+        return $this->hasOne(ProcurementNoticeSkip::class, 'bzp_number', 'bzp_number');
     }
 }

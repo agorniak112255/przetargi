@@ -24,7 +24,7 @@ use Illuminate\Support\Facades\DB;
  * Zakładki są rozłączne:
  *  - created: jest przetarg z tym postępowaniem (numer ogłoszenia przetargu bez wersji = bzp_number ogłoszenia albo
  *    przetarg powiązany z tym ogłoszeniem przez contract_notice_id) — także gdy ogłoszenie wcześniej pominięto,
- *  - skipped: decyzja „pominięte” i brak przetargu,
+ *  - skipped: decyzja „pominięte” postępowania (bzp_number — obejmuje nowe wersje ogłoszenia) i brak przetargu,
  *  - new: bez decyzji i bez przetargu; bez `past` tylko z terminem składania w przyszłości albo bez terminu.
  * Filtry: rodzaj zamówienia (config bzp.cpv_categories — kod pasuje jak w raporcie skuteczności: najdłuższy
  * pasujący początek; liczone w PHP na liście id, potem zwykłe stronicowanie w SQL), województwo (kod „PLxx”),
@@ -210,7 +210,7 @@ final class NoticeListQuery
         $hasSkip = static function (Builder $skips): void {
             $skips->selectRaw('1')
                 ->from('procurement_notice_skips as s')
-                ->whereColumn('s.procurement_notice_id', 'pn.id');
+                ->whereColumn('s.bzp_number', 'pn.bzp_number');
         };
 
         if ($tab === self::TAB_CREATED) {
@@ -300,11 +300,12 @@ final class NoticeListQuery
             return [];
         }
         $notices = ProcurementNotice::query()->whereIn('id', $ids)->get(self::ROW_COLUMNS)->keyBy('id');
+        // decyzja postępowania, nie wersji ogłoszenia
         $skips = ProcurementNoticeSkip::query()
             ->with('user:id,name')
-            ->whereIn('procurement_notice_id', $ids)
+            ->whereIn('bzp_number', $notices->pluck('bzp_number')->map(static fn (mixed $n): string => (string) $n)->unique()->values()->all())
             ->get()
-            ->keyBy('procurement_notice_id');
+            ->keyBy('bzp_number');
         $tenders = self::tendersFor($notices->all());
         $openable = $this->openableTenderIds($user, $tenders);
         $canCreate = $user->can('tenders.create');
@@ -317,7 +318,7 @@ final class NoticeListQuery
                 continue;
             }
             $tender = $tenders[$id] ?? null;
-            $skip = $skips->get($id);
+            $skip = $skips->get((string) $notice->bzp_number);
             $rows[] = $this->present($notice, $tender, $tender !== null && isset($openable[(int) $tender->id]), $skip, $canCreate && $tender === null, $now);
         }
 
@@ -345,7 +346,7 @@ final class NoticeListQuery
             ? $parsed['procedure_url'] : null;
         $objectId = trim((string) $notice->object_id);
         $deadline = $notice->submitting_offers_at;
-        $client = $matchClient ? ($this->clients ??= new NoticeClientMatcher)->match($notice->organization_nip, $notice->organization_name) : null;
+        $client = $matchClient ? ($this->clients ??= new NoticeClientMatcher)->resolve($notice->organization_nip, $notice->organization_name) : null;
 
         return [
             'id' => (int) $notice->id,
@@ -376,8 +377,10 @@ final class NoticeListQuery
             ] : null,
             'past' => $deadline !== null && $deadline->lessThanOrEqualTo($now),
             // podpowiedź do potwierdzenia „Załóż przetarg” (tylko z uprawnieniem tenders.create i bez przetargu):
-            // istniejący klient (po NIP albo nazwie) albo null = zostanie założony nowy klient
-            'client_match' => $client,
+            // istniejący klient (po NIP-ie albo nazwie); null i pusta lista kandydatów = zostanie założony nowy klient;
+            // null i kandydaci = kilku pasujących klientów — zamawiającego wybiera człowiek
+            'client_match' => $client['match'] ?? null,
+            'client_candidates' => $client['candidates'] ?? [],
         ];
     }
 

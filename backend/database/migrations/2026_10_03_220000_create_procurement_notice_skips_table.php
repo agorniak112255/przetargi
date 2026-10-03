@@ -7,8 +7,10 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Decyzja „pominięte” przy ogłoszeniu o zamówieniu z Biuletynu (zakładka Ogłoszenia) — jedna na ogłoszenie, wspólna
- * dla zespołu. Usunięcie ogłoszenia usuwa decyzję; usunięcie konta zostawia decyzję bez autora.
+ * Decyzja „pominięte” przy postępowaniu z Biuletynu (zakładka Ogłoszenia) — jedna na postępowanie (bzp_number, numer
+ * ogłoszenia bez wersji), wspólna dla zespołu, więc nowa wersja ogłoszenia (…/02) nie wraca do „Nowe”.
+ * procurement_notice_id = wersja ogłoszenia, przy której zapadła decyzja (pochodzenie). Usunięcie tej wersji usuwa
+ * decyzję; usunięcie konta zostawia decyzję bez autora.
  */
 return new class extends Migration
 {
@@ -16,7 +18,9 @@ return new class extends Migration
     {
         Schema::create('procurement_notice_skips', function (Blueprint $table): void {
             $table->id();
-            $table->foreignId('procurement_notice_id')->unique()->constrained('procurement_notices')->cascadeOnDelete();
+            // jak procurement_notices.bzp_number
+            $table->string('bzp_number', 30)->unique();
+            $table->foreignId('procurement_notice_id')->constrained('procurement_notices')->cascadeOnDelete();
             $table->foreignId('user_id')->nullable()->constrained('users')->nullOnDelete();
             // nullable: MariaDB z explicit_defaults_for_timestamp=0 (produkcja) dałaby kolumnie NOT NULL
             // ON UPDATE CURRENT_TIMESTAMP; chwilę zapisuje model
