@@ -1545,7 +1545,7 @@ function ConversationRow({
     <div className="group relative">
       {row}
       {/* na ekranie dotykowym (bez najeżdżania) przyciski widać zawsze */}
-      <span className="absolute right-2 top-1/2 flex -translate-y-1/2 gap-1 rounded-full bg-white/95 p-0.5 opacity-0 shadow-sm ring-1 ring-slate-200 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+      <span className="absolute right-2 top-1/2 flex -translate-y-1/2 gap-1 rounded-full bg-white p-0.5 opacity-0 shadow-sm ring-1 ring-slate-200 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
         {actions}
       </span>
     </div>
