@@ -333,6 +333,9 @@ type DocMeta = {
   mode: string
   targets: string[] | null
   has_file: boolean
+  /** pochodzenie pliku pobranego automatycznie (np. 'ezamowienia'); null — wgrany ręcznie */
+  source?: string | null
+  source_url?: string | null
   created_at: string
   uploader?: { name: string } | null
 }
@@ -2827,7 +2830,7 @@ function TenderDetailView() {
           <p className="mb-2 text-slate-500">
             Odczyt pokazuje podgląd pozycji i warunków — do przetargu trafiają dopiero po „Dodaj do przetargu”. Naraz
             widać jeden podgląd: dodaj go albo anuluj, potem odczytaj następny dokument. Odczytany plik zostaje w
-            archiwum dokumentów niżej.
+            archiwum dokumentów niżej (plik z komputera przy ustawieniu odczytu „tylko tekst” — tylko gdy to Word).
           </p>
           <ul className="space-y-1">
             {handoff.noticeDocuments.map((d) => (
@@ -3265,6 +3268,20 @@ function TenderDetailView() {
                       {d.original_name}
                       {d.has_file ? (
                         <span className="ml-1 text-[10px] text-emerald-600">plik zapisany</span>
+                      ) : null}
+                      {d.source === 'ezamowienia' ? (
+                        d.source_url && /^https:\/\//.test(d.source_url) ? (
+                          <a
+                            href={d.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="ml-1 text-[10px] text-blue-700 underline"
+                          >
+                            z e-Zamówień ↗
+                          </a>
+                        ) : (
+                          <span className="ml-1 text-[10px] text-slate-500">z e-Zamówień</span>
+                        )
                       ) : null}
                     </td>
                     <td className="p-2">{DOC_MODE_LABEL[d.mode] ?? d.mode}</td>

@@ -401,9 +401,10 @@ export function Notices() {
         <p className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">
           „Szczegóły” (albo kliknięcie przedmiotu zamówienia) pokazuje treść ogłoszenia, części z opisami i dokumenty
           postępowania. „Załóż przetarg” otwiera kreator z wypełnionym tytułem, zamawiającym, terminem składania z
-          godziną i numerem ogłoszenia. Ogłoszenie nie zawiera listy pozycji — są w dokumentach: w szczegółach wybierz
-          je z listy e-Zamówień albo dodaj pliki pobrane ze strony postępowania, a kreator pokaże odczytane pozycje do
-          sprawdzenia. „Pomiń” chowa ogłoszenie z zakładki „Nowe” u całego zespołu.
+          godziną i numerem ogłoszenia. Ogłoszenie nie zawiera listy pozycji — są w dokumentach:
+          {can(user, 'tenders.import')
+            ? ' w szczegółach wybierz je z listy e-Zamówień albo dodaj pliki pobrane ze strony postępowania, a kreator pokaże odczytane pozycje do sprawdzenia.'
+            : ' odczyt dokumentów w kreatorze wymaga uprawnienia „Dodawanie dokumentów” — poproś o nie administratora.'} „Pomiń” chowa ogłoszenie z zakładki „Nowe” u całego zespołu.
         </p>
       </div>
 
@@ -443,7 +444,17 @@ export function Notices() {
             navigate(`/tenders/${id}`)
           }}
           onConflict={() => setReloadKey((k) => k + 1)}
-          onOpenExisting={(id) => navigate(`/tenders/${id}`)}
+          onOpenExisting={(id) => {
+            const chosen = (confirm.selection?.documents.length ?? 0) + (confirm.selection?.files.length ?? 0)
+            if (
+              chosen > 0 &&
+              !window.confirm(
+                'Wybrane dokumenty nie zostaną przeniesione do istniejącego przetargu — dodasz je tam w zakładce „Dokumenty”. Przejść do przetargu?',
+              )
+            )
+              return
+            navigate(`/tenders/${id}`)
+          }}
         />
       )}
     </div>
@@ -837,7 +848,8 @@ function CreateTenderDialog({
                   {selection.files.length > 0 && (
                     <p className="mt-1">
                       Z komputera ({selection.files.length}): {selection.files.map((f) => f.name).join('; ')}. Kreator
-                      odczyta je w kroku „Dokumenty” i zapisze w archiwum dokumentów przetargu.
+                      odczyta je w kroku „Dokumenty” i zapisze w archiwum dokumentów przetargu (przy ustawieniu odczytu
+                      „tylko tekst” w archiwum zostaje tylko plik Word).
                     </p>
                   )}
                   <p className="mt-1 text-slate-500">

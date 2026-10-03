@@ -156,7 +156,7 @@ return [
         'cache_seconds' => 3600,
         'error_cache_seconds' => 120,
         'timeout' => 15,
-        'download_timeout' => 90,
+        'download_timeout' => 60,
         /** największy plik pobierany do przetargu (MB) */
         'max_file_mb' => 25,
     ],

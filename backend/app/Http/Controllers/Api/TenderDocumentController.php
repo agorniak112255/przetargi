@@ -82,14 +82,17 @@ class TenderDocumentController extends Controller
             throw ValidationException::withMessages(['file' => [$e->getMessage()]]);
         }
 
-        // historia: skąd pochodzi plik (pozycje i warunki trafiają do przetargu dopiero przy „commit”)
-        $name = (string) $file->getClientOriginalName();
-        $this->activities->log($tender, 'document_added', $request->user(), null, [
-            'source' => 'upload',
-            'file_name' => $name,
-            'document_id' => $result['document']?->id,
-            'note' => 'Dodano ręcznie plik „'.$name.'” do odczytu pozycji i warunków.',
-        ]);
+        // historia: skąd pochodzi plik — tylko gdy plik trafił do archiwum (sam odczyt bez zapisu nie dodaje dokumentu;
+        // pozycje i warunki trafiają do przetargu dopiero przy „commit”)
+        if ($result['document'] !== null) {
+            $name = (string) $file->getClientOriginalName();
+            $this->activities->log($tender, 'document_added', $request->user(), null, [
+                'source' => 'upload',
+                'file_name' => $name,
+                'document_id' => $result['document']->id,
+                'note' => 'Dodano ręcznie plik „'.$name.'” do odczytu pozycji i warunków.',
+            ]);
+        }
 
         return response()->json([
             'document_id' => $result['document']?->id,
@@ -143,6 +146,9 @@ class TenderDocumentController extends Controller
                 'document_id' => (int) $existing->id,
             ], 409);
         }
+
+        // pobranie pliku i odczyt z modelem w jednym żądaniu
+        @set_time_limit(300);
 
         try {
             $download = $this->ezamowienia->download($notice, $documentId);

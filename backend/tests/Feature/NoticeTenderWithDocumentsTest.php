@@ -215,8 +215,17 @@ final class NoticeTenderWithDocumentsTest extends TestCase
 
         // plik pobrany ręcznie ze strony postępowania → ta sama ścieżka kreatora (analyze), podgląd bez zapisu pozycji
         $csv = UploadedFile::fake()->createWithContent('Formularz cenowy cz. 2.csv', "Lp.;Opis;Ilość\n1;Koszulka termoaktywna trudnopalna;20\n");
+        // „tylko tekst”: plik nie trafia do archiwum — historia nie notuje dodania dokumentu
         $this->post("/api/tenders/{$tenderId}/documents/analyze", ['file' => $csv, 'mode' => 'simple', 'targets' => ['items']], ['Accept' => 'application/json'])
-            ->assertOk();
+            ->assertOk()
+            ->assertJsonPath('document_id', null);
+        $this->assertSame(0, TenderActivity::query()->where('tender_id', $tenderId)->where('action', 'document_added')->count());
+
+        // z zapisem pliku: dokument w archiwum i wpis w historii
+        $documentId = $this->post("/api/tenders/{$tenderId}/documents/analyze", ['file' => $csv, 'mode' => 'full', 'targets' => ['items']], ['Accept' => 'application/json'])
+            ->assertOk()
+            ->json('document_id');
+        $this->assertIsInt($documentId);
 
         $this->assertSame(0, TenderItem::query()->where('tender_id', $tenderId)->count());
         $activity = TenderActivity::query()->where('tender_id', $tenderId)->where('action', 'document_added')->sole();

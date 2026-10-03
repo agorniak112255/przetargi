@@ -61,6 +61,7 @@ final class NoticeSections
         /** @var array<string, array{first: int, lines: list<string>, lot: ?string}> $buckets */
         $buckets = [];
         $kind = null;
+        $sectionNo = 0;
         $lot = null;
         $inCriteria = false;
         $criteriaPrefix = null;
@@ -81,8 +82,9 @@ final class NoticeSections
         };
 
         foreach (BzpNoticeParser::lines($html) as $index => $line) {
-            if (preg_match('/^SEKCJA\s+[IVX]+\b\s*[-–—:]?\s*(.*)$/u', $line, $m) === 1) {
-                $kind = self::sectionKind($m[1]);
+            if (preg_match('/^SEKCJA\s+([IVX]+)\b\s*[-–—:]?\s*(.*)$/u', $line, $m) === 1) {
+                $kind = self::sectionKind($m[2]);
+                $sectionNo = self::romanToInt($m[1]);
                 $lot = null;
                 $inCriteria = false;
                 $inExecution = false;
@@ -96,7 +98,11 @@ final class NoticeSections
                 continue;
             }
 
-            $point = preg_match('/^(\d+(?:\.\d+)+)\.?\)\s*(.*)$/u', $line, $p) === 1 ? ['number' => $p[1], 'label' => $p[2]] : null;
+            // punkt ogłoszenia ma numer swojej sekcji (w SEKCJI VI „6.4.1.)”); numeracja w tekście zamawiającego
+            // („2.1) Wadium…” w opisie wadium) to treść punktu, nie nowy punkt
+            $point = preg_match('/^(\d+(?:\.\d+)+)\.?\)\s*(.*)$/u', $line, $p) === 1
+                && (int) explode('.', $p[1])[0] === $sectionNo
+                ? ['number' => $p[1], 'label' => $p[2]] : null;
 
             if ($kind === 'communication') {
                 if ($point !== null) {
@@ -186,5 +192,19 @@ final class NoticeSections
         }
 
         return null;
+    }
+
+    private static function romanToInt(string $roman): int
+    {
+        $values = ['I' => 1, 'V' => 5, 'X' => 10];
+        $total = 0;
+        $len = strlen($roman);
+        for ($i = 0; $i < $len; $i++) {
+            $value = $values[$roman[$i]] ?? 0;
+            $next = $i + 1 < $len ? ($values[$roman[$i + 1]] ?? 0) : 0;
+            $total += $value < $next ? -$value : $value;
+        }
+
+        return $total;
     }
 }

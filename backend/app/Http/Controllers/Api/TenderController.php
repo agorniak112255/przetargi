@@ -403,6 +403,8 @@ class TenderController extends Controller
                     'mode',
                     'targets',
                     'disk_path',
+                    'source',
+                    'source_url',
                     'created_at',
                 ])
                 ->map(static function ($d) {
