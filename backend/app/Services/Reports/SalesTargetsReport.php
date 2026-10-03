@@ -47,7 +47,8 @@ final class SalesTargetsReport
         7 => 'Lipiec', 8 => 'Sierpień', 9 => 'Wrzesień', 10 => 'Październik', 11 => 'Listopad', 12 => 'Grudzień',
     ];
 
-    public const RULE = 'Sprzedaż netto z faktur i paragonów w ERP XL, po korektach, z nocnego odczytu. Liczymy tylko klientów '
+    public const RULE = 'Sprzedaż netto z faktur i paragonów w ERP XL, po korektach, z nocnego odczytu; dokument liczy się do '
+        .'miesiąca według daty wystawienia. Liczymy tylko klientów '
         .'z zakładki Klienci (kontrahenci ERP XL, którzy w roku kupili za co najmniej 3000 zł netto; raz dodani zostają '
         .'na liście) — sprzedaży pozostałych kontrahentów ERP XL tu nie ma. Klient należy do handlowca według dzisiejszego '
         .'opiekuna, także w minionych miesiącach: najpierw opiekun z karty w ERP XL, jeśli administrator przypisał tego '

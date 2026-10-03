@@ -24,7 +24,8 @@ return new class extends Migration
             $table->string('document_number', 40);
             // invoice | receipt | export_invoice | invoice_correction | receipt_correction (ErpSaleDocument::KINDS)
             $table->string('kind', 20);
-            // data sprzedaży z XL (TrN_Data2)
+            // data wystawienia z XL (TrN_Data2 — miesiąc w numerze dokumentu zgadza się z nią na 100% FS/PA/FSE z 2026;
+            // TrN_Data3 to data sprzedaży, zwykle wcześniejsza). Decyzja właściciela 03.10.2026: miesiąc faktury = data wystawienia.
             $table->date('issued_at');
             $table->unsignedInteger('customer_xl_gid')->index();
             $table->foreignId('client_id')->nullable()->constrained('clients')->nullOnDelete();
