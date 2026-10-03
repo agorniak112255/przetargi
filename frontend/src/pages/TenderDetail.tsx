@@ -39,6 +39,7 @@ import {
   setTenderWizardHandoff,
   type TenderWizardHandoff,
 } from '../lib/tenderWizard'
+import { DOCUMENT_ACCEPT, expandDocumentFiles, extensionOf, sortDocumentsForReading } from '../lib/zipDocuments'
 import { TenderResultSection } from '../components/tender/TenderResultSection'
 import { MentionTextarea } from '../components/tender/MentionTextarea'
 import { deadlineTimeLabel, formatDeadline } from '../lib/tenderDeadline'
@@ -1492,6 +1493,47 @@ function TenderDetailView() {
   }
 
   /** Plik z komputera przekazany z ogłoszenia: ta sama ścieżka co plik przeciągnięty w kreatorze. */
+  /**
+   * Pliki przeciągnięte w kroku „Dokumenty”: jeden dokument — odczyt jak dotąd; kilka plików albo paczka ZIP
+   * („Pobierz wszystkie załączniki” na platformie) — rozpakowanie w przeglądarce i kolejka „czekające na odczyt”
+   * (pierwszy dokument kreator odczytuje od razu, gdy nie ma otwartego podglądu; kolejne — przyciskiem).
+   */
+  async function addDocumentFiles(list: File[]) {
+    if (list.length === 0) return
+    if (list.length === 1 && extensionOf(list[0].name) !== 'zip') {
+      void analyzeDocument(list[0])
+      return
+    }
+    setErr('')
+    setMsg('')
+    setDocStatus('Rozpakowuję paczkę…')
+    const { files, skipped } = await expandDocumentFiles(list)
+    const skippedText =
+      skipped.length > 0 ? ` Pominięto: ${skipped.map((s) => `${s.name} (${s.reason})`).join('; ')}.` : ''
+    if (files.length === 0) {
+      setDocStatus('')
+      setErr(`Nie ma dokumentów do odczytu.${skippedText}`)
+      return
+    }
+    const current = id ? getTenderWizardHandoff(id) : null
+    const queued = current?.files ?? []
+    updateHandoff({
+      noticeNumber: current?.noticeNumber ?? data?.tender.notice_number ?? '',
+      procedureUrl: current?.procedureUrl ?? null,
+      noticeDocuments: current?.noticeDocuments ?? [],
+      noticeText: current?.noticeText,
+      started: true,
+      files: sortDocumentsForReading([
+        ...queued,
+        ...files.filter((f) => !queued.some((q) => q.name === f.name && q.size === f.size)),
+      ]),
+    })
+    setDocStatus(`Dokumenty do odczytu: ${files.length} — lista „czekające na odczyt” wyżej.`)
+    if (skippedText) setMsg(skippedText.trim())
+    // otwarty podgląd zostaje — następny dokument odczytasz przyciskiem przy nim
+    if (!docPreview) void readHandoffFile(sortDocumentsForReading(files)[0])
+  }
+
   async function readHandoffFile(file: File) {
     const key = `plik:${file.name}:${file.size}`
     const error = await analyzeDocument(file, handoffMode())
@@ -2878,7 +2920,13 @@ function TenderDetailView() {
         <div className="rounded-xl border border-blue-200 bg-white p-4 text-xs shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <h2 className="text-sm font-semibold">
-              Dokumenty z ogłoszenia <span className="app-code">{handoff.noticeNumber}</span> czekające na odczyt
+              {handoff.noticeNumber ? (
+                <>
+                  Dokumenty z ogłoszenia <span className="app-code">{handoff.noticeNumber}</span> czekające na odczyt
+                </>
+              ) : (
+                'Dokumenty czekające na odczyt'
+              )}
             </h2>
             <button
               type="button"
@@ -3007,8 +3055,8 @@ function TenderDetailView() {
               onDrop={(e) => {
                 e.preventDefault()
                 setDragOver(false)
-                const f = e.dataTransfer.files?.[0]
-                if (f && !busy) void analyzeDocument(f)
+                const list = Array.from(e.dataTransfer.files ?? [])
+                if (list.length > 0 && !busy) void addDocumentFiles(list)
               }}
               className={`app-dropzone flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 text-center ${
                 dragOver ? 'border-blue-600 bg-sky-50' : 'border-slate-300 bg-slate-50'
@@ -3031,19 +3079,23 @@ function TenderDetailView() {
                 <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
               </svg>
               <strong className="text-sm">Przeciągnij tu dokumentację przetargu albo formularz ofertowy</strong>
-              <span className="text-xs text-slate-500">PDF, Excel albo Word</span>
+              <span className="text-xs text-slate-500">
+                PDF, Excel albo Word — także kilka plików naraz albo paczka ZIP („Pobierz wszystkie załączniki” na
+                stronie postępowania)
+              </span>
               <span className="mt-1 inline-flex items-center rounded bg-blue-600 px-3 py-2 text-xs font-medium text-white">
                 {busy && docStatus.startsWith('Wybrano') ? 'Odczytuję plik…' : 'Wybierz plik z komputera'}
               </span>
               <input
                 type="file"
                 className="sr-only"
-                accept=".pdf,.xlsx,.xls,.csv,.doc,.docx"
+                accept={DOCUMENT_ACCEPT}
+                multiple
                 disabled={busy}
                 onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  if (f) void analyzeDocument(f)
+                  const list = Array.from(e.target.files ?? [])
                   e.target.value = ''
+                  void addDocumentFiles(list)
                 }}
               />
             </label>

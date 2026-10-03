@@ -9,10 +9,13 @@ import {
 } from '../../lib/api'
 import { errorText, fmtDate } from '../../lib/campaignFormat'
 import { plural } from '../../lib/plural'
-
-/** Te same rodzaje i limit co krok „Dokumenty” kreatora (POST /tenders/{id}/documents/analyze: max 51200 kB). */
-const NOTICE_FILE_EXTENSIONS = ['pdf', 'xlsx', 'xls', 'csv', 'doc', 'docx'] as const
-const NOTICE_FILE_MAX_BYTES = 50 * 1024 * 1024
+import {
+  DOCUMENT_ACCEPT,
+  expandDocumentFiles,
+  isReadableDocument,
+  sortDocumentsForReading,
+  type SkippedDocument,
+} from '../../lib/zipDocuments'
 
 const KIND_LABEL: Record<NoticeDocumentKind, string> = {
   description: 'opis przedmiotu zamówienia',
@@ -27,18 +30,9 @@ const DEFAULT_KINDS: NoticeDocumentKind[] = ['description', 'form']
 /** Sekcje rozwinięte na starcie: przedmiot zamówienia, terminy, wadium. */
 const OPEN_SECTION = /przedmiot|termin|wadium/i
 
-function extensionOf(fileName: string): string {
-  const m = /\.([a-z0-9]+)$/i.exec(fileName.trim())
-  return m ? m[1].toLowerCase() : ''
-}
-
-function readable(fileName: string): boolean {
-  return (NOTICE_FILE_EXTENSIONS as readonly string[]).includes(extensionOf(fileName))
-}
-
 /** Ocena serwera (importable, suggested), a gdy jej brak — ta sama reguła po stronie przeglądarki. */
 function importable(d: NoticeDocument): boolean {
-  return d.importable ?? readable(d.file_name)
+  return d.importable ?? isReadableDocument(d.file_name)
 }
 
 function suggested(d: NoticeDocument): boolean {
@@ -96,7 +90,8 @@ export function NoticeDetailsPanel({
   const [reloadKey, setReloadKey] = useState(0)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [files, setFiles] = useState<File[]>([])
-  const [rejected, setRejected] = useState<{ name: string; reason: string }[]>([])
+  const [rejected, setRejected] = useState<SkippedDocument[]>([])
+  const [unpacking, setUnpacking] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const closeRef = useRef<HTMLButtonElement | null>(null)
 
@@ -167,17 +162,20 @@ export function NoticeDetailsPanel({
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [dirty])
 
-  function addFiles(list: FileList | null) {
+  /** Pliki i paczki ZIP („Pobierz wszystkie załączniki” na platformie) — paczka rozpakowana w przeglądarce. */
+  async function addFiles(list: FileList | null) {
     if (!list || list.length === 0) return
-    const ok: File[] = []
-    const bad: { name: string; reason: string }[] = []
-    for (const f of Array.from(list)) {
-      if (!readable(f.name)) bad.push({ name: f.name, reason: 'tego rodzaju pliku kreator nie odczyta (tylko PDF, Excel, CSV albo Word)' })
-      else if (f.size > NOTICE_FILE_MAX_BYTES) bad.push({ name: f.name, reason: `plik ma ${megabytes(f.size)}, a limit to 50 MB` })
-      else ok.push(f)
+    const picked = Array.from(list)
+    setUnpacking(true)
+    try {
+      const { files: ok, skipped } = await expandDocumentFiles(picked)
+      setRejected(skipped)
+      setFiles((prev) =>
+        sortDocumentsForReading([...prev, ...ok.filter((f) => !prev.some((p) => p.name === f.name && p.size === f.size))]),
+      )
+    } finally {
+      setUnpacking(false)
     }
-    setRejected(bad)
-    setFiles((prev) => [...prev, ...ok.filter((f) => !prev.some((p) => p.name === f.name && p.size === f.size))])
   }
 
   const org = row.organization
@@ -391,8 +389,8 @@ export function NoticeDetailsPanel({
                                 </span>
                                 {!ok && (
                                   <span className="block text-[11px] text-amber-800">
-                                    Kreator nie odczyta pliku tego rodzaju — jeśli to archiwum, pobierz je ze strony
-                                    postępowania, rozpakuj i dodaj pliki niżej.
+                                    Kreator nie odczyta pliku tego rodzaju — jeśli to paczka ZIP, pobierz ją ze strony
+                                    postępowania i przeciągnij niżej: aplikacja ją rozpakuje.
                                   </span>
                                 )}
                               </span>
@@ -417,7 +415,7 @@ export function NoticeDetailsPanel({
                       onDrop={(e) => {
                         e.preventDefault()
                         setDragOver(false)
-                        if (!busy) addFiles(e.dataTransfer.files)
+                        if (!busy && !unpacking) void addFiles(e.dataTransfer.files)
                       }}
                       className={`app-dropzone flex cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed px-4 py-5 text-center focus-within:ring-2 focus-within:ring-blue-500 ${
                         dragOver ? 'border-blue-600 bg-sky-50' : 'border-slate-300 bg-slate-50'
@@ -428,19 +426,24 @@ export function NoticeDetailsPanel({
                           ? 'Dodatkowe pliki z komputera (nieobowiązkowe)'
                           : 'Przeciągnij tu dokumenty pobrane ze strony postępowania'}
                       </strong>
-                      <span className="text-slate-500">PDF, Excel, CSV albo Word, do 50 MB na plik</span>
+                      <span className="text-slate-500">
+                        PDF, Excel, CSV, Word albo paczka ZIP („Pobierz wszystkie załączniki” na stronie postępowania) —
+                        do 50 MB na plik
+                      </span>
                       <span className="mt-1 inline-flex items-center rounded bg-blue-600 px-3 py-1.5 font-medium text-white">
-                        Wybierz pliki z komputera
+                        {unpacking ? 'Rozpakowuję paczkę…' : 'Wybierz pliki z komputera'}
                       </span>
                       <input
                         type="file"
                         multiple
                         className="sr-only"
-                        accept={NOTICE_FILE_EXTENSIONS.map((x) => `.${x}`).join(',')}
-                        disabled={busy}
+                        accept={DOCUMENT_ACCEPT}
+                        disabled={busy || unpacking}
                         onChange={(e) => {
-                          addFiles(e.target.files)
-                          e.target.value = ''
+                          const picked = e.target.files
+                          void addFiles(picked).finally(() => {
+                            e.target.value = ''
+                          })
                         }}
                       />
                     </label>
@@ -477,8 +480,9 @@ export function NoticeDetailsPanel({
                     )}
                     <p className="mt-2 text-slate-500">
                       Dlaczego trzeba pobrać ręcznie: aplikacja pobiera dokumenty sama tylko z e-Zamówień, które
-                      udostępniają ich listę publicznie. Inne platformy (na przykład platformazakupowa.pl) nie pozwalają na
-                      pobieranie plików przez automat.
+                      udostępniają ich listę publicznie. Inne platformy (na przykład platformazakupowa.pl) w regulaminie
+                      zabraniają pobierania załączników przez automat — wystarczy jedno kliknięcie „Pobierz wszystkie
+                      załączniki” na stronie postępowania i przeciągnięcie paczki ZIP tutaj.
                     </p>
                   </div>
                 ) : (
