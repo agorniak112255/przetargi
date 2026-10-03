@@ -17,9 +17,11 @@ import {
   callDurationLabel,
   callKindLabel,
   callPageUrl,
+  declineCall,
   fetchCall,
   fetchCallsConfig,
   isCallStatusNewerOrSame,
+  leaveCall,
   startCall,
   type CallKind,
   type ChatCallMeta,
@@ -385,14 +387,24 @@ function CallCard({
   m,
   own,
   calling,
+  isDirect,
+  declined,
+  ending,
   onJoin,
   onCallBack,
+  onEnd,
+  onDecline,
 }: {
   m: ChatMessage
   own: boolean
   calling: boolean
+  isDirect: boolean
+  declined: boolean
+  ending: boolean
   onJoin: (callId: number) => void
   onCallBack: (kind: CallKind) => void
+  onEnd: (callId: number) => void
+  onDecline: (callId: number) => void
 }) {
   const call = m.meta?.call
   if (!call) return null
@@ -415,15 +427,58 @@ function CallCard({
     const duration = callDurationLabel(call.duration_seconds)
     text = duration ? `Rozmowa · ${duration}` : 'Rozmowa zakończona'
   } else {
-    text = 'Rozmowa trwa'
+    const green = 'rounded-full bg-green-600 px-3 py-1 font-medium text-white hover:bg-green-700'
+    const red =
+      'rounded-full px-3 py-1 font-medium text-red-700 ring-1 ring-red-200 hover:bg-red-50 disabled:opacity-50'
+    const ringing = call.status === 'ringing'
+    let primary: ReactNode
+    let secondary: ReactNode = null
+    if (ringing && own) {
+      // Dzwonię i nikt jeszcze nie odebrał — mogę wrócić do karty rozmowy albo przestać dzwonić.
+      text = 'Dzwonię…'
+      primary = (
+        <button type="button" onClick={() => onJoin(call.id)} className={green}>
+          Wróć do rozmowy
+        </button>
+      )
+      secondary = (
+        <button type="button" disabled={ending} onClick={() => onEnd(call.id)} className={red}>
+          Zakończ
+        </button>
+      )
+    } else if (ringing && !declined) {
+      text = 'Dzwoni…'
+      primary = (
+        <button type="button" onClick={() => onJoin(call.id)} className={green}>
+          Odbierz
+        </button>
+      )
+      secondary = (
+        <button type="button" disabled={ending} onClick={() => onDecline(call.id)} className={red}>
+          Odrzuć
+        </button>
+      )
+    } else {
+      text = ringing ? 'Odrzucono — rozmowa jeszcze trwa' : 'Rozmowa trwa'
+      primary = (
+        <button type="button" onClick={() => onJoin(call.id)} className={green}>
+          Dołącz
+        </button>
+      )
+      // Rozmowę 1:1 kończy każda z dwóch osób (dla obu); grupowa trwa, dopóki ktoś w niej jest.
+      if (isDirect) {
+        secondary = (
+          <button type="button" disabled={ending} onClick={() => onEnd(call.id)} className={red}>
+            Zakończ
+          </button>
+        )
+      }
+    }
     action = (
-      <button
-        type="button"
-        onClick={() => onJoin(call.id)}
-        className="mt-1 justify-self-start rounded-full bg-green-600 px-3 py-1 font-medium text-white hover:bg-green-700"
-      >
-        Dołącz
-      </button>
+      <span className="mt-1 flex flex-wrap items-center gap-2">
+        {primary}
+        {secondary}
+      </span>
     )
   }
   return (
@@ -449,8 +504,13 @@ function MessageItem({
   onDelete,
   deleting,
   calling,
+  isDirect,
+  declinedCall,
+  endingCall,
   onJoinCall,
   onCallBack,
+  onEndCall,
+  onDeclineCall,
 }: {
   m: ChatMessage
   own: boolean
@@ -461,8 +521,13 @@ function MessageItem({
   onDelete: () => void
   deleting: boolean
   calling: boolean
+  isDirect: boolean
+  declinedCall: boolean
+  endingCall: boolean
   onJoinCall: (callId: number) => void
   onCallBack: (kind: CallKind) => void
+  onEndCall: (callId: number) => void
+  onDeclineCall: (callId: number) => void
 }) {
   if (m.kind === 'system') {
     return (
@@ -484,7 +549,18 @@ function MessageItem({
   ) : m.kind === 'mail' ? (
     <MailCard m={m} />
   ) : m.kind === 'call' ? (
-    <CallCard m={m} own={own} calling={calling} onJoin={onJoinCall} onCallBack={onCallBack} />
+    <CallCard
+      m={m}
+      own={own}
+      calling={calling}
+      isDirect={isDirect}
+      declined={declinedCall}
+      ending={endingCall}
+      onJoin={onJoinCall}
+      onCallBack={onCallBack}
+      onEnd={onEndCall}
+      onDecline={onDeclineCall}
+    />
   ) : null
   const bubble = m.deleted
     ? `rounded-2xl px-3 py-1.5 text-slate-500 ring-1 ring-slate-200 ${own ? 'rounded-tr-md' : 'rounded-tl-md'}`
@@ -726,6 +802,9 @@ function Thread({
   const [confirmLeave, setConfirmLeave] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const [calling, setCalling] = useState(false)
+  const [endingCall, setEndingCall] = useState(false)
+  // Rozmowy grupowe odrzucone na tym ekranie — karta przestaje pokazywać „Odbierz/Odrzuć”.
+  const [declinedCalls, setDeclinedCalls] = useState<Set<number>>(() => new Set())
   const [blockedCallUrl, setBlockedCallUrl] = useState('')
   const readUpTo = useRef(conversation.last_read_message_id ?? 0)
 
@@ -1036,6 +1115,35 @@ function Thread({
     }
   }
 
+  /**
+   * Zakończenie z czatu: dzwoniący przestaje dzwonić (bez odebrania = nieodebrane), w rozmowie 1:1 każda z osób
+   * kończy ją dla obu (POST leave); „Odrzuć” — POST decline. Karta rozmowy (CallPage) dostaje chat.call.updated
+   * i sama się rozłącza.
+   */
+  async function endCall(callId: number, decline: boolean) {
+    if (endingCall) return
+    setEndingCall(true)
+    setActionErr('')
+    try {
+      const r = decline ? await declineCall(callId) : await leaveCall(callId)
+      if (decline) setDeclinedCalls((prev) => new Set(prev).add(callId))
+      await patchCall({
+        call_id: r.data.id,
+        conversation_id: r.data.conversation_id,
+        message_id: r.data.message_id,
+        status: r.data.status,
+        kind: r.data.kind,
+        reason: 'status',
+        duration_seconds: r.data.duration_seconds,
+      })
+      onListChanged()
+    } catch (ex) {
+      setActionErr(errorText(ex, decline ? 'Nie udało się odrzucić rozmowy.' : 'Nie udało się zakończyć rozmowy.'))
+    } finally {
+      setEndingCall(false)
+    }
+  }
+
   async function leave() {
     setLeaving(true)
     setActionErr('')
@@ -1267,8 +1375,13 @@ function Thread({
                 onDelete={() => void removeMessage(m.id)}
                 deleting={deleting}
                 calling={calling}
+                isDirect={!isChannel}
+                declinedCall={m.kind === 'call' && m.meta?.call ? declinedCalls.has(m.meta.call.id) : false}
+                endingCall={endingCall}
                 onJoinCall={joinCallTab}
                 onCallBack={(kind) => void placeCall(kind)}
+                onEndCall={(callId) => void endCall(callId, false)}
+                onDeclineCall={(callId) => void endCall(callId, true)}
               />
             </div>
           )
