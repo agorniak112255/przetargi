@@ -143,6 +143,8 @@ final class ErpClientImport
                     'contacts' => $people[$gid] ?? null,
                     'account_manager' => self::cut($managerName, 150),
                     'account_manager_email' => self::cut($manager['email'] ?? null, 150),
+                    // numer pracownika XL — przypisanie klienta handlowcowi (users.erp_employee_gid, ClientAssignment)
+                    'xl_manager_gid' => $manager['employee_gid'] ?? null,
                     'sales_year' => $year,
                     'sales_net' => $total['net'] ?? 0,
                     'sale_documents' => $total['documents'] ?? 0,

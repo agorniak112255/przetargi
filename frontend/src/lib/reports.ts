@@ -9,7 +9,7 @@ import { plural } from './plural'
  * Sekcja null = brak uprawnienia do danych, z których powstaje (nie zera).
  */
 
-export type ReportKey = 'catalog' | 'prices' | 'sources' | 'sales' | 'customers' | 'effectiveness'
+export type ReportKey = 'catalog' | 'prices' | 'sources' | 'sales' | 'customers' | 'effectiveness' | 'targets'
 
 export type CatalogCoverage = {
   with_description: number
@@ -141,6 +141,56 @@ export type SourcesReportData = {
   }[] | null
 }
 
+/**
+ * Od zapytania do sprzedaży: przyszło (kopie tego samego maila raz), odpowiedzieliśmy, zamówił — potwierdzone przez
+ * handlowca; possible — same podpowiedzi z ERP XL (wniosek, pokazywany osobno i szaro).
+ */
+export type SalesFunnel = {
+  received: number
+  replied: number
+  ordered_confirmed: number
+  possible: number
+  value_confirmed: string
+  /** potwierdzone „zamówił” bez wskazanego dokumentu z ERP XL */
+  ordered_without_document: number
+}
+
+/** Cele handlowców (GET /reports/targets?month=RRRR-MM, PUT /reports/targets/{RRRR-MM}). */
+export type SalesTargetsReport = {
+  month: string
+  months: { key: string; label: string }[]
+  /** miesiąc zamknięty (miniony) */
+  closed: boolean
+  /** dni robocze miesiąca w toku; null — miesiąc zamknięty */
+  workdays: { total: number; elapsed: number } | null
+  /** dane sprzedaży z ERP XL do dnia (ostatni nocny odczyt) */
+  data_until: string | null
+  /** reguła liczenia słowami (klienci z zakładki Klienci, opiekun według dzisiejszego stanu) */
+  rule: string
+  rows: {
+    user_id: number
+    name: string
+    target: string | null
+    sales: string
+    percent: number | null
+    clients_bought: number
+    new_clients: number
+    by_source: { xl: string; app: string }
+    has_employee: boolean
+  }[]
+  unassigned: { sales: string; clients_bought: number; new_clients: number }
+  total: { target: string | null; sales: string; percent: number | null }
+}
+
+export function fetchSalesTargets(month?: string, signal?: AbortSignal): Promise<SalesTargetsReport> {
+  return api<SalesTargetsReport>(`/reports/targets${month ? `?month=${encodeURIComponent(month)}` : ''}`, { signal })
+}
+
+/** amount null usuwa cel osoby w tym miesiącu. */
+export function saveSalesTargets(month: string, targets: { user_id: number; amount: number | null }[]): Promise<SalesTargetsReport> {
+  return api<SalesTargetsReport>(`/reports/targets/${month}`, { method: 'PUT', body: JSON.stringify({ targets }) })
+}
+
 export type SalesReportData = {
   generated_at: string
   days: number
@@ -159,7 +209,25 @@ export type SalesReportData = {
     }
     weekly: { week_start: string; received: number; replied: number }[]
     channels: { channel: string; received: number }[]
-    people: { user_id: number; name: string; received: number; replied: number; replied_1bd: number; waiting: number }[] | null
+    /** „Od zapytania do sprzedaży” (etap 4) */
+    funnel: SalesFunnel
+    people:
+      | {
+          user_id: number
+          name: string
+          received: number
+          replied: number
+          replied_1bd: number
+          waiting: number
+          /** zwykle odpowiada w (mediana, sekundy); null — brak odpowiedzi w okresie */
+          median_reply_seconds: number | null
+          /** zamówione z odpowiedzianych (potwierdzone przez handlowca) */
+          ordered: number
+          ordered_percent: number | null
+          /** wartość zamówień z dokumentów potwierdzonych przez handlowca */
+          order_value: string
+        }[]
+      | null
   } | null
   tenders: {
     scope: 'all' | 'own'

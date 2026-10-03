@@ -103,6 +103,15 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('system:check')->everyTenMinutes()->withoutOverlapping(10);
         // stare przebiegi zadań, wpisy wysłanych powiadomień i treść nieprzypiętych ogłoszeń z Biuletynu
         $schedule->command('system:prune')->dailyAt('04:35')->timezone('Europe/Warsaw');
+        // karta klienta i cele handlowców: nagłówki faktur i paragonów klientów z zakładki Klienci (36 miesięcy) —
+        // XL tylko w nocy, po erp:clients
+        $schedule->command('erp:client-documents')->dailyAt('05:40')->timezone('Europe/Warsaw')->withoutOverlapping(30)
+            ->when(static fn (): bool => (bool) config('erpxl.enabled'));
+        // powiązania zapytań z klientami (zawsze) i podpowiedzi „możliwe zamówienie z oferty” (pozycje z XL tylko przy
+        // ERPXL_ENABLED — sprawdza samo polecenie) — po erp:client-documents
+        $schedule->command('inquiries:order-hints')->dailyAt('05:55')->timezone('Europe/Warsaw')->withoutOverlapping(30);
+        // przypomnienia z notatek o klientach i o kończącej się ważności ofert (dzienne od 7:00)
+        $schedule->command('crm:remind')->everyFifteenMinutes()->withoutOverlapping(10);
 
         // zapis przebiegów zadań (scheduled_task_runs) — musi być ostatni, żeby objął wszystkie zadania wyżej
         app(ScheduledTaskRecorder::class)->attach($schedule);

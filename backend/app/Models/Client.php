@@ -11,6 +11,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 /**
  * Klient (zamawiający). Dopisany ręcznie (source = manual) albo z Comarch ERP XL (source = erp_xl, erp:clients) —
  * wtedy pola karty, osoby kontaktowe, opiekun i zakupy w roku są kopią z XL odświeżaną co noc.
+ * Opiekun w XL: account_manager(_email) dla ludzi, xl_manager_gid (numer pracownika XL) do przypisania handlowcowi
+ * (users.erp_employee_gid, ClientAssignment); opiekun w aplikacji: owner_id.
  */
 class Client extends Model
 {
@@ -40,6 +42,7 @@ class Client extends Model
         'contacts',
         'account_manager',
         'account_manager_email',
+        'xl_manager_gid',
         'owner_id',
         'source',
         'xl_gid',
@@ -57,6 +60,7 @@ class Client extends Model
             'emails' => 'array',
             'contacts' => 'array',
             'xl_gid' => 'integer',
+            'xl_manager_gid' => 'integer',
             'xl_archived' => 'boolean',
             'sales_year' => 'integer',
             'sales_net' => 'decimal:2',
@@ -74,5 +78,16 @@ class Client extends Model
     public function tenders(): HasMany
     {
         return $this->hasMany(Tender::class);
+    }
+
+    public function notes(): HasMany
+    {
+        return $this->hasMany(ClientNote::class);
+    }
+
+    /** Faktury i paragony z ERP XL (kopia nocna erp:client-documents). */
+    public function saleDocuments(): HasMany
+    {
+        return $this->hasMany(ErpSaleDocument::class);
     }
 }

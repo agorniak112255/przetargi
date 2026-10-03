@@ -55,6 +55,12 @@ final class ErpXlClient implements ErpXlGateway
     private const CLIENT_CORRECTION_TYPES = [2041, 2042];
 
     /**
+     * Skróty numerów dokumentów sprzedaży klienta. FSK i PAK (korekty FS i PA) — oznaczenia przyjęte w aplikacji,
+     * do potwierdzenia z numeracją w XL (TraNag nie przechowuje symbolu dokumentu).
+     */
+    private const CLIENT_DOCUMENT_PREFIXES = [2033 => 'FS', 2034 => 'PA', 2037 => 'FSE', 2041 => 'FSK', 2042 => 'PAK'];
+
+    /**
      * Data sprzedaży dokumentu (Clarion) do „ostatniej sprzedaży” (decyzja właściciela 01.10.2026, wariant B): dokument
      * w buforze (TrN_Stan < 3) ma TrN_Data2 przestawiane przez XL co noc na dziś — wtedy dzień ostatniej zmiany nagłówka
      * (TrN_LastMod, XlTimestamp → dni od 1.01.1990 + 69035 = Clarion). Zbiorcza WZ dopisywana co kilka dni zostaje
@@ -729,7 +735,7 @@ final class ErpXlClient implements ErpXlGateway
         foreach (array_chunk(array_values(array_unique(array_map('intval', $gids))), 500) as $chunk) {
             $rows = $this->db()->table('CDN.KntOpiekun as o')
                 ->leftJoin('CDN.PrcKarty as p', 'p.Prc_GIDNumer', '=', 'o.KtO_PrcNumer')
-                ->select(['o.KtO_KntNumer', 'p.Prc_Imie1', 'p.Prc_Nazwisko', 'p.Prc_Akronim', 'p.Prc_EMail'])
+                ->select(['o.KtO_KntNumer', 'o.KtO_PrcNumer', 'p.Prc_Imie1', 'p.Prc_Nazwisko', 'p.Prc_Akronim', 'p.Prc_EMail'])
                 ->where('o.KtO_KntTyp', self::CUSTOMER_TYPE)
                 ->whereIn('o.KtO_KntNumer', $chunk)
                 ->where('o.KtO_DataOd', '<=', $onClarionDate)
@@ -740,6 +746,7 @@ final class ErpXlClient implements ErpXlGateway
             foreach ($rows as $r) {
                 $out[] = [
                     'customer_gid' => (int) $r->KtO_KntNumer,
+                    'employee_gid' => (int) $r->KtO_PrcNumer > 0 ? (int) $r->KtO_PrcNumer : null,
                     'first_name' => $this->text($r->Prc_Imie1),
                     'last_name' => $this->text($r->Prc_Nazwisko),
                     'acronym' => $this->text($r->Prc_Akronim),
@@ -749,6 +756,75 @@ final class ErpXlClient implements ErpXlGateway
         }
 
         return $out;
+    }
+
+    public function customerDocuments(array $gids, int $fromClarionDate): iterable
+    {
+        $types = implode(',', [...self::CLIENT_SALE_TYPES, ...self::CLIENT_CORRECTION_TYPES]);
+        $states = implode(',', self::CUSTOMER_SALE_STATES);
+        $customer = self::CUSTOMER_TYPE;
+        $this->yieldToXl();
+        // paczki po 500 kontrahentów (limit parametrów MS SQL 2100 — numery wpisane w zapytanie jako liczby całkowite);
+        // GROUP BY wszystkich kolumn nagłówka, bo MS SQL nie pozwala wybrać kolumny spoza grupowania
+        foreach (array_chunk(array_values(array_unique(array_map('intval', $gids))), 500) as $chunk) {
+            $in = implode(',', $chunk);
+            $sql = <<<SQL
+                SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, n.TrN_TrNSeria AS series,
+                       n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month,
+                       n.TrN_Data2 AS doc_date, n.TrN_KntNumer AS customer_gid, SUM(e.TrE_KsiegowaNetto) AS net_value
+                FROM CDN.TraElem e
+                JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
+                WHERE n.TrN_KntTyp = $customer AND n.TrN_KntNumer IN ($in) AND n.TrN_GIDTyp IN ($types)
+                  AND n.TrN_Stan IN ($states) AND n.TrN_Data2 >= ?
+                GROUP BY n.TrN_GIDTyp, n.TrN_GIDNumer, n.TrN_TrNSeria, n.TrN_TrNNumer, n.TrN_TrNRok, n.TrN_TrNMiesiac,
+                         n.TrN_Data2, n.TrN_KntNumer
+                SQL;
+            foreach ($this->db()->cursor($sql, [$fromClarionDate]) as $r) {
+                $type = (int) $r->doc_type;
+                yield [
+                    'document_type' => $type,
+                    'document_id' => (int) $r->document_id,
+                    'document_number' => $this->documentNumber(self::CLIENT_DOCUMENT_PREFIXES[$type] ?? 'dok. '.$type, $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
+                    'date' => (int) $r->doc_date,
+                    'customer_gid' => (int) $r->customer_gid,
+                    'net_value' => round((float) $r->net_value, 2),
+                ];
+            }
+        }
+    }
+
+    public function customerDocumentLines(array $gids, int $fromClarionDate): iterable
+    {
+        $types = implode(',', self::CLIENT_SALE_TYPES);
+        $states = implode(',', self::CUSTOMER_SALE_STATES);
+        $customer = self::CUSTOMER_TYPE;
+        $this->yieldToXl();
+        foreach (array_chunk(array_values(array_unique(array_map('intval', $gids))), 500) as $chunk) {
+            $in = implode(',', $chunk);
+            $sql = <<<SQL
+                SELECT n.TrN_GIDTyp AS doc_type, n.TrN_GIDNumer AS document_id, n.TrN_TrNSeria AS series,
+                       n.TrN_TrNNumer AS doc_number, n.TrN_TrNRok AS doc_year, n.TrN_TrNMiesiac AS doc_month,
+                       n.TrN_Data2 AS doc_date, n.TrN_KntNumer AS customer_gid, e.TrE_TwrNumer AS item_gid,
+                       e.TrE_Ilosc AS quantity, e.TrE_KsiegowaNetto AS net_value
+                FROM CDN.TraElem e
+                JOIN CDN.TraNag n ON n.TrN_GIDTyp = e.TrE_GIDTyp AND n.TrN_GIDNumer = e.TrE_GIDNumer
+                WHERE n.TrN_KntTyp = $customer AND n.TrN_KntNumer IN ($in) AND n.TrN_GIDTyp IN ($types)
+                  AND n.TrN_Stan IN ($states) AND n.TrN_Data2 >= ? AND e.TrE_Ilosc > 0
+                SQL;
+            foreach ($this->db()->cursor($sql, [$fromClarionDate]) as $r) {
+                $type = (int) $r->doc_type;
+                yield [
+                    'document_type' => $type,
+                    'document_id' => (int) $r->document_id,
+                    'document_number' => $this->documentNumber(self::CLIENT_DOCUMENT_PREFIXES[$type] ?? 'dok. '.$type, $r->series, $r->doc_number, $r->doc_year, $r->doc_month),
+                    'date' => (int) $r->doc_date,
+                    'customer_gid' => (int) $r->customer_gid,
+                    'item_gid' => (int) $r->item_gid,
+                    'quantity' => (float) $r->quantity,
+                    'net_value' => (float) $r->net_value,
+                ];
+            }
+        }
     }
 
     /**

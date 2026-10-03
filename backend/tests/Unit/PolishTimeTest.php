@@ -139,6 +139,31 @@ final class PolishTimeTest extends TestCase
         $this->assertSame('', PolishTime::formatDeadline($this->tender(null, null)));
     }
 
+    public function test_business_days_in_month_count_only_weekdays(): void
+    {
+        // październik 2026: 1.10 czwartek, 31 dni, 9 dni weekendu
+        $this->assertSame(22, PolishTime::businessDaysInMonth(2026, 10));
+        // luty 2027: 28 dni, zaczyna się w poniedziałek — 4 pełne tygodnie
+        $this->assertSame(20, PolishTime::businessDaysInMonth(2027, 2));
+        // marzec 2026 ze zmianą czasu na letni (29.03) — 22 dni
+        $this->assertSame(22, PolishTime::businessDaysInMonth(2026, 3));
+    }
+
+    public function test_business_days_elapsed_counts_today_and_clamps_to_month(): void
+    {
+        // czwartek 1.10 — pierwszy dzień roboczy w toku
+        $this->assertSame(1, PolishTime::businessDaysElapsed(2026, 10, '2026-10-01'));
+        // sobota 3.10 — czwartek i piątek
+        $this->assertSame(2, PolishTime::businessDaysElapsed(2026, 10, '2026-10-03'));
+        // poniedziałek 5.10 — z dzisiejszym
+        $this->assertSame(3, PolishTime::businessDaysElapsed(2026, 10, CarbonImmutable::parse('2026-10-05 23:30', PolishTime::TIMEZONE)));
+        // miesiąc jeszcze się nie zaczął / już się skończył
+        $this->assertSame(0, PolishTime::businessDaysElapsed(2026, 11, '2026-10-31'));
+        $this->assertSame(22, PolishTime::businessDaysElapsed(2026, 10, '2026-12-15'));
+        // ostatni dzień miesiąca (sobota 31.10) — wszystkie
+        $this->assertSame(22, PolishTime::businessDaysElapsed(2026, 10, '2026-10-31'));
+    }
+
     private function tender(?string $date, ?string $time): Tender
     {
         return new Tender(['deadline' => $date, 'deadline_time' => $time]);

@@ -5,6 +5,7 @@ import { can, canAny } from '../lib/api'
 import { CHAT_PERMISSION } from '../lib/chat'
 import { usePresence } from '../lib/usePresence'
 import { ChatNavBadge } from './ChatUnreadProvider'
+import { GlobalSearch } from './GlobalSearch'
 import { IncomingCallProvider } from './IncomingCallProvider'
 import { NavIcon, type NavIconName } from './NavIcon'
 import { NotificationBell } from './NotificationBell'
@@ -51,6 +52,7 @@ export function Layout() {
   const { user, logout } = useAuth()
   usePresence(Boolean(user))
   const [collapsed, setCollapsed] = useState(readCollapsed)
+  const [searchOpen, setSearchOpen] = useState(false)
 
   function toggleCollapsed() {
     const next = !collapsed
@@ -113,6 +115,16 @@ export function Layout() {
           ))}
         </nav>
         <div className="app-sidebar-footer">
+          {/* jedno pole wyszukiwania dla całej aplikacji; skrót Ctrl+K obsługuje samo okno GlobalSearch */}
+          <button
+            type="button"
+            onClick={() => setSearchOpen(true)}
+            data-tip={collapsed ? 'Szukaj (Ctrl+K)' : undefined}
+            className="app-sidebar-btn mx-4 mt-4 block w-[calc(100%-2rem)] rounded bg-slate-700 px-3 py-2 text-left text-xs hover:bg-slate-600"
+          >
+            <NavIcon name="search" className="app-nav-icon" />
+            <span className="app-nav-label">Szukaj (Ctrl+K)</span>
+          </button>
           <NavLink
             to="/account"
             data-tip={collapsed ? 'Moje konto' : undefined}
@@ -152,6 +164,7 @@ export function Layout() {
         <Outlet />
       </main>
       <IncomingCallProvider />
+      <GlobalSearch open={searchOpen} onOpenChange={setSearchOpen} />
     </div>
   )
 }

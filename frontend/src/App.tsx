@@ -26,6 +26,7 @@ import { CampaignTemplateEditor } from './pages/CampaignTemplateEditor'
 import { Campaigns } from './pages/Campaigns'
 import { CardMatches } from './pages/CardMatches'
 import { Chat } from './pages/Chat'
+import { ClientDetail } from './pages/ClientDetail'
 import { Clients } from './pages/Clients'
 import { Inquiries } from './pages/Inquiries'
 import { InquiryReply } from './pages/InquiryReply'
@@ -290,6 +291,14 @@ export default function App() {
             />
             <Route path="substitutes" element={<Substitutes />} />
             <Route path="clients" element={<Clients />} />
+            <Route
+              path="clients/:id"
+              element={
+                <PermissionGuard permission="clients.view">
+                  <ClientDetail />
+                </PermissionGuard>
+              }
+            />
             <Route
               path="inquiries"
               element={

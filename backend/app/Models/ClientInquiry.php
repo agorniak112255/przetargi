@@ -6,6 +6,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class ClientInquiry extends Model
 {
@@ -52,6 +53,18 @@ class ClientInquiry extends Model
         'validity' => 'Ważność oferty',
     ];
 
+    /** Wynik zapytania wpisany przez handlowca: zamówił / zamówił część / nie zamówił / nie wiadomo. */
+    public const OUTCOMES = ['ordered', 'partial', 'not_ordered', 'unknown'];
+
+    /** Powód (tylko przy partial i not_ordered): cena, termin dostawy, kupił gdzie indziej, klient nie odpowiedział. */
+    public const OUTCOME_REASONS = ['price', 'lead_time', 'bought_elsewhere', 'no_response'];
+
+    /**
+     * Skąd powiązanie z klientem (client_link_source): manual — wybrał handlowiec (automat go nie rusza, także
+     * „bez klienta”), email — adres nadawcy jak na karcie klienta, nip — NIP z treści maila (InquiryClientLinker).
+     */
+    public const LINK_SOURCES = ['manual', 'email', 'nip'];
+
     protected $fillable = [
         'user_id',
         'client_id',
@@ -82,6 +95,15 @@ class ClientInquiry extends Model
         'analysis_error',
         'analysis_started_at',
         'analysis_finished_at',
+        'client_link_source',
+        'client_linked_at',
+        'outcome',
+        'outcome_reason',
+        'outcome_by',
+        'outcome_at',
+        'outcome_document_number',
+        'outcome_document_date',
+        'outcome_net_value',
     ];
 
     protected function casts(): array
@@ -97,6 +119,11 @@ class ClientInquiry extends Model
             'analysis_progress' => 'array',
             'analysis_started_at' => 'datetime',
             'analysis_finished_at' => 'datetime',
+            'client_linked_at' => 'datetime',
+            'outcome_by' => 'integer',
+            'outcome_at' => 'datetime',
+            'outcome_document_date' => 'date:Y-m-d',
+            'outcome_net_value' => 'decimal:2',
         ];
     }
 
@@ -129,5 +156,16 @@ class ClientInquiry extends Model
     public function client(): BelongsTo
     {
         return $this->belongsTo(Client::class);
+    }
+
+    /** Podpowiedzi „możliwe zamówienie” z ERP XL (inquiries:order-hints). */
+    public function hints(): HasMany
+    {
+        return $this->hasMany(InquiryOrderHint::class);
+    }
+
+    public function outcomeBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'outcome_by');
     }
 }

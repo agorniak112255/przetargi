@@ -45,6 +45,21 @@ return [
             'default_bell' => true,
             'default_mail' => false,
         ],
+        'client_note_reminder' => [
+            'label' => 'Przypomnienie z notatki o kliencie',
+            'description' => 'W dniu wybranym przy notatce na karcie klienta — tylko do autora notatki.',
+            'default_bell' => true,
+            'default_mail' => true,
+            // notatki są na karcie klienta (clients.view)
+            'permission' => ['clients.view'],
+        ],
+        'offer_validity_ending' => [
+            'label' => 'Kończy się ważność mojej oferty, a klient nie zamówił',
+            'description' => 'Od ostatniego dnia roboczego przed końcem ważności oferty z Twojej odpowiedzi na zapytanie, gdy wynik zapytania nie jest wpisany. Raz na ofertę.',
+            'default_bell' => true,
+            'default_mail' => false,
+            'permission' => ['inquiries.use'],
+        ],
         'system_alert' => [
             'label' => 'Zadanie nocne albo konto dostawcy przestało działać',
             'description' => 'Jeden e-mail na każdy problem, dopóki go nie wyciszysz na ekranie „Stan systemu”.',

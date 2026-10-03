@@ -289,6 +289,8 @@ export type NotificationEventKey =
   | 'tender_invitation'
   | 'inquiry_analysis_ready'
   | 'campaign_reply'
+  | 'client_note_reminder'
+  | 'offer_validity_ending'
   | 'system_alert'
 
 /** 7 dni przed / 3 dni przed / ostatni dzień roboczy przed / w dniu terminu 3 godziny przed (wymaga godziny) */
@@ -351,6 +353,8 @@ export type SystemGapKind =
   | 'salespeople_without_operator'
   | 'clients_without_xl'
   | 'sold_items_without_card'
+  | 'clients_without_manager'
+  | 'salespeople_without_employee'
 
 export type SystemAlertRow = {
   id: number
@@ -2129,4 +2133,363 @@ export async function downloadFile(path: string, fallbackName: string): Promise<
   a.download = name
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/* ---------- Etapy 3–4: kalendarz terminów, wyszukiwanie, karta klienta, wynik zapytania, cele ---------- */
+
+/**
+ * Stan przetargu w kalendarzu (pierwszy pasujący): result_needed — po terminie, bez wyniku, do 60 dni; closed —
+ * wysłany, archiwum, odrzucony albo z wynikiem; ready — są pozycje i wszystkie mają produkt i cenę; urgent — braki
+ * i termin za ≤ 3 dni; in_progress — reszta.
+ */
+export type TenderCalendarState = 'ready' | 'in_progress' | 'urgent' | 'result_needed' | 'closed'
+
+export type TenderCalendarEvent = {
+  tender_id: number
+  number: string
+  notice_number: string | null
+  title: string
+  client: string | null
+  status: string
+  /** dzień terminu „na zegarze” w Polsce (RRRR-MM-DD) */
+  date: string
+  /** godzina składania „HH:MM” w czasie polskim; null = bez godziny */
+  time: string | null
+  state: TenderCalendarState
+  missing: { items: number; without_product: number; without_price: number }
+  url: string
+}
+
+/** mine — prowadzę; invited — zaproszono mnie; pusty — wszystkie, które mogę oglądać */
+export type TenderCalendarFilter = '' | 'mine' | 'invited'
+
+export type TenderCalendarResponse = {
+  from: string
+  to: string
+  today: string
+  events: TenderCalendarEvent[]
+}
+
+/** Zakres from–to najwyżej 62 dni (inaczej 422). */
+export function fetchTenderCalendar(
+  params: { from: string; to: string; filter?: TenderCalendarFilter },
+  signal?: AbortSignal,
+): Promise<TenderCalendarResponse> {
+  const q = new URLSearchParams({ from: params.from, to: params.to })
+  if (params.filter) q.set('filter', params.filter)
+  return api<TenderCalendarResponse>(`/tenders/calendar?${q.toString()}`, { signal })
+}
+
+/** Osobisty adres kalendarza (ICS). url tylko w odpowiedzi na wygenerowanie — potem już nie do odczytania. */
+export type CalendarFeed = {
+  active: boolean
+  scope: 'mine' | 'all' | null
+  created_at: string | null
+  used_at: string | null
+  url?: string
+}
+
+export function fetchCalendarFeed(): Promise<CalendarFeed> {
+  return api<CalendarFeed>('/me/calendar-feed')
+}
+
+/** Nowy adres (stary przestaje działać). scope „all” tylko z tenders.view_all. */
+export function createCalendarFeed(scope: 'mine' | 'all'): Promise<CalendarFeed> {
+  return api<CalendarFeed>('/me/calendar-feed', { method: 'POST', body: JSON.stringify({ scope }) })
+}
+
+export function deleteCalendarFeed(): Promise<{ ok: true }> {
+  return api<{ ok: true }>('/me/calendar-feed', { method: 'DELETE' })
+}
+
+export type GlobalSearchGroupKey = 'products' | 'tenders' | 'inquiries' | 'clients'
+
+export type GlobalSearchHit = {
+  id: number
+  title: string
+  subtitle: string | null
+  detail: string | null
+  badge: string | null
+  url: string
+  /** stan z ERP XL — tylko z inventory.view (produkty) */
+  stock?: { quantity: string; unit: string | null } | null
+}
+
+export type GlobalSearchResponse = {
+  query: string
+  groups: {
+    key: GlobalSearchGroupKey
+    label: string
+    items: GlobalSearchHit[]
+    has_more: boolean
+    /** „Pokaż wszystkie” — tylko produkty (/products?q=) i zapytania (/inquiries?q=) */
+    more_url: string | null
+  }[]
+}
+
+/** q: 2–100 znaków. */
+export function globalSearch(q: string, signal?: AbortSignal): Promise<GlobalSearchResponse> {
+  return api<GlobalSearchResponse>(`/search?q=${encodeURIComponent(q)}`, { signal })
+}
+
+/** Osoba kontaktowa z ERP XL (clients.contacts). */
+export type ClientContact = { name?: string; position?: string; email?: string; phone?: string; mobile?: string }
+
+/** Klient z zakładki Klienci (GET /clients?details=1 — pełne dane; ręczny albo z ERP XL). */
+export type ClientRecord = {
+  id: number
+  name: string
+  acronym: string | null
+  nip: string | null
+  nip_prefix: string | null
+  regon: string | null
+  street: string | null
+  address_line2: string | null
+  postal_code: string | null
+  city: string | null
+  county: string | null
+  commune: string | null
+  voivodeship: string | null
+  country: string | null
+  phone: string | null
+  phone2: string | null
+  fax: string | null
+  emails: string[] | null
+  website: string | null
+  contacts: ClientContact[] | null
+  account_manager: string | null
+  account_manager_email: string | null
+  owner_id: number | null
+  source: 'manual' | 'erp_xl'
+  xl_gid: number | null
+  xl_archived: boolean
+  sales_year: number | null
+  sales_net: string | null
+  sale_documents: number | null
+  last_sale_at: string | null
+  xl_synced_at: string | null
+}
+
+export type InquiryOutcome = 'ordered' | 'partial' | 'not_ordered' | 'unknown'
+
+/** Powód (tylko przy partial i not_ordered): cena, termin dostawy, kupił gdzie indziej, klient nie odpowiedział. */
+export type InquiryOutcomeReason = 'price' | 'lead_time' | 'bought_elsewhere' | 'no_response'
+
+/** Źródło powiązania zapytania z klientem: manual — wybrał handlowiec, email — ten sam adres co w ERP XL, nip — NIP z maila. */
+export type InquiryClientLinkSource = 'manual' | 'email' | 'nip'
+
+export type ClientCard = {
+  client: ClientRecord & { owner: { id: number; name: string } | null; xl_manager_gid: number | null }
+  /** opiekun z karty w ERP XL; user — konto przypisane temu pracownikowi XL */
+  xl_manager: { name: string | null; email: string | null; user: { id: number; name: string } | null } | null
+  /** opiekun w aplikacji (clients.owner_id) */
+  app_owner: { id: number; name: string } | null
+  /** do kogo klient się liczy (cele): pracownik XL zmapowany na konto, potem opiekun w aplikacji */
+  assignment: { user: { id: number; name: string } | null; source: 'xl' | 'app' | null }
+  tiles: {
+    sales_year: { year: number; net: string; documents: number } | null
+    last_sale: { date: string; document_number: string | null } | null
+    /** null — brak uprawnienia do danych tej liczby */
+    last_12m: { invoices: number; inquiries: number | null; tenders: number | null; ordered_inquiries: number | null }
+  }
+  /** najczęściej kupowane (24 miesiące), do 10 */
+  top_items: {
+    erp_item_id: number
+    code: string
+    name: string
+    unit: string | null
+    quantity: string
+    documents: number
+    last_sale_at: string | null
+    product: { id: number; name: string } | null
+  }[]
+  sections: { inquiries: boolean; tenders: boolean; campaigns: boolean }
+  can_manage: boolean
+  documents_synced_at: string | null
+}
+
+export type ClientTimelineType = 'all' | 'invoices' | 'inquiries' | 'tenders' | 'campaigns' | 'notes'
+
+export type TimelineEvent =
+  | {
+      type: 'invoice'
+      id: number
+      date: string
+      document_number: string
+      kind: string
+      net_value: string
+      confirmed_inquiry: { id: number; date: string } | null
+    }
+  | {
+      type: 'inquiry'
+      id: number
+      date: string
+      subject: string | null
+      items_count: number
+      replied_at: string | null
+      outcome: InquiryOutcome | null
+      user: { id: number; name: string }
+      can_open: boolean
+      link_source: InquiryClientLinkSource
+    }
+  | {
+      type: 'tender'
+      id: number
+      date: string
+      number: string
+      title: string
+      status: string
+      result_status: TenderResultStatus | null
+      url: string
+    }
+  | { type: 'campaign'; id: number; date: string; name: string; clicks: number; replied: boolean; user: { id: number; name: string } }
+  | {
+      type: 'note'
+      id: number
+      date: string
+      body: string
+      author: { id: number; name: string } | null
+      remind_on: string | null
+      can_edit: boolean
+    }
+
+export type ClientTimeline = {
+  data: TimelineEvent[]
+  /** źródło ucięte na 200 wpisach */
+  truncated: Record<string, boolean>
+}
+
+export function fetchClientCard(clientId: number, signal?: AbortSignal): Promise<ClientCard> {
+  return api<ClientCard>(`/clients/${clientId}`, { signal })
+}
+
+export function fetchClientTimeline(clientId: number, type: ClientTimelineType = 'all', signal?: AbortSignal): Promise<ClientTimeline> {
+  return api<ClientTimeline>(`/clients/${clientId}/timeline?type=${type}`, { signal })
+}
+
+/** body do 5000 znaków; remind_on „RRRR-MM-DD” (dziś albo później) albo null — bez przypomnienia. */
+export type ClientNoteInput = { body: string; remind_on: string | null }
+
+export function createClientNote(clientId: number, input: ClientNoteInput): Promise<TimelineEvent> {
+  return api<TimelineEvent>(`/clients/${clientId}/notes`, { method: 'POST', body: JSON.stringify(input) })
+}
+
+export function updateClientNote(clientId: number, noteId: number, input: Partial<ClientNoteInput>): Promise<TimelineEvent> {
+  return api<TimelineEvent>(`/clients/${clientId}/notes/${noteId}`, { method: 'PATCH', body: JSON.stringify(input) })
+}
+
+export function deleteClientNote(clientId: number, noteId: number): Promise<{ ok: true }> {
+  return api<{ ok: true }>(`/clients/${clientId}/notes/${noteId}`, { method: 'DELETE' })
+}
+
+/** Opiekun w aplikacji (clients.manage): id użytkownika albo null. */
+export function updateClientOwner(clientId: number, ownerId: number | null): Promise<ClientRecord> {
+  return api<ClientRecord>(`/clients/${clientId}`, { method: 'PATCH', body: JSON.stringify({ owner_id: ownerId }) })
+}
+
+export type InquiryOutcomeView = {
+  outcome: InquiryOutcome | null
+  reason: InquiryOutcomeReason | null
+  by: { id: number; name: string } | null
+  at: string | null
+  /** dokument z ERP XL skopiowany z podpowiedzi przy potwierdzeniu */
+  document: { number: string; date: string; net_value: string } | null
+  can_edit: boolean
+}
+
+export type InquiryClientLink = {
+  client: { id: number; name: string }
+  source: InquiryClientLinkSource
+}
+
+/** Podpowiedź „możliwe, że to zamówienie z tej oferty” — wniosek z ERP XL, nie fakt. */
+export type InquiryOrderHint = {
+  id: number
+  document_number: string
+  issued_at: string
+  document_net: string
+  matched_net: string
+  /** towary w ofercie / z nich powiązane z towarem XL / znalezione na dokumencie */
+  offered_items: number
+  linked_items: number
+  matched_items: number
+}
+
+/** no_client — brak pewnego powiązania z klientem z ERP XL; no_xl — ERP XL wyłączony; not_replied — bez odpowiedzi. */
+export type InquiryOrderHints = {
+  status: 'ok' | 'no_client' | 'no_xl' | 'not_replied'
+  /** reguła słowami (pokazywana szaro przy podpowiedzi) */
+  rule: string
+  computed_at: string | null
+  hints: InquiryOrderHint[]
+}
+
+/** Nowe pola GET /inquiries/{id} (etap 4). */
+export type InquiryOutcomeFields = {
+  outcome: InquiryOutcomeView
+  client_link: InquiryClientLink | null
+  offer_valid_until: string | null
+  validity_text: string | null
+  order_hints: InquiryOrderHints
+}
+
+/** Filtr listy zapytań: missing = wysłane bez wpisanego wyniku. */
+export type InquiryOutcomeFilter = InquiryOutcome | 'missing'
+
+/** Przed wysłaniem odpowiedzi → 422; reason tylko przy partial / not_ordered; hint_id kopiuje dokument z podpowiedzi. */
+export function saveInquiryOutcome(
+  inquiryId: number,
+  body: { outcome: InquiryOutcome | null; reason: InquiryOutcomeReason | null; hint_id?: number | null },
+): Promise<InquiryOutcomeView> {
+  return api<InquiryOutcomeView>(`/inquiries/${inquiryId}/outcome`, { method: 'PUT', body: JSON.stringify(body) })
+}
+
+/** Wybór handlowca (autor zapytania): klient albo null — świadomie bez klienta (automat już tego nie zmieni). */
+export function linkInquiryClient(inquiryId: number, clientId: number | null): Promise<{ client_link: InquiryClientLink | null }> {
+  return api<{ client_link: InquiryClientLink | null }>(`/inquiries/${inquiryId}/client`, {
+    method: 'PUT',
+    body: JSON.stringify({ client_id: clientId }),
+  })
+}
+
+/** Sprawa „Do zrobienia dziś”: oferta z zapytania kończy ważność, a wyniku nie ma (DashboardController::todo). */
+export type DashTodoOfferValidityEnding = {
+  kind: 'offer_validity_ending'
+  inquiry_id: number
+  client: string | null
+  subject: string | null
+  valid_until: string
+  has_hint: boolean
+  url: string
+}
+
+/** Własny cel na Dashboardzie (GET /me/sales-target); target null — brak celu w tym miesiącu. */
+export type MySalesTarget = {
+  month: string
+  target: string | null
+  sales: string
+  percent: number | null
+  workdays: { total: number; elapsed: number }
+  clients_bought: number
+  new_clients: number
+}
+
+export function fetchMySalesTarget(signal?: AbortSignal): Promise<MySalesTarget> {
+  return api<MySalesTarget>('/me/sales-target', { signal })
+}
+
+/** Pracownik ERP XL (opiekun klientów) do przypisania kontu w Administracji → Użytkownicy. */
+export type ErpEmployee = {
+  gid: number
+  name: string | null
+  email: string | null
+  /** liczba klientów z tym opiekunem */
+  clients: number
+  user: { id: number; name: string } | null
+  /** propozycja: konto z tym samym e-mailem — tylko podpowiedź */
+  suggested_user: { id: number; name: string } | null
+}
+
+export function fetchErpEmployees(): Promise<ErpEmployee[]> {
+  return api<{ data: ErpEmployee[] }>('/admin/erp-employees').then((r) => r.data)
 }

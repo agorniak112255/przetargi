@@ -239,7 +239,7 @@ final class FakeErpXlGateway implements ErpXlGateway
     /** @var list<string> */
     public array $contactUnavailable = [];
 
-    /** @var list<array{customer_gid: int, first_name: ?string, last_name: ?string, acronym: ?string, email: ?string}> */
+    /** @var list<array{customer_gid: int, employee_gid?: ?int, first_name: ?string, last_name: ?string, acronym: ?string, email: ?string}> */
     public array $managerRows = [];
 
     /** @var list<list<int>> listy kontrahentów, o które pytano customerCards */
@@ -274,7 +274,72 @@ final class FakeErpXlGateway implements ErpXlGateway
 
     public function customerManagers(array $gids, int $onClarionDate): array
     {
-        return array_values(array_filter($this->managerRows, static fn (array $r): bool => in_array($r['customer_gid'], $gids, true)));
+        $rows = array_values(array_filter($this->managerRows, static fn (array $r): bool => in_array($r['customer_gid'], $gids, true)));
+
+        // starsze testy podają opiekuna bez numeru pracownika — jak XL bez KtO_PrcNumer
+        return array_map(static fn (array $r): array => ['employee_gid' => null, ...$r], $rows);
+    }
+
+    /** @var list<array{document_type: int, document_id: int, document_number: string, date: int, customer_gid: int, net_value: float}> */
+    public array $documentRows = [];
+
+    /** @var list<array{document_type: int, document_id: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float}> */
+    public array $documentLineRows = [];
+
+    /** @var list<array{gids: list<int>, from: int}> wywołania customerDocuments */
+    public array $documentCalls = [];
+
+    /** @var list<array{gids: list<int>, from: int}> wywołania customerDocumentLines */
+    public array $documentLineCalls = [];
+
+    public function customerDocuments(array $gids, int $fromClarionDate): iterable
+    {
+        $this->documentCalls[] = ['gids' => array_values($gids), 'from' => $fromClarionDate];
+        foreach ($this->documentRows as $row) {
+            if ($row['date'] >= $fromClarionDate && in_array($row['customer_gid'], $gids, true)) {
+                yield $row;
+            }
+        }
+    }
+
+    public function customerDocumentLines(array $gids, int $fromClarionDate): iterable
+    {
+        $this->documentLineCalls[] = ['gids' => array_values($gids), 'from' => $fromClarionDate];
+        foreach ($this->documentLineRows as $row) {
+            if ($row['date'] >= $fromClarionDate && in_array($row['customer_gid'], $gids, true)) {
+                yield $row;
+            }
+        }
+    }
+
+    /**
+     * Nagłówek dokumentu sprzedaży jak z customerDocuments (2033 FS, 2034 PA, 2037 FSE, 2041/2042 korekty).
+     *
+     * @return array{document_type: int, document_id: int, document_number: string, date: int, customer_gid: int, net_value: float}
+     */
+    public static function saleDocument(int $documentId, int $date, int $customerGid, float $netValue, int $type = 2033): array
+    {
+        $prefix = [2033 => 'FS', 2034 => 'PA', 2037 => 'FSE', 2041 => 'FSK', 2042 => 'PAK'][$type] ?? 'dok. '.$type;
+
+        return [
+            'document_type' => $type, 'document_id' => $documentId, 'document_number' => $prefix.'-01H/'.$documentId.'/26/09',
+            'date' => $date, 'customer_gid' => $customerGid, 'net_value' => $netValue,
+        ];
+    }
+
+    /**
+     * Pozycja dokumentu sprzedaży jak z customerDocumentLines.
+     *
+     * @return array{document_type: int, document_id: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float}
+     */
+    public static function documentLine(int $documentId, int $date, int $customerGid, int $itemGid, float $quantity, float $netValue, int $type = 2033): array
+    {
+        $prefix = [2033 => 'FS', 2034 => 'PA', 2037 => 'FSE'][$type] ?? 'dok. '.$type;
+
+        return [
+            'document_type' => $type, 'document_id' => $documentId, 'document_number' => $prefix.'-01H/'.$documentId.'/26/09',
+            'date' => $date, 'customer_gid' => $customerGid, 'item_gid' => $itemGid, 'quantity' => $quantity, 'net_value' => $netValue,
+        ];
     }
 
     /** @return array<string, mixed> karta kontrahenta z customerCards, nadpisania w $overrides */

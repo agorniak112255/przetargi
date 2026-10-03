@@ -40,6 +40,8 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        // skrót tajnego klucza adresu kalendarza (ICS) — nigdy w odpowiedzi API
+        'calendar_token_hash',
     ];
 
     protected function casts(): array
@@ -53,6 +55,10 @@ class User extends Authenticatable
             'thunderbird_offers_seen_at' => 'datetime',
             // tylko nadpisania wartości domyślnych z config/notifications.php (NotificationPreferences)
             'notification_preferences' => 'array',
+            // pracownik ERP XL (PrcKarty) przypisany w Administracji — opiekun klientów w XL
+            'erp_employee_gid' => 'integer',
+            'calendar_created_at' => 'datetime',
+            'calendar_used_at' => 'datetime',
         ];
     }
 

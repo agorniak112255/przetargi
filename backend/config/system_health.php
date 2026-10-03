@@ -32,11 +32,15 @@ return [
         'system:prune' => ['label' => 'Czyszczenie starych przebiegów i powiadomień', 'schedule' => 'codziennie rano', 'nightly' => true, 'only_failures' => false],
         'products:match-candidates' => ['label' => 'Propozycje łączenia kart', 'schedule' => 'codziennie rano', 'nightly' => true, 'only_failures' => false],
         'bzp:fetch' => ['label' => 'Ogłoszenia i wyniki przetargów z Biuletynu', 'schedule' => 'codziennie rano', 'nightly' => true, 'only_failures' => false],
+        'erp:client-documents' => ['label' => 'Faktury i paragony klientów z ERP XL', 'schedule' => 'codziennie rano', 'nightly' => true, 'only_failures' => false],
+        'inquiries:order-hints' => ['label' => 'Powiązania zapytań z klientami i podpowiedzi zamówień', 'schedule' => 'codziennie rano', 'nightly' => true, 'only_failures' => false],
         'storage:prune' => ['label' => 'Czyszczenie plików tymczasowych', 'schedule' => 'co godzinę', 'nightly' => false, 'only_failures' => false],
         'jina-usage-snapshot' => ['label' => 'Saldo usługi wyszukiwania stron', 'schedule' => 'co godzinę', 'nightly' => false, 'only_failures' => false],
         'products:retry-images' => ['label' => 'Ponowne pobieranie zablokowanych zdjęć', 'schedule' => 'co 3 godziny', 'nightly' => false, 'only_failures' => false],
         // raz dziennie (po 7:00) wysyła najwięcej e-maili — stały błąd poczty u jednego odbiorcy psuje przebieg co dzień
         'tenders:remind' => ['label' => 'Przypomnienia o terminach i wynikach przetargów', 'schedule' => 'co 15 minut', 'nightly' => false, 'only_failures' => true, 'reopen_within_minutes' => 1560],
+        // jak tenders:remind — najwięcej e-maili raz dziennie po 7:00
+        'crm:remind' => ['label' => 'Przypomnienia z notatek o klientach i o ważności ofert', 'schedule' => 'co 15 minut', 'nightly' => false, 'only_failures' => true, 'reopen_within_minutes' => 1560],
         'campaigns:replies' => ['label' => 'Odpowiedzi klientów na kampanie', 'schedule' => 'co 10 minut', 'nightly' => false, 'only_failures' => true],
         'system:check' => ['label' => 'Sprawdzanie stanu systemu', 'schedule' => 'co 10 minut', 'nightly' => false, 'only_failures' => true],
         'b2b:sync-due' => ['label' => 'Uruchamianie pobierania z kont dostawców', 'schedule' => 'co minutę', 'nightly' => false, 'only_failures' => true],

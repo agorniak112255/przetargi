@@ -176,10 +176,31 @@ interface ErpXlGateway
     public function customerContacts(array $gids): array;
 
     /**
-     * Opiekunowie z karty kontrahenta (KntOpiekun → PrcKarty) przypisani w dniu `$onClarionDate` (DataOd ≤ dzień ≤ DataDo).
+     * Opiekunowie z karty kontrahenta (KntOpiekun → PrcKarty) przypisani w dniu `$onClarionDate` (DataOd ≤ dzień ≤ DataDo),
+     * główny pierwszy. employee_gid = numer pracownika XL (KtO_PrcNumer; null, gdy XL go nie podał).
      *
      * @param  list<int>  $gids
-     * @return list<array{customer_gid: int, first_name: ?string, last_name: ?string, acronym: ?string, email: ?string}>
+     * @return list<array{customer_gid: int, employee_gid: ?int, first_name: ?string, last_name: ?string, acronym: ?string, email: ?string}>
      */
     public function customerManagers(array $gids, int $onClarionDate): array;
+
+    /**
+     * Nagłówki dokumentów sprzedaży kontrahentów z listy od daty (Clarion, TrN_Data2): FS, PA, FSE i korekty FS/PA —
+     * zatwierdzone (TrN_Stan 3–5), jak customerSalesTotals. net_value = suma TrE_KsiegowaNetto pozycji dokumentu (netto
+     * PLN; korekty ze znakiem). Kontrahenci paczkami po 500, strumień (kursor).
+     *
+     * @param  list<int>  $gids
+     * @return iterable<array{document_type: int, document_id: int, document_number: string, date: int, customer_gid: int, net_value: float}>
+     */
+    public function customerDocuments(array $gids, int $fromClarionDate): iterable;
+
+    /**
+     * Pozycje FS, PA i FSE (zatwierdzone, TrE_Ilosc > 0) kontrahentów z listy od daty — do podpowiedzi „możliwe
+     * zamówienie z oferty”. Wiersz = pozycja dokumentu (ten sam towar może wystąpić kilka razy). net_value =
+     * TrE_KsiegowaNetto. Kontrahenci paczkami po 500, strumień.
+     *
+     * @param  list<int>  $gids
+     * @return iterable<array{document_type: int, document_id: int, document_number: string, date: int, customer_gid: int, item_gid: int, quantity: float, net_value: float}>
+     */
+    public function customerDocumentLines(array $gids, int $fromClarionDate): iterable;
 }

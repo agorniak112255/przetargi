@@ -66,6 +66,32 @@ final class PolishTime
     }
 
     /**
+     * Dni robocze w miesiącu — od poniedziałku do piątku (święta nie są liczone, jak lastBusinessDayBefore).
+     */
+    public static function businessDaysInMonth(int $year, int $month): int
+    {
+        $first = CarbonImmutable::create($year, $month, 1, 0, 0, 0, self::TIMEZONE);
+
+        return self::businessDaysBetween($first, $first->endOfMonth()->startOfDay());
+    }
+
+    /**
+     * Dni robocze miesiąca, które już się zaczęły: od 1. dnia miesiąca do $today włącznie (dziś liczy się jako dzień
+     * w toku). Miesiąc przyszły — 0, miesiąc miniony — wszystkie (businessDaysInMonth).
+     */
+    public static function businessDaysElapsed(int $year, int $month, DateTimeInterface|string $today): int
+    {
+        $first = CarbonImmutable::create($year, $month, 1, 0, 0, 0, self::TIMEZONE);
+        $last = $first->endOfMonth()->startOfDay();
+        $day = self::day($today);
+        if ($day->lessThan($first)) {
+            return 0;
+        }
+
+        return self::businessDaysBetween($first, $day->greaterThan($last) ? $last : $day);
+    }
+
+    /**
      * Data i godzina dla ludzi w czasie polskim: „5.10.2026, 10:00”; bez godziny „5.10.2026”.
      */
     public static function format(?DateTimeInterface $moment, bool $withTime = true): string
@@ -104,6 +130,19 @@ final class PolishTime
         $string = self::dateString($date) ?? (string) $date;
 
         return CarbonImmutable::parse(substr($string, 0, 10), self::TIMEZONE)->startOfDay();
+    }
+
+    /** Dni od poniedziałku do piątku w przedziale [$from, $to] (oba dni włącznie, 00:00 czasu polskiego). */
+    private static function businessDaysBetween(CarbonImmutable $from, CarbonImmutable $to): int
+    {
+        $count = 0;
+        for ($day = $from; $day->lessThanOrEqualTo($to); $day = $day->addDay()) {
+            if (! $day->isWeekend()) {
+                $count++;
+            }
+        }
+
+        return $count;
     }
 
     private static function dateString(mixed $date): ?string

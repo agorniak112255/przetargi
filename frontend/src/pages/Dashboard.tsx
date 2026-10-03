@@ -4,6 +4,7 @@ import { useAuth } from '../auth'
 import { api, can, canAny } from '../lib/api'
 import { TENDER_STATUS_FLOW, tenderStatusLabel } from '../lib/tenderStatus'
 import { NavIcon, type NavIconName } from '../components/NavIcon'
+import { MyTargetCard } from '../components/dashboard/MyTargetCard'
 
 /** Jedna sprawa na liście „Do zrobienia dziś” (DashboardController::todo). Daty terminu to dzień „na zegarze” w Polsce. */
 export type DashTodo =
@@ -164,6 +165,7 @@ export function Dashboard() {
         tenders: canAny(user, ['tenders.view_own', 'tenders.view_all']),
         inquiries: can(user, 'inquiries.use'),
       }}
+      targetCard={<MyTargetCard />}
     />
   )
 }
@@ -176,10 +178,13 @@ export function DashboardView({
   data,
   stockLink,
   todoAccess = { tenders: true, inquiries: true },
+  targetCard,
 }: {
   data: Dash
   stockLink: string
   todoAccess?: TodoAccess
+  /** kafelek „Mój cel” (sam pobiera dane i znika bez celu) — Pomoc z przykładowymi danymi go nie pokazuje */
+  targetCard?: ReactNode
 }) {
   const today = new Date().toLocaleDateString('pl-PL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
   const pricesLink = data.prices?.accounts ? '/price-lists/b2b' : '/price-lists'
@@ -199,6 +204,7 @@ export function DashboardView({
       {empty && !data.todo && <p className="text-sm text-slate-500">Nie masz dostępu do żadnego modułu pokazywanego na dashboardzie.</p>}
       <div className="grid grid-cols-1 gap-3.5 @5xl:grid-cols-12">
         {data.todo && <TodoCard items={data.todo.items} access={todoAccess} />}
+        {targetCard}
         {data.tenders && <TendersCard t={data.tenders} span={tendersSpan} won={data.todo?.won_90d ?? null} />}
         {data.products && <ProductsCard p={data.products} span={productsSpan} />}
         {data.stock && <StockCard s={data.stock} span={stockSpan} to={stockLink} />}

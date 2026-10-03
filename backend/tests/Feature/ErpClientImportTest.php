@@ -64,9 +64,10 @@ final class ErpClientImportTest extends TestCase
             ['customer_gid' => 20, 'name' => 'Spoza progu', 'position' => null, 'email' => null, 'phone' => null, 'mobile' => null],
         ];
         $this->xl->managerRows = [
-            ['customer_gid' => 10, 'first_name' => 'Anna', 'last_name' => 'Nowak', 'acronym' => 'NOAN', 'email' => 'anna@supon.pl'],
-            ['customer_gid' => 10, 'first_name' => 'Drugi', 'last_name' => 'Opiekun', 'acronym' => 'DROP', 'email' => null],
-            ['customer_gid' => 30, 'first_name' => null, 'last_name' => null, 'acronym' => 'CHLU', 'email' => null],
+            ['customer_gid' => 10, 'employee_gid' => 501, 'first_name' => 'Anna', 'last_name' => 'Nowak', 'acronym' => 'NOAN', 'email' => 'anna@supon.pl'],
+            ['customer_gid' => 10, 'employee_gid' => 502, 'first_name' => 'Drugi', 'last_name' => 'Opiekun', 'acronym' => 'DROP', 'email' => null],
+            // XL bez numeru pracownika — opiekun tylko z nazwy
+            ['customer_gid' => 30, 'employee_gid' => null, 'first_name' => null, 'last_name' => null, 'acronym' => 'CHLU', 'email' => null],
         ];
 
         $stats = app(ErpClientImport::class)->run(2026, 3000.0);
@@ -85,7 +86,7 @@ final class ErpClientImportTest extends TestCase
         $this->assertSame(['biuro@acme.pl', 'handel@acme.pl', 'magazyn@acme.pl'], $acme->emails);
         $this->assertSame([['name' => 'Jan Kowalski', 'position' => 'Zaopatrzenie', 'email' => 'jan@acme.pl', 'mobile' => '601 000 000']], $acme->contacts);
         // pierwszy opiekun z XL (kolejność: główny pierwszy)
-        $this->assertSame(['Anna Nowak', 'anna@supon.pl'], [$acme->account_manager, $acme->account_manager_email]);
+        $this->assertSame(['Anna Nowak', 'anna@supon.pl', 501], [$acme->account_manager, $acme->account_manager_email, $acme->xl_manager_gid]);
         $this->assertSame(['3000.00', 4, '2026-09-15', 2026], [$acme->sales_net, $acme->sale_documents, $acme->last_sale_at->toDateString(), $acme->sales_year]);
         $this->assertNull($acme->owner_id);
         $this->assertFalse($acme->xl_archived);
@@ -96,6 +97,7 @@ final class ErpClientImportTest extends TestCase
         $this->assertNull($mittal->contacts);
         // opiekun bez imienia i nazwiska — akronim pracownika
         $this->assertSame('CHLU', $mittal->account_manager);
+        $this->assertNull($mittal->xl_manager_gid);
         $this->assertSame('125000.50', $mittal->sales_net);
     }
 
@@ -106,7 +108,10 @@ final class ErpClientImportTest extends TestCase
         app(ErpClientImport::class)->run(2026, 3000.0);
         $manual = Client::query()->create(['name' => 'Ręczny bez NIP', 'city' => 'Krosno']);
 
-        // nowy rok: klient bez zakupów (zostaje, zakupy 0), zmieniony telefon w XL
+        $this->assertNull(Client::query()->where('xl_gid', 10)->value('xl_manager_gid'));
+
+        // nowy rok: klient bez zakupów (zostaje, zakupy 0), zmieniony telefon w XL, nowy opiekun w XL
+        $this->xl->managerRows = [['customer_gid' => 10, 'employee_gid' => 777, 'first_name' => 'Ewa', 'last_name' => 'Lis', 'acronym' => 'LIEW', 'email' => null]];
         $this->xl->salesTotalRows = [];
         $this->xl->cardRows = [FakeErpXlGateway::card(10, 'ACME', ['phone' => '17 222 22 22'])];
         $stats = app(ErpClientImport::class)->run(2027, 3000.0);
@@ -114,6 +119,7 @@ final class ErpClientImportTest extends TestCase
         $this->assertSame(['qualifying' => 0, 'created' => 0, 'updated' => 1, 'linked_by_nip' => 0, 'without_card' => 0, 'unavailable' => []], $stats);
         $acme = Client::query()->where('xl_gid', 10)->sole();
         $this->assertSame(['17 222 22 22', 2027, '0.00', 0, null], [$acme->phone, $acme->sales_year, $acme->sales_net, $acme->sale_documents, $acme->last_sale_at]);
+        $this->assertSame(['Ewa Lis', 777], [$acme->account_manager, $acme->xl_manager_gid]);
         $this->assertSame(2, Client::query()->count());
         $this->assertSame(['Ręczny bez NIP', 'Krosno', 'manual', null], [$manual->fresh()->name, $manual->fresh()->city, $manual->fresh()->source, $manual->fresh()->xl_gid]);
 
@@ -138,12 +144,14 @@ final class ErpClientImportTest extends TestCase
             FakeErpXlGateway::card(30, 'HUTA', ['name' => 'Huta S.A.', 'nip' => '6340000000', 'city' => 'Stalowa Wola', 'email' => 'huta@huta.pl']),
             FakeErpXlGateway::card(40, 'DUBEL', ['nip' => '5170000000']),
         ];
-        $this->xl->managerRows = [['customer_gid' => 30, 'first_name' => 'Anna', 'last_name' => 'Nowak', 'acronym' => 'NOAN', 'email' => null]];
+        $this->xl->managerRows = [['customer_gid' => 30, 'employee_gid' => 501, 'first_name' => 'Anna', 'last_name' => 'Nowak', 'acronym' => 'NOAN', 'email' => null]];
 
         $stats = app(ErpClientImport::class)->run(2026, 3000.0);
 
         $this->assertSame([1, 1], [$stats['linked_by_nip'], $stats['created']]);
         $manual->refresh();
+        // opiekun w XL (numer pracownika) obok opiekuna w aplikacji — oba zostają
+        $this->assertSame([501, $owner->id], [$manual->xl_manager_gid, $manual->owner_id]);
         $this->assertSame(
             [30, 'manual', 'Huta (wpisana ręcznie)', 'PL 634 000 00 00', 'Stalowa Wola', ['huta@huta.pl'], 'Anna Nowak', '9000.00', $owner->id],
             [$manual->xl_gid, $manual->source, $manual->name, $manual->nip, $manual->city, $manual->emails, $manual->account_manager, $manual->sales_net, $manual->owner_id],

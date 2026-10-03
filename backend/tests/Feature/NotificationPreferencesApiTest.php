@@ -30,7 +30,10 @@ final class NotificationPreferencesApiTest extends TestCase
 
         $events = collect($res->json('events'))->keyBy('key');
         $this->assertSame(
-            ['tender_deadline', 'tender_result_needed', 'tender_mention', 'tender_invitation', 'inquiry_analysis_ready', 'campaign_reply'],
+            [
+                'tender_deadline', 'tender_result_needed', 'tender_mention', 'tender_invitation', 'inquiry_analysis_ready', 'campaign_reply',
+                'client_note_reminder', 'offer_validity_ending',
+            ],
             $events->keys()->all(),
         );
         $this->assertTrue($events['tender_deadline']['bell']);

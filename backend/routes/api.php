@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\Admin\BrandDictionaryController as AdminBrandDictio
 use App\Http\Controllers\Api\Admin\CatalogSearchSiteController as AdminCatalogSearchSiteController;
 use App\Http\Controllers\Api\Admin\CatalogSlangController as AdminCatalogSlangController;
 use App\Http\Controllers\Api\Admin\EnrichmentDescriptionTemplateController as AdminEnrichmentDescriptionTemplateController;
+use App\Http\Controllers\Api\Admin\ErpEmployeeController;
 use App\Http\Controllers\Api\Admin\ErpItemController;
 use App\Http\Controllers\Api\Admin\ErpOperatorController;
 use App\Http\Controllers\Api\Admin\MailSettingsController as AdminMailSettingsController;
@@ -23,6 +24,8 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\B2bAccountController;
 use App\Http\Controllers\Api\B2bDiscountRuleController;
 use App\Http\Controllers\Api\B2bManufacturerRuleController;
+use App\Http\Controllers\Api\CalendarFeedController;
+use App\Http\Controllers\Api\CalendarIcsController;
 use App\Http\Controllers\Api\CampaignAssetController;
 use App\Http\Controllers\Api\CampaignClickController;
 use App\Http\Controllers\Api\CampaignController;
@@ -34,13 +37,17 @@ use App\Http\Controllers\Api\Chat\ChatMessageController;
 use App\Http\Controllers\Api\Chat\ChatUserController;
 use App\Http\Controllers\Api\Chat\LiveKitWebhookController;
 use App\Http\Controllers\Api\Chat\RealtimeController;
+use App\Http\Controllers\Api\ClientCardController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
+use App\Http\Controllers\Api\ClientNoteController;
 use App\Http\Controllers\Api\CompetitorController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\EmailSuppressionController;
 use App\Http\Controllers\Api\ExchangeRateController;
+use App\Http\Controllers\Api\GlobalSearchController;
 use App\Http\Controllers\Api\ImportExclusionController;
+use App\Http\Controllers\Api\InquiryOutcomeController;
 use App\Http\Controllers\Api\InventoryBoardController;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\InventoryRwPwController;
@@ -65,10 +72,12 @@ use App\Http\Controllers\Api\ProductRequirementCheckController;
 use App\Http\Controllers\Api\ProductRequirementTermsController;
 use App\Http\Controllers\Api\ProductSubstituteController;
 use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\SalesTargetController;
 use App\Http\Controllers\Api\SearchEventActionController;
 use App\Http\Controllers\Api\TenderActivityController;
 use App\Http\Controllers\Api\TenderBattlecardController;
 use App\Http\Controllers\Api\TenderBzpController;
+use App\Http\Controllers\Api\TenderCalendarController;
 use App\Http\Controllers\Api\TenderCommentController;
 use App\Http\Controllers\Api\TenderConditionController;
 use App\Http\Controllers\Api\TenderConflictsController;
@@ -153,6 +162,13 @@ Route::middleware('auth:sanctum')->group(function (): void {
 // podpis JWT sekretem API; limit żądań gubiłby zdarzenia przy wielu osobach w rozmowie.
 Route::post('/chat/livekit/webhook', LiveKitWebhookController::class);
 
+// Kalendarz terminów do subskrypcji (Outlook, Thunderbird) — publiczny adres z tajnym kluczem: bez auth:sanctum
+// i poza `log.activity` (klucz w adresie nie może trafić do dziennika). Uprawnienia właściciela adresu sprawdza
+// kontroler przy każdym pobraniu; nieznany klucz → 404.
+Route::get('/calendar/{token}.ics', [CalendarIcsController::class, 'show'])
+    ->where('token', '[A-Za-z0-9]{40}')
+    ->middleware('throttle:60,1');
+
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/me', [AuthController::class, 'me']);
     Route::patch('/me/preferences', [AuthController::class, 'updatePreferences']);
@@ -162,6 +178,14 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     // Moje konto › Powiadomienia: zdarzenia × dzwonek / e-mail i momenty przypomnień o terminie
     Route::get('/me/notification-preferences', [NotificationPreferenceController::class, 'show']);
     Route::put('/me/notification-preferences', [NotificationPreferenceController::class, 'update']);
+    // osobisty adres kalendarza terminów (ICS): stan, wygenerowanie nowego (adres widoczny raz), wyłączenie
+    Route::middleware('permission:tenders.view_own|tenders.view_all')->group(function (): void {
+        Route::get('/me/calendar-feed', [CalendarFeedController::class, 'show']);
+        Route::post('/me/calendar-feed', [CalendarFeedController::class, 'store']);
+        Route::delete('/me/calendar-feed', [CalendarFeedController::class, 'destroy']);
+    });
+    // własny cel sprzedaży na Dashboardzie — każdy widzi tylko swój
+    Route::get('/me/sales-target', [SalesTargetController::class, 'mine']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::get('/dashboard', DashboardController::class)->middleware('permission:dashboard.view');
@@ -175,6 +199,11 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     // skuteczność przetargów: poza reports.view kontroler wymaga tenders.view_own albo tenders.view_all
     Route::get('/reports/effectiveness', [ReportController::class, 'effectiveness'])->middleware('permission:reports.view');
     Route::get('/reports/effectiveness/csv', [ReportController::class, 'effectivenessCsv'])->middleware('permission:reports.view');
+    // cele handlowców: zakładka Raportów tylko z reports.view i reports.targets.manage (oba wymagane)
+    Route::middleware(['permission:reports.view', 'permission:reports.targets.manage'])->group(function (): void {
+        Route::get('/reports/targets', [SalesTargetController::class, 'index']);
+        Route::put('/reports/targets/{month}', [SalesTargetController::class, 'update'])->where('month', '\d{4}-\d{2}');
+    });
 
     Route::get('/notifications', [NotificationController::class, 'index']);
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
@@ -182,7 +211,12 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
 
     Route::get('/users/directory', UserDirectoryController::class)->middleware('permission:tenders.invite');
 
+    // jedno pole wyszukiwania (Ctrl+K) — każda grupa wyników sprawdza w kontrolerze własne uprawnienie
+    Route::get('/search', GlobalSearchController::class);
+
     Route::get('/tenders', [TenderController::class, 'index'])->middleware('permission:tenders.view_own|tenders.view_all');
+    // kalendarz terminów — przed „/tenders/{tender}”, żeby „calendar” nie został wzięty za numer przetargu
+    Route::get('/tenders/calendar', [TenderCalendarController::class, 'index'])->middleware('permission:tenders.view_own|tenders.view_all');
     Route::post('/tenders', [TenderController::class, 'store'])->middleware('permission:tenders.create');
     // firmy konkurencji — podpowiedzi w wyniku przetargu
     Route::get('/competitors', [CompetitorController::class, 'index'])->middleware('permission:tenders.view_own|tenders.view_all');
@@ -363,6 +397,16 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
     Route::get('/clients', [ClientController::class, 'index'])->middleware('permission:clients.view');
     Route::post('/clients', [ClientController::class, 'store'])->middleware('permission:clients.manage');
     Route::patch('/clients/{client}', [ClientController::class, 'update'])->middleware('permission:clients.manage');
+    // karta klienta: dane, oś czasu i notatki (edycja i usuwanie notatki — autor albo clients.manage, w kontrolerze)
+    Route::middleware('permission:clients.view')->group(function (): void {
+        Route::get('/clients/{client}', [ClientCardController::class, 'show'])->whereNumber('client');
+        Route::get('/clients/{client}/timeline', [ClientCardController::class, 'timeline'])->whereNumber('client');
+        Route::post('/clients/{client}/notes', [ClientNoteController::class, 'store'])->whereNumber('client');
+        Route::patch('/clients/{client}/notes/{note}', [ClientNoteController::class, 'update'])
+            ->whereNumber(['client', 'note'])->scopeBindings();
+        Route::delete('/clients/{client}/notes/{note}', [ClientNoteController::class, 'destroy'])
+            ->whereNumber(['client', 'note'])->scopeBindings();
+    });
 
     Route::middleware('permission:inquiries.use')->group(function (): void {
         Route::get('/inquiries', [ClientInquiryController::class, 'index']);
@@ -384,6 +428,9 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
         Route::post('/inquiries/{inquiry}/pick-product', [ClientInquiryController::class, 'pickProduct']);
         Route::post('/inquiries/{inquiry}/replied', [ClientInquiryController::class, 'replied']);
         Route::post('/inquiries/{inquiry}/queue-reply', [ClientInquiryController::class, 'queueReply']);
+        // jak się skończyło zapytanie i powiązanie z klientem — tylko autor zapytania (sprawdzenie w kontrolerze)
+        Route::put('/inquiries/{inquiry}/outcome', [InquiryOutcomeController::class, 'update']);
+        Route::put('/inquiries/{inquiry}/client', [InquiryOutcomeController::class, 'client']);
         // kasuje tylko autor zapytania — sprawdzenie w kontrolerze
         Route::delete('/inquiries/{inquiry}', [ClientInquiryController::class, 'destroy']);
 
@@ -524,6 +571,8 @@ Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {
 
     Route::middleware('permission:admin.access')->prefix('admin')->group(function (): void {
         Route::get('/erp-operators', [ErpOperatorController::class, 'index'])->middleware('permission:admin.users.manage');
+        // pracownicy ERP XL (opiekunowie klientów) do przypisania kontom — cele handlowców
+        Route::get('/erp-employees', [ErpEmployeeController::class, 'index'])->middleware('permission:admin.users.manage');
         Route::get('/users', [AdminUserController::class, 'index'])->middleware('permission:admin.users.manage');
         Route::post('/users', [AdminUserController::class, 'store'])->middleware('permission:admin.users.manage');
         Route::patch('/users/{user}', [AdminUserController::class, 'update'])->middleware('permission:admin.users.manage');

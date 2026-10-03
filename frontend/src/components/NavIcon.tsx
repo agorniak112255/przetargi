@@ -17,6 +17,7 @@ export type NavIconName =
   | 'help'
   | 'account'
   | 'notifications'
+  | 'search'
   | 'logout'
   | 'collapse'
   | 'expand'
@@ -107,6 +108,13 @@ const shapes: Record<NavIconName, ReactNode> = {
     <>
       <path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z" />
       <path d="M10 21h4" />
+    </>
+  ),
+  // Lupa — jedno pole wyszukiwania (Ctrl+K).
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="M16 16l4.5 4.5" />
     </>
   ),
   logout: (
