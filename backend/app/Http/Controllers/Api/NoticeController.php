@@ -9,6 +9,7 @@ use App\Models\Client;
 use App\Models\ProcurementNotice;
 use App\Models\ProcurementNoticeSkip;
 use App\Services\Bzp\EzamowieniaDocuments;
+use App\Services\Bzp\NoticeBhpLots;
 use App\Services\Bzp\NoticeClientAmbiguousException;
 use App\Services\Bzp\NoticeListQuery;
 use App\Services\Bzp\NoticeSections;
@@ -34,6 +35,7 @@ class NoticeController extends Controller
         private readonly TenderAccessService $access,
         private readonly NoticeSections $sections,
         private readonly EzamowieniaDocuments $documents,
+        private readonly NoticeBhpLots $bhpLots,
     ) {}
 
     /**
@@ -54,6 +56,8 @@ class NoticeController extends Controller
             if (! is_array($lot)) {
                 continue;
             }
+            // czy część ma towary BHP (wnioskowanie z kodów CPV i opisu — powód w bhp_reason)
+            $bhp = $this->bhpLots->forLot($lot);
             $lots[] = [
                 'lot_no' => (int) ($lot['lot_no'] ?? 0),
                 'name' => is_string($lot['name'] ?? null) ? $lot['name'] : null,
@@ -62,6 +66,8 @@ class NoticeController extends Controller
                 'cpv_main_name' => is_string($lot['cpv_main_name'] ?? null) ? $lot['cpv_main_name'] : null,
                 // jak total_value wiersza: „126 019,26 PLN”, bez waluty w ogłoszeniu — sama liczba
                 'estimated_value' => NoticeListQuery::formatAmount($lot['estimated_value'] ?? null),
+                'bhp' => $bhp['bhp'],
+                'bhp_reason' => $bhp['reason'],
             ];
         }
 

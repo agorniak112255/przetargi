@@ -104,6 +104,37 @@ final class EzamowieniaDocumentsTest extends TestCase
         Http::assertNotSent(fn (Request $request): bool => str_starts_with($request->url(), self::DOWNLOAD));
     }
 
+    public function test_only_documents_of_bhp_lots_are_suggested(): void
+    {
+        // jak 2026/BZP 00454080/01 (pogotowie): 4 pakiety sprzętu medycznego, rękawice tylko w pakiecie 3
+        $notice = $this->notice();
+        $parsed = $notice->parsed;
+        $parsed['lots'] = [
+            ['lot_no' => 1, 'name' => 'Pakiet nr 1 – strzykawki, igły, venflony.', 'cpv_main' => '33140000-3', 'cpv_additional' => ['33141320-9']],
+            ['lot_no' => 2, 'name' => 'Pakiet nr 2 – cewniki, rurki intubacyjne', 'cpv_main' => '33140000-3', 'cpv_additional' => ['33141200-2']],
+            ['lot_no' => 3, 'name' => 'Pakiet nr 3 – papiery do EKG oraz rękawice nitrylowe', 'cpv_main' => '33140000-3', 'cpv_additional' => ['33124130-5', '18424300-0']],
+            ['lot_no' => 4, 'name' => 'Pakiet nr 4 – opatrunki, maski krtaniowe, tlenowe', 'cpv_main' => '33140000-3', 'cpv_additional' => ['33157110-9']],
+        ];
+        $notice->update(['parsed' => $parsed]);
+        $document = fn (int $n, string $name, string $file): array => ['objectId' => self::SAMPLE_OCDS.'_'.$n, 'name' => $name, 'fileName' => $file, 'tenderDocumentState' => 'Published', 'publishedDate' => '2026-09-24T10:33:00Z', 'deleteDate' => null];
+        Http::fake(['ezamowienia.gov.pl/mp-readmodels/api/Search/GetTenderDocuments*' => Http::response([
+            $document(1, 'SWZ', 'SWZ.pdf'),
+            $document(6, 'Załącznik nr 2 do SWZ - Pakiet nr 1 - Formularz cenowy', 'Załącznik nr 2 do SWZ - Pakiet nr 1 - Formularz cenowy.xlsx'),
+            $document(8, 'Załącznik nr 2 do SWZ - Pakiet nr 3 - Formularz cenowy', 'Załącznik nr 2 do SWZ - Pakiet nr 3 - Formularz cenowy.xlsx'),
+            $document(9, 'Załącznik nr 2 do SWZ - Pakiet nr 4 - Formularz cenowy', 'Załącznik nr 2 do SWZ - Pakiet nr 4 - Formularz cenowy.xlsx'),
+            $document(4, 'Załącznik nr 1 do SWZ - Pakiet nr 3- Formularz ofertowy', 'Załącznik nr 1 do SWZ - Pakiet nr 3- Formularz ofertowy.docx'),
+        ])]);
+
+        $documents = app(EzamowieniaDocuments::class)->forNotice($notice);
+        $items = collect($documents['items']);
+
+        $this->assertSame([null, 1, 3, 4, 3], $items->pluck('lot_no')->values()->all());
+        $this->assertSame([null, false, true, false, true], $items->pluck('lot_bhp')->values()->all());
+        // formularze pakietu 3 zaznaczone, pakietów 1 i 4 — nie; SWZ jak dotąd (nie formularz)
+        $this->assertSame([false, false, true, false, true], $items->pluck('suggested')->values()->all());
+        $this->assertStringContainsString('Zaznaczone są tylko dokumenty pakietu 3 — z towarami BHP; dokumentów pozostałych pakietów (2) nie zaznaczono', $documents['note']);
+    }
+
     public function test_http_error_and_other_platform(): void
     {
         $notice = $this->notice();

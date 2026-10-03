@@ -46,6 +46,28 @@ export function documentReadOrder(fileName: string): number {
   return 3
 }
 
+/**
+ * Numer pakietu/części z nazwy pliku — ta sama reguła co NoticeBhpLots::lotNumberOf: „Pakiet nr 3”, „Część II”,
+ * „cz. 4”, „Zadanie nr 5”; sam „Załącznik nr 2” to nie numer części.
+ */
+export function lotNumberOf(fileName: string): number | null {
+  const text = fileName
+    .split(/(\s+)/)
+    .map((w) => (/^[IVX]{1,5}[.,:;)]*$/.test(w) ? w : w.toLowerCase()))
+    .join('')
+  const m = /(?<!\p{L})(?:pakiet\p{L}*|częś[ćc]\p{L}*|czesc\p{L}*|cz\.|zadani\p{L}*)[\s_]*(?:nr\.?|numer)?[\s_]*(\d{1,3}|[IVX]{1,5})(?![\p{L}\d])/u.exec(text)
+  if (!m) return null
+  if (/^\d+$/.test(m[1])) return Number(m[1])
+  const values: Record<string, number> = { I: 1, V: 5, X: 10 }
+  let total = 0
+  for (let i = 0; i < m[1].length; i++) {
+    const v = values[m[1][i]] ?? 0
+    const next = values[m[1][i + 1]] ?? 0
+    total += v < next ? -v : v
+  }
+  return total
+}
+
 export function sortDocumentsForReading(files: File[]): File[] {
   return files
     .map((f, i) => ({ f, i, order: documentReadOrder(f.name) }))

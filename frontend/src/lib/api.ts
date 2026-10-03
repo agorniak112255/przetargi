@@ -2628,8 +2628,12 @@ export type NoticeDocument = {
   kind: NoticeDocumentKind
   /** plik w formacie, który odczyta import dokumentów przetargu (PDF, Word, Excel, CSV) */
   importable?: boolean
-  /** podpowiedź zaznaczenia: opis przedmiotu zamówienia albo formularz cenowy/ofertowy, w formacie do odczytu */
+  /** podpowiedź zaznaczenia: opis przedmiotu zamówienia albo formularz cenowy/ofertowy, w formacie do odczytu, z pakietu z towarami BHP */
   suggested?: boolean
+  /** numer pakietu/części z nazwy dokumentu („Pakiet nr 3”) — tylko gdy ogłoszenie ma taką część */
+  lot_no?: number | null
+  /** czy ten pakiet ma towary BHP (ocena aplikacji z kodów CPV i opisu części) */
+  lot_bhp?: boolean | null
 }
 
 /** Sekcja ogłoszenia z Biuletynu — tekst słowo w słowo z ogłoszenia (bez znaczników HTML, z akapitami). */
@@ -2644,6 +2648,9 @@ export type NoticeLot = {
   cpv_main_name: string | null
   /** tekst wartości z ogłoszenia, bez przeliczania; null — nie podano */
   estimated_value: string | null
+  /** czy część ma towary BHP — ocena aplikacji (kody CPV z listy BHP albo środki ochrony w opisie), powód w bhp_reason */
+  bhp?: boolean
+  bhp_reason?: string | null
 }
 
 /** GET /notices/{id} — te same uprawnienia co lista. */

@@ -13,6 +13,7 @@ import {
   DOCUMENT_ACCEPT,
   expandDocumentFiles,
   isReadableDocument,
+  lotNumberOf,
   sortDocumentsForReading,
   type SkippedDocument,
 } from '../../lib/zipDocuments'
@@ -90,6 +91,8 @@ export function NoticeDetailsPanel({
   const [reloadKey, setReloadKey] = useState(0)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [files, setFiles] = useState<File[]>([])
+  /** pliki z pakietów bez towarów BHP — na start nie do odczytu (człowiek może je zaznaczyć) */
+  const [excludedFiles, setExcludedFiles] = useState<Set<File>>(() => new Set())
   const [rejected, setRejected] = useState<SkippedDocument[]>([])
   const [unpacking, setUnpacking] = useState(false)
   const [dragOver, setDragOver] = useState(false)
@@ -162,6 +165,18 @@ export function NoticeDetailsPanel({
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [dirty])
 
+  /**
+   * Pakiet pliku z numeru w nazwie („Pakiet nr 3”): false — pakiet bez towarów BHP (ocena serwera w details.lots);
+   * null — bez numeru, nieznany pakiet albo postępowanie bez części BHP do zawężenia.
+   */
+  function fileLotBhp(f: File): boolean | null {
+    const lots = details?.lots ?? []
+    if (lots.length < 2 || !lots.some((l) => l.bhp === true)) return null
+    const no = lotNumberOf(f.name)
+    const lot = no == null ? undefined : lots.find((l) => l.lot_no === no)
+    return lot?.bhp ?? null
+  }
+
   /** Pliki i paczki ZIP („Pobierz wszystkie załączniki” na platformie) — paczka rozpakowana w przeglądarce. */
   async function addFiles(list: FileList | null) {
     if (!list || list.length === 0) return
@@ -170,6 +185,8 @@ export function NoticeDetailsPanel({
     try {
       const { files: ok, skipped } = await expandDocumentFiles(picked)
       setRejected(skipped)
+      const nonBhp = ok.filter((f) => fileLotBhp(f) === false)
+      if (nonBhp.length > 0) setExcludedFiles((prev) => new Set([...prev, ...nonBhp]))
       setFiles((prev) =>
         sortDocumentsForReading([...prev, ...ok.filter((f) => !prev.some((p) => p.name === f.name && p.size === f.size))]),
       )
@@ -185,7 +202,7 @@ export function NoticeDetailsPanel({
   const mayCreate = canCreate && !row.tender && !row.skipped
   const mayAddDocs = mayCreate && canImport && details?.can_import_documents !== false
   const chosenDocs = mayAddDocs ? ezItems.filter((d) => selected.has(d.id) && importable(d)) : []
-  const chosenFiles = mayAddDocs ? files : []
+  const chosenFiles = mayAddDocs ? files.filter((f) => !excludedFiles.has(f)) : []
   const withDocuments = chosenDocs.length + chosenFiles.length > 0
 
   return (
@@ -297,6 +314,16 @@ export function NoticeDetailsPanel({
                         <div className="font-medium text-slate-900">
                           {lot.lot_no !== null && details.lots.length > 1 ? `Część ${lot.lot_no}: ` : ''}
                           {lot.name ?? <span className="text-slate-500">nazwa nie podana</span>}
+                          {details.lots.length > 1 && lot.bhp !== undefined && (
+                            <span
+                              title={lot.bhp_reason ?? 'brak kodów CPV z listy BHP i środków ochrony w opisie części'}
+                              className={`ml-2 inline-block rounded px-1.5 text-[11px] font-normal ${
+                                lot.bhp ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {lot.bhp ? 'towary BHP' : 'bez towarów BHP'}
+                            </span>
+                          )}
                         </div>
                         {lot.description ? (
                           <p className="mt-1 whitespace-pre-line text-slate-800">{lot.description}</p>
@@ -352,8 +379,8 @@ export function NoticeDetailsPanel({
                       <p className="mb-1 text-slate-600">
                         Zaznaczone dokumenty kreator pobierze z e-Zamówień po założeniu przetargu, po jednym, i zapisze w
                         archiwum dokumentów przetargu. Na start zaznaczone są te, które z nazwy wyglądają na opis
-                        przedmiotu zamówienia albo formularz cenowy lub ofertowy — rodzaj to podpowiedź z nazwy, sprawdź
-                        go.
+                        przedmiotu zamówienia albo formularz cenowy lub ofertowy — przy kilku pakietach tylko z pakietów
+                        z towarami BHP. Rodzaj i pakiet to podpowiedź z nazwy, sprawdź je.
                       </p>
                     )}
                     <ul className="space-y-1">
@@ -387,6 +414,11 @@ export function NoticeDetailsPanel({
                                   {d.published_at ? ` · opublikowano ${fmtDate(d.published_at)}` : ''}
                                   {` · rodzaj według nazwy: ${KIND_LABEL[d.kind] ?? KIND_LABEL.other}`}
                                 </span>
+                                {d.lot_no != null && d.lot_bhp === false && (
+                                  <span className="block text-[11px] text-slate-600">
+                                    Pakiet {d.lot_no} — bez towarów BHP, dlatego nie zaznaczony.
+                                  </span>
+                                )}
                                 {!ok && (
                                   <span className="block text-[11px] text-amber-800">
                                     Kreator nie odczyta pliku tego rodzaju — jeśli to paczka ZIP, pobierz ją ze strony
@@ -463,9 +495,30 @@ export function NoticeDetailsPanel({
                             key={`${f.name}-${f.size}`}
                             className="flex items-center justify-between gap-2 rounded border border-slate-200 px-2 py-1"
                           >
-                            <span className="min-w-0 break-all">
-                              {f.name} <span className="text-slate-500">· {megabytes(f.size)}</span>
-                            </span>
+                            <label className="flex min-w-0 cursor-pointer items-start gap-2 break-all">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                checked={!excludedFiles.has(f)}
+                                disabled={busy}
+                                onChange={(e) =>
+                                  setExcludedFiles((prev) => {
+                                    const next = new Set(prev)
+                                    if (e.target.checked) next.delete(f)
+                                    else next.add(f)
+                                    return next
+                                  })
+                                }
+                              />
+                              <span>
+                                {f.name} <span className="text-slate-500">· {megabytes(f.size)}</span>
+                                {fileLotBhp(f) === false && (
+                                  <span className="block text-[11px] text-slate-600">
+                                    Pakiet {lotNumberOf(f.name)} — bez towarów BHP, dlatego nie zaznaczony.
+                                  </span>
+                                )}
+                              </span>
+                            </label>
                             <button
                               type="button"
                               disabled={busy}

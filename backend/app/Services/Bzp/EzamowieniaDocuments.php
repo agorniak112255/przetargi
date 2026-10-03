@@ -40,13 +40,17 @@ final class EzamowieniaDocuments
     /** formaty, które odczytuje import dokumentów przetargu (TenderDocumentController::analyze) */
     public const IMPORTABLE_EXTENSIONS = ['pdf', 'xlsx', 'xls', 'csv', 'doc', 'docx'];
 
+    public function __construct(
+        private readonly NoticeBhpLots $bhpLots = new NoticeBhpLots,
+    ) {}
+
     /**
      * Dokumenty do okna szczegółów ogłoszenia.
      *
      * @return array{
      *     available: bool,
      *     source: ?string,
-     *     items: list<array{id: string, name: string, file_name: string, published_at: ?string, kind: string, importable: bool, suggested: bool}>,
+     *     items: list<array{id: string, name: string, file_name: string, published_at: ?string, kind: string, importable: bool, suggested: bool, lot_no: ?int, lot_bhp: ?bool}>,
      *     note: string
      * }
      */
@@ -78,6 +82,12 @@ final class EzamowieniaDocuments
             ];
         }
 
+        // pakiety z towarami BHP: dokumenty innych pakietów (numer w nazwie) nie są podpowiadane do odczytu — tylko gdy
+        // postępowanie ma kilka części i choć jedna jest BHP (inaczej nie ma czego zawężać)
+        $lots = $this->bhpLots->forNotice($notice);
+        $narrowToBhp = count($lots) > 1 && in_array(true, array_column($lots, 'bhp'), true);
+        $skippedLots = 0;
+
         $items = [];
         $links = 0;
         $unreadable = 0;
@@ -92,6 +102,14 @@ final class EzamowieniaDocuments
             if (! $importable) {
                 $unreadable++;
             }
+            $lotNo = NoticeBhpLots::lotNumberOf($document['name'].' '.$document['file_name']);
+            $lotNo = $lotNo !== null && isset($lots[$lotNo]) ? $lotNo : null;
+            $lotBhp = $lotNo !== null ? $lots[$lotNo]['bhp'] : null;
+            $suggested = $importable && in_array($kind, [self::KIND_DESCRIPTION, self::KIND_FORM], true);
+            if ($suggested && $narrowToBhp && $lotBhp === false) {
+                $suggested = false;
+                $skippedLots++;
+            }
             $items[] = [
                 'id' => $document['id'],
                 'name' => $document['name'],
@@ -99,8 +117,10 @@ final class EzamowieniaDocuments
                 'published_at' => $document['published_at'],
                 'kind' => $kind,
                 'importable' => $importable,
-                // podpowiedź zaznaczenia: opis przedmiotu zamówienia i formularz cenowy/ofertowy
-                'suggested' => $importable && in_array($kind, [self::KIND_DESCRIPTION, self::KIND_FORM], true),
+                // podpowiedź zaznaczenia: opis przedmiotu zamówienia i formularz cenowy/ofertowy — z pakietów z towarami BHP
+                'suggested' => $suggested,
+                'lot_no' => $lotNo,
+                'lot_bhp' => $lotBhp,
             ];
         }
 
@@ -111,6 +131,12 @@ final class EzamowieniaDocuments
                 .'Jeśli zamawiający podał dokumenty gdzie indziej, pobierz je i dodaj tutaj.';
         } else {
             $notes[] = 'Pliki opublikowane przez zamawiającego na platformie e-Zamówienia (stan z '.$fetched.').';
+        }
+        if ($skippedLots > 0) {
+            $bhpNumbers = array_keys(array_filter($lots, static fn (array $lot): bool => $lot['bhp']));
+            $notes[] = 'Zaznaczone są tylko dokumenty '.(count($bhpNumbers) === 1 ? 'pakietu ' : 'pakietów ')
+                .implode(', ', $bhpNumbers).' — z towarami BHP; dokumentów pozostałych pakietów ('.$skippedLots
+                .') nie zaznaczono (możesz je zaznaczyć).';
         }
         if ($unreadable > 0) {
             $notes[] = 'Plików, których aplikacja nie odczyta (inny format niż PDF, Word, Excel albo CSV): '.$unreadable

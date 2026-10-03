@@ -144,6 +144,9 @@ final class NoticeDetailsApiTest extends TestCase
             'kind' => 'form',
             'importable' => true,
             'suggested' => true,
+            // nazwa bez numeru pakietu („Pakiet nr 3”) — dokument nie jest przypisany do części
+            'lot_no' => null,
+            'lot_bhp' => null,
         ], $items[$ocds.'_8']);
         $this->assertSame('description', $items[$ocds.'_6']['kind']);
         $this->assertTrue($items[$ocds.'_5']['suggested']);
