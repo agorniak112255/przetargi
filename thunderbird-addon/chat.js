@@ -65,6 +65,9 @@ const CHAT_ALERT_ICON = 'icons/chat-alert.svg'
 /** Drugi kolor migającej plakietki z liczbą (pierwszy: CHAT_BADGE_COLOR). */
 const CHAT_BLINK_BADGE_COLOR = '#f59e0b'
 
+/** Zwykły napis na przycisku „Czat” (jak default_label w manifeście). */
+const CHAT_ACTION_LABEL = 'Czat'
+
 /** Co tyle milisekund przycisk „Czat” zmienia ikonę, dopóki są nieprzeczytane. */
 const CHAT_BLINK_MS = 700
 
@@ -294,10 +297,29 @@ function chatSetActionBadgeColor(color) {
     .catch(() => {})
 }
 
+/**
+ * Napis na przycisku: przy miganiu naprzemiennie „Czat” i „Nowa wiadomość” — sama plakietka z liczbą była za mała,
+ * żeby ją zauważyć (03.10.2026). Napis to największy element przycisku na pasku Thunderbirda.
+ */
+function chatSetActionLabel(label) {
+  if (!browser.browserAction || typeof browser.browserAction.setLabel !== 'function') return
+  Promise.resolve()
+    .then(() => browser.browserAction.setLabel({ label }))
+    .catch(() => {})
+}
+
+function chatUnreadLabel(count) {
+  const n = Number(count) || 0
+  if (n <= 1) return 'Nowa wiadomość'
+
+  return 'Nowe wiadomości (' + (n > 99 ? '99+' : n) + ')'
+}
+
 function chatBlinkStep() {
   chatState.blinkOn = !chatState.blinkOn
   chatSetActionIcon(chatState.blinkOn ? CHAT_ALERT_ICON : CHAT_ICON)
   chatSetActionBadgeColor(chatState.blinkOn ? CHAT_BLINK_BADGE_COLOR : CHAT_BADGE_COLOR)
+  chatSetActionLabel(chatState.blinkOn ? chatUnreadLabel(chatState.unread) : CHAT_ACTION_LABEL)
 }
 
 /**
@@ -322,6 +344,7 @@ function chatSyncBlink() {
     chatState.blinkOn = false
     chatSetActionIcon(CHAT_ICON)
     chatSetActionBadgeColor(CHAT_BADGE_COLOR)
+    chatSetActionLabel(CHAT_ACTION_LABEL)
   }
 }
 
@@ -620,6 +643,23 @@ async function chatLoadConversations() {
   chatState.nextUnreadAt = chatNextUnreadAt()
   chatEnable()
   if (data && data.unread_total !== undefined) chatSetUnread(data.unread_total)
+}
+
+/**
+ * Kliknięcie „Czat”: gdy nieprzeczytana jest dokładnie jedna rozmowa — od razu ta rozmowa (prośba właściciela
+ * 03.10.2026), przy kilku albo żadnej — lista. Bez licznika nie pytamy serwera (okno otwiera się bez zwłoki); błąd
+ * zapytania też otwiera listę.
+ */
+async function chatSingleUnreadConversation() {
+  if (chatState.unread <= 0) return null
+  try {
+    const data = await api('/api/chat/conversations')
+    const unread = (data && Array.isArray(data.data) ? data.data : []).filter((row) => row && Number(row.unread) > 0)
+
+    return unread.length === 1 ? Number(unread[0].id) : null
+  } catch (e) {
+    return null
+  }
 }
 
 /* ------------------------------ zdarzenia ------------------------------ */
@@ -1178,7 +1218,9 @@ browser.notifications.onClicked.addListener((notificationId) => {
 // Przycisk „Czat” na górnym pasku (bez okienka, więc kliknięcie przychodzi tutaj).
 if (browser.browserAction) {
   browser.browserAction.onClicked.addListener(() => {
-    chatOpenWindow(null).catch((e) => console.warn('Supon: nie udało się otworzyć okna czatu:', e.message))
+    chatSingleUnreadConversation()
+      .then((conversationId) => chatOpenWindow(conversationId))
+      .catch((e) => console.warn('Supon: nie udało się otworzyć okna czatu:', e.message))
   })
   Promise.resolve()
     .then(() => browser.browserAction.setBadgeBackgroundColor({ color: CHAT_BADGE_COLOR }))
