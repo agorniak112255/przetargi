@@ -379,6 +379,12 @@ const QUEUE_POLL_SECONDS = 5
  */
 const QUEUE_POLL_MAX_SECONDS = 30
 
+/**
+ * Najdłuższy odstęp przy działającym połączeniu na żywo (chat.js): o nowej pracy serwer mówi sygnałem
+ * `queue.updated`, więc pytanie jest tylko asekuracją. Serwer podaje wtedy co najmniej 120 s (nagłówek X-Realtime).
+ */
+const QUEUE_POLL_REALTIME_MAX_SECONDS = 120
+
 /** Brak połączenia albo błąd serwera — pytanie co 5 s nic tu nie da. */
 const QUEUE_RETRY_SECONDS = 15
 
@@ -404,12 +410,15 @@ let queueFastUntil = 0
 /** Ostatnio zapisany odstęp — do ustawień dodatku trafia tylko zmiana trybu. */
 let queuePaceSaved = 0
 
-/** Odstęp z nagłówka X-Poll-After przycięty do 5–30 s; brak albo bzdura (starszy serwer) = co 5 s jak dotąd. */
-function queueSecondsFromHeader(value) {
+/**
+ * Odstęp z nagłówka X-Poll-After przycięty do 5–30 s (przy połączeniu na żywo do 5–120 s); brak albo bzdura
+ * (starszy serwer) = co 5 s jak dotąd.
+ */
+function queueSecondsFromHeader(value, max = QUEUE_POLL_MAX_SECONDS) {
   const seconds = Number.parseInt(String(value ?? ''), 10)
   if (!Number.isFinite(seconds)) return QUEUE_POLL_SECONDS
 
-  return Math.min(QUEUE_POLL_MAX_SECONDS, Math.max(QUEUE_POLL_SECONDS, seconds))
+  return Math.min(max, Math.max(QUEUE_POLL_SECONDS, seconds))
 }
 
 /**
@@ -424,6 +433,23 @@ function scheduleQueue(startedAt, seconds) {
   // W ustawieniach widać tryb — przy zgłoszeniu „Thunderbird reaguje wolno” od razu wiadomo dlaczego.
   browser.storage.local.set({ queuePace: { seconds, at: Date.now() } })
     .catch((e) => console.warn('Nie udało się zapisać odstępu kolejki:', e.message))
+}
+
+/** Sygnał przyszedł w trakcie przejścia — to przejście mogło już minąć nową pracę, więc pytamy jeszcze raz. */
+let queueAgain = false
+
+/**
+ * Serwer dał znać połączeniem na żywo (`queue.updated`), że w kolejce jest praca — pytamy od razu, bez
+ * czekania na takt zegara. To samo po zerwaniu albo odzyskaniu połączenia: tempo pytań się zmienia.
+ */
+function queueSignal() {
+  queueNextAt = 0
+  if (queueBusy) {
+    queueAgain = true
+
+    return
+  }
+  pollQueue().catch((e) => console.warn('Sprawdzenie kolejki się nie powiodło:', e.message))
 }
 
 /** Handlowiec właśnie idzie do aplikacji — przez kwadrans pytamy co 5 s, od najbliższego taktu. */
@@ -625,7 +651,10 @@ async function pollQueue() {
   if (!token) return
 
   queueBusy = true
+  queueAgain = false
   const startedAt = Date.now()
+  // Przy połączeniu na żywo serwer może kazać pytać rzadziej (X-Poll-After ≥ 120 s) — sygnał przyjdzie sam.
+  const live = typeof chatRealtimeLive === 'function' && chatRealtimeLive()
   try {
     let answer
     let hint = null
@@ -633,6 +662,7 @@ async function pollQueue() {
       // with_offers=1: serwer oddaje też oferty „Otwórz w Thunderbirdzie” i zapamiętuje, że ten dodatek je obsługuje
       // (dopiero wtedy aplikacja pokazuje ten przycisk). Starszy serwer parametr pomija i oddaje samą tablicę.
       answer = await api('/api/inquiries/queued?with_offers=1', {
+        headers: live ? { 'X-Realtime': '1' } : null,
         onResponse: (res) => {
           hint = res.headers.get('X-Poll-After')
         },
@@ -642,7 +672,12 @@ async function pollQueue() {
 
       return
     }
-    scheduleQueue(startedAt, Date.now() < queueFastUntil ? QUEUE_POLL_SECONDS : queueSecondsFromHeader(hint))
+    scheduleQueue(
+      startedAt,
+      Date.now() < queueFastUntil
+        ? QUEUE_POLL_SECONDS
+        : queueSecondsFromHeader(hint, live ? QUEUE_POLL_REALTIME_MAX_SECONDS : QUEUE_POLL_MAX_SECONDS),
+    )
 
     const rows = Array.isArray(answer) ? answer : answer && Array.isArray(answer.inquiries) ? answer.inquiries : []
     const offers = !Array.isArray(answer) && answer && Array.isArray(answer.offers) ? answer.offers : []
@@ -681,6 +716,10 @@ async function pollQueue() {
     }
   } finally {
     queueBusy = false
+    if (queueAgain) {
+      queueAgain = false
+      queueNextAt = 0
+    }
   }
 }
 
@@ -856,6 +895,9 @@ setInterval(() => {
 browser.storage.local.set({ composeTabs: {} }).catch((e) => {
   console.warn('Nie udało się wyczyścić okien odpowiedzi:', e.message)
 })
+
+/* Czat firmowy (chat.js) — start dopiero tutaj, gdy wszystkie pliki tła są już wczytane. */
+chatStart().catch((e) => console.warn('Supon: start czatu:', e.message))
 
 browser.runtime.onMessage.addListener((request) => {
   if (request && request.type === 'createInquiry') {

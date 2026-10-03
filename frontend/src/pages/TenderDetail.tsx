@@ -25,6 +25,7 @@ import { CardConflictsModal } from '../components/CardConflictsModal'
 import type { TenderConflicts } from '../components/RequirementCheckList'
 import { conflictsLabel, useRequirementCheck } from '../lib/useRequirementCheck'
 import { TENDER_STATUS_LABEL } from '../lib/tenderStatus'
+import { ShareToChatButton } from '../components/ShareToChatButton'
 import { StatusFlow } from '../components/StatusFlow'
 import { isTenderWizardActive, setTenderWizardActive } from '../lib/tenderWizard'
 
@@ -3098,6 +3099,7 @@ function TenderDetailView() {
           >
             Zamknij kreator i pokaż pełny widok
           </button>
+          <ShareToChatButton link={{ type: 'tender', id: tender.id }} />
           {actionsMenu}
         </div>
       </div>
@@ -3549,6 +3551,7 @@ function TenderDetailView() {
               },
             ]}
           />
+          <ShareToChatButton link={{ type: 'tender', id: tender.id }} />
           {actionsMenu}
         </div>
       </div>

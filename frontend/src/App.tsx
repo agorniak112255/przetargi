@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppearanceProvider } from './appearance'
 import { AuthProvider, useAuth } from './auth'
+import { ChatUnreadProvider } from './components/ChatUnreadProvider'
 import { Layout } from './components/Layout'
 import { adminTiles } from './components/AdminNavTiles'
 import { Account } from './pages/Account'
@@ -23,6 +24,7 @@ import { CampaignEditor } from './pages/CampaignEditor'
 import { CampaignTemplateEditor } from './pages/CampaignTemplateEditor'
 import { Campaigns } from './pages/Campaigns'
 import { CardMatches } from './pages/CardMatches'
+import { Chat } from './pages/Chat'
 import { Clients } from './pages/Clients'
 import { Inquiries } from './pages/Inquiries'
 import { InquiryReply } from './pages/InquiryReply'
@@ -149,7 +151,9 @@ export default function App() {
           <Route
             element={
               <Guard>
-                <Layout />
+                <ChatUnreadProvider>
+                  <Layout />
+                </ChatUnreadProvider>
               </Guard>
             }
           >
@@ -249,6 +253,14 @@ export default function App() {
               }
             />
 
+            <Route
+              path="czat"
+              element={
+                <PermissionGuard permission="chat">
+                  <Chat />
+                </PermissionGuard>
+              }
+            />
             <Route
               path="ai-settings"
               element={

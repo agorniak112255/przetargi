@@ -194,6 +194,86 @@ button:disabled {
   cursor: default;
 }
 
+/* Czat firmowy w okienku nad mailem: odnośnik z liczbą i „Wyślij koledze”. */
+.badge {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.chat-open {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 0 10px;
+}
+
+.chat-title {
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.chips button {
+  margin: 0;
+  padding: 3px 9px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.chips button.on {
+  border-color: #0284c7;
+  background: #0284c7;
+  color: #fff;
+}
+
+/* Zielona kropka: osoba była w aplikacji w ostatnich minutach. */
+.chips .dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--ok);
+  vertical-align: middle;
+}
+
+.chat textarea {
+  margin-bottom: 8px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.chat .check {
+  align-items: flex-start;
+  font-size: 12px;
+}
+
+.chat .check .note {
+  display: block;
+  color: var(--muted);
+}
+
+button.chat-send {
+  border-color: #0284c7;
+  background: #0284c7;
+}
+
 .status {
   margin-bottom: 10px;
   padding: 7px 9px;

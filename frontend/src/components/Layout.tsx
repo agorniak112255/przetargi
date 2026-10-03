@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { can, canAny } from '../lib/api'
+import { CHAT_PERMISSION } from '../lib/chat'
 import { usePresence } from '../lib/usePresence'
+import { ChatNavBadge } from './ChatUnreadProvider'
 import { NavIcon, type NavIconName } from './NavIcon'
 import { NotificationBell } from './NotificationBell'
 
@@ -27,6 +29,7 @@ const links: NavLinkItem[] = [
   { to: '/reports', label: 'Raporty', icon: 'reports', permission: 'reports.view' },
   { to: '/clients', label: 'Klienci', icon: 'clients', permission: 'clients.view' },
   { to: '/inquiries', label: 'Zapytania', icon: 'inquiries', permission: 'inquiries.use' },
+  { to: '/czat', label: 'Czat', icon: 'chat', permission: CHAT_PERMISSION },
   { to: '/ai-settings', label: 'Ustawienia AI', icon: 'ai-settings', permission: 'ai_settings.manage' },
   { to: '/admin', label: 'Administracja', icon: 'admin', permission: 'admin.access' },
   { to: '/help', label: 'Pomoc', icon: 'help' },
@@ -104,6 +107,7 @@ export function Layout() {
             >
               <NavIcon name={l.icon} className="app-nav-icon" />
               <span className="app-nav-label">{l.label}</span>
+              {l.to === '/czat' && <ChatNavBadge />}
             </NavLink>
           ))}
         </nav>

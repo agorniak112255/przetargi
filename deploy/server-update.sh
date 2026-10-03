@@ -205,6 +205,13 @@ else
   echo "UWAGA: brak deploy/ensure-enrichment-workers.sh — enrichment nie ma kto przetwarzać."
 fi
 
+# Czat: serwer wiadomości (tylko przy BROADCAST_CONNECTION=reverb) — restart po każdym wdrożeniu,
+# bo długo żyjący proces trzyma stary kod i konfigurację.
+echo "==> czat: serwer wiadomości (Reverb)"
+if [[ -f "$APP_ROOT/deploy/ensure-reverb.sh" ]]; then
+  bash "$APP_ROOT/deploy/ensure-reverb.sh" "$APP_ROOT" || true
+fi
+
 # migrate / cache / testowy schedule:run szły jako root — pliki root-owned w storage blokowały cron
 # i aplikację działające jako $OWNER (to samo robi trap na wyjściu)
 echo "==> uprawnienia storage po komendach artisan"

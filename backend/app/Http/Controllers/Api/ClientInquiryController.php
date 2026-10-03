@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api;
 
+use App\Events\Chat\QueueUpdated;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ComposeClientInquiryRequest;
 use App\Http\Requests\MarkClientInquiryRepliedRequest;
@@ -15,6 +16,7 @@ use App\Jobs\AnalyzeClientInquiryJob;
 use App\Models\ClientInquiry;
 use App\Models\OfferComposeRequest;
 use App\Models\User;
+use App\Services\Chat\RealtimeConfig;
 use App\Services\ClientInquiryService;
 use App\Services\InquiryFileText;
 use App\Services\Pricing\SupplierSpecialMask;
@@ -45,8 +47,15 @@ class ClientInquiryController extends Controller
     /** Sygnał obecności z aplikacji (usePresence → users.last_seen_at) idzie co minutę przy widocznej karcie. */
     private const QUEUE_PRESENCE_MINUTES = 15;
 
+    /**
+     * Dodatek z działającym websocketem (nagłówek X-Realtime: 1) dostaje o nowej pracy zdarzenie queue.updated
+     * i pyta od razu — odpytywanie zostaje tylko zapasem na zerwane połączenie.
+     */
+    private const QUEUE_POLL_REALTIME_SECONDS = 120;
+
     public function __construct(
         private readonly ClientInquiryService $inquiries,
+        private readonly RealtimeConfig $realtime,
     ) {}
 
     /**
@@ -600,13 +609,13 @@ class ClientInquiryController extends Controller
                 ]);
 
             return response()->json(['inquiries' => $rows, 'offers' => $offers])
-                ->header('X-Poll-After', (string) $this->queuePollSeconds($user, $rows->isNotEmpty() || $offers->isNotEmpty()));
+                ->header('X-Poll-After', (string) $this->queuePollSeconds($request, $user, $rows->isNotEmpty() || $offers->isNotEmpty()));
         }
 
         // 82% zapytań do API szło stąd (25.09.2026: 22,7 tys. w 5 h, dodatek co 5 s na 6–7 komputerach). Ciało zostaje
         // tablicą — dodatek sprzed 1.23.0 nagłówka nie czyta i pyta co 5 s jak dotąd.
         return response()->json($rows)
-            ->header('X-Poll-After', (string) $this->queuePollSeconds($user, $rows->isNotEmpty()));
+            ->header('X-Poll-After', (string) $this->queuePollSeconds($request, $user, $rows->isNotEmpty()));
     }
 
     /**
@@ -625,17 +634,28 @@ class ClientInquiryController extends Controller
             ->update(['thunderbird_offers_seen_at' => now()]);
     }
 
-    /** Co ile sekund dodatek ma zapytać znowu: szybko, gdy prośba czeka albo handlowiec jest w aplikacji. */
-    private function queuePollSeconds(User $user, bool $pending): int
+    /**
+     * Co ile sekund dodatek ma zapytać znowu: szybko, gdy prośba czeka albo handlowiec jest w aplikacji. Dodatek
+     * połączony z websocketem (X-Realtime: 1, przy włączonym Reverbie) — najwcześniej po 120 s, bo o nowej pracy
+     * dowie się ze zdarzenia queue.updated. Bez nagłówka (starsze wersje dodatku) — jak dotąd.
+     */
+    private function queuePollSeconds(Request $request, User $user, bool $pending): int
     {
         if ($pending) {
-            return self::QUEUE_POLL_FAST_SECONDS;
+            $seconds = self::QUEUE_POLL_FAST_SECONDS;
+        } else {
+            $seen = $user->last_seen_at;
+            $seconds = $seen !== null && $seen->gte(now()->subMinutes(self::QUEUE_PRESENCE_MINUTES))
+                ? self::QUEUE_POLL_FAST_SECONDS
+                : self::QUEUE_POLL_SLOW_SECONDS;
         }
-        $seen = $user->last_seen_at;
+        // Rzadziej tylko przy pustej kolejce: sygnał queue.updated przychodzi wyłącznie przy NOWEJ pracy, a pozycje,
+        // których dodatek w tym przejściu nie podjął (błąd sieci, ponad limit paczki), muszą wrócić szybko.
+        if (! $pending && $request->header('X-Realtime') === '1' && $this->realtime->enabled()) {
+            return max($seconds, self::QUEUE_POLL_REALTIME_SECONDS);
+        }
 
-        return $seen !== null && $seen->gte(now()->subMinutes(self::QUEUE_PRESENCE_MINUTES))
-            ? self::QUEUE_POLL_FAST_SECONDS
-            : self::QUEUE_POLL_SLOW_SECONDS;
+        return $seconds;
     }
 
     /**
@@ -717,6 +737,10 @@ class ClientInquiryController extends Controller
         }
 
         $inquiry->forceFill(['send_requested_at' => $queued ? now() : null])->save();
+        if ($queued) {
+            // dodatek z websocketem pyta o kolejkę od razu, zamiast czekać do następnego odpytania
+            event(new QueueUpdated((int) $inquiry->user_id));
+        }
 
         return response()->json($this->presentFor($request, $inquiry->load('client')));
     }

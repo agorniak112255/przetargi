@@ -46,6 +46,7 @@ const NAV: Array<[string, NavIconName]> = [
   ['Raporty', 'reports'],
   ['Klienci', 'clients'],
   ['Zapytania', 'inquiries'],
+  ['Czat', 'chat'],
   ['Pomoc', 'help'],
 ]
 

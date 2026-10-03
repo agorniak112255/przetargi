@@ -151,8 +151,8 @@
   margin: 0;
 }
 
-/* Licznik nieprzeczytanych powiadomień: pigułka na końcu wiersza zamiast w rogu */
-:root[data-template="nocna-zmiana"] .app-sidebar-btn .app-badge {
+/* Licznik nieprzeczytanych powiadomień i czatu: pigułka na końcu wiersza zamiast w rogu */
+:root[data-template="nocna-zmiana"] :is(.app-sidebar-btn, .app-nav-link) .app-badge {
   position: static;
   min-width: 18px;
   margin-left: auto;
@@ -195,7 +195,7 @@
   padding-inline: 0;
 }
 
-:root[data-template="nocna-zmiana"] .app-sidebar--collapsed .app-sidebar-btn .app-badge {
+:root[data-template="nocna-zmiana"] .app-sidebar--collapsed :is(.app-sidebar-btn, .app-nav-link) .app-badge {
   position: absolute;
   top: 2px;
   right: 4px;

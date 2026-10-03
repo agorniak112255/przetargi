@@ -71,6 +71,7 @@ final class PermissionCatalog
         'campaigns.manage',
         'campaigns.delete',
         'campaigns.view',
+        'chat',
     ];
 
     public const ROLES = [
@@ -107,6 +108,7 @@ final class PermissionCatalog
             // zapytania dwie osoby robiłyby tę samą ofertę
             'inquiries.view_all',
             'campaigns.use',
+            'chat',
         ];
 
         $przetargi = array_values(array_unique([
@@ -145,6 +147,7 @@ final class PermissionCatalog
             'inquiries.view_all',
             'inquiries.view_others',
             'campaigns.use',
+            'chat',
         ];
 
         $dyrektor = [
@@ -170,6 +173,7 @@ final class PermissionCatalog
             'inquiries.view_all',
             'inquiries.view_others',
             'campaigns.use',
+            'chat',
         ];
 
         return [
@@ -236,6 +240,7 @@ final class PermissionCatalog
             ['campaigns.delete', 'Kampanie — usuwanie wysłanych', 'Może usunąć wysłaną albo anulowaną kampanię razem z jej odbiorcami, kliknięciami i odpowiedziami (wypisy z mailingu zostają). Cudze kampanie — tylko z uprawnieniem „Kampanie — wszystkie”. Własny projekt usuwa każdy bez tego uprawnienia.', 'Kampanie'],
             ['campaigns.view', 'Kampanie — podgląd wysłanych', 'Widzi kampanie wszystkich pracowników po rozpoczęciu wysyłki (w trakcie, wysłane i anulowane): treść maila, pozycje, odbiorców, kliknięcia, odpowiedzi i sprzedaż. Nie zmienia, nie wysyła, nie duplikuje i nie usuwa kampanii. Może wysłać mail testowy tylko na własny adres. Projekty innych osób są niewidoczne.', 'Kampanie'],
             ['inquiries.view_others', 'Zapytania — otwieranie cudzych', 'Może otworzyć zapytanie innego pracownika i zobaczyć mail klienta, dobrane pozycje i przygotowany list. Tylko podgląd — zmieniać i wysyłać może wyłącznie autor.', 'Zapytania'],
+            ['chat', 'Czat firmowy', 'Może pisać do współpracowników i w kanałach czatu oraz przekazywać do czatu maile, zapytania i przetargi.', 'Czat'],
             ['ai_settings.manage', 'Ustawienia AI', 'Może konfigurować model AI, klucz API i test połączenia.', 'Administracja'],
             ['admin.access', 'Panel Administracja', 'Widzi pozycję menu Administracja.', 'Administracja'],
             ['admin.users.manage', 'Zarządzanie użytkownikami', 'Może tworzyć, edytować i usuwać konta oraz przypisywać role.', 'Administracja'],

@@ -36,6 +36,13 @@ OXLINT_UNIX = os.path.join(REPO_DIR, 'frontend', 'node_modules', '.bin', 'oxlint
 
 SKIP_DIRS = {'dist', '.git', 'icons'}
 
+# Cudze biblioteki (katalog vendor/) — gotowy, zminifikowany kod: nie sprawdzamy go, ale nazwy, które
+# udostępnia, są globalne dla plików ładowanych razem z nim.
+VENDOR_DIR = 'vendor/'
+VENDOR_GLOBALS = {
+    'vendor/pusher.min.js': ['Pusher'],
+}
+
 # Deklaracje najwyższego poziomu: „function x(”, „class X”, „const X =”.
 TOP_LEVEL = re.compile(
     r'^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)'
@@ -79,6 +86,9 @@ def contexts() -> dict[str, list[str]]:
 def shared_names(files: list[str]) -> list[str]:
     names = set()
     for name in files:
+        if name.startswith(VENDOR_DIR):
+            names.update(VENDOR_GLOBALS.get(name, []))
+            continue
         with open(os.path.join(ADDON_DIR, name), encoding='utf-8') as handle:
             for found in TOP_LEVEL.finditer(handle.read()):
                 names.add(found.group(1) or found.group(2) or found.group(3))
@@ -114,9 +124,10 @@ def check(binary: str, label: str, files: list[str]) -> list[str]:
         json.dump(config, handle, ensure_ascii=False)
         config_path = handle.name
 
+    own = [name for name in files if not name.startswith(VENDOR_DIR)]
     try:
         result = subprocess.run(
-            [binary, '--config', config_path, *files],
+            [binary, '--config', config_path, *own],
             cwd=ADDON_DIR,
             capture_output=True,
             text=True,

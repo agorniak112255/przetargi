@@ -72,11 +72,13 @@ class ApiError extends Error {
  * czytają nagłówki (X-Poll-After przy kolejce wysyłki).
  *
  * `body` jako FormData (plik) idzie bez zamiany na JSON — nagłówek z granicą części ustawia wtedy fetch.
+ *
+ * `headers` — dodatkowe nagłówki (np. X-Realtime przy kolejce); Accept, klucza i typu treści nie nadpisują.
  */
-async function api(path, { method = 'GET', body = null, token = null, baseUrl = null, onResponse = null } = {}) {
+async function api(path, { method = 'GET', body = null, token = null, baseUrl = null, onResponse = null, headers: extra = null } = {}) {
   const settings = await getSettings()
   const url = (baseUrl || settings.baseUrl) + path
-  const headers = { Accept: 'application/json' }
+  const headers = Object.assign({}, extra || {}, { Accept: 'application/json' })
   const auth = token !== null ? token : settings.token
   if (auth) headers.Authorization = 'Bearer ' + auth
   const form = body instanceof FormData

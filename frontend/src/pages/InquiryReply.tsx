@@ -5,6 +5,7 @@ import { InquiryContactChip, InquiryContactModal } from '../components/InquiryCo
 import { ProductAiMatchModal, type AiMatchPick } from '../components/ProductAiMatchModal'
 import { OrderQuantityBadge } from '../components/OrderQuantityBadge'
 import { ProductVerifyModal } from '../components/ProductVerifyModal'
+import { ShareToChatButton } from '../components/ShareToChatButton'
 import { useAuth } from '../auth'
 import { api, type OrderQuantity } from '../lib/api'
 import { copyHtmlBySelection } from '../lib/clipboard'
@@ -1904,13 +1905,22 @@ export function InquiryReply() {
           <InquiryContactChip contact={inquiry.contact} onOpen={() => setContactOpen(true)} />
         </div>
       </div>
-      {/* Jedyne wyjście do listy — kafelek, żeby nie ginął w nagłówku (pasek przycisków go nie powtarza). */}
-      <Link
-        to="/inquiries"
-        className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 shadow-sm ring-1 ring-slate-200 hover:bg-blue-50"
-      >
-        ← Wróć do zapytań
-      </Link>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <ShareToChatButton
+          link={{ type: 'inquiry', id: inquiry.id }}
+          items={(Array.isArray(inquiry.items) ? inquiry.items : []).map((it, i) => {
+            const text = (it.quote ?? it.query ?? '').replace(/\s+/g, ' ').trim()
+            return { number: i + 1, label: `${i + 1}. ${text.length > 70 ? `${text.slice(0, 70)}…` : text}` }
+          })}
+        />
+        {/* Jedyne wyjście do listy — kafelek, żeby nie ginął w nagłówku (pasek przycisków go nie powtarza). */}
+        <Link
+          to="/inquiries"
+          className="rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-blue-700 shadow-sm ring-1 ring-slate-200 hover:bg-blue-50"
+        >
+          ← Wróć do zapytań
+        </Link>
+      </div>
     </div>
   )
 

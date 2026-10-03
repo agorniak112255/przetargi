@@ -70,6 +70,28 @@
     <p id="counter" class="muted"></p>
   </section>
 
+  <!-- Czat firmowy (od 1.32.0): odnośnik do czatu i „Wyślij koledze”. Bez uprawnienia do czatu sekcji nie ma. -->
+  <section id="chat" class="chat" hidden>
+    <button id="openChat" class="secondary chat-open">
+      <span>Otwórz czat</span>
+      <span id="chatUnread" class="badge" hidden></span>
+    </button>
+
+    <div id="chatSend" hidden>
+      <p class="lead chat-title">Wyślij koledze</p>
+      <div id="chatPeople" class="chips"></div>
+      <textarea id="chatComment" rows="2" maxlength="4000" placeholder="Kilka słów od siebie (nie musisz)"></textarea>
+      <label class="check">
+        <input type="checkbox" id="chatIncludeBody">
+        <span>Dołącz treść maila
+          <span class="note">Bez zaznaczenia idzie tylko temat, nadawca i data.</span>
+        </span>
+      </label>
+      <div id="chatStatus" class="status" hidden></div>
+      <button id="chatSendButton" class="primary chat-send" disabled>Wybierz osobę</button>
+    </div>
+  </section>
+
   <!-- Oznaczanie maili wymaga jednorazowej zgody; prosimy o nią tu, bo tu jest
        kliknięcie użytkownika, bez którego Thunderbird o zgodę nie zapyta. -->
   <p id="tagsOff" class="alarm" hidden>

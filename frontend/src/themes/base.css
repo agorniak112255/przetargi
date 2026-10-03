@@ -58,6 +58,15 @@
   right: -6px;
 }
 
+/* Liczba nieprzeczytanych przy „Czat” w zwiniętym pasku — w rogu ikony (link ma position: relative z [data-tip]) */
+.app-sidebar--collapsed .app-nav-link .app-badge {
+  position: absolute;
+  top: 2px;
+  right: 6px;
+  float: none;
+  margin: 0;
+}
+
 /* Strzałki obok logo: nagłówek paska jest przyciskiem zwijania (Layout) */
 .app-brand-toggle {
   position: absolute;

@@ -598,6 +598,209 @@ function insertReply() {
   status('Otwieram okno odpowiedzi…', 'info')
 }
 
+/* ------------------------------ czat firmowy ------------------------------ */
+
+/** Limity pól `mail` przy POST /api/chat/direct/{user}/messages. */
+/**
+ * Przycina tekst do `max` znaków bez rozcinania emoji: połówka pary UTF-16 na końcu psuje JSON — serwer
+ * nie odczytałby wtedy całego żądania i odpowiedziałby mylącym błędem o braku pól.
+ */
+function cutText(text, max) {
+  const out = String(text).slice(0, max)
+  const last = out.charCodeAt(out.length - 1)
+
+  return last >= 0xd800 && last <= 0xdbff ? out.slice(0, -1) : out
+}
+
+const CHAT_MAIL_BODY_MAX = 20000
+const CHAT_MAIL_FIELD_MAX = 300
+const CHAT_MESSAGE_ID_MAX = 998
+
+/** Mail, który idzie do kolegi — odczytany osobno, bo założenie zapytania ma własny przebieg. */
+let chatMessage = null
+
+/** Współpracownicy z czatem, bez mnie. */
+let chatPeople = []
+
+/** Wybrana osoba albo null. */
+let chatPick = null
+
+/**
+ * Identyfikator wysyłki. Przy ponowieniu po błędzie sieci zostaje ten sam — serwer rozpozna powtórkę i nie zapisze
+ * wiadomości drugi raz. Nowy po udanej wysyłce i po zmianie osoby (ten sam identyfikator w innej rozmowie = 422).
+ */
+let chatUuid = null
+
+let chatSending = false
+
+/** Rozmowa z ostatniej wysyłki — „Otwórz czat” przechodzi wtedy prosto do niej. */
+let chatConversationId = null
+
+function chatStatus(text, kind = 'info') {
+  const box = el('chatStatus')
+  box.textContent = text
+  box.className = 'status ' + kind
+  box.hidden = text === ''
+}
+
+function chatSendLabel() {
+  return chatPick === null ? 'Wybierz osobę' : 'Wyślij do: ' + chatPick.name
+}
+
+function renderChatPeople() {
+  const list = el('chatPeople')
+  list.textContent = ''
+  for (const person of chatPeople) {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = chatPick !== null && chatPick.id === person.id ? 'on' : ''
+    chip.setAttribute('aria-pressed', chip.className === 'on' ? 'true' : 'false')
+    chip.title = person.online ? person.name + ' — w pracy' : person.name
+    if (person.online) {
+      const dot = document.createElement('span')
+      dot.className = 'dot'
+      chip.appendChild(dot)
+    }
+    chip.appendChild(document.createTextNode(person.name))
+    chip.addEventListener('click', () => {
+      if (chatPick === null || chatPick.id !== person.id) chatUuid = null
+      chatPick = person
+      chatStatus('')
+      renderChatPeople()
+    })
+    list.appendChild(chip)
+  }
+  el('chatSendButton').textContent = chatSendLabel()
+  el('chatSendButton').disabled = chatPick === null || chatSending
+}
+
+function showChatUnread(count) {
+  const number = Number(count) || 0
+  el('chatUnread').hidden = number <= 0
+  el('chatUnread').textContent = number > 99 ? '99+' : String(number)
+  el('openChat').title = number > 0 ? 'Nieprzeczytane wiadomości: ' + number : 'Brak nieprzeczytanych wiadomości'
+}
+
+/**
+ * Sekcja czatu — tylko gdy konto ma czat. 403 (bez uprawnienia) i 404 (serwer jeszcze bez czatu) po prostu
+ * ją ukrywają; reszta okienka działa jak dotąd.
+ */
+async function initChat() {
+  const settings = await getSettings()
+  if (!settings.token) return
+
+  let users
+  let unread
+  try {
+    [users, unread] = await Promise.all([api('/api/chat/users'), api('/api/chat/unread')])
+  } catch (e) {
+    if (e.status !== 403 && e.status !== 404) console.warn('Czat w okienku:', e.message)
+
+    return
+  }
+
+  showChatUnread(unread && unread.unread_total)
+  el('chat').hidden = false
+
+  chatPeople = (users && Array.isArray(users.data) ? users.data : [])
+    .filter((person) => person && person.is_me !== true && person.id !== undefined)
+    .map((person) => ({ id: person.id, name: String(person.name || '').trim() || 'Bez nazwy', online: person.online === true }))
+
+  // Bez otwartego maila albo bez kolegów zostaje sam odnośnik do czatu.
+  chatMessage = await displayedMessage()
+  if (chatMessage === null || chatPeople.length === 0) return
+
+  renderChatPeople()
+  el('chatSend').hidden = false
+}
+
+async function chatMailBody() {
+  const full = await browser.messages.getFull(chatMessage.id)
+
+  return cutText(messageText(full), CHAT_MAIL_BODY_MAX)
+}
+
+/** „Wyślij do: …” — mail (temat, nadawca, data, identyfikator, opcjonalnie treść) z komentarzem do rozmowy 1:1. */
+async function chatSend() {
+  if (chatSending || chatMessage === null) return
+  if (chatPick === null) {
+    chatStatus('Wybierz osobę, do której wysłać mail.', 'warn')
+
+    return
+  }
+  const person = chatPick
+  const comment = el('chatComment').value.trim()
+
+  chatSending = true
+  el('chatSendButton').disabled = true
+  chatStatus('Wysyłam…', 'info')
+  try {
+    let body = null
+    if (el('chatIncludeBody').checked) {
+      try {
+        body = await chatMailBody()
+      } catch (e) {
+        chatStatus('Nie mogę odczytać treści maila (możliwe, że jest zaszyfrowany). Odznacz „Dołącz treść maila” i wyślij ponownie.', 'error')
+
+        return
+      }
+    }
+
+    if (chatUuid === null) chatUuid = crypto.randomUUID()
+    const messageId = normalizeMessageId(chatMessage.headerMessageId)
+    // Brak tematu albo nadawcy = null (nic nie zgadujemy); aplikacja pokaże wtedy samo „bez tematu”.
+    const subject = cutText(String(chatMessage.subject || '').trim(), CHAT_MAIL_FIELD_MAX)
+    const from = cutText(String(senderHeader(chatMessage.author) || ''), CHAT_MAIL_FIELD_MAX)
+    const answer = await api('/api/chat/direct/' + encodeURIComponent(person.id) + '/messages', {
+      method: 'POST',
+      body: {
+        client_uuid: chatUuid,
+        body: comment === '' ? null : comment,
+        mail: {
+          subject: subject === '' ? null : subject,
+          from: from === '' ? null : from,
+          date: toIsoDate(chatMessage.date),
+          message_id: messageId === '' ? null : cutText(messageId, CHAT_MESSAGE_ID_MAX),
+          body,
+        },
+      },
+    })
+
+    chatUuid = null
+    chatConversationId = answer && answer.conversation_id !== undefined ? answer.conversation_id : null
+    el('chatComment').value = ''
+    el('chatIncludeBody').checked = false
+    chatStatus('Wysłane do: ' + person.name + '. Rozmowę zobaczysz po kliknięciu „Otwórz czat”.', 'ok')
+    if (chatConversationId !== null) {
+      browser.runtime.sendMessage({ type: 'chatSent', conversationId: chatConversationId }).catch(() => {})
+    }
+  } catch (e) {
+    if (e.status === 0) {
+      chatStatus('Brak połączenia z aplikacją — wiadomość nie poszła. Spróbuj jeszcze raz.', 'error')
+    } else if (e.status === 403) {
+      chatStatus('Nie możesz wysyłać wiadomości w czacie — poproś kierownika o dostęp.', 'error')
+    } else {
+      chatStatus('Wiadomość nie poszła: ' + e.message, 'error')
+    }
+  } finally {
+    chatSending = false
+    el('chatSendButton').disabled = chatPick === null
+  }
+}
+
+/** Czat otwiera tło (przestrzeń „Czat Supon”) — okienko zaraz zniknie. */
+async function openChat() {
+  await browser.runtime.sendMessage({ type: 'openChat', conversationId: chatConversationId })
+  window.close()
+}
+
+el('openChat').addEventListener('click', () => {
+  openChat().catch((e) => status(e.message || String(e), 'error'))
+})
+el('chatSendButton').addEventListener('click', () => {
+  chatSend().catch((e) => chatStatus(e.message || String(e), 'error'))
+})
+
 el('openOptions').addEventListener('click', () => browser.runtime.openOptionsPage())
 el('enableTags').addEventListener('click', () => {
   enableTags().catch((e) => status(e.message || String(e), 'error'))
@@ -620,3 +823,5 @@ el('tone').addEventListener('change', updateToneHint)
 el('body').addEventListener('input', updateCounter)
 
 init().catch((e) => status(e.message || String(e), 'error'))
+// Czat niezależnie od zapytania: jego błąd nie może zasłonić „Wyślij do Przetargów”.
+initChat().catch((e) => console.warn('Czat w okienku:', e.message || String(e)))

@@ -3,6 +3,7 @@ import { appHref, can, canAny } from '../lib/api'
 import { BoardReportHelp } from './help/BoardReportHelp'
 import { CampaignsHelp } from './help/CampaignsHelp'
 import { CardMatchesHelp } from './help/CardMatchesHelp'
+import { ChatHelp } from './help/ChatHelp'
 import { DashboardHelp } from './help/DashboardHelp'
 import { InventoryHelp } from './help/InventoryHelp'
 import { AppFrame, Btn, Card, Field, LivePage, Mark, Slideshow, Th } from './help/kit'
@@ -28,6 +29,7 @@ const modules = [
   { id: 'raporty', label: 'Raporty' },
   { id: 'klienci', label: 'Klienci' },
   { id: 'zapytania', label: 'Zapytania' },
+  { id: 'czat', label: 'Czat' },
   { id: 'pobieranie', label: 'Pliki do pobrania' },
 ] as const
 
@@ -2098,6 +2100,7 @@ const panels: Record<ModuleId, () => ReactNode> = {
   raporty: () => <ReportsHelp />,
   klienci: () => <ClientsHelp />,
   zapytania: () => <InquiriesHelp />,
+  czat: () => <ChatHelp />,
   pobieranie: () => <DownloadsHelp />,
 }
 

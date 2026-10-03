@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api;
 
+use App\Events\Chat\QueueUpdated;
 use App\Http\Controllers\Controller;
 use App\Models\OfferComposeRequest;
 use App\Models\User;
@@ -60,6 +61,8 @@ class OfferComposeController extends Controller
             'body_text' => $data['body_text'] ?? null,
             'requested_at' => now(),
         ]);
+        // dodatek z websocketem pyta o kolejkę od razu (GET /inquiries/queued?with_offers=1)
+        event(new QueueUpdated((int) $user->id));
 
         return response()->json($this->present($row), 201);
     }

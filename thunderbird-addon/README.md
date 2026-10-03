@@ -18,6 +18,47 @@ odpowiedź jako odpowiedź na ten sam mail.
    Otwiera się zwykłe okno odpowiedzi — z adresatem, cytatem i podpisem — z gotową treścią na górze.
 6. Wysyłasz. Dodatek sam oznacza zapytanie w aplikacji jako obsłużone.
 
+## Czat (od 1.32.0)
+
+Czat firmowy z aplikacji jest też w Thunderbirdzie.
+
+**Gdzie jest przycisk.** Na pionowym pasku przy lewej krawędzi okna (tam, gdzie
+Poczta, Książka adresowa i Kalendarz) jest ikona **Czat Supon** — niebieski dymek.
+Czerwona liczba na niej to nieprzeczytane wiadomości (powyżej 99 widać „99+”).
+Kliknięcie otwiera czat w nowej karcie Thunderbirda, obok poczty. Do poczty wracasz
+kartą „Odebrane” albo ikoną koperty.
+
+**Nie widać pionowego paska?** Menu **Widok → Paski narzędzi → Pasek przestrzeni**.
+Jeśli nie widać menu: naciśnij klawisz Alt.
+
+**Pierwsze otwarcie.** Karta czatu to strona aplikacji Przetargi — za pierwszym
+razem trzeba się w niej zalogować (tym samym loginem co w przeglądarce) — Thunderbird
+ma własną pamięć stron, osobną od przeglądarki.
+
+**Powiadomienia.** Gdy ktoś do Ciebie napisze, w rogu ekranu pojawia się dymek
+z jego imieniem i początkiem wiadomości. Kliknięcie otwiera tę rozmowę. Dymka nie ma,
+gdy masz właśnie otwartą kartę czatu.
+
+**Okienko nad mailem.** Pod przyciskiem „Supon Przetargi” są teraz też:
+
+- **Otwórz czat** — z liczbą nieprzeczytanych,
+- **Wyślij koledze** — wybierasz osobę, dopisujesz kilka słów i klikasz
+  „Wyślij do: …”. Kolega dostaje w czacie temat, nadawcę i datę maila. Treść maila
+  idzie tylko po zaznaczeniu **Dołącz treść maila** (najwyżej 20 000 znaków).
+
+„Wyślij do Przetargów” działa jak dotąd i zostaje na górze okienka.
+
+**Kto ma czat.** Konto z uprawnieniem „Czat firmowy”. Bez niego ikony czatu nie ma,
+powiadomień też nie, a okienko nad mailem wygląda jak przed 1.32.0.
+
+Technicznie: tło dodatku (`chat.js`) łączy się z serwerem na żywo (Reverb,
+biblioteka `vendor/pusher.min.js`) na kanale `private-user.{id}`, a autoryzację
+kanału robi kluczem dodatku (`POST /api/broadcasting/auth`). Bez połączenia
+(serwer go nie ma, sieć zerwana) licznik jest odświeżany co minutę
+(`GET /api/chat/unread`). Ikona czatu to „przestrzeń” Thunderbirda (`spaces`,
+od Thunderbirda 115, bez dodatkowej zgody), więc aktualizacja do 1.32.0 przechodzi
+po cichu.
+
 ## Załączniki z zapytaniem (od 1.29.0)
 
 Gdy klient przysyła listę produktów w pliku, okienko nad mailem pokazuje
@@ -77,6 +118,12 @@ Odstęp podpowiada aplikacja nagłówkiem `X-Poll-After`. Dodatek przyjmuje najw
 30 sekund, bo po kliknięciu „Zapisz i wyślij” aplikacja czeka na odebranie listu
 około 40 sekund, a potem pisze, że Thunderbird go nie odebrał. Starsza wersja
 aplikacji nagłówka nie wysyła — wtedy dodatek pyta co 5 sekund, jak dotąd.
+
+Od 1.32.0, gdy działa połączenie na żywo (to samo co dla czatu), o nowej prośbie
+aplikacja mówi od razu sygnałem `queue.updated`, a dodatek pyta wtedy natychmiast.
+Pytanie w stałym rytmie jest już tylko asekuracją: dodatek wysyła nagłówek
+`X-Realtime: 1`, a aplikacja podaje odstęp co najmniej 120 sekund (dodatek przyjmuje
+wtedy do 120). Po zerwaniu połączenia dodatek od razu wraca do zwykłego rytmu.
 
 Powód: 25.09.2026 z 6–7 komputerów pytających co 5 sekund szło 82% wszystkich
 zapytań do aplikacji, także wtedy, gdy nikt z niej nie korzystał.
@@ -457,6 +504,11 @@ aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa
   `created_at`, `replied_at`; **brak klucza znaczy „sprawdzone, nie ma nic”** —
   dodatek zdejmuje wtedy znacznik) oraz `GET /api/inquiries/message-ids?since=`
   (identyfikatory maili ruszonych po tej chwili, `next_since`, `has_more`).
+- czat (1.32.0+): `GET /api/me` (`id`, `permissions`), `GET /api/realtime`,
+  `POST /api/broadcasting/auth`, `GET /api/chat/unread`, `GET /api/chat/conversations`,
+  `GET /api/chat/users`, `POST /api/chat/direct/{user}/messages`; zdarzenia na kanale
+  `private-user.{id}`: `chat.message`, `chat.read`, `queue.updated`. 403 z czatu =
+  konto bez czatu (dodatek ukrywa czat i sprawdza ponownie co kwadrans).
 - `POST /api/inquiries` przyjmuje pole `force` (domyślnie false) i przy cudzym
   zapytaniu z tego samego maila odpowiada **409** z polem `duplicate`
   (`id`, `user.name`, `created_at`, `replied_at`, `match`).

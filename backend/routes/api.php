@@ -27,6 +27,10 @@ use App\Http\Controllers\Api\CampaignClickController;
 use App\Http\Controllers\Api\CampaignController;
 use App\Http\Controllers\Api\CampaignTemplateController;
 use App\Http\Controllers\Api\CardMatchController;
+use App\Http\Controllers\Api\Chat\ChatConversationController;
+use App\Http\Controllers\Api\Chat\ChatMessageController;
+use App\Http\Controllers\Api\Chat\ChatUserController;
+use App\Http\Controllers\Api\Chat\RealtimeController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ClientInquiryController;
 use App\Http\Controllers\Api\DashboardController;
@@ -98,6 +102,34 @@ Route::middleware('throttle:300,1')->group(function (): void {
     Route::get('/k/{token}/o/{item}', [CampaignClickController::class, 'offer'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
     Route::get('/k/{token}/p/{item}', [CampaignClickController::class, 'product'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
     Route::get('/k/{token}/l/{item}', [CampaignClickController::class, 'link'])->where('token', '[A-Za-z0-9]{40}')->whereNumber('item');
+});
+
+// Czat firmowy — POZA grupą `log.activity`: dziennik zapisuje ciało każdego udanego POST, a treść wiadomości
+// i przekazanego maila nie może tam trafić. Limity mają własne przedrostki: bez nich throttle liczy wszystkie trasy
+// użytkownika z tym samym limitem na jednym liczniku.
+Route::middleware('auth:sanctum')->group(function (): void {
+    // konfiguracja websocketu — także bez uprawnienia `chat` (dodatek do Thunderbirda słucha nim kolejki)
+    Route::get('/realtime', RealtimeController::class);
+
+    Route::middleware('permission:chat')->prefix('chat')->group(function (): void {
+        Route::get('/users', [ChatUserController::class, 'index']);
+        Route::get('/unread', [ChatConversationController::class, 'unread']);
+        Route::get('/conversations', [ChatConversationController::class, 'index']);
+        Route::post('/conversations', [ChatConversationController::class, 'store'])->middleware('throttle:10,1,chat-conversations');
+        Route::get('/conversations/{conversation}', [ChatConversationController::class, 'show'])->whereNumber('conversation');
+        Route::post('/conversations/{conversation}/participants', [ChatConversationController::class, 'addParticipants'])
+            ->whereNumber('conversation');
+        Route::post('/conversations/{conversation}/leave', [ChatConversationController::class, 'leave'])->whereNumber('conversation');
+        Route::post('/conversations/{conversation}/read', [ChatConversationController::class, 'read'])->whereNumber('conversation');
+        Route::get('/conversations/{conversation}/messages', [ChatMessageController::class, 'index'])->whereNumber('conversation');
+        Route::post('/conversations/{conversation}/messages', [ChatMessageController::class, 'store'])
+            ->whereNumber('conversation')
+            ->middleware('throttle:60,1,chat-messages');
+        Route::post('/direct/{user}/messages', [ChatMessageController::class, 'storeDirect'])
+            ->whereNumber('user')
+            ->middleware('throttle:60,1,chat-messages');
+        Route::delete('/messages/{message}', [ChatMessageController::class, 'destroy'])->whereNumber('message');
+    });
 });
 
 Route::middleware(['auth:sanctum', 'log.activity'])->group(function (): void {

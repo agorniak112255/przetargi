@@ -10,6 +10,7 @@ export type NavIconName =
   | 'reports'
   | 'clients'
   | 'inquiries'
+  | 'chat'
   | 'campaigns'
   | 'ai-settings'
   | 'admin'
@@ -69,6 +70,8 @@ const shapes: Record<NavIconName, ReactNode> = {
       <path d="M3 7l9 6 9-6" />
     </>
   ),
+  // Dymek z dwiema liniami tekstu (makieta czatu, symbol i-chat).
+  chat: <path d="M4 5h16v11H9l-5 4zM8 9.5h8M8 12.5h5" />,
   // Koperta z odlatującą strzałką — wysyłka kampanii (Zapytania mają samą kopertę).
   campaigns: (
     <>

@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
-import { api, ApiError, type User } from './lib/api'
+import { api, ApiError, can, type User } from './lib/api'
+import { CHAT_PERMISSION } from './lib/chat'
+import { startRealtime, stopRealtime } from './lib/realtime'
 
 type AuthCtx = {
   user: User | null
@@ -50,6 +52,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void verify().finally(() => setLoading(false))
   }, [verify])
+
+  // Połączenie czatu w czasie rzeczywistym: nowe po zalogowaniu (także innej osoby), zamknięte po wylogowaniu.
+  const realtimeUserId = user && can(user, CHAT_PERMISSION) ? user.id : null
+  useEffect(() => {
+    if (realtimeUserId === null) return
+    void startRealtime(realtimeUserId)
+    return () => stopRealtime()
+  }, [realtimeUserId])
 
   async function login(email: string, password: string) {
     const data = await api<{ token: string; user: User }>('/login', {
