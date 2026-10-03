@@ -1907,6 +1907,8 @@ export function InquiryReply() {
         client_id: picked?.id ?? null,
         client: picked ? { id: picked.id, name: picked.name } : null,
         client_link: link,
+        // serwer przy zmianie klienta zdejmuje z wyniku dokument poprzedniego klienta (wynik i powód zostają)
+        outcome: !sameClient ? { ...cur.outcome, document: null } : cur.outcome,
         // podpowiedzi liczono dla poprzedniego klienta (serwer je usunął) — nowe policzy nocne sprawdzenie
         order_hints: !sameClient
           ? {

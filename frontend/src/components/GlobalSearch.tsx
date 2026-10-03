@@ -43,6 +43,7 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
   const [active, setActive] = useState(0)
   const [retry, setRetry] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const retryRef = useRef<HTMLButtonElement | null>(null)
   const openRef = useRef(open)
   const onOpenChangeRef = useRef(onOpenChange)
 
@@ -76,7 +77,8 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
   }, [open])
 
   // okno modalne: Escape zamyka tylko wyszukiwanie (nie okno pod spodem, np. subskrypcję kalendarza), Tab i Shift+Tab
-  // zostają w polu wyszukiwania — jedynym elemencie okna, do którego prowadzi Tab (wyniki wybiera się strzałkami)
+  // nie wychodzą poza okno: krążą między polem wyszukiwania a przyciskiem „Spróbuj ponownie”, gdy jest widoczny
+  // (wyniki wybiera się strzałkami)
   useEffect(() => {
     if (!open) return
     function onKey(e: globalThis.KeyboardEvent) {
@@ -86,7 +88,10 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
         onOpenChangeRef.current(false)
       } else if (e.key === 'Tab') {
         e.preventDefault()
-        inputRef.current?.focus()
+        const stops = [inputRef.current, retryRef.current].filter((el): el is HTMLInputElement | HTMLButtonElement => el !== null)
+        const at = stops.findIndex((el) => el === document.activeElement)
+        const next = at < 0 ? 0 : (at + (e.shiftKey ? stops.length - 1 : 1)) % stops.length
+        stops[next]?.focus()
       }
     }
     window.addEventListener('keydown', onKey, true)
@@ -231,7 +236,7 @@ export function GlobalSearch({ open, onOpenChange }: { open: boolean; onOpenChan
           {err && (
             <p className="px-2 py-2 text-xs text-red-600">
               {err}{' '}
-              <button type="button" className="underline" onClick={() => setRetry((n) => n + 1)}>
+              <button ref={retryRef} type="button" className="underline" onClick={() => setRetry((n) => n + 1)}>
                 Spróbuj ponownie
               </button>
             </p>
