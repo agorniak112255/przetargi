@@ -26,6 +26,7 @@ async function refresh() {
   const settings = await getSettings()
   el('baseUrl').value = settings.baseUrl
   el('useAppSubject').checked = settings.useAppSubject
+  el('blinkChatIcon').checked = settings.blinkChatIcon !== false
   await showIdentityState()
   await showLastTiming()
   await showQueuePace()
@@ -378,6 +379,10 @@ async function showQueuePace() {
 
 el('useAppSubject').addEventListener('change', async (event) => {
   await setSettings({ useAppSubject: event.target.checked })
+})
+
+el('blinkChatIcon').addEventListener('change', async (event) => {
+  await setSettings({ blinkChatIcon: event.target.checked })
 })
 
 refresh().catch((e) => status(e.message || String(e), 'error'))

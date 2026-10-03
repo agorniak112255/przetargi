@@ -1,5 +1,7 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -13,6 +15,7 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { ApiError } from '../lib/api'
+import { publicDir } from '../lib/publicDir'
 import {
   callDurationLabel,
   callKindLabel,
@@ -331,8 +334,15 @@ function CardTile({
   )
 }
 
+/**
+ * Małe okno czatu z Thunderbirda (/czat-okno): odnośniki do zapytań i przetargów otwieramy w nowym oknie — dodatek
+ * przenosi je do zwykłej przeglądarki (w okienku nie ma miejsca na aplikację, a Thunderbird nie trzyma logowania).
+ */
+const CompactChatContext = createContext(false)
+
 function LinkCard({ m }: { m: ChatMessage }) {
   const navigate = useNavigate()
+  const compact = useContext(CompactChatContext)
   const link = m.meta?.link
   if (!link) return null
   const path = safeAppPath(link.path)
@@ -345,7 +355,10 @@ function LinkCard({ m }: { m: ChatMessage }) {
       {path ? (
         <button
           type="button"
-          onClick={() => navigate(path)}
+          onClick={() => {
+            if (compact) window.open(new URL(`${publicDir()}${path}`, window.location.origin).href, '_blank')
+            else navigate(path)
+          }}
           className="mt-0.5 justify-self-start font-medium text-sky-700 hover:underline"
         >
           {openLabel} →
@@ -1611,7 +1624,11 @@ function previewFor(c: ChatConversation, me: number): string {
   return text
 }
 
-export function Chat() {
+/**
+ * `compact` — małe okno czatu otwierane przyciskiem „Czat” dodatku Thunderbirda (/czat-okno, ok. 400 px): bez nagłówka
+ * strony i bez menu aplikacji, cała wysokość okna; układ jak na telefonie (lista albo rozmowa).
+ */
+export function Chat({ compact = false }: { compact?: boolean } = {}) {
   const { user } = useAuth()
   const me = user?.id ?? 0
   const [params, setParams] = useSearchParams()
@@ -1861,8 +1878,15 @@ export function Chat() {
   const panel = 'rounded-2xl bg-white shadow-sm ring-1 ring-slate-200/70'
 
   return (
-    <div className="app-chat flex h-[calc(100vh-2.5rem)] min-h-[480px] flex-col">
-      <h1 className="mb-3 text-xl font-semibold">Czat</h1>
+    <CompactChatContext.Provider value={compact}>
+    <div
+      className={
+        compact
+          ? 'app-chat app-chat-window flex h-screen min-h-0 flex-col bg-slate-50 p-2'
+          : 'app-chat flex h-[calc(100vh-2.5rem)] min-h-[480px] flex-col'
+      }
+    >
+      {!compact && <h1 className="mb-3 text-xl font-semibold">Czat</h1>}
       {pageErr && <p className="mb-2 rounded-xl bg-red-50 px-3 py-2 text-xs text-red-700">{pageErr}</p>}
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] gap-3 md:grid-cols-[300px_minmax(0,1fr)]">
         <aside
@@ -2016,5 +2040,6 @@ export function Chat() {
         />
       )}
     </div>
+    </CompactChatContext.Provider>
   )
 }

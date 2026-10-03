@@ -46,6 +46,8 @@ async function getSettings() {
     token: '',
     tone: DEFAULT_TONE,
     useAppSubject: false,
+    // Przycisk „Czat” miga na czerwono, dopóki są nieprzeczytane (od 1.34.0).
+    blinkChatIcon: true,
   })
   s.baseUrl = String(s.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '')
   if (TONES[s.tone] === undefined) s.tone = DEFAULT_TONE

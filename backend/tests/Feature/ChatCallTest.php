@@ -762,6 +762,26 @@ final class ChatCallTest extends TestCase
         $this->assertSame('missed', ChatCall::query()->findOrFail($callId)->status);
     }
 
+    public function test_expire_waits_for_caller_still_on_join_screen(): void
+    {
+        $this->freezeTime();
+        $anna = $this->chatUser('Anna');
+        $bartek = $this->chatUser('Bartek');
+        $callId = (int) $this->startCall($anna, $this->direct($anna, $bartek))->json('data.id');
+        // LiveKit odpowiada, ale Anny jeszcze nie ma w pokoju — wybiera mikrofon na ekranie „Dołącz”
+        $this->roomParticipants = [];
+
+        $this->travel(46)->seconds();
+        $this->artisan('chat:calls-expire')->assertSuccessful();
+        $this->assertSame('ringing', ChatCall::query()->findOrFail($callId)->status);
+        $this->assertSame(0, $this->sentTo('DeleteRoom'));
+
+        // nie dołączyła, a jej token wygasł — nieodebrane
+        $this->travel(121)->seconds();
+        $this->artisan('chat:calls-expire')->assertSuccessful();
+        $this->assertSame('missed', ChatCall::query()->findOrFail($callId)->status);
+    }
+
     public function test_expire_without_livekit_answer_still_applies_ring_timeout(): void
     {
         $this->freezeTime();

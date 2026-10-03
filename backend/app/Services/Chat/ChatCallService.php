@@ -324,16 +324,19 @@ final class ChatCallService
             if ($call->status === ChatCall::STATUS_RINGING) {
                 $ring = (int) config('chat.calls.ring_seconds', 45);
                 if ($call->started_at === null || $call->started_at->lte($now->copy()->subSeconds($ring))) {
-                    // Odbiorca właśnie się łączy (POST /join, a przeglądarka pyta o zgodę na mikrofon i kamerę) —
+                    // Ktoś właśnie się łączy (POST /join, a przeglądarka pyta o zgodę na mikrofon i kamerę) —
                     // dzwonienie czeka na niego najwyżej tyle, ile ważny jest jego token; inaczej dostałby
-                    // „nieodebrane” w trakcie odbierania.
+                    // „nieodebrane” w trakcie odbierania. Dotyczy też dzwoniącego, który jeszcze stoi na ekranie
+                    // „Dołącz” (03.10.2026: po 45 s pokój znikał mu spod rąk i widział „Nie udało się połączyć”) —
+                    // ale tylko gdy serwer rozmów potwierdził, że go w pokoju nie ma (bez odpowiedzi LiveKit nie
+                    // przedłużamy).
                     $ttl = (int) config('chat.calls.token_ttl', 120);
                     $answering = $call->started_at !== null
                         && $call->started_at->gt($now->copy()->subSeconds($ring + $ttl))
                         && ChatCallMember::query()
                             ->where('call_id', $call->id)
                             ->where('state', ChatCallMember::STATE_CONNECTING)
-                            ->where('user_id', '!=', (int) $call->started_by)
+                            ->when($participants === null, fn ($q) => $q->where('user_id', '!=', (int) $call->started_by))
                             ->where('updated_at', '>', $now->copy()->subSeconds($ttl))
                             ->exists();
                     if ($answering) {

@@ -2,7 +2,9 @@
  * Czat firmowy w tle dodatku (od 1.32.0): przestrzeń „Czat Supon” na pionowym pasku Thunderbirda, liczba
  * nieprzeczytanych na jej przycisku, powiadomienia o nowych wiadomościach i połączenie na żywo z serwerem
  * (Reverb, protokół Pushera — vendor/pusher.min.js). Od 1.33.0 także dzwonek rozmów głosowych i wideo
- * (chat.call.ringing / chat.call.updated) — rozmowa sama odbywa się w przeglądarce.
+ * (chat.call.ringing / chat.call.updated) — rozmowa sama odbywa się w przeglądarce. Od 1.34.0 przycisk „Czat” na
+ * górnym pasku z małym osobnym oknem czatu, miganie przycisku przy nieprzeczytanych, mruganie Thunderbirda na pasku
+ * zadań i przenoszenie stron aplikacji otwartych z czatu (rozmowa, zapytanie) do domyślnej przeglądarki.
  *
  * To samo połączenie niesie sygnał `queue.updated`: w kolejce dodatku pojawiła się praca („Zapisz i wyślij”,
  * oferta). Dzięki niemu background.js pyta o kolejkę od razu, a przy działającym połączeniu rzadziej na zapas.
@@ -57,6 +59,20 @@ const CHAT_REALTIME_RECHECK_MINUTES = 15
 /** Najdłuższa treść powiadomienia — dłuższą system i tak utnie. */
 const CHAT_PREVIEW_CHARS = 300
 
+/** Ikona przycisku „Czat” w drugiej fazie migania (od 1.34.0): ten sam dymek na czerwono. */
+const CHAT_ALERT_ICON = 'icons/chat-alert.svg'
+
+/** Co tyle milisekund przycisk „Czat” zmienia ikonę, dopóki są nieprzeczytane. */
+const CHAT_BLINK_MS = 700
+
+/** Wymiary małego okna czatu (od 1.34.0) — jak okno komunikatora obok poczty. */
+const CHAT_WINDOW_WIDTH = 400
+
+const CHAT_WINDOW_HEIGHT = 640
+
+/** Strony czatu w aplikacji — te zostają w Thunderbirdzie; każdą inną stronę aplikacji przenosimy do przeglądarki. */
+const CHAT_PAGE_PATHS = ['/czat', '/czat-okno']
+
 /** Przedrostek powiadomienia o dzwoniącej rozmowie (od 1.33.0) — po nim kliknięcie otwiera rozmowę w przeglądarce. */
 const CALL_NOTIFICATION_PREFIX = 'call-'
 
@@ -101,6 +117,20 @@ const chatState = {
   ringTimer: null,
   /** Wspólny AudioContext dzwonka; zakładany przy pierwszym dzwonku, zamykany, gdy nic już nie dzwoni. */
   audio: null,
+  /** Małe okno czatu (od 1.34.0): jego numer, gdy jest otwarte, i otwieranie w toku (dwa szybkie kliknięcia = jedno okno). */
+  windowId: null,
+  windowPromise: null,
+  /** Okno czatu ma fokus — wtedy przycisk nie miga, a dymek i mruganie paska zadań są zbędne. */
+  windowFocused: false,
+  /** Zegar migania przycisku „Czat” i jego bieżąca faza (true = czerwona ikona). */
+  blinkTimer: null,
+  blinkOn: false,
+  /** Ustawienie „Migająca ikona czatu” (domyślnie włączone). */
+  blinkSetting: true,
+  /** Karty ze stroną aplikacji, które właśnie przenosimy do przeglądarki — jedno przeniesienie na kartę. */
+  redirecting: new Set(),
+  /** Karty, w których była strona czatu (/czat, /czat-okno) — tych nie przenosimy, nawet gdy przejdą dalej. */
+  chatTabs: new Set(),
 }
 
 /** Połączenie na żywo działa i kanał użytkownika jest zasubskrybowany — sygnały dotrą bez pytania serwera. */
@@ -121,12 +151,17 @@ function chatBadgeText(count) {
  * otwarciu. Część po `#` nie idzie na serwer ani do dzienników, a strona zaraz usuwa ją z adresu i trzyma klucz
  * tylko w pamięci (frontend/src/lib/tokenStore.ts).
  */
-async function chatPageUrl(conversationId = null, withToken = true) {
+async function chatPageUrl(conversationId = null, withToken = true, page = '/czat') {
   const { baseUrl, token } = await getSettings()
   const id = Number.parseInt(String(conversationId ?? ''), 10)
   const query = Number.isFinite(id) && id > 0 ? '?c=' + id : ''
 
-  return baseUrl + '/czat' + query + (withToken && token ? '#tb=' + encodeURIComponent(token) : '')
+  return baseUrl + page + query + (withToken && token ? '#tb=' + encodeURIComponent(token) : '')
+}
+
+/** Adres małego okna czatu (od 1.34.0): `/czat-okno` — ten sam czat w wąskim układzie, bez menu aplikacji. */
+async function chatWindowUrl(conversationId = null) {
+  return chatPageUrl(conversationId, true, '/czat-okno')
 }
 
 async function chatHomeUrl() {
@@ -213,7 +248,216 @@ function chatSetUnread(count) {
   const number = Math.max(0, Number.parseInt(String(count ?? 0), 10) || 0)
   const changed = number !== chatState.unread
   chatState.unread = number
-  if (changed) chatPaintBadge()
+  if (changed) {
+    chatPaintBadge()
+    chatPaintActionBadge()
+  }
+  chatSyncBlink()
+}
+
+/* ------------------------- przycisk „Czat” i małe okno (od 1.34.0) ------------------------- */
+
+/*
+ * Przycisk „Czat” na górnym pasku Thunderbirda (browser_action, bez okienka — kliknięcie to onClicked) otwiera
+ * małe osobne okno czatu, a drugie kliknięcie przywołuje to samo okno. Przestrzeń na lewym pasku zostaje jako
+ * druga droga wejścia. Dopóki są nieprzeczytane, a okno czatu nie ma fokusu, przycisk miga na czerwono.
+ */
+
+/** Liczba nieprzeczytanych na przycisku „Czat” — ta sama co na przestrzeni. */
+function chatPaintActionBadge() {
+  if (!browser.browserAction) return
+  const text = chatBadgeText(chatState.unread)
+  Promise.resolve()
+    .then(() => browser.browserAction.setBadgeText({ text }))
+    .then(() => browser.browserAction.setTitle({ title: text === '' ? 'Czat' : 'Czat — nieprzeczytane: ' + text }))
+    .catch((e) => console.warn('Supon: nie udało się odświeżyć licznika na przycisku czatu:', e.message))
+}
+
+function chatSetActionIcon(path) {
+  if (!browser.browserAction) return
+  Promise.resolve()
+    .then(() => browser.browserAction.setIcon({ path }))
+    .catch(() => {})
+}
+
+function chatBlinkStep() {
+  chatState.blinkOn = !chatState.blinkOn
+  chatSetActionIcon(chatState.blinkOn ? CHAT_ALERT_ICON : CHAT_ICON)
+}
+
+/**
+ * Miganie przycisku: tylko przy włączonym czacie i ustawieniu, gdy są nieprzeczytane, a okno czatu nie ma fokusu.
+ * Jeden zegar; po zatrzymaniu ikona zawsze wraca do zwykłej.
+ */
+function chatSyncBlink() {
+  const blink = chatState.blinkSetting && chatState.enabled === true && chatState.unread > 0 && !chatState.windowFocused
+  if (blink) {
+    if (chatState.blinkTimer === null) {
+      chatState.blinkTimer = setInterval(chatBlinkStep, CHAT_BLINK_MS)
+      chatBlinkStep()
+    }
+
+    return
+  }
+  if (chatState.blinkTimer !== null) {
+    clearInterval(chatState.blinkTimer)
+    chatState.blinkTimer = null
+  }
+  if (chatState.blinkOn) {
+    chatState.blinkOn = false
+    chatSetActionIcon(CHAT_ICON)
+  }
+}
+
+/**
+ * Otwiera małe okno czatu, a gdy już jest — przywołuje je na wierzch (z numerem rozmowy: przechodzi do niej).
+ * Bez połączenia z aplikacją otwiera ustawienia dodatku; gdy Thunderbird nie da okna — czat w przestrzeni.
+ */
+async function chatOpenWindow(conversationId = null) {
+  const { token } = await getSettings()
+  if (!token) {
+    await browser.runtime.openOptionsPage()
+
+    return
+  }
+  if (chatState.windowPromise !== null) {
+    // Drugie kliknięcie, zanim pierwsze otworzyło okno — czekamy na tamto zamiast otwierać drugie.
+    await chatState.windowPromise.catch(() => {})
+    if (conversationId === null && chatState.windowId !== null) return
+  }
+
+  if (chatState.windowId !== null) {
+    const windowId = chatState.windowId
+    try {
+      await browser.windows.update(windowId, { focused: true })
+    } catch (e) {
+      // Okno zniknęło bez zdarzenia — otwieramy nowe niżej.
+      if (chatState.windowId === windowId) chatState.windowId = null
+    }
+    if (chatState.windowId === windowId) {
+      if (conversationId !== null) await chatWindowGoTo(windowId, conversationId)
+
+      return
+    }
+  }
+
+  chatState.windowPromise = (async () => {
+    const created = await browser.windows.create({
+      type: 'popup',
+      url: await chatWindowUrl(conversationId),
+      width: CHAT_WINDOW_WIDTH,
+      height: CHAT_WINDOW_HEIGHT,
+    })
+    chatState.windowId = created && created.id !== undefined ? created.id : null
+    // Nowe okno dostaje fokus; zdarzenie onFocusChanged to potwierdzi albo poprawi.
+    chatState.windowFocused = chatState.windowId !== null && (!created || created.focused !== false)
+    chatSyncBlink()
+  })()
+  try {
+    await chatState.windowPromise
+  } catch (e) {
+    console.warn('Supon: nie udało się otworzyć okna czatu, otwieram czat w karcie:', e.message)
+    await chatOpen(conversationId)
+  } finally {
+    chatState.windowPromise = null
+  }
+}
+
+/** Otwarte okno czatu przechodzi do wskazanej rozmowy (`/czat-okno?c=…`). */
+async function chatWindowGoTo(windowId, conversationId) {
+  try {
+    const win = await browser.windows.get(windowId, { populate: true })
+    const tab = win && Array.isArray(win.tabs) ? win.tabs[0] : null
+    if (tab && tab.id !== undefined) await browser.tabs.update(tab.id, { url: await chatWindowUrl(conversationId) })
+  } catch (e) {
+    // Okno zostaje na wierzchu z tym, co pokazywało — rozmowę wybierze się z listy.
+    console.warn('Supon: nie udało się przejść do rozmowy w oknie czatu:', e.message)
+  }
+}
+
+/**
+ * Karta albo okno, które dodatek sam otworzył dla czatu: małe okno czatu albo karta przestrzeni. Tych nie ruszamy,
+ * nawet gdy strona przejdzie w nich pod inny adres aplikacji.
+ */
+function chatOwnTab(tab) {
+  return (chatState.windowId !== null && tab.windowId === chatState.windowId)
+    || (chatState.spaceId !== null && tab.spaceId === chatState.spaceId)
+    || chatState.chatTabs.has(tab.id)
+}
+
+/**
+ * Adres strony aplikacji do otwarcia w przeglądarce (bez końcówki `#…`) albo null. Strony czatu (`/czat`,
+ * `/czat-okno` z dowolnym `?…`) zostają w Thunderbirdzie; każda inna strona aplikacji — w tym rozmowa
+ * `/czat/rozmowa/{id}` i np. `/inquiries/91` — w Thunderbirdzie nie ma logowania, a rozmowa nie ma tam
+ * mikrofonu i kamery.
+ */
+function chatAppUrlForBrowser(url, baseUrl) {
+  if (typeof url !== 'string' || !url.startsWith(baseUrl + '/')) return null
+  const bare = url.split('#')[0]
+  const path = bare.slice(baseUrl.length).split('?')[0].replace(/\/+$/, '')
+  if (CHAT_PAGE_PATHS.includes(path)) return null
+
+  return bare
+}
+
+/**
+ * Strona czatu otworzyła nową kartę albo okno Thunderbirda ze stroną aplikacji (window.open: Zadzwoń, Wideo,
+ * Dołącz, „Otwórz” zapytanie) — zamykamy je i otwieramy ten adres w domyślnej przeglądarce. Karta zwykle startuje
+ * jako about:blank i dopiero potem dostaje adres, dlatego patrzymy na każdą zmianę adresu (tabs.onUpdated).
+ * Filtra `urls` w tabs.onUpdated nie używamy: wymaga uprawnienia „tabs”, którego dodatek nie ma (nowa zgoda
+ * zatrzymałaby cichą aktualizację). Adres karty widać dzięki uprawnieniu do domeny aplikacji.
+ */
+async function chatRedirectTab(tab, url) {
+  if (!tab || tab.id === undefined || typeof url !== 'string' || !url.startsWith('http')) return
+  if (chatState.redirecting.has(tab.id) || chatOwnTab(tab)) return
+  const { baseUrl } = await getSettings()
+  const target = chatAppUrlForBrowser(url, baseUrl)
+  if (target === null) {
+    // Karta ze stroną czatu zostaje czatem także po przejściu w niej do innej strony aplikacji (menu w /czat).
+    if (url.startsWith(baseUrl + '/')) chatState.chatTabs.add(tab.id)
+
+    return
+  }
+  if (chatState.redirecting.has(tab.id) || chatOwnTab(tab)) return
+
+  // Do zamknięcia karty (tabs.onRemoved) — kolejne zdarzenia tej samej karty nie otworzą przeglądarki drugi raz.
+  chatState.redirecting.add(tab.id)
+  try {
+    await browser.windows.openDefaultBrowser(target)
+  } catch (e) {
+    console.warn('Supon: nie udało się otworzyć strony w przeglądarce:', e.message)
+  }
+  try {
+    await browser.tabs.remove(tab.id)
+  } catch (e) {
+    // Osobne okno, którego karty Thunderbird nie zamyka — zamykamy całe okno (nigdy główne ani okno czatu).
+    try {
+      const win = await browser.windows.get(tab.windowId)
+      if (win && win.type === 'popup' && win.id !== chatState.windowId) await browser.windows.remove(win.id)
+    } catch (e2) {
+      console.warn('Supon: nie udało się zamknąć karty ze stroną aplikacji:', e2.message)
+    }
+  }
+}
+
+/**
+ * Sygnał 3 (od 1.34.0): przycisk Thunderbirda mruga na pasku zadań, gdy żadne jego okno nie ma fokusu.
+ * Mruga główne okno poczty (ostatnio używane okno typu „normal”).
+ */
+async function chatDrawAttention() {
+  if (chatState.windowFocused) return
+  try {
+    const last = await browser.windows.getLastFocused()
+    if (!last || last.focused) return
+    let target = last.type === 'normal' ? last : null
+    if (target === null) {
+      const all = await browser.windows.getAll()
+      target = (Array.isArray(all) ? all : []).find((w) => w.type === 'normal') || null
+    }
+    if (target !== null) await browser.windows.update(target.id, { drawAttention: true })
+  } catch (e) {
+    console.warn('Supon: nie udało się zwrócić uwagi na Thunderbirda:', e.message)
+  }
 }
 
 /**
@@ -264,6 +508,7 @@ async function chatOpen(conversationId = null) {
 
 /** Czy człowiek patrzy właśnie na czat — wtedy powiadomienie byłoby zbędne. */
 async function chatInFront() {
+  if (chatState.windowFocused) return true
   try {
     // adres bez klucza — strona usuwa końcówkę #tb=… zaraz po wczytaniu
     const home = await chatPageUrl(null, false)
@@ -283,12 +528,25 @@ function chatEnable() {
   if (chatState.enabled === true) return
   chatState.enabled = true
   chatEnsureSpace()
+  chatSetActionEnabled(true)
+  chatSyncBlink()
+}
+
+/** Bez uprawnienia do czatu przycisk „Czat” jest wyszarzony (dodatek nie może go schować). */
+function chatSetActionEnabled(on) {
+  if (!browser.browserAction) return
+  Promise.resolve()
+    .then(() => (on ? browser.browserAction.enable() : browser.browserAction.disable()))
+    .catch(() => {})
 }
 
 /** Brak uprawnienia (403) albo serwer bez czatu (404): bez przestrzeni, licznika i powiadomień. */
 async function chatDisable() {
   chatState.enabled = false
   chatState.unread = 0
+  chatPaintActionBadge()
+  chatSyncBlink()
+  chatSetActionEnabled(false)
   chatCallStopAll()
   chatState.recheckAt = Date.now() + CHAT_DISABLED_RECHECK_MINUTES * 60 * 1000
   await chatRemoveSpace()
@@ -394,7 +652,10 @@ async function chatOnMessage(data) {
 
   // Wpis o rozmowie (kind=call) tylko odświeża licznik — dzwoni osobne zdarzenie chat.call.ringing.
   if (data.kind === 'call') return
-  if (chatState.enabled !== true || await chatInFront()) return
+  if (chatState.enabled !== true) return
+  // Sygnał 3: Thunderbird schowany albo zminimalizowany — jego przycisk mruga na pasku zadań.
+  await chatDrawAttention()
+  if (await chatInFront()) return
 
   try {
     await browser.notifications.create(
@@ -833,6 +1094,17 @@ async function chatRestart() {
   chatState.nextUnreadAt = 0
   chatState.realtimeRetryAt = 0
   chatState.authStatus = 0
+  // Przycisk „Czat”: bez licznika i migania do odpowiedzi nowego konta; wyszarzy go dopiero brak uprawnienia.
+  chatPaintActionBadge()
+  chatSyncBlink()
+  chatSetActionEnabled(true)
+  // Okno czatu trzyma w pamięci stary klucz — po zmianie konta albo „Odłącz” nie może zostać otwarte.
+  if (chatState.windowId !== null) {
+    const windowId = chatState.windowId
+    chatState.windowId = null
+    chatState.windowFocused = false
+    Promise.resolve().then(() => browser.windows.remove(windowId)).catch(() => {})
+  }
   // Adres przestrzeni idzie za adresem aplikacji, a bez klucza i bez czatu przestrzeni nie ma.
   if (chatState.spaceId !== null) await chatPaintBadge()
   const { token } = await getSettings()
@@ -881,10 +1153,66 @@ browser.notifications.onClicked.addListener((notificationId) => {
   const id = String(notificationId || '')
   if (!id.startsWith(CHAT_NOTIFICATION_PREFIX)) return
   const match = /^chat-(\d+)-/.exec(id)
-  chatOpen(match ? Number(match[1]) : null)
+  // Od 1.34.0 dymek otwiera (albo przywołuje) małe okno czatu od razu na tej rozmowie.
+  chatOpenWindow(match ? Number(match[1]) : null)
     .catch((e) => console.warn('Supon: nie udało się otworzyć czatu:', e.message))
   browser.notifications.clear(id).catch(() => {})
 })
+
+// Przycisk „Czat” na górnym pasku (bez okienka, więc kliknięcie przychodzi tutaj).
+if (browser.browserAction) {
+  browser.browserAction.onClicked.addListener(() => {
+    chatOpenWindow(null).catch((e) => console.warn('Supon: nie udało się otworzyć okna czatu:', e.message))
+  })
+  Promise.resolve()
+    .then(() => browser.browserAction.setBadgeBackgroundColor({ color: CHAT_BADGE_COLOR }))
+    .catch(() => {})
+}
+
+browser.windows.onRemoved.addListener((windowId) => {
+  if (windowId !== chatState.windowId) return
+  chatState.windowId = null
+  chatState.windowFocused = false
+  chatSyncBlink()
+})
+
+// Fokus na oknie czatu zatrzymuje miganie; przejście do poczty albo poza Thunderbirda (WINDOW_ID_NONE) je wznawia.
+browser.windows.onFocusChanged.addListener((windowId) => {
+  const focused = chatState.windowId !== null && windowId === chatState.windowId
+  if (focused === chatState.windowFocused) return
+  chatState.windowFocused = focused
+  chatSyncBlink()
+})
+
+// Strony aplikacji otwarte z czatu w nowej karcie albo oknie Thunderbirda → domyślna przeglądarka.
+browser.tabs.onCreated.addListener((tab) => {
+  chatRedirectTab(tab, tab && tab.url).catch((e) => console.warn('Supon: przeniesienie karty:', e.message))
+})
+browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // Zmiana adresu (about:blank → strona) albo koniec ładowania karty, która od początku miała adres.
+  const url = changeInfo && typeof changeInfo.url === 'string' ? changeInfo.url
+    : changeInfo && changeInfo.status === 'complete' && tab && typeof tab.url === 'string' ? tab.url : null
+  if (url === null) return
+  chatRedirectTab(Object.assign({ id: tabId }, tab || {}), url)
+    .catch((e) => console.warn('Supon: przeniesienie karty:', e.message))
+})
+browser.tabs.onRemoved.addListener((tabId) => {
+  chatState.redirecting.delete(tabId)
+  chatState.chatTabs.delete(tabId)
+})
+
+// Ustawienie „Migająca ikona czatu” (strona ustawień) — od razu, bez restartu.
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes.blinkChatIcon) return
+  chatState.blinkSetting = changes.blinkChatIcon.newValue !== false
+  chatSyncBlink()
+})
+getSettings()
+  .then((settings) => {
+    chatState.blinkSetting = settings.blinkChatIcon !== false
+    chatSyncBlink()
+  })
+  .catch(() => {})
 
 // Powiadomienie o rozmowie: strona rozmowy w domyślnej przeglądarce — sama rozmowa nie odbywa się w Thunderbirdzie.
 browser.notifications.onClicked.addListener((notificationId) => {

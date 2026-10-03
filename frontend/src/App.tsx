@@ -168,6 +168,19 @@ export default function App() {
               </Guard>
             }
           />
+          {/* Małe okno czatu z dodatku Thunderbirda — bez menu aplikacji (poza Layout); dzwoni tam dodatek. */}
+          <Route
+            path="/czat-okno"
+            element={
+              <Guard>
+                <ChatUnreadProvider>
+                  <PermissionGuard permission="chat">
+                    <Chat compact />
+                  </PermissionGuard>
+                </ChatUnreadProvider>
+              </Guard>
+            }
+          />
           <Route
             element={
               <Guard>

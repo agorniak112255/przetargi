@@ -36,8 +36,9 @@ razem trzeba się w niej zalogować (tym samym loginem co w przeglądarce) — T
 ma własną pamięć stron, osobną od przeglądarki.
 
 **Powiadomienia.** Gdy ktoś do Ciebie napisze, w rogu ekranu pojawia się dymek
-z jego imieniem i początkiem wiadomości. Kliknięcie otwiera tę rozmowę. Dymka nie ma,
-gdy masz właśnie otwartą kartę czatu.
+z jego imieniem i początkiem wiadomości. Kliknięcie otwiera tę rozmowę (od 1.34.0
+w małym oknie czatu — niżej). Dymka nie ma, gdy masz właśnie przed sobą kartę albo
+okno czatu.
 
 **Okienko nad mailem.** Pod przyciskiem „Supon Przetargi” są teraz też:
 
@@ -58,6 +59,48 @@ kanału robi kluczem dodatku (`POST /api/broadcasting/auth`). Bez połączenia
 (`GET /api/chat/unread`). Ikona czatu to „przestrzeń” Thunderbirda (`spaces`,
 od Thunderbirda 115, bez dodatkowej zgody), więc aktualizacja do 1.32.0 przechodzi
 po cichu.
+
+## Okno czatu i sygnały nowej wiadomości (od 1.34.0)
+
+**Przycisk „Czat”.** Na górnym pasku Thunderbirda, obok „Pobierz” i „Napisz”, jest
+przycisk **Czat** (niebieski dymek). Kliknięcie otwiera małe osobne okno czatu —
+można je przesunąć w róg ekranu i pisać, mając pocztę przed oczami. Gdy okno schowa
+się za Thunderbirdem, kliknij „Czat” jeszcze raz — to samo okno wróci na wierzch
+(drugie się nie otworzy).
+
+**Nie widać przycisku?** Kliknij prawym przyciskiem myszy wolne miejsce na górnym
+pasku → **Dostosuj…** → przeciągnij „Czat” na pasek → **Zapisz**.
+
+Ikona **Czat Supon** na lewym pasku zostaje — to druga droga do tego samego czatu
+(w karcie zamiast w oknie). „Otwórz czat” w okienku nad mailem też otwiera kartę.
+
+**Jak dodatek daje znać o nowej wiadomości:**
+
+1. **Migający przycisk.** Dopóki masz nieprzeczytane, przycisk „Czat” miga na
+   czerwono i pokazuje ich liczbę. Przestaje, gdy przeczytasz wiadomości albo
+   klikniesz w okno czatu. Miganie można wyłączyć w ustawieniach dodatku
+   (sekcja „Czat” → „Migająca ikona czatu”); liczba zostaje.
+2. **Dymek w rogu ekranu** — jak dotąd; kliknięcie otwiera okno czatu od razu na tej
+   rozmowie.
+3. **Mruganie Thunderbirda na pasku zadań Windows.** Gdy Thunderbird jest
+   zminimalizowany albo schowany pod innymi oknami, jego przycisk na pasku zadań
+   mruga, jak przy Teams. Nie mruga przy Twoich własnych wiadomościach i przy
+   rozmowie głosowej (ta ma swój dzwonek).
+
+**Strony aplikacji otwierają się w przeglądarce.** Gdy w oknie albo karcie czatu
+klikniesz coś, co otwiera inną stronę aplikacji (np. „Otwórz” przy zapytaniu,
+„Zadzwoń”, „Wideo”, „Dołącz”), dodatek zamyka kartę, którą otworzył Thunderbird,
+i otwiera tę stronę w przeglądarce (Chrome/Edge) — w Thunderbirdzie nie ma
+logowania do aplikacji, a rozmowa potrzebuje mikrofonu i kamery przeglądarki.
+
+Technicznie: `browser_action` bez okienka (kliknięcie → `browserAction.onClicked`),
+okno `windows.create({ type: 'popup' })` pod adresem `/czat-okno` (z `?c=` przy
+konkretnej rozmowie i kluczem dodatku w `#tb=…`), miganie przez
+`browserAction.setIcon` co 0,7 s między `icons/chat.svg` i `icons/chat-alert.svg`,
+mruganie paska zadań przez `windows.update(…, { drawAttention: true })`. Strony
+aplikacji w nowych kartach dodatek wyłapuje w `tabs.onCreated`/`tabs.onUpdated`
+(adres karty widzi dzięki uprawnieniu do domeny aplikacji). Wszystko bez nowych
+zgód, więc aktualizacja do 1.34.0 przechodzi po cichu.
 
 ## Rozmowy głosowe i wideo (od 1.33.0)
 
@@ -533,6 +576,8 @@ aplikacji trzeba dopisać nową domenę do `permissions` i zbudować XPI od nowa
 - rozmowy (1.33.0+): zdarzenia `chat.call.ringing` (`call_id`, `conversation_id`,
   `conversation_name`, `kind`, `started_by`) i `chat.call.updated` (`call_id`, `status`,
   `reason`) na tym samym kanale; strona `/czat/rozmowa/{id}` w aplikacji.
+- okno czatu (1.34.0+): strona `/czat-okno` (czat w wąskim układzie, bez menu
+  aplikacji; `?c=` rozmowa, `?u=` osoba, klucz dodatku w `#tb=…` jak w `/czat`).
 - `POST /api/inquiries` przyjmuje pole `force` (domyślnie false) i przy cudzym
   zapytaniu z tego samego maila odpowiada **409** z polem `duplicate`
   (`id`, `user.name`, `created_at`, `replied_at`, `match`).

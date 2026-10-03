@@ -1326,11 +1326,25 @@ export default function CallPage() {
     roomRef.current = r
     try {
       await r.connect(res.join.url, res.join.token, { autoSubscribe: false })
-    } catch {
+    } catch (ex) {
       if (roomRef.current === r) roomRef.current = null
       void r.disconnect()
       if (phaseRef.current !== 'joining') return
-      setJoinErr('Nie udało się połączyć z serwerem rozmów. Sprawdź internet i spróbuj jeszcze raz.')
+      // Najczęstsza przyczyna: rozmowa skończyła się w trakcie łączenia (nikt nie odebrał, druga osoba się rozłączyła)
+      // i serwer zamknął pokój — wtedy mówimy to wprost zamiast ogólnego „nie udało się połączyć”.
+      try {
+        const now = await fetchCall(callId)
+        if (isCallFinished(now.data.status)) {
+          setCall(now.data)
+          finish('finished')
+          return
+        }
+      } catch {
+        /* stan nieznany — zostaje komunikat o połączeniu */
+      }
+      const detail = ex instanceof Error && ex.message ? ` (${ex.message.slice(0, 120)})` : ''
+      console.warn('Rozmowa: łączenie z serwerem rozmów nie powiodło się', ex)
+      setJoinErr(`Nie udało się połączyć z serwerem rozmów. Sprawdź internet i spróbuj jeszcze raz.${detail}`)
       goPhase('lobby')
       return
     }
