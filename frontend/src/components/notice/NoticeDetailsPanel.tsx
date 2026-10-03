@@ -44,6 +44,23 @@ function megabytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toLocaleString('pl-PL', { maximumFractionDigits: 1 })} MB`
 }
 
+/**
+ * Strona postępowania na platformazakupowa.pl otwarta od razu na liście załączników (znacznik sekcji
+ * #allAttachmentsTable na stronie /transakcja/{numer}). Pliki pobiera człowiek w swojej przeglądarce — regulamin
+ * platformy zabrania pobierania załączników przez automat; „Pobierz wszystkie załączniki” działa po zalogowaniu.
+ */
+function attachmentsUrl(procedureUrl: string | null): string | null {
+  if (!procedureUrl) return null
+  try {
+    const url = new URL(procedureUrl)
+    if (!/(^|\.)platformazakupowa\.pl$/i.test(url.hostname) || !/^\/transakcja\/\d+\/?$/.test(url.pathname)) return null
+    url.hash = 'allAttachmentsTable'
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
 function externalLink(href: string, label: string) {
   return (
     <a href={href} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-blue-700 hover:underline">
@@ -433,7 +450,24 @@ export function NoticeDetailsPanel({
                     </ul>
                   </>
                 ) : (
-                  docs && <p className="mb-1 text-slate-600">{docs.note}</p>
+                  docs && (
+                    <>
+                      <p className="mb-1 text-slate-600">{docs.note}</p>
+                      {attachmentsUrl(row.procedure_url) && (
+                        <p className="mb-1 text-slate-700">
+                          <a
+                            href={attachmentsUrl(row.procedure_url) ?? undefined}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mr-2 inline-flex items-center rounded border border-blue-600 px-2 py-0.5 font-medium text-blue-700 hover:bg-blue-50"
+                          >
+                            Otwórz załączniki na platformie ↗
+                          </a>
+                          Tam zaloguj się, kliknij „Pobierz wszystkie załączniki” i przeciągnij pobraną paczkę ZIP niżej.
+                        </p>
+                      )}
+                    </>
+                  )
                 )}
 
                 {mayAddDocs ? (
