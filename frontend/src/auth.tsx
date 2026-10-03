@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { api, ApiError, can, type User } from './lib/api'
 import { CHAT_PERMISSION } from './lib/chat'
 import { startRealtime, stopRealtime } from './lib/realtime'
+import { clearToken, getToken, isAddonSession, setToken } from './lib/tokenStore'
 
 type AuthCtx = {
   user: User | null
@@ -33,7 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [connectionError, setConnectionError] = useState<string | null>(null)
 
   const verify = useCallback(async () => {
-    if (!localStorage.getItem('supon_token')) return
+    if (!getToken()) return
     try {
       setUser(await api<User>('/me'))
       setConnectionError(null)
@@ -41,7 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Tylko 401 znaczy, że serwer już nie zna tego klucza. Po chwilowym błędzie wylogowanie kazałoby zalogować
       // się od nowa, a stary klucz zostałby na serwerze jako kolejna „sesja”.
       if (ex instanceof ApiError && ex.status === 401) {
-        localStorage.removeItem('supon_token')
+        clearToken()
         setConnectionError(null)
       } else {
         setConnectionError(connectionErrorText(ex))
@@ -66,16 +67,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     })
-    localStorage.setItem('supon_token', data.token)
+    setToken(data.token)
     setConnectionError(null)
     setUser(data.user)
   }
 
   async function logout() {
     try {
-      await api('/logout', { method: 'POST' })
+      // Klucz dodatku Thunderbirda (karta czatu w Thunderbirdzie) zostaje na serwerze — skasowany odłączyłby dodatek.
+      if (!isAddonSession()) await api('/logout', { method: 'POST' })
     } finally {
-      localStorage.removeItem('supon_token')
+      clearToken()
       setConnectionError(null)
       setUser(null)
     }

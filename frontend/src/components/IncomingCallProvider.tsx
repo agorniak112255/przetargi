@@ -4,6 +4,7 @@ import { can } from '../lib/api'
 import { callPageUrl, declineCall, fetchCall, RING_SECONDS } from '../lib/calls'
 import { avatarColor, CHAT_PERMISSION, initials } from '../lib/chat'
 import { onRealtime, type ChatCallRingingEvent } from '../lib/realtime'
+import { isAddonSession } from '../lib/tokenStore'
 
 /**
  * Dzwonek w całej aplikacji (montowany w Layout — strona samej rozmowy go nie ma, więc tam nie dzwoni).
@@ -151,7 +152,8 @@ type TabMessage = { type: 'handled'; call_id: number }
  * dodatek: powiadomienie z dźwiękiem, a kliknięcie otwiera rozmowę w przeglądarce. Drugi dzwonek z karty byłby
  * podwójny, a rozmowa i tak nie odbywa się w Thunderbirdzie.
  */
-const INSIDE_THUNDERBIRD = typeof navigator !== 'undefined' && /\bThunderbird\//.test(navigator.userAgent)
+const INSIDE_THUNDERBIRD =
+  isAddonSession() || (typeof navigator !== 'undefined' && /\bThunderbird\//.test(navigator.userAgent))
 
 export function IncomingCallProvider() {
   const { user } = useAuth()

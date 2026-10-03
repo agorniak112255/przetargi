@@ -115,10 +115,22 @@ function chatBadgeText(count) {
   return number > 99 ? '99+' : String(number)
 }
 
-async function chatHomeUrl() {
-  const { baseUrl } = await getSettings()
+/**
+ * Adres czatu w karcie Thunderbirda, z kluczem dodatku w końcówce `#tb=…`. Karta Thunderbirda nie pozwala stronie
+ * zapisać logowania (localStorage: „The operation is insecure”), więc bez tego trzeba by logować się przy każdym
+ * otwarciu. Część po `#` nie idzie na serwer ani do dzienników, a strona zaraz usuwa ją z adresu i trzyma klucz
+ * tylko w pamięci (frontend/src/lib/tokenStore.ts).
+ */
+async function chatPageUrl(conversationId = null, withToken = true) {
+  const { baseUrl, token } = await getSettings()
+  const id = Number.parseInt(String(conversationId ?? ''), 10)
+  const query = Number.isFinite(id) && id > 0 ? '?c=' + id : ''
 
-  return baseUrl + '/czat'
+  return baseUrl + '/czat' + query + (withToken && token ? '#tb=' + encodeURIComponent(token) : '')
+}
+
+async function chatHomeUrl() {
+  return chatPageUrl(null)
 }
 
 function chatButtonProperties() {
@@ -211,12 +223,12 @@ function chatSetUnread(count) {
  */
 async function chatOpen(conversationId = null) {
   const home = await chatHomeUrl()
-  const id = Number.parseInt(String(conversationId ?? ''), 10)
-  const target = Number.isFinite(id) && id > 0 ? home + '?c=' + id : home
+  const target = await chatPageUrl(conversationId)
 
   const spaceId = await chatEnsureSpace()
   if (spaceId === null) {
-    await browser.windows.openDefaultBrowser(target)
+    // zwykła przeglądarka ma własne logowanie — klucz dodatku nie może trafić do jej historii
+    await browser.windows.openDefaultBrowser(await chatPageUrl(conversationId, false))
 
     return
   }
@@ -253,7 +265,8 @@ async function chatOpen(conversationId = null) {
 /** Czy człowiek patrzy właśnie na czat — wtedy powiadomienie byłoby zbędne. */
 async function chatInFront() {
   try {
-    const home = await chatHomeUrl()
+    // adres bez klucza — strona usuwa końcówkę #tb=… zaraz po wczytaniu
+    const home = await chatPageUrl(null, false)
     const tabs = await browser.tabs.query({ active: true, lastFocusedWindow: true })
 
     return tabs.some((tab) => (chatState.spaceId !== null && tab.spaceId === chatState.spaceId)

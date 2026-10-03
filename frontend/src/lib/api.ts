@@ -1,10 +1,11 @@
 import { publicDir } from './publicDir'
+import { getToken } from './tokenStore'
 import type { CheckSource } from '../components/RequirementCheckList'
 
 const API_URL = `${publicDir()}/api`
 
 function token(): string | null {
-  return localStorage.getItem('supon_token')
+  return getToken()
 }
 
 /**
