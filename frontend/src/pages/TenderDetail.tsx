@@ -21,6 +21,7 @@ import {
   type TenderResultStatus,
 } from '../lib/api'
 import { currencyLabel, formatPrice } from '../lib/priceChange'
+import { plural } from '../lib/plural'
 import { offerMarkupFactor, productDisplayName, productThumbUrl, purchaseForOffer, suggestedOfferPrice } from '../lib/productLabel'
 import { isDualRequirement } from '../lib/productAiSearch'
 import { SiwzItemTile, SiwzRequirementBlock, splitSiwzRequirement } from '../components/SiwzRequirementBlock'
@@ -358,6 +359,8 @@ type PreviewItem = {
   bhp?: boolean
   quote?: string
   quote_found?: boolean
+  /** zapisany już w przetargu automatycznie (towar BHP z ilością z ogłoszenia) */
+  added?: boolean
 }
 type PreviewCondition = { category: string | null; content: string; selected: boolean }
 
@@ -733,6 +736,7 @@ function itemMatchesQuery(item: Item, query: string): boolean {
 const actionLabel: Record<string, string> = {
   created: 'Utworzono przetarg',
   document_added: 'Dodano dokument',
+  items_from_notice: 'Dodano towary z ogłoszenia',
   updated: 'Zmieniono dane przetargu',
   status_changed: 'Zmiana statusu',
   item_updated: 'Zmiana pozycji',
@@ -961,6 +965,8 @@ function TenderDetailView() {
     conditions: PreviewCondition[]
     /** podgląd z treści ogłoszenia — zawsze lista pozycji (także przy ustawieniu odczytu „tylko tekst”) */
     fromNotice?: boolean
+    /** ile towarów BHP z ogłoszenia aplikacja zapisała sama — w podglądzie zostają pozostałe */
+    autoAdded?: number
   } | null>(null)
   const [replaceItems, setReplaceItems] = useState(false)
   const [replaceConditions, setReplaceConditions] = useState(false)
@@ -1538,18 +1544,45 @@ function TenderDetailView() {
 
   /**
    * Pozycje z treści ogłoszenia przetargu (POST /tenders/{id}/documents/from-notice-text): model wypisuje towary z
-   * opisu przedmiotu zamówienia, serwer sprawdza cytaty. Tylko podgląd — do przetargu trafia po „Dodaj do przetargu”.
+   * opisu przedmiotu zamówienia, serwer sprawdza cytaty. Towary BHP z ilością z ogłoszenia serwer zapisuje sam (tylko w
+   * przetargu bez pozycji); pozostałe zostają w podglądzie do „Dodaj do przetargu”.
    */
   async function readNoticeText() {
+    let result: (DocumentAnalysis & { added_count?: number; auto_add_note?: string | null }) | null = null
     const error = await runDocumentAnalysis(
       'treść ogłoszenia',
       'ai',
-      () => api<DocumentAnalysis>(`/tenders/${id}/documents/from-notice-text`, { method: 'POST', body: '{}' }),
+      async () => {
+        // towary BHP z ilością z ogłoszenia serwer zapisuje sam (tylko w przetargu bez pozycji) — reszta do podglądu
+        result = await api<DocumentAnalysis & { added_count?: number; auto_add_note?: string | null }>(
+          `/tenders/${id}/documents/from-notice-text`,
+          { method: 'POST', body: JSON.stringify({ auto_add: true }) },
+        )
+        return result
+      },
       false,
       ' (odczyt modelem)',
     )
-    if (!error) setDocPreview((p) => (p ? { ...p, fromNotice: true } : p))
     dropFromHandoff((h) => ({ ...h, noticeText: false }))
+    if (error || result === null) return
+    const res: DocumentAnalysis & { added_count?: number; auto_add_note?: string | null } = result
+    const added = res.added_count ?? 0
+    const rest = (res.items ?? []).filter((i) => !i.added).map((i) => ({ ...i, selected: i.selected !== false }))
+    if (added > 0) await load()
+    const addedText = `Dodano automatycznie ${added} ${plural(added, 'towar BHP', 'towary BHP', 'towarów BHP')} z treści ogłoszenia — są w zakładce Pozycje.`
+    if (added > 0 && rest.length === 0) {
+      setDocPreview(null)
+      setDocStatus(addedText)
+      setMsg(addedText)
+      return
+    }
+    setDocPreview((p) => (p ? { ...p, items: rest, fromNotice: true, autoAdded: added } : p))
+    if (added > 0) {
+      setDocStatus(`${addedText} Pozostałe towary z ogłoszenia są w podglądzie poniżej.`)
+      setMsg(`${addedText} Pozostałe towary z ogłoszenia (poza BHP albo bez ilości) możesz dodać z podglądu.`)
+    } else if (res.auto_add_note) {
+      setMsg(`${res.auto_add_note} Sprawdź listę poniżej.`)
+    }
   }
 
   async function openDocumentPreview(docId: number) {
@@ -2945,7 +2978,8 @@ function TenderDetailView() {
               <div className="mb-3 flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
                 <span className="min-w-0 flex-1 text-slate-600">
                   Gdy ogłoszenie <span className="app-code">{tender.notice_number}</span> wymienia towary i ilości (na
-                  przykład „hełm strażacki – 23 szt.”), model odczyta je z treści ogłoszenia — bez dokumentów.
+                  przykład „hełm strażacki – 23 szt.”), model odczyta je z treści ogłoszenia — bez dokumentów. Do
+                  przetargu bez pozycji towary BHP z ilością wpadają same.
                 </span>
                 <button
                   type="button"
@@ -3201,9 +3235,12 @@ function TenderDetailView() {
                     </h4>
                     {docPreview.fromNotice && (
                       <p className="mb-1 text-[11px] text-slate-600">
-                        Towary BHP są zaznaczone, pozostałe odznaczone — to ocena modelu, sprawdź ją. Ilości są z
-                        ogłoszenia; gdy ogłoszenie ich nie podaje, pozycja dostaje 1 do poprawienia w zakładce Pozycje.
-                        Numer części jest tylko informacją — pozycje przetargu nie są dzielone na części.
+                        {docPreview.autoAdded
+                          ? `Towary BHP z ilością z ogłoszenia (${docPreview.autoAdded}) aplikacja dodała już sama — tu zostały pozostałe: poza BHP (ocena modelu) albo bez ilości w ogłoszeniu. `
+                          : 'Towary BHP są zaznaczone, pozostałe odznaczone — to ocena modelu, sprawdź ją. '}
+                        Ilości są z ogłoszenia; gdy ogłoszenie ich nie podaje, pozycja dostaje 1 do poprawienia w
+                        zakładce Pozycje. Numer części jest tylko informacją — pozycje przetargu nie są dzielone na
+                        części.
                       </p>
                     )}
                     {docPreview.items.length === 0 ? (

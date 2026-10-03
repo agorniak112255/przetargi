@@ -502,7 +502,7 @@ export function NoticeDetailsPanel({
               {withDocuments
                 ? `${chosenDocs.length + chosenFiles.length} ${plural(chosenDocs.length + chosenFiles.length, 'dokument', 'dokumenty', 'dokumentów')} do odczytu. Pozycje i warunki zobaczysz w kreatorze jako podgląd — do przetargu trafią po Twoim zatwierdzeniu.`
                 : mayAddDocs
-                  ? 'Bez dokumentów kreator odczyta towary z treści ogłoszenia — zobaczysz je jako podgląd do zatwierdzenia.'
+                  ? 'Bez dokumentów kreator odczyta towary z treści ogłoszenia — towary BHP z ilością doda do przetargu sam, resztę pokaże w podglądzie.'
                   : 'Bez dokumentów kreator otworzy krok „Dokumenty”.'}
             </span>
           )}

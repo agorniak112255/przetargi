@@ -18,6 +18,7 @@ use App\Support\NoticeNumber;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
@@ -201,13 +202,17 @@ class TenderDocumentController extends Controller
 
     /**
      * Pozycje z TREŚCI ogłoszenia przetargu (opisy części, sekcja „Przedmiot zamówienia”) — bez pliku, dla postępowań,
-     * w których towary i ilości są w samym ogłoszeniu. Zwraca podgląd w kształcie odczytu dokumentu (document_id null);
-     * do przetargu pozycje zapisuje dopiero człowiek przez „commit”. Towary spoza BHP przychodzą odznaczone, pozycje
-     * bez cytatu w ogłoszeniu — odznaczone, ilość bez pokrycia w cytacie — 1 z quantity_missing (do uzupełnienia).
+     * w których towary i ilości są w samym ogłoszeniu. Zwraca podgląd w kształcie odczytu dokumentu (document_id null).
+     * Towary spoza BHP przychodzą odznaczone, pozycje bez cytatu w ogłoszeniu — odznaczone, ilość bez pokrycia w cytacie
+     * — 1 z quantity_missing (do uzupełnienia).
+     * auto_add (decyzja właściciela 03.10.2026: „pozycje BHP niech wpadają same”): gdy przetarg nie ma jeszcze pozycji,
+     * od razu zapisuje towary BHP z cytatem znalezionym w ogłoszeniu i ilością z cytatu (added: true); reszta zostaje
+     * w podglądzie do decyzji człowieka. Historia przetargu notuje każdy zapisany towar z cytatem z ogłoszenia.
      */
     public function fromNoticeText(Request $request, Tender $tender, NoticeItemsReader $reader): JsonResponse
     {
         $this->assertEditable($tender);
+        $autoAdd = $request->boolean('auto_add');
 
         $notice = $this->noticeFor($tender);
         if ($notice === null) {
@@ -242,10 +247,76 @@ class TenderDocumentController extends Controller
                 'bhp' => $row['bhp'],
                 'quote' => $row['quote'],
                 'quote_found' => $row['quote_found'],
+                'added' => false,
             ];
         }, $result['items']);
 
+        $added = 0;
+        $autoAddNote = null;
+        if ($autoAdd) {
+            $toAdd = array_keys(array_filter(
+                $items,
+                static fn (array $item): bool => $item['bhp'] && $item['quote_found'] && ! $item['quantity_missing'],
+            ));
+            if ($toAdd !== []) {
+                // drugi odczyt (druga karta, ponowne wejście) nie dubluje pozycji: zapis tylko do pustego przetargu
+                $added = DB::transaction(function () use ($tender, $items, $toAdd, $request): int {
+                    $locked = Tender::query()->lockForUpdate()->findOrFail($tender->id);
+                    if ($locked->items()->exists()) {
+                        return 0;
+                    }
+                    $rows = array_map(static fn (int $i): array => $items[$i], $toAdd);
+
+                    return $this->import->commit(
+                        $locked,
+                        $rows,
+                        [],
+                        false,
+                        false,
+                        null,
+                        SupplierSpecialMask::forUser($request->user()),
+                        'notice',
+                    )['items_created'];
+                });
+                if ($added > 0) {
+                    foreach ($toAdd as $i) {
+                        $items[$i]['added'] = true;
+                        $items[$i]['selected'] = false;
+                    }
+                    $lines = array_map(static function (int $i) use ($items): string {
+                        $item = $items[$i];
+
+                        return '• '.$item['name'].' — '.$item['quantity'].($item['unit'] !== null ? ' '.$item['unit'] : '')
+                            .($item['lot_no'] !== null ? ' (część '.$item['lot_no'].')' : '').' — z ogłoszenia: „'.$item['quote'].'”';
+                    }, $toAdd);
+                    $this->activities->log($tender, 'items_from_notice', $request->user(), null, [
+                        'source' => 'notice_text',
+                        'notice_id' => $notice->id,
+                        'notice_number' => $notice->notice_number,
+                        'items' => array_map(static fn (int $i): array => [
+                            'name' => $items[$i]['name'],
+                            'quantity' => $items[$i]['quantity'],
+                            'unit' => $items[$i]['unit'],
+                            'lot_no' => $items[$i]['lot_no'],
+                            'quote' => $items[$i]['quote'],
+                        ], $toAdd),
+                        'note' => 'Dodano automatycznie '.$added.' '.match (true) {
+                            $added === 1 => 'towar BHP',
+                            $added % 10 >= 2 && $added % 10 <= 4 && ($added % 100 < 12 || $added % 100 > 14) => 'towary BHP',
+                            default => 'towarów BHP',
+                        }
+                            .' z treści ogłoszenia '.$notice->notice_number." (odczyt modelem, cytaty sprawdzone w ogłoszeniu):\n"
+                            .implode("\n", $lines),
+                    ]);
+                } else {
+                    $autoAddNote = 'Przetarg ma już pozycje — towary z ogłoszenia są tylko w podglądzie.';
+                }
+            }
+        }
+
         return response()->json([
+            'added_count' => $added,
+            'auto_add_note' => $autoAddNote,
             'document_id' => null,
             'mode' => 'ai',
             'targets' => ['items'],

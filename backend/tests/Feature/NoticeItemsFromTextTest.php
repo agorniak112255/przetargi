@@ -6,6 +6,7 @@ namespace Tests\Feature;
 
 use App\Models\ProcurementNotice;
 use App\Models\Tender;
+use App\Models\TenderActivity;
 use App\Models\TenderItem;
 use App\Models\User;
 use App\Services\Ai\OpenAiCompatibleClient;
@@ -76,6 +77,58 @@ final class NoticeItemsFromTextTest extends TestCase
 
         // nic nie trafia do przetargu bez „commit”
         $this->assertSame(0, TenderItem::query()->where('tender_id', $tenderId)->count());
+    }
+
+    public function test_auto_add_saves_bhp_items_with_quantity_once_and_logs_quotes(): void
+    {
+        Sanctum::actingAs(User::factory()->withRole('przetargi')->create());
+        $notice = $this->fixtureNotice('contract-lots');
+        // treść skasowana po 30 dniach — odczyt z opisu części
+        $parsed = $notice->parsed;
+        $parsed['lots'] = [[
+            'lot_no' => 6,
+            'name' => 'Część 6: zasoby ochrony ludności',
+            'description' => "Część 6: zasoby ochrony ludności, w tym zakup i dostawa:\n- hełm strażacki – 23 szt.,\n- ubranie specjalne – 23 szt.,\n- agregat prądotwórczy – 2 szt.,\n- rękawice specjalne.",
+        ]];
+        $notice->forceFill(['parsed' => $parsed, 'html_body' => null])->save();
+        $tenderId = $this->postJson("/api/notices/{$notice->id}/tender")->assertCreated()->json('tender_id');
+
+        $answer = ['content' => json_encode(['items' => [
+            ['lot_no' => 6, 'name' => 'Hełm strażacki', 'quantity' => 23, 'unit' => 'szt.', 'quote' => '- hełm strażacki – 23 szt.', 'bhp' => true],
+            ['lot_no' => 6, 'name' => 'Ubranie specjalne', 'quantity' => 23, 'unit' => 'szt.', 'quote' => 'ubranie specjalne – 23 szt.', 'bhp' => true],
+            // spoza BHP — zostaje w podglądzie
+            ['lot_no' => 6, 'name' => 'Agregat prądotwórczy', 'quantity' => 2, 'unit' => 'szt.', 'quote' => 'agregat prądotwórczy – 2 szt.', 'bhp' => false],
+            // BHP bez ilości w ogłoszeniu — nie zgadujemy ilości, zostaje w podglądzie
+            ['lot_no' => 6, 'name' => 'Rękawice specjalne', 'quantity' => null, 'unit' => null, 'quote' => 'rękawice specjalne', 'bhp' => true],
+        ]], JSON_UNESCAPED_UNICODE)];
+        $this->mock(OpenAiCompatibleClient::class, function (MockInterface $mock) use ($answer): void {
+            $mock->shouldReceive('chat')->twice()->andReturn($answer);
+        });
+
+        $response = $this->postJson("/api/tenders/{$tenderId}/documents/from-notice-text", ['auto_add' => true])
+            ->assertOk()
+            ->assertJsonPath('added_count', 2)
+            ->assertJsonPath('auto_add_note', null);
+        $this->assertSame([true, true, false, false], array_column($response->json('items'), 'added'));
+        $this->assertSame([false, false, false, true], array_column($response->json('items'), 'selected'));
+
+        $items = TenderItem::query()->where('tender_id', $tenderId)->orderBy('line_no')->get();
+        $this->assertSame(['Hełm strażacki', 'Ubranie specjalne'], $items->pluck('requirement')->all());
+        $this->assertSame([23, 23], $items->pluck('quantity')->map(fn ($q) => (int) $q)->all());
+        $this->assertSame('wycena', Tender::query()->findOrFail($tenderId)->status);
+
+        $activity = TenderActivity::query()->where('tender_id', $tenderId)->where('action', 'items_from_notice')->sole();
+        $this->assertSame($notice->notice_number, $activity->meta['notice_number']);
+        $this->assertSame('- hełm strażacki – 23 szt.', $activity->meta['items'][0]['quote']);
+        $this->assertStringContainsString('Dodano automatycznie 2 towary BHP', $activity->meta['note']);
+
+        // drugi odczyt (np. druga karta) nie dubluje pozycji
+        $this->postJson("/api/tenders/{$tenderId}/documents/from-notice-text", ['auto_add' => true])
+            ->assertOk()
+            ->assertJsonPath('added_count', 0)
+            ->assertJsonPath('auto_add_note', 'Przetarg ma już pozycje — towary z ogłoszenia są tylko w podglądzie.');
+        $this->assertSame(2, TenderItem::query()->where('tender_id', $tenderId)->count());
+        $this->assertSame(1, TenderActivity::query()->where('tender_id', $tenderId)->where('action', 'items_from_notice')->count());
     }
 
     public function test_quantity_only_from_quote_with_dashes_and_thousands(): void

@@ -403,7 +403,7 @@ export function Notices() {
           postępowania. „Załóż przetarg” otwiera kreator z wypełnionym tytułem, zamawiającym, terminem składania z
           godziną i numerem ogłoszenia.
           {can(user, 'tenders.import')
-            ? ' Gdy ogłoszenie wymienia towary i ilości, kreator odczyta je z jego treści; pełną listę pozycji mają zwykle dokumenty — w szczegółach wybierz je z listy e-Zamówień albo dodaj pliki pobrane ze strony postępowania. Odczytane pozycje kreator pokaże do sprawdzenia.'
+            ? ' Gdy ogłoszenie wymienia towary i ilości, kreator odczyta je z jego treści i towary BHP doda do przetargu sam; pełną listę pozycji mają zwykle dokumenty — w szczegółach wybierz je z listy e-Zamówień albo dodaj pliki pobrane ze strony postępowania. Pozycje z dokumentów kreator pokaże do sprawdzenia.'
             : ' Odczyt pozycji z ogłoszenia i dokumentów w kreatorze wymaga uprawnienia „Dodawanie dokumentów” — poproś o nie administratora.'} „Pomiń” chowa ogłoszenie z zakładki „Nowe” u całego zespołu.
         </p>
       </div>
@@ -867,7 +867,7 @@ function CreateTenderDialog({
               ) : (
                 <p className="text-slate-600">
                   {canImport
-                    ? 'Kreator odczyta towary z treści ogłoszenia, jeśli ogłoszenie je wymienia (podgląd do zatwierdzenia). Dokumenty dodasz w kreatorze (krok „Dokumenty”) albo wybierzesz je wcześniej w szczegółach ogłoszenia.'
+                    ? 'Kreator odczyta towary z treści ogłoszenia, jeśli ogłoszenie je wymienia — towary BHP z ilością doda do przetargu sam, resztę pokaże w podglądzie. Dokumenty dodasz w kreatorze (krok „Dokumenty”) albo wybierzesz je wcześniej w szczegółach ogłoszenia.'
                     : 'Kreator otworzy krok „Dokumenty”. Odczyt pozycji wymaga uprawnienia „Dodawanie dokumentów”.'}
                 </p>
               )}
